@@ -52,6 +52,7 @@ import {
   piezasPorCartuchoDe,
   piezasPorBolsaDe,
   siguienteNumeroDe,
+  codigoDeSesion,
   stockTeorico,
 } from "./repository.ts";
 import { registrarOperacion, type Contexto } from "./service.ts";
@@ -356,7 +357,7 @@ export async function crearPedido(ctx: Contexto, e: EntradaPedido): Promise<Pedi
     );
 
     const anio = Number(sesion.fecha.slice(0, 4));
-    const numero = await siguienteNumeroDe(client, "CB", anio);
+    const numero = await siguienteNumeroDe(client, await codigoDeSesion(client, sesion.id), "CB", anio);
     const ahora = Date.now();
 
     const { rows } = await client.query(
@@ -676,7 +677,7 @@ export async function entregarDinero(
     );
 
     const anio = Number(sesion.fecha.slice(0, 4));
-    const numero = await siguienteNumeroDe(client, "EN", anio);
+    const numero = await siguienteNumeroDe(client, await codigoDeSesion(client, sesion.id), "EN", anio);
 
     const { rows } = await client.query(
       `INSERT INTO cash_advances

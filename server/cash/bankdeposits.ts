@@ -48,6 +48,7 @@ import {
   enTransaccion,
   sesionAbierta,
   siguienteNumeroDe,
+  codigoDeCaja,
   stockTeorico,
 } from "./repository.ts";
 import { type LineaDenominacion, inventarioDesdeLineas } from "./domain/inventory.ts";
@@ -342,7 +343,7 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
     const remanenteNuevo = disponible - e.importeCentimos;
 
     const anio = Number((e.fechaIngreso ?? new Date().toISOString()).slice(0, 4));
-    const numero = await siguienteNumeroDe(client, "IB", anio);
+    const numero = await siguienteNumeroDe(client, await codigoDeCaja(client, e.registerId), "IB", anio);
     const ahora = Date.now();
 
     const { rows: creado } = await client.query(
@@ -546,7 +547,14 @@ export async function composicionPendiente(
   empresaId: string,
   registerId: number,
   sessionIds: readonly number[],
-  client: PoolClient | typeof pool = pool
+  client: PoolClient | typeof pool = pool,
+  /*
+   * Qué canjes cuentan. `null` = los que todavía no se han ingresado, que es
+   * el montón de la pantalla. Un id = los de ESE ingreso, para recomponer a
+   * posteriori con qué billetes se fue al banco: en cuanto el ingreso se
+   * registra, sus canjes dejan de estar pendientes y el montón ya no los ve.
+   */
+  canjesDe: number | null = null
 ): Promise<{ billetes: LineaDenominacion[]; monedas: LineaDenominacion[] }> {
   const piezas = new Map<Centimos, number>();
   const acumular = (valor: Centimos, cantidad: number) => {
@@ -574,9 +582,11 @@ export async function composicionPendiente(
     `SELECT m.valor_unitario_centimos AS valor, m.direccion, SUM(m.cantidad)::int AS n
        FROM cash_deposit_swaps s
        JOIN cash_denomination_movements m ON m.operation_id = s.operation_id
-      WHERE s.empresa_id = $1 AND s.register_id = $2 AND s.bank_deposit_id IS NULL
+      WHERE s.empresa_id = $1 AND s.register_id = $2
+        AND ($3::int IS NULL AND s.bank_deposit_id IS NULL
+             OR s.bank_deposit_id = $3::int)
       GROUP BY m.valor_unitario_centimos, m.direccion`,
-    [empresaId, registerId]
+    [empresaId, registerId, canjesDe]
   );
   for (const r of canjes) {
     acumular(Number(r.valor), r.direccion === "IN" ? -Number(r.n) : Number(r.n));
@@ -593,6 +603,55 @@ export async function composicionPendiente(
   }
   const porValor = (a: LineaDenominacion, b: LineaDenominacion) => b.valor - a.valor;
   return { billetes: billetes.sort(porValor), monedas: monedas.sort(porValor) };
+}
+
+/**
+ * Con qué billetes se va al banco un ingreso YA registrado.
+ *
+ * Es lo que lleva el resguardo que se le da a quien hace el viaje. Se
+ * reconstruye igual que el montón —sumando los movimientos de los cierres que
+ * lo componen y aplicando sus canjes— pero mirando los canjes de ESTE ingreso
+ * en vez de los pendientes.
+ */
+export async function composicionDeIngreso(
+  empresaId: string,
+  depositId: number
+): Promise<{
+  ingreso: IngresoBancario;
+  billetes: LineaDenominacion[];
+  monedas: LineaDenominacion[];
+} | null> {
+  const { rows } = await pool.query(
+    `SELECT * FROM cash_bank_deposits WHERE id = $1 AND empresa_id = $2`,
+    [depositId, empresaId]
+  );
+  if (rows.length === 0) return null;
+
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const { rows: lineas } = await pool.query(
+    `SELECT l.session_id, l.importe_centimos, s.fecha
+       FROM cash_bank_deposit_sessions l
+       JOIN cash_sessions s ON s.id = l.session_id
+      WHERE l.deposit_id = $1 AND l.vigente
+      ORDER BY s.fecha, s.id`,
+    [depositId]
+  );
+  const cierres = lineas.map((l: any) => ({
+    sessionId: l.session_id,
+    fecha: fechaIso(l.fecha)!,
+    importeCentimos: Number(l.importe_centimos),
+  }));
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  const piezas = await composicionPendiente(
+    empresaId,
+    rows[0].register_id,
+    cierres.map((c) => c.sessionId),
+    pool,
+    depositId
+  );
+
+  return { ingreso: aIngreso(rows[0], cierres, false), ...piezas };
 }
 
 export type PropuestaCanje = {

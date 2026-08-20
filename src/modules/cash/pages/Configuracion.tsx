@@ -38,6 +38,8 @@ type CajaConfig = {
   id: number;
   centro: string;
   nombre: string;
+  /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
+  codigo: string;
   /** Fondo fijo del cajón. 0 = sin fondo fijo. */
   fondoObjetivoCentimos: number;
   activa: boolean;
@@ -245,7 +247,7 @@ function Cajas() {
   const [nombre, setNombre] = useState("");
   const [centro, setCentro] = useState("");
   const [editando, setEditando] = useState<number | null>(null);
-  const [borrador, setBorrador] = useState({ nombre: "", centro: "" });
+  const [borrador, setBorrador] = useState({ nombre: "", centro: "", codigo: "" });
   const [error, setError] = useState("");
   const [ocupado, setOcupado] = useState(false);
 
@@ -341,6 +343,7 @@ function Cajas() {
           <tr>
             <th className={thCls}>Nombre</th>
             <th className={thCls}>Centro</th>
+            <th className={thCls}>Código</th>
             <th className={`${thCls} text-right`}>Fondo fijo</th>
             <th className={`${thCls} text-right`}>Jornadas</th>
             <th className={thCls}>Estado</th>
@@ -348,7 +351,7 @@ function Cajas() {
           </tr>
         </thead>
         <tbody>
-          {sinCajas && <EmptyRow cols={6} text="Todavía no hay ninguna caja." />}
+          {sinCajas && <EmptyRow cols={7} text="Todavía no hay ninguna caja." />}
           {cajas.map((c) => {
             const enEdicion = editando === c.id;
             return (
@@ -373,6 +376,32 @@ function Cajas() {
                     />
                   ) : (
                     c.centro || <span className="text-slate-600">—</span>
+                  )}
+                </td>
+                {/*
+                  El código abre el número de todos los documentos de la caja
+                  (TAR1-IB-26-001) y es lo que se coteja contra el extracto del
+                  banco. Cambiarlo no renumera lo ya emitido: los documentos
+                  nuevos salen con el nuevo y el histórico conserva el suyo.
+                */}
+                <td className={tdCls}>
+                  {enEdicion ? (
+                    <input
+                      value={borrador.codigo}
+                      onChange={(e) => setBorrador({ ...borrador, codigo: e.target.value })}
+                      maxLength={6}
+                      placeholder="TAR1"
+                      className={`${inputCls} w-20 uppercase`}
+                    />
+                  ) : c.codigo ? (
+                    <span className="font-mono text-[12px] font-bold text-sky-300">{c.codigo}</span>
+                  ) : (
+                    <span
+                      className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-300"
+                      title="Sin código, sus documentos numeran con MC y no se distinguen en el banco"
+                    >
+                      sin código
+                    </span>
                   )}
                 </td>
                 <td className={`${tdCls} text-right`}>
@@ -420,7 +449,7 @@ function Cajas() {
                         <button
                           onClick={() => {
                             setEditando(c.id);
-                            setBorrador({ nombre: c.nombre, centro: c.centro });
+                            setBorrador({ nombre: c.nombre, centro: c.centro, codigo: c.codigo });
                           }}
                           disabled={ocupado || Boolean(c.jornadaAbierta)}
                           className={btnMini}

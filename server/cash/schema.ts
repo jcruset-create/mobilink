@@ -23,6 +23,7 @@
 
 import pool from "../db.ts";
 import { DENOMINACIONES_SEMILLA } from "./domain/denominations.ts";
+import { proponerCodigo } from "./domain/registercode.ts";
 
 export async function initCash(): Promise<void> {
   // ── Catálogo de denominaciones y cartuchos ────────────────────────────────
@@ -842,6 +843,31 @@ export async function initCash(): Promise<void> {
     );
   `);
 
+  /*
+   * Código de la caja: las iniciales que identifican de dónde sale cada
+   * documento.
+   *
+   * Con central y varios talleres, el número tiene que decir de qué caja vino
+   * el dinero: es lo que permite conciliar los ingresos contra el extracto del
+   * banco. Antes el contador era único para toda la instalación, así que dos
+   * cajas del mismo taller compartían serie y el número no distinguía nada.
+   *
+   * Va en la caja y no en el centro porque un taller puede tener mostrador y
+   * taller ingresando por separado el mismo día.
+   */
+  await pool.query(`
+    ALTER TABLE cash_registers
+      ADD COLUMN IF NOT EXISTS codigo TEXT NOT NULL DEFAULT '';
+
+    -- Único mientras exista, pero se admite el vacío: una caja recién creada
+    -- todavía no tiene código y no puede chocar con otra igual de vacía.
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_registers_codigo_idx
+      ON cash_registers(empresa_id, codigo) WHERE codigo <> '';
+  `);
+
+  await asignarCodigosDeCaja();
+  await renumerarDocumentos();
+
   await sembrarDenominaciones();
 
   console.log("Mobilink Cash: esquema inicializado correctamente");
@@ -866,4 +892,149 @@ async function sembrarDenominaciones(): Promise<void> {
       [d.valor, d.tipo, d.etiqueta, d.piezasPorCartucho, d.piezasPorBolsa, d.activa, d.orden, ahora]
     );
   }
+}
+
+
+/**
+ * Pone código a las cajas que no lo tienen: `TAR1`, `TAR2`, `REU1`…
+ *
+ * Tres letras del centro —o del nombre, si la caja no tiene centro— y un
+ * ordinal dentro de ese centro. Es una PROPUESTA de arranque: el código se
+ * edita en Configuración y, una vez cambiado, esto no vuelve a tocarlo, porque
+ * solo rellena las que están vacías.
+ *
+ * Las tildes se quitan a propósito (`Alcañiz` → `ALC`): el código acaba escrito
+ * a mano en un resguardo del banco y en un extracto, y ahí no hay tildes.
+ */
+async function asignarCodigosDeCaja(): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT id, empresa_id, centro, nombre FROM cash_registers
+      WHERE codigo = '' ORDER BY empresa_id, centro, id`
+  );
+  if (rows.length === 0) return;
+
+  // Los códigos ya en uso, por empresa, para no chocar con uno puesto a mano.
+  const { rows: usados } = await pool.query(
+    `SELECT empresa_id, codigo FROM cash_registers WHERE codigo <> ''`
+  );
+  const ocupados = new Map<string, Set<string>>();
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  for (const r of usados as any[]) {
+    if (!ocupados.has(r.empresa_id)) ocupados.set(r.empresa_id, new Set());
+    ocupados.get(r.empresa_id)!.add(r.codigo);
+  }
+
+  for (const c of rows as any[]) {
+    if (!ocupados.has(c.empresa_id)) ocupados.set(c.empresa_id, new Set());
+    const suyos = ocupados.get(c.empresa_id)!;
+    const codigo = proponerCodigo(c.centro ?? "", c.nombre ?? "", suyos);
+    suyos.add(codigo);
+    await pool.query(`UPDATE cash_registers SET codigo = $2 WHERE id = $1`, [c.id, codigo]);
+  }
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+}
+
+/**
+ * Pasa los números viejos (`MC-IB-2026-000001`) al formato nuevo
+ * (`TAR1-IB-26-001`).
+ *
+ * El número viejo no decía de qué caja salía y era largo de leer y de dictar.
+ * El nuevo lleva delante el código de la caja, que es por donde se ordena y por
+ * donde se concilia.
+ *
+ * Se renumera TODO el histórico —decisión tomada a sabiendas de que un número
+ * ya impreso deja de coincidir— para que el histórico quede homogéneo y no
+ * haya que mirar dos formatos.
+ *
+ * El tipo y el año se leen del número VIEJO, no de las fechas: el contador
+ * antiguo iba por tipo y año, así que respetarlos es lo único que garantiza
+ * que el orden nuevo sea el mismo que el que ya se emitió. La secuencia se
+ * reparte por (caja, tipo, año) siguiendo el número antiguo, así que dos
+ * documentos nunca intercambian su posición relativa.
+ *
+ * Es idempotente: solo toca las filas que aún tienen el formato viejo, y en la
+ * segunda pasada no hay ninguna.
+ */
+async function renumerarDocumentos(): Promise<void> {
+  // Cada tabla con su forma de llegar a la caja. Las operaciones van por la
+  // jornada; las demás ya guardan el register_id.
+  const tablas: { tabla: string; caja: string }[] = [
+    {
+      tabla: "cash_operations",
+      caja: `(SELECT r.codigo FROM cash_sessions s
+                JOIN cash_registers r ON r.id = s.register_id
+               WHERE s.id = t.session_id)`,
+    },
+    { tabla: "cash_bank_deposits", caja: `(SELECT r.codigo FROM cash_registers r WHERE r.id = t.register_id)` },
+    { tabla: "cash_change_orders", caja: `(SELECT r.codigo FROM cash_registers r WHERE r.id = t.register_id)` },
+    { tabla: "cash_advances", caja: `(SELECT r.codigo FROM cash_registers r WHERE r.id = t.register_id)` },
+  ];
+
+  let renumerados = 0;
+  for (const { tabla, caja } of tablas) {
+    const { rowCount } = await pool.query(`
+      WITH viejos AS (
+        SELECT t.id,
+               ${caja}                                        AS codigo,
+               (regexp_match(t.numero, '^MC-([A-Z]+)-([0-9]{4})-([0-9]+)$'))[1] AS tipo,
+               (regexp_match(t.numero, '^MC-([A-Z]+)-([0-9]{4})-([0-9]+)$'))[2] AS anio,
+               (regexp_match(t.numero, '^MC-([A-Z]+)-([0-9]{4})-([0-9]+)$'))[3]::bigint AS seq
+          FROM ${tabla} t
+         WHERE t.numero ~ '^MC-[A-Z]+-[0-9]{4}-[0-9]+$'
+      ),
+      ordenados AS (
+        SELECT id, codigo, tipo, anio,
+               row_number() OVER (PARTITION BY codigo, tipo, anio ORDER BY seq) AS nueva
+          FROM viejos
+         WHERE codigo IS NOT NULL AND codigo <> ''
+      )
+      UPDATE ${tabla} t
+         SET numero = o.codigo || '-' || o.tipo || '-' || right(o.anio, 2)
+                      || '-' || lpad(o.nueva::text, 3, '0')
+        FROM ordenados o
+       WHERE t.id = o.id
+    `);
+    renumerados += rowCount ?? 0;
+  }
+
+  if (renumerados === 0) return;
+
+  /*
+   * Y los contadores, a la altura de lo renumerado. Sin esto el primer
+   * documento nuevo saldría con el 001 y chocaría con el que ya existe: la
+   * clave única lo rechazaría y no se podría registrar nada.
+   *
+   * La clave pasa a ser CAJA:TIPO:AÑO, que es justo el cambio de fondo — antes
+   * era TIPO:AÑO para toda la instalación.
+   */
+  await pool.query(`
+    INSERT INTO cash_document_counters (clave, last_seq)
+    SELECT clave, MAX(seq)
+      FROM (
+        SELECT split_part(numero, '-', 1) || ':' || split_part(numero, '-', 2)
+                 || ':20' || split_part(numero, '-', 3)          AS clave,
+               split_part(numero, '-', 4)::bigint                AS seq
+          FROM cash_operations WHERE numero ~ '^[A-Z0-9]+-[A-Z]+-[0-9]{2}-[0-9]+$'
+        UNION ALL
+        SELECT split_part(numero, '-', 1) || ':' || split_part(numero, '-', 2)
+                 || ':20' || split_part(numero, '-', 3),
+               split_part(numero, '-', 4)::bigint
+          FROM cash_bank_deposits WHERE numero ~ '^[A-Z0-9]+-[A-Z]+-[0-9]{2}-[0-9]+$'
+        UNION ALL
+        SELECT split_part(numero, '-', 1) || ':' || split_part(numero, '-', 2)
+                 || ':20' || split_part(numero, '-', 3),
+               split_part(numero, '-', 4)::bigint
+          FROM cash_change_orders WHERE numero ~ '^[A-Z0-9]+-[A-Z]+-[0-9]{2}-[0-9]+$'
+        UNION ALL
+        SELECT split_part(numero, '-', 1) || ':' || split_part(numero, '-', 2)
+                 || ':20' || split_part(numero, '-', 3),
+               split_part(numero, '-', 4)::bigint
+          FROM cash_advances WHERE numero ~ '^[A-Z0-9]+-[A-Z]+-[0-9]{2}-[0-9]+$'
+      ) todo
+     GROUP BY clave
+    ON CONFLICT (clave) DO UPDATE
+      SET last_seq = GREATEST(cash_document_counters.last_seq, EXCLUDED.last_seq)
+  `);
+
+  console.log(`Mobilink Cash: ${renumerados} documentos renumerados al formato CAJA-TIPO-AA-NNN`);
 }

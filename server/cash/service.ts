@@ -329,7 +329,7 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
       // El fondo inicial también es una operación con sus piezas: así el libro
       // mayor cuadra desde el primer asiento y el stock se reconstruye entero
       // sumando movimientos, sin ningún caso especial.
-      const numero = await siguienteNumero(client, "OPENING_FLOAT", Number(fecha.slice(0, 4)));
+      const numero = await siguienteNumero(client, sessionId, "OPENING_FLOAT", Number(fecha.slice(0, 4)));
       const opId = await insertarOperacion(client, {
         empresaId: ctx.empresaId,
         sessionId,
@@ -647,7 +647,7 @@ export async function registrarOperacion(
 
     const ahora = Date.now();
     const anio = Number(sesion.fecha.slice(0, 4));
-    const numero = await siguienteNumero(client, e.tipo, anio);
+    const numero = await siguienteNumero(client, sesion.id, e.tipo, anio);
 
     // ¿Hay que avisar a la ERP? Solo si la operación viene de un documento
     // externo y hay integración activa. En modo autónomo esto es NOT_APPLICABLE
@@ -1176,7 +1176,7 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
 
     // Cambio final: sale de la jornada de hoy y mañana entra como fondo.
     if (reparto.totalCambio > 0) {
-      const numero = await siguienteNumero(client, "CLOSING_FLOAT", anio);
+      const numero = await siguienteNumero(client, sesion.id, "CLOSING_FLOAT", anio);
       const opId = await insertarOperacion(client, {
         empresaId: ctx.empresaId,
         sessionId: e.sessionId,
@@ -1212,7 +1212,7 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
 
     // Ingreso bancario: todo lo que no se queda como cambio.
     if (reparto.totalIngreso > 0) {
-      const numero = await siguienteNumero(client, "BANK_DEPOSIT", anio);
+      const numero = await siguienteNumero(client, sesion.id, "BANK_DEPOSIT", anio);
       const opId = await insertarOperacion(client, {
         empresaId: ctx.empresaId,
         sessionId: e.sessionId,
@@ -1526,7 +1526,7 @@ export async function anularOperacion(
     const denominaciones = await cargarDenominaciones(client);
     const ahora = Date.now();
     const anio = Number(sesion.fecha.slice(0, 4));
-    const numero = await siguienteNumero(client, original.tipo, anio);
+    const numero = await siguienteNumero(client, sesion.id, original.tipo, anio);
 
     const nuevaId = await insertarOperacion(client, {
       empresaId: ctx.empresaId,
@@ -2100,7 +2100,7 @@ async function asentarAjusteDeArqueo(
     .filter((d) => d.diferencia < 0)
     .map((d) => ({ valor: d.valor, cantidad: -d.diferencia }));
 
-  const numero = await siguienteNumero(client, "ADJUSTMENT", p.anio);
+  const numero = await siguienteNumero(client, p.sessionId, "ADJUSTMENT", p.anio);
   const operacionId = await insertarOperacion(client, {
     empresaId: p.ctx.empresaId,
     sessionId: p.sessionId,

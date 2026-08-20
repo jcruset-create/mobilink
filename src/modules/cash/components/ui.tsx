@@ -11,7 +11,7 @@
 import { useState, type ReactNode } from "react";
 import { FileDown } from "lucide-react";
 import { euros } from "../utils/money";
-import { informeCierrePdf } from "../services/api";
+import { descargarPdf } from "../services/api";
 
 export {
   inputCls,
@@ -232,12 +232,13 @@ export function AvisoCartuchos({
  * jornada colgando en memoria toda la sesión.
  */
 export function BotonInforme({
-  sessionId,
+  ruta,
   nombre,
   className,
   children,
 }: {
-  sessionId: number;
+  /** Ruta del PDF en la API: `/sessions/12/report.pdf`, `/bank-deposits/3/report.pdf`… */
+  ruta: string;
   /** Nombre del fichero al guardarlo, sin extensión. */
   nombre: string;
   className?: string;
@@ -250,7 +251,7 @@ export function BotonInforme({
     setCargando(true);
     setError("");
     try {
-      const blob = await informeCierrePdf(sessionId);
+      const blob = await descargarPdf(ruta);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

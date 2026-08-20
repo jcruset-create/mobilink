@@ -17,6 +17,12 @@ import { registrarAuditoria } from "../core/auditoria.ts";
 import type { Denominacion } from "./domain/denominations.ts";
 import { FORMAS_PAGO_SEMILLA } from "./domain/operations.ts";
 import { ErrorCaja, sesionAbierta } from "./repository.ts";
+import {
+  CODIGO_MAX,
+  codigoValido,
+  normalizarCodigo,
+  proponerCodigo,
+} from "./domain/registercode.ts";
 
 export type Contexto = { empresaId: string; userId: string | null; ip?: string };
 
@@ -27,6 +33,8 @@ export type CajaConfig = {
   /** Fondo fijo del cajón. 0 = sin fondo fijo. */
   fondoObjetivoCentimos: number;
   activa: boolean;
+  /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
+  codigo: string;
   jornadas: number;
   jornadaAbierta: number | null;
 };
@@ -36,7 +44,7 @@ export type CajaConfig = {
 /** Todas las cajas de la empresa, incluidas las dadas de baja. */
 export async function listarCajas(empresaId: string): Promise<CajaConfig[]> {
   const { rows } = await pool.query(
-    `SELECT c.id, c.centro, c.nombre, c.activa, c.fondo_objetivo_centimos,
+    `SELECT c.id, c.centro, c.nombre, c.codigo, c.activa, c.fondo_objetivo_centimos,
             (SELECT COUNT(*) FROM cash_sessions s WHERE s.register_id = c.id) AS jornadas,
             (SELECT s.id FROM cash_sessions s
               WHERE s.register_id = c.id AND s.estado IN ('OPEN','PENDING_CLOSE','REOPENED')
@@ -51,6 +59,7 @@ export async function listarCajas(empresaId: string): Promise<CajaConfig[]> {
     id: r.id,
     centro: r.centro,
     nombre: r.nombre,
+    codigo: r.codigo ?? "",
     fondoObjetivoCentimos: Number(r.fondo_objetivo_centimos ?? 0),
     activa: r.activa,
     jornadas: Number(r.jornadas),
@@ -59,23 +68,59 @@ export async function listarCajas(empresaId: string): Promise<CajaConfig[]> {
   /* eslint-enable @typescript-eslint/no-explicit-any */
 }
 
+/**
+ * Los códigos que ya tiene esa empresa. Se consulta en el momento y no se
+ * cachea: entre dos altas seguidas hay una caja nueva de por medio.
+ */
+async function codigosEnUso(empresaId: string): Promise<Set<string>> {
+  const { rows } = await pool.query(
+    `SELECT codigo FROM cash_registers WHERE empresa_id = $1 AND codigo <> ''`,
+    [empresaId]
+  );
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  return new Set(rows.map((r: any) => r.codigo));
+}
+
 export async function crearCaja(
   ctx: Contexto,
-  datos: { nombre: string; centro?: string }
-): Promise<{ id: number; centro: string; nombre: string; activa: boolean }> {
+  datos: { nombre: string; centro?: string; codigo?: string }
+): Promise<{ id: number; centro: string; nombre: string; codigo: string; activa: boolean }> {
   const nombre = datos.nombre?.trim();
   if (!nombre) throw new ErrorCaja("ENTRADA_NO_VALIDA", "La caja necesita un nombre.", 400);
 
+  const centro = (datos.centro ?? "").trim();
   const ahora = Date.now();
+
+  /*
+   * La caja nace con código, no sin él.
+   *
+   * Sin código, sus documentos numerarían con el `MC` de reserva y no se
+   * podrían conciliar con el banco, que es justo para lo que está el código. Y
+   * el fallo no daría la cara hasta el primer ingreso, semanas después. Es una
+   * propuesta —`TAR1`, `TAR2`— y se cambia en esta misma pantalla.
+   */
+  const codigo =
+    normalizarCodigo(datos.codigo ?? "") ||
+    proponerCodigo(centro, nombre, await codigosEnUso(ctx.empresaId));
+
+  if (!codigoValido(codigo)) {
+    throw new ErrorCaja(
+      "ENTRADA_NO_VALIDA",
+      `«${codigo}» no vale como código de caja: de 2 a ${CODIGO_MAX} letras o números, sin espacios ni guiones.`,
+      400
+    );
+  }
+
   // El upsert reactiva una caja que se había dado de baja con ese mismo nombre
   // en vez de fallar por la clave única: es lo que espera quien la vuelve a
-  // crear sin acordarse de que ya existía.
+  // crear sin acordarse de que ya existía. El código NO se pisa al reactivar:
+  // sus documentos viejos lo llevan escrito.
   const { rows } = await pool.query(
-    `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
-     VALUES ($1,$2,$3,$4,$4)
+    `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$5,$4,$4)
      ON CONFLICT (empresa_id, centro, nombre) DO UPDATE SET activa = true, updated_at_ms = $4
-     RETURNING id, centro, nombre, activa`,
-    [ctx.empresaId, (datos.centro ?? "").trim(), nombre, ahora]
+     RETURNING id, centro, nombre, codigo, activa`,
+    [ctx.empresaId, centro, nombre, ahora, codigo]
   );
 
   await registrarAuditoria({
@@ -84,7 +129,7 @@ export async function crearCaja(
     accion: "cash.register.create",
     entidad: "cash_registers",
     entidadId: String(rows[0].id),
-    detalle: { nombre: rows[0].nombre, centro: rows[0].centro },
+    detalle: { nombre: rows[0].nombre, centro: rows[0].centro, codigo: rows[0].codigo },
     ip: ctx.ip,
   });
 
@@ -97,6 +142,7 @@ export async function actualizarCaja(
   cambios: {
     nombre?: string;
     centro?: string;
+    codigo?: string;
     activa?: boolean;
     fondoObjetivoCentimos?: number;
   }
@@ -104,6 +150,7 @@ export async function actualizarCaja(
   id: number;
   centro: string;
   nombre: string;
+  codigo: string;
   activa: boolean;
   fondoObjetivoCentimos: number;
 }> {
@@ -119,7 +166,10 @@ export async function actualizarCaja(
    * Lo que no se toca con la caja abierta es su nombre, su centro o su baja.
    */
   const tocaIdentidad =
-    cambios.activa === false || cambios.nombre !== undefined || cambios.centro !== undefined;
+    cambios.activa === false ||
+    cambios.nombre !== undefined ||
+    cambios.centro !== undefined ||
+    cambios.codigo !== undefined;
 
   if (tocaIdentidad && (await sesionAbierta(id))) {
     throw new ErrorCaja(
@@ -132,6 +182,36 @@ export async function actualizarCaja(
   const nombre = cambios.nombre?.trim() || actual[0].nombre;
   const centro = cambios.centro === undefined ? actual[0].centro : cambios.centro.trim();
   const activa = cambios.activa === undefined ? actual[0].activa : cambios.activa;
+
+  /*
+   * Cambiar el código NO renumera lo ya emitido, y es lo correcto: un número
+   * puede estar impreso en un resguardo o apuntado en el extracto del banco.
+   * A partir de aquí los documentos nuevos llevan el código nuevo y el
+   * histórico conserva el viejo, que es lo que hace que siga cuadrando.
+   */
+  const codigo =
+    cambios.codigo === undefined ? (actual[0].codigo ?? "") : normalizarCodigo(cambios.codigo);
+  if (!codigoValido(codigo)) {
+    throw new ErrorCaja(
+      "ENTRADA_NO_VALIDA",
+      `«${codigo}» no vale como código de caja: de 2 a ${CODIGO_MAX} letras o números, sin espacios ni guiones.`,
+      400
+    );
+  }
+  if (codigo !== (actual[0].codigo ?? "")) {
+    const { rows: choca } = await pool.query(
+      `SELECT nombre FROM cash_registers
+        WHERE empresa_id = $1 AND codigo = $2 AND id <> $3`,
+      [ctx.empresaId, codigo, id]
+    );
+    if (choca.length > 0) {
+      throw new ErrorCaja(
+        "ENTRADA_NO_VALIDA",
+        `El código «${codigo}» ya es de la caja «${choca[0].nombre}». Dos cajas con el mismo código harían números repetidos.`,
+        409
+      );
+    }
+  }
 
   const fondo =
     cambios.fondoObjetivoCentimos === undefined
@@ -147,10 +227,11 @@ export async function actualizarCaja(
 
   const { rows } = await pool.query(
     `UPDATE cash_registers
-        SET nombre = $2, centro = $3, activa = $4, fondo_objetivo_centimos = $5, updated_at_ms = $6
+        SET nombre = $2, centro = $3, activa = $4, fondo_objetivo_centimos = $5,
+            codigo = $7, updated_at_ms = $6
       WHERE id = $1
-      RETURNING id, centro, nombre, activa, fondo_objetivo_centimos`,
-    [id, nombre, centro, activa, fondo, Date.now()]
+      RETURNING id, centro, nombre, codigo, activa, fondo_objetivo_centimos`,
+    [id, nombre, centro, activa, fondo, Date.now(), codigo]
   );
 
   await registrarAuditoria({
@@ -163,10 +244,11 @@ export async function actualizarCaja(
       antes: {
         nombre: actual[0].nombre,
         centro: actual[0].centro,
+        codigo: actual[0].codigo ?? "",
         activa: actual[0].activa,
         fondoObjetivoCentimos: Number(actual[0].fondo_objetivo_centimos ?? 0),
       },
-      despues: { nombre, centro, activa, fondoObjetivoCentimos: fondo },
+      despues: { nombre, centro, codigo, activa, fondoObjetivoCentimos: fondo },
     },
     ip: ctx.ip,
   });
@@ -394,7 +476,14 @@ export async function formasPagoActivas(empresaId: string): Promise<FormaPagoCon
   return (await listarFormasPago(empresaId)).filter((f) => f.activa);
 }
 
-function normalizarCodigo(codigo: string): string {
+/**
+ * El código de una FORMA DE PAGO (`BBVA_CARD`), que admite guion bajo.
+ *
+ * No confundir con el de una caja (`TAR1`), que está en
+ * `domain/registercode.ts` y no admite ninguno: ahí el guion es el
+ * separador del número de documento.
+ */
+function normalizarCodigoFormaPago(codigo: string): string {
   return codigo
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -420,7 +509,7 @@ export async function crearFormaPago(
     throw new ErrorCaja("ENTRADA_NO_VALIDA", "La forma de pago necesita un nombre.", 400);
   }
 
-  const codigo = normalizarCodigo(datos.codigo?.trim() || nombre);
+  const codigo = normalizarCodigoFormaPago(datos.codigo?.trim() || nombre);
   if (!codigo) {
     throw new ErrorCaja(
       "ENTRADA_NO_VALIDA",

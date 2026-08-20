@@ -30,6 +30,7 @@ import { ErrorCaja, cargarDenominaciones } from "./repository.ts";
 import { detalleJornada } from "./service.ts";
 import { conteoPorOperacion, documentosDeJornada } from "./documents.ts";
 import { pendientes } from "./treasury.ts";
+import { composicionDeIngreso } from "./bankdeposits.ts";
 import { leerDocumento } from "./storage.ts";
 
 const M = 40;
@@ -267,16 +268,21 @@ async function construirPortada(d: {
   }
 
   /*
-   * El desglose va en tabla —denominación, formato, cantidad, importe— y no
-   * como una lista de frases. Es lo que se compara pieza a pieza contra el
-   * cajón cuando algo no cuadra, y en columnas se lee de un vistazo; en
-   * renglones sueltos hay que ir leyendo cada línea entera.
+   * El desglose va en tabla, con UNA fila por denominación y una columna por
+   * formato: unidades, cartuchos y bolsas de la misma moneda juntos, y el
+   * importe de la fila es el total de esa denominación.
+   *
+   * Antes cada formato era una fila («0,05 € · cartucho de 50 · 1») y la misma
+   * moneda aparecía dos o tres veces, en trozos separados de la tabla: para
+   * saber cuánto hay de 2 € había que buscarla y sumar de cabeza. Así es como
+   * se cuenta un cajón de verdad: moneda a moneda, no formato a formato.
    */
   const columnasPiezas = [
-    { t: "Denominación", x: M, w: ancho * 0.3, derecha: false },
-    { t: "Formato", x: M + ancho * 0.3, w: ancho * 0.34, derecha: false },
-    { t: "Cantidad", x: M + ancho * 0.64, w: ancho * 0.16, derecha: true },
-    { t: "Importe", x: M + ancho * 0.8, w: ancho * 0.2, derecha: true },
+    { t: "Denominación", x: M, w: ancho * 0.24, derecha: false },
+    { t: "Unidades", x: M + ancho * 0.24, w: ancho * 0.15, derecha: true },
+    { t: "Cartuchos", x: M + ancho * 0.41, w: ancho * 0.15, derecha: true },
+    { t: "Bolsas", x: M + ancho * 0.58, w: ancho * 0.15, derecha: true },
+    { t: "Importe", x: M + ancho * 0.75, w: ancho * 0.25, derecha: true },
   ];
 
   const filaPiezas = (celdas: string[], negrita = false) => {
@@ -322,35 +328,34 @@ async function construirPortada(d: {
     doc.y = y + 12;
     doc.font("Helvetica").fontSize(10).fillColor(TINTA);
 
-    for (const l of piezas.sueltas) {
+    // Los tres formatos, agrupados por denominación.
+    const porValor = new Map<number, { sueltas: number; tubos: number; sacos: number }>();
+    const de = (valor: number) => {
+      if (!porValor.has(valor)) porValor.set(valor, { sueltas: 0, tubos: 0, sacos: 0 });
+      return porValor.get(valor)!;
+    };
+    for (const l of piezas.sueltas) de(l.valor).sueltas += l.cantidad;
+    for (const t of piezas.tubos) de(t.valor).tubos += t.cantidad;
+    for (const b of piezas.sacos) de(b.valor).sacos += b.cantidad;
+
+    for (const [valor, f] of [...porValor.entries()].sort((a, b) => b[0] - a[0])) {
+      const importe =
+        valor * f.sueltas +
+        valor * f.tubos * d.piezasDe(valor) +
+        valor * f.sacos * d.piezasBolsaDe(valor);
+      // La celda a cero va en blanco, como en una hoja hecha a mano: el ojo
+      // salta directo a lo que hay, sin vadear ceros.
       filaPiezas([
-        d.etiquetaDe(l.valor),
-        "suelto",
-        String(l.cantidad),
-        eur(l.valor * l.cantidad),
-      ]);
-    }
-    for (const t of piezas.tubos) {
-      const n = d.piezasDe(t.valor);
-      filaPiezas([
-        d.etiquetaDe(t.valor),
-        `${t.cantidad === 1 ? "cartucho" : "cartuchos"} de ${n}`,
-        String(t.cantidad),
-        eur(t.valor * t.cantidad * n),
-      ]);
-    }
-    for (const b of piezas.sacos) {
-      const n = d.piezasBolsaDe(b.valor);
-      filaPiezas([
-        d.etiquetaDe(b.valor),
-        `${b.cantidad === 1 ? "bolsa" : "bolsas"} de ${n}`,
-        String(b.cantidad),
-        eur(b.valor * b.cantidad * n),
+        d.etiquetaDe(valor),
+        f.sueltas > 0 ? String(f.sueltas) : "",
+        f.tubos > 0 ? String(f.tubos) : "",
+        f.sacos > 0 ? String(f.sacos) : "",
+        eur(importe),
       ]);
     }
 
     doc.moveDown(0.2);
-    filaPiezas(["Total", "", "", total == null ? "—" : eur(total)], true);
+    filaPiezas(["Total", "", "", "", total == null ? "—" : eur(total)], true);
   };
 
   composicion("Cambio final que se queda en caja", s.cambioFinalCentimos, d.cambioFinal);
@@ -366,6 +371,61 @@ async function construirPortada(d: {
       fila(`${e.persona} · ${e.motivo} · ${e.numero}`, eur(e.importeCentimos));
     }
     fila("Total fuera", eur(fuera.totalFueraCentimos), true);
+  }
+
+  /*
+   * Hoja aparte: lo que había en el cajón ANTES de repartirlo.
+   *
+   * Es el contado del arqueo con su desglose, y va en su propia página porque
+   * es la que se lleva uno para pasar la cifra a Genes. Metida entre el cambio
+   * final y el ingreso —que son justo las dos mitades en las que se parte
+   * después— habría que ir buscándola.
+   */
+  const arqueo = detalle.ultimoArqueo;
+  if (arqueo) {
+    doc.addPage();
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(16)
+      .fillColor(TINTA)
+      .text("Efectivo en caja antes del cierre", M, doc.y);
+    doc.moveDown(0.2);
+    doc
+      .font("Helvetica")
+      .fontSize(10)
+      .fillColor(GRIS)
+      .text(
+        "Lo que había en el cajón al arquear, antes de apartar el cambio de mañana y el ingreso bancario.",
+        { width: ancho }
+      );
+    doc.moveDown(0.6);
+
+    composicion("Recuento del arqueo", arqueo.totalCentimos, {
+      sueltas: arqueo.sueltas,
+      tubos: arqueo.cartuchos,
+      sacos: arqueo.bolsas,
+    });
+
+    /*
+     * En qué se repartió, para que la hoja se explique sola. Solo si la
+     * jornada está cerrada: con el reparto sin hacer saldrían tres ceros y
+     * parecería que el cajón se quedó vacío.
+     */
+    const cambio = s.cambioFinalCentimos;
+    const ingreso = s.ingresoBancarioCentimos;
+    if (cambio != null || ingreso != null) {
+      titulo("De ahí salieron");
+      fila("Cambio que se queda en caja", eur(cambio ?? 0));
+      fila("Ingreso bancario", eur(ingreso ?? 0));
+      fila("Total repartido", eur((cambio ?? 0) + (ingreso ?? 0)), true);
+      // Si no cuadra con lo contado se dice, en vez de dejar que el lector
+      // haga la resta y se pregunte si el informe está mal.
+      const resto = arqueo.totalCentimos - ((cambio ?? 0) + (ingreso ?? 0));
+      if (resto !== 0) fila("Sin repartir", eur(resto), true);
+    }
+
+    // El listado de operaciones empieza en hoja limpia, no debajo de esto.
+    doc.addPage();
   }
 
   // ── Listado de operaciones ──
@@ -492,4 +552,278 @@ async function paginaDeAviso(
   pagina.drawText(`Justificante de ${d.operacionNumero}`, { x: 50, y: 780, size: 14 });
   pagina.drawText(d.nombre.slice(0, 70), { x: 50, y: 758, size: 10 });
   pagina.drawText(mensaje, { x: 50, y: 730, size: 10 });
+}
+
+// ── Resguardo del ingreso bancario ─────────────────────────────────────────
+
+/**
+ * La hoja que va DENTRO de la bolsa, con el dinero.
+ *
+ * No es un informe de archivo: es el papel que se le da a quien coge el coche
+ * y se planta en el banco. Por eso está pensado para leerse de pie y en dos
+ * segundos —el importe en grande arriba, el desglose de billetes debajo— y por
+ * eso lleva las dos casillas de firma del final: quién se lleva el dinero y
+ * qué dijo el banco al recibirlo. Ese hueco entre «salió de la caja» y «está
+ * en la cuenta» es donde se pierde el dinero, y hasta ahora no lo cubría nada.
+ *
+ * El desglose son los billetes del montón. Si el importe que se lleva no
+ * coincide con ellos —se puede ingresar solo una parte— se dice en su línea en
+ * vez de dejar que los números no cuadren y que quien lo lea se lo imagine.
+ */
+export async function informeIngreso(empresaId: string, depositId: number): Promise<Buffer> {
+  const datos = await composicionDeIngreso(empresaId, depositId);
+  if (!datos) {
+    throw new ErrorCaja("INGRESO_NO_ENCONTRADO", "El ingreso no existe.", 404);
+  }
+  const { ingreso, billetes, monedas } = datos;
+
+  const { rows: cajas } = await pool.query(
+    `SELECT centro, nombre, codigo FROM cash_registers WHERE id = $1`,
+    [ingreso.registerId]
+  );
+  const caja = cajas[0] ?? { centro: "", nombre: "", codigo: "" };
+
+  const denominaciones = await cargarDenominaciones(pool, false);
+  const etiqueta = new Map(denominaciones.map((d) => [d.valor, d.etiqueta]));
+  const etiquetaDe = (v: number) => etiqueta.get(v) ?? `${formatearEuros(v)} €`;
+
+  const doc = new PDFDocument({ margin: M, size: "A4" });
+  const trozos: Buffer[] = [];
+  doc.on("data", (c: Buffer) => trozos.push(c));
+  const listo = new Promise<Buffer>((resolve) =>
+    doc.on("end", () => resolve(Buffer.concat(trozos)))
+  );
+  const ancho = doc.page.width - M * 2;
+
+  // ── Cabecera ──
+  doc.rect(0, 0, doc.page.width, 58).fill("#101a33");
+  doc
+    .fillColor("#ffffff")
+    .font("Helvetica-Bold")
+    .fontSize(15)
+    .text("Ingreso bancario", M, 16, { lineBreak: false });
+  doc
+    .font("Helvetica")
+    .fontSize(10)
+    .fillColor("#94a3b8")
+    .text(
+      `${caja.centro ? `${caja.centro} · ` : ""}${caja.nombre}${
+        ingreso.fechaIngreso ? ` · ${ingreso.fechaIngreso}` : ""
+      }`,
+      M,
+      36,
+      { lineBreak: false }
+    );
+  doc.fillColor(TINTA).font("Helvetica").fontSize(10);
+  doc.y = 78;
+
+  const titulo = (texto: string) => {
+    doc.moveDown(0.6);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(TINTA).text(texto, M);
+    doc
+      .moveTo(M, doc.y + 2)
+      .lineTo(M + ancho, doc.y + 2)
+      .strokeColor("#cbd5e1")
+      .stroke();
+    doc.moveDown(0.5);
+    doc.font("Helvetica").fontSize(10);
+  };
+
+  const fila = (izq: string, der: string, destacado = false) => {
+    const y = doc.y;
+    doc
+      .font(destacado ? "Helvetica-Bold" : "Helvetica")
+      .fillColor(destacado ? TINTA : GRIS)
+      .text(izq, M, y, { width: ancho * 0.62, lineBreak: false });
+    doc
+      .font("Helvetica-Bold")
+      .fillColor(TINTA)
+      .text(der, M + ancho * 0.62, y, { width: ancho * 0.38, align: "right", lineBreak: false });
+    doc.y = y + 14;
+  };
+
+  /*
+   * El número y el importe, en un recuadro y en grande. Es lo que se dicta por
+   * teléfono y lo que se compara contra el extracto: si hay que buscarlo entre
+   * el texto, se busca mal.
+   */
+  const alto = 62;
+  doc.roundedRect(M, doc.y, ancho, alto, 6).fillAndStroke("#f1f5f9", "#cbd5e1");
+  const yCaja = doc.y;
+  doc
+    .fillColor(GRIS)
+    .font("Helvetica-Bold")
+    .fontSize(8)
+    .text("NÚMERO DE INGRESO", M + 14, yCaja + 12, { lineBreak: false });
+  doc
+    .fillColor(TINTA)
+    .font("Helvetica-Bold")
+    .fontSize(18)
+    .text(ingreso.numero, M + 14, yCaja + 26, { lineBreak: false });
+  doc
+    .fillColor(GRIS)
+    .font("Helvetica-Bold")
+    .fontSize(8)
+    .text("IMPORTE A INGRESAR", M + ancho / 2, yCaja + 12, {
+      width: ancho / 2 - 14,
+      align: "right",
+      lineBreak: false,
+    });
+  doc
+    .fillColor(TINTA)
+    .font("Helvetica-Bold")
+    .fontSize(18)
+    .text(eur(ingreso.importeCentimos), M + ancho / 2, yCaja + 26, {
+      width: ancho / 2 - 14,
+      align: "right",
+      lineBreak: false,
+    });
+  doc.y = yCaja + alto + 6;
+  doc.font("Helvetica").fontSize(10);
+
+  if (ingreso.estado === "ANULADO") {
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .fillColor("#b91c1c")
+      .text("INGRESO ANULADO — este resguardo no vale", M, doc.y, { width: ancho });
+    doc.moveDown(0.4);
+    if (ingreso.anuladoMotivo) {
+      doc.font("Helvetica").fontSize(9).fillColor(GRIS).text(ingreso.anuladoMotivo, { width: ancho });
+    }
+    doc.fillColor(TINTA).font("Helvetica").fontSize(10);
+  }
+
+  // ── Los billetes que van dentro ──
+  const totalBilletes = billetes.reduce((a, l) => a + l.valor * l.cantidad, 0);
+  const totalMonedas = monedas.reduce((a, l) => a + l.valor * l.cantidad, 0);
+
+  titulo("Billetes que van al banco");
+  if (billetes.length === 0) {
+    doc.fillColor(GRIS).text("Sin desglose registrado.", M, doc.y, { width: ancho });
+    doc.moveDown(0.4);
+  } else {
+    const cols = [
+      { t: "Denominación", x: M, w: ancho * 0.4, derecha: false },
+      { t: "Cantidad", x: M + ancho * 0.4, w: ancho * 0.25, derecha: true },
+      { t: "Importe", x: M + ancho * 0.65, w: ancho * 0.35, derecha: true },
+    ];
+    const linea = (celdas: string[], negrita = false) => {
+      const y = doc.y;
+      doc.font(negrita ? "Helvetica-Bold" : "Helvetica").fontSize(10).fillColor(TINTA);
+      celdas.forEach((c, i) =>
+        doc.text(c, cols[i].x, y, {
+          width: cols[i].w,
+          align: cols[i].derecha ? "right" : "left",
+          lineBreak: false,
+        })
+      );
+      doc.y = y + 14;
+    };
+
+    const yc = doc.y;
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(GRIS);
+    for (const c of cols) {
+      doc.text(c.t.toUpperCase(), c.x, yc, {
+        width: c.w,
+        align: c.derecha ? "right" : "left",
+        lineBreak: false,
+      });
+    }
+    doc.y = yc + 12;
+
+    for (const l of billetes) {
+      linea([etiquetaDe(l.valor), `${l.cantidad}`, eur(l.valor * l.cantidad)]);
+    }
+    doc.moveDown(0.2);
+    linea(["Total en billetes", "", eur(totalBilletes)], true);
+
+    /*
+     * Si lo que se lleva no son todos los billetes del montón, la diferencia
+     * va escrita. Sin esta línea, el que cuenta la bolsa en el banco encuentra
+     * un importe que no coincide con el desglose y no sabe si falta dinero o
+     * si es que se ingresa a propósito solo una parte.
+     */
+    if (ingreso.importeCentimos !== totalBilletes) {
+      const resto = totalBilletes - ingreso.importeCentimos;
+      fila(
+        resto > 0 ? "Se queda en la caja, no va al banco" : "Se ingresa además, en efectivo de caja",
+        eur(Math.abs(resto)),
+        true
+      );
+    }
+  }
+
+  if (monedas.length > 0) {
+    titulo("Monedas que NO van al banco");
+    doc
+      .fillColor(GRIS)
+      .fontSize(9)
+      .text(
+        "El banco solo admite billetes. Estas monedas se quedan en tienda como remanente y entran en el ingreso siguiente.",
+        M,
+        doc.y,
+        { width: ancho }
+      );
+    doc.moveDown(0.4);
+    doc.fontSize(10);
+    for (const l of monedas) {
+      fila(`${etiquetaDe(l.valor)} × ${l.cantidad}`, eur(l.valor * l.cantidad));
+    }
+    fila("Total en monedas", eur(totalMonedas), true);
+  }
+
+  // ── De dónde sale ──
+  titulo("Cierres que componen el ingreso");
+  for (const c of ingreso.cierres) {
+    fila(`Cierre del ${c.fecha}`, eur(c.importeCentimos));
+  }
+  fila("Remanente anterior", eur(ingreso.remanenteAnteriorCentimos));
+  fila("Total bajo control", eur(ingreso.remanenteAnteriorCentimos + ingreso.totalCierresCentimos), true);
+  fila("Se ingresa", eur(ingreso.importeCentimos), true);
+  fila("Remanente que queda en tienda", eur(ingreso.remanenteNuevoCentimos), true);
+
+  if (ingreso.referencia || ingreso.observaciones) {
+    titulo("Datos del ingreso");
+    if (ingreso.referencia) fila("Referencia bancaria", ingreso.referencia);
+    if (ingreso.observaciones) {
+      doc.fillColor(GRIS).fontSize(9).text(ingreso.observaciones, M, doc.y, { width: ancho });
+      doc.fontSize(10);
+    }
+  }
+
+  /*
+   * Las dos firmas. Van al pie de la página, no a continuación del texto: así
+   * están siempre en el mismo sitio y no bailan según cuántos billetes lleve
+   * el desglose.
+   */
+  const yFirmas = doc.page.height - M - 96;
+  doc.y = Math.max(doc.y + 20, yFirmas);
+  titulo("Firmas");
+  const yF = doc.y + 4;
+  const anchoF = (ancho - 20) / 2;
+  for (const [i, texto] of [
+    "Recibe el dinero y lo lleva al banco",
+    "Conforme del banco / nº de resguardo",
+  ].entries()) {
+    const x = M + i * (anchoF + 20);
+    doc.roundedRect(x, yF, anchoF, 60, 4).strokeColor("#cbd5e1").stroke();
+    doc
+      .font("Helvetica")
+      .fontSize(8)
+      .fillColor(GRIS)
+      .text(texto, x + 8, yF + 6, { width: anchoF - 16, lineBreak: false });
+    doc
+      .moveTo(x + 8, yF + 46)
+      .lineTo(x + anchoF - 8, yF + 46)
+      .strokeColor("#cbd5e1")
+      .stroke();
+    doc
+      .fontSize(7)
+      .fillColor(GRIS)
+      .text("Nombre y firma", x + 8, yF + 49, { width: anchoF - 16, lineBreak: false });
+  }
+
+  doc.end();
+  return listo;
 }
