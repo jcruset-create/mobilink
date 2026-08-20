@@ -372,6 +372,75 @@ export async function initCentral(): Promise<void> {
       ON central_incidents(empresa_id, estado, abierta_en_ms DESC);
   `);
 
+  /*
+   * A quién se avisa y por dónde.
+   *
+   * Un canal es «estos correos, para estos tipos de incidencia, en este
+   * ámbito». El ámbito es el mismo que el de las reglas —empresa, zona, centro
+   * o caja— porque el responsable de un taller quiere los avisos de SU taller y
+   * no los de la red entera: un buzón con avisos que no son tuyos se filtra a
+   * una carpeta y deja de leerse.
+   *
+   * `tipos` vacío significa TODOS. Es el caso normal al empezar, y obligar a
+   * enumerarlos solo conseguiría que alguien olvidara uno.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS central_notification_channels (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      canal TEXT NOT NULL DEFAULT 'EMAIL',
+      destino TEXT NOT NULL,
+      ambito TEXT NOT NULL DEFAULT 'EMPRESA',
+      ambito_id TEXT,
+      tipos TEXT[] NOT NULL DEFAULT '{}',
+      activo BOOLEAN NOT NULL DEFAULT true,
+      creado_en_ms BIGINT NOT NULL,
+      actualizado_en_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS central_channels_empresa_idx
+      ON central_notification_channels(empresa_id, activo);
+    CREATE UNIQUE INDEX IF NOT EXISTS central_channels_unico_idx
+      ON central_notification_channels(empresa_id, canal, lower(destino), ambito,
+                                       COALESCE(ambito_id, ''));
+  `);
+
+  /*
+   * La cola de avisos.
+   *
+   * Mismo patrón que las otras dos colas del proyecto —pendiente, reintentos
+   * con espera creciente y estado terminal— y por la misma razón: **un aviso
+   * que no se puede mandar no puede tumbar lo que lo generó**. El correo se
+   * intenta después; la incidencia ya está registrada.
+   *
+   * Un aviso por incidencia y canal, garantizado por índice único: las
+   * incidencias ya están deduplicadas por hecho, así que esto es lo que impide
+   * que un problema que dura tres días mande tres correos iguales.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS central_notifications (
+      id BIGSERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      incident_id BIGINT NOT NULL,
+      channel_id UUID,
+      canal TEXT NOT NULL DEFAULT 'EMAIL',
+      destino TEXT NOT NULL,
+      asunto TEXT NOT NULL,
+      cuerpo TEXT NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'PENDIENTE'
+        CHECK (estado IN ('PENDIENTE','ENVIANDO','ENVIADO','ERROR','CANCELADO')),
+      intentos INTEGER NOT NULL DEFAULT 0,
+      proximo_intento_ms BIGINT,
+      last_error TEXT,
+      creado_en_ms BIGINT NOT NULL,
+      enviado_en_ms BIGINT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS central_notif_unica_idx
+      ON central_notifications(incident_id, canal, lower(destino));
+    CREATE INDEX IF NOT EXISTS central_notif_pendientes_idx
+      ON central_notifications(estado, proximo_intento_ms)
+      WHERE estado IN ('PENDIENTE','ERROR');
+  `);
+
   await registrarModuloCentral();
 
   console.log("MC Central: esquema inicializado correctamente");

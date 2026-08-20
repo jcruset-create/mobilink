@@ -21,6 +21,7 @@
 import pool from "../../db.ts";
 import { registrarAuditoria } from "../../core/auditoria.ts";
 import { evaluarRed, type EstadoCaja, type Incidencia, type Regla } from "./engine.ts";
+import { avisarDeIncidencia } from "../notifications/service.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -179,7 +180,13 @@ async function estadoDeLaRed(empresaId: string): Promise<EstadoCaja[]> {
   }));
 }
 
-export type ResultadoEvaluacion = { abiertas: number; cerradas: number; evaluadas: number };
+export type ResultadoEvaluacion = {
+  abiertas: number;
+  cerradas: number;
+  evaluadas: number;
+  /** Incidencias nuevas que han generado al menos un aviso. */
+  avisadas: number;
+};
 
 /**
  * Evalúa la red y pone al día la bandeja.
@@ -192,14 +199,41 @@ export async function evaluar(empresaId: string): Promise<ResultadoEvaluacion> {
   const incidencias = evaluarRed(reglas, cajas);
   const ahora = Date.now();
 
-  for (const i of incidencias) await abrirIncidencia(empresaId, i, ahora);
+  let avisadas = 0;
+  for (const i of incidencias) {
+    // Solo se avisa de lo NUEVO. Reevaluar cada cuarto de hora no puede
+    // significar un correo cada cuarto de hora del mismo problema.
+    const nueva = await abrirIncidencia(empresaId, i, ahora);
+    if (nueva) {
+      avisadas += (await avisarDeIncidencia(empresaId, nueva)) > 0 ? 1 : 0;
+    }
+  }
   const cerradas = await cerrarLasQueYaNoPasan(empresaId, incidencias, ahora);
 
-  return { abiertas: incidencias.length, cerradas, evaluadas: cajas.length };
+  return { abiertas: incidencias.length, cerradas, evaluadas: cajas.length, avisadas };
 }
 
-async function abrirIncidencia(empresaId: string, i: Incidencia, ahora: number): Promise<void> {
-  await pool.query(
+/**
+ * Abre la incidencia si no estaba, y devuelve sus datos SOLO si es nueva.
+ *
+ * `xmax = 0` distingue en PostgreSQL una fila insertada de una actualizada por
+ * el `ON CONFLICT`. Es lo que permite avisar únicamente de lo nuevo sin una
+ * segunda consulta ni una condición de carrera entre comprobar y escribir.
+ */
+async function abrirIncidencia(
+  empresaId: string,
+  i: Incidencia,
+  ahora: number
+): Promise<{
+  id: string;
+  tipo: string;
+  registerId: number | null;
+  centroId: string | null;
+  caja: string | null;
+  valor: number;
+  umbral: number;
+} | null> {
+  const { rows } = await pool.query(
     `INSERT INTO central_incidents
        (empresa_id, centro_id, register_id, session_id, tipo, regla_id, clave,
         umbral, valor, detalle, abierta_en_ms, actualizada_en_ms)
@@ -209,7 +243,8 @@ async function abrirIncidencia(empresaId: string, i: Incidencia, ahora: number):
        -- días y no cuatro— sin tocar el estado ni la fecha de apertura, que es
        -- lo que mide cuánto lleva el problema sin resolverse.
        DO UPDATE SET valor = EXCLUDED.valor, umbral = EXCLUDED.umbral,
-                     actualizada_en_ms = EXCLUDED.actualizada_en_ms`,
+                     actualizada_en_ms = EXCLUDED.actualizada_en_ms
+     RETURNING id, (xmax = 0) AS insertada`,
     [
       empresaId,
       i.detalle.centroId ?? null,
@@ -224,6 +259,22 @@ async function abrirIncidencia(empresaId: string, i: Incidencia, ahora: number):
       ahora,
     ]
   );
+
+  if (!rows[0]?.insertada) return null;
+
+  const { rows: caja } = await pool.query(`SELECT nombre FROM cash_registers WHERE id = $1`, [
+    i.registerId,
+  ]);
+
+  return {
+    id: String(rows[0].id),
+    tipo: i.tipo,
+    registerId: i.registerId,
+    centroId: (i.detalle.centroId as string) ?? null,
+    caja: caja[0]?.nombre ?? null,
+    valor: i.valor,
+    umbral: i.umbral,
+  };
 }
 
 async function cerrarLasQueYaNoPasan(

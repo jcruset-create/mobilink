@@ -20,6 +20,7 @@ let servicio: typeof import("../cash/service.ts");
 let tesoreria: typeof import("../cash/treasury.ts");
 let ingresosCaja: typeof import("../cash/bankdeposits.ts");
 let reglas: typeof import("./rules/service.ts");
+let avisos: typeof import("./notifications/service.ts");
 let transporteCaja: typeof import("../cash/events/transport.ts");
 let workerCaja: typeof import("../cash/events/worker.ts");
 let TransporteLocal: typeof import("./transport.ts").TransporteLocal;
@@ -60,6 +61,7 @@ beforeAll(async () => {
   tesoreria = await import("../cash/treasury.ts");
   ingresosCaja = await import("../cash/bankdeposits.ts");
   reglas = await import("./rules/service.ts");
+  avisos = await import("./notifications/service.ts");
   transporteCaja = await import("../cash/events/transport.ts");
   workerCaja = await import("../cash/events/worker.ts");
   TransporteLocal = (await import("./transport.ts")).TransporteLocal;
@@ -74,6 +76,8 @@ beforeAll(async () => {
   await db.query(`DELETE FROM central_denomination_stock WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_incidents WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_rules WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_notifications WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_notification_channels WHERE empresa_id = $1`, [EMPRESA]);
 });
 
 afterAll(async () => {
@@ -738,5 +742,125 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
     } finally {
       transporteCaja.registrarTransporte(null);
     }
+  });
+
+  /*
+   * Fase 8: los avisos.
+   *
+   * Lo que hay que demostrar no es que se mande un correo —eso depende del SMTP
+   * y aquí no hay— sino que **se encola uno y solo uno por incidencia**. Un
+   * problema que dura tres días no puede mandar tres correos iguales: es la
+   * diferencia entre un aviso que se lee y uno que se filtra a una carpeta.
+   */
+  it("una incidencia nueva encola un aviso, y reevaluar no encola más", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'avisos',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `avi-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      await db.query(`UPDATE cash_registers SET codigo = 'AV' || id WHERE id = $1`, [caja]);
+
+      await avisos.guardarCanal({ empresaId: EMPRESA }, { destino: "jefe@taller.example" });
+      await reglas.guardarRegla(
+        { empresaId: EMPRESA, userId: null },
+        { tipo: "DESCUADRE", ambito: "EMPRESA", umbral: 500 }
+      );
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 2000, cantidad: 3 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 2 }],
+      });
+      await vaciar();
+
+      const primera = await reglas.evaluar(EMPRESA);
+      expect(primera.avisadas).toBeGreaterThanOrEqual(1);
+
+      const { rows: cola } = await db.query(
+        `SELECT n.asunto, n.destino, n.estado
+           FROM central_notifications n
+           JOIN central_incidents i ON i.id = n.incident_id
+          WHERE i.register_id = $1`,
+        [caja]
+      );
+      expect(cola).toHaveLength(1);
+      expect(cola[0].destino).toBe("jefe@taller.example");
+      expect(cola[0].estado).toBe("PENDIENTE");
+      // El asunto basta para saber si importa, sin abrir el correo.
+      expect(cola[0].asunto).toContain("Descuadre");
+      expect(cola[0].asunto).toContain("20,00 €");
+
+      // Tres evaluaciones más: sigue habiendo un aviso.
+      await reglas.evaluar(EMPRESA);
+      await reglas.evaluar(EMPRESA);
+      const { rows: otraVez } = await db.query(
+        `SELECT n.id FROM central_notifications n
+           JOIN central_incidents i ON i.id = n.incident_id
+          WHERE i.register_id = $1`,
+        [caja]
+      );
+      expect(otraVez).toHaveLength(1);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * Sin SMTP configurado los avisos ESPERAN, no fallan. Marcarlos como error
+   * gastaría los intentos antes de que exista siquiera la posibilidad de
+   * enviarlos, y el día que se configure el correo ya no saldrían.
+   */
+  it("sin correo configurado, los avisos esperan sin gastar intentos", async () => {
+    const antes = process.env.SMTP_HOST;
+    delete process.env.SMTP_HOST;
+    try {
+      expect(await avisos.enviarPendientes()).toBe(0);
+      const { rows } = await db.query(
+        `SELECT intentos, estado FROM central_notifications WHERE empresa_id = $1`,
+        [EMPRESA]
+      );
+      for (const n of rows) {
+        expect(n.intentos).toBe(0);
+        expect(n.estado).toBe("PENDIENTE");
+      }
+    } finally {
+      if (antes !== undefined) process.env.SMTP_HOST = antes;
+    }
+  });
+
+  it("un canal solo recibe los tipos que pidió", async () => {
+    await avisos.guardarCanal(
+      { empresaId: EMPRESA },
+      { destino: "solo-cambio@taller.example", tipos: ["CALDERILLA_MINIMA"] }
+    );
+
+    const { rows: antes } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM central_notifications
+        WHERE empresa_id = $1 AND destino = 'solo-cambio@taller.example'`,
+      [EMPRESA]
+    );
+
+    // Se fuerza una incidencia de descuadre nueva, de otra jornada.
+    await db.query(
+      `INSERT INTO central_incidents
+         (empresa_id, register_id, tipo, clave, umbral, valor, abierta_en_ms, actualizada_en_ms)
+       VALUES ($1, 999001, 'DESCUADRE', 'DESCUADRE:999001:1', 100, 5000, $2, $2)
+       ON CONFLICT DO NOTHING`,
+      [EMPRESA, Date.now()]
+    );
+    await reglas.evaluar(EMPRESA);
+
+    const { rows: despues } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM central_notifications
+        WHERE empresa_id = $1 AND destino = 'solo-cambio@taller.example'`,
+      [EMPRESA]
+    );
+    expect(despues[0].n).toBe(antes[0].n);
   });
 });

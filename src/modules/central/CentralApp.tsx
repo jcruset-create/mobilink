@@ -33,6 +33,10 @@ import {
   thCls,
   tdCls,
 } from "../administracion/components/ui";
+// `Aviso` vive en las piezas de la caja, que a su vez reexporta las de
+// Administración. Se reutiliza en vez de copiarse: es el mismo lenguaje visual
+// y el mismo componente, no uno parecido.
+import { Aviso } from "../cash/components/ui";
 import { euros } from "../cash/utils/money";
 import * as api from "./api";
 
@@ -835,6 +839,8 @@ function Incidencias() {
         </tbody>
       </TableWrap>
 
+      <Avisos />
+
       <section className="space-y-2">
         <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
           Reglas de la empresa
@@ -927,6 +933,121 @@ function Incidencias() {
         </TableWrap>
       </section>
     </div>
+  );
+}
+
+/**
+ * A quién se avisa.
+ *
+ * Va dentro de Incidencias y no en una pantalla propia porque es la misma
+ * conversación: qué se vigila, y a quién se le cuenta.
+ */
+function Avisos() {
+  const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.canales>> | null>(null);
+  const [destino, setDestino] = useState("");
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const cargar = useCallback(async () => {
+    try {
+      setDatos(await api.canales());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando los avisos");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  const pendientes = datos?.cola.find((c) => c.estado === "PENDIENTE")?.total ?? 0;
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        A quién se avisa
+      </h2>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {/*
+        * Sin SMTP los avisos se acumulan esperando. No es un error, pero hay
+        * que decirlo: si no, alguien pone destinatarios y se queda esperando
+        * correos que no van a salir.
+        */}
+      {datos && !datos.smtp && (
+        <Aviso tono="aviso">
+          No hay correo saliente configurado en el servidor, así que los avisos se quedan en cola
+          esperando. Se enviarán solos en cuanto se configure; no se pierde ninguno.
+        </Aviso>
+      )}
+
+      <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Correo
+          </span>
+          <input
+            value={destino}
+            onChange={(e) => setDestino(e.target.value)}
+            placeholder="responsable@taller.com"
+            className={inputCls}
+          />
+        </label>
+        <button
+          className={btnPrimary}
+          disabled={ocupado || !destino.includes("@")}
+          onClick={() => {
+            setOcupado(true);
+            void api
+              .guardarCanal({ destino: destino.trim() })
+              .then(() => {
+                setDestino("");
+                return cargar();
+              })
+              .catch((e) => setError(e instanceof Error ? e.message : "No se ha podido guardar"))
+              .finally(() => setOcupado(false));
+          }}
+        >
+          Añadir
+        </button>
+        {pendientes > 0 && (
+          <span className="text-[11px] text-slate-400">{pendientes} aviso(s) en cola</span>
+        )}
+      </div>
+
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Correo</th>
+            <th className={thCls}>Qué recibe</th>
+            <th className={thCls}>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(datos?.canales ?? []).length === 0 && (
+            <EmptyRow cols={3} text="Nadie recibe avisos todavía." />
+          )}
+          {(datos?.canales ?? []).map((c) => (
+            <tr key={c.id} className="border-t border-slate-700">
+              <td className={tdCls}>{c.destino}</td>
+              <td className={tdCls}>
+                {c.tipos.length === 0
+                  ? "todo"
+                  : c.tipos.map((t) => etiquetaTipo(t)).join(", ")}
+              </td>
+              <td className={tdCls}>
+                {c.activo ? (
+                  <span className="text-emerald-400">activo</span>
+                ) : (
+                  <span className="text-slate-500">apagado</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+    </section>
   );
 }
 
