@@ -275,7 +275,7 @@ async function proyectar(
       );
       return nuevo ? "APLICADO" : "TARDIO";
 
-    case "COUNT_RECORDED":
+    case "COUNT_RECORDED": {
       if (!nuevo) return "TARDIO";
       await client.query(
         `UPDATE central_sessions
@@ -284,7 +284,49 @@ async function proyectar(
           WHERE session_id = $1`,
         [e.sessionId, num(d.contadoCentimos), num(d.diferenciaCentimos), e.aggregateVersion, ahora]
       );
+
+      /*
+       * La foto del cajón, pieza a pieza. Se PISA la anterior: aquí no interesa
+       * la historia de los arqueos —esa está entera en `central_events`— sino
+       * cuánta calderilla hay ahora en cada caja.
+       *
+       * Los eventos anteriores a esta fase no traen `lineas`, y entonces no se
+       * toca nada: mejor una foto vieja que ninguna.
+       */
+      const lineas = Array.isArray(d.lineas)
+        ? (d.lineas as { valor: number; contado: number; diferencia: number }[])
+        : [];
+      for (const l of lineas) {
+        await client.query(
+          `INSERT INTO central_denomination_stock
+             (register_id, valor_centimos, empresa_id, centro_id, cantidad, diferencia,
+              session_id, contado_en_ms, actualizado_en_ms)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (register_id, valor_centimos) DO UPDATE
+             SET cantidad = EXCLUDED.cantidad,
+                 diferencia = EXCLUDED.diferencia,
+                 centro_id = EXCLUDED.centro_id,
+                 session_id = EXCLUDED.session_id,
+                 contado_en_ms = EXCLUDED.contado_en_ms,
+                 actualizado_en_ms = EXCLUDED.actualizado_en_ms
+             -- Un arqueo que llega tarde no pisa una foto más reciente.
+             WHERE central_denomination_stock.contado_en_ms IS NULL
+                OR central_denomination_stock.contado_en_ms <= EXCLUDED.contado_en_ms`,
+          [
+            e.registerId,
+            l.valor,
+            e.empresaId,
+            e.centroId,
+            l.contado,
+            l.diferencia,
+            e.sessionId,
+            e.ocurridoEnMs,
+            ahora,
+          ]
+        );
+      }
       return "APLICADO";
+    }
 
     case "COUNT_ADJUSTED":
       if (!nuevo) return "TARDIO";

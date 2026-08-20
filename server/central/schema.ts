@@ -272,6 +272,36 @@ export async function initCentral(): Promise<void> {
       ON central_deposit_sources(session_id);
   `);
 
+  /*
+   * El cambio que tiene cada caja, pieza a pieza.
+   *
+   * Sale del último arqueo, que es la única foto FIABLE de qué monedas hay en
+   * un cajón: el stock teórico es correcto por construcción, pero el arqueo es
+   * lo que alguien ha contado con la mano. Para decidir si un taller se está
+   * quedando sin calderilla, la foto buena es la contada.
+   *
+   * Una fila por caja y valor. Se pisa con cada arqueo nuevo: aquí no interesa
+   * la historia —esa está en `central_events`— sino cuánto hay ahora.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS central_denomination_stock (
+      register_id INTEGER NOT NULL,
+      valor_centimos INTEGER NOT NULL,
+      empresa_id UUID NOT NULL,
+      centro_id UUID,
+      cantidad INTEGER NOT NULL DEFAULT 0,
+      -- Diferencia del último arqueo en esa pieza. Un descuadre de un billete y
+      -- otro de veinte monedas de cinco céntimos no son el mismo problema.
+      diferencia INTEGER NOT NULL DEFAULT 0,
+      session_id INTEGER,
+      contado_en_ms BIGINT,
+      actualizado_en_ms BIGINT NOT NULL,
+      PRIMARY KEY (register_id, valor_centimos)
+    );
+    CREATE INDEX IF NOT EXISTS central_denom_empresa_idx
+      ON central_denomination_stock(empresa_id, valor_centimos);
+  `);
+
   await registrarModuloCentral();
 
   console.log("MC Central: esquema inicializado correctamente");

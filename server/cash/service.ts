@@ -1017,12 +1017,27 @@ export async function guardarArqueo(
       tipo: "COUNT_RECORDED",
       ocurridoEnMs: Date.now(),
       actorUserId: ctx.userId,
+      /*
+       * Con el detalle POR PIEZA, y no solo los totales.
+       *
+       * Es lo que permite a MC Central contestar dos cosas que el total no
+       * dice: qué caja se está quedando sin calderilla —porque el arqueo es la
+       * única foto fiable de qué monedas hay en cada cajón— y si un descuadre
+       * es de un billete o de veinte monedas de cinco céntimos, que no son el
+       * mismo problema ni se investigan igual.
+       */
       datos: {
         arqueoId,
         contadoCentimos: comparacion.totalContado,
         teoricoCentimos: comparacion.totalTeorico,
         diferenciaCentimos: comparacion.diferencia,
         denominacionesCuadran: comparacion.cuadranDenominaciones,
+        lineas: comparacion.lineas.map((l) => ({
+          valor: l.valor,
+          teorico: l.teorico,
+          contado: l.contado,
+          diferencia: l.diferencia,
+        })),
       },
     });
 
