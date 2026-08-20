@@ -2825,3 +2825,83 @@ describe.runIf(RUN)("cambio de moneda en mostrador", () => {
     ).rejects.toMatchObject({ codigo: "STOCK_INSUFICIENTE" });
   });
 });
+
+describe.runIf(RUN)("fondo fijo de la caja", () => {
+  it("se guarda, viaja con la caja y admite el cero como «sin fondo fijo»", async () => {
+    const caja = await crearCaja("fondo-fijo");
+
+    const con = await config.actualizarCaja(ctx, caja, { fondoObjetivoCentimos: 35000 });
+    expect(con.fondoObjetivoCentimos).toBe(35000);
+
+    const listadas = await config.listarCajas(EMPRESA);
+    expect(listadas.find((c) => c.id === caja)?.fondoObjetivoCentimos).toBe(35000);
+
+    const sin = await config.actualizarCaja(ctx, caja, { fondoObjetivoCentimos: 0 });
+    expect(sin.fondoObjetivoCentimos).toBe(0);
+  });
+
+  it("un fondo negativo no vale", async () => {
+    const caja = await crearCaja("fondo-negativo");
+    await expect(
+      config.actualizarCaja(ctx, caja, { fondoObjetivoCentimos: -100 })
+    ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
+  });
+
+  it("se puede cambiar con la jornada abierta: el nombre no", async () => {
+    // Que 350 € se quedan cortos se descubre con la caja abierta, no antes.
+    const caja = await crearCaja("fondo-en-caliente");
+    await servicio.abrirJornada(ctx, { registerId: caja });
+
+    const r = await config.actualizarCaja(ctx, caja, { fondoObjetivoCentimos: 50000 });
+    expect(r.fondoObjetivoCentimos).toBe(50000);
+
+    await expect(
+      config.actualizarCaja(ctx, caja, { nombre: "Otro nombre" })
+    ).rejects.toMatchObject({ codigo: "JORNADA_ABIERTA" });
+  });
+
+  it("el reparto del cierre deja el fondo fijo y manda al banco el resto", async () => {
+    const caja = await crearCaja("fondo-cierre");
+    await config.actualizarCaja(ctx, caja, { fondoObjetivoCentimos: 35000 });
+
+    // Fondo de 350 € y 79,69 € cobrados: el caso real del mostrador.
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 6 },
+        { valor: 2000, cantidad: 2 },
+        { valor: 1000, cantidad: 1 },
+      ],
+    });
+    await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "COLLECTION",
+      importeCentimos: 7969,
+      formasPago: [{ forma: "CASH", importe: 7969 }],
+      // 50 + 20 + 5 + 2×2 + 0,50 + 0,10 + 0,05 + 0,02×2 = 79,69 €.
+      efectivoRecibido: [
+        { valor: 5000, cantidad: 1 },
+        { valor: 2000, cantidad: 1 },
+        { valor: 500, cantidad: 1 },
+        { valor: 200, cantidad: 2 },
+        { valor: 50, cantidad: 1 },
+        { valor: 10, cantidad: 1 },
+        { valor: 5, cantidad: 1 },
+        { valor: 2, cantidad: 2 },
+      ],
+      efectivoEntregado: [],
+    });
+
+    const stock = await servicio.stockDeJornada(sesion.id);
+    expect(stock.totalCentimos).toBe(35000 + 7969);
+
+    // La propuesta reparte contra el fondo fijo: se queda 350 y sale el resto.
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: stock.lineas });
+    const propuesta = await servicio.proponerCierre(sesion.id, 35000);
+    const suma = (l: readonly { valor: number; cantidad: number }[]) =>
+      l.reduce((a, x) => a + x.valor * x.cantidad, 0);
+
+    expect(suma(propuesta.cambioFinal)).toBe(35000);
+    expect(suma(propuesta.ingresoBancario)).toBe(7969);
+  });
+});

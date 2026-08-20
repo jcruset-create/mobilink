@@ -58,6 +58,11 @@ export async function initCash(): Promise<void> {
       empresa_id UUID NOT NULL,
       centro TEXT NOT NULL DEFAULT '',
       nombre TEXT NOT NULL,
+      -- Fondo fijo del cajón: lo que esta caja tiene que tener SIEMPRE al
+      -- empezar el día. Es una decisión de la caja, no del cierre de hoy, así
+      -- que vive aquí y no se teclea cada tarde. 0 = sin fondo fijo, y
+      -- entonces el cierre lo pregunta como antes.
+      fondo_objetivo_centimos INTEGER NOT NULL DEFAULT 0,
       activa BOOLEAN NOT NULL DEFAULT true,
       created_at_ms BIGINT NOT NULL,
       updated_at_ms BIGINT NOT NULL,
@@ -690,6 +695,9 @@ export async function initCash(): Promise<void> {
 
     ALTER TABLE cash_denominations
       ADD COLUMN IF NOT EXISTS imagen_url TEXT;
+
+    ALTER TABLE cash_registers
+      ADD COLUMN IF NOT EXISTS fondo_objetivo_centimos INTEGER NOT NULL DEFAULT 0;
   `);
 
   /*

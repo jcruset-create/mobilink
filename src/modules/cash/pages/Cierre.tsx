@@ -8,7 +8,7 @@
  * importe.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FileDown, Minus, Plus, Printer } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, {
@@ -24,9 +24,19 @@ import { repartirIngreso, valorEnvasado } from "../utils/cierre";
 import * as api from "../services/api";
 
 export default function Cierre() {
-  const { jornada, denominaciones, refrescar } = useCash();
+  const { jornada, denominaciones, cajas, refrescar } = useCash();
 
-  const [objetivoTexto, setObjetivoTexto] = useState("300,00");
+  /*
+   * El fondo fijo de esta caja: lo que el cajón tiene que tener SIEMPRE al
+   * empezar el día. Es una decisión de la caja, no del cierre de hoy, así que
+   * viene configurado y no se teclea cada tarde. Sigue siendo editable, porque
+   * un día puede hacer falta dejar más o menos, pero eso es la excepción.
+   */
+  const fondoFijo = cajas.find((c) => c.id === jornada?.sesion.registerId)?.fondoObjetivoCentimos ?? 0;
+
+  const [objetivoTexto, setObjetivoTexto] = useState(
+    fondoFijo > 0 ? euros(fondoFijo).replace(" €", "") : "300,00"
+  );
   const [cambioFinal, setCambioFinal] = useState<CantidadesPorValor>({});
   const [cambioFinalTubos, setCambioFinalTubos] = useState<LineaDenominacion[]>([]);
   const [cambioFinalBolsas, setCambioFinalBolsas] = useState<LineaDenominacion[]>([]);
@@ -37,6 +47,14 @@ export default function Cierre() {
 
   const objetivo = aCentimos(objetivoTexto) ?? 0;
   const totalCambio = totalLineas(lineasDesde(cambioFinal));
+
+  /*
+   * Con el fondo fijo configurado, la composición se propone SOLA al entrar.
+   * Antes había que teclear el importe y pulsar «Proponer»; quien no lo hacía
+   * veía «se queda 0 €, al banco 429,69 €», que es exactamente lo contrario de
+   * lo que quiere hacer. La ref evita repetirlo si el usuario retoca a mano.
+   */
+  const yaPropuesto = useRef(false);
 
   /**
    * Fija cuántos envases de una denominación se quedan en caja.
@@ -72,6 +90,17 @@ export default function Cierre() {
       setError(e instanceof Error ? e.message : "No se ha podido preparar el cierre");
     }
   }, [jornada, objetivo]);
+
+  /*
+   * Propuesta automática al entrar, una sola vez y solo con el fondo fijo
+   * configurado: si la caja no tiene fondo fijo no hay nada que suponer, y se
+   * sigue preguntando como siempre.
+   */
+  useEffect(() => {
+    if (yaPropuesto.current || fondoFijo <= 0 || !jornada) return;
+    yaPropuesto.current = true;
+    void pedirPropuesta();
+  }, [fondoFijo, jornada, pedirPropuesta]);
 
   if (!jornada) return <Aviso tono="aviso">No hay ninguna jornada abierta.</Aviso>;
 
@@ -119,6 +148,16 @@ export default function Cierre() {
     cambioFinalBolsas,
     denominaciones,
   });
+
+  /**
+   * Lo que hay que sacar del cajón: lo contado menos el fondo fijo.
+   *
+   * Es el efectivo que ha entrado hoy —los cobros menos los pagos— y es el
+   * número por el que se entra a esta pantalla. Nunca negativo: si el cajón no
+   * llega al fondo fijo no hay nada que retirar, hay que reponer, y eso lo
+   * dice el aviso de abajo.
+   */
+  const aRetirar = Math.max(0, contadoTotal - (fondoFijo > 0 ? fondoFijo : objetivo));
 
   const valorTubosCambio =
     valorEnvasado(cambioFinalTubos, denominaciones, "cartucho") +
@@ -186,10 +225,23 @@ export default function Cierre() {
         diferencia queda asentada como ajuste auditado.
       </Aviso>
 
+      {/*
+        El cajón por debajo de su fondo fijo. No es un error —se puede cerrar
+        igual— pero mañana se abre corto de cambio, y eso hay que decirlo hoy,
+        que es cuando se puede ir al banco.
+      */}
+      {fondoFijo > 0 && contadoTotal < fondoFijo && (
+        <Aviso tono="aviso">
+          En el cajón hay {euros(contadoTotal)} y su fondo fijo es de {euros(fondoFijo)}: faltan{" "}
+          <strong>{euros(fondoFijo - contadoTotal)}</strong>. No hay nada que ingresar; mañana la
+          caja abre corta de cambio salvo que se reponga.
+        </Aviso>
+      )}
+
       <div className="flex flex-wrap items-end gap-2">
         <label className="block">
           <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
-            Cambio que se queda para mañana
+            Fondo fijo de la caja
           </span>
           <input
             value={objetivoTexto}
@@ -202,7 +254,7 @@ export default function Cierre() {
           onClick={() => void pedirPropuesta()}
           className="h-[38px] rounded-lg bg-slate-700 px-3 text-[12px] font-medium text-slate-200 hover:bg-slate-600"
         >
-          Proponer composición
+          Recalcular
         </button>
         <button
           onClick={quedarseloTodo}
@@ -213,7 +265,7 @@ export default function Cierre() {
         </button>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-4">
         <Card
           title="Contado en el arqueo"
           value={euros(contadoTotal)}
@@ -237,6 +289,21 @@ export default function Cierre() {
           value={euros(totalIngresoConTubos)}
           hint={pistaPrecintos(ingreso.tubos, ingreso.bolsas)}
           accent="text-sky-300"
+        />
+        {/*
+          Lo que hay que sacar del cajón, dicho como número propio. Sale de la
+          resta —contado menos fondo fijo— y no de lo que uno haya compuesto,
+          así que se ve desde el primer momento, antes de tocar nada.
+        */}
+        <Card
+          title="Efectivo a retirar"
+          value={euros(aRetirar)}
+          hint={
+            fondoFijo > 0
+              ? `${euros(contadoTotal)} contados − ${euros(fondoFijo)} de fondo fijo`
+              : "Esta caja no tiene fondo fijo configurado"
+          }
+          accent="text-amber-300"
         />
       </div>
 
