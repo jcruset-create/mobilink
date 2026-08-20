@@ -54,6 +54,7 @@ import {
 import { type LineaDenominacion, inventarioDesdeLineas } from "./domain/inventory.ts";
 import { type Canje, mejorCanje } from "./domain/depositswap.ts";
 import type { Contexto } from "./service.ts";
+import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
 
@@ -398,6 +399,31 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
     );
 
     cierres.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.sessionId - b.sessionId));
+
+    /*
+     * El agregado es la CAJA, no una jornada: un ingreso agrupa varios cierres
+     * y no pertenece a ninguno. Forzarlo dentro de una jornada obligaría a
+     * elegir cuál de los cierres agrupados manda, y cualquier respuesta sería
+     * inventada. La versión sube dentro del bloqueo de la caja que esta
+     * transacción ya tiene tomado.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, e.registerId),
+      registerId: e.registerId,
+      agregado: { tipo: "REGISTER", id: e.registerId },
+      tipo: "BANK_DEPOSIT_CREATED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      datos: {
+        depositId,
+        numero: creado[0].numero,
+        importeCentimos: Number(creado[0].importe_centimos),
+        remanenteNuevoCentimos: Number(creado[0].remanente_nuevo_centimos),
+        cierres: cierres.map((c) => c.sessionId),
+      },
+    });
+
     return aIngreso(creado[0], cierres, true);
   });
 
@@ -490,6 +516,22 @@ export async function anularIngreso(
         RETURNING *`,
       [ingresoId, ctx.userId, Date.now(), motivo.trim()]
     );
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, actualizado[0].register_id),
+      registerId: actualizado[0].register_id,
+      agregado: { tipo: "REGISTER", id: actualizado[0].register_id },
+      tipo: "BANK_DEPOSIT_VOIDED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      datos: {
+        depositId: ingresoId,
+        numero: actualizado[0].numero,
+        importeCentimos: Number(actualizado[0].importe_centimos),
+        motivo: motivo.trim(),
+      },
+    });
 
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const { rows: lineas } = await client.query(

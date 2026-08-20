@@ -20,6 +20,7 @@ import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCaja, exigirPermiso } from "./permissions.ts";
 import * as jerarquia from "./hierarchy.ts";
+import { estadoCola, procesarEventos, reintentarEventos } from "./events/worker.ts";
 import { miniaturaBoton, miniaturaFicha } from "./images.ts";
 import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimientosDeSesion } from "./repository.ts";
 import type { LineaDenominacion } from "./domain/inventory.ts";
@@ -348,6 +349,35 @@ export function createCashRouter(): Router {
             : entero(b.fondoObjetivoCentimos, "fondoObjetivoCentimos"),
       });
       res.json({ caja });
+    })
+  );
+
+  // ── Cola de eventos hacia MC Central ─────────────────────────────────────
+
+  /*
+   * La cola muerta, para que se pueda mirar.
+   *
+   * Va con permiso de ERP y no con uno nuevo: quien puede ver y reintentar la
+   * integración con la ERP es exactamente quien tiene que poder hacerlo con
+   * ésta. Un permiso más por cada cola sería un mecanismo paralelo que
+   * mantener.
+   */
+  r.get(
+    "/events",
+    exigirPermiso("cash.erp.view"),
+    ruta(async (req, res) => {
+      res.json(await estadoCola(req.authCtx!.empresaId));
+    })
+  );
+
+  /** Devuelve a la cola los eventos muertos, y da un empujón al worker. */
+  r.post(
+    "/events/retry",
+    exigirPermiso("cash.erp.sync"),
+    ruta(async (req, res) => {
+      const reencolados = await reintentarEventos(req.authCtx!.empresaId);
+      const tratados = await procesarEventos();
+      res.json({ reencolados, tratados });
     })
   );
 

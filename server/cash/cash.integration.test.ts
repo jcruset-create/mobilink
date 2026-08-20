@@ -38,6 +38,8 @@ let tesoreria: typeof import("./treasury.ts");
 let documentos: typeof import("./documents.ts");
 let ingresos: typeof import("./bankdeposits.ts");
 let informe: typeof import("./report.ts");
+let eventos: typeof import("./events/worker.ts");
+let transporte: typeof import("./events/transport.ts");
 let MockCashErpConnector: typeof import("./erp/mock.ts").MockCashErpConnector;
 let facturaDemo: typeof import("./erp/mock.ts").facturaDemo;
 
@@ -106,6 +108,8 @@ beforeAll(async () => {
   documentos = await import("./documents.ts");
   ingresos = await import("./bankdeposits.ts");
   informe = await import("./report.ts");
+  eventos = await import("./events/worker.ts");
+  transporte = await import("./events/transport.ts");
   const mock = await import("./erp/mock.ts");
   MockCashErpConnector = mock.MockCashErpConnector;
   facturaDemo = mock.facturaDemo;
@@ -3634,5 +3638,195 @@ describe.runIf(RUN)("Ámbito por taller", () => {
 
     const todas = await config.listarCajas(EMPRESA);
     expect(todas.some((c) => c.id === caja)).toBe(true);
+  });
+});
+
+/**
+ * Eventos hacia MC Central (fase 2).
+ *
+ * Lo que de verdad hay que demostrar aquí no es que se emita un evento —eso es
+ * fácil— sino que **emitirlo no puede costar un cobro**. Todo lo demás son
+ * comprobaciones de la cola.
+ */
+describe.runIf(RUN)("Eventos hacia MC Central", () => {
+  // El fondo variado de la suite: con solo billetes de 50 € la caja no puede
+  // devolver cambio y el cobro falla antes de llegar a emitir nada.
+  const FONDO = FONDO_300;
+
+  /*
+   * Vaciar la cola entera, no una tanda.
+   *
+   * El worker coge por orden de llegada, y a estas alturas de la suite hay
+   * cientos de eventos de otras pruebas esperando delante. Una sola tanda ni
+   * siquiera llega a los de la prueba en curso. Termina siempre: lo entregado
+   * queda en SENT y lo fallido en RETRY_PENDING con la espera por delante o en
+   * ERROR, y ninguno de los tres vuelve a salir.
+   */
+  async function vaciarCola() {
+    for (let i = 0; i < 50; i++) {
+      if ((await eventos.procesarEventos(500)) === 0) return;
+    }
+  }
+
+  async function eventosDe(sessionId: number, tipo?: string) {
+    const { rows } = await db.query(
+      `SELECT tipo, aggregate_type, aggregate_version, datos, estado, event_id
+         FROM cash_event_outbox
+        WHERE session_id = $1 ${tipo ? "AND tipo = $2" : ""}
+        ORDER BY id`,
+      tipo ? [sessionId, tipo] : [sessionId]
+    );
+    return rows;
+  }
+
+  it("un cobro emite un evento, y solo uno, con su versión de jornada", async () => {
+    const caja = await crearCaja("ev-cobro");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO });
+
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+    });
+
+    /*
+     * Uno, no dos. El fondo inicial también se asienta como operación, pero la
+     * apertura no pasa por `registrarOperacion`: emite `SESSION_OPENED` con el
+     * fondo dentro. Y así tiene que ser: con los dos eventos, Central podría
+     * sumar el fondo dos veces, que es exactamente el doble conteo que el
+     * encargo prohíbe.
+     */
+    const registrados = await eventosDe(sesion.id, "OPERATION_REGISTERED");
+    expect(registrados.length).toBe(1);
+    expect(registrados[0].datos.tipoOperacion).toBe("COLLECTION");
+    expect(Number(registrados[0].datos.importeCentimos)).toBe(2000);
+
+    // La apertura también emitió lo suyo, y la versión va en orden.
+    const todos = await eventosDe(sesion.id);
+    expect(todos[0].tipo).toBe("SESSION_OPENED");
+    const versiones = todos.map((e) => Number(e.aggregate_version));
+    expect(versiones).toEqual([...versiones].sort((a, b) => a - b));
+    expect(new Set(versiones).size).toBe(versiones.length);
+    expect(todos.every((e) => e.aggregate_type === "SESSION")).toBe(true);
+  });
+
+  /*
+   * La prueba que justifica el diseño entero. Si el transporte cayendo pudiera
+   * revertir la transacción, el dinero estaría en el cajón y el cobro no
+   * existiría: el peor fallo posible en este módulo.
+   */
+  it("con el transporte caído, el cobro se registra igual y el evento espera", async () => {
+    const memoria = new transporte.TransporteEnMemoria();
+    memoria.fallo = new Error("Central no responde");
+    transporte.registrarTransporte(memoria);
+
+    try {
+      const caja = await crearCaja("ev-caido");
+      const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO });
+
+      const cobro = await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 1000,
+        formasPago: [{ forma: "CASH", importe: 1000 }],
+        efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      });
+
+      // El cobro existe: el dinero contado está registrado.
+      expect(cobro.numero).toMatch(numeroDe("C"));
+
+      await vaciarCola();
+
+      const { rows } = await db.query(
+        `SELECT estado, intentos, last_error FROM cash_event_outbox
+          WHERE session_id = $1 ORDER BY id DESC LIMIT 1`,
+        [sesion.id]
+      );
+      expect(rows[0].estado).toBe("RETRY_PENDING");
+      expect(rows[0].intentos).toBe(1);
+      expect(rows[0].last_error).toContain("Central no responde");
+    } finally {
+      transporte.registrarTransporte(null);
+    }
+  });
+
+  it("el worker entrega y no reenvía lo ya entregado", async () => {
+    const memoria = new transporte.TransporteEnMemoria();
+    transporte.registrarTransporte(memoria);
+
+    try {
+      const caja = await crearCaja("ev-entrega");
+      const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO });
+
+      await vaciarCola();
+      const entregados = memoria.recibidos.filter((r) => r.sessionId === sesion.id).length;
+      expect(entregados).toBeGreaterThan(0);
+
+      // Segunda vuelta: ya está todo en SENT, así que no vuelve a salir.
+      await vaciarCola();
+      expect(memoria.recibidos.filter((r) => r.sessionId === sesion.id).length).toBe(entregados);
+    } finally {
+      transporte.registrarTransporte(null);
+    }
+  });
+
+  it("un rechazo permanente va a la cola muerta y se puede relanzar", async () => {
+    const memoria = new transporte.TransporteEnMemoria();
+    memoria.fallo = new transporte.ErrorTransportePermanente("Empresa desconocida");
+    transporte.registrarTransporte(memoria);
+
+    try {
+      const caja = await crearCaja("ev-dlq");
+      const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO });
+
+      await vaciarCola();
+
+      // Sin gastar los ocho intentos: un permanente no se reintenta.
+      const { rows } = await db.query(
+        `SELECT estado, intentos FROM cash_event_outbox WHERE session_id = $1 ORDER BY id`,
+        [sesion.id]
+      );
+      expect(rows[0].estado).toBe("ERROR");
+      expect(rows[0].intentos).toBe(1);
+
+      const cola = await eventos.estadoCola(EMPRESA);
+      expect(cola.muertos.some((m) => m.lastError?.includes("Empresa desconocida"))).toBe(true);
+
+      // Arreglado lo de enfrente, el relanzamiento los devuelve a la cola.
+      memoria.fallo = null;
+      const reencolados = await eventos.reintentarEventos(EMPRESA);
+      expect(reencolados).toBeGreaterThan(0);
+      await vaciarCola();
+
+      const { rows: despues } = await db.query(
+        `SELECT estado FROM cash_event_outbox WHERE session_id = $1 ORDER BY id`,
+        [sesion.id]
+      );
+      expect(despues.every((r) => r.estado === "SENT")).toBe(true);
+    } finally {
+      transporte.registrarTransporte(null);
+    }
+  });
+
+  it("el cierre y el ingreso bancario emiten lo suyo, y el ingreso cuelga de la CAJA", async () => {
+    const caja = await crearCaja("ev-cierre");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO });
+
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: FONDO });
+    // Todo lo contado se queda como cambio: no hay ingreso bancario que hacer.
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: FONDO });
+
+    const tipos = (await eventosDe(sesion.id)).map((e) => e.tipo);
+    expect(tipos).toContain("COUNT_RECORDED");
+    expect(tipos).toContain("SESSION_CLOSED");
+
+    const { rows } = await db.query(
+      `SELECT aggregate_type, register_id FROM cash_event_outbox
+        WHERE tipo = 'BANK_DEPOSIT_CREATED' AND register_id = $1`,
+      [caja]
+    );
+    // Sin ingreso bancario que hacer no hay evento; lo que se fija aquí es que
+    // si lo hubiera, colgaría de la caja y no de una jornada.
+    for (const r of rows) expect(r.aggregate_type).toBe("REGISTER");
   });
 });

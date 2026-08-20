@@ -27,6 +27,105 @@ import * as api from "../services/api";
 
 type Estado = Awaited<ReturnType<typeof api.estadoErp>>;
 
+/**
+ * La cola de eventos hacia MC Central.
+ *
+ * Comparte pantalla con la ERP porque es el mismo trabajo —mirar una cola y
+ * relanzar lo que se atascó— y quien tiene permiso para una lo tiene para la
+ * otra. Una pantalla más por cada cola sería un sitio más donde no mirar.
+ *
+ * **PENDING acumulándose no es una avería.** MC Central no existe todavía
+ * (llega en la fase 3), así que los eventos se apilan esperando destino y el
+ * día que arranque los recibe en orden desde el principio. Lo que sí hay que
+ * mirar es ERROR: eso es la cola muerta.
+ */
+function ColaCentral() {
+  const { puede } = useCash();
+  const [cola, setCola] = useState<api.ColaEventos | null>(null);
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const cargar = useCallback(async () => {
+    try {
+      setCola(await api.colaEventos());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando la cola de eventos");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  const total = (estado: string) =>
+    cola?.resumen.find((r) => r.estado === estado)?.total ?? 0;
+
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800 p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-100">Eventos hacia MC Central</h2>
+          <p className="text-[11px] text-slate-400">
+            Pendientes {total("PENDING") + total("RETRY_PENDING")} · Entregados {total("SENT")} ·
+            En cola muerta {total("ERROR")}
+          </p>
+        </div>
+        {puede("cash.erp.sync") && total("ERROR") > 0 && (
+          <button
+            className={btnSecondary}
+            disabled={ocupado}
+            onClick={() => {
+              setOcupado(true);
+              void api
+                .reintentarEventos()
+                .then(cargar)
+                .catch((e) => setError(e instanceof Error ? e.message : "Error al relanzar"))
+                .finally(() => setOcupado(false));
+            }}
+          >
+            <RotateCcw size={14} /> Relanzar los muertos
+          </button>
+        )}
+      </div>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {total("PENDING") > 0 && (
+        <Aviso tono="info">
+          Hay eventos esperando. MC Central todavía no está conectada, así que se acumulan a
+          propósito: el día que se conecte los recibirá en orden desde el principio.
+        </Aviso>
+      )}
+
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Ocurrió</th>
+            <th className={thCls}>Tipo</th>
+            <th className={`${thCls} text-right`}>Intentos</th>
+            <th className={thCls}>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(cola?.muertos ?? []).length === 0 && (
+            <EmptyRow cols={4} text="No hay ningún evento en la cola muerta." />
+          )}
+          {(cola?.muertos ?? []).map((m) => (
+            <tr key={m.id} className="border-t border-slate-700">
+              <td className={`${tdCls} text-[11px] text-slate-500`}>
+                {new Date(m.ocurridoEnMs).toLocaleString("es-ES")}
+              </td>
+              <td className={`${tdCls} font-mono text-[11px]`}>{m.tipo}</td>
+              <td className={`${tdCls} text-right tabular-nums`}>{m.intentos}</td>
+              <td className={`${tdCls} text-[11px] text-rose-300`}>{m.lastError ?? ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+    </div>
+  );
+}
+
 const TEXTO_ESTADO: Record<string, string> = {
   NO_CONFIGURADA: "NO CONFIGURADA",
   DESACTIVADA: "DESACTIVADA",
@@ -250,6 +349,8 @@ export default function IntegracionErp() {
           </tbody>
         </TableWrap>
       </div>
+
+      <ColaCentral />
     </div>
   );
 }

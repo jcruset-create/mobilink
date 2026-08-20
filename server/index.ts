@@ -20,7 +20,7 @@ import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
-import { initCash, mountCash, startCashErpWorker } from "./cash/index.ts";
+import { initCash, mountCash, startCashErpWorker, startCashEventWorker } from "./cash/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
 import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
@@ -17344,6 +17344,9 @@ initDb()
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
       startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
       startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
+      // Mobilink Cash: eventos de dominio hacia MC Central. Sin transporte
+      // registrado no hace nada: la cola espera destino (fase 3).
+      startCashEventWorker();
     });
   })
   .catch((error) => {

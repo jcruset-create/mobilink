@@ -84,6 +84,7 @@ import {
 } from "./repository.ts";
 import { conectorPara } from "./erp/registry.ts";
 import { exigirAmbitoCaja, exigirJornadaPropia } from "./hierarchy.ts";
+import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
 export type Contexto = {
   empresaId: string;
@@ -369,6 +370,20 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
         ahora,
       });
     }
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, e.registerId),
+      registerId: e.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "SESSION_OPENED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      // La fecha CONTABLE, que puede no ser la de hoy: al arrancar el módulo se
+      // meten días atrasados, y para Central ese cobro es del día que fue.
+      datos: { fecha, fondoCentimos: fondo, heredado },
+    });
 
     const sesion = (await obtenerSesion(sessionId, client))!;
     return { sesion, stock: lineasDesdeInventario(inventarioInicial), heredado, fondo };
@@ -716,6 +731,39 @@ export async function registrarOperacion(
       ahora,
     });
 
+    /*
+     * El evento hacia MC Central.
+     *
+     * Va aquí, con los movimientos ya asentados y dentro de la misma
+     * transacción, y NO dentro del `if` de la ERP que viene justo debajo: ese
+     * era el defecto que encontró la auditoría de la fase 0 —sin ERP
+     * configurada, el módulo no contaba nada a nadie—. Un cobro es un hecho de
+     * la caja tanto si hay una ERP detrás como si no.
+     *
+     * Éste es el único punto de emisión de TODOS los movimientos de efectivo
+     * del módulo: cobros, pagos, ajustes, cambios de moneda, pedidos al banco,
+     * entregas, liquidaciones y canjes de ingreso pasan por aquí.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "OPERATION_REGISTERED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        operacionId: operacionId,
+        numero,
+        tipoOperacion: e.tipo,
+        origen,
+        importeCentimos: e.importeCentimos,
+        efectivoNetoCentimos: validacion.efectivoNeto,
+        sectionId: e.sectionId ?? null,
+      },
+    });
+
     if (sincronizable) {
       await encolarEventoErp(client, {
         empresaId: ctx.empresaId,
@@ -959,6 +1007,24 @@ export async function guardarArqueo(
         ]
       );
     }
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "COUNT_RECORDED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      datos: {
+        arqueoId,
+        contadoCentimos: comparacion.totalContado,
+        teoricoCentimos: comparacion.totalTeorico,
+        diferenciaCentimos: comparacion.diferencia,
+        denominacionesCuadran: comparacion.cuadranDenominaciones,
+      },
+    });
 
     return { ...comparacion, arqueoId };
   });
@@ -1271,6 +1337,25 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       ]
     );
 
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "SESSION_CLOSED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      // El ingreso bancario apartado es lo que Central necesita para la
+      // posición global: es dinero que ya no vuelve a la caja.
+      datos: {
+        fecha: sesion.fecha,
+        cambioFinalCentimos: reparto.totalCambio,
+        ingresoBancarioCentimos: reparto.totalIngreso,
+        diferenciaCentimos: comparacion.diferencia,
+      },
+    });
+
     const sesionFinal = (await obtenerSesion(e.sessionId, client))!;
     return {
       sesion: sesionFinal,
@@ -1450,6 +1535,21 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
       `UPDATE cash_sessions SET estado = 'REOPENED', updated_at_ms = $2 WHERE id = $1`,
       [sessionId, Date.now()]
     );
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, s.registerId),
+      registerId: s.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "SESSION_REOPENED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      // El motivo viaja: una reapertura sin explicación es exactamente lo que
+      // MC Central tiene que poder mirar.
+      datos: { motivo: motivo.trim() },
+    });
+
     return (await obtenerSesion(sessionId, client))!;
   });
 
@@ -1566,6 +1666,30 @@ export async function anularOperacion(
       `UPDATE cash_operations SET estado = 'REVERSED', updated_at_ms = $2 WHERE id = $1`,
       [operationId, ahora]
     );
+
+    /*
+     * La anulación es un hecho nuevo, no la retirada del anterior. Central
+     * recibe los dos —el cobro y su reverso— porque así es como está en el
+     * libro mayor: aquí nada se borra, se compensa.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "OPERATION_REVERSED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        operacionAnuladaId: operationId,
+        operacionInversaId: nuevaId,
+        numero,
+        tipoOperacion: original.tipo,
+        importeCentimos: original.importeCentimos,
+        motivo: motivo?.trim() ?? null,
+      },
+    });
 
     // Si el cobro ya llegó a la ERP, hay que avisarla también de la anulación.
     if (original.erpSyncStatus === "SYNCED" && original.externalDocumentId) {
@@ -2247,6 +2371,23 @@ export async function regularizarArqueo(
         motivo: e.motivo ?? null,
       },
       ip: ctx.ip,
+    });
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "COUNT_ADJUSTED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        arqueoId,
+        numeroAjuste: ajuste.numero,
+        diferenciaCentimos: ajuste.diferenciaCentimos,
+        motivo: e.motivo ?? null,
+      },
     });
 
     return { ...ajuste, arqueoId };

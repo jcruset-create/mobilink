@@ -929,6 +929,83 @@ export async function initCash(): Promise<void> {
     END $$;
   `);
 
+  /*
+   * Cola de eventos de dominio hacia MC Central (fase 2).
+   *
+   * Es hermana de `cash_erp_outbox` y no la misma tabla a propósito: aquella
+   * lleva `connector_key` y una clave ajena a `cash_operations`, y está en
+   * producción. Mezclar dos dominios en una cola viva es riesgo gratuito.
+   *
+   * Y hay una diferencia que manda sobre todo el diseño: esta fila se escribe
+   * DENTRO de la transacción que mueve el dinero. Si su INSERT fallara, se
+   * desharía un cobro que ya ocurrió físicamente, que es la peor avería posible
+   * en este módulo. Por eso aquí NO hay clave ajena, ni CHECK sobre el tipo, ni
+   * ninguna restricción que dependa de los datos: lo único que puede rechazar
+   * esta fila es que la base esté caída, y entonces el cobro tampoco se guarda.
+   *
+   * `estado` sí lleva CHECK porque su lista la escribe el worker, no los datos,
+   * y vive en un solo sitio —éste— para no repetir el incidente de los motivos
+   * de movimiento, donde dos bloques recreaban el mismo CHECK con listas
+   * distintas y el servidor dejaba de arrancar.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_event_outbox (
+      id BIGSERIAL PRIMARY KEY,
+      -- Clave de deduplicación en destino. Se genera aquí y viaja como
+      -- Idempotency-Key: reenviar el mismo evento no lo cuenta dos veces.
+      event_id UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+      empresa_id UUID NOT NULL,
+      -- El taller se copia en el evento aunque se pueda deducir de la caja:
+      -- Central agrega por taller y no debería tener que preguntar por una
+      -- caja que quizá se reasignó después. El evento cuenta lo que pasó
+      -- ENTONCES, y eso incluye dónde pasó.
+      centro_id UUID,
+      register_id INTEGER,
+      session_id INTEGER,
+      aggregate_type TEXT,
+      aggregate_id BIGINT,
+      aggregate_version BIGINT,
+      tipo TEXT NOT NULL,
+      -- Cuándo OCURRIÓ, que no es cuándo se envía ni cuándo se tecleó.
+      ocurrido_en_ms BIGINT NOT NULL,
+      actor_user_id UUID,
+      datos JSONB NOT NULL DEFAULT '{}'::jsonb,
+      estado TEXT NOT NULL DEFAULT 'PENDING'
+        CHECK (estado IN ('PENDING','SENDING','SENT','ERROR','RETRY_PENDING','CANCELLED')),
+      intentos INTEGER NOT NULL DEFAULT 0,
+      proximo_intento_ms BIGINT,
+      last_error TEXT,
+      created_at_ms BIGINT NOT NULL,
+      processed_at_ms BIGINT
+    );
+
+    CREATE INDEX IF NOT EXISTS cash_events_pendientes_idx
+      ON cash_event_outbox(estado, proximo_intento_ms)
+      WHERE estado IN ('PENDING','RETRY_PENDING');
+    CREATE INDEX IF NOT EXISTS cash_events_empresa_idx
+      ON cash_event_outbox(empresa_id, created_at_ms DESC);
+    -- Orden de reconstrucción para Central: por agregado y versión.
+    CREATE INDEX IF NOT EXISTS cash_events_agregado_idx
+      ON cash_event_outbox(aggregate_type, aggregate_id, aggregate_version);
+  `);
+
+  /*
+   * Versión del agregado, para que Central detecte un hueco o un evento que
+   * llega tarde sin tener que fiarse del reloj.
+   *
+   * Sube dentro de bloqueos que YA existen —la jornada en `bloquearSesion` y la
+   * caja en los ingresos bancarios—, así que no añade contención ninguna: el
+   * incremento va donde ya había un `FOR UPDATE`.
+   *
+   * `NOT NULL DEFAULT 0` sobre una tabla con datos no reescribe las filas
+   * (PostgreSQL guarda el valor por defecto en el catálogo desde la 11), así
+   * que es seguro aunque la tabla sea grande.
+   */
+  await pool.query(`
+    ALTER TABLE cash_sessions  ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE cash_registers ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 
