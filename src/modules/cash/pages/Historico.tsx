@@ -7,9 +7,9 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { FileDown } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import {
+  BotonInforme,
   Aviso,
   Cabecera,
   Card,
@@ -25,7 +25,7 @@ import {
   btnDanger,
   btnSecondary,
 } from "../components/ui";
-import { euros, eurosConSigno } from "../utils/money";
+import { euros, eurosConSigno, fechaJornada } from "../utils/money";
 import {
   ETIQUETA_ESTADO_SESION,
   ETIQUETA_TIPO_OPERACION,
@@ -153,7 +153,7 @@ export default function Historico() {
                 onClick={() => setDetalle(s.id)}
                 className="cursor-pointer border-t border-slate-700 hover:bg-slate-700/40"
               >
-                <td className={tdCls}>{s.fecha?.slice(0, 10)}</td>
+                <td className={tdCls}>{fechaJornada(s.fecha)}</td>
                 <td className={tdCls}>
                   {s.caja_centro ? `${s.caja_centro} · ` : ""}
                   {s.caja_nombre}
@@ -257,14 +257,13 @@ function DetalleJornada({
                 Operaciones
               </span>
               {/* Todo el papeleo del día en un PDF, con los escaneos dentro. */}
-              <a
-                href={api.urlInformeCierre(sessionId)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-600"
+              <BotonInforme
+                sessionId={sessionId}
+                nombre={`cierre-${(datos?.sesion.fecha ?? String(sessionId)).slice(0, 10)}`}
+                className="flex items-center gap-1 rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-600 disabled:opacity-50"
               >
-                <FileDown className="h-3.5 w-3.5" /> Informe de cierre
-              </a>
+                Informe de cierre
+              </BotonInforme>
             </div>
             <TableWrap>
               <thead>

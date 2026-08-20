@@ -8,8 +8,10 @@
  * es propio de caja y no existía.
  */
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { FileDown } from "lucide-react";
 import { euros } from "../utils/money";
+import { informeCierrePdf } from "../services/api";
 
 export {
   inputCls,
@@ -213,5 +215,62 @@ export function AvisoCartuchos({
       <strong>Hay que abrir {aperturas.length === 1 ? "un precinto" : "precintos"}:</strong>{" "}
       {aperturas.map(describir).join(", ")}. Un envase abierto no se vuelve a cerrar.
     </Aviso>
+  );
+}
+
+/**
+ * Botón que abre el informe de cierre de una jornada.
+ *
+ * Existe como componente porque lo piden tres pantallas —la confirmación del
+ * cierre, el histórico e informes— y las tres lo tenían como un `<a href>` a la
+ * ruta del PDF. Eso no podía funcionar: el token de la sesión va en una
+ * cabecera `Authorization` y un enlace no la lleva, así que la pestaña nueva
+ * enseñaba «Falta el token de sesión» en vez del informe.
+ *
+ * Se pide con `fetch`, y lo que se abre es el fichero ya descargado. El enlace
+ * temporal se revoca en cuanto se usa: mantenerlo vivo dejaría el PDF de una
+ * jornada colgando en memoria toda la sesión.
+ */
+export function BotonInforme({
+  sessionId,
+  nombre,
+  className,
+  children,
+}: {
+  sessionId: number;
+  /** Nombre del fichero al guardarlo, sin extensión. */
+  nombre: string;
+  className?: string;
+  children?: ReactNode;
+}) {
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState("");
+
+  async function abrir() {
+    setCargando(true);
+    setError("");
+    try {
+      const blob = await informeCierrePdf(sessionId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${nombre}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido abrir el informe");
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  return (
+    <>
+      <button onClick={() => void abrir()} disabled={cargando} className={className} title={error}>
+        <FileDown className="h-3.5 w-3.5" />
+        {cargando ? "Generando…" : (children ?? "Informe")}
+      </button>
+      {error && <span className="text-[11px] text-rose-300">{error}</span>}
+    </>
   );
 }
