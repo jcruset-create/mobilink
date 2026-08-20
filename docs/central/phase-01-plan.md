@@ -28,10 +28,10 @@ auditoría transaccional (Fase 10, R2). Tampoco `app_tenants` — ver decisión 
 
 ## 2. Decisiones que necesito confirmadas antes de tocar código
 
-Son las preguntas bloqueantes de la Fase 0 que afectan a esta fase. **Si aceptas los defectos, no
-hace falta que contestes una por una: dime «adelante con los defectos» y ejecuto.**
+Son las preguntas bloqueantes de la Fase 0 que afectan a esta fase. **Si te parecen bien las cinco opciones recomendadas, no
+hace falta que contestes una por una: dime «adelante» y ejecuto.**
 
-| # | Decisión | Defecto propuesto | Consecuencia de aceptarlo |
+| # | Decisión | Recomendación | Consecuencia de aceptarla |
 |---|---|---|---|
 | D1 (Q1) | ¿TENANT por encima de `app_empresas`? | **No.** `tenant ≡ empresa` | Cero columnas nuevas en las 24 tablas `cash_*`. Si algún día un grupo agrupa dos empresas, se añade entonces con datos reales delante |
 | D2 (Q3) | ¿`centro` pasa a FK? | **Sí**, con `centro_id` nullable → backfill → endurecer | Se conserva `centro TEXT` durante toda la fase; nada se rompe si el backfill no casa |
