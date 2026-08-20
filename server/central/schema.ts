@@ -224,6 +224,54 @@ export async function initCentral(): Promise<void> {
       ADD COLUMN IF NOT EXISTS conciliada BOOLEAN NOT NULL DEFAULT false;
   `);
 
+  /*
+   * Los ingresos bancarios de la red, con su origen.
+   *
+   * Un ingreso no es un número suelto: agrupa los cierres de varios días de una
+   * caja. `central_deposit_sources` guarda ESE desglose —qué jornada puso
+   * cuánto— y es lo que permite contestar, cuando el banco apunta un abono de
+   * 3.480 €, de qué días y de qué caja salió. Sin el desglose, conciliar con el
+   * extracto es adivinar.
+   *
+   * Se guarda aparte y no como JSON dentro del ingreso porque la pregunta que
+   * de verdad se hace es la inversa: «esta jornada, ¿en qué ingreso acabó?».
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS central_bank_deposits (
+      deposit_id INTEGER PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      centro_id UUID,
+      register_id INTEGER,
+      numero TEXT,
+      fecha DATE,
+      referencia TEXT,
+      importe_centimos BIGINT NOT NULL DEFAULT 0,
+      total_cierres_centimos BIGINT NOT NULL DEFAULT 0,
+      remanente_anterior_centimos BIGINT NOT NULL DEFAULT 0,
+      remanente_nuevo_centimos BIGINT NOT NULL DEFAULT 0,
+      estado TEXT NOT NULL DEFAULT 'CONFIRMADO',
+      anulado_motivo TEXT,
+      creado_en_ms BIGINT,
+      anulado_en_ms BIGINT,
+      actualizado_en_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS central_deposits_empresa_idx
+      ON central_bank_deposits(empresa_id, fecha DESC NULLS LAST);
+    CREATE INDEX IF NOT EXISTS central_deposits_caja_idx
+      ON central_bank_deposits(register_id, estado);
+
+    CREATE TABLE IF NOT EXISTS central_deposit_sources (
+      deposit_id INTEGER NOT NULL,
+      session_id INTEGER NOT NULL,
+      empresa_id UUID NOT NULL,
+      fecha DATE,
+      importe_centimos BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY (deposit_id, session_id)
+    );
+    CREATE INDEX IF NOT EXISTS central_sources_session_idx
+      ON central_deposit_sources(session_id);
+  `);
+
   await registrarModuloCentral();
 
   console.log("MC Central: esquema inicializado correctamente");

@@ -99,6 +99,34 @@ export type TransitoAbierto = {
 export const posicion = () =>
   pedir<{ posicion: PosicionGlobal; transitos: TransitoAbierto[] }>("/position");
 
+export type IngresoEnRed = {
+  depositId: number;
+  numero: string | null;
+  fecha: string | null;
+  referencia: string | null;
+  caja: string | null;
+  centro: string | null;
+  importeCentimos: number;
+  totalCierresCentimos: number;
+  remanenteNuevoCentimos: number;
+  estado: string;
+  anuladoMotivo: string | null;
+  origen: { sessionId: number; fecha: string | null; importeCentimos: number }[];
+};
+
+export type PendienteDeIngresar = {
+  registerId: number;
+  caja: string | null;
+  centro: string | null;
+  jornadas: number;
+  centimos: number;
+  desde: string | null;
+  dias: number | null;
+};
+
+export const ingresos = () =>
+  pedir<{ ingresos: IngresoEnRed[]; pendiente: PendienteDeIngresar[] }>("/deposits");
+
 export const red = () =>
   pedir<{
     resumen: ResumenRed;
