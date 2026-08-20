@@ -2998,3 +2998,167 @@ describe.runIf(RUN)("escaneos de la jornada entera", () => {
     ).rejects.toMatchObject({ codigo: "FORMATO_NO_ADMITIDO" });
   });
 });
+
+describe.runIf(RUN)("canje de monedas por billetes para el ingreso", () => {
+  /**
+   * Monta el escenario real del mostrador: una jornada que deja al banco
+   * 105,69 € con una composición concreta —95 € en billetes y 10,69 € en
+   * monedas— y otra jornada abierta con los billetes del cajón.
+   */
+  async function escenario(billetesDeCaja: { valor: number; cantidad: number }[]) {
+    const caja = await crearCaja(`canje-${Math.abs(billetesDeCaja[0]?.valor ?? 0)}-${Date.now()}`);
+
+    const pendiente = [
+      { valor: 5000, cantidad: 1 },
+      { valor: 2000, cantidad: 2 },
+      { valor: 500, cantidad: 1 },
+      { valor: 200, cantidad: 4 },
+      { valor: 100, cantidad: 2 },
+      { valor: 50, cantidad: 1 },
+      { valor: 10, cantidad: 1 },
+      { valor: 5, cantidad: 1 },
+      { valor: 2, cantidad: 2 },
+    ];
+
+    // Jornada 1: entra ese dinero y se cierra mandándolo entero al banco.
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja });
+    await servicio.registrarOperacion(ctx, {
+      sessionId: sesion.id,
+      tipo: "MANUAL_IN",
+      importeCentimos: 10569,
+      formasPago: [{ forma: "CASH", importe: 10569 }],
+      efectivoRecibido: pendiente,
+      concepto: "Cobros del día",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: pendiente });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] });
+
+    // Jornada 2, abierta, con los billetes que tenga el cajón.
+    await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: billetesDeCaja });
+    return { caja, sessionIds: [sesion.id] };
+  }
+
+  const valor = (l: readonly { valor: number; cantidad: number }[]) =>
+    l.reduce((a, x) => a + x.valor * x.cantidad, 0);
+
+  it("el desglose del pendiente sale del libro mayor, no de un redondeo", async () => {
+    const { caja, sessionIds } = await escenario([{ valor: 1000, cantidad: 1 }]);
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+
+    // Lo que de verdad se puede ingresar son 95 €, no los 105 € del redondeo.
+    expect(p.ingresableCentimos).toBe(9500);
+    expect(p.enMonedasCentimos).toBe(1069);
+    expect(valor(p.pendiente.billetes) + valor(p.pendiente.monedas)).toBe(10569);
+  });
+
+  it("con un billete de 10 en caja, propone canjear los 10 € en monedas", async () => {
+    const { caja, sessionIds } = await escenario([{ valor: 1000, cantidad: 1 }]);
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    expect(p.canje?.valorMonedasCentimos).toBe(1000);
+    expect(p.canje?.billetesRecibidos).toEqual([{ valor: 1000, cantidad: 1 }]);
+  });
+
+  it("sin billete de 10 pero con uno de 50, entrega los 2×20 y se lleva el 50", async () => {
+    const { caja, sessionIds } = await escenario([{ valor: 5000, cantidad: 1 }]);
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    expect(p.canje?.valorMonedasCentimos).toBe(1000);
+    expect(valor(p.canje?.billetesEntregados ?? [])).toBe(4000);
+    expect(p.canje?.billetesRecibidos).toEqual([{ valor: 5000, cantidad: 1 }]);
+  });
+
+  it("al registrarlo, el montón cambia y la caja no pierde valor", async () => {
+    const { caja, sessionIds } = await escenario([{ valor: 1000, cantidad: 1 }]);
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    if (!p.canje) throw new Error("debería haber canje");
+
+    const abierta = (await repo.sesionAbierta(caja))!;
+    const antes = (await servicio.stockDeJornada(abierta.id)).totalCentimos;
+
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds,
+      monedasEntregadas: p.canje.monedasEntregadas,
+      billetesEntregados: p.canje.billetesEntregados,
+      billetesRecibidos: p.canje.billetesRecibidos,
+    });
+
+    // La caja mantiene el valor y gana calderilla.
+    const despues = await servicio.stockDeJornada(abierta.id);
+    expect(despues.totalCentimos).toBe(antes);
+    expect(despues.lineas.find((l) => l.valor === 200)?.cantidad).toBe(4);
+
+    // Y el montón ya se puede ingresar entero salvo los 0,69 €.
+    const ahora = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    expect(ahora.ingresableCentimos).toBe(10500);
+    expect(ahora.enMonedasCentimos).toBe(69);
+    expect(ahora.canje).toBeNull();
+  });
+
+  it("sin billetes en la caja no hay canje: se ingresan 95 € y esperan las monedas", async () => {
+    const { caja, sessionIds } = await escenario([{ valor: 200, cantidad: 3 }]);
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    expect(p.canje).toBeNull();
+    expect(p.ingresableCentimos).toBe(9500);
+  });
+
+  it("no se puede canjear una moneda que ya se canjeó", async () => {
+    const { caja, sessionIds } = await escenario([{ valor: 1000, cantidad: 2 }]);
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    if (!p.canje) throw new Error("debería haber canje");
+
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds,
+      monedasEntregadas: p.canje.monedasEntregadas,
+      billetesEntregados: p.canje.billetesEntregados,
+      billetesRecibidos: p.canje.billetesRecibidos,
+    });
+
+    // El mismo canje otra vez: esas monedas ya no están en el montón.
+    await expect(
+      ingresos.registrarCanje(ctx, {
+        registerId: caja,
+        sessionIds,
+        monedasEntregadas: p.canje.monedasEntregadas,
+        billetesEntregados: p.canje.billetesEntregados,
+        billetesRecibidos: p.canje.billetesRecibidos,
+      })
+    ).rejects.toMatchObject({ codigo: "STOCK_INSUFICIENTE" });
+  });
+
+  it("un canje que no cuadra se rechaza", async () => {
+    const { caja, sessionIds } = await escenario([{ valor: 1000, cantidad: 1 }]);
+    await expect(
+      ingresos.registrarCanje(ctx, {
+        registerId: caja,
+        sessionIds,
+        monedasEntregadas: [{ valor: 200, cantidad: 4 }],
+        billetesEntregados: [],
+        billetesRecibidos: [{ valor: 1000, cantidad: 1 }],
+      })
+    ).rejects.toMatchObject({ codigo: "EFECTIVO_NO_CUADRA" });
+  });
+
+  it("el ingreso consume los canjes: el montón siguiente arranca limpio", async () => {
+    const { caja, sessionIds } = await escenario([{ valor: 1000, cantidad: 1 }]);
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds,
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+
+    await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds,
+      importeCentimos: 10500,
+    });
+
+    // Sin cierres pendientes y con los canjes consumidos, el montón es cero.
+    const despues = await ingresos.proponerCanje(EMPRESA, caja, []);
+    expect(despues.ingresableCentimos).toBe(0);
+    expect(despues.enMonedasCentimos).toBe(0);
+  });
+});

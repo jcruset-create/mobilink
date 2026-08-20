@@ -299,6 +299,26 @@ export type IngresoBancario = {
   esUltimo: boolean;
 };
 
+/** Canje de monedas del montón pendiente por billetes del cajón. */
+export type CanjeIngreso = {
+  monedasEntregadas: LineaDenominacion[];
+  billetesEntregados: LineaDenominacion[];
+  billetesRecibidos: LineaDenominacion[];
+  /** Lo que sube el ingreso: el valor de las monedas convertidas. */
+  valorMonedasCentimos: number;
+  valorCanjeCentimos: number;
+};
+
+export type PropuestaCanjeIngreso = {
+  pendiente: { billetes: LineaDenominacion[]; monedas: LineaDenominacion[] };
+  /** Lo que se puede ingresar hoy: solo los billetes del montón. */
+  ingresableCentimos: number;
+  /** Lo que se quedaría en tienda si no se canjea nada. */
+  enMonedasCentimos: number;
+  canje: CanjeIngreso | null;
+  sinJornadaAbierta: boolean;
+};
+
 export type PanelIngresos = {
   pendientes: CierrePendiente[];
   remanenteCentimos: number;

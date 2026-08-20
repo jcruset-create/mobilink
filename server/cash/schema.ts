@@ -709,6 +709,35 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * Canjes de monedas por billetes para poder ingresar en el banco.
+   *
+   * El banco solo admite billetes, así que la parte del montón pendiente que
+   * está en monedas se cambia por billetes del cajón. El canje en sí es una
+   * operación normal (`EXCHANGE`) de la jornada abierta —mueve el cajón y por
+   * eso tiene que estar en su libro mayor—; lo que hace falta anotar aparte es
+   * que ese canje era CONTRA EL MONTÓN, para poder recomponerlo:
+   *
+   *     montón = Σ BANK_DEPOSIT − Σ entradas del canje + Σ salidas del canje
+   *
+   * `bank_deposit_id` a NULL significa «todavía cuenta»; al registrar el
+   * ingreso se rellena y el canje deja de afectar al montón siguiente. Sin eso,
+   * el ajuste se arrastraría para siempre y el montón de la semana que viene
+   * saldría mal.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_deposit_swaps (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      register_id INTEGER NOT NULL REFERENCES cash_registers(id) ON DELETE RESTRICT,
+      operation_id INTEGER NOT NULL REFERENCES cash_operations(id) ON DELETE RESTRICT,
+      bank_deposit_id INTEGER REFERENCES cash_bank_deposits(id) ON DELETE RESTRICT,
+      created_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cash_deposit_swaps_pendientes_idx
+      ON cash_deposit_swaps(register_id) WHERE bank_deposit_id IS NULL;
+  `);
+
+  /*
    * Los motivos y tipos nuevos en los CHECK. Se recrean enteros porque un
    * CHECK no se amplía: se tira y se vuelve a poner. El nombre es el que
    * genera Postgres para un CHECK de columna, el DROP va con IF EXISTS para

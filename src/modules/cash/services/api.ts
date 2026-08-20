@@ -19,6 +19,7 @@ import type {
   EntregaDinero,
   FormaPagoConfig,
   IngresoBancario,
+  PropuestaCanjeIngreso,
   PanelIngresos,
   PedidoCambio,
   Pendientes,
@@ -222,12 +223,68 @@ export const anularDocumento = (id: number, motivo: string) =>
   pedir<{ documento: DocumentoOperacion }>(`/documents/${id}/void`, json({ motivo }));
 
 /** Enlace del informe de cierre. Se abre en una pestaña, no se descarga por fetch. */
-export const urlInformeCierre = (sessionId: number) => `${BASE}/sessions/${sessionId}/report.pdf`;
+/**
+ * Descarga el informe de cierre.
+ *
+ * NO es un enlace. El token de la sesión viaja en una cabecera `Authorization`,
+ * y un `<a href>` no puede llevarla: al abrirse en una pestaña nueva el
+ * servidor respondía «Falta el token de sesión» y en pantalla salía ese JSON en
+ * vez del PDF. Se pide por `fetch` con las cabeceras de siempre y lo que se
+ * abre es el fichero ya descargado.
+ */
+export async function informeCierrePdf(sessionId: number): Promise<Blob> {
+  const cabeceras = await sessionHeaders();
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/sessions/${sessionId}/report.pdf`, { headers: cabeceras });
+  } catch {
+    throw new ErrorApiCaja("SIN_CONEXION", "No hay conexión con el servidor.", 0);
+  }
+
+  if (!res.ok) {
+    // El error sí viene en JSON, aunque la ruta prometa un PDF.
+    const texto = await res.text();
+    let mensaje = "No se ha podido generar el informe.";
+    let codigo = "ERROR";
+    try {
+      const datos = JSON.parse(texto);
+      mensaje = datos?.error ?? mensaje;
+      codigo = datos?.code ?? codigo;
+    } catch {
+      /* El cuerpo no era JSON: se queda el mensaje genérico. */
+    }
+    throw new ErrorApiCaja(codigo, mensaje, res.status);
+  }
+
+  return res.blob();
+}
 
 // ── Ingresos bancarios ─────────────────────────────────────────────────────
 
 export const panelIngresos = (registerId: number) =>
   pedir<PanelIngresos>(`/registers/${registerId}/bank-deposits`);
+
+/**
+ * Qué se puede ingresar de verdad y qué canje lo mejoraría.
+ *
+ * El desglose sale del libro mayor, no de redondear el total: lo que va al
+ * banco son los billetes que hay en el montón, y las monedas hay que cambiarlas
+ * antes por billetes del cajón.
+ */
+export const proponerCanjeIngreso = (registerId: number, sessionIds: readonly number[]) =>
+  pedir<PropuestaCanjeIngreso>(
+    `/registers/${registerId}/bank-deposits/swap` +
+      (sessionIds.length > 0 ? `?cierres=${sessionIds.join(",")}` : "")
+  );
+
+export const registrarCanjeIngreso = (datos: {
+  registerId: number;
+  sessionIds: number[];
+  monedasEntregadas: LineaDenominacion[];
+  billetesEntregados: LineaDenominacion[];
+  billetesRecibidos: LineaDenominacion[];
+}) => pedir<{ operacionId: number; numero: string }>("/bank-deposits/swap", json(datos));
 
 export const crearIngresoBancario = (datos: {
   registerId: number;
