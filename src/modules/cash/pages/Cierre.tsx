@@ -37,16 +37,23 @@ export default function Cierre() {
   const [objetivoTexto, setObjetivoTexto] = useState(
     fondoFijo > 0 ? euros(fondoFijo).replace(" €", "") : "300,00"
   );
-  const [cambioFinal, setCambioFinal] = useState<CantidadesPorValor>({});
-  const [cambioFinalTubos, setCambioFinalTubos] = useState<LineaDenominacion[]>([]);
-  const [cambioFinalBolsas, setCambioFinalBolsas] = useState<LineaDenominacion[]>([]);
+  /*
+   * Lo que se teclea es lo que SE RETIRA para el banco, y el cambio que se
+   * queda sale de restarlo a lo contado.
+   *
+   * Es el orden del mostrador —primero se aparta lo que va al banco, y lo que
+   * queda en el cajón es el cambio— y además hace imposible el descuadre: los
+   * dos lados no son dos cuentas que haya que hacer coincidir, sino una resta.
+   */
+  const [retirado, setRetirado] = useState<CantidadesPorValor>({});
+  const [retiradoTubos, setRetiradoTubos] = useState<LineaDenominacion[]>([]);
+  const [retiradoBolsas, setRetiradoBolsas] = useState<LineaDenominacion[]>([]);
   const [notas, setNotas] = useState("");
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [cerrada, setCerrada] = useState<Awaited<ReturnType<typeof api.cerrarJornada>> | null>(null);
 
   const objetivo = aCentimos(objetivoTexto) ?? 0;
-  const totalCambio = totalLineas(lineasDesde(cambioFinal));
 
   /*
    * Con el fondo fijo configurado, la composición se propone SOLA al entrar.
@@ -61,11 +68,11 @@ export default function Cierre() {
     setError("");
     try {
       const r = await api.proponerCierre(jornada.sesion.id, objetivo);
-      // El ingreso no se guarda: se deriva de lo contado menos lo que se
-      // queda, así que basta con fijar el cambio final.
-      setCambioFinal(cantidadesDesde(r.cambioFinal));
-      setCambioFinalTubos(r.cambioFinalCartuchos ?? []);
-      setCambioFinalBolsas(r.cambioFinalBolsas ?? []);
+      // De la propuesta se toma el lado del BANCO, que es el que se teclea. El
+      // cambio que se queda se deriva restando, así que no hace falta fijarlo.
+      setRetirado(cantidadesDesde(r.ingresoBancario));
+      setRetiradoTubos(r.ingresoBancarioCartuchos ?? []);
+      setRetiradoBolsas(r.ingresoBancarioBolsas ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido preparar el cierre");
     }
@@ -119,6 +126,31 @@ export default function Cierre() {
    * en la rejilla porque un cartucho o una bolsa entera se queda o se va, no se
    * parte —y si se partiera dejaría de ser un precinto.
    */
+  /**
+   * Lo contado menos lo retirado, por denominación. Nunca negativo: la rejilla
+   * ya acota cada casilla a lo que hay contado.
+   */
+  const restar = (
+    contadas: readonly LineaDenominacion[],
+    retiradas: CantidadesPorValor
+  ): CantidadesPorValor => {
+    const queda: CantidadesPorValor = {};
+    for (const l of contadas) {
+      const n = l.cantidad - (retiradas[l.valor] ?? 0);
+      if (n > 0) queda[l.valor] = n;
+    }
+    return queda;
+  };
+
+  /*
+   * El cambio que se queda NO se teclea: es lo contado menos lo retirado. Por
+   * construcción los dos lados suman siempre el efectivo contado, así que el
+   * cierre no puede quedarse a medias por un descuadre de composición.
+   */
+  const cambioFinal = restar(sueltasContadas, retirado);
+  const cambioFinalTubos = lineasDesde(restar(tubosContados, cantidadesDesde(retiradoTubos)));
+  const cambioFinalBolsas = lineasDesde(restar(bolsasContadas, cantidadesDesde(retiradoBolsas)));
+
   const ingreso = repartirIngreso({
     sueltasContadas,
     tubosContados,
@@ -128,6 +160,8 @@ export default function Cierre() {
     cambioFinalBolsas,
     denominaciones,
   });
+
+  const totalCambio = totalLineas(lineasDesde(cambioFinal));
 
   /**
    * Lo que hay que sacar del cajón: lo contado menos el fondo fijo.
@@ -161,9 +195,9 @@ export default function Cierre() {
    * no significa nada.
    */
   function quedarseloTodo() {
-    setCambioFinal(cantidadesDesde(sueltasContadas));
-    setCambioFinalTubos(tubosContados);
-    setCambioFinalBolsas(bolsasContadas);
+    setRetirado({});
+    setRetiradoTubos([]);
+    setRetiradoBolsas([]);
     setObjetivoTexto(euros(contadoTotal).replace(" €", ""));
   }
 
@@ -302,6 +336,12 @@ export default function Cierre() {
         </Aviso>
       )}
 
+      {/*
+        Red de seguridad, no un estado normal: desde que el paso 2 es una resta
+        del paso 1, los dos lados suman siempre lo contado. Se deja porque es la
+        invariante de la que depende que el cierre sea correcto, y si un cambio
+        futuro la rompiera hay que verlo aquí y no en el arqueo de mañana.
+      */}
       {!cuadra && (
         <Aviso tono="mal">
           El cambio final más el ingreso no suman el efectivo contado. Revisa la composición.
@@ -316,40 +356,61 @@ export default function Cierre() {
       {cuadra && desvioObjetivo !== 0 && (
         <Aviso tono="aviso">
           {desvioObjetivo < 0
-            ? `Faltan ${euros(-desvioObjetivo)} para el cambio que has pedido (${euros(objetivo)}).`
-            : `Sobran ${euros(desvioObjetivo)} sobre el cambio que has pedido (${euros(objetivo)}).`}{" "}
+            ? `En el paso 2 quedan ${euros(-desvioObjetivo)} menos que el fondo fijo (${euros(objetivo)}): estás retirando de más.`
+            : `En el paso 2 quedan ${euros(desvioObjetivo)} más que el fondo fijo (${euros(objetivo)}): estás retirando de menos.`}{" "}
           {(tubosContados.length > 0 || bolsasContadas.length > 0) &&
-            "Si el hueco es de un envase entero, ajústalo en las columnas «cart.» o «bols.» de las monedas. "}
-          Puedes cerrar así igualmente: el resto va al ingreso bancario.
+            "Si el hueco es de un envase entero, ajústalo en las columnas «cart.» o «bols.» del paso 1. "}
+          Puedes cerrar así igualmente: lo que retires es lo que va al banco.
         </Aviso>
       )}
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <DenominationGrid
-          titulo="Cambio final (se queda en caja)"
-          denominaciones={denominaciones}
-          cantidades={cambioFinal}
-          onChange={setCambioFinal}
-          disponible={Object.fromEntries(sueltasContadas.map((l) => [l.valor, l.cantidad]))}
-          mostrarDisponible
-          /*
-           * Los envases se cuentan AQUÍ, en las columnas estrechas de las
-           * monedas, y suman en el total de la rejilla. Antes vivían en un
-           * panel aparte y el total de abajo solo contaba lo suelto: con un
-           * tubo de 2,50 € apartado, la rejilla decía «427,19 € de objetivo
-           * 347,50 €» y había que hacer dos sumas mentales para saber si
-           * cuadraba. Ahora el objetivo es el fondo entero y el total es todo
-           * lo que se queda.
-           */
-          cartuchos={cantidadesDesde(cambioFinalTubos)}
-          onCartuchosChange={(c) => setCambioFinalTubos(lineasDesde(c))}
-          bolsas={cantidadesDesde(cambioFinalBolsas)}
-          onBolsasChange={(c) => setCambioFinalBolsas(lineasDesde(c))}
-          disponibleCartuchos={Object.fromEntries(tubosContados.map((l) => [l.valor, l.cantidad]))}
-          disponibleBolsas={Object.fromEntries(bolsasContadas.map((l) => [l.valor, l.cantidad]))}
-          objetivoCentimos={objetivo > 0 ? objetivo : null}
-          deshabilitado={guardando}
-        />
+        <div className="space-y-2">
+          {/*
+            Paso 1: lo que se aparta para el banco. Es lo que se teclea, porque
+            es lo que se hace primero con las manos: separar del cajón lo que se
+            lleva uno. El paso 2 sale de restarlo, así que no hay dos cuentas
+            que puedan discrepar.
+          */}
+          <DenominationGrid
+            titulo="Paso 1 · Efectivo que se retira para el banco"
+            denominaciones={denominaciones}
+            cantidades={retirado}
+            onChange={setRetirado}
+            disponible={Object.fromEntries(sueltasContadas.map((l) => [l.valor, l.cantidad]))}
+            mostrarDisponible
+            cartuchos={cantidadesDesde(retiradoTubos)}
+            onCartuchosChange={(c) => setRetiradoTubos(lineasDesde(c))}
+            bolsas={cantidadesDesde(retiradoBolsas)}
+            onBolsasChange={(c) => setRetiradoBolsas(lineasDesde(c))}
+            disponibleCartuchos={Object.fromEntries(tubosContados.map((l) => [l.valor, l.cantidad]))}
+            disponibleBolsas={Object.fromEntries(bolsasContadas.map((l) => [l.valor, l.cantidad]))}
+            objetivoCentimos={aRetirar > 0 ? aRetirar : null}
+            deshabilitado={guardando}
+          />
+
+          {/*
+            Paso 2: lo que queda en el cajón. No se teclea —es una resta— y por
+            eso va apagado: si se pudiera tocar, volverían a ser dos cuentas que
+            hay que hacer coincidir a mano, que es justo lo que descuadraba.
+          */}
+          <DenominationGrid
+            titulo="Paso 2 · Cambio que se queda en caja"
+            denominaciones={denominaciones}
+            cantidades={cambioFinal}
+            onChange={() => {}}
+            cartuchos={cantidadesDesde(cambioFinalTubos)}
+            bolsas={cantidadesDesde(cambioFinalBolsas)}
+            objetivoCentimos={objetivo > 0 ? objetivo : null}
+            deshabilitado
+          />
+
+          <p className="text-[11px] text-slate-500">
+            El paso 2 no se teclea: es lo contado menos lo que retiras. Los dos suman siempre el
+            efectivo del arqueo, así que el cierre no puede quedarse a medias por un descuadre de
+            composición — si el paso 2 no da el fondo fijo, corrige el paso 1.
+          </p>
+        </div>
 
         <div className="space-y-3">
 
