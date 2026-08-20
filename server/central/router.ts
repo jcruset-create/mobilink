@@ -27,6 +27,7 @@ import {
   transitosAbiertos,
 } from "./queries.ts";
 import * as jerarquia from "../cash/hierarchy.ts";
+import * as reglas from "./rules/service.ts";
 import { ErrorCaja } from "../cash/errors.ts";
 
 /** Traduce `ErrorCaja` a su código HTTP, como hace el router de la caja. */
@@ -143,6 +144,70 @@ export function createCentralRouter(): Router {
           soloDescuadres: q.descuadres === "1",
         }),
       });
+    })
+  );
+
+  // ── Reglas e incidencias ─────────────────────────────────────────────────
+
+  /** La bandeja y las reglas que la llenan, en una llamada. */
+  r.get(
+    "/alerts",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const empresaId = req.authCtx!.empresaId;
+      const [incidencias, lista] = await Promise.all([
+        reglas.listarIncidencias(empresaId, req.query.todas !== "1"),
+        reglas.listarReglas(empresaId),
+      ]);
+      res.json({ incidencias, reglas: lista, permisos: req.centralPermisos });
+    })
+  );
+
+  /**
+   * Evaluar ahora.
+   *
+   * Existe además del ciclo automático porque después de cambiar un umbral uno
+   * quiere ver el efecto en el momento, no en el próximo cuarto de hora.
+   */
+  r.post(
+    "/alerts/evaluate",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      res.json(await reglas.evaluar(req.authCtx!.empresaId));
+    })
+  );
+
+  r.post(
+    "/rules",
+    exigirPermiso("central.rules.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const ctx = { empresaId: req.authCtx!.empresaId, userId: req.authCtx!.userId, ip: req.ip };
+      const regla = await reglas.guardarRegla(ctx, {
+        tipo: String(b.tipo ?? ""),
+        ambito: String(b.ambito ?? "EMPRESA"),
+        ambitoId: typeof b.ambitoId === "string" && b.ambitoId ? b.ambitoId : null,
+        umbral: Number(b.umbral ?? 0),
+        activa: typeof b.activa === "boolean" ? b.activa : true,
+      });
+      res.status(201).json({ regla });
+    })
+  );
+
+  r.patch(
+    "/incidents/:id",
+    exigirPermiso("central.incidents.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const estado = b.estado === "RESUELTA" ? "RESUELTA" : "RECONOCIDA";
+      const ctx = { empresaId: req.authCtx!.empresaId, userId: req.authCtx!.userId, ip: req.ip };
+      await reglas.cambiarIncidencia(
+        ctx,
+        String(req.params.id),
+        estado,
+        typeof b.nota === "string" ? b.nota : undefined
+      );
+      res.json({ ok: true });
     })
   );
 

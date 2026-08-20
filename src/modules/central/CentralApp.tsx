@@ -13,13 +13,22 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { Building2, CalendarDays, Coins, Landmark, Network, Wallet } from "lucide-react";
+import {
+  Bell,
+  Building2,
+  CalendarDays,
+  Coins,
+  Landmark,
+  Network,
+  Wallet,
+} from "lucide-react";
 import {
   Card,
   EmptyRow,
   ErrorBox,
   TableWrap,
   btnPrimary,
+  btnSecondary,
   inputCls,
   thCls,
   tdCls,
@@ -59,6 +68,9 @@ export default function CentralApp() {
           <NavLink to="/central/jornadas" className={enlace}>
             <CalendarDays size={15} /> Jornadas
           </NavLink>
+          <NavLink to="/central/incidencias" className={enlace}>
+            <Bell size={15} /> Incidencias
+          </NavLink>
           <NavLink to="/central/organizacion" className={enlace}>
             <Building2 size={15} /> Organización
           </NavLink>
@@ -71,6 +83,7 @@ export default function CentralApp() {
           <Route path="ingresos" element={<Ingresos />} />
           <Route path="cambio" element={<Cambio />} />
           <Route path="jornadas" element={<Jornadas />} />
+          <Route path="incidencias" element={<Incidencias />} />
           <Route path="organizacion" element={<Organizacion />} />
           <Route path="*" element={<Navigate to="red" replace />} />
         </Routes>
@@ -648,6 +661,271 @@ function Jornadas() {
           ))}
         </tbody>
       </TableWrap>
+    </div>
+  );
+}
+
+// ── Incidencias y reglas ───────────────────────────────────────────────────
+
+const TIPOS: { valor: string; label: string; ayuda: string; unidad: "euros" | "dias" }[] = [
+  {
+    valor: "DESCUADRE",
+    label: "Descuadre de arqueo",
+    ayuda: "Salta si el último arqueo descuadra más de este importe, sobre o falte.",
+    unidad: "euros",
+  },
+  {
+    valor: "TRANSITO_DIAS",
+    label: "Dinero fuera del cajón",
+    ayuda: "Días que puede estar fuera un cambio del banco o una entrega antes de avisar.",
+    unidad: "dias",
+  },
+  {
+    valor: "SIN_CERRAR_DIAS",
+    label: "Caja sin cerrar",
+    ayuda: "Días sin cerrar jornada.",
+    unidad: "dias",
+  },
+  {
+    valor: "PENDIENTE_BANCO_DIAS",
+    label: "Sin llevar al banco",
+    ayuda: "Días que puede esperar un cierre sin ingresarse.",
+    unidad: "dias",
+  },
+  {
+    valor: "CALDERILLA_MINIMA",
+    label: "Poca calderilla",
+    ayuda: "Avisa cuando las monedas de la caja bajan de este importe.",
+    unidad: "euros",
+  },
+];
+
+const etiquetaTipo = (t: string) => TIPOS.find((x) => x.valor === t)?.label ?? t;
+const unidadDe = (t: string) => TIPOS.find((x) => x.valor === t)?.unidad ?? "euros";
+const valorLegible = (tipo: string, v: number) =>
+  unidadDe(tipo) === "euros" ? euros(v) : `${v} día${v === 1 ? "" : "s"}`;
+
+/**
+ * La bandeja, y debajo las reglas que la llenan.
+ *
+ * Las reglas van DEBAJO a propósito: lo que se abre esta pantalla a mirar es
+ * qué está pasando, no cómo está configurado. Se baja a los umbrales el día que
+ * un aviso sobra o falta, y ese día no es todos los días.
+ */
+function Incidencias() {
+  const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.alertas>> | null>(null);
+  const [todas, setTodas] = useState(false);
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const [tipo, setTipo] = useState(TIPOS[0].valor);
+  const [umbral, setUmbral] = useState("20");
+
+  const cargar = useCallback(async () => {
+    try {
+      setDatos(await api.alertas(todas));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando las incidencias");
+    }
+  }, [todas]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  const puedeGestionar = datos?.permisos?.includes("central.incidents.manage") ?? false;
+  const puedeConfigurar = datos?.permisos?.includes("central.rules.configure") ?? false;
+
+  async function accion(fn: () => Promise<unknown>) {
+    setOcupado(true);
+    setError("");
+    try {
+      await fn();
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido guardar");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-sm text-slate-300">
+          <input type="checkbox" checked={todas} onChange={(e) => setTodas(e.target.checked)} />
+          Ver también las cerradas
+        </label>
+        <button
+          className={btnSecondary}
+          disabled={ocupado}
+          onClick={() => void accion(api.evaluarAhora)}
+        >
+          Evaluar ahora
+        </button>
+      </div>
+
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Qué pasa</th>
+            <th className={thCls}>Caja</th>
+            <th className={`${thCls} text-right`}>Valor</th>
+            <th className={`${thCls} text-right`}>Umbral</th>
+            <th className={thCls}>Desde</th>
+            <th className={thCls}>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(datos?.incidencias ?? []).length === 0 && (
+            <EmptyRow cols={6} text="No hay ninguna incidencia abierta." />
+          )}
+          {(datos?.incidencias ?? []).map((i) => (
+            <tr key={i.id} className="border-t border-slate-700">
+              <td className={tdCls}>
+                {etiquetaTipo(i.tipo)}
+                {i.ambitoRegla && i.ambitoRegla !== "EMPRESA" && (
+                  <span className="ml-2 text-[11px] text-slate-500">
+                    regla de {i.ambitoRegla.toLowerCase()}
+                  </span>
+                )}
+              </td>
+              <td className={tdCls}>{i.caja ?? `#${i.registerId}`}</td>
+              <td className={`${tdCls} text-right tabular-nums text-amber-400`}>
+                {valorLegible(i.tipo, i.valor)}
+              </td>
+              <td className={`${tdCls} text-right tabular-nums text-slate-500`}>
+                {valorLegible(i.tipo, i.umbral)}
+              </td>
+              <td className={`${tdCls} text-[11px] text-slate-500`}>
+                {new Date(i.abiertaEnMs).toLocaleDateString("es-ES")}
+              </td>
+              <td className={tdCls}>
+                {i.estado === "RESUELTA" ? (
+                  <span className="text-slate-500">
+                    resuelta{i.cerradaMotivo === "AUTO" ? " (sola)" : ""}
+                  </span>
+                ) : puedeGestionar ? (
+                  <span className="flex gap-2">
+                    {i.estado === "ABIERTA" && (
+                      <button
+                        className="text-[11px] text-sky-400 hover:underline"
+                        disabled={ocupado}
+                        onClick={() => void accion(() => api.cambiarIncidencia(i.id, "RECONOCIDA"))}
+                      >
+                        vista
+                      </button>
+                    )}
+                    <button
+                      className="text-[11px] text-emerald-400 hover:underline"
+                      disabled={ocupado}
+                      onClick={() => void accion(() => api.cambiarIncidencia(i.id, "RESUELTA"))}
+                    >
+                      resolver
+                    </button>
+                  </span>
+                ) : (
+                  i.estado.toLowerCase()
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+
+      <section className="space-y-2">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Reglas de la empresa
+        </h2>
+        <p className="text-[11px] text-slate-500">
+          Cada taller o caja puede tener la suya, y entonces manda la más concreta: la empresa avisa
+          a partir de 20 €, pero una gasolinera que mueve diez veces más necesita otro listón o el
+          aviso salta cada día y deja de leerse.
+        </p>
+
+        {puedeConfigurar && (
+          <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                Qué vigilar
+              </span>
+              <select value={tipo} onChange={(e) => setTipo(e.target.value)} className={inputCls}>
+                {TIPOS.map((t) => (
+                  <option key={t.valor} value={t.valor}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                {unidadDe(tipo) === "euros" ? "Importe (€)" : "Días"}
+              </span>
+              <input
+                value={umbral}
+                onChange={(e) => setUmbral(e.target.value)}
+                className={inputCls}
+                inputMode="decimal"
+              />
+            </label>
+            <button
+              className={btnPrimary}
+              disabled={ocupado}
+              onClick={() =>
+                void accion(() =>
+                  api.guardarRegla({
+                    tipo,
+                    ambito: "EMPRESA",
+                    umbral:
+                      unidadDe(tipo) === "euros"
+                        ? Math.round(Number(umbral.replace(",", ".")) * 100)
+                        : Math.round(Number(umbral)),
+                  })
+                )
+              }
+            >
+              Guardar regla
+            </button>
+            <p className="w-full text-[11px] text-slate-500">
+              {TIPOS.find((t) => t.valor === tipo)?.ayuda}
+            </p>
+          </div>
+        )}
+
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={thCls}>Qué vigila</th>
+              <th className={thCls}>Ámbito</th>
+              <th className={`${thCls} text-right`}>Umbral</th>
+              <th className={thCls}>Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(datos?.reglas ?? []).length === 0 && (
+              <EmptyRow cols={4} text="No hay ninguna regla: sin reglas no hay avisos." />
+            )}
+            {(datos?.reglas ?? []).map((r) => (
+              <tr key={r.id} className="border-t border-slate-700">
+                <td className={tdCls}>{etiquetaTipo(r.tipo)}</td>
+                <td className={tdCls}>{r.ambito.toLowerCase()}</td>
+                <td className={`${tdCls} text-right tabular-nums`}>
+                  {valorLegible(r.tipo, r.umbral)}
+                </td>
+                <td className={tdCls}>
+                  {r.activa ? (
+                    <span className="text-emerald-400">activa</span>
+                  ) : (
+                    <span className="text-slate-500">apagada</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+      </section>
     </div>
   );
 }

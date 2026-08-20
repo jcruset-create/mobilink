@@ -302,6 +302,76 @@ export async function initCentral(): Promise<void> {
       ON central_denomination_stock(empresa_id, valor_centimos);
   `);
 
+  /*
+   * Reglas y sus incidencias.
+   *
+   * Las reglas son POCAS y de tipos cerrados a propósito: cada tipo mira una
+   * cosa medible que Central ya conoce. Una regla genérica con una expresión
+   * que hay que interpretar es una regla que nadie sabe si está bien escrita
+   * hasta el día que no avisa.
+   *
+   * `ambito` + `ambito_id` es la jerarquía: EMPRESA, ZONA, CENTRO o CAJA. La
+   * resolución —gana la más específica— vive en `rules/engine.ts`, que no toca
+   * la base de datos y se prueba en un milisegundo.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS central_rules (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      tipo TEXT NOT NULL,
+      ambito TEXT NOT NULL,
+      ambito_id TEXT,
+      umbral BIGINT NOT NULL,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      creado_por UUID,
+      creado_en_ms BIGINT NOT NULL,
+      actualizado_en_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS central_rules_empresa_idx ON central_rules(empresa_id, tipo);
+
+    -- Una sola regla por tipo y ámbito concreto. Dos reglas del mismo alcance
+    -- obligarían a desempatar, y un aviso que aparece según por dónde se mire
+    -- es peor que no tener aviso.
+    CREATE UNIQUE INDEX IF NOT EXISTS central_rules_unica_idx
+      ON central_rules(empresa_id, tipo, ambito, COALESCE(ambito_id, ''));
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS central_incidents (
+      id BIGSERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      centro_id UUID,
+      register_id INTEGER,
+      session_id INTEGER,
+      tipo TEXT NOT NULL,
+      regla_id UUID,
+      -- Identifica EL HECHO, no la regla: dos descuadres de días distintos son
+      -- dos incidencias; un tránsito que sigue fuera es la misma de ayer.
+      clave TEXT NOT NULL,
+      umbral BIGINT NOT NULL DEFAULT 0,
+      valor BIGINT NOT NULL DEFAULT 0,
+      estado TEXT NOT NULL DEFAULT 'ABIERTA'
+        CHECK (estado IN ('ABIERTA','RECONOCIDA','RESUELTA')),
+      detalle JSONB NOT NULL DEFAULT '{}'::jsonb,
+      nota TEXT,
+      abierta_en_ms BIGINT NOT NULL,
+      actualizada_en_ms BIGINT NOT NULL,
+      cerrada_en_ms BIGINT,
+      cerrada_por UUID,
+      -- AUTO cuando la condición dejó de darse; a mano cuando alguien la cierra.
+      cerrada_motivo TEXT
+    );
+
+    -- Una incidencia VIVA por hecho. Es lo que impide que cada evaluación
+    -- vuelva a abrir el mismo aviso: la barrera es el índice, no el código.
+    CREATE UNIQUE INDEX IF NOT EXISTS central_incidents_viva_idx
+      ON central_incidents(empresa_id, clave)
+      WHERE estado IN ('ABIERTA','RECONOCIDA');
+
+    CREATE INDEX IF NOT EXISTS central_incidents_bandeja_idx
+      ON central_incidents(empresa_id, estado, abierta_en_ms DESC);
+  `);
+
   await registrarModuloCentral();
 
   console.log("MC Central: esquema inicializado correctamente");
