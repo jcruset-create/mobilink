@@ -1006,6 +1006,34 @@ export async function initCash(): Promise<void> {
     ALTER TABLE cash_registers ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
   `);
 
+  /*
+   * Integridad y versión de los justificantes (fase 9 de MC Central).
+   *
+   * · `sha256` es la huella del fichero tal y como se subió. Sirve para dos
+   *   cosas: comprobar que lo que hay en el bucket hoy es lo mismo que se
+   *   adjuntó —una factura que respalda una salida de caja no puede cambiar sin
+   *   que se note— y detectar que el mismo papel se ha subido dos veces.
+   *
+   * · `version` y `reemplaza_a` porque un justificante SE SUSTITUYE, no se
+   *   corrige: el escaneo salió torcido y se vuelve a escanear. El anterior se
+   *   marca sustituido y se queda. Aquí no se borra nada, y menos lo que
+   *   respalda un movimiento de dinero.
+   *
+   * Nullable: los documentos anteriores a esta fase no tienen huella, y eso es
+   * un dato en sí mismo —no se puede verificar lo que se subió antes de
+   * empezar a medirlo— no algo que haya que inventar.
+   */
+  await pool.query(`
+    ALTER TABLE cash_operation_documents
+      ADD COLUMN IF NOT EXISTS sha256 TEXT,
+      ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS reemplaza_a INTEGER,
+      ADD COLUMN IF NOT EXISTS sustituido BOOLEAN NOT NULL DEFAULT false;
+
+    CREATE INDEX IF NOT EXISTS cash_docs_sha_idx
+      ON cash_operation_documents(empresa_id, sha256) WHERE sha256 IS NOT NULL;
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 

@@ -757,12 +757,49 @@ export function createCashRouter(): Router {
       if (!req.file) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
       }
+      const b = req.body ?? {};
+      // Los duplicados se AVISAN, no se bloquean: a veces el mismo resguardo
+      // respalda de verdad dos cosas. Lo que evita es que el mismo taco de
+      // facturas acabe adjuntado cinco veces porque nadie se acordaba.
+      const yaEstaba = await documentos.duplicadosDe(req.authCtx!.empresaId, req.file.buffer);
+
       const documento = await documentos.adjuntarDocumento(
         contexto(req),
         enteroPositivo(req.params.id, "id"),
-        req.file
+        req.file,
+        b.reemplazaA ? enteroPositivo(b.reemplazaA, "reemplazaA") : undefined
       );
-      res.status(201).json({ documento });
+      res.status(201).json({ documento, duplicados: yaEstaba });
+    })
+  );
+
+  /**
+   * ¿Sigue siendo el mismo fichero que se adjuntó?
+   *
+   * Con permiso de lectura y no de escritura: comprobar la integridad de una
+   * evidencia es justo lo que tiene que poder hacer quien la audita, que suele
+   * ser quien no puede tocarla.
+   */
+  r.get(
+    "/documents/:id/verify",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json(
+        await documentos.verificarDocumento(contexto(req), enteroPositivo(req.params.id, "id"))
+      );
+    })
+  );
+
+  r.get(
+    "/sessions/:id/documents/verify",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({
+        verificaciones: await documentos.verificarJornada(
+          contexto(req),
+          enteroPositivo(req.params.id, "id")
+        ),
+      });
     })
   );
 

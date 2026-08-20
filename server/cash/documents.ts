@@ -18,10 +18,11 @@
  *    que el resto del módulo.
  */
 
+import { createHash } from "node:crypto";
 import pool from "../db.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { ErrorCaja } from "./repository.ts";
-import { guardarDocumento, rutaDocumento, urlFirmada } from "./storage.ts";
+import { guardarDocumento, leerDocumento, rutaDocumento, urlFirmada } from "./storage.ts";
 import type { Contexto } from "./service.ts";
 
 /** Lo que acepta el escáner del mostrador, y poco más. */
@@ -86,10 +87,24 @@ function exigirFicheroValido(fichero: { mimetype: string; buffer: Buffer }): voi
   }
 }
 
+/**
+ * Huella del fichero tal y como se subió.
+ *
+ * Es lo que permite comprobar más tarde que la factura que respalda una salida
+ * de caja sigue siendo la misma. Se calcula sobre el buffer recibido, antes de
+ * guardarlo: si se calculara leyendo del bucket, se estaría certificando lo que
+ * hay allí, que es justo lo que se quiere poder comprobar.
+ */
+function huella(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
 export async function adjuntarDocumento(
   ctx: Contexto,
   operationId: number,
-  fichero: { originalname: string; mimetype: string; buffer: Buffer }
+  fichero: { originalname: string; mimetype: string; buffer: Buffer },
+  /** Documento al que sustituye. El escaneo salió torcido y se repite. */
+  reemplazaA?: number
 ): Promise<DocumentoOperacion> {
   exigirFicheroValido(fichero);
 
@@ -113,13 +128,37 @@ export async function adjuntarDocumento(
   );
 
   // Primero el fichero: si esto falla, no queda una fila apuntando a nada.
+  const sha = huella(fichero.buffer);
+
+  /*
+   * La versión sale del documento al que sustituye. Si no sustituye a nadie es
+   * la primera, aunque la operación ya tenga otros justificantes: dos facturas
+   * distintas del mismo pago no son dos versiones de nada.
+   */
+  let version = 1;
+  if (reemplazaA != null) {
+    const { rows: previo } = await pool.query(
+      `SELECT id, version FROM cash_operation_documents
+        WHERE id = $1 AND empresa_id = $2 AND operation_id = $3`,
+      [reemplazaA, ctx.empresaId, operationId]
+    );
+    if (previo.length === 0) {
+      throw new ErrorCaja(
+        "DOCUMENTO_NO_ENCONTRADO",
+        "El justificante al que quieres sustituir no es de esta operación.",
+        404
+      );
+    }
+    version = Number(previo[0].version) + 1;
+  }
+
   const guardado = await guardarDocumento(ruta, fichero.buffer, fichero.mimetype);
 
   const { rows } = await pool.query(
     `INSERT INTO cash_operation_documents
        (empresa_id, operation_id, session_id, nombre, mime, tamano_bytes, ruta,
-        subido_por, subido_at_ms)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        sha256, version, reemplaza_a, subido_por, subido_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$10,$11,$12,$8,$9)
      RETURNING *`,
     [
       ctx.empresaId,
@@ -131,8 +170,24 @@ export async function adjuntarDocumento(
       ruta,
       ctx.userId,
       ahora,
+      sha,
+      version,
+      reemplazaA ?? null,
     ]
   );
+
+  /*
+   * El anterior se marca sustituido, no se borra ni se anula: anular es lo que
+   * se hace cuando un justificante no debía estar; sustituir es que el mismo
+   * papel se ha vuelto a escanear mejor. Distinguirlo importa el día que
+   * alguien pregunte por qué hay dos.
+   */
+  if (reemplazaA != null) {
+    await pool.query(
+      `UPDATE cash_operation_documents SET sustituido = true WHERE id = $1`,
+      [reemplazaA]
+    );
+  }
 
   await registrarAuditoria({
     empresaId: ctx.empresaId,
@@ -144,6 +199,9 @@ export async function adjuntarDocumento(
       operacion: operacion.numero,
       nombre: fichero.originalname,
       tamanoBytes: guardado.tamanoBytes,
+      sha256: sha,
+      version,
+      reemplazaA: reemplazaA ?? null,
     },
     ip: ctx.ip,
   });
@@ -325,4 +383,104 @@ export async function anularDocumento(
   });
 
   return aDocumento(rows[0]);
+}
+
+
+// ── Verificación de integridad ─────────────────────────────────────────────
+
+export type Verificacion = {
+  documentoId: number;
+  estado: "OK" | "ALTERADO" | "SIN_HUELLA" | "NO_ENCONTRADO";
+  mensaje: string;
+};
+
+/**
+ * ¿Sigue siendo el mismo fichero que se subió?
+ *
+ * Se relee del bucket y se compara con la huella guardada. Es la única razón de
+ * ser del SHA-256: una factura que respalda una salida de caja no puede cambiar
+ * sin que quede constancia, y sin comprobarlo la huella sería un adorno.
+ *
+ * `SIN_HUELLA` es un estado propio y no un fallo: los justificantes anteriores
+ * a esta fase no la tienen, y decir «no se puede comprobar» es exacto. Decir
+ * «correcto» sería mentir, y decir «alterado» sería alarmar sin motivo.
+ */
+export async function verificarDocumento(
+  ctx: Contexto,
+  documentoId: number
+): Promise<Verificacion> {
+  const { rows } = await pool.query(
+    `SELECT id, ruta, sha256 FROM cash_operation_documents
+      WHERE id = $1 AND empresa_id = $2`,
+    [documentoId, ctx.empresaId]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja("DOCUMENTO_NO_ENCONTRADO", "El justificante no existe.", 404);
+  }
+
+  const doc = rows[0];
+  if (!doc.sha256) {
+    return {
+      documentoId,
+      estado: "SIN_HUELLA",
+      mensaje: "Se adjuntó antes de que se guardaran huellas, así que no se puede comprobar.",
+    };
+  }
+
+  const contenido = await leerDocumento(doc.ruta);
+  if (!contenido) {
+    return {
+      documentoId,
+      estado: "NO_ENCONTRADO",
+      mensaje: "El fichero ya no está en el almacenamiento.",
+    };
+  }
+
+  const actual = huella(contenido);
+  return actual === doc.sha256
+    ? { documentoId, estado: "OK", mensaje: "El fichero es el mismo que se adjuntó." }
+    : {
+        documentoId,
+        estado: "ALTERADO",
+        mensaje: "El fichero del almacenamiento NO coincide con el que se adjuntó.",
+      };
+}
+
+/** Verifica de golpe los justificantes de una jornada. */
+export async function verificarJornada(
+  ctx: Contexto,
+  sessionId: number
+): Promise<Verificacion[]> {
+  const { rows } = await pool.query(
+    `SELECT id FROM cash_operation_documents
+      WHERE session_id = $1 AND empresa_id = $2 AND NOT anulado
+      ORDER BY id`,
+    [sessionId, ctx.empresaId]
+  );
+
+  const salida: Verificacion[] = [];
+  for (const r of rows) salida.push(await verificarDocumento(ctx, r.id));
+  return salida;
+}
+
+/**
+ * ¿Este fichero ya estaba subido?
+ *
+ * Mismo contenido byte a byte dentro de la misma empresa. No bloquea el alta
+ * —a veces el mismo resguardo respalda de verdad dos cosas— pero permite
+ * avisar, que es lo que evita que el mismo taco de facturas acabe adjuntado
+ * cinco veces porque nadie recordaba si lo había hecho ya.
+ */
+export async function duplicadosDe(
+  empresaId: string,
+  buffer: Buffer
+): Promise<{ id: number; nombre: string; sessionId: number }[]> {
+  const { rows } = await pool.query(
+    `SELECT id, nombre, session_id FROM cash_operation_documents
+      WHERE empresa_id = $1 AND sha256 = $2 AND NOT anulado
+      ORDER BY id`,
+    [empresaId, huella(buffer)]
+  );
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  return rows.map((r: any) => ({ id: r.id, nombre: r.nombre, sessionId: r.session_id }));
 }
