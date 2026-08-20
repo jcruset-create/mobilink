@@ -1,0 +1,295 @@
+/**
+ * Ingesta de eventos en MC Central.
+ *
+ * Tres reglas gobiernan este fichero.
+ *
+ * **1. Un evento se aplica una sola vez.** `central_events.event_id` es clave
+ * primaria y la inserción usa `ON CONFLICT DO NOTHING`: si no insertó fila, el
+ * evento ya estaba y no se vuelve a proyectar. El worker de la caja puede
+ * reenviar sin miedo —se cae justo después de entregar y antes de anotar— y
+ * aquí eso no suma un cobro de más. Es la defensa contra el doble conteo, y no
+ * es una comprobación de código: es la clave primaria.
+ *
+ * **2. Un evento tardío no pisa el estado.** Un reintento puede entregar la
+ * apertura de una jornada DESPUÉS de su cierre. Sin orden, la pantalla diría
+ * que sigue abierta una caja que se cerró hace horas. Por eso los cambios de
+ * estado solo se aplican si la versión del agregado es mayor que la última
+ * aplicada; los contadores, en cambio, se suman siempre, porque la clave
+ * primaria ya garantiza que cada evento se cuenta una vez.
+ *
+ * **3. Central nunca escribe en `cash_*`.** Solo lee eventos y mantiene sus
+ * proyecciones. Si se borraran enteras, se reconstruyen volviendo a pasar
+ * `central_events`. Un error de agregación aquí no puede corromper la caja.
+ */
+
+import type { PoolClient } from "pg";
+import pool from "../db.ts";
+import type { EventoParaEnviar } from "../cash/events/transport.ts";
+
+export type ResultadoIngesta = "APLICADO" | "DUPLICADO" | "TARDIO";
+
+/**
+ * Ingiere un evento. Devuelve qué se hizo con él, que es lo que distingue «no
+ * ha llegado» de «llegó y se descartó por viejo».
+ */
+export async function ingerirEvento(evento: EventoParaEnviar): Promise<ResultadoIngesta> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const ahora = Date.now();
+    const { rowCount } = await client.query(
+      `INSERT INTO central_events
+         (event_id, empresa_id, centro_id, register_id, session_id,
+          aggregate_type, aggregate_id, aggregate_version, tipo, ocurrido_en_ms,
+          actor_user_id, datos, recibido_en_ms)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT (event_id) DO NOTHING`,
+      [
+        evento.eventId,
+        evento.empresaId,
+        evento.centroId,
+        evento.registerId,
+        evento.sessionId,
+        evento.aggregateType,
+        evento.aggregateId,
+        evento.aggregateVersion,
+        evento.tipo,
+        evento.ocurridoEnMs,
+        evento.actorUserId,
+        JSON.stringify(evento.datos ?? {}),
+        ahora,
+      ]
+    );
+
+    // Sin fila insertada, el evento ya estaba: nada que proyectar.
+    if (rowCount === 0) {
+      await client.query("COMMIT");
+      return "DUPLICADO";
+    }
+
+    const resultado = await proyectar(client, evento, ahora);
+    if (resultado === "TARDIO") {
+      await client.query(`UPDATE central_events SET resultado = 'TARDIO' WHERE event_id = $1`, [
+        evento.eventId,
+      ]);
+    }
+
+    await client.query("COMMIT");
+    return resultado;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** ¿Es el evento más nuevo que lo último aplicado a su agregado? */
+function esNuevo(evento: EventoParaEnviar, ultimaVersion: number | null): boolean {
+  if (evento.aggregateVersion == null || ultimaVersion == null) return true;
+  return evento.aggregateVersion > ultimaVersion;
+}
+
+async function proyectar(
+  client: PoolClient,
+  e: EventoParaEnviar,
+  ahora: number
+): Promise<ResultadoIngesta> {
+  await tocarCaja(client, e, ahora);
+
+  if (e.aggregateType === "REGISTER") return proyectarCaja(client, e, ahora);
+  if (e.sessionId == null) return "APLICADO";
+
+  // La fila de la jornada se crea al vuelo: un evento de una jornada que
+  // Central no conoce (porque empezó a escuchar a mitad) sigue contando. Es
+  // preferible una jornada incompleta a un hueco.
+  const { rows } = await client.query(
+    `INSERT INTO central_sessions
+       (session_id, empresa_id, centro_id, register_id, actualizado_en_ms)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (session_id) DO UPDATE SET actualizado_en_ms = $5
+     RETURNING ultima_version`,
+    [e.sessionId, e.empresaId, e.centroId, e.registerId, ahora]
+  );
+  const ultimaVersion = rows[0]?.ultima_version == null ? null : Number(rows[0].ultima_version);
+  const nuevo = esNuevo(e, ultimaVersion);
+
+  const d = e.datos ?? {};
+  const num = (v: unknown): number => (typeof v === "number" ? v : Number(v ?? 0));
+
+  switch (e.tipo) {
+    case "SESSION_OPENED":
+      if (!nuevo) return "TARDIO";
+      await client.query(
+        `UPDATE central_sessions
+            SET fecha = $2, estado = 'OPEN', fondo_inicial_centimos = $3,
+                abierta_en_ms = $4, ultima_version = $5, actualizado_en_ms = $6
+          WHERE session_id = $1`,
+        [e.sessionId, d.fecha ?? null, num(d.fondoCentimos), e.ocurridoEnMs, e.aggregateVersion, ahora]
+      );
+      return "APLICADO";
+
+    case "SESSION_CLOSED":
+      if (!nuevo) return "TARDIO";
+      await client.query(
+        `UPDATE central_sessions
+            SET estado = 'CLOSED', fecha = COALESCE(fecha, $2),
+                cambio_final_centimos = $3, ingreso_bancario_centimos = $4,
+                diferencia_centimos = $5, cerrada_en_ms = $6,
+                ultima_version = $7, actualizado_en_ms = $8
+          WHERE session_id = $1`,
+        [
+          e.sessionId,
+          d.fecha ?? null,
+          num(d.cambioFinalCentimos),
+          num(d.ingresoBancarioCentimos),
+          num(d.diferenciaCentimos),
+          e.ocurridoEnMs,
+          e.aggregateVersion,
+          ahora,
+        ]
+      );
+      await client.query(
+        `UPDATE central_registers
+            SET ultima_fecha_cerrada = GREATEST(COALESCE(ultima_fecha_cerrada, '0001-01-01'), $2::date),
+                jornada_abierta_id = NULL, actualizado_en_ms = $3
+          WHERE register_id = $1`,
+        [e.registerId, d.fecha ?? null, ahora]
+      );
+      return "APLICADO";
+
+    case "SESSION_REOPENED":
+      if (!nuevo) return "TARDIO";
+      await client.query(
+        `UPDATE central_sessions
+            SET estado = 'REOPENED', reaperturas = reaperturas + 1,
+                ultima_version = $2, actualizado_en_ms = $3
+          WHERE session_id = $1`,
+        [e.sessionId, e.aggregateVersion, ahora]
+      );
+      return "APLICADO";
+
+    /*
+     * Los contadores se suman SIEMPRE, tarde o no. No es una excepción a la
+     * regla del orden: un cobro que llega con retraso ocurrió de verdad y su
+     * dinero cuenta igual. Lo que no puede es cambiar el estado de la jornada,
+     * y no lo cambia. Que no se sume dos veces ya lo garantiza la clave
+     * primaria de `central_events`, no este código.
+     */
+    case "OPERATION_REGISTERED": {
+      const tipo = String(d.tipoOperacion ?? "");
+      await client.query(
+        `UPDATE central_sessions
+            SET operaciones = operaciones + 1,
+                efectivo_neto_centimos = efectivo_neto_centimos + $2,
+                cobros_centimos = cobros_centimos + $3,
+                pagos_centimos = pagos_centimos + $4,
+                actualizado_en_ms = $5
+          WHERE session_id = $1`,
+        [
+          e.sessionId,
+          num(d.efectivoNetoCentimos),
+          tipo === "COLLECTION" ? num(d.importeCentimos) : 0,
+          tipo === "PAYMENT" ? num(d.importeCentimos) : 0,
+          ahora,
+        ]
+      );
+      return nuevo ? "APLICADO" : "TARDIO";
+    }
+
+    case "OPERATION_REVERSED":
+      await client.query(
+        `UPDATE central_sessions
+            SET anulaciones = anulaciones + 1, actualizado_en_ms = $2
+          WHERE session_id = $1`,
+        [e.sessionId, ahora]
+      );
+      return nuevo ? "APLICADO" : "TARDIO";
+
+    case "COUNT_RECORDED":
+      if (!nuevo) return "TARDIO";
+      await client.query(
+        `UPDATE central_sessions
+            SET contado_centimos = $2, diferencia_centimos = $3,
+                ultima_version = $4, actualizado_en_ms = $5
+          WHERE session_id = $1`,
+        [e.sessionId, num(d.contadoCentimos), num(d.diferenciaCentimos), e.aggregateVersion, ahora]
+      );
+      return "APLICADO";
+
+    case "COUNT_ADJUSTED":
+      if (!nuevo) return "TARDIO";
+      // Regularizar deja la caja cuadrada: la diferencia pendiente pasa a cero
+      // y el descuadre queda asentado como ajuste, que llega como operación.
+      await client.query(
+        `UPDATE central_sessions
+            SET diferencia_centimos = 0, ultima_version = $2, actualizado_en_ms = $3
+          WHERE session_id = $1`,
+        [e.sessionId, e.aggregateVersion, ahora]
+      );
+      return "APLICADO";
+
+    default:
+      return "APLICADO";
+  }
+}
+
+/** Alta y último latido de la caja. Todo evento pasa por aquí. */
+async function tocarCaja(client: PoolClient, e: EventoParaEnviar, ahora: number): Promise<void> {
+  if (e.registerId == null) return;
+  await client.query(
+    `INSERT INTO central_registers
+       (register_id, empresa_id, centro_id, ultima_actividad_ms, actualizado_en_ms)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (register_id) DO UPDATE
+       SET ultima_actividad_ms = GREATEST(
+             COALESCE(central_registers.ultima_actividad_ms, 0), EXCLUDED.ultima_actividad_ms),
+           -- El taller se refresca con el del evento: si la caja se reasignó,
+           -- la posición actual la manda el último hecho conocido.
+           centro_id = EXCLUDED.centro_id,
+           actualizado_en_ms = EXCLUDED.actualizado_en_ms`,
+    [e.registerId, e.empresaId, e.centroId, e.ocurridoEnMs, ahora]
+  );
+
+  if (e.tipo === "SESSION_OPENED" && e.sessionId != null) {
+    await client.query(
+      `UPDATE central_registers SET jornada_abierta_id = $2 WHERE register_id = $1`,
+      [e.registerId, e.sessionId]
+    );
+  }
+}
+
+async function proyectarCaja(
+  client: PoolClient,
+  e: EventoParaEnviar,
+  ahora: number
+): Promise<ResultadoIngesta> {
+  const d = e.datos ?? {};
+  const importe = Number(d.importeCentimos ?? 0);
+
+  if (e.tipo === "BANK_DEPOSIT_CREATED") {
+    await client.query(
+      `UPDATE central_registers
+          SET ingresos_bancarios = ingresos_bancarios + 1,
+              ingresado_centimos = ingresado_centimos + $2,
+              actualizado_en_ms = $3
+        WHERE register_id = $1`,
+      [e.registerId, importe, ahora]
+    );
+  } else if (e.tipo === "BANK_DEPOSIT_VOIDED") {
+    // Anular resta: el ingreso dejó de existir y la posición de la red no
+    // puede seguir contándolo. El evento de alta sigue en `central_events`,
+    // así que la historia no se pierde — lo que cambia es el saldo.
+    await client.query(
+      `UPDATE central_registers
+          SET ingresos_bancarios = GREATEST(0, ingresos_bancarios - 1),
+              ingresado_centimos = ingresado_centimos - $2,
+              actualizado_en_ms = $3
+        WHERE register_id = $1`,
+      [e.registerId, importe, ahora]
+    );
+  }
+
+  return "APLICADO";
+}

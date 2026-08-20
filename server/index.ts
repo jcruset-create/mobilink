@@ -21,6 +21,7 @@ import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initCash, mountCash, startCashErpWorker, startCashEventWorker } from "./cash/index.ts";
+import { initCentral, mountCentral } from "./central/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
 import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
@@ -16908,6 +16909,7 @@ mountIntegrationHub(app);
 ========================================================= */
 
 mountCash(app);
+mountCentral(app);
 
 /* =========================================================
    MOBILINK LICENCIAS (API bajo /api/licenses)
@@ -17328,6 +17330,7 @@ initDb()
   .then(() => prepararEsquema("Licencias", initLicenses))
   .then(() => prepararEsquema("Connect Pro", initConnect))
   .then(() => prepararEsquema("Mobilink Cash", initCash))
+  .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
