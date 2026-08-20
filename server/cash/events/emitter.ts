@@ -38,7 +38,19 @@ export type TipoEvento =
   | "COUNT_RECORDED"
   | "COUNT_ADJUSTED"
   | "BANK_DEPOSIT_CREATED"
-  | "BANK_DEPOSIT_VOIDED";
+  | "BANK_DEPOSIT_VOIDED"
+  /*
+   * Dinero que ha salido del cajón y todavía no ha vuelto: el cambio que se ha
+   * ido a buscar al banco o los 50 € que lleva alguien para comprar algo.
+   *
+   * Necesita evento propio y no se puede deducir del movimiento de efectivo:
+   * las dos cosas se asientan como `CASH_DELIVERY` y vuelven como `MANUAL_IN`,
+   * que es también el tipo de una entrada de caja cualquiera. Sin estos dos
+   * eventos, Central vería salir el dinero y no sabría que va a volver ni con
+   * quién está mientras tanto.
+   */
+  | "TRANSIT_OPENED"
+  | "TRANSIT_SETTLED";
 
 /** Estados de la cola. La lista vive aquí y en el CHECK de `schema.ts`. */
 export type EstadoEvento =

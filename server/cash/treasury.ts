@@ -57,6 +57,7 @@ import {
 } from "./repository.ts";
 import { registrarOperacion, type Contexto } from "./service.ts";
 import { exigirJornadaPropia } from "./hierarchy.ts";
+import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
 
@@ -394,6 +395,29 @@ export async function crearPedido(ctx: Contexto, e: EntradaPedido): Promise<Pedi
       );
     }
 
+    /*
+     * El dinero está fuera. Este evento es lo que permite a MC Central sumar la
+     * posición global sin contarlo dos veces NI perderlo: el cajón ya no lo
+     * tiene —el asiento de salida es de arriba— y aquí se dice dónde está.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "TRANSIT_OPENED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        clase: "CHANGE_ORDER",
+        documentoId: id,
+        numero,
+        importeCentimos: e.importeCentimos,
+        responsable: "Banco",
+      },
+    });
+
     const lineas = await lineasDePedido(client, [id]);
     return aPedido(rows[0], lineas);
   });
@@ -521,6 +545,26 @@ export async function recibirPedido(
       );
     }
 
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "TRANSIT_SETTLED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      datos: {
+        clase: "CHANGE_ORDER",
+        documentoId: pedidoId,
+        numero: rows[0].numero,
+        importeCentimos: Number(rows[0].importe_centimos),
+        // Lo que el banco dio de verdad, que puede no ser lo que se pidió.
+        liquidadoCentimos: Number(rows[0].importe_recibido_centimos ?? 0),
+        motivo: "RECIBIDO",
+      },
+    });
+
     const lineas = await lineasDePedido(client, [pedidoId]);
     return aPedido(rows[0], lineas);
   });
@@ -598,6 +642,27 @@ export async function cancelarPedido(
         RETURNING *`,
       [pedidoId, motivo.trim(), sessionId, operacion.operacionId, ctx.userId, Date.now()]
     );
+    // Cancelar también cierra el tránsito: el dinero volvió al cajón sin
+    // pasar por el banco. Para la posición global es lo mismo que recibirlo.
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "TRANSIT_SETTLED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      datos: {
+        clase: "CHANGE_ORDER",
+        documentoId: pedidoId,
+        numero: rows[0].numero,
+        importeCentimos: Number(rows[0].importe_centimos),
+        liquidadoCentimos: total,
+        motivo: "CANCELADO",
+      },
+    });
+
     return aPedido(rows[0], await lineasDePedido(client, [pedidoId]));
   });
 
@@ -692,6 +757,26 @@ export async function entregarDinero(
         Date.now(),
       ]
     );
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "TRANSIT_OPENED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      // El nombre viaja: la pregunta que hay que poder contestar no es solo
+      // «cuánto falta» sino «quién lo tiene».
+      datos: {
+        clase: "ADVANCE",
+        documentoId: rows[0].id,
+        numero,
+        importeCentimos: e.importeCentimos,
+        responsable: persona,
+      },
+    });
+
     return aEntrega(rows[0], entregado);
   });
 
@@ -853,6 +938,35 @@ export async function liquidarEntrega(
         Date.now(),
       ]
     );
+    /*
+     * El tránsito se cierra por lo ENTREGADO, no por lo gastado.
+     *
+     * Lo que salió del cajón fueron los 50 €, y eso es lo que dejaba de estar
+     * en la posición global. Cerrarlo por los 40 € de la factura dejaría 10 €
+     * eternamente «en tránsito» con alguien que ya devolvió el cambio.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "TRANSIT_SETTLED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      datos: {
+        clase: "ADVANCE",
+        documentoId: entregaId,
+        numero: previa.numero,
+        importeCentimos: entregado,
+        liquidadoCentimos: entregado,
+        gastoCentimos: gasto,
+        devueltoCentimos: totalDevuelto,
+        diferenciaCentimos: diferencia,
+        motivo: estado,
+      },
+    });
+
     return aEntrega(rows[0]);
   });
 

@@ -17,6 +17,7 @@ let db: typeof import("../db.ts").default;
 let ingest: typeof import("./ingest.ts");
 let queries: typeof import("./queries.ts");
 let servicio: typeof import("../cash/service.ts");
+let tesoreria: typeof import("../cash/treasury.ts");
 let transporteCaja: typeof import("../cash/events/transport.ts");
 let workerCaja: typeof import("../cash/events/worker.ts");
 let TransporteLocal: typeof import("./transport.ts").TransporteLocal;
@@ -54,6 +55,7 @@ beforeAll(async () => {
   ingest = await import("./ingest.ts");
   queries = await import("./queries.ts");
   servicio = await import("../cash/service.ts");
+  tesoreria = await import("../cash/treasury.ts");
   transporteCaja = await import("../cash/events/transport.ts");
   workerCaja = await import("../cash/events/worker.ts");
   TransporteLocal = (await import("./transport.ts")).TransporteLocal;
@@ -62,6 +64,7 @@ beforeAll(async () => {
   await db.query(`DELETE FROM central_events WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_sessions WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_registers WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_transits WHERE empresa_id = $1`, [EMPRESA]);
 });
 
 afterAll(async () => {
@@ -70,6 +73,13 @@ afterAll(async () => {
 });
 
 describe.runIf(RUN)("Ingesta en MC Central", () => {
+  /** Entrega toda la cola de la caja: el worker va por orden de llegada. */
+  async function vaciar() {
+    for (let i = 0; i < 50; i++) {
+      if ((await workerCaja.procesarEventos(500)) === 0) return;
+    }
+  }
+
   it("proyecta la apertura y va contando las operaciones", async () => {
     expect(
       await ingest.ingerirEvento(
@@ -222,6 +232,123 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
       expect(rows[0].estado).toBe("OPEN");
       expect(rows[0].operaciones).toBe(1);
       expect(Number(rows[0].cobros_centimos)).toBe(2000);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * La prueba que da sentido a la fase 4.
+   *
+   * El encargo prohíbe el doble conteo: un mismo efectivo no puede figurar a la
+   * vez en dos posiciones agregadas. El caso que lo pone a prueba es el dinero
+   * que sale del cajón y no ha vuelto — el que se lleva alguien para comprar
+   * algo. Ese billete ya no está en el cajón, pero sigue siendo de la empresa.
+   *
+   * Lo que se comprueba: **el total de la red no cambia** al sacarlo. Cambia
+   * dónde está, no cuánto hay. Si sumara, se estaría contando dos veces; si
+   * restara, se estaría perdiendo, que es lo que hace que un arqueo descuadre
+   * 200 € sin que nadie recuerde por qué.
+   */
+  it("sacar dinero del cajón mueve la posición, no la aumenta", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'pos-global',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `pos-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      await db.query(`UPDATE cash_registers SET codigo = 'PG' || id WHERE id = $1`, [caja]);
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 5000, cantidad: 4 }, { valor: 2000, cantidad: 5 }],
+      });
+      await vaciar();
+
+      const antes = await queries.posicionGlobal(EMPRESA);
+
+      // Salen 50 € con una persona.
+      await tesoreria.entregarDinero(ctx, {
+        sessionId: sesion.id,
+        persona: "Ivan",
+        motivo: "Compra de material",
+        importeCentimos: 5000,
+        entregado: [{ valor: 5000, cantidad: 1 }],
+      });
+      await vaciar();
+
+      const fuera = await queries.posicionGlobal(EMPRESA);
+
+      // El cajón tiene 50 € menos…
+      expect(fuera.enCajonesCentimos).toBe(antes.enCajonesCentimos - 5000);
+      // …que están en tránsito, con su nombre…
+      expect(fuera.enTransitoPersonasCentimos).toBe(antes.enTransitoPersonasCentimos + 5000);
+      // …y el TOTAL de la red no se ha movido ni un céntimo.
+      expect(fuera.totalCentimos).toBe(antes.totalCentimos);
+
+      const abiertos = await queries.transitosAbiertos(EMPRESA);
+      const mio = abiertos.find((t) => t.responsable === "Ivan" && t.importeCentimos === 5000);
+      expect(mio).toBeTruthy();
+      expect(mio!.clase).toBe("ADVANCE");
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  it("al liquidar la entrega, el tránsito se cierra y el total sigue igual", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'pos-liq',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `liq-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      await db.query(`UPDATE cash_registers SET codigo = 'PL' || id WHERE id = $1`, [caja]);
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 5000, cantidad: 2 }, { valor: 1000, cantidad: 5 }],
+      });
+      const entrega = await tesoreria.entregarDinero(ctx, {
+        sessionId: sesion.id,
+        persona: "Marta",
+        motivo: "Ferretería",
+        importeCentimos: 5000,
+        entregado: [{ valor: 5000, cantidad: 1 }],
+      });
+      await vaciar();
+      const conElDineroFuera = await queries.posicionGlobal(EMPRESA);
+
+      /*
+       * El caso del encargo: se entregan 50 €, la factura es de 40 € y devuelve
+       * un billete de 10 €. El tránsito se cierra por los 50 que salieron, no
+       * por los 40 de la factura: si no, quedarían 10 € eternamente «fuera»
+       * con alguien que ya devolvió el cambio.
+       */
+      await tesoreria.liquidarEntrega(ctx, entrega.id, {
+        sessionId: sesion.id,
+        gastoCentimos: 4000,
+        devuelto: [{ valor: 1000, cantidad: 1 }],
+      });
+      await vaciar();
+
+      const despues = await queries.posicionGlobal(EMPRESA);
+      expect(despues.enTransitoPersonasCentimos).toBe(
+        conElDineroFuera.enTransitoPersonasCentimos - 5000
+      );
+      // Se han gastado 40 € de verdad: eso sí sale de la red.
+      expect(despues.totalCentimos).toBe(conElDineroFuera.totalCentimos - 4000);
+
+      // Por documento y no por nombre: la base de pruebas sobrevive entre
+      // ejecuciones y una «Marta» de la vuelta anterior haría pasar o fallar
+      // esta comprobación por el motivo equivocado.
+      const abiertos = await queries.transitosAbiertos(EMPRESA);
+      expect(abiertos.some((t) => t.clase === "ADVANCE" && t.documentoId === entrega.id)).toBe(
+        false
+      );
     } finally {
       transporteCaja.registrarTransporte(null);
     }

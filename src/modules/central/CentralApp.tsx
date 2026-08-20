@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { Building2, CalendarDays, Network } from "lucide-react";
+import { Building2, CalendarDays, Network, Wallet } from "lucide-react";
 import {
   Card,
   EmptyRow,
@@ -47,6 +47,9 @@ export default function CentralApp() {
           <NavLink to="/central/red" className={enlace}>
             <Network size={15} /> Red de cajas
           </NavLink>
+          <NavLink to="/central/posicion" className={enlace}>
+            <Wallet size={15} /> Posición de efectivo
+          </NavLink>
           <NavLink to="/central/jornadas" className={enlace}>
             <CalendarDays size={15} /> Jornadas
           </NavLink>
@@ -58,6 +61,7 @@ export default function CentralApp() {
         <Routes>
           <Route index element={<Navigate to="red" replace />} />
           <Route path="red" element={<Red />} />
+          <Route path="posicion" element={<Posicion />} />
           <Route path="jornadas" element={<Jornadas />} />
           <Route path="organizacion" element={<Organizacion />} />
           <Route path="*" element={<Navigate to="red" replace />} />
@@ -156,6 +160,100 @@ function Red() {
                 )}
               </td>
               <td className={`${tdCls} text-right tabular-nums`}>{euros(c.ingresadoCentimos)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+    </div>
+  );
+}
+
+// ── Posición global de efectivo ────────────────────────────────────────────
+
+/**
+ * Cuánto efectivo hay en la red y dónde está.
+ *
+ * La pantalla enseña el total **y sus tres partes**, y no solo el total, porque
+ * un número de dinero que no se puede comprobar no lo usa nadie. Las tres
+ * partes suman exactamente el total: cada euro está en un sitio y en uno solo.
+ */
+function Posicion() {
+  const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.posicion>> | null>(null);
+  const [error, setError] = useState("");
+
+  const cargar = useCallback(async () => {
+    try {
+      setDatos(await api.posicion());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando la posición");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  if (error) return <ErrorBox>{error}</ErrorBox>;
+  const p = datos?.posicion;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Card title="Total en la red" value={euros(p?.totalCentimos ?? 0)} accent="text-sky-400" />
+        <Card title="En los cajones" value={euros(p?.enCajonesCentimos ?? 0)} />
+        <Card
+          title="Fuera del cajón"
+          value={euros(p?.enTransitoCentimos ?? 0)}
+          hint={`${p?.transitosAbiertos ?? 0} sin cerrar`}
+          accent={p?.transitosAbiertos ? "text-amber-400" : undefined}
+        />
+        <Card
+          title="Esperando al banco"
+          value={euros(p?.pendienteBancoCentimos ?? 0)}
+          hint="apartado en cierres"
+        />
+      </div>
+
+      <p className="text-[11px] text-slate-500">
+        Las tres partes suman el total: el dinero que se fue al banco a cambiar o que lleva alguien
+        ya salió del cajón, así que se cuenta una vez y en un solo sitio.
+      </p>
+
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Documento</th>
+            <th className={thCls}>Quién lo tiene</th>
+            <th className={thCls}>Caja</th>
+            <th className={`${thCls} text-right`}>Importe</th>
+            <th className={`${thCls} text-right`}>Días fuera</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(datos?.transitos ?? []).length === 0 && (
+            <EmptyRow cols={5} text="No hay dinero fuera del cajón ahora mismo." />
+          )}
+          {(datos?.transitos ?? []).map((t) => (
+            <tr key={`${t.clase}-${t.documentoId}`} className="border-t border-slate-700">
+              <td className={tdCls}>
+                <span className="font-mono text-[11px]">{t.numero ?? `#${t.documentoId}`}</span>{" "}
+                <span className="text-[11px] text-slate-500">
+                  {t.clase === "CHANGE_ORDER" ? "cambio al banco" : "entrega"}
+                </span>
+              </td>
+              <td className={tdCls}>{t.responsable ?? "—"}</td>
+              <td className={tdCls}>
+                {t.caja ?? "—"}
+                {t.centro && <span className="ml-2 text-[11px] text-slate-500">{t.centro}</span>}
+              </td>
+              <td className={`${tdCls} text-right tabular-nums`}>{euros(t.importeCentimos)}</td>
+              <td
+                className={`${tdCls} text-right tabular-nums ${
+                  (t.dias ?? 0) > 3 ? "text-amber-400" : ""
+                }`}
+              >
+                {t.dias ?? "—"}
+              </td>
             </tr>
           ))}
         </tbody>
