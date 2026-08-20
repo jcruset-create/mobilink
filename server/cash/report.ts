@@ -368,6 +368,61 @@ async function construirPortada(d: {
     fila("Total fuera", eur(fuera.totalFueraCentimos), true);
   }
 
+  /*
+   * Hoja aparte: lo que había en el cajón ANTES de repartirlo.
+   *
+   * Es el contado del arqueo con su desglose, y va en su propia página porque
+   * es la que se lleva uno para pasar la cifra a Genes. Metida entre el cambio
+   * final y el ingreso —que son justo las dos mitades en las que se parte
+   * después— habría que ir buscándola.
+   */
+  const arqueo = detalle.ultimoArqueo;
+  if (arqueo) {
+    doc.addPage();
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(16)
+      .fillColor(TINTA)
+      .text("Efectivo en caja antes del cierre", M, doc.y);
+    doc.moveDown(0.2);
+    doc
+      .font("Helvetica")
+      .fontSize(10)
+      .fillColor(GRIS)
+      .text(
+        "Lo que había en el cajón al arquear, antes de apartar el cambio de mañana y el ingreso bancario.",
+        { width: ancho }
+      );
+    doc.moveDown(0.6);
+
+    composicion("Recuento del arqueo", arqueo.totalCentimos, {
+      sueltas: arqueo.sueltas,
+      tubos: arqueo.cartuchos,
+      sacos: arqueo.bolsas,
+    });
+
+    /*
+     * En qué se repartió, para que la hoja se explique sola. Solo si la
+     * jornada está cerrada: con el reparto sin hacer saldrían tres ceros y
+     * parecería que el cajón se quedó vacío.
+     */
+    const cambio = s.cambioFinalCentimos;
+    const ingreso = s.ingresoBancarioCentimos;
+    if (cambio != null || ingreso != null) {
+      titulo("De ahí salieron");
+      fila("Cambio que se queda en caja", eur(cambio ?? 0));
+      fila("Ingreso bancario", eur(ingreso ?? 0));
+      fila("Total repartido", eur((cambio ?? 0) + (ingreso ?? 0)), true);
+      // Si no cuadra con lo contado se dice, en vez de dejar que el lector
+      // haga la resta y se pregunte si el informe está mal.
+      const resto = arqueo.totalCentimos - ((cambio ?? 0) + (ingreso ?? 0));
+      if (resto !== 0) fila("Sin repartir", eur(resto), true);
+    }
+
+    // El listado de operaciones empieza en hoja limpia, no debajo de esto.
+    doc.addPage();
+  }
+
   // ── Listado de operaciones ──
   titulo("Operaciones");
   // La sección va en su columna: con taller y gasolinera compartiendo cajón,
