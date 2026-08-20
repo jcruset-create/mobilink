@@ -426,6 +426,8 @@ export type SeccionConfig = {
   nombre: string;
   activa: boolean;
   porDefecto: boolean;
+  /** Tiene su propia caja en la ERP: su efectivo se arquea por separado. */
+  arqueaAparte: boolean;
   orden: number;
   usos: number;
 };
