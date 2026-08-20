@@ -32,6 +32,7 @@ import {
 import { euros, aCentimos } from "../utils/money";
 import type {
   CierrePendiente,
+  LineaDenominacion,
   IngresoBancario,
   PanelIngresos,
   PropuestaCanjeIngreso,
@@ -608,9 +609,6 @@ function DesgloseYCanje({
   const [error, setError] = useState("");
   const { canje } = propuesta;
 
-  const piezas = (lineas: readonly { valor: number; cantidad: number }[]) =>
-    lineas.map((l) => `${euros(l.valor)} × ${l.cantidad}`).join(", ");
-
   async function canjear() {
     if (!canje) return;
     setOcupado(true);
@@ -637,25 +635,18 @@ function DesgloseYCanje({
         Qué hay en la bolsa
       </div>
 
-      <div className="flex items-baseline justify-between gap-2 text-sm">
-        <span className="text-slate-400">En billetes · al banco</span>
-        <span className="font-bold tabular-nums text-sky-300">
-          {euros(propuesta.ingresableCentimos)}
-        </span>
-      </div>
-      {propuesta.pendiente.billetes.length > 0 && (
-        <p className="text-[11px] text-slate-500">{piezas(propuesta.pendiente.billetes)}</p>
-      )}
-
-      <div className="flex items-baseline justify-between gap-2 text-sm">
-        <span className="text-slate-400">En monedas · no las admite el banco</span>
-        <span className="font-bold tabular-nums text-amber-300">
-          {euros(propuesta.enMonedasCentimos)}
-        </span>
-      </div>
-      {propuesta.pendiente.monedas.length > 0 && (
-        <p className="text-[11px] text-slate-500">{piezas(propuesta.pendiente.monedas)}</p>
-      )}
+      <TablaPiezas
+        titulo="En billetes · van al banco"
+        lineas={propuesta.pendiente.billetes}
+        total={propuesta.ingresableCentimos}
+        tono="text-sky-300"
+      />
+      <TablaPiezas
+        titulo="En monedas · no las admite el banco"
+        lineas={propuesta.pendiente.monedas}
+        total={propuesta.enMonedasCentimos}
+        tono="text-amber-300"
+      />
 
       {error && <ErrorBox>{error}</ErrorBox>}
 
@@ -665,11 +656,21 @@ function DesgloseYCanje({
             Se pueden convertir <strong>{euros(canje.valorMonedasCentimos)}</strong> en monedas
             cambiándolos por billetes de la caja.
           </p>
-          <p className="text-[11px] text-slate-400">
-            Entregas a la caja {piezas(canje.monedasEntregadas)}
-            {canje.billetesEntregados.length > 0 && ` y ${piezas(canje.billetesEntregados)}`}; te
-            llevas {piezas(canje.billetesRecibidos)}.
-          </p>
+
+          <TablaPiezas
+            titulo="Entregas a la caja"
+            lineas={[...canje.monedasEntregadas, ...canje.billetesEntregados].sort(
+              (a, b) => b.valor - a.valor
+            )}
+            total={canje.valorCanjeCentimos}
+            tono="text-slate-200"
+          />
+          <TablaPiezas
+            titulo="Te llevas de la caja"
+            lineas={canje.billetesRecibidos}
+            total={canje.valorCanjeCentimos}
+            tono="text-emerald-300"
+          />
           <button
             onClick={() => void canjear()}
             disabled={ocupado}
@@ -687,6 +688,71 @@ function DesgloseYCanje({
             : "Ahora mismo la caja no tiene billetes con los que cambiar estas monedas. Se ingresan los billetes y las monedas esperan aquí: en cuanto la caja tenga el billete que hace falta, aparecerá la propuesta."}
         </Aviso>
       )}
+    </div>
+  );
+}
+
+/**
+ * Piezas en tabla, con la foto de cada billete y cada moneda.
+ *
+ * Antes iban en una línea de texto —«50,00 € × 1, 20,00 € × 2, 5,00 € × 1»—
+ * que hay que leer entera para saber qué hay. Puesto en filas, con la imagen
+ * del catálogo delante, se compara de un vistazo con lo que uno tiene en la
+ * mano, que es lo que se hace de verdad con la bolsa encima del mostrador.
+ *
+ * La foto solo sale si está subida en Configuración; sin ella queda la
+ * etiqueta, que es la que manda.
+ */
+function TablaPiezas({
+  titulo,
+  lineas,
+  total,
+  tono,
+}: {
+  titulo: string;
+  lineas: readonly LineaDenominacion[];
+  total: number;
+  tono: string;
+}) {
+  const { denominaciones } = useCash();
+  if (lineas.length === 0) return null;
+
+  const imagenDe = (valor: number) =>
+    denominaciones.find((d) => d.valor === valor)?.imagenUrl ?? null;
+
+  return (
+    <div className="rounded-lg border border-slate-700/60 bg-slate-900/40">
+      <div className="flex items-baseline justify-between gap-2 border-b border-slate-700/60 px-2 py-1">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+          {titulo}
+        </span>
+        <span className={`text-sm font-black tabular-nums ${tono}`}>{euros(total)}</span>
+      </div>
+      <table className="w-full text-left text-[12px]">
+        <tbody>
+          {lineas.map((l) => {
+            const url = imagenDe(l.valor);
+            return (
+              <tr key={l.valor} className="border-t border-slate-800">
+                <td className="w-12 px-2 py-1">
+                  {url ? (
+                    <img src={url} alt="" className="h-6 w-10 object-contain" />
+                  ) : (
+                    <span className="block h-6 w-10" />
+                  )}
+                </td>
+                <td className="px-1 py-1 font-bold tabular-nums text-slate-200">
+                  {euros(l.valor)}
+                </td>
+                <td className="px-1 py-1 text-right tabular-nums text-slate-300">×{l.cantidad}</td>
+                <td className="px-2 py-1 text-right tabular-nums text-slate-400">
+                  {euros(l.valor * l.cantidad)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
