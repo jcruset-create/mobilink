@@ -3427,3 +3427,106 @@ describe.runIf(RUN)("resguardo del ingreso bancario", () => {
     ).rejects.toMatchObject({ codigo: "INGRESO_NO_ENCONTRADO" });
   });
 });
+
+describe.runIf(RUN)("arqueo repartido entre las cajas de la ERP", () => {
+  it("el informe saca una hoja por caja y las dos suman lo contado", async () => {
+    /*
+     * El caso real del 18/08: un cajón con 350 € de fondo, 29,69 € de taller y
+     * 50 € de gasolinera. En Genes son dos cierres distintos, así que el
+     * arqueo del cajón entero (429,69 €) no cuadra contra ninguno de los dos.
+     */
+    const secciones = await config.listarSecciones(EMPRESA);
+    const taller = secciones.find((x) => x.porDefecto)!;
+    const nombreGaso = `Gasolinera ${String(process.hrtime.bigint()).slice(-6)}`;
+    const gaso = await config.crearSeccion(ctx, { nombre: nombreGaso });
+    await config.actualizarSeccion(ctx, gaso.id, { arqueaAparte: true });
+
+    const caja = await crearCaja("erp-split");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 4 }, { valor: 2000, cantidad: 2 }, { valor: 1000, cantidad: 6 },
+        { valor: 200, cantidad: 2 }, { valor: 100, cantidad: 23 }, { valor: 50, cantidad: 21 },
+        { valor: 20, cantidad: 15 }, { valor: 10, cantidad: 49 }, { valor: 5, cantidad: 64 },
+        { valor: 2, cantidad: 51 }, { valor: 1, cantidad: 38 },
+      ],
+    });
+
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 2969,
+      formasPago: [{ forma: "CASH", importe: 2969 }],
+      efectivoRecibido: [{ valor: 2000, cantidad: 1 }, { valor: 1000, cantidad: 1 }],
+      concepto: "Reparación",
+      sectionId: taller.id,
+    });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      concepto: "Repostaje",
+      sectionId: gaso.id,
+    });
+
+    const teorico = await servicio.stockDeJornada(sesion.id);
+    expect(teorico.totalCentimos).toBe(42969);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: teorico.lineas });
+
+    const resumen = await servicio.resumenJornada(sesion.id);
+    const enResumen = resumen.porSeccion.find((x) => x.nombre === nombreGaso);
+    expect(enResumen?.arqueaAparte).toBe(true);
+    expect(enResumen?.efectivoNetoCentimos).toBe(5000);
+
+    // El reparto: la gasolinera se lleva su billete de 50 y el resto se queda.
+    const { repartirArqueo } = await import("./domain/erpsplit.ts");
+    const reparto = repartirArqueo(
+      resumen.ultimoArqueo!.sueltas,
+      "Taller",
+      resumen.porSeccion.filter((x) => x.arqueaAparte && x.efectivoNetoCentimos !== 0)
+    );
+    expect(reparto.principal.importeCentimos).toBe(37969);
+    expect(reparto.aparte).toHaveLength(1);
+    expect(reparto.aparte[0].importeCentimos).toBe(5000);
+    expect(reparto.aparte[0].piezas).toEqual([{ valor: 5000, cantidad: 1 }]);
+
+    // Y lo que hace que el cierre de Genes cuadre: las dos suman lo contado.
+    expect(reparto.principal.importeCentimos + reparto.aparte[0].importeCentimos).toBe(42969);
+
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: (await servicio.proponerCierre(sesion.id, 35000)).cambioFinal,
+    });
+
+    const pdf = await informe.informeCierre(EMPRESA, sesion.id);
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+  });
+
+  it("sin secciones aparte, el informe sigue sacando una sola hoja", async () => {
+    const caja = await crearCaja("erp-sin-split");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: (await servicio.stockDeJornada(sesion.id)).lineas,
+    });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: (await servicio.proponerCierre(sesion.id, 30000)).cambioFinal,
+    });
+    const pdf = await informe.informeCierre(EMPRESA, sesion.id);
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+  });
+
+  it("la sección por defecto no se puede arquear aparte: es la caja principal", async () => {
+    // Se queda con el fondo, así que separarla de sí misma dejaría el fondo
+    // sin caja a la que imputarse y no cuadraría ninguna de las dos.
+    const secciones = await config.listarSecciones(EMPRESA);
+    const porDefecto = secciones.find((x) => x.porDefecto)!;
+    await expect(
+      config.actualizarSeccion(ctx, porDefecto.id, { arqueaAparte: true })
+    ).rejects.toMatchObject({ codigo: "SECCION_POR_DEFECTO" });
+  });
+});

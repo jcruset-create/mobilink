@@ -1688,6 +1688,8 @@ export type ResumenJornada = {
     pagosCentimos: Centimos;
     /** Efectivo neto: lo que de verdad ha movido el cajón esa sección. */
     efectivoNetoCentimos: Centimos;
+    /** Tiene su propia caja en la ERP y se arquea por separado. */
+    arqueaAparte: boolean;
     operaciones: number;
   }[];
 };
@@ -1735,6 +1737,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
   const { rows: secciones } = await pool.query(
     `SELECT o.section_id,
             COALESCE(sec.nombre, 'Sin sección') AS nombre,
+            COALESCE(sec.arquea_aparte, false) AS arquea_aparte,
             SUM(CASE WHEN o.tipo = 'COLLECTION' THEN o.importe_centimos ELSE 0 END) AS cobros,
             SUM(CASE WHEN o.tipo IN ('PAYMENT','MANUAL_OUT') THEN o.importe_centimos ELSE 0 END) AS pagos,
             SUM(o.efectivo_neto_centimos) AS efectivo,
@@ -1743,7 +1746,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
        LEFT JOIN cash_sections sec ON sec.id = o.section_id
       WHERE o.session_id = $1 AND o.estado = 'CONFIRMED'
         AND o.tipo IN ('COLLECTION','PAYMENT','MANUAL_OUT')
-      GROUP BY o.section_id, sec.nombre, sec.orden
+      GROUP BY o.section_id, sec.nombre, sec.orden, sec.arquea_aparte
       ORDER BY sec.orden NULLS LAST, sec.nombre`,
     [sessionId]
   );
@@ -1828,6 +1831,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
       cobrosCentimos: Number(r.cobros),
       pagosCentimos: Number(r.pagos),
       efectivoNetoCentimos: Number(r.efectivo),
+      arqueaAparte: Boolean(r.arquea_aparte),
       operaciones: Number(r.n),
     })),
     /* eslint-enable @typescript-eslint/no-explicit-any */

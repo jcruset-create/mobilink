@@ -30,6 +30,7 @@ import { ErrorCaja, cargarDenominaciones } from "./repository.ts";
 import { detalleJornada } from "./service.ts";
 import { conteoPorOperacion, documentosDeJornada } from "./documents.ts";
 import { pendientes } from "./treasury.ts";
+import { repartirArqueo } from "./domain/erpsplit.ts";
 import { composicionDeIngreso } from "./bankdeposits.ts";
 import { leerDocumento } from "./storage.ts";
 
@@ -425,39 +426,24 @@ async function construirPortada(d: {
   }
 
   /*
-   * Hoja aparte: lo que había en el cajón ANTES de repartirlo.
+   * Hoja aparte: lo que había en el cajón ANTES de repartirlo, en la
+   * distribución del formulario «Nuevo Arqueo» de Genes.
    *
-   * Con la MISMA distribución que el formulario «Nuevo Arqueo» de Genes,
-   * porque esta hoja existe para teclear sus números allí: monedas a la
-   * izquierda y billetes a la derecha, de menor a mayor, cada una con su foto,
-   * su número de piezas y su importe, y el total en grande abajo. Si el papel
-   * va en otro orden que la pantalla, el que transcribe salta de fila en fila
-   * y ahí es donde se cuela un dedo.
+   * Monedas a la izquierda y billetes a la derecha, de menor a mayor, cada una
+   * con su foto, su casilla de piezas y su importe. Si el papel va en otro
+   * orden que la pantalla, el que transcribe salta de fila en fila y ahí es
+   * donde se cuela un dedo.
    *
-   * El número de piezas es el TOTAL de la denominación —sueltas más lo que hay
-   * dentro de cartuchos y bolsas— que es lo que pide Genes («debe contar todo
-   * el dinero»). Cuando hay envases, el desglose va debajo en pequeño.
+   * Y una rejilla POR CAJA de la ERP. Taller y gasolinera comparten cajón pero
+   * son dos cierres distintos en Genes: con una sola rejilla de 429,69 € no
+   * cuadra ninguno de los dos. El reparto de piezas es una propuesta —el cajón
+   * es uno solo— pero los importes salen del libro mayor y son exactos.
    */
   const arqueo = detalle.ultimoArqueo;
   if (arqueo) {
-    doc.addPage();
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(16)
-      .fillColor(TINTA)
-      .text("Arqueo para Genes", M, doc.y);
-    doc.moveDown(0.2);
-    doc
-      .font("Helvetica")
-      .fontSize(10)
-      .fillColor(GRIS)
-      .text(
-        "Lo que había en el cajón al arquear, antes de apartar el cambio de mañana y el ingreso bancario. En el mismo orden que el formulario de arqueo de Genes.",
-        { width: ancho }
-      );
-    doc.moveDown(0.8);
-
-    // Piezas totales por denominación: sueltas + envases convertidos.
+    // Piezas totales por denominación: sueltas + lo que hay dentro de envases.
+    // Genes pide contar TODO el dinero, así que el número que se teclea es el
+    // total; el desglose de precintos va debajo en pequeño.
     const piezasTotales = new Map<number, number>();
     const envasesDe = new Map<number, string[]>();
     const sumar = (valor: number, n: number) =>
@@ -476,131 +462,204 @@ async function construirPortada(d: {
       envasesDe.set(b.valor, nota);
     }
 
-    // Todas las denominaciones activas, de MENOR a mayor, como en Genes.
-    // También las que están a cero: la hoja calca el formulario fila a fila.
+    const contado = [...piezasTotales.entries()]
+      .map(([valor, cantidad]) => ({ valor, cantidad }))
+      .filter((l) => l.cantidad > 0);
+
+    const seccionesAparte = detalle.porSeccion.filter(
+      (sec) => sec.arqueaAparte && sec.efectivoNetoCentimos !== 0
+    );
+    const reparto = repartirArqueo(contado, d.caja?.nombre || "Caja principal", seccionesAparte);
+    const cajas = [reparto.principal, ...reparto.aparte];
+
     const activas = d.denominaciones.filter((den) => den.activa);
     const monedas = activas.filter((den) => den.tipo === "MONEDA").sort((a, b) => a.valor - b.valor);
     const billetes = activas.filter((den) => den.tipo === "BILLETE").sort((a, b) => a.valor - b.valor);
-
     const colAncho = (ancho - 24) / 2;
-    const filaGenes = (den: (typeof activas)[number], x: number, y: number): number => {
-      const piezas = piezasTotales.get(den.valor) ?? 0;
-      const importe = piezas * den.valor;
-      const notas = envasesDe.get(den.valor);
-      // La fila crece cuando lleva la nota del envase debajo: con altura fija
-      // el «incluye 1 bolsa de 100» se montaba encima de la casilla siguiente.
-      const alto = notas && piezas > 0 ? 38 : 30;
 
-      // La foto —o la etiqueta, si no la hay— identifica la fila, como en Genes.
-      const foto = d.imagenes.get(den.valor);
-      if (foto) {
-        try {
-          doc.image(foto, x, y + 2, { fit: [34, 22] });
-        } catch {
-          /* PNG corrupto: cae a la etiqueta */
+    /** Una rejilla completa, con el reparto de piezas que le toca. */
+    const rejillaGenes = (caja: (typeof cajas)[number], conEnvases: boolean) => {
+      const suyas = new Map(caja.piezas.map((l) => [l.valor, l.cantidad]));
+
+      const filaGenes = (den: (typeof activas)[number], x: number, y: number): number => {
+        const piezas = suyas.get(den.valor) ?? 0;
+        const importe = piezas * den.valor;
+
+        const foto = d.imagenes.get(den.valor);
+        if (foto) {
+          try {
+            doc.image(foto, x, y + 2, { fit: [34, 22] });
+          } catch {
+            /* PNG corrupto: manda la etiqueta */
+          }
         }
-      }
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(10)
+          .fillColor(TINTA)
+          .text(den.etiqueta, x + 40, y + 8, { width: 44, lineBreak: false });
+
+        // La casilla con el número de piezas, como la celda donde se teclea.
+        const cx = x + 88;
+        doc.roundedRect(cx, y + 2, 44, 20, 3).lineWidth(0.8).strokeColor("#94a3b8").stroke();
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(11)
+          .fillColor(piezas > 0 ? TINTA : "#b6c0cc")
+          .text(String(piezas), cx, y + 8, { width: 44, align: "center", lineBreak: false });
+
+        doc.font("Helvetica").fontSize(10).fillColor(GRIS).text("=", cx + 50, y + 8, { lineBreak: false });
+
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(10)
+          .fillColor(piezas > 0 ? TINTA : "#b6c0cc")
+          .text(eur(importe), cx + 60, y + 8, {
+            width: colAncho - (cx - x) - 60,
+            align: "right",
+            lineBreak: false,
+          });
+
+        // El desglose de precintos solo en la rejilla del cajón entero: en las
+        // repartidas las piezas son una propuesta y no hay envase que citar.
+        const notas = conEnvases ? envasesDe.get(den.valor) : undefined;
+        if (notas && piezas > 0) {
+          doc
+            .font("Helvetica")
+            .fontSize(7)
+            .fillColor(GRIS)
+            .text(`incluye ${notas.join(" y ")}`, x + 40, y + 21, {
+              width: colAncho - 40,
+              lineBreak: false,
+            });
+        }
+        return y + 30;
+      };
+
+      const cabeceraCol = (texto: string, x: number, y: number) => {
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(9)
+          .fillColor(GRIS)
+          .text(texto.toUpperCase(), x, y, { lineBreak: false });
+        doc
+          .moveTo(x, y + 13)
+          .lineTo(x + colAncho, y + 13)
+          .lineWidth(0.8)
+          .strokeColor("#cbd5e1")
+          .stroke();
+      };
+
+      const yInicio = doc.y;
+      cabeceraCol("Monedas", M, yInicio);
+      cabeceraCol("Billetes", M + colAncho + 24, yInicio);
+
+      let yMon = yInicio + 20;
+      for (const den of monedas) yMon = filaGenes(den, M, yMon);
+      let yBil = yInicio + 20;
+      for (const den of billetes) yBil = filaGenes(den, M + colAncho + 24, yBil);
+      doc.y = Math.max(yMon, yBil) + 10;
+
+      // El total en grande, como el «Total:» del formulario.
+      const yTotal = doc.y;
+      doc.roundedRect(M + ancho - 240, yTotal, 240, 34, 4).fill("#eef2f7");
       doc
         .font("Helvetica-Bold")
-        .fontSize(10)
+        .fontSize(12)
+        .fillColor(GRIS)
+        .text("Total:", M + ancho - 228, yTotal + 10, { lineBreak: false });
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(16)
         .fillColor(TINTA)
-        .text(den.etiqueta, x + 40, y + 8, { width: 44, lineBreak: false });
-
-      // La casilla con el número de piezas, como la celda donde se teclea.
-      const cx = x + 88;
-      doc.roundedRect(cx, y + 2, 44, 20, 3).lineWidth(0.8).strokeColor("#94a3b8").stroke();
-      doc
-        .font("Helvetica-Bold")
-        .fontSize(11)
-        .fillColor(piezas > 0 ? TINTA : "#b6c0cc")
-        .text(String(piezas), cx, y + 8, { width: 44, align: "center", lineBreak: false });
-
-      doc.font("Helvetica").fontSize(10).fillColor(GRIS).text("=", cx + 50, y + 8, { lineBreak: false });
-
-      doc
-        .font("Helvetica-Bold")
-        .fontSize(10)
-        .fillColor(piezas > 0 ? TINTA : "#b6c0cc")
-        .text(eur(importe), cx + 60, y + 8, {
-          width: colAncho - (cx - x) - 60,
+        .text(eur(caja.importeCentimos), M + ancho - 240, yTotal + 9, {
+          width: 228,
           align: "right",
           lineBreak: false,
         });
-
-      if (notas && piezas > 0) {
-        doc
-          .font("Helvetica")
-          .fontSize(7)
-          .fillColor(GRIS)
-          .text(`incluye ${notas.join(" y ")}`, x + 40, y + 25, {
-            width: colAncho - 40,
-            lineBreak: false,
-          });
-      }
-      return y + alto;
+      doc.y = yTotal + 42;
+      doc.font("Helvetica").fontSize(10).fillColor(TINTA);
     };
 
-    const cabeceraCol = (texto: string, x: number, y: number) => {
+    for (const [i, caja] of cajas.entries()) {
+      doc.addPage();
       doc
         .font("Helvetica-Bold")
-        .fontSize(9)
-        .fillColor(GRIS)
-        .text(texto.toUpperCase(), x, y, { lineBreak: false });
+        .fontSize(16)
+        .fillColor(TINTA)
+        .text(`Arqueo para Genes · ${caja.nombre}`, M, doc.y);
+      doc.moveDown(0.2);
+
+      const soloUna = cajas.length === 1;
       doc
-        .moveTo(x, y + 13)
-        .lineTo(x + colAncho, y + 13)
-        .lineWidth(0.8)
-        .strokeColor("#cbd5e1")
-        .stroke();
-    };
+        .font("Helvetica")
+        .fontSize(10)
+        .fillColor(GRIS)
+        .text(
+          soloUna
+            ? "Lo que había en el cajón al arquear, antes de apartar el cambio de mañana y el ingreso bancario. En el mismo orden que el formulario de arqueo de Genes."
+            : i === 0
+              ? `Lo que le toca a esta caja del arqueo, con el fondo incluido. Del cajón entero (${eur(arqueo.totalCentimos)}) se ha apartado lo de las secciones que cierran por su cuenta.`
+              : "Esta sección cierra en su propia caja de Genes. Su dinero estaba en el mismo cajón, así que sale de aquí y no del arqueo de la caja principal.",
+          { width: ancho }
+        );
 
-    const yInicio = doc.y;
-    cabeceraCol("Monedas", M, yInicio);
-    cabeceraCol("Billetes", M + colAncho + 24, yInicio);
+      if (!soloUna) {
+        doc.moveDown(0.3);
+        doc
+          .font("Helvetica-Oblique")
+          .fontSize(8)
+          .fillColor(GRIS)
+          .text(
+            "El importe es exacto: sale del libro mayor, operación a operación. El reparto de PIEZAS es una propuesta —el cajón es uno solo y este dinero no está separado físicamente—, pensada para que al teclearlo las dos cajas de Genes cuadren.",
+            { width: ancho }
+          );
+      }
+      doc.moveDown(0.6);
+      doc.font("Helvetica").fontSize(10).fillColor(TINTA);
 
-    let yMon = yInicio + 20;
-    for (const den of monedas) yMon = filaGenes(den, M, yMon);
-    let yBil = yInicio + 20;
-    for (const den of billetes) yBil = filaGenes(den, M + colAncho + 24, yBil);
+      if (caja.sinPiezas) {
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(11)
+          .fillColor("#b45309")
+          .text(
+            `No se ha podido proponer con qué piezas: en el cajón ya no queda con qué formar ${eur(caja.importeCentimos)}. Suele pasar cuando ese dinero se fue en un cambio. El importe sigue siendo el bueno.`,
+            { width: ancho }
+          );
+        doc.moveDown(0.5);
+        doc.font("Helvetica").fontSize(10).fillColor(TINTA);
+      }
 
-    doc.y = Math.max(yMon, yBil) + 10;
+      rejillaGenes(caja, soloUna);
 
-    // El total en grande, como el «Total:» del formulario.
-    const yTotal = doc.y;
-    doc.roundedRect(M + ancho - 240, yTotal, 240, 34, 4).fill("#eef2f7");
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(12)
-      .fillColor(GRIS)
-      .text("Total:", M + ancho - 228, yTotal + 10, { lineBreak: false });
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(16)
-      .fillColor(TINTA)
-      .text(eur(arqueo.totalCentimos), M + ancho - 240, yTotal + 9, {
-        width: 228,
-        align: "right",
-        lineBreak: false,
-      });
-    doc.y = yTotal + 42;
-    doc.font("Helvetica").fontSize(10).fillColor(TINTA);
+      // El resumen del reparto, solo en la hoja de la caja principal.
+      if (i === 0 && !soloUna) {
+        titulo("Reparto del cajón");
+        fila("Arqueo del cajón entero", eur(arqueo.totalCentimos));
+        for (const c of reparto.aparte) {
+          fila(`${c.nombre} · cierra en su caja`, `-${eur(c.importeCentimos)}`);
+        }
+        fila(`Queda para ${reparto.principal.nombre}`, eur(reparto.principal.importeCentimos), true);
+      }
 
-    /*
-     * En qué se repartió, para que la hoja se explique sola. Solo si la
-     * jornada está cerrada: con el reparto sin hacer saldrían tres ceros y
-     * parecería que el cajón se quedó vacío.
-     */
-    const cambio = s.cambioFinalCentimos;
-    const ingreso = s.ingresoBancarioCentimos;
-    if (cambio != null || ingreso != null) {
-      titulo("De ahí salieron");
-      fila("Cambio que se queda en caja", eur(cambio ?? 0));
-      fila("Ingreso bancario", eur(ingreso ?? 0));
-      fila("Total repartido", eur((cambio ?? 0) + (ingreso ?? 0)), true);
-      // Si no cuadra con lo contado se dice, en vez de dejar que el lector
-      // haga la resta y se pregunte si el informe está mal.
-      const resto = arqueo.totalCentimos - ((cambio ?? 0) + (ingreso ?? 0));
-      if (resto !== 0) fila("Sin repartir", eur(resto), true);
+      /*
+       * En qué se repartió el cajón entero. Solo en la hoja principal y con la
+       * jornada cerrada: con el reparto sin hacer saldrían tres ceros y
+       * parecería que el cajón se quedó vacío.
+       */
+      const cambio = s.cambioFinalCentimos;
+      const ingresoB = s.ingresoBancarioCentimos;
+      if (i === 0 && (cambio != null || ingresoB != null)) {
+        titulo("De ahí salieron");
+        fila("Cambio que se queda en caja", eur(cambio ?? 0));
+        fila("Ingreso bancario", eur(ingresoB ?? 0));
+        fila("Total repartido", eur((cambio ?? 0) + (ingresoB ?? 0)), true);
+        // Si no cuadra con lo contado se dice, en vez de dejar que el lector
+        // haga la resta y se pregunte si el informe está mal.
+        const resto = arqueo.totalCentimos - ((cambio ?? 0) + (ingresoB ?? 0));
+        if (resto !== 0) fila("Sin repartir", eur(resto), true);
+      }
     }
 
     // El listado de operaciones empieza en hoja limpia, no debajo de esto.

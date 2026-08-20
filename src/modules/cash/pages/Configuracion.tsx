@@ -126,8 +126,10 @@ function Secciones() {
 
       <p className="text-[11px] text-slate-400">
         Para repartir la liquidación entre varios negocios que comparten el mismo cajón. El arqueo
-        y el cierre siguen siendo <strong className="text-slate-300">uno solo</strong>: el dinero
-        no se separa, solo se sabe cuánto ha aportado cada uno.
+        y el cierre de Mobilink siguen siendo{" "}
+        <strong className="text-slate-300">uno solo</strong>: el dinero no se separa, solo se sabe
+        cuánto ha aportado cada uno. Marca «caja propia en la ERP» en las que además cierran por
+        su cuenta en Genes: el informe saca entonces una hoja de arqueo para cada una.
       </p>
 
       {error && <ErrorBox>{error}</ErrorBox>}
@@ -174,11 +176,12 @@ function Secciones() {
             <th className={thCls}>Sección</th>
             <th className={`${thCls} text-right`}>Operaciones</th>
             <th className={thCls}>Estado</th>
+            <th className={thCls}>Caja propia en la ERP</th>
             <th className={`${thCls} text-right`}>Acciones</th>
           </tr>
         </thead>
         <tbody>
-          {secciones.length === 0 && <EmptyRow cols={4} text="Todavía no hay secciones." />}
+          {secciones.length === 0 && <EmptyRow cols={5} text="Todavía no hay secciones." />}
           {secciones.map((sec) => (
             <tr key={sec.id} className={sec.activa ? "" : "opacity-60"}>
               <td className={tdCls}>
@@ -195,6 +198,35 @@ function Secciones() {
                   <span className="text-[11px] text-slate-400">Activa</span>
                 ) : (
                   <span className="text-[11px] text-slate-500">De baja</span>
+                )}
+              </td>
+              {/*
+                La sección por defecto se queda con el fondo del cajón, así que
+                ES la caja principal en la ERP: no puede arquearse aparte de sí
+                misma. De ahí que ahí no haya casilla, sino una explicación.
+              */}
+              <td className={tdCls}>
+                {sec.porDefecto ? (
+                  <span className="text-[10px] text-slate-500">
+                    Caja principal · se queda con el fondo
+                  </span>
+                ) : (
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={sec.arqueaAparte}
+                      onChange={(e) =>
+                        void accion(() =>
+                          api.actualizarSeccion(sec.id, { arqueaAparte: e.target.checked })
+                        )
+                      }
+                      disabled={!editable || ocupado}
+                      className="h-4 w-4 rounded border-slate-600 bg-slate-900 accent-sky-500"
+                    />
+                    <span className="text-[11px] text-slate-400">
+                      {sec.arqueaAparte ? "Se arquea aparte" : "Va en la caja principal"}
+                    </span>
+                  </label>
                 )}
               </td>
               <td className={tdCls}>
@@ -234,6 +266,13 @@ function Secciones() {
         Dar de baja una sección no toca el histórico: los cobros ya registrados con ella siguen
         ahí, solo deja de poder elegirse. Los pagos y salidas no preguntan la sección y se guardan
         con la predeterminada.
+      </p>
+
+      <p className="text-[11px] text-slate-500">
+        «Caja propia en la ERP» es para cuando dos negocios comparten cajón pero cierran por
+        separado en Genes. El informe saca una hoja de arqueo por caja: el importe de cada una es
+        exacto —sale del libro mayor— y el reparto de piezas es una propuesta, porque el cajón es
+        uno solo y ese dinero no está separado físicamente.
       </p>
     </section>
   );
