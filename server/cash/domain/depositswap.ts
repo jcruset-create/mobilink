@@ -25,11 +25,21 @@
  * Así que el objetivo principal es uno y solo uno: **maximizar `x`**, el valor
  * en monedas que se convierte.
  *
- * Como criterio de desempate, entre los canjes que consiguen el mismo `x` se
- * prefiere el que deje a la caja MÁS piezas y se lleve MENOS billetes: el cajón
- * quiere calderilla y billetes pequeños, no un billete de 50. Es lo que hace
- * que, pudiendo elegir, salga «entrega 2×20 + 10 € en monedas, llévate el 50»
- * en vez de «llévate el 10».
+ * ## El desempate: siempre el billete más grande
+ *
+ * Entre los canjes que convierten lo mismo se elige el que **se lleve el
+ * billete más grande posible**. Teniendo 2×20 en el montón y 10 € en monedas,
+ * la propuesta es «entrega los dos de 20 y las monedas, llévate el de 50», no
+ * «llévate el de 10».
+ *
+ * Es lo mejor para el cajón, que es quien paga el canje: se queda con los dos
+ * billetes de 20 y con la calderilla —que es justo lo que necesita para dar
+ * cambio— y suelta el billete gordo, que en un mostrador no sirve para nada
+ * salvo para acabar en el banco. Llevarse el de 10 dejaría al cajón con el de
+ * 50 muerto de risa y sin los 20.
+ *
+ * Después del tamaño se mira que sean pocos billetes, y al final que se
+ * entreguen muchas piezas.
  */
 
 import type { Centimos } from "./money.ts";
@@ -77,7 +87,15 @@ function alcanzables(inv: Inventario): Alcanzables {
   const usadas = new Int32Array(maximo + 1);
   posible[0] = 1;
 
-  for (const [valor, cantidad] of inv) {
+  /*
+   * De mayor a menor. El recorrido marca cada suma la primera vez que la
+   * alcanza, así que empezar por las denominaciones grandes hace que la
+   * reconstrucción salga con los billetes más gordos posibles: 50 € se rehace
+   * como un billete de 50 y no como 2×20 + 10.
+   */
+  const porValorDesc = [...inv].sort((a, b) => b[0] - a[0]);
+
+  for (const [valor, cantidad] of porValorDesc) {
     if (valor <= 0 || cantidad <= 0) continue;
     /*
      * Se recorre a la BAJA sobre una foto de lo que ya era alcanzable sin esta
@@ -164,11 +182,18 @@ export function mejorCanje(
 /**
  * Desempate entre canjes que convierten lo mismo.
  *
- * Gana el que deje a la caja más piezas de las que sirven para dar cambio: se
- * mira primero cuántos billetes se lleva —cuantos menos, más grandes son— y
- * después cuántas piezas se le dejan.
+ * Manda el TAMAÑO del billete que se recibe: cuanto más grande, mejor. El cajón
+ * paga el canje, y le conviene soltar el billete gordo y quedarse con los
+ * pequeños y con la calderilla, que es con lo que da cambio.
+ *
+ * Los otros dos criterios solo entran cuando el primero empata: menos billetes
+ * —para no llevarse cinco de 10 pudiendo llevarse uno de 50— y más piezas
+ * entregadas, que es más cambio para el cajón.
  */
 function preferible(a: Canje, b: Canje): boolean {
+  const mayor = (c: Canje) => c.billetesRecibidos.reduce((n, l) => Math.max(n, l.valor), 0);
+  if (mayor(a) !== mayor(b)) return mayor(a) > mayor(b);
+
   const recibe = (c: Canje) => c.billetesRecibidos.reduce((n, l) => n + l.cantidad, 0);
   if (recibe(a) !== recibe(b)) return recibe(a) < recibe(b);
 

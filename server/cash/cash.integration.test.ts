@@ -3066,6 +3066,19 @@ describe.runIf(RUN)("canje de monedas por billetes para el ingreso", () => {
     expect(p.canje?.billetesRecibidos).toEqual([{ valor: 5000, cantidad: 1 }]);
   });
 
+  it("teniendo el de 10 y el de 50 en caja, propone llevarse el de 50", async () => {
+    // La regla del mostrador: siempre el billete más grande. El cajón se queda
+    // los dos de 20 y la calderilla, y suelta el billete gordo.
+    const { caja, sessionIds } = await escenario([
+      { valor: 5000, cantidad: 1 },
+      { valor: 1000, cantidad: 1 },
+    ]);
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    expect(p.canje?.billetesRecibidos).toEqual([{ valor: 5000, cantidad: 1 }]);
+    expect(p.canje?.billetesEntregados).toEqual([{ valor: 2000, cantidad: 2 }]);
+    expect(p.canje?.valorMonedasCentimos).toBe(1000);
+  });
+
   it("al registrarlo, el montón cambia y la caja no pierde valor", async () => {
     const { caja, sessionIds } = await escenario([{ valor: 1000, cantidad: 1 }]);
     const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
