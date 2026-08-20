@@ -58,17 +58,44 @@ la pantalla lo avisa en la fila de la caja, en ámbar, al lado del nombre.
 
 ## Verificación
 
+Todo ejecutado contra **PostgreSQL 16 real**, en dos bases distintas y a propósito:
+
 | Comprobación | Resultado |
 |---|---|
 | `npx tsc` (servidor y app) | Sin errores |
 | `npm run build` | Correcto |
-| `npm test` | 801 pasan, 321 omitidas |
+| Suite completa sobre base **migrada** (con la clave ajena puesta) | **1122 de 1122**, ninguna omitida |
+| Suite completa sobre base **recién creada** (sin fundación SaaS) | **1122 de 1122** |
+| Migración aplicada dos veces seguidas | 1.ª: 352 cajas emparejadas · 2.ª: 0 filas. Idempotente |
+| DDL de arranque sobre base ya migrada (riesgo R6) | Arranca sin error |
 | `bash scripts/check-versions.sh` | `package.json` SUBIDA (1.8.25), el resto OK |
-| ESLint | **No ejecutable en este repositorio**: `eslint.config.js` importa `@eslint/js`, que no está en `package.json` |
-| Pruebas contra PostgreSQL real | **No ejecutadas**: no hay servidor de base de datos en este entorno. Las 321 omitidas incluyen las cuatro nuevas de ámbito |
+| ESLint | **No ejecutable**: `eslint.config.js` importa `@eslint/js`, que no está en `package.json`. Ajeno a esta fase |
 
-Las dos últimas filas son lo que **no** se ha podido comprobar aquí, y conviene correrlas antes de
-desplegar: `RUN_DB_TESTS=1 DATABASE_URL=… npm test` sobre una base desechable.
+```bash
+RUN_DB_TESTS=1 DATABASE_URL=postgres://…/base_desechable npm test
+```
+
+### Semántica del backfill, comprobada con datos
+
+| Texto del centro | Resultado | Por qué |
+|---|---|---|
+| `tarragona` | → taller «Tarragona» | Se ignoran mayúsculas |
+| `Alcañiz` | → taller «Alcañiz» | Se ignoran las tildes |
+| `DUPLICADO` | **sin asignar** | Había dos talleres con ese nombre: emparejar sería una moneda al aire |
+| `reus` | **sin asignar** | No existe ese taller |
+| *(vacío)* | **sin asignar** | Nada que emparejar |
+
+### Dos fallos que solo aparecieron al ejecutarlo de verdad
+
+Merece la pena dejarlos escritos, porque los dos habrían llegado a producción:
+
+1. **La migración no compilaba.** El backfill usaba `min(id)` sobre un `uuid`, y **PostgreSQL no
+   tiene `min()` para uuid**: la migración entera fallaba al ejecutarla. Se sustituyó por
+   `(array_agg(id))[1]`. El `tsc` no puede ver esto —es SQL en una cadena— y solo lo caza ejecutarlo.
+2. **Las pruebas de ámbito pasaban por el motivo equivocado.** Usaban uuid inventados de taller, que
+   la base de pruebas aceptaba porque allí `centro_id` no lleva clave ajena. En una base migrada, que
+   sí la lleva, reventaban. Ahora crean el taller de verdad cuando `app_centros` existe. **Una prueba
+   que solo pasa donde no hay integridad referencial no prueba nada.**
 
 ## Lo que queda para después
 
