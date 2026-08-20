@@ -3829,4 +3829,146 @@ describe.runIf(RUN)("Eventos hacia MC Central", () => {
     // si lo hubiera, colgaría de la caja y no de una jornada.
     for (const r of rows) expect(r.aggregate_type).toBe("REGISTER");
   });
+
+});
+
+/**
+ * Evidencias: integridad y versión (fase 9 de MC Central).
+ *
+ * El bucket privado y la URL firmada ya existían. Lo que se prueba aquí es lo
+ * nuevo: que se pueda demostrar que el fichero de hoy es el que se adjuntó, y
+ * que sustituir un escaneo torcido no pierda el anterior.
+ */
+describe.runIf(RUN)("Evidencias con huella y versión", () => {
+  async function pdfDePrueba(texto: string): Promise<Buffer> {
+    const { PDFDocument, StandardFonts } = await import("pdf-lib");
+    const doc = await PDFDocument.create();
+    const pagina = doc.addPage([595.28, 841.89]);
+    const fuente = await doc.embedFont(StandardFonts.Helvetica);
+    pagina.drawText(texto, { x: 60, y: 760, size: 14, font: fuente });
+    return Buffer.from(await doc.save());
+  }
+
+  async function cobroConCaja(nombre: string) {
+    const caja = await crearCaja(nombre);
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    return servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+    });
+  }
+  it("el justificante guarda su huella y se puede verificar", async () => {
+    const cobro = await cobroConCaja("huella");
+
+    const doc = await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "factura.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("ORIGINAL"),
+    });
+
+    const { rows } = await db.query(
+      `SELECT sha256, version FROM cash_operation_documents WHERE id = $1`,
+      [doc.id]
+    );
+    expect(rows[0].sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(rows[0].version).toBe(1);
+
+    expect((await documentos.verificarDocumento(ctx, doc.id)).estado).toBe("OK");
+  });
+
+  /*
+   * La razón de ser del SHA-256: si el fichero del almacenamiento cambia, se
+   * tiene que notar. Sin esta comprobación la huella sería un adorno.
+   */
+  it("si el fichero cambia por detrás, la verificación lo dice", async () => {
+    const cobro = await cobroConCaja("alterado");
+    const doc = await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "factura.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("ORIGINAL"),
+    });
+
+    // Se cambia la huella guardada, que es equivalente a que cambiara el
+    // fichero y mucho más fácil de provocar en una prueba.
+    await db.query(`UPDATE cash_operation_documents SET sha256 = $2 WHERE id = $1`, [
+      doc.id,
+      "0".repeat(64),
+    ]);
+
+    expect((await documentos.verificarDocumento(ctx, doc.id)).estado).toBe("ALTERADO");
+  });
+
+  it("un justificante sin huella dice que no se puede comprobar, no que esté bien", async () => {
+    const cobro = await cobroConCaja("sinhuella");
+    const doc = await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "vieja.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("ANTIGUA"),
+    });
+
+    // Como los que se subieron antes de esta fase.
+    await db.query(`UPDATE cash_operation_documents SET sha256 = NULL WHERE id = $1`, [doc.id]);
+
+    const v = await documentos.verificarDocumento(ctx, doc.id);
+    expect(v.estado).toBe("SIN_HUELLA");
+  });
+
+  it("sustituir un escaneo sube la versión y conserva el anterior", async () => {
+    const cobro = await cobroConCaja("version");
+
+    const torcido = await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "torcido.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("TORCIDO"),
+    });
+
+    const bueno = await documentos.adjuntarDocumento(
+      ctx,
+      cobro.operacionId,
+      {
+        originalname: "bueno.pdf",
+        mimetype: "application/pdf",
+        buffer: await pdfDePrueba("BUENO"),
+      },
+      torcido.id
+    );
+
+    const { rows } = await db.query(
+      `SELECT id, version, reemplaza_a, sustituido, anulado
+         FROM cash_operation_documents WHERE id = ANY($1::int[]) ORDER BY id`,
+      [[torcido.id, bueno.id]]
+    );
+    const [viejo, nuevo] = rows;
+
+    expect(nuevo.version).toBe(2);
+    expect(nuevo.reemplaza_a).toBe(torcido.id);
+    // El anterior se queda: sustituido no es lo mismo que anulado. Anular es lo
+    // que se hace cuando un justificante no debía estar; sustituir es que el
+    // mismo papel se ha vuelto a escanear mejor.
+    expect(viejo.sustituido).toBe(true);
+    expect(viejo.anulado).toBe(false);
+  });
+
+  it("avisa de que ese mismo fichero ya se había subido", async () => {
+    const cobro = await cobroConCaja("duplicado");
+
+    const contenido = await pdfDePrueba("EL MISMO TACO DE FACTURAS");
+    await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "taco.pdf",
+      mimetype: "application/pdf",
+      buffer: contenido,
+    });
+
+    const repetidos = await documentos.duplicadosDe(EMPRESA, contenido);
+    expect(repetidos.length).toBeGreaterThanOrEqual(1);
+    expect(repetidos[0].nombre).toBe("taco.pdf");
+
+    // Y uno distinto no sale como duplicado.
+    expect(await documentos.duplicadosDe(EMPRESA, await pdfDePrueba("OTRO"))).toHaveLength(0);
+  });
 });
