@@ -124,33 +124,51 @@ export function permisosDeRol(rol: string | null | undefined): readonly Permiso[
 }
 
 const CACHE_TTL_MS = 60_000;
-const cache = new Map<string, { rol: string | null; expiresAt: number }>();
+const cache = new Map<string, { ambito: AmbitoCaja; expiresAt: number }>();
 
 /**
- * Rol del usuario en el módulo `cash`.
+ * Lo que el usuario es en Mobilink Cash: su rol y hasta dónde llega.
  *
- * Un superadmin es admin de caja sin necesidad de fila: es el mismo criterio
- * que aplica `requireModule` con las licencias.
+ * `centroId` es el **ámbito**: el taller al que está limitado. `null` significa
+ * toda la empresa, y es lo que tiene todo el mundo hasta que alguien decida lo
+ * contrario en Administración. Se eligió así, y no al revés, porque el valor
+ * por defecto de una columna nueva lo hereda todo el censo de usuarios: con el
+ * criterio contrario, desplegar esta fase habría dejado a la plantilla entera
+ * sin poder abrir su caja el lunes por la mañana.
  */
-export async function rolDeCaja(userId: string, esSuperadmin: boolean): Promise<string | null> {
-  if (esSuperadmin) return "admin";
+export type AmbitoCaja = { rol: string | null; centroId: string | null };
+
+/**
+ * Rol y ámbito del usuario en el módulo `cash`.
+ *
+ * Un superadmin es admin de caja sin necesidad de fila —el mismo criterio que
+ * aplica `requireModule` con las licencias— y sin límite de taller: si tuviera
+ * ámbito, no podría supervisar la red, que es justo para lo que está.
+ */
+export async function rolDeCaja(userId: string, esSuperadmin: boolean): Promise<AmbitoCaja> {
+  if (esSuperadmin) return { rol: "admin", centroId: null };
 
   const hit = cache.get(userId);
-  if (hit && hit.expiresAt > Date.now()) return hit.rol;
+  if (hit && hit.expiresAt > Date.now()) return hit.ambito;
 
-  const { rows } = await pool.query<{ rol: string }>(
-    `SELECT rol FROM app_usuario_modulos WHERE user_id = $1 AND modulo = 'cash'`,
+  const { rows } = await pool.query<{ rol: string; centro_id: string | null }>(
+    `SELECT rol, centro_id FROM app_usuario_modulos WHERE user_id = $1 AND modulo = 'cash'`,
     [userId]
   );
-  const rol = rows[0]?.rol ?? null;
-  cache.set(userId, { rol, expiresAt: Date.now() + CACHE_TTL_MS });
-  return rol;
+  const ambito: AmbitoCaja = {
+    rol: rows[0]?.rol ?? null,
+    centroId: rows[0]?.centro_id ?? null,
+  };
+  cache.set(userId, { ambito, expiresAt: Date.now() + CACHE_TTL_MS });
+  return ambito;
 }
 
 declare module "express-serve-static-core" {
   interface Request {
     cashRol?: string | null;
     cashPermisos?: readonly Permiso[];
+    /** Taller al que está limitado el usuario. `null` = toda la empresa. */
+    cashCentroId?: string | null;
   }
 }
 
@@ -159,8 +177,9 @@ export const cargarPermisosCaja: RequestHandler = async (req, res, next) => {
   const ctx = req.authCtx;
   if (!ctx) return res.status(401).json({ error: "Sesión requerida" });
   try {
-    const rol = await rolDeCaja(ctx.userId, ctx.esSuperadmin);
+    const { rol, centroId } = await rolDeCaja(ctx.userId, ctx.esSuperadmin);
     req.cashRol = rol;
+    req.cashCentroId = centroId;
     req.cashPermisos = permisosDeRol(rol);
     next();
   } catch (e) {

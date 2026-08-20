@@ -881,6 +881,54 @@ export async function initCash(): Promise<void> {
       ADD COLUMN IF NOT EXISTS arquea_aparte BOOLEAN NOT NULL DEFAULT false;
   `);
 
+  /*
+   * Jerarquía: ZONA → TALLER → CAJA (MC Central, fase 1).
+   *
+   * Hasta aquí `cash_registers.centro` era texto libre, así que agrupar cajas
+   * por taller era agrupar cadenas. Se añade el vínculo real, y la columna de
+   * texto SE QUEDA: la usan los informes y el `ON CONFLICT (empresa_id, centro,
+   * nombre)` del alta de cajas. Se retirará cuando el backfill esté verificado
+   * contra datos reales, no antes.
+   *
+   * Todo NULLABLE, y no por descuido: esto se ejecuta en CADA arranque, así que
+   * un NOT NULL prematuro no rompe una migración —impide arrancar el proceso—.
+   * Es el mismo fallo que ya costó un incidente con el CHECK de motivos.
+   *
+   * Las claves ajenas hacia `app_*` viven en la migración de Supabase
+   * (`supabase/migrations/central_fase1_jerarquia.sql`) y aquí se ponen solo si
+   * esas tablas existen. Motivo: las pruebas de integración levantan una base
+   * desechable donde solo corre `initCash()`, sin la fundación SaaS; con la
+   * clave ajena incondicional, arrancar contra esa base fallaría. Es la misma
+   * razón por la que `empresa_id` nunca ha tenido FK en este esquema.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_zonas (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      nombre TEXT NOT NULL,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_app_zonas_empresa ON app_zonas(empresa_id, activa);
+    -- El nombre es único dentro de la empresa, no en toda la instalación: dos
+    -- empresas pueden tener cada una su zona «Norte» sin saber la una de la otra.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_app_zonas_nombre
+      ON app_zonas(empresa_id, lower(nombre));
+
+    ALTER TABLE cash_registers ADD COLUMN IF NOT EXISTS centro_id UUID;
+    CREATE INDEX IF NOT EXISTS cash_registers_centro_idx ON cash_registers(centro_id);
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF to_regclass('public.app_centros') IS NOT NULL THEN
+        ALTER TABLE app_centros ADD COLUMN IF NOT EXISTS zona_id UUID;
+        CREATE INDEX IF NOT EXISTS idx_app_centros_zona ON app_centros(zona_id);
+      END IF;
+    END $$;
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 

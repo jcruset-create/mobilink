@@ -31,12 +31,14 @@ import {
 } from "../components/ui";
 import { MEDIDA_RECOMENDADA, PROPORCION_BOTON } from "../components/PaymentMethodPicker";
 import { euros, aCentimos } from "../utils/money";
-import type { Denominacion, FormaPagoConfig, SeccionConfig } from "../types";
+import type { Centro, Denominacion, FormaPagoConfig, SeccionConfig } from "../types";
 import * as api from "../services/api";
 
 type CajaConfig = {
   id: number;
   centro: string;
+  /** Taller al que pertenece. `null` = sin asignar; la fila lo avisa. */
+  centroId: string | null;
   nombre: string;
   /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
   codigo: string;
@@ -285,15 +287,23 @@ function Cajas() {
   const [cajas, setCajas] = useState<CajaConfig[]>([]);
   const [nombre, setNombre] = useState("");
   const [centro, setCentro] = useState("");
+  const [centroId, setCentroId] = useState("");
+  const [centros, setCentros] = useState<Centro[]>([]);
   const [editando, setEditando] = useState<number | null>(null);
-  const [borrador, setBorrador] = useState({ nombre: "", centro: "", codigo: "" });
+  const [borrador, setBorrador] = useState<{
+    nombre: string;
+    centro: string;
+    centroId?: string;
+    codigo: string;
+  }>({ nombre: "", centro: "", codigo: "" });
   const [error, setError] = useState("");
   const [ocupado, setOcupado] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
-      const r = await api.listarCajas();
+      const [r, j] = await Promise.all([api.listarCajas(), api.jerarquia()]);
       setCajas(r.cajas);
+      setCentros(j.centros.filter((c) => c.activo));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error cargando las cajas");
     }
@@ -343,9 +353,10 @@ function Cajas() {
             onKeyDown={(e) => {
               if (e.key === "Enter" && nombre.trim()) {
                 void accion(async () => {
-                  await api.crearCaja(nombre.trim(), centro.trim());
+                  await api.crearCaja(nombre.trim(), centro.trim(), centroId || null);
                   setNombre("");
                   setCentro("");
+                  setCentroId("");
                 });
               }
             }}
@@ -353,21 +364,45 @@ function Cajas() {
             className={inputCls}
           />
         </label>
+        {/*
+          * El taller se ELIGE cuando los hay dados de alta, y solo se teclea
+          * cuando no hay ninguno. Escribirlo a mano era lo que producía
+          * «Tarragona» y «tarragona» como dos talleres distintos, y con eso
+          * ningún informe consolidado cuadra.
+          */}
         <label className="block">
-          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Centro</span>
-          <input
-            value={centro}
-            onChange={(e) => setCentro(e.target.value)}
-            placeholder="tarragona"
-            className={inputCls}
-          />
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Taller
+          </span>
+          {centros.length > 0 ? (
+            <select
+              value={centroId}
+              onChange={(e) => setCentroId(e.target.value)}
+              className={inputCls}
+            >
+              <option value="">Sin asignar</option>
+              {centros.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nombre}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={centro}
+              onChange={(e) => setCentro(e.target.value)}
+              placeholder="tarragona"
+              className={inputCls}
+            />
+          )}
         </label>
         <button
           onClick={() =>
             void accion(async () => {
-              await api.crearCaja(nombre.trim(), centro.trim());
+              await api.crearCaja(nombre.trim(), centro.trim(), centroId || null);
               setNombre("");
               setCentro("");
+              setCentroId("");
             })
           }
           disabled={ocupado || !nombre.trim()}
@@ -407,14 +442,37 @@ function Cajas() {
                   )}
                 </td>
                 <td className={tdCls}>
-                  {enEdicion ? (
+                  {enEdicion && centros.length > 0 ? (
+                    <select
+                      value={borrador.centroId ?? ""}
+                      onChange={(e) => setBorrador({ ...borrador, centroId: e.target.value })}
+                      className={inputCls}
+                    >
+                      <option value="">Sin asignar</option>
+                      {centros.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  ) : enEdicion ? (
                     <input
                       value={borrador.centro}
                       onChange={(e) => setBorrador({ ...borrador, centro: e.target.value })}
                       className={inputCls}
                     />
+                  ) : c.centroId ? (
+                    c.centro
                   ) : (
-                    c.centro || <span className="text-slate-600">—</span>
+                    /*
+                     * Sin taller la caja funciona igual, pero no entra en
+                     * ningún recuento por taller. Se dice aquí y no en una
+                     * nota al pie: si no se ve al lado de la caja, nadie lo
+                     * arregla.
+                     */
+                    <span className="text-amber-400" title="Sin taller asignado: esta caja no se puede agrupar por taller">
+                      {c.centro || "—"} · sin asignar
+                    </span>
                   )}
                 </td>
                 {/*
@@ -469,7 +527,17 @@ function Cajas() {
                         <button
                           onClick={() =>
                             void accion(async () => {
-                              await api.actualizarCaja(c.id, borrador);
+                              /*
+                               * El vacío del desplegable es «sin asignar», y
+                               * eso viaja como null explícito: una cadena
+                               * vacía se interpretaría como un id de taller y
+                               * el servidor la rechazaría con un 404 que no
+                               * dice nada.
+                               */
+                              await api.actualizarCaja(c.id, {
+                                ...borrador,
+                                centroId: borrador.centroId ? borrador.centroId : null,
+                              });
                               setEditando(null);
                             })
                           }
@@ -488,7 +556,12 @@ function Cajas() {
                         <button
                           onClick={() => {
                             setEditando(c.id);
-                            setBorrador({ nombre: c.nombre, centro: c.centro, codigo: c.codigo });
+                            setBorrador({
+                              nombre: c.nombre,
+                              centro: c.centro,
+                              centroId: c.centroId ?? "",
+                              codigo: c.codigo,
+                            });
                           }}
                           disabled={ocupado || Boolean(c.jornadaAbierta)}
                           className={btnMini}
