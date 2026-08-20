@@ -253,7 +253,8 @@ export type FormaPagoConfig = {
 /** Justificante escaneado colgado de un cobro o un pago. */
 export type DocumentoOperacion = {
   id: number;
-  operationId: number;
+  /** null = documento de la jornada entera, no de una operación suelta. */
+  operationId: number | null;
   sessionId: number;
   nombre: string;
   mime: string;

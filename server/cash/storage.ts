@@ -140,9 +140,10 @@ export async function leerDocumento(ruta: string): Promise<Buffer | null> {
 export function rutaDocumento(
   empresaId: string,
   sessionId: number,
-  operationId: number,
+  /** null = documento de la jornada entera, no de una operación. */
+  operationId: number | null,
   extension: string,
   ahora: number
 ): string {
-  return `${empresaId}/${sessionId}/${operationId}_${ahora}${extension}`;
+  return `${empresaId}/${sessionId}/${operationId ?? "jornada"}_${ahora}${extension}`;
 }

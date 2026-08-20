@@ -431,6 +431,20 @@ propone la composición solo al entrar. Lo que hay que retirar sale de la resta
 —contado menos fondo fijo— y es el efectivo que ha entrado en la jornada. Cero
 significa «sin fondo fijo» y el cierre lo pregunta como antes.
 
+**Informes** reúne el papeleo de cada jornada en un sitio: el informe de cierre
+en PDF —que existía pero solo aparecía en la pantalla de confirmación y en el
+detalle del histórico, o sea que quien cerraba y cerraba la pestaña lo perdía de
+vista—, la hoja del ingreso bancario (total y referencia; el desglose pieza a
+pieza ya va en el informe y repetirlo daría dos papeles que se contradicen) y
+los escaneos de la jornada.
+
+**Escaneos de jornada**: `cash_operation_documents.operation_id` admite NULL, y
+eso significa «de la jornada entera, no de una operación» — el taco de facturas
+del día o el resguardo del banco, que no son de ningún cobro concreto. Se
+admiten varios porque en el mostrador no sale todo en un PDF. La consulta del
+informe usa LEFT JOIN: con un JOIN a secas desaparecían del informe justo los
+que no tienen operación, que es lo que los define.
+
 Detalles que costaron un fallo en producción:
 
 - **El cierre reparte LO CONTADO, no el teórico.** La pantalla usaba

@@ -2905,3 +2905,96 @@ describe.runIf(RUN)("fondo fijo de la caja", () => {
     expect(suma(propuesta.ingresoBancario)).toBe(7969);
   });
 });
+
+describe.runIf(RUN)("escaneos de la jornada entera", () => {
+  /** Mismo PDF de juguete que usa el bloque de justificantes. */
+  async function pdfDePrueba(texto: string): Promise<Buffer> {
+    const { PDFDocument, StandardFonts } = await import("pdf-lib");
+    const doc = await PDFDocument.create();
+    const pagina = doc.addPage([595, 842]);
+    pagina.drawText(texto, { x: 50, y: 780, size: 14, font: await doc.embedFont(StandardFonts.Helvetica) });
+    return Buffer.from(await doc.save());
+  }
+
+  it("se suben varios, cuelgan de la jornada y no de ninguna operación", async () => {
+    const caja = await crearCaja("escaneos-jornada");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja });
+
+    // El taco de facturas rara vez sale en un solo PDF.
+    for (const nombre of ["facturas-1.pdf", "facturas-2.pdf", "resguardo-banco.pdf"]) {
+      const d = await documentos.adjuntarDocumentoDeJornada(ctx, sesion.id, {
+        originalname: nombre,
+        mimetype: "application/pdf",
+        buffer: await pdfDePrueba(nombre),
+      });
+      expect(d.operationId).toBeNull();
+      expect(d.sessionId).toBe(sesion.id);
+    }
+
+    const lista = await documentos.documentosSueltosDeJornada(EMPRESA, sesion.id);
+    expect(lista.map((d) => d.nombre)).toEqual([
+      "facturas-1.pdf",
+      "facturas-2.pdf",
+      "resguardo-banco.pdf",
+    ]);
+  });
+
+  it("van dentro del informe de cierre, junto a los de cada cobro", async () => {
+    const caja = await crearCaja("escaneos-informe");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      concepto: "Venta con factura",
+    });
+    await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "de-la-operacion.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("DE LA OPERACION"),
+    });
+    await documentos.adjuntarDocumentoDeJornada(ctx, sesion.id, {
+      originalname: "de-la-jornada.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("DE LA JORNADA"),
+    });
+
+    /*
+     * Los dos: el de la operación y el de la jornada. Con un JOIN a secas en
+     * vez de LEFT JOIN, el de la jornada desaparecía del informe justo por no
+     * tener operación — que es lo que lo define.
+     */
+    const todos = await documentos.documentosDeJornada(sesion.id);
+    expect(todos.map((d) => d.nombre)).toEqual(["de-la-operacion.pdf", "de-la-jornada.pdf"]);
+    expect(todos.find((d) => d.nombre === "de-la-jornada.pdf")?.operacionNumero).toBe("Jornada");
+
+    const pdf = await informe.informeCierre(EMPRESA, sesion.id);
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+  });
+
+  it("una jornada de otra empresa no admite escaneos", async () => {
+    const caja = await crearCaja("escaneos-ajenos");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja });
+    await expect(
+      documentos.adjuntarDocumentoDeJornada(
+        { empresaId: "00000000-0000-4000-a000-0000000000ff", userId: null },
+        sesion.id,
+        { originalname: "x.pdf", mimetype: "application/pdf", buffer: await pdfDePrueba("X") }
+      )
+    ).rejects.toMatchObject({ codigo: "JORNADA_NO_ENCONTRADA" });
+  });
+
+  it("un formato que no es PDF ni imagen se rechaza", async () => {
+    const caja = await crearCaja("escaneos-formato");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja });
+    await expect(
+      documentos.adjuntarDocumentoDeJornada(ctx, sesion.id, {
+        originalname: "hoja.xlsx",
+        mimetype: "application/vnd.ms-excel",
+        buffer: Buffer.from("no soy un pdf"),
+      })
+    ).rejects.toMatchObject({ codigo: "FORMATO_NO_ADMITIDO" });
+  });
+});
