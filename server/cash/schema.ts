@@ -865,6 +865,22 @@ export async function initCash(): Promise<void> {
       ON cash_registers(empresa_id, codigo) WHERE codigo <> '';
   `);
 
+  /*
+   * Secciones que se arquean aparte en la ERP.
+   *
+   * Taller y gasolinera comparten CAJÓN pero son dos cajas distintas en Genes,
+   * y cada una se cierra por su lado. El arqueo del cajón entero no cuadra
+   * contra ninguna de las dos: hay que repartirlo.
+   *
+   * La marca va por sección y no se deduce de «por defecto» porque mañana
+   * puede haber una sección más que SÍ cierre en la misma caja de Genes;
+   * deducirlo la separaría sin que nadie lo pidiera.
+   */
+  await pool.query(`
+    ALTER TABLE cash_sections
+      ADD COLUMN IF NOT EXISTS arquea_aparte BOOLEAN NOT NULL DEFAULT false;
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 

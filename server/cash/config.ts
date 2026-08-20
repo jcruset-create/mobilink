@@ -780,6 +780,8 @@ export type SeccionConfig = {
   nombre: string;
   activa: boolean;
   porDefecto: boolean;
+  /** Tiene su propia caja en la ERP: su efectivo se arquea por separado. */
+  arqueaAparte: boolean;
   orden: number;
   /** Cuántas operaciones la usan. Una sección con usos no se borra. */
   usos: number;
@@ -793,6 +795,7 @@ function aSeccion(r: any): SeccionConfig {
     nombre: r.nombre,
     activa: r.activa,
     porDefecto: r.por_defecto,
+    arqueaAparte: r.arquea_aparte ?? false,
     orden: r.orden,
     usos: Number(r.usos ?? 0),
   };
@@ -875,7 +878,13 @@ export async function crearSeccion(
 export async function actualizarSeccion(
   ctx: Contexto,
   id: number,
-  datos: { nombre?: string; activa?: boolean; porDefecto?: boolean; orden?: number }
+  datos: {
+    nombre?: string;
+    activa?: boolean;
+    porDefecto?: boolean;
+    arqueaAparte?: boolean;
+    orden?: number;
+  }
 ): Promise<SeccionConfig> {
   const { rows: previas } = await pool.query(
     `SELECT * FROM cash_sections WHERE id = $1 AND empresa_id = $2`,
@@ -886,6 +895,17 @@ export async function actualizarSeccion(
 
   const activa = datos.activa ?? antes.activa;
   const porDefecto = datos.porDefecto ?? antes.por_defecto;
+  /*
+   * La sección por defecto es la caja principal en la ERP: se queda con el
+   * fondo del cajón y no puede arquearse aparte de sí misma.
+   *
+   * Al ASCENDER una sección que se arqueaba aparte, la marca se le quita sola
+   * en vez de rechazar el cambio: el usuario está diciendo «esta es ahora la
+   * principal» y obedecerle a medias sería peor. Lo que sí se rechaza es pedir
+   * las dos cosas a la vez, que es una contradicción y no una consecuencia.
+   */
+  const arqueaAparte =
+    porDefecto && !antes.por_defecto ? false : (datos.arqueaAparte ?? antes.arquea_aparte ?? false);
 
   /*
    * La sección por defecto no se puede dar de baja: es la que rellena los
@@ -896,6 +916,16 @@ export async function actualizarSeccion(
     throw new ErrorCaja(
       "SECCION_POR_DEFECTO",
       "La sección por defecto no se puede dar de baja. Marca antes otra como predeterminada.",
+      409
+    );
+  }
+
+  // Pedir las dos cosas a la vez es una contradicción: sin sección a la que
+  // imputar el fondo, no cuadraría ninguna de las dos cajas.
+  if (datos.arqueaAparte === true && porDefecto) {
+    throw new ErrorCaja(
+      "SECCION_POR_DEFECTO",
+      "La sección por defecto es la caja principal: se queda con el fondo y no se puede arquear aparte.",
       409
     );
   }
@@ -912,7 +942,8 @@ export async function actualizarSeccion(
 
   const { rows } = await pool.query(
     `UPDATE cash_sections
-        SET nombre = $3, activa = $4, por_defecto = $5, orden = $6, updated_at_ms = $7
+        SET nombre = $3, activa = $4, por_defecto = $5, orden = $6, updated_at_ms = $7,
+            arquea_aparte = $8
       WHERE id = $1 AND empresa_id = $2
       RETURNING *`,
     [
@@ -923,6 +954,7 @@ export async function actualizarSeccion(
       porDefecto,
       datos.orden ?? antes.orden,
       Date.now(),
+      arqueaAparte,
     ]
   );
 

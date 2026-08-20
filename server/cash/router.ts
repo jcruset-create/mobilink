@@ -1211,6 +1211,7 @@ export function createCashRouter(): Router {
           nombre: typeof b.nombre === "string" ? b.nombre : undefined,
           activa: typeof b.activa === "boolean" ? b.activa : undefined,
           porDefecto: typeof b.porDefecto === "boolean" ? b.porDefecto : undefined,
+          arqueaAparte: typeof b.arqueaAparte === "boolean" ? b.arqueaAparte : undefined,
           orden: b.orden != null ? entero(b.orden, "orden") : undefined,
         }
       );

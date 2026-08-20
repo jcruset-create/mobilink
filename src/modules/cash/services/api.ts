@@ -615,7 +615,13 @@ export const crearSeccion = (datos: { nombre: string; orden?: number }) =>
 
 export const actualizarSeccion = (
   id: number,
-  datos: { nombre?: string; activa?: boolean; porDefecto?: boolean; orden?: number }
+  datos: {
+    nombre?: string;
+    activa?: boolean;
+    porDefecto?: boolean;
+    arqueaAparte?: boolean;
+    orden?: number;
+  }
 ) =>
   pedir<{ seccion: SeccionConfig }>(`/sections/${id}`, {
     method: "PATCH",
