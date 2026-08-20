@@ -88,6 +88,7 @@ export const MODULOS_APP: ModuloApp[] = [
     ],
     pantallas: [
       { key: "red", label: "Red de cajas" },
+      { key: "posicion", label: "Posición de efectivo" },
       { key: "jornadas", label: "Jornadas" },
       { key: "organizacion", label: "Organización" },
     ],

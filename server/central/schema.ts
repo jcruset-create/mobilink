@@ -175,6 +175,55 @@ export async function initCentral(): Promise<void> {
       ON central_registers(empresa_id);
   `);
 
+  /*
+   * Dinero fuera del cajón que todavía no ha vuelto.
+   *
+   * Es la pieza que hace que la posición global cuadre. El cajón ya NO cuenta
+   * este dinero —salió con su asiento— así que sin esta tabla, la red parecería
+   * tener menos efectivo del que tiene cada vez que alguien va al banco. Y la
+   * tentación contraria, sumarlo al cajón, sería contarlo dos veces.
+   *
+   * Una fila por documento (`clase` + `documento_id`), no por movimiento: lo
+   * que interesa es si sigue abierto y por cuánto.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS central_transits (
+      clase TEXT NOT NULL,
+      documento_id BIGINT NOT NULL,
+      empresa_id UUID NOT NULL,
+      centro_id UUID,
+      register_id INTEGER,
+      session_id INTEGER,
+      numero TEXT,
+      importe_centimos BIGINT NOT NULL DEFAULT 0,
+      -- Quién lo tiene. La pregunta que hay que poder contestar no es solo
+      -- cuánto falta, sino con quién está.
+      responsable TEXT,
+      estado TEXT NOT NULL DEFAULT 'ABIERTO',
+      abierto_en_ms BIGINT,
+      cerrado_en_ms BIGINT,
+      liquidado_centimos BIGINT,
+      actualizado_en_ms BIGINT NOT NULL,
+      PRIMARY KEY (clase, documento_id)
+    );
+    CREATE INDEX IF NOT EXISTS central_transits_abiertos_idx
+      ON central_transits(empresa_id, estado);
+  `);
+
+  /*
+   * Marca de conciliación en la jornada.
+   *
+   * El importe que un cierre aparta «para el banco» sale del cajón y espera en
+   * la tienda hasta que un ingreso lo recoge. Mientras no se concilie, ese
+   * dinero EXISTE y hay que contarlo; en cuanto entra en un ingreso, deja de
+   * estar. Sin esta marca, la posición global seguiría contando billetes que ya
+   * están en el banco.
+   */
+  await pool.query(`
+    ALTER TABLE central_sessions
+      ADD COLUMN IF NOT EXISTS conciliada BOOLEAN NOT NULL DEFAULT false;
+  `);
+
   await registrarModuloCentral();
 
   console.log("MC Central: esquema inicializado correctamente");

@@ -198,6 +198,72 @@ async function proyectar(
       return nuevo ? "APLICADO" : "TARDIO";
     }
 
+    /*
+     * Tránsito: dinero que salió del cajón y volverá.
+     *
+     * No toca ningún contador de la jornada, y eso es deliberado: el
+     * movimiento de efectivo ya llegó como `OPERATION_REGISTERED` y descontó
+     * el cajón. Si además sumara aquí, el mismo billete contaría dos veces.
+     * Lo único que hace es anotar dónde está mientras no vuelve.
+     */
+    case "TRANSIT_OPENED":
+      await client.query(
+        `INSERT INTO central_transits
+           (clase, documento_id, empresa_id, centro_id, register_id, session_id,
+            numero, importe_centimos, responsable, estado, abierto_en_ms, actualizado_en_ms)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'ABIERTO',$10,$11)
+         ON CONFLICT (clase, documento_id) DO NOTHING`,
+        [
+          String(d.clase ?? "?"),
+          Number(d.documentoId ?? 0),
+          e.empresaId,
+          e.centroId,
+          e.registerId,
+          e.sessionId,
+          d.numero ?? null,
+          num(d.importeCentimos),
+          d.responsable ?? null,
+          e.ocurridoEnMs,
+          ahora,
+        ]
+      );
+      return "APLICADO";
+
+    case "TRANSIT_SETTLED":
+      /*
+       * `WHERE estado = 'ABIERTO'` y no a secas: si el cierre llegara dos
+       * veces —o llegara antes que la apertura por un reintento— no puede
+       * reabrir ni pisar lo ya liquidado. La fila se crea si no existía,
+       * directamente cerrada, para no perder el hecho.
+       */
+      await client.query(
+        `INSERT INTO central_transits
+           (clase, documento_id, empresa_id, centro_id, register_id, session_id,
+            numero, importe_centimos, estado, cerrado_en_ms, liquidado_centimos,
+            actualizado_en_ms)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'LIQUIDADO',$9,$10,$11)
+         ON CONFLICT (clase, documento_id) DO UPDATE
+           SET estado = 'LIQUIDADO',
+               cerrado_en_ms = EXCLUDED.cerrado_en_ms,
+               liquidado_centimos = EXCLUDED.liquidado_centimos,
+               actualizado_en_ms = EXCLUDED.actualizado_en_ms
+         WHERE central_transits.estado = 'ABIERTO'`,
+        [
+          String(d.clase ?? "?"),
+          Number(d.documentoId ?? 0),
+          e.empresaId,
+          e.centroId,
+          e.registerId,
+          e.sessionId,
+          d.numero ?? null,
+          num(d.importeCentimos),
+          e.ocurridoEnMs,
+          num(d.liquidadoCentimos),
+          ahora,
+        ]
+      );
+      return "APLICADO";
+
     case "OPERATION_REVERSED":
       await client.query(
         `UPDATE central_sessions
@@ -268,6 +334,8 @@ async function proyectarCaja(
   const d = e.datos ?? {};
   const importe = Number(d.importeCentimos ?? 0);
 
+  const cierres = Array.isArray(d.cierres) ? (d.cierres as number[]) : [];
+
   if (e.tipo === "BANK_DEPOSIT_CREATED") {
     await client.query(
       `UPDATE central_registers
@@ -277,6 +345,18 @@ async function proyectarCaja(
         WHERE register_id = $1`,
       [e.registerId, importe, ahora]
     );
+    /*
+     * Los cierres que entran en el ingreso quedan conciliados: su importe «para
+     * el banco» ya no está en la tienda. Sin esto, la posición global seguiría
+     * contando billetes que están en el banco desde hace semanas.
+     */
+    if (cierres.length > 0) {
+      await client.query(
+        `UPDATE central_sessions SET conciliada = true, actualizado_en_ms = $2
+          WHERE session_id = ANY($1::int[])`,
+        [cierres, ahora]
+      );
+    }
   } else if (e.tipo === "BANK_DEPOSIT_VOIDED") {
     // Anular resta: el ingreso dejó de existir y la posición de la red no
     // puede seguir contándolo. El evento de alta sigue en `central_events`,
@@ -289,6 +369,15 @@ async function proyectarCaja(
         WHERE register_id = $1`,
       [e.registerId, importe, ahora]
     );
+    // Y los cierres vuelven a estar pendientes: su dinero está otra vez en la
+    // tienda, así que la posición global tiene que volver a contarlo.
+    if (cierres.length > 0) {
+      await client.query(
+        `UPDATE central_sessions SET conciliada = false, actualizado_en_ms = $2
+          WHERE session_id = ANY($1::int[])`,
+        [cierres, ahora]
+      );
+    }
   }
 
   return "APLICADO";

@@ -74,6 +74,31 @@ export type JornadaEnRed = {
   reaperturas: number;
 };
 
+export type PosicionGlobal = {
+  enCajonesCentimos: number;
+  enTransitoCentimos: number;
+  enTransitoBancoCentimos: number;
+  enTransitoPersonasCentimos: number;
+  transitosAbiertos: number;
+  pendienteBancoCentimos: number;
+  totalCentimos: number;
+};
+
+export type TransitoAbierto = {
+  clase: string;
+  documentoId: number;
+  numero: string | null;
+  caja: string | null;
+  centro: string | null;
+  responsable: string | null;
+  importeCentimos: number;
+  abiertoEnMs: number | null;
+  dias: number | null;
+};
+
+export const posicion = () =>
+  pedir<{ posicion: PosicionGlobal; transitos: TransitoAbierto[] }>("/position");
+
 export const red = () =>
   pedir<{
     resumen: ResumenRed;

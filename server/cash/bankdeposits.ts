@@ -517,22 +517,6 @@ export async function anularIngreso(
       [ingresoId, ctx.userId, Date.now(), motivo.trim()]
     );
 
-    await emitirEvento(client, {
-      empresaId: ctx.empresaId,
-      centroId: await centroDeCaja(client, actualizado[0].register_id),
-      registerId: actualizado[0].register_id,
-      agregado: { tipo: "REGISTER", id: actualizado[0].register_id },
-      tipo: "BANK_DEPOSIT_VOIDED",
-      ocurridoEnMs: Date.now(),
-      actorUserId: ctx.userId,
-      datos: {
-        depositId: ingresoId,
-        numero: actualizado[0].numero,
-        importeCentimos: Number(actualizado[0].importe_centimos),
-        motivo: motivo.trim(),
-      },
-    });
-
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const { rows: lineas } = await client.query(
       `SELECT l.session_id, l.importe_centimos, s.fecha
@@ -542,6 +526,29 @@ export async function anularIngreso(
         ORDER BY s.fecha, s.id`,
       [ingresoId]
     );
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, actualizado[0].register_id),
+      registerId: actualizado[0].register_id,
+      agregado: { tipo: "REGISTER", id: actualizado[0].register_id },
+      tipo: "BANK_DEPOSIT_VOIDED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      /*
+       * Los cierres viajan también aquí, y no solo en el alta: al anular
+       * vuelven a estar pendientes, y quien los proyecta tiene que saber
+       * CUÁLES para devolverlos a la posición global. Deducirlo preguntando a
+       * la caja rompería que Central se sostenga solo con sus eventos.
+       */
+      datos: {
+        depositId: ingresoId,
+        numero: actualizado[0].numero,
+        importeCentimos: Number(actualizado[0].importe_centimos),
+        cierres: lineas.map((l: any) => l.session_id),
+        motivo: motivo.trim(),
+      },
+    });
+
     return aIngreso(
       actualizado[0],
       lineas.map((l: any) => ({

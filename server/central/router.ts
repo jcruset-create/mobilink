@@ -14,7 +14,13 @@
 import { Router, type Request, type Response } from "express";
 import { authenticate, requireModule } from "../core/auth.ts";
 import { cargarPermisosCentral, exigirPermiso } from "./permissions.ts";
-import { cajasEnRed, jornadasEnRed, resumenRed } from "./queries.ts";
+import {
+  cajasEnRed,
+  jornadasEnRed,
+  posicionGlobal,
+  resumenRed,
+  transitosAbiertos,
+} from "./queries.ts";
 import * as jerarquia from "../cash/hierarchy.ts";
 import { ErrorCaja } from "../cash/errors.ts";
 
@@ -51,6 +57,26 @@ export function createCentralRouter(): Router {
         jerarquia.listarCentros(empresaId),
       ]);
       res.json({ resumen, cajas, zonas, centros, permisos: req.centralPermisos });
+    })
+  );
+
+  /**
+   * La posición global de efectivo: cuánto hay en la red y dónde.
+   *
+   * Va junta con los tránsitos abiertos porque un total sin el desglose de qué
+   * está fuera y con quién no se puede comprobar, y un número de dinero que no
+   * se puede comprobar no lo usa nadie.
+   */
+  r.get(
+    "/position",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const empresaId = req.authCtx!.empresaId;
+      const [posicion, transitos] = await Promise.all([
+        posicionGlobal(empresaId),
+        transitosAbiertos(empresaId),
+      ]);
+      res.json({ posicion, transitos });
     })
   );
 

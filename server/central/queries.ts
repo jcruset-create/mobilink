@@ -37,6 +37,27 @@ export type ResumenRed = {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
+ * ¿Existe la tabla de talleres?
+ *
+ * En una instalación sin la fundación SaaS —y en la base desechable de las
+ * pruebas— `app_centros` no existe, y un JOIN contra ella tumba la consulta
+ * entera. Central tiene que seguir enseñando la red aunque los talleres no
+ * estén dados de alta: sin nombre de taller, pero funcionando. Es el mismo
+ * criterio que usa `cash/hierarchy.ts`, y por el mismo motivo.
+ */
+async function hayCentros(): Promise<boolean> {
+  const { rows } = await pool.query(`SELECT to_regclass('public.app_centros') IS NOT NULL AS hay`);
+  return Boolean(rows[0]?.hay);
+}
+
+/** El JOIN al taller, o una columna vacía si esa tabla no está. */
+async function joinCentro(alias: string, columna: string) {
+  return (await hayCentros())
+    ? { select: `${alias}.nombre AS centro_nombre`, join: `LEFT JOIN app_centros ${alias} ON ${alias}.id = ${columna}` }
+    : { select: `NULL::text AS centro_nombre`, join: "" };
+}
+
+/**
  * El resumen de arriba de la pantalla.
  *
  * `descuadres` cuenta jornadas con diferencia distinta de cero **de los últimos
@@ -82,19 +103,20 @@ export async function resumenRed(empresaId: string): Promise<ResumenRed> {
  * arreglar, que es el peor sitio donde esconderlas.
  */
 export async function cajasEnRed(empresaId: string, centroId?: string | null): Promise<CajaEnRed[]> {
+  const centro = await joinCentro("t", "r.centro_id");
   const { rows } = await pool.query(
     `SELECT r.register_id, r.centro_id, r.jornada_abierta_id, r.ultima_actividad_ms,
             r.ultima_fecha_cerrada, r.ingresado_centimos,
             c.nombre AS caja_nombre, c.codigo,
-            t.nombre AS centro_nombre,
+            ${centro.select},
             CASE WHEN r.ultima_fecha_cerrada IS NULL THEN NULL
                  ELSE (CURRENT_DATE - r.ultima_fecha_cerrada) END AS dias_sin_cerrar
        FROM central_registers r
        LEFT JOIN cash_registers c ON c.id = r.register_id
-       LEFT JOIN app_centros t ON t.id = r.centro_id
+       ${centro.join}
       WHERE r.empresa_id = $1
         AND ($2::uuid IS NULL OR r.centro_id = $2)
-      ORDER BY t.nombre NULLS FIRST, c.nombre`,
+      ORDER BY centro_nombre NULLS FIRST, c.nombre`,
     [empresaId, centroId ?? null]
   );
 
@@ -137,11 +159,12 @@ export async function jornadasEnRed(
   }
   if (filtros.soloDescuadres) cond.push(`COALESCE(s.diferencia_centimos,0) <> 0`);
 
+  const centro = await joinCentro("t", "s.centro_id");
   const { rows } = await pool.query(
-    `SELECT s.*, c.nombre AS caja_nombre, c.codigo, t.nombre AS centro_nombre
+    `SELECT s.*, c.nombre AS caja_nombre, c.codigo, ${centro.select}
        FROM central_sessions s
        LEFT JOIN cash_registers c ON c.id = s.register_id
-       LEFT JOIN app_centros t ON t.id = s.centro_id
+       ${centro.join}
       WHERE ${cond.join(" AND ")}
       ORDER BY s.fecha DESC NULLS LAST, s.session_id DESC
       LIMIT 200`,
@@ -166,6 +189,134 @@ export async function jornadasEnRed(
       r.ingreso_bancario_centimos == null ? null : Number(r.ingreso_bancario_centimos),
     anulaciones: r.anulaciones,
     reaperturas: r.reaperturas,
+  }));
+}
+
+// ── Posición global de efectivo ────────────────────────────────────────────
+
+export type PosicionGlobal = {
+  /** En los cajones ahora mismo. */
+  enCajonesCentimos: number;
+  /** Fuera del cajón y sin volver: banco por un lado, personas por otro. */
+  enTransitoCentimos: number;
+  enTransitoBancoCentimos: number;
+  enTransitoPersonasCentimos: number;
+  transitosAbiertos: number;
+  /** Apartado en cierres que todavía no ha recogido ningún ingreso bancario. */
+  pendienteBancoCentimos: number;
+  /** La suma de los tres. Es TODO el efectivo de la red y no repite ni un euro. */
+  totalCentimos: number;
+};
+
+export type TransitoAbierto = {
+  clase: string;
+  documentoId: number;
+  numero: string | null;
+  caja: string | null;
+  centro: string | null;
+  responsable: string | null;
+  importeCentimos: number;
+  abiertoEnMs: number | null;
+  /** Días que lleva fuera. Es el número que convierte un olvido en una pregunta. */
+  dias: number | null;
+};
+
+/**
+ * Cuánto efectivo hay en la red y dónde está.
+ *
+ * **La regla que gobierna esta consulta: cada euro se cuenta en un sitio y solo
+ * en uno.** El módulo de caja asienta el dinero en el momento en que se mueve
+ * físicamente, no cuando se planea, así que:
+ *
+ * · Lo que se fue al banco a cambiar YA salió del cajón. Está en `transitos`.
+ * · Los 50 € que lleva alguien YA salieron del cajón. Están en `transitos`.
+ * · Lo que un cierre aparta para el banco YA salió del cajón. Está en
+ *   `pendiente`, hasta que un ingreso bancario lo recoge y lo concilia.
+ *
+ * Sumarlos al cajón sería contarlos dos veces; no sumarlos sería perderlos, y
+ * es lo que hace que un arqueo descuadre 200 € sin que nadie recuerde por qué.
+ *
+ * El cajón se calcula con la ÚLTIMA jornada de cada caja: si está abierta, el
+ * fondo más el efectivo neto del día; si está cerrada, el cambio que se dejó
+ * para mañana. El fondo inicial no se suma dos veces porque la apertura no pasa
+ * por `registrarOperacion` y por tanto no entra en el efectivo neto.
+ */
+export async function posicionGlobal(empresaId: string): Promise<PosicionGlobal> {
+  const { rows } = await pool.query(
+    `WITH ultima AS (
+       SELECT DISTINCT ON (register_id)
+              register_id, estado, fondo_inicial_centimos,
+              efectivo_neto_centimos, cambio_final_centimos
+         FROM central_sessions
+        WHERE empresa_id = $1
+        ORDER BY register_id, fecha DESC NULLS LAST, session_id DESC
+     ),
+     cajon AS (
+       SELECT COALESCE(SUM(
+         CASE WHEN estado IN ('OPEN','REOPENED')
+              THEN fondo_inicial_centimos + efectivo_neto_centimos
+              ELSE COALESCE(cambio_final_centimos, 0) END), 0) AS centimos
+         FROM ultima
+     )
+     SELECT
+       (SELECT centimos FROM cajon) AS cajon,
+       (SELECT COALESCE(SUM(importe_centimos),0) FROM central_transits
+         WHERE empresa_id = $1 AND estado = 'ABIERTO') AS transito,
+       (SELECT COALESCE(SUM(importe_centimos),0) FROM central_transits
+         WHERE empresa_id = $1 AND estado = 'ABIERTO' AND clase = 'CHANGE_ORDER') AS transito_banco,
+       (SELECT COALESCE(SUM(importe_centimos),0) FROM central_transits
+         WHERE empresa_id = $1 AND estado = 'ABIERTO' AND clase = 'ADVANCE') AS transito_personas,
+       (SELECT COUNT(*)::int FROM central_transits
+         WHERE empresa_id = $1 AND estado = 'ABIERTO') AS abiertos,
+       (SELECT COALESCE(SUM(ingreso_bancario_centimos),0) FROM central_sessions
+         WHERE empresa_id = $1 AND estado = 'CLOSED' AND NOT conciliada) AS pendiente`,
+    [empresaId]
+  );
+
+  const r = rows[0];
+  const enCajones = Number(r.cajon);
+  const enTransito = Number(r.transito);
+  const pendiente = Number(r.pendiente);
+
+  return {
+    enCajonesCentimos: enCajones,
+    enTransitoCentimos: enTransito,
+    enTransitoBancoCentimos: Number(r.transito_banco),
+    enTransitoPersonasCentimos: Number(r.transito_personas),
+    transitosAbiertos: r.abiertos,
+    pendienteBancoCentimos: pendiente,
+    totalCentimos: enCajones + enTransito + pendiente,
+  };
+}
+
+/** Lo que está fuera ahora mismo, con quién y desde cuándo. */
+export async function transitosAbiertos(empresaId: string): Promise<TransitoAbierto[]> {
+  const centro = await joinCentro("ce", "t.centro_id");
+  const { rows } = await pool.query(
+    `SELECT t.clase, t.documento_id, t.numero, t.responsable, t.importe_centimos,
+            t.abierto_en_ms, c.nombre AS caja, ${centro.select}
+       FROM central_transits t
+       LEFT JOIN cash_registers c ON c.id = t.register_id
+       ${centro.join}
+      WHERE t.empresa_id = $1 AND t.estado = 'ABIERTO'
+      ORDER BY t.abierto_en_ms`,
+    [empresaId]
+  );
+
+  const ahora = Date.now();
+  return rows.map((r: any) => ({
+    clase: r.clase,
+    documentoId: Number(r.documento_id),
+    numero: r.numero ?? null,
+    caja: r.caja ?? null,
+    centro: r.centro_nombre ?? null,
+    responsable: r.responsable ?? null,
+    importeCentimos: Number(r.importe_centimos),
+    abiertoEnMs: r.abierto_en_ms == null ? null : Number(r.abierto_en_ms),
+    dias:
+      r.abierto_en_ms == null
+        ? null
+        : Math.floor((ahora - Number(r.abierto_en_ms)) / 86_400_000),
   }));
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
