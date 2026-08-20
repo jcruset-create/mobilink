@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { Building2, CalendarDays, Landmark, Network, Wallet } from "lucide-react";
+import { Building2, CalendarDays, Coins, Landmark, Network, Wallet } from "lucide-react";
 import {
   Card,
   EmptyRow,
@@ -53,6 +53,9 @@ export default function CentralApp() {
           <NavLink to="/central/ingresos" className={enlace}>
             <Landmark size={15} /> Ingresos
           </NavLink>
+          <NavLink to="/central/cambio" className={enlace}>
+            <Coins size={15} /> Cambio
+          </NavLink>
           <NavLink to="/central/jornadas" className={enlace}>
             <CalendarDays size={15} /> Jornadas
           </NavLink>
@@ -66,6 +69,7 @@ export default function CentralApp() {
           <Route path="red" element={<Red />} />
           <Route path="posicion" element={<Posicion />} />
           <Route path="ingresos" element={<Ingresos />} />
+          <Route path="cambio" element={<Cambio />} />
           <Route path="jornadas" element={<Jornadas />} />
           <Route path="organizacion" element={<Organizacion />} />
           <Route path="*" element={<Navigate to="red" replace />} />
@@ -404,6 +408,160 @@ function Ingresos() {
                     </ul>
                   )}
                 </td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+      </section>
+    </div>
+  );
+}
+
+// ── Cambio y arqueos ───────────────────────────────────────────────────────
+
+/** Formatea un valor de pieza: 2000 → «20 €», 10 → «10 c». */
+const pieza = (centimos: number) =>
+  centimos >= 100 ? `${centimos / 100} €` : `${centimos} c`;
+
+/**
+ * El cambio de la red, pieza a pieza.
+ *
+ * La foto sale del último arqueo de cada caja, no del stock teórico. El teórico
+ * es correcto por construcción; el arqueo es lo que alguien ha contado con la
+ * mano, y para decidir si un taller se está quedando sin monedas la foto buena
+ * es la contada.
+ */
+function Cambio() {
+  const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.cambio>> | null>(null);
+  const [error, setError] = useState("");
+
+  const cargar = useCallback(async () => {
+    try {
+      setDatos(await api.cambio());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando el cambio");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  if (error) return <ErrorBox>{error}</ErrorBox>;
+
+  return (
+    <div className="space-y-5">
+      <section className="space-y-2">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Cajas con menos calderilla
+        </h2>
+        <p className="text-[11px] text-slate-500">
+          Solo cuenta monedas: lo que se acaba en un mostrador no son los billetes, de esos siempre
+          entran, sino lo que hace falta para devolver.
+        </p>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={thCls}>Taller</th>
+              <th className={thCls}>Caja</th>
+              <th className={`${thCls} text-right`}>En monedas</th>
+              <th className={thCls}>Último recuento</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(datos?.cajas ?? []).length === 0 && (
+              <EmptyRow cols={4} text="Todavía no ha llegado ningún arqueo con detalle por pieza." />
+            )}
+            {(datos?.cajas ?? []).map((c) => (
+              <tr key={c.registerId} className="border-t border-slate-700">
+                <td className={tdCls}>
+                  {c.centro ?? <span className="text-amber-400">sin taller</span>}
+                </td>
+                <td className={tdCls}>{c.caja ?? `#${c.registerId}`}</td>
+                <td className={`${tdCls} text-right tabular-nums`}>
+                  {euros(c.calderillaCentimos)}
+                </td>
+                <td className={`${tdCls} text-[11px] text-slate-500`}>
+                  {c.contadoEnMs ? new Date(c.contadoEnMs).toLocaleDateString("es-ES") : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Piezas en la red
+        </h2>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={thCls}>Pieza</th>
+              <th className={`${thCls} text-right`}>Unidades</th>
+              <th className={`${thCls} text-right`}>Importe</th>
+              <th className={`${thCls} text-right`}>Cajas a cero</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(datos?.piezas ?? []).length === 0 && <EmptyRow cols={4} text="Sin datos todavía." />}
+            {(datos?.piezas ?? []).map((p) => (
+              <tr key={p.valorCentimos} className="border-t border-slate-700">
+                <td className={tdCls}>{pieza(p.valorCentimos)}</td>
+                <td className={`${tdCls} text-right tabular-nums`}>{p.cantidad}</td>
+                <td className={`${tdCls} text-right tabular-nums`}>{euros(p.importeCentimos)}</td>
+                {/*
+                  * El dato que un total de red no puede dar: que haya 400
+                  * monedas de 10 c no sirve si están todas en un taller.
+                  */}
+                <td
+                  className={`${tdCls} text-right tabular-nums ${
+                    p.cajasSinNinguna > 0 ? "text-amber-400" : "text-slate-500"
+                  }`}
+                >
+                  {p.cajasSinNinguna}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Descuadres por pieza
+        </h2>
+        <p className="text-[11px] text-slate-500">
+          Un descuadre de 20 € puede ser un billete que no está o veinte monedas de un euro mal
+          contadas. No son el mismo problema: lo primero se busca, lo segundo se recuenta.
+        </p>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={thCls}>Pieza</th>
+              <th className={`${thCls} text-right`}>Diferencia</th>
+              <th className={`${thCls} text-right`}>Importe</th>
+              <th className={`${thCls} text-right`}>Cajas</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(datos?.descuadres ?? []).length === 0 && (
+              <EmptyRow cols={4} text="Ninguna caja descuadra en su último arqueo." />
+            )}
+            {(datos?.descuadres ?? []).map((d) => (
+              <tr key={d.valorCentimos} className="border-t border-slate-700">
+                <td className={tdCls}>{pieza(d.valorCentimos)}</td>
+                <td
+                  className={`${tdCls} text-right tabular-nums ${
+                    d.diferencia < 0 ? "text-rose-400" : "text-emerald-400"
+                  }`}
+                >
+                  {d.diferencia > 0 ? `+${d.diferencia}` : d.diferencia}
+                </td>
+                <td className={`${tdCls} text-right tabular-nums`}>
+                  {euros(d.diferencia * d.valorCentimos)}
+                </td>
+                <td className={`${tdCls} text-right tabular-nums`}>{d.cajas}</td>
               </tr>
             ))}
           </tbody>

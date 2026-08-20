@@ -127,6 +127,30 @@ export type PendienteDeIngresar = {
 export const ingresos = () =>
   pedir<{ ingresos: IngresoEnRed[]; pendiente: PendienteDeIngresar[] }>("/deposits");
 
+export type CambioPorPieza = {
+  valorCentimos: number;
+  cantidad: number;
+  importeCentimos: number;
+  cajasSinNinguna: number;
+};
+
+export type CajaSinCambio = {
+  registerId: number;
+  caja: string | null;
+  centro: string | null;
+  calderillaCentimos: number;
+  contadoEnMs: number | null;
+};
+
+export type DescuadrePorPieza = { valorCentimos: number; diferencia: number; cajas: number };
+
+export const cambio = () =>
+  pedir<{
+    piezas: CambioPorPieza[];
+    cajas: CajaSinCambio[];
+    descuadres: DescuadrePorPieza[];
+  }>("/change");
+
 export const red = () =>
   pedir<{
     resumen: ResumenRed;

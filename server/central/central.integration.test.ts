@@ -69,6 +69,7 @@ beforeAll(async () => {
   await db.query(`DELETE FROM central_transits WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_deposit_sources WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_bank_deposits WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_denomination_stock WHERE empresa_id = $1`, [EMPRESA]);
 });
 
 afterAll(async () => {
@@ -459,5 +460,93 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
     );
     expect(fuentes).toHaveLength(1);
     expect(fuentes[0].session_id).toBe(900001);
+  });
+
+  /*
+   * Fase 6: la vista consolidada de cambio.
+   *
+   * Lo que se comprueba es que Central recibe el detalle POR PIEZA del arqueo,
+   * porque es lo único que permite contestar «¿qué caja se está quedando sin
+   * calderilla?». Con solo los totales, esa pregunta no tiene respuesta.
+   */
+  it("el arqueo llega pieza a pieza y deja ver quién se queda sin calderilla", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'cambio',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `cam-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      await db.query(`UPDATE cash_registers SET codigo = 'CM' || id WHERE id = $1`, [caja]);
+
+      // Una caja con un billete de 50 € y poca cosa más: casi sin calderilla.
+      const fondo = [
+        { valor: 5000, cantidad: 1 },
+        { valor: 100, cantidad: 3 },
+        { valor: 10, cantidad: 4 },
+      ];
+      const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: fondo });
+      await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: fondo });
+      await vaciar();
+
+      const { rows: piezas } = await db.query(
+        `SELECT valor_centimos, cantidad FROM central_denomination_stock
+          WHERE register_id = $1 ORDER BY valor_centimos DESC`,
+        [caja]
+      );
+      const porValor = new Map(piezas.map((p: any) => [p.valor_centimos, p.cantidad]));
+      expect(porValor.get(5000)).toBe(1);
+      expect(porValor.get(100)).toBe(3);
+      expect(porValor.get(10)).toBe(4);
+
+      // La calderilla son las monedas, no el billete: 3 € + 0,40 €.
+      const sinCambio = await queries.cajasSinCambio(EMPRESA);
+      const mia = sinCambio.find((c) => c.registerId === caja);
+      expect(mia?.calderillaCentimos).toBe(340);
+
+      // Y el consolidado cuenta las cajas que se han quedado a cero en una
+      // pieza, que es el dato que un total de red no puede dar.
+      const red = await queries.cambioEnRed(EMPRESA);
+      expect(red.find((p) => p.valorCentimos === 5000)?.cantidad).toBeGreaterThanOrEqual(1);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  it("un descuadre se puede mirar por pieza, no solo por su importe", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'descuadre',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `des-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      await db.query(`UPDATE cash_registers SET codigo = 'DS' || id WHERE id = $1`, [caja]);
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 2000, cantidad: 3 }],
+      });
+      // Se cuenta un billete de 20 € de menos.
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 2 }],
+      });
+      await vaciar();
+
+      const { rows } = await db.query(
+        `SELECT diferencia FROM central_denomination_stock
+          WHERE register_id = $1 AND valor_centimos = 2000`,
+        [caja]
+      );
+      expect(rows[0].diferencia).toBe(-1);
+
+      const porPieza = await queries.descuadresPorPieza(EMPRESA);
+      expect(porPieza.some((p) => p.valorCentimos === 2000 && p.diferencia < 0)).toBe(true);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
   });
 });

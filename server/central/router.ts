@@ -16,6 +16,9 @@ import { authenticate, requireModule } from "../core/auth.ts";
 import { cargarPermisosCentral, exigirPermiso } from "./permissions.ts";
 import {
   cajasEnRed,
+  cajasSinCambio,
+  cambioEnRed,
+  descuadresPorPieza,
   ingresosEnRed,
   jornadasEnRed,
   pendienteDeIngresar,
@@ -103,6 +106,27 @@ export function createCentralRouter(): Router {
         pendienteDeIngresar(empresaId),
       ]);
       res.json({ ingresos, pendiente });
+    })
+  );
+
+  /**
+   * Cambio y arqueos de la red, pieza a pieza.
+   *
+   * Los tres cortes van juntos porque contestan a la misma pregunta desde
+   * ángulos distintos: cuánto cambio hay, quién se está quedando sin él y en
+   * qué piezas descuadra la red.
+   */
+  r.get(
+    "/change",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const empresaId = req.authCtx!.empresaId;
+      const [piezas, cajas, descuadres] = await Promise.all([
+        cambioEnRed(empresaId),
+        cajasSinCambio(empresaId),
+        descuadresPorPieza(empresaId),
+      ]);
+      res.json({ piezas, cajas, descuadres });
     })
   );
 

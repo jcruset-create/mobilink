@@ -463,4 +463,119 @@ export async function pendienteDeIngresar(empresaId: string): Promise<PendienteD
     };
   });
 }
+
+// ── Cambio y arqueos en la red ─────────────────────────────────────────────
+
+export type CambioPorPieza = {
+  valorCentimos: number;
+  cantidad: number;
+  importeCentimos: number;
+  /** Cajas que ya no tienen ni una pieza de este valor. */
+  cajasSinNinguna: number;
+};
+
+export type CajaSinCambio = {
+  registerId: number;
+  caja: string | null;
+  centro: string | null;
+  /** Céntimos en monedas (piezas por debajo de 5 €). Es la calderilla. */
+  calderillaCentimos: number;
+  contadoEnMs: number | null;
+};
+
+export type DescuadrePorPieza = {
+  valorCentimos: number;
+  /** Piezas que faltan (negativo) o sobran (positivo), sumando todas las cajas. */
+  diferencia: number;
+  cajas: number;
+};
+
+/**
+ * Umbral de «moneda»: todo lo que vale menos de 5 €.
+ *
+ * Es donde está la frontera real del problema. Lo que se acaba en un mostrador
+ * no son los billetes —de esos siempre entran— sino las monedas para devolver,
+ * y el billete más pequeño de curso es el de 5 €.
+ */
+const MONEDA_MAX_CENTIMOS = 500;
+
+/**
+ * El cambio de toda la red, pieza a pieza.
+ *
+ * `cajasSinNinguna` es el dato que de verdad se mira: que la red tenga 400
+ * monedas de 10 c no sirve de nada si están todas en un taller y en el otro no
+ * queda ninguna. Un total consolidado sin ese contador engaña.
+ */
+export async function cambioEnRed(empresaId: string): Promise<CambioPorPieza[]> {
+  const { rows } = await pool.query(
+    `SELECT valor_centimos,
+            COALESCE(SUM(cantidad),0)::int AS cantidad,
+            COUNT(*) FILTER (WHERE cantidad = 0)::int AS sin_ninguna
+       FROM central_denomination_stock
+      WHERE empresa_id = $1
+      GROUP BY valor_centimos
+      ORDER BY valor_centimos DESC`,
+    [empresaId]
+  );
+
+  return rows.map((r: any) => ({
+    valorCentimos: r.valor_centimos,
+    cantidad: r.cantidad,
+    importeCentimos: r.valor_centimos * r.cantidad,
+    cajasSinNinguna: r.sin_ninguna,
+  }));
+}
+
+/** Las cajas con menos calderilla, que son las que hay que reponer primero. */
+export async function cajasSinCambio(empresaId: string): Promise<CajaSinCambio[]> {
+  const centro = await joinCentro("ce", "d.centro_id");
+  const { rows } = await pool.query(
+    `SELECT d.register_id,
+            COALESCE(SUM(d.valor_centimos * d.cantidad) FILTER (WHERE d.valor_centimos < $2), 0)
+              AS calderilla,
+            MAX(d.contado_en_ms) AS contado_en_ms,
+            c.nombre AS caja_nombre, ${centro.select}
+       FROM central_denomination_stock d
+       LEFT JOIN cash_registers c ON c.id = d.register_id
+       ${centro.join}
+      WHERE d.empresa_id = $1
+      GROUP BY d.register_id, c.nombre, centro_nombre
+      ORDER BY calderilla`,
+    [empresaId, MONEDA_MAX_CENTIMOS]
+  );
+
+  return rows.map((r: any) => ({
+    registerId: r.register_id,
+    caja: r.caja_nombre ?? null,
+    centro: r.centro_nombre ?? null,
+    calderillaCentimos: Number(r.calderilla),
+    contadoEnMs: r.contado_en_ms == null ? null : Number(r.contado_en_ms),
+  }));
+}
+
+/**
+ * En qué piezas descuadra la red.
+ *
+ * Un descuadre de 20 € puede ser un billete de 20 que no está o veinte monedas
+ * de un euro mal contadas, y no son el mismo problema ni se investigan igual:
+ * lo primero se busca, lo segundo se recuenta. El total nunca lo dice.
+ */
+export async function descuadresPorPieza(empresaId: string): Promise<DescuadrePorPieza[]> {
+  const { rows } = await pool.query(
+    `SELECT valor_centimos,
+            COALESCE(SUM(diferencia),0)::int AS diferencia,
+            COUNT(*) FILTER (WHERE diferencia <> 0)::int AS cajas
+       FROM central_denomination_stock
+      WHERE empresa_id = $1 AND diferencia <> 0
+      GROUP BY valor_centimos
+      ORDER BY ABS(SUM(diferencia) * valor_centimos) DESC`,
+    [empresaId]
+  );
+
+  return rows.map((r: any) => ({
+    valorCentimos: r.valor_centimos,
+    diferencia: r.diferencia,
+    cajas: r.cajas,
+  }));
+}
 /* eslint-enable @typescript-eslint/no-explicit-any */
