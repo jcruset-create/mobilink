@@ -51,6 +51,9 @@ type Incidencia = {
   id: string; vehiculo_id: string; posicion_id: string | null;
   gravedad: Gravedad; estado: string; detectada_at: string; foto_url: string | null;
   revision_id: string | null;
+  /** null = de una revisión. 'checkpoint_aviso' = la abrió el arco por correo. */
+  origen: string | null;
+  observacion: string | null;
   matricula: string | null; cliente: string | null; base: string | null;
   posicionNombre: string | null; revisionFecha: string | null; revisionHora: string | null;
   revisionEstado: string | null; tecnico: string | null; problemas: Problema[];
@@ -63,6 +66,7 @@ function parse(row: any): Incidencia {
     id: row.id, vehiculo_id: row.vehiculo_id, posicion_id: row.posicion_id,
     gravedad: (row.gravedad ?? "leve") as Gravedad, estado: row.estado ?? "detectada",
     detectada_at: row.detectada_at ?? "", foto_url: row.foto_url ?? null, revision_id: row.revision_id ?? null,
+    origen: row.origen ?? null, observacion: row.motivo_observacion ?? null,
     matricula: v?.matricula ?? null, cliente: v?.empresa?.nombre ?? null, base: v?.delegacion?.nombre ?? null,
     posicionNombre: pos?.nombre ?? pos?.codigo_posicion ?? null,
     revisionFecha: rev?.fecha_revision ?? null,
@@ -82,7 +86,12 @@ type Grupo = {
   clave: string; revisionId: string | null; vehiculoId: string;
   matricula: string | null; cliente: string | null; base: string | null; tecnico: string | null;
   fecha: string | null; hora: string | null; incidencias: Incidencia[]; gravedadMax: Gravedad;
+  /** Las que abrió el arco por correo no vienen de ninguna revisión. */
+  delArco: boolean; detectadaAt: string;
 };
+
+/** Para ordenar: la fecha de la revisión o, si no la hay, cuándo se detectó. */
+const fechaOrden = (g: Grupo): string => g.fecha ?? g.detectadaAt.slice(0, 10);
 
 function agrupar(deTab: Incidencia[]): Grupo[] {
   const map = new Map<string, Incidencia[]>();
@@ -99,10 +108,14 @@ function agrupar(deTab: Incidencia[]): Grupo[] {
     out.push({
       clave, revisionId: p.revision_id, vehiculoId: p.vehiculo_id, matricula: p.matricula, cliente: p.cliente,
       base: p.base, tecnico: p.tecnico, fecha: p.revisionFecha, hora: p.revisionHora, incidencias: lista, gravedadMax,
+      delArco: !p.revision_id && lista.every((i) => i.origen === "checkpoint_aviso"),
+      detectadaAt: p.detectada_at,
     });
   }
   out.sort((a, b) => GRAV_PESO[a.gravedadMax] - GRAV_PESO[b.gravedadMax]
-    || (b.fecha ?? "").localeCompare(a.fecha ?? "")
+    // Las del arco no tienen revisión: se ordenan por cuándo se detectaron, no
+    // al final de la lista.
+    || fechaOrden(b).localeCompare(fechaOrden(a))
     || a.incidencias[0].detectada_at.localeCompare(b.incidencias[0].detectada_at));
   return out;
 }
@@ -200,7 +213,14 @@ function TarjetaGrupo({ grupo, tab, onResolver, onVer }: { grupo: Grupo; tab: nu
       <div className="mb-3 flex items-start justify-between gap-2">
         <div>
           <div className="text-xl font-black">{g.matricula ?? "—"}</div>
-          <div className="text-[12px] text-slate-400">Revisión: {fechaCorta(g.fecha)}{g.hora ? ` · ${g.hora}` : ""}</div>
+          <div className="text-[12px] text-slate-400">
+            {g.delArco
+              // Estas no salen de una revisión: las abre solo el vigilante de
+              // correo al recibir un aviso del arco. Decir "Revisión: fecha no
+              // disponible" sería mentir sobre de dónde viene el dato.
+              ? <>Aviso del arco · {fechaCorta(g.detectadaAt)}</>
+              : <>Revisión: {fechaCorta(g.fecha)}{g.hora ? ` · ${g.hora}` : ""}</>}
+          </div>
           <div className="text-[12px] text-slate-400">{g.cliente ?? "Cliente no informado"} · {g.base ? `Base ${g.base}` : "Base no informada"}</div>
           {g.tecnico && <div className="text-[11px] text-slate-500">Técnico: {g.tecnico}</div>}
         </div>
@@ -220,6 +240,7 @@ function TarjetaGrupo({ grupo, tab, onResolver, onVer }: { grupo: Grupo; tab: nu
               </div>
               <div className="text-[12px] text-slate-300">{inc.problemas.filter((p) => p.estado !== "solucionado").map((p) => PROBLEMA_LABELS[p.tipo] ?? p.tipo).join(" · ")}</div>
               <div className="text-[11px] text-slate-500">{ESTADO_LABELS[inc.estado] ?? inc.estado} · {diasTexto(inc.detectada_at)}{inc.foto_url ? " · 📷" : ""}</div>
+              {inc.observacion && <div className="text-[11px] text-slate-400">{inc.observacion}</div>}
             </div>
             {tab === 0 && inc.problemas.some((p) => p.estado !== "solucionado") && (
               <button onClick={() => onResolver(inc)} className="rounded bg-emerald-600 px-2.5 py-1 text-[12px] font-bold text-white hover:bg-emerald-500">Solucionar</button>
@@ -228,7 +249,7 @@ function TarjetaGrupo({ grupo, tab, onResolver, onVer }: { grupo: Grupo; tab: nu
         ))}
       </div>
       <div className="mt-3 flex gap-2 border-t border-slate-700 pt-3">
-        <button onClick={onVer} className="flex-1 rounded-lg border border-slate-600 px-3 py-2 text-[13px] font-bold text-slate-200 hover:bg-slate-700">Ver revisión</button>
+        <button onClick={onVer} className="flex-1 rounded-lg border border-slate-600 px-3 py-2 text-[13px] font-bold text-slate-200 hover:bg-slate-700">{g.delArco ? "Ver vehículo" : "Ver revisión"}</button>
       </div>
     </div>
   );

@@ -121,7 +121,11 @@ export function medidaDeTipo(tipo: string): string | null {
 export function senasPosicion(eje: number, posicion: string, ruedasDelEje: number):
   { codigo: string; lado: "izq" | "der"; interiorExterior: "int" | "ext" | null } | null {
   const p = String(posicion ?? "").trim().toLowerCase();
-  const lado = p.includes("izquierda") ? "izq" : p.includes("derecha") ? "der" : null;
+  // La raíz, no la palabra entera: el informe escribe "Exterior izquierda" y
+  // el aviso de presión del arco escribe "Eje 2 - izquierdo exterior". Es la
+  // misma rueda, en masculino y con el lado delante; el orden ya daba igual
+  // porque esto mira si la palabra está, no dónde.
+  const lado = p.includes("izquierd") ? "izq" : p.includes("derech") ? "der" : null;
   if (!lado || !eje) return null;
   const io = ruedasDelEje === 4 ? (p.includes("interior") ? "int" : "ext") : null;
   const codigo = ruedasDelEje === 4

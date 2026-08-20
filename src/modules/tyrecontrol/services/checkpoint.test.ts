@@ -57,6 +57,21 @@ describe("codigoPosicion", () => {
     expect(codigoPosicion(2, "Exterior derecha", 4)).toBe("E2_DER_EXT");
   });
 
+  it("el aviso de presión escribe el lado en masculino y delante", () => {
+    // El informe semanal dice "Exterior izquierda"; el aviso del arco dice
+    // "Eje 2 - izquierdo exterior". Es la misma rueda y tiene que dar el mismo
+    // código: si no, la incidencia se abriría en la rueda equivocada.
+    expect(codigoPosicion(2, "Eje 2 - izquierdo exterior", 4)).toBe("E2_IZQ_EXT");
+    expect(codigoPosicion(2, "Eje 2 - derecho interior", 4)).toBe("E2_DER_INT");
+    expect(codigoPosicion(1, "Eje 1 - izquierdo", 2)).toBe("E1_IZQ");
+    expect(codigoPosicion(1, "Eje 1 - derecho", 2)).toBe("E1_DER");
+  });
+
+  it("sin lado no hay posición: no se coloca a ojo", () => {
+    expect(codigoPosicion(2, "Eje 2 - exterior", 4)).toBeNull();
+    expect(senasPosicion(2, "", 4)).toBeNull();
+  });
+
   it("la rueda única del tercer eje viene en el hueco Interior", () => {
     // Éste es el detalle que rompe todo si se numeran las posiciones por
     // orden de fila: en un 2x4x2 el arco manda cuatro huecos para el eje 3 y
