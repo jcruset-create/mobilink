@@ -487,6 +487,23 @@ export const historico = (filtros: {
   return pedir<{ sesiones: Record<string, unknown>[] }>(`/sessions?${q}`);
 };
 
+/**
+ * Justificantes de la jornada entera: el taco de facturas escaneado de una vez,
+ * el resguardo del banco. No cuelgan de ninguna operación porque no son de
+ * ninguna, y se admiten varios.
+ */
+export const documentosDeJornada = (sessionId: number) =>
+  pedir<{ documentos: DocumentoOperacion[] }>(`/sessions/${sessionId}/documents`);
+
+export const adjuntarDocumentoAJornada = (sessionId: number, fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("documento", fichero);
+  return pedir<{ documento: DocumentoOperacion }>(`/sessions/${sessionId}/documents`, {
+    method: "POST",
+    body: cuerpo,
+  });
+};
+
 export const documentos = (tipo: "RECEIVABLE" | "PAYABLE", q = "") =>
   pedir<{ documentos: DocumentoExterno[] }>(
     `/documents?tipo=${tipo}${q ? `&q=${encodeURIComponent(q)}` : ""}`

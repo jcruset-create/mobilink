@@ -51,6 +51,9 @@ type Props = {
   /** Columna extra para contar bolsas; solo sale si el catálogo las tiene. */
   bolsas?: CantidadesPorValor;
   onBolsasChange?: (bolsas: CantidadesPorValor) => void;
+  /** Topes de los envases, cuando los hay: no se puede quedar uno que no existe. */
+  disponibleCartuchos?: Record<number, number>;
+  disponibleBolsas?: Record<number, number>;
   titulo?: string;
   /** Importe que deberían sumar las piezas; pinta el total en verde o rojo. */
   objetivoCentimos?: number | null;
@@ -68,6 +71,8 @@ export default function DenominationGrid({
   onCartuchosChange,
   bolsas,
   onBolsasChange,
+  disponibleCartuchos,
+  disponibleBolsas,
   titulo,
   objetivoCentimos = null,
   compacto = false,
@@ -114,14 +119,22 @@ export default function DenominationGrid({
     onChange({ ...cantidades, [valor]: limitada });
   }
 
+  /** Mismo tope que en las sueltas: el servidor manda, esto solo lo adelanta. */
+  function acotar(cantidad: number, tope: number | undefined) {
+    return Math.max(0, tope != null ? Math.min(cantidad, tope) : cantidad);
+  }
+
   function fijarCartuchos(valor: number, cantidad: number) {
     if (deshabilitado || !onCartuchosChange) return;
-    onCartuchosChange({ ...(cartuchos ?? {}), [valor]: Math.max(0, cantidad) });
+    onCartuchosChange({
+      ...(cartuchos ?? {}),
+      [valor]: acotar(cantidad, disponibleCartuchos?.[valor]),
+    });
   }
 
   function fijarBolsas(valor: number, cantidad: number) {
     if (deshabilitado || !onBolsasChange) return;
-    onBolsasChange({ ...(bolsas ?? {}), [valor]: Math.max(0, cantidad) });
+    onBolsasChange({ ...(bolsas ?? {}), [valor]: acotar(cantidad, disponibleBolsas?.[valor]) });
   }
 
   const billetes = denominaciones.filter((d) => d.tipo === "BILLETE");
@@ -159,6 +172,8 @@ export default function DenominationGrid({
           fijarCartuchos={onCartuchosChange ? fijarCartuchos : undefined}
           bolsas={bolsas}
           fijarBolsas={onBolsasChange ? fijarBolsas : undefined}
+          disponibleCartuchos={disponibleCartuchos}
+          disponibleBolsas={disponibleBolsas}
         />
       </div>
 
@@ -205,6 +220,8 @@ function Grupo({
   fijarCartuchos,
   bolsas,
   fijarBolsas,
+  disponibleCartuchos,
+  disponibleBolsas,
 }: {
   etiqueta: string;
   denominaciones: Denominacion[];
@@ -217,6 +234,8 @@ function Grupo({
   fijarCartuchos?: (valor: number, cantidad: number) => void;
   bolsas?: CantidadesPorValor;
   fijarBolsas?: (valor: number, cantidad: number) => void;
+  disponibleCartuchos?: Record<number, number>;
+  disponibleBolsas?: Record<number, number>;
 }) {
   if (denominaciones.length === 0) return null;
 
@@ -297,6 +316,7 @@ function Grupo({
                   abreviatura="cart."
                   piezas={d.piezasPorCartucho}
                   valor={cartuchos?.[d.valor] ?? 0}
+                  tope={disponibleCartuchos?.[d.valor]}
                   onChange={(n) => fijarCartuchos(d.valor, n)}
                   deshabilitado={deshabilitado}
                 />
@@ -309,6 +329,7 @@ function Grupo({
                   abreviatura="bols."
                   piezas={d.piezasPorBolsa}
                   valor={bolsas?.[d.valor] ?? 0}
+                  tope={disponibleBolsas?.[d.valor]}
                   onChange={(n) => fijarBolsas(d.valor, n)}
                   deshabilitado={deshabilitado}
                 />
@@ -347,6 +368,7 @@ function CampoEnvase({
   abreviatura,
   piezas,
   valor,
+  tope,
   onChange,
   deshabilitado,
 }: {
@@ -355,16 +377,28 @@ function CampoEnvase({
   abreviatura: string;
   piezas: number;
   valor: number;
+  /** Cuántos hay contados. Sin esto no hay límite. */
+  tope?: number;
   onChange: (n: number) => void;
   deshabilitado: boolean;
 }) {
+  // Un envase que no existe no se puede dejar en caja: se apaga el campo en
+  // vez de dejar teclear un número que el servidor va a rechazar.
+  if (tope === 0) {
+    return <span className="w-12 shrink-0 text-center text-[10px] text-slate-600">—</span>;
+  }
+
   return (
     <input
       type="text"
       inputMode="numeric"
       pattern="[0-9]*"
       aria-label={`${nombre} de ${etiqueta} (${piezas} piezas)`}
-      title={`${nombre} de ${piezas} piezas`}
+      title={
+        tope == null
+          ? `${nombre} de ${piezas} piezas`
+          : `${nombre} de ${piezas} piezas · ${tope} contado${tope === 1 ? "" : "s"}`
+      }
       value={valor === 0 ? "" : String(valor)}
       placeholder={abreviatura}
       onChange={(e) => {

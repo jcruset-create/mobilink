@@ -471,7 +471,10 @@ export async function initCash(): Promise<void> {
     CREATE TABLE IF NOT EXISTS cash_operation_documents (
       id SERIAL PRIMARY KEY,
       empresa_id UUID NOT NULL,
-      operation_id INTEGER NOT NULL REFERENCES cash_operations(id) ON DELETE RESTRICT,
+      -- NULL = documento de la jornada entera, no de una operación suelta: el
+      -- taco de facturas escaneado de una vez, el resguardo del banco. Cuelga
+      -- de la jornada y no de un cobro concreto porque no es de ninguno.
+      operation_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
       -- Repetido a propósito: el informe de cierre pide todos los documentos de
       -- una jornada, y sin esto habría que pasar por las operaciones cada vez.
       session_id INTEGER NOT NULL REFERENCES cash_sessions(id) ON DELETE RESTRICT,
@@ -698,6 +701,11 @@ export async function initCash(): Promise<void> {
 
     ALTER TABLE cash_registers
       ADD COLUMN IF NOT EXISTS fondo_objetivo_centimos INTEGER NOT NULL DEFAULT 0;
+
+    /* Un documento puede colgar de la jornada entera y no de una operación:
+       el taco de facturas escaneado de una vez o el resguardo del banco. */
+    ALTER TABLE cash_operation_documents
+      ALTER COLUMN operation_id DROP NOT NULL;
   `);
 
   /*

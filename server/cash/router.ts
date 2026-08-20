@@ -659,6 +659,41 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Justificantes de la JORNADA entera: el taco de facturas escaneado de una
+   * vez, el resguardo del banco. No cuelgan de ninguna operación porque no son
+   * de ninguna, y se admiten varios: en el mostrador no sale todo en un PDF.
+   */
+  r.get(
+    "/sessions/:id/documents",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({
+        documentos: await documentos.documentosSueltosDeJornada(
+          req.authCtx!.empresaId,
+          enteroPositivo(req.params.id, "id")
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/sessions/:id/documents",
+    exigirPermiso("cash.document.attach"),
+    subida(subidaDocumento.single("documento"), 15),
+    ruta(async (req, res) => {
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
+      }
+      const documento = await documentos.adjuntarDocumentoDeJornada(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        req.file
+      );
+      res.status(201).json({ documento });
+    })
+  );
+
   r.post(
     "/documents/:id/void",
     exigirPermiso("cash.document.void"),

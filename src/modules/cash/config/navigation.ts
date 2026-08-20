@@ -19,6 +19,7 @@ import {
   ClipboardCheck,
   Lock,
   History,
+  FileText,
   Plug,
   Settings,
   type LucideIcon,
@@ -46,6 +47,7 @@ export const NAV: NavItem[] = [
   { key: "arqueo", path: "arqueo", label: "Arqueo", icon: ClipboardCheck, permiso: "cash.count.create" },
   { key: "cierre", path: "cierre", label: "Cierre", icon: Lock, permiso: "cash.close_session" },
   { key: "historico", path: "historico", label: "Histórico", icon: History, permiso: "cash.view" },
+  { key: "informes", path: "informes", label: "Informes", icon: FileText, permiso: "cash.view" },
   { key: "erp", path: "erp", label: "Integración ERP", icon: Plug, permiso: "cash.erp.view" },
   { key: "configuracion", path: "configuracion", label: "Configuración", icon: Settings, permiso: "cash.configure" },
 ];
