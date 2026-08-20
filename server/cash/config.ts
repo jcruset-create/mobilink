@@ -24,6 +24,8 @@ export type CajaConfig = {
   id: number;
   centro: string;
   nombre: string;
+  /** Fondo fijo del cajón. 0 = sin fondo fijo. */
+  fondoObjetivoCentimos: number;
   activa: boolean;
   jornadas: number;
   jornadaAbierta: number | null;
@@ -34,7 +36,7 @@ export type CajaConfig = {
 /** Todas las cajas de la empresa, incluidas las dadas de baja. */
 export async function listarCajas(empresaId: string): Promise<CajaConfig[]> {
   const { rows } = await pool.query(
-    `SELECT c.id, c.centro, c.nombre, c.activa,
+    `SELECT c.id, c.centro, c.nombre, c.activa, c.fondo_objetivo_centimos,
             (SELECT COUNT(*) FROM cash_sessions s WHERE s.register_id = c.id) AS jornadas,
             (SELECT s.id FROM cash_sessions s
               WHERE s.register_id = c.id AND s.estado IN ('OPEN','PENDING_CLOSE','REOPENED')
@@ -49,6 +51,7 @@ export async function listarCajas(empresaId: string): Promise<CajaConfig[]> {
     id: r.id,
     centro: r.centro,
     nombre: r.nombre,
+    fondoObjetivoCentimos: Number(r.fondo_objetivo_centimos ?? 0),
     activa: r.activa,
     jornadas: Number(r.jornadas),
     jornadaAbierta: r.jornada_abierta,
@@ -85,20 +88,36 @@ export async function crearCaja(
     ip: ctx.ip,
   });
 
-  return rows[0];
+  return { ...rows[0], fondoObjetivoCentimos: 0 };
 }
 
 export async function actualizarCaja(
   ctx: Contexto,
   id: number,
-  cambios: { nombre?: string; centro?: string; activa?: boolean }
-): Promise<{ id: number; centro: string; nombre: string; activa: boolean }> {
+  cambios: {
+    nombre?: string;
+    centro?: string;
+    activa?: boolean;
+    fondoObjetivoCentimos?: number;
+  }
+): Promise<{
+  id: number;
+  centro: string;
+  nombre: string;
+  activa: boolean;
+  fondoObjetivoCentimos: number;
+}> {
   const { rows: actual } = await pool.query(
     `SELECT * FROM cash_registers WHERE id = $1 AND empresa_id = $2`,
     [id, ctx.empresaId]
   );
   if (actual.length === 0) throw new ErrorCaja("CAJA_NO_ENCONTRADA", "La caja no existe.", 404);
 
+  /*
+   * El fondo fijo NO es identidad: se puede cambiar con la jornada abierta,
+   * porque es justo cuando uno se da cuenta de que 350 € se quedan cortos.
+   * Lo que no se toca con la caja abierta es su nombre, su centro o su baja.
+   */
   const tocaIdentidad =
     cambios.activa === false || cambios.nombre !== undefined || cambios.centro !== undefined;
 
@@ -114,12 +133,24 @@ export async function actualizarCaja(
   const centro = cambios.centro === undefined ? actual[0].centro : cambios.centro.trim();
   const activa = cambios.activa === undefined ? actual[0].activa : cambios.activa;
 
+  const fondo =
+    cambios.fondoObjetivoCentimos === undefined
+      ? Number(actual[0].fondo_objetivo_centimos ?? 0)
+      : cambios.fondoObjetivoCentimos;
+  if (!Number.isSafeInteger(fondo) || fondo < 0) {
+    throw new ErrorCaja(
+      "ENTRADA_NO_VALIDA",
+      "El fondo fijo tiene que ser un importe positivo, o cero si esta caja no tiene fondo fijo.",
+      400
+    );
+  }
+
   const { rows } = await pool.query(
     `UPDATE cash_registers
-        SET nombre = $2, centro = $3, activa = $4, updated_at_ms = $5
+        SET nombre = $2, centro = $3, activa = $4, fondo_objetivo_centimos = $5, updated_at_ms = $6
       WHERE id = $1
-      RETURNING id, centro, nombre, activa`,
-    [id, nombre, centro, activa, Date.now()]
+      RETURNING id, centro, nombre, activa, fondo_objetivo_centimos`,
+    [id, nombre, centro, activa, fondo, Date.now()]
   );
 
   await registrarAuditoria({
@@ -129,13 +160,18 @@ export async function actualizarCaja(
     entidad: "cash_registers",
     entidadId: String(id),
     detalle: {
-      antes: { nombre: actual[0].nombre, centro: actual[0].centro, activa: actual[0].activa },
-      despues: { nombre, centro, activa },
+      antes: {
+        nombre: actual[0].nombre,
+        centro: actual[0].centro,
+        activa: actual[0].activa,
+        fondoObjetivoCentimos: Number(actual[0].fondo_objetivo_centimos ?? 0),
+      },
+      despues: { nombre, centro, activa, fondoObjetivoCentimos: fondo },
     },
     ip: ctx.ip,
   });
 
-  return rows[0];
+  return { ...rows[0], fondoObjetivoCentimos: Number(rows[0].fondo_objetivo_centimos ?? 0) };
 }
 
 // ── Denominaciones ─────────────────────────────────────────────────────────

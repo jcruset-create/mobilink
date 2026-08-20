@@ -99,7 +99,7 @@ export const bootstrap = () => pedir<Bootstrap>("/bootstrap");
 /** Cajas de la empresa, incluidas las dadas de baja. */
 export const listarCajas = () =>
   pedir<{
-    cajas: (Caja & { activa: boolean; jornadas: string; jornada_abierta: number | null })[];
+    cajas: (Caja & { activa: boolean; jornadas: string; jornadaAbierta: number | null })[];
   }>("/registers");
 
 export const crearCaja = (nombre: string, centro: string) =>
@@ -107,7 +107,13 @@ export const crearCaja = (nombre: string, centro: string) =>
 
 export const actualizarCaja = (
   id: number,
-  datos: { nombre?: string; centro?: string; activa?: boolean }
+  datos: {
+    nombre?: string;
+    centro?: string;
+    activa?: boolean;
+    /** Fondo fijo del cajón, en céntimos. 0 = sin fondo fijo. */
+    fondoObjetivoCentimos?: number;
+  }
 ) =>
   pedir<{ caja: Caja & { activa: boolean } }>(`/registers/${id}`, {
     method: "PATCH",

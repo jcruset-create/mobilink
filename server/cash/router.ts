@@ -269,7 +269,7 @@ export function createCashRouter(): Router {
         cargarDenominaciones(pool, true),
         config.listarFormasPago(empresaId),
         pool.query(
-          `SELECT id, centro, nombre FROM cash_registers
+          `SELECT id, centro, nombre, fondo_objetivo_centimos FROM cash_registers
             WHERE empresa_id = $1 AND activa = true ORDER BY centro, nombre`,
           [empresaId]
         ),
@@ -283,7 +283,10 @@ export function createCashRouter(): Router {
         formasPago,
         secciones,
         ajustes,
-        cajas: cajas.rows,
+        cajas: cajas.rows.map((c: { fondo_objetivo_centimos: number }) => ({
+          ...c,
+          fondoObjetivoCentimos: Number(c.fondo_objetivo_centimos ?? 0),
+        })),
         permisos: req.cashPermisos,
         rol: req.cashRol,
         erp: { estado: erp.estado, connectorKey: erp.connectorKey, displayName: erp.displayName },
@@ -324,6 +327,10 @@ export function createCashRouter(): Router {
         nombre: typeof b.nombre === "string" ? b.nombre : undefined,
         centro: typeof b.centro === "string" ? b.centro : undefined,
         activa: typeof b.activa === "boolean" ? b.activa : undefined,
+        fondoObjetivoCentimos:
+          b.fondoObjetivoCentimos === undefined
+            ? undefined
+            : entero(b.fondoObjetivoCentimos, "fondoObjetivoCentimos"),
       });
       res.json({ caja });
     })

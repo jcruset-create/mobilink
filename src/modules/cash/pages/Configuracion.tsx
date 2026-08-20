@@ -30,7 +30,7 @@ import {
   btnMini,
 } from "../components/ui";
 import { MEDIDA_RECOMENDADA, PROPORCION_BOTON } from "../components/PaymentMethodPicker";
-import { euros } from "../utils/money";
+import { euros, aCentimos } from "../utils/money";
 import type { Denominacion, FormaPagoConfig, SeccionConfig } from "../types";
 import * as api from "../services/api";
 
@@ -38,9 +38,17 @@ type CajaConfig = {
   id: number;
   centro: string;
   nombre: string;
+  /** Fondo fijo del cajón. 0 = sin fondo fijo. */
+  fondoObjetivoCentimos: number;
   activa: boolean;
   jornadas: string;
-  jornada_abierta: number | null;
+  /*
+   * Ojo con el nombre: el servidor lo manda en camelCase. Aquí estaba escrito
+   * `jornada_abierta` y por eso siempre valía undefined — el aviso de «tiene
+   * una jornada abierta» no salía nunca y los botones de editar y dar de baja
+   * se veían habilitados, aunque el servidor los rechazara después.
+   */
+  jornadaAbierta: number | null;
 };
 
 export default function Configuracion() {
@@ -244,7 +252,7 @@ function Cajas() {
   const cargar = useCallback(async () => {
     try {
       const r = await api.listarCajas();
-      setCajas(r.cajas as CajaConfig[]);
+      setCajas(r.cajas);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error cargando las cajas");
     }
@@ -333,13 +341,14 @@ function Cajas() {
           <tr>
             <th className={thCls}>Nombre</th>
             <th className={thCls}>Centro</th>
+            <th className={`${thCls} text-right`}>Fondo fijo</th>
             <th className={`${thCls} text-right`}>Jornadas</th>
             <th className={thCls}>Estado</th>
             <th className={thCls}></th>
           </tr>
         </thead>
         <tbody>
-          {sinCajas && <EmptyRow cols={5} text="Todavía no hay ninguna caja." />}
+          {sinCajas && <EmptyRow cols={6} text="Todavía no hay ninguna caja." />}
           {cajas.map((c) => {
             const enEdicion = editando === c.id;
             return (
@@ -366,9 +375,16 @@ function Cajas() {
                     c.centro || <span className="text-slate-600">—</span>
                   )}
                 </td>
+                <td className={`${tdCls} text-right`}>
+                  <FondoFijo
+                    centimos={c.fondoObjetivoCentimos}
+                    deshabilitado={ocupado}
+                    onGuardar={(v) => void accion(() => api.actualizarCaja(c.id, { fondoObjetivoCentimos: v }))}
+                  />
+                </td>
                 <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{c.jornadas}</td>
                 <td className={tdCls}>
-                  {c.jornada_abierta ? (
+                  {c.jornadaAbierta ? (
                     <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
                       Jornada abierta
                     </span>
@@ -406,10 +422,10 @@ function Cajas() {
                             setEditando(c.id);
                             setBorrador({ nombre: c.nombre, centro: c.centro });
                           }}
-                          disabled={ocupado || Boolean(c.jornada_abierta)}
+                          disabled={ocupado || Boolean(c.jornadaAbierta)}
                           className={btnMini}
                           title={
-                            c.jornada_abierta
+                            c.jornadaAbierta
                               ? "No se puede modificar con la jornada abierta"
                               : "Renombrar"
                           }
@@ -418,10 +434,10 @@ function Cajas() {
                         </button>
                         <button
                           onClick={() => void accion(() => api.actualizarCaja(c.id, { activa: !c.activa }))}
-                          disabled={ocupado || Boolean(c.jornada_abierta)}
+                          disabled={ocupado || Boolean(c.jornadaAbierta)}
                           className={btnMini}
                           title={
-                            c.jornada_abierta
+                            c.jornadaAbierta
                               ? "Cierra la jornada antes de dar de baja la caja"
                               : c.activa
                                 ? "Dar de baja"
@@ -880,6 +896,38 @@ function BotonMixto({ editable }: { editable: boolean }) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Fondo fijo de una caja, en euros.
+ *
+ * Se escribe como se dice —«350»— y viaja en céntimos. Se guarda al salir del
+ * campo, igual que las piezas por cartucho: es un número que se toca una vez y
+ * no merece un botón de guardar propio.
+ */
+function FondoFijo({
+  centimos,
+  deshabilitado,
+  onGuardar,
+}: {
+  centimos: number;
+  deshabilitado: boolean;
+  onGuardar: (centimos: number) => void;
+}) {
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      defaultValue={centimos > 0 ? euros(centimos).replace(" €", "") : ""}
+      placeholder="sin fondo"
+      disabled={deshabilitado}
+      onBlur={(e) => {
+        const nuevo = e.target.value.trim() === "" ? 0 : (aCentimos(e.target.value) ?? centimos);
+        if (nuevo !== centimos) onGuardar(nuevo);
+      }}
+      className="h-8 w-24 rounded-lg border border-slate-600 bg-slate-900 text-center text-sm tabular-nums text-slate-100 placeholder:text-slate-600 outline-none focus:ring-2 focus:ring-sky-500"
+    />
   );
 }
 
