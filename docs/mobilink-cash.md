@@ -424,6 +424,13 @@ código (`asentarAjusteDeArqueo`) para que no diverjan:
    solo. Una caja ya regularizada no vuelve a asentar nada, porque para
    entonces el teórico y lo contado son el mismo número.
 
+**Fondo fijo de la caja** (`cash_registers.fondo_objetivo_centimos`): lo que el
+cajón tiene que tener SIEMPRE al empezar el día. Es una decisión de la caja, no
+del cierre de hoy, así que se configura una vez y el cierre lo trae puesto y
+propone la composición solo al entrar. Lo que hay que retirar sale de la resta
+—contado menos fondo fijo— y es el efectivo que ha entrado en la jornada. Cero
+significa «sin fondo fijo» y el cierre lo pregunta como antes.
+
 Detalles que costaron un fallo en producción:
 
 - **El cierre reparte LO CONTADO, no el teórico.** La pantalla usaba

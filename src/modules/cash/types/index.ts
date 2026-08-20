@@ -24,7 +24,16 @@ export type Denominacion = {
 
 export type LineaDenominacion = { valor: number; cantidad: number };
 
-export type Caja = { id: number; centro: string; nombre: string };
+export type Caja = {
+  id: number;
+  centro: string;
+  nombre: string;
+  /**
+   * Fondo fijo del cajón: lo que esta caja tiene que tener SIEMPRE al empezar
+   * el día. 0 = sin fondo fijo, y entonces el cierre lo pregunta.
+   */
+  fondoObjetivoCentimos: number;
+};
 
 export type EstadoSesion =
   | "DRAFT"
