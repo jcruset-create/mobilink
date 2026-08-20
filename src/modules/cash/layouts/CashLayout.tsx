@@ -70,8 +70,13 @@ export default function CashLayout() {
             )}
           </div>
 
+          {/*
+            El rol y la versión en blanco. Iban en slate-500 y slate-600 sobre
+            la barra oscura y no se leían: son justo los dos datos que se piden
+            por teléfono cuando algo falla, así que tienen que verse.
+          */}
           {rol && (
-            <span className="hidden text-[10px] uppercase tracking-wide text-slate-500 sm:inline">
+            <span className="hidden text-[10px] uppercase tracking-wide text-white sm:inline">
               {rol}
             </span>
           )}
@@ -83,7 +88,7 @@ export default function CashLayout() {
           */}
           <span
             title="Versión de la aplicación que tienes cargada"
-            className="hidden text-[10px] tabular-nums text-slate-600 sm:inline"
+            className="hidden text-[10px] tabular-nums text-white sm:inline"
           >
             v{__APP_VERSION__}
           </span>
