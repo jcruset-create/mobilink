@@ -42,7 +42,16 @@ import pool from "../db.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import type { Centimos } from "./domain/money.ts";
 import { formatearEuros } from "./domain/money.ts";
-import { ErrorCaja, enTransaccion, siguienteNumeroDe } from "./repository.ts";
+import {
+  ErrorCaja,
+  cargarDenominaciones,
+  enTransaccion,
+  sesionAbierta,
+  siguienteNumeroDe,
+  stockTeorico,
+} from "./repository.ts";
+import { type LineaDenominacion, inventarioDesdeLineas } from "./domain/inventory.ts";
+import { type Canje, mejorCanje } from "./domain/depositswap.ts";
 import type { Contexto } from "./service.ts";
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
@@ -376,6 +385,17 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
     }
     /* eslint-enable @typescript-eslint/no-explicit-any */
 
+    /*
+     * Los canjes vigentes quedan consumidos por este ingreso: ya han cumplido
+     * su papel —convertir monedas en billetes de ESTE montón— y a partir de
+     * aquí no deben tocar el montón siguiente.
+     */
+    await client.query(
+      `UPDATE cash_deposit_swaps SET bank_deposit_id = $1
+        WHERE register_id = $2 AND empresa_id = $3 AND bank_deposit_id IS NULL`,
+      [depositId, e.registerId, ctx.empresaId]
+    );
+
     cierres.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.sessionId - b.sessionId));
     return aIngreso(creado[0], cierres, true);
   });
@@ -449,6 +469,15 @@ export async function anularIngreso(
       );
     }
 
+    /*
+     * Anular devuelve los cierres a pendientes, así que sus canjes vuelven a
+     * contar: el montón que reaparece es el que había, con sus monedas ya
+     * cambiadas por billetes.
+     */
+    await client.query(
+      `UPDATE cash_deposit_swaps SET bank_deposit_id = NULL WHERE bank_deposit_id = $1`,
+      [ingresoId]
+    );
     await client.query(
       `UPDATE cash_bank_deposit_sessions SET vigente = false WHERE deposit_id = $1`,
       [ingresoId]
@@ -498,4 +527,219 @@ export async function anularIngreso(
   });
 
   return ingreso;
+}
+
+// ── Canje de monedas por billetes ──────────────────────────────────────────
+
+/**
+ * Composición real del montón que espera para ir al banco.
+ *
+ * Los cierres pendientes guardan un total, no un desglose, pero el desglose
+ * existe: son los asientos `BANK_DEPOSIT` de cada jornada. Sumarlos da las
+ * piezas exactas que hay en la bolsa.
+ *
+ * Y encima se le aplican los canjes que ya se hayan hecho contra ese montón:
+ * lo que entró en la caja sale del montón, y lo que salió de la caja entra.
+ * Sin eso, el desglose seguiría diciendo que hay monedas que ya se cambiaron.
+ */
+export async function composicionPendiente(
+  empresaId: string,
+  registerId: number,
+  sessionIds: readonly number[],
+  client: PoolClient | typeof pool = pool
+): Promise<{ billetes: LineaDenominacion[]; monedas: LineaDenominacion[] }> {
+  const piezas = new Map<Centimos, number>();
+  const acumular = (valor: Centimos, cantidad: number) => {
+    const n = (piezas.get(valor) ?? 0) + cantidad;
+    if (n === 0) piezas.delete(valor);
+    else piezas.set(valor, n);
+  };
+
+  if (sessionIds.length > 0) {
+    const { rows } = await client.query(
+      `SELECT valor_unitario_centimos AS valor, SUM(cantidad)::int AS n
+         FROM cash_denomination_movements
+        WHERE session_id = ANY($1::int[]) AND motivo = 'BANK_DEPOSIT' AND direccion = 'OUT'
+        GROUP BY valor_unitario_centimos`,
+      [[...sessionIds]]
+    );
+    for (const r of rows) acumular(Number(r.valor), Number(r.n));
+  }
+
+  /*
+   * Canjes todavía vigentes de esta caja. La dirección se invierte a
+   * propósito: lo que ENTRA en la caja sale del montón, y al revés.
+   */
+  const { rows: canjes } = await client.query(
+    `SELECT m.valor_unitario_centimos AS valor, m.direccion, SUM(m.cantidad)::int AS n
+       FROM cash_deposit_swaps s
+       JOIN cash_denomination_movements m ON m.operation_id = s.operation_id
+      WHERE s.empresa_id = $1 AND s.register_id = $2 AND s.bank_deposit_id IS NULL
+      GROUP BY m.valor_unitario_centimos, m.direccion`,
+    [empresaId, registerId]
+  );
+  for (const r of canjes) {
+    acumular(Number(r.valor), r.direccion === "IN" ? -Number(r.n) : Number(r.n));
+  }
+
+  const denominaciones = await cargarDenominaciones(client, false);
+  const esBillete = new Map(denominaciones.map((d) => [d.valor, d.tipo === "BILLETE"]));
+
+  const billetes: LineaDenominacion[] = [];
+  const monedas: LineaDenominacion[] = [];
+  for (const [valor, cantidad] of piezas) {
+    if (cantidad <= 0) continue;
+    (esBillete.get(valor) ? billetes : monedas).push({ valor, cantidad });
+  }
+  const porValor = (a: LineaDenominacion, b: LineaDenominacion) => b.valor - a.valor;
+  return { billetes: billetes.sort(porValor), monedas: monedas.sort(porValor) };
+}
+
+export type PropuestaCanje = {
+  /** Desglose del montón tal y como está ahora. */
+  pendiente: { billetes: LineaDenominacion[]; monedas: LineaDenominacion[] };
+  /** Lo que se puede ingresar hoy: solo los billetes. */
+  ingresableCentimos: Centimos;
+  /** Lo que se quedaría en tienda si no se canjea nada. */
+  enMonedasCentimos: Centimos;
+  /** El canje propuesto, o null si la caja no tiene con qué. */
+  canje: Canje | null;
+  /** Falta una jornada abierta donde asentar el canje. */
+  sinJornadaAbierta: boolean;
+};
+
+/**
+ * Qué se puede ingresar, y qué canje lo mejoraría.
+ *
+ * El canje se asienta en la jornada ABIERTA —mueve el cajón, así que tiene que
+ * estar en su libro mayor— y por eso sin jornada abierta se puede consultar
+ * pero no ejecutar.
+ */
+export async function proponerCanje(
+  empresaId: string,
+  registerId: number,
+  sessionIds: readonly number[]
+): Promise<PropuestaCanje> {
+  const pendiente = await composicionPendiente(empresaId, registerId, sessionIds);
+  const abierta = await sesionAbierta(registerId);
+
+  const billetesCaja = new Map<Centimos, number>();
+  if (abierta) {
+    const denominaciones = await cargarDenominaciones(pool, false);
+    const billete = new Set(
+      denominaciones.filter((d) => d.tipo === "BILLETE").map((d) => d.valor)
+    );
+    for (const [valor, n] of await stockTeorico(pool, abierta.id)) {
+      if (billete.has(valor) && n > 0) billetesCaja.set(valor, n);
+    }
+  }
+
+  return {
+    pendiente,
+    ingresableCentimos: pendiente.billetes.reduce((a, l) => a + l.valor * l.cantidad, 0),
+    enMonedasCentimos: pendiente.monedas.reduce((a, l) => a + l.valor * l.cantidad, 0),
+    canje: abierta
+      ? mejorCanje(
+          inventarioDesdeLineas(pendiente.monedas),
+          inventarioDesdeLineas(pendiente.billetes),
+          billetesCaja
+        )
+      : null,
+    sinJornadaAbierta: !abierta,
+  };
+}
+
+/**
+ * Ejecuta el canje: la caja recibe las monedas y entrega los billetes.
+ *
+ * Es una operación `EXCHANGE` normal de la jornada abierta —la misma que «Dar
+ * cambio»— porque eso es exactamente lo que ocurre: entra dinero al cajón y
+ * sale el mismo importe en otras piezas. Lo único que se anota aparte es que el
+ * canje fue contra el montón pendiente, para poder recomponerlo después.
+ *
+ * Se vuelve a validar aquí en vez de fiarse de la propuesta que traiga la
+ * pantalla: entre que se propuso y se confirma pueden haberse gastado los
+ * billetes del cajón, y quien manda es el stock del momento.
+ */
+export async function registrarCanje(
+  ctx: Contexto,
+  e: {
+    registerId: number;
+    sessionIds: number[];
+    monedasEntregadas: LineaDenominacion[];
+    billetesEntregados: LineaDenominacion[];
+    billetesRecibidos: LineaDenominacion[];
+  }
+): Promise<{ operacionId: number; numero: string }> {
+  const entra = [...e.monedasEntregadas, ...e.billetesEntregados].filter((l) => l.cantidad > 0);
+  const sale = e.billetesRecibidos.filter((l) => l.cantidad > 0);
+
+  const valor = (lineas: readonly LineaDenominacion[]) =>
+    lineas.reduce((a, l) => a + l.valor * l.cantidad, 0);
+
+  if (valor(entra) === 0 || valor(entra) !== valor(sale)) {
+    throw new ErrorCaja(
+      "EFECTIVO_NO_CUADRA",
+      "Un canje entrega y recibe el mismo importe: revisa la propuesta.",
+      400
+    );
+  }
+
+  const abierta = await sesionAbierta(e.registerId);
+  if (!abierta) {
+    throw new ErrorCaja(
+      "JORNADA_NO_ABIERTA",
+      "El canje mueve el cajón, así que hace falta una jornada abierta para asentarlo.",
+      409
+    );
+  }
+
+  // Que el montón tenga de verdad lo que se pretende entregar. Sin esto se
+  // podría «canjear» una moneda que ya se cambió en un canje anterior.
+  const monton = await composicionPendiente(ctx.empresaId, e.registerId, e.sessionIds);
+  const hay = new Map<Centimos, number>();
+  for (const l of [...monton.billetes, ...monton.monedas]) hay.set(l.valor, l.cantidad);
+  for (const l of entra) {
+    if ((hay.get(l.valor) ?? 0) < l.cantidad) {
+      throw new ErrorCaja(
+        "STOCK_INSUFICIENTE",
+        `En el montón pendiente no hay ${l.cantidad} piezas de ${formatearEuros(l.valor)} €.`,
+        400
+      );
+    }
+  }
+
+  const { registrarOperacion } = await import("./service.ts");
+  const operacion = await registrarOperacion(ctx, {
+    sessionId: abierta.id,
+    tipo: "EXCHANGE",
+    importeCentimos: valor(entra),
+    formasPago: [{ forma: "CASH", importe: valor(entra) }],
+    efectivoRecibido: entra,
+    efectivoEntregado: sale,
+    concepto: "Canje de monedas por billetes para el ingreso bancario",
+  });
+
+  await pool.query(
+    `INSERT INTO cash_deposit_swaps (empresa_id, register_id, operation_id, created_at_ms)
+     VALUES ($1,$2,$3,$4)`,
+    [ctx.empresaId, e.registerId, operacion.operacionId, Date.now()]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.bank_deposit.swap",
+    entidad: "cash_operations",
+    entidadId: String(operacion.operacionId),
+    detalle: {
+      registerId: e.registerId,
+      entregado: entra,
+      recibido: sale,
+      valorCentimos: valor(entra),
+    },
+    ip: ctx.ip,
+  });
+
+  return { operacionId: operacion.operacionId, numero: operacion.numero };
 }

@@ -9,14 +9,22 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileDown, Printer } from "lucide-react";
+import { Printer } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, {
   type CantidadesPorValor,
   cantidadesDesde,
   lineasDesde,
 } from "../components/DenominationGrid";
-import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, inputCls } from "../components/ui";
+import {
+  Aviso,
+  BotonAccion,
+  BotonInforme,
+  Cabecera,
+  Card,
+  ErrorBox,
+  inputCls,
+} from "../components/ui";
 import { euros, aCentimos, totalLineas } from "../utils/money";
 import type { LineaDenominacion } from "../types";
 import { AvisoPendientes } from "./CambioBanco";
@@ -534,14 +542,13 @@ function Cerrada({ r }: { r: Awaited<ReturnType<typeof api.cerrarJornada>> }) {
       </div>
 
       {/* El papeleo del día en un solo PDF: el cierre y los escaneos detrás. */}
-      <a
-        href={api.urlInformeCierre(r.sesion.id)}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white hover:bg-sky-500"
+      <BotonInforme
+        sessionId={r.sesion.id}
+        nombre={`cierre-${(r.sesion.fecha ?? "").slice(0, 10)}`}
+        className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50"
       >
-        <FileDown className="h-4 w-4" /> Informe de cierre con los justificantes
-      </a>
+        Informe de cierre con los justificantes
+      </BotonInforme>
     </div>
   );
 }

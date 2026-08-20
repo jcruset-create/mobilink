@@ -12,9 +12,10 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { FileDown, Paperclip, Printer, Upload } from "lucide-react";
+import { Paperclip, Printer, Upload } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import {
+  BotonInforme,
   Cabecera,
   EmptyRow,
   ErrorBox,
@@ -23,7 +24,7 @@ import {
   tdCls,
   inputCls,
 } from "../components/ui";
-import { euros } from "../utils/money";
+import { euros, fechaJornada } from "../utils/money";
 import { ETIQUETA_ESTADO_SESION, type DocumentoOperacion, type EstadoSesion } from "../types";
 import * as api from "../services/api";
 
@@ -176,7 +177,7 @@ function FragmentoJornada({
   return (
     <>
       <tr className="border-t border-slate-700">
-        <td className={`${tdCls} font-medium text-slate-100`}>{sesion.fecha}</td>
+        <td className={`${tdCls} font-medium text-slate-100`}>{fechaJornada(sesion.fecha)}</td>
         <td className={`${tdCls} text-[11px] text-slate-400`}>
           {sesion.caja_centro ? `${sesion.caja_centro} · ` : ""}
           {sesion.caja_nombre}
@@ -201,14 +202,11 @@ function FragmentoJornada({
               </button>
             )}
             {cerrada ? (
-              <a
-                href={api.urlInformeCierre(sesion.id)}
-                target="_blank"
-                rel="noreferrer"
-                className={botonCls}
-              >
-                <FileDown className="h-3.5 w-3.5" /> Informe
-              </a>
+              <BotonInforme
+                sessionId={sesion.id}
+                nombre={`cierre-${(sesion.fecha ?? "").slice(0, 10)}`}
+                className={`${botonCls} disabled:opacity-50`}
+              />
             ) : (
               <span className="px-2 py-1 text-[11px] text-slate-600">Sin cerrar</span>
             )}
@@ -378,11 +376,13 @@ function HojaIngreso({ sesion, onCerrar }: { sesion: FilaSesion; onCerrar: () =>
           <tbody>
             <tr className="border-b border-slate-200">
               <td className="py-2 text-slate-500">Jornada</td>
-              <td className="py-2 text-right font-mono">{sesion.fecha}</td>
+              <td className="py-2 text-right font-mono">{fechaJornada(sesion.fecha)}</td>
             </tr>
             <tr className="border-b border-slate-200">
               <td className="py-2 text-slate-500">Referencia</td>
-              <td className="py-2 text-right font-mono">MC-{sesion.fecha}-{sesion.id}</td>
+              <td className="py-2 text-right font-mono">
+                MC-{(sesion.fecha ?? "").slice(0, 10)}-{sesion.id}
+              </td>
             </tr>
             <tr>
               <td className="py-3 font-bold">Importe a ingresar</td>
