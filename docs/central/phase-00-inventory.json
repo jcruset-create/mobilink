@@ -38,7 +38,7 @@
     { "path": "supabase/migrations/cash_fase1.sql", "domain": "esquema caja", "why": "migracion base; declara centimos BIGINT y prohibe NUMERIC/DOUBLE" }
   ],
   "money_types_found": [
-    { "path": "server/cash/domain/money.ts", "line": 19, "declared_type": "type Centimos = number (entero seguro)", "risk": "BAJO — cumple la invariante; validado con Number.isSafeInteger" },
+    { "path": "server/cash/domain/money.ts", "line": 18, "declared_type": "type Centimos = number (entero seguro)", "risk": "BAJO — cumple la invariante; validado con Number.isSafeInteger" },
     { "path": "server/cash/schema.ts", "line": 136, "declared_type": "BIGINT (fondo_inicial_centimos y resto de columnas de importe)", "risk": "BAJO" },
     { "path": "server/cash/schema.ts", "line": 33, "declared_type": "INTEGER (valor_centimos, fondo_objetivo_centimos)", "risk": "BAJO" },
     { "path": "supabase/migrations/cash_fase1.sql", "line": 18, "declared_type": "comentario normativo: centimos BIGINT, nunca NUMERIC ni DOUBLE", "risk": "BAJO" },
