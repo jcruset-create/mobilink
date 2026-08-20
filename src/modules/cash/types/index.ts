@@ -28,6 +28,8 @@ export type Caja = {
   id: number;
   centro: string;
   nombre: string;
+  /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
+  codigo: string;
   /**
    * Fondo fijo del cajón: lo que esta caja tiene que tener SIEMPRE al empezar
    * el día. 0 = sin fondo fijo, y entonces el cierre lo pregunta.

@@ -69,7 +69,14 @@ const total = (lineas: { valor: number; cantidad: number }[]): number =>
 const cantidad = (lineas: { valor: number; cantidad: number }[], valor: number): number =>
   lineas.find((l) => l.valor === valor)?.cantidad ?? 0;
 
-/** Caja nueva por prueba: evita que una prueba dependa del estado de otra. */
+/**
+ * Caja nueva por prueba: evita que una prueba dependa del estado de otra.
+ *
+ * Cada una con su código —`CJ1`, `CJ2`…— porque el código es lo que abre el
+ * número de todos sus documentos (`CJ1-C-26-001`). Con el código vacío la
+ * numeración cae al `MC` de reserva y las pruebas dejarían de comprobar lo que
+ * de verdad pasa en producción.
+ */
 async function crearCaja(nombre: string): Promise<number> {
   const ahora = Date.now();
   const { rows } = await db.query(
@@ -77,8 +84,15 @@ async function crearCaja(nombre: string): Promise<number> {
      VALUES ($1,'tarragona',$2,$3,$3) RETURNING id`,
     [EMPRESA, `${nombre}-${String(process.hrtime.bigint()).slice(-9)}`, ahora]
   );
+  // El código se saca del id y no de un contador de la suite: la base de
+  // pruebas sobrevive entre ejecuciones, así que un contador que empieza otra
+  // vez en 1 chocaría con el `CJ1` de la vuelta anterior.
+  await db.query(`UPDATE cash_registers SET codigo = 'CJ' || id WHERE id = $1`, [rows[0].id]);
   return rows[0].id;
 }
+
+/** El número de documento nuevo: CÓDIGO-TIPO-AA-SECUENCIA. */
+const numeroDe = (tipo: string) => new RegExp(`^CJ\\d+-${tipo}-\\d{2}-\\d{3,}$`);
 
 beforeAll(async () => {
   if (!RUN) return;
@@ -131,7 +145,7 @@ describe.runIf(RUN)("Mobilink Cash sin ERP: escenario completo del encargo", () 
       partyNombre: "Cliente ABC SL",
     });
 
-    expect(cobro.numero).toMatch(/^MC-C-\d{4}-\d{6}$/);
+    expect(cobro.numero).toMatch(numeroDe("C"));
     expect(cobro.efectivoNetoCentimos).toBe(18700);
     expect(cobro.totalStockCentimos).toBe(30000 + 18700);
     expect(cobro.erpSyncStatus).toBe("NOT_APPLICABLE"); // no hay ERP: nada que sincronizar
@@ -161,7 +175,7 @@ describe.runIf(RUN)("Mobilink Cash sin ERP: escenario completo del encargo", () 
       partyNombre: "Proveedor XYZ",
     });
 
-    expect(pago.numero).toMatch(/^MC-P-\d{4}-\d{6}$/);
+    expect(pago.numero).toMatch(numeroDe("P"));
     expect(pago.totalStockCentimos).toBe(30000 + 18700 - 12700);
     expect(cantidad(pago.stock, 10000)).toBe(1); // quedaba uno de los dos
 
@@ -325,7 +339,7 @@ describe.runIf(RUN)("Mobilink Cash sin ERP: escenario completo del encargo", () 
     expect(cobro.totalStockCentimos).toBe(35000);
 
     const reversa = await servicio.anularOperacion(ctx, cobro.operacionId, "Cobro duplicado");
-    expect(reversa.numero).toMatch(/^MC-C-/);
+    expect(reversa.numero).toMatch(numeroDe("C"));
 
     const stock = await servicio.stockDeJornada(sesion.id);
     expect(stock.totalCentimos).toBe(30000);
@@ -785,7 +799,7 @@ describe.runIf(RUN)("cambio al banco", () => {
       solicitado: [{ valor: 100, cantidad: 200, cartuchos: 8 }],
     });
 
-    expect(pedido.numero).toMatch(/^MC-CB-\d{4}-\d{6}$/);
+    expect(pedido.numero).toMatch(numeroDe("CB"));
     expect(pedido.estado).toBe("PENDIENTE");
     // Los 200 € YA no están en la caja: el arqueo de la tarde tiene que cuadrar.
     const tras = await servicio.stockDeJornada(sesion.id);
@@ -911,7 +925,7 @@ describe.runIf(RUN)("entregas de dinero a personas", () => {
       entregado: [{ valor: 5000, cantidad: 1 }],
     });
 
-    expect(entrega.numero).toMatch(/^MC-EN-\d{4}-\d{6}$/);
+    expect(entrega.numero).toMatch(numeroDe("EN"));
     expect(entrega.estado).toBe("ABIERTA");
 
     // El billete de 50 € ya no está en el cajón.
@@ -1113,7 +1127,7 @@ describe.runIf(RUN)("ingresos bancarios", () => {
       referencia: "ING-090",
     });
 
-    expect(ingreso.numero).toMatch(/^MC-IB-\d{4}-\d{6}$/);
+    expect(ingreso.numero).toMatch(numeroDe("IB"));
     expect(ingreso.remanenteAnteriorCentimos).toBe(0);
     expect(ingreso.totalCierresCentimos).toBe(435045);
     expect(ingreso.importeCentimos).toBe(435000);
@@ -2417,7 +2431,7 @@ describe.runIf(RUN)("cierre con descuadre de arqueo", () => {
     const ops = await repo.operacionesDeSesion(sesion.id);
     const ajuste = ops.find((o) => o.tipo === "ADJUSTMENT");
     expect(ajuste).toBeDefined();
-    expect(ajuste!.numero).toMatch(/^MC-/);
+    expect(ajuste!.numero).toMatch(numeroDe("A"));
     expect(ajuste!.efectivoNetoCentimos).toBe(-1000);
 
     // Y el libro cierra en cero: todo lo que entró ha salido.
@@ -2741,7 +2755,7 @@ describe.runIf(RUN)("cambio de moneda en mostrador", () => {
     });
 
     // Serie propia: el histórico distingue un cambio de un cobro o un pago.
-    expect(r.numero).toMatch(/^MC-DC-\d{4}-\d{6}$/);
+    expect(r.numero).toMatch(numeroDe("DC"));
     expect(r.efectivoNetoCentimos).toBe(0);
     expect(r.totalStockCentimos).toBe(antes);
 
@@ -3173,5 +3187,243 @@ describe.runIf(RUN)("canje de monedas por billetes para el ingreso", () => {
     const despues = await ingresos.proponerCanje(EMPRESA, caja, []);
     expect(despues.ingresableCentimos).toBe(0);
     expect(despues.enMonedasCentimos).toBe(0);
+  });
+});
+
+describe.runIf(RUN)("código de caja y numeración de documentos", () => {
+  it("el número lleva delante el código de la caja, no un MC para todas", async () => {
+    // Es lo que permite conciliar con el banco: dos cajas del mismo taller
+    // compartían serie y el número no decía de cuál salía el dinero.
+    const a = await crearCaja("numeracion-a");
+    const b = await crearCaja("numeracion-b");
+    const codigos = await db.query(
+      `SELECT id, codigo FROM cash_registers WHERE id = ANY($1::int[])`,
+      [[a, b]]
+    );
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    const codigoDe = new Map(codigos.rows.map((r: any) => [r.id, r.codigo]));
+
+    const cobroEn = async (caja: number) => {
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: FONDO_300,
+      });
+      const r = await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 5000,
+        formasPago: [{ forma: "CASH", importe: 5000 }],
+        efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+        concepto: "Venta",
+      });
+      return r.numero;
+    };
+
+    const nA = await cobroEn(a);
+    const nB = await cobroEn(b);
+
+    expect(nA.startsWith(`${codigoDe.get(a)}-C-`)).toBe(true);
+    expect(nB.startsWith(`${codigoDe.get(b)}-C-`)).toBe(true);
+    expect(nA).not.toBe(nB);
+  });
+
+  it("cada caja tiene su propia serie: las dos empiezan en 001", async () => {
+    // Con el contador global, la segunda caja habría seguido por donde iba la
+    // primera y el número no serviría para contar los ingresos de un taller.
+    const a = await crearCaja("serie-a");
+    const b = await crearCaja("serie-b");
+    const primerCobro = async (caja: number) => {
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: FONDO_300,
+      });
+      const r = await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 5000,
+        formasPago: [{ forma: "CASH", importe: 5000 }],
+        efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+        concepto: "Venta",
+      });
+      return r.numero.split("-").pop();
+    };
+    expect(await primerCobro(a)).toBe("001");
+    expect(await primerCobro(b)).toBe("001");
+  });
+
+  it("el año va en dos cifras y la secuencia crece dentro de la caja", async () => {
+    const caja = await crearCaja("serie-crece");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    const cobrar = async () =>
+      (
+        await servicio.registrarCobro(ctx, {
+          sessionId: sesion.id,
+          importeCentimos: 1000,
+          formasPago: [{ forma: "CASH", importe: 1000 }],
+          efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+          concepto: "Venta",
+        })
+      ).numero;
+
+    const uno = await cobrar();
+    const dos = await cobrar();
+    const [, , aa, seq1] = uno.split("-");
+    const [, , , seq2] = dos.split("-");
+    expect(aa).toHaveLength(2);
+    expect(aa).toBe(String(new Date().getFullYear() % 100));
+    expect(Number(seq2)).toBe(Number(seq1) + 1);
+  });
+
+  it("una caja sin código numera con MC en vez de dejar la caja parada", async () => {
+    // Un dato de configuración que falta no puede parar el mostrador. Sale
+    // feo, se ve en Configuración, y se arregla sin perder ningún cobro.
+    const { rows } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+       VALUES ($1,'sincodigo',$2,$3,$3) RETURNING id`,
+      [EMPRESA, `sin-codigo-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+    );
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: rows[0].id,
+      fondoManual: FONDO_300,
+    });
+    const r = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      concepto: "Venta",
+    });
+    expect(r.numero.startsWith("MC-C-")).toBe(true);
+  });
+
+  it("una caja nueva nace con código, y dos no pueden compartirlo", async () => {
+    const centro = `centro-${String(process.hrtime.bigint()).slice(-6)}`;
+    const uno = await config.crearCaja(ctx, { nombre: "Mostrador", centro });
+    expect(uno.codigo).not.toBe("");
+
+    const otra = await config.crearCaja(ctx, { nombre: "Taller", centro });
+    expect(otra.codigo).not.toBe(uno.codigo);
+
+    await expect(
+      config.actualizarCaja(ctx, otra.id, { codigo: uno.codigo })
+    ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
+  });
+
+  it("el código se normaliza y se rechaza el que rompería el número", async () => {
+    const centro = `centro-${String(process.hrtime.bigint()).slice(-6)}`;
+    const caja = await config.crearCaja(ctx, { nombre: "Mostrador", centro });
+
+    // Código único por ejecución: la base de pruebas se reutiliza, y un
+    // literal fijo chocaría con la caja que lo recibió en la pasada anterior.
+    const unico = `x ${String(process.hrtime.bigint()).slice(-4)}`;
+    const cambiada = await config.actualizarCaja(ctx, caja.id, { codigo: unico });
+    expect(cambiada.codigo).toBe(unico.toUpperCase().replace(" ", ""));
+
+    // Un guion partiría REU-2-IB-26-001 por donde no toca.
+    await expect(
+      config.actualizarCaja(ctx, caja.id, { codigo: "R" })
+    ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
+  });
+
+  it("cambiar el código no renumera lo ya emitido", async () => {
+    // Un número puede estar impreso en un resguardo o apuntado en el extracto.
+    const centro = `centro-${String(process.hrtime.bigint()).slice(-6)}`;
+    const caja = await config.crearCaja(ctx, { nombre: "Mostrador", centro });
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja.id,
+      fondoManual: FONDO_300,
+    });
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      concepto: "Venta",
+    });
+
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: (await servicio.stockDeJornada(sesion.id)).lineas,
+    });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: (await servicio.proponerCierre(sesion.id, 30000)).cambioFinal,
+    });
+    const nuevoCodigo = `Z${String(process.hrtime.bigint()).slice(-5)}`;
+    await config.actualizarCaja(ctx, caja.id, { codigo: nuevoCodigo });
+
+    const { rows } = await db.query(`SELECT numero FROM cash_operations WHERE id = $1`, [
+      cobro.operacionId,
+    ]);
+    expect(rows[0].numero).toBe(cobro.numero);
+    expect(rows[0].numero.startsWith(`${nuevoCodigo}-`)).toBe(false);
+  });
+});
+
+describe.runIf(RUN)("resguardo del ingreso bancario", () => {
+  it("lleva el número, el importe y el desglose de billetes", async () => {
+    const caja = await crearCaja("resguardo");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 10000,
+      formasPago: [{ forma: "CASH", importe: 10000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 2 }],
+      concepto: "Venta",
+    });
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: (await servicio.stockDeJornada(sesion.id)).lineas,
+    });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: (await servicio.proponerCierre(sesion.id, 30000)).cambioFinal,
+    });
+
+    const ingreso = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [sesion.id],
+      importeCentimos: 10000,
+    });
+
+    const pdf = await informe.informeIngreso(EMPRESA, ingreso.id);
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+    expect(pdf.length).toBeGreaterThan(1000);
+  });
+
+  it("un ingreso de otra empresa no se puede imprimir", async () => {
+    const caja = await crearCaja("resguardo-ajeno");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 10000,
+      formasPago: [{ forma: "CASH", importe: 10000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 2 }],
+      concepto: "Venta",
+    });
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: (await servicio.stockDeJornada(sesion.id)).lineas,
+    });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: (await servicio.proponerCierre(sesion.id, 30000)).cambioFinal,
+    });
+    const ingreso = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [sesion.id],
+      importeCentimos: 10000,
+    });
+
+    await expect(
+      informe.informeIngreso("00000000-0000-4000-a000-0000000000ff", ingreso.id)
+    ).rejects.toMatchObject({ codigo: "INGRESO_NO_ENCONTRADO" });
   });
 });

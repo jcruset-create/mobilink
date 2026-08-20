@@ -106,11 +106,14 @@ export const listarCajas = () =>
 export const crearCaja = (nombre: string, centro: string) =>
   pedir<{ caja: Caja & { activa: boolean } }>("/registers", json({ nombre, centro }));
 
+
 export const actualizarCaja = (
   id: number,
   datos: {
     nombre?: string;
     centro?: string;
+    /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
+    codigo?: string;
     activa?: boolean;
     /** Fondo fijo del cajón, en céntimos. 0 = sin fondo fijo. */
     fondoObjetivoCentimos?: number;
@@ -222,22 +225,20 @@ export const adjuntarDocumento = (operationId: number, fichero: File) => {
 export const anularDocumento = (id: number, motivo: string) =>
   pedir<{ documento: DocumentoOperacion }>(`/documents/${id}/void`, json({ motivo }));
 
-/** Enlace del informe de cierre. Se abre en una pestaña, no se descarga por fetch. */
 /**
- * Descarga el informe de cierre.
+ * Descarga un PDF del servidor con la sesión puesta.
  *
- * NO es un enlace. El token de la sesión viaja en una cabecera `Authorization`,
- * y un `<a href>` no puede llevarla: al abrirse en una pestaña nueva el
- * servidor respondía «Falta el token de sesión» y en pantalla salía ese JSON en
- * vez del PDF. Se pide por `fetch` con las cabeceras de siempre y lo que se
- * abre es el fichero ya descargado.
+ * No puede ser un `<a href>`: el token viaja en la cabecera `Authorization` y
+ * un enlace no puede llevarla, así que el enlace directo devolvía «Falta el
+ * token de sesión». Sirve para cualquier informe: el de cierre y el resguardo
+ * del ingreso comparten este camino.
  */
-export async function informeCierrePdf(sessionId: number): Promise<Blob> {
+export async function descargarPdf(ruta: string): Promise<Blob> {
   const cabeceras = await sessionHeaders();
 
   let res: Response;
   try {
-    res = await fetch(`${BASE}/sessions/${sessionId}/report.pdf`, { headers: cabeceras });
+    res = await fetch(`${BASE}${ruta}`, { headers: cabeceras });
   } catch {
     throw new ErrorApiCaja("SIN_CONEXION", "No hay conexión con el servidor.", 0);
   }

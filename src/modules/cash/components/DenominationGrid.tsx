@@ -150,7 +150,28 @@ export default function DenominationGrid({
         </div>
       )}
 
-      <div className={`grid gap-4 p-3 ${compacto ? "" : "sm:grid-cols-2"}`}>
+      {/*
+        Las dos columnas no se reparten a partes iguales ni se abren tan pronto
+        como cabían antes.
+
+        Los billetes no tienen cartuchos ni bolsas, así que su fila es unos 110
+        px más corta que la de las monedas; con mitad y mitad las monedas iban
+        justas y sobraba hueco a la izquierda. En cuanto la fila creció —la foto
+        del catálogo por delante de la etiqueta— dejó de caber y el campo de
+        bolsas se perdía por el `overflow-hidden`, sin aviso: el operador no
+        podía teclear las bolsas y no había forma de saber por qué.
+
+        De ahí las dos correcciones: se reparte 3/4 en vez de 1/2, y el corte
+        pasa de `sm` (640 px) a `lg` (1024 px), que es donde de verdad caben las
+        dos con la barra lateral puesta. Por debajo, una sola columna a lo
+        ancho. Antes de tocar estos números hay que medir la fila: los botones
+        de 44 px son el mínimo cómodo con el dedo y no se recortan.
+      */}
+      <div
+        className={`grid gap-4 p-3 ${
+          compacto ? "" : "lg:grid-cols-[minmax(0,3fr)_minmax(0,4fr)]"
+        }`}
+      >
         <Grupo
           etiqueta="Billetes"
           denominaciones={billetes}
@@ -263,6 +284,19 @@ function Grupo({
                 cantidad > 0 ? "bg-slate-900/70" : ""
               } ${sinExistencias ? "opacity-40" : ""}`}
             >
+              {/*
+                La foto del catálogo delante de la etiqueta. Contar un cajón se
+                hace mirando las piezas, no leyendo importes, y con la imagen
+                delante la fila se encuentra de un vistazo. Sin foto subida
+                queda solo la etiqueta, que es la que manda.
+              */}
+              {d.imagenUrl && (
+                <img
+                  src={d.imagenUrl}
+                  alt=""
+                  className="h-6 w-8 shrink-0 object-contain"
+                />
+              )}
               <div className="w-14 shrink-0 text-sm font-bold tabular-nums text-slate-200">
                 {d.etiqueta}
               </div>

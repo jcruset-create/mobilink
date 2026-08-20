@@ -543,7 +543,7 @@ function Cerrada({ r }: { r: Awaited<ReturnType<typeof api.cerrarJornada>> }) {
 
       {/* El papeleo del día en un solo PDF: el cierre y los escaneos detrás. */}
       <BotonInforme
-        sessionId={r.sesion.id}
+        ruta={`/sessions/${r.sesion.id}/report.pdf`}
         nombre={`cierre-${(r.sesion.fecha ?? "").slice(0, 10)}`}
         className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50"
       >
