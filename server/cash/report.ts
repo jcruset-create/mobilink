@@ -21,6 +21,8 @@
  * corrupta sería peor que un informe con un hueco señalado.
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import PDFDocument from "pdfkit";
 import { PDFDocument as PDFLib } from "pdf-lib";
 import pool from "../db.ts";
@@ -195,7 +197,12 @@ async function construirPortada(d: {
   const { detalle, caja, fuera, conteos } = d;
   const s = detalle.sesion;
 
-  const doc = new PDFDocument({ margin: M, size: "A4" });
+  /*
+   * `bufferPages` deja volver atrás al terminar para numerar las hojas. Sin
+   * él, la página 1 se cierra antes de saber cuántas van a ser y no se puede
+   * escribir «1 de 5».
+   */
+  const doc = new PDFDocument({ margin: M, size: "A4", bufferPages: true });
   const trozos: Buffer[] = [];
   doc.on("data", (c: Buffer) => trozos.push(c));
   const listo = new Promise<Buffer>((resolve) =>
@@ -203,26 +210,56 @@ async function construirPortada(d: {
   );
 
   const ancho = doc.page.width - M * 2;
+  const subtitulo = `${caja ? `${caja.centro ? `${caja.centro} · ` : ""}${caja.nombre} · ` : ""}${s.fecha}`;
 
-  // ── Cabecera ──
-  doc.rect(0, 0, doc.page.width, 58).fill("#101a33");
-  doc
-    .fillColor("#ffffff")
-    .font("Helvetica-Bold")
-    .fontSize(15)
-    .text("Cierre de caja", M, 16, { lineBreak: false });
-  doc
-    .font("Helvetica")
-    .fontSize(10)
-    .fillColor("#94a3b8")
-    .text(
-      `${caja ? `${caja.centro ? `${caja.centro} · ` : ""}${caja.nombre} · ` : ""}${s.fecha}`,
-      M,
-      36,
-      { lineBreak: false }
-    );
-  doc.fillColor(TINTA).font("Helvetica").fontSize(10);
-  doc.y = 78;
+  /*
+   * La cabecera va en TODAS las hojas del informe, no solo en la primera.
+   *
+   * Este PDF se imprime y se archiva en papel, y las hojas se separan: una
+   * hoja suelta sin marca ni fecha no se sabe de qué caja ni de qué día es.
+   * Con el logotipo, la caja, la fecha y el número de página, cada hoja se
+   * identifica sola.
+   *
+   * Los justificantes escaneados NO la llevan: se incrustan tal cual vienen
+   * del escáner, en `montar()`, y pintarles encima taparía la factura.
+   */
+  const cabecera = () => {
+    doc.rect(0, 0, doc.page.width, 58).fill("#101a33");
+
+    // El logotipo si está; si no, el nombre escrito. Un fichero que falta no
+    // puede dejar sin informe a quien cierra la caja.
+    let x = M;
+    try {
+      const logo = path.join(process.cwd(), "public", "logo-cash.png");
+      if (fs.existsSync(logo)) {
+        doc.image(logo, M, 14, { height: 30 });
+        x = M + 120;
+      }
+    } catch {
+      /* sin logotipo: manda el texto */
+    }
+
+    doc
+      .fillColor("#ffffff")
+      .font("Helvetica-Bold")
+      .fontSize(15)
+      .text("Cierre de caja", x, 16, { lineBreak: false });
+    doc
+      .font("Helvetica")
+      .fontSize(10)
+      .fillColor("#94a3b8")
+      .text(subtitulo, x, 36, { lineBreak: false });
+
+    doc.fillColor(TINTA).font("Helvetica").fontSize(10);
+    doc.x = M;
+    doc.y = 78;
+  };
+
+  // En la primera a mano, y en las siguientes por el evento: `addPage()` se
+  // llama desde media docena de sitios y acordarse en cada uno es cuestión de
+  // tiempo que se olvide en el que se añada mañana.
+  cabecera();
+  doc.on("pageAdded", cabecera);
 
   /*
    * Título de sección: una banda gris con una pestaña azul marino delante, el
@@ -560,7 +597,12 @@ async function construirPortada(d: {
       for (const den of billetes) yBil = filaGenes(den, M + colAncho + 24, yBil);
       doc.y = Math.max(yMon, yBil) + 10;
 
-      // El total en grande, como el «Total:» del formulario.
+      /*
+       * El total en grande, como el «Total:» del formulario. Es el de las
+       * PIEZAS de arriba (`logradoCentimos`), no el teórico del libro mayor:
+       * la ERP suma el desglose que se teclea, así que una hoja cuyo total no
+       * coincida con su propia rejilla es una hoja que no cierra.
+       */
       const yTotal = doc.y;
       doc.roundedRect(M + ancho - 240, yTotal, 240, 34, 4).fill("#eef2f7");
       doc
@@ -572,7 +614,7 @@ async function construirPortada(d: {
         .font("Helvetica-Bold")
         .fontSize(16)
         .fillColor(TINTA)
-        .text(eur(caja.importeCentimos), M + ancho - 240, yTotal + 9, {
+        .text(eur(caja.logradoCentimos), M + ancho - 240, yTotal + 9, {
           width: 228,
           align: "right",
           lineBreak: false,
@@ -618,13 +660,23 @@ async function construirPortada(d: {
       doc.moveDown(0.6);
       doc.font("Helvetica").fontSize(10).fillColor(TINTA);
 
-      if (caja.sinPiezas) {
+      /*
+       * El cajón no siempre da para apartar el importe clavado —el billete de
+       * la sección pudo irse en un cambio— y entonces se aparta lo más
+       * parecido que se pueda formar. La rejilla y su total SIEMPRE cuadran
+       * entre sí, que es lo que necesita la ERP; lo que se explica aquí es en
+       * qué se diferencia del libro mayor.
+       */
+      if (caja.desvioCentimos !== 0) {
+        const falta = caja.desvioCentimos > 0;
         doc
           .font("Helvetica-Bold")
-          .fontSize(11)
+          .fontSize(10)
           .fillColor("#b45309")
           .text(
-            `No se ha podido proponer con qué piezas: en el cajón ya no queda con qué formar ${eur(caja.importeCentimos)}. Suele pasar cuando ese dinero se fue en un cambio. El importe sigue siendo el bueno.`,
+            `El libro mayor dice ${eur(caja.importeCentimos)}, pero con las piezas del cajón solo se puede apartar ${eur(caja.logradoCentimos)}: ` +
+              `${eur(Math.abs(caja.desvioCentimos))} ${falta ? "de más se quedan" : "de más van"} en la otra caja. ` +
+              "Teclea el total de abajo, que es el que cuadra con este desglose.",
             { width: ancho }
           );
         doc.moveDown(0.5);
@@ -633,14 +685,27 @@ async function construirPortada(d: {
 
       rejillaGenes(caja, soloUna);
 
-      // El resumen del reparto, solo en la hoja de la caja principal.
+      /*
+       * El resumen del reparto, solo en la hoja de la caja principal. La resta
+       * se hace con lo APARTADO de verdad, para que cierre contra el total que
+       * se teclea; cuando eso no coincide con el libro mayor, la línea lo dice
+       * en lugar de dejar una resta que no sale.
+       */
       if (i === 0 && !soloUna) {
         titulo("Reparto del cajón");
         fila("Arqueo del cajón entero", eur(arqueo.totalCentimos));
         for (const c of reparto.aparte) {
-          fila(`${c.nombre} · cierra en su caja`, `-${eur(c.importeCentimos)}`);
+          const etiqueta =
+            c.desvioCentimos === 0
+              ? `${c.nombre} · cierra en su caja`
+              : `${c.nombre} · cierra en su caja (libro mayor ${eur(c.importeCentimos)})`;
+          fila(etiqueta, `-${eur(c.logradoCentimos)}`);
         }
-        fila(`Queda para ${reparto.principal.nombre}`, eur(reparto.principal.importeCentimos), true);
+        fila(
+          `Queda para ${reparto.principal.nombre}`,
+          eur(reparto.principal.logradoCentimos),
+          true
+        );
       }
 
       /*
@@ -730,6 +795,29 @@ async function construirPortada(d: {
     });
     doc.y = y + 12;
   }
+
+  /*
+   * El número de página, al final y de una pasada: hasta aquí no se sabía
+   * cuántas iban a ser. `bufferPages` mantiene las hojas abiertas para esto.
+   *
+   * Se estampa solo sobre las hojas de ESTE documento; los justificantes que
+   * se pegan después en `montar()` no llevan nada encima, que taparía la
+   * factura escaneada.
+   */
+  const rango = doc.bufferedPageRange();
+  for (let i = 0; i < rango.count; i++) {
+    doc.switchToPage(rango.start + i);
+    doc
+      .font("Helvetica")
+      .fontSize(9)
+      .fillColor("#94a3b8")
+      .text(`${i + 1} de ${rango.count}`, M, 36, {
+        width: doc.page.width - M * 2,
+        align: "right",
+        lineBreak: false,
+      });
+  }
+  doc.flushPages();
 
   doc.end();
   return listo;
@@ -833,13 +921,23 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   );
   const ancho = doc.page.width - M * 2;
 
-  // ── Cabecera ──
+  // ── Cabecera ── misma marca que el informe de cierre: se archivan juntos.
   doc.rect(0, 0, doc.page.width, 58).fill("#101a33");
+  let xCab = M;
+  try {
+    const logo = path.join(process.cwd(), "public", "logo-cash.png");
+    if (fs.existsSync(logo)) {
+      doc.image(logo, M, 14, { height: 30 });
+      xCab = M + 120;
+    }
+  } catch {
+    /* sin logotipo: manda el texto */
+  }
   doc
     .fillColor("#ffffff")
     .font("Helvetica-Bold")
     .fontSize(15)
-    .text("Ingreso bancario", M, 16, { lineBreak: false });
+    .text("Ingreso bancario", xCab, 16, { lineBreak: false });
   doc
     .font("Helvetica")
     .fontSize(10)
@@ -848,11 +946,12 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
       `${caja.centro ? `${caja.centro} · ` : ""}${caja.nombre}${
         ingreso.fechaIngreso ? ` · ${ingreso.fechaIngreso}` : ""
       }`,
-      M,
+      xCab,
       36,
       { lineBreak: false }
     );
   doc.fillColor(TINTA).font("Helvetica").fontSize(10);
+  doc.x = M;
   doc.y = 78;
 
   // Mismo título de banda que el informe de cierre: los dos papeles salen de
