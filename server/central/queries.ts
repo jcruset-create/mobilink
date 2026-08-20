@@ -319,4 +319,148 @@ export async function transitosAbiertos(empresaId: string): Promise<TransitoAbie
         : Math.floor((ahora - Number(r.abierto_en_ms)) / 86_400_000),
   }));
 }
+
+// ── Ciclo de ingresos bancarios ────────────────────────────────────────────
+
+export type IngresoEnRed = {
+  depositId: number;
+  numero: string | null;
+  fecha: string | null;
+  referencia: string | null;
+  caja: string | null;
+  centro: string | null;
+  importeCentimos: number;
+  totalCierresCentimos: number;
+  remanenteNuevoCentimos: number;
+  estado: string;
+  anuladoMotivo: string | null;
+  /** De dónde salió cada euro: qué jornada puso cuánto. */
+  origen: { sessionId: number; fecha: string | null; importeCentimos: number }[];
+};
+
+export type PendienteDeIngresar = {
+  registerId: number;
+  caja: string | null;
+  centro: string | null;
+  jornadas: number;
+  centimos: number;
+  /** Fecha del cierre más antiguo sin ingresar. Es lo que mide el retraso. */
+  desde: string | null;
+  dias: number | null;
+};
+
+/**
+ * Los ingresos de la red, cada uno con su origen desglosado.
+ *
+ * El desglose no es un adorno: cuando el extracto del banco apunta un abono de
+ * 3.480 €, la pregunta que hay que contestar es de qué días y de qué caja salió
+ * ese dinero. Un ingreso sin origen es un número que no se concilia con nada.
+ *
+ * Los anulados salen también, marcados. Aquí no se borra nada —misma regla que
+ * en la caja— y un ingreso que existió y se anuló es justo lo que alguien va a
+ * buscar cuando el extracto no cuadre.
+ */
+export async function ingresosEnRed(
+  empresaId: string,
+  filtros: { centroId?: string | null; registerId?: number | null } = {}
+): Promise<IngresoEnRed[]> {
+  const centro = await joinCentro("ce", "d.centro_id");
+  const cond: string[] = ["d.empresa_id = $1"];
+  const params: unknown[] = [empresaId];
+
+  if (filtros.centroId) {
+    params.push(filtros.centroId);
+    cond.push(`d.centro_id = $${params.length}`);
+  }
+  if (filtros.registerId) {
+    params.push(filtros.registerId);
+    cond.push(`d.register_id = $${params.length}`);
+  }
+
+  const { rows } = await pool.query(
+    `SELECT d.*, c.nombre AS caja_nombre, ${centro.select},
+            COALESCE(
+              (SELECT json_agg(json_build_object(
+                        'sessionId', s.session_id,
+                        'fecha', s.fecha,
+                        'importeCentimos', s.importe_centimos)
+                      ORDER BY s.fecha, s.session_id)
+                 FROM central_deposit_sources s
+                WHERE s.deposit_id = d.deposit_id),
+              '[]'::json) AS origen
+       FROM central_bank_deposits d
+       LEFT JOIN cash_registers c ON c.id = d.register_id
+       ${centro.join}
+      WHERE ${cond.join(" AND ")}
+      ORDER BY d.fecha DESC NULLS LAST, d.deposit_id DESC
+      LIMIT 200`,
+    params
+  );
+
+  return rows.map((r: any) => ({
+    depositId: r.deposit_id,
+    numero: r.numero ?? null,
+    fecha: r.fecha instanceof Date ? r.fecha.toISOString().slice(0, 10) : (r.fecha ?? null),
+    referencia: r.referencia ?? null,
+    caja: r.caja_nombre ?? null,
+    centro: r.centro_nombre ?? null,
+    importeCentimos: Number(r.importe_centimos),
+    totalCierresCentimos: Number(r.total_cierres_centimos),
+    remanenteNuevoCentimos: Number(r.remanente_nuevo_centimos),
+    estado: r.estado,
+    anuladoMotivo: r.anulado_motivo ?? null,
+    origen: (r.origen ?? []).map(
+      (o: { sessionId: number; fecha: string | null; importeCentimos: string }) => ({
+        sessionId: o.sessionId,
+        fecha: o.fecha ? String(o.fecha).slice(0, 10) : null,
+        importeCentimos: Number(o.importeCentimos),
+      })
+    ),
+  }));
+}
+
+/**
+ * Lo que cada caja tiene cerrado y todavía no ha llevado al banco.
+ *
+ * `desde` es la fecha del cierre más antiguo sin ingresar, y es el dato que de
+ * verdad importa: 400 € esperando desde ayer es la operativa normal; los mismos
+ * 400 € esperando desde hace tres semanas son dinero en un cajón de una tienda,
+ * y eso ya es otra cosa.
+ */
+export async function pendienteDeIngresar(empresaId: string): Promise<PendienteDeIngresar[]> {
+  const centro = await joinCentro("ce", "s.centro_id");
+  const { rows } = await pool.query(
+    `SELECT s.register_id,
+            COUNT(*)::int AS jornadas,
+            COALESCE(SUM(s.ingreso_bancario_centimos),0) AS centimos,
+            MIN(s.fecha) AS desde,
+            c.nombre AS caja_nombre, ${centro.select}
+       FROM central_sessions s
+       LEFT JOIN cash_registers c ON c.id = s.register_id
+       ${centro.join}
+      WHERE s.empresa_id = $1
+        AND s.estado = 'CLOSED'
+        AND NOT s.conciliada
+        AND COALESCE(s.ingreso_bancario_centimos,0) > 0
+      GROUP BY s.register_id, c.nombre, centro_nombre
+      ORDER BY MIN(s.fecha)`,
+    [empresaId]
+  );
+
+  const hoy = new Date();
+  return rows.map((r: any) => {
+    const desde = r.desde instanceof Date ? r.desde.toISOString().slice(0, 10) : (r.desde ?? null);
+    return {
+      registerId: r.register_id,
+      caja: r.caja_nombre ?? null,
+      centro: r.centro_nombre ?? null,
+      jornadas: r.jornadas,
+      centimos: Number(r.centimos),
+      desde,
+      dias: desde
+        ? Math.floor((hoy.getTime() - new Date(`${desde}T00:00:00Z`).getTime()) / 86_400_000)
+        : null,
+    };
+  });
+}
 /* eslint-enable @typescript-eslint/no-explicit-any */

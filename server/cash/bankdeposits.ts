@@ -415,12 +415,28 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
       tipo: "BANK_DEPOSIT_CREATED",
       ocurridoEnMs: Date.now(),
       actorUserId: ctx.userId,
+      /*
+       * El ORIGEN del ingreso viaja entero: qué jornadas lo componen, de qué
+       * día es cada una y cuánto puso. Es lo que permite contestar, cuando el
+       * banco apunta un abono de 3.480 €, de qué días y de qué caja salió ese
+       * dinero — sin eso, un ingreso es un número suelto que no se concilia
+       * con nada.
+       *
+       * Van también los ids sueltos en `cierres` porque es lo que ya
+       * consumía la proyección desde la fase 3, y los eventos viejos que
+       * siguen en la cola llevan solo eso.
+       */
       datos: {
         depositId,
         numero: creado[0].numero,
         importeCentimos: Number(creado[0].importe_centimos),
+        remanenteAnteriorCentimos: Number(creado[0].remanente_anterior_centimos),
         remanenteNuevoCentimos: Number(creado[0].remanente_nuevo_centimos),
+        totalCierresCentimos: Number(creado[0].total_cierres_centimos),
+        referencia: creado[0].referencia ?? null,
+        fecha: fechaIso(creado[0].fecha_ingreso) ?? null,
         cierres: cierres.map((c) => c.sessionId),
+        origen: cierres,
       },
     });
 
@@ -545,6 +561,11 @@ export async function anularIngreso(
         numero: actualizado[0].numero,
         importeCentimos: Number(actualizado[0].importe_centimos),
         cierres: lineas.map((l: any) => l.session_id),
+        origen: lineas.map((l: any) => ({
+          sessionId: l.session_id,
+          fecha: fechaIso(l.fecha),
+          importeCentimos: Number(l.importe_centimos),
+        })),
         motivo: motivo.trim(),
       },
     });

@@ -18,6 +18,7 @@ let ingest: typeof import("./ingest.ts");
 let queries: typeof import("./queries.ts");
 let servicio: typeof import("../cash/service.ts");
 let tesoreria: typeof import("../cash/treasury.ts");
+let ingresosCaja: typeof import("../cash/bankdeposits.ts");
 let transporteCaja: typeof import("../cash/events/transport.ts");
 let workerCaja: typeof import("../cash/events/worker.ts");
 let TransporteLocal: typeof import("./transport.ts").TransporteLocal;
@@ -56,6 +57,7 @@ beforeAll(async () => {
   queries = await import("./queries.ts");
   servicio = await import("../cash/service.ts");
   tesoreria = await import("../cash/treasury.ts");
+  ingresosCaja = await import("../cash/bankdeposits.ts");
   transporteCaja = await import("../cash/events/transport.ts");
   workerCaja = await import("../cash/events/worker.ts");
   TransporteLocal = (await import("./transport.ts")).TransporteLocal;
@@ -65,6 +67,8 @@ beforeAll(async () => {
   await db.query(`DELETE FROM central_sessions WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_registers WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_transits WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_deposit_sources WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_bank_deposits WHERE empresa_id = $1`, [EMPRESA]);
 });
 
 afterAll(async () => {
@@ -352,5 +356,108 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
     } finally {
       transporteCaja.registrarTransporte(null);
     }
+  });
+
+  /*
+   * Fase 5: el ciclo completo de un ingreso bancario, de punta a punta.
+   *
+   * Lo que se demuestra es la ASIGNACIÓN DE ORIGEN: que el ingreso no llega a
+   * Central como un importe suelto, sino sabiendo de qué jornadas salió y
+   * cuánto puso cada una. Es lo que después permite conciliar con el extracto.
+   */
+  it("un ingreso llega con su origen desglosado y deja de estar pendiente", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'ingresos',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `ing-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      await db.query(`UPDATE cash_registers SET codigo = 'IN' || id WHERE id = $1`, [caja]);
+
+      // Un día que cobra 40 € y los aparta enteros para el banco.
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 1000, cantidad: 2 }],
+      });
+      await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 4000,
+        formasPago: [{ forma: "CASH", importe: 4000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 2 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 2 }, { valor: 1000, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        // El cambio se queda; los 40 € en billetes de 20 van al banco.
+        cambioFinal: [{ valor: 1000, cantidad: 2 }],
+      });
+      await vaciar();
+
+      // Antes de ingresar, ese dinero está pendiente y se ve.
+      const pendienteAntes = await queries.pendienteDeIngresar(EMPRESA);
+      const mioAntes = pendienteAntes.find((p) => p.registerId === caja);
+      expect(mioAntes?.centimos).toBe(4000);
+      expect(mioAntes?.jornadas).toBe(1);
+
+      const ingreso = await ingresosCaja.crearIngreso(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        importeCentimos: 4000,
+        referencia: "ABONO-123",
+      });
+      await vaciar();
+
+      const enRed = await queries.ingresosEnRed(EMPRESA, { registerId: caja });
+      const proyectado = enRed.find((i) => i.depositId === ingreso.id);
+      expect(proyectado).toBeTruthy();
+      expect(proyectado!.importeCentimos).toBe(4000);
+      expect(proyectado!.referencia).toBe("ABONO-123");
+
+      // La asignación de origen: de qué jornada salió y cuánto puso.
+      expect(proyectado!.origen).toHaveLength(1);
+      expect(proyectado!.origen[0].sessionId).toBe(sesion.id);
+      expect(proyectado!.origen[0].importeCentimos).toBe(4000);
+      expect(proyectado!.origen[0].fecha).toBe(sesion.fecha);
+
+      // Y deja de contarse como pendiente: ese dinero ya está en el banco.
+      const pendienteDespues = await queries.pendienteDeIngresar(EMPRESA);
+      expect(pendienteDespues.find((p) => p.registerId === caja)).toBeUndefined();
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * Un evento de la fase 3 —cuando el alta solo llevaba la lista de ids— tiene
+   * que poder ingerirse hoy. Los eventos son hechos del pasado: el formato
+   * puede crecer, pero lo ya escrito en la cola no se reescribe.
+   */
+  it("ingiere un evento con el formato viejo, sin desglose de origen", async () => {
+    const viejo = evento({
+      tipo: "BANK_DEPOSIT_CREATED",
+      aggregateType: "REGISTER",
+      aggregateId: 900001,
+      sessionId: null,
+      datos: { depositId: 987654, numero: "VIEJO-1", importeCentimos: 1500, cierres: [900001] },
+    });
+
+    expect(await ingest.ingerirEvento(viejo)).toBe("APLICADO");
+
+    const { rows } = await db.query(
+      `SELECT importe_centimos FROM central_bank_deposits WHERE deposit_id = 987654`
+    );
+    expect(Number(rows[0].importe_centimos)).toBe(1500);
+
+    // El origen queda con la jornada, sin importe: es lo que el evento sabía.
+    const { rows: fuentes } = await db.query(
+      `SELECT session_id, importe_centimos FROM central_deposit_sources WHERE deposit_id = 987654`
+    );
+    expect(fuentes).toHaveLength(1);
+    expect(fuentes[0].session_id).toBe(900001);
   });
 });

@@ -85,6 +85,9 @@ export async function ingerirEvento(evento: EventoParaEnviar): Promise<Resultado
   }
 }
 
+/** Los importes llegan en JSON, así que pueden venir como número o como texto. */
+const num = (v: unknown): number => (typeof v === "number" ? v : Number(v ?? 0));
+
 /** ¿Es el evento más nuevo que lo último aplicado a su agregado? */
 function esNuevo(evento: EventoParaEnviar, ultimaVersion: number | null): boolean {
   if (evento.aggregateVersion == null || ultimaVersion == null) return true;
@@ -116,7 +119,6 @@ async function proyectar(
   const nuevo = esNuevo(e, ultimaVersion);
 
   const d = e.datos ?? {};
-  const num = (v: unknown): number => (typeof v === "number" ? v : Number(v ?? 0));
 
   switch (e.tipo) {
     case "SESSION_OPENED":
@@ -336,6 +338,20 @@ async function proyectarCaja(
 
   const cierres = Array.isArray(d.cierres) ? (d.cierres as number[]) : [];
 
+  /*
+   * El desglose de origen: qué jornada puso cuánto.
+   *
+   * Se acepta también la forma vieja —solo la lista de ids en `cierres`— porque
+   * los eventos ya emitidos ANTES de esta fase siguen en la cola y hay que
+   * poder ingerirlos. Un evento es un hecho del pasado: el formato puede
+   * crecer, pero lo ya escrito no se reescribe. De ahí que se lea lo que haya y
+   * se rellene con lo que falte.
+   */
+  const origen: { sessionId: number; fecha: string | null; importeCentimos: number }[] =
+    Array.isArray(d.origen)
+      ? (d.origen as { sessionId: number; fecha: string | null; importeCentimos: number }[])
+      : cierres.map((id) => ({ sessionId: id, fecha: null, importeCentimos: 0 }));
+
   if (e.tipo === "BANK_DEPOSIT_CREATED") {
     await client.query(
       `UPDATE central_registers
@@ -355,6 +371,42 @@ async function proyectarCaja(
         `UPDATE central_sessions SET conciliada = true, actualizado_en_ms = $2
           WHERE session_id = ANY($1::int[])`,
         [cierres, ahora]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO central_bank_deposits
+         (deposit_id, empresa_id, centro_id, register_id, numero, fecha, referencia,
+          importe_centimos, total_cierres_centimos, remanente_anterior_centimos,
+          remanente_nuevo_centimos, estado, creado_en_ms, actualizado_en_ms)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'CONFIRMADO',$12,$13)
+       ON CONFLICT (deposit_id) DO UPDATE
+         SET estado = 'CONFIRMADO', anulado_motivo = NULL, anulado_en_ms = NULL,
+             actualizado_en_ms = EXCLUDED.actualizado_en_ms`,
+      [
+        Number(d.depositId ?? 0),
+        e.empresaId,
+        e.centroId,
+        e.registerId,
+        d.numero ?? null,
+        d.fecha ?? null,
+        d.referencia ?? null,
+        importe,
+        num(d.totalCierresCentimos),
+        num(d.remanenteAnteriorCentimos),
+        num(d.remanenteNuevoCentimos),
+        e.ocurridoEnMs,
+        ahora,
+      ]
+    );
+
+    for (const o of origen) {
+      await client.query(
+        `INSERT INTO central_deposit_sources
+           (deposit_id, session_id, empresa_id, fecha, importe_centimos)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (deposit_id, session_id) DO NOTHING`,
+        [Number(d.depositId ?? 0), o.sessionId, e.empresaId, o.fecha ?? null, o.importeCentimos]
       );
     }
   } else if (e.tipo === "BANK_DEPOSIT_VOIDED") {
@@ -378,6 +430,18 @@ async function proyectarCaja(
         [cierres, ahora]
       );
     }
+
+    /*
+     * El ingreso se marca anulado, no se borra, y su desglose de origen se
+     * queda: es la misma regla que aplica la caja. Lo que existió consta, y lo
+     * que cambia es que deja de contar.
+     */
+    await client.query(
+      `UPDATE central_bank_deposits
+          SET estado = 'ANULADO', anulado_motivo = $2, anulado_en_ms = $3, actualizado_en_ms = $3
+        WHERE deposit_id = $1`,
+      [Number(d.depositId ?? 0), d.motivo ?? null, ahora]
+    );
   }
 
   return "APLICADO";

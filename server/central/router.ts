@@ -16,7 +16,9 @@ import { authenticate, requireModule } from "../core/auth.ts";
 import { cargarPermisosCentral, exigirPermiso } from "./permissions.ts";
 import {
   cajasEnRed,
+  ingresosEnRed,
   jornadasEnRed,
+  pendienteDeIngresar,
   posicionGlobal,
   resumenRed,
   transitosAbiertos,
@@ -77,6 +79,30 @@ export function createCentralRouter(): Router {
         transitosAbiertos(empresaId),
       ]);
       res.json({ posicion, transitos });
+    })
+  );
+
+  /**
+   * El ciclo de ingresos: lo ingresado con su origen, y lo que falta por ir.
+   *
+   * Van juntos porque son las dos caras de lo mismo. Un listado de ingresos sin
+   * lo pendiente deja fuera precisamente lo que hay que mirar: el dinero que
+   * sigue en la tienda.
+   */
+  r.get(
+    "/deposits",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const empresaId = req.authCtx!.empresaId;
+      const q = req.query;
+      const [ingresos, pendiente] = await Promise.all([
+        ingresosEnRed(empresaId, {
+          centroId: typeof q.centroId === "string" ? q.centroId : null,
+          registerId: typeof q.registerId === "string" ? Number(q.registerId) : null,
+        }),
+        pendienteDeIngresar(empresaId),
+      ]);
+      res.json({ ingresos, pendiente });
     })
   );
 

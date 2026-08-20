@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { Building2, CalendarDays, Network, Wallet } from "lucide-react";
+import { Building2, CalendarDays, Landmark, Network, Wallet } from "lucide-react";
 import {
   Card,
   EmptyRow,
@@ -50,6 +50,9 @@ export default function CentralApp() {
           <NavLink to="/central/posicion" className={enlace}>
             <Wallet size={15} /> Posición de efectivo
           </NavLink>
+          <NavLink to="/central/ingresos" className={enlace}>
+            <Landmark size={15} /> Ingresos
+          </NavLink>
           <NavLink to="/central/jornadas" className={enlace}>
             <CalendarDays size={15} /> Jornadas
           </NavLink>
@@ -62,6 +65,7 @@ export default function CentralApp() {
           <Route index element={<Navigate to="red" replace />} />
           <Route path="red" element={<Red />} />
           <Route path="posicion" element={<Posicion />} />
+          <Route path="ingresos" element={<Ingresos />} />
           <Route path="jornadas" element={<Jornadas />} />
           <Route path="organizacion" element={<Organizacion />} />
           <Route path="*" element={<Navigate to="red" replace />} />
@@ -258,6 +262,153 @@ function Posicion() {
           ))}
         </tbody>
       </TableWrap>
+    </div>
+  );
+}
+
+// ── Ingresos bancarios ─────────────────────────────────────────────────────
+
+/**
+ * El ciclo de ingresos: lo que ya está en el banco y lo que sigue en la tienda.
+ *
+ * Lo pendiente va ARRIBA a propósito. Un listado de ingresos es historia; el
+ * dinero que lleva tres semanas esperando en un cajón es lo que hay que mirar
+ * hoy, y si estuviera debajo de doscientas filas no lo miraría nadie.
+ */
+function Ingresos() {
+  const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.ingresos>> | null>(null);
+  const [abierto, setAbierto] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  const cargar = useCallback(async () => {
+    try {
+      setDatos(await api.ingresos());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando los ingresos");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  if (error) return <ErrorBox>{error}</ErrorBox>;
+  const pendiente = datos?.pendiente ?? [];
+  const totalPendiente = pendiente.reduce((a, p) => a + p.centimos, 0);
+
+  return (
+    <div className="space-y-5">
+      <section className="space-y-2">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Pendiente de llevar al banco · {euros(totalPendiente)}
+        </h2>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={thCls}>Taller</th>
+              <th className={thCls}>Caja</th>
+              <th className={`${thCls} text-right`}>Jornadas</th>
+              <th className={thCls}>Desde</th>
+              <th className={`${thCls} text-right`}>Importe</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pendiente.length === 0 && (
+              <EmptyRow cols={5} text="No hay nada esperando: todos los cierres están ingresados." />
+            )}
+            {pendiente.map((p) => (
+              <tr key={p.registerId} className="border-t border-slate-700">
+                <td className={tdCls}>
+                  {p.centro ?? <span className="text-amber-400">sin taller</span>}
+                </td>
+                <td className={tdCls}>{p.caja ?? `#${p.registerId}`}</td>
+                <td className={`${tdCls} text-right tabular-nums`}>{p.jornadas}</td>
+                <td className={tdCls}>
+                  {p.desde ?? "—"}
+                  {/*
+                    * 400 € esperando desde ayer es lo normal. Los mismos 400 €
+                    * desde hace tres semanas son dinero en el cajón de una
+                    * tienda, y eso ya es otra cosa.
+                    */}
+                  {(p.dias ?? 0) > 7 && (
+                    <span className="ml-2 text-amber-400">{p.dias} días</span>
+                  )}
+                </td>
+                <td className={`${tdCls} text-right tabular-nums`}>{euros(p.centimos)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Ingresos registrados
+        </h2>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={thCls}>Número</th>
+              <th className={thCls}>Fecha</th>
+              <th className={thCls}>Caja</th>
+              <th className={thCls}>Referencia</th>
+              <th className={`${thCls} text-right`}>Importe</th>
+              <th className={thCls}>Origen</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(datos?.ingresos ?? []).length === 0 && (
+              <EmptyRow cols={6} text="Todavía no se ha registrado ningún ingreso." />
+            )}
+            {(datos?.ingresos ?? []).map((i) => (
+              <tr key={i.depositId} className="border-t border-slate-700 align-top">
+                <td className={`${tdCls} font-mono text-[11px]`}>
+                  {i.numero ?? `#${i.depositId}`}
+                  {i.estado === "ANULADO" && (
+                    <span className="ml-2 text-rose-400" title={i.anuladoMotivo ?? ""}>
+                      anulado
+                    </span>
+                  )}
+                </td>
+                <td className={tdCls}>{i.fecha ?? "—"}</td>
+                <td className={tdCls}>
+                  {i.caja ?? "—"}
+                  {i.centro && <span className="ml-2 text-[11px] text-slate-500">{i.centro}</span>}
+                </td>
+                <td className={`${tdCls} text-[11px]`}>{i.referencia ?? "—"}</td>
+                <td
+                  className={`${tdCls} text-right tabular-nums ${
+                    i.estado === "ANULADO" ? "text-slate-500 line-through" : ""
+                  }`}
+                >
+                  {euros(i.importeCentimos)}
+                </td>
+                <td className={tdCls}>
+                  {/*
+                    * El desglose es lo que permite conciliar: cuando el banco
+                    * apunta un abono, hay que poder decir de qué días salió.
+                    */}
+                  <button
+                    className="text-[11px] text-sky-400 hover:underline"
+                    onClick={() => setAbierto(abierto === i.depositId ? null : i.depositId)}
+                  >
+                    {i.origen.length} jornada{i.origen.length === 1 ? "" : "s"}
+                  </button>
+                  {abierto === i.depositId && (
+                    <ul className="mt-1 space-y-0.5">
+                      {i.origen.map((o) => (
+                        <li key={o.sessionId} className="text-[11px] text-slate-400">
+                          {o.fecha ?? `#${o.sessionId}`} · {euros(o.importeCentimos)}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+      </section>
     </div>
   );
 }
