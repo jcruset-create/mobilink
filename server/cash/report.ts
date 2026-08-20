@@ -97,6 +97,36 @@ type Composicion = {
   sacos: LineaDenominacion[];
 };
 
+/**
+ * Fotos del catálogo, descargadas para incrustar.
+ *
+ * Las fotos de billetes y monedas viven en Storage como PNG públicos; aquí se
+ * bajan una vez por informe y se pintan en la hoja del arqueo, que así queda
+ * con la misma pinta que el formulario de Genes donde se van a teclear los
+ * números. Cualquier fallo —foto borrada, red caída, URL vieja— deja esa
+ * denominación con su etiqueta de texto y el informe sale igual: un PDF sin
+ * fotos es útil; un PDF que no se genera, no.
+ */
+async function imagenesDelCatalogo(
+  denominaciones: readonly { valor: number; imagenUrl: string | null }[]
+): Promise<Map<number, Buffer>> {
+  const imagenes = new Map<number, Buffer>();
+  await Promise.all(
+    denominaciones
+      .filter((d) => d.imagenUrl && /^https?:/.test(d.imagenUrl))
+      .map(async (d) => {
+        try {
+          const r = await fetch(d.imagenUrl!, { signal: AbortSignal.timeout(4000) });
+          if (!r.ok) return;
+          imagenes.set(d.valor, Buffer.from(await r.arrayBuffer()));
+        } catch {
+          /* sin foto: la etiqueta manda */
+        }
+      })
+  );
+  return imagenes;
+}
+
 /** Genera el informe entero. Devuelve el PDF listo para descargar. */
 export async function informeCierre(empresaId: string, sessionId: number): Promise<Buffer> {
   const detalle = await detalleJornada(sessionId);
@@ -124,6 +154,8 @@ export async function informeCierre(empresaId: string, sessionId: number): Promi
   const piezasBolsaDe = (valor: number) =>
     denominaciones.find((d) => d.valor === valor)?.piezasPorBolsa ?? 0;
 
+  const imagenes = await imagenesDelCatalogo(denominaciones);
+
   const portada = await construirPortada({
     detalle,
     caja: caja.rows[0] ?? null,
@@ -132,6 +164,8 @@ export async function informeCierre(empresaId: string, sessionId: number): Promi
     ingreso,
     conteos,
     documentos: documentos.length,
+    denominaciones,
+    imagenes,
     etiquetaDe,
     piezasDe,
     piezasBolsaDe,
@@ -151,6 +185,8 @@ async function construirPortada(d: {
   ingreso: Composicion;
   conteos: Map<number, number>;
   documentos: number;
+  denominaciones: import("./domain/denominations.ts").Denominacion[];
+  imagenes: Map<number, Buffer>;
   etiquetaDe: (valor: number) => string;
   piezasDe: (valor: number) => number;
   piezasBolsaDe: (valor: number) => number;
@@ -187,17 +223,24 @@ async function construirPortada(d: {
   doc.fillColor(TINTA).font("Helvetica").fontSize(10);
   doc.y = 78;
 
+  /*
+   * Título de sección: una banda gris con una pestaña azul marino delante, el
+   * mismo azul de la cabecera. La rayita fina de antes se perdía entre las
+   * filas de las tablas y el informe parecía un único listado sin cortes.
+   */
   const titulo = (texto: string) => {
     if (doc.y > doc.page.height - 120) doc.addPage();
     doc.moveDown(0.6);
-    doc.font("Helvetica-Bold").fontSize(11).fillColor(TINTA).text(texto);
+    const y = doc.y;
+    doc.rect(M, y, ancho, 18).fill("#eef2f7");
+    doc.rect(M, y, 3, 18).fill("#101a33");
     doc
-      .moveTo(M, doc.y + 2)
-      .lineTo(M + ancho, doc.y + 2)
-      .strokeColor("#cbd5e1")
-      .stroke();
-    doc.moveDown(0.5);
-    doc.font("Helvetica").fontSize(10);
+      .font("Helvetica-Bold")
+      .fontSize(10)
+      .fillColor(TINTA)
+      .text(texto.toUpperCase(), M + 10, y + 5, { width: ancho - 20, lineBreak: false });
+    doc.y = y + 24;
+    doc.font("Helvetica").fontSize(10).fillColor(TINTA);
   };
 
   const fila = (izq: string, der: string, destacado = false) => {
@@ -338,11 +381,19 @@ async function construirPortada(d: {
     for (const t of piezas.tubos) de(t.valor).tubos += t.cantidad;
     for (const b of piezas.sacos) de(b.valor).sacos += b.cantidad;
 
+    let par = false;
     for (const [valor, f] of [...porValor.entries()].sort((a, b) => b[0] - a[0])) {
       const importe =
         valor * f.sueltas +
         valor * f.tubos * d.piezasDe(valor) +
         valor * f.sacos * d.piezasBolsaDe(valor);
+      // Cebra: sin ella, en una tabla de quince filas el ojo se cambia de
+      // renglón entre la denominación y su importe.
+      if (par) {
+        doc.rect(M, doc.y - 1.5, ancho, 12).fill("#f5f7fa");
+        doc.fillColor(TINTA);
+      }
+      par = !par;
       // La celda a cero va en blanco, como en una hoja hecha a mano: el ojo
       // salta directo a lo que hay, sin vadear ceros.
       filaPiezas([
@@ -376,10 +427,16 @@ async function construirPortada(d: {
   /*
    * Hoja aparte: lo que había en el cajón ANTES de repartirlo.
    *
-   * Es el contado del arqueo con su desglose, y va en su propia página porque
-   * es la que se lleva uno para pasar la cifra a Genes. Metida entre el cambio
-   * final y el ingreso —que son justo las dos mitades en las que se parte
-   * después— habría que ir buscándola.
+   * Con la MISMA distribución que el formulario «Nuevo Arqueo» de Genes,
+   * porque esta hoja existe para teclear sus números allí: monedas a la
+   * izquierda y billetes a la derecha, de menor a mayor, cada una con su foto,
+   * su número de piezas y su importe, y el total en grande abajo. Si el papel
+   * va en otro orden que la pantalla, el que transcribe salta de fila en fila
+   * y ahí es donde se cuela un dedo.
+   *
+   * El número de piezas es el TOTAL de la denominación —sueltas más lo que hay
+   * dentro de cartuchos y bolsas— que es lo que pide Genes («debe contar todo
+   * el dinero»). Cuando hay envases, el desglose va debajo en pequeño.
    */
   const arqueo = detalle.ultimoArqueo;
   if (arqueo) {
@@ -388,23 +445,145 @@ async function construirPortada(d: {
       .font("Helvetica-Bold")
       .fontSize(16)
       .fillColor(TINTA)
-      .text("Efectivo en caja antes del cierre", M, doc.y);
+      .text("Arqueo para Genes", M, doc.y);
     doc.moveDown(0.2);
     doc
       .font("Helvetica")
       .fontSize(10)
       .fillColor(GRIS)
       .text(
-        "Lo que había en el cajón al arquear, antes de apartar el cambio de mañana y el ingreso bancario.",
+        "Lo que había en el cajón al arquear, antes de apartar el cambio de mañana y el ingreso bancario. En el mismo orden que el formulario de arqueo de Genes.",
         { width: ancho }
       );
-    doc.moveDown(0.6);
+    doc.moveDown(0.8);
 
-    composicion("Recuento del arqueo", arqueo.totalCentimos, {
-      sueltas: arqueo.sueltas,
-      tubos: arqueo.cartuchos,
-      sacos: arqueo.bolsas,
-    });
+    // Piezas totales por denominación: sueltas + envases convertidos.
+    const piezasTotales = new Map<number, number>();
+    const envasesDe = new Map<number, string[]>();
+    const sumar = (valor: number, n: number) =>
+      piezasTotales.set(valor, (piezasTotales.get(valor) ?? 0) + n);
+    for (const l of arqueo.sueltas) sumar(l.valor, l.cantidad);
+    for (const t of arqueo.cartuchos) {
+      sumar(t.valor, t.cantidad * d.piezasDe(t.valor));
+      const nota = envasesDe.get(t.valor) ?? [];
+      nota.push(`${t.cantidad} ${t.cantidad === 1 ? "cartucho" : "cartuchos"} de ${d.piezasDe(t.valor)}`);
+      envasesDe.set(t.valor, nota);
+    }
+    for (const b of arqueo.bolsas) {
+      sumar(b.valor, b.cantidad * d.piezasBolsaDe(b.valor));
+      const nota = envasesDe.get(b.valor) ?? [];
+      nota.push(`${b.cantidad} ${b.cantidad === 1 ? "bolsa" : "bolsas"} de ${d.piezasBolsaDe(b.valor)}`);
+      envasesDe.set(b.valor, nota);
+    }
+
+    // Todas las denominaciones activas, de MENOR a mayor, como en Genes.
+    // También las que están a cero: la hoja calca el formulario fila a fila.
+    const activas = d.denominaciones.filter((den) => den.activa);
+    const monedas = activas.filter((den) => den.tipo === "MONEDA").sort((a, b) => a.valor - b.valor);
+    const billetes = activas.filter((den) => den.tipo === "BILLETE").sort((a, b) => a.valor - b.valor);
+
+    const colAncho = (ancho - 24) / 2;
+    const filaGenes = (den: (typeof activas)[number], x: number, y: number): number => {
+      const piezas = piezasTotales.get(den.valor) ?? 0;
+      const importe = piezas * den.valor;
+      const notas = envasesDe.get(den.valor);
+      // La fila crece cuando lleva la nota del envase debajo: con altura fija
+      // el «incluye 1 bolsa de 100» se montaba encima de la casilla siguiente.
+      const alto = notas && piezas > 0 ? 38 : 30;
+
+      // La foto —o la etiqueta, si no la hay— identifica la fila, como en Genes.
+      const foto = d.imagenes.get(den.valor);
+      if (foto) {
+        try {
+          doc.image(foto, x, y + 2, { fit: [34, 22] });
+        } catch {
+          /* PNG corrupto: cae a la etiqueta */
+        }
+      }
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(10)
+        .fillColor(TINTA)
+        .text(den.etiqueta, x + 40, y + 8, { width: 44, lineBreak: false });
+
+      // La casilla con el número de piezas, como la celda donde se teclea.
+      const cx = x + 88;
+      doc.roundedRect(cx, y + 2, 44, 20, 3).lineWidth(0.8).strokeColor("#94a3b8").stroke();
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(11)
+        .fillColor(piezas > 0 ? TINTA : "#b6c0cc")
+        .text(String(piezas), cx, y + 8, { width: 44, align: "center", lineBreak: false });
+
+      doc.font("Helvetica").fontSize(10).fillColor(GRIS).text("=", cx + 50, y + 8, { lineBreak: false });
+
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(10)
+        .fillColor(piezas > 0 ? TINTA : "#b6c0cc")
+        .text(eur(importe), cx + 60, y + 8, {
+          width: colAncho - (cx - x) - 60,
+          align: "right",
+          lineBreak: false,
+        });
+
+      if (notas && piezas > 0) {
+        doc
+          .font("Helvetica")
+          .fontSize(7)
+          .fillColor(GRIS)
+          .text(`incluye ${notas.join(" y ")}`, x + 40, y + 25, {
+            width: colAncho - 40,
+            lineBreak: false,
+          });
+      }
+      return y + alto;
+    };
+
+    const cabeceraCol = (texto: string, x: number, y: number) => {
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(9)
+        .fillColor(GRIS)
+        .text(texto.toUpperCase(), x, y, { lineBreak: false });
+      doc
+        .moveTo(x, y + 13)
+        .lineTo(x + colAncho, y + 13)
+        .lineWidth(0.8)
+        .strokeColor("#cbd5e1")
+        .stroke();
+    };
+
+    const yInicio = doc.y;
+    cabeceraCol("Monedas", M, yInicio);
+    cabeceraCol("Billetes", M + colAncho + 24, yInicio);
+
+    let yMon = yInicio + 20;
+    for (const den of monedas) yMon = filaGenes(den, M, yMon);
+    let yBil = yInicio + 20;
+    for (const den of billetes) yBil = filaGenes(den, M + colAncho + 24, yBil);
+
+    doc.y = Math.max(yMon, yBil) + 10;
+
+    // El total en grande, como el «Total:» del formulario.
+    const yTotal = doc.y;
+    doc.roundedRect(M + ancho - 240, yTotal, 240, 34, 4).fill("#eef2f7");
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .fillColor(GRIS)
+      .text("Total:", M + ancho - 228, yTotal + 10, { lineBreak: false });
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(16)
+      .fillColor(TINTA)
+      .text(eur(arqueo.totalCentimos), M + ancho - 240, yTotal + 9, {
+        width: 228,
+        align: "right",
+        lineBreak: false,
+      });
+    doc.y = yTotal + 42;
+    doc.font("Helvetica").fontSize(10).fillColor(TINTA);
 
     /*
      * En qué se repartió, para que la hoja se explique sola. Solo si la
@@ -617,16 +796,20 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   doc.fillColor(TINTA).font("Helvetica").fontSize(10);
   doc.y = 78;
 
+  // Mismo título de banda que el informe de cierre: los dos papeles salen de
+  // la misma impresora y se archivan juntos, así que visten igual.
   const titulo = (texto: string) => {
     doc.moveDown(0.6);
-    doc.font("Helvetica-Bold").fontSize(11).fillColor(TINTA).text(texto, M);
+    const y = doc.y;
+    doc.rect(M, y, ancho, 18).fill("#eef2f7");
+    doc.rect(M, y, 3, 18).fill("#101a33");
     doc
-      .moveTo(M, doc.y + 2)
-      .lineTo(M + ancho, doc.y + 2)
-      .strokeColor("#cbd5e1")
-      .stroke();
-    doc.moveDown(0.5);
-    doc.font("Helvetica").fontSize(10);
+      .font("Helvetica-Bold")
+      .fontSize(10)
+      .fillColor(TINTA)
+      .text(texto.toUpperCase(), M + 10, y + 5, { width: ancho - 20, lineBreak: false });
+    doc.y = y + 24;
+    doc.font("Helvetica").fontSize(10).fillColor(TINTA);
   };
 
   const fila = (izq: string, der: string, destacado = false) => {
