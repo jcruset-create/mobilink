@@ -97,6 +97,25 @@ const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.strin
 
 export const bootstrap = () => pedir<Bootstrap>("/bootstrap");
 
+// ── Cola de eventos hacia MC Central ───────────────────────────────────────
+
+export type ColaEventos = {
+  resumen: { estado: string; total: number }[];
+  muertos: {
+    id: string;
+    eventId: string;
+    tipo: string;
+    ocurridoEnMs: number;
+    intentos: number;
+    lastError: string | null;
+  }[];
+};
+
+export const colaEventos = () => pedir<ColaEventos>("/events");
+
+export const reintentarEventos = () =>
+  pedir<{ reencolados: number; tratados: number }>("/events/retry", json({}));
+
 // ── Jerarquía: zonas y talleres ────────────────────────────────────────────
 
 /**

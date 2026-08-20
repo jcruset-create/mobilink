@@ -10,8 +10,9 @@ import type { Express } from "express";
 import { initCash } from "./schema.ts";
 import { createCashRouter } from "./router.ts";
 import { startCashErpWorker, stopCashErpWorker } from "./erp/worker.ts";
+import { startCashEventWorker } from "./events/worker.ts";
 
-export { initCash, startCashErpWorker, stopCashErpWorker };
+export { initCash, startCashErpWorker, stopCashErpWorker, startCashEventWorker };
 
 export function mountCash(app: Express): void {
   app.use("/api/cash", createCashRouter());
