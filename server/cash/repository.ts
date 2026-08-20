@@ -464,32 +464,56 @@ const PREFIJO_POR_TIPO: Partial<Record<TipoOperacion, string>> = {
 };
 
 /**
- * Número propio de Mobilink Cash: `MC-C-2026-000042`.
+ * Número propio de Mobilink Cash: `TAR1-C-26-042`.
+ *
+ * Cuatro trozos, y cada uno hace falta:
+ *
+ *  · `TAR1` — el código de la CAJA, que se configura en Configuración. Es lo
+ *    que permite conciliar un ingreso contra el extracto del banco: dice de
+ *    qué caja salió el dinero, no solo de qué taller. Va delante porque es por
+ *    donde se ordena y por donde se agrupa al mirar el extracto.
+ *  · `C` — el tipo de documento (cobro, pago, ingreso bancario…).
+ *  · `26` — el año en dos cifras. La serie se reinicia cada ejercicio.
+ *  · `042` — el contador dentro de esa caja, ese tipo y ese año.
+ *
+ * El formato anterior era `MC-C-2026-000042`: el `MC` era fijo y no decía
+ * nada, y el contador era único para TODA la instalación, así que dos cajas
+ * del mismo taller compartían serie y el número no distinguía de cuál venía el
+ * dinero. El histórico se renumeró a este formato en la migración.
+ *
+ * El relleno a tres cifras es un mínimo, no un tope: el documento 1.234 sale
+ * como `TAR1-C-26-1234`. Preferimos un número largo a una serie que se agota.
  *
  * No depende de ningún número que dé la ERP, porque en modo autónomo no hay
  * ERP. Mismo mecanismo que `nextDocumentNumber()` del Integration Hub: un
  * UPSERT con RETURNING, que es atómico y no necesita bloqueo explícito.
- *
- * El contador es por tipo y año, así que la serie se reinicia cada ejercicio.
  */
 export async function siguienteNumero(
   client: PoolClient,
+  sessionId: number,
   tipo: TipoOperacion,
   anio: number
 ): Promise<string> {
-  return siguienteNumeroDe(client, PREFIJO_POR_TIPO[tipo] ?? "X", anio);
+  return siguienteNumeroDe(
+    client,
+    await codigoDeSesion(client, sessionId),
+    PREFIJO_POR_TIPO[tipo] ?? "X",
+    anio
+  );
 }
 
 /**
  * El mismo contador para documentos que no son operaciones: los pedidos de
- * cambio al banco (`CB`) y las entregas de dinero a personas (`EN`).
+ * cambio al banco (`CB`), las entregas de dinero a personas (`EN`) y los
+ * ingresos bancarios (`IB`).
  */
 export async function siguienteNumeroDe(
   client: PoolClient,
+  codigo: string,
   prefijo: string,
   anio: number
 ): Promise<string> {
-  const clave = `${prefijo}:${anio}`;
+  const clave = `${codigo}:${prefijo}:${anio}`;
   const { rows } = await client.query<{ last_seq: number }>(
     `INSERT INTO cash_document_counters (clave, last_seq)
      VALUES ($1, 1)
@@ -497,7 +521,36 @@ export async function siguienteNumeroDe(
      RETURNING last_seq`,
     [clave]
   );
-  return `MC-${prefijo}-${anio}-${String(rows[0].last_seq).padStart(6, "0")}`;
+  const aa = String(anio % 100).padStart(2, "0");
+  return `${codigo}-${prefijo}-${aa}-${String(rows[0].last_seq).padStart(3, "0")}`;
+}
+
+/**
+ * Código de una caja, con red de seguridad.
+ *
+ * Una caja sin código todavía —recién creada, o creada antes de que existiera
+ * la columna— numera como `MC`. Es feo, pero es infinitamente preferible a que
+ * no se pueda registrar un cobro porque falta un dato de configuración: el
+ * mostrador no puede pararse por eso. Configuración avisa de las que están sin
+ * código.
+ */
+export async function codigoDeCaja(client: PoolClient, registerId: number): Promise<string> {
+  const { rows } = await client.query<{ codigo: string }>(
+    `SELECT codigo FROM cash_registers WHERE id = $1`,
+    [registerId]
+  );
+  return rows[0]?.codigo || "MC";
+}
+
+/** El de la caja a la que pertenece una jornada. */
+export async function codigoDeSesion(client: PoolClient, sessionId: number): Promise<string> {
+  const { rows } = await client.query<{ codigo: string }>(
+    `SELECT r.codigo
+       FROM cash_sessions s JOIN cash_registers r ON r.id = s.register_id
+      WHERE s.id = $1`,
+    [sessionId]
+  );
+  return rows[0]?.codigo || "MC";
 }
 
 // ── Operaciones ────────────────────────────────────────────────────────────

@@ -258,7 +258,7 @@ function DetalleJornada({
               </span>
               {/* Todo el papeleo del día en un PDF, con los escaneos dentro. */}
               <BotonInforme
-                sessionId={sessionId}
+                ruta={`/sessions/${sessionId}/report.pdf`}
                 nombre={`cierre-${(datos?.sesion.fecha ?? String(sessionId)).slice(0, 10)}`}
                 className="flex items-center gap-1 rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-600 disabled:opacity-50"
               >

@@ -19,6 +19,7 @@ import { PiggyBank, Undo2 } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import {
   Aviso,
+  BotonInforme,
   BotonAccion,
   Cabecera,
   Card,
@@ -121,9 +122,22 @@ export default function IngresosBancarios() {
 
       {ultimoCreado && (
         <Aviso tono="bien">
-          Ingreso <strong>{ultimoCreado.numero}</strong> registrado:{" "}
-          <strong>{euros(ultimoCreado.importeCentimos)}</strong> al banco y{" "}
-          <strong>{euros(ultimoCreado.remanenteNuevoCentimos)}</strong> de remanente en tienda.
+          <div className="flex flex-wrap items-center gap-2">
+            <span>
+              Ingreso <strong>{ultimoCreado.numero}</strong> registrado:{" "}
+              <strong>{euros(ultimoCreado.importeCentimos)}</strong> al banco y{" "}
+              <strong>{euros(ultimoCreado.remanenteNuevoCentimos)}</strong> de remanente en tienda.
+            </span>
+            {/* El resguardo se imprime AHORA, que es cuando se mete el dinero
+                en la bolsa y se le da a quien lo lleva. */}
+            <BotonInforme
+              ruta={`/bank-deposits/${ultimoCreado.id}/report.pdf`}
+              nombre={`ingreso-${ultimoCreado.numero}`}
+              className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500"
+            >
+              Resguardo para el banco
+            </BotonInforme>
+          </div>
         </Aviso>
       )}
 
@@ -281,6 +295,7 @@ function PrepararIngreso({
     observaciones?: string;
   }) => Promise<void>;
 }) {
+  const { refrescar } = useCash();
   const totalCierres = seleccionados.reduce((a, c) => a + c.importeCentimos, 0);
   const disponible = remanenteAnterior + totalCierres;
 
@@ -323,7 +338,14 @@ function PrepararIngreso({
       // Si falla, la pantalla sigue siendo usable con el importe a mano.
       setPropuesta(null);
     }
-  }, [registerId, claveSeleccion]);
+    /*
+     * Y la jornada compartida: el canje acaba de mover el cajón de verdad
+     * (sale el billete, entran las monedas), así que el stock que pintan las
+     * demás pantallas y la cabecera tiene que enterarse ya, no en la próxima
+     * navegación.
+     */
+    await refrescar();
+  }, [registerId, claveSeleccion, refrescar]);
 
   useEffect(() => {
     void recargarPropuesta();
@@ -479,10 +501,11 @@ function Historial({
             <th className={`${thCls} text-right`}>Ingresado</th>
             <th className={`${thCls} text-right`}>Remanente</th>
             <th className={thCls}>Estado</th>
+            <th className={thCls}></th>
           </tr>
         </thead>
         <tbody>
-          {ingresos.length === 0 && <EmptyRow cols={6} text="Todavía no se ha registrado ningún ingreso." />}
+          {ingresos.length === 0 && <EmptyRow cols={7} text="Todavía no se ha registrado ningún ingreso." />}
           {ingresos.map((i) => (
             <>
               <tr
@@ -510,10 +533,19 @@ function Historial({
                     </span>
                   )}
                 </td>
+                <td className={tdCls} onClick={(e) => e.stopPropagation()}>
+                  <BotonInforme
+                    ruta={`/bank-deposits/${i.id}/report.pdf`}
+                    nombre={`ingreso-${i.numero}`}
+                    className="flex items-center gap-1 rounded-lg bg-slate-700 px-2 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-600"
+                  >
+                    Resguardo
+                  </BotonInforme>
+                </td>
               </tr>
               {abierto === i.id && (
                 <tr key={`${i.id}-detalle`}>
-                  <td colSpan={6} className="bg-slate-900/40 px-4 py-3">
+                  <td colSpan={7} className="bg-slate-900/40 px-4 py-3">
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div>
                         <div className="mb-1 text-[10px] font-semibold uppercase text-slate-400">

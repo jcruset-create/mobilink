@@ -28,7 +28,7 @@ import * as config from "./config.ts";
 import * as tesoreria from "./treasury.ts";
 import * as documentos from "./documents.ts";
 import * as ingresos from "./bankdeposits.ts";
-import { informeCierre } from "./report.ts";
+import { informeCierre, informeIngreso } from "./report.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 
@@ -269,7 +269,7 @@ export function createCashRouter(): Router {
         cargarDenominaciones(pool, true),
         config.listarFormasPago(empresaId),
         pool.query(
-          `SELECT id, centro, nombre, fondo_objetivo_centimos FROM cash_registers
+          `SELECT id, centro, nombre, codigo, fondo_objetivo_centimos FROM cash_registers
             WHERE empresa_id = $1 AND activa = true ORDER BY centro, nombre`,
           [empresaId]
         ),
@@ -313,6 +313,7 @@ export function createCashRouter(): Router {
       const caja = await config.crearCaja(contexto(req), {
         nombre: typeof b.nombre === "string" ? b.nombre : "",
         centro: typeof b.centro === "string" ? b.centro : "",
+        codigo: typeof b.codigo === "string" ? b.codigo : undefined,
       });
       res.status(201).json({ caja });
     })
@@ -326,6 +327,7 @@ export function createCashRouter(): Router {
       const caja = await config.actualizarCaja(contexto(req), enteroPositivo(req.params.id, "id"), {
         nombre: typeof b.nombre === "string" ? b.nombre : undefined,
         centro: typeof b.centro === "string" ? b.centro : undefined,
+        codigo: typeof b.codigo === "string" ? b.codigo : undefined,
         activa: typeof b.activa === "boolean" ? b.activa : undefined,
         fondoObjetivoCentimos:
           b.fondoObjetivoCentimos === undefined
@@ -726,6 +728,26 @@ export function createCashRouter(): Router {
   );
 
   // ── Ingresos bancarios ───────────────────────────────────────────────────
+
+  /**
+   * Resguardo del ingreso: la hoja que va con el dinero.
+   *
+   * Se le da a quien lo lleva al banco, así que la ve cualquiera que pueda ver
+   * la caja: pedir permiso de configuración para imprimir un papel que va
+   * dentro de la bolsa dejaría el trámite parado esperando a un jefe.
+   */
+  r.get(
+    "/bank-deposits/:id/report.pdf",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const depositId = enteroPositivo(req.params.id, "id");
+      const pdf = await informeIngreso(req.authCtx!.empresaId, depositId);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="ingreso-${depositId}.pdf"`);
+      res.send(pdf);
+    })
+  );
+
 
   /** Pendientes, remanente e historial de la caja: la pantalla en una llamada. */
   r.get(

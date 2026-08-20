@@ -203,7 +203,7 @@ function FragmentoJornada({
             )}
             {cerrada ? (
               <BotonInforme
-                sessionId={sesion.id}
+                ruta={`/sessions/${sesion.id}/report.pdf`}
                 nombre={`cierre-${(sesion.fecha ?? "").slice(0, 10)}`}
                 className={`${botonCls} disabled:opacity-50`}
               />

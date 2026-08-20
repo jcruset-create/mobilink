@@ -8,8 +8,8 @@
  * quien está en el mostrador.
  */
 
-import { useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Menu, Home, CircleDot } from "lucide-react";
 import logoCash from "../../../assets/logo-cash.png";
 import { useCash } from "../contexts/CashContext";
@@ -17,9 +17,28 @@ import { NAV, navVisible } from "../config/navigation";
 import { euros } from "../utils/money";
 
 export default function CashLayout() {
-  const { cajas, cajaId, seleccionarCaja, jornada, permisos, rol } = useCash();
+  const { cajas, cajaId, seleccionarCaja, jornada, permisos, rol, refrescar } = useCash();
   const navigate = useNavigate();
+  const location = useLocation();
   const [abierto, setAbierto] = useState(false);
+
+  /*
+   * La jornada se recarga en cada cambio de pantalla.
+   *
+   * El stock se cargaba una vez al entrar y solo se refrescaba tras operar EN
+   * ESA pantalla. Un canje hecho en Ingresos bancarios movía el cajón de
+   * verdad, pero Arqueo, Dar cambio y Stock de caja seguían pintando la foto
+   * vieja: el billete de 50 € que acababa de salir aparecía como disponible.
+   * Con varias sesiones a la vez sobre la misma caja pasa lo mismo sin salir
+   * de casa: lo que hizo el otro terminal no se veía hasta operar.
+   *
+   * Refrescar al navegar garantiza que cada pantalla abre con el cajón como
+   * está AHORA. Es una llamada por navegación: barata comparada con contar
+   * dinero sobre un número que ya no es verdad.
+   */
+  useEffect(() => {
+    void refrescar();
+  }, [location.pathname, refrescar]);
 
   const items = NAV.filter((i) => navVisible(i, permisos));
   const enMarcha = jornada?.sesion?.estado === "OPEN" || jornada?.sesion?.estado === "REOPENED";
