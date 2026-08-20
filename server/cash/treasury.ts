@@ -56,6 +56,7 @@ import {
   stockTeorico,
 } from "./repository.ts";
 import { registrarOperacion, type Contexto } from "./service.ts";
+import { exigirJornadaPropia } from "./hierarchy.ts";
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
 
@@ -317,9 +318,7 @@ export async function crearPedido(ctx: Contexto, e: EntradaPedido): Promise<Pedi
 
   const pedido = await enTransaccion(async (client) => {
     const sesion = await bloquearSesionOperable(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
 
     // Los billetes que salen: los indicados, o los más grandes que haya.
     let salida = e.salida ?? [];
@@ -443,9 +442,7 @@ export async function recibirPedido(
     }
 
     const sesion = await bloquearSesionOperable(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
 
     const denominaciones = await cargarDenominaciones(client);
     const porCartucho = piezasPorCartuchoDe(denominaciones);
@@ -570,9 +567,7 @@ export async function cancelarPedido(
     }
 
     const sesion = await bloquearSesionOperable(client, sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
 
     const lineas = await lineasDePedido(client, [pedidoId]);
     /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -649,9 +644,7 @@ export async function entregarDinero(
 
   const entrega = await enTransaccion(async (client) => {
     const sesion = await bloquearSesionOperable(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
 
     const entregado = e.entregado ?? [];
     if (entregado.length === 0) {
@@ -767,9 +760,7 @@ export async function liquidarEntrega(
     }
 
     const sesion = await bloquearSesionOperable(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
 
     const entregado = Number(previa.importe_centimos);
     const gasto = e.gastoCentimos ?? 0;

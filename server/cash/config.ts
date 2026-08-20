@@ -17,6 +17,7 @@ import { registrarAuditoria } from "../core/auditoria.ts";
 import type { Denominacion } from "./domain/denominations.ts";
 import { FORMAS_PAGO_SEMILLA } from "./domain/operations.ts";
 import { ErrorCaja, sesionAbierta } from "./repository.ts";
+import { nombreDeCentro } from "./hierarchy.ts";
 import {
   CODIGO_MAX,
   codigoValido,
@@ -24,11 +25,29 @@ import {
   proponerCodigo,
 } from "./domain/registercode.ts";
 
-export type Contexto = { empresaId: string; userId: string | null; ip?: string };
+export type Contexto = {
+  empresaId: string;
+  userId: string | null;
+  ip?: string;
+  /**
+   * Taller al que está limitado el usuario. `null` o ausente = toda la empresa.
+   * Sale de `app_usuario_modulos.centro_id` (ver `permissions.ts`).
+   */
+  centroId?: string | null;
+};
 
 export type CajaConfig = {
   id: number;
   centro: string;
+  /**
+   * El taller al que pertenece, ya como vínculo y no como texto.
+   *
+   * `null` significa «sin asignar», que es el estado normal de todo lo anterior
+   * a la fase 1 de MC Central y de lo que el backfill no supo emparejar. No es
+   * un error: la caja funciona igual. Lo único que no se puede hacer con ella
+   * es agregarla por taller, y la pantalla lo avisa.
+   */
+  centroId: string | null;
   nombre: string;
   /** Fondo fijo del cajón. 0 = sin fondo fijo. */
   fondoObjetivoCentimos: number;
@@ -41,23 +60,35 @@ export type CajaConfig = {
 
 // ── Cajas ──────────────────────────────────────────────────────────────────
 
-/** Todas las cajas de la empresa, incluidas las dadas de baja. */
-export async function listarCajas(empresaId: string): Promise<CajaConfig[]> {
+/**
+ * Las cajas de la empresa, incluidas las dadas de baja.
+ *
+ * Con `centroId` la lista se recorta al taller del usuario. Filtrar aquí no
+ * sustituye a la comprobación de `exigirAmbitoCaja` —quien conozca el id de una
+ * caja podría pedirla igual— pero evita lo otro: enseñar en el desplegable
+ * cajas que al pulsarlas van a dar un 403.
+ */
+export async function listarCajas(
+  empresaId: string,
+  centroId?: string | null
+): Promise<CajaConfig[]> {
   const { rows } = await pool.query(
-    `SELECT c.id, c.centro, c.nombre, c.codigo, c.activa, c.fondo_objetivo_centimos,
+    `SELECT c.id, c.centro, c.centro_id, c.nombre, c.codigo, c.activa, c.fondo_objetivo_centimos,
             (SELECT COUNT(*) FROM cash_sessions s WHERE s.register_id = c.id) AS jornadas,
             (SELECT s.id FROM cash_sessions s
               WHERE s.register_id = c.id AND s.estado IN ('OPEN','PENDING_CLOSE','REOPENED')
               LIMIT 1) AS jornada_abierta
        FROM cash_registers c
       WHERE c.empresa_id = $1
+        AND ($2::uuid IS NULL OR c.centro_id = $2)
       ORDER BY c.activa DESC, c.centro, c.nombre`,
-    [empresaId]
+    [empresaId, centroId ?? null]
   );
   /* eslint-disable @typescript-eslint/no-explicit-any */
   return rows.map((r: any) => ({
     id: r.id,
     centro: r.centro,
+    centroId: r.centro_id ?? null,
     nombre: r.nombre,
     codigo: r.codigo ?? "",
     fondoObjetivoCentimos: Number(r.fondo_objetivo_centimos ?? 0),
@@ -83,12 +114,29 @@ async function codigosEnUso(empresaId: string): Promise<Set<string>> {
 
 export async function crearCaja(
   ctx: Contexto,
-  datos: { nombre: string; centro?: string; codigo?: string }
-): Promise<{ id: number; centro: string; nombre: string; codigo: string; activa: boolean }> {
+  datos: { nombre: string; centro?: string; centroId?: string | null; codigo?: string }
+): Promise<{
+  id: number;
+  centro: string;
+  centroId: string | null;
+  nombre: string;
+  codigo: string;
+  activa: boolean;
+}> {
   const nombre = datos.nombre?.trim();
   if (!nombre) throw new ErrorCaja("ENTRADA_NO_VALIDA", "La caja necesita un nombre.", 400);
 
-  const centro = (datos.centro ?? "").trim();
+  /*
+   * Si viene el taller, su nombre manda sobre el texto que se teclease.
+   *
+   * Las dos columnas conviven durante la fase 1 —`centro_id` es el dato y
+   * `centro` es lo que leen los informes y la clave única del alta— y tienen
+   * que decir lo mismo. Dejar que difieran es fabricar un informe que miente.
+   */
+  const centroId = datos.centroId ?? null;
+  const centro = centroId
+    ? await nombreDeCentro(ctx.empresaId, centroId)
+    : (datos.centro ?? "").trim();
   const ahora = Date.now();
 
   /*
@@ -116,11 +164,13 @@ export async function crearCaja(
   // crear sin acordarse de que ya existía. El código NO se pisa al reactivar:
   // sus documentos viejos lo llevan escrito.
   const { rows } = await pool.query(
-    `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
-     VALUES ($1,$2,$3,$5,$4,$4)
-     ON CONFLICT (empresa_id, centro, nombre) DO UPDATE SET activa = true, updated_at_ms = $4
-     RETURNING id, centro, nombre, codigo, activa`,
-    [ctx.empresaId, centro, nombre, ahora, codigo]
+    `INSERT INTO cash_registers
+       (empresa_id, centro, centro_id, nombre, codigo, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$6,$3,$5,$4,$4)
+     ON CONFLICT (empresa_id, centro, nombre) DO UPDATE
+       SET activa = true, centro_id = EXCLUDED.centro_id, updated_at_ms = $4
+     RETURNING id, centro, centro_id AS "centroId", nombre, codigo, activa`,
+    [ctx.empresaId, centro, nombre, ahora, codigo, centroId]
   );
 
   await registrarAuditoria({
@@ -129,7 +179,12 @@ export async function crearCaja(
     accion: "cash.register.create",
     entidad: "cash_registers",
     entidadId: String(rows[0].id),
-    detalle: { nombre: rows[0].nombre, centro: rows[0].centro, codigo: rows[0].codigo },
+    detalle: {
+      nombre: rows[0].nombre,
+      centro: rows[0].centro,
+      centroId: rows[0].centroId,
+      codigo: rows[0].codigo,
+    },
     ip: ctx.ip,
   });
 
@@ -142,6 +197,7 @@ export async function actualizarCaja(
   cambios: {
     nombre?: string;
     centro?: string;
+    centroId?: string | null;
     codigo?: string;
     activa?: boolean;
     fondoObjetivoCentimos?: number;
@@ -149,6 +205,7 @@ export async function actualizarCaja(
 ): Promise<{
   id: number;
   centro: string;
+  centroId: string | null;
   nombre: string;
   codigo: string;
   activa: boolean;
@@ -169,6 +226,7 @@ export async function actualizarCaja(
     cambios.activa === false ||
     cambios.nombre !== undefined ||
     cambios.centro !== undefined ||
+    cambios.centroId !== undefined ||
     cambios.codigo !== undefined;
 
   if (tocaIdentidad && (await sesionAbierta(id))) {
@@ -180,7 +238,20 @@ export async function actualizarCaja(
   }
 
   const nombre = cambios.nombre?.trim() || actual[0].nombre;
-  const centro = cambios.centro === undefined ? actual[0].centro : cambios.centro.trim();
+
+  /*
+   * Cambiar de taller cambia también el texto, porque las dos columnas tienen
+   * que decir lo mismo mientras convivan. Y desasignar (`centroId: null`) NO
+   * borra el texto: la caja vuelve a estar «sin taller asignado» conservando lo
+   * que ponía antes, que es lo que siguen leyendo sus informes ya emitidos.
+   */
+  const centroId = cambios.centroId === undefined ? actual[0].centro_id : cambios.centroId;
+  const centro =
+    cambios.centroId !== undefined && cambios.centroId
+      ? await nombreDeCentro(ctx.empresaId, cambios.centroId)
+      : cambios.centro === undefined
+        ? actual[0].centro
+        : cambios.centro.trim();
   const activa = cambios.activa === undefined ? actual[0].activa : cambios.activa;
 
   /*
@@ -228,10 +299,11 @@ export async function actualizarCaja(
   const { rows } = await pool.query(
     `UPDATE cash_registers
         SET nombre = $2, centro = $3, activa = $4, fondo_objetivo_centimos = $5,
-            codigo = $7, updated_at_ms = $6
+            codigo = $7, centro_id = $8, updated_at_ms = $6
       WHERE id = $1
-      RETURNING id, centro, nombre, codigo, activa, fondo_objetivo_centimos`,
-    [id, nombre, centro, activa, fondo, Date.now(), codigo]
+      RETURNING id, centro, centro_id AS "centroId", nombre, codigo, activa,
+                fondo_objetivo_centimos`,
+    [id, nombre, centro, activa, fondo, Date.now(), codigo, centroId]
   );
 
   await registrarAuditoria({
@@ -244,11 +316,12 @@ export async function actualizarCaja(
       antes: {
         nombre: actual[0].nombre,
         centro: actual[0].centro,
+        centroId: actual[0].centro_id ?? null,
         codigo: actual[0].codigo ?? "",
         activa: actual[0].activa,
         fondoObjetivoCentimos: Number(actual[0].fondo_objetivo_centimos ?? 0),
       },
-      despues: { nombre, centro, codigo, activa, fondoObjetivoCentimos: fondo },
+      despues: { nombre, centro, centroId, codigo, activa, fondoObjetivoCentimos: fondo },
     },
     ip: ctx.ip,
   });

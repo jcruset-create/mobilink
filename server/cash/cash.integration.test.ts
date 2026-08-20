@@ -3530,3 +3530,67 @@ describe.runIf(RUN)("arqueo repartido entre las cajas de la ERP", () => {
     ).rejects.toMatchObject({ codigo: "SECCION_POR_DEFECTO" });
   });
 });
+
+/**
+ * Ámbito de taller (MC Central, fase 1).
+ *
+ * Lo que se comprueba aquí no es que la pantalla oculte cajas —eso es cosmética
+ * y se puede saltar— sino que el SERVICIO se niegue. Un ámbito que solo vive en
+ * el desplegable no limita a nadie que sepa escribir un id.
+ */
+describe.runIf(RUN)("Ámbito por taller", () => {
+  const TALLER_A = "00000000-0000-4000-a000-00000000ce01";
+  const TALLER_B = "00000000-0000-4000-a000-00000000ce02";
+
+  it("un usuario limitado a su taller no abre la caja de otro, y sí la suya", async () => {
+    const cajaA = await crearCaja("ambito-a");
+    const cajaB = await crearCaja("ambito-b");
+    await db.query(`UPDATE cash_registers SET centro_id = $2 WHERE id = $1`, [cajaA, TALLER_A]);
+    await db.query(`UPDATE cash_registers SET centro_id = $2 WHERE id = $1`, [cajaB, TALLER_B]);
+
+    const soloA = { ...ctx, centroId: TALLER_A };
+
+    await expect(
+      servicio.abrirJornada(soloA, { registerId: cajaB, fondoManual: [] })
+    ).rejects.toMatchObject({ codigo: "CAJA_FUERA_DE_AMBITO" });
+
+    const { sesion } = await servicio.abrirJornada(soloA, { registerId: cajaA, fondoManual: [] });
+    expect(sesion.registerId).toBe(cajaA);
+  });
+
+  it("sin ámbito se sigue operando toda la empresa: nadie pierde acceso al desplegar", async () => {
+    const caja = await crearCaja("ambito-sin");
+    await db.query(`UPDATE cash_registers SET centro_id = $2 WHERE id = $1`, [caja, TALLER_B]);
+
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: [] });
+    expect(sesion.registerId).toBe(caja);
+  });
+
+  /*
+   * Una caja sin taller asignado queda FUERA de cualquier ámbito. Es la
+   * decisión que más se puede discutir, así que se fija en una prueba: lo
+   * contrario convertiría cada caja que el backfill no supo emparejar en un
+   * agujero por el que se cuela todo el mundo.
+   */
+  it("una caja sin taller no la opera quien tiene ámbito", async () => {
+    const huerfana = await crearCaja("ambito-huerfana");
+
+    await expect(
+      servicio.abrirJornada({ ...ctx, centroId: TALLER_A }, { registerId: huerfana, fondoManual: [] })
+    ).rejects.toMatchObject({ codigo: "CAJA_FUERA_DE_AMBITO" });
+  });
+
+  it("el listado de cajas se recorta al ámbito", async () => {
+    const caja = await crearCaja("ambito-lista");
+    await db.query(`UPDATE cash_registers SET centro_id = $2 WHERE id = $1`, [caja, TALLER_A]);
+
+    const listaA = await config.listarCajas(EMPRESA, TALLER_A);
+    expect(listaA.some((c) => c.id === caja)).toBe(true);
+
+    const listaB = await config.listarCajas(EMPRESA, TALLER_B);
+    expect(listaB.some((c) => c.id === caja)).toBe(false);
+
+    const todas = await config.listarCajas(EMPRESA);
+    expect(todas.some((c) => c.id === caja)).toBe(true);
+  });
+});

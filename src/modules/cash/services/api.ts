@@ -33,6 +33,8 @@ import type {
   ResumenJornada,
   SeccionConfig,
   Sesion,
+  Zona,
+  Centro,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -95,6 +97,29 @@ const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.strin
 
 export const bootstrap = () => pedir<Bootstrap>("/bootstrap");
 
+// ── Jerarquía: zonas y talleres ────────────────────────────────────────────
+
+/**
+ * Zonas y talleres de la empresa, y hasta dónde llega el usuario.
+ *
+ * `ambitoCentroId` no es decorativo: con valor, esta sesión solo ve y opera las
+ * cajas de ese taller, y la pantalla debe decirlo en vez de dar a entender que
+ * la empresa tiene una sola caja.
+ */
+export const jerarquia = () =>
+  pedir<{ zonas: Zona[]; centros: Centro[]; ambitoCentroId: string | null }>("/hierarchy");
+
+export const crearZona = (nombre: string) => pedir<{ zona: Zona }>("/zones", json({ nombre }));
+
+export const actualizarZona = (id: string, datos: { nombre?: string; activa?: boolean }) =>
+  pedir<{ zona: Zona }>(`/zones/${id}`, { method: "PATCH", body: JSON.stringify(datos) });
+
+export const asignarZonaACentro = (centroId: string, zonaId: string | null) =>
+  pedir<{ ok: true }>(`/centers/${centroId}/zone`, {
+    method: "PATCH",
+    body: JSON.stringify({ zonaId }),
+  });
+
 // ── Configuración ──────────────────────────────────────────────────────────
 
 /** Cajas de la empresa, incluidas las dadas de baja. */
@@ -103,8 +128,11 @@ export const listarCajas = () =>
     cajas: (Caja & { activa: boolean; jornadas: string; jornadaAbierta: number | null })[];
   }>("/registers");
 
-export const crearCaja = (nombre: string, centro: string) =>
-  pedir<{ caja: Caja & { activa: boolean } }>("/registers", json({ nombre, centro }));
+export const crearCaja = (nombre: string, centro: string, centroId?: string | null) =>
+  pedir<{ caja: Caja & { activa: boolean } }>(
+    "/registers",
+    json({ nombre, centro, centroId: centroId ?? null })
+  );
 
 
 export const actualizarCaja = (
@@ -112,6 +140,8 @@ export const actualizarCaja = (
   datos: {
     nombre?: string;
     centro?: string;
+    /** Taller al que se asigna. `null` explícito lo desasigna. */
+    centroId?: string | null;
     /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
     codigo?: string;
     activa?: boolean;

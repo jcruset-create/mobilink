@@ -83,12 +83,19 @@ import {
   ultimaSesionCerrada,
 } from "./repository.ts";
 import { conectorPara } from "./erp/registry.ts";
+import { exigirAmbitoCaja, exigirJornadaPropia } from "./hierarchy.ts";
 
 export type Contexto = {
   empresaId: string;
   userId: string | null;
   ip?: string;
+  /**
+   * Taller al que está limitado el usuario. `null` o ausente = toda la empresa,
+   * que es como funcionó el módulo hasta la fase 1 de MC Central.
+   */
+  centroId?: string | null;
 };
+
 
 // ── Apertura de jornada ────────────────────────────────────────────────────
 
@@ -198,6 +205,10 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
     if (cajas.length === 0) {
       throw new ErrorCaja("CAJA_NO_ENCONTRADA", "La caja no existe o no está activa.", 404);
     }
+
+    // La apertura es la puerta de entrada: quien no puede abrir la caja de otro
+    // taller tampoco llega a tener una jornada suya que operar después.
+    await exigirAmbitoCaja(client, ctx, e.registerId);
 
     const ahora = Date.now();
     const fecha = fechaDeJornada(e.fecha, ahora);
@@ -517,9 +528,7 @@ export async function registrarOperacion(
 
   const trabajo = async (client: PoolClient) => {
     const sesion = await bloquearSesionOperable(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
 
     // Stock leído con la jornada ya bloqueada: es el bueno hasta el COMMIT.
     const stock = await stockTeorico(client, e.sessionId);
@@ -871,9 +880,7 @@ export async function guardarArqueo(
 ): Promise<ResultadoArqueoGuardado> {
   const resultado = await enTransaccion(async (client) => {
     const sesion = await bloquearSesion(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
     if (sesion.estado === "CLOSED" || sesion.estado === "CANCELLED") {
       throw new ErrorCaja("JORNADA_CERRADA", "La jornada ya está cerrada.", 409);
     }
@@ -1021,9 +1028,7 @@ export type ResultadoCierre = {
 export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<ResultadoCierre> {
   const resultado = await enTransaccion(async (client) => {
     const sesion = await bloquearSesion(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
     if (sesion.estado === "CLOSED") {
       throw new ErrorCaja("JORNADA_CERRADA", "La jornada ya está cerrada.", 409);
     }
@@ -1406,9 +1411,7 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
 
   const sesion = await enTransaccion(async (client) => {
     const s = await bloquearSesion(client, sessionId);
-    if (s.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, s);
     if (s.estado !== "CLOSED") {
       throw new ErrorCaja("JORNADA_NO_CERRADA", "Solo se puede reabrir una jornada cerrada.", 409);
     }
@@ -1495,9 +1498,7 @@ export async function anularOperacion(
     ]);
     const sessionId = rows[0].session_id as number;
     const sesion = await bloquearSesionOperable(client, sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
 
     // Los mismos movimientos del revés.
     const originales = await movimientosDeOperacion(client, operationId);
@@ -2163,9 +2164,7 @@ export async function regularizarArqueo(
 } | null> {
   return enTransaccion(async (client) => {
     const sesion = await bloquearSesion(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
     if (sesion.estado === "CLOSED" || sesion.estado === "CANCELLED") {
       throw new ErrorCaja(
         "JORNADA_CERRADA",

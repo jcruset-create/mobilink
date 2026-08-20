@@ -19,6 +19,7 @@ import { authenticate, requireModule } from "../core/auth.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCaja, exigirPermiso } from "./permissions.ts";
+import * as jerarquia from "./hierarchy.ts";
 import { miniaturaBoton, miniaturaFicha } from "./images.ts";
 import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimientosDeSesion } from "./repository.ts";
 import type { LineaDenominacion } from "./domain/inventory.ts";
@@ -234,6 +235,9 @@ function contexto(req: Request): servicio.Contexto {
     empresaId: req.authCtx!.empresaId,
     userId: req.authCtx!.userId,
     ip: req.ip,
+    // Ámbito de taller. Lo pone `cargarPermisosCaja` y `null` significa toda la
+    // empresa, que es lo que tiene todo el mundo mientras nadie lo limite.
+    centroId: req.cashCentroId ?? null,
   };
 }
 
@@ -269,9 +273,12 @@ export function createCashRouter(): Router {
         cargarDenominaciones(pool, true),
         config.listarFormasPago(empresaId),
         pool.query(
-          `SELECT id, centro, nombre, codigo, fondo_objetivo_centimos FROM cash_registers
-            WHERE empresa_id = $1 AND activa = true ORDER BY centro, nombre`,
-          [empresaId]
+          `SELECT id, centro, centro_id AS "centroId", nombre, codigo, fondo_objetivo_centimos
+             FROM cash_registers
+            WHERE empresa_id = $1 AND activa = true
+              AND ($2::uuid IS NULL OR centro_id = $2)
+            ORDER BY centro, nombre`,
+          [empresaId, req.cashCentroId ?? null]
         ),
         estadoIntegracion(empresaId),
         config.ajustes(empresaId),
@@ -301,7 +308,9 @@ export function createCashRouter(): Router {
     "/registers",
     exigirPermiso("cash.configure"),
     ruta(async (req, res) => {
-      res.json({ cajas: await config.listarCajas(req.authCtx!.empresaId) });
+      res.json({
+        cajas: await config.listarCajas(req.authCtx!.empresaId, req.cashCentroId ?? null),
+      });
     })
   );
 
@@ -313,6 +322,7 @@ export function createCashRouter(): Router {
       const caja = await config.crearCaja(contexto(req), {
         nombre: typeof b.nombre === "string" ? b.nombre : "",
         centro: typeof b.centro === "string" ? b.centro : "",
+        centroId: typeof b.centroId === "string" ? b.centroId : null,
         codigo: typeof b.codigo === "string" ? b.codigo : undefined,
       });
       res.status(201).json({ caja });
@@ -327,6 +337,9 @@ export function createCashRouter(): Router {
       const caja = await config.actualizarCaja(contexto(req), enteroPositivo(req.params.id, "id"), {
         nombre: typeof b.nombre === "string" ? b.nombre : undefined,
         centro: typeof b.centro === "string" ? b.centro : undefined,
+        // `null` explícito = desasignar el taller; ausente = no tocarlo.
+        centroId:
+          b.centroId === null ? null : typeof b.centroId === "string" ? b.centroId : undefined,
         codigo: typeof b.codigo === "string" ? b.codigo : undefined,
         activa: typeof b.activa === "boolean" ? b.activa : undefined,
         fondoObjetivoCentimos:
@@ -335,6 +348,68 @@ export function createCashRouter(): Router {
             : entero(b.fondoObjetivoCentimos, "fondoObjetivoCentimos"),
       });
       res.json({ caja });
+    })
+  );
+
+  // ── Jerarquía: zonas y talleres ──────────────────────────────────────────
+
+  /**
+   * Zonas y talleres de la empresa, en una llamada.
+   *
+   * Van juntos porque la pantalla los usa juntos —el taller se elige y la zona
+   * lo agrupa— y separarlos solo produciría dos peticiones seguidas.
+   */
+  r.get(
+    "/hierarchy",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const empresaId = req.authCtx!.empresaId;
+      const [zonas, centros] = await Promise.all([
+        jerarquia.listarZonas(empresaId),
+        jerarquia.listarCentros(empresaId),
+      ]);
+      res.json({ zonas, centros, ambitoCentroId: req.cashCentroId ?? null });
+    })
+  );
+
+  r.post(
+    "/zones",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const zona = await jerarquia.crearZona(
+        contexto(req),
+        typeof b.nombre === "string" ? b.nombre : ""
+      );
+      res.status(201).json({ zona });
+    })
+  );
+
+  r.patch(
+    "/zones/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const zona = await jerarquia.actualizarZona(contexto(req), String(req.params.id), {
+        nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+        activa: typeof b.activa === "boolean" ? b.activa : undefined,
+      });
+      res.json({ zona });
+    })
+  );
+
+  /** Cuelga un taller de una zona, o lo deja sin zona con `zonaId: null`. */
+  r.patch(
+    "/centers/:id/zone",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      await jerarquia.asignarZonaACentro(
+        contexto(req),
+        String(req.params.id),
+        typeof b.zonaId === "string" ? b.zonaId : null
+      );
+      res.json({ ok: true });
     })
   );
 
@@ -755,6 +830,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const registerId = enteroPositivo(req.params.id, "id");
+      await jerarquia.exigirAmbitoCaja(pool, contexto(req), registerId);
       res.json(await ingresos.panelIngresos(req.authCtx!.empresaId, registerId));
     })
   );
@@ -848,6 +924,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const registerId = enteroPositivo(req.params.id, "id");
+      await jerarquia.exigirAmbitoCaja(pool, contexto(req), registerId);
       const empresaId = req.authCtx!.empresaId;
       const [pedidos, entregas] = await Promise.all([
         tesoreria.listarPedidos(empresaId, registerId),
@@ -1362,6 +1439,13 @@ export function createCashRouter(): Router {
       const { desde, hasta, registerId, estado } = req.query;
       const filtros: string[] = ["s.empresa_id = $1"];
       const params: unknown[] = [req.authCtx!.empresaId];
+
+      // El histórico también se recorta al ámbito: si no puedes operar la caja
+      // de otro taller, tampoco tienes por qué leer sus jornadas.
+      if (req.cashCentroId) {
+        params.push(req.cashCentroId);
+        filtros.push(`c.centro_id = $${params.length}`);
+      }
 
       if (typeof desde === "string" && desde) {
         params.push(desde);
