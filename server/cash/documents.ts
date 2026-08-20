@@ -30,7 +30,8 @@ const TAMANO_MAXIMO = 15 * 1024 * 1024;
 
 export type DocumentoOperacion = {
   id: number;
-  operationId: number;
+  /** null = documento de la jornada entera, no de una operación suelta. */
+  operationId: number | null;
   sessionId: number;
   nombre: string;
   mime: string;
@@ -67,11 +68,8 @@ const extensionDe = (mime: string, nombre: string): string => {
   return /^\.[a-z0-9]{1,5}$/i.test(suelta) ? suelta.toLowerCase() : ".bin";
 };
 
-export async function adjuntarDocumento(
-  ctx: Contexto,
-  operationId: number,
-  fichero: { originalname: string; mimetype: string; buffer: Buffer }
-): Promise<DocumentoOperacion> {
+/** Formato y tamaño. Lo comparten los justificantes de operación y de jornada. */
+function exigirFicheroValido(fichero: { mimetype: string; buffer: Buffer }): void {
   if (!MIMES.has(fichero.mimetype)) {
     throw new ErrorCaja(
       "FORMATO_NO_ADMITIDO",
@@ -86,6 +84,14 @@ export async function adjuntarDocumento(
       400
     );
   }
+}
+
+export async function adjuntarDocumento(
+  ctx: Contexto,
+  operationId: number,
+  fichero: { originalname: string; mimetype: string; buffer: Buffer }
+): Promise<DocumentoOperacion> {
+  exigirFicheroValido(fichero);
 
   const { rows: operaciones } = await pool.query(
     `SELECT id, session_id, empresa_id, numero FROM cash_operations
@@ -145,6 +151,89 @@ export async function adjuntarDocumento(
   return aDocumento(rows[0], await urlFirmada(ruta));
 }
 
+/**
+ * Adjunta un documento a la JORNADA entera, sin operación.
+ *
+ * Es el taco de facturas escaneado de una vez, o el resguardo que devuelve el
+ * banco: papeles del día que no son de ningún cobro concreto. Se admiten
+ * varios, porque en el mostrador no sale todo en un solo PDF.
+ */
+export async function adjuntarDocumentoDeJornada(
+  ctx: Contexto,
+  sessionId: number,
+  fichero: { originalname: string; mimetype: string; buffer: Buffer }
+): Promise<DocumentoOperacion> {
+  exigirFicheroValido(fichero);
+
+  const { rows: sesiones } = await pool.query(
+    `SELECT id, fecha FROM cash_sessions WHERE id = $1 AND empresa_id = $2`,
+    [sessionId, ctx.empresaId]
+  );
+  if (sesiones.length === 0) {
+    throw new ErrorCaja("JORNADA_NO_ENCONTRADA", "La jornada no existe.", 404);
+  }
+
+  const ahora = Date.now();
+  const ruta = rutaDocumento(
+    ctx.empresaId,
+    sessionId,
+    null,
+    extensionDe(fichero.mimetype, fichero.originalname),
+    ahora
+  );
+
+  // Primero el fichero: si esto falla, no queda una fila apuntando a nada.
+  const guardado = await guardarDocumento(ruta, fichero.buffer, fichero.mimetype);
+
+  const { rows } = await pool.query(
+    `INSERT INTO cash_operation_documents
+       (empresa_id, operation_id, session_id, nombre, mime, tamano_bytes, ruta,
+        subido_por, subido_at_ms)
+     VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,$8)
+     RETURNING *`,
+    [
+      ctx.empresaId,
+      sessionId,
+      fichero.originalname.slice(0, 200),
+      fichero.mimetype,
+      guardado.tamanoBytes,
+      ruta,
+      ctx.userId,
+      ahora,
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.document.attach_session",
+    entidad: "cash_operation_documents",
+    entidadId: String(rows[0].id),
+    detalle: {
+      jornada: sesiones[0].fecha,
+      nombre: fichero.originalname,
+      tamanoBytes: guardado.tamanoBytes,
+    },
+    ip: ctx.ip,
+  });
+
+  return aDocumento(rows[0], await urlFirmada(ruta));
+}
+
+/** Los que cuelgan de la jornada entera, con enlaces recién firmados. */
+export async function documentosSueltosDeJornada(
+  empresaId: string,
+  sessionId: number
+): Promise<DocumentoOperacion[]> {
+  const { rows } = await pool.query(
+    `SELECT * FROM cash_operation_documents
+      WHERE empresa_id = $1 AND session_id = $2 AND operation_id IS NULL AND NOT anulado
+      ORDER BY id`,
+    [empresaId, sessionId]
+  );
+  return Promise.all(rows.map(async (r) => aDocumento(r, await urlFirmada(r.ruta))));
+}
+
 /** Documentos de una operación, con enlaces recién firmados. */
 export async function documentosDeOperacion(
   empresaId: string,
@@ -179,19 +268,24 @@ export async function documentosDeJornada(sessionId: number): Promise<
   (DocumentoOperacion & { ruta: string; operacionNumero: string; operacionTipo: string })[]
 > {
   const { rows } = await pool.query(
+    /*
+     * LEFT JOIN, no JOIN: los documentos de la jornada entera no tienen
+     * operación, y con un JOIN a secas desaparecían del informe justo los que
+     * más falta hacen —el taco de facturas del día.
+     */
     `SELECT d.*, o.numero AS operacion_numero, o.tipo AS operacion_tipo
        FROM cash_operation_documents d
-       JOIN cash_operations o ON o.id = d.operation_id
+       LEFT JOIN cash_operations o ON o.id = d.operation_id
       WHERE d.session_id = $1 AND NOT d.anulado
-      ORDER BY o.id, d.id`,
+      ORDER BY o.id NULLS LAST, d.id`,
     [sessionId]
   );
   /* eslint-disable @typescript-eslint/no-explicit-any */
   return rows.map((r: any) => ({
     ...aDocumento(r),
     ruta: r.ruta,
-    operacionNumero: r.operacion_numero,
-    operacionTipo: r.operacion_tipo,
+    operacionNumero: r.operacion_numero ?? "Jornada",
+    operacionTipo: r.operacion_tipo ?? "SESSION_DOCUMENT",
   }));
   /* eslint-enable @typescript-eslint/no-explicit-any */
 }

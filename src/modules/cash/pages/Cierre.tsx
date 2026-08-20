@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileDown, Minus, Plus, Printer } from "lucide-react";
+import { FileDown, Printer } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, {
   type CantidadesPorValor,
@@ -18,7 +18,7 @@ import DenominationGrid, {
 } from "../components/DenominationGrid";
 import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, inputCls } from "../components/ui";
 import { euros, aCentimos, totalLineas } from "../utils/money";
-import type { Denominacion, LineaDenominacion } from "../types";
+import type { LineaDenominacion } from "../types";
 import { AvisoPendientes } from "./CambioBanco";
 import { repartirIngreso, valorEnvasado } from "../utils/cierre";
 import * as api from "../services/api";
@@ -55,26 +55,6 @@ export default function Cierre() {
    * lo que quiere hacer. La ref evita repetirlo si el usuario retoca a mano.
    */
   const yaPropuesto = useRef(false);
-
-  /**
-   * Fija cuántos envases de una denominación se quedan en caja.
-   *
-   * Un solo sitio donde se tocan las listas de precintos: las tocaban los
-   * botones y la cajita por separado, y el tope —no puedes quedarte más
-   * envases de los que has contado— tenía que repetirse en cada uno.
-   */
-  function fijarEnvases(
-    fijar: React.Dispatch<React.SetStateAction<LineaDenominacion[]>>,
-    valor: number,
-    cantidad: number,
-    contados: number
-  ) {
-    const n = Math.max(0, Math.min(contados, cantidad));
-    fijar((prev) => [
-      ...prev.filter((x) => x.valor !== valor),
-      ...(n > 0 ? [{ valor, cantidad: n }] : []),
-    ]);
-  }
 
   const pedirPropuesta = useCallback(async () => {
     if (!jornada || objetivo <= 0) return;
@@ -339,7 +319,7 @@ export default function Cierre() {
             ? `Faltan ${euros(-desvioObjetivo)} para el cambio que has pedido (${euros(objetivo)}).`
             : `Sobran ${euros(desvioObjetivo)} sobre el cambio que has pedido (${euros(objetivo)}).`}{" "}
           {(tubosContados.length > 0 || bolsasContadas.length > 0) &&
-            "Si el hueco es de un envase entero, ajústalo en «Cartuchos precintados» o «Bolsas precintadas». "}
+            "Si el hueco es de un envase entero, ajústalo en las columnas «cart.» o «bols.» de las monedas. "}
           Puedes cerrar así igualmente: el resto va al ingreso bancario.
         </Aviso>
       )}
@@ -353,39 +333,25 @@ export default function Cierre() {
           disponible={Object.fromEntries(sueltasContadas.map((l) => [l.valor, l.cantidad]))}
           mostrarDisponible
           /*
-           * El objetivo de la rejilla es el que queda DESPUÉS de los cartuchos:
-           * la rejilla solo cuenta monedas sueltas, así que con un tubo de 2,50 €
-           * apartado marcaba en ámbar «336,09 de 338,59» cuando el reparto era
-           * exacto. Descontarlos la deja en verde cuando de verdad cuadra.
+           * Los envases se cuentan AQUÍ, en las columnas estrechas de las
+           * monedas, y suman en el total de la rejilla. Antes vivían en un
+           * panel aparte y el total de abajo solo contaba lo suelto: con un
+           * tubo de 2,50 € apartado, la rejilla decía «427,19 € de objetivo
+           * 347,50 €» y había que hacer dos sumas mentales para saber si
+           * cuadraba. Ahora el objetivo es el fondo entero y el total es todo
+           * lo que se queda.
            */
-          objetivoCentimos={objetivo > 0 ? objetivo - valorTubosCambio : null}
+          cartuchos={cantidadesDesde(cambioFinalTubos)}
+          onCartuchosChange={(c) => setCambioFinalTubos(lineasDesde(c))}
+          bolsas={cantidadesDesde(cambioFinalBolsas)}
+          onBolsasChange={(c) => setCambioFinalBolsas(lineasDesde(c))}
+          disponibleCartuchos={Object.fromEntries(tubosContados.map((l) => [l.valor, l.cantidad]))}
+          disponibleBolsas={Object.fromEntries(bolsasContadas.map((l) => [l.valor, l.cantidad]))}
+          objetivoCentimos={objetivo > 0 ? objetivo : null}
           deshabilitado={guardando}
         />
 
         <div className="space-y-3">
-        <PanelEnvases
-          titulo="Cartuchos precintados"
-          nombre="cartucho"
-          plural="cartuchos"
-          contados={tubosContados}
-          sequedan={cambioFinalTubos}
-          piezasDe={(d) => d?.piezasPorCartucho ?? 0}
-          denominaciones={denominaciones}
-          onFijar={(valor, n, contados) => fijarEnvases(setCambioFinalTubos, valor, n, contados)}
-          deshabilitado={guardando}
-        />
-
-        <PanelEnvases
-          titulo="Bolsas precintadas"
-          nombre="bolsa"
-          plural="bolsas"
-          contados={bolsasContadas}
-          sequedan={cambioFinalBolsas}
-          piezasDe={(d) => d?.piezasPorBolsa ?? 0}
-          denominaciones={denominaciones}
-          onFijar={(valor, n, contados) => fijarEnvases(setCambioFinalBolsas, valor, n, contados)}
-          deshabilitado={guardando}
-        />
 
         <div className="rounded-lg border border-slate-700 bg-slate-800">
           <div className="flex items-center justify-between border-b border-slate-700 px-3 py-2">
@@ -487,108 +453,6 @@ function pistaPrecintos(
     nB > 0 ? `${nB} ${nB === 1 ? "bolsa" : "bolsas"}` : null,
   ].filter(Boolean);
   return partes.length > 0 ? `incluye ${partes.join(" y ")}` : undefined;
-}
-
-/**
- * Panel de envases precintados que se quedan en caja.
- *
- * Cartuchos y bolsas se reparten igual —el envase entero se queda o se va, no
- * se parte— así que comparten panel. Lo único que cambia entre los dos es de
- * dónde sale el número de piezas y cómo se llama la cosa en pantalla.
- */
-function PanelEnvases({
-  titulo,
-  nombre,
-  plural,
-  contados,
-  sequedan,
-  piezasDe,
-  denominaciones,
-  onFijar,
-  deshabilitado,
-}: {
-  titulo: string;
-  nombre: string;
-  plural: string;
-  contados: readonly LineaDenominacion[];
-  sequedan: readonly LineaDenominacion[];
-  piezasDe: (d: Denominacion | undefined) => number;
-  denominaciones: readonly Denominacion[];
-  onFijar: (valor: number, cantidad: number, contados: number) => void;
-  deshabilitado: boolean;
-}) {
-  if (contados.length === 0) return null;
-
-  return (
-    <div className="rounded-lg border border-slate-700 bg-slate-800">
-      <div className="border-b border-slate-700 px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">
-        {titulo}
-      </div>
-      <div className="divide-y divide-slate-700/60">
-        {contados.map((t) => {
-          const d = denominaciones.find((x) => x.valor === t.valor);
-          const quedan = sequedan.find((x) => x.valor === t.valor)?.cantidad ?? 0;
-          const valorEnvase = t.valor * piezasDe(d);
-          return (
-            <div key={t.valor} className="flex items-center gap-2 px-3 py-2 text-sm">
-              <div className="min-w-0">
-                <div className="font-bold tabular-nums text-slate-200">{d?.etiqueta}</div>
-                {/* Cuánto mueve cada envase: sin esto no se sabe qué cambia al pulsar. */}
-                <div className="text-[10px] tabular-nums text-slate-500">
-                  {t.cantidad} contado{t.cantidad === 1 ? "" : "s"} · {euros(valorEnvase)} cada uno
-                </div>
-              </div>
-
-              <div className="ml-auto flex shrink-0 items-center gap-1">
-                <span className="mr-1 text-[11px] text-slate-500">se quedan</span>
-                {/*
-                  Mismos botones −/+ de 44 px que la rejilla de monedas. Antes
-                  aquí solo había una cajita de texto: no parecía tocable, y
-                  quedarse un cartucho —lo normal— no se veía posible.
-                */}
-                <button
-                  type="button"
-                  aria-label={`Quitar un ${nombre} de ${d?.etiqueta} del cambio final`}
-                  onClick={() => onFijar(t.valor, quedan - 1, t.cantidad)}
-                  disabled={deshabilitado || quedan === 0}
-                  className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
-                >
-                  <Minus className="h-4 w-4" />
-                </button>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  aria-label={`${titulo} de ${d?.etiqueta} que se quedan en caja`}
-                  value={quedan === 0 ? "" : String(quedan)}
-                  placeholder="0"
-                  onChange={(e) =>
-                    onFijar(t.valor, Number(e.target.value.replace(/\D/g, "") || 0), t.cantidad)
-                  }
-                  onFocus={(e) => e.target.select()}
-                  disabled={deshabilitado}
-                  className="h-11 w-12 rounded-lg border border-slate-600 bg-slate-900 text-center text-sm font-bold tabular-nums text-slate-100 outline-none focus:ring-2 focus:ring-sky-500"
-                />
-                <button
-                  type="button"
-                  aria-label={`Añadir un ${nombre} de ${d?.etiqueta} al cambio final`}
-                  onClick={() => onFijar(t.valor, quedan + 1, t.cantidad)}
-                  disabled={deshabilitado || quedan >= t.cantidad}
-                  className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
-                >
-                  <Plus className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <p className="px-3 py-2 text-[11px] text-slate-500">
-        Un envase entero se queda o se va: no se parte. Los {plural} que se quedan siguen
-        precintados mañana.
-      </p>
-    </div>
-  );
 }
 
 function Cerrada({ r }: { r: Awaited<ReturnType<typeof api.cerrarJornada>> }) {
