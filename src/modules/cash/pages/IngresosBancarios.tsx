@@ -30,7 +30,12 @@ import {
   inputCls,
 } from "../components/ui";
 import { euros, aCentimos } from "../utils/money";
-import type { CierrePendiente, IngresoBancario, PanelIngresos } from "../types";
+import type {
+  CierrePendiente,
+  IngresoBancario,
+  PanelIngresos,
+  PropuestaCanjeIngreso,
+} from "../types";
 import * as api from "../services/api";
 
 const fechaCorta = (iso: string) =>
@@ -279,12 +284,20 @@ function PrepararIngreso({
   const disponible = remanenteAnterior + totalCierres;
 
   /*
-   * Sugerencia de partida: lo disponible redondeado hacia abajo al billete de
-   * 5 € — el banco no admite monedas. Es solo el punto de arranque: cuántas
-   * monedas se han conseguido convertir de verdad lo sabe quien tiene el
-   * dinero delante, y por eso el campo se edita.
+   * Lo que se puede ingresar sale del DESGLOSE del montón, no de redondear el
+   * total: son los billetes que hay de verdad en la bolsa.
+   *
+   * Antes esto era `Math.floor(disponible / 500) * 500`, y daba por hecho que
+   * los euros redondos estaban en billetes. Con 105,69 € proponía ingresar
+   * 105,00 € cuando en billetes solo había 95 € —los otros 10 estaban en
+   * monedas de 2 y de 1— así que en la ventanilla del banco faltaban 10 €.
+   *
+   * El redondeo se queda solo como red mientras la propuesta carga.
    */
-  const sugerido = Math.floor(disponible / 500) * 500;
+  const [propuesta, setPropuesta] = useState<PropuestaCanjeIngreso | null>(null);
+  const sugerido = propuesta
+    ? Math.min(disponible, propuesta.ingresableCentimos)
+    : Math.floor(disponible / 500) * 500;
   const [importeTexto, setImporteTexto] = useState(() => (sugerido / 100).toFixed(2).replace(".", ","));
   const [fecha, setFecha] = useState("");
   const [referencia, setReferencia] = useState("");
@@ -294,6 +307,26 @@ function PrepararIngreso({
   useEffect(() => {
     setImporteTexto((sugerido / 100).toFixed(2).replace(".", ","));
   }, [sugerido]);
+
+  const sessionIds = seleccionados.map((c) => c.sessionId);
+  const claveSeleccion = sessionIds.join(",");
+
+  /*
+   * El desglose y el canje se piden al servidor cada vez que cambia la
+   * selección de cierres: son el montón de esos cierres y solo de esos.
+   */
+  const recargarPropuesta = useCallback(async () => {
+    try {
+      setPropuesta(await api.proponerCanjeIngreso(registerId, claveSeleccion.split(",").filter(Boolean).map(Number)));
+    } catch {
+      // Si falla, la pantalla sigue siendo usable con el importe a mano.
+      setPropuesta(null);
+    }
+  }, [registerId, claveSeleccion]);
+
+  useEffect(() => {
+    void recargarPropuesta();
+  }, [recargarPropuesta]);
 
   const importe = aCentimos(importeTexto) ?? 0;
   const remanenteNuevo = disponible - importe;
@@ -326,6 +359,13 @@ function PrepararIngreso({
               </div>
             ))}
           </div>
+
+          {propuesta && <DesgloseYCanje
+            propuesta={propuesta}
+            registerId={registerId}
+            sessionIds={sessionIds}
+            onCanjeado={recargarPropuesta}
+          />}
 
           <label className="mt-3 block">
             <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
@@ -543,5 +583,110 @@ function Historial({
         borra nada: devuelve los cierres a pendientes, restaura el remanente anterior y deja quién, cuándo y por qué.
       </p>
     </section>
+  );
+}
+
+/**
+ * Desglose del montón pendiente y, si cabe, el canje que lo mejora.
+ *
+ * Es la pieza que cambia la pantalla de «un número que hay que creerse» a «esto
+ * es lo que hay en la bolsa»: se ven los billetes y las monedas por separado,
+ * porque al banco solo van los billetes.
+ */
+function DesgloseYCanje({
+  propuesta,
+  registerId,
+  sessionIds,
+  onCanjeado,
+}: {
+  propuesta: PropuestaCanjeIngreso;
+  registerId: number;
+  sessionIds: number[];
+  onCanjeado: () => Promise<void>;
+}) {
+  const [ocupado, setOcupado] = useState(false);
+  const [error, setError] = useState("");
+  const { canje } = propuesta;
+
+  const piezas = (lineas: readonly { valor: number; cantidad: number }[]) =>
+    lineas.map((l) => `${euros(l.valor)} × ${l.cantidad}`).join(", ");
+
+  async function canjear() {
+    if (!canje) return;
+    setOcupado(true);
+    setError("");
+    try {
+      await api.registrarCanjeIngreso({
+        registerId,
+        sessionIds,
+        monedasEntregadas: canje.monedasEntregadas,
+        billetesEntregados: canje.billetesEntregados,
+        billetesRecibidos: canje.billetesRecibidos,
+      });
+      await onCanjeado();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido registrar el canje");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-2 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+      <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+        Qué hay en la bolsa
+      </div>
+
+      <div className="flex items-baseline justify-between gap-2 text-sm">
+        <span className="text-slate-400">En billetes · al banco</span>
+        <span className="font-bold tabular-nums text-sky-300">
+          {euros(propuesta.ingresableCentimos)}
+        </span>
+      </div>
+      {propuesta.pendiente.billetes.length > 0 && (
+        <p className="text-[11px] text-slate-500">{piezas(propuesta.pendiente.billetes)}</p>
+      )}
+
+      <div className="flex items-baseline justify-between gap-2 text-sm">
+        <span className="text-slate-400">En monedas · no las admite el banco</span>
+        <span className="font-bold tabular-nums text-amber-300">
+          {euros(propuesta.enMonedasCentimos)}
+        </span>
+      </div>
+      {propuesta.pendiente.monedas.length > 0 && (
+        <p className="text-[11px] text-slate-500">{piezas(propuesta.pendiente.monedas)}</p>
+      )}
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {canje && (
+        <div className="space-y-2 rounded-lg border border-emerald-600/40 bg-emerald-950/20 p-2">
+          <p className="text-[12px] text-slate-200">
+            Se pueden convertir <strong>{euros(canje.valorMonedasCentimos)}</strong> en monedas
+            cambiándolos por billetes de la caja.
+          </p>
+          <p className="text-[11px] text-slate-400">
+            Entregas a la caja {piezas(canje.monedasEntregadas)}
+            {canje.billetesEntregados.length > 0 && ` y ${piezas(canje.billetesEntregados)}`}; te
+            llevas {piezas(canje.billetesRecibidos)}.
+          </p>
+          <button
+            onClick={() => void canjear()}
+            disabled={ocupado}
+            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+          >
+            {ocupado ? "Registrando…" : `Canjear y subir el ingreso a ${euros(propuesta.ingresableCentimos + canje.valorMonedasCentimos)}`}
+          </button>
+        </div>
+      )}
+
+      {!canje && propuesta.enMonedasCentimos > 0 && (
+        <Aviso tono="aviso">
+          {propuesta.sinJornadaAbierta
+            ? "Con la caja cerrada no se puede canjear: el cambio sale del cajón. Abre la jornada y vuelve aquí."
+            : "Ahora mismo la caja no tiene billetes con los que cambiar estas monedas. Se ingresan los billetes y las monedas esperan aquí: en cuanto la caja tenga el billete que hace falta, aparecerá la propuesta."}
+        </Aviso>
+      )}
+    </div>
   );
 }

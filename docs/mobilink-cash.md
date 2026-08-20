@@ -445,6 +445,26 @@ admiten varios porque en el mostrador no sale todo en un PDF. La consulta del
 informe usa LEFT JOIN: con un JOIN a secas desaparecían del informe justo los
 que no tienen operación, que es lo que los define.
 
+**Canje de monedas para el ingreso** (`domain/depositswap.ts`): el banco solo
+admite billetes, y el montón que espera para ir al banco tiene una composición
+concreta que sale del libro mayor —los asientos `BANK_DEPOSIT` de los cierres
+pendientes—, no de redondear el total. Las monedas se convierten cambiándolas
+por billetes del cajón, con una operación `EXCHANGE` de la jornada abierta.
+
+La cuenta que define qué optimizar: un canje entrega `x` en monedas más `y` en
+billetes propios y recibe `x + y` en billetes de la caja, así que los billetes
+finales del montón son `billetes − y + (x + y) = billetes + x`. **El ingreso
+sube exactamente `x`, y `y` no influye.** Meter billetes propios en el canje no
+ingresa un euro más: lo que hace es desbloquear un billete más grande de la caja
+cuando no hay uno pequeño —sin billete de 10 no se pueden convertir 10 € en
+monedas, pero entregando además dos de 20 sí se puede coger el de 50—. De ahí
+que el objetivo sea uno solo: maximizar `x`, con la cantidad de piezas que se
+dejan en el cajón como desempate.
+
+`cash_deposit_swaps` anota qué canjes van contra el montón, y `bank_deposit_id`
+a NULL significa «todavía cuenta»: al registrar el ingreso se rellenan y dejan
+de afectar al montón siguiente. Sin eso el ajuste se arrastraría para siempre.
+
 Detalles que costaron un fallo en producción:
 
 - **El cierre reparte LO CONTADO, no el teórico.** La pantalla usaba

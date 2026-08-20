@@ -737,6 +737,49 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Qué se puede ingresar hoy y qué canje lo mejoraría.
+   *
+   * Es una consulta: no reserva ni mueve nada, y por eso la confirmación
+   * vuelve a calcularlo con el stock del momento.
+   */
+  r.get(
+    "/registers/:id/bank-deposits/swap",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const sessionIds =
+        typeof req.query.cierres === "string" && req.query.cierres !== ""
+          ? req.query.cierres.split(",").map((v) => enteroPositivo(v, "cierres"))
+          : [];
+      res.json(
+        await ingresos.proponerCanje(
+          req.authCtx!.empresaId,
+          enteroPositivo(req.params.id, "id"),
+          sessionIds
+        )
+      );
+    })
+  );
+
+  r.post(
+    "/bank-deposits/swap",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json(
+        await ingresos.registrarCanje(contexto(req), {
+          registerId: enteroPositivo(b.registerId, "registerId"),
+          sessionIds: Array.isArray(b.sessionIds)
+            ? b.sessionIds.map((v: unknown) => enteroPositivo(v, "sessionIds"))
+            : [],
+          monedasEntregadas: lineas(b.monedasEntregadas, "monedasEntregadas"),
+          billetesEntregados: lineas(b.billetesEntregados, "billetesEntregados"),
+          billetesRecibidos: lineas(b.billetesRecibidos, "billetesRecibidos"),
+        })
+      );
+    })
+  );
+
   r.post(
     "/bank-deposits",
     exigirPermiso("cash.treasury.manage"),

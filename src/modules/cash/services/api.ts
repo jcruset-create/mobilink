@@ -19,6 +19,7 @@ import type {
   EntregaDinero,
   FormaPagoConfig,
   IngresoBancario,
+  PropuestaCanjeIngreso,
   PanelIngresos,
   PedidoCambio,
   Pendientes,
@@ -263,6 +264,27 @@ export async function informeCierrePdf(sessionId: number): Promise<Blob> {
 
 export const panelIngresos = (registerId: number) =>
   pedir<PanelIngresos>(`/registers/${registerId}/bank-deposits`);
+
+/**
+ * Qué se puede ingresar de verdad y qué canje lo mejoraría.
+ *
+ * El desglose sale del libro mayor, no de redondear el total: lo que va al
+ * banco son los billetes que hay en el montón, y las monedas hay que cambiarlas
+ * antes por billetes del cajón.
+ */
+export const proponerCanjeIngreso = (registerId: number, sessionIds: readonly number[]) =>
+  pedir<PropuestaCanjeIngreso>(
+    `/registers/${registerId}/bank-deposits/swap` +
+      (sessionIds.length > 0 ? `?cierres=${sessionIds.join(",")}` : "")
+  );
+
+export const registrarCanjeIngreso = (datos: {
+  registerId: number;
+  sessionIds: number[];
+  monedasEntregadas: LineaDenominacion[];
+  billetesEntregados: LineaDenominacion[];
+  billetesRecibidos: LineaDenominacion[];
+}) => pedir<{ operacionId: number; numero: string }>("/bank-deposits/swap", json(datos));
 
 export const crearIngresoBancario = (datos: {
   registerId: number;
