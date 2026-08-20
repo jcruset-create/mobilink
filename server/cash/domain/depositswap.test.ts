@@ -125,6 +125,43 @@ describe("canje para el ingreso bancario", () => {
     expect(canje.valorMonedasCentimos).toBe(1000);
   });
 
+  it("teniendo el de 10 Y el de 50, se lleva el de 50", () => {
+    /*
+     * El caso que manda: con 2×20 en el montón y 10 € en monedas, la propuesta
+     * es entregar los dos de 20 con las monedas y llevarse el de 50. Los dos
+     * canjes ingresan lo mismo, pero éste deja al cajón los dos billetes de 20
+     * y la calderilla, y le quita el billete gordo.
+     */
+    const canje = mejorCanje(
+      MONEDAS_PENDIENTES,
+      BILLETES_PENDIENTES,
+      inventarioDesdeLineas([
+        { valor: 5000, cantidad: 1 },
+        { valor: 1000, cantidad: 1 },
+      ])
+    );
+    if (!canje) throw new Error("debería haber canje");
+
+    expect(canje.valorMonedasCentimos).toBe(1000);
+    expect(canje.billetesRecibidos).toEqual([{ valor: 5000, cantidad: 1 }]);
+    expect(canje.billetesEntregados).toEqual([{ valor: 2000, cantidad: 2 }]);
+  });
+
+  it("el billete grande manda aunque haya que entregar más billetes propios", () => {
+    // Con un 20 y un 50 en caja: gana el 50, entregando los dos de 20.
+    const canje = mejorCanje(
+      inventarioDesdeLineas([{ valor: 200, cantidad: 5 }]),
+      inventarioDesdeLineas([{ valor: 2000, cantidad: 2 }]),
+      inventarioDesdeLineas([
+        { valor: 5000, cantidad: 1 },
+        { valor: 2000, cantidad: 1 },
+      ])
+    );
+    if (!canje) throw new Error("debería haber canje");
+    expect(canje.valorMonedasCentimos).toBe(1000);
+    expect(canje.billetesRecibidos).toEqual([{ valor: 5000, cantidad: 1 }]);
+  });
+
   it("a igual conversión, se lleva menos billetes y deja más calderilla", () => {
     // Se pueden convertir 10 € llevándose un billete de 10, o dos de 5. Gana
     // el de 10: la caja se queda con los dos de 5, que sirven para cambio.
