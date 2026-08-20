@@ -19,6 +19,7 @@ let queries: typeof import("./queries.ts");
 let servicio: typeof import("../cash/service.ts");
 let tesoreria: typeof import("../cash/treasury.ts");
 let ingresosCaja: typeof import("../cash/bankdeposits.ts");
+let reglas: typeof import("./rules/service.ts");
 let transporteCaja: typeof import("../cash/events/transport.ts");
 let workerCaja: typeof import("../cash/events/worker.ts");
 let TransporteLocal: typeof import("./transport.ts").TransporteLocal;
@@ -58,6 +59,7 @@ beforeAll(async () => {
   servicio = await import("../cash/service.ts");
   tesoreria = await import("../cash/treasury.ts");
   ingresosCaja = await import("../cash/bankdeposits.ts");
+  reglas = await import("./rules/service.ts");
   transporteCaja = await import("../cash/events/transport.ts");
   workerCaja = await import("../cash/events/worker.ts");
   TransporteLocal = (await import("./transport.ts")).TransporteLocal;
@@ -70,6 +72,8 @@ beforeAll(async () => {
   await db.query(`DELETE FROM central_deposit_sources WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_bank_deposits WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_denomination_stock WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_incidents WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_rules WHERE empresa_id = $1`, [EMPRESA]);
 });
 
 afterAll(async () => {
@@ -495,7 +499,12 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
           WHERE register_id = $1 ORDER BY valor_centimos DESC`,
         [caja]
       );
-      const porValor = new Map(piezas.map((p: any) => [p.valor_centimos, p.cantidad]));
+      const porValor = new Map<number, number>(
+        (piezas as { valor_centimos: number; cantidad: number }[]).map((p) => [
+          p.valor_centimos,
+          p.cantidad,
+        ])
+      );
       expect(porValor.get(5000)).toBe(1);
       expect(porValor.get(100)).toBe(3);
       expect(porValor.get(10)).toBe(4);
@@ -545,6 +554,187 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
 
       const porPieza = await queries.descuadresPorPieza(EMPRESA);
       expect(porPieza.some((p) => p.valorCentimos === 2000 && p.diferencia < 0)).toBe(true);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * Fase 7: reglas, alertas e incidencias, contra datos reales.
+   *
+   * El motor ya está probado aparte y sin base de datos. Lo que se comprueba
+   * aquí es lo que el motor no puede: que la bandeja no se duplique al
+   * reevaluar, y que lo que deja de pasar se cierre solo.
+   */
+  it("un descuadre abre una incidencia, y reevaluar no la duplica", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'reglas',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `reg-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      await db.query(`UPDATE cash_registers SET codigo = 'RG' || id WHERE id = $1`, [caja]);
+
+      await reglas.guardarRegla(
+        { empresaId: EMPRESA, userId: null },
+        { tipo: "DESCUADRE", ambito: "EMPRESA", umbral: 1000 }
+      );
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 2000, cantidad: 3 }],
+      });
+      // Falta un billete de 20 €: descuadre de 2.000 céntimos.
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 2 }],
+      });
+      await vaciar();
+
+      const primera = await reglas.evaluar(EMPRESA);
+      expect(primera.abiertas).toBeGreaterThanOrEqual(1);
+
+      const bandeja = await reglas.listarIncidencias(EMPRESA);
+      const mia = bandeja.filter((i) => i.registerId === caja && i.tipo === "DESCUADRE");
+      expect(mia).toHaveLength(1);
+      expect(mia[0].valor).toBe(2000);
+      expect(mia[0].umbral).toBe(1000);
+
+      // Reevaluar no abre otra: la barrera es el índice único, no un `if`.
+      await reglas.evaluar(EMPRESA);
+      await reglas.evaluar(EMPRESA);
+      const otraVez = await reglas.listarIncidencias(EMPRESA);
+      expect(otraVez.filter((i) => i.registerId === caja && i.tipo === "DESCUADRE")).toHaveLength(1);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * Lo que deja de pasar se cierra solo. Si hubiera que cerrarlo a mano, la
+   * bandeja acumularía avisos de problemas ya arreglados y en dos semanas
+   * nadie la abriría.
+   */
+  it("el aviso de dinero fuera se cierra solo cuando el dinero vuelve", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'auto',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `aut-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      await db.query(`UPDATE cash_registers SET codigo = 'AU' || id WHERE id = $1`, [caja]);
+
+      // «Más de un día fuera». La regla se lee así de literal: con umbral 0 y
+      // un tránsito de hace un minuto NO salta, y es lo correcto — ir al banco
+      // y volver por la tarde es la operativa normal, no una incidencia.
+      await reglas.guardarRegla(
+        { empresaId: EMPRESA, userId: null },
+        { tipo: "TRANSITO_DIAS", ambito: "EMPRESA", umbral: 1 }
+      );
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 5000, cantidad: 2 }],
+      });
+      const entrega = await tesoreria.entregarDinero(ctx, {
+        sessionId: sesion.id,
+        persona: "Nuria",
+        motivo: "Recambios",
+        importeCentimos: 5000,
+        entregado: [{ valor: 5000, cantidad: 1 }],
+      });
+      await vaciar();
+
+      // Se envejece el tránsito tres días: esperar de verdad no es una opción.
+      await db.query(
+        `UPDATE central_transits SET abierto_en_ms = $2
+          WHERE clase = 'ADVANCE' AND documento_id = $1`,
+        [entrega.id, Date.now() - 3 * 86_400_000]
+      );
+      await reglas.evaluar(EMPRESA);
+
+      const abierta = (await reglas.listarIncidencias(EMPRESA)).find(
+        (i) => i.registerId === caja && i.tipo === "TRANSITO_DIAS"
+      );
+      expect(abierta).toBeTruthy();
+
+      // Vuelve el dinero.
+      await tesoreria.liquidarEntrega(ctx, entrega.id, {
+        sessionId: sesion.id,
+        gastoCentimos: 5000,
+      });
+      await vaciar();
+      const resultado = await reglas.evaluar(EMPRESA);
+      expect(resultado.cerradas).toBeGreaterThanOrEqual(1);
+
+      const viva = (await reglas.listarIncidencias(EMPRESA)).find(
+        (i) => i.registerId === caja && i.tipo === "TRANSITO_DIAS"
+      );
+      expect(viva).toBeUndefined();
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * El descuadre NO se cierra solo: es un hecho que ocurrió. El dinero faltó
+   * ese día aunque hoy la caja cuadre, y cerrarlo automáticamente sería borrar
+   * la única señal de que pasó.
+   */
+  it("el descuadre sigue abierto aunque la caja vuelva a cuadrar", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'persiste',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `per-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      await db.query(`UPDATE cash_registers SET codigo = 'PR' || id WHERE id = $1`, [caja]);
+
+      await reglas.guardarRegla(
+        { empresaId: EMPRESA, userId: null },
+        { tipo: "DESCUADRE", ambito: "EMPRESA", umbral: 100 }
+      );
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [{ valor: 1000, cantidad: 3 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 1000, cantidad: 2 }],
+      });
+      await vaciar();
+      await reglas.evaluar(EMPRESA);
+
+      // Se regulariza: a partir de aquí la caja cuadra.
+      await servicio.regularizarArqueo(ctx, { sessionId: sesion.id, motivo: "Recuento erróneo" });
+      await vaciar();
+      await reglas.evaluar(EMPRESA);
+
+      const sigue = (await reglas.listarIncidencias(EMPRESA)).find(
+        (i) => i.registerId === caja && i.tipo === "DESCUADRE"
+      );
+      expect(sigue).toBeTruthy();
+      expect(sigue!.estado).toBe("ABIERTA");
+
+      // Y la cierra una persona, que es quien puede decir por qué.
+      await reglas.cambiarIncidencia(
+        { empresaId: EMPRESA, userId: null },
+        sigue!.id,
+        "RESUELTA",
+        "Se recontó y apareció"
+      );
+      const cerrada = (await reglas.listarIncidencias(EMPRESA, false)).find(
+        (i) => i.id === sigue!.id
+      );
+      expect(cerrada!.estado).toBe("RESUELTA");
+      expect(cerrada!.cerradaMotivo).toBe("MANUAL");
     } finally {
       transporteCaja.registrarTransporte(null);
     }

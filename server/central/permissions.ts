@@ -14,12 +14,21 @@
 import type { RequestHandler } from "express";
 import pool from "../db.ts";
 
-export const PERMISOS = ["central.view", "central.zones.configure"] as const;
+export const PERMISOS = [
+  "central.view",
+  "central.zones.configure",
+  /** Crear y cambiar reglas: decide a quién avisa el sistema y con qué umbral. */
+  "central.rules.configure",
+  /** Reconocer y resolver incidencias. */
+  "central.incidents.manage",
+] as const;
 export type Permiso = (typeof PERMISOS)[number];
 
 const POR_ROL: Record<string, readonly Permiso[]> = {
   consulta: ["central.view"],
-  supervisor: ["central.view"],
+  // El supervisor atiende la bandeja pero no cambia los umbrales: quien vigila
+  // no debería poder subir el listón hasta que su red deje de dar avisos.
+  supervisor: ["central.view", "central.incidents.manage"],
   admin: PERMISOS,
 };
 

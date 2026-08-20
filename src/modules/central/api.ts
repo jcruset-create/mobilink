@@ -151,6 +151,52 @@ export const cambio = () =>
     descuadres: DescuadrePorPieza[];
   }>("/change");
 
+export type Regla = {
+  id: string;
+  tipo: string;
+  ambito: string;
+  ambitoId: string | null;
+  umbral: number;
+  activa: boolean;
+};
+
+export type Incidencia = {
+  id: string;
+  tipo: string;
+  registerId: number;
+  caja: string | null;
+  sessionId: number | null;
+  umbral: number;
+  valor: number;
+  estado: string;
+  nota: string | null;
+  abiertaEnMs: number;
+  cerradaMotivo: string | null;
+  ambitoRegla: string | null;
+};
+
+export const alertas = (todas = false) =>
+  pedir<{ incidencias: Incidencia[]; reglas: Regla[]; permisos: string[] }>(
+    `/alerts${todas ? "?todas=1" : ""}`
+  );
+
+export const evaluarAhora = () =>
+  pedir<{ abiertas: number; cerradas: number; evaluadas: number }>("/alerts/evaluate", json({}));
+
+export const guardarRegla = (r: {
+  tipo: string;
+  ambito: string;
+  ambitoId?: string | null;
+  umbral: number;
+  activa?: boolean;
+}) => pedir<{ regla: Regla }>("/rules", json(r));
+
+export const cambiarIncidencia = (id: string, estado: "RECONOCIDA" | "RESUELTA", nota?: string) =>
+  pedir<{ ok: true }>(`/incidents/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ estado, nota }),
+  });
+
 export const red = () =>
   pedir<{
     resumen: ResumenRed;

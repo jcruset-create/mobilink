@@ -91,6 +91,7 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "posicion", label: "Posición de efectivo" },
       { key: "ingresos", label: "Ingresos bancarios" },
       { key: "cambio", label: "Cambio" },
+      { key: "incidencias", label: "Incidencias" },
       { key: "jornadas", label: "Jornadas" },
       { key: "organizacion", label: "Organización" },
     ],
