@@ -71,7 +71,10 @@ with normalizado as (
     from app_centros
 ),
 unico as (
-  select empresa_id, clave, min(id) as centro_id
+  -- `(array_agg(id))[1]` y no `min(id)`: PostgreSQL no tiene min() para uuid.
+  -- Da igual cuál se coja porque el `having` de abajo deja solo los grupos de
+  -- un elemento, pero sin agregarlo la consulta ni siquiera compila.
+  select empresa_id, clave, (array_agg(id))[1] as centro_id
     from normalizado
    group by empresa_id, clave
   having count(*) = 1

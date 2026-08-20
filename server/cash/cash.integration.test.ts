@@ -3539,8 +3539,50 @@ describe.runIf(RUN)("arqueo repartido entre las cajas de la ERP", () => {
  * el desplegable no limita a nadie que sepa escribir un id.
  */
 describe.runIf(RUN)("Ámbito por taller", () => {
-  const TALLER_A = "00000000-0000-4000-a000-00000000ce01";
-  const TALLER_B = "00000000-0000-4000-a000-00000000ce02";
+  let TALLER_A = "";
+  let TALLER_B = "";
+
+  /*
+   * El taller se crea en `app_centros` cuando esa tabla existe.
+   *
+   * Con un uuid inventado la prueba pasaba en una base sin la fundación SaaS y
+   * reventaba en una migrada, que es donde importa: `cash_registers.centro_id`
+   * tiene clave ajena y un id que no existe no se puede guardar. Una prueba que
+   * solo pasa donde no hay integridad referencial no prueba nada.
+   */
+  async function taller(nombre: string): Promise<string> {
+    const { rows: hay } = await db.query(
+      `SELECT to_regclass('public.app_centros') IS NOT NULL AS hay`
+    );
+    // Sin fundación SaaS no hay taller que crear, pero el id tiene que ser
+    // DISTINTO en cada llamada: con `Date.now()` los dos talleres de la prueba
+    // salían iguales dentro del mismo milisegundo y la prueba de aislamiento
+    // comparaba un taller consigo mismo. `hrtime` es lo que ya usa `crearCaja`.
+    if (!hay[0]?.hay) {
+      return `00000000-0000-4000-a000-${String(process.hrtime.bigint()).slice(-12)}`;
+    }
+
+    await db.query(
+      // El mismo valor va DOS VECES como parámetro distinto: en una posición
+      // PostgreSQL lo deduce uuid y en la otra texto, y con un solo `$1` se
+      // niega a preparar la consulta («inconsistent types deduced»). El cast
+      // no lo arregla: mueve el conflicto, no lo quita.
+      `INSERT INTO app_empresas (id, nombre, slug) VALUES ($1, 'Pruebas', 'pruebas-' || $2)
+       ON CONFLICT (id) DO NOTHING`,
+      [EMPRESA, EMPRESA]
+    );
+    const { rows } = await db.query(
+      `INSERT INTO app_centros (empresa_id, nombre) VALUES ($1, $2) RETURNING id`,
+      [EMPRESA, `${nombre}-${String(process.hrtime.bigint()).slice(-9)}`]
+    );
+    return rows[0].id;
+  }
+
+  beforeAll(async () => {
+    if (!RUN) return;
+    TALLER_A = await taller("ambito-A");
+    TALLER_B = await taller("ambito-B");
+  });
 
   it("un usuario limitado a su taller no abre la caja de otro, y sí la suya", async () => {
     const cajaA = await crearCaja("ambito-a");
