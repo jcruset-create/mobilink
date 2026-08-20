@@ -189,22 +189,30 @@ no el comportamiento por defecto.
 
 ---
 
-## 4. Configuración
+## 4. Configuración — DECIDIDO
 
-Mismo patrón que `CHECKPOINT_IMAP_*`, documentado en `.env.example`. Decide y
-razona si estos avisos van al **mismo buzón** (`tyrecontrol@mobilink.es`, donde
-ya llega el informe semanal) o a otro.
+**Mismo buzón.** Los avisos se reenvían a `tyrecontrol@mobilink.es`, donde ya
+llega el informe semanal (decisión de Jordi, 20-08-2026). La regla de reenvío
+desde la cuenta de Gmail con la etiqueta `Goodyear-Plana` **la pone él**: no es
+trabajo del código, pero recuérdalo en la entrega.
 
-A favor del mismo: un solo juego de credenciales, un solo vigilante, una sola
-cosa que configurar. En contra: hay que distinguir por asunto o remitente, y si
-esa distinción falla un aviso podría intentar procesarse como informe semanal.
-Mira cómo `esAdjuntoInforme()` decide hoy y aplica el mismo rigor.
+Consecuencia directa: **un solo vigilante lee dos clases de correo**, así que lo
+primero que hace al abrir cada mensaje es decidir cuál es. Y esa decisión tiene
+que ser explícita y estrecha en los dos sentidos:
 
-**[verificado]** Hoy los avisos llegan a una cuenta de Gmail distinta, con la
-etiqueta `Goodyear-Plana`. Haga falta o no una regla de reenvío, dilo claro en
-el análisis: es trabajo de Jordi, no del código.
+- Un aviso de presión **no puede** intentar procesarse como informe semanal.
+- El informe semanal **no puede** intentar procesarse como aviso.
+- Lo que no sea ninguno de los dos se descarta sin ruido.
 
----
+**[verificado]** `esAdjuntoInforme()` en `checkpoint.ts` es hoy quien decide si
+un correo trae el informe: mira el adjunto. Un aviso de presión **no lleva
+adjunto**, así que ese es ya un criterio que separa limpiamente los dos casos —
+pero no te apoyes solo en eso. Reconoce el aviso por lo que ES (asunto y
+plantilla), no por lo que le falta, y escribe el test de los dos correos reales.
+
+No hacen falta variables de entorno nuevas: se reutilizan las `CHECKPOINT_IMAP_*`
+que ya existen. Si añades algo (por ejemplo, a quién avisar cuando un correo no
+se reconoce), documéntalo en `.env.example` junto a las demás.
 
 ## 5. Cómo trabajar
 
@@ -216,8 +224,9 @@ Entrega un documento con:
   `checkpoint.ts` (mapeo de ruedas), `tc_incidencias` y cómo las crea la APK.
 - **B.** El analizador determinista: qué campos, con qué expresiones, y qué pasa
   con cada uno si falta.
-- **C.** Tu decisión sobre el papel de la IA (§1) y sobre buzón compartido o
-  aparte (§4).
+- **C.** Tu decisión sobre el papel de la IA (§1). La del buzón ya está tomada
+  (§4): mismo buzón, un vigilante, y el reconocimiento del tipo de correo
+  explícito en los dos sentidos.
 - **D.** Tu regla de deduplicación (§3.1), con el caso "cinco días seguidos"
   resuelto explícitamente.
 - **E.** Cambios mínimos: Base de datos · Servidor · Panel.
@@ -255,7 +264,8 @@ Prueba también la lógica SQL/RPC que escribas, no solo el TypeScript.
 | **C** | Se soluciona la incidencia y el aviso vuelve una semana después | Una incidencia **nueva** — el problema volvió a aparecer |
 | **D** | Matrícula que no existe en TyreControl | No se crea nada, queda registrado y se avisa |
 | **E** | Correo con formato distinto | No se inventa nada: se registra como no reconocido y se avisa |
-| **F** | Correo que no es un aviso de presión | Se ignora sin ruido |
+| **F** | Llega el informe semanal al mismo buzón | Se procesa como informe, NO como aviso |
+| **F2** | Llega publicidad o cualquier otro correo | Se ignora sin ruido |
 | **G** | Falla el proceso a mitad | El correo se queda sin leer y se reintenta solo |
 
 ---
