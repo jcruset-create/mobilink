@@ -218,12 +218,34 @@ async function construirPortada(d: {
   fila("Cobros", eur(detalle.cobros.totalCentimos));
   fila("Pagos", eur(detalle.pagos.totalCentimos));
   fila("Salidas y entregas", eur(detalle.salidasCentimos + detalle.entregasCentimos));
-  fila("Operaciones registradas", String(detalle.operaciones));
-  fila("Justificantes adjuntos", String(d.documentos));
+  /*
+   * `.length`, no el objeto. `detalleJornada` devuelve la LISTA de operaciones
+   * y pisa el contador que traía el resumen, así que esto imprimía
+   * «[object Object],[object Object]…» en el papel del cierre.
+   */
+  fila("Operaciones registradas", String(detalle.operaciones.length));
+  // Sin justificantes no se dice nada: un «0» en el informe solo hace pensar
+  // que falta algo que buscar.
+  if (d.documentos > 0) fila("Justificantes adjuntos", String(d.documentos));
 
   if (detalle.porFormaPago.length > 0) {
     titulo("Por forma de pago");
     for (const f of detalle.porFormaPago) fila(f.forma, eur(f.importeCentimos));
+  }
+
+  /*
+   * Reparto por sección de negocio: taller y gasolinera comparten cajón, y
+   * este es el desglose que dice cuánto ha puesto cada uno. Es informativo —el
+   * arqueo es del cajón entero— pero es lo que se mira para liquidar.
+   */
+  if (detalle.porSeccion.length > 0) {
+    titulo("Por sección");
+    for (const sec of detalle.porSeccion) {
+      fila(
+        `${sec.nombre} · ${sec.operaciones} ${sec.operaciones === 1 ? "operación" : "operaciones"}`,
+        eur(sec.efectivoNetoCentimos)
+      );
+    }
   }
 
   // ── Arqueo y cierre ──
@@ -244,39 +266,91 @@ async function construirPortada(d: {
     );
   }
 
+  /*
+   * El desglose va en tabla —denominación, formato, cantidad, importe— y no
+   * como una lista de frases. Es lo que se compara pieza a pieza contra el
+   * cajón cuando algo no cuadra, y en columnas se lee de un vistazo; en
+   * renglones sueltos hay que ir leyendo cada línea entera.
+   */
+  const columnasPiezas = [
+    { t: "Denominación", x: M, w: ancho * 0.3, derecha: false },
+    { t: "Formato", x: M + ancho * 0.3, w: ancho * 0.34, derecha: false },
+    { t: "Cantidad", x: M + ancho * 0.64, w: ancho * 0.16, derecha: true },
+    { t: "Importe", x: M + ancho * 0.8, w: ancho * 0.2, derecha: true },
+  ];
+
+  const filaPiezas = (celdas: string[], negrita = false) => {
+    const y = doc.y;
+    doc.font(negrita ? "Helvetica-Bold" : "Helvetica").fontSize(9).fillColor(TINTA);
+    celdas.forEach((c, i) => {
+      doc.text(c, columnasPiezas[i].x, y, {
+        width: columnasPiezas[i].w,
+        align: columnasPiezas[i].derecha ? "right" : "left",
+        lineBreak: false,
+      });
+    });
+    doc.y = y + 12;
+    doc.font("Helvetica").fontSize(10);
+  };
+
   const composicion = (
     etiqueta: string,
     total: number | null,
     piezas: Composicion
   ) => {
     titulo(etiqueta);
-    fila("Total", total == null ? "—" : eur(total), true);
-    for (const l of piezas.sueltas) {
-      fila(`   ${d.etiquetaDe(l.valor)} × ${l.cantidad}`, eur(l.valor * l.cantidad));
-    }
-    for (const t of piezas.tubos) {
-      const n = d.piezasDe(t.valor);
-      fila(
-        `   ${d.etiquetaDe(t.valor)} × ${t.cantidad} ${t.cantidad === 1 ? "cartucho" : "cartuchos"} de ${n}`,
-        eur(t.valor * t.cantidad * n)
-      );
-    }
-    for (const b of piezas.sacos) {
-      const n = d.piezasBolsaDe(b.valor);
-      fila(
-        `   ${d.etiquetaDe(b.valor)} × ${b.cantidad} ${b.cantidad === 1 ? "bolsa" : "bolsas"} de ${n}`,
-        eur(b.valor * b.cantidad * n)
-      );
-    }
-    if (
-      piezas.sueltas.length === 0 &&
-      piezas.tubos.length === 0 &&
-      piezas.sacos.length === 0
-    ) {
+
+    const vacio =
+      piezas.sueltas.length === 0 && piezas.tubos.length === 0 && piezas.sacos.length === 0;
+    if (vacio) {
+      fila("Total", total == null ? "—" : eur(total), true);
       doc.fillColor(GRIS).fontSize(9).text("   sin desglose registrado", M);
       doc.fontSize(10);
       doc.moveDown(0.3);
+      return;
     }
+
+    const y = doc.y;
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(GRIS);
+    for (const c of columnasPiezas) {
+      doc.text(c.t.toUpperCase(), c.x, y, {
+        width: c.w,
+        align: c.derecha ? "right" : "left",
+        lineBreak: false,
+      });
+    }
+    doc.y = y + 12;
+    doc.font("Helvetica").fontSize(10).fillColor(TINTA);
+
+    for (const l of piezas.sueltas) {
+      filaPiezas([
+        d.etiquetaDe(l.valor),
+        "suelto",
+        String(l.cantidad),
+        eur(l.valor * l.cantidad),
+      ]);
+    }
+    for (const t of piezas.tubos) {
+      const n = d.piezasDe(t.valor);
+      filaPiezas([
+        d.etiquetaDe(t.valor),
+        `${t.cantidad === 1 ? "cartucho" : "cartuchos"} de ${n}`,
+        String(t.cantidad),
+        eur(t.valor * t.cantidad * n),
+      ]);
+    }
+    for (const b of piezas.sacos) {
+      const n = d.piezasBolsaDe(b.valor);
+      filaPiezas([
+        d.etiquetaDe(b.valor),
+        `${b.cantidad === 1 ? "bolsa" : "bolsas"} de ${n}`,
+        String(b.cantidad),
+        eur(b.valor * b.cantidad * n),
+      ]);
+    }
+
+    doc.moveDown(0.2);
+    filaPiezas(["Total", "", "", total == null ? "—" : eur(total)], true);
   };
 
   composicion("Cambio final que se queda en caja", s.cambioFinalCentimos, d.cambioFinal);
@@ -296,12 +370,20 @@ async function construirPortada(d: {
 
   // ── Listado de operaciones ──
   titulo("Operaciones");
+  // La sección va en su columna: con taller y gasolinera compartiendo cajón,
+  // saber de cuál es cada operación es la mitad de la lectura del listado.
+  /*
+   * Las anchuras dejan un hueco entre columnas a propósito. Sin él, «IMPORTE»
+   * —que va alineado a la derecha— acababa pegado a «JUST.» y se leía
+   * «IMPORTEJUST.» en la cabecera.
+   */
   const cols = [
-    { x: M, w: ancho * 0.24, t: "Número" },
-    { x: M + ancho * 0.24, w: ancho * 0.14, t: "Tipo" },
-    { x: M + ancho * 0.38, w: ancho * 0.32, t: "Concepto" },
-    { x: M + ancho * 0.7, w: ancho * 0.18, t: "Importe" },
-    { x: M + ancho * 0.88, w: ancho * 0.12, t: "Just." },
+    { x: M, w: ancho * 0.21, t: "Número" },
+    { x: M + ancho * 0.22, w: ancho * 0.12, t: "Tipo" },
+    { x: M + ancho * 0.35, w: ancho * 0.13, t: "Sección" },
+    { x: M + ancho * 0.49, w: ancho * 0.23, t: "Concepto" },
+    { x: M + ancho * 0.73, w: ancho * 0.15, t: "Importe" },
+    { x: M + ancho * 0.91, w: ancho * 0.09, t: "Just." },
   ];
 
   const cabeceraTabla = () => {
@@ -329,15 +411,23 @@ async function construirPortada(d: {
     const valores = [
       o.numero,
       ETIQUETA_TIPO[o.tipo] ?? o.tipo,
-      String(o.concepto || o.partyNombre || "").slice(0, 46),
+      String(o.seccionNombre ?? "—").slice(0, 14),
+      String(o.concepto || o.partyNombre || "").slice(0, 30),
       eur(o.importeCentimos),
       n > 0 ? String(n) : "—",
     ];
     valores.forEach((v, i) => {
+      /*
+       * `height` con `ellipsis` recorta de verdad: solo con `lineBreak: false`
+       * un concepto largo seguía desbordando su columna y se pisaba con el
+       * importe de al lado.
+       */
       doc.fillColor(o.estado === "REVERSED" ? GRIS : TINTA).text(v, cols[i].x, y, {
         width: cols[i].w,
-        align: i === 3 ? "right" : "left",
+        height: 11,
+        align: i === 4 ? "right" : "left",
         lineBreak: false,
+        ellipsis: true,
       });
     });
     doc.y = y + 12;
