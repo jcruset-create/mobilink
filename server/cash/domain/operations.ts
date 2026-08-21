@@ -114,7 +114,21 @@ export type MotivoMovimiento =
   /** Apertura de un cartucho: sale el tubo y entran sus monedas sueltas. */
   | "CARTRIDGE_OPENED"
   /** Apertura de una bolsa: sale la bolsa y entran sus monedas sueltas. */
-  | "BAG_OPENED";
+  | "BAG_OPENED"
+  /**
+   * Lo contrario de abrir: alguien juntó monedas sueltas y las precintó, y
+   * el arqueo las contó ya como envase. Salen las monedas y entra el
+   * cartucho. Neto cero, igual que la apertura.
+   *
+   * Existe porque el arqueo cuenta el FORMATO además de las piezas. Sin
+   * asentarlo, el libro mayor seguía creyendo que esas monedas estaban
+   * sueltas y el cierre repartía un cartucho que para él no existía: el
+   * saldo de cartuchos se iba a negativo y el informe de esa jornada ya no
+   * se podía imprimir.
+   */
+  | "CARTRIDGE_FORMED"
+  /** Lo mismo con una bolsa. */
+  | "BAG_FORMED";
 
 export type Direccion = "IN" | "OUT";
 
