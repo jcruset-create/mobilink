@@ -23,6 +23,7 @@ let reglas: typeof import("./rules/service.ts");
 let avisos: typeof import("./notifications/service.ts");
 let clientes: typeof import("./api/clients.ts");
 let hooks: typeof import("./api/webhooks.ts");
+let conciliacion: typeof import("./reconciliation/service.ts");
 let transporteCaja: typeof import("../cash/events/transport.ts");
 let workerCaja: typeof import("../cash/events/worker.ts");
 let TransporteLocal: typeof import("./transport.ts").TransporteLocal;
@@ -66,6 +67,7 @@ beforeAll(async () => {
   avisos = await import("./notifications/service.ts");
   clientes = await import("./api/clients.ts");
   hooks = await import("./api/webhooks.ts");
+  conciliacion = await import("./reconciliation/service.ts");
   transporteCaja = await import("../cash/events/transport.ts");
   workerCaja = await import("../cash/events/worker.ts");
   TransporteLocal = (await import("./transport.ts")).TransporteLocal;
@@ -86,6 +88,8 @@ beforeAll(async () => {
   await db.query(`DELETE FROM central_webhooks WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_api_tokens WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_api_clients WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_statement_lines WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_bank_statements WHERE empresa_id = $1`, [EMPRESA]);
 });
 
 afterAll(async () => {
@@ -969,5 +973,130 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
     await expect(hooks.crearWebhook(EMPRESA, "http://ejemplo.test/inseguro", [])).rejects.toThrow(
       /https/i
     );
+  });
+
+  /*
+   * Fase 14: conciliación bancaria asistida.
+   *
+   * El lector de Norma 43 y el casador se prueban aparte y sin base de datos.
+   * Lo que se comprueba aquí es lo que ellos no pueden: que un extracto que no
+   * cuadra NO se guarde, y que un ingreso ya conciliado deje de ofrecerse.
+   */
+  const l80 = (s: string) => s.padEnd(80, " ");
+
+  function extractoDePrueba(importeCentimos: number, fecha = "260503"): string {
+    return [
+      l80("11" + "0049" + "1500" + "0123456789" + "260501" + "260531" + "2" + "0".repeat(14)),
+      l80(
+        "22" + "00000000" + fecha + fecha + "12   " + "2" +
+          String(importeCentimos).padStart(14, "0") + "0000000000" + "INGRESO CAJA"
+      ),
+      l80("33" + "0049" + "1500" + "0123456789".padEnd(43, "0") + "2" +
+        String(importeCentimos).padStart(14, "0")),
+    ].join("\n");
+  }
+
+  it("importa un extracto y propone la pareja del ingreso", async () => {
+    // Un ingreso registrado en Central, como lo dejaría un cierre.
+    await db.query(
+      `INSERT INTO central_bank_deposits
+         (deposit_id, empresa_id, numero, fecha, importe_centimos, estado, actualizado_en_ms)
+       VALUES (900001, $1, 'TAR1-IB-26-901', '2026-05-03', 150000, 'CONFIRMADO', $2)
+       ON CONFLICT (deposit_id) DO NOTHING`,
+      [EMPRESA, Date.now()]
+    );
+
+    const r = await conciliacion.importarExtracto(
+      { empresaId: EMPRESA, userId: null },
+      "mayo.q43",
+      extractoDePrueba(150000)
+    );
+    expect(r.cuadra).toBe(true);
+    expect(r.apuntes).toBe(1);
+
+    const p = await conciliacion.propuestas(EMPRESA, r.statementId!);
+    expect(p.resumen.altas).toBe(1);
+    expect(p.propuestas[0].candidatos[0].depositId).toBe(900001);
+
+    // Se confirma, y a partir de ahí el ingreso deja de ofrecerse: ofrecer uno
+    // ya casado es invitar a contarlo dos veces.
+    await conciliacion.conciliar(
+      { empresaId: EMPRESA, userId: null },
+      p.propuestas[0].apunteId,
+      900001
+    );
+
+    const despues = await conciliacion.propuestas(EMPRESA, r.statementId!);
+    expect(despues.apuntes).toHaveLength(0);
+  });
+
+  /*
+   * Un extracto incompleto conciliado a medias da por descuadrado lo que en
+   * realidad estaba bien, y deshacerlo cuesta más que volver a pedir el fichero.
+   */
+  it("un extracto que no cuadra consigo mismo no se guarda", async () => {
+    const roto = [
+      l80("11" + "0049" + "1500" + "0123456789" + "260501" + "260531" + "2" + "0".repeat(14)),
+      l80("22" + "00000000" + "260503" + "260503" + "12   " + "2" + "150000".padStart(14, "0")),
+      l80("33" + "0049" + "1500" + "0123456789".padEnd(43, "0") + "2" + "999999".padStart(14, "0")),
+    ].join("\n");
+
+    const r = await conciliacion.importarExtracto(
+      { empresaId: EMPRESA, userId: null },
+      "roto.q43",
+      roto
+    );
+    expect(r.statementId).toBeNull();
+    expect(r.errores.join(" ")).toMatch(/no cuadra/i);
+
+    // Se cuenta ESTE fichero, no todos: otras pruebas importan los suyos.
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM central_bank_statements
+        WHERE empresa_id = $1 AND nombre_fichero = 'roto.q43'`,
+      [EMPRESA]
+    );
+    expect(rows[0].n).toBe(0);
+  });
+
+  it("un apunte ajeno a la caja se descarta y deja de estorbar", async () => {
+    const r = await conciliacion.importarExtracto(
+      { empresaId: EMPRESA, userId: null },
+      "comisiones.q43",
+      extractoDePrueba(3300)
+    );
+    const p = await conciliacion.propuestas(EMPRESA, r.statementId!);
+    expect(p.apuntes).toHaveLength(1);
+
+    await conciliacion.descartar(
+      { empresaId: EMPRESA, userId: null },
+      p.apuntes[0].id,
+      "Comisión de mantenimiento"
+    );
+
+    const despues = await conciliacion.propuestas(EMPRESA, r.statementId!);
+    expect(despues.apuntes).toHaveLength(0);
+  });
+
+  it("un apunte ya conciliado no se puede volver a conciliar", async () => {
+    await db.query(
+      `INSERT INTO central_bank_deposits
+         (deposit_id, empresa_id, numero, fecha, importe_centimos, estado, actualizado_en_ms)
+       VALUES (900002, $1, 'TAR1-IB-26-902', '2026-05-03', 77700, 'CONFIRMADO', $2)
+       ON CONFLICT (deposit_id) DO NOTHING`,
+      [EMPRESA, Date.now()]
+    );
+
+    const r = await conciliacion.importarExtracto(
+      { empresaId: EMPRESA, userId: null },
+      "otro.q43",
+      extractoDePrueba(77700)
+    );
+    const p = await conciliacion.propuestas(EMPRESA, r.statementId!);
+    const apunte = p.propuestas[0].apunteId;
+
+    await conciliacion.conciliar({ empresaId: EMPRESA, userId: null }, apunte, 900002);
+    await expect(
+      conciliacion.conciliar({ empresaId: EMPRESA, userId: null }, apunte, 900002)
+    ).rejects.toThrow(/ya está conciliado/i);
   });
 });

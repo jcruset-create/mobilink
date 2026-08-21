@@ -520,6 +520,65 @@ export async function initCentral(): Promise<void> {
       WHERE estado IN ('PENDIENTE','ERROR');
   `);
 
+  /*
+   * Extractos bancarios y su conciliación.
+   *
+   * Los apuntes se guardan tal cual vienen del banco, sin interpretar: es el
+   * documento original y lo que permite volver a mirarlo cuando alguien
+   * pregunta por qué se casó una cosa con otra.
+   *
+   * La conciliación es una columna en el apunte y no una tabla aparte: un
+   * apunte se concilia con un ingreso, uno a uno. Si algún día hiciera falta
+   * casar un apunte con varios ingresos —un banco que agrupa— sería otra
+   * historia, pero inventar hoy esa tabla es complicar sin caso.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS central_bank_statements (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      nombre_fichero TEXT,
+      cuenta TEXT,
+      desde DATE,
+      hasta DATE,
+      saldo_inicial_centimos BIGINT,
+      saldo_final_centimos BIGINT,
+      -- El saldo declarado por el banco cuadra con sus propios movimientos.
+      cuadra BOOLEAN NOT NULL DEFAULT false,
+      importado_por UUID,
+      importado_en_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS central_statements_empresa_idx
+      ON central_bank_statements(empresa_id, hasta DESC NULLS LAST);
+
+    CREATE TABLE IF NOT EXISTS central_statement_lines (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      statement_id UUID NOT NULL,
+      empresa_id UUID NOT NULL,
+      fecha DATE,
+      fecha_valor DATE,
+      importe_centimos BIGINT NOT NULL,
+      concepto TEXT,
+      ampliado TEXT,
+      referencia TEXT,
+      -- Con qué ingreso se ha casado, y quién lo confirmó. NULL = pendiente.
+      deposit_id INTEGER,
+      conciliado_por UUID,
+      conciliado_en_ms BIGINT,
+      -- Se puede marcar como «no es de caja»: comisiones, recibos, nóminas.
+      descartado BOOLEAN NOT NULL DEFAULT false,
+      descartado_motivo TEXT
+    );
+    CREATE INDEX IF NOT EXISTS central_lines_extracto_idx
+      ON central_statement_lines(statement_id, fecha);
+    CREATE INDEX IF NOT EXISTS central_lines_pendientes_idx
+      ON central_statement_lines(empresa_id)
+      WHERE deposit_id IS NULL AND NOT descartado;
+    -- Un ingreso no puede quedar conciliado con dos apuntes del banco: sería
+    -- contarlo dos veces en el extracto.
+    CREATE UNIQUE INDEX IF NOT EXISTS central_lines_deposito_idx
+      ON central_statement_lines(deposit_id) WHERE deposit_id IS NOT NULL;
+  `);
+
   await registrarModuloCentral();
 
   console.log("MC Central: esquema inicializado correctamente");
