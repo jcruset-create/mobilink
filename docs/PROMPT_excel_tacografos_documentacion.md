@@ -3,6 +3,8 @@
 > Estado: **especificación previa**. No se ha programado nada todavía.
 > Falta el fichero `.xlsx` original: debe adjuntarse antes de ejecutar la fase 0.
 > Centro técnico: COMERCIAL SEA S.A. — Nº centro `E943009`.
+> El Excel es la **fase 1** del módulo propio `tacografos`: ver
+> [`PROMPT_modulo_tacografos.md`](./PROMPT_modulo_tacografos.md).
 
 ---
 
