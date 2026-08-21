@@ -19,6 +19,7 @@ import { authenticate, requireModule } from "../core/auth.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCaja, exigirPermiso } from "./permissions.ts";
+import * as reauth from "./reauth.ts";
 import * as jerarquia from "./hierarchy.ts";
 import { estadoCola, procesarEventos, reintentarEventos } from "./events/worker.ts";
 import { miniaturaBoton, miniaturaFicha } from "./images.ts";
@@ -378,6 +379,25 @@ export function createCashRouter(): Router {
       const reencolados = await reintentarEventos(req.authCtx!.empresaId);
       const tratados = await procesarEventos();
       res.json({ reencolados, tratados });
+    })
+  );
+
+  /**
+   * Volver a identificarse.
+   *
+   * No lleva `exigirPermiso` porque no es una acción sobre la caja: es el
+   * usuario diciendo «sigo siendo yo». Quien no tenga permiso para lo que venga
+   * después se topará con él allí.
+   */
+  r.post(
+    "/reauth",
+    ruta(async (req, res) => {
+      const clave = String((req.body ?? {}).clave ?? "");
+      if (!clave) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "Hace falta la clave.", 400);
+      }
+      await reauth.reautenticar(req.authCtx!.userId, clave);
+      res.json({ ok: true, validoHastaMs: Date.now() + reauth.VALIDEZ_MS });
     })
   );
 
@@ -1194,6 +1214,9 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.session.reopen"),
     ruta(async (req, res) => {
       const motivo = String((req.body ?? {}).motivo ?? "");
+      // Reabrir permite recerrar con otras cifras. Si la reautenticación está
+      // encendida, aquí es donde toca demostrar quién está delante.
+      await reauth.exigirReautenticacion(req.authCtx!.empresaId, req.authCtx!.userId);
       res.json({
         sesion: await servicio.reabrirJornada(contexto(req), enteroPositivo(req.params.id, "id"), motivo),
       });
@@ -1445,6 +1468,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.operation.reverse"),
     ruta(async (req, res) => {
       const motivo = String((req.body ?? {}).motivo ?? "");
+      await reauth.exigirReautenticacion(req.authCtx!.empresaId, req.authCtx!.userId);
       res.json(
         await servicio.anularOperacion(contexto(req), enteroPositivo(req.params.id, "id"), motivo)
       );

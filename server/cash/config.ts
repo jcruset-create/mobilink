@@ -776,13 +776,35 @@ export async function actualizarFormaPago(
 export const AJUSTES = {
   /** Imagen del botón «Mixto» de cobros. */
   MIXTO_IMAGEN: "mixto_imagen_url",
+  /**
+   * Separación de funciones: quien registró algo no puede deshacerlo.
+   *
+   * `"1"` lo enciende. Viene apagado porque en un taller de dos personas
+   * dejaría al mismo responsable sin poder anular nada, y el resultado sería
+   * que comparten usuario —que es peor que no tener separación—.
+   */
+  SOD_ACTIVO: "sod_activo",
+  /**
+   * Reautenticación para las acciones sensibles. `"1"` la enciende.
+   *
+   * Una sesión abierta en el mostrador es una sesión abierta para cualquiera
+   * que pase por delante; contra eso no sirve el permiso, porque el permiso lo
+   * tiene el usuario que dejó la pantalla puesta.
+   */
+  REAUTH_ACTIVO: "reauth_activo",
 } as const;
 
 export type ClaveAjuste = (typeof AJUSTES)[keyof typeof AJUSTES];
 
 const CLAVES_VALIDAS: string[] = Object.values(AJUSTES);
 
-export type Ajustes = { mixtoImagenUrl: string | null };
+export type Ajustes = {
+  mixtoImagenUrl: string | null;
+  /** Separación de funciones activada: quien hizo algo no puede deshacerlo. */
+  sodActivo: boolean;
+  /** Reautenticación exigida para anular y reabrir. */
+  reauthActivo: boolean;
+};
 
 /** Todos los ajustes de la empresa, ya con la forma que espera el frontend. */
 export async function ajustes(empresaId: string): Promise<Ajustes> {
@@ -791,7 +813,11 @@ export async function ajustes(empresaId: string): Promise<Ajustes> {
     [empresaId]
   );
   const mapa = new Map(rows.map((r) => [r.clave, r.valor]));
-  return { mixtoImagenUrl: mapa.get(AJUSTES.MIXTO_IMAGEN) ?? null };
+  return {
+    mixtoImagenUrl: mapa.get(AJUSTES.MIXTO_IMAGEN) ?? null,
+    sodActivo: mapa.get(AJUSTES.SOD_ACTIVO) === "1",
+    reauthActivo: mapa.get(AJUSTES.REAUTH_ACTIVO) === "1",
+  };
 }
 
 /** Fija un ajuste. `null` lo borra. */

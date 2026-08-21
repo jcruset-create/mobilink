@@ -24,8 +24,18 @@
 import pool from "../db.ts";
 import { DENOMINACIONES_SEMILLA } from "./domain/denominations.ts";
 import { proponerCodigo } from "./domain/registercode.ts";
+import { initAuditoria } from "../core/auditoriaSchema.ts";
 
 export async function initCash(): Promise<void> {
+  /*
+   * La auditoría, lo primero.
+   *
+   * La crea la migración de la fundación SaaS, que se aplica a mano, así que en
+   * una base sin ella las llamadas del módulo fallaban en silencio. Ahora se
+   * asegura aquí: el módulo que audita es el que se ocupa de que haya dónde.
+   */
+  await initAuditoria();
+
   // ── Catálogo de denominaciones y cartuchos ────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cash_denominations (
@@ -1032,6 +1042,24 @@ export async function initCash(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS cash_docs_sha_idx
       ON cash_operation_documents(empresa_id, sha256) WHERE sha256 IS NOT NULL;
+  `);
+
+  /*
+   * Marca de reautenticación reciente.
+   *
+   * En la base y no en memoria: en Render hay varias instancias y la siguiente
+   * petición puede caer en otra. Con un mapa en memoria, reautenticarse valdría
+   * o no según a quién le tocara responder — intermitente y sin explicación,
+   * que es la peor clase de fallo.
+   *
+   * Una fila por usuario, que se pisa: no interesa el histórico de cuándo se ha
+   * identificado cada uno, y para eso ya está la auditoría.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_reauth (
+      user_id UUID PRIMARY KEY,
+      hasta_ms BIGINT NOT NULL
+    );
   `);
 
   await asignarCodigosDeCaja();

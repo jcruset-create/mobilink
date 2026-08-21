@@ -123,9 +123,6 @@ export function permisosDeRol(rol: string | null | undefined): readonly Permiso[
   return POR_ROL[rol as RolCaja] ?? [];
 }
 
-const CACHE_TTL_MS = 60_000;
-const cache = new Map<string, { ambito: AmbitoCaja; expiresAt: number }>();
-
 /**
  * Lo que el usuario es en Mobilink Cash: su rol y hasta dónde llega.
  *
@@ -144,23 +141,29 @@ export type AmbitoCaja = { rol: string | null; centroId: string | null };
  * Un superadmin es admin de caja sin necesidad de fila —el mismo criterio que
  * aplica `requireModule` con las licencias— y sin límite de taller: si tuviera
  * ámbito, no podría supervisar la red, que es justo para lo que está.
+ *
+ * **Sin caché, y es un cambio deliberado de la fase 10.** Había una de 60
+ * segundos, lo que significaba que retirarle el permiso a alguien tardaba hasta
+ * un minuto en surtir efecto (riesgo R10). No se puede arreglar invalidándola:
+ * los roles se escriben desde el navegador contra Supabase, así que el servidor
+ * no se entera, y aunque hubiera un endpoint para vaciarla solo alcanzaría a la
+ * instancia que atendiera esa llamada —en Render hay varias—.
+ *
+ * Lo que cuesta quitarla es una lectura por clave indexada en cada petición.
+ * Lo que compra es que retirar un permiso surta efecto en la siguiente, que
+ * para el permiso de mover dinero es la respuesta correcta.
  */
 export async function rolDeCaja(userId: string, esSuperadmin: boolean): Promise<AmbitoCaja> {
   if (esSuperadmin) return { rol: "admin", centroId: null };
-
-  const hit = cache.get(userId);
-  if (hit && hit.expiresAt > Date.now()) return hit.ambito;
 
   const { rows } = await pool.query<{ rol: string; centro_id: string | null }>(
     `SELECT rol, centro_id FROM app_usuario_modulos WHERE user_id = $1 AND modulo = 'cash'`,
     [userId]
   );
-  const ambito: AmbitoCaja = {
+  return {
     rol: rows[0]?.rol ?? null,
     centroId: rows[0]?.centro_id ?? null,
   };
-  cache.set(userId, { ambito, expiresAt: Date.now() + CACHE_TTL_MS });
-  return ambito;
 }
 
 declare module "express-serve-static-core" {

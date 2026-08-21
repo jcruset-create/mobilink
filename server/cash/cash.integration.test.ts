@@ -38,6 +38,7 @@ let tesoreria: typeof import("./treasury.ts");
 let documentos: typeof import("./documents.ts");
 let ingresos: typeof import("./bankdeposits.ts");
 let informe: typeof import("./report.ts");
+let reauth: typeof import("./reauth.ts");
 let eventos: typeof import("./events/worker.ts");
 let transporte: typeof import("./events/transport.ts");
 let MockCashErpConnector: typeof import("./erp/mock.ts").MockCashErpConnector;
@@ -108,6 +109,7 @@ beforeAll(async () => {
   documentos = await import("./documents.ts");
   ingresos = await import("./bankdeposits.ts");
   informe = await import("./report.ts");
+  reauth = await import("./reauth.ts");
   eventos = await import("./events/worker.ts");
   transporte = await import("./events/transport.ts");
   const mock = await import("./erp/mock.ts");
@@ -3970,5 +3972,248 @@ describe.runIf(RUN)("Evidencias con huella y versión", () => {
 
     // Y uno distinto no sale como duplicado.
     expect(await documentos.duplicadosDe(EMPRESA, await pdfDePrueba("OTRO"))).toHaveLength(0);
+  });
+});
+
+/**
+ * Auditoría inmutable y separación de funciones (fase 10 de MC Central).
+ *
+ * La auditoría no la ejercitaba NINGUNA prueba: `app_auditoria` la creaba una
+ * migración que se aplica a mano, no existía en la base de pruebas, y como
+ * `registrarAuditoria` traga sus errores, las 35 llamadas del módulo fallaban
+ * en silencio sin que nadie se enterara. Eso es lo primero que se comprueba
+ * aquí: que ahora se escribe de verdad.
+ */
+describe.runIf(RUN)("Auditoría inmutable y separación de funciones", () => {
+  async function cobroSuelto(nombre: string) {
+    const caja = await crearCaja(nombre);
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+    });
+    return { caja, sesion, cobro };
+  }
+
+  it("un cobro deja su línea de auditoría, con huella", async () => {
+    const { cobro } = await cobroSuelto("auditoria");
+
+    const { rows } = await db.query(
+      `SELECT accion, huella, detalle FROM app_auditoria
+        WHERE entidad = 'cash_operations' AND entidad_id = $1`,
+      [String(cobro.operacionId)]
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].accion).toBe("cash.operation.collection");
+    expect(rows[0].huella).toMatch(/^[0-9a-f]{64}$/);
+    expect(rows[0].detalle.numero).toBe(cobro.numero);
+  });
+
+  /*
+   * Las políticas RLS ya impedían modificar y borrar, pero el servidor se
+   * conecta con `pg` y no pasa por RLS. El disparador sí alcanza a todo el
+   * mundo, y eso es lo que se comprueba: con la misma conexión que usa el
+   * módulo.
+   */
+  it("una línea de auditoría no se puede cambiar ni borrar", async () => {
+    const { cobro } = await cobroSuelto("inmutable");
+    const { rows } = await db.query(
+      `SELECT id FROM app_auditoria WHERE entidad_id = $1 LIMIT 1`,
+      [String(cobro.operacionId)]
+    );
+    const id = rows[0].id;
+
+    await expect(
+      db.query(`UPDATE app_auditoria SET accion = 'otra cosa' WHERE id = $1`, [id])
+    ).rejects.toThrow(/inmutable/i);
+
+    await expect(db.query(`DELETE FROM app_auditoria WHERE id = $1`, [id])).rejects.toThrow(
+      /inmutable/i
+    );
+
+    // Y sigue ahí, intacta.
+    const { rows: despues } = await db.query(
+      `SELECT accion FROM app_auditoria WHERE id = $1`,
+      [id]
+    );
+    expect(despues[0].accion).toBe("cash.operation.collection");
+  });
+
+  /*
+   * La auditoría va DENTRO de la transacción del dinero. Si no se puede
+   * escribir, la operación no se guarda: es la mitad que faltaba del riesgo R2
+   * —antes podía quedar un cobro asentado sin ninguna línea que dijera quién lo
+   * hizo—.
+   */
+  it("si la auditoría no se puede escribir, el cobro tampoco se guarda", async () => {
+    const caja = await crearCaja("r2");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+
+    // Se rompe la escritura de auditoría a propósito, con un disparador que
+    // falla. Es la forma de provocar en una prueba lo que en producción sería
+    // un problema de la base de datos.
+    await db.query(`
+      CREATE OR REPLACE FUNCTION app_auditoria_romper() RETURNS TRIGGER AS $$
+      BEGIN RAISE EXCEPTION 'auditoria caida'; END $$ LANGUAGE plpgsql;
+      CREATE TRIGGER app_auditoria_romper_trg BEFORE INSERT ON app_auditoria
+        FOR EACH ROW EXECUTE FUNCTION app_auditoria_romper();
+    `);
+
+    try {
+      await expect(
+        servicio.registrarCobro(ctx, {
+          sessionId: sesion.id,
+          importeCentimos: 5000,
+          formasPago: [{ forma: "CASH", importe: 5000 }],
+          efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+        })
+      ).rejects.toThrow();
+    } finally {
+      await db.query(`DROP TRIGGER IF EXISTS app_auditoria_romper_trg ON app_auditoria`);
+    }
+
+    // Nada asentado: ni operación ni movimientos. El dinero no se ha movido.
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_operations WHERE session_id = $1 AND tipo = 'COLLECTION'`,
+      [sesion.id]
+    );
+    expect(rows[0].n).toBe(0);
+  });
+
+  it("con SoD apagado, quien cobra puede anular: es el comportamiento de siempre", async () => {
+    const { cobro } = await cobroSuelto("sod-off");
+    const anulada = await servicio.anularOperacion(ctx, cobro.operacionId, "Error de tecleo");
+    expect(anulada.operacionId).toBeGreaterThan(0);
+  });
+
+  /*
+   * Encendido, la misma persona no puede deshacer lo que hizo. Anular una
+   * operación y reabrir una jornada son justo las dos acciones que borran el
+   * rastro de un descuadre.
+   */
+  it("con SoD encendido, quien cobró no puede anular, y otra persona sí", async () => {
+    const yo = "00000000-0000-4000-a000-00000000aa01";
+    const otro = "00000000-0000-4000-a000-00000000aa02";
+
+    const caja = await crearCaja("sod-on");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    const cobro = await servicio.registrarCobro(
+      { ...ctx, userId: yo },
+      {
+        sessionId: sesion.id,
+        importeCentimos: 5000,
+        formasPago: [{ forma: "CASH", importe: 5000 }],
+        efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      }
+    );
+
+    await config.fijarAjuste(ctx, config.AJUSTES.SOD_ACTIVO, "1");
+    try {
+      await expect(
+        servicio.anularOperacion({ ...ctx, userId: yo }, cobro.operacionId, "Me equivoqué")
+      ).rejects.toMatchObject({ codigo: "SOD_REQUIERE_OTRA_PERSONA" });
+
+      // Sin usuario identificado tampoco: ante la duda, no.
+      await expect(
+        servicio.anularOperacion({ ...ctx, userId: null }, cobro.operacionId, "Anónimo")
+      ).rejects.toMatchObject({ codigo: "SOD_REQUIERE_OTRA_PERSONA" });
+
+      const anulada = await servicio.anularOperacion(
+        { ...ctx, userId: otro },
+        cobro.operacionId,
+        "Lo revisa el encargado"
+      );
+      expect(anulada.operacionId).toBeGreaterThan(0);
+    } finally {
+      await config.fijarAjuste(ctx, config.AJUSTES.SOD_ACTIVO, null);
+    }
+  });
+});
+
+/**
+ * Reautenticación (fase 10).
+ *
+ * El verificador es enchufable por la misma razón que el conector de ERP: la
+ * comprobación real va contra Supabase, que aquí no existe, y la REGLA —cuánto
+ * dura, quién pasa, qué ocurre al caducar— se puede probar sin levantar nada.
+ */
+describe.runIf(RUN)("Reautenticación", () => {
+  const USUARIO = "00000000-0000-4000-a000-00000000bb01";
+
+  it("una clave correcta vale diez minutos; una equivocada no vale nada", async () => {
+    reauth.registrarVerificador({
+      verificar: async (_id, clave) => clave === "correcta",
+    });
+    try {
+      await expect(reauth.reautenticar(USUARIO, "mal")).rejects.toMatchObject({
+        codigo: "CLAVE_NO_VALIDA",
+      });
+      expect(await reauth.estaReautenticado(USUARIO)).toBe(false);
+
+      await reauth.reautenticar(USUARIO, "correcta");
+      expect(await reauth.estaReautenticado(USUARIO)).toBe(true);
+    } finally {
+      reauth.registrarVerificador(null);
+    }
+  });
+
+  it("caduca: identificarse hace media hora no sirve para lo de ahora", async () => {
+    reauth.registrarVerificador({ verificar: async () => true });
+    try {
+      await reauth.reautenticar(USUARIO, "loquesea");
+
+      // Se envejece la marca media hora. Esperar de verdad no es una opción.
+      await db.query(`UPDATE cash_reauth SET hasta_ms = $2 WHERE user_id = $1`, [
+        USUARIO,
+        Date.now() - 30 * 60_000,
+      ]);
+      expect(await reauth.estaReautenticado(USUARIO)).toBe(false);
+    } finally {
+      reauth.registrarVerificador(null);
+    }
+  });
+
+  it("apagada no estorba; encendida exige identificarse, y sin usuario no pasa", async () => {
+    // Apagada: la acción sensible no pide nada.
+    await expect(reauth.exigirReautenticacion(EMPRESA, USUARIO)).resolves.toBeUndefined();
+
+    await config.fijarAjuste(ctx, config.AJUSTES.REAUTH_ACTIVO, "1");
+    try {
+      await expect(reauth.exigirReautenticacion(EMPRESA, USUARIO)).rejects.toMatchObject({
+        codigo: "REAUTENTICACION_REQUERIDA",
+      });
+
+      // Ante la duda, no: un usuario sin identificar no puede demostrar nada.
+      await expect(reauth.exigirReautenticacion(EMPRESA, null)).rejects.toMatchObject({
+        codigo: "REAUTENTICACION_REQUERIDA",
+      });
+
+      reauth.registrarVerificador({ verificar: async () => true });
+      await reauth.reautenticar(USUARIO, "correcta");
+      await expect(reauth.exigirReautenticacion(EMPRESA, USUARIO)).resolves.toBeUndefined();
+    } finally {
+      reauth.registrarVerificador(null);
+      await config.fijarAjuste(ctx, config.AJUSTES.REAUTH_ACTIVO, null);
+      await db.query(`DELETE FROM cash_reauth WHERE user_id = $1`, [USUARIO]);
+    }
+  });
+
+  it("sin verificador registrado no se puede comprobar, y se dice", async () => {
+    reauth.registrarVerificador(null);
+    await expect(reauth.reautenticar(USUARIO, "loquesea")).rejects.toMatchObject({
+      codigo: "REAUTENTICACION_NO_DISPONIBLE",
+    });
   });
 });
