@@ -32,6 +32,10 @@ const SE_CIERRAN_SOLOS = new Set([
   "SIN_CERRAR_DIAS",
   "PENDIENTE_BANCO_DIAS",
   "CALDERILLA_MINIMA",
+  // Los dos de la fase 24 también describen un estado en curso: en cuanto la
+  // caja se repone o la cola se desatasca, la incidencia sobra.
+  "AUTONOMIA_DIAS",
+  "COLA_ATASCADA_MINUTOS",
 ]);
 
 export async function listarReglas(empresaId: string): Promise<Regla[]> {
@@ -161,6 +165,14 @@ async function estadoDeLaRed(empresaId: string): Promise<EstadoCaja[]> {
   const dias = (ms: number | null) =>
     ms == null ? null : Math.floor((hoy - Number(ms)) / 86_400_000);
 
+  /*
+   * El retraso de las colas es de la INSTALACIÓN, no de cada caja: la cola de
+   * eventos es una sola. Se calcula una vez y se le pone el mismo valor a
+   * todas, para que la regla pueda tener ámbito de empresa como las demás sin
+   * inventar un ámbito nuevo solo para esto.
+   */
+  const colaRetrasoMinutos = await retrasoDeLasColas();
+
   return rows.map((r: any) => ({
     registerId: r.register_id,
     centroId: r.centro_id ?? null,
@@ -178,7 +190,66 @@ async function estadoDeLaRed(empresaId: string): Promise<EstadoCaja[]> {
           ),
     pendienteCentimos: r.pendiente_centimos == null ? null : Number(r.pendiente_centimos),
     calderillaCentimos: r.calderilla_centimos == null ? null : Number(r.calderilla_centimos),
+    autonomiaDias: null,
+    colaRetrasoMinutos,
   }));
+}
+
+/**
+ * Minutos que lleva esperando lo más viejo de las colas de envío.
+ *
+ * Se mira el evento y el aviso más antiguos que siguen pendientes. En tiempo y
+ * no en cantidad, por lo mismo que en la pantalla de estado: cien pendientes de
+ * hace treinta segundos es una tarde normal y tres de hace dos días es una
+ * integración rota.
+ */
+async function retrasoDeLasColas(): Promise<number | null> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT LEAST(
+                (SELECT MIN(created_at_ms) FROM cash_event_outbox
+                  WHERE estado IN ('PENDING','RETRY_PENDING')),
+                (SELECT MIN(creado_en_ms) FROM central_notifications
+                  WHERE estado = 'PENDIENTE')
+              ) AS mas_viejo`
+    );
+    const ms = rows[0]?.mas_viejo;
+    return ms == null ? null : Math.floor((Date.now() - Number(ms)) / 60_000);
+  } catch {
+    // Que no se pueda medir la cola no puede impedir evaluar lo demás.
+    return null;
+  }
+}
+
+/**
+ * Añade a cada caja los días de cambio que le quedan según la predicción.
+ *
+ * Va aparte y después porque **predecir cuesta**: es una consulta por caja
+ * sobre el libro mayor. Se hace solo si hay alguna regla que lo pida, para que
+ * una empresa que no use este aviso no pague por él en cada vuelta del ciclo.
+ */
+async function conAutonomia(
+  empresaId: string,
+  cajas: EstadoCaja[],
+  reglas: readonly Regla[]
+): Promise<EstadoCaja[]> {
+  if (!reglas.some((r) => r.tipo === "AUTONOMIA_DIAS" && r.activa)) return cajas;
+
+  const { prediccionDeCaja } = await import("../forecast/service.ts");
+  const salida: EstadoCaja[] = [];
+
+  for (const c of cajas) {
+    try {
+      const p = await prediccionDeCaja(empresaId, c.registerId, 14);
+      salida.push({ ...c, autonomiaDias: p.diasDeAutonomia });
+    } catch {
+      // Una caja que no se puede predecir no dispara la regla: sin dato no hay
+      // incidencia, que es lo que ya hace el motor con todo lo demás.
+      salida.push(c);
+    }
+  }
+
+  return salida;
 }
 
 export type ResultadoEvaluacion = {
@@ -196,7 +267,8 @@ export type ResultadoEvaluacion = {
  * parcial sobre las incidencias vivas es lo que lo garantiza — no un `if`.
  */
 export async function evaluar(empresaId: string): Promise<ResultadoEvaluacion> {
-  const [reglas, cajas] = await Promise.all([listarReglas(empresaId), estadoDeLaRed(empresaId)]);
+  const [reglas, base] = await Promise.all([listarReglas(empresaId), estadoDeLaRed(empresaId)]);
+  const cajas = await conAutonomia(empresaId, base, reglas);
   const incidencias = evaluarRed(reglas, cajas);
   const ahora = Date.now();
 

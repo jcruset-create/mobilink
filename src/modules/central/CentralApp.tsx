@@ -1068,12 +1068,30 @@ const TIPOS: { valor: string; label: string; ayuda: string; unidad: "euros" | "d
     ayuda: "Avisa cuando las monedas de la caja bajan de este importe.",
     unidad: "euros",
   },
+  {
+    valor: "AUTONOMIA_DIAS",
+    label: "Se queda sin cambio",
+    ayuda:
+      "Días de cambio que le quedan según la predicción. Un importe fijo no sabe si esa caja gasta 5 € o 50 € al día; los días sí.",
+    unidad: "dias",
+  },
+  {
+    valor: "COLA_ATASCADA_MINUTOS",
+    label: "Cola de envío atascada",
+    ayuda:
+      "Minutos que lleva esperando lo más viejo por enviar. Es la única avería que no se nota: la caja sigue cobrando y Central se queda atrás.",
+    unidad: "dias",
+  },
 ];
 
 const etiquetaTipo = (t: string) => TIPOS.find((x) => x.valor === t)?.label ?? t;
 const unidadDe = (t: string) => TIPOS.find((x) => x.valor === t)?.unidad ?? "euros";
 const valorLegible = (tipo: string, v: number) =>
-  unidadDe(tipo) === "euros" ? euros(v) : `${v} día${v === 1 ? "" : "s"}`;
+  unidadDe(tipo) === "euros"
+    ? euros(v)
+    : tipo === "COLA_ATASCADA_MINUTOS"
+      ? `${v} min`
+      : `${v} día${v === 1 ? "" : "s"}`;
 
 /**
  * La bandeja, y debajo las reglas que la llenan.
@@ -1233,7 +1251,11 @@ function Incidencias() {
             </label>
             <label className="block">
               <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
-                {unidadDe(tipo) === "euros" ? "Importe (€)" : "Días"}
+                {unidadDe(tipo) === "euros"
+                  ? "Importe (€)"
+                  : tipo === "COLA_ATASCADA_MINUTOS"
+                    ? "Minutos"
+                    : "Días"}
               </span>
               <input
                 value={umbral}

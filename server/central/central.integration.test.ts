@@ -80,7 +80,22 @@ beforeAll(async () => {
   workerCaja = await import("../cash/events/worker.ts");
   TransporteLocal = (await import("./transport.ts")).TransporteLocal;
 
-  // Base limpia para esta empresa: las pruebas cuentan filas.
+  /*
+   * Base limpia para esta empresa: las pruebas cuentan filas.
+   *
+   * Lo primero, la cola de eventos de la caja. Una prueba que emite un evento y
+   * termina sin vaciarla deja esa fila PENDIENTE, y en la EJECUCIÓN SIGUIENTE
+   * el primer `vaciar()` la procesa: aparecen jornadas y dinero de la vuelta
+   * anterior, y falla una prueba que no tiene nada que ver con la que los dejó.
+   * Costó un rato entenderlo; se limpia aquí para que cada ejecución empiece de
+   * cero de verdad.
+   */
+  await db.query(
+    `DELETE FROM cash_event_outbox WHERE empresa_id = $1 AND estado IN ('PENDING','RETRY_PENDING')`,
+    [EMPRESA]
+  );
+
+  // Y ahora las proyecciones.
   await db.query(`DELETE FROM central_events WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_sessions WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_registers WHERE empresa_id = $1`, [EMPRESA]);
@@ -1470,6 +1485,170 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
         portador: "   ",
       })
     ).rejects.toMatchObject({ codigo: "FALTA_PORTADOR" });
+  });
+
+  /*
+   * Fase 23: el camino de vuelta.
+   *
+   * Sin él, un traslado que no se llega a hacer deja ese dinero en tránsito
+   * para siempre, engordando la posición global con algo que en realidad está
+   * en el cajón.
+   */
+  it("un traslado cancelado devuelve el dinero a la caja de la que salió", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const marca = String(process.hrtime.bigint()).slice(-9);
+      const { rows: cajas } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'canc','co-' || $2, $3, $3), ($1,'canc','cd-' || $2, $3, $3) RETURNING id`,
+        [EMPRESA, marca, Date.now()]
+      );
+      const [origen, destino] = cajas.map((c: { id: number }) => c.id);
+      await db.query(`UPDATE cash_registers SET codigo = 'CN' || id WHERE id = ANY($1::int[])`, [
+        [origen, destino],
+      ]);
+
+      const jO = await servicio.abrirJornada(ctx, {
+        registerId: origen,
+        fondoManual: [{ valor: 1000, cantidad: 10 }], // 100 €
+      });
+
+      const t = await trasladosCaja.enviar(ctx, {
+        sessionId: jO.sesion.id,
+        destinoRegisterId: destino,
+        piezas: [{ valor: 1000, cantidad: 4 }],
+        portador: "Nadie al final",
+      });
+
+      // Salieron 40 €: quedan 60.
+      expect((await servicio.stockDeJornada(jO.sesion.id)).totalCentimos).toBe(6000);
+
+      // Sin motivo no se cancela: el dinero ya había salido del cajón.
+      await expect(
+        trasladosCaja.cancelar(ctx, t.id, jO.sesion.id, "  ")
+      ).rejects.toMatchObject({ codigo: "FALTA_MOTIVO" });
+
+      const cancelado = await trasladosCaja.cancelar(
+        ctx,
+        t.id,
+        jO.sesion.id,
+        "El viaje se suspendió"
+      );
+      expect(cancelado.estado).toBe("CANCELADO");
+
+      // Y vuelve entero: 100 € otra vez, con las mismas piezas.
+      expect((await servicio.stockDeJornada(jO.sesion.id)).totalCentimos).toBe(10000);
+
+      await vaciar();
+      const { rows: transito } = await db.query(
+        `SELECT estado FROM central_transits WHERE documento_id = $1 AND clase = 'TRANSFER'`,
+        [t.id]
+      );
+      expect(transito[0].estado).toBe("LIQUIDADO");
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * Vuelve a la caja de ORIGEN y no a cualquiera: lo contrario dejaría un
+   * cuadre que no se puede explicar mirando el libro mayor.
+   */
+  it("un traslado cancelado no se puede devolver a otra caja", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const marca = String(process.hrtime.bigint()).slice(-9);
+      const { rows: cajas } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'cx','x-' || $2, $3, $3), ($1,'cx','y-' || $2, $3, $3) RETURNING id`,
+        [EMPRESA, marca, Date.now()]
+      );
+      const [origen, otra] = cajas.map((c: { id: number }) => c.id);
+      await db.query(`UPDATE cash_registers SET codigo = 'CX' || id WHERE id = ANY($1::int[])`, [
+        [origen, otra],
+      ]);
+
+      const jO = await servicio.abrirJornada(ctx, {
+        registerId: origen,
+        fondoManual: [{ valor: 1000, cantidad: 5 }],
+      });
+      const jOtra = await servicio.abrirJornada(ctx, { registerId: otra, fondoManual: [] });
+
+      const t = await trasladosCaja.enviar(ctx, {
+        sessionId: jO.sesion.id,
+        destinoRegisterId: otra,
+        piezas: [{ valor: 1000, cantidad: 2 }],
+        portador: "Alguien",
+      });
+
+      await expect(
+        trasladosCaja.cancelar(ctx, t.id, jOtra.sesion.id, "Devolver aquí")
+      ).rejects.toMatchObject({ codigo: "TRASLADO_DE_OTRA_CAJA" });
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * Fase 24: que las señales nuevas lleguen a alguien.
+   *
+   * La predicción y el estado de las colas estaban en sus pantallas, esperando
+   * a que alguien las mirase. Con una regla, avisan solas.
+   */
+  it("una cola atascada abre incidencia sin que nadie mire la pantalla", async () => {
+    await reglas.guardarRegla(
+      { empresaId: EMPRESA, userId: null },
+      { tipo: "COLA_ATASCADA_MINUTOS", ambito: "EMPRESA", umbral: 60 }
+    );
+
+    // Un aviso pendiente de hace tres horas: la cola lleva parada ese rato.
+    const { rows } = await db.query(
+      `INSERT INTO central_notifications
+         (empresa_id, incident_id, destino, asunto, cuerpo, creado_en_ms)
+       VALUES ($1, 999777, 'x@y.test', 'a', 'b', $2) RETURNING id`,
+      [EMPRESA, Date.now() - 3 * 60 * 60_000]
+    );
+
+    try {
+      await reglas.evaluar(EMPRESA);
+      const bandeja = await reglas.listarIncidencias(EMPRESA);
+      const atasco = bandeja.find((i) => i.tipo === "COLA_ATASCADA_MINUTOS");
+      expect(atasco).toBeTruthy();
+      expect(atasco!.valor).toBeGreaterThanOrEqual(180);
+    } finally {
+      await db.query(`DELETE FROM central_notifications WHERE id = $1`, [rows[0].id]);
+    }
+  });
+
+  /*
+   * El cierre automático de esta incidencia NO se comprueba aquí, y conviene
+   * decir por qué en vez de dejar una prueba que a veces falla.
+   *
+   * El retraso de la cola es de toda la instalación, no de esta empresa: lo
+   * marca el evento pendiente más viejo, venga de donde venga. En una base
+   * donde otras pruebas han dejado eventos sin enviar —que es lo normal— la
+   * cola está atascada de verdad, así que la incidencia **debe** seguir
+   * abierta y afirmar lo contrario sería un verde que depende de qué se haya
+   * ejecutado antes.
+   *
+   * El mecanismo de cierre automático ya está probado con el tránsito, que sí
+   * se controla de principio a fin («el aviso de dinero fuera se cierra solo
+   * cuando el dinero vuelve»), y es el mismo código para los dos.
+   */
+
+  /*
+   * Predecir cuesta —una consulta por caja sobre el libro mayor—, así que solo
+   * se hace si alguien ha pedido ese aviso. Una empresa que no lo use no paga
+   * por él en cada vuelta del ciclo.
+   */
+  it("sin regla de autonomía, evaluar no predice nada", async () => {
+    const r = await reglas.evaluar(EMPRESA);
+    expect(r.evaluadas).toBeGreaterThan(0);
+
+    const conAutonomia = (await reglas.listarIncidencias(EMPRESA)).filter(
+      (i) => i.tipo === "AUTONOMIA_DIAS"
+    );
+    expect(conAutonomia).toHaveLength(0);
   });
 });
 

@@ -50,7 +50,23 @@ export type TipoRegla =
   /** Cierres sin llevar al banco desde hace más de X días. */
   | "PENDIENTE_BANCO_DIAS"
   /** La caja baja de X céntimos en monedas. */
-  | "CALDERILLA_MINIMA";
+  | "CALDERILLA_MINIMA"
+  /**
+   * A la caja le quedan menos de X días de cambio, según la predicción.
+   *
+   * Es distinto de `CALDERILLA_MINIMA` y las dos hacen falta: un importe fijo
+   * no sabe si esa caja gasta 5 € o 50 € al día, así que el mismo umbral avisa
+   * tarde en una y da la lata en otra. Los días de autonomía sí lo saben.
+   */
+  | "AUTONOMIA_DIAS"
+  /**
+   * Una cola de envío lleva X minutos atascada.
+   *
+   * La única avería que este módulo puede tener sin que nadie se entere: la
+   * caja sigue cobrando, las pantallas siguen pintando, y lo único que pasa es
+   * que Central se queda atrás.
+   */
+  | "COLA_ATASCADA_MINUTOS";
 
 export type Regla = {
   id: string;
@@ -80,6 +96,10 @@ export type EstadoCaja = {
   pendienteCentimos?: number | null;
   /** Céntimos en monedas. */
   calderillaCentimos?: number | null;
+  /** Días que aguanta el cambio según la predicción. `null` si no se puede predecir. */
+  autonomiaDias?: number | null;
+  /** Minutos que lleva esperando lo más viejo de las colas de envío. */
+  colaRetrasoMinutos?: number | null;
 };
 
 export type Incidencia = {
@@ -150,6 +170,10 @@ function valorDe(tipo: TipoRegla, c: EstadoCaja): number | null {
       return c.pendienteDias ?? null;
     case "CALDERILLA_MINIMA":
       return c.calderillaCentimos ?? null;
+    case "AUTONOMIA_DIAS":
+      return c.autonomiaDias ?? null;
+    case "COLA_ATASCADA_MINUTOS":
+      return c.colaRetrasoMinutos ?? null;
   }
 }
 
@@ -159,8 +183,15 @@ function valorDe(tipo: TipoRegla, c: EstadoCaja): number | null {
  * `CALDERILLA_MINIMA` es la única que salta por DEBAJO: quedarse sin monedas es
  * el problema, tener muchas no lo es.
  */
+/**
+ * Los dos que saltan por DEBAJO son los que miden lo que queda: quedarse sin
+ * monedas es el problema, tener muchas no lo es; y lo mismo con los días de
+ * cambio que aguanta la caja.
+ */
+const SALTAN_POR_DEBAJO = new Set<TipoRegla>(["CALDERILLA_MINIMA", "AUTONOMIA_DIAS"]);
+
 function supera(tipo: TipoRegla, valor: number, umbral: number): boolean {
-  return tipo === "CALDERILLA_MINIMA" ? valor < umbral : valor > umbral;
+  return SALTAN_POR_DEBAJO.has(tipo) ? valor < umbral : valor > umbral;
 }
 
 /**
@@ -190,6 +221,8 @@ export function evaluarCaja(reglas: readonly Regla[], caja: EstadoCaja): Inciden
     "SIN_CERRAR_DIAS",
     "PENDIENTE_BANCO_DIAS",
     "CALDERILLA_MINIMA",
+    "AUTONOMIA_DIAS",
+    "COLA_ATASCADA_MINUTOS",
   ];
 
   const incidencias: Incidencia[] = [];

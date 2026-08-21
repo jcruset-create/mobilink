@@ -404,6 +404,123 @@ export async function recibir(
   return traslado;
 }
 
+/**
+ * Cancela un traslado que no ha llegado: el dinero vuelve a la caja de origen.
+ *
+ * Existe porque el traslado se puede quedar a medias de verdad —se prepara la
+ * bolsa y el viaje no se hace— y sin camino de vuelta ese dinero quedaría en
+ * tránsito para siempre, engordando la posición global con algo que en realidad
+ * está en el cajón.
+ *
+ * **Vuelve a la caja de ORIGEN, no a cualquiera**, y con las piezas que
+ * salieron. Es el movimiento inverso exacto: lo contrario dejaría un cuadre que
+ * no se puede explicar mirando el libro mayor.
+ */
+export async function cancelar(
+  ctx: Contexto,
+  trasladoId: number,
+  sessionId: number,
+  motivo: string
+): Promise<Traslado> {
+  if (!String(motivo ?? "").trim()) {
+    throw new ErrorCaja(
+      "FALTA_MOTIVO",
+      "Cancelar un traslado exige decir por qué: el dinero ya había salido del cajón.",
+      400
+    );
+  }
+
+  const traslado = await enTransaccion(async (client) => {
+    const { rows: previas } = await client.query(
+      `SELECT * FROM cash_transfers WHERE id = $1 AND empresa_id = $2 FOR UPDATE`,
+      [trasladoId, ctx.empresaId]
+    );
+    if (previas.length === 0) {
+      throw new ErrorCaja("TRASLADO_NO_ENCONTRADO", "El traslado no existe.", 404);
+    }
+    if (previas[0].estado !== "EN_TRANSITO") {
+      throw new ErrorCaja(
+        "TRASLADO_NO_PENDIENTE",
+        `El traslado ya está ${previas[0].estado.toLowerCase()}.`,
+        409
+      );
+    }
+
+    const sesion = await bloquearSesionOperable(client, sessionId);
+    await exigirJornadaPropia(client, ctx, sesion);
+
+    if (sesion.registerId !== previas[0].origen_register_id) {
+      throw new ErrorCaja(
+        "TRASLADO_DE_OTRA_CAJA",
+        "Un traslado cancelado vuelve a la caja de la que salió, no a otra.",
+        409
+      );
+    }
+
+    const l = await lineas(client, [trasladoId]);
+    const enviado = l.get(trasladoId)?.enviado ?? [];
+    const total = totalInventario(inventarioDesdeLineas(enviado));
+
+    const operacion = await registrarOperacion(
+      ctx,
+      {
+        sessionId,
+        tipo: "MANUAL_IN",
+        importeCentimos: total,
+        formasPago: [{ forma: "CASH", importe: total }],
+        efectivoRecibido: enviado,
+        concepto: `Traslado cancelado (${previas[0].numero})`,
+      },
+      client
+    );
+
+    const ahora = Date.now();
+    const { rows } = await client.query(
+      `UPDATE cash_transfers
+          SET estado = 'CANCELADO', diferencia_motivo = $2, session_id_entrada = $3,
+              operation_entrada_id = $4, cerrado_por = $5, cerrado_at_ms = $6
+        WHERE id = $1
+        RETURNING *`,
+      [trasladoId, motivo.trim(), sessionId, operacion.operacionId, ctx.userId, ahora]
+    );
+
+    // Para la posición global, cancelar es lo mismo que recibir: el dinero ha
+    // dejado de estar en camino. Cambia dónde aparece, no si se cuenta.
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "TRANSIT_SETTLED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        clase: "TRANSFER",
+        documentoId: trasladoId,
+        numero: previas[0].numero,
+        importeCentimos: total,
+        liquidadoCentimos: total,
+        motivo: "CANCELADO",
+      },
+    });
+
+    return aTraslado(rows[0], l.get(trasladoId));
+  });
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.transfer.cancel",
+    entidad: "cash_transfers",
+    entidadId: String(trasladoId),
+    detalle: { numero: traslado.numero, motivo },
+    ip: ctx.ip,
+  });
+
+  return traslado;
+}
+
 /** Traslados de una empresa. Los pendientes primero: son los que hay que mirar. */
 export async function listar(empresaId: string, registerId?: number): Promise<Traslado[]> {
   const { rows } = await pool.query(

@@ -147,4 +147,42 @@ describe("evaluación", () => {
     ]);
     expect(incidencias.map((i) => i.registerId)).toEqual([1, 3]);
   });
+
+  /*
+   * `AUTONOMIA_DIAS` y `CALDERILLA_MINIMA` no se solapan, y las dos hacen falta:
+   * un importe fijo no sabe si esa caja gasta 5 € o 50 € al día, así que el
+   * mismo umbral avisa tarde en una y da la lata en la otra.
+   */
+  it("los días de autonomía saltan por debajo, como la calderilla", () => {
+    const reglas = [regla({ id: "r", tipo: "AUTONOMIA_DIAS", ambito: "EMPRESA", umbral: 3 })];
+    expect(evaluarCaja(reglas, { ...caja, autonomiaDias: 1 })).toHaveLength(1);
+    expect(evaluarCaja(reglas, { ...caja, autonomiaDias: 10 })).toHaveLength(0);
+  });
+
+  it("una caja que no se puede predecir no dispara la regla de autonomía", () => {
+    const reglas = [regla({ id: "r", tipo: "AUTONOMIA_DIAS", ambito: "EMPRESA", umbral: 3 })];
+    expect(evaluarCaja(reglas, { ...caja, autonomiaDias: null })).toHaveLength(0);
+  });
+
+  /*
+   * La cola atascada es la única avería que el módulo puede tener sin que nadie
+   * se entere: la caja sigue cobrando y las pantallas siguen pintando.
+   */
+  it("la cola atascada salta por encima, y se mide en minutos", () => {
+    const reglas = [
+      regla({ id: "r", tipo: "COLA_ATASCADA_MINUTOS", ambito: "EMPRESA", umbral: 60 }),
+    ];
+    expect(evaluarCaja(reglas, { ...caja, colaRetrasoMinutos: 180 })).toHaveLength(1);
+    expect(evaluarCaja(reglas, { ...caja, colaRetrasoMinutos: 10 })).toHaveLength(0);
+  });
+
+  it("los dos tipos nuevos son un problema en curso: la clave no lleva jornada", () => {
+    const reglas = [
+      regla({ id: "a", tipo: "AUTONOMIA_DIAS", ambito: "EMPRESA", umbral: 5 }),
+      regla({ id: "b", tipo: "COLA_ATASCADA_MINUTOS", ambito: "EMPRESA", umbral: 5 }),
+    ];
+    const ayer = evaluarCaja(reglas, { ...caja, autonomiaDias: 1, colaRetrasoMinutos: 100, sessionId: 1 });
+    const hoy = evaluarCaja(reglas, { ...caja, autonomiaDias: 0, colaRetrasoMinutos: 500, sessionId: 2 });
+    expect(ayer.map((i) => i.clave).sort()).toEqual(hoy.map((i) => i.clave).sort());
+  });
 });
