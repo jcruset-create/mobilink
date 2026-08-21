@@ -14,12 +14,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import {
+  Activity,
   Bell,
   Building2,
   CalendarDays,
   Coins,
+  FileDown,
   Landmark,
   Network,
+  TrendingUp,
   Wallet,
 } from "lucide-react";
 import {
@@ -72,6 +75,15 @@ export default function CentralApp() {
           <NavLink to="/central/jornadas" className={enlace}>
             <CalendarDays size={15} /> Jornadas
           </NavLink>
+          <NavLink to="/central/prevision" className={enlace}>
+            <TrendingUp size={15} /> Previsión
+          </NavLink>
+          <NavLink to="/central/informes" className={enlace}>
+            <FileDown size={15} /> Informes
+          </NavLink>
+          <NavLink to="/central/estado" className={enlace}>
+            <Activity size={15} /> Estado
+          </NavLink>
           <NavLink to="/central/incidencias" className={enlace}>
             <Bell size={15} /> Incidencias
           </NavLink>
@@ -87,6 +99,9 @@ export default function CentralApp() {
           <Route path="ingresos" element={<Ingresos />} />
           <Route path="cambio" element={<Cambio />} />
           <Route path="jornadas" element={<Jornadas />} />
+          <Route path="prevision" element={<Prevision />} />
+          <Route path="informes" element={<Informes />} />
+          <Route path="estado" element={<Estado />} />
           <Route path="incidencias" element={<Incidencias />} />
           <Route path="organizacion" element={<Organizacion />} />
           <Route path="*" element={<Navigate to="red" replace />} />
@@ -661,6 +676,357 @@ function Jornadas() {
               <td className={`${tdCls} text-right tabular-nums`}>
                 {j.ingresoBancarioCentimos == null ? "—" : euros(j.ingresoBancarioCentimos)}
               </td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+    </div>
+  );
+}
+
+// ── Previsión, salud y reparto ─────────────────────────────────────────────
+
+/**
+ * Lo que va a hacer falta.
+ *
+ * Tres cosas en una pantalla porque se miran juntas: qué caja se queda sin
+ * cambio, cómo de sana está la red, y si algo se puede resolver moviendo dinero
+ * entre talleres en vez de yendo al banco.
+ */
+function Prevision() {
+  const [pred, setPred] = useState<Awaited<ReturnType<typeof api.prediccion>> | null>(null);
+  const [salud, setSalud] = useState<Awaited<ReturnType<typeof api.puntuacion>> | null>(null);
+  const [rep, setRep] = useState<Awaited<ReturnType<typeof api.reparto>> | null>(null);
+  const [error, setError] = useState("");
+
+  const cargar = useCallback(async () => {
+    try {
+      const [p, s, r] = await Promise.all([api.prediccion(7), api.puntuacion(), api.reparto(7)]);
+      setPred(p);
+      setSalud(s);
+      setRep(r);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando la previsión");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  if (error) return <ErrorBox>{error}</ErrorBox>;
+
+  const nota = (p: number | null) =>
+    p == null ? "text-slate-500" : p >= 80 ? "text-emerald-400" : p >= 50 ? "text-amber-400" : "text-rose-400";
+
+  return (
+    <div className="space-y-5">
+      <section className="grid gap-3 sm:grid-cols-3">
+        <Card
+          title="Salud de la red"
+          value={salud?.puntos == null ? "—" : String(salud.puntos)}
+          accent={nota(salud?.puntos ?? null)}
+          hint={`${salud?.conDatos ?? 0} cajas puntuadas${
+            (salud?.sinDatos ?? 0) > 0 ? ` · ${salud!.sinDatos} sin datos todavía` : ""
+          }`}
+        />
+        <Card
+          title="Se quedan sin cambio"
+          value={String((pred?.cajas ?? []).filter((c) => c.irAlBancoAntesDe).length)}
+          hint="en los próximos 7 días"
+        />
+        <Card
+          title="Traslados propuestos"
+          value={String(rep?.traslados.length ?? 0)}
+          hint="entre cajas, sin pasar por el banco"
+        />
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Cuándo se queda sin cambio cada caja
+        </h2>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={thCls}>Caja</th>
+              <th className={`${thCls} text-right`}>En monedas</th>
+              <th className={`${thCls} text-right`}>Aguanta</th>
+              <th className={`${thCls} text-right`}>Falta</th>
+              <th className={thCls}>Ir al banco antes de</th>
+              <th className={thCls}>Por qué</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(pred?.cajas ?? []).length === 0 && (
+              <EmptyRow cols={6} text="Todavía no hay jornadas suficientes para predecir." />
+            )}
+            {(pred?.cajas ?? []).map((c) => (
+              <tr key={c.registerId} className="border-t border-slate-700">
+                <td className={tdCls}>#{c.registerId}</td>
+                <td className={`${tdCls} text-right tabular-nums`}>
+                  {euros(c.calderillaActualCentimos)}
+                </td>
+                <td className={`${tdCls} text-right tabular-nums`}>
+                  {c.diasDeAutonomia == null ? "—" : `${c.diasDeAutonomia} d`}
+                </td>
+                <td className={`${tdCls} text-right tabular-nums`}>
+                  {c.faltaCentimos > 0 ? euros(c.faltaCentimos) : "—"}
+                </td>
+                <td className={`${tdCls} ${c.irAlBancoAntesDe ? "text-amber-400" : "text-slate-500"}`}>
+                  {c.irAlBancoAntesDe ?? "no hace falta"}
+                </td>
+                {/*
+                  * La explicación va en la tabla y no escondida en un icono: una
+                  * propuesta que no se entiende no se corrige, se ignora.
+                  */}
+                <td className={`${tdCls} text-[11px] text-slate-500`}>{c.explicacion}</td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Traslados que ahorrarían un viaje al banco
+        </h2>
+        <p className="text-[11px] text-slate-500">
+          Son propuestas. Moverlo de verdad se hace desde la caja de origen, y queda como un traslado
+          con su portador: mientras viaja, el dinero no está en ninguna de las dos.
+        </p>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={thCls}>De</th>
+              <th className={thCls}>A</th>
+              <th className={thCls}>Piezas</th>
+              <th className={`${thCls} text-right`}>Importe</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rep?.traslados ?? []).length === 0 && (
+              <EmptyRow cols={4} text="Nada que mover: lo que falta hay que traerlo del banco." />
+            )}
+            {(rep?.traslados ?? []).map((t, i) => (
+              <tr key={i} className="border-t border-slate-700">
+                <td className={tdCls}>#{t.desdeRegisterId}</td>
+                <td className={tdCls}>#{t.haciaRegisterId}</td>
+                <td className={`${tdCls} text-[11px]`}>
+                  {t.piezas.map((p) => `${p.cantidad}×${pieza(p.valor)}`).join(", ")}
+                </td>
+                <td className={`${tdCls} text-right tabular-nums`}>{euros(t.importeCentimos)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+          Las cajas con peor nota
+        </h2>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={thCls}>Caja</th>
+              <th className={thCls}>Taller</th>
+              <th className={`${thCls} text-right`}>Nota</th>
+              <th className={thCls}>Qué le resta</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(salud?.peores ?? []).length === 0 && (
+              <EmptyRow cols={4} text="Ninguna caja con datos suficientes todavía." />
+            )}
+            {(salud?.peores ?? []).map((c) => (
+              <tr key={c.registerId} className="border-t border-slate-700">
+                <td className={tdCls}>{c.caja ?? `#${c.registerId}`}</td>
+                <td className={tdCls}>{c.centro ?? "—"}</td>
+                <td className={`${tdCls} text-right tabular-nums ${nota(c.puntos)}`}>{c.puntos}</td>
+                <td className={`${tdCls} text-[11px] text-slate-400`}>
+                  {c.motivos.length === 0
+                    ? "nada"
+                    : c.motivos.map((m) => `${m.detalle} (−${m.puntos})`).join(" · ")}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+      </section>
+    </div>
+  );
+}
+
+// ── Informes ───────────────────────────────────────────────────────────────
+
+function Informes() {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const [desde, setDesde] = useState(`${hoy.slice(0, 7)}-01`);
+  const [hasta, setHasta] = useState(hoy);
+  const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.kpis>> | null>(null);
+  const [error, setError] = useState("");
+
+  const cargar = useCallback(async () => {
+    try {
+      setDatos(await api.kpis(desde, hasta));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando los indicadores");
+    }
+  }, [desde, hasta]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  return (
+    <div className="space-y-5">
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Desde</span>
+          <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className={inputCls} />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Hasta</span>
+          <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className={inputCls} />
+        </label>
+        {/*
+          * Un enlace normal y no un `fetch`: el navegador se encarga de la
+          * descarga y del nombre del fichero, y el CSV va firmado por la sesión
+          * como cualquier otra petición.
+          */}
+        <a className={btnSecondary} href={api.urlExportacion(desde, hasta)}>
+          Descargar jornadas (CSV)
+        </a>
+      </div>
+
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Card title="Jornadas cerradas" value={String(datos?.jornadas ?? 0)} />
+        <Card title="Efectivo para el banco" value={euros(datos?.efectivoCentimos ?? 0)} />
+        {/*
+          * El descuadre va en valor absoluto: un día que sobran 20 € y otro que
+          * faltan 20 € no son una red que cuadra, son dos días que no cuadraron.
+          */}
+        <Card
+          title="Descuadre acumulado"
+          value={euros(datos?.descuadreCentimos ?? 0)}
+          accent="text-amber-400"
+          hint={`${datos?.jornadasConDescuadre ?? 0} jornadas, sin compensar signos`}
+        />
+        <Card
+          title="Días hasta el banco"
+          value={datos?.diasHastaElBanco == null ? "—" : String(datos.diasHastaElBanco)}
+          hint="dinero parado en el cajón"
+        />
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Por taller</h2>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={thCls}>Taller</th>
+              <th className={`${thCls} text-right`}>Jornadas</th>
+              <th className={`${thCls} text-right`}>Efectivo</th>
+              <th className={`${thCls} text-right`}>Descuadre</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(datos?.centros ?? []).length === 0 && (
+              <EmptyRow cols={4} text="Sin jornadas cerradas en el periodo." />
+            )}
+            {(datos?.centros ?? []).map((c) => (
+              <tr key={c.centroId ?? "sin"} className="border-t border-slate-700">
+                <td className={tdCls}>
+                  {c.centro ?? <span className="text-amber-400">sin taller</span>}
+                </td>
+                <td className={`${tdCls} text-right tabular-nums`}>{c.jornadas}</td>
+                <td className={`${tdCls} text-right tabular-nums`}>{euros(c.efectivoCentimos)}</td>
+                <td className={`${tdCls} text-right tabular-nums`}>{euros(c.descuadreCentimos)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </TableWrap>
+      </section>
+    </div>
+  );
+}
+
+// ── Estado del sistema ─────────────────────────────────────────────────────
+
+/**
+ * El atasco, no el pulso.
+ *
+ * Las colas fallan en silencio y creciendo: la caja sigue cobrando y las
+ * pantallas siguen pintando, y lo único que pasa es que Central se queda atrás.
+ */
+function Estado() {
+  const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.salud>> | null>(null);
+  const [error, setError] = useState("");
+
+  const cargar = useCallback(async () => {
+    try {
+      setDatos(await api.salud());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error consultando el estado");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  if (error) return <ErrorBox>{error}</ErrorBox>;
+
+  const color = (e: string) =>
+    e === "OK" ? "text-emerald-400" : e === "RETRASO" || e === "DEGRADADO" ? "text-amber-400" : "text-rose-400";
+
+  return (
+    <div className="space-y-4">
+      <Card
+        title="Estado general"
+        value={datos?.estado ?? "—"}
+        accent={color(datos?.estado ?? "OK")}
+        hint={`La base responde en ${datos?.baseDeDatosMs ?? "—"} ms${
+          datos?.ultimoEventoRecibidoMs
+            ? ` · último evento ${new Date(datos.ultimoEventoRecibidoMs).toLocaleString("es-ES")}`
+            : " · todavía no ha llegado ningún evento"
+        }`}
+      />
+
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Cola</th>
+            <th className={`${thCls} text-right`}>Pendientes</th>
+            <th className={`${thCls} text-right`}>En error</th>
+            <th className={`${thCls} text-right`}>Lo más viejo</th>
+            <th className={thCls}>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(datos?.colas ?? []).map((c) => (
+            <tr key={c.nombre} className="border-t border-slate-700">
+              <td className={tdCls}>{c.nombre}</td>
+              <td className={`${tdCls} text-right tabular-nums`}>{c.pendientes}</td>
+              <td className={`${tdCls} text-right tabular-nums ${c.enError > 0 ? "text-rose-400" : ""}`}>
+                {c.enError}
+              </td>
+              {/*
+                * El retraso se mide en TIEMPO y no en filas: cien pendientes de
+                * hace treinta segundos es una tarde normal y tres de hace dos
+                * días es una integración rota.
+                */}
+              <td className={`${tdCls} text-right tabular-nums`}>
+                {c.retrasoMinutos == null
+                  ? "—"
+                  : c.retrasoMinutos >= 60
+                    ? `${Math.round(c.retrasoMinutos / 60)} h`
+                    : `${c.retrasoMinutos} min`}
+              </td>
+              <td className={`${tdCls} ${color(c.estado)}`}>{c.estado.toLowerCase()}</td>
             </tr>
           ))}
         </tbody>

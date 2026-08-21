@@ -27,6 +27,7 @@ let conciliacion: typeof import("./reconciliation/service.ts");
 let observabilidad: typeof import("./health.ts");
 let prediccion: typeof import("./forecast/service.ts");
 let puntuacion: typeof import("./score/service.ts");
+let trasladosCaja: typeof import("../cash/transfers.ts");
 let transporteCaja: typeof import("../cash/events/transport.ts");
 let workerCaja: typeof import("../cash/events/worker.ts");
 let TransporteLocal: typeof import("./transport.ts").TransporteLocal;
@@ -74,6 +75,7 @@ beforeAll(async () => {
   observabilidad = await import("./health.ts");
   prediccion = await import("./forecast/service.ts");
   puntuacion = await import("./score/service.ts");
+  trasladosCaja = await import("../cash/transfers.ts");
   transporteCaja = await import("../cash/events/transport.ts");
   workerCaja = await import("../cash/events/worker.ts");
   TransporteLocal = (await import("./transport.ts")).TransporteLocal;
@@ -1271,6 +1273,203 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
       expect(Array.isArray(c.motivos)).toBe(true);
       expect(c.puntos).not.toBeNull();
     }
+  });
+
+  /*
+   * Fase 21: traslados entre cajas.
+   *
+   * Lo que hay que demostrar es lo que la fase 19 no podía garantizar sin este
+   * documento: que durante el viaje **el dinero no se cuenta dos veces**.
+   */
+  it("el dinero sale de una caja, viaja, y no está en las dos a la vez", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const marca = String(process.hrtime.bigint()).slice(-9);
+      const { rows: cajas } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'traslado','orig-' || $2, $3, $3), ($1,'traslado','dest-' || $2, $3, $3)
+         RETURNING id`,
+        [EMPRESA, marca, Date.now()]
+      );
+      const [origen, destino] = cajas.map((c: { id: number }) => c.id);
+      await db.query(`UPDATE cash_registers SET codigo = 'TR' || id WHERE id = ANY($1::int[])`, [
+        [origen, destino],
+      ]);
+
+      const jOrigen = await servicio.abrirJornada(ctx, {
+        registerId: origen,
+        fondoManual: [{ valor: 100, cantidad: 100 }],
+      });
+      const jDestino = await servicio.abrirJornada(ctx, {
+        registerId: destino,
+        fondoManual: [{ valor: 5000, cantidad: 1 }],
+      });
+
+      const traslado = await trasladosCaja.enviar(ctx, {
+        sessionId: jOrigen.sesion.id,
+        destinoRegisterId: destino,
+        piezas: [{ valor: 100, cantidad: 40 }],
+        portador: "Nuria",
+      });
+      expect(traslado.estado).toBe("EN_TRANSITO");
+      expect(traslado.importeCentimos).toBe(4000);
+
+      /*
+       * Durante el viaje: el origen ya NO lo tiene y el destino TODAVÍA no. La
+       * suma de los dos cajones es 60 + 50 = 110 €, no 150: los 40 € están en
+       * tránsito, contados una sola vez y en un sitio.
+       */
+      const stockOrigen = await servicio.stockDeJornada(jOrigen.sesion.id);
+      const stockDestino = await servicio.stockDeJornada(jDestino.sesion.id);
+      expect(stockOrigen.totalCentimos).toBe(6000);
+      expect(stockDestino.totalCentimos).toBe(5000);
+
+      await vaciar();
+      const { rows: transito } = await db.query(
+        `SELECT estado, importe_centimos, responsable FROM central_transits
+          WHERE documento_id = $1 AND clase = 'TRANSFER'`,
+        [traslado.id]
+      );
+      expect(transito[0].estado).toBe("ABIERTO");
+      expect(Number(transito[0].importe_centimos)).toBe(4000);
+      expect(transito[0].responsable).toBe("Nuria");
+
+      const recibido = await trasladosCaja.recibir(ctx, traslado.id, {
+        sessionId: jDestino.sesion.id,
+      });
+      expect(recibido.estado).toBe("RECIBIDO");
+
+      const despues = await servicio.stockDeJornada(jDestino.sesion.id);
+      expect(despues.totalCentimos).toBe(9000);
+
+      await vaciar();
+      const { rows: cerrado } = await db.query(
+        `SELECT estado FROM central_transits WHERE documento_id = $1 AND clase = 'TRANSFER'`,
+        [traslado.id]
+      );
+      expect(cerrado[0].estado).toBe("LIQUIDADO");
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * Si llega de menos no se bloquea: el dinero ya está donde está, y negarse a
+   * registrarlo solo esconde el problema. Se exige un motivo, como ya hace el
+   * módulo con el banco y con las entregas.
+   */
+  it("si llega menos de lo que salió, exige motivo pero no se bloquea", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const marca = String(process.hrtime.bigint()).slice(-9);
+      const { rows: cajas } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'dif','o-' || $2, $3, $3), ($1,'dif','d-' || $2, $3, $3) RETURNING id`,
+        [EMPRESA, marca, Date.now()]
+      );
+      const [origen, destino] = cajas.map((c: { id: number }) => c.id);
+      await db.query(`UPDATE cash_registers SET codigo = 'DF' || id WHERE id = ANY($1::int[])`, [
+        [origen, destino],
+      ]);
+
+      const jO = await servicio.abrirJornada(ctx, {
+        registerId: origen,
+        fondoManual: [{ valor: 100, cantidad: 50 }],
+      });
+      const jD = await servicio.abrirJornada(ctx, { registerId: destino, fondoManual: [] });
+
+      const t = await trasladosCaja.enviar(ctx, {
+        sessionId: jO.sesion.id,
+        destinoRegisterId: destino,
+        piezas: [{ valor: 100, cantidad: 30 }],
+        portador: "Iván",
+      });
+
+      await expect(
+        trasladosCaja.recibir(ctx, t.id, {
+          sessionId: jD.sesion.id,
+          recibido: [{ valor: 100, cantidad: 28 }],
+        })
+      ).rejects.toMatchObject({ codigo: "FALTA_MOTIVO" });
+
+      const r = await trasladosCaja.recibir(ctx, t.id, {
+        sessionId: jD.sesion.id,
+        recibido: [{ valor: 100, cantidad: 28 }],
+        diferenciaMotivo: "Faltaban dos monedas al abrir la bolsa",
+      });
+      expect(r.recibidoCentimos).toBe(2800);
+      expect(r.importeCentimos).toBe(3000);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  it("un traslado no se recibe en una caja que no es su destino", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const marca = String(process.hrtime.bigint()).slice(-9);
+      const { rows: cajas } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'x','a-' || $2, $3, $3), ($1,'x','b-' || $2, $3, $3), ($1,'x','c-' || $2, $3, $3)
+         RETURNING id`,
+        [EMPRESA, marca, Date.now()]
+      );
+      const [a, b, c] = cajas.map((x: { id: number }) => x.id);
+      await db.query(`UPDATE cash_registers SET codigo = 'XX' || id WHERE id = ANY($1::int[])`, [
+        [a, b, c],
+      ]);
+
+      const jA = await servicio.abrirJornada(ctx, {
+        registerId: a,
+        fondoManual: [{ valor: 100, cantidad: 10 }],
+      });
+      const jC = await servicio.abrirJornada(ctx, { registerId: c, fondoManual: [] });
+
+      const t = await trasladosCaja.enviar(ctx, {
+        sessionId: jA.sesion.id,
+        destinoRegisterId: b,
+        piezas: [{ valor: 100, cantidad: 5 }],
+        portador: "Quien sea",
+      });
+
+      await expect(
+        trasladosCaja.recibir(ctx, t.id, { sessionId: jC.sesion.id })
+      ).rejects.toMatchObject({ codigo: "TRASLADO_DE_OTRA_CAJA" });
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  it("una caja no se manda dinero a sí misma, ni se traslada sin portador", async () => {
+    const { rows } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+       VALUES ($1,'solo','s-' || $2, $3, $3) RETURNING id`,
+      [EMPRESA, String(process.hrtime.bigint()).slice(-9), Date.now()]
+    );
+    const caja = rows[0].id;
+    await db.query(`UPDATE cash_registers SET codigo = 'SS' || id WHERE id = $1`, [caja]);
+    const j = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 100, cantidad: 10 }],
+    });
+
+    await expect(
+      trasladosCaja.enviar(ctx, {
+        sessionId: j.sesion.id,
+        destinoRegisterId: caja,
+        piezas: [{ valor: 100, cantidad: 1 }],
+        portador: "Alguien",
+      })
+    ).rejects.toMatchObject({ codigo: "TRASLADO_A_LA_MISMA_CAJA" });
+
+    await expect(
+      trasladosCaja.enviar(ctx, {
+        sessionId: j.sesion.id,
+        destinoRegisterId: caja + 1,
+        piezas: [{ valor: 100, cantidad: 1 }],
+        portador: "   ",
+      })
+    ).rejects.toMatchObject({ codigo: "FALTA_PORTADOR" });
   });
 });
 

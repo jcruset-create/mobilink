@@ -4362,3 +4362,126 @@ describe.runIf(RUN)("Importación de días de papel", () => {
     ).rejects.toMatchObject({ codigo: "SALDO_INICIAL_YA_NO_APLICA" });
   });
 });
+
+describe.runIf(RUN)("bolsa contada que el libro mayor no tenía", () => {
+  it("el cierre la precinta en vez de dejar el saldo en negativo", async () => {
+    // 0,10 € con bolsas de 50 piezas configuradas.
+    await db.query(
+      `UPDATE cash_denominations SET piezas_por_bolsa = 50 WHERE valor_centimos = 10`
+    );
+    const { rows } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+       VALUES ($1,'tarragona',$2,'R' || floor(random()*100000)::text,$3,$3) RETURNING id`,
+      [EMPRESA, `repro-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+    );
+    const caja = rows[0].id;
+
+    // Se abre con 80 monedas de 0,10 € SUELTAS (8,00 €) y un billete de 50 €.
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 1 },
+        { valor: 10, cantidad: 80 },
+      ],
+    });
+
+    // El arqueo cuenta 30 sueltas + 1 BOLSA de 50: las mismas 80 piezas, pero
+    // alguien las precintó durante el día. El libro mayor no lo sabe.
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [
+        { valor: 5000, cantidad: 1 },
+        { valor: 10, cantidad: 30 },
+      ],
+      bolsas: [{ valor: 10, cantidad: 1 }],
+    });
+
+    // Se cierra dejándolo todo como cambio, con la bolsa precintada.
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [
+        { valor: 5000, cantidad: 1 },
+        { valor: 10, cantidad: 30 },
+      ],
+      cambioFinalBolsas: [{ valor: 10, cantidad: 1 }],
+    });
+
+    // Ningún saldo de formato en negativo.
+    const resumen = await servicio.resumenJornada(sesion.id);
+    expect(resumen.incidenciasStock).toEqual([]);
+
+    // Y el informe se genera, que es lo que fallaba.
+    const pdf = await informe.informeCierre(EMPRESA, sesion.id);
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+  });
+});
+
+describe.runIf(RUN)("jornada que ya quedó con el saldo en negativo", () => {
+  it("el informe sigue imprimiéndose y el descuadre sale escrito", async () => {
+    await db.query(
+      `UPDATE cash_denominations SET piezas_por_bolsa = 50 WHERE valor_centimos = 10`
+    );
+    const { rows } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+       VALUES ($1,'tarragona',$2,'V' || floor(random()*100000)::text,$3,$3) RETURNING id`,
+      [EMPRESA, `roto-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+    );
+    const caja = rows[0].id;
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 1 }, { valor: 10, cantidad: 80 }],
+    });
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [{ valor: 5000, cantidad: 1 }, { valor: 10, cantidad: 80 }],
+    });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 5000, cantidad: 1 }, { valor: 10, cantidad: 80 }],
+    });
+
+    /*
+     * Se fabrica el destrozo que dejaba la versión anterior, y se fabrica
+     * FIEL: al cerrar, las piezas cuadran —todo sale como cambio final— y lo
+     * único que queda mal es el FORMATO. Por eso no se añade ningún
+     * movimiento nuevo: se parte el asiento de salida en dos, una parte como
+     * bolsa precintada que el libro mayor nunca vio entrar.
+     *
+     * Con un movimiento de más, lo que se rompería serían las piezas, y eso
+     * lo caza otro control distinto (`stockTeorico`). No es lo que pasó.
+     */
+    const { rows: salida } = await db.query(
+      `SELECT m.id, m.operation_id, m.denomination_id, m.created_at_ms
+         FROM cash_denomination_movements m
+        WHERE m.session_id = $1 AND m.valor_unitario_centimos = 10
+          AND m.direccion = 'OUT' AND m.motivo = 'CLOSING_FLOAT'
+        LIMIT 1`,
+      [sesion.id]
+    );
+    // 80 sueltas que salieron → 1 bolsa de 50 + 30 sueltas. Mismas piezas.
+    await db.query(
+      `UPDATE cash_denomination_movements
+          SET cantidad = 50, bolsas = 1, importe_centimos = 500
+        WHERE id = $1`,
+      [salida[0].id]
+    );
+    await db.query(
+      `INSERT INTO cash_denomination_movements
+         (session_id, operation_id, denomination_id, valor_unitario_centimos,
+          importe_centimos, direccion, motivo, cantidad, cartuchos, bolsas,
+          created_by, created_at_ms)
+       VALUES ($1,$2,$3,10,300,'OUT','CLOSING_FLOAT',30,0,0,NULL,$4)`,
+      [sesion.id, salida[0].operation_id, salida[0].denomination_id, salida[0].created_at_ms]
+    );
+
+    // El aviso viaja, en vez de reventar.
+    const resumen = await servicio.resumenJornada(sesion.id);
+    expect(resumen.incidenciasStock).toEqual([
+      expect.objectContaining({ valor: 10, bolsas: -1 }),
+    ]);
+
+    // Y el papeleo sale igual: es lo que se archiva.
+    const pdf = await informe.informeCierre(EMPRESA, sesion.id);
+    expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
+  });
+});

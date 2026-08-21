@@ -314,7 +314,8 @@ export async function initCash(): Promise<void> {
       motivo TEXT NOT NULL CHECK (motivo IN (
         'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
         'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
-        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED')),
+        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED',
+        'CARTRIDGE_FORMED','BAG_FORMED')),
       -- Tubos precintados que representa este asiento. 0 = monedas sueltas.
       -- La columna cantidad son SIEMPRE piezas: en una fila de cartuchos vale
       -- tubos x piezas_por_cartucho. Asi el total de piezas sigue siendo la
@@ -763,7 +764,8 @@ export async function initCash(): Promise<void> {
       ADD CONSTRAINT cash_denomination_movements_motivo_check CHECK (motivo IN (
         'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
         'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
-        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED','EXCHANGE'));
+        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED','EXCHANGE',
+        'CARTRIDGE_FORMED','BAG_FORMED'));
 
     ALTER TABLE cash_operations
       DROP CONSTRAINT IF EXISTS cash_operations_tipo_check;
@@ -1083,6 +1085,74 @@ export async function initCash(): Promise<void> {
     CREATE INDEX IF NOT EXISTS cash_denmov_consumo_idx
       ON cash_denomination_movements (session_id, motivo, direccion)
       INCLUDE (valor_unitario_centimos, cantidad);
+  `);
+
+  /*
+   * Traslados de efectivo entre cajas de la misma empresa.
+   *
+   * La fase 19 sabía proponerlos —cruzar lo que sobra en una con lo que falta
+   * en otra— pero no podía ejecutarlos, y por un motivo concreto: **en medio
+   * del viaje el dinero no está en ninguna de las dos cajas**. Sin un documento
+   * que lo represente, ese dinero se contaría dos veces o ninguna, que es el
+   * doble conteo que la fase 4 vino a cerrar.
+   *
+   * Este es ese documento. La regla que lo sostiene es la misma que ya rige los
+   * pedidos de cambio al banco y las entregas: **los asientos se hacen cuando
+   * el dinero se mueve, no cuando se planea**. Al crear el traslado sale del
+   * cajón de origen; al recibirlo entra en el de destino; en medio, ninguna de
+   * las dos lo tiene y el tránsito dice dónde está y quién lo lleva.
+   *
+   * Cruza jornadas a propósito: se sale de un taller por la tarde y se llega al
+   * otro al día siguiente. Cada asiento pertenece a la jornada en la que
+   * ocurrió.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_transfers (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      numero TEXT NOT NULL,
+      origen_register_id INTEGER NOT NULL REFERENCES cash_registers(id) ON DELETE RESTRICT,
+      destino_register_id INTEGER NOT NULL REFERENCES cash_registers(id) ON DELETE RESTRICT,
+      -- Una caja no se manda dinero a sí misma: sería un asiento de ida y otro
+      -- de vuelta por el mismo importe, o sea, ruido en el libro mayor.
+      CONSTRAINT cash_transfers_distintas CHECK (origen_register_id <> destino_register_id),
+
+      estado TEXT NOT NULL DEFAULT 'EN_TRANSITO'
+        CHECK (estado IN ('EN_TRANSITO','RECIBIDO','CANCELADO')),
+      importe_centimos BIGINT NOT NULL CHECK (importe_centimos > 0),
+      /* Lo que de verdad llegó, que puede no ser lo que salió. */
+      recibido_centimos BIGINT,
+      diferencia_motivo TEXT,
+
+      /** Quién lleva la bolsa. Es lo que se pregunta cuando no aparece. */
+      portador TEXT,
+      notas TEXT,
+
+      session_id_salida INTEGER REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      operation_salida_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
+      session_id_entrada INTEGER REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      operation_entrada_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
+
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL,
+      cerrado_por UUID,
+      cerrado_at_ms BIGINT
+    );
+
+    CREATE INDEX IF NOT EXISTS cash_transfers_empresa_idx
+      ON cash_transfers(empresa_id, estado);
+    CREATE INDEX IF NOT EXISTS cash_transfers_destino_idx
+      ON cash_transfers(destino_register_id, estado);
+
+    CREATE TABLE IF NOT EXISTS cash_transfer_lines (
+      transfer_id INTEGER NOT NULL REFERENCES cash_transfers(id) ON DELETE CASCADE,
+      -- ENVIADO o RECIBIDO: se guardan las dos, porque comparar lo que salió
+      -- con lo que llegó es justo lo que hay que poder hacer.
+      rol TEXT NOT NULL CHECK (rol IN ('ENVIADO','RECIBIDO')),
+      valor_centimos INTEGER NOT NULL,
+      cantidad INTEGER NOT NULL,
+      PRIMARY KEY (transfer_id, rol, valor_centimos)
+    );
   `);
 
   await asignarCodigosDeCaja();
