@@ -38,6 +38,7 @@ import * as kpis from "./reports/kpis.ts";
 import { aCsv, importe } from "./reports/csv.ts";
 import * as prediccion from "./forecast/service.ts";
 import * as puntuacion from "./score/service.ts";
+import * as reparto from "./optimize/service.ts";
 import { ErrorCaja } from "../cash/errors.ts";
 
 /**
@@ -363,6 +364,23 @@ export function createCentralRouter(): Router {
           dias
         )
       );
+    })
+  );
+
+  /**
+   * Reparto de efectivo entre cajas.
+   *
+   * **Propone, no ejecuta.** Mover dinero entre cajas necesita un documento de
+   * tránsito con su estado intermedio, como los pedidos al banco: en medio del
+   * viaje el dinero no está en ninguna de las dos, y sin ese documento se
+   * contaría dos veces o ninguna.
+   */
+  r.get(
+    "/redistribution",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const dias = Number(req.query.dias) > 0 ? Math.min(Number(req.query.dias), 30) : 7;
+      res.json(await reparto.repartoDeLaRed(req.authCtx!.empresaId, dias));
     })
   );
 
