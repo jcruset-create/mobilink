@@ -27,7 +27,7 @@
 
 import type { PoolClient } from "pg";
 import pool from "../db.ts";
-import { registrarAuditoria } from "../core/auditoria.ts";
+import { registrarAuditoria, registrarAuditoriaEnTransaccion } from "../core/auditoria.ts";
 import type { Centimos } from "./domain/money.ts";
 import { formatearEuros } from "./domain/money.ts";
 import {
@@ -86,12 +86,21 @@ import {
   type IncidenciaFormato,
 } from "./repository.ts";
 import { conectorPara } from "./erp/registry.ts";
+import { exigirAmbitoCaja, exigirJornadaPropia } from "./hierarchy.ts";
+import { autorDeOperacion, exigirOtraPersona } from "./sod.ts";
+import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
 export type Contexto = {
   empresaId: string;
   userId: string | null;
   ip?: string;
+  /**
+   * Taller al que está limitado el usuario. `null` o ausente = toda la empresa,
+   * que es como funcionó el módulo hasta la fase 1 de MC Central.
+   */
+  centroId?: string | null;
 };
+
 
 // ── Apertura de jornada ────────────────────────────────────────────────────
 
@@ -201,6 +210,10 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
     if (cajas.length === 0) {
       throw new ErrorCaja("CAJA_NO_ENCONTRADA", "La caja no existe o no está activa.", 404);
     }
+
+    // La apertura es la puerta de entrada: quien no puede abrir la caja de otro
+    // taller tampoco llega a tener una jornada suya que operar después.
+    await exigirAmbitoCaja(client, ctx, e.registerId);
 
     const ahora = Date.now();
     const fecha = fechaDeJornada(e.fecha, ahora);
@@ -361,6 +374,20 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
         ahora,
       });
     }
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, e.registerId),
+      registerId: e.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "SESSION_OPENED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      // La fecha CONTABLE, que puede no ser la de hoy: al arrancar el módulo se
+      // meten días atrasados, y para Central ese cobro es del día que fue.
+      datos: { fecha, fondoCentimos: fondo, heredado },
+    });
 
     const sesion = (await obtenerSesion(sessionId, client))!;
     return { sesion, stock: lineasDesdeInventario(inventarioInicial), heredado, fondo };
@@ -526,9 +553,7 @@ export async function registrarOperacion(
 
   const trabajo = async (client: PoolClient) => {
     const sesion = await bloquearSesionOperable(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
 
     // Stock leído con la jornada ya bloqueada: es el bueno hasta el COMMIT.
     const stock = await stockTeorico(client, e.sessionId);
@@ -716,6 +741,39 @@ export async function registrarOperacion(
       ahora,
     });
 
+    /*
+     * El evento hacia MC Central.
+     *
+     * Va aquí, con los movimientos ya asentados y dentro de la misma
+     * transacción, y NO dentro del `if` de la ERP que viene justo debajo: ese
+     * era el defecto que encontró la auditoría de la fase 0 —sin ERP
+     * configurada, el módulo no contaba nada a nadie—. Un cobro es un hecho de
+     * la caja tanto si hay una ERP detrás como si no.
+     *
+     * Éste es el único punto de emisión de TODOS los movimientos de efectivo
+     * del módulo: cobros, pagos, ajustes, cambios de moneda, pedidos al banco,
+     * entregas, liquidaciones y canjes de ingreso pasan por aquí.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "OPERATION_REGISTERED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        operacionId: operacionId,
+        numero,
+        tipoOperacion: e.tipo,
+        origen,
+        importeCentimos: e.importeCentimos,
+        efectivoNetoCentimos: validacion.efectivoNeto,
+        sectionId: e.sectionId ?? null,
+      },
+    });
+
     if (sincronizable) {
       await encolarEventoErp(client, {
         empresaId: ctx.empresaId,
@@ -755,6 +813,36 @@ export async function registrarOperacion(
       );
     }
 
+    /*
+     * La auditoría, DENTRO de la transacción y sin tragar el error.
+     *
+     * Estaba después del COMMIT y con `registrarAuditoria`, que se traga lo que
+     * falle: una operación podía quedar asentada sin ninguna línea que dijera
+     * quién la hizo. Era el riesgo R2 de la auditoría de la fase 0, y para el
+     * dinero «se guardó pero no se sabe quién» no es un estado aceptable.
+     *
+     * Que esto sea seguro depende de que el INSERT no pueda fallar por los
+     * datos: por eso `app_auditoria` perdió su clave ajena en esta fase.
+     */
+    await registrarAuditoriaEnTransaccion(client, {
+      empresaId: ctx.empresaId,
+      userId: ctx.userId,
+      accion: `cash.operation.${e.tipo.toLowerCase()}`,
+      entidad: "cash_operations",
+      entidadId: String(operacionId),
+      detalle: {
+        numero,
+        origen,
+        importeCentimos: e.importeCentimos,
+        efectivoCentimos: importeEnEfectivo(e.formasPago, codigosEfectivo),
+        formasPago: e.formasPago,
+        recibido: e.efectivoRecibido ?? [],
+        entregado: e.efectivoEntregado ?? [],
+        externalDocumentId: e.externalDocumentId ?? null,
+      },
+      ip: ctx.ip,
+    });
+
     const stockFinal = await stockTeorico(client, e.sessionId);
 
     return {
@@ -771,25 +859,6 @@ export async function registrarOperacion(
   const resultado = clienteExterno
     ? await trabajo(clienteExterno)
     : await enTransaccion(trabajo);
-
-  await registrarAuditoria({
-    empresaId: ctx.empresaId,
-    userId: ctx.userId,
-    accion: `cash.operation.${e.tipo.toLowerCase()}`,
-    entidad: "cash_operations",
-    entidadId: String(resultado.operacionId),
-    detalle: {
-      numero: resultado.numero,
-      origen,
-      importeCentimos: e.importeCentimos,
-      efectivoCentimos: importeEnEfectivo(e.formasPago, codigosEfectivo),
-      formasPago: e.formasPago,
-      recibido: e.efectivoRecibido ?? [],
-      entregado: e.efectivoEntregado ?? [],
-      externalDocumentId: e.externalDocumentId ?? null,
-    },
-    ip: ctx.ip,
-  });
 
   return resultado;
 }
@@ -880,9 +949,7 @@ export async function guardarArqueo(
 ): Promise<ResultadoArqueoGuardado> {
   const resultado = await enTransaccion(async (client) => {
     const sesion = await bloquearSesion(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
     if (sesion.estado === "CLOSED" || sesion.estado === "CANCELLED") {
       throw new ErrorCaja("JORNADA_CERRADA", "La jornada ya está cerrada.", 409);
     }
@@ -962,6 +1029,39 @@ export async function guardarArqueo(
       );
     }
 
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "COUNT_RECORDED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      /*
+       * Con el detalle POR PIEZA, y no solo los totales.
+       *
+       * Es lo que permite a MC Central contestar dos cosas que el total no
+       * dice: qué caja se está quedando sin calderilla —porque el arqueo es la
+       * única foto fiable de qué monedas hay en cada cajón— y si un descuadre
+       * es de un billete o de veinte monedas de cinco céntimos, que no son el
+       * mismo problema ni se investigan igual.
+       */
+      datos: {
+        arqueoId,
+        contadoCentimos: comparacion.totalContado,
+        teoricoCentimos: comparacion.totalTeorico,
+        diferenciaCentimos: comparacion.diferencia,
+        denominacionesCuadran: comparacion.cuadranDenominaciones,
+        lineas: comparacion.lineas.map((l) => ({
+          valor: l.valor,
+          teorico: l.teorico,
+          contado: l.contado,
+          diferencia: l.diferencia,
+        })),
+      },
+    });
+
     return { ...comparacion, arqueoId };
   });
 
@@ -1030,9 +1130,7 @@ export type ResultadoCierre = {
 export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<ResultadoCierre> {
   const resultado = await enTransaccion(async (client) => {
     const sesion = await bloquearSesion(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
     if (sesion.estado === "CLOSED") {
       throw new ErrorCaja("JORNADA_CERRADA", "La jornada ya está cerrada.", 409);
     }
@@ -1301,6 +1399,25 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       ]
     );
 
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "SESSION_CLOSED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      // El ingreso bancario apartado es lo que Central necesita para la
+      // posición global: es dinero que ya no vuelve a la caja.
+      datos: {
+        fecha: sesion.fecha,
+        cambioFinalCentimos: reparto.totalCambio,
+        ingresoBancarioCentimos: reparto.totalIngreso,
+        diferenciaCentimos: comparacion.diferencia,
+      },
+    });
+
     const sesionFinal = (await obtenerSesion(e.sessionId, client))!;
     return {
       sesion: sesionFinal,
@@ -1441,12 +1558,15 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
 
   const sesion = await enTransaccion(async (client) => {
     const s = await bloquearSesion(client, sessionId);
-    if (s.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, s);
     if (s.estado !== "CLOSED") {
       throw new ErrorCaja("JORNADA_NO_CERRADA", "Solo se puede reabrir una jornada cerrada.", 409);
     }
+
+    // Separación de funciones: quien cerró la jornada no la reabre. Reabrir
+    // permite recerrar con otras cifras, así que es la otra mitad del camino
+    // que la anulación abre.
+    await exigirOtraPersona(ctx.empresaId, ctx, s.cerradaPor, "reabrir esta jornada");
 
     const abierta = await sesionAbierta(s.registerId, client);
     if (abierta) {
@@ -1482,6 +1602,21 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
       `UPDATE cash_sessions SET estado = 'REOPENED', updated_at_ms = $2 WHERE id = $1`,
       [sessionId, Date.now()]
     );
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, s.registerId),
+      registerId: s.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "SESSION_REOPENED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      // El motivo viaja: una reapertura sin explicación es exactamente lo que
+      // MC Central tiene que poder mirar.
+      datos: { motivo: motivo.trim() },
+    });
+
     return (await obtenerSesion(sessionId, client))!;
   });
 
@@ -1530,9 +1665,22 @@ export async function anularOperacion(
     ]);
     const sessionId = rows[0].session_id as number;
     const sesion = await bloquearSesionOperable(client, sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
+
+    /*
+     * Separación de funciones: quien registró el cobro no lo anula.
+     *
+     * Anular es una de las dos acciones que borran el rastro de un descuadre
+     * —la otra es reabrir una jornada— y encadenarlas la misma persona sin
+     * testigo es el camino clásico para cuadrar una caja de la que ha salido
+     * dinero. Viene apagado; se enciende donde hay gente suficiente.
+     */
+    await exigirOtraPersona(
+      ctx.empresaId,
+      ctx,
+      await autorDeOperacion(client, operationId),
+      "anular esta operación"
+    );
 
     // Los mismos movimientos del revés.
     const originales = await movimientosDeOperacion(client, operationId);
@@ -1600,6 +1748,30 @@ export async function anularOperacion(
       `UPDATE cash_operations SET estado = 'REVERSED', updated_at_ms = $2 WHERE id = $1`,
       [operationId, ahora]
     );
+
+    /*
+     * La anulación es un hecho nuevo, no la retirada del anterior. Central
+     * recibe los dos —el cobro y su reverso— porque así es como está en el
+     * libro mayor: aquí nada se borra, se compensa.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "OPERATION_REVERSED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        operacionAnuladaId: operationId,
+        operacionInversaId: nuevaId,
+        numero,
+        tipoOperacion: original.tipo,
+        importeCentimos: original.importeCentimos,
+        motivo: motivo?.trim() ?? null,
+      },
+    });
 
     // Si el cobro ya llegó a la ERP, hay que avisarla también de la anulación.
     if (original.erpSyncStatus === "SYNCED" && original.externalDocumentId) {
@@ -2328,9 +2500,7 @@ export async function regularizarArqueo(
 } | null> {
   return enTransaccion(async (client) => {
     const sesion = await bloquearSesion(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
     if (sesion.estado === "CLOSED" || sesion.estado === "CANCELLED") {
       throw new ErrorCaja(
         "JORNADA_CERRADA",
@@ -2413,6 +2583,23 @@ export async function regularizarArqueo(
         motivo: e.motivo ?? null,
       },
       ip: ctx.ip,
+    });
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "COUNT_ADJUSTED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        arqueoId,
+        numeroAjuste: ajuste.numero,
+        diferenciaCentimos: ajuste.diferenciaCentimos,
+        motivo: e.motivo ?? null,
+      },
     });
 
     return { ...ajuste, arqueoId };

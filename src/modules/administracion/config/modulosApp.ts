@@ -10,7 +10,17 @@ export type RolApp = { value: string; label: string };
 export type PantallaApp = { key: string; label: string };
 
 export type ModuloApp = {
-  key: "administracion" | "almacen" | "tyrecontrol" | "sea-core" | "toolcontrol" | "safety" | "presencia" | "workplanner" | "cash";
+  key:
+    | "administracion"
+    | "almacen"
+    | "tyrecontrol"
+    | "sea-core"
+    | "toolcontrol"
+    | "safety"
+    | "presencia"
+    | "workplanner"
+    | "cash"
+    | "central";
   label: string;
   roles: RolApp[];
   pantallas: PantallaApp[];
@@ -63,6 +73,30 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "cierre", label: "Cierre" },
       { key: "historico", label: "Histórico" },
       { key: "erp", label: "Integración ERP" },
+    ],
+  },
+  {
+    key: "central",
+    label: "MC Central",
+    // Solo tres roles, y a propósito: Central de momento MIRA. No mueve dinero,
+    // no cierra jornadas ajenas y no corrige nada. Lo único que escribe es la
+    // organización de la red, y eso es lo que separa a `admin` del resto.
+    roles: [
+      { value: "admin", label: "Admin" },
+      { value: "supervisor", label: "Supervisor de red" },
+      { value: "consulta", label: "Solo consulta" },
+    ],
+    pantallas: [
+      { key: "red", label: "Red de cajas" },
+      { key: "posicion", label: "Posición de efectivo" },
+      { key: "ingresos", label: "Ingresos bancarios" },
+      { key: "cambio", label: "Cambio" },
+      { key: "incidencias", label: "Incidencias" },
+      { key: "prevision", label: "Previsión" },
+      { key: "informes", label: "Informes" },
+      { key: "estado", label: "Estado" },
+      { key: "jornadas", label: "Jornadas" },
+      { key: "organizacion", label: "Organización" },
     ],
   },
   {
