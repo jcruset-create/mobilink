@@ -47,6 +47,7 @@ import {
   CODIGOS_EFECTIVO_POR_DEFECTO,
   importeEnEfectivo,
   validarOperacion,
+  type MotivoMovimiento,
 } from "./domain/operations.ts";
 import { calcularCambio, validarCambioManual, type ResultadoCambio } from "./domain/change.ts";
 import {
@@ -71,6 +72,7 @@ import {
   piezasPorCartuchoDe,
   piezasPorBolsaDe,
   stockPorFormato,
+  stockPorFormatoBruto,
   insertarMovimientos,
   insertarOperacion,
   movimientosDeOperacion,
@@ -81,6 +83,7 @@ import {
   siguienteNumero,
   stockTeorico,
   ultimaSesionCerrada,
+  type IncidenciaFormato,
 } from "./repository.ts";
 import { conectorPara } from "./erp/registry.ts";
 
@@ -392,9 +395,15 @@ export async function stockDeJornada(sessionId: number): Promise<{
   totalCentimos: Centimos;
   piezas: number;
 }> {
+  /*
+   * Aquí se LEE, no se mueve dinero: un saldo de formato incoherente sale como
+   * aviso y no como excepción. Antes reventaba, y con él se caía el informe de
+   * cierre entero: una jornada ya cerrada se quedaba sin su papeleo por algo
+   * que ya no tenía arreglo desde esa pantalla.
+   */
   const [inv, porFormato] = await Promise.all([
     stockTeorico(pool, sessionId),
-    stockPorFormato(pool, sessionId),
+    stockPorFormatoBruto(pool, sessionId),
   ]);
   return {
     lineas: lineasDesdeInventario(inv),
@@ -1174,6 +1183,32 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       concepto: "Ajuste por diferencia de arqueo al cerrar",
     });
 
+    /*
+     * Y ahora el FORMATO, que hasta aquí no se asentaba nunca.
+     *
+     * El arqueo cuenta tres cosas —sueltas, cartuchos y bolsas— pero solo las
+     * piezas llegaban al libro mayor. Si alguien juntaba monedas y las
+     * precintaba, el arqueo lo veía y el libro mayor no: seguía creyendo que
+     * estaban sueltas. Al repartir, el cierre sacaba un envase que para el
+     * libro mayor no existía y su saldo se iba a NEGATIVO. A partir de ahí esa
+     * jornada ya no podía ni imprimir su informe.
+     *
+     * Se asienta solo en el sentido de PRECINTAR. Abrir no tiene vuelta atrás
+     * y ya se hace solo cuando hacen falta piezas (`abrirCartuchosSiHaceFalta`);
+     * hacerlo aquí porque un arqueo dejara los envases a cero rompería tubos de
+     * verdad por un descuido al contar.
+     */
+    await conciliarFormato(client, {
+      sessionId: e.sessionId,
+      operacionesDe: { anio, ahora },
+      ctx,
+      denominaciones,
+      contadoTubos,
+      contadoBolsas,
+      porCartucho,
+      porBolsa,
+    });
+
     // Cambio final: sale de la jornada de hoy y mañana entra como fondo.
     if (reparto.totalCambio > 0) {
       const numero = await siguienteNumero(client, sesion.id, "CLOSING_FLOAT", anio);
@@ -1650,6 +1685,12 @@ export type ResumenJornada = {
   stockCartuchos: LineaDenominacion[];
   /** Bolsas precintadas por valor de la moneda. */
   stockBolsas: LineaDenominacion[];
+  /**
+   * Denominaciones con el saldo de formato en negativo: salió un envase que
+   * nunca entró. Vacío en una jornada sana. Se informa en vez de reventar,
+   * para que el papeleo de una jornada ya cerrada siga saliendo.
+   */
+  incidenciasStock: IncidenciaFormato[];
   totalStockCentimos: Centimos;
   piezas: number;
   porFormaPago: { forma: string; importeCentimos: Centimos }[];
@@ -1698,9 +1739,14 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
   const sesion = await obtenerSesion(sessionId);
   if (!sesion) throw new ErrorCaja("JORNADA_NO_ENCONTRADA", "La jornada no existe.", 404);
 
+  /*
+   * Igual que en `stockDeJornada`: esto se lee para informar, así que una
+   * incoherencia de formato viaja como aviso. Es lo que hace que el informe de
+   * una jornada ya cerrada siga imprimiéndose.
+   */
   const [inv, porFormato] = await Promise.all([
     stockTeorico(pool, sessionId),
-    stockPorFormato(pool, sessionId),
+    stockPorFormatoBruto(pool, sessionId),
   ]);
 
   // Los totales por forma de pago salen de las operaciones vivas: una anulada y
@@ -1803,6 +1849,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     stockSueltas: lineasDesdeInventario(porFormato.sueltas),
     stockCartuchos: lineasDesdeInventario(porFormato.cartuchos),
     stockBolsas: lineasDesdeInventario(porFormato.bolsas),
+    incidenciasStock: porFormato.incidencias,
     totalStockCentimos: totalInventario(inv),
     piezas: totalPiezas(inv),
     porFormaPago: formas.map((r: { forma_pago: string; importe: string }) => ({
@@ -2062,6 +2109,124 @@ export async function cambiarSeccion(
   });
 
   return { operacionId: operationId, sectionId, seccionNombre: nombre };
+}
+
+/**
+ * Deja el formato del libro mayor igual que el que se ha contado.
+ *
+ * Precinta —nunca abre— los envases que el arqueo ha visto y el libro mayor
+ * no tenía apuntados. Cada uno es un asiento de valor neto CERO: salen las
+ * monedas sueltas y entra el envase con esas mismas monedas dentro.
+ *
+ * Si no hay sueltas suficientes para formarlo, no se fuerza: significa que el
+ * recuento y el libro mayor discrepan en piezas, y de eso se encarga el ajuste
+ * del arqueo, que va antes. Inventar aquí las que faltan taparía un descuadre
+ * de dinero haciéndolo pasar por un cambio de formato.
+ */
+async function conciliarFormato(
+  client: PoolClient,
+  p: {
+    sessionId: number;
+    ctx: Contexto;
+    denominaciones: Denominacion[];
+    contadoTubos: Inventario;
+    contadoBolsas: Inventario;
+    porCartucho: ReadonlyMap<Centimos, number>;
+    porBolsa: ReadonlyMap<Centimos, number>;
+    operacionesDe: { anio: number; ahora: number };
+  }
+): Promise<void> {
+  const libro = await stockPorFormatoBruto(client, p.sessionId);
+
+  type Pendiente = { valor: Centimos; envases: number; piezas: number };
+  const aPrecintar: { campo: "cartuchos" | "bolsas"; motivo: MotivoMovimiento; lineas: Pendiente[] }[] =
+    [
+      {
+        campo: "cartuchos",
+        motivo: "CARTRIDGE_FORMED",
+        lineas: faltantes(p.contadoTubos, libro.cartuchos, p.porCartucho, libro.sueltas),
+      },
+      {
+        campo: "bolsas",
+        motivo: "BAG_FORMED",
+        lineas: faltantes(p.contadoBolsas, libro.bolsas, p.porBolsa, libro.sueltas),
+      },
+    ];
+
+  for (const lote of aPrecintar) {
+    if (lote.lineas.length === 0) continue;
+
+    const numero = await siguienteNumero(client, p.sessionId, "ADJUSTMENT", p.operacionesDe.anio);
+    const total = lote.lineas.reduce((a, l) => a + l.valor * l.piezas, 0);
+    const opId = await insertarOperacion(client, {
+      empresaId: p.ctx.empresaId,
+      sessionId: p.sessionId,
+      numero,
+      tipo: "ADJUSTMENT",
+      origen: "MANUAL",
+      concepto:
+        lote.campo === "cartuchos"
+          ? "Monedas precintadas en cartuchos, según el arqueo"
+          : "Monedas precintadas en bolsas, según el arqueo",
+      importeCentimos: total,
+      // Neto cero: el dinero no se mueve, cambia de envase.
+      efectivoNetoCentimos: 0,
+      erpSyncStatus: "NOT_APPLICABLE",
+      userId: p.ctx.userId,
+      ahora: p.operacionesDe.ahora,
+    });
+
+    await insertarMovimientos(client, {
+      sessionId: p.sessionId,
+      operationId: opId,
+      movimientos: [
+        {
+          direccion: "OUT",
+          motivo: lote.motivo,
+          lineas: lote.lineas.map((l) => ({ valor: l.valor, cantidad: l.piezas })),
+        },
+        {
+          direccion: "IN",
+          motivo: lote.motivo,
+          lineas: lote.lineas.map((l) => ({
+            valor: l.valor,
+            cantidad: l.piezas,
+            [lote.campo]: l.envases,
+          })),
+        },
+      ],
+      denominaciones: p.denominaciones,
+      userId: p.ctx.userId,
+      ahora: p.operacionesDe.ahora,
+    });
+  }
+}
+
+/**
+ * Envases que hay que precintar y para los que además hay monedas sueltas.
+ *
+ * El tope de sueltas es lo que impide que una discrepancia de PIEZAS se cuele
+ * disfrazada de cambio de formato.
+ */
+function faltantes(
+  contado: Inventario,
+  enLibro: ReadonlyMap<Centimos, number>,
+  porEnvase: ReadonlyMap<Centimos, number>,
+  sueltasEnLibro: ReadonlyMap<Centimos, number>
+): { valor: Centimos; envases: number; piezas: number }[] {
+  const salida: { valor: Centimos; envases: number; piezas: number }[] = [];
+  for (const { valor, cantidad } of lineasDesdeInventario(contado)) {
+    const piezasPorEnvase = porEnvase.get(valor) ?? 0;
+    if (piezasPorEnvase <= 0) continue;
+
+    const faltan = cantidad - (enLibro.get(valor) ?? 0);
+    if (faltan <= 0) continue;
+
+    const cabenConLasSueltas = Math.floor((sueltasEnLibro.get(valor) ?? 0) / piezasPorEnvase);
+    const envases = Math.min(faltan, cabenConLasSueltas);
+    if (envases > 0) salida.push({ valor, envases, piezas: envases * piezasPorEnvase });
+  }
+  return salida;
 }
 
 // ── Regularización del arqueo ──────────────────────────────────────────────
