@@ -74,6 +74,7 @@ import {
 import {
   type AppView,
   type UserRole,
+  VIEW_LABELS,
   canAccessView,
   canUseAdminTools,
   canUseScreens,
@@ -560,6 +561,11 @@ const [view, setView] = useState<AppView>(() => {
 useEffect(() => {
   if (initialView) setView(initialView);
 }, [initialView]);
+
+// En el móvil las veinte pestañas ocupaban la pantalla entera y había que
+// recorrerlas enteras en cada carga. Se pliegan tras un botón "Menú"; a partir
+// de tablet (md) se muestran siempre, como hasta ahora.
+const [menuMovilAbierto, setMenuMovilAbierto] = useState(false);
 
 const autoSyncPaused =
   formOpen ||
@@ -4989,7 +4995,35 @@ return (
     ))}
   </select>
 </div>
-       <div className={`flex-wrap gap-2 ${embebido ? "hidden" : "flex"}`}>
+      {!embebido && (
+        <button
+          type="button"
+          onClick={() => setMenuMovilAbierto((v) => !v)}
+          aria-expanded={menuMovilAbierto}
+          className="flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 shadow-sm md:hidden"
+        >
+          <span>
+            {menuMovilAbierto ? "Cerrar menú" : "Menú"}
+            <span className="ml-2 font-normal text-slate-500">
+              · {VIEW_LABELS[view] ?? ""}
+            </span>
+          </span>
+          <span className="text-slate-400">{menuMovilAbierto ? "▲" : "▼"}</span>
+        </button>
+      )}
+
+       {/* Al pulsar cualquier pestaña se cierra el menú: el clic burbujea hasta
+           aquí, así no hay que tocar los veinte botones uno a uno. */}
+       <div
+         onClick={() => setMenuMovilAbierto(false)}
+         className={`flex-wrap gap-2 ${
+           embebido
+             ? "hidden"
+             : menuMovilAbierto
+               ? "flex"
+               : "hidden md:flex"
+         }`}
+       >
   {canView("operativo") && (
     <button
       type="button"
