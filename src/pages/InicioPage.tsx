@@ -40,7 +40,8 @@ const ICONOS: Record<string, LucideIcon> = {
  * meterse en el cuadradito: encajado en 36×36 no se leería.
  *
  * Los que no tienen logo -administración, almacén, Core, WorkPlanner,
- * asistencias, Central Pro y panel de taller- se quedan con su icono.
+ * MC Central, asistencias, Central Pro y panel de taller- se quedan con su
+ * icono.
  */
 const LOGOS: Record<string, string> = {
   presencia: logoPresencia,
