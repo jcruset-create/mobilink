@@ -39,6 +39,7 @@ let documentos: typeof import("./documents.ts");
 let ingresos: typeof import("./bankdeposits.ts");
 let informe: typeof import("./report.ts");
 let reauth: typeof import("./reauth.ts");
+let migracion: typeof import("./migration.ts");
 let eventos: typeof import("./events/worker.ts");
 let transporte: typeof import("./events/transport.ts");
 let MockCashErpConnector: typeof import("./erp/mock.ts").MockCashErpConnector;
@@ -110,6 +111,7 @@ beforeAll(async () => {
   ingresos = await import("./bankdeposits.ts");
   informe = await import("./report.ts");
   reauth = await import("./reauth.ts");
+  migracion = await import("./migration.ts");
   eventos = await import("./events/worker.ts");
   transporte = await import("./events/transport.ts");
   const mock = await import("./erp/mock.ts");
@@ -4215,5 +4217,148 @@ describe.runIf(RUN)("Reautenticación", () => {
     await expect(reauth.reautenticar(USUARIO, "loquesea")).rejects.toMatchObject({
       codigo: "REAUTENTICACION_NO_DISPONIBLE",
     });
+  });
+});
+
+/**
+ * Migration Center (fase 11).
+ *
+ * Lo que se prueba es la decisión de fondo: un día de papel se importa con el
+ * desglose REAL del cambio del cajón —lo contado al cerrar menos lo contado al
+ * abrir— y no con un reparto inventado del total. Y que repetir la importación
+ * no duplique dinero, que es lo que separa una herramienta de migración que se
+ * puede reintentar de una que hay que acertar a la primera.
+ */
+describe.runIf(RUN)("Importación de días de papel", () => {
+  it("importa dos días encadenados y el cierre de uno es el fondo del otro", async () => {
+    const caja = await crearCaja("papel");
+    const lote = `L${String(process.hrtime.bigint()).slice(-9)}`;
+
+    const dia13 = {
+      registerId: caja,
+      fecha: "2026-03-13",
+      apertura: [{ valor: 2000, cantidad: 5 }],
+      cierre: [
+        { valor: 2000, cantidad: 5 },
+        { valor: 1000, cantidad: 3 },
+      ],
+      cobradoCentimos: 3000,
+    };
+    const dia14 = {
+      registerId: caja,
+      fecha: "2026-03-14",
+      apertura: [
+        { valor: 2000, cantidad: 5 },
+        { valor: 1000, cantidad: 3 },
+      ],
+      cierre: [
+        { valor: 2000, cantidad: 5 },
+        { valor: 1000, cantidad: 1 },
+      ],
+      pagadoCentimos: 2000,
+    };
+
+    // A propósito en desorden: la importación los ordena, porque el cierre de
+    // cada día es el fondo del siguiente.
+    const r = await migracion.importarDias(ctx, lote, [dia14, dia13]);
+
+    expect(r.importados.map((d) => d.fecha)).toEqual(["2026-03-13", "2026-03-14"]);
+    expect(r.importados[0].netoCentimos).toBe(3000);
+    expect(r.importados[1].netoCentimos).toBe(-2000);
+
+    // El asiento lleva las PIEZAS reales, no un reparto plausible del total.
+    const { rows } = await db.query(
+      `SELECT m.valor_unitario_centimos AS valor_centimos, m.cantidad, m.direccion
+         FROM cash_denomination_movements m
+         JOIN cash_operations o ON o.id = m.operation_id
+        WHERE o.session_id = $1 AND o.origen = 'IMPORT'
+        ORDER BY m.valor_unitario_centimos DESC`,
+      [r.importados[0].sessionId]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].valor_centimos).toBe(1000);
+    expect(rows[0].cantidad).toBe(3);
+    expect(rows[0].direccion).toBe("IN");
+
+    // Y los días quedan cerrados y cuadrados: la importación no puede inventar
+    // un descuadre que en el papel no estaba.
+    const { rows: sesiones } = await db.query(
+      `SELECT estado, diferencia_centimos FROM cash_sessions WHERE id = ANY($1::int[])`,
+      [r.importados.map((d) => d.sessionId)]
+    );
+    for (const s of sesiones) {
+      expect(s.estado).toBe("CLOSED");
+      expect(Number(s.diferencia_centimos)).toBe(0);
+    }
+  });
+
+  it("repetir el mismo lote no duplica dinero", async () => {
+    const caja = await crearCaja("reimport");
+    const lote = `R${String(process.hrtime.bigint()).slice(-9)}`;
+    const dia = {
+      registerId: caja,
+      fecha: "2026-04-01",
+      apertura: [{ valor: 1000, cantidad: 2 }],
+      cierre: [{ valor: 1000, cantidad: 5 }],
+    };
+
+    const primera = await migracion.importarDias(ctx, lote, [dia]);
+    expect(primera.importados).toHaveLength(1);
+
+    const segunda = await migracion.importarDias(ctx, lote, [dia]);
+    expect(segunda.importados).toHaveLength(0);
+    expect(segunda.omitidos).toHaveLength(1);
+
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_operations
+        WHERE empresa_id = $1 AND external_system = 'IMPORT' AND external_document_id = $2`,
+      [EMPRESA, `${lote}:2026-04-01`]
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("un día sin movimiento se importa igual, sin asiento que no ocurrió", async () => {
+    const caja = await crearCaja("quieto");
+    const lote = `Q${String(process.hrtime.bigint()).slice(-9)}`;
+    const r = await migracion.importarDias(ctx, lote, [
+      {
+        registerId: caja,
+        fecha: "2026-04-02",
+        apertura: [{ valor: 1000, cantidad: 2 }],
+        cierre: [{ valor: 1000, cantidad: 2 }],
+      },
+    ]);
+
+    expect(r.importados[0].netoCentimos).toBe(0);
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_operations
+        WHERE session_id = $1 AND origen = 'IMPORT'`,
+      [r.importados[0].sessionId]
+    );
+    expect(rows[0].n).toBe(0);
+  });
+
+  it("el saldo inicial se declara una vez, y no cuando la caja ya tiene historia", async () => {
+    const caja = await crearCaja("saldo");
+    const declarado = await migracion.declararSaldoInicial(
+      ctx,
+      caja,
+      [{ valor: 5000, cantidad: 2 }, { valor: 1000, cantidad: 5 }],
+      "Recuento del 1 de enero, dinero que ya estaba en el cajón"
+    );
+    expect(declarado.totalCentimos).toBe(15000);
+
+    // Queda dicho que se declaró, que es lo que preguntará un auditor.
+    const { rows } = await db.query(
+      `SELECT detalle FROM app_auditoria
+        WHERE accion = 'cash.initial_balance.declare' AND entidad_id = $1`,
+      [String(declarado.sessionId)]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].detalle.totalCentimos).toBe(15000);
+
+    await expect(
+      migracion.declararSaldoInicial(ctx, caja, [{ valor: 1000, cantidad: 1 }], "Otra vez")
+    ).rejects.toMatchObject({ codigo: "SALDO_INICIAL_YA_NO_APLICA" });
   });
 });
