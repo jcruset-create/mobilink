@@ -36,7 +36,23 @@ import * as conciliacion from "./reconciliation/service.ts";
 import { salud } from "./health.ts";
 import * as kpis from "./reports/kpis.ts";
 import { aCsv, importe } from "./reports/csv.ts";
+import * as prediccion from "./forecast/service.ts";
+import * as puntuacion from "./score/service.ts";
 import { ErrorCaja } from "../cash/errors.ts";
+
+/**
+ * Id de caja de la ruta, o un 400 que se entiende.
+ *
+ * Sin esto, un `/forecast/abc` llegaría a la consulta como `NaN` y saldría un
+ * 500 genérico: un error de quien llama contado como si fuera del servidor.
+ */
+function idDeCaja(valor: unknown): number {
+  const n = Number(valor);
+  if (!Number.isSafeInteger(n) || n <= 0) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "El identificador de caja no es válido.", 400);
+  }
+  return n;
+}
 
 /** Traduce `ErrorCaja` a su código HTTP, como hace el router de la caja. */
 function ruta(handler: (req: Request, res: Response) => Promise<void>) {
@@ -320,6 +336,42 @@ export function createCentralRouter(): Router {
         ...creado,
         aviso: "Guarda el secreto ahora: con él se comprueba la firma de cada envío.",
       });
+    })
+  );
+
+  // ── Tesorería predictiva y salud de la red ───────────────────────────────
+
+  /** Qué cajas se quedan sin cambio antes, y cuándo hay que ir al banco. */
+  r.get(
+    "/forecast",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const dias = Number(req.query.dias) > 0 ? Math.min(Number(req.query.dias), 30) : 7;
+      res.json({ cajas: await prediccion.prediccionDeLaRed(req.authCtx!.empresaId, dias) });
+    })
+  );
+
+  r.get(
+    "/forecast/:id",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const dias = Number(req.query.dias) > 0 ? Math.min(Number(req.query.dias), 30) : 7;
+      res.json(
+        await prediccion.prediccionDeCaja(
+          req.authCtx!.empresaId,
+          idDeCaja(req.params.id),
+          dias
+        )
+      );
+    })
+  );
+
+  /** Cash Health Score: el número siempre viene con sus motivos. */
+  r.get(
+    "/score",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      res.json(await puntuacion.saludDeLaRed(req.authCtx!.empresaId));
     })
   );
 
