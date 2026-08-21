@@ -17,7 +17,7 @@
 
 import { Router, type Request, type RequestHandler, type Response } from "express";
 import { resolverTestigo, emitirTestigo, type ContextoApi } from "./clients.ts";
-import { cajasEnRed, posicionGlobal, jornadasDeRed } from "../queries.ts";
+import { cajasEnRed, posicionGlobal, jornadasEnRed } from "../queries.ts";
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -120,7 +120,7 @@ export function createCentralApiRouter(): Router {
     ruta(async (req, res) => {
       const { desde, hasta } = req.query;
       res.json({
-        jornadas: await jornadasDeRed(req.apiCtx!.empresaId, {
+        jornadas: await jornadasEnRed(req.apiCtx!.empresaId, {
           desde: typeof desde === "string" ? desde : undefined,
           hasta: typeof hasta === "string" ? hasta : undefined,
         }),
