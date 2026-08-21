@@ -21,6 +21,8 @@ let tesoreria: typeof import("../cash/treasury.ts");
 let ingresosCaja: typeof import("../cash/bankdeposits.ts");
 let reglas: typeof import("./rules/service.ts");
 let avisos: typeof import("./notifications/service.ts");
+let clientes: typeof import("./api/clients.ts");
+let hooks: typeof import("./api/webhooks.ts");
 let transporteCaja: typeof import("../cash/events/transport.ts");
 let workerCaja: typeof import("../cash/events/worker.ts");
 let TransporteLocal: typeof import("./transport.ts").TransporteLocal;
@@ -62,6 +64,8 @@ beforeAll(async () => {
   ingresosCaja = await import("../cash/bankdeposits.ts");
   reglas = await import("./rules/service.ts");
   avisos = await import("./notifications/service.ts");
+  clientes = await import("./api/clients.ts");
+  hooks = await import("./api/webhooks.ts");
   transporteCaja = await import("../cash/events/transport.ts");
   workerCaja = await import("../cash/events/worker.ts");
   TransporteLocal = (await import("./transport.ts")).TransporteLocal;
@@ -78,6 +82,10 @@ beforeAll(async () => {
   await db.query(`DELETE FROM central_rules WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_notifications WHERE empresa_id = $1`, [EMPRESA]);
   await db.query(`DELETE FROM central_notification_channels WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_webhook_deliveries WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_webhooks WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_api_tokens WHERE empresa_id = $1`, [EMPRESA]);
+  await db.query(`DELETE FROM central_api_clients WHERE empresa_id = $1`, [EMPRESA]);
 });
 
 afterAll(async () => {
@@ -862,5 +870,104 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
       [EMPRESA]
     );
     expect(despues[0].n).toBe(antes[0].n);
+  });
+
+  /*
+   * Fase 12: acceso máquina-a-máquina.
+   *
+   * Hasta aquí un programa tenía que usar la cuenta de una persona, con todos
+   * sus permisos y la garantía de dejar de funcionar el día que esa persona se
+   * fuera. Era el riesgo R8.
+   */
+  it("un cliente cambia su secreto por un testigo, y el secreto no se guarda", async () => {
+    const { clientId, clientSecret } = await clientes.crearCliente(EMPRESA, "ERP de pruebas", [
+      "read:network",
+    ]);
+
+    // De él solo queda la huella: una copia de la base no da acceso a nada.
+    const { rows } = await db.query(
+      `SELECT secreto_huella FROM central_api_clients WHERE client_id = $1`,
+      [clientId]
+    );
+    expect(rows[0].secreto_huella).not.toBe(clientSecret);
+    expect(rows[0].secreto_huella).toMatch(/^[0-9a-f]{64}$/);
+
+    const testigo = await clientes.emitirTestigo(clientId, clientSecret);
+    expect(testigo?.token_type).toBe("Bearer");
+    expect(testigo?.scope).toBe("read:network");
+
+    const ctxApi = await clientes.resolverTestigo(testigo!.access_token);
+    expect(ctxApi?.empresaId).toBe(EMPRESA);
+    expect(ctxApi?.alcances).toEqual(["read:network"]);
+  });
+
+  it("un secreto equivocado no da testigo, y un cliente que no existe tampoco", async () => {
+    const { clientId } = await clientes.crearCliente(EMPRESA, "Otro", []);
+    expect(await clientes.emitirTestigo(clientId, "me-lo-invento")).toBeNull();
+    expect(await clientes.emitirTestigo("mc_noexiste", "loquesea")).toBeNull();
+  });
+
+  /*
+   * Revocar tiene que cortar YA. Si los testigos vivos siguieran valiendo hasta
+   * una hora, seguirían valiendo justo en el rato en el que a alguien le urge
+   * cortar el acceso.
+   */
+  it("revocar un cliente invalida sus testigos en el momento", async () => {
+    const { clientId, clientSecret } = await clientes.crearCliente(EMPRESA, "Revocable", [
+      "read:network",
+    ]);
+    const testigo = await clientes.emitirTestigo(clientId, clientSecret);
+    expect(await clientes.resolverTestigo(testigo!.access_token)).not.toBeNull();
+
+    await clientes.revocarCliente(EMPRESA, clientId);
+
+    expect(await clientes.resolverTestigo(testigo!.access_token)).toBeNull();
+    expect(await clientes.emitirTestigo(clientId, clientSecret)).toBeNull();
+  });
+
+  it("un testigo caducado deja de valer", async () => {
+    const { clientId, clientSecret } = await clientes.crearCliente(EMPRESA, "Caduca", []);
+    const testigo = await clientes.emitirTestigo(clientId, clientSecret);
+
+    await db.query(`UPDATE central_api_tokens SET expira_ms = $1 WHERE client_id = $2`, [
+      Date.now() - 1000,
+      clientId,
+    ]);
+    expect(await clientes.resolverTestigo(testigo!.access_token)).toBeNull();
+
+    expect(await clientes.limpiarTestigos()).toBeGreaterThanOrEqual(1);
+  });
+
+  it("una incidencia nueva encola su webhook, y repetir no lo duplica", async () => {
+    const { id } = await hooks.crearWebhook(EMPRESA, "https://ejemplo.test/mobilink", []);
+
+    await hooks.encolarEvento(EMPRESA, "incident.opened", "incident:12345", { id: "12345" });
+    await hooks.encolarEvento(EMPRESA, "incident.opened", "incident:12345", { id: "12345" });
+
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM central_webhook_deliveries
+        WHERE webhook_id = $1 AND idempotency_key = 'incident:12345'`,
+      [id]
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("un webhook solo recibe los eventos a los que se suscribió", async () => {
+    const { id } = await hooks.crearWebhook(EMPRESA, "https://ejemplo.test/solo-cierres", [
+      "session.closed",
+    ]);
+    await hooks.encolarEvento(EMPRESA, "incident.opened", "otra-cosa", {});
+
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM central_webhook_deliveries WHERE webhook_id = $1`,
+      [id]
+    );
+    expect(rows[0].n).toBe(0);
+  });
+
+  it("un webhook sin https se rechaza: por ahí viajan importes", async () => {
+    await expect(hooks.crearWebhook(EMPRESA, "http://ejemplo.test/inseguro", [])).rejects.toThrow(
+      /https/i
+    );
   });
 });
