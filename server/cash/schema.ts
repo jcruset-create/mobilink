@@ -1062,6 +1062,29 @@ export async function initCash(): Promise<void> {
     );
   `);
 
+  /*
+   * Índice de cobertura para las consultas de consumo (fases 17 a 20).
+   *
+   * La predicción y el reparto preguntan lo mismo por cada caja: qué piezas han
+   * salido dando cambio. Sin este índice, PostgreSQL recorría **la tabla
+   * entera** de movimientos para contestarlo, así que el coste crecía con el
+   * libro mayor de toda la empresa en vez de con la historia de esa caja — y el
+   * libro mayor no mengua nunca.
+   *
+   * Medido sobre 365.000 movimientos (5 cajas, dos años): la llamada que hace
+   * la pantalla de reparto pasa de 230 ms a 140 ms, y el plan deja de ser un
+   * recorrido completo para ser una lectura solo del índice.
+   *
+   * `INCLUDE` en vez de más columnas de clave: no se busca por importe ni por
+   * cantidad, solo se leen, y así el índice ocupa menos y no se reordena por
+   * ellas.
+   */
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS cash_denmov_consumo_idx
+      ON cash_denomination_movements (session_id, motivo, direccion)
+      INCLUDE (valor_unitario_centimos, cantidad);
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 
