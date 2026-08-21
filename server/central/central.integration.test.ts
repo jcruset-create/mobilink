@@ -24,6 +24,7 @@ let avisos: typeof import("./notifications/service.ts");
 let clientes: typeof import("./api/clients.ts");
 let hooks: typeof import("./api/webhooks.ts");
 let conciliacion: typeof import("./reconciliation/service.ts");
+let observabilidad: typeof import("./health.ts");
 let transporteCaja: typeof import("../cash/events/transport.ts");
 let workerCaja: typeof import("../cash/events/worker.ts");
 let TransporteLocal: typeof import("./transport.ts").TransporteLocal;
@@ -68,6 +69,7 @@ beforeAll(async () => {
   clientes = await import("./api/clients.ts");
   hooks = await import("./api/webhooks.ts");
   conciliacion = await import("./reconciliation/service.ts");
+  observabilidad = await import("./health.ts");
   transporteCaja = await import("../cash/events/transport.ts");
   workerCaja = await import("../cash/events/worker.ts");
   TransporteLocal = (await import("./transport.ts")).TransporteLocal;
@@ -1098,5 +1100,79 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
     await expect(
       conciliacion.conciliar({ empresaId: EMPRESA, userId: null }, apunte, 900002)
     ).rejects.toThrow(/ya está conciliado/i);
+  });
+
+  /*
+   * Fase 15: observabilidad.
+   *
+   * Un servicio que contesta «ok» mientras tiene ocho mil eventos sin enviar
+   * miente con la verdad: el proceso vive, pero el sistema no funciona. Lo que
+   * se comprueba aquí es que el atasco se ve.
+   */
+  /*
+   * Esta prueba mira la FORMA, no el veredicto: el estado global depende de lo
+   * que hayan dejado las demás pruebas en las colas, y afirmar «OK» aquí sería
+   * un verde que se rompe según el orden en que se ejecute todo.
+   */
+  it("informa de las cuatro colas y del tiempo de respuesta de la base", async () => {
+    const s = await observabilidad.salud();
+
+    expect(s.colas.map((c) => c.nombre)).toEqual(
+      expect.arrayContaining([
+        "Eventos hacia Central",
+        "Avisos por correo",
+        "Webhooks",
+        "Sincronización con la ERP",
+      ])
+    );
+    expect(s.baseDeDatosMs).toBeGreaterThanOrEqual(0);
+    expect(["OK", "DEGRADADO", "ATASCADO"]).toContain(s.estado);
+  });
+
+  /*
+   * El retraso se mide en TIEMPO, no en filas. Cien pendientes de hace treinta
+   * segundos es una tarde normal; tres desde hace dos días es una integración
+   * rota, y el número de filas solo no distingue una cosa de la otra.
+   */
+  it("un pendiente viejo saca el sistema de OK, aunque sea uno solo", async () => {
+    const { rows } = await db.query(
+      `INSERT INTO central_notifications
+         (empresa_id, incident_id, destino, asunto, cuerpo, creado_en_ms)
+       VALUES ($1, 999999, 'x@y.test', 'a', 'b', $2) RETURNING id`,
+      [EMPRESA, Date.now() - 3 * 60 * 60_000]
+    );
+    try {
+      const s = await observabilidad.salud();
+      const correo = s.colas.find((c) => c.nombre === "Avisos por correo")!;
+      // Otras pruebas dejan avisos recientes en la cola; lo que importa aquí es
+      // que el retraso lo marque el MÁS VIEJO, que es de hace tres horas.
+      expect(correo.pendientes).toBeGreaterThanOrEqual(1);
+      expect(correo.retrasoMinutos).toBeGreaterThanOrEqual(120);
+      expect(correo.estado).toBe("ATASCADA");
+      expect(s.estado).toBe("ATASCADO");
+    } finally {
+      await db.query(`DELETE FROM central_notifications WHERE id = $1`, [rows[0].id]);
+    }
+  });
+
+  /*
+   * Una fila en error terminal no se resuelve sola: es atasco desde el minuto
+   * uno, por muy reciente y por muy poquitas que sean.
+   */
+  it("una sola fila en error terminal ya es atasco, aunque sea de hace un minuto", async () => {
+    const { rows } = await db.query(
+      `INSERT INTO central_notifications
+         (empresa_id, incident_id, destino, asunto, cuerpo, estado, creado_en_ms)
+       VALUES ($1, 999998, 'x@y.test', 'a', 'b', 'ERROR', $2) RETURNING id`,
+      [EMPRESA, Date.now()]
+    );
+    try {
+      const s = await observabilidad.salud();
+      const correo = s.colas.find((c) => c.nombre === "Avisos por correo")!;
+      expect(correo.enError).toBe(1);
+      expect(correo.estado).toBe("ATASCADA");
+    } finally {
+      await db.query(`DELETE FROM central_notifications WHERE id = $1`, [rows[0].id]);
+    }
   });
 });

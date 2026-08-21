@@ -1,7 +1,7 @@
 {
   "name": "mobilink",
   "private": true,
-  "version": "1.8.38",
+  "version": "1.8.39",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -23,6 +23,8 @@
     "seed": "tsx server/seed.ts",
     "backup:postgres": "tsx server/backup-postgres.ts",
     "restore:postgres": "tsx server/restore-postgres.ts",
+    "db:dump": "tsx scripts/backup-full.mjs",
+    "db:restore": "tsx scripts/restore-full.mjs",
     "setup:buckets": "tsx scripts/setup-supabase-buckets.ts",
     "bc:check": "node scripts/bc-check.mjs",
     "bc:setup": "tsx scripts/bc-setup.ts",

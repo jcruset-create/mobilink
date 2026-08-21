@@ -32,6 +32,7 @@ import * as avisos from "./notifications/service.ts";
 import * as clientes from "./api/clients.ts";
 import * as webhooks from "./api/webhooks.ts";
 import * as conciliacion from "./reconciliation/service.ts";
+import { salud } from "./health.ts";
 import { ErrorCaja } from "../cash/errors.ts";
 
 /** Traduce `ErrorCaja` a su código HTTP, como hace el router de la caja. */
@@ -316,6 +317,23 @@ export function createCentralRouter(): Router {
         ...creado,
         aviso: "Guarda el secreto ahora: con él se comprueba la firma de cada envío.",
       });
+    })
+  );
+
+  // ── Estado del sistema ───────────────────────────────────────────────────
+
+  /**
+   * Qué está pasando ahora mismo.
+   *
+   * Con permiso de lectura, no de administración: quien atiende la bandeja de
+   * incidencias tiene que poder ver si lo que falla es una caja o es que la
+   * cola de eventos lleva dos días parada.
+   */
+  r.get(
+    "/health",
+    exigirPermiso("central.view"),
+    ruta(async (_req, res) => {
+      res.json(await salud());
     })
   );
 
