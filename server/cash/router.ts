@@ -453,6 +453,22 @@ export function createCashRouter(): Router {
     })
   );
 
+  r.post(
+    "/transfers/:id/cancel",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        traslado: await traslados.cancelar(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          enteroPositivo(b.sessionId, "sessionId"),
+          String(b.motivo ?? "")
+        ),
+      });
+    })
+  );
+
   // ── Migración: los días que se llevaron en papel ─────────────────────────
 
   /**
