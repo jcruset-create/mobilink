@@ -25,6 +25,47 @@
 --    revisiones con profundidad; los neumáticos con una sola medición quedan
 --    fuera y se informa de cuántos son, para no dar la predicción por completa.
 --
+--  · SET jit = off. NO es una micro-optimización, es la diferencia entre que
+--    el informe salga y que no salga. Ver abajo.
+--
+-- POR QUÉ ESTA CONSULTA LLEVA jit = off (medido, 21-08-2026)
+--
+-- La pantalla daba "canceling statement due to statement timeout". Medido en
+-- un PostgreSQL 16 con volúmenes de producción (818 vehículos, 4.900
+-- neumáticos, 3.272 revisiones, 19.632 mediciones):
+--
+--     con JIT   5.100 ms   ← de los cuales 4.656 ms son COMPILAR
+--     sin JIT     350 ms
+--
+--   JIT: Functions: 522
+--   Timing: Generation 32 ms, Inlining 154 ms, Optimization 2.656 ms,
+--           Emission 1.814 ms, Total 4.656 ms
+--
+-- El trabajo real —leer las tablas y agregar— son 350 ms. El resto es
+-- PostgreSQL compilando a máquina 522 funciones para una consulta que lee
+-- 25.000 filas y se ejecuta una vez.
+--
+-- Se dispara porque el coste ESTIMADO del plan sale 4.081.610, muy por encima
+-- de jit_above_cost (100.000) y de jit_optimize/inline_above_cost (500.000).
+-- Y ese coste es falso: `meses` es un generate_series de 12 filas que el
+-- planificador estima en 1.000, y con eso el join de evol_bandas se estima en
+-- 2.181.336 filas cuando en realidad son 16.584. Una estimación mala infla el
+-- coste, el coste enciende el JIT, y el JIT se come el presupuesto de tiempo.
+--
+-- Con más datos NO mejora: el coste de compilar es plano (~5 s) mientras el
+-- trabajo real crece. Al triplicar los datos: 5.900 ms con JIT, 800 ms sin.
+-- O sea que hoy el informe se pasa el 90 % del tiempo compilando.
+--
+-- El JIT compensa en consultas largas de CPU sobre millones de filas. Esta es
+-- lo contrario: ancha (16 CTEs, ~40 subconsultas en un jsonb_build_object) y
+-- corta. Aquí nunca va a compensar.
+--
+-- IMPORTANTE: el `set jit = off` va DENTRO de la definición, no en un
+-- `alter function` aparte. Comprobado: `create or replace function` borra el
+-- proconfig, así que un ALTER suelto desaparecería en el siguiente despliegue
+-- de este mismo fichero, y el informe volvería a caducar sin que nadie tocara
+-- nada. Los números del informe no cambian: mismo md5 con JIT y sin él.
+--
 -- Idempotente: create or replace.
 -- ============================================================
 
@@ -37,6 +78,7 @@ returns jsonb
 language sql
 security invoker
 stable
+set jit = off
 as $$
 with rango as (
   select
