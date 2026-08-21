@@ -37,28 +37,40 @@ export function permisosDeRol(rol: string | null | undefined): readonly Permiso[
   return POR_ROL[rol] ?? [];
 }
 
-const CACHE_TTL_MS = 60_000;
-const cache = new Map<string, { rol: string | null; expiresAt: number }>();
+export type AmbitoCentral = { rol: string | null; centroId: string | null };
 
-export async function rolCentral(userId: string, esSuperadmin: boolean): Promise<string | null> {
-  if (esSuperadmin) return "admin";
+/**
+ * Rol y ámbito del usuario en MC Central.
+ *
+ * **Sin caché**, por lo mismo que se quitó la de Mobilink Cash en la fase 10:
+ * los roles se escriben desde el navegador contra Supabase, el servidor no se
+ * entera, y en Render hay varias instancias, así que no hay forma de
+ * invalidarla. Cuesta una lectura por clave indexada y compra que retirar un
+ * permiso surta efecto en la siguiente petición.
+ *
+ * El `centroId` es el ámbito de taller, y aquí importa sobre todo por las
+ * exportaciones: un fichero descargado se reenvía, y sería la vía más fácil
+ * para que alguien limitado a un taller acabara con los datos de toda la red.
+ */
+export async function rolCentral(
+  userId: string,
+  esSuperadmin: boolean
+): Promise<AmbitoCentral> {
+  if (esSuperadmin) return { rol: "admin", centroId: null };
 
-  const hit = cache.get(userId);
-  if (hit && hit.expiresAt > Date.now()) return hit.rol;
-
-  const { rows } = await pool.query<{ rol: string }>(
-    `SELECT rol FROM app_usuario_modulos WHERE user_id = $1 AND modulo = 'central'`,
+  const { rows } = await pool.query<{ rol: string; centro_id: string | null }>(
+    `SELECT rol, centro_id FROM app_usuario_modulos WHERE user_id = $1 AND modulo = 'central'`,
     [userId]
   );
-  const rol = rows[0]?.rol ?? null;
-  cache.set(userId, { rol, expiresAt: Date.now() + CACHE_TTL_MS });
-  return rol;
+  return { rol: rows[0]?.rol ?? null, centroId: rows[0]?.centro_id ?? null };
 }
 
 declare module "express-serve-static-core" {
   interface Request {
     centralRol?: string | null;
     centralPermisos?: readonly Permiso[];
+    /** Taller al que está limitado. `null` = toda la empresa. */
+    centralCentroId?: string | null;
   }
 }
 
@@ -66,8 +78,9 @@ export const cargarPermisosCentral: RequestHandler = async (req, res, next) => {
   const ctx = req.authCtx;
   if (!ctx) return res.status(401).json({ error: "Sesión requerida" });
   try {
-    const rol = await rolCentral(ctx.userId, ctx.esSuperadmin);
+    const { rol, centroId } = await rolCentral(ctx.userId, ctx.esSuperadmin);
     req.centralRol = rol;
+    req.centralCentroId = centroId;
     req.centralPermisos = permisosDeRol(rol);
     next();
   } catch (e) {

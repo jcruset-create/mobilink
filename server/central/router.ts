@@ -13,6 +13,7 @@
 
 import { Router, type Request, type Response } from "express";
 import { authenticate, requireModule } from "../core/auth.ts";
+import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCentral, exigirPermiso } from "./permissions.ts";
 import {
   cajasEnRed,
@@ -33,6 +34,8 @@ import * as clientes from "./api/clients.ts";
 import * as webhooks from "./api/webhooks.ts";
 import * as conciliacion from "./reconciliation/service.ts";
 import { salud } from "./health.ts";
+import * as kpis from "./reports/kpis.ts";
+import { aCsv, importe } from "./reports/csv.ts";
 import { ErrorCaja } from "../cash/errors.ts";
 
 /** Traduce `ErrorCaja` a su código HTTP, como hace el router de la caja. */
@@ -42,7 +45,7 @@ function ruta(handler: (req: Request, res: Response) => Promise<void>) {
       await handler(req, res);
     } catch (e) {
       if (e instanceof ErrorCaja) {
-        res.status(e.status).json({ error: e.message, code: e.codigo });
+        res.status(e.estado).json({ error: e.message, code: e.codigo });
         return;
       }
       console.error("[MC Central] error:", e);
@@ -317,6 +320,89 @@ export function createCentralRouter(): Router {
         ...creado,
         aviso: "Guarda el secreto ahora: con él se comprueba la firma de cada envío.",
       });
+    })
+  );
+
+  // ── Informes y KPIs ──────────────────────────────────────────────────────
+
+  /** Rango por defecto: el mes corriente, que es lo que se mira el 90% de las veces. */
+  function rango(req: Request): { desde: string; hasta: string } {
+    const hoy = new Date().toISOString().slice(0, 10);
+    const q = req.query;
+    return {
+      desde: typeof q.desde === "string" && q.desde ? q.desde : `${hoy.slice(0, 7)}-01`,
+      hasta: typeof q.hasta === "string" && q.hasta ? q.hasta : hoy,
+    };
+  }
+
+  r.get(
+    "/kpis",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const { desde, hasta } = rango(req);
+      const empresaId = req.authCtx!.empresaId;
+      const [total, centros] = await Promise.all([
+        kpis.kpis(empresaId, desde, hasta),
+        kpis.porCentro(empresaId, desde, hasta),
+      ]);
+      res.json({ ...total, centros });
+    })
+  );
+
+  /**
+   * Exportación de jornadas en CSV.
+   *
+   * **Se recorta al ámbito de quien exporta**, igual que las pantallas: un
+   * fichero descargado se reenvía, y sería la vía más fácil para que alguien
+   * limitado a un taller acabara con los datos de toda la red.
+   *
+   * Y queda auditado: un informe con dinero que sale del sistema tiene que
+   * dejar dicho quién se lo llevó y de qué periodo.
+   */
+  r.get(
+    "/reports/sessions.csv",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const { desde, hasta } = rango(req);
+      const empresaId = req.authCtx!.empresaId;
+      const ambito = req.centralCentroId ?? null;
+
+      const filas = await kpis.jornadasParaExportar(empresaId, desde, hasta, ambito);
+
+      const csv = aCsv(
+        [
+          "Fecha", "Jornada", "Caja", "Estado", "Fondo inicial",
+          "Contado", "Descuadre", "Para el banco", "Conciliada",
+        ],
+        /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+        filas.map((f: any) => [
+          String(f.fecha).slice(0, 10),
+          f.session_id,
+          f.caja,
+          f.estado,
+          importe(Number(f.fondo_inicial_centimos ?? 0)),
+          importe(f.contado_centimos == null ? null : Number(f.contado_centimos)),
+          importe(f.diferencia_centimos == null ? null : Number(f.diferencia_centimos)),
+          importe(f.ingreso_bancario_centimos == null ? null : Number(f.ingreso_bancario_centimos)),
+          f.conciliada ? "Sí" : "No",
+        ])
+      );
+
+      await registrarAuditoria({
+        empresaId,
+        userId: req.authCtx!.userId,
+        accion: "central.report.export",
+        entidad: "central_sessions",
+        detalle: { desde, hasta, filas: filas.length, ambitoCentroId: ambito },
+        ip: req.ip,
+      });
+
+      res.setHeader("content-type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "content-disposition",
+        `attachment; filename="jornadas-${desde}_${hasta}.csv"`
+      );
+      res.send(csv);
     })
   );
 
