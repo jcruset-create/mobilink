@@ -21,6 +21,7 @@ import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCaja, exigirPermiso } from "./permissions.ts";
 import * as reauth from "./reauth.ts";
 import * as migracion from "./migration.ts";
+import * as traslados from "./transfers.ts";
 import * as jerarquia from "./hierarchy.ts";
 import { estadoCola, procesarEventos, reintentarEventos } from "./events/worker.ts";
 import { miniaturaBoton, miniaturaFicha } from "./images.ts";
@@ -399,6 +400,56 @@ export function createCashRouter(): Router {
       }
       await reauth.reautenticar(req.authCtx!.userId, clave);
       res.json({ ok: true, validoHastaMs: Date.now() + reauth.VALIDEZ_MS });
+    })
+  );
+
+  // ── Traslados entre cajas ────────────────────────────────────────────────
+
+  r.get(
+    "/transfers",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const registerId = req.query.registerId
+        ? enteroPositivo(req.query.registerId, "registerId")
+        : undefined;
+      res.json({ traslados: await traslados.listar(req.authCtx!.empresaId, registerId) });
+    })
+  );
+
+  /**
+   * Manda dinero a otra caja. Permiso de tesorería, no de cajero: sacar
+   * efectivo del cajón para llevarlo a otro sitio no es una operación de
+   * mostrador.
+   */
+  r.post(
+    "/transfers",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json({
+        traslado: await traslados.enviar(contexto(req), {
+          sessionId: enteroPositivo(b.sessionId, "sessionId"),
+          destinoRegisterId: enteroPositivo(b.destinoRegisterId, "destinoRegisterId"),
+          piezas: Array.isArray(b.piezas) ? b.piezas : [],
+          portador: String(b.portador ?? ""),
+          notas: typeof b.notas === "string" ? b.notas : undefined,
+        }),
+      });
+    })
+  );
+
+  r.post(
+    "/transfers/:id/receive",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        traslado: await traslados.recibir(contexto(req), enteroPositivo(req.params.id, "id"), {
+          sessionId: enteroPositivo(b.sessionId, "sessionId"),
+          recibido: Array.isArray(b.recibido) ? b.recibido : undefined,
+          diferenciaMotivo: typeof b.motivo === "string" ? b.motivo : undefined,
+        }),
+      });
     })
   );
 

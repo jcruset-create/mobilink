@@ -790,13 +790,35 @@ export async function movimientosDeOperacion(
  * aquí es lo que necesita el motor para decidir SI hay que abrirlo y para que
  * la pantalla lo pueda decir.
  */
-export async function stockPorFormato(
+export type IncidenciaFormato = {
+  valor: Centimos;
+  sueltas: number;
+  cartuchos: number;
+  bolsas: number;
+};
+
+/**
+ * Saldos por formato TAL Y COMO ESTÁN, sin juzgarlos.
+ *
+ * Devuelve además las denominaciones cuyo saldo es negativo, que es algo que
+ * no debería poder pasar: significa que salió un envase que nunca entró. La
+ * causa conocida es un arqueo que contó un formato distinto del que tenía
+ * apuntado el libro mayor —alguien embolsó monedas sueltas— y un cierre que
+ * después repartió esa bolsa.
+ *
+ * La versión que avisa y la que revienta están separadas a propósito. Leer el
+ * papeleo de una jornada ya cerrada no puede morirse por esto: el informe
+ * tiene que salir con el aviso puesto. Mover dinero, en cambio, sí tiene que
+ * pararse, y de eso se encarga `stockPorFormato`.
+ */
+export async function stockPorFormatoBruto(
   client: PoolClient | typeof pool,
   sessionId: number
 ): Promise<{
   sueltas: Map<Centimos, number>;
   cartuchos: Map<Centimos, number>;
   bolsas: Map<Centimos, number>;
+  incidencias: IncidenciaFormato[];
 }> {
   const { rows } = await client.query<{
     valor_unitario_centimos: number;
@@ -819,6 +841,8 @@ export async function stockPorFormato(
   const sueltas = new Map<Centimos, number>();
   const cartuchos = new Map<Centimos, number>();
   const bolsas = new Map<Centimos, number>();
+  const incidencias: IncidenciaFormato[] = [];
+
   for (const r of rows) {
     const s = Number(r.sueltas);
     const t = Number(r.tubos);
@@ -827,12 +851,40 @@ export async function stockPorFormato(
     if (t > 0) cartuchos.set(r.valor_unitario_centimos, t);
     if (b > 0) bolsas.set(r.valor_unitario_centimos, b);
     if (s < 0 || t < 0 || b < 0) {
-      throw new ErrorCaja(
-        "STOCK_NEGATIVO",
-        `El stock de la denominación de ${r.valor_unitario_centimos} céntimos es negativo (sueltas ${s}, cartuchos ${t}, bolsas ${b}).`,
-        500
-      );
+      incidencias.push({
+        valor: r.valor_unitario_centimos,
+        sueltas: s,
+        cartuchos: t,
+        bolsas: b,
+      });
     }
+  }
+  return { sueltas, cartuchos, bolsas, incidencias };
+}
+
+/**
+ * Lo mismo, pero exigiendo que los saldos sean sanos.
+ *
+ * Es la que usan los caminos que MUEVEN dinero: repartir un envase que el
+ * libro mayor no tiene apuntado convertiría una incoherencia en dinero que no
+ * existe, y eso sí tiene que parar la operación.
+ */
+export async function stockPorFormato(
+  client: PoolClient | typeof pool,
+  sessionId: number
+): Promise<{
+  sueltas: Map<Centimos, number>;
+  cartuchos: Map<Centimos, number>;
+  bolsas: Map<Centimos, number>;
+}> {
+  const { sueltas, cartuchos, bolsas, incidencias } = await stockPorFormatoBruto(client, sessionId);
+  if (incidencias.length > 0) {
+    const i = incidencias[0];
+    throw new ErrorCaja(
+      "STOCK_NEGATIVO",
+      `El stock de la denominación de ${i.valor} céntimos es negativo (sueltas ${i.sueltas}, cartuchos ${i.cartuchos}, bolsas ${i.bolsas}).`,
+      500
+    );
   }
   return { sueltas, cartuchos, bolsas };
 }

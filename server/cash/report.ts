@@ -732,6 +732,42 @@ async function construirPortada(d: {
   }
 
   // ── Listado de operaciones ──
+  /*
+   * Avisos de integridad, si los hay.
+   *
+   * Un saldo de formato en negativo significa que salió un envase que el libro
+   * mayor nunca vio entrar: normalmente, monedas que alguien embolsó y que el
+   * arqueo contó como bolsa sin que quedara apuntado el cambio de formato.
+   *
+   * Sale impreso y no callado. El informe es el papel que se archiva, y un
+   * descuadre de formato que no se escribe en ningún sitio no lo arregla
+   * nadie: dentro de tres meses ya no habrá quien recuerde ese día.
+   */
+  if (detalle.incidenciasStock.length > 0) {
+    titulo("Avisos");
+    doc
+      .font("Helvetica")
+      .fontSize(9)
+      .fillColor("#b45309")
+      .text(
+        "El recuento por formato de estas denominaciones no cuadra: salió más envase precintado del que consta que entró. Los importes del informe son correctos —salen de las piezas—; lo que no cuadra es el reparto entre suelto, cartuchos y bolsas.",
+        M,
+        doc.y,
+        { width: ancho }
+      );
+    doc.moveDown(0.4);
+    doc.fontSize(10);
+    for (const i of detalle.incidenciasStock) {
+      const partes = [
+        i.sueltas < 0 ? `${i.sueltas} sueltas` : null,
+        i.cartuchos < 0 ? `${i.cartuchos} cartuchos` : null,
+        i.bolsas < 0 ? `${i.bolsas} bolsas` : null,
+      ].filter(Boolean);
+      fila(d.etiquetaDe(i.valor), partes.join(" · "), true);
+    }
+    doc.fillColor(TINTA);
+  }
+
   titulo("Operaciones");
   // La sección va en su columna: con taller y gasolinera compartiendo cajón,
   // saber de cuál es cada operación es la mitad de la lectura del listado.

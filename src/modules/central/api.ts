@@ -222,6 +222,104 @@ export const guardarCanal = (c: {
   activo?: boolean;
 }) => pedir<{ canal: CanalAviso }>("/channels", json(c));
 
+// ── Tesorería predictiva, salud e informes (fases 15 a 20) ─────────────────
+
+export type PrediccionCaja = {
+  registerId: number;
+  calderillaActualCentimos: number;
+  diasDeAutonomia: number | null;
+  faltaCentimos: number;
+  irAlBancoAntesDe: string | null;
+  confianza: "ALTA" | "MEDIA" | "SIN_DATOS";
+  explicacion: string;
+  porDia: { fecha: string; esperadoCentimos: number; base: "DIA" | "MEDIA" }[];
+};
+
+export const prediccion = (dias = 7) =>
+  pedir<{ cajas: PrediccionCaja[] }>(`/forecast?dias=${dias}`);
+
+export type MotivoPuntuacion = { factor: string; puntos: number; detalle: string };
+
+export type PuntuacionCaja = {
+  registerId: number;
+  puntos: number | null;
+  nivel: string;
+  motivos: MotivoPuntuacion[];
+  caja: string | null;
+  centro: string | null;
+};
+
+export const puntuacion = () =>
+  pedir<{
+    puntos: number | null;
+    conDatos: number;
+    sinDatos: number;
+    peores: PuntuacionCaja[];
+  }>("/score");
+
+export type Traslado = {
+  desdeRegisterId: number;
+  haciaRegisterId: number;
+  piezas: { valor: number; cantidad: number }[];
+  importeCentimos: number;
+  motivo: string;
+};
+
+export const reparto = (dias = 7) =>
+  pedir<{
+    traslados: Traslado[];
+    alBanco: { registerId: number; piezas: { valor: number; cantidad: number }[] }[];
+    cajas: number;
+  }>(`/redistribution?dias=${dias}`);
+
+export type EstadoCola = {
+  nombre: string;
+  pendientes: number;
+  enError: number;
+  retrasoMinutos: number | null;
+  estado: "OK" | "RETRASO" | "ATASCADA";
+};
+
+export const salud = () =>
+  pedir<{
+    estado: "OK" | "DEGRADADO" | "ATASCADO";
+    baseDeDatosMs: number;
+    colas: EstadoCola[];
+    ultimoEventoRecibidoMs: number | null;
+  }>("/health");
+
+export type Kpis = {
+  desde: string;
+  hasta: string;
+  jornadas: number;
+  efectivoCentimos: number;
+  descuadreCentimos: number;
+  jornadasConDescuadre: number;
+  diasHastaElBanco: number | null;
+  centros: {
+    centroId: string | null;
+    centro: string | null;
+    jornadas: number;
+    efectivoCentimos: number;
+    descuadreCentimos: number;
+  }[];
+};
+
+export const kpis = (desde?: string, hasta?: string) => {
+  const q = new URLSearchParams();
+  if (desde) q.set("desde", desde);
+  if (hasta) q.set("hasta", hasta);
+  return pedir<Kpis>(`/kpis${q.toString() ? `?${q}` : ""}`);
+};
+
+/** La exportación no pasa por `pedir`: es un fichero, no JSON. */
+export const urlExportacion = (desde?: string, hasta?: string) => {
+  const q = new URLSearchParams();
+  if (desde) q.set("desde", desde);
+  if (hasta) q.set("hasta", hasta);
+  return `/api/central/reports/sessions.csv${q.toString() ? `?${q}` : ""}`;
+};
+
 export const red = () =>
   pedir<{
     resumen: ResumenRed;
