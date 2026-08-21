@@ -22,6 +22,7 @@ import pool from "../../db.ts";
 import { registrarAuditoria } from "../../core/auditoria.ts";
 import { evaluarRed, type EstadoCaja, type Incidencia, type Regla } from "./engine.ts";
 import { avisarDeIncidencia } from "../notifications/service.ts";
+import { encolarEvento } from "../api/webhooks.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -206,6 +207,18 @@ export async function evaluar(empresaId: string): Promise<ResultadoEvaluacion> {
     const nueva = await abrirIncidencia(empresaId, i, ahora);
     if (nueva) {
       avisadas += (await avisarDeIncidencia(empresaId, nueva)) > 0 ? 1 : 0;
+
+      // Y hacia fuera. La clave de deduplicación es la incidencia: si el
+      // destino recibe dos veces el mismo envío, sabe que es el mismo hecho.
+      await encolarEvento(empresaId, "incident.opened", `incident:${nueva.id}`, {
+        id: nueva.id,
+        tipo: nueva.tipo,
+        registerId: nueva.registerId,
+        centroId: nueva.centroId,
+        caja: nueva.caja,
+        valor: nueva.valor,
+        umbral: nueva.umbral,
+      });
     }
   }
   const cerradas = await cerrarLasQueYaNoPasan(empresaId, incidencias, ahora);

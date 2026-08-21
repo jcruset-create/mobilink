@@ -441,6 +441,85 @@ export async function initCentral(): Promise<void> {
       WHERE estado IN ('PENDIENTE','ERROR');
   `);
 
+  /*
+   * Clientes máquina-a-máquina y sus testigos.
+   *
+   * De los secretos solo se guarda la huella —ni el secreto del cliente ni el
+   * testigo—, así que una copia de la base de datos no da acceso a nada. El
+   * secreto se enseña una sola vez, al crearlo, y si se pierde se genera otro:
+   * no hay forma de recuperarlo, y esa es justo la propiedad que se busca.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS central_api_clients (
+      client_id TEXT PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      nombre TEXT NOT NULL,
+      secreto_huella TEXT NOT NULL,
+      alcances TEXT[] NOT NULL DEFAULT '{}',
+      activo BOOLEAN NOT NULL DEFAULT true,
+      creado_en_ms BIGINT NOT NULL,
+      ultimo_uso_ms BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS central_api_clients_empresa_idx
+      ON central_api_clients(empresa_id, activo);
+
+    CREATE TABLE IF NOT EXISTS central_api_tokens (
+      token_huella TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      empresa_id UUID NOT NULL,
+      alcances TEXT[] NOT NULL DEFAULT '{}',
+      expira_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS central_api_tokens_cliente_idx ON central_api_tokens(client_id);
+    CREATE INDEX IF NOT EXISTS central_api_tokens_expira_idx ON central_api_tokens(expira_ms);
+  `);
+
+  /*
+   * Webhooks de salida.
+   *
+   * Misma cola y mismos reintentos que los avisos por correo, porque el
+   * problema es idéntico: un destino caído no puede tumbar lo que generó el
+   * evento. Lo que cambia es la firma: cada envío va con un HMAC del cuerpo,
+   * que es lo que permite a quien lo recibe saber que viene de aquí y no de
+   * cualquiera que conozca la URL.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS central_webhooks (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      url TEXT NOT NULL,
+      secreto TEXT NOT NULL,
+      eventos TEXT[] NOT NULL DEFAULT '{}',
+      activo BOOLEAN NOT NULL DEFAULT true,
+      creado_en_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS central_webhooks_empresa_idx
+      ON central_webhooks(empresa_id, activo);
+
+    CREATE TABLE IF NOT EXISTS central_webhook_deliveries (
+      id BIGSERIAL PRIMARY KEY,
+      webhook_id UUID NOT NULL,
+      empresa_id UUID NOT NULL,
+      evento TEXT NOT NULL,
+      -- Clave de deduplicación en destino, igual que en el resto del proyecto.
+      idempotency_key TEXT NOT NULL,
+      cuerpo JSONB NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'PENDIENTE'
+        CHECK (estado IN ('PENDIENTE','ENVIANDO','ENVIADO','ERROR','CANCELADO')),
+      intentos INTEGER NOT NULL DEFAULT 0,
+      proximo_intento_ms BIGINT,
+      last_error TEXT,
+      codigo_http INTEGER,
+      creado_en_ms BIGINT NOT NULL,
+      enviado_en_ms BIGINT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS central_webhook_unico_idx
+      ON central_webhook_deliveries(webhook_id, idempotency_key);
+    CREATE INDEX IF NOT EXISTS central_webhook_pendientes_idx
+      ON central_webhook_deliveries(estado, proximo_intento_ms)
+      WHERE estado IN ('PENDIENTE','ERROR');
+  `);
+
   await registrarModuloCentral();
 
   console.log("MC Central: esquema inicializado correctamente");

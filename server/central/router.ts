@@ -29,6 +29,8 @@ import {
 import * as jerarquia from "../cash/hierarchy.ts";
 import * as reglas from "./rules/service.ts";
 import * as avisos from "./notifications/service.ts";
+import * as clientes from "./api/clients.ts";
+import * as webhooks from "./api/webhooks.ts";
 import { ErrorCaja } from "../cash/errors.ts";
 
 /** Traduce `ErrorCaja` a su código HTTP, como hace el router de la caja. */
@@ -249,6 +251,70 @@ export function createCentralRouter(): Router {
         }
       );
       res.status(201).json({ canal });
+    })
+  );
+
+  // ── Integraciones: clientes de API y webhooks ────────────────────────────
+
+  r.get(
+    "/integrations",
+    exigirPermiso("central.rules.configure"),
+    ruta(async (req, res) => {
+      const empresaId = req.authCtx!.empresaId;
+      const [lista, hooks] = await Promise.all([
+        clientes.listarClientes(empresaId),
+        webhooks.listarWebhooks(empresaId),
+      ]);
+      res.json({ clientes: lista, webhooks: hooks, alcances: clientes.ALCANCES });
+    })
+  );
+
+  /**
+   * Crea un cliente de API.
+   *
+   * **La respuesta lleva el secreto, y es la única vez que se puede ver.** No
+   * se guarda en claro: de él solo queda su huella.
+   */
+  r.post(
+    "/api-clients",
+    exigirPermiso("central.rules.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const creado = await clientes.crearCliente(
+        req.authCtx!.empresaId,
+        String(b.nombre ?? ""),
+        Array.isArray(b.alcances) ? b.alcances.map(String) : []
+      );
+      res.status(201).json({
+        ...creado,
+        aviso: "Guarda el secreto ahora: no se puede volver a ver.",
+      });
+    })
+  );
+
+  r.delete(
+    "/api-clients/:id",
+    exigirPermiso("central.rules.configure"),
+    ruta(async (req, res) => {
+      await clientes.revocarCliente(req.authCtx!.empresaId, String(req.params.id));
+      res.json({ ok: true });
+    })
+  );
+
+  r.post(
+    "/webhooks",
+    exigirPermiso("central.rules.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const creado = await webhooks.crearWebhook(
+        req.authCtx!.empresaId,
+        String(b.url ?? ""),
+        Array.isArray(b.eventos) ? b.eventos.map(String) : []
+      );
+      res.status(201).json({
+        ...creado,
+        aviso: "Guarda el secreto ahora: con él se comprueba la firma de cada envío.",
+      });
     })
   );
 
