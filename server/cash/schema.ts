@@ -304,7 +304,8 @@ export async function initCash(): Promise<void> {
       motivo TEXT NOT NULL CHECK (motivo IN (
         'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
         'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
-        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED')),
+        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED',
+        'CARTRIDGE_FORMED','BAG_FORMED')),
       -- Tubos precintados que representa este asiento. 0 = monedas sueltas.
       -- La columna cantidad son SIEMPRE piezas: en una fila de cartuchos vale
       -- tubos x piezas_por_cartucho. Asi el total de piezas sigue siendo la
@@ -753,7 +754,8 @@ export async function initCash(): Promise<void> {
       ADD CONSTRAINT cash_denomination_movements_motivo_check CHECK (motivo IN (
         'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
         'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
-        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED','EXCHANGE'));
+        'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED','EXCHANGE',
+        'CARTRIDGE_FORMED','BAG_FORMED'));
 
     ALTER TABLE cash_operations
       DROP CONSTRAINT IF EXISTS cash_operations_tipo_check;
