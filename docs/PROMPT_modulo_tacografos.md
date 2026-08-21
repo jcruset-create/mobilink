@@ -1,0 +1,159 @@
+# PROMPT — Módulo Tacógrafos (documentación legal de sustituciones)
+
+> Estado: **diseño previo a programar**. Decisión tomada: es un **módulo propio**,
+> no una sección del área de taller.
+> Bloqueo activo: falta el `.xlsx` original del que salen los textos jurídicos.
+> Especificación funcional y documental completa en
+> [`PROMPT_excel_tacografos_documentacion.md`](./PROMPT_excel_tacografos_documentacion.md).
+
+---
+
+## 1. Qué es
+
+Un centro técnico de tacógrafos debe emitir, cada vez que sustituye un tacógrafo
+digital, documentación legal firmada por el cliente y, en algunos casos,
+comunicarla a la Generalitat de Catalunya. Hoy eso vive en una hoja de cálculo
+donde los mismos datos se reescriben varias veces.
+
+El módulo `tacografos` convierte ese proceso en un expediente: se introducen los
+datos una vez y de ahí salen los documentos, las firmas y el registro de qué se
+entregó, a quién y cuándo.
+
+Dos flujos, excluyentes por expediente:
+
+- **Transferencia correcta** → justificante de transferencia de datos, firmado por
+  el cliente, que autoriza la descarga de la memoria interna, la transferencia de
+  los ficheros y la modalidad de entrega elegida.
+- **Intransferibilidad** → certificado de intransferibilidad, acuse de recibo del
+  cliente y comunicación a la administración.
+
+## 2. Por qué módulo propio y no una sección de taller
+
+Se licencia por separado: el destinatario es cualquier centro técnico de
+tacógrafos, no sólo el taller de COMERCIAL SEA. Eso obliga a clave de licencia
+propia, permisos propios y un ciclo de vida documental (emisión, firma,
+conservación, presentación ante la administración) que no encaja dentro del
+histórico de operaciones de taller.
+
+Consecuencia asumida: el expediente **no depende** de que exista una intervención
+en `tc_intervenciones`. Cuando exista, se enlaza y autorrellena; cuando no, el
+expediente se crea suelto. Esto es deliberado — un centro que compre sólo este
+módulo no tiene taller en Mobilink.
+
+## 3. Encaje técnico
+
+El repo ya tiene el patrón exacto que hay que seguir. No se inventa nada.
+
+### Servidor — copiar la forma de `server/cash/`
+
+```
+server/tacografos/
+  index.ts        initTacografos / mountTacografos  (igual que server/cash/index.ts:18)
+  schema.ts       CREATE TABLE IF NOT EXISTS idempotente (patrón server/licenses/schema.ts)
+  router.ts       createTacografosRouter() → app.use("/api/tacografos", …)
+  repository.ts   acceso a datos + errores tipados
+  service.ts      reglas de negocio
+  permissions.ts  derivados del rol en app_usuario_modulos (patrón server/cash/permissions.ts)
+  documents.ts    generación de PDF con pdf-lib (ya es dependencia del proyecto)
+  templates/      textos legales versionados
+  storage.ts      bucket privado + enlaces firmados (patrón server/cash/storage.ts)
+```
+
+Montaje en `server/index.ts`: tres llamadas, como `initCash`/`mountCash`
+(`server/index.ts:23`). Todas las rutas detrás de
+`authenticate, requireModule("tacografos")` (`server/core/auth.ts:140`).
+
+La clave de módulo no es un enum en código: `licenciaActiva()` consulta
+`app_licencia_activa(empresaId, modulo)` en base de datos
+(`server/core/auth.ts:129`). Basta con dar de alta `tacografos` como módulo
+licenciable y añadirlo a `licenses.modules`.
+
+### Frontend — copiar la forma de `src/modules/safety/` y `toolcontrol/`
+
+```
+src/modules/tacografos/
+  pages/       TacografosDashboard · NuevoExpediente · Expediente · Comunicaciones · ConfiguracionCentro
+  components/  FormularioDatos · VistaDocumento · CapturaFirma
+  services/    api.ts
+  types/       index.ts
+```
+
+Rutas en `src/App.tsx` bajo `/tacografos/*`, envueltas en `<Protegida>`, con el
+mismo estilo que las de `/safety` y `/toolcontrol` (`src/App.tsx:314`).
+
+## 4. Modelo de datos
+
+Prefijo `tac_`. Migraciones idempotentes.
+
+| Tabla | Contenido |
+|---|---|
+| `tac_centros` | Datos fijos del centro técnico por empresa: razón social, nº de centro (`E943009`), dirección, ciudad, email, URL del trámite. Sustituye a la hoja CONFIG del Excel. |
+| `tac_expedientes` | Empresa cliente · persona autorizada · DNI/NIF · matrícula · marca/modelo/nº serie del tacógrafo retirado · nº de informe · fecha informe · fecha entrega · tipo (`transferencia`\|`intransferibilidad`) · modalidad de entrega · entrega física del aparato sí/no · achatarramiento sí/no · estado · `intervencion_id` opcional. |
+| `tac_plantillas` | Textos legales **versionados**. Un cambio normativo futuro crea una versión nueva; los documentos ya emitidos siguen apuntando a la suya. |
+| `tac_documentos` | Un PDF emitido: expediente, tipo (`justificante`\|`acuse_cliente`\|`comunicacion_admin`), versión de plantilla, ruta en storage, hash, firmante, fecha de firma. |
+| `tac_comunicaciones` | Presentación ante la administración: fecha, referencia/registro devuelto, quién la presentó, justificante adjunto. |
+
+Regla dura: **un documento firmado es inmutable.** Se guarda con su hash; corregir
+un dato no reescribe el PDF, emite uno nuevo y deja el anterior anulado con motivo.
+Es documentación legal, no un borrador.
+
+## 5. Permisos
+
+Derivados del rol en `app_usuario_modulos`, sin tabla de permisos paralela —
+exactamente el razonamiento de `server/cash/permissions.ts`:
+
+`tacografos.view` · `.expediente.create` · `.expediente.edit` · `.documento.generate` ·
+`.documento.sign` · `.documento.annul` · `.comunicacion.register` · `.config.edit`
+
+## 6. Pantallas
+
+1. **Dashboard** — expedientes abiertos, pendientes de firma y pendientes de
+   comunicar a la administración. Ésta es la ganancia real frente al Excel: hoy
+   nada avisa de que falta presentar un trámite.
+2. **Nuevo expediente** — formulario único, equivalente a la hoja DATOS: cliente,
+   vehículo, tacógrafo, intervención, entrega de datos, tacógrafo averiado.
+   Desplegables, matrícula en mayúsculas, fechas `dd/mm/aaaa`, campos obligatorios
+   condicionados al tipo de operación.
+3. **Expediente** — vista previa de los documentos que le corresponden, generación
+   de PDF, captura de firma, registro de entrega.
+4. **Comunicaciones** — cola de trámites pendientes, texto copiable para el
+   formulario de la Generalitat, enlace al trámite, registro de la referencia.
+5. **Configuración del centro** — `tac_centros`.
+
+## 7. Documentos
+
+- Generación en servidor con `pdf-lib`.
+- Textos jurídicos desde `tac_plantillas`, **nunca dentro del código**.
+- Firma capturada en canvas y embebida en el PDF, como el justificante de
+  `src/modules/cash/components/JustificantePrevio.tsx`.
+- Almacenamiento en bucket **privado** con enlaces firmados caducables, no público:
+  contienen NIF de personas físicas. Mismo criterio y mismos motivos que
+  `server/cash/storage.ts`.
+- Exportación `.xlsx` del expediente como salida secundaria (`xlsx` ya es
+  dependencia del frontend, `vite.config.ts:66`), para respaldo offline.
+
+## 8. Fases
+
+| Fase | Contenido | Estado |
+|---|---|---|
+| 0 | Análisis del Excel original y transcripción literal de los textos legales | **bloqueada, falta el fichero** |
+| 1 | Excel mejorado, entregable e independiente del despliegue | pendiente de fase 0 |
+| 2 | Esquema, API, formulario y generación de los tres PDF | |
+| 3 | Firma en pantalla y registro de entrega | |
+| 4 | Cola de comunicaciones a la administración y avisos de pendientes | |
+| 5 | Enlace con `tc_intervenciones` para autorrellenar | |
+
+Las fases 0 y 1 no son trabajo tirado: el Excel funciona desde el primer día, sin
+esperar al despliegue, y es la fuente de la que salen los textos legales de
+`tac_plantillas`.
+
+## 9. Decisiones abiertas
+
+- **Nombre comercial** del módulo (el resto son Mobilink Cash, Safety, ToolControl…).
+- **Idioma** de la comunicación a la Generalitat: catalán, castellano o ambos.
+- **Nº de informe**: ¿serie autogenerada por el módulo o tecleada por el técnico?
+  Si se autogenera, hay que decidir si comparte contador con el nº de operación
+  de taller (`PROMPT_numero_de_operacion.md`) o lleva serie propia.
+- **Alcance**: ¿sólo web, o también pantalla en la APK de técnicos para firmar en
+  el vehículo?
+- **Conservación**: cuántos años deben guardarse los documentos emitidos.
