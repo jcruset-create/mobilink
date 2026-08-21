@@ -27,6 +27,13 @@ export type LineaDenominacion = { valor: number; cantidad: number };
 export type Caja = {
   id: number;
   centro: string;
+  /**
+   * El taller al que pertenece, ya como vínculo y no como texto.
+   *
+   * `null` es «sin asignar»: la caja funciona igual, pero no se puede agrupar
+   * por taller. La pantalla de configuración lo avisa.
+   */
+  centroId: string | null;
   nombre: string;
   /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
   codigo: string;
@@ -495,3 +502,11 @@ export const ETIQUETA_ESTADO_SESION: Record<EstadoSesion, string> = {
   REOPENED: "Reabierta",
   CANCELLED: "Anulada",
 };
+
+// ── Jerarquía de la red (MC Central, fase 1) ───────────────────────────────
+
+/** Agrupación de talleres dentro de una empresa. Opcional. */
+export type Zona = { id: string; nombre: string; activa: boolean; centros: number };
+
+/** Taller. Se da de alta en Administración; aquí solo se consulta y se agrupa. */
+export type Centro = { id: string; nombre: string; zonaId: string | null; activo: boolean };

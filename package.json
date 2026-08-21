@@ -1,11 +1,12 @@
 {
   "name": "mobilink",
   "private": true,
-  "version": "1.8.27",
+  "version": "1.8.47",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "lint": "eslint .",
     "build:mobile": "tsc -b && vite build --mode mobile",
     "preview": "vite preview --host",
     "serve:prod": "vite preview --host --port 4173",
@@ -22,6 +23,8 @@
     "seed": "tsx server/seed.ts",
     "backup:postgres": "tsx server/backup-postgres.ts",
     "restore:postgres": "tsx server/restore-postgres.ts",
+    "db:dump": "tsx scripts/backup-full.mjs",
+    "db:restore": "tsx scripts/restore-full.mjs",
     "setup:buckets": "tsx scripts/setup-supabase-buckets.ts",
     "bc:check": "node scripts/bc-check.mjs",
     "bc:setup": "tsx scripts/bc-setup.ts",
@@ -67,6 +70,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^8.4.0",
+    "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.2.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cors": "^2.8.19",
@@ -79,10 +83,15 @@
     "@types/react-dom": "^18.3.1",
     "@types/sharp": "^0.31.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "eslint": "^10.8.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "globals": "^17.11.0",
     "supabase": "^2.101.0",
     "tailwindcss": "^4.2.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.6.3",
+    "typescript-eslint": "^8.67.0",
     "vite": "^5.4.10",
     "vitest": "^4.1.10"
   }

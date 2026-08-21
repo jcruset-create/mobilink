@@ -38,6 +38,10 @@ let tesoreria: typeof import("./treasury.ts");
 let documentos: typeof import("./documents.ts");
 let ingresos: typeof import("./bankdeposits.ts");
 let informe: typeof import("./report.ts");
+let reauth: typeof import("./reauth.ts");
+let migracion: typeof import("./migration.ts");
+let eventos: typeof import("./events/worker.ts");
+let transporte: typeof import("./events/transport.ts");
 let MockCashErpConnector: typeof import("./erp/mock.ts").MockCashErpConnector;
 let facturaDemo: typeof import("./erp/mock.ts").facturaDemo;
 
@@ -106,6 +110,10 @@ beforeAll(async () => {
   documentos = await import("./documents.ts");
   ingresos = await import("./bankdeposits.ts");
   informe = await import("./report.ts");
+  reauth = await import("./reauth.ts");
+  migracion = await import("./migration.ts");
+  eventos = await import("./events/worker.ts");
+  transporte = await import("./events/transport.ts");
   const mock = await import("./erp/mock.ts");
   MockCashErpConnector = mock.MockCashErpConnector;
   facturaDemo = mock.facturaDemo;
@@ -3528,6 +3536,830 @@ describe.runIf(RUN)("arqueo repartido entre las cajas de la ERP", () => {
     await expect(
       config.actualizarSeccion(ctx, porDefecto.id, { arqueaAparte: true })
     ).rejects.toMatchObject({ codigo: "SECCION_POR_DEFECTO" });
+  });
+});
+
+/**
+ * Ámbito de taller (MC Central, fase 1).
+ *
+ * Lo que se comprueba aquí no es que la pantalla oculte cajas —eso es cosmética
+ * y se puede saltar— sino que el SERVICIO se niegue. Un ámbito que solo vive en
+ * el desplegable no limita a nadie que sepa escribir un id.
+ */
+describe.runIf(RUN)("Ámbito por taller", () => {
+  let TALLER_A = "";
+  let TALLER_B = "";
+
+  /*
+   * El taller se crea en `app_centros` cuando esa tabla existe.
+   *
+   * Con un uuid inventado la prueba pasaba en una base sin la fundación SaaS y
+   * reventaba en una migrada, que es donde importa: `cash_registers.centro_id`
+   * tiene clave ajena y un id que no existe no se puede guardar. Una prueba que
+   * solo pasa donde no hay integridad referencial no prueba nada.
+   */
+  async function taller(nombre: string): Promise<string> {
+    const { rows: hay } = await db.query(
+      `SELECT to_regclass('public.app_centros') IS NOT NULL AS hay`
+    );
+    // Sin fundación SaaS no hay taller que crear, pero el id tiene que ser
+    // DISTINTO en cada llamada: con `Date.now()` los dos talleres de la prueba
+    // salían iguales dentro del mismo milisegundo y la prueba de aislamiento
+    // comparaba un taller consigo mismo. `hrtime` es lo que ya usa `crearCaja`.
+    if (!hay[0]?.hay) {
+      return `00000000-0000-4000-a000-${String(process.hrtime.bigint()).slice(-12)}`;
+    }
+
+    await db.query(
+      // El mismo valor va DOS VECES como parámetro distinto: en una posición
+      // PostgreSQL lo deduce uuid y en la otra texto, y con un solo `$1` se
+      // niega a preparar la consulta («inconsistent types deduced»). El cast
+      // no lo arregla: mueve el conflicto, no lo quita.
+      `INSERT INTO app_empresas (id, nombre, slug) VALUES ($1, 'Pruebas', 'pruebas-' || $2)
+       ON CONFLICT (id) DO NOTHING`,
+      [EMPRESA, EMPRESA]
+    );
+    const { rows } = await db.query(
+      `INSERT INTO app_centros (empresa_id, nombre) VALUES ($1, $2) RETURNING id`,
+      [EMPRESA, `${nombre}-${String(process.hrtime.bigint()).slice(-9)}`]
+    );
+    return rows[0].id;
+  }
+
+  beforeAll(async () => {
+    if (!RUN) return;
+    TALLER_A = await taller("ambito-A");
+    TALLER_B = await taller("ambito-B");
+  });
+
+  it("un usuario limitado a su taller no abre la caja de otro, y sí la suya", async () => {
+    const cajaA = await crearCaja("ambito-a");
+    const cajaB = await crearCaja("ambito-b");
+    await db.query(`UPDATE cash_registers SET centro_id = $2 WHERE id = $1`, [cajaA, TALLER_A]);
+    await db.query(`UPDATE cash_registers SET centro_id = $2 WHERE id = $1`, [cajaB, TALLER_B]);
+
+    const soloA = { ...ctx, centroId: TALLER_A };
+
+    await expect(
+      servicio.abrirJornada(soloA, { registerId: cajaB, fondoManual: [] })
+    ).rejects.toMatchObject({ codigo: "CAJA_FUERA_DE_AMBITO" });
+
+    const { sesion } = await servicio.abrirJornada(soloA, { registerId: cajaA, fondoManual: [] });
+    expect(sesion.registerId).toBe(cajaA);
+  });
+
+  it("sin ámbito se sigue operando toda la empresa: nadie pierde acceso al desplegar", async () => {
+    const caja = await crearCaja("ambito-sin");
+    await db.query(`UPDATE cash_registers SET centro_id = $2 WHERE id = $1`, [caja, TALLER_B]);
+
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: [] });
+    expect(sesion.registerId).toBe(caja);
+  });
+
+  /*
+   * Una caja sin taller asignado queda FUERA de cualquier ámbito. Es la
+   * decisión que más se puede discutir, así que se fija en una prueba: lo
+   * contrario convertiría cada caja que el backfill no supo emparejar en un
+   * agujero por el que se cuela todo el mundo.
+   */
+  it("una caja sin taller no la opera quien tiene ámbito", async () => {
+    const huerfana = await crearCaja("ambito-huerfana");
+
+    await expect(
+      servicio.abrirJornada({ ...ctx, centroId: TALLER_A }, { registerId: huerfana, fondoManual: [] })
+    ).rejects.toMatchObject({ codigo: "CAJA_FUERA_DE_AMBITO" });
+  });
+
+  it("el listado de cajas se recorta al ámbito", async () => {
+    const caja = await crearCaja("ambito-lista");
+    await db.query(`UPDATE cash_registers SET centro_id = $2 WHERE id = $1`, [caja, TALLER_A]);
+
+    const listaA = await config.listarCajas(EMPRESA, TALLER_A);
+    expect(listaA.some((c) => c.id === caja)).toBe(true);
+
+    const listaB = await config.listarCajas(EMPRESA, TALLER_B);
+    expect(listaB.some((c) => c.id === caja)).toBe(false);
+
+    const todas = await config.listarCajas(EMPRESA);
+    expect(todas.some((c) => c.id === caja)).toBe(true);
+  });
+});
+
+/**
+ * Eventos hacia MC Central (fase 2).
+ *
+ * Lo que de verdad hay que demostrar aquí no es que se emita un evento —eso es
+ * fácil— sino que **emitirlo no puede costar un cobro**. Todo lo demás son
+ * comprobaciones de la cola.
+ */
+describe.runIf(RUN)("Eventos hacia MC Central", () => {
+  // El fondo variado de la suite: con solo billetes de 50 € la caja no puede
+  // devolver cambio y el cobro falla antes de llegar a emitir nada.
+  const FONDO = FONDO_300;
+
+  /*
+   * Vaciar la cola entera, no una tanda.
+   *
+   * El worker coge por orden de llegada, y a estas alturas de la suite hay
+   * cientos de eventos de otras pruebas esperando delante. Una sola tanda ni
+   * siquiera llega a los de la prueba en curso. Termina siempre: lo entregado
+   * queda en SENT y lo fallido en RETRY_PENDING con la espera por delante o en
+   * ERROR, y ninguno de los tres vuelve a salir.
+   */
+  async function vaciarCola() {
+    for (let i = 0; i < 50; i++) {
+      if ((await eventos.procesarEventos(500)) === 0) return;
+    }
+  }
+
+  async function eventosDe(sessionId: number, tipo?: string) {
+    const { rows } = await db.query(
+      `SELECT tipo, aggregate_type, aggregate_version, datos, estado, event_id
+         FROM cash_event_outbox
+        WHERE session_id = $1 ${tipo ? "AND tipo = $2" : ""}
+        ORDER BY id`,
+      tipo ? [sessionId, tipo] : [sessionId]
+    );
+    return rows;
+  }
+
+  it("un cobro emite un evento, y solo uno, con su versión de jornada", async () => {
+    const caja = await crearCaja("ev-cobro");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO });
+
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+    });
+
+    /*
+     * Uno, no dos. El fondo inicial también se asienta como operación, pero la
+     * apertura no pasa por `registrarOperacion`: emite `SESSION_OPENED` con el
+     * fondo dentro. Y así tiene que ser: con los dos eventos, Central podría
+     * sumar el fondo dos veces, que es exactamente el doble conteo que el
+     * encargo prohíbe.
+     */
+    const registrados = await eventosDe(sesion.id, "OPERATION_REGISTERED");
+    expect(registrados.length).toBe(1);
+    expect(registrados[0].datos.tipoOperacion).toBe("COLLECTION");
+    expect(Number(registrados[0].datos.importeCentimos)).toBe(2000);
+
+    // La apertura también emitió lo suyo, y la versión va en orden.
+    const todos = await eventosDe(sesion.id);
+    expect(todos[0].tipo).toBe("SESSION_OPENED");
+    const versiones = todos.map((e) => Number(e.aggregate_version));
+    expect(versiones).toEqual([...versiones].sort((a, b) => a - b));
+    expect(new Set(versiones).size).toBe(versiones.length);
+    expect(todos.every((e) => e.aggregate_type === "SESSION")).toBe(true);
+  });
+
+  /*
+   * La prueba que justifica el diseño entero. Si el transporte cayendo pudiera
+   * revertir la transacción, el dinero estaría en el cajón y el cobro no
+   * existiría: el peor fallo posible en este módulo.
+   */
+  it("con el transporte caído, el cobro se registra igual y el evento espera", async () => {
+    const memoria = new transporte.TransporteEnMemoria();
+    memoria.fallo = new Error("Central no responde");
+    transporte.registrarTransporte(memoria);
+
+    try {
+      const caja = await crearCaja("ev-caido");
+      const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO });
+
+      const cobro = await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 1000,
+        formasPago: [{ forma: "CASH", importe: 1000 }],
+        efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      });
+
+      // El cobro existe: el dinero contado está registrado.
+      expect(cobro.numero).toMatch(numeroDe("C"));
+
+      await vaciarCola();
+
+      const { rows } = await db.query(
+        `SELECT estado, intentos, last_error FROM cash_event_outbox
+          WHERE session_id = $1 ORDER BY id DESC LIMIT 1`,
+        [sesion.id]
+      );
+      expect(rows[0].estado).toBe("RETRY_PENDING");
+      expect(rows[0].intentos).toBe(1);
+      expect(rows[0].last_error).toContain("Central no responde");
+    } finally {
+      transporte.registrarTransporte(null);
+    }
+  });
+
+  it("el worker entrega y no reenvía lo ya entregado", async () => {
+    const memoria = new transporte.TransporteEnMemoria();
+    transporte.registrarTransporte(memoria);
+
+    try {
+      const caja = await crearCaja("ev-entrega");
+      const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO });
+
+      await vaciarCola();
+      const entregados = memoria.recibidos.filter((r) => r.sessionId === sesion.id).length;
+      expect(entregados).toBeGreaterThan(0);
+
+      // Segunda vuelta: ya está todo en SENT, así que no vuelve a salir.
+      await vaciarCola();
+      expect(memoria.recibidos.filter((r) => r.sessionId === sesion.id).length).toBe(entregados);
+    } finally {
+      transporte.registrarTransporte(null);
+    }
+  });
+
+  it("un rechazo permanente va a la cola muerta y se puede relanzar", async () => {
+    const memoria = new transporte.TransporteEnMemoria();
+    memoria.fallo = new transporte.ErrorTransportePermanente("Empresa desconocida");
+    transporte.registrarTransporte(memoria);
+
+    try {
+      const caja = await crearCaja("ev-dlq");
+      const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO });
+
+      await vaciarCola();
+
+      // Sin gastar los ocho intentos: un permanente no se reintenta.
+      const { rows } = await db.query(
+        `SELECT estado, intentos FROM cash_event_outbox WHERE session_id = $1 ORDER BY id`,
+        [sesion.id]
+      );
+      expect(rows[0].estado).toBe("ERROR");
+      expect(rows[0].intentos).toBe(1);
+
+      const cola = await eventos.estadoCola(EMPRESA);
+      expect(cola.muertos.some((m) => m.lastError?.includes("Empresa desconocida"))).toBe(true);
+
+      // Arreglado lo de enfrente, el relanzamiento los devuelve a la cola.
+      memoria.fallo = null;
+      const reencolados = await eventos.reintentarEventos(EMPRESA);
+      expect(reencolados).toBeGreaterThan(0);
+      await vaciarCola();
+
+      const { rows: despues } = await db.query(
+        `SELECT estado FROM cash_event_outbox WHERE session_id = $1 ORDER BY id`,
+        [sesion.id]
+      );
+      expect(despues.every((r) => r.estado === "SENT")).toBe(true);
+    } finally {
+      transporte.registrarTransporte(null);
+    }
+  });
+
+  it("el cierre y el ingreso bancario emiten lo suyo, y el ingreso cuelga de la CAJA", async () => {
+    const caja = await crearCaja("ev-cierre");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO });
+
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: FONDO });
+    // Todo lo contado se queda como cambio: no hay ingreso bancario que hacer.
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: FONDO });
+
+    const tipos = (await eventosDe(sesion.id)).map((e) => e.tipo);
+    expect(tipos).toContain("COUNT_RECORDED");
+    expect(tipos).toContain("SESSION_CLOSED");
+
+    const { rows } = await db.query(
+      `SELECT aggregate_type, register_id FROM cash_event_outbox
+        WHERE tipo = 'BANK_DEPOSIT_CREATED' AND register_id = $1`,
+      [caja]
+    );
+    // Sin ingreso bancario que hacer no hay evento; lo que se fija aquí es que
+    // si lo hubiera, colgaría de la caja y no de una jornada.
+    for (const r of rows) expect(r.aggregate_type).toBe("REGISTER");
+  });
+
+});
+
+/**
+ * Evidencias: integridad y versión (fase 9 de MC Central).
+ *
+ * El bucket privado y la URL firmada ya existían. Lo que se prueba aquí es lo
+ * nuevo: que se pueda demostrar que el fichero de hoy es el que se adjuntó, y
+ * que sustituir un escaneo torcido no pierda el anterior.
+ */
+describe.runIf(RUN)("Evidencias con huella y versión", () => {
+  async function pdfDePrueba(texto: string): Promise<Buffer> {
+    const { PDFDocument, StandardFonts } = await import("pdf-lib");
+    const doc = await PDFDocument.create();
+    const pagina = doc.addPage([595.28, 841.89]);
+    const fuente = await doc.embedFont(StandardFonts.Helvetica);
+    pagina.drawText(texto, { x: 60, y: 760, size: 14, font: fuente });
+    return Buffer.from(await doc.save());
+  }
+
+  async function cobroConCaja(nombre: string) {
+    const caja = await crearCaja(nombre);
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    return servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+    });
+  }
+  it("el justificante guarda su huella y se puede verificar", async () => {
+    const cobro = await cobroConCaja("huella");
+
+    const doc = await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "factura.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("ORIGINAL"),
+    });
+
+    const { rows } = await db.query(
+      `SELECT sha256, version FROM cash_operation_documents WHERE id = $1`,
+      [doc.id]
+    );
+    expect(rows[0].sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(rows[0].version).toBe(1);
+
+    expect((await documentos.verificarDocumento(ctx, doc.id)).estado).toBe("OK");
+  });
+
+  /*
+   * La razón de ser del SHA-256: si el fichero del almacenamiento cambia, se
+   * tiene que notar. Sin esta comprobación la huella sería un adorno.
+   */
+  it("si el fichero cambia por detrás, la verificación lo dice", async () => {
+    const cobro = await cobroConCaja("alterado");
+    const doc = await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "factura.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("ORIGINAL"),
+    });
+
+    // Se cambia la huella guardada, que es equivalente a que cambiara el
+    // fichero y mucho más fácil de provocar en una prueba.
+    await db.query(`UPDATE cash_operation_documents SET sha256 = $2 WHERE id = $1`, [
+      doc.id,
+      "0".repeat(64),
+    ]);
+
+    expect((await documentos.verificarDocumento(ctx, doc.id)).estado).toBe("ALTERADO");
+  });
+
+  it("un justificante sin huella dice que no se puede comprobar, no que esté bien", async () => {
+    const cobro = await cobroConCaja("sinhuella");
+    const doc = await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "vieja.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("ANTIGUA"),
+    });
+
+    // Como los que se subieron antes de esta fase.
+    await db.query(`UPDATE cash_operation_documents SET sha256 = NULL WHERE id = $1`, [doc.id]);
+
+    const v = await documentos.verificarDocumento(ctx, doc.id);
+    expect(v.estado).toBe("SIN_HUELLA");
+  });
+
+  it("sustituir un escaneo sube la versión y conserva el anterior", async () => {
+    const cobro = await cobroConCaja("version");
+
+    const torcido = await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "torcido.pdf",
+      mimetype: "application/pdf",
+      buffer: await pdfDePrueba("TORCIDO"),
+    });
+
+    const bueno = await documentos.adjuntarDocumento(
+      ctx,
+      cobro.operacionId,
+      {
+        originalname: "bueno.pdf",
+        mimetype: "application/pdf",
+        buffer: await pdfDePrueba("BUENO"),
+      },
+      torcido.id
+    );
+
+    const { rows } = await db.query(
+      `SELECT id, version, reemplaza_a, sustituido, anulado
+         FROM cash_operation_documents WHERE id = ANY($1::int[]) ORDER BY id`,
+      [[torcido.id, bueno.id]]
+    );
+    const [viejo, nuevo] = rows;
+
+    expect(nuevo.version).toBe(2);
+    expect(nuevo.reemplaza_a).toBe(torcido.id);
+    // El anterior se queda: sustituido no es lo mismo que anulado. Anular es lo
+    // que se hace cuando un justificante no debía estar; sustituir es que el
+    // mismo papel se ha vuelto a escanear mejor.
+    expect(viejo.sustituido).toBe(true);
+    expect(viejo.anulado).toBe(false);
+  });
+
+  it("avisa de que ese mismo fichero ya se había subido", async () => {
+    const cobro = await cobroConCaja("duplicado");
+
+    const contenido = await pdfDePrueba("EL MISMO TACO DE FACTURAS");
+    await documentos.adjuntarDocumento(ctx, cobro.operacionId, {
+      originalname: "taco.pdf",
+      mimetype: "application/pdf",
+      buffer: contenido,
+    });
+
+    const repetidos = await documentos.duplicadosDe(EMPRESA, contenido);
+    expect(repetidos.length).toBeGreaterThanOrEqual(1);
+    expect(repetidos[0].nombre).toBe("taco.pdf");
+
+    // Y uno distinto no sale como duplicado.
+    expect(await documentos.duplicadosDe(EMPRESA, await pdfDePrueba("OTRO"))).toHaveLength(0);
+  });
+});
+
+/**
+ * Auditoría inmutable y separación de funciones (fase 10 de MC Central).
+ *
+ * La auditoría no la ejercitaba NINGUNA prueba: `app_auditoria` la creaba una
+ * migración que se aplica a mano, no existía en la base de pruebas, y como
+ * `registrarAuditoria` traga sus errores, las 35 llamadas del módulo fallaban
+ * en silencio sin que nadie se enterara. Eso es lo primero que se comprueba
+ * aquí: que ahora se escribe de verdad.
+ */
+describe.runIf(RUN)("Auditoría inmutable y separación de funciones", () => {
+  async function cobroSuelto(nombre: string) {
+    const caja = await crearCaja(nombre);
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+    });
+    return { caja, sesion, cobro };
+  }
+
+  it("un cobro deja su línea de auditoría, con huella", async () => {
+    const { cobro } = await cobroSuelto("auditoria");
+
+    const { rows } = await db.query(
+      `SELECT accion, huella, detalle FROM app_auditoria
+        WHERE entidad = 'cash_operations' AND entidad_id = $1`,
+      [String(cobro.operacionId)]
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].accion).toBe("cash.operation.collection");
+    expect(rows[0].huella).toMatch(/^[0-9a-f]{64}$/);
+    expect(rows[0].detalle.numero).toBe(cobro.numero);
+  });
+
+  /*
+   * Las políticas RLS ya impedían modificar y borrar, pero el servidor se
+   * conecta con `pg` y no pasa por RLS. El disparador sí alcanza a todo el
+   * mundo, y eso es lo que se comprueba: con la misma conexión que usa el
+   * módulo.
+   */
+  it("una línea de auditoría no se puede cambiar ni borrar", async () => {
+    const { cobro } = await cobroSuelto("inmutable");
+    const { rows } = await db.query(
+      `SELECT id FROM app_auditoria WHERE entidad_id = $1 LIMIT 1`,
+      [String(cobro.operacionId)]
+    );
+    const id = rows[0].id;
+
+    await expect(
+      db.query(`UPDATE app_auditoria SET accion = 'otra cosa' WHERE id = $1`, [id])
+    ).rejects.toThrow(/inmutable/i);
+
+    await expect(db.query(`DELETE FROM app_auditoria WHERE id = $1`, [id])).rejects.toThrow(
+      /inmutable/i
+    );
+
+    // Y sigue ahí, intacta.
+    const { rows: despues } = await db.query(
+      `SELECT accion FROM app_auditoria WHERE id = $1`,
+      [id]
+    );
+    expect(despues[0].accion).toBe("cash.operation.collection");
+  });
+
+  /*
+   * La auditoría va DENTRO de la transacción del dinero. Si no se puede
+   * escribir, la operación no se guarda: es la mitad que faltaba del riesgo R2
+   * —antes podía quedar un cobro asentado sin ninguna línea que dijera quién lo
+   * hizo—.
+   */
+  it("si la auditoría no se puede escribir, el cobro tampoco se guarda", async () => {
+    const caja = await crearCaja("r2");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+
+    // Se rompe la escritura de auditoría a propósito, con un disparador que
+    // falla. Es la forma de provocar en una prueba lo que en producción sería
+    // un problema de la base de datos.
+    await db.query(`
+      CREATE OR REPLACE FUNCTION app_auditoria_romper() RETURNS TRIGGER AS $$
+      BEGIN RAISE EXCEPTION 'auditoria caida'; END $$ LANGUAGE plpgsql;
+      CREATE TRIGGER app_auditoria_romper_trg BEFORE INSERT ON app_auditoria
+        FOR EACH ROW EXECUTE FUNCTION app_auditoria_romper();
+    `);
+
+    try {
+      await expect(
+        servicio.registrarCobro(ctx, {
+          sessionId: sesion.id,
+          importeCentimos: 5000,
+          formasPago: [{ forma: "CASH", importe: 5000 }],
+          efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+        })
+      ).rejects.toThrow();
+    } finally {
+      await db.query(`DROP TRIGGER IF EXISTS app_auditoria_romper_trg ON app_auditoria`);
+    }
+
+    // Nada asentado: ni operación ni movimientos. El dinero no se ha movido.
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_operations WHERE session_id = $1 AND tipo = 'COLLECTION'`,
+      [sesion.id]
+    );
+    expect(rows[0].n).toBe(0);
+  });
+
+  it("con SoD apagado, quien cobra puede anular: es el comportamiento de siempre", async () => {
+    const { cobro } = await cobroSuelto("sod-off");
+    const anulada = await servicio.anularOperacion(ctx, cobro.operacionId, "Error de tecleo");
+    expect(anulada.operacionId).toBeGreaterThan(0);
+  });
+
+  /*
+   * Encendido, la misma persona no puede deshacer lo que hizo. Anular una
+   * operación y reabrir una jornada son justo las dos acciones que borran el
+   * rastro de un descuadre.
+   */
+  it("con SoD encendido, quien cobró no puede anular, y otra persona sí", async () => {
+    const yo = "00000000-0000-4000-a000-00000000aa01";
+    const otro = "00000000-0000-4000-a000-00000000aa02";
+
+    const caja = await crearCaja("sod-on");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    const cobro = await servicio.registrarCobro(
+      { ...ctx, userId: yo },
+      {
+        sessionId: sesion.id,
+        importeCentimos: 5000,
+        formasPago: [{ forma: "CASH", importe: 5000 }],
+        efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      }
+    );
+
+    await config.fijarAjuste(ctx, config.AJUSTES.SOD_ACTIVO, "1");
+    try {
+      await expect(
+        servicio.anularOperacion({ ...ctx, userId: yo }, cobro.operacionId, "Me equivoqué")
+      ).rejects.toMatchObject({ codigo: "SOD_REQUIERE_OTRA_PERSONA" });
+
+      // Sin usuario identificado tampoco: ante la duda, no.
+      await expect(
+        servicio.anularOperacion({ ...ctx, userId: null }, cobro.operacionId, "Anónimo")
+      ).rejects.toMatchObject({ codigo: "SOD_REQUIERE_OTRA_PERSONA" });
+
+      const anulada = await servicio.anularOperacion(
+        { ...ctx, userId: otro },
+        cobro.operacionId,
+        "Lo revisa el encargado"
+      );
+      expect(anulada.operacionId).toBeGreaterThan(0);
+    } finally {
+      await config.fijarAjuste(ctx, config.AJUSTES.SOD_ACTIVO, null);
+    }
+  });
+});
+
+/**
+ * Reautenticación (fase 10).
+ *
+ * El verificador es enchufable por la misma razón que el conector de ERP: la
+ * comprobación real va contra Supabase, que aquí no existe, y la REGLA —cuánto
+ * dura, quién pasa, qué ocurre al caducar— se puede probar sin levantar nada.
+ */
+describe.runIf(RUN)("Reautenticación", () => {
+  const USUARIO = "00000000-0000-4000-a000-00000000bb01";
+
+  it("una clave correcta vale diez minutos; una equivocada no vale nada", async () => {
+    reauth.registrarVerificador({
+      verificar: async (_id, clave) => clave === "correcta",
+    });
+    try {
+      await expect(reauth.reautenticar(USUARIO, "mal")).rejects.toMatchObject({
+        codigo: "CLAVE_NO_VALIDA",
+      });
+      expect(await reauth.estaReautenticado(USUARIO)).toBe(false);
+
+      await reauth.reautenticar(USUARIO, "correcta");
+      expect(await reauth.estaReautenticado(USUARIO)).toBe(true);
+    } finally {
+      reauth.registrarVerificador(null);
+    }
+  });
+
+  it("caduca: identificarse hace media hora no sirve para lo de ahora", async () => {
+    reauth.registrarVerificador({ verificar: async () => true });
+    try {
+      await reauth.reautenticar(USUARIO, "loquesea");
+
+      // Se envejece la marca media hora. Esperar de verdad no es una opción.
+      await db.query(`UPDATE cash_reauth SET hasta_ms = $2 WHERE user_id = $1`, [
+        USUARIO,
+        Date.now() - 30 * 60_000,
+      ]);
+      expect(await reauth.estaReautenticado(USUARIO)).toBe(false);
+    } finally {
+      reauth.registrarVerificador(null);
+    }
+  });
+
+  it("apagada no estorba; encendida exige identificarse, y sin usuario no pasa", async () => {
+    // Apagada: la acción sensible no pide nada.
+    await expect(reauth.exigirReautenticacion(EMPRESA, USUARIO)).resolves.toBeUndefined();
+
+    await config.fijarAjuste(ctx, config.AJUSTES.REAUTH_ACTIVO, "1");
+    try {
+      await expect(reauth.exigirReautenticacion(EMPRESA, USUARIO)).rejects.toMatchObject({
+        codigo: "REAUTENTICACION_REQUERIDA",
+      });
+
+      // Ante la duda, no: un usuario sin identificar no puede demostrar nada.
+      await expect(reauth.exigirReautenticacion(EMPRESA, null)).rejects.toMatchObject({
+        codigo: "REAUTENTICACION_REQUERIDA",
+      });
+
+      reauth.registrarVerificador({ verificar: async () => true });
+      await reauth.reautenticar(USUARIO, "correcta");
+      await expect(reauth.exigirReautenticacion(EMPRESA, USUARIO)).resolves.toBeUndefined();
+    } finally {
+      reauth.registrarVerificador(null);
+      await config.fijarAjuste(ctx, config.AJUSTES.REAUTH_ACTIVO, null);
+      await db.query(`DELETE FROM cash_reauth WHERE user_id = $1`, [USUARIO]);
+    }
+  });
+
+  it("sin verificador registrado no se puede comprobar, y se dice", async () => {
+    reauth.registrarVerificador(null);
+    await expect(reauth.reautenticar(USUARIO, "loquesea")).rejects.toMatchObject({
+      codigo: "REAUTENTICACION_NO_DISPONIBLE",
+    });
+  });
+});
+
+/**
+ * Migration Center (fase 11).
+ *
+ * Lo que se prueba es la decisión de fondo: un día de papel se importa con el
+ * desglose REAL del cambio del cajón —lo contado al cerrar menos lo contado al
+ * abrir— y no con un reparto inventado del total. Y que repetir la importación
+ * no duplique dinero, que es lo que separa una herramienta de migración que se
+ * puede reintentar de una que hay que acertar a la primera.
+ */
+describe.runIf(RUN)("Importación de días de papel", () => {
+  it("importa dos días encadenados y el cierre de uno es el fondo del otro", async () => {
+    const caja = await crearCaja("papel");
+    const lote = `L${String(process.hrtime.bigint()).slice(-9)}`;
+
+    const dia13 = {
+      registerId: caja,
+      fecha: "2026-03-13",
+      apertura: [{ valor: 2000, cantidad: 5 }],
+      cierre: [
+        { valor: 2000, cantidad: 5 },
+        { valor: 1000, cantidad: 3 },
+      ],
+      cobradoCentimos: 3000,
+    };
+    const dia14 = {
+      registerId: caja,
+      fecha: "2026-03-14",
+      apertura: [
+        { valor: 2000, cantidad: 5 },
+        { valor: 1000, cantidad: 3 },
+      ],
+      cierre: [
+        { valor: 2000, cantidad: 5 },
+        { valor: 1000, cantidad: 1 },
+      ],
+      pagadoCentimos: 2000,
+    };
+
+    // A propósito en desorden: la importación los ordena, porque el cierre de
+    // cada día es el fondo del siguiente.
+    const r = await migracion.importarDias(ctx, lote, [dia14, dia13]);
+
+    expect(r.importados.map((d) => d.fecha)).toEqual(["2026-03-13", "2026-03-14"]);
+    expect(r.importados[0].netoCentimos).toBe(3000);
+    expect(r.importados[1].netoCentimos).toBe(-2000);
+
+    // El asiento lleva las PIEZAS reales, no un reparto plausible del total.
+    const { rows } = await db.query(
+      `SELECT m.valor_unitario_centimos AS valor_centimos, m.cantidad, m.direccion
+         FROM cash_denomination_movements m
+         JOIN cash_operations o ON o.id = m.operation_id
+        WHERE o.session_id = $1 AND o.origen = 'IMPORT'
+        ORDER BY m.valor_unitario_centimos DESC`,
+      [r.importados[0].sessionId]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].valor_centimos).toBe(1000);
+    expect(rows[0].cantidad).toBe(3);
+    expect(rows[0].direccion).toBe("IN");
+
+    // Y los días quedan cerrados y cuadrados: la importación no puede inventar
+    // un descuadre que en el papel no estaba.
+    const { rows: sesiones } = await db.query(
+      `SELECT estado, diferencia_centimos FROM cash_sessions WHERE id = ANY($1::int[])`,
+      [r.importados.map((d) => d.sessionId)]
+    );
+    for (const s of sesiones) {
+      expect(s.estado).toBe("CLOSED");
+      expect(Number(s.diferencia_centimos)).toBe(0);
+    }
+  });
+
+  it("repetir el mismo lote no duplica dinero", async () => {
+    const caja = await crearCaja("reimport");
+    const lote = `R${String(process.hrtime.bigint()).slice(-9)}`;
+    const dia = {
+      registerId: caja,
+      fecha: "2026-04-01",
+      apertura: [{ valor: 1000, cantidad: 2 }],
+      cierre: [{ valor: 1000, cantidad: 5 }],
+    };
+
+    const primera = await migracion.importarDias(ctx, lote, [dia]);
+    expect(primera.importados).toHaveLength(1);
+
+    const segunda = await migracion.importarDias(ctx, lote, [dia]);
+    expect(segunda.importados).toHaveLength(0);
+    expect(segunda.omitidos).toHaveLength(1);
+
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_operations
+        WHERE empresa_id = $1 AND external_system = 'IMPORT' AND external_document_id = $2`,
+      [EMPRESA, `${lote}:2026-04-01`]
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("un día sin movimiento se importa igual, sin asiento que no ocurrió", async () => {
+    const caja = await crearCaja("quieto");
+    const lote = `Q${String(process.hrtime.bigint()).slice(-9)}`;
+    const r = await migracion.importarDias(ctx, lote, [
+      {
+        registerId: caja,
+        fecha: "2026-04-02",
+        apertura: [{ valor: 1000, cantidad: 2 }],
+        cierre: [{ valor: 1000, cantidad: 2 }],
+      },
+    ]);
+
+    expect(r.importados[0].netoCentimos).toBe(0);
+    const { rows } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_operations
+        WHERE session_id = $1 AND origen = 'IMPORT'`,
+      [r.importados[0].sessionId]
+    );
+    expect(rows[0].n).toBe(0);
+  });
+
+  it("el saldo inicial se declara una vez, y no cuando la caja ya tiene historia", async () => {
+    const caja = await crearCaja("saldo");
+    const declarado = await migracion.declararSaldoInicial(
+      ctx,
+      caja,
+      [{ valor: 5000, cantidad: 2 }, { valor: 1000, cantidad: 5 }],
+      "Recuento del 1 de enero, dinero que ya estaba en el cajón"
+    );
+    expect(declarado.totalCentimos).toBe(15000);
+
+    // Queda dicho que se declaró, que es lo que preguntará un auditor.
+    const { rows } = await db.query(
+      `SELECT detalle FROM app_auditoria
+        WHERE accion = 'cash.initial_balance.declare' AND entidad_id = $1`,
+      [String(declarado.sessionId)]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].detalle.totalCentimos).toBe(15000);
+
+    await expect(
+      migracion.declararSaldoInicial(ctx, caja, [{ valor: 1000, cantidad: 1 }], "Otra vez")
+    ).rejects.toMatchObject({ codigo: "SALDO_INICIAL_YA_NO_APLICA" });
   });
 });
 

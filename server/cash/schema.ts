@@ -24,8 +24,18 @@
 import pool from "../db.ts";
 import { DENOMINACIONES_SEMILLA } from "./domain/denominations.ts";
 import { proponerCodigo } from "./domain/registercode.ts";
+import { initAuditoria } from "../core/auditoriaSchema.ts";
 
 export async function initCash(): Promise<void> {
+  /*
+   * La auditoría, lo primero.
+   *
+   * La crea la migración de la fundación SaaS, que se aplica a mano, así que en
+   * una base sin ella las llamadas del módulo fallaban en silencio. Ahora se
+   * asegura aquí: el módulo que audita es el que se ocupa de que haya dónde.
+   */
+  await initAuditoria();
+
   // ── Catálogo de denominaciones y cartuchos ────────────────────────────────
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cash_denominations (
@@ -881,6 +891,268 @@ export async function initCash(): Promise<void> {
   await pool.query(`
     ALTER TABLE cash_sections
       ADD COLUMN IF NOT EXISTS arquea_aparte BOOLEAN NOT NULL DEFAULT false;
+  `);
+
+  /*
+   * Jerarquía: ZONA → TALLER → CAJA (MC Central, fase 1).
+   *
+   * Hasta aquí `cash_registers.centro` era texto libre, así que agrupar cajas
+   * por taller era agrupar cadenas. Se añade el vínculo real, y la columna de
+   * texto SE QUEDA: la usan los informes y el `ON CONFLICT (empresa_id, centro,
+   * nombre)` del alta de cajas. Se retirará cuando el backfill esté verificado
+   * contra datos reales, no antes.
+   *
+   * Todo NULLABLE, y no por descuido: esto se ejecuta en CADA arranque, así que
+   * un NOT NULL prematuro no rompe una migración —impide arrancar el proceso—.
+   * Es el mismo fallo que ya costó un incidente con el CHECK de motivos.
+   *
+   * Las claves ajenas hacia `app_*` viven en la migración de Supabase
+   * (`supabase/migrations/central_fase1_jerarquia.sql`) y aquí se ponen solo si
+   * esas tablas existen. Motivo: las pruebas de integración levantan una base
+   * desechable donde solo corre `initCash()`, sin la fundación SaaS; con la
+   * clave ajena incondicional, arrancar contra esa base fallaría. Es la misma
+   * razón por la que `empresa_id` nunca ha tenido FK en este esquema.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_zonas (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      nombre TEXT NOT NULL,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_app_zonas_empresa ON app_zonas(empresa_id, activa);
+    -- El nombre es único dentro de la empresa, no en toda la instalación: dos
+    -- empresas pueden tener cada una su zona «Norte» sin saber la una de la otra.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_app_zonas_nombre
+      ON app_zonas(empresa_id, lower(nombre));
+
+    ALTER TABLE cash_registers ADD COLUMN IF NOT EXISTS centro_id UUID;
+    CREATE INDEX IF NOT EXISTS cash_registers_centro_idx ON cash_registers(centro_id);
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF to_regclass('public.app_centros') IS NOT NULL THEN
+        ALTER TABLE app_centros ADD COLUMN IF NOT EXISTS zona_id UUID;
+        CREATE INDEX IF NOT EXISTS idx_app_centros_zona ON app_centros(zona_id);
+      END IF;
+    END $$;
+  `);
+
+  /*
+   * Cola de eventos de dominio hacia MC Central (fase 2).
+   *
+   * Es hermana de `cash_erp_outbox` y no la misma tabla a propósito: aquella
+   * lleva `connector_key` y una clave ajena a `cash_operations`, y está en
+   * producción. Mezclar dos dominios en una cola viva es riesgo gratuito.
+   *
+   * Y hay una diferencia que manda sobre todo el diseño: esta fila se escribe
+   * DENTRO de la transacción que mueve el dinero. Si su INSERT fallara, se
+   * desharía un cobro que ya ocurrió físicamente, que es la peor avería posible
+   * en este módulo. Por eso aquí NO hay clave ajena, ni CHECK sobre el tipo, ni
+   * ninguna restricción que dependa de los datos: lo único que puede rechazar
+   * esta fila es que la base esté caída, y entonces el cobro tampoco se guarda.
+   *
+   * `estado` sí lleva CHECK porque su lista la escribe el worker, no los datos,
+   * y vive en un solo sitio —éste— para no repetir el incidente de los motivos
+   * de movimiento, donde dos bloques recreaban el mismo CHECK con listas
+   * distintas y el servidor dejaba de arrancar.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_event_outbox (
+      id BIGSERIAL PRIMARY KEY,
+      -- Clave de deduplicación en destino. Se genera aquí y viaja como
+      -- Idempotency-Key: reenviar el mismo evento no lo cuenta dos veces.
+      event_id UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+      empresa_id UUID NOT NULL,
+      -- El taller se copia en el evento aunque se pueda deducir de la caja:
+      -- Central agrega por taller y no debería tener que preguntar por una
+      -- caja que quizá se reasignó después. El evento cuenta lo que pasó
+      -- ENTONCES, y eso incluye dónde pasó.
+      centro_id UUID,
+      register_id INTEGER,
+      session_id INTEGER,
+      aggregate_type TEXT,
+      aggregate_id BIGINT,
+      aggregate_version BIGINT,
+      tipo TEXT NOT NULL,
+      -- Cuándo OCURRIÓ, que no es cuándo se envía ni cuándo se tecleó.
+      ocurrido_en_ms BIGINT NOT NULL,
+      actor_user_id UUID,
+      datos JSONB NOT NULL DEFAULT '{}'::jsonb,
+      estado TEXT NOT NULL DEFAULT 'PENDING'
+        CHECK (estado IN ('PENDING','SENDING','SENT','ERROR','RETRY_PENDING','CANCELLED')),
+      intentos INTEGER NOT NULL DEFAULT 0,
+      proximo_intento_ms BIGINT,
+      last_error TEXT,
+      created_at_ms BIGINT NOT NULL,
+      processed_at_ms BIGINT
+    );
+
+    CREATE INDEX IF NOT EXISTS cash_events_pendientes_idx
+      ON cash_event_outbox(estado, proximo_intento_ms)
+      WHERE estado IN ('PENDING','RETRY_PENDING');
+    CREATE INDEX IF NOT EXISTS cash_events_empresa_idx
+      ON cash_event_outbox(empresa_id, created_at_ms DESC);
+    -- Orden de reconstrucción para Central: por agregado y versión.
+    CREATE INDEX IF NOT EXISTS cash_events_agregado_idx
+      ON cash_event_outbox(aggregate_type, aggregate_id, aggregate_version);
+  `);
+
+  /*
+   * Versión del agregado, para que Central detecte un hueco o un evento que
+   * llega tarde sin tener que fiarse del reloj.
+   *
+   * Sube dentro de bloqueos que YA existen —la jornada en `bloquearSesion` y la
+   * caja en los ingresos bancarios—, así que no añade contención ninguna: el
+   * incremento va donde ya había un `FOR UPDATE`.
+   *
+   * `NOT NULL DEFAULT 0` sobre una tabla con datos no reescribe las filas
+   * (PostgreSQL guarda el valor por defecto en el catálogo desde la 11), así
+   * que es seguro aunque la tabla sea grande.
+   */
+  await pool.query(`
+    ALTER TABLE cash_sessions  ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE cash_registers ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+  `);
+
+  /*
+   * Integridad y versión de los justificantes (fase 9 de MC Central).
+   *
+   * · `sha256` es la huella del fichero tal y como se subió. Sirve para dos
+   *   cosas: comprobar que lo que hay en el bucket hoy es lo mismo que se
+   *   adjuntó —una factura que respalda una salida de caja no puede cambiar sin
+   *   que se note— y detectar que el mismo papel se ha subido dos veces.
+   *
+   * · `version` y `reemplaza_a` porque un justificante SE SUSTITUYE, no se
+   *   corrige: el escaneo salió torcido y se vuelve a escanear. El anterior se
+   *   marca sustituido y se queda. Aquí no se borra nada, y menos lo que
+   *   respalda un movimiento de dinero.
+   *
+   * Nullable: los documentos anteriores a esta fase no tienen huella, y eso es
+   * un dato en sí mismo —no se puede verificar lo que se subió antes de
+   * empezar a medirlo— no algo que haya que inventar.
+   */
+  await pool.query(`
+    ALTER TABLE cash_operation_documents
+      ADD COLUMN IF NOT EXISTS sha256 TEXT,
+      ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS reemplaza_a INTEGER,
+      ADD COLUMN IF NOT EXISTS sustituido BOOLEAN NOT NULL DEFAULT false;
+
+    CREATE INDEX IF NOT EXISTS cash_docs_sha_idx
+      ON cash_operation_documents(empresa_id, sha256) WHERE sha256 IS NOT NULL;
+  `);
+
+  /*
+   * Marca de reautenticación reciente.
+   *
+   * En la base y no en memoria: en Render hay varias instancias y la siguiente
+   * petición puede caer en otra. Con un mapa en memoria, reautenticarse valdría
+   * o no según a quién le tocara responder — intermitente y sin explicación,
+   * que es la peor clase de fallo.
+   *
+   * Una fila por usuario, que se pisa: no interesa el histórico de cuándo se ha
+   * identificado cada uno, y para eso ya está la auditoría.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_reauth (
+      user_id UUID PRIMARY KEY,
+      hasta_ms BIGINT NOT NULL
+    );
+  `);
+
+  /*
+   * Índice de cobertura para las consultas de consumo (fases 17 a 20).
+   *
+   * La predicción y el reparto preguntan lo mismo por cada caja: qué piezas han
+   * salido dando cambio. Sin este índice, PostgreSQL recorría **la tabla
+   * entera** de movimientos para contestarlo, así que el coste crecía con el
+   * libro mayor de toda la empresa en vez de con la historia de esa caja — y el
+   * libro mayor no mengua nunca.
+   *
+   * Medido sobre 365.000 movimientos (5 cajas, dos años): la llamada que hace
+   * la pantalla de reparto pasa de 230 ms a 140 ms, y el plan deja de ser un
+   * recorrido completo para ser una lectura solo del índice.
+   *
+   * `INCLUDE` en vez de más columnas de clave: no se busca por importe ni por
+   * cantidad, solo se leen, y así el índice ocupa menos y no se reordena por
+   * ellas.
+   */
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS cash_denmov_consumo_idx
+      ON cash_denomination_movements (session_id, motivo, direccion)
+      INCLUDE (valor_unitario_centimos, cantidad);
+  `);
+
+  /*
+   * Traslados de efectivo entre cajas de la misma empresa.
+   *
+   * La fase 19 sabía proponerlos —cruzar lo que sobra en una con lo que falta
+   * en otra— pero no podía ejecutarlos, y por un motivo concreto: **en medio
+   * del viaje el dinero no está en ninguna de las dos cajas**. Sin un documento
+   * que lo represente, ese dinero se contaría dos veces o ninguna, que es el
+   * doble conteo que la fase 4 vino a cerrar.
+   *
+   * Este es ese documento. La regla que lo sostiene es la misma que ya rige los
+   * pedidos de cambio al banco y las entregas: **los asientos se hacen cuando
+   * el dinero se mueve, no cuando se planea**. Al crear el traslado sale del
+   * cajón de origen; al recibirlo entra en el de destino; en medio, ninguna de
+   * las dos lo tiene y el tránsito dice dónde está y quién lo lleva.
+   *
+   * Cruza jornadas a propósito: se sale de un taller por la tarde y se llega al
+   * otro al día siguiente. Cada asiento pertenece a la jornada en la que
+   * ocurrió.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_transfers (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      numero TEXT NOT NULL,
+      origen_register_id INTEGER NOT NULL REFERENCES cash_registers(id) ON DELETE RESTRICT,
+      destino_register_id INTEGER NOT NULL REFERENCES cash_registers(id) ON DELETE RESTRICT,
+      -- Una caja no se manda dinero a sí misma: sería un asiento de ida y otro
+      -- de vuelta por el mismo importe, o sea, ruido en el libro mayor.
+      CONSTRAINT cash_transfers_distintas CHECK (origen_register_id <> destino_register_id),
+
+      estado TEXT NOT NULL DEFAULT 'EN_TRANSITO'
+        CHECK (estado IN ('EN_TRANSITO','RECIBIDO','CANCELADO')),
+      importe_centimos BIGINT NOT NULL CHECK (importe_centimos > 0),
+      /* Lo que de verdad llegó, que puede no ser lo que salió. */
+      recibido_centimos BIGINT,
+      diferencia_motivo TEXT,
+
+      /** Quién lleva la bolsa. Es lo que se pregunta cuando no aparece. */
+      portador TEXT,
+      notas TEXT,
+
+      session_id_salida INTEGER REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      operation_salida_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
+      session_id_entrada INTEGER REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      operation_entrada_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
+
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL,
+      cerrado_por UUID,
+      cerrado_at_ms BIGINT
+    );
+
+    CREATE INDEX IF NOT EXISTS cash_transfers_empresa_idx
+      ON cash_transfers(empresa_id, estado);
+    CREATE INDEX IF NOT EXISTS cash_transfers_destino_idx
+      ON cash_transfers(destino_register_id, estado);
+
+    CREATE TABLE IF NOT EXISTS cash_transfer_lines (
+      transfer_id INTEGER NOT NULL REFERENCES cash_transfers(id) ON DELETE CASCADE,
+      -- ENVIADO o RECIBIDO: se guardan las dos, porque comparar lo que salió
+      -- con lo que llegó es justo lo que hay que poder hacer.
+      rol TEXT NOT NULL CHECK (rol IN ('ENVIADO','RECIBIDO')),
+      valor_centimos INTEGER NOT NULL,
+      cantidad INTEGER NOT NULL,
+      PRIMARY KEY (transfer_id, rol, valor_centimos)
+    );
   `);
 
   await asignarCodigosDeCaja();

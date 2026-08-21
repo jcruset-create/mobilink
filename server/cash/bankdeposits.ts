@@ -54,6 +54,7 @@ import {
 import { type LineaDenominacion, inventarioDesdeLineas } from "./domain/inventory.ts";
 import { type Canje, mejorCanje } from "./domain/depositswap.ts";
 import type { Contexto } from "./service.ts";
+import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
 
@@ -398,6 +399,47 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
     );
 
     cierres.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.sessionId - b.sessionId));
+
+    /*
+     * El agregado es la CAJA, no una jornada: un ingreso agrupa varios cierres
+     * y no pertenece a ninguno. Forzarlo dentro de una jornada obligaría a
+     * elegir cuál de los cierres agrupados manda, y cualquier respuesta sería
+     * inventada. La versión sube dentro del bloqueo de la caja que esta
+     * transacción ya tiene tomado.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, e.registerId),
+      registerId: e.registerId,
+      agregado: { tipo: "REGISTER", id: e.registerId },
+      tipo: "BANK_DEPOSIT_CREATED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      /*
+       * El ORIGEN del ingreso viaja entero: qué jornadas lo componen, de qué
+       * día es cada una y cuánto puso. Es lo que permite contestar, cuando el
+       * banco apunta un abono de 3.480 €, de qué días y de qué caja salió ese
+       * dinero — sin eso, un ingreso es un número suelto que no se concilia
+       * con nada.
+       *
+       * Van también los ids sueltos en `cierres` porque es lo que ya
+       * consumía la proyección desde la fase 3, y los eventos viejos que
+       * siguen en la cola llevan solo eso.
+       */
+      datos: {
+        depositId,
+        numero: creado[0].numero,
+        importeCentimos: Number(creado[0].importe_centimos),
+        remanenteAnteriorCentimos: Number(creado[0].remanente_anterior_centimos),
+        remanenteNuevoCentimos: Number(creado[0].remanente_nuevo_centimos),
+        totalCierresCentimos: Number(creado[0].total_cierres_centimos),
+        referencia: creado[0].referencia ?? null,
+        fecha: fechaIso(creado[0].fecha_ingreso) ?? null,
+        cierres: cierres.map((c) => c.sessionId),
+        origen: cierres,
+      },
+    });
+
     return aIngreso(creado[0], cierres, true);
   });
 
@@ -500,6 +542,34 @@ export async function anularIngreso(
         ORDER BY s.fecha, s.id`,
       [ingresoId]
     );
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, actualizado[0].register_id),
+      registerId: actualizado[0].register_id,
+      agregado: { tipo: "REGISTER", id: actualizado[0].register_id },
+      tipo: "BANK_DEPOSIT_VOIDED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      /*
+       * Los cierres viajan también aquí, y no solo en el alta: al anular
+       * vuelven a estar pendientes, y quien los proyecta tiene que saber
+       * CUÁLES para devolverlos a la posición global. Deducirlo preguntando a
+       * la caja rompería que Central se sostenga solo con sus eventos.
+       */
+      datos: {
+        depositId: ingresoId,
+        numero: actualizado[0].numero,
+        importeCentimos: Number(actualizado[0].importe_centimos),
+        cierres: lineas.map((l: any) => l.session_id),
+        origen: lineas.map((l: any) => ({
+          sessionId: l.session_id,
+          fecha: fechaIso(l.fecha),
+          importeCentimos: Number(l.importe_centimos),
+        })),
+        motivo: motivo.trim(),
+      },
+    });
+
     return aIngreso(
       actualizado[0],
       lineas.map((l: any) => ({
