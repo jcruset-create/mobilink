@@ -27,7 +27,7 @@
 
 import type { PoolClient } from "pg";
 import pool from "../db.ts";
-import { registrarAuditoria } from "../core/auditoria.ts";
+import { registrarAuditoria, registrarAuditoriaEnTransaccion } from "../core/auditoria.ts";
 import type { Centimos } from "./domain/money.ts";
 import { formatearEuros } from "./domain/money.ts";
 import {
@@ -84,6 +84,7 @@ import {
 } from "./repository.ts";
 import { conectorPara } from "./erp/registry.ts";
 import { exigirAmbitoCaja, exigirJornadaPropia } from "./hierarchy.ts";
+import { autorDeOperacion, exigirOtraPersona } from "./sod.ts";
 import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
 export type Contexto = {
@@ -803,6 +804,36 @@ export async function registrarOperacion(
       );
     }
 
+    /*
+     * La auditoría, DENTRO de la transacción y sin tragar el error.
+     *
+     * Estaba después del COMMIT y con `registrarAuditoria`, que se traga lo que
+     * falle: una operación podía quedar asentada sin ninguna línea que dijera
+     * quién la hizo. Era el riesgo R2 de la auditoría de la fase 0, y para el
+     * dinero «se guardó pero no se sabe quién» no es un estado aceptable.
+     *
+     * Que esto sea seguro depende de que el INSERT no pueda fallar por los
+     * datos: por eso `app_auditoria` perdió su clave ajena en esta fase.
+     */
+    await registrarAuditoriaEnTransaccion(client, {
+      empresaId: ctx.empresaId,
+      userId: ctx.userId,
+      accion: `cash.operation.${e.tipo.toLowerCase()}`,
+      entidad: "cash_operations",
+      entidadId: String(operacionId),
+      detalle: {
+        numero,
+        origen,
+        importeCentimos: e.importeCentimos,
+        efectivoCentimos: importeEnEfectivo(e.formasPago, codigosEfectivo),
+        formasPago: e.formasPago,
+        recibido: e.efectivoRecibido ?? [],
+        entregado: e.efectivoEntregado ?? [],
+        externalDocumentId: e.externalDocumentId ?? null,
+      },
+      ip: ctx.ip,
+    });
+
     const stockFinal = await stockTeorico(client, e.sessionId);
 
     return {
@@ -819,25 +850,6 @@ export async function registrarOperacion(
   const resultado = clienteExterno
     ? await trabajo(clienteExterno)
     : await enTransaccion(trabajo);
-
-  await registrarAuditoria({
-    empresaId: ctx.empresaId,
-    userId: ctx.userId,
-    accion: `cash.operation.${e.tipo.toLowerCase()}`,
-    entidad: "cash_operations",
-    entidadId: String(resultado.operacionId),
-    detalle: {
-      numero: resultado.numero,
-      origen,
-      importeCentimos: e.importeCentimos,
-      efectivoCentimos: importeEnEfectivo(e.formasPago, codigosEfectivo),
-      formasPago: e.formasPago,
-      recibido: e.efectivoRecibido ?? [],
-      entregado: e.efectivoEntregado ?? [],
-      externalDocumentId: e.externalDocumentId ?? null,
-    },
-    ip: ctx.ip,
-  });
 
   return resultado;
 }
@@ -1516,6 +1528,11 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
       throw new ErrorCaja("JORNADA_NO_CERRADA", "Solo se puede reabrir una jornada cerrada.", 409);
     }
 
+    // Separación de funciones: quien cerró la jornada no la reabre. Reabrir
+    // permite recerrar con otras cifras, así que es la otra mitad del camino
+    // que la anulación abre.
+    await exigirOtraPersona(ctx.empresaId, ctx, s.cerradaPor, "reabrir esta jornada");
+
     const abierta = await sesionAbierta(s.registerId, client);
     if (abierta) {
       throw new ErrorCaja(
@@ -1614,6 +1631,21 @@ export async function anularOperacion(
     const sessionId = rows[0].session_id as number;
     const sesion = await bloquearSesionOperable(client, sessionId);
     await exigirJornadaPropia(client, ctx, sesion);
+
+    /*
+     * Separación de funciones: quien registró el cobro no lo anula.
+     *
+     * Anular es una de las dos acciones que borran el rastro de un descuadre
+     * —la otra es reabrir una jornada— y encadenarlas la misma persona sin
+     * testigo es el camino clásico para cuadrar una caja de la que ha salido
+     * dinero. Viene apagado; se enciende donde hay gente suficiente.
+     */
+    await exigirOtraPersona(
+      ctx.empresaId,
+      ctx,
+      await autorDeOperacion(client, operationId),
+      "anular esta operación"
+    );
 
     // Los mismos movimientos del revés.
     const originales = await movimientosDeOperacion(client, operationId);
