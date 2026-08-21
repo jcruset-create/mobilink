@@ -48,6 +48,15 @@ const LOGOS: Record<string, string> = {
   cash: logoCash,
 };
 
+/**
+ * Módulos sin logotipo propio en fichero pero con marca reconocible: se compone
+ * con el logo de Mobilink y el nombre, tal como se ve dentro del propio módulo.
+ * En cuanto exista el PNG, basta con moverlo a LOGOS y quitarlo de aquí.
+ */
+const MARCAS_COMPUESTAS: Record<string, { nombre: string; color: string }> = {
+  workplanner: { nombre: "WORKPLANNER", color: "text-sky-400" },
+};
+
 /** Emblemas cuadrados: estos sí van dentro del recuadro del icono. */
 const EMBLEMAS: Record<string, string> = {
   tyrecontrol: emblemaTyreControl,
@@ -228,7 +237,16 @@ export default function InicioPage() {
               return (
                 <div key={t.modulo.key} className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
                   <div className="mb-2 flex items-center justify-between gap-2">
-                    {LOGOS[t.modulo.key] ? (
+                    {MARCAS_COMPUESTAS[t.modulo.key] ? (
+                      <div className="flex items-center gap-2">
+                        <img src={logoMobilink} alt="Mobilink" className="h-9 w-auto" />
+                        <span
+                          className={`text-[13px] font-black italic tracking-tight ${MARCAS_COMPUESTAS[t.modulo.key].color}`}
+                        >
+                          {MARCAS_COMPUESTAS[t.modulo.key].nombre}
+                        </span>
+                      </div>
+                    ) : LOGOS[t.modulo.key] ? (
                       // El logo ya lleva el nombre del módulo: no se repite al lado
                       <img
                         src={LOGOS[t.modulo.key]} alt={t.modulo.label}
