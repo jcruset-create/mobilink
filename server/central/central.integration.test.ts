@@ -25,6 +25,8 @@ let clientes: typeof import("./api/clients.ts");
 let hooks: typeof import("./api/webhooks.ts");
 let conciliacion: typeof import("./reconciliation/service.ts");
 let observabilidad: typeof import("./health.ts");
+let prediccion: typeof import("./forecast/service.ts");
+let puntuacion: typeof import("./score/service.ts");
 let transporteCaja: typeof import("../cash/events/transport.ts");
 let workerCaja: typeof import("../cash/events/worker.ts");
 let TransporteLocal: typeof import("./transport.ts").TransporteLocal;
@@ -70,6 +72,8 @@ beforeAll(async () => {
   hooks = await import("./api/webhooks.ts");
   conciliacion = await import("./reconciliation/service.ts");
   observabilidad = await import("./health.ts");
+  prediccion = await import("./forecast/service.ts");
+  puntuacion = await import("./score/service.ts");
   transporteCaja = await import("../cash/events/transport.ts");
   workerCaja = await import("../cash/events/worker.ts");
   TransporteLocal = (await import("./transport.ts")).TransporteLocal;
@@ -1175,4 +1179,103 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
       await db.query(`DELETE FROM central_notifications WHERE id = $1`, [rows[0].id]);
     }
   });
+
+  /*
+   * Fases 17 y 18: predicción y puntuación sobre datos reales.
+   *
+   * Los motores se prueban aparte y sin base de datos. Lo que se comprueba aquí
+   * es lo que ellos no pueden: que las señales se lean de donde deben.
+   */
+  it("el historial de consumo sale del libro mayor, no de los totales", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'prediccion',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `pre-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      await db.query(`UPDATE cash_registers SET codigo = 'PD' || id WHERE id = $1`, [caja]);
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: [
+          { valor: 5000, cantidad: 2 },
+          { valor: 100, cantidad: 30 },
+        ],
+      });
+
+      /*
+       * Un cobro de 50 € pagado con TARJETA no gasta calderilla. Si el
+       * historial saliera de los totales de la jornada, este cobro inflaría la
+       * predicción justo en los días de más facturación.
+       */
+      await servicio.registrarOperacion(ctx, {
+        sessionId: sesion.id,
+        tipo: "COLLECTION",
+        importeCentimos: 5000,
+        formasPago: [{ forma: "BBVA_CARD", importe: 5000, referencia: "0001" }],
+      });
+
+      // Y un cobro en efectivo que sí devuelve monedas.
+      await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 300,
+        formasPago: [{ forma: "CASH", importe: 300 }],
+        efectivoRecibido: [{ valor: 500, cantidad: 1 }],
+      });
+
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: await stockContado(sesion.id),
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        cambioFinal: await stockContado(sesion.id),
+      });
+
+      const historial = await prediccion.historialDeCaja(EMPRESA, caja);
+      expect(historial).toHaveLength(1);
+
+      /*
+       * Salieron 2 € en monedas de cambio, y solo eso.
+       *
+       * Ni el cobro con tarjeta —que no toca el cajón— ni el CAMBIO FINAL que
+       * se deja para mañana. Lo segundo lo destapó esta prueba: contando todas
+       * las salidas, una caja que cierra con 300 € en monedas parecía gastar
+       * 300 € al día, y la predicción mandaba al banco a por un dinero que
+       * estaba en el cajón.
+       */
+      expect(historial[0].calderillaCentimos).toBe(200);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  it("una caja sin historia no se predice: se dice que no hay datos", async () => {
+    const { rows } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+       VALUES ($1,'nueva',$2,$3,$3) RETURNING id`,
+      [EMPRESA, `nue-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+    );
+    const p = await prediccion.prediccionDeCaja(EMPRESA, rows[0].id);
+    expect(p.confianza).toBe("SIN_DATOS");
+    expect(p.irAlBancoAntesDe).toBeNull();
+  });
+
+  it("la salud de la red puntúa y separa las cajas sin datos", async () => {
+    const s = await puntuacion.saludDeLaRed(EMPRESA);
+    expect(s.conDatos + s.sinDatos).toBeGreaterThan(0);
+    // Cada puntuación viene con sus motivos: un número solo no dice nada.
+    for (const c of s.peores) {
+      expect(Array.isArray(c.motivos)).toBe(true);
+      expect(c.puntos).not.toBeNull();
+    }
+  });
 });
+
+/** Lo contado en una jornada, a partir del stock teórico. */
+async function stockContado(sessionId: number) {
+  const { lineas } = await servicio.stockDeJornada(sessionId);
+  return lineas.filter((l) => l.cantidad > 0);
+}
