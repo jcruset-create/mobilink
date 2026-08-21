@@ -20,6 +20,7 @@ import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCaja, exigirPermiso } from "./permissions.ts";
 import * as reauth from "./reauth.ts";
+import * as migracion from "./migration.ts";
 import * as jerarquia from "./hierarchy.ts";
 import { estadoCola, procesarEventos, reintentarEventos } from "./events/worker.ts";
 import { miniaturaBoton, miniaturaFicha } from "./images.ts";
@@ -398,6 +399,44 @@ export function createCashRouter(): Router {
       }
       await reauth.reautenticar(req.authCtx!.userId, clave);
       res.json({ ok: true, validoHastaMs: Date.now() + reauth.VALIDEZ_MS });
+    })
+  );
+
+  // ── Migración: los días que se llevaron en papel ─────────────────────────
+
+  /**
+   * Importa una tanda de días de papel.
+   *
+   * Permiso de configuración y no de cajero: esto crea jornadas cerradas con
+   * dinero dentro, y no es una operación de mostrador.
+   */
+  r.post(
+    "/migration/days",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const dias = Array.isArray(b.dias) ? b.dias : [];
+      if (dias.length === 0) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún día que importar.", 400);
+      }
+      res.json(await migracion.importarDias(contexto(req), String(b.lote ?? ""), dias));
+    })
+  );
+
+  /** Saldo inicial de una caja que arranca. Solo si no tiene ninguna jornada. */
+  r.post(
+    "/registers/:id/initial-balance",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json(
+        await migracion.declararSaldoInicial(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          Array.isArray(b.contado) ? b.contado : [],
+          String(b.motivo ?? "")
+        )
+      );
     })
   );
 
