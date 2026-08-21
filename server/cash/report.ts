@@ -557,20 +557,30 @@ async function construirPortada(d: {
             lineBreak: false,
           });
 
-        // El desglose de precintos solo en la rejilla del cajón entero: en las
-        // repartidas las piezas son una propuesta y no hay envase que citar.
+        /*
+         * El desglose de precintos solo en la rejilla del cajón entero: en las
+         * repartidas las piezas son una propuesta y no hay envase que citar.
+         *
+         * Va DEBAJO de la casilla, no pegado a ella. La casilla ocupa de `y+2`
+         * a `y+22`, así que el renglón anterior —en `y+21`— se le metía dentro
+         * y se leían las dos cosas encima. Y cuando hay nota la fila crece: si
+         * no, la nota se comía la casilla de la denominación siguiente en
+         * cuanto el texto se alargaba («incluye 1 cartucho de 50 y 1 bolsa de
+         * 30»).
+         */
         const notas = conEnvases ? envasesDe.get(den.valor) : undefined;
-        if (notas && piezas > 0) {
+        const hayNota = Boolean(notas && piezas > 0);
+        if (hayNota) {
           doc
             .font("Helvetica")
             .fontSize(7)
             .fillColor(GRIS)
-            .text(`incluye ${notas.join(" y ")}`, x + 40, y + 21, {
+            .text(`incluye ${notas!.join(" y ")}`, x + 40, y + 26, {
               width: colAncho - 40,
               lineBreak: false,
             });
         }
-        return y + 30;
+        return y + (hayNota ? 40 : 30);
       };
 
       const cabeceraCol = (texto: string, x: number, y: number) => {
