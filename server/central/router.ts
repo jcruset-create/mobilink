@@ -31,6 +31,7 @@ import * as reglas from "./rules/service.ts";
 import * as avisos from "./notifications/service.ts";
 import * as clientes from "./api/clients.ts";
 import * as webhooks from "./api/webhooks.ts";
+import * as conciliacion from "./reconciliation/service.ts";
 import { ErrorCaja } from "../cash/errors.ts";
 
 /** Traduce `ErrorCaja` a su código HTTP, como hace el router de la caja. */
@@ -315,6 +316,70 @@ export function createCentralRouter(): Router {
         ...creado,
         aviso: "Guarda el secreto ahora: con él se comprueba la firma de cada envío.",
       });
+    })
+  );
+
+  // ── Conciliación bancaria ────────────────────────────────────────────────
+
+  r.get(
+    "/statements",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      res.json({ extractos: await conciliacion.listarExtractos(req.authCtx!.empresaId) });
+    })
+  );
+
+  /**
+   * Importa un extracto en Norma 43.
+   *
+   * El fichero llega como texto en el cuerpo y no por `multipart`: son unos
+   * pocos kilobytes de texto plano, y montar una subida de ficheros para eso
+   * añadiría una pieza más que mantener sin ganar nada.
+   */
+  r.post(
+    "/statements",
+    exigirPermiso("central.incidents.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const contenido = String(b.contenido ?? "");
+      if (!contenido.trim()) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún extracto.", 400);
+      }
+      const ctx = { empresaId: req.authCtx!.empresaId, userId: req.authCtx!.userId, ip: req.ip };
+      const r2 = await conciliacion.importarExtracto(ctx, String(b.nombre ?? "extracto"), contenido);
+      // 422 y no 400 cuando el fichero se lee pero no cuadra: la petición está
+      // bien formada; lo que no vale es el contenido.
+      res.status(r2.statementId ? 201 : 422).json(r2);
+    })
+  );
+
+  r.get(
+    "/statements/:id/matches",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      res.json(await conciliacion.propuestas(req.authCtx!.empresaId, String(req.params.id)));
+    })
+  );
+
+  r.post(
+    "/statements/lines/:id/reconcile",
+    exigirPermiso("central.incidents.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const ctx = { empresaId: req.authCtx!.empresaId, userId: req.authCtx!.userId, ip: req.ip };
+      await conciliacion.conciliar(ctx, String(req.params.id), Number(b.depositId));
+      res.json({ ok: true });
+    })
+  );
+
+  r.post(
+    "/statements/lines/:id/discard",
+    exigirPermiso("central.incidents.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const ctx = { empresaId: req.authCtx!.empresaId, userId: req.authCtx!.userId, ip: req.ip };
+      await conciliacion.descartar(ctx, String(req.params.id), String(b.motivo ?? ""));
+      res.json({ ok: true });
     })
   );
 

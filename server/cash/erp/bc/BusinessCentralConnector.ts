@@ -304,25 +304,22 @@ export class BusinessCentralConnector implements ICashErpConnector {
     return { ok: true, referencia: datos?.id ?? datos?.documentNumber ?? null };
   }
 
-  /** ¿Está ya contabilizado este número de operación? */
+  /**
+   * ¿Está ya contabilizado este número de operación?
+   *
+   * **Los errores se propagan a propósito, sin capturar.** Si la consulta falla
+   * no se da por hecho que el movimiento no está: el outbox reintentará.
+   * Tragarse el fallo y seguir llevaría a contabilizar un cobro que quizá ya
+   * estaba, que es justo el error que esta comprobación viene a evitar.
+   */
   private async buscarPorNumero(numero: string): Promise<string | null> {
-    try {
-      const r = await this.pedir(
-        `${this.base}/${ENTIDADES.diario}?$filter=externalDocumentNumber eq '${encodeURIComponent(numero)}'&$top=1`,
-        { method: "GET" }
-      );
-      const datos: any = await r.json();
-      const fila = (datos?.value ?? [])[0];
-      return fila ? String(fila.id ?? fila.documentNumber ?? numero) : null;
-    } catch (e) {
-      /*
-       * Si la consulta previa falla, NO se da por hecho que no está: se propaga
-       * y el outbox reintentará. Suponer que no existe llevaría a contabilizar
-       * un cobro que quizá ya estaba, que es el error que esta comprobación
-       * viene justamente a evitar.
-       */
-      throw e;
-    }
+    const r = await this.pedir(
+      `${this.base}/${ENTIDADES.diario}?$filter=externalDocumentNumber eq '${encodeURIComponent(numero)}'&$top=1`,
+      { method: "GET" }
+    );
+    const datos: any = await r.json();
+    const fila = (datos?.value ?? [])[0];
+    return fila ? String(fila.id ?? fila.documentNumber ?? numero) : null;
   }
 }
 
