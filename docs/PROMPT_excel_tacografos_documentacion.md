@@ -1,7 +1,7 @@
 # PROMPT — Excel de documentación de sustitución de tacógrafos
 
-> Estado: **especificación previa**. No se ha programado nada todavía.
-> Falta el fichero `.xlsx` original: debe adjuntarse antes de ejecutar la fase 0.
+> Estado: **ejecutado**. Resultado en `plantillas/TACOGRAFOS_documentacion.xlsx`;
+> análisis y desviaciones en `ANALISIS_excel_tacografos.md`.
 > Centro técnico: COMERCIAL SEA S.A. — Nº centro `E943009`.
 > El Excel es la **fase 1** del módulo propio `tacografos`: ver
 > [`PROMPT_modulo_tacografos.md`](./PROMPT_modulo_tacografos.md).

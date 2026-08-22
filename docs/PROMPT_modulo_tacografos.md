@@ -2,7 +2,9 @@
 
 > Estado: **diseño previo a programar**. Decisión tomada: es un **módulo propio**,
 > no una sección del área de taller.
-> Bloqueo activo: falta el `.xlsx` original del que salen los textos jurídicos.
+> Fases 0 y 1 completadas: ver [`ANALISIS_excel_tacografos.md`](./ANALISIS_excel_tacografos.md).
+> El alcance del módulo crece con la **UNE 66102:2025**: anexo II del RD 125/2017, trazabilidad
+> (técnico, equipos, precintos, bastidor), registro de destrucción a un año y control de versiones.
 > Especificación funcional y documental completa en
 > [`PROMPT_excel_tacografos_documentacion.md`](./PROMPT_excel_tacografos_documentacion.md).
 
@@ -136,8 +138,8 @@ exactamente el razonamiento de `server/cash/permissions.ts`:
 
 | Fase | Contenido | Estado |
 |---|---|---|
-| 0 | Análisis del Excel original y transcripción literal de los textos legales | **bloqueada, falta el fichero** |
-| 1 | Excel mejorado, entregable e independiente del despliegue | pendiente de fase 0 |
+| 0 | Análisis del Excel original y transcripción literal de los textos legales | **hecha** — ver `ANALISIS_excel_tacografos.md` |
+| 1 | Excel mejorado, entregable e independiente del despliegue | **hecho** — `plantillas/TACOGRAFOS_documentacion.xlsx` |
 | 2 | Esquema, API, formulario y generación de los tres PDF | |
 | 3 | Firma en pantalla y registro de entrega | |
 | 4 | Cola de comunicaciones a la administración y avisos de pendientes | |
