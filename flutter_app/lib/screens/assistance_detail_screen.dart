@@ -165,20 +165,6 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   }
 
   Future<void> _goEnCamino() async {
-    // Ya estaba en camino (salida automática al dejar el taller): no se reenvía
-    // al servidor, que dejaría un segundo evento 'en camino' en el historial.
-    if (_status == 'en_camino') {
-      final hora = _horaSalida();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(hora == null
-              ? 'Ya constaba en camino: la salida se registró automáticamente'
-              : 'Ya constaba en camino desde las $hora (salida automática del taller)'),
-          backgroundColor: Colors.lightBlue,
-        ),
-      );
-      return;
-    }
     setState(() => _loading = true);
     try {
       final updated = await widget.api.enCamino(_a['id'] as int);
@@ -401,10 +387,7 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
 
   String get _status => _a['status'] as String? ?? '';
 
-  // También en 'en_camino': el servidor puede haberla movido solo al detectar
-  // que la furgoneta salió del taller (Webfleet). Si aquí solo se aceptara
-  // 'asignada', el técnico se encontraba el botón muerto y sin explicación.
-  bool get _canGoEnCamino => _status == 'asignada' || _status == 'en_camino';
+  bool get _canGoEnCamino => _status == 'asignada';
   bool get _canHeArrived => _status == 'en_camino';
   bool get _canInicioReparacion => _status == 'en_punto';
   bool get _canFinalize => _status == 'inicio_reparacion';
@@ -492,14 +475,24 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
                   const SizedBox(height: 24),
                   _section('Cambiar estado'),
                   const SizedBox(height: 10),
-                  _ActionButton(
-                    icon: Icons.directions_car_outlined,
-                    label: 'Estoy en camino',
-                    color: AppColors.statusEnCamino,
-                    enabled: _canGoEnCamino,
-                    fullWidth: true,
-                    onPressed: _goEnCamino,
-                  ),
+                  // Si la salida ya está registrada, el botón no pinta nada:
+                  // en su lugar queda constancia de quién la registró. Dejarlo
+                  // ahí, gris y sin explicación, es lo que desconcertaba al
+                  // técnico cuando el vigilante se le adelantaba.
+                  if (_status == 'en_camino')
+                    _SalidaRegistrada(
+                      hora: _horaSalida(),
+                      automatica: _a['enCaminoAutomatico'] == true,
+                    )
+                  else
+                    _ActionButton(
+                      icon: Icons.directions_car_outlined,
+                      label: 'Estoy en camino',
+                      color: AppColors.statusEnCamino,
+                      enabled: _canGoEnCamino,
+                      fullWidth: true,
+                      onPressed: _goEnCamino,
+                    ),
                   const SizedBox(height: 10),
                   _ActionButton(
                     icon: Icons.location_on_outlined,
@@ -676,6 +669,60 @@ class _InfoCard extends StatelessWidget {
 
   String _statusLabel(String s) => statusLabel(s);
   Color  _statusColor(String s) => statusColor(s);
+}
+
+/// Sustituye al botón «Estoy en camino» cuando la salida ya está registrada.
+/// Distingue quién la registró: si fue el vigilante de Webfleet al ver que la
+/// furgoneta dejaba el taller, se dice, para no atribuirle al técnico una
+/// pulsación que no hizo.
+class _SalidaRegistrada extends StatelessWidget {
+  final String? hora;
+  final bool automatica;
+
+  const _SalidaRegistrada({required this.hora, required this.automatica});
+
+  @override
+  Widget build(BuildContext context) {
+    final desde = hora == null ? '' : ' desde las $hora';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.statusEnCamino.withValues(alpha: 0.15),
+        border: Border.all(color: AppColors.statusEnCamino.withValues(alpha: 0.5)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.check_circle_outline, color: AppColors.statusEnCamino, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'En camino$desde',
+                  style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (automatica)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Text(
+                      'Registrado solo al salir la furgoneta del taller',
+                      style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _ActionButton extends StatelessWidget {
