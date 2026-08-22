@@ -114,7 +114,7 @@ justificante, que es precisamente donde el cliente elige el medio.
 
 | Hoja | Función |
 |---|---|
-| `DATOS` | Único punto de entrada. 39 campos en 7 secciones, desplegables, avisos de obligatorio condicionados al tipo de operación, aviso de coherencia y cálculo del plazo de destrucción. |
+| `DATOS` | Único punto de entrada. 41 campos en 8 secciones, desplegables, avisos de obligatorio condicionados al tipo de operación, aviso de coherencia y cálculo del plazo de destrucción. |
 | `JUSTIFICANTE TRANSFERENCIA` | Justificante del original + cláusulas de confidencialidad, custodia y titularidad + firma del técnico. |
 | `ANEXO II RD 125-2017` | **Nuevo.** El formulario oficial de 27 campos, relleno automático, con declaración que alterna a)/b) y las dos firmas. |
 | `INTRANSFERIBILIDAD CLIENTE` | Acuse de recibo del original. |
@@ -128,7 +128,7 @@ márgenes definidos por documento, hojas protegidas dejando desbloqueadas sólo 
 macros, sin rutas locales, y pie de control documental (`Formato · Versión · Edición ·
 Elaborado · Aprobado · UNE 66102:2025`) en cada documento imprimible.
 
-**Validación:** 224 fórmulas, 0 errores. Probado en los dos escenarios (transferencia correcta e
+**Validación:** 228 fórmulas, 0 errores. Probado en los dos escenarios (transferencia correcta e
 intransferibilidad): los documentos que no aplican se marcan *"— NO APLICA —"*, la declaración
 del anexo II alterna entre a) y b), y el aviso de coherencia salta si el tipo de operación
 contradice los campos 22/23.
@@ -147,12 +147,10 @@ Todo el texto jurídico del original se conserva. Estos son los cambios, uno a u
 | 4 | El *Exposo / Sol·licito* catalán se reúne en un párrafo copiable | Se pega en el formulario web de un tirón. Contenido íntegro. |
 | 5 | **Se añaden** tres cláusulas al justificante: confidencialidad, custodia a un año y titularidad de los datos | Notas D, E y F del anexo II del RD 125/2017, reproducidas en el anexo C de la UNE 66102:2025. |
 | 6 | *(resuelto)* Entrega del aparato y achatarramiento siguen siendo **excluyentes**, como en el original | Se introduce sólo *"Se entrega al cliente"*; *"Se achatarrará"* se calcula como su contrario y está bloqueado. El acuse imprime siempre una sola de las dos líneas. |
-| 7 | Un solo par nombre/DNI sirve al justificante y al acuse | El original permitía que la persona que autoriza y la que recibe fueran distintas (`K3`/`M3` frente a `I9`/`I10`). **Si eso pasa en la práctica, hay que separarlos otra vez.** |
+| 7 | *(resuelto)* Nombre y DNI de **quien autoriza** y de **quien recibe** son campos distintos | Como en el original (`K3`/`M3` frente a `I9`/`I10`). El justificante usa a quien autoriza; el acuse, a quien recibe. Sin relleno automático entre ellos: en un documento firmado el nombre no se deduce. |
 | 8 | En el anexo II, *"RD ......../....."* se rellena como *"RD 125/2017"* | El formulario oficial lo deja en blanco para que se complete. |
 
-**No cambiado a propósito:** la cita *"Real decreto 125:2017"* aparece así en todo el original.
-La referencia correcta es **RD 125/2017**. No la he tocado por ser una cita legal; corregirla es
-decisión tuya.
+| 9 | *"Real decreto 125:2017"* → *"Real decreto 125/2017"* (y *"Reial decret 125: 2017"* → *"125/2017"*) | Ocho apariciones. La referencia correcta del real decreto lleva barra, no dos puntos. |
 
 ---
 
@@ -184,4 +182,3 @@ Ninguno de estos cabe en una hoja de cálculo. Son el argumento para el módulo
 - Numeración automática del nº de informe a partir de la contraseña del centro y un contador.
 - Campo de nº de bastidor obligatorio (hoy opcional) si se va a rellenar el anexo II completo.
 - Casilla de verificación final del técnico ("control final del servicio prestado", 8.5.1).
-- Segunda persona receptora separada, si el punto 7 de la tabla anterior lo requiere.
