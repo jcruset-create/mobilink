@@ -10,6 +10,7 @@ import logoToolControl from "../assets/hub/logo-toolcontrol.png";
 import logoLicencias from "../assets/hub/logo-licencias.png";
 import logoSafety from "../assets/hub/logo-safety.png";
 import logoCash from "../assets/hub/logo-cash.png";
+import logoCentral from "../assets/hub/logo-central.png";
 import emblemaTyreControl from "../assets/hub/emblema-tyrecontrol.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
@@ -47,6 +48,7 @@ const LOGOS: Record<string, string> = {
   toolcontrol: logoToolControl,
   safety: logoSafety,
   cash: logoCash,
+  central: logoCentral,
 };
 
 /**
@@ -56,7 +58,6 @@ const LOGOS: Record<string, string> = {
  */
 const MARCAS_COMPUESTAS: Record<string, { nombre: string; color: string }> = {
   workplanner: { nombre: "WORKPLANNER", color: "text-sky-400" },
-  central: { nombre: "CENTRAL CASH PRO", color: "text-emerald-400" },
 };
 
 /** Emblemas cuadrados: estos sí van dentro del recuadro del icono. */
