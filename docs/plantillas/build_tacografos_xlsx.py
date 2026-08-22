@@ -147,15 +147,15 @@ TXT = [
                 "confidencial. El solicitante debe evaluar la confidencialidad de los datos transferidos "
                 "para el procedimiento de remisión que elija. El centro técnico no será responsable de la "
                 "violación de la confidencialidad de los datos durante su remisión (nota E del anexo II del "
-                "Real decreto 125:2017)."),
+                "Real decreto 125/2017)."),
  ("Txt_Custodia", "Los datos recuperados de la unidad instalada en el vehículo se guardarán en el centro "
                   "técnico durante un año desde la fecha de la transferencia. Una vez cumplido dicho plazo, "
-                  "los datos serán destruidos (nota F del anexo II del Real decreto 125:2017)."),
+                  "los datos serán destruidos (nota F del anexo II del Real decreto 125/2017)."),
  ("Txt_Titularidad", "Se ha presentado al centro técnico documento que avala la titularidad de los datos "
                      "por parte de la empresa de transportes, verificado y archivado por el centro (nota D "
-                     "del anexo II del Real decreto 125:2017)."),
+                     "del anexo II del Real decreto 125/2017)."),
  ("Txt_Cat_1", "En compliment del requisit expressat en la disposició addicional primera, apartat 10, del "
-               "Reial decret 125: 2017, els remetem còpia del certificat de intransferibilitat corresponent "
+               "Reial decret 125/2017, els remetem còpia del certificat de intransferibilitat corresponent "
                "a la substitució del tacògraf: Model: "),
  ("Txt_Cat_2", ", Nº de Sèrie: "), ("Txt_Cat_3", ", muntat en el vehicle: "),
  ("Txt_Cat_4", ", Nº d'informe / certificat: "), ("Txt_Cat_5", ", Data Informe: "),
@@ -185,8 +185,8 @@ CAMPOS = [
  ("in",  "Empresa",                        "Dat_Empresa",        "COMERCIAL TANK FOODS S.L.", "always"),
  ("in",  "Dirección de la empresa",        "Dat_DireccionEmp",   "C/ Exemple, 12 — 43006 Tarragona", "no"),
  ("in",  "Detalles tarjeta de empresa",    "Dat_TarjetaEmp",     "ESC0000000123456", "no"),
- ("in",  "Nombre persona autorizada",      "Dat_Nombre",         "Joan Pla Serra",   "always"),
- ("in",  "DNI / NIF",                      "Dat_Nif",            "39887654T",        "always"),
+ ("in",  "Nombre de quien autoriza",       "Dat_Nombre",         "Joan Pla Serra",   "always"),
+ ("in",  "DNI / NIF de quien autoriza",    "Dat_Nif",            "39887654T",        "always"),
  ("listsn","Documento de titularidad aportado", "Dat_DocTitularidad", "Sí",           "always"),
  ("sec", "VEHÍCULO", None, None, None),
  ("in",  "Matrícula",                      "Dat_Matricula",      "7567MPF",          "always"),
@@ -221,6 +221,9 @@ CAMPOS = [
  ("date","Fecha de envío",                 "Dat_FechaEnvio",     "2025-03-11",       "transf"),
  ("sec", "ENTREGA DE LOS DATOS DESCARGADOS", None, None, None),
  ("listm","Modalidad de entrega",          "Dat_Modalidad",      "En mano",          "transf"),
+ ("sec", "PERSONA QUE RECIBE EL CERTIFICADO (acuse de intransferibilidad)", None, None, None),
+ ("in",  "Nombre de la persona receptora", "Dat_NombreReceptor", "Marta Solé Vidal", "intr"),
+ ("in",  "DNI de la persona receptora",    "Dat_DniReceptor",    "40123456X",        "intr"),
  ("sec", "TACÓGRAFO AVERIADO", None, None, None),
  ("listsn","Se entrega al cliente",        "Dat_EntregaAparato", "No",               "intr"),
  ("calc", "Se achatarrará (excluyente)",   "Dat_Achatarrar",     None,               "no"),
@@ -305,7 +308,7 @@ dat.cell(ultima + 3, 2,
     f'=IF({nombres["Dat_FechaTransf"][1]}="","",'
     f'"Conservar hasta "&RIGHT("0"&DAY(EDATE({nombres["Dat_FechaTransf"][1]},12)),2)&"/"&'
     f'RIGHT("0"&MONTH(EDATE({nombres["Dat_FechaTransf"][1]},12)),2)&"/"&'
-    f'YEAR(EDATE({nombres["Dat_FechaTransf"][1]},12))&" y destruir después (nota F, RD 125:2017)")').font = f_nota
+    f'YEAR(EDATE({nombres["Dat_FechaTransf"][1]},12))&" y destruir después (nota F, RD 125/2017)")').font = f_nota
 
 dat.column_dimensions["A"].width = 38
 dat.column_dimensions["B"].width = 42
@@ -391,7 +394,7 @@ TEXTOS_J = {
  13: ("Doy la indicación, así mismo, de que los archivos de transferencia originados en la mencionada "
       "descarga sean entregados a la empresa propietaria del vehículo a través del medio indicado "
       "debajo, de entre las cuatro posibles opciones indicadas en el punto 6 de la disposición "
-      "adicional primera del Real decreto 125:2017 (señálese la opción que proceda)"),
+      "adicional primera del Real decreto 125/2017 (señálese la opción que proceda)"),
 }
 for fila, t in TEXTOS_J.items():
     j.merge_cells(f"B{fila}:H{fila}")
@@ -581,7 +584,7 @@ ic["A11"] = f'={txt("Dat_Empresa")}'; ic["A11"].font = d_dato
 ic["A14"] = "Estimados señores:"; ic["A14"].font = d_txt
 ic.merge_cells("A16:G18")
 ic["A16"] = ("En cumplimiento del requisito expresado en la disposición adicional primera, apartado 10, "
-             "del Real decreto 125:2017, les remitimos copia del certificado de intransferibilidad "
+             "del Real decreto 125/2017, les remitimos copia del certificado de intransferibilidad "
              "correspondiente a la sustitución del tacógrafo:")
 ic["A16"].font = d_txt; ic["A16"].alignment = wrapj
 
@@ -602,9 +605,9 @@ def ficha(ws):
 ficha(ic)
 
 ic.cell(27, 1, "Nombre:").font = d_txt
-ic.merge_cells("C27:F27"); ic.cell(27, 3, f'={txt("Dat_Nombre")}').font = d_dato
+ic.merge_cells("C27:F27"); ic.cell(27, 3, f'={txt("Dat_NombreReceptor")}').font = d_dato
 ic.cell(28, 1, "DNI:").font = d_txt
-ic.merge_cells("C28:F28"); ic.cell(28, 3, f'={txt("Dat_Nif")}').font = d_dato
+ic.merge_cells("C28:F28"); ic.cell(28, 3, f'={txt("Dat_DniReceptor")}').font = d_dato
 
 ic.merge_cells("A30:G32")
 ic["A30"] = (f'="En calidad de personal/propietario de la organización de transportes propietaria del '
@@ -650,7 +653,7 @@ ia["A11"] = f'={ref("Cfg_Destinatario")}'; ia["A11"].font = d_dato
 ia["A14"] = "Estimados señores:"; ia["A14"].font = d_txt
 ia.merge_cells("A16:G18")
 ia["A16"] = ("En cumplimiento del requisito expresado en la disposición adicional primera, apartado 10, "
-             "del Real decreto 125:2017, les remitimos copia del certificado de intransferibilidad "
+             "del Real decreto 125/2017, les remitimos copia del certificado de intransferibilidad "
              "correspondiente a la sustitución del tacógrafo:")
 ia["A16"].font = d_txt; ia["A16"].alignment = wrapj
 ficha(ia)
