@@ -114,7 +114,7 @@ justificante, que es precisamente donde el cliente elige el medio.
 
 | Hoja | Función |
 |---|---|
-| `DATOS` | Único punto de entrada. 40 campos en 7 secciones, desplegables, avisos de obligatorio condicionados al tipo de operación, aviso de coherencia y cálculo del plazo de destrucción. |
+| `DATOS` | Único punto de entrada. 39 campos en 7 secciones, desplegables, avisos de obligatorio condicionados al tipo de operación, aviso de coherencia y cálculo del plazo de destrucción. |
 | `JUSTIFICANTE TRANSFERENCIA` | Justificante del original + cláusulas de confidencialidad, custodia y titularidad + firma del técnico. |
 | `ANEXO II RD 125-2017` | **Nuevo.** El formulario oficial de 27 campos, relleno automático, con declaración que alterna a)/b) y las dos firmas. |
 | `INTRANSFERIBILIDAD CLIENTE` | Acuse de recibo del original. |
@@ -128,7 +128,7 @@ márgenes definidos por documento, hojas protegidas dejando desbloqueadas sólo 
 macros, sin rutas locales, y pie de control documental (`Formato · Versión · Edición ·
 Elaborado · Aprobado · UNE 66102:2025`) en cada documento imprimible.
 
-**Validación:** 225 fórmulas, 0 errores. Probado en los dos escenarios (transferencia correcta e
+**Validación:** 224 fórmulas, 0 errores. Probado en los dos escenarios (transferencia correcta e
 intransferibilidad): los documentos que no aplican se marcan *"— NO APLICA —"*, la declaración
 del anexo II alterna entre a) y b), y el aviso de coherencia salta si el tipo de operación
 contradice los campos 22/23.
@@ -146,7 +146,7 @@ Todo el texto jurídico del original se conserva. Estos son los cambios, uno a u
 | 3 | *"Nº de Serie"* → *"Nº de Sèrie"* en el bloque catalán | Ortografía catalana. |
 | 4 | El *Exposo / Sol·licito* catalán se reúne en un párrafo copiable | Se pega en el formulario web de un tirón. Contenido íntegro. |
 | 5 | **Se añaden** tres cláusulas al justificante: confidencialidad, custodia a un año y titularidad de los datos | Notas D, E y F del anexo II del RD 125/2017, reproducidas en el anexo C de la UNE 66102:2025. |
-| 6 | El acuse ahora puede mostrar las dos líneas (entrega del aparato y achatarramiento) o ninguna | El original las hacía excluyentes por construcción (`IF(I8="SI",…,IF(I8="NO",…))`). El encargo pedía dos campos independientes. **Si deben seguir siendo excluyentes, dímelo.** |
+| 6 | *(resuelto)* Entrega del aparato y achatarramiento siguen siendo **excluyentes**, como en el original | Se introduce sólo *"Se entrega al cliente"*; *"Se achatarrará"* se calcula como su contrario y está bloqueado. El acuse imprime siempre una sola de las dos líneas. |
 | 7 | Un solo par nombre/DNI sirve al justificante y al acuse | El original permitía que la persona que autoriza y la que recibe fueran distintas (`K3`/`M3` frente a `I9`/`I10`). **Si eso pasa en la práctica, hay que separarlos otra vez.** |
 | 8 | En el anexo II, *"RD ......../....."* se rellena como *"RD 125/2017"* | El formulario oficial lo deja en blanco para que se complete. |
 
