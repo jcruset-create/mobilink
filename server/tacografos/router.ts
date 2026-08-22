@@ -31,7 +31,7 @@ import {
   TIPOS_DOCUMENTO,
   type TipoDocumento,
 } from "./documents.ts";
-import { leerDocumento } from "./storage.ts";
+import { leerDocumento, urlFirmada } from "./storage.ts";
 
 /** Envuelve un manejador para que un fallo no se lleve por delante el proceso. */
 function ruta(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -300,6 +300,93 @@ export function createTacografosRouter(): Router {
         motivo
       );
       res.json({ documento });
+    })
+  );
+
+  // ── Firmas ────────────────────────────────────────────────────────────────
+
+  r.get(
+    "/expedientes/:id/firmas",
+    exigirPermiso("tacografos.view"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      const firmas = await repo.listarFirmas(ctx.empresaId, String(req.params.id));
+      res.json({
+        firmas: await Promise.all(
+          firmas.map(async (f) => ({ ...f, url: await urlFirmada(f.ruta) }))
+        ),
+      });
+    })
+  );
+
+  r.put(
+    "/expedientes/:id/firmas/:papel",
+    exigirPermiso("tacografos.documento.sign"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      const papel = String(req.params.papel);
+      if (!repo.PAPELES_FIRMA.includes(papel as repo.PapelFirma)) {
+        throw new ErrorTacografos(`Papel de firma no válido: ${papel}.`, "PAPEL_INVALIDO");
+      }
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const imagen = typeof b.imagen === "string" ? b.imagen : "";
+      if (!imagen) {
+        throw new ErrorTacografos("Falta la imagen de la firma.", "FIRMA_REQUERIDA");
+      }
+      const firma = await servicio.firmar(
+        ctx.empresaId,
+        ctx.userId,
+        String(req.params.id),
+        papel as repo.PapelFirma,
+        imagen,
+        texto(b.nombre)
+      );
+      res.json({ firma });
+    })
+  );
+
+  r.delete(
+    "/expedientes/:id/firmas/:papel",
+    exigirPermiso("tacografos.documento.sign"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      const papel = String(req.params.papel);
+      if (!repo.PAPELES_FIRMA.includes(papel as repo.PapelFirma)) {
+        throw new ErrorTacografos(`Papel de firma no válido: ${papel}.`, "PAPEL_INVALIDO");
+      }
+      await repo.borrarFirma(ctx.empresaId, String(req.params.id), papel as repo.PapelFirma);
+      res.json({ ok: true });
+    })
+  );
+
+  // ── Entrega ───────────────────────────────────────────────────────────────
+
+  r.post(
+    "/expedientes/:id/entregar",
+    exigirPermiso("tacografos.entrega.register"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const fechaEntrega = fecha(b.fechaEntrega);
+      if (!fechaEntrega) {
+        throw new ErrorTacografos("Falta la fecha de entrega.", "FECHA_ENTREGA_REQUERIDA");
+      }
+      const receptorNombre = texto(b.receptorNombre);
+      const receptorDni = texto(b.receptorDni);
+      if (!receptorNombre || !receptorDni) {
+        // Sin nombre y DNI el acuse no acredita nada: es lo que firma quien
+        // recibe el certificado.
+        throw new ErrorTacografos(
+          "Hay que indicar el nombre y el DNI de quien recibe el certificado.",
+          "RECEPTOR_REQUERIDO"
+        );
+      }
+      const expediente = await servicio.registrarEntrega(ctx.empresaId, String(req.params.id), {
+        fechaEntrega,
+        receptorNombre,
+        receptorDni,
+      });
+      res.json({ expediente: conCalculados(expediente) });
     })
   );
 

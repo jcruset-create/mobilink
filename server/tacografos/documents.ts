@@ -15,7 +15,14 @@
  * campos incompletos es de la pantalla, no del papel.
  */
 
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import {
+  PDFDocument,
+  StandardFonts,
+  rgb,
+  type PDFFont,
+  type PDFImage,
+  type PDFPage,
+} from "pdf-lib";
 import { seAchatarra, type Modalidad } from "./domain.ts";
 import type { Centro, Expediente } from "./repository.ts";
 import type { Plantillas } from "./templates.ts";
@@ -213,9 +220,23 @@ class Lienzo {
     this.y = arriba - alto;
   }
 
-  /** Línea de firma con su rótulo debajo. */
-  firma(rotulo: string, x = MARGEN, ancho = 200) {
-    this.sitio(34);
+  /**
+   * Línea de firma con su rótulo debajo. Si viene la rúbrica escaneada, se
+   * dibuja encima de la línea, escalada para caber sin deformarse.
+   */
+  firma(rotulo: string, x = MARGEN, ancho = 200, rubrica?: PDFImage) {
+    const ALTO_RUBRICA = 38;
+    this.sitio(34 + (rubrica ? ALTO_RUBRICA : 0));
+    if (rubrica) {
+      const escala = Math.min(ancho / rubrica.width, ALTO_RUBRICA / rubrica.height);
+      this.pagina.drawImage(rubrica, {
+        x,
+        y: this.y - ALTO_RUBRICA,
+        width: rubrica.width * escala,
+        height: rubrica.height * escala,
+      });
+      this.y -= ALTO_RUBRICA;
+    }
     this.pagina.drawLine({
       start: { x, y: this.y - 14 }, end: { x: x + ancho, y: this.y - 14 },
       thickness: 0.8, color: NEGRO,
@@ -253,12 +274,22 @@ function fichaTacografo(l: Lienzo, e: Expediente) {
   l.campo("Fecha Informe:", fechaEs(e.fechaInforme), { anchoEtiqueta: 170 });
 }
 
+/**
+ * Rúbricas ya embebidas en el documento, por papel.
+ *
+ * Llegan embebidas y no como bytes porque `embedPng` es asíncrono y los
+ * compositores no lo son: hacerlos async obligaría a esperar dentro de cada
+ * `drawText`, que es donde menos falta hace.
+ */
+export type Rubricas = Partial<Record<"autoriza" | "receptor" | "tecnico" | "responsable", PDFImage>>;
+
 export type ContextoDocumento = {
   expediente: Expediente;
   centro: Centro;
   plantillas: Plantillas;
   /** Texto del pie: código de formato, versión y fecha de edición. */
   pie: string;
+  rubricas?: Rubricas;
 };
 
 /*
@@ -270,7 +301,10 @@ export type ContextoDocumento = {
 const CUERPO_JUST = 10;
 const CLAUSULA_JUST = 8;
 
-function justificante(l: Lienzo, { expediente: e, centro, plantillas: t, pie }: ContextoDocumento) {
+function justificante(
+  l: Lienzo,
+  { expediente: e, centro, plantillas: t, pie, rubricas = {} }: ContextoDocumento
+) {
   const cuerpo = { tamano: CUERPO_JUST };
   l.linea(centro.nombre, { negrita: true, tamano: CUERPO_JUST });
   l.salto(4);
@@ -314,13 +348,16 @@ function justificante(l: Lienzo, { expediente: e, centro, plantillas: t, pie }: 
   // Las dos firmas van a la misma altura: la del cliente a la izquierda y la
   // del técnico a la derecha, como en la hoja del libro.
   const alturaFirmas = l.altura();
-  l.firma("Persona que autoriza");
+  l.firma("Persona que autoriza", MARGEN, 200, rubricas.autoriza);
   l.enAltura(alturaFirmas);
-  l.firma(`Técnico: ${e.tecnico}`, ANCHO - MARGEN - 200, 200);
+  l.firma(`Técnico: ${e.tecnico}`, ANCHO - MARGEN - 200, 200, rubricas.tecnico);
   l.pie(pie);
 }
 
-function acuseCliente(l: Lienzo, { expediente: e, centro, plantillas: t, pie }: ContextoDocumento) {
+function acuseCliente(
+  l: Lienzo,
+  { expediente: e, centro, plantillas: t, pie, rubricas = {} }: ContextoDocumento
+) {
   cabeceraCentro(l, centro);
   l.salto(20);
   l.parrafo(t.acuse_titulo, { negrita: true, tamano: 13 });
@@ -353,11 +390,14 @@ function acuseCliente(l: Lienzo, { expediente: e, centro, plantillas: t, pie }: 
   l.linea("Entregado");
   l.linea(`${centro.ciudadFirma} a ${fechaEs(e.fechaEntrega)}`);
   l.salto(20);
-  l.firma("Firma");
+  l.firma(`Firma: ${e.receptorNombre}`, MARGEN, 200, rubricas.receptor);
   l.pie(pie);
 }
 
-function comunicacionAdmin(l: Lienzo, { expediente: e, centro, plantillas: t, pie }: ContextoDocumento) {
+function comunicacionAdmin(
+  l: Lienzo,
+  { expediente: e, centro, plantillas: t, pie, rubricas = {} }: ContextoDocumento
+) {
   cabeceraCentro(l, centro);
   l.salto(20);
   l.parrafo(t.acuse_titulo, { negrita: true, tamano: 13 });
@@ -373,7 +413,12 @@ function comunicacionAdmin(l: Lienzo, { expediente: e, centro, plantillas: t, pi
   l.linea("Entregado");
   l.linea(`${centro.ciudadFirma} a ${fechaEs(e.fechaEntrega)}`);
   l.salto(20);
-  l.firma(`Responsable técnico: ${centro.responsableTecnico}`);
+  l.firma(
+    `Responsable técnico: ${centro.responsableTecnico}`,
+    MARGEN,
+    200,
+    rubricas.responsable
+  );
   l.pie(pie);
 }
 
@@ -383,12 +428,42 @@ const COMPOSITORES: Record<TipoDocumento, (l: Lienzo, c: ContextoDocumento) => v
   comunicacion_admin: comunicacionAdmin,
 };
 
-/** Genera el PDF. Devuelve los bytes; guardarlos es de quien llama. */
-export async function componer(tipo: TipoDocumento, ctx: ContextoDocumento): Promise<Buffer> {
+/** Qué firma lleva cada documento. */
+export const FIRMAS_POR_DOCUMENTO: Record<TipoDocumento, Array<keyof Rubricas>> = {
+  justificante: ["autoriza", "tecnico"],
+  acuse_cliente: ["receptor"],
+  comunicacion_admin: ["responsable"],
+};
+
+/**
+ * Genera el PDF. Devuelve los bytes; guardarlos es de quien llama.
+ *
+ * `rubricasPng` son las imágenes de las firmas, por papel. Se embeben aquí
+ * —una sola vez, y sólo las que el documento va a usar— porque `embedPng` es
+ * asíncrono y los compositores no lo son.
+ */
+export async function componer(
+  tipo: TipoDocumento,
+  ctx: ContextoDocumento & { rubricasPng?: Partial<Record<keyof Rubricas, Buffer>> }
+): Promise<Buffer> {
   const doc = await PDFDocument.create();
   const normal = await doc.embedFont(StandardFonts.TimesRoman);
   const negrita = await doc.embedFont(StandardFonts.TimesRomanBold);
-  COMPOSITORES[tipo](new Lienzo(doc, normal, negrita), ctx);
+
+  const rubricas: Rubricas = { ...ctx.rubricas };
+  for (const papel of FIRMAS_POR_DOCUMENTO[tipo]) {
+    const png = ctx.rubricasPng?.[papel];
+    if (!png) continue;
+    try {
+      rubricas[papel] = await doc.embedPng(png);
+    } catch (e) {
+      // Una firma ilegible no puede impedir emitir el documento: sale sin
+      // rúbrica, con su línea en blanco para firmar a mano.
+      console.warn(`Tacógrafos: firma '${papel}' ilegible, se emite sin ella:`, e);
+    }
+  }
+
+  COMPOSITORES[tipo](new Lienzo(doc, normal, negrita), { ...ctx, rubricas });
 
   doc.setTitle(`${ETIQUETA_DOCUMENTO[tipo]} - ${ctx.expediente.numInforme}`);
   doc.setProducer("Mobilink - modulo Tacografos");

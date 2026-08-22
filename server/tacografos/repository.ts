@@ -526,3 +526,127 @@ export async function versionVigente(): Promise<number> {
   );
   return Number(rows[0]?.v) || VERSION_SEMILLA;
 }
+
+// ── Firmas ──────────────────────────────────────────────────────────────────
+
+export const PAPELES_FIRMA = ["autoriza", "receptor", "tecnico", "responsable"] as const;
+export type PapelFirma = (typeof PAPELES_FIRMA)[number];
+
+export type Firma = {
+  id: string;
+  expedienteId: string;
+  papel: PapelFirma;
+  ruta: string;
+  nombre: string;
+  firmadoAtMs: number;
+};
+
+type FilaFirma = {
+  id: string;
+  expediente_id: string;
+  papel: string;
+  ruta: string;
+  nombre: string;
+  firmado_at_ms: string;
+};
+
+function aFirma(f: FilaFirma): Firma {
+  return {
+    id: f.id,
+    expedienteId: f.expediente_id,
+    papel: f.papel as PapelFirma,
+    ruta: f.ruta,
+    nombre: f.nombre,
+    firmadoAtMs: Number(f.firmado_at_ms),
+  };
+}
+
+export async function listarFirmas(
+  empresaId: string,
+  expedienteId: string
+): Promise<Firma[]> {
+  const { rows } = await pool.query<FilaFirma>(
+    `SELECT id, expediente_id, papel, ruta, nombre, firmado_at_ms
+       FROM tac_firmas WHERE empresa_id = $1 AND expediente_id = $2`,
+    [empresaId, expedienteId]
+  );
+  return rows.map(aFirma);
+}
+
+/**
+ * Guarda la firma de un papel, reemplazando la anterior si la había.
+ *
+ * Reemplazar es correcto porque la firma sólo vale mientras el documento no se
+ * ha emitido: una vez emitido, la rúbrica vive dentro del PDF y ya no depende
+ * de esta tabla. La imagen antigua se queda en el almacenamiento a propósito,
+ * por si estaba dentro de un documento ya emitido.
+ */
+export async function guardarFirma(
+  empresaId: string,
+  userId: string,
+  d: { expedienteId: string; papel: PapelFirma; ruta: string; nombre: string; firmadoAtMs: number }
+): Promise<Firma> {
+  const { rows } = await pool.query<FilaFirma>(
+    `INSERT INTO tac_firmas (
+       empresa_id, expediente_id, papel, ruta, nombre, firmado_at_ms, firmado_por
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (expediente_id, papel) DO UPDATE SET
+       ruta = EXCLUDED.ruta,
+       nombre = EXCLUDED.nombre,
+       firmado_at_ms = EXCLUDED.firmado_at_ms,
+       firmado_por = EXCLUDED.firmado_por
+     RETURNING id, expediente_id, papel, ruta, nombre, firmado_at_ms`,
+    [empresaId, d.expedienteId, d.papel, d.ruta, d.nombre, d.firmadoAtMs, userId]
+  );
+  return aFirma(rows[0]);
+}
+
+export async function borrarFirma(
+  empresaId: string,
+  expedienteId: string,
+  papel: PapelFirma
+): Promise<void> {
+  await pool.query(
+    `DELETE FROM tac_firmas WHERE empresa_id = $1 AND expediente_id = $2 AND papel = $3`,
+    [empresaId, expedienteId, papel]
+  );
+}
+
+// ── Estado del expediente ───────────────────────────────────────────────────
+
+/**
+ * Cambia el estado. Devuelve `null` si el expediente no está en uno de los
+ * estados desde los que se permite la transición, para que el servicio pueda
+ * explicar por qué en vez de dejarlo pasar en silencio.
+ */
+export async function cambiarEstado(
+  empresaId: string,
+  id: string,
+  nuevo: string,
+  desde: string[]
+): Promise<Expediente | null> {
+  const { rows } = await pool.query<FilaExpediente>(
+    `UPDATE tac_expedientes SET estado = $3, updated_at_ms = $4
+      WHERE empresa_id = $1 AND id = $2 AND estado = ANY($5)
+      RETURNING ${COLUMNAS}`,
+    [empresaId, id, nuevo, Date.now(), desde]
+  );
+  return rows[0] ? aExpediente(rows[0]) : null;
+}
+
+/** Registro de la entrega al cliente: fecha y quién la recibió. */
+export async function registrarEntrega(
+  empresaId: string,
+  id: string,
+  d: { fechaEntrega: string; receptorNombre: string; receptorDni: string }
+): Promise<Expediente | null> {
+  const { rows } = await pool.query<FilaExpediente>(
+    `UPDATE tac_expedientes SET
+       fecha_entrega = $3, receptor_nombre = $4, receptor_dni = $5,
+       estado = 'entregado', updated_at_ms = $6
+      WHERE empresa_id = $1 AND id = $2 AND estado IN ('emitido','entregado')
+      RETURNING ${COLUMNAS}`,
+    [empresaId, id, d.fechaEntrega, d.receptorNombre, d.receptorDni, Date.now()]
+  );
+  return rows[0] ? aExpediente(rows[0]) : null;
+}

@@ -120,3 +120,29 @@ export type Documento = {
 
 /** Qué puede emitirse para un expediente, según su tipo de operación. */
 export type Emitible = { tipo: TipoDocumento; etiqueta: string };
+
+export type PapelFirma = "autoriza" | "receptor" | "tecnico" | "responsable";
+
+export type Firma = {
+  id: string;
+  expedienteId: string;
+  papel: PapelFirma;
+  ruta: string;
+  nombre: string;
+  firmadoAtMs: number;
+  url: string | null;
+};
+
+/** Qué firma lleva cada documento. Igual que en el servidor. */
+export const FIRMAS_POR_DOCUMENTO: Record<TipoDocumento, PapelFirma[]> = {
+  justificante: ["autoriza", "tecnico"],
+  acuse_cliente: ["receptor"],
+  comunicacion_admin: ["responsable"],
+};
+
+export const ETIQUETA_FIRMA: Record<PapelFirma, string> = {
+  autoriza: "Persona que autoriza la descarga",
+  receptor: "Persona que recibe el certificado",
+  tecnico: "Técnico que interviene",
+  responsable: "Responsable técnico",
+};

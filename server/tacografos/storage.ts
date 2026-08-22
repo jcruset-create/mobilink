@@ -74,7 +74,24 @@ export function rutaDocumento(
   return `${empresaId}/${expedienteId}/${tipo}-${emitidoAtMs}.pdf`;
 }
 
-export async function guardarDocumento(ruta: string, contenido: Buffer): Promise<number> {
+/**
+ * Ruta de una firma. Lleva el instante para que reemplazar una firma no pise la
+ * imagen que ya está dentro de un PDF emitido.
+ */
+export function rutaFirma(
+  empresaId: string,
+  expedienteId: string,
+  papel: string,
+  firmadoAtMs: number
+): string {
+  return `${empresaId}/${expedienteId}/firma-${papel}-${firmadoAtMs}.png`;
+}
+
+export async function guardarDocumento(
+  ruta: string,
+  contenido: Buffer,
+  mime = "application/pdf"
+): Promise<number> {
   if (!haySupabase()) {
     const destino = path.join(DIR_LOCAL, ruta);
     fs.mkdirSync(path.dirname(destino), { recursive: true });
@@ -86,7 +103,7 @@ export async function guardarDocumento(ruta: string, contenido: Buffer): Promise
   const sb = await cliente();
   const { error } = await sb.storage
     .from(BUCKET)
-    .upload(ruta, contenido, { contentType: "application/pdf", upsert: false });
+    .upload(ruta, contenido, { contentType: mime, upsert: false });
 
   if (error) {
     console.error("Tacógrafos: error subiendo el documento:", error);

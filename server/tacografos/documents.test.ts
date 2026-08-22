@@ -12,6 +12,7 @@ import { describe, it, expect } from "vitest";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
   DOCUMENTOS_POR_TIPO,
+  FIRMAS_POR_DOCUMENTO,
   aWinAnsi,
   componer,
   fechaEs,
@@ -256,5 +257,86 @@ describe("fechaEs", () => {
   });
   it("sin fecha, cadena vacía", () => {
     expect(fechaEs(null)).toBe("");
+  });
+});
+
+
+/**
+ * PNG mínimo válido, 1x1 y **opaco**. Vale para comprobar que la rúbrica se
+ * embebe: lo que importa es que el PDF acabe con una imagen dentro, no cómo se
+ * ve la firma.
+ *
+ * Sin canal alfa a propósito: con transparencia, pdf-lib añade además una
+ * máscara y cada rúbrica contaría como dos imágenes.
+ */
+const PNG_1X1 = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC",
+  "base64"
+);
+
+/** Cuenta las imágenes incrustadas en el PDF. */
+function imagenesDelPdf(pdf: Buffer): number {
+  return (pdf.toString("latin1").match(/\/Subtype\s*\/Image/g) ?? []).length;
+}
+
+describe("firmas dentro del documento", () => {
+  it("cada documento sabe qué firmas lleva", () => {
+    expect(FIRMAS_POR_DOCUMENTO.justificante).toEqual(["autoriza", "tecnico"]);
+    expect(FIRMAS_POR_DOCUMENTO.acuse_cliente).toEqual(["receptor"]);
+    expect(FIRMAS_POR_DOCUMENTO.comunicacion_admin).toEqual(["responsable"]);
+  });
+
+  it("sin firmas, el PDF no lleva ninguna imagen", async () => {
+    const pdf = await componer("acuse_cliente", CTX(expediente()));
+    expect(imagenesDelPdf(pdf)).toBe(0);
+  });
+
+  it("la rúbrica del receptor acaba dentro del acuse", async () => {
+    const pdf = await componer("acuse_cliente", {
+      ...CTX(expediente()),
+      rubricasPng: { receptor: PNG_1X1 },
+    });
+    expect(imagenesDelPdf(pdf)).toBe(1);
+  });
+
+  it("el justificante admite las dos firmas a la vez", async () => {
+    const pdf = await componer("justificante", {
+      ...CTX(expediente({ tipo: "transferencia", modalidadEntrega: "en_mano" })),
+      rubricasPng: { autoriza: PNG_1X1, tecnico: PNG_1X1 },
+    });
+    expect(imagenesDelPdf(pdf)).toBe(2);
+  });
+
+  it("una firma que no corresponde al documento se ignora", async () => {
+    // Mandar la del responsable técnico a un acuse de cliente no debe colarla.
+    const pdf = await componer("acuse_cliente", {
+      ...CTX(expediente()),
+      rubricasPng: { responsable: PNG_1X1 },
+    });
+    expect(imagenesDelPdf(pdf)).toBe(0);
+  });
+
+  it("una firma ilegible no impide emitir el documento", async () => {
+    // Sale sin rúbrica y con su línea en blanco para firmar a mano, que es
+    // mejor que dejar al técnico sin papel delante del cliente.
+    const pdf = await componer("acuse_cliente", {
+      ...CTX(expediente()),
+      rubricasPng: { receptor: Buffer.from("esto no es un PNG") },
+    });
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(imagenesDelPdf(pdf)).toBe(0);
+  });
+
+  it("firmar no descuadra la paginación", async () => {
+    const pdf = await componer("justificante", {
+      ...CTX(expediente({ tipo: "transferencia", modalidadEntrega: "en_mano" })),
+      rubricasPng: { autoriza: PNG_1X1, tecnico: PNG_1X1 },
+    });
+    expect((await PDFDocument.load(pdf)).getPageCount()).toBe(1);
+  });
+
+  it("el acuse rotula la firma con el nombre de quien recibe", async () => {
+    const texto = textoDelPdf(await componer("acuse_cliente", CTX(expediente())));
+    expect(texto).toContain("Firma: Marta Solé Vidal");
   });
 });
