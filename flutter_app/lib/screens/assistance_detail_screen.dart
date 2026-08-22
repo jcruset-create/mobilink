@@ -155,7 +155,30 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     }
   }
 
+  /// Hora de salida que registró el servidor, para poder decirle al técnico
+  /// desde cuándo consta en camino. Null si no viene informada.
+  String? _horaSalida() {
+    final ms = _a['departedAtMs'];
+    if (ms is! int) return null;
+    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
+    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
   Future<void> _goEnCamino() async {
+    // Ya estaba en camino (salida automática al dejar el taller): no se reenvía
+    // al servidor, que dejaría un segundo evento 'en camino' en el historial.
+    if (_status == 'en_camino') {
+      final hora = _horaSalida();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(hora == null
+              ? 'Ya constaba en camino: la salida se registró automáticamente'
+              : 'Ya constaba en camino desde las $hora (salida automática del taller)'),
+          backgroundColor: Colors.lightBlue,
+        ),
+      );
+      return;
+    }
     setState(() => _loading = true);
     try {
       final updated = await widget.api.enCamino(_a['id'] as int);
@@ -378,7 +401,10 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
 
   String get _status => _a['status'] as String? ?? '';
 
-  bool get _canGoEnCamino => _status == 'asignada';
+  // También en 'en_camino': el servidor puede haberla movido solo al detectar
+  // que la furgoneta salió del taller (Webfleet). Si aquí solo se aceptara
+  // 'asignada', el técnico se encontraba el botón muerto y sin explicación.
+  bool get _canGoEnCamino => _status == 'asignada' || _status == 'en_camino';
   bool get _canHeArrived => _status == 'en_camino';
   bool get _canInicioReparacion => _status == 'en_punto';
   bool get _canFinalize => _status == 'inicio_reparacion';
