@@ -10,6 +10,7 @@ import logoToolControl from "../assets/hub/logo-toolcontrol.png";
 import logoLicencias from "../assets/hub/logo-licencias.png";
 import logoSafety from "../assets/hub/logo-safety.png";
 import logoCash from "../assets/hub/logo-cash.png";
+import logoCentral from "../assets/hub/logo-central.png";
 import emblemaTyreControl from "../assets/hub/emblema-tyrecontrol.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
@@ -40,14 +41,14 @@ const ICONOS: Record<string, LucideIcon> = {
  * meterse en el cuadradito: encajado en 36×36 no se leería.
  *
  * Los que no tienen ni logo ni marca compuesta -administración, almacén, Core,
- * MC Central, asistencias, Central Pro y panel de taller- se quedan con su
- * icono.
+ * asistencias, Central Pro y panel de taller- se quedan con su icono.
  */
 const LOGOS: Record<string, string> = {
   presencia: logoPresencia,
   toolcontrol: logoToolControl,
   safety: logoSafety,
   cash: logoCash,
+  central: logoCentral,
 };
 
 /**
