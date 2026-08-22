@@ -239,6 +239,40 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
   });
 
   /*
+   * Regresión: una caja recién dada de alta, que todavía no ha movido un euro,
+   * TIENE que verse en la red.
+   *
+   * Antes no se veía, y el motivo era sutil: el listado mandaba sobre
+   * `central_registers`, que es una proyección de eventos y solo tiene fila
+   * cuando la caja ha emitido alguno. O sea que la pantalla que existe para
+   * vigilar la red escondía justo la caja del primer día, sin dar ningún error.
+   */
+  it("una caja sin un solo evento se ve igual en la red", async () => {
+    const { rows: creada } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+       VALUES ($1,'sin-eventos',$2,$3,$3) RETURNING id`,
+      [EMPRESA, `virgen-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+    );
+    const caja = creada[0].id;
+
+    // Nadie la ha tocado: no debe existir en la proyección.
+    const { rows: proy } = await db.query(
+      `SELECT 1 FROM central_registers WHERE register_id = $1`,
+      [caja]
+    );
+    expect(proy).toHaveLength(0);
+
+    const enRed = await queries.cajasEnRed(EMPRESA);
+    const mia = enRed.find((c) => c.registerId === caja);
+
+    expect(mia).toBeDefined();
+    // Y sale diciendo la verdad: existe y no ha hecho nada todavía.
+    expect(mia!.ultimaActividadMs).toBeNull();
+    expect(mia!.jornadaAbiertaId).toBeNull();
+    expect(mia!.ingresadoCentimos).toBe(0);
+  });
+
+  /*
    * De punta a punta: un cobro real en la caja tiene que acabar en la
    * proyección de Central sin que nadie copie nada a mano.
    */

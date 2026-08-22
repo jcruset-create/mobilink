@@ -40,8 +40,7 @@ const ICONOS: Record<string, LucideIcon> = {
  * meterse en el cuadradito: encajado en 36×36 no se leería.
  *
  * Los que no tienen ni logo ni marca compuesta -administración, almacén, Core,
- * MC Central, asistencias, Central Pro y panel de taller- se quedan con su
- * icono.
+ * asistencias, Central Pro y panel de taller- se quedan con su icono.
  */
 const LOGOS: Record<string, string> = {
   presencia: logoPresencia,
@@ -57,6 +56,7 @@ const LOGOS: Record<string, string> = {
  */
 const MARCAS_COMPUESTAS: Record<string, { nombre: string; color: string }> = {
   workplanner: { nombre: "WORKPLANNER", color: "text-sky-400" },
+  central: { nombre: "CENTRAL CASH PRO", color: "text-emerald-400" },
 };
 
 /** Emblemas cuadrados: estos sí van dentro del recuadro del icono. */
