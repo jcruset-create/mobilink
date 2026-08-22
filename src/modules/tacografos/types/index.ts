@@ -100,3 +100,23 @@ export function expedienteVacio(): DatosExpediente {
     intervencionId: null,
   };
 }
+
+export type TipoDocumento = "justificante" | "acuse_cliente" | "comunicacion_admin";
+
+export type Documento = {
+  id: string;
+  expedienteId: string;
+  tipo: TipoDocumento;
+  plantillaVersion: number;
+  ruta: string;
+  /** SHA-256 del PDF: es lo que demuestra que el papel es el que se emitió. */
+  hash: string;
+  tamanoBytes: number;
+  anulado: boolean;
+  motivoAnulacion: string;
+  emitidoAtMs: number;
+  url: string | null;
+};
+
+/** Qué puede emitirse para un expediente, según su tipo de operación. */
+export type Emitible = { tipo: TipoDocumento; etiqueta: string };

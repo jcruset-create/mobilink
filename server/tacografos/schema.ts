@@ -25,6 +25,7 @@
  */
 
 import pool from "../db.ts";
+import { PLANTILLAS, VERSION_SEMILLA } from "./templates.ts";
 
 export async function initTacografos(): Promise<void> {
   // ── Centro técnico ────────────────────────────────────────────────────────
@@ -129,5 +130,64 @@ export async function initTacografos(): Promise<void> {
     CREATE INDEX IF NOT EXISTS tac_exp_custodia_idx
       ON tac_expedientes(empresa_id, fecha_transferencia)
       WHERE destruccion_fecha IS NULL;
+  `);
+
+  // ── Plantillas de los textos legales ──────────────────────────────────────
+  // Versionadas: un cambio normativo crea una versión nueva y los documentos ya
+  // emitidos siguen apuntando a la suya. Sin empresa: el texto del real decreto
+  // es el mismo para todos los centros; lo que cambia por empresa son los datos
+  // del centro, que viven en tac_centros.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tac_plantillas (
+      id SERIAL PRIMARY KEY,
+      clave TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      texto TEXT NOT NULL,
+      created_at_ms BIGINT NOT NULL,
+      UNIQUE (clave, version)
+    );
+  `);
+  /*
+   * Se siembra sin actualizar lo que ya existe: una plantilla en uso no se
+   * reescribe, se sustituye por una versión nueva. Si alguien corrigió el texto
+   * de la versión 1 directamente en la base, este arranque lo respeta.
+   */
+  const ahora = Date.now();
+  for (const [clave, texto] of Object.entries(PLANTILLAS)) {
+    await pool.query(
+      `INSERT INTO tac_plantillas (clave, version, texto, created_at_ms)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (clave, version) DO NOTHING`,
+      [clave, VERSION_SEMILLA, texto, ahora]
+    );
+  }
+
+  // ── Documentos emitidos ───────────────────────────────────────────────────
+  // Inmutables: un documento no se corrige, se anula y se emite otro. Por eso
+  // no hay columnas de contenido editables, sí un hash del PDF y la versión de
+  // plantilla con la que se compuso.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tac_documentos (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      expediente_id UUID NOT NULL REFERENCES tac_expedientes(id),
+      tipo TEXT NOT NULL CHECK (tipo IN ('justificante','acuse_cliente','comunicacion_admin')),
+      plantilla_version INTEGER NOT NULL,
+      ruta TEXT NOT NULL,
+      -- SHA-256 del PDF. Es lo que permite demostrar que el papel que enseña el
+      -- cliente es el que emitió el centro.
+      hash TEXT NOT NULL,
+      tamano_bytes INTEGER NOT NULL DEFAULT 0,
+      anulado BOOLEAN NOT NULL DEFAULT false,
+      motivo_anulacion TEXT NOT NULL DEFAULT '',
+      emitido_at_ms BIGINT NOT NULL,
+      emitido_por UUID
+    );
+    CREATE INDEX IF NOT EXISTS tac_doc_expediente_idx
+      ON tac_documentos(expediente_id, tipo);
+    -- Un solo documento vigente de cada tipo por expediente: para emitir otro
+    -- hay que anular el anterior, y así queda el rastro de que hubo dos.
+    CREATE UNIQUE INDEX IF NOT EXISTS tac_doc_vigente_idx
+      ON tac_documentos(expediente_id, tipo) WHERE NOT anulado;
   `);
 }
