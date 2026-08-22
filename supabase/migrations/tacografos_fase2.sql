@@ -117,3 +117,50 @@ CREATE INDEX IF NOT EXISTS tac_exp_matricula_idx
 CREATE INDEX IF NOT EXISTS tac_exp_custodia_idx
   ON tac_expedientes(empresa_id, fecha_transferencia)
   WHERE destruccion_fecha IS NULL;
+
+-- ============================================================
+-- Fase 3 — plantillas versionadas y documentos emitidos
+-- ============================================================
+
+-- Textos legales, versionados: un cambio normativo crea una versión nueva y los
+-- documentos ya emitidos siguen apuntando a la suya. Sin empresa: el texto del
+-- real decreto es el mismo para todos los centros; lo que cambia por empresa
+-- son los datos del centro, que viven en tac_centros.
+--
+-- Las filas las siembra el arranque del servidor desde
+-- server/tacografos/templates.ts.
+CREATE TABLE IF NOT EXISTS tac_plantillas (
+  id SERIAL PRIMARY KEY,
+  clave TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  texto TEXT NOT NULL,
+  created_at_ms BIGINT NOT NULL,
+  UNIQUE (clave, version)
+);
+
+-- Documentos emitidos. Inmutables: un documento no se corrige, se anula con
+-- motivo y se emite otro. De ahí que no haya columnas de contenido editables,
+-- sí el hash del PDF y la versión de plantilla con la que se compuso.
+CREATE TABLE IF NOT EXISTS tac_documentos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  empresa_id UUID NOT NULL,
+  expediente_id UUID NOT NULL REFERENCES tac_expedientes(id),
+  tipo TEXT NOT NULL CHECK (tipo IN ('justificante','acuse_cliente','comunicacion_admin')),
+  plantilla_version INTEGER NOT NULL,
+  ruta TEXT NOT NULL,
+  -- SHA-256 del PDF: permite demostrar que el papel que enseña el cliente es el
+  -- que emitió el centro.
+  hash TEXT NOT NULL,
+  tamano_bytes INTEGER NOT NULL DEFAULT 0,
+  anulado BOOLEAN NOT NULL DEFAULT false,
+  motivo_anulacion TEXT NOT NULL DEFAULT '',
+  emitido_at_ms BIGINT NOT NULL,
+  emitido_por UUID
+);
+
+CREATE INDEX IF NOT EXISTS tac_doc_expediente_idx
+  ON tac_documentos(expediente_id, tipo);
+-- Un solo documento vigente de cada tipo por expediente: para emitir otro hay
+-- que anular el anterior, y así queda el rastro de que hubo dos.
+CREATE UNIQUE INDEX IF NOT EXISTS tac_doc_vigente_idx
+  ON tac_documentos(expediente_id, tipo) WHERE NOT anulado;

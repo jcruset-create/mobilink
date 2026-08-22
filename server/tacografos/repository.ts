@@ -7,6 +7,7 @@
 
 import pool from "../db.ts";
 import { normalizarMatricula, type DatosExpediente, type Modalidad } from "./domain.ts";
+import { VERSION_SEMILLA, type Plantillas } from "./templates.ts";
 
 export class ErrorTacografos extends Error {
   constructor(
@@ -366,4 +367,162 @@ export async function anularExpediente(
     throw new ErrorTacografos("El expediente no existe.", "EXPEDIENTE_NO_ENCONTRADO", 404);
   }
   return aExpediente(rows[0]);
+}
+
+// ── Documentos emitidos ─────────────────────────────────────────────────────
+
+export type Documento = {
+  id: string;
+  expedienteId: string;
+  tipo: string;
+  plantillaVersion: number;
+  ruta: string;
+  hash: string;
+  tamanoBytes: number;
+  anulado: boolean;
+  motivoAnulacion: string;
+  emitidoAtMs: number;
+};
+
+type FilaDocumento = {
+  id: string;
+  expediente_id: string;
+  tipo: string;
+  plantilla_version: number;
+  ruta: string;
+  hash: string;
+  tamano_bytes: number;
+  anulado: boolean;
+  motivo_anulacion: string;
+  emitido_at_ms: string;
+};
+
+const COLUMNAS_DOC = `
+  id, expediente_id, tipo, plantilla_version, ruta, hash, tamano_bytes,
+  anulado, motivo_anulacion, emitido_at_ms
+`;
+
+function aDocumento(f: FilaDocumento): Documento {
+  return {
+    id: f.id,
+    expedienteId: f.expediente_id,
+    tipo: f.tipo,
+    plantillaVersion: f.plantilla_version,
+    ruta: f.ruta,
+    hash: f.hash,
+    tamanoBytes: f.tamano_bytes,
+    anulado: f.anulado,
+    motivoAnulacion: f.motivo_anulacion,
+    emitidoAtMs: Number(f.emitido_at_ms),
+  };
+}
+
+export async function listarDocumentos(
+  empresaId: string,
+  expedienteId: string
+): Promise<Documento[]> {
+  const { rows } = await pool.query<FilaDocumento>(
+    `SELECT ${COLUMNAS_DOC} FROM tac_documentos
+      WHERE empresa_id = $1 AND expediente_id = $2
+      ORDER BY emitido_at_ms DESC`,
+    [empresaId, expedienteId]
+  );
+  return rows.map(aDocumento);
+}
+
+export async function obtenerDocumento(
+  empresaId: string,
+  id: string
+): Promise<Documento | null> {
+  const { rows } = await pool.query<FilaDocumento>(
+    `SELECT ${COLUMNAS_DOC} FROM tac_documentos WHERE empresa_id = $1 AND id = $2`,
+    [empresaId, id]
+  );
+  return rows[0] ? aDocumento(rows[0]) : null;
+}
+
+export async function crearDocumento(
+  empresaId: string,
+  userId: string,
+  d: {
+    expedienteId: string;
+    tipo: string;
+    plantillaVersion: number;
+    ruta: string;
+    hash: string;
+    tamanoBytes: number;
+    emitidoAtMs: number;
+  }
+): Promise<Documento> {
+  try {
+    const { rows } = await pool.query<FilaDocumento>(
+      `INSERT INTO tac_documentos (
+         empresa_id, expediente_id, tipo, plantilla_version, ruta, hash,
+         tamano_bytes, emitido_at_ms, emitido_por
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING ${COLUMNAS_DOC}`,
+      [
+        empresaId, d.expedienteId, d.tipo, d.plantillaVersion, d.ruta, d.hash,
+        d.tamanoBytes, d.emitidoAtMs, userId,
+      ]
+    );
+    return aDocumento(rows[0]);
+  } catch (e) {
+    // El índice único parcial `tac_doc_vigente_idx` impide dos documentos
+    // vigentes del mismo tipo. Se traduce a un mensaje que dice qué hacer.
+    if (typeof e === "object" && e && (e as { code?: string }).code === "23505") {
+      throw new ErrorTacografos(
+        "Ya hay un documento vigente de ese tipo. Anúlalo antes de emitir otro.",
+        "DOCUMENTO_YA_VIGENTE",
+        409
+      );
+    }
+    throw e;
+  }
+}
+
+export async function anularDocumento(
+  empresaId: string,
+  id: string,
+  motivo: string
+): Promise<Documento> {
+  const { rows } = await pool.query<FilaDocumento>(
+    `UPDATE tac_documentos SET anulado = true, motivo_anulacion = $3
+      WHERE empresa_id = $1 AND id = $2 AND NOT anulado
+      RETURNING ${COLUMNAS_DOC}`,
+    [empresaId, id, motivo]
+  );
+  if (!rows[0]) {
+    throw new ErrorTacografos(
+      "El documento no existe o ya estaba anulado.",
+      "DOCUMENTO_NO_ANULABLE",
+      404
+    );
+  }
+  return aDocumento(rows[0]);
+}
+
+// ── Plantillas de los textos legales ────────────────────────────────────────
+
+/**
+ * Textos de una versión concreta. Se pide la versión y no "la última" a
+ * propósito: reimprimir un documento emitido hace dos años tiene que dar el
+ * mismo papel que se firmó entonces.
+ */
+export async function cargarPlantillas(version: number): Promise<Plantillas> {
+  const { rows } = await pool.query<{ clave: string; texto: string }>(
+    `SELECT clave, texto FROM tac_plantillas WHERE version = $1`,
+    [version]
+  );
+  const out: Plantillas = {};
+  for (const r of rows) out[r.clave] = r.texto;
+  return out;
+}
+
+/** Versión más alta disponible: la que se usa al emitir un documento nuevo. */
+export async function versionVigente(): Promise<number> {
+  const { rows } = await pool.query<{ v: number }>(
+    `SELECT MAX(version) AS v FROM tac_plantillas`
+  );
+  return Number(rows[0]?.v) || VERSION_SEMILLA;
 }

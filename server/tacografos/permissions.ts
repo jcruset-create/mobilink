@@ -24,6 +24,13 @@ export const PERMISOS = [
    * documentación legal, no un borrador.
    */
   "tacografos.expediente.annul",
+  /** Emitir un documento firmable a partir de un expediente completo. */
+  "tacografos.documento.emit",
+  /**
+   * Anular un documento emitido. Va aparte de emitir: retirar el papel que ya
+   * tiene el cliente es una decisión de responsable, no del día a día.
+   */
+  "tacografos.documento.annul",
   /** Datos del centro técnico: contraseña identificativa, dirección, enlaces. */
   "tacografos.config.edit",
 ] as const;
@@ -36,18 +43,26 @@ export type RolTacografos = "admin" | "responsable" | "tecnico" | "consulta";
  * Qué puede hacer cada rol.
  *
  * · consulta    — mirar expedientes.
- * · tecnico     — además crea y edita los suyos: es quien hace la intervención.
- * · responsable — además anula, que es la corrección de un documento ya emitido.
+ * · tecnico     — además crea y edita los suyos y emite los documentos: es
+ *                 quien hace la intervención y quien se los da al cliente.
+ * · responsable — además anula, que es la corrección de algo ya emitido.
  * · admin       — todo, incluida la configuración del centro.
  */
 const POR_ROL: Record<RolTacografos, readonly Permiso[]> = {
   consulta: ["tacografos.view"],
-  tecnico: ["tacografos.view", "tacografos.expediente.create", "tacografos.expediente.edit"],
+  tecnico: [
+    "tacografos.view",
+    "tacografos.expediente.create",
+    "tacografos.expediente.edit",
+    "tacografos.documento.emit",
+  ],
   responsable: [
     "tacografos.view",
     "tacografos.expediente.create",
     "tacografos.expediente.edit",
     "tacografos.expediente.annul",
+    "tacografos.documento.emit",
+    "tacografos.documento.annul",
   ],
   admin: PERMISOS,
 };

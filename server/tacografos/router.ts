@@ -24,6 +24,14 @@ import {
 } from "./domain.ts";
 import * as repo from "./repository.ts";
 import { ErrorTacografos } from "./repository.ts";
+import * as servicio from "./service.ts";
+import {
+  DOCUMENTOS_POR_TIPO,
+  ETIQUETA_DOCUMENTO,
+  TIPOS_DOCUMENTO,
+  type TipoDocumento,
+} from "./documents.ts";
+import { leerDocumento } from "./storage.ts";
 
 /** Envuelve un manejador para que un fallo no se lleve por delante el proceso. */
 function ruta(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -198,6 +206,100 @@ export function createTacografosRouter(): Router {
       const ctx = req.authCtx!;
       const e = await repo.anularExpediente(ctx.empresaId, String(req.params.id));
       res.json({ expediente: conCalculados(e) });
+    })
+  );
+
+  /*
+   * Documentos del expediente. Los enlaces vienen firmados y caducan: una URL
+   * copiada de la barra del navegador deja de abrir el NIF de nadie a los
+   * quince minutos.
+   */
+  r.get(
+    "/expedientes/:id/documentos",
+    exigirPermiso("tacografos.view"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      const id = String(req.params.id);
+      const expediente = await repo.obtenerExpediente(ctx.empresaId, id);
+      if (!expediente) {
+        throw new ErrorTacografos("Expediente no encontrado.", "EXPEDIENTE_NO_ENCONTRADO", 404);
+      }
+      res.json({
+        documentos: await servicio.documentosDelExpediente(ctx.empresaId, id),
+        // Qué se puede emitir para este expediente, con su etiqueta: así la
+        // pantalla no repite la tabla de qué documento va con qué operación.
+        emitibles: DOCUMENTOS_POR_TIPO[expediente.tipo].map((t) => ({
+          tipo: t,
+          etiqueta: ETIQUETA_DOCUMENTO[t],
+        })),
+      });
+    })
+  );
+
+  r.post(
+    "/expedientes/:id/documentos",
+    exigirPermiso("tacografos.documento.emit"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      const tipo = texto((req.body ?? {}).tipo);
+      if (!TIPOS_DOCUMENTO.includes(tipo as TipoDocumento)) {
+        throw new ErrorTacografos(`Tipo de documento no válido: ${tipo}.`, "TIPO_DOC_INVALIDO");
+      }
+      const documento = await servicio.emitirDocumento(
+        ctx.empresaId,
+        ctx.userId,
+        String(req.params.id),
+        tipo as TipoDocumento
+      );
+      res.status(201).json({ documento });
+    })
+  );
+
+  /*
+   * Descarga por el servidor y no redirigiendo al enlace firmado: así funciona
+   * igual con Supabase y con el disco local de desarrollo, y el navegador nunca
+   * ve la URL del almacenamiento.
+   */
+  r.get(
+    "/documentos/:docId/descargar",
+    exigirPermiso("tacografos.view"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      const doc = await repo.obtenerDocumento(ctx.empresaId, String(req.params.docId));
+      if (!doc) {
+        throw new ErrorTacografos("Documento no encontrado.", "DOCUMENTO_NO_ENCONTRADO", 404);
+      }
+      const bytes = await leerDocumento(doc.ruta);
+      if (!bytes) {
+        throw new ErrorTacografos(
+          "El documento ya no está en el almacenamiento.",
+          "DOCUMENTO_SIN_FICHERO",
+          410
+        );
+      }
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${doc.tipo}-${doc.id}.pdf"`);
+      res.send(bytes);
+    })
+  );
+
+  r.post(
+    "/documentos/:docId/anular",
+    exigirPermiso("tacografos.documento.annul"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      const motivo = texto((req.body ?? {}).motivo);
+      if (!motivo) {
+        // Sin motivo la anulación no explica nada, y explicar por qué se retiró
+        // un documento firmado es justo lo que pedirá una auditoría.
+        throw new ErrorTacografos("Hay que indicar el motivo de la anulación.", "MOTIVO_REQUERIDO");
+      }
+      const documento = await repo.anularDocumento(
+        ctx.empresaId,
+        String(req.params.docId),
+        motivo
+      );
+      res.json({ documento });
     })
   );
 

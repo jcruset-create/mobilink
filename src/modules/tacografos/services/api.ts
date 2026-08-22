@@ -7,7 +7,15 @@
  */
 
 import { sessionHeaders } from "../../sessionHeaders";
-import type { Bootstrap, Centro, DatosExpediente, Expediente } from "../types";
+import type {
+  Bootstrap,
+  Centro,
+  DatosExpediente,
+  Documento,
+  Emitible,
+  Expediente,
+  TipoDocumento,
+} from "../types";
 
 const BASE = "/api/tacografos";
 
@@ -72,6 +80,37 @@ export function actualizarExpediente(
 
 export function anularExpediente(id: string): Promise<{ expediente: Expediente }> {
   return pedir(`/expedientes/${id}/anular`, { method: "POST" });
+}
+
+export function listarDocumentos(
+  expedienteId: string
+): Promise<{ documentos: Documento[]; emitibles: Emitible[] }> {
+  return pedir(`/expedientes/${expedienteId}/documentos`);
+}
+
+export function emitirDocumento(
+  expedienteId: string,
+  tipo: TipoDocumento
+): Promise<{ documento: Documento }> {
+  return pedir(`/expedientes/${expedienteId}/documentos`, {
+    method: "POST",
+    body: JSON.stringify({ tipo }),
+  });
+}
+
+export function anularDocumento(
+  documentoId: string,
+  motivo: string
+): Promise<{ documento: Documento }> {
+  return pedir(`/documentos/${documentoId}/anular`, {
+    method: "POST",
+    body: JSON.stringify({ motivo }),
+  });
+}
+
+/** URL de descarga. La sirve el servidor, no el almacenamiento. */
+export function urlDescarga(documentoId: string): string {
+  return `${BASE}/documentos/${documentoId}/descargar`;
 }
 
 export function guardarCentro(c: Centro): Promise<{ centro: Centro }> {

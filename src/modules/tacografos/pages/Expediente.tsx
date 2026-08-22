@@ -14,6 +14,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, ArrowLeft, Ban, Save } from "lucide-react";
 import * as api from "../services/api";
 import { useTacografos } from "../contexts/TacografosContext";
+import DocumentosExpediente from "./DocumentosExpediente";
 import {
   MODALIDADES,
   expedienteVacio,
@@ -315,6 +316,12 @@ export default function Expediente({ nuevo }: Props) {
           </>
         )}
       </fieldset>
+
+      {/*
+        Sólo con expediente guardado: emitir un documento de algo que todavía no
+        existe en la base no tendría a qué apuntar.
+      */}
+      {!nuevo && id && <DocumentosExpediente expedienteId={id} />}
     </div>
   );
 }
