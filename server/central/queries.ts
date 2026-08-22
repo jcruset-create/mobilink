@@ -68,7 +68,12 @@ async function joinCentro(alias: string, columna: string) {
 export async function resumenRed(empresaId: string): Promise<ResumenRed> {
   const { rows } = await pool.query(
     `SELECT
-       (SELECT COUNT(*)::int FROM central_registers WHERE empresa_id = $1) AS cajas,
+       -- Se cuenta sobre cash_registers por lo mismo que el listado: una caja
+       -- que aun no ha emitido eventos existe, y el contador tiene que decirlo.
+       (SELECT COUNT(*)::int FROM cash_registers c
+         WHERE c.empresa_id = $1
+           AND (c.activa OR EXISTS (SELECT 1 FROM central_registers r
+                                     WHERE r.register_id = c.id))) AS cajas,
        (SELECT COUNT(*)::int FROM central_sessions
          WHERE empresa_id = $1 AND estado IN ('OPEN','REOPENED')) AS abiertas,
        (SELECT COUNT(*)::int FROM central_sessions
@@ -101,21 +106,34 @@ export async function resumenRed(empresaId: string): Promise<ResumenRed> {
  * propósito: una caja cuyo taller no esté asignado tiene que SALIR igual, sin
  * taller. Con un JOIN a secas desaparecerían justo las cajas que hay que
  * arreglar, que es el peor sitio donde esconderlas.
+ *
+ * Por lo mismo se manda `cash_registers` y no `central_registers`: el censo de
+ * cajas es el de la caja, no el de Central. `central_registers` solo tiene fila
+ * cuando la caja ha emitido algún evento, así que mandando la proyección **una
+ * caja recién dada de alta, o que aún no ha movido un euro, no aparecía** —
+ * justo la que hay que vigilar el primer día. Ahora sale con sus datos de
+ * supervisión a nulo, que es la verdad: existe y todavía no ha hecho nada.
  */
 export async function cajasEnRed(empresaId: string, centroId?: string | null): Promise<CajaEnRed[]> {
-  const centro = await joinCentro("t", "r.centro_id");
+  const centro = await joinCentro("t", "COALESCE(r.centro_id, c.centro_id)");
   const { rows } = await pool.query(
-    `SELECT r.register_id, r.centro_id, r.jornada_abierta_id, r.ultima_actividad_ms,
-            r.ultima_fecha_cerrada, r.ingresado_centimos,
+    `SELECT c.id AS register_id,
+            COALESCE(r.centro_id, c.centro_id) AS centro_id,
+            r.jornada_abierta_id, r.ultima_actividad_ms,
+            r.ultima_fecha_cerrada,
+            COALESCE(r.ingresado_centimos, 0) AS ingresado_centimos,
             c.nombre AS caja_nombre, c.codigo,
             ${centro.select},
             CASE WHEN r.ultima_fecha_cerrada IS NULL THEN NULL
                  ELSE (CURRENT_DATE - r.ultima_fecha_cerrada) END AS dias_sin_cerrar
-       FROM central_registers r
-       LEFT JOIN cash_registers c ON c.id = r.register_id
+       FROM cash_registers c
+       LEFT JOIN central_registers r ON r.register_id = c.id
        ${centro.join}
-      WHERE r.empresa_id = $1
-        AND ($2::uuid IS NULL OR r.centro_id = $2)
+      WHERE c.empresa_id = $1
+        -- Las de baja no son red viva, pero si ya tienen fila en Central es que
+        -- movieron dinero: esas siguen saliendo o se perderia su historial.
+        AND (c.activa OR r.register_id IS NOT NULL)
+        AND ($2::uuid IS NULL OR COALESCE(r.centro_id, c.centro_id) = $2)
       ORDER BY centro_nombre NULLS FIRST, c.nombre`,
     [empresaId, centroId ?? null]
   );
