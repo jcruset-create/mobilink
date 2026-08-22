@@ -6755,8 +6755,14 @@ app.post(
       }
 
       if (currentResult.rows[0].assignedTechName !== operator.techName) {
+        // Se dice a quién está asignada: en campo, un "no está asignada" a
+        // secas deja al técnico sin saber si es cosa suya, de la tablet o de
+        // que en oficina se la han pasado a otro.
+        const asignadaA = String(currentResult.rows[0].assignedTechName || "").trim();
         return res.status(403).json({
-          error: "Esta asistencia no esta asignada a este operario",
+          error: asignadaA
+            ? `Esta asistencia esta asignada a ${asignadaA}, no a ${operator.techName}`
+            : `Esta asistencia no tiene operario asignado (entraste como ${operator.techName})`,
         });
       }
 
