@@ -1,7 +1,9 @@
 # Análisis del Excel de documentación de tacógrafos y versión mejorada
 
 > Original analizado: `JUSTIFICANTE_TRANSFERENCIA_DE_DATOS_TACOGRAFOS_VDO.xlsx` (2 hojas).
-> Resultado: [`plantillas/TACOGRAFOS_documentacion.xlsx`](./plantillas/TACOGRAFOS_documentacion.xlsx) (7 hojas).
+> Resultado: [`plantillas/TACOGRAFOS_documentacion.xlsx`](./plantillas/TACOGRAFOS_documentacion.xlsx) (6 hojas).
+> Alcance: certificados de transferibilidad e intransferibilidad. El anexo II del
+> RD 125/2017 lo emite la extranet de VDO y queda fuera.
 > Norma aplicada: **UNE 66102:2025** — *Sistema de gestión de los centros técnicos de tacógrafos*.
 
 ---
@@ -73,28 +75,42 @@ Dependencias: todo cuelga de `I1:I10`; `I7=I3`; `D74=A82=I3`; `B76/B78 = IF(G8="
 
 Aquí está el hallazgo importante, y no es de formato.
 
-### 2.1 Falta el documento oficial
+### 2.1 El documento oficial lo emite la extranet de VDO — fuera de alcance
 
 El apartado **7.5.1 c) y d)** exige que el centro disponga del *"modelo de informe sobre
 transferencia de datos – certificado de intransferibilidad"* y conserve los
 *"informes sobre transferencias de datos/certificado de intransferibilidad **según el anexo II
 del RD 125/2017** (véase el anexo C de esta norma)"*.
 
-Ese formulario tiene **27 campos numerados** y dos firmas. **El libro original no lo contiene.**
-Lo que hay son documentos periféricos correctos —la autorización del cliente, el acuse, la
-comunicación— pero no el informe/certificado en sí.
+Conviene tener claro qué es ese impreso, porque el nombre engaña: el anexo II se titula
+*"INFORME SOBRE TRANSFERENCIA DE DATOS / CERTIFICADO DE INTRANSFERIBILIDAD"* y **es un único
+formulario de 27 campos que sirve para los dos casos** — la casilla 22 (*"¿Era posible transferir
+los datos?"*) decide si funciona como informe de transferencia o como certificado de
+intransferibilidad. No son dos documentos.
+
+**Ese impreso lo emite la extranet de VDO**, así que queda fuera de este libro y del futuro
+módulo. Lo que se fabrica aquí son los documentos que lo envuelven: la autorización que firma el
+cliente, el acuse de recibo y la comunicación a la administración — exactamente lo que ya tenía
+el original.
+
+Se llegó a construir la hoja del anexo II y después se retiró, al confirmarse que la emite la
+extranet. Queda en el historial de la rama por si algún día hace falta.
 
 ### 2.2 Trazabilidad (8.5.2)
 
 La norma exige documentar la trazabilidad entre equipos utilizados, unidad intravehicular,
 **técnico que realiza la intervención**, vehículo, **precintos instalados** y centro técnico.
-El original no recoge técnico, equipos, precintos ni nº de bastidor.
+Equipos y precintos viven en el informe técnico de la extranet. Aquí se recogen sólo los dos que
+hacen falta para estos documentos y para el registro: **técnico** y **nº de bastidor**.
 
 ### 2.3 Custodia y destrucción (8.5.1 y nota F del anexo II)
 
 Los archivos transferidos se guardan **un año** y después se destruyen, documentando por cada
 destrucción: fecha, matrícula, nº de bastidor, nº de serie de la UIV, firma digital del archivo,
 método de destrucción y persona que la realiza. No había ni registro ni aviso de plazo.
+
+**Esta obligación sí es del centro**, no de la extranet: por eso la hoja `REGISTRO TRANSFERENCIAS`
+se mantiene.
 
 ### 2.4 Identificación y control de la información documentada (7.5.2 y 7.5.3)
 
@@ -114,9 +130,8 @@ justificante, que es precisamente donde el cliente elige el medio.
 
 | Hoja | Función |
 |---|---|
-| `DATOS` | Único punto de entrada. 41 campos en 8 secciones, desplegables, avisos de obligatorio condicionados al tipo de operación, aviso de coherencia y cálculo del plazo de destrucción. |
+| `DATOS` | Único punto de entrada. 24 campos en 7 secciones, desplegables, avisos de obligatorio condicionados al tipo de operación y cálculo del plazo de destrucción. |
 | `JUSTIFICANTE TRANSFERENCIA` | Justificante del original + cláusulas de confidencialidad, custodia y titularidad + firma del técnico. |
-| `ANEXO II RD 125-2017` | **Nuevo.** El formulario oficial de 27 campos, relleno automático, con declaración que alterna a)/b) y las dos firmas. |
 | `INTRANSFERIBILIDAD CLIENTE` | Acuse de recibo del original. |
 | `INTRANSF. ADMINISTRACION` | Comunicación a la Dirección General + bloque del trámite telemático en catalán, con celda copiable y enlaces web. |
 | `REGISTRO TRANSFERENCIAS` | **Nuevo.** Registro acumulativo con fecha límite de destrucción, estado automático (*En custodia* / *⚠ PENDIENTE DE DESTRUIR* / *Destruido*) y los siete campos del documento de destrucción. |
@@ -128,10 +143,9 @@ márgenes definidos por documento, hojas protegidas dejando desbloqueadas sólo 
 macros, sin rutas locales, y pie de control documental (`Formato · Versión · Edición ·
 Elaborado · Aprobado · UNE 66102:2025`) en cada documento imprimible.
 
-**Validación:** 228 fórmulas, 0 errores. Probado en los dos escenarios (transferencia correcta e
-intransferibilidad): los documentos que no aplican se marcan *"— NO APLICA —"*, la declaración
-del anexo II alterna entre a) y b), y el aviso de coherencia salta si el tipo de operación
-contradice los campos 22/23.
+**Validación:** 182 fórmulas, 0 errores. Probado en los dos escenarios (transferencia correcta e
+intransferibilidad): los documentos que no aplican se marcan *"— NO APLICA —"*, y la entrega del
+tacógrafo averiado y su achatarramiento son excluyentes en ambos sentidos.
 
 ---
 
@@ -159,14 +173,11 @@ Todo el texto jurídico del original se conserva. Estos son los cambios, uno a u
 Ninguno de estos cabe en una hoja de cálculo. Son el argumento para el módulo
 (`PROMPT_modulo_tacografos.md`):
 
-1. **Fotografía de la intervención** (8.5.1 vi y 8.5.2): imagen del vehículo sobre el banco de
-   rodillos, con fecha, hora en formato 24 h y matrícula, integrada en el informe técnico
-   garantizando integridad y autenticidad. Un Excel no puede garantizar ninguna de las dos.
-2. **Documento imprimible por cada destrucción.** Hoy es una fila del registro con los siete
+1. **Documento imprimible por cada destrucción.** Hoy es una fila del registro con los siete
    campos exigidos; la norma habla de *"un documento"* por destrucción.
 3. **Firma digital del archivo destruido.** El registro tiene la columna, pero el hash debe
    calcularlo el sistema que custodia el fichero.
-4. **Descarga diaria de las tarjetas de centro técnico**, copia de seguridad y conservación
+3b. **Descarga diaria de las tarjetas de centro técnico**, copia de seguridad y conservación
    cinco años (8.5.1).
 5. **Registro de extravíos, pérdidas y sustracciones** de precintos y tarjetas, con archivo de
    comunicaciones y denuncias (7.5.1 d).
@@ -180,5 +191,6 @@ Ninguno de estos cabe en una hoja de cálculo. Son el argumento para el módulo
 ## 6. Mejoras sugeridas que sí caben en el Excel, si las quieres
 
 - Numeración automática del nº de informe a partir de la contraseña del centro y un contador.
-- Campo de nº de bastidor obligatorio (hoy opcional) si se va a rellenar el anexo II completo.
+- Campo de nº de bastidor obligatorio (hoy opcional): lo exige el documento de destrucción.
 - Casilla de verificación final del técnico ("control final del servicio prestado", 8.5.1).
+- Conservación **cinco años** de las copias de los certificados emitidos, que también es del centro.

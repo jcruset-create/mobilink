@@ -3,8 +3,10 @@
 > Estado: **diseño previo a programar**. Decisión tomada: es un **módulo propio**,
 > no una sección del área de taller.
 > Fases 0 y 1 completadas: ver [`ANALISIS_excel_tacografos.md`](./ANALISIS_excel_tacografos.md).
-> El alcance del módulo crece con la **UNE 66102:2025**: anexo II del RD 125/2017, trazabilidad
-> (técnico, equipos, precintos, bastidor), registro de destrucción a un año y control de versiones.
+> **Alcance acotado:** el módulo cubre los certificados de transferibilidad e intransferibilidad
+> y los documentos que los envuelven. El anexo II del RD 125/2017 (el informe/certificado oficial
+> de 27 campos) lo emite la **extranet de VDO** y queda fuera. La custodia de los archivos
+> transferidos y su destrucción al año **sí son del centro** y entran en el módulo.
 > Especificación funcional y documental completa en
 > [`PROMPT_excel_tacografos_documentacion.md`](./PROMPT_excel_tacografos_documentacion.md).
 
@@ -140,10 +142,11 @@ exactamente el razonamiento de `server/cash/permissions.ts`:
 |---|---|---|
 | 0 | Análisis del Excel original y transcripción literal de los textos legales | **hecha** — ver `ANALISIS_excel_tacografos.md` |
 | 1 | Excel mejorado, entregable e independiente del despliegue | **hecho** — `plantillas/TACOGRAFOS_documentacion.xlsx` |
-| 2 | Esquema, API, formulario y generación de los tres PDF | |
-| 3 | Firma en pantalla y registro de entrega | |
-| 4 | Cola de comunicaciones a la administración y avisos de pendientes | |
-| 5 | Enlace con `tc_intervenciones` para autorrellenar | |
+| 2 | `server/tacografos/` (schema, router, repository, permissions), tablas `tac_*`, alta como módulo licenciable y formulario único de expediente | |
+| 3 | Los tres PDF con `pdf-lib` desde plantillas versionadas, bucket privado, documento inmutable con hash | |
+| 4 | Firma en pantalla (cliente, receptor y técnico) y registro de entrega | |
+| 5 | Custodia: plazo de un año, aviso de pendientes de destruir y documento de destrucción con sus siete campos; cola de comunicaciones a la Generalitat; conservación cinco años de las copias emitidas | |
+| 6 | Enlace con `tc_intervenciones` para autorrellenar y exportación `.xlsx` del expediente | |
 
 Las fases 0 y 1 no son trabajo tirado: el Excel funciona desde el primer día, sin
 esperar al despliegue, y es la fuente de la que salen los textos legales de
@@ -153,7 +156,8 @@ esperar al despliegue, y es la fuente de la que salen los textos legales de
 
 - **Nombre comercial** del módulo (el resto son Mobilink Cash, Safety, ToolControl…).
 - **Idioma** de la comunicación a la Generalitat: catalán, castellano o ambos.
-- **Nº de informe**: ¿serie autogenerada por el módulo o tecleada por el técnico?
+- **Nº de informe**: ¿serie autogenerada por el módulo o tecleada por el técnico? Ojo: si el
+  número lo asigna la extranet al emitir el anexo II, aquí sólo se copia.
   Si se autogenera, hay que decidir si comparte contador con el nº de operación
   de taller (`PROMPT_numero_de_operacion.md`) o lleva serie propia.
 - **Alcance**: ¿sólo web, o también pantalla en la APK de técnicos para firmar en
