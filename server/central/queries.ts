@@ -68,7 +68,15 @@ async function joinCentro(alias: string, columna: string) {
 export async function resumenRed(empresaId: string): Promise<ResumenRed> {
   const { rows } = await pool.query(
     `SELECT
-       (SELECT COUNT(*)::int FROM central_registers WHERE empresa_id = $1) AS cajas,
+       -- La misma union que el listado, y por lo mismo: una caja que aun no ha
+       -- emitido eventos existe y el contador tiene que decirlo, pero lo que
+       -- Central ya conocia tampoco puede dejar de contarse.
+       (SELECT COUNT(*)::int FROM (
+          SELECT id AS register_id FROM cash_registers
+           WHERE empresa_id = $1 AND activa
+          UNION
+          SELECT register_id FROM central_registers WHERE empresa_id = $1
+        ) u) AS cajas,
        (SELECT COUNT(*)::int FROM central_sessions
          WHERE empresa_id = $1 AND estado IN ('OPEN','REOPENED')) AS abiertas,
        (SELECT COUNT(*)::int FROM central_sessions
@@ -101,22 +109,49 @@ export async function resumenRed(empresaId: string): Promise<ResumenRed> {
  * propósito: una caja cuyo taller no esté asignado tiene que SALIR igual, sin
  * taller. Con un JOIN a secas desaparecerían justo las cajas que hay que
  * arreglar, que es el peor sitio donde esconderlas.
+ *
+ * Y por lo mismo se manda sobre la UNIÓN de las dos tablas, no sobre una:
+ *
+ * - `cash_registers` es el censo de cajas. `central_registers` es una
+ *   proyección de eventos y solo tiene fila cuando la caja ha emitido alguno,
+ *   así que mandando la proyección **una caja recién dada de alta, o que aún no
+ *   ha movido un euro, no aparecía** — justo la que hay que vigilar el primer
+ *   día. Sale con los datos de supervisión a nulo, que es la verdad: existe y
+ *   todavía no ha hecho nada.
+ * - Pero mandar solo el censo tampoco vale: lo que Central ya conoce y en el
+ *   censo no está (una caja retirada, o eventos llegados de otra instalación)
+ *   desaparecería del listado y del contador. Se contaba antes; seguir
+ *   contándolo no es opcional.
+ *
+ * La unión es la única forma de no esconder nada por ninguno de los dos lados,
+ * que es la regla de esta pantalla entera.
  */
 export async function cajasEnRed(empresaId: string, centroId?: string | null): Promise<CajaEnRed[]> {
-  const centro = await joinCentro("t", "r.centro_id");
+  const centro = await joinCentro("t", "COALESCE(r.centro_id, c.centro_id)");
   const { rows } = await pool.query(
-    `SELECT r.register_id, r.centro_id, r.jornada_abierta_id, r.ultima_actividad_ms,
-            r.ultima_fecha_cerrada, r.ingresado_centimos,
+    `WITH ids AS (
+        -- Las de baja no son red viva y no entran por aqui; si movieron dinero
+        -- entran igual por la rama de Central, que es la que guarda su rastro.
+        SELECT id AS register_id FROM cash_registers
+         WHERE empresa_id = $1 AND activa
+        UNION
+        SELECT register_id FROM central_registers WHERE empresa_id = $1
+      )
+      SELECT ids.register_id,
+            COALESCE(r.centro_id, c.centro_id) AS centro_id,
+            r.jornada_abierta_id, r.ultima_actividad_ms,
+            r.ultima_fecha_cerrada,
+            COALESCE(r.ingresado_centimos, 0) AS ingresado_centimos,
             c.nombre AS caja_nombre, c.codigo,
             ${centro.select},
             CASE WHEN r.ultima_fecha_cerrada IS NULL THEN NULL
                  ELSE (CURRENT_DATE - r.ultima_fecha_cerrada) END AS dias_sin_cerrar
-       FROM central_registers r
-       LEFT JOIN cash_registers c ON c.id = r.register_id
+       FROM ids
+       LEFT JOIN cash_registers c ON c.id = ids.register_id
+       LEFT JOIN central_registers r ON r.register_id = ids.register_id
        ${centro.join}
-      WHERE r.empresa_id = $1
-        AND ($2::uuid IS NULL OR r.centro_id = $2)
-      ORDER BY centro_nombre NULLS FIRST, c.nombre`,
+      WHERE ($2::uuid IS NULL OR COALESCE(r.centro_id, c.centro_id) = $2)
+      ORDER BY centro_nombre NULLS FIRST, c.nombre NULLS LAST`,
     [empresaId, centroId ?? null]
   );
 
