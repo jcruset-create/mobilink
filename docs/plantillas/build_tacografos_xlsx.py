@@ -223,7 +223,7 @@ CAMPOS = [
  ("listm","Modalidad de entrega",          "Dat_Modalidad",      "En mano",          "transf"),
  ("sec", "TACÓGRAFO AVERIADO", None, None, None),
  ("listsn","Se entrega al cliente",        "Dat_EntregaAparato", "No",               "intr"),
- ("listsn","Se achatarrará",               "Dat_Achatarrar",     "Sí",               "intr"),
+ ("calc", "Se achatarrará (excluyente)",   "Dat_Achatarrar",     None,               "no"),
 ]
 
 dv_op  = DataValidation(type="list", formula1=f"=CONFIGURACION!$A${lst_op_ini}:$A${lst_op_fin}", allow_blank=True)
@@ -244,6 +244,16 @@ for kind, label, name, ejemplo, req in CAMPOS:
         r += 1
         continue
     dat.cell(r, 1, label).font = f_label
+    if kind == "calc":
+        # Excluyente por construccion: es lo contrario de "se entrega al cliente",
+        # igual que en el libro original, donde un unico SI/NO decidia las dos frases.
+        c = dat.cell(r, 2, f'=IF(B{r-1}="Sí","No",IF(B{r-1}="No","Sí",""))')
+        c.font = Font(name=ARIAL, size=10, bold=True); c.border = box
+        dat.cell(r, 3, "automático").font = f_nota
+        dat.cell(r, 4, 0)
+        nombres[name] = ("DATOS", f"B{r}")
+        r += 1
+        continue
     c = dat.cell(r, 2, ejemplo)
     c.font = f_input; c.fill = fill_in; c.border = box; c.protection = UNLOCK
     if kind == "date":
