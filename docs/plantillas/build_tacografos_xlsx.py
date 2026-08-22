@@ -100,7 +100,6 @@ for name, label, valor in [
     ("Cfg_Version", "Versión del formato", "02"),
     ("Cfg_FechaEdicion", "Fecha de edición del formato", "2026-08-22"),
     ("Cfg_CodJust", "Código formato — justificante transferencia", "CTT-F-01"),
-    ("Cfg_CodAnexo", "Código formato — anexo II RD 125/2017", "CTT-F-02"),
     ("Cfg_CodCliente", "Código formato — acuse intransferibilidad", "CTT-F-03"),
     ("Cfg_CodAdmin", "Código formato — comunicación administración", "CTT-F-04"),
     ("Cfg_CodRegistro", "Código formato — registro de transferencias", "CTT-R-01"),
@@ -183,41 +182,24 @@ dat["A2"].font = f_nota
 CAMPOS = [
  ("sec", "CLIENTE / EMPRESA DE TRANSPORTES", None, None, None),
  ("in",  "Empresa",                        "Dat_Empresa",        "COMERCIAL TANK FOODS S.L.", "always"),
- ("in",  "Dirección de la empresa",        "Dat_DireccionEmp",   "C/ Exemple, 12 — 43006 Tarragona", "no"),
- ("in",  "Detalles tarjeta de empresa",    "Dat_TarjetaEmp",     "ESC0000000123456", "no"),
  ("in",  "Nombre de quien autoriza",       "Dat_Nombre",         "Joan Pla Serra",   "always"),
  ("in",  "DNI / NIF de quien autoriza",    "Dat_Nif",            "39887654T",        "always"),
  ("listsn","Documento de titularidad aportado", "Dat_DocTitularidad", "Sí",           "always"),
  ("sec", "VEHÍCULO", None, None, None),
  ("in",  "Matrícula",                      "Dat_Matricula",      "7567MPF",          "always"),
  ("in",  "Nº de bastidor",                 "Dat_Bastidor",       "VF3XXXXXXXXXXXXXX","no"),
- ("in",  "Fabricante del vehículo",        "Dat_FabricanteVeh",  "RENAULT TRUCKS",   "no"),
- ("in",  "Modelo del vehículo",            "Dat_ModeloVeh",      "T460",             "no"),
  ("sec", "TACÓGRAFO SUSTITUIDO (unidad intravehicular)", None, None, None),
  ("in",  "Marca / fabricante",             "Dat_Marca",          "VDO",              "always"),
  ("in",  "Modelo de la unidad",            "Dat_Modelo",         "1381.7550303006",  "always"),
  ("in",  "Nº de serie",                    "Dat_Serie",          "1000567",          "always"),
- ("date","Fecha de fabricación",           "Dat_FechaFabUIV",    "2018-06-01",       "no"),
- ("listsn","Correctamente instalada en cabina", "Dat_SituacionCabina", "Sí",          "no"),
- ("in",  "Marca de homologación",          "Dat_Homologacion",   "e1-84",            "no"),
- ("in",  "Visibilidad de la placa (Req 169/170)", "Dat_VisibilidadPlaca", "Visible",  "no"),
  ("sec", "INTERVENCIÓN", None, None, None),
  ("in",  "Nº informe / certificado",       "Dat_NumInforme",     "E943009003781L",   "always"),
  ("date","Fecha informe",                  "Dat_FechaInforme",   "2025-03-10",       "always"),
  ("date","Fecha entrega al cliente",       "Dat_FechaEntrega",   "2025-03-14",       "intr"),
  ("list","Tipo de operación",              "Dat_TipoOperacion",  "Intransferibilidad","always"),
  ("in",  "Técnico que interviene",         "Dat_Tecnico",        "Marc Roig",        "always"),
- ("in",  "Detalles tarjeta centro técnico","Dat_TarjetaCentro",  "ESW0000000098765", "no"),
- ("in",  "Equipos utilizados",             "Dat_Equipos",        "Banco BR-12 / CTT-4100", "no"),
- ("in",  "Precintos instalados",           "Dat_Precintos",      "E943009-0012 / 0013","no"),
- ("sec", "TRANSFERENCIA DE DATOS (anexo II RD 125/2017)", None, None, None),
- ("listsn","¿Se ven los datos en pantalla?","Dat_VerPantalla",   "Sí",               "always"),
- ("listsn","¿Era posible imprimir los datos?","Dat_Imprimir",    "Sí",               "always"),
- ("listsn","¿Era posible transferir los datos?","Dat_Transferir","No",               "always"),
- ("listsn","¿Se descargaron todos los datos?","Dat_DescargaOK",  "No",               "always"),
- ("in",  "Si no: motivo",                  "Dat_MotivoNo",       "Memoria interna dañada", "intr"),
+ ("sec", "TRANSFERENCIA DE DATOS", None, None, None),
  ("date","Fecha de transferencia",         "Dat_FechaTransf",    "2025-03-10",       "transf"),
- ("listsn","¿Datos enviados a la empresa?","Dat_Enviados",       "No",               "transf"),
  ("date","Fecha de envío",                 "Dat_FechaEnvio",     "2025-03-11",       "transf"),
  ("sec", "ENTREGA DE LOS DATOS DESCARGADOS", None, None, None),
  ("listm","Modalidad de entrega",          "Dat_Modalidad",      "En mano",          "transf"),
@@ -295,16 +277,8 @@ dat["B2"].font = Font(name=ARIAL, size=11, bold=True)
 dat.conditional_formatting.add("B2", FormulaRule(formula=[f'SUM(D{prim}:D{ultima})>0'], fill=fill_err))
 dat.conditional_formatting.add(f"B{prim}:B{ultima}", FormulaRule(formula=[f'$C{prim}="⚠ Obligatorio"'], fill=fill_err))
 
-# coherencia tipo de operacion vs anexo II
-dat.cell(ultima + 2, 1, "Coherencia (UNE 66102:2025)").font = f_label
+dat.cell(ultima + 2, 1, "Destrucción de los archivos").font = f_label
 dat.cell(ultima + 2, 2,
-    f'=IF(AND($B${fila_tipo}="Transferencia correcta",{"OR("}{nombres["Dat_Transferir"][1]}="No",'
-    f'{nombres["Dat_DescargaOK"][1]}="No")),'
-    f'"⚠ Marcado como transferencia correcta pero el anexo II dice que no se pudo transferir/descargar",'
-    f'IF(AND($B${fila_tipo}="Intransferibilidad",{nombres["Dat_Transferir"][1]}="Sí"),'
-    f'"⚠ Marcado como intransferibilidad pero el anexo II dice que sí era posible transferir",""))').font = f_aviso
-dat.cell(ultima + 3, 1, "Destrucción de los archivos").font = f_label
-dat.cell(ultima + 3, 2,
     f'=IF({nombres["Dat_FechaTransf"][1]}="","",'
     f'"Conservar hasta "&RIGHT("0"&DAY(EDATE({nombres["Dat_FechaTransf"][1]},12)),2)&"/"&'
     f'RIGHT("0"&MONTH(EDATE({nombres["Dat_FechaTransf"][1]},12)),2)&"/"&'
@@ -323,10 +297,6 @@ def ref(name):
 
 def txt(name):
     return f'IF({ref(name)}="","",{ref(name)})'
-
-def guion(name):
-    """Nota A del anexo II: lo que no se pueda obtener se rellena con un guion."""
-    return f'IF({ref(name)}="","-",{ref(name)})'
 
 def fecha_txt(name):
     d = ref(name)
@@ -453,126 +423,6 @@ for col, w in zip("ABCDEFGH", [2, 22, 12, 11, 12, 16, 8, 10]):
     j.column_dimensions[col].width = w
 setup_a4(j, "'JUSTIFICANTE TRANSFERENCIA'!$B$1:$H$30")
 j.protection.sheet = True
-
-# ============================================================ ANEXO II RD 125/2017
-an = wb.create_sheet("ANEXO II RD 125-2017")
-an.merge_cells("A1:G1")
-an["A1"] = "INFORME SOBRE TRANSFERENCIA DE DATOS / CERTIFICADO DE INTRANSFERIBILIDAD"
-an["A1"].font = d_tit; an["A1"].alignment = ctrw
-an.row_dimensions[1].height = 32
-an.merge_cells("A2:G2")
-an["A2"] = f'="NÚMERO DE INFORME/CERTIFICADO: "&{guion("Dat_NumInforme")}'
-an["A2"].font = d_txt_b; an["A2"].alignment = ctr
-
-def an_sec(fila, titulo):
-    an.merge_cells(f"A{fila}:G{fila}")
-    c = an.cell(fila, 1, titulo); c.font = d_sec; c.fill = fill_sec2
-    for col in range(2, 8): an.cell(fila, col).fill = fill_sec2
-
-def an_campo(fila, num, label, formula):
-    an.cell(fila, 1, num).font = d_txt; an.cell(fila, 1).alignment = ctr
-    an.cell(fila, 1).border = box
-    an.merge_cells(f"B{fila}:D{fila}")
-    c = an.cell(fila, 2, label); c.font = d_txt; c.alignment = wrap; c.border = box
-    an.merge_cells(f"E{fila}:G{fila}")
-    v = an.cell(fila, 5, formula); v.font = d_dato; v.alignment = wrap; v.border = box
-
-r = 4
-an_sec(r, "DATOS DEL VEHÍCULO Y DE LA EMPRESA"); r += 1
-for num, label, f in [
- (1, "Número de matrícula del vehículo", f'=UPPER({guion("Dat_Matricula")})'),
- (2, "Número de bastidor del vehículo", f'={guion("Dat_Bastidor")}'),
- (3, "Fabricante del vehículo", f'={guion("Dat_FabricanteVeh")}'),
- (4, "Modelo del vehículo", f'={guion("Dat_ModeloVeh")}'),
- (5, "Nombre de la empresa de transportes", f'={guion("Dat_Empresa")}'),
- (6, "Dirección de la empresa de transportes", f'={guion("Dat_DireccionEmp")}'),
- (7, "Detalles de la tarjeta de empresa", f'={guion("Dat_TarjetaEmp")}'),
-]:
-    an_campo(r, num, label, f); r += 1
-
-an_sec(r, "DATOS DEL CENTRO TÉCNICO"); r += 1
-for num, label, f in [
- (8,  "Nombre del centro técnico", f'={ref("Cfg_Empresa")}&" — "&{ref("Cfg_CentroTecnico")}'),
- (9,  "Dirección del centro técnico", f'={ref("Cfg_Direccion1")}&", "&{ref("Cfg_Direccion2")}&", "&{ref("Cfg_Ciudad")}'),
- (10, "Contraseña del centro técnico", f'={ref("Cfg_NumCentro")}'),
- (11, "Detalles de la tarjeta del centro técnico", f'={guion("Dat_TarjetaCentro")}'),
- (12, "Nombre del técnico que ha intervenido y firma", f'={guion("Dat_Tecnico")}'),
-]:
-    an_campo(r, num, label, f); r += 1
-
-an_sec(r, "DATOS DE LA UNIDAD INSTALADA EN EL VEHÍCULO"); r += 1
-for num, label, f in [
- (13, "Nombre del fabricante del tacógrafo", f'={guion("Dat_Marca")}'),
- (14, "Modelo de la unidad", f'={guion("Dat_Modelo")}'),
- (15, "Número de serie de la unidad", f'={guion("Dat_Serie")}'),
- (16, "Fecha de fabricación de la unidad", f'=IF({ref("Dat_FechaFabUIV")}="","-",{fecha_txt("Dat_FechaFabUIV")})'),
- (17, "Situación de la unidad en la cabina", f'={guion("Dat_SituacionCabina")}'),
- (18, "Marca de homologación de la unidad", f'={guion("Dat_Homologacion")}'),
- (19, "Visibilidad de la placa (Req 169/170)", f'={guion("Dat_VisibilidadPlaca")}'),
-]:
-    an_campo(r, num, label, f); r += 1
-
-an_sec(r, "DETALLES DE LA TRANSFERENCIA"); r += 1
-for num, label, f in [
- (20, "¿Se ven los datos en pantalla?", f'={guion("Dat_VerPantalla")}'),
- (21, "¿Era posible imprimir los datos?", f'={guion("Dat_Imprimir")}'),
- (22, "¿Era posible transferir los datos?", f'={guion("Dat_Transferir")}'),
- (23, "¿Se pudieron descargar todos los datos?", f'={guion("Dat_DescargaOK")}'),
- (24, "En caso negativo de 23, ¿por qué?", f'={guion("Dat_MotivoNo")}'),
- (25, "Fecha de transferencia de los datos desde la unidad intravehicular",
-      f'=IF({ref("Dat_FechaTransf")}="","-",{fecha_txt("Dat_FechaTransf")})'),
- (26, "¿Han sido los datos enviados a la empresa?", f'={guion("Dat_Enviados")}'),
- (27, "Fecha de envío", f'=IF({ref("Dat_FechaEnvio")}="","-",{fecha_txt("Dat_FechaEnvio")})'),
-]:
-    an_campo(r, num, label, f); r += 1
-
-r += 1
-an.merge_cells(f"A{r}:G{r}")
-an.cell(r, 1, "DECLARACIÓN").font = d_sec; an.cell(r, 1).fill = fill_sec2
-for col in range(2, 8): an.cell(r, col).fill = fill_sec2
-r += 1
-an.merge_cells(f"A{r}:G{r}")
-c = an.cell(r, 1, "1  Este documento ha sido emitido de conformidad con los procedimientos establecidos "
-                  "en la Disposición adicional primera del RD 125/2017.")
-c.font = d_txt; c.alignment = wrapj; r += 1
-an.merge_cells(f"A{r}:G{r+1}")
-c = an.cell(r, 1,
-    f'="2  Este documento atestigua que "&IF({ref("Dat_Transferir")}="Sí","fue posible","no fue posible")&'
-    f'" transferir los datos almacenados en la unidad instalada en el vehículo identificada arriba, con '
-    f'la cual estaba equipado el vehículo identificado arriba. En respuesta a la solicitud por escrito de '
-    f'la empresa de transportes identificada arriba:"')
-c.font = d_txt; c.alignment = wrapj; r += 2
-an.merge_cells(f"A{r}:G{r+1}")
-c = an.cell(r, 1,
-    f'=IF({ref("Dat_Transferir")}="Sí",'
-    f'"b) Los datos identificados arriba han sido enviados a la empresa de transportes de acuerdo con lo '
-    f'establecido en el Reglamento de ejecución (UE) 2016/799 de la comisión de 18 de marzo de 2016.",'
-    f'"a) No han podido serle entregados los datos a la empresa de transportes y este documento se emite '
-    f'como certificado de intransferibilidad de acuerdo con el Reglamento de ejecución (UE) 2016/799 de '
-    f'la comisión de 18 de marzo de 2016.")')
-c.font = d_txt_b; c.alignment = wrapj; r += 3
-
-an.merge_cells(f"A{r}:C{r}"); an.cell(r, 1).border = firma_l
-an.merge_cells(f"E{r}:G{r}"); an.cell(r, 5).border = firma_l
-r += 1
-an.merge_cells(f"A{r}:C{r}")
-an.cell(r, 1, f'="FIRMA DEL TÉCNICO QUE REALIZÓ LA INTERVENCIÓN: "&{guion("Dat_Tecnico")}').font = d_peq
-an.merge_cells(f"E{r}:G{r}")
-an.cell(r, 5, f'="FIRMA DEL RESPONSABLE TÉCNICO: "&{ref("Cfg_ResponsableTecnico")}').font = d_peq
-r += 2
-an.merge_cells(f"A{r}:G{r}")
-c = an.cell(r, 1, "La solicitud por escrito de remisión de los datos transferidos por la empresa de "
-                  "transportes debe ser adjuntada a la copia de este documento que se archive en el "
-                  "centro técnico.")
-c.font = Font(name=TNR, size=9, italic=True); c.alignment = wrapj
-r += 2
-pie_control(an, r, "Cfg_CodAnexo")
-fin_anexo = r
-
-for col, w in zip("ABCDEFG", [5, 22, 14, 12, 16, 14, 14]):
-    an.column_dimensions[col].width = w
-setup_a4(an, f"'ANEXO II RD 125-2017'!$A$1:$G${fin_anexo}")
-an.protection.sheet = True
 
 # ============================================================ INTRANSF. CLIENTE
 ic = wb.create_sheet("INTRANSFERIBILIDAD CLIENTE")
