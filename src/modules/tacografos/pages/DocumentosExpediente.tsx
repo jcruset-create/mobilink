@@ -24,7 +24,14 @@ function instante(ms: number): string {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-export default function DocumentosExpediente({ expedienteId }: { expedienteId: string }) {
+export default function DocumentosExpediente({
+  expedienteId,
+  onCambio,
+}: {
+  expedienteId: string;
+  /** Avisa a la ficha: emitir bloquea las firmas y cambia el estado. */
+  onCambio: () => void;
+}) {
   const { puede } = useTacografos();
   const [documentos, setDocumentos] = useState<Documento[]>([]);
   const [emitibles, setEmitibles] = useState<Emitible[]>([]);
@@ -72,6 +79,7 @@ export default function DocumentosExpediente({ expedienteId }: { expedienteId: s
     try {
       await api.emitirDocumento(expedienteId, tipo);
       await cargar();
+      onCambio();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido emitir el documento");
     } finally {
@@ -89,6 +97,7 @@ export default function DocumentosExpediente({ expedienteId }: { expedienteId: s
     try {
       await api.anularDocumento(d.id, motivo);
       await cargar();
+      onCambio();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido anular");
     } finally {

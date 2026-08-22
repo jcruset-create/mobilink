@@ -164,3 +164,29 @@ CREATE INDEX IF NOT EXISTS tac_doc_expediente_idx
 -- que anular el anterior, y así queda el rastro de que hubo dos.
 CREATE UNIQUE INDEX IF NOT EXISTS tac_doc_vigente_idx
   ON tac_documentos(expediente_id, tipo) WHERE NOT anulado;
+
+-- ============================================================
+-- Fase 4 — firmas recogidas en pantalla
+-- ============================================================
+
+-- Se firma ANTES de emitir y el PDF nace con la rúbrica dentro. Es lo que
+-- permite que el documento sea inmutable: si la firma se pegara después habría
+-- que reescribir el PDF y su hash dejaría de significar nada.
+--
+-- Una firma por expediente y papel: quien autoriza la descarga, quien recibe el
+-- certificado, el técnico que intervino y el responsable técnico.
+CREATE TABLE IF NOT EXISTS tac_firmas (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  empresa_id UUID NOT NULL,
+  expediente_id UUID NOT NULL REFERENCES tac_expedientes(id),
+  papel TEXT NOT NULL CHECK (papel IN ('autoriza','receptor','tecnico','responsable')),
+  -- La imagen vive en el bucket privado, como los PDF: es la rúbrica de una
+  -- persona física y no puede quedar en una URL pública.
+  ruta TEXT NOT NULL,
+  -- Nombre tal y como se firmó. Se copia aquí y no se lee del expediente: si
+  -- mañana alguien corrige el nombre, la firma sigue diciendo quién la estampó.
+  nombre TEXT NOT NULL DEFAULT '',
+  firmado_at_ms BIGINT NOT NULL,
+  firmado_por UUID,
+  UNIQUE (expediente_id, papel)
+);

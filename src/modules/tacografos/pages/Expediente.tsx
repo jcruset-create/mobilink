@@ -11,10 +11,11 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, ArrowLeft, Ban, Save } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Ban, PackageCheck, Save } from "lucide-react";
 import * as api from "../services/api";
 import { useTacografos } from "../contexts/TacografosContext";
 import DocumentosExpediente from "./DocumentosExpediente";
+import FirmasExpediente from "./FirmasExpediente";
 import {
   MODALIDADES,
   expedienteVacio,
@@ -71,6 +72,9 @@ export default function Expediente({ nuevo }: Props) {
   const [faltan, setFaltan] = useState<CampoQueFalta[]>([]);
   const [estado, setEstado] = useState<string>("borrador");
   const [limite, setLimite] = useState<string | null>(null);
+  // Se incrementa al firmar o emitir: es lo que hace que la lista de documentos
+  // y la de firmas se vuelvan a pedir sin subir su estado a este componente.
+  const [revision, setRevision] = useState(0);
   const [cargando, setCargando] = useState(!nuevo);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,6 +113,32 @@ export default function Expediente({ nuevo }: Props) {
       setError(e instanceof Error ? e.message : "No se ha podido guardar");
     } finally {
       setGuardando(false);
+    }
+  }
+
+  /**
+   * Da por entregado el certificado. Exige nombre y DNI de quien lo recibe:
+   * sin eso el acuse no acredita nada.
+   */
+  async function entregar() {
+    if (!id) return;
+    const hoy = new Date().toISOString().slice(0, 10);
+    const fechaEntrega = prompt("Fecha de entrega (aaaa-mm-dd):", d.fechaEntrega ?? hoy)?.trim();
+    if (!fechaEntrega) return;
+    const receptorNombre = prompt("Nombre de quien recibe:", d.receptorNombre)?.trim();
+    if (!receptorNombre) return;
+    const receptorDni = prompt("DNI de quien recibe:", d.receptorDni)?.trim();
+    if (!receptorDni) return;
+    setError(null);
+    try {
+      const r = await api.registrarEntrega(id, { fechaEntrega, receptorNombre, receptorDni });
+      const { camposQueFaltan, fechaLimiteDestruccion, estado: est, ...datos } = r.expediente;
+      setD(datos);
+      setFaltan(camposQueFaltan);
+      setLimite(fechaLimiteDestruccion);
+      setEstado(est);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido registrar la entrega");
     }
   }
 
@@ -151,6 +181,14 @@ export default function Expediente({ nuevo }: Props) {
             <Ban className="h-4 w-4" /> Anular
           </button>
         )}
+        {!nuevo && puede("tacografos.entrega.register") && estado === "emitido" && (
+          <button
+            onClick={() => void entregar()}
+            className="flex items-center gap-1.5 rounded-lg border border-emerald-500/50 px-3 py-2 text-[13px] text-emerald-300 hover:bg-emerald-500/10"
+          >
+            <PackageCheck className="h-4 w-4" /> Registrar entrega
+          </button>
+        )}
         {editable && (
           <button
             onClick={() => void guardar()}
@@ -162,6 +200,12 @@ export default function Expediente({ nuevo }: Props) {
         )}
       </div>
 
+      {estado === "entregado" && (
+        <p className="mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-[13px] text-emerald-200">
+          Certificado entregado a {d.receptorNombre} ({d.receptorDni}) el{" "}
+          {(d.fechaEntrega ?? "").split("-").reverse().join("/")}.
+        </p>
+      )}
       {anulado && (
         <p className="mb-3 rounded-lg border border-slate-600 bg-slate-800/60 p-3 text-[13px] text-slate-300">
           Expediente anulado. Ya no puede editarse: si hay que corregir algo, se emite uno nuevo.
@@ -321,7 +365,26 @@ export default function Expediente({ nuevo }: Props) {
         Sólo con expediente guardado: emitir un documento de algo que todavía no
         existe en la base no tendría a qué apuntar.
       */}
-      {!nuevo && id && <DocumentosExpediente expedienteId={id} />}
+      {!nuevo && id && (
+        <>
+          <FirmasExpediente
+            key={`firmas-${revision}`}
+            expedienteId={id}
+            tipo={d.tipo}
+            nombres={{
+              autoriza: d.autorizaNombre,
+              receptor: d.receptorNombre,
+              tecnico: d.tecnico,
+            }}
+            onCambio={() => setRevision((v) => v + 1)}
+          />
+          <DocumentosExpediente
+            key={`docs-${revision}`}
+            expedienteId={id}
+            onCambio={() => setRevision((v) => v + 1)}
+          />
+        </>
+      )}
     </div>
   );
 }

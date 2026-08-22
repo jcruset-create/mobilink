@@ -31,6 +31,10 @@ export const PERMISOS = [
    * tiene el cliente es una decisión de responsable, no del día a día.
    */
   "tacografos.documento.annul",
+  /** Recoger la firma de una persona en pantalla. */
+  "tacografos.documento.sign",
+  /** Dar por entregado el certificado al cliente. */
+  "tacografos.entrega.register",
   /** Datos del centro técnico: contraseña identificativa, dirección, enlaces. */
   "tacografos.config.edit",
 ] as const;
@@ -55,6 +59,8 @@ const POR_ROL: Record<RolTacografos, readonly Permiso[]> = {
     "tacografos.expediente.create",
     "tacografos.expediente.edit",
     "tacografos.documento.emit",
+    "tacografos.documento.sign",
+    "tacografos.entrega.register",
   ],
   responsable: [
     "tacografos.view",
@@ -62,7 +68,9 @@ const POR_ROL: Record<RolTacografos, readonly Permiso[]> = {
     "tacografos.expediente.edit",
     "tacografos.expediente.annul",
     "tacografos.documento.emit",
+    "tacografos.documento.sign",
     "tacografos.documento.annul",
+    "tacografos.entrega.register",
   ],
   admin: PERMISOS,
 };

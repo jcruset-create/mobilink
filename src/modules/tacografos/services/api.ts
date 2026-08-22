@@ -14,6 +14,8 @@ import type {
   Documento,
   Emitible,
   Expediente,
+  Firma,
+  PapelFirma,
   TipoDocumento,
 } from "../types";
 
@@ -111,6 +113,36 @@ export function anularDocumento(
 /** URL de descarga. La sirve el servidor, no el almacenamiento. */
 export function urlDescarga(documentoId: string): string {
   return `${BASE}/documentos/${documentoId}/descargar`;
+}
+
+export function listarFirmas(expedienteId: string): Promise<{ firmas: Firma[] }> {
+  return pedir(`/expedientes/${expedienteId}/firmas`);
+}
+
+export function firmar(
+  expedienteId: string,
+  papel: PapelFirma,
+  imagen: string,
+  nombre: string
+): Promise<{ firma: Firma }> {
+  return pedir(`/expedientes/${expedienteId}/firmas/${papel}`, {
+    method: "PUT",
+    body: JSON.stringify({ imagen, nombre }),
+  });
+}
+
+export function borrarFirma(expedienteId: string, papel: PapelFirma): Promise<{ ok: boolean }> {
+  return pedir(`/expedientes/${expedienteId}/firmas/${papel}`, { method: "DELETE" });
+}
+
+export function registrarEntrega(
+  expedienteId: string,
+  d: { fechaEntrega: string; receptorNombre: string; receptorDni: string }
+): Promise<{ expediente: Expediente }> {
+  return pedir(`/expedientes/${expedienteId}/entregar`, {
+    method: "POST",
+    body: JSON.stringify(d),
+  });
 }
 
 export function guardarCentro(c: Centro): Promise<{ centro: Centro }> {
