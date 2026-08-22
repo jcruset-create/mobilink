@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import logoMobilink from "../../assets/logo-mobilink.png";
+import logoCentral from "../../assets/logo-central.png";
 import {
   Activity,
   Bell,
@@ -59,24 +59,18 @@ export default function CentralApp() {
           * todas. Duplicarla por pantalla es como se acaba teniendo diez
           * cabeceras que se parecen pero no son iguales.
           *
-          * La marca se compone con el logotipo de Mobilink y el nombre, igual
-          * que WorkPlanner en el hub, porque todavía no hay PNG propio. En
-          * cuanto exista, esto se sustituye por un <img> y ya está.
+          * El logotipo ya lleva el nombre dentro: repetirlo al lado sobra, que
+          * es el mismo criterio que sigue la cabecera de la caja.
           */}
-        <header className="mb-4 flex items-center gap-3">
-          <img src={logoMobilink} alt="Mobilink" className="h-10 w-auto shrink-0" />
-          <div className="min-w-0">
-            <div className="flex items-baseline gap-1.5 leading-none">
-              <span className="text-[17px] font-black italic tracking-tight text-white">CENTRAL</span>
-              <span className="text-[17px] font-black italic tracking-tight text-emerald-400">CASH</span>
-              <span className="rounded bg-emerald-500 px-1.5 py-0.5 text-[10px] font-black italic tracking-tight text-slate-900">
-                PRO
-              </span>
-            </div>
-            <p className="mt-1 text-[11px] text-slate-400">
-              Supervisión de la red. Las cajas siguen siendo dueñas de su jornada: aquí solo se mira.
-            </p>
-          </div>
+        <header className="mb-4">
+          <img
+            src={logoCentral}
+            alt="Mobilink Central Cash Pro"
+            className="h-8 w-auto shrink-0 md:h-9"
+          />
+          <p className="mt-1 text-[11px] text-slate-400">
+            Supervisión de la red. Las cajas siguen siendo dueñas de su jornada: aquí solo se mira.
+          </p>
         </header>
 
         <nav className="mb-4 flex flex-wrap gap-1">
