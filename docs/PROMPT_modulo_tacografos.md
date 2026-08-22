@@ -142,7 +142,7 @@ exactamente el razonamiento de `server/cash/permissions.ts`:
 |---|---|---|
 | 0 | Análisis del Excel original y transcripción literal de los textos legales | **hecha** — ver `ANALISIS_excel_tacografos.md` |
 | 1 | Excel mejorado, entregable e independiente del despliegue | **hecho** — `plantillas/TACOGRAFOS_documentacion.xlsx` |
-| 2 | `server/tacografos/` (schema, router, repository, permissions), tablas `tac_*`, alta como módulo licenciable y formulario único de expediente | |
+| 2 | `server/tacografos/` (schema, router, repository, permissions), tablas `tac_*`, alta como módulo licenciable y formulario único de expediente | **hecha** |
 | 3 | Los tres PDF con `pdf-lib` desde plantillas versionadas, bucket privado, documento inmutable con hash | |
 | 4 | Firma en pantalla (cliente, receptor y técnico) y registro de entrega | |
 | 5 | Custodia: plazo de un año, aviso de pendientes de destruir y documento de destrucción con sus siete campos; cola de comunicaciones a la Generalitat; conservación cinco años de las copias emitidas | |
