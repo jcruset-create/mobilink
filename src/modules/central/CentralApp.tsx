@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import logoCentral from "../../assets/logo-central.png";
 import {
   Activity,
@@ -21,6 +21,7 @@ import {
   CalendarDays,
   Coins,
   FileDown,
+  Home,
   Landmark,
   Network,
   TrendingUp,
@@ -43,6 +44,9 @@ import {
 import { Aviso } from "../cash/components/ui";
 import { euros } from "../cash/utils/money";
 import * as api from "./api";
+// El nombre de quien mira sale de la misma tabla que en el hub: es el mismo
+// dato y no tiene por qué venir por la API de Central.
+import { supabase } from "../administracion/services/supabase";
 
 const enlace = ({ isActive }: { isActive: boolean }) =>
   `flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${
@@ -50,28 +54,89 @@ const enlace = ({ isActive }: { isActive: boolean }) =>
   }`;
 
 export default function CentralApp() {
+  const navigate = useNavigate();
+  const [usuario, setUsuario] = useState("");
+
+  /*
+   * Quién está mirando. A mejor esfuerzo: si la consulta falla, la cabecera se
+   * pinta sin nombre en vez de romperse. Central no deja de servir porque no
+   * sepamos cómo se llama quien la abre.
+   */
+  useEffect(() => {
+    let activo = true;
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const id = data.session?.user?.id;
+        if (!id) return;
+        const { data: u } = await supabase
+          .from("app_usuarios")
+          .select("username, nombre")
+          .eq("id", id)
+          .maybeSingle();
+        if (activo && u) setUsuario(u.username || u.nombre || "");
+      } catch {
+        /* sin nombre se vive igual */
+      }
+    })();
+    return () => {
+      activo = false;
+    };
+  }, []);
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
-      <div className="mx-auto max-w-7xl p-4">
-        {/*
-          * La cabecera vive aquí y no en cada pantalla a propósito: es el marco
-          * de las diez rutas hijas, así que la marca se pone una vez y sale en
-          * todas. Duplicarla por pantalla es como se acaba teniendo diez
-          * cabeceras que se parecen pero no son iguales.
-          *
-          * El logotipo ya lleva el nombre dentro: repetirlo al lado sobra, que
-          * es el mismo criterio que sigue la cabecera de la caja.
+      {/*
+        * La cabecera vive aquí y no en cada pantalla a propósito: es el marco
+        * de las diez rutas hijas, así que se pone una vez y sale en todas.
+        * Duplicarla por pantalla es como se acaba teniendo diez cabeceras que
+        * se parecen pero no son iguales.
+        *
+        * Misma barra que el resto de módulos: pegajosa, con el logotipo a la
+        * izquierda y a la derecha quién eres, qué versión tienes cargada y la
+        * salida al menú. Los tres datos que se piden por teléfono cuando algo
+        * falla, y la puerta para volver sin tocar la barra del navegador.
+        */}
+      <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-2 border-b border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur">
+        {/* El logotipo ya lleva el nombre dentro: repetirlo al lado sobra. */}
+        <img
+          src={logoCentral}
+          alt="Mobilink Central Cash Pro"
+          className="h-7 w-auto shrink-0 md:h-8"
+        />
+
+        <div className="flex flex-wrap items-center gap-2">
+          {usuario && (
+            <span className="text-[12px] font-semibold text-white">👤 {usuario}</span>
+          )}
+
+          {/*
+            La versión del build que está sirviendo el navegador. Sin ella, un
+            "sigue sin funcionar" puede ser un fallo de verdad o una caché
+            vieja, y no hay forma de distinguirlo sin mirar el bundle. En
+            blanco y no en gris: se lee por teléfono.
           */}
-        <header className="mb-4">
-          <img
-            src={logoCentral}
-            alt="Mobilink Central Cash Pro"
-            className="h-8 w-auto shrink-0 md:h-9"
-          />
-          <p className="mt-1 text-[11px] text-slate-400">
-            Supervisión de la red. Las cajas siguen siendo dueñas de su jornada: aquí solo se mira.
-          </p>
-        </header>
+          <span
+            title="Versión de la aplicación que tienes cargada"
+            className="hidden text-[10px] tabular-nums text-white sm:inline"
+          >
+            v{__APP_VERSION__}
+          </span>
+
+          <button
+            onClick={() => navigate("/inicio")}
+            title="Volver al inicio"
+            className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700"
+          >
+            <Home className="h-4 w-4" /> Inicio
+          </button>
+        </div>
+      </header>
+
+      <div className="mx-auto max-w-7xl p-4">
+        <p className="mb-4 text-[11px] text-slate-400">
+          Supervisión de la red. Las cajas siguen siendo dueñas de su jornada: aquí solo se mira.
+        </p>
 
         <nav className="mb-4 flex flex-wrap gap-1">
           <NavLink to="/central/red" className={enlace}>
