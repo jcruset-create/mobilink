@@ -16,6 +16,7 @@ import type {
   Expediente,
   Firma,
   PapelFirma,
+  Sugerencia,
   TipoDocumento,
 } from "../types";
 
@@ -143,6 +144,15 @@ export function registrarEntrega(
     method: "POST",
     body: JSON.stringify(d),
   });
+}
+
+export function buscarIntervenciones(texto: string): Promise<{ sugerencias: Sugerencia[] }> {
+  return pedir(`/intervenciones?texto=${encodeURIComponent(texto)}`);
+}
+
+/** URL de descarga del respaldo en hoja de cálculo. */
+export function urlExportar(expedienteId: string): string {
+  return `${BASE}/expedientes/${expedienteId}/exportar`;
 }
 
 export function guardarCentro(c: Centro): Promise<{ centro: Centro }> {

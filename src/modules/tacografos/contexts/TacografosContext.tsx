@@ -24,6 +24,7 @@ type Estado = {
   rol: string | null;
   permisos: string[];
   centro: Centro | null;
+  autorrelleno: boolean;
   puede: (permiso: string) => boolean;
   refrescar: () => Promise<void>;
   fijarCentro: (c: Centro) => void;
@@ -86,6 +87,7 @@ export function TacografosProvider({ children }: { children: ReactNode }) {
       rol: datos?.rol ?? null,
       permisos: datos?.permisos ?? [],
       centro: datos?.centro ?? null,
+      autorrelleno: Boolean(datos?.autorrelleno),
       puede: (p: string) => (datos?.permisos ?? []).includes(p),
       refrescar,
       fijarCentro: (c: Centro) => setDatos((d) => (d ? { ...d, centro: c } : d)),

@@ -72,6 +72,19 @@ export type Bootstrap = {
   rol: string | null;
   permisos: string[];
   centro: Centro;
+  /** Si este centro puede traer datos de una intervención de taller. */
+  autorrelleno: boolean;
+};
+
+/** Intervención de taller de la que se puede copiar el expediente. */
+export type Sugerencia = {
+  intervencionId: string;
+  numero: string | null;
+  fecha: string | null;
+  matricula: string;
+  bastidor: string;
+  empresaCliente: string;
+  tecnico: string;
 };
 
 /** Expediente vacío, con los valores por defecto de la hoja `DATOS`. */

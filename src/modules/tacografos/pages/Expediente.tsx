@@ -11,11 +11,12 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, ArrowLeft, Ban, PackageCheck, Save } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Ban, FileSpreadsheet, PackageCheck, Save } from "lucide-react";
 import * as api from "../services/api";
 import { useTacografos } from "../contexts/TacografosContext";
 import DocumentosExpediente from "./DocumentosExpediente";
 import FirmasExpediente from "./FirmasExpediente";
+import BuscarIntervencion from "../components/BuscarIntervencion";
 import {
   MODALIDADES,
   expedienteVacio,
@@ -66,7 +67,7 @@ const CLASE_ENTRADA =
 export default function Expediente({ nuevo }: Props) {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { puede } = useTacografos();
+  const { puede, autorrelleno } = useTacografos();
 
   const [d, setD] = useState<DatosExpediente>(expedienteVacio());
   const [faltan, setFaltan] = useState<CampoQueFalta[]>([]);
@@ -181,6 +182,14 @@ export default function Expediente({ nuevo }: Props) {
             <Ban className="h-4 w-4" /> Anular
           </button>
         )}
+        {!nuevo && id && (
+          <a
+            href={api.urlExportar(id)}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-600 px-3 py-2 text-[13px] text-slate-300 hover:bg-slate-800"
+          >
+            <FileSpreadsheet className="h-4 w-4" /> Exportar
+          </a>
+        )}
         {!nuevo && puede("tacografos.entrega.register") && estado === "emitido" && (
           <button
             onClick={() => void entregar()}
@@ -200,6 +209,11 @@ export default function Expediente({ nuevo }: Props) {
         )}
       </div>
 
+      {d.intervencionId && (
+        <p className="mb-3 rounded-lg border border-slate-700 bg-slate-800/50 p-2 text-[12px] text-slate-400">
+          Enlazado con una intervención de taller.
+        </p>
+      )}
       {estado === "entregado" && (
         <p className="mb-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-[13px] text-emerald-200">
           Certificado entregado a {d.receptorNombre} ({d.receptorDni}) el{" "}
@@ -224,6 +238,22 @@ export default function Expediente({ nuevo }: Props) {
             El expediente se guarda igual, pero no podrá emitir documentos hasta completarlo.
           </span>
         </p>
+      )}
+
+      {nuevo && autorrelleno && (
+        <BuscarIntervencion
+          onElegir={(s) =>
+            setD((x) => ({
+              ...x,
+              empresaCliente: s.empresaCliente || x.empresaCliente,
+              matricula: s.matricula || x.matricula,
+              bastidor: s.bastidor || x.bastidor,
+              fechaInforme: s.fecha ?? x.fechaInforme,
+              tecnico: s.tecnico || x.tecnico,
+              intervencionId: s.intervencionId,
+            }))
+          }
+        />
       )}
 
       <fieldset disabled={!editable} className="contents">

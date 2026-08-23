@@ -91,6 +91,15 @@ function datosTransferencia(sobre: Partial<import("./domain.ts").DatosExpediente
   });
 }
 
+/*
+ * El pool se cierra UNA vez, al terminar el fichero entero. Estaba en el
+ * `afterAll` del primer bloque y mataba la conexión antes de que corriera el
+ * segundo: "Cannot use a pool after calling end on the pool".
+ */
+afterAll(async () => {
+  await db?.end().catch(() => {});
+});
+
 const centro = {
   nombre: "COMERCIAL SEA S.A.",
   centroTecnico: "Centro técnico de Tacógrafos",
@@ -113,10 +122,6 @@ describe.runIf(RUN)("Tacógrafos contra PostgreSQL", () => {
     servicio = await import("./service.ts");
     ErrorTacografos = (await import("./repository.ts")).ErrorTacografos;
     await repo.guardarCentro(EMPRESA, centro);
-  });
-
-  afterAll(async () => {
-    await db.end().catch(() => {});
   });
 
   beforeEach(async () => {
@@ -383,9 +388,178 @@ describe.runIf(RUN)("Tacógrafos contra PostgreSQL", () => {
     expect(fechaLimiteDestruccion(e.fechaTransferencia)).toBe("2026-03-10");
   });
 
+  // ── Autorrelleno desde el taller (fase 6) ─────────────────────────────────
+
+  it("sin licencia de TyreControl no se consulta nada del taller", async () => {
+    const { autorrellenoDisponible, buscar, olvidarEsquema } = await import("./intervenciones.ts");
+    olvidarEsquema();
+    // Esta base de pruebas no tiene las tablas tc_*, que es exactamente la
+    // situación de un centro que compró sólo el módulo de Tacógrafos.
+    expect(await autorrellenoDisponible(EMPRESA)).toBe(false);
+    expect(await buscar(EMPRESA, "7567")).toEqual([]);
+  });
+
+  it("un texto vacío no dispara ninguna consulta", async () => {
+    const { buscar } = await import("./intervenciones.ts");
+    expect(await buscar(EMPRESA, "   ")).toEqual([]);
+  });
+
+  // ── Exportación de respaldo (fase 6) ──────────────────────────────────────
+
+  it("exporta el expediente a un .xlsx con el rastro documental", async () => {
+    const XLSX = await import("xlsx");
+    const { componerXlsx, nombreFichero } = await import("./export.ts");
+
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datos());
+    const d = await servicio.emitirDocumento(EMPRESA, USUARIO, e.id, "acuse_cliente");
+    const actualizado = (await repo.obtenerExpediente(EMPRESA, e.id))!;
+
+    const buf = componerXlsx(
+      actualizado,
+      await repo.obtenerCentro(EMPRESA),
+      await repo.listarDocumentos(EMPRESA, e.id)
+    );
+    const libro = XLSX.read(buf, { type: "buffer" });
+    expect(libro.SheetNames).toEqual(["EXPEDIENTE", "DOCUMENTOS"]);
+
+    const texto = XLSX.utils
+      .sheet_to_csv(libro.Sheets.EXPEDIENTE)
+      .replace(/\r/g, "");
+    expect(texto).toContain("E943009-INT-001");
+    expect(texto).toContain("7567MPF");
+    expect(texto).toContain("Intransferibilidad");
+    // Las fechas salen en formato español, no en ISO.
+    expect(texto).toContain("10/03/2025");
+    // Excluyentes también en el respaldo.
+    expect(texto).toContain("Se entrega al cliente,No");
+    expect(texto).toContain("Se achatarrará,Sí");
+
+    // El hash es lo que permite comprobar después que el PDF es el que salió
+    // de aquí: sin él, el respaldo no serviría para nada.
+    const docs = XLSX.utils.sheet_to_csv(libro.Sheets.DOCUMENTOS);
+    expect(docs).toContain(d.hash);
+    expect(docs).toContain("Vigente");
+
+    expect(nombreFichero(actualizado)).toBe(
+      "expediente-E943009-INT-001-7567MPF.xlsx"
+    );
+  });
+
+  it("el respaldo de una transferencia lleva el plazo de destrucción", async () => {
+    const XLSX = await import("xlsx");
+    const { componerXlsx } = await import("./export.ts");
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datosTransferencia());
+    const texto = XLSX.utils.sheet_to_csv(
+      XLSX.read(componerXlsx(e, await repo.obtenerCentro(EMPRESA), []), { type: "buffer" })
+        .Sheets.EXPEDIENTE
+    );
+    expect(texto).toContain("Destruir los archivos a partir de,10/03/2026");
+    expect(texto).toContain("En mano");
+  });
+
+  it("el nombre del fichero aguanta un nº de informe con caracteres raros", async () => {
+    const { nombreFichero } = await import("./export.ts");
+    const e = await repo.crearExpediente(
+      EMPRESA,
+      USUARIO,
+      datos({ numInforme: "E943009/2025 nº 7", matricula: "1234 ABC" })
+    );
+    expect(nombreFichero(e)).toBe("expediente-E943009-2025-n-7-1234ABC.xlsx");
+  });
+
   it("ErrorTacografos lleva su código y su estado HTTP", async () => {
     const e = new ErrorTacografos("mensaje", "CODIGO", 409);
     expect(e.code).toBe("CODIGO");
     expect(e.status).toBe(409);
+  });
+});
+
+/**
+ * El autorrelleno con las tablas de TyreControl delante.
+ *
+ * El bloque de arriba sólo comprueba que sin ellas no se consulta nada. Aquí se
+ * levantan unas tablas mínimas con las columnas que usa el JOIN —cuatro tablas
+ * enlazadas— y una `app_licencia_activa` que dice que sí, para probar la
+ * consulta de verdad y no sólo el camino de la degradación.
+ */
+describe.runIf(RUN)("Autorrelleno con TyreControl presente", () => {
+  const EMPRESA_TC = "00000000-0000-4000-a000-0000000000dd";
+  const VEHICULO = "00000000-0000-4000-a000-0000000000e1";
+  const CLIENTE = "00000000-0000-4000-a000-0000000000e2";
+  const TECNICO = "00000000-0000-4000-a000-0000000000e3";
+  let intervenciones: typeof import("./intervenciones.ts");
+
+  beforeAll(async () => {
+    db = (await import("../db.ts")).default;
+    intervenciones = await import("./intervenciones.ts");
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS tc_empresas (id UUID PRIMARY KEY, nombre TEXT);
+      CREATE TABLE IF NOT EXISTS tc_vehiculos (id UUID PRIMARY KEY, matricula TEXT, bastidor TEXT);
+      CREATE TABLE IF NOT EXISTS tc_usuarios (id UUID PRIMARY KEY, nombre TEXT);
+      CREATE TABLE IF NOT EXISTS tc_intervenciones (
+        id UUID PRIMARY KEY, empresa_id UUID, vehiculo_id UUID, tecnico_id UUID,
+        numero TEXT, fecha DATE, created_at TIMESTAMPTZ DEFAULT now()
+      );
+      CREATE OR REPLACE FUNCTION app_licencia_activa(uuid, text)
+        RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true';
+    `);
+    await db.query(`INSERT INTO tc_empresas VALUES ($1, 'TRANSPORTES PLANA S.L.') ON CONFLICT DO NOTHING`, [CLIENTE]);
+    await db.query(`INSERT INTO tc_vehiculos VALUES ($1, '2380jbt', 'WDB9634031L') ON CONFLICT DO NOTHING`, [VEHICULO]);
+    await db.query(`INSERT INTO tc_usuarios VALUES ($1, 'Marc Roig') ON CONFLICT DO NOTHING`, [TECNICO]);
+    await db.query(
+      `INSERT INTO tc_intervenciones (id, empresa_id, vehiculo_id, tecnico_id, numero, fecha)
+       VALUES (gen_random_uuid(), $1, $2, $3, 'NT-2026-000089', DATE '2025-03-10')`,
+      [CLIENTE, VEHICULO, TECNICO]
+    );
+    intervenciones.olvidarEsquema();
+  });
+
+  afterAll(async () => {
+    await db.query(`
+      DROP TABLE IF EXISTS tc_intervenciones;
+      DROP TABLE IF EXISTS tc_vehiculos;
+      DROP TABLE IF EXISTS tc_empresas;
+      DROP TABLE IF EXISTS tc_usuarios;
+      DROP FUNCTION IF EXISTS app_licencia_activa(uuid, text);
+    `);
+    intervenciones.olvidarEsquema();
+  });
+
+  it("con tablas y licencia, el autorrelleno está disponible", async () => {
+    expect(await intervenciones.autorrellenoDisponible(EMPRESA_TC)).toBe(true);
+  });
+
+  it("encuentra la intervención por matrícula y devuelve los datos enlazados", async () => {
+    const [s] = await intervenciones.buscar(EMPRESA_TC, "2380");
+    expect(s).toBeDefined();
+    // El JOIN de las cuatro tablas: vehículo, empresa cliente y técnico.
+    expect(s.matricula).toBe("2380JBT");
+    expect(s.bastidor).toBe("WDB9634031L");
+    expect(s.empresaCliente).toBe("TRANSPORTES PLANA S.L.");
+    expect(s.tecnico).toBe("Marc Roig");
+    expect(s.numero).toBe("NT-2026-000089");
+    // Y la fecha, otra vez, sin correrse un día.
+    expect(s.fecha).toBe("2025-03-10");
+  });
+
+  it("también la encuentra por nº de parte y por nombre del cliente", async () => {
+    expect(await intervenciones.buscar(EMPRESA_TC, "NT-2026")).toHaveLength(1);
+    expect(await intervenciones.buscar(EMPRESA_TC, "plana")).toHaveLength(1);
+    expect(await intervenciones.buscar(EMPRESA_TC, "no existe")).toHaveLength(0);
+  });
+
+  it("una intervención sin vehículo ni técnico no rompe la búsqueda", async () => {
+    // Las claves ajenas son opcionales en tc_intervenciones: el LEFT JOIN tiene
+    // que aguantar los huecos en vez de hacer desaparecer la fila.
+    await db.query(
+      `INSERT INTO tc_intervenciones (id, empresa_id, numero, fecha)
+       VALUES (gen_random_uuid(), $1, 'NT-2026-000090', DATE '2025-04-01')`,
+      [CLIENTE]
+    );
+    const r = await intervenciones.buscar(EMPRESA_TC, "NT-2026-000090");
+    expect(r).toHaveLength(1);
+    expect(r[0].matricula).toBe("");
+    expect(r[0].tecnico).toBe("");
   });
 });
