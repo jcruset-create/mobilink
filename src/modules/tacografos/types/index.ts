@@ -194,3 +194,13 @@ export type TextoTramite = {
   urlTramite: string;
   urlOvt: string;
 };
+
+/** Lo que ha entendido el importador del informe de la extranet. */
+export type Importacion = {
+  origen: "pdf_texto" | "ocr";
+  datos: Partial<DatosExpediente>;
+  campos: Record<string, string>;
+  avisos: string[];
+  encontradas: number;
+  total: number;
+};
