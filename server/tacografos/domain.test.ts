@@ -6,6 +6,9 @@
 import { describe, it, expect } from "vitest";
 import {
   camposQueFaltan,
+  diasParaDestruir,
+  estadoCustodia,
+  faltaParaDestruir,
   fechaLimiteDestruccion,
   normalizarMatricula,
   seAchatarra,
@@ -108,5 +111,68 @@ describe("fechaLimiteDestruccion", () => {
 
   it("una fecha con formato inesperado no revienta", () => {
     expect(fechaLimiteDestruccion("10/03/2025")).toBeNull();
+  });
+});
+
+describe("estadoCustodia", () => {
+  it("sin transferencia no hay nada que custodiar", () => {
+    // En una intransferibilidad no existe archivo: de eso da fe el certificado.
+    expect(estadoCustodia(null, null, "2026-01-01")).toBe("sin_transferencia");
+  });
+
+  it("dentro del año, en custodia", () => {
+    expect(estadoCustodia("2025-03-10", null, "2026-03-09")).toBe("en_custodia");
+  });
+
+  it("el mismo día del aniversario ya toca destruir", () => {
+    expect(estadoCustodia("2025-03-10", null, "2026-03-10")).toBe("pendiente_destruir");
+  });
+
+  it("pasado el plazo, pendiente", () => {
+    expect(estadoCustodia("2025-03-10", null, "2026-06-01")).toBe("pendiente_destruir");
+  });
+
+  it("registrada la destrucción, deja de reclamarse", () => {
+    expect(estadoCustodia("2025-03-10", "2026-03-11", "2027-01-01")).toBe("destruido");
+  });
+});
+
+describe("diasParaDestruir", () => {
+  it("cuenta los días que faltan", () => {
+    expect(diasParaDestruir("2025-03-10", "2026-03-01")).toBe(9);
+  });
+
+  it("y los que se llevan de retraso, en negativo", () => {
+    expect(diasParaDestruir("2025-03-10", "2026-03-20")).toBe(-10);
+  });
+
+  it("el cambio de hora no descuadra la cuenta", () => {
+    // Del 10/03 al 10/03 hay exactamente un año, aunque por medio haya un
+    // cambio de hora que hace que un día tenga 23 horas.
+    expect(diasParaDestruir("2025-03-10", "2026-03-10")).toBe(0);
+  });
+
+  it("sin transferencia no hay plazo", () => {
+    expect(diasParaDestruir(null, "2026-01-01")).toBeNull();
+  });
+});
+
+describe("faltaParaDestruir", () => {
+  const completo = {
+    fecha: "2026-03-11",
+    metodo: "Borrado seguro y destrucción física del soporte",
+    persona: "Jordi Cruset",
+    hash: "a".repeat(64),
+  };
+
+  it("con los cuatro datos no falta nada", () => {
+    expect(faltaParaDestruir(completo)).toEqual([]);
+  });
+
+  it("reclama los que falten, todos a la vez", () => {
+    expect(faltaParaDestruir({ ...completo, metodo: "", hash: "  " })).toEqual([
+      "Método de destrucción",
+      "Firma digital del archivo destruido",
+    ]);
   });
 });

@@ -216,4 +216,36 @@ export async function initTacografos(): Promise<void> {
       UNIQUE (expediente_id, papel)
     );
   `);
+
+  // ── Comunicaciones a la administración ────────────────────────────────────
+  // El certificado de intransferibilidad se remite a la autoridad competente.
+  // Aquí se anota cuándo se presentó y con qué referencia devolvió el trámite:
+  // sin eso, «lo mandamos» no es demostrable.
+  //
+  // Una fila por presentación, no una por expediente: si el trámite se rechaza
+  // y hay que volver a presentarlo, el intento anterior no se borra.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tac_comunicaciones (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      expediente_id UUID NOT NULL REFERENCES tac_expedientes(id),
+      fecha_presentacion DATE NOT NULL,
+      -- Número de registro que devuelve la Generalitat. Es la prueba.
+      referencia TEXT NOT NULL DEFAULT '',
+      notas TEXT NOT NULL DEFAULT '',
+      registrado_at_ms BIGINT NOT NULL,
+      registrado_por UUID
+    );
+    CREATE INDEX IF NOT EXISTS tac_com_expediente_idx
+      ON tac_comunicaciones(expediente_id, fecha_presentacion DESC);
+  `);
+
+  // El acta de destrucción es un documento más, con su hash y su anulación.
+  // La restricción CHECK del tipo se amplía en vez de recrear la tabla: en una
+  // base que ya tenga documentos emitidos, recrearla los perdería.
+  await pool.query(`
+    ALTER TABLE tac_documentos DROP CONSTRAINT IF EXISTS tac_documentos_tipo_check;
+    ALTER TABLE tac_documentos ADD CONSTRAINT tac_documentos_tipo_check
+      CHECK (tipo IN ('justificante','acuse_cliente','comunicacion_admin','acta_destruccion'));
+  `);
 }

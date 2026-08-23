@@ -16,7 +16,10 @@ import type {
   Expediente,
   Firma,
   PapelFirma,
+  Comunicacion,
+  FilaCustodia,
   Sugerencia,
+  TextoTramite,
   TipoDocumento,
 } from "../types";
 
@@ -153,6 +156,44 @@ export function buscarIntervenciones(texto: string): Promise<{ sugerencias: Suge
 /** URL de descarga del respaldo en hoja de cálculo. */
 export function urlExportar(expedienteId: string): string {
   return `${BASE}/expedientes/${expedienteId}/exportar`;
+}
+
+export function listarCustodia(): Promise<{ custodia: FilaCustodia[] }> {
+  return pedir("/custodia");
+}
+
+export function registrarDestruccion(
+  expedienteId: string,
+  d: { fecha: string; metodo: string; persona: string; hash: string }
+): Promise<{ expediente: Expediente }> {
+  return pedir(`/expedientes/${expedienteId}/destruccion`, {
+    method: "POST",
+    body: JSON.stringify(d),
+  });
+}
+
+export function pendientesComunicar(): Promise<{ pendientes: Expediente[] }> {
+  return pedir("/comunicaciones/pendientes");
+}
+
+export function listarComunicaciones(
+  expedienteId: string
+): Promise<{ comunicaciones: Comunicacion[] }> {
+  return pedir(`/expedientes/${expedienteId}/comunicaciones`);
+}
+
+export function registrarComunicacion(
+  expedienteId: string,
+  d: { fechaPresentacion: string; referencia: string; notas: string }
+): Promise<{ comunicacion: Comunicacion }> {
+  return pedir(`/expedientes/${expedienteId}/comunicaciones`, {
+    method: "POST",
+    body: JSON.stringify(d),
+  });
+}
+
+export function textoTramite(expedienteId: string): Promise<TextoTramite> {
+  return pedir(`/expedientes/${expedienteId}/texto-tramite`);
 }
 
 export function guardarCentro(c: Centro): Promise<{ centro: Centro }> {

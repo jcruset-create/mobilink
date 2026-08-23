@@ -27,13 +27,19 @@ import { seAchatarra, type Modalidad } from "./domain.ts";
 import type { Centro, Expediente } from "./repository.ts";
 import type { Plantillas } from "./templates.ts";
 
-export const TIPOS_DOCUMENTO = ["justificante", "acuse_cliente", "comunicacion_admin"] as const;
+export const TIPOS_DOCUMENTO = [
+  "justificante",
+  "acuse_cliente",
+  "comunicacion_admin",
+  "acta_destruccion",
+] as const;
 export type TipoDocumento = (typeof TIPOS_DOCUMENTO)[number];
 
 export const ETIQUETA_DOCUMENTO: Record<TipoDocumento, string> = {
   justificante: "Justificante de transferencia",
   acuse_cliente: "Acuse de recibo - intransferibilidad",
   comunicacion_admin: "Comunicación a la administración",
+  acta_destruccion: "Acta de destrucción de archivos",
 };
 
 /**
@@ -44,9 +50,16 @@ export const CODIGO_FORMATO: Record<TipoDocumento, string> = {
   justificante: "CTT-F-01",
   acuse_cliente: "CTT-F-03",
   comunicacion_admin: "CTT-F-04",
+  acta_destruccion: "CTT-F-05",
 };
 
-/** Qué documento corresponde a cada tipo de operación. */
+/**
+ * Qué documento corresponde a cada tipo de operación.
+ *
+ * El acta de destrucción no está aquí: no se emite con la intervención sino un
+ * año después, y sólo si hubo transferencia. La decide el servicio, no el tipo
+ * de operación.
+ */
 export const DOCUMENTOS_POR_TIPO: Record<Expediente["tipo"], TipoDocumento[]> = {
   transferencia: ["justificante"],
   intransferibilidad: ["acuse_cliente", "comunicacion_admin"],
@@ -425,10 +438,59 @@ function comunicacionAdmin(
   l.pie(pie);
 }
 
+/**
+ * Acta de destrucción de los archivos transferidos.
+ *
+ * Lleva los siete datos que exige el apartado 8.5.1 de la UNE 66102:2025:
+ * fecha de destrucción, matrícula, nº de bastidor, nº de serie de la unidad
+ * intravehicular, firma digital del archivo destruido, método y persona que la
+ * realizó. Si falta alguno, el acta no acredita lo que dice acreditar; por eso
+ * el servicio no la emite hasta tenerlos todos.
+ */
+function actaDestruccion(
+  l: Lienzo,
+  { expediente: e, centro, plantillas: t, pie, rubricas = {} }: ContextoDocumento
+) {
+  cabeceraCentro(l, centro);
+  l.salto(20);
+  l.parrafo(t.acta_titulo ?? "", { negrita: true, tamano: 13 });
+  l.salto(14);
+  l.parrafo(t.acta_p1 ?? "");
+  l.salto(10);
+
+  l.campo("Matrícula del vehículo:", e.matricula, { anchoEtiqueta: 210 });
+  l.campo("Nº de bastidor:", e.bastidor, { anchoEtiqueta: 210 });
+  l.campo("Nº de serie de la unidad:", e.tacSerie, { anchoEtiqueta: 210 });
+  l.campo("Fecha de la transferencia:", fechaEs(e.fechaTransferencia), { anchoEtiqueta: 210 });
+  l.salto(8);
+  l.campo("Fecha de destrucción:", fechaEs(e.destruccionFecha), { anchoEtiqueta: 210 });
+  l.campo("Método de destrucción:", e.destruccionMetodo, { anchoEtiqueta: 210 });
+  l.campo("Persona que la realizó:", e.destruccionPersona, { anchoEtiqueta: 210 });
+  l.salto(8);
+  l.linea("Firma digital del archivo destruido (SHA-256):", { tamano: 10 });
+  // El hash va partido en dos líneas: 64 caracteres seguidos no caben al ancho
+  // de la página y `partirEnLineas` no puede romperlo, porque no tiene espacios.
+  l.linea(e.destruccionHash.slice(0, 32), { tamano: 9, negrita: true });
+  l.linea(e.destruccionHash.slice(32), { tamano: 9, negrita: true });
+  l.salto(12);
+  l.parrafo(t.acta_p2 ?? "");
+  l.salto(14);
+  l.linea(`En ${centro.ciudadFirma}, a ${fechaEs(e.destruccionFecha)}`);
+  l.salto(20);
+  l.firma(
+    `Responsable técnico: ${centro.responsableTecnico}`,
+    MARGEN,
+    200,
+    rubricas.responsable
+  );
+  l.pie(pie);
+}
+
 const COMPOSITORES: Record<TipoDocumento, (l: Lienzo, c: ContextoDocumento) => void> = {
   justificante,
   acuse_cliente: acuseCliente,
   comunicacion_admin: comunicacionAdmin,
+  acta_destruccion: actaDestruccion,
 };
 
 /** Qué firma lleva cada documento. */
@@ -436,6 +498,7 @@ export const FIRMAS_POR_DOCUMENTO: Record<TipoDocumento, Array<keyof Rubricas>> 
   justificante: ["autoriza", "tecnico"],
   acuse_cliente: ["receptor"],
   comunicacion_admin: ["responsable"],
+  acta_destruccion: ["responsable"],
 };
 
 /**

@@ -114,7 +114,11 @@ export function expedienteVacio(): DatosExpediente {
   };
 }
 
-export type TipoDocumento = "justificante" | "acuse_cliente" | "comunicacion_admin";
+export type TipoDocumento =
+  | "justificante"
+  | "acuse_cliente"
+  | "comunicacion_admin"
+  | "acta_destruccion";
 
 export type Documento = {
   id: string;
@@ -151,6 +155,7 @@ export const FIRMAS_POR_DOCUMENTO: Record<TipoDocumento, PapelFirma[]> = {
   justificante: ["autoriza", "tecnico"],
   acuse_cliente: ["receptor"],
   comunicacion_admin: ["responsable"],
+  acta_destruccion: ["responsable"],
 };
 
 export const ETIQUETA_FIRMA: Record<PapelFirma, string> = {
@@ -158,4 +163,34 @@ export const ETIQUETA_FIRMA: Record<PapelFirma, string> = {
   receptor: "Persona que recibe el certificado",
   tecnico: "Técnico que interviene",
   responsable: "Responsable técnico",
+};
+
+export type EstadoCustodia =
+  | "sin_transferencia"
+  | "en_custodia"
+  | "pendiente_destruir"
+  | "destruido";
+
+export type FilaCustodia = {
+  expediente: Expediente;
+  estado: EstadoCustodia;
+  fechaLimite: string | null;
+  diasRestantes: number | null;
+};
+
+export type Comunicacion = {
+  id: string;
+  expedienteId: string;
+  fechaPresentacion: string | null;
+  referencia: string;
+  notas: string;
+  registradoAtMs: number;
+};
+
+export type TextoTramite = {
+  assumpte: string;
+  nomFitxer: string;
+  exposo: string;
+  urlTramite: string;
+  urlOvt: string;
 };

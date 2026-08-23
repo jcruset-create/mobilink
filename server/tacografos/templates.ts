@@ -89,6 +89,35 @@ export const PLANTILLAS: Record<string, string> = {
     "(el certificado de intransferibilidad) a la propiedad de la citada organización",
   acuse_entrega_si: "***Se entrega tacógrafo Averiado",
   acuse_achatarrar_si: "***El tacógrafo se achatarrará",
+
+  // ── Acta de destrucción de los archivos transferidos ──────────────────────
+  // Apartado 8.5.1 de la UNE 66102:2025 y nota F del anexo II: pasado un año
+  // desde la transferencia, los archivos se destruyen y de cada destrucción se
+  // levanta un documento con siete datos, que son los que lleva esta acta.
+  acta_titulo: "ACTA DE DESTRUCCIÓN DE ARCHIVOS DE TRANSFERENCIA DE DATOS",
+  acta_p1:
+    "En cumplimiento de lo establecido en la disposición adicional primera del Real decreto " +
+    "125/2017 y en el apartado 8.5.1 de la Norma UNE 66102:2025, transcurrido un año desde la " +
+    "fecha de la transferencia, se procede a la destrucción de los archivos que contenían los " +
+    "datos descargados de la unidad intravehicular identificada a continuación, así como de sus " +
+    "copias de seguridad.",
+  acta_p2:
+    "El responsable técnico del centro deja constancia de que la destrucción se ha realizado por " +
+    "el método indicado y de que no se conserva ninguna otra copia de dichos archivos.",
+
+  // ── Trámite telemático ante la Generalitat (en catalán) ───────────────────
+  // Se compone en un párrafo copiable para pegarlo en la petición genérica.
+  cat_exposo_1:
+    "En compliment del requisit expressat en la disposició addicional primera, apartat 10, del " +
+    "Reial decret 125/2017, els remetem còpia del certificat de intransferibilitat corresponent " +
+    "a la substitució del tacògraf: Model: ",
+  cat_exposo_2: ", Nº de Sèrie: ",
+  cat_exposo_3: ", muntat en el vehicle: ",
+  cat_exposo_4: ", Nº d\u2019informe / certificat: ",
+  cat_exposo_5: ", Data Informe: ",
+  cat_exposo_6: ". Sol\u00b7licito que es doni el tràmit acceptat.",
+  cat_assumpte: "Certificat de Intransferibilitat de dades Tacògraf digital",
+  cat_fitxer: " Certificat de Intransferibilitat",
 };
 
 export type Plantillas = Record<string, string>;

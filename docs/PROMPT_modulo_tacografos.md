@@ -94,7 +94,7 @@ Prefijo `tac_`. Migraciones idempotentes.
 | `tac_centros` | Datos fijos del centro técnico por empresa: razón social, nº de centro (`E943009`), dirección, ciudad, email, URL del trámite. Sustituye a la hoja CONFIG del Excel. |
 | `tac_expedientes` | Empresa cliente · persona autorizada · DNI/NIF · matrícula · marca/modelo/nº serie del tacógrafo retirado · nº de informe · fecha informe · fecha entrega · tipo (`transferencia`\|`intransferibilidad`) · modalidad de entrega · entrega física del aparato sí/no · achatarramiento sí/no · estado · `intervencion_id` opcional. |
 | `tac_plantillas` | Textos legales **versionados**. Un cambio normativo futuro crea una versión nueva; los documentos ya emitidos siguen apuntando a la suya. |
-| `tac_documentos` | Un PDF emitido: expediente, tipo (`justificante`\|`acuse_cliente`\|`comunicacion_admin`), versión de plantilla, ruta en storage, hash, firmante, fecha de firma. |
+| `tac_documentos` | Un PDF emitido: expediente, tipo (`justificante`\|`acuse_cliente`\|`comunicacion_admin`\|`acta_destruccion`), versión de plantilla, ruta en storage, hash, firmante, fecha de firma. |
 | `tac_comunicaciones` | Presentación ante la administración: fecha, referencia/registro devuelto, quién la presentó, justificante adjunto. |
 
 Regla dura: **un documento firmado es inmutable.** Se guarda con su hash; corregir
@@ -145,7 +145,7 @@ exactamente el razonamiento de `server/cash/permissions.ts`:
 | 2 | `server/tacografos/` (schema, router, repository, permissions), tablas `tac_*`, alta como módulo licenciable y formulario único de expediente | **hecha** |
 | 3 | Los tres PDF con `pdf-lib` desde plantillas versionadas, bucket privado, documento inmutable con hash | **hecha** |
 | 4 | Firma en pantalla (cliente, receptor y técnico) y registro de entrega | **hecha** |
-| 5 | Custodia: plazo de un año, aviso de pendientes de destruir y documento de destrucción con sus siete campos; cola de comunicaciones a la Generalitat; conservación cinco años de las copias emitidas | |
+| 5 | Custodia: plazo de un año, aviso de pendientes de destruir y documento de destrucción con sus siete campos; cola de comunicaciones a la Generalitat; conservación cinco años de las copias emitidas | **hecha** |
 | 6 | Enlace con `tc_intervenciones` para autorrellenar y exportación `.xlsx` del expediente | **hecha** |
 
 Las fases 0 y 1 no son trabajo tirado: el Excel funciona desde el primer día, sin

@@ -12,6 +12,7 @@ import TacografosLayout from "./layouts/TacografosLayout";
 import Expedientes from "./pages/Expedientes";
 import Expediente from "./pages/Expediente";
 import ConfiguracionCentro from "./pages/ConfiguracionCentro";
+import Custodia from "./pages/Custodia";
 
 function Contenido() {
   const { cargando, error, permisos } = useTacografos();
@@ -45,6 +46,7 @@ function Contenido() {
         <Route path="expedientes" element={<Expedientes />} />
         <Route path="expedientes/nuevo" element={<Expediente nuevo />} />
         <Route path="expedientes/:id" element={<Expediente />} />
+        <Route path="custodia" element={<Custodia />} />
         <Route path="centro" element={<ConfiguracionCentro />} />
         <Route path="*" element={<Navigate to="/tacografos/expedientes" replace />} />
       </Route>

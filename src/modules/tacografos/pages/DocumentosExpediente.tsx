@@ -16,6 +16,7 @@ const ETIQUETA: Record<TipoDocumento, string> = {
   justificante: "Justificante de transferencia",
   acuse_cliente: "Acuse de recibo — intransferibilidad",
   comunicacion_admin: "Comunicación a la administración",
+  acta_destruccion: "Acta de destrucción de archivos",
 };
 
 function instante(ms: number): string {

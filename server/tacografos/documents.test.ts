@@ -7,7 +7,6 @@
  * la línea del achatarramiento.
  */
 
-import { inflateSync } from "node:zlib";
 import { describe, it, expect } from "vitest";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
@@ -19,6 +18,7 @@ import {
   partirEnLineas,
 } from "./documents.ts";
 import { PLANTILLAS } from "./templates.ts";
+import { extraerTextoPdf as textoDelPdf } from "./pdfTexto.ts";
 import type { Centro, Expediente } from "./repository.ts";
 
 const CENTRO: Centro = {
@@ -78,43 +78,6 @@ const CTX = (e: Expediente) => ({
   // Mismo formato que compone `service.pie()`.
   pie: "Formato CTT-F-01 · Plantillas v1 · Emitido 22/08/2026 · Centro E943009 · UNE 66102:2025",
 });
-
-/**
- * Texto plano del PDF, para poder afirmar qué hay dentro.
- *
- * pdf-lib comprime los flujos de contenido, así que hay que inflarlos antes de
- * buscar los operadores de dibujo de texto. Se hace aquí, en la prueba, y no
- * con una librería de extracción: lo único que hace falta es leer las cadenas
- * que el propio módulo ha escrito.
- */
-function textoDelPdf(pdf: Buffer): string {
-  const trozos: string[] = [];
-  let desde = 0;
-  for (;;) {
-    const ini = pdf.indexOf("stream", desde);
-    if (ini < 0) break;
-    const fin = pdf.indexOf("endstream", ini);
-    if (fin < 0) break;
-    // Tras "stream" viene un salto de línea (o CRLF) antes de los datos.
-    let datos = ini + "stream".length;
-    if (pdf[datos] === 0x0d) datos++;
-    if (pdf[datos] === 0x0a) datos++;
-    const crudo = pdf.subarray(datos, fin);
-    try {
-      trozos.push(inflateSync(crudo).toString("latin1"));
-    } catch {
-      trozos.push(crudo.toString("latin1"));
-    }
-    // Avanzar sólo un byte volvería a encontrar la "stream" que hay dentro de
-    // "endstream", y el siguiente tramo se comería la página siguiente.
-    desde = fin + "endstream".length;
-  }
-  // pdf-lib escribe las cadenas en hexadecimal: `<434F4D...> Tj`, no `(COM...) Tj`.
-  const contenido = trozos.join("\n");
-  return (contenido.match(/<([0-9A-Fa-f]+)>\s*Tj/g) ?? [])
-    .map((t) => Buffer.from(t.slice(1, t.indexOf(">")), "hex").toString("latin1"))
-    .join(" ");
-}
 
 describe("DOCUMENTOS_POR_TIPO", () => {
   it("el justificante es de la transferencia y los otros dos de la intransferibilidad", () => {

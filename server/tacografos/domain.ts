@@ -124,3 +124,51 @@ export function fechaLimiteDestruccion(fechaTransferencia: string | null): strin
   const limite = new Date(Date.UTC(a + 1, m - 1, d));
   return limite.toISOString().slice(0, 10);
 }
+
+/**
+ * Años que el centro conserva copia de los certificados emitidos.
+ *
+ * El RD 125/2017 lo fija en cinco. No se borra nada al cumplirse: el plazo es
+ * un mínimo de conservación, no una orden de destruir. Lo que sí se destruye al
+ * año son los archivos transferidos, que es otra cosa (nota F del anexo II).
+ */
+export const ANOS_CONSERVACION_CERTIFICADOS = 5;
+
+/** Situación de los archivos de una transferencia respecto de su plazo. */
+export type EstadoCustodia = "sin_transferencia" | "en_custodia" | "pendiente_destruir" | "destruido";
+
+export function estadoCustodia(
+  fechaTransferencia: string | null,
+  destruccionFecha: string | null,
+  hoyIso: string
+): EstadoCustodia {
+  if (!fechaTransferencia) return "sin_transferencia";
+  if (destruccionFecha) return "destruido";
+  const limite = fechaLimiteDestruccion(fechaTransferencia);
+  // Las tres son `aaaa-mm-dd`, así que comparar cadenas es comparar fechas y no
+  // hay ninguna conversión por el medio que pueda correr un día.
+  return limite && hoyIso >= limite ? "pendiente_destruir" : "en_custodia";
+}
+
+/** Días que faltan (negativo si ya pasó) para poder destruir los archivos. */
+export function diasParaDestruir(fechaTransferencia: string | null, hoyIso: string): number | null {
+  const limite = fechaLimiteDestruccion(fechaTransferencia);
+  if (!limite) return null;
+  const dia = 24 * 60 * 60 * 1000;
+  return Math.round((Date.parse(`${limite}T00:00:00Z`) - Date.parse(`${hoyIso}T00:00:00Z`)) / dia);
+}
+
+/** Los siete datos que exige el acta de destrucción (UNE 66102:2025, 8.5.1). */
+export function faltaParaDestruir(d: {
+  fecha: string;
+  metodo: string;
+  persona: string;
+  hash: string;
+}): string[] {
+  const falta: string[] = [];
+  if (!d.fecha.trim()) falta.push("Fecha de destrucción");
+  if (!d.metodo.trim()) falta.push("Método de destrucción");
+  if (!d.persona.trim()) falta.push("Persona que la realizó");
+  if (!d.hash.trim()) falta.push("Firma digital del archivo destruido");
+  return falta;
+}

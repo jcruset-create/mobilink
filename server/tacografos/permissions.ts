@@ -35,6 +35,15 @@ export const PERMISOS = [
   "tacografos.documento.sign",
   /** Dar por entregado el certificado al cliente. */
   "tacografos.entrega.register",
+  /**
+   * Anotar la destrucción de los archivos transferidos pasado el año.
+   *
+   * De responsable y no del día a día: la fecha que queda escrita es la prueba
+   * de que se cumplió el plazo, y quien la firma es el responsable técnico.
+   */
+  "tacografos.custodia.destruir",
+  /** Anotar la presentación del certificado ante la administración. */
+  "tacografos.comunicacion.register",
   /** Datos del centro técnico: contraseña identificativa, dirección, enlaces. */
   "tacografos.config.edit",
 ] as const;
@@ -61,6 +70,7 @@ const POR_ROL: Record<RolTacografos, readonly Permiso[]> = {
     "tacografos.documento.emit",
     "tacografos.documento.sign",
     "tacografos.entrega.register",
+    "tacografos.comunicacion.register",
   ],
   responsable: [
     "tacografos.view",
@@ -71,6 +81,8 @@ const POR_ROL: Record<RolTacografos, readonly Permiso[]> = {
     "tacografos.documento.sign",
     "tacografos.documento.annul",
     "tacografos.entrega.register",
+    "tacografos.custodia.destruir",
+    "tacografos.comunicacion.register",
   ],
   admin: PERMISOS,
 };
