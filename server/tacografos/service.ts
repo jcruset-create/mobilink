@@ -32,9 +32,16 @@ import {
   urlFirmada,
 } from "./storage.ts";
 
+/** Día local de un instante, en `aaaa-mm-dd`. Mismo motivo que en `aIso`. */
+function diaLocal(ms: number): string {
+  const d = new Date(ms);
+  const dos = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${dos(d.getMonth() + 1)}-${dos(d.getDate())}`;
+}
+
 /** Pie de identificación del documento (UNE 66102:2025, 7.5.2). */
 function pie(tipo: TipoDocumento, version: number, emitidoAtMs: number, numCentro: string): string {
-  const emitido = fechaEs(new Date(emitidoAtMs).toISOString().slice(0, 10));
+  const emitido = fechaEs(diaLocal(emitidoAtMs));
   const centro = numCentro ? ` · Centro ${numCentro}` : "";
   return `Formato ${CODIGO_FORMATO[tipo]} · Plantillas v${version} · Emitido ${emitido}${centro} · UNE 66102:2025`;
 }

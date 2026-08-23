@@ -94,10 +94,20 @@ type FilaExpediente = {
   updated_at_ms: string;
 };
 
-/** `DATE` de PostgreSQL a `aaaa-mm-dd`, sin pasar por la zona horaria local. */
-function aIso(v: Date | null): string | null {
+/**
+ * `DATE` de PostgreSQL a `aaaa-mm-dd`.
+ *
+ * Con los componentes locales, NO con `toISOString()`. `pg` construye la fecha
+ * de una columna DATE a medianoche **local**, así que en Madrid (UTC+1) un
+ * `2025-03-10` es `2025-03-09T23:00:00Z` y `toISOString()` lo devolvía como
+ * día 9: el certificado habría salido fechado un día antes en toda España.
+ * Lo destapó la prueba de integración ejecutada con TZ=Europe/Madrid.
+ */
+function aIso(v: Date | string | null): string | null {
   if (!v) return null;
-  return typeof v === "string" ? v : v.toISOString().slice(0, 10);
+  if (typeof v === "string") return v.slice(0, 10);
+  const dos = (n: number) => String(n).padStart(2, "0");
+  return `${v.getFullYear()}-${dos(v.getMonth() + 1)}-${dos(v.getDate())}`;
 }
 
 function aExpediente(f: FilaExpediente): Expediente {
