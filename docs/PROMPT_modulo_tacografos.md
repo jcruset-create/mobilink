@@ -146,7 +146,7 @@ exactamente el razonamiento de `server/cash/permissions.ts`:
 | 3 | Los tres PDF con `pdf-lib` desde plantillas versionadas, bucket privado, documento inmutable con hash | **hecha** |
 | 4 | Firma en pantalla (cliente, receptor y técnico) y registro de entrega | **hecha** |
 | 5 | Custodia: plazo de un año, aviso de pendientes de destruir y documento de destrucción con sus siete campos; cola de comunicaciones a la Generalitat; conservación cinco años de las copias emitidas | |
-| 6 | Enlace con `tc_intervenciones` para autorrellenar y exportación `.xlsx` del expediente | |
+| 6 | Enlace con `tc_intervenciones` para autorrellenar y exportación `.xlsx` del expediente | **hecha** |
 
 Las fases 0 y 1 no son trabajo tirado: el Excel funciona desde el primer día, sin
 esperar al despliegue, y es la fuente de la que salen los textos legales de
@@ -171,6 +171,23 @@ construye la fecha de una columna `DATE` a medianoche **local**, así que en
 habría salido fechado un día antes en toda España** — junto con el plazo de
 custodia de un año. La prueba fija ahora `TZ=Europe/Madrid` para que el fallo
 no pueda volver aunque la CI corra en UTC.
+
+## 8.2 Supuesto del autorrelleno desde el taller
+
+Las tablas `tc_*` de TyreControl **no llevan columna de inquilino**: su
+`empresa_id` apunta a `tc_empresas`, que es la empresa de transportes cliente,
+no el centro que usa Mobilink. El aislamiento allí lo hace RLS contra
+`tc_usuarios`, un mecanismo distinto del `app_usuario_modulos` de este módulo,
+así que **no hay forma de filtrar `tc_intervenciones` por el `empresaId` de la
+sesión**.
+
+Por eso el autorrelleno sólo se ofrece a quien tiene **licencia de
+`tyrecontrol`** vigente y las tablas presentes: si el centro tiene TyreControl
+contratado, esos datos ya son suyos y los ve en su propio módulo. Sin esa
+licencia no se consulta nada.
+
+Si algún día el despliegue deja de ser de un solo centro técnico, esto hay que
+revisarlo antes que ninguna otra cosa.
 
 ## 9. Decisiones abiertas
 

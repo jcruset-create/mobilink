@@ -32,6 +32,8 @@ import {
   type TipoDocumento,
 } from "./documents.ts";
 import { leerDocumento, urlFirmada } from "./storage.ts";
+import * as intervenciones from "./intervenciones.ts";
+import { componerXlsx, nombreFichero } from "./export.ts";
 
 /** Envuelve un manejador para que un fallo no se lleve por delante el proceso. */
 function ruta(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -136,6 +138,9 @@ export function createTacografosRouter(): Router {
         rol: req.tacografosRol ?? null,
         permisos: req.tacografosPermisos ?? [],
         centro: await repo.obtenerCentro(ctx.empresaId),
+        // Para que la pantalla no enseñe un buscador de intervenciones que
+        // nunca va a devolver nada.
+        autorrelleno: await intervenciones.autorrellenoDisponible(ctx.empresaId),
       });
     })
   );
@@ -387,6 +392,45 @@ export function createTacografosRouter(): Router {
         receptorDni,
       });
       res.json({ expediente: conCalculados(expediente) });
+    })
+  );
+
+  // ── Traer datos de una intervención de taller ─────────────────────────────
+
+  r.get(
+    "/intervenciones",
+    exigirPermiso("tacografos.view"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      res.json({
+        sugerencias: await intervenciones.buscar(ctx.empresaId, texto(req.query.texto)),
+      });
+    })
+  );
+
+  // ── Exportación de respaldo ───────────────────────────────────────────────
+
+  r.get(
+    "/expedientes/:id/exportar",
+    exigirPermiso("tacografos.view"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      const id = String(req.params.id);
+      const expediente = await repo.obtenerExpediente(ctx.empresaId, id);
+      if (!expediente) {
+        throw new ErrorTacografos("Expediente no encontrado.", "EXPEDIENTE_NO_ENCONTRADO", 404);
+      }
+      const libro = componerXlsx(
+        expediente,
+        await repo.obtenerCentro(ctx.empresaId),
+        await repo.listarDocumentos(ctx.empresaId, id)
+      );
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader("Content-Disposition", `attachment; filename="${nombreFichero(expediente)}"`);
+      res.send(libro);
     })
   );
 
