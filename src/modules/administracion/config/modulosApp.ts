@@ -102,7 +102,10 @@ export const MODULOS_APP: ModuloApp[] = [
   },
   {
     key: "tacografos",
-    label: "Tacógrafos",
+    // El nombre comercial es sólo esta etiqueta: la clave `tacografos` vive en
+    // la base (licencias y app_usuario_modulos), en las rutas y en los
+    // permisos, así que rebautizar el módulo no toca nada de eso.
+    label: "Mobilink TachoCert",
     // Mismos roles que traduce server/tacografos/permissions.ts: el catálogo y
     // el backend tienen que decir lo mismo, o alguien quedará con un rol que
     // aquí se ve y allí no existe.
