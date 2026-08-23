@@ -135,7 +135,7 @@ export function exigirPermiso(permiso: Permiso): RequestHandler {
   return (req, res, next) => {
     if (!req.tacografosPermisos?.includes(permiso)) {
       return res.status(403).json({
-        error: "No tienes permiso para hacer esto en el módulo de Tacógrafos.",
+        error: "No tienes permiso para hacer esto en Mobilink TachoCert.",
         code: "PERMISO_DENEGADO",
         permiso,
       });

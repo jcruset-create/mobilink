@@ -1,5 +1,5 @@
 /**
- * Módulo Tacógrafos — punto de entrada en el panel.
+ * Mobilink TachoCert — punto de entrada del módulo en el panel.
  *
  * Misma forma que `CashApp`: proveedor de estado, layout y rutas hijas bajo
  * `/tacografos/*`. Si el usuario no tiene acceso al módulo, el backend contesta
@@ -20,7 +20,7 @@ function Contenido() {
   if (cargando) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-900 text-sm text-slate-400">
-        Cargando el módulo de Tacógrafos…
+        Cargando Mobilink TachoCert…
       </div>
     );
   }
@@ -29,7 +29,7 @@ function Contenido() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-900 p-6">
         <div className="max-w-md rounded-2xl border border-amber-500/40 bg-amber-500/10 p-6 text-sm text-amber-200">
-          <p className="mb-1 font-bold">No se ha podido abrir el módulo de Tacógrafos</p>
+          <p className="mb-1 font-bold">No se ha podido abrir Mobilink TachoCert</p>
           <p>
             {error ||
               "Tu usuario no tiene acceso al módulo. Pídeselo a un administrador."}

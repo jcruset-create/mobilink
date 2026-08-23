@@ -1,5 +1,5 @@
 /**
- * Layout del módulo Tacógrafos.
+ * Layout de Mobilink TachoCert.
  *
  * Misma estructura que `CashLayout`: topbar pegajosa y navegación lateral que
  * colapsa en móvil. La contraseña identificativa del centro se ve siempre: es
@@ -9,6 +9,7 @@
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { FileText, Menu, Settings, ShieldCheck } from "lucide-react";
+import logoTachoCert from "../../../assets/hub/logo-tachocert.png";
 import { useTacografos } from "../contexts/TacografosContext";
 
 const NAV = [
@@ -33,7 +34,8 @@ export default function TacografosLayout() {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <span className="text-sm font-bold tracking-wide">Tacógrafos</span>
+          {/* El logotipo ya lleva el nombre dentro: repetirlo al lado sobra. */}
+          <img src={logoTachoCert} alt="Mobilink TachoCert" className="h-7 w-auto shrink-0 md:h-8" />
           {centro?.numCentro && (
             <span className="rounded-md bg-slate-800 px-2 py-0.5 text-[11px] text-slate-300">
               {centro.numCentro}

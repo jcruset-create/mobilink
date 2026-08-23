@@ -1,4 +1,4 @@
-# PROMPT — Módulo Tacógrafos (documentación legal de sustituciones)
+# PROMPT — Mobilink TachoCert (documentación legal de sustituciones de tacógrafos)
 
 > Estado: **diseño previo a programar**. Decisión tomada: es un **módulo propio**,
 > no una sección del área de taller.
@@ -11,6 +11,20 @@
 > [`PROMPT_excel_tacografos_documentacion.md`](./PROMPT_excel_tacografos_documentacion.md).
 
 ---
+
+## 0. Nombre
+
+**Mobilink TachoCert.** `Cert` nombra el entregable —el certificado de
+transferibilidad o de intransferibilidad— y `Tacho` es el prefijo que usa el
+sector. No se llamó *TachoControl* a propósito: en esta casa el sufijo
+`-Control` significa «control de un parque de activos» (TyreControl,
+ToolControl), y aquí no se controlan tacógrafos, se documenta una sustitución.
+
+El nombre comercial vive **sólo** en la etiqueta del catálogo
+(`modulosApp.ts`), en el logotipo y en los rótulos de pantalla. La clave del
+módulo sigue siendo `tacografos`: está en la base de datos (licencias y
+`app_usuario_modulos`), en las rutas y en las cadenas de permisos, así que
+rebautizarlo otra vez no costaría una migración.
 
 ## 1. Qué es
 
@@ -191,7 +205,6 @@ revisarlo antes que ninguna otra cosa.
 
 ## 9. Decisiones abiertas
 
-- **Nombre comercial** del módulo (el resto son Mobilink Cash, Safety, ToolControl…).
 - **Idioma** de la comunicación a la Generalitat: catalán, castellano o ambos.
 - **Nº de informe**: ¿serie autogenerada por el módulo o tecleada por el técnico? Ojo: si el
   número lo asigna la extranet al emitir el anexo II, aquí sólo se copia.

@@ -11,6 +11,7 @@ import logoLicencias from "../assets/hub/logo-licencias.png";
 import logoSafety from "../assets/hub/logo-safety.png";
 import logoCash from "../assets/hub/logo-cash.png";
 import logoCentral from "../assets/hub/logo-central.png";
+import logoTachoCert from "../assets/hub/logo-tachocert.png";
 import emblemaTyreControl from "../assets/hub/emblema-tyrecontrol.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
@@ -50,6 +51,7 @@ const LOGOS: Record<string, string> = {
   safety: logoSafety,
   cash: logoCash,
   central: logoCentral,
+  tacografos: logoTachoCert,
 };
 
 /**
