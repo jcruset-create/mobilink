@@ -203,6 +203,32 @@ licencia no se consulta nada.
 Si algún día el despliegue deja de ser de un solo centro técnico, esto hay que
 revisarlo antes que ninguna otra cosa.
 
+## 8.3 Importación del informe de la extranet
+
+El anexo II que emite VDO trae **doce** de los campos del expediente, así que
+importarlo quita casi todo el tecleo —y con él las erratas que acaban en un
+certificado firmado—. `POST /api/tacografos/importar` acepta el fichero y
+devuelve lo leído **sin guardar nada**: lo confirma el técnico.
+
+Dos caminos, en este orden:
+
+1. **PDF con texto** (el descargado de la extranet): se extrae con `mupdf` y se
+   analiza. Exacto, instantáneo y gratis.
+2. **Foto o PDF escaneado**: se rasteriza y lo lee el modelo de visión que ya
+   usa el OCR de fichas técnicas.
+
+Nunca se manda a un modelo un PDF del que se puede sacar el texto exacto.
+
+`anexoII.ts` es el analizador y no toca ni PDF ni red, para que se pueda probar
+con un fixture. Localiza cada etiqueta por separado —no en orden— porque el
+impreso va a dos columnas y el texto las entrelaza. **Exige que el valor vaya
+pegado a su etiqueta**; si algún día un PDF devolviera todas las etiquetas
+juntas y los valores después, haría falta tirar de coordenadas.
+
+Pendiente: **validarlo contra un PDF real de la extranet**. Las pruebas usan un
+PDF a dos columnas generado aquí, que cubre la mecánica pero no las rarezas del
+fichero de verdad.
+
 ## 9. Decisiones abiertas
 
 - **Idioma** de la comunicación a la Generalitat: catalán, castellano o ambos.

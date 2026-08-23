@@ -11,6 +11,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
+import multer from "multer";
 import { authenticate, requireModule } from "../core/auth.ts";
 import { cargarPermisos, exigirPermiso } from "./permissions.ts";
 import {
@@ -34,6 +35,7 @@ import {
 import { leerDocumento, urlFirmada } from "./storage.ts";
 import * as intervenciones from "./intervenciones.ts";
 import { componerXlsx, nombreFichero } from "./export.ts";
+import { importarAnexoII } from "./importar.ts";
 
 /** Envuelve un manejador para que un fallo no se lleve por delante el proceso. */
 function ruta(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -123,6 +125,20 @@ function conCalculados(e: repo.Expediente) {
     camposQueFaltan: camposQueFaltan(e),
   };
 }
+
+/**
+ * Subida del informe del anexo II.
+ *
+ * El tope es generoso porque el camino habitual es una foto del móvil, que
+ * ronda los pocos MB; quedarse corto obligaría al técnico a bajar la calidad
+ * justo de lo que hay que leer.
+ */
+const subidaInforme = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024, files: 1 },
+});
+
+const TIPOS_ACEPTADOS = ["application/pdf", "image/jpeg", "image/png", "image/webp", "image/heic"];
 
 export function createTacografosRouter(): Router {
   const r = Router();
@@ -431,6 +447,28 @@ export function createTacografosRouter(): Router {
       );
       res.setHeader("Content-Disposition", `attachment; filename="${nombreFichero(expediente)}"`);
       res.send(libro);
+    })
+  );
+
+  /*
+   * Lee el informe de la extranet y devuelve lo que ha entendido. NO crea nada:
+   * el expediente lo guarda el técnico después de repasar los datos, porque un
+   * dato mal leído en silencio acaba en un certificado firmado.
+   */
+  r.post(
+    "/importar",
+    exigirPermiso("tacografos.expediente.create"),
+    subidaInforme.single("fichero"),
+    ruta(async (req, res) => {
+      const f = req.file;
+      if (!f) throw new ErrorTacografos("No se ha recibido ningún fichero.", "FICHERO_REQUERIDO");
+      if (!TIPOS_ACEPTADOS.includes(f.mimetype)) {
+        throw new ErrorTacografos(
+          `Formato no admitido (${f.mimetype}). Sube el PDF de la extranet o una foto del informe.`,
+          "FORMATO_NO_ADMITIDO"
+        );
+      }
+      res.json(await importarAnexoII(f.buffer, f.mimetype));
     })
   );
 

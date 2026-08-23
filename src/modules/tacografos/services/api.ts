@@ -18,6 +18,7 @@ import type {
   PapelFirma,
   Comunicacion,
   FilaCustodia,
+  Importacion,
   Sugerencia,
   TextoTramite,
   TipoDocumento,
@@ -156,6 +157,31 @@ export function buscarIntervenciones(texto: string): Promise<{ sugerencias: Suge
 /** URL de descarga del respaldo en hoja de cálculo. */
 export function urlExportar(expedienteId: string): string {
   return `${BASE}/expedientes/${expedienteId}/exportar`;
+}
+
+/**
+ * Sube el informe del anexo II y devuelve lo que se ha leído.
+ *
+ * Va con `FormData` y sin `Content-Type`: el navegador tiene que poner el suyo
+ * con el `boundary`, y fijarlo a mano rompe la subida.
+ */
+export async function importarInforme(fichero: File): Promise<Importacion> {
+  const cuerpo = new FormData();
+  cuerpo.append("fichero", fichero);
+  const r = await fetch(`${BASE}/importar`, {
+    method: "POST",
+    headers: await sessionHeaders(),
+    body: cuerpo,
+  });
+  const datos = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    throw new ApiError(
+      datos?.error ?? "No se ha podido leer el informe",
+      datos?.code ?? "ERROR",
+      r.status
+    );
+  }
+  return datos as Importacion;
 }
 
 export function listarCustodia(): Promise<{ custodia: FilaCustodia[] }> {

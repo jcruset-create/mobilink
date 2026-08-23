@@ -18,6 +18,7 @@ import DocumentosExpediente from "./DocumentosExpediente";
 import FirmasExpediente from "./FirmasExpediente";
 import BuscarIntervencion from "../components/BuscarIntervencion";
 import TextoTramite from "../components/TextoTramite";
+import ImportarInforme from "../components/ImportarInforme";
 import {
   MODALIDADES,
   expedienteVacio,
@@ -239,6 +240,24 @@ export default function Expediente({ nuevo }: Props) {
             El expediente se guarda igual, pero no podrá emitir documentos hasta completarlo.
           </span>
         </p>
+      )}
+
+      {nuevo && (
+        <ImportarInforme
+          onAplicar={(datos) =>
+            // Sólo pisa lo que trae con valor: si el técnico ya había escrito
+            // algo que el informe no lleva, se respeta.
+            setD((x) => {
+              const mezcla = { ...x };
+              for (const [k, v] of Object.entries(datos)) {
+                if (v !== null && v !== undefined && v !== "") {
+                  (mezcla as Record<string, unknown>)[k] = v;
+                }
+              }
+              return mezcla;
+            })
+          }
+        />
       )}
 
       {nuevo && autorrelleno && (
