@@ -105,12 +105,15 @@ export function partirEnLineas(
  * queda sin documento sin saber por qué.
  */
 export function aWinAnsi(texto: string): string {
+  // Con escapes y no con los caracteres literales: un espacio duro o unas
+  // comillas tipográficas metidas a pelo en el código son invisibles al leerlo
+  // y el linter las rechaza con razón.
   return texto
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[–—]/g, "-")
-    .replace(/ /g, " ")
-    .replace(/[^ -ÿ]/g, "");
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\u00A0/g, " ")
+    .replace(/[^\u0020-\u00FF]/g, "");
 }
 
 type OpcionesTexto = {

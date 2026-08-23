@@ -152,6 +152,26 @@ Las fases 0 y 1 no son trabajo tirado: el Excel funciona desde el primer día, s
 esperar al despliegue, y es la fuente de la que salen los textos legales de
 `tac_plantillas`.
 
+## 8.1 Pruebas contra PostgreSQL
+
+`server/tacografos/tacografos.integration.test.ts` cubre lo que no se puede
+probar en memoria: el índice único parcial que impide dos documentos vigentes
+del mismo tipo, el choque del nº de informe, el aislamiento entre empresas, las
+transiciones de estado y el viaje de las fechas a `DATE` y vuelta.
+
+```bash
+export DATABASE_URL="postgres://usuario:clave@127.0.0.1:5432/base_desechable"
+export PGSSLMODE=disable RUN_DB_TESTS=1
+npx vitest run server/tacografos/
+```
+
+La primera ejecución destapó un fallo que habría llegado a producción: `pg`
+construye la fecha de una columna `DATE` a medianoche **local**, así que en
+`Europe/Madrid` un `2025-03-10` volvía como `2025-03-09` y **el certificado
+habría salido fechado un día antes en toda España** — junto con el plazo de
+custodia de un año. La prueba fija ahora `TZ=Europe/Madrid` para que el fallo
+no pueda volver aunque la CI corra en UTC.
+
 ## 9. Decisiones abiertas
 
 - **Nombre comercial** del módulo (el resto son Mobilink Cash, Safety, ToolControl…).
