@@ -114,6 +114,7 @@ export const MODULOS_APP: ModuloApp[] = [
     ],
     pantallas: [
       { key: "expedientes", label: "Expedientes" },
+      { key: "custodia", label: "Custodia y trámites" },
       { key: "centro", label: "Centro técnico" },
     ],
   },

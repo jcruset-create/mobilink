@@ -18,6 +18,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { extraerTextoPdf as textoDelPdf } from "./pdfTexto.ts";
 
 const RUN = process.env.RUN_DB_TESTS === "1" && !!process.env.DATABASE_URL;
 
@@ -127,6 +128,7 @@ describe.runIf(RUN)("Tacógrafos contra PostgreSQL", () => {
   beforeEach(async () => {
     // Cada prueba parte de limpio. Las firmas y los documentos primero: llevan
     // clave ajena al expediente.
+    await db.query(`DELETE FROM tac_comunicaciones WHERE empresa_id = ANY($1)`, [[EMPRESA, OTRA_EMPRESA]]);
     await db.query(`DELETE FROM tac_firmas WHERE empresa_id = ANY($1)`, [[EMPRESA, OTRA_EMPRESA]]);
     await db.query(`DELETE FROM tac_documentos WHERE empresa_id = ANY($1)`, [[EMPRESA, OTRA_EMPRESA]]);
     await db.query(`DELETE FROM tac_expedientes WHERE empresa_id = ANY($1)`, [[EMPRESA, OTRA_EMPRESA]]);
@@ -465,6 +467,171 @@ describe.runIf(RUN)("Tacógrafos contra PostgreSQL", () => {
       datos({ numInforme: "E943009/2025 nº 7", matricula: "1234 ABC" })
     );
     expect(nombreFichero(e)).toBe("expediente-E943009-2025-n-7-1234ABC.xlsx");
+  });
+
+  // ── Custodia y destrucción (fase 5) ───────────────────────────────────────
+
+  it("la cola de custodia sólo trae transferencias sin destruir", async () => {
+    await repo.crearExpediente(EMPRESA, USUARIO, datos()); // intransferibilidad
+    const t = await repo.crearExpediente(
+      EMPRESA,
+      USUARIO,
+      datosTransferencia({ numInforme: "E943009-INT-002" })
+    );
+    const cola = await servicio.colaCustodia(EMPRESA);
+    expect(cola).toHaveLength(1);
+    expect(cola[0].expediente.id).toBe(t.id);
+    expect(cola[0].fechaLimite).toBe("2026-03-10");
+    expect(cola[0].estado).toBe("pendiente_destruir"); // la transferencia es de 2025
+  });
+
+  it("no deja destruir antes de que se cumpla el año", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datosTransferencia());
+    await expect(
+      servicio.registrarDestruccion(EMPRESA, e.id, {
+        fecha: "2025-09-01",
+        metodo: "Borrado seguro",
+        persona: "Jordi Cruset",
+        hash: "a".repeat(64),
+      })
+    ).rejects.toMatchObject({ code: "DESTRUCCION_ANTES_DE_PLAZO" });
+  });
+
+  it("ni sin los cuatro datos del acta", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datosTransferencia());
+    await expect(
+      servicio.registrarDestruccion(EMPRESA, e.id, {
+        fecha: "2026-03-11",
+        metodo: "",
+        persona: "Jordi Cruset",
+        hash: "",
+      })
+    ).rejects.toMatchObject({ code: "DESTRUCCION_INCOMPLETA" });
+  });
+
+  it("un expediente sin transferencia no tiene archivos que destruir", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datos());
+    await expect(
+      servicio.registrarDestruccion(EMPRESA, e.id, {
+        fecha: "2026-03-11",
+        metodo: "Borrado seguro",
+        persona: "Jordi Cruset",
+        hash: "a".repeat(64),
+      })
+    ).rejects.toMatchObject({ code: "SIN_TRANSFERENCIA" });
+  });
+
+  it("registrada la destrucción, sale de la cola y no se repite", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datosTransferencia());
+    const d = {
+      fecha: "2026-03-11",
+      metodo: "Borrado seguro y destrucción física del soporte",
+      persona: "Jordi Cruset",
+      hash: "b".repeat(64),
+    };
+    const actualizado = await servicio.registrarDestruccion(EMPRESA, e.id, d);
+    expect(actualizado.destruccionFecha).toBe("2026-03-11");
+    expect(await servicio.colaCustodia(EMPRESA)).toHaveLength(0);
+    await expect(servicio.registrarDestruccion(EMPRESA, e.id, d)).rejects.toMatchObject({
+      code: "DESTRUCCION_NO_POSIBLE",
+    });
+  });
+
+  it("el acta de destrucción no se emite sin haberla registrado antes", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datosTransferencia());
+    await expect(
+      servicio.emitirDocumento(EMPRESA, USUARIO, e.id, "acta_destruccion")
+    ).rejects.toMatchObject({ code: "DESTRUCCION_NO_REGISTRADA" });
+  });
+
+  it("el acta lleva los siete datos que exige la norma", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datosTransferencia());
+    await servicio.registrarDestruccion(EMPRESA, e.id, {
+      fecha: "2026-03-11",
+      metodo: "Borrado seguro y destrucción física del soporte",
+      persona: "Jordi Cruset",
+      hash: "c".repeat(64),
+    });
+    const doc = await servicio.emitirDocumento(EMPRESA, USUARIO, e.id, "acta_destruccion");
+    const { leerDocumento } = await import("./storage.ts");
+    const pdf = (await leerDocumento(doc.ruta))!;
+    const texto = textoDelPdf(pdf);
+
+    expect(texto).toContain("11/03/2026");            // fecha de destrucción
+    expect(texto).toContain("7567MPF");               // matrícula
+    expect(texto).toContain("VF3XXXXXXXXXXXXXX");     // bastidor
+    expect(texto).toContain("1000567");               // nº de serie de la UIV
+    expect(texto).toContain("c".repeat(32));          // firma digital, primera mitad
+    expect(texto).toContain("Borrado seguro");        // método
+    expect(texto).toContain("Jordi Cruset");          // persona
+  });
+
+  // ── Comunicaciones a la administración (fase 5) ───────────────────────────
+
+  it("sólo entra en la cola lo que ya tiene la comunicación emitida", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datos());
+    // Recién creado no se reclama: todavía no ha salido ningún papel.
+    expect(await servicio.colaComunicaciones(EMPRESA)).toHaveLength(0);
+    await servicio.emitirDocumento(EMPRESA, USUARIO, e.id, "comunicacion_admin");
+    const cola = await servicio.colaComunicaciones(EMPRESA);
+    expect(cola.map((x) => x.id)).toEqual([e.id]);
+  });
+
+  it("anotada la presentación, sale de la cola y el estado pasa a comunicado", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datos());
+    await servicio.emitirDocumento(EMPRESA, USUARIO, e.id, "comunicacion_admin");
+    const c = await servicio.registrarComunicacion(EMPRESA, USUARIO, e.id, {
+      fechaPresentacion: "2025-03-18",
+      referencia: "9015/2025",
+      notas: "",
+    });
+    expect(c.fechaPresentacion).toBe("2025-03-18");
+    expect(c.referencia).toBe("9015/2025");
+    expect(await servicio.colaComunicaciones(EMPRESA)).toHaveLength(0);
+    expect((await repo.obtenerExpediente(EMPRESA, e.id))?.estado).toBe("comunicado");
+  });
+
+  it("una segunda presentación no borra la primera", async () => {
+    // Si el trámite se rechaza y hay que volver a presentarlo, el intento
+    // anterior tiene que seguir ahí.
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datos());
+    await servicio.emitirDocumento(EMPRESA, USUARIO, e.id, "comunicacion_admin");
+    await servicio.registrarComunicacion(EMPRESA, USUARIO, e.id, {
+      fechaPresentacion: "2025-03-18", referencia: "9015/2025", notas: "rechazada",
+    });
+    await servicio.registrarComunicacion(EMPRESA, USUARIO, e.id, {
+      fechaPresentacion: "2025-03-25", referencia: "9099/2025", notas: "",
+    });
+    const todas = await repo.listarComunicaciones(EMPRESA, e.id);
+    expect(todas).toHaveLength(2);
+    expect(todas[0].referencia).toBe("9099/2025"); // la más reciente primero
+  });
+
+  it("una transferencia correcta no se comunica a la administración", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datosTransferencia());
+    await expect(
+      servicio.registrarComunicacion(EMPRESA, USUARIO, e.id, {
+        fechaPresentacion: "2025-03-18", referencia: "x", notas: "",
+      })
+    ).rejects.toMatchObject({ code: "COMUNICACION_NO_APLICA" });
+  });
+
+  it("el texto del trámite sale montado y en catalán", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datos());
+    const t = await servicio.textoTramite(EMPRESA, e.id);
+    expect(t.assumpte).toContain("Certificat de Intransferibilitat");
+    expect(t.nomFitxer).toBe("E943009-INT-001 Certificat de Intransferibilitat");
+    expect(t.exposo).toContain("Reial decret 125/2017");
+    expect(t.exposo).toContain("1381.7550303006");
+    expect(t.exposo).toContain("7567MPF");
+    expect(t.exposo).toContain("10/03/2025");
+    expect(t.exposo).toContain("Sol·licito");
+    expect(t.urlTramite).toContain("gencat.cat");
+  });
+
+  it("conservar los certificados cinco años desde su emisión", async () => {
+    const emitido = Date.parse("2026-08-22T10:00:00");
+    expect(servicio.conservarCertificadoHasta(emitido)).toBe("2031-08-22");
   });
 
   it("ErrorTacografos lleva su código y su estado HTTP", async () => {

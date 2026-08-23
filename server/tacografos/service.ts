@@ -13,7 +13,15 @@
  */
 
 import { createHash } from "node:crypto";
-import { camposQueFaltan } from "./domain.ts";
+import {
+  ANOS_CONSERVACION_CERTIFICADOS,
+  camposQueFaltan,
+  diasParaDestruir,
+  estadoCustodia,
+  faltaParaDestruir,
+  fechaLimiteDestruccion,
+  type EstadoCustodia,
+} from "./domain.ts";
 import {
   CODIGO_FORMATO,
   DOCUMENTOS_POR_TIPO,
@@ -22,6 +30,7 @@ import {
   fechaEs,
   type TipoDocumento,
 } from "./documents.ts";
+import { PLANTILLAS } from "./templates.ts";
 import * as repo from "./repository.ts";
 import { ErrorTacografos } from "./repository.ts";
 import {
@@ -63,7 +72,24 @@ export async function emitirDocumento(
     );
   }
 
-  if (!DOCUMENTOS_POR_TIPO[expediente.tipo].includes(tipo)) {
+  if (tipo === "acta_destruccion") {
+    // No la decide el tipo de operación sino la destrucción: se levanta un año
+    // después, y sólo si hubo archivos que destruir.
+    const falta = faltaParaDestruir({
+      fecha: expediente.destruccionFecha ?? "",
+      metodo: expediente.destruccionMetodo,
+      persona: expediente.destruccionPersona,
+      hash: expediente.destruccionHash,
+    });
+    if (falta.length > 0) {
+      throw new ErrorTacografos(
+        `El acta no puede emitirse sin registrar antes la destrucción. Falta: ${falta.join(", ")}.`,
+        "DESTRUCCION_NO_REGISTRADA",
+        409,
+        { falta }
+      );
+    }
+  } else if (!DOCUMENTOS_POR_TIPO[expediente.tipo].includes(tipo)) {
     throw new ErrorTacografos(
       "Ese documento no corresponde al tipo de operación del expediente.",
       "DOCUMENTO_NO_APLICA"
@@ -233,4 +259,158 @@ export async function documentosDelExpediente(
       url: d.anulado ? null : await urlFirmada(d.ruta),
     }))
   );
+}
+
+
+// ── Custodia y destrucción de los archivos transferidos ─────────────────────
+
+/** Hoy en `aaaa-mm-dd`, con los componentes locales. */
+function hoy(): string {
+  return diaLocal(Date.now());
+}
+
+export type FilaCustodia = {
+  expediente: repo.Expediente;
+  estado: EstadoCustodia;
+  fechaLimite: string | null;
+  diasRestantes: number | null;
+};
+
+/** Cola de archivos bajo custodia, lo más urgente primero. */
+export async function colaCustodia(empresaId: string): Promise<FilaCustodia[]> {
+  const dia = hoy();
+  return (await repo.listarCustodia(empresaId)).map((expediente) => ({
+    expediente,
+    estado: estadoCustodia(expediente.fechaTransferencia, expediente.destruccionFecha, dia),
+    fechaLimite: fechaLimiteDestruccion(expediente.fechaTransferencia),
+    diasRestantes: diasParaDestruir(expediente.fechaTransferencia, dia),
+  }));
+}
+
+/**
+ * Anota la destrucción de los archivos de una transferencia.
+ *
+ * No se deja registrar antes de tiempo: destruir a los seis meses incumple el
+ * plazo de conservación de un año igual que no destruir nunca incumple el de
+ * destrucción, y la fecha que quedaría escrita sería la prueba de ello.
+ */
+export async function registrarDestruccion(
+  empresaId: string,
+  expedienteId: string,
+  d: { fecha: string; metodo: string; persona: string; hash: string }
+): Promise<repo.Expediente> {
+  const falta = faltaParaDestruir(d);
+  if (falta.length > 0) {
+    throw new ErrorTacografos(
+      `Faltan datos del acta de destrucción: ${falta.join(", ")}.`,
+      "DESTRUCCION_INCOMPLETA",
+      400,
+      { falta }
+    );
+  }
+
+  const expediente = await repo.obtenerExpediente(empresaId, expedienteId);
+  if (!expediente) {
+    throw new ErrorTacografos("Expediente no encontrado.", "EXPEDIENTE_NO_ENCONTRADO", 404);
+  }
+  const limite = fechaLimiteDestruccion(expediente.fechaTransferencia);
+  if (!limite) {
+    throw new ErrorTacografos(
+      "Este expediente no tiene transferencia: no hay archivos que destruir.",
+      "SIN_TRANSFERENCIA",
+      409
+    );
+  }
+  if (d.fecha < limite) {
+    throw new ErrorTacografos(
+      `Los archivos deben conservarse hasta el ${fechaEs(limite)}.`,
+      "DESTRUCCION_ANTES_DE_PLAZO",
+      409,
+      { fechaLimite: limite }
+    );
+  }
+
+  const actualizado = await repo.registrarDestruccion(empresaId, expedienteId, d);
+  if (!actualizado) {
+    throw new ErrorTacografos(
+      "No se puede registrar la destrucción: el expediente está anulado o ya la tenía registrada.",
+      "DESTRUCCION_NO_POSIBLE",
+      409
+    );
+  }
+  return actualizado;
+}
+
+// ── Comunicaciones a la administración ──────────────────────────────────────
+
+export async function colaComunicaciones(empresaId: string): Promise<repo.Expediente[]> {
+  return repo.listarPendientesComunicar(empresaId);
+}
+
+export async function registrarComunicacion(
+  empresaId: string,
+  userId: string,
+  expedienteId: string,
+  d: { fechaPresentacion: string; referencia: string; notas: string }
+): Promise<repo.Comunicacion> {
+  const expediente = await repo.obtenerExpediente(empresaId, expedienteId);
+  if (!expediente) {
+    throw new ErrorTacografos("Expediente no encontrado.", "EXPEDIENTE_NO_ENCONTRADO", 404);
+  }
+  if (expediente.tipo !== "intransferibilidad") {
+    throw new ErrorTacografos(
+      "Sólo se comunica a la administración el certificado de intransferibilidad.",
+      "COMUNICACION_NO_APLICA"
+    );
+  }
+
+  const comunicacion = await repo.registrarComunicacion(empresaId, userId, {
+    expedienteId,
+    ...d,
+  });
+  await repo.cambiarEstado(empresaId, expedienteId, "comunicado", ["emitido", "entregado"]);
+  return comunicacion;
+}
+
+/**
+ * Texto en catalán para pegar en la petición genérica de la Generalitat.
+ *
+ * Se compone aquí y no en la pantalla porque sale de las plantillas
+ * versionadas: si el trámite cambia de redacción, cambia en un sitio.
+ */
+export async function textoTramite(
+  empresaId: string,
+  expedienteId: string
+): Promise<{ assumpte: string; nomFitxer: string; exposo: string; urlTramite: string; urlOvt: string }> {
+  const e = await repo.obtenerExpediente(empresaId, expedienteId);
+  if (!e) {
+    throw new ErrorTacografos("Expediente no encontrado.", "EXPEDIENTE_NO_ENCONTRADO", 404);
+  }
+  const centro = await repo.obtenerCentro(empresaId);
+  const t = { ...PLANTILLAS, ...(await repo.cargarPlantillas(await repo.versionVigente())) };
+
+  return {
+    assumpte: t.cat_assumpte ?? "",
+    nomFitxer: `${e.numInforme}${t.cat_fitxer ?? ""}`,
+    exposo:
+      (t.cat_exposo_1 ?? "") + e.tacModelo +
+      (t.cat_exposo_2 ?? "") + e.tacSerie +
+      (t.cat_exposo_3 ?? "") + e.matricula +
+      (t.cat_exposo_4 ?? "") + e.numInforme +
+      (t.cat_exposo_5 ?? "") + fechaEs(e.fechaInforme) +
+      (t.cat_exposo_6 ?? ""),
+    urlTramite: centro.urlTramite,
+    urlOvt: centro.urlTramiteOvt,
+  };
+}
+
+/**
+ * Hasta cuándo hay que conservar copia de un certificado emitido: cinco años
+ * desde su emisión. Es un mínimo, no una orden de destruir; el módulo lo
+ * enseña, no lo aplica borrando nada.
+ */
+export function conservarCertificadoHasta(emitidoAtMs: number): string {
+  const d = new Date(emitidoAtMs);
+  const dos = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear() + ANOS_CONSERVACION_CERTIFICADOS}-${dos(d.getMonth() + 1)}-${dos(d.getDate())}`;
 }

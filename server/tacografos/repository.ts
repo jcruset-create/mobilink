@@ -660,3 +660,138 @@ export async function registrarEntrega(
   );
   return rows[0] ? aExpediente(rows[0]) : null;
 }
+
+// ── Custodia de los archivos transferidos ───────────────────────────────────
+
+/**
+ * Expedientes cuyos archivos siguen bajo custodia del centro.
+ *
+ * Sólo los de transferencia: en una intransferibilidad no hay archivo que
+ * guardar, que es justo de lo que da fe el certificado. Se ordenan por fecha de
+ * transferencia ascendente, de modo que lo primero de la lista sea siempre lo
+ * más urgente.
+ */
+export async function listarCustodia(empresaId: string): Promise<Expediente[]> {
+  const { rows } = await pool.query<FilaExpediente>(
+    `SELECT ${COLUMNAS} FROM tac_expedientes
+      WHERE empresa_id = $1
+        AND fecha_transferencia IS NOT NULL
+        AND destruccion_fecha IS NULL
+        AND estado <> 'anulado'
+      ORDER BY fecha_transferencia ASC`,
+    [empresaId]
+  );
+  return rows.map(aExpediente);
+}
+
+export async function registrarDestruccion(
+  empresaId: string,
+  id: string,
+  d: { fecha: string; metodo: string; persona: string; hash: string }
+): Promise<Expediente | null> {
+  const { rows } = await pool.query<FilaExpediente>(
+    `UPDATE tac_expedientes SET
+       destruccion_fecha = $3, destruccion_metodo = $4,
+       destruccion_persona = $5, destruccion_hash = $6, updated_at_ms = $7
+      WHERE empresa_id = $1 AND id = $2
+        AND fecha_transferencia IS NOT NULL
+        AND destruccion_fecha IS NULL
+        AND estado <> 'anulado'
+      RETURNING ${COLUMNAS}`,
+    [empresaId, id, d.fecha, d.metodo, d.persona, d.hash, Date.now()]
+  );
+  return rows[0] ? aExpediente(rows[0]) : null;
+}
+
+// ── Comunicaciones a la administración ──────────────────────────────────────
+
+export type Comunicacion = {
+  id: string;
+  expedienteId: string;
+  fechaPresentacion: string | null;
+  referencia: string;
+  notas: string;
+  registradoAtMs: number;
+};
+
+type FilaComunicacion = {
+  id: string;
+  expediente_id: string;
+  fecha_presentacion: Date | string | null;
+  referencia: string;
+  notas: string;
+  registrado_at_ms: string;
+};
+
+function aComunicacion(f: FilaComunicacion): Comunicacion {
+  return {
+    id: f.id,
+    expedienteId: f.expediente_id,
+    fechaPresentacion: aIso(f.fecha_presentacion),
+    referencia: f.referencia,
+    notas: f.notas,
+    registradoAtMs: Number(f.registrado_at_ms),
+  };
+}
+
+export async function listarComunicaciones(
+  empresaId: string,
+  expedienteId: string
+): Promise<Comunicacion[]> {
+  const { rows } = await pool.query<FilaComunicacion>(
+    `SELECT id, expediente_id, fecha_presentacion, referencia, notas, registrado_at_ms
+       FROM tac_comunicaciones
+      WHERE empresa_id = $1 AND expediente_id = $2
+      ORDER BY fecha_presentacion DESC, registrado_at_ms DESC`,
+    [empresaId, expedienteId]
+  );
+  return rows.map(aComunicacion);
+}
+
+export async function registrarComunicacion(
+  empresaId: string,
+  userId: string,
+  d: { expedienteId: string; fechaPresentacion: string; referencia: string; notas: string }
+): Promise<Comunicacion> {
+  const { rows } = await pool.query<FilaComunicacion>(
+    `INSERT INTO tac_comunicaciones (
+       empresa_id, expediente_id, fecha_presentacion, referencia, notas,
+       registrado_at_ms, registrado_por
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+     RETURNING id, expediente_id, fecha_presentacion, referencia, notas, registrado_at_ms`,
+    [
+      empresaId, d.expedienteId, d.fechaPresentacion, d.referencia, d.notas,
+      Date.now(), userId,
+    ]
+  );
+  return aComunicacion(rows[0]);
+}
+
+/**
+ * Intransferibilidades presentadas a la administración y las que faltan.
+ *
+ * «Falta» es: expediente de intransferibilidad, no anulado, del que ya salió la
+ * comunicación en papel y del que no hay ninguna presentación anotada. Antes de
+ * emitir el documento no se puede presentar nada, así que no tendría sentido
+ * reclamarlo.
+ */
+export async function listarPendientesComunicar(empresaId: string): Promise<Expediente[]> {
+  const { rows } = await pool.query<FilaExpediente>(
+    `SELECT ${COLUMNAS} FROM tac_expedientes e
+      WHERE e.empresa_id = $1
+        AND e.tipo = 'intransferibilidad'
+        AND e.estado <> 'anulado'
+        AND EXISTS (
+          SELECT 1 FROM tac_documentos d
+           WHERE d.expediente_id = e.id
+             AND d.tipo = 'comunicacion_admin'
+             AND NOT d.anulado
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM tac_comunicaciones c WHERE c.expediente_id = e.id
+        )
+      ORDER BY e.fecha_informe ASC`,
+    [empresaId]
+  );
+  return rows.map(aExpediente);
+}

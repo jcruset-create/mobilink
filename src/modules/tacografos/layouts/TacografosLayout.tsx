@@ -8,11 +8,12 @@
 
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { FileText, Menu, Settings } from "lucide-react";
+import { FileText, Menu, Settings, ShieldCheck } from "lucide-react";
 import { useTacografos } from "../contexts/TacografosContext";
 
 const NAV = [
   { a: "/tacografos/expedientes", texto: "Expedientes", icono: FileText, permiso: "tacografos.view" },
+  { a: "/tacografos/custodia", texto: "Custodia y trámites", icono: ShieldCheck, permiso: "tacografos.view" },
   { a: "/tacografos/centro", texto: "Centro técnico", icono: Settings, permiso: "tacografos.view" },
 ];
 

@@ -17,6 +17,7 @@ import { useTacografos } from "../contexts/TacografosContext";
 import DocumentosExpediente from "./DocumentosExpediente";
 import FirmasExpediente from "./FirmasExpediente";
 import BuscarIntervencion from "../components/BuscarIntervencion";
+import TextoTramite from "../components/TextoTramite";
 import {
   MODALIDADES,
   expedienteVacio,
@@ -413,6 +414,8 @@ export default function Expediente({ nuevo }: Props) {
             expedienteId={id}
             onCambio={() => setRevision((v) => v + 1)}
           />
+          {/* Sólo en intransferibilidad: es el único caso que se comunica. */}
+          {d.tipo === "intransferibilidad" && <TextoTramite expedienteId={id} />}
         </>
       )}
     </div>

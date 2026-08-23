@@ -190,3 +190,34 @@ CREATE TABLE IF NOT EXISTS tac_firmas (
   firmado_por UUID,
   UNIQUE (expediente_id, papel)
 );
+
+-- ============================================================
+-- Fase 5 — custodia, destrucción y comunicaciones
+-- ============================================================
+
+-- El certificado de intransferibilidad se remite a la autoridad competente.
+-- Aquí se anota cuándo se presentó y con qué referencia devolvió el trámite:
+-- sin eso, «lo mandamos» no es demostrable.
+--
+-- Una fila por presentación y no una por expediente: si el trámite se rechaza y
+-- hay que volver a presentarlo, el intento anterior no se borra.
+CREATE TABLE IF NOT EXISTS tac_comunicaciones (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  empresa_id UUID NOT NULL,
+  expediente_id UUID NOT NULL REFERENCES tac_expedientes(id),
+  fecha_presentacion DATE NOT NULL,
+  -- Número de registro que devuelve la Generalitat. Es la prueba.
+  referencia TEXT NOT NULL DEFAULT '',
+  notas TEXT NOT NULL DEFAULT '',
+  registrado_at_ms BIGINT NOT NULL,
+  registrado_por UUID
+);
+CREATE INDEX IF NOT EXISTS tac_com_expediente_idx
+  ON tac_comunicaciones(expediente_id, fecha_presentacion DESC);
+
+-- El acta de destrucción es un documento más, con su hash y su anulación. La
+-- restricción se amplía en vez de recrear la tabla: en una base con documentos
+-- ya emitidos, recrearla los perdería.
+ALTER TABLE tac_documentos DROP CONSTRAINT IF EXISTS tac_documentos_tipo_check;
+ALTER TABLE tac_documentos ADD CONSTRAINT tac_documentos_tipo_check
+  CHECK (tipo IN ('justificante','acuse_cliente','comunicacion_admin','acta_destruccion'));

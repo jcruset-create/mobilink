@@ -434,6 +434,88 @@ export function createTacografosRouter(): Router {
     })
   );
 
+  // ── Custodia de los archivos transferidos ─────────────────────────────────
+
+  r.get(
+    "/custodia",
+    exigirPermiso("tacografos.view"),
+    ruta(async (req, res) => {
+      res.json({ custodia: await servicio.colaCustodia(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.post(
+    "/expedientes/:id/destruccion",
+    exigirPermiso("tacografos.custodia.destruir"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const expediente = await servicio.registrarDestruccion(
+        ctx.empresaId,
+        String(req.params.id),
+        {
+          fecha: fecha(b.fecha) ?? "",
+          metodo: texto(b.metodo),
+          persona: texto(b.persona),
+          hash: texto(b.hash),
+        }
+      );
+      res.json({ expediente: conCalculados(expediente) });
+    })
+  );
+
+  // ── Comunicaciones a la administración ────────────────────────────────────
+
+  r.get(
+    "/comunicaciones/pendientes",
+    exigirPermiso("tacografos.view"),
+    ruta(async (req, res) => {
+      const pendientes = await servicio.colaComunicaciones(req.authCtx!.empresaId);
+      res.json({ pendientes: pendientes.map(conCalculados) });
+    })
+  );
+
+  r.get(
+    "/expedientes/:id/comunicaciones",
+    exigirPermiso("tacografos.view"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      res.json({
+        comunicaciones: await repo.listarComunicaciones(ctx.empresaId, String(req.params.id)),
+      });
+    })
+  );
+
+  r.post(
+    "/expedientes/:id/comunicaciones",
+    exigirPermiso("tacografos.comunicacion.register"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const fechaPresentacion = fecha(b.fechaPresentacion);
+      if (!fechaPresentacion) {
+        throw new ErrorTacografos("Falta la fecha de presentación.", "FECHA_REQUERIDA");
+      }
+      const comunicacion = await servicio.registrarComunicacion(
+        ctx.empresaId,
+        ctx.userId,
+        String(req.params.id),
+        { fechaPresentacion, referencia: texto(b.referencia), notas: texto(b.notas) }
+      );
+      res.status(201).json({ comunicacion });
+    })
+  );
+
+  /** Texto listo para pegar en la petición genérica de la Generalitat. */
+  r.get(
+    "/expedientes/:id/texto-tramite",
+    exigirPermiso("tacografos.view"),
+    ruta(async (req, res) => {
+      const ctx = req.authCtx!;
+      res.json(await servicio.textoTramite(ctx.empresaId, String(req.params.id)));
+    })
+  );
+
   r.get(
     "/centro",
     exigirPermiso("tacografos.view"),
