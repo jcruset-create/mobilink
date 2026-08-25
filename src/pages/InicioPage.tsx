@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Link2, Download, CalendarClock, Coins, Network, Gauge, type LucideIcon } from "lucide-react";
+import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Download, CalendarClock, Coins, Network, Gauge, type LucideIcon } from "lucide-react";
 import logoMobilink from "../assets/logo-mobilink.png";
 // Copias a la medida del hub: los originales pesan 350-670 KB cada uno y aquí
 // se ven a 36 px de alto. Con cinco tarjetas con logo eso eran 2,4 MB de
@@ -12,6 +12,10 @@ import logoSafety from "../assets/hub/logo-safety.png";
 import logoCash from "../assets/hub/logo-cash.png";
 import logoCentral from "../assets/hub/logo-central.png";
 import logoTachoCert from "../assets/hub/logo-tachocert.png";
+import logoCentralAssistConnect from "../assets/hub/logo-central-assist-connect.png";
+// La cabecera lo enseña a 36 px de alto: ahi la linea de reclamos del
+// lockup completo no se leeria, asi que va el recorte sin ella.
+import logoCabecera from "../assets/hub/logo-central-assist-connect-cabecera.png";
 import emblemaTyreControl from "../assets/hub/emblema-tyrecontrol.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
@@ -43,7 +47,7 @@ const ICONOS: Record<string, LucideIcon> = {
  * meterse en el cuadradito: encajado en 36×36 no se leería.
  *
  * Los que no tienen ni logo ni marca compuesta -administración, almacén, Core,
- * asistencias, Central Pro y panel de taller- se quedan con su icono.
+ * asistencias y panel de taller- se quedan con su icono.
  */
 const LOGOS: Record<string, string> = {
   presencia: logoPresencia,
@@ -213,7 +217,7 @@ export default function InicioPage() {
     <div className="min-h-screen bg-slate-900 text-slate-100">
       <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-700 bg-slate-900/95 px-4 py-2 backdrop-blur">
         <div className="flex items-center gap-2">
-          <img src={logoMobilink} alt="Mobilink" className="h-9 w-auto" />
+          <img src={logoCabecera} alt="Mobilink Central Assist Connect" className="h-9 w-auto" />
         </div>
         <div className="flex items-center gap-3">
           <div className="hidden text-right sm:block">
@@ -372,10 +376,11 @@ export default function InicioPage() {
             {esSuperadmin && (
               <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
                 <div className="mb-2 flex items-center gap-2">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-500/15">
-                    <Link2 className="h-5 w-5 text-cyan-400" />
-                  </div>
-                  <span className="text-sm font-bold">Assist Central Pro</span>
+                  {/* El logo ya lleva el nombre dentro: no se repite al lado */}
+                  <img
+                    src={logoCentralAssistConnect} alt="Mobilink Central Assist Connect"
+                    className="h-9 w-auto max-w-[200px] object-contain object-left"
+                  />
                   <span className="ml-auto whitespace-nowrap rounded-full bg-cyan-500/15 px-2 py-0.5 text-[11px] font-bold text-cyan-300">Superadmin</span>
                 </div>
                 <p className="mb-3 text-[12px] text-slate-500">
