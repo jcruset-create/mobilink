@@ -291,3 +291,50 @@ class Api {
     return (data['data'] as List).map((e) => (e as Map).cast<String, dynamic>()).toList();
   }
 }
+
+/// Conceptos del servicio: qué se montó de verdad (neumáticos, materiales).
+///
+/// El taller ve lo que Central pactó y lo CONFIRMA con la foto de montaje, o
+/// declara el que montó cuando la realidad se desvía. El precio no viaja
+/// nunca por aquí: lo pone el tarifario publicado al cerrar el servicio.
+extension ConceptsApi on Api {
+  Future<List<Map<String, dynamic>>> concepts(int id) async {
+    final data = await _get('/assistances/$id/concepts') as Map;
+    return (data['data'] as List).map((e) => (e as Map).cast<String, dynamic>()).toList();
+  }
+
+  /// Caso "montado no previsto": declara y confirma en el mismo acto.
+  /// [evidenceRef] es la referencia de la foto de montaje ya subida (`c<id>`).
+  Future<Map<String, dynamic>> declareConcept(
+    int id, {
+    required String size,
+    String? brand,
+    String position = 'ANY',
+    int quantity = 1,
+    required String evidenceRef,
+    required String actionId,
+  }) async =>
+      (await _post('/assistances/$id/concepts', {
+        'kind': 'TIRE',
+        'size': size,
+        'brand': brand,
+        'position': position,
+        'quantity': quantity,
+        'evidenceRef': evidenceRef,
+        'clientActionId': actionId,
+      }) as Map)
+          .cast<String, dynamic>();
+
+  /// Confirma un concepto previsto por Central, con su foto de montaje.
+  Future<Map<String, dynamic>> confirmConcept(
+    int id,
+    int conceptId, {
+    required String evidenceRef,
+    required String actionId,
+  }) async =>
+      (await _post('/assistances/$id/concepts/$conceptId/confirm', {
+        'evidenceRef': evidenceRef,
+        'clientActionId': actionId,
+      }) as Map)
+          .cast<String, dynamic>();
+}
