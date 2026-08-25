@@ -19,6 +19,7 @@ import FirmasExpediente from "./FirmasExpediente";
 import BuscarIntervencion from "../components/BuscarIntervencion";
 import TextoTramite from "../components/TextoTramite";
 import ImportarInforme from "../components/ImportarInforme";
+import { descargarBlob } from "../services/abrirBlob";
 import {
   MODALIDADES,
   expedienteVacio,
@@ -145,6 +146,17 @@ export default function Expediente({ nuevo }: Props) {
     }
   }
 
+  async function exportar() {
+    if (!id) return;
+    setError(null);
+    try {
+      const { blob, nombre } = await api.descargarExportacion(id);
+      descargarBlob(blob, nombre);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido exportar");
+    }
+  }
+
   async function anular() {
     if (!id) return;
     if (
@@ -194,12 +206,12 @@ export default function Expediente({ nuevo }: Props) {
           </button>
         )}
         {!nuevo && id && (
-          <a
-            href={api.urlExportar(id)}
+          <button
+            onClick={() => void exportar()}
             className="flex items-center gap-1.5 rounded-lg border border-slate-600 px-3 py-2 text-[13px] text-slate-300 hover:bg-slate-800"
           >
             <FileSpreadsheet className="h-4 w-4" /> Exportar
-          </a>
+          </button>
         )}
         {!nuevo && puede("tacografos.entrega.register") && estado === "emitido" && (
           <button

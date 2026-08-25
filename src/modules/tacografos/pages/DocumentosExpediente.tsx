@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Ban, FileDown, FilePlus2 } from "lucide-react";
 import * as api from "../services/api";
+import { abrirBlob } from "../services/abrirBlob";
 import { useTacografos } from "../contexts/TacografosContext";
 import type { Documento, Emitible, TipoDocumento } from "../types";
 
@@ -85,6 +86,15 @@ export default function DocumentosExpediente({
       setError(e instanceof Error ? e.message : "No se ha podido emitir el documento");
     } finally {
       setOcupado(null);
+    }
+  }
+
+  async function abrir(d: Documento) {
+    setError(null);
+    try {
+      abrirBlob(await api.descargarDocumento(d.id), `${d.tipo}-${d.id}.pdf`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido abrir el documento");
     }
   }
 
@@ -167,14 +177,13 @@ export default function DocumentosExpediente({
                   <span className="text-[11px] text-slate-400">Anulado: {d.motivoAnulacion}</span>
                 )}
                 <span className="ml-auto flex gap-2">
-                  <a
-                    href={api.urlDescarga(d.id)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-1 rounded-lg px-2 py-1 text-sky-400 hover:bg-slate-800"
+                  <button
+                    onClick={() => void abrir(d)}
+                    disabled={ocupado !== null}
+                    className="flex items-center gap-1 rounded-lg px-2 py-1 text-sky-400 hover:bg-slate-800 disabled:opacity-40"
                   >
                     <FileDown className="h-4 w-4" /> Abrir
-                  </a>
+                  </button>
                   {!d.anulado && puede("tacografos.documento.annul") && (
                     <button
                       onClick={() => void anular(d)}
