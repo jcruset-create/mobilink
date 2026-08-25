@@ -302,6 +302,31 @@ describe.skipIf(!RUN)("Conceptos de la asistencia", () => {
     expect(formatear(r!.lineas.find((l) => l.tipo === "TIRE")!.ventaTotal!, 2)).toBe("506.60");
   });
 
+  it("el alta con conceptos los deja previstos, listos para que el taller confirme", async () => {
+    const id = await asistencia();
+    // Lo que hace la ruta de alta: un concepto por cada linea del formulario
+    for (const c of [
+      { kind: "TIRE", size: "315/80R22.5", brand: "Hankook", position: "STEER", quantity: 2 },
+      { kind: "MATERIAL", conceptCode: "REPARACION", quantity: 1 },
+    ]) {
+      await con.crearConcepto(id, centroId, { ...c, actor: "Operador de alta" } as any);
+    }
+    const lista = await con.listarConceptos(id, centroId);
+    expect(lista.length).toBe(2);
+    expect(lista.every((c) => c.status === "previsto")).toBe(true);
+    expect(lista.every((c) => c.plannedBy === "Operador de alta")).toBe(true);
+  });
+
+  it("un concepto sin medida se rechaza y no deja fila a medias", async () => {
+    // La asistencia manda: en el alta esto sale como aviso y no la tumba,
+    // pero el concepto NO puede quedar guardado sin medida.
+    const id = await asistencia();
+    await expect(con.crearConcepto(id, centroId, {
+      kind: "TIRE", size: "   ", actor: "Operador",
+    })).rejects.toMatchObject({ codigo: "medida_requerida" });
+    expect((await con.listarConceptos(id, centroId)).length).toBe(0);
+  });
+
   it("marcar no usado sin motivo se rechaza: la pregunta llegará al cuadrar", async () => {
     const id = await asistencia();
     const c = await con.crearConcepto(id, centroId, {

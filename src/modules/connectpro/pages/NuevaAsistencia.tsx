@@ -60,6 +60,7 @@ export default function NuevaAsistencia() {
   const [clientId, setClientId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [conceptos, setConceptos] = useState<Concepto[]>([]);
   // Extracción por IA: pegar la conversación de WhatsApp o subir capturas
   const [iaAbierto, setIaAbierto] = useState(false);
   const [iaTexto, setIaTexto] = useState("");
@@ -212,6 +213,9 @@ export default function NuevaAsistencia() {
     },
     description: [f.description, f.diagnosis ? `Diagnóstico inicial: ${f.diagnosis}` : "", f.notes ? `Obs.: ${f.notes}` : ""]
       .filter(Boolean).join("\n"),
+    // Lo pactado de antemano: nace previsto y el taller solo lo confirma con
+    // su foto de montaje. El precio no viaja: lo pone el tarifario al cerrar.
+    concepts: conceptos.filter((c) => c.kind === "MATERIAL" ? !!c.conceptCode.trim() : !!c.size.trim()),
   });
 
   const crear = async (draft: boolean) => {
@@ -397,6 +401,13 @@ export default function NuevaAsistencia() {
           </div>
         </Section>
 
+        <ConceptosPrevistos
+          conceptos={conceptos}
+          onChange={setConceptos}
+          esCambioDeNeumatico={/neum|tyre|rueda/i.test(
+            types.find((t) => t.code === f.serviceType)?.name ?? f.serviceType)}
+        />
+
         <Section title="Incidencia">
           <Field label="Descripción *" w="w-full">
             <textarea
@@ -415,5 +426,106 @@ export default function NuevaAsistencia() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Lo que se sabe de antemano que se va a montar.
+ *
+ * Es el momento en que Central lo sabe: si el servicio es un cambio pactado,
+ * el neumático se decide aquí y no cuando llega la factura. Nace como
+ * PREVISTO; el taller solo tiene que confirmarlo con la foto de montaje, y al
+ * cerrar entra solo en la tarifa. Lo previsto que nadie confirme no se cobra:
+ * sale como aviso y manda la tarifa a revisión.
+ *
+ * Aquí no se pone precio. Lo pone el tarifario publicado al cerrar el
+ * servicio, con la configuración congelada en la orden de salida.
+ */
+type Concepto = {
+  kind: "TIRE" | "MATERIAL";
+  size: string; brand: string; position: string;
+  conceptCode: string; quantity: number;
+};
+
+const CONCEPTO_NUEVO: Concepto = {
+  kind: "TIRE", size: "", brand: "", position: "ANY", conceptCode: "", quantity: 1,
+};
+
+function ConceptosPrevistos({ conceptos, onChange, esCambioDeNeumatico }: {
+  conceptos: Concepto[];
+  onChange: (c: Concepto[]) => void;
+  esCambioDeNeumatico: boolean;
+}) {
+  const editar = (i: number, campo: keyof Concepto, valor: string | number) =>
+    onChange(conceptos.map((c, j) => (j === i ? { ...c, [campo]: valor } : c)));
+
+  return (
+    <Section title="Neumáticos y materiales previstos">
+      <div className="w-full">
+        <p className="mb-3 text-[13px] text-slate-400">
+          Si ya se sabe qué se va a montar, ponlo aquí: el taller solo tendrá que
+          confirmarlo con la foto de montaje y entrará solo en la factura.{" "}
+          <span className="text-slate-500">
+            El precio no se indica: lo pone el tarifario al cerrar el servicio.
+          </span>
+        </p>
+
+        {esCambioDeNeumatico && conceptos.length === 0 && (
+          <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[13px] text-amber-300">
+            Este servicio es un cambio de neumático y no has indicado cuál. Si ya se
+            sabe, añádelo: se ahorra la llamada de después y el ajuste a mano.
+          </div>
+        )}
+
+        {conceptos.map((c, i) => (
+          <div key={i} className="mb-2 flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2">
+            <Field label="Tipo">
+              <Select value={c.kind} onChange={(e) => editar(i, "kind", e.target.value)}>
+                <option value="TIRE">Neumático</option>
+                <option value="MATERIAL">Material</option>
+              </Select>
+            </Field>
+            {c.kind === "TIRE" ? (
+              <>
+                <Field label="Medida">
+                  <Input value={c.size} className="w-40" placeholder="315/80R22.5"
+                         onChange={(e) => editar(i, "size", e.target.value)} />
+                </Field>
+                <Field label="Marca">
+                  <Input value={c.brand} className="w-32" placeholder="Hankook"
+                         onChange={(e) => editar(i, "brand", e.target.value)} />
+                </Field>
+                <Field label="Posición">
+                  <Select value={c.position} onChange={(e) => editar(i, "position", e.target.value)}>
+                    <option value="ANY">Cualquiera</option>
+                    <option value="STEER">Dirección</option>
+                    <option value="DRIVE">Tracción</option>
+                    <option value="TRAILER">Remolque</option>
+                  </Select>
+                </Field>
+              </>
+            ) : (
+              <Field label="Código del material">
+                <Input value={c.conceptCode} className="w-48" placeholder="REPARACION"
+                       onChange={(e) => editar(i, "conceptCode", e.target.value)} />
+              </Field>
+            )}
+            <Field label="Cantidad">
+              <Input value={String(c.quantity)} className="w-20"
+                     onChange={(e) => editar(i, "quantity", Number(e.target.value) || 1)} />
+            </Field>
+            <button type="button"
+                    className="pb-2 text-[12px] text-rose-300 hover:underline"
+                    onClick={() => onChange(conceptos.filter((_, j) => j !== i))}>
+              quitar
+            </button>
+          </div>
+        ))}
+
+        <Button variant="ghost" onClick={() => onChange([...conceptos, { ...CONCEPTO_NUEVO }])}>
+          Añadir neumático o material
+        </Button>
+      </div>
+    </Section>
   );
 }
