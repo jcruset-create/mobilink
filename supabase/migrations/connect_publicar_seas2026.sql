@@ -55,10 +55,29 @@ DECLARE
   v_publicadas     INT := 0;
   v_contratos      INT := 0;
   v_borradores     INT;
+  v_fila           RECORD;
+  v_n              INT;
 BEGIN
+  -- Si faltan los nombres, se enseña el menú y se para. Mandar a la gente a
+  -- ejecutar otras dos consultas para volver aquí es un viaje de ida y vuelta
+  -- que el script se puede ahorrar.
   IF v_cliente = '' OR v_proveedora = '' THEN
+    RAISE NOTICE '── CLIENTES ACTIVOS (a quién factura la central) ──';
+    FOR v_fila IN
+      SELECT c.id, c.name FROM connect_clients c
+       JOIN connect_control_centers cc ON cc.name = v_centro_nombre AND cc.id = c."controlCenterId"
+       WHERE c.active ORDER BY c.name
+    LOOP
+      RAISE NOTICE '  cliente  id=%  «%»', v_fila.id, v_fila.name;
+    END LOOP;
+
+    RAISE NOTICE '── EMPRESAS PROVEEDORAS (quién factura a la central) ──';
+    FOR v_fila IN SELECT id, name FROM connect_provider_companies ORDER BY name LOOP
+      RAISE NOTICE '  proveedora  id=%  «%»', v_fila.id, v_fila.name;
+    END LOOP;
+
     RAISE EXCEPTION
-      'Rellena v_cliente y v_proveedora arriba. Míralos con: SELECT id, name FROM connect_clients WHERE active; y SELECT id, name FROM connect_provider_companies;';
+      'Copia dos de esos nombres a v_cliente y v_proveedora, arriba, y vuelve a ejecutar. (Si la lista de clientes sale vacía, hay que dar de alta el cliente antes: sin él no hay contrato de venta.)';
   END IF;
 
   SELECT id INTO v_centro_id FROM connect_control_centers
@@ -67,17 +86,26 @@ BEGIN
     RAISE EXCEPTION 'No existe el centro de control "%"', v_centro_nombre;
   END IF;
 
+  -- Se resuelve por nombre EXIGIENDO que sea único. Con SELECT INTO a secas,
+  -- dos filas con el mismo nombre darían una cualquiera y en silencio, y el
+  -- contrato quedaría enlazado a quien no toca sin que nadie se entere.
+  SELECT COUNT(*) INTO v_n FROM connect_clients
+   WHERE "controlCenterId" = v_centro_id AND name = v_cliente AND active;
+  IF v_n = 0 THEN
+    RAISE EXCEPTION 'No existe el cliente activo "%" en este centro. Deja v_cliente en blanco y ejecuta para ver la lista.', v_cliente;
+  ELSIF v_n > 1 THEN
+    RAISE EXCEPTION 'Hay % clientes activos llamados "%". Desambigua por id: cambia la consulta a c.id = <id>.', v_n, v_cliente;
+  END IF;
   SELECT id INTO v_cliente_id FROM connect_clients
    WHERE "controlCenterId" = v_centro_id AND name = v_cliente AND active;
-  IF v_cliente_id IS NULL THEN
-    RAISE EXCEPTION 'No existe el cliente activo "%" en este centro', v_cliente;
-  END IF;
 
-  SELECT id INTO v_proveedora_id FROM connect_provider_companies
-   WHERE name = v_proveedora;
-  IF v_proveedora_id IS NULL THEN
-    RAISE EXCEPTION 'No existe la empresa proveedora "%"', v_proveedora;
+  SELECT COUNT(*) INTO v_n FROM connect_provider_companies WHERE name = v_proveedora;
+  IF v_n = 0 THEN
+    RAISE EXCEPTION 'No existe la empresa proveedora "%". Deja v_proveedora en blanco y ejecuta para ver la lista.', v_proveedora;
+  ELSIF v_n > 1 THEN
+    RAISE EXCEPTION 'Hay % empresas proveedoras llamadas "%". Desambigua por id.', v_n, v_proveedora;
   END IF;
+  SELECT id INTO v_proveedora_id FROM connect_provider_companies WHERE name = v_proveedora;
 
   SELECT id INTO v_plan_venta FROM connect_tariff_plans
    WHERE "controlCenterId" = v_centro_id AND code = 'SEAS_NACIONAL_VENTA';
