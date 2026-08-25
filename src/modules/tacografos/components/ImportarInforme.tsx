@@ -73,8 +73,8 @@ export default function ImportarInforme({ onAplicar }: Props) {
       </h2>
       <div className="p-3">
         <p className="mb-3 text-[12px] text-slate-400">
-          Sube el PDF del anexo II descargado de VDO, o una foto del impreso. Se rellenan doce
-          campos del expediente; lo revisas antes de guardar.
+          Sube el PDF descargado de VDO —el anexo II o el informe técnico— o una foto del
+          impreso. Se rellenan los campos que traiga; lo revisas antes de guardar.
         </p>
 
         <input
@@ -106,13 +106,26 @@ export default function ImportarInforme({ onAplicar }: Props) {
           <div className="mt-3 rounded-lg border border-slate-700 p-3">
             <p className="mb-2 flex items-center gap-2 text-[12px] text-slate-400">
               <Check className="h-4 w-4 text-emerald-400" />
+              {r.impreso === "anexo_ii" ? "Anexo II" : "Informe técnico"}
               {r.origen === "pdf_texto"
-                ? "Leído del texto del PDF, sin interpretar nada."
-                : "Leído de la imagen: repásalo con más cuidado."}
+                ? " leído del texto del PDF, sin interpretar nada."
+                : " leído de la imagen: repásalo con más cuidado."}
               <span className="text-slate-500">
                 {r.encontradas} de {r.total} campos del impreso
               </span>
             </p>
+
+            {/*
+              El informe técnico no lleva la casilla 22 del anexo II, así que
+              de él nunca sale el tipo de operación. Decirlo evita que el
+              técnico crea que la lectura ha fallado.
+            */}
+            {r.impreso === "informe_tecnico" && (
+              <p className="mb-2 text-[12px] text-amber-300">
+                Este impreso no dice si la transferencia fue posible: elige tú el tipo de
+                operación.
+              </p>
+            )}
 
             <dl className="mb-3 grid gap-x-4 gap-y-1 text-[13px] sm:grid-cols-2">
               {RESUMEN.map(([clave, etiqueta]) => (

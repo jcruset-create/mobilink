@@ -198,6 +198,8 @@ export type TextoTramite = {
 /** Lo que ha entendido el importador del informe de la extranet. */
 export type Importacion = {
   origen: "pdf_texto" | "ocr";
+  /** Cuál de los dos impresos de la extranet se ha reconocido. */
+  impreso: "anexo_ii" | "informe_tecnico";
   datos: Partial<DatosExpediente>;
   campos: Record<string, string>;
   avisos: string[];
