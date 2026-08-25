@@ -46,14 +46,26 @@ Connect es el dueño ECONÓMICO. Una sola verdad por dimensión.
 
 ## 3. El mapa de instantes (ya existen todos en el core)
 
+REGLA DE NEGOCIO (dirección, 25/08/2026): **el tiempo de la asistencia
+empieza al CREAR la asistencia y termina al LLEGAR el vehículo al taller.**
+Es la base del forfait y de los tiempos extra.
+
 | Etapa del motor | Instante en Assist | Campo |
 |---|---|---|
 | `estimate` | al crearla | `createdAtMs` |
 | `locked` (forfait congelado) | al asignar técnico | `assignedAtMs` |
-| `final` (regularización) | al terminar | `finishedAtMs` |
+| `final` (regularización) | al llegar el vehículo al taller | `arrivedAtWorkshopMs` |
 
-El instante contractual del espejo es `assignedAtMs`: es la orden de salida
-de Assist. La sincronización de estados ya mapea el resto del ciclo.
+- El **instante contractual** del espejo (franja diurno/nocturno/festivo del
+  forfait) es `createdAtMs`: el tiempo empieza ahí, lo dice la regla. El
+  espejo nace con `serviceOrderedAtMs = createdAtMs` del core.
+- La **duración** para los tiempos extra es
+  `arrivedAtWorkshopMs − createdAtMs`, calculada por el sistema: el técnico
+  NO teclea minutos. Solo aporta los kilómetros.
+- Si el servicio termina SIN paso por taller (reparado in situ), el fin es
+  `finishedAtMs`. Si tampoco existe, la duración queda nula y el cierre
+  avisa (`DURATION_NOT_AVAILABLE`): nunca se inventa.
+- La sincronización de estados core → Connect ya existe y mapea el resto.
 
 ## 4. El cliente: de texto libre a cuenta
 
@@ -82,6 +94,9 @@ pero conviene decidir entre:
   "SEA flota propia". El motor no distingue.
 
 La opción (b) se puede añadir después sin tocar código: es configuración.
+
+DECIDIDO (25/08/2026): **(a), sin compra.** La venta sale del contrato del
+cliente; el coste de flota propia queda fuera del motor por ahora.
 
 ## 6. Cobros y tarifa se refuerzan
 
@@ -115,8 +130,10 @@ diferencia ni se conoce.
 ## 8. Pruebas mínimas
 
 1. Alta en Assist con cliente → espejo con estimación; asignar técnico →
-   forfait congelado al instante de `assignedAtMs`; terminar con km →
-   cierre con extras, venta correcta, compra según decisión del §5.
+   forfait congelado (franja resuelta al `createdAtMs`, que es cuando
+   empieza el tiempo); llegada al taller con km del técnico → cierre con la
+   duración `createdAtMs → arrivedAtWorkshopMs` y los extras que toquen;
+   sin compra (§5).
 2. Alta sin cliente → espejo sin contrato de venta, `NO_TARIFF_PLAN`,
    y el cobro manual sigue funcionando como hoy.
 3. Una asistencia INYECTADA desde Central NO gana un segundo espejo (ya es
@@ -133,12 +150,20 @@ diferencia ni se conoce.
 - La APK del técnico: fase posterior (ver km/minutos al cierre, §7.3, que
   sí requiere una pantalla mínima o campo en la web).
 
-## 10. Abierto — decidir antes de programar
+## 10. Decisiones tomadas (25/08/2026)
 
-1. **Lado de compra** (§5): ¿arrancamos sin compra (a) o modelamos el coste
-   de flota propia como tarifario de compra (b)?
-2. **Tarifario de venta de Assist**: ¿los clientes de Assist facturan con el
-   MISMO plan SEAS o cada cliente (aseguradora, flota) tendrá el suyo? El
-   motor soporta ambos; cambia qué contratos hay que crear.
-3. **Los km/minutos del cierre**: ¿los apunta el técnico (APK/una pantalla
-   web mínima) o el operador de central al cerrar la ficha?
+1. **Sin compra** (§5a): flota propia, la venta sale del contrato del
+   cliente. El coste interno se podrá modelar después como configuración.
+2. **Mismo plan SEAS para todos los clientes de Assist**: sus contratos de
+   venta apuntan a `SEAS_NACIONAL_VENTA`. Si algún cliente pacta otra cosa,
+   se le carga su plan y su contrato con más prioridad: el motor ya lo hace.
+3. **Los kilómetros los aporta el técnico** (APK Assist / ficha). Los
+   minutos NO se teclean: la duración es `createdAtMs →
+   arrivedAtWorkshopMs`, calculada por el sistema (regla del §3).
+
+## 11. Activación segura
+
+El espejo se enciende con un interruptor por centro
+(`settings.assistMirror`), apagado de fábrica: hasta activarlo, nada cambia
+en producción. Al activarlo solo se espejan asistencias creadas a partir de
+ese momento — nunca retroactivo (§7.7).

@@ -634,6 +634,20 @@ export async function initPricing(): Promise<void> {
   `);
 
   await migrarImportesADecimal();
+  /*
+   * Una asistencia del core tiene COMO MUCHO una fila en Connect: es lo que
+   * impide que el espejo económico de Assist facture dos veces el mismo
+   * servicio. Va aparte y con el fallo tragado a propósito: si en alguna
+   * base hubiera un duplicado histórico, el índice no se crea, el alta de
+   * espejos falla EN VOZ ALTA en el log (su INSERT exige este índice) y el
+   * arranque del servidor no se cae. Un servidor caído es peor que un
+   * espejo pendiente.
+   */
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_connect_assistances_core_unico
+      ON connect_assistances ("coreAssistanceId")
+  `).catch((e: any) => console.error("[Pricing] índice único coreAssistanceId:", e?.message));
+
   await habilitarRls();
 }
 
