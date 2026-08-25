@@ -15,17 +15,19 @@
 -- Publicar de cada versión). Esto es el mismo trabajo dejado por escrito,
 -- reproducible y revisable antes de tocar nada.
 --
--- ── ANTES DE EJECUTAR: RELLENA ESTOS DOS NOMBRES ───────────────────────────
+-- ── ANTES DE EJECUTAR: RELLENA EL CLIENTE ──────────────────────────────────
 --
--- No los adivino. El contrato de venta apunta a un CLIENTE (a quién factura
--- la central) y el de compra a una EMPRESA PROVEEDORA (quién factura a la
--- central). Si el nombre no existe, el script se para con un mensaje claro:
--- prefiero eso a crear un contrato que apunte a quien no toca, porque un
--- contrato mal enlazado no da error, factura mal.
+-- El contrato de VENTA apunta a un CLIENTE (a quién factura la central) y no
+-- lo adivino: si el nombre no existe, el script se para y te enseña la lista.
+-- Un contrato mal enlazado no da error, factura mal.
 --
--- Para ver qué hay cargado:
---   SELECT id, name FROM connect_clients WHERE active ORDER BY name;
---   SELECT id, name FROM connect_provider_companies ORDER BY name;
+-- El contrato de COMPRA no se rellena: la proveedora es la empresa a la que
+-- pertenece el taller que atiende la asistencia, y pueden ser varias (hoy
+-- Soledad y SEA; mañana las que sean). El motor exige un contrato de compra
+-- POR EMPRESA —lo específico manda y no existe el "para todas"—, así que se
+-- crea uno por cada empresa proveedora dada de alta, todos apuntando al mismo
+-- tarifario de compra. Cuando des de alta una empresa nueva: re-ejecuta esto
+-- (solo añade la que falte) o crea su contrato desde el panel.
 --
 -- ── ES IDEMPOTENTE ─────────────────────────────────────────────────────────
 --
@@ -38,7 +40,6 @@ DECLARE
   -- ⇩⇩⇩ RELLENA AQUÍ ⇩⇩⇩
   v_centro_nombre  TEXT := 'Centro de Control SEA';
   v_cliente        TEXT := '';   -- p. ej. 'SEAS'
-  v_proveedora     TEXT := '';   -- p. ej. 'SEA Tarragona'
   -- ⇧⇧⇧ RELLENA AQUÍ ⇧⇧⇧
 
   -- Desde cuándo rigen los contratos. El tarifario está vigente 2026-01-01 →
@@ -48,7 +49,6 @@ DECLARE
 
   v_centro_id      INT;
   v_cliente_id     INT;
-  v_proveedora_id  INT;
   v_plan_venta     INT;
   v_plan_compra    INT;
   v_ahora          BIGINT := (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT;
@@ -56,8 +56,8 @@ DECLARE
   v_contratos      INT := 0;
   v_borradores     INT;
   v_n              INT;
+  v_fila           RECORD;
   v_lista_cli      TEXT;
-  v_lista_pro      TEXT;
 BEGIN
   /*
    * Si faltan los nombres, se enseña el menú y se para.
@@ -66,7 +66,7 @@ BEGIN
    * editor SQL de Supabase no muestra la salida de NOTICE, solo el error, así
    * que un NOTICE aquí se genera y se pierde. Lo comprobamos en vivo.
    */
-  IF v_cliente = '' OR v_proveedora = '' THEN
+  IF v_cliente = '' THEN
     SELECT COALESCE(string_agg(format('  · «%s»  (id %s)', t.name, t.id), E'\n' ORDER BY t.name),
                     '  (ninguno: hay que dar de alta el cliente antes, en Clientes)')
       INTO v_lista_cli
@@ -75,12 +75,8 @@ BEGIN
                ON cc.name = v_centro_nombre AND cc.id = c."controlCenterId"
             WHERE c.active) t;
 
-    SELECT COALESCE(string_agg(format('  · «%s»  (id %s)', t.name, t.id), E'\n' ORDER BY t.name), '  (ninguna)')
-      INTO v_lista_pro
-      FROM (SELECT id, name FROM connect_provider_companies) t;
-
-    RAISE EXCEPTION E'Rellena v_cliente y v_proveedora arriba y vuelve a ejecutar.\n\nCLIENTES ACTIVOS (a quién factura la central):\n%\n\nEMPRESAS PROVEEDORAS (quién factura a la central):\n%',
-      v_lista_cli, v_lista_pro;
+    RAISE EXCEPTION E'Rellena v_cliente arriba y vuelve a ejecutar.\n\nCLIENTES ACTIVOS (a quién factura la central):\n%',
+      v_lista_cli;
   END IF;
 
   SELECT id INTO v_centro_id FROM connect_control_centers
@@ -101,14 +97,6 @@ BEGIN
   END IF;
   SELECT id INTO v_cliente_id FROM connect_clients
    WHERE "controlCenterId" = v_centro_id AND name = v_cliente AND active;
-
-  SELECT COUNT(*) INTO v_n FROM connect_provider_companies WHERE name = v_proveedora;
-  IF v_n = 0 THEN
-    RAISE EXCEPTION 'No existe la empresa proveedora "%". Deja v_proveedora en blanco y ejecuta para ver la lista.', v_proveedora;
-  ELSIF v_n > 1 THEN
-    RAISE EXCEPTION 'Hay % empresas proveedoras llamadas "%". Desambigua por id.', v_n, v_proveedora;
-  END IF;
-  SELECT id INTO v_proveedora_id FROM connect_provider_companies WHERE name = v_proveedora;
 
   SELECT id INTO v_plan_venta FROM connect_tariff_plans
    WHERE "controlCenterId" = v_centro_id AND code = 'SEAS_NACIONAL_VENTA';
@@ -154,24 +142,32 @@ BEGIN
   );
   GET DIAGNOSTICS v_contratos = ROW_COUNT;
 
-  -- ── 3. Contrato de COMPRA: quién le factura a la central ─────────────────
-  INSERT INTO connect_contracts
-    ("controlCenterId", role, "providerCompanyId", "tariffPlanId", name, status,
-     "validFromMs", priority, "createdAtMs", "updatedAtMs")
-  SELECT v_centro_id, 'purchase', v_proveedora_id, v_plan_compra,
-         'Compra ' || v_proveedora || ' — SEAS Nacional 2026', 'active',
-         v_desde_ms, 0, v_ahora, v_ahora
-  WHERE NOT EXISTS (
-    SELECT 1 FROM connect_contracts
-     WHERE "controlCenterId" = v_centro_id AND role = 'purchase'
-       AND "providerCompanyId" = v_proveedora_id AND "tariffPlanId" = v_plan_compra
-       AND status = 'active'
-  );
-  GET DIAGNOSTICS v_borradores = ROW_COUNT;
-  v_contratos := v_contratos + v_borradores;
+  /* ── 3. Contratos de COMPRA: uno POR EMPRESA proveedora ──────────────────
+   *
+   * La proveedora es la empresa a la que pertenece el taller que atiende, y
+   * el motor resuelve la compra taller → empresa → contrato. No existe un
+   * contrato "para todas" (el esquema exige la empresa), así que se crea uno
+   * por cada una, todos sobre el mismo tarifario de compra. Idempotente: al
+   * re-ejecutar solo se añade la empresa que falte.
+   */
+  FOR v_fila IN SELECT id, name FROM connect_provider_companies ORDER BY name LOOP
+    INSERT INTO connect_contracts
+      ("controlCenterId", role, "providerCompanyId", "tariffPlanId", name, status,
+       "validFromMs", priority, "createdAtMs", "updatedAtMs")
+    SELECT v_centro_id, 'purchase', v_fila.id, v_plan_compra,
+           'Compra ' || v_fila.name || ' — SEAS Nacional 2026', 'active',
+           v_desde_ms, 0, v_ahora, v_ahora
+    WHERE NOT EXISTS (
+      SELECT 1 FROM connect_contracts
+       WHERE "controlCenterId" = v_centro_id AND role = 'purchase'
+         AND "providerCompanyId" = v_fila.id AND "tariffPlanId" = v_plan_compra
+         AND status = 'active'
+    );
+    GET DIAGNOSTICS v_borradores = ROW_COUNT;
+    v_contratos := v_contratos + v_borradores;
+  END LOOP;
 
-  RAISE NOTICE 'Centro %, cliente % (%), proveedora % (%)',
-    v_centro_id, v_cliente, v_cliente_id, v_proveedora, v_proveedora_id;
+  RAISE NOTICE 'Centro %, cliente % (%)', v_centro_id, v_cliente, v_cliente_id;
   RAISE NOTICE 'Versiones publicadas ahora: %. Contratos creados ahora: %.',
     v_publicadas, v_contratos;
   RAISE NOTICE 'A partir de aquí el motor factura con estos precios. Tarifica dos o tres servicios reales y mira el margen antes de emitir nada.';
