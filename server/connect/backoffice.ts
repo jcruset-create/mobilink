@@ -1992,6 +1992,98 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     });
   });
 
+  /* ── Conceptos de la asistencia (qué se montó de verdad) ─────────────────
+   *
+   * Ciclo previsto → confirmado | no_usado; el diseño completo está en
+   * docs/PROMPT_conceptos_asistencia.md. La central asigna lo previsto cuando
+   * el cambio se pacta de antemano; confirmar un neumático exige la foto de
+   * montaje (de Lite o del técnico Assist, que llega por el puente). Al
+   * cierre solo se factura lo confirmado.
+   *
+   * Corregir esta lista ANTES del cierre es operación normal y queda en la
+   * auditoría de acciones, pero NO es un ajuste económico: el override con
+   * su límite por rol sigue siendo el camino para tocar importes.
+   */
+
+  async function conConceptos(res: Response, fn: () => Promise<unknown>) {
+    const { ErrorConceptos } = await import("./pricing/concepts.ts");
+    try {
+      res.json(await fn());
+    } catch (e) {
+      if (e instanceof ErrorConceptos) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  }
+
+  router.get("/pricing/:id/concepts", ...requireConnectRole("analyst"), async (req, res) => {
+    const { listarConceptos } = await import("./pricing/concepts.ts");
+    await conConceptos(res, async () => ({
+      data: await listarConceptos(Number(req.params.id), centroDe(req)),
+    }));
+  });
+
+  router.post("/pricing/:id/concepts", ...requireConnectRole("operator"), async (req, res) => {
+    const { crearConcepto } = await import("./pricing/concepts.ts");
+    const u = req.connectUser!;
+    await conConceptos(res, async () => {
+      const c = await crearConcepto(Number(req.params.id), centroDe(req), {
+        kind: String(req.body?.kind ?? ""),
+        size: req.body?.size ?? null,
+        brand: req.body?.brand ?? null,
+        position: req.body?.position ?? null,
+        conceptCode: req.body?.conceptCode ?? null,
+        quantity: req.body?.quantity != null ? Number(req.body.quantity) : 1,
+        confirmar: req.body?.confirmar === true,
+        evidenceRef: req.body?.evidenceRef ?? null,
+        via: "panel",
+        actor: u.name || u.email,
+      });
+      await auditConnect({ req, action: "pricing.concept_added", resourceType: "assistance",
+        resourceId: Number(req.params.id), detail: { conceptId: c.id, kind: c.kind, status: c.status } });
+      return c;
+    });
+  });
+
+  router.patch("/pricing/:id/concepts/:cid", ...requireConnectRole("operator"), async (req, res) => {
+    const { confirmarConcepto, marcarNoUsado, corregirCantidad, ErrorConceptos } = await import("./pricing/concepts.ts");
+    const u = req.connectUser!;
+    const id = Number(req.params.id);
+    const cid = Number(req.params.cid);
+    const accion = String(req.body?.accion ?? "");
+    await conConceptos(res, async () => {
+      let c;
+      if (accion === "confirmar") {
+        c = await confirmarConcepto(id, cid, centroDe(req), {
+          actor: u.name || u.email, via: "panel",
+          evidenceRef: req.body?.evidenceRef ?? null,
+        });
+      } else if (accion === "no_usado") {
+        c = await marcarNoUsado(id, cid, centroDe(req), {
+          actor: u.name || u.email, motivo: String(req.body?.motivo ?? ""),
+        });
+      } else if (accion === "cantidad") {
+        c = await corregirCantidad(id, cid, centroDe(req), Number(req.body?.quantity));
+      } else {
+        throw new ErrorConceptos("accion_invalida", "Acción no reconocida: confirmar | no_usado | cantidad");
+      }
+      await auditConnect({ req, action: `pricing.concept_${accion}`, resourceType: "assistance",
+        resourceId: id, detail: { conceptId: cid } });
+      return c;
+    });
+  });
+
+  router.delete("/pricing/:id/concepts/:cid", ...requireConnectRole("operator"), async (req, res) => {
+    const { retirarConcepto } = await import("./pricing/concepts.ts");
+    await conConceptos(res, async () => {
+      const ok = await retirarConcepto(Number(req.params.id), Number(req.params.cid), centroDe(req));
+      if (ok) {
+        await auditConnect({ req, action: "pricing.concept_removed", resourceType: "assistance",
+          resourceId: Number(req.params.id), detail: { conceptId: Number(req.params.cid) } });
+      }
+      return { ok };
+    });
+  });
+
   /**
    * Ajuste manual de un importe.
    *

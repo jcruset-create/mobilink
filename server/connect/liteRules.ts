@@ -323,6 +323,7 @@ export const EVIDENCE_CATEGORY_LABELS: Record<string, string> = {
   damage: "Daño o avería",
   work: "Trabajo realizado",
   part: "Pieza sustituida",
+  mounting: "Montaje del neumático",
   finished: "Vehículo finalizado",
   document: "Documento",
   signature: "Firma",

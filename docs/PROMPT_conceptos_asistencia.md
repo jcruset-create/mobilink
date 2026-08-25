@@ -28,7 +28,9 @@ confirmación es **la foto de montaje** en el vehículo.
 **Caso B — reparación.** Se va a reparar. El taller se lleva un neumático por
 si acaso; ese neumático de contingencia NO es un concepto (es logística, no
 facturación).
-  - **B1 — se repara**: no se monta neumático. No hay concepto de neumático.
+  - **B1 — se repara**: no se monta neumático. La reparación en sí ES un
+    concepto facturable (material del catálogo, p. ej. "reparación de
+    pinchazo"), que el taller confirma como cualquier otro.
   - **B2 — no se puede reparar**: el taller monta el nuevo. Entonces sí
     **declara desde el catálogo** cuál montó, y lo justifica con la foto de
     montaje en el vehículo.
@@ -174,12 +176,19 @@ como el resto):
   no facturación. No se registra como concepto.
 - Stock/almacén del taller: esto tarifica, no gestiona inventario.
 
-## 11. Abierto — decidir antes de programar
+## 11. Decisiones tomadas (18/08/2026)
 
-1. **La reparación en sí (caso B1): ¿va dentro del forfait o es un concepto
-   de material facturable** (p. ej. "reparación de pinchazo" del catálogo)?
-2. **Catálogo de materiales**: ¿existe ya la lista (válvulas, ecotasa,
-   reparación…) o se monta sobre la marcha en el panel de Tarifas?
-3. **Clientes de Assist**: ¿la confirmación la hace siempre el operador desde
-   el panel con la foto recibida, o está previsto que la app Assist hable con
-   la API de Connect más adelante? (Hoy `flutter_app` no usa `/api/connect`.)
+1. **La reparación (B1) es concepto facturable**: un material del catálogo
+   que el taller confirma como cualquier otro.
+2. **El catálogo de materiales se monta sobre la marcha en el panel de
+   Tarifas**: un material es un suplemento (`connect_tariff_extras`) con
+   `lineKind = 'MATERIAL'` y `calculationType = 'PER_UNIT'`. Sin tabla nueva:
+   se gestionan donde ya se editan los suplementos, y versionan con el
+   tarifario como todo lo demás.
+3. **Clientes de Assist**: la conexión existe y es del lado del servidor —
+   la asistencia se inyecta en el core (`roadside_assistances`), los estados
+   se sincronizan por sondeo y `evidence.ts` ya unifica las fotos de los dos
+   orígenes (`c<id>` de Connect, `a<id>` del core). La foto de montaje del
+   técnico Assist YA llega a la ficha; el operador confirma el concepto desde
+   el panel enlazándola. Que la app Assist confirme por sí misma es una
+   segunda fase, no un requisito del arranque.
