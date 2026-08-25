@@ -56,10 +56,22 @@ describe("camposQueFaltan", () => {
     expect(faltan).not.toContain("fechaEntrega");
   });
 
-  it("exige receptor y fecha de entrega sólo en una intransferibilidad", () => {
-    const d = { ...completo(), receptorNombre: "", receptorDni: "  " };
-    const faltan = camposQueFaltan(d).map((c) => c.campo);
-    expect(faltan).toEqual(["receptorNombre", "receptorDni"]);
+  it("exige la fecha de entrega sólo en una intransferibilidad", () => {
+    const d = { ...completo(), fechaEntrega: null };
+    expect(camposQueFaltan(d).map((c) => c.campo)).toEqual(["fechaEntrega"]);
+  });
+
+  it("nombre y DNI no bloquean la emisión: se recogen al firmar o a mano", () => {
+    // Exigirlos al emitir obligaba a teclearlos antes de tener delante a la
+    // persona, que es exactamente cuando no se saben.
+    const d = {
+      ...completo(),
+      autorizaNombre: "",
+      autorizaNif: "",
+      receptorNombre: "",
+      receptorDni: "",
+    };
+    expect(camposQueFaltan(d)).toEqual([]);
   });
 
   it("los campos comunes se exigen en los dos tipos", () => {
@@ -72,12 +84,12 @@ describe("camposQueFaltan", () => {
   });
 
   it("devuelve todos los que faltan de una vez, no el primero", () => {
-    const d = { ...completo(), empresaCliente: "", autorizaNombre: "", matricula: "" };
+    const d = { ...completo(), empresaCliente: "", tecnico: "", matricula: "" };
     expect(camposQueFaltan(d)).toHaveLength(3);
   });
 
   it("un campo con sólo espacios cuenta como vacío", () => {
-    expect(camposQueFaltan({ ...completo(), autorizaNif: "   " })).toHaveLength(1);
+    expect(camposQueFaltan({ ...completo(), tacMarca: "   " })).toHaveLength(1);
   });
 });
 

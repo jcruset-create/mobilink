@@ -118,8 +118,7 @@ export async function initTacografos(): Promise<void> {
 
       created_at_ms BIGINT NOT NULL,
       updated_at_ms BIGINT NOT NULL,
-      created_by UUID,
-      UNIQUE (empresa_id, num_informe)
+      created_by UUID
     );
     CREATE INDEX IF NOT EXISTS tac_exp_empresa_idx
       ON tac_expedientes(empresa_id, fecha_informe DESC);
@@ -238,6 +237,19 @@ export async function initTacografos(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS tac_com_expediente_idx
       ON tac_comunicaciones(expediente_id, fecha_presentacion DESC);
+  `);
+
+  // El nº de informe sólo choca entre expedientes VIVOS: un expediente anulado
+  // conserva el suyo como rastro, pero no puede secuestrar el número — al
+  // anular una prueba o una equivocación, el informe real de la extranet tiene
+  // que poder registrarse con ese mismo número. La restricción de columna se
+  // sustituye por un índice único parcial; en una base recién creada el DROP
+  // no encuentra nada y no pasa nada.
+  await pool.query(`
+    ALTER TABLE tac_expedientes
+      DROP CONSTRAINT IF EXISTS tac_expedientes_empresa_id_num_informe_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS tac_exp_num_vigente_idx
+      ON tac_expedientes(empresa_id, num_informe) WHERE estado <> 'anulado';
   `);
 
   // El acta de destrucción es un documento más, con su hash y su anulación.

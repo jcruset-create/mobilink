@@ -221,3 +221,14 @@ CREATE INDEX IF NOT EXISTS tac_com_expediente_idx
 ALTER TABLE tac_documentos DROP CONSTRAINT IF EXISTS tac_documentos_tipo_check;
 ALTER TABLE tac_documentos ADD CONSTRAINT tac_documentos_tipo_check
   CHECK (tipo IN ('justificante','acuse_cliente','comunicacion_admin','acta_destruccion'));
+
+-- ============================================================
+-- El nº de informe sólo choca entre expedientes vivos
+-- ============================================================
+-- Un expediente anulado conserva su número como rastro pero no lo secuestra:
+-- al anular una prueba o una equivocación, el informe real de la extranet
+-- tiene que poder registrarse con ese mismo número.
+ALTER TABLE tac_expedientes
+  DROP CONSTRAINT IF EXISTS tac_expedientes_empresa_id_num_informe_key;
+CREATE UNIQUE INDEX IF NOT EXISTS tac_exp_num_vigente_idx
+  ON tac_expedientes(empresa_id, num_informe) WHERE estado <> 'anulado';

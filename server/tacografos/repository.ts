@@ -795,3 +795,52 @@ export async function listarPendientesComunicar(empresaId: string): Promise<Expe
   );
   return rows.map(aExpediente);
 }
+
+/** ¿El expediente llegó a emitir algún documento, vigente o anulado? */
+export async function tieneDocumentos(empresaId: string, id: string): Promise<boolean> {
+  const { rows } = await pool.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM tac_documentos WHERE empresa_id = $1 AND expediente_id = $2`,
+    [empresaId, id]
+  );
+  return Number(rows[0]?.n) > 0;
+}
+
+/**
+ * Borra el expediente del todo, con sus firmas y comunicaciones.
+ *
+ * Sólo lo llama el servicio, y sólo cuando NUNCA se emitió un documento: de un
+ * expediente que emitió papel queda el rastro anulado; de una prueba o una
+ * equivocación no tiene por qué quedar nada.
+ */
+export async function eliminarExpediente(empresaId: string, id: string): Promise<void> {
+  await pool.query(`DELETE FROM tac_firmas WHERE empresa_id = $1 AND expediente_id = $2`, [empresaId, id]);
+  await pool.query(`DELETE FROM tac_comunicaciones WHERE empresa_id = $1 AND expediente_id = $2`, [empresaId, id]);
+  await pool.query(`DELETE FROM tac_expedientes WHERE empresa_id = $1 AND id = $2`, [empresaId, id]);
+}
+
+/**
+ * Guarda nombre y DNI de la persona de un papel, recogidos al firmar.
+ *
+ * Pisa lo que hubiera: lo que la persona dicta con la tablet delante es más
+ * fiable que lo que se tecleó antes de tenerla delante. Un valor vacío no
+ * borra nada.
+ */
+export async function actualizarPersonaFirma(
+  empresaId: string,
+  id: string,
+  papel: PapelFirma,
+  nombre: string,
+  dni: string
+): Promise<void> {
+  if (papel !== "autoriza" && papel !== "receptor") return;
+  const colNombre = papel === "autoriza" ? "autoriza_nombre" : "receptor_nombre";
+  const colDni = papel === "autoriza" ? "autoriza_nif" : "receptor_dni";
+  await pool.query(
+    `UPDATE tac_expedientes SET
+       ${colNombre} = COALESCE(NULLIF($3, ''), ${colNombre}),
+       ${colDni}    = COALESCE(NULLIF($4, ''), ${colDni}),
+       updated_at_ms = $5
+      WHERE empresa_id = $1 AND id = $2 AND estado <> 'anulado'`,
+    [empresaId, id, nombre.trim(), dni.trim(), Date.now()]
+  );
+}

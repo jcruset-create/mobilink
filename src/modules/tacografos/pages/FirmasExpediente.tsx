@@ -24,12 +24,23 @@ function papelesDe(tipo: TipoOperacion): PapelFirma[] {
 type Props = {
   expedienteId: string;
   tipo: TipoOperacion;
-  /** Nombres que se copian junto a la firma, para saber quién la estampó. */
+  /** Nombres con los que se abre el cuadro de firma; la persona los corrige. */
   nombres: Partial<Record<PapelFirma, string>>;
+  /** DNI iniciales de los papeles que llevan (autoriza y receptor). */
+  dnis: Partial<Record<PapelFirma, string>>;
   onCambio: () => void;
+  /** Firmar puede escribir nombre y DNI en el expediente: se sube actualizado. */
+  onExpediente: (e: import("../types").Expediente) => void;
 };
 
-export default function FirmasExpediente({ expedienteId, tipo, nombres, onCambio }: Props) {
+export default function FirmasExpediente({
+  expedienteId,
+  tipo,
+  nombres,
+  dnis,
+  onCambio,
+  onExpediente,
+}: Props) {
   const { puede } = useTacografos();
   const [firmas, setFirmas] = useState<Firma[]>([]);
   const [firmando, setFirmando] = useState<PapelFirma | null>(null);
@@ -56,10 +67,11 @@ export default function FirmasExpediente({ expedienteId, tipo, nombres, onCambio
     onCambio();
   }
 
-  async function guardar(papel: PapelFirma, imagen: string) {
+  async function guardar(papel: PapelFirma, imagen: string, nombre: string, dni: string) {
     setError(null);
     try {
-      await api.firmar(expedienteId, papel, imagen, nombres[papel] ?? "");
+      const r = await api.firmar(expedienteId, papel, imagen, nombre, dni);
+      if (r.expediente) onExpediente(r.expediente);
       setFirmando(null);
       await recargar();
     } catch (e) {
@@ -146,7 +158,10 @@ export default function FirmasExpediente({ expedienteId, tipo, nombres, onCambio
       {firmando && (
         <CapturaFirma
           titulo={ETIQUETA_FIRMA[firmando]}
-          onFirmar={(png) => guardar(firmando, png)}
+          nombreInicial={nombres[firmando] ?? ""}
+          dniInicial={dnis[firmando] ?? ""}
+          pedirDni={firmando === "autoriza" || firmando === "receptor"}
+          onFirmar={(png, nombre, dni) => guardar(firmando, png, nombre, dni)}
           onCancelar={() => setFirmando(null)}
         />
       )}

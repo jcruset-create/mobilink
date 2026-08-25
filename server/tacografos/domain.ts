@@ -48,11 +48,15 @@ export type DatosExpediente = {
 /** Campo que falta, con la etiqueta que ve el usuario. */
 export type CampoQueFalta = { campo: string; etiqueta: string };
 
+/*
+ * Nombre y DNI —de quien autoriza y de quien recibe— NO están aquí a
+ * propósito: se piden al recoger la firma en la tablet, o se escriben a mano
+ * sobre el papel impreso. Exigirlos para emitir obligaba a teclearlos antes de
+ * tener delante a la persona, que es exactamente cuando no se saben.
+ */
 const SIEMPRE: Array<[keyof DatosExpediente, string]> = [
   ["numInforme", "Nº informe / certificado"],
   ["empresaCliente", "Empresa"],
-  ["autorizaNombre", "Nombre de quien autoriza"],
-  ["autorizaNif", "DNI / NIF de quien autoriza"],
   ["matricula", "Matrícula"],
   ["tacMarca", "Marca / fabricante"],
   ["tacModelo", "Modelo de la unidad"],
@@ -68,8 +72,6 @@ const SOLO_TRANSFERENCIA: Array<[keyof DatosExpediente, string]> = [
 
 const SOLO_INTRANSFERIBILIDAD: Array<[keyof DatosExpediente, string]> = [
   ["fechaEntrega", "Fecha entrega al cliente"],
-  ["receptorNombre", "Nombre de la persona receptora"],
-  ["receptorDni", "DNI de la persona receptora"],
 ];
 
 function vacio(v: unknown): boolean {

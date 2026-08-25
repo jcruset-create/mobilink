@@ -147,12 +147,21 @@ export default function Expediente({ nuevo }: Props) {
 
   async function anular() {
     if (!id) return;
-    // Se pregunta porque no tiene vuelta: un expediente anulado ya no se edita,
-    // se emite otro. Es documentación legal.
-    if (!confirm("¿Anular este expediente? No podrá volver a editarse.")) return;
+    if (
+      !confirm(
+        "¿Anular este expediente? Si no tiene documentos emitidos se eliminará del todo; " +
+          "si los tiene, quedará anulado como rastro. Su nº de informe quedará libre."
+      )
+    )
+      return;
     try {
       const r = await api.anularExpediente(id);
-      setEstado(r.expediente.estado);
+      if (r.eliminado) {
+        // No queda nada que enseñar: el expediente ya no existe.
+        navigate("/tacografos/expedientes");
+        return;
+      }
+      if (r.expediente) setEstado(r.expediente.estado);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido anular");
     }
@@ -176,12 +185,12 @@ export default function Expediente({ nuevo }: Props) {
         <h1 className="mr-auto text-lg font-bold">
           {nuevo ? "Nuevo expediente" : d.numInforme || "Expediente"}
         </h1>
-        {!nuevo && puede("tacografos.expediente.annul") && !anulado && (
+        {!nuevo && puede("tacografos.expediente.annul") && (
           <button
             onClick={() => void anular()}
             className="flex items-center gap-1.5 rounded-lg border border-red-500/40 px-3 py-2 text-[13px] text-red-300 hover:bg-red-500/10"
           >
-            <Ban className="h-4 w-4" /> Anular
+            <Ban className="h-4 w-4" /> {anulado ? "Eliminar" : "Anular"}
           </button>
         )}
         {!nuevo && id && (
@@ -426,7 +435,23 @@ export default function Expediente({ nuevo }: Props) {
               receptor: d.receptorNombre,
               tecnico: d.tecnico,
             }}
+            dnis={{ autoriza: d.autorizaNif, receptor: d.receptorDni }}
             onCambio={() => setRevision((v) => v + 1)}
+            onExpediente={(e) =>
+              /*
+               * Sólo los datos de las personas: es lo único que firmar puede
+               * haber escrito, y pisar el resto machacaría lo que el técnico
+               * tenga a medio editar. Sin esto, un Guardar posterior enviaría
+               * los campos vacíos y borraría el nombre recogido en la tablet.
+               */
+              setD((x) => ({
+                ...x,
+                autorizaNombre: e.autorizaNombre,
+                autorizaNif: e.autorizaNif,
+                receptorNombre: e.receptorNombre,
+                receptorDni: e.receptorDni,
+              }))
+            }
           />
           <DocumentosExpediente
             key={`docs-${revision}`}

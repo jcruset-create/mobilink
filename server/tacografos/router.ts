@@ -220,13 +220,21 @@ export function createTacografosRouter(): Router {
     })
   );
 
+  /*
+   * Anular decide en el servicio qué significa: un expediente que nunca emitió
+   * documento se borra del todo (`eliminado: true`); uno con papel emitido
+   * queda como rastro anulado. En ambos casos su nº de informe queda libre.
+   */
   r.post(
     "/expedientes/:id/anular",
     exigirPermiso("tacografos.expediente.annul"),
     ruta(async (req, res) => {
       const ctx = req.authCtx!;
-      const e = await repo.anularExpediente(ctx.empresaId, String(req.params.id));
-      res.json({ expediente: conCalculados(e) });
+      const r2 = await servicio.anularExpediente(ctx.empresaId, String(req.params.id));
+      res.json({
+        eliminado: r2.eliminado,
+        expediente: r2.expediente ? conCalculados(r2.expediente) : null,
+      });
     })
   );
 
@@ -360,9 +368,13 @@ export function createTacografosRouter(): Router {
         String(req.params.id),
         papel as repo.PapelFirma,
         imagen,
-        texto(b.nombre)
+        texto(b.nombre),
+        texto(b.dni)
       );
-      res.json({ firma });
+      // El expediente vuelve porque firmar puede haberle escrito el nombre y
+      // el DNI recogidos en la tablet: la pantalla los refresca sin recargar.
+      const expediente = await repo.obtenerExpediente(ctx.empresaId, String(req.params.id));
+      res.json({ firma, expediente: expediente ? conCalculados(expediente) : null });
     })
   );
 

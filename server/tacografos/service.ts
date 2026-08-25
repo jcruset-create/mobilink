@@ -173,7 +173,8 @@ export async function firmar(
   expedienteId: string,
   papel: repo.PapelFirma,
   pngBase64: string,
-  nombre: string
+  nombre: string,
+  dni = ""
 ): Promise<repo.Firma> {
   const expediente = await repo.obtenerExpediente(empresaId, expedienteId);
   if (!expediente) {
@@ -205,6 +206,10 @@ export async function firmar(
   const firmadoAtMs = Date.now();
   const ruta = rutaFirma(empresaId, expedienteId, papel, firmadoAtMs);
   await guardarDocumento(ruta, png, "image/png");
+
+  // El nombre y el DNI se recogen aquí, con la persona delante: es el momento
+  // en que se saben de verdad, y por eso dejaron de exigirse al emitir.
+  await repo.actualizarPersonaFirma(empresaId, expedienteId, papel, nombre, dni);
 
   return repo.guardarFirma(empresaId, userId, {
     expedienteId,
@@ -413,4 +418,39 @@ export function conservarCertificadoHasta(emitidoAtMs: number): string {
   const d = new Date(emitidoAtMs);
   const dos = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear() + ANOS_CONSERVACION_CERTIFICADOS}-${dos(d.getMonth() + 1)}-${dos(d.getDate())}`;
+}
+
+
+// ── Anulación ───────────────────────────────────────────────────────────────
+
+/**
+ * Anula un expediente, y decide qué significa anular:
+ *
+ * · Si NUNCA emitió un documento —una prueba, una equivocación al guardar—, se
+ *   **borra del todo**, con sus firmas: no hay nada legal de lo que dejar
+ *   rastro, y dejarlo como «anulado» sólo ensucia la lista.
+ * · Si emitió papel, queda como `anulado`: el documento salió por la impresora
+ *   y el rastro tiene que explicarlo.
+ *
+ * En ambos casos el nº de informe queda libre (el índice único sólo cuenta
+ * expedientes vivos): el informe real de la extranet puede registrarse con él.
+ */
+export async function anularExpediente(
+  empresaId: string,
+  expedienteId: string
+): Promise<{ eliminado: boolean; expediente: repo.Expediente | null }> {
+  const expediente = await repo.obtenerExpediente(empresaId, expedienteId);
+  if (!expediente) {
+    throw new ErrorTacografos("El expediente no existe.", "EXPEDIENTE_NO_ENCONTRADO", 404);
+  }
+  if (!(await repo.tieneDocumentos(empresaId, expedienteId))) {
+    await repo.eliminarExpediente(empresaId, expedienteId);
+    return { eliminado: true, expediente: null };
+  }
+  if (expediente.estado === "anulado") {
+    // Ya estaba anulado y tiene documentos: se queda como rastro. Repetir la
+    // orden no es un error, pero tampoco borra nada.
+    return { eliminado: false, expediente };
+  }
+  return { eliminado: false, expediente: await repo.anularExpediente(empresaId, expedienteId) };
 }

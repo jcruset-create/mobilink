@@ -85,7 +85,13 @@ export function actualizarExpediente(
   return pedir(`/expedientes/${id}`, { method: "PUT", body: JSON.stringify(d) });
 }
 
-export function anularExpediente(id: string): Promise<{ expediente: Expediente }> {
+/**
+ * Anular borra del todo un expediente que nunca emitió documento
+ * (`eliminado: true`); uno con papel emitido queda como rastro anulado.
+ */
+export function anularExpediente(
+  id: string
+): Promise<{ eliminado: boolean; expediente: Expediente | null }> {
   return pedir(`/expedientes/${id}/anular`, { method: "POST" });
 }
 
@@ -128,11 +134,12 @@ export function firmar(
   expedienteId: string,
   papel: PapelFirma,
   imagen: string,
-  nombre: string
-): Promise<{ firma: Firma }> {
+  nombre: string,
+  dni: string
+): Promise<{ firma: Firma; expediente: Expediente | null }> {
   return pedir(`/expedientes/${expedienteId}/firmas/${papel}`, {
     method: "PUT",
-    body: JSON.stringify({ imagen, nombre }),
+    body: JSON.stringify({ imagen, nombre, dni }),
   });
 }
 

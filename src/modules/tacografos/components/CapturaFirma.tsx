@@ -14,19 +14,33 @@ import { Eraser, PenLine } from "lucide-react";
 
 type Props = {
   titulo: string;
-  /** Se llama con el PNG en base64 al confirmar. */
-  onFirmar: (pngBase64: string) => Promise<void>;
+  /** Nombre con el que se abre el cuadro; la persona lo corrige si no es ella. */
+  nombreInicial?: string;
+  dniInicial?: string;
+  /** Si el papel lleva DNI (quien autoriza y quien recibe; el técnico no). */
+  pedirDni?: boolean;
+  /** Se llama con el PNG en base64 y los datos de la persona al confirmar. */
+  onFirmar: (pngBase64: string, nombre: string, dni: string) => Promise<void>;
   onCancelar: () => void;
 };
 
 const ANCHO = 520;
 const ALTO = 180;
 
-export default function CapturaFirma({ titulo, onFirmar, onCancelar }: Props) {
+export default function CapturaFirma({
+  titulo,
+  nombreInicial = "",
+  dniInicial = "",
+  pedirDni = false,
+  onFirmar,
+  onCancelar,
+}: Props) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const dibujando = useRef(false);
   const [vacio, setVacio] = useState(true);
   const [guardando, setGuardando] = useState(false);
+  const [nombre, setNombre] = useState(nombreInicial);
+  const [dni, setDni] = useState(dniInicial);
 
   useEffect(() => {
     const lienzo = ref.current;
@@ -89,7 +103,7 @@ export default function CapturaFirma({ titulo, onFirmar, onCancelar }: Props) {
     if (!lienzo) return;
     setGuardando(true);
     try {
-      await onFirmar(lienzo.toDataURL("image/png"));
+      await onFirmar(lienzo.toDataURL("image/png"), nombre.trim(), dni.trim());
     } finally {
       setGuardando(false);
     }
@@ -104,6 +118,30 @@ export default function CapturaFirma({ titulo, onFirmar, onCancelar }: Props) {
         <p className="mb-3 text-[12px] text-slate-400">
           Firma con el dedo o con el lápiz dentro del recuadro.
         </p>
+        {/*
+          El nombre y el DNI se piden aquí, con la persona delante, y no al
+          crear el expediente: es el momento en que se saben de verdad.
+        */}
+        <div className="mb-3 grid gap-2 sm:grid-cols-2">
+          <label className="block text-[12px]">
+            <span className="mb-1 block text-slate-400">Nombre y apellidos</span>
+            <input
+              value={nombre}
+              onChange={(e) => setNombre(e.target.value)}
+              className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-[13px] text-slate-100 outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          </label>
+          {pedirDni && (
+            <label className="block text-[12px]">
+              <span className="mb-1 block text-slate-400">DNI / NIF</span>
+              <input
+                value={dni}
+                onChange={(e) => setDni(e.target.value)}
+                className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-[13px] text-slate-100 outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </label>
+          )}
+        </div>
         <canvas
           ref={ref}
           onPointerDown={empezar}
