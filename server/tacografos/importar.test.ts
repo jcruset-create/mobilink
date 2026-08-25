@@ -101,6 +101,15 @@ describe("importación de un PDF a dos columnas", () => {
     expect(campos.fechaEnvio).toBe("");
   });
 
+  it("distingue el anexo II del informe técnico", async () => {
+    const { importarAnexoII } = await import("./importar.ts");
+    const r = await importarAnexoII(await pdfDosColumnas(), "application/pdf");
+    expect(r.impreso).toBe("anexo_ii");
+    expect(r.origen).toBe("pdf_texto");
+    // Y con el anexo II delante, la casilla 22 sigue decidiendo el tipo.
+    expect(r.datos.tipo).toBe("intransferibilidad");
+  });
+
   it("un PDF sin capa de texto no da nada que analizar", async () => {
     // Es el caso del escaneo: `encontradas` sale a cero y por eso el
     // importador se va al OCR en vez de devolver un expediente vacío.
