@@ -1,4 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
+import RecuperarDespliegue from "./components/RecuperarDespliegue";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 
 import SeaTarragonaV1 from "./SeaTarragonaV1";
@@ -134,6 +135,9 @@ function Cargando() {
 
 export default function App() {
   return (
+    // Recoge el fallo de descarga de un trozo cuando se despliega con la
+    // pestaña abierta: antes eso dejaba la pantalla en blanco.
+    <RecuperarDespliegue>
     <Suspense fallback={<Cargando />}>
     <Routes>
       <Route path="/" element={<SeaTarragonaV1 />} />
@@ -384,5 +388,6 @@ export default function App() {
       <Route path="*" element={<NotFound />} />
     </Routes>
     </Suspense>
+    </RecuperarDespliegue>
   );
 }
