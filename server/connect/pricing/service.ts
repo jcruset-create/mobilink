@@ -23,6 +23,7 @@ import { cargarConfiguracion } from "./repository.ts";
 import { construirSnapshot } from "./snapshot.ts";
 import { aDinero, formatear, multiplicar, porcentajeDe, restar, type Dinero } from "./money.ts";
 import { resolverPrecioNeumatico, type PosicionNeumatico } from "./tires.ts";
+import { conceptosParaCierre } from "./concepts.ts";
 import type { Aviso, ConceptoServicio, ContextoTarifa, EtapaTarifa, ResultadoTarifa } from "./types.ts";
 
 export interface DatosAsistencia {
@@ -259,6 +260,17 @@ export async function finalizar(
 
   const real = distanciaYTiempoReales(a, opciones);
 
+  /*
+   * Los conceptos declarados (neumáticos, materiales) entran aquí, y SOLO los
+   * confirmados: la confirmación con foto es lo que sostiene la línea de la
+   * factura. Los que vengan ya en las opciones (llamadas programáticas) se
+   * respetan y se suman.
+   */
+  const declarados = await conceptosParaCierre(assistanceId);
+  if (declarados.conceptos.length > 0) {
+    real.opciones.conceptos = [...(real.opciones.conceptos ?? []), ...declarados.conceptos];
+  }
+
   const bloqueada = await db.query(
     `SELECT "saleRuleId", "purchaseRuleId" FROM connect_assistance_pricings
       WHERE "assistanceId" = $1 AND stage = 'locked'`,
@@ -284,6 +296,22 @@ export async function finalizar(
                `cuentakilómetros y no los del servicio. No se han cobrado kilómetros de más: ` +
                `si el dato es bueno, corrígelo y ajusta el importe a mano.`,
     });
+  }
+
+  /*
+   * Un concepto previsto que nadie confirmó ni descartó NO se cobra por
+   * defecto —la foto de montaje es la prueba, y no está—, pero tampoco puede
+   * desaparecer en silencio: la tarifa sale a revisión manual para que
+   * alguien decida si falta la foto o si hay que marcarlo como no usado.
+   */
+  if (declarados.sinResolver.length > 0) {
+    r.avisos.push({
+      codigo: "CONCEPT_NOT_CONFIRMED",
+      detalle: `Previsto sin confirmar ni descartar: ` +
+               declarados.sinResolver.map((c) => c.descripcion).join("; ") +
+               `. No se ha cobrado: confírmalo con su foto o márcalo como no usado.`,
+    });
+    r.estado = "manual_review";
   }
 
   return guardar(a, r, atMs, real.opciones);

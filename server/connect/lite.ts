@@ -991,6 +991,83 @@ export function createConnectLiteRouter(): Router {
     res.status(201).json(payload);
   });
 
+  /* ── Conceptos: qué se montó de verdad ────────────────────────────────────
+   *
+   * El taller ve lo que Central pactó ("vas a montar este neumático") y lo
+   * CONFIRMA con la foto de montaje, o declara del catálogo el que montó
+   * cuando la realidad se desvía (reparación que no pudo ser). El precio no
+   * viaja nunca por aquí: lo pone el tarifario publicado en el cierre.
+   * Diseño en docs/PROMPT_conceptos_asistencia.md.
+   */
+
+  router.get("/assistances/:id/concepts", async (req, res) => {
+    const s = req.liteSession!;
+    const a = await loadAssistance(s, Number(req.params.id));
+    if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
+    const { listarConceptos } = await import("./pricing/concepts.ts");
+    res.json({ data: await listarConceptos(a.id, null) });
+  });
+
+  router.post("/assistances/:id/concepts", async (req, res) => {
+    const s = req.liteSession!;
+    const cached = await findAction(req.body?.clientActionId);
+    if (cached) return res.json(cached);
+
+    const a = await loadAssistance(s, Number(req.params.id));
+    if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
+
+    const { crearConcepto, ErrorConceptos } = await import("./pricing/concepts.ts");
+    try {
+      // Lo que el taller declara desde la carretera es lo que ha montado:
+      // nace confirmado, con su foto. Los "previstos" los pone Central.
+      const c = await crearConcepto(a.id, null, {
+        kind: String(req.body?.kind ?? "TIRE"),
+        size: req.body?.size ?? null,
+        brand: req.body?.brand ?? null,
+        position: req.body?.position ?? null,
+        conceptCode: req.body?.conceptCode ?? null,
+        quantity: req.body?.quantity != null ? Number(req.body.quantity) : 1,
+        confirmar: true,
+        evidenceRef: req.body?.evidenceRef ?? null,
+        via: "lite",
+        actor: `${s.userName} (${s.workshopName})`,
+        clientActionId: req.body?.clientActionId ?? null,
+      });
+      await auditLite({ req, action: "lite.concept_declared", resourceType: "assistance",
+        resourceId: a.id, detail: { conceptId: c.id, kind: c.kind } });
+      await recordAction(req.body?.clientActionId, "concept", s, a.id, c);
+      res.status(201).json(c);
+    } catch (e) {
+      if (e instanceof ErrorConceptos) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  });
+
+  router.post("/assistances/:id/concepts/:cid/confirm", async (req, res) => {
+    const s = req.liteSession!;
+    const cached = await findAction(req.body?.clientActionId);
+    if (cached) return res.json(cached);
+
+    const a = await loadAssistance(s, Number(req.params.id));
+    if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
+
+    const { confirmarConcepto, ErrorConceptos } = await import("./pricing/concepts.ts");
+    try {
+      const c = await confirmarConcepto(a.id, Number(req.params.cid), null, {
+        actor: `${s.userName} (${s.workshopName})`,
+        via: "lite",
+        evidenceRef: req.body?.evidenceRef ?? null,
+      });
+      await auditLite({ req, action: "lite.concept_confirmed", resourceType: "assistance",
+        resourceId: a.id, detail: { conceptId: c.id } });
+      await recordAction(req.body?.clientActionId, "concept_confirm", s, a.id, c);
+      res.json(c);
+    } catch (e) {
+      if (e instanceof ErrorConceptos) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  });
+
   // ── Evidencias ───────────────────────────────────────────────────────────
 
   router.post("/assistances/:id/files", limitar("files"), upload.single("file"), async (req, res) => {
@@ -1250,6 +1327,36 @@ export function createConnectLiteRouter(): Router {
           const { stored } = await storePoints(s, a, Array.isArray(op.points) ? op.points.slice(0, 500) : []);
           await recordAction(opId, "locations", s, a.id, { stored });
           results.push({ clientActionId: opId, status: "applied", stored });
+        } else if (kind === "concept" || kind === "concept_confirm") {
+          // La foto sube antes por /files (multipart, su propio clientActionId);
+          // aquí solo viaja la referencia. Sin foto, un neumático se rechaza
+          // igual que en línea: la regla no cambia por ir en cola.
+          const { crearConcepto, confirmarConcepto, ErrorConceptos } = await import("./pricing/concepts.ts");
+          try {
+            const c = kind === "concept"
+              ? await crearConcepto(a.id, null, {
+                  kind: String(op.conceptKind ?? "TIRE"),
+                  size: op.size ?? null, brand: op.brand ?? null,
+                  position: op.position ?? null,
+                  conceptCode: op.conceptCode ?? null,
+                  quantity: op.quantity != null ? Number(op.quantity) : 1,
+                  confirmar: true, evidenceRef: op.evidenceRef ?? null,
+                  via: "lite", actor: `${s.userName} (${s.workshopName})`,
+                  clientActionId: opId || null,
+                })
+              : await confirmarConcepto(a.id, Number(op.conceptId), null, {
+                  actor: `${s.userName} (${s.workshopName})`, via: "lite",
+                  evidenceRef: op.evidenceRef ?? null,
+                });
+            await recordAction(opId, kind, s, a.id, c);
+            results.push({ clientActionId: opId, status: "applied" });
+          } catch (e) {
+            if (e instanceof ErrorConceptos) {
+              results.push({ clientActionId: opId, status: "rejected", error: e.codigo });
+            } else {
+              throw e;
+            }
+          }
         } else {
           results.push({ clientActionId: opId, status: "rejected", error: "unknown_kind" });
         }
