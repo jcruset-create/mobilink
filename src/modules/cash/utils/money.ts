@@ -59,3 +59,22 @@ export function totalLineas(lineas: readonly { valor: number; cantidad: number }
 export function totalPiezas(lineas: readonly { valor: number; cantidad: number }[]): number {
   return lineas.reduce((a, l) => a + l.cantidad, 0);
 }
+
+/**
+ * Fecha contable de una jornada, para pantalla.
+ *
+ * El servidor la devuelve unas veces como `YYYY-MM-DD` y otras como el
+ * timestamp entero que da el driver de Postgres, y en Informes salía tal cual:
+ * «2026-08-18T00:00:00.000Z» en una columna que solo quiere el día. Se recorta
+ * y se escribe como se lee en España.
+ *
+ * No se construye un `Date`: la fecha de la jornada es un día del calendario,
+ * no un instante, y pasarla por la zona horaria del navegador la correría un
+ * día en cuanto alguien abriera la pantalla desde otro huso.
+ */
+export function fechaJornada(valor: string | null | undefined): string {
+  const dia = (valor ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) return dia;
+  const [anio, mes, d] = dia.split("-");
+  return `${d}/${mes}/${anio}`;
+}

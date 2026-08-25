@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 470 120" width="470" height="120">
+  <title>Mobilink TachoCert</title>
+
+  <!-- Emblema: los dos trazos de la casa, azul por arriba y verde por debajo -->
+  <path d="M 25.6 92.2 A 50 37 -20 1 1 105.7 39.9" fill="none" stroke="#0064FC" stroke-width="11" stroke-linecap="round"/>
+  <path d="M 115.2 68.0 A 60 46 -20 0 1 2.3 60.3" fill="none" stroke="#3DB70E" stroke-width="8" stroke-linecap="round"/>
+
+  <!-- Certificado: hoja con esquina doblada -->
+  <g transform="translate(38,30)">
+    <path d="M2 4 a4 4 0 0 1 4-4 h22 l14 14 v34 a4 4 0 0 1-4 4 H6 a4 4 0 0 1-4-4 Z"
+          fill="#FFFFFF" stroke="#0064FC" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M28 0 v10 a4 4 0 0 0 4 4 h10" fill="none" stroke="#0064FC" stroke-width="3"
+          stroke-linejoin="round"/>
+    <g stroke="#B8C4D9" stroke-width="3" stroke-linecap="round">
+      <line x1="10" y1="24" x2="30" y2="24"/>
+      <line x1="10" y1="32" x2="34" y2="32"/>
+      <line x1="10" y1="40" x2="24" y2="40"/>
+    </g>
+    <!-- Sello: es lo que convierte una hoja en un certificado -->
+    <circle cx="36" cy="42" r="13" fill="#3DB70E" stroke="#FFFFFF" stroke-width="3"/>
+    <path d="M30 42 l4 4 l8 -9" fill="none" stroke="#FFFFFF" stroke-width="3.4"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Marca -->
+  <g font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-style="italic" font-weight="bold">
+    <text x="132" y="58" font-size="44" fill="#FFFFFF">Mobi<tspan fill="#0064FC">link</tspan></text>
+    <text x="134" y="94" font-size="36" fill="#F5A623" letter-spacing="0.5">TACHOCERT</text>
+  </g>
+  <text x="136" y="112" font-family="Liberation Sans, Arial, sans-serif" font-size="10"
+        font-weight="bold" letter-spacing="2.6" fill="#B8C4D9">DOCUMENTACIÓN LEGAL DE TACÓGRAFOS</text>
+</svg>

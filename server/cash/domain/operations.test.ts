@@ -330,3 +330,91 @@ describe("entradas no válidas", () => {
     if (esFallo(r)) expect(r.codigo).toBe("IMPORTE_NO_VALIDO");
   });
 });
+
+describe("cambio de moneda en mostrador", () => {
+  /** El caso del encargo: un billete de 20 € por 10 + 5 + cinco monedas de 1 €. */
+  const cambioDe20: OperacionNormalizada = {
+    tipo: "EXCHANGE",
+    origen: "MANUAL",
+    importe: 2000,
+    formasPago: [{ forma: "CASH", importe: 2000 }],
+    efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+    efectivoEntregado: [
+      { valor: 1000, cantidad: 1 },
+      { valor: 500, cantidad: 1 },
+      { valor: 100, cantidad: 5 },
+    ],
+  };
+
+  it("entra el billete, salen sus piezas y el total de la caja no se mueve", () => {
+    const r = validarOperacion(cambioDe20, stock);
+    expect(r.ok).toBe(true);
+    if (esFallo(r)) return;
+
+    expect(r.efectivoNeto).toBe(0);
+    expect(r.movimientos).toHaveLength(2);
+    expect(r.movimientos[0]).toMatchObject({ direccion: "IN", motivo: "EXCHANGE" });
+    expect(r.movimientos[1]).toMatchObject({ direccion: "OUT", motivo: "EXCHANGE" });
+
+    const despues = aplicarMovimientos(stock, r.movimientos);
+    // Mismo dinero, otra composición: un 20 € más, un 10 € y un 5 € menos.
+    expect(totalInventario(despues)).toBe(totalInventario(stock));
+    expect(cantidadDe(despues, 2000)).toBe(cantidadDe(stock, 2000) + 1);
+    expect(cantidadDe(despues, 1000)).toBe(cantidadDe(stock, 1000) - 1);
+    expect(cantidadDe(despues, 100)).toBe(cantidadDe(stock, 100) - 5);
+  });
+
+  it("también al revés: entran monedas y sale el billete", () => {
+    const r = validarOperacion(
+      {
+        ...cambioDe20,
+        efectivoRecibido: [{ valor: 100, cantidad: 20 }],
+        efectivoEntregado: [{ valor: 2000, cantidad: 1 }],
+      },
+      stock
+    );
+    expect(r.ok).toBe(true);
+    if (esFallo(r)) return;
+    expect(r.efectivoNeto).toBe(0);
+  });
+
+  it("si lo que entra y lo que sale no suman lo mismo, no es un cambio", () => {
+    const r = validarOperacion(
+      { ...cambioDe20, efectivoEntregado: [{ valor: 1000, cantidad: 1 }] },
+      stock
+    );
+    expect(r).toMatchObject({ ok: false, codigo: "EFECTIVO_NO_CUADRA" });
+  });
+
+  it("el cambio sale del cajón: lo recién recibido no cuenta como disponible", () => {
+    // Caja sin billetes de 20 €. Cambiar dos de 10 € por uno de 20 € que
+    // "acaba de entrar" es devolverle al cliente su propio dinero.
+    const sinVeintes = inventarioDesdeLineas(
+      CAJA_300.filter((l) => l.valor !== 2000)
+    );
+    const r = validarOperacion(
+      {
+        ...cambioDe20,
+        efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+        efectivoEntregado: [{ valor: 2000, cantidad: 1 }],
+      },
+      sinVeintes
+    );
+    expect(r).toMatchObject({ ok: false, codigo: "STOCK_INSUFICIENTE" });
+  });
+
+  it("no admite tarjeta ni ninguna otra forma: un cambio es todo efectivo", () => {
+    const r = validarOperacion(
+      {
+        ...cambioDe20,
+        formasPago: [
+          { forma: "CASH", importe: 1000 },
+          { forma: "CARD", importe: 1000 },
+        ],
+      },
+      stock,
+      new Set(["CASH"])
+    );
+    expect(r).toMatchObject({ ok: false, codigo: "FORMAS_PAGO_NO_CUADRAN" });
+  });
+});

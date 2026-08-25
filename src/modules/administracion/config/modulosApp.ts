@@ -10,7 +10,18 @@ export type RolApp = { value: string; label: string };
 export type PantallaApp = { key: string; label: string };
 
 export type ModuloApp = {
-  key: "administracion" | "almacen" | "tyrecontrol" | "sea-core" | "toolcontrol" | "safety" | "presencia" | "workplanner" | "cash";
+  key:
+    | "administracion"
+    | "almacen"
+    | "tyrecontrol"
+    | "sea-core"
+    | "toolcontrol"
+    | "safety"
+    | "presencia"
+    | "workplanner"
+    | "cash"
+    | "central"
+    | "tacografos";
   label: string;
   roles: RolApp[];
   pantallas: PantallaApp[];
@@ -63,6 +74,51 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "cierre", label: "Cierre" },
       { key: "historico", label: "Histórico" },
       { key: "erp", label: "Integración ERP" },
+    ],
+  },
+  {
+    key: "central",
+    label: "MC Central",
+    // Solo tres roles, y a propósito: Central de momento MIRA. No mueve dinero,
+    // no cierra jornadas ajenas y no corrige nada. Lo único que escribe es la
+    // organización de la red, y eso es lo que separa a `admin` del resto.
+    roles: [
+      { value: "admin", label: "Admin" },
+      { value: "supervisor", label: "Supervisor de red" },
+      { value: "consulta", label: "Solo consulta" },
+    ],
+    pantallas: [
+      { key: "red", label: "Red de cajas" },
+      { key: "posicion", label: "Posición de efectivo" },
+      { key: "ingresos", label: "Ingresos bancarios" },
+      { key: "cambio", label: "Cambio" },
+      { key: "incidencias", label: "Incidencias" },
+      { key: "prevision", label: "Previsión" },
+      { key: "informes", label: "Informes" },
+      { key: "estado", label: "Estado" },
+      { key: "jornadas", label: "Jornadas" },
+      { key: "organizacion", label: "Organización" },
+    ],
+  },
+  {
+    key: "tacografos",
+    // El nombre comercial es sólo esta etiqueta: la clave `tacografos` vive en
+    // la base (licencias y app_usuario_modulos), en las rutas y en los
+    // permisos, así que rebautizar el módulo no toca nada de eso.
+    label: "Mobilink TachoCert",
+    // Mismos roles que traduce server/tacografos/permissions.ts: el catálogo y
+    // el backend tienen que decir lo mismo, o alguien quedará con un rol que
+    // aquí se ve y allí no existe.
+    roles: [
+      { value: "admin", label: "Admin" },
+      { value: "responsable", label: "Responsable técnico" },
+      { value: "tecnico", label: "Técnico" },
+      { value: "consulta", label: "Solo consulta" },
+    ],
+    pantallas: [
+      { key: "expedientes", label: "Expedientes" },
+      { key: "custodia", label: "Custodia y trámites" },
+      { key: "centro", label: "Centro técnico" },
     ],
   },
   {

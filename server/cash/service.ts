@@ -27,7 +27,7 @@
 
 import type { PoolClient } from "pg";
 import pool from "../db.ts";
-import { registrarAuditoria } from "../core/auditoria.ts";
+import { registrarAuditoria, registrarAuditoriaEnTransaccion } from "../core/auditoria.ts";
 import type { Centimos } from "./domain/money.ts";
 import { formatearEuros } from "./domain/money.ts";
 import {
@@ -47,6 +47,7 @@ import {
   CODIGOS_EFECTIVO_POR_DEFECTO,
   importeEnEfectivo,
   validarOperacion,
+  type MotivoMovimiento,
 } from "./domain/operations.ts";
 import { calcularCambio, validarCambioManual, type ResultadoCambio } from "./domain/change.ts";
 import {
@@ -71,6 +72,7 @@ import {
   piezasPorCartuchoDe,
   piezasPorBolsaDe,
   stockPorFormato,
+  stockPorFormatoBruto,
   insertarMovimientos,
   insertarOperacion,
   movimientosDeOperacion,
@@ -81,14 +83,24 @@ import {
   siguienteNumero,
   stockTeorico,
   ultimaSesionCerrada,
+  type IncidenciaFormato,
 } from "./repository.ts";
 import { conectorPara } from "./erp/registry.ts";
+import { exigirAmbitoCaja, exigirJornadaPropia } from "./hierarchy.ts";
+import { autorDeOperacion, exigirOtraPersona } from "./sod.ts";
+import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
 export type Contexto = {
   empresaId: string;
   userId: string | null;
   ip?: string;
+  /**
+   * Taller al que está limitado el usuario. `null` o ausente = toda la empresa,
+   * que es como funcionó el módulo hasta la fase 1 de MC Central.
+   */
+  centroId?: string | null;
 };
+
 
 // ── Apertura de jornada ────────────────────────────────────────────────────
 
@@ -198,6 +210,10 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
     if (cajas.length === 0) {
       throw new ErrorCaja("CAJA_NO_ENCONTRADA", "La caja no existe o no está activa.", 404);
     }
+
+    // La apertura es la puerta de entrada: quien no puede abrir la caja de otro
+    // taller tampoco llega a tener una jornada suya que operar después.
+    await exigirAmbitoCaja(client, ctx, e.registerId);
 
     const ahora = Date.now();
     const fecha = fechaDeJornada(e.fecha, ahora);
@@ -329,7 +345,7 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
       // El fondo inicial también es una operación con sus piezas: así el libro
       // mayor cuadra desde el primer asiento y el stock se reconstruye entero
       // sumando movimientos, sin ningún caso especial.
-      const numero = await siguienteNumero(client, "OPENING_FLOAT", Number(fecha.slice(0, 4)));
+      const numero = await siguienteNumero(client, sessionId, "OPENING_FLOAT", Number(fecha.slice(0, 4)));
       const opId = await insertarOperacion(client, {
         empresaId: ctx.empresaId,
         sessionId,
@@ -358,6 +374,20 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
         ahora,
       });
     }
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, e.registerId),
+      registerId: e.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "SESSION_OPENED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      // La fecha CONTABLE, que puede no ser la de hoy: al arrancar el módulo se
+      // meten días atrasados, y para Central ese cobro es del día que fue.
+      datos: { fecha, fondoCentimos: fondo, heredado },
+    });
 
     const sesion = (await obtenerSesion(sessionId, client))!;
     return { sesion, stock: lineasDesdeInventario(inventarioInicial), heredado, fondo };
@@ -392,9 +422,15 @@ export async function stockDeJornada(sessionId: number): Promise<{
   totalCentimos: Centimos;
   piezas: number;
 }> {
+  /*
+   * Aquí se LEE, no se mueve dinero: un saldo de formato incoherente sale como
+   * aviso y no como excepción. Antes reventaba, y con él se caía el informe de
+   * cierre entero: una jornada ya cerrada se quedaba sin su papeleo por algo
+   * que ya no tenía arreglo desde esa pantalla.
+   */
   const [inv, porFormato] = await Promise.all([
     stockTeorico(pool, sessionId),
-    stockPorFormato(pool, sessionId),
+    stockPorFormatoBruto(pool, sessionId),
   ]);
   return {
     lineas: lineasDesdeInventario(inv),
@@ -413,14 +449,30 @@ export async function stockDeJornada(sessionId: number): Promise<{
  * stock puede cambiar, y por eso la confirmación vuelve a validar con la
  * jornada bloqueada.
  */
-export async function proponerCambio(sessionId: number, importe: Centimos) {
+export async function proponerCambio(
+  sessionId: number,
+  importe: Centimos,
+  /**
+   * Denominaciones a excluir de la propuesta: las que acaban de ENTRAR.
+   *
+   * Un cambio de moneda va en los dos sentidos —entra un billete y salen
+   * monedas, o entran monedas y sale un billete— así que no vale un tope por
+   * valor. Lo que sí vale siempre: nadie cambia una pieza para recibir de
+   * vuelta esa misma pieza. Quitando del stock lo que entra, el motor —que da
+   * siempre la pieza más grande— resuelve solo los dos sentidos.
+   */
+  excluirValores?: readonly Centimos[]
+) {
   const [stock, denominaciones] = await Promise.all([
     stockPorFormato(pool, sessionId),
     cargarDenominaciones(pool),
   ]);
+  const fuera = new Set(excluirValores ?? []);
+  const recorte = (m: Map<Centimos, number>) =>
+    fuera.size === 0 ? m : new Map([...m].filter(([valor]) => !fuera.has(valor)));
   return calcularCambioConCartuchos(
     importe,
-    stock,
+    { sueltas: recorte(stock.sueltas), cartuchos: recorte(stock.cartuchos), bolsas: recorte(stock.bolsas) },
     piezasPorCartuchoDe(denominaciones),
     piezasPorBolsaDe(denominaciones)
   );
@@ -501,9 +553,7 @@ export async function registrarOperacion(
 
   const trabajo = async (client: PoolClient) => {
     const sesion = await bloquearSesionOperable(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
 
     // Stock leído con la jornada ya bloqueada: es el bueno hasta el COMMIT.
     const stock = await stockTeorico(client, e.sessionId);
@@ -631,7 +681,7 @@ export async function registrarOperacion(
 
     const ahora = Date.now();
     const anio = Number(sesion.fecha.slice(0, 4));
-    const numero = await siguienteNumero(client, e.tipo, anio);
+    const numero = await siguienteNumero(client, sesion.id, e.tipo, anio);
 
     // ¿Hay que avisar a la ERP? Solo si la operación viene de un documento
     // externo y hay integración activa. En modo autónomo esto es NOT_APPLICABLE
@@ -691,6 +741,39 @@ export async function registrarOperacion(
       ahora,
     });
 
+    /*
+     * El evento hacia MC Central.
+     *
+     * Va aquí, con los movimientos ya asentados y dentro de la misma
+     * transacción, y NO dentro del `if` de la ERP que viene justo debajo: ese
+     * era el defecto que encontró la auditoría de la fase 0 —sin ERP
+     * configurada, el módulo no contaba nada a nadie—. Un cobro es un hecho de
+     * la caja tanto si hay una ERP detrás como si no.
+     *
+     * Éste es el único punto de emisión de TODOS los movimientos de efectivo
+     * del módulo: cobros, pagos, ajustes, cambios de moneda, pedidos al banco,
+     * entregas, liquidaciones y canjes de ingreso pasan por aquí.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "OPERATION_REGISTERED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        operacionId: operacionId,
+        numero,
+        tipoOperacion: e.tipo,
+        origen,
+        importeCentimos: e.importeCentimos,
+        efectivoNetoCentimos: validacion.efectivoNeto,
+        sectionId: e.sectionId ?? null,
+      },
+    });
+
     if (sincronizable) {
       await encolarEventoErp(client, {
         empresaId: ctx.empresaId,
@@ -730,6 +813,36 @@ export async function registrarOperacion(
       );
     }
 
+    /*
+     * La auditoría, DENTRO de la transacción y sin tragar el error.
+     *
+     * Estaba después del COMMIT y con `registrarAuditoria`, que se traga lo que
+     * falle: una operación podía quedar asentada sin ninguna línea que dijera
+     * quién la hizo. Era el riesgo R2 de la auditoría de la fase 0, y para el
+     * dinero «se guardó pero no se sabe quién» no es un estado aceptable.
+     *
+     * Que esto sea seguro depende de que el INSERT no pueda fallar por los
+     * datos: por eso `app_auditoria` perdió su clave ajena en esta fase.
+     */
+    await registrarAuditoriaEnTransaccion(client, {
+      empresaId: ctx.empresaId,
+      userId: ctx.userId,
+      accion: `cash.operation.${e.tipo.toLowerCase()}`,
+      entidad: "cash_operations",
+      entidadId: String(operacionId),
+      detalle: {
+        numero,
+        origen,
+        importeCentimos: e.importeCentimos,
+        efectivoCentimos: importeEnEfectivo(e.formasPago, codigosEfectivo),
+        formasPago: e.formasPago,
+        recibido: e.efectivoRecibido ?? [],
+        entregado: e.efectivoEntregado ?? [],
+        externalDocumentId: e.externalDocumentId ?? null,
+      },
+      ip: ctx.ip,
+    });
+
     const stockFinal = await stockTeorico(client, e.sessionId);
 
     return {
@@ -746,25 +859,6 @@ export async function registrarOperacion(
   const resultado = clienteExterno
     ? await trabajo(clienteExterno)
     : await enTransaccion(trabajo);
-
-  await registrarAuditoria({
-    empresaId: ctx.empresaId,
-    userId: ctx.userId,
-    accion: `cash.operation.${e.tipo.toLowerCase()}`,
-    entidad: "cash_operations",
-    entidadId: String(resultado.operacionId),
-    detalle: {
-      numero: resultado.numero,
-      origen,
-      importeCentimos: e.importeCentimos,
-      efectivoCentimos: importeEnEfectivo(e.formasPago, codigosEfectivo),
-      formasPago: e.formasPago,
-      recibido: e.efectivoRecibido ?? [],
-      entregado: e.efectivoEntregado ?? [],
-      externalDocumentId: e.externalDocumentId ?? null,
-    },
-    ip: ctx.ip,
-  });
 
   return resultado;
 }
@@ -855,9 +949,7 @@ export async function guardarArqueo(
 ): Promise<ResultadoArqueoGuardado> {
   const resultado = await enTransaccion(async (client) => {
     const sesion = await bloquearSesion(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
     if (sesion.estado === "CLOSED" || sesion.estado === "CANCELLED") {
       throw new ErrorCaja("JORNADA_CERRADA", "La jornada ya está cerrada.", 409);
     }
@@ -937,6 +1029,39 @@ export async function guardarArqueo(
       );
     }
 
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "COUNT_RECORDED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      /*
+       * Con el detalle POR PIEZA, y no solo los totales.
+       *
+       * Es lo que permite a MC Central contestar dos cosas que el total no
+       * dice: qué caja se está quedando sin calderilla —porque el arqueo es la
+       * única foto fiable de qué monedas hay en cada cajón— y si un descuadre
+       * es de un billete o de veinte monedas de cinco céntimos, que no son el
+       * mismo problema ni se investigan igual.
+       */
+      datos: {
+        arqueoId,
+        contadoCentimos: comparacion.totalContado,
+        teoricoCentimos: comparacion.totalTeorico,
+        diferenciaCentimos: comparacion.diferencia,
+        denominacionesCuadran: comparacion.cuadranDenominaciones,
+        lineas: comparacion.lineas.map((l) => ({
+          valor: l.valor,
+          teorico: l.teorico,
+          contado: l.contado,
+          diferencia: l.diferencia,
+        })),
+      },
+    });
+
     return { ...comparacion, arqueoId };
   });
 
@@ -1005,9 +1130,7 @@ export type ResultadoCierre = {
 export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<ResultadoCierre> {
   const resultado = await enTransaccion(async (client) => {
     const sesion = await bloquearSesion(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
     if (sesion.estado === "CLOSED") {
       throw new ErrorCaja("JORNADA_CERRADA", "La jornada ya está cerrada.", 409);
     }
@@ -1158,9 +1281,35 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       concepto: "Ajuste por diferencia de arqueo al cerrar",
     });
 
+    /*
+     * Y ahora el FORMATO, que hasta aquí no se asentaba nunca.
+     *
+     * El arqueo cuenta tres cosas —sueltas, cartuchos y bolsas— pero solo las
+     * piezas llegaban al libro mayor. Si alguien juntaba monedas y las
+     * precintaba, el arqueo lo veía y el libro mayor no: seguía creyendo que
+     * estaban sueltas. Al repartir, el cierre sacaba un envase que para el
+     * libro mayor no existía y su saldo se iba a NEGATIVO. A partir de ahí esa
+     * jornada ya no podía ni imprimir su informe.
+     *
+     * Se asienta solo en el sentido de PRECINTAR. Abrir no tiene vuelta atrás
+     * y ya se hace solo cuando hacen falta piezas (`abrirCartuchosSiHaceFalta`);
+     * hacerlo aquí porque un arqueo dejara los envases a cero rompería tubos de
+     * verdad por un descuido al contar.
+     */
+    await conciliarFormato(client, {
+      sessionId: e.sessionId,
+      operacionesDe: { anio, ahora },
+      ctx,
+      denominaciones,
+      contadoTubos,
+      contadoBolsas,
+      porCartucho,
+      porBolsa,
+    });
+
     // Cambio final: sale de la jornada de hoy y mañana entra como fondo.
     if (reparto.totalCambio > 0) {
-      const numero = await siguienteNumero(client, "CLOSING_FLOAT", anio);
+      const numero = await siguienteNumero(client, sesion.id, "CLOSING_FLOAT", anio);
       const opId = await insertarOperacion(client, {
         empresaId: ctx.empresaId,
         sessionId: e.sessionId,
@@ -1196,7 +1345,7 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
 
     // Ingreso bancario: todo lo que no se queda como cambio.
     if (reparto.totalIngreso > 0) {
-      const numero = await siguienteNumero(client, "BANK_DEPOSIT", anio);
+      const numero = await siguienteNumero(client, sesion.id, "BANK_DEPOSIT", anio);
       const opId = await insertarOperacion(client, {
         empresaId: ctx.empresaId,
         sessionId: e.sessionId,
@@ -1249,6 +1398,25 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
         e.notas ?? null,
       ]
     );
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "SESSION_CLOSED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      // El ingreso bancario apartado es lo que Central necesita para la
+      // posición global: es dinero que ya no vuelve a la caja.
+      datos: {
+        fecha: sesion.fecha,
+        cambioFinalCentimos: reparto.totalCambio,
+        ingresoBancarioCentimos: reparto.totalIngreso,
+        diferenciaCentimos: comparacion.diferencia,
+      },
+    });
 
     const sesionFinal = (await obtenerSesion(e.sessionId, client))!;
     return {
@@ -1341,9 +1509,12 @@ export async function proponerCierre(
   let restante = objetivoCentimos;
 
   /**
-   * Envases que se quedan: los de menor valor primero, mientras quepan. Se
-   * empieza por las bolsas porque una bolsa entera que se manda al banco y
-   * vuelve a pedirse es el viaje más caro de todos.
+   * Envases que se quedan: los de menor valor primero, mientras quepan.
+   *
+   * Los cartuchos se reparten antes que las bolsas, al revés que al romper: lo
+   * que se conserva precintado para mañana es el cartucho, que es lo que el
+   * cajón necesita ordenado. Una bolsa se abre en cuanto hace falta suelto, así
+   * que quedársela no aporta gran cosa.
    */
   const repartirEnvases = (envases: LineaDenominacion[], por: ReadonlyMap<Centimos, number>) => {
     const quedan: LineaDenominacion[] = [];
@@ -1359,8 +1530,8 @@ export async function proponerCierre(
     return quedan;
   };
 
-  const cambioFinalBolsas = repartirEnvases(sacos, porBolsa);
   const cambioFinalCartuchos = repartirEnvases(tubos, porCartucho);
+  const cambioFinalBolsas = repartirEnvases(sacos, porBolsa);
 
   const cambioFinal = proponerCambioFinal(sueltas, restante);
 
@@ -1387,12 +1558,15 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
 
   const sesion = await enTransaccion(async (client) => {
     const s = await bloquearSesion(client, sessionId);
-    if (s.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, s);
     if (s.estado !== "CLOSED") {
       throw new ErrorCaja("JORNADA_NO_CERRADA", "Solo se puede reabrir una jornada cerrada.", 409);
     }
+
+    // Separación de funciones: quien cerró la jornada no la reabre. Reabrir
+    // permite recerrar con otras cifras, así que es la otra mitad del camino
+    // que la anulación abre.
+    await exigirOtraPersona(ctx.empresaId, ctx, s.cerradaPor, "reabrir esta jornada");
 
     const abierta = await sesionAbierta(s.registerId, client);
     if (abierta) {
@@ -1428,6 +1602,21 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
       `UPDATE cash_sessions SET estado = 'REOPENED', updated_at_ms = $2 WHERE id = $1`,
       [sessionId, Date.now()]
     );
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, s.registerId),
+      registerId: s.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "SESSION_REOPENED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      // El motivo viaja: una reapertura sin explicación es exactamente lo que
+      // MC Central tiene que poder mirar.
+      datos: { motivo: motivo.trim() },
+    });
+
     return (await obtenerSesion(sessionId, client))!;
   });
 
@@ -1476,9 +1665,22 @@ export async function anularOperacion(
     ]);
     const sessionId = rows[0].session_id as number;
     const sesion = await bloquearSesionOperable(client, sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
+
+    /*
+     * Separación de funciones: quien registró el cobro no lo anula.
+     *
+     * Anular es una de las dos acciones que borran el rastro de un descuadre
+     * —la otra es reabrir una jornada— y encadenarlas la misma persona sin
+     * testigo es el camino clásico para cuadrar una caja de la que ha salido
+     * dinero. Viene apagado; se enciende donde hay gente suficiente.
+     */
+    await exigirOtraPersona(
+      ctx.empresaId,
+      ctx,
+      await autorDeOperacion(client, operationId),
+      "anular esta operación"
+    );
 
     // Los mismos movimientos del revés.
     const originales = await movimientosDeOperacion(client, operationId);
@@ -1507,7 +1709,7 @@ export async function anularOperacion(
     const denominaciones = await cargarDenominaciones(client);
     const ahora = Date.now();
     const anio = Number(sesion.fecha.slice(0, 4));
-    const numero = await siguienteNumero(client, original.tipo, anio);
+    const numero = await siguienteNumero(client, sesion.id, original.tipo, anio);
 
     const nuevaId = await insertarOperacion(client, {
       empresaId: ctx.empresaId,
@@ -1546,6 +1748,30 @@ export async function anularOperacion(
       `UPDATE cash_operations SET estado = 'REVERSED', updated_at_ms = $2 WHERE id = $1`,
       [operationId, ahora]
     );
+
+    /*
+     * La anulación es un hecho nuevo, no la retirada del anterior. Central
+     * recibe los dos —el cobro y su reverso— porque así es como está en el
+     * libro mayor: aquí nada se borra, se compensa.
+     */
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId,
+      agregado: { tipo: "SESSION", id: sessionId },
+      tipo: "OPERATION_REVERSED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        operacionAnuladaId: operationId,
+        operacionInversaId: nuevaId,
+        numero,
+        tipoOperacion: original.tipo,
+        importeCentimos: original.importeCentimos,
+        motivo: motivo?.trim() ?? null,
+      },
+    });
 
     // Si el cobro ya llegó a la ERP, hay que avisarla también de la anulación.
     if (original.erpSyncStatus === "SYNCED" && original.externalDocumentId) {
@@ -1631,6 +1857,12 @@ export type ResumenJornada = {
   stockCartuchos: LineaDenominacion[];
   /** Bolsas precintadas por valor de la moneda. */
   stockBolsas: LineaDenominacion[];
+  /**
+   * Denominaciones con el saldo de formato en negativo: salió un envase que
+   * nunca entró. Vacío en una jornada sana. Se informa en vez de reventar,
+   * para que el papeleo de una jornada ya cerrada siga saliendo.
+   */
+  incidenciasStock: IncidenciaFormato[];
   totalStockCentimos: Centimos;
   piezas: number;
   porFormaPago: { forma: string; importeCentimos: Centimos }[];
@@ -1669,6 +1901,8 @@ export type ResumenJornada = {
     pagosCentimos: Centimos;
     /** Efectivo neto: lo que de verdad ha movido el cajón esa sección. */
     efectivoNetoCentimos: Centimos;
+    /** Tiene su propia caja en la ERP y se arquea por separado. */
+    arqueaAparte: boolean;
     operaciones: number;
   }[];
 };
@@ -1677,9 +1911,14 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
   const sesion = await obtenerSesion(sessionId);
   if (!sesion) throw new ErrorCaja("JORNADA_NO_ENCONTRADA", "La jornada no existe.", 404);
 
+  /*
+   * Igual que en `stockDeJornada`: esto se lee para informar, así que una
+   * incoherencia de formato viaja como aviso. Es lo que hace que el informe de
+   * una jornada ya cerrada siga imprimiéndose.
+   */
   const [inv, porFormato] = await Promise.all([
     stockTeorico(pool, sessionId),
-    stockPorFormato(pool, sessionId),
+    stockPorFormatoBruto(pool, sessionId),
   ]);
 
   // Los totales por forma de pago salen de las operaciones vivas: una anulada y
@@ -1716,6 +1955,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
   const { rows: secciones } = await pool.query(
     `SELECT o.section_id,
             COALESCE(sec.nombre, 'Sin sección') AS nombre,
+            COALESCE(sec.arquea_aparte, false) AS arquea_aparte,
             SUM(CASE WHEN o.tipo = 'COLLECTION' THEN o.importe_centimos ELSE 0 END) AS cobros,
             SUM(CASE WHEN o.tipo IN ('PAYMENT','MANUAL_OUT') THEN o.importe_centimos ELSE 0 END) AS pagos,
             SUM(o.efectivo_neto_centimos) AS efectivo,
@@ -1724,7 +1964,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
        LEFT JOIN cash_sections sec ON sec.id = o.section_id
       WHERE o.session_id = $1 AND o.estado = 'CONFIRMED'
         AND o.tipo IN ('COLLECTION','PAYMENT','MANUAL_OUT')
-      GROUP BY o.section_id, sec.nombre, sec.orden
+      GROUP BY o.section_id, sec.nombre, sec.orden, sec.arquea_aparte
       ORDER BY sec.orden NULLS LAST, sec.nombre`,
     [sessionId]
   );
@@ -1781,6 +2021,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     stockSueltas: lineasDesdeInventario(porFormato.sueltas),
     stockCartuchos: lineasDesdeInventario(porFormato.cartuchos),
     stockBolsas: lineasDesdeInventario(porFormato.bolsas),
+    incidenciasStock: porFormato.incidencias,
     totalStockCentimos: totalInventario(inv),
     piezas: totalPiezas(inv),
     porFormaPago: formas.map((r: { forma_pago: string; importe: string }) => ({
@@ -1809,6 +2050,7 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
       cobrosCentimos: Number(r.cobros),
       pagosCentimos: Number(r.pagos),
       efectivoNetoCentimos: Number(r.efectivo),
+      arqueaAparte: Boolean(r.arquea_aparte),
       operaciones: Number(r.n),
     })),
     /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -2041,6 +2283,124 @@ export async function cambiarSeccion(
   return { operacionId: operationId, sectionId, seccionNombre: nombre };
 }
 
+/**
+ * Deja el formato del libro mayor igual que el que se ha contado.
+ *
+ * Precinta —nunca abre— los envases que el arqueo ha visto y el libro mayor
+ * no tenía apuntados. Cada uno es un asiento de valor neto CERO: salen las
+ * monedas sueltas y entra el envase con esas mismas monedas dentro.
+ *
+ * Si no hay sueltas suficientes para formarlo, no se fuerza: significa que el
+ * recuento y el libro mayor discrepan en piezas, y de eso se encarga el ajuste
+ * del arqueo, que va antes. Inventar aquí las que faltan taparía un descuadre
+ * de dinero haciéndolo pasar por un cambio de formato.
+ */
+async function conciliarFormato(
+  client: PoolClient,
+  p: {
+    sessionId: number;
+    ctx: Contexto;
+    denominaciones: Denominacion[];
+    contadoTubos: Inventario;
+    contadoBolsas: Inventario;
+    porCartucho: ReadonlyMap<Centimos, number>;
+    porBolsa: ReadonlyMap<Centimos, number>;
+    operacionesDe: { anio: number; ahora: number };
+  }
+): Promise<void> {
+  const libro = await stockPorFormatoBruto(client, p.sessionId);
+
+  type Pendiente = { valor: Centimos; envases: number; piezas: number };
+  const aPrecintar: { campo: "cartuchos" | "bolsas"; motivo: MotivoMovimiento; lineas: Pendiente[] }[] =
+    [
+      {
+        campo: "cartuchos",
+        motivo: "CARTRIDGE_FORMED",
+        lineas: faltantes(p.contadoTubos, libro.cartuchos, p.porCartucho, libro.sueltas),
+      },
+      {
+        campo: "bolsas",
+        motivo: "BAG_FORMED",
+        lineas: faltantes(p.contadoBolsas, libro.bolsas, p.porBolsa, libro.sueltas),
+      },
+    ];
+
+  for (const lote of aPrecintar) {
+    if (lote.lineas.length === 0) continue;
+
+    const numero = await siguienteNumero(client, p.sessionId, "ADJUSTMENT", p.operacionesDe.anio);
+    const total = lote.lineas.reduce((a, l) => a + l.valor * l.piezas, 0);
+    const opId = await insertarOperacion(client, {
+      empresaId: p.ctx.empresaId,
+      sessionId: p.sessionId,
+      numero,
+      tipo: "ADJUSTMENT",
+      origen: "MANUAL",
+      concepto:
+        lote.campo === "cartuchos"
+          ? "Monedas precintadas en cartuchos, según el arqueo"
+          : "Monedas precintadas en bolsas, según el arqueo",
+      importeCentimos: total,
+      // Neto cero: el dinero no se mueve, cambia de envase.
+      efectivoNetoCentimos: 0,
+      erpSyncStatus: "NOT_APPLICABLE",
+      userId: p.ctx.userId,
+      ahora: p.operacionesDe.ahora,
+    });
+
+    await insertarMovimientos(client, {
+      sessionId: p.sessionId,
+      operationId: opId,
+      movimientos: [
+        {
+          direccion: "OUT",
+          motivo: lote.motivo,
+          lineas: lote.lineas.map((l) => ({ valor: l.valor, cantidad: l.piezas })),
+        },
+        {
+          direccion: "IN",
+          motivo: lote.motivo,
+          lineas: lote.lineas.map((l) => ({
+            valor: l.valor,
+            cantidad: l.piezas,
+            [lote.campo]: l.envases,
+          })),
+        },
+      ],
+      denominaciones: p.denominaciones,
+      userId: p.ctx.userId,
+      ahora: p.operacionesDe.ahora,
+    });
+  }
+}
+
+/**
+ * Envases que hay que precintar y para los que además hay monedas sueltas.
+ *
+ * El tope de sueltas es lo que impide que una discrepancia de PIEZAS se cuele
+ * disfrazada de cambio de formato.
+ */
+function faltantes(
+  contado: Inventario,
+  enLibro: ReadonlyMap<Centimos, number>,
+  porEnvase: ReadonlyMap<Centimos, number>,
+  sueltasEnLibro: ReadonlyMap<Centimos, number>
+): { valor: Centimos; envases: number; piezas: number }[] {
+  const salida: { valor: Centimos; envases: number; piezas: number }[] = [];
+  for (const { valor, cantidad } of lineasDesdeInventario(contado)) {
+    const piezasPorEnvase = porEnvase.get(valor) ?? 0;
+    if (piezasPorEnvase <= 0) continue;
+
+    const faltan = cantidad - (enLibro.get(valor) ?? 0);
+    if (faltan <= 0) continue;
+
+    const cabenConLasSueltas = Math.floor((sueltasEnLibro.get(valor) ?? 0) / piezasPorEnvase);
+    const envases = Math.min(faltan, cabenConLasSueltas);
+    if (envases > 0) salida.push({ valor, envases, piezas: envases * piezasPorEnvase });
+  }
+  return salida;
+}
+
 // ── Regularización del arqueo ──────────────────────────────────────────────
 
 /**
@@ -2081,7 +2441,7 @@ async function asentarAjusteDeArqueo(
     .filter((d) => d.diferencia < 0)
     .map((d) => ({ valor: d.valor, cantidad: -d.diferencia }));
 
-  const numero = await siguienteNumero(client, "ADJUSTMENT", p.anio);
+  const numero = await siguienteNumero(client, p.sessionId, "ADJUSTMENT", p.anio);
   const operacionId = await insertarOperacion(client, {
     empresaId: p.ctx.empresaId,
     sessionId: p.sessionId,
@@ -2140,9 +2500,7 @@ export async function regularizarArqueo(
 } | null> {
   return enTransaccion(async (client) => {
     const sesion = await bloquearSesion(client, e.sessionId);
-    if (sesion.empresaId !== ctx.empresaId) {
-      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
-    }
+    await exigirJornadaPropia(client, ctx, sesion);
     if (sesion.estado === "CLOSED" || sesion.estado === "CANCELLED") {
       throw new ErrorCaja(
         "JORNADA_CERRADA",
@@ -2225,6 +2583,23 @@ export async function regularizarArqueo(
         motivo: e.motivo ?? null,
       },
       ip: ctx.ip,
+    });
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, sesion.registerId),
+      registerId: sesion.registerId,
+      sessionId: e.sessionId,
+      agregado: { tipo: "SESSION", id: e.sessionId },
+      tipo: "COUNT_ADJUSTED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        arqueoId,
+        numeroAjuste: ajuste.numero,
+        diferenciaCentimos: ajuste.diferenciaCentimos,
+        motivo: e.motivo ?? null,
+      },
     });
 
     return { ...ajuste, arqueoId };

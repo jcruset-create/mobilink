@@ -358,10 +358,20 @@ export default function InformeEjecutivo() {
       <div className="rounded-lg border border-rose-800 bg-rose-950/40 p-4 text-sm text-rose-200">
         <p className="font-semibold">No se ha podido generar el informe.</p>
         <p className="mt-1 text-[12px]">{error}</p>
-        <p className="mt-2 text-[12px] text-rose-300/80">
-          Si el mensaje menciona <code>tc_informe_ejecutivo</code>, falta ejecutar la migración
-          <code> tyrecontrol_informe_ejecutivo.sql</code> en Supabase.
-        </p>
+        {/* La pista se enseña según lo que diga el error, no siempre. Antes se
+            leía "falta ejecutar la migración" ante CUALQUIER fallo, y con una
+            caducidad —donde la función está y funciona, solo tarda— mandaba a
+            buscar donde no era. */}
+        {/statement timeout|caduc|tiempo de espera/i.test(error) ? (
+          <p className="mt-2 text-[12px] text-rose-300/80">
+            El informe ha tardado más de lo que la base de datos permite. La migración
+            <code> tyrecontrol_informe_ejecutivo_jit.sql</code> lo deja en menos de un segundo.
+          </p>
+        ) : /tc_informe_ejecutivo/i.test(error) ? (
+          <p className="mt-2 text-[12px] text-rose-300/80">
+            Falta ejecutar la migración <code>tyrecontrol_informe_ejecutivo.sql</code> en Supabase.
+          </p>
+        ) : null}
       </div>
     );
   }

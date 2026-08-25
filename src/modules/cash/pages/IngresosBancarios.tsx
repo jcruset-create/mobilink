@@ -19,6 +19,7 @@ import { PiggyBank, Undo2 } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import {
   Aviso,
+  BotonInforme,
   BotonAccion,
   Cabecera,
   Card,
@@ -30,7 +31,13 @@ import {
   inputCls,
 } from "../components/ui";
 import { euros, aCentimos } from "../utils/money";
-import type { CierrePendiente, IngresoBancario, PanelIngresos } from "../types";
+import type {
+  CierrePendiente,
+  LineaDenominacion,
+  IngresoBancario,
+  PanelIngresos,
+  PropuestaCanjeIngreso,
+} from "../types";
 import * as api from "../services/api";
 
 const fechaCorta = (iso: string) =>
@@ -115,9 +122,22 @@ export default function IngresosBancarios() {
 
       {ultimoCreado && (
         <Aviso tono="bien">
-          Ingreso <strong>{ultimoCreado.numero}</strong> registrado:{" "}
-          <strong>{euros(ultimoCreado.importeCentimos)}</strong> al banco y{" "}
-          <strong>{euros(ultimoCreado.remanenteNuevoCentimos)}</strong> de remanente en tienda.
+          <div className="flex flex-wrap items-center gap-2">
+            <span>
+              Ingreso <strong>{ultimoCreado.numero}</strong> registrado:{" "}
+              <strong>{euros(ultimoCreado.importeCentimos)}</strong> al banco y{" "}
+              <strong>{euros(ultimoCreado.remanenteNuevoCentimos)}</strong> de remanente en tienda.
+            </span>
+            {/* El resguardo se imprime AHORA, que es cuando se mete el dinero
+                en la bolsa y se le da a quien lo lleva. */}
+            <BotonInforme
+              ruta={`/bank-deposits/${ultimoCreado.id}/report.pdf`}
+              nombre={`ingreso-${ultimoCreado.numero}`}
+              className="flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500"
+            >
+              Resguardo para el banco
+            </BotonInforme>
+          </div>
         </Aviso>
       )}
 
@@ -275,16 +295,25 @@ function PrepararIngreso({
     observaciones?: string;
   }) => Promise<void>;
 }) {
+  const { refrescar } = useCash();
   const totalCierres = seleccionados.reduce((a, c) => a + c.importeCentimos, 0);
   const disponible = remanenteAnterior + totalCierres;
 
   /*
-   * Sugerencia de partida: lo disponible redondeado hacia abajo al billete de
-   * 5 € — el banco no admite monedas. Es solo el punto de arranque: cuántas
-   * monedas se han conseguido convertir de verdad lo sabe quien tiene el
-   * dinero delante, y por eso el campo se edita.
+   * Lo que se puede ingresar sale del DESGLOSE del montón, no de redondear el
+   * total: son los billetes que hay de verdad en la bolsa.
+   *
+   * Antes esto era `Math.floor(disponible / 500) * 500`, y daba por hecho que
+   * los euros redondos estaban en billetes. Con 105,69 € proponía ingresar
+   * 105,00 € cuando en billetes solo había 95 € —los otros 10 estaban en
+   * monedas de 2 y de 1— así que en la ventanilla del banco faltaban 10 €.
+   *
+   * El redondeo se queda solo como red mientras la propuesta carga.
    */
-  const sugerido = Math.floor(disponible / 500) * 500;
+  const [propuesta, setPropuesta] = useState<PropuestaCanjeIngreso | null>(null);
+  const sugerido = propuesta
+    ? Math.min(disponible, propuesta.ingresableCentimos)
+    : Math.floor(disponible / 500) * 500;
   const [importeTexto, setImporteTexto] = useState(() => (sugerido / 100).toFixed(2).replace(".", ","));
   const [fecha, setFecha] = useState("");
   const [referencia, setReferencia] = useState("");
@@ -294,6 +323,33 @@ function PrepararIngreso({
   useEffect(() => {
     setImporteTexto((sugerido / 100).toFixed(2).replace(".", ","));
   }, [sugerido]);
+
+  const sessionIds = seleccionados.map((c) => c.sessionId);
+  const claveSeleccion = sessionIds.join(",");
+
+  /*
+   * El desglose y el canje se piden al servidor cada vez que cambia la
+   * selección de cierres: son el montón de esos cierres y solo de esos.
+   */
+  const recargarPropuesta = useCallback(async () => {
+    try {
+      setPropuesta(await api.proponerCanjeIngreso(registerId, claveSeleccion.split(",").filter(Boolean).map(Number)));
+    } catch {
+      // Si falla, la pantalla sigue siendo usable con el importe a mano.
+      setPropuesta(null);
+    }
+    /*
+     * Y la jornada compartida: el canje acaba de mover el cajón de verdad
+     * (sale el billete, entran las monedas), así que el stock que pintan las
+     * demás pantallas y la cabecera tiene que enterarse ya, no en la próxima
+     * navegación.
+     */
+    await refrescar();
+  }, [registerId, claveSeleccion, refrescar]);
+
+  useEffect(() => {
+    void recargarPropuesta();
+  }, [recargarPropuesta]);
 
   const importe = aCentimos(importeTexto) ?? 0;
   const remanenteNuevo = disponible - importe;
@@ -326,6 +382,13 @@ function PrepararIngreso({
               </div>
             ))}
           </div>
+
+          {propuesta && <DesgloseYCanje
+            propuesta={propuesta}
+            registerId={registerId}
+            sessionIds={sessionIds}
+            onCanjeado={recargarPropuesta}
+          />}
 
           <label className="mt-3 block">
             <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
@@ -438,10 +501,11 @@ function Historial({
             <th className={`${thCls} text-right`}>Ingresado</th>
             <th className={`${thCls} text-right`}>Remanente</th>
             <th className={thCls}>Estado</th>
+            <th className={thCls}></th>
           </tr>
         </thead>
         <tbody>
-          {ingresos.length === 0 && <EmptyRow cols={6} text="Todavía no se ha registrado ningún ingreso." />}
+          {ingresos.length === 0 && <EmptyRow cols={7} text="Todavía no se ha registrado ningún ingreso." />}
           {ingresos.map((i) => (
             <>
               <tr
@@ -469,10 +533,19 @@ function Historial({
                     </span>
                   )}
                 </td>
+                <td className={tdCls} onClick={(e) => e.stopPropagation()}>
+                  <BotonInforme
+                    ruta={`/bank-deposits/${i.id}/report.pdf`}
+                    nombre={`ingreso-${i.numero}`}
+                    className="flex items-center gap-1 rounded-lg bg-slate-700 px-2 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-600"
+                  >
+                    Resguardo
+                  </BotonInforme>
+                </td>
               </tr>
               {abierto === i.id && (
                 <tr key={`${i.id}-detalle`}>
-                  <td colSpan={6} className="bg-slate-900/40 px-4 py-3">
+                  <td colSpan={7} className="bg-slate-900/40 px-4 py-3">
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div>
                         <div className="mb-1 text-[10px] font-semibold uppercase text-slate-400">
@@ -543,5 +616,175 @@ function Historial({
         borra nada: devuelve los cierres a pendientes, restaura el remanente anterior y deja quién, cuándo y por qué.
       </p>
     </section>
+  );
+}
+
+/**
+ * Desglose del montón pendiente y, si cabe, el canje que lo mejora.
+ *
+ * Es la pieza que cambia la pantalla de «un número que hay que creerse» a «esto
+ * es lo que hay en la bolsa»: se ven los billetes y las monedas por separado,
+ * porque al banco solo van los billetes.
+ */
+function DesgloseYCanje({
+  propuesta,
+  registerId,
+  sessionIds,
+  onCanjeado,
+}: {
+  propuesta: PropuestaCanjeIngreso;
+  registerId: number;
+  sessionIds: number[];
+  onCanjeado: () => Promise<void>;
+}) {
+  const [ocupado, setOcupado] = useState(false);
+  const [error, setError] = useState("");
+  const { canje } = propuesta;
+
+  async function canjear() {
+    if (!canje) return;
+    setOcupado(true);
+    setError("");
+    try {
+      await api.registrarCanjeIngreso({
+        registerId,
+        sessionIds,
+        monedasEntregadas: canje.monedasEntregadas,
+        billetesEntregados: canje.billetesEntregados,
+        billetesRecibidos: canje.billetesRecibidos,
+      });
+      await onCanjeado();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido registrar el canje");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-2 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+      <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+        Qué hay en la bolsa
+      </div>
+
+      <TablaPiezas
+        titulo="En billetes · van al banco"
+        lineas={propuesta.pendiente.billetes}
+        total={propuesta.ingresableCentimos}
+        tono="text-sky-300"
+      />
+      <TablaPiezas
+        titulo="En monedas · no las admite el banco"
+        lineas={propuesta.pendiente.monedas}
+        total={propuesta.enMonedasCentimos}
+        tono="text-amber-300"
+      />
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {canje && (
+        <div className="space-y-2 rounded-lg border border-emerald-600/40 bg-emerald-950/20 p-2">
+          <p className="text-[12px] text-slate-200">
+            Se pueden convertir <strong>{euros(canje.valorMonedasCentimos)}</strong> en monedas
+            cambiándolos por billetes de la caja.
+          </p>
+
+          <TablaPiezas
+            titulo="Entregas a la caja"
+            lineas={[...canje.monedasEntregadas, ...canje.billetesEntregados].sort(
+              (a, b) => b.valor - a.valor
+            )}
+            total={canje.valorCanjeCentimos}
+            tono="text-slate-200"
+          />
+          <TablaPiezas
+            titulo="Te llevas de la caja"
+            lineas={canje.billetesRecibidos}
+            total={canje.valorCanjeCentimos}
+            tono="text-emerald-300"
+          />
+          <button
+            onClick={() => void canjear()}
+            disabled={ocupado}
+            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+          >
+            {ocupado ? "Registrando…" : `Canjear y subir el ingreso a ${euros(propuesta.ingresableCentimos + canje.valorMonedasCentimos)}`}
+          </button>
+        </div>
+      )}
+
+      {!canje && propuesta.enMonedasCentimos > 0 && (
+        <Aviso tono="aviso">
+          {propuesta.sinJornadaAbierta
+            ? "Con la caja cerrada no se puede canjear: el cambio sale del cajón. Abre la jornada y vuelve aquí."
+            : "Ahora mismo la caja no tiene billetes con los que cambiar estas monedas. Se ingresan los billetes y las monedas esperan aquí: en cuanto la caja tenga el billete que hace falta, aparecerá la propuesta."}
+        </Aviso>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Piezas en tabla, con la foto de cada billete y cada moneda.
+ *
+ * Antes iban en una línea de texto —«50,00 € × 1, 20,00 € × 2, 5,00 € × 1»—
+ * que hay que leer entera para saber qué hay. Puesto en filas, con la imagen
+ * del catálogo delante, se compara de un vistazo con lo que uno tiene en la
+ * mano, que es lo que se hace de verdad con la bolsa encima del mostrador.
+ *
+ * La foto solo sale si está subida en Configuración; sin ella queda la
+ * etiqueta, que es la que manda.
+ */
+function TablaPiezas({
+  titulo,
+  lineas,
+  total,
+  tono,
+}: {
+  titulo: string;
+  lineas: readonly LineaDenominacion[];
+  total: number;
+  tono: string;
+}) {
+  const { denominaciones } = useCash();
+  if (lineas.length === 0) return null;
+
+  const imagenDe = (valor: number) =>
+    denominaciones.find((d) => d.valor === valor)?.imagenUrl ?? null;
+
+  return (
+    <div className="rounded-lg border border-slate-700/60 bg-slate-900/40">
+      <div className="flex items-baseline justify-between gap-2 border-b border-slate-700/60 px-2 py-1">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+          {titulo}
+        </span>
+        <span className={`text-sm font-black tabular-nums ${tono}`}>{euros(total)}</span>
+      </div>
+      <table className="w-full text-left text-[12px]">
+        <tbody>
+          {lineas.map((l) => {
+            const url = imagenDe(l.valor);
+            return (
+              <tr key={l.valor} className="border-t border-slate-800">
+                <td className="w-12 px-2 py-1">
+                  {url ? (
+                    <img src={url} alt="" className="h-6 w-10 object-contain" />
+                  ) : (
+                    <span className="block h-6 w-10" />
+                  )}
+                </td>
+                <td className="px-1 py-1 font-bold tabular-nums text-slate-200">
+                  {euros(l.valor)}
+                </td>
+                <td className="px-1 py-1 text-right tabular-nums text-slate-300">×{l.cantidad}</td>
+                <td className="px-2 py-1 text-right tabular-nums text-slate-400">
+                  {euros(l.valor * l.cantidad)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }

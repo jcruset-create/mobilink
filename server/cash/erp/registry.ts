@@ -15,6 +15,10 @@
 import pool from "../../db.ts";
 import type { ICashErpConnector } from "./connector.ts";
 import { MockCashErpConnector } from "./mock.ts";
+import {
+  BusinessCentralConnector,
+  configDesdeEntorno,
+} from "./bc/BusinessCentralConnector.ts";
 
 export type EstadoIntegracion = "NO_CONFIGURADA" | "CONECTADA" | "ERROR" | "DESACTIVADA";
 
@@ -54,6 +58,19 @@ export function conectoresDisponibles(): string[] {
 
 /** La ERP simulada siempre está registrada: es la que permite trabajar sin ERP real. */
 registrarConector("mock", () => new MockCashErpConnector());
+
+/*
+ * Business Central, solo si hay credenciales.
+ *
+ * Registrarlo siempre lo haría aparecer en la pantalla de integración de todas
+ * las instalaciones, incluidas las que no tienen Business Central, y quien lo
+ * eligiera se encontraría con un fallo de configuración en vez de una lista de
+ * facturas. Sin credenciales, sencillamente no está.
+ */
+{
+  const cfg = configDesdeEntorno();
+  if (cfg) registrarConector("business-central", () => new BusinessCentralConnector(cfg));
+}
 
 export function obtenerConectorPorClave(key: string): ICashErpConnector | null {
   const yaCreado = instancias.get(key);
