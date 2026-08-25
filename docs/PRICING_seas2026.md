@@ -53,8 +53,11 @@ tanto **125 € de venta y 110 € de compra**, con margen de 15 €.
 > vuelta. Hay una prueba en `seas2026.test.ts` que se pone roja si alguien lo
 > intenta, para obligarle a leer el porqué antes de tocarlo.
 
-Conviene que la inversión quede confirmada por escrito con SEAS, para que esté
-en el expediente y no solo en un comentario del código.
+**Confirmado por la dirección.** Jordi Cruset lo dio por escrito dos veces: el
+17/08/2026 («cambia la columna para que salga margen positivo 125 venta 110
+compra») y el 18/08/2026, de forma expresa al cerrar los pendientes del
+tarifario. Queda registrado aquí y en la cabecera de `seas2026.ts`, que es el
+fichero que se carga.
 
 **Lo que NO se ha tocado**: en los neumáticos, **Barum, Dayton y Formula**
 tienen más descuento en venta que en compra (Dayton, 45 % frente a 30 %), o sea
@@ -140,9 +143,11 @@ tarifa.
 Las versiones se han cargado como **BORRADOR**. No facturan nada hasta que
 alguien las publique a conciencia. Antes de hacerlo:
 
-1. Que la inversión del diurno proximidad quede confirmada por escrito.
+1. ~~Que la inversión del diurno proximidad quede confirmada por escrito.~~
+   **Hecho** (18/08/2026, ver §2).
 2. Los descuentos invertidos de Barum, Dayton y Formula, que siguen como en el
-   documento.
+   documento. **Sigue pendiente**: es el mismo caso que el diurno proximidad
+   pero nadie ha dicho lo contrario, y no se inventa.
 3. Si el 07:30 del lunes en la tabla de compra es intencionado.
 4. La posición de las medidas 435/50R19.5 y 445/45R19.5: la tabla de compra no
    la trae y se les ha puesto **remolque**, que es la que llevan en la de
