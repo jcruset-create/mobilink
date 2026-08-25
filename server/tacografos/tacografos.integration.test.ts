@@ -252,10 +252,73 @@ describe.runIf(RUN)("Tacógrafos contra PostgreSQL", () => {
   });
 
   it("no emite si al expediente le faltan datos obligatorios", async () => {
-    const e = await repo.crearExpediente(EMPRESA, USUARIO, datos({ receptorDni: "" }));
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datos({ tacSerie: "" }));
     await expect(
       servicio.emitirDocumento(EMPRESA, USUARIO, e.id, "acuse_cliente")
     ).rejects.toMatchObject({ code: "EXPEDIENTE_INCOMPLETO" });
+  });
+
+  it("sin nombre ni DNI del receptor SÍ se emite: el acuse sale con huecos", async () => {
+    const e = await repo.crearExpediente(
+      EMPRESA,
+      USUARIO,
+      datos({ receptorNombre: "", receptorDni: "", autorizaNombre: "", autorizaNif: "" })
+    );
+    const doc = await servicio.emitirDocumento(EMPRESA, USUARIO, e.id, "acuse_cliente");
+    const { leerDocumento } = await import("./storage.ts");
+    const texto = textoDelPdf((await leerDocumento(doc.ruta))!);
+    // El hueco punteado invita a escribir el dato a mano sobre el papel.
+    expect(texto).toContain("Nombre: " + ".".repeat(40));
+  });
+
+  // ── Anular: borrar la prueba, conservar el rastro ─────────────────────────
+
+  it("anular un expediente que nunca emitió lo borra del todo, firmas incluidas", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datos());
+    await servicio.firmar(EMPRESA, USUARIO, e.id, "receptor", PNG, "Marta");
+    const r = await servicio.anularExpediente(EMPRESA, e.id);
+    expect(r.eliminado).toBe(true);
+    expect(await repo.obtenerExpediente(EMPRESA, e.id)).toBeNull();
+    expect(await repo.listarFirmas(EMPRESA, e.id)).toEqual([]);
+  });
+
+  it("anular uno con documento emitido deja el rastro, no lo borra", async () => {
+    const e = await repo.crearExpediente(EMPRESA, USUARIO, datos());
+    await servicio.emitirDocumento(EMPRESA, USUARIO, e.id, "acuse_cliente");
+    const r = await servicio.anularExpediente(EMPRESA, e.id);
+    expect(r.eliminado).toBe(false);
+    expect(r.expediente?.estado).toBe("anulado");
+    expect(await repo.listarDocumentos(EMPRESA, e.id)).toHaveLength(1);
+  });
+
+  it("el nº de informe de un anulado queda libre para el expediente de verdad", async () => {
+    // El caso que motivó esto: una prueba guardada con el nº real y anulada
+    // bloqueaba el registro del informe auténtico de la extranet.
+    const prueba = await repo.crearExpediente(EMPRESA, USUARIO, datos());
+    await servicio.emitirDocumento(EMPRESA, USUARIO, prueba.id, "acuse_cliente");
+    await servicio.anularExpediente(EMPRESA, prueba.id); // queda como rastro
+    const real = await repo.crearExpediente(EMPRESA, USUARIO, datos());
+    expect(real.numInforme).toBe(prueba.numInforme);
+    // Pero entre dos VIVOS sigue chocando.
+    await expect(repo.crearExpediente(EMPRESA, USUARIO, datos())).rejects.toMatchObject({
+      code: "NUM_INFORME_DUPLICADO",
+    });
+  });
+
+  it("firmar con la tablet escribe nombre y DNI en el expediente", async () => {
+    const e = await repo.crearExpediente(
+      EMPRESA,
+      USUARIO,
+      datos({ receptorNombre: "", receptorDni: "" })
+    );
+    await servicio.firmar(EMPRESA, USUARIO, e.id, "receptor", PNG, "Marta Solé Vidal", "40123456X");
+    const tras = await repo.obtenerExpediente(EMPRESA, e.id);
+    expect(tras?.receptorNombre).toBe("Marta Solé Vidal");
+    expect(tras?.receptorDni).toBe("40123456X");
+    // Y un firmado sin datos no borra lo que ya había.
+    await repo.borrarFirma(EMPRESA, e.id, "receptor");
+    await servicio.firmar(EMPRESA, USUARIO, e.id, "receptor", PNG, "", "");
+    expect((await repo.obtenerExpediente(EMPRESA, e.id))?.receptorNombre).toBe("Marta Solé Vidal");
   });
 
   it("los enlaces de descarga se generan para los vigentes y no para los anulados", async () => {

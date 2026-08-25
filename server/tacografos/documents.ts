@@ -299,6 +299,17 @@ function fichaTacografo(l: Lienzo, e: Expediente) {
  */
 export type Rubricas = Partial<Record<"autoriza" | "receptor" | "tecnico" | "responsable", PDFImage>>;
 
+/**
+ * El valor, o una línea de puntos para escribirlo a mano.
+ *
+ * El nombre y el DNI pueden no estar al emitir: se recogen con la firma en la
+ * tablet o se escriben sobre el papel. Un hueco visible invita a rellenarlo;
+ * un espacio en blanco pasa desapercibido y el documento vuelve sin el dato.
+ */
+function oHueco(valor: string, ancho = 30): string {
+  return valor.trim() !== "" ? valor : ".".repeat(ancho);
+}
+
 export type ContextoDocumento = {
   expediente: Expediente;
   centro: Centro;
@@ -327,8 +338,8 @@ function justificante(
   l.parrafo(t.just_titulo, { negrita: true, tamano: 11, centrado: true });
   l.salto(8);
 
-  l.parrafo(`Yo, ${e.autorizaNombre}`, cuerpo);
-  l.parrafo(`con N.I.F. nº: ${e.autorizaNif}`, cuerpo);
+  l.parrafo(`Yo, ${oHueco(e.autorizaNombre, 44)}`, cuerpo);
+  l.parrafo(`con N.I.F. nº: ${oHueco(e.autorizaNif, 20)}`, cuerpo);
   l.parrafo(`en representación de la empresa de transportes: ${e.empresaCliente}`, cuerpo);
   l.parrafo(`propietaria del vehículo matrícula: ${e.matricula}`, cuerpo);
   l.salto(4);
@@ -386,8 +397,8 @@ function acuseCliente(
   l.salto(8);
   fichaTacografo(l, e);
   l.salto(10);
-  l.campo("Nombre:", e.receptorNombre);
-  l.campo("DNI:", e.receptorDni);
+  l.campo("Nombre:", oHueco(e.receptorNombre, 40));
+  l.campo("DNI:", oHueco(e.receptorDni, 18));
   l.salto(10);
   l.parrafo(
     `En calidad de personal/propietario de la organización de transportes propietaria del ` +
@@ -406,7 +417,7 @@ function acuseCliente(
   l.linea("Entregado");
   l.linea(`${centro.ciudadFirma} a ${fechaEs(e.fechaEntrega)}`);
   l.salto(20);
-  l.firma(`Firma: ${e.receptorNombre}`, MARGEN, 200, rubricas.receptor);
+  l.firma(e.receptorNombre ? `Firma: ${e.receptorNombre}` : "Firma", MARGEN, 200, rubricas.receptor);
   l.pie(pie);
 }
 
