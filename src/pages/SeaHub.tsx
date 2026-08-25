@@ -8,6 +8,7 @@ type Modulo = {
   titulo: string;
   descripcion: string;
   icon: string;
+  logo?: string;
   color: string;
   colorBorder: string;
   colorIcon: string;
@@ -93,6 +94,7 @@ const MODULOS: Modulo[] = [
     titulo: "Almacén Neumáticos",
     descripcion: "Stock operativo, entradas, salidas, traspasos e inventarios.",
     icon: "🏭",
+    logo: "/logos/mobilink-stockflow.png",
     color: "bg-green-50",
     colorBorder: "border-green-300",
     colorIcon: "bg-green-600 text-white",
@@ -416,9 +418,15 @@ export default function SeaHub() {
           {MODULOS.map((m) => (
             <div key={m.id} className={`rounded-2xl border-2 ${m.colorBorder} ${m.color} overflow-hidden`}>
               <Link to={m.ruta} className="flex items-center gap-4 p-5 hover:brightness-95 transition-all">
-                <div className={`h-12 w-12 rounded-xl flex items-center justify-center text-2xl ${m.colorIcon} shrink-0`}>
-                  {m.icon}
-                </div>
+                {m.logo ? (
+                  <div className="h-12 w-24 rounded-xl bg-slate-900 flex items-center justify-center px-1.5 shrink-0">
+                    <img src={m.logo} alt={m.titulo} className="max-h-10 max-w-full object-contain" />
+                  </div>
+                ) : (
+                  <div className={`h-12 w-12 rounded-xl flex items-center justify-center text-2xl ${m.colorIcon} shrink-0`}>
+                    {m.icon}
+                  </div>
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-gray-900 text-lg leading-tight">{m.titulo}</div>
                   <div className="text-sm text-gray-500 mt-0.5 line-clamp-2">{m.descripcion}</div>

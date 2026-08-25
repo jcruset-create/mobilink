@@ -63,8 +63,8 @@ export default function AlmacenLayoutOscuro({ children }: { children: ReactNode 
           <button className="rounded-lg p-1.5 hover:bg-slate-800 md:hidden" onClick={() => setOpen((v) => !v)}>
             <Menu className="h-5 w-5" />
           </button>
-          <Package className="h-5 w-5 text-sky-400" />
-          <span className="text-sm font-black">Mobilink Almacén</span>
+          <img src="/logos/mobilink-stockflow.png" alt="Mobilink StockFlow" className="h-8 w-auto object-contain" />
+          <span className="sr-only">Mobilink Almacén</span>
         </div>
         <div className="flex items-center gap-3">
           {!cargandoPermisos && permisos.perfil && (
