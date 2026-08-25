@@ -1806,8 +1806,37 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       if (b.clientId) {
         await db.query(`UPDATE connect_assistances SET "clientId" = $1 WHERE id = $2`, [Number(b.clientId), row.id]);
       }
+
+      /*
+       * Conceptos pactados de antemano ("vas a montar este neumático"): nacen
+       * previstos aquí mismo, que es el momento en que Central lo sabe. La
+       * asistencia manda: un concepto que no valida no la tira —el servicio
+       * tiene que poder salir—, se devuelve como aviso y se corrige en la
+       * pestaña Tarificación.
+       */
+      const conceptWarnings: string[] = [];
+      if (Array.isArray(b.concepts) && b.concepts.length > 0) {
+        const { crearConcepto, ErrorConceptos } = await import("./pricing/concepts.ts");
+        for (const c of b.concepts.slice(0, 10)) {
+          try {
+            await crearConcepto(row.id, u.controlCenterId, {
+              kind: String(c?.kind ?? "TIRE"),
+              size: c?.size ?? null,
+              brand: c?.brand ?? null,
+              position: c?.position ?? null,
+              conceptCode: c?.conceptCode ?? null,
+              quantity: c?.quantity != null ? Number(c.quantity) : 1,
+              actor: u.name || u.email,
+            });
+          } catch (e) {
+            if (e instanceof ErrorConceptos) conceptWarnings.push(e.message);
+            else throw e;
+          }
+        }
+      }
+
       await auditConnect({ req, action: b.draft ? "assistance.draft_created" : "assistance.created", resourceType: "assistance", resourceId: row.id });
-      res.status(201).json(row);
+      res.status(201).json(conceptWarnings.length ? { ...row, conceptWarnings } : row);
     } catch (e: any) {
       console.error("[Connect] bo crear asistencia:", e?.message);
       err(res, 500, "internal_error", "Error creando la asistencia");
