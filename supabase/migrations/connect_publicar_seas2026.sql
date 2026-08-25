@@ -55,29 +55,32 @@ DECLARE
   v_publicadas     INT := 0;
   v_contratos      INT := 0;
   v_borradores     INT;
-  v_fila           RECORD;
   v_n              INT;
+  v_lista_cli      TEXT;
+  v_lista_pro      TEXT;
 BEGIN
-  -- Si faltan los nombres, se enseña el menú y se para. Mandar a la gente a
-  -- ejecutar otras dos consultas para volver aquí es un viaje de ida y vuelta
-  -- que el script se puede ahorrar.
+  /*
+   * Si faltan los nombres, se enseña el menú y se para.
+   *
+   * La lista va DENTRO del mensaje de la excepción, no en RAISE NOTICE: el
+   * editor SQL de Supabase no muestra la salida de NOTICE, solo el error, así
+   * que un NOTICE aquí se genera y se pierde. Lo comprobamos en vivo.
+   */
   IF v_cliente = '' OR v_proveedora = '' THEN
-    RAISE NOTICE '── CLIENTES ACTIVOS (a quién factura la central) ──';
-    FOR v_fila IN
-      SELECT c.id, c.name FROM connect_clients c
-       JOIN connect_control_centers cc ON cc.name = v_centro_nombre AND cc.id = c."controlCenterId"
-       WHERE c.active ORDER BY c.name
-    LOOP
-      RAISE NOTICE '  cliente  id=%  «%»', v_fila.id, v_fila.name;
-    END LOOP;
+    SELECT COALESCE(string_agg(format('  · «%s»  (id %s)', t.name, t.id), E'\n' ORDER BY t.name),
+                    '  (ninguno: hay que dar de alta el cliente antes, en Clientes)')
+      INTO v_lista_cli
+      FROM (SELECT c.id, c.name FROM connect_clients c
+             JOIN connect_control_centers cc
+               ON cc.name = v_centro_nombre AND cc.id = c."controlCenterId"
+            WHERE c.active) t;
 
-    RAISE NOTICE '── EMPRESAS PROVEEDORAS (quién factura a la central) ──';
-    FOR v_fila IN SELECT id, name FROM connect_provider_companies ORDER BY name LOOP
-      RAISE NOTICE '  proveedora  id=%  «%»', v_fila.id, v_fila.name;
-    END LOOP;
+    SELECT COALESCE(string_agg(format('  · «%s»  (id %s)', t.name, t.id), E'\n' ORDER BY t.name), '  (ninguna)')
+      INTO v_lista_pro
+      FROM (SELECT id, name FROM connect_provider_companies) t;
 
-    RAISE EXCEPTION
-      'Copia dos de esos nombres a v_cliente y v_proveedora, arriba, y vuelve a ejecutar. (Si la lista de clientes sale vacía, hay que dar de alta el cliente antes: sin él no hay contrato de venta.)';
+    RAISE EXCEPTION E'Rellena v_cliente y v_proveedora arriba y vuelve a ejecutar.\n\nCLIENTES ACTIVOS (a quién factura la central):\n%\n\nEMPRESAS PROVEEDORAS (quién factura a la central):\n%',
+      v_lista_cli, v_lista_pro;
   END IF;
 
   SELECT id INTO v_centro_id FROM connect_control_centers
