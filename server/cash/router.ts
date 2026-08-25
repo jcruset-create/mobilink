@@ -19,6 +19,11 @@ import { authenticate, requireModule } from "../core/auth.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCaja, exigirPermiso } from "./permissions.ts";
+import * as reauth from "./reauth.ts";
+import * as migracion from "./migration.ts";
+import * as traslados from "./transfers.ts";
+import * as jerarquia from "./hierarchy.ts";
+import { estadoCola, procesarEventos, reintentarEventos } from "./events/worker.ts";
 import { miniaturaBoton, miniaturaFicha } from "./images.ts";
 import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimientosDeSesion } from "./repository.ts";
 import type { LineaDenominacion } from "./domain/inventory.ts";
@@ -28,7 +33,7 @@ import * as config from "./config.ts";
 import * as tesoreria from "./treasury.ts";
 import * as documentos from "./documents.ts";
 import * as ingresos from "./bankdeposits.ts";
-import { informeCierre } from "./report.ts";
+import { informeCierre, informeIngreso } from "./report.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 
@@ -234,6 +239,9 @@ function contexto(req: Request): servicio.Contexto {
     empresaId: req.authCtx!.empresaId,
     userId: req.authCtx!.userId,
     ip: req.ip,
+    // Ámbito de taller. Lo pone `cargarPermisosCaja` y `null` significa toda la
+    // empresa, que es lo que tiene todo el mundo mientras nadie lo limite.
+    centroId: req.cashCentroId ?? null,
   };
 }
 
@@ -269,9 +277,12 @@ export function createCashRouter(): Router {
         cargarDenominaciones(pool, true),
         config.listarFormasPago(empresaId),
         pool.query(
-          `SELECT id, centro, nombre FROM cash_registers
-            WHERE empresa_id = $1 AND activa = true ORDER BY centro, nombre`,
-          [empresaId]
+          `SELECT id, centro, centro_id AS "centroId", nombre, codigo, fondo_objetivo_centimos
+             FROM cash_registers
+            WHERE empresa_id = $1 AND activa = true
+              AND ($2::uuid IS NULL OR centro_id = $2)
+            ORDER BY centro, nombre`,
+          [empresaId, req.cashCentroId ?? null]
         ),
         estadoIntegracion(empresaId),
         config.ajustes(empresaId),
@@ -283,7 +294,10 @@ export function createCashRouter(): Router {
         formasPago,
         secciones,
         ajustes,
-        cajas: cajas.rows,
+        cajas: cajas.rows.map((c: { fondo_objetivo_centimos: number }) => ({
+          ...c,
+          fondoObjetivoCentimos: Number(c.fondo_objetivo_centimos ?? 0),
+        })),
         permisos: req.cashPermisos,
         rol: req.cashRol,
         erp: { estado: erp.estado, connectorKey: erp.connectorKey, displayName: erp.displayName },
@@ -298,7 +312,9 @@ export function createCashRouter(): Router {
     "/registers",
     exigirPermiso("cash.configure"),
     ruta(async (req, res) => {
-      res.json({ cajas: await config.listarCajas(req.authCtx!.empresaId) });
+      res.json({
+        cajas: await config.listarCajas(req.authCtx!.empresaId, req.cashCentroId ?? null),
+      });
     })
   );
 
@@ -310,6 +326,8 @@ export function createCashRouter(): Router {
       const caja = await config.crearCaja(contexto(req), {
         nombre: typeof b.nombre === "string" ? b.nombre : "",
         centro: typeof b.centro === "string" ? b.centro : "",
+        centroId: typeof b.centroId === "string" ? b.centroId : null,
+        codigo: typeof b.codigo === "string" ? b.codigo : undefined,
       });
       res.status(201).json({ caja });
     })
@@ -323,9 +341,231 @@ export function createCashRouter(): Router {
       const caja = await config.actualizarCaja(contexto(req), enteroPositivo(req.params.id, "id"), {
         nombre: typeof b.nombre === "string" ? b.nombre : undefined,
         centro: typeof b.centro === "string" ? b.centro : undefined,
+        // `null` explícito = desasignar el taller; ausente = no tocarlo.
+        centroId:
+          b.centroId === null ? null : typeof b.centroId === "string" ? b.centroId : undefined,
+        codigo: typeof b.codigo === "string" ? b.codigo : undefined,
         activa: typeof b.activa === "boolean" ? b.activa : undefined,
+        fondoObjetivoCentimos:
+          b.fondoObjetivoCentimos === undefined
+            ? undefined
+            : entero(b.fondoObjetivoCentimos, "fondoObjetivoCentimos"),
       });
       res.json({ caja });
+    })
+  );
+
+  // ── Cola de eventos hacia MC Central ─────────────────────────────────────
+
+  /*
+   * La cola muerta, para que se pueda mirar.
+   *
+   * Va con permiso de ERP y no con uno nuevo: quien puede ver y reintentar la
+   * integración con la ERP es exactamente quien tiene que poder hacerlo con
+   * ésta. Un permiso más por cada cola sería un mecanismo paralelo que
+   * mantener.
+   */
+  r.get(
+    "/events",
+    exigirPermiso("cash.erp.view"),
+    ruta(async (req, res) => {
+      res.json(await estadoCola(req.authCtx!.empresaId));
+    })
+  );
+
+  /** Devuelve a la cola los eventos muertos, y da un empujón al worker. */
+  r.post(
+    "/events/retry",
+    exigirPermiso("cash.erp.sync"),
+    ruta(async (req, res) => {
+      const reencolados = await reintentarEventos(req.authCtx!.empresaId);
+      const tratados = await procesarEventos();
+      res.json({ reencolados, tratados });
+    })
+  );
+
+  /**
+   * Volver a identificarse.
+   *
+   * No lleva `exigirPermiso` porque no es una acción sobre la caja: es el
+   * usuario diciendo «sigo siendo yo». Quien no tenga permiso para lo que venga
+   * después se topará con él allí.
+   */
+  r.post(
+    "/reauth",
+    ruta(async (req, res) => {
+      const clave = String((req.body ?? {}).clave ?? "");
+      if (!clave) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "Hace falta la clave.", 400);
+      }
+      await reauth.reautenticar(req.authCtx!.userId, clave);
+      res.json({ ok: true, validoHastaMs: Date.now() + reauth.VALIDEZ_MS });
+    })
+  );
+
+  // ── Traslados entre cajas ────────────────────────────────────────────────
+
+  r.get(
+    "/transfers",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const registerId = req.query.registerId
+        ? enteroPositivo(req.query.registerId, "registerId")
+        : undefined;
+      res.json({ traslados: await traslados.listar(req.authCtx!.empresaId, registerId) });
+    })
+  );
+
+  /**
+   * Manda dinero a otra caja. Permiso de tesorería, no de cajero: sacar
+   * efectivo del cajón para llevarlo a otro sitio no es una operación de
+   * mostrador.
+   */
+  r.post(
+    "/transfers",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json({
+        traslado: await traslados.enviar(contexto(req), {
+          sessionId: enteroPositivo(b.sessionId, "sessionId"),
+          destinoRegisterId: enteroPositivo(b.destinoRegisterId, "destinoRegisterId"),
+          piezas: Array.isArray(b.piezas) ? b.piezas : [],
+          portador: String(b.portador ?? ""),
+          notas: typeof b.notas === "string" ? b.notas : undefined,
+        }),
+      });
+    })
+  );
+
+  r.post(
+    "/transfers/:id/receive",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        traslado: await traslados.recibir(contexto(req), enteroPositivo(req.params.id, "id"), {
+          sessionId: enteroPositivo(b.sessionId, "sessionId"),
+          recibido: Array.isArray(b.recibido) ? b.recibido : undefined,
+          diferenciaMotivo: typeof b.motivo === "string" ? b.motivo : undefined,
+        }),
+      });
+    })
+  );
+
+  r.post(
+    "/transfers/:id/cancel",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        traslado: await traslados.cancelar(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          enteroPositivo(b.sessionId, "sessionId"),
+          String(b.motivo ?? "")
+        ),
+      });
+    })
+  );
+
+  // ── Migración: los días que se llevaron en papel ─────────────────────────
+
+  /**
+   * Importa una tanda de días de papel.
+   *
+   * Permiso de configuración y no de cajero: esto crea jornadas cerradas con
+   * dinero dentro, y no es una operación de mostrador.
+   */
+  r.post(
+    "/migration/days",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const dias = Array.isArray(b.dias) ? b.dias : [];
+      if (dias.length === 0) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún día que importar.", 400);
+      }
+      res.json(await migracion.importarDias(contexto(req), String(b.lote ?? ""), dias));
+    })
+  );
+
+  /** Saldo inicial de una caja que arranca. Solo si no tiene ninguna jornada. */
+  r.post(
+    "/registers/:id/initial-balance",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json(
+        await migracion.declararSaldoInicial(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          Array.isArray(b.contado) ? b.contado : [],
+          String(b.motivo ?? "")
+        )
+      );
+    })
+  );
+
+  // ── Jerarquía: zonas y talleres ──────────────────────────────────────────
+
+  /**
+   * Zonas y talleres de la empresa, en una llamada.
+   *
+   * Van juntos porque la pantalla los usa juntos —el taller se elige y la zona
+   * lo agrupa— y separarlos solo produciría dos peticiones seguidas.
+   */
+  r.get(
+    "/hierarchy",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const empresaId = req.authCtx!.empresaId;
+      const [zonas, centros] = await Promise.all([
+        jerarquia.listarZonas(empresaId),
+        jerarquia.listarCentros(empresaId),
+      ]);
+      res.json({ zonas, centros, ambitoCentroId: req.cashCentroId ?? null });
+    })
+  );
+
+  r.post(
+    "/zones",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const zona = await jerarquia.crearZona(
+        contexto(req),
+        typeof b.nombre === "string" ? b.nombre : ""
+      );
+      res.status(201).json({ zona });
+    })
+  );
+
+  r.patch(
+    "/zones/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const zona = await jerarquia.actualizarZona(contexto(req), String(req.params.id), {
+        nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+        activa: typeof b.activa === "boolean" ? b.activa : undefined,
+      });
+      res.json({ zona });
+    })
+  );
+
+  /** Cuelga un taller de una zona, o lo deja sin zona con `zonaId: null`. */
+  r.patch(
+    "/centers/:id/zone",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      await jerarquia.asignarZonaACentro(
+        contexto(req),
+        String(req.params.id),
+        typeof b.zonaId === "string" ? b.zonaId : null
+      );
+      res.json({ ok: true });
     })
   );
 
@@ -395,10 +635,22 @@ export function createCashRouter(): Router {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
       }
 
+      /*
+       * El recorte es solo para las monedas. Un billete es un rectángulo que
+       * llena su recuadro y no le sobra fondo por ningún lado; pasarlo por el
+       * recorte solo abre la puerta a que se le coma un borde claro. La moneda
+       * es redonda: ahí las esquinas SÍ sobran.
+       */
+      const catalogo = await cargarDenominaciones(pool, false);
+      const denominacion0 = catalogo.find((d) => d.id === id);
+      if (!denominacion0) {
+        throw new ErrorCaja("DENOMINACION_NO_ENCONTRADA", "La denominación no existe.", 404);
+      }
+
       const url = await guardarImagenBoton(
         fichero,
         `cash/denominations/${id}_${Date.now()}.png`,
-        "ficha"
+        denominacion0.tipo === "MONEDA" ? "ficha" : "boton"
       );
       const denominacion = await config.actualizarDenominacion(contexto(req), id, {
         imagenUrl: url,
@@ -411,9 +663,12 @@ export function createCashRouter(): Router {
    * Recorta el fondo de las fotos que ya estaban subidas.
    *
    * Las primeras se guardaron tal cual venían, con su fondo blanco de JPG
-   * dentro. Volver a subir quince fotos a mano para arreglarlo es trabajo
-   * tonto: el recorte funciona igual sobre lo que ya está guardado, así que se
-   * hace desde aquí.
+   * dentro. Volver a subir las fotos a mano para arreglarlo es trabajo tonto:
+   * el recorte funciona igual sobre lo que ya está guardado, así que se hace
+   * desde aquí.
+   *
+   * Solo las monedas, por lo mismo que en la subida: un billete llena su
+   * recuadro y no tiene fondo que sobre.
    *
    * La foto nueva se sube a otra ruta y la fila apunta a ella. Machacar la
    * anterior dejaría la pantalla enseñando la vieja durante horas, porque las
@@ -428,7 +683,7 @@ export function createCashRouter(): Router {
       const fallos: string[] = [];
 
       for (const d of denominaciones) {
-        if (!d.imagenUrl) continue;
+        if (!d.imagenUrl || d.tipo !== "MONEDA") continue;
         try {
           const respuesta = await fetch(d.imagenUrl);
           if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}`);
@@ -628,7 +883,79 @@ export function createCashRouter(): Router {
       if (!req.file) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
       }
+      const b = req.body ?? {};
+      // Los duplicados se AVISAN, no se bloquean: a veces el mismo resguardo
+      // respalda de verdad dos cosas. Lo que evita es que el mismo taco de
+      // facturas acabe adjuntado cinco veces porque nadie se acordaba.
+      const yaEstaba = await documentos.duplicadosDe(req.authCtx!.empresaId, req.file.buffer);
+
       const documento = await documentos.adjuntarDocumento(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        req.file,
+        b.reemplazaA ? enteroPositivo(b.reemplazaA, "reemplazaA") : undefined
+      );
+      res.status(201).json({ documento, duplicados: yaEstaba });
+    })
+  );
+
+  /**
+   * ¿Sigue siendo el mismo fichero que se adjuntó?
+   *
+   * Con permiso de lectura y no de escritura: comprobar la integridad de una
+   * evidencia es justo lo que tiene que poder hacer quien la audita, que suele
+   * ser quien no puede tocarla.
+   */
+  r.get(
+    "/documents/:id/verify",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json(
+        await documentos.verificarDocumento(contexto(req), enteroPositivo(req.params.id, "id"))
+      );
+    })
+  );
+
+  r.get(
+    "/sessions/:id/documents/verify",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({
+        verificaciones: await documentos.verificarJornada(
+          contexto(req),
+          enteroPositivo(req.params.id, "id")
+        ),
+      });
+    })
+  );
+
+  /**
+   * Justificantes de la JORNADA entera: el taco de facturas escaneado de una
+   * vez, el resguardo del banco. No cuelgan de ninguna operación porque no son
+   * de ninguna, y se admiten varios: en el mostrador no sale todo en un PDF.
+   */
+  r.get(
+    "/sessions/:id/documents",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({
+        documentos: await documentos.documentosSueltosDeJornada(
+          req.authCtx!.empresaId,
+          enteroPositivo(req.params.id, "id")
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/sessions/:id/documents",
+    exigirPermiso("cash.document.attach"),
+    subida(subidaDocumento.single("documento"), 15),
+    ruta(async (req, res) => {
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
+      }
+      const documento = await documentos.adjuntarDocumentoDeJornada(
         contexto(req),
         enteroPositivo(req.params.id, "id"),
         req.file
@@ -670,13 +997,77 @@ export function createCashRouter(): Router {
 
   // ── Ingresos bancarios ───────────────────────────────────────────────────
 
+  /**
+   * Resguardo del ingreso: la hoja que va con el dinero.
+   *
+   * Se le da a quien lo lleva al banco, así que la ve cualquiera que pueda ver
+   * la caja: pedir permiso de configuración para imprimir un papel que va
+   * dentro de la bolsa dejaría el trámite parado esperando a un jefe.
+   */
+  r.get(
+    "/bank-deposits/:id/report.pdf",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const depositId = enteroPositivo(req.params.id, "id");
+      const pdf = await informeIngreso(req.authCtx!.empresaId, depositId);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="ingreso-${depositId}.pdf"`);
+      res.send(pdf);
+    })
+  );
+
+
   /** Pendientes, remanente e historial de la caja: la pantalla en una llamada. */
   r.get(
     "/registers/:id/bank-deposits",
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const registerId = enteroPositivo(req.params.id, "id");
+      await jerarquia.exigirAmbitoCaja(pool, contexto(req), registerId);
       res.json(await ingresos.panelIngresos(req.authCtx!.empresaId, registerId));
+    })
+  );
+
+  /**
+   * Qué se puede ingresar hoy y qué canje lo mejoraría.
+   *
+   * Es una consulta: no reserva ni mueve nada, y por eso la confirmación
+   * vuelve a calcularlo con el stock del momento.
+   */
+  r.get(
+    "/registers/:id/bank-deposits/swap",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const sessionIds =
+        typeof req.query.cierres === "string" && req.query.cierres !== ""
+          ? req.query.cierres.split(",").map((v) => enteroPositivo(v, "cierres"))
+          : [];
+      res.json(
+        await ingresos.proponerCanje(
+          req.authCtx!.empresaId,
+          enteroPositivo(req.params.id, "id"),
+          sessionIds
+        )
+      );
+    })
+  );
+
+  r.post(
+    "/bank-deposits/swap",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json(
+        await ingresos.registrarCanje(contexto(req), {
+          registerId: enteroPositivo(b.registerId, "registerId"),
+          sessionIds: Array.isArray(b.sessionIds)
+            ? b.sessionIds.map((v: unknown) => enteroPositivo(v, "sessionIds"))
+            : [],
+          monedasEntregadas: lineas(b.monedasEntregadas, "monedasEntregadas"),
+          billetesEntregados: lineas(b.billetesEntregados, "billetesEntregados"),
+          billetesRecibidos: lineas(b.billetesRecibidos, "billetesRecibidos"),
+        })
+      );
     })
   );
 
@@ -726,6 +1117,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const registerId = enteroPositivo(req.params.id, "id");
+      await jerarquia.exigirAmbitoCaja(pool, contexto(req), registerId);
       const empresaId = req.authCtx!.empresaId;
       const [pedidos, entregas] = await Promise.all([
         tesoreria.listarPedidos(empresaId, registerId),
@@ -911,7 +1303,15 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const importe = entero(req.query.importe, "importe");
-      res.json(await servicio.proponerCambio(enteroPositivo(req.params.id, "id"), importe));
+      // `excluir`: denominaciones que no se pueden proponer, en CSV de
+      // céntimos. Lo usa el cambio a cliente para no devolver lo que entra.
+      const excluir =
+        typeof req.query.excluir === "string" && req.query.excluir !== ""
+          ? req.query.excluir.split(",").map((v) => enteroPositivo(v, "excluir"))
+          : undefined;
+      res.json(
+        await servicio.proponerCambio(enteroPositivo(req.params.id, "id"), importe, excluir)
+      );
     })
   );
 
@@ -920,6 +1320,9 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.session.reopen"),
     ruta(async (req, res) => {
       const motivo = String((req.body ?? {}).motivo ?? "");
+      // Reabrir permite recerrar con otras cifras. Si la reautenticación está
+      // encendida, aquí es donde toca demostrar quién está delante.
+      await reauth.exigirReautenticacion(req.authCtx!.empresaId, req.authCtx!.userId);
       res.json({
         sesion: await servicio.reabrirJornada(contexto(req), enteroPositivo(req.params.id, "id"), motivo),
       });
@@ -1081,10 +1484,40 @@ export function createCashRouter(): Router {
           nombre: typeof b.nombre === "string" ? b.nombre : undefined,
           activa: typeof b.activa === "boolean" ? b.activa : undefined,
           porDefecto: typeof b.porDefecto === "boolean" ? b.porDefecto : undefined,
+          arqueaAparte: typeof b.arqueaAparte === "boolean" ? b.arqueaAparte : undefined,
           orden: b.orden != null ? entero(b.orden, "orden") : undefined,
         }
       );
       res.json({ seccion });
+    })
+  );
+
+
+  /**
+   * Cambio de moneda a un cliente: entra dinero y sale el mismo importe en
+   * otras piezas. Neto cero — no es un cobro ni un pago, y por eso no va por
+   * `/movements`: allí cada tipo o entra o sale, y aquí pasan las dos cosas.
+   */
+  r.post(
+    "/exchange",
+    exigirPermiso("cash.movement.create"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const importe = enteroPositivo(b.importeCentimos, "importeCentimos");
+      const salida = await servicio.registrarOperacion(contexto(req), {
+        sessionId: enteroPositivo(b.sessionId, "sessionId"),
+        tipo: "EXCHANGE",
+        origen: "MANUAL",
+        importeCentimos: importe,
+        formasPago: [{ forma: "CASH" as never, importe }],
+        efectivoRecibido: lineas(b.recibido, "recibido"),
+        efectivoEntregado: lineas(b.entregado, "entregado"),
+        concepto:
+          typeof b.concepto === "string" && b.concepto.trim()
+            ? b.concepto.trim()
+            : "Cambio de moneda en mostrador",
+      });
+      res.status(201).json(salida);
     })
   );
 
@@ -1141,6 +1574,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.operation.reverse"),
     ruta(async (req, res) => {
       const motivo = String((req.body ?? {}).motivo ?? "");
+      await reauth.exigirReautenticacion(req.authCtx!.empresaId, req.authCtx!.userId);
       res.json(
         await servicio.anularOperacion(contexto(req), enteroPositivo(req.params.id, "id"), motivo)
       );
@@ -1202,6 +1636,13 @@ export function createCashRouter(): Router {
       const { desde, hasta, registerId, estado } = req.query;
       const filtros: string[] = ["s.empresa_id = $1"];
       const params: unknown[] = [req.authCtx!.empresaId];
+
+      // El histórico también se recorta al ámbito: si no puedes operar la caja
+      // de otro taller, tampoco tienes por qué leer sus jornadas.
+      if (req.cashCentroId) {
+        params.push(req.cashCentroId);
+        filtros.push(`c.centro_id = $${params.length}`);
+      }
 
       if (typeof desde === "string" && desde) {
         params.push(desde);

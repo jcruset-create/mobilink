@@ -94,40 +94,25 @@ export type PreferenciaCambio = "menos_piezas" | "mas_piezas";
  * porque devolver 20 € en un billete gasta una pieza y hacerlo en monedas de
  * 50 c gasta cuarenta: el óptimo nunca se lleva el menudo si puede evitarlo.
  */
-export function calcularCambio(
-  importe: Centimos,
-  stock: Inventario,
-  preferencia: PreferenciaCambio = "menos_piezas"
-): ResultadoCambio {
-  if (!Number.isSafeInteger(importe) || importe < 0) {
-    return {
-      ok: false,
-      motivo: "IMPORTE_NO_VALIDO",
-      mensaje: `Importe de cambio no válido: ${String(importe)}.`,
-    };
-  }
-  if (importe === 0) return { ok: true, lineas: [], piezas: 0 };
+/**
+ * La tabla del reparto, sin reconstruir todavía.
+ *
+ * Se saca aparte porque hay dos preguntas distintas que resuelve la MISMA
+ * tabla: «dame exactamente este importe» —el cambio de toda la vida— y «dame
+ * lo más parecido a este importe que se pueda formar», que es lo que hace
+ * falta al partir un arqueo entre dos cajas de la ERP. Construirla dos veces
+ * costaría el doble por nada.
+ */
+type TablaCambio = {
+  valores: number[];
+  /** usadas[i][a]: piezas de la denominación i en la solución óptima de `a`. */
+  usadas: Int32Array[];
+  /** Coste de la última capa. `>= INF` en los importes que no se pueden formar. */
+  previo: Int32Array;
+  signo: number;
+};
 
-  if (importe > CAMBIO_MAXIMO_CENTIMOS) {
-    return {
-      ok: false,
-      motivo: "IMPORTE_EXCESIVO",
-      mensaje:
-        "El cambio a devolver supera el máximo que se calcula automáticamente. Indica a mano las piezas que entregas.",
-    };
-  }
-
-  // Comprobación barata que evita montar la tabla cuando ni siquiera hay dinero
-  // suficiente. Distingue "no hay bastante" de "hay bastante pero no cuadra",
-  // que para quien está en el mostrador son dos problemas distintos.
-  if (totalInventario(stock) < importe) {
-    return {
-      ok: false,
-      motivo: "STOCK_INSUFICIENTE",
-      mensaje: "No hay efectivo suficiente en caja para devolver el cambio.",
-    };
-  }
-
+function construirTabla(importe: Centimos, stock: Inventario, signo: number): TablaCambio {
   // Solo las denominaciones con existencias, de mayor a menor.
   const valores = [...stock.entries()]
     .filter(([, cantidad]) => cantidad > 0)
@@ -138,13 +123,6 @@ export function calcularCambio(
   // usadas[i][a] = piezas de la denominación i que emplea la solución óptima de
   // `a` en esa capa. Es lo que permite reconstruir la combinación al final.
   const usadas: Int32Array[] = [];
-
-  /*
-   * Truco para no escribir la búsqueda dos veces: se minimiza siempre
-   * `signo × piezas`. Con signo = +1 sale la combinación de menos piezas; con
-   * signo = −1, la de más. Es la misma tabla y la misma ventana móvil.
-   */
-  const signo = preferencia === "mas_piezas" ? -1 : 1;
 
   let previo = new Int32Array(importe + 1).fill(INF);
   previo[0] = 0;
@@ -194,6 +172,67 @@ export function calcularCambio(
     previo = actual;
   }
 
+  return { valores, usadas, previo, signo };
+}
+
+/**
+ * Deshace la tabla hasta un importe concreto. `null` si no se puede formar.
+ */
+function reconstruir(t: TablaCambio, objetivo: Centimos): LineaDenominacion[] | null {
+  if (objetivo === 0) return [];
+  if (t.previo[objetivo] >= INF) return null;
+
+  const lineas: LineaDenominacion[] = [];
+  let resto = objetivo;
+  for (let i = t.valores.length - 1; i >= 0; i--) {
+    const cantidad = t.usadas[i][resto];
+    if (cantidad > 0) {
+      lineas.push({ valor: t.valores[i], cantidad });
+      resto -= t.valores[i] * cantidad;
+    }
+  }
+  if (resto !== 0) return null;
+  lineas.sort((a, b) => b.valor - a.valor);
+  return lineas;
+}
+
+export function calcularCambio(
+  importe: Centimos,
+  stock: Inventario,
+  preferencia: PreferenciaCambio = "menos_piezas"
+): ResultadoCambio {
+  if (!Number.isSafeInteger(importe) || importe < 0) {
+    return {
+      ok: false,
+      motivo: "IMPORTE_NO_VALIDO",
+      mensaje: `Importe de cambio no válido: ${String(importe)}.`,
+    };
+  }
+  if (importe === 0) return { ok: true, lineas: [], piezas: 0 };
+
+  if (importe > CAMBIO_MAXIMO_CENTIMOS) {
+    return {
+      ok: false,
+      motivo: "IMPORTE_EXCESIVO",
+      mensaje:
+        "El cambio a devolver supera el máximo que se calcula automáticamente. Indica a mano las piezas que entregas.",
+    };
+  }
+
+  // Comprobación barata que evita montar la tabla cuando ni siquiera hay dinero
+  // suficiente. Distingue "no hay bastante" de "hay bastante pero no cuadra",
+  // que para quien está en el mostrador son dos problemas distintos.
+  if (totalInventario(stock) < importe) {
+    return {
+      ok: false,
+      motivo: "STOCK_INSUFICIENTE",
+      mensaje: "No hay efectivo suficiente en caja para devolver el cambio.",
+    };
+  }
+
+  const tabla = construirTabla(importe, stock, preferencia === "mas_piezas" ? -1 : 1);
+  const { valores, usadas, previo, signo } = tabla;
+
   if (previo[importe] >= INF) {
     return {
       ok: false,
@@ -204,21 +243,13 @@ export function calcularCambio(
 
   // Reconstrucción hacia atrás: en cada capa se sabe cuántas piezas de esa
   // denominación gastó la solución óptima del importe que quedaba.
-  const lineas: LineaDenominacion[] = [];
-  let resto = importe;
-  for (let i = n - 1; i >= 0; i--) {
-    const cantidad = usadas[i][resto];
-    if (cantidad > 0) {
-      lineas.push({ valor: valores[i], cantidad });
-      resto -= valores[i] * cantidad;
-    }
-  }
+  const lineas = reconstruir(tabla, importe);
 
   /* Red de seguridad: si la reconstrucción no cierra en cero, la tabla estaba
      mal y es preferible no proponer nada a proponer una combinación que no
      suma. No debería ocurrir nunca; si ocurre, es un fallo del algoritmo y no
      un caso de negocio. */
-  if (resto !== 0) {
+  if (!lineas) {
     return {
       ok: false,
       motivo: "NO_SOLUTION",
@@ -226,8 +257,66 @@ export function calcularCambio(
     };
   }
 
-  lineas.sort((a, b) => b.valor - a.valor);
   return { ok: true, lineas, piezas: signo * previo[importe] };
+}
+
+/**
+ * Tope del reparto entre cajas de la ERP.
+ *
+ * Es otro problema que el cambio al cliente: aquí no se devuelve nada, se
+ * PARTE un arqueo, y una gasolinera puede pasar de 2.000 € en un día sin que
+ * eso tenga nada de raro. El tope existe solo para acotar la tabla —10.000 €
+ * son unos 40 MB en el peor caso— y no como regla de negocio.
+ */
+export const REPARTO_MAXIMO_CENTIMOS = 1_000_000;
+
+export type RepartoAproximado = {
+  lineas: LineaDenominacion[];
+  /** Lo que suman de verdad esas piezas. Puede quedarse corto del objetivo. */
+  logradoCentimos: Centimos;
+};
+
+/**
+ * Las piezas que más se acercan a `objetivo` sin pasarse.
+ *
+ * Existe porque partir un arqueo entre dos cajas de la ERP no siempre se puede
+ * hacer clavado: si la gasolinera movió 50 € pero ese billete ya salió en un
+ * cambio, en el cajón puede no quedar ninguna combinación que sume 50 € justos.
+ * Rendirse ahí sería lo cómodo y lo inútil —quien tiene que cerrar en Genes se
+ * queda sin poder hacerlo—, así que se aparta lo más parecido que se pueda
+ * formar y se dice EXACTAMENTE cuánto es.
+ *
+ * Que se quede corto y nunca se pase es a propósito: el resto se lo lleva la
+ * caja principal, que es la que tiene el fondo y la que puede absorberlo.
+ *
+ * Devuelve `logradoCentimos` para que quien lo pinte no tenga que volver a
+ * sumar las piezas —y sobre todo para que no pueda imprimir un total que no
+ * cuadre con su propio desglose, que es lo que rompería el cierre de la ERP.
+ */
+export function repartoAproximado(
+  objetivo: Centimos,
+  stock: Inventario,
+  preferencia: PreferenciaCambio = "menos_piezas"
+): RepartoAproximado {
+  if (!Number.isSafeInteger(objetivo) || objetivo <= 0) {
+    return { lineas: [], logradoCentimos: 0 };
+  }
+
+  // Nunca hace falta mirar por encima de lo que hay: ahorra tabla y evita
+  // pedirle al DP un importe que ninguna combinación puede alcanzar.
+  const techo = Math.min(objetivo, totalInventario(stock), REPARTO_MAXIMO_CENTIMOS);
+  if (techo <= 0) return { lineas: [], logradoCentimos: 0 };
+
+  const tabla = construirTabla(techo, stock, preferencia === "mas_piezas" ? -1 : 1);
+
+  // Del objetivo hacia abajo hasta dar con un importe que sí se pueda formar.
+  // El cero siempre lo es, así que el bucle termina.
+  for (let a = techo; a >= 0; a--) {
+    if (tabla.previo[a] >= INF) continue;
+    const lineas = reconstruir(tabla, a);
+    if (lineas) return { lineas, logradoCentimos: a };
+  }
+  return { lineas: [], logradoCentimos: 0 };
 }
 
 /** Atajo cómodo para las pruebas y para la API, que hablan en líneas. */

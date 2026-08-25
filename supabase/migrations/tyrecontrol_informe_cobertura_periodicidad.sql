@@ -71,6 +71,11 @@ returns jsonb
 language sql
 security invoker
 stable
+-- Mismo motivo que en la función base: sin esto, PostgreSQL se va casi cinco
+-- segundos compilando el plan y el informe caduca. Está explicado a fondo en
+-- la cabecera de tyrecontrol_informe_ejecutivo.sql. Y tiene que ir aquí
+-- dentro: un `alter function` suelto lo borra el siguiente create or replace.
+set jit = off
 as $$
 with veh as (
   select v.id, v.matricula,

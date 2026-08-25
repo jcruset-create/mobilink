@@ -19,6 +19,7 @@ import type {
   EntregaDinero,
   FormaPagoConfig,
   IngresoBancario,
+  PropuestaCanjeIngreso,
   PanelIngresos,
   PedidoCambio,
   Pendientes,
@@ -32,6 +33,8 @@ import type {
   ResumenJornada,
   SeccionConfig,
   Sesion,
+  Zona,
+  Centro,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -94,20 +97,76 @@ const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.strin
 
 export const bootstrap = () => pedir<Bootstrap>("/bootstrap");
 
+// ── Cola de eventos hacia MC Central ───────────────────────────────────────
+
+export type ColaEventos = {
+  resumen: { estado: string; total: number }[];
+  muertos: {
+    id: string;
+    eventId: string;
+    tipo: string;
+    ocurridoEnMs: number;
+    intentos: number;
+    lastError: string | null;
+  }[];
+};
+
+export const colaEventos = () => pedir<ColaEventos>("/events");
+
+export const reintentarEventos = () =>
+  pedir<{ reencolados: number; tratados: number }>("/events/retry", json({}));
+
+// ── Jerarquía: zonas y talleres ────────────────────────────────────────────
+
+/**
+ * Zonas y talleres de la empresa, y hasta dónde llega el usuario.
+ *
+ * `ambitoCentroId` no es decorativo: con valor, esta sesión solo ve y opera las
+ * cajas de ese taller, y la pantalla debe decirlo en vez de dar a entender que
+ * la empresa tiene una sola caja.
+ */
+export const jerarquia = () =>
+  pedir<{ zonas: Zona[]; centros: Centro[]; ambitoCentroId: string | null }>("/hierarchy");
+
+export const crearZona = (nombre: string) => pedir<{ zona: Zona }>("/zones", json({ nombre }));
+
+export const actualizarZona = (id: string, datos: { nombre?: string; activa?: boolean }) =>
+  pedir<{ zona: Zona }>(`/zones/${id}`, { method: "PATCH", body: JSON.stringify(datos) });
+
+export const asignarZonaACentro = (centroId: string, zonaId: string | null) =>
+  pedir<{ ok: true }>(`/centers/${centroId}/zone`, {
+    method: "PATCH",
+    body: JSON.stringify({ zonaId }),
+  });
+
 // ── Configuración ──────────────────────────────────────────────────────────
 
 /** Cajas de la empresa, incluidas las dadas de baja. */
 export const listarCajas = () =>
   pedir<{
-    cajas: (Caja & { activa: boolean; jornadas: string; jornada_abierta: number | null })[];
+    cajas: (Caja & { activa: boolean; jornadas: string; jornadaAbierta: number | null })[];
   }>("/registers");
 
-export const crearCaja = (nombre: string, centro: string) =>
-  pedir<{ caja: Caja & { activa: boolean } }>("/registers", json({ nombre, centro }));
+export const crearCaja = (nombre: string, centro: string, centroId?: string | null) =>
+  pedir<{ caja: Caja & { activa: boolean } }>(
+    "/registers",
+    json({ nombre, centro, centroId: centroId ?? null })
+  );
+
 
 export const actualizarCaja = (
   id: number,
-  datos: { nombre?: string; centro?: string; activa?: boolean }
+  datos: {
+    nombre?: string;
+    centro?: string;
+    /** Taller al que se asigna. `null` explícito lo desasigna. */
+    centroId?: string | null;
+    /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
+    codigo?: string;
+    activa?: boolean;
+    /** Fondo fijo del cajón, en céntimos. 0 = sin fondo fijo. */
+    fondoObjetivoCentimos?: number;
+  }
 ) =>
   pedir<{ caja: Caja & { activa: boolean } }>(`/registers/${id}`, {
     method: "PATCH",
@@ -215,13 +274,67 @@ export const adjuntarDocumento = (operationId: number, fichero: File) => {
 export const anularDocumento = (id: number, motivo: string) =>
   pedir<{ documento: DocumentoOperacion }>(`/documents/${id}/void`, json({ motivo }));
 
-/** Enlace del informe de cierre. Se abre en una pestaña, no se descarga por fetch. */
-export const urlInformeCierre = (sessionId: number) => `${BASE}/sessions/${sessionId}/report.pdf`;
+/**
+ * Descarga un PDF del servidor con la sesión puesta.
+ *
+ * No puede ser un `<a href>`: el token viaja en la cabecera `Authorization` y
+ * un enlace no puede llevarla, así que el enlace directo devolvía «Falta el
+ * token de sesión». Sirve para cualquier informe: el de cierre y el resguardo
+ * del ingreso comparten este camino.
+ */
+export async function descargarPdf(ruta: string): Promise<Blob> {
+  const cabeceras = await sessionHeaders();
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${ruta}`, { headers: cabeceras });
+  } catch {
+    throw new ErrorApiCaja("SIN_CONEXION", "No hay conexión con el servidor.", 0);
+  }
+
+  if (!res.ok) {
+    // El error sí viene en JSON, aunque la ruta prometa un PDF.
+    const texto = await res.text();
+    let mensaje = "No se ha podido generar el informe.";
+    let codigo = "ERROR";
+    try {
+      const datos = JSON.parse(texto);
+      mensaje = datos?.error ?? mensaje;
+      codigo = datos?.code ?? codigo;
+    } catch {
+      /* El cuerpo no era JSON: se queda el mensaje genérico. */
+    }
+    throw new ErrorApiCaja(codigo, mensaje, res.status);
+  }
+
+  return res.blob();
+}
 
 // ── Ingresos bancarios ─────────────────────────────────────────────────────
 
 export const panelIngresos = (registerId: number) =>
   pedir<PanelIngresos>(`/registers/${registerId}/bank-deposits`);
+
+/**
+ * Qué se puede ingresar de verdad y qué canje lo mejoraría.
+ *
+ * El desglose sale del libro mayor, no de redondear el total: lo que va al
+ * banco son los billetes que hay en el montón, y las monedas hay que cambiarlas
+ * antes por billetes del cajón.
+ */
+export const proponerCanjeIngreso = (registerId: number, sessionIds: readonly number[]) =>
+  pedir<PropuestaCanjeIngreso>(
+    `/registers/${registerId}/bank-deposits/swap` +
+      (sessionIds.length > 0 ? `?cierres=${sessionIds.join(",")}` : "")
+  );
+
+export const registrarCanjeIngreso = (datos: {
+  registerId: number;
+  sessionIds: number[];
+  monedasEntregadas: LineaDenominacion[];
+  billetesEntregados: LineaDenominacion[];
+  billetesRecibidos: LineaDenominacion[];
+}) => pedir<{ operacionId: number; numero: string }>("/bank-deposits/swap", json(datos));
 
 export const crearIngresoBancario = (datos: {
   registerId: number;
@@ -338,8 +451,28 @@ export const reabrirJornada = (sessionId: number, motivo: string) =>
  * Propuesta de cambio. Es una consulta: no reserva nada, y por eso la
  * confirmación vuelve a validar en el servidor con la jornada bloqueada.
  */
-export const proponerCambio = (sessionId: number, importeCentimos: number) =>
-  pedir<ResultadoCambio>(`/sessions/${sessionId}/change?importe=${importeCentimos}`);
+export const proponerCambio = (
+  sessionId: number,
+  importeCentimos: number,
+  /** Denominaciones que no se pueden proponer: las que acaban de entrar. */
+  excluirValores?: readonly number[]
+) =>
+  pedir<ResultadoCambio>(
+    `/sessions/${sessionId}/change?importe=${importeCentimos}` +
+      (excluirValores && excluirValores.length > 0 ? `&excluir=${excluirValores.join(",")}` : "")
+  );
+
+/**
+ * Cambio de moneda en mostrador: entra dinero y sale el mismo importe en otras
+ * piezas. En los dos sentidos — un billete por monedas, o monedas por billete.
+ */
+export const darCambio = (datos: {
+  sessionId: number;
+  importeCentimos: number;
+  recibido: LineaDenominacion[];
+  entregado: LineaDenominacion[];
+  concepto?: string;
+}) => pedir<RespuestaOperacion>("/exchange", json(datos));
 
 // ── Operaciones ────────────────────────────────────────────────────────────
 
@@ -461,6 +594,23 @@ export const historico = (filtros: {
   return pedir<{ sesiones: Record<string, unknown>[] }>(`/sessions?${q}`);
 };
 
+/**
+ * Justificantes de la jornada entera: el taco de facturas escaneado de una vez,
+ * el resguardo del banco. No cuelgan de ninguna operación porque no son de
+ * ninguna, y se admiten varios.
+ */
+export const documentosDeJornada = (sessionId: number) =>
+  pedir<{ documentos: DocumentoOperacion[] }>(`/sessions/${sessionId}/documents`);
+
+export const adjuntarDocumentoAJornada = (sessionId: number, fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("documento", fichero);
+  return pedir<{ documento: DocumentoOperacion }>(`/sessions/${sessionId}/documents`, {
+    method: "POST",
+    body: cuerpo,
+  });
+};
+
 export const documentos = (tipo: "RECEIVABLE" | "PAYABLE", q = "") =>
   pedir<{ documentos: DocumentoExterno[] }>(
     `/documents?tipo=${tipo}${q ? `&q=${encodeURIComponent(q)}` : ""}`
@@ -514,7 +664,13 @@ export const crearSeccion = (datos: { nombre: string; orden?: number }) =>
 
 export const actualizarSeccion = (
   id: number,
-  datos: { nombre?: string; activa?: boolean; porDefecto?: boolean; orden?: number }
+  datos: {
+    nombre?: string;
+    activa?: boolean;
+    porDefecto?: boolean;
+    arqueaAparte?: boolean;
+    orden?: number;
+  }
 ) =>
   pedir<{ seccion: SeccionConfig }>(`/sections/${id}`, {
     method: "PATCH",

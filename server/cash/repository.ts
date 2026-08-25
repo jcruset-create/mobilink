@@ -460,35 +460,60 @@ const PREFIJO_POR_TIPO: Partial<Record<TipoOperacion, string>> = {
   ADJUSTMENT: "A",
   OPENING_FLOAT: "AP",
   CLOSING_FLOAT: "CI",
+  EXCHANGE: "DC",
 };
 
 /**
- * Número propio de Mobilink Cash: `MC-C-2026-000042`.
+ * Número propio de Mobilink Cash: `TAR1-C-26-042`.
+ *
+ * Cuatro trozos, y cada uno hace falta:
+ *
+ *  · `TAR1` — el código de la CAJA, que se configura en Configuración. Es lo
+ *    que permite conciliar un ingreso contra el extracto del banco: dice de
+ *    qué caja salió el dinero, no solo de qué taller. Va delante porque es por
+ *    donde se ordena y por donde se agrupa al mirar el extracto.
+ *  · `C` — el tipo de documento (cobro, pago, ingreso bancario…).
+ *  · `26` — el año en dos cifras. La serie se reinicia cada ejercicio.
+ *  · `042` — el contador dentro de esa caja, ese tipo y ese año.
+ *
+ * El formato anterior era `MC-C-2026-000042`: el `MC` era fijo y no decía
+ * nada, y el contador era único para TODA la instalación, así que dos cajas
+ * del mismo taller compartían serie y el número no distinguía de cuál venía el
+ * dinero. El histórico se renumeró a este formato en la migración.
+ *
+ * El relleno a tres cifras es un mínimo, no un tope: el documento 1.234 sale
+ * como `TAR1-C-26-1234`. Preferimos un número largo a una serie que se agota.
  *
  * No depende de ningún número que dé la ERP, porque en modo autónomo no hay
  * ERP. Mismo mecanismo que `nextDocumentNumber()` del Integration Hub: un
  * UPSERT con RETURNING, que es atómico y no necesita bloqueo explícito.
- *
- * El contador es por tipo y año, así que la serie se reinicia cada ejercicio.
  */
 export async function siguienteNumero(
   client: PoolClient,
+  sessionId: number,
   tipo: TipoOperacion,
   anio: number
 ): Promise<string> {
-  return siguienteNumeroDe(client, PREFIJO_POR_TIPO[tipo] ?? "X", anio);
+  return siguienteNumeroDe(
+    client,
+    await codigoDeSesion(client, sessionId),
+    PREFIJO_POR_TIPO[tipo] ?? "X",
+    anio
+  );
 }
 
 /**
  * El mismo contador para documentos que no son operaciones: los pedidos de
- * cambio al banco (`CB`) y las entregas de dinero a personas (`EN`).
+ * cambio al banco (`CB`), las entregas de dinero a personas (`EN`) y los
+ * ingresos bancarios (`IB`).
  */
 export async function siguienteNumeroDe(
   client: PoolClient,
+  codigo: string,
   prefijo: string,
   anio: number
 ): Promise<string> {
-  const clave = `${prefijo}:${anio}`;
+  const clave = `${codigo}:${prefijo}:${anio}`;
   const { rows } = await client.query<{ last_seq: number }>(
     `INSERT INTO cash_document_counters (clave, last_seq)
      VALUES ($1, 1)
@@ -496,7 +521,36 @@ export async function siguienteNumeroDe(
      RETURNING last_seq`,
     [clave]
   );
-  return `MC-${prefijo}-${anio}-${String(rows[0].last_seq).padStart(6, "0")}`;
+  const aa = String(anio % 100).padStart(2, "0");
+  return `${codigo}-${prefijo}-${aa}-${String(rows[0].last_seq).padStart(3, "0")}`;
+}
+
+/**
+ * Código de una caja, con red de seguridad.
+ *
+ * Una caja sin código todavía —recién creada, o creada antes de que existiera
+ * la columna— numera como `MC`. Es feo, pero es infinitamente preferible a que
+ * no se pueda registrar un cobro porque falta un dato de configuración: el
+ * mostrador no puede pararse por eso. Configuración avisa de las que están sin
+ * código.
+ */
+export async function codigoDeCaja(client: PoolClient, registerId: number): Promise<string> {
+  const { rows } = await client.query<{ codigo: string }>(
+    `SELECT codigo FROM cash_registers WHERE id = $1`,
+    [registerId]
+  );
+  return rows[0]?.codigo || "MC";
+}
+
+/** El de la caja a la que pertenece una jornada. */
+export async function codigoDeSesion(client: PoolClient, sessionId: number): Promise<string> {
+  const { rows } = await client.query<{ codigo: string }>(
+    `SELECT r.codigo
+       FROM cash_sessions s JOIN cash_registers r ON r.id = s.register_id
+      WHERE s.id = $1`,
+    [sessionId]
+  );
+  return rows[0]?.codigo || "MC";
 }
 
 // ── Operaciones ────────────────────────────────────────────────────────────
@@ -736,13 +790,35 @@ export async function movimientosDeOperacion(
  * aquí es lo que necesita el motor para decidir SI hay que abrirlo y para que
  * la pantalla lo pueda decir.
  */
-export async function stockPorFormato(
+export type IncidenciaFormato = {
+  valor: Centimos;
+  sueltas: number;
+  cartuchos: number;
+  bolsas: number;
+};
+
+/**
+ * Saldos por formato TAL Y COMO ESTÁN, sin juzgarlos.
+ *
+ * Devuelve además las denominaciones cuyo saldo es negativo, que es algo que
+ * no debería poder pasar: significa que salió un envase que nunca entró. La
+ * causa conocida es un arqueo que contó un formato distinto del que tenía
+ * apuntado el libro mayor —alguien embolsó monedas sueltas— y un cierre que
+ * después repartió esa bolsa.
+ *
+ * La versión que avisa y la que revienta están separadas a propósito. Leer el
+ * papeleo de una jornada ya cerrada no puede morirse por esto: el informe
+ * tiene que salir con el aviso puesto. Mover dinero, en cambio, sí tiene que
+ * pararse, y de eso se encarga `stockPorFormato`.
+ */
+export async function stockPorFormatoBruto(
   client: PoolClient | typeof pool,
   sessionId: number
 ): Promise<{
   sueltas: Map<Centimos, number>;
   cartuchos: Map<Centimos, number>;
   bolsas: Map<Centimos, number>;
+  incidencias: IncidenciaFormato[];
 }> {
   const { rows } = await client.query<{
     valor_unitario_centimos: number;
@@ -765,6 +841,8 @@ export async function stockPorFormato(
   const sueltas = new Map<Centimos, number>();
   const cartuchos = new Map<Centimos, number>();
   const bolsas = new Map<Centimos, number>();
+  const incidencias: IncidenciaFormato[] = [];
+
   for (const r of rows) {
     const s = Number(r.sueltas);
     const t = Number(r.tubos);
@@ -773,12 +851,40 @@ export async function stockPorFormato(
     if (t > 0) cartuchos.set(r.valor_unitario_centimos, t);
     if (b > 0) bolsas.set(r.valor_unitario_centimos, b);
     if (s < 0 || t < 0 || b < 0) {
-      throw new ErrorCaja(
-        "STOCK_NEGATIVO",
-        `El stock de la denominación de ${r.valor_unitario_centimos} céntimos es negativo (sueltas ${s}, cartuchos ${t}, bolsas ${b}).`,
-        500
-      );
+      incidencias.push({
+        valor: r.valor_unitario_centimos,
+        sueltas: s,
+        cartuchos: t,
+        bolsas: b,
+      });
     }
+  }
+  return { sueltas, cartuchos, bolsas, incidencias };
+}
+
+/**
+ * Lo mismo, pero exigiendo que los saldos sean sanos.
+ *
+ * Es la que usan los caminos que MUEVEN dinero: repartir un envase que el
+ * libro mayor no tiene apuntado convertiría una incoherencia en dinero que no
+ * existe, y eso sí tiene que parar la operación.
+ */
+export async function stockPorFormato(
+  client: PoolClient | typeof pool,
+  sessionId: number
+): Promise<{
+  sueltas: Map<Centimos, number>;
+  cartuchos: Map<Centimos, number>;
+  bolsas: Map<Centimos, number>;
+}> {
+  const { sueltas, cartuchos, bolsas, incidencias } = await stockPorFormatoBruto(client, sessionId);
+  if (incidencias.length > 0) {
+    const i = incidencias[0];
+    throw new ErrorCaja(
+      "STOCK_NEGATIVO",
+      `El stock de la denominación de ${i.valor} céntimos es negativo (sueltas ${i.sueltas}, cartuchos ${i.cartuchos}, bolsas ${i.bolsas}).`,
+      500
+    );
   }
   return { sueltas, cartuchos, bolsas };
 }

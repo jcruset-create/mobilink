@@ -74,6 +74,12 @@ hay saldo acumulado que se pueda desincronizar.
   diferencia. Registrarlo como "salen 19,50 €" sería mentir sobre las piezas.
 - `arqueo.ts` — teórico vs contado por denominación, doble cuadre, reparto
   cambio final / ingreso bancario.
+- Cambio de moneda en mostrador (`EXCHANGE`, serie `MC-DC-…`): entra dinero y
+  sale el mismo importe en otras piezas, en los dos sentidos — un billete por
+  monedas o monedas por un billete. Es el único tipo con efectivo neto CERO, y
+  el cambio sale del cajón, no de lo que el cliente acaba de dar: se valida
+  contra el stock sin sumar lo recibido. Pantalla propia («Dar cambio»), con la
+  propuesta del motor excluyendo las denominaciones que entran.
 - `cartridges.ts` — cartuchos de monedas. Un tubo **se abre y no se vuelve a
   cerrar**. La regla que manda es **dar siempre las piezas de mayor valor**: si
   la moneda que toca está encartuchada, el tubo se abre. El precinto solo se
@@ -88,12 +94,13 @@ hay saldo acumulado que se pueda desincronizar.
   grande con el que el banco sirve las monedas a granel (500 monedas de 1 €, por
   ejemplo). Funciona igual que el cartucho: se cuenta aparte, viaja aparte y el
   motor la puede abrir sola cuando hace falta, con su propio par de asientos
-  (`BAG_OPENED`). Dentro de una denominación el orden es **sueltas → cartuchos →
-  bolsas**: se rompe el envase más pequeño primero, que es lo que haría
-  cualquiera en el mostrador. Cuántas monedas trae una bolsa se configura por
-  denominación (`piezas_por_bolsa`), porque cada banco sirve el suyo, y tiene
-  que ser mayor que el cartucho de esa misma moneda o el envase pequeño dejaría
-  de ser el pequeño.
+  (`BAG_OPENED`). Dentro de una denominación el orden es **sueltas → bolsas →
+  cartuchos**, siempre, sin mirar tamaños: la bolsa es lo que llega del banco y
+  se deshace nada más abrirla, y el cartucho es lo que se guarda ordenado para
+  el cajón. Cuántas monedas trae una bolsa se configura por denominación
+  (`piezas_por_bolsa`), porque cada banco sirve el suyo, y **puede ser menos que
+  un cartucho** — hubo una validación que lo prohibía y rechazaba la
+  configuración real de un taller con bolsas de veinte y cartuchos de cincuenta.
 
   Un asiento es de un solo formato: la restricción `cash_mov_un_formato` impide
   que una fila lleve `cartuchos > 0` y `bolsas > 0` a la vez, porque entonces no
@@ -416,6 +423,47 @@ código (`asentarAjusteDeArqueo`) para que no diverjan:
 2. **Al cerrar**, como red de seguridad: si nadie regularizó, el cierre lo hace
    solo. Una caja ya regularizada no vuelve a asentar nada, porque para
    entonces el teórico y lo contado son el mismo número.
+
+**Fondo fijo de la caja** (`cash_registers.fondo_objetivo_centimos`): lo que el
+cajón tiene que tener SIEMPRE al empezar el día. Es una decisión de la caja, no
+del cierre de hoy, así que se configura una vez y el cierre lo trae puesto y
+propone la composición solo al entrar. Lo que hay que retirar sale de la resta
+—contado menos fondo fijo— y es el efectivo que ha entrado en la jornada. Cero
+significa «sin fondo fijo» y el cierre lo pregunta como antes.
+
+**Informes** reúne el papeleo de cada jornada en un sitio: el informe de cierre
+en PDF —que existía pero solo aparecía en la pantalla de confirmación y en el
+detalle del histórico, o sea que quien cerraba y cerraba la pestaña lo perdía de
+vista—, la hoja del ingreso bancario (total y referencia; el desglose pieza a
+pieza ya va en el informe y repetirlo daría dos papeles que se contradicen) y
+los escaneos de la jornada.
+
+**Escaneos de jornada**: `cash_operation_documents.operation_id` admite NULL, y
+eso significa «de la jornada entera, no de una operación» — el taco de facturas
+del día o el resguardo del banco, que no son de ningún cobro concreto. Se
+admiten varios porque en el mostrador no sale todo en un PDF. La consulta del
+informe usa LEFT JOIN: con un JOIN a secas desaparecían del informe justo los
+que no tienen operación, que es lo que los define.
+
+**Canje de monedas para el ingreso** (`domain/depositswap.ts`): el banco solo
+admite billetes, y el montón que espera para ir al banco tiene una composición
+concreta que sale del libro mayor —los asientos `BANK_DEPOSIT` de los cierres
+pendientes—, no de redondear el total. Las monedas se convierten cambiándolas
+por billetes del cajón, con una operación `EXCHANGE` de la jornada abierta.
+
+La cuenta que define qué optimizar: un canje entrega `x` en monedas más `y` en
+billetes propios y recibe `x + y` en billetes de la caja, así que los billetes
+finales del montón son `billetes − y + (x + y) = billetes + x`. **El ingreso
+sube exactamente `x`, y `y` no influye.** Meter billetes propios en el canje no
+ingresa un euro más: lo que hace es desbloquear un billete más grande de la caja
+cuando no hay uno pequeño —sin billete de 10 no se pueden convertir 10 € en
+monedas, pero entregando además dos de 20 sí se puede coger el de 50—. De ahí
+que el objetivo sea uno solo: maximizar `x`, con la cantidad de piezas que se
+dejan en el cajón como desempate.
+
+`cash_deposit_swaps` anota qué canjes van contra el montón, y `bank_deposit_id`
+a NULL significa «todavía cuenta»: al registrar el ingreso se rellenan y dejan
+de afectar al montón siguiente. Sin eso el ajuste se arrastraría para siempre.
 
 Detalles que costaron un fallo en producción:
 

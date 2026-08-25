@@ -106,11 +106,16 @@ export function inventarioConTodoAbierto(
 
 /**
  * Qué precintos hay que romper de UNA denominación para reunir `cantidad`
- * piezas, gastando primero lo que menos cuesta deshacer.
+ * piezas.
  *
- * Orden: sueltas → cartuchos → bolsas. Se rompe el envoltorio más pequeño
- * primero; abrir una bolsa de 500 monedas para dar dos, teniendo un tubo de 25
- * a mano, llena el cajón de calderilla que ya no se puede volver a guardar.
+ * Orden: **sueltas → bolsas → cartuchos**, siempre, sin mirar tamaños. Es la
+ * regla del mostrador: la bolsa es lo que llega del banco y se deshace nada
+ * más abrirla; el cartucho es lo que se guarda ordenado para el cajón, y se
+ * respeta mientras quede otra cosa que romper.
+ *
+ * (Antes esto abría el cartucho primero, tomando el envase más pequeño como el
+ * más barato de deshacer. En el mostrador no funciona así: un cartucho abierto
+ * no se vuelve a hacer, y una bolsa abierta no era nada que conservar.)
  *
  * Devuelve `null` si con todo abierto no llega.
  */
@@ -125,15 +130,28 @@ function romperPara(
   let faltan = cantidad - sueltas;
   if (faltan <= 0) return null;
 
-  const porTubo = porCartucho.get(valor) ?? 0;
-  const tubosHay = stock.cartuchos.get(valor) ?? 0;
-  const tubos = porTubo > 0 ? Math.min(tubosHay, Math.ceil(faltan / porTubo)) : 0;
-  faltan -= tubos * porTubo;
+  const envases = [
+    {
+      formato: "bolsa" as const,
+      porEnvase: porBolsa.get(valor) ?? 0,
+      hay: stock.bolsas?.get(valor) ?? 0,
+    },
+    {
+      formato: "cartucho" as const,
+      porEnvase: porCartucho.get(valor) ?? 0,
+      hay: stock.cartuchos.get(valor) ?? 0,
+    },
+  ].filter((e) => e.porEnvase > 0 && e.hay > 0);
 
-  const porSaco = porBolsa.get(valor) ?? 0;
-  const bolsasHay = stock.bolsas?.get(valor) ?? 0;
-  const bolsas = faltan > 0 && porSaco > 0 ? Math.min(bolsasHay, Math.ceil(faltan / porSaco)) : 0;
-  faltan -= bolsas * porSaco;
+  const abiertos = { cartucho: 0, bolsa: 0 };
+  let piezas = 0;
+  for (const e of envases) {
+    if (faltan <= 0) break;
+    const n = Math.min(e.hay, Math.ceil(faltan / e.porEnvase));
+    abiertos[e.formato] += n;
+    piezas += n * e.porEnvase;
+    faltan -= n * e.porEnvase;
+  }
 
   // No llega ni abriéndolo todo: quien llame decide qué hacer con el hueco.
   if (faltan > 0) return null;
@@ -142,9 +160,9 @@ function romperPara(
   // apertura ensuciaría la API y la pantalla con un formato que no se usa.
   return {
     valor,
-    cartuchos: tubos,
-    ...(bolsas > 0 ? { bolsas } : {}),
-    piezas: tubos * porTubo + bolsas * porSaco,
+    cartuchos: abiertos.cartucho,
+    ...(abiertos.bolsa > 0 ? { bolsas: abiertos.bolsa } : {}),
+    piezas,
   };
 }
 

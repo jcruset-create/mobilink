@@ -8,70 +8,94 @@
  * importe.
  */
 
-import { useCallback, useState } from "react";
-import { FileDown, Minus, Plus, Printer } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Printer } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, {
   type CantidadesPorValor,
   cantidadesDesde,
   lineasDesde,
 } from "../components/DenominationGrid";
-import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, inputCls } from "../components/ui";
+import {
+  Aviso,
+  BotonAccion,
+  BotonInforme,
+  Cabecera,
+  Card,
+  ErrorBox,
+  inputCls,
+} from "../components/ui";
 import { euros, aCentimos, totalLineas } from "../utils/money";
-import type { Denominacion, LineaDenominacion } from "../types";
+import type { LineaDenominacion } from "../types";
 import { AvisoPendientes } from "./CambioBanco";
 import { repartirIngreso, valorEnvasado } from "../utils/cierre";
 import * as api from "../services/api";
 
 export default function Cierre() {
-  const { jornada, denominaciones, refrescar } = useCash();
+  const { jornada, denominaciones, cajas, refrescar } = useCash();
 
-  const [objetivoTexto, setObjetivoTexto] = useState("300,00");
-  const [cambioFinal, setCambioFinal] = useState<CantidadesPorValor>({});
-  const [cambioFinalTubos, setCambioFinalTubos] = useState<LineaDenominacion[]>([]);
-  const [cambioFinalBolsas, setCambioFinalBolsas] = useState<LineaDenominacion[]>([]);
+  /*
+   * El fondo fijo de esta caja: lo que el cajón tiene que tener SIEMPRE al
+   * empezar el día. Es una decisión de la caja, no del cierre de hoy, así que
+   * viene configurado y no se teclea cada tarde. Sigue siendo editable, porque
+   * un día puede hacer falta dejar más o menos, pero eso es la excepción.
+   */
+  const fondoFijo = cajas.find((c) => c.id === jornada?.sesion.registerId)?.fondoObjetivoCentimos ?? 0;
+
+  const [objetivoTexto, setObjetivoTexto] = useState(
+    fondoFijo > 0 ? euros(fondoFijo).replace(" €", "") : "300,00"
+  );
+  /*
+   * Lo que se teclea es lo que SE RETIRA para el banco, y el cambio que se
+   * queda sale de restarlo a lo contado.
+   *
+   * Es el orden del mostrador —primero se aparta lo que va al banco, y lo que
+   * queda en el cajón es el cambio— y además hace imposible el descuadre: los
+   * dos lados no son dos cuentas que haya que hacer coincidir, sino una resta.
+   */
+  const [retirado, setRetirado] = useState<CantidadesPorValor>({});
+  const [retiradoTubos, setRetiradoTubos] = useState<LineaDenominacion[]>([]);
+  const [retiradoBolsas, setRetiradoBolsas] = useState<LineaDenominacion[]>([]);
   const [notas, setNotas] = useState("");
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [cerrada, setCerrada] = useState<Awaited<ReturnType<typeof api.cerrarJornada>> | null>(null);
 
   const objetivo = aCentimos(objetivoTexto) ?? 0;
-  const totalCambio = totalLineas(lineasDesde(cambioFinal));
 
-  /**
-   * Fija cuántos envases de una denominación se quedan en caja.
-   *
-   * Un solo sitio donde se tocan las listas de precintos: las tocaban los
-   * botones y la cajita por separado, y el tope —no puedes quedarte más
-   * envases de los que has contado— tenía que repetirse en cada uno.
+  /*
+   * Con el fondo fijo configurado, la composición se propone SOLA al entrar.
+   * Antes había que teclear el importe y pulsar «Proponer»; quien no lo hacía
+   * veía «se queda 0 €, al banco 429,69 €», que es exactamente lo contrario de
+   * lo que quiere hacer. La ref evita repetirlo si el usuario retoca a mano.
    */
-  function fijarEnvases(
-    fijar: React.Dispatch<React.SetStateAction<LineaDenominacion[]>>,
-    valor: number,
-    cantidad: number,
-    contados: number
-  ) {
-    const n = Math.max(0, Math.min(contados, cantidad));
-    fijar((prev) => [
-      ...prev.filter((x) => x.valor !== valor),
-      ...(n > 0 ? [{ valor, cantidad: n }] : []),
-    ]);
-  }
+  const yaPropuesto = useRef(false);
 
   const pedirPropuesta = useCallback(async () => {
     if (!jornada || objetivo <= 0) return;
     setError("");
     try {
       const r = await api.proponerCierre(jornada.sesion.id, objetivo);
-      // El ingreso no se guarda: se deriva de lo contado menos lo que se
-      // queda, así que basta con fijar el cambio final.
-      setCambioFinal(cantidadesDesde(r.cambioFinal));
-      setCambioFinalTubos(r.cambioFinalCartuchos ?? []);
-      setCambioFinalBolsas(r.cambioFinalBolsas ?? []);
+      // De la propuesta se toma el lado del BANCO, que es el que se teclea. El
+      // cambio que se queda se deriva restando, así que no hace falta fijarlo.
+      setRetirado(cantidadesDesde(r.ingresoBancario));
+      setRetiradoTubos(r.ingresoBancarioCartuchos ?? []);
+      setRetiradoBolsas(r.ingresoBancarioBolsas ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido preparar el cierre");
     }
   }, [jornada, objetivo]);
+
+  /*
+   * Propuesta automática al entrar, una sola vez y solo con el fondo fijo
+   * configurado: si la caja no tiene fondo fijo no hay nada que suponer, y se
+   * sigue preguntando como siempre.
+   */
+  useEffect(() => {
+    if (yaPropuesto.current || fondoFijo <= 0 || !jornada) return;
+    yaPropuesto.current = true;
+    void pedirPropuesta();
+  }, [fondoFijo, jornada, pedirPropuesta]);
 
   if (!jornada) return <Aviso tono="aviso">No hay ninguna jornada abierta.</Aviso>;
 
@@ -110,6 +134,31 @@ export default function Cierre() {
    * en la rejilla porque un cartucho o una bolsa entera se queda o se va, no se
    * parte —y si se partiera dejaría de ser un precinto.
    */
+  /**
+   * Lo contado menos lo retirado, por denominación. Nunca negativo: la rejilla
+   * ya acota cada casilla a lo que hay contado.
+   */
+  const restar = (
+    contadas: readonly LineaDenominacion[],
+    retiradas: CantidadesPorValor
+  ): CantidadesPorValor => {
+    const queda: CantidadesPorValor = {};
+    for (const l of contadas) {
+      const n = l.cantidad - (retiradas[l.valor] ?? 0);
+      if (n > 0) queda[l.valor] = n;
+    }
+    return queda;
+  };
+
+  /*
+   * El cambio que se queda NO se teclea: es lo contado menos lo retirado. Por
+   * construcción los dos lados suman siempre el efectivo contado, así que el
+   * cierre no puede quedarse a medias por un descuadre de composición.
+   */
+  const cambioFinal = restar(sueltasContadas, retirado);
+  const cambioFinalTubos = lineasDesde(restar(tubosContados, cantidadesDesde(retiradoTubos)));
+  const cambioFinalBolsas = lineasDesde(restar(bolsasContadas, cantidadesDesde(retiradoBolsas)));
+
   const ingreso = repartirIngreso({
     sueltasContadas,
     tubosContados,
@@ -119,6 +168,18 @@ export default function Cierre() {
     cambioFinalBolsas,
     denominaciones,
   });
+
+  const totalCambio = totalLineas(lineasDesde(cambioFinal));
+
+  /**
+   * Lo que hay que sacar del cajón: lo contado menos el fondo fijo.
+   *
+   * Es el efectivo que ha entrado hoy —los cobros menos los pagos— y es el
+   * número por el que se entra a esta pantalla. Nunca negativo: si el cajón no
+   * llega al fondo fijo no hay nada que retirar, hay que reponer, y eso lo
+   * dice el aviso de abajo.
+   */
+  const aRetirar = Math.max(0, contadoTotal - (fondoFijo > 0 ? fondoFijo : objetivo));
 
   const valorTubosCambio =
     valorEnvasado(cambioFinalTubos, denominaciones, "cartucho") +
@@ -142,9 +203,9 @@ export default function Cierre() {
    * no significa nada.
    */
   function quedarseloTodo() {
-    setCambioFinal(cantidadesDesde(sueltasContadas));
-    setCambioFinalTubos(tubosContados);
-    setCambioFinalBolsas(bolsasContadas);
+    setRetirado({});
+    setRetiradoTubos([]);
+    setRetiradoBolsas([]);
     setObjetivoTexto(euros(contadoTotal).replace(" €", ""));
   }
 
@@ -186,10 +247,23 @@ export default function Cierre() {
         diferencia queda asentada como ajuste auditado.
       </Aviso>
 
+      {/*
+        El cajón por debajo de su fondo fijo. No es un error —se puede cerrar
+        igual— pero mañana se abre corto de cambio, y eso hay que decirlo hoy,
+        que es cuando se puede ir al banco.
+      */}
+      {fondoFijo > 0 && contadoTotal < fondoFijo && (
+        <Aviso tono="aviso">
+          En el cajón hay {euros(contadoTotal)} y su fondo fijo es de {euros(fondoFijo)}: faltan{" "}
+          <strong>{euros(fondoFijo - contadoTotal)}</strong>. No hay nada que ingresar; mañana la
+          caja abre corta de cambio salvo que se reponga.
+        </Aviso>
+      )}
+
       <div className="flex flex-wrap items-end gap-2">
         <label className="block">
           <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
-            Cambio que se queda para mañana
+            Fondo fijo de la caja
           </span>
           <input
             value={objetivoTexto}
@@ -202,7 +276,7 @@ export default function Cierre() {
           onClick={() => void pedirPropuesta()}
           className="h-[38px] rounded-lg bg-slate-700 px-3 text-[12px] font-medium text-slate-200 hover:bg-slate-600"
         >
-          Proponer composición
+          Recalcular
         </button>
         <button
           onClick={quedarseloTodo}
@@ -213,7 +287,7 @@ export default function Cierre() {
         </button>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-4">
         <Card
           title="Contado en el arqueo"
           value={euros(contadoTotal)}
@@ -238,6 +312,21 @@ export default function Cierre() {
           hint={pistaPrecintos(ingreso.tubos, ingreso.bolsas)}
           accent="text-sky-300"
         />
+        {/*
+          Lo que hay que sacar del cajón, dicho como número propio. Sale de la
+          resta —contado menos fondo fijo— y no de lo que uno haya compuesto,
+          así que se ve desde el primer momento, antes de tocar nada.
+        */}
+        <Card
+          title="Efectivo a retirar"
+          value={euros(aRetirar)}
+          hint={
+            fondoFijo > 0
+              ? `${euros(contadoTotal)} contados − ${euros(fondoFijo)} de fondo fijo`
+              : "Esta caja no tiene fondo fijo configurado"
+          }
+          accent="text-amber-300"
+        />
       </div>
 
       {/*
@@ -255,6 +344,12 @@ export default function Cierre() {
         </Aviso>
       )}
 
+      {/*
+        Red de seguridad, no un estado normal: desde que el paso 2 es una resta
+        del paso 1, los dos lados suman siempre lo contado. Se deja porque es la
+        invariante de la que depende que el cierre sea correcto, y si un cambio
+        futuro la rompiera hay que verlo aquí y no en el arqueo de mañana.
+      */}
       {!cuadra && (
         <Aviso tono="mal">
           El cambio final más el ingreso no suman el efectivo contado. Revisa la composición.
@@ -269,56 +364,63 @@ export default function Cierre() {
       {cuadra && desvioObjetivo !== 0 && (
         <Aviso tono="aviso">
           {desvioObjetivo < 0
-            ? `Faltan ${euros(-desvioObjetivo)} para el cambio que has pedido (${euros(objetivo)}).`
-            : `Sobran ${euros(desvioObjetivo)} sobre el cambio que has pedido (${euros(objetivo)}).`}{" "}
+            ? `En el paso 2 quedan ${euros(-desvioObjetivo)} menos que el fondo fijo (${euros(objetivo)}): estás retirando de más.`
+            : `En el paso 2 quedan ${euros(desvioObjetivo)} más que el fondo fijo (${euros(objetivo)}): estás retirando de menos.`}{" "}
           {(tubosContados.length > 0 || bolsasContadas.length > 0) &&
-            "Si el hueco es de un envase entero, ajústalo en «Cartuchos precintados» o «Bolsas precintadas». "}
-          Puedes cerrar así igualmente: el resto va al ingreso bancario.
+            "Si el hueco es de un envase entero, ajústalo en las columnas «cart.» o «bols.» del paso 1. "}
+          Puedes cerrar así igualmente: lo que retires es lo que va al banco.
         </Aviso>
       )}
 
       <div className="grid gap-3 lg:grid-cols-2">
-        <DenominationGrid
-          titulo="Cambio final (se queda en caja)"
-          denominaciones={denominaciones}
-          cantidades={cambioFinal}
-          onChange={setCambioFinal}
-          disponible={Object.fromEntries(sueltasContadas.map((l) => [l.valor, l.cantidad]))}
-          mostrarDisponible
-          /*
-           * El objetivo de la rejilla es el que queda DESPUÉS de los cartuchos:
-           * la rejilla solo cuenta monedas sueltas, así que con un tubo de 2,50 €
-           * apartado marcaba en ámbar «336,09 de 338,59» cuando el reparto era
-           * exacto. Descontarlos la deja en verde cuando de verdad cuadra.
-           */
-          objetivoCentimos={objetivo > 0 ? objetivo - valorTubosCambio : null}
-          deshabilitado={guardando}
-        />
+        <div className="space-y-2">
+          {/*
+            Paso 1: lo que se aparta para el banco. Es lo que se teclea, porque
+            es lo que se hace primero con las manos: separar del cajón lo que se
+            lleva uno. El paso 2 sale de restarlo, así que no hay dos cuentas
+            que puedan discrepar.
+          */}
+          <DenominationGrid
+            titulo="Paso 1 · Efectivo que se retira para el banco"
+            denominaciones={denominaciones}
+            cantidades={retirado}
+            onChange={setRetirado}
+            disponible={Object.fromEntries(sueltasContadas.map((l) => [l.valor, l.cantidad]))}
+            mostrarDisponible
+            cartuchos={cantidadesDesde(retiradoTubos)}
+            onCartuchosChange={(c) => setRetiradoTubos(lineasDesde(c))}
+            bolsas={cantidadesDesde(retiradoBolsas)}
+            onBolsasChange={(c) => setRetiradoBolsas(lineasDesde(c))}
+            disponibleCartuchos={Object.fromEntries(tubosContados.map((l) => [l.valor, l.cantidad]))}
+            disponibleBolsas={Object.fromEntries(bolsasContadas.map((l) => [l.valor, l.cantidad]))}
+            objetivoCentimos={aRetirar > 0 ? aRetirar : null}
+            deshabilitado={guardando}
+          />
+
+          {/*
+            Paso 2: lo que queda en el cajón. No se teclea —es una resta— y por
+            eso va apagado: si se pudiera tocar, volverían a ser dos cuentas que
+            hay que hacer coincidir a mano, que es justo lo que descuadraba.
+          */}
+          <DenominationGrid
+            titulo="Paso 2 · Cambio que se queda en caja"
+            denominaciones={denominaciones}
+            cantidades={cambioFinal}
+            onChange={() => {}}
+            cartuchos={cantidadesDesde(cambioFinalTubos)}
+            bolsas={cantidadesDesde(cambioFinalBolsas)}
+            objetivoCentimos={objetivo > 0 ? objetivo : null}
+            deshabilitado
+          />
+
+          <p className="text-[11px] text-slate-500">
+            El paso 2 no se teclea: es lo contado menos lo que retiras. Los dos suman siempre el
+            efectivo del arqueo, así que el cierre no puede quedarse a medias por un descuadre de
+            composición — si el paso 2 no da el fondo fijo, corrige el paso 1.
+          </p>
+        </div>
 
         <div className="space-y-3">
-        <PanelEnvases
-          titulo="Cartuchos precintados"
-          nombre="cartucho"
-          plural="cartuchos"
-          contados={tubosContados}
-          sequedan={cambioFinalTubos}
-          piezasDe={(d) => d?.piezasPorCartucho ?? 0}
-          denominaciones={denominaciones}
-          onFijar={(valor, n, contados) => fijarEnvases(setCambioFinalTubos, valor, n, contados)}
-          deshabilitado={guardando}
-        />
-
-        <PanelEnvases
-          titulo="Bolsas precintadas"
-          nombre="bolsa"
-          plural="bolsas"
-          contados={bolsasContadas}
-          sequedan={cambioFinalBolsas}
-          piezasDe={(d) => d?.piezasPorBolsa ?? 0}
-          denominaciones={denominaciones}
-          onFijar={(valor, n, contados) => fijarEnvases(setCambioFinalBolsas, valor, n, contados)}
-          deshabilitado={guardando}
-        />
 
         <div className="rounded-lg border border-slate-700 bg-slate-800">
           <div className="flex items-center justify-between border-b border-slate-700 px-3 py-2">
@@ -422,108 +524,6 @@ function pistaPrecintos(
   return partes.length > 0 ? `incluye ${partes.join(" y ")}` : undefined;
 }
 
-/**
- * Panel de envases precintados que se quedan en caja.
- *
- * Cartuchos y bolsas se reparten igual —el envase entero se queda o se va, no
- * se parte— así que comparten panel. Lo único que cambia entre los dos es de
- * dónde sale el número de piezas y cómo se llama la cosa en pantalla.
- */
-function PanelEnvases({
-  titulo,
-  nombre,
-  plural,
-  contados,
-  sequedan,
-  piezasDe,
-  denominaciones,
-  onFijar,
-  deshabilitado,
-}: {
-  titulo: string;
-  nombre: string;
-  plural: string;
-  contados: readonly LineaDenominacion[];
-  sequedan: readonly LineaDenominacion[];
-  piezasDe: (d: Denominacion | undefined) => number;
-  denominaciones: readonly Denominacion[];
-  onFijar: (valor: number, cantidad: number, contados: number) => void;
-  deshabilitado: boolean;
-}) {
-  if (contados.length === 0) return null;
-
-  return (
-    <div className="rounded-lg border border-slate-700 bg-slate-800">
-      <div className="border-b border-slate-700 px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">
-        {titulo}
-      </div>
-      <div className="divide-y divide-slate-700/60">
-        {contados.map((t) => {
-          const d = denominaciones.find((x) => x.valor === t.valor);
-          const quedan = sequedan.find((x) => x.valor === t.valor)?.cantidad ?? 0;
-          const valorEnvase = t.valor * piezasDe(d);
-          return (
-            <div key={t.valor} className="flex items-center gap-2 px-3 py-2 text-sm">
-              <div className="min-w-0">
-                <div className="font-bold tabular-nums text-slate-200">{d?.etiqueta}</div>
-                {/* Cuánto mueve cada envase: sin esto no se sabe qué cambia al pulsar. */}
-                <div className="text-[10px] tabular-nums text-slate-500">
-                  {t.cantidad} contado{t.cantidad === 1 ? "" : "s"} · {euros(valorEnvase)} cada uno
-                </div>
-              </div>
-
-              <div className="ml-auto flex shrink-0 items-center gap-1">
-                <span className="mr-1 text-[11px] text-slate-500">se quedan</span>
-                {/*
-                  Mismos botones −/+ de 44 px que la rejilla de monedas. Antes
-                  aquí solo había una cajita de texto: no parecía tocable, y
-                  quedarse un cartucho —lo normal— no se veía posible.
-                */}
-                <button
-                  type="button"
-                  aria-label={`Quitar un ${nombre} de ${d?.etiqueta} del cambio final`}
-                  onClick={() => onFijar(t.valor, quedan - 1, t.cantidad)}
-                  disabled={deshabilitado || quedan === 0}
-                  className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
-                >
-                  <Minus className="h-4 w-4" />
-                </button>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  aria-label={`${titulo} de ${d?.etiqueta} que se quedan en caja`}
-                  value={quedan === 0 ? "" : String(quedan)}
-                  placeholder="0"
-                  onChange={(e) =>
-                    onFijar(t.valor, Number(e.target.value.replace(/\D/g, "") || 0), t.cantidad)
-                  }
-                  onFocus={(e) => e.target.select()}
-                  disabled={deshabilitado}
-                  className="h-11 w-12 rounded-lg border border-slate-600 bg-slate-900 text-center text-sm font-bold tabular-nums text-slate-100 outline-none focus:ring-2 focus:ring-sky-500"
-                />
-                <button
-                  type="button"
-                  aria-label={`Añadir un ${nombre} de ${d?.etiqueta} al cambio final`}
-                  onClick={() => onFijar(t.valor, quedan + 1, t.cantidad)}
-                  disabled={deshabilitado || quedan >= t.cantidad}
-                  className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-30"
-                >
-                  <Plus className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <p className="px-3 py-2 text-[11px] text-slate-500">
-        Un envase entero se queda o se va: no se parte. Los {plural} que se quedan siguen
-        precintados mañana.
-      </p>
-    </div>
-  );
-}
-
 function Cerrada({ r }: { r: Awaited<ReturnType<typeof api.cerrarJornada>> }) {
   return (
     <div className="space-y-3">
@@ -542,14 +542,13 @@ function Cerrada({ r }: { r: Awaited<ReturnType<typeof api.cerrarJornada>> }) {
       </div>
 
       {/* El papeleo del día en un solo PDF: el cierre y los escaneos detrás. */}
-      <a
-        href={api.urlInformeCierre(r.sesion.id)}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white hover:bg-sky-500"
+      <BotonInforme
+        ruta={`/sessions/${r.sesion.id}/report.pdf`}
+        nombre={`cierre-${(r.sesion.fecha ?? "").slice(0, 10)}`}
+        className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50"
       >
-        <FileDown className="h-4 w-4" /> Informe de cierre con los justificantes
-      </a>
+        Informe de cierre con los justificantes
+      </BotonInforme>
     </div>
   );
 }

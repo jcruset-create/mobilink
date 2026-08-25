@@ -24,7 +24,25 @@ export type Denominacion = {
 
 export type LineaDenominacion = { valor: number; cantidad: number };
 
-export type Caja = { id: number; centro: string; nombre: string };
+export type Caja = {
+  id: number;
+  centro: string;
+  /**
+   * El taller al que pertenece, ya como vínculo y no como texto.
+   *
+   * `null` es «sin asignar»: la caja funciona igual, pero no se puede agrupar
+   * por taller. La pantalla de configuración lo avisa.
+   */
+  centroId: string | null;
+  nombre: string;
+  /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
+  codigo: string;
+  /**
+   * Fondo fijo del cajón: lo que esta caja tiene que tener SIEMPRE al empezar
+   * el día. 0 = sin fondo fijo, y entonces el cierre lo pregunta.
+   */
+  fondoObjetivoCentimos: number;
+};
 
 export type EstadoSesion =
   | "DRAFT"
@@ -244,7 +262,8 @@ export type FormaPagoConfig = {
 /** Justificante escaneado colgado de un cobro o un pago. */
 export type DocumentoOperacion = {
   id: number;
-  operationId: number;
+  /** null = documento de la jornada entera, no de una operación suelta. */
+  operationId: number | null;
   sessionId: number;
   nombre: string;
   mime: string;
@@ -287,6 +306,26 @@ export type IngresoBancario = {
   anuladoMotivo: string | null;
   /** Solo el último confirmado se puede anular: el remanente es una cadena. */
   esUltimo: boolean;
+};
+
+/** Canje de monedas del montón pendiente por billetes del cajón. */
+export type CanjeIngreso = {
+  monedasEntregadas: LineaDenominacion[];
+  billetesEntregados: LineaDenominacion[];
+  billetesRecibidos: LineaDenominacion[];
+  /** Lo que sube el ingreso: el valor de las monedas convertidas. */
+  valorMonedasCentimos: number;
+  valorCanjeCentimos: number;
+};
+
+export type PropuestaCanjeIngreso = {
+  pendiente: { billetes: LineaDenominacion[]; monedas: LineaDenominacion[] };
+  /** Lo que se puede ingresar hoy: solo los billetes del montón. */
+  ingresableCentimos: number;
+  /** Lo que se quedaría en tienda si no se canjea nada. */
+  enMonedasCentimos: number;
+  canje: CanjeIngreso | null;
+  sinJornadaAbierta: boolean;
 };
 
 export type PanelIngresos = {
@@ -394,6 +433,8 @@ export type SeccionConfig = {
   nombre: string;
   activa: boolean;
   porDefecto: boolean;
+  /** Tiene su propia caja en la ERP: su efectivo se arquea por separado. */
+  arqueaAparte: boolean;
   orden: number;
   usos: number;
 };
@@ -461,3 +502,11 @@ export const ETIQUETA_ESTADO_SESION: Record<EstadoSesion, string> = {
   REOPENED: "Reabierta",
   CANCELLED: "Anulada",
 };
+
+// ── Jerarquía de la red (MC Central, fase 1) ───────────────────────────────
+
+/** Agrupación de talleres dentro de una empresa. Opcional. */
+export type Zona = { id: string; nombre: string; activa: boolean; centros: number };
+
+/** Taller. Se da de alta en Administración; aquí solo se consulta y se agrupa. */
+export type Centro = { id: string; nombre: string; zonaId: string | null; activo: boolean };

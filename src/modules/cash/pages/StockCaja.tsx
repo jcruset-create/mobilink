@@ -83,7 +83,12 @@ function Grupo({
   sacos,
 }: {
   titulo: string;
-  denominaciones: { valor: number; etiqueta: string; piezasPorCartucho: number | null }[];
+  denominaciones: {
+    valor: number;
+    etiqueta: string;
+    piezasPorCartucho: number | null;
+    imagenUrl: string | null;
+  }[];
   porValor: Map<number, number>;
   sueltas: Map<number, number>;
   tubos: Map<number, number>;
@@ -112,6 +117,9 @@ function Grupo({
               key={d.valor}
               className={`flex items-center gap-3 px-3 py-1.5 ${cantidad === 0 ? "opacity-40" : ""}`}
             >
+              {d.imagenUrl && (
+                <img src={d.imagenUrl} alt="" className="h-6 w-8 shrink-0 object-contain" />
+              )}
               <span className="w-16 text-sm font-bold tabular-nums text-slate-200">{d.etiqueta}</span>
               <span className="text-lg font-black tabular-nums text-slate-100">×{cantidad}</span>
               {precintos.length > 0 && (

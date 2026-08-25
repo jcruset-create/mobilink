@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Link2, Download, CalendarClock, Coins, type LucideIcon } from "lucide-react";
+import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Link2, Download, CalendarClock, Coins, Network, Gauge, type LucideIcon } from "lucide-react";
 import logoMobilink from "../assets/logo-mobilink.png";
 // Copias a la medida del hub: los originales pesan 350-670 KB cada uno y aquí
 // se ven a 36 px de alto. Con cinco tarjetas con logo eso eran 2,4 MB de
@@ -10,6 +10,8 @@ import logoToolControl from "../assets/hub/logo-toolcontrol.png";
 import logoLicencias from "../assets/hub/logo-licencias.png";
 import logoSafety from "../assets/hub/logo-safety.png";
 import logoCash from "../assets/hub/logo-cash.png";
+import logoCentral from "../assets/hub/logo-central.png";
+import logoTachoCert from "../assets/hub/logo-tachocert.png";
 import emblemaTyreControl from "../assets/hub/emblema-tyrecontrol.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
@@ -31,6 +33,8 @@ const ICONOS: Record<string, LucideIcon> = {
   presencia: Clock,
   workplanner: CalendarClock,
   cash: Coins,
+  central: Network,
+  tacografos: Gauge,
 };
 
 /**
@@ -38,7 +42,7 @@ const ICONOS: Record<string, LucideIcon> = {
  * (llevan el nombre dentro), así que sustituyen al icono y al rótulo en vez de
  * meterse en el cuadradito: encajado en 36×36 no se leería.
  *
- * Los que no tienen logo -administración, almacén, Core, WorkPlanner,
+ * Los que no tienen ni logo ni marca compuesta -administración, almacén, Core,
  * asistencias, Central Pro y panel de taller- se quedan con su icono.
  */
 const LOGOS: Record<string, string> = {
@@ -46,6 +50,17 @@ const LOGOS: Record<string, string> = {
   toolcontrol: logoToolControl,
   safety: logoSafety,
   cash: logoCash,
+  central: logoCentral,
+  tacografos: logoTachoCert,
+};
+
+/**
+ * Módulos sin logotipo propio en fichero pero con marca reconocible: se compone
+ * con el logo de Mobilink y el nombre, tal como se ve dentro del propio módulo.
+ * En cuanto exista el PNG, basta con moverlo a LOGOS y quitarlo de aquí.
+ */
+const MARCAS_COMPUESTAS: Record<string, { nombre: string; color: string }> = {
+  workplanner: { nombre: "WORKPLANNER", color: "text-sky-400" },
 };
 
 /** Emblemas cuadrados: estos sí van dentro del recuadro del icono. */
@@ -63,6 +78,8 @@ const COLORES: Record<string, { bg: string; text: string }> = {
   presencia: { bg: "bg-cyan-500/15", text: "text-cyan-400" },
   workplanner: { bg: "bg-sky-500/15", text: "text-sky-400" },
   cash: { bg: "bg-emerald-500/15", text: "text-emerald-400" },
+  central: { bg: "bg-indigo-500/15", text: "text-indigo-400" },
+  tacografos: { bg: "bg-amber-500/15", text: "text-amber-400" },
 };
 
 const BASES: Record<string, string> = {
@@ -75,6 +92,8 @@ const BASES: Record<string, string> = {
   presencia: "/presencia",
   workplanner: "/workplanner",
   cash: "/cash",
+  central: "/central",
+  tacografos: "/tacografos",
 };
 
 function rutaModulo(modulo: string): string {
@@ -88,7 +107,12 @@ function rutaModulo(modulo: string): string {
 
 function rutaPantalla(modulo: string, pantalla: string): string {
   const base = BASES[modulo] ?? "/";
-  if (modulo === "administracion" || modulo === "tyrecontrol" || modulo === "cash") {
+  if (
+    modulo === "administracion" ||
+    modulo === "tyrecontrol" ||
+    modulo === "cash" ||
+    modulo === "central"
+  ) {
     return `${base}/${pantalla}`;
   }
   return pantalla === "dashboard" ? base : `${base}/${pantalla}`;
@@ -228,7 +252,16 @@ export default function InicioPage() {
               return (
                 <div key={t.modulo.key} className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
                   <div className="mb-2 flex items-center justify-between gap-2">
-                    {LOGOS[t.modulo.key] ? (
+                    {MARCAS_COMPUESTAS[t.modulo.key] ? (
+                      <div className="flex items-center gap-2">
+                        <img src={logoMobilink} alt="Mobilink" className="h-9 w-auto" />
+                        <span
+                          className={`text-[13px] font-black italic tracking-tight ${MARCAS_COMPUESTAS[t.modulo.key].color}`}
+                        >
+                          {MARCAS_COMPUESTAS[t.modulo.key].nombre}
+                        </span>
+                      </div>
+                    ) : LOGOS[t.modulo.key] ? (
                       // El logo ya lleva el nombre del módulo: no se repite al lado
                       <img
                         src={LOGOS[t.modulo.key]} alt={t.modulo.label}
