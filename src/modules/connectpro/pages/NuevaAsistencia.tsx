@@ -89,8 +89,15 @@ export default function NuevaAsistencia() {
         setVehicleTypes((r.vehicle_types ?? []).filter((t) => t.active));
       })
       .catch(() => {});
-    boFetch<{ data: Client[] }>("/clients").then((r) => setClients(r.data.filter((c) => c.active))).catch(() => {});
   }, []);
+
+  // Los clientes, los del centro elegido: el selector no puede ofrecer un
+  // cliente de otra central, que no tiene contrato aqui y no se podria
+  // facturar. Sin centro elegido salen todos, como antes.
+  useEffect(() => {
+    boFetch<{ data: Client[] }>("/clients", { centro })
+      .then((r) => setClients(r.data.filter((c) => c.active))).catch(() => {});
+  }, [centro]);
 
   useEffect(() => {
     if (centro == null) return;
@@ -243,7 +250,9 @@ export default function NuevaAsistencia() {
     setBusy(true);
     setError(null);
     try {
-      const row = await boFetch<{ id: number }>("/assistances", { method: "POST", body: buildBody(draft) });
+      // El mismo centro cuyo catalogo se ha usado para elegir los neumaticos:
+      // elegir de un catalogo y crear el aviso en otra central no puede pasar.
+      const row = await boFetch<{ id: number }>("/assistances", { method: "POST", body: buildBody(draft), centro });
       // Las fotos y mensajes recibidos por WhatsApp pasan a la asistencia creada
       if (capturaId) {
         await boFetch(`/whatsapp-capture/${capturaId}/link`, {
