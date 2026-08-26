@@ -729,6 +729,61 @@ async function crearEsquemaConnect(): Promise<void> {
     ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "manualByName" TEXT;
     ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "speedKmh" DOUBLE PRECISION;
     ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "positionText" TEXT;
+
+    -- Ficha del vehículo de asistencia. La matrícula ya estaba; la marca y el
+    -- modelo hacen falta para reconocerlo al llegar y para reclamar a la
+    -- aseguradora, y no vienen del sincronismo con el core.
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS make TEXT;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS model TEXT;
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS notes TEXT;
+    -- 'core' si la trae el sincronismo (Webfleet), 'manual' si se dio de alta
+    -- a mano. Un taller Lite no tiene GPS de flota: sus furgonetas son manuales.
+    ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'core';
+
+    -- Equipamiento. No es ficha: es lo que decide a qué furgoneta se manda un
+    -- servicio. Una rueda de camión no se cambia sin desmontadora, y mandar la
+    -- que no la lleva es un viaje perdido y un SLA incumplido.
+    ALTER TABLE connect_mobile_units
+      ADD COLUMN IF NOT EXISTS "workshopVan" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE connect_mobile_units
+      ADD COLUMN IF NOT EXISTS "truckTyreMachine" BOOLEAN NOT NULL DEFAULT false;
+
+    -- Fotos del vehículo de asistencia (rotulación, estado, equipamiento).
+    -- Tabla aparte y no una columna con una lista: así cada foto lleva quién
+    -- la subió y cuándo, que es lo que se pregunta cuando una no cuadra.
+    CREATE TABLE IF NOT EXISTS connect_mobile_unit_photos (
+      id SERIAL PRIMARY KEY,
+      "unitId" INTEGER NOT NULL REFERENCES connect_mobile_units(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      "storagePath" TEXT NOT NULL,
+      "fileName" TEXT,
+      "sizeBytes" INTEGER,
+      sha256 TEXT,
+      caption TEXT,
+      "uploadedBy" TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_unit_photos_unidad
+      ON connect_mobile_unit_photos ("unitId");
+
+    -- Fotos del taller. La categoría importa: quien manda un camión a las tres
+    -- de la mañana necesita ver el ACCESO, no la fachada bonita, y el conductor
+    -- que llega necesita reconocer la puerta.
+    CREATE TABLE IF NOT EXISTS connect_workshop_photos (
+      id SERIAL PRIMARY KEY,
+      "workshopId" INTEGER NOT NULL REFERENCES connect_workshops(id) ON DELETE CASCADE,
+      category TEXT NOT NULL DEFAULT 'otros', -- fachada | accesos | interior | otros
+      url TEXT NOT NULL,
+      "storagePath" TEXT NOT NULL,
+      "fileName" TEXT,
+      "sizeBytes" INTEGER,
+      sha256 TEXT,
+      caption TEXT,
+      "uploadedBy" TEXT,
+      "createdAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_connect_workshop_photos_taller
+      ON connect_workshop_photos ("workshopId");
     CREATE UNIQUE INDEX IF NOT EXISTS idx_connect_mobile_units_core
       ON connect_mobile_units ("coreVehicleId") WHERE "coreVehicleId" IS NOT NULL;
 
