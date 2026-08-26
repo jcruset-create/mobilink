@@ -4698,3 +4698,60 @@ describe.runIf(RUN)("cadena de herencia rota por un cierre a cero", () => {
     ).rejects.toMatchObject({ codigo: "SIN_CIERRE_ANTERIOR" });
   });
 });
+
+describe.runIf(RUN)("cierre que deja la caja vacía", () => {
+  async function cajaConFondoFijo(nombre: string): Promise<number> {
+    const caja = await crearCaja(nombre);
+    await db.query(`UPDATE cash_registers SET fondo_objetivo_centimos = 35000 WHERE id = $1`, [caja]);
+    return caja;
+  }
+
+  it("con fondo fijo configurado, mandar todo al banco pide confirmación", async () => {
+    // El despiste real: teclear el cierre con el fondo entero como «ingreso».
+    const caja = await cajaConFondoFijo("vacia-guarda");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 7 }],
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 7 }] });
+
+    await expect(
+      servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] })
+    ).rejects.toMatchObject({ codigo: "CIERRE_DEJA_CAJA_VACIA" });
+
+    // Confirmado en claro, se deja: vaciar la caja de verdad existe.
+    const r = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [],
+      permitirCajaVacia: true,
+    });
+    expect(r.totalIngresoCentimos).toBe(35000);
+    expect(r.totalCambioCentimos).toBe(0);
+  });
+
+  it("sin fondo fijo no pregunta nada: vaciar es lo normal", async () => {
+    const caja = await crearCaja("vacia-sin-fondo");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 2 }] });
+    const r = await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] });
+    expect(r.totalIngresoCentimos).toBe(10000);
+  });
+
+  it("dejar cambio no dispara la pregunta aunque haya fondo fijo", async () => {
+    const caja = await cajaConFondoFijo("vacia-normal");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 8 }],
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 8 }] });
+    const r = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 5000, cantidad: 7 }],
+    });
+    expect(r.totalCambioCentimos).toBe(35000);
+    expect(r.totalIngresoCentimos).toBe(5000);
+  });
+});

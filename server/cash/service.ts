@@ -1094,6 +1094,13 @@ export type EntradaCierre = {
   /** Arqueo que respalda el cierre. Si no se pasa, se usa el último guardado. */
   arqueoId?: number;
   notas?: string;
+  /**
+   * Confirmación explícita para cerrar dejando la caja a CERO cuando la caja
+   * tiene fondo fijo configurado. Vaciarla del todo casi nunca es lo que se
+   * quiere —el despiste real fue mandar el fondo entero al «ingreso» del
+   * cierre— y ese cero rompe además la herencia del día siguiente.
+   */
+  permitirCajaVacia?: boolean;
 };
 
 export type ResultadoCierre = {
@@ -1247,6 +1254,29 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
         valorDe(repartoTubos.ingresoBancario, porCartucho) +
         valorDe(repartoBolsas.ingresoBancario, porBolsa),
     };
+    /*
+     * Dejar la caja a 0,00 € teniendo fondo fijo configurado casi nunca es a
+     * propósito: el caso real fue teclear el cierre mandando el fondo entero
+     * al ingreso del banco, y ese cero además rompía la herencia del día
+     * siguiente. Se pide confirmación explícita en vez de prohibirlo, porque
+     * vaciar la caja de verdad existe (vacaciones, traslado).
+     */
+    if (reparto.totalCambio === 0 && reparto.totalIngreso > 0 && !e.permitirCajaVacia) {
+      const { rows: cajaCierre } = await client.query<{ fondo_objetivo_centimos: string }>(
+        `SELECT fondo_objetivo_centimos FROM cash_registers WHERE id = $1`,
+        [sesion.registerId]
+      );
+      const objetivo = Number(cajaCierre[0]?.fondo_objetivo_centimos ?? 0);
+      if (objetivo > 0) {
+        throw new ErrorCaja(
+          "CIERRE_DEJA_CAJA_VACIA",
+          `Este cierre manda todo al banco y deja la caja a 0,00 €, pero la caja tiene un fondo fijo de ${formatearEuros(objetivo)} €. ¿Seguro que no era cambio? Si de verdad quieres vaciarla, confírmalo.`,
+          409,
+          { objetivoCentimos: objetivo }
+        );
+      }
+    }
+
     const ahora = Date.now();
     const anio = Number(sesion.fecha.slice(0, 4));
 
