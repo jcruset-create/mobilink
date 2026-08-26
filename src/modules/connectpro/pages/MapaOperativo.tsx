@@ -62,11 +62,15 @@ type MapWorkshop = {
  * El color del taller en el mapa es el tipo de su empresa. No es adorno: dice
  * de un vistazo a quién se le está cargando el trabajo, que no es lo mismo un
  * taller del grupo que uno colaborador o uno externo.
+ *
+ * Se repinta la chincheta ENTERA, con el dibujo de la furgoneta y la llave,
+ * usando el PNG como máscara. Un contorno de color alrededor no se distinguía:
+ * a tamaño de mapa el ojo ve la chincheta, no su borde.
  */
 export const TIPOS_EMPRESA: Record<string, { label: string; color: string }> = {
   grupo: { label: "Del grupo", color: "#22c55e" },
   colaboradora: { label: "Colaboradora", color: "#eab308" },
-  externa: { label: "Externa", color: "#94a3b8" },
+  externa: { label: "Externa", color: "#f97316" },
 };
 const TIPO_POR_DEFECTO = TIPOS_EMPRESA.colaboradora;
 
@@ -223,13 +227,10 @@ function workshopIcon(zoom: number, nombre: string, color: string) {
   return L.divIcon({
     html: `
       <div style="text-align:center;width:${w}px">
-        <div style="position:relative;width:${s}px;height:${s}px;margin:0 auto">
-          <div style="position:absolute;inset:0;border-radius:50%;
-               background:${color};opacity:.30;border:2px solid ${color}"></div>
-          <img src="/marker-taller.png" alt="" width="${s}" height="${s}"
-               style="position:relative;display:block;width:${s}px;height:${s}px;max-width:none;
-               filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
-        </div>
+        <div style="width:${s}px;height:${s}px;margin:0 auto;background-color:${color};
+             -webkit-mask:url(/marker-taller.png) center/contain no-repeat;
+             mask:url(/marker-taller.png) center/contain no-repeat;
+             filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))"></div>
         ${labelHtml}
       </div>`,
     className: "",
@@ -601,8 +602,14 @@ export default function MapaOperativo() {
         <span className="text-slate-500">Talleres:</span>
         {Object.entries(TIPOS_EMPRESA).map(([tipo, { label, color }]) => (
           <span key={tipo} className="flex items-center gap-1.5">
-            <span className="inline-block h-3 w-3 rounded-full"
-                  style={{ background: color, opacity: 0.4, border: `2px solid ${color}` }} />
+            <span
+              className="inline-block h-4 w-4"
+              style={{
+                backgroundColor: color,
+                WebkitMask: "url(/marker-taller.png) center/contain no-repeat",
+                mask: "url(/marker-taller.png) center/contain no-repeat",
+              }}
+            />
             {label}
           </span>
         ))}
