@@ -4583,3 +4583,118 @@ describe.runIf(RUN)("anular una jornada abierta por error", () => {
     expect(rows[0].notas).toContain("abierta por error");
   });
 });
+
+describe.runIf(RUN)("cadena de herencia rota por un cierre a cero", () => {
+  it("el caso real: cierre bueno, cierre en falso a cero, y la siguiente hereda del bueno", async () => {
+    const caja = await crearCaja("cadena-rota");
+
+    // El 20 se cierra dejando 350 €.
+    const dia20 = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: "2026-08-20",
+      fondoManual: [{ valor: 5000, cantidad: 7 }],
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: dia20.sesion.id, contado: [{ valor: 5000, cantidad: 7 }] });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: dia20.sesion.id,
+      cambioFinal: [{ valor: 5000, cantidad: 7 }],
+    });
+
+    /*
+     * El 22, un cierre EN FALSO: jornada abierta por error, sin fondo, cerrada
+     * vacía — que era la única salida antes de que existiera anular. Deja el
+     * cambio a cero y rompía la cadena.
+     */
+    const falso = await servicio.abrirJornada(ctx, { registerId: caja, fecha: "2026-08-22", fondoManual: [] });
+    await servicio.guardarArqueo(ctx, { sessionId: falso.sesion.id, contado: [] });
+    await servicio.cerrarJornada(ctx, { sessionId: falso.sesion.id, cambioFinal: [] });
+
+    // La del 24 hereda del 20, saltándose el cierre a cero.
+    const dia24 = await servicio.abrirJornada(ctx, { registerId: caja, fecha: "2026-08-24" });
+    expect(dia24.sesion.fondoInicialHeredado).toBe(true);
+    expect(dia24.sesion.fondoInicialCentimos).toBe(35000);
+    expect(dia24.stock).toEqual([{ valor: 5000, cantidad: 7 }]);
+  });
+
+  it("la jornada ya abierta a cero puede traer el fondo del último cierre con cambio", async () => {
+    const caja = await crearCaja("traer-fondo");
+    const dia20 = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: "2026-08-20",
+      fondoManual: [{ valor: 5000, cantidad: 7 }],
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: dia20.sesion.id, contado: [{ valor: 5000, cantidad: 7 }] });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: dia20.sesion.id,
+      cambioFinal: [{ valor: 5000, cantidad: 7 }],
+    });
+    const falso = await servicio.abrirJornada(ctx, { registerId: caja, fecha: "2026-08-22", fondoManual: [] });
+    await servicio.guardarArqueo(ctx, { sessionId: falso.sesion.id, contado: [] });
+    await servicio.cerrarJornada(ctx, { sessionId: falso.sesion.id, cambioFinal: [] });
+
+    /*
+     * La del 24 en el estado EXACTO de producción: abierta antes del arreglo
+     * de la herencia, sin fondo y sin operación de apertura. Ya no se puede
+     * producir por el camino normal —la propia prueba anterior demuestra que
+     * ahora se hereda—, así que se fabrica: se abre (hereda) y se le quita el
+     * fondo por SQL, que es como quedó la de verdad.
+     */
+    const dia24 = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: "2026-08-24",
+      permitirFechaRepetida: true,
+    });
+    await db.query(
+      `DELETE FROM cash_denomination_movements
+        WHERE session_id = $1 AND motivo = 'OPENING_FLOAT'`,
+      [dia24.sesion.id]
+    );
+    await db.query(
+      `DELETE FROM cash_operations WHERE session_id = $1 AND tipo = 'OPENING_FLOAT'`,
+      [dia24.sesion.id]
+    );
+    await db.query(
+      `UPDATE cash_sessions
+          SET fondo_inicial_centimos = 0, fondo_inicial_heredado = false
+        WHERE id = $1`,
+      [dia24.sesion.id]
+    );
+    await servicio.registrarCobro(ctx, {
+      sessionId: dia24.sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      concepto: "Venta del papel",
+    });
+
+    // El candidato es el cierre del 20, no el del 22.
+    const candidato = await servicio.ultimoCierreConCambio(caja, "2026-08-24", dia24.sesion.id);
+    expect(candidato?.fecha).toBe("2026-08-20");
+    expect(candidato?.totalCentimos).toBe(35000);
+
+    const sesion = await servicio.traerFondoDeCierre(ctx, {
+      sessionId: dia24.sesion.id,
+      motivo: "cadena rota por el cierre en falso del 22",
+    });
+    expect(sesion.fondoInicialCentimos).toBe(35000);
+    expect(sesion.fondoInicialHeredado).toBe(true);
+
+    // El teórico: 350 heredados + 50 del cobro que ya estaba.
+    const stock = await servicio.stockDeJornada(dia24.sesion.id);
+    expect(stock.totalCentimos).toBe(40000);
+
+    // Y no se puede traer dos veces: lo duplicaría.
+    await expect(
+      servicio.traerFondoDeCierre(ctx, { sessionId: dia24.sesion.id, motivo: "otra vez" })
+    ).rejects.toMatchObject({ codigo: "JORNADA_YA_TIENE_FONDO" });
+  });
+
+  it("sin ningún cierre con cambio no hay nada que traer", async () => {
+    const caja = await crearCaja("sin-candidato");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: [] });
+    expect(await servicio.ultimoCierreConCambio(caja, sesion.fecha, sesion.id)).toBeNull();
+    await expect(
+      servicio.traerFondoDeCierre(ctx, { sessionId: sesion.id, motivo: "no hay" })
+    ).rejects.toMatchObject({ codigo: "SIN_CIERRE_ANTERIOR" });
+  });
+});
