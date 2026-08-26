@@ -205,6 +205,40 @@ export default function Talleres() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [openLite, setOpenLite] = useState<number | null>(null);
+  /*
+   * Editar un taller desde el listado.
+   *
+   * Los datos de contacto y ubicacion cambian a menudo -un telefono nuevo, el
+   * codigo postal que faltaba- y hasta ahora solo se podian arreglar
+   * volviendolo a dar de alta. Se abre bajo su fila y se guarda de una vez.
+   */
+  const [openEdit, setOpenEdit] = useState<number | null>(null);
+  const [edit, setEdit] = useState<Record<string, string>>({});
+
+  const CAMPOS_TALLER: [string, string][] = [
+    ["name", "Nombre"], ["phone", "Teléfono"], ["email", "Email"],
+    ["address", "Dirección"], ["postalCode", "CP"], ["city", "Municipio"],
+    ["province", "Provincia"], ["commercialNetwork", "Red comercial"],
+    ["openingHours", "Horario"], ["radiusKm", "Radio (km)"],
+  ];
+
+  const abrirEdicion = (w: Workshop) => {
+    setOpenEdit(w.id);
+    setEdit(Object.fromEntries(
+      CAMPOS_TALLER.map(([c]) => [c, String((w as any)[c] ?? "")])));
+  };
+
+  const guardarTaller = async (w: Workshop) => {
+    if (!edit.name?.trim()) { setError("El taller necesita un nombre."); return; }
+    const radio = Number(edit.radiusKm);
+    if (!Number.isFinite(radio) || radio <= 0) { setError("El radio tiene que ser un número de kilómetros."); return; }
+    setBusy(true); setError(null);
+    try {
+      await boFetch(`/workshops/${w.id}`, { method: "PATCH", body: { ...edit, radiusKm: radio } });
+      setOpenEdit(null);
+      load();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
   const [form, setForm] = useState(FORM_VACIO);
   const formRef = useRef<HTMLDivElement>(null);
 
@@ -369,7 +403,7 @@ export default function Talleres() {
         <Card className="overflow-x-auto">
           <table className="w-full">
             <thead><tr className="border-b border-slate-700">
-              <Th>Taller</Th><Th>Empresa</Th><Th>Ubicación</Th><Th>Producto</Th><Th>Red Mobilink</Th><Th>Teléfono</Th><Th>Radio</Th><Th>Estado</Th><Th>Score</Th>
+              <Th>Taller</Th><Th>Empresa</Th><Th>Ubicación</Th><Th>Producto</Th><Th>Red Mobilink</Th><Th>Teléfono</Th><Th>Radio</Th><Th>Estado</Th><Th>Score</Th>{canEdit && <Th></Th>}
             </tr></thead>
             <tbody>
               {rows.map((w) => (
@@ -438,10 +472,44 @@ export default function Talleres() {
                       </Badge>
                     </Td>
                     <Td>{Math.round(w.currentScore)}/100</Td>
+                    {canEdit && (
+                      <Td>
+                        <button
+                          className="rounded-lg border border-slate-600 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700"
+                          onClick={() => (openEdit === w.id ? setOpenEdit(null) : abrirEdicion(w))}
+                        >
+                          {openEdit === w.id ? "Cerrar" : "✎ Editar"}
+                        </button>
+                      </Td>
+                    )}
                   </tr>
+                  {openEdit === w.id && canEdit && (
+                    <tr>
+                      <td colSpan={10} className="bg-slate-900/40 p-3">
+                        <div className="flex flex-wrap items-end gap-2">
+                          {CAMPOS_TALLER.map(([campo, etiqueta]) => (
+                            <label key={campo} className="flex flex-col gap-1">
+                              <span className="text-[11px] uppercase tracking-wide text-slate-500">{etiqueta}</span>
+                              <Input
+                                value={edit[campo] ?? ""}
+                                className={campo === "name" || campo === "address" ? "w-64" : "w-40"}
+                                onChange={(e) => setEdit({ ...edit, [campo]: e.target.value })}
+                              />
+                            </label>
+                          ))}
+                          <Button disabled={busy} onClick={() => guardarTaller(w)}>Guardar cambios</Button>
+                          <Button variant="ghost" disabled={busy} onClick={() => setOpenEdit(null)}>Cancelar</Button>
+                        </div>
+                        <p className="mt-2 text-[12px] text-slate-500">
+                          El producto y la adhesión a la red se cambian desde su columna, que llevan
+                          su propio registro de quién y cuándo.
+                        </p>
+                      </td>
+                    </tr>
+                  )}
                   {openLite === w.id && (
                     <tr>
-                      <td colSpan={9} className="bg-slate-900/40 p-2">
+                      <td colSpan={canEdit ? 10 : 9} className="bg-slate-900/40 p-2">
                         <LitePanel workshop={w} canEdit={canEdit} onError={setError} />
                       </td>
                     </tr>

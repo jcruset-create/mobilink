@@ -619,7 +619,10 @@ export function createConnectBackofficeRouter(): Router {
       ),
       db.query(
         `SELECT w.*,
-                (SELECT COUNT(*)::int FROM connect_mobile_units mu WHERE mu."workshopId" = w.id) AS units,
+                -- Solo lo compartido, como la tabla: un recuento de lo que no
+                -- se ve sigue diciendo cuantas furgonetas tiene la empresa.
+                (SELECT COUNT(*)::int FROM connect_mobile_units mu
+                  WHERE mu."workshopId" = w.id AND mu."sharedWithCentral" = true) AS units,
                 (SELECT COUNT(*)::int FROM connect_lite_users lu WHERE lu."workshopId" = w.id AND lu.active) AS "liteUsers",
                 (SELECT COUNT(*)::int FROM connect_assistances ca
                   WHERE ca."workshopId" = w.id
@@ -631,7 +634,8 @@ export function createConnectBackofficeRouter(): Router {
         `SELECT COUNT(*)::int AS total,
                 COUNT(*) FILTER (WHERE status IN ('available','at_base'))::int AS available,
                 COUNT(*) FILTER (WHERE "connectionStatus" = 'offline')::int AS offline
-           FROM connect_mobile_units WHERE "providerCompanyId" = $1`,
+           FROM connect_mobile_units
+          WHERE "providerCompanyId" = $1 AND "sharedWithCentral" = true`,
         [id],
       ),
       db.query(
@@ -695,7 +699,7 @@ export function createConnectBackofficeRouter(): Router {
          FROM connect_mobile_units mu
          LEFT JOIN connect_provider_companies pc ON pc.id = mu."providerCompanyId"
          LEFT JOIN connect_assistances ca ON ca.id = mu."activeAssistanceId"
-        WHERE mu."workshopId" = $1
+        WHERE mu."workshopId" = $1 AND mu."sharedWithCentral" = true
         ORDER BY mu.name`,
       [Number(req.params.id)],
     );
@@ -3269,13 +3273,43 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
 
   // ── Unidades móviles (Fase 3) ─────────────────────────────
 
+  /*
+   * Solo lo compartido. Una unidad que el taller no comparte no es un dato
+   * que Central pueda manejar: su posicion, su matricula y su tecnico son de
+   * la empresa propietaria, y el filtro va en el SQL y no en la pantalla
+   * porque ocultar en el navegador deja el dato viajando en la respuesta,
+   * donde cualquiera lo lee.
+   */
   router.get("/mobile-units", ...requireConnectRole("operator"), async (_req, res) => {
     const r = await db.query(
       `SELECT mu.*, pc.name AS "providerName", ca."expedientNumber"
          FROM connect_mobile_units mu
          LEFT JOIN connect_provider_companies pc ON pc.id = mu."providerCompanyId"
          LEFT JOIN connect_assistances ca ON ca.id = mu."activeAssistanceId"
+        WHERE mu."sharedWithCentral" = true
         ORDER BY mu.name`,
+    );
+    res.json({ data: r.rows });
+  });
+
+  /*
+   * El cuadro de mando de qué se comparte: NOMBRE y poco más.
+   *
+   * Existe porque, con el filtro de arriba, una unidad que se deja de
+   * compartir desaparece de la pantalla y nadie podría volver a activarla:
+   * el interruptor se habría quedado del otro lado de la puerta que cierra.
+   * Va sin posición, sin matrícula, sin técnico y sin estado — lo que hace
+   * falta para decidir a quién se le devuelve el permiso y nada más — y solo
+   * para quien administra la central.
+   */
+  router.get("/mobile-units/sharing", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const workshopId = req.query?.workshopId != null ? Number(req.query.workshopId) : null;
+    const r = await db.query(
+      `SELECT mu.id, mu.name, mu."sharedWithCentral", mu."sharedChangedBy", mu."sharedChangedAtMs"
+         FROM connect_mobile_units mu
+        WHERE ($1::int IS NULL OR mu."workshopId" = $1)
+        ORDER BY mu."sharedWithCentral", mu.name`,
+      [Number.isInteger(workshopId) && workshopId! > 0 ? workshopId : null],
     );
     res.json({ data: r.rows });
   });

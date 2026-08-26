@@ -41,7 +41,28 @@ const KPI_LABELS: Record<string, string> = {
   avgWorkMin: "Trabajo (min)", avgStatusQuality: "Calidad de estados",
 };
 
-const TABS = ["Operarios", "Unidades móviles", "KPIs", "Asistencias"] as const;
+const TABS = ["Ficha", "Operarios", "Unidades móviles", "KPIs", "Asistencias"] as const;
+
+/*
+ * Los datos del taller, en el orden en que se preguntan al darlo de alta.
+ * La ubicación va aquí y no solo en el alta porque un taller se muda, y hasta
+ * ahora mover el punto del mapa obligaba a borrarlo y volverlo a crear.
+ */
+const CAMPOS_TALLER: [string, string, string][] = [
+  ["name", "Nombre", "w-72"],
+  ["phone", "Teléfono", "w-40"],
+  ["email", "Email", "w-64"],
+  ["address", "Dirección", "w-72"],
+  ["postalCode", "Código postal", "w-28"],
+  ["city", "Municipio", "w-48"],
+  ["province", "Provincia", "w-40"],
+  ["commercialNetwork", "Red comercial", "w-48"],
+  ["openingHours", "Horario", "w-64"],
+  ["latitude", "Latitud", "w-32"],
+  ["longitude", "Longitud", "w-32"],
+  ["radiusKm", "Radio (km)", "w-24"],
+  ["notes", "Notas", "w-full"],
+];
 
 export default function FichaTaller() {
   const { id: empresaId, wid } = useParams();
@@ -50,7 +71,9 @@ export default function FichaTaller() {
   const canOperate = hasRole(user, "operator");
 
   const [w, setW] = useState<Workshop | null>(null);
-  const [tab, setTab] = useState<(typeof TABS)[number]>("Operarios");
+  const [tab, setTab] = useState<(typeof TABS)[number]>("Ficha");
+  /** Borrador de la ficha mientras se edita; null cuando solo se está mirando. */
+  const [edicion, setEdicion] = useState<Record<string, string> | null>(null);
   const [operators, setOperators] = useState<Operator[]>([]);
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [asistencias, setAsistencias] = useState<any[]>([]);
@@ -70,6 +93,33 @@ export default function FichaTaller() {
       boFetch<{ data: any[] }>(`/assistances?workshopId=${wid}&limit=50`).then((r) => setAsistencias(r.data)).catch(() => {});
     }
   }, [tab, wid]);
+
+  /*
+   * Guardar la ficha entera. La ubicación viaja como número porque el
+   * servidor la rechaza de otro modo: un taller con la latitud en blanco
+   * dejaría de encontrarse en las búsquedas por cercanía.
+   */
+  const guardarFicha = async () => {
+    if (!edicion) return;
+    const lat = Number(edicion.latitude);
+    const lng = Number(edicion.longitude);
+    const radio = Number(edicion.radiusKm);
+    if (!edicion.name?.trim()) { setError("El taller necesita un nombre."); return; }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      setError("Latitud y longitud tienen que ser números: sin ubicación el taller no se encuentra por cercanía.");
+      return;
+    }
+    if (!Number.isFinite(radio) || radio <= 0) { setError("El radio tiene que ser un número de kilómetros."); return; }
+    setBusy(true); setError(null);
+    try {
+      await boFetch(`/workshops/${wid}`, {
+        method: "PATCH",
+        body: { ...edicion, latitude: lat, longitude: lng, radiusKm: radio },
+      });
+      setEdicion(null);
+      load();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
 
   const añadirContacto = async () => {
     if (!contacto.name.trim()) { setError("El nombre del contacto es obligatorio."); return; }
@@ -151,6 +201,62 @@ export default function FichaTaller() {
         ))}
       </div>
 
+      {tab === "Ficha" && (
+        <div className="flex flex-col gap-3">
+          {canEdit && (
+            <div className="flex items-center gap-2">
+              {edicion === null ? (
+                <Button variant="ghost" onClick={() => setEdicion(Object.fromEntries(
+                  CAMPOS_TALLER.map(([c]) => [c, String((w as any)[c] ?? "")])))}>
+                  ✎ Editar ficha
+                </Button>
+              ) : (
+                <>
+                  <Button disabled={busy} onClick={guardarFicha}>Guardar cambios</Button>
+                  <Button variant="ghost" disabled={busy} onClick={() => setEdicion(null)}>Cancelar</Button>
+                  <span className="text-[12px] text-slate-500">
+                    Se guarda todo de una vez; lo que dejes en blanco se borra.
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+
+          <Card className="p-4">
+            <h3 className="mb-3 text-sm font-semibold text-cyan-300">Datos del taller</h3>
+            {edicion === null ? (
+              <div className="grid grid-cols-1 gap-x-8 gap-y-1 md:grid-cols-2">
+                {CAMPOS_TALLER.map(([campo, etiqueta]) => (
+                  <div key={campo} className="flex items-baseline gap-2 border-b border-slate-700/40 py-1.5 text-[13px]">
+                    <span className="w-36 shrink-0 text-slate-500">{etiqueta}</span>
+                    <span className="text-slate-200">
+                      {String((w as any)[campo] ?? "") || <span className="text-slate-600">—</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-end gap-2">
+                {CAMPOS_TALLER.map(([campo, etiqueta, ancho]) => (
+                  <label key={campo} className={`flex flex-col gap-1 ${campo === "notes" ? "w-full" : ""}`}>
+                    <span className="text-[11px] uppercase tracking-wide text-slate-500">{etiqueta}</span>
+                    <Input
+                      value={edicion[campo] ?? ""}
+                      className={ancho}
+                      onChange={(e) => setEdicion({ ...edicion, [campo]: e.target.value })}
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+            <p className="mt-3 text-[12px] text-slate-500">
+              El producto (Assist, Lite o externo) y la adhesión a la red se cambian desde el listado
+              de talleres: llevan su propio registro de quién los cambió y cuándo.
+            </p>
+          </Card>
+        </div>
+      )}
+
       {tab === "Operarios" && (
         <div className="flex flex-col gap-4">
           {operators.length === 0 ? (
@@ -193,7 +299,7 @@ export default function FichaTaller() {
             <LitePanel workshop={w as any} canEdit={canEdit} onError={setError} />
           </div>
         ) : (
-          <TablaUnidades endpoint={`/workshops/${wid}/mobile-units`} canMove={canEdit} workshops={w ? [{ id: w.id, name: w.name }] : []} />
+          <TablaUnidades endpoint={`/workshops/${wid}/mobile-units`} canMove={canEdit} workshops={w ? [{ id: w.id, name: w.name }] : []} workshopId={Number(wid)} />
         )
       )}
 

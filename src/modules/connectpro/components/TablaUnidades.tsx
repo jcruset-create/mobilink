@@ -45,13 +45,20 @@ export const UNIT_STATUS: Record<string, { label: string; cls: string }> = {
 
 const MANUAL_OPTIONS = ["unavailable", "out_of_service", "breakdown", "resting", "shift_ended", "waiting_material"];
 
-export default function TablaUnidades({ endpoint, canMove = false, workshops = [] }: {
+type Compartir = {
+  id: number; name: string; sharedWithCentral: boolean;
+  sharedChangedBy: string | null; sharedChangedAtMs: number | null;
+};
+
+export default function TablaUnidades({ endpoint, canMove = false, workshops = [], workshopId = null }: {
   /** De dónde leer: "/mobile-units" o "/workshops/:id/mobile-units". */
   endpoint: string;
   /** Permite mover unidades a otro taller (cc_admin). */
   canMove?: boolean;
   /** Talleres de destino para el selector de mover. */
   workshops?: { id: number; name: string }[];
+  /** Taller al que se limita el cuadro de lo compartido, si es la ficha de uno. */
+  workshopId?: number | null;
 }) {
   const [rows, setRows] = useState<Unit[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +66,9 @@ export default function TablaUnidades({ endpoint, canMove = false, workshops = [
   const [editing, setEditing] = useState<number | null>(null);
   const [moving, setMoving] = useState<number | null>(null);
   const [manual, setManual] = useState({ status: "unavailable", reason: "" });
+  // Lo que el taller NO comparte: aquí solo el nombre, para poder devolverle
+  // el permiso. Ni posición, ni matrícula, ni técnico, ni estado.
+  const [compartir, setCompartir] = useState<Compartir[] | null>(null);
 
   const load = useCallback(() => {
     boFetch<{ data: Unit[] }>(endpoint).then((r) => setRows(r.data)).catch((e) => setError(e.message));
@@ -98,9 +108,77 @@ export default function TablaUnidades({ endpoint, canMove = false, workshops = [
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
 
+  /* Solo lo pide quien administra: para el resto el endpoint responde 403. */
+  const abrirCompartir = async () => {
+    setError(null);
+    try {
+      const r = await boFetch<{ data: Compartir[] }>(
+        `/mobile-units/sharing${workshopId != null ? `?workshopId=${workshopId}` : ""}`);
+      setCompartir(r.data);
+    } catch (e: any) { setError(e.message); }
+  };
+
+  const cambiarCompartir = async (id: number, shared: boolean) => {
+    setBusy(true); setError(null);
+    try {
+      await boFetch(`/mobile-units/${id}/share`, { method: "PATCH", body: { shared } });
+      await abrirCompartir();
+      load();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  const cuadroCompartir = (
+    <div className="mt-2 text-[12px]">
+      {compartir === null ? (
+        <button onClick={abrirCompartir} className="text-slate-500 hover:text-slate-300 hover:underline">
+          Gestionar qué unidades comparte el taller
+        </button>
+      ) : (
+        <Card className="p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="font-semibold text-slate-300">Unidades compartidas con Central</span>
+            <button onClick={() => setCompartir(null)} className="text-slate-500 hover:text-slate-300">✕</button>
+          </div>
+          <p className="mb-2 text-slate-500">
+            Lo que no se comparte no aparece en la tabla y Central no ve ni su posición, ni su
+            matrícula, ni su técnico. Aquí solo está el nombre, para poder devolver el permiso.
+          </p>
+          {compartir.length === 0 ? (
+            <span className="text-slate-500">No hay unidades.</span>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {compartir.map((c) => (
+                <div key={c.id} className="flex items-center gap-2">
+                  <button
+                    disabled={busy}
+                    onClick={() => cambiarCompartir(c.id, !c.sharedWithCentral)}
+                    className={`rounded-full border px-2 py-0.5 text-[11px] ${c.sharedWithCentral
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                      : "border-slate-600 bg-slate-800 text-slate-400"}`}
+                  >
+                    {c.sharedWithCentral ? "Compartida ✓" : "No compartida"}
+                  </button>
+                  <span className="text-slate-300">{c.name}</span>
+                  {c.sharedChangedBy && (
+                    <span className="text-[11px] text-slate-600">· {c.sharedChangedBy}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+
   if (error && rows.length === 0) return <ErrorBanner message={error} onClose={() => setError(null)} />;
   if (rows.length === 0) {
-    return <EmptyState message="Sin unidades sincronizadas (se cargan automáticamente desde los vehículos del taller y Webfleet)." />;
+    return (
+      <>
+        <EmptyState message="Ninguna unidad compartida con Central. El taller decide cuáles comparte; las que no comparte no se ven desde aquí." />
+        {canMove && cuadroCompartir}
+      </>
+    );
   }
 
   return (
@@ -130,7 +208,7 @@ export default function TablaUnidades({ endpoint, canMove = false, workshops = [
                   <Td>
                     <button
                       disabled={busy}
-                      title={u.sharedChangedBy ? `Último cambio: ${u.sharedChangedBy}` : "El taller decide qué unidades comparte con Central"}
+                      title={u.sharedChangedBy ? `Último cambio: ${u.sharedChangedBy}` : "Dejar de compartir con Central: la unidad desaparece de esta pantalla"}
                       onClick={async () => {
                         setBusy(true); setError(null);
                         try { await boFetch(`/mobile-units/${u.id}/share`, { method: "PATCH", body: { shared: !u.sharedWithCentral } }); load(); }
@@ -196,6 +274,7 @@ export default function TablaUnidades({ endpoint, canMove = false, workshops = [
           </tbody>
         </table>
       </Card>
+      {canMove && cuadroCompartir}
     </>
   );
 }
