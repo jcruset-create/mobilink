@@ -580,6 +580,12 @@ async function crearEsquemaConnect(): Promise<void> {
     -- ============================================================
 
     -- Ficha completa de la empresa (datos fiscales y de facturación)
+    -- Qué es esta empresa para nosotros. Pinta sus talleres en el mapa y, sobre
+    -- todo, dice de un vistazo a quién se está mandando el servicio: no es lo
+    -- mismo cargar trabajo en un taller del grupo que en uno colaborador.
+    ALTER TABLE connect_provider_companies
+      ADD COLUMN IF NOT EXISTS "companyType" TEXT NOT NULL DEFAULT 'colaboradora';
+
     ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "legalName" TEXT;
     ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "taxId" TEXT;
     ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS address TEXT;

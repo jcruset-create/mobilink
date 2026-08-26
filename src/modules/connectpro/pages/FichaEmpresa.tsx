@@ -24,6 +24,8 @@ type Provider = {
   web: string | null; billingEmail: string | null;
   contactEmail: string | null; contactPhone: string | null;
   status: string; notes: string | null; createdAtMs: number;
+  /** grupo | colaboradora | externa — el color de sus talleres en el mapa. */
+  companyType: string | null;
 };
 
 type WorkshopRow = {
@@ -148,6 +150,10 @@ export default function FichaEmpresa() {
    * sola escritura, que ademas deja UNA linea en la auditoria en vez de once.
    */
   const [edicion, setEdicion] = useState<Record<string, string> | null>(null);
+
+  const TIPOS_EMPRESA: [string, string][] = [
+    ["grupo", "Del grupo"], ["colaboradora", "Colaboradora"], ["externa", "Externa"],
+  ];
 
   const CAMPOS_FICHA = [
     "legalName", "taxId", "address", "city", "postalCode", "province",
@@ -304,6 +310,24 @@ export default function FichaEmpresa() {
           )}
           <Card className="p-4">
             <h3 className="mb-2 text-sm font-semibold text-cyan-300">Datos fiscales</h3>
+            <div className="flex items-center gap-2 border-b border-slate-700/40 py-1.5 text-[13px]">
+              <span className="w-40 shrink-0 text-slate-500">Tipo de empresa</span>
+              {canEdit ? (
+                <Select
+                  value={p.companyType ?? "colaboradora"}
+                  onChange={(e) => patch({ companyType: e.target.value })}
+                >
+                  {TIPOS_EMPRESA.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+                </Select>
+              ) : (
+                <span className="text-slate-200">
+                  {TIPOS_EMPRESA.find(([c]) => c === (p.companyType ?? "colaboradora"))?.[1]}
+                </span>
+              )}
+              <span className="text-[11px] text-slate-500">
+                Pinta sus talleres en el mapa: del grupo en verde, colaboradora en amarillo, externa en gris.
+              </span>
+            </div>
             <Campo label="Razón social" value={p.legalName} canEdit={canEdit} edicion={edicion} campo="legalName" onEdit={setEdicion} onSave={(v) => patch({ legalName: v })} />
             <Campo label="CIF / NIF" value={p.taxId} canEdit={canEdit} edicion={edicion} campo="taxId" onEdit={setEdicion} onSave={(v) => patch({ taxId: v })} />
             <Campo label="Dirección" value={p.address} canEdit={canEdit} edicion={edicion} campo="address" onEdit={setEdicion} onSave={(v) => patch({ address: v })} />
