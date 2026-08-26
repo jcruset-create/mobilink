@@ -101,6 +101,17 @@ export default function JornadaActual() {
         {vacia && puede("cash.operation.reverse") && <AnularJornada sessionId={s.id} />}
       </div>
 
+      {/*
+        La jornada amaneció sin fondo pero hay un cierre anterior que dejó
+        cambio: la cadena de herencia se rompió —lo típico, un cierre en falso
+        a cero— y el dinero sigue físicamente en el cajón. Se ofrece traerlo
+        en vez de dejar que el arqueo descuadre por el importe exacto del
+        cambio y nadie sepa de dónde sale.
+      */}
+      {s.fondoInicialCentimos === 0 && puede("cash.open_session") && (
+        <FondoPerdido sessionId={s.id} />
+      )}
+
       {/* Dinero que no está en el cajón y se espera de vuelta. Va arriba a
           propósito: si falta y no se ve, el arqueo parece un descuadre. */}
       <AvisoPendientes compacto />
@@ -691,5 +702,75 @@ function AnularJornada({ sessionId }: { sessionId: number }) {
         </Modal>
       )}
     </>
+  );
+}
+
+/**
+ * Aviso con el cambio del último cierre que lo dejó, y el botón para traerlo.
+ *
+ * Solo aparece si la jornada está a cero Y existe ese cierre: sin candidato no
+ * hay nada que ofrecer y el aviso sería ruido en la primera jornada de una
+ * caja nueva, que legítimamente empieza vacía.
+ */
+function FondoPerdido({ sessionId }: { sessionId: number }) {
+  const { refrescar } = useCash();
+  const [candidato, setCandidato] = useState<
+    Awaited<ReturnType<typeof api.fondoHeredable>>["candidato"]
+  >(null);
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  useEffect(() => {
+    let vivo = true;
+    api
+      .fondoHeredable(sessionId)
+      .then((r) => {
+        if (vivo) setCandidato(r.candidato);
+      })
+      .catch(() => {
+        /* sin candidato no hay aviso; un fallo aquí no debe romper la pantalla */
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [sessionId]);
+
+  if (!candidato) return null;
+
+  async function traer() {
+    if (!candidato) return;
+    setOcupado(true);
+    setError("");
+    try {
+      await api.traerFondoDeCierre(
+        sessionId,
+        `Cambio del cierre del ${candidato.fecha}, no heredado al abrir`
+      );
+      await refrescar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido traer el fondo");
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Aviso tono="aviso">
+      <div className="flex flex-wrap items-center gap-2">
+        <span>
+          Esta jornada ha empezado <strong>sin fondo</strong>, pero el cierre del{" "}
+          <strong>{candidato.fecha}</strong> dejó{" "}
+          <strong>{euros(candidato.totalCentimos)}</strong> de cambio en el cajón. Si ese dinero
+          sigue ahí, tráelo como fondo inicial.
+        </span>
+        <button
+          onClick={() => void traer()}
+          disabled={ocupado}
+          className="rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-amber-500 disabled:opacity-50"
+        >
+          {ocupado ? "Trayendo…" : `Traer ${euros(candidato.totalCentimos)} como fondo`}
+        </button>
+        {error && <span className="text-[12px] text-rose-300">{error}</span>}
+      </div>
+    </Aviso>
   );
 }

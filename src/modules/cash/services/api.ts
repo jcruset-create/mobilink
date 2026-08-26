@@ -450,6 +450,19 @@ export const reabrirJornada = (sessionId: number, motivo: string) =>
 export const anularJornada = (sessionId: number, motivo: string) =>
   pedir<{ sesion: Sesion }>(`/sessions/${sessionId}/void`, json({ motivo }));
 
+export const fondoHeredable = (sessionId: number) =>
+  pedir<{
+    candidato: {
+      sesionId: number;
+      fecha: string;
+      totalCentimos: number;
+      composicion: LineaDenominacion[];
+    } | null;
+  }>(`/sessions/${sessionId}/inheritable-float`);
+
+export const traerFondoDeCierre = (sessionId: number, motivo: string) =>
+  pedir<{ sesion: Sesion }>(`/sessions/${sessionId}/inherit-float`, json({ motivo }));
+
 /**
  * Propuesta de cambio. Es una consulta: no reserva nada, y por eso la
  * confirmación vuelve a validar en el servidor con la jornada bloqueada.

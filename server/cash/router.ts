@@ -1345,6 +1345,46 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Qué cierre traería el fondo, sin tocar nada: la pantalla lo enseña antes
+   * de que nadie confirme.
+   */
+  r.get(
+    "/sessions/:id/inheritable-float",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const sessionId = enteroPositivo(req.params.id, "id");
+      const sesion = await obtenerSesion(sessionId);
+      if (!sesion || sesion.empresaId !== req.authCtx!.empresaId) {
+        throw new ErrorCaja("JORNADA_NO_ENCONTRADA", "La jornada no existe.", 404);
+      }
+      res.json({
+        candidato: await servicio.ultimoCierreConCambio(sesion.registerId, sesion.fecha, sessionId),
+      });
+    })
+  );
+
+  /**
+   * Traer a la jornada abierta el cambio del último cierre que lo dejó. Para
+   * la jornada que amaneció a 0,00 € porque la cadena de herencia se rompió
+   * con un cierre en falso.
+   */
+  r.post(
+    "/sessions/:id/inherit-float",
+    exigirPermiso("cash.open_session"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        sesion: await servicio.traerFondoDeCierre(contexto(req), {
+          sessionId: enteroPositivo(req.params.id, "id"),
+          sesionOrigenId:
+            b.sesionOrigenId === undefined ? undefined : enteroPositivo(b.sesionOrigenId, "sesionOrigenId"),
+          motivo: String(b.motivo ?? ""),
+        }),
+      });
+    })
+  );
+
   // ── Cobros ───────────────────────────────────────────────────────────────
   r.post(
     "/collections",
