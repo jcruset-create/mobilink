@@ -1785,7 +1785,11 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       const { row } = await createAssistance({
         origin: "manual",
         draft: b.draft === true,
-        controlCenterId: u.controlCenterId,
+        // El centro es el propio de quien da el alta; el superadministrador no
+        // tiene, y para el es el que venga indicado. Sin esto, el alta de un
+        // superadministrador nacia sin centro y no casaba con el catalogo ni
+        // con la tarifa de ninguno.
+        controlCenterId: centroPedido(req) ?? u.controlCenterId,
         createdByUserId: u.id,
         expedientNumber: b.expedientNumber || null,
         clientName,
