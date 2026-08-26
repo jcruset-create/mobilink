@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { boFetch } from "../services/api";
+import BotonCoordenadas from "../components/BotonCoordenadas";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState } from "../components/ui";
 import FestivosTalleres from "../components/FestivosTalleres";
@@ -367,6 +368,14 @@ export default function Talleres() {
             <Select value={form.integrationType} onChange={(e) => setForm({ ...form, integrationType: e.target.value })}>
               {TIERS.map((t) => <option key={t} value={t}>{WORKSHOP_TIER_LABELS[t]}</option>)}
             </Select>
+            <BotonCoordenadas
+              direccion={{
+                address: form.address, postalCode: form.postalCode,
+                city: form.city, province: form.province,
+              }}
+              onEncontrado={(p) => setForm({ ...form, latitude: String(p.lat), longitude: String(p.lng) })}
+              onError={setError}
+            />
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
             <Input placeholder="Red comercial (Confortauto…)" value={form.commercialNetwork} onChange={(e) => setForm({ ...form, commercialNetwork: e.target.value })} className="w-44" />

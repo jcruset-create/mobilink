@@ -10,6 +10,7 @@ import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState, KpiCard } from "../components/ui";
 import TablaUnidades from "../components/TablaUnidades";
+import BotonCoordenadas from "../components/BotonCoordenadas";
 import TarjetaOperario, { type Operator } from "../components/TarjetaOperario";
 import ImportarTallerWhatsApp, { CAMPOS_IMPORTABLES, type ImportacionConfirmada } from "../components/ImportarTallerWhatsApp";
 import {
@@ -364,6 +365,16 @@ export default function FichaEmpresa() {
                 <Select value={nuevoTaller.integrationType} onChange={(e) => setNuevoTaller({ ...nuevoTaller, integrationType: e.target.value })}>
                   {TIERS.map((t) => <option key={t} value={t}>{WORKSHOP_TIER_LABELS[t]}</option>)}
                 </Select>
+                <BotonCoordenadas
+                  direccion={{
+                    address: nuevoTaller.address, postalCode: nuevoTaller.postalCode,
+                    city: nuevoTaller.city, province: nuevoTaller.province,
+                  }}
+                  onEncontrado={(p) => setNuevoTaller({
+                    ...nuevoTaller, latitude: String(p.lat), longitude: String(p.lng),
+                  })}
+                  onError={setError}
+                />
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 <Input placeholder="Red comercial (Confortauto…)" value={nuevoTaller.commercialNetwork} onChange={(e) => setNuevoTaller({ ...nuevoTaller, commercialNetwork: e.target.value })} className="w-44" />

@@ -11,6 +11,7 @@ import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Button, ErrorBanner, EmptyState } from "../components/ui";
 import TablaUnidades from "../components/TablaUnidades";
 import Fotos from "../components/Fotos";
+import BotonCoordenadas from "../components/BotonCoordenadas";
 import TarjetaOperario, { type Operator } from "../components/TarjetaOperario";
 import { LitePanel } from "./Talleres";
 import {
@@ -279,6 +280,16 @@ export default function FichaTaller() {
                     />
                   </label>
                 ))}
+                <BotonCoordenadas
+                  direccion={{
+                    address: edicion.address, postalCode: edicion.postalCode,
+                    city: edicion.city, province: edicion.province,
+                  }}
+                  onEncontrado={(p) => setEdicion({
+                    ...edicion, latitude: String(p.lat), longitude: String(p.lng),
+                  })}
+                  onError={setError}
+                />
               </div>
             )}
             <p className="mt-3 text-[12px] text-slate-500">
