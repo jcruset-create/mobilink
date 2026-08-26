@@ -9,14 +9,45 @@ if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL no está configurada");
 }
 
+/**
+ * Supabase exige TLS; un PostgreSQL local (desarrollo o el contenedor de las
+ * pruebas de integración) no lo ofrece y rechaza la conexión con "The server
+ * does not support SSL connections". Se decide por la propia URL, así que en
+ * producción no cambia nada.
+ */
+const esLocal =
+  /@(localhost|127\.0\.0\.1|::1|postgres)[:/]/i.test(process.env.DATABASE_URL) ||
+  process.env.PGSSLMODE === "disable";
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  ssl: esLocal ? false : { rejectUnauthorized: false },
 });
 
 export async function initDb() {
+  // `payments` (cobros con Stripe) solo existía en la base de producción: nadie
+  // la creaba desde el código, así que en una base nueva todos los endpoints de
+  // /api/payments reventaban y el ALTER de abajo fallaba en silencio. En la base
+  // que ya existe esto es un no-op.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id SERIAL PRIMARY KEY,
+      reference TEXT NOT NULL,
+      customer_name TEXT NOT NULL DEFAULT '',
+      customer_phone TEXT NOT NULL DEFAULT '',
+      amount_cents INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      stripe_session_id TEXT,
+      stripe_payment_intent_id TEXT,
+      payment_url TEXT,
+      paid_at_ms BIGINT,
+      created_at_ms BIGINT NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS payments_reference_idx ON payments (reference);
+    CREATE INDEX IF NOT EXISTS payments_session_idx ON payments (stripe_session_id);
+  `);
+
   await pool.query(`
     ALTER TABLE payments ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
   `).catch(() => {});
@@ -212,6 +243,18 @@ export async function initDb() {
     ADD COLUMN IF NOT EXISTS "workshopId" TEXT;
   `);
 
+  // Unidad móvil asignada al trabajo (área "movil"): mientras el trabajo está
+  // en curso la furgoneta no está disponible para asistencias en carretera.
+  // Se guarda el id (integridad) y el nombre (es lo que cruza roadside, que
+  // referencia las furgonetas por nombre en "assignedVehicleName").
+  await pool.query(`
+    ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS "assignedVehicleId" INTEGER;
+
+    ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS "assignedVehicleName" TEXT;
+  `);
+
   // APK Mobilink Taller: fotos adjuntas a un trabajo
   await pool.query(`
     CREATE TABLE IF NOT EXISTS job_files (
@@ -223,6 +266,14 @@ export async function initDb() {
       "createdAtMs" BIGINT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS job_files_job_idx ON job_files("jobId");
+  `);
+
+  // Distingue la firma del cliente de las fotos del trabajo. Van a la misma
+  // tabla porque son el mismo tipo de adjunto, pero la firma es única por
+  // trabajo y se enseña aparte.
+  await pool.query(`
+    ALTER TABLE job_files
+    ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'foto';
   `);
 
   await pool.query(`
@@ -275,6 +326,54 @@ export async function initDb() {
 
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "esRemolque" BOOLEAN NOT NULL DEFAULT false;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "origen" TEXT NOT NULL DEFAULT 'taller';
+
+    -- Nº de expediente que asigna Central a las asistencias que vienen de la red
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "expedienteCentral" TEXT;
+
+    -- Auto "En camino": se arma cuando la furgoneta asignada se ve DENTRO del
+    -- radio del taller; al salir del radio (>500 m) se activa el estado solo.
+    -- Evita falsos positivos si se asigna una furgoneta que ya esta en ruta.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "autoEnCaminoArmada" BOOLEAN NOT NULL DEFAULT false;
+
+    -- Hora de inicio del estado "en camino a taller" (el resto de estados ya
+    -- tienen su marca de tiempo propia)
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "enCaminoBaseAtMs" BIGINT;
+
+    -- Quién SOLICITA la asistencia (puede ser distinto del cliente al que se
+    -- realiza el servicio: aseguradora, gestor de flota, otra empresa…)
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteEmpresa" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteNombre" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteTelefono" TEXT;
+
+    -- Nº de autorización o de cita que da quien solicita: lo pide después la
+    -- aseguradora o el gestor de flota para pagar el servicio.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteAutorizacion" TEXT;
+
+    -- Kilómetros DEL SERVICIO que anota el técnico al finalizar (no el
+    -- cuentakilómetros). Los usa el espejo económico de Connect para cobrar
+    -- los kilómetros de más; el tiempo NO se anota: va de la creación a la
+    -- llegada al taller, y esos instantes ya existen.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "serviceKm" INTEGER;
+
+    -- Compartir con Central: furgonetas y técnicos visibles para la red (por defecto no)
+    ALTER TABLE roadside_vehicles
+    ADD COLUMN IF NOT EXISTS "compartidoCentral" BOOLEAN NOT NULL DEFAULT false;
+
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "compartidoCentral" BOOLEAN NOT NULL DEFAULT false;
 
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "descripcionAveria" TEXT;
@@ -384,6 +483,62 @@ export async function initDb() {
       ON roadside_vehicles(active);
   `);
 
+  // ── Multi-taller Assist ──
+  // Una empresa (= licencia) puede tener varios talleres. Cada taller ve solo
+  // sus propias asistencias, pero puede ver el estado + ubicación + técnico de
+  // las unidades móviles de los demás talleres de la MISMA empresa.
+  // `licenseId` es el id de la fila `licenses` (empresa). Sin FK dura para no
+  // acoplar el orden de init entre db.ts y el módulo de licencias; se indexa.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS assist_talleres (
+      id SERIAL PRIMARY KEY,
+      "licenseId" INTEGER,
+      nombre TEXT NOT NULL,
+      direccion TEXT,
+      telefono TEXT,
+      "codigoInterno" TEXT,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS assist_talleres_license_idx
+      ON assist_talleres("licenseId");
+    CREATE INDEX IF NOT EXISTS assist_talleres_activo_idx
+      ON assist_talleres(activo);
+
+    -- El técnico pertenece a un taller (Assist multi-taller).
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS "tallerId" INTEGER;
+
+    -- Taller real (assist_talleres.id) al que pertenece cada asistencia y cada
+    -- unidad móvil. Convive con el "workshopId" TEXT existente hasta migrar.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "tallerId" INTEGER;
+
+    ALTER TABLE roadside_vehicles
+    ADD COLUMN IF NOT EXISTS "tallerId" INTEGER;
+
+    CREATE INDEX IF NOT EXISTS roadside_assistances_taller_idx
+      ON roadside_assistances("tallerId");
+    CREATE INDEX IF NOT EXISTS roadside_vehicles_taller_idx
+      ON roadside_vehicles("tallerId");
+    CREATE INDEX IF NOT EXISTS techs_taller_idx
+      ON techs("tallerId");
+
+    -- Aislamiento del panel web por taller: mapea el usuario del hub (Supabase
+    -- auth user id) a su taller. "esAdmin" = ve todos los talleres (selector).
+    -- Se combina con app_usuarios.es_superadmin (que también da acceso total).
+    CREATE TABLE IF NOT EXISTS assist_panel_users (
+      "userId" TEXT PRIMARY KEY,
+      username TEXT,
+      "tallerId" INTEGER,
+      "esAdmin" BOOLEAN NOT NULL DEFAULT false,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS assist_panel_users_taller_idx
+      ON assist_panel_users("tallerId");
+  `);
+
   // ── Órdenes de Trabajo de Flota (OTF) ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS otf (
@@ -435,6 +590,18 @@ export async function initDb() {
       "updatedAtMs" BIGINT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS otf_trabajos_otf_idx ON otf_trabajos("otfId");
+
+    -- Catálogo de plantillas de trabajos OTF ("Revisar presiones", etc.).
+    -- Sustituye el texto libre de trabajoPlantilla por opciones consistentes
+    -- (también de cara al código de línea al presupuestar en el ERP).
+    CREATE TABLE IF NOT EXISTS otf_plantillas (
+      id SERIAL PRIMARY KEY,
+      nombre TEXT NOT NULL UNIQUE,
+      descripcion TEXT,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS otf_trabajo_files (
       id SERIAL PRIMARY KEY,
@@ -620,15 +787,25 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS wcs_job_idx ON whatsapp_capture_sessions(job_id);
     CREATE INDEX IF NOT EXISTS wcs_status_idx ON whatsapp_capture_sessions(status);
 
+    -- Estado del análisis IA. Antes se deducía de ai_suggestions IS NULL, lo que
+    -- hacía indistinguible "analizando" de "falló y no se va a recuperar".
+    ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS ai_status TEXT;
+    ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS ai_error TEXT;
+    ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS ai_started_at BIGINT;
+
     -- Un único número de WhatsApp para todo el ecosistema: la sesión de
     -- captura puede pertenecer a una asistencia del core (job_id), a una de
     -- Central Pro (connect_assistance_id) o a un alta que aún no existe
     -- (ambas a null; se vincula al crear la asistencia).
     ALTER TABLE whatsapp_capture_sessions ALTER COLUMN job_id DROP NOT NULL;
     ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS connect_assistance_id INTEGER;
-    ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
     CREATE INDEX IF NOT EXISTS wcs_connect_idx
       ON whatsapp_capture_sessions(connect_assistance_id);
+
+    -- Para qué se abrió la captura: decide qué prompt usa el análisis con IA.
+    -- 'assistance' (por defecto) es lo de siempre; 'workshop' es el alta de un
+    -- taller de la red que llega por WhatsApp (ficha de Google, tarjeta…).
+    ALTER TABLE whatsapp_capture_sessions ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'assistance';
 
     CREATE TABLE IF NOT EXISTS whatsapp_capture_messages (
       id SERIAL PRIMARY KEY,
@@ -658,6 +835,11 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS transcript TEXT;
     ALTER TABLE whatsapp_capture_messages
       ADD COLUMN IF NOT EXISTS transcript_status TEXT DEFAULT 'none';
+    -- Va DESPUES de crear la tabla, no antes: sobre una base ya existente daba
+    -- igual el orden, pero sobre una vacia rompia el arranque entero con
+    -- 'relation "whatsapp_capture_messages" does not exist'. Lo destapo el
+    -- contenedor de PostgreSQL de las pruebas de integracion.
+    ALTER TABLE whatsapp_capture_messages ALTER COLUMN job_id DROP NOT NULL;
   `);
 
   await pool.query(`
@@ -761,6 +943,98 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS whatsapp2_enviado_en_ms BIGINT,
       ADD COLUMN IF NOT EXISTS sms2_enviado_en_ms BIGINT;
   `).catch(() => {});
+
+  // Alta/baja de técnicos. Hasta ahora la única forma de quitar a alguien era
+  // borrar la fila, y el panel reconstruye su plantilla sobre INITIAL_TECHS
+  // (código), así que el borrado no servía: al recargar volvía a aparecer.
+  await pool.query(`
+    ALTER TABLE techs
+    ADD COLUMN IF NOT EXISTS activo BOOLEAN NOT NULL DEFAULT true;
+  `);
+
+  // Checklists de trabajo. Las plantillas se editan desde WorkPlanner y el
+  // técnico las marca en la tablet.
+  //
+  // Los ítems van en JSONB y no en tabla aparte a propósito: una plantilla son
+  // media docena de líneas que se leen y se guardan siempre enteras, así que
+  // una tabla hija solo añadiría joins y un orden que mantener a mano.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS checklist_plantillas (
+      id            SERIAL PRIMARY KEY,
+      nombre        TEXT NOT NULL,
+      area          TEXT,
+      items         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      activo        BOOLEAN NOT NULL DEFAULT true,
+      "workshopId"  TEXT,
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+  `);
+
+  // Estado del checklist EN un trabajo concreto. Se copia de la plantilla al
+  // instanciarlo: si mañana alguien edita la plantilla, el trabajo ya hecho no
+  // cambia, que es lo que se espera de un registro de lo que se comprobó.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS job_checklists (
+      "jobId"       INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+      "plantillaId" INTEGER,
+      nombre        TEXT,
+      items         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+  `);
+
+  // Idempotencia de la APK de taller. La app reintenta lo que quedó en la cola
+  // offline, y un envío que llegó al servidor pero cuya respuesta se perdió por
+  // un timeout se repetiría: dos veces la misma foto, o dos veces el mismo
+  // trabajo. La clave la genera el cliente y es la que decide si algo ya se
+  // hizo.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS taller_idempotencia (
+      clave        TEXT PRIMARY KEY,
+      respuesta    JSONB NOT NULL,
+      "createdAtMs" BIGINT NOT NULL
+    );
+  `);
+
+  // ── SaaS: módulo "workplanner" licenciable ────────────────────────────
+  // Equivale a supabase/migrations/saas_fase1c_modulo_workplanner.sql. Se
+  // aplica en el arranque para no depender de ejecutarlo a mano en el SQL
+  // Editor. Es idempotente y sólo actúa si las tablas SaaS existen.
+  const MODULOS_LICENCIABLES =
+    "'administracion','tyrecontrol','almacen','sea-core','toolcontrol','safety','presencia','taller','workplanner','cash'";
+  const EMPRESA_SEMILLA = "00000000-0000-4000-a000-000000000001";
+
+  await pool
+    .query(
+      `
+      DO $migracion$
+      BEGIN
+        IF to_regclass('public.app_licencias') IS NOT NULL THEN
+          ALTER TABLE app_licencias DROP CONSTRAINT IF EXISTS app_licencias_modulo_check;
+          ALTER TABLE app_licencias ADD CONSTRAINT app_licencias_modulo_check
+            CHECK (modulo IN (${MODULOS_LICENCIABLES}));
+
+          INSERT INTO app_licencias (empresa_id, modulo)
+          SELECT '${EMPRESA_SEMILLA}', 'workplanner'
+          WHERE NOT EXISTS (
+            SELECT 1 FROM app_licencias
+            WHERE empresa_id = '${EMPRESA_SEMILLA}' AND modulo = 'workplanner'
+          );
+        END IF;
+
+        IF to_regclass('public.app_usuario_modulos') IS NOT NULL THEN
+          ALTER TABLE app_usuario_modulos DROP CONSTRAINT IF EXISTS app_usuario_modulos_modulo_check;
+          ALTER TABLE app_usuario_modulos ADD CONSTRAINT app_usuario_modulos_modulo_check
+            CHECK (modulo IN (${MODULOS_LICENCIABLES}));
+        END IF;
+      END
+      $migracion$;
+    `
+    )
+    .catch((error) => {
+      console.error("No se pudo aplicar la migración del módulo workplanner:", error);
+    });
 
   console.log("PostgreSQL/Supabase inicializado correctamente");
 }

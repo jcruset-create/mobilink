@@ -2,6 +2,10 @@
 #  - como artifact del run (pestaña Actions)
 #  - como GitHub Release "tyrecontrol-vX.Y.Z+N", para descargarla
 #    directamente desde el navegador de la tablet e instalarla.
+#  - en public/, que es de donde tira el centro de descargas
+#    (/descargas.html → /api/apps/list → ficheros public/tyrecontrol-*.apk).
+#
+# El fichero se llama igual en los tres sitios: tyrecontrol-<versión>.apk.
 name: Build TyreControl APK
 
 on:
@@ -38,9 +42,32 @@ jobs:
           flutter-version: "3.35.4"
           cache: true
 
-      - name: Version de la app
+      # Cada build sube la versión: 0.31.6 → 0.31.7 → … → 0.31.9 → 0.32.0.
+      # El tramo final va de 0 a 9 y al desbordar arrastra al del medio (y ese,
+      # al llegar a 100, al primero). El pubspec se reescribe ANTES de compilar
+      # para que la APK lleve ya el número nuevo, y se guarda en el repositorio
+      # al final, solo si el build ha ido bien.
+      #
+      # Al build number se le pone el nº de ejecución del workflow: así dos
+      # APK del mismo nombre nunca se confunden y las releases no se pisan.
+      - name: Subir la versión
         id: ver
-        run: echo "version=$(grep '^version:' pubspec.yaml | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+        run: |
+          ACTUAL=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          IFS=. read -r MA MI PA <<< "$ACTUAL"
+          PA=$((PA + 1))
+          if [ "$PA" -gt 9 ]; then PA=0; MI=$((MI + 1)); fi
+          if [ "$MI" -gt 99 ]; then MI=0; MA=$((MA + 1)); fi
+          NOMBRE="$MA.$MI.$PA"
+          BUILD=${{ github.run_number }}
+          sed -i "s/^version: .*/version: $NOMBRE+$BUILD/" pubspec.yaml
+          grep '^version:' pubspec.yaml
+          {
+            echo "nombre=$NOMBRE"
+            echo "build=$BUILD"
+            echo "version=$NOMBRE+$BUILD"
+          } >> "$GITHUB_OUTPUT"
+          echo "$ACTUAL → $NOMBRE+$BUILD"
 
       - run: flutter pub get
 
@@ -50,30 +77,112 @@ jobs:
       # asi cada APK se instala encima de la anterior sin desinstalar. Si el
       # secret no esta, se firma con la clave debug del runner (cada build
       # tendria firma distinta y Android pediria desinstalar entre versiones).
+      # Diagnóstico: solo longitudes, nunca el contenido. Sirve para distinguir
+      # "el secret no existe" de "existe pero está mal pegado", sin exponer la
+      # clave (GitHub además enmascara el valor en los logs).
+      - name: Estado de los secrets de firma
+        run: |
+          echo "MOBILINK_KEYSTORE_BASE64: ${#KS_B64} caracteres (se esperan ~3536)"
+          echo "MOBILINK_KEYSTORE_PASSWORD: ${#KS_PASS} caracteres (se esperan 20)"
+          if [ -z "$KS_B64" ]; then
+            echo "::warning::El secret MOBILINK_KEYSTORE_BASE64 llega vacío." \
+                 "Comprueba que está en Settings → Secrets and variables → Actions," \
+                 "pestaña Secrets (no Variables), como 'Repository secret', y que el" \
+                 "nombre coincide exactamente."
+          fi
+
       - name: Preparar keystore de firma
         if: ${{ env.KS_B64 != '' }}
-        run: echo "$KS_B64" | base64 -d > /tmp/mobilink.keystore
+        run: |
+          echo "$KS_B64" | base64 -d > /tmp/mobilink.keystore
+          # Un base64 cortado al pegar produce un fichero corrupto que Gradle
+          # rechaza mucho más tarde con un error críptico.
+          keytool -list -keystore /tmp/mobilink.keystore -storepass "$KS_PASS" >/dev/null
+          echo "Keystore válido y contraseña correcta."
 
       - name: Build APK
         run: flutter build apk --release
+          --build-name=${{ steps.ver.outputs.nombre }}
+          --build-number=${{ steps.ver.outputs.build }}
         env:
           MOBILINK_KEYSTORE_PATH: ${{ env.KS_B64 != '' && '/tmp/mobilink.keystore' || '' }}
           MOBILINK_KEYSTORE_PASSWORD: ${{ env.KS_PASS }}
           MOBILINK_KEY_ALIAS: mobilink
 
+      # Sin esto, un secret mal pegado produce un build VERDE con un APK que no
+      # se puede instalar encima del anterior — el fallo aparecería en la tablet,
+      # no aquí. Se comprueba el certificado real del APK ya construido.
+      - name: Comprobar que la APK va firmada con la clave de Mobilink
+        if: ${{ env.KS_B64 != '' }}
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          CERTS=$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk)
+          echo "$CERTS"
+          if echo "$CERTS" | grep -q "CN=Android Debug"; then
+            echo "::error::La APK está firmada con la clave de DEBUG pese a existir el secret." \
+                 "Revisa MOBILINK_KEYSTORE_BASE64 y MOBILINK_KEYSTORE_PASSWORD."
+            exit 1
+          fi
+
+      # El nombre lleva el prefijo "tyrecontrol-" porque es el que busca el
+      # centro de descargas (APK_APPS en server/index.ts): el fichero que se
+      # publica en public/ y el que se adjunta a la release son el mismo.
       - name: Renombrar APK
         run: cp build/app/outputs/flutter-apk/app-release.apk
-          "build/app/outputs/flutter-apk/mobilink-tyrecontrol-${{ steps.ver.outputs.version }}.apk"
+          "build/app/outputs/flutter-apk/tyrecontrol-${{ steps.ver.outputs.version }}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: mobilink-tyrecontrol-${{ steps.ver.outputs.version }}
-          path: tyrecontrol_app/build/app/outputs/flutter-apk/mobilink-tyrecontrol-*.apk
+          name: tyrecontrol-${{ steps.ver.outputs.version }}
+          path: tyrecontrol_app/build/app/outputs/flutter-apk/tyrecontrol-*.apk
 
+      # Solo se publica release si la APK va firmada con la clave estable. Una
+      # release que no se puede instalar encima de la anterior es peor que no
+      # tener release: el artifact del run sigue disponible para depurar.
       - name: Publicar release con la APK
+        if: ${{ env.KS_B64 != '' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: tyrecontrol-v${{ steps.ver.outputs.version }}
           name: Mobilink TyreControl ${{ steps.ver.outputs.version }}
           body: APK de Mobilink TyreControl generada por CI desde ${{ github.sha }}.
-          files: tyrecontrol_app/build/app/outputs/flutter-apk/mobilink-tyrecontrol-*.apk
+          files: tyrecontrol_app/build/app/outputs/flutter-apk/tyrecontrol-*.apk
+
+      # El centro de descargas no necesita nada más: /apps/tyrecontrol redirige
+      # al asset de esta release (ver APK_APPS en server/index.ts). Así el
+      # binario no entra en el repositorio, que crecía 58 MB por compilación.
+
+      # Se guarda la versión nueva DESPUÉS de publicar: si el build falla, el
+      # número no se quema. El [skip ci] evita que este commit dispare otro
+      # build (pubspec.yaml está dentro de las rutas que vigila el workflow) y
+      # con él, un bucle infinito.
+      #
+      # Si el push se rechaza porque alguien empujó mientras compilábamos, se
+      # avisa y se sigue: el run NO se pone en rojo por esto. La consecuencia
+      # es solo que el próximo build repita el mismo nombre de versión, y aun
+      # así saldrá con otro build number, así que no se pisa ninguna release.
+      - name: Guardar la versión nueva en el repositorio
+        if: ${{ env.KS_B64 != '' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pubspec.yaml
+          if git diff --cached --quiet; then
+            echo "El pubspec no ha cambiado; nada que guardar."
+            exit 0
+          fi
+          git commit -m "chore(tyrecontrol): version ${{ steps.ver.outputs.version }} [skip ci]"
+          # Se reintenta una vez sobre la punta actual: el push suele fallar
+          # solo porque otro commit llegó mientras compilábamos, y sin este
+          # reintento el centro de descargas se quedaría con la APK anterior.
+          if ! git push origin HEAD:${{ github.ref_name }}; then
+            echo "Push rechazado; se reintenta sobre la punta actual de ${{ github.ref_name }}."
+            git pull --rebase origin ${{ github.ref_name }} || true
+            if ! git push origin HEAD:${{ github.ref_name }}; then
+              echo "::warning::No se ha podido guardar la versión" \
+                   "${{ steps.ver.outputs.version }} en ${{ github.ref_name }}" \
+                   "(seguramente otro push llegó antes). La release está publicada," \
+                   "así que el centro de descargas ya sirve esta APK; lo único que" \
+                   "pasa es que el próximo build repetirá el nombre de versión."
+            fi
+          fi

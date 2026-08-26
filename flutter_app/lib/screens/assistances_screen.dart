@@ -9,6 +9,7 @@ import '../main.dart' show exteriorMode;
 import '../services/api_service.dart';
 import '../services/offline_store.dart';
 import '../theme/app_theme.dart';
+import '../widgets/plate_badge.dart';
 import 'assistance_detail_screen.dart';
 import 'cobros_screen.dart';
 import 'history_screen.dart';
@@ -31,6 +32,8 @@ class _AssistancesScreenState extends State<AssistancesScreen>
   bool _loading = true;
   String? _error;
   String _techName = '';
+  String _empresaNombre = '';
+  String _tallerNombre = '';
   String _appVersion = '';
   StreamSubscription<List<ConnectivityResult>>? _connSub;
 
@@ -57,7 +60,13 @@ class _AssistancesScreenState extends State<AssistancesScreen>
 
   Future<void> _loadTechName() async {
     final prefs = await SharedPreferences.getInstance();
-    if (mounted) setState(() => _techName = prefs.getString('techName') ?? '');
+    if (mounted) {
+      setState(() {
+        _techName = prefs.getString('techName') ?? '';
+        _empresaNombre = prefs.getString('empresaNombre') ?? '';
+        _tallerNombre = prefs.getString('tallerNombre') ?? '';
+      });
+    }
   }
 
   Future<void> _loadVersion() async {
@@ -95,6 +104,9 @@ class _AssistancesScreenState extends State<AssistancesScreen>
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('techName');
     await prefs.remove('code');
+    await prefs.remove('empresaNombre');
+    await prefs.remove('tallerNombre');
+    await prefs.remove('tallerId');
     if (!mounted) return;
     Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen()));
   }
@@ -143,13 +155,14 @@ class _AssistancesScreenState extends State<AssistancesScreen>
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     final isExterior = exteriorMode.value;
 
     return Scaffold(
+      // En vertical no caben logo + pestañas + acciones en una sola fila:
+      // arriba logo y acciones, debajo las pestañas a todo el ancho.
       appBar: PreferredSize(
-        preferredSize: Size.fromHeight(isExterior ? 120 : 108),
+        preferredSize: Size.fromHeight(isExterior ? 230 : 214),
         child: Container(
           color: AppColors.background,
           child: SafeArea(
@@ -168,7 +181,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                           children: [
                             Image.asset(
                               'assets/logo_horizontal2.png',
-                              height: isExterior ? 70 : 62,
+                              height: isExterior ? 56 : 48,
                               fit: BoxFit.contain,
                               alignment: Alignment.centerLeft,
                             ),
@@ -178,6 +191,30 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                                 child: Text(
                                   _techName,
                                   style: tt.labelSmall?.copyWith(color: AppColors.textSecondary),
+                                ),
+                              ),
+                            if (_tallerNombre.isNotEmpty || _empresaNombre.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 2, top: 1),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.store_mall_directory_outlined,
+                                        size: 12, color: AppColors.primary),
+                                    const SizedBox(width: 3),
+                                    Flexible(
+                                      child: Text(
+                                        [_empresaNombre, _tallerNombre]
+                                            .where((s) => s.isNotEmpty)
+                                            .join(' · '),
+                                        overflow: TextOverflow.ellipsis,
+                                        style: tt.labelSmall?.copyWith(
+                                          color: AppColors.primary,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             if (_appVersion.isNotEmpty)
@@ -190,20 +227,6 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                               ),
                           ],
                         ),
-                      ),
-                      // Pestañas
-                      TabBar(
-                        controller: _tabController,
-                        isScrollable: true,
-                        tabAlignment: TabAlignment.start,
-                        dividerColor: Colors.transparent,
-                        tabs: [
-                          Tab(icon: Icon(Icons.assignment_outlined, size: isExterior ? 28 : 24), text: 'Activas'),
-                          Tab(icon: Icon(Icons.local_shipping_outlined, size: isExterior ? 28 : 24), text: 'OTF'),
-                          Tab(icon: Icon(Icons.history,              size: isExterior ? 28 : 24), text: 'Historial'),
-                          Tab(icon: Icon(Icons.receipt_long_outlined,size: isExterior ? 28 : 24), text: 'Cobros'),
-                          Tab(icon: Icon(Icons.add_card_outlined,    size: isExterior ? 28 : 24), text: 'Pagos'),
-                        ],
                       ),
                       // Acciones
                       const SizedBox(width: 4),
@@ -219,6 +242,20 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                       _TopBarIcon(icon: Icons.qr_code_scanner,        color: AppColors.info,          tooltip: 'Escanear matrícula', onPressed: _scanPlate),
                       _TopBarIcon(icon: Icons.refresh_outlined,      color: AppColors.textSecondary, tooltip: 'Actualizar',    onPressed: _load),
                       _TopBarIcon(icon: Icons.logout,                 color: AppColors.danger,        tooltip: 'Cerrar sesión', onPressed: _logout),
+                    ],
+                  ),
+                  // Pestañas a todo el ancho, debajo del logo
+                  TabBar(
+                    controller: _tabController,
+                    isScrollable: true,
+                    tabAlignment: TabAlignment.start,
+                    dividerColor: Colors.transparent,
+                    tabs: [
+                      Tab(icon: Icon(Icons.assignment_outlined,  size: isExterior ? 28 : 24), text: 'Activas'),
+                      Tab(icon: Icon(Icons.local_shipping_outlined, size: isExterior ? 28 : 24), text: 'OTF'),
+                      Tab(icon: Icon(Icons.history,              size: isExterior ? 28 : 24), text: 'Historial'),
+                      Tab(icon: Icon(Icons.receipt_long_outlined,size: isExterior ? 28 : 24), text: 'Cobros'),
+                      Tab(icon: Icon(Icons.add_card_outlined,    size: isExterior ? 28 : 24), text: 'Pagos'),
                     ],
                   ),
                 ],
@@ -459,18 +496,20 @@ class _ActiveAssistancesTab extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              Text(plate, style: tt.titleMedium),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  customer,
-                                  style: tt.bodyMedium,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
+                          // La matrícula manda: si viene informada, en grande
+                          // y arriba del todo. Si no, ni se pinta.
+                          if (plate.isNotEmpty) ...[
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: PlateBadge(plate: plate),
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                          Text(
+                            customer,
+                            style: tt.bodyMedium,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(height: 4),
                           Text(

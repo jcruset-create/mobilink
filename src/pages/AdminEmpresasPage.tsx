@@ -31,6 +31,7 @@ type Licencia = {
 
 const MODULOS = [
   "taller",
+  "workplanner",
   "administracion",
   "tyrecontrol",
   "almacen",
@@ -38,6 +39,8 @@ const MODULOS = [
   "toolcontrol",
   "safety",
   "presencia",
+  "cash",
+  "tacografos",
 ];
 
 const ESTADO_COLOR: Record<string, string> = {

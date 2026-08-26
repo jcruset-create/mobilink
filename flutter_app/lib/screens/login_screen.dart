@@ -32,10 +32,26 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() { _loading = true; _error = null; });
 
     try {
-      await ApiService.login(name, pin);
+      final data = await ApiService.login(name, pin);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('techName', name);
       await prefs.setString('code', pin);
+
+      // Multi-taller: guardar empresa y taller del operario (si los trae).
+      final empresa = data['empresa'];
+      final taller = data['taller'];
+      await prefs.setString(
+        'empresaNombre',
+        (empresa is Map ? empresa['nombre'] as String? : null) ?? '',
+      );
+      await prefs.setString(
+        'tallerNombre',
+        (taller is Map ? taller['nombre'] as String? : null) ?? '',
+      );
+      await prefs.setInt(
+        'tallerId',
+        (taller is Map ? (taller['id'] as num?)?.toInt() : null) ?? 0,
+      );
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
@@ -80,7 +96,11 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Image.asset('assets/logo_horizontal2.png', width: 360),
+                  // scaleDown: en vertical el ancho útil puede ser menor de 360.
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Image.asset('assets/logo_horizontal2.png', width: 360),
+                  ),
                   const SizedBox(height: 12),
                   Text(
                     'Acceso operarios',
@@ -107,8 +127,12 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 12),
 
-                  // Dígitos PIN
-                  Row(
+                  // Dígitos PIN (scaleDown: 4 casillas de 64 no caben en el
+                  // ancho útil de una pantalla estrecha en vertical)
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: List.generate(4, (i) {
                       return Container(
@@ -131,6 +155,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       );
                     }),
+                    ),
                   ),
 
                   if (_error != null) ...[

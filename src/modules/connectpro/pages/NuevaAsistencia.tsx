@@ -8,6 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { PageTitle, Card, Input, Select, Button, ErrorBanner } from "../components/ui";
 import CapturaWhatsApp from "../components/CapturaWhatsApp";
+import ConfirmarImportacionIA, { type PropuestaIA, type ExtraIA } from "../components/ConfirmarImportacionIA";
 import type { ServiceType, VehicleType } from "../types";
 import type { Client } from "./Clientes";
 
@@ -59,6 +60,7 @@ export default function NuevaAsistencia() {
   const [clientId, setClientId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [conceptos, setConceptos] = useState<Concepto[]>([]);
   // Extracción por IA: pegar la conversación de WhatsApp o subir capturas
   const [iaAbierto, setIaAbierto] = useState(false);
   const [iaTexto, setIaTexto] = useState("");
@@ -67,6 +69,11 @@ export default function NuevaAsistencia() {
   const [iaMsg, setIaMsg] = useState<string | null>(null);
   // Sesión de captura de WhatsApp, para vincularla a la asistencia al crearla
   const [capturaId, setCapturaId] = useState<number | null>(null);
+  /** Propuesta de la IA pendiente de confirmar (ventana de revisión). */
+  const [revision, setRevision] = useState<{
+    origen: string; propuestas: PropuestaIA[]; extras: ExtraIA[];
+    resumen: string | null; confianza: "high" | "medium" | "low" | null;
+  } | null>(null);
 
   useEffect(() => {
     boFetch<{ service_types: ServiceType[]; vehicle_types?: VehicleType[] }>("/catalogs")
@@ -81,48 +88,74 @@ export default function NuevaAsistencia() {
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setF({ ...f, [k]: e.target.type === "checkbox" ? (e.target as HTMLInputElement).checked : e.target.value } as Form);
 
-  /** Vuelca al formulario lo que ha entendido la IA, sin pisar lo ya escrito. */
-  const aplicarExtraccion = (d: Record<string, any>): number => {
+  /**
+   * Convierte lo que ha entendido la IA en propuestas revisables. No toca el
+   * formulario: abre la ventana de confirmación para que el operador decida.
+   */
+  const proponerExtraccion = (d: Record<string, any>, origen: string) => {
     const texto = (v: unknown) => (v == null ? "" : String(v));
-    const mapa: Partial<Record<keyof Form, unknown>> = {
-      expedientNumber: d.expedientNumber, externalReference: d.externalReference, clientName: d.clientName,
-      serviceType: d.serviceType, priority: d.priority === "urgente" ? "urgente" : undefined,
-      slaMinutes: d.slaMinutes, customerName: d.customerName, customerPhone: d.customerPhone,
-      requesterName: d.requesterName, requesterPhone: d.requesterPhone, requesterEmail: d.requesterEmail,
-      address: d.address, lat: d.latitude, lng: d.longitude,
-      road: d.road, km: d.km, direction: d.direction, placeRef: d.placeRef,
-      vehicleType: d.vehicleType, make: d.make, model: d.model, plate: d.plate, vin: d.vin,
-      fuel: d.fuel, weight: d.weight, cargo: d.cargo,
-      description: d.description, diagnosis: d.diagnosis,
-    };
-    let aplicados = 0;
-    const siguiente: Form = { ...f };
-    for (const [clave, valor] of Object.entries(mapa) as [keyof Form, unknown][]) {
-      if (valor == null || texto(valor) === "") continue;
-      // Lo que ya haya escrito el operador manda sobre la IA
-      if (texto(siguiente[clave]).trim() !== "" && clave !== "priority" && clave !== "serviceType" && clave !== "vehicleType") continue;
-      (siguiente as any)[clave] = texto(valor);
-      aplicados++;
-    }
-    if (d.trailer === true && !siguiente.trailer) { siguiente.trailer = true; aplicados++; }
-    if (d.dangerous === true && !siguiente.dangerous) { siguiente.dangerous = true; aplicados++; }
+    const mapa: [keyof Form, string, unknown][] = [
+      ["expedientNumber", "Nº expediente", d.expedientNumber],
+      ["externalReference", "Referencia externa", d.externalReference],
+      ["clientName", "Cliente (texto libre)", d.clientName],
+      ["serviceType", "Tipo de asistencia", d.serviceType],
+      ["priority", "Prioridad", d.priority === "urgente" ? "urgente" : undefined],
+      ["slaMinutes", "SLA (min llegada)", d.slaMinutes],
+      ["customerName", "Nombre del cliente", d.customerName],
+      ["customerPhone", "Teléfono del cliente", d.customerPhone],
+      ["requesterName", "Solicitante", d.requesterName],
+      ["requesterPhone", "Tel. solicitante", d.requesterPhone],
+      ["requesterEmail", "Email", d.requesterEmail],
+      ["address", "Dirección", d.address],
+      ["lat", "Latitud", d.latitude],
+      ["lng", "Longitud", d.longitude],
+      ["road", "Carretera", d.road],
+      ["km", "Km", d.km],
+      ["direction", "Sentido", d.direction],
+      ["placeRef", "Referencia del lugar", d.placeRef],
+      ["vehicleType", "Tipo de vehículo", d.vehicleType],
+      ["make", "Marca", d.make],
+      ["model", "Modelo", d.model],
+      ["plate", "Matrícula", d.plate],
+      ["vin", "VIN", d.vin],
+      ["fuel", "Combustible", d.fuel],
+      ["weight", "Peso (t)", d.weight],
+      ["cargo", "Carga", d.cargo],
+      ["description", "Descripción de la incidencia", d.description],
+      ["diagnosis", "Diagnóstico inicial", d.diagnosis],
+    ];
 
-    // Los datos sueltos leídos en fotos se acumulan en observaciones internas
-    const extras: { campo: string; valor: string }[] = Array.isArray(d.datosDetectados) ? d.datosDetectados : [];
-    const lineasExtra = extras
-      .filter((x) => x?.campo && x?.valor)
+    const propuestas: PropuestaIA[] = [];
+    for (const [clave, label, valor] of mapa) {
+      if (valor == null || texto(valor) === "") continue;
+      propuestas.push({ key: clave, label, valor: texto(valor), actual: texto(f[clave]).trim() });
+    }
+    if (d.trailer === true && !f.trailer) propuestas.push({ key: "trailer", label: "Remolque", valor: "sí", actual: "" });
+    if (d.dangerous === true && !f.dangerous) propuestas.push({ key: "dangerous", label: "Mercancía peligrosa", valor: "sí", actual: "" });
+
+    const extras: ExtraIA[] = (Array.isArray(d.datosDetectados) ? d.datosDetectados : [])
+      .filter((x: any) => x?.campo && x?.valor)
+      .map((x: any) => ({ campo: String(x.campo), valor: String(x.valor) }));
+    if (d.notes) extras.push({ campo: "Observaciones", valor: String(d.notes) });
+
+    setRevision({ origen, propuestas, extras, resumen: d.resumen ?? null, confianza: d.confidence ?? null });
+  };
+
+  /** Aplica al formulario solo lo que el operador ha confirmado. */
+  const aplicarConfirmado = (campos: Record<string, string>, extras: ExtraIA[]) => {
+    const siguiente: Form = { ...f };
+    for (const [clave, valor] of Object.entries(campos)) {
+      if (clave === "trailer" || clave === "dangerous") (siguiente as any)[clave] = true;
+      else (siguiente as any)[clave] = valor;
+    }
+    const lineas = extras
       .map((x) => `${x.campo}: ${x.valor}`)
       .filter((l) => !siguiente.notes.includes(l));
-    if (lineasExtra.length) {
-      siguiente.notes = [siguiente.notes, ...lineasExtra].filter(Boolean).join("\n");
-      aplicados += lineasExtra.length;
-    }
-    if (d.notes && !siguiente.notes.includes(String(d.notes))) {
-      siguiente.notes = [siguiente.notes, String(d.notes)].filter(Boolean).join("\n");
-      aplicados++;
-    }
+    if (lineas.length) siguiente.notes = [siguiente.notes, ...lineas].filter(Boolean).join("\n");
     setF(siguiente);
-    return aplicados;
+    const total = Object.keys(campos).length + lineas.length;
+    setRevision(null);
+    setIaMsg(total > 0 ? `Importados ${total} dato${total !== 1 ? "s" : ""}.` : "No se ha importado nada.");
   };
 
   const analizarConIA = async () => {
@@ -137,12 +170,7 @@ export default function NuevaAsistencia() {
         method: "POST",
         body: { text: iaTexto.trim(), images: iaImagenes },
       });
-      const aplicados = aplicarExtraccion(r.data ?? {});
-      setIaMsg(
-        aplicados > 0
-          ? `La IA ha rellenado ${aplicados} campo${aplicados !== 1 ? "s" : ""}. Revísalos antes de crear.`
-          : "La IA no ha encontrado datos aprovechables (o ya estaban rellenos).",
-      );
+      proponerExtraccion(r.data ?? {}, "Texto y capturas pegados");
     } catch (e: any) {
       setIaMsg(e.message);
     } finally {
@@ -185,6 +213,9 @@ export default function NuevaAsistencia() {
     },
     description: [f.description, f.diagnosis ? `Diagnóstico inicial: ${f.diagnosis}` : "", f.notes ? `Obs.: ${f.notes}` : ""]
       .filter(Boolean).join("\n"),
+    // Lo pactado de antemano: nace previsto y el taller solo lo confirma con
+    // su foto de montaje. El precio no viaja: lo pone el tarifario al cerrar.
+    concepts: conceptos.filter((c) => c.kind === "MATERIAL" ? !!c.conceptCode.trim() : !!c.size.trim()),
   });
 
   const crear = async (draft: boolean) => {
@@ -213,12 +244,21 @@ export default function NuevaAsistencia() {
 
       {/* Recepción directa de WhatsApp (mismo número que Mobilink Assist) */}
       <CapturaWhatsApp
-        onSugerencias={(datos) => {
-          const n = aplicarExtraccion(datos);
-          setIaMsg(n > 0 ? `WhatsApp: ${n} campo${n !== 1 ? "s" : ""} rellenado${n !== 1 ? "s" : ""}.` : null);
-        }}
+        onSugerencias={(datos) => proponerExtraccion(datos, "Conversación de WhatsApp")}
         onSesion={setCapturaId}
       />
+
+      {revision && (
+        <ConfirmarImportacionIA
+          origen={revision.origen}
+          propuestas={revision.propuestas}
+          extras={revision.extras}
+          resumen={revision.resumen}
+          confianza={revision.confianza}
+          onCancelar={() => { setRevision(null); setIaMsg("Importación cancelada."); }}
+          onConfirmar={aplicarConfirmado}
+        />
+      )}
 
       {/* Importación por IA: la misma que en Mobilink Assist */}
       <Card className="mb-4 border-violet-500/30 p-4">
@@ -266,8 +306,8 @@ export default function NuevaAsistencia() {
               {iaMsg && <span className="text-[12px] text-slate-400">{iaMsg}</span>}
             </div>
             <p className="text-[12px] text-slate-500">
-              Lee también el texto de las fotos (datos del conductor, teléfonos, albaranes…). Nunca
-              sobrescribe lo que ya hayas escrito, y lo que no encaja en un campo va a observaciones internas.
+              Lee también el texto de las fotos (datos del conductor, teléfonos, albaranes…). Al terminar
+              se abre una ventana para revisar y confirmar qué datos se importan: nada se escribe solo.
             </p>
           </div>
         )}
@@ -361,6 +401,13 @@ export default function NuevaAsistencia() {
           </div>
         </Section>
 
+        <ConceptosPrevistos
+          conceptos={conceptos}
+          onChange={setConceptos}
+          esCambioDeNeumatico={/neum|tyre|rueda/i.test(
+            types.find((t) => t.code === f.serviceType)?.name ?? f.serviceType)}
+        />
+
         <Section title="Incidencia">
           <Field label="Descripción *" w="w-full">
             <textarea
@@ -379,5 +426,106 @@ export default function NuevaAsistencia() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Lo que se sabe de antemano que se va a montar.
+ *
+ * Es el momento en que Central lo sabe: si el servicio es un cambio pactado,
+ * el neumático se decide aquí y no cuando llega la factura. Nace como
+ * PREVISTO; el taller solo tiene que confirmarlo con la foto de montaje, y al
+ * cerrar entra solo en la tarifa. Lo previsto que nadie confirme no se cobra:
+ * sale como aviso y manda la tarifa a revisión.
+ *
+ * Aquí no se pone precio. Lo pone el tarifario publicado al cerrar el
+ * servicio, con la configuración congelada en la orden de salida.
+ */
+type Concepto = {
+  kind: "TIRE" | "MATERIAL";
+  size: string; brand: string; position: string;
+  conceptCode: string; quantity: number;
+};
+
+const CONCEPTO_NUEVO: Concepto = {
+  kind: "TIRE", size: "", brand: "", position: "ANY", conceptCode: "", quantity: 1,
+};
+
+function ConceptosPrevistos({ conceptos, onChange, esCambioDeNeumatico }: {
+  conceptos: Concepto[];
+  onChange: (c: Concepto[]) => void;
+  esCambioDeNeumatico: boolean;
+}) {
+  const editar = (i: number, campo: keyof Concepto, valor: string | number) =>
+    onChange(conceptos.map((c, j) => (j === i ? { ...c, [campo]: valor } : c)));
+
+  return (
+    <Section title="Neumáticos y materiales previstos">
+      <div className="w-full">
+        <p className="mb-3 text-[13px] text-slate-400">
+          Si ya se sabe qué se va a montar, ponlo aquí: el taller solo tendrá que
+          confirmarlo con la foto de montaje y entrará solo en la factura.{" "}
+          <span className="text-slate-500">
+            El precio no se indica: lo pone el tarifario al cerrar el servicio.
+          </span>
+        </p>
+
+        {esCambioDeNeumatico && conceptos.length === 0 && (
+          <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[13px] text-amber-300">
+            Este servicio es un cambio de neumático y no has indicado cuál. Si ya se
+            sabe, añádelo: se ahorra la llamada de después y el ajuste a mano.
+          </div>
+        )}
+
+        {conceptos.map((c, i) => (
+          <div key={i} className="mb-2 flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2">
+            <Field label="Tipo">
+              <Select value={c.kind} onChange={(e) => editar(i, "kind", e.target.value)}>
+                <option value="TIRE">Neumático</option>
+                <option value="MATERIAL">Material</option>
+              </Select>
+            </Field>
+            {c.kind === "TIRE" ? (
+              <>
+                <Field label="Medida">
+                  <Input value={c.size} className="w-40" placeholder="315/80R22.5"
+                         onChange={(e) => editar(i, "size", e.target.value)} />
+                </Field>
+                <Field label="Marca">
+                  <Input value={c.brand} className="w-32" placeholder="Hankook"
+                         onChange={(e) => editar(i, "brand", e.target.value)} />
+                </Field>
+                <Field label="Posición">
+                  <Select value={c.position} onChange={(e) => editar(i, "position", e.target.value)}>
+                    <option value="ANY">Cualquiera</option>
+                    <option value="STEER">Dirección</option>
+                    <option value="DRIVE">Tracción</option>
+                    <option value="TRAILER">Remolque</option>
+                  </Select>
+                </Field>
+              </>
+            ) : (
+              <Field label="Código del material">
+                <Input value={c.conceptCode} className="w-48" placeholder="REPARACION"
+                       onChange={(e) => editar(i, "conceptCode", e.target.value)} />
+              </Field>
+            )}
+            <Field label="Cantidad">
+              <Input value={String(c.quantity)} className="w-20"
+                     onChange={(e) => editar(i, "quantity", Number(e.target.value) || 1)} />
+            </Field>
+            <button type="button"
+                    className="pb-2 text-[12px] text-rose-300 hover:underline"
+                    onClick={() => onChange(conceptos.filter((_, j) => j !== i))}>
+              quitar
+            </button>
+          </div>
+        ))}
+
+        <Button variant="ghost" onClick={() => onChange([...conceptos, { ...CONCEPTO_NUEVO }])}>
+          Añadir neumático o material
+        </Button>
+      </div>
+    </Section>
   );
 }

@@ -53,6 +53,8 @@ type Fila = {
   cliente: string;
   base: string;
   tecnico: string;
+  /** true si la midió el arco: no hay operario a quien nombrar. */
+  esArco: boolean;
   km: number | null;
   estado: string;
   incidencias: number;
@@ -136,8 +138,20 @@ export default function HistoricoRevisiones() {
         tecnicoId: fTecnico || null,
       });
       setFilas(data.map((r: any) => {
-        const d = r.created_at ? new Date(r.created_at) : null;
+        // La hora de la MEDICIÓN, no la de la grabación. El CheckPoint la
+        // trae en el informe (13:14:52) y se guarda en medido_at; sin ella,
+        // una importación pintaba la misma hora —la de la importación— en
+        // todas sus revisiones. created_at sigue valiendo para lo que se hace
+        // con la APK, donde el técnico guarda al terminar.
+        const cuando = r.medido_at ?? r.created_at;
+        const d = cuando ? new Date(cuando) : null;
         const incs = (r.incidencias ?? []) as { estado: string }[];
+        // Misma regla que tc_informe_control_revisiones: es del arco cuando
+        // TODAS sus mediciones vienen del arco. Si un técnico repasó una sola
+        // rueda, la revisión ya no es del CheckPoint y lleva su nombre.
+        const dets = (r.detalles ?? []) as { metodo_profundidad: string | null; metodo_presion: string | null }[];
+        const esArco = dets.length > 0
+          && dets.every((d) => d.metodo_profundidad === "checkpoint" || d.metodo_presion === "checkpoint");
         return {
           id: r.id,
           fecha: r.fecha_revision ?? "",
@@ -146,7 +160,8 @@ export default function HistoricoRevisiones() {
           unidad: r.vehiculo?.numero_unidad ?? null,
           cliente: r.vehiculo?.empresa?.nombre ?? "—",
           base: r.vehiculo?.delegacion?.nombre ?? "—",
-          tecnico: r.tecnico?.nombre ?? "—",
+          tecnico: r.tecnico?.nombre ?? (esArco ? "CheckPoint" : "—"),
+          esArco,
           km: r.km_vehiculo != null ? Number(r.km_vehiculo) : null,
           estado: r.estado_revision ?? "completada",
           incidencias: incs.length,
@@ -171,6 +186,27 @@ export default function HistoricoRevisiones() {
     const pend = filas.filter((f) => f.incidenciasAbiertas > 0).length;
     return { total: filas.length, conInc, pend };
   }, [filas]);
+
+  // Cuántas ha hecho cada uno, con los MISMOS filtros que la tabla — se cuenta
+  // sobre las filas ya cargadas, así que no puede discrepar de lo que se ve.
+  // El arco va aparte: no es un operario, y mezclarlo escondería cuánto hace
+  // cada persona.
+  const porQuien = useMemo(() => {
+    const m = new Map<string, { quien: string; esArco: boolean; n: number; conInc: number }>();
+    for (const f of filas) {
+      const quien = f.esArco ? "CheckPoint" : (f.tecnico && f.tecnico !== "—" ? f.tecnico : "Sin operario");
+      const e = m.get(quien) ?? { quien, esArco: f.esArco, n: 0, conInc: 0 };
+      e.n++; if (f.incidencias > 0) e.conInc++;
+      m.set(quien, e);
+    }
+    // De más a menos; a igualdad, por nombre, para que no baile entre recargas.
+    return [...m.values()].sort((a, b) => b.n - a.n || a.quien.localeCompare(b.quien));
+  }, [filas]);
+
+  // La consulta trae como mucho 200 filas. Si se alcanza el tope, el desglose
+  // (y el total) son de lo cargado, no de todo lo que cumple el filtro: se
+  // dice, en vez de dar un número que parece completo y no lo es.
+  const topeAlcanzado = filas.length >= 200;
 
   const btnCls = (activo: boolean) =>
     `rounded-lg px-3 py-1.5 text-sm font-bold ${activo ? "bg-sky-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`;
@@ -200,9 +236,24 @@ export default function HistoricoRevisiones() {
           {usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
         </select>
         <span className="pb-2 text-xs text-slate-500">
-          {resumen.total} revisión(es) · {resumen.conInc} con incidencias · {resumen.pend} con incidencia pendiente
+          {topeAlcanzado ? "Primeras " : ""}{resumen.total} revisión(es) · {resumen.conInc} con incidencias · {resumen.pend} con incidencia pendiente
+          {topeAlcanzado && <span className="ml-1 text-amber-400">· hay más: acota las fechas</span>}
         </span>
       </div>
+
+      {porQuien.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-bold uppercase text-slate-500">Quién las ha hecho</span>
+          {porQuien.map((p) => (
+            <span key={p.quien}
+              className={`rounded-full px-2.5 py-1 text-[12px] font-semibold ${
+                p.esArco ? "bg-sky-500/15 text-sky-300" : "bg-slate-700/60 text-slate-200"}`}>
+              {p.quien} <span className="font-black">{p.n}</span>
+              {p.conInc > 0 && <span className="ml-1 text-amber-300">({p.conInc} con incid.)</span>}
+            </span>
+          ))}
+        </div>
+      )}
 
       {error && (
         <div className="mb-3 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-300">
@@ -228,10 +279,28 @@ export default function HistoricoRevisiones() {
               <tr key={f.id} className="border-t border-slate-700/60">
                 <td className={tdCls + " text-slate-300"}>{fechaCorta(f.fecha)}</td>
                 <td className={tdCls + " text-slate-400"}>{f.hora || "—"}</td>
-                <td className={tdCls + " font-bold"}>{f.matricula}{f.unidad ? <span className="ml-1 text-[11px] font-normal text-slate-500">· {f.unidad}</span> : null}</td>
+                <td className={tdCls + " font-bold"}>
+                  {/* La matrícula lleva a la ficha: es donde se pincha por
+                      instinto, y desde el histórico la pregunta que sigue
+                      siempre es "¿qué le pasa a ese vehículo?". Sin
+                      vehiculoId (revisión sin vehículo) queda como texto. */}
+                  {f.vehiculoId
+                    ? <button onClick={() => navigate(`/tyrecontrol/vehiculos/${f.vehiculoId}`)}
+                        className="font-bold text-sky-300 hover:underline" title="Ver la ficha del vehículo">
+                        {f.matricula}
+                      </button>
+                    : f.matricula}
+                  {f.unidad ? <span className="ml-1 text-[11px] font-normal text-slate-500">· {f.unidad}</span> : null}
+                </td>
                 <td className={tdCls + " text-slate-400"}>{f.cliente}</td>
                 <td className={tdCls + " text-slate-400"}>{f.base}</td>
-                <td className={tdCls + " text-slate-300"}>{f.tecnico}</td>
+                <td className={tdCls + " text-slate-300"}>
+                  {/* En chip y no como texto: "CheckPoint" no es una persona,
+                      y puesto igual que un nombre se lee como si lo fuera. */}
+                  {f.esArco
+                    ? <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[11px] font-bold text-sky-300">CheckPoint</span>
+                    : f.tecnico}
+                </td>
                 <td className={tdCls + " text-slate-400"}>{f.km != null ? f.km.toLocaleString("es-ES") : "—"}</td>
                 <td className={tdCls}>
                   {f.incidencias === 0 ? <span className="text-slate-500">—</span> : (
@@ -260,9 +329,19 @@ export default function HistoricoRevisiones() {
       {ficha && (
         <Modal title={`Revisión ${ficha.matricula} · ${fechaCorta(ficha.fecha)}${ficha.hora ? ` · ${ficha.hora}` : ""}`} onClose={() => setFicha(null)} size="xl">
           <div className="mb-2 text-[12px] text-slate-400">
-            {ficha.cliente} · Base {ficha.base} · Operario: {ficha.tecnico}
+            {ficha.cliente} · Base {ficha.base} · {ficha.esArco ? "Medido por el CheckPoint" : `Operario: ${ficha.tecnico}`}
             {ficha.km != null ? ` · ${ficha.km.toLocaleString("es-ES")} km` : ""}
             {" · "}Estado: {ESTADO_META[ficha.estado]?.label ?? ficha.estado}
+            {/* Mirando una revisión, lo siguiente que se quiere ver es el
+                vehículo entero. Cierra el modal para no dejarlo colgando
+                encima de otra pantalla. */}
+            {ficha.vehiculoId && (
+              <button
+                onClick={() => { const id = ficha.vehiculoId; setFicha(null); navigate(`/tyrecontrol/vehiculos/${id}`); }}
+                className="ml-2 font-semibold text-sky-300 hover:underline">
+                Ver ficha del vehículo →
+              </button>
+            )}
           </div>
 
           {/* Plano visual del vehículo con las mediciones de esta revisión */}
@@ -319,16 +398,24 @@ export default function HistoricoRevisiones() {
           <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Mediciones por posición</div>
           <TableWrap>
             <thead className="bg-slate-900"><tr>
-              <th className={thCls}>Posición</th><th className={thCls}>Neumático</th><th className={thCls}>Profundidad</th>
+              <th className={thCls}>Posición</th><th className={thCls}>Neumático</th>
+              <th className={thCls}>Marca y modelo</th><th className={thCls}>Profundidad</th>
               <th className={thCls}>Presión</th><th className={thCls}>Estado visual</th><th className={thCls}>Observaciones</th>
             </tr></thead>
             <tbody>
-              {cargandoFicha ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Cargando…</td></tr>
-              : fichaDetalleOrden.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={6}>Sin datos de posiciones para esta revisión.</td></tr>
+              {cargandoFicha ? <tr><td className={tdCls + " text-slate-500"} colSpan={7}>Cargando…</td></tr>
+              : fichaDetalleOrden.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={7}>Sin datos de posiciones para esta revisión.</td></tr>
               : fichaDetalleOrden.map((d) => (
                 <tr key={d.id} className="border-t border-slate-700/60">
                   <td className={tdCls + " font-semibold"}>{d.posicion?.codigo_posicion ?? "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.neumatico ? (d.neumatico.numero_interno ?? d.neumatico.codigo_interno) : (d.neumatico_ausente ? "Ausente" : "—")}</td>
+                  {/* El número interno identifica la goma pero no dice cuál es:
+                      con dos modelos de la misma marca y medida, un
+                      "IMP-1492HPW-P2" no le sirve a nadie. Solo lo informado. */}
+                  <td className={tdCls + " text-slate-300"}>
+                    {[d.neumatico?.marca, d.neumatico?.modelo].filter(Boolean).join(" ") || "—"}
+                    {d.neumatico?.medida ? <span className="ml-1 text-[11px] text-slate-500">{d.neumatico.medida}</span> : null}
+                  </td>
                   <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "No accesible" : d.profundidad_mm != null ? `${d.profundidad_mm} mm` : "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.no_accesible ? "—" : d.presion_bar != null ? `${presionTxt(d.presion_bar)} bar` : "—"}</td>
                   <td className={tdCls + " text-slate-400"}>{d.estado_visual ?? "—"}</td>

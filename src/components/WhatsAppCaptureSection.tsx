@@ -222,17 +222,23 @@ const AI_FIELD_LABELS: { key: keyof WhatsAppAiSuggestions; label: string; applyK
   { key: "municipio", label: "Municipio" },
   { key: "provincia", label: "Provincia" },
   { key: "tipoAveria", label: "Tipo avería" },
-  { key: "descripcionAveria", label: "Descripción avería", applyKey: "notes" },
-  { key: "resumen", label: "Resumen" },
+  { key: "descripcionAveria", label: "Descripción avería", applyKey: "descripcionAveria" },
+  { key: "resumen", label: "Resumen (a observaciones)", applyKey: "notesAppend" },
 ];
 
 type Props = {
   jobId: number;
   jobPlate?: string;
   onAssistanceUpdated?: () => void;
+  /**
+   * Cierra el panel y deja solo la tarjeta de la asistencia. Lo decide el
+   * usuario con el botón «Cerrar», cuando ya ha aplicado los datos que quería;
+   * se vuelve a abrir con el botón «Captura WhatsApp».
+   */
+  onClose?: () => void;
 };
 
-export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUpdated }: Props) {
+export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUpdated, onClose }: Props) {
   const [session, setSession] = useState<WhatsAppCaptureSessionWithMessages | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -271,10 +277,15 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
     fetchSession();
   }, [fetchSession]);
 
-  // Poll messages when session is ACTIVE
+  // Sondeo: mensajes nuevos mientras la captura está ACTIVE, y resultado del
+  // análisis mientras está 'pending'. Sin esto último la pantalla se quedaba
+  // congelada en "Analizando con IA…" aunque el análisis ya hubiera terminado.
   useEffect(() => {
-    if (!session || session.status !== "ACTIVE") return;
-    const interval = setInterval(fetchSession, 8000);
+    if (!session) return;
+    const isActive = session.status === "ACTIVE";
+    const isAnalyzing = session.ai_status === "pending";
+    if (!isActive && !isAnalyzing) return;
+    const interval = setInterval(fetchSession, isActive ? 8000 : 3000);
     return () => clearInterval(interval);
   }, [session, fetchSession]);
 
@@ -332,14 +343,29 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
         setError(d.error ?? "Error cerrando captura");
         return;
       }
+      // El sondeo del resultado lo lleva el efecto de arriba mientras
+      // ai_status siga en 'pending'.
       await fetchSession();
-      // Poll for AI results
-      let attempts = 0;
-      const poll = setInterval(async () => {
-        await fetchSession();
-        attempts++;
-        if (attempts > 10) clearInterval(poll);
-      }, 3000);
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function reanalyze() {
+    if (!session) return;
+    setActionLoading(true);
+    setError(null);
+    try {
+      const res = await apiFetch(
+        `${API_BASE}/api/whatsapp-capture/sessions/${session.id}/reanalyze`,
+        { method: "POST", headers: getAdminHeaders() }
+      );
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        setError(d?.error ?? "Error relanzando el análisis");
+        return;
+      }
+      await fetchSession();
     } finally {
       setActionLoading(false);
     }
@@ -392,6 +418,7 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
   }
 
   const suggestions: WhatsAppAiSuggestions | null = session?.ai_suggestions ?? null;
+  const aiStatus = session?.ai_status ?? null;
   const messages = session?.messages ?? [];
   const locationMessages = messages.filter(
     (m) => m.message_type === "location" && m.latitude != null && m.longitude != null
@@ -515,6 +542,18 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
           {!session && (
             <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-white/60">Sin sesión</span>
           )}
+          {/* Cierra el panel, no la sesión de captura: eso lo hace «Finalizar
+              captura». Aquí solo se recoge la vista cuando ya no hace falta. */}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              title="Cerrar el panel (la captura no se toca)"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/25 px-3 py-1 text-xs font-bold text-white/80 hover:bg-white/10"
+            >
+              ✕ Cerrar
+            </button>
+          )}
         </div>
       </div>
 
@@ -558,8 +597,17 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
               </button>
             </>
           )}
-          {isClosed && !suggestions && (
-            <span className="text-xs text-slate-400 self-center">Analizando con IA…</span>
+          {isClosed && aiStatus === "pending" && (
+            <span className="text-xs text-slate-400 self-center animate-pulse">Analizando con IA…</span>
+          )}
+          {isClosed && aiStatus === "error" && (
+            <button
+              onClick={reanalyze}
+              disabled={actionLoading}
+              className="flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-black text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {actionLoading ? "…" : "↻ Reintentar análisis"}
+            </button>
           )}
           {isClosed && (
             <button
@@ -571,6 +619,17 @@ export default function WhatsAppCaptureSection({ jobId, jobPlate, onAssistanceUp
             </button>
           )}
         </div>
+
+        {/* Fallo del análisis IA — antes se mostraba como "Analizando con IA…" para siempre */}
+        {isClosed && aiStatus === "error" && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            <span className="font-bold">El análisis con IA no se completó.</span>
+            {session?.ai_error && <span className="block text-xs mt-0.5">{session.ai_error}</span>}
+            <span className="block text-xs mt-0.5 text-amber-700">
+              Los mensajes y archivos siguen disponibles abajo; puedes rellenar los datos a mano.
+            </span>
+          </div>
+        )}
 
         {/* Session info */}
         {session && (

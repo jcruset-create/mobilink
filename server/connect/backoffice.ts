@@ -7,30 +7,124 @@
  */
 
 import crypto from "node:crypto";
-import { Router, json, type Response } from "express";
+import { Router, json, type Request, type Response } from "express";
 import db from "../db.ts";
-import { requireConnectRole, auditConnect } from "./rbac.ts";
+import { requireConnectRole, auditConnect, type ConnectRole } from "./rbac.ts";
 import {
   createAssistance, submitDraft, assignAssistance, transition, InvalidTransitionError,
   findCandidates, offerToWorkshop, acceptAssignment, rejectAssignment, withdrawAndReassign,
 } from "./service.ts";
 import { requireProviderUser, requireConnectUser } from "./rbac.ts";
 import { assistanceKpis, hashPin, newPinSalt } from "./lite.ts";
+import { liteMetrics } from "./liteMetrics.ts";
 import {
   WORKSHOP_INTEGRATION_TYPES, WORKSHOP_TIER, LITE_STATUS_LABELS, computeLiteKpis, statusQualityScore,
 } from "./liteRules.ts";
-import { connectBus } from "./bus.ts";
+import { buscarDuplicados, normalizarPropuesta } from "./workshopImport.ts";
+import { interpretarBusqueda, talleresCercanos } from "./geoSearch.ts";
+import { notifyLiteUser, notifyLiteWorkshop } from "./litePush.ts";
+import { connectBus, publish } from "./bus.ts";
 import { setManualStatus } from "./mobileunits.ts";
 import { kpiDashboard, demandOutlook } from "./intelligence.ts";
 import { createAlert } from "./alerts.ts";
 import { drivingRoute } from "./routing.ts";
-import { extractJson, hasAi, AI_IMAGE_RULES } from "../core/ai.ts";
+import { buildConnectReportPdf, generarYGuardarInforme } from "./report.ts";
+import { clasificarCola, ESTADOS_CERRADOS, type Cola } from "./queues.ts";
+import { evidenciasDeAsistencia, firmaDeAsistencia } from "./evidence.ts";
+import { normalizarVehiculo, descripcionVehiculo } from "./vehicle.ts";
+import { formatear } from "./pricing/money.ts";
+import { puede as puedeEconomico } from "./pricing/permissions.ts";
+import type { ResultadoTarifa } from "./pricing/types.ts";
+import { extractJson, hasAi, AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "../core/ai.ts";
+import { leerBackoffice, guardarBackoffice } from "./backofficeData.ts";
 import {
   activeCaptureSession, captureMessages, saveCaptureAnalysis, normalize as normalizeCapture,
 } from "../core/whatsappCapture.ts";
 
 function err(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
+}
+
+/**
+ * Centro de control por el que hay que filtrar, o null si se ven todos.
+ *
+ * El superadministrador del hub atraviesa los centros a propósito: es quien da
+ * de alta y da soporte a las centrales. Cualquier otro rol ve el suyo y solo el
+ * suyo. Es el mismo criterio que ya usaban clientes, usuarios y auditoría; lo
+ * que faltaba era aplicarlo también a las asistencias y a la facturación, que
+ * es donde están los importes.
+ */
+function centroDe(req: { connectUser?: { role: string; controlCenterId: number | null } }): number | null {
+  const u = req.connectUser;
+  if (!u || u.role === "superadmin") return null;
+  return u.controlCenterId;
+}
+
+/**
+ * El centro sobre el que se está operando, para las rutas que necesitan uno
+ * concreto: configurar un tarifario, aplicar una plantilla, marcar facturado.
+ *
+ * `centroDe` devuelve null para el superadministrador a propósito, porque en
+ * los LISTADOS eso significa «los ve todos». Pero configurar no es listar: no
+ * existe «publicar la tarifa de todas las centrales a la vez». Así que aquí el
+ * superadministrador tiene que decir en cuál está, y lo dice con
+ * `controlCenterId`.
+ *
+ * Se acepta tanto en la query como en el cuerpo porque las rutas de
+ * administración son mitad GET y mitad POST/PUT, y obligar a cada pantalla a
+ * recordar cuál toca es una fuente de fallos sin ninguna ventaja.
+ */
+function centroPedido(req: Request): number | null {
+  const propio = centroDe(req);
+  if (propio != null) return propio;
+  const pedido = req.query?.controlCenterId ?? req.body?.controlCenterId;
+  if (pedido == null || pedido === "") return null;
+  const n = Number(pedido);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/**
+ * Resultado del motor listo para JSON.
+ *
+ * Los importes salen como TEXTO con dos decimales. Convertirlos a `number`
+ * aquí devolvería la coma flotante que se ha quitado a conciencia en todo el
+ * motor, y el panel solo tiene que pintarlos.
+ *
+ * Y se recorta según el rol de quien pregunta: el margen no lo ve todo el
+ * mundo. Se recorta al SALIR y no al calcular, porque el motor necesita las
+ * dos patas para el margen aunque quien pregunte no vaya a verlo.
+ */
+function paraApi(r: ResultadoTarifa, role?: ConnectRole) {
+  const t = (d: bigint | null) => (d == null ? null : formatear(d, 2));
+  const verVenta = role == null || puedeEconomico(role, "ver_venta");
+  const verCompra = role == null || puedeEconomico(role, "ver_compra");
+  const verMargen = role == null || puedeEconomico(role, "ver_margen");
+  const si = (ok: boolean, v: string | null) => (ok ? v : null);
+
+  return {
+    etapa: r.etapa, estado: r.estado, currency: r.currency,
+    saleTotal: si(verVenta, t(r.ventaTotal)), purchaseTotal: si(verCompra, t(r.compraTotal)),
+    grossMargin: si(verMargen, t(r.margen)), grossMarginPct: si(verMargen, t(r.margenPct)),
+    tariff: r.venta?.tariffPlanName ?? r.compra?.tariffPlanName ?? null,
+    version: r.venta?.version ?? r.compra?.version ?? null,
+    rule: r.venta?.regla?.name ?? r.compra?.regla?.name ?? null,
+    lines: r.lineas.map((l) => ({
+      lineNumber: l.numero, kind: l.tipo, description: l.descripcion,
+      quantity: l.cantidad, unit: l.unidad,
+      saleUnitPrice: si(verVenta, t(l.ventaUnitaria)), saleTotal: si(verVenta, t(l.ventaTotal)),
+      purchaseUnitPrice: si(verCompra, t(l.compraUnitaria)), purchaseTotal: si(verCompra, t(l.compraTotal)),
+    })),
+    warnings: r.avisos,
+    explanation: r.explicacion,
+    engineVersion: r.engineVersion,
+  };
+}
+
+/** Columnas JSON: según el driver llegan ya parseadas o como texto. */
+function leerJson(value: unknown): Record<string, any> {
+  if (value == null) return {};
+  if (typeof value !== "string") return value as Record<string, any>;
+  try { return JSON.parse(value); } catch { return {}; }
 }
 
 /**
@@ -366,17 +460,12 @@ export function createConnectBackofficeRouter(): Router {
         ORDER BY ca.priority = 'urgente' DESC, ca."createdAtMs" ASC`,
     );
 
-    const pending: any[] = [], assigning: any[] = [], active: any[] = [], attention: any[] = [];
+    const colas: Record<Cola, any[]> = { pending: [], assigning: [], active: [], attention: [] };
     for (const a of r.rows) {
-      const slaRisk = a.slaDeadlineAtMs != null && Number(a.slaDeadlineAtMs) - now < 15 * 60_000;
-      const slaBreached = a.slaDeadlineAtMs != null && Number(a.slaDeadlineAtMs) < now;
-      const row = { ...a, slaRisk, slaBreached };
-      if (["assignment_failed", "no_coverage"].includes(a.status) || slaBreached) attention.push(row);
-      else if (["draft", "pending"].includes(a.status)) pending.push(row);
-      else if (["searching", "awaiting_acceptance"].includes(a.status)) assigning.push(row);
-      else active.push(row);
+      const { cola, slaRisk, slaBreached } = clasificarCola(a, now);
+      colas[cola].push({ ...a, cola, slaRisk, slaBreached });
     }
-    res.json({ generated_at: now, pending, assigning, active, attention });
+    res.json({ generated_at: now, ...colas });
   });
 
   // Mapa operativo: asistencias activas + talleres + posición de técnicos
@@ -522,8 +611,7 @@ export function createConnectBackofficeRouter(): Router {
     const since30 = Date.now() - 30 * 24 * 3600_000;
     const [auth, workshops, units, stats, billing, incidents] = await Promise.all([
       db.query(
-        `SELECT a.*, (SELECT COUNT(*)::int FROM connect_tariff_lines tl
-                       WHERE tl."authorizationId" = a.id AND tl.active) AS "tariffLines"
+        `SELECT a.*
            FROM connect_provider_authorizations a
           WHERE a."providerCompanyId" = $1 AND a."branchId" IS NULL
           ORDER BY a.id DESC LIMIT 1`,
@@ -653,7 +741,7 @@ export function createConnectBackofficeRouter(): Router {
            FROM techs t
            LEFT JOIN roadside_assistances ra ON ra.id = t."currentRoadsideAssistanceId"
            LEFT JOIN connect_assistances ca ON ca."coreAssistanceId" = t."currentRoadsideAssistanceId"
-          WHERE t."workshopId" = $1
+          WHERE t."workshopId" = $1 AND t."compartidoCentral" = true
           ORDER BY t.name`,
         [String(coreWorkshopId)],
       );
@@ -760,6 +848,89 @@ export function createConnectBackofficeRouter(): Router {
     res.json({ data: r.rows });
   });
 
+  /**
+   * Búsqueda de ubicación del mapa operativo: municipio, código postal, punto
+   * kilométrico de carretera, coordenadas o enlace de Google Maps. Devuelve el
+   * punto y los talleres más cercanos, que es la pregunta real ("¿a quién le
+   * mando esto?").
+   *
+   * La geocodificación se hace en el servidor y no en el navegador para no
+   * publicar la clave de Google en el panel.
+   */
+  router.get("/geo/search", ...requireConnectRole("operator"), async (req, res) => {
+    const consulta = String(req.query.q ?? "");
+    const plan = interpretarBusqueda(consulta);
+    if (!plan) return err(res, 422, "validation_failed", "Escribe una localidad, un código postal o un punto kilométrico");
+
+    const talleres = await db.query(
+      `SELECT w.id, w.name, w.latitude, w.longitude, w."radiusKm", w.phone, w."integrationType",
+              w."connectStatus", w."networkParticipation", w.city, w.province, pc.name AS "providerName"
+         FROM connect_workshops w
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"`,
+    );
+    const responder = (punto: { lat: number; lng: number }, etiqueta: string, precision: string, avisos: string[]) =>
+      res.json({
+        punto, etiqueta, tipo: plan.tipo, precision, avisos,
+        workshops: talleresCercanos(punto, talleres.rows.map((w: any) => ({
+          ...w, latitude: Number(w.latitude), longitude: Number(w.longitude), radiusKm: Number(w.radiusKm),
+        }))),
+      });
+
+    // Coordenadas y enlaces no hace falta preguntárselos a nadie
+    if (plan.punto) return responder(plan.punto, plan.etiqueta, "exacta", plan.avisos);
+    if (!plan.consultas.length) {
+      return err(res, 422, "not_geocodable", plan.avisos[0] ?? "No se puede situar eso en el mapa");
+    }
+
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) return err(res, 503, "geocoder_unavailable", "GOOGLE_MAPS_API_KEY no configurada en el servidor");
+
+    // Se prueban las consultas en orden: de la más precisa a la de repliegue
+    for (let i = 0; i < plan.consultas.length; i++) {
+      const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
+      url.searchParams.set("address", plan.consultas[i]);
+      url.searchParams.set("key", apiKey);
+      url.searchParams.set("language", "es");
+      if (plan.componentes) url.searchParams.set("components", plan.componentes);
+
+      let data: any;
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        data = await r.json();
+      } catch (e: any) {
+        console.error("[Connect] geocodificación:", e?.message);
+        return err(res, 502, "geocoder_error", "El geocodificador no responde ahora mismo");
+      }
+      if (data.status === "ZERO_RESULTS") continue;
+      if (data.status !== "OK" || !data.results?.[0]) {
+        // Sin `error_message`: Google repite en él la dirección consultada, que
+        // es la ubicación del cliente, y acabaría en los registros del servidor.
+        console.error(`[Connect] geocodificación: ${data.status}`);
+        return err(res, 502, "geocoder_error", `El geocodificador devolvió ${data.status}`);
+      }
+
+      const r0 = data.results[0];
+      const avisos = [...plan.avisos];
+      // Un repliegue ya no es lo que pidió el operador: hay que decírselo
+      if (i > 0) avisos.unshift(`No se encontró "${plan.consultas[0]}"; se muestra "${r0.formatted_address}".`);
+      const precision = r0.geometry?.location_type === "ROOFTOP" ? "exacta"
+        : r0.geometry?.location_type === "RANGE_INTERPOLATED" ? "interpolada"
+        : "aproximada";
+      if (precision === "aproximada" && plan.tipo === "punto_kilometrico") {
+        avisos.push("Google no ha situado el kilómetro exacto: el punto es orientativo.");
+      }
+      return responder(
+        { lat: r0.geometry.location.lat, lng: r0.geometry.location.lng },
+        r0.formatted_address ?? plan.etiqueta,
+        precision,
+        avisos,
+      );
+    }
+
+    return err(res, 404, "not_found", `No se ha encontrado "${consulta}"`);
+  });
+
   // ── Talleres de la red ────────────────────────────────────
 
   router.get("/workshops", ...requireConnectRole("analyst"), async (_req, res) => {
@@ -773,6 +944,49 @@ export function createConnectBackofficeRouter(): Router {
     res.json({ data: r.rows });
   });
 
+  /**
+   * Propuestas de alta leídas de una captura de WhatsApp, ya en el formato de
+   * `connect_workshops` y con los posibles duplicados marcados. No crea nada:
+   * el alta la sigue confirmando el operador campo a campo.
+   */
+  router.get("/whatsapp-capture/:id/workshops", ...requireConnectRole("operator"), async (req, res) => {
+    const r = await db.query(
+      `SELECT ai_suggestions, ai_status, ai_error FROM whatsapp_capture_sessions WHERE id = $1`,
+      [Number(req.params.id)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Sesión no encontrada");
+
+    let bruto = r.rows[0].ai_suggestions;
+    if (typeof bruto === "string") { try { bruto = JSON.parse(bruto); } catch { bruto = null; } }
+    if (!bruto) {
+      return res.json({
+        data: [], avisos: [], resumen: null,
+        aiStatus: r.rows[0].ai_status, aiError: r.rows[0].ai_error,
+      });
+    }
+
+    const existentes = await db.query(
+      `SELECT id, name, phone, address, latitude, longitude FROM connect_workshops`,
+    );
+    const data = (Array.isArray(bruto.talleres) ? bruto.talleres : []).map((t: any) => {
+      const campos = normalizarPropuesta(t);
+      return {
+        campos,
+        duplicados: buscarDuplicados(campos, existentes.rows),
+        datosDetectados: Array.isArray(t.datosDetectados) ? t.datosDetectados : [],
+        confidence: ["high", "medium", "low"].includes(t.confidence) ? t.confidence : null,
+      };
+    });
+
+    res.json({
+      data,
+      avisos: Array.isArray(bruto.avisos) ? bruto.avisos : [],
+      resumen: typeof bruto.resumen === "string" ? bruto.resumen : null,
+      aiStatus: r.rows[0].ai_status,
+      aiError: r.rows[0].ai_error,
+    });
+  });
+
   router.post("/workshops", ...requireConnectRole("cc_admin"), async (req, res) => {
     const b = req.body ?? {};
     if (!b.name?.trim() || typeof b.latitude !== "number" || typeof b.longitude !== "number") {
@@ -781,13 +995,17 @@ export function createConnectBackofficeRouter(): Router {
     const now = Date.now();
     const r = await db.query(
       `INSERT INTO connect_workshops
-         ("coreWorkshopId", "providerCompanyId", "branchId", name, phone, latitude, longitude, "radiusKm", services, "integrationType", "createdAtMs", "updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11) RETURNING *`,
+         ("coreWorkshopId", "providerCompanyId", "branchId", name, phone, latitude, longitude, "radiusKm", services, "integrationType",
+          address, "postalCode", city, province, email, "commercialNetwork", "openingHours", notes,
+          "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19) RETURNING *`,
       [
         b.coreWorkshopId ?? null, b.providerCompanyId ?? null, b.branchId ?? null,
         b.name.trim(), b.phone ?? null, b.latitude, b.longitude, Number(b.radiusKm) || 60,
         JSON.stringify(Array.isArray(b.services) && b.services.length ? b.services : []),
         WORKSHOP_INTEGRATION_TYPES.includes(b.integrationType) ? b.integrationType : "assist",
+        b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+        b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null, b.notes ?? null,
         now,
       ],
     );
@@ -820,6 +1038,14 @@ export function createConnectBackofficeRouter(): Router {
          "liteSettings" = COALESCE($11, "liteSettings"),
          features = COALESCE($12, features),
          "coreWorkshopId" = COALESCE($13, "coreWorkshopId"),
+         address = COALESCE($14, address),
+         "postalCode" = COALESCE($15, "postalCode"),
+         city = COALESCE($16, city),
+         province = COALESCE($17, province),
+         email = COALESCE($18, email),
+         "commercialNetwork" = COALESCE($19, "commercialNetwork"),
+         "openingHours" = COALESCE($20, "openingHours"),
+         notes = COALESCE($21, notes),
          "updatedAtMs" = $9
        WHERE id = $10 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
@@ -829,7 +1055,9 @@ export function createConnectBackofficeRouter(): Router {
        u.name, now, Number(req.params.id),
        b.liteSettings ? JSON.stringify(b.liteSettings) : null,
        b.features ? JSON.stringify(b.features) : null,
-       b.coreWorkshopId != null ? String(b.coreWorkshopId) : null],
+       b.coreWorkshopId != null ? String(b.coreWorkshopId) : null,
+       b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+       b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null, b.notes ?? null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
     // Cambiar a Lite (o volver) no toca datos: solo el producto habilitado
@@ -965,6 +1193,76 @@ export function createConnectBackofficeRouter(): Router {
     res.json({ ok: true });
   });
 
+  /**
+   * Salud de la red Lite: lo que el encargo pide vigilar y hasta ahora no se
+   * medía. La mitad sale de los contadores del proceso (última hora) y la otra
+   * mitad de la base, que es donde vive el estado de los dispositivos.
+   */
+  router.get("/lite/health", ...requireConnectRole("analyst"), async (_req, res) => {
+    const now = Date.now();
+    const metricas = liteMetrics.snapshot(now);
+
+    const versiones = await db.query(
+      `SELECT COALESCE(d."appVersion", 'desconocida') AS version,
+              COUNT(*)::int AS dispositivos,
+              MAX(d."lastSeenAtMs") AS "ultimoUsoMs"
+         FROM connect_lite_devices d
+         JOIN connect_lite_users u ON u.id = d."userId"
+        WHERE d."revokedAtMs" IS NULL AND u.active
+          AND d."lastSeenAtMs" > $1
+        GROUP BY 1 ORDER BY 2 DESC`,
+      [now - 30 * 24 * 3600_000],
+    );
+
+    // Cola atascada: la APK dice que le quedan cosas por subir y su último
+    // parte ya no es reciente, o arrastra evidencias que ha dado por fallidas.
+    const colas = await db.query(
+      `SELECT d.id, d."deviceId", d."appVersion", d."queuePending", d."queueFailed",
+              d."queueOldestAtMs", d."queueReportedAtMs", d."lastSeenAtMs",
+              u.name AS "userName", w.id AS "workshopId", w.name AS "workshopName"
+         FROM connect_lite_devices d
+         JOIN connect_lite_users u ON u.id = d."userId"
+         JOIN connect_workshops w ON w.id = d."workshopId"
+        WHERE d."revokedAtMs" IS NULL
+          AND (COALESCE(d."queueFailed", 0) > 0
+               OR (COALESCE(d."queuePending", 0) > 0 AND d."queueOldestAtMs" < $1))
+        ORDER BY COALESCE(d."queueFailed", 0) DESC, d."queueOldestAtMs" LIMIT 50`,
+      [now - 30 * 60_000],
+    );
+
+    // Dispositivos activos sin token push: no recibirán ningún aviso, por muy
+    // bien que funcione el envío.
+    const sinPush = await db.query(
+      `SELECT COUNT(*)::int AS total
+         FROM connect_lite_devices d JOIN connect_lite_users u ON u.id = d."userId"
+        WHERE d."revokedAtMs" IS NULL AND u.active AND d."fcmToken" IS NULL
+          AND d."lastSeenAtMs" > $1`,
+      [now - 7 * 24 * 3600_000],
+    );
+
+    // Servicios en curso cuyo seguimiento se ha quedado mudo.
+    const seguimientoMudo = await db.query(
+      `SELECT ca.id, ca."expedientNumber", ca.status, ca."liteUserName",
+              w.id AS "workshopId", w.name AS "workshopName", ca."operatorLocationAtMs"
+         FROM connect_assistances ca
+         JOIN connect_workshops w ON w.id = ca."workshopId"
+        WHERE w."integrationType" = 'lite'
+          AND ca.status IN ('en_route','in_progress','returning_to_workshop')
+          AND (ca."operatorLocationAtMs" IS NULL OR ca."operatorLocationAtMs" < $1)
+        ORDER BY ca."updatedAtMs" DESC LIMIT 50`,
+      [now - 15 * 60_000],
+    );
+
+    res.json({
+      generadoEnMs: now,
+      metricas,
+      versiones: versiones.rows,
+      colasAtascadas: colas.rows,
+      dispositivosSinPush: sinPush.rows[0]?.total ?? 0,
+      seguimientoMudo: seguimientoMudo.rows,
+    });
+  });
+
   /** Todo lo que el taller ha reportado: rastro GPS, evidencias, firma y KPIs. */
   router.get("/assistances/:id/lite", ...requireConnectRole("analyst"), async (req, res) => {
     const id = Number(req.params.id);
@@ -987,16 +1285,9 @@ export function createConnectBackofficeRouter(): Router {
            FROM connect_assistance_tracks WHERE "assistanceId" = $1 ORDER BY "deviceTsMs" LIMIT 2000`,
         [id],
       ),
-      db.query(
-        `SELECT id, category, url, "fileName", "sizeBytes", lat, lng, "createdAtMs"
-           FROM connect_assistance_files WHERE "assistanceId" = $1 AND "deletedAtMs" IS NULL ORDER BY id`,
-        [id],
-      ),
-      db.query(
-        `SELECT id, "signerName", "signerDocument", url, "signedAtMs"
-           FROM connect_assistance_signatures WHERE "assistanceId" = $1 ORDER BY id DESC LIMIT 1`,
-        [id],
-      ),
+      // Fotos de la APK Lite y del técnico de Mobilink Assist, unificadas
+      evidenciasDeAsistencia(id),
+      firmaDeAsistencia(id),
       db.query(
         `SELECT d."lastSeenAtMs", d.platform, d."appVersion", d."gpsPermission", d."notifPermission",
                 d."fcmToken" IS NOT NULL AS "pushEnabled"
@@ -1013,8 +1304,8 @@ export function createConnectBackofficeRouter(): Router {
       assistance: a.rows[0],
       tier: WORKSHOP_TIER[a.rows[0].integrationType] ?? null,
       track: track.rows.map((p: any) => ({ ...p, deviceTsMs: Number(p.deviceTsMs) })),
-      files: files.rows,
-      signature: signature.rows[0] ?? null,
+      files,
+      signature,
       device: device.rows[0] ?? null,
       kpis: await assistanceKpis(id),
       // "Ubicación desactualizada" es información operativa, no un color
@@ -1187,6 +1478,132 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     res.json({ data });
   });
 
+  // ── Back office de la asistencia ─────────────────────────────────────────
+
+  /**
+   * Datos de back office. Si la asistencia está en un taller con Mobilink
+   * Assist, son LOS MISMOS que ve y edita el back office de Assist.
+   */
+  router.get("/assistances/:id/backoffice", ...requireConnectRole("analyst"), async (req, res) => {
+    const r = await leerBackoffice(Number(req.params.id));
+    if (!r) return err(res, 404, "not_found", "Asistencia no encontrada");
+    res.json({ data: r.data, origen: r.origen });
+  });
+
+  router.put("/assistances/:id/backoffice", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const data = await guardarBackoffice(id, req.body ?? {});
+    await auditConnect({
+      req, action: "assistance.backoffice_saved", resourceType: "assistance", resourceId: id,
+      detail: { campos: Object.keys(req.body ?? {}).length },
+    });
+    res.json({ data });
+  });
+
+  /** Extracción por IA con los campos del back office (texto y/o capturas). */
+  router.post("/assistances/:id/backoffice/ai-extract", ...requireConnectRole("operator"), async (req, res) => {
+    const text = String(req.body?.text ?? "").trim();
+    const images: string[] = Array.isArray(req.body?.images)
+      ? req.body.images.filter((u: any) => typeof u === "string" && u.startsWith("data:image")).slice(0, 6)
+      : [];
+    if (!text && images.length === 0) {
+      return err(res, 422, "validation_failed", "Pega el texto o añade al menos una imagen");
+    }
+    if (!hasAi()) return err(res, 503, "ai_unavailable", "La extracción por IA no está configurada (OPENAI_API_KEY)");
+
+    const data = await extractJson({ system: AI_BACKOFFICE_PROMPT, text, images, maxTokens: 900 });
+    await auditConnect({
+      req, action: "assistance.backoffice_ai_extract", resourceType: "assistance",
+      resourceId: Number(req.params.id), detail: { campos: Object.keys(data).length },
+    });
+    res.json({ data });
+  });
+
+  // ── Informe de la asistencia ─────────────────────────────────────────────
+
+  /** Informe PDF de la asistencia (se abre en el navegador). */
+  router.get("/assistances/:id/report.pdf", ...requireConnectRole("analyst"), async (req, res) => {
+    const id = Number(req.params.id);
+    try {
+      /*
+       * Aquí sí van los importes: la ruta va con rol de la central. El informe
+       * que se archiva con URL pública se genera sin ellos, porque ese enlace
+       * lo acaba viendo el taller y el precio de venta es el de la central.
+       */
+      const { buffer, assistance } = await buildConnectReportPdf(id, { incluirImportes: true });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="asistencia_${assistance.expedientNumber ?? id}.pdf"`,
+      );
+      res.send(buffer);
+    } catch (e: any) {
+      console.error("[Connect] informe:", e?.message);
+      err(res, 500, "report_failed", "No se pudo generar el informe");
+    }
+  });
+
+  /** Regenera el informe y lo archiva en la ficha. */
+  router.post("/assistances/:id/report", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const url = await generarYGuardarInforme(id);
+    if (!url) return err(res, 500, "report_failed", "No se pudo generar el informe");
+    await auditConnect({ req, action: "assistance.report_generated", resourceType: "assistance", resourceId: id });
+    res.json({ url });
+  });
+
+  // ── Colas operativas (ventanas a pantalla completa) ──────────────────────
+
+  /**
+   * Todas las asistencias en juego con la información completa: quién la
+   * atiende, con qué furgoneta, tiempos de cada estado y contacto, más la cola
+   * que le corresponde. Ordenadas cronológicamente (la más antigua primero: es
+   * la que más espera lleva).
+   *
+   * Una sola consulta sirve las cinco pestañas, resumen incluido: filtrar por
+   * cola en el servidor obligaría a repetirla al cambiar de pestaña.
+   */
+  router.get("/assistances/queues", ...requireConnectRole("operator"), async (_req, res) => {
+    const now = Date.now();
+    const r = await db.query(
+      `SELECT ca.id, ca.uuid, ca.status, ca.priority, ca."serviceType", ca.address,
+              ca."customerName", ca."customerPhone", ca."expedientNumber", ca."externalReference",
+              ca."clientName", ca.description, ca.latitude, ca.longitude, ca.origin,
+              ca."slaMinutes", ca."slaDeadlineAtMs", ca."createdAtMs", ca."updatedAtMs",
+              ca."assignedTechName", ca."assignedVehicleName", ca."assignedVehiclePlate",
+              ca."liteUserName", ca.vehicle, ca."locationDetails", ca."reportUrl",
+              ca."operatorLat", ca."operatorLng", ca."operatorLocationAtMs",
+              w.name AS "workshopName", w.phone AS "workshopPhone", w."integrationType",
+              pc.name AS "providerName", cl.name AS "clientDisplayName", p.name AS "partnerName",
+              ra."assignedTechName" AS "coreTech", ra."assignedVehicleName" AS "coreVehicle",
+              ra.status AS "coreStatus",
+              -- Evidencias de los dos orígenes: APK Lite/WhatsApp y core Assist
+              ((SELECT COUNT(*)::int FROM connect_assistance_files f
+                 WHERE f."assistanceId" = ca.id AND f."deletedAtMs" IS NULL AND f.category <> 'report')
+               + COALESCE((SELECT COUNT(*)::int FROM roadside_assistance_files rf
+                            WHERE rf."assistanceId" = ca."coreAssistanceId" AND rf.kind <> 'firma'), 0)) AS "files",
+              (SELECT json_agg(json_build_object('toStatus', h."toStatus", 'occurredAtMs', h."occurredAtMs")
+                        ORDER BY h.id)
+                 FROM connect_status_history h WHERE h."assistanceId" = ca.id) AS timeline,
+              asg."acceptDeadlineMs"
+         FROM connect_assistances ca
+         LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+         LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+         LEFT JOIN connect_clients cl ON cl.id = ca."clientId"
+         LEFT JOIN connect_partners p ON p.id = ca."partnerId"
+         LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
+         LEFT JOIN LATERAL (
+           SELECT "acceptDeadlineMs" FROM connect_assignments
+            WHERE "assistanceId" = ca.id AND status = 'sent' ORDER BY id DESC LIMIT 1
+         ) asg ON true
+        WHERE ca.status <> ALL ($1::text[])
+        ORDER BY ca."createdAtMs" ASC`,
+      [ESTADOS_CERRADOS],
+    );
+    const data = r.rows.map((a: any) => ({ ...a, ...clasificarCola(a, now) }));
+    res.json({ data, generatedAtMs: now });
+  });
+
   // ── Captura de WhatsApp (mismo número de entrada que Mobilink Assist) ────
 
   /**
@@ -1214,6 +1631,8 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   router.post("/whatsapp-capture/start", ...requireConnectRole("operator"), async (req, res) => {
     const u = req.connectUser!;
     const assistanceId = req.body?.assistanceId != null ? Number(req.body.assistanceId) : null;
+    // 'workshop' cambia el prompt del análisis: alta de taller, no incidencia.
+    const purpose = req.body?.purpose === "workshop" ? "workshop" : "assistance";
 
     const activa = await activeCaptureSession();
     if (activa) {
@@ -1232,9 +1651,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
 
     const now = Date.now();
     const ins = await db.query(
-      `INSERT INTO whatsapp_capture_sessions (job_id, connect_assistance_id, status, started_at, created_by)
-       VALUES (NULL, $1, 'ACTIVE', $2, $3) RETURNING *`,
-      [assistanceId, now, u.name],
+      `INSERT INTO whatsapp_capture_sessions (job_id, connect_assistance_id, purpose, status, started_at, created_by)
+       VALUES (NULL, $1, $4, 'ACTIVE', $2, $3) RETURNING *`,
+      [assistanceId, now, u.name, purpose],
     );
     await auditConnect({
       req, action: "whatsapp.capture_started", resourceType: "assistance",
@@ -1304,25 +1723,30 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
         WHERE ($1::text IS NULL OR ca.status = $1)
           AND ($3::int IS NULL OR ca."workshopId" = $3)
+          AND ($4::int IS NULL OR ca."controlCenterId" = $4)
         ORDER BY ca.id DESC LIMIT $2`,
-      [status, limit, workshopId],
+      [status, limit, workshopId, centroDe(req)],
     );
     res.json({ data: r.rows });
   });
 
   router.get("/assistances/:id", ...requireConnectRole("analyst"), async (req, res) => {
     const r = await db.query(
+      // La trazabilidad de connect_assistances manda; el core solo rellena
+      // los huecos de las asistencias antiguas, anteriores a esas columnas.
       `SELECT ca.*, p.name AS "partnerName", w.name AS "workshopName", w.phone AS "workshopPhone",
               pc.name AS "providerName", u.name AS "createdByName",
-              ra."assignedTechName", ra.status AS "coreStatus"
+              COALESCE(ca."assignedTechName", ca."liteUserName", ra."assignedTechName") AS "assignedTechName",
+              COALESCE(ca."assignedVehicleName", ra."assignedVehicleName") AS "assignedVehicleName",
+              ra.status AS "coreStatus"
          FROM connect_assistances ca
          LEFT JOIN connect_partners p ON p.id = ca."partnerId"
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
          LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
          LEFT JOIN connect_users u ON u.id = ca."createdByUserId"
          LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
-        WHERE ca.id = $1`,
-      [Number(req.params.id)],
+        WHERE ca.id = $1 AND ($2::int IS NULL OR ca."controlCenterId" = $2)`,
+      [Number(req.params.id), centroDe(req)],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
     res.json(r.rows[0]);
@@ -1382,8 +1806,37 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       if (b.clientId) {
         await db.query(`UPDATE connect_assistances SET "clientId" = $1 WHERE id = $2`, [Number(b.clientId), row.id]);
       }
+
+      /*
+       * Conceptos pactados de antemano ("vas a montar este neumático"): nacen
+       * previstos aquí mismo, que es el momento en que Central lo sabe. La
+       * asistencia manda: un concepto que no valida no la tira —el servicio
+       * tiene que poder salir—, se devuelve como aviso y se corrige en la
+       * pestaña Tarificación.
+       */
+      const conceptWarnings: string[] = [];
+      if (Array.isArray(b.concepts) && b.concepts.length > 0) {
+        const { crearConcepto, ErrorConceptos } = await import("./pricing/concepts.ts");
+        for (const c of b.concepts.slice(0, 10)) {
+          try {
+            await crearConcepto(row.id, u.controlCenterId, {
+              kind: String(c?.kind ?? "TIRE"),
+              size: c?.size ?? null,
+              brand: c?.brand ?? null,
+              position: c?.position ?? null,
+              conceptCode: c?.conceptCode ?? null,
+              quantity: c?.quantity != null ? Number(c.quantity) : 1,
+              actor: u.name || u.email,
+            });
+          } catch (e) {
+            if (e instanceof ErrorConceptos) conceptWarnings.push(e.message);
+            else throw e;
+          }
+        }
+      }
+
       await auditConnect({ req, action: b.draft ? "assistance.draft_created" : "assistance.created", resourceType: "assistance", resourceId: row.id });
-      res.status(201).json(row);
+      res.status(201).json(conceptWarnings.length ? { ...row, conceptWarnings } : row);
     } catch (e: any) {
       console.error("[Connect] bo crear asistencia:", e?.message);
       err(res, 500, "internal_error", "Error creando la asistencia");
@@ -1436,6 +1889,939 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     res.json(r.rows[0]);
   });
 
+  // ── Tarificación ─────────────────────────────────────────────────────────
+
+  /**
+   * Estimación para comparar talleres candidatos. No guarda nada: se llama
+   * una vez por candidato y guardar diez estimaciones que nadie va a mirar
+   * solo ensucia la ficha.
+   */
+  router.post("/pricing/:id/estimate", ...requireConnectRole("operator"), async (req, res) => {
+    const { estimar } = await import("./pricing/service.ts");
+    const r = await estimar(Number(req.params.id), {
+      workshopId: req.body?.workshopId != null ? Number(req.body.workshopId) : undefined,
+      providerCompanyId: req.body?.providerCompanyId != null ? Number(req.body.providerCompanyId) : undefined,
+      distanceKm: req.body?.distanceKm != null ? Number(req.body.distanceKm) : null,
+      distanceSource: req.body?.distanceSource ?? "estimated",
+      durationMin: req.body?.durationMin != null ? Number(req.body.durationMin) : null,
+    });
+    if (!r) return err(res, 404, "not_found", "Asistencia no encontrada o sin centro de control");
+    res.json(paraApi(r, req.connectUser?.role));
+  });
+
+  /** Bloqueo del forfait. Idempotente: repetirlo devuelve el mismo. */
+  router.post("/pricing/:id/lock", ...requireConnectRole("operator"), async (req, res) => {
+    const { bloquear } = await import("./pricing/service.ts");
+    const r = await bloquear(Number(req.params.id), {
+      distanceKm: req.body?.distanceKm != null ? Number(req.body.distanceKm) : null,
+      distanceSource: req.body?.distanceSource ?? "routed",
+      userId: req.connectUser?.id ?? null,
+    });
+    if (!r) return err(res, 404, "not_found", "Asistencia no encontrada o sin centro de control");
+    await auditConnect({ req, action: "pricing.locked", resourceType: "assistance",
+      resourceId: Number(req.params.id), detail: { regla: r.venta?.regla?.code, estado: r.estado } });
+    res.json(paraApi(r, req.connectUser?.role));
+  });
+
+  /** Cierre: regulariza con lo real manteniendo la regla bloqueada. */
+  router.post("/pricing/:id/finalize", ...requireConnectRole("operator"), async (req, res) => {
+    const { finalizar } = await import("./pricing/service.ts");
+    const r = await finalizar(Number(req.params.id), {
+      distanceKm: req.body?.distanceKm != null ? Number(req.body.distanceKm) : null,
+      distanceSource: req.body?.distanceSource ?? "routed",
+      durationMin: req.body?.durationMin != null ? Number(req.body.durationMin) : null,
+      conceptos: Array.isArray(req.body?.conceptos) ? req.body.conceptos : undefined,
+      cancelado: !!req.body?.cancelado,
+      userId: req.connectUser?.id ?? null,
+    });
+    if (!r) return err(res, 404, "not_found", "Asistencia no encontrada o sin centro de control");
+    await auditConnect({ req, action: "pricing.finalized", resourceType: "assistance",
+      resourceId: Number(req.params.id), detail: { estado: r.estado, lineas: r.lineas.length } });
+    res.json(paraApi(r, req.connectUser?.role));
+  });
+
+  /**
+   * Las tres etapas con sus líneas: es la pestaña de tarificación.
+   *
+   * La normalización vive en `presenter.ts` y no aquí: las columnas NUMERIC
+   * llegan del driver como texto y las JSONB llegan parseadas o sin parsear
+   * según el caso, y eso tiene bastante criterio como para poder probarlo sin
+   * levantar la base.
+   */
+  router.get("/pricing/:id", ...requireConnectRole("analyst"), async (req, res) => {
+    const { etapasDe } = await import("./pricing/service.ts");
+    const { etapaParaApi } = await import("./pricing/presenter.ts");
+    const { recortarSegunRol } = await import("./pricing/permissions.ts");
+    const role = req.connectUser?.role;
+    const filas = await etapasDe(Number(req.params.id));
+
+    res.json({
+      data: filas.map(etapaParaApi).map((e) => ({
+        ...recortarSegunRol(e, role, {
+          venta: ["saleTotal"], compra: ["purchaseTotal"],
+          margen: ["grossMargin", "grossMarginPct"],
+        }),
+        lines: e.lines.map((l) => recortarSegunRol(l as Record<string, any>, role, {
+          venta: ["saleUnitPrice", "saleTotal"],
+          compra: ["purchaseUnitPrice", "purchaseTotal"],
+        })),
+      })),
+    });
+  });
+
+  /**
+   * Por qué costó eso. Se lee del snapshot y no del tarifario actual: si
+   * mañana se sube el nocturno, esta asistencia se sigue explicando con lo
+   * que se le aplicó entonces.
+   */
+  router.get("/pricing/:id/explain", ...requireConnectRole("analyst"), async (req, res) => {
+    const { leerEtapa } = await import("./pricing/service.ts");
+    for (const etapa of ["final", "locked", "estimate"] as const) {
+      const r = await leerEtapa(Number(req.params.id), etapa);
+      if (r) return res.json({ etapa, explicacion: r.explicacion, avisos: r.avisos });
+    }
+    return err(res, 404, "not_found", "Esta asistencia todavía no tiene tarifa calculada");
+  });
+
+  /**
+   * Precio de un neumático para esta asistencia.
+   *
+   * Se consulta desde la ficha cuando el taller comunica qué ha montado. Sale
+   * la compra, la venta, el margen y de qué tarifa viene cada cifra. Si no hay
+   * precio para esa medida y esa marca, el importe viene nulo y el resultado
+   * marcado para revisión manual: aquí un cero se facturaría.
+   */
+  router.post("/pricing/:id/tire", ...requireConnectRole("operator"), async (req, res) => {
+    const { precioNeumatico } = await import("./pricing/service.ts");
+    const medida = String(req.body?.medida ?? "").trim();
+    if (!medida) return err(res, 400, "medida_requerida", "Hace falta la medida del neumático");
+
+    const r = await precioNeumatico(Number(req.params.id), {
+      medida,
+      marca: req.body?.marca ?? null,
+      posicion: req.body?.posicion ?? null,
+      modelo: req.body?.modelo ?? null,
+      cantidad: req.body?.cantidad != null ? Number(req.body.cantidad) : 1,
+    }, {
+      workshopId: req.body?.workshopId != null ? Number(req.body.workshopId) : undefined,
+    });
+    if (!r) return err(res, 404, "not_found", "Asistencia no encontrada o sin centro de control");
+
+    const t = (d: bigint | null) => (d == null ? null : formatear(d, 2));
+    res.json({
+      request: r.peticion,
+      currency: r.currency,
+      purchase: { unitPrice: t(r.compra.importeUnitario), total: t(r.compra.importeTotal),
+                  explanation: r.compra.explicacion, tariff: r.compra.tarifario, version: r.compra.version },
+      sale: { unitPrice: t(r.venta.importeUnitario), total: t(r.venta.importeTotal),
+              explanation: r.venta.explicacion, tariff: r.venta.tarifario, version: r.venta.version },
+      grossMargin: t(r.margen), grossMarginPct: t(r.margenPct),
+      warnings: r.avisos,
+      manualReview: r.revisionManual,
+    });
+  });
+
+  /* ── Conceptos de la asistencia (qué se montó de verdad) ─────────────────
+   *
+   * Ciclo previsto → confirmado | no_usado; el diseño completo está en
+   * docs/PROMPT_conceptos_asistencia.md. La central asigna lo previsto cuando
+   * el cambio se pacta de antemano; confirmar un neumático exige la foto de
+   * montaje (de Lite o del técnico Assist, que llega por el puente). Al
+   * cierre solo se factura lo confirmado.
+   *
+   * Corregir esta lista ANTES del cierre es operación normal y queda en la
+   * auditoría de acciones, pero NO es un ajuste económico: el override con
+   * su límite por rol sigue siendo el camino para tocar importes.
+   */
+
+  async function conConceptos(res: Response, fn: () => Promise<unknown>) {
+    const { ErrorConceptos } = await import("./pricing/concepts.ts");
+    try {
+      res.json(await fn());
+    } catch (e) {
+      if (e instanceof ErrorConceptos) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  }
+
+  router.get("/pricing/:id/concepts", ...requireConnectRole("analyst"), async (req, res) => {
+    const { listarConceptos } = await import("./pricing/concepts.ts");
+    await conConceptos(res, async () => ({
+      data: await listarConceptos(Number(req.params.id), centroDe(req)),
+    }));
+  });
+
+  router.post("/pricing/:id/concepts", ...requireConnectRole("operator"), async (req, res) => {
+    const { crearConcepto } = await import("./pricing/concepts.ts");
+    const u = req.connectUser!;
+    await conConceptos(res, async () => {
+      const c = await crearConcepto(Number(req.params.id), centroDe(req), {
+        kind: String(req.body?.kind ?? ""),
+        size: req.body?.size ?? null,
+        brand: req.body?.brand ?? null,
+        position: req.body?.position ?? null,
+        conceptCode: req.body?.conceptCode ?? null,
+        quantity: req.body?.quantity != null ? Number(req.body.quantity) : 1,
+        confirmar: req.body?.confirmar === true,
+        evidenceRef: req.body?.evidenceRef ?? null,
+        via: "panel",
+        actor: u.name || u.email,
+      });
+      await auditConnect({ req, action: "pricing.concept_added", resourceType: "assistance",
+        resourceId: Number(req.params.id), detail: { conceptId: c.id, kind: c.kind, status: c.status } });
+      return c;
+    });
+  });
+
+  router.patch("/pricing/:id/concepts/:cid", ...requireConnectRole("operator"), async (req, res) => {
+    const { confirmarConcepto, marcarNoUsado, corregirCantidad, ErrorConceptos } = await import("./pricing/concepts.ts");
+    const u = req.connectUser!;
+    const id = Number(req.params.id);
+    const cid = Number(req.params.cid);
+    const accion = String(req.body?.accion ?? "");
+    await conConceptos(res, async () => {
+      let c;
+      if (accion === "confirmar") {
+        c = await confirmarConcepto(id, cid, centroDe(req), {
+          actor: u.name || u.email, via: "panel",
+          evidenceRef: req.body?.evidenceRef ?? null,
+        });
+      } else if (accion === "no_usado") {
+        c = await marcarNoUsado(id, cid, centroDe(req), {
+          actor: u.name || u.email, motivo: String(req.body?.motivo ?? ""),
+        });
+      } else if (accion === "cantidad") {
+        c = await corregirCantidad(id, cid, centroDe(req), Number(req.body?.quantity));
+      } else {
+        throw new ErrorConceptos("accion_invalida", "Acción no reconocida: confirmar | no_usado | cantidad");
+      }
+      await auditConnect({ req, action: `pricing.concept_${accion}`, resourceType: "assistance",
+        resourceId: id, detail: { conceptId: cid } });
+      return c;
+    });
+  });
+
+  router.delete("/pricing/:id/concepts/:cid", ...requireConnectRole("operator"), async (req, res) => {
+    const { retirarConcepto } = await import("./pricing/concepts.ts");
+    await conConceptos(res, async () => {
+      const ok = await retirarConcepto(Number(req.params.id), Number(req.params.cid), centroDe(req));
+      if (ok) {
+        await auditConnect({ req, action: "pricing.concept_removed", resourceType: "assistance",
+          resourceId: Number(req.params.id), detail: { conceptId: Number(req.params.cid) } });
+      }
+      return { ok };
+    });
+  });
+
+  /**
+   * Ajuste manual de un importe.
+   *
+   * Va con rol de supervisor y no de operador, y aun así el servicio comprueba
+   * el límite del rol: un supervisor mueve lo razonable de un turno y por
+   * encima de ahí hace falta el administrador de la central. El motivo es
+   * obligatorio, y no por burocracia: es lo único que responderá la pregunta
+   * dentro de seis meses.
+   */
+  router.post("/pricing/:id/override", ...requireConnectRole("supervisor"), async (req, res) => {
+    const { ajustarImporte, ErrorAjuste } = await import("./pricing/overrides.ts");
+    const u = req.connectUser!;
+    try {
+      const r = await ajustarImporte({
+        assistanceId: Number(req.params.id),
+        etapa: req.body?.etapa === "locked" ? "locked" : "final",
+        lineNumber: req.body?.lineNumber != null ? Number(req.body.lineNumber) : null,
+        campo: req.body?.campo,
+        valorNuevo: req.body?.valorNuevo,
+        motivo: String(req.body?.motivo ?? ""),
+      }, {
+        id: u.id, nombre: u.name || u.email, role: u.role,
+        controlCenterId: centroDe(req),
+      });
+
+      await auditConnect({ req, action: "pricing.override", resourceType: "assistance",
+        resourceId: Number(req.params.id), detail: {
+          campo: req.body?.campo, anterior: r.anterior, nuevo: r.nuevo, motivo: req.body?.motivo } });
+      res.json(r);
+    } catch (e) {
+      if (e instanceof ErrorAjuste) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  });
+
+  /** Los ajustes de una asistencia, para enseñarlos junto a las etapas. */
+  router.get("/pricing/:id/overrides", ...requireConnectRole("analyst"), async (req, res) => {
+    const { ajustesDe } = await import("./pricing/overrides.ts");
+    res.json({ data: await ajustesDe(Number(req.params.id)) });
+  });
+
+  /**
+   * Auditoría económica: qué se ha movido a mano en el periodo, quién y
+   * cuánto. Es de administrador de central: es la pantalla que vigila a los
+   * que pueden ajustar.
+   */
+  router.get("/pricing/audit", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const { auditoriaEconomica } = await import("./pricing/overrides.ts");
+    const ahora = new Date();
+    res.json(await auditoriaEconomica({
+      controlCenterId: centroDe(req),
+      desdeMs: Number(req.query.from) || new Date(ahora.getFullYear(), ahora.getMonth(), 1).getTime(),
+      hastaMs: Number(req.query.to) || Date.now(),
+    }));
+  });
+
+  /** Lo que este usuario puede ver y tocar del dinero, para que el panel no ofrezca lo que va a rechazar. */
+  router.get("/pricing/permissions", ...requireConnectUser(), async (req, res) => {
+    const { puede, limiteAjuste, leerAjustes } = await import("./pricing/permissions.ts");
+    const { formatear } = await import("./pricing/money.ts");
+    const u = req.connectUser!;
+
+    const cc = u.controlCenterId
+      ? await db.query(`SELECT settings FROM connect_control_centers WHERE id = $1`, [u.controlCenterId])
+      : null;
+    const limite = limiteAjuste(u.role, leerAjustes(cc?.rows[0]?.settings ?? null));
+
+    res.json({
+      role: u.role,
+      verVenta: puede(u.role, "ver_venta"),
+      verCompra: puede(u.role, "ver_compra"),
+      verMargen: puede(u.role, "ver_margen"),
+      ajustarImporte: puede(u.role, "ajustar_importe"),
+      publicarTarifa: puede(u.role, "publicar_tarifa"),
+      exportarFacturacion: puede(u.role, "exportar_facturacion"),
+      limiteAjuste: limite === undefined || limite == null ? null : formatear(limite, 2),
+    });
+  });
+
+  // ── Puesta en marcha de una central ──────────────────────────────────────
+
+  /*
+   * Lo que lleva a una central de "no hay nada" a "ya factura". Configurar
+   * esto tiene ocho pasos y siete de ellos no dan error si te los saltas:
+   * simplemente no se factura, y nadie se entera hasta fin de mes.
+   */
+  const puesta = () => import("./onboarding.ts");
+
+  async function conPuesta(res: Response, fn: () => Promise<unknown>) {
+    const { ErrorPuestaEnMarcha } = await puesta();
+    try {
+      res.json(await fn());
+    } catch (e) {
+      if (e instanceof ErrorPuestaEnMarcha) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  }
+
+  /**
+   * Las centrales entre las que elegir.
+   *
+   * Existe para el superadministrador, que no tiene centro propio y por tanto
+   * tiene que decir en cuál está antes de configurar nada. Cualquier otro rol
+   * recibe la suya y solo la suya: así el selector se puede pintar igual para
+   * todos y con un único elemento simplemente no se enseña.
+   */
+  router.get("/setup/control-centers", ...requireConnectRole("analyst"), async (req, res) => {
+    const propio = centroDe(req);
+    const r = await db.query(
+      `SELECT id, name FROM connect_control_centers
+        WHERE "deletedAtMs" IS NULL AND status = 'active'
+          AND ($1::int IS NULL OR id = $1)
+        ORDER BY name`,
+      [propio],
+    );
+    res.json({ data: r.rows.map((x: any) => ({ id: Number(x.id), name: String(x.name) })) });
+  });
+
+  /** Las plantillas disponibles. Son datos: añadir una es añadir un fichero. */
+  router.get("/setup/templates", ...requireConnectRole("cc_admin"), async (_req, res) => {
+    const { catalogoPlantillas } = await import("./pricing/plantillas/index.ts");
+    res.json({ data: catalogoPlantillas() });
+  });
+
+  /** Qué le falta a esta central para poder facturar, en orden y con el porqué. */
+  router.get("/setup/status", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { estadoPuestaEnMarcha } = await puesta();
+    res.json(await estadoPuestaEnMarcha(centro));
+  });
+
+  /**
+   * Crea un tarifario desde una plantilla. Nace como borrador y con los
+   * importes a cero: una plantilla con precios inventados es un número que
+   * alguien publica con prisa y acaba en una factura.
+   */
+  router.post("/setup/apply-template", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { aplicarPlantilla } = await puesta();
+    await conPuesta(res, async () => {
+      const r = await aplicarPlantilla(centro, {
+        plantilla: String(req.body?.plantilla ?? ""),
+        code: String(req.body?.code ?? ""),
+        nombre: String(req.body?.nombre ?? ""),
+        anio: req.body?.anio != null ? Number(req.body.anio) : undefined,
+        pais: req.body?.pais, zonaHoraria: req.body?.zonaHoraria, moneda: req.body?.moneda,
+      });
+      await auditConnect({ req, action: "setup.template_applied", resourceType: "tariff_plan",
+        resourceId: r.tariffPlanId, detail: { plantilla: r.plantilla, reglas: r.reglas } });
+      return r;
+    });
+  });
+
+  /**
+   * Alta de una central nueva. Solo el superadministrador del hub: es quien da
+   * de alta y da soporte a las centrales.
+   */
+  router.post("/setup/control-centers", ...requireConnectRole("superadmin"), async (req, res) => {
+    const { crearCentro } = await puesta();
+    await conPuesta(res, async () => {
+      const r = await crearCentro({
+        nombre: String(req.body?.nombre ?? ""),
+        emailAdmin: String(req.body?.emailAdmin ?? ""),
+        nombreAdmin: req.body?.nombreAdmin ?? null,
+        pais: req.body?.pais, zonaHoraria: req.body?.zonaHoraria, moneda: req.body?.moneda,
+      });
+      await auditConnect({ req, action: "setup.control_center_created", resourceType: "control_center",
+        resourceId: r.controlCenterId, detail: { nombre: req.body?.nombre } });
+      return r;
+    });
+  });
+
+  // ── Contratos ────────────────────────────────────────────────────────────
+
+  /*
+   * El eslabón que más se olvida: se configura el tarifario, se publica, y no
+   * pasa nada porque nadie ha dicho qué cliente usa cuál.
+   */
+  router.get("/contracts", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarContratos } = await puesta();
+    res.json({ data: await listarContratos(centro) });
+  });
+
+  router.put("/contracts", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { guardarContrato } = await puesta();
+    await conPuesta(res, async () => {
+      const r = await guardarContrato(centro, req.body ?? {});
+      await auditConnect({ req, action: "contract.saved", resourceType: "contract",
+        resourceId: r.id, detail: { role: req.body?.role, status: req.body?.status } });
+      return r;
+    });
+  });
+
+  router.delete("/contracts/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { borrarContrato } = await puesta();
+    const ok = await borrarContrato(centro, Number(req.params.id));
+    if (ok) {
+      await auditConnect({ req, action: "contract.ended", resourceType: "contract",
+        resourceId: Number(req.params.id), detail: {} });
+    }
+    res.json({ ok });
+  });
+
+  // ── Cierre automático de tarifas ─────────────────────────────────────────
+
+  /*
+   * Apagado de fábrica. Mientras lo esté, el cierre lo dispara una persona
+   * desde la ficha, que es como funciona hoy.
+   */
+  router.get("/pricing/auto-close", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { leerAjustesCierre, simularCierre } = await import("./pricing/cierreAutomatico.ts");
+
+    const cc = await db.query(`SELECT settings FROM connect_control_centers WHERE id = $1`, [centro]);
+    const ajustes = leerAjustesCierre(cc.rows[0]?.settings ?? null);
+    res.json({ ...ajustes, ...(await simularCierre(centro, ajustes.esperaMin)) });
+  });
+
+  /**
+   * Simula sin cerrar nada: «con esta espera se cerrarían N servicios».
+   * Encender el interruptor a ciegas en una central con seiscientos servicios
+   * sin cerrar es una sorpresa que conviene ahorrarse.
+   */
+  router.get("/pricing/auto-close/preview", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { simularCierre, ESPERA_POR_DEFECTO_MIN } = await import("./pricing/cierreAutomatico.ts");
+    const espera = Number(req.query.esperaMin);
+    res.json(await simularCierre(centro, Number.isFinite(espera) && espera >= 0 ? espera : ESPERA_POR_DEFECTO_MIN));
+  });
+
+  router.put("/pricing/auto-close", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { guardarAjustesCierre, simularCierre } = await import("./pricing/cierreAutomatico.ts");
+
+    const ajustes = await guardarAjustesCierre(centro, {
+      activo: req.body?.activo === true,
+      esperaMin: Number(req.body?.esperaMin),
+    });
+    await auditConnect({ req, action: "pricing.auto_close_changed", detail: ajustes });
+    res.json({ ...ajustes, ...(await simularCierre(centro, ajustes.esperaMin)) });
+  });
+
+  // ── Calendario de los talleres ───────────────────────────────────────────
+
+  /*
+   * No es el calendario de la central, que trabaja 365 días 24 horas. Es el de
+   * cada taller: los festivos de su comunidad y los de su municipio, que son
+   * los que hacen que un día no esté disponible o cobre distinto.
+   */
+  const wcal = () => import("./workshopCalendar.ts");
+
+  router.get("/workshop-holidays", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarFestivos } = await wcal();
+    res.json({ data: await listarFestivos(centro, {
+      desde: (req.query.desde as string) ?? null,
+      hasta: (req.query.hasta as string) ?? null,
+      workshopId: req.query.workshopId != null ? Number(req.query.workshopId) : null,
+    }) });
+  });
+
+  /** Cobertura por comunidad: dónde faltan festivos por cargar. */
+  router.get("/workshop-holidays/coverage", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { coberturaPorRegion } = await wcal();
+    res.json({ data: await coberturaPorRegion(centro, Number(req.query.anio) || new Date().getFullYear()) });
+  });
+
+  /** Alta en lote: los autonómicos llegan doce de golpe y los locales de dos en dos. */
+  router.post("/workshop-holidays", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { guardarFestivos } = await wcal();
+    const entradas = Array.isArray(req.body?.festivos) ? req.body.festivos : [];
+    const r = await guardarFestivos(centro, entradas);
+    if (r.errores.length > 0) return err(res, 422, "festivos_invalidos", r.errores.join("; "));
+    await auditConnect({ req, action: "workshop_holidays.saved", detail: { escritos: r.escritos } });
+    res.json(r);
+  });
+
+  router.delete("/workshop-holidays/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { borrarFestivo } = await wcal();
+    res.json({ ok: await borrarFestivo(centro, Number(req.params.id)) });
+  });
+
+  /** Rellena la comunidad autónoma de los talleres a partir de su provincia. */
+  router.post("/workshop-holidays/resolve-regions", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { resolverRegiones } = await wcal();
+    const r = await resolverRegiones(centro);
+    await auditConnect({ req, action: "workshop_holidays.regions_resolved", detail: {
+      actualizados: r.actualizados, sinReconocer: r.sinReconocer.length } });
+    res.json(r);
+  });
+
+  /** Las comunidades, para los desplegables. */
+  router.get("/workshop-holidays/regions", ...requireConnectRole("analyst"), async (_req, res) => {
+    const { REGIONES } = await import("./regiones.ts");
+    res.json({ data: REGIONES });
+  });
+
+  // ── Administración del tarifario ─────────────────────────────────────────
+
+  /*
+   * Hasta ahora un tarifario solo se cambiaba editando un fichero de datos y
+   * ejecutando un script. Eso valía para cargar el primero; no vale para que
+   * una central suba el nocturno en enero sin llamar a nadie.
+   *
+   * Todo va con rol de administrador de central, y el módulo de debajo se
+   * encarga de que una versión publicada no se pueda tocar.
+   */
+  const admin = () => import("./pricing/tariffAdmin.ts");
+
+  async function conTarifario(res: Response, fn: () => Promise<unknown>) {
+    const { ErrorTarifario } = await admin();
+    try {
+      res.json(await fn());
+    } catch (e) {
+      if (e instanceof ErrorTarifario) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  }
+
+  /** Envuelve una ruta de administración resolviendo el centro una sola vez. */
+  function rutaAdmin(fn: (centro: number, req: Request) => Promise<unknown>) {
+    return async (req: Request, res: Response) => {
+      const centro = centroPedido(req);
+      if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+      await conTarifario(res, () => fn(centro, req));
+    };
+  }
+
+  router.get("/tariffs", ...requireConnectRole("analyst"), rutaAdmin(async (centro) => {
+    const { listarPlanes } = await admin();
+    return { data: await listarPlanes(centro) };
+  }));
+
+  router.post("/tariffs", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { crearPlan } = await admin();
+    const p = await crearPlan(centro, req.body ?? {});
+    await auditConnect({ req, action: "tariff.plan_saved", resourceType: "tariff_plan",
+      resourceId: p.id, detail: { code: p.code } });
+    return p;
+  }));
+
+  router.get("/tariffs/:planId/versions", ...requireConnectRole("analyst"), rutaAdmin(async (centro, req) => {
+    const { listarVersiones } = await admin();
+    return { data: await listarVersiones(centro, Number(req.params.planId)) };
+  }));
+
+  /** El contenido completo de una versión: reglas, suplementos, franjas, zonas y calendario. */
+  router.get("/tariffs/versions/:versionId", ...requireConnectRole("analyst"), rutaAdmin(async (centro, req) => {
+    const { detalleVersion } = await admin();
+    return detalleVersion(centro, Number(req.params.versionId));
+  }));
+
+  /**
+   * Duplicar es la vía normal para cambiar un precio: se copia lo publicado,
+   * se edita la copia y se publica con su fecha de entrada en vigor.
+   */
+  router.post("/tariffs/versions/:versionId/duplicate", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { duplicarVersion } = await admin();
+    const r = await duplicarVersion(centro, Number(req.params.versionId), {
+      version: String(req.body?.version ?? ""),
+      validFromMs: Number(req.body?.validFromMs) || Date.now(),
+      validToMs: req.body?.validToMs != null ? Number(req.body.validToMs) : null,
+      notes: req.body?.notes ?? null,
+    });
+    await auditConnect({ req, action: "tariff.version_duplicated", resourceType: "tariff_version",
+      resourceId: r.id, detail: { origen: Number(req.params.versionId), ...r.copiado } });
+    return r;
+  }));
+
+  router.patch("/tariffs/versions/:versionId", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { editarVersion } = await admin();
+    return editarVersion(centro, Number(req.params.versionId), {
+      validFromMs: req.body?.validFromMs != null ? Number(req.body.validFromMs) : null,
+      validToMs: req.body?.validToMs != null ? Number(req.body.validToMs) : null,
+      notes: req.body?.notes ?? null,
+      priority: req.body?.priority != null ? Number(req.body.priority) : null,
+    });
+  }));
+
+  /** Revisión previa: lo que se puede saber de una versión sin ejecutarla. */
+  router.get("/tariffs/versions/:versionId/check", ...requireConnectRole("analyst"), rutaAdmin(async (centro, req) => {
+    const { revisarVersion } = await admin();
+    return { problemas: await revisarVersion(centro, Number(req.params.versionId)) };
+  }));
+
+  router.post("/tariffs/versions/:versionId/publish", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { publicar } = await admin();
+    const r = await publicar(centro, Number(req.params.versionId), req.connectUser?.id ?? null);
+    await auditConnect({ req, action: "tariff.version_published", resourceType: "tariff_version",
+      resourceId: Number(req.params.versionId), detail: { avisos: r.avisos.length } });
+    return r;
+  }));
+
+  router.post("/tariffs/versions/:versionId/archive", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { archivar } = await admin();
+    const ok = await archivar(centro, Number(req.params.versionId));
+    if (ok) {
+      await auditConnect({ req, action: "tariff.version_archived", resourceType: "tariff_version",
+        resourceId: Number(req.params.versionId), detail: {} });
+    }
+    return { ok };
+  }));
+
+  router.put("/tariffs/versions/:versionId/rules", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { guardarRegla } = await admin();
+    const r = await guardarRegla(centro, Number(req.params.versionId), req.body ?? {});
+    await auditConnect({ req, action: "tariff.rule_saved", resourceType: "tariff_version",
+      resourceId: Number(req.params.versionId), detail: { code: r.code, importe: req.body?.amount } });
+    return r;
+  }));
+
+  router.delete("/tariffs/versions/:versionId/rules/:ruleId", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { borrarRegla } = await admin();
+    const ok = await borrarRegla(centro, Number(req.params.versionId), Number(req.params.ruleId));
+    if (ok) {
+      await auditConnect({ req, action: "tariff.rule_deleted", resourceType: "tariff_version",
+        resourceId: Number(req.params.versionId), detail: { ruleId: Number(req.params.ruleId) } });
+    }
+    return { ok };
+  }));
+
+  router.put("/tariffs/versions/:versionId/extras", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { guardarExtra } = await admin();
+    const r = await guardarExtra(centro, Number(req.params.versionId), req.body ?? {});
+    await auditConnect({ req, action: "tariff.extra_saved", resourceType: "tariff_version",
+      resourceId: Number(req.params.versionId), detail: { code: r.code } });
+    return r;
+  }));
+
+  router.delete("/tariffs/versions/:versionId/extras/:extraId", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { borrarExtra } = await admin();
+    return { ok: await borrarExtra(centro, Number(req.params.versionId), Number(req.params.extraId)) };
+  }));
+
+  router.put("/tariffs/time-bands", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { guardarFranja } = await admin();
+    const r = await guardarFranja(centro, req.body ?? {});
+    await auditConnect({ req, action: "tariff.time_band_saved", detail: r });
+    return r;
+  }));
+
+  router.put("/tariffs/zones", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { guardarZona } = await admin();
+    const r = await guardarZona(centro, req.body ?? {});
+    await auditConnect({ req, action: "tariff.zone_saved", detail: r });
+    return r;
+  }));
+
+  router.put("/tariffs/calendars/:calendarId/days", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { guardarDiaCalendario } = await admin();
+    return guardarDiaCalendario(centro, Number(req.params.calendarId), req.body ?? {});
+  }));
+
+  router.delete("/tariffs/calendars/:calendarId/days/:dayId", ...requireConnectRole("cc_admin"), rutaAdmin(async (centro, req) => {
+    const { borrarDiaCalendario } = await admin();
+    return { ok: await borrarDiaCalendario(centro, Number(req.params.calendarId), Number(req.params.dayId)) };
+  }));
+
+  // ── Catálogo de neumáticos ───────────────────────────────────────────────
+
+  /*
+   * Mantenimiento del catálogo: medidas, marcas, grupos, precios de tarifa y
+   * baremos de fabricante. Es administración de la configuración de precios,
+   * así que va con rol de administrador de central y no de operador.
+   *
+   * Todo se normaliza al escribir (`medidaCanonica`, `normalizarMarca`) para
+   * que "315/80 R 22,5" y "315/80R22.5" no acaben siendo dos entradas del
+   * catálogo, y todo se filtra por centro de control, que es donde están los
+   * costes de compra.
+   */
+  const catalogo = () => import("./pricing/catalog.ts");
+
+  /** Traduce los errores del catálogo a respuestas, sin tragárselos. */
+  async function conCatalogo(res: Response, fn: () => Promise<unknown>) {
+    const { ErrorCatalogo } = await catalogo();
+    try {
+      res.json(await fn());
+    } catch (e) {
+      if (e instanceof ErrorCatalogo) {
+        return err(res, e.codigo === "version_publicada" ? 409 : 400, e.codigo, e.message);
+      }
+      throw e;
+    }
+  }
+
+  router.get("/pricing/catalog/sizes", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarMedidas } = await catalogo();
+    res.json({ data: await listarMedidas(centro, String(req.query?.q ?? "")) });
+  });
+
+  router.post("/pricing/catalog/sizes", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { crearMedida } = await catalogo();
+    await conCatalogo(res, () => crearMedida(centro, String(req.body?.medida ?? "")));
+  });
+
+  router.get("/pricing/catalog/brands", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarMarcas } = await catalogo();
+    res.json({ data: await listarMarcas(centro) });
+  });
+
+  router.post("/pricing/catalog/brands", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { crearMarca } = await catalogo();
+    await conCatalogo(res, () => crearMarca(centro, String(req.body?.marca ?? ""), req.body?.code ?? null));
+  });
+
+  router.get("/pricing/catalog/versions/:versionId/groups", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarGrupos } = await catalogo();
+    res.json({ data: await listarGrupos(centro, Number(req.params.versionId)) });
+  });
+
+  router.post("/pricing/catalog/versions/:versionId/groups", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { guardarGrupo } = await catalogo();
+    await conCatalogo(res, async () => {
+      const g = await guardarGrupo(centro, Number(req.params.versionId), {
+        code: String(req.body?.code ?? ""), name: String(req.body?.name ?? req.body?.code ?? ""),
+        marcas: Array.isArray(req.body?.marcas) ? req.body.marcas.map(String) : [],
+      });
+      await auditConnect({ req, action: "pricing.catalog.group_saved", resourceType: "tariff_version",
+        resourceId: Number(req.params.versionId), detail: { code: g.code, marcas: g.marcas.length } });
+      return g;
+    });
+  });
+
+  router.get("/pricing/catalog/versions/:versionId/tire-prices", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarPrecios } = await catalogo();
+    res.json({ data: await listarPrecios(centro, Number(req.params.versionId)) });
+  });
+
+  router.post("/pricing/catalog/versions/:versionId/tire-prices", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { crearPrecio } = await catalogo();
+    await conCatalogo(res, async () => {
+      const p = await crearPrecio(centro, Number(req.params.versionId), {
+        medida: req.body?.medida ?? null,
+        marca: req.body?.marca ?? null,
+        grupoMarca: req.body?.grupoMarca ?? null,
+        posicion: req.body?.posicion ?? null,
+        modeloPrecio: String(req.body?.modeloPrecio ?? ""),
+        importeNeto: req.body?.importeNeto ?? null,
+        descuentoPorcentaje: req.body?.descuentoPorcentaje ?? null,
+        baremoId: req.body?.baremoId != null ? Number(req.body.baremoId) : null,
+        prioridad: req.body?.prioridad != null ? Number(req.body.prioridad) : 0,
+      });
+      await auditConnect({ req, action: "pricing.catalog.tire_price_created", resourceType: "tariff_version",
+        resourceId: Number(req.params.versionId), detail: { id: p.id, medida: p.tireSizeCode, marca: p.brandName } });
+      return p;
+    });
+  });
+
+  /**
+   * Carga en lote: pegar la tabla del proveedor de una vez.
+   *
+   * Un catálogo real son ciento y pico filas por lado; de una en una no las
+   * mete nadie. Se valida todo antes de escribir nada, y si algo falla se
+   * devuelve qué fila y por qué sin haber tocado la base.
+   */
+  router.post("/pricing/catalog/versions/:versionId/tire-prices/bulk", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { crearPreciosEnLote } = await catalogo();
+    const filas = Array.isArray(req.body?.filas) ? req.body.filas : [];
+
+    await conCatalogo(res, async () => {
+      const r = await crearPreciosEnLote(centro, Number(req.params.versionId), filas,
+        { reemplazar: req.body?.reemplazar === true });
+      if (r.escritas > 0 || r.borradas > 0) {
+        await auditConnect({ req, action: "pricing.catalog.tire_prices_bulk", resourceType: "tariff_version",
+          resourceId: Number(req.params.versionId), detail: r });
+      }
+      return r;
+    });
+  });
+
+  router.delete("/pricing/catalog/tire-prices/:priceId", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { desactivarPrecio } = await catalogo();
+    await conCatalogo(res, async () => {
+      const ok = await desactivarPrecio(centro, Number(req.params.priceId));
+      if (ok) {
+        await auditConnect({ req, action: "pricing.catalog.tire_price_disabled", resourceType: "tariff_tire_price",
+          resourceId: Number(req.params.priceId), detail: {} });
+      }
+      return { ok };
+    });
+  });
+
+  router.get("/pricing/catalog/price-lists", ...requireConnectRole("analyst"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { listarBaremos } = await catalogo();
+    res.json({ data: await listarBaremos(centro) });
+  });
+
+  router.post("/pricing/catalog/price-lists", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { crearBaremo } = await catalogo();
+    await conCatalogo(res, () => crearBaremo(centro, {
+      marca: String(req.body?.marca ?? ""),
+      nombre: String(req.body?.nombre ?? ""),
+      vigenteDesdeMs: Number(req.body?.vigenteDesdeMs ?? Date.now()),
+      vigenteHastaMs: req.body?.vigenteHastaMs != null ? Number(req.body.vigenteHastaMs) : null,
+      fuente: req.body?.fuente ?? null,
+    }));
+  });
+
+  router.post("/pricing/catalog/price-lists/:listId/lines", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { cargarLineasBaremo } = await catalogo();
+    const lineas = Array.isArray(req.body?.lineas) ? req.body.lineas : [];
+    await conCatalogo(res, async () => {
+      const r = await cargarLineasBaremo(centro, Number(req.params.listId), lineas);
+      await auditConnect({ req, action: "pricing.catalog.price_list_loaded", resourceType: "manufacturer_price_list",
+        resourceId: Number(req.params.listId), detail: r });
+      return r;
+    });
+  });
+
+  /**
+   * Datos del vehículo, editables en cualquier momento.
+   *
+   * El PATCH general solo admite borrador o pendiente de asignación, y con
+   * razón: cambiar la ubicación o el tipo de servicio con el taller ya en
+   * camino descuadra la operación. Pero la ficha del vehículo no es
+   * operativa, es descriptiva, y en la práctica llega tarde: se abre la
+   * asistencia con una llamada, y la matrícula, la marca y el modelo se
+   * confirman después. Con la restricción general, esas fichas se quedaban
+   * incompletas para siempre.
+   *
+   * Se mezcla con lo que ya hubiera: mandar solo la matrícula no borra el
+   * resto. Y si la asistencia ya está inyectada en el core, la matrícula y la
+   * descripción se actualizan también allí, que es de donde beben el taller
+   * FULL y el informe.
+   */
+  router.patch("/assistances/:id/vehicle", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const cur = await db.query(
+      `SELECT status, vehicle, "coreAssistanceId" FROM connect_assistances WHERE id = $1`, [id],
+    );
+    if (!cur.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    if (cur.rows[0].status === "cancelled") {
+      return err(res, 409, "invalid_state", "La asistencia está cancelada");
+    }
+
+    const vehiculo = normalizarVehiculo(leerJson(cur.rows[0].vehicle), req.body ?? {});
+
+    const r = await db.query(
+      `UPDATE connect_assistances SET vehicle = $1, "updatedAtMs" = $2 WHERE id = $3 RETURNING vehicle`,
+      [JSON.stringify(vehiculo), Date.now(), id],
+    );
+
+    if (cur.rows[0].coreAssistanceId) {
+      await db.query(
+        `UPDATE roadside_assistances
+            SET plate = $1, "vehicleDescription" = COALESCE($2, "vehicleDescription"), "updatedAtMs" = $3
+          WHERE id = $4`,
+        [
+          vehiculo.plate ?? "",
+          descripcionVehiculo(vehiculo),
+          Date.now(), cur.rows[0].coreAssistanceId,
+        ],
+      ).catch((e: any) => console.error("[Connect] vehículo → core:", e?.message));
+    }
+
+    await auditConnect({
+      req, action: "assistance.vehicle_updated", resourceType: "assistance", resourceId: id,
+      detail: { plate: vehiculo.plate, make: vehiculo.make, model: vehiculo.model },
+    });
+    publish({ kind: "status", assistanceId: id, status: cur.rows[0].status });
+    res.json(leerJson(r.rows[0].vehicle));
+  });
+
   // Enviar borrador
   router.post("/assistances/:id/submit", ...requireConnectRole("operator"), async (req, res) => {
     const id = Number(req.params.id);
@@ -1479,7 +2865,67 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       a.rows[0].latitude, a.rows[0].longitude, a.rows[0].serviceType,
       excluded.rows.map((x) => x.workshopId),
     );
-    res.json({ data: candidates });
+
+    /*
+     * Festivo y precio de cada candidato.
+     *
+     * La central trabaja 365 días 24 horas, pero los talleres no: cada uno
+     * tiene los festivos de su comunidad y los de su municipio. El operador
+     * necesita verlo ANTES de llamar, porque con esa información puede elegir
+     * otro taller cercano que sí esté trabajando, y de paso más barato.
+     *
+     * El precio se calcula solo para los primeros: cada estimación son varias
+     * consultas, y nadie compara treinta talleres. Los de más abajo salen sin
+     * precio en vez de hacer esperar a la pantalla.
+     */
+    const centro = a.rows[0].controlCenterId;
+    const conPrecio = req.query.conPrecio !== "0";
+    const TOPE = 8;
+
+    let calendarios = new Map<number, any>();
+    if (centro != null && candidates.length > 0) {
+      const { calendarioDeTalleres } = await import("./workshopCalendar.ts");
+      const cuando = a.rows[0].serviceOrderedAtMs ?? Date.now();
+      calendarios = await calendarioDeTalleres(
+        Number(centro), candidates.map((c) => c.workshopId), new Date(Number(cuando)));
+    }
+
+    const { estimar } = await import("./pricing/service.ts");
+    const { formatear } = await import("./pricing/money.ts");
+    const verMargen = puedeEconomico(req.connectUser?.role as ConnectRole, "ver_margen");
+
+    const data = await Promise.all(candidates.map(async (c, i) => {
+      const cal = calendarios.get(c.workshopId);
+      let precio: Record<string, unknown> | null = null;
+
+      if (conPrecio && i < TOPE && centro != null) {
+        try {
+          const r = await estimar(id, { workshopId: c.workshopId, distanceKm: c.distanceKm });
+          if (r) {
+            precio = {
+              saleTotal: r.ventaTotal == null ? null : formatear(r.ventaTotal, 2),
+              purchaseTotal: r.compraTotal == null ? null : formatear(r.compraTotal, 2),
+              grossMargin: verMargen && r.margen != null ? formatear(r.margen, 2) : null,
+              rule: r.venta?.regla?.name ?? r.compra?.regla?.name ?? null,
+              currency: r.currency,
+            };
+          }
+        } catch {
+          // Un candidato sin tarifa no puede tumbar el comparador: sale sin precio
+        }
+      }
+
+      return {
+        ...c,
+        festivo: cal
+          ? { esFestivo: cal.esFestivo, festivos: cal.festivos,
+              regionName: cal.regionName, regionDesconocida: cal.regionDesconocida }
+          : null,
+        precio,
+      };
+    }));
+
+    res.json({ data, precioHasta: conPrecio ? Math.min(TOPE, candidates.length) : 0 });
   });
 
   // Historial de ofertas/asignaciones de la asistencia
@@ -1788,29 +3234,19 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     res.json(r.rows[0]);
   });
 
-  router.get("/authorizations/:id/tariffs", ...requireConnectRole("analyst"), async (req, res) => {
-    const r = await db.query(
-      `SELECT * FROM connect_tariff_lines WHERE "authorizationId" = $1 ORDER BY "serviceTypeCode"`,
-      [Number(req.params.id)],
-    );
-    res.json({ data: r.rows });
-  });
+  /*
+   * El editor de tarifas por autorización (importe base + €/km) se ha
+   * retirado: lo sustituye el motor de tarifas, que vive en Tarifas y sabe
+   * franjas, festivos, zonas y los dos lados.
+   *
+   * La TABLA connect_tariff_lines se queda, y `finalizeAcceptedAssignment`
+   * la sigue leyendo como respaldo cuando el motor no devuelve importe —una
+   * empresa sin contrato de compra todavía—. Borrarla dejaría hoy mismo sin
+   * coste a las asistencias de esas empresas, que es peor que arrastrar una
+   * tabla. Lo que ya no se puede es escribir en ella: no tiene sentido dar de
+   * alta datos nuevos en un sistema que se está retirando.
+   */
 
-  router.put("/authorizations/:id/tariffs/:code", ...requireConnectRole("cc_admin"), async (req, res) => {
-    const { baseAmount, perKmAmount, active } = req.body ?? {};
-    const r = await db.query(
-      `INSERT INTO connect_tariff_lines ("authorizationId", "serviceTypeCode", "baseAmount", "perKmAmount", active, "updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT ("authorizationId", "serviceTypeCode")
-       DO UPDATE SET "baseAmount" = EXCLUDED."baseAmount", "perKmAmount" = EXCLUDED."perKmAmount",
-                     active = EXCLUDED.active, "updatedAtMs" = EXCLUDED."updatedAtMs"
-       RETURNING *`,
-      [Number(req.params.id), String(req.params.code), Number(baseAmount) || 0, Number(perKmAmount) || 0,
-       active !== false, Date.now()],
-    );
-    await auditConnect({ req, action: "tariff.upserted", resourceType: "authorization", resourceId: Number(req.params.id), detail: req.body });
-    res.json(r.rows[0]);
-  });
 
   // Coste final de la asistencia (cierre administrativo)
   router.patch("/assistances/:id/costs", ...requireConnectRole("operator"), async (req, res) => {
@@ -2025,6 +3461,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   router.get("/billing/summary", ...requireConnectRole("cc_admin"), async (req, res) => {
     const from = Number(req.query.from) || new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
     const to = Number(req.query.to) || Date.now();
+    const centro = centroDe(req);
     const [byClient, byProvider, totals] = await Promise.all([
       db.query(
         `SELECT COALESCE(c.name, ca."clientName", p.name, 'Sin cliente') AS name,
@@ -2035,8 +3472,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
            LEFT JOIN connect_clients c ON c.id = ca."clientId"
            LEFT JOIN connect_partners p ON p.id = ca."partnerId"
           WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
+            AND ($3::int IS NULL OR ca."controlCenterId" = $3)
           GROUP BY 1 ORDER BY amount DESC`,
-        [from, to],
+        [from, to, centro],
       ),
       db.query(
         `SELECT COALESCE(pc.name, w.name, 'Sin proveedor') AS name,
@@ -2047,8 +3485,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
            LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
            LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
           WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
+            AND ($3::int IS NULL OR ca."controlCenterId" = $3)
           GROUP BY 1 ORDER BY amount DESC`,
-        [from, to],
+        [from, to, centro],
       ),
       db.query(
         `SELECT COUNT(*)::int AS services,
@@ -2056,8 +3495,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
                 COUNT(*) FILTER (WHERE "finalCost" IS NULL)::int AS without_final,
                 COUNT(*) FILTER (WHERE "invoicedAtMs" IS NULL)::int AS pending_invoice
            FROM connect_assistances
-          WHERE status IN ('finished','at_workshop') AND "createdAtMs" BETWEEN $1 AND $2`,
-        [from, to],
+          WHERE status IN ('finished','at_workshop') AND "createdAtMs" BETWEEN $1 AND $2
+            AND ($3::int IS NULL OR "controlCenterId" = $3)`,
+        [from, to, centro],
       ),
     ]);
     res.json({ from, to, totals: totals.rows[0], by_client: byClient.rows, by_provider: byProvider.rows });
@@ -2077,8 +3517,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
          LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
         WHERE ca.status IN ('finished','at_workshop') AND ca."createdAtMs" BETWEEN $1 AND $2
+          AND ($3::int IS NULL OR ca."controlCenterId" = $3)
         ORDER BY ca.id DESC LIMIT 1000`,
-      [from, to],
+      [from, to, centroDe(req)],
     );
     res.json({ data: r.rows, from, to });
   });
@@ -2089,11 +3530,147 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
     const r = await db.query(
       `UPDATE connect_assistances SET "invoicedAtMs" = $1
         WHERE id = ANY($2::int[]) AND status = 'finished' AND "invoicedAtMs" IS NULL
+          AND ($3::int IS NULL OR "controlCenterId" = $3)
         RETURNING id`,
-      [Date.now(), ids],
+      [Date.now(), ids, centroDe(req)],
     );
     await auditConnect({ req, action: "billing.marked_invoiced", detail: { count: r.rows.length, ids: r.rows.map((x) => x.id) } });
     res.json({ marked: r.rows.length });
+  });
+
+  // ── Facturación desde el motor de tarifas ────────────────────────────────
+
+  /*
+   * Lo de arriba factura contra `finalCost`, un número suelto por asistencia
+   * sin desglose ni lado. Esto factura contra las LÍNEAS del motor, que traen
+   * concepto a concepto lo que se le cobra al cliente y lo que el taller le
+   * cobra a la central. Conviven a propósito: hay servicios pactados a mano
+   * que no pasan por el motor, y romper la facturación de siempre para
+   * estrenar la nueva no le hace falta a nadie.
+   */
+
+  /** Mes en curso si no se dice otra cosa. */
+  function periodoDe(req: Request) {
+    const ahora = new Date();
+    return {
+      controlCenterId: centroDe(req),
+      desdeMs: Number(req.query.from) || new Date(ahora.getFullYear(), ahora.getMonth(), 1).getTime(),
+      hastaMs: Number(req.query.to) || Date.now(),
+      incluirExportadas: req.query.incluirExportadas === "1",
+    };
+  }
+
+  function ladoDe(req: Request): "sale" | "purchase" {
+    return req.query.side === "purchase" || req.body?.side === "purchase" ? "purchase" : "sale";
+  }
+
+  /**
+   * Los documentos del periodo por un lado, con sus líneas y lo que impide
+   * emitir cada uno. Y aparte, los servicios terminados SIN tarifa de cierre:
+   * esa lista es la que impide facturar de menos sin enterarse.
+   */
+  router.get("/billing/documents", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const { agruparEnDocumentos, resumen } = await import("./pricing/billing.ts");
+    const { lineasFacturables, pendientesDeCierre } = await import("./pricing/billingRepo.ts");
+
+    const periodo = periodoDe(req);
+    const lado = ladoDe(req);
+    const [filas, pendientes] = await Promise.all([
+      lineasFacturables(periodo, lado),
+      pendientesDeCierre(periodo),
+    ]);
+    const documentos = agruparEnDocumentos(filas, lado);
+
+    res.json({
+      from: periodo.desdeMs, to: periodo.hastaMs, side: lado,
+      resumen: resumen(documentos),
+      documentos,
+      pendientesDeCierre: pendientes,
+    });
+  });
+
+  /**
+   * CSV para el ERP.
+   *
+   * Solo salen los documentos emitibles: uno bloqueado por una línea sin
+   * precio no se exporta a medias, porque la factura iría corta por un importe
+   * que nadie ha decidido. Se ven en la pantalla con su motivo.
+   */
+  router.get("/billing/export.csv", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const { agruparEnDocumentos, aCsv } = await import("./pricing/billing.ts");
+    const { lineasFacturables } = await import("./pricing/billingRepo.ts");
+
+    const periodo = periodoDe(req);
+    const lado = ladoDe(req);
+    const documentos = agruparEnDocumentos(await lineasFacturables(periodo, lado), lado)
+      .filter((d) => !d.bloqueado);
+
+    const nombre = `facturacion-${lado === "sale" ? "venta" : "compra"}-` +
+      `${new Date(periodo.desdeMs).toISOString().slice(0, 10)}.csv`;
+
+    await auditConnect({ req, action: "billing.exported", detail: {
+      side: lado, from: periodo.desdeMs, to: periodo.hastaMs, documentos: documentos.length } });
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${nombre}"`);
+    res.send(aCsv(documentos));
+  });
+
+  /**
+   * Deja constancia de lo que ya ha salido. A partir de aquí esas asistencias
+   * no vuelven a aparecer en el listado ni en la exportación, que es lo que
+   * impide mandar dos veces la misma factura.
+   */
+  router.post("/billing/mark-exported", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+
+    const { agruparEnDocumentos } = await import("./pricing/billing.ts");
+    const { lineasFacturables, marcarExportadas } = await import("./pricing/billingRepo.ts");
+
+    const lado = ladoDe(req);
+    const periodo = {
+      controlCenterId: centro,
+      desdeMs: Number(req.body?.from) || 0,
+      hastaMs: Number(req.body?.to) || Date.now(),
+    };
+    const documentos = agruparEnDocumentos(await lineasFacturables(periodo, lado), lado)
+      .filter((d) => !d.bloqueado);
+
+    // Una marca por asistencia con su importe, para poder cuadrar después
+    const porAsistencia = new Map<number, { id: number; importe: number; currency: string }>();
+    for (const d of documentos) {
+      for (const l of d.lineas) {
+        const acc = porAsistencia.get(l.assistanceId)
+          ?? { id: l.assistanceId, importe: 0, currency: d.currency };
+        acc.importe += Number(l.total ?? 0);
+        porAsistencia.set(l.assistanceId, acc);
+      }
+    }
+
+    const marcadas = await marcarExportadas(centro, lado,
+      [...porAsistencia.values()].map((a) => ({
+        id: a.id, importe: a.importe.toFixed(4), currency: a.currency,
+      })),
+      { userId: req.connectUser?.id ?? null, referencia: req.body?.referencia ?? null });
+
+    await auditConnect({ req, action: "billing.marked_exported", detail: {
+      side: lado, marcadas, referencia: req.body?.referencia ?? null } });
+    res.json({ marcadas });
+  });
+
+  /** Deshacer: el ERP la rechazó o se emitió por error. */
+  router.delete("/billing/mark-exported/:assistanceId", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const centro = centroPedido(req);
+    if (centro == null) return err(res, 400, "centro_requerido", "Indica el centro de control");
+    const { desmarcarExportada } = await import("./pricing/billingRepo.ts");
+    const lado = ladoDe(req);
+    const ok = await desmarcarExportada(centro, Number(req.params.assistanceId), lado);
+    if (ok) {
+      await auditConnect({ req, action: "billing.unmarked_exported", resourceType: "assistance",
+        resourceId: Number(req.params.assistanceId), detail: { side: lado } });
+    }
+    res.json({ ok });
   });
 
   // ── Incidencias (Sprint 5) ────────────────────────────────
@@ -2239,6 +3816,33 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
         toRef ?? null, body.trim(), u.id, u.name, Date.now(),
       ],
     );
+
+    // Si el taller es Lite, el mensaje de Central le llega como aviso al
+    // operario. Antes el chat era de ida: el taller escribia y Central leia,
+    // pero la respuesta se quedaba esperando a que alguien abriera la app.
+    // El aviso no lleva el texto: solo el identificador, y el operario lo lee
+    // ya autenticado (misma regla de privacidad que el resto de push).
+    try {
+      const a = await db.query(
+        `SELECT ca.id, ca."expedientNumber", ca."liteUserId", w."integrationType"
+           FROM connect_assistances ca
+           LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+          WHERE ca.id = $1`,
+        [Number(req.params.id)],
+      );
+      const fila = a.rows[0];
+      if (fila?.integrationType === "lite" && fila.liteUserId) {
+        await notifyLiteUser(Number(fila.liteUserId), {
+          title: "Mensaje de la central",
+          body: `${fila.expedientNumber ?? `#${fila.id}`} · Abre la app para leerlo`,
+          data: { type: "assistance_message", assistanceId: String(fila.id) },
+        });
+      }
+    } catch (e: any) {
+      // Un fallo de aviso nunca puede tumbar el registro de la comunicacion
+      console.error("[Connect] aviso de mensaje a Lite:", e?.message);
+    }
+
     res.status(201).json(r.rows[0]);
   });
 

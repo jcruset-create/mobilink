@@ -6,24 +6,30 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { boFetch } from "../services/api";
+import { abrirInforme } from "../services/informe";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { Card, Badge, Button, ErrorBanner } from "../components/ui";
 import AsignacionTab from "../components/AsignacionTab";
 import ComunicacionesTab from "../components/ComunicacionesTab";
 import SeguimientoLiteTab from "../components/SeguimientoLiteTab";
-import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime } from "../types";
+import BackOfficeTab from "../components/BackOfficeTab";
+import VehiculoTab from "../components/VehiculoTab";
+import TarificacionTab from "../components/TarificacionTab";
+import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime, fmtImporte } from "../types";
 
 type Detail = {
   id: number; uuid: string; status: string; priority: string; serviceType: string;
   expedientNumber: string | null; externalReference: string | null; clientName: string | null;
   partnerName: string | null; workshopName: string | null; workshopPhone: string | null;
-  providerName: string | null; assignedTechName: string | null; coreStatus: string | null;
+  providerName: string | null; coreStatus: string | null;
   customerName: string; customerPhone: string; requester: string; locationDetails: string;
   address: string; latitude: number | null; longitude: number | null;
   vehicle: string; description: string | null; origin: string; createdByName: string | null;
   slaMinutes: number | null; slaDeadlineAtMs: number | null; cancelReason: string | null;
   assignmentExplanation: string | null; createdAtMs: number;
-  estimatedCost: number | null; finalCost: number | null; costCurrency: string; costDetail: string | null;
+  reportUrl: string | null; reportAtMs: number | null;
+  assignedTechName: string | null; assignedVehicleName: string | null; assignedVehiclePlate: string | null;
+  estimatedCost: number | string | null; finalCost: number | string | null; costCurrency: string; costDetail: string | null;
 };
 
 type TimelineEntry = { fromStatus: string | null; toStatus: string; actorType: string; reason: string | null; occurredAtMs: number };
@@ -40,7 +46,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-const TABS = ["Resumen", "Asignación", "Seguimiento", "Comunicaciones", "Costes", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
+const TABS = ["Resumen", "Back office", "Asignación", "Seguimiento", "Comunicaciones", "Tarificación", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
 
 export default function FichaAsistencia() {
   const { id } = useParams();
@@ -140,6 +146,14 @@ export default function FichaAsistencia() {
                   </Button>
                 ))
               )}
+              {["finished", "returning_to_workshop", "at_workshop"].includes(a.status) && (
+                <Button
+                  variant="ghost" disabled={busy}
+                  onClick={() => abrirInforme(a.id).catch((e: any) => setError(e.message))}
+                >
+                  {a.reportUrl ? "Ver informe" : "Generar informe"}
+                </Button>
+              )}
               {!["finished", "returning_to_workshop", "at_workshop", "cancelled"].includes(a.status) && (
                 <Button variant="danger" onClick={cancelar} disabled={busy}>Cancelar</Button>
               )}
@@ -148,9 +162,18 @@ export default function FichaAsistencia() {
         </div>
         <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-[12px] text-slate-400">
           <span>Cliente: <b className="text-slate-200">{a.clientName ?? a.partnerName ?? "—"}</b></span>
+          {/* El vehículo averiado, que es de lo que va el servicio: hasta ahora
+              en la cabecera solo salía la furgoneta del taller. */}
+          <span>Vehículo: <b className="text-slate-200">
+            {[vehicle.plate, [vehicle.make, vehicle.model].filter(Boolean).join(" ")]
+              .filter(Boolean).join(" · ") || "—"}
+          </b></span>
           <span>Proveedor: <b className="text-slate-200">{a.providerName ?? "—"}</b></span>
           <span>Taller: <b className="text-slate-200">{a.workshopName ?? "—"}</b></span>
-          <span>Técnico: <b className="text-slate-200">{a.assignedTechName ?? "—"}</b></span>
+          <span>Operario: <b className="text-slate-200">{a.assignedTechName ?? "—"}</b></span>
+          <span>Furgoneta: <b className="text-slate-200">
+            {[a.assignedVehicleName, a.assignedVehiclePlate].filter(Boolean).join(" · ") || "—"}
+          </b></span>
           <span>Creada: <b className="text-slate-200">{fmtDateTime(a.createdAtMs)}</b>{a.createdByName ? ` por ${a.createdByName}` : ""}</span>
         </div>
       </Card>
@@ -185,34 +208,53 @@ export default function FichaAsistencia() {
         {tab === "Asignación" && (
           <AsignacionTab assistanceId={a.id} status={a.status} canOperate={canOperate} onChanged={load} />
         )}
+        {tab === "Back office" && (
+          <BackOfficeTab assistanceId={a.id} canOperate={canOperate} />
+        )}
         {tab === "Seguimiento" && (
           <SeguimientoLiteTab assistanceId={a.id} canOperate={canOperate} onChanged={load} />
         )}
         {tab === "Comunicaciones" && (
           <ComunicacionesTab assistanceId={a.id} canOperate={canOperate} />
         )}
-        {tab === "Costes" && (
-          <div>
-            <Row label="Coste estimado" value={a.estimatedCost != null ? `${a.estimatedCost.toFixed(2)} ${a.costCurrency}` : "Sin tarifa aplicable"} />
-            <Row label="Detalle del cálculo" value={a.costDetail} />
-            <Row label="Coste final" value={a.finalCost != null ? `${a.finalCost.toFixed(2)} ${a.costCurrency}` : "Pendiente de cierre"} />
-            {canOperate && ["finished", "returning_to_workshop", "at_workshop", "arrived", "in_progress"].includes(a.status) && (
-              <div className="mt-3">
-                <Button
-                  variant="ghost" disabled={busy}
-                  onClick={() => {
-                    const v = window.prompt("Coste final del servicio (€):", a.finalCost != null ? String(a.finalCost) : a.estimatedCost != null ? String(a.estimatedCost) : "");
-                    if (v != null && v.trim() !== "" && !Number.isNaN(Number(v))) {
-                      setBusy(true);
-                      boFetch(`/assistances/${a.id}/costs`, { method: "PATCH", body: { finalCost: Number(v) } })
-                        .then(load).catch((e: any) => setError(e.message)).finally(() => setBusy(false));
-                    }
-                  }}
-                >
-                  Registrar coste final
-                </Button>
-              </div>
-            )}
+        {tab === "Tarificación" && (
+          <div className="flex flex-col gap-4">
+            <TarificacionTab
+              assistanceId={a.id}
+              canOperate={canOperate}
+              status={a.status}
+              onChanged={load}
+            />
+
+            {/*
+              * El coste a mano se queda: hay servicios que se pactan por
+              * teléfono y no hay tarifa que los explique. Pero se pinta
+              * debajo del motor y con su etiqueta, para que se vea que es un
+              * importe puesto a dedo y no lo que dice el tarifario.
+              */}
+            <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+              <p className="mb-2 text-[13px] font-medium text-slate-200">Importe a mano</p>
+              <Row label="Coste estimado" value={fmtImporte(a.estimatedCost, a.costCurrency) ?? "Sin tarifa aplicable"} />
+              <Row label="Detalle del cálculo" value={a.costDetail} />
+              <Row label="Coste final" value={fmtImporte(a.finalCost, a.costCurrency) ?? "Pendiente de cierre"} />
+              {canOperate && ["finished", "returning_to_workshop", "at_workshop", "arrived", "in_progress"].includes(a.status) && (
+                <div className="mt-3">
+                  <Button
+                    variant="ghost" disabled={busy}
+                    onClick={() => {
+                      const v = window.prompt("Coste final del servicio (€):", a.finalCost != null ? String(a.finalCost) : a.estimatedCost != null ? String(a.estimatedCost) : "");
+                      if (v != null && v.trim() !== "" && !Number.isNaN(Number(v))) {
+                        setBusy(true);
+                        boFetch(`/assistances/${a.id}/costs`, { method: "PATCH", body: { finalCost: Number(v) } })
+                          .then(load).catch((e: any) => setError(e.message)).finally(() => setBusy(false));
+                      }
+                    }}
+                  >
+                    Registrar coste final a mano
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
         )}
         {tab === "Solicitante" && (
@@ -227,18 +269,12 @@ export default function FichaAsistencia() {
           </div>
         )}
         {tab === "Vehículo" && (
-          <div>
-            <Row label="Tipo" value={vehicle.type} />
-            <Row label="Marca / modelo" value={[vehicle.make, vehicle.model].filter(Boolean).join(" ")} />
-            <Row label="Matrícula" value={vehicle.plate} />
-            <Row label="VIN" value={vehicle.vin} />
-            <Row label="Combustible" value={vehicle.fuel} />
-            <Row label="Eléctrico" value={vehicle.electric} />
-            <Row label="Remolque" value={vehicle.trailer} />
-            <Row label="Peso" value={vehicle.weight} />
-            <Row label="Carga" value={vehicle.cargo} />
-            <Row label="Mercancía peligrosa" value={vehicle.dangerousGoods} />
-          </div>
+          <VehiculoTab
+            assistanceId={a.id}
+            vehicle={vehicle}
+            editable={canOperate && a.status !== "cancelled"}
+            onSaved={load}
+          />
         )}
         {tab === "Ubicación" && (
           <div>

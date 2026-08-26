@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/etiqueta_neumatico.dart';
 
 /// Histórico de operaciones de un vehículo, agrupado por intervención
 /// (sesión de cambio) con su informe. Al tocar una intervención se ven sus
@@ -71,8 +72,14 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
           controller: scroll,
           padding: const EdgeInsets.all(16),
           children: [
-            Text('Intervención · ${_fecha(iv['fecha'] as String?)}',
+            Text(
+                iv['numero'] != null
+                    ? 'Parte ${iv['numero']}'
+                    : 'Intervención · ${_fecha(iv['fecha'] as String?)}',
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            if (iv['numero'] != null)
+              Text(_fecha(iv['fecha'] as String?),
+                  style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
             const SizedBox(height: 8),
             Container(
               width: double.infinity,
@@ -229,8 +236,26 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
                                 color: AppColors.surface,
                                 margin: const EdgeInsets.only(bottom: 8),
                                 child: ListTile(
-                                  title: Text('${_fecha(iv['fecha'] as String?)} · ${iv['n_operaciones'] ?? 0} operación(es)',
-                                      style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                                  // El número de parte va PRIMERO y destacado:
+                                  // es lo que el técnico apunta en el albarán y
+                                  // lo que el cliente cita por teléfono. Puede
+                                  // faltar en intervenciones anteriores a la
+                                  // migración que lo introdujo.
+                                  title: Row(children: [
+                                    if (iv['numero'] != null) ...[
+                                      Text('${iv['numero']}',
+                                          style: const TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w800,
+                                              color: AppColors.info)),
+                                      const SizedBox(width: 8),
+                                    ],
+                                    Expanded(
+                                      child: Text('${_fecha(iv['fecha'] as String?)} · ${iv['n_operaciones'] ?? 0} operación(es)',
+                                          style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                                    ),
+                                  ]),
                                   subtitle: Text(informe, style: const TextStyle(color: AppColors.textPrimary, fontSize: 14)),
                                   trailing: const Icon(Icons.chevron_right, color: AppColors.textHint),
                                   onTap: () => _verDetalle(iv),
@@ -302,7 +327,20 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
     final borde = _borde(s);
     final marca = s['marca'] as String?;
     final mm = s['mm'];
+    final presion = s['presion'];
+    final distintivos = [
+      if (s['recau'] == true) 'RECAUCH.',
+      if (s['reesc'] == true) 'REESC.',
+      if (s['girado'] == true) 'GIRADO',
+    ];
     final averias = s['averias'] is List ? (s['averias'] as List).whereType<String>().toList() : const <String>[];
+    // Mismo color que el informe de flota y que el resto de planos de la app:
+    // manda la banda de profundidad. Sin mm conocidos, el recuadro oscuro de
+    // siempre. El borde sigue diciendo lo suyo: rojo avería, verde cambiada.
+    final mmNum = mm is num ? mm.toDouble() : double.tryParse('$mm');
+    final banda = (marca != null && mmNum != null) ? bandaProfundidad(mmNum) : null;
+    final cTexto = banda?.tinta ?? AppColors.textPrimary;
+    final cSuave = banda != null ? cTexto.withValues(alpha: 0.72) : AppColors.textSecondary;
     return Positioned(
       left: (x / 100 * w).clamp(0.0, w - cardW),
       top: (y / 100 * h).clamp(0.0, h - 24),
@@ -310,36 +348,81 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
         decoration: BoxDecoration(
-          color: AppColors.surface.withValues(alpha: 0.92),
+          color: banda?.fondo ?? AppColors.surface.withValues(alpha: 0.92),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: borde, width: 1.5),
         ),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(s['codigo']?.toString() ?? '—', style: TextStyle(fontSize: 7, fontWeight: FontWeight.w700, color: borde), maxLines: 1, overflow: TextOverflow.ellipsis),
-          Text(marca ?? 'Libre', style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w600, color: AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(s['codigo']?.toString() ?? '—',
+              style: TextStyle(
+                  fontSize: 7,
+                  fontWeight: FontWeight.w700,
+                  // Sobre un recuadro claro, el borde rojo/verde como tinta no
+                  // se lee: manda la tinta de la banda.
+                  color: banda != null ? cTexto : borde),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(marca ?? 'Libre', style: TextStyle(fontSize: 8, fontWeight: FontWeight.w600, color: cTexto), maxLines: 1, overflow: TextOverflow.ellipsis),
           if (marca != null)
-            Text(mm != null ? '$mm mm' : '— mm', style: const TextStyle(fontSize: 7, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text('${mm != null ? '$mm mm' : '— mm'} · ${presion != null ? '$presion bar' : '— bar'}',
+                style: TextStyle(fontSize: 7, color: cSuave), maxLines: 1, overflow: TextOverflow.ellipsis),
+          // Mismas etiquetas que en los otros planos: REESC. relleno de naranja
+          // brillante, el resto en contorno.
+          if (marca != null && distintivos.isNotEmpty)
+            Wrap(spacing: 2, runSpacing: 2, children: [
+              for (final d in distintivos)
+                EtiquetaNeu(
+                  txt: d,
+                  color: cTexto,
+                  fontSize: 6.5,
+                  fondo: d == 'REESC.'
+                      ? AppColors.reesculturado
+                      : (d == 'NEW' ? AppColors.tireNuevo : null),
+                ),
+            ]),
           if (widget.conAveria && averias.isNotEmpty)
-            Text('⚠ ${averias.join(' · ')}', style: const TextStyle(fontSize: 7, fontWeight: FontWeight.w700, color: AppColors.danger), maxLines: 2, overflow: TextOverflow.ellipsis),
+            Text('⚠ ${averias.join(' · ')}',
+                style: TextStyle(
+                    fontSize: 7,
+                    fontWeight: FontWeight.w700,
+                    // El rojo de siempre se pierde sobre la banda roja o la
+                    // verde oscura; ahí manda la tinta legible de la banda.
+                    color: banda != null ? cTexto : AppColors.danger),
+                maxLines: 2, overflow: TextOverflow.ellipsis),
         ]),
       ),
     );
   }
 
   Widget _listaFallback() {
+    if (widget.items.isEmpty) {
+      return const Text('No se guardó el estado previo (intervención anterior a esta función).',
+          style: TextStyle(fontSize: 11, color: AppColors.textHint));
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       for (final s in widget.items)
         Padding(
           padding: const EdgeInsets.only(bottom: 2),
-          child: Text(
-            '${s['codigo'] ?? '—'}: ${s['marca'] ?? 'Libre'}${s['medida'] != null ? ' ${s['medida']}' : ''}'
-            '${s['mm'] != null ? ' · ${s['mm']} mm' : ''}'
-            '${widget.conAveria && s['averias'] is List && (s['averias'] as List).isNotEmpty ? '  ⚠ ${(s['averias'] as List).join(' · ')}' : ''}',
-            style: TextStyle(
-              fontSize: 11,
-              color: _borde(s) == AppColors.cardBorder ? AppColors.textSecondary : _borde(s),
-            ),
-          ),
+          child: Builder(builder: (_) {
+            final dist = [
+              if (s['recau'] == true) 'RECAUCH.',
+              if (s['reesc'] == true) 'REESC.',
+              if (s['girado'] == true) 'GIRADO',
+            ].join(' · ');
+            final averias = widget.conAveria && s['averias'] is List
+                ? (s['averias'] as List).join(' · ')
+                : '';
+            return Text(
+              '${s['codigo'] ?? '—'}: ${s['marca'] ?? 'Libre'}${s['medida'] != null ? ' ${s['medida']}' : ''}'
+              '${s['mm'] != null ? ' · ${s['mm']} mm' : ''}'
+              '${s['presion'] != null ? ' · ${s['presion']} bar' : ''}'
+              '${dist.isNotEmpty ? '  $dist' : ''}'
+              '${averias.isNotEmpty ? '  ⚠ $averias' : ''}',
+              style: TextStyle(
+                fontSize: 11,
+                color: _borde(s) == AppColors.cardBorder ? AppColors.textSecondary : _borde(s),
+              ),
+            );
+          }),
         ),
     ]);
   }
@@ -347,6 +430,8 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
   @override
   Widget build(BuildContext context) {
     final url = widget.imagen;
+    // Sin posiciones no tiene sentido pintar el chasis vacío: mejor el aviso.
+    if (widget.items.isEmpty) return _listaFallback();
     if (url == null || url.isEmpty || _aspect == null) return _listaFallback();
     return LayoutBuilder(builder: (ctx, c) {
       final w = c.maxWidth;

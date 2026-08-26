@@ -6,6 +6,7 @@ import {
 } from "./data";
 import { EMPRESA_VACIA, delegacionVacia } from "../components/forms";
 import { tipoLlantaLabel } from "../types";
+import { medidaCanonica } from "./medidas";
 import type { VehiculoInput } from "../types";
 
 export interface FilaReporte {
@@ -26,8 +27,17 @@ export interface ReporteImport {
   configsNuevas: string[];
 }
 
-const normN = (s: any) => String(s ?? "").trim().toLowerCase();               // nombres
-const normM = (s: any) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, ""); // medidas
+// Nombres: sin tildes, sin distinguir mayúsculas y tratando "_" y "-" como
+// espacios. En el Excel se escribe "Autobús" o "Camión 2 ejes" y en el
+// catálogo están como "autobus" y "camion_2_ejes": es el mismo tipo.
+const sinTildes = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const normN = (s: any) => sinTildes(String(s ?? "")).trim().toLowerCase()
+  .replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+// Medidas: se comparan y se crean en la forma canónica, la misma que impone
+// el disparador de la base de datos. Comparar "295/80R22,5" con "295/80R22.5"
+// como si fueran distintas hacía que el importador intentara crear una
+// medida que ya existe.
+const normM = (s: any) => medidaCanonica(String(s ?? "")).toLowerCase();
 const normL = (s: any) => String(s ?? "").trim().toLowerCase().replace(/[\s·.]+/g, ""); // llantas
 
 function fechaStr(v: any): string | null {
@@ -64,7 +74,10 @@ export async function importVehiculos(rows: any[], ejecutar: boolean): Promise<R
   // Catálogos que faltan (a crear)
   const basesFile = [...new Set(rows.map((r) => String(r.base ?? "").trim()).filter(Boolean))];
   const configsFile = [...new Set(rows.map((r) => String(r.configuracion_ejes ?? "").trim()).filter(Boolean))];
-  const medidasFile = [...new Set(rows.map((r) => String(r.medida ?? "").trim()).filter(Boolean))];
+  // Las medidas se agrupan ya en canónico: un Excel que traiga "295/80R22,5"
+  // y "295/80R22.5" pide crear la misma medida dos veces, y la segunda choca
+  // contra el unique del catálogo.
+  const medidasFile = [...new Set(rows.map((r) => medidaCanonica(String(r.medida ?? ""))).filter(Boolean))];
 
   const delegacionesNuevas = basesFile.filter((b) => !delegaciones.some((d) => normN(d.nombre) === normN(b)));
   const configsNuevas = configsFile.filter((c) => !configs.some((x) => normN(x.nombre) === normN(c)));
@@ -73,7 +86,7 @@ export async function importVehiculos(rows: any[], ejecutar: boolean): Promise<R
   if (ejecutar && empresaId) {
     for (const b of delegacionesNuevas) await crearDelegacion({ ...delegacionVacia(empresaId), nombre: b });
     for (const c of configsNuevas) await crearConfigEjes(c);
-    for (const m of medidasNuevas) await crearMedida(m.replace(/\s+/g, "").toUpperCase());
+    for (const m of medidasNuevas) await crearMedida(medidaCanonica(m));
     delegaciones = await listarDelegaciones(empresaId);
     configs = await listarConfigEjes();
     medidas = await listarMedidas();
@@ -81,7 +94,13 @@ export async function importVehiculos(rows: any[], ejecutar: boolean): Promise<R
   }
 
   const mapDeleg = new Map(delegaciones.map((d) => [normN(d.nombre), d.id]));
-  const mapTipo = new Map(tipos.map((t) => [normN(t.nombre), t.id]));
+  // Un tipo se reconoce por su nombre interno ("autobus") o por su
+  // descripción ("Autobús urbano"), que es lo que se suele escribir en el Excel.
+  const mapTipo = new Map<string, string>();
+  for (const t of tipos) {
+    if (t.descripcion) mapTipo.set(normN(t.descripcion), t.id);
+    mapTipo.set(normN(t.nombre), t.id); // el nombre manda si hay empate
+  }
   const mapConfig = new Map(configs.map((c) => [normN(c.nombre), c.id]));
   const mapMedida = new Map(medidas.map((m) => [normM(m.valor), m.id]));
   const mapLlanta = new Map(llantas.map((l) => [normL(tipoLlantaLabel(l)), l.id]));

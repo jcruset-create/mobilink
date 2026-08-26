@@ -11,6 +11,8 @@ import { deliverPendingWebhooks, enqueueWebhookEvent } from "./webhooks.ts";
 import { computeWorkshopScores, notifySlaEvents, detectAnomalies } from "./score.ts";
 import { syncMobileUnits } from "./mobileunits.ts";
 import { storeDailyKpiSnapshot, predictDemand, backfillDemandActuals, generateRecommendations } from "./intelligence.ts";
+import { purgeLiteActions } from "./lite.ts";
+import { pasadaDeCierreAutomatico } from "./pricing/cierreAutomatico.ts";
 
 const TICK_MS = 15_000;
 const SCORE_EVERY_TICKS = 20; // recalcular el score cada ~5 min
@@ -40,6 +42,31 @@ export async function runConnectChecksOnce(): Promise<void> {
       if (recs > 0) console.log(`[Connect] worker: ${recs} recomendación(es) de IA generadas`);
     }
     if (tick % 240 === 3) await predictDemand(); // predicción de demanda cada hora
+    if (tick % 4 === 1) {
+      // Espejo económico de Assist (apagado salvo interruptor en el centro)
+      const { pasadaDeEspejos } = await import("./assistMirror.ts");
+      const e = await pasadaDeEspejos();
+      if (e.creados + e.bloqueados + e.regularizados > 0) {
+        console.log(`[Connect] espejo Assist: ${e.creados} creados, ${e.bloqueados} bloqueados, ${e.regularizados} regularizados`);
+      }
+    }
+    if (tick % 240 === 7) {
+      // Caducidad de las operaciones idempotentes de Lite, una vez por hora
+      const purgadas = await purgeLiteActions();
+      if (purgadas > 0) console.log(`[Connect] worker: ${purgadas} operación(es) de Lite caducadas`);
+    }
+    if (tick % 40 === 11) {
+      /*
+       * Cierre automático de tarifas, cada ~10 min. No hace nada salvo que
+       * alguna central lo haya encendido en Configuración: de fábrica está
+       * apagado y el cierre lo dispara una persona.
+       */
+      const cierre = await pasadaDeCierreAutomatico();
+      if (cierre.cerradas > 0 || cierre.fallidas > 0) {
+        console.log(`[Pricing] cierre automático: ${cierre.cerradas} cerrada(s), ` +
+          `${cierre.fallidas} con error, en ${cierre.centros} central(es)`);
+      }
+    }
     await deliverPendingWebhooks();
   } catch (err: any) {
     console.error("[Connect] worker error:", err?.message);

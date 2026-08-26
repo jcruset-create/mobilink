@@ -27,6 +27,14 @@ class AppColors {
 
   static const disabledBtn = Color(0xFF2A3441);
 
+  // Botones de la portada de la APK, en tonos pastel. Son claros a proposito
+  // sobre el fondo oscuro: cada acción se reconoce por su color antes de leer
+  // la etiqueta. El texto y el icono los pone _BigTile en oscuro, calculando
+  // el contraste, para que se lean sobre estos fondos.
+  static const tileVerdePastel = Color(0xFFA8D5BA); // Operaciones
+  static const tileGrisPastel  = Color(0xFFC9CFD8); // Planificacion
+  static const tileRojoPastel  = Color(0xFFF2B0AC); // Incidencias
+
   // Estados de posicion de neumatico (color + significado, nunca solo color)
   static const tirePendiente    = Color(0xFF4B5563); // gris
   static const tireSeleccionado = Color(0xFF3B82F6); // azul
@@ -36,6 +44,11 @@ class AppColors {
   static const tireNoAccesible  = Color(0xFF374151); // negro/gris oscuro
   static const tireNuevo        = Color(0xFF00E676); // verde brillante — sin estrenar
   static const tireBien         = Color(0xFF86EFAC); // verde mas claro — dentro de umbral
+
+  /// Naranja brillante del distintivo REESC. Va SIEMPRE de fondo con tinta
+  /// oscura encima: los recuadros del plano se pintan de verde/amarillo/rojo
+  /// claros, y sobre ellos un naranja en texto se perdería.
+  static const reesculturado = Color(0xFFFF7A00);
 }
 
 // ── Tamanos: modo normal vs "exterior" (sol directo / guantes) ──
@@ -216,3 +229,34 @@ Color? tireStatusFill(TireStatus s) {
 /// (verdes y naranja) piden texto oscuro; el rojo, texto blanco.
 Color tireStatusOnFill(TireStatus s) =>
     s == TireStatus.grave ? Colors.white : AppColors.background;
+
+// ── Bandas de profundidad del INFORME DE FLOTA ────────────────────────────
+//
+// El recuadro del neumático se pinta con estos colores para que la tablet y el
+// informe que recibe el cliente digan exactamente lo mismo. Son los valores
+// del informe ejecutivo (BANDA_INFO en InformeEjecutivo.tsx): si cambian allí,
+// hay que cambiarlos aquí.
+//
+// OJO: esto es SOLO color. El diagnóstico (TireStatus) sigue saliendo de los
+// umbrales de la empresa y es quien decide si una rueda es anomalía y abre el
+// camino de excepción. Una cosa es cómo se pinta y otra qué se hace.
+
+class BandaProfundidad {
+  final String etiqueta;
+  final Color fondo;
+  final Color tinta; // legible encima de [fondo]
+  const BandaProfundidad(this.etiqueta, this.fondo, this.tinta);
+}
+
+/// Banda a la que pertenece una profundidad, en mm. Los tramos van CERRADOS
+/// POR ARRIBA igual que en el informe: 4.0 cae en "hasta 4", 6.0 en "4-6"…
+BandaProfundidad bandaProfundidad(double mm) {
+  // Tintas elegidas por contraste real sobre cada fondo: oscura en los cuatro
+  // tramos claros (9.0 a 13.8:1) y blanca en el rojo y el verde oscuro.
+  if (mm <= 4) return const BandaProfundidad('≤ 4 mm', Color(0xFFE5322E), Colors.white);
+  if (mm <= 6) return const BandaProfundidad('4-6 mm', Color(0xFFEFA508), AppColors.background);
+  if (mm <= 8) return const BandaProfundidad('6-8 mm', Color(0xFFF6D96D), AppColors.background);
+  if (mm <= 10) return const BandaProfundidad('8-10 mm', Color(0xFFCDE0B2), AppColors.background);
+  if (mm <= 12) return const BandaProfundidad('10-12 mm', Color(0xFF8FBF6B), AppColors.background);
+  return const BandaProfundidad('> 12 mm', Color(0xFF4A7D2A), Colors.white);
+}

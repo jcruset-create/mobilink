@@ -312,7 +312,7 @@ export function validateFinish(rules: FinishRules, payload: FinishPayload): stri
     errors.push("Falta el nombre del firmante.");
   }
   if (rules.requireOdometer && !Number.isFinite(Number(payload.odometerKm))) {
-    errors.push("Faltan los kilómetros del vehículo.");
+    errors.push("Faltan los kilómetros recorridos en el servicio.");
   }
   return errors;
 }
@@ -323,6 +323,7 @@ export const EVIDENCE_CATEGORY_LABELS: Record<string, string> = {
   damage: "Daño o avería",
   work: "Trabajo realizado",
   part: "Pieza sustituida",
+  mounting: "Montaje del neumático",
   finished: "Vehículo finalizado",
   document: "Documento",
   signature: "Firma",

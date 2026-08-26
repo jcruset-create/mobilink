@@ -4,6 +4,7 @@ import '../models/cliente_activo.dart';
 import '../screens/cliente_screen.dart';
 import '../screens/login_screen.dart';
 import '../services/offline_store.dart';
+import '../services/probe_session.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
@@ -33,7 +34,10 @@ class _TopStatusBarState extends State<TopStatusBar> {
   Future<void> _cargar() async {
     try {
       final info = await PackageInfo.fromPlatform();
-      if (mounted) setState(() => _version = 'v${info.version}');
+      // Con el build number: es lo único que distingue dos APK del mismo
+      // 0.31.6, y sin él no se sabe si la tablet tiene la última.
+      final b = info.buildNumber;
+      if (mounted) setState(() => _version = b.isEmpty ? 'v${info.version}' : 'v${info.version}+$b');
     } catch (_) {/* ignore */}
 
     // Nombre del técnico: primero el cacheado (instantáneo, funciona sin
@@ -154,6 +158,24 @@ class _TopStatusBarState extends State<TopStatusBar> {
                                 padding: const EdgeInsets.only(top: 4),
                                 child: _Pill(icon: Icons.sync, color: AppColors.info, label: '$n por sincronizar'),
                               ),
+                      ),
+                      // Estado de la sonda TLGX3. Solo aparece si hay una sonda
+                      // recordada: en una tablet sin sonda no pinta nada.
+                      ListenableBuilder(
+                        listenable: ProbeSession.instance,
+                        builder: (_, __) {
+                          final s = ProbeSession.instance;
+                          if (!s.conectada && !s.hayPredeterminada) return const SizedBox.shrink();
+                          final (IconData ic, Color c, String txt) = s.conectada
+                              ? (Icons.sensors, AppColors.success, 'Sonda conectada')
+                              : (s.armada || s.autoReconectando || s.conectando)
+                                  ? (Icons.bluetooth_searching, AppColors.info, 'Buscando sonda…')
+                                  : (Icons.sensors_off, AppColors.textHint, 'Sonda apagada');
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: _Pill(icon: ic, color: c, label: txt),
+                          );
+                        },
                       ),
                     ],
                   ),

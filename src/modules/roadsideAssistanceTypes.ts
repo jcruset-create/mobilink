@@ -76,6 +76,8 @@ export type RoadsideAssistance = {
   plate: string;
   plateRemolque?: string | null;
   esRemolque?: boolean;
+  origen?: "central" | "taller";
+  expedienteCentral?: string | null;
   descripcionAveria?: string | null;
   trabajosARealizar?: string | null;
   redirectionLat?: number | null;
@@ -105,18 +107,30 @@ export type RoadsideAssistance = {
   plateMismatch?: boolean;
   conductorNombre?: string | null;
   conductorDni?: string | null;
+  // Quién solicita la asistencia (puede ser distinto del cliente servido)
+  solicitanteEmpresa?: string | null;
+  solicitanteNombre?: string | null;
+  solicitanteTelefono?: string | null;
+  // Nº de autorización o de cita que da quien solicita: es lo que luego pide
+  // la aseguradora o el gestor de flota para pagar el servicio.
+  solicitanteAutorizacion?: string | null;
   reportToken?: string | null;
   whatsappAsignadaSentAtMs?: number | null;
   whatsappFinalizadaSentAtMs?: number | null;
   arrivedAtPointMs?: number | null;
   inicioReparacionAtMs?: number | null;
   finishedAtMs?: number | null;
+  enCaminoBaseAtMs?: number | null;
   arrivedAtWorkshopMs?: number | null;
   cancelledAtMs?: number | null;
   updatedAtMs: number;
 };
 
 export type RoadsideAssistanceDraft = {
+  solicitanteEmpresa: string;
+  solicitanteNombre: string;
+  solicitanteTelefono: string;
+  solicitanteAutorizacion: string;
   customerName: string;
   customerPhone: string;
   conductorNombre: string;
@@ -160,7 +174,11 @@ export type RoadsideAssistanceFile = {
 export type RoadsideTrackingResponse = {
   assistance: RoadsideAssistance;
   vanPlate?: string | null;
+  vanMarca?: string | null;
+  vanModelo?: string | null;
   workshop?: { lat: number; lng: number } | null;
+  /** Teléfono del técnico asignado (para que el cliente pueda llamarle). */
+  techPhone?: string | null;
   events: Array<{
     status: RoadsideAssistanceStatus;
     createdAtMs: number;

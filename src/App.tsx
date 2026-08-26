@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 
 import SeaTarragonaV1 from "./SeaTarragonaV1";
@@ -12,8 +12,18 @@ import OtfTvPage from "./pages/OtfTvPage";
 import VehiculoHistorialPage from "./pages/VehiculoHistorialPage";
 import DashboardPage from "./pages/DashboardPage";
 import LicensesPage from "./pages/LicensesPage";
+import CentralSharingPage from "./pages/CentralSharingPage";
+import TalleresPage from "./pages/TalleresPage";
+import LugaresPage from "./pages/LugaresPage";
+import OtfHistorialPage from "./pages/OtfHistorialPage";
 import AdminEmpresasPage from "./pages/AdminEmpresasPage";
-import ConnectProApp from "./modules/connectpro/ConnectProApp";
+/**
+ * Los productos que viven bajo su propia ruta se cargan bajo demanda: son
+ * aplicaciones completas y no tiene sentido descargarlas (ni compilarlas en
+ * el mismo trozo) cuando el usuario entra a otra cosa.
+ */
+const ConnectProApp = lazy(() => import("./modules/connectpro/ConnectProApp"));
+const WorkPlannerApp = lazy(() => import("./modules/workplanner/WorkPlannerApp"));
 
 import CobrosDashboard from "./modules/cobros/pages/CobrosDashboard";
 
@@ -78,8 +88,11 @@ import CentrosTrabajo from "./modules/sea-core/pages/CentrosTrabajo";
 import CoreCompetencias from "./modules/sea-core/pages/Competencias";
 import CoreAutorizaciones from "./modules/sea-core/pages/Autorizaciones";
 
-import TyreControlApp from "./modules/tyrecontrol/TyreControlApp";
-import AdministracionApp from "./modules/administracion/AdministracionApp";
+const TyreControlApp = lazy(() => import("./modules/tyrecontrol/TyreControlApp"));
+const AdministracionApp = lazy(() => import("./modules/administracion/AdministracionApp"));
+const CashApp = lazy(() => import("./modules/cash/CashApp"));
+const TacografosApp = lazy(() => import("./modules/tacografos/TacografosApp"));
+const CentralApp = lazy(() => import("./modules/central/CentralApp"));
 import AccesoPage from "./pages/AccesoPage";
 import InicioPage from "./pages/InicioPage";
 
@@ -110,8 +123,18 @@ function ProtegidaPorRol({
   );
 }
 
+/** Pantalla de espera mientras se descarga el trozo de una sub-aplicación. */
+function Cargando() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-900 text-sm text-slate-400">
+      Cargando…
+    </div>
+  );
+}
+
 export default function App() {
   return (
+    <Suspense fallback={<Cargando />}>
     <Routes>
       <Route path="/" element={<SeaTarragonaV1 />} />
       {/* Login clásico del panel (pantallas de TV, supervisor por contraseña…) */}
@@ -131,9 +154,14 @@ export default function App() {
       <Route path="/vehiculo" element={<VehiculoHistorialPage />} />
       <Route path="/dashboard" element={<DashboardPage />} />
       <Route path="/licencias" element={<LicensesPage />} />
+      <Route path="/asistencias/central" element={<CentralSharingPage />} />
+      <Route path="/asistencias/talleres" element={<TalleresPage />} />
+      <Route path="/asistencias/lugares" element={<LugaresPage />} />
+      <Route path="/otf/historial" element={<OtfHistorialPage />} />
       <Route path="/admin/empresas" element={<AdminEmpresasPage />} />
       <Route path="/connect/*" element={<ConnectProApp />} />
       <Route path="/operativo2" element={<SeaTarragonaV1 initialView="operativo2" />} />
+      <Route path="/workplanner/*" element={<WorkPlannerApp />} />
       {/* Asistencias en carretera como módulo aparte del operativo */}
       <Route path="/asistencias" element={<SeaTarragonaV1 initialView="asistencias" />} />
       <Route path="/login" element={<Login />} />
@@ -345,10 +373,16 @@ export default function App() {
       {/* SEA Administración (cobros, seguimiento de pagos y recobros) */}
       <Route path="/administracion/*" element={<AdministracionApp />} />
 
+      {/* Mobilink Cash — caja física: cobros, pagos, denominaciones y arqueo */}
+      <Route path="/cash/*" element={<CashApp />} />
+      <Route path="/tacografos/*" element={<TacografosApp />} />
+      <Route path="/central/*" element={<CentralApp />} />
+
       {/* Mobilink Integration Hub — panel de integraciones */}
       <Route path="/integraciones" element={<Protegida><PanelIntegraciones /></Protegida>} />
 
       <Route path="*" element={<NotFound />} />
     </Routes>
+    </Suspense>
   );
 }

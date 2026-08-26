@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, Upload, CalendarCheck, AlertTriangle, History, HelpCircle, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, Upload, Archive, CalendarCheck, AlertTriangle, History, HelpCircle, type LucideIcon } from "lucide-react";
 import type { Rol } from "../types";
 
 export type NavItem = {
@@ -25,8 +25,10 @@ export const NAV: NavItem[] = [
   { key: "lotes-revision", path: "lotes-revision", label: "Lotes de revisión", icon: ClipboardList, roles: ["administrador"] },
   { key: "plantillas-mantenimiento", path: "plantillas-mantenimiento", label: "Plantillas de mantenimiento", icon: ClipboardCheck, roles: ["administrador"] },
   { key: "neumaticos", path: "neumaticos", label: "Neumáticos", icon: CircleDot, roles: ["administrador"] },
+  { key: "almacen-usados", path: "almacen-usados", label: "Almacén de usados", icon: Archive, roles: ["administrador"] },
   { key: "montajes", path: "montajes", label: "Montajes actuales", icon: Wrench, roles: ["administrador"] },
   { key: "operaciones", path: "operaciones", label: "Operaciones", icon: ClipboardList, roles: ["administrador"] },
+  { key: "intervenciones", path: "intervenciones", label: "Intervenciones", icon: CalendarCheck, roles: ["administrador"] },
   { key: "revision-vehiculo", path: "revision-vehiculo", label: "Revisión de vehículo", icon: ClipboardCheck, roles: ["administrador"] },
   { key: "autorizaciones", path: "autorizaciones", label: "Autorizaciones", icon: ShieldCheck, roles: ["administrador"] },
   { key: "enlace-almacen", path: "enlace-almacen", label: "Enlace con almacén", icon: Link2, superadminOnly: true },
@@ -41,13 +43,20 @@ export const NAV: NavItem[] = [
   { key: "mis-delegaciones", path: "mis-delegaciones", label: "Mis delegaciones", icon: MapPin, roles: ["cliente"] },
   { key: "mis-vehiculos", path: "mis-vehiculos", label: "Mis vehículos", icon: Truck, roles: ["cliente"] },
   { key: "mis-neumaticos", path: "mis-neumaticos", label: "Mis neumáticos", icon: CircleDot, roles: ["cliente"] },
-  { key: "montajes-cliente", path: "montajes", label: "Montajes actuales", icon: Wrench, roles: ["cliente"] },
-  { key: "operaciones-cliente", path: "operaciones", label: "Operaciones", icon: ClipboardList, roles: ["cliente"] },
+  // El cliente tiene sus propias entradas, así que se nombran en su idioma:
+  // "montaje" y "operación" son vocabulario de taller, no de un responsable
+  // de flota que entra a ver cómo están sus autobuses.
+  { key: "montajes-cliente", path: "montajes", label: "Neumáticos montados", icon: Wrench, roles: ["cliente"] },
+  { key: "operaciones-cliente", path: "operaciones", label: "Trabajos realizados", icon: ClipboardList, roles: ["cliente"] },
+  { key: "intervenciones-cliente", path: "intervenciones", label: "Partes de trabajo", icon: CalendarCheck, roles: ["cliente"] },
   { key: "informes-cliente", path: "informes", label: "Informes", icon: BarChart3, roles: ["cliente"] },
   // Todos
   { key: "ayuda", path: "ayuda", label: "Ayuda / Manual", icon: HelpCircle },
   { key: "perfil", path: "perfil", label: "Perfil", icon: User },
 ];
+
+/** Pantallas que nunca se filtran por permisos. */
+export const SIEMPRE_VISIBLES = ["dashboard", "ayuda", "perfil"];
 
 export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: boolean, pantallas?: string[] | null): boolean {
   if (item.superadminOnly) return esSuperadmin;
@@ -61,7 +70,9 @@ export function navVisible(item: NavItem, rol: Rol | undefined, esSuperadmin: bo
   }
   // Gating por pantallas (usuarios unificados): se compara por path;
   // null = todas las del rol; el super-admin no se filtra.
-  if (!esSuperadmin && pantallas && item.path !== "dashboard" && item.path !== "ayuda" && !pantallas.includes(item.path)) {
+  // Dashboard, Ayuda y Perfil no se filtran nunca: dejar a alguien sin su
+  // propia ficha o sin la ayuda no es restringir, es dejarle atrapado.
+  if (!esSuperadmin && pantallas && !SIEMPRE_VISIBLES.includes(item.path) && !pantallas.includes(item.path)) {
     return false;
   }
   return true;

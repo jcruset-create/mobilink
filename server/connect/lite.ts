@@ -23,6 +23,10 @@ import { transition, InvalidTransitionError, rejectAssignment, acceptAssignment 
 import { publish } from "./bus.ts";
 import { createAlert } from "./alerts.ts";
 import { notifyLiteUser } from "./litePush.ts";
+import { liteMetrics } from "./liteMetrics.ts";
+import {
+  hitLimit, limitKey, newLimitStore, pruneLimitStore, LITE_LIMITS, type LimitName,
+} from "./liteLimits.ts";
 import {
   DEFAULT_FINISH_RULES, DEFAULT_GEOFENCE, EVIDENCE_CATEGORIES, EVIDENCE_CATEGORY_LABELS,
   LITE_STATUS_LABELS, SERVICE_RESULTS, SERVICE_RESULT_LABELS, canLiteTransition, computeLiteKpis,
@@ -41,6 +45,12 @@ function err(res: Response, status: number, code: string, message: string, extra
 
 function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+/** Número entero o null: lo que llega de la APK no siempre es un número. */
+function entero(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n) : null;
 }
 
 function safeParse(value: unknown): any {
@@ -195,6 +205,60 @@ function registerFailedLogin(key: string): void {
   }
 }
 
+// ── Límites de uso ─────────────────────────────────────────────────────────
+
+const limitStore = newLimitStore();
+let ultimaLimpiezaMs = 0;
+
+/**
+ * Freno por dispositivo (o por IP en el login, que aún no tiene sesión). El
+ * tope general por dispositivo se comprueba siempre, además del de la familia.
+ */
+function limitar(name: LimitName) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const now = Date.now();
+    if (now - ultimaLimpiezaMs > 300_000) {
+      pruneLimitStore(limitStore, now);
+      ultimaLimpiezaMs = now;
+    }
+
+    const sujeto = req.liteSession ? `d${req.liteSession.deviceId}` : `ip${req.ip ?? "?"}`;
+    const comprobaciones: LimitName[] = name === "login" ? ["login"] : [name, "device"];
+
+    for (const cual of comprobaciones) {
+      const v = hitLimit(limitStore, limitKey(cual, sujeto), LITE_LIMITS[cual], now);
+      if (!v.allowed) {
+        liteMetrics.recordRateLimited(etiquetaRuta(req), now);
+        res.setHeader("Retry-After", String(v.retryAfterSec));
+        return err(res, 429, "rate_limited",
+          "Demasiadas operaciones seguidas. Se reintentará en unos segundos.",
+          { retryAfterSec: v.retryAfterSec, limit: cual });
+      }
+    }
+    next();
+  };
+}
+
+// ── Medición ───────────────────────────────────────────────────────────────
+
+/**
+ * Etiqueta estable por ruta (`POST /assistances/:id/files`), no por URL: si se
+ * usara la URL real, cada asistencia crearía su propia serie y la métrica no
+ * agregaría nada. De paso evita que un identificador acabe en las métricas.
+ */
+function etiquetaRuta(req: Request): string {
+  const patron = (req as any).route?.path ?? req.path.replace(/\/\d+/g, "/:id");
+  return `${req.method} ${patron}`;
+}
+
+function medir(req: Request, res: Response, next: NextFunction) {
+  const inicio = Date.now();
+  res.on("finish", () => {
+    liteMetrics.recordApi(etiquetaRuta(req), res.statusCode, Date.now() - inicio);
+  });
+  next();
+}
+
 async function requireLite(req: Request, res: Response, next: NextFunction) {
   try {
     const header = String(req.headers.authorization || "");
@@ -321,6 +385,9 @@ async function storePoints(
       headingDeg: p.headingDeg != null ? Number(p.headingDeg) : null,
     }))
     .filter((p) => isValidPoint(p, now));
+  // Se miden las descartadas por inválidas, no las que quita `dedupePoints`:
+  // un punto repetido no aporta nada y tirarlo no es perder información.
+  liteMetrics.recordPoints(rawPoints.length, valid.length);
   const points = dedupePoints(valid as GpsPoint[]);
   if (points.length === 0) return { stored: 0, hint: null };
 
@@ -386,11 +453,12 @@ const ALLOWED_IMAGE_MIME = new Set(["image/jpeg", "image/png", "image/webp", "im
 export function createConnectLiteRouter(): Router {
   const router = Router();
   router.use(json({ limit: "2mb" }));
+  router.use(medir);
 
   // ── Sesión ───────────────────────────────────────────────────────────────
 
   /** Login con código de taller + usuario + PIN. Devuelve token de dispositivo. */
-  router.post("/login", async (req, res) => {
+  router.post("/login", limitar("login"), async (req, res) => {
     const workshopCode = String(req.body?.workshopCode || "").trim();
     const username = String(req.body?.username || "").trim().toLowerCase();
     const pin = String(req.body?.pin || "");
@@ -528,11 +596,19 @@ export function createConnectLiteRouter(): Router {
          "gpsPermission" = COALESCE($5, "gpsPermission"),
          "cameraPermission" = COALESCE($6, "cameraPermission"),
          "notifPermission" = COALESCE($7, "notifPermission"),
-         "lastSeenAtMs" = $8
-       WHERE id = $9`,
+         "queuePending" = COALESCE($8, "queuePending"),
+         "queueFailed" = COALESCE($9, "queueFailed"),
+         "queueOldestAtMs" = CASE WHEN $8 IS NULL THEN "queueOldestAtMs" ELSE $10 END,
+         "queueReportedAtMs" = CASE WHEN $8 IS NULL THEN "queueReportedAtMs" ELSE $11 END,
+         "lastSeenAtMs" = $11
+       WHERE id = $12`,
       [
         b.fcmToken ?? null, b.platform ?? null, b.osVersion ?? null, b.appVersion ?? null,
         b.gpsPermission ?? null, b.cameraPermission ?? null, b.notifPermission ?? null,
+        // La cola sí se pisa con lo que diga la APK, incluido el cero: si se
+        // usara COALESCE con el más antiguo, una cola ya vaciada seguiría
+        // apareciendo como atascada para siempre.
+        entero(b.queuePending), entero(b.queueFailed), entero(b.queueOldestAtMs),
         Date.now(), s.deviceId,
       ],
     );
@@ -644,7 +720,9 @@ export function createConnectLiteRouter(): Router {
       // El operario que acepta se queda el servicio salvo que sea el admin
       if (s.role === "operator") {
         await db.query(
-          `UPDATE connect_assistances SET "liteUserId" = $1, "liteUserName" = $2 WHERE id = $3 AND "liteUserId" IS NULL`,
+          `UPDATE connect_assistances
+              SET "liteUserId" = $1, "liteUserName" = $2, "assignedTechName" = COALESCE("assignedTechName", $2)
+            WHERE id = $3 AND "liteUserId" IS NULL`,
           [s.userId, s.userName, a.id],
         );
         const fresh = await db.query(`SELECT status FROM connect_assistances WHERE id = $1`, [a.id]);
@@ -718,7 +796,9 @@ export function createConnectLiteRouter(): Router {
     if (!u.rows[0]) return err(res, 404, "not_found", "Operario no encontrado en este taller");
 
     await db.query(
-      `UPDATE connect_assistances SET "liteUserId" = $1, "liteUserName" = $2, "updatedAtMs" = $3 WHERE id = $4`,
+      `UPDATE connect_assistances
+          SET "liteUserId" = $1, "liteUserName" = $2, "assignedTechName" = $2, "updatedAtMs" = $3
+        WHERE id = $4`,
       [u.rows[0].id, u.rows[0].name, Date.now(), a.id],
     );
     if (a.status === "assigned") {
@@ -750,7 +830,7 @@ export function createConnectLiteRouter(): Router {
 
   // ── Máquina de estados ───────────────────────────────────────────────────
 
-  router.post("/assistances/:id/status", async (req, res) => {
+  router.post("/assistances/:id/status", limitar("status"), async (req, res) => {
     const s = req.liteSession!;
     const cached = await findAction(req.body?.clientActionId);
     if (cached) return res.json(cached);
@@ -812,7 +892,7 @@ export function createConnectLiteRouter(): Router {
 
   // ── Geolocalización ──────────────────────────────────────────────────────
 
-  router.post("/assistances/:id/location", async (req, res) => {
+  router.post("/assistances/:id/location", limitar("location"), async (req, res) => {
     const s = req.liteSession!;
     const a = await loadAssistance(s, Number(req.params.id));
     if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
@@ -827,7 +907,7 @@ export function createConnectLiteRouter(): Router {
   });
 
   /** Lote de posiciones acumuladas sin cobertura. */
-  router.post("/assistances/:id/locations-batch", async (req, res) => {
+  router.post("/assistances/:id/locations-batch", limitar("locationsBatch"), async (req, res) => {
     const s = req.liteSession!;
     const a = await loadAssistance(s, Number(req.params.id));
     if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
@@ -850,7 +930,7 @@ export function createConnectLiteRouter(): Router {
 
   // ── Observaciones y mensajes ─────────────────────────────────────────────
 
-  router.post("/assistances/:id/notes", async (req, res) => {
+  router.post("/assistances/:id/notes", limitar("messages"), async (req, res) => {
     const s = req.liteSession!;
     const cached = await findAction(req.body?.clientActionId);
     if (cached) return res.json(cached);
@@ -884,7 +964,7 @@ export function createConnectLiteRouter(): Router {
     res.json({ data: r.rows });
   });
 
-  router.post("/assistances/:id/messages", async (req, res) => {
+  router.post("/assistances/:id/messages", limitar("messages"), async (req, res) => {
     const s = req.liteSession!;
     const cached = await findAction(req.body?.clientActionId);
     if (cached) return res.json(cached);
@@ -915,9 +995,86 @@ export function createConnectLiteRouter(): Router {
     res.status(201).json(payload);
   });
 
+  /* ── Conceptos: qué se montó de verdad ────────────────────────────────────
+   *
+   * El taller ve lo que Central pactó ("vas a montar este neumático") y lo
+   * CONFIRMA con la foto de montaje, o declara del catálogo el que montó
+   * cuando la realidad se desvía (reparación que no pudo ser). El precio no
+   * viaja nunca por aquí: lo pone el tarifario publicado en el cierre.
+   * Diseño en docs/PROMPT_conceptos_asistencia.md.
+   */
+
+  router.get("/assistances/:id/concepts", async (req, res) => {
+    const s = req.liteSession!;
+    const a = await loadAssistance(s, Number(req.params.id));
+    if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
+    const { listarConceptos } = await import("./pricing/concepts.ts");
+    res.json({ data: await listarConceptos(a.id, null) });
+  });
+
+  router.post("/assistances/:id/concepts", async (req, res) => {
+    const s = req.liteSession!;
+    const cached = await findAction(req.body?.clientActionId);
+    if (cached) return res.json(cached);
+
+    const a = await loadAssistance(s, Number(req.params.id));
+    if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
+
+    const { crearConcepto, ErrorConceptos } = await import("./pricing/concepts.ts");
+    try {
+      // Lo que el taller declara desde la carretera es lo que ha montado:
+      // nace confirmado, con su foto. Los "previstos" los pone Central.
+      const c = await crearConcepto(a.id, null, {
+        kind: String(req.body?.kind ?? "TIRE"),
+        size: req.body?.size ?? null,
+        brand: req.body?.brand ?? null,
+        position: req.body?.position ?? null,
+        conceptCode: req.body?.conceptCode ?? null,
+        quantity: req.body?.quantity != null ? Number(req.body.quantity) : 1,
+        confirmar: true,
+        evidenceRef: req.body?.evidenceRef ?? null,
+        via: "lite",
+        actor: `${s.userName} (${s.workshopName})`,
+        clientActionId: req.body?.clientActionId ?? null,
+      });
+      await auditLite({ req, action: "lite.concept_declared", resourceType: "assistance",
+        resourceId: a.id, detail: { conceptId: c.id, kind: c.kind } });
+      await recordAction(req.body?.clientActionId, "concept", s, a.id, c);
+      res.status(201).json(c);
+    } catch (e) {
+      if (e instanceof ErrorConceptos) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  });
+
+  router.post("/assistances/:id/concepts/:cid/confirm", async (req, res) => {
+    const s = req.liteSession!;
+    const cached = await findAction(req.body?.clientActionId);
+    if (cached) return res.json(cached);
+
+    const a = await loadAssistance(s, Number(req.params.id));
+    if (!a) return err(res, 404, "not_found", "Asistencia no encontrada");
+
+    const { confirmarConcepto, ErrorConceptos } = await import("./pricing/concepts.ts");
+    try {
+      const c = await confirmarConcepto(a.id, Number(req.params.cid), null, {
+        actor: `${s.userName} (${s.workshopName})`,
+        via: "lite",
+        evidenceRef: req.body?.evidenceRef ?? null,
+      });
+      await auditLite({ req, action: "lite.concept_confirmed", resourceType: "assistance",
+        resourceId: a.id, detail: { conceptId: c.id } });
+      await recordAction(req.body?.clientActionId, "concept_confirm", s, a.id, c);
+      res.json(c);
+    } catch (e) {
+      if (e instanceof ErrorConceptos) return err(res, e.estado, e.codigo, e.message);
+      throw e;
+    }
+  });
+
   // ── Evidencias ───────────────────────────────────────────────────────────
 
-  router.post("/assistances/:id/files", upload.single("file"), async (req, res) => {
+  router.post("/assistances/:id/files", limitar("files"), upload.single("file"), async (req, res) => {
     const s = req.liteSession!;
     const cached = await findAction(req.body?.clientActionId);
     if (cached) return res.json(cached);
@@ -1003,7 +1160,7 @@ export function createConnectLiteRouter(): Router {
 
   // ── Firma ────────────────────────────────────────────────────────────────
 
-  router.post("/assistances/:id/signature", async (req, res) => {
+  router.post("/assistances/:id/signature", limitar("signature"), async (req, res) => {
     const s = req.liteSession!;
     const cached = await findAction(req.body?.clientActionId);
     if (cached) return res.json(cached);
@@ -1133,7 +1290,7 @@ export function createConnectLiteRouter(): Router {
    * Las fotos y firmas viajan por sus endpoints (multipart/base64) con el
    * mismo mecanismo de idempotencia.
    */
-  router.post("/sync", async (req, res) => {
+  router.post("/sync", limitar("sync"), async (req, res) => {
     const s = req.liteSession!;
     const ops = Array.isArray(req.body?.operations) ? req.body.operations.slice(0, 100) : [];
     const results: any[] = [];
@@ -1152,6 +1309,7 @@ export function createConnectLiteRouter(): Router {
         if (kind === "status") {
           if (!canLiteTransition(a.status, String(op.status))) {
             // Conflicto real: el estado oficial ya no admite ese cambio
+            liteMetrics.recordConflict(s.workshopId);
             results.push({
               clientActionId: opId, status: "conflict",
               officialStatus: a.status, requested: op.status,
@@ -1173,6 +1331,36 @@ export function createConnectLiteRouter(): Router {
           const { stored } = await storePoints(s, a, Array.isArray(op.points) ? op.points.slice(0, 500) : []);
           await recordAction(opId, "locations", s, a.id, { stored });
           results.push({ clientActionId: opId, status: "applied", stored });
+        } else if (kind === "concept" || kind === "concept_confirm") {
+          // La foto sube antes por /files (multipart, su propio clientActionId);
+          // aquí solo viaja la referencia. Sin foto, un neumático se rechaza
+          // igual que en línea: la regla no cambia por ir en cola.
+          const { crearConcepto, confirmarConcepto, ErrorConceptos } = await import("./pricing/concepts.ts");
+          try {
+            const c = kind === "concept"
+              ? await crearConcepto(a.id, null, {
+                  kind: String(op.conceptKind ?? "TIRE"),
+                  size: op.size ?? null, brand: op.brand ?? null,
+                  position: op.position ?? null,
+                  conceptCode: op.conceptCode ?? null,
+                  quantity: op.quantity != null ? Number(op.quantity) : 1,
+                  confirmar: true, evidenceRef: op.evidenceRef ?? null,
+                  via: "lite", actor: `${s.userName} (${s.workshopName})`,
+                  clientActionId: opId || null,
+                })
+              : await confirmarConcepto(a.id, Number(op.conceptId), null, {
+                  actor: `${s.userName} (${s.workshopName})`, via: "lite",
+                  evidenceRef: op.evidenceRef ?? null,
+                });
+            await recordAction(opId, kind, s, a.id, c);
+            results.push({ clientActionId: opId, status: "applied" });
+          } catch (e) {
+            if (e instanceof ErrorConceptos) {
+              results.push({ clientActionId: opId, status: "rejected", error: e.codigo });
+            } else {
+              throw e;
+            }
+          }
         } else {
           results.push({ clientActionId: opId, status: "rejected", error: "unknown_kind" });
         }
@@ -1213,6 +1401,29 @@ export function createConnectLiteRouter(): Router {
   });
 
   return router;
+}
+
+// ---------------------------------------------------------------------------
+// Retención
+// ---------------------------------------------------------------------------
+
+/** Días que se guarda el resultado de una operación para poder reenviarla. */
+export const LITE_ACTIONS_RETENTION_DAYS = 30;
+
+/**
+ * `connect_lite_actions` guarda la respuesta completa de cada operación para
+ * que reenviarla sea idempotente, y esa respuesta incluye datos del cliente
+ * (nombre y teléfono del solicitante). Su única razón de ser es que una APK sin
+ * cobertura pueda reintentar, cosa que ocurre en horas, no en meses: dejarlo
+ * crecer para siempre era guardar datos personales sin motivo.
+ */
+export async function purgeLiteActions(now = Date.now()): Promise<number> {
+  const corte = now - LITE_ACTIONS_RETENTION_DAYS * 24 * 3600_000;
+  const r = await db.query(
+    `DELETE FROM connect_lite_actions WHERE "createdAtMs" < $1`,
+    [corte],
+  );
+  return r.rowCount ?? 0;
 }
 
 // ---------------------------------------------------------------------------

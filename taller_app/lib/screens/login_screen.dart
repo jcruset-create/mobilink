@@ -32,10 +32,20 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() {
         _techs = t;
         _loadingTechs = false;
+        if (t.isEmpty) {
+          _error = 'No hay ningún operario dado de alta con PIN de taller. '
+              'Pídelo en oficina.';
+        }
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
-      setState(() => _loadingTechs = false);
+      // Sin esto, un fallo al cargar la lista dejaba el desplegable vacío sin
+      // explicar nada: parecía que la app no dejaba elegir operario.
+      setState(() {
+        _loadingTechs = false;
+        _error = 'No se ha podido cargar la lista de operarios. '
+            'Comprueba la conexión y vuelve a intentarlo.';
+      });
     }
   }
 
@@ -84,7 +94,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const Icon(Icons.build_circle, size: 64, color: AppColors.primary),
                 const SizedBox(height: 12),
                 const Text(
-                  'Mobilink Taller',
+                  'WorkPlanner Taller',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                 ),

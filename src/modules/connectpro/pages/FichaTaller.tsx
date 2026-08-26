@@ -22,7 +22,16 @@ type Workshop = {
   radiusKm: number; connectStatus: string; currentScore: number; providerName: string | null;
   providerCompanyId: number | null; integrationType: WorkshopIntegrationType;
   networkParticipation: boolean; liteCode: string | null;
+  address: string | null; postalCode: string | null; city: string | null; province: string | null;
+  email: string | null; commercialNetwork: string | null; openingHours: string | null;
+  notes: string | null;
 };
+
+/** Dirección postal en una línea, saltando lo que el taller no tenga informado. */
+function direccionCompleta(w: Workshop): string {
+  return [w.address, [w.postalCode, w.city].filter(Boolean).join(" "), w.province]
+    .map((p) => p?.trim()).filter(Boolean).join(", ");
+}
 
 type Kpis = Record<string, number | null>;
 
@@ -87,6 +96,7 @@ export default function FichaTaller() {
             <Badge className={WORKSHOP_TIER_STYLES[w.integrationType]}>
               {WORKSHOP_TIER[w.integrationType]} · {WORKSHOP_TIER_LABELS[w.integrationType]}
             </Badge>
+            {w.commercialNetwork && <span className="ml-2 text-slate-400">Red {w.commercialNetwork}</span>}
             {w.liteCode && <span className="ml-2 font-mono text-[12px] text-violet-300">Código app: {w.liteCode}</span>}
             {w.phone && <a className="ml-3 text-cyan-300 hover:underline" href={`tel:${w.phone}`}>📞 {w.phone}</a>}
             <a
@@ -99,6 +109,35 @@ export default function FichaTaller() {
         }
       />
       {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
+
+      {(direccionCompleta(w) || w.email || w.openingHours || w.notes) && (
+        <Card className="mb-3 flex flex-wrap gap-x-8 gap-y-2 p-4 text-[13px]">
+          {direccionCompleta(w) && (
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-slate-500">Dirección</div>
+              <div className="text-slate-200">{direccionCompleta(w)}</div>
+            </div>
+          )}
+          {w.email && (
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-slate-500">Email</div>
+              <a className="text-cyan-300 hover:underline" href={`mailto:${w.email}`}>{w.email}</a>
+            </div>
+          )}
+          {w.openingHours && (
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-slate-500">Horario</div>
+              <div className="text-slate-200">{w.openingHours}</div>
+            </div>
+          )}
+          {w.notes && (
+            <div className="w-full">
+              <div className="text-[11px] uppercase tracking-wide text-slate-500">Observaciones</div>
+              <div className="whitespace-pre-line text-slate-200">{w.notes}</div>
+            </div>
+          )}
+        </Card>
+      )}
 
       <div className="mb-3 flex gap-1">
         {TABS.map((t) => (

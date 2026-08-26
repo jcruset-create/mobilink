@@ -1,14 +1,19 @@
 import { supabase } from "./supabase";
+import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
+import { medidaCanonica } from "./medidas";
+import { recorrerPaginas } from "./paginacion";
 import type {
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
   Neumatico, NeumaticoInput, MontajeActual, HistorialMontaje, DestinoDesmontaje, MotivoDesmontaje,
   ClienteAlmacen, ProductoAlmacen, OperacionNeumatico, TipoOperacion, FichaGenerica,
   RevisionVehiculo, RevisionDetalle, AutorizacionOperacion,
-  MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
+  MarcaNeumatico, MarcaVehiculo, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, MotivoFueraAlmacen,
   TipoIncidencia, TipoIncidenciaInput, MotivoPendiente, MotivoPendienteInput,
   Fabricante, MarcaContadores, TyreSize, TyreSizeInput, ReferenciaNeumatico,
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
+  ConfigIdentificacion, IdentificacionMedida, ModoIdentificacion, PendienteIdentificar,
+  UsadoEnAlmacen, ResumenAlmacenUsados,
   VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
   PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
@@ -30,7 +35,12 @@ function pick<T extends Record<string, any>>(obj: T, cols: readonly string[]): R
 
 const COLS_EMPRESA = ["nombre", "cif", "codigo_cliente", "telefono", "email", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "activo"] as const;
 const COLS_DELEGACION = ["empresa_id", "nombre", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "responsable", "telefono", "email", "activo", "webfleet_lat", "webfleet_lng", "webfleet_radio_m", "webfleet_zona_nombre", "webfleet_genera_avisos"] as const;
-const COLS_VEHICULO = ["empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "numero_unidad", "marca", "modelo", "bastidor", "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo", "config_ejes_id", "medida_id", "tipo_llanta_id", "medidas_por_eje", "revision_intervalo_dias", "revision_intervalo_km"] as const;
+const COLS_VEHICULO = [
+  "empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "numero_unidad", "marca", "modelo", "bastidor",
+  "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo", "config_ejes_id", "medida_id",
+  "tipo_llanta_id", "medidas_por_eje", "revision_intervalo_dias", "revision_intervalo_km",
+  // Los datos de la ficha técnica no son columnas: van a tc_vehiculo_atributos_tecnicos.
+] as const;
 const COLS_NEUMATICO = ["empresa_id", "codigo_interno", "numero_serie", "dot", "marca", "modelo", "medida", "indice_carga", "indice_velocidad", "rfid_epc", "estado", "fecha_compra", "coste_compra", "proveedor", "referencia_almacen", "activo", "almacen_producto_id"] as const;
 
 // ── Empresas ─────────────────────────────────────────────────
@@ -110,7 +120,9 @@ export async function listarUsuarios(empresaId?: string): Promise<Perfil[]> {
 export type NuevoUsuario = {
   nombre: string;
   email: string;
-  password: string;
+  /** Solo para usuarios de APK (allí es el PIN). En el panel se entra por
+   *  enlace de email, así que para un cliente se deja vacío. */
+  password?: string;
   rol: Rol;
   acceso_apk: boolean;
   acceso_panel: boolean;
@@ -242,9 +254,13 @@ export async function listarRevisionesHistorico(filtros: {
   let q = supabase
     .from("revisiones_vehiculo")
     .select(
-      "id, fecha_revision, created_at, estado_revision, km_vehiculo, empresa_id, tecnico_id, " +
+      "id, fecha_revision, created_at, medido_at, momento, estado_revision, km_vehiculo, empresa_id, tecnico_id, " +
       "vehiculo:tc_vehiculos(id, matricula, numero_unidad, empresa:tc_empresas(nombre), delegacion:tc_delegaciones(nombre), tipo:tc_tipos_vehiculo(imagen_chasis_url)), " +
-      "tecnico:tc_usuarios(nombre), incidencias:tc_incidencias(id, estado)"
+      "tecnico:tc_usuarios(nombre), incidencias:tc_incidencias(id, estado), " +
+      // Para saber QUIÉN midió. Una revisión del arco no tiene técnico, pero
+      // tampoco lo tiene una importación de Excel: "sin técnico" no distingue
+      // una de otra. Lo que las separa es el método de cada medición.
+      "detalles:revisiones_neumaticos_detalle(metodo_profundidad, metodo_presion)"
     )
     .in("estado_revision", ["completada", "completada_con_incidencias", "completada_incidencia_pendiente"]);
   if (filtros.desde) q = q.gte("fecha_revision", filtros.desde);
@@ -252,7 +268,12 @@ export async function listarRevisionesHistorico(filtros: {
   if (filtros.empresaId) q = q.eq("empresa_id", filtros.empresaId);
   if (filtros.tecnicoId) q = q.eq("tecnico_id", filtros.tecnicoId);
   const { data, error } = await q
-    .order("created_at", { ascending: false })
+    // Por `momento` (columna generada = medido_at ?? created_at), que es
+    // justo lo que pinta la columna Hora. Ordenar por created_at y enseñar
+    // medido_at hacía saltar la lista: un informe del CheckPoint se importa
+    // de una vez, así que sus revisiones comparten created_at pero tienen
+    // horas de medición de toda la semana.
+    .order("momento", { ascending: false })
     .limit(filtros.limite ?? 200);
   if (error) throw new Error(error.message);
   return data ?? [];
@@ -269,6 +290,41 @@ export async function listarIncidenciasDeRevision(revisionId: string): Promise<a
 }
 
 // ── Empresas visibles por usuario (ficha de usuario) ───────────
+/**
+ * Pantallas permitidas de un cliente. `null` = todas las de su rol.
+ *
+ * Se usa tc_permisos_cliente (nativa de TyreControl) y NO app_usuario_modulos:
+ * aquella referencia app_usuarios, y un cliente creado desde este panel solo
+ * existe en tc_usuarios — el guardado habría fallado por clave ajena.
+ * Su RLS ya permite a un administrador gestionar los de su empresa y a cada
+ * usuario leer los suyos, así que va directo por Supabase.
+ */
+export async function obtenerPantallasUsuario(usuarioId: string): Promise<string[] | null> {
+  const { data, error } = await supabase
+    .from("tc_permisos_cliente")
+    .select("pantalla, puede_ver")
+    .eq("usuario_id", usuarioId);
+  if (error) throw new Error(error.message);
+  const filas = data ?? [];
+  if (filas.length === 0) return null; // sin filas = sin restricción
+  return filas.filter((f: any) => f.puede_ver).map((f: any) => String(f.pantalla));
+}
+
+/** Guarda las pantallas permitidas. `null` (o lista vacía) = todas. */
+export async function guardarPantallasUsuario(usuarioId: string, pantallas: string[] | null): Promise<void> {
+  const { error: delErr } = await supabase
+    .from("tc_permisos_cliente").delete().eq("usuario_id", usuarioId);
+  if (delErr) throw new Error(delErr.message);
+  // Lista vacía = sin restricción, igual que null: guardar cero pantallas
+  // dejaría al usuario fuera de todo sin manera de avisarle.
+  if (!pantallas || pantallas.length === 0) return;
+  const filas = [...new Set(pantallas)].map((pantalla) => ({
+    usuario_id: usuarioId, pantalla, puede_ver: true,
+  }));
+  const { error } = await supabase.from("tc_permisos_cliente").insert(filas);
+  if (error) throw new Error(error.message);
+}
+
 export async function listarEmpresasDeUsuario(usuarioId: string): Promise<string[]> {
   const { data, error } = await supabase
     .from("tc_operador_empresas")
@@ -323,6 +379,43 @@ export async function eliminarUsuario(id: string): Promise<void> {
 }
 
 /// Cambia la contraseña/PIN de un usuario (vía backend, service-role).
+/**
+ * Último acceso de cada usuario visible ({id: fecha ISO | null}).
+ * Vive en auth.users, así que solo el backend (service role) puede leerlo.
+ */
+export async function ultimosAccesos(): Promise<Record<string, string | null>> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/usuarios/ultimos-accesos`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j as any)?.error) throw new Error((j as any)?.error || "Error consultando accesos");
+  return ((j as any).accesos ?? {}) as Record<string, string | null>;
+}
+
+/**
+ * Enlace de acceso de un solo uso para que un usuario entre al panel.
+ * El backend lo genera con service-role; aquí solo se pide y se devuelve.
+ * Es una credencial: no guardarlo ni registrarlo en ningún sitio.
+ */
+export async function generarEnlaceAcceso(id: string): Promise<{ enlace: string; email: string }> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/usuarios/${id}/enlace-acceso`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    // El origen lo pone el navegador: así el enlace lleva de vuelta al mismo
+    // panel desde el que se generó (producción o preview), sin cablearlo.
+    body: JSON.stringify({ origen: window.location.origin }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || (j as any)?.error) throw new Error((j as any)?.error || "Error generando el enlace");
+  return { enlace: String((j as any).enlace), email: String((j as any).email ?? "") };
+}
+
 export async function cambiarPasswordUsuario(id: string, password: string): Promise<void> {
   const { data: sess } = await supabase.auth.getSession();
   const token = sess.session?.access_token;
@@ -410,9 +503,11 @@ export async function listarMontajesVehiculo(vehiculoId: string): Promise<Montaj
 // Última medición de profundidad/presión registrada en una revisión completada
 // para cada neumático de este vehículo (para mostrarla en el plano en vez del
 // dato de alta, que solo vale como referencia inicial).
-export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promise<Record<string, { profundidad_mm: number | null; presion_bar: number | null }>> {
+export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promise<Record<string, { profundidad_mm: number | null; presion_bar: number | null; medido_en: string | null }>> {
   const { data: revs, error: e1 } = await supabase.from("revisiones_vehiculo")
-    .select("id").eq("vehiculo_id", vehiculoId).neq("estado_revision", "anulada")
+    // created_at viaja porque hace falta saber si la medición es anterior a la
+    // profundidad del propio neumático (ver utils/profundidad.ts).
+    .select("id, created_at, fecha_revision").eq("vehiculo_id", vehiculoId).neq("estado_revision", "anulada")
     .order("fecha_revision", { ascending: false }).order("created_at", { ascending: false });
   if (e1) throw new Error(e1.message);
   const ids = (revs ?? []).map((r) => r.id);
@@ -432,12 +527,21 @@ export async function listarUltimasMedicionesVehiculo(vehiculoId: string): Promi
   const ordenRevision = new Map(ids.map((id, i) => [id, i]));
   const detsOrdenados = [...(dets ?? [])].sort((a, b) => (ordenRevision.get(a.revision_id) ?? 0) - (ordenRevision.get(b.revision_id) ?? 0));
 
-  const mapa: Record<string, { profundidad_mm: number | null; presion_bar: number | null }> = {};
+  // Fecha de cada revisión, para sellar la medición con la que le toca.
+  const fechaRevision = new Map((revs ?? []).map((r: any) =>
+    [r.id as string, (r.created_at ?? r.fecha_revision ?? null) as string | null]));
+
+  const mapa: Record<string, { profundidad_mm: number | null; presion_bar: number | null; medido_en: string | null }> = {};
   for (const d of detsOrdenados) {
     const nid = d.neumatico_id ?? (d.posicion_id ? neuPorPosicion.get(d.posicion_id) : null);
     if (!nid) continue;
-    const actual = mapa[nid] ?? { profundidad_mm: null, presion_bar: null };
-    if (actual.profundidad_mm == null && d.profundidad_mm != null) actual.profundidad_mm = d.profundidad_mm;
+    const actual = mapa[nid] ?? { profundidad_mm: null, presion_bar: null, medido_en: null };
+    if (actual.profundidad_mm == null && d.profundidad_mm != null) {
+      actual.profundidad_mm = d.profundidad_mm;
+      // La fecha es la de la revisión de la que sale la PROFUNDIDAD, que es el
+      // dato que se compara después.
+      actual.medido_en = fechaRevision.get(d.revision_id) ?? null;
+    }
     if (actual.presion_bar == null && d.presion_bar != null) actual.presion_bar = d.presion_bar;
     mapa[nid] = actual;
   }
@@ -459,6 +563,27 @@ export async function listarPresionesCatalogoPorModelo(): Promise<Record<string,
     if (!marca || !modelo || !medida || r.presion_maxima_bar == null) continue;
     const clave = `${marca}|${modelo}|${medida}`.toLowerCase().replace(/\s+/g, "");
     if (mapa[clave] == null) mapa[clave] = r.presion_maxima_bar;
+  }
+  return mapa;
+}
+
+/**
+ * Profundidad de dibujo (de fábrica) del catálogo por marca|modelo|medida.
+ * Es la que enseña la tablet cuando el neumático aún no tiene ninguna
+ * medición propia; el panel hacía lo mismo con la presión pero no con la
+ * profundidad, y por eso una rueda recién montada salía con "— mm".
+ */
+export async function listarProfundidadesCatalogoPorModelo(): Promise<Record<string, number>> {
+  const { data, error } = await supabase.from("tc_referencias_neumatico")
+    .select("profundidad_dibujo_mm, modelo:tc_cat_modelos_neumatico(nombre, marca:tc_cat_marcas_neumatico(nombre)), tyre_size:tyre_sizes(medida)")
+    .eq("activo", true).not("profundidad_dibujo_mm", "is", null);
+  if (error) throw new Error(error.message);
+  const mapa: Record<string, number> = {};
+  for (const r of ((data ?? []) as any[])) {
+    const marca = r.modelo?.marca?.nombre; const modelo = r.modelo?.nombre; const medida = r.tyre_size?.medida;
+    if (!marca || !modelo || !medida || r.profundidad_dibujo_mm == null) continue;
+    const clave = `${marca}|${modelo}|${medida}`.toLowerCase().replace(/\s+/g, "");
+    if (mapa[clave] == null) mapa[clave] = r.profundidad_dibujo_mm;
   }
   return mapa;
 }
@@ -489,6 +614,29 @@ export async function desmontarNeumatico(params: {
     p_nuevo_estado: params.destino, p_obs: params.observaciones ?? null,
   });
   if (error) throw new Error(error.message);
+}
+
+// Aplica un PLAN DE TRABAJO completo (movimientos + reesculturados + giros +
+// reparaciones en sitio) en una sola transacción — la misma RPC que usa la APK.
+export async function aplicarPlanTrabajo(params: {
+  vehiculoId: string;
+  acciones: Array<{ tipo: string; montaje: string; posicion?: string; valor?: number }>;
+  km?: number | null; observaciones?: string | null;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("tc_aplicar_plan_trabajo", {
+    p_vehiculo: params.vehiculoId, p_acciones: params.acciones,
+    p_km: params.km ?? null, p_obs: params.observaciones ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+// Marcas de recauchutado (p. ej. INSA): el distintivo RECAUCH. se hereda de la
+// marca, no del neumático.
+export async function listarMarcasRecauchutadas(): Promise<Set<string>> {
+  const { data } = await supabase.from("tc_cat_marcas_neumatico")
+    .select("nombre").eq("es_recauchutado", true).eq("activo", true);
+  return new Set(((data ?? []) as any[]).map((m) => String(m.nombre ?? "").trim().toUpperCase()).filter(Boolean));
 }
 
 export async function rotarNeumatico(params: { montajeOrigenId: string; posicionDestinoId: string }): Promise<void> {
@@ -837,6 +985,63 @@ export async function listarReservas(filtros?: { empresaId?: string; status?: st
   return (data ?? []) as unknown as ReservaNeumatico[];
 }
 
+// ── Vínculo prevista → ejecución (fase 2 del rediseño) ─────────
+/** Los catorce RPC de ejecución que el despachador de BD conoce. */
+export type RpcEjecucion =
+  | "tc_montar_desde_almacen" | "tc_montar_desde_catalogo" | "tc_montar_fuera_almacen"
+  | "tc_desmontar_neumatico" | "tc_sustituir_neumatico" | "tc_cambiar_posicion"
+  | "tc_intercambiar_posiciones" | "tc_corregir_posicion" | "tc_corregir_montado"
+  | "tc_registrar_reparacion" | "tc_descartar_neumatico" | "tc_regularizar_desmontaje"
+  | "tc_aplicar_plan_trabajo" | "tc_permutar_plan";
+
+export interface ResultadoEjecucionPrevista {
+  prevista: string;
+  /** Ids de las operaciones de ejecución vinculadas (una sustitución son dos). */
+  operaciones: string[];
+  resultado: unknown;
+}
+
+/**
+ * Ejecuta una operación PREVISTA con el RPC de ejecución de siempre, en una
+ * sola transacción: mueve el neumático, vincula las filas resultantes
+ * (operacion_prevista_id), cierra el plan como completada y consume o libera
+ * su reserva. `args` lleva los MISMOS nombres de parámetro que el RPC real
+ * (p_montaje, p_vehiculo…), sin p_operacion: el vínculo lo pone la BD.
+ */
+export async function ejecutarOperacionPrevista(
+  previstaId: string, rpc: RpcEjecucion, args: Record<string, unknown>,
+): Promise<ResultadoEjecucionPrevista> {
+  const { data, error } = await supabase.rpc("tc_ejecutar_prevista", {
+    p_prevista: previstaId, p_rpc: rpc, p_args: args,
+  });
+  if (error) throw new Error(error.message);
+  return data as unknown as ResultadoEjecucionPrevista;
+}
+
+export interface OperacionVinculada {
+  id: string; numero_operacion?: number | null; tipo_operacion: string;
+  status?: string | null; fecha_operacion?: string | null;
+}
+
+/** Filas de ejecución que apuntan a esta prevista (vacío si no se ha ejecutado). */
+export async function listarEjecucionesDePrevista(previstaId: string): Promise<OperacionVinculada[]> {
+  const { data, error } = await supabase.from("operaciones_neumaticos")
+    .select("id, numero_operacion, tipo_operacion, status, fecha_operacion")
+    .eq("operacion_prevista_id", previstaId).order("created_at");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as OperacionVinculada[];
+}
+
+/** La prevista que esta ejecución cierra (null si no ejecuta ningún plan). */
+export async function obtenerPrevistaDe(op: OperacionNeumatico): Promise<OperacionVinculada | null> {
+  if (!op.operacion_prevista_id) return null;
+  const { data, error } = await supabase.from("operaciones_neumaticos")
+    .select("id, numero_operacion, tipo_operacion, status, fecha_operacion")
+    .eq("id", op.operacion_prevista_id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data ?? null) as unknown as OperacionVinculada | null;
+}
+
 // ── Fase 8: Operaciones (listado/filtros) ──────────────────────
 const OPERACION_SELECT = "*, empresa:tc_empresas(*), vehiculo:tc_vehiculos(*), neumatico:tc_neumaticos(*), posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(*), posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(*)";
 
@@ -845,39 +1050,222 @@ export interface MontajeSnapshot {
   x?: number | null; y?: number | null; w?: number | null; h?: number | null;
   marca?: string | null; modelo?: string | null; medida?: string | null;
   mm?: number | null; presion?: number | null; averias?: string[] | null;
+  // Distintivos del propio neumático (reesculturado, girado en llanta,
+  // recauchutado por marca) — presentes en snapshots recientes.
+  reesc?: boolean | null; girado?: boolean | null; recau?: boolean | null;
 }
 export interface IncidenciaOrigen {
   posicion_id?: string | null; codigo?: string | null; averias?: string[] | null; gravedad?: string | null;
 }
 export interface Intervencion {
   id: string; empresa_id: string; vehiculo_id: string | null; fecha: string;
+  /** Número de parte legible: OP-2026-000143. Desde la fase 3 se asigna AL
+   *  CERRAR (una sesión abandonada o cancelada no quema números), así que
+   *  falta en abiertas/planificadas y en registros muy antiguos. */
+  numero?: string | null;
   resumen: string | null; resumen_ia: string | null; n_operaciones: number; created_at?: string;
   montaje_antes?: MontajeSnapshot[] | null;
   montaje_despues?: MontajeSnapshot[] | null;
   incidencias?: IncidenciaOrigen[] | null;
   imagen_chasis?: string | null;
+  // Ciclo de vida (fases 1-4) y cronometraje (Productividad)
+  tecnico_id?: string | null;
+  inicio_at?: string | null;
+  fin_at?: string | null;
+  cerrada_at?: string | null;
+  observaciones?: string | null;
+  duracion_seg?: number | null;
+  trabajo_seg?: number | null;
+  pausa_seg?: number | null;
+  n_pausas?: number | null;
+  /** Foto del stock al cierre (fase 5): lineas = estado completo de
+   *  tc_stock_almacen_empresa; efecto = solo lo que esta intervención tocó,
+   *  con antes/después. Falta en intervenciones cerradas antes de la fase 5. */
+  stock_snapshot?: {
+    capturado_at?: string;
+    lineas?: { producto_id?: string; marca?: string | null; modelo?: string | null; medida?: string | null; nuevo?: number; usado?: number }[];
+    efecto?: {
+      producto_id?: string; marca?: string | null; modelo?: string | null; medida?: string | null;
+      montados_nuevo?: number; montados_usado?: number; devueltos_usado?: number;
+      antes_nuevo?: number; antes_usado?: number; despues_nuevo?: number; despues_usado?: number;
+    }[];
+  } | null;
+  empresa?: { nombre?: string | null } | null;
+  vehiculo?: { matricula?: string | null } | null;
+  tecnico?: { nombre?: string | null } | null;
 }
+
+/** Estado visible de una intervención, derivado (no hay columna de estado):
+ *  planificada = abierta sin empezar · en_curso = abierta trabajándose ·
+ *  cerrada = con cerrada_at. Las anteriores a la fase 1 se backfillearon
+ *  como cerradas. */
+export type EstadoIntervencion = "planificada" | "en_curso" | "cerrada";
+export function estadoIntervencion(i: Pick<Intervencion, "inicio_at" | "cerrada_at">): EstadoIntervencion {
+  if (i.cerrada_at) return "cerrada";
+  return i.inicio_at ? "en_curso" : "planificada";
+}
+export interface FiltrosIntervenciones {
+  empresaId?: string; vehiculoId?: string; estado?: EstadoIntervencion; desde?: string; hasta?: string;
+}
+
+/** Una página del listado global de intervenciones, con total real (mismo
+ *  patrón que listarOperacionesPagina: count exact, respeta la RLS). */
+export async function listarIntervencionesPagina(
+  filtros: FiltrosIntervenciones | undefined,
+  pagina: number,
+  tamano: number,
+): Promise<{ filas: Intervencion[]; total: number }> {
+  const desde = Math.max(0, pagina) * tamano;
+  let q = supabase.from("tc_intervenciones")
+    .select("*, empresa:tc_empresas(nombre), vehiculo:tc_vehiculos(matricula), tecnico:tc_usuarios(nombre)", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range(desde, desde + tamano - 1);
+  if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
+  if (filtros?.vehiculoId) q = q.eq("vehiculo_id", filtros.vehiculoId);
+  if (filtros?.desde) q = q.gte("fecha", filtros.desde);
+  if (filtros?.hasta) q = q.lte("fecha", filtros.hasta);
+  if (filtros?.estado === "cerrada") q = q.not("cerrada_at", "is", null);
+  if (filtros?.estado === "en_curso") q = q.is("cerrada_at", null).not("inicio_at", "is", null);
+  if (filtros?.estado === "planificada") q = q.is("cerrada_at", null).is("inicio_at", null);
+  const { data, error, count } = await q;
+  if (error) throw new Error(error.message);
+  return { filas: (data ?? []) as unknown as Intervencion[], total: count ?? 0 };
+}
+
+export interface OperacionPrevistaPlan {
+  tipo: string; neumatico?: string | null; posicion_destino?: string | null;
+  prioridad?: string | null; motivo?: string | null; obs?: string | null; reservar?: boolean;
+}
+
+/** Crea una intervención PLANIFICADA con sus operaciones previstas dentro
+ *  (atómico, en BD). Las previstas heredan fecha, técnico y prioridad. */
+export async function planificarIntervencion(params: {
+  empresaId: string; vehiculoId: string; fechaPrevista?: string | null; tecnicoId?: string | null;
+  prioridad?: string; observaciones?: string | null; operaciones: OperacionPrevistaPlan[];
+}): Promise<{ id: string; n_operaciones: number }> {
+  const { data, error } = await supabase.rpc("tc_planificar_intervencion", {
+    p_empresa: params.empresaId, p_vehiculo: params.vehiculoId,
+    p_fecha_prevista: params.fechaPrevista ?? null, p_tecnico: params.tecnicoId ?? null,
+    p_prioridad: params.prioridad ?? "normal", p_obs: params.observaciones ?? null,
+    p_operaciones: params.operaciones,
+  });
+  if (error) throw new Error(error.message);
+  return data as unknown as { id: string; n_operaciones: number };
+}
+
+/** Cancela una intervención abierta: sus previstas vivas pasan a canceladas
+ *  (liberando reservas) y la intervención se cierra sin número de parte. */
+export async function cancelarIntervencion(id: string, motivo?: string | null): Promise<void> {
+  const { error } = await supabase.rpc("tc_cancelar_intervencion", { p_intervencion: id, p_motivo: motivo ?? null });
+  if (error) throw new Error(error.message);
+}
+
+/** Una intervención completa, con empresa/vehículo/técnico, para el informe. */
+export async function obtenerIntervencion(id: string): Promise<Intervencion | null> {
+  const { data, error } = await supabase.from("tc_intervenciones")
+    .select("*, empresa:tc_empresas(nombre), vehiculo:tc_vehiculos(matricula), tecnico:tc_usuarios(nombre)")
+    .eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data ?? null) as unknown as Intervencion | null;
+}
+
 export async function listarIntervenciones(vehiculoId: string): Promise<Intervencion[]> {
+  // Antes de listar, se envuelven las operaciones que se quedaron sueltas (las
+  // del panel y las de resolver incidencias, que no pasan por Finalizar): así
+  // salen con su número de parte en vez de quedarse fuera del histórico.
+  //
+  // Solo toca lo que lleva más de media hora huérfano, para no romper una
+  // sesión de Cambios abierta. Es best-effort: si falla, el histórico se
+  // muestra igual y ya se consolidará en la siguiente visita.
+  await supabase.rpc("tc_agrupar_operaciones_sueltas", { p_minutos: 30 }).then(
+    () => undefined,
+    () => undefined,
+  );
   const { data, error } = await supabase.from("tc_intervenciones").select("*").eq("vehiculo_id", vehiculoId).order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as Intervencion[];
 }
 
-export async function listarOperaciones(filtros?: {
+export interface FiltrosOperaciones {
   empresaId?: string; vehiculoId?: string; neumaticoId?: string; tipo?: TipoOperacion; estado?: string; intervencionId?: string; desde?: string; hasta?: string;
-}): Promise<OperacionNeumatico[]> {
-  let q = supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("created_at", { ascending: false }).limit(200);
-  if (filtros?.empresaId) q = q.eq("empresa_id", filtros.empresaId);
-  if (filtros?.vehiculoId) q = q.eq("vehiculo_id", filtros.vehiculoId);
-  if (filtros?.neumaticoId) q = q.eq("neumatico_id", filtros.neumaticoId);
-  if (filtros?.tipo) q = q.eq("tipo_operacion", filtros.tipo);
-  if (filtros?.estado) q = q.eq("status", filtros.estado);
-  if (filtros?.intervencionId) q = q.eq("intervencion_id", filtros.intervencionId);
-  if (filtros?.desde) q = q.gte("fecha_operacion", filtros.desde);
-  if (filtros?.hasta) q = q.lte("fecha_operacion", filtros.hasta);
+}
+
+/**
+ * Los filtros, en un solo sitio. Listado, paginado y exportación tienen que
+ * mirar exactamente el mismo conjunto de filas: si cada uno los aplicase por su
+ * cuenta, el día que se añada un filtro nuevo el Excel exportaría algo distinto
+ * de lo que enseña la pantalla, y nadie se daría cuenta.
+ */
+function filtrarOperaciones<T>(q: T, f?: FiltrosOperaciones): T {
+  let r = q as any;
+  if (f?.empresaId) r = r.eq("empresa_id", f.empresaId);
+  if (f?.vehiculoId) r = r.eq("vehiculo_id", f.vehiculoId);
+  if (f?.neumaticoId) r = r.eq("neumatico_id", f.neumaticoId);
+  if (f?.tipo) r = r.eq("tipo_operacion", f.tipo);
+  if (f?.estado) r = r.eq("status", f.estado);
+  if (f?.intervencionId) r = r.eq("intervencion_id", f.intervencionId);
+  if (f?.desde) r = r.gte("fecha_operacion", f.desde);
+  if (f?.hasta) r = r.lte("fecha_operacion", f.hasta);
+  return r as T;
+}
+
+export async function listarOperaciones(filtros?: FiltrosOperaciones): Promise<OperacionNeumatico[]> {
+  const q = filtrarOperaciones(
+    supabase.from("operaciones_neumaticos").select(OPERACION_SELECT).order("created_at", { ascending: false }).limit(200),
+    filtros,
+  );
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as OperacionNeumatico[];
+}
+
+export interface PaginaOperaciones {
+  filas: OperacionNeumatico[];
+  /** Cuántas cumplen el filtro, no cuántas se han traído. */
+  total: number;
+}
+
+/**
+ * Una página del listado, con el total de verdad.
+ *
+ * `count: "exact"` lo cuenta la base de datos con los mismos filtros y respeta
+ * la RLS, así que el número que se enseña es el que el usuario puede ver.
+ */
+export async function listarOperacionesPagina(
+  filtros: FiltrosOperaciones | undefined,
+  pagina: number,
+  tamano: number,
+): Promise<PaginaOperaciones> {
+  const desde = Math.max(0, pagina) * tamano;
+  const q = filtrarOperaciones(
+    supabase.from("operaciones_neumaticos")
+      .select(OPERACION_SELECT, { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range(desde, desde + tamano - 1),
+    filtros,
+  );
+  const { data, error, count } = await q;
+  if (error) throw new Error(error.message);
+  return { filas: (data ?? []) as unknown as OperacionNeumatico[], total: count ?? 0 };
+}
+
+/**
+ * TODAS las operaciones que cumplen el filtro, para exportar.
+ *
+ * Se trae por bloques porque PostgREST tiene su propio tope por respuesta y una
+ * petición única devolvería un recorte silencioso — que es justo el fallo que
+ * esto viene a corregir. El tope de seguridad evita que un filtro vacío intente
+ * descargar la tabla entera al navegador; cuando se alcanza se avisa, no se
+ * recorta a escondidas.
+ */
+export async function listarOperacionesTodas(
+  filtros: FiltrosOperaciones | undefined,
+  maximo = 10000,
+): Promise<{ filas: OperacionNeumatico[]; total: number; truncado: boolean }> {
+  return recorrerPaginas<OperacionNeumatico>(
+    (pagina, tamano) => listarOperacionesPagina(filtros, pagina, tamano),
+    maximo,
+  );
 }
 
 // ── Módulo Operaciones: catálogos configurables ────────────────
@@ -974,12 +1362,21 @@ export async function listarMarcas(): Promise<MarcaNeumatico[]> {
   return (data ?? []) as MarcaNeumatico[];
 }
 export async function crearMarca(nombre: string): Promise<void> {
-  const { error } = await supabase.from("tc_cat_marcas_neumatico").insert({ nombre: nombre.trim() });
+  const n = nombre.trim().replace(/\s+/g, " ");
+  if (!n) throw new Error("El nombre de la marca es obligatorio");
+  // Las marcas no distinguen mayúsculas: "hankook" y "HANKOOK" son la misma y
+  // el catálogo solo admite una. Sin esta comprobación el usuario recibiría un
+  // "duplicate key value violates unique constraint" y no sabría qué hacer.
+  const { data: ya } = await supabase.from("tc_cat_marcas_neumatico")
+    .select("nombre").ilike("nombre", n).limit(1).maybeSingle();
+  if (ya) throw new Error(`Esa marca ya está en el catálogo como "${(ya as { nombre: string }).nombre}".`);
+  const { error } = await supabase.from("tc_cat_marcas_neumatico").insert({ nombre: n });
   if (error) throw new Error(error.message);
 }
 export async function actualizarMarca(id: string, patch: {
   nombre?: string; logo_url?: string | null; fabricante_id?: string | null;
   pais_origen?: string | null; segmento?: string | null; tipo_principal?: string | null; observaciones?: string | null;
+  es_recauchutado?: boolean;
 }): Promise<void> {
   const payload: Record<string, any> = {};
   if (patch.nombre != null) payload.nombre = patch.nombre.trim();
@@ -989,6 +1386,7 @@ export async function actualizarMarca(id: string, patch: {
   if (patch.segmento !== undefined) payload.segmento = patch.segmento;
   if (patch.tipo_principal !== undefined) payload.tipo_principal = patch.tipo_principal;
   if (patch.observaciones !== undefined) payload.observaciones = patch.observaciones;
+  if (patch.es_recauchutado !== undefined) payload.es_recauchutado = patch.es_recauchutado;
   const { error } = await supabase.from("tc_cat_marcas_neumatico").update(payload).eq("id", id);
   if (error) throw new Error(error.message);
 }
@@ -1023,6 +1421,379 @@ export async function eliminarFabricante(id: string): Promise<void> {
 }
 
 const BUCKET_MARCAS = "tc-marcas";
+// ── Ficha técnica del vehículo (documento + OCR) ────────────────
+export interface DocumentoVehiculo {
+  id: string; tipo: string; nombre_original?: string | null; paginas?: number | null;
+  tamano_bytes?: number | null; fecha_emision?: string | null;
+  ocr_estado: "pendiente" | "procesando" | "ok" | "error";
+  ocr_confianza?: number | null; version: number; vigente: boolean;
+  created_at: string; url?: string | null;
+}
+
+export interface CampoFicha {
+  codigo_origen?: string | null; etiqueta_origen?: string | null; clave?: string | null;
+  valor: string; unidad?: string | null; confianza?: number | null; pagina?: number | null;
+}
+
+export interface EjeFicha {
+  posicion: number; ruedas: number; directriz: boolean; motriz: boolean; elevable: boolean;
+  medida?: string | null; indice_carga?: string | null; codigo_velocidad?: string | null;
+}
+
+export interface ResultadoFichaTecnica {
+  campos: CampoFicha[];
+  ejes: EjeFicha[];
+  configuracion: string | null;
+  configuracionPendiente: string | null;
+  configuracionExisteEnCatalogo: boolean;
+  configuracionConvencional: string | null;
+  observaciones: string | null;
+  confianza: number | null;
+  avisos: string[];
+  /** Si tiene contenido, el documento NO es de este vehículo: no aplicar. */
+  bloqueos: string[];
+}
+
+async function tokenSesion(): Promise<string> {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess.session?.access_token;
+  if (!token) throw new Error("Sesión no válida");
+  return token;
+}
+
+export async function listarDocumentosVehiculo(vehiculoId: string): Promise<DocumentoVehiculo[]> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/vehiculos/${vehiculoId}/documentos`, {
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => []);
+  if (!r.ok) throw new Error((j as any)?.error || "Error listando documentos");
+  return j as DocumentoVehiculo[];
+}
+
+/** Sube la ficha técnica: un PDF o varias imágenes de las páginas. */
+export async function subirFichaTecnica(vehiculoId: string, files: File[]): Promise<{ documento: { id: string } }> {
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/vehiculos/${vehiculoId}/ficha-tecnica`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+    body: fd,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error subiendo el documento");
+  return j as any;
+}
+
+export async function procesarOcrDocumento(documentoId: string): Promise<ResultadoFichaTecnica> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/documentos/${documentoId}/ocr`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error procesando el documento");
+  return j as ResultadoFichaTecnica;
+}
+
+/** Aplica SOLO lo que el técnico ha aceptado en la pantalla de revisión. */
+export async function aplicarFichaTecnica(documentoId: string, cambios: {
+  campos?: Record<string, string>;
+  ejes?: EjeFicha[];
+  configuracion?: string | null;
+  configuracionConvencional?: string | null;
+  atributos?: CampoFicha[];
+  vehiculoId?: string;
+}): Promise<{ aplicado: string[]; ignorados?: string[] }> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/documentos/${documentoId}/aplicar`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${await tokenSesion()}` },
+    body: JSON.stringify(cambios),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error aplicando los cambios");
+  return j as any;
+}
+
+/** Sube una ficha técnica SIN vehículo: para crear el vehículo directamente a partir del documento. */
+export async function subirFichaTecnicaNueva(empresaId: string, files: File[]): Promise<{ documento: { id: string } }> {
+  const fd = new FormData();
+  fd.append("empresaId", empresaId);
+  for (const f of files) fd.append("files", f);
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/documentos/nueva-ficha`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+    body: fd,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error subiendo la ficha técnica");
+  return j as any;
+}
+
+/** Campo de la ficha técnica con su código oficial y descripción. */
+export interface CampoCatalogoFicha { codigo: string | null; clave: string; descripcion: string; unidad: string | null; }
+
+/** Dato técnico del vehículo sin columna propia (de la ficha técnica), ya validado. */
+export interface AtributoTecnicoVehiculo {
+  codigo_origen: string | null; etiqueta_origen: string | null; clave_normalizada: string | null;
+  valor_bruto: string | null; unidad: string | null;
+}
+
+export async function listarAtributosTecnicos(vehiculoId: string): Promise<AtributoTecnicoVehiculo[]> {
+  const { data, error } = await supabase.from("tc_vehiculo_atributos_tecnicos")
+    .select("codigo_origen, etiqueta_origen, clave_normalizada, valor_bruto, unidad")
+    .eq("vehiculo_id", vehiculoId).eq("estado", "validado")
+    .order("codigo_origen");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as AtributoTecnicoVehiculo[];
+}
+
+export async function listarCatalogoCamposFicha(): Promise<CampoCatalogoFicha[]> {
+  const { data, error } = await supabase.from("tc_cat_campos_ficha_tecnica")
+    .select("codigo, clave, descripcion, unidad").order("orden");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as CampoCatalogoFicha[];
+}
+
+// ── Ficha técnica ITV: maestro de campos + valores por vehículo ─────
+// El maestro guarda TODOS los códigos posibles; el vehículo, solo los que
+// tienen dato real. Ver supabase/migrations/tyrecontrol_itv_*.sql.
+
+export interface CampoItv {
+  id: string; codigo: string | null; clave: string; descripcion: string;
+  categoria: string | null; orden_seccion: number; orden: number;
+  tipo_dato: TipoDatoItv; unidad: string | null; es_multiple: boolean;
+  ayuda: string | null; activo: boolean;
+}
+
+export interface ValorItv {
+  id: string; vehiculo_id: string; campo_ficha_id: string | null;
+  codigo_origen: string | null; etiqueta_origen: string | null; clave_normalizada: string | null;
+  valor_bruto: string | null; valor_normalizado: string | null; valor_json: unknown | null;
+  valor_numero: number | null; valor_fecha: string | null; valor_booleano: boolean | null;
+  unidad: string | null; confianza: number | null; estado: string;
+  origen: string; verificado_manualmente: boolean; documento_id: string | null;
+  campo?: CampoItv | null;
+}
+
+export interface CambioItv {
+  id: string; campo_ficha_id: string; valor_anterior: unknown | null; valor_nuevo: unknown | null;
+  motivo_cambio: string; cambiado_por: string | null; documento_id: string | null; created_at: string;
+  campo?: Pick<CampoItv, "codigo" | "descripcion"> | null;
+}
+
+const CAMPO_ITV_SELECT = "id, codigo, clave, descripcion, categoria, orden_seccion, orden, tipo_dato, unidad, es_multiple, ayuda, activo";
+
+/** Maestro completo. `soloActivos` deja fuera los códigos desactivados (p. ej. titular). */
+export async function listarCamposItv(soloActivos = true): Promise<CampoItv[]> {
+  let q = supabase.from("tc_cat_campos_ficha_tecnica").select(CAMPO_ITV_SELECT);
+  if (soloActivos) q = q.eq("activo", true);
+  const { data, error } = await q.order("orden_seccion").order("orden").order("codigo");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as CampoItv[];
+}
+
+export async function actualizarCampoItv(id: string, patch: Partial<CampoItv>): Promise<void> {
+  const cols = ["codigo", "descripcion", "categoria", "orden_seccion", "orden", "tipo_dato", "unidad", "es_multiple", "ayuda", "activo"] as const;
+  const next: any = { updated_at: new Date().toISOString() };
+  for (const c of cols) if (patch[c] !== undefined) next[c] = patch[c];
+  const { error } = await supabase.from("tc_cat_campos_ficha_tecnica").update(next).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function crearCampoItv(campo: Omit<CampoItv, "id">): Promise<string> {
+  const { data, error } = await supabase.from("tc_cat_campos_ficha_tecnica").insert(campo).select("id").single();
+  if (error) throw new Error(error.message);
+  return (data as { id: string }).id;
+}
+
+/** ¿Se puede borrar un código del maestro? Solo si ningún vehículo lo usa. */
+export async function campoItvEnUso(id: string): Promise<number> {
+  const { count, error } = await supabase.from("tc_vehiculo_atributos_tecnicos")
+    .select("id", { count: "exact", head: true }).eq("campo_ficha_id", id);
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
+/**
+ * Valores de un vehículo. Solo devuelve los que tienen dato real: un
+ * código sin valor no debe existir como fila, pero si alguno se coló
+ * (datos antiguos), aquí se filtra igualmente.
+ */
+export async function listarValoresItv(vehiculoId: string): Promise<ValorItv[]> {
+  const { data, error } = await supabase.from("tc_vehiculo_atributos_tecnicos")
+    .select(`id, vehiculo_id, campo_ficha_id, codigo_origen, etiqueta_origen, clave_normalizada,
+             valor_bruto, valor_normalizado, valor_json, valor_numero, valor_fecha, valor_booleano,
+             unidad, confianza, estado, origen, verificado_manualmente, documento_id,
+             campo:tc_cat_campos_ficha_tecnica(${CAMPO_ITV_SELECT})`)
+    .eq("vehiculo_id", vehiculoId)
+    .neq("estado", "rechazado");
+  if (error) throw new Error(error.message);
+  const filas = (data ?? []) as unknown as ValorItv[];
+  return filas
+    .filter((v) => v.campo?.activo !== false)
+    .filter((v) => hasRealValue(v.valor_bruto) || v.valor_numero != null || v.valor_fecha != null
+      || v.valor_booleano != null || hasRealValue(v.valor_json))
+    .sort((a, b) => (a.campo?.orden_seccion ?? 99) - (b.campo?.orden_seccion ?? 99)
+      || (a.campo?.orden ?? 99) - (b.campo?.orden ?? 99)
+      || (a.campo?.codigo ?? "").localeCompare(b.campo?.codigo ?? ""));
+}
+
+export interface ValorItvEntrada {
+  campoFichaId: string;
+  valorBruto: string;
+  confianza?: number | null;
+  documentoId?: string | null;
+  origen?: "manual" | "ocr" | "importacion" | "api";
+}
+
+/**
+ * Guarda (crea o actualiza) valores de ficha, dejando rastro en el
+ * historial de lo que había antes. Los valores sin dato real se ignoran:
+ * nunca se crea una fila vacía.
+ */
+export async function guardarValoresItv(vehiculoId: string, entradas: ValorItvEntrada[]): Promise<number> {
+  const campos = await listarCamposItv(false);
+  const porId = new Map(campos.map((c) => [c.id, c]));
+  const previos = await listarValoresItv(vehiculoId);
+  const previoPorCampo = new Map(previos.map((v) => [v.campo_ficha_id ?? "", v]));
+  const usuario = (await supabase.auth.getUser()).data.user?.id ?? null;
+
+  let guardados = 0;
+  for (const e of entradas) {
+    const campo = porId.get(e.campoFichaId);
+    if (!campo) continue;
+    if (!hasRealValue(e.valorBruto)) continue; // regla dura: nada vacío
+
+    const n = normalizarValor(e.valorBruto, campo.tipo_dato, campo.unidad);
+    const anterior = previoPorCampo.get(e.campoFichaId) ?? null;
+    const fila = {
+      vehiculo_id: vehiculoId,
+      campo_ficha_id: campo.id,
+      codigo_origen: campo.codigo,
+      etiqueta_origen: campo.descripcion,
+      clave_normalizada: campo.clave,
+      valor_bruto: String(e.valorBruto).trim(),
+      valor_normalizado: n.texto,
+      valor_json: n.json,
+      valor_numero: n.numero,
+      valor_fecha: n.fecha,
+      valor_booleano: n.booleano,
+      tipo_valor: campo.tipo_dato,
+      unidad: campo.unidad,
+      confianza: e.confianza ?? null,
+      estado: "validado",
+      origen: e.origen ?? "manual",
+      verificado_manualmente: (e.origen ?? "manual") === "manual",
+      documento_id: e.documentoId ?? null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = anterior
+      ? await supabase.from("tc_vehiculo_atributos_tecnicos").update(fila).eq("id", anterior.id)
+      : await supabase.from("tc_vehiculo_atributos_tecnicos").insert(fila);
+    if (error) throw new Error(error.message);
+
+    await supabase.from("tc_vehiculo_ficha_historial").insert({
+      atributo_id: anterior?.id ?? null,
+      vehiculo_id: vehiculoId,
+      campo_ficha_id: campo.id,
+      valor_anterior: anterior ? { valor: anterior.valor_bruto, unidad: anterior.unidad } : null,
+      valor_nuevo: { valor: fila.valor_bruto, unidad: fila.unidad },
+      motivo_cambio: e.origen ?? "manual",
+      cambiado_por: usuario,
+      documento_id: e.documentoId ?? null,
+    });
+    guardados++;
+  }
+  return guardados;
+}
+
+export async function borrarValorItv(valor: ValorItv): Promise<void> {
+  const usuario = (await supabase.auth.getUser()).data.user?.id ?? null;
+  const { error } = await supabase.from("tc_vehiculo_atributos_tecnicos").delete().eq("id", valor.id);
+  if (error) throw new Error(error.message);
+  if (!valor.campo_ficha_id) return;
+  await supabase.from("tc_vehiculo_ficha_historial").insert({
+    atributo_id: null, vehiculo_id: valor.vehiculo_id, campo_ficha_id: valor.campo_ficha_id,
+    valor_anterior: { valor: valor.valor_bruto, unidad: valor.unidad }, valor_nuevo: null,
+    motivo_cambio: "borrado", cambiado_por: usuario, documento_id: valor.documento_id ?? null,
+  });
+}
+
+export async function listarHistorialItv(vehiculoId: string): Promise<CambioItv[]> {
+  const { data, error } = await supabase.from("tc_vehiculo_ficha_historial")
+    .select("id, campo_ficha_id, valor_anterior, valor_nuevo, motivo_cambio, cambiado_por, documento_id, created_at, campo:tc_cat_campos_ficha_tecnica(codigo, descripcion)")
+    .eq("vehiculo_id", vehiculoId).order("created_at", { ascending: false }).limit(200);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as CambioItv[];
+}
+
+// ── Marcas de VEHÍCULO (catálogo por tipo, con logo) ────────────
+// Una marca puede servir para varios tipos (Mercedes-Benz es tractora,
+// camión, furgoneta y autobús), de ahí la tabla de relación.
+export async function listarMarcasVehiculo(tipoVehiculoId?: string): Promise<MarcaVehiculo[]> {
+  const { data, error } = await supabase.from("tc_cat_marcas_vehiculo")
+    .select("*, tipos:tc_cat_marcas_vehiculo_tipos(tipo_vehiculo_id)")
+    .eq("activo", true).order("orden").order("nombre");
+  if (error) throw new Error(error.message);
+  const marcas = ((data ?? []) as any[]).map((m) => ({
+    ...m, tipo_ids: (m.tipos ?? []).map((t: any) => t.tipo_vehiculo_id as string),
+  })) as MarcaVehiculo[];
+  return tipoVehiculoId ? marcas.filter((m) => m.tipo_ids.includes(tipoVehiculoId)) : marcas;
+}
+
+export async function crearMarcaVehiculo(nombre: string, tipoIds: string[] = []): Promise<string> {
+  const { data, error } = await supabase.from("tc_cat_marcas_vehiculo")
+    .insert({ nombre: nombre.trim() }).select("id").single();
+  if (error) throw new Error(error.message);
+  const id = (data as any).id as string;
+  if (tipoIds.length) await guardarTiposMarcaVehiculo(id, tipoIds);
+  return id;
+}
+
+export async function actualizarMarcaVehiculo(id: string, patch: {
+  nombre?: string; logo_url?: string | null; pais_origen?: string | null; activo?: boolean;
+}): Promise<void> {
+  const payload: Record<string, any> = {};
+  if (patch.nombre != null) payload.nombre = patch.nombre.trim();
+  if (patch.logo_url !== undefined) payload.logo_url = patch.logo_url;
+  if (patch.pais_origen !== undefined) payload.pais_origen = patch.pais_origen;
+  if (patch.activo !== undefined) payload.activo = patch.activo;
+  const { error } = await supabase.from("tc_cat_marcas_vehiculo").update(payload).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+/// Marca/desmarca un tipo de vehículo para una marca.
+export async function alternarTipoMarcaVehiculo(marcaId: string, tipoId: string, activar: boolean): Promise<void> {
+  if (activar) {
+    const { error } = await supabase.from("tc_cat_marcas_vehiculo_tipos")
+      .upsert({ marca_id: marcaId, tipo_vehiculo_id: tipoId });
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await supabase.from("tc_cat_marcas_vehiculo_tipos")
+      .delete().eq("marca_id", marcaId).eq("tipo_vehiculo_id", tipoId);
+    if (error) throw new Error(error.message);
+  }
+}
+
+async function guardarTiposMarcaVehiculo(marcaId: string, tipoIds: string[]): Promise<void> {
+  const { error } = await supabase.from("tc_cat_marcas_vehiculo_tipos")
+    .upsert(tipoIds.map((t) => ({ marca_id: marcaId, tipo_vehiculo_id: t })));
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarMarcaVehiculo(id: string): Promise<void> {
+  const { error } = await supabase.from("tc_cat_marcas_vehiculo").update({ activo: false }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function subirLogoMarcaVehiculo(marcaId: string, file: File): Promise<string> {
+  const extension = file.name.split(".").pop() || "png";
+  const ruta = `vehiculo/${marcaId}/${Date.now()}.${extension}`;
+  const { error } = await supabase.storage.from(BUCKET_MARCAS).upload(ruta, file, { upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from(BUCKET_MARCAS).getPublicUrl(ruta).data.publicUrl;
+}
+
 export async function subirLogoMarca(marcaId: string, file: File): Promise<string> {
   const extension = file.name.split(".").pop() || "png";
   const ruta = `${marcaId}/${Date.now()}.${extension}`;
@@ -1086,8 +1857,11 @@ export async function fijarTiposDeMedida(medidaId: string, tipoVehiculoIds: stri
   if (error) throw new Error(error.message);
 }
 export async function crearMedida(valor: string): Promise<string> {
-  const v = valor.trim();
-  // Reutiliza si ya existe (evita duplicados por unique).
+  // En canónico: la base de datos lo va a normalizar de todas formas (hay un
+  // disparador), así que buscar por el texto tal cual no encontraría
+  // "295/80R22.5" al pedir "295/80R22,5" y el insert chocaría contra el unique.
+  const v = medidaCanonica(valor);
+  if (!v) throw new Error("La medida es obligatoria");
   const { data: ya } = await supabase.from("tc_cat_medidas_neumatico").select("id").eq("valor", v).limit(1).maybeSingle();
   if (ya) return (ya as { id: string }).id;
   const { data, error } = await supabase.from("tc_cat_medidas_neumatico").insert({ valor: v }).select("id").single();
@@ -1103,6 +1877,14 @@ export async function listarConfigEjes(): Promise<ConfigEjes[]> {
 }
 export async function crearConfigEjes(nombre: string, descripcion?: string): Promise<void> {
   const { error } = await supabase.from("tc_config_ejes").insert({ nombre: nombre.trim(), descripcion: descripcion?.trim() || null });
+  if (error) throw new Error(error.message);
+}
+export async function actualizarConfigEjes(id: string, patch: { nombre?: string; descripcion?: string | null }): Promise<void> {
+  const next: Record<string, unknown> = {};
+  if (patch.nombre != null) next.nombre = patch.nombre.trim();
+  if (patch.descripcion !== undefined) next.descripcion = patch.descripcion?.trim() || null;
+  if (!Object.keys(next).length) return;
+  const { error } = await supabase.from("tc_config_ejes").update(next).eq("id", id);
   if (error) throw new Error(error.message);
 }
 export async function desactivarConfigEjes(id: string): Promise<void> {
@@ -1143,6 +1925,113 @@ export async function guardarUmbralMedida(empresaId: string, medida: string, pat
 export async function eliminarUmbralMedida(empresaId: string, medida: string): Promise<void> {
   const { error } = await supabase.from("tc_config_umbrales_medida").delete().eq("empresa_id", empresaId).eq("medida", medida);
   if (error) throw new Error(error.message);
+}
+
+// ── Política de identificación (genérico / identificado / mixto) ─────────────
+// Sin fila guardada la empresa es 'generico', que es como se ha comportado
+// siempre el sistema. La resuelve el servidor en cada montaje
+// (tc_identificacion_resuelve), no la app.
+export async function obtenerIdentificacionEmpresa(empresaId: string): Promise<ConfigIdentificacion | null> {
+  const { data, error } = await supabase.from("tc_config_identificacion").select("*").eq("empresa_id", empresaId).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as ConfigIdentificacion) ?? null;
+}
+
+export async function guardarIdentificacionEmpresa(empresaId: string, patch: {
+  modo: ModoIdentificacion; exigir_identidad: boolean;
+}): Promise<void> {
+  const { error } = await supabase.from("tc_config_identificacion")
+    .upsert({ empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id" });
+  if (error) throw new Error(error.message);
+}
+
+export async function listarIdentificacionMedida(empresaId: string): Promise<IdentificacionMedida[]> {
+  const { data, error } = await supabase.from("tc_config_identificacion_medida")
+    .select("*").eq("empresa_id", empresaId).order("medida");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as IdentificacionMedida[];
+}
+
+export async function guardarIdentificacionMedida(empresaId: string, medida: string, identificable: boolean): Promise<void> {
+  const { error } = await supabase.from("tc_config_identificacion_medida")
+    .upsert({ empresa_id: empresaId, medida, identificable, updated_at: new Date().toISOString() },
+            { onConflict: "empresa_id,medida" });
+  if (error) throw new Error(error.message);
+}
+
+export async function eliminarIdentificacionMedida(empresaId: string, medida: string): Promise<void> {
+  const { error } = await supabase.from("tc_config_identificacion_medida")
+    .delete().eq("empresa_id", empresaId).eq("medida", medida);
+  if (error) throw new Error(error.message);
+}
+
+// Neumáticos que la política dice que deberían llevar identidad y no la
+// llevan. En modo genérico la lista sale vacía: nadie tiene nada pendiente.
+export async function pendientesIdentificar(empresaId: string): Promise<PendienteIdentificar[]> {
+  const { data, error } = await supabase.rpc("tc_pendientes_identificar", { p_empresa: empresaId });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as PendienteIdentificar[];
+}
+
+// ── Almacén de usados ───────────────────────────────────────────────────────
+// Gomas concretas que están en el almacén, con su identidad y sus milímetros.
+// Vienen ordenadas por dibujo restante: la que mejor casa con un eje, primero.
+export async function listarUsadosAlmacen(empresaId: string): Promise<UsadoEnAlmacen[]> {
+  const { data, error } = await supabase.rpc("tc_almacen_usados", { p_empresa: empresaId });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as UsadoEnAlmacen[];
+}
+
+export async function resumenUsadosAlmacen(empresaId: string): Promise<ResumenAlmacenUsados | null> {
+  const { data, error } = await supabase.rpc("tc_almacen_usados_resumen", { p_empresa: empresaId });
+  if (error) throw new Error(error.message);
+  const filas = (data ?? []) as ResumenAlmacenUsados[];
+  return filas[0] ?? null;
+}
+
+/** Resultado de tc_migrar_usados_a_fichas (Decisión 1: poner a cero los
+ *  apuntes viejos del doble conteo de usados). Con simular=true no escribe. */
+export interface ResultadoRegularizacionUsados {
+  simulacion?: boolean;
+  fichas_en_almacen?: number;
+  saldo_usado_stock?: number;
+  se_regularizarian?: number;
+  saldo_anterior?: number;
+  asientos?: number;
+  error?: string;
+}
+
+/** Regulariza el inventario de usados de una empresa. El RPC exige sesión de
+ *  admin/superadmin (por eso NO se puede lanzar desde el SQL Editor, donde no
+ *  hay usuario): este es el camino, desde el panel. */
+export async function migrarUsadosAFichas(empresaId: string, simular = true): Promise<ResultadoRegularizacionUsados> {
+  const { data, error } = await supabase.rpc("tc_migrar_usados_a_fichas", { p_empresa: empresaId, p_simular: simular });
+  if (error) throw new Error(error.message);
+  return (data ?? {}) as ResultadoRegularizacionUsados;
+}
+
+// Reescultura de una goma YA DESMONTADA. Para las montadas está el plan de
+// trabajo, que las reesculpe en el camión sin sacarlas del vehículo.
+export async function reesculturarEnAlmacen(neumaticoId: string, profundidadMm: number, obs?: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_reesculturar_en_almacen", {
+    p_neumatico: neumaticoId, p_profundidad_mm: profundidadMm, p_obs: obs ?? null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+// Cuántos neumáticos activos de la empresa llevan identidad de verdad. Es la
+// medida de cobertura real: control_individual sin RFID ni serie no sirve.
+export async function coberturaIdentificacion(empresaId: string): Promise<{ total: number; conIdentidad: number }> {
+  const base = supabase.from("tc_neumaticos").select("*", { count: "exact", head: true })
+    .eq("empresa_id", empresaId).eq("activo", true);
+  const [{ count: total, error: e1 }, { count: conIdentidad, error: e2 }] = await Promise.all([
+    base,
+    supabase.from("tc_neumaticos").select("*", { count: "exact", head: true })
+      .eq("empresa_id", empresaId).eq("activo", true).or("rfid_epc.not.is.null,numero_serie.not.is.null"),
+  ]);
+  if (e1) throw new Error(e1.message);
+  if (e2) throw new Error(e2.message);
+  return { total: total ?? 0, conIdentidad: conIdentidad ?? 0 };
 }
 
 // Categoría de una medida del catálogo (turismo/4x4/furgoneta/camion/otros)
@@ -1533,8 +2422,84 @@ export async function subirImagenConfigEjes(configId: string, file: File): Promi
   return supabase.storage.from("tc-chasis").getPublicUrl(ruta).data.publicUrl;
 }
 
+/**
+ * Crea las posiciones de neumático que le falten a un tipo, calculadas a
+ * partir de su configuración de ejes. Va por el servidor porque escribir en
+ * el catálogo de posiciones exige super-admin, y así funciona para cualquier
+ * usuario del panel. Idempotente: no duplica ni borra nada.
+ */
+export async function generarPosicionesDeTipo(tipoId: string): Promise<{ creadas: number; total: number }> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/tipos/${tipoId}/generar-posiciones`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error generando las posiciones");
+  return j as any;
+}
+
 export async function actualizarImagenConfigEjes(configId: string, url: string | null): Promise<void> {
   const { error } = await supabase.from("tc_config_ejes").update({ imagen_chasis_url: url }).eq("id", configId);
+  if (error) throw new Error(error.message);
+}
+
+// ── Imagen de chasis por configuración + MARCA ───────────────
+// Un 2x4 de MAN no se dibuja igual que uno de Volvo. Si la marca no tiene
+// imagen propia se hereda la genérica de la configuración.
+export interface ImagenConfigMarca {
+  config_ejes_id: string; marca_id: string; imagen_chasis_url: string | null;
+}
+
+export async function listarImagenesConfigMarca(configId?: string): Promise<ImagenConfigMarca[]> {
+  let q = supabase.from("tc_config_ejes_marca").select("config_ejes_id, marca_id, imagen_chasis_url");
+  if (configId) q = q.eq("config_ejes_id", configId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ImagenConfigMarca[];
+}
+
+export async function subirImagenConfigMarca(configId: string, marcaId: string, file: File): Promise<string> {
+  const extension = file.name.split(".").pop() || "png";
+  const ruta = `config-ejes/${configId}/marca-${marcaId}-${Date.now()}.${extension}`;
+  const { error } = await supabase.storage.from("tc-chasis").upload(ruta, file, { upsert: true });
+  if (error) throw new Error(error.message);
+  return supabase.storage.from("tc-chasis").getPublicUrl(ruta).data.publicUrl;
+}
+
+/** Normaliza para comparar marcas: sin acentos, sin mayúsculas ni espacios de más. */
+const normMarca = (s: string) =>
+  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+
+/**
+ * Imagen de chasis específica de la marca de un vehículo para su
+ * configuración. Devuelve null si esa marca no tiene una propia: entonces
+ * el plano usa la genérica de la configuración.
+ *
+ * La mayoría de vehículos guardan la marca como texto suelto y no enlazada
+ * al catálogo, así que se empareja por nombre normalizado si no hay marca_id.
+ */
+export async function imagenChasisDeMarca(
+  configId?: string | null, marcaId?: string | null, marcaNombre?: string | null,
+): Promise<string | null> {
+  if (!configId) return null;
+
+  let id = marcaId ?? null;
+  if (!id && marcaNombre?.trim()) {
+    const { data } = await supabase.from("tc_cat_marcas_vehiculo").select("id, nombre").eq("activo", true);
+    const objetivo = normMarca(marcaNombre);
+    id = ((data ?? []) as any[]).find((m) => normMarca(m.nombre) === objetivo)?.id ?? null;
+  }
+  if (!id) return null;
+
+  const { data } = await supabase.from("tc_config_ejes_marca")
+    .select("imagen_chasis_url").eq("config_ejes_id", configId).eq("marca_id", id).limit(1);
+  return ((data ?? []) as any[])[0]?.imagen_chasis_url ?? null;
+}
+
+export async function guardarImagenConfigMarca(configId: string, marcaId: string, url: string | null): Promise<void> {
+  const { error } = await supabase.from("tc_config_ejes_marca")
+    .upsert({ config_ejes_id: configId, marca_id: marcaId, imagen_chasis_url: url, updated_at: new Date().toISOString() },
+            { onConflict: "config_ejes_id,marca_id" });
   if (error) throw new Error(error.message);
 }
 

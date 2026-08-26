@@ -13,7 +13,13 @@ class Empresa {
   final String id;
   final String nombre;
   Empresa({required this.id, required this.nombre});
-  factory Empresa.fromJson(Map<String, dynamic> j) => Empresa(id: j['id'], nombre: j['nombre'] ?? '');
+  /// Varios selects traen la empresa embebida solo por el nombre
+  /// (`empresa:tc_empresas(nombre)`), porque es lo único que se pinta. Sin el
+  /// `?? ''` esa embebida a medias tiraba la pantalla entera con "type 'Null'
+  /// is not a subtype of type 'String'", y nadie lee el id de una empresa
+  /// embebida: el de verdad va en `Vehiculo.empresaId`.
+  factory Empresa.fromJson(Map<String, dynamic> j) =>
+      Empresa(id: j['id'] ?? '', nombre: j['nombre'] ?? '');
 }
 
 class TipoVehiculo {
@@ -77,6 +83,13 @@ class Vehiculo {
     this.empresa,
     this.tipo,
   });
+
+  /// ¿Los km llegan solos de una plataforma de telemática?
+  ///
+  /// Hoy la única es Webfleet. Si mañana hay otra, se añade aquí y las
+  /// pantallas no se enteran: solo preguntan por este flag para decidir si hay
+  /// que pedirle los kilómetros al técnico.
+  bool get kmAutomaticos => (webfleetVehicleId ?? '').isNotEmpty;
 
   factory Vehiculo.fromJson(Map<String, dynamic> j) => Vehiculo(
         id: j['id'],
@@ -157,9 +170,15 @@ class Neumatico {
   final String? indiceVelocidad;
   final String? dot;
   final String? rfidEpc;
+  final String? numeroSerie;
   final String estado;
   final num? profundidadActualMm;
+  /// Cuándo se fijó [profundidadActualMm] (reescultura, montaje de usado…).
+  /// La mantiene un trigger en la base de datos, no las RPC.
+  final DateTime? profundidadActualizadaEn;
   final String? origen; // almacen_generico | almacen_usado | catalogo_sin_stock | …
+  final bool reesculturado; // se le han cortado dibujos nuevos
+  final bool giradoEnLlanta; // montado del reves en la llanta
 
   Neumatico({
     required this.id,
@@ -172,9 +191,13 @@ class Neumatico {
     this.indiceVelocidad,
     this.dot,
     this.rfidEpc,
+    this.numeroSerie,
     required this.estado,
     this.profundidadActualMm,
+    this.profundidadActualizadaEn,
     this.origen,
+    this.reesculturado = false,
+    this.giradoEnLlanta = false,
   });
 
   factory Neumatico.fromJson(Map<String, dynamic> j) => Neumatico(
@@ -188,10 +211,20 @@ class Neumatico {
         indiceVelocidad: j['indice_velocidad'],
         dot: j['dot'],
         rfidEpc: j['rfid_epc'],
+        numeroSerie: j['numero_serie'],
         estado: j['estado'] ?? 'almacen',
         profundidadActualMm: j['profundidad_actual_mm'],
+        profundidadActualizadaEn: DateTime.tryParse('${j['profundidad_actualizada_en'] ?? ''}'),
         origen: j['origen'],
+        reesculturado: j['reesculturado'] == true,
+        giradoEnLlanta: j['girado_en_llanta'] == true,
       );
+
+  /// ¿La goma lleva identidad propia? El flag control_individual no basta:
+  /// una ficha marcada como individual pero sin RFID ni serie no identifica
+  /// nada. Lo que cuenta es tener uno de los dos.
+  bool get identificado =>
+      (rfidEpc ?? '').isNotEmpty || (numeroSerie ?? '').isNotEmpty;
 
   String get medidaCompleta {
     final idx = [indiceCarga, indiceVelocidad].where((e) => e != null && e.isNotEmpty).join('');
@@ -323,6 +356,9 @@ class RevisionDetalleDraft {
   bool noAccesible;
   bool neumaticoAusente;
   List<String> fotoPaths; // rutas locales, se suben al guardar/sincronizar
+  /// Cuándo se tomó esta medición. Solo lo rellenan las lecturas del
+  /// histórico; en un borrador que se está midiendo ahora es null.
+  DateTime? medidoEn;
 
   RevisionDetalleDraft({
     required this.posicionId,
@@ -336,9 +372,28 @@ class RevisionDetalleDraft {
     this.noAccesible = false,
     this.neumaticoAusente = false,
     List<String>? fotoPaths,
+    this.medidoEn,
   }) : fotoPaths = fotoPaths ?? [];
 
   bool get medido => noAccesible || neumaticoAusente || (profundidadMm != null || presionBar != null);
+
+  /// Copia con otra profundidad, conservando lo demás (presión, estado
+  /// visual, no accesible…). Se usa para diagnosticar con la profundidad
+  /// VIGENTE cuando la de la revisión se ha quedado vieja.
+  RevisionDetalleDraft conProfundidad(double? mm) => RevisionDetalleDraft(
+        posicionId: posicionId,
+        neumaticoId: neumaticoId,
+        profundidadMm: mm,
+        presionBar: presionBar,
+        metodoProfundidad: metodoProfundidad,
+        metodoPresion: metodoPresion,
+        estadoVisual: estadoVisual,
+        observaciones: observaciones,
+        noAccesible: noAccesible,
+        neumaticoAusente: neumaticoAusente,
+        fotoPaths: fotoPaths,
+        medidoEn: medidoEn,
+      );
 
   Map<String, dynamic> toJson({required String revisionId, required String empresaId, required String vehiculoId}) => {
         'revision_id': revisionId,
@@ -355,4 +410,26 @@ class RevisionDetalleDraft {
         'no_accesible': noAccesible,
         'neumatico_ausente': neumaticoAusente,
       };
+}
+
+/// Profundidad que hay que ENSEÑAR y con la que hay que diagnosticar: la de
+/// la última medición de revisión o la del propio neumático, según cuál se
+/// haya fijado DESPUÉS.
+///
+/// Hasta ahora ganaba siempre la medición, y por eso un reesculturado no se
+/// veía: el neumático conserva su id, así que la medición vieja (4.7 mm)
+/// tapaba para siempre los 8 mm recién tecleados. Lo mismo con un usado
+/// montado con su profundidad a mano.
+///
+/// Si falta alguna de las dos fechas manda la MEDICIÓN: es un dato tomado con
+/// sonda sobre la rueda y es lo que había antes de esta corrección.
+double? profundidadVigente(RevisionDetalleDraft? med, Neumatico? n) {
+  final medida = med?.profundidadMm;
+  final propia = n?.profundidadActualMm?.toDouble();
+  if (medida == null) return propia;
+  if (propia == null) return medida;
+  final tMed = med?.medidoEn;
+  final tProp = n?.profundidadActualizadaEn;
+  if (tMed == null || tProp == null) return medida;
+  return tProp.isAfter(tMed) ? propia : medida;
 }

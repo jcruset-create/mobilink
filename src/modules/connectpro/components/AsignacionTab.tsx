@@ -12,6 +12,29 @@ type Candidate = {
   workshopId: number; name: string; providerName: string | null; requiresAcceptance: boolean;
   distanceKm: number; etaMinutes: number; score: number; explanation: string;
   acceptProbability?: number; activeLoad?: number;
+  // Disponibilidad compartida con Central (null = el taller no la comparte)
+  sharedUnits?: number; availableUnits?: number;
+  sharedTechs?: number; availableTechs?: number;
+  effectiveAvailable?: number | null;
+  /*
+   * La central trabaja 365 días 24 horas, pero los talleres no: cada uno tiene
+   * los festivos de su comunidad y los de su municipio. Hay que verlo ANTES de
+   * llamar, que es cuando todavía se puede mandar el servicio a otro.
+   */
+  festivo?: {
+    esFestivo: boolean;
+    festivos: { ambito: "national" | "regional" | "local"; nombre: string | null }[];
+    regionName: string | null;
+    regionDesconocida: boolean;
+  } | null;
+  precio?: {
+    saleTotal: string | null; purchaseTotal: string | null;
+    grossMargin: string | null; rule: string | null; currency: string;
+  } | null;
+};
+
+const AMBITOS: Record<string, string> = {
+  national: "festivo nacional", regional: "festivo autonómico", local: "fiesta local",
 };
 
 type Assignment = {
@@ -107,6 +130,11 @@ export default function AsignacionTab({
         <Card className="overflow-x-auto">
           <h3 className="border-b border-slate-700 px-4 py-3 text-sm font-semibold text-slate-300">
             Comparador de proveedores {candidates ? `(${candidates.length} candidatos)` : ""}
+            {candidates && candidates.some((c) => c.festivo?.esFestivo) && (
+              <span className="ml-2 text-[12px] font-normal text-amber-300">
+                · hoy es festivo en alguno: mira la columna de calendario antes de llamar
+              </span>
+            )}
           </h3>
           {!candidates ? (
             <p className="p-4 text-sm text-slate-500">Buscando candidatos…</p>
@@ -115,7 +143,9 @@ export default function AsignacionTab({
           ) : (
             <table className="w-full">
               <thead><tr className="border-b border-slate-700">
-                <Th>#</Th><Th>Taller</Th><Th>Empresa</Th><Th>Distancia</Th><Th>ETA</Th><Th>Acepta</Th><Th>Carga</Th><Th>Score</Th><Th>Motivo</Th><Th></Th>
+                <Th>#</Th><Th>Taller</Th><Th>Empresa</Th><Th>Distancia</Th><Th>ETA</Th>
+                <Th>Calendario</Th><Th>Coste</Th><Th>Acepta</Th>
+                <Th>Disponibilidad</Th><Th>Carga</Th><Th>Score</Th><Th>Motivo</Th><Th></Th>
               </tr></thead>
               <tbody>
                 {candidates.map((c, i) => (
@@ -125,7 +155,50 @@ export default function AsignacionTab({
                     <Td>{c.providerName ?? "-"}</Td>
                     <Td>{c.distanceKm} km</Td>
                     <Td>~{c.etaMinutes} min</Td>
+                    <Td>
+                      {!c.festivo ? (
+                        <span className="text-slate-600">—</span>
+                      ) : c.festivo.esFestivo ? (
+                        <Badge
+                          className="border-amber-500/40 bg-amber-500/10 text-amber-300"
+                          title={c.festivo.festivos.map((f) => `${AMBITOS[f.ambito] ?? f.ambito}: ${f.nombre ?? ""}`).join(" · ")}
+                        >
+                          {AMBITOS[c.festivo.festivos[0].ambito] ?? "festivo"}
+                        </Badge>
+                      ) : c.festivo.regionDesconocida ? (
+                        <span className="text-slate-500" title="Este taller no tiene comunidad autónoma asignada: no se le pueden aplicar sus festivos">
+                          sin calendario
+                        </span>
+                      ) : (
+                        <span className="text-emerald-300">laborable</span>
+                      )}
+                    </Td>
+                    <Td>
+                      {c.precio?.purchaseTotal
+                        ? <span className="tabular-nums font-semibold text-slate-100">
+                            {c.precio.purchaseTotal} {c.precio.currency}
+                          </span>
+                        : <span className="text-slate-600" title="Sin tarifa de compra para este taller">—</span>}
+                    </Td>
                     <Td>{c.acceptProbability != null ? `${Math.round(c.acceptProbability * 100)} %` : "—"}</Td>
+                    <Td>
+                      {c.effectiveAvailable == null ? (
+                        <span className="text-slate-500" title="El taller no comparte sus recursos con Central">
+                          sin datos
+                        </span>
+                      ) : c.effectiveAvailable === 0 ? (
+                        <Badge className="border-amber-500/40 bg-amber-500/10 text-amber-300" title="Ninguna furgoneta o técnico libre ahora mismo">
+                          ⚠ ocupado
+                        </Badge>
+                      ) : (
+                        <span className="text-emerald-300">
+                          {[
+                            c.sharedUnits ? `${c.availableUnits}/${c.sharedUnits} furgo.` : null,
+                            c.sharedTechs ? `${c.availableTechs}/${c.sharedTechs} téc.` : null,
+                          ].filter(Boolean).join(" · ")}
+                        </span>
+                      )}
+                    </Td>
                     <Td>{c.activeLoad != null ? (c.activeLoad === 0 ? "libre" : `${c.activeLoad} activas`) : "—"}</Td>
                     <Td><Badge className={c.score >= 80 ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : c.score >= 60 ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-red-500/40 bg-red-500/10 text-red-300"}>{c.score}</Badge></Td>
                     <Td className="max-w-[260px] text-[12px] text-slate-400">{c.explanation}</Td>

@@ -86,6 +86,7 @@ export default function LicensesPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [query, setQuery] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [editFor, setEditFor] = useState<License | null>(null);
   const [historyFor, setHistoryFor] = useState<License | null>(null);
   const [history, setHistory] = useState<any | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -329,6 +330,10 @@ export default function LicensesPage() {
                             Cancelar
                           </button>
                         )}
+                        <button type="button" onClick={() => setEditFor(l)}
+                          className="rounded border border-slate-700 px-2 py-1 text-xs font-bold text-slate-400 hover:bg-slate-800">
+                          Editar
+                        </button>
                         <button type="button" onClick={() => void openHistory(l)}
                           className="rounded border border-slate-700 px-2 py-1 text-xs font-bold text-slate-400 hover:bg-slate-800">
                           Historial
@@ -344,7 +349,8 @@ export default function LicensesPage() {
         </section>
       </main>
 
-      {showCreate && <CreateLicenseModal onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); void load(); }} />}
+      {showCreate && <LicenseFormModal onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); void load(); }} />}
+      {editFor && <LicenseFormModal license={editFor} onClose={() => setEditFor(null)} onSaved={() => { setEditFor(null); void load(); }} />}
 
       {historyFor && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setHistoryFor(null)}>
@@ -396,17 +402,18 @@ export default function LicensesPage() {
   );
 }
 
-function CreateLicenseModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+/** Modal de creación (sin `license`) o edición (con `license`) de una licencia. */
+function LicenseFormModal({ license, onClose, onSaved }: { license?: License; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState({
-    customerName: "",
-    companyName: "",
-    plan: "standard",
-    maxUsers: "5",
-    maxDevices: "5",
-    aiMonthlyLimit: "1000",
-    graceDays: "30",
-    modules: "asistencias",
-    notes: "",
+    customerName: license?.customerName ?? "",
+    companyName: license?.companyName ?? "",
+    plan: license?.plan ?? "standard",
+    maxUsers: String(license?.maxUsers ?? 5),
+    maxDevices: String(license?.maxDevices ?? 5),
+    aiMonthlyLimit: String(license?.aiMonthlyLimit ?? 1000),
+    graceDays: String(license?.graceDays ?? 30),
+    modules: license ? license.modules.join(", ") : "asistencias",
+    notes: license?.notes ?? "",
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -416,8 +423,8 @@ function CreateLicenseModal({ onClose, onCreated }: { onClose: () => void; onCre
     setSaving(true);
     setError("");
     try {
-      const res = await apiFetch(`${API_BASE}/api/licenses`, {
-        method: "POST",
+      const res = await apiFetch(license ? `${API_BASE}/api/licenses/${license.id}` : `${API_BASE}/api/licenses`, {
+        method: license ? "PATCH" : "POST",
         headers: await authHeaders(),
         body: JSON.stringify({
           customerName: form.customerName.trim(),
@@ -428,14 +435,14 @@ function CreateLicenseModal({ onClose, onCreated }: { onClose: () => void; onCre
           aiMonthlyLimit: Number(form.aiMonthlyLimit),
           graceDays: Number(form.graceDays),
           modules: form.modules.split(",").map((m) => m.trim()).filter(Boolean),
-          notes: form.notes.trim() || undefined,
+          notes: form.notes.trim() || (license ? null : undefined),
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Error creando licencia");
-      onCreated();
+      if (!res.ok) throw new Error(data?.error || (license ? "Error guardando cambios" : "Error creando licencia"));
+      onSaved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Error creando licencia");
+      setError(e instanceof Error ? e.message : (license ? "Error guardando cambios" : "Error creando licencia"));
     } finally {
       setSaving(false);
     }
@@ -456,7 +463,7 @@ function CreateLicenseModal({ onClose, onCreated }: { onClose: () => void; onCre
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div className="w-full max-w-lg rounded-lg border border-slate-800 bg-slate-900 p-5 text-slate-100" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 font-black">Nueva licencia</div>
+        <div className="mb-4 font-black">{license ? `Editar licencia · ${license.customerName}` : "Nueva licencia"}</div>
         {error && <div className="mb-3 rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-300">{error}</div>}
         <div className="grid grid-cols-2 gap-3">
           {field("Cliente *", "customerName")}
@@ -483,7 +490,7 @@ function CreateLicenseModal({ onClose, onCreated }: { onClose: () => void; onCre
           </button>
           <button type="button" disabled={saving} onClick={() => void submit()}
             className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-bold text-amber-950 hover:bg-amber-400 disabled:opacity-50">
-            {saving ? "Creando…" : "Crear licencia"}
+            {saving ? "Guardando…" : license ? "Guardar cambios" : "Crear licencia"}
           </button>
         </div>
       </div>

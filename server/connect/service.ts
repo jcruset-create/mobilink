@@ -13,7 +13,7 @@ import db from "../db.ts";
 import { enqueueWebhookEvent } from "./webhooks.ts";
 import { publish } from "./bus.ts";
 import { createAlert } from "./alerts.ts";
-import { notifyLiteWorkshop } from "./litePush.ts";
+import { notifyLiteUser, notifyLiteWorkshop } from "./litePush.ts";
 
 // ---------------------------------------------------------------------------
 // Máquina de estados
@@ -99,6 +99,43 @@ export async function transition(
     });
   }
   publish({ kind: "status", assistanceId, status: toStatus });
+
+  // Informe de cierre: se genera al finalizar y se rehace al cerrar el ciclo
+  // en el taller, para que recoja también la vuelta. En segundo plano: que
+  // un fallo del PDF nunca bloquee el cambio de estado.
+  if (toStatus === "finished" || toStatus === "at_workshop") {
+    void import("./report.ts")
+      .then(({ generarYGuardarInforme }) => generarYGuardarInforme(assistanceId))
+      .catch((err) => console.error("[Connect] informe:", err?.message));
+  }
+
+  // Cancelacion: el operario del taller Lite puede estar ya en camino, asi que
+  // se le avisa en el momento en vez de esperar a que abra la app y descubra
+  // que conduce hacia un servicio que ya no existe.
+  if (toStatus === "cancelled") {
+    try {
+      const w = await db.query(
+        `SELECT ca."liteUserId", ca."workshopId", ca."expedientNumber", w."integrationType"
+           FROM connect_assistances ca
+           LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
+          WHERE ca.id = $1`,
+        [assistanceId],
+      );
+      const fila = w.rows[0];
+      if (fila?.integrationType === "lite") {
+        const aviso = {
+          title: "Asistencia cancelada",
+          body: `${fila.expedientNumber ?? `#${assistanceId}`} · No hace falta acudir`,
+          data: { type: "assistance_cancelled", assistanceId: String(assistanceId) },
+        };
+        if (fila.liteUserId) await notifyLiteUser(Number(fila.liteUserId), aviso);
+        else if (fila.workshopId) await notifyLiteWorkshop(Number(fila.workshopId), aviso);
+      }
+    } catch (e: any) {
+      console.error("[Connect] aviso de cancelacion a Lite:", e?.message);
+    }
+  }
+
   if (toStatus === "assignment_failed" || toStatus === "no_coverage") {
     await createAlert({
       type: toStatus,
@@ -185,6 +222,19 @@ export async function createAssistance(input: CreateAssistanceInput): Promise<{ 
     if (dup.rows[0]) return { row: dup.rows[0], duplicated: true };
   }
 
+  /*
+   * Sin centro de control la asistencia queda sin dueño, y con más de una
+   * central eso significa que no la ve nadie o la ven todas. La API de
+   * partners no lo manda, así que se deduce del partner.
+   */
+  let controlCenterId = input.controlCenterId ?? null;
+  if (controlCenterId == null && input.partnerId) {
+    const p = await db.query(
+      `SELECT "controlCenterId" FROM connect_partners WHERE id = $1`, [input.partnerId],
+    );
+    controlCenterId = p.rows[0]?.controlCenterId ?? null;
+  }
+
   const initialStatus = input.draft ? "draft" : "pending";
   const origin = input.origin ?? "api";
   // Si no llega expediente (creación manual sin rellenarlo, API, import…), se genera.
@@ -215,7 +265,7 @@ export async function createAssistance(input: CreateAssistanceInput): Promise<{ 
       JSON.stringify(input.vehicle ?? {}),
       JSON.stringify(input.metadata ?? {}),
       origin,
-      input.controlCenterId ?? null,
+      controlCenterId,
       input.createdByUserId ?? null,
       expedientNumber,
       input.clientName ?? null,
@@ -278,7 +328,24 @@ export interface WorkshopCandidate {
   explanation: string;
   acceptProbability?: number; // 0..1, histórico de aceptación de ofertas
   activeLoad?: number;        // asistencias activas ahora mismo
+  // Disponibilidad real compartida con Central (null = el taller no comparte
+  // recursos y no se puede saber; se usa el proxy de carga)
+  sharedUnits?: number;
+  availableUnits?: number;
+  sharedTechs?: number;
+  availableTechs?: number;
+  effectiveAvailable?: number | null;
 }
+
+/**
+ * Estados de furgoneta en los que la unidad puede salir a una asistencia.
+ * "En base" cuenta: es el estado normal de una furgoneta parada en el taller,
+ * no un impedimento.
+ */
+const UNIT_DISPATCHABLE = ["available", "at_base"];
+
+/** Único estado de técnico realmente disponible (el resto: ocupado, vacaciones, permiso…). */
+const TECH_AVAILABLE = "disponible";
 
 /** ETA aproximada por carretera: haversine × 1,4 a 60 km/h medios + 5 min de salida. */
 function estimateEtaMinutes(distanceKm: number): number {
@@ -297,7 +364,11 @@ export async function findCandidates(
             COALESCE(a."requiresAcceptance", false) AS "requiresAcceptance",
             COALESCE(a."acceptTimeoutMin", 10) AS "acceptTimeoutMin",
             hist.accepted, hist.declined, hist."etaFactor",
-            COALESCE(load.n, 0)::int AS "activeLoad"
+            COALESCE(load.n, 0)::int AS "activeLoad",
+            COALESCE(units.shared, 0)::int AS "sharedUnits",
+            COALESCE(units.available, 0)::int AS "availableUnits",
+            COALESCE(opers.shared, 0)::int AS "sharedTechs",
+            COALESCE(opers.available, 0)::int AS "availableTechs"
        FROM connect_workshops w
        LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
        LEFT JOIN connect_provider_authorizations a
@@ -322,10 +393,26 @@ export async function findCandidates(
           WHERE ca."workshopId" = w.id
             AND ca.status IN ('assigned','technician_assigned','en_route','arrived','in_progress')
        ) load ON true
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS shared,
+                COUNT(*) FILTER (WHERE mu.status = ANY($2::text[]))::int AS available
+           FROM connect_mobile_units mu
+          WHERE mu."workshopId" = w.id AND mu."sharedWithCentral" = true
+       ) units ON true
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS shared,
+                COUNT(*) FILTER (
+                  WHERE t.blocked = false AND t."currentRoadsideAssistanceId" IS NULL
+                        AND t.status = $3
+                )::int AS available
+           FROM techs t
+          WHERE w."coreWorkshopId" IS NOT NULL
+            AND t."workshopId" = w."coreWorkshopId" AND t."compartidoCentral" = true
+       ) opers ON true
       WHERE w."connectStatus" = 'active'
         AND w."networkParticipation" = true
         AND (a.id IS NULL OR a.excluded = false)`,
-    [since90],
+    [since90, UNIT_DISPATCHABLE, TECH_AVAILABLE],
   );
   const candidates: WorkshopCandidate[] = [];
   for (const w of r.rows) {
@@ -345,9 +432,32 @@ export async function findCandidates(
     const offered = (w.accepted ?? 0) + (w.declined ?? 0);
     const acceptProbability = Math.round(((Number(w.accepted ?? 0) + 0.7 * 6) / (offered + 6)) * 100) / 100;
 
-    // Fase 4 — penalización por carga: cada asistencia activa resta capacidad
+    // Disponibilidad real compartida con Central: furgonetas y técnicos.
+    const sharedUnits = Number(w.sharedUnits ?? 0);
+    const availableUnits = Number(w.availableUnits ?? 0);
+    const sharedTechs = Number(w.sharedTechs ?? 0);
+    const availableTechs = Number(w.availableTechs ?? 0);
+
+    // Capacidad efectiva = lo que realmente puede despachar. Un taller necesita
+    // furgoneta Y técnico; si comparte ambos, la capacidad es el mínimo de los
+    // dos. Si solo comparte uno, se usa ese. Si no comparte nada → null (proxy).
+    let effectiveAvailable: number | null = null;
+    if (sharedUnits > 0 && sharedTechs > 0) {
+      effectiveAvailable = Math.min(availableUnits, availableTechs);
+    } else if (sharedUnits > 0) {
+      effectiveAvailable = availableUnits;
+    } else if (sharedTechs > 0) {
+      effectiveAvailable = availableTechs;
+    }
+
+    // Un taller sin recursos libres AHORA no se oculta: el comparador es una
+    // ayuda para el operador, que tiene que ver todas las opciones de la zona
+    // y decidir (puede llamar y confirmar). Se penaliza en el score y se dice
+    // en el motivo; la asignación automática, además, lo deja para el final.
     const activeLoad = Number(w.activeLoad ?? 0);
-    const loadFactor = Math.max(0, 1 - activeLoad / 5); // 5+ activas → saturado
+    const loadFactor = effectiveAvailable != null
+      ? Math.min(1, effectiveAvailable / 2) // 2+ libres → capacidad plena
+      : Math.max(0, 1 - activeLoad / 5); // 5+ activas → saturado
 
     // Score = 45 % ETA + 25 % score de red + 15 % prob. aceptación + 15 % carga
     const fit = Math.max(0, 1 - etaMinutes / 90);
@@ -362,8 +472,14 @@ export async function findCandidates(
       `${Math.round(distanceKm)} km (ETA ~${etaMinutes} min${etaFactor !== 1 ? `, corregida ×${etaFactor.toFixed(1)} por historial` : ""})`,
       `score de red ${Math.round(w.currentScore)}/100`,
       `acepta el ${Math.round(acceptProbability * 100)} %`,
-      activeLoad > 0 ? `${activeLoad} activa(s) ahora` : "sin carga",
-    ];
+      effectiveAvailable != null
+        ? [
+            sharedUnits > 0 ? `${availableUnits}/${sharedUnits} furgoneta(s)` : null,
+            sharedTechs > 0 ? `${availableTechs}/${sharedTechs} técnico(s)` : null,
+          ].filter(Boolean).join(" · ") + " libre(s)"
+        : activeLoad > 0 ? `${activeLoad} activa(s) ahora` : "sin carga",
+      effectiveAvailable === 0 ? "⚠ sin recursos libres ahora mismo" : null,
+    ].filter(Boolean);
     candidates.push({
       workshopId: w.id,
       name: w.name,
@@ -375,10 +491,16 @@ export async function findCandidates(
       score,
       acceptProbability,
       activeLoad,
+      sharedUnits, availableUnits, sharedTechs, availableTechs, effectiveAvailable,
       explanation: `${w.name}: ${parts.join(" · ")}`,
     });
   }
-  return candidates.sort((a, b) => b.score - a.score);
+  // Primero los que pueden salir ahora; dentro de cada grupo, por score
+  return candidates.sort((a, b) => {
+    const dispA = a.effectiveAvailable === 0 ? 1 : 0;
+    const dispB = b.effectiveAvailable === 0 ? 1 : 0;
+    return dispA - dispB || b.score - a.score;
+  });
 }
 
 /** Talleres ya ofertados sin éxito para esta asistencia (no se reofertan). */
@@ -529,7 +651,32 @@ async function finalizeAcceptedAssignment(assignmentId: number, actorName: strin
   // Coste estimado según el tarifario de la autorización (base + €/km × distancia)
   let estimatedCost: number | null = null;
   let costDetail: string | null = null;
+
+  /*
+   * Este es el instante contractual: la central acaba de dar la orden de
+   * salida al taller. El motor de tarifas congela aquí el forfait, y de ahí en
+   * adelante ya no cambia aunque el técnico llegue de madrugada.
+   *
+   * Si no hay tarifario configurado para este cliente o este proveedor, el
+   * motor no devuelve importe y se mantiene el cálculo de siempre: estrenar el
+   * motor no puede dejar asistencias sin coste.
+   */
+  let tarifado = false;
   try {
+    const { bloquear } = await import("./pricing/service.ts");
+    const breakdownPrevio = asg.scoreBreakdown ? JSON.parse(asg.scoreBreakdown) : {};
+    const r = await bloquear(asg.assistanceId, {
+      distanceKm: Number(breakdownPrevio.distanceKm) || null,
+      distanceSource: "estimated",
+      workshopId: asg.workshopId,
+    });
+    if (r?.ventaTotal != null) tarifado = true;
+  } catch (err: any) {
+    console.error("[Pricing] bloqueo de tarifa:", err?.message);
+  }
+
+  // Respaldo mientras no haya tarifario configurado para este caso
+  if (!tarifado) try {
     const breakdown = asg.scoreBreakdown ? JSON.parse(asg.scoreBreakdown) : {};
     const distanceKm = Number(breakdown.distanceKm) || 0;
     const t = await db.query(
@@ -755,8 +902,9 @@ async function injectIntoCore(a: any, connectWorkshopId: number): Promise<number
   const r = await db.query(
     `INSERT INTO roadside_assistances
        ("workshopId", status, priority, "customerName", "customerPhone", address, latitude, longitude,
-        plate, "vehicleDescription", "descripcionAveria", "trackingToken", notes, "createdAtMs", "updatedAtMs")
-     VALUES ($1, 'pendiente', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+        plate, "vehicleDescription", "descripcionAveria", "trackingToken", notes, origen,
+        "expedienteCentral", "createdAtMs", "updatedAtMs")
+     VALUES ($1, 'pendiente', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'central', $13, $14, $14)
      RETURNING id`,
     [
       w.rows[0]?.coreWorkshopId ?? null,
@@ -771,6 +919,7 @@ async function injectIntoCore(a: any, connectWorkshopId: number): Promise<number
       description || null,
       crypto.randomUUID().replace(/-/g, ""),
       `Connect Pro · ${a.uuid}`,
+      a.expedientNumber ?? a.externalReference ?? null,
       now,
     ],
   );
@@ -796,15 +945,37 @@ export async function syncFromCore(): Promise<number> {
     // 'finished' ya NO es terminal (queda la vuelta al taller), pero se acota a
     // 48 h de actividad para no arrastrar indefinidamente asistencias cerradas.
     `SELECT ca.id, ca.status AS connect_status, ra.status AS core_status,
-            ra."assignedTechName", ra."cancelledAtMs"
+            ra."assignedTechName", ra."assignedVehicleName", ra."cancelledAtMs",
+            ca."assignedTechName" AS "prevTech", ca."assignedVehicleName" AS "prevVehicle",
+            rv.plate AS "vehiclePlate"
        FROM connect_assistances ca
        JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
+       LEFT JOIN LATERAL (
+         SELECT v.plate FROM roadside_vehicles v
+          WHERE (ra."webfleetVehicleId" IS NOT NULL AND v."webfleetVehicleId" = ra."webfleetVehicleId")
+             OR (ra."assignedVehicleName" IS NOT NULL AND v.name = ra."assignedVehicleName")
+          LIMIT 1
+       ) rv ON true
       WHERE ca.status NOT IN ('at_workshop', 'cancelled', 'no_coverage')
         AND (ca.status <> 'finished' OR ca."updatedAtMs" > $1)`,
     [Date.now() - 48 * 3600_000],
   );
   let changed = 0;
   for (const row of r.rows) {
+    // Trazabilidad: quién y con qué, copiado del core en cuanto se sabe
+    if (
+      (row.assignedTechName && row.assignedTechName !== row.prevTech) ||
+      (row.assignedVehicleName && row.assignedVehicleName !== row.prevVehicle)
+    ) {
+      await db.query(
+        `UPDATE connect_assistances
+            SET "assignedTechName" = COALESCE($1, "assignedTechName"),
+                "assignedVehicleName" = COALESCE($2, "assignedVehicleName"),
+                "assignedVehiclePlate" = COALESCE($3, "assignedVehiclePlate")
+          WHERE id = $4`,
+        [row.assignedTechName ?? null, row.assignedVehicleName ?? null, row.vehiclePlate ?? null, row.id],
+      ).catch((e: any) => console.error("[Connect] trazabilidad:", e?.message));
+    }
     const target = CORE_STATUS_MAP[row.core_status];
     if (!target || target === row.connect_status) continue;
     // Nunca retroceder (eventos duplicados o fuera de orden)

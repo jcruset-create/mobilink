@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { listarOperaciones, listarEmpresas, listarVehiculos, actualizarCosteOperacion, planificarOperacion, cambiarEstadoOperacion, listarUsuarios, listarReservas, liberarReserva, anularOperacion, listarHistorialEstados, listarAuditoriaOperacion, listarMovimientosOperacion, listarAdjuntosOperacion } from "../services/data";
-import type { EstadoHistorialEntry, AuditoriaEntry } from "../services/data";
+import { listarOperacionesPagina, listarOperacionesTodas, listarEmpresas, listarVehiculos, actualizarCosteOperacion, planificarOperacion, cambiarEstadoOperacion, listarUsuarios, listarReservas, liberarReserva, anularOperacion, listarHistorialEstados, listarAuditoriaOperacion, listarMovimientosOperacion, listarAdjuntosOperacion, listarEjecucionesDePrevista, obtenerPrevistaDe } from "../services/data";
+import type { EstadoHistorialEntry, AuditoriaEntry, OperacionVinculada } from "../services/data";
 import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo, EstadoOperacion, Perfil, ReservaNeumatico, PrioridadOperacion, OperacionMovimiento, OperacionAdjunto } from "../types";
 import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, ESTADO_OPERACION_BADGE, PRIORIDAD_OPERACION_LABELS } from "../types";
 import { TableWrap, tdCls, thCls, inputCls, Modal, Field } from "../components/ui";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Acciones de estado disponibles según el estado actual (transiciones simples).
+// El grafo también vive en la base de datos (trg_op_valida_transicion): esto
+// solo decide qué botones se enseñan.
 const ACCIONES_ESTADO: Partial<Record<EstadoOperacion, { estado: EstadoOperacion; label: string; cls: string }[]>> = {
   pendiente: [{ estado: "asignada", label: "Asignar", cls: "text-sky-300" }, { estado: "cancelada", label: "Cancelar", cls: "text-rose-300" }],
   planificada: [{ estado: "asignada", label: "Asignar", cls: "text-sky-300" }, { estado: "cancelada", label: "Cancelar", cls: "text-rose-300" }],
@@ -15,6 +17,23 @@ const ACCIONES_ESTADO: Partial<Record<EstadoOperacion, { estado: EstadoOperacion
   en_proceso: [{ estado: "completada", label: "Completar", cls: "text-emerald-300" }, { estado: "pausada", label: "Pausar", cls: "text-amber-300" }],
   pausada: [{ estado: "en_proceso", label: "Reanudar", cls: "text-amber-300" }, { estado: "cancelada", label: "Cancelar", cls: "text-rose-300" }],
 };
+
+// Tipos FÍSICOS (es_fisica en tc_cat_tipos_operacion): no se completan a mano
+// —la BD lo rechaza (EJECUCION_REQUERIDA)—, se cierran solos al registrar la
+// ejecución real, que queda vinculada. Las correcciones sí se completan a mano.
+const TIPOS_FISICOS = new Set<TipoOperacion>([
+  "sustitucion", "montaje", "desmontaje", "cambio_posicion", "intercambio",
+  "reparacion", "retirada_stock", "retirada_definitiva",
+]);
+
+const ESTADOS_ACTIVOS = new Set<EstadoOperacion>(["borrador", "pendiente", "planificada", "asignada", "en_proceso", "pausada"]);
+
+function accionesPara(o: OperacionNeumatico): { estado: EstadoOperacion; label: string; cls: string }[] {
+  if (!o.status || o.is_anulada) return [];
+  const base = ACCIONES_ESTADO[o.status] ?? [];
+  // "Completar" a mano solo para lo no físico; lo físico se completa ejecutando.
+  return base.filter((a) => a.estado !== "completada" || !TIPOS_FISICOS.has(o.tipo_operacion));
+}
 
 const COLOR_TIPO: Record<TipoOperacion, string> = {
   montaje: "bg-emerald-500/30 text-emerald-200",
@@ -58,22 +77,43 @@ export default function Operaciones() {
   const [detalle, setDetalle] = useState<null | {
     op: OperacionNeumatico; movimientos: OperacionMovimiento[]; adjuntos: OperacionAdjunto[];
     historial: EstadoHistorialEntry[]; auditoria: AuditoriaEntry[];
+    // Vínculo plan ↔ ejecución (fase 2): qué plan ejecuta esta fila y qué
+    // ejecuciones cierran este plan.
+    ejecuciones: OperacionVinculada[]; prevista: OperacionVinculada | null;
+    // Por sección: un fallo de permisos o de red no puede parecer "no hay nada".
+    errores: Partial<Record<"movimientos" | "adjuntos" | "historial" | "auditoria" | "vinculo", string>>;
   }>(null);
   const [cargandoDet, setCargandoDet] = useState(false);
   const [motivoAnular, setMotivoAnular] = useState("");
   const [anulando, setAnulando] = useState(false);
 
   async function abrirDetalle(o: OperacionNeumatico) {
-    setDetalle({ op: o, movimientos: [], adjuntos: [], historial: [], auditoria: [] });
+    setDetalle({ op: o, movimientos: [], adjuntos: [], historial: [], auditoria: [], ejecuciones: [], prevista: null, errores: {} });
     setMotivoAnular(""); setCargandoDet(true);
     try {
-      const [mov, adj, hist, aud] = await Promise.all([
-        listarMovimientosOperacion(o.id).catch(() => []),
-        listarAdjuntosOperacion(o.id).catch(() => []),
-        listarHistorialEstados(o.id).catch(() => []),
-        listarAuditoriaOperacion(o.id).catch(() => []),
+      // allSettled y no all: que falle una sección no puede tumbar las otras,
+      // pero tampoco puede desaparecer. Cada una dice lo suyo.
+      const [mov, adj, hist, aud, ejec, prev] = await Promise.allSettled([
+        listarMovimientosOperacion(o.id),
+        listarAdjuntosOperacion(o.id),
+        listarHistorialEstados(o.id),
+        listarAuditoriaOperacion(o.id),
+        listarEjecucionesDePrevista(o.id),
+        obtenerPrevistaDe(o),
       ]);
-      setDetalle({ op: o, movimientos: mov, adjuntos: adj, historial: hist, auditoria: aud });
+      const err = (r: PromiseSettledResult<unknown>) =>
+        r.status === "rejected" ? ((r.reason as any)?.message || "No se ha podido cargar") : undefined;
+      const val = <T,>(r: PromiseSettledResult<T[]>): T[] => (r.status === "fulfilled" ? r.value : []);
+      setDetalle({
+        op: o,
+        movimientos: val(mov), adjuntos: val(adj), historial: val(hist), auditoria: val(aud),
+        ejecuciones: val(ejec),
+        prevista: prev.status === "fulfilled" ? prev.value : null,
+        errores: {
+          movimientos: err(mov), adjuntos: err(adj), historial: err(hist), auditoria: err(aud),
+          vinculo: err(ejec) ?? err(prev),
+        },
+      });
     } finally { setCargandoDet(false); }
   }
 
@@ -86,10 +126,17 @@ export default function Operaciones() {
 
   const [exportando, setExportando] = useState(false);
   async function exportarExcel() {
-    setExportando(true);
+    setExportando(true); setMsg("");
     try {
       const XLSX = await import("xlsx");
-      const filas = items.map((o) => ({
+      // Lo que cumple el filtro, no lo que hay en pantalla. Antes exportaba
+      // `items`, así que el Excel se quedaba en la página actual y el usuario
+      // no tenía forma de notar lo que faltaba.
+      const { filas: todas, total: n, truncado } = await listarOperacionesTodas(filtros);
+      if (truncado) {
+        setMsg(`El filtro devuelve ${n} operaciones y se han exportado ${todas.length}. Acota el rango de fechas o la empresa para llevártelas todas.`);
+      }
+      const filas = todas.map((o) => ({
         Nº: o.numero_operacion ?? "", Fecha: o.fecha_operacion ?? "", Empresa: o.empresa?.nombre ?? "",
         Vehículo: o.vehiculo?.matricula ?? "", Tipo: TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion,
         Estado: o.status ? ESTADO_OPERACION_LABELS[o.status] : "", Prioridad: o.prioridad ? PRIORIDAD_OPERACION_LABELS[o.prioridad] : "",
@@ -145,22 +192,31 @@ export default function Operaciones() {
   const [fEstado, setFEstado] = useState<EstadoOperacion | "">("");
   const [fDesde, setFDesde] = useState("");
   const [fHasta, setFHasta] = useState("");
+  const [pagina, setPagina] = useState(0);
+  const [total, setTotal] = useState(0);
+  const TAMANO = 50;
+  const ultimaPagina = Math.max(0, Math.ceil(total / TAMANO) - 1);
+
+  const filtros = {
+    empresaId: fEmpresa || undefined, vehiculoId: fVehiculo || undefined,
+    tipo: fTipo || undefined, estado: fEstado || undefined, desde: fDesde || undefined, hasta: fHasta || undefined,
+  };
 
   async function cargar() {
     setLoading(true);
     try {
-      const [ops, veh] = await Promise.all([
-        listarOperaciones({
-          empresaId: fEmpresa || undefined, vehiculoId: fVehiculo || undefined,
-          tipo: fTipo || undefined, estado: fEstado || undefined, desde: fDesde || undefined, hasta: fHasta || undefined,
-        }),
+      const [pag, veh] = await Promise.all([
+        listarOperacionesPagina(filtros, pagina, TAMANO),
         listarVehiculos(fEmpresa ? { empresaId: fEmpresa } : undefined),
       ]);
-      setItems(ops); setVehiculos(veh);
+      setItems(pag.filas); setTotal(pag.total); setVehiculos(veh);
     } catch (e: any) { setMsg(e?.message || "Error"); } finally { setLoading(false); }
   }
   useEffect(() => { if (!esCliente) listarEmpresas().then(setEmpresas); }, [esCliente]);
-  useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [fEmpresa, fVehiculo, fTipo, fEstado, fDesde, fHasta]);
+  // Cambiar un filtro vuelve a la primera página: quedarse en la 7 de un
+  // resultado que ahora tiene 2 enseña una tabla vacía que parece un fallo.
+  useEffect(() => { setPagina(0); }, [fEmpresa, fVehiculo, fTipo, fEstado, fDesde, fHasta]);
+  useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [fEmpresa, fVehiculo, fTipo, fEstado, fDesde, fHasta, pagina]);
 
   const num = (s: string) => (s.trim() === "" ? null : Number(s.replace(",", ".")));
   async function guardarCoste() {
@@ -204,12 +260,19 @@ export default function Operaciones() {
         <input type="date" className={`${inputCls} w-auto`} value={fDesde} onChange={(e) => setFDesde(e.target.value)} />
         <span className="text-xs text-slate-500">a</span>
         <input type="date" className={`${inputCls} w-auto`} value={fHasta} onChange={(e) => setFHasta(e.target.value)} />
-        <span className="text-xs text-slate-500">{items.length}</span>
+        {/* Antes decía items.length: las filas cargadas, no las que hay. Con el
+            tope de 200 el número era además falso justo cuando importaba. */}
+        <span className="text-xs text-slate-500">
+          {total === 0 ? "0" : `${pagina * TAMANO + 1}–${Math.min((pagina + 1) * TAMANO, total)} de ${total}`}
+        </span>
       </div>
 
       <TableWrap>
         <thead className="bg-slate-900"><tr>
-          <th className={thCls}>Nº</th><th className={thCls}>Fecha</th><th className={thCls}>Empresa</th><th className={thCls}>Vehículo</th>
+          {/* "Nº" a secas se confundía con el número de intervención, que es
+              otra serie distinta (tc_intervenciones.numero, texto). */}
+          <th className={thCls} title="Número de operación. No es el número de intervención.">Nº operación</th>
+          <th className={thCls}>Fecha</th><th className={thCls}>Empresa</th><th className={thCls}>Vehículo</th>
           <th className={thCls}>Tipo</th><th className={thCls}>Estado</th><th className={thCls}>Neumático</th><th className={thCls}>Posición</th>
           <th className={thCls}>Km</th><th className={thCls}>Motivo</th><th className={thCls}>Destino</th><th className={thCls}>Coste</th><th className={thCls}>Acciones</th>
         </tr></thead>
@@ -252,7 +315,7 @@ export default function Operaciones() {
               <td className={tdCls}>
                 <div className="flex flex-wrap gap-1">
                   <button onClick={() => abrirDetalle(o)} className="rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700">Detalle</button>
-                  {(o.status && !o.is_anulada ? ACCIONES_ESTADO[o.status] ?? [] : []).map((a) => (
+                  {accionesPara(o).map((a) => (
                     <button key={a.estado} onClick={() => accionEstado(o, a.estado)} disabled={accionando === o.id}
                       className={`rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold hover:bg-slate-700 disabled:opacity-50 ${a.cls}`}>
                       {a.label}
@@ -264,6 +327,20 @@ export default function Operaciones() {
           ))}
         </tbody>
       </TableWrap>
+
+      {total > TAMANO && (
+        <div className="mt-3 flex items-center justify-end gap-2 text-xs">
+          <button onClick={() => setPagina((p) => Math.max(0, p - 1))} disabled={pagina === 0 || loading}
+            className="rounded-lg border border-slate-600 px-3 py-1.5 font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-40">
+            ← Anterior
+          </button>
+          <span className="text-slate-400">Página {pagina + 1} de {ultimaPagina + 1}</span>
+          <button onClick={() => setPagina((p) => Math.min(ultimaPagina, p + 1))} disabled={pagina >= ultimaPagina || loading}
+            className="rounded-lg border border-slate-600 px-3 py-1.5 font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-40">
+            Siguiente →
+          </button>
+        </div>
+      )}
 
       {editCoste && (
         <Modal title="Coste de la operación" onClose={() => setEditCoste(null)}
@@ -284,7 +361,7 @@ export default function Operaciones() {
             <button onClick={() => setPlan(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
             <button onClick={guardarPlan} disabled={guardandoPlan || !plan.empresaId} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{guardandoPlan ? "Guardando…" : "Planificar"}</button>
           </div>}>
-          <p className="mb-3 text-xs text-slate-400">La operación queda pendiente/planificada. Su ejecución física se registra al marcarla como completada desde la app o el escritorio.</p>
+          <p className="mb-3 text-xs text-slate-400">La operación queda pendiente/planificada. Se cerrará sola cuando se registre su ejecución real (montaje, desmontaje, sustitución…) desde la ficha del vehículo o la APK, y quedará vinculada a ella. Las operaciones físicas no se completan a mano.</p>
           <div className="grid gap-2 sm:grid-cols-2">
             {!esCliente && (
               <Field label="Empresa">
@@ -351,7 +428,7 @@ export default function Operaciones() {
       )}
 
       {detalle && (
-        <Modal title={`Operación ${detalle.op.numero_operacion ? `#${detalle.op.numero_operacion}` : ""}`} onClose={() => setDetalle(null)}>
+        <Modal title={`Operación ${detalle.op.numero_operacion ? `nº ${detalle.op.numero_operacion}` : "(sin numerar)"}`} onClose={() => setDetalle(null)}>
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
             <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${COLOR_TIPO[detalle.op.tipo_operacion]}`}>{TIPO_OPERACION_LABELS[detalle.op.tipo_operacion]}</span>
             {detalle.op.status && <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${ESTADO_OPERACION_BADGE[detalle.op.status]}`}>{ESTADO_OPERACION_LABELS[detalle.op.status]}</span>}
@@ -360,29 +437,55 @@ export default function Operaciones() {
           </div>
           {cargandoDet ? <div className="text-sm text-slate-500">Cargando…</div> : (
             <div className="space-y-3 text-sm">
-              <Seccion titulo={`Movimientos (${detalle.movimientos.length})`}>
-                {detalle.movimientos.length === 0 ? <Vacio /> : detalle.movimientos.map((m) => (
+              {/* Vínculo plan ↔ ejecución (fase 2). Solo sale cuando hay algo
+                  que decir: qué plan ejecuta esta fila, qué ejecuciones
+                  cerraron este plan, o cómo se completa una física activa. */}
+              {detalle.errores.vinculo ? (
+                <div className="rounded-lg bg-slate-800/60 p-2 text-[12px] text-amber-300">⚠ Vínculo plan↔ejecución: {detalle.errores.vinculo}</div>
+              ) : (
+                <>
+                  {detalle.prevista && (
+                    <div className="rounded-lg bg-sky-500/10 p-2 text-[12px] text-sky-200">
+                      Ejecuta la operación planificada <span className="font-mono font-bold">#{detalle.prevista.numero_operacion ?? "—"}</span>
+                      {detalle.prevista.fecha_operacion ? ` (${detalle.prevista.fecha_operacion})` : ""}
+                    </div>
+                  )}
+                  {detalle.ejecuciones.length > 0 && (
+                    <div className="rounded-lg bg-emerald-500/10 p-2 text-[12px] text-emerald-200">
+                      Ejecutada en: {detalle.ejecuciones.map((e) => `#${e.numero_operacion ?? "—"} (${TIPO_OPERACION_LABELS[e.tipo_operacion as TipoOperacion] ?? e.tipo_operacion})`).join(", ")}
+                    </div>
+                  )}
+                  {detalle.ejecuciones.length === 0 && !detalle.op.is_anulada
+                    && TIPOS_FISICOS.has(detalle.op.tipo_operacion)
+                    && !!detalle.op.status && ESTADOS_ACTIVOS.has(detalle.op.status) && (
+                    <div className="rounded-lg bg-slate-800/60 p-2 text-[12px] text-slate-400">
+                      Esta operación es física: no se completa a mano. Se cerrará sola al registrar la
+                      ejecución real desde la ficha del vehículo o la APK, y quedará vinculada aquí.
+                    </div>
+                  )}
+                </>
+              )}
+              <Seccion titulo="Movimientos" n={detalle.movimientos.length} error={detalle.errores.movimientos}>
+                {detalle.movimientos.map((m) => (
                   <div key={m.id} className="text-[12px] text-slate-300">• {m.movimiento_tipo}{m.estado_anterior || m.estado_nuevo ? `: ${m.estado_anterior ?? "?"} → ${m.estado_nuevo ?? "?"}` : ""}{(m as any).neumatico ? ` · ${(m as any).neumatico.numero_interno ?? (m as any).neumatico.codigo_interno ?? ""}` : ""}</div>
                 ))}
               </Seccion>
-              <Seccion titulo={`Historial de estados (${detalle.historial.length})`}>
-                {detalle.historial.length === 0 ? <Vacio /> : detalle.historial.map((h) => (
+              <Seccion titulo="Historial de estados" n={detalle.historial.length} error={detalle.errores.historial}>
+                {detalle.historial.map((h) => (
                   <div key={h.id} className="text-[12px] text-slate-300">• {new Date(h.created_at).toLocaleString("es-ES")} — {h.estado_anterior ?? "—"} → <span className="font-semibold">{h.estado_nuevo}</span></div>
                 ))}
               </Seccion>
-              <Seccion titulo={`Auditoría (${detalle.auditoria.length})`}>
-                {detalle.auditoria.length === 0 ? <Vacio /> : detalle.auditoria.map((a) => (
+              <Seccion titulo="Auditoría" n={detalle.auditoria.length} error={detalle.errores.auditoria}>
+                {detalle.auditoria.map((a) => (
                   <div key={a.id} className="text-[12px] text-slate-300">• {new Date(a.created_at).toLocaleString("es-ES")} — <span className="font-semibold">{a.accion}</span>{a.motivo ? `: ${a.motivo}` : ""}</div>
                 ))}
               </Seccion>
-              <Seccion titulo={`Fotos (${detalle.adjuntos.length})`}>
-                {detalle.adjuntos.length === 0 ? <Vacio /> : (
-                  <div className="flex flex-wrap gap-2">
-                    {detalle.adjuntos.map((f) => (
-                      <a key={f.id} href={f.file_url} target="_blank" rel="noreferrer"><img src={f.file_url} alt="" className="h-20 w-20 rounded bg-slate-950 object-cover" /></a>
-                    ))}
-                  </div>
-                )}
+              <Seccion titulo="Fotos" n={detalle.adjuntos.length} error={detalle.errores.adjuntos}>
+                <div className="flex flex-wrap gap-2">
+                  {detalle.adjuntos.map((f) => (
+                    <a key={f.id} href={f.file_url} target="_blank" rel="noreferrer"><img src={f.file_url} alt="" className="h-20 w-20 rounded bg-slate-950 object-cover" /></a>
+                  ))}
+                </div>
               </Seccion>
 
               {!esCliente && !detalle.op.is_anulada && (
@@ -402,12 +505,24 @@ export default function Operaciones() {
   );
 }
 
-function Seccion({ titulo, children }: { titulo: string; children: ReactNode }) {
+/**
+ * Tres estados distintos, no dos: con datos, vacía de verdad, y rota.
+ * Antes las dos últimas se veían igual — un guion — y un fallo de permisos
+ * pasaba por "aquí no hay nada".
+ */
+function Seccion({ titulo, n, error, children }: { titulo: string; n: number; error?: string; children: ReactNode }) {
   return (
     <div className="rounded-lg bg-slate-800/60 p-2">
-      <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">{titulo}</div>
-      <div className="space-y-0.5">{children}</div>
+      <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">
+        {titulo}{error ? "" : ` (${n})`}
+      </div>
+      {error ? (
+        <div className="text-[12px] text-amber-300">⚠ No se ha podido cargar: {error}</div>
+      ) : n === 0 ? (
+        <div className="text-[12px] text-slate-500">Sin datos</div>
+      ) : (
+        <div className="space-y-0.5">{children}</div>
+      )}
     </div>
   );
 }
-function Vacio() { return <div className="text-[12px] text-slate-500">—</div>; }

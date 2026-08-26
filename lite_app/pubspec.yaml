@@ -1,7 +1,7 @@
 name: lite_app
 description: "Mobilink Assist Lite — asistencias de Central Pro para talleres colaboradores"
 publish_to: "none"
-version: 0.1.1+2
+version: 0.2.8+46
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -24,6 +24,11 @@ dependencies:
   hive: ^2.2.3
   hive_flutter: ^1.1.0
   connectivity_plus: ^6.0.5
+  # Avisos push de Central Pro. El backend ya enviaba (FCM v1); esto es el lado
+  # que recibe. Sin google-services.json la app arranca igual y se queda con el
+  # sondeo de la bandeja: ver lib/services/push.dart.
+  firebase_core: ^3.6.0
+  firebase_messaging: ^15.1.3
 
 dev_dependencies:
   flutter_lints: ^3.0.0

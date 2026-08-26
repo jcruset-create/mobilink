@@ -1,0 +1,116 @@
+# Pruebas del backend y del panel.
+#
+# Hasta ahora no había ninguna CI que ejecutara `npm test`: las pruebas solo se
+# pasaban a mano. Este workflow ejecuta las unitarias siempre, y además levanta
+# un PostgreSQL desechable para las de integración de Mobilink Assist Lite, que
+# recorren el ciclo completo contra base de datos real.
+#
+# La base de datos es un contenedor efímero del runner: no toca nada real y
+# muere con el job.
+name: Tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "server/**"
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig*.json"
+      - ".github/workflows/tests.yml"
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mobilink
+          POSTGRES_PASSWORD: mobilink
+          POSTGRES_DB: mobilink_test
+        ports:
+          - 5432:5432
+        # Sin esto los tests arrancan antes de que Postgres acepte conexiones
+        options: >-
+          --health-cmd "pg_isready -U mobilink -d mobilink_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # El esquema se crea entero al arrancar (initDb + initConnect), así que
+      # la base empieza vacía y no hace falta ningún volcado previo.
+      DATABASE_URL: postgresql://mobilink:mobilink@localhost:5432/mobilink_test
+      PGSSLMODE: disable
+      RUN_DB_TESTS: "1"
+      NODE_ENV: test
+      # server/supabase.ts se valida al importarse, y mountConnect lo arrastra
+      # por la cadena backoffice → rbac → core/auth. Los valores son ficticios
+      # a propósito: la API de la APK se autentica con su propio token y las
+      # pruebas no suben ficheros, así que nunca se llama a Supabase. Si algún
+      # día una prueba lo llamara, fallaría de forma evidente en vez de tocar
+      # un proyecto real.
+      SUPABASE_URL: http://supabase.invalid
+      SUPABASE_SERVICE_ROLE_KEY: clave-ficticia-de-pruebas
+      SUPABASE_ROADSIDE_BUCKET: roadside
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck del panel
+        run: npx tsc -b
+
+      # El backend se ejecuta con `tsx`, que borra los tipos sin comprobarlos:
+      # sin esto, un error de tipos en server/ llega a producción.
+      - name: Typecheck del servidor (Central Pro y Lite)
+        run: npx tsc -p tsconfig.server.json
+
+      # Los typechecks de arriba NO compilan el bundle, y Render sí: la entrega
+      # #55 pasó la CI en verde y su deploy murió compilando, dejando en
+      # producción el código de la anterior sin que nadie se enterara. Compilar
+      # aquí lo mismo que compila Render cierra ese agujero.
+      - name: Compilar el bundle (lo mismo que hace Render)
+        run: npx vite build
+
+      # Una sola pasada: el informe JSON sirve para la comprobación siguiente.
+      - name: Pruebas (unitarias + integración contra PostgreSQL)
+        run: npm test -- --reporter=verbose --reporter=json --outputFile.json=/tmp/tests.json
+
+      # Si las de integración se saltaran por un fallo de configuración, el job
+      # seguiría verde y no nos enteraríamos: eso es peor que no tenerlas.
+      - name: Comprobar que las de integración se han ejecutado de verdad
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, sys, os
+          if not os.path.exists('/tmp/tests.json'):
+              sys.exit('No se ha generado el informe de pruebas.')
+          d = json.load(open('/tmp/tests.json'))
+          ficheros = d.get('testResults', [])
+          integracion = [t for t in ficheros if 'integration' in t.get('name', '')]
+          if not integracion:
+              sys.exit('No se ha encontrado ningun fichero de pruebas de integracion.')
+          for t in integracion:
+              casos = t.get('assertionResults', [])
+              pasados = [c for c in casos if c.get('status') == 'passed']
+              print(f"{os.path.basename(t['name'])}: {len(pasados)}/{len(casos)} casos en verde"
+                    f" (fichero: {t.get('status')})")
+              # "skipped" aqui no es un salto legitimo: si RUN_DB_TESTS esta
+              # puesto y aun asi no se ejecutan, es que la suite ni se ha
+              # cargado (un import que revienta, por ejemplo). Antes esto
+              # pasaba por bueno y daba una falsa sensacion de cobertura.
+              if not pasados:
+                  sys.exit('Las pruebas de integracion no han llegado a ejecutarse: '
+                           'revisa el error de carga de la suite mas arriba.')
+          PY

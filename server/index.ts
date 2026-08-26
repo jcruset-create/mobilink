@@ -13,18 +13,35 @@ import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
-import OpenAI, { toFile } from "openai";
+import { getMailTransport } from "./mail.ts";
+import { startCheckpointMail, revisarBuzonCheckpoint } from "./checkpointMail.ts";
+import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
+import { initCash, mountCash, startCashErpWorker, startCashEventWorker } from "./cash/index.ts";
+import { initTacografos, mountTacografos } from "./tacografos/index.ts";
+import { initCentral, mountCentral } from "./central/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
+import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
+import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
+// Las reglas de "esto es un dato de verdad" y la normalizacion viven en un
+// solo sitio: el mismo modulo que usa el panel, para que servidor y cliente
+// no puedan discrepar sobre si un guion es un valor.
+import { hasRealValue, normalizarValor } from "../src/modules/tyrecontrol/services/itvValores.ts";
+import { resumenOperaciones } from "../src/modules/tyrecontrol/services/resumenOperaciones.ts";
+import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tecnica/axleMapper.ts";
+import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
+import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
+import { mountAsistente } from "./tyrecontrol/asistente.ts";
+import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
-import { AI_IMAGE_RULES } from "./core/ai.ts";
+import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
-import { saveCaptureAnalysis } from "./core/whatsappCapture.ts";
+import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -499,10 +516,9 @@ app.post("/api/whatsapp/send-agenda-reminder", protectWhenStrict(requirePanelRol
 const PORT = process.env.PORT || 4000;
 
 const RESET_PASSWORD = "sea123";
+// El cliente de OpenAI vive en core/openaiService.ts: aquí no se crea ninguno.
+// Toda la IA de la plataforma pasa por pedirIA() / transcribirAudio().
 console.log("KEY:", process.env.OPENAI_API_KEY ? "OK" : "NO CARGADA");
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
   apiVersion: "2026-04-22.dahlia",
 });
@@ -573,11 +589,15 @@ function normalizeTechRow(t: any) {
     priorities: safeJsonParse(t.priorities, {}),
     avatar: t.avatar ?? null,
     roadsideCapable: t.roadsideCapable === true || t.roadsideCapable === "true",
+    compartidoCentral: t.compartidoCentral === true || t.compartidoCentral === "true",
     currentRoadsideAssistanceId:
       t.currentRoadsideAssistanceId != null ? Number(t.currentRoadsideAssistanceId) : null,
     phone: t.phone ?? null,
     statusChangedAtMs: t.statusChangedAtMs != null ? Number(t.statusChangedAtMs) : null,
     statusTotals: safeJsonParse(t.statusTotals, {}),
+    // Sin la columna (base antigua) se asume de alta: nadie está de baja por
+    // omisión.
+    activo: t.activo !== false,
   };
 }
 
@@ -604,6 +624,8 @@ stripeSessionId: job.stripeSessionId ?? null,
 stripePaymentIntentId: job.stripePaymentIntentId ?? null,
 finishedWhatsappSentAtMs: job.finishedWhatsappSentAtMs ?? null,
 finishedWhatsappSid: job.finishedWhatsappSid ?? null,
+assignedVehicleId: job.assignedVehicleId ?? null,
+assignedVehicleName: job.assignedVehicleName ?? null,
   };
 }
 
@@ -678,6 +700,7 @@ function normalizeRoadsideAssistanceRow(row: any) {
     arrivedAtPointMs: row.arrivedAtPointMs != null ? Number(row.arrivedAtPointMs) : null,
     inicioReparacionAtMs: row.inicioReparacionAtMs != null ? Number(row.inicioReparacionAtMs) : null,
     finishedAtMs: row.finishedAtMs != null ? Number(row.finishedAtMs) : null,
+    enCaminoBaseAtMs: row.enCaminoBaseAtMs != null ? Number(row.enCaminoBaseAtMs) : null,
     arrivedAtWorkshopMs: row.arrivedAtWorkshopMs != null ? Number(row.arrivedAtWorkshopMs) : null,
     cancelledAtMs: row.cancelledAtMs != null ? Number(row.cancelledAtMs) : null,
     whatsappEnCaminoEnviado: row.whatsappEnCaminoEnviado === true || row.whatsappEnCaminoEnviado === "true",
@@ -689,6 +712,12 @@ function normalizeRoadsideAssistanceRow(row: any) {
     plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
     plateRemolque: row.plateRemolque ?? null,
     esRemolque: row.esRemolque === true || row.esRemolque === "true",
+    origen: row.origen === "central" ? "central" : "taller",
+    expedienteCentral: row.expedienteCentral ?? null,
+    solicitanteEmpresa: row.solicitanteEmpresa ?? null,
+    solicitanteNombre: row.solicitanteNombre ?? null,
+    solicitanteTelefono: row.solicitanteTelefono ?? null,
+    solicitanteAutorizacion: row.solicitanteAutorizacion ?? null,
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
     knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
@@ -718,6 +747,7 @@ function normalizeRoadsideVehicleRow(row: any) {
     marca: row.marca ?? null,
     modelo: row.modelo ?? null,
     esTaller: row.esTaller === true || row.esTaller === "true",
+    compartidoCentral: row.compartidoCentral === true || row.compartidoCentral === "true",
     notes: row.notes ?? null,
     active: row.active !== false,
     createdAtMs: Number(row.createdAtMs ?? Date.now()),
@@ -775,7 +805,7 @@ function getRoadsideStatusTimestampField(status: string) {
   if (status === "en_punto") return "arrivedAtPointMs";
   if (status === "inicio_reparacion") return "inicioReparacionAtMs";
   if (status === "finalizada") return "finishedAtMs";
-  if (status === "en_camino_base") return null;
+  if (status === "en_camino_base") return "enCaminoBaseAtMs";
   if (status === "llegada_taller") return "arrivedAtWorkshopMs";
   if (status === "redirigida") return null;
   if (status === "cancelada") return "cancelledAtMs";
@@ -1501,6 +1531,89 @@ async function getRoadsideOperatorFromRequest(req: express.Request) {
   };
 }
 
+/**
+ * Multi-taller: resuelve el usuario del PANEL WEB (login del hub, Supabase) y
+ * su taller para aislar las asistencias. Best-effort: si no hay token válido
+ * devuelve null (y el llamante decide el comportamiento de compatibilidad).
+ *   - esAdmin: superadmin de plataforma O admin de asistencias (assist_panel_users).
+ *   - tallerId: taller fijo del usuario (si no es admin).
+ */
+type AssistPanelUser = {
+  userId: string;
+  username: string | null;
+  esAdmin: boolean;
+  tallerId: number | null;
+};
+async function getAssistPanelUser(req: express.Request): Promise<AssistPanelUser | null> {
+  const auth = String(req.headers.authorization || "");
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return null;
+  let ctx;
+  try {
+    ctx = await resolveAuthContext(token);
+  } catch {
+    return null;
+  }
+  if (!ctx) return null;
+  let tallerId: number | null = null;
+  let esAdminPanel = false;
+  try {
+    const r = await db.query(
+      `SELECT "tallerId", "esAdmin" FROM assist_panel_users WHERE "userId" = $1`,
+      [ctx.userId]
+    );
+    if (r.rows.length) {
+      tallerId = r.rows[0].tallerId != null ? Number(r.rows[0].tallerId) : null;
+      esAdminPanel = r.rows[0].esAdmin === true;
+    }
+  } catch { /* tabla aún no migrada: tratamos como sin config */ }
+  return {
+    userId: ctx.userId,
+    username: ctx.username ?? null,
+    esAdmin: ctx.esSuperadmin === true || esAdminPanel,
+    tallerId,
+  };
+}
+
+/**
+ * Credenciales válidas para la APK de taller (WorkPlanner Taller).
+ *
+ * Un técnico de taller puede identificarse de dos formas históricas:
+ *   · código de operario (techs.roadsideOperatorCode) — lo que usaba la APK
+ *   · PIN de taller      (techs.workshopPin)          — lo que usa /operario/taller
+ *
+ * Se aceptan las dos: exigir solo la primera dejaba fuera de la app a los
+ * técnicos que únicamente tienen PIN, que son la mayoría de los de taller.
+ * Los endpoints de asistencias en carretera siguen pidiendo el código, para no
+ * ampliar por la puerta de atrás quién puede tocar una asistencia.
+ */
+async function getTallerOperatorFromRequest(req: express.Request) {
+  return (
+    (await getRoadsideOperatorFromRequest(req)) ??
+    (await getWorkshopOperatorFromRequest(req))
+  );
+}
+
+function requireTallerOperator(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const operator = await getTallerOperatorFromRequest(req);
+
+    if (!operator) {
+      return res.status(401).json({ error: "Operario no autorizado" });
+    }
+
+    (req as any).roadsideOperator = operator;
+    next();
+  })().catch((error) => {
+    console.error("requireTallerOperator error:", error);
+    res.status(500).json({ error: "Error validando operario" });
+  });
+}
+
 function requireRoadsideOperator(
   req: express.Request,
   res: express.Response,
@@ -1552,52 +1665,138 @@ app.get("/api/health", (_req, res) => {
 
 // ── TyreControl: cerrar una intervención de cambio de neumático ──
 // Agrupa las operaciones de la sesión, redacta un informe con IA y lo guarda.
+//
+// Dos modos (fase 3):
+//   · Con intervencionId (APK nueva): la sesión YA existe en BD desde
+//     tc_iniciar_intervencion y sus operaciones nacieron dentro. Se CIERRA
+//     esa fila (cerrada_at + número de parte al cerrar), adoptando además
+//     las huérfanas completadas del vehículo en la ventana — ahí siguen
+//     cayendo las reparaciones en sitio de resolver incidencias.
+//   · Sin él (APKs viejas): como siempre, se CREA la intervención agrupando
+//     las huérfanas del vehículo desde `desde`.
 app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate, requireModule("tyrecontrol")), async (req, res) => {
   try {
-    const { vehiculoId, desde, montajeAntes, incidencias, imagenChasis,
+    const { vehiculoId, desde, intervencionId, montajeAntes, incidencias, imagenChasis,
       inicioAt, finAt, pausaSeg, nPausas } = req.body ?? {};
     if (!vehiculoId || !desde) return res.status(400).json({ error: "vehiculoId y desde requeridos" });
 
-    // Operaciones de la sesión aún sin intervención.
-    const { data: ops, error } = await supabase
+    // La sesión abierta, si la APK la manda. Si no existe o ya está cerrada,
+    // se degrada al modo clásico en vez de fallar: cerrar nunca debe dejar
+    // al técnico colgado.
+    let sesion: any = null;
+    if (typeof intervencionId === "string" && intervencionId) {
+      const { data: iv } = await supabase
+        .from("tc_intervenciones")
+        .select("id, numero, inicio_at, cerrada_at, vehiculo_id, empresa_id, tecnico_id")
+        .eq("id", intervencionId).maybeSingle();
+      if (iv && !iv.cerrada_at && iv.vehiculo_id === vehiculoId) sesion = iv;
+    }
+
+    const SELECT_OPS = "id, empresa_id, tecnico_id, neumatico_id, tipo_operacion, motivo, is_anulada, fecha_operacion, created_at, " +
+      "posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), " +
+      "posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), " +
+      "neumatico:tc_neumaticos(marca, modelo, medida, numero_interno)";
+
+    // Huérfanas completadas del vehículo en la ventana. En modo sesión son
+    // las "rezagadas" a adoptar; en modo clásico, la sesión entera. Solo
+    // trabajo HECHO: una prevista no puede colarse en el parte (fase 2).
+    const { data: sueltas, error } = await supabase
       .from("operaciones_neumaticos")
-      .select("id, empresa_id, tecnico_id, neumatico_id, tipo_operacion, motivo, is_anulada, fecha_operacion, " +
-        "posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), " +
-        "posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), " +
-        "neumatico:tc_neumaticos(marca, modelo, medida)")
+      .select(SELECT_OPS)
       .eq("vehiculo_id", vehiculoId)
       .is("intervencion_id", null)
+      .eq("status", "completada")
       .gte("created_at", desde)
       .order("created_at", { ascending: true });
     if (error) throw error;
-    const activas = (ops ?? []).filter((o: any) => !o.is_anulada);
-    if (activas.length === 0) return res.json({ id: null, resumen: "", resumen_ia: "", n: 0 });
 
-    // Resumen determinista (mismas frases que en el front).
-    const MOTIVO: Record<string, string> = { desgaste: "desgaste", pinchazo: "pinchazo", rotura: "rotura", preventivo: "preventivo", desgaste_irregular: "desgaste irregular", cambio_estacional: "cambio estacional", reparacion: "reparación", fin_vida: "fin de vida", error_montaje: "error de montaje", otro: "otro" };
-    const VERBO: Record<string, [string, string]> = { montaje: ["Montado", "Montados"], desmontaje: ["Desmontado", "Desmontados"], sustitucion: ["Sustituido", "Sustituidos"], rotacion: ["Rotado", "Rotados"], cambio_posicion: ["Cambiado de posición", "Cambiados de posición"], intercambio: ["Intercambiado", "Intercambiados"], descarte: ["Descartado", "Descartados"] };
-    const posLabel = (o: any) => { const p = o.posicion_destino ?? o.posicion_origen; return p?.nombre ?? p?.codigo_posicion ?? o.neumatico?.medida ?? ""; };
-    const unirY = (xs: string[]) => { const a = xs.filter(Boolean); if (!a.length) return ""; if (a.length === 1) return a[0]; return `${a.slice(0, -1).join(", ")} y ${a[a.length - 1]}`; };
-    const porTipo = new Map<string, string[]>(); const reps = new Map<string, string[]>();
-    for (const o of activas as any[]) {
-      if (o.tipo_operacion === "reparacion") { const m = o.motivo ? (MOTIVO[o.motivo] ?? o.motivo) : "reparación"; const a = reps.get(m) ?? []; const pl = posLabel(o); if (pl) a.push(pl); reps.set(m, a); continue; }
-      const a = porTipo.get(o.tipo_operacion) ?? []; const pl = posLabel(o); if (pl) a.push(pl); porTipo.set(o.tipo_operacion, a);
+    let ops: any[] = sueltas ?? [];
+    if (sesion) {
+      const { data: propias, error: e0 } = await supabase
+        .from("operaciones_neumaticos")
+        .select(SELECT_OPS)
+        .eq("intervencion_id", sesion.id)
+        .eq("status", "completada")
+        .order("created_at", { ascending: true });
+      if (e0) throw e0;
+      ops = [...(propias ?? []), ...ops].sort((a: any, b: any) =>
+        String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
     }
-    const lineas: string[] = [];
-    for (const [tipo, poss] of porTipo) { const v = VERBO[tipo]; const n = poss.length || (activas as any[]).filter((o) => o.tipo_operacion === tipo).length; const s = n === 1 ? "neumático" : "neumáticos"; const verbo = v ? (n === 1 ? v[0] : v[1]) : tipo; lineas.push(`${verbo} ${n} ${s}${poss.length ? ": " + unirY(poss) : ""}`); }
-    for (const [m, poss] of reps) lineas.push(`Reparación (${m})${poss.length ? ": " + unirY(poss) : ""}`);
-    const resumen = lineas.join("\n");
+    const activas = ops.filter((o: any) => !o.is_anulada);
+    if (activas.length === 0) {
+      // Sesión vacía o abandonada: se cierra sin quemar número de parte.
+      if (sesion) {
+        await supabase.from("tc_intervenciones")
+          .update({ cerrada_at: new Date().toISOString() })
+          .eq("id", sesion.id).is("cerrada_at", null);
+      }
+      return res.json({ id: sesion?.id ?? null, numero: sesion?.numero ?? null, resumen: "", resumen_ia: "", n: 0 });
+    }
 
-    // Estado del vehículo DESPUÉS: montajes actuales por posición.
+    // Resumen determinista: el MISMO generador que usa el panel
+    // (resumenOperaciones.ts). Aquí había una copia incrustada de los verbos
+    // que ya divergía; ver §3.4 del prompt de Intervenciones.
+    const resumen = resumenOperaciones(activas as any[]).join("\n");
+
+    // Estado del vehículo DESPUÉS: montajes actuales por posición, más la
+    // última presión medida por neumático (o la objetivo del eje como
+    // respaldo) y los distintivos del propio neumático (reesculturado,
+    // girado, recauchutado por marca).
     const curPorPos = new Map<string, any>();
+    const presPorNeu = new Map<string, number>();
+    const presObjPorEje = new Map<number | null, number>();
+    let marcasRecau = new Set<string>();
     try {
       const { data: md } = await supabase
         .from("tc_montajes_actuales")
-        .select("posicion_id, neumatico:tc_neumaticos(marca, modelo, medida, profundidad_actual_mm), " +
+        .select("posicion_id, neumatico_id, neumatico:tc_neumaticos(marca, modelo, medida, profundidad_actual_mm, reesculturado, girado_en_llanta), " +
           "posicion:tc_posiciones_vehiculo(codigo_posicion, nombre, eje, pos_x, pos_y, pos_w, pos_h)")
         .eq("vehiculo_id", vehiculoId);
       for (const r of (md ?? []) as any[]) curPorPos.set(r.posicion_id, r);
+
+      const { data: revs } = await supabase
+        .from("revisiones_neumaticos_detalle")
+        .select("neumatico_id, presion_bar, created_at")
+        .eq("vehiculo_id", vehiculoId)
+        .order("created_at", { ascending: false })
+        .limit(400);
+      for (const r of (revs ?? []) as any[]) {
+        if (r.neumatico_id && r.presion_bar != null && !presPorNeu.has(r.neumatico_id)) {
+          presPorNeu.set(r.neumatico_id, Number(r.presion_bar));
+        }
+      }
+
+      const { data: veh } = await supabase.from("tc_vehiculos").select("tipo_vehiculo_id").eq("id", vehiculoId).maybeSingle();
+      if (veh?.tipo_vehiculo_id) {
+        const { data: po } = await supabase
+          .from("tc_presiones_objetivo")
+          .select("eje, presion_objetivo_bar, vehiculo_id, tipo_vehiculo_id")
+          .or(`vehiculo_id.eq.${vehiculoId},tipo_vehiculo_id.eq.${veh.tipo_vehiculo_id}`);
+        // La específica de vehículo pisa a la de tipo; eje null aplica a todos.
+        for (const p of (po ?? []) as any[]) {
+          if (p.vehiculo_id && p.vehiculo_id !== vehiculoId) continue;
+          const clave = p.eje ?? null;
+          if (p.vehiculo_id === vehiculoId || !presObjPorEje.has(clave)) {
+            presObjPorEje.set(clave, Number(p.presion_objetivo_bar));
+          }
+        }
+      }
+
+      const { data: mr } = await supabase
+        .from("tc_cat_marcas_neumatico").select("nombre")
+        .eq("es_recauchutado", true).eq("activo", true);
+      marcasRecau = new Set((mr ?? []).map((m: any) => String(m.nombre ?? "").trim().toUpperCase()));
     } catch (e) { console.error("montaje después falló:", e); }
+
+    const presionDe = (cur: any): number | null => {
+      if (!cur) return null;
+      const medida = cur.neumatico_id ? presPorNeu.get(cur.neumatico_id) : undefined;
+      if (medida != null) return medida;
+      const eje = cur.posicion?.eje ?? null;
+      return presObjPorEje.get(eje) ?? presObjPorEje.get(null) ?? null;
+    };
+    const esRecau = (cur: any): boolean =>
+      marcasRecau.has(String(cur?.neumatico?.marca ?? "").trim().toUpperCase());
 
     // El plano "después" reutiliza el esqueleto del "antes" (mismas posiciones y
     // coordenadas), sustituyendo el neumático por el actual y limpiando averías.
@@ -1611,7 +1810,10 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
           modelo: cur?.neumatico?.modelo ?? null,
           medida: cur?.neumatico?.medida ?? null,
           mm: cur?.neumatico?.profundidad_actual_mm ?? null,
-          presion: null,
+          presion: presionDe(cur),
+          reesc: cur?.neumatico?.reesculturado === true,
+          girado: cur?.neumatico?.girado_en_llanta === true,
+          recau: esRecau(cur),
           averias: null,
         };
       });
@@ -1626,7 +1828,10 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         modelo: r.neumatico?.modelo ?? null,
         medida: r.neumatico?.medida ?? null,
         mm: r.neumatico?.profundidad_actual_mm ?? null,
-        presion: null,
+        presion: presionDe(r),
+        reesc: r.neumatico?.reesculturado === true,
+        girado: r.neumatico?.girado_en_llanta === true,
+        recau: esRecau(r),
       }));
     }
 
@@ -1644,14 +1849,15 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
         origen.length ? `Averías de origen:\n${origen.join("\n")}` : "",
         `Acciones realizadas:\n${resumen}`,
       ].filter(Boolean).join("\n\n");
-      const r = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "Eres un técnico de neumáticos. Redacta un informe breve (2-4 frases, español, tono profesional) de la intervención: de qué avería se partía, qué se hizo y cómo quedó el vehículo. No inventes datos ni cifras que no aparezcan." },
-          { role: "user", content: partes },
-        ],
+      const r = await pedirIA({
+        operacion: "tyrecontrol.informe-intervencion",
+        proposito: "informe",
+        prompt:
+          "Eres un técnico de neumáticos. Redacta un informe breve (2-4 frases, español, tono profesional) " +
+          "de la intervención: de qué avería se partía, qué se hizo y cómo quedó el vehículo. " +
+          "No inventes datos ni cifras que no aparezcan.\n\n" + partes,
       });
-      resumenIa = r.choices[0]?.message?.content?.trim() || resumen;
+      resumenIa = r.texto.trim() || resumen;
     } catch (e) { console.error("IA intervención falló, se guarda solo el resumen:", e); }
 
     const empresaId = (activas[0] as any).empresa_id;
@@ -1660,7 +1866,9 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
     // Cronometraje automático (Analítica de Productividad): la APK manda las
     // marcas de inicio/fin de la sesión de cambio y el total de pausas; aquí
     // se calculan duración y tiempo efectivo (duración = trabajo + pausa).
-    const tIni = inicioAt ? new Date(inicioAt) : null;
+    // Si la sesión existe en BD, su inicio_at (sellado por
+    // tc_iniciar_intervencion) manda sobre el reloj del móvil.
+    const tIni = sesion?.inicio_at ? new Date(sesion.inicio_at) : (inicioAt ? new Date(inicioAt) : null);
     const tFin = finAt ? new Date(finAt) : null;
     const durSeg = tIni && tFin && !isNaN(+tIni) && !isNaN(+tFin)
       ? Math.max(0, Math.round((+tFin - +tIni) / 1000)) : null;
@@ -1674,29 +1882,83 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
     }
     const tipoPrincipal = [...cuenta.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
-    const { data: interv, error: e2 } = await supabase
-      .from("tc_intervenciones")
-      .insert({
-        empresa_id: empresaId, vehiculo_id: vehiculoId, tecnico_id: tecnicoId,
-        resumen, resumen_ia: resumenIa, n_operaciones: activas.length,
-        inicio_at: tIni && !isNaN(+tIni) ? tIni.toISOString() : null,
-        fin_at: tFin && !isNaN(+tFin) ? tFin.toISOString() : null,
-        duracion_seg: durSeg,
-        trabajo_seg: durSeg != null ? Math.max(0, durSeg - pSeg) : null,
-        pausa_seg: pSeg,
-        n_pausas: Number.isFinite(Number(nPausas)) ? Math.max(0, Math.round(Number(nPausas))) : 0,
-        tipo_principal: tipoPrincipal,
-        n_neumaticos: neus.size || null,
-        montaje_antes: Array.isArray(montajeAntes) ? montajeAntes : null,
-        montaje_despues: montajeDespues.length ? montajeDespues : null,
-        incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
-        imagen_chasis: typeof imagenChasis === "string" && imagenChasis ? imagenChasis : null,
-      })
-      .select("id").single();
-    if (e2) throw e2;
-    await supabase.from("operaciones_neumaticos").update({ intervencion_id: interv.id }).in("id", (activas as any[]).map((o) => o.id));
+    // Los campos del parte, comunes a los dos modos.
+    const datosParte = {
+      resumen, resumen_ia: resumenIa, n_operaciones: activas.length,
+      inicio_at: tIni && !isNaN(+tIni) ? tIni.toISOString() : null,
+      fin_at: tFin && !isNaN(+tFin) ? tFin.toISOString() : null,
+      duracion_seg: durSeg,
+      trabajo_seg: durSeg != null ? Math.max(0, durSeg - pSeg) : null,
+      pausa_seg: pSeg,
+      n_pausas: Number.isFinite(Number(nPausas)) ? Math.max(0, Math.round(Number(nPausas))) : 0,
+      tipo_principal: tipoPrincipal,
+      n_neumaticos: neus.size || null,
+      montaje_antes: Array.isArray(montajeAntes) ? montajeAntes : null,
+      montaje_despues: montajeDespues.length ? montajeDespues : null,
+      incidencias: Array.isArray(incidencias) && incidencias.length ? incidencias : null,
+      imagen_chasis: typeof imagenChasis === "string" && imagenChasis ? imagenChasis : null,
+    };
 
-    res.json({ id: interv.id, resumen, resumen_ia: resumenIa, n: activas.length });
+    let intervId: string; let numero: string | null;
+    if (sesion) {
+      // Modo sesión: CERRAR la intervención que abrió tc_iniciar_intervencion.
+      const { error: e2 } = await supabase
+        .from("tc_intervenciones")
+        .update({
+          ...datosParte,
+          tecnico_id: sesion.tecnico_id ?? tecnicoId,
+          cerrada_at: tFin && !isNaN(+tFin) ? tFin.toISOString() : new Date().toISOString(),
+        })
+        .eq("id", sesion.id);
+      if (e2) throw e2;
+      intervId = sesion.id;
+      // El número de parte se asigna AL CERRAR (una sesión abandonada no
+      // quema números). Atómico e idempotente en BD; si la función aún no
+      // existe (SQL de fase 3 sin aplicar), respaldo con el generador de
+      // siempre para no dejar el parte sin número.
+      numero = sesion.numero ?? null;
+      if (!numero) {
+        const r1 = await supabase.rpc("tc_asignar_numero_intervencion", { p_intervencion: sesion.id });
+        if (!r1.error && typeof r1.data === "string") {
+          numero = r1.data;
+        } else {
+          const r2 = await supabase.rpc("tc_generar_numero_operacion");
+          if (!r2.error && typeof r2.data === "string") {
+            numero = r2.data;
+            await supabase.from("tc_intervenciones").update({ numero }).eq("id", sesion.id).is("numero", null);
+          }
+        }
+      }
+    } else {
+      // Modo clásico (APKs sin sesión): crear la intervención ya cerrada.
+      const { data: interv, error: e2 } = await supabase
+        .from("tc_intervenciones")
+        .insert({ empresa_id: empresaId, vehiculo_id: vehiculoId, tecnico_id: tecnicoId, ...datosParte })
+        // cerrada_at NO se manda a propósito: su default now() ya deja la
+        // intervención cerrada, y así este insert funciona igual con la
+        // migración de fase 1 aplicada o sin aplicar (se despliegan por
+        // separado). El número lo pone la BD por DEFAULT.
+        .select("id, numero").single();
+      if (e2) throw e2;
+      intervId = interv.id;
+      numero = (interv as any).numero ?? null;
+    }
+
+    // Estampar la intervención en las operaciones: en modo sesión adopta las
+    // rezagadas (las propias ya la llevan y el update es un no-op para ellas).
+    await supabase.from("operaciones_neumaticos").update({ intervencion_id: intervId }).in("id", (activas as any[]).map((o) => o.id));
+
+    // Fase 5: foto del stock al cierre. El informe de dentro de seis meses
+    // enseña el stock de ENTONCES, no el de hoy, y el efecto exacto de esta
+    // intervención (Antes · Montados · Devueltos · Después) sale de sus
+    // operaciones reales — lo calcula y guarda la BD, nunca la IA.
+    // Best-effort: sin el SQL de fase 5 aplicado, el parte se cierra igual.
+    {
+      const snap = await supabase.rpc("tc_stock_snapshot_intervencion", { p_intervencion: intervId });
+      if (snap.error) console.error("snapshot de stock al cerrar:", snap.error.message);
+    }
+
+    res.json({ id: intervId, numero, resumen, resumen_ia: resumenIa, n: activas.length });
   } catch (error: any) {
     console.error("cerrar intervención:", error);
     res.status(500).json({ error: error?.message || "Error" });
@@ -1705,17 +1967,12 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
 
 app.get("/api/ai-test", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "Eres un asistente técnico." },
-        { role: "user", content: "Dime una recomendación de tecnología para un mecánico" }
-      ],
+    const r = await pedirIA({
+      operacion: "diagnostico.ai-test",
+      prompt: "Eres un asistente técnico. Dime una recomendación de tecnología para un mecánico",
     });
 
-    res.json({
-      result: response.choices[0].message.content,
-    });
+    res.json({ result: r.texto, model: r.modelo });
 
   } catch (error) {
     console.error(error);
@@ -1847,14 +2104,13 @@ No propongas saltarte reglas.
 Si no hay técnico válido, responsable debe ser null.
 `;
 
-    const response = await openai.responses.create({
-      model: "gpt-4o-mini",
-      input: prompt,
+    const rIa = await pedirIA({
+      operacion: "taller.asignacion",
+      proposito: "asistente",
+      prompt,
     });
 
-    res.json({
-      text: response.output_text,
-    });
+    res.json({ text: rIa.texto });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error IA" });
@@ -1868,8 +2124,8 @@ app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => 
   try {
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
-             "roadsideCapable", "currentRoadsideAssistanceId", phone,
-             "statusChangedAtMs", "statusTotals"
+             "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
+             "statusChangedAtMs", "statusTotals", activo
       FROM techs
       ORDER BY id ASC
     `);
@@ -2014,6 +2270,45 @@ app.patch("/api/techs/:name/roadside-capable", requireAdminRole, async (req, res
   } catch (error) {
     console.error("PATCH /api/techs/:name/roadside-capable error:", error);
     res.status(500).json({ error: "Error actualizando apto para carretera" });
+  }
+});
+
+/**
+ * Alta o baja de un técnico.
+ *
+ * Sustituye al borrado: la ficha se conserva —con su histórico de trabajos,
+ * tiempos y pausas, que hacen falta para nóminas y reclamaciones— pero deja de
+ * ofrecerse para asignar y no puede entrar en las apps.
+ */
+app.put("/api/techs/:name/activo", requireAdminRole, async (req, res) => {
+  try {
+    const name = String(req.params.name);
+    const activo = req.body?.activo !== false;
+
+    const result = await db.query(
+      `UPDATE techs
+       SET activo = $1,
+           -- Al dar de baja se libera el trabajo en curso y se retiran las
+           -- credenciales: si no, seguiría pudiendo entrar en la tablet.
+           status = CASE WHEN $1 THEN status ELSE 'baja' END,
+           blocked = CASE WHEN $1 THEN blocked ELSE true END,
+           "currentJobId" = CASE WHEN $1 THEN "currentJobId" ELSE NULL END,
+           "roadsideOperatorCode" = CASE WHEN $1 THEN "roadsideOperatorCode" ELSE NULL END,
+           "workshopPin" = CASE WHEN $1 THEN "workshopPin" ELSE NULL END,
+           "statusChangedAtMs" = $2
+       WHERE name = $3
+       RETURNING *`,
+      [activo, Date.now(), name]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Técnico no encontrado" });
+    }
+
+    res.json(normalizeTechRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/techs/:name/activo error:", error);
+    res.status(500).json({ error: "Error cambiando el alta del técnico" });
   }
 });
 
@@ -2239,12 +2534,14 @@ if (interruptedMaintenanceTasks.length > 0) {
           "actualMinutes",
           "workedAccumulatedMinutes",
           "pausedAccumulatedMinutes",
-          "pausedAtMs"
+          "pausedAtMs",
+          "assignedVehicleId",
+          "assignedVehicleName"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14, $15, $16, $17,
-          $18, $19
+          $18, $19, $20, $21
         )
         ON CONFLICT (id) DO UPDATE SET
           area = EXCLUDED.area,
@@ -2264,7 +2561,9 @@ if (interruptedMaintenanceTasks.length > 0) {
           "actualMinutes" = EXCLUDED."actualMinutes",
           "workedAccumulatedMinutes" = EXCLUDED."workedAccumulatedMinutes",
           "pausedAccumulatedMinutes" = EXCLUDED."pausedAccumulatedMinutes",
-          "pausedAtMs" = EXCLUDED."pausedAtMs"
+          "pausedAtMs" = EXCLUDED."pausedAtMs",
+          "assignedVehicleId" = EXCLUDED."assignedVehicleId",
+          "assignedVehicleName" = EXCLUDED."assignedVehicleName"
         RETURNING *
       `,
       [
@@ -2287,6 +2586,8 @@ if (interruptedMaintenanceTasks.length > 0) {
         job.workedAccumulatedMinutes ?? 0,
         job.pausedAccumulatedMinutes ?? 0,
         job.pausedAtMs ?? null,
+        Number.isFinite(Number(job.assignedVehicleId)) ? Number(job.assignedVehicleId) : null,
+        String(job.assignedVehicleName || "").trim() || null,
       ]
     );
 
@@ -2370,12 +2671,14 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
           "actualMinutes",
           "workedAccumulatedMinutes",
           "pausedAccumulatedMinutes",
-          "pausedAtMs"
+          "pausedAtMs",
+          "assignedVehicleId",
+          "assignedVehicleName"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14, $15, $16, $17,
-          $18, $19
+          $18, $19, $20, $21
         )
         ON CONFLICT (id) DO UPDATE SET
           area = EXCLUDED.area,
@@ -2395,7 +2698,9 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
           "actualMinutes" = EXCLUDED."actualMinutes",
           "workedAccumulatedMinutes" = EXCLUDED."workedAccumulatedMinutes",
           "pausedAccumulatedMinutes" = EXCLUDED."pausedAccumulatedMinutes",
-          "pausedAtMs" = EXCLUDED."pausedAtMs"
+          "pausedAtMs" = EXCLUDED."pausedAtMs",
+          "assignedVehicleId" = EXCLUDED."assignedVehicleId",
+          "assignedVehicleName" = EXCLUDED."assignedVehicleName"
         RETURNING *
       `,
       [
@@ -2418,6 +2723,8 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
         job.workedAccumulatedMinutes ?? 0,
         job.pausedAccumulatedMinutes ?? 0,
         job.pausedAtMs ?? null,
+        Number.isFinite(Number(job.assignedVehicleId)) ? Number(job.assignedVehicleId) : null,
+        String(job.assignedVehicleName || "").trim() || null,
       ]
     );
 
@@ -2519,12 +2826,79 @@ app.delete("/api/jobs/:id", protectWhenStrict(requirePanelRole), async (req, res
    NO tocan los /api/jobs del panel web.
 ========================================================= */
 
-async function getTallerOperator(techName: string) {
+/**
+ * ¿Es el mismo técnico? Los nombres viajan por tres sitios (columna `techs`,
+ * lista `assignedNames` del trabajo y cabecera de la APK) y basta un acento,
+ * una mayúscula o un espacio de más para que la comparación exacta falle y el
+ * técnico vea "no tienes tareas" teniendo trabajo asignado.
+ */
+function mismoNombreTecnico(a: unknown, b: unknown) {
+  const normaliza = (v: unknown) =>
+    String(v ?? "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLowerCase();
+
+  const na = normaliza(a);
+  return na !== "" && na === normaliza(b);
+}
+
+/**
+ * Idempotencia para la APK de taller.
+ *
+ * La cola offline reintenta lo que no pudo enviar. Si una petición llegó al
+ * servidor pero la respuesta se perdió (timeout, cambio de red al salir del
+ * taller), el reintento la aplicaría otra vez: dos fotos idénticas en el mismo
+ * trabajo, o dos trabajos iguales. La clave viaja en la cabecera
+ * `x-idempotency-key` y la genera el cliente al encolar, así que sobrevive al
+ * reintento.
+ *
+ * Devuelve la respuesta ya guardada si esa clave se procesó antes.
+ */
+async function respuestaIdempotente(req: express.Request) {
+  const clave = String(req.headers["x-idempotency-key"] ?? "").trim();
+  if (!clave) return null;
+
   const r = await db.query(
+    `SELECT respuesta FROM taller_idempotencia WHERE clave = $1 LIMIT 1`,
+    [clave]
+  );
+
+  return r.rows.length > 0 ? r.rows[0].respuesta : null;
+}
+
+async function guardarIdempotencia(req: express.Request, respuesta: unknown) {
+  const clave = String(req.headers["x-idempotency-key"] ?? "").trim();
+  if (!clave) return;
+
+  try {
+    await db.query(
+      `INSERT INTO taller_idempotencia (clave, respuesta, "createdAtMs")
+       VALUES ($1, $2, $3)
+       ON CONFLICT (clave) DO NOTHING`,
+      [clave, JSON.stringify(respuesta), Date.now()]
+    );
+  } catch (error) {
+    // Que falle el registro no debe tumbar la operación, que sí se ha hecho.
+    console.error("guardarIdempotencia error:", error);
+  }
+}
+
+async function getTallerOperator(techName: string) {
+  let r = await db.query(
     `SELECT name, "es_supervisor" FROM techs WHERE name = $1 LIMIT 1`,
     [techName]
   );
-  if (r.rows.length === 0) return null;
+
+  // Repliegue tolerante: mismo nombre con otra caja o sin acentos.
+  if (r.rows.length === 0) {
+    const todos = await db.query(`SELECT name, "es_supervisor" FROM techs`);
+    const encontrado = todos.rows.find((t: any) => mismoNombreTecnico(t.name, techName));
+    if (!encontrado) return null;
+    r = { rows: [encontrado] } as any;
+  }
+
   return {
     name: String(r.rows[0].name),
     esSupervisor: r.rows[0].es_supervisor === true,
@@ -2532,7 +2906,71 @@ async function getTallerOperator(techName: string) {
 }
 
 // Ficha del operario logueado (para pintar el rol en la APK)
-app.get("/api/taller-operator/me", requireRoadsideOperator, async (req, res) => {
+/**
+ * Público: nombres que pueden entrar en la APK de taller.
+ *
+ * La APK usaba /api/roadside-operator/techs, que solo devuelve operarios con
+ * código de asistencia en carretera: los técnicos de taller no salían y el
+ * desplegable de la pantalla de login aparecía vacío.
+ */
+app.get("/api/taller-operator/techs-list", async (_req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT name
+      FROM techs
+      WHERE activo = true
+        AND (NULLIF(TRIM(COALESCE("workshopPin", '')), '') IS NOT NULL
+             OR NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL)
+      ORDER BY name ASC
+    `);
+
+    res.json(result.rows.map((r: any) => ({ name: r.name })));
+  } catch (error) {
+    console.error("GET /api/taller-operator/techs-list error:", error);
+    res.status(500).json({ error: "Error obteniendo operarios de taller" });
+  }
+});
+
+/**
+ * Público: login de la APK. Acepta el PIN de taller o el código de operario,
+ * sin que el técnico tenga que saber cuál de los dos tiene.
+ */
+app.post("/api/taller-operator/login", async (req, res) => {
+  try {
+    const techName = String(req.body?.techName || "").trim();
+    const code = String(req.body?.code || "").trim();
+
+    if (!techName || !code) {
+      return res.status(400).json({ error: "Faltan datos" });
+    }
+
+    // El PIN de taller se guarda hasheado (ver verifyWorkshopPin): no se puede
+    // comparar en claro contra "workshopPin", que queda a NULL en cuanto el PIN
+    // heredado se migra en el primer login correcto.
+    const porPin = await verifyWorkshopPin(techName, code);
+
+    const esperado = await getExpectedRoadsideOperatorCode(techName);
+    const porCodigo = Boolean(esperado) && code === esperado;
+
+    if (!porPin && !porCodigo) {
+      return res.status(401).json({ error: "PIN incorrecto" });
+    }
+
+    // El código de operario da además sesión unificada (Bearer) porque es la
+    // que ya montaba /api/roadside-operator/login; con PIN de taller se entra
+    // igual, solo con las cabeceras de operario.
+    res.json({
+      ok: true,
+      techName,
+      metodo: porPin ? "pin" : "codigo",
+    });
+  } catch (error) {
+    console.error("POST /api/taller-operator/login error:", error);
+    res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
+app.get("/api/taller-operator/me", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2545,7 +2983,7 @@ app.get("/api/taller-operator/me", requireRoadsideOperator, async (req, res) => 
 });
 
 // Trabajos visibles (scope=live). Operario: solo los suyos. Supervisor: todos.
-app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/jobs", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2562,7 +3000,9 @@ app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) =
     let jobs = result.rows.map(normalizeJobRow);
     if (!op.esSupervisor) {
       jobs = jobs.filter(
-        (j: any) => Array.isArray(j.assignedNames) && j.assignedNames.includes(op.name)
+        (j: any) =>
+          Array.isArray(j.assignedNames) &&
+          j.assignedNames.some((n: unknown) => mismoNombreTecnico(n, op.name))
       );
     }
     res.json(jobs);
@@ -2573,7 +3013,7 @@ app.get("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) =
 });
 
 // Lista de técnicos para asignar (solo supervisor)
-app.get("/api/taller-operator/techs", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/techs", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2597,8 +3037,14 @@ app.get("/api/taller-operator/techs", requireRoadsideOperator, async (req, res) 
 });
 
 // Crear/asignar trabajo (solo supervisor)
-app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) => {
+app.post("/api/taller-operator/jobs", requireTallerOperator, async (req, res) => {
   try {
+    // Sin esto, un reintento de la cola crea un segundo trabajo idéntico: el id
+    // se genera con Date.now() en cada intento, así que no colisiona y pasan los
+    // dos.
+    const yaCreado = await respuestaIdempotente(req);
+    if (yaCreado) return res.json(yaCreado);
+
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
     if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
@@ -2635,7 +3081,9 @@ app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) 
         workshopId,
       ]
     );
-    res.json(normalizeJobRow(result.rows[0]));
+    const creado = normalizeJobRow(result.rows[0]);
+    await guardarIdempotencia(req, creado);
+    res.json(creado);
   } catch (error) {
     console.error("POST /api/taller-operator/jobs error:", error);
     res.status(500).json({ error: "Error creando trabajo" });
@@ -2643,7 +3091,7 @@ app.post("/api/taller-operator/jobs", requireRoadsideOperator, async (req, res) 
 });
 
 // Reasignar trabajo (solo supervisor)
-app.put("/api/taller-operator/jobs/:id/assign", requireRoadsideOperator, async (req, res) => {
+app.put("/api/taller-operator/jobs/:id/assign", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2671,7 +3119,7 @@ app.put("/api/taller-operator/jobs/:id/assign", requireRoadsideOperator, async (
 
 // Cambiar estado del trabajo (operario: solo los suyos; supervisor: cualquiera)
 // status admitido: activo (empezar/reanudar) | parado (pausar) | cerrado (finalizar) | espera
-app.put("/api/taller-operator/jobs/:id/status", requireRoadsideOperator, async (req, res) => {
+app.put("/api/taller-operator/jobs/:id/status", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2757,7 +3205,7 @@ async function tallerCanAccessJob(op: { name: string; esSupervisor: boolean }, j
 }
 
 // Listar fotos de un trabajo
-app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (req, res) => {
+app.get("/api/taller-operator/jobs/:id/files", requireTallerOperator, async (req, res) => {
   try {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
@@ -2768,7 +3216,7 @@ app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (r
       return res.status(403).json({ error: "Sin acceso a este trabajo" });
     }
     const result = await db.query(
-      `SELECT id, url, "fileName", "techName", "createdAtMs"
+      `SELECT id, url, "fileName", "techName", "createdAtMs", tipo
        FROM job_files WHERE "jobId" = $1 ORDER BY "createdAtMs" ASC`,
       [id]
     );
@@ -2779,6 +3227,7 @@ app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (r
         fileName: r.fileName ?? null,
         techName: r.techName ?? null,
         createdAtMs: Number(r.createdAtMs),
+        tipo: r.tipo ?? "foto",
       }))
     );
   } catch (error) {
@@ -2790,10 +3239,15 @@ app.get("/api/taller-operator/jobs/:id/files", requireRoadsideOperator, async (r
 // Subir foto a un trabajo
 app.post(
   "/api/taller-operator/jobs/:id/files",
-  requireRoadsideOperator,
+  requireTallerOperator,
   upload.single("file"),
   async (req, res) => {
     try {
+      // Reintento de la cola offline: la foto ya se subió, se devuelve la
+      // misma respuesta en vez de dejar dos copias en el trabajo.
+      const yaHecho = await respuestaIdempotente(req);
+      if (yaHecho) return res.json(yaHecho);
+
       const { techName } = (req as any).roadsideOperator as { techName: string };
       const op = await getTallerOperator(techName);
       if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
@@ -2810,7 +3264,12 @@ app.post(
         "image/webp": "webp",
       };
       const ext = mimeToExt[req.file.mimetype] ?? "jpg";
-      const storagePath = `taller/${id}/foto_${Date.now()}.${ext}`;
+      // 'firma' o 'foto'. La firma del cliente es única por trabajo: si se
+      // repite, la nueva sustituye a la anterior en vez de acumular garabatos.
+      const tipo = String((req.body as any)?.tipo ?? "foto").trim() === "firma"
+        ? "firma"
+        : "foto";
+      const storagePath = `taller/${id}/${tipo}_${Date.now()}.${ext}`;
 
       const { error: uploadError } = await supabase.storage
         .from(SUPABASE_ROADSIDE_BUCKET)
@@ -2824,25 +3283,314 @@ app.post(
         .from(SUPABASE_ROADSIDE_BUCKET)
         .getPublicUrl(storagePath);
 
+      if (tipo === "firma") {
+        await db.query(`DELETE FROM job_files WHERE "jobId" = $1 AND tipo = 'firma'`, [id]);
+      }
+
       const result = await db.query(
-        `INSERT INTO job_files ("jobId", url, "fileName", "techName", "createdAtMs")
-         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-        [id, publicData.publicUrl, req.file.originalname, op.name, Date.now()]
+        `INSERT INTO job_files ("jobId", url, "fileName", "techName", "createdAtMs", tipo)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [id, publicData.publicUrl, req.file.originalname, op.name, Date.now(), tipo]
       );
       const row = result.rows[0];
-      res.json({
+      const respuesta = {
         id: Number(row.id),
         url: row.url,
         fileName: row.fileName ?? null,
         techName: row.techName ?? null,
         createdAtMs: Number(row.createdAtMs),
-      });
+        tipo: row.tipo ?? "foto",
+      };
+      await guardarIdempotencia(req, respuesta);
+      res.json(respuesta);
     } catch (error) {
       console.error("POST /api/taller-operator/jobs/:id/files error:", error);
       res.status(500).json({ error: "Error subiendo foto" });
     }
   }
 );
+
+/* =========================================================
+   CHECKLISTS — plantillas (WorkPlanner) y estado por trabajo (APK)
+========================================================= */
+
+/** Normaliza los ítems que llegan del editor: texto obligatorio, resto opcional. */
+function normalizaItemsPlantilla(valor: unknown) {
+  if (!Array.isArray(valor)) return [];
+  return valor
+    .map((item: any) => ({
+      texto: String(item?.texto ?? "").trim(),
+      obligatorio: item?.obligatorio === true,
+    }))
+    .filter((item) => item.texto !== "");
+}
+
+// Plantillas: listado para el panel (incluye las desactivadas si se pide)
+app.get("/api/checklist-plantillas", requirePanelRole, async (req, res) => {
+  try {
+    const incluirInactivas = String(req.query.incluirInactivas || "") === "true";
+    const result = await db.query(
+      `SELECT * FROM checklist_plantillas
+       ${incluirInactivas ? "" : "WHERE activo = true"}
+       ORDER BY nombre ASC`
+    );
+    res.json(result.rows.map(normalizaPlantillaRow));
+  } catch (error) {
+    console.error("GET /api/checklist-plantillas error:", error);
+    res.status(500).json({ error: "Error obteniendo las plantillas" });
+  }
+});
+
+function normalizaPlantillaRow(row: any) {
+  return {
+    id: Number(row.id),
+    nombre: row.nombre,
+    area: row.area ?? null,
+    items: Array.isArray(row.items) ? row.items : safeJsonParse(row.items, []),
+    activo: row.activo !== false,
+    workshopId: row.workshopId ?? null,
+    createdAtMs: Number(row.createdAtMs),
+    updatedAtMs: Number(row.updatedAtMs),
+  };
+}
+
+app.post("/api/checklist-plantillas", requireSupervisorRole, async (req, res) => {
+  try {
+    const nombre = String(req.body?.nombre ?? "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+
+    const items = normalizaItemsPlantilla(req.body?.items);
+    const ahora = Date.now();
+
+    const result = await db.query(
+      `INSERT INTO checklist_plantillas
+         (nombre, area, items, activo, "workshopId", "createdAtMs", "updatedAtMs")
+       VALUES ($1, $2, $3, true, $4, $5, $5)
+       RETURNING *`,
+      [
+        nombre,
+        String(req.body?.area ?? "").trim() || null,
+        JSON.stringify(items),
+        String(req.body?.workshopId ?? "").trim() || null,
+        ahora,
+      ]
+    );
+
+    res.json(normalizaPlantillaRow(result.rows[0]));
+  } catch (error) {
+    console.error("POST /api/checklist-plantillas error:", error);
+    res.status(500).json({ error: "Error creando la plantilla" });
+  }
+});
+
+app.put("/api/checklist-plantillas/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+    const nombre = String(req.body?.nombre ?? "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+
+    const result = await db.query(
+      `UPDATE checklist_plantillas
+       SET nombre = $1, area = $2, items = $3, activo = $4, "updatedAtMs" = $5
+       WHERE id = $6
+       RETURNING *`,
+      [
+        nombre,
+        String(req.body?.area ?? "").trim() || null,
+        JSON.stringify(normalizaItemsPlantilla(req.body?.items)),
+        req.body?.activo !== false,
+        Date.now(),
+        id,
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Plantilla no encontrada" });
+    }
+    res.json(normalizaPlantillaRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/checklist-plantillas/:id error:", error);
+    res.status(500).json({ error: "Error guardando la plantilla" });
+  }
+});
+
+// Baja lógica: los trabajos ya hechos conservan su copia, pero la plantilla
+// deja de ofrecerse. Borrarla de verdad rompería el histórico.
+app.delete("/api/checklist-plantillas/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+
+    await db.query(
+      `UPDATE checklist_plantillas SET activo = false, "updatedAtMs" = $1 WHERE id = $2`,
+      [Date.now(), id]
+    );
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("DELETE /api/checklist-plantillas/:id error:", error);
+    res.status(500).json({ error: "Error desactivando la plantilla" });
+  }
+});
+
+// ── La APK ────────────────────────────────────────────────
+
+// Plantillas activas, para que el técnico elija cuál aplicar.
+app.get("/api/taller-operator/checklist-plantillas", requireTallerOperator, async (_req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT * FROM checklist_plantillas WHERE activo = true ORDER BY nombre ASC`
+    );
+    res.json(result.rows.map(normalizaPlantillaRow));
+  } catch (error) {
+    console.error("GET /api/taller-operator/checklist-plantillas error:", error);
+    res.status(500).json({ error: "Error obteniendo las plantillas" });
+  }
+});
+
+function normalizaChecklistRow(row: any) {
+  return {
+    jobId: Number(row.jobId),
+    plantillaId: row.plantillaId != null ? Number(row.plantillaId) : null,
+    nombre: row.nombre ?? null,
+    items: Array.isArray(row.items) ? row.items : safeJsonParse(row.items, []),
+    updatedAtMs: Number(row.updatedAtMs),
+  };
+}
+
+app.get("/api/taller-operator/jobs/:id/checklist", requireTallerOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    if (!(await tallerCanAccessJob(op, id))) {
+      return res.status(403).json({ error: "Sin acceso a este trabajo" });
+    }
+
+    const result = await db.query(`SELECT * FROM job_checklists WHERE "jobId" = $1`, [id]);
+    res.json(result.rows.length > 0 ? normalizaChecklistRow(result.rows[0]) : null);
+  } catch (error) {
+    console.error("GET /api/taller-operator/jobs/:id/checklist error:", error);
+    res.status(500).json({ error: "Error obteniendo el checklist" });
+  }
+});
+
+// Aplica una plantilla al trabajo. Copia los ítems: si luego alguien edita la
+// plantilla, lo ya comprobado no cambia.
+app.post("/api/taller-operator/jobs/:id/checklist", requireTallerOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+    if (!(await tallerCanAccessJob(op, id))) {
+      return res.status(403).json({ error: "Sin acceso a este trabajo" });
+    }
+
+    const plantillaId = Number(req.body?.plantillaId);
+    if (!Number.isFinite(plantillaId)) {
+      return res.status(400).json({ error: "Plantilla no válida" });
+    }
+
+    const plantilla = await db.query(
+      `SELECT * FROM checklist_plantillas WHERE id = $1 LIMIT 1`,
+      [plantillaId]
+    );
+    if (plantilla.rows.length === 0) {
+      return res.status(404).json({ error: "Plantilla no encontrada" });
+    }
+
+    const origen = normalizaPlantillaRow(plantilla.rows[0]);
+    const items = origen.items.map((item: any) => ({
+      texto: String(item?.texto ?? ""),
+      obligatorio: item?.obligatorio === true,
+      hecho: false,
+      hechoAtMs: null,
+      tecnico: null,
+    }));
+    const ahora = Date.now();
+
+    const result = await db.query(
+      `INSERT INTO job_checklists ("jobId", "plantillaId", nombre, items, "updatedAtMs")
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT ("jobId") DO UPDATE SET
+         "plantillaId" = EXCLUDED."plantillaId",
+         nombre = EXCLUDED.nombre,
+         items = EXCLUDED.items,
+         "updatedAtMs" = EXCLUDED."updatedAtMs"
+       RETURNING *`,
+      [id, origen.id, origen.nombre, JSON.stringify(items), ahora]
+    );
+
+    res.json(normalizaChecklistRow(result.rows[0]));
+  } catch (error) {
+    console.error("POST /api/taller-operator/jobs/:id/checklist error:", error);
+    res.status(500).json({ error: "Error aplicando el checklist" });
+  }
+});
+
+/**
+ * Marca o desmarca UN ítem por su índice.
+ *
+ * Deliberadamente no se envía la lista entera: con dos técnicos en el mismo
+ * trabajo, o con la tablet reenviando la cola, el último en guardar borraría lo
+ * que marcó el otro. Es el mismo problema que tuvimos con los recordatorios de
+ * la agenda.
+ */
+app.put("/api/taller-operator/jobs/:id/checklist/:indice", requireTallerOperator, async (req, res) => {
+  try {
+    const { techName } = (req as any).roadsideOperator as { techName: string };
+    const op = await getTallerOperator(techName);
+    if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
+
+    const id = Number(req.params.id);
+    const indice = Number(req.params.indice);
+    if (!Number.isFinite(id) || !Number.isFinite(indice)) {
+      return res.status(400).json({ error: "Petición no válida" });
+    }
+    if (!(await tallerCanAccessJob(op, id))) {
+      return res.status(403).json({ error: "Sin acceso a este trabajo" });
+    }
+
+    const actual = await db.query(`SELECT * FROM job_checklists WHERE "jobId" = $1`, [id]);
+    if (actual.rows.length === 0) {
+      return res.status(404).json({ error: "Este trabajo no tiene checklist" });
+    }
+
+    const checklist = normalizaChecklistRow(actual.rows[0]);
+    if (indice < 0 || indice >= checklist.items.length) {
+      return res.status(400).json({ error: "Ítem no válido" });
+    }
+
+    const hecho = req.body?.hecho !== false;
+    const items = checklist.items.map((item: any, i: number) =>
+      i === indice
+        ? {
+            ...item,
+            hecho,
+            hechoAtMs: hecho ? Date.now() : null,
+            tecnico: hecho ? op.name : null,
+          }
+        : item
+    );
+
+    const result = await db.query(
+      `UPDATE job_checklists SET items = $1, "updatedAtMs" = $2 WHERE "jobId" = $3 RETURNING *`,
+      [JSON.stringify(items), Date.now(), id]
+    );
+
+    res.json(normalizaChecklistRow(result.rows[0]));
+  } catch (error) {
+    console.error("PUT /api/taller-operator/jobs/:id/checklist/:indice error:", error);
+    res.status(500).json({ error: "Error marcando el ítem" });
+  }
+});
 
 /* =========================================================
    PRESENCIA OPERATOR (APK Mobilink Presencia — fichaje)
@@ -3438,35 +4186,27 @@ app.post("/api/agenda-config/festivos-ia", requireSupervisorRole, async (req, re
       return res.status(400).json({ error: "Indica la ciudad" });
     }
 
-    const response = await openai.chat.completions.create({
-      model: process.env.FESTIVOS_IA_MODEL || "gpt-4o",
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content:
-            "Eres un experto en calendarios laborales de España. Devuelves únicamente JSON válido. " +
-            "En España el calendario laboral de un municipio tiene 14 festivos: los nacionales, " +
-            "los de su comunidad autónoma y EXACTAMENTE 2 festivos locales propios del municipio. " +
-            "Debes incluir siempre los 2 festivos locales. Si no estás seguro de alguno, inclúyelo " +
-            'igualmente marcando "confianza":"baja" para que el usuario lo revise; nunca lo omitas.',
-        },
-        {
-          role: "user",
-          content:
-            `Lista los 14 días festivos NO laborables del año ${year} en ${city} (España): ` +
-            "nacionales, de su comunidad autónoma y los 2 locales del municipio. " +
-            'Responde con este JSON exacto: {"festivos":[{"fecha":"YYYY-MM-DD","festividad":"nombre",' +
-            '"ambito":"nacional|autonomico|local","fija":true|false,"confianza":"alta|media|baja"}]}. ' +
-            '"fija" es true si el festivo cae siempre en el mismo día y mes cada año, y false si es móvil ' +
-            "(por ejemplo Viernes Santo o Lunes de Pascua). " +
-            `Ejemplo de festivos locales: en Tarragona son Sant Magí (19 de agosto) y Santa Tecla ` +
-            "(23 de septiembre). Ordena por fecha.",
-        },
-      ],
+    const rIa = await pedirIA({
+      operacion: "agenda.festivos",
+      prompt:
+      "Eres un experto en calendarios laborales de España. Devuelves únicamente JSON válido. " +
+      "En España el calendario laboral de un municipio tiene 14 festivos: los nacionales, " +
+      "los de su comunidad autónoma y EXACTAMENTE 2 festivos locales propios del municipio. " +
+      "Debes incluir siempre los 2 festivos locales. Si no estás seguro de alguno, inclúyelo " +
+      'igualmente marcando "confianza":"baja" para que el usuario lo revise; nunca lo omitas.' +
+      "\n\n" +
+      `Lista los 14 días festivos NO laborables del año ${year} en ${city} (España): ` +
+      "nacionales, de su comunidad autónoma y los 2 locales del municipio. " +
+      'Responde con este JSON exacto: {"festivos":[{"fecha":"YYYY-MM-DD","festividad":"nombre",' +
+      '"ambito":"nacional|autonomico|local","fija":true|false,"confianza":"alta|media|baja"}]}. ' +
+      '"fija" es true si el festivo cae siempre en el mismo día y mes cada año, y false si es móvil ' +
+      "(por ejemplo Viernes Santo o Lunes de Pascua). " +
+      `Ejemplo de festivos locales: en Tarragona son Sant Magí (19 de agosto) y Santa Tecla ` +
+      "(23 de septiembre). Ordena por fecha.",
+      maxTokens: 4000,
     });
 
-    const raw = safeJsonParse<any>(response.choices[0]?.message?.content ?? "", null);
+    const raw = safeJsonParse<any>(rIa.texto, null);
     const items = Array.isArray(raw?.festivos) ? raw.festivos : [];
 
     const seen = new Set<string>();
@@ -3527,6 +4267,71 @@ app.get("/api/roadside-vehicles", protectWhenStrict(authenticate), async (req, r
   }
 });
 
+/**
+ * Fase 5 multi-taller: la licencia (= empresa) limita el nº de unidades
+ * móviles ACTIVAS entre todos sus talleres (licenses.maxUnidadesMoviles).
+ *
+ * Resuelve el taller de la furgoneta (tallerId explícito o por nombre de la
+ * base) y comprueba el cupo de su licencia. `excludeVehicleId` evita contarse
+ * a sí misma al editar. Sin taller/licencia resoluble no se limita (compat).
+ */
+async function resolveVehicleTallerId(body: any): Promise<number | null> {
+  if (body?.tallerId != null && Number.isFinite(Number(body.tallerId))) {
+    return Number(body.tallerId);
+  }
+  const base = body?.base ? String(body.base).trim() : "";
+  if (!base) return null;
+  const r = await db.query(
+    `SELECT id FROM assist_talleres WHERE activo = true AND LOWER(nombre) = LOWER($1) LIMIT 1`,
+    [base]
+  );
+  return r.rows.length ? Number(r.rows[0].id) : null;
+}
+
+async function checkUnidadesMovilesLicense(
+  tallerId: number | null,
+  excludeVehicleId?: number
+): Promise<{ allowed: boolean; error?: string; aviso?: string }> {
+  if (tallerId == null) return { allowed: true };
+  const lic = await db.query(
+    `SELECT l.id, l."maxUnidadesMoviles",
+            COALESCE(NULLIF(l."companyName", ''), l."customerName") AS empresa
+     FROM assist_talleres t
+     JOIN licenses l ON l.id = t."licenseId"
+     WHERE t.id = $1`,
+    [tallerId]
+  );
+  if (!lic.rows.length) return { allowed: true };
+  const max = Number(lic.rows[0].maxUnidadesMoviles ?? 0);
+  if (!Number.isFinite(max) || max <= 0) return { allowed: true };
+
+  const cnt = await db.query(
+    `SELECT COUNT(*)::int AS n
+     FROM roadside_vehicles v
+     JOIN assist_talleres t ON t.id = v."tallerId"
+     WHERE t."licenseId" = $1 AND v.active = true
+       AND ($2::int IS NULL OR v.id <> $2)`,
+    [lic.rows[0].id, excludeVehicleId ?? null]
+  );
+  const enUso = Number(cnt.rows[0].n);
+  const empresa = lic.rows[0].empresa;
+
+  if (enUso >= max) {
+    return {
+      allowed: false,
+      error: `Límite de licencia alcanzado: ${empresa} tiene ${enUso}/${max} unidades móviles activas. Amplía la licencia o desactiva otra unidad.`,
+    };
+  }
+  const tras = enUso + 1;
+  if (tras >= max * 0.8) {
+    return {
+      allowed: true,
+      aviso: `Licencia de ${empresa}: ${tras}/${max} unidades móviles en uso.`,
+    };
+  }
+  return { allowed: true };
+}
+
 app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
   try {
     const body = req.body ?? {};
@@ -3535,6 +4340,15 @@ app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
 
     if (!name) {
       return res.status(400).json({ error: "El nombre es obligatorio" });
+    }
+
+    const tallerId = await resolveVehicleTallerId(body);
+    const activa = body.active !== false;
+    let avisoLicencia: string | undefined;
+    if (activa) {
+      const check = await checkUnidadesMovilesLicense(tallerId);
+      if (!check.allowed) return res.status(409).json({ error: check.error, code: "LICENSE_UNITS_LIMIT" });
+      avisoLicencia = check.aviso;
     }
 
     const result = await db.query(
@@ -3550,10 +4364,11 @@ app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
           "esTaller",
           notes,
           active,
+          "tallerId",
           "createdAtMs",
           "updatedAtMs"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
         RETURNING *
       `,
       [
@@ -3566,12 +4381,15 @@ app.post("/api/roadside-vehicles", requireAdminRole, async (req, res) => {
         body.modelo ? String(body.modelo).trim() : null,
         body.esTaller === true || body.esTaller === "true",
         body.notes ? String(body.notes).trim() : null,
-        body.active !== false,
+        activa,
+        tallerId,
         now,
       ]
     );
 
-    res.json(normalizeRoadsideVehicleRow(result.rows[0]));
+    const payload: any = normalizeRoadsideVehicleRow(result.rows[0]);
+    if (avisoLicencia) payload.avisoLicencia = avisoLicencia;
+    res.json(payload);
   } catch (error) {
     console.error("POST /api/roadside-vehicles error:", error);
     res.status(500).json({ error: "Error creando furgoneta" });
@@ -3593,6 +4411,16 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
       return res.status(400).json({ error: "El nombre es obligatorio" });
     }
 
+    const tallerId = await resolveVehicleTallerId(body);
+    const activa = body.active !== false;
+    let avisoLicencia: string | undefined;
+    if (activa) {
+      // Al editar, la propia furgoneta no cuenta contra el cupo.
+      const check = await checkUnidadesMovilesLicense(tallerId, id);
+      if (!check.allowed) return res.status(409).json({ error: check.error, code: "LICENSE_UNITS_LIMIT" });
+      avisoLicencia = check.aviso;
+    }
+
     const result = await db.query(
       `
         UPDATE roadside_vehicles
@@ -3607,7 +4435,8 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
           "esTaller" = $9,
           notes = $10,
           active = $11,
-          "updatedAtMs" = $12
+          "tallerId" = $12,
+          "updatedAtMs" = $13
         WHERE id = $1
         RETURNING *
       `,
@@ -3622,7 +4451,8 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
         body.modelo ? String(body.modelo).trim() : null,
         body.esTaller === true || body.esTaller === "true",
         body.notes ? String(body.notes).trim() : null,
-        body.active !== false,
+        activa,
+        tallerId,
         now,
       ]
     );
@@ -3631,7 +4461,9 @@ app.put("/api/roadside-vehicles/:id", requireAdminRole, async (req, res) => {
       return res.status(404).json({ error: "Furgoneta no encontrada" });
     }
 
-    res.json(normalizeRoadsideVehicleRow(result.rows[0]));
+    const payload: any = normalizeRoadsideVehicleRow(result.rows[0]);
+    if (avisoLicencia) payload.avisoLicencia = avisoLicencia;
+    res.json(payload);
   } catch (error) {
     console.error("PUT /api/roadside-vehicles/:id error:", error);
     res.status(500).json({ error: "Error actualizando furgoneta" });
@@ -3673,26 +4505,339 @@ app.delete(
   }
 );
 
+/* =========================================================
+   COMPARTIR CON CENTRAL — furgonetas y técnicos visibles para la red
+========================================================= */
+
+// Listado combinado con el flag de compartición
+app.get("/api/central-sharing", requireSupervisorRole, async (_req, res) => {
+  try {
+    const [vehicles, techs] = await Promise.all([
+      db.query(`SELECT * FROM roadside_vehicles WHERE active = true ORDER BY name ASC`),
+      db.query(
+        `SELECT name, status, blocked, "roadsideCapable", "compartidoCentral",
+                "currentRoadsideAssistanceId"
+         FROM techs ORDER BY name ASC`
+      ),
+    ]);
+    res.json({
+      vehicles: vehicles.rows.map(normalizeRoadsideVehicleRow),
+      techs: techs.rows.map(normalizeTechRow),
+    });
+  } catch (error) {
+    console.error("GET /api/central-sharing error:", error);
+    res.status(500).json({ error: "Error obteniendo compartición con Central" });
+  }
+});
+
+// Compartir/ocultar una furgoneta
+app.patch("/api/central-sharing/vehicle/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const compartido = req.body?.compartido === true;
+    const r = await db.query(
+      `UPDATE roadside_vehicles SET "compartidoCentral" = $2, "updatedAtMs" = $3 WHERE id = $1 RETURNING *`,
+      [id, compartido, Date.now()]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Furgoneta no encontrada" });
+    res.json(normalizeRoadsideVehicleRow(r.rows[0]));
+  } catch (error) {
+    console.error("PATCH /api/central-sharing/vehicle/:id error:", error);
+    res.status(500).json({ error: "Error actualizando furgoneta" });
+  }
+});
+
+// Compartir/ocultar un técnico
+app.patch("/api/central-sharing/tech/:name", requireSupervisorRole, async (req, res) => {
+  try {
+    const name = String(req.params.name);
+    const compartido = req.body?.compartido === true;
+    const r = await db.query(
+      `UPDATE techs SET "compartidoCentral" = $2 WHERE name = $1
+       RETURNING name, status, blocked, "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId"`,
+      [name, compartido]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Técnico no encontrado" });
+    res.json(normalizeTechRow(r.rows[0]));
+  } catch (error) {
+    console.error("PATCH /api/central-sharing/tech/:name error:", error);
+    res.status(500).json({ error: "Error actualizando técnico" });
+  }
+});
+
+// Compartir/ocultar todos de un tipo
+app.post("/api/central-sharing/bulk", requireSupervisorRole, async (req, res) => {
+  try {
+    const tipo = String(req.body?.tipo || "");
+    const compartido = req.body?.compartido === true;
+    if (tipo === "vehicles") {
+      await db.query(`UPDATE roadside_vehicles SET "compartidoCentral" = $1, "updatedAtMs" = $2 WHERE active = true`, [compartido, Date.now()]);
+    } else if (tipo === "techs") {
+      await db.query(`UPDATE techs SET "compartidoCentral" = $1`, [compartido]);
+    } else {
+      return res.status(400).json({ error: "tipo debe ser 'vehicles' o 'techs'" });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("POST /api/central-sharing/bulk error:", error);
+    res.status(500).json({ error: "Error actualizando" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// Multi-taller Assist: gestión de talleres (una empresa = una licencia
+// puede tener varios talleres) y asignación de técnicos a cada taller.
+// ─────────────────────────────────────────────────────────────
+
+// Listado: talleres + empresas (licencias) para el desplegable + técnicos
+app.get("/api/assist-talleres", requireSupervisorRole, async (_req, res) => {
+  try {
+    const [talleres, empresas, techs] = await Promise.all([
+      db.query(`
+        SELECT
+          t.id, t.nombre, t.direccion, t.telefono, t."codigoInterno",
+          t.activo, t."licenseId",
+          COALESCE(NULLIF(l."companyName", ''), l."customerName") AS "empresaNombre",
+          (SELECT COUNT(*) FROM techs th WHERE th."tallerId" = t.id) AS "nTecnicos",
+          (SELECT COUNT(*) FROM roadside_vehicles v WHERE v."tallerId" = t.id AND v.active = true) AS "nUnidades"
+        FROM assist_talleres t
+        LEFT JOIN licenses l ON l.id = t."licenseId"
+        ORDER BY t.activo DESC, t.nombre ASC
+      `),
+      db.query(`
+        SELECT l.id,
+               COALESCE(NULLIF(l."companyName", ''), l."customerName") AS nombre,
+               l."maxUnidadesMoviles",
+               (SELECT COUNT(*) FROM roadside_vehicles v
+                JOIN assist_talleres t ON t.id = v."tallerId"
+                WHERE t."licenseId" = l.id AND v.active = true) AS "unidadesEnUso"
+        FROM licenses l
+        ORDER BY nombre ASC
+      `),
+      db.query(`SELECT name, "tallerId" FROM techs ORDER BY name ASC`),
+    ]);
+    res.json({
+      talleres: talleres.rows.map((r) => ({
+        id: Number(r.id),
+        nombre: r.nombre,
+        direccion: r.direccion ?? null,
+        telefono: r.telefono ?? null,
+        codigoInterno: r.codigoInterno ?? null,
+        activo: r.activo === true,
+        licenseId: r.licenseId != null ? Number(r.licenseId) : null,
+        empresaNombre: r.empresaNombre ?? null,
+        nTecnicos: Number(r.nTecnicos ?? 0),
+        nUnidades: Number(r.nUnidades ?? 0),
+      })),
+      empresas: empresas.rows.map((r) => ({
+        id: Number(r.id),
+        nombre: r.nombre,
+        maxUnidadesMoviles: Number(r.maxUnidadesMoviles ?? 0),
+        unidadesEnUso: Number(r.unidadesEnUso ?? 0),
+      })),
+      techs: techs.rows.map((r) => ({
+        name: r.name,
+        tallerId: r.tallerId != null ? Number(r.tallerId) : null,
+      })),
+    });
+  } catch (error) {
+    console.error("GET /api/assist-talleres error:", error);
+    res.status(500).json({ error: "Error obteniendo talleres" });
+  }
+});
+
+// Crear taller
+app.post("/api/assist-talleres", requireSupervisorRole, async (req, res) => {
+  try {
+    const nombre = String(req.body?.nombre || "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+    const licenseId = req.body?.licenseId != null ? Number(req.body.licenseId) : null;
+    const direccion = req.body?.direccion ? String(req.body.direccion).trim() : null;
+    const telefono = req.body?.telefono ? String(req.body.telefono).trim() : null;
+    const codigoInterno = req.body?.codigoInterno ? String(req.body.codigoInterno).trim() : null;
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO assist_talleres
+         ("licenseId", nombre, direccion, telefono, "codigoInterno", activo, "createdAtMs", "updatedAtMs")
+       VALUES ($1, $2, $3, $4, $5, true, $6, $6)
+       RETURNING id`,
+      [licenseId, nombre, direccion, telefono, codigoInterno, now]
+    );
+    res.json({ ok: true, id: Number(r.rows[0].id) });
+  } catch (error) {
+    console.error("POST /api/assist-talleres error:", error);
+    res.status(500).json({ error: "Error creando taller" });
+  }
+});
+
+// Editar taller (nombre, empresa, contacto, activo)
+app.patch("/api/assist-talleres/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const fields: string[] = [];
+    const values: any[] = [];
+    let i = 1;
+    const set = (col: string, val: any) => { fields.push(`"${col}" = $${i++}`); values.push(val); };
+    if (typeof req.body?.nombre === "string") set("nombre", req.body.nombre.trim());
+    if ("licenseId" in (req.body || {})) set("licenseId", req.body.licenseId != null ? Number(req.body.licenseId) : null);
+    if ("direccion" in (req.body || {})) set("direccion", req.body.direccion ? String(req.body.direccion).trim() : null);
+    if ("telefono" in (req.body || {})) set("telefono", req.body.telefono ? String(req.body.telefono).trim() : null);
+    if ("codigoInterno" in (req.body || {})) set("codigoInterno", req.body.codigoInterno ? String(req.body.codigoInterno).trim() : null);
+    if (typeof req.body?.activo === "boolean") set("activo", req.body.activo);
+    if (!fields.length) return res.status(400).json({ error: "Nada que actualizar" });
+    set("updatedAtMs", Date.now());
+    values.push(id);
+    const r = await db.query(
+      `UPDATE assist_talleres SET ${fields.join(", ")} WHERE id = $${i} RETURNING id`,
+      values
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Taller no encontrado" });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error("PATCH /api/assist-talleres/:id error:", error);
+    res.status(500).json({ error: "Error actualizando taller" });
+  }
+});
+
+// Asignar (o quitar) el taller de un técnico
+app.patch("/api/assist-talleres/tech/:name", requireSupervisorRole, async (req, res) => {
+  try {
+    const name = String(req.params.name);
+    const tallerId = req.body?.tallerId != null ? Number(req.body.tallerId) : null;
+    const r = await db.query(
+      `UPDATE techs SET "tallerId" = $2 WHERE name = $1 RETURNING name, "tallerId"`,
+      [name, tallerId]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Técnico no encontrado" });
+    res.json({ ok: true, name, tallerId });
+  } catch (error) {
+    console.error("PATCH /api/assist-talleres/tech/:name error:", error);
+    res.status(500).json({ error: "Error asignando taller al técnico" });
+  }
+});
+
+// Usuarios del panel web (hub) → taller. Superadmins siempre ven todo; aquí se
+// asigna el taller fijo del resto y se marca quién es admin de asistencias.
+app.get("/api/assist-panel-users", requireSupervisorRole, async (_req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT u.id AS "userId", u.username, u.nombre, u.es_superadmin AS "esSuperadmin",
+             p."tallerId", COALESCE(p."esAdmin", false) AS "esAdmin"
+      FROM app_usuarios u
+      LEFT JOIN assist_panel_users p ON p."userId" = u.id
+      WHERE u.activo = true
+      ORDER BY u.nombre ASC NULLS LAST, u.username ASC
+    `);
+    res.json({
+      usuarios: r.rows.map((x: any) => ({
+        userId: x.userId,
+        username: x.username,
+        nombre: x.nombre ?? x.username,
+        esSuperadmin: x.esSuperadmin === true,
+        esAdmin: x.esAdmin === true,
+        tallerId: x.tallerId != null ? Number(x.tallerId) : null,
+      })),
+    });
+  } catch (error) {
+    console.error("GET /api/assist-panel-users error:", error);
+    res.status(500).json({ error: "Error obteniendo usuarios del panel" });
+  }
+});
+
+// Asignar taller / marcar admin a un usuario del panel (upsert)
+app.patch("/api/assist-panel-users/:userId", requireSupervisorRole, async (req, res) => {
+  try {
+    const userId = String(req.params.userId);
+    const tallerId = req.body?.tallerId != null ? Number(req.body.tallerId) : null;
+    const esAdmin = req.body?.esAdmin === true;
+    // Resolver username para dejarlo legible en la tabla de mapeo.
+    const u = await db.query(`SELECT username FROM app_usuarios WHERE id = $1`, [userId]);
+    if (!u.rows.length) return res.status(404).json({ error: "Usuario no encontrado" });
+    await db.query(
+      `INSERT INTO assist_panel_users ("userId", username, "tallerId", "esAdmin", "updatedAtMs")
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT ("userId") DO UPDATE
+         SET username = EXCLUDED.username,
+             "tallerId" = EXCLUDED."tallerId",
+             "esAdmin" = EXCLUDED."esAdmin",
+             "updatedAtMs" = EXCLUDED."updatedAtMs"`,
+      [userId, u.rows[0].username ?? null, tallerId, esAdmin, Date.now()]
+    );
+    res.json({ ok: true, userId, tallerId, esAdmin });
+  } catch (error) {
+    console.error("PATCH /api/assist-panel-users/:userId error:", error);
+    res.status(500).json({ error: "Error asignando taller al usuario" });
+  }
+});
+
 app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const includeClosed = String(req.query.includeClosed || "") === "true";
 
-    const result = await db.query(`
-      SELECT *
-      FROM roadside_assistances
-      ${
-        includeClosed
-          ? ""
-          : `WHERE status NOT IN ('llegada_taller', 'cancelada')`
+    // Aislamiento multi-taller. Reglas:
+    //  - Admin (superadmin / admin de asistencias): respeta ?tallerId= del
+    //    selector; sin parámetro ve todos los talleres.
+    //  - Usuario con taller fijo: se fuerza su taller (ignora ?tallerId=).
+    //  - Usuario sin taller y no admin: no ve ninguna asistencia (estricto).
+    //  - Sin token (compatibilidad durante la transición): ve todo.
+    const panelUser = await getAssistPanelUser(req);
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let idx = 1;
+
+    if (!includeClosed) {
+      conditions.push(`status NOT IN ('llegada_taller', 'cancelada')`);
+    }
+
+    if (panelUser) {
+      if (panelUser.esAdmin) {
+        const sel = req.query.tallerId != null ? Number(req.query.tallerId) : NaN;
+        if (Number.isFinite(sel)) {
+          conditions.push(`"tallerId" = $${idx++}`);
+          params.push(sel);
+        }
+        // sin selección → todos los talleres
+      } else if (panelUser.tallerId != null) {
+        conditions.push(`"tallerId" = $${idx++}`);
+        params.push(panelUser.tallerId);
+      } else {
+        // Sin taller y sin ser admin: no ve nada.
+        return res.json([]);
       }
-      ORDER BY "createdAtMs" DESC
-      LIMIT 200
-    `);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const result = await db.query(
+      `SELECT * FROM roadside_assistances ${where} ORDER BY "createdAtMs" DESC LIMIT 200`,
+      params
+    );
 
     res.json(result.rows.map(normalizeRoadsideAssistanceRow));
   } catch (error) {
     console.error("GET /api/roadside-assistances error:", error);
     res.status(500).json({ error: "Error obteniendo asistencias" });
+  }
+});
+
+// Contexto del usuario del panel para pintar (o no) el selector de taller.
+app.get("/api/roadside-assistances/mi-contexto", async (req, res) => {
+  try {
+    const panelUser = await getAssistPanelUser(req);
+    const talleres = await db.query(
+      `SELECT id, nombre FROM assist_talleres WHERE activo = true ORDER BY nombre ASC`
+    );
+    res.json({
+      esAdmin: panelUser?.esAdmin ?? false,
+      tallerId: panelUser?.tallerId ?? null,
+      // Sin token (transición) tratamos como admin para no romper la vista.
+      sinContexto: panelUser == null,
+      talleres: talleres.rows.map((r: any) => ({ id: Number(r.id), nombre: r.nombre })),
+    });
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/mi-contexto error:", error);
+    res.status(500).json({ error: "Error obteniendo contexto" });
   }
 });
 
@@ -3845,17 +4990,30 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       ),
     ]);
 
-    // Matrícula de NUESTRA furgoneta (no la del camión asistido)
+    // Datos de NUESTRA furgoneta (no del camión asistido). Al cliente se le
+    // enseña marca/modelo + matrícula, que es lo que reconoce cuando la ve
+    // llegar; el nombre interno ("Furgoneta 010") no le dice nada.
+    // Se busca por el identificador de Webfleet y, si la asistencia no lo
+    // tiene, por el nombre con el que se asignó.
     let vanPlate: string | null = null;
-    if (assistance.webfleetVehicleId) {
-      try {
-        const vp = await db.query(
-          `SELECT plate FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`,
-          [assistance.webfleetVehicleId]
-        );
-        vanPlate = vp.rows[0]?.plate ?? null;
-      } catch { /* sin matrícula */ }
-    }
+    let vanMarca: string | null = null;
+    let vanModelo: string | null = null;
+    try {
+      const vp = assistance.webfleetVehicleId
+        ? await db.query(
+            `SELECT plate, marca, modelo FROM roadside_vehicles WHERE "webfleetVehicleId" = $1 LIMIT 1`,
+            [assistance.webfleetVehicleId]
+          )
+        : assistance.assignedVehicleName
+          ? await db.query(
+              `SELECT plate, marca, modelo FROM roadside_vehicles WHERE name = $1 LIMIT 1`,
+              [assistance.assignedVehicleName]
+            )
+          : null;
+      vanPlate = vp?.rows[0]?.plate ?? null;
+      vanMarca = vp?.rows[0]?.marca ?? null;
+      vanModelo = vp?.rows[0]?.modelo ?? null;
+    } catch { /* sin datos de furgoneta */ }
 
     // Coordenadas del taller (destino en vuelta al taller)
     let workshop: { lat: number; lng: number } | null = null;
@@ -3866,10 +5024,26 @@ app.get("/api/roadside-tracking/:token", async (req, res) => {
       if (Number.isFinite(wlat) && Number.isFinite(wlng)) workshop = { lat: wlat, lng: wlng };
     } catch { /* sin config */ }
 
+    // Teléfono del técnico asignado, para que el cliente pueda llamarle
+    // directamente desde la página de seguimiento.
+    let techPhone: string | null = null;
+    if (assistance.assignedTechName) {
+      try {
+        const tp = await db.query(`SELECT phone FROM techs WHERE name = $1 LIMIT 1`, [
+          assistance.assignedTechName,
+        ]);
+        const raw = tp.rows[0]?.phone ? String(tp.rows[0].phone).trim() : "";
+        techPhone = raw || null;
+      } catch { /* sin teléfono */ }
+    }
+
     res.json({
       assistance,
       vanPlate,
+      vanMarca,
+      vanModelo,
       workshop,
+      techPhone,
       events: eventsResult.rows.map((e: any) => ({
         status: e.status,
         createdAtMs: Number(e.createdAtMs),
@@ -4130,6 +5304,237 @@ app.get("/api/webfleet/debug", protectWhenStrict(requirePanelRole), async (_req,
   }
 });
 
+// Diagnóstico de COMBUSTIBLE. showObjectReportExtern no devuelve nivel ni
+// consumo si el equipo no tiene enlace CAN/FMS, pero los informes de viaje
+// pueden traer fuel_usage (consumo, estimado o real según configuración).
+// Este endpoint lanza las tres consultas y devuelve la respuesta CRUDA de
+// cada una + las claves detectadas, para saber de qué datos disponemos.
+//   /api/webfleet/debug-fuel?objectno=001&dias=7
+app.get("/api/webfleet/debug-fuel", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const objectno = String(req.query.objectno || "").trim();
+    if (!objectno) return res.status(400).json({ error: "Falta objectno (p. ej. ?objectno=001)" });
+    const dias = Math.min(31, Math.max(1, Number(req.query.dias) || 7));
+    const to = Date.now();
+    const from = to - dias * 24 * 3600 * 1000;
+    const rango = webfleetRange(from, to);
+
+    const consultar = async (action: string, extra: Record<string, string>) => {
+      try {
+        const { url, headers } = buildWebfleetRequest(action, extra);
+        const r = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
+        const text = await r.text();
+        let claves: string[] = [];
+        let filas: number | null = null;
+        try {
+          const j = JSON.parse(text);
+          const arr = Array.isArray(j) ? j : j?.data ?? [];
+          filas = Array.isArray(arr) ? arr.length : null;
+          if (Array.isArray(arr) && arr.length) claves = Object.keys(arr[0]);
+        } catch {/* respuesta no JSON: se devuelve el texto igualmente */}
+        // Lo que buscamos: cualquier clave que hable de combustible.
+        const clavesCombustible = claves.filter((k) => /fuel|consum|tank|litro|liter/i.test(k));
+        return { status: r.status, filas, claves, clavesCombustible, muestra: text.slice(0, 1500) };
+      } catch (e: any) {
+        return { error: e?.message || String(e) };
+      }
+    };
+
+    const [objeto, viajes, resumen] = await Promise.all([
+      consultar("showObjectReportExtern", { objectno }),
+      consultar("showTripReportExtern", { objectno, ...rango }),
+      consultar("showTripSummaryReportExtern", { objectno, ...rango }),
+    ]);
+
+    const hayCombustible = [objeto, viajes, resumen].some(
+      (x: any) => Array.isArray(x?.clavesCombustible) && x.clavesCombustible.length > 0
+    );
+    res.json({
+      objectno,
+      dias,
+      veredicto: hayCombustible
+        ? "Hay campos de combustible: ver clavesCombustible en cada bloque."
+        : "Sin campos de combustible en ninguna de las 3 consultas (equipo sin enlace CAN/FMS).",
+      showObjectReportExtern: objeto,
+      showTripReportExtern: viajes,
+      showTripSummaryReportExtern: resumen,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "Error consultando Webfleet" });
+  }
+});
+
+// ── Odómetro histórico: ¿nos puede decir Webfleet los km de un vehículo en una
+// fecha y hora concretas del pasado?
+//
+// Vía 2 (libro de ruta): showLogbook devuelve los viajes de los últimos meses
+// CON lectura de odómetro, así que el dato es directo. No todas las cuentas lo
+// tienen contratado/activado; si no está, Webfleet responde errorCode 9.
+// Vía 1 (viajes): showTripReportExtern siempre está, pero solo trae distancia,
+// así que el km en T se reconstruye restando al odómetro actual lo recorrido
+// después de T (interpolando el viaje que contenga T).
+//
+//   /api/webfleet/debug-odometer?objectno=001&dias=30&at=2026-07-15T09:40:00Z
+app.get("/api/webfleet/debug-odometer", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const objectno = String(req.query.objectno || "").trim();
+    if (!objectno) return res.status(400).json({ error: "Falta objectno (p. ej. ?objectno=001)" });
+    const dias = Math.min(90, Math.max(1, Number(req.query.dias) || 30));
+    const to = Date.now();
+    const from = to - dias * 24 * 3600 * 1000;
+    const rango = webfleetRange(from, to);
+    // "a las 10:00" es hora de España, no UTC: si el parámetro no trae zona se
+    // interpreta en Europe/Madrid (en verano son 2 horas, que en carretera son
+    // más de 150 km de diferencia). Con Z o desfase explícito se respeta.
+    const ZONA_ES = "Europe/Madrid";
+    const desfaseZona = (ts: number) => {
+      const p = Object.fromEntries(
+        new Intl.DateTimeFormat("en-US", {
+          timeZone: ZONA_ES, hour12: false, year: "numeric", month: "2-digit",
+          day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+        }).formatToParts(new Date(ts)).map((x) => [x.type, x.value])
+      ) as Record<string, string>;
+      return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - ts;
+    };
+    const parseFecha = (s: string): number => {
+      const txt = s.trim();
+      if (/(Z|[+-]\d{2}:?\d{2})$/i.test(txt)) return new Date(txt).getTime();
+      let m = txt.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:[T ]+(\d{1,2})[:.](\d{2}))?/);
+      let Y: number, M: number, D: number, h: number, mi: number;
+      if (m) { [, D, M, Y, h, mi] = m.map(Number) as any; }
+      else {
+        m = txt.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ]+(\d{1,2})[:.](\d{2}))?/);
+        if (!m) return NaN;
+        [, Y, M, D, h, mi] = m.map(Number) as any;
+      }
+      const supuesto = Date.UTC(Y, M - 1, D, h || 0, mi || 0);
+      return supuesto - desfaseZona(supuesto);
+    };
+
+    const atMs = req.query.at ? parseFecha(String(req.query.at)) : null;
+    if (req.query.at && !Number.isFinite(atMs as number)) {
+      return res.status(400).json({
+        error: "Parámetro at no válido. Formatos: 29/07/2026 10:00 · 2026-07-29 10:00 · 2026-07-29T08:00:00Z",
+      });
+    }
+    if (atMs != null && atMs > to) {
+      return res.status(400).json({
+        error: "La fecha pedida está en el futuro: Webfleet no puede saber los km de una fecha que no ha llegado.",
+        at: new Date(atMs).toISOString(), ahora: new Date(to).toISOString(),
+      });
+    }
+    if (atMs != null && atMs < from) {
+      return res.status(400).json({
+        error: `La fecha pedida queda fuera del rango consultado (${dias} días). Repite con un dias mayor.`,
+        at: new Date(atMs).toISOString(), desde: new Date(from).toISOString(),
+      });
+    }
+
+    const RE_ODO = /odo|mileage|kilomet|milage/i;
+    const consultar = async (action: string, extra: Record<string, string>) => {
+      try {
+        const { url, headers } = buildWebfleetRequest(action, extra);
+        const r = await fetch(url, { headers, signal: AbortSignal.timeout(25000) });
+        const text = await r.text();
+        let json: any = null;
+        try { json = JSON.parse(text); } catch {/* respuesta no JSON */}
+        if (json && !Array.isArray(json) && json.errorCode) {
+          return { status: r.status, errorCode: json.errorCode, errorMsg: json.errorMsg, filas: null, claves: [], clavesOdometro: [], datos: [] as any[] };
+        }
+        const arr: any[] = Array.isArray(json) ? json : json?.data ?? [];
+        const claves = arr.length ? Object.keys(arr[0]) : [];
+        return {
+          status: r.status,
+          filas: arr.length,
+          claves,
+          clavesOdometro: claves.filter((k) => RE_ODO.test(k)),
+          datos: arr,
+          muestra: text.slice(0, 800),
+        };
+      } catch (e: any) {
+        return { error: e?.message || String(e), filas: null, claves: [], clavesOdometro: [], datos: [] as any[] };
+      }
+    };
+
+    const [objeto, libro, libroHist, viajes] = await Promise.all([
+      consultar("showObjectReportExtern", { objectno }),
+      consultar("showLogbook", { objectno, ...rango }),
+      consultar("showLogbook_history", { objectno, ...rango }),
+      consultar("showTripReportExtern", { objectno, ...rango }),
+    ]);
+
+    const odometroActualKm = objeto.datos?.length ? webfleetOdometerKm(objeto.datos[0]) : null;
+
+    // Km en el instante pedido, por las dos vías, para poder compararlas.
+    const num = (x: any) => (Number.isFinite(Number(x)) ? Number(x) : null);
+    const kmEn = (filas: any[], ts: number, anclaKm: number | null) => {
+      const tramos = filas
+        .map((f) => ({
+          ini: f.start_time ? new Date(f.start_time).getTime() : null,
+          fin: f.end_time ? new Date(f.end_time).getTime() : null,
+          odoFin: num(f.end_odometer ?? f.odometer_end ?? f.end_odo ?? f.odometer),
+          distancia: num(f.distance),
+        }))
+        .filter((f) => f.fin != null)
+        .sort((a, b) => (a.fin as number) - (b.fin as number));
+
+      const previos = tramos.filter((f) => (f.fin as number) <= ts && f.odoFin != null);
+      if (previos.length) {
+        const p = previos[previos.length - 1];
+        return { km: p.odoFin, metodo: "lectura directa del libro de ruta",
+                 referencia: new Date(p.fin as number).toISOString(), precisionKm: 0 };
+      }
+      if (anclaKm == null) return null;
+      let despues = 0;
+      let dentro = 0;
+      for (const f of tramos) {
+        const d = (f.distancia ?? 0) / 1000;
+        if (f.ini != null && f.ini >= ts) despues += d;
+        else if (f.ini != null && f.ini < ts && (f.fin as number) > ts) {
+          despues += d * (((f.fin as number) - ts) / ((f.fin as number) - f.ini));
+          dentro = d;
+        }
+      }
+      return { km: Math.round((anclaKm - despues) * 10) / 10,
+               metodo: "reconstruido desde el odómetro actual restando los viajes posteriores",
+               referencia: "odómetro actual", precisionKm: Math.round(dentro * 10) / 10 };
+    };
+
+    const filasLibro = (libro.datos?.length ? libro.datos : libroHist.datos) ?? [];
+    const kmSolicitado = atMs
+      ? {
+          at: new Date(atMs).toISOString(),
+          atLocal: new Intl.DateTimeFormat("es-ES", { timeZone: ZONA_ES, dateStyle: "short", timeStyle: "short" }).format(new Date(atMs)) + ` (${ZONA_ES})`,
+          porLibroDeRuta: filasLibro.length ? kmEn(filasLibro, atMs, odometroActualKm) : null,
+          porViajes: viajes.datos?.length ? kmEn(viajes.datos, atMs, odometroActualKm) : null,
+        }
+      : null;
+
+    const libroDisponible = filasLibro.length > 0;
+    const libroConOdometro = libro.clavesOdometro.length > 0 || libroHist.clavesOdometro.length > 0;
+
+    res.json({
+      objectno,
+      dias,
+      odometroActualKm,
+      veredicto: libroDisponible
+        ? (libroConOdometro
+            ? "VÍA 2 DISPONIBLE: el libro de ruta responde y trae odómetro (ver clavesOdometro)."
+            : "El libro de ruta responde pero SIN campos de odómetro: usar la vía 1 (viajes).")
+        : "Sin libro de ruta en esta cuenta (ver errorCode): usar la vía 1 (viajes) + serie propia.",
+      kmSolicitado,
+      // Se devuelven solo las claves y unas pocas filas: el volcado completo no
+      // aporta y puede ser enorme.
+      showObjectReportExtern: { ...objeto, datos: objeto.datos?.slice(0, 1) },
+      showLogbook: { ...libro, datos: libro.datos?.slice(0, 3) },
+      showLogbook_history: { ...libroHist, datos: libroHist.datos?.slice(0, 3) },
+      showTripReportExtern: { ...viajes, datos: viajes.datos?.slice(0, 3) },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || "Error consultando Webfleet" });
+  }
+});
+
 app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
@@ -4139,26 +5544,64 @@ app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_r
     const data = await response.json();
     if (data?.errorCode) return res.status(502).json({ error: `Webfleet error ${data.errorCode}: ${data.errorMsg}` });
 
-    // Cruzar con matrícula de nuestra BD
-    const dbVehicles = await db.query(
-      `SELECT "webfleetVehicleId", plate FROM roadside_vehicles WHERE "webfleetVehicleId" IS NOT NULL`
+    // Cruzar con nuestra BD: matrícula, taller y estado operativo.
+    // Multi-taller (fase 4): las furgonetas de OTROS talleres de la empresa se
+    // ven con estado + ubicación + técnico, pero sin el detalle de la
+    // asistencia (ni informe de seguimiento).
+    const dbVehicles = await db.query(`
+      SELECT rv."webfleetVehicleId", rv.plate, rv.name, rv."tallerId", rv.active,
+             at.nombre AS "tallerNombre",
+             ra.id AS "asistenciaActivaId",
+             ra."assignedTechName" AS "techName"
+      FROM roadside_vehicles rv
+      LEFT JOIN assist_talleres at ON at.id = rv."tallerId"
+      LEFT JOIN LATERAL (
+        SELECT id, "assignedTechName"
+        FROM roadside_assistances a
+        WHERE a."assignedVehicleName" = rv.name
+          AND a.status IN ('asignada','en_camino','en_punto','inicio_reparacion','finalizada','en_camino_base')
+        ORDER BY a."createdAtMs" DESC
+        LIMIT 1
+      ) ra ON true
+      WHERE rv."webfleetVehicleId" IS NOT NULL
+    `);
+    const infoByWebfleetId = new Map<string, any>(
+      dbVehicles.rows.map((r: any) => [r.webfleetVehicleId, r])
     );
-    const plateByWebfleetId = new Map<string, string>(
-      dbVehicles.rows.map((r: any) => [r.webfleetVehicleId, r.plate])
-    );
+
+    // Taller del usuario del panel (si tiene taller fijo). Admin/superadmin o
+    // sin token → todo se trata como propio (compatibilidad).
+    const panelUser = await getAssistPanelUser(_req);
+    const miTallerId = panelUser && !panelUser.esAdmin ? panelUser.tallerId : null;
 
     const vehicles = Array.isArray(data) ? data : data?.data ?? [];
     res.json(
-      vehicles.map((v: any) => ({
-        objectno: v.objectno,
-        objectname: v.objectname ?? v.objectno,
-        lat: Number(v.latitude_mdeg) / 1_000_000,
-        lng: Number(v.longitude_mdeg) / 1_000_000,
-        postext: v.postext_short ?? v.postext ?? null,
-        timestamp: v.pos_time ?? null,
-        plate: plateByWebfleetId.get(v.objectno) ?? null,
-        speedKmh: v.speed_kmh != null ? Number(v.speed_kmh) : null,
-      }))
+      vehicles
+        // Una furgoneta dada de baja sigue existiendo en Webfleet, pero para
+        // nosotros ya no es flota: fuera del mapa y del selector. Los objetos
+        // que no tenemos dados de alta se siguen mostrando: no están de baja,
+        // simplemente no están fichados todavía.
+        .filter((v: any) => infoByWebfleetId.get(v.objectno)?.active !== false)
+        .map((v: any) => {
+        const info = infoByWebfleetId.get(v.objectno);
+        const tallerId = info?.tallerId != null ? Number(info.tallerId) : null;
+        const esPropio = miTallerId == null || tallerId == null || tallerId === miTallerId;
+        return {
+          objectno: v.objectno,
+          objectname: v.objectname ?? v.objectno,
+          lat: Number(v.latitude_mdeg) / 1_000_000,
+          lng: Number(v.longitude_mdeg) / 1_000_000,
+          postext: v.postext_short ?? v.postext ?? null,
+          timestamp: v.pos_time ?? null,
+          plate: info?.plate ?? null,
+          speedKmh: v.speed_kmh != null ? Number(v.speed_kmh) : null,
+          tallerId,
+          tallerNombre: info?.tallerNombre ?? null,
+          esPropio,
+          estado: info?.asistenciaActivaId != null ? "trabajando" : "en_taller",
+          techName: info?.techName ?? null,
+        };
+      })
     );
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "Error listando vehículos Webfleet" });
@@ -4167,8 +5610,7 @@ app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_r
 
 app.get("/api/webfleet/vehicle/:vehicleId/position", protectWhenStrict(requirePanelRole), async (req, res) => {
   try {
-    const { vehicleId } = req.params;
-    const position = await getWebfleetVehiclePosition(vehicleId);
+    const position = await getWebfleetVehiclePosition(String(req.params.vehicleId));
     res.json(position);
   } catch (error: any) {
     const noConfig = error?.message?.includes("no configuradas");
@@ -4199,6 +5641,14 @@ function webfleetOdometerKm(o: any): number | null {
 // de vehículos actualizados. Para el botón "Sincronizar ahora" de la config.
 app.post("/api/tyrecontrol/webfleet/sync", authenticate, requireModule("tyrecontrol"), async (_req, res) => {
   const r = await syncWebfleetOnce();
+  if ("error" in r) return res.status(502).json(r);
+  res.json(r);
+});
+
+// Mira el buzón del CheckPoint ahora mismo, sin esperar al temporizador. Para
+// probar la configuración del buzón sin quedarse quince minutos mirando.
+app.post("/api/tyrecontrol/checkpoint/revisar", authenticate, requireModule("tyrecontrol"), async (_req, res) => {
+  const r = await revisarBuzonCheckpoint();
   if ("error" in r) return res.status(502).json(r);
   res.json(r);
 });
@@ -4255,6 +5705,160 @@ app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrec
       pos_time: o.pos_time ?? null,
     });
   } catch (e: any) { res.status(500).json({ error: e?.message || "Error Webfleet" }); }
+});
+
+// ── Conducción eficiente (Webfleet) ─────────────────────────────────────────
+// Los equipos de la flota no tienen enlace CAN/FMS, así que Webfleet devuelve
+// fuel_usage y co2 SIEMPRE a 0. Lo que sí trae, y es aprovechable, son los
+// indicadores de conducción de TomTom (OptiDrive), el ralentí y los excesos de
+// velocidad. Este endpoint los agrega para la pestaña "Conducción" de la
+// Analítica de Productividad.
+//
+// Una sola llamada por informe para TODA la flota (sin objectno), no una por
+// vehículo: es lo que hace que esto sea rápido con flotas grandes.
+//   /api/tyrecontrol/webfleet/conduccion?empresa=<uuid>&dias=30
+app.get("/api/tyrecontrol/webfleet/conduccion", authenticate, requireModule("tyrecontrol"), async (req, res) => {
+  try {
+    const empresa = String(req.query.empresa || "");
+    if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
+    const dias = Math.min(90, Math.max(1, Number(req.query.dias) || 30));
+    const creds = await resolveWebfleetCreds(empresa);
+    if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
+
+    const to = Date.now();
+    const from = to - dias * 24 * 3600 * 1000;
+    const rango = webfleetRange(from, to);
+
+    const pedir = async (action: string) => {
+      const { url, headers } = buildWebfleetRequest(action, rango, creds);
+      const r = await fetch(url, { headers, signal: AbortSignal.timeout(25000) });
+      if (!r.ok) throw new Error(`Webfleet ${action} HTTP ${r.status}`);
+      const data = await r.json();
+      if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
+      return (Array.isArray(data) ? data : data?.data ?? []) as any[];
+    };
+
+    const [viajes, resumen] = await Promise.all([
+      pedir("showTripReportExtern"),
+      pedir("showTripSummaryReportExtern"),
+    ]);
+
+    // Matrícula de nuestros vehículos por objectno de Webfleet.
+    const { data: vehs } = await supabase
+      .from("tc_vehiculos")
+      .select("matricula, webfleet_vehicle_id")
+      .eq("empresa_id", empresa)
+      .not("webfleet_vehicle_id", "is", null);
+    const matriculaPorObj = new Map<string, string>(
+      (vehs ?? []).map((v: any) => [String(v.webfleet_vehicle_id), v.matricula])
+    );
+
+    const num = (x: any) => (Number.isFinite(Number(x)) ? Number(x) : 0);
+    type Acc = {
+      objectno: string; objectname: string; matricula: string | null;
+      viajes: number; distancia_m: number; duracion_s: number; ralenti_s: number;
+      optidriveSuma: number; optidriveN: number;
+      excesos: number; eventos: number; vmax: number;
+    };
+    const porVehiculo = new Map<string, Acc>();
+    const porConductor = new Map<string, { conductor: string; viajes: number; distancia_m: number; ralenti_s: number; duracion_s: number; optidriveSuma: number; optidriveN: number }>();
+
+    for (const t of viajes) {
+      const key = String(t.objectno ?? "");
+      if (!key) continue;
+      const a = porVehiculo.get(key) ?? {
+        objectno: key, objectname: t.objectname ?? key,
+        matricula: matriculaPorObj.get(key) ?? null,
+        viajes: 0, distancia_m: 0, duracion_s: 0, ralenti_s: 0,
+        optidriveSuma: 0, optidriveN: 0, excesos: 0, eventos: 0, vmax: 0,
+      };
+      a.viajes += 1;
+      a.distancia_m += num(t.distance);
+      a.duracion_s += num(t.duration);
+      a.ralenti_s += num(t.idle_time);
+      // Los indicadores de OptiDrive son 0..1; solo cuentan si vienen informados.
+      if (t.optidrive_indicator != null) { a.optidriveSuma += num(t.optidrive_indicator); a.optidriveN += 1; }
+      a.excesos += num(t.speeding_indicator);
+      a.eventos += num(t.drivingevents_indicator);
+      a.vmax = Math.max(a.vmax, num(t.max_speed));
+      porVehiculo.set(key, a);
+
+      const cond = (t.drivername ?? "").toString().trim();
+      if (cond) {
+        const c = porConductor.get(cond) ?? { conductor: cond, viajes: 0, distancia_m: 0, ralenti_s: 0, duracion_s: 0, optidriveSuma: 0, optidriveN: 0 };
+        c.viajes += 1; c.distancia_m += num(t.distance); c.ralenti_s += num(t.idle_time); c.duracion_s += num(t.duration);
+        if (t.optidrive_indicator != null) { c.optidriveSuma += num(t.optidrive_indicator); c.optidriveN += 1; }
+        porConductor.set(cond, c);
+      }
+    }
+
+    // El resumen diario aporta el tiempo con motor en marcha (operatingtime) y
+    // las paradas, que el informe de viajes no da.
+    const standstillPorObj = new Map<string, { standstill_s: number; operating_s: number; tours: number }>();
+    for (const s of resumen) {
+      const key = String(s.objectno ?? "");
+      if (!key) continue;
+      const cur = standstillPorObj.get(key) ?? { standstill_s: 0, operating_s: 0, tours: 0 };
+      cur.standstill_s += num(s.standstill);
+      cur.operating_s += num(s.operatingtime);
+      cur.tours += num(s.tours);
+      standstillPorObj.set(key, cur);
+    }
+
+    const pct = (parte: number, total: number) => (total > 0 ? Math.round((1000 * parte) / total) / 10 : 0);
+    const filas = [...porVehiculo.values()].map((a) => {
+      const extra = standstillPorObj.get(a.objectno);
+      return {
+        objectno: a.objectno,
+        vehiculo: a.matricula ?? a.objectname,
+        enlazado: a.matricula != null,
+        viajes: a.viajes,
+        km: Math.round(a.distancia_m / 1000),
+        horas: Math.round((a.duracion_s / 3600) * 10) / 10,
+        ralenti_min: Math.round(a.ralenti_s / 60),
+        pct_ralenti: pct(a.ralenti_s, a.duracion_s),
+        optidrive: a.optidriveN ? Math.round((100 * a.optidriveSuma) / a.optidriveN) : null,
+        excesos: Math.round(a.excesos * 10) / 10,
+        vmax: a.vmax,
+        paradas_min: extra ? Math.round(extra.standstill_s / 60) : null,
+        tours: extra?.tours ?? null,
+      };
+    }).sort((x, y) => y.km - x.km);
+
+    const totDur = [...porVehiculo.values()].reduce((s, a) => s + a.duracion_s, 0);
+    const totRal = [...porVehiculo.values()].reduce((s, a) => s + a.ralenti_s, 0);
+    const totKm = filas.reduce((s, f) => s + f.km, 0);
+    const conOpti = filas.filter((f) => f.optidrive != null);
+
+    res.json({
+      dias,
+      // Se deja explícito para que la app pueda avisar: sin CAN no hay consumo.
+      combustible_disponible: false,
+      kpis: {
+        vehiculos: filas.length,
+        viajes: filas.reduce((s, f) => s + f.viajes, 0),
+        km: totKm,
+        horas: Math.round((totDur / 3600) * 10) / 10,
+        ralenti_horas: Math.round((totRal / 3600) * 10) / 10,
+        pct_ralenti: pct(totRal, totDur),
+        optidrive: conOpti.length
+          ? Math.round(conOpti.reduce((s, f) => s + (f.optidrive ?? 0), 0) / conOpti.length)
+          : null,
+      },
+      por_vehiculo: filas,
+      por_conductor: [...porConductor.values()]
+        .map((c) => ({
+          conductor: c.conductor,
+          viajes: c.viajes,
+          km: Math.round(c.distancia_m / 1000),
+          pct_ralenti: pct(c.ralenti_s, c.duracion_s),
+          optidrive: c.optidriveN ? Math.round((100 * c.optidriveSuma) / c.optidriveN) : null,
+        }))
+        .sort((a, b) => b.km - a.km),
+    });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || "Error consultando Webfleet" });
+  }
 });
 
 app.post("/api/asistencias/:id/en-camino", protectWhenStrict(authenticate), async (req, res) => {
@@ -4351,7 +5955,8 @@ app.get("/api/roadside-operator/techs", async (_req, res) => {
     const result = await db.query(`
       SELECT *
       FROM techs
-      WHERE NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL
+      WHERE activo = true
+        AND NULLIF(TRIM(COALESCE("roadsideOperatorCode", '')), '') IS NOT NULL
       ORDER BY id ASC
     `);
 
@@ -4376,7 +5981,7 @@ app.post("/api/roadside-operator/login", async (req, res) => {
 
     const techResult = await db.query(
       `
-        SELECT name
+        SELECT name, "tallerId"
         FROM techs
         WHERE name = $1
         LIMIT 1
@@ -4388,6 +5993,36 @@ app.post("/api/roadside-operator/login", async (req, res) => {
       return res.status(404).json({
         error: "Operario no encontrado",
       });
+    }
+
+    // Multi-taller: resolver el taller del operario y su empresa (= licencia).
+    // Si el técnico aún no tiene taller asignado, ambos van a null y la app
+    // sigue funcionando (compatibilidad hacia atrás).
+    let taller: { id: number; nombre: string } | null = null;
+    let empresa: { id: number; nombre: string } | null = null;
+    const tallerId = techResult.rows[0].tallerId;
+    if (tallerId != null) {
+      const tallerRes = await db.query(
+        `
+          SELECT
+            t.id AS "tallerId",
+            t.nombre AS "tallerNombre",
+            l.id AS "empresaId",
+            COALESCE(NULLIF(l."companyName", ''), l."customerName") AS "empresaNombre"
+          FROM assist_talleres t
+          LEFT JOIN licenses l ON l.id = t."licenseId"
+          WHERE t.id = $1 AND t.activo = true
+          LIMIT 1
+        `,
+        [tallerId]
+      );
+      if (tallerRes.rows.length > 0) {
+        const r = tallerRes.rows[0];
+        taller = { id: Number(r.tallerId), nombre: r.tallerNombre };
+        if (r.empresaId != null) {
+          empresa = { id: Number(r.empresaId), nombre: r.empresaNombre || "" };
+        }
+      }
     }
 
     // Sesión unificada (fase 1 SaaS): garantizar usuario de Supabase Auth
@@ -4442,6 +6077,8 @@ app.post("/api/roadside-operator/login", async (req, res) => {
     res.json({
       ok: true,
       techName,
+      empresa,
+      taller,
       session,
     });
   } catch (error) {
@@ -5193,12 +6830,32 @@ app.post(
 
       const timestampField = getRoadsideStatusTimestampField(status);
 
+      /*
+       * Kilómetros DEL SERVICIO, si el técnico los manda (normalmente al
+       * finalizar). Por encima de 2.000 se RECHAZA en vez de descartarse en
+       * silencio: el técnico está delante y puede corregirlo; el cierre
+       * económico tiene además su propia guarda. El tiempo no se manda
+       * nunca: va de la creación a la llegada al taller, y esos instantes
+       * ya los pone el sistema.
+       */
+      let serviceKm: number | null = null;
+      if (req.body?.serviceKm != null && req.body.serviceKm !== "") {
+        const km = Math.round(Number(req.body.serviceKm));
+        if (!Number.isFinite(km) || km < 0 || km > 2000) {
+          return res.status(400).json({
+            error: "Kilómetros del servicio no válidos (0-2000). Son los del servicio, no el cuentakilómetros.",
+          });
+        }
+        serviceKm = km;
+      }
+
       const result = await db.query(
         `
           UPDATE roadside_assistances
           SET
             status = $2,
             "updatedAtMs" = $3
+            ${serviceKm != null ? `, "serviceKm" = $4` : ""}
             ${
               timestampField
                 ? `, "${timestampField}" = COALESCE("${timestampField}", $3)`
@@ -5207,7 +6864,7 @@ app.post(
           WHERE id = $1
           RETURNING *
         `,
-        [id, status, now]
+        serviceKm != null ? [id, status, now, serviceKm] : [id, status, now]
       );
 
       await db.query(
@@ -5251,7 +6908,7 @@ app.post(
           [id, operator.techName, now + 1]
         );
         const baseResult = await db.query(
-          `UPDATE roadside_assistances SET status = 'en_camino_base', "updatedAtMs" = $2 WHERE id = $1 RETURNING *`,
+          `UPDATE roadside_assistances SET status = 'en_camino_base', "enCaminoBaseAtMs" = COALESCE("enCaminoBaseAtMs", $2), "updatedAtMs" = $2 WHERE id = $1 RETURNING *`,
           [id, now + 1]
         );
         updated = normalizeRoadsideAssistanceRow(baseResult.rows[0]);
@@ -5551,6 +7208,10 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           "assignedVehicleName",
           "trackingToken",
           notes,
+          "solicitanteEmpresa",
+          "solicitanteNombre",
+          "solicitanteTelefono",
+          "solicitanteAutorizacion",
           "createdAtMs",
           "assignedAtMs",
           "departedAtMs",
@@ -5563,7 +7224,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29
+          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
         )
         RETURNING *
       `,
@@ -5589,6 +7250,10 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         body.assignedVehicleName ? String(body.assignedVehicleName).trim() : null,
         crypto.randomUUID(),
         body.notes ? String(body.notes).trim() : null,
+        body.solicitanteEmpresa ? String(body.solicitanteEmpresa).trim() : null,
+        body.solicitanteNombre ? String(body.solicitanteNombre).trim() : null,
+        body.solicitanteTelefono ? String(body.solicitanteTelefono).trim() : null,
+        body.solicitanteAutorizacion ? String(body.solicitanteAutorizacion).trim() : null,
         now,
         timestampField === "assignedAtMs" ? now : null,
         timestampField === "departedAtMs" ? now : null,
@@ -5721,6 +7386,10 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
           "descripcionAveria" = $19,
           "trabajosARealizar" = $20,
           "esRemolque" = $21,
+          "solicitanteEmpresa" = COALESCE($22, "solicitanteEmpresa"),
+          "solicitanteNombre" = COALESCE($23, "solicitanteNombre"),
+          "solicitanteTelefono" = COALESCE($24, "solicitanteTelefono"),
+          "solicitanteAutorizacion" = COALESCE($25, "solicitanteAutorizacion"),
           "updatedAtMs" = $17
           ${
             timestampField
@@ -5752,6 +7421,12 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         body.descripcionAveria ? String(body.descripcionAveria).trim() : null,
         body.trabajosARealizar ? String(body.trabajosARealizar).trim() : null,
         body.esRemolque === true,
+        // Solicitante: COALESCE en el UPDATE — si el editor no envía el campo
+        // (APK antigua u otro flujo) se conserva; cadena vacía sí lo borra.
+        body.solicitanteEmpresa != null ? String(body.solicitanteEmpresa).trim() : null,
+        body.solicitanteNombre != null ? String(body.solicitanteNombre).trim() : null,
+        body.solicitanteTelefono != null ? String(body.solicitanteTelefono).trim() : null,
+        body.solicitanteAutorizacion != null ? String(body.solicitanteAutorizacion).trim() : null,
       ]
     );
 
@@ -6027,28 +7702,19 @@ async function detectPlateFromImage(
         : "En España, la matrícula BLANCA es la del CAMIÓN/vehículo tractor y la matrícula ROJA es la del REMOLQUE. " +
           "Si en la imagen aparecen varias matrículas (blanca y roja), devuelve SOLO la matrícula BLANCA (la del camión), ignorando la roja. ";
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text:
-                "Esta es una foto de la matrícula de un vehículo español. " +
-                colorInstruction +
-                "Responde EXCLUSIVAMENTE con el texto de la matrícula (sin espacios ni guiones), " +
-                "o con la palabra NONE si no se puede leer ninguna matrícula en la imagen.",
-            },
-            { type: "image_url", image_url: { url: imageUrl } },
-          ] as any,
-        },
-      ],
-      max_tokens: 20,
+    const r = await pedirIA({
+      operacion: "assist.detectPlate",
+      proposito: "documento",
+      prompt:
+        "Esta es una foto de la matrícula de un vehículo español. " +
+        colorInstruction +
+        "Responde EXCLUSIVAMENTE con el texto de la matrícula (sin espacios ni guiones), " +
+        "o con la palabra NONE si no se puede leer ninguna matrícula en la imagen.",
+      imagenes: [{ url: imageUrl }],
+      maxTokens: 2000,
     });
 
-    const text = response.choices[0]?.message?.content?.trim() ?? "";
+    const text = r.texto.trim();
     const plate = normalizePlateText(text);
     return plate && plate !== "NONE" && plate.length >= 5 ? plate : null;
   } catch (error) {
@@ -6063,34 +7729,29 @@ async function detectBothPlatesFromImage(
   imageUrl: string
 ): Promise<{ white: string | null; red: string | null }> {
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text:
-                "Foto de matrículas de vehículos españoles. En España la matrícula BLANCA es del CAMIÓN " +
-                "y la matrícula ROJA es del REMOLQUE. " +
-                "La matrícula del REMOLQUE (roja) tiene el formato: una 'R' seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). " +
-                "Identifica las matrículas que aparezcan y responde EXCLUSIVAMENTE en JSON con este formato: " +
-                '{"blanca":"XXXX","roja":"RYYYYZZZ"}. ' +
-                "La 'roja' debe empezar por R y seguir el formato R+4 dígitos+3 letras. " +
-                "Usa null en el campo si esa matrícula no aparece o no es legible. Sin espacios ni guiones.",
-            },
-            { type: "image_url", image_url: { url: imageUrl } },
-          ] as any,
+    const r = await pedirIA<{ blanca: string | null; roja: string | null }>({
+      operacion: "assist.detectBothPlates",
+      proposito: "documento",
+      prompt:
+        "Foto de matrículas de vehículos españoles. En España la matrícula BLANCA es del CAMIÓN " +
+        "y la matrícula ROJA es del REMOLQUE. " +
+        "La matrícula del REMOLQUE (roja) tiene el formato: una 'R' seguida de 4 dígitos y 3 letras (ej. R0000BBB, R1234BCD). " +
+        "Identifica las matrículas que aparezcan. " +
+        "La 'roja' debe empezar por R y seguir el formato R+4 dígitos+3 letras. " +
+        "Usa null en el campo si esa matrícula no aparece o no es legible. Sin espacios ni guiones.",
+      imagenes: [{ url: imageUrl }],
+      maxTokens: 2000,
+      esquema: {
+        nombre: "matriculas",
+        schema: {
+          type: "object", additionalProperties: false,
+          required: ["blanca", "roja"],
+          properties: { blanca: { type: ["string", "null"] }, roja: { type: ["string", "null"] } },
         },
-      ],
-      max_tokens: 60,
-      response_format: { type: "json_object" } as any,
+      },
     });
 
-    const raw = response.choices[0]?.message?.content?.trim() ?? "{}";
-    let parsed: any = {};
-    try { parsed = JSON.parse(raw); } catch { parsed = {}; }
+    const parsed: any = r.datos ?? {};
 
     const normOrNull = (v: unknown) => {
       const p = normalizePlateText(v);
@@ -6876,6 +8537,12 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       const mainPlate = remolquePrincipal ? `Remolque ${a.plateRemolque}` : (a.plate || "");
       if (mainPlate) bx += badge(mainPlate, bx, by0, "#dbeafe", "#1e40af") + 6;
       if (a.priority === "urgente") bx += badge("URGENTE", bx, by0, "#fee2e2", "#991b1b") + 6;
+      if (a.origen === "central") {
+        bx += badge(
+          a.expedienteCentral ? `CENTRAL · EXP. ${a.expedienteCentral}` : "VÍA CENTRAL",
+          bx, by0, "#e0e7ff", "#3730a3"
+        ) + 6;
+      }
       const secondaryBits: string[] = [];
       if (remolquePrincipal && a.plate) secondaryBits.push(`Tractora ${a.plate}`);
       if (!remolquePrincipal && a.plateRemolque) secondaryBits.push(`Remolque ${a.plateRemolque}`);
@@ -6939,6 +8606,19 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       if (a.customerName) clienteLines.push(["Nombre:", a.customerName]);
       if (a.customerPhone) clienteLines.push(["Teléfono:", a.customerPhone]);
       if (a.conductorNombre) clienteLines.push(["Conductor:", a.conductorNombre]);
+      // Quién solicitó la asistencia: si vino por la red de Central, se
+      // indica "Central Assist"; si no, los datos del solicitante.
+      if (a.origen === "central") {
+        clienteLines.push([
+          "Solicitado por:",
+          `Central Assist${a.expedienteCentral ? ` (Exp. ${a.expedienteCentral})` : ""}`,
+        ]);
+      } else {
+        const solicitante = [a.solicitanteEmpresa, a.solicitanteNombre, a.solicitanteTelefono]
+          .filter(Boolean)
+          .join(" · ");
+        if (solicitante) clienteLines.push(["Solicitado por:", solicitante]);
+      }
       if (!clienteLines.length) clienteLines.push(["Nombre:", "-"]);
 
       const intervencionLines: [string, string][] = [];
@@ -6987,10 +8667,13 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       {
         const steps: { label: string; ms: number | null }[] = [
           { label: "Aviso", ms: a.createdAtMs },
+          { label: "Asignada", ms: a.assignedAtMs },
           { label: "Salida", ms: a.departedAtMs },
           { label: "En punto", ms: a.arrivedAtPointMs },
+          { label: "Reparando", ms: a.inicioReparacionAtMs },
           { label: "Finalizada", ms: a.finishedAtMs },
-          { label: "Taller", ms: a.arrivedAtWorkshopMs },
+          { label: "A taller", ms: a.enCaminoBaseAtMs },
+          { label: "En taller", ms: a.arrivedAtWorkshopMs },
         ];
         if (doc.y + 46 > 790) doc.addPage();
         const y0 = doc.y + 4;
@@ -7260,7 +8943,9 @@ async function buildVehicleTrackingPdfBuffer(
     doc.moveDown(0.3);
     try {
       const mapBuf = await buildTrackMapImage(track, stops);
-      if (mapBuf) doc.image(mapBuf, { fit: [480, 380], align: "left" });
+      // Sin "align": pdfkit solo admite center/right y la izquierda ya es el
+      // valor por defecto, así que la opción anterior no hacía nada.
+      if (mapBuf) doc.image(mapBuf, { fit: [480, 380] as [number, number] });
     } catch { /* sin mapa */ }
   }
 
@@ -7344,23 +9029,6 @@ app.get("/api/roadside-assistances/:id/tracking-report.pdf", requireSupervisorRo
   }
 });
 
-let mailTransport: import("nodemailer").Transporter | null = null;
-function getMailTransport() {
-  if (mailTransport) return mailTransport;
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    return null;
-  }
-  mailTransport = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: Number(process.env.SMTP_PORT || 587) === 465,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-  return mailTransport;
-}
 
 app.post(
   "/api/roadside-assistances/:id/send-report",
@@ -7616,18 +9284,9 @@ app.post(
         return res.status(503).json({ error: "OPENAI_API_KEY no configurada" });
       }
 
-      const systemPrompt = `Eres un asistente de back office de asistencia en carretera. A partir del texto y las imágenes (capturas de WhatsApp, tarjetas, hojas de datos) extrae los datos para dar de alta una asistencia. NO inventes: si un dato no aparece, omítelo (no lo incluyas en el JSON). Normaliza teléfonos españoles (9 dígitos) y matrículas españolas sin espacios.
-
-${AI_IMAGE_RULES}
-
-Devuelve SOLO un objeto JSON con las claves que conozcas, de este conjunto exacto:
-- Contactos: solicitanteNombre, solicitanteTelefono, solicitanteWhatsapp, solicitanteEmail, conductorNombre, conductorTelefono, responsableNombre, responsableTelefono, responsableCargo, autorizadorNombre, autorizadorTelefono, autorizadorCargo
-- Empresas: empresaSolicitanteNombre, empresaSolicitanteTelefono, empresaSolicitanteEmail, empresaServicioNombre, empresaServicioCif, empresaServicioTelefono, empresaFacturacionNombre, empresaFacturacionCif, empresaFacturacionEmail, expedienteExterno, referenciaCliente, referenciaAutorizacion
-- Operativa: tiposAsistencia (array de: Neumáticos, Mecánica, Batería, Arranque, Combustible, Apertura vehículo, Remolcado, Accidente, Rescate, Otros), tipoVehiculo (Turismo, Furgoneta, Camión rígido, Tractora, Remolque, Semirremolque, Autobús, Motocicleta, Maquinaria, Vehículo agrícola), estadoVehiculo (Puede circular, No puede circular, Bloqueado, Accidentado, Volcado), ubicacionIncidencia (Autopista, Autovía, Carretera nacional, Ciudad, Polígono, Taller, Parking, Puerto, Centro logístico)
-- Vehículo: plate (matrícula del vehículo/camión), plateRemolque (matrícula roja del remolque: R+4 dígitos+3 letras), marca, modelo, color, vin, kilometraje (número), medidaNeumatico, ejeAfectado (Dirección, Tracción, Remolque), posicionRueda (Interior, Exterior), vehiculoCargado (true/false), mercancia, adr (true/false)
-- Averia: descripcionAveria (texto libre de la avería o trabajos)
-- Facturación: importeAcordado (número), observacionesFacturacion
-Usa exactamente esas claves. tiposAsistencia siempre como array. Sin texto fuera del JSON.`;
+      // El prompt vive en core/ai.ts: lo comparten el back office de Assist
+      // y el de Central Pro, que rellenan exactamente los mismos campos.
+      const systemPrompt = AI_BACKOFFICE_PROMPT;
 
       type ContentPart =
         | { type: "text"; text: string }
@@ -7640,16 +9299,15 @@ Usa exactamente esas claves. tiposAsistencia siempre como array. Sin texto fuera
         })),
       ];
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
-        ],
-        temperature: 0.1,
-        max_tokens: 800,
+      const rIa = await pedirIA({
+        operacion: "assist.backoffice-extract",
+        proposito: "asistente",
+        prompt: `${systemPrompt}\n\n${text || "(sin texto: analiza las imágenes)"}`,
+        imagenes: images.map((url: string) => ({ url })),
+        temperatura: 0.1,
+        maxTokens: 4000,
       });
-      const rawOut = response.choices[0]?.message?.content ?? "{}";
+      const rawOut = rIa.texto || "{}";
       const cleaned = rawOut.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
       let parsed: Record<string, any> = {};
       try { parsed = JSON.parse(cleaned); } catch { parsed = {}; }
@@ -8920,9 +10578,11 @@ app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) =>
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
+    // Upsert, NO reemplazo. Antes esto hacía DELETE de toda la tabla y volvía a
+    // insertar la lista del cliente: la última pestaña que guardaba imponía su
+    // copia y borraba lo que hubieran creado las demás (se perdieron
+    // recordatorios reales así). Los borrados van por DELETE /:id.
     await db.query("BEGIN");
-
-    await db.query(`DELETE FROM agenda_date_reminders`);
 
     for (const item of items) {
       await db.query(
@@ -8999,6 +10659,25 @@ app.put("/api/agenda-date-reminders", requireSupervisorRole, async (req, res) =>
     res.status(500).json({
       error: "Error guardando recordatorios de agenda",
     });
+
+  }
+});
+
+/** Borrado por elemento: sustituye al antiguo reemplazo completo de la tabla. */
+app.delete("/api/agenda-date-reminders/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de recordatorio no válido" });
+    }
+
+    await db.query(`DELETE FROM agenda_date_reminders WHERE id = $1`, [id]);
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("DELETE /api/agenda-date-reminders/:id error:", error);
+    res.status(500).json({ error: "Error eliminando el recordatorio" });
+
+
   }
 });
 
@@ -9006,9 +10685,10 @@ app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) 
   try {
     const items = Array.isArray(req.body) ? req.body : [];
 
+    // Upsert, NO reemplazo: vaciar la tabla hacía que una pestaña con datos
+    // antiguos borrase los estados creados desde otra. Los borrados van por
+    // DELETE /:id.
     await db.query("BEGIN");
-
-    await db.query(`DELETE FROM scheduled_tech_statuses`);
 
     for (const item of items) {
       await db.query(
@@ -9077,6 +10757,20 @@ app.put("/api/scheduled-tech-statuses", requireSupervisorRole, async (req, res) 
     res.status(500).json({
       error: "Error guardando estados técnicos programados",
     });
+  }
+});
+
+/** Borrado por elemento del estado programado de un técnico. */
+app.delete("/api/scheduled-tech-statuses/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ error: "ID de estado no válido" });
+
+    await db.query(`DELETE FROM scheduled_tech_statuses WHERE id = $1`, [id]);
+    res.json({ ok: true, id });
+  } catch (error) {
+    console.error("DELETE /api/scheduled-tech-statuses/:id error:", error);
+    res.status(500).json({ error: "Error eliminando el estado programado" });
   }
 });
 
@@ -10991,27 +12685,15 @@ Reglas obligatorias:
 - Si una página no parece un albarán, no la incluyas.
 `;
 
-      const response = await (openai.responses.create as any)({
-        model: "gpt-4o-mini",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: prompt,
-              },
-              {
-                type: "input_file",
-                filename: req.file.originalname || "albaranes.pdf",
-                file_data: `data:application/pdf;base64,${base64Pdf}`,
-              },
-            ],
-          },
-        ],
+      const rIa = await pedirIA({
+        operacion: "almacen.leer-pdf",
+        proposito: "documento",
+        prompt,
+        archivos: [{ nombre: req.file.originalname || "albaranes.pdf", dataUri: `data:application/pdf;base64,${base64Pdf}` }],
+        maxTokens: 8000,
       });
 
-      const textoRespuesta = String(response.output_text || "");
+      const textoRespuesta = rIa.texto;
       const jsonTexto = limpiarJsonOpenAI(textoRespuesta);
 
       let datosRaw: any;
@@ -11172,27 +12854,15 @@ Reglas obligatorias:
 - Si una página no parece un albarán de entrada de cliente, no la incluyas.
 `;
 
-      const response = await (openai.responses.create as any)({
-        model: "gpt-4o-mini",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: prompt,
-              },
-              {
-                type: "input_file",
-                filename: req.file.originalname || "entrada.pdf",
-                file_data: `data:application/pdf;base64,${base64Pdf}`,
-              },
-            ],
-          },
-        ],
+      const rIa = await pedirIA({
+        operacion: "almacen.leer-pdf",
+        proposito: "documento",
+        prompt,
+        archivos: [{ nombre: req.file.originalname || "entrada.pdf", dataUri: `data:application/pdf;base64,${base64Pdf}` }],
+        maxTokens: 8000,
       });
 
-      const textoRespuesta = String(response.output_text || "");
+      const textoRespuesta = rIa.texto;
       const jsonTexto = limpiarJsonOpenAI(textoRespuesta);
 
       let datosRaw: any;
@@ -11343,7 +13013,7 @@ async function verifyWorkshopPin(techName: string, pin: string): Promise<boolean
   if (!techName || !pin) return false;
   const result = await db.query(
     `SELECT name, "workshopPin", "workshopPinHash", "workshopPinSalt"
-       FROM techs WHERE name = $1 LIMIT 1`,
+       FROM techs WHERE name = $1 AND activo = true LIMIT 1`,
     [techName]
   );
   if (result.rows.length === 0) return false;
@@ -11367,7 +13037,12 @@ async function verifyWorkshopPin(techName: string, pin: string): Promise<boolean
 }
 
 async function getWorkshopOperatorFromRequest(req: express.Request) {
-  const techName = String(req.headers["x-operator-name"] ?? "").trim();
+  const bruto = String(req.headers["x-operator-name"] ?? "").trim();
+  // La APK codifica el nombre: las cabeceras HTTP no admiten acentos y un
+  // "Jesús" sin codificar se pierde por el camino. El panel web lo manda tal
+  // cual, así que se acepta de las dos formas.
+  let techName = bruto;
+  try { techName = decodeURIComponent(bruto); } catch { /* nombre sin codificar */ }
   const pin = String(req.headers["x-operator-pin"] ?? "").trim();
   if (!(await verifyWorkshopPin(techName, pin))) return null;
   return { techName };
@@ -11395,7 +13070,7 @@ function requireWorkshopOperatorAuth(
 app.get("/api/workshop-operator/techs-list", async (_req, res) => {
   try {
     const result = await db.query(
-      `SELECT name FROM techs ORDER BY name ASC`
+      `SELECT name FROM techs WHERE activo = true ORDER BY name ASC`
     );
     res.json(result.rows.map((r: any) => ({ name: r.name })));
   } catch (error) {
@@ -11611,17 +13286,15 @@ Devuelve SOLO el JSON sin texto adicional:
 }`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: `Mensaje WhatsApp:\n${body}${mediaUrls.length ? `\n\nAdjuntos: ${mediaUrls.join(", ")}` : ""}` },
-      ],
-      temperature: 0.1,
-      max_tokens: 800,
+    const rIa = await pedirIA({
+      operacion: "assist.whatsapp-extract",
+      proposito: "asistente",
+      prompt: `${systemPrompt}\n\nMensaje WhatsApp:\n${body}${mediaUrls.length ? `\n\nAdjuntos: ${mediaUrls.join(", ")}` : ""}`,
+      temperatura: 0.1,
+      maxTokens: 4000,
     });
 
-    const raw = response.choices[0]?.message?.content ?? "{}";
+    const raw = rIa.texto || "{}";
     const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
     const parsed = JSON.parse(cleaned);
     const confidence = parsed.confidence ?? "medium";
@@ -11641,10 +13314,23 @@ app.post(
       // Validate Twilio signature
       const authToken = process.env.TWILIO_AUTH_TOKEN ?? "";
       const twilioSig = req.headers["x-twilio-signature"] as string | undefined;
-      const fullUrl = `${process.env.PUBLIC_APP_URL || CANONICAL_PUBLIC_URL}/api/whatsapp/inbound`;
+      // La firma se calcula sobre la URL EXACTA que Twilio llamó. El servicio
+      // responde por varios nombres a la vez (dominio propio y el .onrender.com
+      // heredado), así que se prueban todos en vez de fijar uno: cambiar de
+      // dominio no debe depender de acertar con esta constante.
+      const hostLlamado = req.get("x-forwarded-host") || req.get("host");
+      const candidatos = [
+        process.env.PUBLIC_APP_URL,
+        hostLlamado ? `https://${hostLlamado}` : "",
+        "https://app.mobilink.es",
+        "https://sea-tarragona.onrender.com",
+      ]
+        .map((u) => String(u || "").trim().replace(/\/+$/, ""))
+        .filter((u) => /^https?:\/\//i.test(u));
+      const urls = [...new Set(candidatos)].map((u) => `${u}/api/whatsapp/inbound`);
 
       if (authToken && twilioSig) {
-        const valid = twilio.validateRequest(authToken, twilioSig, fullUrl, req.body);
+        const valid = urls.some((u) => twilio.validateRequest(authToken, twilioSig, u, req.body));
         if (!valid) {
           console.warn("Invalid Twilio signature on /api/whatsapp/inbound — procesando igualmente");
         }
@@ -12100,12 +13786,10 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
     const buffer = Buffer.from(await resp.arrayBuffer());
 
     const file = await toFile(buffer, `audio.${ext}`, { type: contentType });
-    const tr = await openai.audio.transcriptions.create({
-      file,
-      model: "whisper-1",
+    const transcript = await transcribirAudio(file, {
+      operacion: "assist.whatsapp-transcripcion",
       prompt: "Asistencia en carretera: matrícula, avería, ubicación, chofer, autorización.",
     });
-    const transcript = (tr.text || "").trim();
 
     // Guardamos la transcripción y la usamos como text_content para que el análisis IA la incluya
     const upd = await db.query(
@@ -12207,8 +13891,10 @@ app.get("/api/whatsapp-capture/by-job/:jobId", requireAdminRole, async (req, res
     );
     if (!sessionResult.rows.length) return res.json(null);
     const session = sessionResult.rows[0];
+    await reconcileCaptureAiStatus(session);
     session.started_at = session.started_at ? Number(session.started_at) : null;
     session.ended_at = session.ended_at ? Number(session.ended_at) : null;
+    session.ai_started_at = session.ai_started_at ? Number(session.ai_started_at) : null;
     if (session.ai_suggestions) {
       try { session.ai_suggestions = JSON.parse(session.ai_suggestions); } catch {}
     }
@@ -12359,7 +14045,15 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
       }
     }
 
-    // Run AI analysis asynchronously — don't block the response
+    // Marcamos 'pending' de forma síncrona para que la respuesta del cierre ya
+    // lleve el estado correcto; el análisis corre en segundo plano y persiste
+    // done/error en la sesión (core/whatsappCapture.ts).
+    await db.query(
+      `UPDATE whatsapp_capture_sessions
+       SET ai_status = 'pending', ai_error = NULL, ai_started_at = $2
+       WHERE id = $1`,
+      [id, now]
+    );
     saveCaptureAnalysis(id)
       .then((s) => console.log(`WhatsApp capture session #${id} analizada (${Object.keys(s).length} campos)`))
       .catch((e) => console.error("AI analysis error:", e));
@@ -12388,7 +14082,8 @@ app.post("/api/whatsapp-capture/sessions/:id/reopen", requireAdminRole, async (r
 
     const result = await db.query(
       `UPDATE whatsapp_capture_sessions
-       SET status = 'ACTIVE', ended_at = NULL, ai_suggestions = NULL
+       SET status = 'ACTIVE', ended_at = NULL, ai_suggestions = NULL,
+           ai_status = NULL, ai_error = NULL, ai_started_at = NULL
        WHERE id = $1
        RETURNING *`,
       [id]
@@ -12401,6 +14096,37 @@ app.post("/api/whatsapp-capture/sessions/:id/reopen", requireAdminRole, async (r
   } catch (error) {
     console.error("POST /api/whatsapp-capture/sessions/:id/reopen error:", error);
     return res.status(500).json({ error: "Error reabriendo sesión" });
+  }
+});
+
+// POST relanzar el análisis IA de una sesión ya cerrada, sin tener que
+// reabrirla y volver a cerrarla (que borraría los mensajes del contexto).
+app.post("/api/whatsapp-capture/sessions/:id/reanalyze", requireAdminRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const session = await db.query(
+      `SELECT id, status, ai_status FROM whatsapp_capture_sessions WHERE id = $1`,
+      [id]
+    );
+    if (!session.rows.length) return res.status(404).json({ error: "Sesión no encontrada" });
+    if (session.rows[0].status !== "CLOSED") {
+      return res.status(400).json({ error: "La captura sigue abierta. Ciérrala para analizarla." });
+    }
+    if (session.rows[0].ai_status === "pending") {
+      return res.status(409).json({ error: "Ya hay un análisis en curso." });
+    }
+
+    await db.query(
+      `UPDATE whatsapp_capture_sessions
+       SET ai_status = 'pending', ai_error = NULL, ai_started_at = $2
+       WHERE id = $1`,
+      [id, Date.now()]
+    );
+    saveCaptureAnalysis(id).catch((e) => console.error("AI reanalysis error:", e));
+    return res.json({ ok: true, ai_status: "pending" });
+  } catch (error) {
+    console.error("POST /api/whatsapp-capture/sessions/:id/reanalyze error:", error);
+    return res.status(500).json({ error: "Error relanzando el análisis" });
   }
 });
 
@@ -12430,6 +14156,7 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       latitude: "latitude",
       longitude: "longitude",
       vehicleDescription: '"vehicleDescription"',
+      descripcionAveria: '"descripcionAveria"',
       notes: "notes",
     };
 
@@ -12576,12 +14303,25 @@ app.post("/api/roadside-known-places", requireAdminRole, async (req, res) => {
     const b = req.body ?? {};
     const lat = Number(b.lat), lng = Number(b.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: "lat/lng requeridos" });
-    const result = await createKnownPlaceDedup({
-      nombre: String(b.nombre ?? "").trim(), tipo: b.tipo, direccion: b.direccion ?? null,
-      lat, lng, clientId: b.clientId ?? null, clientName: b.clientName ?? null,
-      notas: b.notas ?? null, createdBy: "oficina",
-    });
-    res.json(result);
+    // Alta manual de oficina: SIN deduplicado (eso es para los altas
+    // automáticos de los operarios). Si la oficina crea una base con su
+    // nombre, se crea tal cual y se devuelve el lugar directamente.
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO roadside_known_places
+        (nombre, tipo, direccion, lat, lng, "clientId", "clientName", notas, "createdBy", active, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'oficina',true,$9,$9) RETURNING *`,
+      [
+        String(b.nombre ?? "").trim() || "Lugar sin nombre",
+        b.tipo || "otro",
+        b.direccion ?? null,
+        lat, lng,
+        b.clientId ?? null, b.clientName ?? null,
+        b.notas ?? null,
+        now,
+      ]
+    );
+    res.json(normalizeKnownPlace(r.rows[0]));
   } catch (e) {
     console.error("POST known-places error:", e);
     res.status(500).json({ error: "Error creando lugar" });
@@ -12595,8 +14335,9 @@ app.put("/api/roadside-known-places/:id", requireAdminRole, async (req, res) => 
     const r = await db.query(
       `UPDATE roadside_known_places SET
          nombre = COALESCE($2, nombre), tipo = COALESCE($3, tipo),
-         direccion = $4, lat = COALESCE($5, lat), lng = COALESCE($6, lng),
-         "clientId" = $7, "clientName" = $8, notas = $9, "updatedAtMs" = $10
+         direccion = COALESCE($4, direccion), lat = COALESCE($5, lat), lng = COALESCE($6, lng),
+         "clientId" = COALESCE($7, "clientId"), "clientName" = COALESCE($8, "clientName"),
+         notas = COALESCE($9, notas), "updatedAtMs" = $10
        WHERE id = $1 RETURNING *`,
       [id, b.nombre ?? null, b.tipo ?? null, b.direccion ?? null,
        b.lat != null ? Number(b.lat) : null, b.lng != null ? Number(b.lng) : null,
@@ -12799,10 +14540,201 @@ app.get("/api/otf/:id", requireAdminRole, async (req, res) => {
   }
 });
 
+/**
+ * Regla de asignación de OTF: un operario que ya está trabajando no puede
+ * recibir otra OTF, salvo que sea para AMPLIAR el trabajo en la MISMA base
+ * donde está ahora (mismo lugar conocido). Ocupado = tiene una OTF
+ * planificada/en curso o una asistencia de carretera activa.
+ */
+async function checkTechDisponibleParaOtf(
+  techName: string | null | undefined,
+  knownPlaceId: number | null,
+  excludeOtfId?: number
+): Promise<{ ok: boolean; error?: string }> {
+  const name = String(techName ?? "").trim();
+  if (!name) return { ok: true };
+
+  // ¿Está en una asistencia de carretera?
+  const tech = await db.query(
+    `SELECT "currentRoadsideAssistanceId" FROM techs WHERE name = $1`,
+    [name]
+  );
+  if (tech.rows.length && tech.rows[0].currentRoadsideAssistanceId != null) {
+    return {
+      ok: false,
+      error: `${name} está en una asistencia en carretera (nº ${tech.rows[0].currentRoadsideAssistanceId}). No se le puede asignar otra OTF hasta que termine.`,
+    };
+  }
+
+  // ¿Tiene ya una OTF abierta?
+  const abierta = await db.query(
+    `SELECT id, "baseName", "knownPlaceId" FROM otf
+     WHERE "assignedTechName" = $1 AND status IN ('planificada','en_curso')
+       AND ($2::int IS NULL OR id <> $2)
+     ORDER BY "createdAtMs" DESC LIMIT 1`,
+    [name, excludeOtfId ?? null]
+  );
+  if (!abierta.rows.length) return { ok: true };
+
+  const actual = abierta.rows[0];
+  const mismaBase =
+    knownPlaceId != null &&
+    actual.knownPlaceId != null &&
+    Number(actual.knownPlaceId) === Number(knownPlaceId);
+  if (mismaBase) return { ok: true }; // ampliación del trabajo en su base actual
+
+  return {
+    ok: false,
+    error: `${name} ya tiene la OTF #${actual.id}${actual.baseName ? ` en ${actual.baseName}` : ""}. Solo se le puede asignar otra OTF en esa misma base (ampliación) o cuando termine.`,
+  };
+}
+
+// ── Plantillas de trabajos OTF (catálogo) ──
+app.get("/api/otf-plantillas", requireSupervisorRole, async (req, res) => {
+  try {
+    const incluirInactivas = String(req.query.all || "") === "true";
+    const r = await db.query(
+      `SELECT id, nombre, descripcion, activo FROM otf_plantillas
+       ${incluirInactivas ? "" : "WHERE activo = true"}
+       ORDER BY nombre ASC`
+    );
+    res.json(r.rows.map((p: any) => ({
+      id: Number(p.id),
+      nombre: p.nombre,
+      descripcion: p.descripcion ?? null,
+      activo: p.activo === true,
+    })));
+  } catch (e) {
+    console.error("GET /api/otf-plantillas error:", e);
+    res.status(500).json({ error: "Error obteniendo plantillas" });
+  }
+});
+
+app.post("/api/otf-plantillas", requireSupervisorRole, async (req, res) => {
+  try {
+    const nombre = String(req.body?.nombre ?? "").trim();
+    if (!nombre) return res.status(400).json({ error: "El nombre es obligatorio" });
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO otf_plantillas (nombre, descripcion, activo, "createdAtMs", "updatedAtMs")
+       VALUES ($1, $2, true, $3, $3)
+       ON CONFLICT (nombre) DO UPDATE SET activo = true, "updatedAtMs" = $3
+       RETURNING id, nombre, descripcion, activo`,
+      [nombre, req.body?.descripcion ? String(req.body.descripcion).trim() : null, now]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    console.error("POST /api/otf-plantillas error:", e);
+    res.status(500).json({ error: "Error creando plantilla" });
+  }
+});
+
+app.patch("/api/otf-plantillas/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const b = req.body ?? {};
+    const r = await db.query(
+      `UPDATE otf_plantillas SET
+         nombre = COALESCE($2, nombre),
+         descripcion = COALESCE($3, descripcion),
+         activo = COALESCE($4, activo),
+         "updatedAtMs" = $5
+       WHERE id = $1 RETURNING id, nombre, descripcion, activo`,
+      [id, typeof b.nombre === "string" ? b.nombre.trim() : null,
+       typeof b.descripcion === "string" ? b.descripcion.trim() : null,
+       typeof b.activo === "boolean" ? b.activo : null, Date.now()]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: "Plantilla no encontrada" });
+    res.json(r.rows[0]);
+  } catch (e) {
+    console.error("PATCH /api/otf-plantillas/:id error:", e);
+    res.status(500).json({ error: "Error actualizando plantilla" });
+  }
+});
+
+// ── TyreControl por matrícula: resumen para la tarjeta de la OTF ──
+// Busca el vehículo en TyreControl (normalizando la matrícula) y devuelve la
+// última revisión completada con sus alertas. Solo lectura.
+app.get("/api/otf-tyrecontrol-info", requireSupervisorRole, async (req, res) => {
+  try {
+    const plateRaw = String(req.query.plate ?? "").trim();
+    const norm = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!norm) return res.status(400).json({ error: "plate requerida" });
+
+    // tc_vehiculos guarda la matrícula en mayúsculas pero puede llevar guiones
+    // o espacios: se normaliza en JS para comparar.
+    const { data: vehiculos, error: vErr } = await supabase
+      .from("tc_vehiculos")
+      .select("id, matricula, marca, modelo, km_actual, activo")
+      .limit(2000);
+    if (vErr) throw new Error(vErr.message);
+    const veh = (vehiculos ?? []).find(
+      (v: any) => String(v.matricula ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "") === norm
+    );
+    if (!veh) return res.json({ found: false });
+
+    const { data: revs } = await supabase
+      .from("revisiones_vehiculo")
+      .select("id, fecha_revision, km_vehiculo, estado_revision")
+      .eq("vehiculo_id", veh.id)
+      .in("estado_revision", ["completada", "enviada"])
+      .order("fecha_revision", { ascending: false })
+      .limit(1);
+    const rev = revs?.[0] ?? null;
+
+    let alertas = 0;
+    let minProfundidad: number | null = null;
+    let posiciones = 0;
+    if (rev) {
+      const { data: det } = await supabase
+        .from("revisiones_neumaticos_detalle")
+        .select("profundidad_mm, alerta_generada, neumatico_ausente")
+        .eq("revision_id", rev.id);
+      for (const d of det ?? []) {
+        posiciones++;
+        if ((d as any).alerta_generada === true) alertas++;
+        const p = (d as any).profundidad_mm != null ? Number((d as any).profundidad_mm) : null;
+        if (p != null && (minProfundidad == null || p < minProfundidad)) minProfundidad = p;
+      }
+    }
+
+    res.json({
+      found: true,
+      vehiculo: {
+        id: veh.id,
+        matricula: veh.matricula,
+        marca: veh.marca ?? null,
+        modelo: veh.modelo ?? null,
+        kmActual: veh.km_actual != null ? Number(veh.km_actual) : null,
+        activo: veh.activo !== false,
+      },
+      ultimaRevision: rev
+        ? {
+            fecha: rev.fecha_revision,
+            km: rev.km_vehiculo != null ? Number(rev.km_vehiculo) : null,
+            posiciones,
+            alertas,
+            minProfundidadMm: minProfundidad,
+          }
+        : null,
+    });
+  } catch (e) {
+    console.error("GET /api/otf/tyrecontrol-info error:", e);
+    res.status(500).json({ error: "Error consultando TyreControl" });
+  }
+});
+
 app.post("/api/otf", requireSupervisorRole, async (req, res) => {
   try {
     const b = req.body ?? {};
     const now = Date.now();
+
+    const disp = await checkTechDisponibleParaOtf(
+      b.assignedTechName,
+      b.knownPlaceId != null ? Number(b.knownPlaceId) : null
+    );
+    if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
     const r = await db.query(
       `INSERT INTO otf ("workshopId","clientName","clientId","knownPlaceId","baseName",direccion,lat,lng,
         "fechaProgramadaMs",status,"assignedTechName","assignedVehicleName","webfleetVehicleId",notas,"createdAtMs","updatedAtMs")
@@ -12822,10 +14754,41 @@ app.post("/api/otf", requireSupervisorRole, async (req, res) => {
   }
 });
 
+// Cancelar una OTF (endpoint dedicado: el PUT genérico reescribe todos los
+// campos y solo queremos tocar el estado).
+app.post("/api/otf/:id/cancelar", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no valido" });
+    const r = await db.query(
+      `UPDATE otf SET status = 'cancelada', "updatedAtMs" = $2
+       WHERE id = $1 AND status <> 'finalizada' RETURNING id`,
+      [id, Date.now()]
+    );
+    if (!r.rows.length) {
+      return res.status(409).json({ error: "La OTF no existe o ya está finalizada (no se puede cancelar)" });
+    }
+    res.json(await otfWithDetails(id));
+  } catch (e) {
+    console.error("POST /api/otf/:id/cancelar error:", e);
+    res.status(500).json({ error: "Error cancelando OTF" });
+  }
+});
+
 app.put("/api/otf/:id", requireSupervisorRole, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const b = req.body ?? {};
+
+    if (b.assignedTechName) {
+      const disp = await checkTechDisponibleParaOtf(
+        b.assignedTechName,
+        b.knownPlaceId != null ? Number(b.knownPlaceId) : null,
+        id
+      );
+      if (!disp.ok) return res.status(409).json({ error: disp.error, code: "TECH_OCUPADO" });
+    }
+
     await db.query(
       `UPDATE otf SET
          "clientName" = COALESCE($2,"clientName"),
@@ -12875,9 +14838,9 @@ app.put("/api/otf/trabajos/:tid", requireSupervisorRole, async (req, res) => {
       ? combineTrabajo(b.trabajoPlantilla, b.detalleManual) : null;
     const r = await db.query(
       `UPDATE otf_trabajos SET
-         plate = COALESCE($2,plate), "plateRemolque" = $3, "tipoVehiculo" = COALESCE($4,"tipoVehiculo"),
+         plate = COALESCE($2,plate), "plateRemolque" = COALESCE($3,"plateRemolque"), "tipoVehiculo" = COALESCE($4,"tipoVehiculo"),
          "trabajoPlantilla" = $5, "detalleManual" = $6, trabajo = COALESCE($7,trabajo),
-         status = COALESCE($8,status), observaciones = $9, "updatedAtMs" = $10
+         status = COALESCE($8,status), observaciones = COALESCE($9,observaciones), "updatedAtMs" = $10
        WHERE id = $1 RETURNING *`,
       [tid, b.plate != null ? String(b.plate).toUpperCase().trim() : null, b.plateRemolque ?? null,
        b.tipoVehiculo ?? null, b.trabajoPlantilla ?? null, b.detalleManual ?? null, trabajo,
@@ -12964,11 +14927,23 @@ app.post("/api/roadside-operator/otf/:id/trabajos", requireRoadsideOperator, asy
     if (!b.plate || !b.tipoVehiculo || (!b.trabajoPlantilla && !b.detalleManual) || !b.motivoAltaCampo) {
       return res.status(400).json({ error: "Matrícula, tipo, trabajo y motivo son obligatorios" });
     }
-    if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
-      const dup = await db.query(`SELECT * FROM otf_trabajos WHERE "otfId" = $1 ORDER BY id DESC LIMIT 1`, [otfId]);
-      return res.json(normalizeOtfTrabajo(dup.rows[0]));
-    }
     const trabajo = combineTrabajo(b.trabajoPlantilla, b.detalleManual);
+    if (req.body?.clientActionId && (await isDuplicateAction(req.body.clientActionId))) {
+      // Reintento del mismo alta: se devuelve el trabajo que creó el intento
+      // anterior. Se busca por los datos del alta y no "el último de la OTF":
+      // otro técnico puede haber añadido uno en medio, y las fotos acabarían
+      // colgando del trabajo equivocado.
+      const dup = await db.query(
+        `SELECT * FROM otf_trabajos
+          WHERE "otfId" = $1 AND plate = $2 AND trabajo = $3
+            AND origen = 'tecnico_campo' AND "creadoPorTecnico" = $4
+          ORDER BY id DESC LIMIT 1`,
+        [otfId, String(b.plate).toUpperCase().trim(), trabajo, operator.techName]
+      );
+      // Si no aparece, el intento anterior se quedó sin crear nada pese a haber
+      // registrado la acción: se sigue adelante y se crea ahora.
+      if (dup.rows[0]) return res.json(normalizeOtfTrabajo(dup.rows[0]));
+    }
     const now = Date.now();
     const r = await db.query(
       `INSERT INTO otf_trabajos ("otfId",plate,"plateRemolque","tipoVehiculo","trabajoPlantilla","detalleManual",trabajo,
@@ -13120,21 +15095,47 @@ app.get("/api/otf/:id/report.pdf", requireAdminRole, async (req, res) => {
     const planificados = data.trabajos.filter((t: any) => t.origen !== "tecnico_campo");
     const enCampo = data.trabajos.filter((t: any) => t.origen === "tecnico_campo");
 
-    const printT = (t: any) => {
+    const FOTO_LABELS: Record<string, string> = { matricula: "Matrícula", averia: "Avería" };
+    const printT = async (t: any) => {
+      if (doc.y > 700) doc.addPage();
       doc.fontSize(10).font("Helvetica-Bold").text(`${t.plate || "—"} · ${t.tipoVehiculo || ""}  [${t.status}]`);
       doc.fontSize(9).font("Helvetica").text(`   ${t.trabajo || ""}`);
+      if (t.observaciones) doc.fontSize(8).font("Helvetica").text(`   Observaciones: ${t.observaciones}`);
       if (t.motivoAltaCampo) doc.fontSize(8).font("Helvetica-Oblique").text(`   Motivo alta en campo: ${t.motivoAltaCampo}`);
+      // Fotos del trabajo (matrícula, avería…): fila de miniaturas etiquetadas
+      const fotos = (t.fotos ?? []).slice(0, 4);
+      if (fotos.length > 0) {
+        if (doc.y > 640) doc.addPage();
+        const y0 = doc.y + 4;
+        let x = 50;
+        for (const f of fotos) {
+          try {
+            const buf = await fetchImageForPdf(f.url);
+            doc.image(buf, x, y0, { fit: [110, 80] });
+            const label = FOTO_LABELS[String(f.kind)] ?? "";
+            if (label) {
+              doc.fontSize(7).font("Helvetica").fillColor("#555555")
+                .text(label, x, y0 + 83, { width: 110, align: "center" });
+              doc.fillColor("#000000");
+            }
+            x += 120;
+          } catch { /* foto no accesible: se omite */ }
+        }
+        doc.x = 40;
+        doc.y = y0 + 96;
+      }
       doc.moveDown(0.2);
     };
 
     doc.fontSize(11).font("Helvetica-Bold").text("Planificados por oficina:");
     if (planificados.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
-    planificados.forEach(printT);
+    for (const t of planificados) await printT(t);
 
     doc.moveDown(0.4);
+    if (doc.y > 700) doc.addPage();
     doc.fontSize(11).font("Helvetica-Bold").text("Añadidos en campo por el técnico:");
     if (enCampo.length === 0) doc.fontSize(9).font("Helvetica").text("  (ninguno)");
-    enCampo.forEach(printT);
+    for (const t of enCampo) await printT(t);
 
     // Firma única
     if (data.firmaUrl || data.firmanteNombre) {
@@ -13235,6 +15236,39 @@ function requireTyreControlUser(
     next();
   })().catch((error) => {
     console.error("requireTyreControlUser error:", error);
+    res.status(500).json({ error: "Error de autenticación" });
+  });
+}
+
+// Igual que requireTyreControlUser pero para el DASHBOARD WEB (acceso_panel),
+// no la APK (acceso_apk) — la ficha técnica se sube desde la web, y un
+// administrador que solo usa el panel no tiene por qué tener acceso_apk.
+function requireTyreControlPanelUser(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  void (async () => {
+    const authHeader = String(req.headers["authorization"] ?? "");
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "No autenticado" });
+
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data.user) return res.status(401).json({ error: "Sesión no válida" });
+
+    const { data: perfil } = await supabase
+      .from("tc_usuarios")
+      .select("id, acceso_panel, es_superadmin, activo")
+      .eq("id", data.user.id)
+      .maybeSingle();
+    if (!perfil || !perfil.activo || (!perfil.acceso_panel && !perfil.es_superadmin)) {
+      return res.status(403).json({ error: "Sin acceso al panel" });
+    }
+
+    (req as any).tyreControlUserId = data.user.id;
+    next();
+  })().catch((error) => {
+    console.error("requireTyreControlPanelUser error:", error);
     res.status(500).json({ error: "Error de autenticación" });
   });
 }
@@ -13421,15 +15455,25 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
     const b = req.body ?? {};
     const nombre = String(b.nombre ?? "").trim();
     const email = String(b.email ?? "").trim().toLowerCase();
-    const password = String(b.password ?? "");
     const rol = String(b.rol ?? "cliente");
     const accesoApk = Boolean(b.acceso_apk ?? false);
     const accesoPanel = Boolean(b.acceso_panel ?? true);
     // Un admin normal solo crea en SU empresa; el super-admin en la que indique.
     const empresaId = esSuper ? String(b.empresa_id ?? perfil.empresa_id) : perfil.empresa_id;
 
-    if (!nombre || !email || !password) return res.status(400).json({ error: "Nombre, email y contraseña son obligatorios" });
+    if (!nombre || !email) return res.status(400).json({ error: "Nombre y email son obligatorios" });
     if (!["administrador", "operador", "cliente"].includes(rol)) return res.status(400).json({ error: "Rol no válido" });
+
+    // La contraseña solo hace falta para entrar en la APK (allí es el PIN). En
+    // el panel se entra con enlace por email, así que obligar a un admin a
+    // inventar una contraseña para un cliente creaba una credencial que nadie
+    // usaría y que el admin conocería. Si no viene, se pone una aleatoria que
+    // nadie sabe: la cuenta solo es accesible por enlace.
+    const passwordPedida = String(b.password ?? "");
+    if (accesoApk && passwordPedida.length < 4) {
+      return res.status(400).json({ error: "Un usuario con acceso a la APK necesita un PIN de al menos 4 caracteres" });
+    }
+    const password = passwordPedida || crypto.randomBytes(24).toString("base64url");
 
     const { data: created, error: createErr } = await supabase.auth.admin.createUser({ email, password, email_confirm: true });
     if (createErr || !created.user) return res.status(400).json({ error: createErr?.message ?? "No se pudo crear el usuario" });
@@ -13456,6 +15500,133 @@ app.post("/api/tyrecontrol/usuarios", async (req, res) => {
     res.status(500).json({ error: error?.message || "Error interno" });
   }
 });
+
+/**
+ * Últimos accesos de los usuarios visibles para quien pregunta.
+ *
+ * `last_sign_in_at` vive en auth.users, que no es accesible desde el navegador
+ * ni con RLS: hace falta service role. Se devuelve un mapa {id: fecha} para no
+ * tener que rehacer el listado de usuarios, que sigue saliendo por Supabase.
+ *
+ * El alcance lo pone el servidor, no el cliente: un admin de empresa solo ve
+ * los de SU empresa. Aceptar una lista de ids del body sin comprobarla dejaría
+ * consultar la actividad de cualquiera.
+ */
+app.get(
+  "/api/tyrecontrol/usuarios/ultimos-accesos",
+  authenticate,
+  requireModule("tyrecontrol"),
+  requireTyreControlAdmin,
+  async (req, res) => {
+    try {
+      const admin = (req as any).tcAdmin as { id: string; es_superadmin: boolean };
+
+      let q = supabase.from("tc_usuarios").select("id");
+      if (!admin.es_superadmin) {
+        const { data: yo } = await supabase
+          .from("tc_usuarios").select("empresa_id").eq("id", admin.id).maybeSingle();
+        if (!yo?.empresa_id) return res.json({ accesos: {} });
+        q = q.eq("empresa_id", yo.empresa_id);
+      }
+      const { data: visibles } = await q;
+      const permitidos = new Set((visibles ?? []).map((u: any) => u.id as string));
+      if (permitidos.size === 0) return res.json({ accesos: {} });
+
+      // listUsers pagina de 50 en 50 por defecto. Se recorre hasta agotar,
+      // con un tope por si el proyecto crece: mejor un dato incompleto que
+      // una petición que nunca termina.
+      const accesos: Record<string, string | null> = {};
+      const PAGINAS_MAX = 40;
+      for (let page = 1; page <= PAGINAS_MAX; page++) {
+        const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+        if (error) return res.status(400).json({ error: error.message });
+        const lote = data?.users ?? [];
+        for (const u of lote) {
+          if (permitidos.has(u.id)) accesos[u.id] = (u as any).last_sign_in_at ?? null;
+        }
+        if (lote.length < 1000) break;
+      }
+      res.json({ accesos });
+    } catch (error: any) {
+      console.error("GET /api/tyrecontrol/usuarios/ultimos-accesos error:", error?.message);
+      res.status(500).json({ error: error?.message || "Error consultando los accesos" });
+    }
+  },
+);
+
+/**
+ * Genera un enlace de acceso de un solo uso para un usuario del panel.
+ *
+ * Por qué existe: el panel se entra con enlace mágico por email
+ * (signInWithOtp), no con contraseña. Para invitar a un cliente hay dos
+ * caminos y aquí se eligen los dos:
+ *   · El cliente puede pedirse su propio enlace desde la pantalla de login.
+ *   · El administrador puede generar el enlace aquí y pasárselo por el canal
+ *     que ya usa con él (WhatsApp, su email corporativo).
+ *
+ * Se usa generateLink y NO inviteUserByEmail a propósito: generateLink
+ * devuelve el enlace sin depender del envío de correo de Supabase, que en el
+ * plan por defecto está muy limitado y no sirve para producción. Quien manda
+ * el enlace es el administrador, y así el flujo no falla en silencio.
+ *
+ * El enlace es una credencial de un solo uso: NO se registra en los logs.
+ */
+app.post(
+  "/api/tyrecontrol/usuarios/:id/enlace-acceso",
+  authenticate,
+  requireModule("tyrecontrol"),
+  requireTyreControlAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      const admin = (req as any).tcAdmin as { id: string; rol: string; es_superadmin: boolean };
+
+      const { data: objetivo } = await supabase
+        .from("tc_usuarios")
+        .select("id, email, nombre, activo, acceso_panel, empresa_id")
+        .eq("id", id)
+        .maybeSingle();
+      if (!objetivo) return res.status(404).json({ error: "Usuario no encontrado" });
+
+      // Un admin de empresa solo genera enlaces de SU empresa; el super-admin,
+      // de cualquiera. Sin esto, un admin podría suplantar a un cliente ajeno.
+      if (!admin.es_superadmin) {
+        const { data: yo } = await supabase
+          .from("tc_usuarios").select("empresa_id").eq("id", admin.id).maybeSingle();
+        if (!yo?.empresa_id || yo.empresa_id !== objetivo.empresa_id) {
+          return res.status(403).json({ error: "Ese usuario no es de tu empresa" });
+        }
+      }
+
+      if (!objetivo.activo) return res.status(400).json({ error: "El usuario está desactivado" });
+      if (!objetivo.acceso_panel) return res.status(400).json({ error: "Ese usuario no tiene acceso al panel" });
+      if (!objetivo.email) return res.status(400).json({ error: "El usuario no tiene email" });
+
+      const base = String(req.body?.origen ?? "").trim();
+      // Solo se acepta un origen http(s) para no fabricar enlaces hacia
+      // esquemas raros; el destino real lo valida además Supabase con su
+      // lista de Redirect URLs.
+      const redirectTo = /^https?:\/\//i.test(base)
+        ? `${base.replace(/\/$/, "")}/tyrecontrol/dashboard`
+        : undefined;
+
+      const { data, error } = await supabase.auth.admin.generateLink({
+        type: "magiclink",
+        email: objetivo.email,
+        options: redirectTo ? { redirectTo } : undefined,
+      });
+      if (error) return res.status(400).json({ error: error.message });
+
+      const enlace = (data as any)?.properties?.action_link as string | undefined;
+      if (!enlace) return res.status(500).json({ error: "Supabase no devolvió el enlace" });
+
+      res.json({ ok: true, enlace, email: objetivo.email });
+    } catch (error: any) {
+      console.error("POST /api/tyrecontrol/usuarios/:id/enlace-acceso error:", error?.message);
+      res.status(500).json({ error: error?.message || "Error generando el enlace" });
+    }
+  },
+);
 
 // Elimina un usuario del todo (perfil + asignaciones + usuario de auth).
 // Si el usuario tiene historial (revisiones, etc., por FK) se bloquea con
@@ -13526,6 +15697,565 @@ app.post(
     }
   }
 );
+
+/* =========================================================
+   TYRECONTROL · FICHA TÉCNICA DEL VEHÍCULO
+   Subida del documento (PDF o fotos de las páginas), OCR y
+   cálculo de la configuración de ejes. La ficha del vehículo NO
+   se toca aquí: esto solo deja los datos listos para revisar.
+========================================================= */
+
+const BUCKET_DOCS = "tc-documentos";
+const fichaOcr = new OpenAiFichaTecnicaOcr();
+
+/// URL firmada (el bucket es privado: la ficha lleva VIN y titular).
+async function urlFirmadaDoc(storagePath: string, segundos = 3600): Promise<string | null> {
+  const { data } = await supabase.storage.from(BUCKET_DOCS).createSignedUrl(storagePath, segundos);
+  return data?.signedUrl ?? null;
+}
+
+/// Comprueba que el usuario puede tocar este vehículo y devuelve su empresa.
+async function vehiculoDeUsuario(vehiculoId: string): Promise<{ id: string; empresa_id: string; matricula: string; bastidor: string | null; tipo_vehiculo_id: string | null } | null> {
+  const { data } = await supabase
+    .from("tc_vehiculos")
+    .select("id, empresa_id, matricula, bastidor, tipo_vehiculo_id")
+    .eq("id", vehiculoId)
+    .maybeSingle();
+  return (data as any) ?? null;
+}
+
+// Sube la ficha técnica (PDF o imágenes de las páginas). Varias páginas en
+// una misma subida = un solo documento.
+app.post(
+  "/api/tyrecontrol/vehiculos/:id/ficha-tecnica",
+  requireTyreControlPanelUser,
+  upload.array("files", 12),
+  async (req, res) => {
+    try {
+      const vehiculoId = String(req.params.id);
+      const userId = (req as any).tyreControlUserId as string;
+      const files = (req.files as Express.Multer.File[]) ?? [];
+      if (!files.length) return res.status(400).json({ error: "No se recibió ningún archivo" });
+
+      const veh = await vehiculoDeUsuario(vehiculoId);
+      if (!veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+
+      // Un mismo archivo subido dos veces no crea documentos duplicados.
+      const hash = crypto.createHash("sha256");
+      for (const f of files) hash.update(f.buffer);
+      const sha = hash.digest("hex");
+
+      const { data: yaExiste } = await supabase
+        .from("tc_vehiculo_documentos")
+        .select("id")
+        .eq("vehiculo_id", vehiculoId)
+        .eq("hash_sha256", sha)
+        .maybeSingle();
+      if (yaExiste) {
+        return res.status(409).json({ error: "Este documento ya está subido", id: (yaExiste as any).id });
+      }
+
+      // Las páginas van juntas bajo una carpeta por documento.
+      const carpeta = `${veh.empresa_id}/${vehiculoId}/${Date.now()}`;
+      const rutas: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const ext = (f.originalname.split(".").pop() || "bin").toLowerCase();
+        const ruta = `${carpeta}/p${String(i + 1).padStart(2, "0")}.${ext}`;
+        const { error } = await supabase.storage
+          .from(BUCKET_DOCS)
+          .upload(ruta, f.buffer, { contentType: f.mimetype, upsert: false });
+        if (error) throw new Error(error.message);
+        rutas.push(ruta);
+      }
+
+      // El nuevo documento pasa a ser el vigente; el anterior se archiva.
+      await supabase
+        .from("tc_vehiculo_documentos")
+        .update({ vigente: false })
+        .eq("vehiculo_id", vehiculoId)
+        .eq("tipo", "ficha_tecnica")
+        .eq("vigente", true);
+
+      const { data: doc, error: insErr } = await supabase
+        .from("tc_vehiculo_documentos")
+        .insert({
+          vehiculo_id: vehiculoId,
+          empresa_id: veh.empresa_id,
+          tipo: "ficha_tecnica",
+          storage_path: carpeta,
+          nombre_original: files[0].originalname,
+          mime_type: files[0].mimetype,
+          paginas: files.length,
+          tamano_bytes: files.reduce((s, f) => s + f.size, 0),
+          hash_sha256: sha,
+          ocr_estado: "pendiente",
+          subido_por: userId,
+        })
+        .select("id, paginas, created_at")
+        .single();
+      if (insErr) throw new Error(insErr.message);
+
+      res.json({ ok: true, documento: doc, paginas: rutas.length });
+    } catch (e: any) {
+      console.error("POST ficha-tecnica error:", e);
+      res.status(500).json({ error: e?.message || "Error subiendo la ficha técnica" });
+    }
+  }
+);
+
+// Sube una ficha técnica SIN vehículo todavía: sirve para crear el vehículo
+// directamente desde el documento (alta rápida). El documento queda "huérfano"
+// (vehiculo_id null) hasta que /documentos/:id/aplicar lo enlaza al vehículo
+// recién creado.
+app.post(
+  "/api/tyrecontrol/documentos/nueva-ficha",
+  requireTyreControlPanelUser,
+  upload.array("files", 12),
+  async (req, res) => {
+    try {
+      const empresaId = String(req.body.empresaId || "");
+      if (!empresaId) return res.status(400).json({ error: "Falta la empresa" });
+      const userId = (req as any).tyreControlUserId as string;
+      const files = (req.files as Express.Multer.File[]) ?? [];
+      if (!files.length) return res.status(400).json({ error: "No se recibió ningún archivo" });
+
+      const hash = crypto.createHash("sha256");
+      for (const f of files) hash.update(f.buffer);
+      const sha = hash.digest("hex");
+
+      const carpeta = `${empresaId}/nuevo/${Date.now()}`;
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const ext = (f.originalname.split(".").pop() || "bin").toLowerCase();
+        const ruta = `${carpeta}/p${String(i + 1).padStart(2, "0")}.${ext}`;
+        const { error } = await supabase.storage
+          .from(BUCKET_DOCS)
+          .upload(ruta, f.buffer, { contentType: f.mimetype, upsert: false });
+        if (error) throw new Error(error.message);
+      }
+
+      const { data: doc, error: insErr } = await supabase
+        .from("tc_vehiculo_documentos")
+        .insert({
+          vehiculo_id: null,
+          empresa_id: empresaId,
+          tipo: "ficha_tecnica",
+          storage_path: carpeta,
+          nombre_original: files[0].originalname,
+          mime_type: files[0].mimetype,
+          paginas: files.length,
+          tamano_bytes: files.reduce((s, f) => s + f.size, 0),
+          hash_sha256: sha,
+          ocr_estado: "pendiente",
+          subido_por: userId,
+        })
+        .select("id, paginas, created_at")
+        .single();
+      if (insErr) throw new Error(insErr.message);
+
+      res.json({ ok: true, documento: doc });
+    } catch (e: any) {
+      console.error("POST documentos/nueva-ficha error:", e);
+      res.status(500).json({ error: e?.message || "Error subiendo la ficha técnica" });
+    }
+  }
+);
+
+// Procesa el OCR del documento y devuelve los datos detectados SIN aplicarlos.
+app.post(
+  "/api/tyrecontrol/documentos/:id/ocr",
+  requireTyreControlPanelUser,
+  async (req, res) => {
+    const docId = String(req.params.id);
+    try {
+      const { data: doc } = await supabase
+        .from("tc_vehiculo_documentos")
+        .select("id, vehiculo_id, storage_path, mime_type, paginas")
+        .eq("id", docId)
+        .maybeSingle();
+      if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
+
+      // Documento "huérfano" (subido para crear el vehículo directamente):
+      // aún no hay vehículo con el que comparar ni tipo que sugiera la
+      // configuración, se sigue igual pero sin esas comprobaciones.
+      const vehiculoIdDoc = (doc as any).vehiculo_id as string | null;
+      const veh = vehiculoIdDoc ? await vehiculoDeUsuario(vehiculoIdDoc) : null;
+      if (vehiculoIdDoc && !veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+
+      await supabase.from("tc_vehiculo_documentos")
+        .update({ ocr_estado: "procesando", ocr_error: null }).eq("id", docId);
+
+      // Páginas del documento → entradas para el modelo de visión.
+      const { data: lista } = await supabase.storage
+        .from(BUCKET_DOCS).list((doc as any).storage_path, { limit: 50, sortBy: { column: "name", order: "asc" } });
+      const archivos = (lista ?? []).filter((f) => f.name && !f.name.startsWith("."));
+      if (!archivos.length) throw new Error("No se han podido leer las páginas del documento");
+
+      // El modelo lee imágenes, no PDF: si se subió un PDF se rasteriza aquí
+      // (mupdf, sin dependencias del sistema) y cada página pasa como imagen.
+      const esPdf = archivos.some((f) => f.name.toLowerCase().endsWith(".pdf"));
+      const urls: string[] = [];
+      if (esPdf) {
+        const nombrePdf = archivos.find((f) => f.name.toLowerCase().endsWith(".pdf"))!.name;
+        const { data: descarga, error: dlErr } = await supabase.storage
+          .from(BUCKET_DOCS).download(`${(doc as any).storage_path}/${nombrePdf}`);
+        if (dlErr || !descarga) throw new Error(dlErr?.message || "No se pudo descargar el PDF");
+        const buffer = Buffer.from(await descarga.arrayBuffer());
+
+        let paginas;
+        try {
+          paginas = rasterizarPdf(buffer);
+        } catch (e: any) {
+          await supabase.from("tc_vehiculo_documentos")
+            .update({ ocr_estado: "error", ocr_error: `PDF ilegible: ${e?.message}` }).eq("id", docId);
+          return res.status(422).json({
+            error: "No se ha podido leer el PDF (puede estar corrupto o protegido). Prueba a fotografiar las páginas desde la tablet.",
+          });
+        }
+        for (const p of paginas) urls.push(`data:image/png;base64,${p.png.toString("base64")}`);
+        await supabase.from("tc_vehiculo_documentos")
+          .update({ paginas: paginas.length }).eq("id", docId);
+      } else {
+        for (const f of archivos) {
+          const u = await urlFirmadaDoc(`${(doc as any).storage_path}/${f.name}`);
+          if (u) urls.push(u);
+        }
+      }
+      if (!urls.length) throw new Error("No se han podido leer las páginas del documento");
+
+      const resultado = await fichaOcr.extraer(urls);
+
+      // Configuración de ejes: se CALCULA contando neumáticos por eje, nunca
+      // se copia la nomenclatura del fabricante.
+      const { data: tipo } = veh?.tipo_vehiculo_id
+        ? await supabase.from("tc_tipos_vehiculo").select("nombre").eq("id", veh.tipo_vehiculo_id).maybeSingle()
+        : { data: null as any };
+      const calc = calcularConfiguracion(resultado, (tipo as any)?.nombre ?? null);
+      const avisos = avisosCoherencia(calc);
+
+      // Aviso bloqueante si el documento no es de este vehículo (no aplica
+      // si aún no hay vehículo: se está creando uno nuevo a partir de esto).
+      const campo = (clave: string) =>
+        resultado.campos.find((c) => (c.clave ?? "").toLowerCase() === clave)?.valor?.trim() ?? null;
+      const norm = (s: string | null) => (s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const vinDoc = campo("vin"), matriculaDoc = campo("matricula");
+      const bloqueos: string[] = [];
+      if (veh) {
+        if (vinDoc && veh.bastidor && norm(vinDoc) !== norm(veh.bastidor)) {
+          bloqueos.push(`El bastidor de la ficha (${vinDoc}) no coincide con el del vehículo (${veh.bastidor}).`);
+        }
+        if (matriculaDoc && norm(matriculaDoc) !== norm(veh.matricula)) {
+          bloqueos.push(`La matrícula de la ficha (${matriculaDoc}) no coincide con la del vehículo (${veh.matricula}).`);
+        }
+      }
+
+      // ¿Existe ya esa configuración en el catálogo?
+      let configExiste = false;
+      if (calc.configuracion) {
+        const { data: cfg } = await supabase.from("tc_config_ejes")
+          .select("id").eq("nombre", calc.configuracion).maybeSingle();
+        configExiste = !!cfg;
+      }
+
+      await supabase.from("tc_vehiculo_documentos").update({
+        ocr_estado: "ok",
+        ocr_confianza: resultado.confianza,
+        ocr_datos: { ...resultado, configuracion: calc },
+      }).eq("id", docId);
+
+      res.json({
+        ok: true,
+        campos: resultado.campos,
+        ejes: calc.ejes,
+        configuracion: calc.configuracion,
+        configuracionPendiente: calc.motivoPendiente ?? null,
+        configuracionExisteEnCatalogo: configExiste,
+        configuracionConvencional: calc.configuracionConvencional,
+        observaciones: resultado.observaciones,
+        confianza: resultado.confianza,
+        avisos,
+        bloqueos,
+      });
+    } catch (e: any) {
+      console.error("POST documentos/:id/ocr error:", e);
+      await supabase.from("tc_vehiculo_documentos")
+        .update({ ocr_estado: "error", ocr_error: String(e?.message ?? e) }).eq("id", docId);
+      res.status(500).json({ error: e?.message || "Error procesando el documento" });
+    }
+  }
+);
+
+// Aplica los cambios YA REVISADOS por el técnico. Nunca se aplica nada que
+// no haya pasado por la pantalla de revisión: aquí solo llega lo aceptado.
+app.post("/api/tyrecontrol/documentos/:id/aplicar", requireTyreControlPanelUser, async (req, res) => {
+  try {
+    const docId = String(req.params.id);
+    const userId = (req as any).tyreControlUserId as string;
+    const { campos, ejes, configuracion, configuracionConvencional, atributos, vehiculoId: vehiculoIdNuevo } = req.body ?? {};
+
+    const { data: doc } = await supabase
+      .from("tc_vehiculo_documentos").select("id, vehiculo_id, empresa_id").eq("id", docId).maybeSingle();
+    if (!doc) return res.status(404).json({ error: "Documento no encontrado" });
+
+    // Documento huérfano (alta directa desde ficha): el vehículo se acaba de
+    // crear y llega en el cuerpo de la petición; aquí se enlaza documento↔vehículo.
+    let vehiculoId = (doc as any).vehiculo_id as string | null;
+    const eraHuerfano = !vehiculoId;
+    if (!vehiculoId) {
+      if (!vehiculoIdNuevo) return res.status(400).json({ error: "Falta el vehículo al que aplicar la ficha" });
+      vehiculoId = String(vehiculoIdNuevo);
+    }
+
+    const veh = await vehiculoDeUsuario(vehiculoId);
+    if (!veh) return res.status(404).json({ error: "Vehículo no encontrado" });
+    if (veh.empresa_id !== (doc as any).empresa_id) {
+      return res.status(403).json({ error: "El vehículo no pertenece a la empresa del documento" });
+    }
+
+    const aplicado: string[] = [];
+
+    // 1) Campos del vehículo aceptados: cada clave del catálogo tiene su
+    //    columna propia y tipada (texto, entero, numérico o fecha) — no se
+    //    guarda como texto libre salvo lo que quede fuera del catálogo.
+    // La ficha tecnica vive en tc_vehiculo_atributos_tecnicos. Aqui solo
+    // quedan los campos que son columna del vehiculo porque son su identidad
+    // operativa (los usan listas, montajes, informes y la APK).
+    const COLUMNAS_TEXTO: Record<string, string> = {
+      marca: "marca", modelo: "modelo", vin: "bastidor", bastidor: "bastidor",
+    };
+    const COLUMNAS_ENTERO: Record<string, string> = {};
+    const COLUMNAS_NUMERICO: Record<string, string> = {};
+    const COLUMNAS_FECHA: Record<string, string> = {
+      fecha_primera_matriculacion: "fecha_matriculacion",
+    };
+    // "25/10/2017" → "2017-10-25". Una fecha en formato no ISO rompe el
+    // guardado (columna date de Postgres): mejor no aplicarla que romperlo.
+    const fechaIso = (v: string): string | null => {
+      const s = v.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      const m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+      return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : null;
+    };
+    // De un valor como "315/70R22.5" o "18.500 kg" se queda solo con el
+    // primer número: si no hay un número reconocible, no se aplica.
+    const numero = (v: string): number | null => {
+      const m = String(v).replace(",", ".").match(/-?\d+(\.\d+)?/);
+      return m ? Number(m[0]) : null;
+    };
+    const patch: Record<string, any> = {};
+    for (const [clave, valor] of Object.entries(campos ?? {})) {
+      if (valor == null || String(valor).trim() === "") continue;
+      const texto = String(valor).trim();
+      if (COLUMNAS_TEXTO[clave]) patch[COLUMNAS_TEXTO[clave]] = texto;
+      else if (COLUMNAS_ENTERO[clave]) { const n = numero(texto); if (n != null) patch[COLUMNAS_ENTERO[clave]] = Math.round(n); }
+      else if (COLUMNAS_NUMERICO[clave]) { const n = numero(texto); if (n != null) patch[COLUMNAS_NUMERICO[clave]] = n; }
+      else if (COLUMNAS_FECHA[clave]) { const iso = fechaIso(texto); if (iso) patch[COLUMNAS_FECHA[clave]] = iso; }
+    }
+    if (configuracionConvencional) {
+      patch.config_convencional = String(configuracionConvencional).trim();
+      patch.config_convencional_origen = "documento";
+    }
+
+    // 2) Configuración de ejes: se busca en el catálogo; si no existe, se crea
+    //    con la nomenclatura de TyreControl (neumáticos por eje).
+    if (configuracion) {
+      const nombre = String(configuracion).trim();
+      let { data: cfg } = await supabase
+        .from("tc_config_ejes").select("id").eq("nombre", nombre).maybeSingle();
+      if (!cfg) {
+        const { data: creada, error } = await supabase.from("tc_config_ejes")
+          .insert({ nombre, descripcion: `Detectada de ficha técnica (${nombre})` })
+          .select("id").single();
+        if (error) throw new Error(error.message);
+        cfg = creada as any;
+        aplicado.push(`configuración ${nombre} creada en el catálogo`);
+      }
+      patch.config_ejes_id = (cfg as any).id;
+      aplicado.push(`configuración ${nombre}`);
+    }
+
+    if (Object.keys(patch).length) {
+      const { error } = await supabase.from("tc_vehiculos").update(patch).eq("id", vehiculoId);
+      if (error) throw new Error(error.message);
+      aplicado.push(`${Object.keys(patch).length} campo(s) del vehículo`);
+    }
+
+    // 3) Ejes: un registro por eje, con sus neumáticos y atributos.
+    if (Array.isArray(ejes) && ejes.length) {
+      for (const e of ejes) {
+        const fila = {
+          vehiculo_id: vehiculoId,
+          eje: Number(e.posicion),
+          ruedas: e.ruedas != null ? Number(e.ruedas) : null,
+          directriz: e.directriz === true,
+          motriz: e.motriz === true,
+          elevable: e.elevable === true,
+        };
+        const { error } = await supabase
+          .from("tc_vehiculo_ejes").upsert(fila, { onConflict: "vehiculo_id,eje" });
+        if (error) throw new Error(error.message);
+      }
+      aplicado.push(`${ejes.length} eje(s)`);
+    }
+
+    // 4) Valores de la ficha técnica ITV. Esta tabla es la fuente de la
+    //    verdad del módulo: un código solo existe aquí si trae dato real,
+    //    enlazado al maestro y con el valor normalizado por su tipo.
+    //    Todo cambio deja rastro en el historial.
+    const ignorados: string[] = [];
+    if (Array.isArray(atributos) && atributos.length) {
+      const { data: catalogoRows } = await supabase
+        .from("tc_cat_campos_ficha_tecnica")
+        .select("id, clave, codigo, descripcion, unidad, tipo_dato, activo");
+      const porClave = new Map((catalogoRows ?? []).map((c: any) => [c.clave, c]));
+      const porCodigo = new Map((catalogoRows ?? [])
+        .filter((c: any) => c.codigo)
+        .map((c: any) => [String(c.codigo).toUpperCase().trim(), c]));
+
+      const { data: previosRows } = await supabase
+        .from("tc_vehiculo_atributos_tecnicos")
+        .select("id, campo_ficha_id, valor_bruto, unidad")
+        .eq("vehiculo_id", vehiculoId);
+      const previoPorCampo = new Map((previosRows ?? [])
+        .filter((p: any) => p.campo_ficha_id)
+        .map((p: any) => [p.campo_ficha_id as string, p]));
+
+      let guardados = 0;
+      for (const a of atributos as any[]) {
+        // Regla dura: nada vacío, ni guiones, ni "N/A". El cero sí entra.
+        if (!hasRealValue(a?.valor)) { continue; }
+        const cat = (a.clave ? porClave.get(a.clave) : null)
+          ?? (a.codigo_origen ? porCodigo.get(String(a.codigo_origen).toUpperCase().trim()) : null);
+        // Un código que no está en el maestro NO se guarda solo: se
+        // devuelve para que alguien decida si merece una definición.
+        if (!cat || cat.activo === false) {
+          ignorados.push(String(a.codigo_origen ?? a.clave ?? a.etiqueta_origen ?? "?"));
+          continue;
+        }
+
+        const n = normalizarValor(String(a.valor), cat.tipo_dato, cat.unidad);
+        const previo = previoPorCampo.get(cat.id);
+        const fila: Record<string, unknown> = {
+          vehiculo_id: vehiculoId,
+          documento_id: docId,
+          campo_ficha_id: cat.id,
+          codigo_origen: cat.codigo ?? a.codigo_origen ?? null,
+          etiqueta_origen: cat.descripcion ?? a.etiqueta_origen ?? null,
+          clave_normalizada: cat.clave,
+          valor_bruto: String(a.valor).trim(),
+          valor_normalizado: n.texto,
+          valor_json: n.json,
+          valor_numero: n.numero,
+          valor_fecha: n.fecha,
+          valor_booleano: n.booleano,
+          tipo_valor: cat.tipo_dato,
+          unidad: cat.unidad ?? a.unidad ?? null,
+          confianza: a.confianza ?? null,
+          estado: "validado",
+          origen: "ocr",
+          verificado_manualmente: true, // el usuario lo ha confirmado en la revisión
+          pagina: a.pagina ?? null,
+          validado_por: userId,
+          validado_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const { error } = previo
+          ? await supabase.from("tc_vehiculo_atributos_tecnicos").update(fila).eq("id", previo.id)
+          : await supabase.from("tc_vehiculo_atributos_tecnicos").insert(fila);
+        if (error) throw new Error(error.message);
+
+        await supabase.from("tc_vehiculo_ficha_historial").insert({
+          atributo_id: previo?.id ?? null,
+          vehiculo_id: vehiculoId,
+          campo_ficha_id: cat.id,
+          valor_anterior: previo ? { valor: previo.valor_bruto, unidad: previo.unidad } : null,
+          valor_nuevo: { valor: fila.valor_bruto, unidad: fila.unidad },
+          motivo_cambio: "ocr",
+          cambiado_por: userId,
+          documento_id: docId,
+        });
+        guardados++;
+      }
+      if (guardados) aplicado.push(`${guardados} dato(s) de ficha técnica`);
+    }
+
+    // Enlaza el documento huérfano con el vehículo recién creado.
+    if (eraHuerfano) {
+      await supabase.from("tc_vehiculo_documentos")
+        .update({ vehiculo_id: vehiculoId, vigente: true }).eq("id", docId);
+    }
+
+    res.json({ ok: true, aplicado, ignorados });
+  } catch (e: any) {
+    console.error("POST documentos/:id/aplicar error:", e);
+    res.status(500).json({ error: e?.message || "Error aplicando los cambios" });
+  }
+});
+
+// Documentos de un vehículo (con URL firmada de la primera página).
+// Crea las posiciones de neumático que le faltan a un tipo de vehículo a
+// partir de su configuración de ejes ("2x4x2" = 3 ejes con 2, 4 y 2 ruedas).
+// Es un cálculo, no una estimación: no interviene ningún modelo de IA.
+// Idempotente: solo añade los códigos que aún no existen, nunca borra.
+app.post("/api/tyrecontrol/tipos/:id/generar-posiciones", requireTyreControlPanelUser, async (req, res) => {
+  try {
+    const tipoId = String(req.params.id);
+    const { data: tipo } = await supabase
+      .from("tc_tipos_vehiculo").select("id, nombre, configuracion_ejes").eq("id", tipoId).maybeSingle();
+    if (!tipo) return res.status(404).json({ error: "Tipo de vehículo no encontrado" });
+
+    const generadas = generarPosiciones((tipo as any).configuracion_ejes);
+    if (!generadas.length) {
+      return res.status(422).json({
+        error: `El tipo "${(tipo as any).nombre}" no tiene una configuración de ejes válida (${(tipo as any).configuracion_ejes ?? "vacía"}). Indícala primero en Configuración.`,
+      });
+    }
+
+    const { data: existentes } = await supabase
+      .from("tc_posiciones_vehiculo").select("codigo_posicion").eq("tipo_vehiculo_id", tipoId);
+    const ya = new Set(((existentes ?? []) as any[]).map((p) => p.codigo_posicion));
+
+    const nuevas = generadas.filter((p) => !ya.has(p.codigo_posicion));
+    if (nuevas.length) {
+      const { error } = await supabase.from("tc_posiciones_vehiculo")
+        .insert(nuevas.map((p) => ({ ...p, tipo_vehiculo_id: tipoId, activo: true })));
+      if (error) throw new Error(error.message);
+    }
+
+    res.json({ ok: true, creadas: nuevas.length, total: generadas.length, yaExistian: generadas.length - nuevas.length });
+  } catch (e: any) {
+    console.error("POST tipos/:id/generar-posiciones error:", e);
+    res.status(500).json({ error: e?.message || "Error generando las posiciones" });
+  }
+});
+
+app.get("/api/tyrecontrol/vehiculos/:id/documentos", requireTyreControlPanelUser, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("tc_vehiculo_documentos")
+      .select("id, tipo, nombre_original, paginas, tamano_bytes, fecha_emision, ocr_estado, ocr_confianza, version, vigente, created_at, storage_path")
+      .eq("vehiculo_id", String(req.params.id))
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+
+    const docs = [];
+    for (const d of (data ?? []) as any[]) {
+      const { data: lista } = await supabase.storage
+        .from(BUCKET_DOCS).list(d.storage_path, { limit: 1, sortBy: { column: "name", order: "asc" } });
+      const primera = (lista ?? [])[0]?.name;
+      docs.push({
+        ...d,
+        url: primera ? await urlFirmadaDoc(`${d.storage_path}/${primera}`) : null,
+      });
+    }
+    res.json(docs);
+  } catch (e: any) {
+    console.error("GET vehiculos/:id/documentos error:", e);
+    res.status(500).json({ error: e?.message || "Error listando documentos" });
+  }
+});
 
 // KPIs / Dashboard de dirección
 app.get("/api/dashboard/kpis", requireAdminRole, async (req, res) => {
@@ -13691,48 +16421,48 @@ app.post(
       const dataUrl = `data:${req.file.mimetype};base64,${base64}`;
 
       const systemPrompt = `Eres un extractor de datos de administración de un taller.
-Recibirás la imagen de un aviso de devolución de recibo bancario o de una factura pendiente
+Recibirás la imagen de un aviso de devolución de recibo bancario o de facturas pendientes
 (normalmente un email del banco o de contabilidad con campos como CLIENTE, FACTURA,
-VENCIMIENTO, NOMINAL, GASTOS, TOTAL).
+VENCIMIENTO, NOMINAL, GASTOS, TOTAL). El aviso puede contener UNA o VARIAS partidas
+(varias facturas/recibos en una tabla).
 
 Responde SOLO con JSON válido, sin markdown, con esta estructura exacta:
 {
   "clienteCodigo": string | null,      // código numérico del cliente si aparece (ej. "100506")
   "clienteNombre": string | null,      // razón social (ej. "DENIS EXPRESS CARGO, S.L.")
-  "numeroFactura": string | null,      // número de la factura o recibo (ej. "0000001535")
-  "vencimiento": string | null,        // fecha de vencimiento en formato ISO yyyy-mm-dd
-  "numeroVencimiento": string | null,  // si la factura está partida en varios vencimientos, cuál es (ej. "2/3", "1/2"); null si no aparece
   "fechaContabilizacion": string | null, // FECHA CONTABILIZACIÓN del aviso en ISO yyyy-mm-dd
-  "fechaFactura": string | null,       // fecha de emisión de la factura en ISO yyyy-mm-dd; SOLO si aparece explícitamente como fecha de factura (no confundir con la contabilización)
-  "nominal": number | null,            // importe nominal en euros
-  "gastos": number | null,             // gastos de devolución en euros
-  "total": number | null,              // importe total en euros (nominal + gastos)
-  "confianza": "alta" | "media" | "baja"
+  "confianza": "alta" | "media" | "baja",
+  "partidas": [                        // UNA entrada por cada factura/recibo del aviso
+    {
+      "numeroFactura": string | null,      // número de la factura o recibo (ej. "0000001535")
+      "vencimiento": string | null,        // fecha de vencimiento en formato ISO yyyy-mm-dd
+      "numeroVencimiento": string | null,  // si la factura está partida en varios vencimientos, cuál es (ej. "2/3"); null si no aparece
+      "fechaFactura": string | null,       // fecha de emisión de la factura en ISO yyyy-mm-dd; SOLO si aparece explícitamente como fecha de factura (no confundir con la contabilización)
+      "nominal": number | null,            // importe nominal en euros
+      "gastos": number | null,             // gastos de devolución en euros
+      "total": number | null               // importe total de ESTA partida (nominal + gastos)
+    }
+  ]
 }
 
 Reglas:
+- Si el aviso tiene una tabla con varias facturas, devuelve una partida por fila (no las sumes en una sola).
+- El "Total" general del aviso (suma de todas las partidas) NO es una partida: ignóralo.
 - Fechas tipo "30.06.26" o "2.07.26" son dd.mm.aa → conviértelas a ISO (2026-06-30, 2026-07-02).
 - Importes en formato español "1.997,32" → 1997.32 (número, punto decimal).
-- Si el total no aparece pero sí nominal y gastos, calcula total = nominal + gastos.
+- Si el total de una partida no aparece pero sí nominal y gastos, calcula total = nominal + gastos.
 - Devuelve null en cualquier campo que no puedas leer con claridad.`;
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Extrae los datos del impagado de esta imagen:" },
-              { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
-            ],
-          },
-        ],
-        temperature: 0,
-        max_tokens: 400,
+      const rIa = await pedirIA({
+        operacion: "administracion.analizar-impagado",
+        proposito: "documento",
+        prompt: `${systemPrompt}\n\nExtrae los datos del impagado de esta imagen:`,
+        imagenes: [{ url: dataUrl }],
+        temperatura: 0,
+        maxTokens: 4000,
       });
 
-      const raw = response.choices[0]?.message?.content ?? "{}";
+      const raw = rIa.texto || "{}";
       const jsonTexto = limpiarJsonOpenAI(raw);
 
       let datos: any;
@@ -13742,6 +16472,21 @@ Reglas:
         console.error("analizar-impagado: respuesta no parseable:", raw);
         return res.status(422).json({ success: false, message: "No se pudieron extraer datos de la imagen." });
       }
+
+      // Normalizar: partidas siempre como array, y la primera aplanada en el
+      // nivel superior por compatibilidad con el formato antiguo de un solo recobro.
+      const partidas = Array.isArray(datos?.partidas) && datos.partidas.length
+        ? datos.partidas
+        : [{
+            numeroFactura: datos?.numeroFactura ?? null,
+            vencimiento: datos?.vencimiento ?? null,
+            numeroVencimiento: datos?.numeroVencimiento ?? null,
+            fechaFactura: datos?.fechaFactura ?? null,
+            nominal: datos?.nominal ?? null,
+            gastos: datos?.gastos ?? null,
+            total: datos?.total ?? null,
+          }];
+      datos = { ...datos, partidas, ...partidas[0] };
 
       return res.json({ success: true, datos });
     } catch (error) {
@@ -13796,23 +16541,16 @@ Reglas:
 - Si un dato aparece en varias capturas con valores distintos, prioriza el de "Datos Generales".
 - Devuelve null en cualquier campo que no puedas leer con claridad.`;
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: `Extrae los datos del cliente combinando estas ${dataUrls.length} captura(s):` },
-              ...dataUrls.map((url) => ({ type: "image_url" as const, image_url: { url, detail: "high" as const } })),
-            ],
-          },
-        ],
-        temperature: 0,
-        max_tokens: 400,
+      const rIa = await pedirIA({
+        operacion: "administracion.analizar-cliente",
+        proposito: "documento",
+        prompt: `${systemPrompt}\n\nExtrae los datos del cliente combinando estas ${dataUrls.length} captura(s):`,
+        imagenes: dataUrls.map((url: string) => ({ url })),
+        temperatura: 0,
+        maxTokens: 4000,
       });
 
-      const raw = response.choices[0]?.message?.content ?? "{}";
+      const raw = rIa.texto || "{}";
       const jsonTexto = limpiarJsonOpenAI(raw);
 
       let datos: any;
@@ -14292,6 +17030,15 @@ function startRecobrosNotifierChecker() {
 mountIntegrationHub(app);
 
 /* =========================================================
+   MOBILINK CASH (API bajo /api/cash)
+   Igual que el hub: antes del catch-all del SPA.
+========================================================= */
+
+mountCash(app);
+mountCentral(app);
+mountTacografos(app);
+
+/* =========================================================
    MOBILINK LICENCIAS (API bajo /api/licenses)
 ========================================================= */
 
@@ -14320,10 +17067,46 @@ mountLicenses(app, requireLicensesAdmin);
              mobilink-stockflow-<v>.apk
 ========================================================= */
 
-const APK_APPS: Record<string, { prefix: string; label: string }> = {
-  assist: { prefix: "mobilink-assist-", label: "Mobilink Assist" },
-  tyrecontrol: { prefix: "tyrecontrol-", label: "Mobilink TyreControl" },
+// Cada app puede publicarse por dos caminos:
+//  - releaseTag: la CI publica una GitHub Release por build (TyreControl). El
+//    centro de descargas redirige al asset, así que el binario NO vive en el
+//    repositorio y este no engorda 58 MB por compilación.
+//  - prefix: fichero suelto en public/ (las que todavía se compilan a mano).
+// Si hay release se usa la release; si falla o no hay, se cae al fichero.
+const APK_APPS: Record<
+  string,
+  { prefix: string; label: string; releaseTag?: string; pubspec?: string }
+> = {
+  assist: {
+    prefix: "mobilink-assist-",
+    label: "Mobilink Assist",
+    releaseTag: "assist-v",
+    pubspec: "flutter_app/pubspec.yaml",
+  },
+  // Lite ya publica releases, asi que lleva "pubspec" como las demas. Estuvo
+  // sin el a proposito mientras no habia publicado ninguna: la etiqueta se
+  // construye con la version del repositorio, y sin release detras eso daba un
+  // enlace roto. Ahora no puede pasar, porque la CI guarda esa version DESPUES
+  // de publicar; si el numero esta en el repo, su release existe.
+  "assist-lite": {
+    prefix: "mobilink-assist-lite-",
+    label: "Mobilink Assist Lite",
+    releaseTag: "assist-lite-v",
+    pubspec: "lite_app/pubspec.yaml",
+  },
+  tyrecontrol: {
+    prefix: "tyrecontrol-",
+    label: "Mobilink TyreControl",
+    releaseTag: "tyrecontrol-v",
+    pubspec: "tyrecontrol_app/pubspec.yaml",
+  },
   stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
+  taller: {
+    prefix: "mobilink-taller-",
+    label: "WorkPlanner Taller",
+    releaseTag: "taller-v",
+    pubspec: "taller_app/pubspec.yaml",
+  },
 };
 
 // Devuelve el APK más reciente (mayor versión) para un prefijo dado
@@ -14332,48 +17115,137 @@ function latestApkFor(prefix: string): { file: string; version: string } | null 
     const dir = path.join(__dirname, "../public");
     const files = fs
       .readdirSync(dir)
-      .filter((f) => f.startsWith(prefix) && f.endsWith(".apk"));
+      .filter((f) => f.startsWith(prefix) && f.endsWith(".apk"))
+      // "mobilink-assist-" es prefijo de "mobilink-assist-lite-": sin esto, la
+      // APK de Lite se colaría en la fila de Assist. Detrás del prefijo va la
+      // versión, así que lo siguiente tiene que ser un dígito.
+      .filter((f) => /^\d/.test(f.slice(prefix.length)));
     if (!files.length) return null;
     const withVer = files.map((f) => ({
       file: f,
       version: f.slice(prefix.length, -4), // entre prefijo y ".apk"
     }));
-    // Orden por versión semántica descendente
-    withVer.sort((a, b) => {
-      const pa = a.version.split(".").map((n) => parseInt(n, 10) || 0);
-      const pb = b.version.split(".").map((n) => parseInt(n, 10) || 0);
-      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-        if ((pb[i] || 0) !== (pa[i] || 0)) return (pb[i] || 0) - (pa[i] || 0);
-      }
-      return 0;
-    });
+    withVer.sort((a, b) => masNuevaPrimero(a.version, b.version));
     return withVer[0];
   } catch {
     return null;
   }
 }
 
-// JSON con la última versión de cada app (lo consume /descargas.html)
-app.get("/api/apps/list", (_req, res) => {
-  const out = Object.entries(APK_APPS).map(([key, { prefix, label }]) => {
-    const latest = latestApkFor(prefix);
-    return {
-      key,
-      label,
-      version: latest?.version ?? null,
-      url: latest ? `/apps/${key}` : null,
+// ── APK publicada como GitHub Release ───────────────────────────────────────
+// El repositorio es público, así que el asset se descarga sin credenciales y
+// basta con redirigir al navegador.
+//
+// Se pregunta por la ETIQUETA EXACTA (…/releases/tags/assist-v1.8.3+31), no
+// por la lista de releases: la lista pagina, y con varias apps publicando a
+// diario la de una app que publique poco se caía de la primera página. La
+// etiqueta se construye con la versión del pubspec del repositorio, que la CI
+// guarda solo DESPUÉS de publicar la release; si está en el repo, existe.
+//
+// Se cachea porque la API sin token permite 60 peticiones por hora y el centro
+// de descargas la consultaría en cada visita.
+const GH_REPO = process.env.GITHUB_REPO || "jcruset-create/mobilink";
+type ApkRelease = { version: string; url: string };
+const releaseCache = new Map<string, { hasta: number; valor: ApkRelease | null }>();
+const RELEASE_TTL_OK_MS = 10 * 60 * 1000;
+const RELEASE_TTL_FALLO_MS = 60 * 1000; // tras un fallo se reintenta antes
+
+async function releaseApkPorTag(tag: string, version: string): Promise<ApkRelease | null> {
+  const cache = releaseCache.get(tag);
+  if (cache && Date.now() < cache.hasta) return cache.valor;
+  try {
+    const headers: Record<string, string> = {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "mobilink-descargas",
     };
-  });
+    // Opcional: solo sirve para subir el límite de peticiones.
+    if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+    const r = await fetch(
+      `https://api.github.com/repos/${GH_REPO}/releases/tags/${encodeURIComponent(tag)}`,
+      { headers, signal: AbortSignal.timeout(8000) }
+    );
+    // 404 = esa release no existe (app que todavía no ha publicado ninguna).
+    // Se cachea como "no hay" para no preguntar en cada visita.
+    if (r.status === 404) {
+      releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_OK_MS, valor: null });
+      return null;
+    }
+    if (!r.ok) throw new Error(`GitHub HTTP ${r.status}`);
+    const rel = (await r.json()) as any;
+    const asset = (rel?.assets ?? []).find((a: any) => String(a.name ?? "").endsWith(".apk"));
+    const valor = asset?.browser_download_url
+      ? { version, url: asset.browser_download_url as string }
+      : null;
+    releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_OK_MS, valor });
+    return valor;
+  } catch (e: any) {
+    console.warn("[descargas] no se pudo consultar la release de GitHub:", e?.message || e);
+    // Se conserva lo último bueno si lo había; si no, se reintenta en un minuto.
+    const valor = cache?.valor ?? null;
+    releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_FALLO_MS, valor });
+    return valor;
+  }
+}
+
+// Versión declarada en el pubspec de la app dentro del repositorio. La CI
+// guarda ese número DESPUÉS de publicar la release, así que si está aquí es
+// que su release existe.
+function versionDelPubspec(rel: string): string | null {
+  try {
+    const txt = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
+    return txt.match(/^version:\s*(\S+)/m)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Resuelve la descarga de una app, por orden de preferencia:
+//   1. La release cuya etiqueta corresponde a la versión del repositorio.
+//   2. Fichero suelto en public/ (apps que todavía no publican release, o
+//      mientras GitHub no responde).
+// Devolver el fichero local como respaldo es lo que permite añadir el
+// releaseTag a una app ANTES de que su CI haya publicado nada: mientras no
+// exista la release se sigue sirviendo lo de siempre.
+async function resolverApk(
+  app0: { prefix: string; releaseTag?: string; pubspec?: string }
+): Promise<{ version: string; url?: string; file?: string } | null> {
+  if (app0.releaseTag && app0.pubspec) {
+    const v = versionDelPubspec(app0.pubspec);
+    if (v) {
+      const rel = await releaseApkPorTag(`${app0.releaseTag}${v}`, v);
+      if (rel) return { version: rel.version, url: rel.url };
+    }
+  }
+  const local = latestApkFor(app0.prefix);
+  return local ? { version: local.version, file: local.file } : null;
+}
+
+// JSON con la última versión de cada app (lo consume /descargas.html)
+app.get("/api/apps/list", async (_req, res) => {
+  const out = await Promise.all(
+    Object.entries(APK_APPS).map(async ([key, app0]) => {
+      const latest = await resolverApk(app0);
+      return {
+        key,
+        label: app0.label,
+        version: latest?.version ?? null,
+        url: latest ? `/apps/${key}` : null,
+      };
+    })
+  );
   res.json(out);
 });
 
 // Descarga directa de la última APK de una app
-app.get("/apps/:app", (req, res) => {
+app.get("/apps/:app", async (req, res) => {
   const app0 = APK_APPS[String(req.params.app)];
   if (!app0) return res.status(404).json({ error: "App no encontrada" });
-  const latest = latestApkFor(app0.prefix);
+  const latest = await resolverApk(app0);
   if (!latest) return res.status(404).json({ error: "Sin APK disponible" });
-  res.download(path.join(__dirname, "../public", latest.file));
+  // Con release se redirige al asset de GitHub: la descarga no pasa por
+  // nuestro servidor y el binario no vive en el repositorio.
+  if (latest.url) return res.redirect(302, latest.url);
+  res.download(path.join(__dirname, "../public", latest.file!));
 });
 
 /* =========================================================
@@ -14381,6 +17253,10 @@ app.get("/apps/:app", (req, res) => {
 ========================================================= */
 
 mountConnect(app, requireLicensesAdmin);
+
+// Asistente virtual de TyreControl (function calling sobre herramientas de
+// solo lectura). Ver server/tyrecontrol/asistente.ts.
+mountAsistente(app, authenticate, requireModule("tyrecontrol"));
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
@@ -14411,10 +17287,178 @@ app.use(
 /* =========================================================
    START SERVER
 ========================================================= */
+// ─────────────────────────────────────────────────────────────
+// Auto "En camino": si la furgoneta asignada se aleja >500 m del taller sin
+// que el operario haya pulsado "En camino", se activa solo (con ETA y
+// WhatsApp, como el botón). Salvaguarda: solo se dispara si antes vimos la
+// furgoneta DENTRO del radio tras la asignación ("armada"), para no marcar
+// en camino a furgonetas asignadas cuando ya estaban en ruta.
+// ─────────────────────────────────────────────────────────────
+const AUTO_EN_CAMINO_RADIO_M = 500;
+let autoEnCaminoRunning = false;
+
+async function activarEnCaminoAutomatico(
+  assistanceId: number,
+  origen: { lat: number; lng: number }
+) {
+  const current = await db.query(
+    `SELECT * FROM roadside_assistances WHERE id = $1 AND status = 'asignada' LIMIT 1`,
+    [assistanceId]
+  );
+  if (!current.rows.length) return; // alguien la cambió entre medias
+  const row = current.rows[0];
+  const now = Date.now();
+
+  // ETA solo si hay destino (sin coordenadas se activa igualmente, sin ruta)
+  let eta: { minutos: number; kilometros: string } | null = null;
+  const destLat = normalizeNullableNumber(row.latitude);
+  const destLng = normalizeNullableNumber(row.longitude);
+  if (destLat != null && destLng != null) {
+    try {
+      eta = await calcularETA(origen, { lat: destLat, lng: destLng });
+    } catch (e: any) {
+      console.error(`auto en-camino #${assistanceId}: ETA fallida:`, e?.message);
+    }
+  }
+
+  const result = await db.query(
+    `UPDATE roadside_assistances
+     SET status = 'en_camino',
+         "departedAtMs" = COALESCE("departedAtMs", $2),
+         "etaMinutos" = COALESCE($3, "etaMinutos"),
+         "etaKm" = COALESCE($4, "etaKm"),
+         "updatedAtMs" = $2
+     WHERE id = $1 RETURNING *`,
+    [assistanceId, now, eta?.minutos ?? null, eta?.kilometros ?? null]
+  );
+  const updated = normalizeRoadsideAssistanceRow(result.rows[0]);
+
+  await db.query(
+    `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+     VALUES ($1, 'en_camino', 'Automático: la furgoneta salió del taller (Webfleet)', 'auto-webfleet', $2)`,
+    [assistanceId, now]
+  );
+
+  // WhatsApp de "en camino" al cliente (igual que el botón), una sola vez
+  if (updated.customerPhone && !row.whatsappEnCaminoEnviado) {
+    try {
+      const trackingUrl = `${getPublicAppBaseUrl({} as express.Request)}/seguimiento/${updated.trackingToken}`;
+      const waResult = await sendRoadsideStatusWhatsApp(updated, "en_camino", {
+        etaMinutos: updated.etaMinutos,
+        etaKm: updated.etaKm,
+        trackingUrl,
+      });
+      if (waResult?.status === "sent") {
+        await db.query(
+          `UPDATE roadside_assistances
+           SET "whatsappEnCaminoEnviado" = true, "whatsappEnCaminoAt" = $2 WHERE id = $1`,
+          [assistanceId, now]
+        );
+      }
+    } catch (waErr: any) {
+      console.error(`auto en-camino #${assistanceId}: WhatsApp fallido:`, waErr?.message);
+    }
+  }
+
+  await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
+  console.log(`Auto en-camino: asistencia #${assistanceId} activada (furgoneta a >${AUTO_EN_CAMINO_RADIO_M} m del taller)`);
+}
+
+async function vigilarSalidaDelTaller() {
+  if (autoEnCaminoRunning) return; // sin solapes si Webfleet tarda
+  autoEnCaminoRunning = true;
+  try {
+    const asignadas = await db.query(
+      `SELECT id, "webfleetVehicleId", "autoEnCaminoArmada"
+       FROM roadside_assistances
+       WHERE status = 'asignada' AND "webfleetVehicleId" IS NOT NULL`
+    );
+    if (!asignadas.rows.length) return;
+
+    const wcfg = await getWorkshopConfig();
+    const wlat = parseFloat(wcfg.taller_lat);
+    const wlng = parseFloat(wcfg.taller_lng);
+    if (!Number.isFinite(wlat) || !Number.isFinite(wlng)) return;
+
+    // Una sola llamada trae la posición de toda la flota
+    const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
+    const response = await fetch(url, { headers });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (data?.errorCode) return;
+    const vehicles = Array.isArray(data) ? data : data?.data ?? [];
+    const posByObj = new Map<string, { lat: number; lng: number }>();
+    for (const v of vehicles) {
+      const lat = Number(v.latitude_mdeg) / 1_000_000;
+      const lng = Number(v.longitude_mdeg) / 1_000_000;
+      if (Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0)) {
+        posByObj.set(String(v.objectno), { lat, lng });
+      }
+    }
+
+    for (const a of asignadas.rows) {
+      const pos = posByObj.get(String(a.webfleetVehicleId));
+      if (!pos) continue;
+      const dist = haversineDistanceM(pos.lat, pos.lng, wlat, wlng);
+      if (dist <= AUTO_EN_CAMINO_RADIO_M) {
+        // Furgoneta vista en el taller: se arma el disparo automático
+        if (a.autoEnCaminoArmada !== true) {
+          await db.query(
+            `UPDATE roadside_assistances SET "autoEnCaminoArmada" = true WHERE id = $1`,
+            [a.id]
+          );
+        }
+      } else if (a.autoEnCaminoArmada === true) {
+        await activarEnCaminoAutomatico(Number(a.id), pos);
+      }
+    }
+  } catch (e: any) {
+    console.error("vigilarSalidaDelTaller error:", e?.message);
+  } finally {
+    autoEnCaminoRunning = false;
+  }
+}
+
+function startAutoEnCaminoWatcher() {
+  // Sin credenciales de Webfleet no hay posiciones: el chequeo saldrá vacío
+  setInterval(() => void vigilarSalidaDelTaller(), 60_000);
+  console.log(`Auto en-camino: vigilancia activa (radio ${AUTO_EN_CAMINO_RADIO_M} m, cada 60 s)`);
+}
+
+/**
+ * Prepara el esquema de un módulo sin poder tumbar el arranque.
+ *
+ * Antes, cualquier fallo aquí hacía `process.exit(1)` y el servicio no llegaba
+ * a abrir el puerto. Eso convertía un tropiezo pasajero de la base —una
+ * sentencia que se pasa del `statement_timeout`, un cerrojo que tarda— en una
+ * caída de TODO el SaaS: ni Connect, ni Licencias, ni Cash, ni el panel. Y como
+ * el proceso moría sin soltar sus conexiones, el reintento se encontraba el
+ * mismo cerrojo pillado y volvía a morir; el servicio no salía solo del bucle.
+ *
+ * Las migraciones son idempotentes y la base ya tiene el esquema puesto desde
+ * hace meses: servir con un esquema que quizá no se ha podido repasar es mucho
+ * mejor que no servir nada. El fallo se registra bien visible para que se vea
+ * en los logs del despliegue.
+ */
+async function prepararEsquema(nombre: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (error) {
+    console.error(
+      `[ARRANQUE] No se ha podido preparar el esquema de ${nombre}. ` +
+        "El servidor arranca igualmente; revisa este error cuanto antes.",
+      error
+    );
+  }
+}
+
 initDb()
-  .then(() => initIntegrationHub())
-  .then(() => initLicenses())
-  .then(() => initConnect())
+  .then(() => prepararEsquema("Integration Hub", initIntegrationHub))
+  .then(() => prepararEsquema("Licencias", initLicenses))
+  .then(() => prepararEsquema("Connect Pro", initConnect))
+  .then(() => prepararEsquema("Mobilink Cash", initCash))
+  .then(() => prepararEsquema("MC Central", initCentral))
+  .then(() => prepararEsquema("Tacógrafos", initTacografos))
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
@@ -14424,13 +17468,22 @@ initDb()
       startCaducidadRecordatoriosChecker(); // avisos WhatsApp/SMS de caducidad de tacógrafo
       startWebfleetSync(); // sincronización periódica de "vehículos en base"
       startMantenimientoAvisos(); // avisos automáticos de revisiones (próximas/vencidas)
+      startCheckpointMail(); // informe del arco CheckPoint por correo (apagado sin credenciales)
       startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
+      startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
+      startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
+      // Mobilink Cash: eventos de dominio hacia MC Central. Sin transporte
+      // registrado no hace nada: la cola espera destino (fase 3).
+      startCashEventWorker();
     });
   })
   .catch((error) => {
-    console.error("Error inicializando base de datos:", error);
+    // Solo llega aquí si falla `initDb`, que es la conexión con la base del
+    // núcleo: sin ella no hay nada que servir. Los esquemas de los módulos ya
+    // no pueden caer por aquí, van envueltos en `prepararEsquema`.
+    console.error("Error conectando con la base de datos del núcleo:", error);
     process.exit(1);
   });

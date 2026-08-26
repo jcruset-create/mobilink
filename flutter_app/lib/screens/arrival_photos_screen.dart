@@ -79,43 +79,6 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
     setState(() => _extraPhotos.add(file));
   }
 
-  Future<ImageSource?> _showSourceDialog(String label) {
-    return showModalBottomSheet<ImageSource>(
-      context: context,
-      backgroundColor: const Color(0xFF16213e),
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(label,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16)),
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt, color: Colors.white70),
-              title: const Text('Cámara',
-                  style: TextStyle(color: Colors.white70)),
-              onTap: () => Navigator.pop(context, ImageSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library, color: Colors.white70),
-              title: const Text('Galería',
-                  style: TextStyle(color: Colors.white70)),
-              onTap: () => Navigator.pop(context, ImageSource.gallery),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
-
   Future<void> _handlePlateResult(Map<String, dynamic> result) async {
     final action = result['plateAction'] as String? ?? 'none';
     final detected = result['detectedPlate'] as String?;
@@ -343,7 +306,10 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
       backgroundColor: const Color(0xFF1a1a2e),
       appBar: AppBar(
         toolbarHeight: 110,
-        title: Image.asset('assets/logo_horizontal2.png', height: 100),
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Image.asset('assets/logo_horizontal2.png', height: 100),
+        ),
         backgroundColor: const Color(0xFF16213e),
         foregroundColor: Colors.white,
       ),

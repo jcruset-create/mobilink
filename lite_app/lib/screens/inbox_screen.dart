@@ -1,16 +1,22 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../config.dart';
 import '../services/api.dart';
+import '../services/file_queue.dart';
+import '../services/push.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
 import '../theme.dart';
+import '../widgets/plate_badge.dart';
 import 'assistance_screen.dart';
 import 'login_screen.dart';
 import 'profile_screen.dart';
 
 /// Bandeja del operario: pendientes, activas y finalizadas.
-/// Refresca sola cada 25 s y al volver a primer plano; mientras no haya
-/// notificaciones push instaladas, este sondeo es lo que trae los avisos.
+///
+/// Los avisos llegan por push (Central asigna → suena el móvil). El sondeo se
+/// queda como red de seguridad por si el push falla o el dispositivo no lo
+/// tiene disponible: cada 25 s sin push, cada 2 min con él.
 class InboxScreen extends StatefulWidget {
   const InboxScreen({super.key, required this.session});
   final Session session;
@@ -22,6 +28,7 @@ class InboxScreen extends StatefulWidget {
 class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   late final Api _api = Api(widget.session.token);
   Timer? _timer;
+  StreamSubscription<PushEvent>? _push;
   int _tab = 0;
   bool _loading = true;
   bool _offline = false;
@@ -37,13 +44,55 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _load();
-    _timer = Timer.periodic(const Duration(seconds: 25), (_) => _load(silent: true));
+    // Con push, el sondeo solo cubre el hueco de un aviso perdido; sin él, es
+    // lo único que trae las asistencias nuevas.
+    _timer = Timer.periodic(
+      Duration(seconds: Push.disponible ? 120 : 25),
+      (_) => _load(silent: true),
+    );
+    _push = Push.events.listen(_alRecibirAviso);
+    _registrarDispositivo();
+  }
+
+  /// El token de push viaja con el resto del estado del dispositivo, que es
+  /// donde Central lo espera (connect_lite_devices). De paso va el estado de
+  /// las colas: es lo que permite a Central detectar un móvil que lleva horas
+  /// sin poder subir sus evidencias.
+  Future<void> _registrarDispositivo() async {
+    await _api.registerDevice({
+      if (Push.token != null) 'fcmToken': Push.token,
+      'notifPermission': Push.permiso,
+      'appVersion': kAppVersion,
+      ...estadoDeColas(),
+    }).catchError((_) {});
+  }
+
+  Future<void> _alRecibirAviso(PushEvent e) async {
+    // Token nuevo: si no se reenvía, los avisos se van a un dispositivo muerto
+    if (e.type == 'token_refresh') {
+      await _registrarDispositivo();
+      return;
+    }
+    await _load(silent: true);
+    if (!mounted) return;
+    // Solo se navega si el operario ha tocado la notificación. Un aviso con la
+    // app abierta no puede sacarle de lo que esté haciendo.
+    if (e.abrir && e.assistanceId != null) {
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => AssistanceScreen(
+          session: widget.session,
+          assistanceId: e.assistanceId!,
+        ),
+      ));
+      _load();
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
+    _push?.cancel();
     super.dispose();
   }
 
@@ -57,6 +106,8 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     // Antes de leer, se intenta vaciar lo que quedó pendiente sin cobertura
     try {
       await OfflineQueue.flush(_api);
+      // Las evidencias van aparte: son binarios y se suben de una en una
+      await FileQueue.flush(_api);
     } catch (_) {/* seguimos: se reintentará en el próximo ciclo */}
     try {
       final rows = await _api.assistances(_scopes[_tab]);
@@ -242,11 +293,19 @@ class _AssistanceCard extends StatelessWidget {
               const SizedBox(height: 6),
               Text(st.label, style: TextStyle(color: st.color, fontWeight: FontWeight.w600)),
               const SizedBox(height: 6),
+              // La matrícula manda: si viene informada, en grande y no
+              // enterrada en la línea de datos del vehículo.
+              if ((vehicle['plate']?.toString() ?? '').isNotEmpty) ...[
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: PlateBadge(plate: vehicle['plate'].toString(), fontSize: 22),
+                ),
+                const SizedBox(height: 6),
+              ],
               Text(
                 [
                   row['serviceType']?.toString(),
                   [vehicle['make'], vehicle['model']].where((x) => x != null).join(' '),
-                  vehicle['plate']?.toString(),
                 ].where((x) => x != null && x.toString().isNotEmpty).join(' · '),
                 style: const TextStyle(color: Colors.white70),
               ),

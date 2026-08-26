@@ -11,8 +11,78 @@
 
 import crypto from "node:crypto";
 import db from "../db.ts";
+import { seedNetworkWorkshops } from "./seedWorkshops.ts";
+import { initPricing } from "./pricing/schema.ts";
 
+/**
+ * Identificador del cerrojo de arranque. Cualquier número sirve mientras sea
+ * el mismo en todos los procesos; este viene de "connect-schema".
+ */
+const CERROJO_ESQUEMA = 815_243_119;
+
+/**
+ * Crea y actualiza el esquema, con un cerrojo para que solo lo haga uno a la
+ * vez.
+ *
+ * Sin él, dos procesos arrancando a la vez ejecutan los mismos CREATE TABLE y
+ * ALTER sobre las mismas tablas y se pisan: PostgreSQL responde con errores de
+ * tupla concurrente o con un interbloqueo, y el que pierde no arranca. Pasa en
+ * Render en cuanto hay más de una instancia, y pasaba en las pruebas de
+ * integración, que es donde se detectó: dos ficheros de pruebas contra una
+ * base recién creada fallaban una de cada dos veces.
+ *
+ * El cerrojo es de sesión, así que hace falta una conexión propia del pool: si
+ * se pidiera y se soltara desde el pool general, podrían tocar conexiones
+ * distintas y no serviría de nada.
+ */
 export async function initConnect(): Promise<void> {
+  const cliente = await db.connect();
+  try {
+    if (!(await esperarCerrojo(cliente))) {
+      /*
+       * No se ha podido coger el cerrojo. Lo tiene otro proceso, que está
+       * aplicando exactamente estas mismas migraciones idempotentes, así que
+       * no hay nada que hacer salvo dejarle acabar. Antes esto no existía y se
+       * esperaba indefinidamente con `pg_advisory_lock`; cuando el cerrojo se
+       * quedaba pillado, la espera chocaba con el `statement_timeout` de la
+       * base y el arranque moría. Y como moría sin soltar la conexión, el
+       * siguiente arranque encontraba el cerrojo igual de pillado: un bucle
+       * del que el servicio no salía solo.
+       */
+      console.warn(
+        "Connect Pro: el esquema lo está aplicando otro proceso; se continúa sin repetirlo."
+      );
+      return;
+    }
+    await crearEsquemaConnect();
+  } finally {
+    await cliente.query(`SELECT pg_advisory_unlock($1)`, [CERROJO_ESQUEMA]).catch(() => {});
+    cliente.release();
+  }
+}
+
+/**
+ * Intenta coger el cerrojo durante un rato, sin bloquearse.
+ *
+ * `pg_try_advisory_lock` vuelve en el acto diciendo si lo ha conseguido, así
+ * que la espera la controlamos nosotros y nunca la corta la base de datos a
+ * mitad. Un minuto da de sobra para que otra instancia termine de migrar, y si
+ * no lo consigue devuelve `false` en vez de tumbar el arranque.
+ */
+async function esperarCerrojo(
+  cliente: { query: (q: string, v?: unknown[]) => Promise<{ rows: { ok: boolean }[] }> },
+  esperaMaximaMs = 60_000
+): Promise<boolean> {
+  const limite = Date.now() + esperaMaximaMs;
+  for (;;) {
+    const { rows } = await cliente.query(`SELECT pg_try_advisory_lock($1) AS ok`, [CERROJO_ESQUEMA]);
+    if (rows[0]?.ok) return true;
+    if (Date.now() >= limite) return false;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+}
+
+async function crearEsquemaConnect(): Promise<void> {
   await db.query(`
     -- Empresas cliente (partners externos: aseguradoras, renting, grúas...)
     CREATE TABLE IF NOT EXISTS connect_partners (
@@ -522,6 +592,15 @@ export async function initConnect(): Promise<void> {
     -- Las unidades cuelgan del taller, no solo de la empresa
     ALTER TABLE connect_mobile_units ADD COLUMN IF NOT EXISTS "workshopId" INTEGER;
 
+    -- Trazabilidad del servicio: quién lo hizo y con qué. Se copian aquí (no
+    -- se dejan solo en el core) para que el historial y el informe sigan
+    -- diciendo la verdad aunque después cambie el vehículo o el técnico.
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "assignedTechName" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "assignedVehicleName" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "assignedVehiclePlate" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "reportUrl" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "reportAtMs" BIGINT;
+
     -- Contactos manuales del taller (imprescindible en talleres EXTERNAL,
     -- útil en todos: encargado, centralita, guardia…)
     CREATE TABLE IF NOT EXISTS connect_workshop_contacts (
@@ -536,6 +615,42 @@ export async function initConnect(): Promise<void> {
       "updatedAtMs" BIGINT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_connect_ws_contacts ON connect_workshop_contacts ("workshopId");
+
+    -- Back office de la asistencia (mismos bloques que el de Mobilink Assist).
+    -- Solo se usa para asistencias SIN fila en el core: las que sí la tienen
+    -- comparten roadside_backoffice con Assist, para no tener dos verdades.
+    CREATE TABLE IF NOT EXISTS connect_assistance_backoffice (
+      id SERIAL PRIMARY KEY,
+      "assistanceId" INTEGER NOT NULL UNIQUE REFERENCES connect_assistances(id) ON DELETE CASCADE,
+
+      -- Contactos
+      "solicitanteNombre" TEXT, "solicitanteTelefono" TEXT, "solicitanteWhatsapp" TEXT,
+      "solicitanteEmail" TEXT, "conductorTelefono" TEXT,
+      "responsableNombre" TEXT, "responsableTelefono" TEXT, "responsableCargo" TEXT,
+      "autorizadorNombre" TEXT, "autorizadorTelefono" TEXT, "autorizadorCargo" TEXT,
+
+      -- Empresas
+      "empresaSolicitanteNombre" TEXT, "empresaSolicitanteTelefono" TEXT, "empresaSolicitanteEmail" TEXT,
+      "empresaServicioNombre" TEXT, "empresaServicioCif" TEXT, "empresaServicioTelefono" TEXT,
+      "empresaFacturacionNombre" TEXT, "empresaFacturacionCif" TEXT, "empresaFacturacionEmail" TEXT,
+      "expedienteExterno" TEXT, "referenciaCliente" TEXT, "referenciaAutorizacion" TEXT,
+
+      -- Operativa
+      "tiposAsistencia" TEXT, "tipoVehiculo" TEXT, "estadoVehiculo" TEXT, "ubicacionIncidencia" TEXT,
+
+      -- Vehículo
+      marca TEXT, modelo TEXT, color TEXT, vin TEXT, kilometraje INTEGER,
+      "medidaNeumatico" TEXT, "ejeAfectado" TEXT, "posicionRueda" TEXT,
+      "vehiculoCargado" BOOLEAN, mercancia TEXT, adr BOOLEAN,
+
+      -- Facturación
+      facturable BOOLEAN DEFAULT true, "pendienteAutorizacion" BOOLEAN DEFAULT false,
+      garantia BOOLEAN DEFAULT false, interna BOOLEAN DEFAULT false,
+      "importeAcordado" NUMERIC(10,2), "observacionesFacturacion" TEXT,
+
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
 
     -- Contadores correlativos (nº de expediente por año, etc.)
     CREATE TABLE IF NOT EXISTS connect_counters (
@@ -633,6 +748,25 @@ export async function initConnect(): Promise<void> {
     ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "liteSettings" TEXT NOT NULL DEFAULT '{}';
     -- {arrivalRadiusUrbanM, arrivalRadiusRuralM, workshopRadiusM, trackWhileWorking, finishRules:{...}}
 
+    -- Ficha postal del taller. Hasta ahora solo se guardaban las coordenadas,
+    -- pero la central necesita la dirección escrita para llamar, facturar y
+    -- decirle al cliente dónde va (los talleres de red no son SEA Tarragona).
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS address TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "postalCode" TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS city TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS province TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS email TEXT;
+    -- Red comercial o franquicia a la que pertenece (Confortauto, Euromaster…).
+    -- No confundir con "networkParticipation", que es la adhesión a la red Mobilink.
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "commercialNetwork" TEXT;
+    -- Horario de apertura tal cual lo declara el taller, en texto libre
+    -- ("L-V 08:30-13:30|15:00-18:30; Sáb 09:00-13:00").
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "openingHours" TEXT;
+    -- Observaciones internas del taller. Recoge además lo que la importación
+    -- por WhatsApp lee de Google y Central no guarda en columna propia
+    -- (valoración, reseñas, web, URL de Maps, categorías…).
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS notes TEXT;
+
     -- Resultado y datos de cierre reportados por el taller (Lite o externo)
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "resultCode" TEXT;
     ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "resolutionNotes" TEXT;
@@ -689,6 +823,14 @@ export async function initConnect(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_connect_lite_devices_user ON connect_lite_devices ("userId");
     CREATE INDEX IF NOT EXISTS idx_connect_lite_devices_ws ON connect_lite_devices ("workshopId");
+
+    -- Estado de la cola offline que informa la propia APK. Sin esto, una cola
+    -- atascada (evidencias que nunca llegan) solo se descubre cuando falta la
+    -- documentación de un servicio ya cerrado.
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queuePending" INTEGER;
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queueFailed" INTEGER;
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queueOldestAtMs" BIGINT;
+    ALTER TABLE connect_lite_devices ADD COLUMN IF NOT EXISTS "queueReportedAtMs" BIGINT;
 
     -- Rastro GPS del operario durante la asistencia (solo servicios activos)
     CREATE TABLE IF NOT EXISTS connect_assistance_tracks (
@@ -798,7 +940,44 @@ export async function initConnect(): Promise<void> {
              WHERE w."integrationType" = 'assist' AND w."coreWorkshopId" IS NOT NULL) = 1;
   `);
 
+  /*
+   * Los partners no tenían centro de control, así que una asistencia creada
+   * por la API quedaba sin dueño. Mientras nadie filtraba por centro no se
+   * notaba; en cuanto haya dos centrales, una asistencia huérfana o no la ve
+   * nadie o la ven todas. Se rellena solo cuando hay un único centro, que es
+   * el caso de hoy: con dos o más hay que decidirlo a mano.
+   */
+  await db.query(`
+    ALTER TABLE connect_partners ADD COLUMN IF NOT EXISTS "controlCenterId" INTEGER;
+
+    UPDATE connect_partners
+       SET "controlCenterId" = (SELECT id FROM connect_control_centers
+                                 WHERE "deletedAtMs" IS NULL ORDER BY id LIMIT 1)
+     WHERE "controlCenterId" IS NULL
+       AND (SELECT COUNT(*) FROM connect_control_centers WHERE "deletedAtMs" IS NULL) = 1;
+
+    UPDATE connect_assistances ca
+       SET "controlCenterId" = p."controlCenterId"
+      FROM connect_partners p
+     WHERE p.id = ca."partnerId"
+       AND ca."controlCenterId" IS NULL
+       AND p."controlCenterId" IS NOT NULL;
+  `);
+
+  // Motor de tarifas: su esquema vive aparte para no seguir engordando este
+  // fichero. Depende de connect_control_centers, connect_clients y
+  // connect_assistances, así que va después.
+  await initPricing();
+
   await seedConnectDefaults();
+  // El catálogo de talleres depende de red (geocodificación): si falla, se
+  // deja constancia y se sigue arrancando. Un alta pendiente no puede tumbar
+  // el servidor entero, y en el próximo arranque se vuelve a intentar.
+  try {
+    await seedNetworkWorkshops();
+  } catch (e: any) {
+    console.error("[Connect] catálogo de talleres de red:", e?.message);
+  }
 }
 
 /**

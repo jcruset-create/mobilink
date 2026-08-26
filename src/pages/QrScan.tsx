@@ -36,6 +36,8 @@ const ESTADO_COLOR: Record<string, { bg: string; text: string; label: string }> 
 export default function QrScan() {
   const { tipo, id } = useParams<{ tipo: string; id: string }>();
   const [item, setItem] = useState<Item | null>(null);
+  const [fotos, setFotos] = useState<{ id: string; url: string }[]>([]);
+  const [fotoAmpliada, setFotoAmpliada] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
   const [noEncontrado, setNoEncontrado] = useState(false);
 
@@ -92,6 +94,13 @@ export default function QrScan() {
         requiere_autorizacion:(data as any).sea_authorizations?.nombre ?? null,
       });
     }
+    // Galería de fotos adicionales
+    const { data: fts } = await supabase
+      .from("tc_item_photos")
+      .select("id, url, orden")
+      .eq(t === "herramienta" ? "tool_id" : "machine_id", itemId)
+      .order("orden");
+    setFotos((fts ?? []).map((f: any) => ({ id: f.id, url: f.url })));
     setCargando(false);
   }
 
@@ -175,6 +184,34 @@ export default function QrScan() {
         {item.foto_url && (
           <div className="rounded-2xl overflow-hidden border bg-white">
             <img src={item.foto_url} alt={item.nombre} className="w-full object-cover max-h-48" />
+          </div>
+        )}
+
+        {/* Galería de fotos */}
+        {fotos.filter((f) => f.url !== item.foto_url).length > 0 && (
+          <div className="rounded-2xl border bg-white p-3">
+            <div className="flex flex-wrap gap-2">
+              {fotos.filter((f) => f.url !== item.foto_url).map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setFotoAmpliada(f.url)}
+                  className="h-20 w-20 overflow-hidden rounded-xl border"
+                >
+                  <img src={f.url} alt="" className="h-full w-full object-cover" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Foto ampliada */}
+        {fotoAmpliada && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+            onClick={() => setFotoAmpliada(null)}
+          >
+            <img src={fotoAmpliada} alt="" className="max-h-full max-w-full rounded-xl" />
           </div>
         )}
 

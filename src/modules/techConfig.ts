@@ -82,32 +82,71 @@ export function defaultPriorities(name: string): Record<AreaKey, RolePriority> {
   };
 }
 
+/**
+ * Crea un técnico.
+ *
+ * `semilla` distingue los dos usos, que hasta ahora se confundían:
+ *
+ * - **true**: plantilla histórica (INITIAL_TECHS). Las competencias y
+ *   prioridades salen de las listas de nombres de este fichero, que es lo que
+ *   reproduce la configuración con la que arrancó el taller.
+ * - **false** (por defecto): alta nueva desde la pantalla de Técnicos. **No se
+ *   mira el nombre**: entra sin competencias y con prioridad baja, y es el
+ *   supervisor quien decide en qué áreas trabaja. Antes, un fichaje nuevo
+ *   heredaba capacidades solo si se llamaba como alguien de la lista, lo que es
+ *   tan arbitrario como suena.
+ */
 export function createTech(
   name: string,
-  status: TechStatus = "disponible"
+  status: TechStatus = "disponible",
+  { semilla = false }: { semilla?: boolean } = {}
 ): Tech {
   return {
     name,
     status,
     currentJobId: null,
     blocked: isUnavailableTechStatus(status),
-    competencies: defaultCompetencies(name),
-    priorities: defaultPriorities(name),
+    competencies: semilla ? defaultCompetencies(name) : sinCompetencias(),
+    priorities: semilla ? defaultPriorities(name) : sinPrioridades(),
     statusChangedAtMs: nowMs(),
     statusTotals: {},
   };
 }
 
+/** Sin competencias: el supervisor las activa en la pantalla de Técnicos. */
+function sinCompetencias(): Record<CompetencyKey, RoleCapability> {
+  return {
+    camion: makeCapability(false),
+    movil: makeCapability(false),
+    tacografo: makeCapability(false),
+    turismo: makeCapability(false),
+    mecanica: makeCapability(false),
+    alineacion_camion: makeCapability(false),
+    pinchazo_camion: makeCapability(false),
+  };
+}
+
+function sinPrioridades(): Record<AreaKey, RolePriority> {
+  const baja: RolePriority = { responsable: 99, apoyo: 99 };
+  return {
+    camion: { ...baja },
+    movil: { ...baja },
+    tacografo: { ...baja },
+    turismo: { ...baja },
+    mecanica: { ...baja },
+  };
+}
+
 export const INITIAL_TECHS: Tech[] = [
-  createTech("José"),
-  createTech("Iván"),
-  createTech("Alejandro"),
-  createTech("Jesús"),
-  createTech("Anthoni"),
-  createTech("David"),
-  createTech("Andrés"),
-  createTech("Albert"),
-  createTech("Ramón"),
+  createTech("José", "disponible", { semilla: true }),
+  createTech("Iván", "disponible", { semilla: true }),
+  createTech("Alejandro", "disponible", { semilla: true }),
+  createTech("Jesús", "disponible", { semilla: true }),
+  createTech("Anthoni", "disponible", { semilla: true }),
+  createTech("David", "disponible", { semilla: true }),
+  createTech("Andrés", "disponible", { semilla: true }),
+  createTech("Albert", "disponible", { semilla: true }),
+  createTech("Ramón", "disponible", { semilla: true }),
 ];
 
 export function countReservedMobileCapacity(techs: Tech[]): number {

@@ -5,7 +5,8 @@ import { supabase } from "./supabase";
 import type {
   FiltrosInformes, KpisInformes, EstadoFlota, DimensionTotal, MarcaMedidaTotal, ProfundidadDistribucion, Alerta,
   EconomicoInformes, RankingVehiculo, RankingMarca, CosteKmNeumatico, DesgasteNeumatico,
-  PresionNeumatico, ProductividadTecnico, OperacionesInforme,
+  PresionNeumatico, ProductividadTecnico, OperacionesInforme, InformeEjecutivo,
+  ControlRevision,
 } from "../types/informes";
 
 function params(f: FiltrosInformes) {
@@ -22,6 +23,15 @@ export async function obtenerEstadoFlota(f: FiltrosInformes): Promise<EstadoFlot
   const { data, error } = await supabase.rpc("tc_informes_estado_flota", { p_empresa: f.empresaId ?? null });
   if (error) throw new Error(error.message);
   return data as EstadoFlota;
+}
+
+/** La flota por fecha de revisión. El rango filtra por esa fecha. */
+export async function controlRevisiones(f: FiltrosInformes): Promise<ControlRevision[]> {
+  const { data, error } = await supabase.rpc("tc_informe_control_revisiones", {
+    p_empresa: f.empresaId ?? null, p_desde: f.desde ?? null, p_hasta: f.hasta ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ControlRevision[];
 }
 
 export async function inventarioPor(f: FiltrosInformes, dim: "marca" | "modelo" | "medida" | "estado"): Promise<DimensionTotal[]> {
@@ -94,4 +104,10 @@ export async function operacionesInforme(f: FiltrosInformes): Promise<Operacione
   const { data, error } = await supabase.rpc("tc_informes_operaciones", params(f));
   if (error) throw new Error(error.message);
   return data as OperacionesInforme;
+}
+
+export async function obtenerInformeEjecutivo(f: FiltrosInformes): Promise<InformeEjecutivo> {
+  const { data, error } = await supabase.rpc("tc_informe_ejecutivo", params(f));
+  if (error) throw new Error(error.message);
+  return data as InformeEjecutivo;
 }

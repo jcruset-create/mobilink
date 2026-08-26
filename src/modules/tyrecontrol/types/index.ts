@@ -406,6 +406,12 @@ export interface Vehiculo {
   medidas_por_eje?: boolean;
   revision_intervalo_dias?: number | null; // override de periodicidad por vehículo
   revision_intervalo_km?: number | null;
+  // Los datos de la ficha técnica NO viven aquí: cada código de la tarjeta
+  // (A.1, F.1.1, P.2, V.9…) es una fila de tc_vehiculo_atributos_tecnicos
+  // enlazada al maestro tc_cat_campos_ficha_tecnica, y solo existe si trae
+  // dato real. Matrícula, marca, modelo, bastidor y fecha de matriculación
+  // se quedan arriba porque son la identidad operativa del vehículo, no un
+  // dato de ficha.
   created_at?: string;
   updated_at?: string;
   empresa?: Empresa | null;
@@ -422,6 +428,73 @@ export interface UmbralesEmpresa {
   profundidad_minima_mm: number;
   profundidad_aviso_mm: number;
   presion_tolerancia_bar: number;
+}
+
+// Modo de identificación de neumáticos de una empresa.
+//   generico     → nada se identifica (comportamiento histórico)
+//   identificado → todo lleva número de serie o RFID
+//   mixto        → solo las medidas con excepción
+export type ModoIdentificacion = "generico" | "identificado" | "mixto";
+
+export const MODO_IDENTIFICACION_LABELS: Record<ModoIdentificacion, string> = {
+  generico: "Genérico",
+  identificado: "Todo identificado",
+  mixto: "Mixto",
+};
+
+export interface ConfigIdentificacion {
+  empresa_id: string;
+  modo: ModoIdentificacion;
+  // Cuando la política resuelve "identificable" y no llega ni RFID ni serie:
+  // true bloquea el montaje, false lo deja pasar como genérico.
+  exigir_identidad: boolean;
+}
+
+// Una goma concreta en el almacén: identidad, milímetros y de dónde viene.
+export interface UsadoEnAlmacen {
+  neumatico_id: string;
+  numero_interno: string | null;
+  numero_serie: string | null;
+  rfid_epc: string | null;
+  dot: string | null;
+  marca: string | null;
+  modelo: string | null;
+  medida: string | null;
+  profundidad_actual_mm: number | null;
+  profundidad_actualizada_en: string | null;
+  reesculturado: boolean;
+  estado: string;
+  origen: string | null;
+  fecha_desmontaje: string | null;
+  matricula_anterior: string | null;
+  km_acumulados: number | null;
+}
+
+// Cuántas gomas hay según cada mundo. Si no cuadran, es el doble conteo.
+export interface ResumenAlmacenUsados {
+  fichas: number;
+  con_identidad: number;
+  reesculturadas: number;
+  unidades_stock: number;
+}
+
+// Neumático al que le falta identidad y cuya medida sí debería llevarla.
+export interface PendienteIdentificar {
+  neumatico_id: string;
+  numero_interno: string | null;
+  marca: string | null;
+  medida: string | null;
+  profundidad_actual_mm: number | null;
+  estado: string;
+  matricula: string | null;
+  codigo_posicion: string | null;
+}
+
+// Excepción por medida del modo mixto.
+export interface IdentificacionMedida {
+  empresa_id: string;
+  medida: string;
+  identificable: boolean;
 }
 
 // Override de umbrales para una medida concreta dentro de una empresa.
@@ -487,6 +560,8 @@ export const MOTIVO_DESMONTAJE_LABELS: Record<MotivoDesmontaje, string> = {
 export interface Neumatico {
   id: string;
   empresa_id: string;
+  reesculturado?: boolean | null;
+  girado_en_llanta?: boolean | null;
   numero_interno?: string | null;
   control_individual?: boolean;
   creado_automaticamente?: boolean;
@@ -600,6 +675,9 @@ export interface OperacionNeumatico {
   almacen_movimiento_id?: string | null;
   tecnico_id?: string | null;
   observaciones?: string | null;
+  /** Intervención (parte de trabajo) a la que pertenece. Las operaciones de
+   *  una misma sesión de Cambios comparten la suya y salen bajo un solo número. */
+  intervencion_id?: string | null;
   created_at?: string;
   // Ciclo de vida (módulo Operaciones)
   numero_operacion?: number | null;
@@ -613,6 +691,10 @@ export interface OperacionNeumatico {
   is_correccion?: boolean;
   is_anulada?: boolean;
   operacion_anulada_id?: string | null;
+  /** Operación planificada que esta fila ejecuta (vínculo de la fase 2).
+   *  Varias filas de ejecución pueden apuntar al mismo plan: una sustitución
+   *  son dos. La columna solo existe con la migración de fase 2 aplicada. */
+  operacion_prevista_id?: string | null;
   delegacion_id?: string | null;
   incidencia_id?: string | null;
   proveedor?: string | null;
@@ -790,6 +872,17 @@ export interface MarcaNeumatico {
   id: string; nombre: string; activo: boolean; logo_url?: string | null;
   fabricante_id?: string | null; pais_origen?: string | null;
   segmento?: SegmentoMarca | null; tipo_principal?: TipoPrincipalMarca | null; observaciones?: string | null;
+  /// Marca de recauchutado (p. ej. INSA): sus neumáticos salen marcados como
+  /// recauchutados en la ficha del vehículo y en la pantalla de cambios.
+  es_recauchutado?: boolean | null;
+}
+
+/// Marca de vehículo (catálogo con logo). `tipo_ids` son los tipos de
+/// vehículo en los que aparece: una misma marca sirve para varios.
+export interface MarcaVehiculo {
+  id: string; nombre: string; activo: boolean;
+  logo_url?: string | null; pais_origen?: string | null; orden?: number;
+  tipo_ids: string[];
 }
 
 export interface MarcaContadores { id: string; num_modelos: number; num_neumaticos: number; num_vehiculos: number; }

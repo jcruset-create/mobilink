@@ -6,16 +6,14 @@
  * de errores: los llamantes solo aportan el prompt de sistema y el material.
  */
 
-import OpenAI from "openai";
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+import { pedirIA, hayIA } from "./openaiService.ts";
 
 export type AiContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string; detail: "auto" } };
 
 export function hasAi(): boolean {
-  return !!process.env.OPENAI_API_KEY;
+  return hayIA();
 }
 
 /**
@@ -30,33 +28,57 @@ export async function extractJson(opts: {
   images?: string[];
   maxTokens?: number;
   model?: string;
+  /**
+   * Con `strict`, un fallo lanza Error con el motivo real (clave ausente,
+   * error del proveedor, respuesta no JSON) en vez de devolver `{}`. Para
+   * llamantes que persisten el estado del análisis y necesitan la causa.
+   */
+  strict?: boolean;
 }): Promise<Record<string, any>> {
-  if (!hasAi()) return {};
+  if (!hasAi()) {
+    if (opts.strict) throw new Error("OPENAI_API_KEY no está configurada en el servidor");
+    return {};
+  }
   const images = (opts.images ?? []).filter((u) => typeof u === "string" && u.length > 0);
   const text = (opts.text ?? "").trim();
   if (!text && images.length === 0) return {};
 
-  const userContent: AiContentPart[] = [
-    { type: "text", text: text || "(sin texto: analiza las imágenes)" },
-    ...images.map((url) => ({ type: "image_url" as const, image_url: { url, detail: "auto" as const } })),
-  ];
+  // Toda la comunicación con OpenAI pasa por la capa central (Responses API).
+  const r = await pedirIA({
+    operacion: "core.extractJson",
+    proposito: "asistente",
+    prompt: `${opts.system}
 
+${text || "(sin texto: analiza las imágenes)"}`,
+    imagenes: images.map((url) => ({ url })),
+    temperatura: 0.1,
+    maxTokens: opts.maxTokens ?? 800,
+  });
+  if (!r.ok || !r.texto) {
+    if (opts.strict) throw new Error(r.error || "el modelo no devolvió respuesta");
+    return {};
+  }
+
+  const cleaned = r.texto.replace(/```json\r?\n?/g, "").replace(/```\r?\n?/g, "").trim();
   try {
-    const response = await openai.chat.completions.create({
-      model: opts.model ?? "gpt-4o",
-      messages: [
-        { role: "system", content: opts.system },
-        { role: "user", content: userContent as any },
-      ],
-      temperature: 0.1,
-      max_tokens: opts.maxTokens ?? 800,
-    });
-    const raw = response.choices[0]?.message?.content ?? "{}";
-    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
     const parsed = JSON.parse(cleaned);
     return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (err: any) {
-    console.error("[IA] extractJson:", err?.message);
+  } catch {
+    // A veces el modelo envuelve el JSON en prosa: rescatamos el primer bloque {...}
+    const bloque = cleaned.match(/\{[\s\S]*\}/);
+    if (bloque) {
+      try {
+        const parsed = JSON.parse(bloque[0]);
+        if (parsed && typeof parsed === "object") return parsed;
+      } catch { /* cae al error de abajo */ }
+    }
+    console.error("[IA] extractJson: respuesta no JSON:", cleaned.slice(0, 300));
+    if (opts.strict) {
+      const truncada = cleaned.length > 0 && !cleaned.trimEnd().endsWith("}");
+      throw new Error(truncada
+        ? "la respuesta del modelo llegó cortada (subir maxTokens)"
+        : "el modelo respondió algo que no es JSON");
+    }
     return {};
   }
 }
@@ -80,3 +102,22 @@ export const AI_IMAGE_RULES = `LECTURA DE IMÁGENES (obligatorio):
 MATRÍCULAS (España):
 - Matrícula BLANCA = camión o vehículo tractor.
 - Matrícula ROJA = REMOLQUE, con formato R + 4 dígitos + 3 letras (p. ej. R0000BBB). Nunca la pongas como matrícula del vehículo.`;
+
+/**
+ * Prompt del back office de asistencia (contactos, empresas, operativa,
+ * vehículo y facturación). Lo comparten el back office de Mobilink Assist y
+ * el de Assist Central Pro: los dos rellenan los mismos campos, así que la
+ * extracción tiene que entender exactamente lo mismo.
+ */
+export const AI_BACKOFFICE_PROMPT = `Eres un asistente de back office de asistencia en carretera. A partir del texto y las imágenes (capturas de WhatsApp, tarjetas, hojas de datos) extrae los datos para dar de alta una asistencia. NO inventes: si un dato no aparece, omítelo (no lo incluyas en el JSON). Normaliza teléfonos españoles (9 dígitos) y matrículas españolas sin espacios.
+
+${AI_IMAGE_RULES}
+
+Devuelve SOLO un objeto JSON con las claves que conozcas, de este conjunto exacto:
+- Contactos: solicitanteNombre, solicitanteTelefono, solicitanteWhatsapp, solicitanteEmail, conductorNombre, conductorTelefono, responsableNombre, responsableTelefono, responsableCargo, autorizadorNombre, autorizadorTelefono, autorizadorCargo
+- Empresas: empresaSolicitanteNombre, empresaSolicitanteTelefono, empresaSolicitanteEmail, empresaServicioNombre, empresaServicioCif, empresaServicioTelefono, empresaFacturacionNombre, empresaFacturacionCif, empresaFacturacionEmail, expedienteExterno, referenciaCliente, referenciaAutorizacion
+- Operativa: tiposAsistencia (array de: Neumáticos, Mecánica, Batería, Arranque, Combustible, Apertura vehículo, Remolcado, Accidente, Rescate, Otros), tipoVehiculo (Turismo, Furgoneta, Camión rígido, Tractora, Remolque, Semirremolque, Autobús, Motocicleta, Maquinaria, Vehículo agrícola), estadoVehiculo (Puede circular, No puede circular, Bloqueado, Accidentado, Volcado), ubicacionIncidencia (Autopista, Autovía, Carretera nacional, Ciudad, Polígono, Taller, Parking, Puerto, Centro logístico)
+- Vehículo: plate (matrícula del vehículo/camión), plateRemolque (matrícula roja del remolque: R+4 dígitos+3 letras), marca, modelo, color, vin, kilometraje (número), medidaNeumatico, ejeAfectado (Dirección, Tracción, Remolque), posicionRueda (Interior, Exterior), vehiculoCargado (true/false), mercancia, adr (true/false)
+- Averia: descripcionAveria (texto libre de la avería o trabajos)
+- Facturación: importeAcordado (número), observacionesFacturacion
+Usa exactamente esas claves. tiposAsistencia siempre como array. Sin texto fuera del JSON.`;

@@ -1,8 +1,7 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:signature/signature.dart';
 import '../services/api.dart';
-import '../services/queue.dart';
+import '../services/file_queue.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
 import '../theme.dart';
@@ -58,22 +57,30 @@ class _SignatureScreenState extends State<SignatureScreen> {
       final png = await _controller.toPngBytes();
       if (png == null) throw Exception('No se pudo generar la firma');
       final pos = await Tracker.currentPosition();
-      await _api.signature(
-        widget.assistanceId,
-        imageBase64: base64Encode(png),
+
+      // La firma se guarda en el móvil antes de intentar enviarla: si no hay
+      // cobertura no se puede pedir al cliente que vuelva a firmar dentro de
+      // un rato, porque para entonces ya se habrá ido.
+      await FileQueue.addSignature(
+        assistanceId: widget.assistanceId,
+        png: png,
         signerName: _nombre.text.trim(),
         signerDocument: _documento.text.trim().isEmpty ? null : _documento.text.trim(),
         consentText: kConsentText,
         lat: pos?.latitude,
         lng: pos?.longitude,
-        actionId: OfflineQueue.newActionId(),
       );
+      await FileQueue.flush(_api);
       if (!mounted) return;
+      final pendiente = FileQueue.forAssistance(widget.assistanceId)
+          .any((f) => f.kind == 'signature');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(pendiente
+            ? 'Firma guardada. Se enviará a la central al recuperar cobertura.'
+            : 'Firma registrada.'),
+        backgroundColor: pendiente ? AppColors.warn : null,
+      ));
       Navigator.of(context).pop(true);
-    } on OfflineError {
-      setState(() => _error =
-          'Sin conexión. La firma necesita conexión para guardarse; vuelve a '
-          'intentarlo cuando recuperes cobertura (los datos se conservan).');
     } on ApiError catch (e) {
       setState(() => _error = e.message);
     } catch (e) {

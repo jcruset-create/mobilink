@@ -134,7 +134,11 @@ class ApiService {
               .post(Uri.parse(url), headers: await _authHeaders(),
                   body: jsonEncode(type == 'en_camino'
                       ? {'clientActionId': actionId}
-                      : {'status': item['status'], 'clientActionId': actionId}))
+                      : {
+                          'status': item['status'],
+                          'clientActionId': actionId,
+                          if (item['serviceKm'] != null) 'serviceKm': item['serviceKm'],
+                        }))
               .timeout(const Duration(seconds: 12));
           ok = res.statusCode == 200;
         } else if (type == 'upload_file') {
@@ -266,14 +270,21 @@ class ApiService {
     );
   }
 
-  Future<Map<String, dynamic>> updateStatus(int id, String status) async {
+  Future<Map<String, dynamic>> updateStatus(int id, String status, {int? serviceKm}) async {
     final actionId = '${DateTime.now().millisecondsSinceEpoch}-$id-$status';
     try {
       final res = await http
           .post(
             Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/status'),
             headers: await _authHeaders(),
-            body: jsonEncode({'status': status, 'clientActionId': actionId}),
+            body: jsonEncode({
+              'status': status,
+              'clientActionId': actionId,
+              // Kilómetros DEL SERVICIO al finalizar: el espejo económico los
+              // usa para cobrar los km de más. El tiempo no se manda: va de
+              // la creación a la llegada al taller y lo pone el sistema.
+              if (serviceKm != null) 'serviceKm': serviceKm,
+            }),
           )
           .timeout(const Duration(seconds: 12));
       final data = jsonDecode(res.body) as Map<String, dynamic>;
@@ -286,7 +297,8 @@ class ApiService {
       if (_isNetworkError(e)) {
         // Sin red → encolar y aplicar el cambio en local
         OfflineStore.offline.value = true;
-        await OfflineStore.enqueueStatus(assistanceId: id, status: status, type: 'status');
+        await OfflineStore.enqueueStatus(
+            assistanceId: id, status: status, type: 'status', serviceKm: serviceKm);
         return _localAssistance(id, status);
       }
       rethrow;
@@ -373,6 +385,7 @@ class ApiService {
     String? detalleManual,
     required String motivoAltaCampo,
     String? status,
+    String? actionId,
   }) async {
     final res = await http.post(
       Uri.parse('$kBackendUrl/api/roadside-operator/otf/$otfId/trabajos'),
@@ -384,6 +397,9 @@ class ApiService {
         'detalleManual': detalleManual,
         'motivoAltaCampo': motivoAltaCampo,
         if (status != null) 'status': status,
+        // Sin esto el servidor no puede deduplicar y cada reintento crea otro
+        // trabajo: es justo lo que llenaba la OTF de trabajos repetidos.
+        if (actionId != null) 'clientActionId': actionId,
       }),
     );
     final data = jsonDecode(res.body) as Map<String, dynamic>;
@@ -446,7 +462,8 @@ class ApiService {
     if (streamed.statusCode != 200) throw Exception('Error finalizando OTF');
   }
 
-  Future<void> uploadOtfTrabajoFile(int trabajoId, File file, String kind) async {
+  Future<void> uploadOtfTrabajoFile(int trabajoId, File file, String kind,
+      {String? actionId}) async {
     final req = http.MultipartRequest(
       'POST',
       Uri.parse('$kBackendUrl/api/roadside-operator/otf/trabajos/$trabajoId/files'),
@@ -456,6 +473,7 @@ class ApiService {
       'x-roadside-operator-code': code,
     });
     req.fields['kind'] = kind;
+    if (actionId != null) req.fields['clientActionId'] = actionId;
     req.files.add(await http.MultipartFile.fromPath('file', file.path));
     final streamed = await req.send().timeout(const Duration(seconds: 40));
     await streamed.stream.drain();

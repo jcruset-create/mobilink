@@ -8,6 +8,8 @@ import '../services/queue.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
 import '../theme.dart';
+import '../widgets/plate_badge.dart';
+import 'concepts_screen.dart';
 import 'finish_screen.dart';
 import 'photos_screen.dart';
 import 'signature_screen.dart';
@@ -30,6 +32,7 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
   Timer? _timer;
 
   Map<String, dynamic>? _a;
+  List<Map<String, dynamic>> _conceptos = [];
   bool _busy = false;
   bool _loading = true;
   String? _error;
@@ -67,8 +70,12 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
     if (!silent) setState(() => _loading = true);
     try {
       final a = await _api.assistance(widget.assistanceId);
+      // Los conceptos (neumáticos pactados) van aparte y su fallo no puede
+      // tumbar la ficha: un servidor sin la ruta simplemente no enseña nada.
+      List<Map<String, dynamic>> conceptos = _conceptos;
+      try { conceptos = await _api.concepts(widget.assistanceId); } catch (_) {}
       if (!mounted) return;
-      setState(() { _a = a; _loading = false; _error = null; _offline = false; });
+      setState(() { _a = a; _conceptos = conceptos; _loading = false; _error = null; _offline = false; });
       await _tracker.sync(
         widget.assistanceId,
         a['status']?.toString() ?? '',
@@ -84,6 +91,17 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
   }
 
   String get _status => _a?['status']?.toString() ?? '';
+
+  /// Lo pendiente por delante: es lo que hace que el operario entre.
+  String _conceptosSubtitulo() {
+    final previstos = _conceptos.where((c) => c['status'] == 'previsto').length;
+    if (previstos > 0) {
+      return '$previstos montaje${previstos == 1 ? '' : 's'} pactado${previstos == 1 ? '' : 's'} por confirmar con foto';
+    }
+    final confirmados = _conceptos.where((c) => c['status'] == 'confirmado').length;
+    if (confirmados > 0) return '$confirmados confirmado${confirmados == 1 ? '' : 's'}';
+    return 'Confirmar lo montado, con su foto';
+  }
   String? get _next => _a?['nextStatus']?.toString();
 
   // ── Acciones ─────────────────────────────────────────────────────────────
@@ -417,12 +435,23 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
                     ]),
 
                     _Bloque(titulo: 'Vehículo', hijos: [
+                      // La matrícula manda: si viene informada, en grande y
+                      // encabezando el bloque, no como una fila más.
+                      if (((a['vehicle'] as Map?)?['plate']?.toString() ?? '').isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: PlateBadge(
+                              plate: (a['vehicle'] as Map?)?['plate']?.toString() ?? '',
+                            ),
+                          ),
+                        ),
                       _Dato('Tipo', (a['vehicle'] as Map?)?['type']?.toString()),
                       _Dato('Marca y modelo', [
                         (a['vehicle'] as Map?)?['make'],
                         (a['vehicle'] as Map?)?['model'],
                       ].where((x) => x != null).join(' ')),
-                      _Dato('Matrícula', (a['vehicle'] as Map?)?['plate']?.toString()),
                     ]),
 
                     _Bloque(titulo: 'Contacto', hijos: [
@@ -521,6 +550,19 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
                           onTap: () async {
                             await Navigator.of(context).push(MaterialPageRoute(
                               builder: (_) => PhotosScreen(
+                                session: widget.session, assistanceId: widget.assistanceId,
+                              ),
+                            ));
+                            _load(silent: true);
+                          },
+                        ),
+                        _AccionFila(
+                          icono: Icons.tire_repair,
+                          titulo: 'Neumáticos y materiales',
+                          subtitulo: _conceptosSubtitulo(),
+                          onTap: () async {
+                            await Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => ConceptsScreen(
                                 session: widget.session, assistanceId: widget.assistanceId,
                               ),
                             ));

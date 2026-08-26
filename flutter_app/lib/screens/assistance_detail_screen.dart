@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../main.dart' show exteriorMode;
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/plate_badge.dart';
 import 'arrival_photos_screen.dart';
 import 'cobros_screen.dart';
 import 'finish_screen.dart';
@@ -123,10 +124,11 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     }
   }
 
-  Future<void> _changeStatus(String status) async {
+  Future<void> _changeStatus(String status, {int? serviceKm}) async {
     setState(() => _loading = true);
     try {
-      final updated = await widget.api.updateStatus(_a['id'] as int, status);
+      final updated =
+          await widget.api.updateStatus(_a['id'] as int, status, serviceKm: serviceKm);
       setState(() => _a = updated);
       // El servidor auto-transiciona 'finalizada' → 'en_camino_base'; arrancar GPS tracking
       if (updated['status'] == 'en_camino_base') {
@@ -181,7 +183,9 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   }
 
   Future<void> _onFinalize() async {
-    final confirmed = await Navigator.of(context).push<bool>(
+    // FinishScreen devuelve los kilómetros DEL SERVICIO que anotó el
+    // técnico; el tiempo no se pide a nadie (creación → llegada al taller).
+    final serviceKm = await Navigator.of(context).push<int>(
       MaterialPageRoute(
         builder: (_) => FinishScreen(
           api: widget.api,
@@ -189,8 +193,8 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
         ),
       ),
     );
-    if (confirmed == true) {
-      await _changeStatus('finalizada');
+    if (serviceKm != null) {
+      await _changeStatus('finalizada', serviceKm: serviceKm);
     }
   }
 
@@ -398,7 +402,10 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 80,
-        title: Image.asset('assets/logo_horizontal2.png', height: 70),
+        title: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Image.asset('assets/logo_horizontal2.png', height: 70),
+        ),
         backgroundColor: AppColors.background,
         foregroundColor: Colors.white,
       ),
@@ -570,12 +577,17 @@ class _InfoCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // La matrícula manda: si viene informada, en grande y arriba del
+          // todo. Si no, ni se pinta (antes dejaba una línea vacía).
+          if ((a['plate'] as String? ?? '').trim().isNotEmpty) ...[
+            PlateBadge(plate: a['plate'] as String),
+            const SizedBox(height: 12),
+          ],
           _row(Icons.business, a['customerName'] ?? ''),
           if ((a['conductorNombre'] as String? ?? '').isNotEmpty)
             _row(Icons.person, a['conductorNombre'] ?? ''),
           _row(Icons.phone, a['customerPhone'] ?? ''),
           _row(Icons.location_on, a['address'] ?? ''),
-          _row(Icons.directions_car, a['plate'] ?? ''),
           if ((a['vehicleDescription'] as String? ?? '').isNotEmpty)
             _row(Icons.info_outline, a['vehicleDescription'] ?? ''),
           if ((a['assignedVehicleName'] as String? ?? '').isNotEmpty)
@@ -676,8 +688,10 @@ class _ActionButton extends StatelessWidget {
         foregroundColor: enabled ? _contrastColor(color) : AppColors.textDisabled,
         disabledBackgroundColor: AppColors.disabledBtn,
         disabledForegroundColor: AppColors.textDisabled,
-        minimumSize: Size(fullWidth ? double.infinity : 140, minHeight),
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+        // Sin ancho mínimo cuando va en fila: en vertical los tres botones de
+        // acciones rápidas se reparten menos de 140 px cada uno.
+        minimumSize: Size(fullWidth ? double.infinity : 0, minHeight),
+        padding: EdgeInsets.symmetric(vertical: 16, horizontal: fullWidth ? 20 : 8),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         elevation: 0,
       ),
@@ -788,16 +802,19 @@ class _WhatsAppCaptureCard extends StatelessWidget {
             children: [
               const Icon(Icons.chat, size: 16, color: Colors.green),
               const SizedBox(width: 8),
-              const Text(
-                'Archivos del cliente (WhatsApp)',
-                style: TextStyle(
-                  color: Colors.green,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 1,
+              const Expanded(
+                child: Text(
+                  'Archivos del cliente (WhatsApp)',
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.green,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1,
+                  ),
                 ),
               ),
-              const Spacer(),
+              const SizedBox(width: 8),
               if (totalMedia > 0)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),

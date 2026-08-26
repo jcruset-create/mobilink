@@ -1,0 +1,39 @@
+{
+  // Typecheck del servidor. El backend se ejecuta con `tsx`, que borra los
+  // tipos sin comprobarlos, así que hasta ahora un error de tipos en
+  // server/ llegaba a producción sin que nada lo parase: el `tsc -b` del
+  // proyecto solo mira el panel y vite.config.ts.
+  //
+  // Se empezó por Central Pro y Mobilink Assist Lite, que estaban limpios. El
+  // resto de server/ arrastra errores anteriores; según se vayan arreglando se
+  // amplía este `include` en vez de dejarlo todo fuera.
+  //
+  // MC Central se añadió en la fase 16, y conviene saber por qué tan tarde: no
+  // estaba, así que durante diez fases `npx tsc` decía «correcto» sin haber
+  // mirado ni una línea de `server/central/`. Lo destapó un import que faltaba
+  // y que el compilador debería haber cazado. Un typecheck que no incluye lo
+  // que estás escribiendo es peor que no tenerlo, porque da confianza.
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "module": "esnext",
+    "types": ["node"],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": false,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": [
+    "server/connect/**/*.ts",
+    "server/cash/**/*.ts",
+    "server/central/**/*.ts",
+    "server/tacografos/**/*.ts",
+    "server/core/auditoria.ts",
+    "server/core/auditoriaSchema.ts",
+    "server/dbBackup.ts"
+  ]
+}

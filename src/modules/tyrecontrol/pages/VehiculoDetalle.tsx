@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones } from "../services/data";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, imagenChasisDeMarca, generarPosicionesDeTipo } from "../services/data";
 import type { Intervencion } from "../services/data";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
@@ -8,6 +8,8 @@ import { resumenOperaciones } from "../services/resumenOperaciones";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
+import FichaTecnicaVehiculo from "../components/FichaTecnicaVehiculo";
+import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -37,13 +39,30 @@ export default function VehiculoDetalle() {
   const [cargandoFicha, setCargandoFicha] = useState(false);
   const [operaciones, setOperaciones] = useState<OperacionNeumatico[]>([]);
   const [modalOps, setModalOps] = useState(false);
+  const [filtroOps, setFiltroOps] = useState("");
   const [intervenciones, setIntervenciones] = useState<Intervencion[]>([]);
   const [verInterv, setVerInterv] = useState<null | { interv: Intervencion; ops: OperacionNeumatico[] }>(null);
+  const [recargarItv, setRecargarItv] = useState(0); // fuerza recarga del bloque ITV al aplicar una ficha
+  // Imagen de chasis propia de la marca para esta configuración (un 2x4 de
+  // MAN no se dibuja como uno de Volvo). Si no hay, manda la de la config.
+  const [imagenMarca, setImagenMarca] = useState<string | null>(null);
 
   async function cargar() {
     const veh = await obtenerVehiculo(id);
     setV(veh);
-    if (veh?.tipo_vehiculo_id) setPosiciones(await listarPosiciones(veh.tipo_vehiculo_id));
+    if (veh?.tipo_vehiculo_id) {
+      let pos = await listarPosiciones(veh.tipo_vehiculo_id);
+      // Si el tipo aún no tiene posiciones, se calculan solas a partir de su
+      // configuración de ejes ("2x4x2" = 8 ruedas) en vez de dejar el plano
+      // vacío hasta que alguien las cree a mano.
+      if (pos.length === 0) {
+        try {
+          await generarPosicionesDeTipo(veh.tipo_vehiculo_id);
+          pos = await listarPosiciones(veh.tipo_vehiculo_id);
+        } catch { /* configuración inválida: se avisa en el bloque de posiciones */ }
+      }
+      setPosiciones(pos);
+    }
     setMontajes(await listarMontajesVehiculo(id));
 
     // Catálogos para traducir medida_id / tipo_llanta_id a etiquetas legibles.
@@ -55,6 +74,9 @@ export default function VehiculoDetalle() {
     setRevisiones(await listarRevisiones(id));
     setOperaciones(await listarOperaciones({ vehiculoId: id }).catch(() => []));
     setIntervenciones(await listarIntervenciones(id).catch(() => []));
+    setImagenMarca(
+      await imagenChasisDeMarca(veh?.config_ejes_id, (veh as any)?.marca_id, veh?.marca).catch(() => null),
+    );
   }
 
   async function abrirIntervencion(interv: Intervencion) {
@@ -73,6 +95,24 @@ export default function VehiculoDetalle() {
   );
   const medidaLabel = (mid?: string | null) => (mid ? medidasMap.get(mid) : null) ?? "—";
   const llantaLabel = (lid?: string | null) => { const l = lid ? llantasMap.get(lid) : null; return l ? tipoLlantaLabel(l) : "—"; };
+
+  // Una línea del histórico. Fuera del modal porque la usan los dos bloques:
+  // las operaciones de cada parte y las que aún no se han agrupado.
+  const filaOperacion = (o: OperacionNeumatico) => (
+    <tr key={o.id} className={`border-t border-slate-700/60 ${o.is_anulada ? "opacity-50" : ""}`}>
+      {/* Número de LÍNEA, que ya existía (tyrecontrol_operaciones_fase1). El
+          del parte, OP-…, va en la cabecera del bloque. */}
+      <td className={tdCls + " font-mono text-slate-500"}>{o.numero_operacion ? `#${o.numero_operacion}` : "—"}</td>
+      <td className={tdCls + " text-slate-400"}>
+        {o.created_at ? new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : o.fecha_operacion}
+      </td>
+      <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}{o.is_anulada ? " (anulada)" : ""}</td>
+      <td className={tdCls + " text-slate-400"}>{o.status ? ESTADO_OPERACION_LABELS[o.status] : "—"}</td>
+      <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
+      <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
+      <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
+    </tr>
+  );
 
   if (!v) return <div className="text-slate-400">Cargando ficha…</div>;
 
@@ -93,32 +133,39 @@ export default function VehiculoDetalle() {
 
   return (
     <div>
-      <div className="mb-3 flex items-center gap-2">
-        <button onClick={() => navigate("/tyrecontrol/vehiculos")} className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200">← Vehículos</button>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => navigate(esCliente ? "/tyrecontrol/mis-vehiculos" : "/tyrecontrol/vehiculos")}
+          className="rounded bg-slate-800 px-3 py-1 text-[12px] text-slate-200"
+        >
+          ← {esCliente ? "Mis vehículos" : "Vehículos"}
+        </button>
         <h1 className="text-lg font-black">{v.matricula}{v.numero_unidad ? ` · Unidad ${v.numero_unidad}` : ""}</h1>
         <Badge ok={v.activo}>{v.activo ? "Activo" : "Inactivo"}</Badge>
+        <span className="ml-2 text-lg font-black text-slate-100">
+          {Number(v.km_actual).toLocaleString("es-ES")} <span className="text-xs font-normal text-slate-400">km</span>
+        </span>
+        <span className="text-[11px] text-slate-500">({ORIGEN_KM_LABELS[v.origen_km]})</span>
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-2">
-        {/* Datos generales */}
-        <div className="rounded-lg bg-slate-800 p-3">
-          <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Datos generales</div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {dato("Empresa", v.empresa?.nombre)}{dato("Delegación", v.delegacion?.nombre)}
-            {dato("Nº de unidad", v.numero_unidad)}
-            {dato("Marca", v.marca)}{dato("Modelo", v.modelo)}
-            {dato("Tipo", v.tipo?.descripcion ?? v.tipo?.nombre)}{dato("Bastidor", v.bastidor)}
-            {dato("Fecha matriculación", v.fecha_matriculacion)}{dato("Webfleet ID", v.webfleet_vehicle_id)}
-          </div>
-        </div>
-
-        {/* Kilometraje */}
-        <div className="rounded-lg bg-slate-800 p-3">
-          <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Kilometraje</div>
-          <div className="text-3xl font-black">{Number(v.km_actual).toLocaleString("es-ES")} <span className="text-sm font-normal text-slate-400">km</span></div>
-          <div className="mt-1 text-xs text-slate-500">Origen: {ORIGEN_KM_LABELS[v.origen_km]}</div>
+      {/* Datos generales: todo lo que traiga la ficha técnica, no solo lo que tiene columna propia */}
+      <div className="rounded-lg bg-slate-800 p-3">
+        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Datos generales</div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {dato("Empresa", v.empresa?.nombre)}{dato("Delegación", v.delegacion?.nombre)}
+          {dato("Nº de unidad", v.numero_unidad)}
+          {dato("Marca", v.marca)}{dato("Modelo", v.modelo)}
+          {dato("Tipo", v.tipo?.descripcion ?? v.tipo?.nombre)}{dato("Bastidor", v.bastidor)}
+          {dato("Fecha matriculación", v.fecha_matriculacion)}{dato("Webfleet ID", v.webfleet_vehicle_id)}
         </div>
       </div>
+
+      {/* Ficha técnica (documento + OCR): justo debajo de los datos generales,
+          que es de donde salen esos datos. */}
+      <FichaTecnicaVehiculo vehiculo={v} puedeEditar={!esCliente} onAplicado={() => { void cargar(); setRecargarItv((n) => n + 1); }} />
+
+      {/* Ficha técnica ITV: solo los códigos que tienen dato real. */}
+      <FichaTecnicaItv key={recargarItv} vehiculoId={v.id} puedeEditar={!esCliente} onCambio={cargar} />
 
       {/* Webfleet: enlazar vehículo y sincronizar km/posición */}
       {!esCliente && (
@@ -160,7 +207,7 @@ export default function VehiculoDetalle() {
         <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Plano del vehículo</div>
         <VehicleLayoutImage
           tipo={v.tipo}
-          imagenFallback={v.config_ejes?.imagen_chasis_url ?? null}
+          imagenConfig={imagenMarca ?? v.config_ejes?.imagen_chasis_url ?? null}
           posiciones={posiciones}
           vehiculoId={v.id}
           empresaId={v.empresa_id}
@@ -168,31 +215,45 @@ export default function VehiculoDetalle() {
           medidaPorPosicionId={medidaPorPosicionId}
           editable={!esCliente}
           puedeCalibrar={!!perfil?.es_superadmin}
-          onFicha={(nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}
+          onFicha={esCliente ? undefined : (nid) => navigate(`/tyrecontrol/neumaticos/${nid}`)}
           onChanged={cargar}
           onTipoChanged={cargar}
+          onOperaciones={() => setModalOps(true)}
         />
       </div>
 
-      {/* Estructura de posiciones */}
-      <div className="mt-3 rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Estructura de posiciones ({posiciones.length})</div>
-        {posiciones.length === 0 ? (
-          <div className="text-sm text-slate-500">
-            {v.tipo_vehiculo_id ? "Este tipo de vehículo no tiene posiciones definidas." : "Asigna un tipo de vehículo para ver sus posiciones."}
-          </div>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {posiciones.map((p) => (
-              <div key={p.id} className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-center">
-                <div className="text-[13px] font-bold text-sky-300">{p.codigo_posicion}</div>
-                <div className="text-[10px] text-slate-400">{p.nombre}</div>
-                <div className="text-[9px] text-slate-500">Eje {p.eje ?? "—"} · {p.lado ?? ""}{p.interior_exterior ? ` · ${p.interior_exterior}` : ""}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* El listado de posiciones se quitó: el plano y las etiquetas de cada
+          neumático ya dicen dónde está cada rueda, y repetirlo en fichas de
+          ocho posiciones empujaba lo demás fuera de pantalla en el móvil.
+          Lo que SÍ se queda son los avisos, que no se ven en ninguna otra
+          parte y delatan un vehículo mal configurado. */}
+      {(() => {
+        // Las posiciones salen del TIPO de vehículo: si no tiene los mismos
+        // ejes que la configuración, en el plano aparecen ruedas que no
+        // existen. Sin este aviso, el técnico mide una rueda fantasma.
+        const ejesConfig = v.config_ejes?.nombre ? v.config_ejes.nombre.split(/x/i).filter((s) => s.trim() !== "").length : 0;
+        const ejesTipo = v.tipo?.numero_ejes ?? 0;
+        const descuadre = !!ejesConfig && !!ejesTipo && ejesConfig !== ejesTipo;
+        if (descuadre) {
+          return (
+            <div className="mt-3 rounded-lg border border-rose-500/50 bg-rose-950/40 p-3 text-[12px] text-rose-200">
+              El tipo «{v.tipo?.descripcion ?? v.tipo?.nombre}» tiene {ejesTipo} ejes, pero la configuración
+              {" "}{v.config_ejes?.nombre} son {ejesConfig}: por eso salen {posiciones.length} posiciones.
+              Cambia el tipo del vehículo por uno de {ejesConfig} ejes.
+            </div>
+          );
+        }
+        if (posiciones.length === 0) {
+          return (
+            <div className="mt-3 rounded-lg border border-amber-500/50 bg-amber-950/30 p-3 text-[12px] text-amber-200">
+              {v.tipo_vehiculo_id
+                ? "Este tipo de vehículo no tiene posiciones definidas, así que el plano sale vacío."
+                : "Asigna un tipo de vehículo para que el plano muestre sus posiciones."}
+            </div>
+          );
+        }
+        return null;
+      })()}
 
       {/* Inspecciones (revisiones del vehículo) */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
@@ -348,6 +409,12 @@ export default function VehiculoDetalle() {
 
       {modalOps && (
         <Modal title="Histórico de operaciones" onClose={() => setModalOps(false)}>
+          <input
+            value={filtroOps}
+            onChange={(e) => setFiltroOps(e.target.value)}
+            placeholder="Buscar por nº de parte (OP-2026-000143), de línea (#123) o de neumático"
+            className="mb-3 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500"
+          />
           {(() => {
             const lineas = resumenOperaciones(operaciones);
             return lineas.length > 0 ? (
@@ -359,24 +426,77 @@ export default function VehiculoDetalle() {
               </div>
             ) : null;
           })()}
-          <TableWrap>
-            <thead className="bg-slate-900"><tr>
-              <th className={thCls}>Fecha</th><th className={thCls}>Tipo</th><th className={thCls}>Estado</th>
-              <th className={thCls}>Neumático</th><th className={thCls}>Posición</th><th className={thCls}>Motivo</th>
-            </tr></thead>
-            <tbody>
-              {operaciones.map((o) => (
-                <tr key={o.id} className={`border-t border-slate-700/60 ${o.is_anulada ? "opacity-50" : ""}`}>
-                  <td className={tdCls + " text-slate-400"}>{o.fecha_operacion}{o.created_at ? " · " + new Date(o.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}</td>
-                  <td className={tdCls + " text-slate-200"}>{TIPO_OPERACION_LABELS[o.tipo_operacion] ?? o.tipo_operacion}{o.is_anulada ? " (anulada)" : ""}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.status ? ESTADO_OPERACION_LABELS[o.status] : "—"}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.codigo_posicion ?? ""}{o.posicion_origen && o.posicion_destino ? " → " : ""}{o.posicion_destino?.codigo_posicion ?? ""}</td>
-                  <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </TableWrap>
+          {/* Agrupado por INTERVENCIÓN: las operaciones de una misma visita al
+              taller salen bajo un solo número de parte, en vez de como líneas
+              sueltas que parecían trabajos independientes. */}
+          {(() => {
+            const q = filtroOps.trim().toUpperCase();
+            const porIntervencion = new Map<string, OperacionNeumatico[]>();
+            const sueltas: OperacionNeumatico[] = [];
+            for (const o of operaciones) {
+              if (o.intervencion_id) {
+                const lista = porIntervencion.get(o.intervencion_id) ?? [];
+                lista.push(o);
+                porIntervencion.set(o.intervencion_id, lista);
+              } else {
+                sueltas.push(o);
+              }
+            }
+            const bloques = intervenciones
+              .map((i) => ({ i, ops: porIntervencion.get(i.id) ?? [] }))
+              .filter(({ i, ops }) =>
+                !q || (i.numero ?? "").toUpperCase().includes(q) ||
+                (i.resumen ?? "").toUpperCase().includes(q) ||
+                ops.some((o) => (o.neumatico?.numero_interno ?? "").toUpperCase().includes(q)
+                  || `#${o.numero_operacion ?? ""}` === q));
+
+            if (bloques.length === 0 && (sueltas.length === 0 || q)) {
+              return <div className="text-sm text-slate-500">
+                {q ? "Ningún parte coincide con la búsqueda." : "Este vehículo no tiene operaciones registradas."}
+              </div>;
+            }
+            const cabecera = (
+              <thead className="bg-slate-900"><tr>
+                <th className={thCls}>Nº</th><th className={thCls}>Hora</th><th className={thCls}>Tipo</th>
+                <th className={thCls}>Estado</th><th className={thCls}>Neumático</th>
+                <th className={thCls}>Posición</th><th className={thCls}>Motivo</th>
+              </tr></thead>
+            );
+            return (
+              <div className="flex flex-col gap-3">
+                {bloques.map(({ i, ops }) => (
+                  <div key={i.id} className="rounded-lg border border-slate-700 bg-slate-900/60">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-slate-700 px-3 py-2">
+                      <span className="font-mono text-[13px] font-bold text-sky-300">{i.numero ?? "sin número"}</span>
+                      <span className="text-[12px] text-slate-300">
+                        {i.fecha}
+                        {i.created_at ? " · " + new Date(i.created_at).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : ""}
+                      </span>
+                      <span className="text-[12px] text-slate-500">
+                        {i.n_operaciones} {i.n_operaciones === 1 ? "operación" : "operaciones"}
+                      </span>
+                      {i.resumen && <span className="w-full text-[12px] text-slate-400">{i.resumen}</span>}
+                    </div>
+                    {ops.length > 0 ? (
+                      <TableWrap>{cabecera}<tbody>{ops.map(filaOperacion)}</tbody></TableWrap>
+                    ) : (
+                      // Puede pasar: listarOperaciones trae las 200 últimas, así
+                      // que un parte viejo puede quedarse sin sus líneas.
+                      <div className="px-3 py-2 text-[12px] text-slate-500">Sus operaciones no están entre las últimas cargadas.</div>
+                    )}
+                  </div>
+                ))}
+                {sueltas.length > 0 && !q && (
+                  <div className="rounded-lg border border-amber-600/40 bg-amber-500/5">
+                    <div className="border-b border-amber-600/30 px-3 py-2 text-[12px] text-amber-200">
+                      Recién hechas, aún sin número: se agrupan solas al cerrar la intervención.
+                    </div>
+                    <TableWrap>{cabecera}<tbody>{sueltas.map(filaOperacion)}</tbody></TableWrap>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </Modal>
       )}
     </div>

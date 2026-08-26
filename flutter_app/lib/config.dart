@@ -1,1 +1,1 @@
-const String kBackendUrl = 'https://mobilink-solutions.com';
+const String kBackendUrl = 'https://api.mobilink-solutions.com';

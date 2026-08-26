@@ -52,6 +52,8 @@ const FIELD = "rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm
 const INPUT = `mt-1 w-full ${FIELD}`;
 const LABEL = "text-xs font-medium text-slate-400";
 
+type FotoItem = { id?: string; url: string; file?: File };
+
 const EMPTY: Partial<Herramienta> = {
   codigo: "", nombre: "", descripcion: "", marca: "", modelo: "",
   numero_serie: "", estado: "disponible", es_compartida: false,
@@ -77,6 +79,9 @@ export default function Herramientas() {
   const [form, setForm] = useState<any>({ ...EMPTY });
   const [editId, setEditId] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
+  const [fotoAmpliada, setFotoAmpliada] = useState<string | null>(null);
+  const [fotos, setFotos] = useState<FotoItem[]>([]);
+  const [fotosIniciales, setFotosIniciales] = useState<string[]>([]);
 
   useEffect(() => { cargar(); }, []);
 
@@ -119,8 +124,25 @@ export default function Herramientas() {
   function abrirNueva() {
     setForm({ ...EMPTY });
     setEditId(null);
+    setFotos([]);
+    setFotosIniciales([]);
     setError("");
     setModal(true);
+  }
+
+  async function cargarFotos(toolId: string, fotoUrl: string | null) {
+    const { data } = await supabase
+      .from("tc_item_photos")
+      .select("id, url, orden")
+      .eq("tool_id", toolId)
+      .order("orden");
+    let lista: FotoItem[] = (data ?? []).map((f) => ({ id: f.id, url: f.url }));
+    // Migración perezosa: la foto antigua (foto_url) que aún no esté en la tabla
+    if (fotoUrl && !lista.some((f) => f.url === fotoUrl)) {
+      lista = [{ url: fotoUrl }, ...lista];
+    }
+    setFotos(lista);
+    setFotosIniciales((data ?? []).map((f) => f.id));
   }
 
   function abrirEditar(h: Herramienta) {
@@ -130,11 +152,31 @@ export default function Herramientas() {
       estado: h.estado, es_compartida: h.es_compartida,
       category_id: h.category_id ?? "", ubicacion_habitual_id: h.ubicacion_habitual_id ?? "",
       ubicacion_actual_id: h.ubicacion_actual_id ?? "", observaciones: h.observaciones ?? "",
-      activa: h.activa,
+      activa: h.activa, foto_url: h.foto_url,
     });
     setEditId(h.id);
+    setFotos([]);
+    setFotosIniciales([]);
+    cargarFotos(h.id, h.foto_url);
     setError("");
     setModal(true);
+  }
+
+  function anadirFotos(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const nuevas: FotoItem[] = Array.from(files).map((f) => ({
+      url: URL.createObjectURL(f),
+      file: f,
+    }));
+    setFotos((prev) => [...prev, ...nuevas]);
+  }
+
+  function quitarFoto(idx: number) {
+    setFotos((prev) => {
+      const f = prev[idx];
+      if (f?.file) URL.revokeObjectURL(f.url);
+      return prev.filter((_, i) => i !== idx);
+    });
   }
 
   async function guardar() {
@@ -145,7 +187,29 @@ export default function Herramientas() {
     setGuardando(true);
     setError("");
 
+    // Subir las fotos nuevas al bucket
+    const finales: { id?: string; url: string }[] = [];
+    for (const f of fotos) {
+      if (f.file) {
+        const ext = f.file.name.split(".").pop()?.toLowerCase() || "jpg";
+        const ruta = `herramientas/${crypto.randomUUID()}.${ext}`;
+        const { error: upErr } = await supabase.storage
+          .from("toolcontrol-fotos")
+          .upload(ruta, f.file, { upsert: true });
+        if (upErr) {
+          setGuardando(false);
+          setError(`Error subiendo la foto: ${upErr.message}`);
+          return;
+        }
+        finales.push({ url: supabase.storage.from("toolcontrol-fotos").getPublicUrl(ruta).data.publicUrl });
+      } else {
+        finales.push({ id: f.id, url: f.url });
+      }
+    }
+    const fotoUrl: string | null = finales[0]?.url ?? null;
+
     const payload = {
+      foto_url:             fotoUrl,
       codigo:               form.codigo.trim(),
       nombre:               form.nombre.trim(),
       descripcion:          form.descripcion || null,
@@ -161,12 +225,33 @@ export default function Herramientas() {
       activa:               form.activa ?? true,
     };
 
-    const { error: err } = editId
-      ? await supabase.from("tc_tools").update(payload).eq("id", editId)
-      : await supabase.from("tc_tools").insert(payload);
+    let toolId = editId;
+    let err;
+    if (editId) {
+      ({ error: err } = await supabase.from("tc_tools").update(payload).eq("id", editId));
+    } else {
+      const { data: creada, error: insErr } = await supabase
+        .from("tc_tools").insert(payload).select("id").single();
+      err = insErr;
+      toolId = creada?.id ?? null;
+    }
+
+    if (err || !toolId) { setGuardando(false); setError(err?.message ?? "Error guardando."); return; }
+
+    // Sincronizar galería en tc_item_photos
+    const idsActuales = finales.filter((f) => f.id).map((f) => f.id as string);
+    const aBorrar = fotosIniciales.filter((fid) => !idsActuales.includes(fid));
+    if (aBorrar.length) await supabase.from("tc_item_photos").delete().in("id", aBorrar);
+    for (let i = 0; i < finales.length; i++) {
+      const f = finales[i];
+      if (f.id) {
+        await supabase.from("tc_item_photos").update({ orden: i }).eq("id", f.id);
+      } else {
+        await supabase.from("tc_item_photos").insert({ tool_id: toolId, url: f.url, orden: i });
+      }
+    }
 
     setGuardando(false);
-    if (err) { setError(err.message); return; }
 
     setMensaje(editId ? "Herramienta actualizada." : "Herramienta creada.");
     setModal(false);
@@ -260,10 +345,22 @@ export default function Herramientas() {
                   <tr key={h.id} className="border-t border-slate-800 align-middle hover:bg-slate-800/50">
                     <td className="p-3 font-mono font-semibold text-slate-200">{h.codigo}</td>
                     <td className="p-3">
-                      <div className="font-medium text-slate-100">{h.nombre}</div>
-                      {h.es_compartida && (
-                        <span className="text-xs text-cyan-300">Compartida</span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {h.foto_url && (
+                          <img
+                            src={h.foto_url}
+                            alt=""
+                            onClick={() => setFotoAmpliada(h.foto_url)}
+                            className="h-9 w-9 shrink-0 cursor-pointer rounded-lg border border-slate-700 object-cover hover:opacity-80"
+                          />
+                        )}
+                        <div>
+                          <div className="font-medium text-slate-100">{h.nombre}</div>
+                          {h.es_compartida && (
+                            <span className="text-xs text-cyan-300">Compartida</span>
+                          )}
+                        </div>
+                      </div>
                     </td>
                     <td className="p-3 text-slate-400">
                       {[h.marca, h.modelo].filter(Boolean).join(" · ") || "—"}
@@ -463,6 +560,44 @@ export default function Herramientas() {
                 />
               </div>
 
+              <div>
+                <label className={LABEL}>Fotos</label>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {fotos.map((f, i) => (
+                    <div key={f.id ?? f.url} className="relative h-20 w-20">
+                      <img
+                        src={f.url}
+                        alt=""
+                        onClick={() => setFotoAmpliada(f.url)}
+                        className="h-20 w-20 cursor-pointer rounded-lg border border-slate-700 object-cover hover:opacity-80"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => quitarFoto(i)}
+                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500/80 text-xs font-bold text-white hover:bg-red-500"
+                      >
+                        ×
+                      </button>
+                      {i === 0 && (
+                        <span className="absolute bottom-1 left-1 rounded bg-amber-500 px-1 text-[10px] font-bold text-amber-950">
+                          Principal
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                  <label className="flex h-20 w-20 cursor-pointer items-center justify-center rounded-lg border border-dashed border-slate-700 text-xs text-slate-500 hover:border-amber-500 hover:text-amber-400">
+                    + Añadir
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => { anadirFotos(e.target.files); e.target.value = ""; }}
+                    />
+                  </label>
+                </div>
+              </div>
+
               <label className="flex items-center gap-2 text-sm text-slate-300">
                 <input
                   type="checkbox"
@@ -545,6 +680,29 @@ export default function Herramientas() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Visor de foto ampliada */}
+      {fotoAmpliada && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setFotoAmpliada(null)}
+        >
+          <button
+            type="button"
+            onClick={() => setFotoAmpliada(null)}
+            className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-slate-800/90 text-xl font-bold text-slate-100 hover:bg-slate-700"
+            aria-label="Cerrar"
+          >
+            ×
+          </button>
+          <img
+            src={fotoAmpliada}
+            alt=""
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[90vh] max-w-[90vw] rounded-xl object-contain"
+          />
         </div>
       )}
     </ToolControlLayout>

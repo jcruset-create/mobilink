@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../services/probe_session.dart';
+import '../services/rfid_service.dart';
 import '../services/tlgx_probe_service.dart';
 import '../theme/app_theme.dart';
 
@@ -18,6 +19,10 @@ class _SondaScreenState extends State<SondaScreen> {
   static const double _psiABar = 0.0689476;
 
   late final TlgxProbeService _probe;
+  late final RfidService _rfidService;
+  bool _leyendoRfid = false;
+  String _rfidMsg = '';
+  String _rfidPwr = ''; // potencia del lector en centésimas de dBm
   bool _conectada = false;
   bool _ocupado = false;
   String _error = '';
@@ -36,12 +41,16 @@ class _SondaScreenState extends State<SondaScreen> {
   void initState() {
     super.initState();
     _probe = TlgxProbeService(onLine: _onLine, onState: _onState);
+    // La capa RFID reutiliza la conexión ya abierta: solo envía comandos y
+    // consume las respuestas RFID que le pasa _onLine.
+    _rfidService = RfidService(enviar: _probe.enviar);
     _predeterminada = ProbeSession.instance.sondaPredeterminada();
     _serieCtrl.text = (_predeterminada?['serie'] as String?) ?? '';
   }
 
   @override
   void dispose() {
+    _rfidService.dispose();
     _probe.desconectar();
     _serieCtrl.dispose();
     super.dispose();
@@ -82,6 +91,9 @@ class _SondaScreenState extends State<SondaScreen> {
 
   void _onLine(String line) {
     _addLog('◀ $line');
+    // Las respuestas RFID también van a su capa (no interrumpe profundidad
+    // ni presión: parsearLinea sigue procesando la línea igual que antes).
+    _rfidService.manejarLinea(line);
     final r = parsearLinea(line);
     setState(() {
       switch (r.tipo) {
@@ -92,6 +104,7 @@ class _SondaScreenState extends State<SondaScreen> {
           if (r.clave == 'modelo') _modelo = r.texto ?? '';
           if (r.clave == 'version') _version = r.texto ?? '';
           if (r.clave == 'bateria') _bateria = r.texto ?? '';
+          if (r.clave == 'rfid_pwr') _rfidPwr = r.texto ?? '';
           break;
         default: break;
       }
@@ -128,6 +141,7 @@ class _SondaScreenState extends State<SondaScreen> {
       await _probe.enviar('MODSTR');
       await _probe.enviar('V');
       await _probe.enviar('BV');
+      await _probe.enviar('RFIDPWR'); // potencia actual del lector RFID
     } catch (e) {
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     } finally {
@@ -170,6 +184,57 @@ class _SondaScreenState extends State<SondaScreen> {
       _addLog('▶ $cmd');
     } catch (e) {
       setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  /// Lectura puntual de EPC siguiendo el protocolo: GO → GR → GO.
+  Future<void> _leerRfid() async {
+    setState(() { _leyendoRfid = true; _rfidMsg = ''; _error = ''; });
+    _addLog('▶ GR (lectura RFID)');
+    try {
+      final msg = await _rfidService.leerEpc();
+      if (!mounted) return;
+      setState(() {
+        switch (msg.status) {
+          case RfidStatus.epc:
+            _rfid = msg.epc ?? '';
+            _rfidMsg = 'Etiqueta leída';
+            break;
+          case RfidStatus.timeout:
+            _rfidMsg = 'No se ha encontrado etiqueta RFID';
+            break;
+          case RfidStatus.error:
+            _rfidMsg = 'Error del lector${msg.error != null ? ': ${msg.error}' : ''}';
+            break;
+          case RfidStatus.cancelado:
+            _rfidMsg = 'Lectura cancelada';
+            break;
+          default:
+            _rfidMsg = msg.raw;
+        }
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _leyendoRfid = false);
+    }
+  }
+
+  /// Sube la potencia de emisión del lector RFID. Persistente: la sonda la
+  /// mantiene al apagarla (PERRFIDPWR). Más potencia = más alcance, pero
+  /// también más consumo de batería.
+  Future<void> _fijarPotencia(int centesimas) async {
+    try {
+      await _rfidService.fijarPotenciaPersistente(centesimas);
+      _addLog('▶ PERRFIDPWR$centesimas');
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await _rfidService.leerPotencia();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Potencia RFID a ${(centesimas / 100).toStringAsFixed(0)} dBm.')));
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString().replaceFirst('Exception: ', ''));
     }
   }
 
@@ -269,6 +334,77 @@ class _SondaScreenState extends State<SondaScreen> {
           ]),
           const SizedBox(height: 8),
           _lecturaCard('RFID (EPC)', _rfid.isEmpty ? '—' : _rfid, const Color(0xFFA78BFA), Icons.nfc, () => _enviar('GR'), mono: true),
+          const SizedBox(height: 8),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFA78BFA), foregroundColor: Colors.white,
+              minimumSize: const Size.fromHeight(50),
+            ),
+            onPressed: (!_conectada || _leyendoRfid) ? null : _leerRfid,
+            icon: _leyendoRfid
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.nfc),
+            label: Text(_leyendoRfid ? 'Acerca la etiqueta…' : 'Leer RFID'),
+          ),
+          if (_conectada) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceVariant,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.cardBorder),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  const Icon(Icons.settings_input_antenna, size: 18, color: Color(0xFFA78BFA)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Alcance del lector RFID${_rfidPwr.isNotEmpty ? ' · ahora ${(int.tryParse(_rfidPwr) ?? 0) / 100} dBm' : ''}',
+                      style: const TextStyle(color: AppColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 6),
+                const Text(
+                  'Más potencia = más alcance, pero gasta más batería. Se guarda en la sonda aunque la apagues.',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                ),
+                const SizedBox(height: 8),
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  for (final p in [1500, 2000, 2400, 2700])
+                    Builder(builder: (_) {
+                      final activa = _rfidPwr == '$p';
+                      final color = activa ? const Color(0xFFA78BFA) : AppColors.textSecondary;
+                      return OutlinedButton(
+                        onPressed: () => _fijarPotencia(p),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(
+                            color: activa ? const Color(0xFFA78BFA) : AppColors.cardBorder,
+                            width: activa ? 2 : 1,
+                          ),
+                        ),
+                        child: Text(
+                          '${p ~/ 100} dBm${p == 2700 ? ' (máx.)' : ''}',
+                          style: TextStyle(color: color, fontWeight: FontWeight.w700),
+                        ),
+                      );
+                    }),
+                ]),
+              ]),
+            ),
+          ],
+          if (_rfidMsg.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(_rfidMsg,
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: _rfid.isNotEmpty && _rfidMsg == 'Etiqueta leída'
+                          ? AppColors.success
+                          : AppColors.warning)),
+            ),
 
           const SizedBox(height: 16),
           if (_conectada)

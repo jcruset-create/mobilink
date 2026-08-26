@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/models.dart';
+import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import 'etiqueta_neumatico.dart';
 
 /// Plano del vehículo con la FOTO real de fondo y una tarjeta por posición,
 /// colocada en las coordenadas calibradas en el panel web (pos_x/y/w/h, en %).
@@ -143,9 +145,13 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
 
   Widget _cardPositioned(PosicionVehiculo p, int i, double w, double h) {
     final co = _coords(p, i);
-    final cardW = (co.w / 100 * w).clamp(108.0, 210.0);
+    // El ancho es EXACTAMENTE su porcentaje, sin suelo en píxeles: es lo único
+    // que garantiza que dos tarjetas del mismo eje no se pisen ni invadan el
+    // chasis por estrecha que sea la pantalla. Y se ancla por el centro.
+    final cardW = co.w / 100 * w;
+    final centroX = (co.x + co.w / 2) / 100 * w;
     return Positioned(
-      left: (co.x / 100 * w).clamp(0.0, w - cardW),
+      left: (centroX - cardW / 2).clamp(0.0, w - cardW),
       top: (co.y / 100 * h).clamp(0.0, h - 36),
       width: cardW,
       child: _TarjetaPosicion(
@@ -203,17 +209,24 @@ class _TarjetaPosicion extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Recuadro pintado entero del color del estado (nuevo / bien / justo / mal).
+    final prof = liveProf ?? draft?.profundidadMm ?? valor?.prof;
+    final pres = livePres ?? draft?.presionBar ?? valor?.pres;
+
+    // El recuadro se pinta con la BANDA DE PROFUNDIDAD del informe de flota:
+    // el técnico ve el mismo color que verá el cliente en su informe. Sin
+    // profundidad conocida se cae al color del estado (gris de pendiente…).
     // Mientras se mide, la rueda activa manda: se queda con el marco azul.
-    final fill = seleccionada ? null : tireStatusFill(status);
+    final banda = prof != null ? bandaProfundidad(prof) : null;
+    final fill = seleccionada ? null : (banda?.fondo ?? tireStatusFill(status));
+    // El relleno ya no dice si la rueda está mal, así que lo dice el marco:
+    // una avería con 15 mm saldría verde oscuro y, sin esto, no se
+    // distinguiría de una rueda sana.
+    final alerta = status == TireStatus.grave || status == TireStatus.advertencia;
     final color = seleccionada ? AppColors.tireSeleccionado : tireStatusColor(status);
-    final cTexto = fill != null ? tireStatusOnFill(status) : AppColors.textPrimary;
+    final cTexto = fill != null ? (banda?.tinta ?? tireStatusOnFill(status)) : AppColors.textPrimary;
     final cSuave = fill != null ? cTexto.withValues(alpha: 0.72) : AppColors.textSecondary;
     final cTenue = fill != null ? cTexto.withValues(alpha: 0.60) : AppColors.textHint;
     final cAcento = fill != null ? cTexto : color;
-
-    final prof = liveProf ?? draft?.profundidadMm ?? valor?.prof;
-    final pres = livePres ?? draft?.presionBar ?? valor?.pres;
     final profTxt = prof != null ? '${prof.toStringAsFixed(1)} mm' : '— mm';
     final presTxt = pres != null ? '${pres.toStringAsFixed(1)} bar' : '— bar';
 
@@ -230,8 +243,10 @@ class _TarjetaPosicion extends StatelessWidget {
           decoration: BoxDecoration(
             color: fill ?? AppColors.surface.withValues(alpha: 0.92),
             border: Border.all(
-              color: fill != null ? Color.alphaBlend(Colors.black.withValues(alpha: 0.30), fill) : color,
-              width: seleccionada ? 3 : 2,
+              color: (!seleccionada && alerta)
+                  ? color
+                  : (fill != null ? Color.alphaBlend(Colors.black.withValues(alpha: 0.30), fill) : color),
+              width: (seleccionada || (!seleccionada && alerta)) ? 3 : 2,
             ),
             borderRadius: BorderRadius.circular(10),
           ),
@@ -270,6 +285,30 @@ class _TarjetaPosicion extends StatelessWidget {
                     style: TextStyle(fontSize: 9, color: cSuave),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                  ),
+                // Distintivos del propio neumático: recauchutado (lo dice la
+                // marca) y reesculturado (se le han cortado dibujos nuevos).
+                if (status == TireStatus.nuevo ||
+                    TyreControlApi.esMarcaRecauchutada(neumatico!.marca) ||
+                    neumatico!.reesculturado ||
+                    neumatico!.giradoEnLlanta)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 3,
+                      children: [
+                        // "Nuevo" ya no se ve por el color (ahora manda la
+                        // profundidad), así que se dice con todas las letras.
+                        if (status == TireStatus.nuevo)
+                          EtiquetaNeu(txt: 'NEW', color: cTexto, fondo: AppColors.tireNuevo),
+                        if (TyreControlApi.esMarcaRecauchutada(neumatico!.marca))
+                          EtiquetaNeu(txt: 'RECAUCH.', color: cTexto),
+                        if (neumatico!.reesculturado)
+                          EtiquetaNeu(txt: 'REESC.', color: cTexto, fondo: AppColors.reesculturado),
+                        if (neumatico!.giradoEnLlanta) EtiquetaNeu(txt: 'GIRADO', color: cTexto),
+                      ],
+                    ),
                   ),
               ] else
                 const Text('Sin neumático', style: TextStyle(fontSize: 10, color: AppColors.textHint)),
