@@ -23,6 +23,9 @@ import {
   Cabecera,
   Card,
   ErrorBox,
+  Modal,
+  btnDanger,
+  btnSecondary,
   inputCls,
 } from "../components/ui";
 import { euros, aCentimos, totalLineas } from "../utils/money";
@@ -60,6 +63,8 @@ export default function Cierre() {
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [cerrada, setCerrada] = useState<Awaited<ReturnType<typeof api.cerrarJornada>> | null>(null);
+  // El texto de la pregunta cuando el cierre dejaría la caja a cero. Null = no hay pregunta.
+  const [confirmarVacia, setConfirmarVacia] = useState<string | null>(null);
 
   const objetivo = aCentimos(objetivoTexto) ?? 0;
 
@@ -209,7 +214,7 @@ export default function Cierre() {
     setObjetivoTexto(euros(contadoTotal).replace(" €", ""));
   }
 
-  async function cerrar() {
+  async function cerrar(permitirCajaVacia = false) {
     setGuardando(true);
     setError("");
     try {
@@ -218,11 +223,23 @@ export default function Cierre() {
         cambioFinalCartuchos: cambioFinalTubos,
         cambioFinalBolsas,
         notas: notas || undefined,
+        permitirCajaVacia,
       });
+      setConfirmarVacia(null);
       setCerrada(r);
       await refrescar();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se ha podido cerrar la jornada");
+      /*
+       * Dejar la caja a cero con fondo fijo configurado no es un error: es una
+       * pregunta. El caso real fue mandar el fondo entero al ingreso creyendo
+       * que era el cambio, así que aquí se corta y se pregunta en claro, con
+       * el botón de venirse atrás delante.
+       */
+      if (e instanceof api.ErrorApiCaja && e.codigo === "CIERRE_DEJA_CAJA_VACIA") {
+        setConfirmarVacia(e.message);
+      } else {
+        setError(e instanceof Error ? e.message : "No se ha podido cerrar la jornada");
+      }
     } finally {
       setGuardando(false);
     }
@@ -503,6 +520,24 @@ export default function Cierre() {
         <input value={notas} onChange={(e) => setNotas(e.target.value)} className={inputCls} placeholder="Opcional" />
       </label>
 
+      {confirmarVacia && (
+        <Modal
+          title="La caja quedaría a 0,00 €"
+          onClose={() => setConfirmarVacia(null)}
+          footer={
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmarVacia(null)} className={btnSecondary}>
+                Volver y repartir el cambio
+              </button>
+              <button onClick={() => void cerrar(true)} disabled={guardando} className={btnDanger}>
+                {guardando ? "Cerrando…" : "Sí, vaciar la caja"}
+              </button>
+            </div>
+          }
+        >
+          <p className="text-sm text-slate-300">{confirmarVacia}</p>
+        </Modal>
+      )}
       <BotonAccion tono="cierre" onClick={() => void cerrar()} disabled={guardando || !cuadra}>
         {guardando ? "Cerrando…" : "Cerrar jornada"}
       </BotonAccion>

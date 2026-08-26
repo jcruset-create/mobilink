@@ -585,6 +585,8 @@ export const cerrarJornada = (
     cambioFinalBolsas?: LineaDenominacion[];
     arqueoId?: number;
     notas?: string;
+    /** Confirmación explícita para dejar la caja a cero teniendo fondo fijo. */
+    permitirCajaVacia?: boolean;
   }
 ) =>
   pedir<{

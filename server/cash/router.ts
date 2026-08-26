@@ -1679,6 +1679,7 @@ export function createCashRouter(): Router {
           cambioFinalBolsas: lineas(b.cambioFinalBolsas, "cambioFinalBolsas"),
           arqueoId: b.arqueoId ? enteroPositivo(b.arqueoId, "arqueoId") : undefined,
           notas: typeof b.notas === "string" ? b.notas : undefined,
+          permitirCajaVacia: b.permitirCajaVacia === true,
         })
       );
     })
