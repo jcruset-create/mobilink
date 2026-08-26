@@ -156,6 +156,56 @@ describe.skipIf(!RUN)("Unidades móviles: solo se ve lo compartido", () => {
     expect(reservada.technicianRef).toBeUndefined();
   });
 
+  it("la furgoneta se da de alta a mano con su matrícula, marca y modelo", async () => {
+    const res = await fetch(`${base}/workshops/${tallerId}/mobile-units`, {
+      method: "POST",
+      headers: { "x-test-user": admin, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: `Manual-${sufijo}`, plate: "1234ABC", make: "Ford", model: "Transit",
+        workshopVan: true, truckTyreMachine: true,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const creada = await res.json() as any;
+    expect(creada.origin).toBe("manual");
+    expect(creada.make).toBe("Ford");
+    // El equipamiento es lo que decide a que furgoneta se manda el servicio
+    expect(creada.workshopVan).toBe(true);
+    expect(creada.truckTyreMachine).toBe(true);
+
+    // Y aparece en la tabla con su vehículo
+    const r = await api(`/workshops/${tallerId}/mobile-units`, operador);
+    const fila = r.body.data.find((u: any) => Number(u.id) === Number(creada.id));
+    expect(fila.model).toBe("Transit");
+
+    // Guardar la ficha sin mandar el taller NO la deja sin taller
+    const patch = await fetch(`${base}/mobile-units/${creada.id}`, {
+      method: "PATCH",
+      headers: { "x-test-user": admin, "content-type": "application/json" },
+      body: JSON.stringify({ plate: "4321CBA", truckTyreMachine: false }),
+    });
+    expect(patch.status).toBe(200);
+    const tras = await patch.json() as any;
+    expect(tras.workshopId).toBe(tallerId);
+    // Quitar un equipamiento tiene que poder hacerse: false no es "no lo toques"
+    expect(tras.truckTyreMachine).toBe(false);
+    expect(tras.workshopVan).toBe(true);
+
+    // La manual se puede dar de baja
+    const del = await fetch(`${base}/mobile-units/${creada.id}`, {
+      method: "DELETE", headers: { "x-test-user": admin },
+    });
+    expect(del.status).toBe(200);
+  });
+
+  it("una furgoneta del sincronismo no se borra desde el panel", async () => {
+    const res = await fetch(`${base}/mobile-units/${idCompartida}`, {
+      method: "DELETE", headers: { "x-test-user": admin },
+    });
+    // Volvería a aparecer en la siguiente pasada: se da de baja en Assist
+    expect(res.status).toBe(409);
+  });
+
   it("el operador no puede abrir el cuadro: es de quien administra", async () => {
     const r = await api("/mobile-units/sharing", operador);
     expect(r.status).toBe(403);

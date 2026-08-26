@@ -8,7 +8,10 @@
 
 import crypto from "node:crypto";
 import { Router, json, type Request, type Response } from "express";
+import multer from "multer";
+import sharp from "sharp";
 import db from "../db.ts";
+import { supabase, SUPABASE_ROADSIDE_BUCKET } from "../supabase.ts";
 import { requireConnectRole, auditConnect, type ConnectRole } from "./rbac.ts";
 import {
   createAssistance, submitDraft, assignAssistance, transition, InvalidTransitionError,
@@ -184,6 +187,55 @@ async function generateLiteCode(name: string): Promise<string> {
     if (!hit.rows[0]) return code;
   }
   return `${base}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+}
+
+/* Las fotos del vehículo llegan por multipart y se guardan en memoria: se
+ * normalizan y se suben a Supabase, nunca tocan el disco del servidor. */
+const subida = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024, files: 1 },
+});
+const IMAGENES_ADMITIDAS = new Set([
+  "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif",
+]);
+
+const FOTOS_TALLER = ["fachada", "accesos", "interior", "otros"] as const;
+
+/**
+ * Deja una foto lista y subida: reorienta —la del móvil viene girada—,
+ * comprime y la sube al almacén. Devuelve lo que hay que guardar en la ficha,
+ * o el error tal cual para responderlo sin inventarse un 500.
+ */
+async function subirFoto(archivo: Express.Multer.File, carpeta: string): Promise<
+  | { ok: true; url: string; ruta: string; bytes: number; sha256: string }
+  | { ok: false; estado: number; codigo: string; mensaje: string }
+> {
+  if (!IMAGENES_ADMITIDAS.has(archivo.mimetype)) {
+    return { ok: false, estado: 415, codigo: "unsupported_media",
+             mensaje: "Formato no admitido (usa JPG, PNG o WEBP)" };
+  }
+  let buffer: Buffer;
+  try {
+    buffer = await sharp(archivo.buffer)
+      .rotate()
+      .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+  } catch {
+    return { ok: false, estado: 422, codigo: "invalid_image", mensaje: "El archivo no es una imagen válida" };
+  }
+  const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
+  const ruta = `${carpeta}/${Date.now()}_${sha256.slice(0, 8)}.jpg`;
+  const { error: upErr } = await supabase.storage
+    .from(SUPABASE_ROADSIDE_BUCKET)
+    .upload(ruta, buffer, { contentType: "image/jpeg", upsert: false });
+  if (upErr) {
+    console.error("[Connect] subida de foto:", upErr.message);
+    return { ok: false, estado: 502, codigo: "upload_failed",
+             mensaje: "No se pudo guardar la fotografía; reintenta" };
+  }
+  const { data: pub } = supabase.storage.from(SUPABASE_ROADSIDE_BUCKET).getPublicUrl(ruta);
+  return { ok: true, url: pub.publicUrl, ruta, bytes: buffer.length, sha256 };
 }
 
 export function createConnectBackofficeRouter(): Router {
@@ -706,20 +758,230 @@ export function createConnectBackofficeRouter(): Router {
     res.json({ data: r.rows });
   });
 
-  /** Mover una unidad a otro taller (o quitarla de uno). */
+  /**
+   * Alta manual de una furgoneta de asistencia.
+   *
+   * Las de Mobilink Assist llegan solas por el sincronismo con el core, con su
+   * GPS de flota. Un taller Lite no tiene nada de eso —la posición sale del
+   * móvil del operario durante la asistencia—, así que sus furgonetas se dan
+   * de alta aquí a mano. Nacen marcadas como 'manual' para que el sincronismo,
+   * que solo toca las que trae del core, no las pise ni las borre.
+   */
+  router.post("/workshops/:id/mobile-units", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const b = req.body ?? {};
+    const nombre = String(b.name ?? "").trim();
+    if (!nombre) return err(res, 422, "validation_failed", "La furgoneta necesita un nombre");
+
+    const w = await db.query(
+      `SELECT id, "providerCompanyId" FROM connect_workshops WHERE id = $1`,
+      [Number(req.params.id)],
+    );
+    if (!w.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+    if (!w.rows[0].providerCompanyId) {
+      return err(res, 422, "validation_failed", "El taller no está asignado a ninguna empresa");
+    }
+
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO connect_mobile_units
+         ("providerCompanyId", "workshopId", name, plate, make, model, notes,
+          "workshopVan", "truckTyreMachine",
+          status, origin, "sharedWithCentral", "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'unknown','manual',true,$10,$10) RETURNING *`,
+      [w.rows[0].providerCompanyId, w.rows[0].id, nombre,
+       b.plate?.trim() || null, b.make?.trim() || null, b.model?.trim() || null,
+       b.notes?.trim() || null, b.workshopVan === true, b.truckTyreMachine === true, now],
+    );
+    await db.query(
+      `INSERT INTO connect_mobile_unit_events ("unitId", "fromStatus", "toStatus", reason, "createdAtMs")
+       VALUES ($1, NULL, 'unknown', 'alta manual desde el panel', $2)`,
+      [r.rows[0].id, now],
+    );
+    await auditConnect({
+      req, action: "mobile_unit.created", resourceType: "mobile_unit",
+      resourceId: Number(r.rows[0].id), detail: { workshopId: w.rows[0].id, name: nombre },
+    });
+    res.status(201).json(r.rows[0]);
+  });
+
+  /** Baja de una furgoneta dada de alta a mano. Las del core no se borran aquí:
+   *  volverían a aparecer en el siguiente sincronismo. */
+  router.delete("/mobile-units/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const id = Number(req.params.id);
+    const u = await db.query(`SELECT id, origin, name FROM connect_mobile_units WHERE id = $1`, [id]);
+    if (!u.rows[0]) return err(res, 404, "not_found", "Unidad no encontrada");
+    if (u.rows[0].origin !== "manual") {
+      return err(res, 409, "not_manual",
+        "Esta furgoneta viene del sincronismo con Mobilink Assist: se da de baja allí, aquí volvería a aparecer.");
+    }
+    await db.query(`DELETE FROM connect_mobile_units WHERE id = $1`, [id]);
+    await auditConnect({
+      req, action: "mobile_unit.deleted", resourceType: "mobile_unit",
+      resourceId: id, detail: { name: u.rows[0].name },
+    });
+    res.json({ ok: true });
+  });
+
+  // ── Fotos del taller ──────────────────────────────────────
+  //
+  // Quien decide a qué taller manda un camión a las tres de la mañana
+  // necesita ver el ACCESO, no la fachada bonita; y el conductor que llega
+  // necesita reconocer la puerta. Por eso la foto lleva categoría.
+
+  router.get("/workshops/:id/photos", ...requireConnectRole("operator"), async (req, res) => {
+    const r = await db.query(
+      `SELECT id, category, url, "fileName", "sizeBytes", caption, "uploadedBy", "createdAtMs"
+         FROM connect_workshop_photos WHERE "workshopId" = $1
+        ORDER BY category, id`,
+      [Number(req.params.id)],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post(
+    "/workshops/:id/photos",
+    ...requireConnectRole("cc_admin"),
+    subida.single("file"),
+    async (req, res) => {
+      const id = Number(req.params.id);
+      const u = req.connectUser!;
+      const w = await db.query(`SELECT id FROM connect_workshops WHERE id = $1`, [id]);
+      if (!w.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
+      if (!req.file) return err(res, 400, "no_file", "No se recibió ninguna foto");
+
+      const categoria = (FOTOS_TALLER as readonly string[]).includes(String(req.body?.category))
+        ? String(req.body.category) : "otros";
+      const foto = await subirFoto(req.file, `connect-workshops/${id}/${categoria}`);
+      if (foto.ok === false) return err(res, foto.estado, foto.codigo, foto.mensaje);
+
+      const r = await db.query(
+        `INSERT INTO connect_workshop_photos
+           ("workshopId", category, url, "storagePath", "fileName", "sizeBytes", sha256,
+            caption, "uploadedBy", "createdAtMs")
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING id, category, url, "fileName", "sizeBytes", caption, "uploadedBy", "createdAtMs"`,
+        [id, categoria, foto.url, foto.ruta,
+         String(req.file.originalname || "foto.jpg").slice(0, 120),
+         foto.bytes, foto.sha256, String(req.body?.caption ?? "").trim() || null, u.name, Date.now()],
+      );
+      await auditConnect({
+        req, action: "workshop.photo_added", resourceType: "workshop",
+        resourceId: id, detail: { category: categoria, sha256: foto.sha256 },
+      });
+      res.status(201).json(r.rows[0]);
+    },
+  );
+
+  router.delete("/workshops/photos/:photoId", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const r = await db.query(
+      `DELETE FROM connect_workshop_photos WHERE id = $1 RETURNING "workshopId", "storagePath"`,
+      [Number(req.params.photoId)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Foto no encontrada");
+    await supabase.storage.from(SUPABASE_ROADSIDE_BUCKET).remove([r.rows[0].storagePath])
+      .catch(() => {});
+    await auditConnect({
+      req, action: "workshop.photo_deleted", resourceType: "workshop",
+      resourceId: Number(r.rows[0].workshopId),
+    });
+    res.json({ ok: true });
+  });
+
+  // ── Fotos del vehículo de asistencia ──────────────────────
+
+  router.get("/mobile-units/:id/photos", ...requireConnectRole("operator"), async (req, res) => {
+    const r = await db.query(
+      `SELECT id, url, "fileName", "sizeBytes", caption, "uploadedBy", "createdAtMs"
+         FROM connect_mobile_unit_photos WHERE "unitId" = $1 ORDER BY id`,
+      [Number(req.params.id)],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post(
+    "/mobile-units/:id/photos",
+    ...requireConnectRole("cc_admin"),
+    subida.single("file"),
+    async (req, res) => {
+      const id = Number(req.params.id);
+      const u = req.connectUser!;
+      const unidad = await db.query(`SELECT id FROM connect_mobile_units WHERE id = $1`, [id]);
+      if (!unidad.rows[0]) return err(res, 404, "not_found", "Unidad no encontrada");
+      if (!req.file) return err(res, 400, "no_file", "No se recibió ninguna foto");
+
+      const foto = await subirFoto(req.file, `connect-units/${id}`);
+      if (foto.ok === false) return err(res, foto.estado, foto.codigo, foto.mensaje);
+
+      const r = await db.query(
+        `INSERT INTO connect_mobile_unit_photos
+           ("unitId", url, "storagePath", "fileName", "sizeBytes", sha256, caption, "uploadedBy", "createdAtMs")
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id, url, "fileName", "sizeBytes", caption, "uploadedBy", "createdAtMs"`,
+        [id, foto.url, foto.ruta, String(req.file.originalname || "foto.jpg").slice(0, 120),
+         foto.bytes, foto.sha256, String(req.body?.caption ?? "").trim() || null, u.name, Date.now()],
+      );
+      await auditConnect({
+        req, action: "mobile_unit.photo_added", resourceType: "mobile_unit",
+        resourceId: id, detail: { sha256: foto.sha256 },
+      });
+      res.status(201).json(r.rows[0]);
+    },
+  );
+
+  router.delete("/mobile-units/photos/:photoId", ...requireConnectRole("cc_admin"), async (req, res) => {
+    const r = await db.query(
+      `DELETE FROM connect_mobile_unit_photos WHERE id = $1 RETURNING "unitId", "storagePath"`,
+      [Number(req.params.photoId)],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Foto no encontrada");
+    // El fichero se borra después: si fallara, la ficha ya no lo enseña y el
+    // huérfano en el almacén es preferible a una foto que sigue a la vista.
+    await supabase.storage.from(SUPABASE_ROADSIDE_BUCKET).remove([r.rows[0].storagePath])
+      .catch(() => {});
+    await auditConnect({
+      req, action: "mobile_unit.photo_deleted", resourceType: "mobile_unit",
+      resourceId: Number(r.rows[0].unitId),
+    });
+    res.json({ ok: true });
+  });
+
+  /**
+   * Ficha de la unidad: moverla de taller y sus datos de vehículo.
+   *
+   * El taller SOLO se toca si viene en la petición. Antes se escribía siempre,
+   * así que guardar la matrícula sin mandar el taller dejaba la furgoneta sin
+   * taller y desaparecía de la ficha donde se estaba editando.
+   */
   router.patch("/mobile-units/:id", ...requireConnectRole("cc_admin"), async (req, res) => {
     const id = Number(req.params.id);
-    const workshopId = req.body?.workshopId != null ? Number(req.body.workshopId) : null;
-    if (workshopId != null) {
+    const b = req.body ?? {};
+    const mueve = Object.prototype.hasOwnProperty.call(b, "workshopId");
+    const workshopId = mueve && b.workshopId != null ? Number(b.workshopId) : null;
+    if (mueve && workshopId != null) {
       const w = await db.query(`SELECT id FROM connect_workshops WHERE id = $1`, [workshopId]);
       if (!w.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
     }
+    const texto = (v: unknown) => (v == null ? null : String(v).trim());
     const r = await db.query(
-      `UPDATE connect_mobile_units SET "workshopId" = $1, "updatedAtMs" = $2 WHERE id = $3 RETURNING *`,
-      [workshopId, Date.now(), id],
+      `UPDATE connect_mobile_units SET
+         "workshopId" = CASE WHEN $1 THEN $2 ELSE "workshopId" END,
+         name = COALESCE($3, name), plate = COALESCE($4, plate),
+         make = COALESCE($5, make), model = COALESCE($6, model),
+         notes = COALESCE($7, notes),
+         "workshopVan" = COALESCE($10, "workshopVan"),
+         "truckTyreMachine" = COALESCE($11, "truckTyreMachine"),
+         "updatedAtMs" = $8
+       WHERE id = $9 RETURNING *`,
+      [mueve, workshopId, texto(b.name) || null, texto(b.plate), texto(b.make),
+       texto(b.model), texto(b.notes), Date.now(), id,
+       typeof b.workshopVan === "boolean" ? b.workshopVan : null,
+       typeof b.truckTyreMachine === "boolean" ? b.truckTyreMachine : null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Unidad no encontrada");
-    await auditConnect({ req, action: "unit.workshop_changed", resourceType: "mobile_unit", resourceId: id, detail: { workshopId } });
+    await auditConnect({
+      req, action: mueve ? "unit.workshop_changed" : "mobile_unit.updated",
+      resourceType: "mobile_unit", resourceId: id, detail: b,
+    });
     res.json(r.rows[0]);
   });
 
@@ -1050,6 +1312,8 @@ export function createConnectBackofficeRouter(): Router {
          "commercialNetwork" = COALESCE($19, "commercialNetwork"),
          "openingHours" = COALESCE($20, "openingHours"),
          notes = COALESCE($21, notes),
+         -- Lo que el taller sabe hacer: decide si se le puede mandar el vehiculo
+         services = COALESCE($22, services),
          "updatedAtMs" = $9
        WHERE id = $10 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
@@ -1061,7 +1325,9 @@ export function createConnectBackofficeRouter(): Router {
        b.features ? JSON.stringify(b.features) : null,
        b.coreWorkshopId != null ? String(b.coreWorkshopId) : null,
        b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
-       b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null, b.notes ?? null],
+       b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null, b.notes ?? null,
+       // Llega ya como texto JSON desde el panel; una lista tambien vale
+       b.services == null ? null : (typeof b.services === "string" ? b.services : JSON.stringify(b.services))],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
     // Cambiar a Lite (o volver) no toca datos: solo el producto habilitado
@@ -3334,6 +3600,21 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       [shared, u.name, Date.now(), Number(req.params.id)],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Unidad no encontrada");
+
+    /*
+     * Y en el core, si la furgoneta viene de alli. El sincronismo copia
+     * `compartidoCentral` en cada pasada, asi que cambiarlo solo aqui duraba
+     * hasta el siguiente minuto: el interruptor parecia funcionar y se volvia
+     * atras solo. La decision del taller vive en Mobilink Assist; esto la
+     * escribe alli.
+     */
+    if (r.rows[0].coreVehicleId != null) {
+      await db.query(
+        `UPDATE roadside_vehicles SET "compartidoCentral" = $1 WHERE id = $2`,
+        [shared, Number(r.rows[0].coreVehicleId)],
+      ).catch((e) => console.error("[Connect] compartir en el core:", e?.message));
+    }
+
     await auditConnect({
       req, action: shared ? "mobile_unit.shared_with_central" : "mobile_unit.removed_from_central",
       resourceType: "mobile_unit", resourceId: Number(req.params.id),
