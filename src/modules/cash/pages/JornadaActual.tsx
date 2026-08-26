@@ -11,7 +11,7 @@ import { useNavigate } from "react-router-dom";
 import { HandCoins, Banknote, ArrowLeftRight, Repeat, ClipboardCheck, Lock, PlayCircle } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, { type CantidadesPorValor, lineasDesde } from "../components/DenominationGrid";
-import { Aviso, BotonAccion, Cabecera, Card, ErrorBox } from "../components/ui";
+import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, Modal, btnDanger, btnSecondary, inputCls } from "../components/ui";
 import { euros, totalLineas } from "../utils/money";
 import { ETIQUETA_ESTADO_SESION, ETIQUETA_FORMA_PAGO } from "../types";
 import type { FormaPagoConfig, Operacion, SeccionConfig } from "../types";
@@ -41,6 +41,17 @@ export default function JornadaActual() {
 
   const s = jornada.sesion;
   const caja = cajas.find((c) => c.id === s.registerId);
+
+  /*
+   * La jornada está «vacía» si no tiene nada más que su fondo de apertura:
+   * es el único caso en que anularla es deshacer un despiste y no borrar
+   * trabajo. El servidor lo vuelve a comprobar; esto solo decide si el enlace
+   * merece estar a la vista.
+   */
+  const vacia =
+    jornada.operaciones <= 1 &&
+    jornada.cobros.totalCentimos === 0 &&
+    jornada.pagos.totalCentimos === 0;
 
   return (
     <div className="space-y-3">
@@ -81,6 +92,13 @@ export default function JornadaActual() {
             Cerrar caja
           </BotonAccion>
         )}
+        {/*
+          Deshacer una apertura en falso. Discreto a propósito —es un enlace,
+          no un botón de acción— y solo cuando la jornada está vacía: con
+          operaciones dentro anular no es deshacer, es borrar trabajo, y el
+          servidor lo rechazaría igualmente.
+        */}
+        {vacia && puede("cash.operation.reverse") && <AnularJornada sessionId={s.id} />}
       </div>
 
       {/* Dinero que no está en el cajón y se espera de vuelta. Va arriba a
@@ -601,5 +619,77 @@ function Apertura({ cajaId }: { cajaId: number }) {
         />
       </label>
     </div>
+  );
+}
+
+/**
+ * Enlace y modal para anular una jornada abierta por error.
+ *
+ * El caso real: se abre la jornada de hoy por despiste cuando lo que se quería
+ * era registrar un día atrasado llevado en papel. Con ésta abierta, la caja no
+ * deja abrir la buena; cerrarla en falso sembraría el histórico.
+ */
+function AnularJornada({ sessionId }: { sessionId: number }) {
+  const { refrescar } = useCash();
+  const [abierto, setAbierto] = useState(false);
+  const [motivo, setMotivo] = useState("");
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  async function anular() {
+    setOcupado(true);
+    setError("");
+    try {
+      await api.anularJornada(sessionId, motivo);
+      setAbierto(false);
+      await refrescar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido anular la jornada");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setAbierto(true)}
+        className="self-center px-2 text-[12px] text-slate-500 underline-offset-2 hover:text-rose-300 hover:underline"
+      >
+        Anular jornada
+      </button>
+
+      {abierto && (
+        <Modal
+          title="Anular esta jornada"
+          onClose={() => setAbierto(false)}
+          footer={
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setAbierto(false)} className={btnSecondary}>
+                Cancelar
+              </button>
+              <button onClick={() => void anular()} disabled={!motivo.trim() || ocupado} className={btnDanger}>
+                {ocupado ? "Anulando…" : "Anular la jornada"}
+              </button>
+            </div>
+          }
+        >
+          {error && <ErrorBox>{error}</ErrorBox>}
+          <p className="mb-2 text-sm text-slate-300">
+            La jornada quedará <strong>anulada</strong>: seguirá viéndose en el histórico, pero no
+            contará para nada —ni bloquea abrir otra, ni hereda fondo, ni sale en los informes—.
+            Solo se puede anular una jornada sin operaciones; para registrar un día atrasado,
+            anula ésta y abre una nueva poniendo la fecha que toca.
+          </p>
+          <input
+            value={motivo}
+            onChange={(e) => setMotivo(e.target.value)}
+            placeholder="Motivo de la anulación (obligatorio)"
+            className={inputCls}
+            autoFocus
+          />
+        </Modal>
+      )}
+    </>
   );
 }
