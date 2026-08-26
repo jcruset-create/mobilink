@@ -52,6 +52,7 @@ class OfflineStore {
     required int assistanceId,
     required String status,
     required String type, // 'status' | 'en_camino'
+    int? serviceKm,
   }) async {
     final actionId =
         '${DateTime.now().millisecondsSinceEpoch}-$assistanceId-$status';
@@ -60,6 +61,7 @@ class OfflineStore {
       'type': type,
       'assistanceId': assistanceId,
       'status': status,
+      if (serviceKm != null) 'serviceKm': serviceKm,
       'ts': DateTime.now().millisecondsSinceEpoch,
     });
     pendingCount.value = _outbox.length;

@@ -19,6 +19,11 @@ import { authenticate, requireModule } from "../core/auth.ts";
 import { supabase, SUPABASE_STORAGE_BUCKET } from "../supabase.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { cargarPermisosCaja, exigirPermiso } from "./permissions.ts";
+import * as reauth from "./reauth.ts";
+import * as migracion from "./migration.ts";
+import * as traslados from "./transfers.ts";
+import * as jerarquia from "./hierarchy.ts";
+import { estadoCola, procesarEventos, reintentarEventos } from "./events/worker.ts";
 import { miniaturaBoton, miniaturaFicha } from "./images.ts";
 import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimientosDeSesion } from "./repository.ts";
 import type { LineaDenominacion } from "./domain/inventory.ts";
@@ -234,6 +239,9 @@ function contexto(req: Request): servicio.Contexto {
     empresaId: req.authCtx!.empresaId,
     userId: req.authCtx!.userId,
     ip: req.ip,
+    // Ámbito de taller. Lo pone `cargarPermisosCaja` y `null` significa toda la
+    // empresa, que es lo que tiene todo el mundo mientras nadie lo limite.
+    centroId: req.cashCentroId ?? null,
   };
 }
 
@@ -269,9 +277,12 @@ export function createCashRouter(): Router {
         cargarDenominaciones(pool, true),
         config.listarFormasPago(empresaId),
         pool.query(
-          `SELECT id, centro, nombre, codigo, fondo_objetivo_centimos FROM cash_registers
-            WHERE empresa_id = $1 AND activa = true ORDER BY centro, nombre`,
-          [empresaId]
+          `SELECT id, centro, centro_id AS "centroId", nombre, codigo, fondo_objetivo_centimos
+             FROM cash_registers
+            WHERE empresa_id = $1 AND activa = true
+              AND ($2::uuid IS NULL OR centro_id = $2)
+            ORDER BY centro, nombre`,
+          [empresaId, req.cashCentroId ?? null]
         ),
         estadoIntegracion(empresaId),
         config.ajustes(empresaId),
@@ -301,7 +312,9 @@ export function createCashRouter(): Router {
     "/registers",
     exigirPermiso("cash.configure"),
     ruta(async (req, res) => {
-      res.json({ cajas: await config.listarCajas(req.authCtx!.empresaId) });
+      res.json({
+        cajas: await config.listarCajas(req.authCtx!.empresaId, req.cashCentroId ?? null),
+      });
     })
   );
 
@@ -313,6 +326,7 @@ export function createCashRouter(): Router {
       const caja = await config.crearCaja(contexto(req), {
         nombre: typeof b.nombre === "string" ? b.nombre : "",
         centro: typeof b.centro === "string" ? b.centro : "",
+        centroId: typeof b.centroId === "string" ? b.centroId : null,
         codigo: typeof b.codigo === "string" ? b.codigo : undefined,
       });
       res.status(201).json({ caja });
@@ -327,6 +341,9 @@ export function createCashRouter(): Router {
       const caja = await config.actualizarCaja(contexto(req), enteroPositivo(req.params.id, "id"), {
         nombre: typeof b.nombre === "string" ? b.nombre : undefined,
         centro: typeof b.centro === "string" ? b.centro : undefined,
+        // `null` explícito = desasignar el taller; ausente = no tocarlo.
+        centroId:
+          b.centroId === null ? null : typeof b.centroId === "string" ? b.centroId : undefined,
         codigo: typeof b.codigo === "string" ? b.codigo : undefined,
         activa: typeof b.activa === "boolean" ? b.activa : undefined,
         fondoObjetivoCentimos:
@@ -335,6 +352,220 @@ export function createCashRouter(): Router {
             : entero(b.fondoObjetivoCentimos, "fondoObjetivoCentimos"),
       });
       res.json({ caja });
+    })
+  );
+
+  // ── Cola de eventos hacia MC Central ─────────────────────────────────────
+
+  /*
+   * La cola muerta, para que se pueda mirar.
+   *
+   * Va con permiso de ERP y no con uno nuevo: quien puede ver y reintentar la
+   * integración con la ERP es exactamente quien tiene que poder hacerlo con
+   * ésta. Un permiso más por cada cola sería un mecanismo paralelo que
+   * mantener.
+   */
+  r.get(
+    "/events",
+    exigirPermiso("cash.erp.view"),
+    ruta(async (req, res) => {
+      res.json(await estadoCola(req.authCtx!.empresaId));
+    })
+  );
+
+  /** Devuelve a la cola los eventos muertos, y da un empujón al worker. */
+  r.post(
+    "/events/retry",
+    exigirPermiso("cash.erp.sync"),
+    ruta(async (req, res) => {
+      const reencolados = await reintentarEventos(req.authCtx!.empresaId);
+      const tratados = await procesarEventos();
+      res.json({ reencolados, tratados });
+    })
+  );
+
+  /**
+   * Volver a identificarse.
+   *
+   * No lleva `exigirPermiso` porque no es una acción sobre la caja: es el
+   * usuario diciendo «sigo siendo yo». Quien no tenga permiso para lo que venga
+   * después se topará con él allí.
+   */
+  r.post(
+    "/reauth",
+    ruta(async (req, res) => {
+      const clave = String((req.body ?? {}).clave ?? "");
+      if (!clave) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "Hace falta la clave.", 400);
+      }
+      await reauth.reautenticar(req.authCtx!.userId, clave);
+      res.json({ ok: true, validoHastaMs: Date.now() + reauth.VALIDEZ_MS });
+    })
+  );
+
+  // ── Traslados entre cajas ────────────────────────────────────────────────
+
+  r.get(
+    "/transfers",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const registerId = req.query.registerId
+        ? enteroPositivo(req.query.registerId, "registerId")
+        : undefined;
+      res.json({ traslados: await traslados.listar(req.authCtx!.empresaId, registerId) });
+    })
+  );
+
+  /**
+   * Manda dinero a otra caja. Permiso de tesorería, no de cajero: sacar
+   * efectivo del cajón para llevarlo a otro sitio no es una operación de
+   * mostrador.
+   */
+  r.post(
+    "/transfers",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json({
+        traslado: await traslados.enviar(contexto(req), {
+          sessionId: enteroPositivo(b.sessionId, "sessionId"),
+          destinoRegisterId: enteroPositivo(b.destinoRegisterId, "destinoRegisterId"),
+          piezas: Array.isArray(b.piezas) ? b.piezas : [],
+          portador: String(b.portador ?? ""),
+          notas: typeof b.notas === "string" ? b.notas : undefined,
+        }),
+      });
+    })
+  );
+
+  r.post(
+    "/transfers/:id/receive",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        traslado: await traslados.recibir(contexto(req), enteroPositivo(req.params.id, "id"), {
+          sessionId: enteroPositivo(b.sessionId, "sessionId"),
+          recibido: Array.isArray(b.recibido) ? b.recibido : undefined,
+          diferenciaMotivo: typeof b.motivo === "string" ? b.motivo : undefined,
+        }),
+      });
+    })
+  );
+
+  r.post(
+    "/transfers/:id/cancel",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        traslado: await traslados.cancelar(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          enteroPositivo(b.sessionId, "sessionId"),
+          String(b.motivo ?? "")
+        ),
+      });
+    })
+  );
+
+  // ── Migración: los días que se llevaron en papel ─────────────────────────
+
+  /**
+   * Importa una tanda de días de papel.
+   *
+   * Permiso de configuración y no de cajero: esto crea jornadas cerradas con
+   * dinero dentro, y no es una operación de mostrador.
+   */
+  r.post(
+    "/migration/days",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const dias = Array.isArray(b.dias) ? b.dias : [];
+      if (dias.length === 0) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún día que importar.", 400);
+      }
+      res.json(await migracion.importarDias(contexto(req), String(b.lote ?? ""), dias));
+    })
+  );
+
+  /** Saldo inicial de una caja que arranca. Solo si no tiene ninguna jornada. */
+  r.post(
+    "/registers/:id/initial-balance",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json(
+        await migracion.declararSaldoInicial(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          Array.isArray(b.contado) ? b.contado : [],
+          String(b.motivo ?? "")
+        )
+      );
+    })
+  );
+
+  // ── Jerarquía: zonas y talleres ──────────────────────────────────────────
+
+  /**
+   * Zonas y talleres de la empresa, en una llamada.
+   *
+   * Van juntos porque la pantalla los usa juntos —el taller se elige y la zona
+   * lo agrupa— y separarlos solo produciría dos peticiones seguidas.
+   */
+  r.get(
+    "/hierarchy",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const empresaId = req.authCtx!.empresaId;
+      const [zonas, centros] = await Promise.all([
+        jerarquia.listarZonas(empresaId),
+        jerarquia.listarCentros(empresaId),
+      ]);
+      res.json({ zonas, centros, ambitoCentroId: req.cashCentroId ?? null });
+    })
+  );
+
+  r.post(
+    "/zones",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const zona = await jerarquia.crearZona(
+        contexto(req),
+        typeof b.nombre === "string" ? b.nombre : ""
+      );
+      res.status(201).json({ zona });
+    })
+  );
+
+  r.patch(
+    "/zones/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const zona = await jerarquia.actualizarZona(contexto(req), String(req.params.id), {
+        nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+        activa: typeof b.activa === "boolean" ? b.activa : undefined,
+      });
+      res.json({ zona });
+    })
+  );
+
+  /** Cuelga un taller de una zona, o lo deja sin zona con `zonaId: null`. */
+  r.patch(
+    "/centers/:id/zone",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      await jerarquia.asignarZonaACentro(
+        contexto(req),
+        String(req.params.id),
+        typeof b.zonaId === "string" ? b.zonaId : null
+      );
+      res.json({ ok: true });
     })
   );
 
@@ -652,12 +883,49 @@ export function createCashRouter(): Router {
       if (!req.file) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
       }
+      const b = req.body ?? {};
+      // Los duplicados se AVISAN, no se bloquean: a veces el mismo resguardo
+      // respalda de verdad dos cosas. Lo que evita es que el mismo taco de
+      // facturas acabe adjuntado cinco veces porque nadie se acordaba.
+      const yaEstaba = await documentos.duplicadosDe(req.authCtx!.empresaId, req.file.buffer);
+
       const documento = await documentos.adjuntarDocumento(
         contexto(req),
         enteroPositivo(req.params.id, "id"),
-        req.file
+        req.file,
+        b.reemplazaA ? enteroPositivo(b.reemplazaA, "reemplazaA") : undefined
       );
-      res.status(201).json({ documento });
+      res.status(201).json({ documento, duplicados: yaEstaba });
+    })
+  );
+
+  /**
+   * ¿Sigue siendo el mismo fichero que se adjuntó?
+   *
+   * Con permiso de lectura y no de escritura: comprobar la integridad de una
+   * evidencia es justo lo que tiene que poder hacer quien la audita, que suele
+   * ser quien no puede tocarla.
+   */
+  r.get(
+    "/documents/:id/verify",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json(
+        await documentos.verificarDocumento(contexto(req), enteroPositivo(req.params.id, "id"))
+      );
+    })
+  );
+
+  r.get(
+    "/sessions/:id/documents/verify",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({
+        verificaciones: await documentos.verificarJornada(
+          contexto(req),
+          enteroPositivo(req.params.id, "id")
+        ),
+      });
     })
   );
 
@@ -755,6 +1023,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const registerId = enteroPositivo(req.params.id, "id");
+      await jerarquia.exigirAmbitoCaja(pool, contexto(req), registerId);
       res.json(await ingresos.panelIngresos(req.authCtx!.empresaId, registerId));
     })
   );
@@ -848,6 +1117,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const registerId = enteroPositivo(req.params.id, "id");
+      await jerarquia.exigirAmbitoCaja(pool, contexto(req), registerId);
       const empresaId = req.authCtx!.empresaId;
       const [pedidos, entregas] = await Promise.all([
         tesoreria.listarPedidos(empresaId, registerId),
@@ -1050,6 +1320,9 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.session.reopen"),
     ruta(async (req, res) => {
       const motivo = String((req.body ?? {}).motivo ?? "");
+      // Reabrir permite recerrar con otras cifras. Si la reautenticación está
+      // encendida, aquí es donde toca demostrar quién está delante.
+      await reauth.exigirReautenticacion(req.authCtx!.empresaId, req.authCtx!.userId);
       res.json({
         sesion: await servicio.reabrirJornada(contexto(req), enteroPositivo(req.params.id, "id"), motivo),
       });
@@ -1317,6 +1590,7 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.operation.reverse"),
     ruta(async (req, res) => {
       const motivo = String((req.body ?? {}).motivo ?? "");
+      await reauth.exigirReautenticacion(req.authCtx!.empresaId, req.authCtx!.userId);
       res.json(
         await servicio.anularOperacion(contexto(req), enteroPositivo(req.params.id, "id"), motivo)
       );
@@ -1378,6 +1652,13 @@ export function createCashRouter(): Router {
       const { desde, hasta, registerId, estado } = req.query;
       const filtros: string[] = ["s.empresa_id = $1"];
       const params: unknown[] = [req.authCtx!.empresaId];
+
+      // El histórico también se recorta al ámbito: si no puedes operar la caja
+      // de otro taller, tampoco tienes por qué leer sus jornadas.
+      if (req.cashCentroId) {
+        params.push(req.cashCentroId);
+        filtros.push(`c.centro_id = $${params.length}`);
+      }
 
       if (typeof desde === "string" && desde) {
         params.push(desde);

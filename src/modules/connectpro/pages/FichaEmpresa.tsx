@@ -10,6 +10,7 @@ import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState, KpiCard } from "../components/ui";
 import TablaUnidades from "../components/TablaUnidades";
+import BotonCoordenadas from "../components/BotonCoordenadas";
 import TarjetaOperario, { type Operator } from "../components/TarjetaOperario";
 import ImportarTallerWhatsApp, { CAMPOS_IMPORTABLES, type ImportacionConfirmada } from "../components/ImportarTallerWhatsApp";
 import {
@@ -23,6 +24,8 @@ type Provider = {
   web: string | null; billingEmail: string | null;
   contactEmail: string | null; contactPhone: string | null;
   status: string; notes: string | null; createdAtMs: number;
+  /** grupo | colaboradora | externa — el color de sus talleres en el mapa. */
+  companyType: string | null;
 };
 
 type WorkshopRow = {
@@ -54,14 +57,39 @@ const TALLER_VACIO = {
 };
 const TABS = ["Resumen", "Talleres", "Operarios", "Unidades"] as const;
 
-/** Campo editable de la ficha (edición en línea, cc_admin). */
-function Campo({ label, value, onSave, canEdit, placeholder }: {
+/**
+ * Campo de la ficha. Se puede tocar de dos maneras y las dos conviven:
+ * suelto —"editar" al lado, para corregir un dato— o dentro de la edición de
+ * la ficha entera, cuando `edicion` trae el borrador de todos los campos.
+ */
+function Campo({ label, value, onSave, canEdit, placeholder, edicion, campo, onEdit }: {
   label: string; value: string | null; canEdit: boolean; placeholder?: string;
   onSave: (v: string) => Promise<void>;
+  /** Borrador de la ficha completa, o null si no se está editando entera. */
+  edicion?: Record<string, string> | null;
+  campo?: string;
+  onEdit?: (e: Record<string, string>) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [v, setV] = useState(value ?? "");
   useEffect(() => setV(value ?? ""), [value]);
+
+  // Con la ficha entera abierta, el campo es un cuadro de texto sin más: el
+  // botón de guardar es el de arriba, uno para todos.
+  if (edicion && campo && onEdit) {
+    return (
+      <div className="flex items-center gap-2 border-b border-slate-700/40 py-1.5 text-[13px]">
+        <span className="w-40 shrink-0 text-slate-500">{label}</span>
+        <Input
+          value={edicion[campo] ?? ""}
+          placeholder={placeholder}
+          className="w-64"
+          onChange={(e) => onEdit({ ...edicion, [campo]: e.target.value })}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center gap-2 border-b border-slate-700/40 py-1.5 text-[13px]">
       <span className="w-40 shrink-0 text-slate-500">{label}</span>
@@ -112,6 +140,40 @@ export default function FichaEmpresa() {
       ),
     ).then((pares) => setOperarios(Object.fromEntries(pares)));
   }, [tab, f, operarios]);
+
+  /*
+   * Editar la ficha entera de una vez.
+   *
+   * Los campos se pueden tocar uno a uno, pero dar de alta una empresa son
+   * once datos seguidos y hacerlo de uno en uno son once idas y venidas al
+   * servidor. Con el boton se abren todos, se rellenan y se guardan en una
+   * sola escritura, que ademas deja UNA linea en la auditoria en vez de once.
+   */
+  const [edicion, setEdicion] = useState<Record<string, string> | null>(null);
+
+  const TIPOS_EMPRESA: [string, string][] = [
+    ["grupo", "Del grupo"], ["colaboradora", "Colaboradora"], ["externa", "Externa"],
+  ];
+
+  const CAMPOS_FICHA = [
+    "legalName", "taxId", "address", "city", "postalCode", "province",
+    "contactPhone", "contactEmail", "billingEmail", "web", "notes",
+  ] as const;
+
+  const abrirEdicion = () => {
+    const prov = f?.provider as any;
+    setEdicion(Object.fromEntries(CAMPOS_FICHA.map((c) => [c, prov?.[c] ?? ""])));
+  };
+
+  const guardarFicha = async () => {
+    if (!edicion) return;
+    setBusy(true); setError(null);
+    try {
+      await boFetch(`/providers/${id}`, { method: "PATCH", body: edicion });
+      setEdicion(null);
+      load();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
 
   const patch = async (body: Record<string, unknown>) => {
     try { await boFetch(`/providers/${id}`, { method: "PATCH", body }); load(); }
@@ -231,22 +293,55 @@ export default function FichaEmpresa() {
 
       {tab === "Resumen" && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {canEdit && (
+            <div className="flex items-center gap-2 lg:col-span-2">
+              {edicion === null ? (
+                <Button variant="ghost" onClick={abrirEdicion}>✎ Editar ficha</Button>
+              ) : (
+                <>
+                  <Button disabled={busy} onClick={guardarFicha}>Guardar cambios</Button>
+                  <Button variant="ghost" disabled={busy} onClick={() => setEdicion(null)}>Cancelar</Button>
+                  <span className="text-[12px] text-slate-500">
+                    Se guarda todo de una vez; lo que dejes en blanco se borra.
+                  </span>
+                </>
+              )}
+            </div>
+          )}
           <Card className="p-4">
             <h3 className="mb-2 text-sm font-semibold text-cyan-300">Datos fiscales</h3>
-            <Campo label="Razón social" value={p.legalName} canEdit={canEdit} onSave={(v) => patch({ legalName: v })} />
-            <Campo label="CIF / NIF" value={p.taxId} canEdit={canEdit} onSave={(v) => patch({ taxId: v })} />
-            <Campo label="Dirección" value={p.address} canEdit={canEdit} onSave={(v) => patch({ address: v })} />
-            <Campo label="Población" value={p.city} canEdit={canEdit} onSave={(v) => patch({ city: v })} />
-            <Campo label="Código postal" value={p.postalCode} canEdit={canEdit} onSave={(v) => patch({ postalCode: v })} />
-            <Campo label="Provincia" value={p.province} canEdit={canEdit} onSave={(v) => patch({ province: v })} />
+            <div className="flex items-center gap-2 border-b border-slate-700/40 py-1.5 text-[13px]">
+              <span className="w-40 shrink-0 text-slate-500">Tipo de empresa</span>
+              {canEdit ? (
+                <Select
+                  value={p.companyType ?? "colaboradora"}
+                  onChange={(e) => patch({ companyType: e.target.value })}
+                >
+                  {TIPOS_EMPRESA.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+                </Select>
+              ) : (
+                <span className="text-slate-200">
+                  {TIPOS_EMPRESA.find(([c]) => c === (p.companyType ?? "colaboradora"))?.[1]}
+                </span>
+              )}
+              <span className="text-[11px] text-slate-500">
+                Pinta sus talleres en el mapa: del grupo en verde, colaboradora en amarillo, externa en gris.
+              </span>
+            </div>
+            <Campo label="Razón social" value={p.legalName} canEdit={canEdit} edicion={edicion} campo="legalName" onEdit={setEdicion} onSave={(v) => patch({ legalName: v })} />
+            <Campo label="CIF / NIF" value={p.taxId} canEdit={canEdit} edicion={edicion} campo="taxId" onEdit={setEdicion} onSave={(v) => patch({ taxId: v })} />
+            <Campo label="Dirección" value={p.address} canEdit={canEdit} edicion={edicion} campo="address" onEdit={setEdicion} onSave={(v) => patch({ address: v })} />
+            <Campo label="Población" value={p.city} canEdit={canEdit} edicion={edicion} campo="city" onEdit={setEdicion} onSave={(v) => patch({ city: v })} />
+            <Campo label="Código postal" value={p.postalCode} canEdit={canEdit} edicion={edicion} campo="postalCode" onEdit={setEdicion} onSave={(v) => patch({ postalCode: v })} />
+            <Campo label="Provincia" value={p.province} canEdit={canEdit} edicion={edicion} campo="province" onEdit={setEdicion} onSave={(v) => patch({ province: v })} />
           </Card>
           <Card className="p-4">
             <h3 className="mb-2 text-sm font-semibold text-cyan-300">Contacto y facturación</h3>
-            <Campo label="Teléfono" value={p.contactPhone} canEdit={canEdit} onSave={(v) => patch({ contactPhone: v })} />
-            <Campo label="Email" value={p.contactEmail} canEdit={canEdit} onSave={(v) => patch({ contactEmail: v })} />
-            <Campo label="Email de facturación" value={p.billingEmail} canEdit={canEdit} onSave={(v) => patch({ billingEmail: v })} />
-            <Campo label="Web" value={p.web} canEdit={canEdit} onSave={(v) => patch({ web: v })} />
-            <Campo label="Notas" value={p.notes} canEdit={canEdit} onSave={(v) => patch({ notes: v })} />
+            <Campo label="Teléfono" value={p.contactPhone} canEdit={canEdit} edicion={edicion} campo="contactPhone" onEdit={setEdicion} onSave={(v) => patch({ contactPhone: v })} />
+            <Campo label="Email" value={p.contactEmail} canEdit={canEdit} edicion={edicion} campo="contactEmail" onEdit={setEdicion} onSave={(v) => patch({ contactEmail: v })} />
+            <Campo label="Email de facturación" value={p.billingEmail} canEdit={canEdit} edicion={edicion} campo="billingEmail" onEdit={setEdicion} onSave={(v) => patch({ billingEmail: v })} />
+            <Campo label="Web" value={p.web} canEdit={canEdit} edicion={edicion} campo="web" onEdit={setEdicion} onSave={(v) => patch({ web: v })} />
+            <Campo label="Notas" value={p.notes} canEdit={canEdit} edicion={edicion} campo="notes" onEdit={setEdicion} onSave={(v) => patch({ notes: v })} />
             {p.contactPhone && (
               <a href={`tel:${p.contactPhone}`} className="mt-2 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-[14px] font-bold text-white hover:bg-emerald-500">
                 📞 Llamar a la empresa
@@ -294,6 +389,16 @@ export default function FichaEmpresa() {
                 <Select value={nuevoTaller.integrationType} onChange={(e) => setNuevoTaller({ ...nuevoTaller, integrationType: e.target.value })}>
                   {TIERS.map((t) => <option key={t} value={t}>{WORKSHOP_TIER_LABELS[t]}</option>)}
                 </Select>
+                <BotonCoordenadas
+                  direccion={{
+                    address: nuevoTaller.address, postalCode: nuevoTaller.postalCode,
+                    city: nuevoTaller.city, province: nuevoTaller.province,
+                  }}
+                  onEncontrado={(p) => setNuevoTaller({
+                    ...nuevoTaller, latitude: String(p.lat), longitude: String(p.lng),
+                  })}
+                  onError={setError}
+                />
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 <Input placeholder="Red comercial (Confortauto…)" value={nuevoTaller.commercialNetwork} onChange={(e) => setNuevoTaller({ ...nuevoTaller, commercialNetwork: e.target.value })} className="w-44" />

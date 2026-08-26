@@ -67,6 +67,35 @@ export async function boDownload(path: string, nombrePorDefecto: string): Promis
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Subir un fichero (multipart). No se puede usar `boFetch`: pone
+ * Content-Type de JSON, y con multipart el navegador tiene que poner el suyo
+ * con la frontera que él mismo genera.
+ */
+export async function boSubir<T>(
+  path: string,
+  file: File,
+  campos?: Record<string, string>,
+): Promise<T> {
+  const headers: Record<string, string> = {};
+  try {
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.access_token) headers.Authorization = `Bearer ${data.session.access_token}`;
+  } catch {
+    /* sin sesión: el backend devolverá 401 */
+  }
+  const form = new FormData();
+  form.append("file", file);
+  for (const [k, v] of Object.entries(campos ?? {})) form.append(k, v);
+  const res = await fetch(`${API_BASE}/api/connect/bo${path}`, { method: "POST", headers, body: form });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new ApiError(res.status, json?.error?.code ?? "error",
+      json?.error?.message ?? `Error HTTP ${res.status}`);
+  }
+  return json as T;
+}
+
 export async function boFetch<T>(
   path: string,
   options?: { method?: string; body?: unknown; centro?: number | null },

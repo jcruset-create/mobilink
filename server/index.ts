@@ -20,7 +20,9 @@ import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
 import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
-import { initCash, mountCash, startCashErpWorker } from "./cash/index.ts";
+import { initCash, mountCash, startCashErpWorker, startCashEventWorker } from "./cash/index.ts";
+import { initTacografos, mountTacografos } from "./tacografos/index.ts";
+import { initCentral, mountCentral } from "./central/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
 import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
@@ -6761,12 +6763,32 @@ app.post(
 
       const timestampField = getRoadsideStatusTimestampField(status);
 
+      /*
+       * Kilómetros DEL SERVICIO, si el técnico los manda (normalmente al
+       * finalizar). Por encima de 2.000 se RECHAZA en vez de descartarse en
+       * silencio: el técnico está delante y puede corregirlo; el cierre
+       * económico tiene además su propia guarda. El tiempo no se manda
+       * nunca: va de la creación a la llegada al taller, y esos instantes
+       * ya los pone el sistema.
+       */
+      let serviceKm: number | null = null;
+      if (req.body?.serviceKm != null && req.body.serviceKm !== "") {
+        const km = Math.round(Number(req.body.serviceKm));
+        if (!Number.isFinite(km) || km < 0 || km > 2000) {
+          return res.status(400).json({
+            error: "Kilómetros del servicio no válidos (0-2000). Son los del servicio, no el cuentakilómetros.",
+          });
+        }
+        serviceKm = km;
+      }
+
       const result = await db.query(
         `
           UPDATE roadside_assistances
           SET
             status = $2,
             "updatedAtMs" = $3
+            ${serviceKm != null ? `, "serviceKm" = $4` : ""}
             ${
               timestampField
                 ? `, "${timestampField}" = COALESCE("${timestampField}", $3)`
@@ -6775,7 +6797,7 @@ app.post(
           WHERE id = $1
           RETURNING *
         `,
-        [id, status, now]
+        serviceKm != null ? [id, status, now, serviceKm] : [id, status, now]
       );
 
       await db.query(
@@ -16908,6 +16930,8 @@ mountIntegrationHub(app);
 ========================================================= */
 
 mountCash(app);
+mountCentral(app);
+mountTacografos(app);
 
 /* =========================================================
    MOBILINK LICENCIAS (API bajo /api/licenses)
@@ -17328,6 +17352,8 @@ initDb()
   .then(() => prepararEsquema("Licencias", initLicenses))
   .then(() => prepararEsquema("Connect Pro", initConnect))
   .then(() => prepararEsquema("Mobilink Cash", initCash))
+  .then(() => prepararEsquema("MC Central", initCentral))
+  .then(() => prepararEsquema("Tacógrafos", initTacografos))
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
@@ -17344,6 +17370,9 @@ initDb()
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
       startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
       startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
+      // Mobilink Cash: eventos de dominio hacia MC Central. Sin transporte
+      // registrado no hace nada: la cola espera destino (fase 3).
+      startCashEventWorker();
     });
   })
   .catch((error) => {

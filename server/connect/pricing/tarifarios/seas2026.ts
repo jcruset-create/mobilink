@@ -28,6 +28,15 @@
  * como lo que es —las dos columnas cambiadas en esa fila del documento—, así
  * que aquí van al revés: **125 € de venta y 110 € de compra**.
  *
+ * CONFIRMADO POR LA DIRECCIÓN. Jordi Cruset, por escrito, dos veces:
+ *   · 17/08/2026 — «cambia la columna para que salga margen positivo
+ *     125 venta 110 compra».
+ *   · 18/08/2026 — confirmación expresa de esta inversión al cerrar los
+ *     pendientes del tarifario.
+ * Queda aquí porque este fichero es lo que se carga: quien contraste la
+ * tarifa contra el PDF encuentra la explicación en el mismo sitio que la
+ * diferencia.
+ *
  * Es el ÚNICO importe de este fichero que no coincide con el documento, y está
  * cambiado a propósito. Si alguien contrasta la carga contra el PDF y ve la
  * diferencia: no es una errata de transcripción, no la "corrijas" de vuelta.
@@ -35,19 +44,17 @@
  *
  * LO QUE FALTA CONTRASTAR O DECIDIR
  *
- *  1. Que la dirección confirme por escrito la inversión del diurno
- *     proximidad, para que quede en el expediente y no solo aquí.
- *  2. La ventana de festivos acaba el lunes a las 08:00 en la tabla de venta y
+ *  1. La ventana de festivos acaba el lunes a las 08:00 en la tabla de venta y
  *     a las 07:30 en la de compra. Aquí van las dos a las 08:00: en esa media
  *     hora el importe es el mismo (nocturno y festivo valen igual en las dos
  *     tablas), así que la diferencia solo cambiaría la etiqueta.
- *  3. Las medidas 435/50R19.5 y 445/45R19.5 no traen posición en la tabla de
+ *  2. Las medidas 435/50R19.5 y 445/45R19.5 no traen posición en la tabla de
  *     compra; se les ha puesto REMOLQUE porque es la que llevan en la de
  *     venta.
- *  4. La columna GRUPO de la tabla de descuentos (1..8, con valores dobles
+ *  3. La columna GRUPO de la tabla de descuentos (1..8, con valores dobles
  *     como "3,1") no se ha podido cruzar con los grupos de precio neto
  *     (1ª EUROPEAS / import 1 / import 2). No se carga: no se inventa.
- *  5. Tres marcas tienen MÁS descuento en venta que en compra —BARUM, DAYTON y
+ *  4. Tres marcas tienen MÁS descuento en venta que en compra —BARUM, DAYTON y
  *     FORMULA—, o sea margen negativo también ahí. Eso NO se ha tocado: está
  *     en el documento y nadie ha dicho lo contrario. Es el mismo caso que el
  *     diurno proximidad y probablemente merezca la misma revisión.

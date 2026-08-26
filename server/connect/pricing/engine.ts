@@ -465,16 +465,34 @@ function anadirConceptos(
       c.extraCode ? l?.extras.find((e) => e.code === c.extraCode) ?? null : null;
     const ev = buscar(cfg.venta);
     const ec = buscar(cfg.compra);
-    if (!ev && !ec) {
-      avisos.push({ codigo: "EXTRA_AMOUNT_MISSING", detalle: c.extraCode ?? c.tipo });
-      continue;
-    }
     const rv = ev ? calcularExtra(ev, { unidades: cantidad }) : null;
     const rc = ec ? calcularExtra(ec, { unidades: cantidad }) : null;
     for (const r of [rv, rc]) if (r && esError(r)) avisos.push({ codigo: r.error as CodigoAviso });
 
     const modelo = (rv && !esError(rv) ? rv : null) ?? (rc && !esError(rc) ? rc : null);
-    if (!modelo) continue;
+    if (!modelo) {
+      /*
+       * Material confirmado sin precio en NINGUNA tarifa. Antes esto se
+       * omitía con un aviso suelto, y un aviso suelto deja el estado en
+       * `partial`: la factura salía corta sin que nadie tuviera que mirarla.
+       * La línea con importes nulos fuerza la revisión manual, que es lo que
+       * hace ya el neumático sin precio. Nunca cero, nunca invisible.
+       */
+      avisos.push({ codigo: "MATERIAL_PRICE_NOT_FOUND", detalle: c.extraCode ?? c.tipo });
+      anadir({
+        tipo: c.tipo,
+        conceptCode: c.extraCode ?? null,
+        descripcion: c.descripcion ?? (ev ?? ec)?.name ?? c.extraCode ?? "Material",
+        cantidad,
+        unidad: "ud",
+        compraUnitaria: null, ventaUnitaria: null,
+        compraTotal: null, ventaTotal: null,
+        saleRuleId: null, purchaseRuleId: null,
+        extraId: (ev ?? ec)?.id ?? null,
+        metadata: { sinPrecio: true },
+      });
+      continue;
+    }
 
     anadir({
       tipo: c.tipo,

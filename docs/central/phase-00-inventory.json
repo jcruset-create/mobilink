@@ -1,0 +1,59 @@
+{
+  "repo": {
+    "commit": "edd3139",
+    "branch": "claude/mobilink-central-cash-uqk7t9",
+    "generated_at": "2026-08-20",
+    "note": "HEAD identico a origin/main (0 commits de diferencia en ambos sentidos). Sustituye a la auditoria previa sobre bc28e12 (13-ago-2026), 228 commits por detras y anterior al modulo Mobilink Cash."
+  },
+  "stack": {
+    "languages": ["TypeScript", "Dart", "SQL"],
+    "frameworks": ["React 18 + Vite 5 + Tailwind 4 + react-router 7", "Express 5", "Flutter (8 apps)"],
+    "orm": "ninguno (SQL crudo con pg.Pool)",
+    "database": "PostgreSQL (Supabase) + SQLite local (better-sqlite3) en server",
+    "auth": "Supabase Auth (Bearer) -> server/core/auth.ts:authenticate; licencias por empresa+modulo (app_licencia_activa); permisos por app_usuario_modulos",
+    "offline_storage": "Hive en apps Flutter; la SPA web (incluido el modulo cash) es online-only"
+  },
+  "entrypoints": [
+    "server/index.ts (monolito Express, monta /api/cash)",
+    "server/cash/index.ts (initCash, mountCash, startCashErpWorker)",
+    "server/cash/router.ts (API /api/cash/*)",
+    "src/modules/cash/CashApp.tsx (SPA, rutas /cash/*)",
+    "server/integration-hub/index.ts",
+    "server/licenses/index.ts"
+  ],
+  "hot_files": [
+    { "path": "server/cash/schema.ts", "domain": "esquema caja", "why": "24 tablas cash_*; toda tabla lleva empresa_id UUID NOT NULL; importes en centimos enteros" },
+    { "path": "server/cash/domain/money.ts", "domain": "dinero", "why": "Centimos = entero; prohibe explicitamente coma flotante; techo defensivo 100M EUR" },
+    { "path": "server/cash/domain/arqueo.ts", "domain": "arqueo", "why": "teorico vs contado por denominacion, doble cuadre" },
+    { "path": "server/cash/domain/change.ts", "domain": "cambio", "why": "programacion dinamica con stock limitado, NO_SOLUTION explicito" },
+    { "path": "server/cash/domain/cartridges.ts", "domain": "denominaciones", "why": "sueltas/bolsas/cartuchos, apertura de precinto con asientos propios" },
+    { "path": "server/cash/domain/restock.ts", "domain": "tesoreria", "why": "peticion de cambio al banco a partir del consumo real del libro mayor" },
+    { "path": "server/cash/domain/depositswap.ts", "domain": "ingresos bancarios", "why": "canje monedas->billetes para el ingreso" },
+    { "path": "server/cash/service.ts", "domain": "transaccional", "why": "invariantes de jornada y asientos dentro de transaccion" },
+    { "path": "server/cash/erp/worker.ts", "domain": "sincronizacion", "why": "FOR UPDATE SKIP LOCKED, backoff exponencial 30s*2^n hasta 1h, MAX_INTENTOS" },
+    { "path": "server/cash/permissions.ts", "domain": "RBAC", "why": "22 permisos finos, 4 roles (admin/responsable/cajero/consulta)" },
+    { "path": "server/core/auth.ts", "domain": "auth/tenant", "why": "empresaId en el contexto de peticion; licenciaActiva(); DEFAULT_EMPRESA_ID de respaldo" },
+    { "path": "server/core/auditoria.ts", "domain": "auditoria", "why": "app_auditoria; 35 llamadas desde server/cash/*" },
+    { "path": "supabase/migrations/saas_fase1_empresas_licencias.sql", "domain": "multi-tenant", "why": "app_empresas / app_centros / app_licencias / app_usuario_modulos.centro_id" },
+    { "path": "supabase/migrations/cash_fase1.sql", "domain": "esquema caja", "why": "migracion base; declara centimos BIGINT y prohibe NUMERIC/DOUBLE" }
+  ],
+  "money_types_found": [
+    { "path": "server/cash/domain/money.ts", "line": 18, "declared_type": "type Centimos = number (entero seguro)", "risk": "BAJO — cumple la invariante; validado con Number.isSafeInteger" },
+    { "path": "server/cash/schema.ts", "line": 136, "declared_type": "BIGINT (fondo_inicial_centimos y resto de columnas de importe)", "risk": "BAJO" },
+    { "path": "server/cash/schema.ts", "line": 33, "declared_type": "INTEGER (valor_centimos, fondo_objetivo_centimos)", "risk": "BAJO" },
+    { "path": "supabase/migrations/cash_fase1.sql", "line": 18, "declared_type": "comentario normativo: centimos BIGINT, nunca NUMERIC ni DOUBLE", "risk": "BAJO" },
+    { "path": "supabase/migrations/administracion_fase1.sql", "line": 0, "declared_type": "numeric(12,2) en adm_* (modulo Administracion, ajeno a cash)", "risk": "UNKNOWN — no leido en profundidad en esta pasada" }
+  ],
+  "unread_but_relevant": [
+    "server/cash/service.ts (leido solo parcialmente)",
+    "server/cash/repository.ts",
+    "server/cash/treasury.ts",
+    "server/cash/bankdeposits.ts",
+    "server/cash/report.ts",
+    "src/modules/cash/pages/* (10 pantallas)",
+    "server/integration-hub/* (contrato Connector, DLQ)",
+    "server/index.ts (17k lineas; solo localizado el montaje de cash)",
+    "supabase/migrations/administracion_fase*.sql (modulo Administracion)",
+    "taller_app/lib/services/offline_store.dart (outbox Flutter)"
+  ]
+}
