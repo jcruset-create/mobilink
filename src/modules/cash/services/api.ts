@@ -398,6 +398,9 @@ export const movimientosJornada = (sessionId: number) =>
 export const reabrirJornada = (sessionId: number, motivo: string) =>
   pedir<{ sesion: Sesion }>(`/sessions/${sessionId}/reopen`, json({ motivo }));
 
+export const anularJornada = (sessionId: number, motivo: string) =>
+  pedir<{ sesion: Sesion }>(`/sessions/${sessionId}/void`, json({ motivo }));
+
 /**
  * Propuesta de cambio. Es una consulta: no reserva nada, y por eso la
  * confirmación vuelve a validar en el servidor con la jornada bloqueada.

@@ -3653,3 +3653,101 @@ describe.runIf(RUN)("jornada que ya quedó con el saldo en negativo", () => {
     expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
   });
 });
+
+describe.runIf(RUN)("anular una jornada abierta por error", () => {
+  it("el flujo del despiste entero: anular la de hoy y abrir la del día que tocaba", async () => {
+    const caja = await crearCaja("despiste");
+
+    // El lunes 24 se llevó en papel. El 20 fue el último cierre real.
+    const dia20 = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: "2026-08-20",
+      fondoManual: [{ valor: 5000, cantidad: 7 }], // 350 €
+    });
+    await servicio.guardarArqueo(ctx, {
+      sessionId: dia20.sesion.id,
+      contado: [{ valor: 5000, cantidad: 7 }],
+    });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: dia20.sesion.id,
+      cambioFinal: [{ valor: 5000, cantidad: 7 }],
+    });
+
+    // Hoy se abre por despiste. Hereda los 350 € del 20.
+    const hoy = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(hoy.sesion.fondoInicialHeredado).toBe(true);
+
+    // Se anula. La caja queda libre.
+    const anulada = await servicio.anularJornada(ctx, hoy.sesion.id, "abierta por error");
+    expect(anulada.estado).toBe("CANCELLED");
+    expect(await repo.sesionAbierta(caja)).toBeNull();
+
+    // Su fondo de apertura cayó con ella.
+    const { rows: ops } = await db.query(
+      `SELECT estado FROM cash_operations WHERE session_id = $1`,
+      [hoy.sesion.id]
+    );
+    expect(ops.every((o: { estado: string }) => o.estado === "CANCELLED")).toBe(true);
+
+    // Y se abre la del 24, que hereda del 20 — la anulada no pinta nada.
+    const dia24 = await servicio.abrirJornada(ctx, { registerId: caja, fecha: "2026-08-24" });
+    expect(dia24.sesion.fecha).toBe("2026-08-24");
+    expect(dia24.sesion.fondoInicialHeredado).toBe(true);
+    expect(dia24.sesion.fondoInicialCentimos).toBe(35000);
+    expect(dia24.stock).toEqual([{ valor: 5000, cantidad: 7 }]);
+  });
+
+  it("una jornada con operaciones no se anula: primero se anulan ellas", async () => {
+    const caja = await crearCaja("despiste-lleno");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      concepto: "Venta",
+    });
+
+    await expect(
+      servicio.anularJornada(ctx, sesion.id, "me equivoqué")
+    ).rejects.toMatchObject({ codigo: "JORNADA_CON_OPERACIONES" });
+
+    // Anulada la operación, la jornada ya está vacía y sí se deja.
+    await servicio.anularOperacion(ctx, cobro.operacionId, "prueba");
+    const anulada = await servicio.anularJornada(ctx, sesion.id, "ahora sí");
+    expect(anulada.estado).toBe("CANCELLED");
+  });
+
+  it("con arqueo guardado no se anula, y sin motivo tampoco", async () => {
+    const caja = await crearCaja("despiste-arqueo");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+
+    await expect(servicio.anularJornada(ctx, sesion.id, "  ")).rejects.toMatchObject({
+      codigo: "FALTA_MOTIVO",
+    });
+
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: FONDO_300 });
+    await expect(
+      servicio.anularJornada(ctx, sesion.id, "sobra")
+    ).rejects.toMatchObject({ codigo: "JORNADA_CON_ARQUEO" });
+  });
+
+  it("una cerrada no se anula, y la anulada queda en el histórico con su motivo", async () => {
+    const caja = await crearCaja("despiste-cerrada");
+    const cerrada = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+    await servicio.guardarArqueo(ctx, { sessionId: cerrada.sesion.id, contado: FONDO_300 });
+    await servicio.cerrarJornada(ctx, { sessionId: cerrada.sesion.id, cambioFinal: FONDO_300 });
+
+    await expect(
+      servicio.anularJornada(ctx, cerrada.sesion.id, "tarde")
+    ).rejects.toMatchObject({ codigo: "JORNADA_NO_ABIERTA" });
+
+    const vacia = await servicio.abrirJornada(ctx, { registerId: caja });
+    await servicio.anularJornada(ctx, vacia.sesion.id, "abierta por error");
+    const { rows } = await db.query(`SELECT estado, notas FROM cash_sessions WHERE id = $1`, [
+      vacia.sesion.id,
+    ]);
+    expect(rows[0].estado).toBe("CANCELLED");
+    expect(rows[0].notas).toContain("abierta por error");
+  });
+});
