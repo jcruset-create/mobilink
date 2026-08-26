@@ -201,6 +201,10 @@ const IMAGENES_ADMITIDAS = new Set([
 
 const FOTOS_TALLER = ["fachada", "accesos", "interior", "otros"] as const;
 
+/* Qué es cada empresa para nosotros. Un tipo que no esté en la lista se
+ * ignora en vez de escribirse: el color del mapa se lee como una decisión. */
+const TIPOS_EMPRESA: string[] = ["grupo", "colaboradora", "externa"];
+
 /**
  * Deja una foto lista y subida: reorienta —la del móvil viene girada—,
  * comprime y la sube al almacén. Devuelve lo que hay que guardar en la ficha,
@@ -560,7 +564,7 @@ export function createConnectBackofficeRouter(): Router {
       ),
       db.query(
         `SELECT w.id, w.name, w.latitude, w.longitude, w."radiusKm", w."connectStatus",
-                w."currentScore", pc.name AS "providerName"
+                w."currentScore", pc.name AS "providerName", pc."companyType"
            FROM connect_workshops w
            LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"`,
       ),
@@ -636,12 +640,14 @@ export function createConnectBackofficeRouter(): Router {
               address = COALESCE($8, address), city = COALESCE($9, city),
               "postalCode" = COALESCE($10, "postalCode"), province = COALESCE($11, province),
               web = COALESCE($12, web), "billingEmail" = COALESCE($13, "billingEmail"),
+              "companyType" = COALESCE($16, "companyType"),
               "updatedAtMs" = $14
         WHERE id = $15 AND "deletedAtMs" IS NULL RETURNING *`,
       [b.name ?? null, b.contactEmail ?? null, b.contactPhone ?? null, b.status ?? null, b.notes ?? null,
        b.legalName ?? null, b.taxId ?? null, b.address ?? null, b.city ?? null,
        b.postalCode ?? null, b.province ?? null, b.web ?? null, b.billingEmail ?? null,
-       Date.now(), id],
+       Date.now(), id,
+       TIPOS_EMPRESA.includes(String(b.companyType)) ? String(b.companyType) : null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Empresa no encontrada");
     await auditConnect({ req, action: "provider.updated", resourceType: "provider", resourceId: id, detail: req.body });
