@@ -233,6 +233,66 @@ export async function asignarZonaACentro(
   });
 }
 
+/**
+ * Poner una caja en su taller (o quitarla de él).
+ *
+ * Existe porque el backfill de la fase 1 **no adivina**: empareja por nombre
+ * exacto normalizado y lo que no casa queda a `NULL`. Eso es lo correcto
+ * —asignar una caja al taller equivocado envenena todos los informes
+ * consolidados de después—, pero dejaba la puerta de salida sin construir: la
+ * migración remitía a resolverlo «a mano desde Configuración» y esa pantalla no
+ * existía. Esto es esa puerta.
+ *
+ * No se toca la columna de texto `centro`. Tiene un UNIQUE con
+ * `(empresa_id, nombre)` detrás, así que reescribirla podría chocar con otra
+ * caja; y además es la columna que la fase 1 dejó marcada para retirar. El
+ * taller de verdad es `centro_id`.
+ *
+ * Ojo con lo que esto significa de acceso, que no es cosmético: una caja sin
+ * taller queda FUERA de cualquier ámbito (ver `exigirAmbitoCaja`). Al ponerle
+ * taller, la gente limitada a ese taller pasa a poder operarla. Por eso pide
+ * `central.zones.configure` y queda auditado.
+ */
+export async function asignarCentroACaja(
+  ctx: Contexto,
+  registerId: number,
+  centroId: string | null
+): Promise<void> {
+  // Un id que no es un entero positivo llegaría a la consulta como NaN y
+  // reventaría con un error de PostgreSQL en vez de con uno que se entienda.
+  if (!Number.isInteger(registerId) || registerId <= 0) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "Esa caja no existe.", 400);
+  }
+
+  // El taller, si se da uno: `nombreDeCentro` revienta si no es de la empresa.
+  if (centroId) await nombreDeCentro(ctx.empresaId, centroId);
+
+  // Y la caja. Sin esta comprobación se podría reasignar la caja de otra
+  // empresa mandando su id a pelo: la pantalla no defiende nada, el servicio sí.
+  const { rows } = await pool.query(
+    `SELECT id FROM cash_registers WHERE id = $1 AND empresa_id = $2`,
+    [registerId, ctx.empresaId]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "Esa caja no es de tu empresa.", 404);
+  }
+
+  await pool.query(
+    `UPDATE cash_registers SET centro_id = $2, updated_at_ms = $3 WHERE id = $1`,
+    [registerId, centroId, Date.now()]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.caja.taller",
+    entidad: "cash_registers",
+    entidadId: String(registerId),
+    detalle: { centroId },
+    ip: ctx.ip,
+  });
+}
+
 // ── Ámbito: hasta dónde llega un usuario ───────────────────────────────────
 
 /**

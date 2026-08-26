@@ -377,6 +377,7 @@ function Posicion() {
           ))}
         </tbody>
       </TableWrap>
+
     </div>
   );
 }
@@ -1540,6 +1541,17 @@ function Organizacion() {
 
   const puedeConfigurar = datos?.permisos?.includes("central.zones.configure") ?? false;
 
+  /*
+   * Las cajas sin taller, arriba. Son las que hay que resolver, y en una red
+   * con muchas cajas enterrarlas por orden alfabético es esconderlas.
+   */
+  const cajasOrdenadas = [...(datos?.cajas ?? [])].sort((a, b) => {
+    const sinA = a.centroId == null ? 0 : 1;
+    const sinB = b.centroId == null ? 0 : 1;
+    if (sinA !== sinB) return sinA - sinB;
+    return (a.nombre ?? "").localeCompare(b.nombre ?? "");
+  });
+
   async function accion(fn: () => Promise<unknown>) {
     setOcupado(true);
     setError("");
@@ -1620,6 +1632,59 @@ function Organizacion() {
                   </select>
                 ) : (
                   ((datos?.zonas ?? []).find((z) => z.id === c.zonaId)?.nombre ?? "—")
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+
+      {/*
+        * Y un piso más abajo: qué taller es el de cada caja.
+        *
+        * Esta tabla existe porque el backfill de la fase 1 no adivina — empareja
+        * por nombre exacto y lo que no casa queda sin taller. Hasta ahora la
+        * única salida era SQL a mano: la migración remitía a «Configuración» y
+        * esa pantalla no estaba construida. Las cajas sin taller salen PRIMERO,
+        * que son las que hay que resolver.
+        */}
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Caja</th>
+            <th className={thCls}>Taller</th>
+          </tr>
+        </thead>
+        <tbody>
+          {cajasOrdenadas.length === 0 && (
+            <EmptyRow cols={2} text="No hay cajas dadas de alta." />
+          )}
+          {cajasOrdenadas.map((c) => (
+            <tr key={c.registerId} className="border-t border-slate-700">
+              <td className={tdCls}>
+                {c.nombre ?? `Caja ${c.registerId}`}
+                {c.codigo && <span className="ml-2 text-[11px] text-slate-500">{c.codigo}</span>}
+              </td>
+              <td className={tdCls}>
+                {puedeConfigurar ? (
+                  <select
+                    value={c.centroId ?? ""}
+                    disabled={ocupado}
+                    className={inputCls}
+                    onChange={(e) =>
+                      void accion(() => api.asignarCentro(c.registerId, e.target.value || null))
+                    }
+                  >
+                    {/* En ámbar como en la red: sin taller no es un estado neutro. */}
+                    <option value="">Sin taller</option>
+                    {(datos?.centros ?? []).map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.nombre}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  (c.centroNombre ?? <span className="text-amber-400">sin taller</span>)
                 )}
               </td>
             </tr>
