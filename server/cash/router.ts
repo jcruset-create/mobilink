@@ -1329,6 +1329,22 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Anular una jornada abierta por error. Solo si está vacía; el servicio es
+   * quien lo comprueba. Mismo permiso que anular operaciones: es quien hoy
+   * puede deshacer cosas.
+   */
+  r.post(
+    "/sessions/:id/void",
+    exigirPermiso("cash.operation.reverse"),
+    ruta(async (req, res) => {
+      const motivo = String((req.body ?? {}).motivo ?? "");
+      res.json({
+        sesion: await servicio.anularJornada(contexto(req), enteroPositivo(req.params.id, "id"), motivo),
+      });
+    })
+  );
+
   // ── Cobros ───────────────────────────────────────────────────────────────
   r.post(
     "/collections",
