@@ -822,6 +822,42 @@ export function createConnectBackofficeRouter(): Router {
     res.json({ ok: true });
   });
 
+  /**
+   * Coordenadas de una dirección.
+   *
+   * La latitud y la longitud son obligatorias para dar de alta un taller —de
+   * ellas dependen el reparto por cercanía y el radio de cobertura— y hasta
+   * ahora había que ir a buscarlas a Google y pegarlas a mano, que es como se
+   * cuelan las de otro sitio.
+   *
+   * Si no se encuentra, se dice: no se devuelve un punto aproximado. Unas
+   * coordenadas inventadas mandarían la asistencia a donde no es, y eso no se
+   * descubre hasta que alguien conduce hasta allí.
+   */
+  router.post("/geocode", ...requireConnectRole("operator"), async (req, res) => {
+    const b = req.body ?? {};
+    if (!String(b.address ?? "").trim() && !String(b.city ?? "").trim() && !String(b.postalCode ?? "").trim()) {
+      return err(res, 422, "validation_failed", "Indica al menos la dirección, el municipio o el código postal");
+    }
+    try {
+      const { geocodificar } = await import("./seedWorkshops.ts");
+      const punto = await geocodificar({
+        address: b.address ?? null, postalCode: b.postalCode ?? null,
+        city: b.city ?? null, province: b.province ?? null,
+      });
+      if (!punto) {
+        return err(res, 404, "not_found",
+          "No se ha encontrado esa dirección. Revísala, o pon las coordenadas a mano desde Google Maps.");
+      }
+      res.json(punto);
+    } catch (e: any) {
+      // Sin clave configurada o Google caído: se dice, no se inventa
+      console.error("[Connect] geocodificar:", e?.message);
+      return err(res, 502, "geocoding_failed",
+        "No se ha podido consultar el mapa ahora mismo. Prueba de nuevo o pon las coordenadas a mano.");
+    }
+  });
+
   // ── Fotos del taller ──────────────────────────────────────
   //
   // Quien decide a qué taller manda un camión a las tres de la mañana
