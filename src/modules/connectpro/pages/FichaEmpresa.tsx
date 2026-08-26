@@ -325,7 +325,7 @@ export default function FichaEmpresa() {
                 </span>
               )}
               <span className="text-[11px] text-slate-500">
-                Pinta sus talleres en el mapa: del grupo en verde, colaboradora en amarillo, externa en gris.
+                Pinta sus talleres en el mapa: del grupo en verde, colaboradora en amarillo, externa en naranja.
               </span>
             </div>
             <Campo label="Razón social" value={p.legalName} canEdit={canEdit} edicion={edicion} campo="legalName" onEdit={setEdicion} onSave={(v) => patch({ legalName: v })} />
