@@ -576,3 +576,97 @@ export type BancoConfig = {
   activo: boolean;
   cuentas: number;
 };
+
+// ── Escáner de facturas ────────────────────────────────────────────────────
+
+/**
+ * Un campo que ha rellenado el escáner.
+ *
+ * `estado` dice qué hacer con él en la pantalla: `RELLENAR` va sin más,
+ * `REVISAR` va marcado para que alguien lo mire, y `VACIO` no va —o no se ha
+ * leído, o no merecía la pena—.
+ */
+export type CampoPropuesto<T> = {
+  valor: T;
+  confianza: number;
+  estado: "RELLENAR" | "REVISAR" | "VACIO";
+};
+
+export type CodigoAvisoEscaneo =
+  | "NO_ES_FACTURA"
+  | "VARIAS_FACTURAS"
+  | "VARIOS_RECIBOS"
+  | "SIN_NUMERO_FACTURA"
+  | "SIN_TOTAL"
+  | "SIN_EVIDENCIA_DE_PAGO"
+  | "PAYMENT_AMOUNT_MISMATCH"
+  | "TOTALES_NO_CUADRAN"
+  | "POSIBLE_DUPLICADO";
+
+export type AvisoEscaneo = {
+  codigo: CodigoAvisoEscaneo;
+  mensaje: string;
+  /** Grave = no se preselecciona forma de cobro y hay algo que mirar. */
+  grave: boolean;
+};
+
+/** Lo que propone el escáner. Nunca un cobro: una propuesta. */
+export type PropuestaEscaneo = {
+  scanId: number;
+  referencia: CampoPropuesto<string | null>;
+  importeCentimos: CampoPropuesto<number | null>;
+  cliente: CampoPropuesto<string | null>;
+  concepto: CampoPropuesto<string | null>;
+  formaCobro: {
+    /** Código del catálogo, o null. null es NO LO SÉ, nunca «efectivo». */
+    formaPago: string | null;
+    confianza: number;
+    motivo: string;
+    autoSeleccionar: boolean;
+    reglaId: number | null;
+  };
+  /** null = no hay justificante con el que comparar. */
+  importeCuadra: boolean | null;
+  avisos: AvisoEscaneo[];
+  extra: {
+    fecha: string | null;
+    cliente: { codigo: string | null; nombre: string | null; nif: string | null };
+    vehiculo: { marca: string | null; modelo: string | null; matricula: string | null };
+    recibo: {
+      detectado: boolean;
+      importeCentimos: number | null;
+      tarjetaUltimos4: string | null;
+      adquirente: string | null;
+      comercio: string | null;
+      terminal: string | null;
+      red: string | null;
+      cuenta: string | null;
+      fechaHora: string | null;
+    };
+  };
+};
+
+/** En qué dato del resguardo mira una regla. */
+export type CampoRegla =
+  | "ADQUIRENTE"
+  | "COMERCIO"
+  | "TERMINAL"
+  | "RED"
+  | "CUENTA"
+  | "PLANTILLA"
+  | "TEXTO";
+
+/** Regla del escáner: qué TPV es de quién. */
+export type ReglaPagoConfig = {
+  id: number;
+  campo: CampoRegla;
+  patron: string;
+  formaPago: string;
+  /** Vacío si esa forma ya no está en el catálogo. */
+  formaPagoNombre: string;
+  confianza: number;
+  autoSeleccionar: boolean;
+  prioridad: number;
+  activa: boolean;
+  notas: string;
+};
