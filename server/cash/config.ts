@@ -1394,6 +1394,30 @@ async function asegurarBancos(empresaId: string): Promise<void> {
       [empresaId, b.codigo, b.nombre, ahora]
     );
   }
+
+  /*
+   * Y engancha al maestro las cuentas que se dieron de alta antes de que
+   * existiera.
+   *
+   * También lo hace la migración de arranque, pero la siembra es PEREZOSA: una
+   * empresa que todavía no había tocado el maestro no tenía bancos con los que
+   * enlazar cuando el servidor arrancó, y sus cuentas se habrían quedado sin
+   * logotipo hasta el siguiente reinicio. Aquí se cubre ese caso.
+   *
+   * Solo toca las que están a NULL, así que no pisa nada elegido a mano.
+   */
+  await pool.query(
+    `UPDATE cash_bank_accounts c
+        SET bank_id = b.id
+       FROM cash_banks b
+      WHERE c.empresa_id = $1
+        AND c.bank_id IS NULL
+        AND b.empresa_id = c.empresa_id
+        AND c.iban LIKE 'ES%'
+        AND length(c.iban) = 24
+        AND b.codigo = substring(c.iban from 5 for 4)`,
+    [empresaId]
+  );
 }
 
 export async function listarBancos(empresaId: string): Promise<BancoConfig[]> {

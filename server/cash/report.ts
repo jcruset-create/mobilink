@@ -1031,8 +1031,8 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   /*
    * La caja, en blanco y más grande: es el dato que identifica el papel cuando
    * hay varios encima de la mesa, y en gris pequeño se perdía contra el azul.
-   * La fecha se queda apagada al lado, que es secundaria aquí —va también en
-   * su propia fila más abajo—.
+   * La fecha no se repite aquí —ya va en «Datos del ingreso»— para no quitarle
+   * sitio a lo único que distingue un resguardo de otro de un vistazo.
    */
   doc
     .font("Helvetica-Bold")
@@ -1041,17 +1041,6 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
     .text(`${caja.centro ? `${caja.centro} · ` : ""}${caja.nombre}`, xCab, 34, {
       lineBreak: false,
     });
-  if (ingreso.fechaIngreso) {
-    const anchoCaja = doc.widthOfString(
-      `${caja.centro ? `${caja.centro} · ` : ""}${caja.nombre}`
-    );
-    doc
-      .font("Helvetica")
-      .fontSize(10)
-      .fillColor("#94a3b8")
-      .text(`· ${ingreso.fechaIngreso}`, xCab + anchoCaja + 8, 37, { lineBreak: false });
-  }
-
   /*
    * Y el logotipo del banco a la derecha: de un vistazo se sabe a qué entidad
    * fue ese dinero, sin leer el IBAN. Si no hay logotipo subido se pone el

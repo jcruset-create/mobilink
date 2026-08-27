@@ -1243,6 +1243,29 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * Enlaza con el maestro las cuentas que se dieron de alta ANTES de que
+   * existiera.
+   *
+   * La columna se añadió vacía y solo se rellena al crear una cuenta nueva, así
+   * que las que ya estaban se quedaban sin banco —y por tanto sin logotipo en
+   * el resguardo— para siempre, sin que nada lo dijera.
+   *
+   * El enlace sale del propio IBAN: las cuatro cifras siguientes al `ES` y su
+   * dígito de control son el código de entidad. Solo se tocan las que están a
+   * NULL, así que esto no pisa nada puesto a mano y se puede repetir.
+   */
+  await pool.query(`
+    UPDATE cash_bank_accounts c
+       SET bank_id = b.id
+      FROM cash_banks b
+     WHERE c.bank_id IS NULL
+       AND b.empresa_id = c.empresa_id
+       AND c.iban LIKE 'ES%'
+       AND length(c.iban) = 24
+       AND b.codigo = substring(c.iban from 5 for 4)
+  `);
+
+  /*
    * Una sola cuenta por defecto por empresa. Índice único parcial y no una
    * comprobación en el código: con dos marcadas, «la de por defecto» dejaría
    * de significar nada y la elegida dependería del orden de la consulta.
