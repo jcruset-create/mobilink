@@ -569,6 +569,49 @@ export function createCashRouter(): Router {
     })
   );
 
+  // ── Cuentas bancarias ────────────────────────────────────────────────────
+
+  r.get(
+    "/bank-accounts",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({ cuentas: await config.listarCuentas(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.post(
+    "/bank-accounts",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const cuenta = await config.crearCuenta(contexto(req), {
+        banco: typeof b.banco === "string" ? b.banco : "",
+        iban: typeof b.iban === "string" ? b.iban : "",
+        alias: typeof b.alias === "string" ? b.alias : undefined,
+        porDefecto: typeof b.porDefecto === "boolean" ? b.porDefecto : undefined,
+        orden: b.orden === undefined ? undefined : entero(b.orden, "orden"),
+      });
+      res.status(201).json({ cuenta });
+    })
+  );
+
+  r.patch(
+    "/bank-accounts/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const cuenta = await config.actualizarCuenta(contexto(req), enteroPositivo(req.params.id, "id"), {
+        banco: typeof b.banco === "string" ? b.banco : undefined,
+        iban: typeof b.iban === "string" ? b.iban : undefined,
+        alias: typeof b.alias === "string" ? b.alias : undefined,
+        activa: typeof b.activa === "boolean" ? b.activa : undefined,
+        porDefecto: typeof b.porDefecto === "boolean" ? b.porDefecto : undefined,
+        orden: b.orden === undefined ? undefined : entero(b.orden, "orden"),
+      });
+      res.json({ cuenta });
+    })
+  );
+
   // ── Catálogo de denominaciones ───────────────────────────────────────────
 
   /** Todas, activas o no: la pantalla de configuración necesita las desactivadas. */
@@ -1091,6 +1134,7 @@ export function createCashRouter(): Router {
             : undefined,
         referencia: typeof b.referencia === "string" ? b.referencia : undefined,
         observaciones: typeof b.observaciones === "string" ? b.observaciones : undefined,
+        bankAccountId: b.bankAccountId ? enteroPositivo(b.bankAccountId, "bankAccountId") : undefined,
       });
       res.status(201).json({ ingreso });
     })
@@ -1111,6 +1155,8 @@ export function createCashRouter(): Router {
           fechaIngreso: typeof b.fechaIngreso === "string" ? b.fechaIngreso : b.fechaIngreso === null ? null : undefined,
           referencia: typeof b.referencia === "string" ? b.referencia : b.referencia === null ? null : undefined,
           observaciones: typeof b.observaciones === "string" ? b.observaciones : b.observaciones === null ? null : undefined,
+          bankAccountId:
+            b.bankAccountId === null ? null : b.bankAccountId ? enteroPositivo(b.bankAccountId, "bankAccountId") : undefined,
         }),
       });
     })

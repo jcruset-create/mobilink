@@ -77,6 +77,11 @@ export type IngresoBancario = {
   registerId: number;
   fechaIngreso: string | null;
   referencia: string | null;
+  /** Cuenta a la que fue el dinero. null en los ingresos anteriores al catálogo. */
+  bankAccountId: number | null;
+  /** Datos de esa cuenta, para pintarla sin otra consulta. */
+  banco: string | null;
+  iban: string | null;
   observaciones: string | null;
   remanenteAnteriorCentimos: Centimos;
   totalCierresCentimos: Centimos;
@@ -103,6 +108,9 @@ function aIngreso(r: any, cierres: CierreConciliado[], esUltimo: boolean): Ingre
     registerId: r.register_id,
     fechaIngreso: fechaIso(r.fecha_ingreso),
     referencia: r.referencia,
+    bankAccountId: r.bank_account_id ?? null,
+    banco: r.banco ?? null,
+    iban: r.iban ?? null,
     observaciones: r.observaciones,
     remanenteAnteriorCentimos: Number(r.remanente_anterior_centimos),
     totalCierresCentimos: Number(r.total_cierres_centimos),
@@ -190,9 +198,11 @@ export async function listarIngresos(
   registerId: number
 ): Promise<IngresoBancario[]> {
   const { rows } = await pool.query(
-    `SELECT * FROM cash_bank_deposits
-      WHERE empresa_id = $1 AND register_id = $2
-      ORDER BY id DESC LIMIT 100`,
+    `SELECT d.*, c.banco, c.iban
+       FROM cash_bank_deposits d
+       LEFT JOIN cash_bank_accounts c ON c.id = d.bank_account_id
+      WHERE d.empresa_id = $1 AND d.register_id = $2
+      ORDER BY d.id DESC LIMIT 100`,
     [empresaId, registerId]
   );
   if (rows.length === 0) return [];
@@ -250,6 +260,8 @@ export type EntradaIngreso = {
   fechaIngreso?: string;
   referencia?: string;
   observaciones?: string;
+  /** Cuenta a la que va. Si no se dice, la marcada por defecto. */
+  bankAccountId?: number;
 };
 
 export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<IngresoBancario> {
@@ -343,6 +355,32 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
     }
     const remanenteNuevo = disponible - e.importeCentimos;
 
+    /*
+     * A qué cuenta va. Si no se dice, la marcada por defecto: es lo normal —una
+     * empresa ingresa casi siempre en la misma— y obligar a elegirla cada vez
+     * sería un estorbo diario. Puede quedar en NULL si aún no hay ninguna dada
+     * de alta, y entonces se rellena después desde la pantalla.
+     */
+    let cuentaId: number | null = e.bankAccountId ?? null;
+    if (cuentaId != null) {
+      const { rows: cta } = await client.query(
+        `SELECT id, activa FROM cash_bank_accounts WHERE id = $1 AND empresa_id = $2`,
+        [cuentaId, ctx.empresaId]
+      );
+      if (cta.length === 0) {
+        throw new ErrorCaja("CUENTA_NO_ENCONTRADA", "La cuenta bancaria no existe.", 404);
+      }
+      if (!cta[0].activa) {
+        throw new ErrorCaja("CUENTA_DE_BAJA", "Esa cuenta bancaria está dada de baja.", 409);
+      }
+    } else {
+      const { rows: pordef } = await client.query(
+        `SELECT id FROM cash_bank_accounts WHERE empresa_id = $1 AND por_defecto AND activa`,
+        [ctx.empresaId]
+      );
+      cuentaId = pordef[0]?.id ?? null;
+    }
+
     const anio = Number((e.fechaIngreso ?? new Date().toISOString()).slice(0, 4));
     const numero = await siguienteNumeroDe(client, await codigoDeCaja(client, e.registerId), "IB", anio);
     const ahora = Date.now();
@@ -351,8 +389,8 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
       `INSERT INTO cash_bank_deposits
          (empresa_id, register_id, numero, estado, fecha_ingreso, referencia, observaciones,
           remanente_anterior_centimos, total_cierres_centimos, importe_centimos,
-          remanente_nuevo_centimos, creado_por, creado_at_ms)
-       VALUES ($1,$2,$3,'CONFIRMADO',$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          remanente_nuevo_centimos, creado_por, creado_at_ms, bank_account_id)
+       VALUES ($1,$2,$3,'CONFIRMADO',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING *`,
       [
         ctx.empresaId,
@@ -367,6 +405,7 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
         remanenteNuevo,
         ctx.userId,
         ahora,
+        cuentaId,
       ]
     );
     const depositId = creado[0].id;
@@ -483,6 +522,8 @@ export async function completarIngreso(
     fechaIngreso?: string | null;
     referencia?: string | null;
     observaciones?: string | null;
+    /** Cuenta a la que fue. null la desvincula; omitirlo la deja como estaba. */
+    bankAccountId?: number | null;
   }
 ): Promise<IngresoBancario> {
   const { rows: previo } = await pool.query(
@@ -513,11 +554,29 @@ export async function completarIngreso(
   const referencia = limpio(e.referencia);
   const observaciones = limpio(e.observaciones);
 
+  // La cuenta se comprueba aquí y no en el UPDATE: un id de otra empresa no
+  // puede acabar escrito en un ingreso ni por error ni a propósito.
+  if (e.bankAccountId != null) {
+    const { rows: cta } = await pool.query(
+      `SELECT id, activa FROM cash_bank_accounts WHERE id = $1 AND empresa_id = $2`,
+      [e.bankAccountId, ctx.empresaId]
+    );
+    if (cta.length === 0) {
+      throw new ErrorCaja("CUENTA_NO_ENCONTRADA", "La cuenta bancaria no existe.", 404);
+    }
+    /*
+     * Una cuenta de baja SÍ se admite al completar: el ingreso pudo hacerse
+     * cuando aún estaba abierta y lo que se está haciendo es apuntar dónde fue
+     * de verdad, no elegir dónde va.
+     */
+  }
+
   const { rows } = await pool.query(
     `UPDATE cash_bank_deposits
-        SET fecha_ingreso = CASE WHEN $3 THEN $4::date ELSE fecha_ingreso END,
-            referencia    = CASE WHEN $5 THEN $6      ELSE referencia    END,
-            observaciones = CASE WHEN $7 THEN $8      ELSE observaciones END
+        SET fecha_ingreso   = CASE WHEN $3 THEN $4::date ELSE fecha_ingreso   END,
+            referencia      = CASE WHEN $5 THEN $6       ELSE referencia      END,
+            observaciones   = CASE WHEN $7 THEN $8       ELSE observaciones   END,
+            bank_account_id = CASE WHEN $9 THEN $10::int ELSE bank_account_id END
       WHERE id = $1 AND empresa_id = $2
       RETURNING *`,
     [
@@ -529,6 +588,8 @@ export async function completarIngreso(
       referencia ?? null,
       observaciones !== undefined,
       observaciones ?? null,
+      e.bankAccountId !== undefined,
+      e.bankAccountId ?? null,
     ]
   );
 
@@ -558,8 +619,12 @@ export async function completarIngreso(
       ORDER BY s.fecha, s.id`,
     [e.depositId]
   );
+  const { rows: cta } = await pool.query(
+    `SELECT banco, iban FROM cash_bank_accounts WHERE id = $1`,
+    [rows[0].bank_account_id]
+  );
   return aIngreso(
-    rows[0],
+    { ...rows[0], banco: cta[0]?.banco ?? null, iban: cta[0]?.iban ?? null },
     lineas.map((l: any) => ({
       sessionId: l.session_id,
       fecha: fechaIso(l.fecha)!,

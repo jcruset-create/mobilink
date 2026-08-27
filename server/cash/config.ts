@@ -18,6 +18,7 @@ import type { Denominacion } from "./domain/denominations.ts";
 import { FORMAS_PAGO_SEMILLA } from "./domain/operations.ts";
 import { ErrorCaja, sesionAbierta } from "./repository.ts";
 import { nombreDeCentro } from "./hierarchy.ts";
+import { ibanValido, normalizarIban } from "./domain/bankaccount.ts";
 import {
   CODIGO_MAX,
   codigoValido,
@@ -1082,4 +1083,218 @@ export async function seccionPorDefecto(empresaId: string): Promise<number | nul
     [empresaId]
   );
   return rows[0]?.id ?? null;
+}
+
+// ── Cuentas bancarias ──────────────────────────────────────────────────────
+
+export type CuentaBancariaConfig = {
+  id: number;
+  banco: string;
+  iban: string;
+  alias: string;
+  activa: boolean;
+  porDefecto: boolean;
+  orden: number;
+  /** Ingresos que ya apuntan a ella. Una cuenta con usos no se borra. */
+  usos: number;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function aCuenta(r: any): CuentaBancariaConfig {
+  return {
+    id: r.id,
+    banco: r.banco,
+    iban: r.iban,
+    alias: r.alias ?? "",
+    activa: r.activa,
+    porDefecto: r.por_defecto,
+    orden: r.orden,
+    usos: Number(r.usos ?? 0),
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export async function listarCuentas(empresaId: string): Promise<CuentaBancariaConfig[]> {
+  const { rows } = await pool.query(
+    `SELECT c.*, (SELECT COUNT(*) FROM cash_bank_deposits d WHERE d.bank_account_id = c.id) AS usos
+       FROM cash_bank_accounts c
+      WHERE c.empresa_id = $1
+      ORDER BY c.activa DESC, c.por_defecto DESC, c.orden, c.banco`,
+    [empresaId]
+  );
+  return rows.map(aCuenta);
+}
+
+/** Solo las que deben salir en el desplegable del ingreso. */
+export async function cuentasActivas(empresaId: string): Promise<CuentaBancariaConfig[]> {
+  return (await listarCuentas(empresaId)).filter((c) => c.activa);
+}
+
+/**
+ * Comprueba banco e IBAN, con el IBAN normalizado.
+ *
+ * El IBAN se valida con su dígito de control: un número bailado tiene la misma
+ * pinta que el bueno y solo el módulo 97 lo delata. Un ingreso apuntado a una
+ * cuenta que no existe no se concilia contra ningún extracto.
+ */
+function exigirDatos(banco: string, iban: string): { banco: string; iban: string } {
+  const nombre = (banco ?? "").trim();
+  if (!nombre) throw new ErrorCaja("ENTRADA_NO_VALIDA", "La cuenta necesita el nombre del banco.", 400);
+
+  const normalizado = normalizarIban(iban ?? "");
+  if (!normalizado) throw new ErrorCaja("ENTRADA_NO_VALIDA", "La cuenta necesita un IBAN.", 400);
+  if (!ibanValido(normalizado)) {
+    throw new ErrorCaja(
+      "IBAN_NO_VALIDO",
+      `«${iban}» no es un IBAN válido: revisa que no falte o sobre algún dígito.`,
+      400
+    );
+  }
+  return { banco: nombre, iban: normalizado };
+}
+
+export async function crearCuenta(
+  ctx: Contexto,
+  datos: { banco: string; iban: string; alias?: string; porDefecto?: boolean; orden?: number }
+): Promise<CuentaBancariaConfig> {
+  const { banco, iban } = exigirDatos(datos.banco, datos.iban);
+
+  const { rows: repes } = await pool.query(
+    `SELECT id, activa FROM cash_bank_accounts WHERE empresa_id = $1 AND iban = $2`,
+    [ctx.empresaId, iban]
+  );
+  if (repes.length > 0) {
+    throw new ErrorCaja(
+      "CUENTA_REPETIDA",
+      repes[0].activa
+        ? "Esa cuenta ya está dada de alta."
+        : "Esa cuenta ya existe pero está dada de baja. Reactívala en vez de crearla otra vez.",
+      409
+    );
+  }
+
+  // La primera cuenta de la empresa es la de por defecto: si no, el
+  // desplegable saldría sin nada preseleccionado el primer día.
+  const { rows: cuantas } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM cash_bank_accounts WHERE empresa_id = $1`,
+    [ctx.empresaId]
+  );
+  const porDefecto = datos.porDefecto ?? cuantas[0].n === 0;
+  if (porDefecto) await quitarPorDefecto(ctx.empresaId);
+
+  const ahora = Date.now();
+  const { rows } = await pool.query(
+    `INSERT INTO cash_bank_accounts
+       (empresa_id, banco, iban, alias, por_defecto, orden, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
+     RETURNING *, 0 AS usos`,
+    [ctx.empresaId, banco, iban, (datos.alias ?? "").trim(), porDefecto, datos.orden ?? 0, ahora]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.bank_account.create",
+    entidad: "cash_bank_accounts",
+    entidadId: String(rows[0].id),
+    detalle: { banco, iban, porDefecto },
+    ip: ctx.ip,
+  });
+
+  return aCuenta(rows[0]);
+}
+
+/** Deja sin marca la que la tuviera: el índice único rechazaría dos. */
+async function quitarPorDefecto(empresaId: string): Promise<void> {
+  await pool.query(
+    `UPDATE cash_bank_accounts SET por_defecto = false, updated_at_ms = $2
+      WHERE empresa_id = $1 AND por_defecto`,
+    [empresaId, Date.now()]
+  );
+}
+
+export async function actualizarCuenta(
+  ctx: Contexto,
+  id: number,
+  cambios: {
+    banco?: string;
+    iban?: string;
+    alias?: string;
+    activa?: boolean;
+    porDefecto?: boolean;
+    orden?: number;
+  }
+): Promise<CuentaBancariaConfig> {
+  const { rows: previas } = await pool.query(
+    `SELECT * FROM cash_bank_accounts WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  const antes = previas[0];
+  if (!antes) throw new ErrorCaja("CUENTA_NO_ENCONTRADA", "La cuenta no existe.", 404);
+
+  const { banco, iban } = exigirDatos(
+    cambios.banco ?? antes.banco,
+    cambios.iban ?? antes.iban
+  );
+  const activa = cambios.activa ?? antes.activa;
+  const porDefecto = cambios.porDefecto ?? antes.por_defecto;
+
+  /*
+   * La cuenta por defecto no se da de baja: es la que se preselecciona al
+   * ingresar, y dejarla de baja pero marcada haría que el desplegable
+   * propusiera una cuenta cerrada.
+   */
+  if (!activa && porDefecto) {
+    throw new ErrorCaja(
+      "CUENTA_POR_DEFECTO",
+      "La cuenta por defecto no se puede dar de baja. Marca antes otra como predeterminada.",
+      409
+    );
+  }
+
+  if (iban !== antes.iban) {
+    const { rows: choca } = await pool.query(
+      `SELECT banco FROM cash_bank_accounts WHERE empresa_id = $1 AND iban = $2 AND id <> $3`,
+      [ctx.empresaId, iban, id]
+    );
+    if (choca.length > 0) {
+      throw new ErrorCaja("CUENTA_REPETIDA", `Ese IBAN ya es de «${choca[0].banco}».`, 409);
+    }
+  }
+
+  if (porDefecto && !antes.por_defecto) await quitarPorDefecto(ctx.empresaId);
+
+  const { rows } = await pool.query(
+    `UPDATE cash_bank_accounts
+        SET banco = $3, iban = $4, alias = $5, activa = $6, por_defecto = $7,
+            orden = $8, updated_at_ms = $9
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING *, (SELECT COUNT(*) FROM cash_bank_deposits d WHERE d.bank_account_id = $1) AS usos`,
+    [
+      id,
+      ctx.empresaId,
+      banco,
+      iban,
+      cambios.alias === undefined ? antes.alias : cambios.alias.trim(),
+      activa,
+      porDefecto,
+      cambios.orden ?? antes.orden,
+      Date.now(),
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.bank_account.update",
+    entidad: "cash_bank_accounts",
+    entidadId: String(id),
+    detalle: {
+      antes: { banco: antes.banco, iban: antes.iban, activa: antes.activa, porDefecto: antes.por_defecto },
+      despues: { banco, iban, activa, porDefecto },
+    },
+    ip: ctx.ip,
+  });
+
+  return aCuenta(rows[0]);
 }
