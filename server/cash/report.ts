@@ -134,6 +134,16 @@ async function imagenesDelCatalogo(
 }
 
 /** Genera el informe entero. Devuelve el PDF listo para descargar. */
+/*
+ * Los logotipos de la cabecera se arriman más al borde que el texto.
+ *
+ * La banda azul llega de canto a canto de la hoja, así que el margen del
+ * cuerpo —pensado para que el texto no se coma la encuadernación— aquí solo
+ * deja a los dos logotipos apretados contra el centro. Con este, cada uno se
+ * va a su esquina y el título respira en medio.
+ */
+const M_LOGO = 24;
+
 /**
  * El logotipo de Mobilink Cash para la cabecera de los informes.
  *
@@ -254,7 +264,7 @@ async function construirPortada(d: {
     try {
       const logo = logoMobilink();
       if (logo) {
-        doc.image(logo, M, 12, { height: 34 });
+        doc.image(logo, M_LOGO, 12, { height: 34 });
         x = M + 132;
       }
     } catch {
@@ -884,7 +894,7 @@ async function construirPortada(d: {
     doc
       .font("Helvetica")
       .fontSize(9)
-      .fillColor("#94a3b8")
+      .fillColor("#ffffff")
       .text(`${i + 1} de ${rango.count}`, M, 38, {
         width: doc.page.width - M * 2,
         align: "right",
@@ -1089,7 +1099,7 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   try {
     const logo = logoMobilink();
     if (logo) {
-      doc.image(logo, M, 12, { height: 34 });
+      doc.image(logo, M_LOGO, 12, { height: 34 });
       xCab = M + 132;
     }
   } catch {
@@ -1131,7 +1141,7 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
       const escala = Math.min(ANCHO / logoBanco.ancho, ALTO / logoBanco.alto);
       const ancho = logoBanco.ancho * escala;
       const alto = logoBanco.alto * escala;
-      doc.image(logoBanco.datos, doc.page.width - M - ancho, (58 - alto) / 2, {
+      doc.image(logoBanco.datos, doc.page.width - M_LOGO - ancho, (58 - alto) / 2, {
         width: ancho,
         height: alto,
       });
@@ -1143,7 +1153,7 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
       .font("Helvetica-Bold")
       .fontSize(12)
       .fillColor("#ffffff")
-      .text(ingreso.banco, doc.page.width - M - 200, 22, {
+      .text(ingreso.banco, doc.page.width - M_LOGO - 200, 22, {
         width: 200,
         align: "right",
         lineBreak: false,
