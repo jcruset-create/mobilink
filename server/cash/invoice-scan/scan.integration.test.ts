@@ -379,3 +379,131 @@ describe.runIf(RUN)("qué hizo la persona con lo propuesto", () => {
     expect(rows[0].operation_id).toBe(null);
   });
 });
+
+describe.runIf(RUN)("cuando el escaneo no sale", () => {
+  it("un fallo del proveedor deja rastro y se propaga", async () => {
+    /*
+     * El rastro del que falla es el que más falta hace: cuando alguien dice
+     * «a mí no me lee las facturas», esto es lo que hay que poder mirar.
+     */
+    const antes = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_invoice_scans WHERE empresa_id=$1 AND error IS NOT NULL`,
+      [EMPRESA]
+    );
+
+    await expect(
+      escaneo.escanearFactura(
+        { empresaId: EMPRESA, userId: USUARIO, sessionId: null, fichero: fichero("rota.pdf") },
+        async () => {
+          throw new Error("el proveedor ha devuelto 503");
+        }
+      )
+    ).rejects.toThrow("503");
+
+    const despues = await db.query(
+      `SELECT error, nombre FROM cash_invoice_scans
+        WHERE empresa_id=$1 AND error IS NOT NULL ORDER BY id DESC LIMIT 1`,
+      [EMPRESA]
+    );
+    const cuenta = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_invoice_scans WHERE empresa_id=$1 AND error IS NOT NULL`,
+      [EMPRESA]
+    );
+    expect(cuenta.rows[0].n).toBe(antes.rows[0].n + 1);
+    expect(despues.rows[0].error).toContain("503");
+    expect(despues.rows[0].nombre).toBe("rota.pdf");
+  });
+
+  it("un escaneo fallido tampoco registra ningún cobro", async () => {
+    const antes = await db.query(`SELECT COUNT(*)::int AS n FROM cash_operations WHERE empresa_id=$1`, [EMPRESA]);
+    await expect(
+      escaneo.escanearFactura(
+        { empresaId: EMPRESA, userId: USUARIO, sessionId: null, fichero: fichero() },
+        async () => {
+          throw new Error("ilegible");
+        }
+      )
+    ).rejects.toThrow();
+    const despues = await db.query(`SELECT COUNT(*)::int AS n FROM cash_operations WHERE empresa_id=$1`, [EMPRESA]);
+    expect(despues.rows[0].n).toBe(antes.rows[0].n);
+  });
+
+  it("una factura de más de 15 MB se rechaza antes de mandarla a ningún sitio", async () => {
+    const gorda = Buffer.concat([
+      Buffer.from("%PDF-1.4\n", "latin1"),
+      Buffer.alloc(16 * 1024 * 1024, 0x20),
+    ]);
+    await expect(
+      escaneo.escanearFactura(
+        {
+          empresaId: EMPRESA,
+          userId: USUARIO,
+          sessionId: null,
+          fichero: { originalname: "gorda.pdf", mimetype: "application/pdf", buffer: gorda },
+        },
+        async () => {
+          throw new Error("no se debería haber llamado al extractor");
+        }
+      )
+    ).rejects.toMatchObject({ codigo: "DOCUMENTO_DEMASIADO_GRANDE" });
+  });
+
+  it("una extracción a medias no revienta el normalizador", async () => {
+    /*
+     * El esquema estricto garantiza la forma de la respuesta HOY, pero el
+     * extractor es un puerto y mañana puede haber otro detrás. Que falte medio
+     * objeto tiene que dar campos vacíos, no una pantalla rota.
+     */
+    const aMedias = { es_factura: true } as unknown as import("./types.ts").ExtraccionCruda;
+    const p = await escanear(aMedias);
+    expect(p.referencia.valor).toBe(null);
+    expect(p.importeCentimos.valor).toBe(null);
+    expect(p.formaCobro.formaPago).toBe(null);
+    expect(p.avisos.some((a) => a.codigo === "SIN_TOTAL")).toBe(true);
+  });
+});
+
+describe.runIf(RUN)("cada empresa con lo suyo", () => {
+  it("las reglas de otra empresa no clasifican mis cobros", async () => {
+    const OTRA = "00000000-0000-4000-a000-0000000000ee";
+    const comercio = String(process.hrtime.bigint()).slice(-7);
+
+    // Una regla de OTRA empresa que casaría de sobra con esta factura.
+    await db.query(
+      `INSERT INTO cash_payment_rules
+         (empresa_id, campo, patron, forma_pago, confianza, auto_seleccionar, prioridad,
+          created_at_ms, updated_at_ms)
+       VALUES ($1,'COMERCIO',$2,'CASH',1,true,1,$3,$3)`,
+      [OTRA, comercio, Date.now()]
+    );
+
+    const cruda = extraccion580();
+    cruda.recibo.comercio = comercio;
+    const p = await escanear(cruda);
+
+    expect(p.formaCobro.formaPago).toBe(null);
+    await db.query(`DELETE FROM cash_payment_rules WHERE empresa_id = $1`, [OTRA]);
+  });
+
+  it("un duplicado de otra empresa no es mi duplicado", async () => {
+    const OTRA = "00000000-0000-4000-a000-0000000000ee";
+    const referencia = `AJENA-${String(process.hrtime.bigint()).slice(-8)}`;
+    await db.query(
+      `INSERT INTO cash_operations
+         (empresa_id, session_id, numero, tipo, origen, party_nombre, concepto, referencia,
+          importe_centimos, efectivo_neto_centimos, estado, created_by, created_at_ms,
+          confirmed_at_ms, updated_at_ms)
+       SELECT $1, s.id, $2, 'COLLECTION', 'MANUAL', 'X', 'X', $3, 100, 0, 'CONFIRMED',
+              NULL, $4, $4, $4
+         FROM cash_sessions s LIMIT 1`,
+      [OTRA, `OTRA-${referencia}`, referencia, Date.now()]
+    );
+
+    const cruda = extraccion580();
+    cruda.factura.numero = referencia;
+    const p = await escanear(cruda);
+    expect(p.avisos.some((a) => a.codigo === "POSIBLE_DUPLICADO")).toBe(false);
+
+    await db.query(`DELETE FROM cash_operations WHERE empresa_id = $1`, [OTRA]);
+  });
+});

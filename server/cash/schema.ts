@@ -1357,6 +1357,9 @@ export async function initCash(): Promise<void> {
 
       motor TEXT NOT NULL,
       duracion_ms INTEGER NOT NULL DEFAULT 0,
+      /* Por qué no salió, cuando no sale. El escaneo que hay que investigar
+         meses después es justo el que falló, así que también deja rastro. */
+      error TEXT,
       /* Lo que dijo el modelo y lo que se entendió, uno al lado del otro. */
       extraccion_cruda JSONB,
       extraccion_normalizada JSONB,
@@ -1380,6 +1383,10 @@ export async function initCash(): Promise<void> {
       ON cash_invoice_scans(empresa_id, creado_at_ms DESC);
     CREATE INDEX IF NOT EXISTS cash_invoice_scans_operacion_idx
       ON cash_invoice_scans(operation_id) WHERE operation_id IS NOT NULL;
+    /* Añadida después de la tabla: un CREATE TABLE IF NOT EXISTS no toca una
+       tabla que ya existe, y sin esto el primer escaneo fallido después de
+       actualizar reventaría al escribir su rastro. */
+    ALTER TABLE cash_invoice_scans ADD COLUMN IF NOT EXISTS error TEXT;
   `);
 
   await asignarCodigosDeCaja();

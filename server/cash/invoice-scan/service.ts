@@ -143,6 +143,44 @@ export type EntradaEscaneo = {
 };
 
 /**
+ * Deja constancia de un escaneo que no ha salido.
+ *
+ * Nunca lanza: el error que hay que enseñar es el del escaneo, no el de no
+ * haber podido apuntarlo. Y no guarda el mensaje entero, solo su principio:
+ * por ahí pueden venir trozos de respuesta del proveedor.
+ */
+async function apuntarFallo(
+  entrada: EntradaEscaneo,
+  documento: DocumentoAdjunto,
+  duracionMs: number,
+  causa: unknown
+): Promise<void> {
+  try {
+    await pool.query(
+      `INSERT INTO cash_invoice_scans
+         (empresa_id, session_id, nombre, mime, tamano_bytes, sha256, motor, duracion_ms,
+          error, creado_por, creado_at_ms)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [
+        entrada.empresaId,
+        entrada.sessionId,
+        documento.nombre,
+        documento.mime,
+        documento.contenido.length,
+        crypto.createHash("sha256").update(documento.contenido).digest("hex"),
+        "openai:responses",
+        duracionMs,
+        String(causa instanceof Error ? causa.message : causa).slice(0, 300),
+        entrada.userId,
+        Date.now(),
+      ]
+    );
+  } catch (e) {
+    console.error("Mobilink Cash: no se ha podido apuntar el escaneo fallido:", e);
+  }
+}
+
+/**
  * Escanea y propone. Nunca cobra.
  *
  * `extractor` entra por parámetro para poder probar el camino entero sin
@@ -161,7 +199,19 @@ export async function escanearFactura(
   };
 
   const inicio = Date.now();
-  const cruda = await extractor(documento);
+  let cruda;
+  try {
+    cruda = await extractor(documento);
+  } catch (e) {
+    /*
+     * Un escaneo que falla también deja rastro, y es el que más falta hace:
+     * cuando alguien dice «a mí no me lee las facturas», lo que hay que poder
+     * mirar es esto. Se apunta y se vuelve a lanzar, que quien está delante
+     * tiene que enterarse.
+     */
+    await apuntarFallo(entrada, documento, Date.now() - inicio, e);
+    throw e;
+  }
   const duracionMs = Date.now() - inicio;
 
   const normalizada = normalizar(cruda);
@@ -185,8 +235,9 @@ export async function escanearFactura(
   }
 
   /*
-   * El rastro. Se guarda SIEMPRE, salga bien o regular, porque el escaneo que
-   * hay que investigar meses después es justo el que salió regular.
+   * El rastro de un escaneo que ha salido. Los que fallan dejan el suyo por
+   * `apuntarFallo`, arriba: los dos hacen falta, y el que hay que investigar
+   * meses después suele ser el que salió regular.
    *
    * Lo que no se guarda: el fichero. Ese se cuelga del cobro por la vía de
    * siempre cuando el cobro existe, y duplicarlo aquí sería tener la factura
