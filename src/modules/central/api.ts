@@ -371,6 +371,16 @@ export const asignarZona = (centroId: string, zonaId: string | null) =>
   });
 
 /**
+ * Vuelve a pedirle a la caja que cuente sus ingresos. No cambia nada en la
+ * caja: repara lo que Central no llegó a ver.
+ */
+export const reemitirIngresos = (f: { centroId?: string | null; registerId?: number | null }) =>
+  pedir<{ reenviados: number }>("/deposits/resync", json({
+    centroId: f.centroId ?? null,
+    registerId: f.registerId ?? null,
+  }));
+
+/**
  * El resguardo del ingreso, por la API de Central y no por la de la caja: un
  * supervisor de red puede no tener `cash.view`, y el PDF es el mismo.
  */
