@@ -24,7 +24,7 @@ import * as migracion from "./migration.ts";
 import * as traslados from "./transfers.ts";
 import * as jerarquia from "./hierarchy.ts";
 import { estadoCola, procesarEventos, reintentarEventos } from "./events/worker.ts";
-import { miniaturaBoton, miniaturaFicha } from "./images.ts";
+import { miniaturaBoton, miniaturaFicha, miniaturaLogo } from "./images.ts";
 import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimientosDeSesion } from "./repository.ts";
 import type { LineaDenominacion } from "./domain/inventory.ts";
 import { CAMBIO_MAXIMO_CENTIMOS } from "./domain/change.ts";
@@ -71,21 +71,24 @@ const subidaDocumento = multer({
 /**
  * Reduce la imagen y la sube a Storage. Devuelve su URL.
  *
- * El tratamiento no es el mismo para todo. El logotipo de un banco llena su
- * botón y su fondo forma parte del logotipo —el azul del BBVA es el BBVA— así
- * que se deja tal cual. Un billete o una moneda es una ficha suelta que se
- * pinta sobre lo que sea, y la foto que uno encuentra viene en JPG sobre fondo
- * blanco: ahí el fondo se recorta.
+ * El tratamiento no es el mismo para todo. Un botón de cobro se ve a 32 px y
+ * su fondo forma parte del dibujo, así que se deja tal cual y se guarda ligero.
+ * Un billete o una moneda es una ficha suelta que se pinta sobre lo que sea, y
+ * la foto que uno encuentra viene en JPG sobre fondo blanco: ahí el fondo se
+ * recorta. Un logotipo de banco se IMPRIME en la cabecera del resguardo: ni se
+ * le baja la paleta ni se le pierde la transparencia.
  */
 async function guardarImagenBoton(
   fichero: { buffer: Buffer },
   ruta_: string,
-  tratamiento: "boton" | "ficha" = "boton"
+  tratamiento: "boton" | "ficha" | "logo" = "boton"
 ): Promise<string> {
   const miniatura =
     tratamiento === "ficha"
       ? await miniaturaFicha(fichero.buffer)
-      : await miniaturaBoton(fichero.buffer);
+      : tratamiento === "logo"
+        ? await miniaturaLogo(fichero.buffer)
+        : await miniaturaBoton(fichero.buffer);
 
   let error: { message?: string } | null = null;
   try {
@@ -606,9 +609,22 @@ export function createCashRouter(): Router {
       if (!/^image\//.test(req.file.mimetype)) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
       }
-      // Tratamiento «botón»: el fondo forma parte del logotipo de un banco.
-      const url = await guardarImagenBoton(req.file, `cash/bancos/${id}_${Date.now()}.png`, "boton");
+      const url = await guardarImagenBoton(req.file, `cash/bancos/${id}_${Date.now()}.png`, "logo");
       res.json({ banco: await config.actualizarBanco(contexto(req), id, { logoUrl: url }) });
+    })
+  );
+
+  /**
+   * Quita el logotipo subido. No deja al banco sin nada: debajo está el que
+   * trae la aplicación, que vuelve a salir solo. Es la salida para un fichero
+   * mal recortado o que resultó no ser el logotipo que uno creía.
+   */
+  r.delete(
+    "/banks/:id/logo",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const id = enteroPositivo(req.params.id, "id");
+      res.json({ banco: await config.actualizarBanco(contexto(req), id, { logoUrl: null }) });
     })
   );
 
@@ -656,9 +672,8 @@ export function createCashRouter(): Router {
   );
 
   /**
-   * Logotipo del banco. Mismo tratamiento que los botones de cobro: el fondo
-   * forma parte del logotipo —el azul del BBVA es el BBVA— así que no se
-   * recorta.
+   * Logotipo de esta cuenta en concreto, que manda sobre el del banco. Solo
+   * hace falta cuando una cuenta luce distinto del resto de su entidad.
    */
   r.post(
     "/bank-accounts/:id/logo",
@@ -672,7 +687,7 @@ export function createCashRouter(): Router {
       if (!/^image\//.test(req.file.mimetype)) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
       }
-      const url = await guardarImagenBoton(req.file, `cash/bancos/${id}_${Date.now()}.png`, "boton");
+      const url = await guardarImagenBoton(req.file, `cash/cuentas/${id}_${Date.now()}.png`, "logo");
       const cuenta = await config.actualizarCuenta(contexto(req), id, { logoUrl: url });
       res.json({ cuenta });
     })

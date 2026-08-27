@@ -15,8 +15,12 @@
  * Solo con RUN_DB_TESTS=1 y DATABASE_URL a una base DESECHABLE.
  */
 
+import fs from "node:fs";
+import path from "node:path";
+import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { esFallo } from "./domain/result.ts";
+import { BANCOS_SEMILLA } from "./domain/banks.ts";
 
 const RUN = process.env.RUN_DB_TESTS === "1" && !!process.env.DATABASE_URL;
 
@@ -76,8 +80,8 @@ const cantidad = (lineas: { valor: number; cantidad: number }[], valor: number):
 /**
  * Caja nueva por prueba: evita que una prueba dependa del estado de otra.
  *
- * Cada una con su código —`CJ1`, `CJ2`…— porque el código es lo que abre el
- * número de todos sus documentos (`CJ1-C-26-001`). Con el código vacío la
+ * Cada una con su código —`C1`, `C2`…— porque el código es lo que abre el
+ * número de todos sus documentos (`C1-C-26-001`). Con el código vacío la
  * numeración cae al `MC` de reserva y las pruebas dejarían de comprobar lo que
  * de verdad pasa en producción.
  */
@@ -88,15 +92,23 @@ async function crearCaja(nombre: string): Promise<number> {
      VALUES ($1,'tarragona',$2,$3,$3) RETURNING id`,
     [EMPRESA, `${nombre}-${String(process.hrtime.bigint()).slice(-9)}`, ahora]
   );
-  // El código se saca del id y no de un contador de la suite: la base de
-  // pruebas sobrevive entre ejecuciones, así que un contador que empieza otra
-  // vez en 1 chocaría con el `CJ1` de la vuelta anterior.
-  await db.query(`UPDATE cash_registers SET codigo = 'CJ' || id WHERE id = $1`, [rows[0].id]);
+  /*
+   * El código se saca del id y no de un contador de la suite: la base de
+   * pruebas sobrevive entre ejecuciones, así que un contador que empieza otra
+   * vez en 1 chocaría con el `C1` de la vuelta anterior.
+   *
+   * Y va en base 36, no en decimal: el código admite 6 caracteres, y una base
+   * de pruebas veterana pasa de los cinco dígitos —llegó a `CJ10385`— y a
+   * partir de ahí fallaban todas las cajas. En base 36 caben ids de hasta
+   * sesenta millones.
+   */
+  const codigo = `C${rows[0].id.toString(36).toUpperCase()}`;
+  await db.query(`UPDATE cash_registers SET codigo = $2 WHERE id = $1`, [rows[0].id, codigo]);
   return rows[0].id;
 }
 
 /** El número de documento nuevo: CÓDIGO-TIPO-AA-SECUENCIA. */
-const numeroDe = (tipo: string) => new RegExp(`^CJ\\d+-${tipo}-\\d{2}-\\d{3,}$`);
+const numeroDe = (tipo: string) => new RegExp(`^C[0-9A-Z]+-${tipo}-\\d{2}-\\d{3,}$`);
 
 beforeAll(async () => {
   if (!RUN) return;
@@ -3403,6 +3415,63 @@ describe.runIf(RUN)("resguardo del ingreso bancario", () => {
     expect(pdf.length).toBeGreaterThan(1000);
   });
 
+  it("lleva el logotipo del banco a tamaño completo, sin haber subido nada", async () => {
+    /*
+     * El logotipo se imprime, así que va al PDF con toda su resolución: la
+     * miniatura de un botón sale sucia en el papel. Se comprueba por el ancho
+     * en píxeles de la imagen incrustada, que es el del fichero de
+     * `public/bancos/`, no uno recortado por el camino.
+     */
+    const caja = await crearCaja("resguardo-logo");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: FONDO_300,
+    });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 10000,
+      formasPago: [{ forma: "CASH", importe: 10000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 2 }],
+      concepto: "Venta",
+    });
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: (await servicio.stockDeJornada(sesion.id)).lineas,
+    });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: (await servicio.proponerCierre(sesion.id, 30000)).cambioFinal,
+    });
+
+    // Cuenta de CaixaBank y banco SIN logotipo subido: manda el de la aplicación.
+    const bancos = await config.listarBancos(EMPRESA);
+    const caixa = bancos.find((b) => b.codigo === "2100")!;
+    await config.actualizarBanco(ctx, caixa.id, { logoUrl: null });
+    const bban = `2100${String(process.hrtime.bigint()).slice(-16).padStart(16, "0")}`;
+    let resto = 0;
+    for (const c of `${bban}ES00`) {
+      const v = c >= "A" ? String(c.charCodeAt(0) - 55) : c;
+      for (const d of v) resto = (resto * 10 + Number(d)) % 97;
+    }
+    const cuenta = await config.crearCuenta(ctx, {
+      iban: `ES${String(98 - resto).padStart(2, "0")}${bban}`,
+    });
+
+    const ingreso = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [sesion.id],
+      importeCentimos: 10000,
+      bankAccountId: cuenta.id,
+    });
+
+    const pdf = await informe.informeIngreso(EMPRESA, ingreso.id);
+    const fichero = path.join(process.cwd(), "public", "bancos", "2100-caixabank.png");
+    const { width, height } = await sharp(fs.readFileSync(fichero)).metadata();
+    const crudo = pdf.toString("latin1");
+    expect(crudo).toContain(`/Width ${width}`);
+    expect(crudo).toContain(`/Height ${height}`);
+  });
+
   it("un ingreso de otra empresa no se puede imprimir", async () => {
     const caja = await crearCaja("resguardo-ajeno");
     const { sesion } = await servicio.abrirJornada(ctx, {
@@ -5121,6 +5190,70 @@ describe.runIf(RUN)("maestro de bancos", () => {
     const cuenta = await config.crearCuenta(ctx, { iban: ibanDe("0049") });
     const lista = await config.listarCuentas(EMPRESA);
     expect(lista.find((c) => c.id === cuenta.id)!.logoUrl).toBe("https://ejemplo.test/s.png");
+  });
+
+  it("los que trae la aplicación salen sin subir nada, y el subido manda", async () => {
+    /*
+     * Tres capas, de arriba abajo: el logotipo subido a la cuenta, el subido
+     * al banco y el que trae la aplicación. Quitar uno tiene que dejar ver el
+     * de debajo, que es la salida cuando el fichero subido sale mal: fue lo
+     * que pasó con un CaixaBank que traía dentro las dos versiones de la marca
+     * y salían las dos en la cabecera del resguardo.
+     */
+    const bancos = await config.listarBancos(EMPRESA);
+    const caixa = bancos.find((b) => b.codigo === "2100")!;
+
+    const limpio = await config.actualizarBanco(ctx, caixa.id, { logoUrl: null });
+    expect(limpio.logoUrl).toBe("/bancos/2100-caixabank.png");
+    expect(limpio.logoPropio).toBe(false);
+
+    const propio = await config.actualizarBanco(ctx, caixa.id, {
+      logoUrl: "https://ejemplo.test/subido.png",
+    });
+    expect(propio.logoUrl).toBe("https://ejemplo.test/subido.png");
+    expect(propio.logoPropio).toBe(true);
+
+    // Y al quitarlo vuelve el de la aplicación, no se queda sin nada.
+    const vuelto = await config.actualizarBanco(ctx, caixa.id, { logoUrl: null });
+    expect(vuelto.logoUrl).toBe("/bancos/2100-caixabank.png");
+  });
+
+  it("el fichero del logotipo que trae la aplicación existe de verdad", async () => {
+    // Una ruta mal escrita dejaría el resguardo sin logotipo y sin ruido.
+    for (const banco of BANCOS_SEMILLA) {
+      if (!banco.logo) continue;
+      const fichero = path.join(process.cwd(), "public", banco.logo.replace(/^\//, ""));
+      expect(fs.existsSync(fichero), `falta ${banco.logo}`).toBe(true);
+      // Con transparencia: la cabecera del resguardo es azul marino, y un
+      // logotipo con su fondo dentro sale metido en un recuadro.
+      const { hasAlpha } = await sharp(fs.readFileSync(fichero)).metadata();
+      expect(hasAlpha, `${banco.logo} sin transparencia`).toBe(true);
+    }
+  });
+
+  it("el logotipo de Mobilink Cash de las cabeceras va sin fondo", async () => {
+    /*
+     * El fichero de siempre trae dentro su propio azul marino, parecido al de
+     * la banda pero no igual, y sobre el papel se le veía el recuadro. Las
+     * cabeceras usan la versión recortada; si desapareciera, volvería el
+     * recuadro sin que nadie se enterara hasta imprimir.
+     */
+    const fichero = path.join(process.cwd(), "public", "logo-cash-fondo-oscuro.png");
+    expect(fs.existsSync(fichero)).toBe(true);
+    const { hasAlpha } = await sharp(fs.readFileSync(fichero)).metadata();
+    expect(hasAlpha).toBe(true);
+  });
+
+  it("una cuenta de CaixaBank saca el logotipo aunque nadie haya subido ninguno", async () => {
+    const bancos = await config.listarBancos(EMPRESA);
+    const caixa = bancos.find((b) => b.codigo === "2100")!;
+    await config.actualizarBanco(ctx, caixa.id, { logoUrl: null });
+
+    const cuenta = await config.crearCuenta(ctx, { iban: ibanDe("2100") });
+    const lista = await config.listarCuentas(EMPRESA);
+    const vista = lista.find((c) => c.id === cuenta.id)!;
+    expect(vista.logoUrl).toBe("/bancos/2100-caixabank.png");
+    expect(vista.logoPropio).toBe(false);
   });
 });
 
