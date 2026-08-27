@@ -354,6 +354,22 @@ export const asignarZona = (centroId: string, zonaId: string | null) =>
     body: JSON.stringify({ zonaId }),
   });
 
+/**
+ * El resguardo del ingreso, por la API de Central y no por la de la caja: un
+ * supervisor de red puede no tener `cash.view`, y el PDF es el mismo.
+ */
+export async function resguardoIngreso(depositId: number): Promise<Blob> {
+  const r = await fetch(`${BASE}/deposits/${depositId}/report.pdf`, {
+    headers: await sessionHeaders(),
+  });
+  if (!r.ok) {
+    // El error viene en JSON aunque la ruta prometa un PDF.
+    const cuerpo = await r.json().catch(() => ({}));
+    throw new Error(cuerpo?.error || `Error ${r.status}`);
+  }
+  return r.blob();
+}
+
 /** Un piso más abajo del árbol: qué taller es el de esta caja. */
 export const asignarCentro = (registerId: number, centroId: string | null) =>
   pedir<{ ok: true }>(`/registers/${registerId}/center`, {
