@@ -423,6 +423,8 @@ export type Pendientes = {
  */
 export type Ajustes = {
   mixtoImagenUrl: string | null;
+  /** Destinatarios del resguardo de ingreso, separados por coma. */
+  correoCentral: string | null;
 };
 
 /**
@@ -521,6 +523,8 @@ export type CuentaBancariaConfig = {
   banco: string;
   iban: string;
   alias: string;
+  /** Logotipo, propio o heredado del maestro de bancos. */
+  logoUrl: string | null;
   activa: boolean;
   porDefecto: boolean;
   orden: number;
@@ -555,4 +559,15 @@ export const ETIQUETA_ESTADO_INGRESO: Record<EstadoIngresoVisible, string> = {
   PENDIENTE_CONFIRMAR: "Pendiente de confirmar",
   CONFIRMADO: "Confirmado",
   ANULADO: "Anulado",
+};
+
+/** Banco del maestro: su código de entidad y su logotipo. */
+export type BancoConfig = {
+  id: number;
+  /** Cuatro cifras de entidad del IBAN: es como se reconoce el banco. */
+  codigo: string;
+  nombre: string;
+  logoUrl: string | null;
+  activo: boolean;
+  cuentas: number;
 };
