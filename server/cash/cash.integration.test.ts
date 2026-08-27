@@ -80,8 +80,8 @@ const cantidad = (lineas: { valor: number; cantidad: number }[], valor: number):
 /**
  * Caja nueva por prueba: evita que una prueba dependa del estado de otra.
  *
- * Cada una con su código —`CJ1`, `CJ2`…— porque el código es lo que abre el
- * número de todos sus documentos (`CJ1-C-26-001`). Con el código vacío la
+ * Cada una con su código —`C1`, `C2`…— porque el código es lo que abre el
+ * número de todos sus documentos (`C1-C-26-001`). Con el código vacío la
  * numeración cae al `MC` de reserva y las pruebas dejarían de comprobar lo que
  * de verdad pasa en producción.
  */
@@ -92,15 +92,23 @@ async function crearCaja(nombre: string): Promise<number> {
      VALUES ($1,'tarragona',$2,$3,$3) RETURNING id`,
     [EMPRESA, `${nombre}-${String(process.hrtime.bigint()).slice(-9)}`, ahora]
   );
-  // El código se saca del id y no de un contador de la suite: la base de
-  // pruebas sobrevive entre ejecuciones, así que un contador que empieza otra
-  // vez en 1 chocaría con el `CJ1` de la vuelta anterior.
-  await db.query(`UPDATE cash_registers SET codigo = 'CJ' || id WHERE id = $1`, [rows[0].id]);
+  /*
+   * El código se saca del id y no de un contador de la suite: la base de
+   * pruebas sobrevive entre ejecuciones, así que un contador que empieza otra
+   * vez en 1 chocaría con el `C1` de la vuelta anterior.
+   *
+   * Y va en base 36, no en decimal: el código admite 6 caracteres, y una base
+   * de pruebas veterana pasa de los cinco dígitos —llegó a `CJ10385`— y a
+   * partir de ahí fallaban todas las cajas. En base 36 caben ids de hasta
+   * sesenta millones.
+   */
+  const codigo = `C${rows[0].id.toString(36).toUpperCase()}`;
+  await db.query(`UPDATE cash_registers SET codigo = $2 WHERE id = $1`, [rows[0].id, codigo]);
   return rows[0].id;
 }
 
 /** El número de documento nuevo: CÓDIGO-TIPO-AA-SECUENCIA. */
-const numeroDe = (tipo: string) => new RegExp(`^CJ\\d+-${tipo}-\\d{2}-\\d{3,}$`);
+const numeroDe = (tipo: string) => new RegExp(`^C[0-9A-Z]+-${tipo}-\\d{2}-\\d{3,}$`);
 
 beforeAll(async () => {
   if (!RUN) return;
