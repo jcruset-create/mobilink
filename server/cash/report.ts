@@ -266,11 +266,17 @@ async function construirPortada(d: {
       .font("Helvetica-Bold")
       .fontSize(15)
       .text("Cierre de caja", x, 16, { lineBreak: false });
+    /*
+     * La caja y la fecha, en blanco y del mismo tamaño que en el resguardo del
+     * ingreso: los dos papeles se archivan juntos y tienen que verse igual. En
+     * gris pequeño se perdían contra el azul, y son justo el dato que
+     * identifica una hoja suelta cuando el taco se separa.
+     */
     doc
-      .font("Helvetica")
-      .fontSize(10)
-      .fillColor("#94a3b8")
-      .text(subtitulo, x, 36, { lineBreak: false });
+      .font("Helvetica-Bold")
+      .fontSize(13)
+      .fillColor("#ffffff")
+      .text(subtitulo, x, 34, { lineBreak: false });
 
     doc.fillColor(TINTA).font("Helvetica").fontSize(10);
     doc.x = M;
@@ -879,7 +885,7 @@ async function construirPortada(d: {
       .font("Helvetica")
       .fontSize(9)
       .fillColor("#94a3b8")
-      .text(`${i + 1} de ${rango.count}`, M, 36, {
+      .text(`${i + 1} de ${rango.count}`, M, 38, {
         width: doc.page.width - M * 2,
         align: "right",
         lineBreak: false,
