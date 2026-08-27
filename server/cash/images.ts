@@ -17,6 +17,13 @@ import { ErrorCaja } from "./errors.ts";
 
 const ALTO_MAXIMO = 240;
 
+/*
+ * El logotipo del banco se imprime, y el papel tiene mucha más resolución que
+ * una pantalla: a 480 px de alto sobre los 38 puntos que ocupa en la cabecera
+ * salen más de 900 puntos por pulgada, de sobra para cualquier impresora.
+ */
+const ALTO_LOGO = 480;
+
 export async function miniaturaBoton(original: Buffer): Promise<Buffer> {
   try {
     return await sharp(original)
@@ -26,6 +33,41 @@ export async function miniaturaBoton(original: Buffer): Promise<Buffer> {
   } catch {
     // sharp no ha sabido leerla: no era una imagen de verdad, viniera con el
     // content-type que viniera.
+    throw new ErrorCaja(
+      "ENTRADA_NO_VALIDA",
+      "El fichero no se ha podido leer como imagen. Prueba con un PNG o un JPG.",
+      400
+    );
+  }
+}
+
+/**
+ * El logotipo de un banco, tal cual pero a tamaño razonable.
+ *
+ * Es distinto de un botón de cobro en dos cosas. La primera, que sale IMPRESO
+ * en la cabecera del resguardo, ancho y con letra fina: la paleta de 128
+ * colores del botón se le come los bordes y sale sucio. La segunda, que casi
+ * siempre viene en PNG con transparencia, hecho para fondo oscuro, y esa
+ * transparencia hay que conservarla o la cabecera azul se queda con un
+ * recuadro blanco alrededor.
+ *
+ * Además se recortan los márgenes vacíos que traiga el fichero: son los que
+ * hacen que el logotipo salga pequeño en un hueco grande.
+ */
+export async function miniaturaLogo(original: Buffer): Promise<Buffer> {
+  try {
+    let imagen = sharp(original).ensureAlpha();
+    try {
+      // El recorte falla si la imagen es de un solo color: entonces se deja.
+      imagen = sharp(await imagen.trim({ threshold: 5 }).toBuffer());
+    } catch {
+      imagen = sharp(original).ensureAlpha();
+    }
+    return await imagen
+      .resize({ height: ALTO_LOGO, withoutEnlargement: true })
+      .png({ compressionLevel: 9, effort: 7 })
+      .toBuffer();
+  } catch {
     throw new ErrorCaja(
       "ENTRADA_NO_VALIDA",
       "El fichero no se ha podido leer como imagen. Prueba con un PNG o un JPG.",

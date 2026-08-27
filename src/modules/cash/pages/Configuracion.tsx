@@ -1624,8 +1624,9 @@ function Bancos() {
       <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Bancos</h2>
       <p className="text-[12px] text-slate-500">
         El código son las cuatro cifras de entidad que trae el IBAN: al dar de alta una cuenta, el
-        banco se reconoce solo y de aquí saca el logotipo que sale en el resguardo. Sube el
-        logotipo una vez y lo usan todas las cuentas de esa entidad.
+        banco se reconoce solo y de aquí saca el logotipo que sale en el resguardo. Algunos ya
+        vienen puestos; el que falte se sube una vez y lo usan todas las cuentas de esa entidad.
+        Si el que subes no queda bien, «Quitar» devuelve el que trae la aplicación.
       </p>
 
       {error && <ErrorBox>{error}</ErrorBox>}
@@ -1676,6 +1677,16 @@ function Bancos() {
                         }}
                       />
                     </label>
+                  )}
+                  {editable && b.logoPropio && (
+                    <button
+                      className={btnMini}
+                      disabled={ocupado}
+                      title="Quitar el logotipo subido y volver al que trae la aplicación"
+                      onClick={() => void accion(() => api.quitarLogoBanco(b.id))}
+                    >
+                      Quitar
+                    </button>
                   )}
                 </div>
               </td>

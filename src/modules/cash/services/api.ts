@@ -300,6 +300,10 @@ export const subirLogoBanco = (id: number, fichero: File) => {
   return pedir<{ banco: BancoConfig }>(`/banks/${id}/logo`, { method: "POST", body: cuerpo });
 };
 
+/** Quita el logotipo subido: vuelve a salir el que trae la aplicación. */
+export const quitarLogoBanco = (id: number) =>
+  pedir<{ banco: BancoConfig }>(`/banks/${id}/logo`, { method: "DELETE" });
+
 export const cuentasBancarias = () =>
   pedir<{ cuentas: CuentaBancariaConfig[] }>(`/bank-accounts`);
 
