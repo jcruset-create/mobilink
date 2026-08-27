@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PiggyBank, Undo2 } from "lucide-react";
+import { Landmark, Paperclip, PiggyBank, Undo2, Upload } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import {
   Aviso,
@@ -29,9 +29,11 @@ import {
   thCls,
   tdCls,
   inputCls,
+  btnSecondary,
 } from "../components/ui";
 import { euros, aCentimos } from "../utils/money";
 import type {
+  DocumentoOperacion,
   CierrePendiente,
   LineaDenominacion,
   IngresoBancario,
@@ -234,7 +236,14 @@ export default function IngresosBancarios() {
       )}
 
       {/* ── Historial ── */}
-      <Historial ingresos={panel.ingresos} gestiona={gestiona} ocupado={ocupado} onAccion={accion} />
+      <Historial
+        ingresos={panel.ingresos}
+        gestiona={gestiona}
+        puedeAdjuntar={puede("cash.document.attach")}
+        ocupado={ocupado}
+        onAccion={accion}
+        onRecargar={() => void cargar()}
+      />
     </div>
   );
 }
@@ -476,13 +485,17 @@ function PrepararIngreso({
 function Historial({
   ingresos,
   gestiona,
+  puedeAdjuntar,
   ocupado,
   onAccion,
+  onRecargar,
 }: {
   ingresos: IngresoBancario[];
   gestiona: boolean;
+  puedeAdjuntar: boolean;
   ocupado: boolean;
   onAccion: (fn: () => Promise<unknown>) => Promise<void>;
+  onRecargar: () => void;
 }) {
   const [abierto, setAbierto] = useState<number | null>(null);
   const [motivo, setMotivo] = useState("");
@@ -573,6 +586,16 @@ function Historial({
                         {i.anuladoMotivo && (
                           <div className="mt-2 text-[12px] text-red-300">Anulado: {i.anuladoMotivo}</div>
                         )}
+
+                        {/*
+                          Los datos que da el banco AL HACER el ingreso: la
+                          fecha real y la referencia llegan con el resguardo,
+                          después de registrarlo aquí. Y el comprobante
+                          escaneado se cuelga del ingreso, no de una jornada:
+                          el papel del banco cubre los cierres de varios días.
+                        */}
+                        <DatosDelBanco ingreso={i} editable={gestiona} onGuardado={onRecargar} />
+                        <ComprobantesDelIngreso depositId={i.id} puedeAdjuntar={puedeAdjuntar} />
 
                         {gestiona && i.estado === "CONFIRMADO" && i.esUltimo && (
                           <div className="mt-3 flex flex-wrap items-end gap-2">
@@ -785,6 +808,184 @@ function TablaPiezas({
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * Fecha real y referencia del banco.
+ *
+ * El ingreso se registra en la tienda al preparar la bolsa, pero estos dos
+ * datos los da el banco DESPUÉS, cuando alguien vuelve con el resguardo. Antes
+ * solo se podían poner al crear el ingreso —y si aún no se sabían, que es lo
+ * normal, se quedaban en «—» para siempre—.
+ */
+function DatosDelBanco({
+  ingreso,
+  editable,
+  onGuardado,
+}: {
+  ingreso: IngresoBancario;
+  editable: boolean;
+  onGuardado: () => void;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const [fecha, setFecha] = useState(ingreso.fechaIngreso ?? "");
+  const [referencia, setReferencia] = useState(ingreso.referencia ?? "");
+  const [ocupado, setOcupado] = useState(false);
+  const [error, setError] = useState("");
+
+  if (!editable || ingreso.estado !== "CONFIRMADO") return null;
+
+  async function guardar() {
+    setOcupado(true);
+    setError("");
+    try {
+      await api.completarIngreso(ingreso.id, { fechaIngreso: fecha || null, referencia });
+      setAbierto(false);
+      onGuardado();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se han podido guardar los datos");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  if (!abierto) {
+    return (
+      <button
+        onClick={() => setAbierto(true)}
+        className="mt-3 flex items-center gap-1 rounded-lg bg-sky-700 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-sky-600"
+      >
+        <Landmark className="h-3.5 w-3.5" />
+        {ingreso.fechaIngreso || ingreso.referencia ? "Editar datos del banco" : "Confirmar en el banco"}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900/60 p-2">
+      {error && <div className="mb-1 text-[11px] text-rose-300">{error}</div>}
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Fecha real del ingreso
+          </span>
+          <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Referencia bancaria
+          </span>
+          <input
+            value={referencia}
+            onChange={(e) => setReferencia(e.target.value)}
+            placeholder="Nº de resguardo"
+            className={inputCls}
+          />
+        </label>
+        <button
+          onClick={() => void guardar()}
+          disabled={ocupado}
+          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+        >
+          {ocupado ? "Guardando…" : "Guardar"}
+        </button>
+        <button onClick={() => setAbierto(false)} className={btnSecondary}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * El comprobante escaneado que da el banco.
+ *
+ * Cuelga del INGRESO y no de una jornada: el resguardo cubre el ingreso
+ * entero, que junta los cierres de varios días, y elegir uno de ellos sería
+ * arbitrario. Por eso tampoco sale en el informe de cierre de ninguno.
+ */
+function ComprobantesDelIngreso({
+  depositId,
+  puedeAdjuntar,
+}: {
+  depositId: number;
+  puedeAdjuntar: boolean;
+}) {
+  const [docs, setDocs] = useState<DocumentoOperacion[]>([]);
+  const [ocupado, setOcupado] = useState(false);
+  const [error, setError] = useState("");
+
+  const cargar = useCallback(async () => {
+    try {
+      setDocs((await api.documentosDeIngreso(depositId)).documentos);
+    } catch {
+      /* que no se caiga el detalle entero por esto */
+    }
+  }, [depositId]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function subir(fichero: File) {
+    setOcupado(true);
+    setError("");
+    try {
+      await api.adjuntarDocumentoAIngreso(depositId, fichero);
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido subir el comprobante");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="mt-3">
+      <div className="mb-1 text-[10px] font-semibold uppercase text-slate-400">
+        Comprobante del banco
+      </div>
+      {error && <div className="mb-1 text-[11px] text-rose-300">{error}</div>}
+
+      {docs.length === 0 && !puedeAdjuntar && (
+        <p className="text-[12px] text-slate-500">Todavía no se ha subido ninguno.</p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {docs.map((d) => (
+          <a
+            key={d.id}
+            href={d.url ?? "#"}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1 rounded-lg bg-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-600"
+          >
+            <Paperclip className="h-3 w-3" /> {d.nombre}
+          </a>
+        ))}
+
+        {puedeAdjuntar && (
+          <label className="flex cursor-pointer items-center gap-1 rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-600">
+            <Upload className="h-3.5 w-3.5" />
+            {ocupado ? "Subiendo…" : docs.length > 0 ? "Añadir otro" : "Subir comprobante"}
+            <input
+              type="file"
+              accept="application/pdf,image/jpeg,image/png"
+              className="hidden"
+              disabled={ocupado}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                // El valor se limpia para poder volver a elegir el MISMO fichero
+                // si la primera subida falló.
+                e.target.value = "";
+                if (f) void subir(f);
+              }}
+            />
+          </label>
+        )}
+      </div>
     </div>
   );
 }
