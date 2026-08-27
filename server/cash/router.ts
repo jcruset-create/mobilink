@@ -569,6 +569,49 @@ export function createCashRouter(): Router {
     })
   );
 
+  // ── Maestro de bancos ────────────────────────────────────────────────────
+
+  r.get(
+    "/banks",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({ bancos: await config.listarBancos(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.patch(
+    "/banks/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        banco: await config.actualizarBanco(contexto(req), enteroPositivo(req.params.id, "id"), {
+          nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+          activo: typeof b.activo === "boolean" ? b.activo : undefined,
+        }),
+      });
+    })
+  );
+
+  /** Logotipo del banco: se sube una vez y lo usan todas sus cuentas. */
+  r.post(
+    "/banks/:id/logo",
+    exigirPermiso("cash.configure"),
+    subida(subidaImagen.single("imagen"), 8),
+    ruta(async (req, res) => {
+      const id = enteroPositivo(req.params.id, "id");
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ninguna imagen.", 400);
+      }
+      if (!/^image\//.test(req.file.mimetype)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
+      }
+      // Tratamiento «botón»: el fondo forma parte del logotipo de un banco.
+      const url = await guardarImagenBoton(req.file, `cash/bancos/${id}_${Date.now()}.png`, "boton");
+      res.json({ banco: await config.actualizarBanco(contexto(req), id, { logoUrl: url }) });
+    })
+  );
+
   // ── Cuentas bancarias ────────────────────────────────────────────────────
 
   r.get(
@@ -608,6 +651,29 @@ export function createCashRouter(): Router {
         porDefecto: typeof b.porDefecto === "boolean" ? b.porDefecto : undefined,
         orden: b.orden === undefined ? undefined : entero(b.orden, "orden"),
       });
+      res.json({ cuenta });
+    })
+  );
+
+  /**
+   * Logotipo del banco. Mismo tratamiento que los botones de cobro: el fondo
+   * forma parte del logotipo —el azul del BBVA es el BBVA— así que no se
+   * recorta.
+   */
+  r.post(
+    "/bank-accounts/:id/logo",
+    exigirPermiso("cash.configure"),
+    subida(subidaImagen.single("imagen"), 8),
+    ruta(async (req, res) => {
+      const id = enteroPositivo(req.params.id, "id");
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ninguna imagen.", 400);
+      }
+      if (!/^image\//.test(req.file.mimetype)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
+      }
+      const url = await guardarImagenBoton(req.file, `cash/bancos/${id}_${Date.now()}.png`, "boton");
+      const cuenta = await config.actualizarCuenta(contexto(req), id, { logoUrl: url });
       res.json({ cuenta });
     })
   );
@@ -866,6 +932,25 @@ export function createCashRouter(): Router {
    * permitiría registrar un cobro «en Mixto», que no dice por dónde entró el
    * dinero.
    */
+  /**
+   * Fija un ajuste del módulo. La clave se valida contra la lista blanca en
+   * `fijarAjuste`, así que esto no puede convertirse en un cajón de sastre.
+   */
+  r.patch(
+    "/settings",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      if (typeof b.clave !== "string") {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "Falta la clave del ajuste.", 400);
+      }
+      const valor = b.valor === null || b.valor === "" ? null : String(b.valor);
+      res.json({
+        ajustes: await config.fijarAjuste(contexto(req), b.clave as config.ClaveAjuste, valor),
+      });
+    })
+  );
+
   r.post(
     "/settings/mixed-image",
     exigirPermiso("cash.configure"),
@@ -1159,6 +1244,20 @@ export function createCashRouter(): Router {
             b.bankAccountId === null ? null : b.bankAccountId ? enteroPositivo(b.bankAccountId, "bankAccountId") : undefined,
         }),
       });
+    })
+  );
+
+  /**
+   * Manda el resguardo a la central, con el comprobante escaneado adjunto.
+   *
+   * Mismo permiso que registrar el ingreso: quien lo hace es quien lo comunica.
+   */
+  r.post(
+    "/bank-deposits/:id/email",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const { enviarResguardoALaCentral } = await import("./deposit-mail.ts");
+      res.json(await enviarResguardoALaCentral(contexto(req), enteroPositivo(req.params.id, "id")));
     })
   );
 

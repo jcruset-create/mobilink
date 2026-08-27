@@ -18,7 +18,8 @@ import type { Denominacion } from "./domain/denominations.ts";
 import { FORMAS_PAGO_SEMILLA } from "./domain/operations.ts";
 import { ErrorCaja, sesionAbierta } from "./repository.ts";
 import { nombreDeCentro } from "./hierarchy.ts";
-import { ibanValido, normalizarIban } from "./domain/bankaccount.ts";
+import { entidadDeIban, ibanValido, normalizarIban } from "./domain/bankaccount.ts";
+import { BANCOS_SEMILLA } from "./domain/banks.ts";
 import {
   CODIGO_MAX,
   codigoValido,
@@ -793,6 +794,15 @@ export const AJUSTES = {
    * tiene el usuario que dejó la pantalla puesta.
    */
   REAUTH_ACTIVO: "reauth_activo",
+  /**
+   * Correo de la central al que se manda el resguardo de un ingreso, con
+   * el comprobante del banco adjunto.
+   *
+   * Admite varias direcciones separadas por coma: la central suele ser
+   * administración y el jefe, y obligar a reenviar a mano el segundo es
+   * justo el paso que se olvida.
+   */
+  CORREO_CENTRAL: "correo_central",
 } as const;
 
 export type ClaveAjuste = (typeof AJUSTES)[keyof typeof AJUSTES];
@@ -805,6 +815,8 @@ export type Ajustes = {
   sodActivo: boolean;
   /** Reautenticación exigida para anular y reabrir. */
   reauthActivo: boolean;
+  /** Destinatarios del resguardo de ingreso. Vacío = no se puede enviar. */
+  correoCentral: string | null;
 };
 
 /** Todos los ajustes de la empresa, ya con la forma que espera el frontend. */
@@ -818,6 +830,7 @@ export async function ajustes(empresaId: string): Promise<Ajustes> {
     mixtoImagenUrl: mapa.get(AJUSTES.MIXTO_IMAGEN) ?? null,
     sodActivo: mapa.get(AJUSTES.SOD_ACTIVO) === "1",
     reauthActivo: mapa.get(AJUSTES.REAUTH_ACTIVO) === "1",
+    correoCentral: mapa.get(AJUSTES.CORREO_CENTRAL) ?? null,
   };
 }
 
@@ -829,6 +842,25 @@ export async function fijarAjuste(
 ): Promise<Ajustes> {
   if (!CLAVES_VALIDAS.includes(clave)) {
     throw new ErrorCaja("AJUSTE_DESCONOCIDO", `El ajuste «${clave}» no existe.`, 400);
+  }
+
+  /*
+   * El correo se comprueba al guardarlo, no al enviarlo. Un destinatario
+   * mal escrito no se descubre hasta que en la central echan en falta un
+   * resguardo, y para entonces han pasado semanas.
+   */
+  if (clave === AJUSTES.CORREO_CENTRAL && valor !== null && valor.trim() !== "") {
+    const malos = valor
+      .split(",")
+      .map((d) => d.trim())
+      .filter((d) => d !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(d));
+    if (malos.length > 0) {
+      throw new ErrorCaja(
+        "CORREO_NO_VALIDO",
+        `Esto no es una dirección de correo: ${malos.join(", ")}.`,
+        400
+      );
+    }
   }
 
   if (valor === null) {
@@ -1092,6 +1124,8 @@ export type CuentaBancariaConfig = {
   banco: string;
   iban: string;
   alias: string;
+  /** Logotipo del banco; null = solo el nombre. */
+  logoUrl: string | null;
   activa: boolean;
   porDefecto: boolean;
   orden: number;
@@ -1106,6 +1140,7 @@ function aCuenta(r: any): CuentaBancariaConfig {
     banco: r.banco,
     iban: r.iban,
     alias: r.alias ?? "",
+    logoUrl: r.logo_url ?? null,
     activa: r.activa,
     porDefecto: r.por_defecto,
     orden: r.orden,
@@ -1116,8 +1151,11 @@ function aCuenta(r: any): CuentaBancariaConfig {
 
 export async function listarCuentas(empresaId: string): Promise<CuentaBancariaConfig[]> {
   const { rows } = await pool.query(
-    `SELECT c.*, (SELECT COUNT(*) FROM cash_bank_deposits d WHERE d.bank_account_id = c.id) AS usos
+    `SELECT c.*,
+            COALESCE(c.logo_url, b.logo_url) AS logo_url,
+            (SELECT COUNT(*) FROM cash_bank_deposits d WHERE d.bank_account_id = c.id) AS usos
        FROM cash_bank_accounts c
+       LEFT JOIN cash_banks b ON b.id = c.bank_id
       WHERE c.empresa_id = $1
       ORDER BY c.activa DESC, c.por_defecto DESC, c.orden, c.banco`,
     [empresaId]
@@ -1155,9 +1193,16 @@ function exigirDatos(banco: string, iban: string): { banco: string; iban: string
 
 export async function crearCuenta(
   ctx: Contexto,
-  datos: { banco: string; iban: string; alias?: string; porDefecto?: boolean; orden?: number }
+  datos: { banco?: string; iban: string; alias?: string; porDefecto?: boolean; orden?: number }
 ): Promise<CuentaBancariaConfig> {
-  const { banco, iban } = exigirDatos(datos.banco, datos.iban);
+  /*
+   * El nombre del banco puede venir vacío: si el IBAN es de una entidad
+   * conocida, se coge del maestro. Teclearlo a mano solo hace falta para un
+   * banco que no esté en la lista.
+   */
+  const nombrePropuesto =
+    (datos.banco ?? "").trim() || (await nombreDelMaestro(ctx.empresaId, datos.iban));
+  const { banco, iban } = exigirDatos(nombrePropuesto, datos.iban);
 
   const { rows: repes } = await pool.query(
     `SELECT id, activa FROM cash_bank_accounts WHERE empresa_id = $1 AND iban = $2`,
@@ -1182,13 +1227,17 @@ export async function crearCuenta(
   const porDefecto = datos.porDefecto ?? cuantas[0].n === 0;
   if (porDefecto) await quitarPorDefecto(ctx.empresaId);
 
+  // El banco se reconoce solo por las cuatro cifras de entidad del IBAN: nadie
+  // tiene que elegirlo de una lista, y así no puede equivocarse al hacerlo.
+  const bankId = await bancoDeIban(ctx.empresaId, iban);
+
   const ahora = Date.now();
   const { rows } = await pool.query(
     `INSERT INTO cash_bank_accounts
-       (empresa_id, banco, iban, alias, por_defecto, orden, created_at_ms, updated_at_ms)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
+       (empresa_id, banco, iban, alias, por_defecto, orden, created_at_ms, updated_at_ms, bank_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8)
      RETURNING *, 0 AS usos`,
-    [ctx.empresaId, banco, iban, (datos.alias ?? "").trim(), porDefecto, datos.orden ?? 0, ahora]
+    [ctx.empresaId, banco, iban, (datos.alias ?? "").trim(), porDefecto, datos.orden ?? 0, ahora, bankId]
   );
 
   await registrarAuditoria({
@@ -1220,6 +1269,7 @@ export async function actualizarCuenta(
     banco?: string;
     iban?: string;
     alias?: string;
+    logoUrl?: string | null;
     activa?: boolean;
     porDefecto?: boolean;
     orden?: number;
@@ -1267,7 +1317,8 @@ export async function actualizarCuenta(
   const { rows } = await pool.query(
     `UPDATE cash_bank_accounts
         SET banco = $3, iban = $4, alias = $5, activa = $6, por_defecto = $7,
-            orden = $8, updated_at_ms = $9
+            orden = $8, updated_at_ms = $9,
+            logo_url = CASE WHEN $10 THEN $11 ELSE logo_url END
       WHERE id = $1 AND empresa_id = $2
       RETURNING *, (SELECT COUNT(*) FROM cash_bank_deposits d WHERE d.bank_account_id = $1) AS usos`,
     [
@@ -1280,6 +1331,8 @@ export async function actualizarCuenta(
       porDefecto,
       cambios.orden ?? antes.orden,
       Date.now(),
+      cambios.logoUrl !== undefined,
+      cambios.logoUrl ?? null,
     ]
   );
 
@@ -1297,4 +1350,130 @@ export async function actualizarCuenta(
   });
 
   return aCuenta(rows[0]);
+}
+
+// ── Maestro de bancos ──────────────────────────────────────────────────────
+
+export type BancoConfig = {
+  id: number;
+  /** Cuatro cifras de entidad del IBAN: es como se reconoce el banco. */
+  codigo: string;
+  nombre: string;
+  logoUrl: string | null;
+  activo: boolean;
+  /** Cuentas dadas de alta con este banco. */
+  cuentas: number;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function aBanco(r: any): BancoConfig {
+  return {
+    id: r.id,
+    codigo: r.codigo,
+    nombre: r.nombre,
+    logoUrl: r.logo_url ?? null,
+    activo: r.activo,
+    cuentas: Number(r.cuentas ?? 0),
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * Siembra el maestro la primera vez que se consulta.
+ *
+ * Solo rellena lo que falta: un banco que el usuario haya renombrado o al que
+ * haya subido su logotipo no se pisa nunca.
+ */
+async function asegurarBancos(empresaId: string): Promise<void> {
+  const ahora = Date.now();
+  for (const b of BANCOS_SEMILLA) {
+    await pool.query(
+      `INSERT INTO cash_banks (empresa_id, codigo, nombre, created_at_ms, updated_at_ms)
+       VALUES ($1,$2,$3,$4,$4)
+       ON CONFLICT (empresa_id, codigo) DO NOTHING`,
+      [empresaId, b.codigo, b.nombre, ahora]
+    );
+  }
+}
+
+export async function listarBancos(empresaId: string): Promise<BancoConfig[]> {
+  await asegurarBancos(empresaId);
+  const { rows } = await pool.query(
+    `SELECT b.*, (SELECT COUNT(*) FROM cash_bank_accounts c WHERE c.bank_id = b.id) AS cuentas
+       FROM cash_banks b
+      WHERE b.empresa_id = $1
+      ORDER BY b.activo DESC, b.nombre`,
+    [empresaId]
+  );
+  return rows.map(aBanco);
+}
+
+export async function actualizarBanco(
+  ctx: Contexto,
+  id: number,
+  cambios: { nombre?: string; logoUrl?: string | null; activo?: boolean }
+): Promise<BancoConfig> {
+  const { rows: previos } = await pool.query(
+    `SELECT * FROM cash_banks WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  if (previos.length === 0) throw new ErrorCaja("BANCO_NO_ENCONTRADO", "El banco no existe.", 404);
+
+  const nombre = cambios.nombre === undefined ? previos[0].nombre : cambios.nombre.trim();
+  if (!nombre) throw new ErrorCaja("ENTRADA_NO_VALIDA", "El banco necesita un nombre.", 400);
+
+  const { rows } = await pool.query(
+    `UPDATE cash_banks
+        SET nombre = $3, activo = $4, updated_at_ms = $5,
+            logo_url = CASE WHEN $6 THEN $7 ELSE logo_url END
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING *, (SELECT COUNT(*) FROM cash_bank_accounts c WHERE c.bank_id = $1) AS cuentas`,
+    [
+      id,
+      ctx.empresaId,
+      nombre,
+      cambios.activo ?? previos[0].activo,
+      Date.now(),
+      cambios.logoUrl !== undefined,
+      cambios.logoUrl ?? null,
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.bank.update",
+    entidad: "cash_banks",
+    entidadId: String(id),
+    detalle: { nombre, logoCambiado: cambios.logoUrl !== undefined },
+    ip: ctx.ip,
+  });
+
+  return aBanco(rows[0]);
+}
+
+/**
+ * El banco del maestro que corresponde a un IBAN, por su código de entidad.
+ *
+ * Devuelve null si el IBAN no es español o si esa entidad no está en el
+ * maestro: en ambos casos la cuenta se queda sin banco y sin logotipo, que es
+ * preferible a colgarla del banco equivocado.
+ */
+/** El nombre del maestro para ese IBAN, o cadena vacía si no se reconoce. */
+async function nombreDelMaestro(empresaId: string, iban: string): Promise<string> {
+  const id = await bancoDeIban(empresaId, iban);
+  if (id == null) return "";
+  const { rows } = await pool.query(`SELECT nombre FROM cash_banks WHERE id = $1`, [id]);
+  return rows[0]?.nombre ?? "";
+}
+
+export async function bancoDeIban(empresaId: string, iban: string): Promise<number | null> {
+  const entidad = entidadDeIban(iban);
+  if (!entidad) return null;
+  await asegurarBancos(empresaId);
+  const { rows } = await pool.query(
+    `SELECT id FROM cash_banks WHERE empresa_id = $1 AND codigo = $2`,
+    [empresaId, entidad]
+  );
+  return rows[0]?.id ?? null;
 }

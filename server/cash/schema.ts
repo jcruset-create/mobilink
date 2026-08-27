@@ -1183,6 +1183,29 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * Maestro de bancos, por empresa.
+   *
+   * El `codigo` son las cuatro cifras de entidad del IBAN, que es lo que
+   * permite reconocer el banco al teclear la cuenta. Va por empresa y no
+   * global porque el logotipo lo sube cada una: la lista de bancos es la misma
+   * para todos, pero la imagen no se puede compartir entre inquilinos.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_banks (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      codigo TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      logo_url TEXT,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, codigo)
+    );
+    CREATE INDEX IF NOT EXISTS cash_banks_empresa_idx ON cash_banks(empresa_id, activo);
+  `);
+
+  /*
    * Cuentas bancarias de la empresa: a dónde va el dinero de cada ingreso.
    *
    * Sin esto, un ingreso decía cuánto y cuándo pero no A DÓNDE, y con dos
@@ -1201,6 +1224,8 @@ export async function initCash(): Promise<void> {
       iban TEXT NOT NULL,
       /* Nombre corto para el desplegable: «BBVA nómina», «Caixa taller». */
       alias TEXT NOT NULL DEFAULT '',
+      /* Logotipo del banco, para que el resguardo se reconozca de un vistazo. */
+      logo_url TEXT,
       activa BOOLEAN NOT NULL DEFAULT true,
       por_defecto BOOLEAN NOT NULL DEFAULT false,
       orden INTEGER NOT NULL DEFAULT 0,
@@ -1210,6 +1235,11 @@ export async function initCash(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS cash_bank_accounts_empresa_idx
       ON cash_bank_accounts(empresa_id, activa, orden);
+    ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS logo_url TEXT;
+    /* El banco del maestro, del que sale el logotipo. Se resuelve solo por
+       el código de entidad del IBAN. */
+    ALTER TABLE cash_bank_accounts
+      ADD COLUMN IF NOT EXISTS bank_id INTEGER REFERENCES cash_banks(id) ON DELETE SET NULL;
   `);
 
   /*

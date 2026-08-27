@@ -60,3 +60,21 @@ export function colaIban(texto: string): string {
   const iban = normalizarIban(texto);
   return iban.length <= 4 ? iban : `···${iban.slice(-4)}`;
 }
+
+/**
+ * Código de entidad de un IBAN español: las cuatro primeras cifras del BBAN.
+ *
+ * `ES91 2100 0418…` → `2100`, que es CaixaBank. Es lo que permite reconocer el
+ * banco solo con teclear la cuenta, sin que nadie tenga que elegirlo de una
+ * lista y sin que se equivoque al hacerlo.
+ *
+ * Solo tiene sentido en España: en otros países esas posiciones significan
+ * otra cosa, así que fuera de ES se devuelve null en vez de inventarse una
+ * correspondencia.
+ */
+export function entidadDeIban(texto: string): string | null {
+  const iban = normalizarIban(texto);
+  if (!iban.startsWith("ES") || iban.length !== 24) return null;
+  const entidad = iban.slice(4, 8);
+  return /^[0-9]{4}$/.test(entidad) ? entidad : null;
+}

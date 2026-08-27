@@ -33,6 +33,7 @@ import { MEDIDA_RECOMENDADA, PROPORCION_BOTON } from "../components/PaymentMetho
 import { euros, aCentimos } from "../utils/money";
 import type {
   Centro,
+  BancoConfig,
   CuentaBancariaConfig,
   Denominacion,
   FormaPagoConfig,
@@ -71,7 +72,9 @@ export default function Configuracion() {
         descripcion="Cajas físicas, secciones de negocio, formas de cobro y catálogo de denominaciones."
       />
       <Cajas />
+      <Bancos />
       <CuentasBancarias />
+      <CorreoCentral />
       <Secciones />
       <FormasPago />
       {puede("cash.denominations.configure") ? <Denominaciones /> : <DenominacionesSoloLectura />}
@@ -1563,6 +1566,197 @@ function CuentasBancarias() {
           ))}
         </tbody>
       </TableWrap>
+    </section>
+  );
+}
+
+// ── Maestro de bancos ──────────────────────────────────────────────────────
+
+/**
+ * Bancos con su código de entidad y su logotipo.
+ *
+ * El código son las cuatro cifras que trae el IBAN, así que al dar de alta una
+ * cuenta el banco se reconoce solo y hereda de aquí el logotipo, que sale en
+ * el resguardo. Los logotipos NO vienen puestos: son marcas de cada banco y no
+ * se distribuyen con la aplicación; se suben una vez y valen para todas las
+ * cuentas de esa entidad.
+ */
+function Bancos() {
+  const { puede } = useCash();
+  const [bancos, setBancos] = useState<BancoConfig[]>([]);
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const [soloConLogo, setSoloConLogo] = useState(false);
+
+  const editable = puede("cash.configure");
+
+  const cargar = useCallback(async () => {
+    try {
+      setBancos((await api.bancosMaestro()).bancos);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando los bancos");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function accion(fn: () => Promise<unknown>) {
+    setOcupado(true);
+    setError("");
+    try {
+      await fn();
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido guardar");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  // Son veintitantos: por defecto se enseñan los que ya tienen logotipo o
+  // cuentas, que son los que le importan a cada empresa.
+  const visibles = soloConLogo ? bancos : bancos.filter((b) => b.logoUrl || b.cuentas > 0);
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Bancos</h2>
+      <p className="text-[12px] text-slate-500">
+        El código son las cuatro cifras de entidad que trae el IBAN: al dar de alta una cuenta, el
+        banco se reconoce solo y de aquí saca el logotipo que sale en el resguardo. Sube el
+        logotipo una vez y lo usan todas las cuentas de esa entidad.
+      </p>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      <button
+        onClick={() => setSoloConLogo((v) => !v)}
+        className="text-[12px] text-sky-300 underline-offset-2 hover:underline"
+      >
+        {soloConLogo ? "Ver solo los que uso" : `Ver los ${bancos.length} bancos`}
+      </button>
+
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Logotipo</th>
+            <th className={thCls}>Banco</th>
+            <th className={thCls}>Código</th>
+            <th className={`${thCls} text-right`}>Cuentas</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visibles.length === 0 && (
+            <EmptyRow cols={4} text="Todavía no usas ningún banco. Pulsa arriba para verlos todos." />
+          )}
+          {visibles.map((b) => (
+            <tr key={b.id} className={b.activo ? "" : "opacity-60"}>
+              <td className={tdCls}>
+                <div className="flex items-center gap-2">
+                  {b.logoUrl ? (
+                    <img src={b.logoUrl} alt="" className="h-7 w-16 rounded bg-white/5 object-contain" />
+                  ) : (
+                    <span className="flex h-7 w-16 items-center justify-center rounded border border-dashed border-slate-600 text-[9px] text-slate-600">
+                      sin logo
+                    </span>
+                  )}
+                  {editable && (
+                    <label className={`${btnMini} cursor-pointer`} title="Subir el logotipo del banco">
+                      {b.logoUrl ? "Cambiar" : "Subir"}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        disabled={ocupado}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void accion(() => api.subirLogoBanco(b.id, f));
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+              </td>
+              <td className={tdCls}>
+                <span className="font-medium text-slate-100">{b.nombre}</span>
+              </td>
+              <td className={`${tdCls} font-mono text-[11px] tabular-nums text-slate-400`}>{b.codigo}</td>
+              <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{b.cuentas}</td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+    </section>
+  );
+}
+
+// ── Correo de la central ───────────────────────────────────────────────────
+
+/**
+ * A quién se le manda el resguardo de un ingreso.
+ *
+ * El taller ingresa y la central concilia: entre las dos cosas había un correo
+ * a mano con los adjuntos, que es el paso que se olvida cuando el día viene
+ * torcido. Sin esto relleno, el botón de enviar no puede hacer nada.
+ */
+function CorreoCentral() {
+  const { ajustes, puede, recargarConfiguracion } = useCash();
+  const [valor, setValor] = useState(ajustes.correoCentral ?? "");
+  const [error, setError] = useState("");
+  const [estado, setEstado] = useState<"listo" | "guardando" | "guardado">("listo");
+
+  const editable = puede("cash.configure");
+
+  async function guardar() {
+    setEstado("guardando");
+    setError("");
+    try {
+      await api.fijarAjuste("correo_central", valor.trim() || null);
+      await recargarConfiguracion();
+      setEstado("guardado");
+    } catch (e) {
+      setEstado("listo");
+      setError(e instanceof Error ? e.message : "No se ha podido guardar");
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Correo de la central
+      </h2>
+      <p className="text-[12px] text-slate-500">
+        A dónde se manda el resguardo de un ingreso con su comprobante adjunto. Admite varias
+        direcciones separadas por coma: la central suele ser administración y el jefe, y reenviar
+        el segundo a mano es justo lo que se olvida.
+      </p>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+        <label className="block flex-1">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Direcciones
+          </span>
+          <input
+            value={valor}
+            onChange={(e) => {
+              setValor(e.target.value);
+              setEstado("listo");
+            }}
+            placeholder="administracion@empresa.com, jefe@empresa.com"
+            disabled={!editable}
+            className={`${inputCls} w-full`}
+          />
+        </label>
+        {editable && (
+          <button onClick={() => void guardar()} disabled={estado === "guardando"} className={btnPrimary}>
+            {estado === "guardando" ? "Guardando…" : estado === "guardado" ? "Guardado" : "Guardar"}
+          </button>
+        )}
+      </div>
     </section>
   );
 }

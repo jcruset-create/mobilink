@@ -18,6 +18,7 @@ import type {
   DocumentoOperacion,
   EntregaDinero,
   FormaPagoConfig,
+  BancoConfig,
   CuentaBancariaConfig,
   IngresoBancario,
   PropuestaCanjeIngreso,
@@ -287,11 +288,24 @@ export const completarIngreso = (
     method: "PATCH",
   });
 
+export const bancosMaestro = () => pedir<{ bancos: BancoConfig[] }>(`/banks`);
+
+export const actualizarBanco = (id: number, cambios: { nombre?: string; activo?: boolean }) =>
+  // El method va DESPUÉS del spread: json() trae POST y lo pisaría.
+  pedir<{ banco: BancoConfig }>(`/banks/${id}`, { ...json(cambios), method: "PATCH" });
+
+export const subirLogoBanco = (id: number, fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("imagen", fichero);
+  return pedir<{ banco: BancoConfig }>(`/banks/${id}/logo`, { method: "POST", body: cuerpo });
+};
+
 export const cuentasBancarias = () =>
   pedir<{ cuentas: CuentaBancariaConfig[] }>(`/bank-accounts`);
 
 export const crearCuentaBancaria = (datos: {
-  banco: string;
+  /** Si se omite, sale del maestro por el código de entidad del IBAN. */
+  banco?: string;
   iban: string;
   alias?: string;
   porDefecto?: boolean;
@@ -312,6 +326,12 @@ export const actualizarCuentaBancaria = (
     ...json(cambios),
     method: "PATCH",
   });
+
+export const enviarResguardoALaCentral = (depositId: number) =>
+  pedir<{ destinatarios: string[]; adjuntos: string[] }>(
+    `/bank-deposits/${depositId}/email`,
+    { method: "POST" }
+  );
 
 export const documentosDeIngreso = (depositId: number) =>
   pedir<{ documentos: DocumentoOperacion[] }>(`/bank-deposits/${depositId}/documents`);
@@ -716,6 +736,10 @@ export const guardarConfigErp = (datos: {
 }) => pedir<{ config: Record<string, unknown> }>("/erp/config", { method: "PUT", body: JSON.stringify(datos) });
 
 // ── Ajustes del módulo ─────────────────────────────────────────────────────
+
+export const fijarAjuste = (clave: string, valor: string | null) =>
+  // El method va DESPUÉS del spread: json() trae POST y lo pisaría.
+  pedir<{ ajustes: Ajustes }>("/settings", { ...json({ clave, valor }), method: "PATCH" });
 
 /** Sube la imagen del botón «Mixto» y devuelve los ajustes ya actualizados. */
 export const subirImagenMixto = (fichero: File) => {

@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Landmark, Paperclip, PiggyBank, Undo2, Upload } from "lucide-react";
+import { Landmark, Mail, Paperclip, PiggyBank, Undo2, Upload } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import {
   Aviso,
@@ -568,6 +568,14 @@ function Historial({
                   })()}
                 </td>
                 <td className={tdCls} onClick={(e) => e.stopPropagation()}>
+                  {/*
+                    Enviar solo cuando el ingreso está confirmado en el banco:
+                    el correo dice «ya está ingresado», y mandarlo antes de
+                    volver del banco sería afirmar algo que aún no ha pasado.
+                  */}
+                  {gestiona && estadoIngreso(i) === "CONFIRMADO" && (
+                    <EnviarALaCentral ingreso={i} />
+                  )}
                   <BotonInforme
                     ruta={`/bank-deposits/${i.id}/report.pdf`}
                     nombre={`ingreso-${i.numero}`}
@@ -936,8 +944,21 @@ function DatosDelBanco({
           </select>
         </label>
         <label className="block">
-          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+          <span className="mb-1 flex items-center gap-2 text-[10px] font-semibold uppercase text-slate-400">
             Fecha real del ingreso
+            {/*
+              Casi siempre se confirma el mismo día que se vuelve del banco, y
+              teclear dd/mm/aaaa para poner hoy es el tipo de fricción que hace
+              que el campo se quede vacío.
+            */}
+            <button
+              type="button"
+              onClick={() => setFecha(new Date().toLocaleDateString("sv-SE"))}
+              className="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] font-bold normal-case text-slate-200 hover:bg-slate-600"
+              title="Poner la fecha de hoy"
+            >
+              Hoy
+            </button>
           </span>
           <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
         </label>
@@ -1054,6 +1075,54 @@ function ComprobantesDelIngreso({
           </label>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Manda el resguardo a la central, con el comprobante escaneado adjunto.
+ *
+ * El taller ingresa y la central concilia; entre las dos cosas había un correo
+ * a mano que es justo el paso que se olvida cuando el día viene torcido.
+ */
+function EnviarALaCentral({ ingreso }: { ingreso: IngresoBancario }) {
+  const [estado, setEstado] = useState<"listo" | "enviando" | "enviado">("listo");
+  const [error, setError] = useState("");
+
+  async function enviar() {
+    setEstado("enviando");
+    setError("");
+    try {
+      const r = await api.enviarResguardoALaCentral(ingreso.id);
+      setEstado("enviado");
+      // Quién lo ha recibido, no solo «enviado»: es lo que se comprueba
+      // cuando en la central dicen que no les ha llegado.
+      setError("");
+      setDestinos(r.destinatarios.join(", "));
+    } catch (e) {
+      setEstado("listo");
+      setError(e instanceof Error ? e.message : "No se ha podido enviar");
+    }
+  }
+
+  const [destinos, setDestinos] = useState("");
+
+  return (
+    <div className="inline-flex flex-col items-end">
+      <button
+        onClick={() => void enviar()}
+        disabled={estado !== "listo"}
+        title={
+          estado === "enviado"
+            ? `Enviado a ${destinos}`
+            : "Mandar el resguardo y el comprobante a la central"
+        }
+        className="mr-1 inline-flex items-center gap-1 rounded-lg bg-slate-700 px-2 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-600 disabled:opacity-50"
+      >
+        <Mail className="h-3.5 w-3.5" />
+        {estado === "enviando" ? "Enviando…" : estado === "enviado" ? "Enviado" : "Enviar"}
+      </button>
+      {error && <span className="mt-0.5 max-w-[220px] text-right text-[10px] text-rose-300">{error}</span>}
     </div>
   );
 }

@@ -100,6 +100,24 @@ export type IngresoBancario = {
 const fechaIso = (v: any): string | null =>
   v == null ? null : v instanceof Date ? v.toISOString().slice(0, 10) : String(v);
 
+/**
+ * Rellena banco e IBAN de una fila de ingreso.
+ *
+ * Las consultas que devuelven el ingreso son varias —crear, completar,
+ * anular— y todas tienen que traer la cuenta resuelta: la pantalla y el
+ * resguardo la pintan. Sin esto, cada una tenía que acordarse de su JOIN, y la
+ * que se olvidaba enseñaba «sin especificar» sobre un ingreso que sí la tenía.
+ */
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+async function conCuenta(fila: any): Promise<any> {
+  if (fila.banco !== undefined || fila.bank_account_id == null) return fila;
+  const { rows } = await pool.query(
+    `SELECT banco, iban FROM cash_bank_accounts WHERE id = $1`,
+    [fila.bank_account_id]
+  );
+  return { ...fila, banco: rows[0]?.banco ?? null, iban: rows[0]?.iban ?? null };
+}
+
 function aIngreso(r: any, cierres: CierreConciliado[], esUltimo: boolean): IngresoBancario {
   return {
     id: r.id,
@@ -479,7 +497,7 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
       },
     });
 
-    return aIngreso(creado[0], cierres, true);
+    return aIngreso(await conCuenta(creado[0]), cierres, true);
   });
 
   await registrarAuditoria({
@@ -619,12 +637,8 @@ export async function completarIngreso(
       ORDER BY s.fecha, s.id`,
     [e.depositId]
   );
-  const { rows: cta } = await pool.query(
-    `SELECT banco, iban FROM cash_bank_accounts WHERE id = $1`,
-    [rows[0].bank_account_id]
-  );
   return aIngreso(
-    { ...rows[0], banco: cta[0]?.banco ?? null, iban: cta[0]?.iban ?? null },
+    await conCuenta(rows[0]),
     lineas.map((l: any) => ({
       sessionId: l.session_id,
       fecha: fechaIso(l.fecha)!,
@@ -741,7 +755,7 @@ export async function anularIngreso(
     });
 
     return aIngreso(
-      actualizado[0],
+      await conCuenta(actualizado[0]),
       lineas.map((l: any) => ({
         sessionId: l.session_id,
         fecha: fechaIso(l.fecha)!,
@@ -861,8 +875,13 @@ export async function composicionDeIngreso(
   billetes: LineaDenominacion[];
   monedas: LineaDenominacion[];
 } | null> {
+  // Con los datos de la cuenta: el resguardo los imprime, y sin el JOIN salían
+  // como «sin especificar» aunque el ingreso sí tuviera cuenta apuntada.
   const { rows } = await pool.query(
-    `SELECT * FROM cash_bank_deposits WHERE id = $1 AND empresa_id = $2`,
+    `SELECT d.*, c.banco, c.iban
+       FROM cash_bank_deposits d
+       LEFT JOIN cash_bank_accounts c ON c.id = d.bank_account_id
+      WHERE d.id = $1 AND d.empresa_id = $2`,
     [depositId, empresaId]
   );
   if (rows.length === 0) return null;

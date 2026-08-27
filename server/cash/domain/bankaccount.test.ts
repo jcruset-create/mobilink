@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { colaIban, formatearIban, ibanValido, normalizarIban } from "./bankaccount.ts";
+import {
+  colaIban,
+  entidadDeIban,
+  formatearIban,
+  ibanValido,
+  normalizarIban,
+} from "./bankaccount.ts";
 
 describe("cuenta bancaria", () => {
   it("normaliza como se dicta, no como se teclea", () => {
@@ -35,5 +41,24 @@ describe("cuenta bancaria", () => {
     expect(formatearIban("ES9121000418450200051332")).toBe("ES91 2100 0418 4502 0005 1332");
     expect(colaIban("ES9121000418450200051332")).toBe("···1332");
     expect(colaIban("123")).toBe("123");
+  });
+});
+
+describe("entidad del IBAN", () => {
+  it("saca el código de entidad de un IBAN español", () => {
+    // Es lo que permite reconocer el banco sin que nadie lo elija a mano.
+    expect(entidadDeIban("ES91 2100 0418 4502 0005 1332")).toBe("2100");
+    expect(entidadDeIban("ES9121000418450200051332")).toBe("2100");
+  });
+
+  it("fuera de España no se inventa nada", () => {
+    // Esas posiciones significan otra cosa en cada país.
+    expect(entidadDeIban("DE89 3704 0044 0532 0130 00")).toBeNull();
+    expect(entidadDeIban("PT50 0002 0123 1234 5678 9015 4")).toBeNull();
+  });
+
+  it("un IBAN incompleto no da entidad", () => {
+    expect(entidadDeIban("ES91 2100")).toBeNull();
+    expect(entidadDeIban("")).toBeNull();
   });
 });

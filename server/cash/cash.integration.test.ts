@@ -5070,3 +5070,56 @@ describe.runIf(RUN)("cuentas bancarias de la empresa", () => {
     ).rejects.toMatchObject({ codigo: "CUENTA_NO_ENCONTRADA" });
   });
 });
+
+describe.runIf(RUN)("maestro de bancos", () => {
+  /** IBAN válido de una entidad concreta, distinto en cada ejecución. */
+  function ibanDe(entidad: string): string {
+    const bban = `${entidad}${String(process.hrtime.bigint()).slice(-16).padStart(16, "0")}`;
+    let resto = 0;
+    for (const c of `${bban}ES00`) {
+      const v = c >= "A" ? String(c.charCodeAt(0) - 55) : c;
+      for (const d of v) resto = (resto * 10 + Number(d)) % 97;
+    }
+    return `ES${String(98 - resto).padStart(2, "0")}${bban}`;
+  }
+
+  it("se siembra solo, con los códigos de entidad reales", async () => {
+    const bancos = await config.listarBancos(EMPRESA);
+    const caixa = bancos.find((b) => b.codigo === "2100");
+    expect(caixa?.nombre).toContain("CaixaBank");
+    expect(bancos.find((b) => b.codigo === "0182")?.nombre).toBe("BBVA");
+  });
+
+  it("una cuenta reconoce su banco por el IBAN, sin que nadie lo elija", async () => {
+    // Es lo que evita el error de colgar la cuenta del banco equivocado.
+    const cuenta = await config.crearCuenta(ctx, { iban: ibanDe("0182") });
+    expect(cuenta.banco).toBe("BBVA");
+  });
+
+  it("el nombre tecleado manda sobre el del maestro", async () => {
+    // Un banco puede tener nombre comercial propio para quien lo usa.
+    const cuenta = await config.crearCuenta(ctx, { banco: "BBVA nóminas", iban: ibanDe("0182") });
+    expect(cuenta.banco).toBe("BBVA nóminas");
+  });
+
+  it("un IBAN de entidad desconocida exige teclear el banco", async () => {
+    // 9999 no existe en el maestro: sin nombre no hay cuenta que valga.
+    await expect(config.crearCuenta(ctx, { iban: ibanDe("9999") })).rejects.toMatchObject({
+      codigo: "ENTRADA_NO_VALIDA",
+    });
+    const cuenta = await config.crearCuenta(ctx, { banco: "Banco raro", iban: ibanDe("9999") });
+    expect(cuenta.banco).toBe("Banco raro");
+  });
+
+  it("el logotipo del maestro llega a la cuenta sin copiarlo", async () => {
+    // Se sube una vez por banco y lo heredan todas sus cuentas: copiarlo
+    // dejaría cuentas con el logotipo viejo al cambiarlo.
+    const bancos = await config.listarBancos(EMPRESA);
+    const santander = bancos.find((b) => b.codigo === "0049")!;
+    await config.actualizarBanco(ctx, santander.id, { logoUrl: "https://ejemplo.test/s.png" });
+
+    const cuenta = await config.crearCuenta(ctx, { iban: ibanDe("0049") });
+    const lista = await config.listarCuentas(EMPRESA);
+    expect(lista.find((c) => c.id === cuenta.id)!.logoUrl).toBe("https://ejemplo.test/s.png");
+  });
+});
