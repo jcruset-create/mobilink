@@ -72,6 +72,11 @@ function ruta(handler: (req: Request, res: Response) => Promise<void>) {
   };
 }
 
+/** AAAA-MM-DD o nada. Un filtro mal escrito no debe tumbar la pantalla. */
+function fechaValida(v: unknown): string | null {
+  return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+}
+
 export function createCentralRouter(): Router {
   const r = Router();
   r.use(authenticate, requireModule("central"), cargarPermisosCentral);
@@ -129,6 +134,10 @@ export function createCentralRouter(): Router {
         ingresosEnRed(empresaId, {
           centroId: typeof q.centroId === "string" ? q.centroId : null,
           registerId: typeof q.registerId === "string" ? Number(q.registerId) : null,
+          // Solo se aceptan fechas con forma de fecha: lo demás se ignora en
+          // vez de llegar a la consulta y reventar con un error de PostgreSQL.
+          desde: fechaValida(q.desde),
+          hasta: fechaValida(q.hasta),
         }),
         pendienteDeIngresar(empresaId),
       ]);
