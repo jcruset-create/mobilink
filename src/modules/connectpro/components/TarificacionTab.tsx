@@ -101,6 +101,10 @@ const AVISOS: Record<string, string> = {
   MANUAL_OVERRIDE: "Importe ajustado a mano",
   WORKSHOP_HOLIDAY: "El taller estaba de festivo: su lado de compra se tarifica como festivo",
   WORKSHOP_KM_IMPLAUSIBLE: "Los kilómetros que anotó el taller parecen la lectura del cuentakilómetros: no se han cobrado kilómetros de más",
+  CONCEPT_NOT_CONFIRMED: "Hay conceptos previstos sin confirmar ni descartar: no se han cobrado",
+  MATERIAL_PRICE_NOT_FOUND: "Un material confirmado no tiene precio en la tarifa",
+  AMBIGUOUS_TIRE_PRICE: "Dos precios de neumático empatan: hay que desempatarlos en el catálogo",
+  MANUFACTURER_LIST_NOT_FOUND: "Descuento sobre baremo sin baremo del fabricante vigente",
 };
 
 const LADOS: Record<string, string> = { sale: "venta", purchase: "compra" };
@@ -253,6 +257,8 @@ export default function TarificacionTab({
           )}
         </div>
       )}
+
+      <Conceptos assistanceId={assistanceId} canOperate={canOperate} onChanged={onChanged} />
 
       <ConsultaNeumatico assistanceId={assistanceId} canOperate={canOperate} />
     </div>
@@ -561,6 +567,310 @@ function ConsultaNeumatico({ assistanceId, canOperate }: { assistanceId: number;
               Venta: {r.sale?.explanation ?? "sin tarifa"}. Compra: {r.purchase?.explanation ?? "sin tarifa"}.
             </p>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Conceptos: qué se montó de verdad (neumáticos, materiales).
+ *
+ * El ciclo es previsto → confirmado | no usado, y lo que sostiene cada línea
+ * de la factura es la FOTO de montaje: confirmar un neumático sin foto no
+ * existe, ni aquí ni en la APK. Al cierre solo se factura lo confirmado; lo
+ * previsto sin resolver sale como aviso y deja la tarifa en revisión manual.
+ *
+ * El operador puede hacer todo esto en nombre del taller: es el camino para
+ * los clientes de Assist, cuya foto llega por el puente del core.
+ */
+function Conceptos({ assistanceId, canOperate, onChanged }: {
+  assistanceId: number; canOperate: boolean; onChanged: () => void;
+}) {
+  type Concepto = {
+    id: number; kind: "TIRE" | "MATERIAL"; size: string | null; brand: string | null;
+    position: string; conceptCode: string | null; quantity: number;
+    status: "previsto" | "confirmado" | "no_usado"; statusReason: string | null;
+    plannedBy: string | null; confirmedBy: string | null; confirmedVia: string | null;
+    evidenceRef: string | null;
+  };
+  type Foto = { id: string; label: string; url: string; esImagen: boolean; origen: string };
+
+  const [lista, setLista] = useState<Concepto[]>([]);
+  const [fotos, setFotos] = useState<Foto[]>([]);
+  const [anadiendo, setAnadiendo] = useState(false);
+  const [confirmando, setConfirmando] = useState<Concepto | null>(null);
+  const [fotoElegida, setFotoElegida] = useState("");
+  const [form, setForm] = useState({ kind: "TIRE", size: "", brand: "", position: "ANY", conceptCode: "", quantity: "1" });
+  const [precioDe, setPrecioDe] = useState<Record<number, string>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const cargar = useCallback(() => {
+    boFetch<{ data: Concepto[] }>(`/pricing/${assistanceId}/concepts`)
+      .then((r) => setLista(r.data)).catch((e) => setError(e.message));
+    boFetch<{ files: Foto[] }>(`/assistances/${assistanceId}/lite`)
+      .then((r) => setFotos((r.files ?? []).filter((f) => f.esImagen))).catch(() => {});
+  }, [assistanceId]);
+  useEffect(cargar, [cargar]);
+
+  const llamar = async (fn: () => Promise<unknown>) => {
+    setBusy(true); setError(null);
+    try { await fn(); cargar(); onChanged(); }
+    catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const crear = (confirmar: boolean) => llamar(async () => {
+    await boFetch(`/pricing/${assistanceId}/concepts`, {
+      method: "POST",
+      body: {
+        kind: form.kind, size: form.size || null, brand: form.brand || null,
+        position: form.position, conceptCode: form.conceptCode || null,
+        quantity: Number(form.quantity) || 1,
+        confirmar, evidenceRef: confirmar ? fotoElegida || null : null,
+      },
+    });
+    setAnadiendo(false);
+    setForm({ kind: "TIRE", size: "", brand: "", position: "ANY", conceptCode: "", quantity: "1" });
+    setFotoElegida("");
+  });
+
+  const confirmar = () => confirmando && llamar(async () => {
+    await boFetch(`/pricing/${assistanceId}/concepts/${confirmando.id}`, {
+      method: "PATCH", body: { accion: "confirmar", evidenceRef: fotoElegida || null },
+    });
+    setConfirmando(null); setFotoElegida("");
+  });
+
+  const noUsado = (c: Concepto) => {
+    const motivo = window.prompt("¿Por qué no se montó? (se pudo reparar, se anuló el cambio…)");
+    if (!motivo) return;
+    void llamar(() => boFetch(`/pricing/${assistanceId}/concepts/${c.id}`, {
+      method: "PATCH", body: { accion: "no_usado", motivo },
+    }));
+  };
+
+  const cantidad = (c: Concepto) => {
+    const q = window.prompt("Cantidad", String(c.quantity));
+    if (!q) return;
+    void llamar(() => boFetch(`/pricing/${assistanceId}/concepts/${c.id}`, {
+      method: "PATCH", body: { accion: "cantidad", quantity: Number(q) },
+    }));
+  };
+
+  const retirar = (c: Concepto) => {
+    if (!window.confirm("Retirar este concepto de la lista. No se borra: queda en la auditoría. ¿Seguro?")) return;
+    void llamar(() => boFetch(`/pricing/${assistanceId}/concepts/${c.id}`, { method: "DELETE" }));
+  };
+
+  /** Lo que la tarifa le dará, para verlo ANTES de cerrar. */
+  const verPrecio = async (c: Concepto) => {
+    try {
+      const r = await boFetch<any>(`/pricing/${assistanceId}/tire`, {
+        method: "POST",
+        body: { medida: c.size, marca: c.brand, posicion: c.position, cantidad: c.quantity },
+      });
+      setPrecioDe((p) => ({
+        ...p,
+        [c.id]: r.sale.total != null
+          ? `venta ${r.sale.total} / compra ${r.purchase.total ?? "sin tarifa"} ${r.currency}`
+          : "sin precio en tarifa: saldría a revisión manual",
+      }));
+    } catch (e: any) { setError(e.message); }
+  };
+
+  const ESTADO_CONCEPTO: Record<string, { texto: string; clase: string }> = {
+    previsto: { texto: "Previsto", clase: "border-amber-500/40 text-amber-300" },
+    confirmado: { texto: "Confirmado", clase: "border-emerald-500/40 text-emerald-300" },
+    no_usado: { texto: "No usado", clase: "border-slate-600 text-slate-500" },
+  };
+
+  const foto = (ref: string | null) => fotos.find((f) => f.id === ref) ?? null;
+
+  return (
+    <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-4">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h4 className="text-[13px] font-semibold text-slate-200">Conceptos del servicio</h4>
+        {canOperate && !anadiendo && (
+          <Button variant="ghost" onClick={() => setAnadiendo(true)}>Añadir</Button>
+        )}
+      </div>
+      <p className="mb-3 text-[12px] text-slate-500">
+        Lo que se monta de verdad. Solo lo confirmado —con su foto de montaje— entra
+        en la tarifa de cierre; lo previsto sin resolver no se cobra y deja el cierre
+        en revisión manual.
+      </p>
+
+      {error && <ErrorBanner message={error} onClose={() => setError(null)} />}
+
+      {lista.length === 0 && !anadiendo ? (
+        <p className="text-[13px] text-slate-500">
+          Sin conceptos. Si el servicio incluye un cambio de neumático pactado,
+          añádelo como previsto para que el taller solo tenga que confirmarlo.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {lista.map((c) => (
+            <div key={c.id} className="rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2 text-[13px]">
+                <Badge className={ESTADO_CONCEPTO[c.status]?.clase ?? ""}>
+                  {ESTADO_CONCEPTO[c.status]?.texto ?? c.status}
+                </Badge>
+                <span className="font-medium text-slate-100">
+                  {c.kind === "TIRE"
+                    ? `${c.size}${c.brand ? ` · ${c.brand}` : ""}${c.position !== "ANY" ? ` · ${c.position}` : ""}`
+                    : c.conceptCode}
+                </span>
+                <span className="text-slate-400">×{c.quantity}</span>
+                {foto(c.evidenceRef) && (
+                  <a href={foto(c.evidenceRef)!.url} target="_blank" rel="noreferrer"
+                     className="text-cyan-300 hover:underline">foto ↗</a>
+                )}
+                {canOperate && (
+                  <span className="ml-auto flex gap-2">
+                    {c.kind === "TIRE" && (
+                      <button className="text-[12px] text-cyan-300 hover:underline" onClick={() => verPrecio(c)}>
+                        precio
+                      </button>
+                    )}
+                    {c.status === "previsto" && (
+                      <>
+                        <button className="text-[12px] text-emerald-300 hover:underline"
+                                onClick={() => { setConfirmando(c); setFotoElegida(""); }}>
+                          confirmar
+                        </button>
+                        <button className="text-[12px] text-amber-300 hover:underline" onClick={() => noUsado(c)}>
+                          no usado
+                        </button>
+                      </>
+                    )}
+                    <button className="text-[12px] text-slate-400 hover:underline" onClick={() => cantidad(c)}>
+                      cantidad
+                    </button>
+                    <button className="text-[12px] text-rose-300 hover:underline" onClick={() => retirar(c)}>
+                      retirar
+                    </button>
+                  </span>
+                )}
+              </div>
+              {precioDe[c.id] && <p className="mt-1 text-[12px] text-slate-400">{precioDe[c.id]}</p>}
+              <p className="mt-0.5 text-[12px] text-slate-500">
+                {c.status === "previsto" && c.plannedBy && `Previsto por ${c.plannedBy}.`}
+                {c.status === "confirmado" && c.confirmedBy &&
+                  ` Confirmado por ${c.confirmedBy}${c.confirmedVia === "panel" ? " desde el panel" : ""}.`}
+                {c.status === "no_usado" && c.statusReason && ` ${c.statusReason}.`}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {confirmando && (
+        <div className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-3 py-2">
+          <p className="mb-2 text-[13px] text-slate-200">
+            Confirmar {confirmando.size ?? confirmando.conceptCode}
+            {confirmando.kind === "TIRE" && " — hace falta la foto de montaje en el vehículo"}
+          </p>
+          {confirmando.kind === "TIRE" && (
+            fotos.length === 0 ? (
+              <p className="mb-2 text-[12px] text-amber-300">
+                Esta asistencia no tiene todavía ninguna foto. La sube el taller desde su
+                app (Lite o Assist); en cuanto llegue aparecerá aquí.
+              </p>
+            ) : (
+              <Select value={fotoElegida} onChange={(e) => setFotoElegida(e.target.value)}>
+                <option value="">Elige la foto de montaje…</option>
+                {fotos.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.label}{f.origen === "assist" ? " (técnico Assist)" : ""}
+                  </option>
+                ))}
+              </Select>
+            )
+          )}
+          <div className="mt-2 flex gap-2">
+            <Button onClick={confirmar} disabled={busy || (confirmando.kind === "TIRE" && !fotoElegida)}>
+              Confirmar
+            </Button>
+            <Button variant="ghost" onClick={() => setConfirmando(null)} disabled={busy}>Cancelar</Button>
+          </div>
+        </div>
+      )}
+
+      {anadiendo && (
+        <div className="mt-3 rounded-lg border border-slate-600 bg-slate-900/40 px-3 py-2">
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="block">
+              <span className="mb-1 block text-[11px] text-slate-500">Tipo</span>
+              <Select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+                <option value="TIRE">Neumático</option>
+                <option value="MATERIAL">Material</option>
+              </Select>
+            </label>
+            {form.kind === "TIRE" ? (
+              <>
+                <label className="block">
+                  <span className="mb-1 block text-[11px] text-slate-500">Medida</span>
+                  <Input value={form.size} placeholder="315/80R22.5"
+                         onChange={(e) => setForm({ ...form, size: e.target.value })} />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-[11px] text-slate-500">Marca</span>
+                  <Input value={form.brand} placeholder="Hankook"
+                         onChange={(e) => setForm({ ...form, brand: e.target.value })} />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-[11px] text-slate-500">Posición</span>
+                  <Select value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })}>
+                    <option value="ANY">Cualquiera</option>
+                    <option value="STEER">Dirección</option>
+                    <option value="DRIVE">Tracción</option>
+                    <option value="TRAILER">Remolque</option>
+                  </Select>
+                </label>
+              </>
+            ) : (
+              <label className="block">
+                <span className="mb-1 block text-[11px] text-slate-500">Código del material</span>
+                <Input value={form.conceptCode} placeholder="REPARACION"
+                       onChange={(e) => setForm({ ...form, conceptCode: e.target.value })} />
+              </label>
+            )}
+            <label className="block">
+              <span className="mb-1 block text-[11px] text-slate-500">Cantidad</span>
+              <Input value={form.quantity} className="w-16"
+                     onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
+            </label>
+          </div>
+
+          {form.kind === "TIRE" && fotos.length > 0 && (
+            <label className="mt-2 block">
+              <span className="mb-1 block text-[11px] text-slate-500">
+                Foto de montaje (solo para confirmarlo ya, en nombre del taller)
+              </span>
+              <Select value={fotoElegida} onChange={(e) => setFotoElegida(e.target.value)}>
+                <option value="">— sin confirmar: queda como previsto —</option>
+                {fotos.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.label}{f.origen === "assist" ? " (técnico Assist)" : ""}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          )}
+
+          <div className="mt-2 flex gap-2">
+            <Button onClick={() => crear(false)} disabled={busy}>Dejar previsto</Button>
+            <Button variant="ghost" disabled={busy || (form.kind === "TIRE" && !fotoElegida)}
+                    onClick={() => crear(true)}>
+              Confirmar ya
+            </Button>
+            <Button variant="ghost" onClick={() => setAnadiendo(false)} disabled={busy}>Cancelar</Button>
+          </div>
+          <p className="mt-1 text-[11px] text-slate-500">
+            El precio no se declara: lo pone el tarifario publicado al cerrar.
+          </p>
         </div>
       )}
     </div>

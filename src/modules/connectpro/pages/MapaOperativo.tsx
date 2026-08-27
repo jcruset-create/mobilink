@@ -55,7 +55,27 @@ type Busqueda = {
 type MapWorkshop = {
   id: number; name: string; latitude: number; longitude: number; radiusKm: number;
   connectStatus: string; currentScore: number; providerName: string | null;
+  companyType: string | null;
 };
+
+/**
+ * El color del taller en el mapa es el tipo de su empresa. No es adorno: dice
+ * de un vistazo a quién se le está cargando el trabajo, que no es lo mismo un
+ * taller del grupo que uno colaborador o uno externo.
+ *
+ * Se repinta la chincheta ENTERA, con el dibujo de la furgoneta y la llave,
+ * usando el PNG como máscara. Un contorno de color alrededor no se distinguía:
+ * a tamaño de mapa el ojo ve la chincheta, no su borde.
+ */
+export const TIPOS_EMPRESA: Record<string, { label: string; color: string }> = {
+  grupo: { label: "Del grupo", color: "#22c55e" },
+  colaboradora: { label: "Colaboradora", color: "#eab308" },
+  externa: { label: "Externa", color: "#f97316" },
+};
+const TIPO_POR_DEFECTO = TIPOS_EMPRESA.colaboradora;
+
+const colorEmpresa = (tipo: string | null) =>
+  (tipo && TIPOS_EMPRESA[tipo] ? TIPOS_EMPRESA[tipo] : TIPO_POR_DEFECTO).color;
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "#f59e0b", searching: "#38bdf8", awaiting_acceptance: "#e879f9",
@@ -190,7 +210,7 @@ function vehicleIcon(zoom: number, stale: boolean, label: string) {
 // para que las etiquetas no se solapen con el mapa alejado.
 const WORKSHOP_LABEL_MIN_ZOOM = 9;
 
-function workshopIcon(zoom: number, nombre: string) {
+function workshopIcon(zoom: number, nombre: string, color: string) {
   const f = zoomFactor(zoom);
   const s = Math.round(40 * f);
   const font = Math.max(8, Math.round(10 * f));
@@ -200,16 +220,17 @@ function workshopIcon(zoom: number, nombre: string) {
   const tipY = Math.round(s * 0.9);
   const texto = nombre.length > 20 ? `${nombre.slice(0, 19)}…` : nombre;
   const labelHtml = showLabel
-    ? `<div style="display:inline-block;background:rgba(15,23,42,.92);color:#22c55e;border:1px solid #22c55e;
+    ? `<div style="display:inline-block;background:rgba(15,23,42,.92);color:${color};border:1px solid ${color};
              font:900 ${font}px/1.5 system-ui;padding:1px 5px;border-radius:4px;
              margin-top:${Math.round(s * 0.06)}px;white-space:nowrap">${texto}</div>`
     : "";
   return L.divIcon({
     html: `
       <div style="text-align:center;width:${w}px">
-        <img src="/marker-taller.png" alt="" width="${s}" height="${s}"
-             style="display:block;margin:0 auto;width:${s}px;height:${s}px;max-width:none;
-             filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))" />
+        <div style="width:${s}px;height:${s}px;margin:0 auto;background-color:${color};
+             -webkit-mask:url(/marker-taller.png) center/contain no-repeat;
+             mask:url(/marker-taller.png) center/contain no-repeat;
+             filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))"></div>
         ${labelHtml}
       </div>`,
     className: "",
@@ -486,7 +507,7 @@ export default function MapaOperativo() {
             <span key={`w${w.id}`}>
               <Marker
                 position={[w.latitude, w.longitude]}
-                icon={workshopIcon(zoom, w.name)}
+                icon={workshopIcon(zoom, w.name, colorEmpresa(w.companyType))}
                 draggable={adjustMode}
                 eventHandlers={adjustMode ? {
                   dragend: (e) => {
@@ -574,6 +595,23 @@ export default function MapaOperativo() {
             <span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: color }} />
             {ASSISTANCE_STATUS_LABELS[status] ?? status}
           </Badge>
+        ))}
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-3 text-[12px] text-slate-400">
+        <span className="text-slate-500">Talleres:</span>
+        {Object.entries(TIPOS_EMPRESA).map(([tipo, { label, color }]) => (
+          <span key={tipo} className="flex items-center gap-1.5">
+            <span
+              className="inline-block h-4 w-4"
+              style={{
+                backgroundColor: color,
+                WebkitMask: "url(/marker-taller.png) center/contain no-repeat",
+                mask: "url(/marker-taller.png) center/contain no-repeat",
+              }}
+            />
+            {label}
+          </span>
         ))}
       </div>
     </div>

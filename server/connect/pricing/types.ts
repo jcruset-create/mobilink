@@ -36,7 +36,9 @@ export type CodigoAviso =
   | "EXTRA_BASE_MISSING"
   | "MANUAL_OVERRIDE"
   | "WORKSHOP_HOLIDAY"          // el taller está de festivo: su compra sube
-  | "WORKSHOP_KM_IMPLAUSIBLE";  // los km anotados parecen el cuentakilómetros
+  | "WORKSHOP_KM_IMPLAUSIBLE"   // los km anotados parecen el cuentakilómetros
+  | "CONCEPT_NOT_CONFIRMED"     // previsto sin confirmar ni descartar al cerrar
+  | "MATERIAL_PRICE_NOT_FOUND"; // material confirmado sin precio en la tarifa
 
 export interface Aviso {
   codigo: CodigoAviso;

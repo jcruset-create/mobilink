@@ -29,11 +29,20 @@ class _FinishScreenState extends State<FinishScreen> {
   final _nombreCtrl = TextEditingController();
   final _dniCtrl = TextEditingController();
   final _obsCtrl = TextEditingController();
+  final _kmCtrl = TextEditingController();
 
   File? _photoReparacion;
   File? _photoOr;
   bool _uploading = false;
   String? _uploadingLabel;
+
+  /// Kilómetros DEL SERVICIO (no el cuentakilómetros): son los que la
+  /// facturación usa para cobrar los km de más. Por encima de 2.000 se
+  /// rechaza aquí mismo, que es donde el técnico puede corregirlo.
+  int? get _km {
+    final v = int.tryParse(_kmCtrl.text.trim());
+    return v != null && v >= 0 && v <= 2000 ? v : null;
+  }
 
   bool get _canConfirm =>
       _photoReparacion != null &&
@@ -41,13 +50,15 @@ class _FinishScreenState extends State<FinishScreen> {
       !_sigController.isEmpty &&
       _nombreCtrl.text.trim().isNotEmpty &&
       _dniCtrl.text.trim().isNotEmpty &&
-      _obsCtrl.text.trim().isNotEmpty;
+      _obsCtrl.text.trim().isNotEmpty &&
+      _km != null;
 
   @override
   void dispose() {
     _sigController.dispose();
     _nombreCtrl.dispose();
     _dniCtrl.dispose();
+    _kmCtrl.dispose();
     _obsCtrl.dispose();
     super.dispose();
   }
@@ -117,7 +128,9 @@ class _FinishScreenState extends State<FinishScreen> {
       );
 
       if (!mounted) return;
-      Navigator.of(context).pop(true);
+      // El que abre esta pantalla manda los km junto al cambio de estado:
+      // así viajan en la misma acción idempotente que el 'finalizada'.
+      Navigator.of(context).pop(_km);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -185,6 +198,25 @@ class _FinishScreenState extends State<FinishScreen> {
                     onChanged: (_) => setState(() {}),
                   ),
                   const SizedBox(height: 20),
+                  _label('Kilómetros recorridos *'),
+                  const SizedBox(height: 4),
+                  const Text('Del servicio, no del cuentakilómetros',
+                      style: TextStyle(color: Colors.white38, fontSize: 12)),
+                  const SizedBox(height: 8),
+                  _TextField(
+                    controller: _kmCtrl,
+                    hint: 'p. ej. 130',
+                    icon: Icons.route,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  if (_kmCtrl.text.trim().isNotEmpty && _km == null)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 6),
+                      child: Text('Entre 0 y 2.000. ¿Seguro que no es la lectura del cuentakilómetros?',
+                          style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
+                    ),
+                  const SizedBox(height: 20),
                   _label('Trabajos realizados *'),
                   const SizedBox(height: 8),
                   TextField(
@@ -249,7 +281,7 @@ class _FinishScreenState extends State<FinishScreen> {
                   ),
                   const SizedBox(height: 20),
                   ListenableBuilder(
-                    listenable: Listenable.merge([_nombreCtrl, _dniCtrl, _sigController]),
+                    listenable: Listenable.merge([_nombreCtrl, _dniCtrl, _kmCtrl, _sigController]),
                     builder: (_, __) => SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
@@ -333,12 +365,14 @@ class _TextField extends StatelessWidget {
   final String hint;
   final IconData icon;
   final ValueChanged<String> onChanged;
+  final TextInputType? keyboardType;
 
   const _TextField({
     required this.controller,
     required this.hint,
     required this.icon,
     required this.onChanged,
+    this.keyboardType,
   });
 
   @override
@@ -346,6 +380,7 @@ class _TextField extends StatelessWidget {
     return TextField(
       controller: controller,
       onChanged: onChanged,
+      keyboardType: keyboardType,
       style: const TextStyle(color: Colors.black87, fontSize: 15),
       decoration: InputDecoration(
         hintText: hint,

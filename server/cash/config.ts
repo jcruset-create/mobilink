@@ -18,6 +18,8 @@ import type { Denominacion } from "./domain/denominations.ts";
 import { FORMAS_PAGO_SEMILLA } from "./domain/operations.ts";
 import { ErrorCaja, sesionAbierta } from "./repository.ts";
 import { nombreDeCentro } from "./hierarchy.ts";
+import { entidadDeIban, ibanValido, normalizarIban } from "./domain/bankaccount.ts";
+import { BANCOS_SEMILLA, logoDeSemilla } from "./domain/banks.ts";
 import {
   CODIGO_MAX,
   codigoValido,
@@ -792,6 +794,15 @@ export const AJUSTES = {
    * tiene el usuario que dejó la pantalla puesta.
    */
   REAUTH_ACTIVO: "reauth_activo",
+  /**
+   * Correo de la central al que se manda el resguardo de un ingreso, con
+   * el comprobante del banco adjunto.
+   *
+   * Admite varias direcciones separadas por coma: la central suele ser
+   * administración y el jefe, y obligar a reenviar a mano el segundo es
+   * justo el paso que se olvida.
+   */
+  CORREO_CENTRAL: "correo_central",
 } as const;
 
 export type ClaveAjuste = (typeof AJUSTES)[keyof typeof AJUSTES];
@@ -804,6 +815,8 @@ export type Ajustes = {
   sodActivo: boolean;
   /** Reautenticación exigida para anular y reabrir. */
   reauthActivo: boolean;
+  /** Destinatarios del resguardo de ingreso. Vacío = no se puede enviar. */
+  correoCentral: string | null;
 };
 
 /** Todos los ajustes de la empresa, ya con la forma que espera el frontend. */
@@ -817,6 +830,7 @@ export async function ajustes(empresaId: string): Promise<Ajustes> {
     mixtoImagenUrl: mapa.get(AJUSTES.MIXTO_IMAGEN) ?? null,
     sodActivo: mapa.get(AJUSTES.SOD_ACTIVO) === "1",
     reauthActivo: mapa.get(AJUSTES.REAUTH_ACTIVO) === "1",
+    correoCentral: mapa.get(AJUSTES.CORREO_CENTRAL) ?? null,
   };
 }
 
@@ -828,6 +842,25 @@ export async function fijarAjuste(
 ): Promise<Ajustes> {
   if (!CLAVES_VALIDAS.includes(clave)) {
     throw new ErrorCaja("AJUSTE_DESCONOCIDO", `El ajuste «${clave}» no existe.`, 400);
+  }
+
+  /*
+   * El correo se comprueba al guardarlo, no al enviarlo. Un destinatario
+   * mal escrito no se descubre hasta que en la central echan en falta un
+   * resguardo, y para entonces han pasado semanas.
+   */
+  if (clave === AJUSTES.CORREO_CENTRAL && valor !== null && valor.trim() !== "") {
+    const malos = valor
+      .split(",")
+      .map((d) => d.trim())
+      .filter((d) => d !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(d));
+    if (malos.length > 0) {
+      throw new ErrorCaja(
+        "CORREO_NO_VALIDO",
+        `Esto no es una dirección de correo: ${malos.join(", ")}.`,
+        400
+      );
+    }
   }
 
   if (valor === null) {
@@ -1080,6 +1113,428 @@ export async function seccionPorDefecto(empresaId: string): Promise<number | nul
   const { rows } = await pool.query<{ id: number }>(
     `SELECT id FROM cash_sections WHERE empresa_id = $1 AND por_defecto AND activa LIMIT 1`,
     [empresaId]
+  );
+  return rows[0]?.id ?? null;
+}
+
+// ── Cuentas bancarias ──────────────────────────────────────────────────────
+
+export type CuentaBancariaConfig = {
+  id: number;
+  banco: string;
+  iban: string;
+  alias: string;
+  /** Logotipo del banco; null = solo el nombre. */
+  logoUrl: string | null;
+  /** true si el logotipo es uno subido a mano y se puede quitar. */
+  logoPropio: boolean;
+  activa: boolean;
+  porDefecto: boolean;
+  orden: number;
+  /** Ingresos que ya apuntan a ella. Una cuenta con usos no se borra. */
+  usos: number;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function aCuenta(r: any): CuentaBancariaConfig {
+  return {
+    id: r.id,
+    banco: r.banco,
+    iban: r.iban,
+    alias: r.alias ?? "",
+    /*
+     * El logotipo sale, por este orden, del que se subió a la cuenta, del que
+     * se subió al banco y del que trae la aplicación. Así quitar uno subido
+     * deja el de debajo, en vez de dejar el resguardo sin nada.
+     */
+    logoUrl: r.logo_url ?? logoDeSemilla(r.codigo_entidad) ?? null,
+    logoPropio: r.logo_propio != null,
+    activa: r.activa,
+    porDefecto: r.por_defecto,
+    orden: r.orden,
+    usos: Number(r.usos ?? 0),
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/*
+ * El SELECT de una cuenta, en un sitio solo.
+ *
+ * Estaba repetido y cada copia se olvidaba de algo: sin el JOIN el resguardo
+ * salía sin banco, y sin el código de entidad no hay forma de saber qué
+ * logotipo de los que trae la aplicación le toca.
+ */
+const SELECT_CUENTA = `
+    SELECT c.*,
+           c.logo_url AS logo_propio,
+           b.codigo AS codigo_entidad,
+           COALESCE(c.logo_url, b.logo_url) AS logo_url,
+           (SELECT COUNT(*) FROM cash_bank_deposits d WHERE d.bank_account_id = c.id) AS usos
+      FROM cash_bank_accounts c
+      LEFT JOIN cash_banks b ON b.id = c.bank_id`;
+
+/** Relee una cuenta con todo lo que le cuelga, para devolverla tras tocarla. */
+async function refrescarCuenta(empresaId: string, id: number): Promise<CuentaBancariaConfig> {
+  const { rows } = await pool.query(`${SELECT_CUENTA} WHERE c.empresa_id = $1 AND c.id = $2`, [
+    empresaId,
+    id,
+  ]);
+  return aCuenta(rows[0]);
+}
+
+export async function listarCuentas(empresaId: string): Promise<CuentaBancariaConfig[]> {
+  const { rows } = await pool.query(
+    `${SELECT_CUENTA}
+      WHERE c.empresa_id = $1
+      ORDER BY c.activa DESC, c.por_defecto DESC, c.orden, c.banco`,
+    [empresaId]
+  );
+  return rows.map(aCuenta);
+}
+
+/** Solo las que deben salir en el desplegable del ingreso. */
+export async function cuentasActivas(empresaId: string): Promise<CuentaBancariaConfig[]> {
+  return (await listarCuentas(empresaId)).filter((c) => c.activa);
+}
+
+/**
+ * Comprueba banco e IBAN, con el IBAN normalizado.
+ *
+ * El IBAN se valida con su dígito de control: un número bailado tiene la misma
+ * pinta que el bueno y solo el módulo 97 lo delata. Un ingreso apuntado a una
+ * cuenta que no existe no se concilia contra ningún extracto.
+ */
+function exigirDatos(banco: string, iban: string): { banco: string; iban: string } {
+  const nombre = (banco ?? "").trim();
+  if (!nombre) throw new ErrorCaja("ENTRADA_NO_VALIDA", "La cuenta necesita el nombre del banco.", 400);
+
+  const normalizado = normalizarIban(iban ?? "");
+  if (!normalizado) throw new ErrorCaja("ENTRADA_NO_VALIDA", "La cuenta necesita un IBAN.", 400);
+  if (!ibanValido(normalizado)) {
+    throw new ErrorCaja(
+      "IBAN_NO_VALIDO",
+      `«${iban}» no es un IBAN válido: revisa que no falte o sobre algún dígito.`,
+      400
+    );
+  }
+  return { banco: nombre, iban: normalizado };
+}
+
+export async function crearCuenta(
+  ctx: Contexto,
+  datos: { banco?: string; iban: string; alias?: string; porDefecto?: boolean; orden?: number }
+): Promise<CuentaBancariaConfig> {
+  /*
+   * El nombre del banco puede venir vacío: si el IBAN es de una entidad
+   * conocida, se coge del maestro. Teclearlo a mano solo hace falta para un
+   * banco que no esté en la lista.
+   */
+  const nombrePropuesto =
+    (datos.banco ?? "").trim() || (await nombreDelMaestro(ctx.empresaId, datos.iban));
+  const { banco, iban } = exigirDatos(nombrePropuesto, datos.iban);
+
+  const { rows: repes } = await pool.query(
+    `SELECT id, activa FROM cash_bank_accounts WHERE empresa_id = $1 AND iban = $2`,
+    [ctx.empresaId, iban]
+  );
+  if (repes.length > 0) {
+    throw new ErrorCaja(
+      "CUENTA_REPETIDA",
+      repes[0].activa
+        ? "Esa cuenta ya está dada de alta."
+        : "Esa cuenta ya existe pero está dada de baja. Reactívala en vez de crearla otra vez.",
+      409
+    );
+  }
+
+  // La primera cuenta de la empresa es la de por defecto: si no, el
+  // desplegable saldría sin nada preseleccionado el primer día.
+  const { rows: cuantas } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM cash_bank_accounts WHERE empresa_id = $1`,
+    [ctx.empresaId]
+  );
+  const porDefecto = datos.porDefecto ?? cuantas[0].n === 0;
+  if (porDefecto) await quitarPorDefecto(ctx.empresaId);
+
+  // El banco se reconoce solo por las cuatro cifras de entidad del IBAN: nadie
+  // tiene que elegirlo de una lista, y así no puede equivocarse al hacerlo.
+  const bankId = await bancoDeIban(ctx.empresaId, iban);
+
+  const ahora = Date.now();
+  const { rows } = await pool.query(
+    `INSERT INTO cash_bank_accounts
+       (empresa_id, banco, iban, alias, por_defecto, orden, created_at_ms, updated_at_ms, bank_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8)
+     RETURNING *, 0 AS usos`,
+    [ctx.empresaId, banco, iban, (datos.alias ?? "").trim(), porDefecto, datos.orden ?? 0, ahora, bankId]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.bank_account.create",
+    entidad: "cash_bank_accounts",
+    entidadId: String(rows[0].id),
+    detalle: { banco, iban, porDefecto },
+    ip: ctx.ip,
+  });
+
+  // Releída, que el INSERT no trae ni el banco del maestro ni su logotipo.
+  return refrescarCuenta(ctx.empresaId, rows[0].id);
+}
+
+/** Deja sin marca la que la tuviera: el índice único rechazaría dos. */
+async function quitarPorDefecto(empresaId: string): Promise<void> {
+  await pool.query(
+    `UPDATE cash_bank_accounts SET por_defecto = false, updated_at_ms = $2
+      WHERE empresa_id = $1 AND por_defecto`,
+    [empresaId, Date.now()]
+  );
+}
+
+export async function actualizarCuenta(
+  ctx: Contexto,
+  id: number,
+  cambios: {
+    banco?: string;
+    iban?: string;
+    alias?: string;
+    logoUrl?: string | null;
+    activa?: boolean;
+    porDefecto?: boolean;
+    orden?: number;
+  }
+): Promise<CuentaBancariaConfig> {
+  const { rows: previas } = await pool.query(
+    `SELECT * FROM cash_bank_accounts WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  const antes = previas[0];
+  if (!antes) throw new ErrorCaja("CUENTA_NO_ENCONTRADA", "La cuenta no existe.", 404);
+
+  const { banco, iban } = exigirDatos(
+    cambios.banco ?? antes.banco,
+    cambios.iban ?? antes.iban
+  );
+  const activa = cambios.activa ?? antes.activa;
+  const porDefecto = cambios.porDefecto ?? antes.por_defecto;
+
+  /*
+   * La cuenta por defecto no se da de baja: es la que se preselecciona al
+   * ingresar, y dejarla de baja pero marcada haría que el desplegable
+   * propusiera una cuenta cerrada.
+   */
+  if (!activa && porDefecto) {
+    throw new ErrorCaja(
+      "CUENTA_POR_DEFECTO",
+      "La cuenta por defecto no se puede dar de baja. Marca antes otra como predeterminada.",
+      409
+    );
+  }
+
+  if (iban !== antes.iban) {
+    const { rows: choca } = await pool.query(
+      `SELECT banco FROM cash_bank_accounts WHERE empresa_id = $1 AND iban = $2 AND id <> $3`,
+      [ctx.empresaId, iban, id]
+    );
+    if (choca.length > 0) {
+      throw new ErrorCaja("CUENTA_REPETIDA", `Ese IBAN ya es de «${choca[0].banco}».`, 409);
+    }
+  }
+
+  if (porDefecto && !antes.por_defecto) await quitarPorDefecto(ctx.empresaId);
+
+  const { rows } = await pool.query(
+    `UPDATE cash_bank_accounts
+        SET banco = $3, iban = $4, alias = $5, activa = $6, por_defecto = $7,
+            orden = $8, updated_at_ms = $9,
+            logo_url = CASE WHEN $10 THEN $11 ELSE logo_url END
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING *, (SELECT COUNT(*) FROM cash_bank_deposits d WHERE d.bank_account_id = $1) AS usos`,
+    [
+      id,
+      ctx.empresaId,
+      banco,
+      iban,
+      cambios.alias === undefined ? antes.alias : cambios.alias.trim(),
+      activa,
+      porDefecto,
+      cambios.orden ?? antes.orden,
+      Date.now(),
+      cambios.logoUrl !== undefined,
+      cambios.logoUrl ?? null,
+    ]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja("NO_ENCONTRADA", "Esa cuenta bancaria no existe.", 404);
+  }
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.bank_account.update",
+    entidad: "cash_bank_accounts",
+    entidadId: String(id),
+    detalle: {
+      antes: { banco: antes.banco, iban: antes.iban, activa: antes.activa, porDefecto: antes.por_defecto },
+      despues: { banco, iban, activa, porDefecto },
+    },
+    ip: ctx.ip,
+  });
+
+  return refrescarCuenta(ctx.empresaId, id);
+}
+
+// ── Maestro de bancos ──────────────────────────────────────────────────────
+
+export type BancoConfig = {
+  id: number;
+  /** Cuatro cifras de entidad del IBAN: es como se reconoce el banco. */
+  codigo: string;
+  nombre: string;
+  logoUrl: string | null;
+  /** true si el logotipo es uno subido a mano y se puede quitar. */
+  logoPropio: boolean;
+  activo: boolean;
+  /** Cuentas dadas de alta con este banco. */
+  cuentas: number;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function aBanco(r: any): BancoConfig {
+  return {
+    id: r.id,
+    codigo: r.codigo,
+    nombre: r.nombre,
+    // El subido manda; debajo, el que trae la aplicación para esa entidad.
+    logoUrl: r.logo_url ?? logoDeSemilla(r.codigo) ?? null,
+    logoPropio: r.logo_url != null,
+    activo: r.activo,
+    cuentas: Number(r.cuentas ?? 0),
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * Siembra el maestro la primera vez que se consulta.
+ *
+ * Solo rellena lo que falta: un banco que el usuario haya renombrado o al que
+ * haya subido su logotipo no se pisa nunca.
+ */
+async function asegurarBancos(empresaId: string): Promise<void> {
+  const ahora = Date.now();
+  for (const b of BANCOS_SEMILLA) {
+    await pool.query(
+      `INSERT INTO cash_banks (empresa_id, codigo, nombre, created_at_ms, updated_at_ms)
+       VALUES ($1,$2,$3,$4,$4)
+       ON CONFLICT (empresa_id, codigo) DO NOTHING`,
+      [empresaId, b.codigo, b.nombre, ahora]
+    );
+  }
+
+  /*
+   * Y engancha al maestro las cuentas que se dieron de alta antes de que
+   * existiera.
+   *
+   * También lo hace la migración de arranque, pero la siembra es PEREZOSA: una
+   * empresa que todavía no había tocado el maestro no tenía bancos con los que
+   * enlazar cuando el servidor arrancó, y sus cuentas se habrían quedado sin
+   * logotipo hasta el siguiente reinicio. Aquí se cubre ese caso.
+   *
+   * Solo toca las que están a NULL, así que no pisa nada elegido a mano.
+   */
+  await pool.query(
+    `UPDATE cash_bank_accounts c
+        SET bank_id = b.id
+       FROM cash_banks b
+      WHERE c.empresa_id = $1
+        AND c.bank_id IS NULL
+        AND b.empresa_id = c.empresa_id
+        AND c.iban LIKE 'ES%'
+        AND length(c.iban) = 24
+        AND b.codigo = substring(c.iban from 5 for 4)`,
+    [empresaId]
+  );
+}
+
+export async function listarBancos(empresaId: string): Promise<BancoConfig[]> {
+  await asegurarBancos(empresaId);
+  const { rows } = await pool.query(
+    `SELECT b.*, (SELECT COUNT(*) FROM cash_bank_accounts c WHERE c.bank_id = b.id) AS cuentas
+       FROM cash_banks b
+      WHERE b.empresa_id = $1
+      ORDER BY b.activo DESC, b.nombre`,
+    [empresaId]
+  );
+  return rows.map(aBanco);
+}
+
+export async function actualizarBanco(
+  ctx: Contexto,
+  id: number,
+  cambios: { nombre?: string; logoUrl?: string | null; activo?: boolean }
+): Promise<BancoConfig> {
+  const { rows: previos } = await pool.query(
+    `SELECT * FROM cash_banks WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  if (previos.length === 0) throw new ErrorCaja("BANCO_NO_ENCONTRADO", "El banco no existe.", 404);
+
+  const nombre = cambios.nombre === undefined ? previos[0].nombre : cambios.nombre.trim();
+  if (!nombre) throw new ErrorCaja("ENTRADA_NO_VALIDA", "El banco necesita un nombre.", 400);
+
+  const { rows } = await pool.query(
+    `UPDATE cash_banks
+        SET nombre = $3, activo = $4, updated_at_ms = $5,
+            logo_url = CASE WHEN $6 THEN $7 ELSE logo_url END
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING *, (SELECT COUNT(*) FROM cash_bank_accounts c WHERE c.bank_id = $1) AS cuentas`,
+    [
+      id,
+      ctx.empresaId,
+      nombre,
+      cambios.activo ?? previos[0].activo,
+      Date.now(),
+      cambios.logoUrl !== undefined,
+      cambios.logoUrl ?? null,
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.bank.update",
+    entidad: "cash_banks",
+    entidadId: String(id),
+    detalle: { nombre, logoCambiado: cambios.logoUrl !== undefined },
+    ip: ctx.ip,
+  });
+
+  return aBanco(rows[0]);
+}
+
+/**
+ * El banco del maestro que corresponde a un IBAN, por su código de entidad.
+ *
+ * Devuelve null si el IBAN no es español o si esa entidad no está en el
+ * maestro: en ambos casos la cuenta se queda sin banco y sin logotipo, que es
+ * preferible a colgarla del banco equivocado.
+ */
+/** El nombre del maestro para ese IBAN, o cadena vacía si no se reconoce. */
+async function nombreDelMaestro(empresaId: string, iban: string): Promise<string> {
+  const id = await bancoDeIban(empresaId, iban);
+  if (id == null) return "";
+  const { rows } = await pool.query(`SELECT nombre FROM cash_banks WHERE id = $1`, [id]);
+  return rows[0]?.nombre ?? "";
+}
+
+export async function bancoDeIban(empresaId: string, iban: string): Promise<number | null> {
+  const entidad = entidadDeIban(iban);
+  if (!entidad) return null;
+  await asegurarBancos(empresaId);
+  const { rows } = await pool.query(
+    `SELECT id FROM cash_banks WHERE empresa_id = $1 AND codigo = $2`,
+    [empresaId, entidad]
   );
   return rows[0]?.id ?? null;
 }

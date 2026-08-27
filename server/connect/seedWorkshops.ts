@@ -31,7 +31,10 @@ async function providerCompanyId(name: string, now: number): Promise<number> {
  * que usan los ETAs). Devuelve null si no hay clave o si no se encuentra: sin
  * coordenadas el taller no se da de alta, porque inventarlas sería peor.
  */
-async function geocodificar(w: SeedWorkshop): Promise<{ lat: number; lng: number } | null> {
+export async function geocodificar(w: {
+  address?: string | null; postalCode?: string | null;
+  city?: string | null; province?: string | null;
+}): Promise<{ lat: number; lng: number } | null> {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
   if (!apiKey) return null;
 

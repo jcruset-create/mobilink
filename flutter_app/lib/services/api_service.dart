@@ -134,7 +134,11 @@ class ApiService {
               .post(Uri.parse(url), headers: await _authHeaders(),
                   body: jsonEncode(type == 'en_camino'
                       ? {'clientActionId': actionId}
-                      : {'status': item['status'], 'clientActionId': actionId}))
+                      : {
+                          'status': item['status'],
+                          'clientActionId': actionId,
+                          if (item['serviceKm'] != null) 'serviceKm': item['serviceKm'],
+                        }))
               .timeout(const Duration(seconds: 12));
           ok = res.statusCode == 200;
         } else if (type == 'upload_file') {
@@ -266,14 +270,21 @@ class ApiService {
     );
   }
 
-  Future<Map<String, dynamic>> updateStatus(int id, String status) async {
+  Future<Map<String, dynamic>> updateStatus(int id, String status, {int? serviceKm}) async {
     final actionId = '${DateTime.now().millisecondsSinceEpoch}-$id-$status';
     try {
       final res = await http
           .post(
             Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/status'),
             headers: await _authHeaders(),
-            body: jsonEncode({'status': status, 'clientActionId': actionId}),
+            body: jsonEncode({
+              'status': status,
+              'clientActionId': actionId,
+              // Kilómetros DEL SERVICIO al finalizar: el espejo económico los
+              // usa para cobrar los km de más. El tiempo no se manda: va de
+              // la creación a la llegada al taller y lo pone el sistema.
+              if (serviceKm != null) 'serviceKm': serviceKm,
+            }),
           )
           .timeout(const Duration(seconds: 12));
       final data = jsonDecode(res.body) as Map<String, dynamic>;
@@ -286,7 +297,8 @@ class ApiService {
       if (_isNetworkError(e)) {
         // Sin red → encolar y aplicar el cambio en local
         OfflineStore.offline.value = true;
-        await OfflineStore.enqueueStatus(assistanceId: id, status: status, type: 'status');
+        await OfflineStore.enqueueStatus(
+            assistanceId: id, status: status, type: 'status', serviceKm: serviceKm);
         return _localAssistance(id, status);
       }
       rethrow;

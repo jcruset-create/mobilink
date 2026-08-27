@@ -124,10 +124,11 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     }
   }
 
-  Future<void> _changeStatus(String status) async {
+  Future<void> _changeStatus(String status, {int? serviceKm}) async {
     setState(() => _loading = true);
     try {
-      final updated = await widget.api.updateStatus(_a['id'] as int, status);
+      final updated =
+          await widget.api.updateStatus(_a['id'] as int, status, serviceKm: serviceKm);
       setState(() => _a = updated);
       // El servidor auto-transiciona 'finalizada' → 'en_camino_base'; arrancar GPS tracking
       if (updated['status'] == 'en_camino_base') {
@@ -182,7 +183,9 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
   }
 
   Future<void> _onFinalize() async {
-    final confirmed = await Navigator.of(context).push<bool>(
+    // FinishScreen devuelve los kilómetros DEL SERVICIO que anotó el
+    // técnico; el tiempo no se pide a nadie (creación → llegada al taller).
+    final serviceKm = await Navigator.of(context).push<int>(
       MaterialPageRoute(
         builder: (_) => FinishScreen(
           api: widget.api,
@@ -190,8 +193,8 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
         ),
       ),
     );
-    if (confirmed == true) {
-      await _changeStatus('finalizada');
+    if (serviceKm != null) {
+      await _changeStatus('finalizada', serviceKm: serviceKm);
     }
   }
 

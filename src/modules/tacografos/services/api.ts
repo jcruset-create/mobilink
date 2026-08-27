@@ -121,9 +121,26 @@ export function anularDocumento(
   });
 }
 
-/** URL de descarga. La sirve el servidor, no el almacenamiento. */
-export function urlDescarga(documentoId: string): string {
-  return `${BASE}/documentos/${documentoId}/descargar`;
+/**
+ * Descarga el PDF con la sesión puesta.
+ *
+ * No puede ser un enlace normal: el endpoint exige la cabecera Authorization y
+ * un `<a href>` navega sin ella — el navegador enseñaba
+ * «Falta el token de sesión» en vez del documento.
+ */
+export async function descargarDocumento(documentoId: string): Promise<Blob> {
+  const r = await fetch(`${BASE}/documentos/${documentoId}/descargar`, {
+    headers: await sessionHeaders(),
+  });
+  if (!r.ok) {
+    const datos = await r.json().catch(() => ({}));
+    throw new ApiError(
+      datos?.error ?? "No se ha podido abrir el documento",
+      datos?.code ?? "ERROR",
+      r.status
+    );
+  }
+  return r.blob();
 }
 
 export function listarFirmas(expedienteId: string): Promise<{ firmas: Firma[] }> {
@@ -161,9 +178,24 @@ export function buscarIntervenciones(texto: string): Promise<{ sugerencias: Suge
   return pedir(`/intervenciones?texto=${encodeURIComponent(texto)}`);
 }
 
-/** URL de descarga del respaldo en hoja de cálculo. */
-export function urlExportar(expedienteId: string): string {
-  return `${BASE}/expedientes/${expedienteId}/exportar`;
+/** Respaldo en hoja de cálculo, también con la sesión puesta. */
+export async function descargarExportacion(
+  expedienteId: string
+): Promise<{ blob: Blob; nombre: string }> {
+  const r = await fetch(`${BASE}/expedientes/${expedienteId}/exportar`, {
+    headers: await sessionHeaders(),
+  });
+  if (!r.ok) {
+    const datos = await r.json().catch(() => ({}));
+    throw new ApiError(
+      datos?.error ?? "No se ha podido exportar",
+      datos?.code ?? "ERROR",
+      r.status
+    );
+  }
+  const disposicion = r.headers.get("Content-Disposition") ?? "";
+  const nombre = /filename="([^"]+)"/.exec(disposicion)?.[1] ?? "expediente.xlsx";
+  return { blob: await r.blob(), nombre };
 }
 
 /**

@@ -24,7 +24,7 @@ import * as migracion from "./migration.ts";
 import * as traslados from "./transfers.ts";
 import * as jerarquia from "./hierarchy.ts";
 import { estadoCola, procesarEventos, reintentarEventos } from "./events/worker.ts";
-import { miniaturaBoton, miniaturaFicha } from "./images.ts";
+import { miniaturaBoton, miniaturaFicha, miniaturaLogo } from "./images.ts";
 import { ErrorCaja, cargarDenominaciones, obtenerSesion, sesionAbierta, movimientosDeSesion } from "./repository.ts";
 import type { LineaDenominacion } from "./domain/inventory.ts";
 import { CAMBIO_MAXIMO_CENTIMOS } from "./domain/change.ts";
@@ -71,21 +71,24 @@ const subidaDocumento = multer({
 /**
  * Reduce la imagen y la sube a Storage. Devuelve su URL.
  *
- * El tratamiento no es el mismo para todo. El logotipo de un banco llena su
- * botón y su fondo forma parte del logotipo —el azul del BBVA es el BBVA— así
- * que se deja tal cual. Un billete o una moneda es una ficha suelta que se
- * pinta sobre lo que sea, y la foto que uno encuentra viene en JPG sobre fondo
- * blanco: ahí el fondo se recorta.
+ * El tratamiento no es el mismo para todo. Un botón de cobro se ve a 32 px y
+ * su fondo forma parte del dibujo, así que se deja tal cual y se guarda ligero.
+ * Un billete o una moneda es una ficha suelta que se pinta sobre lo que sea, y
+ * la foto que uno encuentra viene en JPG sobre fondo blanco: ahí el fondo se
+ * recorta. Un logotipo de banco se IMPRIME en la cabecera del resguardo: ni se
+ * le baja la paleta ni se le pierde la transparencia.
  */
 async function guardarImagenBoton(
   fichero: { buffer: Buffer },
   ruta_: string,
-  tratamiento: "boton" | "ficha" = "boton"
+  tratamiento: "boton" | "ficha" | "logo" = "boton"
 ): Promise<string> {
   const miniatura =
     tratamiento === "ficha"
       ? await miniaturaFicha(fichero.buffer)
-      : await miniaturaBoton(fichero.buffer);
+      : tratamiento === "logo"
+        ? await miniaturaLogo(fichero.buffer)
+        : await miniaturaBoton(fichero.buffer);
 
   let error: { message?: string } | null = null;
   try {
@@ -569,6 +572,127 @@ export function createCashRouter(): Router {
     })
   );
 
+  // ── Maestro de bancos ────────────────────────────────────────────────────
+
+  r.get(
+    "/banks",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({ bancos: await config.listarBancos(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.patch(
+    "/banks/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        banco: await config.actualizarBanco(contexto(req), enteroPositivo(req.params.id, "id"), {
+          nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+          activo: typeof b.activo === "boolean" ? b.activo : undefined,
+        }),
+      });
+    })
+  );
+
+  /** Logotipo del banco: se sube una vez y lo usan todas sus cuentas. */
+  r.post(
+    "/banks/:id/logo",
+    exigirPermiso("cash.configure"),
+    subida(subidaImagen.single("imagen"), 8),
+    ruta(async (req, res) => {
+      const id = enteroPositivo(req.params.id, "id");
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ninguna imagen.", 400);
+      }
+      if (!/^image\//.test(req.file.mimetype)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
+      }
+      const url = await guardarImagenBoton(req.file, `cash/bancos/${id}_${Date.now()}.png`, "logo");
+      res.json({ banco: await config.actualizarBanco(contexto(req), id, { logoUrl: url }) });
+    })
+  );
+
+  /**
+   * Quita el logotipo subido. No deja al banco sin nada: debajo está el que
+   * trae la aplicación, que vuelve a salir solo. Es la salida para un fichero
+   * mal recortado o que resultó no ser el logotipo que uno creía.
+   */
+  r.delete(
+    "/banks/:id/logo",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const id = enteroPositivo(req.params.id, "id");
+      res.json({ banco: await config.actualizarBanco(contexto(req), id, { logoUrl: null }) });
+    })
+  );
+
+  // ── Cuentas bancarias ────────────────────────────────────────────────────
+
+  r.get(
+    "/bank-accounts",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({ cuentas: await config.listarCuentas(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.post(
+    "/bank-accounts",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const cuenta = await config.crearCuenta(contexto(req), {
+        banco: typeof b.banco === "string" ? b.banco : "",
+        iban: typeof b.iban === "string" ? b.iban : "",
+        alias: typeof b.alias === "string" ? b.alias : undefined,
+        porDefecto: typeof b.porDefecto === "boolean" ? b.porDefecto : undefined,
+        orden: b.orden === undefined ? undefined : entero(b.orden, "orden"),
+      });
+      res.status(201).json({ cuenta });
+    })
+  );
+
+  r.patch(
+    "/bank-accounts/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const cuenta = await config.actualizarCuenta(contexto(req), enteroPositivo(req.params.id, "id"), {
+        banco: typeof b.banco === "string" ? b.banco : undefined,
+        iban: typeof b.iban === "string" ? b.iban : undefined,
+        alias: typeof b.alias === "string" ? b.alias : undefined,
+        activa: typeof b.activa === "boolean" ? b.activa : undefined,
+        porDefecto: typeof b.porDefecto === "boolean" ? b.porDefecto : undefined,
+        orden: b.orden === undefined ? undefined : entero(b.orden, "orden"),
+      });
+      res.json({ cuenta });
+    })
+  );
+
+  /**
+   * Logotipo de esta cuenta en concreto, que manda sobre el del banco. Solo
+   * hace falta cuando una cuenta luce distinto del resto de su entidad.
+   */
+  r.post(
+    "/bank-accounts/:id/logo",
+    exigirPermiso("cash.configure"),
+    subida(subidaImagen.single("imagen"), 8),
+    ruta(async (req, res) => {
+      const id = enteroPositivo(req.params.id, "id");
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ninguna imagen.", 400);
+      }
+      if (!/^image\//.test(req.file.mimetype)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "El fichero tiene que ser una imagen.", 400);
+      }
+      const url = await guardarImagenBoton(req.file, `cash/cuentas/${id}_${Date.now()}.png`, "logo");
+      const cuenta = await config.actualizarCuenta(contexto(req), id, { logoUrl: url });
+      res.json({ cuenta });
+    })
+  );
+
   // ── Catálogo de denominaciones ───────────────────────────────────────────
 
   /** Todas, activas o no: la pantalla de configuración necesita las desactivadas. */
@@ -823,6 +947,25 @@ export function createCashRouter(): Router {
    * permitiría registrar un cobro «en Mixto», que no dice por dónde entró el
    * dinero.
    */
+  /**
+   * Fija un ajuste del módulo. La clave se valida contra la lista blanca en
+   * `fijarAjuste`, así que esto no puede convertirse en un cajón de sastre.
+   */
+  r.patch(
+    "/settings",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      if (typeof b.clave !== "string") {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "Falta la clave del ajuste.", 400);
+      }
+      const valor = b.valor === null || b.valor === "" ? null : String(b.valor);
+      res.json({
+        ajustes: await config.fijarAjuste(contexto(req), b.clave as config.ClaveAjuste, valor),
+      });
+    })
+  );
+
   r.post(
     "/settings/mixed-image",
     exigirPermiso("cash.configure"),
@@ -1091,8 +1234,76 @@ export function createCashRouter(): Router {
             : undefined,
         referencia: typeof b.referencia === "string" ? b.referencia : undefined,
         observaciones: typeof b.observaciones === "string" ? b.observaciones : undefined,
+        bankAccountId: b.bankAccountId ? enteroPositivo(b.bankAccountId, "bankAccountId") : undefined,
       });
       res.status(201).json({ ingreso });
+    })
+  );
+
+  /**
+   * Completar un ingreso con los datos reales del banco: fecha, referencia y
+   * observaciones. Los importes no se editan nunca por aquí — se anula.
+   */
+  r.patch(
+    "/bank-deposits/:id",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        ingreso: await ingresos.completarIngreso(contexto(req), {
+          depositId: enteroPositivo(req.params.id, "id"),
+          fechaIngreso: typeof b.fechaIngreso === "string" ? b.fechaIngreso : b.fechaIngreso === null ? null : undefined,
+          referencia: typeof b.referencia === "string" ? b.referencia : b.referencia === null ? null : undefined,
+          observaciones: typeof b.observaciones === "string" ? b.observaciones : b.observaciones === null ? null : undefined,
+          bankAccountId:
+            b.bankAccountId === null ? null : b.bankAccountId ? enteroPositivo(b.bankAccountId, "bankAccountId") : undefined,
+        }),
+      });
+    })
+  );
+
+  /**
+   * Manda el resguardo a la central, con el comprobante escaneado adjunto.
+   *
+   * Mismo permiso que registrar el ingreso: quien lo hace es quien lo comunica.
+   */
+  r.post(
+    "/bank-deposits/:id/email",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const { enviarResguardoALaCentral } = await import("./deposit-mail.ts");
+      res.json(await enviarResguardoALaCentral(contexto(req), enteroPositivo(req.params.id, "id")));
+    })
+  );
+
+  /** El comprobante que dio el banco, colgado del ingreso. */
+  r.get(
+    "/bank-deposits/:id/documents",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({
+        documentos: await documentos.documentosDeIngreso(
+          req.authCtx!.empresaId,
+          enteroPositivo(req.params.id, "id")
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/bank-deposits/:id/documents",
+    exigirPermiso("cash.document.attach"),
+    subida(subidaDocumento.single("documento"), 15),
+    ruta(async (req, res) => {
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
+      }
+      const documento = await documentos.adjuntarDocumentoDeIngreso(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        req.file
+      );
+      res.status(201).json({ documento });
     })
   );
 
@@ -1325,6 +1536,62 @@ export function createCashRouter(): Router {
       await reauth.exigirReautenticacion(req.authCtx!.empresaId, req.authCtx!.userId);
       res.json({
         sesion: await servicio.reabrirJornada(contexto(req), enteroPositivo(req.params.id, "id"), motivo),
+      });
+    })
+  );
+
+  /**
+   * Anular una jornada abierta por error. Solo si está vacía; el servicio es
+   * quien lo comprueba. Mismo permiso que anular operaciones: es quien hoy
+   * puede deshacer cosas.
+   */
+  r.post(
+    "/sessions/:id/void",
+    exigirPermiso("cash.operation.reverse"),
+    ruta(async (req, res) => {
+      const motivo = String((req.body ?? {}).motivo ?? "");
+      res.json({
+        sesion: await servicio.anularJornada(contexto(req), enteroPositivo(req.params.id, "id"), motivo),
+      });
+    })
+  );
+
+  /**
+   * Qué cierre traería el fondo, sin tocar nada: la pantalla lo enseña antes
+   * de que nadie confirme.
+   */
+  r.get(
+    "/sessions/:id/inheritable-float",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const sessionId = enteroPositivo(req.params.id, "id");
+      const sesion = await obtenerSesion(sessionId);
+      if (!sesion || sesion.empresaId !== req.authCtx!.empresaId) {
+        throw new ErrorCaja("JORNADA_NO_ENCONTRADA", "La jornada no existe.", 404);
+      }
+      res.json({
+        candidato: await servicio.ultimoCierreConCambio(sesion.registerId, sesion.fecha, sessionId),
+      });
+    })
+  );
+
+  /**
+   * Traer a la jornada abierta el cambio del último cierre que lo dejó. Para
+   * la jornada que amaneció a 0,00 € porque la cadena de herencia se rompió
+   * con un cierre en falso.
+   */
+  r.post(
+    "/sessions/:id/inherit-float",
+    exigirPermiso("cash.open_session"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        sesion: await servicio.traerFondoDeCierre(contexto(req), {
+          sessionId: enteroPositivo(req.params.id, "id"),
+          sesionOrigenId:
+            b.sesionOrigenId === undefined ? undefined : enteroPositivo(b.sesionOrigenId, "sesionOrigenId"),
+          motivo: String(b.motivo ?? ""),
+        }),
       });
     })
   );
@@ -1623,6 +1890,7 @@ export function createCashRouter(): Router {
           cambioFinalBolsas: lineas(b.cambioFinalBolsas, "cambioFinalBolsas"),
           arqueoId: b.arqueoId ? enteroPositivo(b.arqueoId, "arqueoId") : undefined,
           notas: typeof b.notas === "string" ? b.notas : undefined,
+          permitirCajaVacia: b.permitirCajaVacia === true,
         })
       );
     })
