@@ -19,7 +19,7 @@ import { FORMAS_PAGO_SEMILLA } from "./domain/operations.ts";
 import { ErrorCaja, sesionAbierta } from "./repository.ts";
 import { nombreDeCentro } from "./hierarchy.ts";
 import { entidadDeIban, ibanValido, normalizarIban } from "./domain/bankaccount.ts";
-import { BANCOS_SEMILLA } from "./domain/banks.ts";
+import { BANCOS_SEMILLA, logoDeSemilla } from "./domain/banks.ts";
 import {
   CODIGO_MAX,
   codigoValido,
@@ -1126,6 +1126,8 @@ export type CuentaBancariaConfig = {
   alias: string;
   /** Logotipo del banco; null = solo el nombre. */
   logoUrl: string | null;
+  /** true si el logotipo es uno subido a mano y se puede quitar. */
+  logoPropio: boolean;
   activa: boolean;
   porDefecto: boolean;
   orden: number;
@@ -1140,7 +1142,13 @@ function aCuenta(r: any): CuentaBancariaConfig {
     banco: r.banco,
     iban: r.iban,
     alias: r.alias ?? "",
-    logoUrl: r.logo_url ?? null,
+    /*
+     * El logotipo sale, por este orden, del que se subió a la cuenta, del que
+     * se subió al banco y del que trae la aplicación. Así quitar uno subido
+     * deja el de debajo, en vez de dejar el resguardo sin nada.
+     */
+    logoUrl: r.logo_url ?? logoDeSemilla(r.codigo_entidad) ?? null,
+    logoPropio: r.logo_propio != null,
     activa: r.activa,
     porDefecto: r.por_defecto,
     orden: r.orden,
@@ -1149,13 +1157,34 @@ function aCuenta(r: any): CuentaBancariaConfig {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
+/*
+ * El SELECT de una cuenta, en un sitio solo.
+ *
+ * Estaba repetido y cada copia se olvidaba de algo: sin el JOIN el resguardo
+ * salía sin banco, y sin el código de entidad no hay forma de saber qué
+ * logotipo de los que trae la aplicación le toca.
+ */
+const SELECT_CUENTA = `
+    SELECT c.*,
+           c.logo_url AS logo_propio,
+           b.codigo AS codigo_entidad,
+           COALESCE(c.logo_url, b.logo_url) AS logo_url,
+           (SELECT COUNT(*) FROM cash_bank_deposits d WHERE d.bank_account_id = c.id) AS usos
+      FROM cash_bank_accounts c
+      LEFT JOIN cash_banks b ON b.id = c.bank_id`;
+
+/** Relee una cuenta con todo lo que le cuelga, para devolverla tras tocarla. */
+async function refrescarCuenta(empresaId: string, id: number): Promise<CuentaBancariaConfig> {
+  const { rows } = await pool.query(`${SELECT_CUENTA} WHERE c.empresa_id = $1 AND c.id = $2`, [
+    empresaId,
+    id,
+  ]);
+  return aCuenta(rows[0]);
+}
+
 export async function listarCuentas(empresaId: string): Promise<CuentaBancariaConfig[]> {
   const { rows } = await pool.query(
-    `SELECT c.*,
-            COALESCE(c.logo_url, b.logo_url) AS logo_url,
-            (SELECT COUNT(*) FROM cash_bank_deposits d WHERE d.bank_account_id = c.id) AS usos
-       FROM cash_bank_accounts c
-       LEFT JOIN cash_banks b ON b.id = c.bank_id
+    `${SELECT_CUENTA}
       WHERE c.empresa_id = $1
       ORDER BY c.activa DESC, c.por_defecto DESC, c.orden, c.banco`,
     [empresaId]
@@ -1250,7 +1279,8 @@ export async function crearCuenta(
     ip: ctx.ip,
   });
 
-  return aCuenta(rows[0]);
+  // Releída, que el INSERT no trae ni el banco del maestro ni su logotipo.
+  return refrescarCuenta(ctx.empresaId, rows[0].id);
 }
 
 /** Deja sin marca la que la tuviera: el índice único rechazaría dos. */
@@ -1335,6 +1365,9 @@ export async function actualizarCuenta(
       cambios.logoUrl ?? null,
     ]
   );
+  if (rows.length === 0) {
+    throw new ErrorCaja("NO_ENCONTRADA", "Esa cuenta bancaria no existe.", 404);
+  }
 
   await registrarAuditoria({
     empresaId: ctx.empresaId,
@@ -1349,7 +1382,7 @@ export async function actualizarCuenta(
     ip: ctx.ip,
   });
 
-  return aCuenta(rows[0]);
+  return refrescarCuenta(ctx.empresaId, id);
 }
 
 // ── Maestro de bancos ──────────────────────────────────────────────────────
@@ -1360,6 +1393,8 @@ export type BancoConfig = {
   codigo: string;
   nombre: string;
   logoUrl: string | null;
+  /** true si el logotipo es uno subido a mano y se puede quitar. */
+  logoPropio: boolean;
   activo: boolean;
   /** Cuentas dadas de alta con este banco. */
   cuentas: number;
@@ -1371,7 +1406,9 @@ function aBanco(r: any): BancoConfig {
     id: r.id,
     codigo: r.codigo,
     nombre: r.nombre,
-    logoUrl: r.logo_url ?? null,
+    // El subido manda; debajo, el que trae la aplicación para esa entidad.
+    logoUrl: r.logo_url ?? logoDeSemilla(r.codigo) ?? null,
+    logoPropio: r.logo_url != null,
     activo: r.activo,
     cuentas: Number(r.cuentas ?? 0),
   };

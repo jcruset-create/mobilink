@@ -525,6 +525,8 @@ export type CuentaBancariaConfig = {
   alias: string;
   /** Logotipo, propio o heredado del maestro de bancos. */
   logoUrl: string | null;
+  /** true si el logotipo es uno subido a mano, y por tanto se puede quitar. */
+  logoPropio: boolean;
   activa: boolean;
   porDefecto: boolean;
   orden: number;
@@ -567,7 +569,10 @@ export type BancoConfig = {
   /** Cuatro cifras de entidad del IBAN: es como se reconoce el banco. */
   codigo: string;
   nombre: string;
+  /** El subido; si no hay, el que trae la aplicación para esa entidad. */
   logoUrl: string | null;
+  /** true si el logotipo es uno subido a mano, y por tanto se puede quitar. */
+  logoPropio: boolean;
   activo: boolean;
   cuentas: number;
 };
