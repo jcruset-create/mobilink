@@ -956,6 +956,49 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   );
   const caja = cajas[0] ?? { centro: "", nombre: "", codigo: "" };
 
+  /*
+   * Los comprobantes del banco, que van INCRUSTADOS detrás del resguardo.
+   *
+   * Y mandan sobre las firmas: el papel sellado del banco prueba el ingreso
+   * mucho mejor que dos garabatos, así que cuando hay comprobante las casillas
+   * de firma sobran y se quitan. Sin comprobante siguen saliendo, porque
+   * entonces son lo único que cubre el trayecto hasta el banco.
+   */
+  const { rows: comprobantes } = await pool.query<{
+    id: number;
+    nombre: string;
+    mime: string;
+    ruta: string;
+  }>(
+    `SELECT id, nombre, mime, ruta FROM cash_operation_documents
+      WHERE empresa_id = $1 AND deposit_id = $2 AND NOT anulado
+      ORDER BY id`,
+    [empresaId, depositId]
+  );
+  const hayComprobante = comprobantes.length > 0;
+
+  // El logotipo del banco, del maestro. Cualquier fallo al bajarlo deja el
+  // nombre en su sitio: un resguardo sin logo sirve, uno que no se genera no.
+  let logoBanco: Buffer | null = null;
+  if (ingreso.bankAccountId != null) {
+    const { rows: logos } = await pool.query<{ logo_url: string | null }>(
+      `SELECT COALESCE(c.logo_url, b.logo_url) AS logo_url
+         FROM cash_bank_accounts c
+         LEFT JOIN cash_banks b ON b.id = c.bank_id
+        WHERE c.id = $1`,
+      [ingreso.bankAccountId]
+    );
+    const url = logos[0]?.logo_url;
+    if (url && /^https?:/.test(url)) {
+      try {
+        const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
+        if (r.ok) logoBanco = Buffer.from(await r.arrayBuffer());
+      } catch {
+        /* sin logotipo: manda el nombre */
+      }
+    }
+  }
+
   const denominaciones = await cargarDenominaciones(pool, false);
   const etiqueta = new Map(denominaciones.map((d) => [d.valor, d.etiqueta]));
   const etiquetaDe = (v: number) => etiqueta.get(v) ?? `${formatearEuros(v)} €`;
@@ -985,18 +1028,52 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
     .font("Helvetica-Bold")
     .fontSize(15)
     .text("Ingreso bancario", xCab, 16, { lineBreak: false });
+  /*
+   * La caja, en blanco y más grande: es el dato que identifica el papel cuando
+   * hay varios encima de la mesa, y en gris pequeño se perdía contra el azul.
+   * La fecha se queda apagada al lado, que es secundaria aquí —va también en
+   * su propia fila más abajo—.
+   */
   doc
-    .font("Helvetica")
-    .fontSize(10)
-    .fillColor("#94a3b8")
-    .text(
-      `${caja.centro ? `${caja.centro} · ` : ""}${caja.nombre}${
-        ingreso.fechaIngreso ? ` · ${ingreso.fechaIngreso}` : ""
-      }`,
-      xCab,
-      36,
-      { lineBreak: false }
+    .font("Helvetica-Bold")
+    .fontSize(13)
+    .fillColor("#ffffff")
+    .text(`${caja.centro ? `${caja.centro} · ` : ""}${caja.nombre}`, xCab, 34, {
+      lineBreak: false,
+    });
+  if (ingreso.fechaIngreso) {
+    const anchoCaja = doc.widthOfString(
+      `${caja.centro ? `${caja.centro} · ` : ""}${caja.nombre}`
     );
+    doc
+      .font("Helvetica")
+      .fontSize(10)
+      .fillColor("#94a3b8")
+      .text(`· ${ingreso.fechaIngreso}`, xCab + anchoCaja + 8, 37, { lineBreak: false });
+  }
+
+  /*
+   * Y el logotipo del banco a la derecha: de un vistazo se sabe a qué entidad
+   * fue ese dinero, sin leer el IBAN. Si no hay logotipo subido se pone el
+   * nombre, que cumple lo mismo aunque luzca menos.
+   */
+  if (logoBanco) {
+    try {
+      doc.image(logoBanco, doc.page.width - M - 96, 13, { fit: [96, 32], align: "right" });
+    } catch {
+      /* logotipo ilegible: manda el nombre */
+    }
+  } else if (ingreso.banco) {
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .fillColor("#ffffff")
+      .text(ingreso.banco, doc.page.width - M - 200, 22, {
+        width: 200,
+        align: "right",
+        lineBreak: false,
+      });
+  }
   doc.fillColor(TINTA).font("Helvetica").fontSize(10);
   doc.x = M;
   doc.y = 78;
@@ -1176,10 +1253,16 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
    * del resguardo: con dos bancos abiertos, quien hace el viaje tiene que
    * saber en cuál ingresar, y quien concilia después, contra qué extracto.
    */
-  if (ingreso.banco || ingreso.referencia || ingreso.observaciones) {
+  {
     titulo("Datos del ingreso");
-    if (ingreso.banco) fila("Banco", ingreso.banco, true);
-    if (ingreso.iban) fila("Cuenta", formatearIban(ingreso.iban), true);
+    /*
+     * El banco y la cuenta salen SIEMPRE, incluso vacíos. Si no se sabe a
+     * dónde fue el dinero, eso es justo lo que hay que ver en el papel: un
+     * hueco en blanco se rellena, un dato que no aparece no se echa en falta.
+     */
+    fila("Banco", ingreso.banco || "— sin especificar —", true);
+    fila("Cuenta", ingreso.iban ? formatearIban(ingreso.iban) : "— sin especificar —", true);
+    if (ingreso.fechaIngreso) fila("Fecha del ingreso", ingreso.fechaIngreso);
     if (ingreso.referencia) fila("Referencia bancaria", ingreso.referencia);
     if (ingreso.observaciones) {
       doc.fillColor(GRIS).fontSize(9).text(ingreso.observaciones, M, doc.y, { width: ancho });
@@ -1188,37 +1271,83 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   }
 
   /*
-   * Las dos firmas. Van al pie de la página, no a continuación del texto: así
-   * están siempre en el mismo sitio y no bailan según cuántos billetes lleve
-   * el desglose.
+   * Las dos firmas, SOLO si no hay comprobante del banco.
+   *
+   * Cuando el resguardo sellado viene detrás incrustado, las casillas sobran:
+   * el papel del banco prueba el ingreso mejor que dos garabatos, y dejarlas
+   * en blanco al lado de la prueba buena solo invita a preguntarse si falta
+   * algo. Sin comprobante siguen saliendo, porque entonces son lo único que
+   * cubre el trayecto de la tienda al banco.
    */
-  const yFirmas = doc.page.height - M - 96;
-  doc.y = Math.max(doc.y + 20, yFirmas);
-  titulo("Firmas");
-  const yF = doc.y + 4;
-  const anchoF = (ancho - 20) / 2;
-  for (const [i, texto] of [
-    "Recibe el dinero y lo lleva al banco",
-    "Conforme del banco / nº de resguardo",
-  ].entries()) {
-    const x = M + i * (anchoF + 20);
-    doc.roundedRect(x, yF, anchoF, 60, 4).strokeColor("#cbd5e1").stroke();
+  if (!hayComprobante) {
+    const yFirmas = doc.page.height - M - 96;
+    doc.y = Math.max(doc.y + 20, yFirmas);
+    titulo("Firmas");
+    const yF = doc.y + 4;
+    const anchoF = (ancho - 20) / 2;
+    for (const [i, texto] of [
+      "Recibe el dinero y lo lleva al banco",
+      "Conforme del banco / nº de resguardo",
+    ].entries()) {
+      const x = M + i * (anchoF + 20);
+      doc.roundedRect(x, yF, anchoF, 60, 4).strokeColor("#cbd5e1").stroke();
+      doc
+        .font("Helvetica")
+        .fontSize(8)
+        .fillColor(GRIS)
+        .text(texto, x + 8, yF + 6, { width: anchoF - 16, lineBreak: false });
+      doc
+        .moveTo(x + 8, yF + 46)
+        .lineTo(x + anchoF - 8, yF + 46)
+        .strokeColor("#cbd5e1")
+        .stroke();
+      doc
+        .fontSize(7)
+        .fillColor(GRIS)
+        .text("Nombre y firma", x + 8, yF + 49, { width: anchoF - 16, lineBreak: false });
+    }
+  } else {
+    // Y se dice cuántos vienen detrás, para que se note si falta alguno.
+    titulo("Comprobante del banco");
     doc
       .font("Helvetica")
-      .fontSize(8)
+      .fontSize(9)
       .fillColor(GRIS)
-      .text(texto, x + 8, yF + 6, { width: anchoF - 16, lineBreak: false });
-    doc
-      .moveTo(x + 8, yF + 46)
-      .lineTo(x + anchoF - 8, yF + 46)
-      .strokeColor("#cbd5e1")
-      .stroke();
-    doc
-      .fontSize(7)
-      .fillColor(GRIS)
-      .text("Nombre y firma", x + 8, yF + 49, { width: anchoF - 16, lineBreak: false });
+      .text(
+        comprobantes.length === 1
+          ? "El comprobante sellado por el banco va en la página siguiente."
+          : `Los ${comprobantes.length} comprobantes del banco van en las páginas siguientes.`,
+        M,
+        doc.y,
+        { width: ancho }
+      );
+    doc.fillColor(TINTA).fontSize(10);
   }
 
   doc.end();
-  return listo;
+
+  /*
+   * Y el comprobante sellado detrás, incrustado. Se reutiliza el mismo montaje
+   * que el informe de cierre: un escaneo ilegible o que ya no está en el
+   * almacenamiento no tumba el resguardo, sale una página diciéndolo.
+   */
+  const portada = await listo;
+  if (comprobantes.length === 0) return portada;
+  return montar(
+    portada,
+    comprobantes.map((c) => ({
+      ...c,
+      operacionNumero: ingreso.numero,
+      // El montaje pinta estos dos en la página de aviso si algo falla.
+      operacionTipo: "Ingreso bancario",
+      operationId: null,
+      sessionId: null,
+      depositId,
+      tamanoBytes: 0,
+      anulado: false,
+      anuladoMotivo: null,
+      subidoAtMs: 0,
+      url: null,
+    }))
+  );
 }
