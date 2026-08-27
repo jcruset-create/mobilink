@@ -397,7 +397,13 @@ export type PendienteDeIngresar = {
  */
 export async function ingresosEnRed(
   empresaId: string,
-  filtros: { centroId?: string | null; registerId?: number | null } = {}
+  filtros: {
+    centroId?: string | null;
+    registerId?: number | null;
+    /** Rango por fecha del ingreso, inclusive. Formato AAAA-MM-DD. */
+    desde?: string | null;
+    hasta?: string | null;
+  } = {}
 ): Promise<IngresoEnRed[]> {
   const centro = await joinCentro("ce", "d.centro_id");
   const cond: string[] = ["d.empresa_id = $1"];
@@ -410,6 +416,20 @@ export async function ingresosEnRed(
   if (filtros.registerId) {
     params.push(filtros.registerId);
     cond.push(`d.register_id = $${params.length}`);
+  }
+  /*
+   * El rango va sobre la fecha del ingreso, que es la del banco. Los que
+   * todavía no la tienen quedan FUERA de cualquier rango, y es lo correcto:
+   * filtrar por fechas es preguntar «qué se ingresó entre estos días», y algo
+   * sin fecha no se ingresó ningún día todavía.
+   */
+  if (filtros.desde) {
+    params.push(filtros.desde);
+    cond.push(`d.fecha >= $${params.length}::date`);
+  }
+  if (filtros.hasta) {
+    params.push(filtros.hasta);
+    cond.push(`d.fecha <= $${params.length}::date`);
   }
 
   const { rows } = await pool.query(

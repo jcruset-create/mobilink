@@ -294,6 +294,10 @@ export type IngresoBancario = {
   registerId: number;
   fechaIngreso: string | null;
   referencia: string | null;
+  /** Cuenta a la que fue el dinero. null en los anteriores al catálogo. */
+  bankAccountId: number | null;
+  banco: string | null;
+  iban: string | null;
   observaciones: string | null;
   remanenteAnteriorCentimos: number;
   totalCierresCentimos: number;
@@ -419,6 +423,8 @@ export type Pendientes = {
  */
 export type Ajustes = {
   mixtoImagenUrl: string | null;
+  /** Destinatarios del resguardo de ingreso, separados por coma. */
+  correoCentral: string | null;
 };
 
 /**
@@ -510,3 +516,63 @@ export type Zona = { id: string; nombre: string; activa: boolean; centros: numbe
 
 /** Taller. Se da de alta en Administración; aquí solo se consulta y se agrupa. */
 export type Centro = { id: string; nombre: string; zonaId: string | null; activo: boolean };
+
+/** Cuenta bancaria de la empresa: a dónde se ingresa el efectivo. */
+export type CuentaBancariaConfig = {
+  id: number;
+  banco: string;
+  iban: string;
+  alias: string;
+  /** Logotipo, propio o heredado del maestro de bancos. */
+  logoUrl: string | null;
+  /** true si el logotipo es uno subido a mano, y por tanto se puede quitar. */
+  logoPropio: boolean;
+  activa: boolean;
+  porDefecto: boolean;
+  orden: number;
+  /** Ingresos que ya apuntan a ella. Con usos no se borra, se desactiva. */
+  usos: number;
+};
+
+/**
+ * Estado de un ingreso TAL Y COMO SE LEE, que no es el de la base de datos.
+ *
+ * En la tabla, `estado` solo distingue vivo de anulado: «CONFIRMADO» ahí
+ * significa «registrado en la aplicación», no «el dinero ya está en el banco».
+ * Son dos cosas distintas y en el mostrador importa la segunda: entre que se
+ * prepara la bolsa y que alguien vuelve con el resguardo pasan horas o días, y
+ * ese hueco es justo donde se pierde el dinero.
+ *
+ * La señal de que ya se hizo de verdad es tener FECHA REAL, que es lo que se
+ * rellena al volver del banco. Se deriva en vez de guardar otra columna:
+ * un estado aparte podría acabar diciendo «confirmado» sin fecha, o al revés.
+ */
+export type EstadoIngresoVisible = "PENDIENTE_CONFIRMAR" | "CONFIRMADO" | "ANULADO";
+
+export function estadoIngreso(i: {
+  estado: "CONFIRMADO" | "ANULADO";
+  fechaIngreso: string | null;
+}): EstadoIngresoVisible {
+  if (i.estado === "ANULADO") return "ANULADO";
+  return i.fechaIngreso ? "CONFIRMADO" : "PENDIENTE_CONFIRMAR";
+}
+
+export const ETIQUETA_ESTADO_INGRESO: Record<EstadoIngresoVisible, string> = {
+  PENDIENTE_CONFIRMAR: "Pendiente de confirmar",
+  CONFIRMADO: "Confirmado",
+  ANULADO: "Anulado",
+};
+
+/** Banco del maestro: su código de entidad y su logotipo. */
+export type BancoConfig = {
+  id: number;
+  /** Cuatro cifras de entidad del IBAN: es como se reconoce el banco. */
+  codigo: string;
+  nombre: string;
+  /** El subido; si no hay, el que trae la aplicación para esa entidad. */
+  logoUrl: string | null;
+  /** true si el logotipo es uno subido a mano, y por tanto se puede quitar. */
+  logoPropio: boolean;
+  activo: boolean;
+  cuentas: number;
+};

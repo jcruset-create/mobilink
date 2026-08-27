@@ -155,7 +155,9 @@ export function CashProvider({ children }: { children: ReactNode }) {
     formasPago: boot?.formasPago ?? [],
     formasParaCobros: (boot?.formasPago ?? []).filter((f) => f.activa && f.enCobros),
     formasParaPagos: (boot?.formasPago ?? []).filter((f) => f.activa && f.enPagos),
-    ajustes: boot?.ajustes ?? { mixtoImagenUrl: null },
+    // Reserva mientras carga: los mismos campos que el tipo, para que un
+    // ajuste nuevo no se olvide aquí y rompa la pantalla al arrancar.
+    ajustes: boot?.ajustes ?? { mixtoImagenUrl: null, correoCentral: null },
     secciones: boot?.secciones ?? [],
     seccionesActivas: (boot?.secciones ?? []).filter((s) => s.activa),
     cajas: boot?.cajas ?? [],

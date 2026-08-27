@@ -639,6 +639,9 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
         sessionIds: [sesion.id],
         importeCentimos: 4000,
         referencia: "ABONO-123",
+        // Con fecha DE VERDAD y no a nulo: si se deja sin poner, comprobar que
+        // Central la recibe compara null con null y no prueba nada.
+        fechaIngreso: "2026-08-21",
       });
       await vaciar();
 
@@ -647,6 +650,15 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
       expect(proyectado).toBeTruthy();
       expect(proyectado!.importeCentimos).toBe(4000);
       expect(proyectado!.referencia).toBe("ABONO-123");
+
+      /*
+       * La fecha y el estado también, que es lo que se mira para conciliar con
+       * el extracto. Sin esto, Central enseñaba el ingreso con la fecha en
+       * blanco y nadie podía casarlo con el apunte del banco.
+       */
+      expect(ingreso.fechaIngreso).toBe("2026-08-21");
+      expect(proyectado!.fecha).toBe("2026-08-21");
+      expect(proyectado!.estado).toBe("CONFIRMADO");
 
       // La asignación de origen: de qué jornada salió y cuánto puso.
       expect(proyectado!.origen).toHaveLength(1);
@@ -660,6 +672,299 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
     } finally {
       transporteCaja.registrarTransporte(null);
     }
+  });
+
+  /*
+   * Poner la fecha real del banco DESPUÉS, que es como ocurre: el ingreso se
+   * registra al preparar la bolsa y la fecha se sabe al volver.
+   *
+   * Esta prueba cubre el camino que faltaba y por el que se coló el fallo: la
+   * fila YA ESTÁ en Central. Antes, el reenvío del alta chocaba con ella y el
+   * `ON CONFLICT` solo tocaba el estado, así que la fecha se quedaba vieja
+   * para siempre y la caja decía «Confirmado» mientras Central decía
+   * «Pendiente de confirmar».
+   */
+  it("la fecha del banco puesta después llega a Central, con la fila ya proyectada", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+         VALUES ($1,'completar',$2,$3,$4,$4) RETURNING id`,
+        [
+          EMPRESA,
+          `compl-${String(process.hrtime.bigint()).slice(-9)}`,
+          `CP${String(process.hrtime.bigint()).slice(-6)}`,
+          Date.now(),
+        ]
+      );
+      const caja = creada[0].id;
+      const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: [] });
+      await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 4000,
+        formasPago: [{ forma: "CASH", importe: 4000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 2 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 2 }],
+      });
+      // Todo al banco: no se deja cambio.
+      await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] });
+
+      // Se registra SIN fecha: la bolsa está lista, nadie ha ido al banco aún.
+      const ingreso = await ingresosCaja.crearIngreso(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        importeCentimos: 4000,
+      });
+      await vaciar();
+
+      const antes = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+        (i) => i.depositId === ingreso.id
+      );
+      expect(antes?.fecha).toBeNull(); // pendiente de confirmar, y bien dicho
+
+      // Y ahora se vuelve del banco y se apunta la fecha de verdad.
+      await ingresosCaja.completarIngreso(ctx, {
+        depositId: ingreso.id,
+        fechaIngreso: "2026-08-27",
+        referencia: "ABONO-REAL",
+      });
+      await vaciar();
+
+      const despues = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+        (i) => i.depositId === ingreso.id
+      );
+      expect(despues?.fecha).toBe("2026-08-27");
+      expect(despues?.referencia).toBe("ABONO-REAL");
+      expect(despues?.estado).toBe("CONFIRMADO");
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * El botón «Resincronizar con la caja», por su servicio.
+   *
+   * Es la reparación que antes había que hacer entrando por consola. Hay que
+   * demostrar dos cosas: que repara de verdad —la fila pasa de no existir en
+   * Central a existir con su fecha— y que respeta el ámbito de empresa.
+   * Reparar la red de otro sería mucho peor que no poder reparar la propia.
+   */
+  it("resincronizar repara los ingresos de tu empresa y solo los tuyos", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+         VALUES ($1,'resync',$2,$3,$4,$4) RETURNING id`,
+        [
+          EMPRESA,
+          `rs-${String(process.hrtime.bigint()).slice(-9)}`,
+          `RS${String(process.hrtime.bigint()).slice(-6)}`,
+          Date.now(),
+        ]
+      );
+      const caja = creada[0].id;
+
+      // Un ingreso que la caja tiene con fecha y que Central no conoce: es
+      // exactamente el estado que deja un ingreso anterior al evento.
+      const { rows: dep } = await db.query(
+        `INSERT INTO cash_bank_deposits
+           (empresa_id, register_id, numero, estado, fecha_ingreso, referencia,
+            importe_centimos, remanente_anterior_centimos, total_cierres_centimos,
+            remanente_nuevo_centimos, creado_at_ms)
+         VALUES ($1,$2,$3,'CONFIRMADO','2026-08-27','ABONO',81500,0,81553,53,$4) RETURNING id`,
+        [EMPRESA, caja, `RS-${String(process.hrtime.bigint()).slice(-6)}`, Date.now()]
+      );
+
+      expect((await queries.ingresosEnRed(EMPRESA, { registerId: caja })).length).toBe(0);
+
+      const r = await ingresosCaja.reemitirIngresos(ctx, { registerId: caja });
+      expect(r.reenviados).toBe(1);
+      await vaciar();
+
+      const enRed = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+        (i) => i.depositId === dep[0].id
+      );
+      expect(enRed?.fecha).toBe("2026-08-27");
+      expect(enRed?.estado).toBe("CONFIRMADO");
+
+      // Desde otra empresa, esa caja no tiene nada que reenviar.
+      const otra = { ...ctx, empresaId: "00000000-0000-4000-a000-0000000000ee" };
+      const ajeno = await ingresosCaja.reemitirIngresos(otra, { registerId: caja });
+      expect(ajeno.reenviados).toBe(0);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * El reenvío sobre una fila QUE YA ESTÁ en Central.
+   *
+   * Es el camino que usa `scripts/central-reemitir-ingresos.ts` para reparar
+   * lo que Central no vio en su momento, y el que estaba roto: el `ON CONFLICT`
+   * solo tocaba el estado, así que la fecha se quedaba vieja y reenviar no
+   * servía de nada. Sin esta prueba, la reparación vuelve a romperse sin que
+   * nadie se entere.
+   */
+  it("reenviar el alta actualiza la fecha de un ingreso ya proyectado", async () => {
+    const { rows: creada } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+       VALUES ($1,'reenvio',$2,$3,$4,$4) RETURNING id`,
+      [
+        EMPRESA,
+        `reenv-${String(process.hrtime.bigint()).slice(-9)}`,
+        `RE${String(process.hrtime.bigint()).slice(-6)}`,
+        Date.now(),
+      ]
+    );
+    const caja = creada[0].id;
+    const dep = Number(String(process.hrtime.bigint()).slice(-8));
+
+    const alta = (fecha: string | null) =>
+      ingest.ingerirEvento(
+        evento({
+          tipo: "BANK_DEPOSIT_CREATED",
+          aggregateType: "REGISTER",
+          aggregateId: caja,
+          registerId: caja,
+          sessionId: null,
+          datos: { depositId: dep, numero: `RV-${dep}`, importeCentimos: 81500, fecha },
+        })
+      );
+
+    // Así llegó en su día: sin la fecha del banco.
+    await alta(null);
+    const antes = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+      (i) => i.depositId === dep
+    );
+    expect(antes?.fecha).toBeNull();
+
+    // Y así lo reenvía el script, con la fecha que la caja ya tiene.
+    await alta("2026-08-27");
+    const despues = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+      (i) => i.depositId === dep
+    );
+    expect(despues?.fecha).toBe("2026-08-27");
+
+    // Y un reenvío SIN fecha no borra la que ya hay: solo rellena huecos.
+    await alta(null);
+    const tras = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+      (i) => i.depositId === dep
+    );
+    expect(tras?.fecha).toBe("2026-08-27");
+  });
+
+  /*
+   * Los filtros de la pantalla de ingresos.
+   *
+   * El del rango de fechas tiene una consecuencia que conviene dejar probada:
+   * un ingreso SIN fecha del banco queda fuera de cualquier rango. Es lo
+   * correcto —preguntar «qué se ingresó entre estos días» no puede devolver
+   * algo que no se ha ingresado ningún día—, pero si no se dice, parece que se
+   * ha perdido.
+   */
+  it("los ingresos se filtran por caja y por rango de fechas", async () => {
+    const { rows: creada } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+       VALUES ($1,'filtros',$2,$3,$4,$4) RETURNING id`,
+      [
+        EMPRESA,
+        `filtro-${String(process.hrtime.bigint()).slice(-9)}`,
+        `FL${String(process.hrtime.bigint()).slice(-6)}`,
+        Date.now(),
+      ]
+    );
+    const caja = creada[0].id;
+
+    const alta = async (numero: string, fecha: string | null) => {
+      const { rows } = await db.query(
+        `INSERT INTO cash_bank_deposits
+           (empresa_id, register_id, numero, estado, fecha_ingreso, importe_centimos,
+            remanente_anterior_centimos, total_cierres_centimos, remanente_nuevo_centimos,
+            creado_at_ms)
+         VALUES ($1,$2,$3,'CONFIRMADO',$4::date,1000,0,1000,0,$5) RETURNING id`,
+        [EMPRESA, caja, numero, fecha, Date.now()]
+      );
+      await ingest.ingerirEvento(
+        evento({
+          tipo: "BANK_DEPOSIT_CREATED",
+          aggregateType: "REGISTER",
+          aggregateId: caja,
+          registerId: caja,
+          sessionId: null,
+          datos: { depositId: rows[0].id, numero, importeCentimos: 1000, fecha },
+        })
+      );
+      return rows[0].id;
+    };
+
+    await alta(`F-ENE-${caja}`, "2026-01-15");
+    await alta(`F-JUN-${caja}`, "2026-06-15");
+    const sinFecha = await alta(`F-SIN-${caja}`, null);
+
+    const deLaCaja = await queries.ingresosEnRed(EMPRESA, { registerId: caja });
+    expect(deLaCaja).toHaveLength(3);
+
+    const primerSemestre = await queries.ingresosEnRed(EMPRESA, {
+      registerId: caja,
+      desde: "2026-01-01",
+      hasta: "2026-03-31",
+    });
+    expect(primerSemestre.map((i) => i.numero)).toEqual([`F-ENE-${caja}`]);
+
+    // El que no tiene fecha no está en NINGÚN rango, y eso es lo correcto.
+    const todoElAno = await queries.ingresosEnRed(EMPRESA, {
+      registerId: caja,
+      desde: "2026-01-01",
+      hasta: "2026-12-31",
+    });
+    expect(todoElAno.map((i) => i.depositId)).not.toContain(sinFecha);
+    expect(todoElAno).toHaveLength(2);
+  });
+
+  /*
+   * El resguardo del ingreso, por la API de Central.
+   *
+   * Existe ruta propia porque la de la caja exige `cash.view` y un supervisor
+   * de red puede no tenerlo. Lo que hay que demostrar es que **la empresa sale
+   * de la sesión y no de la petición**: pedir el resguardo de otra empresa
+   * cambiando el número tiene que no devolver nada.
+   */
+  it("el resguardo se genera para tu empresa y no para la de otro", async () => {
+    const { rows: creada } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+       VALUES ($1,'resguardo',$2,$3,$4,$4) RETURNING id`,
+      [
+        EMPRESA,
+        `resg-${String(process.hrtime.bigint()).slice(-9)}`,
+        `RG${String(process.hrtime.bigint()).slice(-6)}`,
+        Date.now(),
+      ]
+    );
+    const caja = creada[0].id;
+    const { rows: dep } = await db.query(
+      `INSERT INTO cash_bank_deposits
+         (empresa_id, register_id, numero, estado, fecha_ingreso, importe_centimos,
+          remanente_anterior_centimos, total_cierres_centimos, remanente_nuevo_centimos,
+          creado_at_ms)
+       VALUES ($1,$2,$3,'CONFIRMADO','2026-08-21',4000,0,4000,0,$4) RETURNING id`,
+      [EMPRESA, caja, `RESG-${String(process.hrtime.bigint()).slice(-6)}`, Date.now()]
+    );
+
+    const { informeIngreso } = await import("../cash/report.ts");
+
+    const pdf = await informeIngreso(EMPRESA, dep[0].id);
+    expect(pdf.length).toBeGreaterThan(1000);
+    // Un PDF de verdad y no una página de error: la firma va en los 5 primeros
+    // bytes y es lo único que distingue un Buffer válido de uno cualquiera.
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+
+    // Desde otra empresa, ese mismo ingreso no existe.
+    await expect(
+      informeIngreso("00000000-0000-4000-a000-0000000000ef", dep[0].id)
+    ).rejects.toMatchObject({ codigo: "INGRESO_NO_ENCONTRADO" });
   });
 
   /*
