@@ -124,8 +124,24 @@ export type PendienteDeIngresar = {
   dias: number | null;
 };
 
-export const ingresos = () =>
-  pedir<{ ingresos: IngresoEnRed[]; pendiente: PendienteDeIngresar[] }>("/deposits");
+export type FiltrosIngresos = {
+  centroId?: string | null;
+  registerId?: number | null;
+  desde?: string | null;
+  hasta?: string | null;
+};
+
+export const ingresos = (f: FiltrosIngresos = {}) => {
+  const q = new URLSearchParams();
+  if (f.centroId) q.set("centroId", f.centroId);
+  if (f.registerId) q.set("registerId", String(f.registerId));
+  if (f.desde) q.set("desde", f.desde);
+  if (f.hasta) q.set("hasta", f.hasta);
+  const cola = q.toString();
+  return pedir<{ ingresos: IngresoEnRed[]; pendiente: PendienteDeIngresar[] }>(
+    `/deposits${cola ? `?${cola}` : ""}`
+  );
+};
 
 export type CambioPorPieza = {
   valorCentimos: number;

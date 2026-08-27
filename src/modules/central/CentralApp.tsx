@@ -423,13 +423,24 @@ function Ingresos() {
   const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.ingresos>> | null>(null);
   const [abierto, setAbierto] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [filtros, setFiltros] = useState<api.FiltrosIngresos>({});
+  /*
+   * Los talleres y las cajas para los desplegables salen de la red, no de los
+   * ingresos: si salieran de los ingresos, al filtrar por un taller
+   * desaparecerían del desplegable los demás y no habría forma de volver.
+   */
+  const [red, setRed] = useState<Awaited<ReturnType<typeof api.red>> | null>(null);
 
   const cargar = useCallback(async () => {
     try {
-      setDatos(await api.ingresos());
+      setDatos(await api.ingresos(filtros));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error cargando los ingresos");
     }
+  }, [filtros]);
+
+  useEffect(() => {
+    void api.red().then(setRed).catch(() => setRed(null));
   }, []);
 
   useEffect(() => {
@@ -440,8 +451,94 @@ function Ingresos() {
   const pendiente = datos?.pendiente ?? [];
   const totalPendiente = pendiente.reduce((a, p) => a + p.centimos, 0);
 
+  const cajasDeFiltro = (red?.cajas ?? []).filter(
+    (c) => !filtros.centroId || c.centroId === filtros.centroId
+  );
+
   return (
     <div className="space-y-5">
+      {/*
+        * Filtros. El taller y la caja van encadenados: al elegir taller, el
+        * desplegable de cajas se queda con las suyas, porque ofrecer cajas de
+        * otro taller sobre un taller ya elegido solo sirve para no encontrar
+        * nada. Cambiar de taller limpia la caja por lo mismo.
+        */}
+      <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Taller
+          </span>
+          <select
+            value={filtros.centroId ?? ""}
+            className={inputCls}
+            onChange={(e) =>
+              setFiltros((f) => ({
+                ...f,
+                centroId: e.target.value || null,
+                registerId: null,
+              }))
+            }
+          >
+            <option value="">Todos</option>
+            {(red?.centros ?? []).map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.nombre}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Caja
+          </span>
+          <select
+            value={filtros.registerId ?? ""}
+            className={inputCls}
+            onChange={(e) =>
+              setFiltros((f) => ({ ...f, registerId: Number(e.target.value) || null }))
+            }
+          >
+            <option value="">Todas</option>
+            {cajasDeFiltro.map((c) => (
+              <option key={c.registerId} value={c.registerId}>
+                {c.nombre ?? `#${c.registerId}`}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Desde
+          </span>
+          <input
+            type="date"
+            value={filtros.desde ?? ""}
+            className={inputCls}
+            onChange={(e) => setFiltros((f) => ({ ...f, desde: e.target.value || null }))}
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Hasta
+          </span>
+          <input
+            type="date"
+            value={filtros.hasta ?? ""}
+            className={inputCls}
+            onChange={(e) => setFiltros((f) => ({ ...f, hasta: e.target.value || null }))}
+          />
+        </label>
+
+        {(filtros.centroId || filtros.registerId || filtros.desde || filtros.hasta) && (
+          <button className={btnSecondary} onClick={() => setFiltros({})}>
+            Quitar filtros
+          </button>
+        )}
+      </div>
+
       <section className="space-y-2">
         <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
           Pendiente de llevar al banco · {euros(totalPendiente)}
@@ -494,6 +591,10 @@ function Ingresos() {
             <tr>
               <th className={thCls}>Número</th>
               <th className={thCls}>Fecha</th>
+              {/* Taller y caja en columnas separadas, igual que en la tabla de
+                  arriba: el taller es por donde se lee la red, y llevarlo de
+                  apellido pequeño de la caja lo escondía. */}
+              <th className={thCls}>Taller</th>
               <th className={thCls}>Caja</th>
               <th className={thCls}>Referencia</th>
               <th className={`${thCls} text-right`}>Importe</th>
@@ -504,7 +605,7 @@ function Ingresos() {
           </thead>
           <tbody>
             {(datos?.ingresos ?? []).length === 0 && (
-              <EmptyRow cols={8} text="Todavía no se ha registrado ningún ingreso." />
+              <EmptyRow cols={9} text="No hay ingresos con esos filtros." />
             )}
             {(datos?.ingresos ?? []).map((i) => (
               <tr key={i.depositId} className="border-t border-slate-700 align-top">
@@ -513,9 +614,9 @@ function Ingresos() {
                 </td>
                 <td className={tdCls}>{i.fecha ?? "—"}</td>
                 <td className={tdCls}>
-                  {i.caja ?? "—"}
-                  {i.centro && <span className="ml-2 text-[11px] text-slate-500">{i.centro}</span>}
+                  {i.centro ?? <span className="text-amber-400">sin taller</span>}
                 </td>
+                <td className={tdCls}>{i.caja ?? "—"}</td>
                 <td className={`${tdCls} text-[11px]`}>{i.referencia ?? "—"}</td>
                 <td
                   className={`${tdCls} text-right tabular-nums ${
