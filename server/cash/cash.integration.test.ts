@@ -4899,3 +4899,174 @@ describe.runIf(RUN)("confirmar el ingreso en el banco y adjuntar el comprobante"
     ).rejects.toMatchObject({ codigo: "INGRESO_NO_ENCONTRADO" });
   });
 });
+
+describe.runIf(RUN)("cuentas bancarias de la empresa", () => {
+  /**
+   * Un IBAN español VÁLIDO y distinto en cada ejecución.
+   *
+   * Con IBAN fijos, la segunda pasada choca contra las cuentas que dejó la
+   * primera —la base de pruebas sobrevive— y el alta falla por repetida. Y no
+   * vale cualquier número: el dígito de control se calcula, porque el propio
+   * código lo comprueba y rechazaría un IBAN inventado.
+   */
+  function ibanDePrueba(): string {
+    // El BBAN español son 20 dígitos EXACTOS: 4 de entidad y 16 más. Sin
+    // rellenar, un reloj con menos cifras deja un IBAN corto que el propio
+    // validador rechaza, y la prueba fallaría por el dato, no por el código.
+    const bban = `2100${String(process.hrtime.bigint()).slice(-16).padStart(16, "0")}`;
+    const movido = `${bban}ES00`;
+    let resto = 0;
+    for (const c of movido) {
+      const valor = c >= "A" ? String(c.charCodeAt(0) - 55) : c;
+      for (const d of valor) resto = (resto * 10 + Number(d)) % 97;
+    }
+    return `ES${String(98 - resto).padStart(2, "0")}${bban}`;
+  }
+
+  it("la primera cuenta se marca sola como predeterminada", async () => {
+    // Si no, el desplegable saldría sin nada preseleccionado el primer día.
+    const { rows } = await db.query(`SELECT COUNT(*)::int AS n FROM cash_bank_accounts WHERE empresa_id=$1`, [EMPRESA]);
+    if (rows[0].n === 0) {
+      const iban = ibanDePrueba();
+      const primera = await config.crearCuenta(ctx, { banco: "BBVA", iban });
+      expect(primera.porDefecto).toBe(true);
+      // Se guarda normalizado: sin espacios y en mayúsculas.
+      expect(primera.iban).toBe(iban.replace(/\s/g, "").toUpperCase());
+    }
+  });
+
+  it("un IBAN con un dígito bailado se rechaza", async () => {
+    await expect(
+      // Un dígito de control que no cuadra: misma pinta, número imposible.
+      config.crearCuenta(ctx, { banco: "Malo", iban: "ES00 2100 0418 4502 0005 1332" })
+    ).rejects.toMatchObject({ codigo: "IBAN_NO_VALIDO" });
+  });
+
+  it("no se puede dar de alta dos veces la misma cuenta", async () => {
+    const iban = ibanDePrueba();
+    await config.crearCuenta(ctx, { banco: "Uno", iban });
+    await expect(config.crearCuenta(ctx, { banco: "Otro", iban })).rejects.toMatchObject({
+      codigo: "CUENTA_REPETIDA",
+    });
+  });
+
+  it("marcar otra como predeterminada quita la marca a la anterior", async () => {
+    // La base de datos solo admite una: sin quitar la vieja, el UPDATE moriría.
+    const a = await config.crearCuenta(ctx, { banco: "A", iban: ibanDePrueba(), porDefecto: true });
+    const b = await config.crearCuenta(ctx, { banco: "B", iban: ibanDePrueba(), porDefecto: true });
+    const lista = await config.listarCuentas(EMPRESA);
+    expect(lista.find((c) => c.id === b.id)!.porDefecto).toBe(true);
+    expect(lista.find((c) => c.id === a.id)!.porDefecto).toBe(false);
+    expect(lista.filter((c) => c.porDefecto)).toHaveLength(1);
+  });
+
+  it("la predeterminada no se da de baja sin poner otra antes", async () => {
+    const { rows } = await db.query(
+      `SELECT id FROM cash_bank_accounts WHERE empresa_id = $1 AND por_defecto`, [EMPRESA]);
+    await expect(
+      config.actualizarCuenta(ctx, rows[0].id, { activa: false })
+    ).rejects.toMatchObject({ codigo: "CUENTA_POR_DEFECTO" });
+  });
+
+  it("un ingreso nuevo va a la cuenta predeterminada sin tener que elegirla", async () => {
+    const cuenta = await config.crearCuenta(ctx, {
+      banco: "Santander",
+      iban: ibanDePrueba(),
+      porDefecto: true,
+    });
+
+    const caja = await crearCaja("cuenta-defecto");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 10000,
+      formasPago: [{ forma: "CASH", importe: 10000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 2 }],
+      concepto: "Venta",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 4 }] });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [{ valor: 5000, cantidad: 2 }] });
+
+    const ingreso = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [sesion.id],
+      importeCentimos: 10000,
+    });
+    expect(ingreso.bankAccountId).toBe(cuenta.id);
+
+    // Y el listado la trae ya resuelta, sin otra consulta desde la pantalla.
+    const panel = await ingresos.panelIngresos(EMPRESA, caja);
+    const enLista = panel.ingresos.find((i: { id: number }) => i.id === ingreso.id)!;
+    expect(enLista.banco).toBe("Santander");
+    expect(enLista.iban).toBe(cuenta.iban);
+  });
+
+  it("se puede cambiar la cuenta de un ingreso ya hecho, incluso a una de baja", async () => {
+    // El dinero pudo ir a una cuenta que después se cerró: apuntar dónde fue
+    // de verdad no es elegir dónde va.
+    const vieja = await config.crearCuenta(ctx, { banco: "Cerrada", iban: ibanDePrueba() });
+    const caja = await crearCaja("cuenta-cambio");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 10000,
+      formasPago: [{ forma: "CASH", importe: 10000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 2 }],
+      concepto: "Venta",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 4 }] });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [{ valor: 5000, cantidad: 2 }] });
+    const ingreso = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [sesion.id],
+      importeCentimos: 10000,
+    });
+
+    await config.actualizarCuenta(ctx, vieja.id, { activa: false });
+    const completado = await ingresos.completarIngreso(ctx, {
+      depositId: ingreso.id,
+      bankAccountId: vieja.id,
+      referencia: "R-777",
+    });
+    expect(completado.bankAccountId).toBe(vieja.id);
+    expect(completado.banco).toBe("Cerrada");
+  });
+
+  it("no se puede apuntar un ingreso a una cuenta de otra empresa", async () => {
+    const { rows } = await db.query(
+      `INSERT INTO cash_bank_accounts (empresa_id, banco, iban, created_at_ms, updated_at_ms)
+       VALUES ('00000000-0000-4000-a000-0000000000ff','Ajeno',$2,$1,$1)
+       RETURNING id`,
+      [Date.now(), ibanDePrueba().replace(/\s/g, "")]
+    );
+    const caja = await crearCaja("cuenta-ajena");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 10000,
+      formasPago: [{ forma: "CASH", importe: 10000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 2 }],
+      concepto: "Venta",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 4 }] });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [{ valor: 5000, cantidad: 2 }] });
+
+    await expect(
+      ingresos.crearIngreso(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        importeCentimos: 10000,
+        bankAccountId: rows[0].id,
+      })
+    ).rejects.toMatchObject({ codigo: "CUENTA_NO_ENCONTRADA" });
+  });
+});

@@ -33,6 +33,7 @@ import {
 } from "../components/ui";
 import { euros, aCentimos } from "../utils/money";
 import type {
+  CuentaBancariaConfig,
   DocumentoOperacion,
   CierrePendiente,
   LineaDenominacion,
@@ -577,8 +578,13 @@ function Historial({
                         <div className="flex justify-between gap-2"><span className="text-slate-400">+ Total cierres</span><span className="tabular-nums">{euros(i.totalCierresCentimos)}</span></div>
                         <div className="flex justify-between gap-2"><span className="text-slate-400">− Ingresado</span><span className="tabular-nums">{euros(i.importeCentimos)}</span></div>
                         <div className="mt-1 flex justify-between gap-2 border-t border-slate-700 pt-1 font-bold"><span>= Remanente nuevo</span><span className="tabular-nums text-amber-300">{euros(i.remanenteNuevoCentimos)}</span></div>
+                        {i.banco && (
+                          <div className="mt-2 text-[12px] text-slate-300">
+                            {i.banco} · <span className="font-mono">···{(i.iban ?? "").slice(-4)}</span>
+                          </div>
+                        )}
                         {i.referencia && (
-                          <div className="mt-2 text-[12px] text-slate-400">Referencia: {i.referencia}</div>
+                          <div className="text-[12px] text-slate-400">Referencia: {i.referencia}</div>
                         )}
                         {i.observaciones && (
                           <div className="text-[12px] text-slate-400">{i.observaciones}</div>
@@ -832,8 +838,20 @@ function DatosDelBanco({
   const [abierto, setAbierto] = useState(false);
   const [fecha, setFecha] = useState(ingreso.fechaIngreso ?? "");
   const [referencia, setReferencia] = useState(ingreso.referencia ?? "");
+  const [cuentaId, setCuentaId] = useState<number | "">(ingreso.bankAccountId ?? "");
+  const [cuentas, setCuentas] = useState<CuentaBancariaConfig[]>([]);
   const [ocupado, setOcupado] = useState(false);
   const [error, setError] = useState("");
+
+  // Las cuentas solo se piden al abrir el formulario: no hacen falta para
+  // pintar la fila, y son una petición por ingreso desplegado.
+  useEffect(() => {
+    if (!abierto) return;
+    void api
+      .cuentasBancarias()
+      .then((r) => setCuentas(r.cuentas))
+      .catch(() => setCuentas([]));
+  }, [abierto]);
 
   if (!editable || ingreso.estado !== "CONFIRMADO") return null;
 
@@ -841,7 +859,11 @@ function DatosDelBanco({
     setOcupado(true);
     setError("");
     try {
-      await api.completarIngreso(ingreso.id, { fechaIngreso: fecha || null, referencia });
+      await api.completarIngreso(ingreso.id, {
+        fechaIngreso: fecha || null,
+        referencia,
+        bankAccountId: cuentaId === "" ? null : cuentaId,
+      });
       setAbierto(false);
       onGuardado();
     } catch (e) {
@@ -867,6 +889,32 @@ function DatosDelBanco({
     <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900/60 p-2">
       {error && <div className="mb-1 text-[11px] text-rose-300">{error}</div>}
       <div className="flex flex-wrap items-end gap-2">
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Banco y cuenta
+          </span>
+          <select
+            value={cuentaId}
+            onChange={(e) => setCuentaId(e.target.value === "" ? "" : Number(e.target.value))}
+            className={inputCls}
+          >
+            <option value="">Sin especificar</option>
+            {/*
+              Las de baja solo salen si son LA de este ingreso: el dinero pudo
+              ir a una cuenta que después se cerró, y quitarla del desplegable
+              borraría ese dato en cuanto alguien tocara la fecha.
+            */}
+            {cuentas
+              .filter((c) => c.activa || c.id === ingreso.bankAccountId)
+              .map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.banco}
+                  {c.alias ? ` · ${c.alias}` : ""} · ···{c.iban.slice(-4)}
+                  {c.activa ? "" : " (de baja)"}
+                </option>
+              ))}
+          </select>
+        </label>
         <label className="block">
           <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
             Fecha real del ingreso

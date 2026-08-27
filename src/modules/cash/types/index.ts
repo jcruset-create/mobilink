@@ -294,6 +294,10 @@ export type IngresoBancario = {
   registerId: number;
   fechaIngreso: string | null;
   referencia: string | null;
+  /** Cuenta a la que fue el dinero. null en los anteriores al catálogo. */
+  bankAccountId: number | null;
+  banco: string | null;
+  iban: string | null;
   observaciones: string | null;
   remanenteAnteriorCentimos: number;
   totalCierresCentimos: number;
@@ -510,3 +514,16 @@ export type Zona = { id: string; nombre: string; activa: boolean; centros: numbe
 
 /** Taller. Se da de alta en Administración; aquí solo se consulta y se agrupa. */
 export type Centro = { id: string; nombre: string; zonaId: string | null; activo: boolean };
+
+/** Cuenta bancaria de la empresa: a dónde se ingresa el efectivo. */
+export type CuentaBancariaConfig = {
+  id: number;
+  banco: string;
+  iban: string;
+  alias: string;
+  activa: boolean;
+  porDefecto: boolean;
+  orden: number;
+  /** Ingresos que ya apuntan a ella. Con usos no se borra, se desactiva. */
+  usos: number;
+};

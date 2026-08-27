@@ -31,7 +31,13 @@ import {
 } from "../components/ui";
 import { MEDIDA_RECOMENDADA, PROPORCION_BOTON } from "../components/PaymentMethodPicker";
 import { euros, aCentimos } from "../utils/money";
-import type { Centro, Denominacion, FormaPagoConfig, SeccionConfig } from "../types";
+import type {
+  Centro,
+  CuentaBancariaConfig,
+  Denominacion,
+  FormaPagoConfig,
+  SeccionConfig,
+} from "../types";
 import * as api from "../services/api";
 
 type CajaConfig = {
@@ -65,6 +71,7 @@ export default function Configuracion() {
         descripcion="Cajas físicas, secciones de negocio, formas de cobro y catálogo de denominaciones."
       />
       <Cajas />
+      <CuentasBancarias />
       <Secciones />
       <FormasPago />
       {puede("cash.denominations.configure") ? <Denominaciones /> : <DenominacionesSoloLectura />}
@@ -1379,6 +1386,177 @@ function DenominacionesSoloLectura() {
                 <div>{d.piezasPorCartucho ? euros(d.piezasPorCartucho * d.valor) : "—"}</div>
                 <div className="text-[10px] text-slate-500">
                   {d.piezasPorBolsa ? euros(d.piezasPorBolsa * d.valor) : "—"}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+    </section>
+  );
+}
+
+// ── Cuentas bancarias ──────────────────────────────────────────────────────
+
+/**
+ * A dónde va el dinero de cada ingreso.
+ *
+ * Con dos bancos abiertos, un ingreso que solo dice cuánto y cuándo no se
+ * puede conciliar: falta contra qué extracto. La marcada por defecto es la que
+ * se preselecciona al ingresar, que es lo normal —casi siempre se ingresa en
+ * la misma— y evita tener que elegirla cada día.
+ */
+function CuentasBancarias() {
+  const { puede } = useCash();
+  const [cuentas, setCuentas] = useState<CuentaBancariaConfig[]>([]);
+  const [banco, setBanco] = useState("");
+  const [iban, setIban] = useState("");
+  const [alias, setAlias] = useState("");
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const editable = puede("cash.configure");
+
+  const cargar = useCallback(async () => {
+    try {
+      setCuentas((await api.cuentasBancarias()).cuentas);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando las cuentas");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function accion(fn: () => Promise<unknown>) {
+    setOcupado(true);
+    setError("");
+    try {
+      await fn();
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido guardar");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Cuentas bancarias
+      </h2>
+      <p className="text-[12px] text-slate-500">
+        Dónde se ingresa el efectivo. Al registrar un ingreso se propone la marcada como
+        predeterminada, y el resguardo que se lleva al banco sale con el banco y la cuenta
+        impresos. El IBAN se comprueba con su dígito de control: un número bailado tiene la
+        misma pinta que el bueno y no se casaría con ningún extracto.
+      </p>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {editable && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Banco</span>
+            <input value={banco} onChange={(e) => setBanco(e.target.value)} placeholder="BBVA" className={inputCls} />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">IBAN</span>
+            <input
+              value={iban}
+              onChange={(e) => setIban(e.target.value)}
+              placeholder="ES91 2100 0418 4502 0005 1332"
+              className={`${inputCls} w-72`}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Alias (opcional)
+            </span>
+            <input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Caja taller" className={inputCls} />
+          </label>
+          <button
+            onClick={() =>
+              void accion(async () => {
+                await api.crearCuentaBancaria({ banco, iban, alias });
+                setBanco("");
+                setIban("");
+                setAlias("");
+              })
+            }
+            disabled={ocupado || !banco.trim() || !iban.trim()}
+            className={btnPrimary}
+          >
+            + Añadir cuenta
+          </button>
+        </div>
+      )}
+
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Banco</th>
+            <th className={thCls}>IBAN</th>
+            <th className={`${thCls} text-right`}>Ingresos</th>
+            <th className={thCls}>Estado</th>
+            <th className={`${thCls} text-right`}>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {cuentas.length === 0 && (
+            <EmptyRow cols={5} text="Todavía no hay ninguna cuenta bancaria." />
+          )}
+          {cuentas.map((c) => (
+            <tr key={c.id} className={c.activa ? "" : "opacity-60"}>
+              <td className={tdCls}>
+                <div className="font-medium text-slate-100">{c.banco}</div>
+                {c.alias && <div className="text-[10px] text-slate-500">{c.alias}</div>}
+              </td>
+              <td className={`${tdCls} font-mono text-[11px] tabular-nums text-slate-300`}>
+                {c.iban.replace(/(.{4})/g, "$1 ").trim()}
+              </td>
+              <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{c.usos}</td>
+              <td className={tdCls}>
+                {c.porDefecto ? (
+                  <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-[10px] font-bold text-sky-300">
+                    Predeterminada
+                  </span>
+                ) : c.activa ? (
+                  <span className="text-[11px] text-slate-400">Activa</span>
+                ) : (
+                  <span className="text-[11px] text-slate-500">De baja</span>
+                )}
+              </td>
+              <td className={tdCls}>
+                <div className="flex justify-end gap-1">
+                  {editable && !c.porDefecto && c.activa && (
+                    <button
+                      onClick={() => void accion(() => api.actualizarCuentaBancaria(c.id, { porDefecto: true }))}
+                      disabled={ocupado}
+                      className={btnMini}
+                      title="Marcarla como predeterminada: es la que se propone al registrar un ingreso"
+                    >
+                      Predeterminar
+                    </button>
+                  )}
+                  {editable && (
+                    <button
+                      onClick={() => void accion(() => api.actualizarCuentaBancaria(c.id, { activa: !c.activa }))}
+                      disabled={ocupado || (c.porDefecto && c.activa)}
+                      className={btnMini}
+                      title={
+                        c.porDefecto && c.activa
+                          ? "La predeterminada no se da de baja: marca antes otra"
+                          : c.activa
+                            ? "Dar de baja: deja de salir al ingresar, pero sus ingresos siguen ahí"
+                            : "Reactivar"
+                      }
+                    >
+                      {c.activa ? "Dar de baja" : "Reactivar"}
+                    </button>
+                  )}
                 </div>
               </td>
             </tr>

@@ -1182,6 +1182,60 @@ export async function initCash(): Promise<void> {
       ON cash_operation_documents(deposit_id) WHERE deposit_id IS NOT NULL;
   `);
 
+  /*
+   * Cuentas bancarias de la empresa: a dónde va el dinero de cada ingreso.
+   *
+   * Sin esto, un ingreso decía cuánto y cuándo pero no A DÓNDE, y con dos
+   * bancos abiertos eso es justo lo que hace falta para conciliar contra el
+   * extracto correcto.
+   *
+   * `activa` en vez de borrar: una cuenta que se cierra sigue siendo la de los
+   * ingresos que ya se hicieron, y borrarla los dejaría huérfanos.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_bank_accounts (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      banco TEXT NOT NULL,
+      /* IBAN normalizado: sin espacios y en mayúsculas, como se compara. */
+      iban TEXT NOT NULL,
+      /* Nombre corto para el desplegable: «BBVA nómina», «Caixa taller». */
+      alias TEXT NOT NULL DEFAULT '',
+      activa BOOLEAN NOT NULL DEFAULT true,
+      por_defecto BOOLEAN NOT NULL DEFAULT false,
+      orden INTEGER NOT NULL DEFAULT 0,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, iban)
+    );
+    CREATE INDEX IF NOT EXISTS cash_bank_accounts_empresa_idx
+      ON cash_bank_accounts(empresa_id, activa, orden);
+  `);
+
+  /*
+   * Una sola cuenta por defecto por empresa. Índice único parcial y no una
+   * comprobación en el código: con dos marcadas, «la de por defecto» dejaría
+   * de significar nada y la elegida dependería del orden de la consulta.
+   */
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_bank_accounts_una_por_defecto_idx
+      ON cash_bank_accounts(empresa_id) WHERE por_defecto;
+  `);
+
+  /*
+   * La cuenta a la que fue cada ingreso. NULL en los ya hechos: no se puede
+   * adivinar a qué banco fueron, y ponerles una a dedo sería inventarse un
+   * dato contable. Se rellenan a mano desde la pantalla si hace falta.
+   *
+   * ON DELETE RESTRICT: una cuenta con ingresos detrás no se borra, se
+   * desactiva.
+   */
+  await pool.query(`
+    ALTER TABLE cash_bank_deposits
+      ADD COLUMN IF NOT EXISTS bank_account_id INTEGER
+        REFERENCES cash_bank_accounts(id) ON DELETE RESTRICT;
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 
