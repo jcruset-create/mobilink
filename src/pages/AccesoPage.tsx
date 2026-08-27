@@ -101,7 +101,6 @@ export default function AccesoPage() {
           value={usuario}
           onChange={(e) => setUsuario(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && entrar()}
-          placeholder="Jordi"
           autoComplete="username"
           autoCapitalize="none"
           autoCorrect="off"
