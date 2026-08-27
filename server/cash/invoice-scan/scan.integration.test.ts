@@ -153,12 +153,27 @@ describe.runIf(RUN)("escaneo de factura", () => {
     expect(rows[0].extraccion_normalizada.totales.totalCentimos).toBe(19510);
   });
 
-  it("el número de tarjeta entero NO llega a la base de datos", async () => {
-    // Del recibo solo pueden entrar los cuatro últimos, en ningún sitio más.
-    const p = await escanear(extraccion580());
+  it("el número de tarjeta entero NO llega a la base de datos, ni en la cruda", async () => {
+    /*
+     * Ni en la normalizada ni en la cruda, que es la que se guarda «tal cual»
+     * para poder auditarla: ese «tal cual» tiene este límite. Se comprueba con
+     * un recibo en el que el datáfono NO ha enmascarado, que es el caso que
+     * hay que cubrir —si siempre enmascarara, no haría falta recortar nada—.
+     */
+    const cruda = extraccion580();
+    cruda.recibo.tarjeta = "4548810000001234";
+    cruda.recibo.texto = "VENTA TARJETA 4548 8100 0000 1234 COMERC: 702";
+
+    const p = await escanear(cruda);
     const { rows } = await db.query(`SELECT * FROM cash_invoice_scans WHERE id = $1`, [p.scanId]);
-    expect(rows[0].extraccion_normalizada.recibo.tarjetaUltimos4).toBe("7394");
-    expect(JSON.stringify(rows[0].extraccion_normalizada)).not.toContain("************7394");
+    const guardado = JSON.stringify(rows[0]);
+
+    expect(rows[0].extraccion_normalizada.recibo.tarjetaUltimos4).toBe("1234");
+    expect(rows[0].extraccion_cruda.recibo.tarjeta).toBe("···1234");
+    expect(guardado).not.toContain("4548810000001234");
+    expect(guardado).not.toContain("4548 8100 0000 1234");
+    // Y el número de comercio, que sí hace falta para conciliar, sigue ahí.
+    expect(guardado).toContain("702");
   });
 });
 

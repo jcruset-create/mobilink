@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import type { ExtraccionCruda } from "./types.ts";
 import {
   confianza,
   fechaImpresa,
@@ -12,6 +13,7 @@ import {
   importeImpreso,
   matricula,
   textoOpcional,
+  sinDatosDeTarjeta,
   ultimosCuatro,
 } from "./normalize.ts";
 
@@ -154,5 +156,42 @@ describe("confianza declarada por el modelo", () => {
     expect(confianza(undefined)).toBe(0);
     expect(confianza(null)).toBe(0);
     expect(confianza("mucha")).toBe(0);
+  });
+});
+
+describe("la cruda se guarda sin números de tarjeta", () => {
+  const conTarjeta = (tarjeta: string | null, texto: string | null) =>
+    ({
+      recibo: { tarjeta, texto },
+    }) as unknown as ExtraccionCruda;
+
+  it("la tarjeta se queda en sus cuatro últimos", () => {
+    const r = sinDatosDeTarjeta(conTarjeta("************7394", null));
+    expect(r.recibo.tarjeta).toBe("···7394");
+  });
+
+  it("un número entero que se colara en el texto también se recorta", () => {
+    /*
+     * Los datáfonos enmascaran, pero eso depende de cómo esté configurado cada
+     * uno, y un OCR puede leer asteriscos como ceros. Lo que no puede pasar es
+     * que quede guardado: no lo arregla nadie después.
+     */
+    const r = sinDatosDeTarjeta(
+      conTarjeta(null, "VENTA 4548 8100 0000 1234 IMPORTE 22,93 EUR")
+    );
+    expect(r.recibo.texto).toBe("VENTA ···1234 IMPORTE 22,93 EUR");
+    expect(r.recibo.texto).not.toContain("4548");
+  });
+
+  it("lo que no es una tarjeta no se toca", () => {
+    // Un número de comercio o una autorización son cortos y tienen que quedar.
+    const r = sinDatosDeTarjeta(conTarjeta(null, "COMERC: 266179530 AUT: 201864"));
+    expect(r.recibo.texto).toBe("COMERC: 266179530 AUT: 201864");
+  });
+
+  it("sin recibo no revienta", () => {
+    const r = sinDatosDeTarjeta(conTarjeta(null, null));
+    expect(r.recibo.tarjeta).toBe(null);
+    expect(r.recibo.texto).toBe(null);
   });
 });

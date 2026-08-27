@@ -19,7 +19,7 @@ import { ErrorCaja } from "../errors.ts";
 import { formasPagoActivas } from "../config.ts";
 import { clasificar, type ReglaFormaCobro } from "./classifier.ts";
 import { extractorIA, type DocumentoAdjunto, type ExtractorFacturas } from "./extractor.ts";
-import { evidenciaDeCobro, normalizar } from "./normalize.ts";
+import { evidenciaDeCobro, normalizar, sinDatosDeTarjeta } from "./normalize.ts";
 import type { Aviso, PropuestaCobro } from "./types.ts";
 import { validar } from "./validate.ts";
 
@@ -259,7 +259,8 @@ export async function escanearFactura(
       crypto.createHash("sha256").update(documento.contenido).digest("hex"),
       "openai:responses",
       duracionMs,
-      JSON.stringify(cruda),
+      // Cruda, pero sin números de tarjeta: eso no se guarda ni para auditar.
+      JSON.stringify(sinDatosDeTarjeta(cruda)),
       JSON.stringify(normalizada),
       propuesta.formaCobro.formaPago,
       propuesta.formaCobro.confianza,

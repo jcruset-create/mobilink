@@ -149,6 +149,23 @@ export function ultimosCuatro(texto: string | null | undefined): string | null {
 }
 
 /**
+ * Enmascara cualquier cosa que parezca un número de tarjeta entero.
+ *
+ * Los datáfonos imprimen la tarjeta enmascarada, pero eso depende de cómo esté
+ * configurado cada uno, y un OCR puede leer los asteriscos como ceros. Lo que
+ * no puede pasar es que ese número quede guardado: no lo arregla nadie
+ * después.
+ *
+ * Doce dígitos seguidos o más, con o sin separadores. Un número de comercio o
+ * una autorización son mucho más cortos y no se tocan, que son justo los que
+ * hacen falta para conciliar.
+ */
+export function enmascararTarjetas(texto: string | null): string | null {
+  if (!texto) return texto;
+  return texto.replace(/(?:\d[ -]?){11,}\d/g, (trozo) => `···${trozo.replace(/\D/g, "").slice(-4)}`);
+}
+
+/**
  * Un identificador del recibo —comercio, terminal, autorización—.
  *
  * Se quitan los separadores de millar que mete la impresora del TPV
@@ -224,7 +241,7 @@ export function normalizar(cruda: ExtraccionCruda): ExtraccionNormalizada {
       adquirente: textoOpcional(r?.adquirente),
       cuenta: textoOpcional(r?.cuenta),
       fechaHora: textoOpcional(r?.fecha_hora),
-      texto: textoOpcional(r?.texto),
+      texto: enmascararTarjetas(textoOpcional(r?.texto)),
     },
     confianza: {
       numeroFactura: confianza(cruda.confianza?.numero_factura),
@@ -256,5 +273,29 @@ export function evidenciaDeCobro(n: ExtraccionNormalizada): EvidenciaCobro {
     plantilla: n.recibo.plantilla,
     textoRecibo: n.recibo.texto,
     confianzaRecibo: n.confianza.recibo,
+  };
+}
+
+/**
+ * La extracción cruda, sin números de tarjeta.
+ *
+ * La cruda se guarda tal y como la devuelve el modelo, para poder auditarla.
+ * «Tal cual» tiene un límite: los recibos imprimen la tarjeta enmascarada
+ * —«************7394»— pero eso depende del datáfono, y un recibo mal
+ * configurado, o un OCR que se invente ceros, podría dejar ahí una tirada de
+ * dígitos que parezca un número de tarjeta entero.
+ *
+ * Guardar eso no lo arregla nadie después: se recorta ANTES de escribirlo, y
+ * no se pierde nada, porque lo que sirve para conciliar son los cuatro
+ * últimos, que se guardan aparte en la normalizada.
+ */
+export function sinDatosDeTarjeta(cruda: ExtraccionCruda): ExtraccionCruda {
+  return {
+    ...cruda,
+    recibo: {
+      ...cruda.recibo,
+      tarjeta: cruda.recibo?.tarjeta ? `···${ultimosCuatro(cruda.recibo.tarjeta) ?? ""}` : null,
+      texto: enmascararTarjetas(cruda.recibo?.texto ?? null),
+    },
   };
 }
