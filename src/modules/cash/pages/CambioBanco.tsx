@@ -107,6 +107,7 @@ export default function CambioBanco() {
   const [error, setError] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [pedidoImpreso, setPedidoImpreso] = useState<PedidoCambio | null>(null);
+  const [pedidoInforme, setPedidoInforme] = useState<PedidoCambio | null>(null);
 
   const importe = aCentimos(importeTexto) ?? 0;
   const gestiona = puede("cash.treasury.manage");
@@ -385,10 +386,11 @@ export default function CambioBanco() {
               <th className={`${thCls} text-right`}>Volvió</th>
               <th className={thCls}>Estado</th>
               <th className={thCls}>Observaciones</th>
+              <th className={`${thCls} text-right`}>Detalle</th>
             </tr>
           </thead>
           <tbody>
-            {pedidos.length === 0 && <EmptyRow cols={5} text="Todavía no se ha pedido cambio." />}
+            {pedidos.length === 0 && <EmptyRow cols={6} text="Todavía no se ha pedido cambio." />}
             {pedidos
               .filter((p) => p.estado !== "PENDIENTE")
               .map((p) => (
@@ -412,11 +414,32 @@ export default function CambioBanco() {
                   <td className={`${tdCls} text-[11px] text-slate-400`}>
                     {p.diferenciaMotivo ?? "—"}
                   </td>
+                  <td className={`${tdCls} text-right`}>
+                    {/*
+                      El importe que salió y el que volvió ya están en la fila;
+                      lo que falta es EN QUÉ piezas, que es lo que se compara
+                      contra la bolsa que trae el que ha ido al banco.
+                    */}
+                    <button
+                      onClick={() => setPedidoInforme(p)}
+                      className="rounded-lg bg-slate-700 px-2.5 py-1 text-[11px] font-medium text-slate-100 hover:bg-slate-600"
+                    >
+                      Ver informe
+                    </button>
+                  </td>
                 </tr>
               ))}
           </tbody>
         </TableWrap>
       </section>
+
+      {pedidoInforme && (
+        <InformeCambio
+          pedido={pedidoInforme}
+          denominaciones={denominaciones}
+          onCerrar={() => setPedidoInforme(null)}
+        />
+      )}
 
       {pedidoImpreso && (
         <HojaBanco
@@ -641,6 +664,216 @@ function PedidoPendiente({
   );
 }
 
+// ── Piezas de un cambio, en pantalla ───────────────────────────────────────
+
+type LineaCambio = { valor: number; cantidad: number; cartuchos: number; bolsas?: number };
+
+/** «3 cartuchos de 25» o «12 sueltas»: cómo se pide en la ventanilla. */
+function comoSePide(l: LineaCambio, denominaciones: readonly Denominacion[]): string {
+  const d = denominaciones.find((x) => x.valor === l.valor);
+  if (l.cartuchos > 0) {
+    return `${l.cartuchos} ${l.cartuchos === 1 ? "cartucho" : "cartuchos"} de ${d?.piezasPorCartucho ?? "?"}`;
+  }
+  if (l.bolsas && l.bolsas > 0) {
+    return `${l.bolsas} ${l.bolsas === 1 ? "bolsa" : "bolsas"} de ${d?.piezasPorBolsa ?? "?"}`;
+  }
+  return `${l.cantidad} ${l.cantidad === 1 ? "suelta" : "sueltas"}`;
+}
+
+const sumaDe = (lineas: readonly LineaCambio[]) =>
+  lineas.reduce((a, l) => a + l.valor * l.cantidad, 0);
+
+/**
+ * Una de las tres patas del informe: lo que salió, lo que se pidió, lo que
+ * volvió. Las tres se leen igual porque son la misma pregunta —qué piezas y
+ * cuánto suman— hecha en tres momentos distintos.
+ */
+function TablaCambio({
+  lineas,
+  denominaciones,
+  vacio,
+}: {
+  lineas: readonly LineaCambio[];
+  denominaciones: readonly Denominacion[];
+  vacio: string;
+}) {
+  if (lineas.length === 0) {
+    return <p className="py-1 text-sm italic text-slate-500">{vacio}</p>;
+  }
+  return (
+    <table className="w-full border-collapse text-sm">
+      <thead>
+        <tr className="border-b border-slate-300 text-[11px] uppercase tracking-wide text-slate-500">
+          <th className="py-1 text-left font-bold">Denominación</th>
+          <th className="py-1 text-right font-bold">Cómo viene</th>
+          <th className="py-1 text-right font-bold">Piezas</th>
+          <th className="py-1 text-right font-bold">Importe</th>
+        </tr>
+      </thead>
+      <tbody>
+        {lineas.map((l, i) => (
+          <tr key={`${l.valor}-${i}`} className="border-b border-slate-200">
+            <td className="py-1">{etiquetaDe(l.valor)}</td>
+            <td className="py-1 text-right">{comoSePide(l, denominaciones)}</td>
+            <td className="py-1 text-right tabular-nums">{l.cantidad}</td>
+            <td className="py-1 text-right tabular-nums">{euros(l.valor * l.cantidad)}</td>
+          </tr>
+        ))}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td className="py-1.5 font-bold" colSpan={3}>
+            Total
+          </td>
+          <td className="py-1.5 text-right font-black tabular-nums">{euros(sumaDe(lineas))}</td>
+        </tr>
+      </tfoot>
+    </table>
+  );
+}
+
+// ── Informe del cambio ─────────────────────────────────────────────────────
+
+/**
+ * Qué salió de la caja y qué volvió del banco, en una hoja.
+ *
+ * El histórico dice cuánto salió y cuánto volvió, y con eso basta para ver que
+ * cuadra. Lo que no dice es EN QUÉ: se fueron dos billetes de 50 y volvieron
+ * cuatro cartuchos de 2 € y cincuenta monedas de 20 céntimos. Eso es lo que
+ * hay que comprobar contra la bolsa que trae el que ha ido al banco, y lo que
+ * explica, meses después, por qué el stock de la caja cambió de forma ese día.
+ *
+ * Se ve en pantalla, no se descarga: es una comprobación de mostrador, de las
+ * de mirar y cerrar. El botón de imprimir sigue ahí para quien quiera el papel.
+ */
+function InformeCambio({
+  pedido,
+  denominaciones,
+  onCerrar,
+}: {
+  pedido: PedidoCambio;
+  denominaciones: readonly Denominacion[];
+  onCerrar: () => void;
+}) {
+  const { cajas, cajaId } = useCash();
+  const caja = cajas.find((c) => c.id === cajaId);
+
+  const salio = sumaDe(pedido.enviado);
+  const volvio = sumaDe(pedido.recibido);
+  /*
+   * Un pedido cancelado no tiene líneas de RECIBIDO: el dinero vuelve a la
+   * caja tal y como salió, sin pasar por la ventanilla. Decirlo con palabras
+   * evita que un «volvió: nada» se lea como dinero perdido.
+   */
+  const cancelado = pedido.estado === "CANCELADO";
+  const diferencia = cancelado ? 0 : volvio - salio;
+
+  const fecha = (ms: number | null) =>
+    ms == null ? "—" : new Date(ms).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/70 p-4 print:static print:bg-white print:p-0">
+      <div className="w-full max-w-2xl rounded-xl bg-white p-6 text-slate-900 print:max-w-none print:rounded-none">
+        <div className="mb-4 flex items-start justify-between print:hidden">
+          <h2 className="text-lg font-black">Informe del cambio</h2>
+          <div className="flex gap-2">
+            <button
+              onClick={() => window.print()}
+              className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-white"
+            >
+              <Printer className="h-3.5 w-3.5" /> Imprimir
+            </button>
+            <button
+              onClick={onCerrar}
+              className="rounded-lg bg-slate-200 px-3 py-1.5 text-[12px] font-medium text-slate-700"
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+
+        <div className="mb-4 border-b border-slate-300 pb-3">
+          <div className="font-mono text-base font-bold">{pedido.numero}</div>
+          {caja && (
+            <div className="text-sm text-slate-600">
+              {caja.centro ? `${caja.centro} · ` : ""}
+              {caja.nombre}
+            </div>
+          )}
+          <div className="mt-1 text-[12px] text-slate-500">
+            Salió el {fecha(pedido.creadoAtMs)}
+            {" · "}
+            {cancelado ? "Cancelado" : "Volvió"} el {fecha(pedido.cerradoAtMs)}
+          </div>
+        </div>
+
+        <section className="mb-5">
+          <h3 className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+            Salió de la caja
+          </h3>
+          <TablaCambio
+            lineas={pedido.enviado}
+            denominaciones={denominaciones}
+            vacio="Sin desglose de lo que salió."
+          />
+        </section>
+
+        <section className="mb-5">
+          <h3 className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+            Se le pidió al banco
+          </h3>
+          <TablaCambio
+            lineas={pedido.solicitado}
+            denominaciones={denominaciones}
+            vacio="Sin desglose de lo que se pidió."
+          />
+        </section>
+
+        <section className="mb-5">
+          <h3 className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+            Volvió del banco
+          </h3>
+          {cancelado ? (
+            <p className="py-1 text-sm italic text-slate-600">
+              El pedido se canceló: a la caja volvió el mismo dinero que había salido.
+            </p>
+          ) : (
+            <TablaCambio
+              lineas={pedido.recibido}
+              denominaciones={denominaciones}
+              vacio="Todavía no ha vuelto: el dinero sigue en el banco."
+            />
+          )}
+        </section>
+
+        <section className="rounded-lg bg-slate-100 p-3 text-sm">
+          <div className="flex justify-between">
+            <span>Salió</span>
+            <span className="font-bold tabular-nums">{euros(salio)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Volvió</span>
+            <span className="font-bold tabular-nums">{euros(cancelado ? salio : volvio)}</span>
+          </div>
+          <div
+            className={`mt-1 flex justify-between border-t border-slate-300 pt-1 font-black ${
+              diferencia === 0 ? "" : "text-red-700"
+            }`}
+          >
+            <span>Diferencia</span>
+            <span className="tabular-nums">{euros(diferencia)}</span>
+          </div>
+          {pedido.diferenciaMotivo && (
+            <p className="mt-2 text-[12px] text-slate-600">{pedido.diferenciaMotivo}</p>
+          )}
+        </section>
+
+        {pedido.notas && <p className="mt-3 text-[12px] text-slate-600">{pedido.notas}</p>}
+      </div>
+    </div>
+  );
+}
+
 // ── Hoja para llevar al banco ──────────────────────────────────────────────
 
 /**
@@ -667,18 +900,6 @@ function HojaBanco({
 }) {
   const { cajas, cajaId } = useCash();
   const caja = cajas.find((c) => c.id === cajaId);
-
-  /** «3 cartuchos de 25» o «12 sueltas»: cómo se pide en la ventanilla. */
-  const comoSePide = (l: { valor: number; cantidad: number; cartuchos: number; bolsas?: number }) => {
-    const d = denominaciones.find((x) => x.valor === l.valor);
-    if (l.cartuchos > 0) {
-      return `${l.cartuchos} ${l.cartuchos === 1 ? "cartucho" : "cartuchos"} de ${d?.piezasPorCartucho ?? "?"}`;
-    }
-    if (l.bolsas && l.bolsas > 0) {
-      return `${l.bolsas} ${l.bolsas === 1 ? "bolsa" : "bolsas"} de ${d?.piezasPorBolsa ?? "?"}`;
-    }
-    return `${l.cantidad} sueltas`;
-  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-black/70 p-4 print:static print:bg-white print:p-0">
@@ -720,7 +941,7 @@ function HojaBanco({
             {lineas.map((l, i) => (
               <tr key={`${l.valor}-${i}`} className="border-b border-slate-200">
                 <td className="py-1">{etiquetaDe(l.valor)}</td>
-                <td className="py-1 text-right tabular-nums">{comoSePide(l)}</td>
+                <td className="py-1 text-right tabular-nums">{comoSePide(l, denominaciones)}</td>
                 <td className="py-1 text-right tabular-nums">{l.cantidad}</td>
                 <td className="py-1 text-right tabular-nums">{euros(l.cantidad * l.valor)}</td>
               </tr>
