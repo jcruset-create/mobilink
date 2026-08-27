@@ -527,3 +527,32 @@ export type CuentaBancariaConfig = {
   /** Ingresos que ya apuntan a ella. Con usos no se borra, se desactiva. */
   usos: number;
 };
+
+/**
+ * Estado de un ingreso TAL Y COMO SE LEE, que no es el de la base de datos.
+ *
+ * En la tabla, `estado` solo distingue vivo de anulado: «CONFIRMADO» ahí
+ * significa «registrado en la aplicación», no «el dinero ya está en el banco».
+ * Son dos cosas distintas y en el mostrador importa la segunda: entre que se
+ * prepara la bolsa y que alguien vuelve con el resguardo pasan horas o días, y
+ * ese hueco es justo donde se pierde el dinero.
+ *
+ * La señal de que ya se hizo de verdad es tener FECHA REAL, que es lo que se
+ * rellena al volver del banco. Se deriva en vez de guardar otra columna:
+ * un estado aparte podría acabar diciendo «confirmado» sin fecha, o al revés.
+ */
+export type EstadoIngresoVisible = "PENDIENTE_CONFIRMAR" | "CONFIRMADO" | "ANULADO";
+
+export function estadoIngreso(i: {
+  estado: "CONFIRMADO" | "ANULADO";
+  fechaIngreso: string | null;
+}): EstadoIngresoVisible {
+  if (i.estado === "ANULADO") return "ANULADO";
+  return i.fechaIngreso ? "CONFIRMADO" : "PENDIENTE_CONFIRMAR";
+}
+
+export const ETIQUETA_ESTADO_INGRESO: Record<EstadoIngresoVisible, string> = {
+  PENDIENTE_CONFIRMAR: "Pendiente de confirmar",
+  CONFIRMADO: "Confirmado",
+  ANULADO: "Anulado",
+};

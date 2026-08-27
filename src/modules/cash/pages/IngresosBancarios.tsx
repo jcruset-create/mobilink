@@ -32,6 +32,7 @@ import {
   btnSecondary,
 } from "../components/ui";
 import { euros, aCentimos } from "../utils/money";
+import { ETIQUETA_ESTADO_INGRESO, estadoIngreso } from "../types";
 import type {
   CuentaBancariaConfig,
   DocumentoOperacion,
@@ -536,16 +537,35 @@ function Historial({
                 <td className={`${tdCls} text-right tabular-nums text-amber-300`}>
                   {euros(i.remanenteNuevoCentimos)}
                 </td>
+                {/*
+                  Verde solo cuando el dinero ESTÁ en el banco. Registrar el
+                  ingreso y hacerlo son dos momentos distintos, y pintar los dos
+                  igual escondía el hueco entre ellos: el único sitio donde el
+                  efectivo puede perderse sin que nadie lo note.
+                */}
                 <td className={tdCls}>
-                  {i.estado === "ANULADO" ? (
-                    <span className="rounded-full bg-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-400" title={i.anuladoMotivo ?? ""}>
-                      Anulado
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
-                      Confirmado
-                    </span>
-                  )}
+                  {(() => {
+                    const estado = estadoIngreso(i);
+                    const pinta = {
+                      ANULADO: "bg-slate-700 text-slate-400",
+                      PENDIENTE_CONFIRMAR: "bg-amber-500/20 text-amber-300",
+                      CONFIRMADO: "bg-emerald-500/20 text-emerald-300",
+                    }[estado];
+                    return (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${pinta}`}
+                        title={
+                          estado === "ANULADO"
+                            ? (i.anuladoMotivo ?? "")
+                            : estado === "PENDIENTE_CONFIRMAR"
+                              ? "Registrado en la aplicación, pero todavía sin la fecha real del banco"
+                              : `Ingresado en el banco el ${i.fechaIngreso}`
+                        }
+                      >
+                        {ETIQUETA_ESTADO_INGRESO[estado]}
+                      </span>
+                    );
+                  })()}
                 </td>
                 <td className={tdCls} onClick={(e) => e.stopPropagation()}>
                   <BotonInforme
