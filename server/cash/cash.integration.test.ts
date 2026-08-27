@@ -5216,7 +5216,24 @@ describe.runIf(RUN)("maestro de bancos", () => {
       if (!banco.logo) continue;
       const fichero = path.join(process.cwd(), "public", banco.logo.replace(/^\//, ""));
       expect(fs.existsSync(fichero), `falta ${banco.logo}`).toBe(true);
+      // Con transparencia: la cabecera del resguardo es azul marino, y un
+      // logotipo con su fondo dentro sale metido en un recuadro.
+      const { hasAlpha } = await sharp(fs.readFileSync(fichero)).metadata();
+      expect(hasAlpha, `${banco.logo} sin transparencia`).toBe(true);
     }
+  });
+
+  it("el logotipo de Mobilink Cash de las cabeceras va sin fondo", async () => {
+    /*
+     * El fichero de siempre trae dentro su propio azul marino, parecido al de
+     * la banda pero no igual, y sobre el papel se le veía el recuadro. Las
+     * cabeceras usan la versión recortada; si desapareciera, volvería el
+     * recuadro sin que nadie se enterara hasta imprimir.
+     */
+    const fichero = path.join(process.cwd(), "public", "logo-cash-fondo-oscuro.png");
+    expect(fs.existsSync(fichero)).toBe(true);
+    const { hasAlpha } = await sharp(fs.readFileSync(fichero)).metadata();
+    expect(hasAlpha).toBe(true);
   });
 
   it("una cuenta de CaixaBank saca el logotipo aunque nadie haya subido ninguno", async () => {

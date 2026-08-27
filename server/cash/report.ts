@@ -134,6 +134,25 @@ async function imagenesDelCatalogo(
 }
 
 /** Genera el informe entero. Devuelve el PDF listo para descargar. */
+/**
+ * El logotipo de Mobilink Cash para la cabecera de los informes.
+ *
+ * Va el de FONDO TRANSPARENTE. El fichero de siempre trae dentro su propio
+ * azul marino, parecido al de la banda pero no igual, y sobre el papel se le
+ * veía el recuadro alrededor. La versión recortada se apoya directamente en la
+ * banda, sea del color que sea.
+ *
+ * Si faltara, se usa el de siempre: un recuadro se aguanta, quedarse sin
+ * cabecera no.
+ */
+function logoMobilink(): string | null {
+  for (const nombre of ["logo-cash-fondo-oscuro.png", "logo-cash.png"]) {
+    const fichero = path.join(process.cwd(), "public", nombre);
+    if (fs.existsSync(fichero)) return fichero;
+  }
+  return null;
+}
+
 export async function informeCierre(empresaId: string, sessionId: number): Promise<Buffer> {
   const detalle = await detalleJornada(sessionId);
   if (detalle.sesion.empresaId !== empresaId) {
@@ -233,10 +252,10 @@ async function construirPortada(d: {
     // puede dejar sin informe a quien cierra la caja.
     let x = M;
     try {
-      const logo = path.join(process.cwd(), "public", "logo-cash.png");
-      if (fs.existsSync(logo)) {
-        doc.image(logo, M, 14, { height: 30 });
-        x = M + 120;
+      const logo = logoMobilink();
+      if (logo) {
+        doc.image(logo, M, 12, { height: 34 });
+        x = M + 132;
       }
     } catch {
       /* sin logotipo: manda el texto */
@@ -1062,10 +1081,10 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   doc.rect(0, 0, doc.page.width, 58).fill("#101a33");
   let xCab = M;
   try {
-    const logo = path.join(process.cwd(), "public", "logo-cash.png");
-    if (fs.existsSync(logo)) {
-      doc.image(logo, M, 14, { height: 30 });
-      xCab = M + 120;
+    const logo = logoMobilink();
+    if (logo) {
+      doc.image(logo, M, 12, { height: 34 });
+      xCab = M + 132;
     }
   } catch {
     /* sin logotipo: manda el texto */
