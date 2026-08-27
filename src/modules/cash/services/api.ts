@@ -271,6 +271,28 @@ export const adjuntarDocumento = (operationId: number, fichero: File) => {
   });
 };
 
+export const completarIngreso = (
+  depositId: number,
+  datos: { fechaIngreso?: string | null; referencia?: string | null; observaciones?: string | null }
+) =>
+  // El method va DESPUÉS del spread: json() trae POST y lo pisaría.
+  pedir<{ ingreso: IngresoBancario }>(`/bank-deposits/${depositId}`, {
+    ...json(datos),
+    method: "PATCH",
+  });
+
+export const documentosDeIngreso = (depositId: number) =>
+  pedir<{ documentos: DocumentoOperacion[] }>(`/bank-deposits/${depositId}/documents`);
+
+export const adjuntarDocumentoAIngreso = (depositId: number, fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("documento", fichero);
+  return pedir<{ documento: DocumentoOperacion }>(`/bank-deposits/${depositId}/documents`, {
+    method: "POST",
+    body: cuerpo,
+  });
+};
+
 export const anularDocumento = (id: number, motivo: string) =>
   pedir<{ documento: DocumentoOperacion }>(`/documents/${id}/void`, json({ motivo }));
 
