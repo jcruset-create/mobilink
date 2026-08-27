@@ -25,6 +25,7 @@ import {
   Menu,
   Landmark,
   Network,
+  RefreshCw,
   TrendingUp,
   Wallet,
 } from "lucide-react";
@@ -430,6 +431,8 @@ function Ingresos() {
    * desaparecerían del desplegable los demás y no habría forma de volver.
    */
   const [red, setRed] = useState<Awaited<ReturnType<typeof api.red>> | null>(null);
+  const [resync, setResync] = useState("");
+  const [ocupado, setOcupado] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
@@ -454,6 +457,8 @@ function Ingresos() {
   const cajasDeFiltro = (red?.cajas ?? []).filter(
     (c) => !filtros.centroId || c.centroId === filtros.centroId
   );
+  // Reparar no es mirar: el botón solo sale a quien puede configurar la red.
+  const puedeConfigurar = red?.permisos?.includes("central.zones.configure") ?? false;
 
   return (
     <div className="space-y-5">
@@ -536,6 +541,52 @@ function Ingresos() {
           <button className={btnSecondary} onClick={() => setFiltros({})}>
             Quitar filtros
           </button>
+        )}
+
+        {/*
+          * Resincronizar: repara lo que Central no vio en su momento —ingresos
+          * anteriores al evento, o cuya fecha se puso cuando completar todavía
+          * no avisaba—. No cambia nada en la caja, y por eso se puede pulsar
+          * sin miedo; lo dice el propio botón.
+          *
+          * Respeta taller y caja, no el rango: el rango filtra por fecha del
+          * banco, y lo que hay que reparar es justo lo que no tiene fecha.
+          */}
+        {puedeConfigurar && (
+          <div className="ml-auto flex items-end gap-2">
+            {resync && <span className="pb-2 text-[11px] text-emerald-300">{resync}</span>}
+            <button
+              className={btnSecondary}
+              disabled={ocupado}
+              title="Vuelve a pedirle a la caja que cuente sus ingresos. No cambia nada en la caja."
+              onClick={() =>
+                void (async () => {
+                  setOcupado(true);
+                  setResync("");
+                  try {
+                    const r = await api.reemitirIngresos({
+                      centroId: filtros.centroId ?? null,
+                      registerId: filtros.registerId ?? null,
+                    });
+                    setResync(
+                      r.reenviados === 0
+                        ? "No había ninguno que reenviar."
+                        : `${r.reenviados} reenviado${r.reenviados === 1 ? "" : "s"}. ` +
+                          "Tarda unos segundos en verse."
+                    );
+                    await cargar();
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "No se ha podido resincronizar");
+                  } finally {
+                    setOcupado(false);
+                  }
+                })()
+              }
+            >
+              <RefreshCw className="h-3.5 w-3.5" />{" "}
+              {ocupado ? "Resincronizando…" : "Resincronizar con la caja"}
+            </button>
+          </div>
         )}
       </div>
 
