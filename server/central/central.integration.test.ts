@@ -745,6 +745,61 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
   });
 
   /*
+   * El botón «Resincronizar con la caja», por su servicio.
+   *
+   * Es la reparación que antes había que hacer entrando por consola. Hay que
+   * demostrar dos cosas: que repara de verdad —la fila pasa de no existir en
+   * Central a existir con su fecha— y que respeta el ámbito de empresa.
+   * Reparar la red de otro sería mucho peor que no poder reparar la propia.
+   */
+  it("resincronizar repara los ingresos de tu empresa y solo los tuyos", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+         VALUES ($1,'resync',$2,$3,$4,$4) RETURNING id`,
+        [
+          EMPRESA,
+          `rs-${String(process.hrtime.bigint()).slice(-9)}`,
+          `RS${String(process.hrtime.bigint()).slice(-6)}`,
+          Date.now(),
+        ]
+      );
+      const caja = creada[0].id;
+
+      // Un ingreso que la caja tiene con fecha y que Central no conoce: es
+      // exactamente el estado que deja un ingreso anterior al evento.
+      const { rows: dep } = await db.query(
+        `INSERT INTO cash_bank_deposits
+           (empresa_id, register_id, numero, estado, fecha_ingreso, referencia,
+            importe_centimos, remanente_anterior_centimos, total_cierres_centimos,
+            remanente_nuevo_centimos, creado_at_ms)
+         VALUES ($1,$2,$3,'CONFIRMADO','2026-08-27','ABONO',81500,0,81553,53,$4) RETURNING id`,
+        [EMPRESA, caja, `RS-${String(process.hrtime.bigint()).slice(-6)}`, Date.now()]
+      );
+
+      expect((await queries.ingresosEnRed(EMPRESA, { registerId: caja })).length).toBe(0);
+
+      const r = await ingresosCaja.reemitirIngresos(ctx, { registerId: caja });
+      expect(r.reenviados).toBe(1);
+      await vaciar();
+
+      const enRed = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+        (i) => i.depositId === dep[0].id
+      );
+      expect(enRed?.fecha).toBe("2026-08-27");
+      expect(enRed?.estado).toBe("CONFIRMADO");
+
+      // Desde otra empresa, esa caja no tiene nada que reenviar.
+      const otra = { ...ctx, empresaId: "00000000-0000-4000-a000-0000000000ee" };
+      const ajeno = await ingresosCaja.reemitirIngresos(otra, { registerId: caja });
+      expect(ajeno.reenviados).toBe(0);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
    * El reenvío sobre una fila QUE YA ESTÁ en Central.
    *
    * Es el camino que usa `scripts/central-reemitir-ingresos.ts` para reparar

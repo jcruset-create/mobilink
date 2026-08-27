@@ -23,7 +23,7 @@
  */
 
 import pool from "../server/db.ts";
-import { emitirEvento } from "../server/cash/events/emitter.ts";
+import { reemitirIngresos } from "../server/cash/bankdeposits.ts";
 
 const APLICAR = process.argv.includes("--aplicar");
 const arg = (n: string): string | null => {
@@ -32,21 +32,27 @@ const arg = (n: string): string | null => {
 };
 const CAJA = arg("--caja");
 
-const eur = (c: number) =>
-  new Intl.NumberFormat("es-ES", { minimumFractionDigits: 2 }).format(c / 100);
-
-/** La fecha de un `DATE` de pg, sin pasar por `String()`, que da «Fri May 03». */
+/*
+ * La fecha de un `DATE` de pg NO se saca con String().slice(0,10): eso da
+ * «Thu Aug 27». Ya mordió una vez en este módulo y la conciliación dejó de
+ * casar nada en silencio.
+ */
 const fechaIso = (v: unknown): string | null =>
   v instanceof Date ? v.toISOString().slice(0, 10) : v == null ? null : String(v).slice(0, 10);
 
+const eur = (c: number) =>
+  new Intl.NumberFormat("es-ES", { minimumFractionDigits: 2 }).format(c / 100);
+
+/*
+ * El trabajo lo hace `reemitirIngresos`, el MISMO servicio que el botón de
+ * Central. Dos copias de esto se habrían separado en cuanto una de las dos
+ * cambiara, y la que se quedara vieja repararía mal sin decirlo.
+ */
 async function main(): Promise<void> {
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  const { rows } = await pool.query(
-    `SELECT d.id, d.empresa_id, d.register_id, d.numero, d.estado,
-            d.fecha_ingreso, d.referencia, d.importe_centimos,
-            d.total_cierres_centimos, d.remanente_anterior_centimos,
-            d.remanente_nuevo_centimos, d.anulado_motivo, d.creado_at_ms,
-            r.centro_id, COALESCE(r.centro || ' · ', '') || r.nombre AS caja
+  const { rows } = await pool.query<any>(
+    `SELECT d.id, d.numero, d.estado, d.fecha_ingreso, d.importe_centimos, d.empresa_id,
+            COALESCE(r.centro || ' · ', '') || r.nombre AS caja, r.id AS register_id
        FROM cash_bank_deposits d
        JOIN cash_registers r ON r.id = d.register_id
       ${CAJA ? "WHERE r.codigo = $1" : ""}
@@ -60,68 +66,29 @@ async function main(): Promise<void> {
   }
   console.log(APLICAR ? "" : "── SIMULACIÓN, no se cambia nada ──");
 
-  for (const d of rows as any[]) {
+  for (const d of rows) {
     const fecha = fechaIso(d.fecha_ingreso);
     console.log(
       `  ↻ ${d.numero ?? `#${d.id}`} · ${d.caja} · ${eur(Number(d.importe_centimos))} € · ` +
         `${d.estado}${fecha ? ` · ${fecha}` : " · sin fecha"}`
     );
-    if (APLICAR) await reenviar(d, fecha);
   }
+
+  if (!APLICAR) return;
+
+  // Una empresa por vuelta: el servicio filtra por la del contexto.
+  const empresas = [...new Set(rows.map((d) => String(d.empresa_id)))];
+  let total = 0;
+  for (const empresaId of empresas) {
+    const registerId = CAJA ? Number(rows[0].register_id) : null;
+    const r = await reemitirIngresos(
+      { empresaId, userId: null, ip: null } as any,
+      { registerId }
+    );
+    total += r.reenviados;
+  }
+  console.log(`      ${total} reenviado(s). Central avisada.`);
   /* eslint-enable @typescript-eslint/no-explicit-any */
-}
-
-/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-async function reenviar(d: any, fecha: string | null): Promise<void> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const comun = {
-      empresaId: d.empresa_id as string,
-      centroId: (d.centro_id ?? null) as string | null,
-      registerId: Number(d.register_id),
-      agregado: { tipo: "REGISTER" as const, id: Number(d.register_id) },
-      actorUserId: null,
-    };
-
-    await emitirEvento(client, {
-      ...comun,
-      tipo: "BANK_DEPOSIT_CREATED",
-      ocurridoEnMs: Number(d.creado_at_ms ?? Date.now()),
-      datos: {
-        depositId: Number(d.id),
-        numero: d.numero ?? null,
-        importeCentimos: Number(d.importe_centimos),
-        totalCierresCentimos: Number(d.total_cierres_centimos ?? 0),
-        remanenteAnteriorCentimos: Number(d.remanente_anterior_centimos ?? 0),
-        remanenteNuevoCentimos: Number(d.remanente_nuevo_centimos ?? 0),
-        referencia: d.referencia ?? null,
-        fecha,
-      },
-    });
-
-    // Y si estaba anulado, el segundo hecho. En este orden: el alta primero.
-    if (d.estado === "ANULADO") {
-      await emitirEvento(client, {
-        ...comun,
-        tipo: "BANK_DEPOSIT_VOIDED",
-        ocurridoEnMs: Date.now(),
-        datos: {
-          depositId: Number(d.id),
-          importeCentimos: Number(d.importe_centimos),
-          motivo: d.anulado_motivo ?? null,
-        },
-      });
-    }
-
-    await client.query("COMMIT");
-    console.log("      Central avisada.");
-  } catch (e) {
-    await client.query("ROLLBACK");
-    throw e;
-  } finally {
-    client.release();
-  }
 }
 
 main()

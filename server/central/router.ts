@@ -28,6 +28,7 @@ import {
   transitosAbiertos,
 } from "./queries.ts";
 import * as jerarquia from "../cash/hierarchy.ts";
+import * as ingresosCaja from "../cash/bankdeposits.ts";
 import * as reglas from "./rules/service.ts";
 import * as avisos from "./notifications/service.ts";
 import * as clientes from "./api/clients.ts";
@@ -608,6 +609,31 @@ export function createCentralRouter(): Router {
         typeof b.zonaId === "string" ? b.zonaId : null
       );
       res.json({ ok: true });
+    })
+  );
+
+  /**
+   * Volver a pedirle a la caja que cuente sus ingresos.
+   *
+   * Repara lo que Central no vio en su momento: ingresos anteriores a que
+   * existiera el evento, o cuya fecha se puso cuando completar todavía no
+   * avisaba. No cambia ni un dato de la caja.
+   *
+   * Pide `central.zones.configure` y no `central.view`: escribe en la cola de
+   * eventos y sube la versión del agregado. Mirar no es repararlo.
+   */
+  r.post(
+    "/deposits/resync",
+    exigirPermiso("central.zones.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const ctx = { empresaId: req.authCtx!.empresaId, userId: req.authCtx!.userId, ip: req.ip };
+      res.json(
+        await ingresosCaja.reemitirIngresos(ctx, {
+          centroId: typeof b.centroId === "string" ? b.centroId : null,
+          registerId: typeof b.registerId === "number" ? b.registerId : null,
+        })
+      );
     })
   );
 
