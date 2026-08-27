@@ -22,8 +22,10 @@ import {
   Coins,
   FileDown,
   Home,
+  Menu,
   Landmark,
   Network,
+  RefreshCw,
   TrendingUp,
   Wallet,
 } from "lucide-react";
@@ -43,19 +45,42 @@ import {
 // y el mismo componente, no uno parecido.
 import { Aviso } from "../cash/components/ui";
 import { euros } from "../cash/utils/money";
+// El estado visible de un ingreso se decide en un solo sitio y se reutiliza: si
+// Central lo calculara por su cuenta, acabaría diciendo «Confirmado» donde la
+// caja dice «Pendiente de confirmar».
+import { ETIQUETA_ESTADO_INGRESO, estadoIngreso } from "../cash/types";
 import * as api from "./api";
 // El nombre de quien mira sale de la misma tabla que en el hub: es el mismo
 // dato y no tiene por qué venir por la API de Central.
 import { supabase } from "../administracion/services/supabase";
 
 const enlace = ({ isActive }: { isActive: boolean }) =>
-  `flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${
+  `flex items-center gap-2 rounded-xl px-3 py-2 text-[13px] font-medium ${
     isActive ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"
   }`;
+
+/*
+ * Las diez pantallas, en una lista y no repartidas por el JSX. Con el menú en
+ * un lateral la lista se pinta una vez y se recorre; escribir diez enlaces a
+ * mano es como se acaba teniendo uno con el icono cambiado.
+ */
+const PANTALLAS = [
+  { to: "red", icon: Network, label: "Red de cajas" },
+  { to: "posicion", icon: Wallet, label: "Posición de efectivo" },
+  { to: "ingresos", icon: Landmark, label: "Ingresos" },
+  { to: "cambio", icon: Coins, label: "Cambio" },
+  { to: "jornadas", icon: CalendarDays, label: "Jornadas" },
+  { to: "prevision", icon: TrendingUp, label: "Previsión" },
+  { to: "informes", icon: FileDown, label: "Informes" },
+  { to: "estado", icon: Activity, label: "Estado" },
+  { to: "incidencias", icon: Bell, label: "Incidencias" },
+  { to: "organizacion", icon: Building2, label: "Organización" },
+] as const;
 
 export default function CentralApp() {
   const navigate = useNavigate();
   const [usuario, setUsuario] = useState("");
+  const [menu, setMenu] = useState(false);
 
   /*
    * Quién está mirando. A mejor esfuerzo: si la consulta falla, la cabecera se
@@ -98,12 +123,21 @@ export default function CentralApp() {
         * falla, y la puerta para volver sin tocar la barra del navegador.
         */}
       <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-2 border-b border-slate-700 bg-slate-900/95 px-3 py-2 backdrop-blur">
-        {/* El logotipo ya lleva el nombre dentro: repetirlo al lado sobra. */}
-        <img
-          src={logoCentral}
-          alt="Mobilink Central Cash Pro"
-          className="h-7 w-auto shrink-0 md:h-8"
-        />
+        <div className="flex items-center gap-2">
+          <button
+            className="rounded-lg p-1.5 hover:bg-slate-800 md:hidden"
+            onClick={() => setMenu((v) => !v)}
+            aria-label="Abrir el menú"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          {/* El logotipo ya lleva el nombre dentro: repetirlo al lado sobra. */}
+          <img
+            src={logoCentral}
+            alt="Mobilink Central Cash Pro"
+            className="h-7 w-auto shrink-0 md:h-8"
+          />
+        </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {usuario && (
@@ -133,43 +167,37 @@ export default function CentralApp() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-7xl p-4">
-        <p className="mb-4 text-[11px] text-slate-400">
-          Supervisión de la red. Las cajas siguen siendo dueñas de su jornada: aquí solo se mira.
-        </p>
+      <div className="mx-auto flex max-w-[1500px]">
+        {/*
+          * Menú al lateral, como el resto de las aplicaciones. Con diez
+          * pantallas la fila horizontal se partía en tres líneas en el móvil y
+          * empujaba la tabla fuera de la vista; en un lateral caben todas y en
+          * pantalla pequeña se pliega.
+          */}
+        <aside
+          className={`${menu ? "block" : "hidden"} w-52 shrink-0 border-r border-slate-700 bg-slate-900 p-2 md:block`}
+        >
+          <nav className="flex flex-col gap-1">
+            {PANTALLAS.map((p) => {
+              const Icon = p.icon;
+              return (
+                <NavLink
+                  key={p.to}
+                  to={`/central/${p.to}`}
+                  onClick={() => setMenu(false)}
+                  className={enlace}
+                >
+                  <Icon size={15} /> {p.label}
+                </NavLink>
+              );
+            })}
+          </nav>
+        </aside>
 
-        <nav className="mb-4 flex flex-wrap gap-1">
-          <NavLink to="/central/red" className={enlace}>
-            <Network size={15} /> Red de cajas
-          </NavLink>
-          <NavLink to="/central/posicion" className={enlace}>
-            <Wallet size={15} /> Posición de efectivo
-          </NavLink>
-          <NavLink to="/central/ingresos" className={enlace}>
-            <Landmark size={15} /> Ingresos
-          </NavLink>
-          <NavLink to="/central/cambio" className={enlace}>
-            <Coins size={15} /> Cambio
-          </NavLink>
-          <NavLink to="/central/jornadas" className={enlace}>
-            <CalendarDays size={15} /> Jornadas
-          </NavLink>
-          <NavLink to="/central/prevision" className={enlace}>
-            <TrendingUp size={15} /> Previsión
-          </NavLink>
-          <NavLink to="/central/informes" className={enlace}>
-            <FileDown size={15} /> Informes
-          </NavLink>
-          <NavLink to="/central/estado" className={enlace}>
-            <Activity size={15} /> Estado
-          </NavLink>
-          <NavLink to="/central/incidencias" className={enlace}>
-            <Bell size={15} /> Incidencias
-          </NavLink>
-          <NavLink to="/central/organizacion" className={enlace}>
-            <Building2 size={15} /> Organización
-          </NavLink>
-        </nav>
+        <main className="min-w-0 flex-1 p-4">
+          <p className="mb-4 text-[11px] text-slate-400">
+            Supervisión de la red. Las cajas siguen siendo dueñas de su jornada: aquí solo se mira.
+          </p>
 
         <Routes>
           <Route index element={<Navigate to="red" replace />} />
@@ -185,6 +213,7 @@ export default function CentralApp() {
           <Route path="organizacion" element={<Organizacion />} />
           <Route path="*" element={<Navigate to="red" replace />} />
         </Routes>
+        </main>
       </div>
     </div>
   );
@@ -395,13 +424,26 @@ function Ingresos() {
   const [datos, setDatos] = useState<Awaited<ReturnType<typeof api.ingresos>> | null>(null);
   const [abierto, setAbierto] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [filtros, setFiltros] = useState<api.FiltrosIngresos>({});
+  /*
+   * Los talleres y las cajas para los desplegables salen de la red, no de los
+   * ingresos: si salieran de los ingresos, al filtrar por un taller
+   * desaparecerían del desplegable los demás y no habría forma de volver.
+   */
+  const [red, setRed] = useState<Awaited<ReturnType<typeof api.red>> | null>(null);
+  const [resync, setResync] = useState("");
+  const [ocupado, setOcupado] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
-      setDatos(await api.ingresos());
+      setDatos(await api.ingresos(filtros));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error cargando los ingresos");
     }
+  }, [filtros]);
+
+  useEffect(() => {
+    void api.red().then(setRed).catch(() => setRed(null));
   }, []);
 
   useEffect(() => {
@@ -412,8 +454,142 @@ function Ingresos() {
   const pendiente = datos?.pendiente ?? [];
   const totalPendiente = pendiente.reduce((a, p) => a + p.centimos, 0);
 
+  const cajasDeFiltro = (red?.cajas ?? []).filter(
+    (c) => !filtros.centroId || c.centroId === filtros.centroId
+  );
+  // Reparar no es mirar: el botón solo sale a quien puede configurar la red.
+  const puedeConfigurar = red?.permisos?.includes("central.zones.configure") ?? false;
+
   return (
     <div className="space-y-5">
+      {/*
+        * Filtros. El taller y la caja van encadenados: al elegir taller, el
+        * desplegable de cajas se queda con las suyas, porque ofrecer cajas de
+        * otro taller sobre un taller ya elegido solo sirve para no encontrar
+        * nada. Cambiar de taller limpia la caja por lo mismo.
+        */}
+      <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Taller
+          </span>
+          <select
+            value={filtros.centroId ?? ""}
+            className={inputCls}
+            onChange={(e) =>
+              setFiltros((f) => ({
+                ...f,
+                centroId: e.target.value || null,
+                registerId: null,
+              }))
+            }
+          >
+            <option value="">Todos</option>
+            {(red?.centros ?? []).map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.nombre}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Caja
+          </span>
+          <select
+            value={filtros.registerId ?? ""}
+            className={inputCls}
+            onChange={(e) =>
+              setFiltros((f) => ({ ...f, registerId: Number(e.target.value) || null }))
+            }
+          >
+            <option value="">Todas</option>
+            {cajasDeFiltro.map((c) => (
+              <option key={c.registerId} value={c.registerId}>
+                {c.nombre ?? `#${c.registerId}`}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Desde
+          </span>
+          <input
+            type="date"
+            value={filtros.desde ?? ""}
+            className={inputCls}
+            onChange={(e) => setFiltros((f) => ({ ...f, desde: e.target.value || null }))}
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Hasta
+          </span>
+          <input
+            type="date"
+            value={filtros.hasta ?? ""}
+            className={inputCls}
+            onChange={(e) => setFiltros((f) => ({ ...f, hasta: e.target.value || null }))}
+          />
+        </label>
+
+        {(filtros.centroId || filtros.registerId || filtros.desde || filtros.hasta) && (
+          <button className={btnSecondary} onClick={() => setFiltros({})}>
+            Quitar filtros
+          </button>
+        )}
+
+        {/*
+          * Resincronizar: repara lo que Central no vio en su momento —ingresos
+          * anteriores al evento, o cuya fecha se puso cuando completar todavía
+          * no avisaba—. No cambia nada en la caja, y por eso se puede pulsar
+          * sin miedo; lo dice el propio botón.
+          *
+          * Respeta taller y caja, no el rango: el rango filtra por fecha del
+          * banco, y lo que hay que reparar es justo lo que no tiene fecha.
+          */}
+        {puedeConfigurar && (
+          <div className="ml-auto flex items-end gap-2">
+            {resync && <span className="pb-2 text-[11px] text-emerald-300">{resync}</span>}
+            <button
+              className={btnSecondary}
+              disabled={ocupado}
+              title="Vuelve a pedirle a la caja que cuente sus ingresos. No cambia nada en la caja."
+              onClick={() =>
+                void (async () => {
+                  setOcupado(true);
+                  setResync("");
+                  try {
+                    const r = await api.reemitirIngresos({
+                      centroId: filtros.centroId ?? null,
+                      registerId: filtros.registerId ?? null,
+                    });
+                    setResync(
+                      r.reenviados === 0
+                        ? "No había ninguno que reenviar."
+                        : `${r.reenviados} reenviado${r.reenviados === 1 ? "" : "s"}. ` +
+                          "Tarda unos segundos en verse."
+                    );
+                    await cargar();
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "No se ha podido resincronizar");
+                  } finally {
+                    setOcupado(false);
+                  }
+                })()
+              }
+            >
+              <RefreshCw className="h-3.5 w-3.5" />{" "}
+              {ocupado ? "Resincronizando…" : "Resincronizar con la caja"}
+            </button>
+          </div>
+        )}
+      </div>
+
       <section className="space-y-2">
         <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
           Pendiente de llevar al banco · {euros(totalPendiente)}
@@ -466,31 +642,32 @@ function Ingresos() {
             <tr>
               <th className={thCls}>Número</th>
               <th className={thCls}>Fecha</th>
+              {/* Taller y caja en columnas separadas, igual que en la tabla de
+                  arriba: el taller es por donde se lee la red, y llevarlo de
+                  apellido pequeño de la caja lo escondía. */}
+              <th className={thCls}>Taller</th>
               <th className={thCls}>Caja</th>
               <th className={thCls}>Referencia</th>
               <th className={`${thCls} text-right`}>Importe</th>
+              <th className={thCls}>Estado</th>
               <th className={thCls}>Origen</th>
+              <th className={thCls}>Resguardo</th>
             </tr>
           </thead>
           <tbody>
             {(datos?.ingresos ?? []).length === 0 && (
-              <EmptyRow cols={6} text="Todavía no se ha registrado ningún ingreso." />
+              <EmptyRow cols={9} text="No hay ingresos con esos filtros." />
             )}
             {(datos?.ingresos ?? []).map((i) => (
               <tr key={i.depositId} className="border-t border-slate-700 align-top">
                 <td className={`${tdCls} font-mono text-[11px]`}>
                   {i.numero ?? `#${i.depositId}`}
-                  {i.estado === "ANULADO" && (
-                    <span className="ml-2 text-rose-400" title={i.anuladoMotivo ?? ""}>
-                      anulado
-                    </span>
-                  )}
                 </td>
                 <td className={tdCls}>{i.fecha ?? "—"}</td>
                 <td className={tdCls}>
-                  {i.caja ?? "—"}
-                  {i.centro && <span className="ml-2 text-[11px] text-slate-500">{i.centro}</span>}
+                  {i.centro ?? <span className="text-amber-400">sin taller</span>}
                 </td>
+                <td className={tdCls}>{i.caja ?? "—"}</td>
                 <td className={`${tdCls} text-[11px]`}>{i.referencia ?? "—"}</td>
                 <td
                   className={`${tdCls} text-right tabular-nums ${
@@ -498,6 +675,44 @@ function Ingresos() {
                   }`}
                 >
                   {euros(i.importeCentimos)}
+                </td>
+                {/*
+                  * El estado, en columna propia y con la MISMA insignia que la
+                  * caja: antes era una palabra pequeña al lado del número y
+                  * había que saber dónde mirar. Es el primer dato que se mira
+                  * cuando el extracto no cuadra.
+                  *
+                  * Son tres estados y no dos: un ingreso registrado al que
+                  * todavía no se le ha puesto la fecha real del banco está
+                  * «pendiente de confirmar», no confirmado. Decirlo de otro
+                  * modo aquí sería contradecir a la caja sobre el mismo hecho.
+                  */}
+                <td className={tdCls}>
+                  {(() => {
+                    const estado = estadoIngreso({
+                      estado: i.estado === "ANULADO" ? "ANULADO" : "CONFIRMADO",
+                      fechaIngreso: i.fecha,
+                    });
+                    const pinta = {
+                      ANULADO: "bg-slate-700 text-slate-400",
+                      PENDIENTE_CONFIRMAR: "bg-amber-500/20 text-amber-300",
+                      CONFIRMADO: "bg-emerald-500/20 text-emerald-300",
+                    }[estado];
+                    return (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${pinta}`}
+                        title={
+                          estado === "ANULADO"
+                            ? (i.anuladoMotivo ?? "")
+                            : estado === "PENDIENTE_CONFIRMAR"
+                              ? "Registrado en la aplicación, pero todavía sin la fecha real del banco"
+                              : `Ingresado en el banco el ${i.fecha}`
+                        }
+                      >
+                        {ETIQUETA_ESTADO_INGRESO[estado]}
+                      </span>
+                    );
+                  })()}
                 </td>
                 <td className={tdCls}>
                   {/*
@@ -520,11 +735,65 @@ function Ingresos() {
                     </ul>
                   )}
                 </td>
+                {/*
+                  * El resguardo, el mismo PDF que emite la caja. Aquí no es
+                  * para llevarlo al banco sino para consultarlo cuando algo no
+                  * cuadra, así que basta con poder abrirlo.
+                  */}
+                <td className={tdCls}>
+                  <BotonResguardo depositId={i.depositId} numero={i.numero} />
+                </td>
               </tr>
             ))}
           </tbody>
         </TableWrap>
       </section>
+    </div>
+  );
+}
+
+/**
+ * Abre el resguardo del ingreso.
+ *
+ * Descarga el PDF con la sesión puesta y lo abre en una pestaña. Un enlace a
+ * pelo no vale: la ruta exige `Authorization`, y el navegador no lo manda al
+ * navegar.
+ */
+function BotonResguardo({ depositId, numero }: { depositId: number; numero: string | null }) {
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState("");
+
+  async function abrir() {
+    setCargando(true);
+    setError("");
+    try {
+      const blob = await api.resguardoIngreso(depositId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.download = `ingreso-${numero ?? depositId}.pdf`;
+      a.click();
+      // Sin revocar, cada consulta deja un blob colgado en memoria.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido abrir");
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  return (
+    <div>
+      <button
+        onClick={() => void abrir()}
+        disabled={cargando}
+        className="flex items-center gap-1 rounded-lg bg-slate-700 px-2 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-600 disabled:opacity-50"
+      >
+        <FileDown className="h-3.5 w-3.5" /> {cargando ? "Abriendo…" : "Resguardo"}
+      </button>
+      {error && <div className="mt-1 text-[10px] text-rose-400">{error}</div>}
     </div>
   );
 }
