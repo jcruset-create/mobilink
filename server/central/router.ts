@@ -34,6 +34,7 @@ import * as clientes from "./api/clients.ts";
 import * as webhooks from "./api/webhooks.ts";
 import * as conciliacion from "./reconciliation/service.ts";
 import { salud } from "./health.ts";
+import { informeIngreso } from "../cash/report.ts";
 import * as kpis from "./reports/kpis.ts";
 import { aCsv, importe } from "./reports/csv.ts";
 import * as prediccion from "./forecast/service.ts";
@@ -598,6 +599,33 @@ export function createCentralRouter(): Router {
         typeof b.zonaId === "string" ? b.zonaId : null
       );
       res.json({ ok: true });
+    })
+  );
+
+  /**
+   * El resguardo del ingreso, en PDF.
+   *
+   * Ruta propia y no la de la caja aunque el PDF sea el mismo: aquélla exige
+   * `cash.view`, y un supervisor de red que solo mira Central no tiene por qué
+   * tenerlo. Aquí basta `central.view`.
+   *
+   * La empresa sale de la sesión, nunca de la petición: `informeIngreso` la
+   * recibe y filtra por ella, así que pedir el resguardo de otra empresa
+   * cambiando el número en la barra del navegador no devuelve nada.
+   */
+  r.get(
+    "/deposits/:id/report.pdf",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: "Ese ingreso no existe." });
+        return;
+      }
+      const pdf = await informeIngreso(req.authCtx!.empresaId, id);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="ingreso-${id}.pdf"`);
+      res.send(pdf);
     })
   );
 
