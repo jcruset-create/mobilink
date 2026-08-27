@@ -589,27 +589,65 @@ export async function completarIngreso(
      */
   }
 
-  const { rows } = await pool.query(
-    `UPDATE cash_bank_deposits
-        SET fecha_ingreso   = CASE WHEN $3 THEN $4::date ELSE fecha_ingreso   END,
-            referencia      = CASE WHEN $5 THEN $6       ELSE referencia      END,
-            observaciones   = CASE WHEN $7 THEN $8       ELSE observaciones   END,
-            bank_account_id = CASE WHEN $9 THEN $10::int ELSE bank_account_id END
-      WHERE id = $1 AND empresa_id = $2
-      RETURNING *`,
-    [
-      e.depositId,
-      ctx.empresaId,
-      fecha !== undefined,
-      fecha ?? null,
-      referencia !== undefined,
-      referencia ?? null,
-      observaciones !== undefined,
-      observaciones ?? null,
-      e.bankAccountId !== undefined,
-      e.bankAccountId ?? null,
-    ]
-  );
+  /*
+   * En transacción, y con el aviso a Central DENTRO: es el patrón de outbox
+   * transaccional del módulo. Antes esto era un UPDATE suelto sin evento, y el
+   * resultado era que la caja marcaba el ingreso como confirmado mientras
+   * Central seguía enseñándolo como «pendiente de confirmar» — la fecha del
+   * banco no salía de la caja.
+   */
+  const client = await pool.connect();
+  // La fila que devuelve el UPDATE, con lo justo que se lee de ella aquí. Un
+  // `any[]` habría bastado para compilar, pero el fichero no usa `any` para
+  // esto y no hay razón para empezar.
+  let rows: { fecha_ingreso: unknown; referencia: string | null }[];
+  try {
+    await client.query("BEGIN");
+    const actualizado = await client.query(
+      `UPDATE cash_bank_deposits
+          SET fecha_ingreso   = CASE WHEN $3 THEN $4::date ELSE fecha_ingreso   END,
+              referencia      = CASE WHEN $5 THEN $6       ELSE referencia      END,
+              observaciones   = CASE WHEN $7 THEN $8       ELSE observaciones   END,
+              bank_account_id = CASE WHEN $9 THEN $10::int ELSE bank_account_id END
+        WHERE id = $1 AND empresa_id = $2
+        RETURNING *`,
+      [
+        e.depositId,
+        ctx.empresaId,
+        fecha !== undefined,
+        fecha ?? null,
+        referencia !== undefined,
+        referencia ?? null,
+        observaciones !== undefined,
+        observaciones ?? null,
+        e.bankAccountId !== undefined,
+        e.bankAccountId ?? null,
+      ]
+    );
+    rows = actualizado.rows;
+
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, Number(previo[0].register_id)),
+      registerId: Number(previo[0].register_id),
+      agregado: { tipo: "REGISTER", id: Number(previo[0].register_id) },
+      tipo: "BANK_DEPOSIT_COMPLETED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: ctx.userId,
+      datos: {
+        depositId: e.depositId,
+        fecha: fechaIso(rows[0]?.fecha_ingreso) ?? null,
+        referencia: rows[0]?.referencia ?? null,
+      },
+    });
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 
   await registrarAuditoria({
     empresaId: ctx.empresaId,

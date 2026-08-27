@@ -38,6 +38,14 @@ export type TipoEvento =
   | "COUNT_RECORDED"
   | "COUNT_ADJUSTED"
   | "BANK_DEPOSIT_CREATED"
+  /*
+   * Al ingreso se le ha puesto la fecha REAL del banco (y, de paso, su
+   * referencia). Es un hecho distinto de crearlo y necesita evento propio: el
+   * ingreso se registra cuando se prepara la bolsa y la fecha se sabe después,
+   * al volver del banco. Sin este evento, la caja pasaba a «Confirmado» y
+   * Central se quedaba enseñándolo como «Pendiente de confirmar» para siempre.
+   */
+  | "BANK_DEPOSIT_COMPLETED"
   | "BANK_DEPOSIT_VOIDED"
   /*
    * Dinero que ha salido del cajón y todavía no ha vuelto: el cambio que se ha
