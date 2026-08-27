@@ -40,6 +40,7 @@ import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
+import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 
 const twilioClient = twilio(
@@ -2938,15 +2939,15 @@ app.post("/api/taller-operator/login", async (req, res) => {
       return res.status(400).json({ error: "Faltan datos" });
     }
 
-    const porPin = await db.query(
-      `SELECT name FROM techs WHERE name = $1 AND "workshopPin" = $2 LIMIT 1`,
-      [techName, code]
-    );
+    // El PIN de taller se guarda hasheado (ver verifyWorkshopPin): no se puede
+    // comparar en claro contra "workshopPin", que queda a NULL en cuanto el PIN
+    // heredado se migra en el primer login correcto.
+    const porPin = await verifyWorkshopPin(techName, code);
 
     const esperado = await getExpectedRoadsideOperatorCode(techName);
     const porCodigo = Boolean(esperado) && code === esperado;
 
-    if (porPin.rows.length === 0 && !porCodigo) {
+    if (!porPin && !porCodigo) {
       return res.status(401).json({ error: "PIN incorrecto" });
     }
 
@@ -2956,7 +2957,7 @@ app.post("/api/taller-operator/login", async (req, res) => {
     res.json({
       ok: true,
       techName,
-      metodo: porPin.rows.length > 0 ? "pin" : "codigo",
+      metodo: porPin ? "pin" : "codigo",
     });
   } catch (error) {
     console.error("POST /api/taller-operator/login error:", error);
@@ -3641,7 +3642,8 @@ app.get("/api/presencia-operator/employees", async (_req, res) => {
   }
 });
 
-// Login: valida PIN (el primer PIN del empleado queda registrado)
+// Login: valida el PIN del empleado. El PIN lo asigna un responsable desde la
+// ficha de empleado (PUT /api/sea-core/employees/:id/pin); sin PIN no hay acceso.
 app.post("/api/presencia-operator/login", async (req, res) => {
   try {
     const employeeId = String(req.body?.employeeId || "").trim();
@@ -3658,6 +3660,66 @@ app.post("/api/presencia-operator/login", async (req, res) => {
   } catch (error) {
     console.error("POST /api/presencia-operator/login error:", error);
     res.status(500).json({ error: "Error iniciando sesión" });
+  }
+});
+
+/* =========================================================
+   SEA CORE — PIN de empleado (administración)
+   Única vía para asignar el PIN de las APKs de operario
+   (Presencia, Safety, ToolControl). Antes lo registraba el
+   primer PIN que se tecleara en el login, lo que permitía
+   apropiarse de la identidad de un compañero sin PIN.
+========================================================= */
+
+// Empleados activos y si tienen PIN asignado (nunca se devuelve el PIN).
+app.get("/api/sea-core/employees/pin-status", async (req, res) => {
+  try {
+    const admin = await verificarAdminApp(req);
+    if (!admin.ok) return res.status(403).json({ error: admin.error });
+    const { data, error } = await supabase
+      .from("sea_employees")
+      .select("id, nombre, apellidos, codigo_operario, pin_hash, activo")
+      .eq("activo", true)
+      .order("nombre");
+    if (error) throw error;
+    res.json(
+      (data ?? []).map((e: any) => ({
+        id: e.id,
+        nombre: e.nombre,
+        apellidos: e.apellidos,
+        codigoOperario: e.codigo_operario,
+        tienePin: Boolean(e.pin_hash),
+      }))
+    );
+  } catch (error) {
+    console.error("GET /api/sea-core/employees/pin-status error:", error);
+    res.status(500).json({ error: "Error consultando el estado de los PIN" });
+  }
+});
+
+// Asigna (o revoca, con pin vacío) el PIN de un empleado.
+app.put("/api/sea-core/employees/:id/pin", async (req, res) => {
+  try {
+    const admin = await verificarAdminApp(req);
+    if (!admin.ok) return res.status(403).json({ error: admin.error });
+    const employeeId = String(req.params.id || "").trim();
+    const pin = String(req.body?.pin ?? "").trim();
+    if (!employeeId) return res.status(400).json({ error: "Empleado requerido" });
+    if (pin && !/^\d{4,8}$/.test(pin)) {
+      return res.status(400).json({ error: "El PIN debe tener entre 4 y 8 dígitos" });
+    }
+    const { data, error } = await supabase.rpc("sea_set_employee_pin", {
+      p_employee_id: employeeId,
+      p_pin: pin || null,
+    });
+    if (error) throw error;
+    if (data !== true) {
+      return res.status(404).json({ error: "Empleado no encontrado" });
+    }
+    res.json({ ok: true, tienePin: Boolean(pin) });
+  } catch (error) {
+    console.error("PUT /api/sea-core/employees/:id/pin error:", error);
+    res.status(500).json({ error: "Error guardando el PIN" });
   }
 });
 
@@ -12934,6 +12996,41 @@ Reglas obligatorias:
    WORKSHOP OPERATOR (TECH MOBILE PORTAL)
 ========================================================= */
 
+/**
+ * Verifica el PIN del portal de taller de un operario.
+ *
+ * El PIN se guarda hasheado (`workshopPinHash`/`workshopPinSalt`). Los PIN
+ * heredados en claro (`workshopPin`) siguen aceptándose y, en el primer login
+ * correcto, se re-guardan hasheados y se borra el valor en claro. Así ningún
+ * operario se queda fuera y el dato en claro desaparece solo.
+ */
+async function verifyWorkshopPin(techName: string, pin: string): Promise<boolean> {
+  if (!techName || !pin) return false;
+  const result = await db.query(
+    `SELECT name, "workshopPin", "workshopPinHash", "workshopPinSalt"
+       FROM techs WHERE name = $1 AND activo = true LIMIT 1`,
+    [techName]
+  );
+  if (result.rows.length === 0) return false;
+  const row = result.rows[0] as {
+    workshopPin: string | null;
+    workshopPinHash: string | null;
+    workshopPinSalt: string | null;
+  };
+  const check = verifySecretWithLegacy(pin, row.workshopPinHash, row.workshopPinSalt, row.workshopPin);
+  if (!check.ok) return false;
+  if (check.needsUpgrade) {
+    const { hash, salt } = makeSecret(pin);
+    await db.query(
+      `UPDATE techs
+          SET "workshopPinHash" = $1, "workshopPinSalt" = $2, "workshopPin" = NULL
+        WHERE name = $3`,
+      [hash, salt, techName]
+    );
+  }
+  return true;
+}
+
 async function getWorkshopOperatorFromRequest(req: express.Request) {
   const bruto = String(req.headers["x-operator-name"] ?? "").trim();
   // La APK codifica el nombre: las cabeceras HTTP no admiten acentos y un
@@ -12942,14 +13039,7 @@ async function getWorkshopOperatorFromRequest(req: express.Request) {
   let techName = bruto;
   try { techName = decodeURIComponent(bruto); } catch { /* nombre sin codificar */ }
   const pin = String(req.headers["x-operator-pin"] ?? "").trim();
-  if (!techName || !pin) return null;
-  const result = await db.query(
-    `SELECT name FROM techs
-     WHERE name = $1 AND "workshopPin" = $2 AND activo = true
-     LIMIT 1`,
-    [techName, pin]
-  );
-  if (result.rows.length === 0) return null;
+  if (!(await verifyWorkshopPin(techName, pin))) return null;
   return { techName };
 }
 
@@ -12992,11 +13082,7 @@ app.post("/api/workshop-operator/login", async (req, res) => {
     if (!name || !pin) {
       return res.status(400).json({ error: "Faltan datos" });
     }
-    const result = await db.query(
-      `SELECT name FROM techs WHERE name = $1 AND "workshopPin" = $2 LIMIT 1`,
-      [name, pin]
-    );
-    if (result.rows.length === 0) {
+    if (!(await verifyWorkshopPin(name, pin))) {
       return res.status(401).json({ error: "PIN incorrecto" });
     }
     res.json({ ok: true, techName: name });
@@ -13130,10 +13216,24 @@ app.put(
       const techName = String(req.params.name || "").trim();
       const pin = String(req.body?.pin || "").trim();
       if (!techName) return res.status(400).json({ error: "Nombre requerido" });
-      await db.query(
-        `UPDATE techs SET "workshopPin" = $1 WHERE name = $2`,
-        [pin || null, techName]
-      );
+      if (pin) {
+        // Se guarda solo el hash; la columna en claro queda siempre a NULL.
+        const { hash, salt } = makeSecret(pin);
+        await db.query(
+          `UPDATE techs
+              SET "workshopPinHash" = $1, "workshopPinSalt" = $2, "workshopPin" = NULL
+            WHERE name = $3`,
+          [hash, salt, techName]
+        );
+      } else {
+        // PIN vacío = revocar el acceso al portal.
+        await db.query(
+          `UPDATE techs
+              SET "workshopPinHash" = NULL, "workshopPinSalt" = NULL, "workshopPin" = NULL
+            WHERE name = $1`,
+          [techName]
+        );
+      }
       res.json({ ok: true });
     } catch (error) {
       console.error("PUT /api/techs/:name/workshop-pin error:", error);

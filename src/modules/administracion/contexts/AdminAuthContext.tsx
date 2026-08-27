@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../services/supabase";
 import type { Perfil } from "../types";
+import { esSuperadmin, olvidarSuperadmin } from "../../superadmin";
 
 type AdminAuthValue = {
   user: User | null;
@@ -24,14 +25,28 @@ async function cargarPerfil(userId: string): Promise<Perfil | null> {
     .maybeSingle();
   if (error) {
     console.error("[Administración] error cargando perfil:", error.message);
-    return null;
   }
-  return (data as Perfil | null) ?? null;
+  const perfil = (data as Perfil | null) ?? null;
+  if (perfil) return perfil;
+
+  // Un superadmin de la plataforma entra aunque no tenga ficha en
+  // adm_usuarios: se le da perfil de admin sintético para este módulo.
+  if (await esSuperadmin(userId)) {
+    return {
+      id: userId,
+      nombre: "Superadmin",
+      email: "",
+      rol: "admin",
+      activo: true,
+    } as unknown as Perfil;
+  }
+  return null;
 }
 
 // Pantallas permitidas del usuario en el módulo (unificación de usuarios,
 // fase 11). Si la tabla no existe aún o no hay fila, null = sin restricción.
 async function cargarPantallas(userId: string): Promise<string[] | null> {
+  if (await esSuperadmin(userId)) return null; // sin restricción
   try {
     const { data, error } = await supabase
       .from("app_usuario_modulos")
@@ -75,6 +90,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function signOut() {
+    olvidarSuperadmin();
     await supabase.auth.signOut();
     setUser(null);
     setPerfil(null);

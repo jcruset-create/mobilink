@@ -19,6 +19,7 @@ import logoCabecera from "../assets/hub/logo-central-assist-connect-cabecera.png
 import emblemaTyreControl from "../assets/hub/emblema-tyrecontrol.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
+import { esSuperadmin as resolverSuperadmin, olvidarSuperadmin } from "../modules/superadmin";
 
 // Tarjetas fijas con login interno propio (no dependen de app_usuario_modulos).
 // Ponlas a false para ocultarlas del hub.
@@ -145,14 +146,13 @@ export default function InicioPage() {
       if (!user) { navigate("/acceso", { replace: true }); return; }
 
       // Ficha maestra (mejor esfuerzo) + accesos por módulo
-      let esSuperadmin = false;
+      // El flag lo resuelve el helper compartido (app_usuarios y, en su
+      // defecto, tc_usuarios), el mismo que usan los guardias de cada módulo.
+      let esSuperadmin = await resolverSuperadmin(user.id);
       try {
         const { data: u } = await supabase.from("app_usuarios")
-          .select("username, nombre, es_superadmin").eq("id", user.id).maybeSingle();
-        if (u) {
-          if (activo) { setNombre(u.nombre); setUsername(u.username); }
-          esSuperadmin = Boolean(u.es_superadmin);
-        }
+          .select("username, nombre").eq("id", user.id).maybeSingle();
+        if (u && activo) { setNombre(u.nombre); setUsername(u.username); }
       } catch { /* tabla sin migrar: seguimos con fallbacks */ }
 
       const accesos = new Map<string, { rol: string; pantallas: string[] | null }>();
@@ -182,11 +182,8 @@ export default function InicioPage() {
           }
         } catch { /* opcional */ }
         try {
-          const { data: t } = await supabase.from("tc_usuarios").select("rol, es_superadmin").eq("id", user.id).maybeSingle();
-          if (t) {
-            accesos.set("tyrecontrol", { rol: t.rol as string, pantallas: null });
-            esSuperadmin = esSuperadmin || Boolean(t.es_superadmin);
-          }
+          const { data: t } = await supabase.from("tc_usuarios").select("rol").eq("id", user.id).maybeSingle();
+          if (t) accesos.set("tyrecontrol", { rol: t.rol as string, pantallas: null });
         } catch { /* opcional */ }
       }
 
@@ -209,6 +206,7 @@ export default function InicioPage() {
   }, [navigate]);
 
   async function salir() {
+    olvidarSuperadmin();
     await supabase.auth.signOut();
     navigate("/acceso", { replace: true });
   }

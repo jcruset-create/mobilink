@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { esSuperadmin } from "../../superadmin";
 
 export type PerfilAlmacen = {
   id: string;
@@ -119,6 +120,23 @@ export async function cargarPermisosUsuarioActual(): Promise<PermisosAlmacen> {
     .maybeSingle();
 
   if (perfilError || !perfilData) {
+    // Un superadmin de la plataforma entra aunque no tenga ficha en
+    // perfiles_usuario: se le da un perfil de admin sintetico para el modulo.
+    if (await esSuperadmin(user.id)) {
+      return construirPermisos(
+        {
+          id: `superadmin:${user.id}`,
+          user_id: user.id,
+          nombre: user.email ?? "Superadmin",
+          email: user.email ?? "",
+          codigo_operario: null,
+          rol: "admin",
+          ubicacion: null,
+          activo: true,
+        } as unknown as PerfilAlmacen,
+        []
+      );
+    }
     return permisosIniciales;
   }
 
