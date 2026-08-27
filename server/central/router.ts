@@ -601,5 +601,24 @@ export function createCentralRouter(): Router {
     })
   );
 
+  /**
+   * Poner una caja en su taller. El espejo de la ruta de arriba, un piso más
+   * abajo del árbol: zona → taller → caja.
+   */
+  r.patch(
+    "/registers/:id/center",
+    exigirPermiso("central.zones.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const ctx = { empresaId: req.authCtx!.empresaId, userId: req.authCtx!.userId, ip: req.ip };
+      await jerarquia.asignarCentroACaja(
+        ctx,
+        Number(req.params.id),
+        typeof b.centroId === "string" && b.centroId ? b.centroId : null
+      );
+      res.json({ ok: true });
+    })
+  );
+
   return r;
 }

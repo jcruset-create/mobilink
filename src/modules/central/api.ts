@@ -353,3 +353,10 @@ export const asignarZona = (centroId: string, zonaId: string | null) =>
     method: "PATCH",
     body: JSON.stringify({ zonaId }),
   });
+
+/** Un piso más abajo del árbol: qué taller es el de esta caja. */
+export const asignarCentro = (registerId: number, centroId: string | null) =>
+  pedir<{ ok: true }>(`/registers/${registerId}/center`, {
+    method: "PATCH",
+    body: JSON.stringify({ centroId }),
+  });

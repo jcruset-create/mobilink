@@ -4485,3 +4485,273 @@ describe.runIf(RUN)("jornada que ya quedó con el saldo en negativo", () => {
     expect(pdf.subarray(0, 4).toString()).toBe("%PDF");
   });
 });
+
+describe.runIf(RUN)("anular una jornada abierta por error", () => {
+  it("el flujo del despiste entero: anular la de hoy y abrir la del día que tocaba", async () => {
+    const caja = await crearCaja("despiste");
+
+    // El lunes 24 se llevó en papel. El 20 fue el último cierre real.
+    const dia20 = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: "2026-08-20",
+      fondoManual: [{ valor: 5000, cantidad: 7 }], // 350 €
+    });
+    await servicio.guardarArqueo(ctx, {
+      sessionId: dia20.sesion.id,
+      contado: [{ valor: 5000, cantidad: 7 }],
+    });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: dia20.sesion.id,
+      cambioFinal: [{ valor: 5000, cantidad: 7 }],
+    });
+
+    // Hoy se abre por despiste. Hereda los 350 € del 20.
+    const hoy = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(hoy.sesion.fondoInicialHeredado).toBe(true);
+
+    // Se anula. La caja queda libre.
+    const anulada = await servicio.anularJornada(ctx, hoy.sesion.id, "abierta por error");
+    expect(anulada.estado).toBe("CANCELLED");
+    expect(await repo.sesionAbierta(caja)).toBeNull();
+
+    // Su fondo de apertura cayó con ella.
+    const { rows: ops } = await db.query(
+      `SELECT estado FROM cash_operations WHERE session_id = $1`,
+      [hoy.sesion.id]
+    );
+    expect(ops.every((o: { estado: string }) => o.estado === "CANCELLED")).toBe(true);
+
+    // Y se abre la del 24, que hereda del 20 — la anulada no pinta nada.
+    const dia24 = await servicio.abrirJornada(ctx, { registerId: caja, fecha: "2026-08-24" });
+    expect(dia24.sesion.fecha).toBe("2026-08-24");
+    expect(dia24.sesion.fondoInicialHeredado).toBe(true);
+    expect(dia24.sesion.fondoInicialCentimos).toBe(35000);
+    expect(dia24.stock).toEqual([{ valor: 5000, cantidad: 7 }]);
+  });
+
+  it("una jornada con operaciones no se anula: primero se anulan ellas", async () => {
+    const caja = await crearCaja("despiste-lleno");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+    const cobro = await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      concepto: "Venta",
+    });
+
+    await expect(
+      servicio.anularJornada(ctx, sesion.id, "me equivoqué")
+    ).rejects.toMatchObject({ codigo: "JORNADA_CON_OPERACIONES" });
+
+    // Anulada la operación, la jornada ya está vacía y sí se deja.
+    await servicio.anularOperacion(ctx, cobro.operacionId, "prueba");
+    const anulada = await servicio.anularJornada(ctx, sesion.id, "ahora sí");
+    expect(anulada.estado).toBe("CANCELLED");
+  });
+
+  it("con arqueo guardado no se anula, y sin motivo tampoco", async () => {
+    const caja = await crearCaja("despiste-arqueo");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+
+    await expect(servicio.anularJornada(ctx, sesion.id, "  ")).rejects.toMatchObject({
+      codigo: "FALTA_MOTIVO",
+    });
+
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: FONDO_300 });
+    await expect(
+      servicio.anularJornada(ctx, sesion.id, "sobra")
+    ).rejects.toMatchObject({ codigo: "JORNADA_CON_ARQUEO" });
+  });
+
+  it("una cerrada no se anula, y la anulada queda en el histórico con su motivo", async () => {
+    const caja = await crearCaja("despiste-cerrada");
+    const cerrada = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO_300 });
+    await servicio.guardarArqueo(ctx, { sessionId: cerrada.sesion.id, contado: FONDO_300 });
+    await servicio.cerrarJornada(ctx, { sessionId: cerrada.sesion.id, cambioFinal: FONDO_300 });
+
+    await expect(
+      servicio.anularJornada(ctx, cerrada.sesion.id, "tarde")
+    ).rejects.toMatchObject({ codigo: "JORNADA_NO_ABIERTA" });
+
+    const vacia = await servicio.abrirJornada(ctx, { registerId: caja });
+    await servicio.anularJornada(ctx, vacia.sesion.id, "abierta por error");
+    const { rows } = await db.query(`SELECT estado, notas FROM cash_sessions WHERE id = $1`, [
+      vacia.sesion.id,
+    ]);
+    expect(rows[0].estado).toBe("CANCELLED");
+    expect(rows[0].notas).toContain("abierta por error");
+  });
+});
+
+describe.runIf(RUN)("cadena de herencia rota por un cierre a cero", () => {
+  it("el caso real: cierre bueno, cierre en falso a cero, y la siguiente hereda del bueno", async () => {
+    const caja = await crearCaja("cadena-rota");
+
+    // El 20 se cierra dejando 350 €.
+    const dia20 = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: "2026-08-20",
+      fondoManual: [{ valor: 5000, cantidad: 7 }],
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: dia20.sesion.id, contado: [{ valor: 5000, cantidad: 7 }] });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: dia20.sesion.id,
+      cambioFinal: [{ valor: 5000, cantidad: 7 }],
+    });
+
+    /*
+     * El 22, un cierre EN FALSO: jornada abierta por error, sin fondo, cerrada
+     * vacía — que era la única salida antes de que existiera anular. Deja el
+     * cambio a cero y rompía la cadena.
+     */
+    const falso = await servicio.abrirJornada(ctx, { registerId: caja, fecha: "2026-08-22", fondoManual: [] });
+    await servicio.guardarArqueo(ctx, { sessionId: falso.sesion.id, contado: [] });
+    await servicio.cerrarJornada(ctx, { sessionId: falso.sesion.id, cambioFinal: [] });
+
+    // La del 24 hereda del 20, saltándose el cierre a cero.
+    const dia24 = await servicio.abrirJornada(ctx, { registerId: caja, fecha: "2026-08-24" });
+    expect(dia24.sesion.fondoInicialHeredado).toBe(true);
+    expect(dia24.sesion.fondoInicialCentimos).toBe(35000);
+    expect(dia24.stock).toEqual([{ valor: 5000, cantidad: 7 }]);
+  });
+
+  it("la jornada ya abierta a cero puede traer el fondo del último cierre con cambio", async () => {
+    const caja = await crearCaja("traer-fondo");
+    const dia20 = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: "2026-08-20",
+      fondoManual: [{ valor: 5000, cantidad: 7 }],
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: dia20.sesion.id, contado: [{ valor: 5000, cantidad: 7 }] });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: dia20.sesion.id,
+      cambioFinal: [{ valor: 5000, cantidad: 7 }],
+    });
+    const falso = await servicio.abrirJornada(ctx, { registerId: caja, fecha: "2026-08-22", fondoManual: [] });
+    await servicio.guardarArqueo(ctx, { sessionId: falso.sesion.id, contado: [] });
+    await servicio.cerrarJornada(ctx, { sessionId: falso.sesion.id, cambioFinal: [] });
+
+    /*
+     * La del 24 en el estado EXACTO de producción: abierta antes del arreglo
+     * de la herencia, sin fondo y sin operación de apertura. Ya no se puede
+     * producir por el camino normal —la propia prueba anterior demuestra que
+     * ahora se hereda—, así que se fabrica: se abre (hereda) y se le quita el
+     * fondo por SQL, que es como quedó la de verdad.
+     */
+    const dia24 = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fecha: "2026-08-24",
+      permitirFechaRepetida: true,
+    });
+    await db.query(
+      `DELETE FROM cash_denomination_movements
+        WHERE session_id = $1 AND motivo = 'OPENING_FLOAT'`,
+      [dia24.sesion.id]
+    );
+    await db.query(
+      `DELETE FROM cash_operations WHERE session_id = $1 AND tipo = 'OPENING_FLOAT'`,
+      [dia24.sesion.id]
+    );
+    await db.query(
+      `UPDATE cash_sessions
+          SET fondo_inicial_centimos = 0, fondo_inicial_heredado = false
+        WHERE id = $1`,
+      [dia24.sesion.id]
+    );
+    await servicio.registrarCobro(ctx, {
+      sessionId: dia24.sesion.id,
+      importeCentimos: 5000,
+      formasPago: [{ forma: "CASH", importe: 5000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      concepto: "Venta del papel",
+    });
+
+    // El candidato es el cierre del 20, no el del 22.
+    const candidato = await servicio.ultimoCierreConCambio(caja, "2026-08-24", dia24.sesion.id);
+    expect(candidato?.fecha).toBe("2026-08-20");
+    expect(candidato?.totalCentimos).toBe(35000);
+
+    const sesion = await servicio.traerFondoDeCierre(ctx, {
+      sessionId: dia24.sesion.id,
+      motivo: "cadena rota por el cierre en falso del 22",
+    });
+    expect(sesion.fondoInicialCentimos).toBe(35000);
+    expect(sesion.fondoInicialHeredado).toBe(true);
+
+    // El teórico: 350 heredados + 50 del cobro que ya estaba.
+    const stock = await servicio.stockDeJornada(dia24.sesion.id);
+    expect(stock.totalCentimos).toBe(40000);
+
+    // Y no se puede traer dos veces: lo duplicaría.
+    await expect(
+      servicio.traerFondoDeCierre(ctx, { sessionId: dia24.sesion.id, motivo: "otra vez" })
+    ).rejects.toMatchObject({ codigo: "JORNADA_YA_TIENE_FONDO" });
+  });
+
+  it("sin ningún cierre con cambio no hay nada que traer", async () => {
+    const caja = await crearCaja("sin-candidato");
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: [] });
+    expect(await servicio.ultimoCierreConCambio(caja, sesion.fecha, sesion.id)).toBeNull();
+    await expect(
+      servicio.traerFondoDeCierre(ctx, { sessionId: sesion.id, motivo: "no hay" })
+    ).rejects.toMatchObject({ codigo: "SIN_CIERRE_ANTERIOR" });
+  });
+});
+
+describe.runIf(RUN)("cierre que deja la caja vacía", () => {
+  async function cajaConFondoFijo(nombre: string): Promise<number> {
+    const caja = await crearCaja(nombre);
+    await db.query(`UPDATE cash_registers SET fondo_objetivo_centimos = 35000 WHERE id = $1`, [caja]);
+    return caja;
+  }
+
+  it("con fondo fijo configurado, mandar todo al banco pide confirmación", async () => {
+    // El despiste real: teclear el cierre con el fondo entero como «ingreso».
+    const caja = await cajaConFondoFijo("vacia-guarda");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 7 }],
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 7 }] });
+
+    await expect(
+      servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] })
+    ).rejects.toMatchObject({ codigo: "CIERRE_DEJA_CAJA_VACIA" });
+
+    // Confirmado en claro, se deja: vaciar la caja de verdad existe.
+    const r = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [],
+      permitirCajaVacia: true,
+    });
+    expect(r.totalIngresoCentimos).toBe(35000);
+    expect(r.totalCambioCentimos).toBe(0);
+  });
+
+  it("sin fondo fijo no pregunta nada: vaciar es lo normal", async () => {
+    const caja = await crearCaja("vacia-sin-fondo");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 2 }] });
+    const r = await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] });
+    expect(r.totalIngresoCentimos).toBe(10000);
+  });
+
+  it("dejar cambio no dispara la pregunta aunque haya fondo fijo", async () => {
+    const caja = await cajaConFondoFijo("vacia-normal");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 8 }],
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 8 }] });
+    const r = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 5000, cantidad: 7 }],
+    });
+    expect(r.totalCambioCentimos).toBe(35000);
+    expect(r.totalIngresoCentimos).toBe(5000);
+  });
+});

@@ -11,6 +11,7 @@ import CapturaWhatsApp from "../components/CapturaWhatsApp";
 import ConfirmarImportacionIA, { type PropuestaIA, type ExtraIA } from "../components/ConfirmarImportacionIA";
 import type { ServiceType, VehicleType } from "../types";
 import type { Client } from "./Clientes";
+import { useCentroDeTrabajo } from "../components/CentroDeTrabajo";
 
 type Form = {
   expedientNumber: string; externalReference: string; clientName: string;
@@ -61,6 +62,12 @@ export default function NuevaAsistencia() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [conceptos, setConceptos] = useState<Concepto[]>([]);
+  // Medidas y marcas del catálogo de la central: lo previsto se elige de
+  // ahí, no se teclea. Una medida escrita a mano que no exista en el
+  // catálogo no casa con ningún precio y manda la tarifa a revisión.
+  const { centro } = useCentroDeTrabajo();
+  const [medidas, setMedidas] = useState<string[]>([]);
+  const [marcas, setMarcas] = useState<string[]>([]);
   // Extracción por IA: pegar la conversación de WhatsApp o subir capturas
   const [iaAbierto, setIaAbierto] = useState(false);
   const [iaTexto, setIaTexto] = useState("");
@@ -82,8 +89,25 @@ export default function NuevaAsistencia() {
         setVehicleTypes((r.vehicle_types ?? []).filter((t) => t.active));
       })
       .catch(() => {});
-    boFetch<{ data: Client[] }>("/clients").then((r) => setClients(r.data.filter((c) => c.active))).catch(() => {});
   }, []);
+
+  // Los clientes, los del centro elegido: el selector no puede ofrecer un
+  // cliente de otra central, que no tiene contrato aqui y no se podria
+  // facturar. Sin centro elegido salen todos, como antes.
+  useEffect(() => {
+    boFetch<{ data: Client[] }>("/clients", { centro })
+      .then((r) => setClients(r.data.filter((c) => c.active))).catch(() => {});
+  }, [centro]);
+
+  useEffect(() => {
+    if (centro == null) return;
+    boFetch<{ data: { normalizedCode: string; active: boolean }[] }>("/pricing/catalog/sizes", { centro })
+      .then((r) => setMedidas(r.data.filter((m) => m.active).map((m) => m.normalizedCode)))
+      .catch(() => {});
+    boFetch<{ data: { name: string; active: boolean }[] }>("/pricing/catalog/brands", { centro })
+      .then((r) => setMarcas(r.data.filter((m) => m.active).map((m) => m.name)))
+      .catch(() => {});
+  }, [centro]);
 
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setF({ ...f, [k]: e.target.type === "checkbox" ? (e.target as HTMLInputElement).checked : e.target.value } as Form);
@@ -226,7 +250,9 @@ export default function NuevaAsistencia() {
     setBusy(true);
     setError(null);
     try {
-      const row = await boFetch<{ id: number }>("/assistances", { method: "POST", body: buildBody(draft) });
+      // El mismo centro cuyo catalogo se ha usado para elegir los neumaticos:
+      // elegir de un catalogo y crear el aviso en otra central no puede pasar.
+      const row = await boFetch<{ id: number }>("/assistances", { method: "POST", body: buildBody(draft), centro });
       // Las fotos y mensajes recibidos por WhatsApp pasan a la asistencia creada
       if (capturaId) {
         await boFetch(`/whatsapp-capture/${capturaId}/link`, {
@@ -404,6 +430,8 @@ export default function NuevaAsistencia() {
         <ConceptosPrevistos
           conceptos={conceptos}
           onChange={setConceptos}
+          medidas={medidas}
+          marcas={marcas}
           esCambioDeNeumatico={/neum|tyre|rueda/i.test(
             types.find((t) => t.code === f.serviceType)?.name ?? f.serviceType)}
         />
@@ -451,10 +479,12 @@ const CONCEPTO_NUEVO: Concepto = {
   kind: "TIRE", size: "", brand: "", position: "ANY", conceptCode: "", quantity: 1,
 };
 
-function ConceptosPrevistos({ conceptos, onChange, esCambioDeNeumatico }: {
+function ConceptosPrevistos({ conceptos, onChange, esCambioDeNeumatico, medidas, marcas }: {
   conceptos: Concepto[];
   onChange: (c: Concepto[]) => void;
   esCambioDeNeumatico: boolean;
+  medidas: string[];
+  marcas: string[];
 }) {
   const editar = (i: number, campo: keyof Concepto, valor: string | number) =>
     onChange(conceptos.map((c, j) => (j === i ? { ...c, [campo]: valor } : c)));
@@ -488,12 +518,14 @@ function ConceptosPrevistos({ conceptos, onChange, esCambioDeNeumatico }: {
             {c.kind === "TIRE" ? (
               <>
                 <Field label="Medida">
-                  <Input value={c.size} className="w-40" placeholder="315/80R22.5"
-                         onChange={(e) => editar(i, "size", e.target.value)} />
+                  <DelCatalogo valor={c.size} opciones={medidas} ancho="w-40"
+                               vacio="— Elegir medida —" libre="315/80R22.5"
+                               onChange={(v) => editar(i, "size", v)} />
                 </Field>
                 <Field label="Marca">
-                  <Input value={c.brand} className="w-32" placeholder="Hankook"
-                         onChange={(e) => editar(i, "brand", e.target.value)} />
+                  <DelCatalogo valor={c.brand} opciones={marcas} ancho="w-36"
+                               vacio="— Elegir marca —" libre="Hankook"
+                               onChange={(v) => editar(i, "brand", v)} />
                 </Field>
                 <Field label="Posición">
                   <Select value={c.position} onChange={(e) => editar(i, "position", e.target.value)}>
@@ -527,5 +559,45 @@ function ConceptosPrevistos({ conceptos, onChange, esCambioDeNeumatico }: {
         </Button>
       </div>
     </Section>
+  );
+}
+
+/**
+ * Un valor del catálogo de la central: medida o marca.
+ *
+ * Es un desplegable y no un campo de texto a propósito. La medida y la marca
+ * son las dos claves con las que el tarifario busca el precio del neumático,
+ * y "315/80 R22,5" escrito a mano no casa con "315/80R22.5" del catálogo: la
+ * línea se quedaría sin precio y mandaría la tarifa a revisión manual. Con el
+ * desplegable solo se puede elegir algo que el motor sabe tarificar.
+ *
+ * Dos salvedades:
+ *
+ *  · Si el catálogo aún no ha llegado —o el superadministrador todavía no ha
+ *    elegido central— se cae a campo de texto en vez de dejar un desplegable
+ *    vacío que impediría dar de alta la asistencia. Dar el aviso nunca puede
+ *    bloquearse por la tarifa.
+ *  · Un valor que ya venga puesto y no esté en el catálogo (lo típico, algo
+ *    que ha rellenado la IA) se añade como opción en vez de desaparecer sin
+ *    decir nada.
+ */
+function DelCatalogo({ valor, opciones, onChange, ancho, vacio, libre }: {
+  valor: string;
+  opciones: string[];
+  onChange: (v: string) => void;
+  ancho: string;
+  vacio: string;
+  libre: string;
+}) {
+  if (opciones.length === 0) {
+    return <Input value={valor} className={ancho} placeholder={libre}
+                  onChange={(e) => onChange(e.target.value)} />;
+  }
+  const lista = valor && !opciones.includes(valor) ? [valor, ...opciones] : opciones;
+  return (
+    <Select value={valor} className={ancho} onChange={(e) => onChange(e.target.value)}>
+      <option value="">{vacio}</option>
+      {lista.map((o) => <option key={o} value={o}>{o}</option>)}
+    </Select>
   );
 }

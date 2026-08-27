@@ -447,6 +447,22 @@ export const movimientosJornada = (sessionId: number) =>
 export const reabrirJornada = (sessionId: number, motivo: string) =>
   pedir<{ sesion: Sesion }>(`/sessions/${sessionId}/reopen`, json({ motivo }));
 
+export const anularJornada = (sessionId: number, motivo: string) =>
+  pedir<{ sesion: Sesion }>(`/sessions/${sessionId}/void`, json({ motivo }));
+
+export const fondoHeredable = (sessionId: number) =>
+  pedir<{
+    candidato: {
+      sesionId: number;
+      fecha: string;
+      totalCentimos: number;
+      composicion: LineaDenominacion[];
+    } | null;
+  }>(`/sessions/${sessionId}/inheritable-float`);
+
+export const traerFondoDeCierre = (sessionId: number, motivo: string) =>
+  pedir<{ sesion: Sesion }>(`/sessions/${sessionId}/inherit-float`, json({ motivo }));
+
 /**
  * Propuesta de cambio. Es una consulta: no reserva nada, y por eso la
  * confirmación vuelve a validar en el servidor con la jornada bloqueada.
@@ -569,6 +585,8 @@ export const cerrarJornada = (
     cambioFinalBolsas?: LineaDenominacion[];
     arqueoId?: number;
     notas?: string;
+    /** Confirmación explícita para dejar la caja a cero teniendo fondo fijo. */
+    permitirCajaVacia?: boolean;
   }
 ) =>
   pedir<{
