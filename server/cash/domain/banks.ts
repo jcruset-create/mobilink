@@ -9,19 +9,30 @@
  * añaden los que falten y se cambian los nombres. Por eso la semilla solo
  * rellena lo que no existe y nunca pisa lo que haya tocado el usuario.
  *
- * Los LOGOTIPOS no vienen puestos: son marcas registradas de cada banco y no
- * se distribuyen con la aplicación. Se suben una vez en Configuración y desde
- * ahí los reutilizan todas las cuentas de esa entidad.
+ * Los LOGOTIPOS que la aplicación trae hechos viven en `public/bancos/`, en
+ * versión para fondo oscuro —la cabecera del resguardo es azul marino— y con
+ * transparencia, para que no salga el recuadro blanco de la imagen. Se usan
+ * solo para identificar al banco al que fue el dinero.
+ *
+ * No están todos: el que falte se sube en Configuración y desde ahí lo
+ * reutilizan todas las cuentas de esa entidad. Un logotipo subido MANDA sobre
+ * el de la semilla, y al quitarlo vuelve a salir el de la semilla, así que
+ * nada se pierde por probar.
  */
 
 export type BancoSemilla = {
   /** Cuatro cifras. Clave natural: es lo que trae el IBAN. */
   codigo: string;
   nombre: string;
+  /** Logotipo que trae la aplicación, servido desde `public/`. */
+  logo?: string;
 };
 
+/** El logotipo de CaixaBank cubre también los IBAN que quedan de Bankia. */
+const CAIXABANK = "/bancos/2100-caixabank.png";
+
 export const BANCOS_SEMILLA: BancoSemilla[] = [
-  { codigo: "2100", nombre: "CaixaBank" },
+  { codigo: "2100", nombre: "CaixaBank", logo: CAIXABANK },
   { codigo: "0049", nombre: "Banco Santander" },
   { codigo: "0182", nombre: "BBVA" },
   { codigo: "0081", nombre: "Banco Sabadell" },
@@ -45,6 +56,22 @@ export const BANCOS_SEMILLA: BancoSemilla[] = [
    * conserva el código de entidad antiguo, así que sin ellos el reconocimiento
    * fallaría justo en las cuentas más viejas.
    */
-  { codigo: "2038", nombre: "Bankia (ahora CaixaBank)" },
+  { codigo: "2038", nombre: "Bankia (ahora CaixaBank)", logo: CAIXABANK },
   { codigo: "0075", nombre: "Banco Popular (ahora Santander)" },
 ];
+
+/** Índice por código, para resolver el logotipo sin recorrer la lista. */
+const POR_CODIGO = new Map(BANCOS_SEMILLA.map((b) => [b.codigo, b]));
+
+/**
+ * El logotipo que trae la aplicación para esa entidad, si lo trae.
+ *
+ * Se resuelve al LEER, no se guarda en la base de datos: así el día que se
+ * cambie o se añada uno lo tienen todas las empresas sin migrar nada, y quitar
+ * un logotipo subido a mano hace que vuelva a salir este en lugar de dejar el
+ * resguardo sin nada.
+ */
+export function logoDeSemilla(codigo: string | null | undefined): string | null {
+  if (!codigo) return null;
+  return POR_CODIGO.get(codigo)?.logo ?? null;
+}

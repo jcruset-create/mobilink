@@ -23,10 +23,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import sharp from "sharp";
 import PDFDocument from "pdfkit";
 import { PDFDocument as PDFLib } from "pdf-lib";
 import pool from "../db.ts";
 import { formatearEuros } from "./domain/money.ts";
+import { logoDeSemilla } from "./domain/banks.ts";
 import type { LineaDenominacion } from "./domain/inventory.ts";
 import { ErrorCaja, cargarDenominaciones } from "./repository.ts";
 import { detalleJornada } from "./service.ts";
@@ -132,6 +134,35 @@ async function imagenesDelCatalogo(
 }
 
 /** Genera el informe entero. Devuelve el PDF listo para descargar. */
+/*
+ * Los logotipos de la cabecera se arriman más al borde que el texto.
+ *
+ * La banda azul llega de canto a canto de la hoja, así que el margen del
+ * cuerpo —pensado para que el texto no se coma la encuadernación— aquí solo
+ * deja a los dos logotipos apretados contra el centro. Con este, cada uno se
+ * va a su esquina y el título respira en medio.
+ */
+const M_LOGO = 24;
+
+/**
+ * El logotipo de Mobilink Cash para la cabecera de los informes.
+ *
+ * Va el de FONDO TRANSPARENTE. El fichero de siempre trae dentro su propio
+ * azul marino, parecido al de la banda pero no igual, y sobre el papel se le
+ * veía el recuadro alrededor. La versión recortada se apoya directamente en la
+ * banda, sea del color que sea.
+ *
+ * Si faltara, se usa el de siempre: un recuadro se aguanta, quedarse sin
+ * cabecera no.
+ */
+function logoMobilink(): string | null {
+  for (const nombre of ["logo-cash-fondo-oscuro.png", "logo-cash.png"]) {
+    const fichero = path.join(process.cwd(), "public", nombre);
+    if (fs.existsSync(fichero)) return fichero;
+  }
+  return null;
+}
+
 export async function informeCierre(empresaId: string, sessionId: number): Promise<Buffer> {
   const detalle = await detalleJornada(sessionId);
   if (detalle.sesion.empresaId !== empresaId) {
@@ -231,10 +262,10 @@ async function construirPortada(d: {
     // puede dejar sin informe a quien cierra la caja.
     let x = M;
     try {
-      const logo = path.join(process.cwd(), "public", "logo-cash.png");
-      if (fs.existsSync(logo)) {
-        doc.image(logo, M, 14, { height: 30 });
-        x = M + 120;
+      const logo = logoMobilink();
+      if (logo) {
+        doc.image(logo, M_LOGO, 12, { height: 34 });
+        x = M + 132;
       }
     } catch {
       /* sin logotipo: manda el texto */
@@ -245,11 +276,17 @@ async function construirPortada(d: {
       .font("Helvetica-Bold")
       .fontSize(15)
       .text("Cierre de caja", x, 16, { lineBreak: false });
+    /*
+     * La caja y la fecha, en blanco y del mismo tamaño que en el resguardo del
+     * ingreso: los dos papeles se archivan juntos y tienen que verse igual. En
+     * gris pequeño se perdían contra el azul, y son justo el dato que
+     * identifica una hoja suelta cuando el taco se separa.
+     */
     doc
-      .font("Helvetica")
-      .fontSize(10)
-      .fillColor("#94a3b8")
-      .text(subtitulo, x, 36, { lineBreak: false });
+      .font("Helvetica-Bold")
+      .fontSize(13)
+      .fillColor("#ffffff")
+      .text(subtitulo, x, 34, { lineBreak: false });
 
     doc.fillColor(TINTA).font("Helvetica").fontSize(10);
     doc.x = M;
@@ -857,8 +894,8 @@ async function construirPortada(d: {
     doc
       .font("Helvetica")
       .fontSize(9)
-      .fillColor("#94a3b8")
-      .text(`${i + 1} de ${rango.count}`, M, 36, {
+      .fillColor("#ffffff")
+      .text(`${i + 1} de ${rango.count}`, M, 38, {
         width: doc.page.width - M * 2,
         align: "right",
         lineBreak: false,
@@ -943,6 +980,48 @@ async function paginaDeAviso(
  * coincide con ellos —se puede ingresar solo una parte— se dice en su línea en
  * vez de dejar que los números no cuadren y que quien lo lea se lo imagine.
  */
+/**
+ * Trae el logotipo del banco, venga de donde venga.
+ *
+ * Los que trae la aplicación son ficheros de `public/` y se leen del disco;
+ * los que sube el usuario viven en Storage y se bajan. Ningún fallo se
+ * propaga: sin logotipo el resguardo pone el nombre del banco y se imprime
+ * igual, que es lo que importa.
+ */
+type Logotipo = { datos: Buffer; ancho: number; alto: number };
+
+async function bajarLogotipo(url: string): Promise<Logotipo | null> {
+  const datos = await leerLogotipo(url);
+  if (!datos) return null;
+  try {
+    const { width, height } = await sharp(datos).metadata();
+    if (!width || !height) return null;
+    return { datos, ancho: width, alto: height };
+  } catch {
+    // No se ha podido leer como imagen: mejor el nombre que un PDF roto.
+    return null;
+  }
+}
+
+async function leerLogotipo(url: string): Promise<Buffer | null> {
+  try {
+    if (/^https?:/.test(url)) {
+      const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      return r.ok ? Buffer.from(await r.arrayBuffer()) : null;
+    }
+    if (url.startsWith("/")) {
+      const fichero = path.join(process.cwd(), "public", url.replace(/^\/+/, ""));
+      // Que una ruta con «..» no saque nada de fuera de public/.
+      const raiz = path.join(process.cwd(), "public");
+      if (!fichero.startsWith(raiz + path.sep)) return null;
+      return fs.existsSync(fichero) ? fs.readFileSync(fichero) : null;
+    }
+  } catch {
+    /* sin logotipo: manda el nombre */
+  }
+  return null;
+}
+
 export async function informeIngreso(empresaId: string, depositId: number): Promise<Buffer> {
   const datos = await composicionDeIngreso(empresaId, depositId);
   if (!datos) {
@@ -977,26 +1056,29 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   );
   const hayComprobante = comprobantes.length > 0;
 
-  // El logotipo del banco, del maestro. Cualquier fallo al bajarlo deja el
-  // nombre en su sitio: un resguardo sin logo sirve, uno que no se genera no.
-  let logoBanco: Buffer | null = null;
+  /*
+   * El logotipo del banco.
+   *
+   * Sale UNO solo, el primero que haya de estos tres: el subido a la cuenta,
+   * el subido al banco y el que trae la aplicación en `public/bancos/`. Antes
+   * salían dos porque la imagen que se había subido traía dentro las dos
+   * versiones de la marca, la de fondo claro y la de fondo oscuro; quitando el
+   * fichero subido vuelve a mandar el de la aplicación, que es una sola.
+   *
+   * Cualquier fallo al conseguirlo deja el nombre en su sitio: un resguardo
+   * sin logotipo sirve, uno que no se genera no.
+   */
+  let logoBanco: Logotipo | null = null;
   if (ingreso.bankAccountId != null) {
-    const { rows: logos } = await pool.query<{ logo_url: string | null }>(
-      `SELECT COALESCE(c.logo_url, b.logo_url) AS logo_url
+    const { rows: logos } = await pool.query<{ logo_url: string | null; codigo: string | null }>(
+      `SELECT COALESCE(c.logo_url, b.logo_url) AS logo_url, b.codigo AS codigo
          FROM cash_bank_accounts c
          LEFT JOIN cash_banks b ON b.id = c.bank_id
         WHERE c.id = $1`,
       [ingreso.bankAccountId]
     );
-    const url = logos[0]?.logo_url;
-    if (url && /^https?:/.test(url)) {
-      try {
-        const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
-        if (r.ok) logoBanco = Buffer.from(await r.arrayBuffer());
-      } catch {
-        /* sin logotipo: manda el nombre */
-      }
-    }
+    const url = logos[0]?.logo_url ?? logoDeSemilla(logos[0]?.codigo);
+    logoBanco = url ? await bajarLogotipo(url) : null;
   }
 
   const denominaciones = await cargarDenominaciones(pool, false);
@@ -1015,10 +1097,10 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   doc.rect(0, 0, doc.page.width, 58).fill("#101a33");
   let xCab = M;
   try {
-    const logo = path.join(process.cwd(), "public", "logo-cash.png");
-    if (fs.existsSync(logo)) {
-      doc.image(logo, M, 14, { height: 30 });
-      xCab = M + 120;
+    const logo = logoMobilink();
+    if (logo) {
+      doc.image(logo, M_LOGO, 12, { height: 34 });
+      xCab = M + 132;
     }
   } catch {
     /* sin logotipo: manda el texto */
@@ -1048,7 +1130,21 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
    */
   if (logoBanco) {
     try {
-      doc.image(logoBanco, doc.page.width - M - 96, 13, { fit: [96, 32], align: "right" });
+      /*
+       * Lo más grande que cabe en la banda sin deformarlo: se calcula con el
+       * tamaño real de la imagen, se pega al margen derecho y se centra en el
+       * alto. Un logotipo cuadrado y uno alargado quedan así los dos bien, sin
+       * dejar el hueco a medias como hacía la caja fija de antes.
+       */
+      const ALTO = 38;
+      const ANCHO = 210;
+      const escala = Math.min(ANCHO / logoBanco.ancho, ALTO / logoBanco.alto);
+      const ancho = logoBanco.ancho * escala;
+      const alto = logoBanco.alto * escala;
+      doc.image(logoBanco.datos, doc.page.width - M_LOGO - ancho, (58 - alto) / 2, {
+        width: ancho,
+        height: alto,
+      });
     } catch {
       /* logotipo ilegible: manda el nombre */
     }
@@ -1057,7 +1153,7 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
       .font("Helvetica-Bold")
       .fontSize(12)
       .fillColor("#ffffff")
-      .text(ingreso.banco, doc.page.width - M - 200, 22, {
+      .text(ingreso.banco, doc.page.width - M_LOGO - 200, 22, {
         width: 200,
         align: "right",
         lineBreak: false,
