@@ -639,6 +639,9 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
         sessionIds: [sesion.id],
         importeCentimos: 4000,
         referencia: "ABONO-123",
+        // Con fecha DE VERDAD y no a nulo: si se deja sin poner, comprobar que
+        // Central la recibe compara null con null y no prueba nada.
+        fechaIngreso: "2026-08-21",
       });
       await vaciar();
 
@@ -647,6 +650,15 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
       expect(proyectado).toBeTruthy();
       expect(proyectado!.importeCentimos).toBe(4000);
       expect(proyectado!.referencia).toBe("ABONO-123");
+
+      /*
+       * La fecha y el estado también, que es lo que se mira para conciliar con
+       * el extracto. Sin esto, Central enseñaba el ingreso con la fecha en
+       * blanco y nadie podía casarlo con el apunte del banco.
+       */
+      expect(ingreso.fechaIngreso).toBe("2026-08-21");
+      expect(proyectado!.fecha).toBe("2026-08-21");
+      expect(proyectado!.estado).toBe("CONFIRMADO");
 
       // La asignación de origen: de qué jornada salió y cuánto puso.
       expect(proyectado!.origen).toHaveLength(1);
@@ -660,6 +672,49 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
     } finally {
       transporteCaja.registrarTransporte(null);
     }
+  });
+
+  /*
+   * El resguardo del ingreso, por la API de Central.
+   *
+   * Existe ruta propia porque la de la caja exige `cash.view` y un supervisor
+   * de red puede no tenerlo. Lo que hay que demostrar es que **la empresa sale
+   * de la sesión y no de la petición**: pedir el resguardo de otra empresa
+   * cambiando el número tiene que no devolver nada.
+   */
+  it("el resguardo se genera para tu empresa y no para la de otro", async () => {
+    const { rows: creada } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+       VALUES ($1,'resguardo',$2,$3,$4,$4) RETURNING id`,
+      [
+        EMPRESA,
+        `resg-${String(process.hrtime.bigint()).slice(-9)}`,
+        `RG${String(process.hrtime.bigint()).slice(-6)}`,
+        Date.now(),
+      ]
+    );
+    const caja = creada[0].id;
+    const { rows: dep } = await db.query(
+      `INSERT INTO cash_bank_deposits
+         (empresa_id, register_id, numero, estado, fecha_ingreso, importe_centimos,
+          remanente_anterior_centimos, total_cierres_centimos, remanente_nuevo_centimos,
+          creado_at_ms)
+       VALUES ($1,$2,$3,'CONFIRMADO','2026-08-21',4000,0,4000,0,$4) RETURNING id`,
+      [EMPRESA, caja, `RESG-${String(process.hrtime.bigint()).slice(-6)}`, Date.now()]
+    );
+
+    const { informeIngreso } = await import("../cash/report.ts");
+
+    const pdf = await informeIngreso(EMPRESA, dep[0].id);
+    expect(pdf.length).toBeGreaterThan(1000);
+    // Un PDF de verdad y no una página de error: la firma va en los 5 primeros
+    // bytes y es lo único que distingue un Buffer válido de uno cualquiera.
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+
+    // Desde otra empresa, ese mismo ingreso no existe.
+    await expect(
+      informeIngreso("00000000-0000-4000-a000-0000000000ef", dep[0].id)
+    ).rejects.toMatchObject({ codigo: "INGRESO_NO_ENCONTRADO" });
   });
 
   /*
