@@ -17,6 +17,7 @@ import { Router, json, type Request, type Response, type NextFunction } from "ex
 import multer from "multer";
 import sharp from "sharp";
 import db from "../db.ts";
+import { hashSecret, newSalt } from "../core/credentials.ts";
 import { supabase, SUPABASE_ROADSIDE_BUCKET } from "../supabase.ts";
 import { transition, InvalidTransitionError, rejectAssignment, acceptAssignment } from "./service.ts";
 import { publish } from "./bus.ts";
@@ -172,12 +173,15 @@ export async function auditLite(opts: {
 
 // ── Autenticación ──────────────────────────────────────────────────────────
 
+// Implementación compartida en `server/core/credentials.ts` (mismo algoritmo:
+// PBKDF2-SHA256, 60.000 iteraciones, 32 bytes). Se reexporta para no tocar los
+// call sites existentes (`backoffice.ts`).
 export function hashPin(pin: string, salt: string): string {
-  return crypto.pbkdf2Sync(pin, salt, 60_000, 32, "sha256").toString("hex");
+  return hashSecret(pin, salt);
 }
 
 export function newPinSalt(): string {
-  return crypto.randomBytes(16).toString("hex");
+  return newSalt();
 }
 
 /** Intentos fallidos de login por IP+usuario (memoria del proceso). */

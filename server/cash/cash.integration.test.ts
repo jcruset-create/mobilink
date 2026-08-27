@@ -3567,7 +3567,13 @@ describe.runIf(RUN)("Ámbito por taller", () => {
     // salían iguales dentro del mismo milisegundo y la prueba de aislamiento
     // comparaba un taller consigo mismo. `hrtime` es lo que ya usa `crearCaja`.
     if (!hay[0]?.hay) {
-      return `00000000-0000-4000-a000-${String(process.hrtime.bigint()).slice(-12)}`;
+      // `padStart` y no solo `slice`: en un runner recién arrancado `hrtime`
+      // lleva pocos nanosegundos y su texto NO llega a 12 dígitos, así que el
+      // último grupo salía corto y PostgreSQL rechazaba el uuid. Reventaba solo
+      // en máquinas con poco tiempo encendidas —o sea, en la CI y nunca en
+      // local—, que es la peor forma de fallar.
+      const cola = String(process.hrtime.bigint()).slice(-12).padStart(12, "0");
+      return `00000000-0000-4000-a000-${cola}`;
     }
 
     await db.query(
