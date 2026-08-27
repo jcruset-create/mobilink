@@ -1099,3 +1099,108 @@ export async function registrarCanje(
 
   return { operacionId: operacion.operacionId, numero: operacion.numero };
 }
+
+/**
+ * Reenvía a MC Central los ingresos que ya existen en la caja.
+ *
+ * Central se alimenta solo de eventos, así que un ingreso creado —o completado
+ * con su fecha— antes de que existiera el evento correspondiente, para Central
+ * no existe o existe a medias. Esto no cambia NI UN DATO de la caja: vuelve a
+ * contar lo que la caja ya dice.
+ *
+ * Los anulados van en dos pasos, alta y anulación, porque es como ocurrieron:
+ * mandar solo el segundo dejaría en Central una fila que nunca se dio de alta.
+ *
+ * Devuelve cuántos ha reenviado, que es lo que la pantalla necesita para poder
+ * decir algo distinto de «hecho».
+ */
+export async function reemitirIngresos(
+  ctx: Contexto,
+  filtros: { centroId?: string | null; registerId?: number | null } = {}
+): Promise<{ reenviados: number }> {
+  const cond: string[] = ["d.empresa_id = $1"];
+  const params: unknown[] = [ctx.empresaId];
+  if (filtros.centroId) {
+    params.push(filtros.centroId);
+    cond.push(`r.centro_id = $${params.length}`);
+  }
+  if (filtros.registerId) {
+    params.push(filtros.registerId);
+    cond.push(`d.register_id = $${params.length}`);
+  }
+
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const { rows } = await pool.query<any>(
+    `SELECT d.*, r.centro_id
+       FROM cash_bank_deposits d
+       JOIN cash_registers r ON r.id = d.register_id
+      WHERE ${cond.join(" AND ")}
+      ORDER BY d.id`,
+    params
+  );
+
+  let reenviados = 0;
+  for (const d of rows) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const comun = {
+        empresaId: ctx.empresaId,
+        centroId: (d.centro_id ?? null) as string | null,
+        registerId: Number(d.register_id),
+        agregado: { tipo: "REGISTER" as const, id: Number(d.register_id) },
+        actorUserId: ctx.userId,
+      };
+
+      await emitirEvento(client, {
+        ...comun,
+        tipo: "BANK_DEPOSIT_CREATED",
+        ocurridoEnMs: Number(d.creado_at_ms ?? Date.now()),
+        datos: {
+          depositId: Number(d.id),
+          numero: d.numero ?? null,
+          importeCentimos: Number(d.importe_centimos),
+          totalCierresCentimos: Number(d.total_cierres_centimos ?? 0),
+          remanenteAnteriorCentimos: Number(d.remanente_anterior_centimos ?? 0),
+          remanenteNuevoCentimos: Number(d.remanente_nuevo_centimos ?? 0),
+          referencia: d.referencia ?? null,
+          fecha: fechaIso(d.fecha_ingreso),
+        },
+      });
+
+      if (d.estado === "ANULADO") {
+        await emitirEvento(client, {
+          ...comun,
+          tipo: "BANK_DEPOSIT_VOIDED",
+          ocurridoEnMs: Date.now(),
+          datos: {
+            depositId: Number(d.id),
+            importeCentimos: Number(d.importe_centimos),
+            motivo: d.anulado_motivo ?? null,
+          },
+        });
+      }
+
+      await client.query("COMMIT");
+      reenviados++;
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "central.ingresos.reemitir",
+    entidad: "cash_bank_deposits",
+    entidadId: String(filtros.registerId ?? filtros.centroId ?? "todos"),
+    detalle: { reenviados, filtros },
+    ip: ctx.ip,
+  });
+
+  return { reenviados };
+}
