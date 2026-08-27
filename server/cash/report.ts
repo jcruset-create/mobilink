@@ -34,6 +34,7 @@ import { conteoPorOperacion, documentosDeJornada } from "./documents.ts";
 import { pendientes } from "./treasury.ts";
 import { repartirArqueo } from "./domain/erpsplit.ts";
 import { composicionDeIngreso } from "./bankdeposits.ts";
+import { formatearIban } from "./domain/bankaccount.ts";
 import { leerDocumento } from "./storage.ts";
 
 const M = 40;
@@ -1170,8 +1171,15 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   fila("Se ingresa", eur(ingreso.importeCentimos), true);
   fila("Remanente que queda en tienda", eur(ingreso.remanenteNuevoCentimos), true);
 
-  if (ingreso.referencia || ingreso.observaciones) {
+  /*
+   * A qué cuenta va, en el papel que se lleva al banco. Es media razón de ser
+   * del resguardo: con dos bancos abiertos, quien hace el viaje tiene que
+   * saber en cuál ingresar, y quien concilia después, contra qué extracto.
+   */
+  if (ingreso.banco || ingreso.referencia || ingreso.observaciones) {
     titulo("Datos del ingreso");
+    if (ingreso.banco) fila("Banco", ingreso.banco, true);
+    if (ingreso.iban) fila("Cuenta", formatearIban(ingreso.iban), true);
     if (ingreso.referencia) fila("Referencia bancaria", ingreso.referencia);
     if (ingreso.observaciones) {
       doc.fillColor(GRIS).fontSize(9).text(ingreso.observaciones, M, doc.y, { width: ancho });

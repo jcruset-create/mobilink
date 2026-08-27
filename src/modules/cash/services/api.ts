@@ -18,6 +18,7 @@ import type {
   DocumentoOperacion,
   EntregaDinero,
   FormaPagoConfig,
+  CuentaBancariaConfig,
   IngresoBancario,
   PropuestaCanjeIngreso,
   PanelIngresos,
@@ -273,11 +274,42 @@ export const adjuntarDocumento = (operationId: number, fichero: File) => {
 
 export const completarIngreso = (
   depositId: number,
-  datos: { fechaIngreso?: string | null; referencia?: string | null; observaciones?: string | null }
+  datos: {
+    fechaIngreso?: string | null;
+    referencia?: string | null;
+    observaciones?: string | null;
+    bankAccountId?: number | null;
+  }
 ) =>
   // El method va DESPUÉS del spread: json() trae POST y lo pisaría.
   pedir<{ ingreso: IngresoBancario }>(`/bank-deposits/${depositId}`, {
     ...json(datos),
+    method: "PATCH",
+  });
+
+export const cuentasBancarias = () =>
+  pedir<{ cuentas: CuentaBancariaConfig[] }>(`/bank-accounts`);
+
+export const crearCuentaBancaria = (datos: {
+  banco: string;
+  iban: string;
+  alias?: string;
+  porDefecto?: boolean;
+}) => pedir<{ cuenta: CuentaBancariaConfig }>(`/bank-accounts`, json(datos));
+
+export const actualizarCuentaBancaria = (
+  id: number,
+  cambios: {
+    banco?: string;
+    iban?: string;
+    alias?: string;
+    activa?: boolean;
+    porDefecto?: boolean;
+  }
+) =>
+  // El method va DESPUÉS del spread: json() trae POST y lo pisaría.
+  pedir<{ cuenta: CuentaBancariaConfig }>(`/bank-accounts/${id}`, {
+    ...json(cambios),
     method: "PATCH",
   });
 
