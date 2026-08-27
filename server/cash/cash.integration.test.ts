@@ -5123,3 +5123,75 @@ describe.runIf(RUN)("maestro de bancos", () => {
     expect(lista.find((c) => c.id === cuenta.id)!.logoUrl).toBe("https://ejemplo.test/s.png");
   });
 });
+
+describe.runIf(RUN)("cuentas anteriores al maestro de bancos", () => {
+  it("una cuenta creada sin bank_id se engancha sola por su IBAN", async () => {
+    /*
+     * El caso real: la cuenta se dio de alta cuando `bank_id` no existía, así
+     * que quedó a NULL y el resguardo salía sin logotipo aunque el banco lo
+     * tuviera subido. Nada lo decía: simplemente no aparecía.
+     */
+    const bban = `2100${String(process.hrtime.bigint()).slice(-16).padStart(16, "0")}`;
+    let resto = 0;
+    for (const c of `${bban}ES00`) {
+      const v = c >= "A" ? String(c.charCodeAt(0) - 55) : c;
+      for (const d of v) resto = (resto * 10 + Number(d)) % 97;
+    }
+    const iban = `ES${String(98 - resto).padStart(2, "0")}${bban}`;
+
+    // Se inserta a pelo, como quedaron las de antes: sin banco enlazado.
+    const { rows } = await db.query(
+      `INSERT INTO cash_bank_accounts
+         (empresa_id, banco, iban, created_at_ms, updated_at_ms)
+       VALUES ($1,'CAIXABANK',$2,$3,$3) RETURNING id`,
+      [EMPRESA, iban, Date.now()]
+    );
+    const cuentaId = rows[0].id;
+
+    const { rows: antes } = await db.query(
+      `SELECT bank_id FROM cash_bank_accounts WHERE id = $1`,
+      [cuentaId]
+    );
+    expect(antes[0].bank_id).toBeNull();
+
+    // Con solo consultar el maestro, la cuenta queda enganchada…
+    const bancos = await config.listarBancos(EMPRESA);
+    const caixa = bancos.find((b) => b.codigo === "2100")!;
+    const { rows: despues } = await db.query(
+      `SELECT bank_id FROM cash_bank_accounts WHERE id = $1`,
+      [cuentaId]
+    );
+    expect(despues[0].bank_id).toBe(caixa.id);
+
+    // …y hereda el logotipo, que era lo que faltaba en el resguardo.
+    await config.actualizarBanco(ctx, caixa.id, { logoUrl: "https://ejemplo.test/caixa.png" });
+    const lista = await config.listarCuentas(EMPRESA);
+    expect(lista.find((c) => c.id === cuentaId)!.logoUrl).toBe("https://ejemplo.test/caixa.png");
+  });
+
+  it("no pisa el banco de una cuenta que ya lo tenía", async () => {
+    const bancos = await config.listarBancos(EMPRESA);
+    const bbva = bancos.find((b) => b.codigo === "0182")!;
+    const bban = `2100${String(process.hrtime.bigint()).slice(-16).padStart(16, "0")}`;
+    let resto = 0;
+    for (const c of `${bban}ES00`) {
+      const v = c >= "A" ? String(c.charCodeAt(0) - 55) : c;
+      for (const d of v) resto = (resto * 10 + Number(d)) % 97;
+    }
+    const iban = `ES${String(98 - resto).padStart(2, "0")}${bban}`;
+
+    // IBAN de CaixaBank pero enganchada a mano a BBVA: el relleno no la toca.
+    const { rows } = await db.query(
+      `INSERT INTO cash_bank_accounts
+         (empresa_id, banco, iban, bank_id, created_at_ms, updated_at_ms)
+       VALUES ($1,'A mano',$2,$3,$4,$4) RETURNING id`,
+      [EMPRESA, iban, bbva.id, Date.now()]
+    );
+    await config.listarBancos(EMPRESA);
+    const { rows: despues } = await db.query(
+      `SELECT bank_id FROM cash_bank_accounts WHERE id = $1`,
+      [rows[0].id]
+    );
+    expect(despues[0].bank_id).toBe(bbva.id);
+  });
+});
