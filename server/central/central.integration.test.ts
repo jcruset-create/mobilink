@@ -745,6 +745,63 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
   });
 
   /*
+   * El reenvío sobre una fila QUE YA ESTÁ en Central.
+   *
+   * Es el camino que usa `scripts/central-reemitir-ingresos.ts` para reparar
+   * lo que Central no vio en su momento, y el que estaba roto: el `ON CONFLICT`
+   * solo tocaba el estado, así que la fecha se quedaba vieja y reenviar no
+   * servía de nada. Sin esta prueba, la reparación vuelve a romperse sin que
+   * nadie se entere.
+   */
+  it("reenviar el alta actualiza la fecha de un ingreso ya proyectado", async () => {
+    const { rows: creada } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+       VALUES ($1,'reenvio',$2,$3,$4,$4) RETURNING id`,
+      [
+        EMPRESA,
+        `reenv-${String(process.hrtime.bigint()).slice(-9)}`,
+        `RE${String(process.hrtime.bigint()).slice(-6)}`,
+        Date.now(),
+      ]
+    );
+    const caja = creada[0].id;
+    const dep = Number(String(process.hrtime.bigint()).slice(-8));
+
+    const alta = (fecha: string | null) =>
+      ingest.ingerirEvento(
+        evento({
+          tipo: "BANK_DEPOSIT_CREATED",
+          aggregateType: "REGISTER",
+          aggregateId: caja,
+          registerId: caja,
+          sessionId: null,
+          datos: { depositId: dep, numero: `RV-${dep}`, importeCentimos: 81500, fecha },
+        })
+      );
+
+    // Así llegó en su día: sin la fecha del banco.
+    await alta(null);
+    const antes = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+      (i) => i.depositId === dep
+    );
+    expect(antes?.fecha).toBeNull();
+
+    // Y así lo reenvía el script, con la fecha que la caja ya tiene.
+    await alta("2026-08-27");
+    const despues = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+      (i) => i.depositId === dep
+    );
+    expect(despues?.fecha).toBe("2026-08-27");
+
+    // Y un reenvío SIN fecha no borra la que ya hay: solo rellena huecos.
+    await alta(null);
+    const tras = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+      (i) => i.depositId === dep
+    );
+    expect(tras?.fecha).toBe("2026-08-27");
+  });
+
+  /*
    * Los filtros de la pantalla de ingresos.
    *
    * El del rango de fechas tiene una consecuencia que conviene dejar probada:
