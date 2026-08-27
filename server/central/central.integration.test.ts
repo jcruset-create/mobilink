@@ -305,7 +305,8 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
     const caja = creada[0].id;
 
     const jerarquia = await import("../cash/hierarchy.ts");
-    const ctx = { empresaId: EMPRESA, userId: null, ip: null } as any;
+    // `ip` va fuera: es opcional y `null` no encaja con `string | undefined`.
+    const ctx = { empresaId: EMPRESA, userId: null };
 
     // Antes: la red la enseña, pero sin taller.
     const antes = (await queries.cajasEnRed(EMPRESA)).find((c) => c.registerId === caja);
@@ -338,6 +339,89 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
     await expect(jerarquia.asignarCentroACaja(ctx, Number("x"), taller)).rejects.toMatchObject({
       codigo: "ENTRADA_NO_VALIDA",
     });
+  });
+
+  /*
+   * Corregir un cierre ya proyectado: el caso real del 21/08.
+   *
+   * Se tecleó el reparto al revés y el fondo salió como «ingreso bancario».
+   * `scripts/cash-reclasificar-cierre.ts` lo arregla en la caja, pero si no
+   * avisa a Central, Central sigue enseñando ese dinero como ido al banco —y
+   * no en un sitio: el mismo campo alimenta la columna «Al banco», la posición
+   * global y los «pendientes de ingresar».
+   *
+   * Lo que hay que demostrar no es que la consulta pinte números, sino que el
+   * evento correctivo GANA al del cierre original. Central proyecta por versión
+   * del agregado y descarta lo viejo como TARDIO: si la corrección no subiera
+   * la versión, se tiraría en silencio y el descuadre seguiría ahí.
+   */
+  it("un cierre corregido pisa al original en Central, no se descarta por tardío", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'reclasificar',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `recl-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      const hoy = new Date().toISOString().slice(0, 10);
+      const { rows: ses } = await db.query(
+        `INSERT INTO cash_sessions (empresa_id, register_id, fecha, estado,
+                                    created_at_ms, updated_at_ms)
+         VALUES ($1,$2,$3::date,'CLOSED',$4,$4) RETURNING id`,
+        [EMPRESA, caja, hoy, Date.now()]
+      );
+      const sesion = ses[0].id;
+
+      const emitir = async (cambio: number, ingreso: number) => {
+        const client = await db.connect();
+        try {
+          await client.query("BEGIN");
+          await (await import("../cash/events/emitter.ts")).emitirEvento(client, {
+            empresaId: EMPRESA,
+            registerId: caja,
+            sessionId: sesion,
+            agregado: { tipo: "SESSION", id: sesion },
+            tipo: "SESSION_CLOSED",
+            ocurridoEnMs: Date.now(),
+            datos: {
+              fecha: hoy,
+              cambioFinalCentimos: cambio,
+              ingresoBancarioCentimos: ingreso,
+              diferenciaCentimos: 0,
+            },
+          });
+          await client.query("COMMIT");
+        } finally {
+          client.release();
+        }
+      };
+
+      // El cierre tal como se tecleó: los 350 € del fondo como ingreso.
+      await emitir(0, 35000);
+      await vaciar();
+
+      const { rows: mal } = await db.query(
+        `SELECT cambio_final_centimos, ingreso_bancario_centimos
+           FROM central_sessions WHERE session_id = $1`,
+        [sesion]
+      );
+      expect(Number(mal[0].ingreso_bancario_centimos)).toBe(35000);
+
+      // Y la corrección: mismo dinero, otra etiqueta.
+      await emitir(35000, 0);
+      await vaciar();
+
+      const { rows: bien } = await db.query(
+        `SELECT cambio_final_centimos, ingreso_bancario_centimos
+           FROM central_sessions WHERE session_id = $1`,
+        [sesion]
+      );
+      expect(Number(bien[0].ingreso_bancario_centimos)).toBe(0);
+      expect(Number(bien[0].cambio_final_centimos)).toBe(35000);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
   });
 
   /*

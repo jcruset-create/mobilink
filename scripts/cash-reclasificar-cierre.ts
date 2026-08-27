@@ -32,11 +32,31 @@
  *
  * Reclasifica el ingreso ENTERO del cierre. Si solo una parte era cambio, no
  * sirve: ese caso se corrige reabriendo la jornada y cerrándola bien.
+ *
+ * ── Y avisa a MC Central ──────────────────────────────────────────────────
+ *
+ * Al reclasificar se emite un `SESSION_CLOSED` con los totales nuevos. Sin él,
+ * la caja quedaba bien y Central se quedaba con la foto vieja: seguia
+ * enseñando ese dinero como ido al banco. Y no es un sitio: el mismo campo
+ * alimenta la columna «Al banco» de Jornadas, la posicion global y la lista de
+ * «pendientes de ingresar», asi que un valor viejo envenena los tres.
+ *
+ * Central proyecta por version del agregado, y `emitirEvento` la sube, asi que
+ * el evento correctivo gana al del cierre original en vez de descartarse por
+ * tardio.
+ *
+ *   npx tsx scripts/cash-reclasificar-cierre.ts --sesion 42 --reemitir
+ *
+ * `--reemitir` no cambia ni un dato de la caja: vuelve a mandar a Central los
+ * totales que la jornada tiene AHORA. Es la salida para las jornadas que se
+ * reclasificaron antes de que este script emitiera el evento.
  */
 
 import pool from "../server/db.ts";
+import { emitirEvento } from "../server/cash/events/emitter.ts";
 
 const APLICAR = process.argv.includes("--aplicar");
+const REEMITIR = process.argv.includes("--reemitir");
 const arg = (nombre: string): string | null => {
   const i = process.argv.indexOf(nombre);
   return i >= 0 ? process.argv[i + 1] : null;
@@ -57,6 +77,7 @@ async function main(): Promise<void> {
   const { rows: sesiones } = await pool.query(
     `SELECT s.id, s.fecha::text AS fecha, s.estado,
             s.cambio_final_centimos, s.ingreso_bancario_centimos,
+            s.diferencia_centimos, s.empresa_id, s.register_id, r.centro_id,
             r.codigo, COALESCE(r.centro || ' · ', '') || r.nombre AS caja,
             EXISTS (SELECT 1 FROM cash_bank_deposit_sessions l
                      WHERE l.session_id = s.id AND l.vigente) AS conciliado
@@ -82,6 +103,22 @@ async function main(): Promise<void> {
       console.log(`  ✗ ${cab}: no está cerrada (${s.estado}). Sin tocar.`);
       continue;
     }
+
+    /*
+     * Reemitir es otra cosa: no reclasifica nada, solo le vuelve a contar a
+     * Central lo que la jornada dice AHORA. Va antes del guarda de abajo a
+     * propósito, porque el caso que lo necesita es justo el de una jornada YA
+     * reclasificada, que tiene el ingreso a cero.
+     */
+    if (REEMITIR) {
+      console.log(
+        `  ↻ ${cab}: reenviando a Central cambio ${eur(cambio)} €, ` +
+          `ingreso ${eur(ingreso)} €.`
+      );
+      if (APLICAR) await avisarACentral(s, cambio, ingreso);
+      continue;
+    }
+
     if (ingreso <= 0) {
       console.log(`  ✗ ${cab}: su cierre no tiene ingreso que reclasificar. Sin tocar.`);
       continue;
@@ -98,18 +135,57 @@ async function main(): Promise<void> {
       `  ✓ ${cab}: ingreso ${eur(ingreso)} € → cambio final. ` +
         `Quedará: cambio ${eur(cambio + ingreso)} €, ingreso 0,00 €.`
     );
-    if (APLICAR) await aplicar(s.id, s.fecha, s.codigo || "MC", ingreso, cambio);
+    if (APLICAR) await aplicar(s, s.codigo || "MC", ingreso, cambio);
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
 }
 
-async function aplicar(
-  sessionId: number,
-  fecha: string,
-  codigo: string,
-  ingreso: number,
-  cambio: number
-): Promise<void> {
+/**
+ * El aviso a Central: un `SESSION_CLOSED` con los totales que manda la caja.
+ *
+ * Se le pasa el cliente cuando forma parte de una reclasificación, para que el
+ * evento entre en la MISMA transacción que el cambio de datos: es el patrón de
+ * outbox transaccional que usa el resto del módulo, y lo que impide que la
+ * caja quede reclasificada y el aviso se pierda por el camino.
+ */
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+async function avisarACentral(s: any, cambio: number, ingreso: number, cliente?: any): Promise<void> {
+  const propio = !cliente;
+  const client = cliente ?? (await pool.connect());
+  try {
+    if (propio) await client.query("BEGIN");
+    await emitirEvento(client, {
+      empresaId: s.empresa_id,
+      centroId: s.centro_id ?? null,
+      registerId: Number(s.register_id),
+      sessionId: Number(s.id),
+      agregado: { tipo: "SESSION", id: Number(s.id) },
+      tipo: "SESSION_CLOSED",
+      ocurridoEnMs: Date.now(),
+      actorUserId: null,
+      datos: {
+        fecha: s.fecha,
+        cambioFinalCentimos: cambio,
+        ingresoBancarioCentimos: ingreso,
+        diferenciaCentimos: Number(s.diferencia_centimos ?? 0),
+      },
+    });
+    if (propio) {
+      await client.query("COMMIT");
+      console.log("      Central avisada.");
+    }
+  } catch (e) {
+    if (propio) await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    if (propio) client.release();
+  }
+}
+
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+async function aplicar(s: any, codigo: string, ingreso: number, cambio: number): Promise<void> {
+  const sessionId = Number(s.id);
+  const fecha = s.fecha as string;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -162,8 +238,19 @@ async function aplicar(
       [sessionId, cambio + ingreso, eur(ingreso), ahora]
     );
 
+    /*
+     * El aviso a Central va DENTRO de esta transacción, no después: si el
+     * proceso se cae entre el UPDATE y el evento, la caja quedaría
+     * reclasificada y Central enseñando el dinero como ido al banco, que es
+     * exactamente el descuadre que este script viene a quitar.
+     *
+     * Los totales que se mandan son los de después: el ingreso pasa a cero y
+     * el cambio se queda con todo.
+     */
+    await avisarACentral(s, cambio + ingreso, 0, client);
+
     await client.query("COMMIT");
-    console.log(`      ${rowCount} movimiento(s) reclasificados.`);
+    console.log(`      ${rowCount} movimiento(s) reclasificados. Central avisada.`);
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
