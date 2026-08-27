@@ -675,6 +675,144 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
   });
 
   /*
+   * Poner la fecha real del banco DESPUÉS, que es como ocurre: el ingreso se
+   * registra al preparar la bolsa y la fecha se sabe al volver.
+   *
+   * Esta prueba cubre el camino que faltaba y por el que se coló el fallo: la
+   * fila YA ESTÁ en Central. Antes, el reenvío del alta chocaba con ella y el
+   * `ON CONFLICT` solo tocaba el estado, así que la fecha se quedaba vieja
+   * para siempre y la caja decía «Confirmado» mientras Central decía
+   * «Pendiente de confirmar».
+   */
+  it("la fecha del banco puesta después llega a Central, con la fila ya proyectada", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+         VALUES ($1,'completar',$2,$3,$4,$4) RETURNING id`,
+        [
+          EMPRESA,
+          `compl-${String(process.hrtime.bigint()).slice(-9)}`,
+          `CP${String(process.hrtime.bigint()).slice(-6)}`,
+          Date.now(),
+        ]
+      );
+      const caja = creada[0].id;
+      const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: [] });
+      await servicio.registrarCobro(ctx, {
+        sessionId: sesion.id,
+        importeCentimos: 4000,
+        formasPago: [{ forma: "CASH", importe: 4000 }],
+        efectivoRecibido: [{ valor: 2000, cantidad: 2 }],
+      });
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 2 }],
+      });
+      // Todo al banco: no se deja cambio.
+      await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [] });
+
+      // Se registra SIN fecha: la bolsa está lista, nadie ha ido al banco aún.
+      const ingreso = await ingresosCaja.crearIngreso(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        importeCentimos: 4000,
+      });
+      await vaciar();
+
+      const antes = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+        (i) => i.depositId === ingreso.id
+      );
+      expect(antes?.fecha).toBeNull(); // pendiente de confirmar, y bien dicho
+
+      // Y ahora se vuelve del banco y se apunta la fecha de verdad.
+      await ingresosCaja.completarIngreso(ctx, {
+        depositId: ingreso.id,
+        fechaIngreso: "2026-08-27",
+        referencia: "ABONO-REAL",
+      });
+      await vaciar();
+
+      const despues = (await queries.ingresosEnRed(EMPRESA, { registerId: caja })).find(
+        (i) => i.depositId === ingreso.id
+      );
+      expect(despues?.fecha).toBe("2026-08-27");
+      expect(despues?.referencia).toBe("ABONO-REAL");
+      expect(despues?.estado).toBe("CONFIRMADO");
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
+   * Los filtros de la pantalla de ingresos.
+   *
+   * El del rango de fechas tiene una consecuencia que conviene dejar probada:
+   * un ingreso SIN fecha del banco queda fuera de cualquier rango. Es lo
+   * correcto —preguntar «qué se ingresó entre estos días» no puede devolver
+   * algo que no se ha ingresado ningún día—, pero si no se dice, parece que se
+   * ha perdido.
+   */
+  it("los ingresos se filtran por caja y por rango de fechas", async () => {
+    const { rows: creada } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, codigo, created_at_ms, updated_at_ms)
+       VALUES ($1,'filtros',$2,$3,$4,$4) RETURNING id`,
+      [
+        EMPRESA,
+        `filtro-${String(process.hrtime.bigint()).slice(-9)}`,
+        `FL${String(process.hrtime.bigint()).slice(-6)}`,
+        Date.now(),
+      ]
+    );
+    const caja = creada[0].id;
+
+    const alta = async (numero: string, fecha: string | null) => {
+      const { rows } = await db.query(
+        `INSERT INTO cash_bank_deposits
+           (empresa_id, register_id, numero, estado, fecha_ingreso, importe_centimos,
+            remanente_anterior_centimos, total_cierres_centimos, remanente_nuevo_centimos,
+            creado_at_ms)
+         VALUES ($1,$2,$3,'CONFIRMADO',$4::date,1000,0,1000,0,$5) RETURNING id`,
+        [EMPRESA, caja, numero, fecha, Date.now()]
+      );
+      await ingest.ingerirEvento(
+        evento({
+          tipo: "BANK_DEPOSIT_CREATED",
+          aggregateType: "REGISTER",
+          aggregateId: caja,
+          registerId: caja,
+          sessionId: null,
+          datos: { depositId: rows[0].id, numero, importeCentimos: 1000, fecha },
+        })
+      );
+      return rows[0].id;
+    };
+
+    await alta(`F-ENE-${caja}`, "2026-01-15");
+    await alta(`F-JUN-${caja}`, "2026-06-15");
+    const sinFecha = await alta(`F-SIN-${caja}`, null);
+
+    const deLaCaja = await queries.ingresosEnRed(EMPRESA, { registerId: caja });
+    expect(deLaCaja).toHaveLength(3);
+
+    const primerSemestre = await queries.ingresosEnRed(EMPRESA, {
+      registerId: caja,
+      desde: "2026-01-01",
+      hasta: "2026-03-31",
+    });
+    expect(primerSemestre.map((i) => i.numero)).toEqual([`F-ENE-${caja}`]);
+
+    // El que no tiene fecha no está en NINGÚN rango, y eso es lo correcto.
+    const todoElAno = await queries.ingresosEnRed(EMPRESA, {
+      registerId: caja,
+      desde: "2026-01-01",
+      hasta: "2026-12-31",
+    });
+    expect(todoElAno.map((i) => i.depositId)).not.toContain(sinFecha);
+    expect(todoElAno).toHaveLength(2);
+  });
+
+  /*
    * El resguardo del ingreso, por la API de Central.
    *
    * Existe ruta propia porque la de la caja exige `cash.view` y un supervisor
