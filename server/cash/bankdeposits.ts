@@ -465,6 +465,111 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
 
 // ── Anular ─────────────────────────────────────────────────────────────────
 
+/**
+ * Completa un ingreso con los datos que da el banco al hacerlo de verdad.
+ *
+ * El ingreso se registra en la tienda al preparar la bolsa, pero la fecha real
+ * y la referencia las da el banco DESPUÉS, cuando alguien vuelve con el
+ * resguardo. Hasta ahora esos campos solo se podían poner al crear, y si no
+ * se sabían aún —lo normal— quedaban en «—» para siempre.
+ *
+ * Solo toca fecha, referencia y observaciones. Los importes no: esos salieron
+ * del libro mayor y se corrigen anulando el ingreso, no editándolo.
+ */
+export async function completarIngreso(
+  ctx: Contexto,
+  e: {
+    depositId: number;
+    fechaIngreso?: string | null;
+    referencia?: string | null;
+    observaciones?: string | null;
+  }
+): Promise<IngresoBancario> {
+  const { rows: previo } = await pool.query(
+    `SELECT * FROM cash_bank_deposits WHERE id = $1 AND empresa_id = $2`,
+    [e.depositId, ctx.empresaId]
+  );
+  if (previo.length === 0) {
+    throw new ErrorCaja("INGRESO_NO_ENCONTRADO", "El ingreso no existe.", 404);
+  }
+  if (previo[0].estado !== "CONFIRMADO") {
+    throw new ErrorCaja(
+      "INGRESO_ANULADO",
+      "El ingreso está anulado: no tiene sentido completarle los datos del banco.",
+      409
+    );
+  }
+
+  // undefined = no tocar; null o vacío = borrar el dato.
+  const limpio = (v: string | null | undefined) => {
+    if (v === undefined) return undefined;
+    const t = (v ?? "").trim();
+    return t === "" ? null : t;
+  };
+  const fecha = limpio(e.fechaIngreso);
+  if (fecha !== undefined && fecha !== null && !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "La fecha del ingreso tiene que ser AAAA-MM-DD.", 400);
+  }
+  const referencia = limpio(e.referencia);
+  const observaciones = limpio(e.observaciones);
+
+  const { rows } = await pool.query(
+    `UPDATE cash_bank_deposits
+        SET fecha_ingreso = CASE WHEN $3 THEN $4::date ELSE fecha_ingreso END,
+            referencia    = CASE WHEN $5 THEN $6      ELSE referencia    END,
+            observaciones = CASE WHEN $7 THEN $8      ELSE observaciones END
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING *`,
+    [
+      e.depositId,
+      ctx.empresaId,
+      fecha !== undefined,
+      fecha ?? null,
+      referencia !== undefined,
+      referencia ?? null,
+      observaciones !== undefined,
+      observaciones ?? null,
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.deposit.complete",
+    entidad: "cash_bank_deposits",
+    entidadId: String(e.depositId),
+    detalle: {
+      numero: previo[0].numero,
+      antes: {
+        fechaIngreso: fechaIso(previo[0].fecha_ingreso),
+        referencia: previo[0].referencia,
+      },
+      despues: { fechaIngreso: fecha ?? fechaIso(previo[0].fecha_ingreso), referencia: referencia ?? previo[0].referencia },
+    },
+    ip: ctx.ip,
+  });
+
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const { rows: lineas } = await pool.query(
+    `SELECT l.session_id, l.importe_centimos, s.fecha
+       FROM cash_bank_deposit_sessions l
+       JOIN cash_sessions s ON s.id = l.session_id
+      WHERE l.deposit_id = $1 AND l.vigente
+      ORDER BY s.fecha, s.id`,
+    [e.depositId]
+  );
+  return aIngreso(
+    rows[0],
+    lineas.map((l: any) => ({
+      sessionId: l.session_id,
+      fecha: fechaIso(l.fecha)!,
+      importeCentimos: Number(l.importe_centimos),
+    })),
+    false
+  );
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+}
+
 export async function anularIngreso(
   ctx: Contexto,
   ingresoId: number,

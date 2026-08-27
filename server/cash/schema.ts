@@ -1155,6 +1155,33 @@ export async function initCash(): Promise<void> {
     );
   `);
 
+  /*
+   * El comprobante del banco se adjunta AL INGRESO, no a una jornada.
+   *
+   * Un ingreso junta varios cierres —el resguardo que da el banco cubre los
+   * tres días de golpe— así que colgarlo de una jornada concreta sería mentir:
+   * ¿de cuál? La fila de documentos gana un ancla más (`deposit_id`) y
+   * `session_id` deja de ser obligatorio, con un CHECK que exige exactamente
+   * un dueño: o jornada (con o sin operación) o ingreso, nunca ambos ni
+   * ninguno. `documentosDeJornada` filtra por `session_id`, así que los
+   * comprobantes de ingresos no se cuelan en los informes de cierre.
+   */
+  await pool.query(`
+    ALTER TABLE cash_operation_documents
+      ADD COLUMN IF NOT EXISTS deposit_id INTEGER REFERENCES cash_bank_deposits(id) ON DELETE RESTRICT;
+    ALTER TABLE cash_operation_documents
+      ALTER COLUMN session_id DROP NOT NULL;
+    ALTER TABLE cash_operation_documents
+      DROP CONSTRAINT IF EXISTS cash_opdoc_un_ancla;
+    ALTER TABLE cash_operation_documents
+      ADD CONSTRAINT cash_opdoc_un_ancla CHECK (
+        (session_id IS NOT NULL AND deposit_id IS NULL)
+        OR (session_id IS NULL AND deposit_id IS NOT NULL AND operation_id IS NULL)
+      );
+    CREATE INDEX IF NOT EXISTS cash_opdoc_deposit_idx
+      ON cash_operation_documents(deposit_id) WHERE deposit_id IS NOT NULL;
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 

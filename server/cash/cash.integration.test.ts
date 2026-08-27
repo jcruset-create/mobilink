@@ -4755,3 +4755,141 @@ describe.runIf(RUN)("cierre que deja la caja vacía", () => {
     expect(r.totalIngresoCentimos).toBe(5000);
   });
 });
+
+describe.runIf(RUN)("confirmar el ingreso en el banco y adjuntar el comprobante", () => {
+  /** Un ingreso real, con su cierre detrás. */
+  async function ingresoDePrueba(): Promise<{ id: number; caja: number }> {
+    const caja = await crearCaja("comprobante");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 10000,
+      formasPago: [{ forma: "CASH", importe: 10000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 2 }],
+      concepto: "Venta",
+    });
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [{ valor: 5000, cantidad: 4 }],
+    });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 5000, cantidad: 2 }],
+    });
+    const ingreso = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [sesion.id],
+      importeCentimos: 10000,
+    });
+    // Se registra sin fecha ni referencia, que es lo normal: las da el banco
+    // después, cuando alguien vuelve con el resguardo.
+    expect(ingreso.fechaIngreso).toBeNull();
+    expect(ingreso.referencia).toBeNull();
+    return { id: ingreso.id, caja };
+  }
+
+  it("se completan la fecha real y la referencia después de ir al banco", async () => {
+    const { id } = await ingresoDePrueba();
+
+    const completado = await ingresos.completarIngreso(ctx, {
+      depositId: id,
+      fechaIngreso: "2026-08-27",
+      referencia: "ING-99881",
+    });
+    expect(completado.fechaIngreso).toBe("2026-08-27");
+    expect(completado.referencia).toBe("ING-99881");
+    // Los importes NO se tocan por aquí: eso se corrige anulando.
+    expect(completado.importeCentimos).toBe(10000);
+
+    // Y persiste: no era solo lo que devolvió la llamada.
+    const { rows } = await db.query(
+      `SELECT fecha_ingreso::text AS f, referencia FROM cash_bank_deposits WHERE id = $1`,
+      [id]
+    );
+    expect(rows[0].f).toBe("2026-08-27");
+    expect(rows[0].referencia).toBe("ING-99881");
+  });
+
+  it("lo que no se manda se queda como estaba, y lo vacío se borra", async () => {
+    const { id } = await ingresoDePrueba();
+    await ingresos.completarIngreso(ctx, { depositId: id, fechaIngreso: "2026-08-27", referencia: "R-1" });
+
+    // Solo la referencia: la fecha sigue puesta.
+    const soloRef = await ingresos.completarIngreso(ctx, { depositId: id, referencia: "R-2" });
+    expect(soloRef.fechaIngreso).toBe("2026-08-27");
+    expect(soloRef.referencia).toBe("R-2");
+
+    // Cadena vacía = borrar, para poder deshacer una errata.
+    const borrada = await ingresos.completarIngreso(ctx, { depositId: id, referencia: "" });
+    expect(borrada.referencia).toBeNull();
+    expect(borrada.fechaIngreso).toBe("2026-08-27");
+  });
+
+  it("una fecha con formato raro se rechaza y un ingreso anulado no se completa", async () => {
+    const { id } = await ingresoDePrueba();
+    await expect(
+      ingresos.completarIngreso(ctx, { depositId: id, fechaIngreso: "27/08/2026" })
+    ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
+
+    await ingresos.anularIngreso(ctx, id, "prueba");
+    await expect(
+      ingresos.completarIngreso(ctx, { depositId: id, referencia: "R" })
+    ).rejects.toMatchObject({ codigo: "INGRESO_ANULADO" });
+  });
+
+  it("el comprobante cuelga del ingreso y NO del informe de cierre de sus jornadas", async () => {
+    const caja = await crearCaja("comprobante-informe");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 5000, cantidad: 2 }],
+    });
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 10000,
+      formasPago: [{ forma: "CASH", importe: 10000 }],
+      efectivoRecibido: [{ valor: 5000, cantidad: 2 }],
+      concepto: "Venta",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: [{ valor: 5000, cantidad: 4 }] });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: [{ valor: 5000, cantidad: 2 }] });
+    const ingreso = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [sesion.id],
+      importeCentimos: 10000,
+    });
+
+    const doc = await documentos.adjuntarDocumentoDeIngreso(ctx, ingreso.id, {
+      originalname: "resguardo-banco.pdf",
+      mimetype: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4 resguardo"),
+    });
+    expect(doc.depositId).toBe(ingreso.id);
+    expect(doc.sessionId).toBeNull();
+    expect(doc.operationId).toBeNull();
+
+    const lista = await documentos.documentosDeIngreso(EMPRESA, ingreso.id);
+    expect(lista).toHaveLength(1);
+    expect(lista[0].nombre).toBe("resguardo-banco.pdf");
+
+    /*
+     * Lo que de verdad importa: el resguardo cubre el ingreso entero —que junta
+     * varios cierres— así que NO puede colarse en el informe de cierre de una
+     * jornada suelta, o el papeleo de ese día enseñaría un papel que no es suyo.
+     */
+    const deJornada = await documentos.documentosDeJornada(sesion.id);
+    expect(deJornada).toHaveLength(0);
+  });
+
+  it("no se adjunta a un ingreso que no existe", async () => {
+    await expect(
+      documentos.adjuntarDocumentoDeIngreso(ctx, 999999, {
+        originalname: "x.pdf",
+        mimetype: "application/pdf",
+        buffer: Buffer.from("%PDF-1.4"),
+      })
+    ).rejects.toMatchObject({ codigo: "INGRESO_NO_ENCONTRADO" });
+  });
+});

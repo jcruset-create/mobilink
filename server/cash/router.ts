@@ -1096,6 +1096,57 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Completar un ingreso con los datos reales del banco: fecha, referencia y
+   * observaciones. Los importes no se editan nunca por aquí — se anula.
+   */
+  r.patch(
+    "/bank-deposits/:id",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        ingreso: await ingresos.completarIngreso(contexto(req), {
+          depositId: enteroPositivo(req.params.id, "id"),
+          fechaIngreso: typeof b.fechaIngreso === "string" ? b.fechaIngreso : b.fechaIngreso === null ? null : undefined,
+          referencia: typeof b.referencia === "string" ? b.referencia : b.referencia === null ? null : undefined,
+          observaciones: typeof b.observaciones === "string" ? b.observaciones : b.observaciones === null ? null : undefined,
+        }),
+      });
+    })
+  );
+
+  /** El comprobante que dio el banco, colgado del ingreso. */
+  r.get(
+    "/bank-deposits/:id/documents",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({
+        documentos: await documentos.documentosDeIngreso(
+          req.authCtx!.empresaId,
+          enteroPositivo(req.params.id, "id")
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/bank-deposits/:id/documents",
+    exigirPermiso("cash.document.attach"),
+    subida(subidaDocumento.single("documento"), 15),
+    ruta(async (req, res) => {
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
+      }
+      const documento = await documentos.adjuntarDocumentoDeIngreso(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        req.file
+      );
+      res.status(201).json({ documento });
+    })
+  );
+
   r.post(
     "/bank-deposits/:id/void",
     exigirPermiso("cash.treasury.manage"),
