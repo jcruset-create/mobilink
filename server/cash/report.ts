@@ -23,10 +23,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import sharp from "sharp";
 import PDFDocument from "pdfkit";
 import { PDFDocument as PDFLib } from "pdf-lib";
 import pool from "../db.ts";
 import { formatearEuros } from "./domain/money.ts";
+import { logoDeSemilla } from "./domain/banks.ts";
 import type { LineaDenominacion } from "./domain/inventory.ts";
 import { ErrorCaja, cargarDenominaciones } from "./repository.ts";
 import { detalleJornada } from "./service.ts";
@@ -943,6 +945,48 @@ async function paginaDeAviso(
  * coincide con ellos —se puede ingresar solo una parte— se dice en su línea en
  * vez de dejar que los números no cuadren y que quien lo lea se lo imagine.
  */
+/**
+ * Trae el logotipo del banco, venga de donde venga.
+ *
+ * Los que trae la aplicación son ficheros de `public/` y se leen del disco;
+ * los que sube el usuario viven en Storage y se bajan. Ningún fallo se
+ * propaga: sin logotipo el resguardo pone el nombre del banco y se imprime
+ * igual, que es lo que importa.
+ */
+type Logotipo = { datos: Buffer; ancho: number; alto: number };
+
+async function bajarLogotipo(url: string): Promise<Logotipo | null> {
+  const datos = await leerLogotipo(url);
+  if (!datos) return null;
+  try {
+    const { width, height } = await sharp(datos).metadata();
+    if (!width || !height) return null;
+    return { datos, ancho: width, alto: height };
+  } catch {
+    // No se ha podido leer como imagen: mejor el nombre que un PDF roto.
+    return null;
+  }
+}
+
+async function leerLogotipo(url: string): Promise<Buffer | null> {
+  try {
+    if (/^https?:/.test(url)) {
+      const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      return r.ok ? Buffer.from(await r.arrayBuffer()) : null;
+    }
+    if (url.startsWith("/")) {
+      const fichero = path.join(process.cwd(), "public", url.replace(/^\/+/, ""));
+      // Que una ruta con «..» no saque nada de fuera de public/.
+      const raiz = path.join(process.cwd(), "public");
+      if (!fichero.startsWith(raiz + path.sep)) return null;
+      return fs.existsSync(fichero) ? fs.readFileSync(fichero) : null;
+    }
+  } catch {
+    /* sin logotipo: manda el nombre */
+  }
+  return null;
+}
+
 export async function informeIngreso(empresaId: string, depositId: number): Promise<Buffer> {
   const datos = await composicionDeIngreso(empresaId, depositId);
   if (!datos) {
@@ -977,26 +1021,29 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
   );
   const hayComprobante = comprobantes.length > 0;
 
-  // El logotipo del banco, del maestro. Cualquier fallo al bajarlo deja el
-  // nombre en su sitio: un resguardo sin logo sirve, uno que no se genera no.
-  let logoBanco: Buffer | null = null;
+  /*
+   * El logotipo del banco.
+   *
+   * Sale UNO solo, el primero que haya de estos tres: el subido a la cuenta,
+   * el subido al banco y el que trae la aplicación en `public/bancos/`. Antes
+   * salían dos porque la imagen que se había subido traía dentro las dos
+   * versiones de la marca, la de fondo claro y la de fondo oscuro; quitando el
+   * fichero subido vuelve a mandar el de la aplicación, que es una sola.
+   *
+   * Cualquier fallo al conseguirlo deja el nombre en su sitio: un resguardo
+   * sin logotipo sirve, uno que no se genera no.
+   */
+  let logoBanco: Logotipo | null = null;
   if (ingreso.bankAccountId != null) {
-    const { rows: logos } = await pool.query<{ logo_url: string | null }>(
-      `SELECT COALESCE(c.logo_url, b.logo_url) AS logo_url
+    const { rows: logos } = await pool.query<{ logo_url: string | null; codigo: string | null }>(
+      `SELECT COALESCE(c.logo_url, b.logo_url) AS logo_url, b.codigo AS codigo
          FROM cash_bank_accounts c
          LEFT JOIN cash_banks b ON b.id = c.bank_id
         WHERE c.id = $1`,
       [ingreso.bankAccountId]
     );
-    const url = logos[0]?.logo_url;
-    if (url && /^https?:/.test(url)) {
-      try {
-        const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
-        if (r.ok) logoBanco = Buffer.from(await r.arrayBuffer());
-      } catch {
-        /* sin logotipo: manda el nombre */
-      }
-    }
+    const url = logos[0]?.logo_url ?? logoDeSemilla(logos[0]?.codigo);
+    logoBanco = url ? await bajarLogotipo(url) : null;
   }
 
   const denominaciones = await cargarDenominaciones(pool, false);
@@ -1048,7 +1095,21 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
    */
   if (logoBanco) {
     try {
-      doc.image(logoBanco, doc.page.width - M - 96, 13, { fit: [96, 32], align: "right" });
+      /*
+       * Lo más grande que cabe en la banda sin deformarlo: se calcula con el
+       * tamaño real de la imagen, se pega al margen derecho y se centra en el
+       * alto. Un logotipo cuadrado y uno alargado quedan así los dos bien, sin
+       * dejar el hueco a medias como hacía la caja fija de antes.
+       */
+      const ALTO = 38;
+      const ANCHO = 210;
+      const escala = Math.min(ANCHO / logoBanco.ancho, ALTO / logoBanco.alto);
+      const ancho = logoBanco.ancho * escala;
+      const alto = logoBanco.alto * escala;
+      doc.image(logoBanco.datos, doc.page.width - M - ancho, (58 - alto) / 2, {
+        width: ancho,
+        height: alto,
+      });
     } catch {
       /* logotipo ilegible: manda el nombre */
     }
