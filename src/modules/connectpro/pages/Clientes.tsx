@@ -1,6 +1,7 @@
 /** Connect Pro — Clientes del centro de control (aseguradoras, flotas…). */
 
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState } from "../components/ui";
@@ -72,12 +73,15 @@ export default function Clientes() {
         <Card className="overflow-x-auto">
           <table className="w-full">
             <thead><tr className="border-b border-slate-700">
-              <Th>Cliente</Th><Th>Contacto</Th><Th>SLA por defecto</Th><Th>Prioridad</Th><Th>Estado</Th><Th>Alta</Th>{canEdit && <Th></Th>}
+              <Th>Cliente</Th><Th>CIF</Th><Th>Contacto</Th><Th>SLA por defecto</Th><Th>Prioridad</Th><Th>Estado</Th><Th>Alta</Th>{canEdit && <Th></Th>}
             </tr></thead>
             <tbody>
               {rows.map((c) => (
                 <tr key={c.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                  <Td className="font-semibold text-slate-100">{c.name}</Td>
+                  <Td className="font-semibold text-slate-100">
+                    <Link className="hover:text-cyan-300 hover:underline" to={`/connect/clientes/${c.id}`}>{c.name}</Link>
+                  </Td>
+                  <Td>{c.taxId || "—"}</Td>
                   <Td>{[c.contactEmail, c.contactPhone].filter(Boolean).join(" · ") || "-"}</Td>
                   <Td>{c.defaultSlaMinutes ? `${c.defaultSlaMinutes} min` : "—"}</Td>
                   <Td>{c.defaultPriority === "urgente" ? <Badge className="border-red-500/40 bg-red-500/10 text-red-300">Urgente</Badge> : "Normal"}</Td>

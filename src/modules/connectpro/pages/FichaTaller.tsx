@@ -26,6 +26,13 @@ type Workshop = {
   networkParticipation: boolean; liteCode: string | null;
   address: string | null; postalCode: string | null; city: string | null; province: string | null;
   email: string | null; commercialNetwork: string | null; openingHours: string | null;
+  country: string | null; emergencyPhone: string | null;
+  assistanceEmail: string | null; adminEmail: string | null;
+  billingEmail: string | null; deliveryNoteEmail: string | null;
+  open24h: boolean; active: boolean;
+  coverageProvinces: string | null; coveragePostalCodes: string | null;
+  vehicleTypes: string | null;
+  avgResponseMinutes: number | null; authorizationLimit: number | null;
   notes: string | null; services: string | null;
 };
 
@@ -50,6 +57,26 @@ const TABS = ["Ficha", "Operarios", "Unidades móviles", "KPIs", "Asistencias"] 
  * La ubicación va aquí y no solo en el alta porque un taller se muda, y hasta
  * ahora mover el punto del mapa obligaba a borrarlo y volverlo a crear.
  */
+/** Campos que en base de datos son una lista JSON y aquí se editan en texto. */
+const CAMPOS_LISTA = ["coverageProvinces", "coveragePostalCodes", "vehicleTypes"];
+
+/**
+ * Valor tal como se enseña en el formulario. Las listas llegan como JSON
+ * (`["Barcelona","Girona"]`) y ahí no hay quien las lea ni las escriba: se
+ * muestran separadas por comas, que es como el servidor las vuelve a aceptar.
+ */
+function valorEditable(campo: string, w: Record<string, unknown>): string {
+  const bruto = w[campo];
+  if (bruto == null) return "";
+  if (CAMPOS_LISTA.includes(campo)) {
+    try {
+      const lista = JSON.parse(String(bruto));
+      if (Array.isArray(lista)) return lista.join(", ");
+    } catch { /* si no era JSON, se enseña tal cual */ }
+  }
+  return String(bruto);
+}
+
 const CAMPOS_TALLER: [string, string, string][] = [
   ["name", "Nombre", "w-72"],
   ["phone", "Teléfono", "w-40"],
@@ -58,6 +85,19 @@ const CAMPOS_TALLER: [string, string, string][] = [
   ["postalCode", "Código postal", "w-28"],
   ["city", "Municipio", "w-48"],
   ["province", "Provincia", "w-40"],
+  ["country", "País", "w-40"],
+  ["emergencyPhone", "Teléfono de urgencias", "w-40"],
+  // Cuatro buzones distintos: cada aviso sale al suyo y mezclarlos hacía que
+  // las facturas acabaran en el correo de quien coge las asistencias.
+  ["assistanceEmail", "Email de asistencias", "w-64"],
+  ["adminEmail", "Email de administración", "w-64"],
+  ["billingEmail", "Email de facturación", "w-64"],
+  ["deliveryNoteEmail", "Email de albaranes", "w-64"],
+  ["coverageProvinces", "Provincias que cubre", "w-72"],
+  ["coveragePostalCodes", "Códigos postales", "w-72"],
+  ["vehicleTypes", "Tipos de vehículo", "w-72"],
+  ["avgResponseMinutes", "Tiempo medio (min)", "w-32"],
+  ["authorizationLimit", "Límite sin autorización (€)", "w-40"],
   ["commercialNetwork", "Red comercial", "w-48"],
   ["openingHours", "Horario", "w-64"],
   ["latitude", "Latitud", "w-32"],
@@ -147,7 +187,15 @@ export default function FichaTaller() {
     try {
       await boFetch(`/workshops/${wid}`, {
         method: "PATCH",
-        body: { ...edicion, latitude: lat, longitude: lng, radiusKm: radio },
+        body: {
+          ...edicion,
+          latitude: lat, longitude: lng, radiusKm: radio,
+          // El formulario trabaja con texto; la API espera número y booleano.
+          open24h: edicion.open24h === "true",
+          active: edicion.active !== "false",
+          avgResponseMinutes: edicion.avgResponseMinutes?.trim() ? Number(edicion.avgResponseMinutes) : null,
+          authorizationLimit: edicion.authorizationLimit?.trim() ? Number(edicion.authorizationLimit) : null,
+        },
       });
       setEdicion(null);
       load();
@@ -239,8 +287,14 @@ export default function FichaTaller() {
           {canEdit && (
             <div className="flex items-center gap-2">
               {edicion === null ? (
-                <Button variant="ghost" onClick={() => setEdicion(Object.fromEntries(
-                  CAMPOS_TALLER.map(([c]) => [c, String((w as any)[c] ?? "")])))}>
+                <Button variant="ghost" onClick={() => setEdicion({
+                  ...Object.fromEntries(CAMPOS_TALLER.map(([c]) => [c, valorEditable(c, w as any)])),
+                  // Los interruptores no están en CAMPOS_TALLER (no son texto):
+                  // si no se sembraran aquí, al guardar se enviaría siempre el
+                  // valor por defecto y se pisaría lo que tuviera el taller.
+                  open24h: String(w.open24h === true),
+                  active: String(w.active !== false),
+                })}>
                   ✎ Editar ficha
                 </Button>
               ) : (
@@ -280,6 +334,24 @@ export default function FichaTaller() {
                     />
                   </label>
                 ))}
+                {/* Interruptores: no caben en la rejilla de campos de texto,
+                    pero deciden si al taller se le puede mandar trabajo. */}
+                <label className="flex items-center gap-2 text-sm text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={edicion.open24h === "true"}
+                    onChange={(e) => setEdicion({ ...edicion, open24h: String(e.target.checked) })}
+                  />
+                  Servicio 24 h
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={edicion.active !== "false"}
+                    onChange={(e) => setEdicion({ ...edicion, active: String(e.target.checked) })}
+                  />
+                  Taller activo
+                </label>
                 <BotonCoordenadas
                   direccion={{
                     address: edicion.address, postalCode: edicion.postalCode,
