@@ -33,8 +33,26 @@ class Camara {
       BuildContext context, ImageSource origen, int calidad, double? maxWidth) async {
     if (origen == ImageSource.camera && !await _permisoDeCamara(context)) return null;
     try {
-      return await _picker.pickImage(
+      final desde = DateTime.now();
+      final foto = await _picker.pickImage(
           source: origen, imageQuality: calidad, maxWidth: maxWidth);
+
+      /*
+       * Volver sin foto puede ser que el operario haya cancelado... o que la
+       * cámara ni se haya abierto, que es como se manifiesta que el sistema no
+       * nos deje verla. Se distinguen por el tiempo: cancelar exige que a
+       * alguien le dé tiempo a mirar la pantalla y pulsar atrás. Menos de un
+       * segundo es que no llegó a abrirse, y eso hay que decirlo en vez de
+       * dejar al operario pulsando un botón que no hace nada.
+       */
+      if (foto == null &&
+          origen == ImageSource.camera &&
+          DateTime.now().difference(desde) < const Duration(milliseconds: 900)) {
+        _avisar(context,
+            'La cámara no llegó a abrirse. Comprueba que el teléfono tiene una '
+            'aplicación de cámara activa y que no está deshabilitada.');
+      }
+      return foto;
     } catch (e) {
       // Un fallo aquí es casi siempre la cámara del sistema rechazando la
       // petición. Se dice lo que pasa y qué hacer, en vez de no hacer nada.

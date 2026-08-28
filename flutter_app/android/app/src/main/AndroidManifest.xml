@@ -44,6 +44,13 @@
     <uses-permission android:name="android.permission.CAMERA" />
 
     <queries>
+        <!-- Android 11 o superior esconde las apps que no se declaran aqui.
+             Sin esto la camara del sistema es INVISIBLE para nosotros:
+             image_picker busca quien atiende la peticion, no encuentra a
+             nadie y la foto no se hace, sin error y sin abrir nada. -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
