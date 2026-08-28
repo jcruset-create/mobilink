@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:signature/signature.dart';
 import '../services/api_service.dart';
+import '../services/camara.dart';
 
 class FinishScreen extends StatefulWidget {
   final ApiService api;
@@ -19,7 +20,6 @@ class FinishScreen extends StatefulWidget {
 }
 
 class _FinishScreenState extends State<FinishScreen> {
-  final _picker = ImagePicker();
   final _sigController = SignatureController(
     penStrokeWidth: 3,
     penColor: Colors.black,
@@ -81,14 +81,14 @@ class _FinishScreenState extends State<FinishScreen> {
 
   Future<void> _pickPhoto() async {
     // Abre directamente la cámara (sin preguntar cámara/galería)
-    final xfile = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1920);
+    final xfile = await Camara.hacerFoto(context, maxWidth: 1920);
     if (xfile == null) return;
     final file = await _normalizeImage(xfile);
     setState(() => _photoReparacion = file);
   }
 
   Future<void> _pickPhotoOr() async {
-    final xfile = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1920);
+    final xfile = await Camara.hacerFoto(context, maxWidth: 1920);
     if (xfile == null) return;
     final file = await _normalizeImage(xfile, document: true);
     setState(() => _photoOr = file);

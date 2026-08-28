@@ -1,13 +1,13 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/api.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
 import '../theme.dart';
+import '../services/camara.dart';
 
 /// Neumáticos y materiales del servicio.
 ///
@@ -90,7 +90,7 @@ class _ConceptsScreenState extends State<ConceptsScreen> {
   /// Sube en directo y no por la cola porque la confirmación la necesita YA:
   /// sin la subida hecha no hay referencia que enviar.
   Future<String?> _fotoDeMontaje() async {
-    final foto = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 90);
+    final foto = await Camara.hacerFoto(context);
     if (foto == null) return null;
 
     setState(() { _busy = true; _progreso = 0.3; });
