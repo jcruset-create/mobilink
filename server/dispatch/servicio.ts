@@ -20,7 +20,7 @@ import crypto from "node:crypto";
 import db from "../db.ts";
 import { exigirDestinoUtilizable, resolverSecreto } from "./destinosServicio.ts";
 import { sanearError } from "./destinos.ts";
-import { registrarEvento } from "../eventlog/servicio.ts";
+import { registrarEnTransaccion, registrarEvento } from "../eventlog/servicio.ts";
 import { tipoDesdeEventoCable } from "../eventlog/tipos.ts";
 import {
   esFinal,
@@ -234,7 +234,7 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
   );
   let despacho = ins.rows[0];
 
-  await registrarEvento(despacho.id, "REQUESTED", null, "out", now);
+  await registrarEventoDeEnvio(despacho.id, "REQUESTED", null, "out", now);
   await anotarDiario({
     system: "assist", tenantId: p.tenantId, assistanceId: p.assistanceId,
     correlationId, eventType: "EXTERNAL_DISPATCH_CREATED",
@@ -307,7 +307,7 @@ export async function intentarEnvio(dispatchId: number) {
       clearTimeout(temporizador);
     }
 
-    const cuerpo = await res.json().catch(() => null);
+    const cuerpo = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
     if (!res.ok) {
       const motivo = cuerpo?.error?.message ?? `El destino respondió ${res.status}`;
       return marcarError(dispatchId, motivo, cuerpo);
@@ -339,9 +339,21 @@ export async function intentarEnvio(dispatchId: number) {
       dedupeKey: `disp-enviado-${dispatchId}`,
     });
 
-    // El destino ya la tiene: eso ES un evento, aunque todavía no haya dicho
-    // si la acepta.
-    await aplicarEvento(dispatchId, "RECEIVED", datos.status, cuando);
+    /*
+     * El destino ya la tiene: eso ES un evento, aunque todavía no haya dicho
+     * si la acepta.
+     *
+     * Va aparte y no puede tumbar el envío: en este punto la asistencia YA
+     * está creada al otro lado y el estado SENT ya está guardado. Dejar el
+     * envío en ERROR porque falló una anotación provocaría un reintento que
+     * volvería a mandar un servicio que ya salió — la idempotencia lo pararía,
+     * pero es un viaje entero para nada y un ERROR en pantalla que no lo es.
+     */
+    try {
+      await aplicarEvento(dispatchId, "RECEIVED", datos.status, cuando);
+    } catch (e: any) {
+      console.error("[Dispatch] envío entregado pero no se pudo anotar:", e?.message);
+    }
 
     return (await db.query(`SELECT * FROM external_dispatches WHERE id = $1`, [dispatchId])).rows[0];
   } catch (e: any) {
@@ -426,57 +438,88 @@ export async function aplicarEvento(
 
   const nuevoEstado = estadoEnvioTrasEvento(d.status, evento);
   const marca = marcaTemporalDe(evento);
-
-  const sets = [`"lastEvent" = $2`, `"lastSyncAtMs" = $3`, `"updatedAtMs" = $3`];
-  const params: unknown[] = [dispatchId, evento, cuandoMs];
-  if (nuevoEstado) {
-    params.push(nuevoEstado);
-    sets.push(`status = $${params.length}`);
-  }
-  if (marca) sets.push(`"${marca}" = COALESCE("${marca}", $3)`);
-  await db.query(`UPDATE external_dispatches SET ${sets.join(", ")} WHERE id = $1`, params);
-
-  await registrarEvento(dispatchId, evento, estadoRemoto, "in", cuandoMs);
+  const tipo = tipoDesdeEventoCable(evento);
 
   /*
-   * Y al diario, traducido al vocabulario interno. La clave de deduplicación
-   * lleva el tipo pero NO la hora: un webhook se entrega al menos una vez, y
-   * el mismo hecho reenviado no puede pintar dos líneas en la timeline.
+   * Todo junto o nada: el envío, su historial, el diario y el estado de la
+   * asistencia.
+   *
+   * El caso que esto evita es concreto y se ve al leerlo: si se actualizara el
+   * envío a COMPLETED y muriera el proceso antes de mover la asistencia, en
+   * Assist quedaría una asistencia «en camino» para siempre, con el envío
+   * diciendo que terminó. Nadie la volvería a mirar porque el envío ya está
+   * cerrado, y nadie la cerraría porque la asistencia sigue abierta.
    */
-  const tipo = tipoDesdeEventoCable(evento);
-  if (tipo) {
-    await anotarDiario({
-      system: "assist", tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
-      correlationId: d.correlationId, eventType: tipo,
-      originSystem: d.destinationSystem, occurredAtMs: cuandoMs,
-      actorType: "partner",
-      payload: { remoteStatus: estadoRemoto },
-      dedupeKey: `disp-${dispatchId}-${tipo}`,
-    });
-  }
-  // Si venía de un fallo y ahora sí ha entrado algo, la integración se ha
-  // recuperado: hace falta para poder cerrar el aviso en la bandeja.
-  if (d.status === "ERROR") {
-    await anotarDiario({
-      system: "assist", tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
-      correlationId: d.correlationId, eventType: "SYNC_RECOVERED",
-      occurredAtMs: cuandoMs, dedupeKey: `disp-recuperado-${dispatchId}-${cuandoMs}`,
-    });
+  const cliente = await db.connect();
+  try {
+    await cliente.query("BEGIN");
+
+    const sets = [`"lastEvent" = $2`, `"lastSyncAtMs" = $3`, `"updatedAtMs" = $3`];
+    const params: unknown[] = [dispatchId, evento, cuandoMs];
+    if (nuevoEstado) {
+      params.push(nuevoEstado);
+      sets.push(`status = $${params.length}`);
+    }
+    if (marca) sets.push(`"${marca}" = COALESCE("${marca}", $3)`);
+    await cliente.query(`UPDATE external_dispatches SET ${sets.join(", ")} WHERE id = $1`, params);
+
+    if (esEvento(evento)) {
+      await cliente.query(
+        `INSERT INTO external_dispatch_events
+           ("dispatchId", event, "remoteStatus", direction, "occurredAtMs")
+         VALUES ($1,$2,$3,'in',$4)`,
+        [dispatchId, evento, estadoRemoto, cuandoMs],
+      );
+    }
+
+    /*
+     * Al diario, traducido al vocabulario interno. La clave de deduplicación
+     * lleva el tipo pero NO la hora: un webhook se entrega al menos una vez, y
+     * el mismo hecho reenviado no puede pintar dos líneas en la timeline.
+     */
+    if (tipo) {
+      await registrarEnTransaccion(cliente, {
+        system: "assist", tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
+        correlationId: d.correlationId, eventType: tipo,
+        originSystem: d.destinationSystem, occurredAtMs: cuandoMs,
+        actorType: "partner",
+        payload: { remoteStatus: estadoRemoto },
+        dedupeKey: `disp-${dispatchId}-${tipo}`,
+      });
+    }
+    // Si venía de un fallo y ahora sí ha entrado algo, la integración se ha
+    // recuperado: hace falta para poder cerrar el aviso en la bandeja.
+    if (d.status === "ERROR") {
+      await registrarEnTransaccion(cliente, {
+        system: "assist", tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
+        correlationId: d.correlationId, eventType: "SYNC_RECOVERED",
+        occurredAtMs: cuandoMs, dedupeKey: `disp-recuperado-${dispatchId}-${cuandoMs}`,
+      });
+    }
+
+    const estadoAssist = estadoAssistDesdeEvento(evento);
+    if (estadoAssist && d.sourceSystem === "assist") {
+      /*
+       * No se pisa una asistencia ya cerrada. Un webhook que llega tarde no
+       * puede reabrir algo que en Assist ya se dio por finalizado o cancelado.
+       */
+      await cliente.query(
+        `UPDATE roadside_assistances
+            SET status = $2, "updatedAtMs" = $3
+          WHERE id = $1 AND status NOT IN ('finalizada','cancelada')`,
+        [Number(d.sourceAssistanceId), estadoAssist, cuandoMs],
+      );
+    }
+
+    await cliente.query("COMMIT");
+  } catch (e: any) {
+    await cliente.query("ROLLBACK").catch(() => {});
+    console.error("[Dispatch] no se pudo aplicar el evento:", e?.message);
+    throw e;
+  } finally {
+    cliente.release();
   }
 
-  const estadoAssist = estadoAssistDesdeEvento(evento);
-  if (estadoAssist && d.sourceSystem === "assist") {
-    /*
-     * No se pisa una asistencia ya cerrada. Un webhook que llega tarde no
-     * puede reabrir algo que en Assist ya se dio por finalizado o cancelado.
-     */
-    await db.query(
-      `UPDATE roadside_assistances
-          SET status = $2, "updatedAtMs" = $3
-        WHERE id = $1 AND status NOT IN ('finalizada','cancelada')`,
-      [Number(d.sourceAssistanceId), estadoAssist, cuandoMs],
-    );
-  }
   return (await db.query(`SELECT * FROM external_dispatches WHERE id = $1`, [dispatchId])).rows[0];
 }
 
@@ -504,7 +547,12 @@ export async function aplicarAvisoDeCentral(
   return { aplicado: true };
 }
 
-async function registrarEvento(
+/**
+ * Historial del ENVÍO, que no es el diario de la asistencia: aquél cuenta lo
+ * que le pasó al servicio, éste lo que le pasó al cable. Se llamaban igual y
+ * eso hacía que una llamada al diario acabara escribiendo aquí sin avisar.
+ */
+async function registrarEventoDeEnvio(
   dispatchId: number,
   evento: string,
   estadoRemoto: string | null,

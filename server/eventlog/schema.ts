@@ -145,8 +145,22 @@ export async function initEventLog(): Promise<void> {
 async function migrarHistoricos(): Promise<void> {
   const now = Date.now();
 
+  /*
+   * Las dos tablas de origen son de OTROS módulos, y este esquema puede
+   * inicializarse antes que ellos (lo llama `initConnect`, que corre antes que
+   * los envíos). Si aún no existen no hay nada que migrar: se vuelve a intentar
+   * en el siguiente arranque, cuando ya estén.
+   */
+  const hay = await db.query(
+    `SELECT to_regclass('public.external_dispatch_events') AS envios,
+            to_regclass('public.connect_status_history')   AS estados`,
+  );
+  const hayEnvios = hay.rows[0]?.envios != null;
+  const hayEstados = hay.rows[0]?.estados != null;
+  if (!hayEnvios && !hayEstados) return;
+
   // Envíos: el evento del cable se traduce al vocabulario del diario.
-  const envios = await db.query(
+  const envios = !hayEnvios ? { rowCount: 0 } : await db.query(
     `INSERT INTO assistance_events
        (uuid, "sourceSystem", "tenantId", "assistanceId", "correlationId", "eventType",
         "originSystem", "actorType", "occurredAtMs", payload, "dedupeKey", "createdAtMs")
@@ -183,7 +197,7 @@ async function migrarHistoricos(): Promise<void> {
 
   // Estados de Central. Solo los que tienen equivalente: 'pending' y
   // 'searching' son trámite interno y no son noticia para nadie.
-  const estados = await db.query(
+  const estados = !hayEstados ? { rowCount: 0 } : await db.query(
     `INSERT INTO assistance_events
        (uuid, "sourceSystem", "tenantId", "assistanceId", "correlationId", "eventType",
         "originSystem", "actorType", "occurredAtMs", payload, "dedupeKey", "createdAtMs")

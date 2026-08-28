@@ -67,7 +67,7 @@ async function assist(ruta: string, init?: { method?: string; body?: unknown; ta
     headers: { "Content-Type": "application/json" },
     body: init?.body != null ? JSON.stringify({ ...(init.body as object), tallerId: t }) : undefined,
   });
-  return { status: res.status, body: await res.json().catch(() => ({})), texto: "" };
+  return { status: res.status, body: (await res.json().catch(() => ({}))) as any, texto: "" };
 }
 
 async function central(ruta: string, usuario: string, init?: { method?: string; body?: unknown }) {
@@ -80,7 +80,7 @@ async function central(ruta: string, usuario: string, init?: { method?: string; 
   return { status: res.status, body: safe(texto), texto };
 }
 
-function safe(t: string) { try { return JSON.parse(t); } catch { return {}; } }
+function safe(t: string): any { try { return JSON.parse(t); } catch { return {}; } }
 
 describe.skipIf(!RUN)("Destinos externos y credenciales", () => {
   beforeAll(async () => {
@@ -369,8 +369,8 @@ describe.skipIf(!RUN)("Destinos externos y credenciales", () => {
     expect(rA.status).toBe(201);
     expect(rB.status).toBe(201);
 
-    const idA = (await rA.json()).id;
-    const idB = (await rB.json()).id;
+    const idA = ((await rA.json()) as any).id;
+    const idB = ((await rB.json()) as any).id;
     const filas = await db.query(
       `SELECT uuid, "controlCenterId" FROM connect_assistances WHERE uuid = ANY($1::text[])`,
       [[idA, idB]]);

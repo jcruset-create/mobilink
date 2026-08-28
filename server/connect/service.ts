@@ -10,8 +10,8 @@
 
 import crypto from "node:crypto";
 import db from "../db.ts";
-import { enqueueWebhookEvent } from "./webhooks.ts";
-import { registrarEvento } from "../eventlog/servicio.ts";
+import { enqueueWebhookEvent, enqueueWebhookEventEnTransaccion } from "./webhooks.ts";
+import { registrarEnTransaccion } from "../eventlog/servicio.ts";
 import { tipoDesdeEstadoCentral } from "../eventlog/tipos.ts";
 import { publish } from "./bus.ts";
 import { createAlert } from "./alerts.ts";
@@ -89,53 +89,77 @@ export async function transition(
   if (from === toStatus) return;
   if (!TRANSITIONS[from]?.includes(toStatus)) throw new InvalidTransitionError(from, toStatus);
 
-  await db.query(`UPDATE connect_assistances SET status = $1, "updatedAtMs" = $2 WHERE id = $3`, [toStatus, now, assistanceId]);
-  await db.query(
-    `INSERT INTO connect_status_history ("assistanceId", "fromStatus", "toStatus", "actorType", reason, "occurredAtMs")
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [assistanceId, from, toStatus, actorType, reason ?? null, now],
-  );
   /*
-   * El diario de Central. Solo los estados que significan algo: 'pending' y
-   * 'searching' son trámite interno y llenarían la timeline de ruido.
+   * Las cuatro escrituras van juntas o no va ninguna: estado, historial,
+   * diario y aviso al partner.
    *
-   * La clave de deduplicación lleva el id del historial, que ya es único: así
-   * dos transiciones al mismo estado (una reasignación, por ejemplo) sí dejan
-   * las dos líneas, que es lo correcto.
+   * Antes eran cuatro consultas sueltas, y entre la primera y la última cabía
+   * un reinicio del proceso. El resultado era el peor de los posibles: Central
+   * con la asistencia «finalizada» y Assist esperando indefinidamente un aviso
+   * que ya no iba a salir de ninguna cola, porque nunca llegó a entrar.
+   *
+   * `connect_webhook_deliveries` es el outbox: la fila se escribe aquí, dentro
+   * de la transacción, y quien entrega es el worker, fuera y con reintentos.
    */
-  const tipoDiario = tipoDesdeEstadoCentral(toStatus);
-  if (tipoDiario) {
-    const centro = await db.query(
-      `SELECT "controlCenterId" FROM connect_assistances WHERE id = $1`, [assistanceId]);
-    await registrarEvento({
-      system: "central",
-      tenantId: centro.rows[0]?.controlCenterId ?? null,
-      assistanceId,
-      correlationId: row.correlationId ?? null,
-      eventType: tipoDiario,
-      actorType: actorType === "user" ? "user" : actorType === "api" ? "api" : "system",
-      occurredAtMs: now,
-      payload: { fromStatus: from, toStatus, reason: reason ?? null },
-      dedupeKey: `central-estado-${assistanceId}-${toStatus}-${now}`,
-    });
-  }
+  const cliente = await db.connect();
+  try {
+    await cliente.query("BEGIN");
 
-  if (row.partnerId) {
-    await enqueueWebhookEvent(row.partnerId, `assistance.${toStatus}`, {
-      assistance_id: row.uuid,
-      from_status: from,
-      to_status: toStatus,
-      reason: reason ?? null,
-      occurred_at: new Date(now).toISOString(),
-      /*
-       * El correlation_id viaja en CADA aviso, no solo en el primero. Es lo
-       * único con lo que el sistema de origen puede saber de qué asistencia
-       * suya le están hablando: su id aquí no significa nada allí.
-       */
-      correlation_id: row.correlationId ?? null,
-      expedient_number: row.expedientNumber ?? null,
-      source_reference: row.sourceReference ?? null,
-    });
+    await cliente.query(
+      `UPDATE connect_assistances SET status = $1, "updatedAtMs" = $2 WHERE id = $3`,
+      [toStatus, now, assistanceId],
+    );
+    await cliente.query(
+      `INSERT INTO connect_status_history ("assistanceId", "fromStatus", "toStatus", "actorType", reason, "occurredAtMs")
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [assistanceId, from, toStatus, actorType, reason ?? null, now],
+    );
+
+    /*
+     * El diario de Central. Solo los estados que significan algo: 'pending' y
+     * 'searching' son trámite interno y llenarían la timeline de ruido.
+     */
+    const tipoDiario = tipoDesdeEstadoCentral(toStatus);
+    if (tipoDiario) {
+      const centro = await cliente.query(
+        `SELECT "controlCenterId" FROM connect_assistances WHERE id = $1`, [assistanceId]);
+      await registrarEnTransaccion(cliente, {
+        system: "central",
+        tenantId: centro.rows[0]?.controlCenterId ?? null,
+        assistanceId,
+        correlationId: row.correlationId ?? null,
+        eventType: tipoDiario,
+        actorType: actorType === "user" ? "user" : actorType === "api" ? "api" : "system",
+        occurredAtMs: now,
+        payload: { fromStatus: from, toStatus, reason: reason ?? null },
+        dedupeKey: `central-estado-${assistanceId}-${toStatus}-${now}`,
+      });
+    }
+
+    if (row.partnerId) {
+      await enqueueWebhookEventEnTransaccion(cliente, row.partnerId, `assistance.${toStatus}`, {
+        assistance_id: row.uuid,
+        from_status: from,
+        to_status: toStatus,
+        reason: reason ?? null,
+        occurred_at: new Date(now).toISOString(),
+        /*
+         * El correlation_id viaja en CADA aviso, no solo en el primero. Es lo
+         * único con lo que el sistema de origen puede saber de qué asistencia
+         * suya le están hablando: su id aquí no significa nada allí.
+         */
+        correlation_id: row.correlationId ?? null,
+        expedient_number: row.expedientNumber ?? null,
+        source_reference: row.sourceReference ?? null,
+      });
+    }
+
+    await cliente.query("COMMIT");
+  } catch (e) {
+    await cliente.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    cliente.release();
   }
   publish({ kind: "status", assistanceId, status: toStatus });
 
