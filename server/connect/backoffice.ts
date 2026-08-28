@@ -688,9 +688,24 @@ export function createConnectBackofficeRouter(): Router {
     const q = String(req.query.q ?? "").trim();
     const r = await db.query(
       `SELECT pc.*,
+              -- Estado frente al ERP. Mientras no haya ERP configurado no hay
+              -- fila en integration_mappings y sale "no sincronizado", que es
+              -- la verdad. El tenant del hub se toma como el id del centro de
+              -- control en texto: es la convención que hay que respetar al
+              -- crear las configuraciones de ERP, porque hoy el hub recibe el
+              -- tenant por cabecera y nadie lo ata todavía a un centro.
+              m.system AS "erpSystem", m.external_code AS "erpCode",
+              m.external_company AS "erpCompany",
+              COALESCE(m.sync_status, 'not_synced') AS "erpSyncStatus",
+              m.last_sync_at_ms AS "erpLastSyncAtMs", m.last_sync_error AS "erpLastSyncError",
               (SELECT COUNT(*)::int FROM connect_branches b WHERE b."providerCompanyId" = pc.id AND b."deletedAtMs" IS NULL) AS branches,
               (SELECT COUNT(*)::int FROM connect_workshops w WHERE w."providerCompanyId" = pc.id) AS workshops
          FROM connect_provider_companies pc
+         LEFT JOIN LATERAL (
+           SELECT * FROM integration_mappings im
+            WHERE im.entity_type = 'provider' AND im.mobilink_id = pc.id::text
+            ORDER BY im.updated_at_ms DESC LIMIT 1
+         ) m ON true
         WHERE pc."deletedAtMs" IS NULL
           AND ($1 = '' OR pc.name ILIKE '%' || $1 || '%'
                        OR pc."legalName" ILIKE '%' || $1 || '%'
@@ -3751,7 +3766,18 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   router.get("/clients", ...requireConnectRole("operator"), async (req, res) => {
     const u = req.connectUser!;
     const r = await db.query(
-      `SELECT * FROM connect_clients WHERE $1::int IS NULL OR "controlCenterId" = $1 ORDER BY name`,
+      `SELECT c.*,
+              m.system AS "erpSystem", m.external_code AS "erpCode",
+              COALESCE(m.sync_status, 'not_synced') AS "erpSyncStatus",
+              m.last_sync_at_ms AS "erpLastSyncAtMs", m.last_sync_error AS "erpLastSyncError"
+         FROM connect_clients c
+         LEFT JOIN LATERAL (
+           SELECT * FROM integration_mappings im
+            WHERE im.entity_type = 'customer' AND im.mobilink_id = c.id::text
+            ORDER BY im.updated_at_ms DESC LIMIT 1
+         ) m ON true
+        WHERE $1::int IS NULL OR c."controlCenterId" = $1
+        ORDER BY c.name`,
       [u.role === "superadmin" ? null : u.controlCenterId],
     );
     res.json({ data: r.rows });

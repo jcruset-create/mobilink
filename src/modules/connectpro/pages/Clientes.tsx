@@ -6,11 +6,14 @@ import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState } from "../components/ui";
 import { fmtDateTime } from "../types";
+import EstadoErp from "../components/EstadoErp";
 
 export type Client = {
   id: number; name: string; taxId: string | null; contactEmail: string | null; contactPhone: string | null;
   defaultSlaMinutes: number | null; defaultPriority: string; notes: string | null;
   active: boolean; createdAtMs: number;
+  erpSystem?: string | null; erpCode?: string | null; erpSyncStatus?: string | null;
+  erpLastSyncAtMs?: number | null; erpLastSyncError?: string | null;
 };
 
 export default function Clientes() {
@@ -73,7 +76,7 @@ export default function Clientes() {
         <Card className="overflow-x-auto">
           <table className="w-full">
             <thead><tr className="border-b border-slate-700">
-              <Th>Cliente</Th><Th>CIF</Th><Th>Contacto</Th><Th>SLA por defecto</Th><Th>Prioridad</Th><Th>Estado</Th><Th>Alta</Th>{canEdit && <Th></Th>}
+              <Th>Cliente</Th><Th>CIF</Th><Th>Contacto</Th><Th>SLA por defecto</Th><Th>Prioridad</Th><Th>Estado</Th><Th>ERP</Th><Th>Alta</Th>{canEdit && <Th></Th>}
             </tr></thead>
             <tbody>
               {rows.map((c) => (
@@ -90,6 +93,7 @@ export default function Clientes() {
                       {c.active ? "Activo" : "Inactivo"}
                     </Badge>
                   </Td>
+                  <Td><EstadoErp datos={c} /></Td>
                   <Td>{fmtDateTime(c.createdAtMs)}</Td>
                   {canEdit && (
                     <Td><Button variant="ghost" disabled={busy} onClick={() => toggle(c)}>{c.active ? "Desactivar" : "Activar"}</Button></Td>
