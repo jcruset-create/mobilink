@@ -60,6 +60,7 @@ import {
   ROADSIDE_ASSISTANCE_STATUS_LABELS,
 } from "../modules/roadsideAssistanceTypes";
 import SubcontratacionExterna from "./SubcontratacionExterna";
+import TimelineAsistencia from "./TimelineAsistencia";
 import SelectorSubcontrata, {
   guardarSubcontrata,
   SUBCONTRATA_VACIA,
@@ -2874,6 +2875,14 @@ export default function RoadsideAssistanceView({
                 {editingAssistance && (
                   <div className="md:col-span-2">
                     <SubcontratacionExterna assistanceId={editingAssistance.id} />
+                  </div>
+                )}
+
+                {/* El historial va aquí, junto a la subcontratación: cuando algo
+                    no cuadra, lo primero que se mira es qué pasó y cuándo. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <TimelineAsistencia assistanceId={editingAssistance.id} />
                   </div>
                 )}
 

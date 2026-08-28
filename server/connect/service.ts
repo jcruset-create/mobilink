@@ -11,6 +11,8 @@
 import crypto from "node:crypto";
 import db from "../db.ts";
 import { enqueueWebhookEvent } from "./webhooks.ts";
+import { registrarEvento } from "../eventlog/servicio.ts";
+import { tipoDesdeEstadoCentral } from "../eventlog/tipos.ts";
 import { publish } from "./bus.ts";
 import { createAlert } from "./alerts.ts";
 import { notifyLiteUser, notifyLiteWorkshop } from "./litePush.ts";
@@ -93,6 +95,31 @@ export async function transition(
      VALUES ($1, $2, $3, $4, $5, $6)`,
     [assistanceId, from, toStatus, actorType, reason ?? null, now],
   );
+  /*
+   * El diario de Central. Solo los estados que significan algo: 'pending' y
+   * 'searching' son trámite interno y llenarían la timeline de ruido.
+   *
+   * La clave de deduplicación lleva el id del historial, que ya es único: así
+   * dos transiciones al mismo estado (una reasignación, por ejemplo) sí dejan
+   * las dos líneas, que es lo correcto.
+   */
+  const tipoDiario = tipoDesdeEstadoCentral(toStatus);
+  if (tipoDiario) {
+    const centro = await db.query(
+      `SELECT "controlCenterId" FROM connect_assistances WHERE id = $1`, [assistanceId]);
+    await registrarEvento({
+      system: "central",
+      tenantId: centro.rows[0]?.controlCenterId ?? null,
+      assistanceId,
+      correlationId: row.correlationId ?? null,
+      eventType: tipoDiario,
+      actorType: actorType === "user" ? "user" : actorType === "api" ? "api" : "system",
+      occurredAtMs: now,
+      payload: { fromStatus: from, toStatus, reason: reason ?? null },
+      dedupeKey: `central-estado-${assistanceId}-${toStatus}-${now}`,
+    });
+  }
+
   if (row.partnerId) {
     await enqueueWebhookEvent(row.partnerId, `assistance.${toStatus}`, {
       assistance_id: row.uuid,
