@@ -59,6 +59,7 @@ import {
   ROADSIDE_ASSISTANCE_STATUS_FLOW,
   ROADSIDE_ASSISTANCE_STATUS_LABELS,
 } from "../modules/roadsideAssistanceTypes";
+import SubcontratacionExterna from "./SubcontratacionExterna";
 import SelectorSubcontrata, {
   guardarSubcontrata,
   SUBCONTRATA_VACIA,
@@ -2866,6 +2867,15 @@ export default function RoadsideAssistanceView({
                   </div>
                   <SelectorSubcontrata valor={editSubcontrata} onChange={setEditSubcontrata} />
                 </div>
+
+                {/* Subcontratar a otra PLATAFORMA es distinto de mandarlo a un
+                    taller: allí se abre un expediente aparte, con sus estados
+                    y su facturación. Por eso va en su propio bloque. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <SubcontratacionExterna assistanceId={editingAssistance.id} />
+                  </div>
+                )}
 
                 <label className="block md:col-span-2">
                   <span className="mb-1 block text-xs font-semibold text-slate-400">

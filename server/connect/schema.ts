@@ -1131,6 +1131,21 @@ async function crearEsquemaConnect(): Promise<void> {
   // Motor de tarifas: su esquema vive aparte para no seguir engordando este
   // fichero. Depende de connect_control_centers, connect_clients y
   // connect_assistances, así que va después.
+  /*
+   * Asistencias que entran de otro sistema (Assist u otra central). El
+   * expediente de Central sigue siendo el suyo: esto solo guarda de dónde
+   * viene y el hilo que ata las dos mitades, para poder contestar «¿de qué
+   * asistencia de Assist es ésta?» sin llamar por teléfono.
+   */
+  await db.query(`
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "sourceSystem" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "sourceReference" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "correlationId" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "requesterCompanyId" INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_connect_assist_correlacion
+      ON connect_assistances ("correlationId");
+  `);
+
   await initPricing();
   // El núcleo multiempresa va DESPUÉS: la relación comercial apunta a
   // connect_control_centers y a connect_provider_companies, y su backfill

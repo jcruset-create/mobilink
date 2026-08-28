@@ -334,6 +334,22 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "expedienteCentral" TEXT;
 
+    /*
+     * Conductor que firma la reparación.
+     *
+     * Estas dos columnas llevaban tiempo leyéndose y escribiéndose desde
+     * server/index.ts (el normalizador y el endpoint de firma del parte) pero
+     * NINGUNA migración las creaba: existían solo porque alguien las añadió a
+     * mano en la base de producción. Sobre una base nueva —una copia para
+     * pruebas, un entorno de staging— esos endpoints fallaban con «column
+     * does not exist». Se añaden aquí para que la base se pueda reconstruir
+     * desde cero.
+     */
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "conductorNombre" TEXT;
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "conductorDni" TEXT;
+
     -- Auto "En camino": se arma cuando la furgoneta asignada se ve DENTRO del
     -- radio del taller; al salir del radio (>500 m) se activa el estado solo.
     -- Evita falsos positivos si se asigna una furgoneta que ya esta en ruta.

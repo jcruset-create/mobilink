@@ -2277,6 +2277,9 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
               -- asistencias antiguas, anteriores a "providerCompanyId".
               COALESCE(pcd.name, pc.name) AS "providerName",
               cli.name AS "clientName", fac.name AS "billingClientName",
+              -- De dónde viene, si viene de fuera. La empresa solicitante es
+              -- la que resolvió la recepción contra la cartera del centro.
+              req.name AS "requesterCompanyName",
               ct.name AS "contactName", ct.surname AS "contactSurname",
               ct.phone AS "contactPhone", ct.mobile AS "contactMobile", ct.email AS "contactEmail",
               u.name AS "createdByName",
@@ -2290,6 +2293,7 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
          LEFT JOIN connect_provider_companies pcd ON pcd.id = ca."providerCompanyId"
          LEFT JOIN connect_clients cli ON cli.id = ca."clientId"
          LEFT JOIN connect_clients fac ON fac.id = ca."billingClientId"
+         LEFT JOIN connect_provider_companies req ON req.id = ca."requesterCompanyId"
          LEFT JOIN connect_workshop_contacts ct ON ct.id = ca."contactId"
          LEFT JOIN connect_users u ON u.id = ca."createdByUserId"
          LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
