@@ -203,6 +203,20 @@ const FOTOS_TALLER = ["fachada", "accesos", "interior", "otros"] as const;
 
 /* Qué es cada empresa para nosotros. Un tipo que no esté en la lista se
  * ignora en vez de escribirse: el color del mapa se lee como una decisión. */
+/**
+ * Listas de la ficha del taller (provincias, códigos postales, tipos de
+ * vehículo). El panel las manda como texto separado por comas y se guardan
+ * como JSON, igual que `services`. Devuelve null cuando no viene nada, para
+ * que el COALESCE de la consulta conserve lo que ya hubiera.
+ */
+function listaJson(valor: unknown): string | null {
+  if (valor == null) return null;
+  if (Array.isArray(valor)) return JSON.stringify(valor.map((v) => String(v).trim()).filter(Boolean));
+  const texto = String(valor).trim();
+  if (!texto) return "[]"; // vaciarla a propósito sí es una orden
+  return JSON.stringify(texto.split(",").map((v) => v.trim()).filter(Boolean));
+}
+
 const TIPOS_EMPRESA: string[] = ["grupo", "colaboradora", "externa"];
 
 /**
@@ -1363,6 +1377,21 @@ export function createConnectBackofficeRouter(): Router {
          notes = COALESCE($21, notes),
          -- Lo que el taller sabe hacer: decide si se le puede mandar el vehiculo
          services = COALESCE($22, services),
+         -- Ficha ampliada. Los campos nuevos van AL FINAL: la lista es
+         -- posicional y renumerarla desplazaria los datos sin dar error.
+         country = COALESCE($23, country),
+         "emergencyPhone" = COALESCE($24, "emergencyPhone"),
+         "assistanceEmail" = COALESCE($25, "assistanceEmail"),
+         "adminEmail" = COALESCE($26, "adminEmail"),
+         "billingEmail" = COALESCE($27, "billingEmail"),
+         "deliveryNoteEmail" = COALESCE($28, "deliveryNoteEmail"),
+         "open24h" = COALESCE($29, "open24h"),
+         active = COALESCE($30, active),
+         "coverageProvinces" = COALESCE($31, "coverageProvinces"),
+         "coveragePostalCodes" = COALESCE($32, "coveragePostalCodes"),
+         "vehicleTypes" = COALESCE($33, "vehicleTypes"),
+         "avgResponseMinutes" = COALESCE($34, "avgResponseMinutes"),
+         "authorizationLimit" = COALESCE($35, "authorizationLimit"),
          "updatedAtMs" = $9
        WHERE id = $10 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
@@ -1376,7 +1405,14 @@ export function createConnectBackofficeRouter(): Router {
        b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
        b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null, b.notes ?? null,
        // Llega ya como texto JSON desde el panel; una lista tambien vale
-       b.services == null ? null : (typeof b.services === "string" ? b.services : JSON.stringify(b.services))],
+       b.services == null ? null : (typeof b.services === "string" ? b.services : JSON.stringify(b.services)),
+       b.country ?? null, b.emergencyPhone ?? null, b.assistanceEmail ?? null,
+       b.adminEmail ?? null, b.billingEmail ?? null, b.deliveryNoteEmail ?? null,
+       typeof b.open24h === "boolean" ? b.open24h : null,
+       typeof b.active === "boolean" ? b.active : null,
+       listaJson(b.coverageProvinces), listaJson(b.coveragePostalCodes), listaJson(b.vehicleTypes),
+       b.avgResponseMinutes != null && b.avgResponseMinutes !== "" ? Number(b.avgResponseMinutes) : null,
+       b.authorizationLimit != null && b.authorizationLimit !== "" ? Number(b.authorizationLimit) : null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
     // Cambiar a Lite (o volver) no toca datos: solo el producto habilitado
@@ -3517,6 +3553,30 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       [u.role === "superadmin" ? null : u.controlCenterId],
     );
     res.json({ data: r.rows });
+  });
+
+  /**
+   * Ficha de un cliente: sus datos y sus contactos. El aislamiento por centro
+   * de control es el mismo que en el listado — un cc_admin no puede leer la
+   * ficha de un cliente de otro centro.
+   */
+  router.get("/clients/:id", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return err(res, 422, "validation_failed", "Id no válido");
+    const r = await db.query(
+      `SELECT * FROM connect_clients
+        WHERE id = $1 AND ($2::int IS NULL OR "controlCenterId" = $2)`,
+      [id, u.role === "superadmin" ? null : u.controlCenterId],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Cliente no encontrado");
+    const contactos = await db.query(
+      `SELECT * FROM connect_workshop_contacts
+        WHERE "ownerType" = 'client' AND "ownerId" = $1
+        ORDER BY "isPrimary" DESC, name`,
+      [id],
+    );
+    res.json({ client: r.rows[0], contacts: contactos.rows });
   });
 
   router.post("/clients", ...requireConnectRole("cc_admin"), async (req, res) => {
