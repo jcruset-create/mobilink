@@ -11,6 +11,7 @@ import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Button, ErrorBanner, EmptyState } from "../components/ui";
 import type { ProviderCompany, Authorization } from "../types";
 import { fmtDateTime } from "../types";
+import EstadoErp from "../components/EstadoErp";
 
 export default function Empresas() {
   const { user } = useConnectAuth();
@@ -67,7 +68,7 @@ export default function Empresas() {
         <Card className="overflow-x-auto">
           <table className="w-full">
             <thead><tr className="border-b border-slate-700">
-              <Th>Empresa</Th><Th>Contacto</Th><Th>Talleres</Th><Th>Autorización</Th><Th>Alta</Th><Th></Th>
+              <Th>Empresa</Th><Th>CIF</Th><Th>Localidad</Th><Th>Contacto</Th><Th>Talleres</Th><Th>ERP</Th><Th>Autorización</Th><Th>Alta</Th><Th></Th>
             </tr></thead>
             <tbody>
               {rows.map((p) => {
@@ -80,12 +81,15 @@ export default function Empresas() {
                         <Badge className="ml-2 border-red-500/40 bg-red-500/10 text-red-300">Suspendida</Badge>
                       )}
                     </Td>
+                    <Td>{(p as any).taxId ?? "—"}</Td>
+                    <Td>{[(p as any).city, (p as any).province].filter(Boolean).join(", ") || "—"}</Td>
                     <Td>
                       {p.contactPhone
                         ? <a className="text-cyan-300 hover:underline" href={`tel:${p.contactPhone}`}>{p.contactPhone}</a>
                         : (p.contactEmail ?? "-")}
                     </Td>
                     <Td>{p.workshops}</Td>
+                    <Td><EstadoErp datos={p as any} /></Td>
                     <Td>
                       {a ? (
                         <Badge className={a.status === "active" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-slate-600 text-slate-400"}>

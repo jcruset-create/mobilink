@@ -203,6 +203,81 @@ const FOTOS_TALLER = ["fachada", "accesos", "interior", "otros"] as const;
 
 /* Qué es cada empresa para nosotros. Un tipo que no esté en la lista se
  * ignora en vez de escribirse: el color del mapa se lee como una decisión. */
+/**
+ * Listas de la ficha del taller (provincias, códigos postales, tipos de
+ * vehículo). El panel las manda como texto separado por comas y se guardan
+ * como JSON, igual que `services`. Devuelve null cuando no viene nada, para
+ * que el COALESCE de la consulta conserve lo que ya hubiera.
+ */
+/**
+ * Congela cómo eran proveedor, taller y contacto en el momento del servicio.
+ *
+ * La asistencia sigue apuntando a las fichas vivas —para navegar y para los
+ * informes de hoy—, pero si mañana el taller cambia de email o de dirección,
+ * una asistencia de hace seis meses tiene que seguir contando con qué datos se
+ * gestionó. Se guarda como JSON en una sola columna para que la ficha pueda
+ * crecer sin ir añadiendo columnas espejo.
+ *
+ * Es best-effort a propósito: si falla, la asistencia NO se cae. Perder el
+ * snapshot es molesto; no poder dar de alta el servicio es mucho peor.
+ */
+async function guardarSnapshotPartes(assistanceId: number) {
+  try {
+    const r = await db.query(
+      `SELECT
+         pc.name AS "proveedorNombre", pc."legalName" AS "proveedorRazonSocial",
+         pc."taxId" AS "proveedorCif",
+         w.name AS "tallerNombre", w.address AS "tallerDireccion",
+         w."postalCode" AS "tallerCp", w.city AS "tallerPoblacion", w.province AS "tallerProvincia",
+         w.phone AS "tallerTelefono", w."emergencyPhone" AS "tallerUrgencias",
+         COALESCE(w."assistanceEmail", w.email) AS "tallerEmail",
+         c.name AS "contactoNombre", c.surname AS "contactoApellidos",
+         c.phone AS "contactoTelefono", c.mobile AS "contactoMovil", c.email AS "contactoEmail"
+       FROM connect_assistances a
+       LEFT JOIN connect_provider_companies pc ON pc.id = a."providerCompanyId"
+       LEFT JOIN connect_workshops w ON w.id = a."workshopId"
+       LEFT JOIN connect_workshop_contacts c ON c.id = a."contactId"
+       WHERE a.id = $1`,
+      [assistanceId],
+    );
+    const fila = r.rows[0];
+    if (!fila) return;
+    // Solo lo informado: un snapshot lleno de nulos no cuenta nada.
+    const datos = Object.fromEntries(Object.entries(fila).filter(([, v]) => v != null));
+    if (Object.keys(datos).length === 0) return;
+    await db.query(
+      `UPDATE connect_assistances
+          SET "partiesSnapshot" = $2, "partiesSnapshotAtMs" = $3
+        WHERE id = $1`,
+      [assistanceId, JSON.stringify(datos), Date.now()],
+    );
+  } catch (e: any) {
+    console.error("[Connect] snapshot de partes:", e?.message);
+  }
+}
+
+/** Fichas a las que puede colgarse un contacto. */
+const TIPOS_CONTACTO_OWNER = ["workshop", "provider", "client"] as const;
+
+/**
+ * Valida un email de contacto. Devuelve el mensaje de error o null si vale.
+ * No se exige el email —hay contactos que solo dan teléfono—, pero si lo
+ * escriben mal el aviso no llega y nadie se entera hasta que hace falta.
+ */
+function emailInvalido(valor: unknown): string | null {
+  const email = String(valor ?? "").trim();
+  if (!email) return null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? null : `El email "${email}" no es válido`;
+}
+
+function listaJson(valor: unknown): string | null {
+  if (valor == null) return null;
+  if (Array.isArray(valor)) return JSON.stringify(valor.map((v) => String(v).trim()).filter(Boolean));
+  const texto = String(valor).trim();
+  if (!texto) return "[]"; // vaciarla a propósito sí es una orden
+  return JSON.stringify(texto.split(",").map((v) => v.trim()).filter(Boolean));
+}
+
 const TIPOS_EMPRESA: string[] = ["grupo", "colaboradora", "externa"];
 
 /**
@@ -603,14 +678,50 @@ export function createConnectBackofficeRouter(): Router {
 
   // ── Empresas proveedoras ──────────────────────────────────
 
-  router.get("/providers", ...requireConnectRole("analyst"), async (_req, res) => {
+  /**
+   * Proveedores. Con `q` busca por lo que uno tiene a mano cuando llama un
+   * taller: nombre, razón social, CIF, población, provincia, teléfono… y
+   * también por el código con el que ese proveedor existe en el ERP, que es
+   * lo único que aparece en muchas facturas.
+   */
+  router.get("/providers", ...requireConnectRole("analyst"), async (req, res) => {
+    const q = String(req.query.q ?? "").trim();
     const r = await db.query(
       `SELECT pc.*,
+              -- Estado frente al ERP. Mientras no haya ERP configurado no hay
+              -- fila en integration_mappings y sale "no sincronizado", que es
+              -- la verdad. El tenant del hub se toma como el id del centro de
+              -- control en texto: es la convención que hay que respetar al
+              -- crear las configuraciones de ERP, porque hoy el hub recibe el
+              -- tenant por cabecera y nadie lo ata todavía a un centro.
+              m.system AS "erpSystem", m.external_code AS "erpCode",
+              m.external_company AS "erpCompany",
+              COALESCE(m.sync_status, 'not_synced') AS "erpSyncStatus",
+              m.last_sync_at_ms AS "erpLastSyncAtMs", m.last_sync_error AS "erpLastSyncError",
               (SELECT COUNT(*)::int FROM connect_branches b WHERE b."providerCompanyId" = pc.id AND b."deletedAtMs" IS NULL) AS branches,
               (SELECT COUNT(*)::int FROM connect_workshops w WHERE w."providerCompanyId" = pc.id) AS workshops
          FROM connect_provider_companies pc
+         LEFT JOIN LATERAL (
+           SELECT * FROM integration_mappings im
+            WHERE im.entity_type = 'provider' AND im.mobilink_id = pc.id::text
+            ORDER BY im.updated_at_ms DESC LIMIT 1
+         ) m ON true
         WHERE pc."deletedAtMs" IS NULL
+          AND ($1 = '' OR pc.name ILIKE '%' || $1 || '%'
+                       OR pc."legalName" ILIKE '%' || $1 || '%'
+                       OR pc."commercialName" ILIKE '%' || $1 || '%'
+                       OR pc."taxId" ILIKE '%' || $1 || '%'
+                       OR pc.city ILIKE '%' || $1 || '%'
+                       OR pc.province ILIKE '%' || $1 || '%'
+                       OR pc."contactPhone" ILIKE '%' || $1 || '%'
+                       OR EXISTS (
+                            SELECT 1 FROM integration_mappings m
+                             WHERE m.entity_type = 'provider'
+                               AND m.mobilink_id = pc.id::text
+                               AND (m.external_code ILIKE '%' || $1 || '%'
+                                 OR COALESCE(m.external_id, '') ILIKE '%' || $1 || '%')))
         ORDER BY pc.name`,
+      [q],
     );
     res.json({ data: r.rows });
   });
@@ -641,13 +752,20 @@ export function createConnectBackofficeRouter(): Router {
               "postalCode" = COALESCE($10, "postalCode"), province = COALESCE($11, province),
               web = COALESCE($12, web), "billingEmail" = COALESCE($13, "billingEmail"),
               "companyType" = COALESCE($16, "companyType"),
+              country = COALESCE($17, country),
+              "commercialName" = COALESCE($18, "commercialName"),
+              "paymentTerms" = COALESCE($19, "paymentTerms"),
+              "paymentMethod" = COALESCE($20, "paymentMethod"),
               "updatedAtMs" = $14
         WHERE id = $15 AND "deletedAtMs" IS NULL RETURNING *`,
+      // Los campos nuevos se añaden AL FINAL a propósito: renumerar una lista
+      // posicional mete cada dato en la columna de al lado sin dar ningún error.
       [b.name ?? null, b.contactEmail ?? null, b.contactPhone ?? null, b.status ?? null, b.notes ?? null,
        b.legalName ?? null, b.taxId ?? null, b.address ?? null, b.city ?? null,
        b.postalCode ?? null, b.province ?? null, b.web ?? null, b.billingEmail ?? null,
        Date.now(), id,
-       TIPOS_EMPRESA.includes(String(b.companyType)) ? String(b.companyType) : null],
+       TIPOS_EMPRESA.includes(String(b.companyType)) ? String(b.companyType) : null,
+       b.country ?? null, b.commercialName ?? null, b.paymentTerms ?? null, b.paymentMethod ?? null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Empresa no encontrada");
     await auditConnect({ req, action: "provider.updated", resourceType: "provider", resourceId: id, detail: req.body });
@@ -1106,12 +1224,83 @@ export function createConnectBackofficeRouter(): Router {
     const name = String(req.body?.name || "").trim();
     if (!name) return err(res, 422, "validation_failed", "El nombre es obligatorio");
     const now = Date.now();
+    const emailMal = emailInvalido(req.body?.email);
+    if (emailMal) return err(res, 422, "validation_failed", emailMal);
     const r = await db.query(
-      `INSERT INTO connect_workshop_contacts ("workshopId", name, phone, role, notes, "createdAtMs", "updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$6) RETURNING *`,
+      `INSERT INTO connect_workshop_contacts
+         ("workshopId", "ownerType", "ownerId", name, phone, role, notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,'workshop',$1,$2,$3,$4,$5,$6,$6) RETURNING *`,
       [id, name, req.body?.phone ?? null, req.body?.role ?? null, req.body?.notes ?? null, now],
     );
     await auditConnect({ req, action: "workshop.contact_added", resourceType: "workshop", resourceId: id, detail: { name } });
+    res.status(201).json(r.rows[0]);
+  });
+
+  /**
+   * Contactos de cualquier ficha: taller, proveedor o cliente. Es la misma
+   * tabla que ya usaban los talleres (connect_workshop_contacts), con
+   * ownerType/ownerId; por eso la edición y el borrado siguen siendo
+   * /workshop-contacts/:id, que ya existía y está en uso.
+   */
+  router.get("/contacts", ...requireConnectRole("operator"), async (req, res) => {
+    const ownerType = String(req.query.ownerType || "");
+    const ownerId = Number(req.query.ownerId);
+    if (!TIPOS_CONTACTO_OWNER.includes(ownerType as any)) {
+      return err(res, 422, "validation_failed", "ownerType debe ser workshop, provider o client");
+    }
+    if (!Number.isFinite(ownerId)) return err(res, 422, "validation_failed", "ownerId no válido");
+    const r = await db.query(
+      `SELECT * FROM connect_workshop_contacts
+        WHERE "ownerType" = $1 AND "ownerId" = $2
+        ORDER BY "isPrimary" DESC, active DESC, name`,
+      [ownerType, ownerId],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post("/contacts", ...requireConnectRole("operator"), async (req, res) => {
+    const b = req.body ?? {};
+    const ownerType = String(b.ownerType || "");
+    const ownerId = Number(b.ownerId);
+    const name = String(b.name || "").trim();
+    if (!TIPOS_CONTACTO_OWNER.includes(ownerType as any)) {
+      return err(res, 422, "validation_failed", "ownerType debe ser workshop, provider o client");
+    }
+    if (!Number.isFinite(ownerId)) return err(res, 422, "validation_failed", "ownerId no válido");
+    if (!name) return err(res, 422, "validation_failed", "El nombre es obligatorio");
+    const emailMal = emailInvalido(b.email);
+    if (emailMal) return err(res, 422, "validation_failed", emailMal);
+
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO connect_workshop_contacts
+         ("ownerType", "ownerId", "workshopId", name, surname, role, phone, mobile, email,
+          "contactType", "isPrimary", "forAssistance", "forAdmin", "forBilling", "forEmergency",
+          notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17) RETURNING *`,
+      [ownerType, ownerId,
+       // Se conserva workshopId en los de taller: lo que ya consultaba por esa
+       // columna sigue encontrándolos sin cambiar ni una consulta.
+       ownerType === "workshop" ? ownerId : null,
+       name, b.surname ?? null, b.role ?? null, b.phone ?? null, b.mobile ?? null, b.email ?? null,
+       b.contactType ?? null,
+       b.isPrimary === true, b.forAssistance === true, b.forAdmin === true,
+       b.forBilling === true, b.forEmergency === true,
+       b.notes ?? null, now],
+    );
+
+    // Un solo principal por ficha: al marcar uno, se desmarca el anterior.
+    if (b.isPrimary === true) {
+      await db.query(
+        `UPDATE connect_workshop_contacts SET "isPrimary" = false
+          WHERE "ownerType" = $1 AND "ownerId" = $2 AND id <> $3`,
+        [ownerType, ownerId, r.rows[0].id],
+      );
+    }
+    await auditConnect({
+      req, action: "contact.added", resourceType: ownerType, resourceId: ownerId,
+      detail: { name, contactType: b.contactType ?? null },
+    });
     res.status(201).json(r.rows[0]);
   });
 
@@ -1120,10 +1309,23 @@ export function createConnectBackofficeRouter(): Router {
     const r = await db.query(
       `UPDATE connect_workshop_contacts SET
          name = COALESCE($1, name), phone = COALESCE($2, phone), role = COALESCE($3, role),
-         notes = COALESCE($4, notes), active = COALESCE($5, active), "updatedAtMs" = $6
+         notes = COALESCE($4, notes), active = COALESCE($5, active), "updatedAtMs" = $6,
+         surname = COALESCE($8, surname), email = COALESCE($9, email),
+         mobile = COALESCE($10, mobile), "contactType" = COALESCE($11, "contactType"),
+         "isPrimary" = COALESCE($12, "isPrimary"),
+         "forAssistance" = COALESCE($13, "forAssistance"),
+         "forAdmin" = COALESCE($14, "forAdmin"),
+         "forBilling" = COALESCE($15, "forBilling"),
+         "forEmergency" = COALESCE($16, "forEmergency")
        WHERE id = $7 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.role ?? null, b.notes ?? null,
-       typeof b.active === "boolean" ? b.active : null, Date.now(), Number(req.params.id)],
+       typeof b.active === "boolean" ? b.active : null, Date.now(), Number(req.params.id),
+       b.surname ?? null, b.email ?? null, b.mobile ?? null, b.contactType ?? null,
+       typeof b.isPrimary === "boolean" ? b.isPrimary : null,
+       typeof b.forAssistance === "boolean" ? b.forAssistance : null,
+       typeof b.forAdmin === "boolean" ? b.forAdmin : null,
+       typeof b.forBilling === "boolean" ? b.forBilling : null,
+       typeof b.forEmergency === "boolean" ? b.forEmergency : null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Contacto no encontrado");
     await auditConnect({ req, action: "workshop.contact_updated", resourceType: "workshop", resourceId: r.rows[0].workshopId, detail: b });
@@ -1356,6 +1558,21 @@ export function createConnectBackofficeRouter(): Router {
          notes = COALESCE($21, notes),
          -- Lo que el taller sabe hacer: decide si se le puede mandar el vehiculo
          services = COALESCE($22, services),
+         -- Ficha ampliada. Los campos nuevos van AL FINAL: la lista es
+         -- posicional y renumerarla desplazaria los datos sin dar error.
+         country = COALESCE($23, country),
+         "emergencyPhone" = COALESCE($24, "emergencyPhone"),
+         "assistanceEmail" = COALESCE($25, "assistanceEmail"),
+         "adminEmail" = COALESCE($26, "adminEmail"),
+         "billingEmail" = COALESCE($27, "billingEmail"),
+         "deliveryNoteEmail" = COALESCE($28, "deliveryNoteEmail"),
+         "open24h" = COALESCE($29, "open24h"),
+         active = COALESCE($30, active),
+         "coverageProvinces" = COALESCE($31, "coverageProvinces"),
+         "coveragePostalCodes" = COALESCE($32, "coveragePostalCodes"),
+         "vehicleTypes" = COALESCE($33, "vehicleTypes"),
+         "avgResponseMinutes" = COALESCE($34, "avgResponseMinutes"),
+         "authorizationLimit" = COALESCE($35, "authorizationLimit"),
          "updatedAtMs" = $9
        WHERE id = $10 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.latitude ?? null, b.longitude ?? null,
@@ -1369,7 +1586,14 @@ export function createConnectBackofficeRouter(): Router {
        b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
        b.email ?? null, b.commercialNetwork ?? null, b.openingHours ?? null, b.notes ?? null,
        // Llega ya como texto JSON desde el panel; una lista tambien vale
-       b.services == null ? null : (typeof b.services === "string" ? b.services : JSON.stringify(b.services))],
+       b.services == null ? null : (typeof b.services === "string" ? b.services : JSON.stringify(b.services)),
+       b.country ?? null, b.emergencyPhone ?? null, b.assistanceEmail ?? null,
+       b.adminEmail ?? null, b.billingEmail ?? null, b.deliveryNoteEmail ?? null,
+       typeof b.open24h === "boolean" ? b.open24h : null,
+       typeof b.active === "boolean" ? b.active : null,
+       listaJson(b.coverageProvinces), listaJson(b.coveragePostalCodes), listaJson(b.vehicleTypes),
+       b.avgResponseMinutes != null && b.avgResponseMinutes !== "" ? Number(b.avgResponseMinutes) : null,
+       b.authorizationLimit != null && b.authorizationLimit !== "" ? Number(b.authorizationLimit) : null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Taller no encontrado");
     // Cambiar a Lite (o volver) no toca datos: solo el producto habilitado
@@ -2047,7 +2271,15 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       // La trazabilidad de connect_assistances manda; el core solo rellena
       // los huecos de las asistencias antiguas, anteriores a esas columnas.
       `SELECT ca.*, p.name AS "partnerName", w.name AS "workshopName", w.phone AS "workshopPhone",
-              pc.name AS "providerName", u.name AS "createdByName",
+              w."emergencyPhone" AS "workshopEmergencyPhone",
+              COALESCE(w."assistanceEmail", w.email) AS "workshopEmail",
+              -- El proveedor explícito manda; el del taller solo rellena las
+              -- asistencias antiguas, anteriores a "providerCompanyId".
+              COALESCE(pcd.name, pc.name) AS "providerName",
+              cli.name AS "clientName", fac.name AS "billingClientName",
+              ct.name AS "contactName", ct.surname AS "contactSurname",
+              ct.phone AS "contactPhone", ct.mobile AS "contactMobile", ct.email AS "contactEmail",
+              u.name AS "createdByName",
               COALESCE(ca."assignedTechName", ca."liteUserName", ra."assignedTechName") AS "assignedTechName",
               COALESCE(ca."assignedVehicleName", ra."assignedVehicleName") AS "assignedVehicleName",
               ra.status AS "coreStatus"
@@ -2055,6 +2287,10 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
          LEFT JOIN connect_partners p ON p.id = ca."partnerId"
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
          LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+         LEFT JOIN connect_provider_companies pcd ON pcd.id = ca."providerCompanyId"
+         LEFT JOIN connect_clients cli ON cli.id = ca."clientId"
+         LEFT JOIN connect_clients fac ON fac.id = ca."billingClientId"
+         LEFT JOIN connect_workshop_contacts ct ON ct.id = ca."contactId"
          LEFT JOIN connect_users u ON u.id = ca."createdByUserId"
          LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
         WHERE ca.id = $1 AND ($2::int IS NULL OR ca."controlCenterId" = $2)`,
@@ -2121,6 +2357,30 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       });
       if (b.clientId) {
         await db.query(`UPDATE connect_assistances SET "clientId" = $1 WHERE id = $2`, [Number(b.clientId), row.id]);
+      }
+
+      /*
+       * Subcontratación: a quién se le encarga y a quién se le factura. El
+       * cliente de facturación se guarda aunque coincida con el solicitante,
+       * porque "coinciden hoy" no es lo mismo que "son el mismo": si mañana
+       * cambia el acuerdo, la asistencia antigua tiene que seguir diciendo a
+       * quién se le facturó de verdad.
+       */
+      if (b.billingClientId || b.providerCompanyId || b.workshopCompanyId || b.contactId) {
+        await db.query(
+          `UPDATE connect_assistances SET
+             "billingClientId" = COALESCE($1, "billingClientId"),
+             "providerCompanyId" = COALESCE($2, "providerCompanyId"),
+             "workshopId" = COALESCE($3, "workshopId"),
+             "contactId" = COALESCE($4, "contactId")
+           WHERE id = $5`,
+          [b.billingClientId ? Number(b.billingClientId) : null,
+           b.providerCompanyId ? Number(b.providerCompanyId) : null,
+           b.workshopCompanyId ? Number(b.workshopCompanyId) : null,
+           b.contactId ? Number(b.contactId) : null,
+           row.id],
+        );
+        await guardarSnapshotPartes(row.id);
       }
 
       /*
@@ -3506,10 +3766,45 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   router.get("/clients", ...requireConnectRole("operator"), async (req, res) => {
     const u = req.connectUser!;
     const r = await db.query(
-      `SELECT * FROM connect_clients WHERE $1::int IS NULL OR "controlCenterId" = $1 ORDER BY name`,
+      `SELECT c.*,
+              m.system AS "erpSystem", m.external_code AS "erpCode",
+              COALESCE(m.sync_status, 'not_synced') AS "erpSyncStatus",
+              m.last_sync_at_ms AS "erpLastSyncAtMs", m.last_sync_error AS "erpLastSyncError"
+         FROM connect_clients c
+         LEFT JOIN LATERAL (
+           SELECT * FROM integration_mappings im
+            WHERE im.entity_type = 'customer' AND im.mobilink_id = c.id::text
+            ORDER BY im.updated_at_ms DESC LIMIT 1
+         ) m ON true
+        WHERE $1::int IS NULL OR c."controlCenterId" = $1
+        ORDER BY c.name`,
       [u.role === "superadmin" ? null : u.controlCenterId],
     );
     res.json({ data: r.rows });
+  });
+
+  /**
+   * Ficha de un cliente: sus datos y sus contactos. El aislamiento por centro
+   * de control es el mismo que en el listado — un cc_admin no puede leer la
+   * ficha de un cliente de otro centro.
+   */
+  router.get("/clients/:id", ...requireConnectRole("operator"), async (req, res) => {
+    const u = req.connectUser!;
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return err(res, 422, "validation_failed", "Id no válido");
+    const r = await db.query(
+      `SELECT * FROM connect_clients
+        WHERE id = $1 AND ($2::int IS NULL OR "controlCenterId" = $2)`,
+      [id, u.role === "superadmin" ? null : u.controlCenterId],
+    );
+    if (!r.rows[0]) return err(res, 404, "not_found", "Cliente no encontrado");
+    const contactos = await db.query(
+      `SELECT * FROM connect_workshop_contacts
+        WHERE "ownerType" = 'client' AND "ownerId" = $1
+        ORDER BY "isPrimary" DESC, name`,
+      [id],
+    );
+    res.json({ client: r.rows[0], contacts: contactos.rows });
   });
 
   router.post("/clients", ...requireConnectRole("cc_admin"), async (req, res) => {
@@ -3539,11 +3834,39 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
          "contactPhone" = COALESCE($3, "contactPhone"),
          "defaultSlaMinutes" = COALESCE($4, "defaultSlaMinutes"),
          "defaultPriority" = COALESCE($5, "defaultPriority"),
-         active = COALESCE($6, active), notes = COALESCE($7, notes), "updatedAtMs" = $8
+         active = COALESCE($6, active), notes = COALESCE($7, notes), "updatedAtMs" = $8,
+         -- Ficha fiscal y de facturación (campos nuevos al final: la lista es
+         -- posicional y renumerarla desplazaría los datos en silencio)
+         "taxId" = COALESCE($10, "taxId"),
+         "legalName" = COALESCE($11, "legalName"),
+         "commercialName" = COALESCE($12, "commercialName"),
+         address = COALESCE($13, address),
+         "postalCode" = COALESCE($14, "postalCode"),
+         city = COALESCE($15, city),
+         province = COALESCE($16, province),
+         country = COALESCE($17, country),
+         currency = COALESCE($18, currency),
+         "paymentMethod" = COALESCE($19, "paymentMethod"),
+         "paymentTerms" = COALESCE($20, "paymentTerms"),
+         "billingPeriodicity" = COALESCE($21, "billingPeriodicity"),
+         "billingGrouped" = COALESCE($22, "billingGrouped"),
+         "referenceRequired" = COALESCE($23, "referenceRequired"),
+         "purchaseOrderRequired" = COALESCE($24, "purchaseOrderRequired"),
+         "costCenter" = COALESCE($25, "costCenter"),
+         project = COALESCE($26, project),
+         "billingSeries" = COALESCE($27, "billingSeries"),
+         "taxConfig" = COALESCE($28, "taxConfig"),
+         "billingNotes" = COALESCE($29, "billingNotes")
        WHERE id = $9 RETURNING *`,
       [b.name ?? null, b.contactEmail ?? null, b.contactPhone ?? null,
        b.defaultSlaMinutes != null ? Number(b.defaultSlaMinutes) : null,
-       b.defaultPriority ?? null, b.active ?? null, b.notes ?? null, Date.now(), Number(req.params.id)],
+       b.defaultPriority ?? null, b.active ?? null, b.notes ?? null, Date.now(), Number(req.params.id),
+       b.taxId ?? null, b.legalName ?? null, b.commercialName ?? null, b.address ?? null,
+       b.postalCode ?? null, b.city ?? null, b.province ?? null, b.country ?? null,
+       b.currency ?? null, b.paymentMethod ?? null, b.paymentTerms ?? null,
+       b.billingPeriodicity ?? null, b.billingGrouped ?? null, b.referenceRequired ?? null,
+       b.purchaseOrderRequired ?? null, b.costCenter ?? null, b.project ?? null,
+       b.billingSeries ?? null, b.taxConfig ?? null, b.billingNotes ?? null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Cliente no encontrado");
     await auditConnect({ req, action: "client.updated", resourceType: "client", resourceId: Number(req.params.id), detail: b });
