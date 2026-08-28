@@ -243,6 +243,10 @@ export function useRoadside({
         assistanceToStore.customerPhone
       }.`
     );
+
+    // Se devuelve la asistencia creada: quien la da de alta puede necesitar su
+    // id para lo que va después (asignar proveedor y taller, por ejemplo).
+    return assistanceToStore;
   }
 
   async function updateRoadsideAssistance(
