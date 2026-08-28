@@ -18,7 +18,8 @@
 import crypto from "node:crypto";
 
 import db from "../db.ts";
-import { getSecretsProvider } from "../integration-hub/infrastructure/secrets.ts";
+import { exigirDestinoUtilizable, resolverSecreto } from "./destinosServicio.ts";
+import { sanearError } from "./destinos.ts";
 import {
   esFinal,
   esEvento,
@@ -77,7 +78,7 @@ export async function listarDestinos(tenantId: string | null) {
       baseUrl: d.baseUrl,
       plataforma: d.destinationTenantLabel ?? null,
       notes: d.notes ?? null,
-      credencialConfigurada: Boolean(await resolverClave(d.secretName)),
+      credencialConfigurada: Boolean(await resolverSecreto(d.secretName)),
     })),
   );
 }
@@ -156,8 +157,12 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
   const a = await cargarAsistencia(p.assistanceId);
   if (!a) throw new ErrorDespacho("not_found", "Asistencia no encontrada", 404);
 
-  const destino = await cargarDestino(p.destinationId, p.tenantId);
-  if (!destino) throw new ErrorDespacho("destination_not_found", "Destino no disponible", 404);
+  /*
+   * Puerta única: comprueba dueño, activación y credencial. Un destino sin
+   * variable de entorno NO puede enviar aunque se llame a la API a mano — el
+   * botón deshabilitado del panel es una comodidad, esto es la garantía.
+   */
+  const destino = await exigirDestinoUtilizable(p.destinationId, p.tenantId);
 
   // Validar antes de crear nada: mandar una asistencia sin sitio ni contacto
   // obliga al destino a llamar para preguntar, y eso lo paga el cliente en
@@ -256,7 +261,7 @@ export async function intentarEnvio(dispatchId: number) {
     [dispatchId, now],
   );
 
-  const clave = await resolverClave(d.secretName);
+  const clave = await resolverSecreto(d.secretName);
   if (!clave) {
     return marcarError(
       dispatchId,
@@ -330,7 +335,7 @@ async function marcarError(dispatchId: number, motivo: string, cuerpo?: unknown)
         SET status = 'ERROR', "lastError" = $2, "responseSnapshot" = COALESCE($3, "responseSnapshot"),
             "updatedAtMs" = $4
       WHERE id = $1`,
-    [dispatchId, String(motivo).slice(0, 1000),
+    [dispatchId, sanearError(motivo).slice(0, 1000),
      cuerpo != null ? JSON.stringify(cuerpo).slice(0, 8000) : null, now],
   );
   console.error(`[Dispatch] envío ${dispatchId} falló: ${motivo}`);
@@ -460,25 +465,6 @@ export function nuevoCorrelationId(atMs = Date.now()): string {
   const d = new Date(atMs);
   const fecha = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
   return `COR-${fecha}-${crypto.randomBytes(4).toString("hex")}`;
-}
-
-async function resolverClave(secretName: string | null): Promise<string | undefined> {
-  if (!secretName) return undefined;
-  // Nombre plano en el entorno, o a través del proveedor de secretos del hub,
-  // que es el que ya usan los conectores de ERP.
-  return (
-    process.env[secretName] ??
-    (await getSecretsProvider().get("dispatch", "central", secretName).catch(() => undefined))
-  );
-}
-
-async function cargarDestino(id: number, tenantId: string | null) {
-  const r = await db.query(
-    `SELECT * FROM external_destinations
-      WHERE id = $1 AND active AND ("ownerTenantId" IS NULL OR "ownerTenantId" = $2)`,
-    [id, tenantId],
-  );
-  return r.rows[0] ?? null;
 }
 
 async function cargarAsistencia(id: number): Promise<(AsistenciaAssist & { expediente: string | null }) | null> {

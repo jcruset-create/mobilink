@@ -19,6 +19,7 @@ import { createConnectRouter, createConnectAdminRouter } from "./router.ts";
 import { createConnectBackofficeRouter } from "./backoffice.ts";
 import { createConnectLiteRouter } from "./lite.ts";
 import { createEmpresasRouter } from "./empresasRouter.ts";
+import { createIntegracionesRouter } from "./integraciones.ts";
 import { startConnectWorker, stopConnectWorker, runConnectChecksOnce } from "./worker.ts";
 
 export { initConnect, startConnectWorker, stopConnectWorker, runConnectChecksOnce };
@@ -34,6 +35,9 @@ export function mountConnect(app: Express, requireAdmin: RequestHandler): void {
   // CADA consulta pasa por la relación comercial, y mezclarlo con los 4.700
   // renglones de backoffice.ts haría imposible comprobarlo de un vistazo.
   app.use("/api/connect/bo/empresas", createEmpresasRouter());
+  // Partners de integración y sus credenciales. Antes del backoffice por el
+  // mismo motivo: es una ruta más específica del mismo prefijo.
+  app.use("/api/connect/bo/integraciones", createIntegracionesRouter());
   app.use("/api/connect/bo", createConnectBackofficeRouter());
   app.use("/api/connect/lite", createConnectLiteRouter());
   console.log(

@@ -33,6 +33,42 @@ export function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+/**
+ * Equivalencias entre permisos, en un único sitio.
+ *
+ * `assistances:write` es el permiso original, de cuando solo había uno para
+ * escribir. Al separarlo en `create` y `update` quedaron claves vivas con el
+ * antiguo, así que las dos formas tienen que valer: la vieja concede las dos
+ * nuevas, y cualquiera de las nuevas satisface a quien pide la vieja.
+ *
+ * Sin esto, una credencial recién creada con los permisos nuevos recibiría un
+ * 403 al crear una asistencia — que es exactamente lo que pasó al probarlo.
+ */
+const EQUIVALENCIAS: Record<string, string[]> = {
+  "assistances:write": ["assistances:create", "assistances:update"],
+};
+
+/** Los permisos que concede de verdad una lista de scopes. */
+export function expandirScopes(scopes: string[]): string[] {
+  const fuera = new Set<string>();
+  for (const s of scopes) {
+    fuera.add(s);
+    for (const e of EQUIVALENCIAS[s] ?? []) fuera.add(e);
+  }
+  return [...fuera];
+}
+
+/** Si una clave con `scopes` cumple el permiso `requerido`. */
+export function cumpleScope(scopes: string[], requerido?: string): boolean {
+  if (!requerido) return true;
+  if (scopes.includes("*")) return true;
+  const efectivos = expandirScopes(scopes);
+  if (efectivos.includes(requerido)) return true;
+  // Y al revés: quien pide el permiso antiguo se conforma con cualquiera de
+  // los nuevos que lo sustituyen.
+  return (EQUIVALENCIAS[requerido] ?? []).some((alternativo) => efectivos.includes(alternativo));
+}
+
 function sendError(res: Response, status: number, code: string, message: string) {
   return res.status(status).json({ error: { code, message } });
 }
@@ -62,7 +98,7 @@ export function requireConnectKey(scope?: string) {
         return sendError(res, 403, "forbidden", "La cuenta del partner está suspendida");
       }
       const scopes: string[] = JSON.parse(row.scopes || "[]");
-      if (scope && !scopes.includes(scope) && !scopes.includes("*")) {
+      if (!cumpleScope(scopes, scope)) {
         return sendError(res, 403, "scope_missing", `La API key no tiene el scope requerido: ${scope}`);
       }
       req.connectAuth = {
