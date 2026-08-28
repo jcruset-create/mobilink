@@ -99,6 +99,20 @@ export async function initIntegrationHub(): Promise<void> {
       ON integration_mappings(tenant_id, entity_type, mobilink_id);
   `);
 
+  // La misma entidad de Mobilink puede vivir en varias EMPRESAS del mismo ERP
+  // (SAP sociedad A y sociedad B), y cada mapeo lleva su propio estado de
+  // sincronización: integration_sync_state cuenta el estado por tipo de
+  // entidad, no por ficha, y aquí hace falta saber que ESTE proveedor falló.
+  await pool.query(`
+    ALTER TABLE integration_mappings ADD COLUMN IF NOT EXISTS external_company TEXT;
+    ALTER TABLE integration_mappings ADD COLUMN IF NOT EXISTS external_id TEXT;
+    ALTER TABLE integration_mappings
+      ADD COLUMN IF NOT EXISTS sync_status TEXT NOT NULL DEFAULT 'not_synced';
+      -- not_synced | pending | syncing | synced | error
+    ALTER TABLE integration_mappings ADD COLUMN IF NOT EXISTS last_sync_at_ms BIGINT;
+    ALTER TABLE integration_mappings ADD COLUMN IF NOT EXISTS last_sync_error TEXT;
+  `);
+
   // ── Referencias de producto externas normalizadas + ofertas de proveedor ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS external_product_references (

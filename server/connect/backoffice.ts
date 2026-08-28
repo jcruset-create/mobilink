@@ -641,13 +641,20 @@ export function createConnectBackofficeRouter(): Router {
               "postalCode" = COALESCE($10, "postalCode"), province = COALESCE($11, province),
               web = COALESCE($12, web), "billingEmail" = COALESCE($13, "billingEmail"),
               "companyType" = COALESCE($16, "companyType"),
+              country = COALESCE($17, country),
+              "commercialName" = COALESCE($18, "commercialName"),
+              "paymentTerms" = COALESCE($19, "paymentTerms"),
+              "paymentMethod" = COALESCE($20, "paymentMethod"),
               "updatedAtMs" = $14
         WHERE id = $15 AND "deletedAtMs" IS NULL RETURNING *`,
+      // Los campos nuevos se añaden AL FINAL a propósito: renumerar una lista
+      // posicional mete cada dato en la columna de al lado sin dar ningún error.
       [b.name ?? null, b.contactEmail ?? null, b.contactPhone ?? null, b.status ?? null, b.notes ?? null,
        b.legalName ?? null, b.taxId ?? null, b.address ?? null, b.city ?? null,
        b.postalCode ?? null, b.province ?? null, b.web ?? null, b.billingEmail ?? null,
        Date.now(), id,
-       TIPOS_EMPRESA.includes(String(b.companyType)) ? String(b.companyType) : null],
+       TIPOS_EMPRESA.includes(String(b.companyType)) ? String(b.companyType) : null,
+       b.country ?? null, b.commercialName ?? null, b.paymentTerms ?? null, b.paymentMethod ?? null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Empresa no encontrada");
     await auditConnect({ req, action: "provider.updated", resourceType: "provider", resourceId: id, detail: req.body });
@@ -3539,11 +3546,39 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
          "contactPhone" = COALESCE($3, "contactPhone"),
          "defaultSlaMinutes" = COALESCE($4, "defaultSlaMinutes"),
          "defaultPriority" = COALESCE($5, "defaultPriority"),
-         active = COALESCE($6, active), notes = COALESCE($7, notes), "updatedAtMs" = $8
+         active = COALESCE($6, active), notes = COALESCE($7, notes), "updatedAtMs" = $8,
+         -- Ficha fiscal y de facturación (campos nuevos al final: la lista es
+         -- posicional y renumerarla desplazaría los datos en silencio)
+         "taxId" = COALESCE($10, "taxId"),
+         "legalName" = COALESCE($11, "legalName"),
+         "commercialName" = COALESCE($12, "commercialName"),
+         address = COALESCE($13, address),
+         "postalCode" = COALESCE($14, "postalCode"),
+         city = COALESCE($15, city),
+         province = COALESCE($16, province),
+         country = COALESCE($17, country),
+         currency = COALESCE($18, currency),
+         "paymentMethod" = COALESCE($19, "paymentMethod"),
+         "paymentTerms" = COALESCE($20, "paymentTerms"),
+         "billingPeriodicity" = COALESCE($21, "billingPeriodicity"),
+         "billingGrouped" = COALESCE($22, "billingGrouped"),
+         "referenceRequired" = COALESCE($23, "referenceRequired"),
+         "purchaseOrderRequired" = COALESCE($24, "purchaseOrderRequired"),
+         "costCenter" = COALESCE($25, "costCenter"),
+         project = COALESCE($26, project),
+         "billingSeries" = COALESCE($27, "billingSeries"),
+         "taxConfig" = COALESCE($28, "taxConfig"),
+         "billingNotes" = COALESCE($29, "billingNotes")
        WHERE id = $9 RETURNING *`,
       [b.name ?? null, b.contactEmail ?? null, b.contactPhone ?? null,
        b.defaultSlaMinutes != null ? Number(b.defaultSlaMinutes) : null,
-       b.defaultPriority ?? null, b.active ?? null, b.notes ?? null, Date.now(), Number(req.params.id)],
+       b.defaultPriority ?? null, b.active ?? null, b.notes ?? null, Date.now(), Number(req.params.id),
+       b.taxId ?? null, b.legalName ?? null, b.commercialName ?? null, b.address ?? null,
+       b.postalCode ?? null, b.city ?? null, b.province ?? null, b.country ?? null,
+       b.currency ?? null, b.paymentMethod ?? null, b.paymentTerms ?? null,
+       b.billingPeriodicity ?? null, b.billingGrouped ?? null, b.referenceRequired ?? null,
+       b.purchaseOrderRequired ?? null, b.costCenter ?? null, b.project ?? null,
+       b.billingSeries ?? null, b.taxConfig ?? null, b.billingNotes ?? null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Cliente no encontrado");
     await auditConnect({ req, action: "client.updated", resourceType: "client", resourceId: Number(req.params.id), detail: b });
