@@ -35,6 +35,7 @@ import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tec
 import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
+import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
@@ -17850,6 +17851,14 @@ app.get("/apps/:app", async (req, res) => {
 
 mountConnect(app, requireLicensesAdmin);
 
+/*
+ * Subcontratación a plataformas externas (Assist → Central A/B, y más
+ * adelante Central → Central). Va aparte de Connect a propósito: Connect es
+ * el que RECIBE, esto es el que ENVÍA, y meterlos juntos acabaría con un
+ * módulo que se llama a sí mismo.
+ */
+app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
+
 // Asistente virtual de TyreControl (function calling sobre herramientas de
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
 mountAsistente(app, authenticate, requireModule("tyrecontrol"));
@@ -18053,6 +18062,7 @@ initDb()
   .then(() => prepararEsquema("Integration Hub", initIntegrationHub))
   .then(() => prepararEsquema("Licencias", initLicenses))
   .then(() => prepararEsquema("Connect Pro", initConnect))
+  .then(() => prepararEsquema("Envíos externos", initDispatch))
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))
@@ -18070,6 +18080,7 @@ initDb()
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
+      startDispatchWorker(); // reintentos de subcontratación a plataformas externas
       startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
       startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
       // Mobilink Cash: eventos de dominio hacia MC Central. Sin transporte

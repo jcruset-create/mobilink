@@ -76,7 +76,11 @@ export async function transition(
   reason?: string,
 ): Promise<void> {
   const now = Date.now();
-  const r = await db.query(`SELECT status, "partnerId", uuid FROM connect_assistances WHERE id = $1`, [assistanceId]);
+  const r = await db.query(
+    `SELECT status, "partnerId", uuid, "correlationId", "expedientNumber", "sourceReference"
+       FROM connect_assistances WHERE id = $1`,
+    [assistanceId],
+  );
   const row = r.rows[0];
   if (!row) throw new Error(`Asistencia Connect ${assistanceId} no encontrada`);
   const from: string = row.status;
@@ -96,6 +100,14 @@ export async function transition(
       to_status: toStatus,
       reason: reason ?? null,
       occurred_at: new Date(now).toISOString(),
+      /*
+       * El correlation_id viaja en CADA aviso, no solo en el primero. Es lo
+       * único con lo que el sistema de origen puede saber de qué asistencia
+       * suya le están hablando: su id aquí no significa nada allí.
+       */
+      correlation_id: row.correlationId ?? null,
+      expedient_number: row.expedientNumber ?? null,
+      source_reference: row.sourceReference ?? null,
     });
   }
   publish({ kind: "status", assistanceId, status: toStatus });

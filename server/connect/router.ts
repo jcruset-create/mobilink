@@ -13,6 +13,7 @@ import {
   createAssistance, assignAssistance, findCandidates, transition,
   InvalidTransitionError,
 } from "./service.ts";
+import { resolverSolicitante } from "./recepcionExterna.ts";
 
 function err(res: Response, status: number, code: string, message: string, details?: unknown) {
   return res.status(status).json({ error: { code, message, ...(details ? { details } : {}) } });
@@ -35,6 +36,10 @@ function toPublic(a: any) {
     cancel_reason: a.cancelReason,
     created_at: new Date(Number(a.createdAtMs)).toISOString(),
     updated_at: new Date(Number(a.updatedAtMs)).toISOString(),
+    // El expediente de Central: es el número por el que preguntará quien
+    // llame, y el que el sistema de origen guarda como referencia del destino.
+    expedient_number: a.expedientNumber ?? null,
+    correlation_id: a.correlationId ?? null,
   };
 }
 
@@ -106,6 +111,45 @@ export function createConnectRouter(): Router {
         metadata: b.metadata,
       });
       if (duplicated) return res.status(200).json(toPublic(row));
+
+      /*
+       * Emparejar al solicitante con la cartera de ESTA central. Se hace
+       * después de crear la asistencia y sin poder tumbarla: si el
+       * emparejamiento falla, el servicio ya está dado de alta y alguien lo
+       * atenderá; lo que queda pendiente es a quién se le factura, y eso se
+       * arregla en la ficha. Al revés —rechazar el servicio porque no cuadra
+       * una ficha administrativa— se arregla en el arcén.
+       */
+      const meta = (b.metadata ?? {}) as Record<string, any>;
+      try {
+        const centro = (
+          await db.query(`SELECT "controlCenterId" FROM connect_partners WHERE id = $1`, [auth.partnerId])
+        ).rows[0]?.controlCenterId ?? null;
+        const resuelta = await resolverSolicitante(centro, meta.requester);
+        await db.query(
+          `UPDATE connect_assistances
+              SET "sourceSystem" = $2, "sourceReference" = $3, "correlationId" = $4,
+                  "requesterCompanyId" = COALESCE($5, "requesterCompanyId"),
+                  "clientId" = COALESCE("clientId", $6)
+            WHERE id = $1`,
+          [
+            row.id,
+            meta.source_system ? String(meta.source_system) : null,
+            meta.source_reference ? String(meta.source_reference) : null,
+            meta.correlation_id ? String(meta.correlation_id) : null,
+            resuelta?.companyId ?? null,
+            resuelta?.clientId ?? null,
+          ],
+        );
+        if (resuelta?.creada || resuelta?.relacionCreada) {
+          console.log(
+            `[Connect] asistencia externa ${row.uuid}: empresa ${resuelta.companyId} ` +
+            `${resuelta.creada ? "creada" : "existente"}, relación ${resuelta.relacionCreada ? "creada" : "existente"}`,
+          );
+        }
+      } catch (e: any) {
+        console.error("[Connect] no se pudo resolver el solicitante:", e?.message);
+      }
 
       // Modo auto: asignar en segundo plano; el partner recibe 201 inmediato
       const modeR = await db.query(`SELECT "assignmentMode" FROM connect_partners WHERE id = $1`, [auth.partnerId]);

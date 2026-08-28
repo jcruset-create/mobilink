@@ -1,0 +1,182 @@
+/**
+ * API de subcontratación a plataformas externas, desde Assist.
+ *
+ * Dos puertas con guardas distintos a propósito:
+ *
+ *  · Las rutas de gestión van con `requireSupervisorRole`, el mismo guarda que
+ *    el resto del panel de Assist.
+ *  · La de recepción de avisos (`/webhook`) NO lleva sesión: la llama Central,
+ *    que no tiene usuario aquí. Se autentica con la firma HMAC del propio
+ *    aviso, que es lo que ya hace el emisor.
+ */
+
+import crypto from "node:crypto";
+
+import { Router, json, type RequestHandler, type Response } from "express";
+
+import db from "../db.ts";
+import {
+  ErrorDespacho,
+  aplicarAvisoDeCentral,
+  intentarEnvio,
+  listarDespachosDeAsistencia,
+  listarDestinos,
+  subcontratarEnCentral,
+} from "./servicio.ts";
+
+function fallo(res: Response, e: unknown) {
+  if (e instanceof ErrorDespacho) {
+    return res.status(e.estado).json({ error: e.message, code: e.codigo });
+  }
+  console.error("[Dispatch] error:", (e as any)?.message);
+  return res.status(500).json({ error: "Error en la subcontratación externa" });
+}
+
+/**
+ * El taller de Assist desde el que se opera. Es el `sourceTenantId` del envío:
+ * sin él, dos talleres del mismo Assist compartirían destinos y despachos.
+ */
+async function tenantDe(req: any): Promise<string | null> {
+  const t = req.assistPanelUser?.tallerId ?? req.query?.tallerId ?? req.body?.tallerId;
+  return t == null || t === "" ? null : String(t);
+}
+
+export function createDispatchRouter(requireSupervisorRole: RequestHandler): Router {
+  const router = Router();
+  router.use(json({ limit: "1mb" }));
+
+  /* ── Recepción de avisos del destino ───────────────────────────────────── */
+  /*
+   * Va la primera y sin sesión: la llama Central. La firma se comprueba con el
+   * secreto compartido del endpoint, con comparación en tiempo constante, y
+   * con ventana de tiempo para que un aviso capturado no valga eternamente.
+   */
+  router.post("/webhook", async (req, res) => {
+    try {
+      const secreto = process.env.DISPATCH_WEBHOOK_SECRET;
+      if (!secreto) {
+        console.error("[Dispatch] DISPATCH_WEBHOOK_SECRET sin configurar: aviso rechazado");
+        return res.status(503).json({ error: "Recepción de avisos no configurada" });
+      }
+      const firma = String(req.headers["x-mobilink-signature"] ?? "");
+      const ts = Number(req.headers["x-mobilink-timestamp"] ?? 0);
+      const cuerpo = JSON.stringify(req.body ?? {});
+
+      if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300) {
+        return res.status(401).json({ error: "Aviso caducado o sin marca de tiempo" });
+      }
+      const esperada = crypto.createHmac("sha256", secreto).update(`${ts}.${cuerpo}`).digest("hex");
+      const a = Buffer.from(firma, "utf8");
+      const b = Buffer.from(esperada, "utf8");
+      if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+        return res.status(401).json({ error: "Firma inválida" });
+      }
+
+      const datos = (req.body?.data ?? {}) as Record<string, unknown>;
+      const correlationId = String(
+        (datos.correlation_id as string) ?? (datos.metadata as any)?.correlation_id ?? "",
+      );
+      if (!correlationId) return res.status(422).json({ error: "Falta correlation_id" });
+
+      const r = await aplicarAvisoDeCentral(correlationId, String(req.body?.type ?? ""), datos);
+      // 200 aunque no se aplique: el emisor reintenta ante cualquier no-2xx, y
+      // un aviso que aquí no significa nada no se arregla reintentándolo.
+      res.json({ ok: true, ...r });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /* ── Destinos disponibles ──────────────────────────────────────────────── */
+  router.get("/destinos", requireSupervisorRole, async (req, res) => {
+    try {
+      res.json({ data: await listarDestinos(await tenantDe(req)) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /* ── Alta de destino (administración) ──────────────────────────────────── */
+  /*
+   * No recibe ninguna clave: solo el NOMBRE de la variable de entorno donde
+   * vive. Es lo que impide que una credencial pase por el navegador.
+   */
+  router.post("/destinos", requireSupervisorRole, async (req, res) => {
+    try {
+      const name = String(req.body?.name ?? "").trim();
+      const baseUrl = String(req.body?.baseUrl ?? "").trim();
+      const secretName = String(req.body?.secretName ?? "").trim();
+      if (!name || !baseUrl || !secretName) {
+        return res.status(422).json({ error: "Nombre, URL y nombre del secreto son obligatorios" });
+      }
+      if (!/^https:\/\//i.test(baseUrl) && !/^http:\/\/localhost/i.test(baseUrl)) {
+        return res.status(422).json({ error: "La URL debe ser https (o localhost en desarrollo)" });
+      }
+      const now = Date.now();
+      const r = await db.query(
+        `INSERT INTO external_destinations
+           (uuid, name, kind, "baseUrl", "secretName", "destinationTenantLabel",
+            "ownerTenantId", notes, "createdAtMs", "updatedAtMs")
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING id`,
+        [
+          crypto.randomUUID(), name,
+          req.body?.kind === "external" ? "external" : "central",
+          baseUrl.replace(/\/+$/, ""), secretName,
+          req.body?.plataforma ? String(req.body.plataforma).trim() : null,
+          await tenantDe(req),
+          req.body?.notes ? String(req.body.notes).trim() : null,
+          now,
+        ],
+      );
+      res.status(201).json({ id: Number(r.rows[0].id) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /* ── Subcontratar una asistencia ───────────────────────────────────────── */
+  router.post("/asistencias/:id/subcontratar", requireSupervisorRole, async (req, res) => {
+    try {
+      const destinationId = Number(req.body?.destinationId);
+      if (!Number.isInteger(destinationId) || destinationId <= 0) {
+        return res.status(422).json({ error: "Indica la plataforma de destino" });
+      }
+      const despacho = await subcontratarEnCentral({
+        assistanceId: Number(req.params.id),
+        destinationId,
+        tenantId: await tenantDe(req),
+        referenciaCliente: req.body?.referenciaCliente ?? null,
+        limiteAutorizado: req.body?.limiteAutorizado ?? null,
+        incluirObservaciones: Boolean(req.body?.incluirObservaciones),
+      });
+      res.status(201).json(despacho);
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.get("/asistencias/:id/despachos", requireSupervisorRole, async (req, res) => {
+    try {
+      res.json({ data: await listarDespachosDeAsistencia(Number(req.params.id)) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /* ── Reintento manual ──────────────────────────────────────────────────── */
+  router.post("/despachos/:id/reintentar", requireSupervisorRole, async (req, res) => {
+    try {
+      const d = await intentarEnvio(Number(req.params.id));
+      res.json({
+        id: Number(d.id),
+        status: d.status,
+        lastError: d.lastError ?? null,
+        retryCount: Number(d.retryCount ?? 0),
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  return router;
+}
