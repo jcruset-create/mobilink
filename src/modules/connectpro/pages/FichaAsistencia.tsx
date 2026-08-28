@@ -22,6 +22,10 @@ type Detail = {
   expedientNumber: string | null; externalReference: string | null; clientName: string | null;
   partnerName: string | null; workshopName: string | null; workshopPhone: string | null;
   providerName: string | null; coreStatus: string | null;
+  workshopEmergencyPhone: string | null; workshopEmail: string | null;
+  billingClientName: string | null;
+  contactName: string | null; contactSurname: string | null;
+  contactPhone: string | null; contactMobile: string | null; contactEmail: string | null;
   customerName: string; customerPhone: string; requester: string; locationDetails: string;
   address: string; latitude: number | null; longitude: number | null;
   vehicle: string; description: string | null; origin: string; createdByName: string | null;
@@ -169,7 +173,20 @@ export default function FichaAsistencia() {
               .filter(Boolean).join(" · ") || "—"}
           </b></span>
           <span>Proveedor: <b className="text-slate-200">{a.providerName ?? "—"}</b></span>
-          <span>Taller: <b className="text-slate-200">{a.workshopName ?? "—"}</b></span>
+          <span>Taller: <b className="text-slate-200">
+            {[a.workshopName, a.workshopPhone].filter(Boolean).join(" · ") || "—"}
+          </b></span>
+          {/* Con quién se habla en ese taller: sin esto había que ir a buscarlo
+              a la ficha, y en una asistencia en curso no da tiempo. */}
+          {a.contactName && (
+            <span>Contacto: <b className="text-slate-200">
+              {[[a.contactName, a.contactSurname].filter(Boolean).join(" "),
+                a.contactPhone ?? a.contactMobile, a.contactEmail].filter(Boolean).join(" · ")}
+            </b></span>
+          )}
+          {a.billingClientName && a.billingClientName !== a.clientName && (
+            <span>Se factura a: <b className="text-amber-300">{a.billingClientName}</b></span>
+          )}
           <span>Operario: <b className="text-slate-200">{a.assignedTechName ?? "—"}</b></span>
           <span>Furgoneta: <b className="text-slate-200">
             {[a.assignedVehicleName, a.assignedVehiclePlate].filter(Boolean).join(" · ") || "—"}
