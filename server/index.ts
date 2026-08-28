@@ -718,6 +718,8 @@ function normalizeRoadsideAssistanceRow(row: any) {
     solicitanteNombre: row.solicitanteNombre ?? null,
     solicitanteTelefono: row.solicitanteTelefono ?? null,
     solicitanteAutorizacion: row.solicitanteAutorizacion ?? null,
+    // Salida registrada por el vigilante de Webfleet, no por el tecnico
+    enCaminoAutomatico: row.enCaminoAutomatico === true,
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
     knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
@@ -6818,8 +6820,14 @@ app.post(
       }
 
       if (currentResult.rows[0].assignedTechName !== operator.techName) {
+        // Se dice a quién está asignada: en campo, un "no está asignada" a
+        // secas deja al técnico sin saber si es cosa suya, de la tablet o de
+        // que en oficina se la han pasado a otro.
+        const asignadaA = String(currentResult.rows[0].assignedTechName || "").trim();
         return res.status(403).json({
-          error: "Esta asistencia no esta asignada a este operario",
+          error: asignadaA
+            ? `Esta asistencia esta asignada a ${asignadaA}, no a ${operator.techName}`
+            : `Esta asistencia no tiene operario asignado (entraste como ${operator.techName})`,
         });
       }
 
@@ -17319,6 +17327,7 @@ async function activarEnCaminoAutomatico(
   const result = await db.query(
     `UPDATE roadside_assistances
      SET status = 'en_camino',
+         "enCaminoAutomatico" = true,
          "departedAtMs" = COALESCE("departedAtMs", $2),
          "etaMinutos" = COALESCE($3, "etaMinutos"),
          "etaKm" = COALESCE($4, "etaKm"),

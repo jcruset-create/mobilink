@@ -156,6 +156,15 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     }
   }
 
+  /// Hora de salida que registró el servidor, para poder decirle al técnico
+  /// desde cuándo consta en camino. Null si no viene informada.
+  String? _horaSalida() {
+    final ms = _a['departedAtMs'];
+    if (ms is! int) return null;
+    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
+    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
   Future<void> _goEnCamino() async {
     setState(() => _loading = true);
     try {
@@ -469,14 +478,24 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
                   const SizedBox(height: 24),
                   _section('Cambiar estado'),
                   const SizedBox(height: 10),
-                  _ActionButton(
-                    icon: Icons.directions_car_outlined,
-                    label: 'Estoy en camino',
-                    color: AppColors.statusEnCamino,
-                    enabled: _canGoEnCamino,
-                    fullWidth: true,
-                    onPressed: _goEnCamino,
-                  ),
+                  // Si la salida ya está registrada, el botón no pinta nada:
+                  // en su lugar queda constancia de quién la registró. Dejarlo
+                  // ahí, gris y sin explicación, es lo que desconcertaba al
+                  // técnico cuando el vigilante se le adelantaba.
+                  if (_status == 'en_camino')
+                    _SalidaRegistrada(
+                      hora: _horaSalida(),
+                      automatica: _a['enCaminoAutomatico'] == true,
+                    )
+                  else
+                    _ActionButton(
+                      icon: Icons.directions_car_outlined,
+                      label: 'Estoy en camino',
+                      color: AppColors.statusEnCamino,
+                      enabled: _canGoEnCamino,
+                      fullWidth: true,
+                      onPressed: _goEnCamino,
+                    ),
                   const SizedBox(height: 10),
                   _ActionButton(
                     icon: Icons.location_on_outlined,
@@ -653,6 +672,60 @@ class _InfoCard extends StatelessWidget {
 
   String _statusLabel(String s) => statusLabel(s);
   Color  _statusColor(String s) => statusColor(s);
+}
+
+/// Sustituye al botón «Estoy en camino» cuando la salida ya está registrada.
+/// Distingue quién la registró: si fue el vigilante de Webfleet al ver que la
+/// furgoneta dejaba el taller, se dice, para no atribuirle al técnico una
+/// pulsación que no hizo.
+class _SalidaRegistrada extends StatelessWidget {
+  final String? hora;
+  final bool automatica;
+
+  const _SalidaRegistrada({required this.hora, required this.automatica});
+
+  @override
+  Widget build(BuildContext context) {
+    final desde = hora == null ? '' : ' desde las $hora';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.statusEnCamino.withValues(alpha: 0.15),
+        border: Border.all(color: AppColors.statusEnCamino.withValues(alpha: 0.5)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.check_circle_outline, color: AppColors.statusEnCamino, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'En camino$desde',
+                  style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (automatica)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Text(
+                      'Registrado solo al salir la furgoneta del taller',
+                      style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _ActionButton extends StatelessWidget {

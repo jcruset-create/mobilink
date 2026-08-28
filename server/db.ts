@@ -340,6 +340,12 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "autoEnCaminoArmada" BOOLEAN NOT NULL DEFAULT false;
 
+    -- Quien registro la salida: true si la puso el vigilante de Webfleet en
+    -- lugar del tecnico. La APK lo necesita para no atribuirle al tecnico una
+    -- pulsacion que no hizo (ni al reves).
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "enCaminoAutomatico" BOOLEAN NOT NULL DEFAULT false;
+
     -- Hora de inicio del estado "en camino a taller" (el resto de estados ya
     -- tienen su marca de tiempo propia)
     ALTER TABLE roadside_assistances
