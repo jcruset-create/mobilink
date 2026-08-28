@@ -20,6 +20,8 @@ import crypto from "node:crypto";
 import db from "../db.ts";
 import { exigirDestinoUtilizable, resolverSecreto } from "./destinosServicio.ts";
 import { sanearError } from "./destinos.ts";
+import { registrarEvento } from "../eventlog/servicio.ts";
+import { tipoDesdeEventoCable } from "../eventlog/tipos.ts";
 import {
   esFinal,
   esEvento,
@@ -44,6 +46,15 @@ const TIEMPO_MAXIMO_MS = 15_000;
 
 /** Espera entre reintentos: creciente, con techo de una hora. */
 const ESPERAS_MS = [30_000, 120_000, 600_000, 1_800_000, 3_600_000];
+
+/**
+ * Anotar en el diario no puede tumbar un envío. `registrarEvento` ya traga sus
+ * errores; este envoltorio existe para que se lea de un vistazo que aquí NO se
+ * espera un resultado y que el flujo sigue pase lo que pase.
+ */
+async function anotarDiario(a: Parameters<typeof registrarEvento>[0]) {
+  await registrarEvento(a).catch(() => false);
+}
 
 export class ErrorDespacho extends Error {
   codigo: string;
@@ -224,6 +235,12 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
   let despacho = ins.rows[0];
 
   await registrarEvento(despacho.id, "REQUESTED", null, "out", now);
+  await anotarDiario({
+    system: "assist", tenantId: p.tenantId, assistanceId: p.assistanceId,
+    correlationId, eventType: "EXTERNAL_DISPATCH_CREATED",
+    payload: { destino: destino.name, plataforma: destino.destinationTenantLabel },
+    dedupeKey: `disp-creado-${despacho.id}`,
+  });
   await db.query(
     `UPDATE roadside_assistances SET "despachoExternoId" = $2 WHERE id = $1`,
     [p.assistanceId, despacho.id],
@@ -314,6 +331,14 @@ export async function intentarEnvio(dispatchId: number) {
       );
     }
 
+    await anotarDiario({
+      system: "assist", tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
+      correlationId: d.correlationId, eventType: "EXTERNAL_DISPATCH_SENT",
+      occurredAtMs: cuando,
+      payload: { destino: d.destinoNombre, expedienteDestino: datos.externalReference },
+      dedupeKey: `disp-enviado-${dispatchId}`,
+    });
+
     // El destino ya la tiene: eso ES un evento, aunque todavía no haya dicho
     // si la acepta.
     await aplicarEvento(dispatchId, "RECEIVED", datos.status, cuando);
@@ -339,7 +364,17 @@ async function marcarError(dispatchId: number, motivo: string, cuerpo?: unknown)
      cuerpo != null ? JSON.stringify(cuerpo).slice(0, 8000) : null, now],
   );
   console.error(`[Dispatch] envío ${dispatchId} falló: ${motivo}`);
-  return (await db.query(`SELECT * FROM external_dispatches WHERE id = $1`, [dispatchId])).rows[0];
+  const fila = (await db.query(`SELECT * FROM external_dispatches WHERE id = $1`, [dispatchId])).rows[0];
+  await anotarDiario({
+    system: "assist", tenantId: fila?.sourceTenantId, assistanceId: fila?.sourceAssistanceId,
+    correlationId: fila?.correlationId, eventType: "SYNC_FAILED",
+    occurredAtMs: now,
+    payload: { motivo: sanearError(motivo), intento: Number(fila?.retryCount ?? 0) },
+    // Un intento fallido por intento: sin el número, dos fallos seguidos se
+    // deduplicarían en uno y no se vería que lleva días sin salir.
+    dedupeKey: `disp-fallo-${dispatchId}-${fila?.retryCount ?? 0}`,
+  });
+  return fila;
 }
 
 /**
@@ -402,6 +437,32 @@ export async function aplicarEvento(
   await db.query(`UPDATE external_dispatches SET ${sets.join(", ")} WHERE id = $1`, params);
 
   await registrarEvento(dispatchId, evento, estadoRemoto, "in", cuandoMs);
+
+  /*
+   * Y al diario, traducido al vocabulario interno. La clave de deduplicación
+   * lleva el tipo pero NO la hora: un webhook se entrega al menos una vez, y
+   * el mismo hecho reenviado no puede pintar dos líneas en la timeline.
+   */
+  const tipo = tipoDesdeEventoCable(evento);
+  if (tipo) {
+    await anotarDiario({
+      system: "assist", tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
+      correlationId: d.correlationId, eventType: tipo,
+      originSystem: d.destinationSystem, occurredAtMs: cuandoMs,
+      actorType: "partner",
+      payload: { remoteStatus: estadoRemoto },
+      dedupeKey: `disp-${dispatchId}-${tipo}`,
+    });
+  }
+  // Si venía de un fallo y ahora sí ha entrado algo, la integración se ha
+  // recuperado: hace falta para poder cerrar el aviso en la bandeja.
+  if (d.status === "ERROR") {
+    await anotarDiario({
+      system: "assist", tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
+      correlationId: d.correlationId, eventType: "SYNC_RECOVERED",
+      occurredAtMs: cuandoMs, dedupeKey: `disp-recuperado-${dispatchId}-${cuandoMs}`,
+    });
+  }
 
   const estadoAssist = estadoAssistDesdeEvento(evento);
   if (estadoAssist && d.sourceSystem === "assist") {

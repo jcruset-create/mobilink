@@ -36,6 +36,9 @@ import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
+import { initEventLog } from "./eventlog/schema.ts";
+import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./eventlog/servicio.ts";
+import { tipoDesdeEstadoAssist } from "./eventlog/tipos.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
@@ -4826,6 +4829,28 @@ app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req
 });
 
 // Contexto del usuario del panel para pintar (o no) el selector de taller.
+/**
+ * La timeline de una asistencia, construida DESDE los eventos.
+ *
+ * No hay ninguna lista de hitos guardada en paralelo, y es deliberado: dos
+ * fuentes para lo mismo se desincronizan y nadie sabe cuál mirar.
+ */
+app.get("/api/roadside-assistances/:id/timeline", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(422).json({ error: "Id inválido" });
+    const data = await timelineDe("assist", id, {
+      incluirTecnicos: req.query.tecnicos === "true",
+      // La cadena completa trae también lo que anotó la plataforma de destino.
+      cadenaCompleta: req.query.cadena === "true",
+    });
+    res.json({ data });
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/:id/timeline error:", error);
+    res.status(500).json({ error: "Error obteniendo la timeline" });
+  }
+});
+
 app.get("/api/roadside-assistances/mi-contexto", async (req, res) => {
   try {
     const panelUser = await getAssistPanelUser(req);
@@ -7277,6 +7302,27 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
 
     const assistance = normalizeRoadsideAssistanceRow(result.rows[0]);
 
+    /*
+     * Primera línea del diario. Va aquí y no dentro del INSERT porque anotar
+     * no puede tumbar un alta: `registrarEventoAsistencia` traga sus errores.
+     */
+    void registrarEventoAsistencia({
+      system: "assist",
+      tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+      assistanceId: assistance.id,
+      eventType: "ASSISTANCE_CREATED",
+      actorType: "user",
+      actorName: (req as any).authCtx?.nombre ?? null,
+      occurredAtMs: now,
+      payload: {
+        matricula: assistance.plate || null,
+        cliente: assistance.customerName || null,
+        prioridad: assistance.priority,
+        origen: body.redirectedFromId ? "redireccion" : "manual",
+      },
+      dedupeKey: `assist-creada-${assistance.id}`,
+    });
+
     // Si en la creación se rellenó el Back Office, copiarlo a la nueva asistencia
     if (backofficeHasData(body.backoffice)) {
       try {
@@ -7657,6 +7703,27 @@ app.post(
 
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
+      /*
+       * Diario. Después de contestar: la timeline es importante pero no tanto
+       * como que el operario vea el cambio de estado sin esperar a un INSERT.
+       *
+       * La clave de deduplicación lleva la hora, así que un ida y vuelta entre
+       * dos estados deja las dos líneas — que es lo correcto: pasó de verdad.
+       */
+      const tipoDiario = tipoDesdeEstadoAssist(status);
+      if (tipoDiario) {
+        void registrarEventoAsistencia({
+          system: "assist",
+          tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+          assistanceId: id,
+          eventType: tipoDiario,
+          actorType: "user",
+          actorName: (req as any).authCtx?.nombre ?? null,
+          occurredAtMs: now,
+          payload: { estado: status, tecnico: updated.assignedTechName || null },
+          dedupeKey: `assist-estado-${id}-${status}-${now}`,
+        });
+      }
 
       // ── WhatsApp con deduplicación ─────────────────────────────────────────
       if (status === "asignada" && updated.customerPhone && !updated.whatsappAsignadaSentAtMs) {
@@ -18063,6 +18130,9 @@ initDb()
   .then(() => prepararEsquema("Licencias", initLicenses))
   .then(() => prepararEsquema("Connect Pro", initConnect))
   .then(() => prepararEsquema("Envíos externos", initDispatch))
+  // Después de Connect y de los envíos: su migración lee de las tablas de los
+  // dos para traerse el histórico que ya existía.
+  .then(() => prepararEsquema("Diario de asistencias", initEventLog))
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))

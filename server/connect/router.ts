@@ -14,6 +14,7 @@ import {
   InvalidTransitionError,
 } from "./service.ts";
 import { resolverSolicitante } from "./recepcionExterna.ts";
+import { registrarEvento } from "../eventlog/servicio.ts";
 
 function err(res: Response, status: number, code: string, message: string, details?: unknown) {
   return res.status(status).json({ error: { code, message, ...(details ? { details } : {}) } });
@@ -141,6 +142,24 @@ export function createConnectRouter(): Router {
             resuelta?.clientId ?? null,
           ],
         );
+        /*
+         * Deduplicada por el uuid de la asistencia: si el partner reenvía y la
+         * idempotencia devuelve la misma, no se anota dos veces la recepción.
+         */
+        await registrarEvento({
+          system: "central", tenantId: centro, assistanceId: row.id,
+          correlationId: meta.correlation_id ? String(meta.correlation_id) : null,
+          eventType: "EXTERNAL_ASSISTANCE_RECEIVED",
+          originSystem: meta.source_system ? String(meta.source_system) : "api",
+          actorType: "partner", actorName: auth.partnerName,
+          payload: {
+            expedienteOrigen: meta.source_reference ?? null,
+            expediente: row.expedientNumber ?? null,
+            empresaSolicitante: (meta.requester as any)?.company ?? null,
+          },
+          dedupeKey: `central-recibida-${row.uuid}`,
+        });
+
         if (resuelta?.creada || resuelta?.relacionCreada) {
           console.log(
             `[Connect] asistencia externa ${row.uuid}: empresa ${resuelta.companyId} ` +
