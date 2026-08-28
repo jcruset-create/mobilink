@@ -69,6 +69,13 @@
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
     <queries>
+        <!-- Android 11 o superior esconde las apps que no se declaran aqui.
+             Sin esto la camara del sistema es INVISIBLE para nosotros:
+             image_picker busca quien atiende la peticion, no encuentra a
+             nadie y la foto no se hace, sin error y sin abrir nada. -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
         <!-- url_launcher: abrir la navegación y llamar por teléfono. Sin esto,
              canLaunchUrl devuelve false en Android 11 o superior. -->
         <intent>
