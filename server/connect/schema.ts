@@ -14,6 +14,7 @@ import db from "../db.ts";
 import { seedNetworkWorkshops } from "./seedWorkshops.ts";
 import { initPricing } from "./pricing/schema.ts";
 import { initEmpresas } from "./empresasSchema.ts";
+import { initEventLog } from "../eventlog/schema.ts";
 
 /**
  * Identificador del cerrojo de arranque. Cualquier número sirve mientras sea
@@ -1151,6 +1152,13 @@ async function crearEsquemaConnect(): Promise<void> {
   // connect_control_centers y a connect_provider_companies, y su backfill
   // necesita que las dos existan ya con sus datos.
   await initEmpresas();
+  /*
+   * El diario va aquí y no solo en el arranque del servidor porque `transition`
+   * escribe en él DENTRO de su transacción: Connect ya no funciona sin esa
+   * tabla, así que quien inicializa Connect tiene que asegurarla. Es idempotente
+   * y su migración se salta las tablas que todavía no existan.
+   */
+  await initEventLog();
 
   await seedConnectDefaults();
   // El catálogo de talleres depende de red (geocodificación): si falla, se

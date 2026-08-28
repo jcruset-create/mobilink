@@ -68,12 +68,14 @@ describe.skipIf(!RUN)("Integración Assist → Central", () => {
     const { initDb } = await import("../db.ts");
     const { initConnect } = await import("../connect/schema.ts");
     const { initDispatch } = await import("./schema.ts");
+    const { initEventLog } = await import("../eventlog/schema.ts");
     const { createConnectRouter } = await import("../connect/router.ts");
     const { sha256 } = await import("../connect/auth.ts");
 
     await initDb();
     await initConnect();
     await initDispatch();
+    await initEventLog();
 
     // ── La plataforma de destino: una central con su partner y su API key ──
     const cc = await db.query(
@@ -213,7 +215,7 @@ describe.skipIf(!RUN)("Integración Assist → Central", () => {
     const b = await enviar();
     expect(a.status).toBe(201);
     expect(b.status).toBe(200);          // 200, no 201: es la misma, no una nueva
-    expect((await a.json()).id).toBe((await b.json()).id);
+    expect(((await a.json()) as any).id).toBe(((await b.json()) as any).id);
 
     const n = await db.query(
       `SELECT COUNT(*)::int AS n FROM connect_assistances

@@ -344,7 +344,7 @@ export async function probarConexion(
     const duracion = Date.now() - inicio;
 
     if (res.status === 401 || res.status === 403) {
-      const cuerpo = await res.json().catch(() => null);
+      const cuerpo = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
       const motivo = sanearError(
         cuerpo?.error?.message ?? `El destino rechazó la credencial (${res.status})`,
         [secreto],
