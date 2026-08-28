@@ -18,6 +18,7 @@ import { initConnect } from "./schema.ts";
 import { createConnectRouter, createConnectAdminRouter } from "./router.ts";
 import { createConnectBackofficeRouter } from "./backoffice.ts";
 import { createConnectLiteRouter } from "./lite.ts";
+import { createEmpresasRouter } from "./empresasRouter.ts";
 import { startConnectWorker, stopConnectWorker, runConnectChecksOnce } from "./worker.ts";
 
 export { initConnect, startConnectWorker, stopConnectWorker, runConnectChecksOnce };
@@ -26,6 +27,13 @@ export { initConnect, startConnectWorker, stopConnectWorker, runConnectChecksOnc
 export function mountConnect(app: Express, requireAdmin: RequestHandler): void {
   app.use("/api/connect/v1", createConnectRouter());
   app.use("/api/connect/admin", createConnectAdminRouter(requireAdmin));
+  // Antes del backoffice: es una ruta más específica del mismo prefijo y
+  // Express resuelve por orden de montaje.
+  //
+  // La cartera de empresas va aparte a propósito: es el único módulo donde
+  // CADA consulta pasa por la relación comercial, y mezclarlo con los 4.700
+  // renglones de backoffice.ts haría imposible comprobarlo de un vistazo.
+  app.use("/api/connect/bo/empresas", createEmpresasRouter());
   app.use("/api/connect/bo", createConnectBackofficeRouter());
   app.use("/api/connect/lite", createConnectLiteRouter());
   console.log(
