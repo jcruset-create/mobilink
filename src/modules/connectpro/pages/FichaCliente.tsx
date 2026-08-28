@@ -13,15 +13,10 @@ import { boFetch } from "../services/api";
 import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Badge, Button, ErrorBanner } from "../components/ui";
 import { Campo } from "../components/CampoFicha";
+import ContactosFicha from "../components/ContactosFicha";
 import type { Client } from "./Clientes";
 
-type Contacto = {
-  id: number; name: string; surname: string | null; role: string | null;
-  phone: string | null; mobile: string | null; email: string | null;
-  isPrimary: boolean; active: boolean;
-};
-
-type Ficha = { client: Client; contacts: Contacto[] };
+type Ficha = { client: Client };
 
 /** Campos que se editan como texto cuando se abre la ficha entera. */
 const CAMPOS_FICHA = [
@@ -144,28 +139,7 @@ export default function FichaCliente() {
           </div>
         </Card>
 
-        <Card className="p-4">
-          <h3 className="mb-3 text-sm font-semibold text-cyan-300">Contactos</h3>
-          {f.contacts.length === 0 ? (
-            <p className="text-[13px] text-slate-500">
-              Sin contactos. Se podrán añadir desde aquí cuando esté la gestión de
-              contactos compartida entre proveedor, taller y cliente.
-            </p>
-          ) : (
-            <ul className="space-y-2 text-[13px]">
-              {f.contacts.map((k) => (
-                <li key={k.id} className="border-b border-slate-700/40 pb-1.5">
-                  <span className="font-semibold text-slate-100">{[k.name, k.surname].filter(Boolean).join(" ")}</span>
-                  {k.isPrimary && <Badge className="ml-2 border-cyan-500/40 bg-cyan-500/10 text-cyan-300">Principal</Badge>}
-                  {k.role && <span className="ml-2 text-slate-500">{k.role}</span>}
-                  <div className="text-slate-400">
-                    {[k.phone, k.mobile, k.email].filter(Boolean).join(" · ") || "—"}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+        <ContactosFicha ownerType="client" ownerId={Number(id)} canEdit={canEdit} />
       </div>
     </div>
   );
