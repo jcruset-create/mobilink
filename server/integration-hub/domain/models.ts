@@ -9,6 +9,56 @@
 export type Currency = "EUR" | "USD" | "GBP" | string;
 
 /** Cliente normalizado. */
+/**
+ * Proveedor normalizado, en el mismo formato para cualquier ERP. Es el espejo
+ * de MobilinkCustomer por el lado del acreedor: lo que subcontratamos.
+ */
+export interface MobilinkProvider {
+  /** Id del proveedor en Mobilink (connect_provider_companies.id). */
+  providerId?: string;
+  /** Id en el sistema externo (nº de acreedor del ERP). */
+  externalId?: string;
+  name: string;
+  legalName?: string;
+  taxId?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  province?: string;
+  postalCode?: string;
+  country?: string;
+  paymentTerms?: string;
+  paymentMethod?: string;
+}
+
+/** Asistencia empujada al ERP: lo mínimo para que allí exista el servicio. */
+export interface MobilinkAssistancePush {
+  assistanceId: string;
+  reference?: string;
+  serviceType: string;
+  description?: string;
+  plate?: string;
+  /** Cliente al que se factura, ya mapeado si se conoce. */
+  billingCustomer?: MobilinkCustomer;
+  /** Proveedor que ejecutó el servicio. */
+  provider?: MobilinkProvider;
+  occurredAtMs: number;
+  finishedAtMs?: number;
+}
+
+/** Datos económicos de una asistencia para facturación en el ERP. */
+export interface MobilinkBillingPush {
+  assistanceId: string;
+  reference?: string;
+  billingCustomer?: MobilinkCustomer;
+  currency: string;
+  /** Coste del proveedor y venta al cliente, en la moneda indicada. */
+  providerCost?: number;
+  salePrice?: number;
+  lines?: Array<{ code?: string; description: string; quantity: number; unitPrice: number }>;
+}
+
 export interface MobilinkCustomer {
   /** Id del cliente en Mobilink (si ya existe mapeado). */
   customerId?: string;
