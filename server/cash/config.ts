@@ -20,6 +20,7 @@ import { ErrorCaja, sesionAbierta } from "./repository.ts";
 import { nombreDeCentro } from "./hierarchy.ts";
 import { entidadDeIban, ibanValido, normalizarIban } from "./domain/bankaccount.ts";
 import { BANCOS_SEMILLA, logoDeSemilla } from "./domain/banks.ts";
+import type { CampoRegla } from "./invoice-scan/classifier.ts";
 import {
   CODIGO_MAX,
   codigoValido,
@@ -1537,4 +1538,296 @@ export async function bancoDeIban(empresaId: string, iban: string): Promise<numb
     [empresaId, entidad]
   );
   return rows[0]?.id ?? null;
+}
+
+// ── Reglas del escáner de facturas ─────────────────────────────────────────
+
+/**
+ * Qué TPV es de quién.
+ *
+ * El escáner lee el resguardo del datáfono y saca de él datos objetivos
+ * —número de comercio, terminal, adquirente—. Traducir eso a una forma de
+ * cobro de ESTA empresa no lo puede saber un modelo: depende del contrato que
+ * el taller tenga con cada proveedor. Por eso se configura aquí.
+ *
+ * La regla mira un CAMPO concreto, no el texto suelto del recibo, y hay un
+ * motivo real: en una factura de este taller cobrada por un TPV de BBVA, el
+ * resguardo imprime «LBL : Visa CaixaBank», que es el producto de la tarjeta
+ * del cliente. Con una regla de texto, ese cobro se clasificaría como
+ * CaixaBank. Con una de número de comercio, no.
+ */
+export type ReglaPagoConfig = {
+  id: number;
+  campo: CampoRegla;
+  patron: string;
+  formaPago: string;
+  /** Nombre de la forma, para la pantalla. Vacío si ya no está en el catálogo. */
+  formaPagoNombre: string;
+  confianza: number;
+  autoSeleccionar: boolean;
+  prioridad: number;
+  activa: boolean;
+  notas: string;
+};
+
+const CAMPOS_REGLA: readonly CampoRegla[] = [
+  "ADQUIRENTE",
+  "COMERCIO",
+  "TERMINAL",
+  "RED",
+  "CUENTA",
+  "PLANTILLA",
+  "TEXTO",
+];
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function aRegla(r: any): ReglaPagoConfig {
+  return {
+    id: r.id,
+    campo: r.campo,
+    patron: r.patron,
+    formaPago: r.forma_pago,
+    formaPagoNombre: r.forma_nombre ?? "",
+    // NUMERIC llega como texto: pasarlo por Number aquí y no antes.
+    confianza: Number(r.confianza),
+    autoSeleccionar: r.auto_seleccionar,
+    prioridad: r.prioridad,
+    activa: r.activa,
+    notas: r.notas ?? "",
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * La única regla que se puede dar por buena de fábrica.
+ *
+ * «Comercia Global Payments» es el adquirente que imprime en su ticket el TPV
+ * de CaixaBank, y eso no depende de qué taller sea. Lo demás —qué comercio es
+ * de ClearOne, qué terminal es de Stripe— es del contrato de cada empresa y lo
+ * tiene que configurar quien lo sepa.
+ *
+ * Se siembra solo si la empresa tiene esa forma de cobro en su catálogo, y
+ * nunca pisa una regla ya existente.
+ */
+async function asegurarReglas(empresaId: string): Promise<void> {
+  const ahora = Date.now();
+  await pool.query(
+    `INSERT INTO cash_payment_rules
+       (empresa_id, campo, patron, forma_pago, confianza, auto_seleccionar, prioridad,
+        notas, created_at_ms, updated_at_ms)
+     SELECT $1, 'ADQUIRENTE', 'Comercia Global Payments', 'CAIXABANK_CARD', 0.98, true, 100,
+            'El adquirente que imprime el TPV de CaixaBank en su ticket.', $2, $2
+      WHERE EXISTS (
+        SELECT 1 FROM cash_payment_methods
+         WHERE empresa_id = $1 AND codigo = 'CAIXABANK_CARD' AND activa
+      )
+     ON CONFLICT (empresa_id, campo, patron) DO NOTHING`,
+    [empresaId, ahora]
+  );
+}
+
+export async function listarReglasPago(empresaId: string): Promise<ReglaPagoConfig[]> {
+  await asegurarReglas(empresaId);
+  const { rows } = await pool.query(
+    `SELECT r.*, m.nombre AS forma_nombre
+       FROM cash_payment_rules r
+       LEFT JOIN cash_payment_methods m
+              ON m.empresa_id = r.empresa_id AND m.codigo = r.forma_pago
+      WHERE r.empresa_id = $1
+      ORDER BY r.activa DESC, r.prioridad, r.id`,
+    [empresaId]
+  );
+  return rows.map(aRegla);
+}
+
+function exigirCampo(valor: unknown): CampoRegla {
+  if (typeof valor !== "string" || !CAMPOS_REGLA.includes(valor as CampoRegla)) {
+    throw new ErrorCaja(
+      "ENTRADA_NO_VALIDA",
+      `El campo tiene que ser uno de: ${CAMPOS_REGLA.join(", ")}.`,
+      400
+    );
+  }
+  return valor as CampoRegla;
+}
+
+function exigirConfianza(valor: unknown): number {
+  const n = typeof valor === "number" ? valor : Number(valor);
+  if (!Number.isFinite(n) || n < 0 || n > 1) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "La confianza va de 0 a 1.", 400);
+  }
+  // Dos decimales, que es lo que guarda la columna: redondear aquí evita que
+  // lo guardado y lo enseñado difieran.
+  return Math.round(n * 100) / 100;
+}
+
+/** Que la forma exista en el catálogo AHORA: una regla a un código muerto no sirve. */
+async function exigirFormaDelCatalogo(empresaId: string, codigo: unknown): Promise<string> {
+  if (typeof codigo !== "string" || !codigo.trim()) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "Falta la forma de cobro.", 400);
+  }
+  const { rows } = await pool.query(
+    `SELECT 1 FROM cash_payment_methods WHERE empresa_id = $1 AND codigo = $2 AND activa`,
+    [empresaId, codigo.trim().toUpperCase()]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja(
+      "FORMA_NO_ENCONTRADA",
+      "Esa forma de cobro no está en el catálogo de la empresa.",
+      404
+    );
+  }
+  return codigo.trim().toUpperCase();
+}
+
+export async function crearReglaPago(
+  ctx: Contexto,
+  datos: {
+    campo: unknown;
+    patron: unknown;
+    formaPago: unknown;
+    confianza?: unknown;
+    autoSeleccionar?: boolean;
+    prioridad?: number;
+    notas?: string;
+  }
+): Promise<ReglaPagoConfig> {
+  const campo = exigirCampo(datos.campo);
+  const patron = typeof datos.patron === "string" ? datos.patron.trim() : "";
+  if (patron.length < 2) {
+    throw new ErrorCaja(
+      "ENTRADA_NO_VALIDA",
+      "El patrón tiene que tener al menos dos caracteres: uno solo casaría con casi todo.",
+      400
+    );
+  }
+  const formaPago = await exigirFormaDelCatalogo(ctx.empresaId, datos.formaPago);
+  const ahora = Date.now();
+
+  const { rows } = await pool.query(
+    `INSERT INTO cash_payment_rules
+       (empresa_id, campo, patron, forma_pago, confianza, auto_seleccionar, prioridad,
+        notas, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)
+     ON CONFLICT (empresa_id, campo, patron) DO NOTHING
+     RETURNING *`,
+    [
+      ctx.empresaId,
+      campo,
+      patron,
+      formaPago,
+      exigirConfianza(datos.confianza ?? 0.95),
+      datos.autoSeleccionar ?? true,
+      datos.prioridad ?? 100,
+      (datos.notas ?? "").slice(0, 500),
+      ahora,
+    ]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja(
+      "REGLA_REPETIDA",
+      "Ya hay una regla con ese mismo campo y ese mismo patrón.",
+      409
+    );
+  }
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.payment_rule.create",
+    entidad: "cash_payment_rules",
+    entidadId: String(rows[0].id),
+    detalle: { campo, patron, formaPago },
+    ip: ctx.ip,
+  });
+
+  return (await listarReglasPago(ctx.empresaId)).find((r) => r.id === rows[0].id)!;
+}
+
+export async function actualizarReglaPago(
+  ctx: Contexto,
+  id: number,
+  cambios: {
+    formaPago?: unknown;
+    confianza?: unknown;
+    autoSeleccionar?: boolean;
+    prioridad?: number;
+    activa?: boolean;
+    notas?: string;
+  }
+): Promise<ReglaPagoConfig> {
+  const { rows: previos } = await pool.query(
+    `SELECT * FROM cash_payment_rules WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  if (previos.length === 0) {
+    throw new ErrorCaja("REGLA_NO_ENCONTRADA", "Esa regla no existe.", 404);
+  }
+  const antes = previos[0];
+
+  const formaPago =
+    cambios.formaPago === undefined
+      ? antes.forma_pago
+      : await exigirFormaDelCatalogo(ctx.empresaId, cambios.formaPago);
+
+  const { rows } = await pool.query(
+    `UPDATE cash_payment_rules
+        SET forma_pago = $3, confianza = $4, auto_seleccionar = $5, prioridad = $6,
+            activa = $7, notas = $8, updated_at_ms = $9
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING id`,
+    [
+      id,
+      ctx.empresaId,
+      formaPago,
+      cambios.confianza === undefined ? Number(antes.confianza) : exigirConfianza(cambios.confianza),
+      cambios.autoSeleccionar ?? antes.auto_seleccionar,
+      cambios.prioridad ?? antes.prioridad,
+      cambios.activa ?? antes.activa,
+      (cambios.notas ?? antes.notas ?? "").slice(0, 500),
+      Date.now(),
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.payment_rule.update",
+    entidad: "cash_payment_rules",
+    entidadId: String(id),
+    detalle: {
+      antes: { formaPago: antes.forma_pago, activa: antes.activa },
+      despues: { formaPago, activa: cambios.activa ?? antes.activa },
+    },
+    ip: ctx.ip,
+  });
+
+  return (await listarReglasPago(ctx.empresaId)).find((r) => r.id === rows[0].id)!;
+}
+
+/**
+ * Borra una regla.
+ *
+ * Aquí sí se borra de verdad, al revés que en el catálogo de formas de pago:
+ * una regla no es un dato histórico de ningún cobro. Lo que decidió queda en
+ * el rastro del escaneo, con su id y su motivo escritos, así que borrarla no
+ * hace ilegible nada de lo pasado.
+ */
+export async function borrarReglaPago(ctx: Contexto, id: number): Promise<void> {
+  const { rowCount } = await pool.query(
+    `DELETE FROM cash_payment_rules WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  if (!rowCount) {
+    throw new ErrorCaja("REGLA_NO_ENCONTRADA", "Esa regla no existe.", 404);
+  }
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.payment_rule.delete",
+    entidad: "cash_payment_rules",
+    entidadId: String(id),
+    detalle: {},
+    ip: ctx.ip,
+  });
 }

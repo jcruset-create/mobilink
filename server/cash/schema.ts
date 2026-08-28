@@ -1289,6 +1289,106 @@ export async function initCash(): Promise<void> {
         REFERENCES cash_bank_accounts(id) ON DELETE RESTRICT;
   `);
 
+  /*
+   * Reglas del escáner de facturas: qué TPV es de quién.
+   *
+   * Miran CAMPOS del resguardo, no su texto suelto, y eso no es un detalle. En
+   * una factura real de este taller, cobrada por un TPV de BBVA, el resguardo
+   * imprime «LBL : Visa CaixaBank», que es el producto de la tarjeta DEL
+   * CLIENTE. Una regla de «si pone CaixaBank es CaixaBank» la clasificaría mal;
+   * el número de comercio, en cambio, identifica el datáfono y no miente.
+   *
+   * `forma_pago` es un código del catálogo de la empresa y NO lleva clave
+   * ajena: el catálogo es editable y una forma dada de baja no debe tumbar una
+   * regla ni al revés. El clasificador comprueba al leer que el código siga
+   * existiendo, y si no, se salta la regla y lo dice.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_payment_rules (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      campo TEXT NOT NULL
+        CHECK (campo IN ('ADQUIRENTE','COMERCIO','TERMINAL','RED','CUENTA','PLANTILLA','TEXTO')),
+      patron TEXT NOT NULL,
+      forma_pago TEXT NOT NULL,
+      /* 0..1. Es el techo de la propuesta: nunca sube por encima de esto. */
+      confianza NUMERIC(3,2) NOT NULL DEFAULT 0.95
+        CHECK (confianza >= 0 AND confianza <= 1),
+      /* Si además puede quedar marcada sola en la pantalla de cobros. */
+      auto_seleccionar BOOLEAN NOT NULL DEFAULT true,
+      prioridad INTEGER NOT NULL DEFAULT 100,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      notas TEXT,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, campo, patron)
+    );
+    CREATE INDEX IF NOT EXISTS cash_payment_rules_empresa_idx
+      ON cash_payment_rules(empresa_id, activa, prioridad);
+  `);
+
+  /*
+   * El rastro de cada escaneo.
+   *
+   * Se guarda lo que dijo el modelo, lo que se entendió, lo que se propuso y
+   * —cuando el cobro acaba registrándose— con qué se quedó la persona. Sirve
+   * para tres cosas que solo se pueden hacer si el dato está: investigar un
+   * cobro mal clasificado meses después, medir cuánto acierta el escáner y
+   * saber qué campos corrige siempre el mostrador, que es por dónde hay que
+   * mejorarlo.
+   *
+   * `operation_id` es NULL mientras el cobro no exista, y puede quedarse NULL
+   * para siempre: escanear no obliga a cobrar. Es justamente la prueba de que
+   * el escáner no confirma nada.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_invoice_scans (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      session_id INTEGER REFERENCES cash_sessions(id) ON DELETE SET NULL,
+      operation_id INTEGER REFERENCES cash_operations(id) ON DELETE SET NULL,
+
+      /* Del fichero: nombre, tipo, tamaño y huella. El fichero en sí se cuelga
+         del cobro por la vía de siempre, cuando el cobro existe. */
+      nombre TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      tamano_bytes BIGINT NOT NULL,
+      sha256 TEXT NOT NULL,
+
+      motor TEXT NOT NULL,
+      duracion_ms INTEGER NOT NULL DEFAULT 0,
+      /* Por qué no salió, cuando no sale. El escaneo que hay que investigar
+         meses después es justo el que falló, así que también deja rastro. */
+      error TEXT,
+      /* Lo que dijo el modelo y lo que se entendió, uno al lado del otro. */
+      extraccion_cruda JSONB,
+      extraccion_normalizada JSONB,
+
+      forma_pago_propuesta TEXT,
+      forma_pago_confianza NUMERIC(3,2),
+      forma_pago_motivo TEXT,
+      regla_id INTEGER,
+      auto_seleccionada BOOLEAN NOT NULL DEFAULT false,
+      avisos JSONB,
+
+      /* Se rellenan al confirmar el cobro, si se confirma. */
+      campos_corregidos JSONB,
+      forma_pago_final TEXT,
+      confirmado_at_ms BIGINT,
+
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cash_invoice_scans_empresa_idx
+      ON cash_invoice_scans(empresa_id, creado_at_ms DESC);
+    CREATE INDEX IF NOT EXISTS cash_invoice_scans_operacion_idx
+      ON cash_invoice_scans(operation_id) WHERE operation_id IS NOT NULL;
+    /* Añadida después de la tabla: un CREATE TABLE IF NOT EXISTS no toca una
+       tabla que ya existe, y sin esto el primer escaneo fallido después de
+       actualizar reventaría al escribir su rastro. */
+    ALTER TABLE cash_invoice_scans ADD COLUMN IF NOT EXISTS error TEXT;
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 

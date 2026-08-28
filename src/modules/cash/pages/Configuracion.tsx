@@ -37,6 +37,8 @@ import type {
   CuentaBancariaConfig,
   Denominacion,
   FormaPagoConfig,
+  ReglaPagoConfig,
+  CampoRegla,
   SeccionConfig,
 } from "../types";
 import * as api from "../services/api";
@@ -77,6 +79,7 @@ export default function Configuracion() {
       <CorreoCentral />
       <Secciones />
       <FormasPago />
+      <ReglasEscaner />
       {puede("cash.denominations.configure") ? <Denominaciones /> : <DenominacionesSoloLectura />}
     </div>
   );
@@ -1702,6 +1705,228 @@ function Bancos() {
     </section>
   );
 }
+
+// ── Reglas del escáner de facturas ─────────────────────────────────────────
+
+/**
+ * Qué TPV es de quién.
+ *
+ * El escáner lee el resguardo del datáfono y saca de él datos objetivos: el
+ * número de comercio, el terminal, el adquirente. Traducir eso a una forma de
+ * cobro depende del contrato de cada taller, así que se configura aquí y no
+ * viene decidido de fábrica.
+ *
+ * Lo importante de esta pantalla es que la regla mira UN CAMPO. En una factura
+ * real de este taller, cobrada por un TPV de BBVA, el resguardo imprime
+ * «LBL : Visa CaixaBank» —que es el producto de la tarjeta del cliente—. Con
+ * una regla sobre el texto entero, ese cobro se clasificaría como CaixaBank.
+ * Con una sobre el número de comercio, no.
+ */
+function ReglasEscaner() {
+  const { puede } = useCash();
+  const [reglas, setReglas] = useState<ReglaPagoConfig[]>([]);
+  const [formas, setFormas] = useState<FormaPagoConfig[]>([]);
+  const [campo, setCampo] = useState<CampoRegla>("COMERCIO");
+  const [patron, setPatron] = useState("");
+  const [formaPago, setFormaPago] = useState("");
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const editable = puede("cash.configure");
+
+  const cargar = useCallback(async () => {
+    try {
+      const [r, f] = await Promise.all([api.reglasPago(), api.listarFormasPago()]);
+      setReglas(r.reglas);
+      setFormas(f.formasPago.filter((x) => x.activa && x.enCobros));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando las reglas");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function accion(fn: () => Promise<unknown>) {
+    setOcupado(true);
+    setError("");
+    try {
+      await fn();
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "La acción ha fallado");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Reglas del escáner de facturas
+      </h2>
+      <p className="text-[12px] text-slate-500">
+        Cuando una factura escaneada trae dentro el resguardo del datáfono, estas reglas dicen de
+        qué TPV es. Miran <strong>un dato concreto</strong> del resguardo: el número de comercio y
+        el terminal son los que identifican el datáfono de verdad. Evita las de «texto», que casan
+        con cualquier palabra suelta —el resguardo de un TPV de BBVA puede llevar impreso
+        «Visa CaixaBank», que es la tarjeta del cliente y no el TPV—.
+      </p>
+      <p className="text-[12px] text-slate-500">
+        Sin regla que lo reconozca, el escáner no propone forma de cobro. Nunca supone efectivo por
+        no encontrar resguardo.
+      </p>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Mira</th>
+            <th className={thCls}>Cuando vale</th>
+            <th className={thCls}>Forma de cobro</th>
+            <th className={`${thCls} text-center`}>La marca sola</th>
+            <th className={`${thCls} text-right`}>Orden</th>
+            {editable && <th className={`${thCls} text-right`}>Acciones</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {reglas.length === 0 && (
+            <EmptyRow cols={editable ? 6 : 5} text="Todavía no hay reglas configuradas." />
+          )}
+          {reglas.map((r) => (
+            <tr key={r.id} className={r.activa ? "" : "opacity-60"}>
+              <td className={tdCls}>{ETIQUETA_CAMPO_REGLA[r.campo]}</td>
+              <td className={`${tdCls} font-mono text-[11px] text-slate-300`}>{r.patron}</td>
+              <td className={tdCls}>
+                {r.formaPagoNombre || (
+                  <span className="text-amber-300" title="Esa forma ya no está en el catálogo">
+                    {r.formaPago} (dada de baja)
+                  </span>
+                )}
+              </td>
+              <td className={`${tdCls} text-center`}>
+                {r.autoSeleccionar ? (
+                  <span className="text-emerald-300">sí</span>
+                ) : (
+                  <span className="text-slate-500">solo la propone</span>
+                )}
+              </td>
+              <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{r.prioridad}</td>
+              {editable && (
+                <td className={`${tdCls} text-right`}>
+                  <div className="flex justify-end gap-1">
+                    <button
+                      className={btnMini}
+                      disabled={ocupado}
+                      title={
+                        r.autoSeleccionar
+                          ? "Que solo la proponga, sin marcar el botón"
+                          : "Que marque el botón sola cuando esté segura"
+                      }
+                      onClick={() =>
+                        void accion(() =>
+                          api.actualizarReglaPago(r.id, { autoSeleccionar: !r.autoSeleccionar })
+                        )
+                      }
+                    >
+                      {r.autoSeleccionar ? "Solo proponer" : "Marcar sola"}
+                    </button>
+                    <button
+                      className={btnMini}
+                      disabled={ocupado}
+                      onClick={() => void accion(() => api.actualizarReglaPago(r.id, { activa: !r.activa }))}
+                    >
+                      {r.activa ? "Desactivar" : "Activar"}
+                    </button>
+                    <button
+                      className={btnMini}
+                      disabled={ocupado}
+                      onClick={() => void accion(() => api.borrarReglaPago(r.id))}
+                    >
+                      Borrar
+                    </button>
+                  </div>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+
+      {editable && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800/40 p-2">
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Mira</span>
+            <select
+              value={campo}
+              onChange={(e) => setCampo(e.target.value as CampoRegla)}
+              className={inputCls}
+            >
+              {(Object.keys(ETIQUETA_CAMPO_REGLA) as CampoRegla[]).map((c) => (
+                <option key={c} value={c}>
+                  {ETIQUETA_CAMPO_REGLA[c]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Cuando vale
+            </span>
+            <input
+              value={patron}
+              onChange={(e) => setPatron(e.target.value)}
+              className={inputCls}
+              placeholder="266179530"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Forma de cobro
+            </span>
+            <select
+              value={formaPago}
+              onChange={(e) => setFormaPago(e.target.value)}
+              className={inputCls}
+            >
+              <option value="">Elige…</option>
+              {formas.map((f) => (
+                <option key={f.codigo} value={f.codigo}>
+                  {f.nombre}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            disabled={ocupado || patron.trim().length < 2 || !formaPago}
+            onClick={() =>
+              void accion(async () => {
+                await api.crearReglaPago({ campo, patron: patron.trim(), formaPago });
+                setPatron("");
+              })
+            }
+            className="rounded-lg bg-sky-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-sky-500 disabled:opacity-50"
+          >
+            Añadir regla
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Cómo se llama cada campo en la pantalla. */
+const ETIQUETA_CAMPO_REGLA: Record<CampoRegla, string> = {
+  COMERCIO: "Número de comercio",
+  TERMINAL: "Terminal / TPV",
+  ADQUIRENTE: "Adquirente",
+  RED: "Red",
+  CUENTA: "Cuenta del resguardo",
+  PLANTILLA: "Tipo de resguardo",
+  TEXTO: "Texto del resguardo (poco fiable)",
+};
 
 // ── Correo de la central ───────────────────────────────────────────────────
 
