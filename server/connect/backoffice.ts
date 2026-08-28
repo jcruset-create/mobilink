@@ -209,6 +209,53 @@ const FOTOS_TALLER = ["fachada", "accesos", "interior", "otros"] as const;
  * como JSON, igual que `services`. Devuelve null cuando no viene nada, para
  * que el COALESCE de la consulta conserve lo que ya hubiera.
  */
+/**
+ * Congela cómo eran proveedor, taller y contacto en el momento del servicio.
+ *
+ * La asistencia sigue apuntando a las fichas vivas —para navegar y para los
+ * informes de hoy—, pero si mañana el taller cambia de email o de dirección,
+ * una asistencia de hace seis meses tiene que seguir contando con qué datos se
+ * gestionó. Se guarda como JSON en una sola columna para que la ficha pueda
+ * crecer sin ir añadiendo columnas espejo.
+ *
+ * Es best-effort a propósito: si falla, la asistencia NO se cae. Perder el
+ * snapshot es molesto; no poder dar de alta el servicio es mucho peor.
+ */
+async function guardarSnapshotPartes(assistanceId: number) {
+  try {
+    const r = await db.query(
+      `SELECT
+         pc.name AS "proveedorNombre", pc."legalName" AS "proveedorRazonSocial",
+         pc."taxId" AS "proveedorCif",
+         w.name AS "tallerNombre", w.address AS "tallerDireccion",
+         w."postalCode" AS "tallerCp", w.city AS "tallerPoblacion", w.province AS "tallerProvincia",
+         w.phone AS "tallerTelefono", w."emergencyPhone" AS "tallerUrgencias",
+         COALESCE(w."assistanceEmail", w.email) AS "tallerEmail",
+         c.name AS "contactoNombre", c.surname AS "contactoApellidos",
+         c.phone AS "contactoTelefono", c.mobile AS "contactoMovil", c.email AS "contactoEmail"
+       FROM connect_assistances a
+       LEFT JOIN connect_provider_companies pc ON pc.id = a."providerCompanyId"
+       LEFT JOIN connect_workshops w ON w.id = a."workshopId"
+       LEFT JOIN connect_workshop_contacts c ON c.id = a."contactId"
+       WHERE a.id = $1`,
+      [assistanceId],
+    );
+    const fila = r.rows[0];
+    if (!fila) return;
+    // Solo lo informado: un snapshot lleno de nulos no cuenta nada.
+    const datos = Object.fromEntries(Object.entries(fila).filter(([, v]) => v != null));
+    if (Object.keys(datos).length === 0) return;
+    await db.query(
+      `UPDATE connect_assistances
+          SET "partiesSnapshot" = $2, "partiesSnapshotAtMs" = $3
+        WHERE id = $1`,
+      [assistanceId, JSON.stringify(datos), Date.now()],
+    );
+  } catch (e: any) {
+    console.error("[Connect] snapshot de partes:", e?.message);
+  }
+}
+
 /** Fichas a las que puede colgarse un contacto. */
 const TIPOS_CONTACTO_OWNER = ["workshop", "provider", "client"] as const;
 
@@ -631,14 +678,35 @@ export function createConnectBackofficeRouter(): Router {
 
   // ── Empresas proveedoras ──────────────────────────────────
 
-  router.get("/providers", ...requireConnectRole("analyst"), async (_req, res) => {
+  /**
+   * Proveedores. Con `q` busca por lo que uno tiene a mano cuando llama un
+   * taller: nombre, razón social, CIF, población, provincia, teléfono… y
+   * también por el código con el que ese proveedor existe en el ERP, que es
+   * lo único que aparece en muchas facturas.
+   */
+  router.get("/providers", ...requireConnectRole("analyst"), async (req, res) => {
+    const q = String(req.query.q ?? "").trim();
     const r = await db.query(
       `SELECT pc.*,
               (SELECT COUNT(*)::int FROM connect_branches b WHERE b."providerCompanyId" = pc.id AND b."deletedAtMs" IS NULL) AS branches,
               (SELECT COUNT(*)::int FROM connect_workshops w WHERE w."providerCompanyId" = pc.id) AS workshops
          FROM connect_provider_companies pc
         WHERE pc."deletedAtMs" IS NULL
+          AND ($1 = '' OR pc.name ILIKE '%' || $1 || '%'
+                       OR pc."legalName" ILIKE '%' || $1 || '%'
+                       OR pc."commercialName" ILIKE '%' || $1 || '%'
+                       OR pc."taxId" ILIKE '%' || $1 || '%'
+                       OR pc.city ILIKE '%' || $1 || '%'
+                       OR pc.province ILIKE '%' || $1 || '%'
+                       OR pc."contactPhone" ILIKE '%' || $1 || '%'
+                       OR EXISTS (
+                            SELECT 1 FROM integration_mappings m
+                             WHERE m.entity_type = 'provider'
+                               AND m.mobilink_id = pc.id::text
+                               AND (m.external_code ILIKE '%' || $1 || '%'
+                                 OR COALESCE(m.external_id, '') ILIKE '%' || $1 || '%')))
         ORDER BY pc.name`,
+      [q],
     );
     res.json({ data: r.rows });
   });
@@ -2188,7 +2256,15 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       // La trazabilidad de connect_assistances manda; el core solo rellena
       // los huecos de las asistencias antiguas, anteriores a esas columnas.
       `SELECT ca.*, p.name AS "partnerName", w.name AS "workshopName", w.phone AS "workshopPhone",
-              pc.name AS "providerName", u.name AS "createdByName",
+              w."emergencyPhone" AS "workshopEmergencyPhone",
+              COALESCE(w."assistanceEmail", w.email) AS "workshopEmail",
+              -- El proveedor explícito manda; el del taller solo rellena las
+              -- asistencias antiguas, anteriores a "providerCompanyId".
+              COALESCE(pcd.name, pc.name) AS "providerName",
+              cli.name AS "clientName", fac.name AS "billingClientName",
+              ct.name AS "contactName", ct.surname AS "contactSurname",
+              ct.phone AS "contactPhone", ct.mobile AS "contactMobile", ct.email AS "contactEmail",
+              u.name AS "createdByName",
               COALESCE(ca."assignedTechName", ca."liteUserName", ra."assignedTechName") AS "assignedTechName",
               COALESCE(ca."assignedVehicleName", ra."assignedVehicleName") AS "assignedVehicleName",
               ra.status AS "coreStatus"
@@ -2196,6 +2272,10 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
          LEFT JOIN connect_partners p ON p.id = ca."partnerId"
          LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
          LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+         LEFT JOIN connect_provider_companies pcd ON pcd.id = ca."providerCompanyId"
+         LEFT JOIN connect_clients cli ON cli.id = ca."clientId"
+         LEFT JOIN connect_clients fac ON fac.id = ca."billingClientId"
+         LEFT JOIN connect_workshop_contacts ct ON ct.id = ca."contactId"
          LEFT JOIN connect_users u ON u.id = ca."createdByUserId"
          LEFT JOIN roadside_assistances ra ON ra.id = ca."coreAssistanceId"
         WHERE ca.id = $1 AND ($2::int IS NULL OR ca."controlCenterId" = $2)`,
@@ -2262,6 +2342,30 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
       });
       if (b.clientId) {
         await db.query(`UPDATE connect_assistances SET "clientId" = $1 WHERE id = $2`, [Number(b.clientId), row.id]);
+      }
+
+      /*
+       * Subcontratación: a quién se le encarga y a quién se le factura. El
+       * cliente de facturación se guarda aunque coincida con el solicitante,
+       * porque "coinciden hoy" no es lo mismo que "son el mismo": si mañana
+       * cambia el acuerdo, la asistencia antigua tiene que seguir diciendo a
+       * quién se le facturó de verdad.
+       */
+      if (b.billingClientId || b.providerCompanyId || b.workshopCompanyId || b.contactId) {
+        await db.query(
+          `UPDATE connect_assistances SET
+             "billingClientId" = COALESCE($1, "billingClientId"),
+             "providerCompanyId" = COALESCE($2, "providerCompanyId"),
+             "workshopId" = COALESCE($3, "workshopId"),
+             "contactId" = COALESCE($4, "contactId")
+           WHERE id = $5`,
+          [b.billingClientId ? Number(b.billingClientId) : null,
+           b.providerCompanyId ? Number(b.providerCompanyId) : null,
+           b.workshopCompanyId ? Number(b.workshopCompanyId) : null,
+           b.contactId ? Number(b.contactId) : null,
+           row.id],
+        );
+        await guardarSnapshotPartes(row.id);
       }
 
       /*
