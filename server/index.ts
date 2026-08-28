@@ -718,6 +718,12 @@ function normalizeRoadsideAssistanceRow(row: any) {
     solicitanteNombre: row.solicitanteNombre ?? null,
     solicitanteTelefono: row.solicitanteTelefono ?? null,
     solicitanteAutorizacion: row.solicitanteAutorizacion ?? null,
+    // Subcontratación: quién ejecuta y a quién se factura
+    proveedorId: row.proveedorId != null ? Number(row.proveedorId) : null,
+    proveedorTallerId: row.proveedorTallerId != null ? Number(row.proveedorTallerId) : null,
+    proveedorContactoId: row.proveedorContactoId != null ? Number(row.proveedorContactoId) : null,
+    clienteFacturacionId: row.clienteFacturacionId != null ? Number(row.clienteFacturacionId) : null,
+    subcontrataSnapshot: row.subcontrataSnapshot ?? null,
     // Salida registrada por el vigilante de Webfleet, no por el tecnico
     enCaminoAutomatico: row.enCaminoAutomatico === true,
     descripcionAveria: row.descripcionAveria ?? null,
@@ -9324,6 +9330,593 @@ app.post(
 );
 
 /* ── Companies ── */
+
+/* =========================================================
+   SUBCONTRATACIÓN — proveedores, sus talleres, contactos y
+   clientes de facturación, desde el panel de Mobilink Assist.
+
+   Las tablas son LAS MISMAS que usa Connect Pro
+   (connect_provider_companies, connect_workshops,
+   connect_workshop_contacts, connect_clients). Aquí no se
+   copia ni un dato: lo único que cambia es la puerta de
+   entrada, porque el panel de Assist se autentica con su
+   propio rol y Connect con sesión de Supabase. Dos puertas,
+   un solo almacén — duplicar las tablas habría creado dos
+   verdades sobre el mismo taller.
+   ========================================================= */
+
+/**
+ * Valida un email. Devuelve el mensaje de error, o null si vale o si viene
+ * vacío: no todos los contactos tienen correo, pero uno mal escrito no falla
+ * hasta que hace falta mandar el aviso, que es el peor momento posible.
+ */
+function emailNoValido(valor: unknown): string | null {
+  const email = String(valor ?? "").trim();
+  if (!email) return null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? null : `El email "${email}" no es válido`;
+}
+
+/** Lista de proveedores. Con `q` busca por lo que uno tiene a mano. */
+app.get("/api/proveedores", requireSupervisorRole, async (req, res) => {
+  try {
+    const q = String(req.query.q ?? "").trim();
+    const r = await db.query(
+      `SELECT pc.*,
+              (SELECT COUNT(*)::int FROM connect_workshops w
+                WHERE w."providerCompanyId" = pc.id) AS talleres,
+              m.system AS "erpSystem", m.external_code AS "erpCode",
+              COALESCE(m.sync_status, 'not_synced') AS "erpSyncStatus",
+              m.last_sync_at_ms AS "erpLastSyncAtMs", m.last_sync_error AS "erpLastSyncError"
+         FROM connect_provider_companies pc
+         LEFT JOIN LATERAL (
+           SELECT * FROM integration_mappings im
+            WHERE im.entity_type = 'provider' AND im.mobilink_id = pc.id::text
+            ORDER BY im.updated_at_ms DESC LIMIT 1
+         ) m ON true
+        WHERE pc."deletedAtMs" IS NULL
+          AND ($1 = '' OR pc.name ILIKE '%' || $1 || '%'
+                       OR pc."legalName" ILIKE '%' || $1 || '%'
+                       OR pc."commercialName" ILIKE '%' || $1 || '%'
+                       OR pc."taxId" ILIKE '%' || $1 || '%'
+                       OR pc.city ILIKE '%' || $1 || '%'
+                       OR pc.province ILIKE '%' || $1 || '%'
+                       OR pc."contactPhone" ILIKE '%' || $1 || '%')
+        ORDER BY pc.name`,
+      [q],
+    );
+    res.json({ data: r.rows });
+  } catch (e: any) {
+    console.error("GET /api/proveedores error:", e?.message);
+    res.status(500).json({ error: "Error listando proveedores" });
+  }
+});
+
+app.get("/api/proveedores/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Id no válido" });
+    const r = await db.query(
+      `SELECT * FROM connect_provider_companies WHERE id = $1 AND "deletedAtMs" IS NULL`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: "Proveedor no encontrado" });
+    const talleres = await db.query(
+      `SELECT * FROM connect_workshops WHERE "providerCompanyId" = $1 ORDER BY name`, [id]);
+    const contactos = await db.query(
+      `SELECT * FROM connect_workshop_contacts
+        WHERE "ownerType" = 'provider' AND "ownerId" = $1
+        ORDER BY "isPrimary" DESC, active DESC, name`, [id]);
+    res.json({ proveedor: r.rows[0], talleres: talleres.rows, contactos: contactos.rows });
+  } catch (e: any) {
+    console.error("GET /api/proveedores/:id error:", e?.message);
+    res.status(500).json({ error: "Error cargando el proveedor" });
+  }
+});
+
+app.post("/api/proveedores", requireAdminRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const name = String(b.name ?? "").trim();
+    if (!name) return res.status(422).json({ error: "El nombre es obligatorio" });
+    const emailMal = emailNoValido(b.contactEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    // Aviso, no bloqueo: dos empresas del grupo pueden compartir CIF en los
+    // datos viejos, y negarse a darlas de alta pararía el trabajo.
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO connect_provider_companies
+         (uuid, name, "legalName", "commercialName", "taxId", address, "postalCode", city,
+          province, country, web, "contactEmail", "contactPhone", "billingEmail",
+          "paymentTerms", "paymentMethod", notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)
+       RETURNING *`,
+      [crypto.randomUUID(), name, b.legalName ?? null, b.commercialName ?? null, b.taxId ?? null,
+       b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+       b.country ?? null, b.web ?? null, b.contactEmail ?? null, b.contactPhone ?? null,
+       b.billingEmail ?? null, b.paymentTerms ?? null, b.paymentMethod ?? null, b.notes ?? null, now],
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e: any) {
+    console.error("POST /api/proveedores error:", e?.message);
+    res.status(500).json({ error: "Error creando el proveedor" });
+  }
+});
+
+app.patch("/api/proveedores/:id", requireAdminRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const emailMal = emailNoValido(b.contactEmail) ?? emailNoValido(b.billingEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const r = await db.query(
+      `UPDATE connect_provider_companies SET
+         name = COALESCE($2, name), "legalName" = COALESCE($3, "legalName"),
+         "commercialName" = COALESCE($4, "commercialName"), "taxId" = COALESCE($5, "taxId"),
+         address = COALESCE($6, address), "postalCode" = COALESCE($7, "postalCode"),
+         city = COALESCE($8, city), province = COALESCE($9, province),
+         country = COALESCE($10, country), web = COALESCE($11, web),
+         "contactEmail" = COALESCE($12, "contactEmail"), "contactPhone" = COALESCE($13, "contactPhone"),
+         "billingEmail" = COALESCE($14, "billingEmail"),
+         "paymentTerms" = COALESCE($15, "paymentTerms"), "paymentMethod" = COALESCE($16, "paymentMethod"),
+         status = COALESCE($17, status), notes = COALESCE($18, notes),
+         "updatedAtMs" = $19
+       WHERE id = $1 AND "deletedAtMs" IS NULL RETURNING *`,
+      [Number(req.params.id), b.name ?? null, b.legalName ?? null, b.commercialName ?? null,
+       b.taxId ?? null, b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+       b.country ?? null, b.web ?? null, b.contactEmail ?? null, b.contactPhone ?? null,
+       b.billingEmail ?? null, b.paymentTerms ?? null, b.paymentMethod ?? null,
+       b.status ?? null, b.notes ?? null, Date.now()],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Proveedor no encontrado" });
+    res.json(r.rows[0]);
+  } catch (e: any) {
+    console.error("PATCH /api/proveedores/:id error:", e?.message);
+    res.status(500).json({ error: "Error guardando el proveedor" });
+  }
+});
+
+/**
+ * Listas de la ficha del taller (provincias, códigos postales, tipos de
+ * vehículo): el panel las manda separadas por comas y se guardan como JSON.
+ * `null` cuando no viene nada, para que el COALESCE conserve lo que había;
+ * cadena vacía sí es una orden de vaciarla.
+ */
+function listaComoJson(valor: unknown): string | null {
+  if (valor == null) return null;
+  if (Array.isArray(valor)) return JSON.stringify(valor.map((v) => String(v).trim()).filter(Boolean));
+  const texto = String(valor).trim();
+  if (!texto) return "[]";
+  return JSON.stringify(texto.split(",").map((v) => v.trim()).filter(Boolean));
+}
+
+/** Talleres/centros de un proveedor. */
+app.get("/api/proveedores/:id/talleres", requireSupervisorRole, async (req, res) => {
+  try {
+    const soloActivos = String(req.query.soloActivos ?? "") === "true";
+    const r = await db.query(
+      `SELECT * FROM connect_workshops
+        WHERE "providerCompanyId" = $1 AND ($2 = false OR active = true)
+        ORDER BY name`,
+      [Number(req.params.id), soloActivos],
+    );
+    res.json({ data: r.rows });
+  } catch (e: any) {
+    console.error("GET /api/proveedores/:id/talleres error:", e?.message);
+    res.status(500).json({ error: "Error listando los talleres" });
+  }
+});
+
+app.post("/api/proveedores/:id/talleres", requireAdminRole, async (req, res) => {
+  try {
+    const providerId = Number(req.params.id);
+    const b = req.body ?? {};
+    const name = String(b.name ?? "").trim();
+    if (!name) return res.status(422).json({ error: "El nombre del taller es obligatorio" });
+    const prov = await db.query(
+      `SELECT status FROM connect_provider_companies WHERE id = $1 AND "deletedAtMs" IS NULL`, [providerId]);
+    if (!prov.rows[0]) return res.status(404).json({ error: "El proveedor no existe" });
+    const emailMal = emailNoValido(b.email) ?? emailNoValido(b.assistanceEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const now = Date.now();
+    // Latitud y longitud son obligatorias en la tabla (la red busca por
+    // cercanía); sin coordenadas se guarda en 0,0 y se corrige al geocodificar.
+    const r = await db.query(
+      `INSERT INTO connect_workshops
+         ("providerCompanyId", name, phone, latitude, longitude, address, "postalCode",
+          city, province, country, email, "assistanceEmail", "adminEmail", "billingEmail",
+          "deliveryNoteEmail", "emergencyPhone", "openingHours", "open24h", active,
+          "integrationType", "networkParticipation", notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+               'external', false, $20, $21, $21)
+       RETURNING *`,
+      [providerId, name, b.phone ?? null,
+       Number.isFinite(Number(b.latitude)) ? Number(b.latitude) : 0,
+       Number.isFinite(Number(b.longitude)) ? Number(b.longitude) : 0,
+       b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+       b.country ?? null, b.email ?? null, b.assistanceEmail ?? null, b.adminEmail ?? null,
+       b.billingEmail ?? null, b.deliveryNoteEmail ?? null, b.emergencyPhone ?? null,
+       b.openingHours ?? null, b.open24h === true, b.active !== false, b.notes ?? null, now],
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e: any) {
+    console.error("POST /api/proveedores/:id/talleres error:", e?.message);
+    res.status(500).json({ error: "Error creando el taller" });
+  }
+});
+
+app.patch("/api/proveedor-talleres/:id", requireAdminRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const emailMal = emailNoValido(b.email) ?? emailNoValido(b.assistanceEmail)
+      ?? emailNoValido(b.adminEmail) ?? emailNoValido(b.billingEmail) ?? emailNoValido(b.deliveryNoteEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const r = await db.query(
+      `UPDATE connect_workshops SET
+         name = COALESCE($2, name), phone = COALESCE($3, phone),
+         address = COALESCE($4, address), "postalCode" = COALESCE($5, "postalCode"),
+         city = COALESCE($6, city), province = COALESCE($7, province),
+         country = COALESCE($8, country), email = COALESCE($9, email),
+         "assistanceEmail" = COALESCE($10, "assistanceEmail"),
+         "adminEmail" = COALESCE($11, "adminEmail"),
+         "billingEmail" = COALESCE($12, "billingEmail"),
+         "deliveryNoteEmail" = COALESCE($13, "deliveryNoteEmail"),
+         "emergencyPhone" = COALESCE($14, "emergencyPhone"),
+         "openingHours" = COALESCE($15, "openingHours"),
+         "open24h" = COALESCE($16, "open24h"), active = COALESCE($17, active),
+         "coverageProvinces" = COALESCE($18, "coverageProvinces"),
+         "coveragePostalCodes" = COALESCE($19, "coveragePostalCodes"),
+         "vehicleTypes" = COALESCE($20, "vehicleTypes"),
+         "avgResponseMinutes" = COALESCE($21, "avgResponseMinutes"),
+         "authorizationLimit" = COALESCE($22, "authorizationLimit"),
+         latitude = COALESCE($23, latitude), longitude = COALESCE($24, longitude),
+         notes = COALESCE($25, notes), "updatedAtMs" = $26
+       WHERE id = $1 RETURNING *`,
+      [Number(req.params.id), b.name ?? null, b.phone ?? null, b.address ?? null,
+       b.postalCode ?? null, b.city ?? null, b.province ?? null, b.country ?? null,
+       b.email ?? null, b.assistanceEmail ?? null, b.adminEmail ?? null, b.billingEmail ?? null,
+       b.deliveryNoteEmail ?? null, b.emergencyPhone ?? null, b.openingHours ?? null,
+       typeof b.open24h === "boolean" ? b.open24h : null,
+       typeof b.active === "boolean" ? b.active : null,
+       listaComoJson(b.coverageProvinces), listaComoJson(b.coveragePostalCodes),
+       listaComoJson(b.vehicleTypes),
+       b.avgResponseMinutes != null && b.avgResponseMinutes !== "" ? Number(b.avgResponseMinutes) : null,
+       b.authorizationLimit != null && b.authorizationLimit !== "" ? Number(b.authorizationLimit) : null,
+       Number.isFinite(Number(b.latitude)) && b.latitude !== "" ? Number(b.latitude) : null,
+       Number.isFinite(Number(b.longitude)) && b.longitude !== "" ? Number(b.longitude) : null,
+       b.notes ?? null, Date.now()],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Taller no encontrado" });
+    res.json(r.rows[0]);
+  } catch (e: any) {
+    console.error("PATCH /api/proveedor-talleres/:id error:", e?.message);
+    res.status(500).json({ error: "Error guardando el taller" });
+  }
+});
+
+/**
+ * Asigna (o cambia) el proveedor, el taller, el contacto y el cliente de
+ * facturación de una asistencia.
+ *
+ * Va en su propio endpoint y no dentro del alta porque el alta es un INSERT
+ * posicional de treinta y tantos parámetros: meter cuatro más ahí es la clase
+ * de cambio que desplaza un dato a la columna de al lado sin dar ningún error.
+ *
+ * Al guardar se congela el snapshot de cómo eran esas fichas en ese momento.
+ */
+app.patch("/api/roadside-assistances/:id/subcontrata", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Id no válido" });
+    const b = req.body ?? {};
+
+    const tallerId = b.proveedorTallerId != null ? Number(b.proveedorTallerId) : null;
+    if (tallerId != null) {
+      const t = await db.query(
+        `SELECT w.id, w.active, w."providerCompanyId", pc.status AS "estadoProveedor"
+           FROM connect_workshops w
+           LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+          WHERE w.id = $1`, [tallerId]);
+      if (!t.rows[0]) return res.status(404).json({ error: "El taller no existe" });
+      // Se avisa, pero NO se bloquea reasignar una asistencia antigua a un
+      // taller dado de baja: el histórico tiene que poder repararse.
+      if (t.rows[0].active === false) {
+        console.warn(`Asistencia #${id}: taller ${tallerId} inactivo`);
+      }
+    }
+
+    const r = await db.query(
+      `UPDATE roadside_assistances SET
+         "proveedorId" = $2, "proveedorTallerId" = $3,
+         "proveedorContactoId" = $4, "clienteFacturacionId" = $5,
+         "updatedAtMs" = $6
+       WHERE id = $1 RETURNING *`,
+      [id,
+       b.proveedorId != null ? Number(b.proveedorId) : null,
+       tallerId,
+       b.proveedorContactoId != null ? Number(b.proveedorContactoId) : null,
+       b.clienteFacturacionId != null ? Number(b.clienteFacturacionId) : null,
+       Date.now()],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Asistencia no encontrada" });
+
+    await guardarSnapshotSubcontrata(id);
+    const fresca = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [id]);
+    res.json(normalizeRoadsideAssistanceRow(fresca.rows[0]));
+  } catch (e: any) {
+    console.error("PATCH /api/roadside-assistances/:id/subcontrata error:", e?.message);
+    res.status(500).json({ error: "Error guardando la subcontratación" });
+  }
+});
+
+/**
+ * Congela cómo eran proveedor, taller y contacto en el momento del servicio.
+ * Best-effort a propósito: si falla, la asignación NO se deshace. Perder el
+ * snapshot es molesto; dejar una asistencia sin taller asignado es peor.
+ */
+async function guardarSnapshotSubcontrata(assistanceId: number) {
+  try {
+    const r = await db.query(
+      `SELECT
+         pc.name AS "proveedorNombre", pc."legalName" AS "proveedorRazonSocial",
+         pc."taxId" AS "proveedorCif", pc."contactPhone" AS "proveedorTelefono",
+         w.name AS "tallerNombre", w.address AS "tallerDireccion",
+         w."postalCode" AS "tallerCp", w.city AS "tallerPoblacion", w.province AS "tallerProvincia",
+         w.phone AS "tallerTelefono", w."emergencyPhone" AS "tallerUrgencias",
+         COALESCE(w."assistanceEmail", w.email) AS "tallerEmail",
+         c.name AS "contactoNombre", c.surname AS "contactoApellidos",
+         c.phone AS "contactoTelefono", c.mobile AS "contactoMovil", c.email AS "contactoEmail",
+         cf.name AS "clienteFacturacionNombre", cf."taxId" AS "clienteFacturacionCif"
+       FROM roadside_assistances a
+       LEFT JOIN connect_provider_companies pc ON pc.id = a."proveedorId"
+       LEFT JOIN connect_workshops w ON w.id = a."proveedorTallerId"
+       LEFT JOIN connect_workshop_contacts c ON c.id = a."proveedorContactoId"
+       LEFT JOIN connect_clients cf ON cf.id = a."clienteFacturacionId"
+       WHERE a.id = $1`,
+      [assistanceId],
+    );
+    const fila = r.rows[0];
+    if (!fila) return;
+    const datos = Object.fromEntries(Object.entries(fila).filter(([, v]) => v != null));
+    if (Object.keys(datos).length === 0) return;
+    await db.query(
+      `UPDATE roadside_assistances
+          SET "subcontrataSnapshot" = $2, "subcontrataSnapshotAtMs" = $3
+        WHERE id = $1`,
+      [assistanceId, JSON.stringify(datos), Date.now()],
+    );
+  } catch (e: any) {
+    console.error("snapshot de subcontratación:", e?.message);
+  }
+}
+
+/* ── Contactos: cuelgan de un taller, un proveedor o un cliente ── */
+
+const OWNERS_CONTACTO = ["workshop", "provider", "client"];
+
+app.get("/api/contactos", requireSupervisorRole, async (req, res) => {
+  try {
+    const ownerType = String(req.query.ownerType ?? "");
+    const ownerId = Number(req.query.ownerId);
+    if (!OWNERS_CONTACTO.includes(ownerType)) {
+      return res.status(422).json({ error: "ownerType debe ser workshop, provider o client" });
+    }
+    if (!Number.isFinite(ownerId)) return res.status(422).json({ error: "ownerId no válido" });
+    const r = await db.query(
+      `SELECT * FROM connect_workshop_contacts
+        WHERE "ownerType" = $1 AND "ownerId" = $2
+        ORDER BY "isPrimary" DESC, active DESC, name`,
+      [ownerType, ownerId],
+    );
+    res.json({ data: r.rows });
+  } catch (e: any) {
+    console.error("GET /api/contactos error:", e?.message);
+    res.status(500).json({ error: "Error listando contactos" });
+  }
+});
+
+app.post("/api/contactos", requireSupervisorRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const ownerType = String(b.ownerType ?? "");
+    const ownerId = Number(b.ownerId);
+    const name = String(b.name ?? "").trim();
+    if (!OWNERS_CONTACTO.includes(ownerType)) {
+      return res.status(422).json({ error: "ownerType debe ser workshop, provider o client" });
+    }
+    if (!Number.isFinite(ownerId)) return res.status(422).json({ error: "ownerId no válido" });
+    if (!name) return res.status(422).json({ error: "El nombre es obligatorio" });
+    const emailMal = emailNoValido(b.email);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO connect_workshop_contacts
+         ("ownerType", "ownerId", "workshopId", name, surname, role, phone, mobile, email,
+          "contactType", "isPrimary", "forAssistance", "forAdmin", "forBilling", "forEmergency",
+          notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17) RETURNING *`,
+      [ownerType, ownerId,
+       // Los de taller conservan workshopId: lo que ya consultaba por esa
+       // columna los sigue encontrando sin tocar ni una consulta.
+       ownerType === "workshop" ? ownerId : null,
+       name, b.surname ?? null, b.role ?? null, b.phone ?? null, b.mobile ?? null, b.email ?? null,
+       b.contactType ?? null, b.isPrimary === true, b.forAssistance === true,
+       b.forAdmin === true, b.forBilling === true, b.forEmergency === true, b.notes ?? null, now],
+    );
+    // Un solo principal por ficha.
+    if (b.isPrimary === true) {
+      await db.query(
+        `UPDATE connect_workshop_contacts SET "isPrimary" = false
+          WHERE "ownerType" = $1 AND "ownerId" = $2 AND id <> $3`,
+        [ownerType, ownerId, r.rows[0].id],
+      );
+    }
+    res.status(201).json(r.rows[0]);
+  } catch (e: any) {
+    console.error("POST /api/contactos error:", e?.message);
+    res.status(500).json({ error: "Error creando el contacto" });
+  }
+});
+
+app.patch("/api/contactos/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const emailMal = emailNoValido(b.email);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const r = await db.query(
+      `UPDATE connect_workshop_contacts SET
+         name = COALESCE($2, name), surname = COALESCE($3, surname),
+         role = COALESCE($4, role), phone = COALESCE($5, phone),
+         mobile = COALESCE($6, mobile), email = COALESCE($7, email),
+         "contactType" = COALESCE($8, "contactType"),
+         "isPrimary" = COALESCE($9, "isPrimary"),
+         "forAssistance" = COALESCE($10, "forAssistance"),
+         "forAdmin" = COALESCE($11, "forAdmin"),
+         "forBilling" = COALESCE($12, "forBilling"),
+         "forEmergency" = COALESCE($13, "forEmergency"),
+         active = COALESCE($14, active), notes = COALESCE($15, notes),
+         "updatedAtMs" = $16
+       WHERE id = $1 RETURNING *`,
+      [Number(req.params.id), b.name ?? null, b.surname ?? null, b.role ?? null,
+       b.phone ?? null, b.mobile ?? null, b.email ?? null, b.contactType ?? null,
+       typeof b.isPrimary === "boolean" ? b.isPrimary : null,
+       typeof b.forAssistance === "boolean" ? b.forAssistance : null,
+       typeof b.forAdmin === "boolean" ? b.forAdmin : null,
+       typeof b.forBilling === "boolean" ? b.forBilling : null,
+       typeof b.forEmergency === "boolean" ? b.forEmergency : null,
+       typeof b.active === "boolean" ? b.active : null, b.notes ?? null, Date.now()],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Contacto no encontrado" });
+    if (b.isPrimary === true) {
+      await db.query(
+        `UPDATE connect_workshop_contacts SET "isPrimary" = false
+          WHERE "ownerType" = $1 AND "ownerId" = $2 AND id <> $3`,
+        [r.rows[0].ownerType, r.rows[0].ownerId, r.rows[0].id],
+      );
+    }
+    res.json(r.rows[0]);
+  } catch (e: any) {
+    console.error("PATCH /api/contactos/:id error:", e?.message);
+    res.status(500).json({ error: "Error guardando el contacto" });
+  }
+});
+
+/* ── Clientes de facturación ── */
+
+app.get("/api/clientes-facturacion", requireSupervisorRole, async (req, res) => {
+  try {
+    const q = String(req.query.q ?? "").trim();
+    const r = await db.query(
+      `SELECT c.*,
+              m.system AS "erpSystem", m.external_code AS "erpCode",
+              COALESCE(m.sync_status, 'not_synced') AS "erpSyncStatus",
+              m.last_sync_at_ms AS "erpLastSyncAtMs", m.last_sync_error AS "erpLastSyncError"
+         FROM connect_clients c
+         LEFT JOIN LATERAL (
+           SELECT * FROM integration_mappings im
+            WHERE im.entity_type = 'customer' AND im.mobilink_id = c.id::text
+            ORDER BY im.updated_at_ms DESC LIMIT 1
+         ) m ON true
+        WHERE ($1 = '' OR c.name ILIKE '%' || $1 || '%'
+                       OR c."legalName" ILIKE '%' || $1 || '%'
+                       OR c."taxId" ILIKE '%' || $1 || '%'
+                       OR c.city ILIKE '%' || $1 || '%')
+        ORDER BY c.name`,
+      [q],
+    );
+    res.json({ data: r.rows });
+  } catch (e: any) {
+    console.error("GET /api/clientes-facturacion error:", e?.message);
+    res.status(500).json({ error: "Error listando clientes" });
+  }
+});
+
+app.get("/api/clientes-facturacion/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await db.query(`SELECT * FROM connect_clients WHERE id = $1`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: "Cliente no encontrado" });
+    const contactos = await db.query(
+      `SELECT * FROM connect_workshop_contacts
+        WHERE "ownerType" = 'client' AND "ownerId" = $1
+        ORDER BY "isPrimary" DESC, active DESC, name`, [id]);
+    res.json({ cliente: r.rows[0], contactos: contactos.rows });
+  } catch (e: any) {
+    console.error("GET /api/clientes-facturacion/:id error:", e?.message);
+    res.status(500).json({ error: "Error cargando el cliente" });
+  }
+});
+
+app.post("/api/clientes-facturacion", requireAdminRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const name = String(b.name ?? "").trim();
+    if (!name) return res.status(422).json({ error: "El nombre es obligatorio" });
+    const emailMal = emailNoValido(b.contactEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const taxId = String(b.taxId ?? "").trim();
+    if (taxId) {
+      const dup = await db.query(`SELECT id, name FROM connect_clients WHERE "taxId" ILIKE $1`, [taxId]);
+      if (dup.rows[0]) {
+        return res.status(409).json({
+          error: `Ya existe un cliente con ese CIF: ${dup.rows[0].name}`,
+        });
+      }
+    }
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO connect_clients
+         (name, "legalName", "commercialName", "taxId", address, "postalCode", city, province,
+          country, currency, "contactEmail", "contactPhone", notes, active, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,'EUR'),$11,$12,$13,true,$14,$14) RETURNING *`,
+      [name, b.legalName ?? null, b.commercialName ?? null, taxId || null, b.address ?? null,
+       b.postalCode ?? null, b.city ?? null, b.province ?? null, b.country ?? null,
+       b.currency ?? null, b.contactEmail ?? null, b.contactPhone ?? null, b.notes ?? null, now],
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e: any) {
+    console.error("POST /api/clientes-facturacion error:", e?.message);
+    res.status(500).json({ error: "Error creando el cliente" });
+  }
+});
+
+app.patch("/api/clientes-facturacion/:id", requireAdminRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const emailMal = emailNoValido(b.contactEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const r = await db.query(
+      `UPDATE connect_clients SET
+         name = COALESCE($2, name), "legalName" = COALESCE($3, "legalName"),
+         "commercialName" = COALESCE($4, "commercialName"), "taxId" = COALESCE($5, "taxId"),
+         address = COALESCE($6, address), "postalCode" = COALESCE($7, "postalCode"),
+         city = COALESCE($8, city), province = COALESCE($9, province),
+         country = COALESCE($10, country), currency = COALESCE($11, currency),
+         "paymentMethod" = COALESCE($12, "paymentMethod"), "paymentTerms" = COALESCE($13, "paymentTerms"),
+         "billingPeriodicity" = COALESCE($14, "billingPeriodicity"),
+         "billingGrouped" = COALESCE($15, "billingGrouped"),
+         "referenceRequired" = COALESCE($16, "referenceRequired"),
+         "purchaseOrderRequired" = COALESCE($17, "purchaseOrderRequired"),
+         "costCenter" = COALESCE($18, "costCenter"), project = COALESCE($19, project),
+         "billingSeries" = COALESCE($20, "billingSeries"), "taxConfig" = COALESCE($21, "taxConfig"),
+         "billingNotes" = COALESCE($22, "billingNotes"),
+         "contactEmail" = COALESCE($23, "contactEmail"), "contactPhone" = COALESCE($24, "contactPhone"),
+         active = COALESCE($25, active), notes = COALESCE($26, notes), "updatedAtMs" = $27
+       WHERE id = $1 RETURNING *`,
+      [Number(req.params.id), b.name ?? null, b.legalName ?? null, b.commercialName ?? null,
+       b.taxId ?? null, b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+       b.country ?? null, b.currency ?? null, b.paymentMethod ?? null, b.paymentTerms ?? null,
+       b.billingPeriodicity ?? null,
+       typeof b.billingGrouped === "boolean" ? b.billingGrouped : null,
+       typeof b.referenceRequired === "boolean" ? b.referenceRequired : null,
+       typeof b.purchaseOrderRequired === "boolean" ? b.purchaseOrderRequired : null,
+       b.costCenter ?? null, b.project ?? null, b.billingSeries ?? null, b.taxConfig ?? null,
+       b.billingNotes ?? null, b.contactEmail ?? null, b.contactPhone ?? null,
+       typeof b.active === "boolean" ? b.active : null, b.notes ?? null, Date.now()],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Cliente no encontrado" });
+    res.json(r.rows[0]);
+  } catch (e: any) {
+    console.error("PATCH /api/clientes-facturacion/:id error:", e?.message);
+    res.status(500).json({ error: "Error guardando el cliente" });
+  }
+});
 
 app.get("/api/companies", requireSupervisorRole, async (req, res) => {
   try {

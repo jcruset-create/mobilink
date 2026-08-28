@@ -367,6 +367,32 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "solicitanteAutorizacion" TEXT;
 
+    -- Subcontratación: a quién se le encarga el servicio y a quién se factura.
+    -- OJO con los nombres: "workshopId" ya existe en esta tabla y es el taller
+    -- PROPIO (el del inquilino, TEXT). El taller subcontratado es otra cosa y
+    -- va en "proveedorTallerId", que apunta a connect_workshops.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "proveedorId" INTEGER;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "proveedorTallerId" INTEGER;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "proveedorContactoId" INTEGER;
+
+    -- Cliente al que se factura, que no siempre es quien solicita.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "clienteFacturacionId" INTEGER;
+
+    -- Cómo eran proveedor, taller y contacto EN EL MOMENTO del servicio: si
+    -- mañana cambia el email o la dirección del taller, una asistencia de hace
+    -- meses tiene que seguir contando con qué datos se gestionó.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "subcontrataSnapshot" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "subcontrataSnapshotAtMs" BIGINT;
+
     -- Kilómetros DEL SERVICIO que anota el técnico al finalizar (no el
     -- cuentakilómetros). Los usa el espejo económico de Connect para cobrar
     -- los kilómetros de más; el tiempo NO se anota: va de la creación a la
