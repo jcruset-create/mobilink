@@ -287,7 +287,12 @@ describe.skipIf(!RUN)("Integración Assist → Central", () => {
     await db.query(`DELETE FROM roadside_assistances WHERE id = $1`, [otra]);
   });
 
-  it("sin credencial configurada no se envía, y se dice por qué", async () => {
+  /*
+   * Antes esto creaba el envío y lo dejaba en ERROR. Ahora la puerta de
+   * destinos lo rechaza ANTES de crear nada, que es mejor: un destino sin
+   * credencial no es un envío que haya fallado, es uno que no debía salir.
+   */
+  it("sin credencial configurada no se llega a crear el envío, y se dice por qué", async () => {
     const { subcontratarEnCentral } = await import("./servicio.ts");
     const otra = await crearAsistenciaAssist();
     const sinClave = await db.query(
@@ -297,14 +302,18 @@ describe.skipIf(!RUN)("Integración Assist → Central", () => {
       [`dest-sinclave-${sufijo}`, `Sin credencial ${sufijo}`, baseCentral, now],
     );
 
-    const d = await subcontratarEnCentral({
-      assistanceId: otra, destinationId: Number(sinClave.rows[0].id), tenantId: null,
-    });
-    expect(d.status).toBe("ERROR");
-    expect(d.lastError).toContain("credencial");
+    await expect(
+      subcontratarEnCentral({
+        assistanceId: otra, destinationId: Number(sinClave.rows[0].id), tenantId: null,
+      }),
+    ).rejects.toThrow(/MISCONFIGURED|no existe/i);
 
-    await db.query(`DELETE FROM external_dispatch_events WHERE "dispatchId" = $1`, [d.id]);
-    await db.query(`DELETE FROM external_dispatches WHERE id = $1`, [d.id]);
+    // Y no ha quedado ningún envío a medias.
+    const n = await db.query(
+      `SELECT COUNT(*)::int AS n FROM external_dispatches WHERE "destinationId" = $1`,
+      [sinClave.rows[0].id]);
+    expect(n.rows[0].n).toBe(0);
+
     await db.query(`DELETE FROM external_destinations WHERE id = $1`, [sinClave.rows[0].id]);
     await db.query(`DELETE FROM roadside_assistances WHERE id = $1`, [otra]);
   });

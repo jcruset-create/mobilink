@@ -44,6 +44,53 @@ export async function initDispatch(): Promise<void> {
       ON external_destinations ("ownerTenantId", active);
   `);
 
+  /*
+   * Configuración y salud del destino.
+   *
+   * `healthStatus` guarda el resultado de la ÚLTIMA prueba de conexión, no el
+   * estado actual: el estado se recalcula al leer, porque entre una prueba y
+   * ahora puede haber desaparecido la variable de entorno y un "AVAILABLE"
+   * guardado mentiría.
+   *
+   * `lastError` se guarda YA SANEADO. Un error de red puede traer dentro la
+   * URL con credenciales o el eco de la cabecera Authorization, y esta columna
+   * se enseña en el panel.
+   */
+  await db.query(`
+    ALTER TABLE external_destinations ADD COLUMN IF NOT EXISTS system TEXT;
+    ALTER TABLE external_destinations ADD COLUMN IF NOT EXISTS "apiVersion" TEXT;
+    ALTER TABLE external_destinations ADD COLUMN IF NOT EXISTS capabilities TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE external_destinations ADD COLUMN IF NOT EXISTS "partnerRef" TEXT;
+    ALTER TABLE external_destinations ADD COLUMN IF NOT EXISTS "timeoutMs" INTEGER;
+    ALTER TABLE external_destinations ADD COLUMN IF NOT EXISTS "maxRetries" INTEGER;
+    ALTER TABLE external_destinations ADD COLUMN IF NOT EXISTS metadata TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE external_destinations ADD COLUMN IF NOT EXISTS "healthStatus" TEXT;
+    ALTER TABLE external_destinations ADD COLUMN IF NOT EXISTS "lastOkAtMs" BIGINT;
+    ALTER TABLE external_destinations ADD COLUMN IF NOT EXISTS "lastAttemptAtMs" BIGINT;
+    ALTER TABLE external_destinations ADD COLUMN IF NOT EXISTS "lastError" TEXT;
+
+    UPDATE external_destinations SET system = upper(kind) WHERE system IS NULL;
+  `);
+
+  /*
+   * Historial de pruebas de conexión: sirve para ver si un destino falla
+   * siempre o falló una vez, que es la diferencia entre «está roto» y «hubo un
+   * corte». Sin historial, el último error solo cuenta la última foto.
+   */
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS external_destination_checks (
+      id SERIAL PRIMARY KEY,
+      "destinationId" INTEGER NOT NULL REFERENCES external_destinations(id) ON DELETE CASCADE,
+      estado TEXT NOT NULL,
+      "durationMs" INTEGER,
+      detail TEXT,                      -- ya saneado: nunca lleva credenciales
+      "byUser" TEXT,
+      "checkedAtMs" BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_destination_checks_destino
+      ON external_destination_checks ("destinationId", id DESC);
+  `);
+
   await db.query(`
     CREATE TABLE IF NOT EXISTS external_dispatches (
       id SERIAL PRIMARY KEY,

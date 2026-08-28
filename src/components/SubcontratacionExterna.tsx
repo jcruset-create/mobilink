@@ -17,14 +17,25 @@
 import { useCallback, useEffect, useState } from "react";
 import { API_BASE, getAdminHeaders } from "../modules/workshopApi";
 
+type EstadoDestino =
+  | "NO_DESTINATIONS" | "DISABLED" | "MISCONFIGURED"
+  | "AUTH_ERROR" | "UNREACHABLE" | "AVAILABLE";
+
 type Destino = {
   id: number;
   name: string;
-  plataforma: string | null;
-  kind: string;
-  credencialConfigurada: boolean;
+  remoteTenant: string | null;
+  system: string | null;
+  apiKeyEnvName: string | null;
+  estado: EstadoDestino;
+  mensaje: string;
+  motivos: string[];
+  lastOkAtMs: number | null;
+  lastError: string | null;
   notes: string | null;
 };
+
+type Cartera = { estadoGlobal: EstadoDestino; disponibles: number; data: Destino[] };
 
 type Evento = { evento: string; remoteStatus: string | null; direccion: string; occurredAtMs: number | null };
 
@@ -97,7 +108,9 @@ async function pedir(ruta: string, init?: RequestInit) {
 }
 
 export default function SubcontratacionExterna({ assistanceId }: { assistanceId: number }) {
-  const [destinos, setDestinos] = useState<Destino[]>([]);
+  const [cartera, setCartera] = useState<Cartera | null>(null);
+  const destinos = cartera?.data ?? [];
+  const [probando, setProbando] = useState<number | null>(null);
   const [despachos, setDespachos] = useState<Despacho[]>([]);
   const [destinoId, setDestinoId] = useState<number | "">("");
   const [referenciaCliente, setReferenciaCliente] = useState("");
@@ -114,7 +127,7 @@ export default function SubcontratacionExterna({ assistanceId }: { assistanceId:
   }, [assistanceId]);
 
   useEffect(() => {
-    pedir("/api/dispatch/destinos").then((d) => setDestinos(d.data)).catch(() => { /* opcional */ });
+    pedir("/api/dispatch/destinos").then(setCartera).catch((e) => setError(e.message));
     void cargar();
   }, [cargar]);
 
@@ -145,6 +158,17 @@ export default function SubcontratacionExterna({ assistanceId }: { assistanceId:
   };
 
   const elegido = destinos.find((d) => d.id === destinoId);
+  const disponibles = destinos.filter((d) => d.estado === "AVAILABLE");
+  const noDisponibles = destinos.filter((d) => d.estado !== "AVAILABLE");
+
+  const probar = async (id: number) => {
+    setProbando(id); setError("");
+    try {
+      const r = await pedir(`/api/dispatch/destinos/${id}/probar`, { method: "POST" });
+      if (!r.ok) setError(`${r.estado}: ${r.mensaje}`);
+      setCartera(await pedir("/api/dispatch/destinos"));
+    } catch (e: any) { setError(e.message); } finally { setProbando(null); }
+  };
   const yaEnviadaA = new Set(despachos.filter((d) => !d.sePuedeReintentar).map((d) => d.destino.id));
 
   return (
@@ -226,9 +250,19 @@ export default function SubcontratacionExterna({ assistanceId }: { assistanceId:
         </div>
       ))}
 
-      {destinos.length === 0 ? (
+      {/*
+          Tres situaciones distintas, tres mensajes distintos. Confundirlas hacía
+          buscar en el sitio equivocado: «no hay ninguna» se arregla dando de alta
+          un destino, «mal configurada» se arregla poniendo una variable de
+          entorno en el servidor.
+      */}
+      {cartera?.estadoGlobal === "NO_DESTINATIONS" ? (
         <p className="text-[12px] text-slate-500">
-          No hay plataformas de destino configuradas.
+          No hay plataformas configuradas.
+        </p>
+      ) : disponibles.length === 0 ? (
+        <p className="text-[12px] text-amber-300">
+          Ninguna plataforma disponible ahora mismo. Revisa su configuración más abajo.
         </p>
       ) : (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -238,9 +272,9 @@ export default function SubcontratacionExterna({ assistanceId }: { assistanceId:
             className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500"
           >
             <option value="">— Plataforma de destino —</option>
-            {destinos.map((d) => (
+            {disponibles.map((d) => (
               <option key={d.id} value={d.id} disabled={yaEnviadaA.has(d.id)}>
-                {d.name}{d.plataforma ? ` · ${d.plataforma}` : ""}
+                {d.name}{d.remoteTenant ? ` · ${d.remoteTenant}` : ""}
                 {yaEnviadaA.has(d.id) ? " (ya enviada)" : ""}
               </option>
             ))}
@@ -275,7 +309,7 @@ export default function SubcontratacionExterna({ assistanceId }: { assistanceId:
             </label>
             <button
               onClick={() => void enviar()}
-              disabled={busy || !destinoId || elegido?.credencialConfigurada === false}
+              disabled={busy || !destinoId || (elegido != null && elegido.estado !== "AVAILABLE")}
               className="ml-auto rounded-lg bg-orange-600 px-3 py-2 text-xs font-bold text-white hover:bg-orange-500 disabled:opacity-50"
             >
               {busy ? "Enviando…" : "Subcontratar"}
@@ -284,11 +318,49 @@ export default function SubcontratacionExterna({ assistanceId }: { assistanceId:
         </div>
       )}
 
-      {elegido && !elegido.credencialConfigurada && (
-        <p className="mt-2 text-[12px] text-amber-300">
-          «{elegido.name}» no tiene credencial configurada en el servidor. Hasta que se
-          configure, el envío fallaría.
-        </p>
+      {elegido && elegido.estado !== "AVAILABLE" && (
+        <p className="mt-2 text-[12px] text-amber-300">{elegido.mensaje}</p>
+      )}
+
+      {/* Las plataformas que NO se pueden usar, con el motivo concreto y el
+          nombre de la variable que hay que crear. Sin el nombre, quien lo
+          configura tiene que adivinarlo. */}
+      {noDisponibles.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          {noDisponibles.map((d) => (
+            <div key={d.id} className="rounded-lg border border-slate-700 bg-slate-950/40 px-3 py-2 text-[12px]">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-slate-300">{d.name}</span>
+                <span className={`rounded border px-1.5 text-[10px] font-bold ${
+                  d.estado === "DISABLED"
+                    ? "border-slate-600 text-slate-400"
+                    : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                }`}>
+                  {d.estado}
+                </span>
+                <button
+                  onClick={() => void probar(d.id)}
+                  disabled={probando === d.id}
+                  className="ml-auto text-[11px] text-slate-500 hover:text-orange-400 disabled:opacity-50"
+                >
+                  {probando === d.id ? "probando…" : "probar conexión"}
+                </button>
+              </div>
+              <div className="text-slate-500">{d.mensaje}</div>
+              {d.motivos.length > 0 && (
+                <ul className="mt-0.5 list-inside list-disc text-slate-500">
+                  {d.motivos.map((m, i) => <li key={i}>{m}</li>)}
+                </ul>
+              )}
+              {d.apiKeyEnvName && d.estado === "MISCONFIGURED" && (
+                <div className="mt-0.5 text-slate-500">
+                  Variable esperada: <code className="text-slate-400">{d.apiKeyEnvName}</code>
+                </div>
+              )}
+              {d.lastError && <div className="mt-0.5 text-red-300/80">{d.lastError}</div>}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

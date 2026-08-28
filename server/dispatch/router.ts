@@ -20,12 +20,21 @@ import {
   aplicarAvisoDeCentral,
   intentarEnvio,
   listarDespachosDeAsistencia,
-  listarDestinos,
   subcontratarEnCentral,
 } from "./servicio.ts";
+import {
+  ErrorDestino,
+  activarDestino,
+  cargarDestinoDe,
+  crearDestino,
+  estadoDeDestino,
+  listarDestinosConEstado,
+  probarConexion,
+} from "./destinosServicio.ts";
+import { destinoParaApi } from "./destinos.ts";
 
 function fallo(res: Response, e: unknown) {
-  if (e instanceof ErrorDespacho) {
+  if (e instanceof ErrorDespacho || e instanceof ErrorDestino) {
     return res.status(e.estado).json({ error: e.message, code: e.codigo });
   }
   console.error("[Dispatch] error:", (e as any)?.message);
@@ -88,47 +97,79 @@ export function createDispatchRouter(requireSupervisorRole: RequestHandler): Rou
   });
 
   /* ── Destinos disponibles ──────────────────────────────────────────────── */
+  /*
+   * Devuelve además el estado GLOBAL, que es lo que decide el mensaje de la
+   * pantalla. «Cero destinos» y «un destino sin credencial» llevan a sitios
+   * distintos —dar de alta uno, o crear una variable en Render— y confundirlos
+   * hace perder media hora buscando donde no es.
+   */
   router.get("/destinos", requireSupervisorRole, async (req, res) => {
     try {
-      res.json({ data: await listarDestinos(await tenantDe(req)) });
+      res.json(await listarDestinosConEstado(await tenantDe(req)));
     } catch (e) {
       fallo(res, e);
     }
   });
 
-  /* ── Alta de destino (administración) ──────────────────────────────────── */
+  /** Prueba de conexión real: variable de entorno → endpoint → autenticación. */
+  router.post("/destinos/:id/probar", requireSupervisorRole, async (req: any, res) => {
+    try {
+      const quien = req.assistPanelUser?.nombre ?? req.authCtx?.username ?? null;
+      res.json(await probarConexion(Number(req.params.id), await tenantDe(req), quien));
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.patch("/destinos/:id", requireSupervisorRole, async (req, res) => {
+    try {
+      if (typeof req.body?.active !== "boolean") {
+        return res.status(422).json({ error: "Solo se puede activar o desactivar desde aquí" });
+      }
+      res.json(await activarDestino(Number(req.params.id), await tenantDe(req), req.body.active));
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /** Historial de pruebas: distingue «está roto» de «hubo un corte». */
+  router.get("/destinos/:id/comprobaciones", requireSupervisorRole, async (req, res) => {
+    try {
+      const d = await cargarDestinoDe(Number(req.params.id), await tenantDe(req));
+      if (!d) return res.status(404).json({ error: "Destino no encontrado" });
+      const r = await db.query(
+        `SELECT estado, "durationMs", detail, "byUser", "checkedAtMs"
+           FROM external_destination_checks WHERE "destinationId" = $1
+          ORDER BY id DESC LIMIT 20`,
+        [d.id],
+      );
+      res.json({ data: r.rows });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /* ── Alta de destino ───────────────────────────────────────────────────── */
   /*
    * No recibe ninguna clave: solo el NOMBRE de la variable de entorno donde
-   * vive. Es lo que impide que una credencial pase por el navegador.
+   * vive. Si alguien manda una credencial en el cuerpo se rechaza con una
+   * explicación, en vez de guardarla «por comodidad».
    */
   router.post("/destinos", requireSupervisorRole, async (req, res) => {
     try {
-      const name = String(req.body?.name ?? "").trim();
-      const baseUrl = String(req.body?.baseUrl ?? "").trim();
-      const secretName = String(req.body?.secretName ?? "").trim();
-      if (!name || !baseUrl || !secretName) {
-        return res.status(422).json({ error: "Nombre, URL y nombre del secreto son obligatorios" });
-      }
-      if (!/^https:\/\//i.test(baseUrl) && !/^http:\/\/localhost/i.test(baseUrl)) {
-        return res.status(422).json({ error: "La URL debe ser https (o localhost en desarrollo)" });
-      }
-      const now = Date.now();
-      const r = await db.query(
-        `INSERT INTO external_destinations
-           (uuid, name, kind, "baseUrl", "secretName", "destinationTenantLabel",
-            "ownerTenantId", notes, "createdAtMs", "updatedAtMs")
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING id`,
-        [
-          crypto.randomUUID(), name,
-          req.body?.kind === "external" ? "external" : "central",
-          baseUrl.replace(/\/+$/, ""), secretName,
-          req.body?.plataforma ? String(req.body.plataforma).trim() : null,
-          await tenantDe(req),
-          req.body?.notes ? String(req.body.notes).trim() : null,
-          now,
-        ],
-      );
-      res.status(201).json({ id: Number(r.rows[0].id) });
+      const creado = await crearDestino({ ...req.body, ownerTenantId: await tenantDe(req) });
+      res.status(201).json(creado);
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.get("/destinos/:id", requireSupervisorRole, async (req, res) => {
+    try {
+      const d = await cargarDestinoDe(Number(req.params.id), await tenantDe(req));
+      if (!d) return res.status(404).json({ error: "Destino no encontrado" });
+      const { estado, motivos } = await estadoDeDestino(d);
+      res.json(destinoParaApi(d, estado, motivos));
     } catch (e) {
       fallo(res, e);
     }
