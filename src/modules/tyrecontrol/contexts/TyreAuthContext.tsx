@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../services/supabase";
 import type { Perfil } from "../types";
+import { esSuperadmin, olvidarSuperadmin } from "../../superadmin";
 
 type TyreAuthValue = {
   user: User | null;
@@ -25,11 +26,29 @@ async function cargarPerfil(userId: string): Promise<Perfil | null> {
     .maybeSingle();
   if (error) {
     console.error("[TyreControl] error cargando perfil:", error.message);
-    return null;
   }
-  if (!data) return null;
+
+  // Un superadmin de la plataforma entra aunque no tenga ficha en tc_usuarios,
+  // y si la tiene se le respeta el flag maestro aunque su fila no lo lleve.
+  const superadmin = await esSuperadmin(userId);
+
+  if (!data) {
+    if (!superadmin) return null;
+    return {
+      id: userId,
+      nombre: "Superadmin",
+      rol: "administrador",
+      activo: true,
+      acceso_panel: true,
+      acceso_apk: true,
+      es_superadmin: true,
+      empresa_id: null,
+      empresa: null,
+    } as unknown as Perfil;
+  }
 
   const perfil = data as unknown as Perfil;
+  if (superadmin) perfil.es_superadmin = true;
 
   // Carga de empresa aparte (best-effort; si falla, no bloquea el login)
   if (perfil.empresa_id) {
@@ -42,6 +61,7 @@ async function cargarPerfil(userId: string): Promise<Perfil | null> {
 // Pantallas permitidas del usuario en TyreControl (usuarios unificados,
 // fase 11). Si la tabla no existe o no hay restricción, null = todas.
 async function cargarPantallas(userId: string): Promise<string[] | null> {
+  if (await esSuperadmin(userId)) return null; // sin restricción
   try {
     const { data, error } = await supabase
       .from("app_usuario_modulos")
@@ -96,6 +116,7 @@ export function TyreAuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function signOut() {
+    olvidarSuperadmin();
     await supabase.auth.signOut();
     setUser(null);
     setPerfil(null);

@@ -33,7 +33,10 @@ export type DocumentoOperacion = {
   id: number;
   /** null = documento de la jornada entera, no de una operación suelta. */
   operationId: number | null;
-  sessionId: number;
+  /** null = documento de un ingreso bancario, no de una jornada. */
+  sessionId: number | null;
+  /** El ingreso bancario del que es comprobante, si es de uno. */
+  depositId: number | null;
   nombre: string;
   mime: string;
   tamanoBytes: number;
@@ -50,6 +53,7 @@ function aDocumento(r: any, url: string | null = null): DocumentoOperacion {
     id: r.id,
     operationId: r.operation_id,
     sessionId: r.session_id,
+    depositId: r.deposit_id ?? null,
     nombre: r.nombre,
     mime: r.mime,
     tamanoBytes: Number(r.tamano_bytes),
@@ -216,6 +220,85 @@ export async function adjuntarDocumento(
  * banco: papeles del día que no son de ningún cobro concreto. Se admiten
  * varios, porque en el mostrador no sale todo en un solo PDF.
  */
+/**
+ * Adjunta el comprobante del banco a un ingreso bancario.
+ *
+ * Va al ingreso y no a una jornada porque el resguardo del banco cubre el
+ * ingreso ENTERO —que junta varios cierres— y colgarlo de un día concreto
+ * sería elegir uno al azar. Se admite también sobre un ingreso anulado a
+ * propósito: el papel del banco que deshizo la operación es justo el que uno
+ * quiere conservar ahí.
+ */
+export async function adjuntarDocumentoDeIngreso(
+  ctx: Contexto,
+  depositId: number,
+  fichero: { originalname: string; mimetype: string; buffer: Buffer }
+): Promise<DocumentoOperacion> {
+  exigirFicheroValido(fichero);
+
+  const { rows: ingresos } = await pool.query(
+    `SELECT id, numero FROM cash_bank_deposits WHERE id = $1 AND empresa_id = $2`,
+    [depositId, ctx.empresaId]
+  );
+  if (ingresos.length === 0) {
+    throw new ErrorCaja("INGRESO_NO_ENCONTRADO", "El ingreso no existe.", 404);
+  }
+
+  const ahora = Date.now();
+  // Carpeta propia: los comprobantes de ingresos no viven en ninguna jornada.
+  const ruta = `${ctx.empresaId}/ingresos/${depositId}_${ahora}${extensionDe(
+    fichero.mimetype,
+    fichero.originalname
+  )}`;
+
+  // Primero el fichero: si esto falla, no queda una fila apuntando a nada.
+  const guardado = await guardarDocumento(ruta, fichero.buffer, fichero.mimetype);
+
+  const { rows } = await pool.query(
+    `INSERT INTO cash_operation_documents
+       (empresa_id, operation_id, session_id, deposit_id, nombre, mime,
+        tamano_bytes, ruta, subido_por, subido_at_ms)
+     VALUES ($1,NULL,NULL,$2,$3,$4,$5,$6,$7,$8)
+     RETURNING *`,
+    [
+      ctx.empresaId,
+      depositId,
+      fichero.originalname.slice(0, 200),
+      fichero.mimetype,
+      guardado.tamanoBytes,
+      ruta,
+      ctx.userId,
+      ahora,
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.deposit.document.attach",
+    entidad: "cash_operation_documents",
+    entidadId: String(rows[0].id),
+    detalle: { ingreso: ingresos[0].numero, nombre: rows[0].nombre },
+    ip: ctx.ip,
+  });
+
+  return aDocumento(rows[0], await urlFirmada(ruta));
+}
+
+/** Los comprobantes vivos de un ingreso bancario, con su URL para abrirlos. */
+export async function documentosDeIngreso(
+  empresaId: string,
+  depositId: number
+): Promise<DocumentoOperacion[]> {
+  const { rows } = await pool.query(
+    `SELECT * FROM cash_operation_documents
+      WHERE empresa_id = $1 AND deposit_id = $2 AND NOT anulado
+      ORDER BY id`,
+    [empresaId, depositId]
+  );
+  return Promise.all(rows.map(async (r) => aDocumento(r, await urlFirmada(r.ruta))));
+}
+
 export async function adjuntarDocumentoDeJornada(
   ctx: Contexto,
   sessionId: number,

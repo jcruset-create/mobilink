@@ -11,6 +11,7 @@ import CapturaWhatsApp from "../components/CapturaWhatsApp";
 import ConfirmarImportacionIA, { type PropuestaIA, type ExtraIA } from "../components/ConfirmarImportacionIA";
 import type { ServiceType, VehicleType } from "../types";
 import type { Client } from "./Clientes";
+import { useCentroDeTrabajo } from "../components/CentroDeTrabajo";
 
 type Form = {
   expedientNumber: string; externalReference: string; clientName: string;
@@ -60,6 +61,13 @@ export default function NuevaAsistencia() {
   const [clientId, setClientId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [conceptos, setConceptos] = useState<Concepto[]>([]);
+  // Medidas y marcas del catálogo de la central: lo previsto se elige de
+  // ahí, no se teclea. Una medida escrita a mano que no exista en el
+  // catálogo no casa con ningún precio y manda la tarifa a revisión.
+  const { centro } = useCentroDeTrabajo();
+  const [medidas, setMedidas] = useState<string[]>([]);
+  const [marcas, setMarcas] = useState<string[]>([]);
   // Extracción por IA: pegar la conversación de WhatsApp o subir capturas
   const [iaAbierto, setIaAbierto] = useState(false);
   const [iaTexto, setIaTexto] = useState("");
@@ -81,8 +89,25 @@ export default function NuevaAsistencia() {
         setVehicleTypes((r.vehicle_types ?? []).filter((t) => t.active));
       })
       .catch(() => {});
-    boFetch<{ data: Client[] }>("/clients").then((r) => setClients(r.data.filter((c) => c.active))).catch(() => {});
   }, []);
+
+  // Los clientes, los del centro elegido: el selector no puede ofrecer un
+  // cliente de otra central, que no tiene contrato aqui y no se podria
+  // facturar. Sin centro elegido salen todos, como antes.
+  useEffect(() => {
+    boFetch<{ data: Client[] }>("/clients", { centro })
+      .then((r) => setClients(r.data.filter((c) => c.active))).catch(() => {});
+  }, [centro]);
+
+  useEffect(() => {
+    if (centro == null) return;
+    boFetch<{ data: { normalizedCode: string; active: boolean }[] }>("/pricing/catalog/sizes", { centro })
+      .then((r) => setMedidas(r.data.filter((m) => m.active).map((m) => m.normalizedCode)))
+      .catch(() => {});
+    boFetch<{ data: { name: string; active: boolean }[] }>("/pricing/catalog/brands", { centro })
+      .then((r) => setMarcas(r.data.filter((m) => m.active).map((m) => m.name)))
+      .catch(() => {});
+  }, [centro]);
 
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setF({ ...f, [k]: e.target.type === "checkbox" ? (e.target as HTMLInputElement).checked : e.target.value } as Form);
@@ -212,6 +237,9 @@ export default function NuevaAsistencia() {
     },
     description: [f.description, f.diagnosis ? `Diagnóstico inicial: ${f.diagnosis}` : "", f.notes ? `Obs.: ${f.notes}` : ""]
       .filter(Boolean).join("\n"),
+    // Lo pactado de antemano: nace previsto y el taller solo lo confirma con
+    // su foto de montaje. El precio no viaja: lo pone el tarifario al cerrar.
+    concepts: conceptos.filter((c) => c.kind === "MATERIAL" ? !!c.conceptCode.trim() : !!c.size.trim()),
   });
 
   const crear = async (draft: boolean) => {
@@ -222,7 +250,9 @@ export default function NuevaAsistencia() {
     setBusy(true);
     setError(null);
     try {
-      const row = await boFetch<{ id: number }>("/assistances", { method: "POST", body: buildBody(draft) });
+      // El mismo centro cuyo catalogo se ha usado para elegir los neumaticos:
+      // elegir de un catalogo y crear el aviso en otra central no puede pasar.
+      const row = await boFetch<{ id: number }>("/assistances", { method: "POST", body: buildBody(draft), centro });
       // Las fotos y mensajes recibidos por WhatsApp pasan a la asistencia creada
       if (capturaId) {
         await boFetch(`/whatsapp-capture/${capturaId}/link`, {
@@ -397,6 +427,15 @@ export default function NuevaAsistencia() {
           </div>
         </Section>
 
+        <ConceptosPrevistos
+          conceptos={conceptos}
+          onChange={setConceptos}
+          medidas={medidas}
+          marcas={marcas}
+          esCambioDeNeumatico={/neum|tyre|rueda/i.test(
+            types.find((t) => t.code === f.serviceType)?.name ?? f.serviceType)}
+        />
+
         <Section title="Incidencia">
           <Field label="Descripción *" w="w-full">
             <textarea
@@ -415,5 +454,150 @@ export default function NuevaAsistencia() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Lo que se sabe de antemano que se va a montar.
+ *
+ * Es el momento en que Central lo sabe: si el servicio es un cambio pactado,
+ * el neumático se decide aquí y no cuando llega la factura. Nace como
+ * PREVISTO; el taller solo tiene que confirmarlo con la foto de montaje, y al
+ * cerrar entra solo en la tarifa. Lo previsto que nadie confirme no se cobra:
+ * sale como aviso y manda la tarifa a revisión.
+ *
+ * Aquí no se pone precio. Lo pone el tarifario publicado al cerrar el
+ * servicio, con la configuración congelada en la orden de salida.
+ */
+type Concepto = {
+  kind: "TIRE" | "MATERIAL";
+  size: string; brand: string; position: string;
+  conceptCode: string; quantity: number;
+};
+
+const CONCEPTO_NUEVO: Concepto = {
+  kind: "TIRE", size: "", brand: "", position: "ANY", conceptCode: "", quantity: 1,
+};
+
+function ConceptosPrevistos({ conceptos, onChange, esCambioDeNeumatico, medidas, marcas }: {
+  conceptos: Concepto[];
+  onChange: (c: Concepto[]) => void;
+  esCambioDeNeumatico: boolean;
+  medidas: string[];
+  marcas: string[];
+}) {
+  const editar = (i: number, campo: keyof Concepto, valor: string | number) =>
+    onChange(conceptos.map((c, j) => (j === i ? { ...c, [campo]: valor } : c)));
+
+  return (
+    <Section title="Neumáticos y materiales previstos">
+      <div className="w-full">
+        <p className="mb-3 text-[13px] text-slate-400">
+          Si ya se sabe qué se va a montar, ponlo aquí: el taller solo tendrá que
+          confirmarlo con la foto de montaje y entrará solo en la factura.{" "}
+          <span className="text-slate-500">
+            El precio no se indica: lo pone el tarifario al cerrar el servicio.
+          </span>
+        </p>
+
+        {esCambioDeNeumatico && conceptos.length === 0 && (
+          <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[13px] text-amber-300">
+            Este servicio es un cambio de neumático y no has indicado cuál. Si ya se
+            sabe, añádelo: se ahorra la llamada de después y el ajuste a mano.
+          </div>
+        )}
+
+        {conceptos.map((c, i) => (
+          <div key={i} className="mb-2 flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2">
+            <Field label="Tipo">
+              <Select value={c.kind} onChange={(e) => editar(i, "kind", e.target.value)}>
+                <option value="TIRE">Neumático</option>
+                <option value="MATERIAL">Material</option>
+              </Select>
+            </Field>
+            {c.kind === "TIRE" ? (
+              <>
+                <Field label="Medida">
+                  <DelCatalogo valor={c.size} opciones={medidas} ancho="w-40"
+                               vacio="— Elegir medida —" libre="315/80R22.5"
+                               onChange={(v) => editar(i, "size", v)} />
+                </Field>
+                <Field label="Marca">
+                  <DelCatalogo valor={c.brand} opciones={marcas} ancho="w-36"
+                               vacio="— Elegir marca —" libre="Hankook"
+                               onChange={(v) => editar(i, "brand", v)} />
+                </Field>
+                <Field label="Posición">
+                  <Select value={c.position} onChange={(e) => editar(i, "position", e.target.value)}>
+                    <option value="ANY">Cualquiera</option>
+                    <option value="STEER">Dirección</option>
+                    <option value="DRIVE">Tracción</option>
+                    <option value="TRAILER">Remolque</option>
+                  </Select>
+                </Field>
+              </>
+            ) : (
+              <Field label="Código del material">
+                <Input value={c.conceptCode} className="w-48" placeholder="REPARACION"
+                       onChange={(e) => editar(i, "conceptCode", e.target.value)} />
+              </Field>
+            )}
+            <Field label="Cantidad">
+              <Input value={String(c.quantity)} className="w-20"
+                     onChange={(e) => editar(i, "quantity", Number(e.target.value) || 1)} />
+            </Field>
+            <button type="button"
+                    className="pb-2 text-[12px] text-rose-300 hover:underline"
+                    onClick={() => onChange(conceptos.filter((_, j) => j !== i))}>
+              quitar
+            </button>
+          </div>
+        ))}
+
+        <Button variant="ghost" onClick={() => onChange([...conceptos, { ...CONCEPTO_NUEVO }])}>
+          Añadir neumático o material
+        </Button>
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * Un valor del catálogo de la central: medida o marca.
+ *
+ * Es un desplegable y no un campo de texto a propósito. La medida y la marca
+ * son las dos claves con las que el tarifario busca el precio del neumático,
+ * y "315/80 R22,5" escrito a mano no casa con "315/80R22.5" del catálogo: la
+ * línea se quedaría sin precio y mandaría la tarifa a revisión manual. Con el
+ * desplegable solo se puede elegir algo que el motor sabe tarificar.
+ *
+ * Dos salvedades:
+ *
+ *  · Si el catálogo aún no ha llegado —o el superadministrador todavía no ha
+ *    elegido central— se cae a campo de texto en vez de dejar un desplegable
+ *    vacío que impediría dar de alta la asistencia. Dar el aviso nunca puede
+ *    bloquearse por la tarifa.
+ *  · Un valor que ya venga puesto y no esté en el catálogo (lo típico, algo
+ *    que ha rellenado la IA) se añade como opción en vez de desaparecer sin
+ *    decir nada.
+ */
+function DelCatalogo({ valor, opciones, onChange, ancho, vacio, libre }: {
+  valor: string;
+  opciones: string[];
+  onChange: (v: string) => void;
+  ancho: string;
+  vacio: string;
+  libre: string;
+}) {
+  if (opciones.length === 0) {
+    return <Input value={valor} className={ancho} placeholder={libre}
+                  onChange={(e) => onChange(e.target.value)} />;
+  }
+  const lista = valor && !opciones.includes(valor) ? [valor, ...opciones] : opciones;
+  return (
+    <Select value={valor} className={ancho} onChange={(e) => onChange(e.target.value)}>
+      <option value="">{vacio}</option>
+      {lista.map((o) => <option key={o} value={o}>{o}</option>)}
+    </Select>
   );
 }

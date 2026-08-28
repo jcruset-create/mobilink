@@ -4,6 +4,7 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/api_service.dart';
+import '../services/camara.dart';
 
 class ArrivalPhotosScreen extends StatefulWidget {
   final ApiService api;
@@ -26,7 +27,6 @@ class ArrivalPhotosScreen extends StatefulWidget {
 }
 
 class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
-  final _picker = ImagePicker();
 
   // Fotos obligatorias (solo en modo normal)
   File? _photoCamion;
@@ -66,14 +66,14 @@ class _ArrivalPhotosScreenState extends State<ArrivalPhotosScreen> {
 
   Future<void> _pickPhoto(String label, void Function(File) onPicked, {bool plate = false}) async {
     // Abre directamente la cámara (sin preguntar cámara/galería)
-    final xfile = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1920);
+    final xfile = await Camara.hacerFoto(context, maxWidth: 1920);
     if (xfile == null) return;
     final file = await _normalizeImage(xfile, plate: plate);
     setState(() => onPicked(file));
   }
 
   Future<void> _pickExtraPhoto() async {
-    final xfile = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1920);
+    final xfile = await Camara.hacerFoto(context, maxWidth: 1920);
     if (xfile == null) return;
     final file = await _normalizeImage(xfile);
     setState(() => _extraPhotos.add(file));

@@ -8,12 +8,14 @@ import '../services/file_queue.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
 import '../theme.dart';
+import '../services/camara.dart';
 
 const Map<String, String> kCategorias = {
   'arrival': 'Vehículo al llegar',
   'damage': 'Daño o avería',
   'work': 'Trabajo realizado',
   'part': 'Pieza sustituida',
+  'mounting': 'Montaje del neumático',
   'finished': 'Vehículo finalizado',
   'document': 'Documento',
   'other': 'Otros',
@@ -81,8 +83,10 @@ class _PhotosScreenState extends State<PhotosScreen> {
   }
 
   Future<void> _agregarFoto(ImageSource origen) async {
-    final picker = ImagePicker();
-    final foto = await picker.pickImage(source: origen, imageQuality: 90);
+    // Pasa por Camara: pide el permiso antes y explica el fallo si lo hay.
+    final foto = origen == ImageSource.camera
+        ? await Camara.hacerFoto(context)
+        : await Camara.elegirDeGaleria(context);
     if (foto == null) return;
 
     setState(() { _busy = true; _progreso = 0.2; });

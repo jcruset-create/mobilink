@@ -91,7 +91,7 @@ export async function pendientesDeCierre(p: Periodo): Promise<Record<string, unk
        LEFT JOIN connect_clients c ON c.id = ca."clientId"
        LEFT JOIN connect_workshops w ON w.id = ca."workshopId"
        LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
-      WHERE ca.status IN ('finished', 'cancelled')
+      WHERE ca.status IN ('finished', 'cancelled', 'returning_to_workshop', 'at_workshop')
         AND COALESCE(ca."serviceOrderedAtMs", ca."createdAtMs") BETWEEN $1 AND $2
         AND ($3::int IS NULL OR ca."controlCenterId" = $3)
         AND NOT EXISTS (SELECT 1 FROM connect_assistance_pricings x

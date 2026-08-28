@@ -124,8 +124,24 @@ export type PendienteDeIngresar = {
   dias: number | null;
 };
 
-export const ingresos = () =>
-  pedir<{ ingresos: IngresoEnRed[]; pendiente: PendienteDeIngresar[] }>("/deposits");
+export type FiltrosIngresos = {
+  centroId?: string | null;
+  registerId?: number | null;
+  desde?: string | null;
+  hasta?: string | null;
+};
+
+export const ingresos = (f: FiltrosIngresos = {}) => {
+  const q = new URLSearchParams();
+  if (f.centroId) q.set("centroId", f.centroId);
+  if (f.registerId) q.set("registerId", String(f.registerId));
+  if (f.desde) q.set("desde", f.desde);
+  if (f.hasta) q.set("hasta", f.hasta);
+  const cola = q.toString();
+  return pedir<{ ingresos: IngresoEnRed[]; pendiente: PendienteDeIngresar[] }>(
+    `/deposits${cola ? `?${cola}` : ""}`
+  );
+};
 
 export type CambioPorPieza = {
   valorCentimos: number;
@@ -352,4 +368,37 @@ export const asignarZona = (centroId: string, zonaId: string | null) =>
   pedir<{ ok: true }>(`/centers/${centroId}/zone`, {
     method: "PATCH",
     body: JSON.stringify({ zonaId }),
+  });
+
+/**
+ * Vuelve a pedirle a la caja que cuente sus ingresos. No cambia nada en la
+ * caja: repara lo que Central no llegó a ver.
+ */
+export const reemitirIngresos = (f: { centroId?: string | null; registerId?: number | null }) =>
+  pedir<{ reenviados: number }>("/deposits/resync", json({
+    centroId: f.centroId ?? null,
+    registerId: f.registerId ?? null,
+  }));
+
+/**
+ * El resguardo del ingreso, por la API de Central y no por la de la caja: un
+ * supervisor de red puede no tener `cash.view`, y el PDF es el mismo.
+ */
+export async function resguardoIngreso(depositId: number): Promise<Blob> {
+  const r = await fetch(`${BASE}/deposits/${depositId}/report.pdf`, {
+    headers: await sessionHeaders(),
+  });
+  if (!r.ok) {
+    // El error viene en JSON aunque la ruta prometa un PDF.
+    const cuerpo = await r.json().catch(() => ({}));
+    throw new Error(cuerpo?.error || `Error ${r.status}`);
+  }
+  return r.blob();
+}
+
+/** Un piso más abajo del árbol: qué taller es el de esta caja. */
+export const asignarCentro = (registerId: number, centroId: string | null) =>
+  pedir<{ ok: true }>(`/registers/${registerId}/center`, {
+    method: "PATCH",
+    body: JSON.stringify({ centroId }),
   });

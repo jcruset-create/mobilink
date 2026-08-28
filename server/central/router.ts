@@ -28,12 +28,14 @@ import {
   transitosAbiertos,
 } from "./queries.ts";
 import * as jerarquia from "../cash/hierarchy.ts";
+import * as ingresosCaja from "../cash/bankdeposits.ts";
 import * as reglas from "./rules/service.ts";
 import * as avisos from "./notifications/service.ts";
 import * as clientes from "./api/clients.ts";
 import * as webhooks from "./api/webhooks.ts";
 import * as conciliacion from "./reconciliation/service.ts";
 import { salud } from "./health.ts";
+import { informeIngreso } from "../cash/report.ts";
 import * as kpis from "./reports/kpis.ts";
 import { aCsv, importe } from "./reports/csv.ts";
 import * as prediccion from "./forecast/service.ts";
@@ -69,6 +71,11 @@ function ruta(handler: (req: Request, res: Response) => Promise<void>) {
       res.status(500).json({ error: "Error interno de MC Central" });
     }
   };
+}
+
+/** AAAA-MM-DD o nada. Un filtro mal escrito no debe tumbar la pantalla. */
+function fechaValida(v: unknown): string | null {
+  return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
 }
 
 export function createCentralRouter(): Router {
@@ -128,6 +135,10 @@ export function createCentralRouter(): Router {
         ingresosEnRed(empresaId, {
           centroId: typeof q.centroId === "string" ? q.centroId : null,
           registerId: typeof q.registerId === "string" ? Number(q.registerId) : null,
+          // Solo se aceptan fechas con forma de fecha: lo demás se ignora en
+          // vez de llegar a la consulta y reventar con un error de PostgreSQL.
+          desde: fechaValida(q.desde),
+          hasta: fechaValida(q.hasta),
         }),
         pendienteDeIngresar(empresaId),
       ]);
@@ -596,6 +607,77 @@ export function createCentralRouter(): Router {
         ctx,
         String(req.params.id),
         typeof b.zonaId === "string" ? b.zonaId : null
+      );
+      res.json({ ok: true });
+    })
+  );
+
+  /**
+   * Volver a pedirle a la caja que cuente sus ingresos.
+   *
+   * Repara lo que Central no vio en su momento: ingresos anteriores a que
+   * existiera el evento, o cuya fecha se puso cuando completar todavía no
+   * avisaba. No cambia ni un dato de la caja.
+   *
+   * Pide `central.zones.configure` y no `central.view`: escribe en la cola de
+   * eventos y sube la versión del agregado. Mirar no es repararlo.
+   */
+  r.post(
+    "/deposits/resync",
+    exigirPermiso("central.zones.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const ctx = { empresaId: req.authCtx!.empresaId, userId: req.authCtx!.userId, ip: req.ip };
+      res.json(
+        await ingresosCaja.reemitirIngresos(ctx, {
+          centroId: typeof b.centroId === "string" ? b.centroId : null,
+          registerId: typeof b.registerId === "number" ? b.registerId : null,
+        })
+      );
+    })
+  );
+
+  /**
+   * El resguardo del ingreso, en PDF.
+   *
+   * Ruta propia y no la de la caja aunque el PDF sea el mismo: aquélla exige
+   * `cash.view`, y un supervisor de red que solo mira Central no tiene por qué
+   * tenerlo. Aquí basta `central.view`.
+   *
+   * La empresa sale de la sesión, nunca de la petición: `informeIngreso` la
+   * recibe y filtra por ella, así que pedir el resguardo de otra empresa
+   * cambiando el número en la barra del navegador no devuelve nada.
+   */
+  r.get(
+    "/deposits/:id/report.pdf",
+    exigirPermiso("central.view"),
+    ruta(async (req, res) => {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: "Ese ingreso no existe." });
+        return;
+      }
+      const pdf = await informeIngreso(req.authCtx!.empresaId, id);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="ingreso-${id}.pdf"`);
+      res.send(pdf);
+    })
+  );
+
+  /**
+   * Poner una caja en su taller. El espejo de la ruta de arriba, un piso más
+   * abajo del árbol: zona → taller → caja.
+   */
+  r.patch(
+    "/registers/:id/center",
+    exigirPermiso("central.zones.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const ctx = { empresaId: req.authCtx!.empresaId, userId: req.authCtx!.userId, ip: req.ip };
+      await jerarquia.asignarCentroACaja(
+        ctx,
+        Number(req.params.id),
+        typeof b.centroId === "string" && b.centroId ? b.centroId : null
       );
       res.json({ ok: true });
     })

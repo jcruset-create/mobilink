@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart' show exteriorMode;
@@ -16,6 +15,7 @@ import 'history_screen.dart';
 import 'login_screen.dart';
 import 'otf_screen.dart';
 import 'payments_screen.dart';
+import '../services/camara.dart';
 
 class AssistancesScreen extends StatefulWidget {
   final ApiService api;
@@ -112,8 +112,7 @@ class _AssistancesScreenState extends State<AssistancesScreen>
   }
 
   Future<void> _scanPlate() async {
-    final picker = ImagePicker();
-    final x = await picker.pickImage(source: ImageSource.camera, maxWidth: 1600);
+    final x = await Camara.hacerFoto(context, maxWidth: 1600);
     if (x == null) return;
     if (!mounted) return;
     showDialog(context: context, barrierDismissible: false, builder: (_) =>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { supabase } from "../services/supabase";
+import { esSuperadmin } from "../../superadmin";
 
 type RequireAuthProps = { children: React.ReactNode };
 
@@ -45,7 +46,10 @@ export default function RequireAuth({ children }: RequireAuthProps) {
     supabase.auth.getSession().then(async ({ data }) => {
       const user = data.session?.user ?? null;
       setAuthed(!!user);
-      if (user) setPantallas(await cargarPantallasAlmacen(user.id));
+      // El superadmin no tiene restriccion de pantallas en ningun modulo.
+      if (user) {
+        setPantallas((await esSuperadmin(user.id)) ? null : await cargarPantallasAlmacen(user.id));
+      }
       setChecking(false);
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {

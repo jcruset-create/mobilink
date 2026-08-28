@@ -42,6 +42,14 @@ export async function runConnectChecksOnce(): Promise<void> {
       if (recs > 0) console.log(`[Connect] worker: ${recs} recomendación(es) de IA generadas`);
     }
     if (tick % 240 === 3) await predictDemand(); // predicción de demanda cada hora
+    if (tick % 4 === 1) {
+      // Espejo económico de Assist (apagado salvo interruptor en el centro)
+      const { pasadaDeEspejos } = await import("./assistMirror.ts");
+      const e = await pasadaDeEspejos();
+      if (e.creados + e.bloqueados + e.regularizados > 0) {
+        console.log(`[Connect] espejo Assist: ${e.creados} creados, ${e.bloqueados} bloqueados, ${e.regularizados} regularizados`);
+      }
+    }
     if (tick % 240 === 7) {
       // Caducidad de las operaciones idempotentes de Lite, una vez por hora
       const purgadas = await purgeLiteActions();

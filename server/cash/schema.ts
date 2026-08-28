@@ -1155,6 +1155,240 @@ export async function initCash(): Promise<void> {
     );
   `);
 
+  /*
+   * El comprobante del banco se adjunta AL INGRESO, no a una jornada.
+   *
+   * Un ingreso junta varios cierres —el resguardo que da el banco cubre los
+   * tres días de golpe— así que colgarlo de una jornada concreta sería mentir:
+   * ¿de cuál? La fila de documentos gana un ancla más (`deposit_id`) y
+   * `session_id` deja de ser obligatorio, con un CHECK que exige exactamente
+   * un dueño: o jornada (con o sin operación) o ingreso, nunca ambos ni
+   * ninguno. `documentosDeJornada` filtra por `session_id`, así que los
+   * comprobantes de ingresos no se cuelan en los informes de cierre.
+   */
+  await pool.query(`
+    ALTER TABLE cash_operation_documents
+      ADD COLUMN IF NOT EXISTS deposit_id INTEGER REFERENCES cash_bank_deposits(id) ON DELETE RESTRICT;
+    ALTER TABLE cash_operation_documents
+      ALTER COLUMN session_id DROP NOT NULL;
+    ALTER TABLE cash_operation_documents
+      DROP CONSTRAINT IF EXISTS cash_opdoc_un_ancla;
+    ALTER TABLE cash_operation_documents
+      ADD CONSTRAINT cash_opdoc_un_ancla CHECK (
+        (session_id IS NOT NULL AND deposit_id IS NULL)
+        OR (session_id IS NULL AND deposit_id IS NOT NULL AND operation_id IS NULL)
+      );
+    CREATE INDEX IF NOT EXISTS cash_opdoc_deposit_idx
+      ON cash_operation_documents(deposit_id) WHERE deposit_id IS NOT NULL;
+  `);
+
+  /*
+   * Maestro de bancos, por empresa.
+   *
+   * El `codigo` son las cuatro cifras de entidad del IBAN, que es lo que
+   * permite reconocer el banco al teclear la cuenta. Va por empresa y no
+   * global porque el logotipo lo sube cada una: la lista de bancos es la misma
+   * para todos, pero la imagen no se puede compartir entre inquilinos.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_banks (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      codigo TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      logo_url TEXT,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, codigo)
+    );
+    CREATE INDEX IF NOT EXISTS cash_banks_empresa_idx ON cash_banks(empresa_id, activo);
+  `);
+
+  /*
+   * Cuentas bancarias de la empresa: a dónde va el dinero de cada ingreso.
+   *
+   * Sin esto, un ingreso decía cuánto y cuándo pero no A DÓNDE, y con dos
+   * bancos abiertos eso es justo lo que hace falta para conciliar contra el
+   * extracto correcto.
+   *
+   * `activa` en vez de borrar: una cuenta que se cierra sigue siendo la de los
+   * ingresos que ya se hicieron, y borrarla los dejaría huérfanos.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_bank_accounts (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      banco TEXT NOT NULL,
+      /* IBAN normalizado: sin espacios y en mayúsculas, como se compara. */
+      iban TEXT NOT NULL,
+      /* Nombre corto para el desplegable: «BBVA nómina», «Caixa taller». */
+      alias TEXT NOT NULL DEFAULT '',
+      /* Logotipo del banco, para que el resguardo se reconozca de un vistazo. */
+      logo_url TEXT,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      por_defecto BOOLEAN NOT NULL DEFAULT false,
+      orden INTEGER NOT NULL DEFAULT 0,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, iban)
+    );
+    CREATE INDEX IF NOT EXISTS cash_bank_accounts_empresa_idx
+      ON cash_bank_accounts(empresa_id, activa, orden);
+    ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS logo_url TEXT;
+    /* El banco del maestro, del que sale el logotipo. Se resuelve solo por
+       el código de entidad del IBAN. */
+    ALTER TABLE cash_bank_accounts
+      ADD COLUMN IF NOT EXISTS bank_id INTEGER REFERENCES cash_banks(id) ON DELETE SET NULL;
+  `);
+
+  /*
+   * Enlaza con el maestro las cuentas que se dieron de alta ANTES de que
+   * existiera.
+   *
+   * La columna se añadió vacía y solo se rellena al crear una cuenta nueva, así
+   * que las que ya estaban se quedaban sin banco —y por tanto sin logotipo en
+   * el resguardo— para siempre, sin que nada lo dijera.
+   *
+   * El enlace sale del propio IBAN: las cuatro cifras siguientes al `ES` y su
+   * dígito de control son el código de entidad. Solo se tocan las que están a
+   * NULL, así que esto no pisa nada puesto a mano y se puede repetir.
+   */
+  await pool.query(`
+    UPDATE cash_bank_accounts c
+       SET bank_id = b.id
+      FROM cash_banks b
+     WHERE c.bank_id IS NULL
+       AND b.empresa_id = c.empresa_id
+       AND c.iban LIKE 'ES%'
+       AND length(c.iban) = 24
+       AND b.codigo = substring(c.iban from 5 for 4)
+  `);
+
+  /*
+   * Una sola cuenta por defecto por empresa. Índice único parcial y no una
+   * comprobación en el código: con dos marcadas, «la de por defecto» dejaría
+   * de significar nada y la elegida dependería del orden de la consulta.
+   */
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_bank_accounts_una_por_defecto_idx
+      ON cash_bank_accounts(empresa_id) WHERE por_defecto;
+  `);
+
+  /*
+   * La cuenta a la que fue cada ingreso. NULL en los ya hechos: no se puede
+   * adivinar a qué banco fueron, y ponerles una a dedo sería inventarse un
+   * dato contable. Se rellenan a mano desde la pantalla si hace falta.
+   *
+   * ON DELETE RESTRICT: una cuenta con ingresos detrás no se borra, se
+   * desactiva.
+   */
+  await pool.query(`
+    ALTER TABLE cash_bank_deposits
+      ADD COLUMN IF NOT EXISTS bank_account_id INTEGER
+        REFERENCES cash_bank_accounts(id) ON DELETE RESTRICT;
+  `);
+
+  /*
+   * Reglas del escáner de facturas: qué TPV es de quién.
+   *
+   * Miran CAMPOS del resguardo, no su texto suelto, y eso no es un detalle. En
+   * una factura real de este taller, cobrada por un TPV de BBVA, el resguardo
+   * imprime «LBL : Visa CaixaBank», que es el producto de la tarjeta DEL
+   * CLIENTE. Una regla de «si pone CaixaBank es CaixaBank» la clasificaría mal;
+   * el número de comercio, en cambio, identifica el datáfono y no miente.
+   *
+   * `forma_pago` es un código del catálogo de la empresa y NO lleva clave
+   * ajena: el catálogo es editable y una forma dada de baja no debe tumbar una
+   * regla ni al revés. El clasificador comprueba al leer que el código siga
+   * existiendo, y si no, se salta la regla y lo dice.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_payment_rules (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      campo TEXT NOT NULL
+        CHECK (campo IN ('ADQUIRENTE','COMERCIO','TERMINAL','RED','CUENTA','PLANTILLA','TEXTO')),
+      patron TEXT NOT NULL,
+      forma_pago TEXT NOT NULL,
+      /* 0..1. Es el techo de la propuesta: nunca sube por encima de esto. */
+      confianza NUMERIC(3,2) NOT NULL DEFAULT 0.95
+        CHECK (confianza >= 0 AND confianza <= 1),
+      /* Si además puede quedar marcada sola en la pantalla de cobros. */
+      auto_seleccionar BOOLEAN NOT NULL DEFAULT true,
+      prioridad INTEGER NOT NULL DEFAULT 100,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      notas TEXT,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, campo, patron)
+    );
+    CREATE INDEX IF NOT EXISTS cash_payment_rules_empresa_idx
+      ON cash_payment_rules(empresa_id, activa, prioridad);
+  `);
+
+  /*
+   * El rastro de cada escaneo.
+   *
+   * Se guarda lo que dijo el modelo, lo que se entendió, lo que se propuso y
+   * —cuando el cobro acaba registrándose— con qué se quedó la persona. Sirve
+   * para tres cosas que solo se pueden hacer si el dato está: investigar un
+   * cobro mal clasificado meses después, medir cuánto acierta el escáner y
+   * saber qué campos corrige siempre el mostrador, que es por dónde hay que
+   * mejorarlo.
+   *
+   * `operation_id` es NULL mientras el cobro no exista, y puede quedarse NULL
+   * para siempre: escanear no obliga a cobrar. Es justamente la prueba de que
+   * el escáner no confirma nada.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_invoice_scans (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      session_id INTEGER REFERENCES cash_sessions(id) ON DELETE SET NULL,
+      operation_id INTEGER REFERENCES cash_operations(id) ON DELETE SET NULL,
+
+      /* Del fichero: nombre, tipo, tamaño y huella. El fichero en sí se cuelga
+         del cobro por la vía de siempre, cuando el cobro existe. */
+      nombre TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      tamano_bytes BIGINT NOT NULL,
+      sha256 TEXT NOT NULL,
+
+      motor TEXT NOT NULL,
+      duracion_ms INTEGER NOT NULL DEFAULT 0,
+      /* Por qué no salió, cuando no sale. El escaneo que hay que investigar
+         meses después es justo el que falló, así que también deja rastro. */
+      error TEXT,
+      /* Lo que dijo el modelo y lo que se entendió, uno al lado del otro. */
+      extraccion_cruda JSONB,
+      extraccion_normalizada JSONB,
+
+      forma_pago_propuesta TEXT,
+      forma_pago_confianza NUMERIC(3,2),
+      forma_pago_motivo TEXT,
+      regla_id INTEGER,
+      auto_seleccionada BOOLEAN NOT NULL DEFAULT false,
+      avisos JSONB,
+
+      /* Se rellenan al confirmar el cobro, si se confirma. */
+      campos_corregidos JSONB,
+      forma_pago_final TEXT,
+      confirmado_at_ms BIGINT,
+
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cash_invoice_scans_empresa_idx
+      ON cash_invoice_scans(empresa_id, creado_at_ms DESC);
+    CREATE INDEX IF NOT EXISTS cash_invoice_scans_operacion_idx
+      ON cash_invoice_scans(operation_id) WHERE operation_id IS NOT NULL;
+    /* Añadida después de la tabla: un CREATE TABLE IF NOT EXISTS no toca una
+       tabla que ya existe, y sin esto el primer escaneo fallido después de
+       actualizar reventaría al escribir su rastro. */
+    ALTER TABLE cash_invoice_scans ADD COLUMN IF NOT EXISTS error TEXT;
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 

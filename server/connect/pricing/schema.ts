@@ -551,6 +551,56 @@ export async function initPricing(): Promise<void> {
       ON connect_workshop_holidays ("controlCenterId", date);
   `);
 
+  await db.query(`
+    /*
+     * Conceptos de la asistencia: qué se montó de verdad (neumáticos,
+     * materiales). Ver docs/PROMPT_conceptos_asistencia.md.
+     *
+     * El ciclo es previsto → confirmado | no_usado. Lo previsto lo asigna la
+     * central al crear la asistencia (cambio pactado); el taller lo confirma
+     * con la foto de montaje, o declara+confirma el que montó cuando la
+     * realidad se desvía (reparación fallida). Al cierre SOLO se factura lo
+     * confirmado: lo previsto sin resolver sale como aviso, nunca cobrado
+     * por defecto.
+     *
+     * Aquí no hay precios a propósito: quien declara dice QUÉ y CUÁNTOS. El
+     * precio lo pone el tarifario publicado en el cierre. Un taller que
+     * pudiera declarar su precio estaría escribiendo su propia factura.
+     */
+    CREATE TABLE IF NOT EXISTS connect_assistance_concepts (
+      id SERIAL PRIMARY KEY,
+      "controlCenterId" INTEGER NOT NULL REFERENCES connect_control_centers(id),
+      "assistanceId" INTEGER NOT NULL REFERENCES connect_assistances(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,                     -- TIRE | MATERIAL
+      size TEXT,                              -- neumático: medida canónica
+      brand TEXT,                             -- neumático: marca normalizada
+      position TEXT NOT NULL DEFAULT 'ANY',   -- STEER | DRIVE | TRAILER | ANY
+      "conceptCode" TEXT,                     -- material: código del suplemento
+      quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+      status TEXT NOT NULL DEFAULT 'previsto', -- previsto | confirmado | no_usado
+      "statusReason" TEXT,                    -- obligatorio al marcar no_usado
+      "plannedBy" TEXT,
+      "plannedAtMs" BIGINT,
+      "confirmedBy" TEXT,
+      "confirmedAtMs" BIGINT,
+      "confirmedVia" TEXT,                    -- lite | panel
+      "evidenceRef" TEXT,                     -- foto de montaje: c<id> | a<id>
+      "clientActionId" TEXT,                  -- idempotencia de la cola de Lite
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL,
+      "deletedAtMs" BIGINT,
+      CONSTRAINT connect_assistance_concepts_forma CHECK (
+        (kind = 'TIRE' AND size IS NOT NULL) OR
+        (kind = 'MATERIAL' AND "conceptCode" IS NOT NULL)
+      )
+    );
+    CREATE INDEX IF NOT EXISTS idx_assistance_concepts_asistencia
+      ON connect_assistance_concepts ("assistanceId");
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_assistance_concepts_accion
+      ON connect_assistance_concepts ("assistanceId", "clientActionId")
+      WHERE "clientActionId" IS NOT NULL;
+  `);
+
   /*
    * La comunidad autónoma del taller se guarda resuelta a partir de su
    * provincia. Se guarda en lugar de calcularse en cada consulta porque la
@@ -584,6 +634,20 @@ export async function initPricing(): Promise<void> {
   `);
 
   await migrarImportesADecimal();
+  /*
+   * Una asistencia del core tiene COMO MUCHO una fila en Connect: es lo que
+   * impide que el espejo económico de Assist facture dos veces el mismo
+   * servicio. Va aparte y con el fallo tragado a propósito: si en alguna
+   * base hubiera un duplicado histórico, el índice no se crea, el alta de
+   * espejos falla EN VOZ ALTA en el log (su INSERT exige este índice) y el
+   * arranque del servidor no se cae. Un servidor caído es peor que un
+   * espejo pendiente.
+   */
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_connect_assistances_core_unico
+      ON connect_assistances ("coreAssistanceId")
+  `).catch((e: any) => console.error("[Pricing] índice único coreAssistanceId:", e?.message));
+
   await habilitarRls();
 }
 
@@ -643,6 +707,7 @@ async function habilitarRls(): Promise<void> {
     "connect_manufacturer_price_lists", "connect_tariff_tire_prices",
     "connect_assistance_pricings", "connect_assistance_price_lines",
     "connect_pricing_overrides", "connect_billing_marks", "connect_workshop_holidays",
+    "connect_assistance_concepts",
   ];
   for (const tabla of tablas) {
     await db.query(`ALTER TABLE ${tabla} ENABLE ROW LEVEL SECURITY;`).catch(() => {});

@@ -5,11 +5,12 @@
  * idéntico en las tres.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { boFetch } from "../services/api";
 import { useConnectEvents } from "../services/events";
 import { Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState } from "./ui";
+import Fotos from "./Fotos";
 import { fmtDateTime } from "../types";
 
 export type Unit = {
@@ -18,6 +19,8 @@ export type Unit = {
   technicianRef: string | null; latitude: number | null; longitude: number | null;
   positionText: string | null; speedKmh: number | null; connectionStatus: string | null;
   activeAssistanceId: number | null; expedientNumber: string | null;
+  make: string | null; model: string | null; notes: string | null; origin: string | null;
+  workshopVan: boolean; truckTyreMachine: boolean;
   manualStatus: string | null; manualReason: string | null; manualByName: string | null;
   lastReportAtMs: number | null;
   sharedWithCentral: boolean; sharedChangedBy: string | null;
@@ -45,13 +48,24 @@ export const UNIT_STATUS: Record<string, { label: string; cls: string }> = {
 
 const MANUAL_OPTIONS = ["unavailable", "out_of_service", "breakdown", "resting", "shift_ended", "waiting_material"];
 
-export default function TablaUnidades({ endpoint, canMove = false, workshops = [] }: {
+type Compartir = {
+  id: number; name: string; sharedWithCentral: boolean;
+  sharedChangedBy: string | null; sharedChangedAtMs: number | null;
+};
+
+export default function TablaUnidades({
+  endpoint, canMove = false, workshops = [], workshopId = null, puedeAltaManual = false,
+}: {
   /** De dónde leer: "/mobile-units" o "/workshops/:id/mobile-units". */
   endpoint: string;
   /** Permite mover unidades a otro taller (cc_admin). */
   canMove?: boolean;
   /** Talleres de destino para el selector de mover. */
   workshops?: { id: number; name: string }[];
+  /** Taller al que se limita el cuadro de lo compartido, si es la ficha de uno. */
+  workshopId?: number | null;
+  /** Permite dar de alta furgonetas a mano: solo tiene sentido en un taller. */
+  puedeAltaManual?: boolean;
 }) {
   const [rows, setRows] = useState<Unit[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +73,69 @@ export default function TablaUnidades({ endpoint, canMove = false, workshops = [
   const [editing, setEditing] = useState<number | null>(null);
   const [moving, setMoving] = useState<number | null>(null);
   const [manual, setManual] = useState({ status: "unavailable", reason: "" });
+  // Lo que el taller NO comparte: aquí solo el nombre, para poder devolverle
+  // el permiso. Ni posición, ni matrícula, ni técnico, ni estado.
+  const [compartir, setCompartir] = useState<Compartir[] | null>(null);
+  /** Unidad cuya ficha (matrícula, marca, modelo, fotos) está abierta. */
+  const [abierta, setAbierta] = useState<number | null>(null);
+  const [ficha, setFicha] = useState<Record<string, string>>({});
+  const [alta, setAlta] = useState<Record<string, string> | null>(null);
+
+  const CAMPOS_UNIDAD: [string, string, string][] = [
+    ["name", "Nombre", "w-48"],
+    ["plate", "Matrícula", "w-32"],
+    ["make", "Marca", "w-36"],
+    ["model", "Modelo", "w-40"],
+    ["notes", "Notas", "w-64"],
+  ];
+
+  const abrirFicha = (u: Unit) => {
+    setAbierta(abierta === u.id ? null : u.id);
+    setFicha({
+      ...Object.fromEntries(CAMPOS_UNIDAD.map(([c]) => [c, String((u as any)[c] ?? "")])),
+      workshopVan: u.workshopVan ? "si" : "no",
+      truckTyreMachine: u.truckTyreMachine ? "si" : "no",
+    });
+  };
+
+  const guardarFicha = async (u: Unit) => {
+    if (!ficha.name?.trim()) { setError("La furgoneta necesita un nombre."); return; }
+    setBusy(true); setError(null);
+    try {
+      await boFetch(`/mobile-units/${u.id}`, {
+        method: "PATCH",
+        body: {
+          ...ficha,
+          workshopVan: ficha.workshopVan === "si",
+          truckTyreMachine: ficha.truckTyreMachine === "si",
+        },
+      });
+      load();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  const crearUnidad = async () => {
+    if (!alta?.name?.trim()) { setError("La furgoneta necesita un nombre."); return; }
+    setBusy(true); setError(null);
+    try {
+      await boFetch(`/workshops/${workshopId}/mobile-units`, {
+        method: "POST",
+        body: {
+          ...alta,
+          workshopVan: alta.workshopVan === "si",
+          truckTyreMachine: alta.truckTyreMachine === "si",
+        },
+      });
+      setAlta(null);
+      load();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  const borrarUnidad = async (u: Unit) => {
+    setBusy(true); setError(null);
+    try { await boFetch(`/mobile-units/${u.id}`, { method: "DELETE" }); setAbierta(null); load(); }
+    catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
 
   const load = useCallback(() => {
     boFetch<{ data: Unit[] }>(endpoint).then((r) => setRows(r.data)).catch((e) => setError(e.message));
@@ -98,9 +175,120 @@ export default function TablaUnidades({ endpoint, canMove = false, workshops = [
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
 
+  /* Solo lo pide quien administra: para el resto el endpoint responde 403. */
+  const abrirCompartir = async () => {
+    setError(null);
+    try {
+      const r = await boFetch<{ data: Compartir[] }>(
+        `/mobile-units/sharing${workshopId != null ? `?workshopId=${workshopId}` : ""}`);
+      setCompartir(r.data);
+    } catch (e: any) { setError(e.message); }
+  };
+
+  const cambiarCompartir = async (id: number, shared: boolean) => {
+    setBusy(true); setError(null);
+    try {
+      await boFetch(`/mobile-units/${id}/share`, { method: "PATCH", body: { shared } });
+      await abrirCompartir();
+      load();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  const cuadroCompartir = (
+    <div className="mt-2 text-[12px]">
+      {compartir === null ? (
+        <button onClick={abrirCompartir} className="text-slate-500 hover:text-slate-300 hover:underline">
+          Gestionar qué unidades comparte el taller
+        </button>
+      ) : (
+        <Card className="p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="font-semibold text-slate-300">Unidades compartidas con Central</span>
+            <button onClick={() => setCompartir(null)} className="text-slate-500 hover:text-slate-300">✕</button>
+          </div>
+          <p className="mb-2 text-slate-500">
+            Lo que no se comparte no aparece en la tabla y Central no ve ni su posición, ni su
+            matrícula, ni su técnico. Aquí solo está el nombre, para poder devolver el permiso.
+          </p>
+          {compartir.length === 0 ? (
+            <span className="text-slate-500">No hay unidades.</span>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {compartir.map((c) => (
+                <div key={c.id} className="flex items-center gap-2">
+                  <button
+                    disabled={busy}
+                    onClick={() => cambiarCompartir(c.id, !c.sharedWithCentral)}
+                    className={`rounded-full border px-2 py-0.5 text-[11px] ${c.sharedWithCentral
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                      : "border-slate-600 bg-slate-800 text-slate-400"}`}
+                  >
+                    {c.sharedWithCentral ? "Compartida ✓" : "No compartida"}
+                  </button>
+                  <span className="text-slate-300">{c.name}</span>
+                  {c.sharedChangedBy && (
+                    <span className="text-[11px] text-slate-600">· {c.sharedChangedBy}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+
+  const cuadroAlta = !puedeAltaManual || !canMove || workshopId == null ? null : (
+    <div className="mt-2">
+      {alta === null ? (
+        <Button variant="ghost" onClick={() => setAlta({ name: "", plate: "", make: "", model: "", notes: "" })}>
+          + Añadir furgoneta
+        </Button>
+      ) : (
+        <Card className="p-3">
+          <div className="flex flex-wrap items-end gap-2">
+            {CAMPOS_UNIDAD.map(([campo, etiqueta, ancho]) => (
+              <label key={campo} className="flex flex-col gap-1">
+                <span className="text-[11px] uppercase tracking-wide text-slate-500">
+                  {etiqueta}{campo === "name" ? " *" : ""}
+                </span>
+                <Input value={alta[campo] ?? ""} className={ancho}
+                       onChange={(e) => setAlta({ ...alta, [campo]: e.target.value })} />
+              </label>
+            ))}
+            <div className="flex flex-col gap-1 pb-1">
+              <label className="flex items-center gap-1.5 text-[13px] text-slate-300">
+                <input type="checkbox" checked={alta.workshopVan === "si"}
+                       onChange={(e) => setAlta({ ...alta, workshopVan: e.target.checked ? "si" : "no" })} />
+                Furgón taller
+              </label>
+              <label className="flex items-center gap-1.5 text-[13px] text-slate-300">
+                <input type="checkbox" checked={alta.truckTyreMachine === "si"}
+                       onChange={(e) => setAlta({ ...alta, truckTyreMachine: e.target.checked ? "si" : "no" })} />
+                Desmontadora de camión
+              </label>
+            </div>
+            <Button disabled={busy} onClick={crearUnidad}>Añadir</Button>
+            <Button variant="ghost" disabled={busy} onClick={() => setAlta(null)}>Cancelar</Button>
+          </div>
+          <p className="mt-2 text-[12px] text-slate-500">
+            Para talleres sin GPS de flota. Las furgonetas de Mobilink Assist llegan solas por el
+            sincronismo y no hay que darlas de alta aquí.
+          </p>
+        </Card>
+      )}
+    </div>
+  );
+
   if (error && rows.length === 0) return <ErrorBanner message={error} onClose={() => setError(null)} />;
   if (rows.length === 0) {
-    return <EmptyState message="Sin unidades sincronizadas (se cargan automáticamente desde los vehículos del taller y Webfleet)." />;
+    return (
+      <>
+        <EmptyState message="Ninguna unidad compartida con Central. El taller decide cuáles comparte; las que no comparte no se ven desde aquí." />
+        {cuadroAlta}
+        {canMove && cuadroCompartir}
+      </>
+    );
   }
 
   return (
@@ -109,16 +297,32 @@ export default function TablaUnidades({ endpoint, canMove = false, workshops = [
       <Card className="overflow-x-auto">
         <table className="w-full">
           <thead><tr className="border-b border-slate-700">
-            <Th>Unidad</Th><Th>Matrícula</Th><Th>Estado</Th><Th>Central</Th><Th>Técnico</Th><Th>Asistencia</Th>
+            <Th>Unidad</Th><Th>Matrícula</Th><Th>Vehículo</Th><Th>Estado</Th><Th>Central</Th><Th>Técnico</Th><Th>Asistencia</Th>
             <Th>Posición</Th><Th>Últ. señal</Th><Th></Th>
           </tr></thead>
           <tbody>
             {rows.map((u) => {
               const st = UNIT_STATUS[u.status] ?? UNIT_STATUS.unknown;
               return (
-                <tr key={u.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                <Fragment key={u.id}>
+                <tr className="border-b border-slate-700/50 hover:bg-slate-700/30">
                   <Td className="font-semibold text-slate-100">{u.name}</Td>
                   <Td>{u.plate ?? "-"}</Td>
+                  <Td>
+                    {[u.make, u.model].filter(Boolean).join(" ") || <span className="text-slate-600">—</span>}
+                    {(u.workshopVan || u.truckTyreMachine) && (
+                      <div className="mt-0.5 flex flex-wrap gap-1">
+                        {u.workshopVan && (
+                          <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 text-[10px] text-sky-300"
+                                title="Furgón taller">taller</span>
+                        )}
+                        {u.truckTyreMachine && (
+                          <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 text-[10px] text-amber-300"
+                                title="Lleva máquina de montar y desmontar neumáticos de camión">desmontadora</span>
+                        )}
+                      </div>
+                    )}
+                  </Td>
                   <Td>
                     <Badge className={st.cls}>{st.label}</Badge>
                     {u.manualStatus && (
@@ -130,7 +334,7 @@ export default function TablaUnidades({ endpoint, canMove = false, workshops = [
                   <Td>
                     <button
                       disabled={busy}
-                      title={u.sharedChangedBy ? `Último cambio: ${u.sharedChangedBy}` : "El taller decide qué unidades comparte con Central"}
+                      title={u.sharedChangedBy ? `Último cambio: ${u.sharedChangedBy}` : "Dejar de compartir con Central: la unidad desaparece de esta pantalla"}
                       onClick={async () => {
                         setBusy(true); setError(null);
                         try { await boFetch(`/mobile-units/${u.id}/share`, { method: "PATCH", body: { shared: !u.sharedWithCentral } }); load(); }
@@ -187,15 +391,72 @@ export default function TablaUnidades({ endpoint, canMove = false, workshops = [
                         {canMove && workshops.length > 0 && (
                           <Button variant="ghost" onClick={() => setMoving(u.id)}>Mover…</Button>
                         )}
+                        <Button variant="ghost" onClick={() => abrirFicha(u)}>
+                          {abierta === u.id ? "Cerrar" : "Ficha y fotos…"}
+                        </Button>
                       </div>
                     )}
                   </Td>
                 </tr>
+
+                {abierta === u.id && (
+                  <tr>
+                    <td colSpan={10} className="bg-slate-900/40 p-3">
+                      <div className="flex flex-col gap-3">
+                        {canMove ? (
+                          <div className="flex flex-wrap items-end gap-2">
+                            {CAMPOS_UNIDAD.map(([campo, etiqueta, ancho]) => (
+                              <label key={campo} className="flex flex-col gap-1">
+                                <span className="text-[11px] uppercase tracking-wide text-slate-500">{etiqueta}</span>
+                                <Input value={ficha[campo] ?? ""} className={ancho}
+                                       onChange={(e) => setFicha({ ...ficha, [campo]: e.target.value })} />
+                              </label>
+                            ))}
+                            <div className="flex flex-col gap-1 pb-1">
+                              <label className="flex items-center gap-1.5 text-[13px] text-slate-300">
+                                <input type="checkbox" checked={ficha.workshopVan === "si"}
+                                       onChange={(e) => setFicha({ ...ficha, workshopVan: e.target.checked ? "si" : "no" })} />
+                                Furgón taller
+                              </label>
+                              <label className="flex items-center gap-1.5 text-[13px] text-slate-300">
+                                <input type="checkbox" checked={ficha.truckTyreMachine === "si"}
+                                       onChange={(e) => setFicha({ ...ficha, truckTyreMachine: e.target.checked ? "si" : "no" })} />
+                                Desmontadora de camión
+                              </label>
+                            </div>
+                            <Button disabled={busy} onClick={() => guardarFicha(u)}>Guardar cambios</Button>
+                            {u.origin === "manual" && (
+                              <Button variant="danger" disabled={busy} onClick={() => borrarUnidad(u)}>
+                                Dar de baja
+                              </Button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-[13px] text-slate-400">
+                            {[u.make, u.model].filter(Boolean).join(" ") || "Sin marca ni modelo"}
+                            {u.notes ? ` · ${u.notes}` : ""}
+                          </div>
+                        )}
+
+                        <Fotos
+                          endpoint={`/mobile-units/${u.id}/photos`}
+                          borrarBase="/mobile-units/photos"
+                          canEdit={canMove}
+                          titulo="Fotos del vehículo de asistencia"
+                          ayuda="La rotulación para reconocerlo, y el estado en que está: cuando alguien discute un daño, la foto de antes es lo único que zanja la discusión."
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>
         </table>
       </Card>
+      {cuadroAlta}
+      {canMove && cuadroCompartir}
     </>
   );
 }
