@@ -12,6 +12,7 @@ import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, Emp
 import TablaUnidades from "../components/TablaUnidades";
 import BotonCoordenadas from "../components/BotonCoordenadas";
 import { Campo } from "../components/CampoFicha";
+import ContactosFicha from "../components/ContactosFicha";
 import TarjetaOperario, { type Operator } from "../components/TarjetaOperario";
 import ImportarTallerWhatsApp, { CAMPOS_IMPORTABLES, type ImportacionConfirmada } from "../components/ImportarTallerWhatsApp";
 import {
@@ -305,6 +306,11 @@ export default function FichaEmpresa() {
               </a>
             )}
           </Card>
+          {/* Contactos del proveedor: hasta ahora solo los tenían los talleres,
+              y del proveedor se guardaba un email y un teléfono sueltos. */}
+          <div className="lg:col-span-2">
+            <ContactosFicha ownerType="provider" ownerId={Number(id)} canEdit={canEdit} titulo="Contactos del proveedor" />
+          </div>
           <Card className="p-4 lg:col-span-2">
             <h3 className="mb-2 text-sm font-semibold text-cyan-300">Autorización y SLA</h3>
             {!f.authorization ? (

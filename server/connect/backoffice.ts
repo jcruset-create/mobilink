@@ -209,6 +209,20 @@ const FOTOS_TALLER = ["fachada", "accesos", "interior", "otros"] as const;
  * como JSON, igual que `services`. Devuelve null cuando no viene nada, para
  * que el COALESCE de la consulta conserve lo que ya hubiera.
  */
+/** Fichas a las que puede colgarse un contacto. */
+const TIPOS_CONTACTO_OWNER = ["workshop", "provider", "client"] as const;
+
+/**
+ * Valida un email de contacto. Devuelve el mensaje de error o null si vale.
+ * No se exige el email —hay contactos que solo dan teléfono—, pero si lo
+ * escriben mal el aviso no llega y nadie se entera hasta que hace falta.
+ */
+function emailInvalido(valor: unknown): string | null {
+  const email = String(valor ?? "").trim();
+  if (!email) return null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? null : `El email "${email}" no es válido`;
+}
+
 function listaJson(valor: unknown): string | null {
   if (valor == null) return null;
   if (Array.isArray(valor)) return JSON.stringify(valor.map((v) => String(v).trim()).filter(Boolean));
@@ -1127,12 +1141,83 @@ export function createConnectBackofficeRouter(): Router {
     const name = String(req.body?.name || "").trim();
     if (!name) return err(res, 422, "validation_failed", "El nombre es obligatorio");
     const now = Date.now();
+    const emailMal = emailInvalido(req.body?.email);
+    if (emailMal) return err(res, 422, "validation_failed", emailMal);
     const r = await db.query(
-      `INSERT INTO connect_workshop_contacts ("workshopId", name, phone, role, notes, "createdAtMs", "updatedAtMs")
-       VALUES ($1,$2,$3,$4,$5,$6,$6) RETURNING *`,
+      `INSERT INTO connect_workshop_contacts
+         ("workshopId", "ownerType", "ownerId", name, phone, role, notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,'workshop',$1,$2,$3,$4,$5,$6,$6) RETURNING *`,
       [id, name, req.body?.phone ?? null, req.body?.role ?? null, req.body?.notes ?? null, now],
     );
     await auditConnect({ req, action: "workshop.contact_added", resourceType: "workshop", resourceId: id, detail: { name } });
+    res.status(201).json(r.rows[0]);
+  });
+
+  /**
+   * Contactos de cualquier ficha: taller, proveedor o cliente. Es la misma
+   * tabla que ya usaban los talleres (connect_workshop_contacts), con
+   * ownerType/ownerId; por eso la edición y el borrado siguen siendo
+   * /workshop-contacts/:id, que ya existía y está en uso.
+   */
+  router.get("/contacts", ...requireConnectRole("operator"), async (req, res) => {
+    const ownerType = String(req.query.ownerType || "");
+    const ownerId = Number(req.query.ownerId);
+    if (!TIPOS_CONTACTO_OWNER.includes(ownerType as any)) {
+      return err(res, 422, "validation_failed", "ownerType debe ser workshop, provider o client");
+    }
+    if (!Number.isFinite(ownerId)) return err(res, 422, "validation_failed", "ownerId no válido");
+    const r = await db.query(
+      `SELECT * FROM connect_workshop_contacts
+        WHERE "ownerType" = $1 AND "ownerId" = $2
+        ORDER BY "isPrimary" DESC, active DESC, name`,
+      [ownerType, ownerId],
+    );
+    res.json({ data: r.rows });
+  });
+
+  router.post("/contacts", ...requireConnectRole("operator"), async (req, res) => {
+    const b = req.body ?? {};
+    const ownerType = String(b.ownerType || "");
+    const ownerId = Number(b.ownerId);
+    const name = String(b.name || "").trim();
+    if (!TIPOS_CONTACTO_OWNER.includes(ownerType as any)) {
+      return err(res, 422, "validation_failed", "ownerType debe ser workshop, provider o client");
+    }
+    if (!Number.isFinite(ownerId)) return err(res, 422, "validation_failed", "ownerId no válido");
+    if (!name) return err(res, 422, "validation_failed", "El nombre es obligatorio");
+    const emailMal = emailInvalido(b.email);
+    if (emailMal) return err(res, 422, "validation_failed", emailMal);
+
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO connect_workshop_contacts
+         ("ownerType", "ownerId", "workshopId", name, surname, role, phone, mobile, email,
+          "contactType", "isPrimary", "forAssistance", "forAdmin", "forBilling", "forEmergency",
+          notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17) RETURNING *`,
+      [ownerType, ownerId,
+       // Se conserva workshopId en los de taller: lo que ya consultaba por esa
+       // columna sigue encontrándolos sin cambiar ni una consulta.
+       ownerType === "workshop" ? ownerId : null,
+       name, b.surname ?? null, b.role ?? null, b.phone ?? null, b.mobile ?? null, b.email ?? null,
+       b.contactType ?? null,
+       b.isPrimary === true, b.forAssistance === true, b.forAdmin === true,
+       b.forBilling === true, b.forEmergency === true,
+       b.notes ?? null, now],
+    );
+
+    // Un solo principal por ficha: al marcar uno, se desmarca el anterior.
+    if (b.isPrimary === true) {
+      await db.query(
+        `UPDATE connect_workshop_contacts SET "isPrimary" = false
+          WHERE "ownerType" = $1 AND "ownerId" = $2 AND id <> $3`,
+        [ownerType, ownerId, r.rows[0].id],
+      );
+    }
+    await auditConnect({
+      req, action: "contact.added", resourceType: ownerType, resourceId: ownerId,
+      detail: { name, contactType: b.contactType ?? null },
+    });
     res.status(201).json(r.rows[0]);
   });
 
@@ -1141,10 +1226,23 @@ export function createConnectBackofficeRouter(): Router {
     const r = await db.query(
       `UPDATE connect_workshop_contacts SET
          name = COALESCE($1, name), phone = COALESCE($2, phone), role = COALESCE($3, role),
-         notes = COALESCE($4, notes), active = COALESCE($5, active), "updatedAtMs" = $6
+         notes = COALESCE($4, notes), active = COALESCE($5, active), "updatedAtMs" = $6,
+         surname = COALESCE($8, surname), email = COALESCE($9, email),
+         mobile = COALESCE($10, mobile), "contactType" = COALESCE($11, "contactType"),
+         "isPrimary" = COALESCE($12, "isPrimary"),
+         "forAssistance" = COALESCE($13, "forAssistance"),
+         "forAdmin" = COALESCE($14, "forAdmin"),
+         "forBilling" = COALESCE($15, "forBilling"),
+         "forEmergency" = COALESCE($16, "forEmergency")
        WHERE id = $7 RETURNING *`,
       [b.name ?? null, b.phone ?? null, b.role ?? null, b.notes ?? null,
-       typeof b.active === "boolean" ? b.active : null, Date.now(), Number(req.params.id)],
+       typeof b.active === "boolean" ? b.active : null, Date.now(), Number(req.params.id),
+       b.surname ?? null, b.email ?? null, b.mobile ?? null, b.contactType ?? null,
+       typeof b.isPrimary === "boolean" ? b.isPrimary : null,
+       typeof b.forAssistance === "boolean" ? b.forAssistance : null,
+       typeof b.forAdmin === "boolean" ? b.forAdmin : null,
+       typeof b.forBilling === "boolean" ? b.forBilling : null,
+       typeof b.forEmergency === "boolean" ? b.forEmergency : null],
     );
     if (!r.rows[0]) return err(res, 404, "not_found", "Contacto no encontrado");
     await auditConnect({ req, action: "workshop.contact_updated", resourceType: "workshop", resourceId: r.rows[0].workshopId, detail: b });
