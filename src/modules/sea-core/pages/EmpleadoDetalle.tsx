@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import CoreLayout from "../layouts/CoreLayout";
 import { supabase } from "../../almacen-neumaticos/services/supabase";
+import { apiFetch } from "../../apiFetch";
 
 type Empleado = {
   id: string; nombre: string; apellidos: string | null;
@@ -61,7 +62,55 @@ export default function EmpleadoDetalle() {
   const [formVest, setFormVest] = useState({ calzado: "", pantalon: "", camisa: "", camiseta: "", chaqueta: "", sudadera: "", chaleco: "", observaciones: "" });
   const [guardandoVest, setGuardandoVest] = useState(false);
 
+  // PIN de las APKs de operario (Presencia, Safety, ToolControl)
+  const [tienePin, setTienePin] = useState<boolean | null>(null);
+  const [pinInput, setPinInput] = useState("");
+  const [pinGuardando, setPinGuardando] = useState(false);
+  const [pinMensaje, setPinMensaje] = useState("");
+
   useEffect(() => { if (id) cargar(id); }, [id]);
+
+  async function cargarEstadoPin(empId: string) {
+    try {
+      const res = await apiFetch("/api/sea-core/employees/pin-status");
+      if (!res.ok) { setTienePin(null); return; }
+      const lista = (await res.json()) as { id: string; tienePin: boolean }[];
+      const fila = lista.find((e) => e.id === empId);
+      setTienePin(fila ? fila.tienePin : false);
+    } catch {
+      setTienePin(null);
+    }
+  }
+
+  async function guardarPin(revocar = false) {
+    if (!id) return;
+    const pin = revocar ? "" : pinInput.trim();
+    if (!revocar && !/^\d{4,8}$/.test(pin)) {
+      setPinMensaje("El PIN debe tener entre 4 y 8 dígitos.");
+      return;
+    }
+    setPinGuardando(true);
+    setPinMensaje("");
+    try {
+      const res = await apiFetch(`/api/sea-core/employees/${id}/pin`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPinMensaje(data?.error || "No se pudo guardar el PIN.");
+        return;
+      }
+      setTienePin(Boolean(pin));
+      setPinInput("");
+      setPinMensaje(revocar ? "Acceso revocado." : "PIN asignado.");
+    } catch {
+      setPinMensaje("No se pudo guardar el PIN.");
+    } finally {
+      setPinGuardando(false);
+    }
+  }
 
   async function cargar(empId: string) {
     setCargando(true);
@@ -104,6 +153,7 @@ export default function EmpleadoDetalle() {
       setFormVest({ calzado: "", pantalon: "", camisa: "", camiseta: "", chaqueta: "", sudadera: "", chaleco: "", observaciones: "" });
     }
     setCargando(false);
+    void cargarEstadoPin(empId);
   }
 
   async function addCompetencia() {
@@ -417,6 +467,54 @@ export default function EmpleadoDetalle() {
                 <span className="font-medium text-right">{value ?? "—"}</span>
               </div>
             ))}
+          </div>
+
+          <div className="rounded-xl border border-slate-700 bg-slate-800 p-5 space-y-3 md:col-span-2">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-slate-200">PIN de las apps de operario</h2>
+              {tienePin === null ? null : tienePin ? (
+                <span className="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-800">
+                  PIN asignado
+                </span>
+              ) : (
+                <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800">
+                  Sin PIN — no puede entrar
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-400">
+              Da acceso a Presencia, Safety y ToolControl. El PIN no se puede consultar,
+              solo asignar uno nuevo. Comunícaselo al empleado en persona.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="password"
+                inputMode="numeric"
+                autoComplete="new-password"
+                maxLength={8}
+                value={pinInput}
+                onChange={(e) => setPinInput(e.target.value.replace(/\D/g, ""))}
+                placeholder="Nuevo PIN (4-8 dígitos)"
+                className="rounded-xl border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+              />
+              <button
+                onClick={() => void guardarPin(false)}
+                disabled={pinGuardando}
+                className="rounded-xl bg-slate-700 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
+              >
+                {pinGuardando ? "Guardando…" : tienePin ? "Cambiar PIN" : "Asignar PIN"}
+              </button>
+              {tienePin && (
+                <button
+                  onClick={() => void guardarPin(true)}
+                  disabled={pinGuardando}
+                  className="rounded-xl border border-red-300 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                >
+                  Revocar acceso
+                </button>
+              )}
+            </div>
+            {pinMensaje && <div className="text-sm text-slate-300">{pinMensaje}</div>}
           </div>
         </div>
       )}

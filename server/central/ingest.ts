@@ -424,6 +424,21 @@ async function proyectarCaja(
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'CONFIRMADO',$12,$13)
        ON CONFLICT (deposit_id) DO UPDATE
          SET estado = 'CONFIRMADO', anulado_motivo = NULL, anulado_en_ms = NULL,
+             /*
+              * Se refrescan también los datos y no solo el estado. Antes el
+              * conflicto solo tocaba el estado, así que un ingreso que YA
+              * estaba proyectado se quedaba con su fecha vieja para siempre:
+              * reenviarlo no lo arreglaba, y esa es justo la vía por la que se
+              * repara lo que Central no vio en su momento.
+              *
+              * COALESCE y no asignación directa: un evento reenviado sin un
+              * dato no debe borrar el que ya hay. Solo rellena huecos y
+              * actualiza lo que trae.
+              */
+             numero = COALESCE(EXCLUDED.numero, central_bank_deposits.numero),
+             fecha = COALESCE(EXCLUDED.fecha, central_bank_deposits.fecha),
+             referencia = COALESCE(EXCLUDED.referencia, central_bank_deposits.referencia),
+             importe_centimos = EXCLUDED.importe_centimos,
              actualizado_en_ms = EXCLUDED.actualizado_en_ms`,
       [
         Number(d.depositId ?? 0),
@@ -451,6 +466,24 @@ async function proyectarCaja(
         [Number(d.depositId ?? 0), o.sessionId, e.empresaId, o.fecha ?? null, o.importeCentimos]
       );
     }
+  } else if (e.tipo === "BANK_DEPOSIT_COMPLETED") {
+    /*
+     * La fecha real del banco, que se sabe al volver de ingresar y no al
+     * preparar la bolsa. Es lo que separa «pendiente de confirmar» de
+     * «confirmado», así que sin esto Central contradice a la caja.
+     *
+     * Solo se tocan los campos que el hecho trae. Si llega antes que el alta
+     * —la cola no garantiza orden entre agregados distintos—, el UPDATE no
+     * encuentra fila y no hace nada; el alta la creará después con su fecha.
+     */
+    await client.query(
+      `UPDATE central_bank_deposits
+          SET fecha = COALESCE($2::date, fecha),
+              referencia = COALESCE($3, referencia),
+              actualizado_en_ms = $4
+        WHERE deposit_id = $1`,
+      [Number(d.depositId ?? 0), d.fecha ?? null, d.referencia ?? null, ahora]
+    );
   } else if (e.tipo === "BANK_DEPOSIT_VOIDED") {
     // Anular resta: el ingreso dejó de existir y la posición de la red no
     // puede seguir contándolo. El evento de alta sigue en `central_events`,

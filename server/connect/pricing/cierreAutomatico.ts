@@ -34,13 +34,16 @@ import {
 export { leerAjustesCierre, ESPERA_POR_DEFECTO_MIN, type AjustesCierre };
 
 /**
- * Cuándo terminó de verdad: el instante de la transición a terminada o
- * anulada. Si por lo que sea no hay historial, se cae a `updatedAtMs`, que es
- * peor pero es lo que hay.
+ * Cuándo terminó de verdad: el instante de la transición a terminada,
+ * anulada o —para Assist, donde el tiempo corre hasta la llegada del
+ * vehículo al taller— a `at_workshop`, que al ser posterior manda. Si por lo
+ * que sea no hay historial, se cae a `updatedAtMs`, que es peor pero es lo
+ * que hay.
  */
 const SQL_TERMINADA_EN = `COALESCE(
   (SELECT MAX(h."occurredAtMs") FROM connect_status_history h
-    WHERE h."assistanceId" = ca.id AND h."toStatus" IN ('finished','cancelled')),
+    WHERE h."assistanceId" = ca.id
+      AND h."toStatus" IN ('finished','cancelled','at_workshop')),
   ca."updatedAtMs")`;
 
 export interface ResultadoCierre {
@@ -119,7 +122,7 @@ async function asistenciasPorCerrar(
     `SELECT ca.id, ${SQL_TERMINADA_EN} AS "terminadaEnMs"
        FROM connect_assistances ca
       WHERE ca."controlCenterId" = $1
-        AND ca.status IN ('finished', 'cancelled')
+        AND ca.status IN ('finished', 'cancelled', 'returning_to_workshop', 'at_workshop')
         AND ${SQL_TERMINADA_EN} <= $2
         AND EXISTS (SELECT 1 FROM connect_assistance_pricings p
                      WHERE p."assistanceId" = ca.id AND p.stage = 'locked')
@@ -146,7 +149,8 @@ export async function simularCierre(controlCenterId: number, esperaMin: number):
   const [conEspera, total] = await Promise.all([
     db.query(
       `SELECT COUNT(*)::int AS n FROM connect_assistances ca
-        WHERE ca."controlCenterId" = $1 AND ca.status IN ('finished','cancelled')
+        WHERE ca."controlCenterId" = $1
+          AND ca.status IN ('finished','cancelled','returning_to_workshop','at_workshop')
           AND ${SQL_TERMINADA_EN} <= $2
           AND EXISTS (SELECT 1 FROM connect_assistance_pricings p
                        WHERE p."assistanceId" = ca.id AND p.stage = 'locked')
@@ -155,7 +159,8 @@ export async function simularCierre(controlCenterId: number, esperaMin: number):
       [controlCenterId, Date.now() - esperaMin * 60_000]),
     db.query(
       `SELECT COUNT(*)::int AS n FROM connect_assistances ca
-        WHERE ca."controlCenterId" = $1 AND ca.status IN ('finished','cancelled')
+        WHERE ca."controlCenterId" = $1
+          AND ca.status IN ('finished','cancelled','returning_to_workshop','at_workshop')
           AND NOT EXISTS (SELECT 1 FROM connect_assistance_pricings p
                            WHERE p."assistanceId" = ca.id AND p.stage = 'final')`,
       [controlCenterId]),

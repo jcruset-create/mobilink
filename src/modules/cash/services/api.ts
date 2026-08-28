@@ -18,6 +18,8 @@ import type {
   DocumentoOperacion,
   EntregaDinero,
   FormaPagoConfig,
+  BancoConfig,
+  CuentaBancariaConfig,
   IngresoBancario,
   PropuestaCanjeIngreso,
   PanelIngresos,
@@ -35,6 +37,9 @@ import type {
   Sesion,
   Zona,
   Centro,
+  PropuestaEscaneo,
+  ReglaPagoConfig,
+  CampoRegla,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -271,6 +276,82 @@ export const adjuntarDocumento = (operationId: number, fichero: File) => {
   });
 };
 
+export const completarIngreso = (
+  depositId: number,
+  datos: {
+    fechaIngreso?: string | null;
+    referencia?: string | null;
+    observaciones?: string | null;
+    bankAccountId?: number | null;
+  }
+) =>
+  // El method va DESPUÉS del spread: json() trae POST y lo pisaría.
+  pedir<{ ingreso: IngresoBancario }>(`/bank-deposits/${depositId}`, {
+    ...json(datos),
+    method: "PATCH",
+  });
+
+export const bancosMaestro = () => pedir<{ bancos: BancoConfig[] }>(`/banks`);
+
+export const actualizarBanco = (id: number, cambios: { nombre?: string; activo?: boolean }) =>
+  // El method va DESPUÉS del spread: json() trae POST y lo pisaría.
+  pedir<{ banco: BancoConfig }>(`/banks/${id}`, { ...json(cambios), method: "PATCH" });
+
+export const subirLogoBanco = (id: number, fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("imagen", fichero);
+  return pedir<{ banco: BancoConfig }>(`/banks/${id}/logo`, { method: "POST", body: cuerpo });
+};
+
+/** Quita el logotipo subido: vuelve a salir el que trae la aplicación. */
+export const quitarLogoBanco = (id: number) =>
+  pedir<{ banco: BancoConfig }>(`/banks/${id}/logo`, { method: "DELETE" });
+
+export const cuentasBancarias = () =>
+  pedir<{ cuentas: CuentaBancariaConfig[] }>(`/bank-accounts`);
+
+export const crearCuentaBancaria = (datos: {
+  /** Si se omite, sale del maestro por el código de entidad del IBAN. */
+  banco?: string;
+  iban: string;
+  alias?: string;
+  porDefecto?: boolean;
+}) => pedir<{ cuenta: CuentaBancariaConfig }>(`/bank-accounts`, json(datos));
+
+export const actualizarCuentaBancaria = (
+  id: number,
+  cambios: {
+    banco?: string;
+    iban?: string;
+    alias?: string;
+    activa?: boolean;
+    porDefecto?: boolean;
+  }
+) =>
+  // El method va DESPUÉS del spread: json() trae POST y lo pisaría.
+  pedir<{ cuenta: CuentaBancariaConfig }>(`/bank-accounts/${id}`, {
+    ...json(cambios),
+    method: "PATCH",
+  });
+
+export const enviarResguardoALaCentral = (depositId: number) =>
+  pedir<{ destinatarios: string[]; adjuntos: string[] }>(
+    `/bank-deposits/${depositId}/email`,
+    { method: "POST" }
+  );
+
+export const documentosDeIngreso = (depositId: number) =>
+  pedir<{ documentos: DocumentoOperacion[] }>(`/bank-deposits/${depositId}/documents`);
+
+export const adjuntarDocumentoAIngreso = (depositId: number, fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("documento", fichero);
+  return pedir<{ documento: DocumentoOperacion }>(`/bank-deposits/${depositId}/documents`, {
+    method: "POST",
+    body: cuerpo,
+  });
+};
+
 export const anularDocumento = (id: number, motivo: string) =>
   pedir<{ documento: DocumentoOperacion }>(`/documents/${id}/void`, json({ motivo }));
 
@@ -447,6 +528,22 @@ export const movimientosJornada = (sessionId: number) =>
 export const reabrirJornada = (sessionId: number, motivo: string) =>
   pedir<{ sesion: Sesion }>(`/sessions/${sessionId}/reopen`, json({ motivo }));
 
+export const anularJornada = (sessionId: number, motivo: string) =>
+  pedir<{ sesion: Sesion }>(`/sessions/${sessionId}/void`, json({ motivo }));
+
+export const fondoHeredable = (sessionId: number) =>
+  pedir<{
+    candidato: {
+      sesionId: number;
+      fecha: string;
+      totalCentimos: number;
+      composicion: LineaDenominacion[];
+    } | null;
+  }>(`/sessions/${sessionId}/inheritable-float`);
+
+export const traerFondoDeCierre = (sessionId: number, motivo: string) =>
+  pedir<{ sesion: Sesion }>(`/sessions/${sessionId}/inherit-float`, json({ motivo }));
+
 /**
  * Propuesta de cambio. Es una consulta: no reserva nada, y por eso la
  * confirmación vuelve a validar en el servidor con la jornada bloqueada.
@@ -569,6 +666,8 @@ export const cerrarJornada = (
     cambioFinalBolsas?: LineaDenominacion[];
     arqueoId?: number;
     notas?: string;
+    /** Confirmación explícita para dejar la caja a cero teniendo fondo fijo. */
+    permitirCajaVacia?: boolean;
   }
 ) =>
   pedir<{
@@ -645,6 +744,10 @@ export const guardarConfigErp = (datos: {
 
 // ── Ajustes del módulo ─────────────────────────────────────────────────────
 
+export const fijarAjuste = (clave: string, valor: string | null) =>
+  // El method va DESPUÉS del spread: json() trae POST y lo pisaría.
+  pedir<{ ajustes: Ajustes }>("/settings", { ...json({ clave, valor }), method: "PATCH" });
+
 /** Sube la imagen del botón «Mixto» y devuelve los ajustes ya actualizados. */
 export const subirImagenMixto = (fichero: File) => {
   const cuerpo = new FormData();
@@ -695,3 +798,64 @@ export const regularizarArqueo = (sessionId: number, motivo?: string) =>
     diferenciaCentimos: number;
     arqueoId: number;
   }>(`/sessions/${sessionId}/regularize`, json({ motivo }));
+
+// ── Escáner de facturas ────────────────────────────────────────────────────
+
+/**
+ * Manda la factura y devuelve lo que propone. NO cobra.
+ *
+ * El fichero va y vuelve en la misma petición y no se guarda en ningún sitio:
+ * el original se cuelga del cobro por la vía de siempre, cuando el cobro
+ * existe.
+ */
+export const escanearFactura = (fichero: File, sessionId?: number | null) => {
+  const cuerpo = new FormData();
+  cuerpo.append("documento", fichero);
+  if (sessionId != null) cuerpo.append("sessionId", String(sessionId));
+  return pedir<{ propuesta: PropuestaEscaneo }>(`/invoice-scan`, {
+    method: "POST",
+    body: cuerpo,
+  });
+};
+
+/**
+ * Qué hizo la persona con lo que se le propuso.
+ *
+ * Se llama después de confirmar el cobro y solo sirve para medir. Nunca debe
+ * tumbar nada: quien la llama la ignora si falla.
+ */
+export const anotarResultadoEscaneo = (
+  scanId: number,
+  datos: { operationId: number; formaPagoFinal: string; camposCorregidos: string[] }
+) => pedir<{ ok: true }>(`/invoice-scan/${scanId}/resultado`, json(datos));
+
+// ── Reglas del escáner ─────────────────────────────────────────────────────
+
+export const reglasPago = () => pedir<{ reglas: ReglaPagoConfig[] }>(`/payment-rules`);
+
+export const crearReglaPago = (datos: {
+  campo: CampoRegla;
+  patron: string;
+  formaPago: string;
+  confianza?: number;
+  autoSeleccionar?: boolean;
+  prioridad?: number;
+  notas?: string;
+}) => pedir<{ regla: ReglaPagoConfig }>(`/payment-rules`, json(datos));
+
+export const actualizarReglaPago = (
+  id: number,
+  cambios: {
+    formaPago?: string;
+    confianza?: number;
+    autoSeleccionar?: boolean;
+    prioridad?: number;
+    activa?: boolean;
+    notas?: string;
+  }
+) =>
+  // El method va DESPUÉS del spread: json() trae POST y lo pisaría.
+  pedir<{ regla: ReglaPagoConfig }>(`/payment-rules/${id}`, { ...json(cambios), method: "PATCH" });
+
+export const borrarReglaPago = (id: number) =>
+  pedir<{ ok: true }>(`/payment-rules/${id}`, { method: "DELETE" });

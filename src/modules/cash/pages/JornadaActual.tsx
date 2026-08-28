@@ -11,7 +11,7 @@ import { useNavigate } from "react-router-dom";
 import { HandCoins, Banknote, ArrowLeftRight, Repeat, ClipboardCheck, Lock, PlayCircle } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, { type CantidadesPorValor, lineasDesde } from "../components/DenominationGrid";
-import { Aviso, BotonAccion, Cabecera, Card, ErrorBox } from "../components/ui";
+import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, Modal, btnDanger, btnSecondary, inputCls } from "../components/ui";
 import { euros, totalLineas } from "../utils/money";
 import { ETIQUETA_ESTADO_SESION, ETIQUETA_FORMA_PAGO } from "../types";
 import type { FormaPagoConfig, Operacion, SeccionConfig } from "../types";
@@ -41,6 +41,17 @@ export default function JornadaActual() {
 
   const s = jornada.sesion;
   const caja = cajas.find((c) => c.id === s.registerId);
+
+  /*
+   * La jornada está «vacía» si no tiene nada más que su fondo de apertura:
+   * es el único caso en que anularla es deshacer un despiste y no borrar
+   * trabajo. El servidor lo vuelve a comprobar; esto solo decide si el enlace
+   * merece estar a la vista.
+   */
+  const vacia =
+    jornada.operaciones <= 1 &&
+    jornada.cobros.totalCentimos === 0 &&
+    jornada.pagos.totalCentimos === 0;
 
   return (
     <div className="space-y-3">
@@ -81,7 +92,25 @@ export default function JornadaActual() {
             Cerrar caja
           </BotonAccion>
         )}
+        {/*
+          Deshacer una apertura en falso. Discreto a propósito —es un enlace,
+          no un botón de acción— y solo cuando la jornada está vacía: con
+          operaciones dentro anular no es deshacer, es borrar trabajo, y el
+          servidor lo rechazaría igualmente.
+        */}
+        {vacia && puede("cash.operation.reverse") && <AnularJornada sessionId={s.id} />}
       </div>
+
+      {/*
+        La jornada amaneció sin fondo pero hay un cierre anterior que dejó
+        cambio: la cadena de herencia se rompió —lo típico, un cierre en falso
+        a cero— y el dinero sigue físicamente en el cajón. Se ofrece traerlo
+        en vez de dejar que el arqueo descuadre por el importe exacto del
+        cambio y nadie sepa de dónde sale.
+      */}
+      {s.fondoInicialCentimos === 0 && puede("cash.open_session") && (
+        <FondoPerdido sessionId={s.id} />
+      )}
 
       {/* Dinero que no está en el cajón y se espera de vuelta. Va arriba a
           propósito: si falta y no se ve, el arqueo parece un descuadre. */}
@@ -601,5 +630,147 @@ function Apertura({ cajaId }: { cajaId: number }) {
         />
       </label>
     </div>
+  );
+}
+
+/**
+ * Enlace y modal para anular una jornada abierta por error.
+ *
+ * El caso real: se abre la jornada de hoy por despiste cuando lo que se quería
+ * era registrar un día atrasado llevado en papel. Con ésta abierta, la caja no
+ * deja abrir la buena; cerrarla en falso sembraría el histórico.
+ */
+function AnularJornada({ sessionId }: { sessionId: number }) {
+  const { refrescar } = useCash();
+  const [abierto, setAbierto] = useState(false);
+  const [motivo, setMotivo] = useState("");
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  async function anular() {
+    setOcupado(true);
+    setError("");
+    try {
+      await api.anularJornada(sessionId, motivo);
+      setAbierto(false);
+      await refrescar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido anular la jornada");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setAbierto(true)}
+        className="self-center px-2 text-[12px] text-slate-500 underline-offset-2 hover:text-rose-300 hover:underline"
+      >
+        Anular jornada
+      </button>
+
+      {abierto && (
+        <Modal
+          title="Anular esta jornada"
+          onClose={() => setAbierto(false)}
+          footer={
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setAbierto(false)} className={btnSecondary}>
+                Cancelar
+              </button>
+              <button onClick={() => void anular()} disabled={!motivo.trim() || ocupado} className={btnDanger}>
+                {ocupado ? "Anulando…" : "Anular la jornada"}
+              </button>
+            </div>
+          }
+        >
+          {error && <ErrorBox>{error}</ErrorBox>}
+          <p className="mb-2 text-sm text-slate-300">
+            La jornada quedará <strong>anulada</strong>: seguirá viéndose en el histórico, pero no
+            contará para nada —ni bloquea abrir otra, ni hereda fondo, ni sale en los informes—.
+            Solo se puede anular una jornada sin operaciones; para registrar un día atrasado,
+            anula ésta y abre una nueva poniendo la fecha que toca.
+          </p>
+          <input
+            value={motivo}
+            onChange={(e) => setMotivo(e.target.value)}
+            placeholder="Motivo de la anulación (obligatorio)"
+            className={inputCls}
+            autoFocus
+          />
+        </Modal>
+      )}
+    </>
+  );
+}
+
+/**
+ * Aviso con el cambio del último cierre que lo dejó, y el botón para traerlo.
+ *
+ * Solo aparece si la jornada está a cero Y existe ese cierre: sin candidato no
+ * hay nada que ofrecer y el aviso sería ruido en la primera jornada de una
+ * caja nueva, que legítimamente empieza vacía.
+ */
+function FondoPerdido({ sessionId }: { sessionId: number }) {
+  const { refrescar } = useCash();
+  const [candidato, setCandidato] = useState<
+    Awaited<ReturnType<typeof api.fondoHeredable>>["candidato"]
+  >(null);
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  useEffect(() => {
+    let vivo = true;
+    api
+      .fondoHeredable(sessionId)
+      .then((r) => {
+        if (vivo) setCandidato(r.candidato);
+      })
+      .catch(() => {
+        /* sin candidato no hay aviso; un fallo aquí no debe romper la pantalla */
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [sessionId]);
+
+  if (!candidato) return null;
+
+  async function traer() {
+    if (!candidato) return;
+    setOcupado(true);
+    setError("");
+    try {
+      await api.traerFondoDeCierre(
+        sessionId,
+        `Cambio del cierre del ${candidato.fecha}, no heredado al abrir`
+      );
+      await refrescar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido traer el fondo");
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Aviso tono="aviso">
+      <div className="flex flex-wrap items-center gap-2">
+        <span>
+          Esta jornada ha empezado <strong>sin fondo</strong>, pero el cierre del{" "}
+          <strong>{candidato.fecha}</strong> dejó{" "}
+          <strong>{euros(candidato.totalCentimos)}</strong> de cambio en el cajón. Si ese dinero
+          sigue ahí, tráelo como fondo inicial.
+        </span>
+        <button
+          onClick={() => void traer()}
+          disabled={ocupado}
+          className="rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-amber-500 disabled:opacity-50"
+        >
+          {ocupado ? "Trayendo…" : `Traer ${euros(candidato.totalCentimos)} como fondo`}
+        </button>
+        {error && <span className="text-[12px] text-rose-300">{error}</span>}
+      </div>
+    </Aviso>
   );
 }

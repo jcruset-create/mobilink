@@ -246,8 +246,17 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
       }
     }
 
-    // Acotado a la fecha: una jornada fechada atrás hereda del día anterior a
-    // ella, no de la última que se cerró en el reloj.
+    /*
+     * Acotado a la fecha: una jornada fechada atrás hereda del día anterior a
+     * ella, no de la última que se cerró en el reloj.
+     *
+     * Y saltando los cierres que quedaron a CERO. Un cierre en falso —una
+     * jornada abierta por error que alguien cerró vacía cuando anular todavía
+     * no existía— cortaba la cadena, y la jornada siguiente amanecía con
+     * 0,00 € aunque el dinero siguiera en el cajón. El cambio de verdad es el
+     * del último cierre que dejó piezas, así que es ése el que se hereda; la
+     * anterioridad la sigue mandando la fecha.
+     */
     const anterior = await ultimaSesionCerrada(client, e.registerId, fecha);
     const denominaciones = await cargarDenominaciones(client);
 
@@ -256,38 +265,25 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
     let cartuchos: LineaDenominacion[] = [];
     let bolsas: LineaDenominacion[] = [];
     let heredado = false;
+    let sesionHeredadaId: number | null = anterior?.id ?? null;
 
     if (anterior) {
-      const { rows } = await client.query(
-        `SELECT valor_unitario_centimos,
-                SUM(CASE WHEN cartuchos = 0 AND bolsas = 0 THEN cantidad ELSE 0 END) AS sueltas,
-                SUM(cartuchos) AS tubos,
-                SUM(bolsas) AS sacos
-           FROM cash_denomination_movements
-          WHERE session_id = $1 AND motivo = 'CLOSING_FLOAT' AND direccion = 'OUT'
-          GROUP BY valor_unitario_centimos`,
-        [anterior.id]
-      );
-      composicion = rows
-        .map((r: { valor_unitario_centimos: number; sueltas: string }) => ({
-          valor: r.valor_unitario_centimos,
-          cantidad: Number(r.sueltas),
-        }))
-        .filter((l) => l.cantidad > 0);
-      // Un tubo que quedó precintado ayer sigue precintado hoy.
-      cartuchos = rows
-        .map((r: { valor_unitario_centimos: number; tubos: string }) => ({
-          valor: r.valor_unitario_centimos,
-          cantidad: Number(r.tubos),
-        }))
-        .filter((l) => l.cantidad > 0);
-      // Una bolsa que quedó precintada ayer sigue precintada hoy.
-      bolsas = rows
-        .map((r: { valor_unitario_centimos: number; sacos: string }) => ({
-          valor: r.valor_unitario_centimos,
-          cantidad: Number(r.sacos),
-        }))
-        .filter((l) => l.cantidad > 0);
+      let piezas = await composicionDeCierre(client, anterior.id);
+      if (
+        piezas.composicion.length === 0 &&
+        piezas.cartuchos.length === 0 &&
+        piezas.bolsas.length === 0
+      ) {
+        const conCambio = await ultimoCierreConCambio(e.registerId, fecha, 0, client);
+        if (conCambio) {
+          piezas = conCambio;
+          sesionHeredadaId = conCambio.sesionId;
+        }
+      }
+      composicion = piezas.composicion;
+      // Un tubo que quedó precintado ayer sigue precintado hoy; una bolsa, igual.
+      cartuchos = piezas.cartuchos;
+      bolsas = piezas.bolsas;
       heredado = composicion.length > 0 || cartuchos.length > 0 || bolsas.length > 0;
     }
 
@@ -335,7 +331,7 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
         ahora,
         fondo,
         heredado,
-        anterior?.id ?? null,
+        heredado ? sesionHeredadaId : (anterior?.id ?? null),
         e.notas ?? null,
       ]
     );
@@ -1098,6 +1094,13 @@ export type EntradaCierre = {
   /** Arqueo que respalda el cierre. Si no se pasa, se usa el último guardado. */
   arqueoId?: number;
   notas?: string;
+  /**
+   * Confirmación explícita para cerrar dejando la caja a CERO cuando la caja
+   * tiene fondo fijo configurado. Vaciarla del todo casi nunca es lo que se
+   * quiere —el despiste real fue mandar el fondo entero al «ingreso» del
+   * cierre— y ese cero rompe además la herencia del día siguiente.
+   */
+  permitirCajaVacia?: boolean;
 };
 
 export type ResultadoCierre = {
@@ -1251,6 +1254,29 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
         valorDe(repartoTubos.ingresoBancario, porCartucho) +
         valorDe(repartoBolsas.ingresoBancario, porBolsa),
     };
+    /*
+     * Dejar la caja a 0,00 € teniendo fondo fijo configurado casi nunca es a
+     * propósito: el caso real fue teclear el cierre mandando el fondo entero
+     * al ingreso del banco, y ese cero además rompía la herencia del día
+     * siguiente. Se pide confirmación explícita en vez de prohibirlo, porque
+     * vaciar la caja de verdad existe (vacaciones, traslado).
+     */
+    if (reparto.totalCambio === 0 && reparto.totalIngreso > 0 && !e.permitirCajaVacia) {
+      const { rows: cajaCierre } = await client.query<{ fondo_objetivo_centimos: string }>(
+        `SELECT fondo_objetivo_centimos FROM cash_registers WHERE id = $1`,
+        [sesion.registerId]
+      );
+      const objetivo = Number(cajaCierre[0]?.fondo_objetivo_centimos ?? 0);
+      if (objetivo > 0) {
+        throw new ErrorCaja(
+          "CIERRE_DEJA_CAJA_VACIA",
+          `Este cierre manda todo al banco y deja la caja a 0,00 €, pero la caja tiene un fondo fijo de ${formatearEuros(objetivo)} €. ¿Seguro que no era cambio? Si de verdad quieres vaciarla, confírmalo.`,
+          409,
+          { objetivoCentimos: objetivo }
+        );
+      }
+    }
+
     const ahora = Date.now();
     const anio = Number(sesion.fecha.slice(0, 4));
 
@@ -1551,6 +1577,229 @@ export async function proponerCierre(
 
 // ── Reapertura y reversión ─────────────────────────────────────────────────
 
+/**
+ * Composición que dejó un cierre: las piezas de su cambio final.
+ *
+ * Se usa al abrir —para heredar— y al traer el fondo a una jornada que se
+ * abrió sin él, así que vive en un sitio y no en dos que se van separando.
+ */
+async function composicionDeCierre(
+  client: PoolClient | typeof pool,
+  sessionId: number
+): Promise<{
+  composicion: LineaDenominacion[];
+  cartuchos: LineaDenominacion[];
+  bolsas: LineaDenominacion[];
+}> {
+  const { rows } = await client.query(
+    `SELECT valor_unitario_centimos,
+            SUM(CASE WHEN cartuchos = 0 AND bolsas = 0 THEN cantidad ELSE 0 END) AS sueltas,
+            SUM(cartuchos) AS tubos,
+            SUM(bolsas) AS sacos
+       FROM cash_denomination_movements
+      WHERE session_id = $1 AND motivo = 'CLOSING_FLOAT' AND direccion = 'OUT'
+      GROUP BY valor_unitario_centimos`,
+    [sessionId]
+  );
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const columna = (nombre: string) =>
+    (rows as any[])
+      .map((r) => ({ valor: r.valor_unitario_centimos, cantidad: Number(r[nombre]) }))
+      .filter((l) => l.cantidad > 0);
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  return {
+    composicion: columna("sueltas"),
+    cartuchos: columna("tubos"),
+    bolsas: columna("sacos"),
+  };
+}
+
+/**
+ * El último cierre ANTERIOR a una fecha que de verdad dejó cambio en el cajón.
+ *
+ * No basta con «el último cerrado»: una jornada que se cerró a cero —una
+ * apertura en falso que se cerró en vez de anularse, un día que acabó con la
+ * caja vacía— corta la cadena, y la jornada siguiente amanece sin fondo aunque
+ * el dinero siguiera físicamente en el cajón. Aquí se salta hacia atrás hasta
+ * encontrar uno con piezas, que es lo que uno esperaría al mirar la bandeja.
+ */
+export async function ultimoCierreConCambio(
+  registerId: number,
+  hasta: string,
+  excluyendo: number,
+  // Dentro de una transacción se pasa su client; suelto, el pool basta.
+  client: PoolClient | typeof pool = pool
+): Promise<{
+  sesionId: number;
+  fecha: string;
+  totalCentimos: Centimos;
+  composicion: LineaDenominacion[];
+  cartuchos: LineaDenominacion[];
+  bolsas: LineaDenominacion[];
+} | null> {
+  // 20 cierres hacia atrás dan de sobra: más de veinte cierres seguidos en
+  // falso ya no es un despiste, es otra cosa, y mejor que alguien mire.
+  const { rows } = await client.query<{ id: number; fecha: string }>(
+    `SELECT id, fecha::text AS fecha FROM cash_sessions
+      WHERE register_id = $1 AND estado = 'CLOSED'
+        AND fecha <= $2::date AND id <> $3
+      ORDER BY fecha DESC, id DESC LIMIT 20`,
+    [registerId, hasta, excluyendo]
+  );
+
+  const denominaciones = await cargarDenominaciones(client);
+  const porCartucho = piezasPorCartuchoDe(denominaciones);
+  const porBolsa = piezasPorBolsaDe(denominaciones);
+
+  for (const s of rows) {
+    const piezas = await composicionDeCierre(client, s.id);
+    const total = totalInventario(
+      inventarioDesdeLineas([
+        ...piezas.composicion,
+        ...aPiezas(piezas.cartuchos, porCartucho, "cartuchos"),
+        ...aPiezas(piezas.bolsas, porBolsa, "bolsas"),
+      ])
+    );
+    if (total > 0) {
+      return { sesionId: s.id, fecha: s.fecha, totalCentimos: total, ...piezas };
+    }
+  }
+  return null;
+}
+
+/**
+ * Trae a una jornada ABIERTA el cambio que dejó un cierre anterior.
+ *
+ * Para la jornada que se abrió sin fondo porque la cadena de herencia estaba
+ * rota: el cierre inmediatamente anterior no dejó cambio —se cerró a cero— y
+ * la de hoy amaneció con 0,00 € aunque el dinero siguiera en el cajón.
+ *
+ * Se asienta como el fondo de apertura que tenía que haber tenido: mismo
+ * motivo `OPENING_FLOAT` y misma composición, envases incluidos. No se toca
+ * nada de lo ya registrado hoy, así que los cobros que ya se hubieran metido
+ * siguen donde estaban y el teórico sube justo lo que entra.
+ *
+ * Solo sobre una jornada que NO tenga ya fondo: si lo tuviera, esto lo
+ * duplicaría, y un fondo duplicado no se ve hasta que el arqueo descuadra por
+ * la cifra exacta del cambio.
+ */
+export async function traerFondoDeCierre(
+  ctx: Contexto,
+  e: { sessionId: number; sesionOrigenId?: number; motivo: string }
+): Promise<Sesion> {
+  if (!e.motivo?.trim()) {
+    throw new ErrorCaja("FALTA_MOTIVO", "Traer el fondo de un cierre exige indicar el motivo.", 400);
+  }
+
+  const sesion = await enTransaccion(async (client) => {
+    const s = await bloquearSesion(client, e.sessionId);
+    if (s.empresaId !== ctx.empresaId) {
+      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
+    }
+    if (s.estado !== "OPEN" && s.estado !== "REOPENED") {
+      throw new ErrorCaja("JORNADA_NO_ABIERTA", "Solo se puede hacer con la jornada abierta.", 409);
+    }
+    if (s.fondoInicialCentimos > 0) {
+      throw new ErrorCaja(
+        "JORNADA_YA_TIENE_FONDO",
+        `Esta jornada ya tiene un fondo de ${formatearEuros(s.fondoInicialCentimos)} €. Traer otro lo duplicaría.`,
+        409
+      );
+    }
+
+    // El origen: el que se pida, o el último cierre anterior con cambio.
+    let origenId = e.sesionOrigenId;
+    if (!origenId) {
+      const cand = await ultimoCierreConCambio(s.registerId, s.fecha, e.sessionId);
+      if (!cand) {
+        throw new ErrorCaja(
+          "SIN_CIERRE_ANTERIOR",
+          "No hay ningún cierre anterior a esta fecha que dejara cambio en el cajón.",
+          409
+        );
+      }
+      origenId = cand.sesionId;
+    }
+
+    const { rows: org } = await client.query<{ id: number; fecha: string; estado: string; register_id: number }>(
+      `SELECT id, fecha::text AS fecha, estado, register_id FROM cash_sessions WHERE id = $1`,
+      [origenId]
+    );
+    if (org.length === 0 || org[0].estado !== "CLOSED") {
+      throw new ErrorCaja("JORNADA_NO_CERRADA", "El origen tiene que ser una jornada cerrada.", 409);
+    }
+    if (org[0].register_id !== s.registerId) {
+      throw new ErrorCaja("CAJA_DISTINTA", "Ese cierre es de otra caja.", 409);
+    }
+
+    const piezas = await composicionDeCierre(client, origenId);
+    const denominaciones = await cargarDenominaciones(client);
+    const porCartucho = piezasPorCartuchoDe(denominaciones);
+    const porBolsa = piezasPorBolsaDe(denominaciones);
+    const lineasCartucho = aPiezas(piezas.cartuchos, porCartucho, "cartuchos");
+    const lineasBolsa = aPiezas(piezas.bolsas, porBolsa, "bolsas");
+    const lineas = [...piezas.composicion, ...lineasCartucho, ...lineasBolsa];
+    if (lineas.length === 0) {
+      throw new ErrorCaja(
+        "CIERRE_SIN_CAMBIO",
+        `El cierre del ${org[0].fecha} no dejó nada en el cajón.`,
+        409
+      );
+    }
+
+    const fondo = totalInventario(inventarioDesdeLineas(lineas));
+    const ahora = Date.now();
+    const anio = Number(s.fecha.slice(0, 4));
+    const numero = await siguienteNumero(client, s.id, "OPENING_FLOAT", anio);
+
+    const opId = await insertarOperacion(client, {
+      empresaId: ctx.empresaId,
+      sessionId: s.id,
+      numero,
+      tipo: "OPENING_FLOAT",
+      origen: "MANUAL",
+      concepto: `Cambio heredado del cierre del ${org[0].fecha}`,
+      importeCentimos: fondo,
+      efectivoNetoCentimos: fondo,
+      erpSyncStatus: "NOT_APPLICABLE",
+      userId: ctx.userId,
+      ahora,
+    });
+    await insertarMovimientos(client, {
+      sessionId: s.id,
+      operationId: opId,
+      movimientos: [{ direccion: "IN", motivo: "OPENING_FLOAT", lineas }],
+      denominaciones,
+      userId: ctx.userId,
+      ahora,
+    });
+
+    await client.query(
+      `UPDATE cash_sessions
+          SET fondo_inicial_centimos = $2, fondo_inicial_heredado = true,
+              sesion_anterior_id = $3,
+              notas = COALESCE(NULLIF(notas, '') || ' · ', '') || $4,
+              updated_at_ms = $5
+        WHERE id = $1`,
+      [s.id, fondo, origenId, `Fondo traído del cierre del ${org[0].fecha}: ${e.motivo.trim()}`, ahora]
+    );
+
+    return (await obtenerSesion(s.id, client))!;
+  });
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.session.inherit_float",
+    entidad: "cash_sessions",
+    entidadId: String(e.sessionId),
+    detalle: { motivo: e.motivo, sesionOrigenId: e.sesionOrigenId ?? null },
+    ip: ctx.ip,
+  });
+
+  return sesion;
+}
+
 export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: string): Promise<Sesion> {
   if (!motivo?.trim()) {
     throw new ErrorCaja("FALTA_MOTIVO", "Reabrir una jornada exige indicar el motivo.", 400);
@@ -1624,6 +1873,151 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
     empresaId: ctx.empresaId,
     userId: ctx.userId,
     accion: "cash.session.reopen",
+    entidad: "cash_sessions",
+    entidadId: String(sessionId),
+    detalle: { motivo },
+    ip: ctx.ip,
+  });
+
+  return sesion;
+}
+
+/**
+ * Anula una jornada abierta por error.
+ *
+ * Existe para el despiste concreto de abrir la jornada de HOY cuando lo que se
+ * quería era registrar un día atrasado que se llevó en papel: con la equivocada
+ * abierta, la caja no deja abrir ninguna otra, y cerrarla en falso sembraría el
+ * histórico con un cierre basura que además entraría en la herencia del fondo.
+ *
+ * Solo se anula una jornada VACÍA: sin cobros, sin pagos, sin movimientos, sin
+ * arqueos y sin documentos; como mucho su fondo de apertura. Una jornada con
+ * dinero movido no se esfuma: sus operaciones se anulan una a una, con su
+ * reversión y su rastro, y solo entonces queda vacía.
+ *
+ * Anular no borra nada. La jornada pasa a CANCELLED —sigue en el histórico,
+ * como «Anulada»— y su fondo de apertura a CANCELLED con ella. No hace falta
+ * revertir sus movimientos: el stock se reconstruye POR JORNADA, así que los
+ * asientos de una cancelada no pisan a nadie; y todo lo que decide algo mira
+ * el estado (`sesionAbierta` no la ve, la herencia solo mira CLOSED, los
+ * informes salen de jornadas cerradas).
+ */
+export async function anularJornada(
+  ctx: Contexto,
+  sessionId: number,
+  motivo: string
+): Promise<Sesion> {
+  if (!motivo?.trim()) {
+    throw new ErrorCaja("FALTA_MOTIVO", "Anular una jornada exige indicar el motivo.", 400);
+  }
+
+  const sesion = await enTransaccion(async (client) => {
+    const s = await bloquearSesion(client, sessionId);
+    if (s.empresaId !== ctx.empresaId) {
+      throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
+    }
+    /*
+     * PENDING_CLOSE tampoco vale: significa que ya hay un arqueo guardado, y
+     * un arqueo es trabajo hecho sobre esta jornada. Quien llegó hasta ahí no
+     * está ante un despiste de apertura.
+     */
+    if (s.estado !== "OPEN" && s.estado !== "REOPENED") {
+      throw new ErrorCaja(
+        "JORNADA_NO_ABIERTA",
+        "Solo se puede anular una jornada abierta. Una cerrada se reabre; una anulada ya lo está.",
+        409
+      );
+    }
+
+    /*
+     * Cuentan como «trabajo» solo las operaciones VIVAS. Una original ya
+     * REVERSED y su reversión se compensan a cero y son justo el rastro de
+     * haber deshecho las cosas una a una — que es lo que se pide antes de
+     * poder anular la jornada. Si bloquearan, la jornada con un cobro anulado
+     * no se podría anular nunca.
+     */
+    const { rows: ops } = await client.query<{
+      id: number;
+      tipo: string;
+      numero: string;
+      estado: string;
+      reversa_de_id: number | null;
+    }>(
+      `SELECT id, tipo, numero, estado, reversa_de_id FROM cash_operations
+        WHERE session_id = $1 AND estado <> 'CANCELLED'`,
+      [sessionId]
+    );
+    const ajenas = ops.filter(
+      (o) => o.tipo !== "OPENING_FLOAT" && o.estado !== "REVERSED" && o.reversa_de_id == null
+    );
+    if (ajenas.length > 0) {
+      throw new ErrorCaja(
+        "JORNADA_CON_OPERACIONES",
+        `La jornada tiene ${ajenas.length} ${ajenas.length === 1 ? "operación registrada" : "operaciones registradas"} (${ajenas
+          .slice(0, 3)
+          .map((o) => o.numero)
+          .join(", ")}${ajenas.length > 3 ? "…" : ""}). Anúlalas una a una antes de anular la jornada.`,
+        409
+      );
+    }
+
+    const { rows: arqueos } = await client.query(
+      `SELECT COUNT(*)::int AS n FROM cash_counts WHERE session_id = $1`,
+      [sessionId]
+    );
+    if (arqueos[0].n > 0) {
+      throw new ErrorCaja(
+        "JORNADA_CON_ARQUEO",
+        "La jornada ya tiene un arqueo guardado: no es una apertura en falso. Si aun así sobra, ciérrala y déjalo escrito en las notas.",
+        409
+      );
+    }
+
+    const { rows: docs } = await client.query(
+      `SELECT COUNT(*)::int AS n FROM cash_operation_documents
+        WHERE session_id = $1 AND NOT anulado`,
+      [sessionId]
+    );
+    if (docs[0].n > 0) {
+      throw new ErrorCaja(
+        "JORNADA_CON_DOCUMENTOS",
+        "La jornada tiene justificantes adjuntos. Retíralos antes de anularla.",
+        409
+      );
+    }
+
+    const ahora = Date.now();
+    /*
+     * El fondo de apertura cae con la jornada: sin esto quedaría como una
+     * operación viva colgando de una jornada que ya no existe a ningún
+     * efecto. Las parejas ya anuladas (REVERSED + reversión) se quedan como
+     * están: son el rastro de lo que pasó, no operaciones vivas.
+     */
+    for (const o of ops) {
+      if (o.tipo !== "OPENING_FLOAT" || o.estado === "REVERSED" || o.reversa_de_id != null) continue;
+      await client.query(
+        `UPDATE cash_operations SET estado = 'CANCELLED', updated_at_ms = $2 WHERE id = $1`,
+        [o.id, ahora]
+      );
+    }
+
+    // El motivo queda EN la jornada, no solo en la auditoría: el histórico lo
+    // enseña sin tener que ir a buscar quién la anuló a otra tabla.
+    await client.query(
+      `UPDATE cash_sessions
+          SET estado = 'CANCELLED', cerrada_por = $2, cerrada_at_ms = $3,
+              notas = COALESCE(NULLIF(notas, '') || ' · ', '') || $4,
+              updated_at_ms = $3
+        WHERE id = $1`,
+      [sessionId, ctx.userId, ahora, `Anulada: ${motivo.trim()}`]
+    );
+    return (await obtenerSesion(sessionId, client))!;
+  });
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.session.cancel",
     entidad: "cash_sessions",
     entidadId: String(sessionId),
     detalle: { motivo },

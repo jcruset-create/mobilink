@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PiggyBank, Undo2 } from "lucide-react";
+import { Landmark, Mail, Paperclip, PiggyBank, Undo2, Upload } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import {
   Aviso,
@@ -29,9 +29,13 @@ import {
   thCls,
   tdCls,
   inputCls,
+  btnSecondary,
 } from "../components/ui";
 import { euros, aCentimos } from "../utils/money";
+import { ETIQUETA_ESTADO_INGRESO, estadoIngreso } from "../types";
 import type {
+  CuentaBancariaConfig,
+  DocumentoOperacion,
   CierrePendiente,
   LineaDenominacion,
   IngresoBancario,
@@ -234,7 +238,14 @@ export default function IngresosBancarios() {
       )}
 
       {/* ── Historial ── */}
-      <Historial ingresos={panel.ingresos} gestiona={gestiona} ocupado={ocupado} onAccion={accion} />
+      <Historial
+        ingresos={panel.ingresos}
+        gestiona={gestiona}
+        puedeAdjuntar={puede("cash.document.attach")}
+        ocupado={ocupado}
+        onAccion={accion}
+        onRecargar={() => void cargar()}
+      />
     </div>
   );
 }
@@ -476,13 +487,17 @@ function PrepararIngreso({
 function Historial({
   ingresos,
   gestiona,
+  puedeAdjuntar,
   ocupado,
   onAccion,
+  onRecargar,
 }: {
   ingresos: IngresoBancario[];
   gestiona: boolean;
+  puedeAdjuntar: boolean;
   ocupado: boolean;
   onAccion: (fn: () => Promise<unknown>) => Promise<void>;
+  onRecargar: () => void;
 }) {
   const [abierto, setAbierto] = useState<number | null>(null);
   const [motivo, setMotivo] = useState("");
@@ -522,18 +537,45 @@ function Historial({
                 <td className={`${tdCls} text-right tabular-nums text-amber-300`}>
                   {euros(i.remanenteNuevoCentimos)}
                 </td>
+                {/*
+                  Verde solo cuando el dinero ESTÁ en el banco. Registrar el
+                  ingreso y hacerlo son dos momentos distintos, y pintar los dos
+                  igual escondía el hueco entre ellos: el único sitio donde el
+                  efectivo puede perderse sin que nadie lo note.
+                */}
                 <td className={tdCls}>
-                  {i.estado === "ANULADO" ? (
-                    <span className="rounded-full bg-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-400" title={i.anuladoMotivo ?? ""}>
-                      Anulado
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
-                      Confirmado
-                    </span>
-                  )}
+                  {(() => {
+                    const estado = estadoIngreso(i);
+                    const pinta = {
+                      ANULADO: "bg-slate-700 text-slate-400",
+                      PENDIENTE_CONFIRMAR: "bg-amber-500/20 text-amber-300",
+                      CONFIRMADO: "bg-emerald-500/20 text-emerald-300",
+                    }[estado];
+                    return (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${pinta}`}
+                        title={
+                          estado === "ANULADO"
+                            ? (i.anuladoMotivo ?? "")
+                            : estado === "PENDIENTE_CONFIRMAR"
+                              ? "Registrado en la aplicación, pero todavía sin la fecha real del banco"
+                              : `Ingresado en el banco el ${i.fechaIngreso}`
+                        }
+                      >
+                        {ETIQUETA_ESTADO_INGRESO[estado]}
+                      </span>
+                    );
+                  })()}
                 </td>
                 <td className={tdCls} onClick={(e) => e.stopPropagation()}>
+                  {/*
+                    Enviar solo cuando el ingreso está confirmado en el banco:
+                    el correo dice «ya está ingresado», y mandarlo antes de
+                    volver del banco sería afirmar algo que aún no ha pasado.
+                  */}
+                  {gestiona && estadoIngreso(i) === "CONFIRMADO" && (
+                    <EnviarALaCentral ingreso={i} />
+                  )}
                   <BotonInforme
                     ruta={`/bank-deposits/${i.id}/report.pdf`}
                     nombre={`ingreso-${i.numero}`}
@@ -564,8 +606,13 @@ function Historial({
                         <div className="flex justify-between gap-2"><span className="text-slate-400">+ Total cierres</span><span className="tabular-nums">{euros(i.totalCierresCentimos)}</span></div>
                         <div className="flex justify-between gap-2"><span className="text-slate-400">− Ingresado</span><span className="tabular-nums">{euros(i.importeCentimos)}</span></div>
                         <div className="mt-1 flex justify-between gap-2 border-t border-slate-700 pt-1 font-bold"><span>= Remanente nuevo</span><span className="tabular-nums text-amber-300">{euros(i.remanenteNuevoCentimos)}</span></div>
+                        {i.banco && (
+                          <div className="mt-2 text-[12px] text-slate-300">
+                            {i.banco} · <span className="font-mono">···{(i.iban ?? "").slice(-4)}</span>
+                          </div>
+                        )}
                         {i.referencia && (
-                          <div className="mt-2 text-[12px] text-slate-400">Referencia: {i.referencia}</div>
+                          <div className="text-[12px] text-slate-400">Referencia: {i.referencia}</div>
                         )}
                         {i.observaciones && (
                           <div className="text-[12px] text-slate-400">{i.observaciones}</div>
@@ -573,6 +620,16 @@ function Historial({
                         {i.anuladoMotivo && (
                           <div className="mt-2 text-[12px] text-red-300">Anulado: {i.anuladoMotivo}</div>
                         )}
+
+                        {/*
+                          Los datos que da el banco AL HACER el ingreso: la
+                          fecha real y la referencia llegan con el resguardo,
+                          después de registrarlo aquí. Y el comprobante
+                          escaneado se cuelga del ingreso, no de una jornada:
+                          el papel del banco cubre los cierres de varios días.
+                        */}
+                        <DatosDelBanco ingreso={i} editable={gestiona} onGuardado={onRecargar} />
+                        <ComprobantesDelIngreso depositId={i.id} puedeAdjuntar={puedeAdjuntar} />
 
                         {gestiona && i.estado === "CONFIRMADO" && i.esUltimo && (
                           <div className="mt-3 flex flex-wrap items-end gap-2">
@@ -785,6 +842,287 @@ function TablaPiezas({
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * Fecha real y referencia del banco.
+ *
+ * El ingreso se registra en la tienda al preparar la bolsa, pero estos dos
+ * datos los da el banco DESPUÉS, cuando alguien vuelve con el resguardo. Antes
+ * solo se podían poner al crear el ingreso —y si aún no se sabían, que es lo
+ * normal, se quedaban en «—» para siempre—.
+ */
+function DatosDelBanco({
+  ingreso,
+  editable,
+  onGuardado,
+}: {
+  ingreso: IngresoBancario;
+  editable: boolean;
+  onGuardado: () => void;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const [fecha, setFecha] = useState(ingreso.fechaIngreso ?? "");
+  const [referencia, setReferencia] = useState(ingreso.referencia ?? "");
+  const [cuentaId, setCuentaId] = useState<number | "">(ingreso.bankAccountId ?? "");
+  const [cuentas, setCuentas] = useState<CuentaBancariaConfig[]>([]);
+  const [ocupado, setOcupado] = useState(false);
+  const [error, setError] = useState("");
+
+  // Las cuentas solo se piden al abrir el formulario: no hacen falta para
+  // pintar la fila, y son una petición por ingreso desplegado.
+  useEffect(() => {
+    if (!abierto) return;
+    void api
+      .cuentasBancarias()
+      .then((r) => setCuentas(r.cuentas))
+      .catch(() => setCuentas([]));
+  }, [abierto]);
+
+  if (!editable || ingreso.estado !== "CONFIRMADO") return null;
+
+  async function guardar() {
+    setOcupado(true);
+    setError("");
+    try {
+      await api.completarIngreso(ingreso.id, {
+        fechaIngreso: fecha || null,
+        referencia,
+        bankAccountId: cuentaId === "" ? null : cuentaId,
+      });
+      setAbierto(false);
+      onGuardado();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se han podido guardar los datos");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  if (!abierto) {
+    return (
+      <button
+        onClick={() => setAbierto(true)}
+        className="mt-3 flex items-center gap-1 rounded-lg bg-sky-700 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-sky-600"
+      >
+        <Landmark className="h-3.5 w-3.5" />
+        {ingreso.fechaIngreso || ingreso.referencia ? "Editar datos del banco" : "Confirmar en el banco"}
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900/60 p-2">
+      {error && <div className="mb-1 text-[11px] text-rose-300">{error}</div>}
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Banco y cuenta
+          </span>
+          <select
+            value={cuentaId}
+            onChange={(e) => setCuentaId(e.target.value === "" ? "" : Number(e.target.value))}
+            className={inputCls}
+          >
+            <option value="">Sin especificar</option>
+            {/*
+              Las de baja solo salen si son LA de este ingreso: el dinero pudo
+              ir a una cuenta que después se cerró, y quitarla del desplegable
+              borraría ese dato en cuanto alguien tocara la fecha.
+            */}
+            {cuentas
+              .filter((c) => c.activa || c.id === ingreso.bankAccountId)
+              .map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.banco}
+                  {c.alias ? ` · ${c.alias}` : ""} · ···{c.iban.slice(-4)}
+                  {c.activa ? "" : " (de baja)"}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 flex items-center gap-2 text-[10px] font-semibold uppercase text-slate-400">
+            Fecha real del ingreso
+            {/*
+              Casi siempre se confirma el mismo día que se vuelve del banco, y
+              teclear dd/mm/aaaa para poner hoy es el tipo de fricción que hace
+              que el campo se quede vacío.
+            */}
+            <button
+              type="button"
+              onClick={() => setFecha(new Date().toLocaleDateString("sv-SE"))}
+              className="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] font-bold normal-case text-slate-200 hover:bg-slate-600"
+              title="Poner la fecha de hoy"
+            >
+              Hoy
+            </button>
+          </span>
+          <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Referencia bancaria
+          </span>
+          <input
+            value={referencia}
+            onChange={(e) => setReferencia(e.target.value)}
+            placeholder="Nº de resguardo"
+            className={inputCls}
+          />
+        </label>
+        <button
+          onClick={() => void guardar()}
+          disabled={ocupado}
+          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+        >
+          {ocupado ? "Guardando…" : "Guardar"}
+        </button>
+        <button onClick={() => setAbierto(false)} className={btnSecondary}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * El comprobante escaneado que da el banco.
+ *
+ * Cuelga del INGRESO y no de una jornada: el resguardo cubre el ingreso
+ * entero, que junta los cierres de varios días, y elegir uno de ellos sería
+ * arbitrario. Por eso tampoco sale en el informe de cierre de ninguno.
+ */
+function ComprobantesDelIngreso({
+  depositId,
+  puedeAdjuntar,
+}: {
+  depositId: number;
+  puedeAdjuntar: boolean;
+}) {
+  const [docs, setDocs] = useState<DocumentoOperacion[]>([]);
+  const [ocupado, setOcupado] = useState(false);
+  const [error, setError] = useState("");
+
+  const cargar = useCallback(async () => {
+    try {
+      setDocs((await api.documentosDeIngreso(depositId)).documentos);
+    } catch {
+      /* que no se caiga el detalle entero por esto */
+    }
+  }, [depositId]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function subir(fichero: File) {
+    setOcupado(true);
+    setError("");
+    try {
+      await api.adjuntarDocumentoAIngreso(depositId, fichero);
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido subir el comprobante");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="mt-3">
+      <div className="mb-1 text-[10px] font-semibold uppercase text-slate-400">
+        Comprobante del banco
+      </div>
+      {error && <div className="mb-1 text-[11px] text-rose-300">{error}</div>}
+
+      {docs.length === 0 && !puedeAdjuntar && (
+        <p className="text-[12px] text-slate-500">Todavía no se ha subido ninguno.</p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {docs.map((d) => (
+          <a
+            key={d.id}
+            href={d.url ?? "#"}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1 rounded-lg bg-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-600"
+          >
+            <Paperclip className="h-3 w-3" /> {d.nombre}
+          </a>
+        ))}
+
+        {puedeAdjuntar && (
+          <label className="flex cursor-pointer items-center gap-1 rounded-lg bg-slate-700 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-600">
+            <Upload className="h-3.5 w-3.5" />
+            {ocupado ? "Subiendo…" : docs.length > 0 ? "Añadir otro" : "Subir comprobante"}
+            <input
+              type="file"
+              accept="application/pdf,image/jpeg,image/png"
+              className="hidden"
+              disabled={ocupado}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                // El valor se limpia para poder volver a elegir el MISMO fichero
+                // si la primera subida falló.
+                e.target.value = "";
+                if (f) void subir(f);
+              }}
+            />
+          </label>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Manda el resguardo a la central, con el comprobante escaneado adjunto.
+ *
+ * El taller ingresa y la central concilia; entre las dos cosas había un correo
+ * a mano que es justo el paso que se olvida cuando el día viene torcido.
+ */
+function EnviarALaCentral({ ingreso }: { ingreso: IngresoBancario }) {
+  const [estado, setEstado] = useState<"listo" | "enviando" | "enviado">("listo");
+  const [error, setError] = useState("");
+
+  async function enviar() {
+    setEstado("enviando");
+    setError("");
+    try {
+      const r = await api.enviarResguardoALaCentral(ingreso.id);
+      setEstado("enviado");
+      // Quién lo ha recibido, no solo «enviado»: es lo que se comprueba
+      // cuando en la central dicen que no les ha llegado.
+      setError("");
+      setDestinos(r.destinatarios.join(", "));
+    } catch (e) {
+      setEstado("listo");
+      setError(e instanceof Error ? e.message : "No se ha podido enviar");
+    }
+  }
+
+  const [destinos, setDestinos] = useState("");
+
+  return (
+    <div className="inline-flex flex-col items-end">
+      <button
+        onClick={() => void enviar()}
+        disabled={estado !== "listo"}
+        title={
+          estado === "enviado"
+            ? `Enviado a ${destinos}`
+            : "Mandar el resguardo y el comprobante a la central"
+        }
+        className="mr-1 inline-flex items-center gap-1 rounded-lg bg-slate-700 px-2 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-600 disabled:opacity-50"
+      >
+        <Mail className="h-3.5 w-3.5" />
+        {estado === "enviando" ? "Enviando…" : estado === "enviado" ? "Enviado" : "Enviar"}
+      </button>
+      {error && <span className="mt-0.5 max-w-[220px] text-right text-[10px] text-rose-300">{error}</span>}
     </div>
   );
 }

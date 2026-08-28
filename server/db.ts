@@ -361,6 +361,13 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "solicitanteAutorizacion" TEXT;
 
+    -- Kilómetros DEL SERVICIO que anota el técnico al finalizar (no el
+    -- cuentakilómetros). Los usa el espejo económico de Connect para cobrar
+    -- los kilómetros de más; el tiempo NO se anota: va de la creación a la
+    -- llegada al taller, y esos instantes ya existen.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "serviceKm" INTEGER;
+
     -- Compartir con Central: furgonetas y técnicos visibles para la red (por defecto no)
     ALTER TABLE roadside_vehicles
     ADD COLUMN IF NOT EXISTS "compartidoCentral" BOOLEAN NOT NULL DEFAULT false;
@@ -619,6 +626,12 @@ export async function initDb() {
 
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPin" TEXT DEFAULT NULL;
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT NULL;
+
+    -- PIN del portal de taller hasheado (PBKDF2, ver server/core/credentials.ts).
+    -- "workshopPin" queda solo para los PIN heredados en claro: en el primer
+    -- login correcto se re-guardan aquí y se borra el valor en claro.
+    ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPinHash" TEXT DEFAULT NULL;
+    ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPinSalt" TEXT DEFAULT NULL;
   `);
 
   await pool.query(`
