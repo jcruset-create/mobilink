@@ -11,6 +11,7 @@ import Asistencias from "./pages/Asistencias";
 import ColasOperativas from "./pages/ColasOperativas";
 import NuevaAsistencia from "./pages/NuevaAsistencia";
 import FichaAsistencia from "./pages/FichaAsistencia";
+import Cartera from "./pages/Cartera";
 import Empresas from "./pages/Empresas";
 import FichaEmpresa from "./pages/FichaEmpresa";
 import FichaTaller from "./pages/FichaTaller";
@@ -74,6 +75,7 @@ export default function ConnectProApp() {
             <Route path="unidades" element={<UnidadesMoviles />} />
             <Route path="informes" element={<Informes />} />
             <Route path="inteligencia" element={<Inteligencia />} />
+            <Route path="cartera" element={<Cartera />} />
             <Route path="empresas" element={<Empresas />} />
             <Route path="empresas/:id" element={<FichaEmpresa />} />
             <Route path="empresas/:id/talleres/:wid" element={<FichaTaller />} />

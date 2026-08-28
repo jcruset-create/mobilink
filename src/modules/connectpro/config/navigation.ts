@@ -5,7 +5,7 @@
  */
 
 import {
-  LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2,
+  LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2, Briefcase,
   AlertTriangle, BellRing, Contact, Plug, BarChart3, FileText,
   Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, Wrench, HeartPulse, Tags, Rocket, type LucideIcon,
 } from "lucide-react";
@@ -31,6 +31,11 @@ export const CONNECT_NAV: ConnectNavItem[] = [
   // Empresas → Talleres → Unidades y Operarios es la jerarquía; "Talleres" es
   // la vista transversal de toda la red, y desde ella se dan de alta talleres
   // por WhatsApp sin tener que entrar antes en su empresa.
+  // "Cartera" y "Empresas de asistencia" NO son la misma lista y por eso están
+  // las dos: la segunda enseña los proveedores de la red, la primera enseña
+  // TODAS las empresas con las que trata esta central y el papel de cada una
+  // (la misma empresa puede ser proveedora y cliente a la vez).
+  { key: "cartera", path: "cartera", label: "Cartera de empresas", icon: Briefcase, minRole: "analyst" },
   { key: "empresas", path: "empresas", label: "Empresas de asistencia", icon: Building2, minRole: "analyst" },
   { key: "talleres", path: "talleres", label: "Talleres de la red", icon: Wrench, minRole: "analyst" },
   { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, minRole: "operator" },

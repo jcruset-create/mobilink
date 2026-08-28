@@ -105,6 +105,9 @@ export async function initIntegrationHub(): Promise<void> {
   // entidad, no por ficha, y aquí hace falta saber que ESTE proveedor falló.
   await pool.query(`
     ALTER TABLE integration_mappings ADD COLUMN IF NOT EXISTS external_company TEXT;
+    -- El mismo ERP sirve a varios entornos: el código 889 de Business Central
+    -- no significa lo mismo en el tenant de producción que en el de pruebas.
+    ALTER TABLE integration_mappings ADD COLUMN IF NOT EXISTS external_tenant TEXT;
     ALTER TABLE integration_mappings ADD COLUMN IF NOT EXISTS external_id TEXT;
     ALTER TABLE integration_mappings
       ADD COLUMN IF NOT EXISTS sync_status TEXT NOT NULL DEFAULT 'not_synced';
