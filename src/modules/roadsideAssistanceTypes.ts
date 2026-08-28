@@ -114,6 +114,14 @@ export type RoadsideAssistance = {
   // Nº de autorización o de cita que da quien solicita: es lo que luego pide
   // la aseguradora o el gestor de flota para pagar el servicio.
   solicitanteAutorizacion?: string | null;
+  // Subcontratación: a quién se le ha mandado el trabajo. Los ids apuntan a las
+  // mismas tablas que usa Connect Pro; el snapshot congela nombres y teléfonos
+  // tal y como estaban el día del servicio.
+  proveedorId?: number | null;
+  proveedorTallerId?: number | null;
+  proveedorContactoId?: number | null;
+  clienteFacturacionId?: number | null;
+  subcontrataSnapshot?: Record<string, string> | null;
   reportToken?: string | null;
   whatsappAsignadaSentAtMs?: number | null;
   whatsappFinalizadaSentAtMs?: number | null;

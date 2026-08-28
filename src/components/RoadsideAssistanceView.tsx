@@ -59,6 +59,11 @@ import {
   ROADSIDE_ASSISTANCE_STATUS_FLOW,
   ROADSIDE_ASSISTANCE_STATUS_LABELS,
 } from "../modules/roadsideAssistanceTypes";
+import SelectorSubcontrata, {
+  guardarSubcontrata,
+  SUBCONTRATA_VACIA,
+  type Subcontrata,
+} from "./SelectorSubcontrata";
 
 const INITIAL_DRAFT: RoadsideAssistanceDraft = {
   solicitanteEmpresa: "",
@@ -329,7 +334,11 @@ type Props = {
   error: string;
   onRefresh: () => void;
   onOpenSettings?: () => void;
-  onCreate: (draft: RoadsideAssistanceDraft) => Promise<void>;
+  // Devuelve la asistencia creada: hace falta su id para colgarle la
+  // subcontratación, que se guarda en una llamada aparte.
+  onCreate: (
+    draft: RoadsideAssistanceDraft
+  ) => Promise<RoadsideAssistance | void>;
   onUpdate: (
     assistance: RoadsideAssistance,
     draft: RoadsideAssistanceEditDraft
@@ -410,6 +419,10 @@ export default function RoadsideAssistanceView({
 }: Props) {
   const navigate = useNavigate();
   const [draft, setDraft] = useState<RoadsideAssistanceDraft>(INITIAL_DRAFT);
+  // La subcontratación va por su cuenta: no cabe en el alta sin tocar el
+  // INSERT posicional de la asistencia, y no queremos tocarlo.
+  const [subcontrata, setSubcontrata] = useState<Subcontrata>(SUBCONTRATA_VACIA);
+  const [editSubcontrata, setEditSubcontrata] = useState<Subcontrata>(SUBCONTRATA_VACIA);
   const [editingAssistance, setEditingAssistance] =
     useState<RoadsideAssistance | null>(null);
   const [editDraft, setEditDraft] =
@@ -732,8 +745,22 @@ export default function RoadsideAssistanceView({
     setSaving(true);
 
     try {
-      await onCreate(draft);
+      const creada = await onCreate(draft);
+      // Si falla solo la subcontratación, la asistencia ya está creada: se avisa
+      // pero no se pierde el alta ni se reintenta a ciegas.
+      if (creada && subcontrata.proveedorId) {
+        try {
+          await guardarSubcontrata(creada.id, subcontrata);
+        } catch (subError) {
+          setLocalError(
+            `Asistencia #${creada.id} creada, pero no se pudo guardar la subcontratación: ${
+              subError instanceof Error ? subError.message : "error desconocido"
+            }. Asígnala editando la asistencia.`
+          );
+        }
+      }
       setDraft(INITIAL_DRAFT);
+      setSubcontrata(SUBCONTRATA_VACIA);
       setPanelTab("activas");
     } catch (createError) {
       setLocalError(
@@ -803,12 +830,19 @@ export default function RoadsideAssistanceView({
   function openEditor(assistance: RoadsideAssistance) {
     setEditingAssistance(assistance);
     setEditDraft(buildEditDraft(assistance));
+    setEditSubcontrata({
+      proveedorId: assistance.proveedorId ?? null,
+      proveedorTallerId: assistance.proveedorTallerId ?? null,
+      proveedorContactoId: assistance.proveedorContactoId ?? null,
+      clienteFacturacionId: assistance.clienteFacturacionId ?? null,
+    });
     setEditError("");
   }
 
   function closeEditor() {
     setEditingAssistance(null);
     setEditDraft(INITIAL_EDIT_DRAFT);
+    setEditSubcontrata(SUBCONTRATA_VACIA);
     setEditError("");
   }
 
@@ -828,6 +862,8 @@ export default function RoadsideAssistanceView({
 
     try {
       await onUpdate(editingAssistance, editDraft);
+      await guardarSubcontrata(editingAssistance.id, editSubcontrata);
+      onRefresh();
       closeEditor();
     } catch (updateError) {
       setEditError(
@@ -1692,6 +1728,18 @@ export default function RoadsideAssistanceView({
                 />
               </label>
 
+              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wide text-slate-300">
+                    Subcontratación (opcional)
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Solo si el trabajo lo hace un taller externo
+                  </span>
+                </div>
+                <SelectorSubcontrata valor={subcontrata} onChange={setSubcontrata} />
+              </div>
+
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold text-slate-400">
                   Observaciones
@@ -1813,6 +1861,31 @@ export default function RoadsideAssistanceView({
                         {assistance.solicitanteAutorizacion && (
                           <div className="mt-0.5 truncate text-xs font-bold text-amber-400/90">
                             Autorización / cita: {assistance.solicitanteAutorizacion}
+                          </div>
+                        )}
+                        {/* Se lee del snapshot: enseña el taller tal y como era el
+                            día del servicio, aunque hoy esté de baja o renombrado. */}
+                        {assistance.subcontrataSnapshot?.tallerNombre && (
+                          <div className="mt-0.5 truncate text-xs text-violet-300">
+                            Subcontrata: {[
+                              assistance.subcontrataSnapshot.proveedorNombre,
+                              assistance.subcontrataSnapshot.tallerNombre,
+                              assistance.subcontrataSnapshot.tallerUrgencias ||
+                                assistance.subcontrataSnapshot.tallerTelefono,
+                              [
+                                assistance.subcontrataSnapshot.contactoNombre,
+                                assistance.subcontrataSnapshot.contactoApellidos,
+                              ]
+                                .filter(Boolean)
+                                .join(" "),
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </div>
+                        )}
+                        {assistance.subcontrataSnapshot?.clienteFacturacionNombre && (
+                          <div className="mt-0.5 truncate text-xs text-slate-500">
+                            Se factura a: {assistance.subcontrataSnapshot.clienteFacturacionNombre}
                           </div>
                         )}
                       </div>
@@ -2781,6 +2854,18 @@ export default function RoadsideAssistanceView({
                     className="w-full resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
                   />
                 </label>
+
+                <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 md:col-span-2">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wide text-slate-300">
+                      Subcontratación
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      Taller externo que hace el trabajo
+                    </span>
+                  </div>
+                  <SelectorSubcontrata valor={editSubcontrata} onChange={setEditSubcontrata} />
+                </div>
 
                 <label className="block md:col-span-2">
                   <span className="mb-1 block text-xs font-semibold text-slate-400">
