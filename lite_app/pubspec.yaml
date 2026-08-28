@@ -1,7 +1,7 @@
 name: lite_app
 description: "Mobilink Assist Lite — asistencias de Central Pro para talleres colaboradores"
 publish_to: "none"
-version: 0.2.7+45
+version: 0.2.8+46
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -16,6 +16,9 @@ dependencies:
   geolocator: ^13.0.2
   url_launcher: ^6.3.0
   image_picker: ^1.1.2
+  # La cámara del sistema solo hace la foto en nombre de la app si esta tiene
+  # el permiso concedido, y image_picker no lo pide: ver services/camara.dart
+  permission_handler: ^11.3.1
   flutter_image_compress: ^2.3.0
   path_provider: ^2.1.0
   signature: ^5.5.0
