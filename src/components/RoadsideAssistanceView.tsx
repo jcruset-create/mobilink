@@ -29,6 +29,8 @@ import {
   Wifi,
   Truck,
   Store,
+  Building2,
+  Contact,
 } from "lucide-react";
 import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
 import KnownPlaceMapModal from "./KnownPlaceMapModal";
@@ -1059,6 +1061,18 @@ export default function RoadsideAssistanceView({
             className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
           >
             <Store className="h-4 w-4 shrink-0" /> Talleres
+          </a>
+          <a
+            href="/asistencias/proveedores"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Building2 className="h-4 w-4 shrink-0" /> Proveedores
+          </a>
+          <a
+            href="/asistencias/clientes"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Contact className="h-4 w-4 shrink-0" /> Clientes
           </a>
           <a
             href="/asistencias/lugares"
