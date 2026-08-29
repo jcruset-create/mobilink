@@ -43,6 +43,13 @@ import { initDocumentos } from "./documentos/schema.ts";
 import { createDocumentosRouter } from "./documentos/router.ts";
 import { recalcularEstadoAdmin, registrarDocumento as registrarDocumentoDeAssist } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
+import {
+  initCorreo,
+  mountCorreo,
+  revisarDocumentacionAlFinalizar,
+  startCorreoWorker,
+} from "./correo/index.ts";
+import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
@@ -7723,6 +7730,18 @@ app.post(
       void recalcularEstadoAdmin("assist", id)
         .catch((e) => console.error("estado administrativo:", e?.message));
 
+      /*
+       * Al terminar el servicio se mira qué documentación falta y se programa
+       * que se pida. No manda nada aquí: encolarlo es lo que permite que la
+       * cadencia sea de días y que no salgan cuatro correos si el estado se
+       * toca cuatro veces.
+       */
+      if (status === "finalizada") {
+        void revisarDocumentacionAlFinalizar(
+          "assist", id, (req as any).assistPanelUser?.tallerId ?? null,
+        ).catch((e) => console.error("revisión de documentación:", e?.message));
+      }
+
       const tipoDiario = tipoDesdeEstadoAssist(status);
       if (tipoDiario) {
         void registrarEventoAsistencia({
@@ -7933,7 +7952,8 @@ app.post(
         mimeType: req.file.mimetype ?? null,
         legacyFileId: Number(result.rows[0]?.id) || null,
         uploadedBy: (req as any).authCtx?.nombre ?? null,
-      }).catch((e) => console.error("registro de documento:", e?.message));
+      }).then(() => resolverRecordatoriosPorDocumentos("assist", id))
+        .catch((e) => console.error("registro de documento:", e?.message));
 
       // Si en la foto del camión también sale matrícula roja → asignar al remolque
       // automáticamente (registro matricula_remolque apuntando a la misma foto)
@@ -17960,6 +17980,7 @@ mountConnect(app, requireLicensesAdmin);
  */
 app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
 app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRole));
+mountCorreo(app, requireSupervisorRole);
 
 // Asistente virtual de TyreControl (function calling sobre herramientas de
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
@@ -18170,6 +18191,8 @@ initDb()
   .then(() => prepararEsquema("Diario de asistencias", initEventLog))
   // Después del diario: registrar un documento anota un evento.
   .then(() => prepararEsquema("Documentos", initDocumentos))
+  // Después de documentos: los recordatorios miran qué documentación falta.
+  .then(() => prepararEsquema("Correo del expediente", initCorreo))
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))
@@ -18188,6 +18211,7 @@ initDb()
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
       startDispatchWorker(); // reintentos de subcontratación a plataformas externas
+      startCorreoWorker(); // recordatorios de documentación pendiente
       startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
       startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
       // Mobilink Cash: eventos de dominio hacia MC Central. Sin transporte
