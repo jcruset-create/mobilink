@@ -27,7 +27,10 @@ import crypto from "node:crypto";
 import db from "../db.ts";
 import { evaluar, type Peticion } from "../acuerdos/dominio.ts";
 import { aAcuerdo } from "../acuerdos/servicio.ts";
-import { normalizarPesos, ordenar, type Medidas, type Pesos, type Puntuado } from "./dominio.ts";
+import {
+  codigoPostalDe, normalizarPesos, ordenar,
+  type Medidas, type Pesos, type Puntuado,
+} from "./dominio.ts";
 import { medidasDe, metricasDe } from "./metricas.ts";
 import { decidir, leerRegla, type Contexto, type Regla } from "./reglas.ts";
 
@@ -261,6 +264,49 @@ async function guardarDecision(
     console.error("[Enrutado] no se pudo guardar la decisión:", (e as any)?.message);
     return null;
   }
+}
+
+/* ── Enrutar una asistencia concreta ─────────────────────────────────────── */
+
+/**
+ * A quién mandar ESTA asistencia.
+ *
+ * Lee la asistencia con el centro en el WHERE —de otra plataforma no se enruta
+ * nada— y compone la petición con lo que se sabe. Lo que quien llama mande en
+ * `manual` pisa lo deducido: el operador que está mirando el mapa sabe más que
+ * una expresión regular sobre una dirección.
+ */
+export async function enrutarAsistencia(
+  controlCenterId: number, assistanceId: number,
+  manual: Partial<PeticionEnrutado> = {},
+  opciones: { guardar?: boolean; quien?: string } = {},
+): Promise<Resultado> {
+  const r = await db.query(
+    `SELECT id, address, priority, "serviceType", vehicle, "estimatedCost",
+            "requesterCompanyId", "correlationId"
+       FROM connect_assistances WHERE id = $1 AND "controlCenterId" = $2`,
+    [assistanceId, controlCenterId],
+  );
+  const a = r.rows[0];
+  if (!a) throw new ErrorEnrutado(404, "not_found", "Asistencia no encontrada");
+
+  let vehiculo: Record<string, any> = {};
+  try {
+    const o = JSON.parse(String(a.vehicle ?? "") || "{}");
+    if (o && typeof o === "object") vehiculo = o;
+  } catch { /* un vehículo mal guardado no impide enrutar */ }
+
+  return enrutar(controlCenterId, {
+    servicio: a.serviceType ?? null,
+    codigoPostal: codigoPostalDe(a.address),
+    prioridad: a.priority ?? null,
+    tipoVehiculo: vehiculo.type ?? null,
+    clienteId: a.requesterCompanyId == null ? null : Number(a.requesterCompanyId),
+    importeEstimado: a.estimatedCost == null ? null : Number(a.estimatedCost),
+    assistanceId,
+    correlationId: a.correlationId ?? null,
+    ...manual,
+  }, opciones);
 }
 
 /* ── Reglas: alta, baja y orden ──────────────────────────────────────────── */

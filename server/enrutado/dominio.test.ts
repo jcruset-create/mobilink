@@ -8,7 +8,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MEDIDAS_VACIAS, PESOS_POR_DEFECTO, normalizarPesos, notasDe, ordenar, type Medidas,
+  MEDIDAS_VACIAS, PESOS_POR_DEFECTO, codigoPostalDe, normalizarPesos, notasDe, ordenar,
+  type Medidas,
 } from "./dominio.ts";
 
 function cand(nombre: string, m: Partial<Medidas> = {}) {
@@ -148,5 +149,28 @@ describe("Pesos configurables", () => {
   it("un criterio inventado no entra", () => {
     const p = normalizarPesos({ simpatia: 99 }) as any;
     expect(p.simpatia).toBeUndefined();
+  });
+});
+
+/*
+ * `connect_assistances` guarda la dirección como texto libre. Sacar el CP de
+ * ahí es lo que permite enrutar sin pedirle nada al operador.
+ */
+describe("Código postal sacado de la dirección", () => {
+  it("lo encuentra en una dirección normal", () => {
+    expect(codigoPostalDe("Carrer Major 12, 43201 Reus, Tarragona")).toBe("43201");
+    expect(codigoPostalDe("08001 Barcelona")).toBe("08001");
+  });
+
+  /* Un portal o un kilómetro no son un código postal. */
+  it("no confunde otros números con el CP", () => {
+    expect(codigoPostalDe("A-7 km 1234, salida 12")).toBeNull();
+    expect(codigoPostalDe("Calle Sin Número 4")).toBeNull();
+    expect(codigoPostalDe("")).toBeNull();
+    expect(codigoPostalDe(null)).toBeNull();
+  });
+
+  it("no se traga un número de seis o más cifras", () => {
+    expect(codigoPostalDe("Ref 1234567")).toBeNull();
   });
 });
