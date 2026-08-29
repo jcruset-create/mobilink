@@ -87,7 +87,24 @@ export function createDispatchRouter(requireSupervisorRole: RequestHandler): Rou
       );
       if (!correlationId) return res.status(422).json({ error: "Falta correlation_id" });
 
-      const r = await aplicarAvisoDeCentral(correlationId, String(req.body?.type ?? ""), datos);
+      /*
+       * Un aviso de facturación no es un cambio de estado: trae lo que la
+       * plataforma nos va a cobrar. Se trata aparte porque lo que entra es un
+       * importe, y porque lo que NO puede entrar —su coste interno, su
+       * margen— se queda fuera al no leerse.
+       */
+      const tipo = String(req.body?.type ?? "");
+      if (tipo === "assistance.billable" || tipo === "billing.ready") {
+        const { registrarImporteDelDestino } = await import("../excepciones/servicio.ts");
+        return res.json(await registrarImporteDelDestino(correlationId, {
+          importe: (datos as any).amount ?? (datos as any).importe,
+          concepto: (datos as any).concept ?? (datos as any).concepto,
+          impuestos: (datos as any).taxes ?? (datos as any).impuestos,
+          moneda: (datos as any).currency ?? (datos as any).moneda,
+        }));
+      }
+
+      const r = await aplicarAvisoDeCentral(correlationId, tipo, datos);
       // 200 aunque no se aplique: el emisor reintenta ante cualquier no-2xx, y
       // un aviso que aquí no significa nada no se arregla reintentándolo.
       res.json({ ok: true, ...r });
