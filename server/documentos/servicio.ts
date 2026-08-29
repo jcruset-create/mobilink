@@ -18,6 +18,7 @@ import {
   esVisibilidad,
   estadoAdministrativo,
   puedeVer,
+  tipoDesdeKindAssist,
   visibilidadPorDefecto,
   type EstadoAdmin,
   type TipoDocumento,
@@ -186,6 +187,77 @@ export async function listarDocumentos(
   // Segunda comprobación en memoria: la consulta ya filtra, pero un valor raro
   // en la columna no puede colarse por una comparación de SQL que no lo cubra.
   return r.rows.filter((x: any) => puedeVer(x.visibilidad, quien)).map(aApi);
+}
+
+/* ── Puente con la galería de Assist ─────────────────────────────────────── */
+
+/**
+ * Registra en el catálogo un fichero recién subido a la galería de Assist.
+ *
+ * ── Por qué existe este puente ──────────────────────────────────────────────
+ *
+ * `roadside_assistance_files` sigue siendo donde vive el fichero: años de
+ * fotos, cuatro sitios que escriben en ella y varias pantallas que la leen.
+ * Cambiar todo eso de golpe sería arriesgado sin ganar nada hoy.
+ *
+ * Lo que faltaba es que el catálogo se enterase. La migración de arranque
+ * incorpora lo que ya había, pero una foto subida a las diez de la mañana no
+ * tenía tipo ni visibilidad hasta el siguiente reinicio, y mientras tanto no
+ * existía para nada de lo nuevo: ni el estado administrativo la contaba, ni
+ * se podía compartir con la plataforma que subcontrató el servicio.
+ *
+ * ── Por qué no lanza nunca ──────────────────────────────────────────────────
+ *
+ * Guardar la foto es lo que le importa a quien está en la carretera con el
+ * móvil en la mano. Si el catálogo falla, la foto ya está guardada y la
+ * migración de arranque la recogerá; hacer fallar la subida por esto sería
+ * cambiar un problema pequeño por uno grande.
+ */
+export async function registrarFicheroDeAssist(f: {
+  fileId: number | string;
+  assistanceId: number | string;
+  kind: unknown;
+  url: unknown;
+  fileName?: unknown;
+  createdAtMs?: number | null;
+}): Promise<boolean> {
+  try {
+    const tipo = tipoDesdeKindAssist(f.kind);
+    const cuando = Number(f.createdAtMs ?? Date.now());
+    await db.query(
+      `INSERT INTO assistance_documents
+         (uuid, "sourceSystem", "tenantId", "assistanceId", tipo, origen, visibilidad,
+          url, "fileName", "legacyFileId", "createdAtMs", "updatedAtMs")
+       SELECT gen_random_uuid()::text, 'assist', a."tallerId"::text, $1, $2, 'propio', $3,
+              $4, $5, $6, $7, $7
+         FROM roadside_assistances a WHERE a.id = $8
+       ON CONFLICT DO NOTHING`,
+      [
+        String(f.assistanceId), tipo, visibilidadPorDefecto(tipo, "propio"),
+        String(f.url ?? ""), f.fileName == null ? null : String(f.fileName),
+        Number(f.fileId), cuando, Number(f.assistanceId),
+      ],
+    );
+    return true;
+  } catch (e) {
+    console.error("[Documentos] fichero de Assist no catalogado:", (e as any)?.message);
+    return false;
+  }
+}
+
+/**
+ * Quita del catálogo un fichero borrado de la galería.
+ *
+ * Sin esto, borrar una foto la dejaría viva en el catálogo y seguiría
+ * contando para el estado administrativo y para lo que se comparte: se habría
+ * borrado de la pantalla y de ningún sitio más.
+ */
+export async function olvidarFicheroDeAssist(fileId: number | string): Promise<void> {
+  try {
+    await db.query(`DELETE FROM assistance_documents WHERE "legacyFileId" = $1`, [Number(fileId)]);
+  } catch (e) {
+    console.error("[Documentos] fichero borrado no retirado del catálogo:", (e as any)?.message);
+  }
 }
 
 /**
