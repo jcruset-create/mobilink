@@ -20,6 +20,8 @@ import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime, fmtImp
 type Detail = {
   id: number; uuid: string; status: string; priority: string; serviceType: string;
   expedientNumber: string | null; externalReference: string | null; clientName: string | null;
+  sourceSystem?: string | null; sourceReference?: string | null;
+  correlationId?: string | null; requesterCompanyName?: string | null;
   partnerName: string | null; workshopName: string | null; workshopPhone: string | null;
   providerName: string | null; coreStatus: string | null;
   workshopEmergencyPhone: string | null; workshopEmail: string | null;
@@ -215,6 +217,24 @@ export default function FichaAsistencia() {
             <Row label="Tipo de asistencia" value={a.serviceType} />
             <Row label="Referencia externa" value={a.externalReference} />
             <Row label="Origen" value={a.origin} />
+            {/* Una asistencia que llega de otro sistema: el expediente del
+                origen es el número por el que preguntarán al llamar, y no es
+                el nuestro. Los dos conviven a propósito. */}
+            {a.sourceSystem && (
+              <>
+                <Row
+                  label="Sistema de origen"
+                  value={
+                    <span className="rounded border border-indigo-500/40 bg-indigo-500/10 px-1.5 py-0.5 text-[11px] font-bold uppercase text-indigo-300">
+                      {a.sourceSystem}
+                    </span>
+                  }
+                />
+                <Row label="Expediente en origen" value={a.sourceReference} />
+                <Row label="Empresa solicitante" value={a.requesterCompanyName} />
+                <Row label="Correlación" value={a.correlationId} />
+              </>
+            )}
             <Row label="Descripción" value={a.description && <span className="whitespace-pre-wrap">{a.description}</span>} />
             <Row label="Explicación de asignación" value={a.assignmentExplanation} />
             <Row label="Estado en Mobilink Assist" value={a.coreStatus} />

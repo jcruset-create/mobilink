@@ -35,6 +35,23 @@ import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tec
 import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
+import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
+import { initEventLog } from "./eventlog/schema.ts";
+import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./eventlog/servicio.ts";
+import { tipoDesdeEstadoAssist } from "./eventlog/tipos.ts";
+import { initDocumentos } from "./documentos/schema.ts";
+import { createDocumentosRouter } from "./documentos/router.ts";
+import { recalcularEstadoAdmin, registrarDocumento as registrarDocumentoDeAssist } from "./documentos/servicio.ts";
+import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
+import {
+  initCorreo,
+  mountCorreo,
+  revisarDocumentacionAlFinalizar,
+  startCorreoWorker,
+} from "./correo/index.ts";
+import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
+import { initExcepciones } from "./excepciones/schema.ts";
+import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
@@ -4825,6 +4842,28 @@ app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req
 });
 
 // Contexto del usuario del panel para pintar (o no) el selector de taller.
+/**
+ * La timeline de una asistencia, construida DESDE los eventos.
+ *
+ * No hay ninguna lista de hitos guardada en paralelo, y es deliberado: dos
+ * fuentes para lo mismo se desincronizan y nadie sabe cuál mirar.
+ */
+app.get("/api/roadside-assistances/:id/timeline", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(422).json({ error: "Id inválido" });
+    const data = await timelineDe("assist", id, {
+      incluirTecnicos: req.query.tecnicos === "true",
+      // La cadena completa trae también lo que anotó la plataforma de destino.
+      cadenaCompleta: req.query.cadena === "true",
+    });
+    res.json({ data });
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/:id/timeline error:", error);
+    res.status(500).json({ error: "Error obteniendo la timeline" });
+  }
+});
+
 app.get("/api/roadside-assistances/mi-contexto", async (req, res) => {
   try {
     const panelUser = await getAssistPanelUser(req);
@@ -7276,6 +7315,27 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
 
     const assistance = normalizeRoadsideAssistanceRow(result.rows[0]);
 
+    /*
+     * Primera línea del diario. Va aquí y no dentro del INSERT porque anotar
+     * no puede tumbar un alta: `registrarEventoAsistencia` traga sus errores.
+     */
+    void registrarEventoAsistencia({
+      system: "assist",
+      tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+      assistanceId: assistance.id,
+      eventType: "ASSISTANCE_CREATED",
+      actorType: "user",
+      actorName: (req as any).authCtx?.nombre ?? null,
+      occurredAtMs: now,
+      payload: {
+        matricula: assistance.plate || null,
+        cliente: assistance.customerName || null,
+        prioridad: assistance.priority,
+        origen: body.redirectedFromId ? "redireccion" : "manual",
+      },
+      dedupeKey: `assist-creada-${assistance.id}`,
+    });
+
     // Si en la creación se rellenó el Back Office, copiarlo a la nueva asistencia
     if (backofficeHasData(body.backoffice)) {
       try {
@@ -7656,6 +7716,48 @@ app.post(
 
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
+      /*
+       * Diario. Después de contestar: la timeline es importante pero no tanto
+       * como que el operario vea el cambio de estado sin esperar a un INSERT.
+       *
+       * La clave de deduplicación lleva la hora, así que un ida y vuelta entre
+       * dos estados deja las dos líneas — que es lo correcto: pasó de verdad.
+       */
+      /*
+       * El estado administrativo depende de si el servicio ha terminado: hasta
+       * entonces no se reclama papeleo. Al cambiar de estado hay que
+       * recalcularlo o una asistencia recién finalizada se quedaría sin
+       * aparecer como pendiente de albarán.
+       */
+      void recalcularEstadoAdmin("assist", id)
+        .catch((e) => console.error("estado administrativo:", e?.message));
+
+      /*
+       * Al terminar el servicio se mira qué documentación falta y se programa
+       * que se pida. No manda nada aquí: encolarlo es lo que permite que la
+       * cadencia sea de días y que no salgan cuatro correos si el estado se
+       * toca cuatro veces.
+       */
+      if (status === "finalizada") {
+        void revisarDocumentacionAlFinalizar(
+          "assist", id, (req as any).assistPanelUser?.tallerId ?? null,
+        ).catch((e) => console.error("revisión de documentación:", e?.message));
+      }
+
+      const tipoDiario = tipoDesdeEstadoAssist(status);
+      if (tipoDiario) {
+        void registrarEventoAsistencia({
+          system: "assist",
+          tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+          assistanceId: id,
+          eventType: tipoDiario,
+          actorType: "user",
+          actorName: (req as any).authCtx?.nombre ?? null,
+          occurredAtMs: now,
+          payload: { estado: status, tecnico: updated.assignedTechName || null },
+          dedupeKey: `assist-estado-${id}-${status}-${now}`,
+        });
+      }
 
       // ── WhatsApp con deduplicación ─────────────────────────────────────────
       if (status === "asignada" && updated.customerPhone && !updated.whatsappAsignadaSentAtMs) {
@@ -7832,6 +7934,28 @@ app.post(
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
         [id, kind, publicData.publicUrl, req.file.originalname, Date.now(), detectedPlate]
       );
+
+      /*
+       * Y al registro de documentos, que es donde viven el tipo y la
+       * visibilidad. La tabla de arriba sigue siendo la que lee la galería de
+       * fotos actual; ésta es la que sabe si un fichero se puede enseñar a otra
+       * plataforma y si el expediente tiene ya lo que necesita.
+       *
+       * No puede tumbar la subida: el fichero ya está guardado y en Supabase.
+       */
+      void registrarDocumentoDeAssist({
+        system: "assist",
+        tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+        assistanceId: id,
+        tipo: tipoDocumentoDesdeKind(kind),
+        origen: "propio",
+        url: publicData.publicUrl,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype ?? null,
+        legacyFileId: Number(result.rows[0]?.id) || null,
+        uploadedBy: (req as any).authCtx?.nombre ?? null,
+      }).then(() => resolverRecordatoriosPorDocumentos("assist", id))
+        .catch((e) => console.error("registro de documento:", e?.message));
 
       // Si en la foto del camión también sale matrícula roja → asignar al remolque
       // automáticamente (registro matricula_remolque apuntando a la misma foto)
@@ -17850,6 +17974,17 @@ app.get("/apps/:app", async (req, res) => {
 
 mountConnect(app, requireLicensesAdmin);
 
+/*
+ * Subcontratación a plataformas externas (Assist → Central A/B, y más
+ * adelante Central → Central). Va aparte de Connect a propósito: Connect es
+ * el que RECIBE, esto es el que ENVÍA, y meterlos juntos acabaría con un
+ * módulo que se llama a sí mismo.
+ */
+app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
+app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRole));
+mountCorreo(app, requireSupervisorRole);
+app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
+
 // Asistente virtual de TyreControl (function calling sobre herramientas de
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
 mountAsistente(app, authenticate, requireModule("tyrecontrol"));
@@ -18053,6 +18188,15 @@ initDb()
   .then(() => prepararEsquema("Integration Hub", initIntegrationHub))
   .then(() => prepararEsquema("Licencias", initLicenses))
   .then(() => prepararEsquema("Connect Pro", initConnect))
+  .then(() => prepararEsquema("Envíos externos", initDispatch))
+  // Después de Connect y de los envíos: su migración lee de las tablas de los
+  // dos para traerse el histórico que ya existía.
+  .then(() => prepararEsquema("Diario de asistencias", initEventLog))
+  // Después del diario: registrar un documento anota un evento.
+  .then(() => prepararEsquema("Documentos", initDocumentos))
+  // Después de documentos: los recordatorios miran qué documentación falta.
+  .then(() => prepararEsquema("Correo del expediente", initCorreo))
+  .then(() => prepararEsquema("Bandeja y costes", initExcepciones))
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))
@@ -18070,6 +18214,8 @@ initDb()
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
+      startDispatchWorker(); // reintentos de subcontratación a plataformas externas
+      startCorreoWorker(); // recordatorios de documentación pendiente
       startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
       startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
       // Mobilink Cash: eventos de dominio hacia MC Central. Sin transporte
