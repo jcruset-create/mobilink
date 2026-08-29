@@ -90,17 +90,25 @@ export default function Acuerdos() {
   const [cargando, setCargando] = useState(true);
   const [abierto, setAbierto] = useState<number | null>(null);
 
-  const cargar = useCallback(async () => {
-    setCargando(true);
-    try {
-      const r = await boFetch<{ data: Acuerdo[] }>("/acuerdos");
-      setData(r.data ?? []);
-      setError("");
-    } catch (e: any) { setError(e.message); }
-    finally { setCargando(false); }
-  }, []);
+  /*
+   * Recargar es subir un contador, no llamar a una función que escribe estado
+   * dentro del efecto. Así el efecto solo pide datos y los deja al volver.
+   *
+   * De paso se gana algo real: al refrescar no se tapa la tabla con
+   * «Cargando…». Los datos que ya están siguen ahí hasta que llegan los
+   * nuevos, que es lo que uno espera al pulsar actualizar.
+   */
+  const [recarga, setRecarga] = useState(0);
+  const cargar = useCallback(() => setRecarga((n) => n + 1), []);
 
-  useEffect(() => { void cargar(); }, [cargar]);
+  useEffect(() => {
+    let vivo = true;
+    boFetch<{ data: Acuerdo[] }>("/acuerdos")
+      .then((r) => { if (!vivo) return; setData(r.data ?? []); setError(""); })
+      .catch((e) => { if (vivo) setError(e.message); })
+      .finally(() => { if (vivo) setCargando(false); });
+    return () => { vivo = false; };
+  }, [recarga]);
 
   return (
     <div className="space-y-4">

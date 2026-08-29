@@ -96,16 +96,30 @@ export async function listarDestinos(tenantId: string | null, ownerSystem = "ass
   );
 }
 
+/**
+ * Envíos de una asistencia.
+ *
+ * `tenantId` no es opcional por comodidad: sin él, dos talleres del mismo
+ * Assist —o dos Centrales del mismo Central— verían los envíos del otro sin
+ * más que cambiar el número de la URL. Se admite `null` únicamente para el
+ * superadministrador, que ya atraviesa las plataformas en todo el resto.
+ */
 export async function listarDespachosDeAsistencia(
-  assistanceId: number, system: SistemaOrigen = "assist",
+  assistanceId: number, system: SistemaOrigen = "assist", tenantId: string | null = null,
 ) {
+  const params: unknown[] = [String(assistanceId), system];
+  let filtroTenant = "";
+  if (tenantId != null) {
+    params.push(tenantId);
+    filtroTenant = ` AND d."sourceTenantId" = $${params.length}`;
+  }
   const r = await db.query(
     `SELECT d.*, dest.name AS "destinoNombre", dest."destinationTenantLabel" AS "destinoPlataforma"
        FROM external_dispatches d
        JOIN external_destinations dest ON dest.id = d."destinationId"
-      WHERE d."sourceSystem" = $2 AND d."sourceAssistanceId" = $1
+      WHERE d."sourceSystem" = $2 AND d."sourceAssistanceId" = $1${filtroTenant}
       ORDER BY d.id DESC`,
-    [String(assistanceId), system],
+    params,
   );
   const ids = r.rows.map((x: any) => x.id);
   const eventos = ids.length
@@ -260,15 +274,42 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
  * decisión, y convertir un fallo de red en un error de su pantalla le haría
  * pensar que no se ha registrado nada.
  */
-export async function intentarEnvio(dispatchId: number) {
+/**
+ * Reintenta un envío.
+ *
+ * `dueno` es obligatorio cuando la llamada viene de fuera, y es la corrección
+ * de un agujero real: sin él, cualquiera con sesión podía reintentar el envío
+ * de otra plataforma poniendo su id en la URL. Eso no es leer de más — es
+ * mandar la asistencia de otro a un destino de otro **con la credencial de
+ * otro**, que es lo más caro que se puede hacer con un id ajeno.
+ *
+ * Se pasa `null` solo desde dentro (el worker de reintentos y el
+ * superadministrador), donde el despacho ya viene de una consulta acotada.
+ */
+export async function intentarEnvio(
+  dispatchId: number,
+  dueno: { tenantId: string | null; system: SistemaOrigen } | null = null,
+) {
+  const params: unknown[] = [dispatchId];
+  let filtro = "";
+  if (dueno) {
+    params.push(dueno.system);
+    filtro += ` AND d."sourceSystem" = $${params.length}`;
+    if (dueno.tenantId != null) {
+      params.push(dueno.tenantId);
+      filtro += ` AND d."sourceTenantId" = $${params.length}`;
+    }
+  }
   const r = await db.query(
     `SELECT d.*, dest."baseUrl", dest."secretName", dest.name AS "destinoNombre"
        FROM external_dispatches d
        JOIN external_destinations dest ON dest.id = d."destinationId"
-      WHERE d.id = $1`,
-    [dispatchId],
+      WHERE d.id = $1${filtro}`,
+    params,
   );
   const d = r.rows[0];
+  // Mismo 404 si no existe que si es de otra plataforma: quien prueba ids no
+  // puede averiguar cuáles existen.
   if (!d) throw new ErrorDespacho("not_found", "Despacho no encontrado", 404);
   if (!sePuedeReintentar(d.status)) return d;
 

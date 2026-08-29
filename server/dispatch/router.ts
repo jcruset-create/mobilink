@@ -258,7 +258,8 @@ export function createDispatchRouter(
 
   router.get("/asistencias/:id/despachos", async (req, res) => {
     try {
-      res.json({ data: await listarDespachosDeAsistencia(Number(req.params.id), system) });
+      res.json({ data: await listarDespachosDeAsistencia(
+        Number(req.params.id), system, await tenantDe(req)) });
     } catch (e) {
       fallo(res, e);
     }
@@ -267,7 +268,9 @@ export function createDispatchRouter(
   /* ── Reintento manual ──────────────────────────────────────────────────── */
   router.post("/despachos/:id/reintentar", async (req, res) => {
     try {
-      const d = await intentarEnvio(Number(req.params.id));
+      const d = await intentarEnvio(Number(req.params.id), {
+        tenantId: await tenantDe(req), system,
+      });
       res.json({
         id: Number(d.id),
         status: d.status,
