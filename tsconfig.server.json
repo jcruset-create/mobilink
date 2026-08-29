@@ -36,6 +36,7 @@
   "include": [
     "server/connect/**/*.ts",
     "server/dispatch/**/*.ts",
+    "server/acuerdos/**/*.ts",
     "server/eventlog/**/*.ts",
     "server/documentos/**/*.ts",
     "server/correo/**/*.ts",

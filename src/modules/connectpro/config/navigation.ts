@@ -36,6 +36,9 @@ export const CONNECT_NAV: ConnectNavItem[] = [
   // TODAS las empresas con las que trata esta central y el papel de cada una
   // (la misma empresa puede ser proveedora y cliente a la vez).
   { key: "cartera", path: "cartera", label: "Cartera de empresas", icon: Briefcase, minRole: "analyst" },
+  // Los acuerdos van pegados a la cartera: son la relación con la empresa
+  // contada en condiciones, y se llega a ellos desde la misma pregunta.
+  { key: "acuerdos", path: "acuerdos", label: "Acuerdos comerciales", icon: Handshake, minRole: "analyst" },
   { key: "empresas", path: "empresas", label: "Empresas de asistencia", icon: Building2, minRole: "analyst" },
   { key: "talleres", path: "talleres", label: "Talleres de la red", icon: Wrench, minRole: "analyst" },
   { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, minRole: "operator" },

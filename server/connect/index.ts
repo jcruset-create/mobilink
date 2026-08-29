@@ -19,6 +19,7 @@ import { createConnectRouter, createConnectAdminRouter } from "./router.ts";
 import { createConnectBackofficeRouter } from "./backoffice.ts";
 import { createConnectLiteRouter } from "./lite.ts";
 import { createEmpresasRouter } from "./empresasRouter.ts";
+import { createAcuerdosRouter } from "../acuerdos/router.ts";
 import { createIntegracionesRouter } from "./integraciones.ts";
 import { createDocumentosRouter } from "../documentos/router.ts";
 import { createDispatchRouter } from "../dispatch/router.ts";
@@ -54,6 +55,11 @@ export function mountConnect(app: Express, requireAdmin: RequestHandler): void {
    * HTTP con su credencial, igual que si estuvieran en servidores distintos.
    */
   app.use("/api/connect/bo/envios", createDispatchRouter(requireConnectRole("supervisor"), "central"));
+  /*
+   * Acuerdos comerciales con cada partner y presupuestos. Ruta más específica
+   * que el backoffice, así que va antes.
+   */
+  app.use("/api/connect/bo/acuerdos", createAcuerdosRouter());
   app.use("/api/connect/bo", createConnectBackofficeRouter());
   app.use("/api/connect/lite", createConnectLiteRouter());
   console.log(
