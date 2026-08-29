@@ -15,6 +15,7 @@ import SeguimientoLiteTab from "../components/SeguimientoLiteTab";
 import BackOfficeTab from "../components/BackOfficeTab";
 import VehiculoTab from "../components/VehiculoTab";
 import TarificacionTab from "../components/TarificacionTab";
+import SubcontratacionTab from "../components/SubcontratacionTab";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime, fmtImporte } from "../types";
 
 type Detail = {
@@ -52,7 +53,10 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-const TABS = ["Resumen", "Back office", "Asignación", "Seguimiento", "Comunicaciones", "Tarificación", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
+// «Subcontratación» va detrás de «Asignación» porque es la misma pregunta
+// —a quién se le da este servicio— cuando la respuesta está fuera de la red
+// propia.
+const TABS = ["Resumen", "Back office", "Asignación", "Subcontratación", "Seguimiento", "Comunicaciones", "Tarificación", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
 
 export default function FichaAsistencia() {
   const { id } = useParams();
@@ -244,6 +248,9 @@ export default function FichaAsistencia() {
         )}
         {tab === "Asignación" && (
           <AsignacionTab assistanceId={a.id} status={a.status} canOperate={canOperate} onChanged={load} />
+        )}
+        {tab === "Subcontratación" && (
+          <SubcontratacionTab assistanceId={a.id} canOperate={canOperate} />
         )}
         {tab === "Back office" && (
           <BackOfficeTab assistanceId={a.id} canOperate={canOperate} />

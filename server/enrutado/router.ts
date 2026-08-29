@@ -15,7 +15,7 @@ import { auditConnect, requireConnectRole } from "../connect/rbac.ts";
 import {
   ErrorEnrutado,
   actualizarRegla, borrarRegla, configuracionDe, crearRegla, decisionesDe, enrutar,
-  guardarModo, guardarPesos, reglasDe,
+  enrutarAsistencia, guardarModo, guardarPesos, reglasDe,
 } from "./servicio.ts";
 import { metricasDe } from "./metricas.ts";
 import { PESOS_POR_DEFECTO } from "./dominio.ts";
@@ -143,6 +143,30 @@ export function createEnrutadoRouter(): Router {
         importeEstimado: b.importeEstimado ?? null, distanciaKm: b.distanciaKm ?? null,
         cuando: b.cuandoMs ? new Date(Number(b.cuandoMs)) : new Date(),
       }, { guardar: false }));
+    } catch (e) { fallo(res, e); }
+  });
+
+  /**
+   * Sugerencia para una asistencia concreta.
+   *
+   * Ésta SÍ guarda la decisión: es una consulta real sobre un expediente real,
+   * y es justo la que habrá que poder explicar más adelante. La del simulador
+   * no se guarda porque no lo es.
+   */
+  router.post("/asistencias/:id/sugerencia", async (req, res) => {
+    try {
+      const centro = conCentro(req, res); if (centro == null) return;
+      const b = req.body ?? {};
+      // Lo que mande el operador pisa lo deducido: está mirando el mapa.
+      const manual: Record<string, unknown> = {};
+      if (b.provincia) manual.provincia = String(b.provincia);
+      if (b.codigoPostal) manual.codigoPostal = String(b.codigoPostal);
+      if (b.servicio) manual.servicio = String(b.servicio);
+      if (b.distanciaKm != null) manual.distanciaKm = Number(b.distanciaKm);
+
+      res.json(await enrutarAsistencia(centro, Number(req.params.id), manual, {
+        quien: req.connectUser?.name ?? "usuario",
+      }));
     } catch (e) { fallo(res, e); }
   });
 
