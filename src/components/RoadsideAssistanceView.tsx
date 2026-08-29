@@ -59,6 +59,10 @@ import {
   ROADSIDE_ASSISTANCE_STATUS_FLOW,
   ROADSIDE_ASSISTANCE_STATUS_LABELS,
 } from "../modules/roadsideAssistanceTypes";
+import SubcontratacionExterna from "./SubcontratacionExterna";
+import TimelineAsistencia from "./TimelineAsistencia";
+import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
+import CorreoExpediente from "./CorreoExpediente";
 import SelectorSubcontrata, {
   guardarSubcontrata,
   SUBCONTRATA_VACIA,
@@ -2866,6 +2870,40 @@ export default function RoadsideAssistanceView({
                   </div>
                   <SelectorSubcontrata valor={editSubcontrata} onChange={setEditSubcontrata} />
                 </div>
+
+                {/* Subcontratar a otra PLATAFORMA es distinto de mandarlo a un
+                    taller: allí se abre un expediente aparte, con sus estados
+                    y su facturación. Por eso va en su propio bloque. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <SubcontratacionExterna assistanceId={editingAssistance.id} />
+                  </div>
+                )}
+
+                {/* El historial va aquí, junto a la subcontratación: cuando algo
+                    no cuadra, lo primero que se mira es qué pasó y cuándo. */}
+                {/* El expediente va ANTES del historial: al abrir una asistencia
+                    cerrada, lo primero que se quiere saber es si falta algo por
+                    cobrar, no la cronología. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <ExpedienteAdministrativo assistanceId={editingAssistance.id} />
+                  </div>
+                )}
+
+                {/* El correo va pegado al expediente: casi siempre se abre
+                    para pedir lo que falta, y lo que falta está justo arriba. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <CorreoExpediente assistanceId={editingAssistance.id} />
+                  </div>
+                )}
+
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <TimelineAsistencia assistanceId={editingAssistance.id} />
+                  </div>
+                )}
 
                 <label className="block md:col-span-2">
                   <span className="mb-1 block text-xs font-semibold text-slate-400">
