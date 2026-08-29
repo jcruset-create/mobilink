@@ -62,6 +62,7 @@ import {
 import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
 import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
+import CorreoExpediente from "./CorreoExpediente";
 import SelectorSubcontrata, {
   guardarSubcontrata,
   SUBCONTRATA_VACIA,
@@ -2887,6 +2888,14 @@ export default function RoadsideAssistanceView({
                 {editingAssistance && (
                   <div className="md:col-span-2">
                     <ExpedienteAdministrativo assistanceId={editingAssistance.id} />
+                  </div>
+                )}
+
+                {/* El correo va pegado al expediente: casi siempre se abre
+                    para pedir lo que falta, y lo que falta está justo arriba. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <CorreoExpediente assistanceId={editingAssistance.id} />
                   </div>
                 )}
 
