@@ -188,6 +188,54 @@ export async function listarDocumentos(
   return r.rows.filter((x: any) => puedeVer(x.visibilidad, quien)).map(aApi);
 }
 
+/**
+ * ¿De quién es esta asistencia?
+ *
+ * El filtro correcto para los documentos NO es la columna `tenantId` del
+ * propio documento, sino de quién es la asistencia a la que cuelgan. Dos
+ * motivos, y los dos importan:
+ *
+ *   · los documentos importados de la galería antigua pueden tener `tenantId`
+ *     a nulo, y filtrar por esa columna los haría desaparecer de golpe;
+ *   · un documento que colgara de la asistencia de otro sería visible aunque
+ *     su `tenantId` fuera el correcto, que es el caso que hay que cerrar.
+ *
+ * Devuelve `null` cuando la asistencia no existe o no está adscrita a nadie,
+ * y quien llama decide: no adscrita se trata como visible, que es como se ha
+ * comportado el panel desde siempre.
+ */
+export async function tenantDeAsistencia(
+  system: Sistema, assistanceId: string | number,
+): Promise<string | null> {
+  const id = Number(assistanceId);
+  if (!Number.isFinite(id)) return null;
+  try {
+    const r = system === "assist"
+      ? await db.query(`SELECT "tallerId"::text AS t FROM roadside_assistances WHERE id = $1`, [id])
+      : await db.query(`SELECT "controlCenterId"::text AS t FROM connect_assistances WHERE id = $1`, [id]);
+    const t = r.rows[0]?.t;
+    return t == null || t === "" ? null : String(t);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ¿Puede esta plataforma tocar esta asistencia?
+ *
+ * `null` en `tenantId` es el superadministrador, que atraviesa las
+ * plataformas igual que en el resto de Central. Una asistencia sin dueño se
+ * deja pasar: es como funcionaba antes y bloquearla ahora escondería
+ * expedientes antiguos sin avisar.
+ */
+export async function puedeTocarAsistencia(
+  system: Sistema, assistanceId: string | number, tenantId: string | null,
+): Promise<boolean> {
+  if (tenantId == null) return true;
+  const dueno = await tenantDeAsistencia(system, assistanceId);
+  return dueno == null || dueno === String(tenantId);
+}
+
 /** Un documento concreto, o null si quien pregunta no puede verlo. */
 export async function cargarDocumento(uuid: string, quien: Quien = "propio") {
   const r = await db.query(`SELECT * FROM assistance_documents WHERE uuid = $1`, [uuid]);
@@ -207,10 +255,27 @@ export async function cambiarVisibilidad(
   uuid: string,
   visibilidad: Visibilidad,
   porQuien?: string | null,
+  quienTenant: string | null = null,
 ) {
   if (!esVisibilidad(visibilidad)) {
     throw new ErrorDocumento("visibilidad_invalida", "Visibilidad desconocida");
   }
+
+  /*
+   * Se comprueba ANTES de escribir, no después. Un UPDATE ... RETURNING que
+   * luego rechaza ya ha cambiado la fila: aunque se contestara 404, el
+   * documento de la otra plataforma se habría publicado igual.
+   */
+  const previo = await db.query(
+    `SELECT "sourceSystem", "assistanceId" FROM assistance_documents WHERE uuid = $1`, [uuid]);
+  if (previo.rows.length === 0) {
+    throw new ErrorDocumento("not_found", "Documento no encontrado", 404);
+  }
+  const dueno = previo.rows[0];
+  if (!(await puedeTocarAsistencia(dueno.sourceSystem as Sistema, dueno.assistanceId, quienTenant))) {
+    throw new ErrorDocumento("not_found", "Documento no encontrado", 404);
+  }
+
   const r = await db.query(
     `UPDATE assistance_documents SET visibilidad = $2, "updatedAtMs" = $3
       WHERE uuid = $1 RETURNING *`,

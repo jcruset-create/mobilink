@@ -77,19 +77,28 @@ export default function Enrutado() {
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(true);
 
-  const cargar = useCallback(async () => {
-    setCargando(true);
-    try {
-      const r = await boFetch<{ pesos: Pesos; modo: string; reglas: Regla[] }>("/enrutado/config");
-      setPesos(r.pesos ?? {});
-      setModo(r.modo ?? "suggest");
-      setReglas(r.reglas ?? []);
-      setError("");
-    } catch (e: any) { setError(e.message); }
-    finally { setCargando(false); }
-  }, []);
+  /*
+   * Recargar sube un contador; el efecto es el único que pide y el único que
+   * escribe, y lo hace al volver la respuesta. Al refrescar no se tapa lo que
+   * ya está en pantalla.
+   */
+  const [recarga, setRecarga] = useState(0);
+  const cargar = useCallback(() => setRecarga((n) => n + 1), []);
 
-  useEffect(() => { void cargar(); }, [cargar]);
+  useEffect(() => {
+    let vivo = true;
+    boFetch<{ pesos: Pesos; modo: string; reglas: Regla[] }>("/enrutado/config")
+      .then((r) => {
+        if (!vivo) return;
+        setPesos(r.pesos ?? {});
+        setModo(r.modo ?? "suggest");
+        setReglas(r.reglas ?? []);
+        setError("");
+      })
+      .catch((e) => { if (vivo) setError(e.message); })
+      .finally(() => { if (vivo) setCargando(false); });
+    return () => { vivo = false; };
+  }, [recarga]);
 
   const total = CRITERIOS.reduce((s, c) => s + (pesos[c.clave] ?? 0), 0);
 

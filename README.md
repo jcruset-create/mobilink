@@ -2,6 +2,13 @@
 
 Aplicacion interna de gestion para taller Mobilink (antes SEA Tarragona). Incluye panel operativo, agenda, pantallas de operarios, cobros, asistencias en carretera y modulo de almacen de neumaticos.
 
+## Arquitectura
+
+[`ARCHITECTURE.md`](ARCHITECTURE.md) explica como encajan Mobilink Assist y
+Central: multiempresa, aislamiento entre plataformas, subcontratacion,
+acuerdos comerciales, enrutado y las convenciones que hay que respetar al
+tocar el servidor. Leelo antes de anadir un modulo bajo `server/`.
+
 ## Desarrollo
 
 ```bash

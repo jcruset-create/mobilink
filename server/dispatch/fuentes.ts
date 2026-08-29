@@ -146,6 +146,16 @@ const assist: FuenteAsistencia = {
 
 /* ── Central ─────────────────────────────────────────────────────────────── */
 
+/** JSON guardado que puede venir mal: se lee como objeto vacío, no revienta. */
+function objeto(v: unknown): Record<string, any> {
+  try {
+    const o = JSON.parse(String(v ?? "") || "{}");
+    return o && typeof o === "object" ? o : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Traducción de los estados del cable a los de Central.
  *
@@ -173,10 +183,8 @@ const central: FuenteAsistencia = {
     const a = r.rows[0];
     if (!a) return null;
 
-    let vehiculo: any = {};
-    try { vehiculo = JSON.parse(a.vehicle || "{}"); } catch { vehiculo = {}; }
-    let solicitante: any = {};
-    try { solicitante = JSON.parse(a.requester || "{}"); } catch { solicitante = {}; }
+    const vehiculo = objeto(a.vehicle);
+    const solicitante = objeto(a.requester);
 
     return {
       id: Number(a.id),
