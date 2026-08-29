@@ -129,6 +129,77 @@ const STEP_LABELS: Partial<Record<RoadsideAssistanceStatus, string>> = {
 };
 
 /** Hora de inicio de cada estado del flujo (si la asistencia la tiene registrada). */
+/**
+ * Los tipos de foto que tienen un sitio propio en la galería, en el orden en
+ * que se miran: primero para identificar el vehículo, luego lo que pasaba,
+ * luego lo que se hizo, y al final la firma.
+ */
+const GRUPOS_ADJUNTO: { kind: string; label: string }[] = [
+  { kind: "matricula_camion", label: "Matrícula camión" },
+  { kind: "matricula_remolque", label: "Matrícula remolque" },
+  { kind: "averia", label: "Avería" },
+  { kind: "foto_averia", label: "Avería (antes de reparar)" },
+  { kind: "trabajo_realizado", label: "Trabajo realizado" },
+  { kind: "foto_reparacion", label: "Reparación finalizada" },
+  { kind: "foto_or", label: "OR manual (técnico)" },
+  { kind: "foto_extra", label: "Fotos adicionales" },
+  { kind: "firma", label: "Firma cliente" },
+  { kind: "foto", label: "Otras fotos" },
+];
+
+/** Cómo se llama cada tipo del catálogo, para lo que no cae en un grupo fijo. */
+const ETIQUETA_TIPO_DOC: Record<string, string> = {
+  albaran: "Albaranes",
+  parte: "Partes de trabajo",
+  factura: "Facturas",
+  presupuesto: "Presupuestos",
+  fotografia: "Otras fotografías",
+  autorizacion: "Autorizaciones",
+  firma: "Firmas",
+  otro: "Otros documentos",
+};
+
+/**
+ * Reparte los adjuntos en grupos para pintarlos.
+ *
+ * Lo importante de esta función es lo que arregla: antes se recorría una lista
+ * fija de `kind` y **lo que no estaba en la lista no se pintaba**. Los
+ * adjuntos de WhatsApp, los albaranes y las facturas se subían y no se veían
+ * en ningún sitio. Un fichero guardado que no se puede ver es un fichero
+ * perdido, y encima nadie lo echa de menos porque nunca llegó a aparecer.
+ *
+ * Ahora los grupos conocidos conservan su orden y su nombre, y todo lo demás
+ * cae en un grupo por tipo del catálogo. Lo que ni siquiera esté catalogado
+ * acaba en «Otros documentos», que es feo pero visible.
+ */
+function agruparAdjuntos(
+  files: any[],
+): { clave: string; label: string; group: any[] }[] {
+  const salida: { clave: string; label: string; group: any[] }[] = [];
+  const colocados = new Set<any>();
+
+  for (const { kind, label } of GRUPOS_ADJUNTO) {
+    const group = files.filter((f) => f.kind === kind);
+    if (group.length === 0) continue;
+    group.forEach((f) => colocados.add(f));
+    salida.push({ clave: kind, label, group });
+  }
+
+  // Objeto plano y no un Map: en este fichero `Map` es el icono de lucide y
+  // tapa al del lenguaje.
+  const resto = files.filter((f) => !colocados.has(f));
+  const porTipo: Record<string, any[]> = {};
+  for (const f of resto) {
+    const tipo = String(f.tipoDocumento ?? "otro");
+    (porTipo[tipo] ??= []).push(f);
+  }
+  for (const [tipo, group] of Object.entries(porTipo)) {
+    salida.push({ clave: `tipo:${tipo}`, label: ETIQUETA_TIPO_DOC[tipo] ?? "Otros documentos", group });
+  }
+
+  return salida;
+}
+
 function stepTimestamp(
   st: RoadsideAssistanceStatus,
   a?: RoadsideAssistance
@@ -2997,49 +3068,42 @@ export default function RoadsideAssistanceView({
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {[
-                    { kind: "matricula_camion", label: "Matrícula camión" },
-                    { kind: "matricula_remolque", label: "Matrícula remolque" },
-                    { kind: "averia", label: "Avería" },
-                    { kind: "foto_averia", label: "Avería (antes de reparar)" },
-                    { kind: "trabajo_realizado", label: "Trabajo realizado" },
-                    { kind: "foto_reparacion", label: "Reparación finalizada" },
-                    { kind: "foto_or", label: "OR manual (técnico)" },
-                    { kind: "foto_extra", label: "Fotos adicionales" },
-                    { kind: "firma", label: "Firma cliente" },
-                    { kind: "foto", label: "Otras fotos" },
-                  ].map(({ kind, label }) => {
-                    const group = photos.filter((f) => f.kind === kind);
-                    if (group.length === 0) return null;
-                    return (
-                      <div key={kind}>
-                        <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">
-                          {label}
-                        </div>
-                        <div className="grid gap-2 grid-cols-2 sm:grid-cols-3">
-                          {group.map((file) => (
-                            <button
-                              key={file.id}
-                              type="button"
-                              onClick={() => setLightboxUrl(file.url)}
-                              className="overflow-hidden rounded-lg border border-slate-700 hover:opacity-90"
-                            >
-                              <img
-                                src={file.url}
-                                alt={label}
-                                className="h-32 w-full object-cover"
-                              />
-                              {file.detectedPlate && (
-                                <div className="bg-slate-900 px-2 py-1 text-center text-xs font-black text-white">
-                                  IA: {file.detectedPlate}
-                                </div>
-                              )}
-                            </button>
-                          ))}
-                        </div>
+                  {agruparAdjuntos(photos).map(({ clave, label, group }) => (
+                    <div key={clave}>
+                      <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">
+                        {label}
                       </div>
-                    );
-                  })}
+                      <div className="grid gap-2 grid-cols-2 sm:grid-cols-3">
+                        {group.map((file: any) => (
+                          <button
+                            key={file.id}
+                            type="button"
+                            onClick={() => setLightboxUrl(file.url)}
+                            className="overflow-hidden rounded-lg border border-slate-700 hover:opacity-90"
+                          >
+                            <img
+                              src={file.url}
+                              alt={label}
+                              className="h-32 w-full object-cover"
+                            />
+                            {file.detectedPlate && (
+                              <div className="bg-slate-900 px-2 py-1 text-center text-xs font-black text-white">
+                                IA: {file.detectedPlate}
+                              </div>
+                            )}
+                            {/* Quién más ve esto. Solo se avisa de lo que sale
+                                de casa: marcar como «interno» lo que ya es
+                                interno sería ruido en todas las fotos. */}
+                            {(file.visibilidad === "compartido" || file.visibilidad === "cliente") && (
+                              <div className="bg-slate-900/80 px-2 py-0.5 text-center text-[10px] font-bold text-amber-300">
+                                {file.visibilidad === "cliente" ? "va al cliente" : "compartida"}
+                              </div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

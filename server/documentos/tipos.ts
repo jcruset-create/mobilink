@@ -40,7 +40,7 @@ export function esTipoDocumento(v: unknown): v is TipoDocumento {
  * Se traducen en vez de renombrarlos en la base: hay años de fotos guardadas
  * con esos nombres y las pantallas actuales los leen tal cual.
  */
-const DESDE_KIND_ASSIST: Record<string, TipoDocumento> = {
+export const DESDE_KIND_ASSIST: Record<string, TipoDocumento> = {
   firma: "firma",
   foto: "fotografia",
   fotos: "fotografia",

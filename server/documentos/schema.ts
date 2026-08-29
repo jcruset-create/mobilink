@@ -21,6 +21,7 @@
  */
 
 import db from "../db.ts";
+import { DESDE_KIND_ASSIST, visibilidadPorDefecto } from "./tipos.ts";
 
 export async function initDocumentos(): Promise<void> {
   await db.query(`
@@ -133,35 +134,32 @@ async function importarFicherosDeAssist(): Promise<void> {
   );
   if (hay.rows[0]?.tabla == null) return;
 
+  /*
+   * El CASE se GENERA desde los mismos mapas que usa el código, en vez de
+   * escribirlo a mano aquí.
+   *
+   * Escrito dos veces ya había divergido: una factura migrada quedaba
+   * «interno» y una recién subida «compartido», que es la clase de diferencia
+   * que nadie encuentra hasta que un documento aparece donde no debía.
+   */
+  const casoTipo = Object.entries(DESDE_KIND_ASSIST)
+    .map(([kind, tipo]) => `WHEN '${kind}' THEN '${tipo}'`)
+    .join(" ");
+  const casoVisibilidad = Object.entries(DESDE_KIND_ASSIST)
+    .map(([kind, tipo]) => `WHEN '${kind}' THEN '${visibilidadPorDefecto(tipo, "propio")}'`)
+    .join(" ");
+
   const r = await db.query(
     `INSERT INTO assistance_documents
        (uuid, "sourceSystem", "tenantId", "assistanceId", tipo, origen, visibilidad,
         url, "fileName", "legacyFileId", "createdAtMs", "updatedAtMs")
      SELECT gen_random_uuid()::text, 'assist', a."tallerId"::text, f."assistanceId"::text,
-            CASE lower(f.kind)
-              WHEN 'firma'        THEN 'firma'
-              WHEN 'foto'         THEN 'fotografia'
-              WHEN 'fotos'        THEN 'fotografia'
-              WHEN 'matricula'    THEN 'fotografia'
-              WHEN 'averia'       THEN 'fotografia'
-              WHEN 'albaran'      THEN 'albaran'
-              WHEN 'parte'        THEN 'parte'
-              WHEN 'factura'      THEN 'factura'
-              WHEN 'autorizacion' THEN 'autorizacion'
-              ELSE 'otro'
-            END,
+            CASE lower(f.kind) ${casoTipo} ELSE 'otro' END,
             'propio',
-            CASE lower(f.kind)
-              WHEN 'albaran' THEN 'cliente'
-              WHEN 'parte'   THEN 'cliente'
-              WHEN 'firma'        THEN 'compartido'
-              WHEN 'foto'         THEN 'compartido'
-              WHEN 'fotos'        THEN 'compartido'
-              WHEN 'matricula'    THEN 'compartido'
-              WHEN 'averia'       THEN 'compartido'
-              WHEN 'autorizacion' THEN 'compartido'
-              ELSE 'interno'
-            END,
+            -- Un kind que no se reconoce entra como interno, nunca
+            -- compartido: un fichero antiguo sin clasificar no puede empezar
+            -- a verse desde otra plataforma por una migracion.
+            CASE lower(f.kind) ${casoVisibilidad} ELSE 'interno' END,
             f.url, f."fileName", f.id, f."createdAtMs", f."createdAtMs"
        FROM roadside_assistance_files f
        JOIN roadside_assistances a ON a.id = f."assistanceId"
