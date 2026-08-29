@@ -50,6 +50,8 @@ import {
   startCorreoWorker,
 } from "./correo/index.ts";
 import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
+import { initExcepciones } from "./excepciones/schema.ts";
+import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
@@ -17981,6 +17983,7 @@ mountConnect(app, requireLicensesAdmin);
 app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
 app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRole));
 mountCorreo(app, requireSupervisorRole);
+app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
 
 // Asistente virtual de TyreControl (function calling sobre herramientas de
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
@@ -18193,6 +18196,7 @@ initDb()
   .then(() => prepararEsquema("Documentos", initDocumentos))
   // Después de documentos: los recordatorios miran qué documentación falta.
   .then(() => prepararEsquema("Correo del expediente", initCorreo))
+  .then(() => prepararEsquema("Bandeja y costes", initExcepciones))
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))

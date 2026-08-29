@@ -39,6 +39,7 @@
     "server/eventlog/**/*.ts",
     "server/documentos/**/*.ts",
     "server/correo/**/*.ts",
+    "server/excepciones/**/*.ts",
     "server/cash/**/*.ts",
     "server/central/**/*.ts",
     "server/tacografos/**/*.ts",
