@@ -55,6 +55,15 @@ export type EmpresaSolicitante = {
 
 export type OpcionesSobre = {
   correlationId: string;
+  /**
+   * Quién manda el sobre: `assist` o `central`.
+   *
+   * Viaja en el sobre porque quien lo recibe lo necesita para saber con qué
+   * sistema está hablando —y porque una Central que recibe de otra Central no
+   * puede quedar registrada como si viniera de Assist. Por defecto `assist`,
+   * que es de donde salió este módulo y lo que mandan los sobres antiguos.
+   */
+  sistemaOrigen?: "assist" | "central";
   /** Expediente de Assist: la referencia con la que se hablará por teléfono. */
   referencia: string | null;
   empresaSolicitante: EmpresaSolicitante;
@@ -140,7 +149,7 @@ export function construirSobre(a: AsistenciaAssist, op: OpcionesSobre): Record<s
 
     metadata: limpiar({
       correlation_id: op.correlationId,
-      source_system: "assist",
+      source_system: op.sistemaOrigen ?? "assist",
       source_assistance_id: String(a.id),
       source_reference: texto(op.referencia),
       source_created_at: a.createdAtMs != null ? new Date(Number(a.createdAtMs)).toISOString() : undefined,
