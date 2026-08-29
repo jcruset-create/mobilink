@@ -7,7 +7,7 @@
 import {
   LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2, Briefcase,
   AlertTriangle, BellRing, Contact, Plug, BarChart3, FileText,
-  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, Wrench, HeartPulse, Tags, Rocket, type LucideIcon,
+  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, Wrench, HeartPulse, Tags, Rocket, Route, type LucideIcon,
 } from "lucide-react";
 import type { ConnectRole } from "../types";
 
@@ -39,6 +39,9 @@ export const CONNECT_NAV: ConnectNavItem[] = [
   // Los acuerdos van pegados a la cartera: son la relación con la empresa
   // contada en condiciones, y se llega a ellos desde la misma pregunta.
   { key: "acuerdos", path: "acuerdos", label: "Acuerdos comerciales", icon: Handshake, minRole: "analyst" },
+  // Enrutado va detrás de los acuerdos porque los usa: primero se pacta con
+  // quién se trabaja, luego se decide a cuál de ellos se manda cada servicio.
+  { key: "enrutado", path: "enrutado", label: "Enrutado", icon: Route, minRole: "operator" },
   { key: "empresas", path: "empresas", label: "Empresas de asistencia", icon: Building2, minRole: "analyst" },
   { key: "talleres", path: "talleres", label: "Talleres de la red", icon: Wrench, minRole: "analyst" },
   { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, minRole: "operator" },
