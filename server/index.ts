@@ -39,6 +39,10 @@ import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispa
 import { initEventLog } from "./eventlog/schema.ts";
 import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./eventlog/servicio.ts";
 import { tipoDesdeEstadoAssist } from "./eventlog/tipos.ts";
+import { initDocumentos } from "./documentos/schema.ts";
+import { createDocumentosRouter } from "./documentos/router.ts";
+import { recalcularEstadoAdmin, registrarDocumento as registrarDocumentoDeAssist } from "./documentos/servicio.ts";
+import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
@@ -7710,6 +7714,15 @@ app.post(
        * La clave de deduplicación lleva la hora, así que un ida y vuelta entre
        * dos estados deja las dos líneas — que es lo correcto: pasó de verdad.
        */
+      /*
+       * El estado administrativo depende de si el servicio ha terminado: hasta
+       * entonces no se reclama papeleo. Al cambiar de estado hay que
+       * recalcularlo o una asistencia recién finalizada se quedaría sin
+       * aparecer como pendiente de albarán.
+       */
+      void recalcularEstadoAdmin("assist", id)
+        .catch((e) => console.error("estado administrativo:", e?.message));
+
       const tipoDiario = tipoDesdeEstadoAssist(status);
       if (tipoDiario) {
         void registrarEventoAsistencia({
@@ -7900,6 +7913,27 @@ app.post(
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
         [id, kind, publicData.publicUrl, req.file.originalname, Date.now(), detectedPlate]
       );
+
+      /*
+       * Y al registro de documentos, que es donde viven el tipo y la
+       * visibilidad. La tabla de arriba sigue siendo la que lee la galería de
+       * fotos actual; ésta es la que sabe si un fichero se puede enseñar a otra
+       * plataforma y si el expediente tiene ya lo que necesita.
+       *
+       * No puede tumbar la subida: el fichero ya está guardado y en Supabase.
+       */
+      void registrarDocumentoDeAssist({
+        system: "assist",
+        tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+        assistanceId: id,
+        tipo: tipoDocumentoDesdeKind(kind),
+        origen: "propio",
+        url: publicData.publicUrl,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype ?? null,
+        legacyFileId: Number(result.rows[0]?.id) || null,
+        uploadedBy: (req as any).authCtx?.nombre ?? null,
+      }).catch((e) => console.error("registro de documento:", e?.message));
 
       // Si en la foto del camión también sale matrícula roja → asignar al remolque
       // automáticamente (registro matricula_remolque apuntando a la misma foto)
@@ -17925,6 +17959,7 @@ mountConnect(app, requireLicensesAdmin);
  * módulo que se llama a sí mismo.
  */
 app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
+app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRole));
 
 // Asistente virtual de TyreControl (function calling sobre herramientas de
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
@@ -18133,6 +18168,8 @@ initDb()
   // Después de Connect y de los envíos: su migración lee de las tablas de los
   // dos para traerse el histórico que ya existía.
   .then(() => prepararEsquema("Diario de asistencias", initEventLog))
+  // Después del diario: registrar un documento anota un evento.
+  .then(() => prepararEsquema("Documentos", initDocumentos))
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))

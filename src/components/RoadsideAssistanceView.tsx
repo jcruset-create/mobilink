@@ -61,6 +61,7 @@ import {
 } from "../modules/roadsideAssistanceTypes";
 import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
+import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
 import SelectorSubcontrata, {
   guardarSubcontrata,
   SUBCONTRATA_VACIA,
@@ -2880,6 +2881,15 @@ export default function RoadsideAssistanceView({
 
                 {/* El historial va aquí, junto a la subcontratación: cuando algo
                     no cuadra, lo primero que se mira es qué pasó y cuándo. */}
+                {/* El expediente va ANTES del historial: al abrir una asistencia
+                    cerrada, lo primero que se quiere saber es si falta algo por
+                    cobrar, no la cronología. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <ExpedienteAdministrativo assistanceId={editingAssistance.id} />
+                  </div>
+                )}
+
                 {editingAssistance && (
                   <div className="md:col-span-2">
                     <TimelineAsistencia assistanceId={editingAssistance.id} />

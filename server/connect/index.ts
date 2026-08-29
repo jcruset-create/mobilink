@@ -20,6 +20,8 @@ import { createConnectBackofficeRouter } from "./backoffice.ts";
 import { createConnectLiteRouter } from "./lite.ts";
 import { createEmpresasRouter } from "./empresasRouter.ts";
 import { createIntegracionesRouter } from "./integraciones.ts";
+import { createDocumentosRouter } from "../documentos/router.ts";
+import { requireConnectRole } from "./rbac.ts";
 import { startConnectWorker, stopConnectWorker, runConnectChecksOnce } from "./worker.ts";
 
 export { initConnect, startConnectWorker, stopConnectWorker, runConnectChecksOnce };
@@ -38,6 +40,12 @@ export function mountConnect(app: Express, requireAdmin: RequestHandler): void {
   // Partners de integración y sus credenciales. Antes del backoffice por el
   // mismo motivo: es una ruta más específica del mismo prefijo.
   app.use("/api/connect/bo/integraciones", createIntegracionesRouter());
+  /*
+   * Los mismos endpoints de documentos que Assist, con el guarda de Connect y
+   * diciendo que aquí el sistema es "central". La política de visibilidad es la
+   * misma función: lo que cambia es quién pregunta.
+   */
+  app.use("/api/connect/bo/docs", createDocumentosRouter("central", requireConnectRole("operator")));
   app.use("/api/connect/bo", createConnectBackofficeRouter());
   app.use("/api/connect/lite", createConnectLiteRouter());
   console.log(
