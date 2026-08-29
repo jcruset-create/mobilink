@@ -20,6 +20,7 @@ import { createConnectBackofficeRouter } from "./backoffice.ts";
 import { createConnectLiteRouter } from "./lite.ts";
 import { createEmpresasRouter } from "./empresasRouter.ts";
 import { createAcuerdosRouter } from "../acuerdos/router.ts";
+import { createEnrutadoRouter } from "../enrutado/router.ts";
 import { createIntegracionesRouter } from "./integraciones.ts";
 import { createDocumentosRouter } from "../documentos/router.ts";
 import { createDispatchRouter } from "../dispatch/router.ts";
@@ -60,6 +61,11 @@ export function mountConnect(app: Express, requireAdmin: RequestHandler): void {
    * que el backoffice, así que va antes.
    */
   app.use("/api/connect/bo/acuerdos", createAcuerdosRouter());
+  /*
+   * Enrutado: a quién se manda cada servicio. Las reglas y los pesos son de la
+   * central, no del código, y por eso hay una API para configurarlos.
+   */
+  app.use("/api/connect/bo/enrutado", createEnrutadoRouter());
   app.use("/api/connect/bo", createConnectBackofficeRouter());
   app.use("/api/connect/lite", createConnectLiteRouter());
   console.log(
