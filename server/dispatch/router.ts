@@ -123,6 +123,23 @@ export function createDispatchRouter(
         }));
       }
 
+      /*
+       * Una oferta tampoco es un cambio de estado: el destino dice por cuánto
+       * lo haría, no que vaya a hacerlo. Se guarda como presupuesto y espera a
+       * que alguien la acepte; hasta entonces el envío sigue sin aceptar.
+       */
+      if (tipo === "assistance.quoted" || tipo === "quote.provided") {
+        const { registrarOferta } = await import("../acuerdos/servicio.ts");
+        return res.json(await registrarOferta(correlationId, {
+          importe: (datos as any).amount ?? (datos as any).importe,
+          moneda: (datos as any).currency ?? (datos as any).moneda,
+          impuestos: (datos as any).taxes ?? (datos as any).impuestos,
+          concepto: (datos as any).concept ?? (datos as any).concepto,
+          etaMin: (datos as any).eta_minutes ?? (datos as any).etaMin,
+          validoHastaMs: (datos as any).valid_until_ms ?? (datos as any).validoHastaMs,
+        }));
+      }
+
       const r = await aplicarAvisoDeCentral(correlationId, tipo, datos);
       // 200 aunque no se aplique: el emisor reintenta ante cualquier no-2xx, y
       // un aviso que aquí no significa nada no se arregla reintentándolo.
