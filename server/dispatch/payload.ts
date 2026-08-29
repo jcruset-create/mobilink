@@ -73,6 +73,18 @@ export type OpcionesSobre = {
   limiteAutorizado?: number | null;
   /** Se manda solo si el usuario lo ha marcado: son datos de terceros. */
   incluirObservaciones?: boolean;
+  /**
+   * Esto es una PETICIÓN DE PRESUPUESTO, no un encargo.
+   *
+   * Viaja como bandera en el sobre y no como otro tipo de mensaje para que el
+   * destino reciba exactamente los mismos datos —los necesita igual para poder
+   * poner precio— y para que la conversación siga siendo una.
+   *
+   * Quien lo manda tiene que haber comprobado que el destino sabe leerlo: uno
+   * que no lo entienda crearía una asistencia de verdad, que es justo lo que
+   * no se pedía.
+   */
+  soloPresupuesto?: boolean;
 };
 
 function texto(v: unknown): string | undefined {
@@ -150,6 +162,7 @@ export function construirSobre(a: AsistenciaAssist, op: OpcionesSobre): Record<s
     metadata: limpiar({
       correlation_id: op.correlationId,
       source_system: op.sistemaOrigen ?? "assist",
+      quote_only: op.soloPresupuesto === true ? true : undefined,
       source_assistance_id: String(a.id),
       source_reference: texto(op.referencia),
       source_created_at: a.createdAtMs != null ? new Date(Number(a.createdAtMs)).toISOString() : undefined,

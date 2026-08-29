@@ -58,8 +58,7 @@ async function bo(ruta: string, usuario: string, init?: { method?: string; body?
     body: init?.body != null ? JSON.stringify(init.body) : undefined,
   });
   const texto = await res.text();
-  let body: any = {};
-  try { body = JSON.parse(texto); } catch { body = {}; }
+  const body = (() => { try { return JSON.parse(texto); } catch { return {}; } })();
   return { status: res.status, body, texto };
 }
 

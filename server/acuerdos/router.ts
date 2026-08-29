@@ -149,12 +149,37 @@ export function createAcuerdosRouter(): Router {
       const q = await decidirPresupuesto(
         Number(req.params.id), centroDe(req), aceptar, req.connectUser?.id ?? null, req.body?.motivo ?? null,
       );
+
+      /*
+       * Aceptar un precio ES encargar el servicio. Si se dejara en dos pasos,
+       * habría presupuestos aceptados que nadie confirmó y partners esperando
+       * una llamada que no llega.
+       *
+       * Si la confirmación falla, el presupuesto SIGUE aceptado: la decisión
+       * ya se tomó y es correcta. Lo que queda pendiente es el envío, que la
+       * pantalla enseña con su error y su botón de reintentar.
+       */
+      let confirmacion: { ok: boolean; error?: string } | null = null;
+      if (aceptar && q.dispatchId != null) {
+        try {
+          const { confirmarTrasPresupuesto } = await import("../dispatch/servicio.ts");
+          const centro = req.connectUser?.controlCenterId;
+          await confirmarTrasPresupuesto(
+            Number(q.dispatchId), centro == null ? null : String(centro), "central",
+          );
+          confirmacion = { ok: true };
+        } catch (e: any) {
+          console.error("[Acuerdos] presupuesto aceptado pero no confirmado:", e?.message);
+          confirmacion = { ok: false, error: e?.message ?? "No se pudo confirmar el encargo" };
+        }
+      }
+
       await auditConnect({
         req, action: aceptar ? "quote.accept" : "quote.reject",
         resourceType: "quote", resourceId: req.params.id,
         detail: { importe: q.amount, moneda: q.currency },
       });
-      res.json(q);
+      res.json({ ...q, confirmacion });
     } catch (e) { fallo(res, e); }
   });
 
