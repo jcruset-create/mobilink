@@ -181,6 +181,30 @@ export async function initDispatch(): Promise<void> {
   `);
 
   /*
+   * Central también subcontrata: a otra Central, a un taller o a una plataforma
+   * externa. Necesita las mismas dos columnas de rastro que Assist.
+   */
+  await db.query(`
+    ALTER TABLE connect_assistances
+      ADD COLUMN IF NOT EXISTS "despachoExternoId" INTEGER;
+    ALTER TABLE connect_assistances
+      ADD COLUMN IF NOT EXISTS "expedienteDestino" TEXT;
+  `);
+
+  /*
+   * Un destino puede pertenecer a una CENTRAL, no solo a un taller de Assist.
+   * `ownerTenantId` guardaba el taller como texto; ahora distingue de quién es
+   * con `ownerSystem`, porque el "77" de Assist y el "77" de Central son cosas
+   * distintas y sin esto una central vería los destinos de un taller.
+   */
+  await db.query(`
+    ALTER TABLE external_destinations
+      ADD COLUMN IF NOT EXISTS "ownerSystem" TEXT NOT NULL DEFAULT 'assist';
+    CREATE INDEX IF NOT EXISTS idx_external_destinations_dueno
+      ON external_destinations ("ownerSystem", "ownerTenantId", active);
+  `);
+
+  /*
    * En la asistencia de Assist se deja solo el rastro mínimo para poder
    * pintar la ficha sin cruzar tablas en cada listado. La verdad del envío
    * está en external_dispatches; esto es una copia de conveniencia.

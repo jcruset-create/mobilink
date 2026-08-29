@@ -20,6 +20,7 @@ import crypto from "node:crypto";
 import db from "../db.ts";
 import { exigirDestinoUtilizable, resolverSecreto } from "./destinosServicio.ts";
 import { sanearError } from "./destinos.ts";
+import { esSistemaOrigen, fuenteDe, type SistemaOrigen } from "./fuentes.ts";
 import { registrarEnTransaccion, registrarEvento } from "../eventlog/servicio.ts";
 import { tipoDesdeEventoCable } from "../eventlog/tipos.ts";
 import {
@@ -69,14 +70,15 @@ export class ErrorDespacho extends Error {
 /* ── Lectura ─────────────────────────────────────────────────────────────── */
 
 /** Destinos que puede usar un taller de Assist. */
-export async function listarDestinos(tenantId: string | null) {
+export async function listarDestinos(tenantId: string | null, ownerSystem = "assist") {
   const r = await db.query(
     `SELECT id, uuid, name, kind, "baseUrl", "destinationTenantLabel", "ownerTenantId",
             active, notes, "secretName"
        FROM external_destinations
-      WHERE active AND ("ownerTenantId" IS NULL OR "ownerTenantId" = $1)
+      WHERE active AND "ownerSystem" = $2
+        AND ("ownerTenantId" IS NULL OR "ownerTenantId" = $1)
       ORDER BY name`,
-    [tenantId],
+    [tenantId, ownerSystem],
   );
   // Se dice SI hay credencial, nunca cuál: el panel necesita avisar de que
   // falta configurarla, y para eso no hace falta enseñarla.
@@ -94,14 +96,16 @@ export async function listarDestinos(tenantId: string | null) {
   );
 }
 
-export async function listarDespachosDeAsistencia(assistanceId: number) {
+export async function listarDespachosDeAsistencia(
+  assistanceId: number, system: SistemaOrigen = "assist",
+) {
   const r = await db.query(
     `SELECT d.*, dest.name AS "destinoNombre", dest."destinationTenantLabel" AS "destinoPlataforma"
        FROM external_dispatches d
        JOIN external_destinations dest ON dest.id = d."destinationId"
-      WHERE d."sourceSystem" = 'assist' AND d."sourceAssistanceId" = $1
+      WHERE d."sourceSystem" = $2 AND d."sourceAssistanceId" = $1
       ORDER BY d.id DESC`,
-    [String(assistanceId)],
+    [String(assistanceId), system],
   );
   const ids = r.rows.map((x: any) => x.id);
   const eventos = ids.length
@@ -149,6 +153,8 @@ function num(v: unknown): number | null {
 /* ── Crear y enviar ──────────────────────────────────────────────────────── */
 
 export type PeticionSubcontrata = {
+  /** Quién subcontrata. Por defecto Assist, que es quien lo hacía hasta ahora. */
+  system?: SistemaOrigen;
   assistanceId: number;
   destinationId: number;
   tenantId: string | null;
@@ -165,7 +171,10 @@ export type PeticionSubcontrata = {
  * error y ofrece reintentar.
  */
 export async function subcontratarEnCentral(p: PeticionSubcontrata) {
-  const a = await cargarAsistencia(p.assistanceId);
+  const system: SistemaOrigen = esSistemaOrigen(p.system) ? p.system : "assist";
+  const fuente = fuenteDe(system);
+
+  const a = await fuente.cargar(p.assistanceId);
   if (!a) throw new ErrorDespacho("not_found", "Asistencia no encontrada", 404);
 
   /*
@@ -173,7 +182,7 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
    * variable de entorno NO puede enviar aunque se llame a la API a mano — el
    * botón deshabilitado del panel es una comodidad, esto es la garantía.
    */
-  const destino = await exigirDestinoUtilizable(p.destinationId, p.tenantId);
+  const destino = await exigirDestinoUtilizable(p.destinationId, p.tenantId, system);
 
   // Validar antes de crear nada: mandar una asistencia sin sitio ni contacto
   // obliga al destino a llamar para preguntar, y eso lo paga el cliente en
@@ -185,8 +194,8 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
 
   const ya = await db.query(
     `SELECT * FROM external_dispatches
-      WHERE "sourceSystem" = 'assist' AND "sourceAssistanceId" = $1 AND "destinationId" = $2`,
-    [String(p.assistanceId), p.destinationId],
+      WHERE "sourceSystem" = $3 AND "sourceAssistanceId" = $1 AND "destinationId" = $2`,
+    [String(p.assistanceId), p.destinationId, system],
   );
   if (ya.rows[0] && !sePuedeReintentar(ya.rows[0].status)) {
     throw new ErrorDespacho(
@@ -201,13 +210,10 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
   // destino reconozca el segundo intento como el mismo servicio.
   const correlationId = ya.rows[0]?.correlationId ?? nuevoCorrelationId(now);
 
-  const empresa = {
-    nombre: a.solicitanteEmpresa || a.customerName || "Cliente de Assist",
-    cif: null as string | null,
-    telefono: a.solicitanteTelefono,
-  };
+  const empresa = await fuente.solicitante(p.assistanceId);
   const sobre = construirSobre(a, {
     correlationId,
+    sistemaOrigen: system,
     referencia: a.expediente,
     empresaSolicitante: empresa,
     referenciaCliente: p.referenciaCliente ?? null,
@@ -220,7 +226,7 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
        (uuid, "sourceSystem", "sourceTenantId", "sourceAssistanceId", "sourceReference",
         "destinationId", "destinationSystem", "destinationTenantId", "correlationId",
         status, "payloadSnapshot", "createdAtMs", "updatedAtMs")
-     VALUES ($1,'assist',$2,$3,$4,$5,$6,$7,$8,'PENDING',$9,$10,$10)
+     VALUES ($1,$11,$2,$3,$4,$5,$6,$7,$8,'PENDING',$9,$10,$10)
      ON CONFLICT ("sourceSystem", "sourceTenantId", "sourceAssistanceId", "destinationId")
      DO UPDATE SET "payloadSnapshot" = EXCLUDED."payloadSnapshot",
                    status = 'PENDING', "lastError" = NULL, "updatedAtMs" = EXCLUDED."updatedAtMs"
@@ -229,22 +235,19 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
       crypto.randomUUID(), p.tenantId, String(p.assistanceId), a.expediente,
       destino.id, destino.kind === "central" ? "central" : "external",
       destino.destinationTenantLabel, correlationId,
-      JSON.stringify(sobre), now,
+      JSON.stringify(sobre), now, system,
     ],
   );
   let despacho = ins.rows[0];
 
   await registrarEventoDeEnvio(despacho.id, "REQUESTED", null, "out", now);
   await anotarDiario({
-    system: "assist", tenantId: p.tenantId, assistanceId: p.assistanceId,
+    system, tenantId: p.tenantId, assistanceId: p.assistanceId,
     correlationId, eventType: "EXTERNAL_DISPATCH_CREATED",
     payload: { destino: destino.name, plataforma: destino.destinationTenantLabel },
     dedupeKey: `disp-creado-${despacho.id}`,
   });
-  await db.query(
-    `UPDATE roadside_assistances SET "despachoExternoId" = $2 WHERE id = $1`,
-    [p.assistanceId, despacho.id],
-  );
+  await fuente.anotarDespacho(p.assistanceId, despacho.id);
 
   despacho = await intentarEnvio(despacho.id);
   return aApi({ ...despacho, destinoNombre: destino.name, destinoPlataforma: destino.destinationTenantLabel });
@@ -324,15 +327,13 @@ export async function intentarEnvio(dispatchId: number) {
       [dispatchId, cuando, datos.externalAssistanceId, datos.externalReference,
        JSON.stringify(cuerpo).slice(0, 8000)],
     );
-    if (datos.externalReference) {
-      await db.query(
-        `UPDATE roadside_assistances SET "expedienteDestino" = $2 WHERE id = $1`,
-        [Number(d.sourceAssistanceId), datos.externalReference],
-      );
+    if (datos.externalReference && esSistemaOrigen(d.sourceSystem)) {
+      await fuenteDe(d.sourceSystem)
+        .anotarExpedienteDestino(d.sourceAssistanceId, datos.externalReference);
     }
 
     await anotarDiario({
-      system: "assist", tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
+      system: d.sourceSystem, tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
       correlationId: d.correlationId, eventType: "EXTERNAL_DISPATCH_SENT",
       occurredAtMs: cuando,
       payload: { destino: d.destinoNombre, expedienteDestino: datos.externalReference },
@@ -378,7 +379,8 @@ async function marcarError(dispatchId: number, motivo: string, cuerpo?: unknown)
   console.error(`[Dispatch] envío ${dispatchId} falló: ${motivo}`);
   const fila = (await db.query(`SELECT * FROM external_dispatches WHERE id = $1`, [dispatchId])).rows[0];
   await anotarDiario({
-    system: "assist", tenantId: fila?.sourceTenantId, assistanceId: fila?.sourceAssistanceId,
+    system: fila?.sourceSystem ?? "assist",
+    tenantId: fila?.sourceTenantId, assistanceId: fila?.sourceAssistanceId,
     correlationId: fila?.correlationId, eventType: "SYNC_FAILED",
     occurredAtMs: now,
     payload: { motivo: sanearError(motivo), intento: Number(fila?.retryCount ?? 0) },
@@ -479,7 +481,7 @@ export async function aplicarEvento(
      */
     if (tipo) {
       await registrarEnTransaccion(cliente, {
-        system: "assist", tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
+        system: d.sourceSystem, tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
         correlationId: d.correlationId, eventType: tipo,
         originSystem: d.destinationSystem, occurredAtMs: cuandoMs,
         actorType: "partner",
@@ -491,27 +493,36 @@ export async function aplicarEvento(
     // recuperado: hace falta para poder cerrar el aviso en la bandeja.
     if (d.status === "ERROR") {
       await registrarEnTransaccion(cliente, {
-        system: "assist", tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
+        system: d.sourceSystem, tenantId: d.sourceTenantId, assistanceId: d.sourceAssistanceId,
         correlationId: d.correlationId, eventType: "SYNC_RECOVERED",
         occurredAtMs: cuandoMs, dedupeKey: `disp-recuperado-${dispatchId}-${cuandoMs}`,
       });
     }
 
-    const estadoAssist = estadoAssistDesdeEvento(evento);
-    if (estadoAssist && d.sourceSystem === "assist") {
-      /*
-       * No se pisa una asistencia ya cerrada. Un webhook que llega tarde no
-       * puede reabrir algo que en Assist ya se dio por finalizado o cancelado.
-       */
-      await cliente.query(
-        `UPDATE roadside_assistances
-            SET status = $2, "updatedAtMs" = $3
-          WHERE id = $1 AND status NOT IN ('finalizada','cancelada')`,
-        [Number(d.sourceAssistanceId), estadoAssist, cuandoMs],
-      );
+    /*
+     * El estado interno del origen. Si su adaptador sabe hacerlo con un UPDATE,
+     * entra en ESTA transacción y cuaja con todo lo demás. Si no —Central, que
+     * pasa por `transition()` y abre la suya— se hace después del COMMIT, y se
+     * apunta aquí para no olvidarlo.
+     */
+    const estadoInterno = estadoAssistDesdeEvento(evento);
+    const fuente = esSistemaOrigen(d.sourceSystem) ? fuenteDe(d.sourceSystem) : null;
+    if (estadoInterno && fuente?.aplicarEstadoEnTransaccion) {
+      await fuente.aplicarEstadoEnTransaccion(cliente, d.sourceAssistanceId, estadoInterno, cuandoMs);
     }
 
     await cliente.query("COMMIT");
+
+    /*
+     * Fuera de la transacción y sin poder tumbarla: el despacho ya está
+     * guardado. Si esto falla, el envío consta correcto y el estado interno se
+     * queda atrás — visible y recuperable, que es mejor que deshacer un hecho
+     * que el destino ya nos ha comunicado.
+     */
+    if (estadoInterno && fuente && !fuente.aplicarEstadoEnTransaccion) {
+      await fuente.aplicarEstado(d.sourceAssistanceId, estadoInterno, cuandoMs)
+        .catch((e: any) => console.error("[Dispatch] estado interno no aplicado:", e?.message));
+    }
   } catch (e: any) {
     await cliente.query("ROLLBACK").catch(() => {});
     console.error("[Dispatch] no se pudo aplicar el evento:", e?.message);
@@ -576,25 +587,3 @@ export function nuevoCorrelationId(atMs = Date.now()): string {
   return `COR-${fecha}-${crypto.randomBytes(4).toString("hex")}`;
 }
 
-async function cargarAsistencia(id: number): Promise<(AsistenciaAssist & { expediente: string | null }) | null> {
-  const r = await db.query(
-    `SELECT id, plate, "vehicleDescription", address, latitude, longitude, "googleMapsUrl",
-            "customerName", "customerPhone", "conductorNombre",
-            "solicitanteEmpresa", "solicitanteNombre", "solicitanteTelefono", "solicitanteAutorizacion",
-            "descripcionAveria", "trabajosARealizar", priority, status, notes, "createdAtMs",
-            "expedienteCentral"
-       FROM roadside_assistances WHERE id = $1`,
-    [id],
-  );
-  const a = r.rows[0];
-  if (!a) return null;
-  return {
-    ...a,
-    id: Number(a.id),
-    latitude: a.latitude == null ? null : Number(a.latitude),
-    longitude: a.longitude == null ? null : Number(a.longitude),
-    // Assist no numera expedientes propios todavía: se manda su id con
-    // prefijo, que es estable y sirve para hablar por teléfono.
-    expediente: `AST-${a.id}`,
-  };
-}

@@ -163,6 +163,45 @@ export async function initEmpresas(): Promise<void> {
       ON connect_clients ("companyId");
   `);
 
+  /*
+   * El partner deja de tener identidad propia y apunta a la EMPRESA.
+   *
+   * `connect_partners` guardaba nombre, razón social y CIF por su cuenta, así
+   * que la misma empresa que ya estaba en la cartera aparecía otra vez ahí, con
+   * los datos a medias y sin forma de saber que era la misma. A partir de aquí
+   * el partner es una RELACIÓN —quién puede mandarnos trabajo y con qué
+   * credencial— y la identidad la pone `connect_provider_companies`.
+   *
+   * Las columnas viejas NO se borran: hay partners vivos con su nombre ahí y
+   * borrarlas dejaría listados en blanco. Se quedan como respaldo mientras se
+   * enlazan; el nombre se lee de la empresa cuando la hay.
+   */
+  await db.query(`
+    ALTER TABLE connect_partners
+      ADD COLUMN IF NOT EXISTS "companyId" INTEGER REFERENCES connect_provider_companies(id);
+    CREATE INDEX IF NOT EXISTS idx_connect_partners_company
+      ON connect_partners ("companyId");
+  `);
+
+  /*
+   * Enlace automático SOLO por CIF normalizado, nunca por nombre. «Talleres
+   * Pérez, S.L.» y «TALLERES PEREZ SL» son la misma empresa y el nombre no lo
+   * demuestra; emparejar por parecido acaba dando de alta trabajo a nombre de
+   * quien no es.
+   */
+  const enlazados = await db.query(
+    `UPDATE connect_partners p
+        SET "companyId" = pc.id
+       FROM connect_provider_companies pc
+      WHERE p."companyId" IS NULL
+        AND p."taxId" IS NOT NULL AND p."taxId" <> ''
+        AND pc."taxIdNormalized" = upper(regexp_replace(p."taxId", '[^A-Za-z0-9]', '', 'g'))
+        AND pc."deletedAtMs" IS NULL`,
+  );
+  if (enlazados.rowCount) {
+    console.log(`Connect Pro: ${enlazados.rowCount} partners enlazados con su empresa por CIF.`);
+  }
+
   await backfillRelaciones();
 }
 

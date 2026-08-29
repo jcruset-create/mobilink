@@ -105,12 +105,21 @@ export type CarteraDestinos = {
  * prueba y ahora puede haber desaparecido la variable de entorno, y un
  * «disponible» guardado mentiría en la única pantalla donde importa.
  */
-export async function listarDestinosConEstado(tenantId: string | null): Promise<CarteraDestinos> {
+export async function listarDestinosConEstado(
+  tenantId: string | null,
+  ownerSystem: string = "assist",
+): Promise<CarteraDestinos> {
+  /*
+   * El dueño es la pareja (sistema, tenant), no el tenant a secas: el taller
+   * «77» de Assist y la central «77» de Connect son cosas distintas, y sin el
+   * sistema una vería los destinos de la otra.
+   */
   const r = await db.query(
     `SELECT * FROM external_destinations
-      WHERE "ownerTenantId" IS NULL OR "ownerTenantId" = $1
+      WHERE "ownerSystem" = $2
+        AND ("ownerTenantId" IS NULL OR "ownerTenantId" = $1)
       ORDER BY name`,
-    [tenantId],
+    [tenantId, ownerSystem],
   );
   const variables = await fotoDeVariables(r.rows);
   const hay = comprobadorDesde(variables);
@@ -133,11 +142,16 @@ export async function listarDestinosConEstado(tenantId: string | null): Promise<
  * El filtro por dueño va DENTRO de la consulta: un destino de otro taller no
  * se puede alcanzar cambiando el id en la URL, que es lo que se prueba.
  */
-export async function cargarDestinoDe(id: number, tenantId: string | null) {
+export async function cargarDestinoDe(
+  id: number,
+  tenantId: string | null,
+  ownerSystem: string = "assist",
+) {
   const r = await db.query(
     `SELECT * FROM external_destinations
-      WHERE id = $1 AND ("ownerTenantId" IS NULL OR "ownerTenantId" = $2)`,
-    [id, tenantId],
+      WHERE id = $1 AND "ownerSystem" = $3
+        AND ("ownerTenantId" IS NULL OR "ownerTenantId" = $2)`,
+    [id, tenantId, ownerSystem],
   );
   return r.rows[0] ?? null;
 }
@@ -158,8 +172,12 @@ export async function estadoDeDestino(d: any): Promise<{
  * comodidad, esto es la garantía. Un destino sin credencial no puede enviar
  * aunque se llame a la API directamente.
  */
-export async function exigirDestinoUtilizable(id: number, tenantId: string | null) {
-  const d = await cargarDestinoDe(id, tenantId);
+export async function exigirDestinoUtilizable(
+  id: number,
+  tenantId: string | null,
+  ownerSystem: string = "assist",
+) {
+  const d = await cargarDestinoDe(id, tenantId, ownerSystem);
   if (!d) throw new ErrorDestino("destination_not_found", "Destino no disponible", 404);
   const { estado, motivos } = await estadoDeDestino(d);
   if (!sePuedeEnviar(estado)) {
@@ -189,6 +207,7 @@ export type AltaDestino = {
   metadata?: unknown;
   notes?: string | null;
   ownerTenantId: string | null;
+  ownerSystem?: string;
 };
 
 /**
@@ -249,8 +268,8 @@ export async function crearDestino(p: AltaDestino & { [k: string]: unknown }) {
     `INSERT INTO external_destinations
        (uuid, name, kind, system, "baseUrl", "secretName", "destinationTenantLabel",
         "partnerRef", "apiVersion", capabilities, "timeoutMs", "maxRetries", metadata,
-        "ownerTenantId", notes, "createdAtMs", "updatedAtMs")
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16)
+        "ownerTenantId", "ownerSystem", notes, "createdAtMs", "updatedAtMs")
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$17,$15,$16,$16)
      RETURNING *`,
     [
       crypto.randomUUID(), name,
@@ -261,6 +280,7 @@ export async function crearDestino(p: AltaDestino & { [k: string]: unknown }) {
       ent(p.timeoutMs), ent(p.maxRetries),
       JSON.stringify(p.metadata && typeof p.metadata === "object" ? p.metadata : {}),
       p.ownerTenantId, txt(p.notes), now,
+      p.ownerSystem === "central" ? "central" : "assist",
     ],
   );
   const fila = r.rows[0];
@@ -268,14 +288,16 @@ export async function crearDestino(p: AltaDestino & { [k: string]: unknown }) {
   return destinoParaApi(fila, estado, motivos);
 }
 
-export async function activarDestino(id: number, tenantId: string | null, activo: boolean) {
-  const d = await cargarDestinoDe(id, tenantId);
+export async function activarDestino(
+  id: number, tenantId: string | null, activo: boolean, ownerSystem: string = "assist",
+) {
+  const d = await cargarDestinoDe(id, tenantId, ownerSystem);
   if (!d) throw new ErrorDestino("destination_not_found", "Destino no encontrado", 404);
   await db.query(
     `UPDATE external_destinations SET active = $2, "updatedAtMs" = $3 WHERE id = $1`,
     [id, activo, Date.now()],
   );
-  const fresco = await cargarDestinoDe(id, tenantId);
+  const fresco = await cargarDestinoDe(id, tenantId, ownerSystem);
   const { estado, motivos } = await estadoDeDestino(fresco);
   return destinoParaApi(fresco, estado, motivos);
 }
@@ -309,8 +331,9 @@ export async function probarConexion(
   id: number,
   tenantId: string | null,
   porQuien?: string,
+  ownerSystem: string = "assist",
 ): Promise<ResultadoPrueba> {
-  const d = await cargarDestinoDe(id, tenantId);
+  const d = await cargarDestinoDe(id, tenantId, ownerSystem);
   if (!d) throw new ErrorDestino("destination_not_found", "Destino no encontrado", 404);
 
   const inicio = Date.now();
