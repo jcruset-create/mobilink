@@ -22,6 +22,9 @@ export const EVENTOS = [
   "ACCEPTED",        // el destino se hace cargo
   "REJECTED",        // el destino no se hace cargo
   "INFO_REQUESTED",  // el destino pide datos antes de decidir
+  "QUOTED",          // el destino ofrece precio y plazo, aún no se hace cargo
+  "QUOTE_ACCEPTED",  // el origen acepta esa oferta
+  "QUOTE_REJECTED",  // el origen la descarta
   "ASSIGNED",        // hay proveedor/taller asignado
   "EN_ROUTE",        // va de camino
   "ON_SITE",         // ha llegado al punto
@@ -143,6 +146,13 @@ const ORDEN: EstadoEnvio[] = [
 
 const A_ENVIO: Partial<Record<Evento, EstadoEnvio>> = {
   RECEIVED: "RECEIVED",
+  /*
+   * Presupuestar es haber recibido, no haber aceptado. Un destino que ofrece
+   * precio todavía no se ha comprometido a ir, y pintar el envío como aceptado
+   * dejaría al operador creyendo que el servicio está encargado cuando aún
+   * falta que alguien apruebe el importe.
+   */
+  QUOTED: "RECEIVED",
   ACCEPTED: "ACCEPTED",
   ASSIGNED: "ACCEPTED",
   EN_ROUTE: "ACCEPTED",

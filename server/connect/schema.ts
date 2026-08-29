@@ -15,6 +15,8 @@ import { seedNetworkWorkshops } from "./seedWorkshops.ts";
 import { initPricing } from "./pricing/schema.ts";
 import { initEmpresas } from "./empresasSchema.ts";
 import { initEventLog } from "../eventlog/schema.ts";
+import { initAcuerdos } from "../acuerdos/schema.ts";
+import { initEnrutado } from "../enrutado/schema.ts";
 
 /**
  * Identificador del cerrojo de arranque. Cualquier número sirve mientras sea
@@ -1159,6 +1161,13 @@ async function crearEsquemaConnect(): Promise<void> {
    * y su migración se salta las tablas que todavía no existan.
    */
   await initEventLog();
+  /*
+   * Los acuerdos son columnas nuevas sobre `connect_provider_authorizations`,
+   * así que van DESPUÉS de que exista la tabla y dentro de la misma
+   * inicialización de Connect: quien tiene Central tiene acuerdos.
+   */
+  await initAcuerdos();
+  await initEnrutado();
 
   await seedConnectDefaults();
   // El catálogo de talleres depende de red (geocodificación): si falla, se

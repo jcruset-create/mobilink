@@ -13,6 +13,7 @@ import {
   cambiarVisibilidad,
   listarDocumentos,
   marcarFacturada,
+  puedeTocarAsistencia,
   registrarDocumento,
   situacionAdministrativa,
   validarCoste,
@@ -41,6 +42,27 @@ export function createDocumentosRouter(
   router.use(json({ limit: "1mb" }));
   for (const g of Array.isArray(guardas) ? guardas : [guardas]) router.use(g);
 
+  /**
+   * La plataforma desde la que se opera, siempre del usuario y nunca del
+   * cuerpo. En Assist es el taller; en Central, el centro de control.
+   */
+  function tenantDe(req: any): string | null {
+    const t = req.connectUser?.controlCenterId ?? req.assistPanelUser?.tallerId;
+    return t == null || t === "" ? null : String(t);
+  }
+
+  /**
+   * Corta el paso a la asistencia de otra plataforma.
+   *
+   * Contesta 404 y no 403 a propósito: un 403 confirmaría que el expediente
+   * existe, y quien va probando números no tiene por qué averiguarlo.
+   */
+  async function ajena(req: any, res: Response, id: string): Promise<boolean> {
+    if (await puedeTocarAsistencia(system, id, tenantDe(req))) return false;
+    res.status(404).json({ error: "Asistencia no encontrada", code: "not_found" });
+    return true;
+  }
+
   /** Catálogo, para que el panel no repita las listas. */
   router.get("/catalogo", (_req, res) => {
     res.json({
@@ -52,12 +74,14 @@ export function createDocumentosRouter(
 
   router.get("/asistencias/:id/documentos", async (req, res) => {
     try {
+      if (await ajena(req, res, req.params.id)) return;
       res.json({ data: await listarDocumentos(system, req.params.id, "propio") });
     } catch (e) { fallo(res, e); }
   });
 
   router.post("/asistencias/:id/documentos", async (req: any, res) => {
     try {
+      if (await ajena(req, res, req.params.id)) return;
       const doc = await registrarDocumento({
         system,
         tenantId: req.assistPanelUser?.tallerId ?? req.connectUser?.controlCenterId ?? null,
@@ -89,6 +113,7 @@ export function createDocumentosRouter(
       res.json(await cambiarVisibilidad(
         req.params.uuid, req.body?.visibilidad,
         req.authCtx?.nombre ?? req.connectUser?.name ?? null,
+        tenantDe(req),
       ));
     } catch (e) { fallo(res, e); }
   });
@@ -96,6 +121,7 @@ export function createDocumentosRouter(
   /** Qué falta y en qué estado administrativo está el expediente. */
   router.get("/asistencias/:id/situacion", async (req, res) => {
     try {
+      if (await ajena(req, res, req.params.id)) return;
       const s = await situacionAdministrativa(system, req.params.id);
       res.json({
         ...s,
@@ -107,6 +133,7 @@ export function createDocumentosRouter(
 
   router.post("/asistencias/:id/validar-coste", async (req: any, res) => {
     try {
+      if (await ajena(req, res, req.params.id)) return;
       const estado = await validarCoste(
         system, req.params.id,
         req.authCtx?.nombre ?? req.connectUser?.name ?? null,
@@ -117,6 +144,7 @@ export function createDocumentosRouter(
 
   router.post("/asistencias/:id/facturada", async (req: any, res) => {
     try {
+      if (await ajena(req, res, req.params.id)) return;
       const estado = await marcarFacturada(
         system, req.params.id,
         req.authCtx?.nombre ?? req.connectUser?.name ?? null,

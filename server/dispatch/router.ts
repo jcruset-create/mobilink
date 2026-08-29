@@ -46,11 +46,30 @@ function fallo(res: Response, e: unknown) {
  * sin él, dos talleres del mismo Assist compartirían destinos y despachos.
  */
 async function tenantDe(req: any): Promise<string | null> {
-  const t = req.assistPanelUser?.tallerId ?? req.query?.tallerId ?? req.body?.tallerId;
+  /*
+   * En Assist el tenant es el taller; en Central, el centro de control. Los dos
+   * salen del usuario autenticado, nunca del cuerpo de la petición: un tenant
+   * que se pueda mandar es un tenant que se puede falsificar.
+   *
+   * `tallerId` por query se sigue admitiendo solo para Assist, donde ya venía
+   * de antes y el guarda de supervisor ya limita quién llega.
+   */
+  const t = req.connectUser?.controlCenterId
+    ?? req.assistPanelUser?.tallerId
+    ?? req.query?.tallerId ?? req.body?.tallerId;
   return t == null || t === "" ? null : String(t);
 }
 
-export function createDispatchRouter(requireSupervisorRole: RequestHandler): Router {
+/**
+ * `system` dice quién subcontrata: Assist o una Central. Cambia de qué tabla
+ * sale la asistencia y de quién son los destinos, nada más — la lógica del
+ * envío es la misma para los dos, que es justo lo que se buscaba al
+ * generalizarla.
+ */
+export function createDispatchRouter(
+  guardas: RequestHandler | RequestHandler[],
+  system: "assist" | "central" = "assist",
+): Router {
   const router = Router();
   router.use(json({ limit: "1mb" }));
 
@@ -104,6 +123,23 @@ export function createDispatchRouter(requireSupervisorRole: RequestHandler): Rou
         }));
       }
 
+      /*
+       * Una oferta tampoco es un cambio de estado: el destino dice por cuánto
+       * lo haría, no que vaya a hacerlo. Se guarda como presupuesto y espera a
+       * que alguien la acepte; hasta entonces el envío sigue sin aceptar.
+       */
+      if (tipo === "assistance.quoted" || tipo === "quote.provided") {
+        const { registrarOferta } = await import("../acuerdos/servicio.ts");
+        return res.json(await registrarOferta(correlationId, {
+          importe: (datos as any).amount ?? (datos as any).importe,
+          moneda: (datos as any).currency ?? (datos as any).moneda,
+          impuestos: (datos as any).taxes ?? (datos as any).impuestos,
+          concepto: (datos as any).concept ?? (datos as any).concepto,
+          etaMin: (datos as any).eta_minutes ?? (datos as any).etaMin,
+          validoHastaMs: (datos as any).valid_until_ms ?? (datos as any).validoHastaMs,
+        }));
+      }
+
       const r = await aplicarAvisoDeCentral(correlationId, tipo, datos);
       // 200 aunque no se aplique: el emisor reintenta ante cualquier no-2xx, y
       // un aviso que aquí no significa nada no se arregla reintentándolo.
@@ -113,6 +149,10 @@ export function createDispatchRouter(requireSupervisorRole: RequestHandler): Rou
     }
   });
 
+  // El webhook va ANTES de los guardas: lo llama el destino, que no tiene
+  // usuario aquí y se autentica con la firma del propio aviso.
+  for (const g of Array.isArray(guardas) ? guardas : [guardas]) router.use(g);
+
   /* ── Destinos disponibles ──────────────────────────────────────────────── */
   /*
    * Devuelve además el estado GLOBAL, que es lo que decide el mensaje de la
@@ -120,39 +160,39 @@ export function createDispatchRouter(requireSupervisorRole: RequestHandler): Rou
    * distintos —dar de alta uno, o crear una variable en Render— y confundirlos
    * hace perder media hora buscando donde no es.
    */
-  router.get("/destinos", requireSupervisorRole, async (req, res) => {
+  router.get("/destinos", async (req, res) => {
     try {
-      res.json(await listarDestinosConEstado(await tenantDe(req)));
+      res.json(await listarDestinosConEstado(await tenantDe(req), system));
     } catch (e) {
       fallo(res, e);
     }
   });
 
   /** Prueba de conexión real: variable de entorno → endpoint → autenticación. */
-  router.post("/destinos/:id/probar", requireSupervisorRole, async (req: any, res) => {
+  router.post("/destinos/:id/probar", async (req: any, res) => {
     try {
       const quien = req.assistPanelUser?.nombre ?? req.authCtx?.username ?? null;
-      res.json(await probarConexion(Number(req.params.id), await tenantDe(req), quien));
+      res.json(await probarConexion(Number(req.params.id), await tenantDe(req), quien, system));
     } catch (e) {
       fallo(res, e);
     }
   });
 
-  router.patch("/destinos/:id", requireSupervisorRole, async (req, res) => {
+  router.patch("/destinos/:id", async (req, res) => {
     try {
       if (typeof req.body?.active !== "boolean") {
         return res.status(422).json({ error: "Solo se puede activar o desactivar desde aquí" });
       }
-      res.json(await activarDestino(Number(req.params.id), await tenantDe(req), req.body.active));
+      res.json(await activarDestino(Number(req.params.id), await tenantDe(req), req.body.active, system));
     } catch (e) {
       fallo(res, e);
     }
   });
 
   /** Historial de pruebas: distingue «está roto» de «hubo un corte». */
-  router.get("/destinos/:id/comprobaciones", requireSupervisorRole, async (req, res) => {
+  router.get("/destinos/:id/comprobaciones", async (req, res) => {
     try {
-      const d = await cargarDestinoDe(Number(req.params.id), await tenantDe(req));
+      const d = await cargarDestinoDe(Number(req.params.id), await tenantDe(req), system);
       if (!d) return res.status(404).json({ error: "Destino no encontrado" });
       const r = await db.query(
         `SELECT estado, "durationMs", detail, "byUser", "checkedAtMs"
@@ -172,18 +212,20 @@ export function createDispatchRouter(requireSupervisorRole: RequestHandler): Rou
    * vive. Si alguien manda una credencial en el cuerpo se rechaza con una
    * explicación, en vez de guardarla «por comodidad».
    */
-  router.post("/destinos", requireSupervisorRole, async (req, res) => {
+  router.post("/destinos", async (req, res) => {
     try {
-      const creado = await crearDestino({ ...req.body, ownerTenantId: await tenantDe(req) });
+      const creado = await crearDestino({
+        ...req.body, ownerTenantId: await tenantDe(req), ownerSystem: system,
+      });
       res.status(201).json(creado);
     } catch (e) {
       fallo(res, e);
     }
   });
 
-  router.get("/destinos/:id", requireSupervisorRole, async (req, res) => {
+  router.get("/destinos/:id", async (req, res) => {
     try {
-      const d = await cargarDestinoDe(Number(req.params.id), await tenantDe(req));
+      const d = await cargarDestinoDe(Number(req.params.id), await tenantDe(req), system);
       if (!d) return res.status(404).json({ error: "Destino no encontrado" });
       const { estado, motivos } = await estadoDeDestino(d);
       res.json(destinoParaApi(d, estado, motivos));
@@ -193,13 +235,14 @@ export function createDispatchRouter(requireSupervisorRole: RequestHandler): Rou
   });
 
   /* ── Subcontratar una asistencia ───────────────────────────────────────── */
-  router.post("/asistencias/:id/subcontratar", requireSupervisorRole, async (req, res) => {
+  router.post("/asistencias/:id/subcontratar", async (req, res) => {
     try {
       const destinationId = Number(req.body?.destinationId);
       if (!Number.isInteger(destinationId) || destinationId <= 0) {
         return res.status(422).json({ error: "Indica la plataforma de destino" });
       }
       const despacho = await subcontratarEnCentral({
+        system,
         assistanceId: Number(req.params.id),
         destinationId,
         tenantId: await tenantDe(req),
@@ -213,18 +256,21 @@ export function createDispatchRouter(requireSupervisorRole: RequestHandler): Rou
     }
   });
 
-  router.get("/asistencias/:id/despachos", requireSupervisorRole, async (req, res) => {
+  router.get("/asistencias/:id/despachos", async (req, res) => {
     try {
-      res.json({ data: await listarDespachosDeAsistencia(Number(req.params.id)) });
+      res.json({ data: await listarDespachosDeAsistencia(
+        Number(req.params.id), system, await tenantDe(req)) });
     } catch (e) {
       fallo(res, e);
     }
   });
 
   /* ── Reintento manual ──────────────────────────────────────────────────── */
-  router.post("/despachos/:id/reintentar", requireSupervisorRole, async (req, res) => {
+  router.post("/despachos/:id/reintentar", async (req, res) => {
     try {
-      const d = await intentarEnvio(Number(req.params.id));
+      const d = await intentarEnvio(Number(req.params.id), {
+        tenantId: await tenantDe(req), system,
+      });
       res.json({
         id: Number(d.id),
         status: d.status,
