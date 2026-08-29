@@ -41,7 +41,12 @@ import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./even
 import { tipoDesdeEstadoAssist } from "./eventlog/tipos.ts";
 import { initDocumentos } from "./documentos/schema.ts";
 import { createDocumentosRouter } from "./documentos/router.ts";
-import { recalcularEstadoAdmin, registrarDocumento as registrarDocumentoDeAssist } from "./documentos/servicio.ts";
+import {
+  olvidarFicheroDeAssist,
+  recalcularEstadoAdmin,
+  registrarDocumento as registrarDocumentoDeAssist,
+  registrarFicheroDeAssist,
+} from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import {
   initCorreo,
@@ -7960,11 +7965,18 @@ app.post(
       // Si en la foto del camión también sale matrícula roja → asignar al remolque
       // automáticamente (registro matricula_remolque apuntando a la misma foto)
       if (kind === "matricula_camion" && detectedRemolquePlate) {
-        await db.query(
+        const remolque = await db.query(
           `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs", "detectedPlate")
-           VALUES ($1, 'matricula_remolque', $2, $3, $4, $5)`,
+           VALUES ($1, 'matricula_remolque', $2, $3, $4, $5) RETURNING id, "createdAtMs"`,
           [id, publicData.publicUrl, req.file.originalname, Date.now() + 1, detectedRemolquePlate]
         );
+        // Al catálogo también: es un fichero más de la asistencia, aunque
+        // apunte a la misma foto que el del camión.
+        void registrarFicheroDeAssist({
+          fileId: remolque.rows[0].id, assistanceId: id, kind: "matricula_remolque",
+          url: publicData.publicUrl, fileName: req.file.originalname,
+          createdAtMs: Number(remolque.rows[0].createdAtMs),
+        });
       }
 
       let plateAction: "none" | "assigned" | "match" | "mismatch" = "none";
@@ -8057,6 +8069,12 @@ app.post(
         [id, kind, publicData.publicUrl, filename, Date.now()]
       );
 
+      void registrarFicheroDeAssist({
+        fileId: result.rows[0].id, assistanceId: id, kind,
+        url: publicData.publicUrl, fileName: filename,
+        createdAtMs: Number(result.rows[0].createdAtMs),
+      });
+
       res.json({ file: result.rows[0] });
     } catch (error: any) {
       console.error("POST /api/roadside-assistances/:id/files-from-url error:", error);
@@ -8065,11 +8083,28 @@ app.post(
   }
 );
 
+/**
+ * La galería de una asistencia.
+ *
+ * Sigue leyendo `roadside_assistance_files`, que es donde vive el fichero, y
+ * le añade del catálogo lo que el catálogo sabe: el tipo y con quién está
+ * compartido.
+ *
+ * El JOIN es POR LA IZQUIERDA a propósito. Leer del catálogo y ya está sería
+ * más limpio de contar, pero una foto que por lo que sea no esté catalogada
+ * desaparecería de la pantalla sin que nadie se entere, y una foto que no se
+ * ve es una foto perdida. Así, como mucho, sale sin etiqueta.
+ */
 app.get("/api/roadside-assistances/:id/files", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
     const result = await db.query(
-      `SELECT * FROM roadside_assistance_files WHERE "assistanceId" = $1 ORDER BY "createdAtMs" ASC`,
+      `SELECT f.*, d.tipo AS "tipoDocumento", d.visibilidad, d.uuid AS "documentoUuid"
+         FROM roadside_assistance_files f
+         LEFT JOIN assistance_documents d
+           ON d."legacyFileId" = f.id AND d."sourceSystem" = 'assist'
+        WHERE f."assistanceId" = $1
+        ORDER BY f."createdAtMs" ASC`,
       [id]
     );
     res.json(result.rows);
@@ -8092,6 +8127,12 @@ app.delete(
       if (result.rows.length === 0) {
         return res.status(404).json({ error: "Archivo no encontrado" });
       }
+      /*
+       * Y del catálogo. Sin esto, la foto desaparecería de la pantalla y de
+       * ningún sitio más: seguiría contando para el estado administrativo y
+       * seguiría compartida con quien subcontrató el servicio.
+       */
+      await olvidarFicheroDeAssist(fileId);
       res.json({ deleted: true });
     } catch (error) {
       console.error("DELETE /api/roadside-assistances/:id/files/:fileId error:", error);
@@ -14737,14 +14778,25 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
       if ((msg.message_type === "image" || msg.message_type === "video" || msg.message_type === "audio" || msg.message_type === "document") && (msg.media_stored_url || msg.media_url)) {
         const url = msg.media_stored_url || msg.media_url;
         // Evitar duplicados al reabrir y volver a cerrar la sesión: solo insertar si esa URL aún no está guardada
-        await db.query(
+        const nombreWa = `WhatsApp ${msg.message_type} ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}`;
+        const guardado = await db.query(
           `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs")
            SELECT $1, $2, $3, $4, $5
            WHERE NOT EXISTS (
              SELECT 1 FROM roadside_assistance_files WHERE "assistanceId" = $1 AND url = $3
-           )`,
-          [jobId, `whatsapp_${msg.message_type}`, url, `WhatsApp ${msg.message_type} ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}`, now]
-        ).catch(() => {});
+           )
+           RETURNING id, "createdAtMs"`,
+          [jobId, `whatsapp_${msg.message_type}`, url, nombreWa, now]
+        ).catch(() => null);
+        // Solo si se ha insertado de verdad: al reabrir y cerrar la sesión no
+        // se inserta nada, y catalogar de nuevo sería contarlo dos veces.
+        if (guardado?.rows?.[0]) {
+          void registrarFicheroDeAssist({
+            fileId: guardado.rows[0].id, assistanceId: jobId,
+            kind: `whatsapp_${msg.message_type}`, url, fileName: nombreWa,
+            createdAtMs: Number(guardado.rows[0].createdAtMs),
+          });
+        }
       }
       if (msg.message_type === "text" && msg.text_content) {
         noteLines.push(`[WhatsApp ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}] ${msg.text_content}`);
