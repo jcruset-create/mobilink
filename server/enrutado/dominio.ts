@@ -223,3 +223,25 @@ function explicar(notas: Notas, pesos: Pesos, total: number): string {
   if (ordenados.length === 0) return "Ningún criterio a favor";
   return `Por ${ordenados.map((x) => ETIQUETA[x.c]).join(" y ")}`;
 }
+
+/* ── Utilidades de lectura ───────────────────────────────────────────────── */
+
+/**
+ * El código postal, sacado de una dirección escrita a mano.
+ *
+ * `connect_assistances` guarda la dirección como texto libre: no hay columna
+ * de provincia ni de CP. Extraer cinco dígitos es fiable en España y es lo que
+ * más manda en la cobertura, porque los acuerdos admiten prefijos —pactar «43»
+ * es pactar Tarragona—.
+ *
+ * Adivinar la PROVINCIA del texto no se hace: acertaría a menudo y fallaría
+ * justo en los nombres compuestos, y un enrutado que falla a veces es peor que
+ * uno que pregunta. La pantalla deja corregirlo a mano.
+ *
+ * Vive aquí y no en el servicio porque es una función pura: colgarla de un
+ * fichero que necesita base de datos obligaría a levantar una para probarla.
+ */
+export function codigoPostalDe(direccion: unknown): string | null {
+  const m = /(?:^|[^0-9])(\d{5})(?:[^0-9]|$)/.exec(String(direccion ?? ""));
+  return m ? m[1] : null;
+}

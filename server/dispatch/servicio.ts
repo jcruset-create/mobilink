@@ -20,6 +20,7 @@ import crypto from "node:crypto";
 import db from "../db.ts";
 import { exigirDestinoUtilizable, resolverSecreto } from "./destinosServicio.ts";
 import { sanearError } from "./destinos.ts";
+import { puede } from "./capacidadesDestino.ts";
 import { esSistemaOrigen, fuenteDe, type SistemaOrigen } from "./fuentes.ts";
 import { registrarEnTransaccion, registrarEvento } from "../eventlog/servicio.ts";
 import { tipoDesdeEventoCable } from "../eventlog/tipos.ts";
@@ -37,7 +38,6 @@ import {
   construirSobre,
   respuestaDeCentral,
   validarParaEnvio,
-  type AsistenciaAssist,
 } from "./payload.ts";
 
 // Se reexporta para quien ya lo importaba de aquí.
@@ -141,6 +141,8 @@ function aApi(d: any, eventos: any[] = []) {
     referenciaDestino: d.externalReference ?? null,
     externalAssistanceId: d.externalAssistanceId ?? null,
     status: d.status,
+    /* Distingue «le he pedido precio» de «se lo he encargado». */
+    soloPresupuesto: d.quoteOnly === true,
     ultimoEvento: d.lastEvent ?? null,
     sentAtMs: num(d.sentAtMs),
     receivedAtMs: num(d.receivedAtMs),
@@ -175,6 +177,8 @@ export type PeticionSubcontrata = {
   referenciaCliente?: string | null;
   limiteAutorizado?: number | null;
   incluirObservaciones?: boolean;
+  /** Pide precio en vez de encargar. Exige que el destino sepa presupuestar. */
+  soloPresupuesto?: boolean;
 };
 
 /**
@@ -197,6 +201,22 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
    * botón deshabilitado del panel es una comodidad, esto es la garantía.
    */
   const destino = await exigirDestinoUtilizable(p.destinationId, p.tenantId, system);
+
+  /*
+   * Cerrojo del modo presupuesto.
+   *
+   * Un destino que no sabe leer `quote_only` recibiría el sobre y crearía una
+   * asistencia de verdad: mandaría una grúa a un sitio donde solo se estaba
+   * preguntando el precio. Por eso no basta con no ofrecer el botón en la
+   * pantalla; la puerta se cierra aquí.
+   */
+  if (p.soloPresupuesto && !puede(destino.capabilities, "supports_quotes")) {
+    throw new ErrorDespacho(
+      "quotes_unsupported",
+      `«${destino.name}» no sabe presupuestar: si se le manda, lo tomaría como un encargo. ` +
+      "Encárgalo con la tarifa pactada o pídele el precio por teléfono.",
+    );
+  }
 
   // Validar antes de crear nada: mandar una asistencia sin sitio ni contacto
   // obliga al destino a llamar para preguntar, y eso lo paga el cliente en
@@ -233,23 +253,25 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
     referenciaCliente: p.referenciaCliente ?? null,
     limiteAutorizado: p.limiteAutorizado ?? null,
     incluirObservaciones: p.incluirObservaciones ?? false,
+    soloPresupuesto: p.soloPresupuesto === true,
   });
 
   const ins = await db.query(
     `INSERT INTO external_dispatches
        (uuid, "sourceSystem", "sourceTenantId", "sourceAssistanceId", "sourceReference",
         "destinationId", "destinationSystem", "destinationTenantId", "correlationId",
-        status, "payloadSnapshot", "createdAtMs", "updatedAtMs")
-     VALUES ($1,$11,$2,$3,$4,$5,$6,$7,$8,'PENDING',$9,$10,$10)
+        status, "payloadSnapshot", "createdAtMs", "updatedAtMs", "quoteOnly")
+     VALUES ($1,$11,$2,$3,$4,$5,$6,$7,$8,'PENDING',$9,$10,$10,$12)
      ON CONFLICT ("sourceSystem", "sourceTenantId", "sourceAssistanceId", "destinationId")
      DO UPDATE SET "payloadSnapshot" = EXCLUDED."payloadSnapshot",
-                   status = 'PENDING', "lastError" = NULL, "updatedAtMs" = EXCLUDED."updatedAtMs"
+                   status = 'PENDING', "lastError" = NULL, "updatedAtMs" = EXCLUDED."updatedAtMs",
+                   "quoteOnly" = EXCLUDED."quoteOnly"
      RETURNING *`,
     [
       crypto.randomUUID(), p.tenantId, String(p.assistanceId), a.expediente,
       destino.id, destino.kind === "central" ? "central" : "external",
       destino.destinationTenantLabel, correlationId,
-      JSON.stringify(sobre), now, system,
+      JSON.stringify(sobre), now, system, p.soloPresupuesto === true,
     ],
   );
   let despacho = ins.rows[0];
@@ -286,6 +308,42 @@ export async function subcontratarEnCentral(p: PeticionSubcontrata) {
  * Se pasa `null` solo desde dentro (el worker de reintentos y el
  * superadministrador), donde el despacho ya viene de una consulta acotada.
  */
+/**
+ * Confirma el encargo después de aceptar un presupuesto.
+ *
+ * Reutiliza el MISMO despacho —misma fila, misma correlación— quitándole la
+ * marca de presupuesto y volviéndolo a mandar. Crear uno nuevo le daría al
+ * destino dos peticiones para el mismo servicio y una correlación distinta a
+ * la del precio que acaba de dar, que es justo lo que rompe la trazabilidad
+ * en el momento en que más falta hace: al facturar.
+ */
+export async function confirmarTrasPresupuesto(
+  dispatchId: number, tenantId: string | null, system: SistemaOrigen,
+) {
+  const params: unknown[] = [dispatchId, system];
+  let filtro = "";
+  if (tenantId != null) {
+    params.push(tenantId);
+    filtro = ` AND "sourceTenantId" = $${params.length}`;
+  }
+  const r = await db.query(
+    `SELECT * FROM external_dispatches
+      WHERE id = $1 AND "sourceSystem" = $2${filtro}`,
+    params,
+  );
+  const d = r.rows[0];
+  if (!d) throw new ErrorDespacho("not_found", "Envío no encontrado", 404);
+  if (d.quoteOnly !== true) return d;    // ya era un encargo: nada que confirmar
+
+  return subcontratarEnCentral({
+    system,
+    assistanceId: Number(d.sourceAssistanceId),
+    destinationId: Number(d.destinationId),
+    tenantId,
+    soloPresupuesto: false,
+  });
+}
+
 export async function intentarEnvio(
   dispatchId: number,
   dueno: { tenantId: string | null; system: SistemaOrigen } | null = null,

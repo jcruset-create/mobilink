@@ -256,6 +256,51 @@ export function createDispatchRouter(
     }
   });
 
+  /* ── Pedir precio en vez de encargar ───────────────────────────────────── */
+  /*
+   * Manda la petición al destino Y abre el presupuesto, con la MISMA
+   * correlación. Las dos cosas juntas y no en dos llamadas del panel porque a
+   * medias no significan nada: un presupuesto sin petición nadie lo va a
+   * contestar, y una petición sin presupuesto no tiene dónde caer la respuesta.
+   */
+  router.post("/asistencias/:id/presupuesto", async (req: any, res) => {
+    try {
+      const destinationId = Number(req.body?.destinationId);
+      if (!Number.isInteger(destinationId) || destinationId <= 0) {
+        return res.status(422).json({ error: "Indica la plataforma a la que pedir precio" });
+      }
+      const despacho = await subcontratarEnCentral({
+        system,
+        assistanceId: Number(req.params.id),
+        destinationId,
+        tenantId: await tenantDe(req),
+        referenciaCliente: req.body?.referenciaCliente ?? null,
+        limiteAutorizado: req.body?.limiteAutorizado ?? null,
+        soloPresupuesto: true,
+      });
+
+      /*
+       * El presupuesto solo lo lleva Central: en Assist no hay cartera de
+       * acuerdos donde colgarlo, y el envío ya queda registrado igual.
+       */
+      let presupuesto = null;
+      if (system === "central") {
+        const centro = await tenantDe(req);
+        const { pedirPresupuesto } = await import("../acuerdos/servicio.ts");
+        presupuesto = await pedirPresupuesto({
+          centro: Number(centro),
+          assistanceId: Number(req.params.id),
+          authorizationId: req.body?.authorizationId == null ? null : Number(req.body.authorizationId),
+          dispatchId: Number(despacho.id),
+          correlationId: despacho.correlationId,
+        });
+      }
+      res.status(201).json({ despacho, presupuesto });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
   router.get("/asistencias/:id/despachos", async (req, res) => {
     try {
       res.json({ data: await listarDespachosDeAsistencia(

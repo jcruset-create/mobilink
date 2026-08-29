@@ -215,4 +215,18 @@ export async function initDispatch(): Promise<void> {
     ALTER TABLE roadside_assistances
       ADD COLUMN IF NOT EXISTS "expedienteDestino" TEXT;
   `);
+
+  /*
+   * Un despacho puede ser una PETICIÓN DE PRESUPUESTO en vez de un encargo.
+   *
+   * Va como columna del mismo despacho y no como tabla aparte porque es el
+   * mismo servicio en la misma conversación: cuando se acepta el presupuesto
+   * se reenvía este despacho sin la marca, y así el `correlationId` es el
+   * mismo de punta a punta. Con dos filas, el destino vería dos peticiones
+   * distintas para lo mismo.
+   */
+  await db.query(`
+    ALTER TABLE external_dispatches
+      ADD COLUMN IF NOT EXISTS "quoteOnly" BOOLEAN NOT NULL DEFAULT false;
+  `);
 }
