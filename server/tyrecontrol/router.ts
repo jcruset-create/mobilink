@@ -321,5 +321,114 @@ export function createTyreControlRouter(guarda: any): Router {
     }
   });
 
+  /* ── Sustitución de neumático (preparada, sin escribir) ────────────────── */
+
+  /**
+   * Las listas cerradas que necesita la pantalla.
+   *
+   * Se sirven desde el servidor y no se copian en el front porque son los
+   * valores de un CHECK de TyreControl: si allí cambian, un desplegable con la
+   * lista escrita a mano ofrecería opciones que el RPC rechaza.
+   */
+  router.get("/sustitucion/opciones", async (_req, res) => {
+    try {
+      const s = await import("./sustitucion.ts");
+      res.json({
+        destinos: s.DESTINOS_RETIRADO.map((v) => ({ valor: v, etiqueta: s.ETIQUETA_DESTINO[v] })),
+        motivos: s.MOTIVOS_DESMONTAJE.map((v) => ({ valor: v, etiqueta: s.ETIQUETA_MOTIVO[v] })),
+        condiciones: s.CONDICIONES,
+      });
+    } catch (e) { fallo(res, e); }
+  });
+
+  /**
+   * El almacén de la empresa, para elegir qué se montó.
+   *
+   * Devuelve PRODUCTOS con sus cantidades, no fichas de neumático: es lo que
+   * `tc_sustituir_neumatico` acepta. Un selector de fichas sería más cómodo y
+   * no se podría enviar.
+   */
+  router.get("/stock", async (req, res) => {
+    try {
+      const tcEmpresaId = String(req.query.tcEmpresaId ?? "").trim();
+      if (!tcEmpresaId) {
+        return res.status(422).json({ estado: "ERROR", code: "missing_query", error: "Indica la empresa" });
+      }
+      const { stockDeEmpresa } = await import("./sustitucionServicio.ts");
+      res.json({ data: await stockDeEmpresa(tcEmpresaId) });
+    } catch (e) { fallo(res, e); }
+  });
+
+  /**
+   * Marca los datos de la sustitución sobre la asistencia.
+   *
+   * Separado del PATCH de reparación porque los campos no se solapan y mezclar
+   * los dos dejaría una asistencia marcada a la vez como reparación y como
+   * sustitución, que no significa nada.
+   */
+  router.patch("/asistencias/:id/marca-sustitucion", async (req, res) => {
+    try {
+      const { esCondicion, esDestinoRetirado, esMotivoDesmontaje } = await import("./sustitucion.ts");
+      const b = req.body ?? {};
+      const texto = (v: unknown) => (v == null || v === "" ? null : String(v).trim() || null);
+
+      const posicion = texto(b.tcPosicionCodigo);
+      if (!posicion) {
+        return res.status(422).json({ error: "Indica la rueda", code: "sin_posicion" });
+      }
+      const producto = texto(b.tcProductoAlmacenId);
+      if (!producto) {
+        return res.status(422).json({ error: "Indica el neumático que se montó", code: "sin_producto" });
+      }
+      const condicion = texto(b.tcCondicion) ?? "nuevo";
+      if (!esCondicion(condicion)) {
+        return res.status(422).json({ error: "Condición desconocida", code: "condicion_invalida" });
+      }
+      const destino = texto(b.tcDestinoRetirado) ?? "almacen";
+      if (!esDestinoRetirado(destino)) {
+        return res.status(422).json({ error: "Destino desconocido", code: "destino_invalido" });
+      }
+      const motivo = texto(b.tcMotivoDesmontaje) ?? "desgaste";
+      if (!esMotivoDesmontaje(motivo)) {
+        return res.status(422).json({ error: "Motivo desconocido", code: "motivo_invalido" });
+      }
+
+      const r = await db.query(
+        `UPDATE roadside_assistances
+            SET "tcOperacion" = 'sustitucion_neumatico',
+                "tcPosicionCodigo" = $2, "tcNeumaticoId" = $3,
+                "tcProductoAlmacenId" = $4, "tcCondicion" = $5,
+                "tcDestinoRetirado" = $6, "tcMotivoDesmontaje" = $7,
+                "tcRfidEntrante" = $8, "tcSerieEntrante" = $9, "tcDotEntrante" = $10,
+                "updatedAtMs" = $11
+          WHERE id = $1
+        RETURNING id, "tcOperacion", "tcPosicionCodigo", "tcNeumaticoId",
+                  "tcProductoAlmacenId", "tcCondicion", "tcDestinoRetirado",
+                  "tcMotivoDesmontaje", "tcRfidEntrante", "tcSerieEntrante", "tcDotEntrante"`,
+        [Number(req.params.id), posicion, texto(b.tcNeumaticoId), producto, condicion,
+         destino, motivo, texto(b.tcRfidEntrante), texto(b.tcSerieEntrante), texto(b.tcDotEntrante),
+         Date.now()],
+      );
+      if (!r.rows.length) return res.status(404).json({ error: "Asistencia no encontrada" });
+      res.json(r.rows[0]);
+    } catch (e) { fallo(res, e); }
+  });
+
+  /**
+   * Lo que se le mandaría a TyreControl. NO envía nada y NO encola nada.
+   *
+   * Es un GET a propósito: no tiene efectos, ni siquiera en la cola. Que se
+   * pueda abrir y cerrar sin consecuencias es justamente lo que hace que sirva
+   * para revisar antes de encender la llave.
+   */
+  router.get("/simulacro/sustitucion/:id", async (req, res) => {
+    try {
+      const { simulacroSustitucion } = await import("./sustitucionSimulacro.ts");
+      const s = await simulacroSustitucion(Number(req.params.id));
+      if (!s) return res.status(404).json({ error: "Asistencia no encontrada" });
+      res.json(s);
+    } catch (e) { fallo(res, e); }
+  });
+
   return router;
 }

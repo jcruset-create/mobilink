@@ -42,4 +42,30 @@ export async function initTyreControlAssist(): Promise<void> {
     ALTER TABLE roadside_assistances
       ADD COLUMN IF NOT EXISTS "tcIncidenciaId" TEXT;
   `);
+
+  /*
+   * Sustitución de neumático.
+   *
+   * El entrante NO se guarda como un id de ficha de TyreControl: TC no acepta
+   * uno. Lo que pide es un PRODUCTO del almacén más la condición (nuevo/usado)
+   * y, si se conoce, la identidad de la unidad (RFID o número de serie). Estas
+   * columnas guardan exactamente eso y nada más, para no inventar una forma de
+   * elegir neumático que al llegar al RPC no existiría.
+   */
+  await db.query(`
+    ALTER TABLE roadside_assistances
+      ADD COLUMN IF NOT EXISTS "tcProductoAlmacenId" TEXT;
+    ALTER TABLE roadside_assistances
+      ADD COLUMN IF NOT EXISTS "tcCondicion" TEXT;
+    ALTER TABLE roadside_assistances
+      ADD COLUMN IF NOT EXISTS "tcDestinoRetirado" TEXT;
+    ALTER TABLE roadside_assistances
+      ADD COLUMN IF NOT EXISTS "tcMotivoDesmontaje" TEXT;
+    ALTER TABLE roadside_assistances
+      ADD COLUMN IF NOT EXISTS "tcRfidEntrante" TEXT;
+    ALTER TABLE roadside_assistances
+      ADD COLUMN IF NOT EXISTS "tcSerieEntrante" TEXT;
+    ALTER TABLE roadside_assistances
+      ADD COLUMN IF NOT EXISTS "tcDotEntrante" TEXT;
+  `);
 }
