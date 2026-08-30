@@ -12,13 +12,12 @@ import {
   fetchOtfPlantillas,
   createOtfPlantilla,
   updateOtfPlantilla,
-  fetchTyreControlInfo,
   cancelOtf,
   type OtfPlantilla,
-  type TyreControlInfo,
 } from "../modules/roadsideAssistanceApi";
 import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
 import KnownPlaceMapModal from "../components/KnownPlaceMapModal";
+import TyreControlVehiculo from "../components/TyreControlVehiculo";
 import AssistSidebar from "../components/AssistSidebar";
 
 const STATUS_OTF: Record<string, string> = {
@@ -414,19 +413,9 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
   const [detalle, setDetalle] = useState("");
   const [observaciones, setObservaciones] = useState("");
   const [adding, setAdding] = useState(false);
-  const [tyreInfo, setTyreInfo] = useState<TyreControlInfo | null>(null);
-
-  // Tarjeta TyreControl: al escribir una matrícula completa (>= 6 caracteres)
-  // se consulta el vehículo y su última revisión. Con debounce para no
-  // disparar una petición por tecla.
-  useEffect(() => {
-    const p = plate.trim();
-    if (p.replace(/[^A-Z0-9]/gi, "").length < 6) { setTyreInfo(null); return; }
-    const timer = setTimeout(() => {
-      fetchTyreControlInfo(p).then(setTyreInfo).catch(() => setTyreInfo(null));
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [plate]);
+  // La consulta a TyreControl (y su antirrebote) vive ahora dentro de
+  // TyreControlVehiculo: la hacían dos pantallas con dos copias del mismo
+  // efecto.
 
   async function add() {
     if (adding) return; // evita el doble clic → trabajo duplicado
@@ -554,30 +543,15 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
             className={`${inputCls} col-span-2`}
           />
         </div>
-        {tyreInfo?.found && tyreInfo.vehiculo && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-xs">
-            <span className="font-black text-cyan-300">🛞 TyreControl</span>
-            <span className="font-bold text-cyan-200">
-              {tyreInfo.vehiculo.matricula}
-              {tyreInfo.vehiculo.marca ? ` · ${tyreInfo.vehiculo.marca}${tyreInfo.vehiculo.modelo ? ` ${tyreInfo.vehiculo.modelo}` : ""}` : ""}
-              {tyreInfo.vehiculo.kmActual != null ? ` · ${tyreInfo.vehiculo.kmActual.toLocaleString("es-ES")} km` : ""}
-            </span>
-            {tyreInfo.ultimaRevision ? (
-              <span className={tyreInfo.ultimaRevision.alertas > 0 ? "font-bold text-red-300" : "text-cyan-300"}>
-                Última revisión {new Date(tyreInfo.ultimaRevision.fecha).toLocaleDateString("es-ES")}
-                {tyreInfo.ultimaRevision.minProfundidadMm != null ? ` · mín. ${tyreInfo.ultimaRevision.minProfundidadMm} mm` : ""}
-                {tyreInfo.ultimaRevision.alertas > 0 ? ` · ⚠ ${tyreInfo.ultimaRevision.alertas} alerta${tyreInfo.ultimaRevision.alertas !== 1 ? "s" : ""}` : " · sin alertas"}
-              </span>
-            ) : (
-              <span className="text-cyan-300">Sin revisiones registradas</span>
-            )}
-          </div>
-        )}
-        {tyreInfo && !tyreInfo.found && (
-          <div className="mt-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-500">
-            🛞 Matrícula no encontrada en TyreControl
-          </div>
-        )}
+        {/*
+          * Antes esta tarjeta enseñaba solo la última revisión. Ahora enseña la
+          * configuración real: ejes, posiciones y qué neumático hay montado en
+          * cada una. Sigue siendo SOLO LECTURA — todavía no se planifica nada
+          * por posición.
+          */}
+        <div className="mt-2">
+          <TyreControlVehiculo plate={plate} modo="completo" />
+        </div>
         <button onClick={add} disabled={adding} className="mt-2 w-full rounded-lg bg-orange-600 px-3 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-50">
           {adding ? "Añadiendo…" : "+ Añadir trabajo"}
         </button>
