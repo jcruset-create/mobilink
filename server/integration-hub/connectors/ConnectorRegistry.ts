@@ -143,13 +143,17 @@ export async function resolveTechnicalConnector(
   for (const key of preference) {
     const cfg = await getConnectorConfig(tenantId, key);
     if (cfg?.enabled) {
-      return { key, connector: await buildTechnicalConnector(tenantId, key), usingDefault: false };
+      return {
+        key, connector: await buildTechnicalConnector(tenantId, key), usingDefault: false,
+        config: (cfg.config ?? {}) as Record<string, unknown>,
+      };
     }
   }
 
   // 2) Ninguno configurado → primer preferido en simulación.
   const key = preference[0];
-  return { key, connector: await buildTechnicalConnector(tenantId, key), usingDefault: true };
+  // Sin config guardada el conector va en simulación: `config` vacía, no ausente.
+  return { key, connector: await buildTechnicalConnector(tenantId, key), usingDefault: true, config: {} };
 }
 
 // ── Supplier Hub (Fase 3) ────────────────────────────────────────────────────
@@ -193,6 +197,7 @@ export async function resolveSupplierConnectors(
         key: DEFAULT_SUPPLIER_KEY,
         connector: await buildSupplierConnector(tenantId, DEFAULT_SUPPLIER_KEY),
         usingDefault: true,
+        config: {},
       },
     ];
   }
@@ -202,6 +207,7 @@ export async function resolveSupplierConnectors(
       key: c.connector_key as string,
       connector: await buildSupplierConnector(tenantId, c.connector_key),
       usingDefault: false,
+      config: (c.config ?? {}) as Record<string, unknown>,
     }))
   );
 }
@@ -271,6 +277,7 @@ export async function resolveCommunicationConnector(
         channel: COMMUNICATION_CHANNELS[key],
         connector: await buildCommunicationConnector(tenantId, key),
         usingDefault: false,
+        config: (cfg.config ?? {}) as Record<string, unknown>,
       };
     }
   }
@@ -281,6 +288,7 @@ export async function resolveCommunicationConnector(
     channel: COMMUNICATION_CHANNELS[key],
     connector: await buildCommunicationConnector(tenantId, key),
     usingDefault: true,
+    config: {},
   };
 }
 

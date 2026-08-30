@@ -7,7 +7,7 @@
  */
 
 /** Cómo ha ido la resolución de una matrícula. Nunca «el primero que salga». */
-export type ResultadoResolucion = "FOUND" | "NOT_FOUND" | "AMBIGUOUS";
+export type ResultadoResolucion = "FOUND" | "NOT_FOUND" | "AMBIGUOUS" | "MAPPING_ERROR";
 
 export type VehiculoTc = {
   tcVehicleId: string;
@@ -24,15 +24,31 @@ export type VehiculoTc = {
   updatedAt: string | null;
 };
 
+/**
+ * De dónde ha salido la empresa con la que se resolvió.
+ *
+ * Importa distinguirlo: `mapping` es una relación declarada por una persona;
+ * `unica` es que solo había un vehículo con esa matrícula en toda la base, que
+ * es un indicio bueno pero no una decisión. Quien encargue una escritura debe
+ * poder exigir la primera.
+ */
+export type OrigenEmpresa = "mapping" | "unica" | "indicada";
+
 export type Resolucion =
-  | { estado: "FOUND"; vehiculo: VehiculoTc }
+  | { estado: "FOUND"; vehiculo: VehiculoTc; origenEmpresa: OrigenEmpresa }
   /*
    * Los candidatos van con la resolución ambigua, no en un log: la misma
    * matrícula puede existir en varias empresas de TC —es única por empresa, no
    * globalmente— y quien tenga que desambiguar necesita ver entre qué elige.
    */
   | { estado: "AMBIGUOUS"; candidatos: VehiculoTc[] }
-  | { estado: "NOT_FOUND" };
+  | { estado: "NOT_FOUND" }
+  /*
+   * El mapeo apunta a una empresa que no existe o está de baja. NO se resuelve
+   * por otra: sería actuar sobre el vehículo de un tercero por un error de
+   * configuración que nadie ha visto.
+   */
+  | { estado: "MAPPING_ERROR"; motivo: string; tcEmpresaId: string };
 
 export type EjeTc = {
   eje: number;

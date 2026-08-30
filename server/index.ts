@@ -50,6 +50,8 @@ import {
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
+import { engancheCierreTyreControl } from "./tyrecontrol/cierreAsistencia.ts";
+import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { resolverVehiculo as resolverVehiculoTc } from "./tyrecontrol/vehiculos.ts";
 import { estadoDeVehiculo as estadoVehiculoTc } from "./tyrecontrol/estadoVehiculo.ts";
 import {
@@ -6947,6 +6949,19 @@ app.post(
       let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
       // Generar reportToken al finalizar
+      /*
+       * TyreControl. Va DESPUÉS de que la asistencia ya esté guardada y sin
+       * `await`: el técnico no puede esperar a que conteste otro sistema, y un
+       * problema con TC no puede impedir que una asistencia se cierre.
+       *
+       * Hoy no manda nada — solo prepara y anota el sobre. Ver
+       * `server/tyrecontrol/cierreAsistencia.ts`.
+       */
+      if (status === "finalizada") {
+        void engancheCierreTyreControl(Number(id))
+          .catch((e) => console.error("[TyreControl] enganche de cierre:", e?.message));
+      }
+
       if (status === "finalizada" && !updated.reportToken) {
         const { randomUUID } = await import("crypto");
         const reportToken = randomUUID();
@@ -7713,6 +7728,19 @@ app.post(
       let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
       // ── Generar reportToken si se finaliza y no existe ya ──────────────────
+      /*
+       * TyreControl. Va DESPUÉS de que la asistencia ya esté guardada y sin
+       * `await`: el técnico no puede esperar a que conteste otro sistema, y un
+       * problema con TC no puede impedir que una asistencia se cierre.
+       *
+       * Hoy no manda nada — solo prepara y anota el sobre. Ver
+       * `server/tyrecontrol/cierreAsistencia.ts`.
+       */
+      if (status === "finalizada") {
+        void engancheCierreTyreControl(Number(id))
+          .catch((e) => console.error("[TyreControl] enganche de cierre:", e?.message));
+      }
+
       if (status === "finalizada" && !updated.reportToken) {
         const { randomUUID } = await import("crypto");
         const reportToken = randomUUID();
@@ -18248,6 +18276,7 @@ initDb()
   .then(() => prepararEsquema("Diario de asistencias", initEventLog))
   // Después del diario: registrar un documento anota un evento.
   .then(() => prepararEsquema("Documentos", initDocumentos))
+  .then(() => prepararEsquema("Mapeo TyreControl", initMapeoEmpresas))
   // Después de documentos: los recordatorios miran qué documentación falta.
   .then(() => prepararEsquema("Correo del expediente", initCorreo))
   .then(() => prepararEsquema("Bandeja y costes", initExcepciones))

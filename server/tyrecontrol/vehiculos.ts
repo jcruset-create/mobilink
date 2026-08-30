@@ -80,15 +80,70 @@ export type OpcionesResolucion = {
   incluirInactivos?: boolean;
 };
 
+/* ── Resolución con cliente ──────────────────────────────────────────────── */
+
+/**
+ * Matrícula + cliente de Assist → vehículo de TyreControl.
+ *
+ * Es la puerta que hay que usar cuando se conoce el cliente, porque es la que
+ * quita la ambigüedad de verdad. Los cinco casos, todos explícitos:
+ *
+ *   1. Cliente mapeado y matrícula en esa empresa      → FOUND (por mapping)
+ *   2. Cliente mapeado y matrícula NO en esa empresa   → NOT_FOUND
+ *   3. Sin mapeo y matrícula única en toda la base     → FOUND (por coincidencia)
+ *   4. Sin mapeo y matrícula en varias empresas        → AMBIGUOUS
+ *   5. El mapeo apunta a una empresa inexistente o de baja → MAPPING_ERROR
+ *
+ * El caso 2 es el que más importa: con el cliente mapeado NO se busca en otra
+ * empresa. Que ese cliente no tenga ese vehículo es una respuesta correcta;
+ * encontrarlo en la empresa de al lado y actuar sobre él, no.
+ */
+export async function resolverVehiculoDeCliente(
+  matricula: unknown,
+  clienteId: number | null | undefined,
+  tenantId?: string | null,
+): Promise<Resolucion> {
+  const { comprobarEmpresa, empresaDeCliente } = await import("./empresas.ts");
+  const mapeo = await empresaDeCliente(clienteId, tenantId);
+
+  if (!mapeo || !mapeo.activo) {
+    // Casos 3 y 4: sin mapeo utilizable se busca en toda la base, y si sale más
+    // de uno se dice que es ambiguo en vez de elegir.
+    return resolverVehiculo(matricula);
+  }
+
+  const empresa = await comprobarEmpresa(mapeo.tcEmpresaId);
+  if (!empresa) {
+    return {
+      estado: "MAPPING_ERROR", tcEmpresaId: mapeo.tcEmpresaId,
+      motivo: "El cliente está mapeado a una empresa que ya no existe en TyreControl",
+    };
+  }
+  if (!empresa.activa) {
+    return {
+      estado: "MAPPING_ERROR", tcEmpresaId: mapeo.tcEmpresaId,
+      motivo: `El cliente está mapeado a «${empresa.nombre}», que está dada de baja en TyreControl`,
+    };
+  }
+
+  const r = await resolverVehiculo(matricula, { empresaId: mapeo.tcEmpresaId });
+  return r.estado === "FOUND" ? { ...r, origenEmpresa: "mapping" } : r;
+}
+
 /**
  * Matrícula → vehículo de TyreControl.
  *
  * Una sola consulta filtrada en el servidor, más dos de etiquetas. No se trae
  * la tabla.
  */
+/*
+ * Devuelve una unión MÁS ESTRECHA que `Resolucion` a propósito: sin cliente no
+ * hay mapeo, así que `MAPPING_ERROR` no puede darse. Declararlo evita que quien
+ * llame tenga que escribir una rama para un caso imposible.
+ */
 export async function resolverVehiculo(
   matricula: unknown, opciones: OpcionesResolucion = {},
-): Promise<Resolucion> {
+): Promise<Exclude<Resolucion, { estado: "MAPPING_ERROR" }>> {
   const buscada = normalizarMatricula(matricula);
   const patron = patronBusquedaMatricula(buscada);
   if (!patron) return { estado: "NOT_FOUND" };
@@ -113,7 +168,12 @@ export async function resolverVehiculo(
   const { empresas, tipos } = await etiquetas(exactos);
   const vehiculos = exactos.map((f: any) => aVehiculo(f, empresas, tipos));
 
-  if (vehiculos.length === 1) return { estado: "FOUND", vehiculo: vehiculos[0] };
+  if (vehiculos.length === 1) {
+    return {
+      estado: "FOUND", vehiculo: vehiculos[0],
+      origenEmpresa: opciones.empresaId ? "indicada" : "unica",
+    };
+  }
 
   console.warn(
     `[TyreControl] matrícula ${buscada} ambigua: ${vehiculos.length} vehículos en ` +

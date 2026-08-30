@@ -15,9 +15,11 @@
  * El 502 se reserva para lo que sí es un fallo: no poder hablar con TC.
  */
 
-import { Router, type Request, type Response } from "express";
+import { Router, json, type Request, type Response } from "express";
 
-import { ErrorTyreControl, resolverVehiculo } from "./vehiculos.ts";
+import { registrarAuditoria } from "../core/auth.ts";
+
+import { ErrorTyreControl, resolverVehiculo, resolverVehiculoDeCliente } from "./vehiculos.ts";
 import { estadoDeVehiculo } from "./estadoVehiculo.ts";
 
 function fallo(res: Response, e: unknown) {
@@ -31,6 +33,7 @@ function fallo(res: Response, e: unknown) {
 
 export function createTyreControlRouter(guarda: any): Router {
   const router = Router();
+  router.use(json({ limit: "256kb" }));
   router.use(guarda);
 
   /**
@@ -59,16 +62,26 @@ export function createTyreControlRouter(guarda: any): Router {
         return res.json({ estado: "FOUND", ...estado, msConsulta: Date.now() - t0 });
       }
 
-      const r = await resolverVehiculo(plate, { empresaId });
+      /*
+       * Con cliente se pasa por el mapeo, que es lo que quita la ambigüedad.
+       * Sin cliente se busca en toda la base y puede salir ambigua: es
+       * información honesta, no un fallo.
+       */
+      const clienteId = Number(req.query.clienteId ?? "");
+      const r = Number.isInteger(clienteId) && clienteId > 0
+        ? await resolverVehiculoDeCliente(plate, clienteId, String(req.query.tallerId ?? "") || null)
+        : await resolverVehiculo(plate, { empresaId });
+
       if (r.estado === "NOT_FOUND") return res.json({ estado: "NOT_FOUND" });
-      if (r.estado === "AMBIGUOUS") {
-        return res.json({ estado: "AMBIGUOUS", candidatos: r.candidatos });
+      if (r.estado === "AMBIGUOUS") return res.json({ estado: "AMBIGUOUS", candidatos: r.candidatos });
+      if (r.estado === "MAPPING_ERROR") {
+        return res.json({ estado: "MAPPING_ERROR", motivo: r.motivo, tcEmpresaId: r.tcEmpresaId });
       }
 
       const estado = await estadoDeVehiculo(r.vehiculo);
       const ms = Date.now() - t0;
       if (ms > 1500) console.warn(`[TyreControl] estado de ${plate} tardó ${ms} ms`);
-      return res.json({ estado: "FOUND", ...estado!, msConsulta: ms });
+      return res.json({ estado: "FOUND", origenEmpresa: r.origenEmpresa, ...estado!, msConsulta: ms });
     } catch (e) {
       fallo(res, e);
     }
@@ -81,13 +94,114 @@ export function createTyreControlRouter(guarda: any): Router {
       if (!plate) {
         return res.status(422).json({ estado: "ERROR", code: "missing_query", error: "Indica una matrícula" });
       }
-      const r = await resolverVehiculo(plate, {
-        empresaId: String(req.query.empresaId ?? "").trim() || null,
-      });
-      res.json(r.estado === "FOUND" ? { estado: "FOUND", vehiculo: r.vehiculo } : r);
+      const clienteId = Number(req.query.clienteId ?? "");
+      const r = Number.isInteger(clienteId) && clienteId > 0
+        ? await resolverVehiculoDeCliente(plate, clienteId, String(req.query.tallerId ?? "") || null)
+        : await resolverVehiculo(plate, { empresaId: String(req.query.empresaId ?? "").trim() || null });
+      res.json(r);
     } catch (e) {
       fallo(res, e);
     }
+  });
+
+  /* ── Mapeo cliente Assist ↔ empresa TyreControl ────────────────────────── */
+  /*
+   * Es configuración de oficina. No aparece en la pantalla del técnico y no le
+   * añade ningún paso: quien mapea es quien administra, una vez por cliente.
+   */
+
+  router.get("/empresas", async (_req, res) => {
+    try {
+      const { empresasDeTyreControl } = await import("./empresas.ts");
+      res.json({ data: await empresasDeTyreControl() });
+    } catch (e) { fallo(res, e); }
+  });
+
+  router.get("/mapeos", async (req: any, res) => {
+    try {
+      const { listarMapeos } = await import("./empresas.ts");
+      res.json({ data: await listarMapeos(req.assistPanelUser?.tallerId ?? null) });
+    } catch (e) { fallo(res, e); }
+  });
+
+  router.put("/mapeos", async (req: any, res) => {
+    try {
+      const { ErrorMapeo, guardarMapeo } = await import("./empresas.ts");
+      try {
+        const m = await guardarMapeo({
+          clienteId: Number(req.body?.clienteId),
+          tcEmpresaId: String(req.body?.tcEmpresaId ?? ""),
+          activo: req.body?.activo !== false,
+          tenantId: req.assistPanelUser?.tallerId ?? null,
+          porQuien: req.authCtx?.nombre ?? null,
+        });
+        // La auditoría que ya existe en Assist; no se estrena otra.
+        await registrarAuditoria({
+          empresaId: req.authCtx?.empresaId ?? "assist",
+          userId: req.authCtx?.userId,
+          accion: "tyrecontrol.mapeo.guardar", entidad: "connect_clients",
+          entidadId: String(m.clienteId), detalle: { tcEmpresaId: m.tcEmpresaId },
+          ip: req.ip,
+        }).catch(() => {});
+        res.json(m);
+      } catch (e: any) {
+        if (e instanceof ErrorMapeo) {
+          return res.status(e.estado).json({ error: e.message, code: e.codigo });
+        }
+        throw e;
+      }
+    } catch (e) { fallo(res, e); }
+  });
+
+  router.delete("/mapeos/:clienteId", async (req: any, res) => {
+    try {
+      const { ErrorMapeo, borrarMapeo } = await import("./empresas.ts");
+      try {
+        await borrarMapeo(Number(req.params.clienteId), req.assistPanelUser?.tallerId ?? null);
+        await registrarAuditoria({
+          empresaId: req.authCtx?.empresaId ?? "assist",
+          userId: req.authCtx?.userId,
+          accion: "tyrecontrol.mapeo.borrar", entidad: "connect_clients",
+          entidadId: String(req.params.clienteId), ip: req.ip,
+        }).catch(() => {});
+        res.json({ ok: true });
+      } catch (e: any) {
+        if (e instanceof ErrorMapeo) {
+          return res.status(e.estado).json({ error: e.message, code: e.codigo });
+        }
+        throw e;
+      }
+    } catch (e) { fallo(res, e); }
+  });
+
+  /* ── Estado del canal ──────────────────────────────────────────────────── */
+
+  /** Sin token ni contraseña: solo si hay sesión y a nombre de quién. */
+  router.get("/canal", async (_req, res) => {
+    try {
+      const { estadoSesionTc } = await import("./sesion.ts");
+      const { escrituraHabilitada, probarCanal } = await import("./conector.ts");
+      const sesion = estadoSesionTc();
+      if (!sesion.hayCredenciales) {
+        return res.json({
+          ok: false, sesion, escrituraHabilitada: escrituraHabilitada(),
+          mensaje: "Falta configurar el usuario de integración de TyreControl.",
+        });
+      }
+      res.json({ ...(await probarCanal()), sesion });
+    } catch (e) { fallo(res, e); }
+  });
+
+  /**
+   * Lo que se le mandaría a TyreControl al cerrar una asistencia. NO envía nada.
+   */
+  router.get("/simulacro/asistencia/:id", async (req, res) => {
+    try {
+      const { alFinalizarAsistenciaParaTyreControl } = await import("./cierreAsistencia.ts");
+      const sobre = await alFinalizarAsistenciaParaTyreControl(Number(req.params.id));
+      if (!sobre) return res.status(404).json({ error: "Asistencia no encontrada" });
+      res.json(sobre);
+    } catch (e) { fallo(res, e); }
   });
 
   /**
