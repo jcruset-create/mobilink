@@ -98,14 +98,27 @@ export async function llamarRpc<T = unknown>(
  * afirmar sobre el canal sin escribir de verdad — y escribir de verdad no toca
  * en esta fase.
  */
-export async function probarCanal(): Promise<{
+export type InformeCanal = {
   ok: boolean;
   identidad: { authUid: string | null; esSuperadmin: boolean | null; esAdmin: boolean | null; empresaId: string | null };
+  /** La ficha del usuario en `tc_usuarios`, para poder comprobar los permisos. */
+  usuarioTc: { nombre: string | null; rol: string | null; esSuperadmin: boolean; accesoApk: boolean } | null;
   empresas: { id: string; nombre: string }[];
   lecturaOk: boolean;
   escrituraHabilitada: boolean;
+  /**
+   * Permisos DE MÁS.
+   *
+   * Un usuario de integración con rol de administrador funcionaría igual de
+   * bien, y ése es el problema: nadie lo notaría hasta que un fallo tocara algo
+   * que no debía. Se dice aquí para que se corrija antes de la prueba real, no
+   * después.
+   */
+  avisos: string[];
   mensaje: string;
-}> {
+};
+
+export async function probarCanal(): Promise<InformeCanal> {
   const vacio = { authUid: null, esSuperadmin: null, esAdmin: null, empresaId: null };
   try {
     const cliente = await clienteTyreControl();
@@ -138,22 +151,57 @@ export async function probarCanal(): Promise<{
       nombre: String(a.tc_empresas?.nombre ?? ""),
     }));
 
-    const reconocido = identidad.authUid != null
+    /*
+     * La ficha se lee con la sesión del propio usuario: si no puede verse a sí
+     * mismo, tampoco está bien dado de alta.
+     */
+    const { data: ficha } = await cliente
+      .from("tc_usuarios").select("nombre, rol, es_superadmin, acceso_apk")
+      .eq("id", uid).maybeSingle();
+
+    const usuarioTc = ficha ? {
+      nombre: ficha.nombre ?? null,
+      rol: ficha.rol ?? null,
+      esSuperadmin: ficha.es_superadmin === true,
+      accesoApk: ficha.acceso_apk === true,
+    } : null;
+
+    const avisos: string[] = [];
+    if (!usuarioTc) {
+      avisos.push("El usuario entra en Supabase pero NO tiene ficha en tc_usuarios: TyreControl no lo reconoce.");
+    } else {
+      if (usuarioTc.esSuperadmin) {
+        avisos.push("Es superadministrador de TyreControl: son muchos más permisos de los que necesita.");
+      }
+      if (usuarioTc.rol === "administrador") {
+        avisos.push("Tiene rol de administrador: bastaría con «operador» y las empresas asignadas.");
+      }
+      if (usuarioTc.accesoApk) {
+        avisos.push("Tiene acceso a la APK: un usuario de integración no es un técnico.");
+      }
+      if (empresas.length === 0 && identidad.empresaId == null) {
+        avisos.push("No tiene ninguna empresa asignada en tc_operador_empresas.");
+      }
+    }
+
+    const reconocido = identidad.authUid != null && usuarioTc != null
       && (identidad.esSuperadmin === true || identidad.esAdmin === true
           || identidad.empresaId != null || empresas.length > 0);
 
     return {
-      ok: reconocido, identidad, empresas,
+      ok: reconocido, identidad, usuarioTc, empresas, avisos,
       lecturaOk: !lectura.error,
       escrituraHabilitada: escrituraHabilitada(),
-      mensaje: reconocido
-        ? `TyreControl reconoce al usuario de integración con acceso a ${empresas.length} empresa(s).`
-        : "El usuario entra en Supabase pero TyreControl no le da acceso a ninguna empresa.",
+      mensaje: !reconocido
+        ? "TyreControl no reconoce al usuario de integración."
+        : avisos.length > 0
+          ? `Reconocido con acceso a ${empresas.length} empresa(s), pero con ${avisos.length} aviso(s) de permisos.`
+          : `Reconocido con los permisos justos y acceso a ${empresas.length} empresa(s).`,
     };
   } catch (e: any) {
     const { codigo, mensaje } = normalizar(e);
     return {
-      ok: false, identidad: vacio, empresas: [], lecturaOk: false,
+      ok: false, identidad: vacio, usuarioTc: null, empresas: [], avisos: [], lecturaOk: false,
       escrituraHabilitada: escrituraHabilitada(),
       mensaje: `${codigo}: ${mensaje}`,
     };
