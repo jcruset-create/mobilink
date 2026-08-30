@@ -20,6 +20,7 @@
 import { useEffect, useState } from "react";
 
 import { API_BASE, getAdminHeaders } from "../modules/workshopApi";
+import TyreControlSustitucion from "./TyreControlSustitucion";
 
 type Neumatico = {
   marca: string | null; modelo: string | null; medida: string | null; dot: string | null;
@@ -188,12 +189,28 @@ export default function TyreControlVehiculo({ plate, modo = "resumen", assistanc
       <div className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2">
         {cabecera}
         {editable && assistanceId != null && (
-          <MarcarReparacion
-            assistanceId={assistanceId}
-            posiciones={(estado.posiciones ?? [])
-              .filter((p) => p.montajeActualId)
-              .map((p) => ({ codigo: p.codigoPosicion, eje: p.eje }))}
-          />
+          <>
+            <MarcarReparacion
+              assistanceId={assistanceId}
+              posiciones={(estado.posiciones ?? [])
+                .filter((p) => p.montajeActualId)
+                .map((p) => ({ codigo: p.codigoPosicion, eje: p.eje }))}
+            />
+            {/*
+              La sustitución necesita la empresa: el almacén del que sale el
+              neumático entrante es el de ESA empresa, no un catálogo global.
+            */}
+            {v.empresaId && (
+              <TyreControlSustitucion
+                assistanceId={assistanceId}
+                tcEmpresaId={v.empresaId}
+                posiciones={(estado.posiciones ?? [])
+                  .filter((p) => p.montajeActualId)
+                  .map((p) => ({ codigo: p.codigoPosicion, eje: p.eje,
+                                 medida: p.neumatico?.medida ?? null }))}
+              />
+            )}
+          </>
         )}
       </div>
     );
