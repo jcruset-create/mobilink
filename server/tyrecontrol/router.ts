@@ -17,6 +17,7 @@
 
 import { Router, json, type Request, type Response } from "express";
 
+import db from "../db.ts";
 import { registrarAuditoria } from "../core/auth.ts";
 
 import { ErrorTyreControl, resolverVehiculo, resolverVehiculoDeCliente } from "./vehiculos.ts";
@@ -197,10 +198,110 @@ export function createTyreControlRouter(guarda: any): Router {
    */
   router.get("/simulacro/asistencia/:id", async (req, res) => {
     try {
-      const { alFinalizarAsistenciaParaTyreControl } = await import("./cierreAsistencia.ts");
-      const sobre = await alFinalizarAsistenciaParaTyreControl(Number(req.params.id));
+      const { simulacroCierre } = await import("./cierreAsistencia.ts");
+      const sobre = await simulacroCierre(Number(req.params.id));
       if (!sobre) return res.status(404).json({ error: "Asistencia no encontrada" });
       res.json(sobre);
+    } catch (e) { fallo(res, e); }
+  });
+
+  /**
+   * Marca qué operación de neumático fue esta asistencia y sobre qué rueda.
+   *
+   * Endpoint propio y no un campo más del PUT de asistencias: es una lista
+   * blanca de cinco campos con valores acotados, y meterlo en un PUT de ciento
+   * cuarenta líneas lo escondería.
+   */
+  router.patch("/asistencias/:id/marca", async (req, res) => {
+    try {
+      const { OPERACIONES_ASSIST, esResultadoReparacion, esTipoReparacion } =
+        await import("./reparacion.ts");
+      const b = req.body ?? {};
+
+      const operacion = b.tcOperacion == null || b.tcOperacion === ""
+        ? null : String(b.tcOperacion);
+      if (operacion && !(OPERACIONES_ASSIST as readonly string[]).includes(operacion)) {
+        return res.status(422).json({ error: "Operación desconocida", code: "operacion_invalida" });
+      }
+      const tipo = b.tcTipoReparacion == null || b.tcTipoReparacion === ""
+        ? null : String(b.tcTipoReparacion);
+      if (tipo && !esTipoReparacion(tipo)) {
+        return res.status(422).json({ error: "Tipo de reparación desconocido", code: "tipo_invalido" });
+      }
+      const resultado = b.tcResultadoReparacion == null || b.tcResultadoReparacion === ""
+        ? null : String(b.tcResultadoReparacion);
+      if (resultado && !esResultadoReparacion(resultado)) {
+        return res.status(422).json({ error: "Resultado desconocido", code: "resultado_invalido" });
+      }
+
+      const r = await db.query(
+        `UPDATE roadside_assistances
+            SET "tcOperacion" = $2, "tcTipoReparacion" = $3, "tcResultadoReparacion" = $4,
+                "tcPosicionCodigo" = $5, "tcNeumaticoId" = $6, "updatedAtMs" = $7
+          WHERE id = $1
+        RETURNING id, "tcOperacion", "tcTipoReparacion", "tcResultadoReparacion",
+                  "tcPosicionCodigo", "tcNeumaticoId"`,
+        [Number(req.params.id), operacion, tipo, resultado,
+         b.tcPosicionCodigo == null || b.tcPosicionCodigo === "" ? null : String(b.tcPosicionCodigo),
+         b.tcNeumaticoId == null || b.tcNeumaticoId === "" ? null : String(b.tcNeumaticoId),
+         Date.now()],
+      );
+      if (!r.rows.length) return res.status(404).json({ error: "Asistencia no encontrada" });
+      res.json(r.rows[0]);
+    } catch (e) { fallo(res, e); }
+  });
+
+  /* ── Sincronización de reparaciones ────────────────────────────────────── */
+
+  /** Cómo va la sincronización de una asistencia, para la oficina. */
+  router.get("/sync/asistencia/:id", async (req, res) => {
+    try {
+      const { operacionExistente, correlacionReparacion } = await import("./outbox.ts");
+      const r = await db.query(
+        `SELECT "tcSyncEstado", "tcSyncMotivo", "tcSyncAtMs", "tcOperacionTcId",
+                "tcIncidenciaId", "tcPosicionCodigo", "tcNeumaticoId"
+           FROM roadside_assistances WHERE id = $1`,
+        [Number(req.params.id)],
+      );
+      const a = r.rows[0];
+      if (!a) return res.status(404).json({ error: "Asistencia no encontrada" });
+
+      const ref = String(a.tcPosicionCodigo ?? a.tcNeumaticoId ?? "").trim();
+      const correlationId = ref ? correlacionReparacion(Number(req.params.id), ref) : null;
+      const op = correlationId ? await operacionExistente(correlationId) : null;
+
+      res.json({
+        estado: a.tcSyncEstado ?? null,
+        motivo: a.tcSyncMotivo ?? null,
+        cuandoMs: a.tcSyncAtMs == null ? null : Number(a.tcSyncAtMs),
+        operacionTcId: a.tcOperacionTcId ?? null,
+        incidenciaId: a.tcIncidenciaId ?? null,
+        correlationId,
+        // Del outbox solo lo que sirve para diagnosticar: nunca el payload, que
+        // lleva identificadores del cliente.
+        outbox: op ? {
+          status: op.status, intentos: Number(op.retry_count ?? 0),
+          error: op.error_message ?? null, codigo: op.error_code ?? null,
+        } : null,
+      });
+    } catch (e) { fallo(res, e); }
+  });
+
+  /**
+   * Reintento a mano de lo que quedó en error o en revisión.
+   *
+   * Vuelve a pasar por el mismo camino, o sea que repite la lectura previa: no
+   * reenvía el RPC a ciegas, porque entre el fallo y ahora la rueda puede haber
+   * cambiado otra vez.
+   */
+  router.post("/sync/reintentar", async (req, res) => {
+    try {
+      const correlationId = String(req.body?.correlationId ?? "");
+      if (!correlationId) {
+        return res.status(422).json({ error: "Indica la referencia de la sincronización" });
+      }
+      const { reintentarAMano } = await import("./outbox.ts");
+      res.json({ estado: await reintentarAMano(correlationId) });
     } catch (e) { fallo(res, e); }
   });
 
