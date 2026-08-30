@@ -2949,7 +2949,12 @@ export default function RoadsideAssistanceView({
                     a ignorar. Solo lectura: no hay nada que tocar desde aquí. */}
                 {editingAssistance?.plate && (
                   <div className="md:col-span-2">
-                    <TyreControlVehiculo plate={editingAssistance.plate} modo="resumen" />
+                    <TyreControlVehiculo
+                      plate={editingAssistance.plate}
+                      modo="resumen"
+                      assistanceId={editingAssistance.id}
+                      editable
+                    />
                   </div>
                 )}
 

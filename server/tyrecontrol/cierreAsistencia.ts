@@ -29,6 +29,9 @@ import db from "../db.ts";
 import { correlacionAsistencia } from "./operaciones.ts";
 import { escrituraHabilitada } from "./conector.ts";
 import { resolverVehiculoDeCliente } from "./vehiculos.ts";
+import {
+  EXPLICACION, empresaEnAlcance, evaluarAptitud, sincronizacionReparacionActiva,
+} from "./reparacion.ts";
 
 export type SobreCierre = {
   correlationId: string;
@@ -146,26 +149,156 @@ export async function alFinalizarAsistenciaParaTyreControl(
 }
 
 /**
- * El enganche que se llama al cerrar.
+ * Decide si esta asistencia se encola para TyreControl, y la encola.
  *
- * Aun con el interruptor puesto, en esta fase NO encola ninguna escritura: solo
- * anota lo que habría enviado. Es a propósito — activar el interruptor por
- * error no debe provocar escrituras de negocio que nadie ha aprobado.
+ * Nunca ejecuta el RPC: eso es del worker. Y nunca lanza — el cierre de la
+ * asistencia manda por encima de todo lo demás.
  */
 export async function engancheCierreTyreControl(assistanceId: number): Promise<SobreCierre | null> {
   const sobre = await alFinalizarAsistenciaParaTyreControl(assistanceId);
   if (!sobre) return null;
 
-  const modo = escrituraHabilitada() ? "preparado" : "simulacro";
-  if (sobre.resolucion === "FOUND") {
-    console.log(
-      `[TyreControl] ${modo}: asistencia ${assistanceId} → vehículo ${sobre.tcVehicleId} ` +
-      `(empresa por ${sobre.origenEmpresa}) · ${sobre.correlationId}`,
-    );
-  } else {
-    console.log(
-      `[TyreControl] ${modo}: asistencia ${assistanceId} sin vehículo en TC (${sobre.resolucion})`,
-    );
+  try {
+    await decidirYEncolar(assistanceId, sobre);
+  } catch (e: any) {
+    console.error(`[TyreControl] no se pudo encolar la asistencia ${assistanceId}:`, e?.message);
   }
   return sobre;
+}
+
+/** Anota por qué NO se sincroniza. Que la oficina lo vea es parte del trabajo. */
+async function anotarNoSincroniza(assistanceId: number, motivo: string): Promise<void> {
+  await db.query(
+    `UPDATE roadside_assistances
+        SET "tcSyncEstado" = 'NO_APLICA', "tcSyncMotivo" = $2, "tcSyncAtMs" = $3
+      WHERE id = $1`,
+    [assistanceId, motivo, Date.now()],
+  ).catch(() => {});
+}
+
+async function decidirYEncolar(assistanceId: number, sobre: SobreCierre): Promise<void> {
+  const fila = await db.query(
+    `SELECT status, plate, "tcOperacion", "tcTipoReparacion", "tcResultadoReparacion",
+            "tcPosicionCodigo", "tcNeumaticoId", "observacionesReparacion"
+       FROM roadside_assistances WHERE id = $1`,
+    [assistanceId],
+  );
+  const a = fila.rows[0];
+  if (!a) return;
+
+  const aptitud = evaluarAptitud(a);
+  if (aptitud.apta !== true) {
+    // «Sin marca» es el caso de la inmensa mayoría de asistencias: no se anota
+    // nada para no llenar la ficha de avisos que no significan nada.
+    if (aptitud.motivo !== "sin_marca") {
+      await anotarNoSincroniza(assistanceId, EXPLICACION[aptitud.motivo]);
+    }
+    return;
+  }
+
+  if (sobre.resolucion !== "FOUND" || !sobre.tcVehicleId || !sobre.tcEmpresaId) {
+    await anotarNoSincroniza(assistanceId,
+      sobre.motivo ?? EXPLICACION[sobre.resolucion === "NOT_FOUND" ? "sin_vehiculo_tc" : "sin_matricula"]);
+    return;
+  }
+
+  /*
+   * Para ESCRIBIR, la empresa tiene que venir de una correspondencia declarada.
+   * Que la matrícula fuera única en toda la base es un buen indicio para leer,
+   * pero no para tocar el histórico técnico de un cliente: si la coincidencia
+   * era casual, se estaría escribiendo en la ficha de otro.
+   */
+  if (sobre.origenEmpresa !== "mapping") {
+    await anotarNoSincroniza(assistanceId, EXPLICACION.empresa_no_por_mapping);
+    return;
+  }
+
+  if (!empresaEnAlcance(sobre.tcEmpresaId)) {
+    await anotarNoSincroniza(assistanceId, EXPLICACION.fuera_de_alcance);
+    return;
+  }
+
+  const refRueda = String(a.tcPosicionCodigo ?? a.tcNeumaticoId ?? "").trim();
+  const { encolarReparacion, situacionDePosicion } = await import("./outbox.ts");
+
+  /*
+   * Se lee la situación AHORA para guardarla como referencia. El worker volverá
+   * a leerla antes de escribir; esto es lo que Assist creía en el momento del
+   * cierre, y comparar las dos es lo que detecta que alguien movió la rueda
+   * mientras tanto.
+   */
+  let montajeEsperado: string | null = null;
+  let neumaticoEsperado: string | null = null;
+  if (a.tcPosicionCodigo) {
+    const s = await situacionDePosicion(sobre.tcVehicleId, String(a.tcPosicionCodigo)).catch(() => null);
+    montajeEsperado = s?.montajeActualId ?? null;
+    neumaticoEsperado = s?.neumaticoId ?? null;
+  }
+
+  const r = await encolarReparacion({
+    assistanceId,
+    refRueda,
+    plan: {
+      tcVehicleId: sobre.tcVehicleId,
+      tcEmpresaId: sobre.tcEmpresaId,
+      posicionCodigo: a.tcPosicionCodigo ?? null,
+      neumaticoId: a.tcNeumaticoId ?? null,
+      tipo: aptitud.tipo,
+      resultado: aptitud.resultado,
+      /*
+       * Una referencia humana mínima: quién y de qué asistencia. Es lo único
+       * que puede llevar el técnico real a TyreControl, porque la operación se
+       * atribuye al usuario de integración.
+       */
+      observaciones: [
+        `Asistencia Mobilink AST-${assistanceId}`,
+        sobre.tecnico ? `Técnico: ${sobre.tecnico}` : null,
+        a.observacionesReparacion || null,
+      ].filter(Boolean).join(" · "),
+      // El coste NO se manda: en Assist se cierra en back-office después del
+      // cierre técnico, así que aquí todavía no es definitivo.
+      coste: null,
+      proveedor: null,
+      montajeEsperado,
+      neumaticoEsperado,
+    },
+  });
+
+  if (r.encolada === true) {
+    await db.query(
+      `UPDATE roadside_assistances SET "tcSyncEstado" = 'PENDIENTE', "tcSyncMotivo" = NULL,
+              "tcSyncAtMs" = $2 WHERE id = $1`,
+      [assistanceId, Date.now()],
+    ).catch(() => {});
+    console.log(`[TyreControl] reparación encolada · ${r.correlationId}`);
+  } else {
+    console.log(`[TyreControl] no se encola ${r.correlationId}: ${r.motivo}`);
+  }
+}
+
+/** Solo para el simulacro: qué pasaría, sin encolar ni escribir. */
+export async function simulacroCierre(assistanceId: number): Promise<Record<string, unknown> | null> {
+  const sobre = await alFinalizarAsistenciaParaTyreControl(assistanceId);
+  if (!sobre) return null;
+  const fila = await db.query(
+    `SELECT status, plate, "tcOperacion", "tcTipoReparacion", "tcResultadoReparacion",
+            "tcPosicionCodigo", "tcNeumaticoId" FROM roadside_assistances WHERE id = $1`,
+    [assistanceId],
+  );
+  const aptitud = evaluarAptitud(fila.rows[0] ?? {});
+  return {
+    ...sobre,
+    apta: aptitud.apta,
+    motivoNoApta: aptitud.apta === true ? null : EXPLICACION[aptitud.motivo],
+    tipoReparacion: aptitud.apta === true ? aptitud.tipo : null,
+    empresaEnAlcance: empresaEnAlcance(sobre.tcEmpresaId),
+    escrituraActiva: sincronizacionReparacionActiva(),
+    rpcPrevisto: aptitud.apta
+      ? "tc_resolver_incidencia_parcial (rueda montada) o tc_registrar_reparacion (desmontada)"
+      : null,
+    // Se dice explícitamente lo que NO se manda, que es tan importante como lo
+    // que sí: el coste llega después y serviceKm no es el cuentakilómetros.
+    noSeEnvia: ["coste", "proveedor", "serviceKm"],
+    escrituraGeneral: escrituraHabilitada(),
+  };
 }

@@ -52,6 +52,8 @@ import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matr
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { engancheCierreTyreControl } from "./tyrecontrol/cierreAsistencia.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
+import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
+import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
 import { resolverVehiculo as resolverVehiculoTc } from "./tyrecontrol/vehiculos.ts";
 import { estadoDeVehiculo as estadoVehiculoTc } from "./tyrecontrol/estadoVehiculo.ts";
 import {
@@ -12131,6 +12133,15 @@ function startCaducidadRecordatoriosChecker() {
   console.log(`Avisos de caducidad de tacógrafo activos (a partir de las ${CADUCIDAD_NOTIFY_HOUR}).`);
   void checkCaducidadRecordatorios();
   setInterval(() => { void checkCaducidadRecordatorios(); }, CADUCIDAD_CHECK_INTERVAL_MS);
+
+  /*
+   * Worker de sincronización con TyreControl. Cada minuto, y solo hace algo si
+   * las dos llaves están puestas: `cicloReparaciones` sale enseguida si no.
+   * Va aquí y no en el cierre porque el técnico no puede esperar a otro sistema.
+   */
+  setInterval(() => {
+    void cicloReparaciones().catch((e) => console.error("[TyreControl] worker:", e?.message));
+  }, 60_000);
 }
 
 app.get("/api/recordatorios-caducidad", protectWhenStrict(requirePanelRole), async (req, res) => {
@@ -18277,6 +18288,7 @@ initDb()
   // Después del diario: registrar un documento anota un evento.
   .then(() => prepararEsquema("Documentos", initDocumentos))
   .then(() => prepararEsquema("Mapeo TyreControl", initMapeoEmpresas))
+  .then(() => prepararEsquema("Sincronización TyreControl", initTyreControlAssist))
   // Después de documentos: los recordatorios miran qué documentación falta.
   .then(() => prepararEsquema("Correo del expediente", initCorreo))
   .then(() => prepararEsquema("Bandeja y costes", initExcepciones))
