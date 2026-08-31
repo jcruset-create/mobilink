@@ -200,6 +200,11 @@ export default function Operaciones() {
   const filtros = {
     empresaId: fEmpresa || undefined, vehiculoId: fVehiculo || undefined,
     tipo: fTipo || undefined, estado: fEstado || undefined, desde: fDesde || undefined, hasta: fHasta || undefined,
+    // Al cliente esta pantalla se le llama "Trabajos realizados". Una
+    // corrección de dato no es un trabajo: no se monta ni se desmonta nada y
+    // no genera coste. Enseñársela ahí sería decirle que se hizo algo en su
+    // vehículo que no se hizo. El taller sí las ve, que para eso las hace.
+    sinCorrecciones: esCliente || undefined,
   };
 
   async function cargar() {
