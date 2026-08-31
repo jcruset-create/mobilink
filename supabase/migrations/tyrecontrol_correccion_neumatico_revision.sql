@@ -294,6 +294,63 @@ comment on function tc_crear_referencia_provisional(uuid, text, text, text, text
   'catálogo. Reutiliza marca/modelo/medida comparando normalizado y solo marca '
   'pendiente_validar lo que crea de cero. Un administrador la valida después.';
 
+-- ── 4b. La goma encontrada tampoco existe como ficha ────────────────────────
+--
+-- Identificarla por el flanco da una REFERENCIA de catálogo (marca, modelo,
+-- medida). Lo que hay en la rueda es una UNIDAD FÍSICA concreta, que es otra
+-- cosa: dos gomas del mismo modelo y medida son dos fichas distintas.
+--
+-- Y el técnico no puede crear fichas: la RLS de tc_neumaticos pide admin. Sin
+-- esto, el flujo de la foto llega hasta el final y no puede guardar nada.
+--
+-- Se crea la ficha Y se corrige el montaje en la MISMA llamada, a propósito:
+-- una ficha suelta que no llega a montarse por un fallo de red quedaría de
+-- huérfana en el inventario, contando como stock que no existe.
+create or replace function tc_corregir_montado_nueva_ficha(
+  p_montaje uuid,
+  p_marca text,
+  p_modelo text,
+  p_medida text,
+  p_dot text default null,
+  p_numero_serie text default null,
+  p_obs text default null,
+  p_revision uuid default null,
+  p_metodo text default null,
+  p_foto_url text default null
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare m record; v_neu uuid; v_op uuid;
+begin
+  select * into m from tc_montajes_actuales where id = p_montaje;
+  if not found then raise exception 'Montaje no encontrado'; end if;
+  if not (tc_is_superadmin()
+          or (tc_is_admin() and m.empresa_id = tc_auth_empresa_id())
+          or tc_operador_ve_empresa(m.empresa_id)) then
+    raise exception 'Sin permiso para corregir el neumático de esta empresa';
+  end if;
+  if nullif(trim(coalesce(p_marca, '')), '') is null
+     or nullif(trim(coalesce(p_medida, '')), '') is null then
+    raise exception 'Hacen falta al menos marca y medida para dar de alta la goma encontrada';
+  end if;
+
+  -- Nace ya montada: es donde está. Se crea en 'almacen' y la corrección la
+  -- pasa a 'montado' en la misma transacción, así que nunca queda suelta.
+  insert into tc_neumaticos (empresa_id, marca, modelo, medida, dot, numero_serie, estado, activo)
+  values (m.empresa_id, trim(p_marca), nullif(trim(coalesce(p_modelo, '')), ''),
+          trim(p_medida), nullif(trim(coalesce(p_dot, '')), ''),
+          nullif(trim(coalesce(p_numero_serie, '')), ''), 'almacen', true)
+  returning id into v_neu;
+
+  v_op := tc_corregir_montado(p_montaje, v_neu, p_obs, p_revision, p_metodo, p_foto_url);
+
+  return jsonb_build_object('neumatico_id', v_neu, 'operacion_id', v_op);
+end $$;
+
+comment on function tc_corregir_montado_nueva_ficha(uuid, text, text, text, text, text, text, uuid, text, text) is
+  'Da de alta la ficha de la goma encontrada Y corrige el montaje en la misma '
+  'llamada. Juntas a propósito: una ficha que no llegue a montarse por un '
+  'fallo de red quedaría contando como stock que no existe.';
+
 -- ── 5. Validar lo que creó el técnico ───────────────────────────────────────
 create or replace function tc_validar_referencia(p_referencia uuid)
 returns void
@@ -321,6 +378,7 @@ end $$;
 
 grant execute on function tc_corregir_montado(uuid, uuid, text, uuid, text, text) to authenticated;
 grant execute on function tc_crear_referencia_provisional(uuid, text, text, text, text, text, text) to authenticated;
+grant execute on function tc_corregir_montado_nueva_ficha(uuid, text, text, text, text, text, text, uuid, text, text) to authenticated;
 grant execute on function tc_validar_referencia(uuid) to authenticated;
 
 -- ── Comprobación ────────────────────────────────────────────────────────────

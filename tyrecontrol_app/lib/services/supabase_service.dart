@@ -561,6 +561,167 @@ class TyreControlApi {
     return _db.storage.from(_bucketFotos).getPublicUrl(path);
   }
 
+  /// Foto del flanco para identificar la goma. Va al mismo bucket que el
+  /// resto de fotos de revisión: no se monta otro sistema de archivos.
+  static Future<String> subirFotoFlanco(File file, {required String revisionId, required String posicionId}) async {
+    final ext = file.path.split('.').last;
+    final path = 'flancos/$revisionId/${posicionId}_${DateTime.now().microsecondsSinceEpoch}.$ext';
+    await _db.storage.from(_bucketFotos).upload(path, file);
+    return _db.storage.from(_bucketFotos).getPublicUrl(path);
+  }
+
+  // ── Corrección del neumático registrado ──────────────────────
+  //
+  // El técnico encuentra en la rueda una goma distinta de la que Mobilink
+  // tiene fichada. Esto NO es un trabajo de taller: se corrige el dato, no se
+  // monta nada. Cero coste y cero mano de obra.
+
+  /// ¿Se puede ofrecer "Identificar con foto"? Sin IA configurada en el
+  /// servidor, mejor no enseñar un botón que va a fallar.
+  static Future<bool> flancoDisponible() async {
+    try {
+      final r = await http.get(
+        Uri.parse('$kBackendUrl/api/tyrecontrol/flanco/estado'),
+        headers: {if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken'},
+      ).timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return false;
+      return (jsonDecode(r.body) as Map)['disponible'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Lee el flanco de la foto. Devuelve lo que la IA PROPONE, nunca lo guarda.
+  /// Si el servicio no responde o la foto no da, devuelve la propuesta vacía
+  /// con su aviso: el técnico sigue a mano y la revisión no se bloquea.
+  static Future<Map<String, dynamic>> leerFlanco(String imagenUrl) async {
+    try {
+      final r = await http.post(
+        Uri.parse('$kBackendUrl/api/tyrecontrol/flanco/leer'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken',
+        },
+        body: jsonEncode({'imagen_url': imagenUrl}),
+      ).timeout(const Duration(seconds: 60));
+      final cuerpo = jsonDecode(r.body);
+      if (r.statusCode != 200) {
+        return {'aviso': (cuerpo is Map ? cuerpo['error'] : null) ?? 'No se ha podido leer el flanco',
+                'suficienteParaBuscar': false, 'dudosos': const []};
+      }
+      return Map<String, dynamic>.from(cuerpo as Map);
+    } catch (e) {
+      return {'aviso': 'No hay conexión con el servicio de identificación',
+              'suficienteParaBuscar': false, 'dudosos': const []};
+    }
+  }
+
+  /// Gomas de la empresa que se pueden poner en esta posición: las que NO
+  /// están montadas en ningún sitio. Busca por número, serie, RFID o DOT.
+  static Future<List<Neumatico>> buscarNeumaticosParaCorregir(
+      String empresaId, String texto) async {
+    var q = _db.from('tc_neumaticos').select()
+        .eq('empresa_id', empresaId).eq('activo', true)
+        .not('estado', 'in', '("montado","descartado")');
+    final t = texto.trim();
+    if (t.isNotEmpty) {
+      q = q.or('numero_interno.ilike.%$t%,codigo_interno.ilike.%$t%,'
+               'numero_serie.ilike.%$t%,rfid_epc.ilike.%$t%,dot.ilike.%$t%');
+    }
+    final data = await q.limit(50);
+    return (data as List).map((e) => Neumatico.fromJson(Map<String, dynamic>.from(e))).toList();
+  }
+
+  /// Referencias del catálogo que casan con lo leído, para elegir antes de
+  /// crear nada. Se buscan por marca y medida; el modelo lo afina la pantalla.
+  static Future<List<Map<String, dynamic>>> buscarReferencias(String marca, String medida) async {
+    final data = await _db.from('tc_referencias_neumatico')
+        .select('id, referencia_completa, pendiente_validar, '
+                'modelo:tc_cat_modelos_neumatico(nombre, marca:tc_cat_marcas_neumatico(nombre)), '
+                'medida:tyre_sizes(medida)')
+        .eq('activo', true).limit(200);
+    final norm = (String? x) => (x ?? '').toUpperCase().replaceAll(RegExp(r'[\s-]+'), '');
+    final nm = norm(marca), nd = norm(medida);
+    return (data as List)
+        .map((e) => Map<String, dynamic>.from(e))
+        .where((r) {
+          final m = r['modelo'] as Map?;
+          final marcaRef = (m?['marca'] as Map?)?['nombre'] as String?;
+          final medidaRef = (r['medida'] as Map?)?['medida'] as String?;
+          return norm(marcaRef) == nm && norm(medidaRef) == nd;
+        }).toList();
+  }
+
+  /// Da de alta una referencia que no está en el catálogo. Nace PROVISIONAL:
+  /// un administrador la valida después. La base de datos reutiliza marca,
+  /// modelo y medida si ya existen escritas de otra manera.
+  static Future<Map<String, dynamic>> crearReferenciaProvisional({
+    required String empresaId,
+    required String marca,
+    required String modelo,
+    required String medida,
+    required String cargaSimple,
+    String? cargaDoble,
+    String? velocidad,
+  }) async {
+    final r = await _db.rpc('tc_crear_referencia_provisional', params: {
+      'p_empresa': empresaId, 'p_marca': marca, 'p_modelo': modelo, 'p_medida': medida,
+      'p_carga_simple': cargaSimple,
+      'p_carga_doble': (cargaDoble ?? '').trim().isEmpty ? null : cargaDoble!.trim(),
+      'p_velocidad': (velocidad ?? '').trim().isEmpty ? null : velocidad!.trim(),
+    });
+    return Map<String, dynamic>.from(r as Map);
+  }
+
+  /// Corrige QUÉ neumático hay en la posición. No genera trabajo ni coste: la
+  /// goma que estaba mal fichada pasa a "no localizada" —no al almacén, que
+  /// sería inventar stock— y queda todo atado a esta revisión.
+  static Future<String> corregirMontado({
+    required String montajeId,
+    required String neumaticoCorrectoId,
+    String? revisionId,
+    String? metodo,
+    String? fotoUrl,
+    String? observaciones,
+  }) async {
+    final r = await _db.rpc('tc_corregir_montado', params: {
+      'p_montaje': montajeId,
+      'p_neumatico_correcto': neumaticoCorrectoId,
+      'p_obs': observaciones,
+      'p_revision': revisionId,
+      'p_metodo': metodo,
+      'p_foto_url': fotoUrl,
+    });
+    return r as String;
+  }
+
+  /// La goma encontrada no existe ni como ficha: se da de alta Y se corrige el
+  /// montaje en la misma llamada. Juntas a propósito: una ficha que no llegara
+  /// a montarse por un corte de red quedaría contando como stock inexistente.
+  static Future<Map<String, dynamic>> corregirMontadoNuevaFicha({
+    required String montajeId,
+    required String marca,
+    String? modelo,
+    required String medida,
+    String? dot,
+    String? numeroSerie,
+    String? revisionId,
+    String? metodo,
+    String? fotoUrl,
+    String? observaciones,
+  }) async {
+    final r = await _db.rpc('tc_corregir_montado_nueva_ficha', params: {
+      'p_montaje': montajeId, 'p_marca': marca,
+      'p_modelo': (modelo ?? '').trim().isEmpty ? null : modelo!.trim(),
+      'p_medida': medida,
+      'p_dot': (dot ?? '').trim().isEmpty ? null : dot!.trim(),
+      'p_numero_serie': (numeroSerie ?? '').trim().isEmpty ? null : numeroSerie!.trim(),
+      'p_obs': observaciones, 'p_revision': revisionId,
+      'p_metodo': metodo, 'p_foto_url': fotoUrl,
+    });
+    return Map<String, dynamic>.from(r as Map);
+  }
+
   // ── Incidencias (Fase 1: detección + pendientes) ─────────────
   /// Contador de incidencias pendientes (para el badge de Inicio). Se
   /// actualiza al llamar a [listarIncidencias] o [contarIncidenciasPendientes].
