@@ -37,6 +37,10 @@ import type {
   Sesion,
   Zona,
   Centro,
+  PropuestaEscaneo,
+  ReglaPagoConfig,
+  CampoRegla,
+  PropuestaReposicion,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -795,3 +799,82 @@ export const regularizarArqueo = (sessionId: number, motivo?: string) =>
     diferenciaCentimos: number;
     arqueoId: number;
   }>(`/sessions/${sessionId}/regularize`, json({ motivo }));
+
+// ── Escáner de facturas ────────────────────────────────────────────────────
+
+/**
+ * Manda la factura y devuelve lo que propone. NO cobra.
+ *
+ * El fichero va y vuelve en la misma petición y no se guarda en ningún sitio:
+ * el original se cuelga del cobro por la vía de siempre, cuando el cobro
+ * existe.
+ */
+export const escanearFactura = (fichero: File, sessionId?: number | null) => {
+  const cuerpo = new FormData();
+  cuerpo.append("documento", fichero);
+  if (sessionId != null) cuerpo.append("sessionId", String(sessionId));
+  return pedir<{ propuesta: PropuestaEscaneo }>(`/invoice-scan`, {
+    method: "POST",
+    body: cuerpo,
+  });
+};
+
+/**
+ * Qué hizo la persona con lo que se le propuso.
+ *
+ * Se llama después de confirmar el cobro y solo sirve para medir. Nunca debe
+ * tumbar nada: quien la llama la ignora si falla.
+ */
+export const anotarResultadoEscaneo = (
+  scanId: number,
+  datos: { operationId: number; formaPagoFinal: string; camposCorregidos: string[] }
+) => pedir<{ ok: true }>(`/invoice-scan/${scanId}/resultado`, json(datos));
+
+// ── Reglas del escáner ─────────────────────────────────────────────────────
+
+export const reglasPago = () => pedir<{ reglas: ReglaPagoConfig[] }>(`/payment-rules`);
+
+export const crearReglaPago = (datos: {
+  campo: CampoRegla;
+  patron: string;
+  formaPago: string;
+  confianza?: number;
+  autoSeleccionar?: boolean;
+  prioridad?: number;
+  notas?: string;
+}) => pedir<{ regla: ReglaPagoConfig }>(`/payment-rules`, json(datos));
+
+export const actualizarReglaPago = (
+  id: number,
+  cambios: {
+    formaPago?: string;
+    confianza?: number;
+    autoSeleccionar?: boolean;
+    prioridad?: number;
+    activa?: boolean;
+    notas?: string;
+  }
+) =>
+  // El method va DESPUÉS del spread: json() trae POST y lo pisaría.
+  pedir<{ regla: ReglaPagoConfig }>(`/payment-rules/${id}`, { ...json(cambios), method: "PATCH" });
+
+export const borrarReglaPago = (id: number) =>
+  pedir<{ ok: true }>(`/payment-rules/${id}`, { method: "DELETE" });
+
+// ── Reposición del fondo desde el dinero pendiente de ingresar ─────────────
+
+export const proponerReposicionFondo = (registerId: number, sessionIds: number[]) =>
+  pedir<PropuestaReposicion>(
+    `/registers/${registerId}/bank-deposits/float-topup?cierres=${sessionIds.join(",")}`
+  );
+
+export const reponerFondo = (datos: {
+  registerId: number;
+  sessionIds: number[];
+  sacar: LineaDenominacion[];
+  devolver: LineaDenominacion[];
+}) =>
+  pedir<{ operacionId: number; numero: string; importeCentimos: number }>(
+    `/bank-deposits/float-topup`,
+    json(datos)
+  );

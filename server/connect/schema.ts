@@ -13,6 +13,10 @@ import crypto from "node:crypto";
 import db from "../db.ts";
 import { seedNetworkWorkshops } from "./seedWorkshops.ts";
 import { initPricing } from "./pricing/schema.ts";
+import { initEmpresas } from "./empresasSchema.ts";
+import { initEventLog } from "../eventlog/schema.ts";
+import { initAcuerdos } from "../acuerdos/schema.ts";
+import { initEnrutado } from "../enrutado/schema.ts";
 
 /**
  * Identificador del cerrojo de arranque. Cualquier número sirve mientras sea
@@ -622,6 +626,108 @@ async function crearEsquemaConnect(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_connect_ws_contacts ON connect_workshop_contacts ("workshopId");
 
+    -- ── Subcontratación: proveedor, taller y cliente como fichas completas ──
+    -- Se AMPLÍAN las entidades que ya existían (connect_provider_companies,
+    -- connect_workshops, connect_clients). No se crean tablas paralelas: el
+    -- proveedor ya era connect_provider_companies y sus centros ya eran
+    -- connect_workshops vía "providerCompanyId".
+
+    -- Proveedor: lo que faltaba para tratarlo como acreedor, no solo como
+    -- empresa de la red.
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS country TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "commercialName" TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "paymentTerms" TEXT;
+    ALTER TABLE connect_provider_companies ADD COLUMN IF NOT EXISTS "paymentMethod" TEXT;
+
+    -- Taller/centro: datos de contacto diferenciados y capacidades operativas.
+    -- Los emails van separados porque cada aviso sale a un buzón distinto:
+    -- pedir el servicio, administración, facturación y albaranes.
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS country TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "emergencyPhone" TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "assistanceEmail" TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "adminEmail" TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "billingEmail" TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "deliveryNoteEmail" TEXT;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "open24h" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+    -- Cobertura y capacidades. JSON en texto, como el resto de listas del
+    -- módulo (services, features): provincias y CP atendidos, tipos de
+    -- vehículo, y el importe que el taller puede gastar sin pedir permiso.
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "coverageProvinces" TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "coveragePostalCodes" TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "vehicleTypes" TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "avgResponseMinutes" INTEGER;
+    ALTER TABLE connect_workshops ADD COLUMN IF NOT EXISTS "authorizationLimit" DOUBLE PRECISION;
+
+    -- Cliente: ficha fiscal y de facturación. Antes solo tenía nombre, CIF y
+    -- un contacto suelto; para facturar hace falta el resto.
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "legalName" TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "commercialName" TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS address TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "postalCode" TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS city TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS province TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS country TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'EUR';
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "paymentMethod" TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "paymentTerms" TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "billingPeriodicity" TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "billingGrouped" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "referenceRequired" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "purchaseOrderRequired" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "costCenter" TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS project TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "billingSeries" TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "taxConfig" TEXT;
+    ALTER TABLE connect_clients ADD COLUMN IF NOT EXISTS "billingNotes" TEXT;
+
+    -- Contactos reutilizables. NO se crea una tabla nueva: se generaliza la
+    -- que ya había (connect_workshop_contacts) para que cuelgue de cualquier
+    -- ficha —taller, proveedor o cliente— mediante ownerType/ownerId. Las
+    -- filas antiguas se rellenan más abajo y "workshopId" se conserva, así
+    -- que todo lo que ya consultaba por taller sigue funcionando igual.
+    ALTER TABLE connect_workshop_contacts ALTER COLUMN "workshopId" DROP NOT NULL;
+    ALTER TABLE connect_workshop_contacts ADD COLUMN IF NOT EXISTS "ownerType" TEXT;
+    ALTER TABLE connect_workshop_contacts ADD COLUMN IF NOT EXISTS "ownerId" INTEGER;
+    ALTER TABLE connect_workshop_contacts ADD COLUMN IF NOT EXISTS surname TEXT;
+    ALTER TABLE connect_workshop_contacts ADD COLUMN IF NOT EXISTS email TEXT;
+    ALTER TABLE connect_workshop_contacts ADD COLUMN IF NOT EXISTS mobile TEXT;
+    ALTER TABLE connect_workshop_contacts ADD COLUMN IF NOT EXISTS "contactType" TEXT;
+    ALTER TABLE connect_workshop_contacts ADD COLUMN IF NOT EXISTS "isPrimary" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE connect_workshop_contacts ADD COLUMN IF NOT EXISTS "forAssistance" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE connect_workshop_contacts ADD COLUMN IF NOT EXISTS "forAdmin" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE connect_workshop_contacts ADD COLUMN IF NOT EXISTS "forBilling" BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE connect_workshop_contacts ADD COLUMN IF NOT EXISTS "forEmergency" BOOLEAN NOT NULL DEFAULT false;
+
+    -- Migración de lo que ya había: todo contacto existente es de taller.
+    UPDATE connect_workshop_contacts
+       SET "ownerType" = 'workshop', "ownerId" = "workshopId"
+     WHERE "ownerType" IS NULL AND "workshopId" IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_connect_contacts_owner
+      ON connect_workshop_contacts ("ownerType", "ownerId");
+
+    -- ── La asistencia: quién pide, a quién se factura y quién lo hace ──
+    -- Antes solo había "partnerId" (quien nos manda el aviso) y "workshopId".
+    -- El cliente que solicita y el que se factura pueden no ser el mismo, y el
+    -- proveedor se guarda explícito para no deducirlo del taller cada vez.
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "clientId" INTEGER REFERENCES connect_clients(id);
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "billingClientId" INTEGER REFERENCES connect_clients(id);
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "providerCompanyId" INTEGER REFERENCES connect_provider_companies(id);
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "contactId" INTEGER;
+
+    -- Snapshot histórico: cómo eran proveedor, taller y contacto EN EL MOMENTO
+    -- del servicio. Si mañana cambia el email o la dirección del taller, la
+    -- asistencia antigua tiene que seguir contando lo que de verdad pasó. Se
+    -- guarda como JSON en una sola columna para no ir clonando campo a campo
+    -- cada vez que la ficha crezca.
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "partiesSnapshot" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "partiesSnapshotAtMs" BIGINT;
+
+    CREATE INDEX IF NOT EXISTS idx_connect_assist_client ON connect_assistances ("clientId");
+    CREATE INDEX IF NOT EXISTS idx_connect_assist_billing_client ON connect_assistances ("billingClientId");
+    CREATE INDEX IF NOT EXISTS idx_connect_assist_provider ON connect_assistances ("providerCompanyId");
+
     -- Back office de la asistencia (mismos bloques que el de Mobilink Assist).
     -- Solo se usa para asistencias SIN fila en el core: las que sí la tienen
     -- comparten roadside_backoffice con Assist, para no tener dos verdades.
@@ -1028,7 +1134,40 @@ async function crearEsquemaConnect(): Promise<void> {
   // Motor de tarifas: su esquema vive aparte para no seguir engordando este
   // fichero. Depende de connect_control_centers, connect_clients y
   // connect_assistances, así que va después.
+  /*
+   * Asistencias que entran de otro sistema (Assist u otra central). El
+   * expediente de Central sigue siendo el suyo: esto solo guarda de dónde
+   * viene y el hilo que ata las dos mitades, para poder contestar «¿de qué
+   * asistencia de Assist es ésta?» sin llamar por teléfono.
+   */
+  await db.query(`
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "sourceSystem" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "sourceReference" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "correlationId" TEXT;
+    ALTER TABLE connect_assistances ADD COLUMN IF NOT EXISTS "requesterCompanyId" INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_connect_assist_correlacion
+      ON connect_assistances ("correlationId");
+  `);
+
   await initPricing();
+  // El núcleo multiempresa va DESPUÉS: la relación comercial apunta a
+  // connect_control_centers y a connect_provider_companies, y su backfill
+  // necesita que las dos existan ya con sus datos.
+  await initEmpresas();
+  /*
+   * El diario va aquí y no solo en el arranque del servidor porque `transition`
+   * escribe en él DENTRO de su transacción: Connect ya no funciona sin esa
+   * tabla, así que quien inicializa Connect tiene que asegurarla. Es idempotente
+   * y su migración se salta las tablas que todavía no existan.
+   */
+  await initEventLog();
+  /*
+   * Los acuerdos son columnas nuevas sobre `connect_provider_authorizations`,
+   * así que van DESPUÉS de que exista la tabla y dentro de la misma
+   * inicialización de Connect: quien tiene Central tiene acuerdos.
+   */
+  await initAcuerdos();
+  await initEnrutado();
 
   await seedConnectDefaults();
   // El catálogo de talleres depende de red (geocodificación): si falla, se

@@ -20,7 +20,7 @@ import { rasterizarPdf } from "../tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { aDatosExpediente, parsearAnexoII } from "./anexoII.ts";
 import { aDatosExpedienteInfTec, parsearInfTec } from "./infTec.ts";
 import type { Lectura } from "./cotejo.ts";
-import { ErrorTacografos } from "./repository.ts";
+import { ErrorTacografos } from "./errors.ts";
 import type { DatosExpediente } from "./domain.ts";
 
 /** Por debajo de esto se da por hecho que el PDF es un escaneo sin texto. */

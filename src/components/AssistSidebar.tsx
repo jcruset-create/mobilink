@@ -9,6 +9,7 @@
 
 import { useState } from "react";
 import {
+  AlertTriangle,
   Plus,
   Clock3,
   CheckCircle2,
@@ -16,6 +17,8 @@ import {
   Map,
   Wifi,
   Store,
+  Building2,
+  Contact,
   MapPin,
   Truck,
   List,
@@ -26,7 +29,7 @@ import {
 
 type Props = {
   /** Clave de la entrada activa (p. ej. "otf"). */
-  active?: "flota" | "central" | "talleres" | "lugares" | "otf" | "vehiculo" | "panel";
+  active?: "flota" | "central" | "talleres" | "proveedores" | "clientes" | "lugares" | "otf" | "vehiculo" | "panel" | "bandeja";
 };
 
 const itemCls = (activo: boolean) =>
@@ -96,6 +99,17 @@ export default function AssistSidebar({ active }: Props) {
           </a>
           <a href="/asistencias/talleres" className={itemCls(active === "talleres")}>
             <Store className="h-4 w-4 shrink-0" /> Talleres
+          </a>
+          {/* La bandeja va la primera del bloque: es por donde se empieza el
+              día, antes que por ninguna ficha. */}
+          <a href="/asistencias/bandeja" className={itemCls(active === "bandeja")}>
+            <AlertTriangle className="h-4 w-4 shrink-0" /> Bandeja
+          </a>
+          <a href="/asistencias/proveedores" className={itemCls(active === "proveedores")}>
+            <Building2 className="h-4 w-4 shrink-0" /> Proveedores
+          </a>
+          <a href="/asistencias/clientes" className={itemCls(active === "clientes")}>
+            <Contact className="h-4 w-4 shrink-0" /> Clientes
           </a>
           <a href="/asistencias/lugares" className={itemCls(active === "lugares")}>
             <MapPin className="h-4 w-4 shrink-0" /> Lugares

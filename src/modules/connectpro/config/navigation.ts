@@ -5,9 +5,9 @@
  */
 
 import {
-  LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2,
+  LayoutDashboard, Radio, PlusCircle, ClipboardList, Map, Building2, Briefcase,
   AlertTriangle, BellRing, Contact, Plug, BarChart3, FileText,
-  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, Wrench, HeartPulse, Tags, Rocket, type LucideIcon,
+  Receipt, UserCog, ScrollText, Settings, Handshake, BrainCircuit, Wrench, HeartPulse, Tags, Rocket, Route, type LucideIcon,
 } from "lucide-react";
 import type { ConnectRole } from "../types";
 
@@ -31,6 +31,17 @@ export const CONNECT_NAV: ConnectNavItem[] = [
   // Empresas → Talleres → Unidades y Operarios es la jerarquía; "Talleres" es
   // la vista transversal de toda la red, y desde ella se dan de alta talleres
   // por WhatsApp sin tener que entrar antes en su empresa.
+  // "Cartera" y "Empresas de asistencia" NO son la misma lista y por eso están
+  // las dos: la segunda enseña los proveedores de la red, la primera enseña
+  // TODAS las empresas con las que trata esta central y el papel de cada una
+  // (la misma empresa puede ser proveedora y cliente a la vez).
+  { key: "cartera", path: "cartera", label: "Cartera de empresas", icon: Briefcase, minRole: "analyst" },
+  // Los acuerdos van pegados a la cartera: son la relación con la empresa
+  // contada en condiciones, y se llega a ellos desde la misma pregunta.
+  { key: "acuerdos", path: "acuerdos", label: "Acuerdos comerciales", icon: Handshake, minRole: "analyst" },
+  // Enrutado va detrás de los acuerdos porque los usa: primero se pacta con
+  // quién se trabaja, luego se decide a cuál de ellos se manda cada servicio.
+  { key: "enrutado", path: "enrutado", label: "Enrutado", icon: Route, minRole: "operator" },
   { key: "empresas", path: "empresas", label: "Empresas de asistencia", icon: Building2, minRole: "analyst" },
   { key: "talleres", path: "talleres", label: "Talleres de la red", icon: Wrench, minRole: "analyst" },
   { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, minRole: "operator" },

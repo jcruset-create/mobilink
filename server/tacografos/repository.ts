@@ -9,17 +9,12 @@ import pool from "../db.ts";
 import { normalizarMatricula, type DatosExpediente, type Modalidad } from "./domain.ts";
 import { VERSION_SEMILLA, type Plantillas } from "./templates.ts";
 
-export class ErrorTacografos extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-    readonly status = 400,
-    readonly extra?: Record<string, unknown>
-  ) {
-    super(message);
-    this.name = "ErrorTacografos";
-  }
-}
+// La clase vive en errors.ts para que un módulo sin base de datos —el
+// importador, que sólo lee PDF— pueda lanzarla sin arrastrar db.ts, que
+// revienta al cargarse si no hay DATABASE_URL. Se reexporta porque nació aquí
+// y media docena de ficheros la importan de este sitio.
+import { ErrorTacografos } from "./errors.ts";
+export { ErrorTacografos };
 
 export type Centro = {
   nombre: string;

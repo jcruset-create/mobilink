@@ -36,8 +36,8 @@ import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
 import PaymentMethodPicker, { MIXTO } from "../components/PaymentMethodPicker";
 import Justificantes from "../components/Justificantes";
-import JustificantePrevio from "../components/JustificantePrevio";
-import { type AperturaCartucho, type DocumentoExterno } from "../types";
+import EscanerFactura from "../components/EscanerFactura";
+import { type AperturaCartucho, type DocumentoExterno, type PropuestaEscaneo } from "../types";
 import * as api from "../services/api";
 
 /** Dónde se recuerda la última sección usada en este navegador. */
@@ -114,6 +114,19 @@ export default function Cobros() {
   const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
   /** PDF elegido antes de confirmar; se sube en cuanto el cobro existe. */
   const [justificante, setJustificante] = useState<File | null>(null);
+
+  /*
+   * Lo que el escáner ha propuesto, y qué ha tocado la persona después.
+   *
+   * Las dos cosas hacen falta para la regla que más importa de esta pantalla:
+   * un segundo escaneo NO puede pisar un campo que alguien haya corregido a
+   * mano. `tocados` se vacía justo al aplicar una propuesta, de forma que lo
+   * que se escriba a partir de ahí queda marcado como decisión de la persona.
+   */
+  const [escaneo, setEscaneo] = useState<PropuestaEscaneo | null>(null);
+  const [tocados, setTocados] = useState<Set<string>>(new Set());
+  const marcarTocado = (campo: string) =>
+    setTocados((t) => (t.has(campo) ? t : new Set(t).add(campo)));
   /*
    * Sección del cobro. Se recuerda la última usada en el navegador: al meter
    * cien tickets de gasolinera seguidos, elegirla cien veces sobra. NO se
@@ -250,6 +263,52 @@ export default function Cobros() {
     setCambioPropuesto({});
     setAvisoCambio("");
     setJustificante(null);
+    setEscaneo(null);
+    setTocados(new Set());
+  }
+
+  /**
+   * Aplica lo que ha propuesto el escáner.
+   *
+   * Dos reglas mandan aquí:
+   *
+   * - Solo se rellena lo que el escáner ha leído con confianza suficiente. Lo
+   *   que viene en estado VACIO no se toca: un campo en blanco se rellena en
+   *   diez segundos, uno mal relleno hay que descubrirlo primero.
+   * - No se pisa NADA que la persona haya escrito después del escaneo. Por eso
+   *   `tocados` se vacía al final: lo de antes ya está aplicado y lo que se
+   *   escriba a partir de ahora es decisión suya.
+   *
+   * Y la forma de cobro solo se marca sola si el clasificador lo permite. Un
+   * botón marcado es un botón que nadie vuelve a mirar.
+   */
+  function aplicarEscaneo(p: PropuestaEscaneo) {
+    setEscaneo(p);
+
+    if (p.referencia.estado !== "VACIO" && p.referencia.valor && !tocados.has("referencia")) {
+      setReferencia(p.referencia.valor);
+    }
+    if (p.importeCentimos.estado !== "VACIO" && p.importeCentimos.valor != null && !tocados.has("importe")) {
+      setImporteTexto(euros(p.importeCentimos.valor));
+    }
+    if (p.cliente.estado !== "VACIO" && p.cliente.valor && !tocados.has("cliente")) {
+      setCliente(p.cliente.valor);
+    }
+    if (p.concepto.estado !== "VACIO" && p.concepto.valor && !tocados.has("concepto")) {
+      setConcepto(p.concepto.valor);
+    }
+
+    const propuesta = p.formaCobro.formaPago;
+    if (
+      p.formaCobro.autoSeleccionar &&
+      propuesta &&
+      !tocados.has("modo") &&
+      formasParaCobros.some((f) => f.codigo === propuesta)
+    ) {
+      setModo(propuesta);
+    }
+
+    setTocados(new Set());
   }
 
   function elegirDocumento(d: DocumentoExterno) {
@@ -313,6 +372,36 @@ export default function Cobros() {
               `${e instanceof Error ? `: ${e.message}` : "."} Vuelve a adjuntarlo aquí abajo.`
           );
         }
+      }
+
+      /*
+       * Qué se ha quedado de lo que propuso el escáner.
+       *
+       * Va aparte y en silencio: es una medida, no parte del cobro. Sin esto
+       * se sabría qué propuso la máquina pero nunca si acertó, que es lo único
+       * que permite mejorarla. Si falla, no pasa nada — el dinero ya está
+       * contado y esto no lo toca.
+       */
+      if (escaneo) {
+        const corregidos: string[] = [];
+        const distinto = (campo: string, propuesto: string | null, final: string) =>
+          propuesto != null && propuesto.trim() !== final.trim() && corregidos.push(campo);
+        distinto("referencia", escaneo.referencia.valor, referencia);
+        distinto("cliente", escaneo.cliente.valor, cliente);
+        distinto("concepto", escaneo.concepto.valor, concepto);
+        if (escaneo.importeCentimos.valor != null && escaneo.importeCentimos.valor !== importe) {
+          corregidos.push("importe");
+        }
+        if (escaneo.formaCobro.formaPago && escaneo.formaCobro.formaPago !== modo) {
+          corregidos.push("formaCobro");
+        }
+        void api
+          .anotarResultadoEscaneo(escaneo.scanId, {
+            operationId: r.operacionId,
+            formaPagoFinal: modo,
+            camposCorregidos: corregidos,
+          })
+          .catch(() => {});
       }
 
       limpiar();
@@ -427,7 +516,10 @@ export default function Cobros() {
                 </span>
                 <input
                   value={referencia}
-                  onChange={(e) => setReferencia(e.target.value)}
+                  onChange={(e) => {
+                    setReferencia(e.target.value);
+                    marcarTocado("referencia");
+                  }}
                   className={inputCls}
                   placeholder="T-1234"
                 />
@@ -436,7 +528,10 @@ export default function Cobros() {
                 <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Importe a cobrar</span>
                 <input
                   value={importeTexto}
-                  onChange={(e) => setImporteTexto(e.target.value)}
+                  onChange={(e) => {
+                    setImporteTexto(e.target.value);
+                    marcarTocado("importe");
+                  }}
                   inputMode="decimal"
                   placeholder="187,00"
                   className={`${inputCls} text-lg font-bold tabular-nums`}
@@ -446,13 +541,29 @@ export default function Cobros() {
                 <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
                   Cliente <span className="font-normal normal-case text-slate-500">(opcional)</span>
                 </span>
-                <input value={cliente} onChange={(e) => setCliente(e.target.value)} className={inputCls} placeholder="Nombre o texto libre" />
+                <input
+                  value={cliente}
+                  onChange={(e) => {
+                    setCliente(e.target.value);
+                    marcarTocado("cliente");
+                  }}
+                  className={inputCls}
+                  placeholder="Nombre o texto libre"
+                />
               </label>
               <label className="block">
                 <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
                   Concepto <span className="font-normal normal-case text-slate-500">(opcional)</span>
                 </span>
-                <input value={concepto} onChange={(e) => setConcepto(e.target.value)} className={inputCls} placeholder="Venta mostrador" />
+                <input
+                  value={concepto}
+                  onChange={(e) => {
+                    setConcepto(e.target.value);
+                    marcarTocado("concepto");
+                  }}
+                  className={inputCls}
+                  placeholder="Venta mostrador"
+                />
               </label>
             </div>
 
@@ -466,6 +577,7 @@ export default function Cobros() {
                 valor={modo}
                 onChange={(v) => {
                   setModo(v);
+                  marcarTocado("modo");
                   // Cambiar de forma vacía lo que se hubiera contado o repartido
                   // del modo anterior: dejarlo colgando sería lo que acabaría en
                   // un cobro con piezas de una tarjeta.
@@ -480,13 +592,17 @@ export default function Cobros() {
               />
             </div>
 
-            {/* El escaneo se elige aquí y se sube solo al confirmar: en el
+            {/* La factura se elige aquí y se sube sola al confirmar: en el
                 mostrador es un gesto seguido —escanear, cobrar— sin tener que
-                buscar el cobro después. */}
-            <JustificantePrevio
+                buscar el cobro después. De paso se lee y rellena la pantalla,
+                pero lo que se confirma lo decide quien está delante. */}
+            <EscanerFactura
               fichero={justificante}
               onChange={setJustificante}
+              onPropuesta={aplicarEscaneo}
+              onOlvidar={() => setEscaneo(null)}
               puedeAdjuntar={puede("cash.document.attach")}
+              sessionId={jornada?.sesion.id ?? null}
               deshabilitado={guardando}
               onError={setError}
             />

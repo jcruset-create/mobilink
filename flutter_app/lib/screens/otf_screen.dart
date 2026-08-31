@@ -1,12 +1,12 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:signature/signature.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/plate_badge.dart';
+import '../services/camara.dart';
 
 const _tipos = ['Tractora', 'Remolque', 'Camión rígido', 'Furgoneta', 'Turismo', 'Maquinaria', 'Otros'];
 
@@ -146,8 +146,6 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
     }
   }
 
-  final _statusPicker = ImagePicker();
-
   Future<void> _setStatus(Map<String, dynamic> t, String status) async {
     final tid = t['id'] as int;
     try {
@@ -163,7 +161,7 @@ class _OtfDetailScreenState extends State<OtfDetailScreen> {
               content: Text('Haz una foto de la matrícula del vehículo'),
               duration: Duration(seconds: 2)));
           }
-          final x = await _statusPicker.pickImage(source: ImageSource.camera, maxWidth: 1920);
+          final x = await Camara.hacerFoto(context, maxWidth: 1920);
           if (x == null) {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -376,7 +374,6 @@ class OtfAddTrabajoScreen extends StatefulWidget {
 }
 
 class _OtfAddTrabajoScreenState extends State<OtfAddTrabajoScreen> {
-  final _picker = ImagePicker();
   final _plate = TextEditingController();
   final _trabajo = TextEditingController();
   final _motivo = TextEditingController();
@@ -412,7 +409,7 @@ class _OtfAddTrabajoScreenState extends State<OtfAddTrabajoScreen> {
   }
 
   Future<void> _pick(void Function(File) set) async {
-    final x = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1920);
+    final x = await Camara.hacerFoto(context, maxWidth: 1920);
     if (x == null) return;
     setState(() => set(File(x.path)));
   }

@@ -34,6 +34,7 @@ import * as tesoreria from "./treasury.ts";
 import * as documentos from "./documents.ts";
 import * as ingresos from "./bankdeposits.ts";
 import { informeCierre, informeIngreso } from "./report.ts";
+import { anotarConfirmacion, escanearFactura } from "./invoice-scan/service.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 
@@ -1214,6 +1215,47 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Cuánto le falta a la caja para su fondo, y con qué piezas del montón
+   * pendiente se puede reponer. Consulta: no mueve nada.
+   */
+  r.get(
+    "/registers/:id/bank-deposits/float-topup",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const sessionIds =
+        typeof req.query.cierres === "string" && req.query.cierres !== ""
+          ? req.query.cierres.split(",").map((v) => enteroPositivo(v, "cierres"))
+          : [];
+      res.json(
+        await ingresos.proponerReposicion(
+          req.authCtx!.empresaId,
+          enteroPositivo(req.params.id, "id"),
+          sessionIds
+        )
+      );
+    })
+  );
+
+  /** Devuelve al cajón las piezas indicadas del montón pendiente. */
+  r.post(
+    "/bank-deposits/float-topup",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json(
+        await ingresos.registrarReposicion(contexto(req), {
+          registerId: enteroPositivo(b.registerId, "registerId"),
+          sessionIds: Array.isArray(b.sessionIds)
+            ? b.sessionIds.map((v: unknown) => enteroPositivo(v, "sessionIds"))
+            : [],
+          sacar: lineas(b.sacar, "sacar"),
+          devolver: b.devolver == null ? [] : lineas(b.devolver, "devolver"),
+        })
+      );
+    })
+  );
+
   r.post(
     "/bank-deposits",
     exigirPermiso("cash.treasury.manage"),
@@ -1596,6 +1638,116 @@ export function createCashRouter(): Router {
     })
   );
 
+  // ── Reglas del escáner: qué TPV es de quién ──────────────────────────────
+
+  r.get(
+    "/payment-rules",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      res.json({ reglas: await config.listarReglasPago(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.post(
+    "/payment-rules",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json({
+        regla: await config.crearReglaPago(contexto(req), {
+          campo: b.campo,
+          patron: b.patron,
+          formaPago: b.formaPago,
+          confianza: b.confianza,
+          autoSeleccionar: typeof b.autoSeleccionar === "boolean" ? b.autoSeleccionar : undefined,
+          prioridad: b.prioridad != null ? entero(b.prioridad, "prioridad") : undefined,
+          notas: typeof b.notas === "string" ? b.notas : undefined,
+        }),
+      });
+    })
+  );
+
+  r.patch(
+    "/payment-rules/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        regla: await config.actualizarReglaPago(contexto(req), enteroPositivo(req.params.id, "id"), {
+          formaPago: b.formaPago,
+          confianza: b.confianza,
+          autoSeleccionar: typeof b.autoSeleccionar === "boolean" ? b.autoSeleccionar : undefined,
+          prioridad: b.prioridad != null ? entero(b.prioridad, "prioridad") : undefined,
+          activa: typeof b.activa === "boolean" ? b.activa : undefined,
+          notas: typeof b.notas === "string" ? b.notas : undefined,
+        }),
+      });
+    })
+  );
+
+  r.delete(
+    "/payment-rules/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      await config.borrarReglaPago(contexto(req), enteroPositivo(req.params.id, "id"));
+      res.json({ ok: true });
+    })
+  );
+
+  // ── Escaneo de facturas ──────────────────────────────────────────────────
+
+  /**
+   * Lee una factura y PROPONE los datos del cobro. No cobra.
+   *
+   * La ruta es de escritura solo sobre su propio rastro: no existe camino desde
+   * aquí a `cash_operations`. El cobro lo sigue confirmando una persona en
+   * `POST /collections`, con lo que tenga en la pantalla después de revisarlo.
+   *
+   * Pide el permiso de cobro manual porque eso es lo que prepara: quien no
+   * puede inventarse un cobro tampoco puede pedirle a la aplicación que se lo
+   * deje preparado.
+   */
+  r.post(
+    "/invoice-scan",
+    exigirPermiso("cash.collection.create_manual"),
+    subida(subidaDocumento.single("documento"), 15),
+    ruta(async (req, res) => {
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
+      }
+      const b = req.body ?? {};
+      const propuesta = await escanearFactura({
+        empresaId: req.authCtx!.empresaId,
+        userId: req.authCtx!.userId ?? null,
+        sessionId: b.sessionId ? enteroPositivo(b.sessionId, "sessionId") : null,
+        fichero: req.file,
+      });
+      res.json({ propuesta });
+    })
+  );
+
+  /**
+   * Qué hizo la persona con lo que se le propuso.
+   *
+   * Se llama después de confirmar el cobro y solo sirve para medir: sin esto
+   * se sabría qué propuso la máquina pero nunca si acertó.
+   */
+  r.post(
+    "/invoice-scan/:id/resultado",
+    exigirPermiso("cash.collection.create_manual"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      await anotarConfirmacion(enteroPositivo(req.params.id, "id"), req.authCtx!.empresaId, {
+        operationId: enteroPositivo(b.operationId, "operationId"),
+        formaPagoFinal: typeof b.formaPagoFinal === "string" ? b.formaPagoFinal : "",
+        camposCorregidos: Array.isArray(b.camposCorregidos)
+          ? b.camposCorregidos.filter((c: unknown) => typeof c === "string").slice(0, 20)
+          : [],
+      });
+      res.json({ ok: true });
+    })
+  );
+
   // ── Cobros ───────────────────────────────────────────────────────────────
   r.post(
     "/collections",
@@ -1930,7 +2082,10 @@ export function createCashRouter(): Router {
       }
 
       const { rows } = await pool.query(
-        `SELECT s.*, c.nombre AS caja_nombre, c.centro AS caja_centro
+        /* El fondo fijo va en la fila para que el histórico pueda decir
+           cuánto le faltó a la caja ese día sin adivinar de qué caja era. */
+        `SELECT s.*, c.nombre AS caja_nombre, c.centro AS caja_centro,
+                c.fondo_objetivo_centimos AS caja_fondo_objetivo_centimos
            FROM cash_sessions s
            JOIN cash_registers c ON c.id = s.register_id
           WHERE ${filtros.join(" AND ")}

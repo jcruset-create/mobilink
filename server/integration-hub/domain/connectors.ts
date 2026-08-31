@@ -7,7 +7,10 @@
  */
 
 import type {
+  MobilinkAssistancePush,
+  MobilinkBillingPush,
   MobilinkCustomer,
+  MobilinkProvider,
   MobilinkProduct,
   MobilinkPrice,
   MobilinkStock,
@@ -74,6 +77,20 @@ export interface IErpConnector extends Connector {
 
   createCustomer(ctx: OperationContext, customer: MobilinkCustomer): Promise<MobilinkCustomer>;
   updateCustomer(ctx: OperationContext, customer: MobilinkCustomer): Promise<MobilinkCustomer>;
+
+  /**
+   * Proveedores (acreedores). Opcionales a propósito: no todo ERP los expone,
+   * y obligar a implementarlos rompería los conectores que ya funcionan. Quien
+   * llame debe comprobar que el método existe antes de usarlo.
+   */
+  getProviders?(ctx: OperationContext): Promise<MobilinkProvider[]>;
+  getProvider?(ctx: OperationContext, externalProviderId: string): Promise<MobilinkProvider | null>;
+  createProvider?(ctx: OperationContext, provider: MobilinkProvider): Promise<MobilinkProvider>;
+  updateProvider?(ctx: OperationContext, provider: MobilinkProvider): Promise<MobilinkProvider>;
+
+  /** Empuja la asistencia y su economía al ERP. También opcionales. */
+  pushAssistance?(ctx: OperationContext, input: MobilinkAssistancePush): Promise<{ externalId?: string }>;
+  pushBillingData?(ctx: OperationContext, input: MobilinkBillingPush): Promise<{ externalId?: string }>;
 }
 
 /**

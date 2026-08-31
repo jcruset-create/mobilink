@@ -619,8 +619,15 @@ export async function initCash(): Promise<void> {
   // ingreso siguiente.
   //
   // La ecuación que lo gobierna todo va como CHECK, no como validación de
-  // código: remanente anterior + cierres − ingresado = remanente nuevo. Ningún
-  // error de programa puede escribir una fila que descuadre.
+  // código:
+  //
+  //     remanente anterior + cierres − repuesto al cajón − ingresado
+  //       = remanente nuevo
+  //
+  // Ningún error de programa puede escribir una fila que descuadre. `repuesto`
+  // es el dinero que se sacó del montón para reponer el fondo de la caja: dejó
+  // de estar en la bolsa antes de ir al banco, y sin él la ecuación miente por
+  // esa cantidad exacta.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cash_bank_deposits (
       id SERIAL PRIMARY KEY,
@@ -635,10 +642,12 @@ export async function initCash(): Promise<void> {
 
       remanente_anterior_centimos BIGINT NOT NULL CHECK (remanente_anterior_centimos >= 0),
       total_cierres_centimos BIGINT NOT NULL CHECK (total_cierres_centimos >= 0),
+      repuesto_centimos BIGINT NOT NULL DEFAULT 0 CHECK (repuesto_centimos >= 0),
       importe_centimos BIGINT NOT NULL CHECK (importe_centimos > 0),
       remanente_nuevo_centimos BIGINT NOT NULL CHECK (remanente_nuevo_centimos >= 0),
       CONSTRAINT cash_bank_deposits_ecuacion CHECK (
-        remanente_anterior_centimos + total_cierres_centimos - importe_centimos
+        remanente_anterior_centimos + total_cierres_centimos
+          - repuesto_centimos - importe_centimos
           = remanente_nuevo_centimos
       ),
 
@@ -651,6 +660,26 @@ export async function initCash(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS cash_bank_deposits_caja_idx
       ON cash_bank_deposits(register_id, estado, id DESC);
+
+    /* La columna, para las bases que ya existían. Va con ALTER y no solo en el
+       CREATE TABLE de arriba: a una tabla que ya está, el CREATE TABLE IF NOT
+       EXISTS no le añade nada, y el primer ingreso después de actualizar se
+       encontraría con que la columna no existe. */
+    ALTER TABLE cash_bank_deposits
+      ADD COLUMN IF NOT EXISTS repuesto_centimos BIGINT NOT NULL DEFAULT 0;
+
+    /* Y la ecuación, recreada AQUÍ y en un único sitio: un CHECK no se amplía,
+       se tira y se vuelve a poner. Las filas viejas llevan repuesto = 0, así
+       que siguen cumpliéndola y la recreación no puede fallar sobre datos que
+       ya están. */
+    ALTER TABLE cash_bank_deposits
+      DROP CONSTRAINT IF EXISTS cash_bank_deposits_ecuacion;
+    ALTER TABLE cash_bank_deposits
+      ADD CONSTRAINT cash_bank_deposits_ecuacion CHECK (
+        remanente_anterior_centimos + total_cierres_centimos
+          - repuesto_centimos - importe_centimos
+          = remanente_nuevo_centimos
+      );
 
     -- Qué cierres componen cada ingreso. \`vigente\` baja a false al anular el
     -- ingreso, y el índice único parcial es lo que impide A NIVEL DE BASE DE
@@ -747,6 +776,35 @@ export async function initCash(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS cash_deposit_swaps_pendientes_idx
       ON cash_deposit_swaps(register_id) WHERE bank_deposit_id IS NULL;
+  `);
+
+  /*
+   * Reposiciones del fondo: dinero que vuelve del montón pendiente al cajón.
+   *
+   * Hermana del canje y con la misma forma —operación en el libro mayor más
+   * una fila que la ata a la caja hasta que un ingreso la consume—, pero con
+   * una diferencia de fondo: el canje NO cambia el valor de ninguno de los dos
+   * lados y esto sí. El montón baja lo que sube el cajón.
+   *
+   * Sin la fila, el montón seguiría diciendo que tiene un dinero que ya está
+   * otra vez en el cajón, y se podría ingresar dos veces en el banco.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_float_topups (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      register_id INTEGER NOT NULL REFERENCES cash_registers(id) ON DELETE RESTRICT,
+      operation_id INTEGER NOT NULL REFERENCES cash_operations(id) ON DELETE RESTRICT,
+      bank_deposit_id INTEGER REFERENCES cash_bank_deposits(id) ON DELETE RESTRICT,
+      /* Lo que se repuso y cuánto faltaba entonces: el «cuánto faltaba» no se
+         puede recalcular después, porque el cierre que lo causó ya pasó. */
+      importe_centimos BIGINT NOT NULL,
+      deficit_centimos BIGINT NOT NULL,
+      creado_por UUID,
+      created_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cash_float_topups_pendientes_idx
+      ON cash_float_topups(register_id) WHERE bank_deposit_id IS NULL;
   `);
 
   /*
@@ -1287,6 +1345,106 @@ export async function initCash(): Promise<void> {
     ALTER TABLE cash_bank_deposits
       ADD COLUMN IF NOT EXISTS bank_account_id INTEGER
         REFERENCES cash_bank_accounts(id) ON DELETE RESTRICT;
+  `);
+
+  /*
+   * Reglas del escáner de facturas: qué TPV es de quién.
+   *
+   * Miran CAMPOS del resguardo, no su texto suelto, y eso no es un detalle. En
+   * una factura real de este taller, cobrada por un TPV de BBVA, el resguardo
+   * imprime «LBL : Visa CaixaBank», que es el producto de la tarjeta DEL
+   * CLIENTE. Una regla de «si pone CaixaBank es CaixaBank» la clasificaría mal;
+   * el número de comercio, en cambio, identifica el datáfono y no miente.
+   *
+   * `forma_pago` es un código del catálogo de la empresa y NO lleva clave
+   * ajena: el catálogo es editable y una forma dada de baja no debe tumbar una
+   * regla ni al revés. El clasificador comprueba al leer que el código siga
+   * existiendo, y si no, se salta la regla y lo dice.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_payment_rules (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      campo TEXT NOT NULL
+        CHECK (campo IN ('ADQUIRENTE','COMERCIO','TERMINAL','RED','CUENTA','PLANTILLA','TEXTO')),
+      patron TEXT NOT NULL,
+      forma_pago TEXT NOT NULL,
+      /* 0..1. Es el techo de la propuesta: nunca sube por encima de esto. */
+      confianza NUMERIC(3,2) NOT NULL DEFAULT 0.95
+        CHECK (confianza >= 0 AND confianza <= 1),
+      /* Si además puede quedar marcada sola en la pantalla de cobros. */
+      auto_seleccionar BOOLEAN NOT NULL DEFAULT true,
+      prioridad INTEGER NOT NULL DEFAULT 100,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      notas TEXT,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, campo, patron)
+    );
+    CREATE INDEX IF NOT EXISTS cash_payment_rules_empresa_idx
+      ON cash_payment_rules(empresa_id, activa, prioridad);
+  `);
+
+  /*
+   * El rastro de cada escaneo.
+   *
+   * Se guarda lo que dijo el modelo, lo que se entendió, lo que se propuso y
+   * —cuando el cobro acaba registrándose— con qué se quedó la persona. Sirve
+   * para tres cosas que solo se pueden hacer si el dato está: investigar un
+   * cobro mal clasificado meses después, medir cuánto acierta el escáner y
+   * saber qué campos corrige siempre el mostrador, que es por dónde hay que
+   * mejorarlo.
+   *
+   * `operation_id` es NULL mientras el cobro no exista, y puede quedarse NULL
+   * para siempre: escanear no obliga a cobrar. Es justamente la prueba de que
+   * el escáner no confirma nada.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_invoice_scans (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      session_id INTEGER REFERENCES cash_sessions(id) ON DELETE SET NULL,
+      operation_id INTEGER REFERENCES cash_operations(id) ON DELETE SET NULL,
+
+      /* Del fichero: nombre, tipo, tamaño y huella. El fichero en sí se cuelga
+         del cobro por la vía de siempre, cuando el cobro existe. */
+      nombre TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      tamano_bytes BIGINT NOT NULL,
+      sha256 TEXT NOT NULL,
+
+      motor TEXT NOT NULL,
+      duracion_ms INTEGER NOT NULL DEFAULT 0,
+      /* Por qué no salió, cuando no sale. El escaneo que hay que investigar
+         meses después es justo el que falló, así que también deja rastro. */
+      error TEXT,
+      /* Lo que dijo el modelo y lo que se entendió, uno al lado del otro. */
+      extraccion_cruda JSONB,
+      extraccion_normalizada JSONB,
+
+      forma_pago_propuesta TEXT,
+      forma_pago_confianza NUMERIC(3,2),
+      forma_pago_motivo TEXT,
+      regla_id INTEGER,
+      auto_seleccionada BOOLEAN NOT NULL DEFAULT false,
+      avisos JSONB,
+
+      /* Se rellenan al confirmar el cobro, si se confirma. */
+      campos_corregidos JSONB,
+      forma_pago_final TEXT,
+      confirmado_at_ms BIGINT,
+
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cash_invoice_scans_empresa_idx
+      ON cash_invoice_scans(empresa_id, creado_at_ms DESC);
+    CREATE INDEX IF NOT EXISTS cash_invoice_scans_operacion_idx
+      ON cash_invoice_scans(operation_id) WHERE operation_id IS NOT NULL;
+    /* Añadida después de la tabla: un CREATE TABLE IF NOT EXISTS no toca una
+       tabla que ya existe, y sin esto el primer escaneo fallido después de
+       actualizar reventaría al escribir su rastro. */
+    ALTER TABLE cash_invoice_scans ADD COLUMN IF NOT EXISTS error TEXT;
   `);
 
   await asignarCodigosDeCaja();

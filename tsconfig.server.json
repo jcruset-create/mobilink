@@ -27,8 +27,21 @@
     "strict": false,
     "noFallthroughCasesInSwitch": true
   },
+  //
+  // Fase 18: `server/dispatch/**` y `server/eventlog/**` se anaden aqui el
+  // mismo dia que se escriben, y no diez fases despues como paso con MC
+  // Central. Al anadirlos salio a la luz una colision de nombres que llevaba
+  // dos tandas sin detectarse: un ayudante local y un import se llamaban
+  // igual, y las llamadas al diario acababan escribiendo en otra tabla.
   "include": [
     "server/connect/**/*.ts",
+    "server/dispatch/**/*.ts",
+    "server/acuerdos/**/*.ts",
+    "server/enrutado/**/*.ts",
+    "server/eventlog/**/*.ts",
+    "server/documentos/**/*.ts",
+    "server/correo/**/*.ts",
+    "server/excepciones/**/*.ts",
     "server/cash/**/*.ts",
     "server/central/**/*.ts",
     "server/tacografos/**/*.ts",

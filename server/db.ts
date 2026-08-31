@@ -334,11 +334,33 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "expedienteCentral" TEXT;
 
+    /*
+     * Conductor que firma la reparación.
+     *
+     * Estas dos columnas llevaban tiempo leyéndose y escribiéndose desde
+     * server/index.ts (el normalizador y el endpoint de firma del parte) pero
+     * NINGUNA migración las creaba: existían solo porque alguien las añadió a
+     * mano en la base de producción. Sobre una base nueva —una copia para
+     * pruebas, un entorno de staging— esos endpoints fallaban con «column
+     * does not exist». Se añaden aquí para que la base se pueda reconstruir
+     * desde cero.
+     */
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "conductorNombre" TEXT;
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "conductorDni" TEXT;
+
     -- Auto "En camino": se arma cuando la furgoneta asignada se ve DENTRO del
     -- radio del taller; al salir del radio (>500 m) se activa el estado solo.
     -- Evita falsos positivos si se asigna una furgoneta que ya esta en ruta.
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "autoEnCaminoArmada" BOOLEAN NOT NULL DEFAULT false;
+
+    -- Quien registro la salida: true si la puso el vigilante de Webfleet en
+    -- lugar del tecnico. La APK lo necesita para no atribuirle al tecnico una
+    -- pulsacion que no hizo (ni al reves).
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "enCaminoAutomatico" BOOLEAN NOT NULL DEFAULT false;
 
     -- Hora de inicio del estado "en camino a taller" (el resto de estados ya
     -- tienen su marca de tiempo propia)
@@ -360,6 +382,32 @@ export async function initDb() {
     -- aseguradora o el gestor de flota para pagar el servicio.
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "solicitanteAutorizacion" TEXT;
+
+    -- Subcontratación: a quién se le encarga el servicio y a quién se factura.
+    -- OJO con los nombres: "workshopId" ya existe en esta tabla y es el taller
+    -- PROPIO (el del inquilino, TEXT). El taller subcontratado es otra cosa y
+    -- va en "proveedorTallerId", que apunta a connect_workshops.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "proveedorId" INTEGER;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "proveedorTallerId" INTEGER;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "proveedorContactoId" INTEGER;
+
+    -- Cliente al que se factura, que no siempre es quien solicita.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "clienteFacturacionId" INTEGER;
+
+    -- Cómo eran proveedor, taller y contacto EN EL MOMENTO del servicio: si
+    -- mañana cambia el email o la dirección del taller, una asistencia de hace
+    -- meses tiene que seguir contando con qué datos se gestionó.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "subcontrataSnapshot" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "subcontrataSnapshotAtMs" BIGINT;
 
     -- Kilómetros DEL SERVICIO que anota el técnico al finalizar (no el
     -- cuentakilómetros). Los usa el espejo económico de Connect para cobrar
