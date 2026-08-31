@@ -65,7 +65,7 @@ class _NoCoincideScreenState extends State<NoCoincideScreen> {
   @override
   void initState() {
     super.initState();
-    SupabaseService.flancoDisponible().then((v) {
+    TyreControlApi.flancoDisponible().then((v) {
       if (mounted) setState(() => _hayIA = v);
     });
   }
@@ -82,7 +82,7 @@ class _NoCoincideScreenState extends State<NoCoincideScreen> {
   Future<void> _buscar() async {
     setState(() { _trabajando = true; _error = null; });
     try {
-      final r = await SupabaseService.buscarNeumaticosParaCorregir(widget.empresaId, _busqueda.text);
+      final r = await TyreControlApi.buscarNeumaticosParaCorregir(widget.empresaId, _busqueda.text);
       if (mounted) setState(() => _candidatos = r);
     } catch (e) {
       if (mounted) setState(() => _error = 'No se ha podido buscar: $e');
@@ -97,9 +97,9 @@ class _NoCoincideScreenState extends State<NoCoincideScreen> {
     if (foto == null) return;
     setState(() { _trabajando = true; _error = null; _avisoIA = null; });
     try {
-      final url = await SupabaseService.subirFotoFlanco(
+      final url = await TyreControlApi.subirFotoFlanco(
         File(foto.path), revisionId: widget.revisionId, posicionId: widget.posicionId);
-      final p = await SupabaseService.leerFlanco(url);
+      final p = await TyreControlApi.leerFlanco(url);
       if (!mounted) return;
       setState(() {
         _fotoUrl = url;
@@ -161,7 +161,7 @@ class _NoCoincideScreenState extends State<NoCoincideScreen> {
 
   Future<void> _corregirCon(Neumatico elegido) async {
     if (!await _confirmar(_describe(elegido))) return;
-    await _guardar(() => SupabaseService.corregirMontado(
+    await _guardar(() => TyreControlApi.corregirMontado(
           montajeId: widget.montajeId,
           neumaticoCorrectoId: elegido.id,
           revisionId: widget.revisionId,
@@ -185,12 +185,12 @@ class _NoCoincideScreenState extends State<NoCoincideScreen> {
       // corrección: el dato del vehículo importa más que el del catálogo.
       if (_carga.text.trim().isNotEmpty && _modelo.text.trim().isNotEmpty) {
         try {
-          await SupabaseService.crearReferenciaProvisional(
+          await TyreControlApi.crearReferenciaProvisional(
             empresaId: widget.empresaId, marca: marca, modelo: _modelo.text.trim(),
             medida: medida, cargaSimple: _carga.text.trim(), velocidad: _velocidad.text.trim());
         } catch (_) {/* el catálogo se completa luego; la corrección no espera */}
       }
-      await SupabaseService.corregirMontadoNuevaFicha(
+      await TyreControlApi.corregirMontadoNuevaFicha(
         montajeId: widget.montajeId, marca: marca, modelo: _modelo.text.trim(),
         medida: medida, dot: _dot.text.trim(), revisionId: widget.revisionId,
         metodo: _fotoUrl != null ? 'foto_ia' : 'manual', fotoUrl: _fotoUrl,

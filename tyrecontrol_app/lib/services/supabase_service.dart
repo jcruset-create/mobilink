@@ -640,7 +640,7 @@ class TyreControlApi {
                 'modelo:tc_cat_modelos_neumatico(nombre, marca:tc_cat_marcas_neumatico(nombre)), '
                 'medida:tyre_sizes(medida)')
         .eq('activo', true).limit(200);
-    final norm = (String? x) => (x ?? '').toUpperCase().replaceAll(RegExp(r'[\s-]+'), '');
+    String norm(String? x) => (x ?? '').toUpperCase().replaceAll(RegExp(r'[\s-]+'), '');
     final nm = norm(marca), nd = norm(medida);
     return (data as List)
         .map((e) => Map<String, dynamic>.from(e))

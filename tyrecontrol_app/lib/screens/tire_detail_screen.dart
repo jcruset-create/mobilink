@@ -194,7 +194,7 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
   Future<void> _noCoincide(Neumatico n) async {
     setState(() => _guardando = true);
     try {
-      final montajes = await SupabaseService.listarMontajesVehiculo(widget.vehiculo.id);
+      final montajes = await TyreControlApi.listarMontajesVehiculo(widget.vehiculo.id);
       final m = montajes.where((x) => x.posicionId == widget.posicion.id).firstOrNull;
       if (!mounted) return;
       if (m == null) {
