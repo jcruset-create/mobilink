@@ -53,6 +53,7 @@ import {
 } from "./repository.ts";
 import { type LineaDenominacion, inventarioDesdeLineas } from "./domain/inventory.ts";
 import { type Canje, mejorCanje } from "./domain/depositswap.ts";
+import { deficitDeFondo, mejorReposicion } from "./domain/floattopup.ts";
 import type { Contexto } from "./service.ts";
 import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
@@ -362,12 +363,18 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
     /* eslint-enable @typescript-eslint/no-explicit-any */
 
     const remanenteAnterior = await remanenteActual(client, e.registerId);
-    const disponible = remanenteAnterior + totalCierres;
+    /*
+     * Lo que se ha devuelto al cajón para reponer su fondo ya no está en la
+     * bolsa: se descuenta aquí o se podría ingresar en el banco un dinero que
+     * está otra vez en el mostrador.
+     */
+    const repuesto = await repuestoPendiente(client, ctx.empresaId, e.registerId);
+    const disponible = remanenteAnterior + totalCierres - repuesto;
 
     if (e.importeCentimos > disponible) {
       throw new ErrorCaja(
         "INGRESO_SUPERA_DISPONIBLE",
-        `Se quieren ingresar ${formatearEuros(e.importeCentimos)} € y el efectivo bajo control son ${formatearEuros(disponible)} € (${formatearEuros(totalCierres)} € de cierres más ${formatearEuros(remanenteAnterior)} € de remanente).`,
+        `Se quieren ingresar ${formatearEuros(e.importeCentimos)} € y el efectivo bajo control son ${formatearEuros(disponible)} € (${formatearEuros(totalCierres)} € de cierres más ${formatearEuros(remanenteAnterior)} € de remanente${repuesto > 0 ? `, menos ${formatearEuros(repuesto)} € devueltos al cajón para reponer su fondo` : ""}).`,
         400
       );
     }
@@ -451,6 +458,13 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
      */
     await client.query(
       `UPDATE cash_deposit_swaps SET bank_deposit_id = $1
+        WHERE register_id = $2 AND empresa_id = $3 AND bank_deposit_id IS NULL`,
+      [depositId, e.registerId, ctx.empresaId]
+    );
+    // Y las reposiciones de fondo, por lo mismo: ya han descontado de ESTE
+    // montón y no deben volver a descontar del siguiente.
+    await client.query(
+      `UPDATE cash_float_topups SET bank_deposit_id = $1
         WHERE register_id = $2 AND empresa_id = $3 AND bank_deposit_id IS NULL`,
       [depositId, e.registerId, ctx.empresaId]
     );
@@ -744,6 +758,10 @@ export async function anularIngreso(
       [ingresoId]
     );
     await client.query(
+      `UPDATE cash_float_topups SET bank_deposit_id = NULL WHERE bank_deposit_id = $1`,
+      [ingresoId]
+    );
+    await client.query(
       `UPDATE cash_bank_deposit_sessions SET vigente = false WHERE deposit_id = $1`,
       [ingresoId]
     );
@@ -883,6 +901,25 @@ export async function composicionPendiente(
   for (const r of canjes) {
     acumular(Number(r.valor), r.direccion === "IN" ? -Number(r.n) : Number(r.n));
   }
+
+  /*
+   * Y las reposiciones de fondo, que SALEN del montón hacia el cajón. Al revés
+   * que el canje, esto no devuelve nada: el montón se queda con menos valor,
+   * que es exactamente el punto. Sin restarlo aquí, el montón diría que tiene
+   * un dinero que ya está otra vez en el cajón y se podría ingresar dos veces.
+   */
+  const { rows: reposiciones } = await client.query(
+    `SELECT m.valor_unitario_centimos AS valor, SUM(m.cantidad)::int AS n
+       FROM cash_float_topups t
+       JOIN cash_denomination_movements m ON m.operation_id = t.operation_id
+      WHERE t.empresa_id = $1 AND t.register_id = $2
+        AND m.direccion = 'IN'
+        AND ($3::int IS NULL AND t.bank_deposit_id IS NULL
+             OR t.bank_deposit_id = $3::int)
+      GROUP BY m.valor_unitario_centimos`,
+    [empresaId, registerId, canjesDe]
+  );
+  for (const r of reposiciones) acumular(Number(r.valor), -Number(r.n));
 
   const denominaciones = await cargarDenominaciones(client, false);
   const esBillete = new Map(denominaciones.map((d) => [d.valor, d.tipo === "BILLETE"]));
@@ -1203,4 +1240,261 @@ export async function reemitirIngresos(
   });
 
   return { reenviados };
+}
+
+// ── Reposición del fondo desde el montón pendiente ─────────────────────────
+
+/** Lo ya devuelto al cajón que todavía no ha consumido ningún ingreso. */
+async function repuestoPendiente(
+  client: PoolClient | typeof pool,
+  empresaId: string,
+  registerId: number
+): Promise<Centimos> {
+  const { rows } = await client.query(
+    `SELECT COALESCE(SUM(importe_centimos),0)::bigint AS total
+       FROM cash_float_topups
+      WHERE empresa_id = $1 AND register_id = $2 AND bank_deposit_id IS NULL`,
+    [empresaId, registerId]
+  );
+  return Number(rows[0].total);
+}
+
+export type DeficitFondo = {
+  /** El fondo fijo configurado en la caja. 0 = sin fondo fijo. */
+  fondoObjetivoCentimos: Centimos;
+  /** Lo que hay ahora en el cajón: la jornada abierta, o el último cierre. */
+  efectivoCentimos: Centimos;
+  /** Lo que falta. 0 cuando la caja va justa o sobrada. */
+  deficitCentimos: Centimos;
+  /**
+   * Cierres seguidos, hacia atrás, que han acabado por debajo del fondo.
+   *
+   * Es la antigüedad del problema, y se cuenta en CIERRES y no en días del
+   * calendario: un taller que abre de lunes a viernes no lleva «tres días» de
+   * déficit el lunes siguiente por haber pasado el fin de semana.
+   */
+  cierresConDeficit: number;
+};
+
+/**
+ * Cuánto le falta a una caja para su fondo fijo.
+ *
+ * El efectivo se mira de la jornada ABIERTA si la hay —es lo que hay en el
+ * cajón ahora mismo— y si no, del cambio que dejó el último cierre, que es lo
+ * que habrá mañana al abrir. Las dos son la misma pregunta hecha en dos
+ * momentos.
+ */
+export async function deficitDeCaja(
+  empresaId: string,
+  registerId: number
+): Promise<DeficitFondo> {
+  const { rows: cajas } = await pool.query(
+    `SELECT fondo_objetivo_centimos FROM cash_registers WHERE id = $1 AND empresa_id = $2`,
+    [registerId, empresaId]
+  );
+  const objetivo = Number(cajas[0]?.fondo_objetivo_centimos ?? 0);
+
+  const abierta = await sesionAbierta(registerId);
+  let efectivo = 0;
+  if (abierta) {
+    for (const [valor, n] of await stockTeorico(pool, abierta.id)) efectivo += valor * n;
+  } else {
+    const { rows } = await pool.query(
+      `SELECT COALESCE(SUM(m.valor_unitario_centimos * m.cantidad),0)::bigint AS total
+         FROM cash_denomination_movements m
+        WHERE m.session_id = (
+                SELECT id FROM cash_sessions
+                 WHERE register_id = $1 AND estado = 'CLOSED'
+                 ORDER BY fecha DESC, id DESC LIMIT 1)
+          AND m.motivo = 'CLOSING_FLOAT' AND m.direccion = 'OUT'`,
+      [registerId]
+    );
+    efectivo = Number(rows[0].total);
+  }
+
+  /*
+   * Cuántos cierres seguidos vienen quedándose cortos. Se recorren hacia atrás
+   * y se para en el primero que llegó al fondo: lo que interesa es la racha
+   * actual, no cuántas veces ha pasado en la vida de la caja.
+   */
+  let racha = 0;
+  if (objetivo > 0) {
+    const { rows: cierres } = await pool.query(
+      `SELECT COALESCE(SUM(CASE WHEN m.motivo = 'CLOSING_FLOAT' AND m.direccion = 'OUT'
+                                THEN m.valor_unitario_centimos * m.cantidad ELSE 0 END),0)::bigint AS cambio
+         FROM cash_sessions s
+         LEFT JOIN cash_denomination_movements m ON m.session_id = s.id
+        WHERE s.register_id = $1 AND s.estado = 'CLOSED'
+        GROUP BY s.id, s.fecha
+        ORDER BY s.fecha DESC, s.id DESC
+        LIMIT 30`,
+      [registerId]
+    );
+    for (const c of cierres) {
+      if (Number(c.cambio) >= objetivo) break;
+      racha++;
+    }
+  }
+
+  return {
+    fondoObjetivoCentimos: objetivo,
+    efectivoCentimos: efectivo,
+    deficitCentimos: deficitDeFondo(objetivo, efectivo),
+    cierresConDeficit: racha,
+  };
+}
+
+export type PropuestaReposicion = DeficitFondo & {
+  /** Lo que hay en el montón, para poder enseñarlo y para elegir de ahí. */
+  monton: { billetes: LineaDenominacion[]; monedas: LineaDenominacion[] };
+  /** Valor del montón: el techo de lo que se puede reponer. */
+  montonCentimos: Centimos;
+  /** Las piezas propuestas. Vacío = no se puede reponer nada todavía. */
+  propuesta: LineaDenominacion[];
+  propuestaCentimos: Centimos;
+  /** La reposición mueve el cajón, así que necesita jornada abierta. */
+  sinJornadaAbierta: boolean;
+};
+
+/**
+ * Qué se puede devolver hoy al cajón, y con qué piezas.
+ *
+ * Nunca propone más de lo que falta ni más de lo que hay: si el montón está
+ * vacío, la propuesta viene vacía y quien mire la pantalla verá que hay que
+ * esperar al próximo cierre.
+ */
+export async function proponerReposicion(
+  empresaId: string,
+  registerId: number,
+  sessionIds: readonly number[]
+): Promise<PropuestaReposicion> {
+  const [deficit, monton, abierta] = await Promise.all([
+    deficitDeCaja(empresaId, registerId),
+    composicionPendiente(empresaId, registerId, sessionIds),
+    sesionAbierta(registerId),
+  ]);
+
+  const todas = [...monton.billetes, ...monton.monedas];
+  const propuesta = mejorReposicion(
+    inventarioDesdeLineas(todas),
+    deficit.deficitCentimos
+  );
+
+  return {
+    ...deficit,
+    monton,
+    montonCentimos: todas.reduce((a, l) => a + l.valor * l.cantidad, 0),
+    propuesta,
+    propuestaCentimos: propuesta.reduce((a, l) => a + l.valor * l.cantidad, 0),
+    sinJornadaAbierta: !abierta,
+  };
+}
+
+/**
+ * Devuelve al cajón las piezas indicadas del montón pendiente.
+ *
+ * Se asienta como una entrada de efectivo de la jornada abierta —entra dinero
+ * y no sale nada— y NO como un cobro. Esto no es un detalle de nomenclatura:
+ * el desglose por secciones solo suma `COLLECTION`, `PAYMENT` y `MANUAL_OUT`,
+ * así que un `MANUAL_IN` no se cuela en el reparto por secciones ni, por
+ * tanto, en el cierre que se concilia con la ERP. Ese es exactamente el motivo
+ * de que la reposición salga del montón y no de los cobros del día siguiente:
+ * con los cobros, parte de la caja del Genes dejaría de ser venta.
+ *
+ * Se revalida todo aquí y no se hace caso a la propuesta que traiga la
+ * pantalla: entre proponer y confirmar puede haberse hecho un canje, otra
+ * reposición o un ingreso, y quien manda es el estado del momento.
+ */
+export async function registrarReposicion(
+  ctx: Contexto,
+  e: { registerId: number; sessionIds: number[]; lineas: LineaDenominacion[] }
+): Promise<{ operacionId: number; numero: string; importeCentimos: Centimos }> {
+  const lineas = e.lineas.filter((l) => l.cantidad > 0);
+  const importe = lineas.reduce((a, l) => a + l.valor * l.cantidad, 0);
+
+  if (importe <= 0) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "No hay nada que reponer.", 400);
+  }
+
+  const deficit = await deficitDeCaja(ctx.empresaId, e.registerId);
+  if (deficit.deficitCentimos <= 0) {
+    throw new ErrorCaja(
+      "SIN_DEFICIT",
+      "Esta caja ya tiene su fondo completo: no hay nada que reponer.",
+      409
+    );
+  }
+  if (importe > deficit.deficitCentimos) {
+    throw new ErrorCaja(
+      "REPOSICION_EXCESIVA",
+      `A la caja le faltan ${formatearEuros(deficit.deficitCentimos)} € y se quieren devolver ${formatearEuros(importe)} €. Reponer de más la dejaría por encima de su fondo.`,
+      400
+    );
+  }
+
+  const abierta = await sesionAbierta(e.registerId);
+  if (!abierta) {
+    throw new ErrorCaja(
+      "JORNADA_NO_ABIERTA",
+      "La reposición mete dinero en el cajón, así que hace falta una jornada abierta para asentarla.",
+      409
+    );
+  }
+
+  // Que el montón tenga de verdad esas piezas.
+  const monton = await composicionPendiente(ctx.empresaId, e.registerId, e.sessionIds);
+  const hay = new Map<Centimos, number>();
+  for (const l of [...monton.billetes, ...monton.monedas]) hay.set(l.valor, l.cantidad);
+  for (const l of lineas) {
+    if ((hay.get(l.valor) ?? 0) < l.cantidad) {
+      throw new ErrorCaja(
+        "STOCK_INSUFICIENTE",
+        `En el montón pendiente no hay ${l.cantidad} piezas de ${formatearEuros(l.valor)} €.`,
+        400
+      );
+    }
+  }
+
+  const { registrarOperacion } = await import("./service.ts");
+  const operacion = await registrarOperacion(ctx, {
+    sessionId: abierta.id,
+    tipo: "MANUAL_IN",
+    importeCentimos: importe,
+    formasPago: [{ forma: "CASH", importe }],
+    efectivoRecibido: lineas,
+    concepto: "Reposición del fondo con dinero pendiente de ingresar",
+  });
+
+  await pool.query(
+    `INSERT INTO cash_float_topups
+       (empresa_id, register_id, operation_id, importe_centimos, deficit_centimos,
+        creado_por, created_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [
+      ctx.empresaId,
+      e.registerId,
+      operacion.operacionId,
+      importe,
+      deficit.deficitCentimos,
+      ctx.userId,
+      Date.now(),
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.bank_deposit.float_topup",
+    entidad: "cash_operations",
+    entidadId: String(operacion.operacionId),
+    detalle: {
+      registerId: e.registerId,
+      lineas,
+      importeCentimos: importe,
+      deficitCentimos: deficit.deficitCentimos,
+    },
+    ip: ctx.ip,
+  });
+
+  return { ...operacion, importeCentimos: importe };
 }

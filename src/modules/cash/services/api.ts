@@ -40,6 +40,7 @@ import type {
   PropuestaEscaneo,
   ReglaPagoConfig,
   CampoRegla,
+  PropuestaReposicion,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -859,3 +860,20 @@ export const actualizarReglaPago = (
 
 export const borrarReglaPago = (id: number) =>
   pedir<{ ok: true }>(`/payment-rules/${id}`, { method: "DELETE" });
+
+// ── Reposición del fondo desde el dinero pendiente de ingresar ─────────────
+
+export const proponerReposicionFondo = (registerId: number, sessionIds: number[]) =>
+  pedir<PropuestaReposicion>(
+    `/registers/${registerId}/bank-deposits/float-topup?cierres=${sessionIds.join(",")}`
+  );
+
+export const reponerFondo = (datos: {
+  registerId: number;
+  sessionIds: number[];
+  lineas: LineaDenominacion[];
+}) =>
+  pedir<{ operacionId: number; numero: string; importeCentimos: number }>(
+    `/bank-deposits/float-topup`,
+    json(datos)
+  );

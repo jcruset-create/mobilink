@@ -47,7 +47,26 @@ type FilaSesion = {
   denominaciones_cuadran: boolean | null;
   cambio_final_centimos: string | null;
   ingreso_bancario_centimos: string | null;
+  /** Fondo fijo de la caja, para saber si el cierre se quedó corto. */
+  caja_fondo_objetivo_centimos: string | null;
 };
+
+/**
+ * Lo que le faltó a la caja para su fondo fijo al cerrar.
+ *
+ * Negativo a propósito: es lo que hay que reponer, y verlo en rojo con su
+ * signo es la diferencia entre «cerró con 328,48 €» —que no dice nada— y
+ * «cerró 21,52 € por debajo de su fondo», que es lo que hay que arreglar.
+ *
+ * `null` cuando no aplica: jornada sin cerrar, o caja sin fondo fijo, donde
+ * hablar de déficit sería inventarse una deuda.
+ */
+function deficitDeCierre(s: FilaSesion): number | null {
+  const objetivo = Number(s.caja_fondo_objetivo_centimos ?? 0);
+  if (objetivo <= 0 || s.cambio_final_centimos == null) return null;
+  const hueco = objetivo - Number(s.cambio_final_centimos);
+  return hueco > 0 ? -hueco : null;
+}
 
 export default function Historico() {
   const { cajas, puede } = useCash();
@@ -148,6 +167,7 @@ export default function Historico() {
           {sesiones.length === 0 && <EmptyRow cols={9} text={cargando ? "Buscando…" : "No hay jornadas con esos filtros."} />}
           {sesiones.map((s) => {
             const dif = s.diferencia_centimos == null ? null : Number(s.diferencia_centimos);
+            const deficit = deficitDeCierre(s);
             return (
               <tr
                 key={s.id}
@@ -177,7 +197,23 @@ export default function Historico() {
                   {dif == null ? "—" : eurosConSigno(dif)}
                 </td>
                 <td className={`${tdCls} text-right tabular-nums`}>
-                  {s.cambio_final_centimos == null ? "—" : euros(Number(s.cambio_final_centimos))}
+                  {s.cambio_final_centimos == null ? (
+                    "—"
+                  ) : (
+                    <>
+                      {euros(Number(s.cambio_final_centimos))}
+                      {deficit != null && (
+                        <span
+                          className="ml-1 font-bold text-rose-400"
+                          title={`La caja cerró por debajo de su fondo fijo de ${euros(
+                            Number(s.caja_fondo_objetivo_centimos)
+                          )}. Se repone desde Ingresos bancarios, con el dinero pendiente de ingresar.`}
+                        >
+                          {eurosConSigno(deficit)}
+                        </span>
+                      )}
+                    </>
+                  )}
                 </td>
                 <td className={`${tdCls} text-right tabular-nums`}>
                   {s.ingreso_bancario_centimos == null ? "—" : euros(Number(s.ingreso_bancario_centimos))}
