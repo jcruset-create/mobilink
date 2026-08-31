@@ -670,3 +670,27 @@ export type ReglaPagoConfig = {
   activa: boolean;
   notas: string;
 };
+
+// ── Reposición del fondo de la caja ────────────────────────────────────────
+
+/**
+ * Qué le falta a la caja para su fondo fijo, y con qué reponerlo.
+ *
+ * El dinero sale del montón que espera para ir al banco, no de los cobros del
+ * día: así la reposición no es una venta y no se cuela en el cierre que se
+ * concilia con la ERP.
+ */
+export type PropuestaReposicion = {
+  fondoObjetivoCentimos: number;
+  efectivoCentimos: number;
+  /** Lo que falta. 0 = la caja va justa o sobrada. */
+  deficitCentimos: number;
+  /** Cierres seguidos que han acabado por debajo del fondo. */
+  cierresConDeficit: number;
+  monton: { billetes: LineaDenominacion[]; monedas: LineaDenominacion[] };
+  montonCentimos: number;
+  /** Piezas propuestas. Vacío = no hay con qué reponer todavía. */
+  propuesta: LineaDenominacion[];
+  propuestaCentimos: number;
+  sinJornadaAbierta: boolean;
+};

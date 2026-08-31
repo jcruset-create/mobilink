@@ -41,6 +41,7 @@ import type {
   IngresoBancario,
   PanelIngresos,
   PropuestaCanjeIngreso,
+  PropuestaReposicion,
 } from "../types";
 import * as api from "../services/api";
 
@@ -172,6 +173,18 @@ export default function IngresosBancarios() {
           accent={masAntiguo && masAntiguo.dias > 3 ? "text-red-300" : undefined}
         />
       </div>
+
+      {/*
+        El fondo de la caja, antes que nada: si el cajón va corto, eso se
+        arregla con este dinero y hay que verlo antes de decidir cuánto se
+        lleva al banco.
+      */}
+      <ReponerFondo
+        registerId={cajaId}
+        sessionIds={panel.pendientes.map((c) => c.sessionId)}
+        gestiona={gestiona}
+        onRepuesto={cargar}
+      />
 
       {/* ── Cierres pendientes ── */}
       <section className="space-y-2">
@@ -673,6 +686,136 @@ function Historial({
         borra nada: devuelve los cierres a pendientes, restaura el remanente anterior y deja quién, cuándo y por qué.
       </p>
     </section>
+  );
+}
+
+/**
+ * Reponer el fondo de la caja con el dinero que espera para ir al banco.
+ *
+ * Cuando una jornada cierra por debajo del fondo fijo, ese dinero no se ha
+ * perdido: está en la bolsa del banco. Devolverlo al cajón es un traspaso
+ * entre dos bolsillos de la tienda, y por eso se hace desde aquí y no de los
+ * cobros del día siguiente —con los cobros, parte de la caja dejaría de ser
+ * venta y no cuadraría el cierre que se pasa a la ERP—.
+ *
+ * A mano, como el canje: mover dinero entre bolsillos sin que nadie lo pulse
+ * es de las cosas que después no sabe explicar nadie.
+ */
+function ReponerFondo({
+  registerId,
+  sessionIds,
+  gestiona,
+  onRepuesto,
+}: {
+  registerId: number;
+  sessionIds: number[];
+  gestiona: boolean;
+  onRepuesto: () => Promise<void>;
+}) {
+  const [datos, setDatos] = useState<PropuestaReposicion | null>(null);
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const clave = sessionIds.join(",");
+  const cargar = useCallback(async () => {
+    try {
+      setDatos(await api.proponerReposicionFondo(registerId, clave.split(",").filter(Boolean).map(Number)));
+    } catch {
+      // Sin propuesta la pantalla sigue sirviendo para ingresar, que es lo
+      // que la gente viene a hacer aquí.
+      setDatos(null);
+    }
+  }, [registerId, clave]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  if (!datos || datos.deficitCentimos <= 0) return null;
+
+  /*
+   * A partir del tercer cierre seguido por debajo del fondo el aviso cambia de
+   * tono. Un día corto se arregla solo en cuanto haya dinero pendiente; tres
+   * seguidos quieren decir que nadie lo está mirando.
+   */
+  const insistente = datos.cierresConDeficit >= 3;
+
+  async function reponer() {
+    if (!datos) return;
+    setOcupado(true);
+    setError("");
+    try {
+      await api.reponerFondo({
+        registerId,
+        sessionIds: clave.split(",").filter(Boolean).map(Number),
+        lineas: datos.propuesta,
+      });
+      await cargar();
+      await onRepuesto();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido reponer el fondo");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div
+      className={`rounded-lg border p-3 ${
+        insistente ? "border-rose-500/50 bg-rose-500/10" : "border-amber-500/40 bg-amber-500/10"
+      }`}
+    >
+      <div className={`text-[13px] font-bold ${insistente ? "text-rose-200" : "text-amber-200"}`}>
+        La caja va con {euros(datos.deficitCentimos)} menos de su fondo de{" "}
+        {euros(datos.fondoObjetivoCentimos)}
+        {insistente && ` — van ${datos.cierresConDeficit} cierres seguidos`}
+      </div>
+
+      {error && <div className="mt-1 text-[12px] text-rose-300">{error}</div>}
+
+      {datos.propuesta.length === 0 ? (
+        <p className="mt-1 text-[12px] text-slate-300">
+          {datos.montonCentimos === 0
+            ? "No hay dinero pendiente de ingresar con el que reponerlo. Se podrá después del próximo cierre."
+            : "El dinero pendiente no tiene piezas con las que llegar sin pasarse. Se podrá después del próximo cierre."}
+        </p>
+      ) : (
+        <>
+          <p className="mt-1 text-[12px] text-slate-300">
+            Se devuelven <strong>{euros(datos.propuestaCentimos)}</strong> del dinero pendiente de
+            ingresar al cajón. No es un cobro: el efectivo total de la tienda no cambia.
+          </p>
+          <ul className="mt-1 flex flex-wrap gap-2 text-[11px] tabular-nums text-slate-300">
+            {datos.propuesta.map((l) => (
+              <li key={l.valor} className="rounded bg-slate-800 px-2 py-0.5">
+                {l.cantidad} × {euros(l.valor)}
+              </li>
+            ))}
+          </ul>
+          {datos.propuestaCentimos < datos.deficitCentimos && (
+            <p className="mt-1 text-[11px] text-slate-400">
+              Con esto se repone lo que se puede; quedarán {euros(datos.deficitCentimos - datos.propuestaCentimos)}{" "}
+              pendientes para el próximo cierre.
+            </p>
+          )}
+          {datos.sinJornadaAbierta ? (
+            <p className="mt-2 text-[12px] text-slate-400">
+              Hace falta una jornada abierta: la reposición mete dinero en el cajón.
+            </p>
+          ) : (
+            gestiona && (
+              <button
+                onClick={() => void reponer()}
+                disabled={ocupado}
+                className="mt-2 rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-amber-500 disabled:opacity-50"
+              >
+                Reponer {euros(datos.propuestaCentimos)} en el cajón
+              </button>
+            )
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
