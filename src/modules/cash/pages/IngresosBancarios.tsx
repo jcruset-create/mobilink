@@ -42,6 +42,7 @@ import type {
   PanelIngresos,
   PropuestaCanjeIngreso,
   PropuestaReposicion,
+  ReposicionPendiente,
 } from "../types";
 import * as api from "../services/api";
 
@@ -151,7 +152,10 @@ export default function IngresosBancarios() {
         <Card
           title="Pendiente de ingresar"
           value={euros(panel.totalPendienteCentimos)}
-          hint={`${panel.pendientes.length} ${panel.pendientes.length === 1 ? "cierre" : "cierres"} sin conciliar`}
+          hint={
+            `${panel.pendientes.length} ${panel.pendientes.length === 1 ? "cierre" : "cierres"} sin conciliar` +
+            (panel.reposiciones.length > 0 ? ", menos lo repuesto al cajón" : "")
+          }
           accent="text-sky-300"
         />
         <Card
@@ -202,7 +206,7 @@ export default function IngresosBancarios() {
             </tr>
           </thead>
           <tbody>
-            {panel.pendientes.length === 0 && (
+            {panel.pendientes.length === 0 && panel.reposiciones.length === 0 && (
               <EmptyRow cols={gestiona ? 5 : 4} text="No hay ningún cierre pendiente: todo está en el banco." />
             )}
             {panel.pendientes.map((c) => (
@@ -220,6 +224,9 @@ export default function IngresosBancarios() {
                   })
                 }
               />
+            ))}
+            {panel.reposiciones.map((r) => (
+              <FilaReposicion key={`rep-${r.id}`} reposicion={r} seleccionable={gestiona} />
             ))}
           </tbody>
         </TableWrap>
@@ -293,6 +300,34 @@ function FilaPendiente({
       <td className={tdCls}>
         <BadgeDias dias={cierre.dias} />
       </td>
+    </tr>
+  );
+}
+
+/**
+ * Una reposición de fondo, en la misma lista que los cierres y restando.
+ *
+ * No se puede marcar: no es un cierre que se elija llevar al banco, es dinero
+ * que ya salió de la bolsa. Aparece aquí —y no en una nota aparte— para que la
+ * columna de importes sume lo que de verdad se va a ingresar; si no, la lista
+ * dice un total y el servidor acepta otro.
+ */
+function FilaReposicion({
+  reposicion,
+  seleccionable,
+}: {
+  reposicion: ReposicionPendiente;
+  seleccionable: boolean;
+}) {
+  return (
+    <tr className="bg-amber-500/5">
+      {seleccionable && <td className={tdCls}></td>}
+      <td className={`${tdCls} font-medium text-slate-100`}>{fechaCorta(reposicion.fecha)}</td>
+      <td className={`${tdCls} text-amber-300`}>Reposición del fondo</td>
+      <td className={`${tdCls} text-right font-bold tabular-nums text-amber-300`}>
+        −{euros(reposicion.importeCentimos)}
+      </td>
+      <td className={`${tdCls} text-[11px] text-slate-400`}>devuelto al cajón</td>
     </tr>
   );
 }
@@ -701,6 +736,30 @@ function Historial({
  * A mano, como el canje: mover dinero entre bolsillos sin que nadie lo pulse
  * es de las cosas que después no sabe explicar nadie.
  */
+/** Un desglose de piezas en línea, con su rótulo. */
+function Piezas({
+  titulo,
+  lineas,
+  tono,
+}: {
+  titulo: string;
+  lineas: LineaDenominacion[];
+  tono: string;
+}) {
+  return (
+    <div className="mt-1">
+      <div className="text-[11px] uppercase tracking-wide text-slate-400">{titulo}</div>
+      <ul className={`mt-0.5 flex flex-wrap gap-2 text-[11px] tabular-nums ${tono}`}>
+        {lineas.map((l) => (
+          <li key={l.valor} className="rounded bg-slate-800 px-2 py-0.5">
+            {l.cantidad} × {euros(l.valor)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function ReponerFondo({
   registerId,
   sessionIds,
@@ -741,14 +800,15 @@ function ReponerFondo({
   const insistente = datos.cierresConDeficit >= 3;
 
   async function reponer() {
-    if (!datos) return;
+    if (!datos?.reposicion) return;
     setOcupado(true);
     setError("");
     try {
       await api.reponerFondo({
         registerId,
         sessionIds: clave.split(",").filter(Boolean).map(Number),
-        lineas: datos.propuesta,
+        sacar: datos.reposicion.sacar,
+        devolver: datos.reposicion.devolver,
       });
       await cargar();
       await onRepuesto();
@@ -773,29 +833,40 @@ function ReponerFondo({
 
       {error && <div className="mt-1 text-[12px] text-rose-300">{error}</div>}
 
-      {datos.propuesta.length === 0 ? (
+      {!datos.reposicion ? (
         <p className="mt-1 text-[12px] text-slate-300">
           {datos.montonCentimos === 0
             ? "No hay dinero pendiente de ingresar con el que reponerlo. Se podrá después del próximo cierre."
-            : "El dinero pendiente no tiene piezas con las que llegar sin pasarse. Se podrá después del próximo cierre."}
+            : "El dinero pendiente no tiene piezas con las que llegar, ni dando vuelta desde el cajón. Se podrá después del próximo cierre."}
         </p>
       ) : (
         <>
           <p className="mt-1 text-[12px] text-slate-300">
-            Se devuelven <strong>{euros(datos.propuestaCentimos)}</strong> del dinero pendiente de
-            ingresar al cajón. No es un cobro: el efectivo total de la tienda no cambia.
+            Se devuelven <strong>{euros(datos.reposicion.netoCentimos)}</strong> del dinero pendiente
+            de ingresar al cajón. No es un cobro: el efectivo total de la tienda no cambia.
           </p>
-          <ul className="mt-1 flex flex-wrap gap-2 text-[11px] tabular-nums text-slate-300">
-            {datos.propuesta.map((l) => (
-              <li key={l.valor} className="rounded bg-slate-800 px-2 py-0.5">
-                {l.cantidad} × {euros(l.valor)}
-              </li>
-            ))}
-          </ul>
-          {datos.propuestaCentimos < datos.deficitCentimos && (
+          <Piezas
+            titulo="Sale del dinero pendiente"
+            lineas={datos.reposicion.sacar}
+            tono="text-slate-300"
+          />
+          {/*
+            La vuelta, cuando la bolsa no tiene las piezas justas: se saca de
+            más y el cajón devuelve la diferencia, como en un canje. Se enseña
+            aparte porque quien lo hace tiene que contar dos montones, no uno.
+          */}
+          {datos.reposicion.devolver.length > 0 && (
+            <Piezas
+              titulo="Vuelve del cajón a la bolsa"
+              lineas={datos.reposicion.devolver}
+              tono="text-amber-200"
+            />
+          )}
+          {datos.reposicion.netoCentimos < datos.deficitCentimos && (
             <p className="mt-1 text-[11px] text-slate-400">
-              Con esto se repone lo que se puede; quedarán {euros(datos.deficitCentimos - datos.propuestaCentimos)}{" "}
-              pendientes para el próximo cierre.
+              Con esto se repone lo que se puede; quedarán{" "}
+              {euros(datos.deficitCentimos - datos.reposicion.netoCentimos)} pendientes para el
+              próximo cierre.
             </p>
           )}
           {datos.sinJornadaAbierta ? (
@@ -809,7 +880,7 @@ function ReponerFondo({
                 disabled={ocupado}
                 className="mt-2 rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-amber-500 disabled:opacity-50"
               >
-                Reponer {euros(datos.propuestaCentimos)} en el cajón
+                Reponer {euros(datos.reposicion.netoCentimos)} en el cajón
               </button>
             )
           )}

@@ -871,7 +871,8 @@ export const proponerReposicionFondo = (registerId: number, sessionIds: number[]
 export const reponerFondo = (datos: {
   registerId: number;
   sessionIds: number[];
-  lineas: LineaDenominacion[];
+  sacar: LineaDenominacion[];
+  devolver: LineaDenominacion[];
 }) =>
   pedir<{ operacionId: number; numero: string; importeCentimos: number }>(
     `/bank-deposits/float-topup`,
