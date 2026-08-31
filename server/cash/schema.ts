@@ -619,8 +619,15 @@ export async function initCash(): Promise<void> {
   // ingreso siguiente.
   //
   // La ecuación que lo gobierna todo va como CHECK, no como validación de
-  // código: remanente anterior + cierres − ingresado = remanente nuevo. Ningún
-  // error de programa puede escribir una fila que descuadre.
+  // código:
+  //
+  //     remanente anterior + cierres − repuesto al cajón − ingresado
+  //       = remanente nuevo
+  //
+  // Ningún error de programa puede escribir una fila que descuadre. `repuesto`
+  // es el dinero que se sacó del montón para reponer el fondo de la caja: dejó
+  // de estar en la bolsa antes de ir al banco, y sin él la ecuación miente por
+  // esa cantidad exacta.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cash_bank_deposits (
       id SERIAL PRIMARY KEY,
@@ -635,10 +642,12 @@ export async function initCash(): Promise<void> {
 
       remanente_anterior_centimos BIGINT NOT NULL CHECK (remanente_anterior_centimos >= 0),
       total_cierres_centimos BIGINT NOT NULL CHECK (total_cierres_centimos >= 0),
+      repuesto_centimos BIGINT NOT NULL DEFAULT 0 CHECK (repuesto_centimos >= 0),
       importe_centimos BIGINT NOT NULL CHECK (importe_centimos > 0),
       remanente_nuevo_centimos BIGINT NOT NULL CHECK (remanente_nuevo_centimos >= 0),
       CONSTRAINT cash_bank_deposits_ecuacion CHECK (
-        remanente_anterior_centimos + total_cierres_centimos - importe_centimos
+        remanente_anterior_centimos + total_cierres_centimos
+          - repuesto_centimos - importe_centimos
           = remanente_nuevo_centimos
       ),
 
@@ -651,6 +660,26 @@ export async function initCash(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS cash_bank_deposits_caja_idx
       ON cash_bank_deposits(register_id, estado, id DESC);
+
+    /* La columna, para las bases que ya existían. Va con ALTER y no solo en el
+       CREATE TABLE de arriba: a una tabla que ya está, el CREATE TABLE IF NOT
+       EXISTS no le añade nada, y el primer ingreso después de actualizar se
+       encontraría con que la columna no existe. */
+    ALTER TABLE cash_bank_deposits
+      ADD COLUMN IF NOT EXISTS repuesto_centimos BIGINT NOT NULL DEFAULT 0;
+
+    /* Y la ecuación, recreada AQUÍ y en un único sitio: un CHECK no se amplía,
+       se tira y se vuelve a poner. Las filas viejas llevan repuesto = 0, así
+       que siguen cumpliéndola y la recreación no puede fallar sobre datos que
+       ya están. */
+    ALTER TABLE cash_bank_deposits
+      DROP CONSTRAINT IF EXISTS cash_bank_deposits_ecuacion;
+    ALTER TABLE cash_bank_deposits
+      ADD CONSTRAINT cash_bank_deposits_ecuacion CHECK (
+        remanente_anterior_centimos + total_cierres_centimos
+          - repuesto_centimos - importe_centimos
+          = remanente_nuevo_centimos
+      );
 
     -- Qué cierres componen cada ingreso. \`vigente\` baja a false al anular el
     -- ingreso, y el índice único parcial es lo que impide A NIVEL DE BASE DE

@@ -301,6 +301,8 @@ export type IngresoBancario = {
   observaciones: string | null;
   remanenteAnteriorCentimos: number;
   totalCierresCentimos: number;
+  /** Lo que se sacó del montón para reponer el fondo del cajón. */
+  repuestoCentimos: number;
   importeCentimos: number;
   remanenteNuevoCentimos: number;
   cierres: { sessionId: number; fecha: string; importeCentimos: number }[];

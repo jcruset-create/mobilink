@@ -1329,7 +1329,23 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
     fila(`Cierre del ${c.fecha}`, eur(c.importeCentimos));
   }
   fila("Remanente anterior", eur(ingreso.remanenteAnteriorCentimos));
-  fila("Total bajo control", eur(ingreso.remanenteAnteriorCentimos + ingreso.totalCierresCentimos), true);
+  /*
+   * Lo que volvió al cajón a reponer su fondo sale en el papel, en negativo.
+   * Sin esta línea el resguardo no cuadra: quien lo lea sumará los cierres y
+   * el remanente y le sobrará justo esa cantidad, sin nada que la explique.
+   */
+  if (ingreso.repuestoCentimos > 0) {
+    fila("Repuesto al cajón (fondo de caja)", `-${eur(ingreso.repuestoCentimos)}`);
+  }
+  fila(
+    "Total bajo control",
+    eur(
+      ingreso.remanenteAnteriorCentimos +
+        ingreso.totalCierresCentimos -
+        ingreso.repuestoCentimos
+    ),
+    true
+  );
   fila("Se ingresa", eur(ingreso.importeCentimos), true);
   fila("Remanente que queda en tienda", eur(ingreso.remanenteNuevoCentimos), true);
 

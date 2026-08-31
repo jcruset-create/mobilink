@@ -246,6 +246,7 @@ export default function IngresosBancarios() {
           registerId={cajaId}
           seleccionados={seleccionados}
           remanenteAnterior={panel.remanenteCentimos}
+          repuesto={panel.reposiciones.reduce((a, r) => a + r.importeCentimos, 0)}
           ocupado={ocupado}
           onCrear={(datos) =>
             accion(async () => {
@@ -338,12 +339,15 @@ function PrepararIngreso({
   registerId,
   seleccionados,
   remanenteAnterior,
+  repuesto,
   ocupado,
   onCrear,
 }: {
   registerId: number;
   seleccionados: CierrePendiente[];
   remanenteAnterior: number;
+  /** Lo ya devuelto al cajón desde este montón: no se puede ingresar. */
+  repuesto: number;
   ocupado: boolean;
   onCrear: (datos: {
     registerId: number;
@@ -356,7 +360,12 @@ function PrepararIngreso({
 }) {
   const { refrescar } = useCash();
   const totalCierres = seleccionados.reduce((a, c) => a + c.importeCentimos, 0);
-  const disponible = remanenteAnterior + totalCierres;
+  /*
+   * Lo repuesto se RESTA aquí igual que lo resta el servidor. Sin esto la
+   * pantalla decía tener 73,13 € cuando en la bolsa quedaban 51,61 €, y el
+   * «quedan en tienda» mentía por los 21,52 € que ya estaban en el cajón.
+   */
+  const disponible = remanenteAnterior + totalCierres - repuesto;
 
   /*
    * Lo que se puede ingresar sale del DESGLOSE del montón, no de redondear el
@@ -418,9 +427,12 @@ function PrepararIngreso({
     () => [
       { texto: "Remanente anterior", valor: remanenteAnterior },
       { texto: `Cierres seleccionados (${seleccionados.length})`, valor: totalCierres },
+      ...(repuesto > 0
+        ? [{ texto: "Repuesto al cajón", valor: -repuesto }]
+        : []),
       { texto: "Efectivo bajo control", valor: disponible, destacado: true },
     ],
-    [remanenteAnterior, seleccionados.length, totalCierres, disponible]
+    [remanenteAnterior, seleccionados.length, totalCierres, repuesto, disponible]
   );
 
   return (

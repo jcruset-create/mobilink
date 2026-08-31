@@ -101,6 +101,8 @@ export type IngresoBancario = {
   observaciones: string | null;
   remanenteAnteriorCentimos: Centimos;
   totalCierresCentimos: Centimos;
+  /** Lo que se sacó del montón para reponer el fondo del cajón. */
+  repuestoCentimos: Centimos;
   importeCentimos: Centimos;
   remanenteNuevoCentimos: Centimos;
   cierres: CierreConciliado[];
@@ -148,6 +150,7 @@ function aIngreso(r: any, cierres: CierreConciliado[], esUltimo: boolean): Ingre
     observaciones: r.observaciones,
     remanenteAnteriorCentimos: Number(r.remanente_anterior_centimos),
     totalCierresCentimos: Number(r.total_cierres_centimos),
+    repuestoCentimos: Number(r.repuesto_centimos ?? 0),
     importeCentimos: Number(r.importe_centimos),
     remanenteNuevoCentimos: Number(r.remanente_nuevo_centimos),
     cierres,
@@ -463,9 +466,10 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
     const { rows: creado } = await client.query(
       `INSERT INTO cash_bank_deposits
          (empresa_id, register_id, numero, estado, fecha_ingreso, referencia, observaciones,
-          remanente_anterior_centimos, total_cierres_centimos, importe_centimos,
-          remanente_nuevo_centimos, creado_por, creado_at_ms, bank_account_id)
-       VALUES ($1,$2,$3,'CONFIRMADO',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          remanente_anterior_centimos, total_cierres_centimos, repuesto_centimos,
+          importe_centimos, remanente_nuevo_centimos, creado_por, creado_at_ms,
+          bank_account_id)
+       VALUES ($1,$2,$3,'CONFIRMADO',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING *`,
       [
         ctx.empresaId,
@@ -476,6 +480,7 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
         e.observaciones?.trim() || null,
         remanenteAnterior,
         totalCierres,
+        repuesto,
         e.importeCentimos,
         remanenteNuevo,
         ctx.userId,
