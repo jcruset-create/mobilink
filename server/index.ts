@@ -35,7 +35,30 @@ import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tec
 import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
+import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
+import { initEventLog } from "./eventlog/schema.ts";
+import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./eventlog/servicio.ts";
+import { tipoDesdeEstadoAssist } from "./eventlog/tipos.ts";
+import { initDocumentos } from "./documentos/schema.ts";
+import { createDocumentosRouter } from "./documentos/router.ts";
+import {
+  olvidarFicheroDeAssist,
+  recalcularEstadoAdmin,
+  registrarDocumento as registrarDocumentoDeAssist,
+  registrarFicheroDeAssist,
+} from "./documentos/servicio.ts";
+import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
+import {
+  initCorreo,
+  mountCorreo,
+  revisarDocumentacionAlFinalizar,
+  startCorreoWorker,
+} from "./correo/index.ts";
+import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
+import { initExcepciones } from "./excepciones/schema.ts";
+import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
+import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -718,6 +741,14 @@ function normalizeRoadsideAssistanceRow(row: any) {
     solicitanteNombre: row.solicitanteNombre ?? null,
     solicitanteTelefono: row.solicitanteTelefono ?? null,
     solicitanteAutorizacion: row.solicitanteAutorizacion ?? null,
+    // Subcontratación: quién ejecuta y a quién se factura
+    proveedorId: row.proveedorId != null ? Number(row.proveedorId) : null,
+    proveedorTallerId: row.proveedorTallerId != null ? Number(row.proveedorTallerId) : null,
+    proveedorContactoId: row.proveedorContactoId != null ? Number(row.proveedorContactoId) : null,
+    clienteFacturacionId: row.clienteFacturacionId != null ? Number(row.clienteFacturacionId) : null,
+    subcontrataSnapshot: row.subcontrataSnapshot ?? null,
+    // Salida registrada por el vigilante de Webfleet, no por el tecnico
+    enCaminoAutomatico: row.enCaminoAutomatico === true,
     descripcionAveria: row.descripcionAveria ?? null,
     trabajosARealizar: row.trabajosARealizar ?? null,
     knownPlaceId: row.knownPlaceId != null ? Number(row.knownPlaceId) : null,
@@ -4817,6 +4848,28 @@ app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req
 });
 
 // Contexto del usuario del panel para pintar (o no) el selector de taller.
+/**
+ * La timeline de una asistencia, construida DESDE los eventos.
+ *
+ * No hay ninguna lista de hitos guardada en paralelo, y es deliberado: dos
+ * fuentes para lo mismo se desincronizan y nadie sabe cuál mirar.
+ */
+app.get("/api/roadside-assistances/:id/timeline", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(422).json({ error: "Id inválido" });
+    const data = await timelineDe("assist", id, {
+      incluirTecnicos: req.query.tecnicos === "true",
+      // La cadena completa trae también lo que anotó la plataforma de destino.
+      cadenaCompleta: req.query.cadena === "true",
+    });
+    res.json({ data });
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/:id/timeline error:", error);
+    res.status(500).json({ error: "Error obteniendo la timeline" });
+  }
+});
+
 app.get("/api/roadside-assistances/mi-contexto", async (req, res) => {
   try {
     const panelUser = await getAssistPanelUser(req);
@@ -6818,8 +6871,14 @@ app.post(
       }
 
       if (currentResult.rows[0].assignedTechName !== operator.techName) {
+        // Se dice a quién está asignada: en campo, un "no está asignada" a
+        // secas deja al técnico sin saber si es cosa suya, de la tablet o de
+        // que en oficina se la han pasado a otro.
+        const asignadaA = String(currentResult.rows[0].assignedTechName || "").trim();
         return res.status(403).json({
-          error: "Esta asistencia no esta asignada a este operario",
+          error: asignadaA
+            ? `Esta asistencia esta asignada a ${asignadaA}, no a ${operator.techName}`
+            : `Esta asistencia no tiene operario asignado (entraste como ${operator.techName})`,
         });
       }
 
@@ -7262,6 +7321,27 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
 
     const assistance = normalizeRoadsideAssistanceRow(result.rows[0]);
 
+    /*
+     * Primera línea del diario. Va aquí y no dentro del INSERT porque anotar
+     * no puede tumbar un alta: `registrarEventoAsistencia` traga sus errores.
+     */
+    void registrarEventoAsistencia({
+      system: "assist",
+      tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+      assistanceId: assistance.id,
+      eventType: "ASSISTANCE_CREATED",
+      actorType: "user",
+      actorName: (req as any).authCtx?.nombre ?? null,
+      occurredAtMs: now,
+      payload: {
+        matricula: assistance.plate || null,
+        cliente: assistance.customerName || null,
+        prioridad: assistance.priority,
+        origen: body.redirectedFromId ? "redireccion" : "manual",
+      },
+      dedupeKey: `assist-creada-${assistance.id}`,
+    });
+
     // Si en la creación se rellenó el Back Office, copiarlo a la nueva asistencia
     if (backofficeHasData(body.backoffice)) {
       try {
@@ -7642,6 +7722,48 @@ app.post(
 
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
+      /*
+       * Diario. Después de contestar: la timeline es importante pero no tanto
+       * como que el operario vea el cambio de estado sin esperar a un INSERT.
+       *
+       * La clave de deduplicación lleva la hora, así que un ida y vuelta entre
+       * dos estados deja las dos líneas — que es lo correcto: pasó de verdad.
+       */
+      /*
+       * El estado administrativo depende de si el servicio ha terminado: hasta
+       * entonces no se reclama papeleo. Al cambiar de estado hay que
+       * recalcularlo o una asistencia recién finalizada se quedaría sin
+       * aparecer como pendiente de albarán.
+       */
+      void recalcularEstadoAdmin("assist", id)
+        .catch((e) => console.error("estado administrativo:", e?.message));
+
+      /*
+       * Al terminar el servicio se mira qué documentación falta y se programa
+       * que se pida. No manda nada aquí: encolarlo es lo que permite que la
+       * cadencia sea de días y que no salgan cuatro correos si el estado se
+       * toca cuatro veces.
+       */
+      if (status === "finalizada") {
+        void revisarDocumentacionAlFinalizar(
+          "assist", id, (req as any).assistPanelUser?.tallerId ?? null,
+        ).catch((e) => console.error("revisión de documentación:", e?.message));
+      }
+
+      const tipoDiario = tipoDesdeEstadoAssist(status);
+      if (tipoDiario) {
+        void registrarEventoAsistencia({
+          system: "assist",
+          tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+          assistanceId: id,
+          eventType: tipoDiario,
+          actorType: "user",
+          actorName: (req as any).authCtx?.nombre ?? null,
+          occurredAtMs: now,
+          payload: { estado: status, tecnico: updated.assignedTechName || null },
+          dedupeKey: `assist-estado-${id}-${status}-${now}`,
+        });
+      }
 
       // ── WhatsApp con deduplicación ─────────────────────────────────────────
       if (status === "asignada" && updated.customerPhone && !updated.whatsappAsignadaSentAtMs) {
@@ -7819,14 +7941,43 @@ app.post(
         [id, kind, publicData.publicUrl, req.file.originalname, Date.now(), detectedPlate]
       );
 
+      /*
+       * Y al registro de documentos, que es donde viven el tipo y la
+       * visibilidad. La tabla de arriba sigue siendo la que lee la galería de
+       * fotos actual; ésta es la que sabe si un fichero se puede enseñar a otra
+       * plataforma y si el expediente tiene ya lo que necesita.
+       *
+       * No puede tumbar la subida: el fichero ya está guardado y en Supabase.
+       */
+      void registrarDocumentoDeAssist({
+        system: "assist",
+        tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+        assistanceId: id,
+        tipo: tipoDocumentoDesdeKind(kind),
+        origen: "propio",
+        url: publicData.publicUrl,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype ?? null,
+        legacyFileId: Number(result.rows[0]?.id) || null,
+        uploadedBy: (req as any).authCtx?.nombre ?? null,
+      }).then(() => resolverRecordatoriosPorDocumentos("assist", id))
+        .catch((e) => console.error("registro de documento:", e?.message));
+
       // Si en la foto del camión también sale matrícula roja → asignar al remolque
       // automáticamente (registro matricula_remolque apuntando a la misma foto)
       if (kind === "matricula_camion" && detectedRemolquePlate) {
-        await db.query(
+        const remolque = await db.query(
           `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs", "detectedPlate")
-           VALUES ($1, 'matricula_remolque', $2, $3, $4, $5)`,
+           VALUES ($1, 'matricula_remolque', $2, $3, $4, $5) RETURNING id, "createdAtMs"`,
           [id, publicData.publicUrl, req.file.originalname, Date.now() + 1, detectedRemolquePlate]
         );
+        // Al catálogo también: es un fichero más de la asistencia, aunque
+        // apunte a la misma foto que el del camión.
+        void registrarFicheroDeAssist({
+          fileId: remolque.rows[0].id, assistanceId: id, kind: "matricula_remolque",
+          url: publicData.publicUrl, fileName: req.file.originalname,
+          createdAtMs: Number(remolque.rows[0].createdAtMs),
+        });
       }
 
       let plateAction: "none" | "assigned" | "match" | "mismatch" = "none";
@@ -7919,6 +8070,12 @@ app.post(
         [id, kind, publicData.publicUrl, filename, Date.now()]
       );
 
+      void registrarFicheroDeAssist({
+        fileId: result.rows[0].id, assistanceId: id, kind,
+        url: publicData.publicUrl, fileName: filename,
+        createdAtMs: Number(result.rows[0].createdAtMs),
+      });
+
       res.json({ file: result.rows[0] });
     } catch (error: any) {
       console.error("POST /api/roadside-assistances/:id/files-from-url error:", error);
@@ -7927,11 +8084,28 @@ app.post(
   }
 );
 
+/**
+ * La galería de una asistencia.
+ *
+ * Sigue leyendo `roadside_assistance_files`, que es donde vive el fichero, y
+ * le añade del catálogo lo que el catálogo sabe: el tipo y con quién está
+ * compartido.
+ *
+ * El JOIN es POR LA IZQUIERDA a propósito. Leer del catálogo y ya está sería
+ * más limpio de contar, pero una foto que por lo que sea no esté catalogada
+ * desaparecería de la pantalla sin que nadie se entere, y una foto que no se
+ * ve es una foto perdida. Así, como mucho, sale sin etiqueta.
+ */
 app.get("/api/roadside-assistances/:id/files", protectWhenStrict(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
     const result = await db.query(
-      `SELECT * FROM roadside_assistance_files WHERE "assistanceId" = $1 ORDER BY "createdAtMs" ASC`,
+      `SELECT f.*, d.tipo AS "tipoDocumento", d.visibilidad, d.uuid AS "documentoUuid"
+         FROM roadside_assistance_files f
+         LEFT JOIN assistance_documents d
+           ON d."legacyFileId" = f.id AND d."sourceSystem" = 'assist'
+        WHERE f."assistanceId" = $1
+        ORDER BY f."createdAtMs" ASC`,
       [id]
     );
     res.json(result.rows);
@@ -7954,6 +8128,12 @@ app.delete(
       if (result.rows.length === 0) {
         return res.status(404).json({ error: "Archivo no encontrado" });
       }
+      /*
+       * Y del catálogo. Sin esto, la foto desaparecería de la pantalla y de
+       * ningún sitio más: seguiría contando para el estado administrativo y
+       * seguiría compartida con quien subcontrató el servicio.
+       */
+      await olvidarFicheroDeAssist(fileId);
       res.json({ deleted: true });
     } catch (error) {
       console.error("DELETE /api/roadside-assistances/:id/files/:fileId error:", error);
@@ -9316,6 +9496,593 @@ app.post(
 );
 
 /* ── Companies ── */
+
+/* =========================================================
+   SUBCONTRATACIÓN — proveedores, sus talleres, contactos y
+   clientes de facturación, desde el panel de Mobilink Assist.
+
+   Las tablas son LAS MISMAS que usa Connect Pro
+   (connect_provider_companies, connect_workshops,
+   connect_workshop_contacts, connect_clients). Aquí no se
+   copia ni un dato: lo único que cambia es la puerta de
+   entrada, porque el panel de Assist se autentica con su
+   propio rol y Connect con sesión de Supabase. Dos puertas,
+   un solo almacén — duplicar las tablas habría creado dos
+   verdades sobre el mismo taller.
+   ========================================================= */
+
+/**
+ * Valida un email. Devuelve el mensaje de error, o null si vale o si viene
+ * vacío: no todos los contactos tienen correo, pero uno mal escrito no falla
+ * hasta que hace falta mandar el aviso, que es el peor momento posible.
+ */
+function emailNoValido(valor: unknown): string | null {
+  const email = String(valor ?? "").trim();
+  if (!email) return null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? null : `El email "${email}" no es válido`;
+}
+
+/** Lista de proveedores. Con `q` busca por lo que uno tiene a mano. */
+app.get("/api/proveedores", requireSupervisorRole, async (req, res) => {
+  try {
+    const q = String(req.query.q ?? "").trim();
+    const r = await db.query(
+      `SELECT pc.*,
+              (SELECT COUNT(*)::int FROM connect_workshops w
+                WHERE w."providerCompanyId" = pc.id) AS talleres,
+              m.system AS "erpSystem", m.external_code AS "erpCode",
+              COALESCE(m.sync_status, 'not_synced') AS "erpSyncStatus",
+              m.last_sync_at_ms AS "erpLastSyncAtMs", m.last_sync_error AS "erpLastSyncError"
+         FROM connect_provider_companies pc
+         LEFT JOIN LATERAL (
+           SELECT * FROM integration_mappings im
+            WHERE im.entity_type = 'provider' AND im.mobilink_id = pc.id::text
+            ORDER BY im.updated_at_ms DESC LIMIT 1
+         ) m ON true
+        WHERE pc."deletedAtMs" IS NULL
+          AND ($1 = '' OR pc.name ILIKE '%' || $1 || '%'
+                       OR pc."legalName" ILIKE '%' || $1 || '%'
+                       OR pc."commercialName" ILIKE '%' || $1 || '%'
+                       OR pc."taxId" ILIKE '%' || $1 || '%'
+                       OR pc.city ILIKE '%' || $1 || '%'
+                       OR pc.province ILIKE '%' || $1 || '%'
+                       OR pc."contactPhone" ILIKE '%' || $1 || '%')
+        ORDER BY pc.name`,
+      [q],
+    );
+    res.json({ data: r.rows });
+  } catch (e: any) {
+    console.error("GET /api/proveedores error:", e?.message);
+    res.status(500).json({ error: "Error listando proveedores" });
+  }
+});
+
+app.get("/api/proveedores/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Id no válido" });
+    const r = await db.query(
+      `SELECT * FROM connect_provider_companies WHERE id = $1 AND "deletedAtMs" IS NULL`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: "Proveedor no encontrado" });
+    const talleres = await db.query(
+      `SELECT * FROM connect_workshops WHERE "providerCompanyId" = $1 ORDER BY name`, [id]);
+    const contactos = await db.query(
+      `SELECT * FROM connect_workshop_contacts
+        WHERE "ownerType" = 'provider' AND "ownerId" = $1
+        ORDER BY "isPrimary" DESC, active DESC, name`, [id]);
+    res.json({ proveedor: r.rows[0], talleres: talleres.rows, contactos: contactos.rows });
+  } catch (e: any) {
+    console.error("GET /api/proveedores/:id error:", e?.message);
+    res.status(500).json({ error: "Error cargando el proveedor" });
+  }
+});
+
+app.post("/api/proveedores", requireAdminRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const name = String(b.name ?? "").trim();
+    if (!name) return res.status(422).json({ error: "El nombre es obligatorio" });
+    const emailMal = emailNoValido(b.contactEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    // Aviso, no bloqueo: dos empresas del grupo pueden compartir CIF en los
+    // datos viejos, y negarse a darlas de alta pararía el trabajo.
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO connect_provider_companies
+         (uuid, name, "legalName", "commercialName", "taxId", address, "postalCode", city,
+          province, country, web, "contactEmail", "contactPhone", "billingEmail",
+          "paymentTerms", "paymentMethod", notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)
+       RETURNING *`,
+      [crypto.randomUUID(), name, b.legalName ?? null, b.commercialName ?? null, b.taxId ?? null,
+       b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+       b.country ?? null, b.web ?? null, b.contactEmail ?? null, b.contactPhone ?? null,
+       b.billingEmail ?? null, b.paymentTerms ?? null, b.paymentMethod ?? null, b.notes ?? null, now],
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e: any) {
+    console.error("POST /api/proveedores error:", e?.message);
+    res.status(500).json({ error: "Error creando el proveedor" });
+  }
+});
+
+app.patch("/api/proveedores/:id", requireAdminRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const emailMal = emailNoValido(b.contactEmail) ?? emailNoValido(b.billingEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const r = await db.query(
+      `UPDATE connect_provider_companies SET
+         name = COALESCE($2, name), "legalName" = COALESCE($3, "legalName"),
+         "commercialName" = COALESCE($4, "commercialName"), "taxId" = COALESCE($5, "taxId"),
+         address = COALESCE($6, address), "postalCode" = COALESCE($7, "postalCode"),
+         city = COALESCE($8, city), province = COALESCE($9, province),
+         country = COALESCE($10, country), web = COALESCE($11, web),
+         "contactEmail" = COALESCE($12, "contactEmail"), "contactPhone" = COALESCE($13, "contactPhone"),
+         "billingEmail" = COALESCE($14, "billingEmail"),
+         "paymentTerms" = COALESCE($15, "paymentTerms"), "paymentMethod" = COALESCE($16, "paymentMethod"),
+         status = COALESCE($17, status), notes = COALESCE($18, notes),
+         "updatedAtMs" = $19
+       WHERE id = $1 AND "deletedAtMs" IS NULL RETURNING *`,
+      [Number(req.params.id), b.name ?? null, b.legalName ?? null, b.commercialName ?? null,
+       b.taxId ?? null, b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+       b.country ?? null, b.web ?? null, b.contactEmail ?? null, b.contactPhone ?? null,
+       b.billingEmail ?? null, b.paymentTerms ?? null, b.paymentMethod ?? null,
+       b.status ?? null, b.notes ?? null, Date.now()],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Proveedor no encontrado" });
+    res.json(r.rows[0]);
+  } catch (e: any) {
+    console.error("PATCH /api/proveedores/:id error:", e?.message);
+    res.status(500).json({ error: "Error guardando el proveedor" });
+  }
+});
+
+/**
+ * Listas de la ficha del taller (provincias, códigos postales, tipos de
+ * vehículo): el panel las manda separadas por comas y se guardan como JSON.
+ * `null` cuando no viene nada, para que el COALESCE conserve lo que había;
+ * cadena vacía sí es una orden de vaciarla.
+ */
+function listaComoJson(valor: unknown): string | null {
+  if (valor == null) return null;
+  if (Array.isArray(valor)) return JSON.stringify(valor.map((v) => String(v).trim()).filter(Boolean));
+  const texto = String(valor).trim();
+  if (!texto) return "[]";
+  return JSON.stringify(texto.split(",").map((v) => v.trim()).filter(Boolean));
+}
+
+/** Talleres/centros de un proveedor. */
+app.get("/api/proveedores/:id/talleres", requireSupervisorRole, async (req, res) => {
+  try {
+    const soloActivos = String(req.query.soloActivos ?? "") === "true";
+    const r = await db.query(
+      `SELECT * FROM connect_workshops
+        WHERE "providerCompanyId" = $1 AND ($2 = false OR active = true)
+        ORDER BY name`,
+      [Number(req.params.id), soloActivos],
+    );
+    res.json({ data: r.rows });
+  } catch (e: any) {
+    console.error("GET /api/proveedores/:id/talleres error:", e?.message);
+    res.status(500).json({ error: "Error listando los talleres" });
+  }
+});
+
+app.post("/api/proveedores/:id/talleres", requireAdminRole, async (req, res) => {
+  try {
+    const providerId = Number(req.params.id);
+    const b = req.body ?? {};
+    const name = String(b.name ?? "").trim();
+    if (!name) return res.status(422).json({ error: "El nombre del taller es obligatorio" });
+    const prov = await db.query(
+      `SELECT status FROM connect_provider_companies WHERE id = $1 AND "deletedAtMs" IS NULL`, [providerId]);
+    if (!prov.rows[0]) return res.status(404).json({ error: "El proveedor no existe" });
+    const emailMal = emailNoValido(b.email) ?? emailNoValido(b.assistanceEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const now = Date.now();
+    // Latitud y longitud son obligatorias en la tabla (la red busca por
+    // cercanía); sin coordenadas se guarda en 0,0 y se corrige al geocodificar.
+    const r = await db.query(
+      `INSERT INTO connect_workshops
+         ("providerCompanyId", name, phone, latitude, longitude, address, "postalCode",
+          city, province, country, email, "assistanceEmail", "adminEmail", "billingEmail",
+          "deliveryNoteEmail", "emergencyPhone", "openingHours", "open24h", active,
+          "integrationType", "networkParticipation", notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+               'external', false, $20, $21, $21)
+       RETURNING *`,
+      [providerId, name, b.phone ?? null,
+       Number.isFinite(Number(b.latitude)) ? Number(b.latitude) : 0,
+       Number.isFinite(Number(b.longitude)) ? Number(b.longitude) : 0,
+       b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+       b.country ?? null, b.email ?? null, b.assistanceEmail ?? null, b.adminEmail ?? null,
+       b.billingEmail ?? null, b.deliveryNoteEmail ?? null, b.emergencyPhone ?? null,
+       b.openingHours ?? null, b.open24h === true, b.active !== false, b.notes ?? null, now],
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e: any) {
+    console.error("POST /api/proveedores/:id/talleres error:", e?.message);
+    res.status(500).json({ error: "Error creando el taller" });
+  }
+});
+
+app.patch("/api/proveedor-talleres/:id", requireAdminRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const emailMal = emailNoValido(b.email) ?? emailNoValido(b.assistanceEmail)
+      ?? emailNoValido(b.adminEmail) ?? emailNoValido(b.billingEmail) ?? emailNoValido(b.deliveryNoteEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const r = await db.query(
+      `UPDATE connect_workshops SET
+         name = COALESCE($2, name), phone = COALESCE($3, phone),
+         address = COALESCE($4, address), "postalCode" = COALESCE($5, "postalCode"),
+         city = COALESCE($6, city), province = COALESCE($7, province),
+         country = COALESCE($8, country), email = COALESCE($9, email),
+         "assistanceEmail" = COALESCE($10, "assistanceEmail"),
+         "adminEmail" = COALESCE($11, "adminEmail"),
+         "billingEmail" = COALESCE($12, "billingEmail"),
+         "deliveryNoteEmail" = COALESCE($13, "deliveryNoteEmail"),
+         "emergencyPhone" = COALESCE($14, "emergencyPhone"),
+         "openingHours" = COALESCE($15, "openingHours"),
+         "open24h" = COALESCE($16, "open24h"), active = COALESCE($17, active),
+         "coverageProvinces" = COALESCE($18, "coverageProvinces"),
+         "coveragePostalCodes" = COALESCE($19, "coveragePostalCodes"),
+         "vehicleTypes" = COALESCE($20, "vehicleTypes"),
+         "avgResponseMinutes" = COALESCE($21, "avgResponseMinutes"),
+         "authorizationLimit" = COALESCE($22, "authorizationLimit"),
+         latitude = COALESCE($23, latitude), longitude = COALESCE($24, longitude),
+         notes = COALESCE($25, notes), "updatedAtMs" = $26
+       WHERE id = $1 RETURNING *`,
+      [Number(req.params.id), b.name ?? null, b.phone ?? null, b.address ?? null,
+       b.postalCode ?? null, b.city ?? null, b.province ?? null, b.country ?? null,
+       b.email ?? null, b.assistanceEmail ?? null, b.adminEmail ?? null, b.billingEmail ?? null,
+       b.deliveryNoteEmail ?? null, b.emergencyPhone ?? null, b.openingHours ?? null,
+       typeof b.open24h === "boolean" ? b.open24h : null,
+       typeof b.active === "boolean" ? b.active : null,
+       listaComoJson(b.coverageProvinces), listaComoJson(b.coveragePostalCodes),
+       listaComoJson(b.vehicleTypes),
+       b.avgResponseMinutes != null && b.avgResponseMinutes !== "" ? Number(b.avgResponseMinutes) : null,
+       b.authorizationLimit != null && b.authorizationLimit !== "" ? Number(b.authorizationLimit) : null,
+       Number.isFinite(Number(b.latitude)) && b.latitude !== "" ? Number(b.latitude) : null,
+       Number.isFinite(Number(b.longitude)) && b.longitude !== "" ? Number(b.longitude) : null,
+       b.notes ?? null, Date.now()],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Taller no encontrado" });
+    res.json(r.rows[0]);
+  } catch (e: any) {
+    console.error("PATCH /api/proveedor-talleres/:id error:", e?.message);
+    res.status(500).json({ error: "Error guardando el taller" });
+  }
+});
+
+/**
+ * Asigna (o cambia) el proveedor, el taller, el contacto y el cliente de
+ * facturación de una asistencia.
+ *
+ * Va en su propio endpoint y no dentro del alta porque el alta es un INSERT
+ * posicional de treinta y tantos parámetros: meter cuatro más ahí es la clase
+ * de cambio que desplaza un dato a la columna de al lado sin dar ningún error.
+ *
+ * Al guardar se congela el snapshot de cómo eran esas fichas en ese momento.
+ */
+app.patch("/api/roadside-assistances/:id/subcontrata", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Id no válido" });
+    const b = req.body ?? {};
+
+    const tallerId = b.proveedorTallerId != null ? Number(b.proveedorTallerId) : null;
+    if (tallerId != null) {
+      const t = await db.query(
+        `SELECT w.id, w.active, w."providerCompanyId", pc.status AS "estadoProveedor"
+           FROM connect_workshops w
+           LEFT JOIN connect_provider_companies pc ON pc.id = w."providerCompanyId"
+          WHERE w.id = $1`, [tallerId]);
+      if (!t.rows[0]) return res.status(404).json({ error: "El taller no existe" });
+      // Se avisa, pero NO se bloquea reasignar una asistencia antigua a un
+      // taller dado de baja: el histórico tiene que poder repararse.
+      if (t.rows[0].active === false) {
+        console.warn(`Asistencia #${id}: taller ${tallerId} inactivo`);
+      }
+    }
+
+    const r = await db.query(
+      `UPDATE roadside_assistances SET
+         "proveedorId" = $2, "proveedorTallerId" = $3,
+         "proveedorContactoId" = $4, "clienteFacturacionId" = $5,
+         "updatedAtMs" = $6
+       WHERE id = $1 RETURNING *`,
+      [id,
+       b.proveedorId != null ? Number(b.proveedorId) : null,
+       tallerId,
+       b.proveedorContactoId != null ? Number(b.proveedorContactoId) : null,
+       b.clienteFacturacionId != null ? Number(b.clienteFacturacionId) : null,
+       Date.now()],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Asistencia no encontrada" });
+
+    await guardarSnapshotSubcontrata(id);
+    const fresca = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [id]);
+    res.json(normalizeRoadsideAssistanceRow(fresca.rows[0]));
+  } catch (e: any) {
+    console.error("PATCH /api/roadside-assistances/:id/subcontrata error:", e?.message);
+    res.status(500).json({ error: "Error guardando la subcontratación" });
+  }
+});
+
+/**
+ * Congela cómo eran proveedor, taller y contacto en el momento del servicio.
+ * Best-effort a propósito: si falla, la asignación NO se deshace. Perder el
+ * snapshot es molesto; dejar una asistencia sin taller asignado es peor.
+ */
+async function guardarSnapshotSubcontrata(assistanceId: number) {
+  try {
+    const r = await db.query(
+      `SELECT
+         pc.name AS "proveedorNombre", pc."legalName" AS "proveedorRazonSocial",
+         pc."taxId" AS "proveedorCif", pc."contactPhone" AS "proveedorTelefono",
+         w.name AS "tallerNombre", w.address AS "tallerDireccion",
+         w."postalCode" AS "tallerCp", w.city AS "tallerPoblacion", w.province AS "tallerProvincia",
+         w.phone AS "tallerTelefono", w."emergencyPhone" AS "tallerUrgencias",
+         COALESCE(w."assistanceEmail", w.email) AS "tallerEmail",
+         c.name AS "contactoNombre", c.surname AS "contactoApellidos",
+         c.phone AS "contactoTelefono", c.mobile AS "contactoMovil", c.email AS "contactoEmail",
+         cf.name AS "clienteFacturacionNombre", cf."taxId" AS "clienteFacturacionCif"
+       FROM roadside_assistances a
+       LEFT JOIN connect_provider_companies pc ON pc.id = a."proveedorId"
+       LEFT JOIN connect_workshops w ON w.id = a."proveedorTallerId"
+       LEFT JOIN connect_workshop_contacts c ON c.id = a."proveedorContactoId"
+       LEFT JOIN connect_clients cf ON cf.id = a."clienteFacturacionId"
+       WHERE a.id = $1`,
+      [assistanceId],
+    );
+    const fila = r.rows[0];
+    if (!fila) return;
+    const datos = Object.fromEntries(Object.entries(fila).filter(([, v]) => v != null));
+    if (Object.keys(datos).length === 0) return;
+    await db.query(
+      `UPDATE roadside_assistances
+          SET "subcontrataSnapshot" = $2, "subcontrataSnapshotAtMs" = $3
+        WHERE id = $1`,
+      [assistanceId, JSON.stringify(datos), Date.now()],
+    );
+  } catch (e: any) {
+    console.error("snapshot de subcontratación:", e?.message);
+  }
+}
+
+/* ── Contactos: cuelgan de un taller, un proveedor o un cliente ── */
+
+const OWNERS_CONTACTO = ["workshop", "provider", "client"];
+
+app.get("/api/contactos", requireSupervisorRole, async (req, res) => {
+  try {
+    const ownerType = String(req.query.ownerType ?? "");
+    const ownerId = Number(req.query.ownerId);
+    if (!OWNERS_CONTACTO.includes(ownerType)) {
+      return res.status(422).json({ error: "ownerType debe ser workshop, provider o client" });
+    }
+    if (!Number.isFinite(ownerId)) return res.status(422).json({ error: "ownerId no válido" });
+    const r = await db.query(
+      `SELECT * FROM connect_workshop_contacts
+        WHERE "ownerType" = $1 AND "ownerId" = $2
+        ORDER BY "isPrimary" DESC, active DESC, name`,
+      [ownerType, ownerId],
+    );
+    res.json({ data: r.rows });
+  } catch (e: any) {
+    console.error("GET /api/contactos error:", e?.message);
+    res.status(500).json({ error: "Error listando contactos" });
+  }
+});
+
+app.post("/api/contactos", requireSupervisorRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const ownerType = String(b.ownerType ?? "");
+    const ownerId = Number(b.ownerId);
+    const name = String(b.name ?? "").trim();
+    if (!OWNERS_CONTACTO.includes(ownerType)) {
+      return res.status(422).json({ error: "ownerType debe ser workshop, provider o client" });
+    }
+    if (!Number.isFinite(ownerId)) return res.status(422).json({ error: "ownerId no válido" });
+    if (!name) return res.status(422).json({ error: "El nombre es obligatorio" });
+    const emailMal = emailNoValido(b.email);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO connect_workshop_contacts
+         ("ownerType", "ownerId", "workshopId", name, surname, role, phone, mobile, email,
+          "contactType", "isPrimary", "forAssistance", "forAdmin", "forBilling", "forEmergency",
+          notes, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17) RETURNING *`,
+      [ownerType, ownerId,
+       // Los de taller conservan workshopId: lo que ya consultaba por esa
+       // columna los sigue encontrando sin tocar ni una consulta.
+       ownerType === "workshop" ? ownerId : null,
+       name, b.surname ?? null, b.role ?? null, b.phone ?? null, b.mobile ?? null, b.email ?? null,
+       b.contactType ?? null, b.isPrimary === true, b.forAssistance === true,
+       b.forAdmin === true, b.forBilling === true, b.forEmergency === true, b.notes ?? null, now],
+    );
+    // Un solo principal por ficha.
+    if (b.isPrimary === true) {
+      await db.query(
+        `UPDATE connect_workshop_contacts SET "isPrimary" = false
+          WHERE "ownerType" = $1 AND "ownerId" = $2 AND id <> $3`,
+        [ownerType, ownerId, r.rows[0].id],
+      );
+    }
+    res.status(201).json(r.rows[0]);
+  } catch (e: any) {
+    console.error("POST /api/contactos error:", e?.message);
+    res.status(500).json({ error: "Error creando el contacto" });
+  }
+});
+
+app.patch("/api/contactos/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const emailMal = emailNoValido(b.email);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const r = await db.query(
+      `UPDATE connect_workshop_contacts SET
+         name = COALESCE($2, name), surname = COALESCE($3, surname),
+         role = COALESCE($4, role), phone = COALESCE($5, phone),
+         mobile = COALESCE($6, mobile), email = COALESCE($7, email),
+         "contactType" = COALESCE($8, "contactType"),
+         "isPrimary" = COALESCE($9, "isPrimary"),
+         "forAssistance" = COALESCE($10, "forAssistance"),
+         "forAdmin" = COALESCE($11, "forAdmin"),
+         "forBilling" = COALESCE($12, "forBilling"),
+         "forEmergency" = COALESCE($13, "forEmergency"),
+         active = COALESCE($14, active), notes = COALESCE($15, notes),
+         "updatedAtMs" = $16
+       WHERE id = $1 RETURNING *`,
+      [Number(req.params.id), b.name ?? null, b.surname ?? null, b.role ?? null,
+       b.phone ?? null, b.mobile ?? null, b.email ?? null, b.contactType ?? null,
+       typeof b.isPrimary === "boolean" ? b.isPrimary : null,
+       typeof b.forAssistance === "boolean" ? b.forAssistance : null,
+       typeof b.forAdmin === "boolean" ? b.forAdmin : null,
+       typeof b.forBilling === "boolean" ? b.forBilling : null,
+       typeof b.forEmergency === "boolean" ? b.forEmergency : null,
+       typeof b.active === "boolean" ? b.active : null, b.notes ?? null, Date.now()],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Contacto no encontrado" });
+    if (b.isPrimary === true) {
+      await db.query(
+        `UPDATE connect_workshop_contacts SET "isPrimary" = false
+          WHERE "ownerType" = $1 AND "ownerId" = $2 AND id <> $3`,
+        [r.rows[0].ownerType, r.rows[0].ownerId, r.rows[0].id],
+      );
+    }
+    res.json(r.rows[0]);
+  } catch (e: any) {
+    console.error("PATCH /api/contactos/:id error:", e?.message);
+    res.status(500).json({ error: "Error guardando el contacto" });
+  }
+});
+
+/* ── Clientes de facturación ── */
+
+app.get("/api/clientes-facturacion", requireSupervisorRole, async (req, res) => {
+  try {
+    const q = String(req.query.q ?? "").trim();
+    const r = await db.query(
+      `SELECT c.*,
+              m.system AS "erpSystem", m.external_code AS "erpCode",
+              COALESCE(m.sync_status, 'not_synced') AS "erpSyncStatus",
+              m.last_sync_at_ms AS "erpLastSyncAtMs", m.last_sync_error AS "erpLastSyncError"
+         FROM connect_clients c
+         LEFT JOIN LATERAL (
+           SELECT * FROM integration_mappings im
+            WHERE im.entity_type = 'customer' AND im.mobilink_id = c.id::text
+            ORDER BY im.updated_at_ms DESC LIMIT 1
+         ) m ON true
+        WHERE ($1 = '' OR c.name ILIKE '%' || $1 || '%'
+                       OR c."legalName" ILIKE '%' || $1 || '%'
+                       OR c."taxId" ILIKE '%' || $1 || '%'
+                       OR c.city ILIKE '%' || $1 || '%')
+        ORDER BY c.name`,
+      [q],
+    );
+    res.json({ data: r.rows });
+  } catch (e: any) {
+    console.error("GET /api/clientes-facturacion error:", e?.message);
+    res.status(500).json({ error: "Error listando clientes" });
+  }
+});
+
+app.get("/api/clientes-facturacion/:id", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await db.query(`SELECT * FROM connect_clients WHERE id = $1`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: "Cliente no encontrado" });
+    const contactos = await db.query(
+      `SELECT * FROM connect_workshop_contacts
+        WHERE "ownerType" = 'client' AND "ownerId" = $1
+        ORDER BY "isPrimary" DESC, active DESC, name`, [id]);
+    res.json({ cliente: r.rows[0], contactos: contactos.rows });
+  } catch (e: any) {
+    console.error("GET /api/clientes-facturacion/:id error:", e?.message);
+    res.status(500).json({ error: "Error cargando el cliente" });
+  }
+});
+
+app.post("/api/clientes-facturacion", requireAdminRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const name = String(b.name ?? "").trim();
+    if (!name) return res.status(422).json({ error: "El nombre es obligatorio" });
+    const emailMal = emailNoValido(b.contactEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const taxId = String(b.taxId ?? "").trim();
+    if (taxId) {
+      const dup = await db.query(`SELECT id, name FROM connect_clients WHERE "taxId" ILIKE $1`, [taxId]);
+      if (dup.rows[0]) {
+        return res.status(409).json({
+          error: `Ya existe un cliente con ese CIF: ${dup.rows[0].name}`,
+        });
+      }
+    }
+    const now = Date.now();
+    const r = await db.query(
+      `INSERT INTO connect_clients
+         (name, "legalName", "commercialName", "taxId", address, "postalCode", city, province,
+          country, currency, "contactEmail", "contactPhone", notes, active, "createdAtMs", "updatedAtMs")
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,'EUR'),$11,$12,$13,true,$14,$14) RETURNING *`,
+      [name, b.legalName ?? null, b.commercialName ?? null, taxId || null, b.address ?? null,
+       b.postalCode ?? null, b.city ?? null, b.province ?? null, b.country ?? null,
+       b.currency ?? null, b.contactEmail ?? null, b.contactPhone ?? null, b.notes ?? null, now],
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e: any) {
+    console.error("POST /api/clientes-facturacion error:", e?.message);
+    res.status(500).json({ error: "Error creando el cliente" });
+  }
+});
+
+app.patch("/api/clientes-facturacion/:id", requireAdminRole, async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const emailMal = emailNoValido(b.contactEmail);
+    if (emailMal) return res.status(422).json({ error: emailMal });
+    const r = await db.query(
+      `UPDATE connect_clients SET
+         name = COALESCE($2, name), "legalName" = COALESCE($3, "legalName"),
+         "commercialName" = COALESCE($4, "commercialName"), "taxId" = COALESCE($5, "taxId"),
+         address = COALESCE($6, address), "postalCode" = COALESCE($7, "postalCode"),
+         city = COALESCE($8, city), province = COALESCE($9, province),
+         country = COALESCE($10, country), currency = COALESCE($11, currency),
+         "paymentMethod" = COALESCE($12, "paymentMethod"), "paymentTerms" = COALESCE($13, "paymentTerms"),
+         "billingPeriodicity" = COALESCE($14, "billingPeriodicity"),
+         "billingGrouped" = COALESCE($15, "billingGrouped"),
+         "referenceRequired" = COALESCE($16, "referenceRequired"),
+         "purchaseOrderRequired" = COALESCE($17, "purchaseOrderRequired"),
+         "costCenter" = COALESCE($18, "costCenter"), project = COALESCE($19, project),
+         "billingSeries" = COALESCE($20, "billingSeries"), "taxConfig" = COALESCE($21, "taxConfig"),
+         "billingNotes" = COALESCE($22, "billingNotes"),
+         "contactEmail" = COALESCE($23, "contactEmail"), "contactPhone" = COALESCE($24, "contactPhone"),
+         active = COALESCE($25, active), notes = COALESCE($26, notes), "updatedAtMs" = $27
+       WHERE id = $1 RETURNING *`,
+      [Number(req.params.id), b.name ?? null, b.legalName ?? null, b.commercialName ?? null,
+       b.taxId ?? null, b.address ?? null, b.postalCode ?? null, b.city ?? null, b.province ?? null,
+       b.country ?? null, b.currency ?? null, b.paymentMethod ?? null, b.paymentTerms ?? null,
+       b.billingPeriodicity ?? null,
+       typeof b.billingGrouped === "boolean" ? b.billingGrouped : null,
+       typeof b.referenceRequired === "boolean" ? b.referenceRequired : null,
+       typeof b.purchaseOrderRequired === "boolean" ? b.purchaseOrderRequired : null,
+       b.costCenter ?? null, b.project ?? null, b.billingSeries ?? null, b.taxConfig ?? null,
+       b.billingNotes ?? null, b.contactEmail ?? null, b.contactPhone ?? null,
+       typeof b.active === "boolean" ? b.active : null, b.notes ?? null, Date.now()],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: "Cliente no encontrado" });
+    res.json(r.rows[0]);
+  } catch (e: any) {
+    console.error("PATCH /api/clientes-facturacion/:id error:", e?.message);
+    res.status(500).json({ error: "Error guardando el cliente" });
+  }
+});
 
 app.get("/api/companies", requireSupervisorRole, async (req, res) => {
   try {
@@ -14012,14 +14779,25 @@ app.post("/api/whatsapp-capture/sessions/:id/close", requireAdminRole, async (re
       if ((msg.message_type === "image" || msg.message_type === "video" || msg.message_type === "audio" || msg.message_type === "document") && (msg.media_stored_url || msg.media_url)) {
         const url = msg.media_stored_url || msg.media_url;
         // Evitar duplicados al reabrir y volver a cerrar la sesión: solo insertar si esa URL aún no está guardada
-        await db.query(
+        const nombreWa = `WhatsApp ${msg.message_type} ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}`;
+        const guardado = await db.query(
           `INSERT INTO roadside_assistance_files ("assistanceId", kind, url, "fileName", "createdAtMs")
            SELECT $1, $2, $3, $4, $5
            WHERE NOT EXISTS (
              SELECT 1 FROM roadside_assistance_files WHERE "assistanceId" = $1 AND url = $3
-           )`,
-          [jobId, `whatsapp_${msg.message_type}`, url, `WhatsApp ${msg.message_type} ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}`, now]
-        ).catch(() => {});
+           )
+           RETURNING id, "createdAtMs"`,
+          [jobId, `whatsapp_${msg.message_type}`, url, nombreWa, now]
+        ).catch(() => null);
+        // Solo si se ha insertado de verdad: al reabrir y cerrar la sesión no
+        // se inserta nada, y catalogar de nuevo sería contarlo dos veces.
+        if (guardado?.rows?.[0]) {
+          void registrarFicheroDeAssist({
+            fileId: guardado.rows[0].id, assistanceId: jobId,
+            kind: `whatsapp_${msg.message_type}`, url, fileName: nombreWa,
+            createdAtMs: Number(guardado.rows[0].createdAtMs),
+          });
+        }
       }
       if (msg.message_type === "text" && msg.text_content) {
         noteLines.push(`[WhatsApp ${new Date(Number(msg.received_at)).toLocaleTimeString("es-ES")}] ${msg.text_content}`);
@@ -17249,15 +18027,56 @@ app.get("/apps/:app", async (req, res) => {
 
 mountConnect(app, requireLicensesAdmin);
 
+/*
+ * Subcontratación a plataformas externas (Assist → Central A/B, y más
+ * adelante Central → Central). Va aparte de Connect a propósito: Connect es
+ * el que RECIBE, esto es el que ENVÍA, y meterlos juntos acabaría con un
+ * módulo que se llama a sí mismo.
+ */
+app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
+app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRole));
+mountCorreo(app, requireSupervisorRole);
+app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
+
 // Asistente virtual de TyreControl (function calling sobre herramientas de
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
 mountAsistente(app, authenticate, requireModule("tyrecontrol"));
+
+// Identificar un neumático por la foto de su flanco durante una revisión.
+// Solo propone: guardar lo decide el técnico. Ver server/tyrecontrol/flanco/.
+mountFlanco(app, authenticate, requireModule("tyrecontrol"));
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
 
 app.use(express.static(path.join(__dirname, "../dist")));
+
+/*
+ * Un trozo que no existe es un 404, no el index.html.
+ *
+ * El panel carga cada sub-aplicación con `lazy()`, y el nombre del trozo lleva
+ * un hash que cambia en cada compilación: /assets/TyreControlApp-<hash>.js.
+ * Quien tuviera la pestaña abierta durante un despliegue sigue con el
+ * index.html viejo en memoria y pide un trozo que aquí ya no está.
+ *
+ * Con el catch-all de abajo a secas, esa petición se llevaba el index.html con
+ * un 200 y content-type text/html. Comprobado en Chromium contra el dist real:
+ * el navegador rechaza el módulo ("Expected a JavaScript-or-Wasm module script
+ * but the server responded with a MIME type of text/html"), el import se rompe
+ * en pleno render y React desmonta el árbol entero. Pantalla en blanco, y a
+ * refrescar a mano.
+ *
+ * Devolver 404 no arregla por sí solo la pantalla —eso lo hace
+ * RecuperarDespliegue en el panel, recargando— pero es lo que hace que el
+ * fallo se pueda reconocer en vez de disfrazarse de página.
+ *
+ * Se limita a /assets/ a propósito: ahí y solo ahí deja Vite lo que lleva
+ * hash, así que ninguna ruta del panel puede caer aquí por accidente.
+ */
+app.use("/assets", (_req, res) => {
+  res.status(404).type("text/plain").send("No existe. Seguramente es de una versión anterior del panel.");
+});
 
 app.get(/.*/, (_req, res) => {
   res.sendFile(path.join(__dirname, "../dist/index.html"));
@@ -17319,6 +18138,7 @@ async function activarEnCaminoAutomatico(
   const result = await db.query(
     `UPDATE roadside_assistances
      SET status = 'en_camino',
+         "enCaminoAutomatico" = true,
          "departedAtMs" = COALESCE("departedAtMs", $2),
          "etaMinutos" = COALESCE($3, "etaMinutos"),
          "etaKm" = COALESCE($4, "etaKm"),
@@ -17451,6 +18271,15 @@ initDb()
   .then(() => prepararEsquema("Integration Hub", initIntegrationHub))
   .then(() => prepararEsquema("Licencias", initLicenses))
   .then(() => prepararEsquema("Connect Pro", initConnect))
+  .then(() => prepararEsquema("Envíos externos", initDispatch))
+  // Después de Connect y de los envíos: su migración lee de las tablas de los
+  // dos para traerse el histórico que ya existía.
+  .then(() => prepararEsquema("Diario de asistencias", initEventLog))
+  // Después del diario: registrar un documento anota un evento.
+  .then(() => prepararEsquema("Documentos", initDocumentos))
+  // Después de documentos: los recordatorios miran qué documentación falta.
+  .then(() => prepararEsquema("Correo del expediente", initCorreo))
+  .then(() => prepararEsquema("Bandeja y costes", initExcepciones))
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))
@@ -17468,6 +18297,8 @@ initDb()
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
+      startDispatchWorker(); // reintentos de subcontratación a plataformas externas
+      startCorreoWorker(); // recordatorios de documentación pendiente
       startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
       startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
       // Mobilink Cash: eventos de dominio hacia MC Central. Sin transporte

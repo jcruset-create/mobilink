@@ -206,19 +206,82 @@ export default function Arqueo() {
           <div className="border-b border-slate-700 px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">
             Teórico actual
           </div>
+          {/*
+            El teórico se enseña con las mismas columnas que la rejilla de la
+            izquierda: sueltas, cartuchos y bolsas. Con un único «×25» no se
+            sabe si son veinticinco monedas por el cajón o un cartucho
+            precintado, y son dos cosas distintas a la hora de contar: el
+            cartucho no se abre, se cuenta como uno.
+          */}
+          <div className="flex items-center gap-3 border-b border-slate-700/60 px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+            {/* El hueco de la foto, para que el rótulo caiga sobre la etiqueta. */}
+            <span className="w-8 shrink-0" />
+            <span className="w-14">Denom.</span>
+            <span className="w-10 text-right">Sueltas</span>
+            <span className="w-10 text-right">Cart.</span>
+            <span className="w-10 text-right">Bols.</span>
+            <span className="ml-auto">Importe</span>
+          </div>
           <div className="divide-y divide-slate-700/60">
             {jornada.stock.length === 0 && (
               <p className="px-3 py-4 text-sm text-slate-500">La caja está a cero.</p>
             )}
             {jornada.stock.map((l) => {
               const d = denominaciones.find((x) => x.valor === l.valor);
+              const sueltas = (jornada.stockSueltas ?? []).find((x) => x.valor === l.valor)?.cantidad ?? 0;
+              const cart = (jornada.stockCartuchos ?? []).find((x) => x.valor === l.valor)?.cantidad ?? 0;
+              const bols = (jornada.stockBolsas ?? []).find((x) => x.valor === l.valor)?.cantidad ?? 0;
+              const precintado = cart > 0 || bols > 0;
               return (
                 <div key={l.valor} className="flex items-center gap-3 px-3 py-1.5">
-                  <span className="w-16 text-sm font-bold tabular-nums text-slate-200">
+                  {/*
+                    La misma foto del catálogo que lleva la rejilla de la
+                    izquierda, y delante del valor por lo mismo: un cajón se
+                    cuenta mirando las piezas, no leyendo importes, y con las
+                    dos columnas ilustradas igual la fila del teórico se
+                    empareja de un vistazo con la que se está tecleando.
+                    El hueco se reserva siempre —haya foto o no— para que las
+                    cifras de las dos columnas sigan alineadas.
+                  */}
+                  <span className="flex h-6 w-8 shrink-0 items-center justify-center">
+                    {d?.imagenUrl && (
+                      <img src={d.imagenUrl} alt="" className="max-h-6 max-w-8 object-contain" />
+                    )}
+                  </span>
+                  <span className="w-14 text-sm font-bold tabular-nums text-slate-200">
                     {d?.etiqueta ?? euros(l.valor)}
                   </span>
-                  <span className="text-lg font-black tabular-nums text-slate-100">×{l.cantidad}</span>
-                  <span className="ml-auto text-sm tabular-nums text-slate-400">{euros(l.valor * l.cantidad)}</span>
+                  <span className="w-10 text-right text-base font-black tabular-nums text-slate-100">
+                    {sueltas || "—"}
+                  </span>
+                  <span
+                    className={`w-10 text-right text-base font-black tabular-nums ${
+                      cart > 0 ? "text-sky-300" : "text-slate-600"
+                    }`}
+                    title={cart > 0 ? `${cart} × ${d?.piezasPorCartucho ?? "?"} piezas` : undefined}
+                  >
+                    {cart || "—"}
+                  </span>
+                  <span
+                    className={`w-10 text-right text-base font-black tabular-nums ${
+                      bols > 0 ? "text-sky-300" : "text-slate-600"
+                    }`}
+                    title={bols > 0 ? `${bols} × ${d?.piezasPorBolsa ?? "?"} piezas` : undefined}
+                  >
+                    {bols || "—"}
+                  </span>
+                  <span className="ml-auto text-right">
+                    <span className="block text-sm tabular-nums text-slate-400">
+                      {euros(l.valor * l.cantidad)}
+                    </span>
+                    {/* El total en piezas solo cuando hay precintos: si todo va
+                        suelto, ya está en la primera columna y repetirlo sobra. */}
+                    {precintado && (
+                      <span className="block text-[10px] tabular-nums text-slate-500">
+                        {l.cantidad} piezas
+                      </span>
+                    )}
+                  </span>
                 </div>
               );
             })}

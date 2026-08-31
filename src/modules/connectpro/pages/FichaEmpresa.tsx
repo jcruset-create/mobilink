@@ -11,6 +11,8 @@ import { useConnectAuth, hasRole } from "../contexts/ConnectAuthContext";
 import { PageTitle, Card, Th, Td, Badge, Input, Select, Button, ErrorBanner, EmptyState, KpiCard } from "../components/ui";
 import TablaUnidades from "../components/TablaUnidades";
 import BotonCoordenadas from "../components/BotonCoordenadas";
+import { Campo } from "../components/CampoFicha";
+import ContactosFicha from "../components/ContactosFicha";
 import TarjetaOperario, { type Operator } from "../components/TarjetaOperario";
 import ImportarTallerWhatsApp, { CAMPOS_IMPORTABLES, type ImportacionConfirmada } from "../components/ImportarTallerWhatsApp";
 import {
@@ -22,6 +24,8 @@ type Provider = {
   id: number; name: string; legalName: string | null; taxId: string | null;
   address: string | null; city: string | null; postalCode: string | null; province: string | null;
   web: string | null; billingEmail: string | null;
+  commercialName: string | null; country: string | null;
+  paymentTerms: string | null; paymentMethod: string | null;
   contactEmail: string | null; contactPhone: string | null;
   status: string; notes: string | null; createdAtMs: number;
   /** grupo | colaboradora | externa — el color de sus talleres en el mapa. */
@@ -57,59 +61,6 @@ const TALLER_VACIO = {
 };
 const TABS = ["Resumen", "Talleres", "Operarios", "Unidades"] as const;
 
-/**
- * Campo de la ficha. Se puede tocar de dos maneras y las dos conviven:
- * suelto —"editar" al lado, para corregir un dato— o dentro de la edición de
- * la ficha entera, cuando `edicion` trae el borrador de todos los campos.
- */
-function Campo({ label, value, onSave, canEdit, placeholder, edicion, campo, onEdit }: {
-  label: string; value: string | null; canEdit: boolean; placeholder?: string;
-  onSave: (v: string) => Promise<void>;
-  /** Borrador de la ficha completa, o null si no se está editando entera. */
-  edicion?: Record<string, string> | null;
-  campo?: string;
-  onEdit?: (e: Record<string, string>) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [v, setV] = useState(value ?? "");
-  useEffect(() => setV(value ?? ""), [value]);
-
-  // Con la ficha entera abierta, el campo es un cuadro de texto sin más: el
-  // botón de guardar es el de arriba, uno para todos.
-  if (edicion && campo && onEdit) {
-    return (
-      <div className="flex items-center gap-2 border-b border-slate-700/40 py-1.5 text-[13px]">
-        <span className="w-40 shrink-0 text-slate-500">{label}</span>
-        <Input
-          value={edicion[campo] ?? ""}
-          placeholder={placeholder}
-          className="w-64"
-          onChange={(e) => onEdit({ ...edicion, [campo]: e.target.value })}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex items-center gap-2 border-b border-slate-700/40 py-1.5 text-[13px]">
-      <span className="w-40 shrink-0 text-slate-500">{label}</span>
-      {editing ? (
-        <>
-          <Input value={v} onChange={(e) => setV(e.target.value)} className="w-64" placeholder={placeholder} autoFocus />
-          <Button onClick={async () => { await onSave(v); setEditing(false); }}>Guardar</Button>
-          <Button variant="ghost" onClick={() => { setV(value ?? ""); setEditing(false); }}>✕</Button>
-        </>
-      ) : (
-        <>
-          <span className="text-slate-200">{value || <span className="text-slate-600">{placeholder ?? "—"}</span>}</span>
-          {canEdit && (
-            <button className="text-[11px] text-slate-500 hover:text-cyan-300" onClick={() => setEditing(true)}>editar</button>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
 
 export default function FichaEmpresa() {
   const { id } = useParams();
@@ -158,6 +109,7 @@ export default function FichaEmpresa() {
   const CAMPOS_FICHA = [
     "legalName", "taxId", "address", "city", "postalCode", "province",
     "contactPhone", "contactEmail", "billingEmail", "web", "notes",
+    "commercialName", "country", "paymentTerms", "paymentMethod",
   ] as const;
 
   const abrirEdicion = () => {
@@ -328,12 +280,14 @@ export default function FichaEmpresa() {
                 Pinta sus talleres en el mapa: del grupo en verde, colaboradora en amarillo, externa en naranja.
               </span>
             </div>
+            <Campo label="Nombre comercial" value={p.commercialName} canEdit={canEdit} edicion={edicion} campo="commercialName" onEdit={setEdicion} onSave={(v) => patch({ commercialName: v })} />
             <Campo label="Razón social" value={p.legalName} canEdit={canEdit} edicion={edicion} campo="legalName" onEdit={setEdicion} onSave={(v) => patch({ legalName: v })} />
             <Campo label="CIF / NIF" value={p.taxId} canEdit={canEdit} edicion={edicion} campo="taxId" onEdit={setEdicion} onSave={(v) => patch({ taxId: v })} />
             <Campo label="Dirección" value={p.address} canEdit={canEdit} edicion={edicion} campo="address" onEdit={setEdicion} onSave={(v) => patch({ address: v })} />
             <Campo label="Población" value={p.city} canEdit={canEdit} edicion={edicion} campo="city" onEdit={setEdicion} onSave={(v) => patch({ city: v })} />
             <Campo label="Código postal" value={p.postalCode} canEdit={canEdit} edicion={edicion} campo="postalCode" onEdit={setEdicion} onSave={(v) => patch({ postalCode: v })} />
             <Campo label="Provincia" value={p.province} canEdit={canEdit} edicion={edicion} campo="province" onEdit={setEdicion} onSave={(v) => patch({ province: v })} />
+            <Campo label="País" value={p.country} canEdit={canEdit} edicion={edicion} campo="country" onEdit={setEdicion} onSave={(v) => patch({ country: v })} />
           </Card>
           <Card className="p-4">
             <h3 className="mb-2 text-sm font-semibold text-cyan-300">Contacto y facturación</h3>
@@ -341,6 +295,10 @@ export default function FichaEmpresa() {
             <Campo label="Email" value={p.contactEmail} canEdit={canEdit} edicion={edicion} campo="contactEmail" onEdit={setEdicion} onSave={(v) => patch({ contactEmail: v })} />
             <Campo label="Email de facturación" value={p.billingEmail} canEdit={canEdit} edicion={edicion} campo="billingEmail" onEdit={setEdicion} onSave={(v) => patch({ billingEmail: v })} />
             <Campo label="Web" value={p.web} canEdit={canEdit} edicion={edicion} campo="web" onEdit={setEdicion} onSave={(v) => patch({ web: v })} />
+            {/* Condiciones comerciales: es lo que la administración necesita
+                para pagarle, y hasta ahora vivía en las observaciones. */}
+            <Campo label="Condiciones de pago" value={p.paymentTerms} canEdit={canEdit} edicion={edicion} campo="paymentTerms" onEdit={setEdicion} onSave={(v) => patch({ paymentTerms: v })} placeholder="P. ej. 30 días fecha factura" />
+            <Campo label="Forma de pago" value={p.paymentMethod} canEdit={canEdit} edicion={edicion} campo="paymentMethod" onEdit={setEdicion} onSave={(v) => patch({ paymentMethod: v })} placeholder="P. ej. transferencia" />
             <Campo label="Notas" value={p.notes} canEdit={canEdit} edicion={edicion} campo="notes" onEdit={setEdicion} onSave={(v) => patch({ notes: v })} />
             {p.contactPhone && (
               <a href={`tel:${p.contactPhone}`} className="mt-2 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-[14px] font-bold text-white hover:bg-emerald-500">
@@ -348,6 +306,11 @@ export default function FichaEmpresa() {
               </a>
             )}
           </Card>
+          {/* Contactos del proveedor: hasta ahora solo los tenían los talleres,
+              y del proveedor se guardaba un email y un teléfono sueltos. */}
+          <div className="lg:col-span-2">
+            <ContactosFicha ownerType="provider" ownerId={Number(id)} canEdit={canEdit} titulo="Contactos del proveedor" />
+          </div>
           <Card className="p-4 lg:col-span-2">
             <h3 className="mb-2 text-sm font-semibold text-cyan-300">Autorización y SLA</h3>
             {!f.authorization ? (

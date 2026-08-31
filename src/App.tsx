@@ -1,4 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
+import RecuperarDespliegue from "./components/RecuperarDespliegue";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 
 import SeaTarragonaV1 from "./SeaTarragonaV1";
@@ -14,6 +15,9 @@ import DashboardPage from "./pages/DashboardPage";
 import LicensesPage from "./pages/LicensesPage";
 import CentralSharingPage from "./pages/CentralSharingPage";
 import TalleresPage from "./pages/TalleresPage";
+import ProveedoresPage from "./pages/ProveedoresPage";
+import BandejaExcepcionesPage from "./pages/BandejaExcepcionesPage";
+import ClientesFacturacionPage from "./pages/ClientesFacturacionPage";
 import LugaresPage from "./pages/LugaresPage";
 import OtfHistorialPage from "./pages/OtfHistorialPage";
 import AdminEmpresasPage from "./pages/AdminEmpresasPage";
@@ -134,6 +138,9 @@ function Cargando() {
 
 export default function App() {
   return (
+    // Recoge el fallo de descarga de un trozo cuando se despliega con la
+    // pestaña abierta: antes eso dejaba la pantalla en blanco.
+    <RecuperarDespliegue>
     <Suspense fallback={<Cargando />}>
     <Routes>
       <Route path="/" element={<SeaTarragonaV1 />} />
@@ -156,6 +163,9 @@ export default function App() {
       <Route path="/licencias" element={<LicensesPage />} />
       <Route path="/asistencias/central" element={<CentralSharingPage />} />
       <Route path="/asistencias/talleres" element={<TalleresPage />} />
+      <Route path="/asistencias/bandeja" element={<BandejaExcepcionesPage />} />
+      <Route path="/asistencias/proveedores" element={<ProveedoresPage />} />
+      <Route path="/asistencias/clientes" element={<ClientesFacturacionPage />} />
       <Route path="/asistencias/lugares" element={<LugaresPage />} />
       <Route path="/otf/historial" element={<OtfHistorialPage />} />
       <Route path="/admin/empresas" element={<AdminEmpresasPage />} />
@@ -384,5 +394,6 @@ export default function App() {
       <Route path="*" element={<NotFound />} />
     </Routes>
     </Suspense>
+    </RecuperarDespliegue>
   );
 }

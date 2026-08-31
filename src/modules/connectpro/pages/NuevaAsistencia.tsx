@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { boFetch } from "../services/api";
+import SelectorProveedorTaller, { type Seleccion } from "../components/SelectorProveedorTaller";
 import { PageTitle, Card, Input, Select, Button, ErrorBanner } from "../components/ui";
 import CapturaWhatsApp from "../components/CapturaWhatsApp";
 import ConfirmarImportacionIA, { type PropuestaIA, type ExtraIA } from "../components/ConfirmarImportacionIA";
@@ -59,6 +60,12 @@ export default function NuevaAsistencia() {
   const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [clientId, setClientId] = useState("");
+  // A quién se factura, que no siempre es quien pide el servicio.
+  const [billingClientId, setBillingClientId] = useState("");
+  // A quién se le encarga: proveedor → taller → contacto.
+  const [subcontrata, setSubcontrata] = useState<Seleccion>({
+    providerCompanyId: null, workshopId: null, contactId: null,
+  });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [conceptos, setConceptos] = useState<Concepto[]>([]);
@@ -218,6 +225,10 @@ export default function NuevaAsistencia() {
     expedientNumber: f.expedientNumber || null,
     externalReference: f.externalReference || null,
     clientId: clientId ? Number(clientId) : null,
+    billingClientId: billingClientId ? Number(billingClientId) : null,
+    providerCompanyId: subcontrata.providerCompanyId,
+    workshopCompanyId: subcontrata.workshopId,
+    contactId: subcontrata.contactId,
     clientName: f.clientName || null,
     priority: f.priority,
     slaMinutes: f.slaMinutes ? Number(f.slaMinutes) : null,
@@ -358,6 +369,13 @@ export default function NuevaAsistencia() {
           {!clientId && (
             <Field label="Cliente (texto libre)"><Input value={f.clientName} onChange={set("clientName")} className="w-48" placeholder="Aseguradora / flota" /></Field>
           )}
+          <Field label="Cliente de facturación">
+            <Select value={billingClientId} onChange={(e) => setBillingClientId(e.target.value)}
+              title="Solo si se factura a alguien distinto de quien solicita el servicio">
+              <option value="">— El mismo que solicita —</option>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </Select>
+          </Field>
           <Field label="Tipo de asistencia">
             <Select value={f.serviceType} onChange={set("serviceType")}>
               {types.map((t) => <option key={t.code} value={t.code}>{t.name}</option>)}
@@ -435,6 +453,15 @@ export default function NuevaAsistencia() {
           esCambioDeNeumatico={/neum|tyre|rueda/i.test(
             types.find((t) => t.code === f.serviceType)?.name ?? f.serviceType)}
         />
+
+        <Section title="Subcontratación">
+          <p className="mb-2 text-[12px] text-slate-500">
+            Opcional al dar de alta. Si ya se sabe a quién se le encarga, se elige
+            aquí y la asistencia queda enganchada a la ficha del taller en vez de
+            a un nombre escrito a mano.
+          </p>
+          <SelectorProveedorTaller valor={subcontrata} onChange={(sel) => setSubcontrata(sel)} />
+        </Section>
 
         <Section title="Incidencia">
           <Field label="Descripción *" w="w-full">
