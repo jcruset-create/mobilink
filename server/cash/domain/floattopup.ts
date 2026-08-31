@@ -12,20 +12,32 @@
  * cambio, y eso ensucia la conciliación con la ERP. Desde el montón, la
  * reposición no es una venta y no se cuela en el cierre por secciones.
  *
+ * ## Con vuelta, para que cuadre siempre
+ *
+ * La bolsa no suele tener las piezas justas. Con un déficit de 21,52 € y un
+ * montón de `50 + 10 + 10 + 2 + 0,50 + 0,10`, no hay forma de sumar 21,52
+ * exactos: lo más que se puede sacar sin pasarse son 20,60 € y la caja se
+ * queda 92 céntimos coja, con el problema aplazado a mañana.
+ *
+ * Así que la reposición tiene DOS SENTIDOS, como el canje: sale del montón lo
+ * que haga falta y el cajón devuelve la vuelta.
+ *
+ *     del montón al cajón:   X
+ *     del cajón al montón:   Y      (la vuelta)
+ *                          ─────
+ *          efecto neto:    X − Y  =  el déficit, exacto
+ *
+ * Con el ejemplo: salen 22,00 € del montón (10 + 10 + 2), vuelven 0,48 € en
+ * monedas del cajón, y el fondo queda repuesto al céntimo. Es el canje de
+ * siempre con `X − Y = déficit` en vez de `X − Y = 0`.
+ *
  * ## Qué se elige, y por qué en ese orden
  *
- * 1. **Lo más cerca posible del déficit, sin pasarse.** Pasarse dejaría la
- *    caja con más fondo del que tiene configurado, que es el problema al
- *    revés. Quedarse corto se admite —se repone lo que se pueda y se sigue
- *    avisando por el resto— porque el montón puede no tener las piezas justas.
- *
- * 2. **Con las menos piezas posibles.** Reponer 21,52 € con dos monedas de
- *    diez y un puñado de calderilla es correcto; hacerlo con 2.152 monedas de
- *    un céntimo también «suma», y no es lo mismo para quien tiene que contarlo.
- *
- * No se prefieren monedas ni billetes a propósito. Aquí lo que necesita el
- * cajón es VALOR, no formato: el formato ya lo arregla el canje, que existe
- * justamente para eso.
+ * 1. **Sin vuelta, si se puede.** Menos manos en el cajón, menos errores.
+ * 2. **La vuelta más pequeña posible.** Se prueban los importes del montón de
+ *    menor a mayor a partir del déficit: el primero que el cajón sepa devolver
+ *    es el que menos calderilla le saca.
+ * 3. **Con las menos piezas posibles**, a ambos lados.
  */
 
 import type { Centimos } from "./money.ts";
@@ -34,6 +46,7 @@ import {
   type LineaDenominacion,
   lineasDesdeInventario,
 } from "./inventory.ts";
+import { calcularCambio } from "./change.ts";
 
 /**
  * Tope de la búsqueda, en céntimos.
@@ -46,61 +59,32 @@ import {
 const MAXIMO_BUSQUEDA = 200_000;
 
 /**
- * Las piezas que se sacan del montón para reponer el fondo.
+ * La mochila del montón, resuelta una vez y consultable para cualquier importe.
  *
- * Devuelve la lista vacía cuando no se puede reponer nada: el montón está
- * vacío, o su pieza más pequeña ya pasa del déficit.
+ * Se desdobla el montón en piezas sueltas y se resuelve como una mochila 0/1:
+ * es la única forma en que la reconstrucción de la lista es correcta por
+ * construcción. Con el bucle acotado y un puntero «de dónde vino», la
+ * descomposición puede acabar usando más piezas de una denominación de las que
+ * hay, y eso aquí sería proponer sacar del montón algo que no está.
  */
-export function mejorReposicion(
-  monton: Inventario,
-  deficitCentimos: Centimos
-): LineaDenominacion[] {
-  if (deficitCentimos <= 0) return [];
-
-  /*
-   * El montón, pieza a pieza, de mayor a menor valor.
-   *
-   * Se desdobla en piezas sueltas para poder resolverlo como una mochila 0/1,
-   * que es la única forma en que la reconstrucción de la lista es correcta por
-   * construcción: con el bucle acotado y un puntero «de dónde vino» la
-   * decomposición puede acabar usando más piezas de una denominación de las
-   * que hay, y eso aquí sería proponer sacar del montón algo que no está.
-   *
-   * El tope existe porque el cajón de un mostrador tiene decenas de piezas, no
-   * miles; si alguna vez hubiera más, se resuelve con las de más valor, que es
-   * lo que llega antes al déficit.
-   */
+function mochilaDelMonton(monton: Inventario, tope: number) {
   const MAXIMO_PIEZAS = 512;
   const items: Centimos[] = [];
   for (const [valor, cantidad] of [...monton.entries()].sort((a, b) => b[0] - a[0])) {
     if (valor <= 0 || cantidad <= 0) continue;
     for (let i = 0; i < cantidad && items.length < MAXIMO_PIEZAS; i++) items.push(valor);
   }
-  if (items.length === 0) return [];
 
-  const tope = Math.min(deficitCentimos, MAXIMO_BUSQUEDA);
-
-  /*
-   * Para cada importe alcanzable, con cuántas piezas se llega. No basta con
-   * saber si se alcanza: entre dos formas de reponer 21,52 € se quiere la de
-   * dos monedas, no la de doscientas.
-   */
   const INALCANZABLE = 0x7fffffff;
   const coste = new Int32Array(tope + 1).fill(INALCANZABLE);
   coste[0] = 0;
 
   // Un bit por (pieza, importe): si esa pieza se usó para el mejor coste de
   // ese importe. Es lo que permite rehacer la lista exacta al final.
-  const anchoBits = tope + 1;
-  const tomado = new Uint8Array(items.length * Math.ceil(anchoBits / 8));
-  const marcar = (i: number, importe: number) => {
-    const base = i * Math.ceil(anchoBits / 8);
-    tomado[base + (importe >> 3)] |= 1 << (importe & 7);
-  };
-  const seTomo = (i: number, importe: number) => {
-    const base = i * Math.ceil(anchoBits / 8);
-    return (tomado[base + (importe >> 3)] & (1 << (importe & 7))) !== 0;
-  };
+  const bytesPorPieza = Math.ceil((tope + 1) / 8);
+  const tomado = new Uint8Array(items.length * bytesPorPieza);
+  const seTomo = (i: number, importe: number) =>
+    (tomado[i * bytesPorPieza + (importe >> 3)] & (1 << (importe & 7))) !== 0;
 
   for (let i = 0; i < items.length; i++) {
     const valor = items[i];
@@ -112,40 +96,107 @@ export function mejorReposicion(
       if (previo === INALCANZABLE) continue;
       if (previo + 1 < coste[importe]) {
         coste[importe] = previo + 1;
-        marcar(i, importe);
+        tomado[i * bytesPorPieza + (importe >> 3)] |= 1 << (importe & 7);
       }
     }
   }
 
-  let mejor = 0;
-  for (let importe = tope; importe > 0; importe--) {
-    if (coste[importe] !== INALCANZABLE) {
-      mejor = importe;
-      break;
-    }
-  }
-  if (mejor === 0) return [];
-
-  /*
-   * Se rehace hacia atrás, de la última pieza a la primera: en el momento en
-   * que se marcó la pieza `i` para el importe, el resto venía de las piezas
-   * anteriores, así que basta con recorrerlas en orden inverso.
-   */
-  const elegidas = new Map<Centimos, number>();
-  let restante = mejor;
-  for (let i = items.length - 1; i >= 0 && restante > 0; i--) {
-    if (!seTomo(i, restante)) continue;
-    const valor = items[i];
-    elegidas.set(valor, (elegidas.get(valor) ?? 0) + 1);
-    restante -= valor;
-  }
-  // Si la reconstrucción no llega a cero, algo no cuadra y es mejor no
-  // proponer nada que proponer una lista que no suma lo que dice.
-  if (restante !== 0) return [];
-
-  return lineasDesdeInventario(elegidas);
+  return {
+    alcanzable: (importe: number) => importe >= 0 && importe <= tope && coste[importe] !== INALCANZABLE,
+    /** Las piezas que suman ese importe, o `null` si no se alcanza. */
+    piezasPara(importe: number): LineaDenominacion[] | null {
+      if (importe === 0) return [];
+      if (!this.alcanzable(importe)) return null;
+      const elegidas = new Map<Centimos, number>();
+      let restante = importe;
+      /*
+       * Se rehace hacia atrás, de la última pieza a la primera: en el momento
+       * en que se marcó la pieza `i` para el importe, el resto venía de las
+       * piezas anteriores, así que basta con recorrerlas en orden inverso.
+       */
+      for (let i = items.length - 1; i >= 0 && restante > 0; i--) {
+        if (!seTomo(i, restante)) continue;
+        elegidas.set(items[i], (elegidas.get(items[i]) ?? 0) + 1);
+        restante -= items[i];
+      }
+      // Si no llega a cero, algo no cuadra: mejor no proponer nada que
+      // proponer una lista que no suma lo que dice.
+      return restante === 0 ? lineasDesdeInventario(elegidas) : null;
+    },
+  };
 }
 
+/** Lo que sale del montón, lo que vuelve del cajón, y el neto que repone. */
+export type Reposicion = {
+  /** Piezas que salen del montón pendiente hacia el cajón. */
+  sacar: LineaDenominacion[];
+  /** Piezas que el cajón devuelve al montón. Vacío = sin vuelta. */
+  devolver: LineaDenominacion[];
+  /** `sacar − devolver`. Es lo que sube el fondo de la caja. */
+  netoCentimos: Centimos;
+};
+
+/**
+ * Cómo reponer el fondo, con vuelta si hace falta.
+ *
+ * Devuelve `null` cuando no se puede reponer nada. Si no se llega al déficit
+ * exacto ni con vuelta, se devuelve lo más cerca que se pueda por debajo: la
+ * caja se queda algo mejor y el resto se avisa.
+ */
+export function mejorReposicion(
+  monton: Inventario,
+  caja: Inventario,
+  deficitCentimos: Centimos
+): Reposicion | null {
+  if (deficitCentimos <= 0) return null;
+
+  /*
+   * Hasta dónde merece la pena pasarse al sacar del montón.
+   *
+   * Nunca hace falta pasarse más que la pieza más grande de la bolsa: si el
+   * exceso llegara a valer tanto como esa pieza, se podría quitar la pieza y
+   * seguir cubriendo el déficit. Con ese tope la búsqueda es completa sin
+   * explorar importes que jamás serían la respuesta.
+   */
+  let mayor = 0;
+  for (const [valor, cantidad] of monton) if (cantidad > 0 && valor > mayor) mayor = valor;
+  if (mayor === 0) return null;
+
+  const tope = Math.min(deficitCentimos + mayor, MAXIMO_BUSQUEDA);
+  const mochila = mochilaDelMonton(monton, tope);
+
+  /*
+   * Se prueban los importes de menor a mayor a partir del déficit: el primero
+   * que cuadre es, por construcción, el de menos vuelta. El déficit exacto se
+   * prueba el primero, así que «sin vuelta» siempre gana cuando es posible.
+   */
+  for (let sale = deficitCentimos; sale <= tope; sale++) {
+    if (!mochila.alcanzable(sale)) continue;
+    const sacar = mochila.piezasPara(sale);
+    if (!sacar) continue;
+
+    const vuelta = sale - deficitCentimos;
+    if (vuelta === 0) return { sacar, devolver: [], netoCentimos: deficitCentimos };
+
+    // La vuelta la resuelve el motor de cambio de siempre: combinación exacta
+    // con el stock que hay de verdad en el cajón, o no hay vuelta posible.
+    const cambio = calcularCambio(vuelta, caja, "menos_piezas");
+    if (cambio.ok) return { sacar, devolver: cambio.lineas, netoCentimos: deficitCentimos };
+  }
+
+  /*
+   * Ni con vuelta se llega al déficit exacto. Se repone lo que se pueda sin
+   * pasarse, que deja la caja mejor que estaba, y quien mire la pantalla verá
+   * cuánto queda pendiente.
+   */
+  for (let sale = deficitCentimos - 1; sale > 0; sale--) {
+    if (!mochila.alcanzable(sale)) continue;
+    const sacar = mochila.piezasPara(sale);
+    if (sacar) return { sacar, devolver: [], netoCentimos: sale };
+  }
+
+  return null;
+}
 
 /**
  * El déficit de fondo de una caja: lo que le falta para su fondo fijo.

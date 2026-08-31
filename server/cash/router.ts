@@ -1249,7 +1249,8 @@ export function createCashRouter(): Router {
           sessionIds: Array.isArray(b.sessionIds)
             ? b.sessionIds.map((v: unknown) => enteroPositivo(v, "sessionIds"))
             : [],
-          lineas: lineas(b.lineas, "lineas"),
+          sacar: lineas(b.sacar, "sacar"),
+          devolver: b.devolver == null ? [] : lineas(b.devolver, "devolver"),
         })
       );
     })
