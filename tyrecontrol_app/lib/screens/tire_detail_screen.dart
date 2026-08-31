@@ -6,6 +6,7 @@ import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/campo_identidad.dart';
+import 'no_coincide_screen.dart';
 
 const _estadosVisuales = <String, String>{
   'correcto': 'Correcto',
@@ -163,6 +164,72 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
     }
   }
 
+  /// "No coincide": la goma que hay puesta no es esta. Deliberadamente NO se
+  /// llama "Cambiar", que es una sustitución física y sí genera trabajo:
+  /// confundirlas es la forma más fácil de meter en el histórico un montaje
+  /// que nunca ocurrió. Discreta a propósito — es la excepción, no el camino
+  /// normal de la revisión.
+  Widget _lineaNoCoincide(Neumatico n) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: InkWell(
+        onTap: _guardando ? null : () => _noCoincide(n),
+        child: const Row(children: [
+          Icon(Icons.report_problem_outlined, size: 13, color: AppColors.warning),
+          SizedBox(width: 4),
+          Text('No coincide',
+              style: TextStyle(color: AppColors.warning, fontSize: 12, fontWeight: FontWeight.w600)),
+        ]),
+      ),
+    );
+  }
+
+  /// Abre la corrección. El id del montaje no viaja en esta pantalla, así que
+  /// se busca aquí: es una consulta y evita cambiar el constructor, que
+  /// obligaría a tocar la pantalla de revisión entera.
+  ///
+  /// Necesita red a propósito. La corrección cambia qué goma hay en una
+  /// posición, y encolarla sin saber si otra corrección tocó la misma mientras
+  /// tanto es peor que pedir cobertura para un caso que es raro.
+  Future<void> _noCoincide(Neumatico n) async {
+    setState(() => _guardando = true);
+    try {
+      final montajes = await TyreControlApi.listarMontajesVehiculo(widget.vehiculo.id);
+      final m = montajes.where((x) => x.posicionId == widget.posicion.id).firstOrNull;
+      if (!mounted) return;
+      if (m == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('No se encuentra el montaje de esta posición')));
+        return;
+      }
+      final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        builder: (_) => NoCoincideScreen(
+          registrado: n,
+          montajeId: m.id,
+          empresaId: widget.vehiculo.empresaId,
+          revisionId: widget.revision.id,
+          posicionId: widget.posicion.id,
+          posicionNombre: widget.posicion.nombre ?? widget.posicion.codigoPosicion,
+        ),
+      ));
+      if (!mounted) return;
+      if (ok == true) {
+        // La revisión NO se cierra ni se pierde lo tecleado: se vuelve a esta
+        // misma rueda para seguir con la profundidad y la presión.
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Corregido. Sin trabajo ni coste. Sigue con la medición.')));
+        setState(() {});
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Hace falta conexión para corregir: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _guardando = false);
+    }
+  }
+
   /// Identidad de la goma: la que trae o la que se acaba de poner. Si no
   /// lleva ninguna, el enlace para ponérsela.
   Widget _lineaIdentidad(Neumatico n) {
@@ -305,6 +372,7 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
                             Text(n.medidaCompleta, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
                             if (n.dot != null) Text('DOT ${n.dot}', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
                             _lineaIdentidad(n),
+                            _lineaNoCoincide(n),
                           ],
                         ),
                       ),
