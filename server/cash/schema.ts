@@ -750,6 +750,35 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * Reposiciones del fondo: dinero que vuelve del montón pendiente al cajón.
+   *
+   * Hermana del canje y con la misma forma —operación en el libro mayor más
+   * una fila que la ata a la caja hasta que un ingreso la consume—, pero con
+   * una diferencia de fondo: el canje NO cambia el valor de ninguno de los dos
+   * lados y esto sí. El montón baja lo que sube el cajón.
+   *
+   * Sin la fila, el montón seguiría diciendo que tiene un dinero que ya está
+   * otra vez en el cajón, y se podría ingresar dos veces en el banco.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_float_topups (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      register_id INTEGER NOT NULL REFERENCES cash_registers(id) ON DELETE RESTRICT,
+      operation_id INTEGER NOT NULL REFERENCES cash_operations(id) ON DELETE RESTRICT,
+      bank_deposit_id INTEGER REFERENCES cash_bank_deposits(id) ON DELETE RESTRICT,
+      /* Lo que se repuso y cuánto faltaba entonces: el «cuánto faltaba» no se
+         puede recalcular después, porque el cierre que lo causó ya pasó. */
+      importe_centimos BIGINT NOT NULL,
+      deficit_centimos BIGINT NOT NULL,
+      creado_por UUID,
+      created_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cash_float_topups_pendientes_idx
+      ON cash_float_topups(register_id) WHERE bank_deposit_id IS NULL;
+  `);
+
+  /*
    * Los motivos y tipos nuevos en los CHECK. Se recrean enteros porque un
    * CHECK no se amplía: se tira y se vuelve a poner. El nombre es el que
    * genera Postgres para un CHECK de columna, el DROP va con IF EXISTS para

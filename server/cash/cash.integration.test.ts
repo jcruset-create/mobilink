@@ -5328,3 +5328,188 @@ describe.runIf(RUN)("cuentas anteriores al maestro de bancos", () => {
     expect(despues[0].bank_id).toBe(bbva.id);
   });
 });
+
+describe.runIf(RUN)("reposición del fondo desde el dinero pendiente de ingresar", () => {
+  /**
+   * El caso real de Tarragona el 28/08/2026, reproducido.
+   *
+   * Fondo fijo 350 €. La jornada abre con 350, se ingresan 100 € al banco de
+   * más de lo que dio el día, y el cierre deja el cajón en 250 €: le faltan
+   * 100 € de fondo, y esos 100 € están en la bolsa que espera al banco.
+   */
+  async function escenario() {
+    const caja = await crearCaja(`reposicion-${Date.now()}`);
+    await config.actualizarCaja(ctx, caja, { fondoObjetivoCentimos: 35000 });
+
+    // 350,00 € exactos: 150 + 100 + 50 + 20 + 10 + 10 + 5 + 4 + 1.
+    const fondo = [
+      { valor: 5000, cantidad: 3 },
+      { valor: 2000, cantidad: 5 },
+      { valor: 1000, cantidad: 5 },
+      { valor: 500, cantidad: 4 },
+      { valor: 200, cantidad: 5 },
+      { valor: 100, cantidad: 10 },
+      { valor: 50, cantidad: 10 },
+      { valor: 20, cantidad: 20 },
+      { valor: 10, cantidad: 10 },
+    ];
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: fondo });
+
+    // Se cierra dejando 250 € y mandando 100 € al banco: la caja queda corta.
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: fondo });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      // 250,00 €: el fondo menos dos billetes de 50, que se van al banco.
+      cambioFinal: [
+        { valor: 5000, cantidad: 1 },
+        { valor: 2000, cantidad: 5 },
+        { valor: 1000, cantidad: 5 },
+        { valor: 500, cantidad: 4 },
+        { valor: 200, cantidad: 5 },
+        { valor: 100, cantidad: 10 },
+        { valor: 50, cantidad: 10 },
+        { valor: 20, cantidad: 20 },
+        { valor: 10, cantidad: 10 },
+      ],
+    });
+
+    // Y al día siguiente se abre heredando esos 250 €.
+    const { sesion: hoy } = await servicio.abrirJornada(ctx, { registerId: caja });
+    return { caja, sessionIds: [sesion.id], hoy };
+  }
+
+  const valor = (l: readonly { valor: number; cantidad: number }[]) =>
+    l.reduce((a, x) => a + x.valor * x.cantidad, 0);
+
+  it("ve el déficit del fondo y de dónde viene", async () => {
+    const { caja } = await escenario();
+    const d = await ingresos.deficitDeCaja(EMPRESA, caja);
+    expect(d.fondoObjetivoCentimos).toBe(35000);
+    expect(d.efectivoCentimos).toBe(25000);
+    expect(d.deficitCentimos).toBe(10000);
+    expect(d.cierresConDeficit).toBe(1);
+  });
+
+  it("propone reponerlo con piezas que están de verdad en el montón", async () => {
+    const { caja, sessionIds } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    expect(p.deficitCentimos).toBe(10000);
+    expect(p.montonCentimos).toBe(10000);
+    expect(p.propuestaCentimos).toBe(10000);
+    // Y lo propuesto cabe en el montón, pieza a pieza.
+    const hay = new Map(
+      [...p.monton.billetes, ...p.monton.monedas].map((l) => [l.valor, l.cantidad])
+    );
+    for (const l of p.propuesta) expect(l.cantidad).toBeLessThanOrEqual(hay.get(l.valor) ?? 0);
+  });
+
+  it("al reponer, el cajón sube y el montón baja lo mismo: el total NO cambia", async () => {
+    /*
+     * Es la prueba que sostiene toda la funcionalidad. Reponer no es ingresar
+     * ni cobrar: es mover dinero de un bolsillo de la tienda a otro.
+     */
+    const { caja, sessionIds, hoy } = await escenario();
+    const antesCaja = (await servicio.detalleJornada(hoy.id)).totalStockCentimos;
+    const antesMonton = (await ingresos.proponerReposicion(EMPRESA, caja, sessionIds)).montonCentimos;
+
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, lineas: p.propuesta });
+
+    const despuesCaja = (await servicio.detalleJornada(hoy.id)).totalStockCentimos;
+    const despuesMonton = (await ingresos.proponerReposicion(EMPRESA, caja, sessionIds)).montonCentimos;
+
+    expect(despuesCaja - antesCaja).toBe(10000);
+    expect(antesMonton - despuesMonton).toBe(10000);
+    expect(antesCaja + antesMonton).toBe(despuesCaja + despuesMonton);
+  });
+
+  it("después de reponer, la caja ya no tiene déficit", async () => {
+    const { caja, sessionIds } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, lineas: p.propuesta });
+    expect((await ingresos.deficitDeCaja(EMPRESA, caja)).deficitCentimos).toBe(0);
+  });
+
+  it("lo repuesto ya no se puede ingresar en el banco", async () => {
+    // Si no bajara el disponible, ese dinero se ingresaría estando en el cajón.
+    const { caja, sessionIds } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, lineas: p.propuesta });
+
+    await expect(
+      ingresos.crearIngreso(ctx, { registerId: caja, sessionIds, importeCentimos: 10000 })
+    ).rejects.toMatchObject({ codigo: "INGRESO_SUPERA_DISPONIBLE" });
+  });
+
+  it("NO se puede reponer más de lo que falta", async () => {
+    const { caja, sessionIds } = await escenario();
+    await expect(
+      ingresos.registrarReposicion(ctx, {
+        registerId: caja,
+        sessionIds,
+        lineas: [{ valor: 5000, cantidad: 3 }],
+      })
+    ).rejects.toMatchObject({ codigo: "REPOSICION_EXCESIVA" });
+  });
+
+  it("NO se puede sacar del montón una pieza que no está", async () => {
+    const { caja, sessionIds } = await escenario();
+    await expect(
+      ingresos.registrarReposicion(ctx, {
+        registerId: caja,
+        sessionIds,
+        lineas: [{ valor: 5, cantidad: 4 }],
+      })
+    ).rejects.toMatchObject({ codigo: "STOCK_INSUFICIENTE" });
+  });
+
+  it("una caja con su fondo completo no admite reposición", async () => {
+    const { caja, sessionIds } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, lineas: p.propuesta });
+
+    await expect(
+      ingresos.registrarReposicion(ctx, {
+        registerId: caja,
+        sessionIds,
+        lineas: [{ valor: 1000, cantidad: 1 }],
+      })
+    ).rejects.toMatchObject({ codigo: "SIN_DEFICIT" });
+  });
+
+  it("la reposición NO se cuela en el reparto por secciones ni en el cierre del Genes", async () => {
+    /*
+     * Es el motivo de que el dinero salga del montón y no de los cobros del
+     * día siguiente: con los cobros, parte de la caja del Genes dejaría de ser
+     * venta. El desglose por secciones solo cuenta cobros y pagos.
+     */
+    const { caja, sessionIds, hoy } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, lineas: p.propuesta });
+
+    const detalle = await servicio.detalleJornada(hoy.id);
+    const cobros = detalle.porSeccion.reduce((a, s) => a + s.cobrosCentimos, 0);
+    expect(cobros).toBe(0);
+  });
+
+  it("una caja sin fondo fijo nunca tiene déficit que reponer", async () => {
+    const caja = await crearCaja(`sin-fondo-${Date.now()}`);
+    const d = await ingresos.deficitDeCaja(EMPRESA, caja);
+    expect(d.fondoObjetivoCentimos).toBe(0);
+    expect(d.deficitCentimos).toBe(0);
+  });
+
+  it("sin jornada abierta se puede consultar pero no reponer", async () => {
+    const caja = await crearCaja(`repo-cerrada-${Date.now()}`);
+    await config.actualizarCaja(ctx, caja, { fondoObjetivoCentimos: 35000 });
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, []);
+    expect(p.sinJornadaAbierta).toBe(true);
+    await expect(
+      ingresos.registrarReposicion(ctx, {
+        registerId: caja,
+        sessionIds: [],
+        lineas: [{ valor: 1000, cantidad: 1 }],
+      })
+    ).rejects.toMatchObject({ codigo: "JORNADA_NO_ABIERTA" });
+  });
+});
