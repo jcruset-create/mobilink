@@ -214,6 +214,8 @@ export default function Arqueo() {
             cartucho no se abre, se cuenta como uno.
           */}
           <div className="flex items-center gap-3 border-b border-slate-700/60 px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+            {/* El hueco de la foto, para que el rótulo caiga sobre la etiqueta. */}
+            <span className="w-8 shrink-0" />
             <span className="w-14">Denom.</span>
             <span className="w-10 text-right">Sueltas</span>
             <span className="w-10 text-right">Cart.</span>
@@ -232,6 +234,20 @@ export default function Arqueo() {
               const precintado = cart > 0 || bols > 0;
               return (
                 <div key={l.valor} className="flex items-center gap-3 px-3 py-1.5">
+                  {/*
+                    La misma foto del catálogo que lleva la rejilla de la
+                    izquierda, y delante del valor por lo mismo: un cajón se
+                    cuenta mirando las piezas, no leyendo importes, y con las
+                    dos columnas ilustradas igual la fila del teórico se
+                    empareja de un vistazo con la que se está tecleando.
+                    El hueco se reserva siempre —haya foto o no— para que las
+                    cifras de las dos columnas sigan alineadas.
+                  */}
+                  <span className="flex h-6 w-8 shrink-0 items-center justify-center">
+                    {d?.imagenUrl && (
+                      <img src={d.imagenUrl} alt="" className="max-h-6 max-w-8 object-contain" />
+                    )}
+                  </span>
                   <span className="w-14 text-sm font-bold tabular-nums text-slate-200">
                     {d?.etiqueta ?? euros(l.valor)}
                   </span>
