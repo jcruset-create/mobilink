@@ -29,6 +29,8 @@ import {
   Wifi,
   Truck,
   Store,
+  Building2,
+  Contact,
 } from "lucide-react";
 import RoadsideBackofficeModal, { type BackofficeData } from "./RoadsideBackofficeModal";
 import KnownPlaceMapModal from "./KnownPlaceMapModal";
@@ -57,6 +59,15 @@ import {
   ROADSIDE_ASSISTANCE_STATUS_FLOW,
   ROADSIDE_ASSISTANCE_STATUS_LABELS,
 } from "../modules/roadsideAssistanceTypes";
+import SubcontratacionExterna from "./SubcontratacionExterna";
+import TimelineAsistencia from "./TimelineAsistencia";
+import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
+import CorreoExpediente from "./CorreoExpediente";
+import SelectorSubcontrata, {
+  guardarSubcontrata,
+  SUBCONTRATA_VACIA,
+  type Subcontrata,
+} from "./SelectorSubcontrata";
 
 const INITIAL_DRAFT: RoadsideAssistanceDraft = {
   solicitanteEmpresa: "",
@@ -118,6 +129,77 @@ const STEP_LABELS: Partial<Record<RoadsideAssistanceStatus, string>> = {
 };
 
 /** Hora de inicio de cada estado del flujo (si la asistencia la tiene registrada). */
+/**
+ * Los tipos de foto que tienen un sitio propio en la galería, en el orden en
+ * que se miran: primero para identificar el vehículo, luego lo que pasaba,
+ * luego lo que se hizo, y al final la firma.
+ */
+const GRUPOS_ADJUNTO: { kind: string; label: string }[] = [
+  { kind: "matricula_camion", label: "Matrícula camión" },
+  { kind: "matricula_remolque", label: "Matrícula remolque" },
+  { kind: "averia", label: "Avería" },
+  { kind: "foto_averia", label: "Avería (antes de reparar)" },
+  { kind: "trabajo_realizado", label: "Trabajo realizado" },
+  { kind: "foto_reparacion", label: "Reparación finalizada" },
+  { kind: "foto_or", label: "OR manual (técnico)" },
+  { kind: "foto_extra", label: "Fotos adicionales" },
+  { kind: "firma", label: "Firma cliente" },
+  { kind: "foto", label: "Otras fotos" },
+];
+
+/** Cómo se llama cada tipo del catálogo, para lo que no cae en un grupo fijo. */
+const ETIQUETA_TIPO_DOC: Record<string, string> = {
+  albaran: "Albaranes",
+  parte: "Partes de trabajo",
+  factura: "Facturas",
+  presupuesto: "Presupuestos",
+  fotografia: "Otras fotografías",
+  autorizacion: "Autorizaciones",
+  firma: "Firmas",
+  otro: "Otros documentos",
+};
+
+/**
+ * Reparte los adjuntos en grupos para pintarlos.
+ *
+ * Lo importante de esta función es lo que arregla: antes se recorría una lista
+ * fija de `kind` y **lo que no estaba en la lista no se pintaba**. Los
+ * adjuntos de WhatsApp, los albaranes y las facturas se subían y no se veían
+ * en ningún sitio. Un fichero guardado que no se puede ver es un fichero
+ * perdido, y encima nadie lo echa de menos porque nunca llegó a aparecer.
+ *
+ * Ahora los grupos conocidos conservan su orden y su nombre, y todo lo demás
+ * cae en un grupo por tipo del catálogo. Lo que ni siquiera esté catalogado
+ * acaba en «Otros documentos», que es feo pero visible.
+ */
+function agruparAdjuntos(
+  files: any[],
+): { clave: string; label: string; group: any[] }[] {
+  const salida: { clave: string; label: string; group: any[] }[] = [];
+  const colocados = new Set<any>();
+
+  for (const { kind, label } of GRUPOS_ADJUNTO) {
+    const group = files.filter((f) => f.kind === kind);
+    if (group.length === 0) continue;
+    group.forEach((f) => colocados.add(f));
+    salida.push({ clave: kind, label, group });
+  }
+
+  // Objeto plano y no un Map: en este fichero `Map` es el icono de lucide y
+  // tapa al del lenguaje.
+  const resto = files.filter((f) => !colocados.has(f));
+  const porTipo: Record<string, any[]> = {};
+  for (const f of resto) {
+    const tipo = String(f.tipoDocumento ?? "otro");
+    (porTipo[tipo] ??= []).push(f);
+  }
+  for (const [tipo, group] of Object.entries(porTipo)) {
+    salida.push({ clave: `tipo:${tipo}`, label: ETIQUETA_TIPO_DOC[tipo] ?? "Otros documentos", group });
+  }
+
+  return salida;
+}
+
 function stepTimestamp(
   st: RoadsideAssistanceStatus,
   a?: RoadsideAssistance
@@ -327,7 +409,11 @@ type Props = {
   error: string;
   onRefresh: () => void;
   onOpenSettings?: () => void;
-  onCreate: (draft: RoadsideAssistanceDraft) => Promise<void>;
+  // Devuelve la asistencia creada: hace falta su id para colgarle la
+  // subcontratación, que se guarda en una llamada aparte.
+  onCreate: (
+    draft: RoadsideAssistanceDraft
+  ) => Promise<RoadsideAssistance | void>;
   onUpdate: (
     assistance: RoadsideAssistance,
     draft: RoadsideAssistanceEditDraft
@@ -408,6 +494,10 @@ export default function RoadsideAssistanceView({
 }: Props) {
   const navigate = useNavigate();
   const [draft, setDraft] = useState<RoadsideAssistanceDraft>(INITIAL_DRAFT);
+  // La subcontratación va por su cuenta: no cabe en el alta sin tocar el
+  // INSERT posicional de la asistencia, y no queremos tocarlo.
+  const [subcontrata, setSubcontrata] = useState<Subcontrata>(SUBCONTRATA_VACIA);
+  const [editSubcontrata, setEditSubcontrata] = useState<Subcontrata>(SUBCONTRATA_VACIA);
   const [editingAssistance, setEditingAssistance] =
     useState<RoadsideAssistance | null>(null);
   const [editDraft, setEditDraft] =
@@ -730,8 +820,22 @@ export default function RoadsideAssistanceView({
     setSaving(true);
 
     try {
-      await onCreate(draft);
+      const creada = await onCreate(draft);
+      // Si falla solo la subcontratación, la asistencia ya está creada: se avisa
+      // pero no se pierde el alta ni se reintenta a ciegas.
+      if (creada && subcontrata.proveedorId) {
+        try {
+          await guardarSubcontrata(creada.id, subcontrata);
+        } catch (subError) {
+          setLocalError(
+            `Asistencia #${creada.id} creada, pero no se pudo guardar la subcontratación: ${
+              subError instanceof Error ? subError.message : "error desconocido"
+            }. Asígnala editando la asistencia.`
+          );
+        }
+      }
       setDraft(INITIAL_DRAFT);
+      setSubcontrata(SUBCONTRATA_VACIA);
       setPanelTab("activas");
     } catch (createError) {
       setLocalError(
@@ -801,12 +905,19 @@ export default function RoadsideAssistanceView({
   function openEditor(assistance: RoadsideAssistance) {
     setEditingAssistance(assistance);
     setEditDraft(buildEditDraft(assistance));
+    setEditSubcontrata({
+      proveedorId: assistance.proveedorId ?? null,
+      proveedorTallerId: assistance.proveedorTallerId ?? null,
+      proveedorContactoId: assistance.proveedorContactoId ?? null,
+      clienteFacturacionId: assistance.clienteFacturacionId ?? null,
+    });
     setEditError("");
   }
 
   function closeEditor() {
     setEditingAssistance(null);
     setEditDraft(INITIAL_EDIT_DRAFT);
+    setEditSubcontrata(SUBCONTRATA_VACIA);
     setEditError("");
   }
 
@@ -826,6 +937,8 @@ export default function RoadsideAssistanceView({
 
     try {
       await onUpdate(editingAssistance, editDraft);
+      await guardarSubcontrata(editingAssistance.id, editSubcontrata);
+      onRefresh();
       closeEditor();
     } catch (updateError) {
       setEditError(
@@ -1059,6 +1172,18 @@ export default function RoadsideAssistanceView({
             className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
           >
             <Store className="h-4 w-4 shrink-0" /> Talleres
+          </a>
+          <a
+            href="/asistencias/proveedores"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Building2 className="h-4 w-4 shrink-0" /> Proveedores
+          </a>
+          <a
+            href="/asistencias/clientes"
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2 font-medium text-slate-300 hover:bg-slate-800"
+          >
+            <Contact className="h-4 w-4 shrink-0" /> Clientes
           </a>
           <a
             href="/asistencias/lugares"
@@ -1678,6 +1803,18 @@ export default function RoadsideAssistanceView({
                 />
               </label>
 
+              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wide text-slate-300">
+                    Subcontratación (opcional)
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Solo si el trabajo lo hace un taller externo
+                  </span>
+                </div>
+                <SelectorSubcontrata valor={subcontrata} onChange={setSubcontrata} />
+              </div>
+
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold text-slate-400">
                   Observaciones
@@ -1799,6 +1936,31 @@ export default function RoadsideAssistanceView({
                         {assistance.solicitanteAutorizacion && (
                           <div className="mt-0.5 truncate text-xs font-bold text-amber-400/90">
                             Autorización / cita: {assistance.solicitanteAutorizacion}
+                          </div>
+                        )}
+                        {/* Se lee del snapshot: enseña el taller tal y como era el
+                            día del servicio, aunque hoy esté de baja o renombrado. */}
+                        {assistance.subcontrataSnapshot?.tallerNombre && (
+                          <div className="mt-0.5 truncate text-xs text-violet-300">
+                            Subcontrata: {[
+                              assistance.subcontrataSnapshot.proveedorNombre,
+                              assistance.subcontrataSnapshot.tallerNombre,
+                              assistance.subcontrataSnapshot.tallerUrgencias ||
+                                assistance.subcontrataSnapshot.tallerTelefono,
+                              [
+                                assistance.subcontrataSnapshot.contactoNombre,
+                                assistance.subcontrataSnapshot.contactoApellidos,
+                              ]
+                                .filter(Boolean)
+                                .join(" "),
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </div>
+                        )}
+                        {assistance.subcontrataSnapshot?.clienteFacturacionNombre && (
+                          <div className="mt-0.5 truncate text-xs text-slate-500">
+                            Se factura a: {assistance.subcontrataSnapshot.clienteFacturacionNombre}
                           </div>
                         )}
                       </div>
@@ -2768,6 +2930,52 @@ export default function RoadsideAssistanceView({
                   />
                 </label>
 
+                <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 md:col-span-2">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wide text-slate-300">
+                      Subcontratación
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      Taller externo que hace el trabajo
+                    </span>
+                  </div>
+                  <SelectorSubcontrata valor={editSubcontrata} onChange={setEditSubcontrata} />
+                </div>
+
+                {/* Subcontratar a otra PLATAFORMA es distinto de mandarlo a un
+                    taller: allí se abre un expediente aparte, con sus estados
+                    y su facturación. Por eso va en su propio bloque. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <SubcontratacionExterna assistanceId={editingAssistance.id} />
+                  </div>
+                )}
+
+                {/* El historial va aquí, junto a la subcontratación: cuando algo
+                    no cuadra, lo primero que se mira es qué pasó y cuándo. */}
+                {/* El expediente va ANTES del historial: al abrir una asistencia
+                    cerrada, lo primero que se quiere saber es si falta algo por
+                    cobrar, no la cronología. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <ExpedienteAdministrativo assistanceId={editingAssistance.id} />
+                  </div>
+                )}
+
+                {/* El correo va pegado al expediente: casi siempre se abre
+                    para pedir lo que falta, y lo que falta está justo arriba. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <CorreoExpediente assistanceId={editingAssistance.id} />
+                  </div>
+                )}
+
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <TimelineAsistencia assistanceId={editingAssistance.id} />
+                  </div>
+                )}
+
                 <label className="block md:col-span-2">
                   <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Observaciones
@@ -2860,49 +3068,42 @@ export default function RoadsideAssistanceView({
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {[
-                    { kind: "matricula_camion", label: "Matrícula camión" },
-                    { kind: "matricula_remolque", label: "Matrícula remolque" },
-                    { kind: "averia", label: "Avería" },
-                    { kind: "foto_averia", label: "Avería (antes de reparar)" },
-                    { kind: "trabajo_realizado", label: "Trabajo realizado" },
-                    { kind: "foto_reparacion", label: "Reparación finalizada" },
-                    { kind: "foto_or", label: "OR manual (técnico)" },
-                    { kind: "foto_extra", label: "Fotos adicionales" },
-                    { kind: "firma", label: "Firma cliente" },
-                    { kind: "foto", label: "Otras fotos" },
-                  ].map(({ kind, label }) => {
-                    const group = photos.filter((f) => f.kind === kind);
-                    if (group.length === 0) return null;
-                    return (
-                      <div key={kind}>
-                        <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">
-                          {label}
-                        </div>
-                        <div className="grid gap-2 grid-cols-2 sm:grid-cols-3">
-                          {group.map((file) => (
-                            <button
-                              key={file.id}
-                              type="button"
-                              onClick={() => setLightboxUrl(file.url)}
-                              className="overflow-hidden rounded-lg border border-slate-700 hover:opacity-90"
-                            >
-                              <img
-                                src={file.url}
-                                alt={label}
-                                className="h-32 w-full object-cover"
-                              />
-                              {file.detectedPlate && (
-                                <div className="bg-slate-900 px-2 py-1 text-center text-xs font-black text-white">
-                                  IA: {file.detectedPlate}
-                                </div>
-                              )}
-                            </button>
-                          ))}
-                        </div>
+                  {agruparAdjuntos(photos).map(({ clave, label, group }) => (
+                    <div key={clave}>
+                      <div className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">
+                        {label}
                       </div>
-                    );
-                  })}
+                      <div className="grid gap-2 grid-cols-2 sm:grid-cols-3">
+                        {group.map((file: any) => (
+                          <button
+                            key={file.id}
+                            type="button"
+                            onClick={() => setLightboxUrl(file.url)}
+                            className="overflow-hidden rounded-lg border border-slate-700 hover:opacity-90"
+                          >
+                            <img
+                              src={file.url}
+                              alt={label}
+                              className="h-32 w-full object-cover"
+                            />
+                            {file.detectedPlate && (
+                              <div className="bg-slate-900 px-2 py-1 text-center text-xs font-black text-white">
+                                IA: {file.detectedPlate}
+                              </div>
+                            )}
+                            {/* Quién más ve esto. Solo se avisa de lo que sale
+                                de casa: marcar como «interno» lo que ya es
+                                interno sería ruido en todas las fotos. */}
+                            {(file.visibilidad === "compartido" || file.visibilidad === "cliente") && (
+                              <div className="bg-slate-900/80 px-2 py-0.5 text-center text-[10px] font-bold text-amber-300">
+                                {file.visibilidad === "cliente" ? "va al cliente" : "compartida"}
+                              </div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

@@ -15,13 +15,20 @@ import SeguimientoLiteTab from "../components/SeguimientoLiteTab";
 import BackOfficeTab from "../components/BackOfficeTab";
 import VehiculoTab from "../components/VehiculoTab";
 import TarificacionTab from "../components/TarificacionTab";
+import SubcontratacionTab from "../components/SubcontratacionTab";
 import { ASSISTANCE_STATUS_LABELS, ASSISTANCE_STATUS_STYLES, fmtDateTime, fmtImporte } from "../types";
 
 type Detail = {
   id: number; uuid: string; status: string; priority: string; serviceType: string;
   expedientNumber: string | null; externalReference: string | null; clientName: string | null;
+  sourceSystem?: string | null; sourceReference?: string | null;
+  correlationId?: string | null; requesterCompanyName?: string | null;
   partnerName: string | null; workshopName: string | null; workshopPhone: string | null;
   providerName: string | null; coreStatus: string | null;
+  workshopEmergencyPhone: string | null; workshopEmail: string | null;
+  billingClientName: string | null;
+  contactName: string | null; contactSurname: string | null;
+  contactPhone: string | null; contactMobile: string | null; contactEmail: string | null;
   customerName: string; customerPhone: string; requester: string; locationDetails: string;
   address: string; latitude: number | null; longitude: number | null;
   vehicle: string; description: string | null; origin: string; createdByName: string | null;
@@ -46,7 +53,10 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-const TABS = ["Resumen", "Back office", "Asignación", "Seguimiento", "Comunicaciones", "Tarificación", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
+// «Subcontratación» va detrás de «Asignación» porque es la misma pregunta
+// —a quién se le da este servicio— cuando la respuesta está fuera de la red
+// propia.
+const TABS = ["Resumen", "Back office", "Asignación", "Subcontratación", "Seguimiento", "Comunicaciones", "Tarificación", "Solicitante", "Vehículo", "Ubicación", "Timeline"] as const;
 
 export default function FichaAsistencia() {
   const { id } = useParams();
@@ -169,7 +179,20 @@ export default function FichaAsistencia() {
               .filter(Boolean).join(" · ") || "—"}
           </b></span>
           <span>Proveedor: <b className="text-slate-200">{a.providerName ?? "—"}</b></span>
-          <span>Taller: <b className="text-slate-200">{a.workshopName ?? "—"}</b></span>
+          <span>Taller: <b className="text-slate-200">
+            {[a.workshopName, a.workshopPhone].filter(Boolean).join(" · ") || "—"}
+          </b></span>
+          {/* Con quién se habla en ese taller: sin esto había que ir a buscarlo
+              a la ficha, y en una asistencia en curso no da tiempo. */}
+          {a.contactName && (
+            <span>Contacto: <b className="text-slate-200">
+              {[[a.contactName, a.contactSurname].filter(Boolean).join(" "),
+                a.contactPhone ?? a.contactMobile, a.contactEmail].filter(Boolean).join(" · ")}
+            </b></span>
+          )}
+          {a.billingClientName && a.billingClientName !== a.clientName && (
+            <span>Se factura a: <b className="text-amber-300">{a.billingClientName}</b></span>
+          )}
           <span>Operario: <b className="text-slate-200">{a.assignedTechName ?? "—"}</b></span>
           <span>Furgoneta: <b className="text-slate-200">
             {[a.assignedVehicleName, a.assignedVehiclePlate].filter(Boolean).join(" · ") || "—"}
@@ -198,6 +221,24 @@ export default function FichaAsistencia() {
             <Row label="Tipo de asistencia" value={a.serviceType} />
             <Row label="Referencia externa" value={a.externalReference} />
             <Row label="Origen" value={a.origin} />
+            {/* Una asistencia que llega de otro sistema: el expediente del
+                origen es el número por el que preguntarán al llamar, y no es
+                el nuestro. Los dos conviven a propósito. */}
+            {a.sourceSystem && (
+              <>
+                <Row
+                  label="Sistema de origen"
+                  value={
+                    <span className="rounded border border-indigo-500/40 bg-indigo-500/10 px-1.5 py-0.5 text-[11px] font-bold uppercase text-indigo-300">
+                      {a.sourceSystem}
+                    </span>
+                  }
+                />
+                <Row label="Expediente en origen" value={a.sourceReference} />
+                <Row label="Empresa solicitante" value={a.requesterCompanyName} />
+                <Row label="Correlación" value={a.correlationId} />
+              </>
+            )}
             <Row label="Descripción" value={a.description && <span className="whitespace-pre-wrap">{a.description}</span>} />
             <Row label="Explicación de asignación" value={a.assignmentExplanation} />
             <Row label="Estado en Mobilink Assist" value={a.coreStatus} />
@@ -207,6 +248,9 @@ export default function FichaAsistencia() {
         )}
         {tab === "Asignación" && (
           <AsignacionTab assistanceId={a.id} status={a.status} canOperate={canOperate} onChanged={load} />
+        )}
+        {tab === "Subcontratación" && (
+          <SubcontratacionTab assistanceId={a.id} canOperate={canOperate} />
         )}
         {tab === "Back office" && (
           <BackOfficeTab assistanceId={a.id} canOperate={canOperate} />

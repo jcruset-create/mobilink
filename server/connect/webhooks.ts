@@ -6,19 +6,62 @@
  */
 
 import crypto from "node:crypto";
+import type { PoolClient } from "pg";
 import db from "../db.ts";
 import { createAlert } from "./alerts.ts";
 
 const RETRY_DELAYS_MS = [60_000, 300_000, 1_800_000, 7_200_000, 21_600_000, 86_400_000];
 
-/** Encola un evento para todos los endpoints activos del partner que lo escuchan. */
+/**
+ * Encola un evento para los endpoints activos del partner que lo escuchan.
+ *
+ * `connect_webhook_deliveries` ES el outbox: la fila se escribe aquí y quien
+ * entrega es el worker, fuera de la petición y con reintentos. No hace falta
+ * otra tabla ni otro servicio.
+ *
+ * Lo que sí hacía falta es poder escribirla DENTRO de la transacción que
+ * provoca el evento (ver `enqueueWebhookEventEnTransaccion`): si el cambio de
+ * estado cuaja y el aviso no, el otro sistema se queda esperando algo que ya
+ * pasó y nadie lo sabe hasta que llama el cliente.
+ */
 export async function enqueueWebhookEvent(
   partnerId: number,
   eventType: string,
   data: Record<string, unknown>,
 ): Promise<void> {
+  await encolar(db, partnerId, eventType, data);
+}
+
+/**
+ * La misma cola, dentro de la transacción de quien llama.
+ *
+ * Es el patrón Transactional Outbox, y aquí lo que garantiza es exactamente
+ * esto: **o cambia el estado y sale el aviso, o no cambia nada**. No existe
+ * ningún instante en el que Central sepa de un cambio que Assist nunca va a
+ * recibir.
+ *
+ * Puede lanzar, a diferencia de la versión suelta, y así tiene que ser: si el
+ * aviso no se puede encolar, el cambio de estado se deshace con él.
+ */
+export async function enqueueWebhookEventEnTransaccion(
+  cliente: PoolClient,
+  partnerId: number,
+  eventType: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  await encolar(cliente, partnerId, eventType, data);
+}
+
+type Ejecutor = { query: (texto: string, params?: unknown[]) => Promise<{ rows: any[] }> };
+
+async function encolar(
+  ejecutor: Ejecutor,
+  partnerId: number,
+  eventType: string,
+  data: Record<string, unknown>,
+): Promise<void> {
   const now = Date.now();
-  const endpoints = await db.query(
+  const endpoints = await ejecutor.query(
     `SELECT id, "eventTypes" FROM connect_webhook_endpoints WHERE "partnerId" = $1 AND status = 'active'`,
     [partnerId],
   );
@@ -31,7 +74,7 @@ export async function enqueueWebhookEvent(
   for (const ep of endpoints.rows) {
     const types: string[] = JSON.parse(ep.eventTypes || '["*"]');
     if (!types.includes("*") && !types.includes(eventType)) continue;
-    await db.query(
+    await ejecutor.query(
       `INSERT INTO connect_webhook_deliveries ("endpointId", "eventType", payload, "nextRetryAtMs", "createdAtMs")
        VALUES ($1, $2, $3, $4, $4)`,
       [ep.id, eventType, payload, now],

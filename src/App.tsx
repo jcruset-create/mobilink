@@ -14,6 +14,9 @@ import DashboardPage from "./pages/DashboardPage";
 import LicensesPage from "./pages/LicensesPage";
 import CentralSharingPage from "./pages/CentralSharingPage";
 import TalleresPage from "./pages/TalleresPage";
+import ProveedoresPage from "./pages/ProveedoresPage";
+import BandejaExcepcionesPage from "./pages/BandejaExcepcionesPage";
+import ClientesFacturacionPage from "./pages/ClientesFacturacionPage";
 import LugaresPage from "./pages/LugaresPage";
 import OtfHistorialPage from "./pages/OtfHistorialPage";
 import AdminEmpresasPage from "./pages/AdminEmpresasPage";
@@ -156,6 +159,9 @@ export default function App() {
       <Route path="/licencias" element={<LicensesPage />} />
       <Route path="/asistencias/central" element={<CentralSharingPage />} />
       <Route path="/asistencias/talleres" element={<TalleresPage />} />
+      <Route path="/asistencias/bandeja" element={<BandejaExcepcionesPage />} />
+      <Route path="/asistencias/proveedores" element={<ProveedoresPage />} />
+      <Route path="/asistencias/clientes" element={<ClientesFacturacionPage />} />
       <Route path="/asistencias/lugares" element={<LugaresPage />} />
       <Route path="/otf/historial" element={<OtfHistorialPage />} />
       <Route path="/admin/empresas" element={<AdminEmpresasPage />} />
