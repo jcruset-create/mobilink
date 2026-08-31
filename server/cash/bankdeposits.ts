@@ -53,7 +53,7 @@ import {
 } from "./repository.ts";
 import { type LineaDenominacion, inventarioDesdeLineas } from "./domain/inventory.ts";
 import { type Canje, mejorCanje } from "./domain/depositswap.ts";
-import { deficitDeFondo, mejorReposicion } from "./domain/floattopup.ts";
+import { type Reposicion, deficitDeFondo, mejorReposicion } from "./domain/floattopup.ts";
 import type { Contexto } from "./service.ts";
 import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
 
@@ -70,6 +70,21 @@ export type CierrePendiente = {
 };
 
 export type CierreConciliado = { sessionId: number; fecha: string; importeCentimos: Centimos };
+
+/**
+ * Una reposición de fondo que todavía no ha entrado en ningún ingreso.
+ *
+ * Va en la misma lista que los cierres pendientes y RESTA: ese dinero ya no
+ * está en la bolsa, está otra vez en el cajón. Enseñarlo ahí y no aparte es lo
+ * que hace que la lista sume exactamente lo que se va a llevar al banco, que
+ * es lo único que se puede comprobar contando billetes.
+ */
+export type ReposicionPendiente = {
+  id: number;
+  fecha: string;
+  /** Lo repuesto, en positivo. En la lista se pinta restando. */
+  importeCentimos: Centimos;
+};
 
 export type IngresoBancario = {
   id: number;
@@ -211,6 +226,32 @@ export async function cierresPendientes(
   /* eslint-enable @typescript-eslint/no-explicit-any */
 }
 
+/**
+ * Reposiciones de fondo hechas contra el montón que todavía espera al banco.
+ *
+ * Se listan una a una, con su fecha, en vez de darlas sumadas: son movimientos
+ * de dinero como los cierres y quien cuadra la bolsa tiene que poder señalar
+ * cuál es cuál.
+ */
+export async function reposicionesPendientes(
+  empresaId: string,
+  registerId: number
+): Promise<ReposicionPendiente[]> {
+  const { rows } = await pool.query(
+    `SELECT id, importe_centimos, created_at_ms
+       FROM cash_float_topups
+      WHERE empresa_id = $1 AND register_id = $2 AND bank_deposit_id IS NULL
+      ORDER BY created_at_ms, id`,
+    [empresaId, registerId]
+  );
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  return rows.map((r: any) => ({
+    id: r.id,
+    fecha: new Date(Number(r.created_at_ms)).toISOString().slice(0, 10),
+    importeCentimos: Number(r.importe_centimos),
+  }));
+}
+
 /** Historial de ingresos de la caja, con sus cierres, el más reciente primero. */
 export async function listarIngresos(
   empresaId: string,
@@ -255,15 +296,24 @@ export async function listarIngresos(
 
 /** Todo lo que necesita la pantalla, en una llamada. */
 export async function panelIngresos(empresaId: string, registerId: number) {
-  const [pendientes, remanente, ingresos] = await Promise.all([
+  const [pendientes, reposiciones, remanente, ingresos] = await Promise.all([
     cierresPendientes(empresaId, registerId),
+    reposicionesPendientes(empresaId, registerId),
     remanenteActual(pool, registerId),
     listarIngresos(empresaId, registerId),
   ]);
   return {
     pendientes,
+    reposiciones,
     remanenteCentimos: remanente,
-    totalPendienteCentimos: pendientes.reduce((a, c) => a + c.importeCentimos, 0),
+    /*
+     * Los cierres MENOS lo que se devolvió al cajón. Es el total que de verdad
+     * se puede ingresar, y el mismo que valida `crearIngreso`: si aquí saliera
+     * el bruto, la pantalla ofrecería un importe que el servidor rechaza.
+     */
+    totalPendienteCentimos:
+      pendientes.reduce((a, c) => a + c.importeCentimos, 0) -
+      reposiciones.reduce((a, r) => a + r.importeCentimos, 0),
     ingresos,
   };
 }
@@ -903,23 +953,27 @@ export async function composicionPendiente(
   }
 
   /*
-   * Y las reposiciones de fondo, que SALEN del montón hacia el cajón. Al revés
-   * que el canje, esto no devuelve nada: el montón se queda con menos valor,
-   * que es exactamente el punto. Sin restarlo aquí, el montón diría que tiene
-   * un dinero que ya está otra vez en el cajón y se podría ingresar dos veces.
+   * Y las reposiciones de fondo. Como el canje, mueven piezas en los dos
+   * sentidos —sale del montón lo que repone el fondo y vuelve la vuelta— así
+   * que la dirección se invierte igual: lo que ENTRA en el cajón sale del
+   * montón, y lo que sale del cajón vuelve al montón. A diferencia del canje,
+   * los dos lados NO suman lo mismo: la diferencia es justo lo que el montón
+   * pierde. Sin esto, el montón diría que tiene un dinero que ya está otra vez
+   * en el cajón y se podría ingresar dos veces.
    */
   const { rows: reposiciones } = await client.query(
-    `SELECT m.valor_unitario_centimos AS valor, SUM(m.cantidad)::int AS n
+    `SELECT m.valor_unitario_centimos AS valor, m.direccion, SUM(m.cantidad)::int AS n
        FROM cash_float_topups t
        JOIN cash_denomination_movements m ON m.operation_id = t.operation_id
       WHERE t.empresa_id = $1 AND t.register_id = $2
-        AND m.direccion = 'IN'
         AND ($3::int IS NULL AND t.bank_deposit_id IS NULL
              OR t.bank_deposit_id = $3::int)
-      GROUP BY m.valor_unitario_centimos`,
+      GROUP BY m.valor_unitario_centimos, m.direccion`,
     [empresaId, registerId, canjesDe]
   );
-  for (const r of reposiciones) acumular(Number(r.valor), -Number(r.n));
+  for (const r of reposiciones) {
+    acumular(Number(r.valor), r.direccion === "IN" ? -Number(r.n) : Number(r.n));
+  }
 
   const denominaciones = await cargarDenominaciones(client, false);
   const esBillete = new Map(denominaciones.map((d) => [d.valor, d.tipo === "BILLETE"]));
@@ -1262,8 +1316,11 @@ async function repuestoPendiente(
 export type DeficitFondo = {
   /** El fondo fijo configurado en la caja. 0 = sin fondo fijo. */
   fondoObjetivoCentimos: Centimos;
-  /** Lo que hay ahora en el cajón: la jornada abierta, o el último cierre. */
-  efectivoCentimos: Centimos;
+  /**
+   * El fondo de verdad: el cambio que dejó el último cierre más lo que ya se
+   * le haya repuesto hoy. NO es el efectivo que hay ahora en el cajón.
+   */
+  fondoCentimos: Centimos;
   /** Lo que falta. 0 cuando la caja va justa o sobrada. */
   deficitCentimos: Centimos;
   /**
@@ -1279,10 +1336,20 @@ export type DeficitFondo = {
 /**
  * Cuánto le falta a una caja para su fondo fijo.
  *
- * El efectivo se mira de la jornada ABIERTA si la hay —es lo que hay en el
- * cajón ahora mismo— y si no, del cambio que dejó el último cierre, que es lo
- * que habrá mañana al abrir. Las dos son la misma pregunta hecha en dos
- * momentos.
+ * Se mide contra el CAMBIO QUE DEJÓ EL ÚLTIMO CIERRE, nunca contra el efectivo
+ * que hay en el cajón a media mañana. Mirar el cajón en caliente da un número
+ * que no significa nada: dentro están ya los cobros del día, que se van a
+ * ingresar, y el déficit sale más pequeño de lo que es —o desaparece— para
+ * volver puntualmente en el cierre siguiente. El fondo es con lo que la caja
+ * ARRANCA, y eso lo fijó el cierre anterior.
+ *
+ * A ese cambio se le suma lo ya repuesto en la jornada abierta, que es lo que
+ * hace que el déficit baje a cero en cuanto se pulsa Reponer y no se pueda
+ * reponer dos veces lo mismo. Cuando esa jornada cierre, el cambio que deje ya
+ * incluirá la reposición y la cuenta seguirá saliendo sola.
+ *
+ * Sin ningún cierre todavía no hay déficit: una caja recién dada de alta no
+ * debe nada, y proponerle reponer su fondo entero sería inventarse una deuda.
  */
 export async function deficitDeCaja(
   empresaId: string,
@@ -1294,22 +1361,40 @@ export async function deficitDeCaja(
   );
   const objetivo = Number(cajas[0]?.fondo_objetivo_centimos ?? 0);
 
-  const abierta = await sesionAbierta(registerId);
-  let efectivo = 0;
-  if (abierta) {
-    for (const [valor, n] of await stockTeorico(pool, abierta.id)) efectivo += valor * n;
-  } else {
+  const { rows: ultimos } = await pool.query(
+    `SELECT id FROM cash_sessions
+      WHERE register_id = $1 AND estado = 'CLOSED'
+      ORDER BY fecha DESC, id DESC LIMIT 1`,
+    [registerId]
+  );
+  const ultimoCierre: number | null = ultimos[0]?.id ?? null;
+
+  let fondo = 0;
+  if (ultimoCierre != null) {
     const { rows } = await pool.query(
       `SELECT COALESCE(SUM(m.valor_unitario_centimos * m.cantidad),0)::bigint AS total
          FROM cash_denomination_movements m
-        WHERE m.session_id = (
-                SELECT id FROM cash_sessions
-                 WHERE register_id = $1 AND estado = 'CLOSED'
-                 ORDER BY fecha DESC, id DESC LIMIT 1)
-          AND m.motivo = 'CLOSING_FLOAT' AND m.direccion = 'OUT'`,
-      [registerId]
+        WHERE m.session_id = $1 AND m.motivo = 'CLOSING_FLOAT' AND m.direccion = 'OUT'`,
+      [ultimoCierre]
     );
-    efectivo = Number(rows[0].total);
+    fondo = Number(rows[0].total);
+  }
+
+  /*
+   * Lo repuesto en la jornada abierta. Solo esa: las reposiciones de jornadas
+   * ya cerradas están dentro del cambio que dejó el cierre y contarlas otra
+   * vez sería sumarlas dos veces.
+   */
+  const abierta = await sesionAbierta(registerId);
+  if (abierta) {
+    const { rows } = await pool.query(
+      `SELECT COALESCE(SUM(t.importe_centimos),0)::bigint AS total
+         FROM cash_float_topups t
+         JOIN cash_operations o ON o.id = t.operation_id
+        WHERE t.empresa_id = $1 AND t.register_id = $2 AND o.session_id = $3`,
+      [empresaId, registerId, abierta.id]
+    );
+    fondo += Number(rows[0].total);
   }
 
   /*
@@ -1338,8 +1423,8 @@ export async function deficitDeCaja(
 
   return {
     fondoObjetivoCentimos: objetivo,
-    efectivoCentimos: efectivo,
-    deficitCentimos: deficitDeFondo(objetivo, efectivo),
+    fondoCentimos: fondo,
+    deficitCentimos: ultimoCierre == null ? 0 : deficitDeFondo(objetivo, fondo),
     cierresConDeficit: racha,
   };
 }
@@ -1349,19 +1434,19 @@ export type PropuestaReposicion = DeficitFondo & {
   monton: { billetes: LineaDenominacion[]; monedas: LineaDenominacion[] };
   /** Valor del montón: el techo de lo que se puede reponer. */
   montonCentimos: Centimos;
-  /** Las piezas propuestas. Vacío = no se puede reponer nada todavía. */
-  propuesta: LineaDenominacion[];
-  propuestaCentimos: Centimos;
+  /** Qué sacar del montón y qué devolverle. `null` = no hay con qué todavía. */
+  reposicion: Reposicion | null;
   /** La reposición mueve el cajón, así que necesita jornada abierta. */
   sinJornadaAbierta: boolean;
 };
 
 /**
- * Qué se puede devolver hoy al cajón, y con qué piezas.
+ * Qué se puede devolver hoy al cajón, con qué piezas, y qué vuelve a cambio.
  *
- * Nunca propone más de lo que falta ni más de lo que hay: si el montón está
- * vacío, la propuesta viene vacía y quien mire la pantalla verá que hay que
- * esperar al próximo cierre.
+ * La vuelta sale del cajón y por eso hace falta su stock: proponer devolver
+ * 48 céntimos que la caja no tiene sería mandar a alguien a hacer un cuadre
+ * imposible. Sin jornada abierta no hay cajón que mirar, así que la propuesta
+ * se calcula sin vuelta y la pantalla avisa de que falta abrir.
  */
 export async function proponerReposicion(
   empresaId: string,
@@ -1375,31 +1460,32 @@ export async function proponerReposicion(
   ]);
 
   const todas = [...monton.billetes, ...monton.monedas];
-  const propuesta = mejorReposicion(
-    inventarioDesdeLineas(todas),
-    deficit.deficitCentimos
-  );
+  const caja = abierta ? await stockTeorico(pool, abierta.id) : new Map<Centimos, number>();
 
   return {
     ...deficit,
     monton,
     montonCentimos: todas.reduce((a, l) => a + l.valor * l.cantidad, 0),
-    propuesta,
-    propuestaCentimos: propuesta.reduce((a, l) => a + l.valor * l.cantidad, 0),
+    reposicion: mejorReposicion(inventarioDesdeLineas(todas), caja, deficit.deficitCentimos),
     sinJornadaAbierta: !abierta,
   };
 }
 
 /**
- * Devuelve al cajón las piezas indicadas del montón pendiente.
+ * Devuelve al cajón las piezas indicadas del montón pendiente, con su vuelta.
  *
- * Se asienta como una entrada de efectivo de la jornada abierta —entra dinero
- * y no sale nada— y NO como un cobro. Esto no es un detalle de nomenclatura:
- * el desglose por secciones solo suma `COLLECTION`, `PAYMENT` y `MANUAL_OUT`,
- * así que un `MANUAL_IN` no se cuela en el reparto por secciones ni, por
- * tanto, en el cierre que se concilia con la ERP. Ese es exactamente el motivo
- * de que la reposición salga del montón y no de los cobros del día siguiente:
- * con los cobros, parte de la caja del Genes dejaría de ser venta.
+ * Va en los DOS SENTIDOS a propósito, como el canje: la bolsa casi nunca tiene
+ * las piezas justas del déficit, así que sale de ella algo de más y el cajón
+ * devuelve la diferencia. Lo que repone el fondo es el NETO, `sacar −
+ * devolver`, y es el neto lo que se compara con el déficit.
+ *
+ * Se asienta como una entrada de efectivo de la jornada abierta y NO como un
+ * cobro. Esto no es un detalle de nomenclatura: el desglose por secciones solo
+ * suma `COLLECTION`, `PAYMENT` y `MANUAL_OUT`, así que un `MANUAL_IN` no se
+ * cuela en el reparto por secciones ni, por tanto, en el cierre que se
+ * concilia con la ERP. Ese es exactamente el motivo de que la reposición salga
+ * del montón y no de los cobros del día siguiente: con los cobros, parte de la
+ * caja del Genes dejaría de ser venta.
  *
  * Se revalida todo aquí y no se hace caso a la propuesta que traiga la
  * pantalla: entre proponer y confirmar puede haberse hecho un canje, otra
@@ -1407,10 +1493,21 @@ export async function proponerReposicion(
  */
 export async function registrarReposicion(
   ctx: Contexto,
-  e: { registerId: number; sessionIds: number[]; lineas: LineaDenominacion[] }
+  e: {
+    registerId: number;
+    sessionIds: number[];
+    /** Piezas que salen del montón hacia el cajón. */
+    sacar: LineaDenominacion[];
+    /** Piezas que el cajón devuelve al montón. Vacío = sin vuelta. */
+    devolver?: LineaDenominacion[];
+  }
 ): Promise<{ operacionId: number; numero: string; importeCentimos: Centimos }> {
-  const lineas = e.lineas.filter((l) => l.cantidad > 0);
-  const importe = lineas.reduce((a, l) => a + l.valor * l.cantidad, 0);
+  const valor = (l: readonly LineaDenominacion[]) =>
+    l.reduce((a, x) => a + x.valor * x.cantidad, 0);
+
+  const sacar = e.sacar.filter((l) => l.cantidad > 0);
+  const devolver = (e.devolver ?? []).filter((l) => l.cantidad > 0);
+  const importe = valor(sacar) - valor(devolver);
 
   if (importe <= 0) {
     throw new ErrorCaja("ENTRADA_NO_VALIDA", "No hay nada que reponer.", 400);
@@ -1441,15 +1538,19 @@ export async function registrarReposicion(
     );
   }
 
-  // Que el montón tenga de verdad esas piezas.
+  // Que el montón tenga de verdad esas piezas. La vuelta no se comprueba aquí:
+  // sale del cajón y de ese stock responde la propia operación, que lo lee con
+  // la jornada bloqueada y rechaza lo que no haya.
   const monton = await composicionPendiente(ctx.empresaId, e.registerId, e.sessionIds);
   const hay = new Map<Centimos, number>();
   for (const l of [...monton.billetes, ...monton.monedas]) hay.set(l.valor, l.cantidad);
-  for (const l of lineas) {
-    if ((hay.get(l.valor) ?? 0) < l.cantidad) {
+  const pedido = new Map<Centimos, number>();
+  for (const l of sacar) pedido.set(l.valor, (pedido.get(l.valor) ?? 0) + l.cantidad);
+  for (const [valorPieza, cantidad] of pedido) {
+    if ((hay.get(valorPieza) ?? 0) < cantidad) {
       throw new ErrorCaja(
         "STOCK_INSUFICIENTE",
-        `En el montón pendiente no hay ${l.cantidad} piezas de ${formatearEuros(l.valor)} €.`,
+        `En el montón pendiente no hay ${cantidad} piezas de ${formatearEuros(valorPieza)} €.`,
         400
       );
     }
@@ -1461,7 +1562,8 @@ export async function registrarReposicion(
     tipo: "MANUAL_IN",
     importeCentimos: importe,
     formasPago: [{ forma: "CASH", importe }],
-    efectivoRecibido: lineas,
+    efectivoRecibido: sacar,
+    efectivoEntregado: devolver,
     concepto: "Reposición del fondo con dinero pendiente de ingresar",
   });
 
@@ -1489,7 +1591,8 @@ export async function registrarReposicion(
     entidadId: String(operacion.operacionId),
     detalle: {
       registerId: e.registerId,
-      lineas,
+      sacar,
+      devolver,
       importeCentimos: importe,
       deficitCentimos: deficit.deficitCentimos,
     },

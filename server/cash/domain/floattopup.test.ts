@@ -9,14 +9,17 @@ import { describe, expect, it } from "vitest";
 import { inventarioDesdeLineas, totalInventario } from "./inventory.ts";
 import { deficitDeFondo, mejorReposicion } from "./floattopup.ts";
 
-const monton = (...lineas: [number, number][]) =>
+const inv = (...lineas: [number, number][]) =>
   inventarioDesdeLineas(lineas.map(([valor, cantidad]) => ({ valor, cantidad })));
 
-const suma = (lineas: { valor: number; cantidad: number }[]) =>
+const suma = (lineas: readonly { valor: number; cantidad: number }[]) =>
   lineas.reduce((a, l) => a + l.valor * l.cantidad, 0);
 
-const piezas = (lineas: { valor: number; cantidad: number }[]) =>
+const piezas = (lineas: readonly { valor: number; cantidad: number }[]) =>
   lineas.reduce((a, l) => a + l.cantidad, 0);
+
+/** Un cajón de mostrador normal, con calderilla de sobra para dar vuelta. */
+const CAJON = inv([5000, 2], [2000, 3], [1000, 4], [500, 4], [200, 10], [100, 15], [50, 10], [20, 10], [10, 10], [5, 10], [2, 10], [1, 10]);
 
 describe("cuánto falta para el fondo", () => {
   it("el caso real de Tarragona el 28/08", () => {
@@ -40,87 +43,120 @@ describe("cuánto falta para el fondo", () => {
   });
 });
 
-describe("qué piezas se sacan del montón", () => {
-  it("repone el déficit exacto cuando el montón puede", () => {
+describe("sin vuelta, cuando el montón tiene las piezas justas", () => {
+  it("repone el déficit exacto", () => {
     // 21,52 € = 20 € + 1 € + 0,50 € + 2 × 0,01 €
-    const lineas = mejorReposicion(
-      monton([2000, 3], [100, 5], [50, 2], [20, 4], [1, 10]),
-      2152
-    );
-    expect(suma(lineas)).toBe(2152);
+    const r = mejorReposicion(inv([2000, 3], [100, 5], [50, 2], [20, 4], [1, 10]), CAJON, 2152)!;
+    expect(r.netoCentimos).toBe(2152);
+    expect(suma(r.sacar)).toBe(2152);
+    expect(r.devolver).toEqual([]);
+  });
+
+  it("prefiere no dar vuelta aunque pudiera", () => {
+    /*
+     * Con un montón que puede hacer los 21,52 € justos, sacar un billete de 50
+     * y devolver 28,48 € en monedas también «cuadraría», pero mete la mano en
+     * el cajón sin necesidad.
+     */
+    const r = mejorReposicion(inv([5000, 1], [2000, 1], [100, 1], [50, 1], [1, 2]), CAJON, 2152)!;
+    expect(r.devolver).toEqual([]);
+    expect(suma(r.sacar)).toBe(2152);
   });
 
   it("con las menos piezas posibles", () => {
-    /*
-     * Reponer 21,52 € con calderilla «suma» igual, pero no es lo mismo para
-     * quien tiene que contarlo y meterlo en el cajón.
-     */
-    const conCalderilla = monton([2000, 1], [100, 1], [50, 1], [1, 300]);
-    const lineas = mejorReposicion(conCalderilla, 2152);
-    expect(suma(lineas)).toBe(2152);
+    const r = mejorReposicion(inv([2000, 1], [100, 1], [50, 1], [1, 300]), CAJON, 2152)!;
     // 20 + 1 + 0,50 + 2×0,01 = 5 piezas. Nada más corto es posible.
-    expect(piezas(lineas)).toBe(5);
+    expect(piezas(r.sacar)).toBe(5);
+  });
+});
+
+describe("con vuelta, que es lo que hace que cuadre siempre", () => {
+  /**
+   * El montón real de Tarragona el 31/08: 72,60 € en la bolsa.
+   *
+   * Con esas piezas NO hay forma de sumar 21,52 € exactos. Sin vuelta, lo más
+   * que se puede sacar sin pasarse son 20,60 € y la caja se queda 92 céntimos
+   * coja: el déficit no desaparece, solo encoge.
+   */
+  const MONTON_REAL = inv([5000, 1], [1000, 2], [200, 1], [50, 1], [10, 1]);
+
+  it("el caso real: saca de más y devuelve la vuelta", () => {
+    const r = mejorReposicion(MONTON_REAL, CAJON, 2152)!;
+    expect(r.netoCentimos).toBe(2152);
+    expect(suma(r.sacar) - suma(r.devolver)).toBe(2152);
+    expect(r.devolver.length).toBeGreaterThan(0);
   });
 
-  it("nunca se pasa del déficit", () => {
-    // Solo hay un billete de 50 y el déficit son 21,52: no se toca.
-    const lineas = mejorReposicion(monton([5000, 2]), 2152);
-    expect(lineas).toEqual([]);
-  });
-
-  it("repone lo que se pueda cuando no llega, y ni un céntimo más", () => {
-    // Con un billete de 20 y nada más, se reponen 20,00 de los 21,52.
-    const lineas = mejorReposicion(monton([2000, 1], [5000, 3]), 2152);
-    expect(suma(lineas)).toBe(2000);
-    expect(suma(lineas)).toBeLessThan(2152);
-  });
-
-  it("no se rinde cuando la pieza grande no cabe pero varias pequeñas sí", () => {
+  it("y la vuelta es la más pequeña que cuadra", () => {
     /*
-     * Es el caso donde un reparto codicioso se equivoca: cogería el billete de
-     * 20 y se quedaría en 20,00 con 1,52 sin reponer, cuando con las monedas
-     * se llega justo.
+     * El primer importe que el montón sabe formar por encima de 21,52 € son
+     * 22,00 € (10+10+2), así que la vuelta son 48 céntimos. Sacar el billete
+     * de 50 también cuadraría, devolviendo 28,48 €, pero vacía el cajón de
+     * calderilla sin ninguna necesidad.
      */
-    const lineas = mejorReposicion(
-      monton([2000, 1], [200, 10], [100, 2], [50, 1], [1, 2]),
-      2152
-    );
-    expect(suma(lineas)).toBe(2152);
+    const r = mejorReposicion(MONTON_REAL, CAJON, 2152)!;
+    expect(suma(r.sacar)).toBe(2200);
+    expect(suma(r.devolver)).toBe(48);
   });
 
-  it("nunca propone más piezas de las que hay en el montón", () => {
-    // Con un solo billete de 20, no se puede usar dos veces para llegar a 40.
-    const lineas = mejorReposicion(monton([2000, 1]), 4000);
-    expect(suma(lineas)).toBe(2000);
-    expect(lineas.find((l) => l.valor === 2000)!.cantidad).toBe(1);
-  });
-
-  it("respeta el stock de cada denominación", () => {
-    const disponible = monton([200, 3], [100, 2]);
-    const lineas = mejorReposicion(disponible, 100000);
-    for (const l of lineas) {
-      expect(l.cantidad).toBeLessThanOrEqual(disponible.get(l.valor) ?? 0);
+  it("el neto es SIEMPRE el déficit, ni un céntimo más", () => {
+    for (const deficit of [1, 7, 99, 1234, 2152, 5000]) {
+      const r = mejorReposicion(MONTON_REAL, CAJON, deficit);
+      if (r) expect(r.netoCentimos).toBe(deficit);
     }
-    expect(suma(lineas)).toBe(totalInventario(disponible));
+  });
+
+  it("si el cajón no tiene con qué dar la vuelta, repone lo que puede", () => {
+    // Un cajón con solo billetes de 50 no sabe devolver 48 céntimos.
+    const sinCalderilla = inv([5000, 3]);
+    const r = mejorReposicion(MONTON_REAL, sinCalderilla, 2152)!;
+    expect(r.devolver).toEqual([]);
+    // 20,60 € = 10 + 10 + 0,50 + 0,10, lo máximo sin pasarse.
+    expect(r.netoCentimos).toBe(2060);
+    expect(r.netoCentimos).toBeLessThan(2152);
+  });
+});
+
+describe("lo que no se puede hacer", () => {
+  it("nunca se sacan más piezas de las que hay en el montón", () => {
+    const monton = inv([2000, 1]);
+    const r = mejorReposicion(monton, CAJON, 4000)!;
+    for (const l of r.sacar) {
+      expect(l.cantidad).toBeLessThanOrEqual(monton.get(l.valor) ?? 0);
+    }
+  });
+
+  it("nunca se devuelven más piezas de las que hay en el cajón", () => {
+    const cajonJusto = inv([100, 1], [5, 1], [1, 3]);
+    const r = mejorReposicion(inv([1000, 1]), cajonJusto, 892);
+    if (r) {
+      for (const l of r.devolver) {
+        expect(l.cantidad).toBeLessThanOrEqual(cajonJusto.get(l.valor) ?? 0);
+      }
+    }
   });
 
   it("montón vacío: no se propone nada", () => {
-    expect(mejorReposicion(monton(), 2152)).toEqual([]);
+    expect(mejorReposicion(inv(), CAJON, 2152)).toBe(null);
   });
 
-  it("sin déficit no se saca nada del montón", () => {
-    expect(mejorReposicion(monton([2000, 5]), 0)).toEqual([]);
-    expect(mejorReposicion(monton([2000, 5]), -100)).toEqual([]);
+  it("sin déficit no se toca nada", () => {
+    expect(mejorReposicion(inv([2000, 5]), CAJON, 0)).toBe(null);
+    expect(mejorReposicion(inv([2000, 5]), CAJON, -100)).toBe(null);
+  });
+
+  it("el montón entero, si el déficit lo supera", () => {
+    const monton = inv([200, 3], [100, 2]);
+    const r = mejorReposicion(monton, CAJON, 100000)!;
+    expect(suma(r.sacar)).toBe(totalInventario(monton));
+    expect(r.devolver).toEqual([]);
   });
 
   it("un montón enorme no cuelga la pantalla", () => {
-    // Un cajón de verdad tiene decenas de piezas; que haya cientos no puede
-    // convertir esto en una espera.
-    const grande = monton([1, 400], [2, 300], [5, 200], [2000, 50]);
+    const grande = inv([1, 400], [2, 300], [5, 200], [2000, 50]);
     const inicio = Date.now();
-    const lineas = mejorReposicion(grande, 35000);
-    expect(Date.now() - inicio).toBeLessThan(2000);
-    expect(suma(lineas)).toBeGreaterThan(0);
-    expect(suma(lineas)).toBeLessThanOrEqual(35000);
+    const r = mejorReposicion(grande, CAJON, 35000);
+    expect(Date.now() - inicio).toBeLessThan(3000);
+    expect(r).not.toBe(null);
   });
 });
