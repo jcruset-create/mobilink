@@ -211,7 +211,7 @@ type Props = {
   appendLog: (text: string) => void;
   confirmScheduledArrival: (scheduled: ScheduledJob) => void;
   deleteScheduledJobFromBackend?: (id: number) => Promise<void>;
-  cancelScheduledJob: (id: number) => void;
+  cancelScheduledJob: (id: number) => void | Promise<void>;
 
   techs: Tech[];
   scheduledTechStatuses: ScheduledTechStatus[];
@@ -2203,8 +2203,10 @@ appendLog(
               const closed = isClosedDate(day.date);
               const dayHeight = slots.length * SLOT_HEIGHT;
 
+              // Las citas canceladas SÍ se pintan (en rojo, tachadas): queda
+              // constancia de que ese hueco estaba reservado y se anuló. Solo
+              // se ocultan las eliminadas de verdad.
               const dayJobs = scheduledJobsForSelectedWorkshop
-  .filter((job) => job.status !== "cancelado")
   .filter((job) => job.status !== "eliminado")
   .filter((job) => getScheduledDate(job) === day.date)
   .map((job) => ({
@@ -2411,9 +2413,11 @@ appendLog(
 
                           openEditAppointment(job);
                         }}
-                        className={`absolute z-40 cursor-pointer overflow-hidden rounded-xl border-2 p-2 text-sm font-semibold shadow-md ${getScheduledJobCardClass(
-                          job
-                        )}`}
+                        className={`absolute z-40 overflow-hidden rounded-xl border-2 p-2 text-sm font-semibold shadow-md ${
+                          job.status === "cancelado"
+                            ? "cursor-default line-through decoration-2"
+                            : "cursor-pointer"
+                        } ${getScheduledJobCardClass(job)}`}
                         style={{
                           top,
                           height,
@@ -2428,8 +2432,16 @@ appendLog(
                               "Operación"}
                           </div>
 
-                          <span className="shrink-0 rounded-full bg-white/90 px-2 py-0.5 text-[9px] font-black uppercase text-slate-800">
-                            {getScheduledJobStatusLabel(job.status)}
+                          <span
+                            className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-black uppercase no-underline ${
+                              job.status === "cancelado"
+                                ? "bg-red-100 text-red-800"
+                                : "bg-white/90 text-slate-800"
+                            }`}
+                          >
+                            {job.status === "cancelado"
+                              ? "Cancelada"
+                              : getScheduledJobStatusLabel(job.status)}
                           </span>
                         </div>
 
@@ -2529,16 +2541,18 @@ appendLog(
                         )}
 
                         <div className="absolute bottom-1 left-1 right-1 flex gap-1">
-  <button
-    type="button"
-    onClick={(e) => {
-      e.stopPropagation();
-      sendAgendaWhatsApp(job);
-    }}
-    className="flex-1 rounded-md bg-green-500 px-1 py-0.5 text-[9px] font-semibold text-white shadow-sm"
-  >
-    WhatsApp
-  </button>
+  {job.status !== "cancelado" && (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        sendAgendaWhatsApp(job);
+      }}
+      className="flex-1 rounded-md bg-green-500 px-1 py-0.5 text-[9px] font-semibold text-white shadow-sm"
+    >
+      WhatsApp
+    </button>
+  )}
 
   {job.status === "programado" && (
     <button
