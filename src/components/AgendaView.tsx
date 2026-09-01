@@ -2576,6 +2576,7 @@ appendLog(
 
 <AgendaConfigModal
   open={configModalOpen}
+  dark={dark}
   config={agendaConfig}
   onClose={() => setConfigModalOpen(false)}
   onSaved={(config) => {
