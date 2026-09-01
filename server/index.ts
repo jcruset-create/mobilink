@@ -66,6 +66,7 @@ import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
 import { initExcepciones } from "./excepciones/schema.ts";
 import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
+import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -18082,11 +18083,41 @@ app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
 mountAsistente(app, authenticate, requireModule("tyrecontrol"));
 
+// Identificar un neumático por la foto de su flanco durante una revisión.
+// Solo propone: guardar lo decide el técnico. Ver server/tyrecontrol/flanco/.
+mountFlanco(app, authenticate, requireModule("tyrecontrol"));
+
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
 
 app.use(express.static(path.join(__dirname, "../dist")));
+
+/*
+ * Un trozo que no existe es un 404, no el index.html.
+ *
+ * El panel carga cada sub-aplicación con `lazy()`, y el nombre del trozo lleva
+ * un hash que cambia en cada compilación: /assets/TyreControlApp-<hash>.js.
+ * Quien tuviera la pestaña abierta durante un despliegue sigue con el
+ * index.html viejo en memoria y pide un trozo que aquí ya no está.
+ *
+ * Con el catch-all de abajo a secas, esa petición se llevaba el index.html con
+ * un 200 y content-type text/html. Comprobado en Chromium contra el dist real:
+ * el navegador rechaza el módulo ("Expected a JavaScript-or-Wasm module script
+ * but the server responded with a MIME type of text/html"), el import se rompe
+ * en pleno render y React desmonta el árbol entero. Pantalla en blanco, y a
+ * refrescar a mano.
+ *
+ * Devolver 404 no arregla por sí solo la pantalla —eso lo hace
+ * RecuperarDespliegue en el panel, recargando— pero es lo que hace que el
+ * fallo se pueda reconocer en vez de disfrazarse de página.
+ *
+ * Se limita a /assets/ a propósito: ahí y solo ahí deja Vite lo que lleva
+ * hash, así que ninguna ruta del panel puede caer aquí por accidente.
+ */
+app.use("/assets", (_req, res) => {
+  res.status(404).type("text/plain").send("No existe. Seguramente es de una versión anterior del panel.");
+});
 
 app.get(/.*/, (_req, res) => {
   res.sendFile(path.join(__dirname, "../dist/index.html"));

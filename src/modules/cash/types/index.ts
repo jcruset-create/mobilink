@@ -301,6 +301,8 @@ export type IngresoBancario = {
   observaciones: string | null;
   remanenteAnteriorCentimos: number;
   totalCierresCentimos: number;
+  /** Lo que se sacó del montón para reponer el fondo del cajón. */
+  repuestoCentimos: number;
   importeCentimos: number;
   remanenteNuevoCentimos: number;
   cierres: { sessionId: number; fecha: string; importeCentimos: number }[];
@@ -332,9 +334,24 @@ export type PropuestaCanjeIngreso = {
   sinJornadaAbierta: boolean;
 };
 
+/**
+ * Reposición de fondo que aún no ha entrado en ningún ingreso.
+ *
+ * Va en la misma lista que los cierres, restando: ese dinero salió de la bolsa
+ * y está otra vez en el cajón.
+ */
+export type ReposicionPendiente = {
+  id: number;
+  fecha: string;
+  /** Lo repuesto, en positivo. Se pinta con el signo menos delante. */
+  importeCentimos: number;
+};
+
 export type PanelIngresos = {
   pendientes: CierrePendiente[];
+  reposiciones: ReposicionPendiente[];
   remanenteCentimos: number;
+  /** Cierres MENOS reposiciones: lo que de verdad se puede llevar al banco. */
   totalPendienteCentimos: number;
   ingresos: IngresoBancario[];
 };
@@ -669,4 +686,37 @@ export type ReglaPagoConfig = {
   prioridad: number;
   activa: boolean;
   notas: string;
+};
+
+// ── Reposición del fondo de la caja ────────────────────────────────────────
+
+/**
+ * Qué le falta a la caja para su fondo fijo, y con qué reponerlo.
+ *
+ * El dinero sale del montón que espera para ir al banco, no de los cobros del
+ * día: así la reposición no es una venta y no se cuela en el cierre que se
+ * concilia con la ERP.
+ */
+export type Reposicion = {
+  /** Piezas que salen del montón pendiente hacia el cajón. */
+  sacar: LineaDenominacion[];
+  /** Piezas que el cajón devuelve al montón. Vacío = sin vuelta. */
+  devolver: LineaDenominacion[];
+  /** `sacar − devolver`: lo que sube el fondo de la caja. */
+  netoCentimos: number;
+};
+
+export type PropuestaReposicion = {
+  fondoObjetivoCentimos: number;
+  /** El cambio que dejó el último cierre más lo ya repuesto hoy. */
+  fondoCentimos: number;
+  /** Lo que falta. 0 = la caja va justa o sobrada. */
+  deficitCentimos: number;
+  /** Cierres seguidos que han acabado por debajo del fondo. */
+  cierresConDeficit: number;
+  monton: { billetes: LineaDenominacion[]; monedas: LineaDenominacion[] };
+  montonCentimos: number;
+  /** Qué sacar y qué devolver. null = no hay con qué reponer todavía. */
+  reposicion: Reposicion | null;
+  sinJornadaAbierta: boolean;
 };

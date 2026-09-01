@@ -916,6 +916,9 @@ export interface ReferenciaNeumatico {
   revoluciones_km?: number | null; carga_maxima_kg?: number | null; presion_maxima_bar?: number | null; peso_kg?: number | null;
   ply?: number | null; ancho_seccion_mm?: number | null; anchura_rodadura_mm?: number | null; radio_carga_mm?: number | null;
   etiqueta_rr?: string | null; etiqueta_grip_humedo?: string | null; etiqueta_ruido_db?: number | null; etiqueta_ruido_clase?: string | null;
+  /** La creó un técnico desde una revisión y nadie la ha repasado aún. */
+  pendiente_validar?: boolean;
+  creado_por?: string | null;
   modelo?: ModeloNeumatico & { marca?: MarcaNeumatico | null } | null;
   tyre_size?: TyreSize | null;
 }

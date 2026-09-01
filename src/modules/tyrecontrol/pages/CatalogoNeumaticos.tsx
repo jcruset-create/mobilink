@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico, listarNeumaticosSinCatalogar, crearReferenciaNeumatico, actualizarModeloTecnico, proponerIndicesMedida } from "../services/data";
+import { listarReferenciasPendientes, validarReferencia, listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico, listarNeumaticosSinCatalogar, crearReferenciaNeumatico, actualizarModeloTecnico, proponerIndicesMedida } from "../services/data";
 import type { ComboSinCatalogar } from "../services/data";
 import type { ReferenciaNeumatico, EjeRecomendado } from "../types";
 import { presionTxt } from "../types";
@@ -40,6 +40,26 @@ export default function CatalogoNeumaticos() {
   const [msgEdit, setMsgEdit] = useState("");
   const [borrando, setBorrando] = useState(false);
   const [confirmarBaja, setConfirmarBaja] = useState(false);
+
+  // Referencias que un técnico creó desde una revisión y nadie ha repasado.
+  const [pendientes, setPendientes] = useState<ReferenciaNeumatico[]>([]);
+  const [validando, setValidando] = useState<string | null>(null);
+  const [msgPend, setMsgPend] = useState("");
+
+  async function cargarPendientes() {
+    try { setPendientes(await listarReferenciasPendientes()); }
+    catch { /* la columna puede no estar aún: el catálogo sigue siendo útil */ }
+  }
+  useEffect(() => { void cargarPendientes(); }, []);
+
+  async function validar(r: ReferenciaNeumatico) {
+    setValidando(r.id); setMsgPend("");
+    try {
+      await validarReferencia(r.id);
+      await Promise.all([cargarPendientes(), cargar()]);
+    } catch (e: any) { setMsgPend(e?.message || "No se ha podido validar"); }
+    finally { setValidando(null); }
+  }
 
   // Alta de referencias (Nueva referencia + Sin catalogar)
   type FormRef = { marca: string; modelo: string; medida: string; indiceCargaSimple: string; indiceCargaDoble: string; codigoVelocidad: string };
@@ -259,6 +279,40 @@ export default function CatalogoNeumaticos() {
           </div>
         )}
       </div>
+
+
+      {/* Lo que entra por una revisión pasa por aquí antes de darse por bueno:
+          el técnico escribe lo que lee en el flanco, y "X-MULTI D" y "X Multi
+          D" son la misma goma escrita de dos maneras. Validar es mirarlas. */}
+      {pendientes.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-600/50 bg-amber-500/10 p-3">
+          <p className="text-sm font-bold text-amber-200">
+            {pendientes.length} referencia{pendientes.length === 1 ? "" : "s"} pendiente{pendientes.length === 1 ? "" : "s"} de validar
+          </p>
+          <p className="mt-0.5 text-[12px] text-amber-300/80">
+            Creadas por un técnico durante una revisión. Revisa el nombre y comprueba que no
+            duplican una que ya existía escrita de otra manera.
+          </p>
+          {msgPend && <p className="mt-1 text-[12px] text-rose-300">{msgPend}</p>}
+          <ul className="mt-2 space-y-1">
+            {pendientes.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-2 rounded-lg bg-slate-900/40 px-2 py-1.5">
+                <button onClick={() => setFicha(r)} className="text-left text-[13px] text-slate-100 hover:underline">
+                  {r.referencia_completa}
+                </button>
+                {puedeEditar && (
+                  <button
+                    onClick={() => void validar(r)}
+                    disabled={validando === r.id}
+                    className="shrink-0 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50">
+                    {validando === r.id ? "…" : "Dar por buena"}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <input className={`${inputCls} max-w-[240px]`} placeholder="Buscar (ej. AH51, 315/80, regional)…" value={q} onChange={(e) => setQ(e.target.value)} />
