@@ -1215,6 +1215,47 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Cuánto le falta a la caja para su fondo, y con qué piezas del montón
+   * pendiente se puede reponer. Consulta: no mueve nada.
+   */
+  r.get(
+    "/registers/:id/bank-deposits/float-topup",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const sessionIds =
+        typeof req.query.cierres === "string" && req.query.cierres !== ""
+          ? req.query.cierres.split(",").map((v) => enteroPositivo(v, "cierres"))
+          : [];
+      res.json(
+        await ingresos.proponerReposicion(
+          req.authCtx!.empresaId,
+          enteroPositivo(req.params.id, "id"),
+          sessionIds
+        )
+      );
+    })
+  );
+
+  /** Devuelve al cajón las piezas indicadas del montón pendiente. */
+  r.post(
+    "/bank-deposits/float-topup",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json(
+        await ingresos.registrarReposicion(contexto(req), {
+          registerId: enteroPositivo(b.registerId, "registerId"),
+          sessionIds: Array.isArray(b.sessionIds)
+            ? b.sessionIds.map((v: unknown) => enteroPositivo(v, "sessionIds"))
+            : [],
+          sacar: lineas(b.sacar, "sacar"),
+          devolver: b.devolver == null ? [] : lineas(b.devolver, "devolver"),
+        })
+      );
+    })
+  );
+
   r.post(
     "/bank-deposits",
     exigirPermiso("cash.treasury.manage"),
@@ -2041,7 +2082,10 @@ export function createCashRouter(): Router {
       }
 
       const { rows } = await pool.query(
-        `SELECT s.*, c.nombre AS caja_nombre, c.centro AS caja_centro
+        /* El fondo fijo va en la fila para que el histórico pueda decir
+           cuánto le faltó a la caja ese día sin adivinar de qué caja era. */
+        `SELECT s.*, c.nombre AS caja_nombre, c.centro AS caja_centro,
+                c.fondo_objetivo_centimos AS caja_fondo_objetivo_centimos
            FROM cash_sessions s
            JOIN cash_registers c ON c.id = s.register_id
           WHERE ${filtros.join(" AND ")}
