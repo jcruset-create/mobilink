@@ -5328,3 +5328,542 @@ describe.runIf(RUN)("cuentas anteriores al maestro de bancos", () => {
     expect(despues[0].bank_id).toBe(bbva.id);
   });
 });
+
+describe.runIf(RUN)("reposición del fondo desde el dinero pendiente de ingresar", () => {
+  /**
+   * El caso real de Tarragona el 28/08/2026, reproducido.
+   *
+   * Fondo fijo 350 €. La jornada abre con 350, se ingresan 100 € al banco de
+   * más de lo que dio el día, y el cierre deja el cajón en 250 €: le faltan
+   * 100 € de fondo, y esos 100 € están en la bolsa que espera al banco.
+   */
+  async function escenario({ reabrir = true } = {}) {
+    const caja = await crearCaja(`reposicion-${Date.now()}`);
+    await config.actualizarCaja(ctx, caja, { fondoObjetivoCentimos: 35000 });
+
+    // 350,00 € exactos: 150 + 100 + 50 + 20 + 10 + 10 + 5 + 4 + 1.
+    const fondo = [
+      { valor: 5000, cantidad: 3 },
+      { valor: 2000, cantidad: 5 },
+      { valor: 1000, cantidad: 5 },
+      { valor: 500, cantidad: 4 },
+      { valor: 200, cantidad: 5 },
+      { valor: 100, cantidad: 10 },
+      { valor: 50, cantidad: 10 },
+      { valor: 20, cantidad: 20 },
+      { valor: 10, cantidad: 10 },
+    ];
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: fondo });
+
+    // Se cierra dejando 250 € y mandando 100 € al banco: la caja queda corta.
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: fondo });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      // 250,00 €: el fondo menos dos billetes de 50, que se van al banco.
+      cambioFinal: [
+        { valor: 5000, cantidad: 1 },
+        { valor: 2000, cantidad: 5 },
+        { valor: 1000, cantidad: 5 },
+        { valor: 500, cantidad: 4 },
+        { valor: 200, cantidad: 5 },
+        { valor: 100, cantidad: 10 },
+        { valor: 50, cantidad: 10 },
+        { valor: 20, cantidad: 20 },
+        { valor: 10, cantidad: 10 },
+      ],
+    });
+
+    // Y al día siguiente se abre heredando esos 250 €.
+    const hoy = reabrir
+      ? (await servicio.abrirJornada(ctx, { registerId: caja })).sesion
+      : null;
+    return { caja, sessionIds: [sesion.id], hoy: hoy! };
+  }
+
+  const valor = (l: readonly { valor: number; cantidad: number }[]) =>
+    l.reduce((a, x) => a + x.valor * x.cantidad, 0);
+
+  it("ve el déficit del fondo y de dónde viene", async () => {
+    const { caja } = await escenario();
+    const d = await ingresos.deficitDeCaja(EMPRESA, caja);
+    expect(d.fondoObjetivoCentimos).toBe(35000);
+    expect(d.fondoCentimos).toBe(25000);
+    expect(d.deficitCentimos).toBe(10000);
+    expect(d.cierresConDeficit).toBe(1);
+  });
+
+  it("propone reponerlo con piezas que están de verdad en el montón", async () => {
+    const { caja, sessionIds } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    expect(p.deficitCentimos).toBe(10000);
+    expect(p.montonCentimos).toBe(10000);
+    expect(p.reposicion!.netoCentimos).toBe(10000);
+    // El montón tiene los dos billetes de 50 justos: no hace falta vuelta.
+    expect(p.reposicion!.devolver).toEqual([]);
+    // Y lo propuesto cabe en el montón, pieza a pieza.
+    const hay = new Map(
+      [...p.monton.billetes, ...p.monton.monedas].map((l) => [l.valor, l.cantidad])
+    );
+    for (const l of p.reposicion!.sacar) {
+      expect(l.cantidad).toBeLessThanOrEqual(hay.get(l.valor) ?? 0);
+    }
+  });
+
+  it("al reponer, el cajón sube y el montón baja lo mismo: el total NO cambia", async () => {
+    /*
+     * Es la prueba que sostiene toda la funcionalidad. Reponer no es ingresar
+     * ni cobrar: es mover dinero de un bolsillo de la tienda a otro.
+     */
+    const { caja, sessionIds, hoy } = await escenario();
+    const antesCaja = (await servicio.detalleJornada(hoy.id)).totalStockCentimos;
+    const antesMonton = (await ingresos.proponerReposicion(EMPRESA, caja, sessionIds)).montonCentimos;
+
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, sacar: p.reposicion!.sacar, devolver: p.reposicion!.devolver });
+
+    const despuesCaja = (await servicio.detalleJornada(hoy.id)).totalStockCentimos;
+    const despuesMonton = (await ingresos.proponerReposicion(EMPRESA, caja, sessionIds)).montonCentimos;
+
+    expect(despuesCaja - antesCaja).toBe(10000);
+    expect(antesMonton - despuesMonton).toBe(10000);
+    expect(antesCaja + antesMonton).toBe(despuesCaja + despuesMonton);
+  });
+
+  it("después de reponer, la caja ya no tiene déficit", async () => {
+    const { caja, sessionIds } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, sacar: p.reposicion!.sacar, devolver: p.reposicion!.devolver });
+    expect((await ingresos.deficitDeCaja(EMPRESA, caja)).deficitCentimos).toBe(0);
+  });
+
+  it("lo repuesto ya no se puede ingresar en el banco", async () => {
+    // Si no bajara el disponible, ese dinero se ingresaría estando en el cajón.
+    const { caja, sessionIds } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, sacar: p.reposicion!.sacar, devolver: p.reposicion!.devolver });
+
+    await expect(
+      ingresos.crearIngreso(ctx, { registerId: caja, sessionIds, importeCentimos: 10000 })
+    ).rejects.toMatchObject({ codigo: "INGRESO_SUPERA_DISPONIBLE" });
+  });
+
+  it("NO se puede reponer más de lo que falta", async () => {
+    const { caja, sessionIds } = await escenario();
+    await expect(
+      ingresos.registrarReposicion(ctx, {
+        registerId: caja,
+        sessionIds,
+        sacar: [{ valor: 5000, cantidad: 3 }],
+      })
+    ).rejects.toMatchObject({ codigo: "REPOSICION_EXCESIVA" });
+  });
+
+  it("NO se puede sacar del montón una pieza que no está", async () => {
+    const { caja, sessionIds } = await escenario();
+    await expect(
+      ingresos.registrarReposicion(ctx, {
+        registerId: caja,
+        sessionIds,
+        sacar: [{ valor: 5, cantidad: 4 }],
+      })
+    ).rejects.toMatchObject({ codigo: "STOCK_INSUFICIENTE" });
+  });
+
+  it("una caja con su fondo completo no admite reposición", async () => {
+    const { caja, sessionIds } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, sacar: p.reposicion!.sacar, devolver: p.reposicion!.devolver });
+
+    await expect(
+      ingresos.registrarReposicion(ctx, {
+        registerId: caja,
+        sessionIds,
+        sacar: [{ valor: 1000, cantidad: 1 }],
+      })
+    ).rejects.toMatchObject({ codigo: "SIN_DEFICIT" });
+  });
+
+  it("la reposición NO se cuela en el reparto por secciones ni en el cierre del Genes", async () => {
+    /*
+     * Es el motivo de que el dinero salga del montón y no de los cobros del
+     * día siguiente: con los cobros, parte de la caja del Genes dejaría de ser
+     * venta. El desglose por secciones solo cuenta cobros y pagos.
+     */
+    const { caja, sessionIds, hoy } = await escenario();
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, { registerId: caja, sessionIds, sacar: p.reposicion!.sacar, devolver: p.reposicion!.devolver });
+
+    const detalle = await servicio.detalleJornada(hoy.id);
+    const cobros = detalle.porSeccion.reduce((a, s) => a + s.cobrosCentimos, 0);
+    expect(cobros).toBe(0);
+  });
+
+  it("el déficit se mide contra el ÚLTIMO CIERRE, no contra el cajón a media mañana", async () => {
+    /*
+     * El fallo que tenía esto y que se veía en pantalla: a mediodía el cajón
+     * lleva dentro los cobros del día, que se van a ingresar, y medir contra
+     * él hacía que el déficit encogiera —o desapareciera— para volver puntual
+     * en el cierre. El fondo es con lo que la caja ARRANCA, y eso lo fijó el
+     * cierre anterior.
+     */
+    const { caja, hoy } = await escenario();
+    await servicio.registrarCobro(ctx, {
+      sessionId: hoy.id,
+      importeCentimos: 20000,
+      formasPago: [{ forma: "CASH", importe: 20000 }],
+      efectivoRecibido: [{ valor: 20000, cantidad: 1 }],
+      concepto: "Venta del día siguiente",
+    });
+
+    // El cajón tiene ahora 450 €, muy por encima del fondo de 350…
+    expect((await servicio.detalleJornada(hoy.id)).totalStockCentimos).toBe(45000);
+    // …y aun así le siguen faltando los 100 € que el cierre se llevó de más.
+    const d = await ingresos.deficitDeCaja(EMPRESA, caja);
+    expect(d.fondoCentimos).toBe(25000);
+    expect(d.deficitCentimos).toBe(10000);
+  });
+
+  it("con la bolsa sin las piezas justas, saca de más y el cajón da la vuelta", async () => {
+    /*
+     * El caso de Tarragona del 31/08: en la bolsa hay 72,60 € en piezas con
+     * las que NO se pueden formar 21,52 €. Sin vuelta lo más que se saca son
+     * 20,60 € y la caja se queda coja; con vuelta cuadra al céntimo.
+     */
+    const caja = await crearCaja(`repo-vuelta-${Date.now()}`);
+    await config.actualizarCaja(ctx, caja, { fondoObjetivoCentimos: 35000 });
+
+    // Abre con 350 € exactos, con calderilla de sobra para dar la vuelta.
+    const fondo = [
+      { valor: 5000, cantidad: 4 },
+      { valor: 2000, cantidad: 5 },
+      { valor: 1000, cantidad: 2 },
+      { valor: 200, cantidad: 5 },
+      { valor: 100, cantidad: 10 },
+      { valor: 50, cantidad: 10 },
+      { valor: 20, cantidad: 10 },
+      { valor: 10, cantidad: 10 },
+      { valor: 5, cantidad: 20 },
+      { valor: 2, cantidad: 20 },
+      { valor: 1, cantidad: 60 },
+    ];
+    expect(valor(fondo)).toBe(35000);
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: fondo });
+
+    // Un cobro en efectivo de 51,08 € con las piezas justas, sin cambio.
+    const cobrado = [
+      { valor: 5000, cantidad: 1 },
+      { valor: 100, cantidad: 1 },
+      { valor: 5, cantidad: 1 },
+      { valor: 2, cantidad: 1 },
+      { valor: 1, cantidad: 1 },
+    ];
+    expect(valor(cobrado)).toBe(5108);
+    await servicio.registrarCobro(ctx, {
+      sessionId: sesion.id,
+      importeCentimos: 5108,
+      formasPago: [{ forma: "CASH", importe: 5108 }],
+      efectivoRecibido: cobrado,
+      concepto: "Venta del día",
+    });
+
+    // En el cajón hay 401,08 €. Se cierra dejando 328,48 € de cambio, así que
+    // a la bolsa se van 72,60 € en 50 + 10 + 10 + 2 + 0,50 + 0,10.
+    const cambioFinal = [
+      { valor: 5000, cantidad: 4 },
+      { valor: 2000, cantidad: 5 },
+      { valor: 200, cantidad: 4 },
+      { valor: 100, cantidad: 11 },
+      { valor: 50, cantidad: 9 },
+      { valor: 20, cantidad: 10 },
+      { valor: 10, cantidad: 9 },
+      { valor: 5, cantidad: 21 },
+      { valor: 2, cantidad: 21 },
+      { valor: 1, cantidad: 61 },
+    ];
+    expect(valor(cambioFinal)).toBe(32848);
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [...fondo, ...cobrado],
+    });
+    await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal });
+
+    const { sesion: hoy } = await servicio.abrirJornada(ctx, { registerId: caja });
+    const sessionIds = [sesion.id];
+
+    const d = await ingresos.deficitDeCaja(EMPRESA, caja);
+    expect(d.fondoCentimos).toBe(32848);
+    expect(d.deficitCentimos).toBe(2152);
+
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    expect(p.montonCentimos).toBe(7260);
+    // Salen 22,00 € y vuelven 0,48 €: el fondo sube exactamente 21,52 €.
+    expect(valor(p.reposicion!.sacar)).toBe(2200);
+    expect(valor(p.reposicion!.devolver)).toBe(48);
+    expect(p.reposicion!.netoCentimos).toBe(2152);
+
+    const antesCaja = (await servicio.detalleJornada(hoy.id)).totalStockCentimos;
+    await ingresos.registrarReposicion(ctx, {
+      registerId: caja,
+      sessionIds,
+      sacar: p.reposicion!.sacar,
+      devolver: p.reposicion!.devolver,
+    });
+
+    // El cajón sube el NETO, no lo que salió de la bolsa.
+    const despuesCaja = (await servicio.detalleJornada(hoy.id)).totalStockCentimos;
+    expect(despuesCaja - antesCaja).toBe(2152);
+    // Y la bolsa baja ese mismo neto: la vuelta se le devuelve de verdad.
+    const despues = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    expect(p.montonCentimos - despues.montonCentimos).toBe(2152);
+    expect(despues.deficitCentimos).toBe(0);
+  });
+
+  it("la reposición sale en la lista de pendientes, en negativo, y resta del total", async () => {
+    /*
+     * Que se vea ahí y no en una nota aparte es lo que hace que la columna de
+     * importes sume lo que de verdad se va a llevar al banco. Con el bruto, la
+     * pantalla ofrecería un importe que el propio servidor rechaza.
+     */
+    const { caja, sessionIds } = await escenario();
+    const antes = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(antes.totalPendienteCentimos).toBe(10000);
+    expect(antes.reposiciones).toEqual([]);
+
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    await ingresos.registrarReposicion(ctx, {
+      registerId: caja,
+      sessionIds,
+      sacar: p.reposicion!.sacar,
+      devolver: p.reposicion!.devolver,
+    });
+
+    const despues = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(despues.reposiciones).toHaveLength(1);
+    expect(despues.reposiciones[0].importeCentimos).toBe(10000);
+    // Los cierres siguen ahí por su importe; el total ya descuenta lo repuesto.
+    expect(despues.pendientes.reduce((a, c) => a + c.importeCentimos, 0)).toBe(10000);
+    expect(despues.totalPendienteCentimos).toBe(0);
+  });
+
+  it("la caja REAL de Tarragona: sobre de 72,60 €, remanente de 0,53 €, y todo cuadra", async () => {
+    /*
+     * La pantalla del 31/08 entera, reconstruida movimiento a movimiento, para
+     * comprobar que la vuelta no descuadra nada. Lo que se ve arriba:
+     *
+     *     Pendiente de ingresar   72,60 €   (un cierre sin conciliar)
+     *     Remanente en tienda      0,53 €   (monedas del ingreso anterior)
+     *     Bajo control            73,13 €
+     *     La caja va con 21,52 € menos de su fondo de 350,00 €
+     *
+     * Lo que hay que demostrar es que después de reponer siguen cuadrando las
+     * TRES cuentas a la vez: el sobre, el cajón y el efectivo total.
+     */
+    const caja = await crearCaja(`tgn-real-${Date.now()}`);
+    await config.actualizarCaja(ctx, caja, { fondoObjetivoCentimos: 35000 });
+
+    // El fondo de 350,00 €, con calderilla de sobra: es la caja de mostrador.
+    const FONDO = [
+      { valor: 5000, cantidad: 4 },
+      { valor: 2000, cantidad: 5 },
+      { valor: 1000, cantidad: 2 },
+      { valor: 200, cantidad: 5 },
+      { valor: 100, cantidad: 10 },
+      { valor: 50, cantidad: 10 },
+      { valor: 20, cantidad: 10 },
+      { valor: 10, cantidad: 10 },
+      { valor: 5, cantidad: 20 },
+      { valor: 2, cantidad: 20 },
+      { valor: 1, cantidad: 60 },
+    ];
+    expect(valor(FONDO)).toBe(35000);
+
+    // ── Jornada 1: se cobran 105,53 € y se cierra dejando el fondo entero ────
+    const j1 = (await servicio.abrirJornada(ctx, { registerId: caja, fondoManual: FONDO })).sesion;
+    const cobro1 = [
+      { valor: 5000, cantidad: 2 },
+      { valor: 500, cantidad: 1 },
+      { valor: 50, cantidad: 1 },
+      { valor: 2, cantidad: 1 },
+      { valor: 1, cantidad: 1 },
+    ];
+    expect(valor(cobro1)).toBe(10553);
+    await servicio.registrarCobro(ctx, {
+      sessionId: j1.id,
+      importeCentimos: 10553,
+      formasPago: [{ forma: "CASH", importe: 10553 }],
+      efectivoRecibido: cobro1,
+      concepto: "Ventas del día",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: j1.id, contado: [...FONDO, ...cobro1] });
+    await servicio.cerrarJornada(ctx, { sessionId: j1.id, cambioFinal: FONDO });
+
+    // Al banco van los billetes: 105,00 €. Las monedas —0,53 €— se quedan.
+    await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [j1.id],
+      importeCentimos: 10500,
+    });
+
+    // ── Jornada 2: el cobro de 72,60 €, que es el sobre que espera al banco ──
+    const j2 = (await servicio.abrirJornada(ctx, { registerId: caja })).sesion;
+    const SOBRE = [
+      { valor: 5000, cantidad: 1 },
+      { valor: 1000, cantidad: 2 },
+      { valor: 200, cantidad: 1 },
+      { valor: 50, cantidad: 1 },
+      { valor: 10, cantidad: 1 },
+    ];
+    expect(valor(SOBRE)).toBe(7260);
+    await servicio.registrarCobro(ctx, {
+      sessionId: j2.id,
+      importeCentimos: 7260,
+      formasPago: [{ forma: "CASH", importe: 7260 }],
+      efectivoRecibido: SOBRE,
+      concepto: "Ventas del día",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: j2.id, contado: [...FONDO, ...SOBRE] });
+    await servicio.cerrarJornada(ctx, { sessionId: j2.id, cambioFinal: FONDO });
+
+    // ── Jornada 3: se paga a un proveedor del cajón y la caja cierra corta ───
+    const j3 = (await servicio.abrirJornada(ctx, { registerId: caja })).sesion;
+    await servicio.registrarOperacion(ctx, {
+      sessionId: j3.id,
+      tipo: "PAYMENT",
+      importeCentimos: 2152,
+      formasPago: [{ forma: "CASH", importe: 2152 }],
+      efectivoEntregado: [
+        { valor: 2000, cantidad: 1 },
+        { valor: 100, cantidad: 1 },
+        { valor: 50, cantidad: 1 },
+        { valor: 2, cantidad: 1 },
+      ],
+      concepto: "Pago a proveedor",
+    });
+    const CORTO = [
+      { valor: 5000, cantidad: 4 },
+      { valor: 2000, cantidad: 4 },
+      { valor: 1000, cantidad: 2 },
+      { valor: 200, cantidad: 5 },
+      { valor: 100, cantidad: 9 },
+      { valor: 50, cantidad: 9 },
+      { valor: 20, cantidad: 10 },
+      { valor: 10, cantidad: 10 },
+      { valor: 5, cantidad: 20 },
+      { valor: 2, cantidad: 19 },
+      { valor: 1, cantidad: 60 },
+    ];
+    expect(valor(CORTO)).toBe(32848);
+    await servicio.guardarArqueo(ctx, { sessionId: j3.id, contado: CORTO });
+    await servicio.cerrarJornada(ctx, { sessionId: j3.id, cambioFinal: CORTO });
+
+    // ── Hoy: la pantalla, tal y como se ve ──────────────────────────────────
+    const hoy = (await servicio.abrirJornada(ctx, { registerId: caja })).sesion;
+
+    const antes = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(antes.pendientes).toHaveLength(1); // la jornada 3 no dio nada al banco
+    expect(antes.totalPendienteCentimos).toBe(7260);
+    expect(antes.remanenteCentimos).toBe(53);
+    expect(antes.totalPendienteCentimos + antes.remanenteCentimos).toBe(7313);
+
+    const sessionIds = antes.pendientes.map((c) => c.sessionId);
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    expect(p.deficitCentimos).toBe(2152);
+    expect(p.reposicion!.sacar).toEqual([
+      { valor: 1000, cantidad: 2 },
+      { valor: 200, cantidad: 1 },
+    ]);
+    expect(valor(p.reposicion!.devolver)).toBe(48);
+    expect(p.reposicion!.netoCentimos).toBe(2152);
+
+    // ── Se repone. Las tres cuentas, después ────────────────────────────────
+    const cajonAntes = (await servicio.detalleJornada(hoy.id)).totalStockCentimos;
+    await ingresos.registrarReposicion(ctx, {
+      registerId: caja,
+      sessionIds,
+      sacar: p.reposicion!.sacar,
+      devolver: p.reposicion!.devolver,
+    });
+
+    const cajonDespues = (await servicio.detalleJornada(hoy.id)).totalStockCentimos;
+    const despues = await ingresos.panelIngresos(EMPRESA, caja);
+
+    // 1. El cajón sube el neto, ni un céntimo más.
+    expect(cajonDespues - cajonAntes).toBe(2152);
+    // 2. El sobre baja ese mismo neto.
+    expect(despues.totalPendienteCentimos).toBe(5108);
+    // 3. El remanente NO se toca: son monedas de otro ingreso ya cerrado.
+    expect(despues.remanenteCentimos).toBe(53);
+    // 4. Y el efectivo total de la tienda es el mismo de antes.
+    expect(cajonDespues + despues.totalPendienteCentimos + despues.remanenteCentimos).toBe(
+      cajonAntes + antes.totalPendienteCentimos + antes.remanenteCentimos
+    );
+
+    /*
+     * El sobre, pieza a pieza: se fue el 10 + 10 + 2 y volvieron los 0,48 €.
+     * Al banco solo puede ir el billete de 50; el resto son monedas que se
+     * quedan en tienda, y esas son las que hay que ver crecer en el remanente.
+     */
+    const bolsa = await ingresos.composicionPendiente(EMPRESA, caja, sessionIds);
+    expect(bolsa.billetes).toEqual([{ valor: 5000, cantidad: 1 }]);
+    expect(valor(bolsa.monedas)).toBe(108); // 0,50 + 0,10 + los 0,48 de la vuelta
+    expect(valor(bolsa.billetes) + valor(bolsa.monedas)).toBe(5108);
+
+    // ── Y al llevar el billete al banco, el remanente cuadra al céntimo ──────
+    const ingreso = await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds,
+      importeCentimos: 5000,
+    });
+    // 0,53 € de antes + 1,08 € que quedan en el sobre = 1,61 € en monedas.
+    expect(ingreso.remanenteNuevoCentimos).toBe(161);
+    expect((await ingresos.panelIngresos(EMPRESA, caja)).remanenteCentimos).toBe(161);
+
+    /*
+     * Y el ingreso guarda lo repuesto, que es lo que hace que su ecuación
+     * cuadre. Antes de existir esa columna, este mismo INSERT reventaba contra
+     * el CHECK de la tabla: reponer dejaba la caja sin poder ingresar.
+     */
+    expect(ingreso.repuestoCentimos).toBe(2152);
+    expect(
+      ingreso.remanenteAnteriorCentimos +
+        ingreso.totalCierresCentimos -
+        ingreso.repuestoCentimos -
+        ingreso.importeCentimos
+    ).toBe(ingreso.remanenteNuevoCentimos);
+  });
+
+  it("una caja sin fondo fijo nunca tiene déficit que reponer", async () => {
+    const caja = await crearCaja(`sin-fondo-${Date.now()}`);
+    const d = await ingresos.deficitDeCaja(EMPRESA, caja);
+    expect(d.fondoObjetivoCentimos).toBe(0);
+    expect(d.deficitCentimos).toBe(0);
+  });
+
+  it("una caja recién dada de alta no debe su fondo entero", async () => {
+    /*
+     * Sin ningún cierre no hay nada que reponer: proponerle devolver los 350 €
+     * completos sería inventarse una deuda que nadie ha contraído.
+     */
+    const caja = await crearCaja(`repo-nueva-${Date.now()}`);
+    await config.actualizarCaja(ctx, caja, { fondoObjetivoCentimos: 35000 });
+    const d = await ingresos.deficitDeCaja(EMPRESA, caja);
+    expect(d.fondoObjetivoCentimos).toBe(35000);
+    expect(d.deficitCentimos).toBe(0);
+  });
+
+  it("sin jornada abierta se puede consultar pero no reponer", async () => {
+    // Con déficit de verdad —la caja cerró corta— pero sin cajón donde meter
+    // el dinero: la reposición mueve efectivo y eso necesita jornada abierta.
+    const { caja, sessionIds } = await escenario({ reabrir: false });
+    const p = await ingresos.proponerReposicion(EMPRESA, caja, sessionIds);
+    expect(p.deficitCentimos).toBe(10000);
+    expect(p.sinJornadaAbierta).toBe(true);
+    await expect(
+      ingresos.registrarReposicion(ctx, {
+        registerId: caja,
+        sessionIds,
+        sacar: [{ valor: 5000, cantidad: 1 }],
+      })
+    ).rejects.toMatchObject({ codigo: "JORNADA_NO_ABIERTA" });
+  });
+});

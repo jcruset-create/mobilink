@@ -1188,6 +1188,8 @@ export async function listarIntervenciones(vehiculoId: string): Promise<Interven
 
 export interface FiltrosOperaciones {
   empresaId?: string; vehiculoId?: string; neumaticoId?: string; tipo?: TipoOperacion; estado?: string; intervencionId?: string; desde?: string; hasta?: string;
+  /** Fuera las correcciones de dato: no son trabajo. Ver filtrarOperaciones. */
+  sinCorrecciones?: boolean;
 }
 
 /**
@@ -1204,6 +1206,11 @@ function filtrarOperaciones<T>(q: T, f?: FiltrosOperaciones): T {
   if (f?.tipo) r = r.eq("tipo_operacion", f.tipo);
   if (f?.estado) r = r.eq("status", f.estado);
   if (f?.intervencionId) r = r.eq("intervencion_id", f.intervencionId);
+  // Una corrección no es un trabajo: no se monta ni se desmonta nada, no
+  // genera coste ni mano de obra. Para el cliente esta pantalla se llama
+  // "Trabajos realizados", así que enseñarle ahí una corrección de dato es
+  // decirle que se hizo algo en su vehículo que no se hizo.
+  if (f?.sinCorrecciones) r = r.eq("is_correccion", false);
   if (f?.desde) r = r.gte("fecha_operacion", f.desde);
   if (f?.hasta) r = r.lte("fecha_operacion", f.hasta);
   return r as T;
@@ -2719,6 +2726,25 @@ export async function listarFotosCatalogoPorModelo(): Promise<Record<string, str
 }
 
 const REFERENCIA_SELECT = "*, modelo:tc_cat_modelos_neumatico(*, marca:tc_cat_marcas_neumatico(*)), tyre_size:tyre_sizes(*)";
+
+/**
+ * Referencias que un técnico dio de alta desde una revisión y nadie ha
+ * repasado. Se listan aparte porque son las que pueden llevar el nombre mal
+ * escrito o duplicar una que ya existía con otra grafía.
+ */
+export async function listarReferenciasPendientes(): Promise<ReferenciaNeumatico[]> {
+  const { data, error } = await supabase.from("tc_referencias_neumatico")
+    .select(REFERENCIA_SELECT).eq("activo", true).eq("pendiente_validar", true)
+    .order("referencia_completa");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as ReferenciaNeumatico[];
+}
+
+/** Da por buena una referencia provisional. Solo administradores. */
+export async function validarReferencia(id: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_validar_referencia", { p_referencia: id });
+  if (error) throw new Error(error.message);
+}
 
 export async function listarReferenciasNeumatico(filtros?: {
   q?: string; marcaId?: string; modeloId?: string; eje?: string; aplicacion?: string; ms?: boolean; tresPmsf?: boolean;
