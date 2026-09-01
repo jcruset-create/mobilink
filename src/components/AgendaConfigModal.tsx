@@ -329,10 +329,12 @@ export default function AgendaConfigModal({
     errorBox: dark
       ? "border-rose-800 bg-rose-950/40 text-rose-300"
       : "border-red-200 bg-red-50 text-red-700",
-    scopeChip: dark ? "bg-slate-700 text-slate-300" : th.scopeChip,
+    scopeChip: dark ? "bg-slate-700 text-slate-300" : "bg-slate-100 text-slate-500",
     ok: dark ? "text-emerald-400" : "text-emerald-600",
     warn: dark ? "text-rose-400" : "text-red-600",
-    scopeChipLocal: dark ? "bg-amber-900/50 font-bold text-amber-200" : th.scopeChipLocal,
+    scopeChipLocal: dark
+      ? "bg-amber-900/50 font-bold text-amber-200"
+      : "bg-amber-100 font-bold text-amber-800",
   };
 
   const timeClass = `w-full rounded-xl border px-2 py-2 text-sm ${th.input}`;
