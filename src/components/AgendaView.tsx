@@ -752,6 +752,8 @@ useEffect(() => {
 }, []);
 
   const [reminderModalOpen, setReminderModalOpen] = useState(false);
+  // Id del recordatorio / estado de técnico que se está editando. null = alta nueva.
+  const [editingReminderId, setEditingReminderId] = useState<number | null>(null);
 
   // ---- Configuración de agenda (horario y festivos) ----
   const [agendaConfig, setAgendaConfig] = useState<AgendaConfig>(DEFAULT_AGENDA_CONFIG);
@@ -948,6 +950,8 @@ function getVisibleDateReminders() {
   }
 
 function openDateReminderModal() {
+  setEditingReminderId(null);
+
   setReminderDraft({
     kind: "normal",
     title: "",
@@ -962,7 +966,31 @@ function openDateReminderModal() {
   setReminderModalOpen(true);
 }
 
+// Abre el mismo modal en modo edición al pulsar sobre la barra de "Todo el día"
+// (por ejemplo "ANDRÉS · BAJA"), con los datos del recordatorio ya cargados.
+function openEditDateReminder(reminder: DateReminder) {
+  setEditingReminderId(reminder.id);
+
+  setReminderDraft({
+    kind: reminder.kind === "tech_status" ? "tech_status" : "normal",
+    title: reminder.title || "",
+    startDate: reminder.startDate,
+    endDate: reminder.endDate,
+    color: reminder.color,
+    notes: reminder.notes || "",
+    techName: reminder.techName || "",
+    techStatus: reminder.techStatus || "vacaciones",
+  });
+
+  setReminderModalOpen(true);
+}
+
 function saveDateReminder() {
+  const enEdicion =
+    editingReminderId != null
+      ? dateReminders.find((item) => item.id === editingReminderId) ?? null
+      : null;
+
   if (!reminderDraft.startDate || !reminderDraft.endDate) {
     alert("Selecciona fecha inicio y fecha final.");
     return;
@@ -981,7 +1009,7 @@ function saveDateReminder() {
       return;
     }
 
-   const scheduledStatus = createScheduledTechStatus({
+   const scheduledBase = createScheduledTechStatus({
   techName,
   status: reminderDraft.techStatus,
   startDate: reminderDraft.startDate,
@@ -990,6 +1018,12 @@ function saveDateReminder() {
   notes: reminderDraft.notes.trim() || undefined,
   workshopId: safeSelectedWorkshopId,
 });
+
+    // Al editar se conserva el id del estado programado para no duplicarlo.
+    const scheduledStatus: ScheduledTechStatus =
+      enEdicion?.techStatusId
+        ? { ...scheduledBase, id: enEdicion.techStatusId }
+        : scheduledBase;
 
     const alreadyExists = scheduledTechStatuses.some(
   (item: ScheduledTechStatus) =>
@@ -1004,7 +1038,7 @@ function saveDateReminder() {
       `${techName} · ${getTechStatusLabel(reminderDraft.techStatus)}`;
 
     const reminder: DateReminder = {
-      id: createDateReminderId(),
+      id: enEdicion ? enEdicion.id : createDateReminderId(),
       workshopId: safeSelectedWorkshopId,
       kind: "tech_status",
       title: title.toUpperCase(),
@@ -1017,15 +1051,31 @@ function saveDateReminder() {
       techStatus: reminderDraft.techStatus,
     };
 
-    if (!alreadyExists) {
-      setScheduledTechStatuses((prev) => [scheduledStatus, ...prev]);
+    if (enEdicion) {
+      setScheduledTechStatuses((prev) =>
+        prev.some((item) => item.id === scheduledStatus.id)
+          ? prev.map((item) =>
+              item.id === scheduledStatus.id ? { ...item, ...scheduledStatus } : item
+            )
+          : [scheduledStatus, ...prev]
+      );
+
+      setDateReminders((prev) =>
+        prev.map((item) => (item.id === reminder.id ? reminder : item))
+      );
+    } else {
+      if (!alreadyExists) {
+        setScheduledTechStatuses((prev) => [scheduledStatus, ...prev]);
+      }
+
+      setDateReminders((prev) => [...prev, reminder]);
     }
 
-    setDateReminders((prev) => [...prev, reminder]);
     guardarRecordatorioEnBackend(reminder);
+    setEditingReminderId(null);
 
     appendLog(
-      `Estado técnico programado: ${techName} · ${getTechStatusLabel(
+      `${enEdicion ? "Estado técnico actualizado" : "Estado técnico programado"}: ${techName} · ${getTechStatusLabel(
         reminderDraft.techStatus
       )} · ${reminder.startDate} a ${reminder.endDate}.`
     );
@@ -1052,7 +1102,7 @@ function saveDateReminder() {
   }
 
   const reminder: DateReminder = {
-    id: createDateReminderId(),
+    id: enEdicion ? enEdicion.id : createDateReminderId(),
     workshopId: safeSelectedWorkshopId,
     kind: "normal",
     title: reminderDraft.title.trim().toUpperCase(),
@@ -1062,11 +1112,27 @@ function saveDateReminder() {
     notes: reminderDraft.notes.trim(),
   };
 
-  setDateReminders((prev) => [...prev, reminder]);
+  if (enEdicion) {
+    setDateReminders((prev) =>
+      prev.map((item) => (item.id === reminder.id ? reminder : item))
+    );
+
+    // Si antes era un estado de técnico y ahora es un recordatorio normal,
+    // se retira el estado programado que tenía asociado.
+    if (enEdicion.kind === "tech_status" && enEdicion.techStatusId) {
+      setScheduledTechStatuses((prev) =>
+        prev.filter((item) => item.id !== enEdicion.techStatusId)
+      );
+    }
+  } else {
+    setDateReminders((prev) => [...prev, reminder]);
+  }
+
   guardarRecordatorioEnBackend(reminder);
+  setEditingReminderId(null);
 
   appendLog(
-    `Recordatorio creado: ${reminder.title} · ${reminder.startDate} a ${reminder.endDate}.`
+    `${enEdicion ? "Recordatorio actualizado" : "Recordatorio creado"}: ${reminder.title} · ${reminder.startDate} a ${reminder.endDate}.`
   );
 
   setReminderModalOpen(false);
@@ -1957,8 +2023,22 @@ appendLog(
               return (
                 <div
                   key={reminder.id}
-                  title={reminder.notes || reminder.title}
-                  className={`z-20 mx-1 my-1 flex items-center justify-between gap-2 rounded-md border px-2 py-1 text-[10px] font-black uppercase shadow-sm ${getReminderColorClass(
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openEditDateReminder(reminder)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      openEditDateReminder(reminder);
+                    }
+                  }}
+                  title={
+                    (reminder.notes || reminder.title) +
+                    (reminder.kind === "tech_status"
+                      ? "\nPulsa para editar el estado del técnico"
+                      : "\nPulsa para editar el recordatorio")
+                  }
+                  className={`z-20 mx-1 my-1 flex cursor-pointer items-center justify-between gap-2 rounded-md border px-2 py-1 text-[10px] font-black uppercase shadow-sm transition hover:brightness-110 ${getReminderColorClass(
                     reminder.color
                   )}`}
                   style={{
@@ -2524,11 +2604,18 @@ appendLog(
 {reminderModalOpen && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
     <div className="w-full max-w-lg rounded-3xl bg-white text-slate-900 p-6 shadow-2xl">
-      <h3 className="text-xl font-semibold">Nuevo recordatorio por fechas</h3>
+      <h3 className="text-xl font-semibold">
+        {editingReminderId != null
+          ? reminderDraft.kind === "tech_status"
+            ? "Editar estado de técnico"
+            : "Editar recordatorio por fechas"
+          : "Nuevo recordatorio por fechas"}
+      </h3>
 
       <p className="mt-1 text-sm text-slate-500">
-        Crea un recordatorio normal de agenda o programa el estado de un técnico
-        durante un rango de fechas.
+        {editingReminderId != null
+          ? "Cambia el técnico, el estado, las fechas o las observaciones y guarda."
+          : "Crea un recordatorio normal de agenda o programa el estado de un técnico durante un rango de fechas."}
       </p>
 
       <div className="mt-5 space-y-4">
@@ -2743,7 +2830,10 @@ appendLog(
       <div className="mt-6 flex gap-3">
         <button
           type="button"
-          onClick={() => setReminderModalOpen(false)}
+          onClick={() => {
+            setReminderModalOpen(false);
+            setEditingReminderId(null);
+          }}
           className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
         >
           Cancelar
@@ -2754,7 +2844,9 @@ appendLog(
           onClick={saveDateReminder}
           className="flex-1 rounded-2xl bg-red-600 px-4 py-3 text-sm font-medium text-white"
         >
-          {reminderDraft.kind === "tech_status"
+          {editingReminderId != null
+            ? "Guardar cambios"
+            : reminderDraft.kind === "tech_status"
             ? "Guardar estado técnico"
             : "Guardar recordatorio"}
         </button>
