@@ -59,6 +59,7 @@ import { initExcepciones } from "./excepciones/schema.ts";
 import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
+import { mountParte } from "./tyrecontrol/parte/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -18260,6 +18261,10 @@ mountAsistente(app, authenticate, requireModule("tyrecontrol"));
 // Identificar un neumático por la foto de su flanco durante una revisión.
 // Solo propone: guardar lo decide el técnico. Ver server/tyrecontrol/flanco/.
 mountFlanco(app, authenticate, requireModule("tyrecontrol"));
+
+// Parte de servicio a partir de fotografías. Solo propone: guardar lo decide
+// el técnico, y aterriza en la intervención y los montajes que ya existen.
+mountParte(app, authenticate, requireModule("tyrecontrol"));
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
