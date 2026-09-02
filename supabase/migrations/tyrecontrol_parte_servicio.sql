@@ -137,15 +137,23 @@ alter table tc_intervenciones add constraint chk_interv_lugar
 --
 -- Van al catálogo general a propósito: un neumático retirado por "rodaje sin
 -- presión" lo está en todo el sistema, no solo en el papel de ese día.
-insert into tc_cat_motivos (codigo, nombre, tipo_operacion, orden) values
-  ('cambio_posicion','Cambio de posición / Permutación',null,85),
-  ('dano_golpe','Daño por golpe',null,86),
-  ('cortes','Cortes',null,87),
-  ('roces_flanco','Roces en flanco',null,88),
-  ('dano_banda_rodadura','Daño en banda de rodadura',null,89),
-  ('rodaje_sin_presion','Rodaje sin presión',null,90),
-  ('robo','Robo',null,91)
-on conflict (codigo) do nothing;
+-- NO se usa "on conflict" aquí, y no es un descuido. tc_cat_motivos no tiene
+-- único el código: tiene unique (codigo, tipo_operacion), y estos motivos son
+-- comunes a todas las operaciones, o sea tipo_operacion NULL. En un índice
+-- único de PostgreSQL dos NULL no son iguales, así que ON CONFLICT no los
+-- reconocería y volver a pasar la migración duplicaría las siete filas.
+insert into tc_cat_motivos (codigo, nombre, tipo_operacion, orden)
+select v.codigo, v.nombre, null::text, v.orden
+  from (values
+    ('cambio_posicion','Cambio de posición / Permutación',85),
+    ('dano_golpe','Daño por golpe',86),
+    ('cortes','Cortes',87),
+    ('roces_flanco','Roces en flanco',88),
+    ('dano_banda_rodadura','Daño en banda de rodadura',89),
+    ('rodaje_sin_presion','Rodaje sin presión',90),
+    ('robo','Robo',91)
+  ) as v(codigo, nombre, orden)
+ where not exists (select 1 from tc_cat_motivos m where m.codigo = v.codigo);
 
 insert into tc_cat_destinos (codigo, nombre, estado_resultante, orden) values
   ('comprada_taller','Comprada por el taller','vendido',90),
