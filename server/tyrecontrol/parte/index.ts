@@ -1,6 +1,9 @@
 import type { Express, RequestHandler } from "express";
 import { hayIA } from "../../core/openaiService.ts";
+import { supabase } from "../../supabase.ts";
 import { LectorParteIA, type LectorParte } from "./lectorParte.ts";
+import { armarParte, type MovimientoFila } from "./armarParte.ts";
+import { generarPartePdf } from "./generarPdf.ts";
 
 /**
  * Parte de servicio a partir de fotografías.
@@ -18,6 +21,32 @@ import { LectorParteIA, type LectorParte } from "./lectorParte.ts";
  *  el vehículo y sus ruedas: con 24 va sobrado, y sin tope una petición podría
  *  costar lo que quisiera quien la lance. */
 const MAX_FOTOS = 24;
+
+/**
+ * ¿El usuario de la petición puede ver esta empresa?
+ *
+ * Reproduce a mano lo que hace tc_puede_ver_empresa en la base de datos,
+ * porque aquí la RLS no protege: el cliente de servidor usa service_role.
+ */
+async function puedeVerEmpresa(req: any, empresaId: string): Promise<boolean> {
+  const userId = req.authCtx?.userId as string | undefined;
+  if (!userId) return false;
+  if (req.authCtx?.esSuperadmin === true) return true;
+
+  const { data: u } = await supabase
+    .from("tc_usuarios").select("rol, empresa_id, es_superadmin, activo")
+    .eq("id", userId).maybeSingle();
+  if (!u || u.activo === false) return false;
+  if (u.es_superadmin) return true;
+  if (u.rol === "administrador" && u.empresa_id === empresaId) return true;
+  // Cliente: solo la suya, y solo para leer — que es lo único que hace esto.
+  if (u.rol === "cliente" && u.empresa_id === empresaId) return true;
+
+  const { data: asignado } = await supabase
+    .from("tc_operador_empresas").select("empresa_id")
+    .eq("usuario_id", userId).eq("empresa_id", empresaId).maybeSingle();
+  return !!asignado;
+}
 
 export function mountParte(app: Express, ...guards: RequestHandler[]): void {
   const lector: LectorParte = new LectorParteIA();
@@ -60,6 +89,82 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
       res.json(parte);
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "No se ha podido leer el parte" });
+    }
+  });
+
+  /**
+   * El parte en PDF de una intervención.
+   *
+   * No se rellena a mano: se DERIVA de lo que Mobilink ya guarda —la
+   * intervención, sus movimientos de neumático y sus líneas de servicio—, así
+   * que reimprimirlo mañana dice lo que de verdad pasó.
+   */
+  app.get("/api/tyrecontrol/parte/:id/pdf", ...guards, async (req, res) => {
+    try {
+      const id = String(req.params.id ?? "");
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return res.status(400).json({ error: "Parte no válido" });
+
+      const { data: interv, error: e1 } = await supabase
+        .from("tc_intervenciones")
+        .select("*, vehiculo:tc_vehiculos(matricula, km_actual, empresa:tc_empresas(nombre))")
+        .eq("id", id).maybeSingle();
+      if (e1) throw new Error(e1.message);
+      if (!interv) return res.status(404).json({ error: "Parte no encontrado" });
+
+      // Este endpoint corre con service_role, o sea que SE SALTA LA RLS. El
+      // permiso hay que comprobarlo aquí a mano y con la misma regla que usa
+      // tc_puede_ver_empresa: superadmin, administrador de esa empresa, u
+      // operador asignado a ella. Sin esto, cualquiera con sesión podría
+      // descargarse el parte de otro cliente.
+      if (!(await puedeVerEmpresa(req, interv.empresa_id))) {
+        return res.status(403).json({ error: "Sin permiso sobre este parte" });
+      }
+
+      const { data: movs } = await supabase
+        .from("tc_operacion_movimientos")
+        .select(`movimiento_tipo, profundidad_anterior, profundidad_final,
+                 operacion:operaciones_neumaticos!inner(motivo, destino, intervencion_id),
+                 neumatico:tc_neumaticos(marca, modelo, medida, numero_serie, dot, estado),
+                 posicion:tc_posiciones_vehiculo!destino_posicion_id(codigo_posicion)`)
+        .eq("operacion.intervencion_id", id)
+        .order("orden");
+
+      const filas: MovimientoFila[] = (movs ?? []).map((m: any) => ({
+        movimiento_tipo: m.movimiento_tipo,
+        profundidad_anterior: m.profundidad_anterior,
+        profundidad_final: m.profundidad_final,
+        posicion: m.posicion?.codigo_posicion ?? null,
+        marca: m.neumatico?.marca ?? null,
+        modelo: m.neumatico?.modelo ?? null,
+        medida: m.neumatico?.medida ?? null,
+        // El número de serie identifica la unidad; el DOT solo dice cuándo se
+        // fabricó. Se prefiere el primero y se cae al segundo.
+        serie: m.neumatico?.numero_serie ?? m.neumatico?.dot ?? null,
+        motivo: m.operacion?.motivo ?? null,
+        destino: m.operacion?.destino ?? null,
+      }));
+
+      const { data: servicios } = await supabase
+        .from("tc_intervencion_servicios")
+        .select("servicio, cantidad").eq("intervencion_id", id);
+
+      const pdf = await generarPartePdf(armarParte(
+        {
+          ...interv,
+          matricula: interv.vehiculo?.matricula ?? null,
+          flota: interv.vehiculo?.empresa?.nombre ?? null,
+          km: interv.vehiculo?.km_actual ?? null,
+        },
+        filas,
+        (servicios ?? []) as { servicio: string; cantidad: number }[],
+      ));
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition",
+        `inline; filename="parte-${(interv.numero || id).replace(/[^\w.-]/g, "_")}.pdf"`);
+      res.end(Buffer.from(pdf));
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "No se ha podido generar el parte" });
     }
   });
 }

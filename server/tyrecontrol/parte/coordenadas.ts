@@ -27,17 +27,32 @@ export const CABECERA = {
   // deja que el generador lo encoja si el número es largo.
   numero:            { x: 520, y: 36, tam: 10, ancho: 66 },
   orden_flota:       { x: 366, y: 55, ancho: 120 },
-  inicio_servicio:   { x: 366, y: 78 },
-  inicio_mecanico:   { x: 366, y: 104 },
-  fin_mecanico:      { x: 366, y: 133 },
-  fin_servicio:      { x: 366, y: 159 },
-  km_mecanico:       { x: 366, y: 184 },
+  inicio_servicio:   { x: 345, y: 79 },
+  inicio_mecanico:   { x: 345, y: 108 },
+  fin_mecanico:      { x: 345, y: 133 },
+  fin_servicio:      { x: 345, y: 162 },
+  km_mecanico:       { x: 345, y: 186 },
   // Columna izquierda amarilla.
-  flota:             { x: 72, y: 141, ancho: 390 },
-  matricula:         { x: 72, y: 165, tam: 11 },
-  km:                { x: 72, y: 189 },
-  fecha:             { x: 72, y: 212 },
+  flota:             { x: 72, y: 144, ancho: 155 },
+  matricula:         { x: 72, y: 167, tam: 11, ancho: 155 },
+  km:                { x: 72, y: 191, ancho: 155 },
+  fecha:             { x: 72, y: 214, ancho: 155 },
 } satisfies Record<string, Punto>;
+
+/**
+ * El recuadro de «Posición Ruedas».
+ *
+ * El diagrama impreso es el de Conti360, con su numeración 1IZI/2IZE. Nosotros
+ * usamos el esquema de Mobilink —el tipo de vehículo y su plano—, así que se
+ * TAPA y se pone encima la configuración real del vehículo. Enseñar dos
+ * numeraciones distintas en el mismo papel es pedir que alguien apunte una
+ * medición en la rueda equivocada.
+ */
+// Medido sobre la plantilla: el marco del cuadro va de x 403,5 a 566,5 y de
+// y 87 a 190,5. Se tapa DESDE DEBAJO DEL TÍTULO —«Posición Ruedas» sigue
+// siendo cierto para el plano de Mobilink— y sin llegar al marco, para no
+// borrar la línea del recuadro.
+export const POSICION_RUEDAS = { x: 405, y: 99.3, ancho: 160, alto: 89.7 };
 
 /** Las tres casillas de dónde se hizo el servicio. */
 export const LUGAR: Record<"taller" | "flota" | "carretera", Punto> = {

@@ -61,6 +61,17 @@ export interface PartePdf {
   /** PNG de la firma, ya dibujada en la tablet. */
   firma_cliente?: Uint8Array | null;
   firma_tecnico?: Uint8Array | null;
+  /**
+   * El plano de la configuración del vehículo en Mobilink (2x2x2 y demás).
+   * Tapa el diagrama de Conti360, que usa otra numeración de posiciones.
+   */
+  plano?: Uint8Array | null;
+}
+
+/** PNG o JPG: pdf-lib necesita saberlo, y la imagen viene de donde viene. */
+async function meterImagen(doc: PDFDocument, bytes: Uint8Array) {
+  const esPng = bytes[0] === 0x89 && bytes[1] === 0x50;
+  return esPng ? doc.embedPng(bytes) : doc.embedJpg(bytes);
 }
 
 const TAM = 8;
@@ -128,6 +139,32 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
     escribir(p, d.km_mecanico ?? "", normal, C.CABECERA.km_mecanico.x, C.CABECERA.km_mecanico.y);
     if (d.lugar && C.LUGAR[d.lugar]) cruz(p, negrita, C.LUGAR[d.lugar].x, C.LUGAR[d.lugar].y);
 
+    // El plano de Mobilink encima del diagrama de Conti360. Se tapa primero en
+    // blanco: dejar el dibujo viejo asomando por detrás sería peor que no
+    // poner nada.
+    if (d.plano) {
+      const caja = C.POSICION_RUEDAS;
+      p.drawRectangle({
+        x: caja.x, y: C.aPdf(caja.y + caja.alto), width: caja.ancho, height: caja.alto,
+        color: rgb(1, 1, 1),
+      });
+      try {
+        const img = await meterImagen(doc, d.plano);
+        // Se encaja sin deformarlo y centrado: un plano estirado no se parece
+        // al vehículo.
+        const esc = Math.min(caja.ancho / img.width, caja.alto / img.height);
+        const an = img.width * esc, al = img.height * esc;
+        p.drawImage(img, {
+          x: caja.x + (caja.ancho - an) / 2,
+          y: C.aPdf(caja.y + caja.alto - (caja.alto - al) / 2),
+          width: an, height: al,
+        });
+      } catch {
+        // Un plano ilegible no puede tumbar el parte entero: se queda el hueco
+        // en blanco y el resto del papel sale igual.
+      }
+    }
+
     // Neumáticos de esta página.
     const desde = pag * C.DESMONTADOS.filas;
     desmontados.slice(desde, desde + C.DESMONTADOS.filas).forEach((n, i) => {
@@ -190,7 +227,7 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
         [d.firma_tecnico, C.FIRMAS.tecnico_firma] as const,
       ]) {
         if (!png) continue;
-        const img = await doc.embedPng(png);
+        const img = await meterImagen(doc, png);
         // Se encaja dentro del recuadro sin deformarla: una firma estirada no
         // se parece a la del cliente.
         const esc = Math.min(sitio.ancho / img.width, sitio.alto / img.height, 1);
