@@ -11265,10 +11265,11 @@ app.get("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (_req,
     const result = await db.query(`
       SELECT data
       FROM scheduled_jobs
-      WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
-        'cancelado',
-        'eliminado'
-      )
+      -- Las citas canceladas SIGUEN en la agenda (se pintan en rojo como
+      -- histórico). Solo se ocultan las borradas de verdad, que son las que
+      -- llevan deletedAtMs o el estado 'eliminado'.
+      WHERE COALESCE(data::jsonb->>'status', '') <> 'eliminado'
+        AND data::jsonb->>'deletedAtMs' IS NULL
       ORDER BY id ASC
     `);
 
@@ -11550,10 +11551,8 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
       const current = await db.query(`
         SELECT data
         FROM scheduled_jobs
-        WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
-          'cancelado',
-          'eliminado'
-        )
+        WHERE COALESCE(data::jsonb->>'status', '') <> 'eliminado'
+          AND data::jsonb->>'deletedAtMs' IS NULL
         ORDER BY id ASC
       `);
 
@@ -11581,18 +11580,20 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
         .toLowerCase()
         .trim();
 
-      if (
-        ["cancelado", "eliminado"].includes(existingStatus) &&
-        !["cancelado", "eliminado"].includes(incomingStatus)
-      ) {
+      const existingBorrada =
+        existingStatus === "eliminado" ||
+        existingData?.deletedAtMs != null;
+
+      if (existingBorrada && incomingStatus !== "eliminado") {
         console.warn(
           `PUT /api/scheduled-jobs ignorado: intento de reactivar cita eliminada id=${item.id}`
         );
         continue;
       }
 
+      // Solo 'eliminado' borra: 'cancelado' se queda visible en la agenda.
       const nextItem =
-        ["cancelado", "eliminado"].includes(incomingStatus)
+        incomingStatus === "eliminado"
           ? {
               ...item,
               status: incomingStatus,
@@ -11616,10 +11617,11 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
     const current = await db.query(`
       SELECT data
       FROM scheduled_jobs
-      WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
-        'cancelado',
-        'eliminado'
-      )
+      -- Las citas canceladas SIGUEN en la agenda (se pintan en rojo como
+      -- histórico). Solo se ocultan las borradas de verdad, que son las que
+      -- llevan deletedAtMs o el estado 'eliminado'.
+      WHERE COALESCE(data::jsonb->>'status', '') <> 'eliminado'
+        AND data::jsonb->>'deletedAtMs' IS NULL
       ORDER BY id ASC
     `);
 
@@ -11704,6 +11706,84 @@ app.put("/api/scheduled-jobs/:id/status", protectWhenStrict(requirePanelRole), a
   } catch (error) {
     console.error("PUT /api/scheduled-jobs/:id/status error:", error);
     res.status(500).json({ error: "Error cambiando el estado de la cita" });
+  }
+});
+
+/**
+ * Cancela UNA cita sin borrarla: se queda en la agenda, en rojo, como
+ * histórico de que ese hueco estaba reservado y se anuló. El borrado real
+ * sigue siendo el DELETE de más abajo.
+ */
+app.put("/api/scheduled-jobs/:id/cancelar", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de cita inválido" });
+    }
+
+    const now = Date.now();
+
+    const current = await db.query(
+      `
+      SELECT data
+      FROM scheduled_jobs
+      WHERE id = $1
+      LIMIT 1
+      `,
+      [id]
+    );
+
+    if (current.rowCount === 0) {
+      return res.status(404).json({ error: "Cita no encontrada" });
+    }
+
+    const currentData = current.rows[0].data ?? {};
+
+    if (currentData.deletedAtMs != null || currentData.status === "eliminado") {
+      return res.status(409).json({ error: "La cita ya está eliminada" });
+    }
+
+    const nextData = {
+      ...currentData,
+      status: "cancelado",
+      cancelledAtMs: currentData.cancelledAtMs ?? now,
+      motivoCancelacion:
+        typeof req.body?.motivo === "string" && req.body.motivo.trim()
+          ? req.body.motivo.trim()
+          : currentData.motivoCancelacion ?? null,
+    };
+
+    const result = await db.query(
+      `
+      UPDATE scheduled_jobs
+      SET
+        data = $2,
+        "updatedAtMs" = $3
+      WHERE id = $1
+      RETURNING data
+      `,
+      [id, JSON.stringify(nextData), now]
+    );
+
+    // Si la cita venía de un recordatorio de caducidad, este vuelve a un estado
+    // coherente, igual que al borrarla.
+    await db.query(
+      `UPDATE recordatorios_caducidad
+       SET estado = CASE
+             WHEN whatsapp_estado = 'enviado' OR sms_estado = 'enviado' THEN 'AVISADO'
+             ELSE 'PENDIENTE'
+           END,
+           cita_id = NULL,
+           actualizado_en_ms = $2
+       WHERE cita_id = $1 AND estado = 'CONVERTIDO_EN_CITA'`,
+      [id, now]
+    ).catch((e) => console.error("Error revirtiendo recordatorio de caducidad:", e));
+
+    res.json({ ok: true, scheduledJob: result.rows[0].data });
+  } catch (error) {
+    console.error("PUT /api/scheduled-jobs/:id/cancelar error:", error);
+    res.status(500).json({ error: "Error cancelando la cita" });
   }
 });
 
