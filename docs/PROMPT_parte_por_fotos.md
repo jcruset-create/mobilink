@@ -199,29 +199,20 @@ Dos son importantes y los asumo:
 - **«Comprueba visualmente un PDF generado.»** Puedo generarlo y rasterizarlo
   para mirarlo, y lo haré antes de darlo por bueno.
 
-## 8. Lo único que sigue faltando
+## 8. DECIDIDO también esto
 
-La plantilla ya está (`Parte_de_Servicio_conti360_SEA_III_2019.pdf`, A4 nativo).
-Lo que falta ahora es decidir, y son cosas que no puedo inventarme:
+| | Decisión |
+|---|---|
+| **Posiciones** | Se usa **el esquema de Mobilink** (el tipo de vehículo y su plano, 2x2x2 y demás), no la numeración de Conti360. No hay mapeo que inventar, y es el esquema que ya tienen las mediciones |
+| **Tractora y remolque** | **Dos partes**. Un parte, un vehículo — que es como TyreControl los guarda |
+| **Servicios facturables** | Se **añaden a TyreControl** con cantidad |
+| **Firmas** | **En la tablet** |
 
-1. **El mapeo de posiciones.** La numeración de Conti360 (`1IZI`, `2IZE`,
-   `3DE`… hasta 22, más `Rpto 1` y `Rpto 2`) contra la de Mobilink (`E1_IZQ`…).
-   Con un ejemplo de un vehículo tipado lo saco, pero adivinarlo sería colocar
-   mediciones en la rueda equivocada.
-2. **Tractora y remolque en el mismo parte**: ¿dos vehículos en un documento,
-   dos partes, o el documento agrupa lo que el sistema guarda por separado?
-3. **Los servicios facturables** (equilibrados, alineación, válvulas, horas de
-   oficial…). Hoy no existen en TyreControl. ¿Se añaden como catálogo con
-   cantidad por parte, o de momento el PDF los deja en blanco para rellenar a
-   mano?
-4. **Las firmas**: ¿se capturan en la tablet, o el PDF se imprime y se firma en
-   papel?
-5. Los **seis motivos y cuatro destinos** que faltan: ¿se añaden al catálogo
-   —lo que los pone también a disposición del resto del sistema— o solo se
-   usan dentro del parte?
+Con esto no queda ninguna decisión abierta. El plan es:
 
-Mi recomendación para empezar: **hacer primero la mitad que ya encaja** —
-cabecera, desmontados, montados y neumáticos nuevos, que salen de datos que
-Mobilink ya tiene— y dejar servicios y firmas en blanco en el PDF hasta que
-decidas 3 y 4. Así hay algo utilizable pronto y ninguna decisión se toma a
-ciegas.
+1. ~~Base de datos~~ — hecho: catálogo de servicios con unidad, líneas por
+   parte, firmas, tiempos del mecánico, lugar, y los motivos y destinos que
+   faltaban.
+2. ~~Lector de fotos~~ — hecho.
+3. El **PDF** sobre la plantilla, con su tabla de coordenadas.
+4. La **pantalla del APK**: fotos, revisión, servicios, firmas y PDF.
