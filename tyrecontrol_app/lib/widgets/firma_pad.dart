@@ -99,7 +99,9 @@ class _PintorFirma extends CustomPainter {
         continue;
       }
       final path = Path()..moveTo(trazo.first.dx, trazo.first.dy);
-      for (final o in trazo.skip(1)) path.lineTo(o.dx, o.dy);
+      for (final o in trazo.skip(1)) {
+        path.lineTo(o.dx, o.dy);
+      }
       canvas.drawPath(path, p);
     }
   }

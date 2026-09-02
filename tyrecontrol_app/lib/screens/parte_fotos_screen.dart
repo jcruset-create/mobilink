@@ -25,7 +25,7 @@ enum _Paso { fotos, revision, servicios, firmas, hecho }
 /// clasificar ayuda al técnico a saber si le falta alguna.
 enum _Tipo { matricula, cuentakilometros, vehiculo, neumatico }
 
-const _ETIQUETA = {
+const _etiqueta = {
   _Tipo.matricula: 'Matrícula',
   _Tipo.cuentakilometros: 'Cuentakilómetros',
   _Tipo.vehiculo: 'Vehículo',
@@ -81,9 +81,18 @@ class _ParteFotosScreenState extends State<ParteFotosScreen> {
   void initState() {
     super.initState();
     TyreControlApi.parteDisponible().then((v) { if (mounted) setState(() => _hayIA = v); });
-    TyreControlApi.listarServiciosCatalogo()
-        .then((v) { if (mounted) setState(() => _catServicios = v); })
-        .catchError((_) => <Map<String, dynamic>>[]);
+    _cargarServicios();
+  }
+
+  /// El catálogo de servicios no es imprescindible para empezar: si no carga
+  /// se sigue sin él y se dice en su paso, en vez de tumbar la pantalla.
+  Future<void> _cargarServicios() async {
+    try {
+      final v = await TyreControlApi.listarServiciosCatalogo();
+      if (mounted) setState(() => _catServicios = v);
+    } catch (_) {
+      // Sin catálogo se puede seguir; el paso de servicios ya lo avisa.
+    }
   }
 
   @override
@@ -96,7 +105,7 @@ class _ParteFotosScreenState extends State<ParteFotosScreen> {
   }
 
   // ── Paso 1: las fotos ──────────────────────────────────────────────────────
-  Future<void> _añadir(ImageSource origen, _Tipo tipo) async {
+  Future<void> _anadirFoto(ImageSource origen, _Tipo tipo) async {
     final picker = ImagePicker();
     if (origen == ImageSource.gallery) {
       final varias = await picker.pickMultiImage(imageQuality: 85);
@@ -235,16 +244,16 @@ class _ParteFotosScreenState extends State<ParteFotosScreen> {
       Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Row(children: [
-          Expanded(child: Text(_ETIQUETA[t]!, style: const TextStyle(fontWeight: FontWeight.w600))),
+          Expanded(child: Text(_etiqueta[t]!, style: const TextStyle(fontWeight: FontWeight.w600))),
           IconButton(
             tooltip: 'Cámara',
             icon: const Icon(Icons.photo_camera_outlined),
-            onPressed: () => _añadir(ImageSource.camera, t),
+            onPressed: () => _anadirFoto(ImageSource.camera, t),
           ),
           IconButton(
             tooltip: 'Galería',
             icon: const Icon(Icons.photo_library_outlined),
-            onPressed: () => _añadir(ImageSource.gallery, t),
+            onPressed: () => _anadirFoto(ImageSource.gallery, t),
           ),
         ]),
       ),
@@ -276,7 +285,7 @@ class _ParteFotosScreenState extends State<ParteFotosScreen> {
               child: Container(
                 color: Colors.black54,
                 padding: const EdgeInsets.symmetric(horizontal: 3),
-                child: Text(_ETIQUETA[f.tipo]!,
+                child: Text(_etiqueta[f.tipo]!,
                     style: const TextStyle(fontSize: 9, color: Colors.white)),
               ),
             ),
