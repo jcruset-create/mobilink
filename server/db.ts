@@ -1019,6 +1019,27 @@ export async function initDb() {
     );
   `);
 
+  // Cupo anual de vacaciones y modo de cómputo. Una fila por taller y año con
+  // "techName" = '' es el valor por defecto; las filas con nombre son el cupo
+  // propio de ese técnico (antigüedad, jornada parcial, incorporación a mitad
+  // de año). Se guarda fila a fila, nunca reemplazando la colección entera.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vacaciones_config (
+      id                 SERIAL PRIMARY KEY,
+      "workshopId"       TEXT NOT NULL DEFAULT '',
+      anio               INTEGER NOT NULL,
+      "techName"         TEXT NOT NULL DEFAULT '',
+      modo               TEXT NOT NULL DEFAULT 'naturales',
+      "diasPorDefecto"   INTEGER NOT NULL DEFAULT 30,
+      dias               INTEGER,
+      "createdAtMs"      BIGINT NOT NULL,
+      "updatedAtMs"      BIGINT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS vacaciones_config_unica
+      ON vacaciones_config ("workshopId", anio, "techName");
+  `);
+
   // Estado del checklist EN un trabajo concreto. Se copia de la plantilla al
   // instanciarlo: si mañana alguien edita la plantilla, el trabajo ya hecho no
   // cambia, que es lo que se espera de un registro de lo que se comprobó.

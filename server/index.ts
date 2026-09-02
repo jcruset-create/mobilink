@@ -11307,6 +11307,141 @@ app.get("/api/scheduled-tech-statuses", protectWhenStrict(requirePanelRole), asy
   }
 });
 
+/* =========================================================
+   VACACIONES: cupo anual y modo de cómputo
+========================================================= */
+
+/**
+ * Devuelve la configuración de un año: modo, días por defecto y los cupos
+ * propios por técnico. La fila con "techName" = '' es el valor por defecto.
+ */
+app.get("/api/vacaciones-config", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const anio = Number(req.query.anio) || new Date().getFullYear();
+    const workshopId = String(req.query.workshopId || "");
+
+    const result = await db.query(
+      `
+        SELECT "techName", modo, "diasPorDefecto", dias
+        FROM vacaciones_config
+        WHERE "workshopId" = $1 AND anio = $2
+      `,
+      [workshopId, anio]
+    );
+
+    const porDefecto = result.rows.find((row) => !row.techName);
+
+    const diasPorTecnico: Record<string, number> = {};
+
+    for (const row of result.rows) {
+      if (row.techName && row.dias != null) {
+        diasPorTecnico[row.techName] = Number(row.dias);
+      }
+    }
+
+    res.json({
+      anio,
+      workshopId,
+      modo: porDefecto?.modo === "laborables" ? "laborables" : "naturales",
+      diasPorDefecto:
+        porDefecto?.diasPorDefecto != null ? Number(porDefecto.diasPorDefecto) : 30,
+      diasPorTecnico,
+    });
+  } catch (error) {
+    console.error("GET /api/vacaciones-config error:", error);
+    res.status(500).json({ error: "Error cargando la configuración de vacaciones" });
+  }
+});
+
+/**
+ * Guarda la configuración de un año. Upsert fila a fila: un técnico sin cupo
+ * propio se borra de la tabla en vez de guardarse a null, para que se vea claro
+ * que hereda el valor por defecto.
+ */
+app.put("/api/vacaciones-config", requireSupervisorRole, async (req, res) => {
+  try {
+    const anio = Number(req.body?.anio);
+
+    if (!Number.isInteger(anio) || anio < 2000 || anio > 2100) {
+      return res.status(400).json({ error: "Año no válido" });
+    }
+
+    const workshopId = String(req.body?.workshopId || "");
+    const modo = req.body?.modo === "laborables" ? "laborables" : "naturales";
+
+    const diasPorDefecto = Number(req.body?.diasPorDefecto);
+
+    if (!Number.isInteger(diasPorDefecto) || diasPorDefecto < 0 || diasPorDefecto > 366) {
+      return res.status(400).json({ error: "Días por defecto no válidos" });
+    }
+
+    const diasPorTecnico =
+      req.body?.diasPorTecnico && typeof req.body.diasPorTecnico === "object"
+        ? (req.body.diasPorTecnico as Record<string, unknown>)
+        : {};
+
+    const now = Date.now();
+
+    await db.query("BEGIN");
+
+    await db.query(
+      `
+        INSERT INTO vacaciones_config (
+          "workshopId", anio, "techName", modo, "diasPorDefecto", dias,
+          "createdAtMs", "updatedAtMs"
+        )
+        VALUES ($1, $2, '', $3, $4, NULL, $5, $5)
+        ON CONFLICT ("workshopId", anio, "techName")
+        DO UPDATE SET
+          modo = EXCLUDED.modo,
+          "diasPorDefecto" = EXCLUDED."diasPorDefecto",
+          "updatedAtMs" = EXCLUDED."updatedAtMs"
+      `,
+      [workshopId, anio, modo, diasPorDefecto, now]
+    );
+
+    for (const [techName, valor] of Object.entries(diasPorTecnico)) {
+      const nombre = String(techName || "").trim();
+      if (!nombre) continue;
+
+      const dias = Number(valor);
+
+      // Sin cupo propio: se borra la fila y el técnico hereda el valor general.
+      if (!Number.isInteger(dias) || dias < 0 || dias > 366) {
+        await db.query(
+          `DELETE FROM vacaciones_config
+           WHERE "workshopId" = $1 AND anio = $2 AND "techName" = $3`,
+          [workshopId, anio, nombre]
+        );
+        continue;
+      }
+
+      await db.query(
+        `
+          INSERT INTO vacaciones_config (
+            "workshopId", anio, "techName", modo, "diasPorDefecto", dias,
+            "createdAtMs", "updatedAtMs"
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+          ON CONFLICT ("workshopId", anio, "techName")
+          DO UPDATE SET
+            dias = EXCLUDED.dias,
+            "updatedAtMs" = EXCLUDED."updatedAtMs"
+        `,
+        [workshopId, anio, nombre, modo, diasPorDefecto, dias, now]
+      );
+    }
+
+    await db.query("COMMIT");
+
+    res.json({ ok: true });
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    console.error("PUT /api/vacaciones-config error:", error);
+    res.status(500).json({ error: "Error guardando la configuración de vacaciones" });
+  }
+});
+
 app.get("/api/agenda-date-reminders", protectWhenStrict(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(
