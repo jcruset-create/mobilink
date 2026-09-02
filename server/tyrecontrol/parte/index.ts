@@ -22,6 +22,9 @@ import { generarPartePdf } from "./generarPdf.ts";
  *  costar lo que quisiera quien la lance. */
 const MAX_FOTOS = 24;
 
+/** El mismo cubo donde ya viven las fotos y las firmas de TyreControl. */
+const BUCKET_PARTES = "tc-revisiones-fotos";
+
 /**
  * ¿El usuario de la petición puede ver esta empresa?
  *
@@ -98,18 +101,21 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
    * No se rellena a mano: se DERIVA de lo que Mobilink ya guarda —la
    * intervención, sus movimientos de neumático y sus líneas de servicio—, así
    * que reimprimirlo mañana dice lo que de verdad pasó.
+   *
+   * Está aparte de la ruta porque hay dos maneras de pedirlo —descargarlo, o
+   * guardarlo para abrirlo desde el móvil— y las dos tienen que comprobar
+   * exactamente el mismo permiso.
    */
-  app.get("/api/tyrecontrol/parte/:id/pdf", ...guards, async (req, res) => {
-    try {
-      const id = String(req.params.id ?? "");
-      if (!/^[0-9a-f-]{36}$/i.test(id)) return res.status(400).json({ error: "Parte no válido" });
+  async function construirPdf(req: any, id: string):
+      Promise<{ estado: number; error: string } | { pdf: Uint8Array; nombre: string }> {
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return { estado: 400, error: "Parte no válido" };
 
       const { data: interv, error: e1 } = await supabase
         .from("tc_intervenciones")
         .select("*, vehiculo:tc_vehiculos(matricula, km_actual, empresa:tc_empresas(nombre))")
         .eq("id", id).maybeSingle();
       if (e1) throw new Error(e1.message);
-      if (!interv) return res.status(404).json({ error: "Parte no encontrado" });
+      if (!interv) return { estado: 404, error: "Parte no encontrado" };
 
       // Este endpoint corre con service_role, o sea que SE SALTA LA RLS. El
       // permiso hay que comprobarlo aquí a mano y con la misma regla que usa
@@ -117,7 +123,7 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
       // operador asignado a ella. Sin esto, cualquiera con sesión podría
       // descargarse el parte de otro cliente.
       if (!(await puedeVerEmpresa(req, interv.empresa_id))) {
-        return res.status(403).json({ error: "Sin permiso sobre este parte" });
+        return { estado: 403, error: "Sin permiso sobre este parte" };
       }
 
       const { data: movs } = await supabase
@@ -159,10 +165,48 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
         (servicios ?? []) as { servicio: string; cantidad: number }[],
       ));
 
+      return { pdf, nombre: `parte-${(interv.numero || id).replace(/[^\w.-]/g, "_")}.pdf` };
+  }
+
+  app.get("/api/tyrecontrol/parte/:id/pdf", ...guards, async (req, res) => {
+    try {
+      const r = await construirPdf(req, String(req.params.id ?? ""));
+      if ("error" in r) return res.status(r.estado).json({ error: r.error });
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition",
-        `inline; filename="parte-${(interv.numero || id).replace(/[^\w.-]/g, "_")}.pdf"`);
-      res.end(Buffer.from(pdf));
+      res.setHeader("Content-Disposition", `inline; filename="${r.nombre}"`);
+      res.end(Buffer.from(r.pdf));
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "No se ha podido generar el parte" });
+    }
+  });
+
+  /**
+   * El mismo parte, pero guardado y devuelto como enlace.
+   *
+   * Existe por la APK: para abrir el PDF el móvil lanza el visor del sistema,
+   * y ese visor NO lleva la cabecera de sesión, así que pedir directamente la
+   * ruta de arriba devolvería un 401. Meter el token en la URL tampoco vale
+   * —acabaría en el historial del navegador y en los registros—, de modo que
+   * el permiso se comprueba aquí, con sesión, y lo que viaja al visor es un
+   * enlace de Storage con un nombre que no se adivina.
+   */
+  app.post("/api/tyrecontrol/parte/:id/pdf/enlace", ...guards, async (req, res) => {
+    try {
+      const id = String(req.params.id ?? "");
+      const r = await construirPdf(req, id);
+      if ("error" in r) return res.status(r.estado).json({ error: r.error });
+
+      const ruta = `partes/${id}/${r.nombre}`;
+      const { error } = await supabase.storage.from(BUCKET_PARTES)
+        .upload(ruta, Buffer.from(r.pdf), { contentType: "application/pdf", upsert: true });
+      if (error) throw new Error(error.message);
+
+      // Firmado y con caducidad: el parte lleva matrícula, cliente y firmas, y
+      // no tiene por qué quedar colgando en una dirección permanente.
+      const { data, error: e2 } = await supabase.storage.from(BUCKET_PARTES)
+        .createSignedUrl(ruta, 60 * 60);
+      if (e2 || !data?.signedUrl) throw new Error(e2?.message || "No se ha podido firmar el enlace");
+      res.json({ url: data.signedUrl });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "No se ha podido generar el parte" });
     }
