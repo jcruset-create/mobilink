@@ -722,6 +722,108 @@ class TyreControlApi {
     return Map<String, dynamic>.from(r as Map);
   }
 
+  // ── Parte de servicio por fotografías ────────────────────────
+  //
+  // Una vía de entrada OPCIONAL: el técnico fotografía matrícula,
+  // cuentakilómetros y flancos, la IA propone y él confirma. Termina en una
+  // intervención con sus operaciones, no en un documento suelto.
+
+  /// ¿Se puede ofrecer? Sin IA configurada, mejor no enseñar el botón.
+  static Future<bool> parteDisponible() async {
+    try {
+      final r = await http.get(
+        Uri.parse('$kBackendUrl/api/tyrecontrol/parte/estado'),
+        headers: {if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken'},
+      ).timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return false;
+      return (jsonDecode(r.body) as Map)['disponible'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Sube una foto del parte. Van al bucket que ya existe, en su carpeta.
+  static Future<String> subirFotoParte(File file, {required String carpeta}) async {
+    final ext = file.path.split('.').last;
+    final path = 'partes/$carpeta/${DateTime.now().microsecondsSinceEpoch}.$ext';
+    await _db.storage.from(_bucketFotos).upload(path, file);
+    return _db.storage.from(_bucketFotos).getPublicUrl(path);
+  }
+
+  /// Manda TODAS las fotos juntas: así el modelo puede cruzarlas y reconocer
+  /// que dos son de la misma rueda. Devuelve lo que PROPONE, nunca lo guarda.
+  static Future<Map<String, dynamic>> leerParte(List<String> imagenes) async {
+    try {
+      final r = await http.post(
+        Uri.parse('$kBackendUrl/api/tyrecontrol/parte/leer'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken',
+        },
+        body: jsonEncode({'imagenes': imagenes}),
+      ).timeout(const Duration(minutes: 3));
+      final cuerpo = jsonDecode(r.body);
+      if (r.statusCode != 200) {
+        return {'warnings': [(cuerpo is Map ? cuerpo['error'] : null) ?? 'No se ha podido leer el parte'],
+                'utilizable': false, 'tires': const []};
+      }
+      return Map<String, dynamic>.from(cuerpo as Map);
+    } catch (_) {
+      return {'warnings': const ['No hay conexión con el servicio de lectura'],
+              'utilizable': false, 'tires': const []};
+    }
+  }
+
+  /// Las líneas de servicio facturables del parte. Se reemplazan enteras: es
+  /// más simple y no deja líneas viejas de un intento anterior.
+  static Future<void> guardarServiciosParte(
+      String intervencionId, Map<String, num> cantidades) async {
+    await _db.from('tc_intervencion_servicios').delete().eq('intervencion_id', intervencionId);
+    final filas = cantidades.entries
+        .where((e) => e.value > 0)
+        .map((e) => {'intervencion_id': intervencionId, 'servicio': e.key, 'cantidad': e.value})
+        .toList();
+    if (filas.isNotEmpty) await _db.from('tc_intervencion_servicios').insert(filas);
+  }
+
+  /// El catálogo de servicios facturables, para pintar la lista.
+  static Future<List<Map<String, dynamic>>> listarServiciosCatalogo() async {
+    final d = await _db.from('tc_cat_servicios').select().eq('activo', true).order('orden');
+    return (d as List).map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  /// Firmas y datos de cabecera que el parte pide y la intervención no traía.
+  static Future<void> guardarCabeceraParte(String intervencionId, Map<String, dynamic> datos) async {
+    await _db.from('tc_intervenciones').update(datos).eq('id', intervencionId);
+  }
+
+  /// Sube una firma dibujada en la tablet. Mismo bucket: no hay otro sistema
+  /// de archivos, y una firma es una imagen como las demás.
+  static Future<String> subirFirma(Uint8List png, {required String intervencionId, required String quien}) async {
+    final path = 'firmas/$intervencionId/$quien.png';
+    await _db.storage.from(_bucketFotos).uploadBinary(path, png,
+        fileOptions: const FileOptions(upsert: true, contentType: 'image/png'));
+    return _db.storage.from(_bucketFotos).getPublicUrl(path);
+  }
+
+  /// Un enlace al PDF del parte que se pueda abrir con el visor del sistema.
+  ///
+  /// No se devuelve la ruta del servidor: el visor lanza una petición SIN la
+  /// cabecera de sesión y recibiría un 401. El servidor comprueba aquí el
+  /// permiso —con la sesión, como debe ser—, guarda el parte y devuelve un
+  /// enlace firmado y caducable.
+  static Future<String> enlacePdfParte(String intervencionId) async {
+    final r = await http.post(
+      Uri.parse('$kBackendUrl/api/tyrecontrol/parte/$intervencionId/pdf/enlace'),
+      headers: {if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken'},
+    ).timeout(const Duration(seconds: 60));
+    final cuerpo = jsonDecode(r.body);
+    if (r.statusCode != 200) {
+      throw Exception((cuerpo is Map ? cuerpo['error'] : null) ?? 'No se ha podido generar el PDF');
+    }
+    return (cuerpo as Map)['url'] as String;
+  }
+
   // ── Incidencias (Fase 1: detección + pendientes) ─────────────
   /// Contador de incidencias pendientes (para el badge de Inicio). Se
   /// actualiza al llamar a [listarIncidencias] o [contarIncidenciasPendientes].
