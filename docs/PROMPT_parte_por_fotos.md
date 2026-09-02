@@ -102,50 +102,30 @@ papel ya cumplimentado. Consecuencias que hay que decidir antes de programar:
 3. **El generador del PDF** del parte, con pdf-lib, y su tabla de coordenadas.
 4. **Dónde se guarda el parte**: ver decisión 5.1.
 
-## 5. Lo que hay que decidir antes de escribir código
+## 5. DECIDIDO
 
-### 5.1 ¿Es un documento nuevo o es la intervención que ya existe?
+**El parte alimenta lo que ya hay** (decisión 5.1), y **es una vía de entrada
+opcional**: no todas las operaciones se harán así, solo las que el técnico
+elija a mano.
 
-El modelo de datos del encargo —matrícula, km, vehículo, flota, fecha y una
-lista de neumáticos con marca, modelo, serie, medida y posición— es **casi
-exactamente** lo que TyreControl ya guarda en un vehículo, sus montajes y su
-intervención.
+Las dos cosas juntas fijan el diseño:
 
-- Si el parte es **un documento suelto**, habrá dos verdades sobre qué goma
-  lleva un vehículo: la del parte y la de `tc_montajes_actuales`. El día que no
-  coincidan, nadie sabrá cuál vale.
-- Si el parte **alimenta lo que ya hay** —crea o actualiza vehículo, km y
-  montajes tras la confirmación del técnico— entonces el PDF es una *salida*
-  del sistema, no una isla.
+- El parte por fotos NO es un documento nuevo ni una tabla nueva de verdad:
+  termina en una **intervención** (`tc_intervenciones`, que ya es el parte de
+  trabajo, ya tiene número y ya la puede escribir un operador) con sus
+  operaciones y sus montajes. El PDF es una SALIDA de eso, no una isla.
+- Como es opcional, **no se toca ni el flujo de revisión ni el de Cambiar**.
+  Es una entrada nueva y aditiva: quien no la use no se entera de que existe.
 
-**Recomiendo lo segundo**, con el parte guardado como documento adjunto de la
-intervención. Pero es tu decisión: si estos partes vienen de un tercero y no
-deben tocar el inventario, entonces sí es un documento suelto y hay que decirlo
-explícitamente.
+Lo que sigue son las decisiones menores, resueltas con la opción conservadora
+y consistente con lo que ya hace el sistema. Cualquiera se puede cambiar.
 
-### 5.2 ¿Vehículo que ya existe o alta desde el parte?
-
-Si la matrícula leída no está en Mobilink: ¿se da de alta el vehículo, se
-rechaza, o se guarda el parte sin vincular? Con la RLS de hoy, un técnico **no
-puede** crear vehículos.
-
-### 5.3 ¿Qué es «flota o cliente»?
-
-En TyreControl eso es la **empresa**, y la RLS ya decide qué empresa ve cada
-usuario. Leerla de la foto y hacerle caso sería dejar que una fotografía
-cambie el ámbito de permisos. Propongo leerla solo como dato informativo y que
-la empresa la siga poniendo la sesión.
-
-### 5.4 ¿Sin cobertura?
-
-Las fotos ya se encolan. El análisis necesita red. ¿Se permite crear el parte
-sin cobertura y analizarlo al recuperarla, o se exige red como en la corrección
-de neumático?
-
-### 5.5 ¿Quién puede crear partes?
-
-¿Solo el operador asignado, también el administrador, el cliente no? Hoy la
-respuesta natural sería la misma que para la revisión.
+| | Se hace | Por qué |
+|---|---|---|
+| Matrícula que no existe | NO se da de alta el vehículo: el parte queda sin vincular y se avisa | La RLS no deja a un técnico crear vehículos, y una matrícula mal leída crearía flota fantasma |
+| «Flota / cliente» | Se lee como dato informativo; la empresa la pone la sesión | Hacerle caso sería dejar que una fotografía cambie el ámbito de permisos |
+| Sin cobertura | Las fotos se encolan; el análisis exige red y se dice | Igual que la corrección de neumático |
+| Quién puede | Operador asignado y administrador | Mismo criterio que la revisión |
 
 ## 6. Lo que NO haría, y por qué
 
@@ -172,9 +152,7 @@ Dos son importantes y los asumo:
 - **«Comprueba visualmente un PDF generado.»** Puedo generarlo y rasterizarlo
   para mirarlo, y lo haré antes de darlo por bueno.
 
-## 8. Qué necesito de ti
+## 8. Lo único que sigue faltando
 
-1. La decisión **5.1**, que es la que más cambia el trabajo.
-2. El **parte en blanco**, en PDF o escaneado. Sin él la plantilla es
-   provisional.
-3. Las decisiones 5.2 a 5.5, que son más rápidas.
+El **parte en blanco**, en PDF o escaneado. Mientras no lo haya, la plantilla
+del PDF es provisional y queda documentado cómo sustituirla.
