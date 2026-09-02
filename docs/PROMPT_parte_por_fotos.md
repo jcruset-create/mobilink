@@ -57,35 +57,82 @@ Comprobado en el repositorio, no supuesto:
 Es decir: **de las trece piezas del encargo, once ya existen**. Lo que falta de
 verdad es poco, y está en el punto 4.
 
-## 3. El PDF adjunto: es un escaneo, no un formulario
+## 3. La plantilla en blanco, ya recibida — y lo que revela
 
-Comprobado con pdf-lib sobre `09896.pdf`:
+`Parte_de_Servicio_conti360_SEA_III_2019.pdf`. Comprobado:
 
 ```
-paginas: 1
-tamano pagina: 591 x 835 pt
-campos de formulario: 0
-XObjects (imagenes): /FXX1
-Fuentes: ninguna  → es un escaneo
+paginas: 1   (el sistema decia 76; el /Count del fichero dice 1)
+tamano: 595 x 842 pt  → A4 exacto
+fuentes: 5   imagenes: 32   → PDF NATIVO, no un escaneo
+campos de formulario: 0     sin XFA
 ```
 
-No tiene campos rellenables ni una sola fuente: es una foto de un parte de
-papel ya cumplimentado. Consecuencias que hay que decidir antes de programar:
+Que sea nativo y A4 exacto es una buena noticia: se puede estampar texto
+encima con pdf-lib con precisión, sin depender de la resolución de un escaneo.
+(El primer PDF, `09896.pdf`, sí era un escaneo de un parte ya relleno: servía
+de ejemplo, no de plantilla.)
 
-- **No se puede «rellenar el formulario»**: no hay formulario que rellenar.
-- Quedan dos caminos:
-  - **(a) Estampar texto por coordenadas** sobre una plantilla en blanco
-    escaneada. Es lo que insinúa el encargo. Sale idéntico al papel, pero
-    depende de una plantilla que **hoy no tenemos** y de una tabla de
-    coordenadas que hay que calibrar a mano contra el escaneo.
-  - **(b) Redibujarlo con pdf-lib** con el mismo diseño y tamaño de página.
-    Sale nítido, se busca el texto, la segunda página de neumáticos es trivial
-    y no depende de ningún escaneo. Es además como se generan hoy los otros
-    PDF del sistema.
-- **Recomiendo (b)**, y dejar la tabla de coordenadas en un fichero aparte de
-  todos modos, que es lo que el encargo pide poder ajustar.
-- En cualquiera de los dos casos **hace falta el parte en blanco**. Sin él se
-  hace una plantilla provisional y se documenta cómo sustituirla.
+### Lo que el formulario pide de verdad
+
+Y aquí está lo importante. **El modelo de datos del encargo cubre una parte
+pequeña de este parte.** El formulario real tiene:
+
+- **Cabecera**: Parte de Servicio nº, Nº de Orden Flota, Flota, Matrícula, Km,
+  Fecha, y **cinco marcas de tiempo** —Inicio Servicio, Inicio Mecánico, Fin
+  Mecánico, Fin Servicio, Km Recorridos Mecánico.
+- **Lugar del servicio**: taller / instalaciones de la flota / carretera.
+- **Diagrama de posiciones** propio de Conti360, numeradas del 1 al 22 con
+  códigos `1IZI`, `2IZE`, `3DE`… y **cabeza tractora + remolque en el mismo
+  parte**, más `Rpto 1` y `Rpto 2`.
+- **Tabla de desmontados/permutados**: posición, dimensión y modelo, bar, nº de
+  serie/DOT, mm, y dos bloques de casillas — **Razón de Sustitución** (10
+  opciones) y **Destino del Neumático** (7 opciones).
+- **Tabla de montados**: posición, dimensión y modelo, **origen**, serie/DOT, mm.
+- **Neumáticos nuevos montados**: marca, dimensión, modelo, unidades, con
+  Continental y Semperit preimpresas.
+- **Servicios realizados con cantidad**: desmontar/montar cubierta, quitar y
+  poner rueda, equilibrados, pinchazo, rayados, alineación (standard o
+  compleja), salida de servicio móvil, kilómetros recorridos, horas de oficial
+  de 1ª, válvulas, alargaderas.
+- **Firmas**: nombre y DNI del cliente, firma y sello, nombre y firma del técnico.
+
+El JSON del encargo —matrícula, km, vehículo, flota, fecha y una lista de
+neumáticos— **cubre la cabecera y poco más**.
+
+### Qué de eso ya existe, comparado uno a uno
+
+| Bloque del parte | En TyreControl |
+|---|---|
+| Matrícula, km, fecha, flota | Ya está |
+| Tiempos de servicio y mecánico | La intervención ya cronometra (inicio, fin, pausas). Encaja parcialmente |
+| Desmontados con posición, serie, mm | `operaciones_neumaticos` + `revisiones_neumaticos_detalle` |
+| **Razón de Sustitución** (10) | `tc_cat_motivos` cubre 4: desgaste, pinchazo, desgaste irregular y (aprox.) roces en flanco. **Faltan** cambio de posición, daño por golpe, cortes, daño en banda de rodadura, rodaje sin presión y robo |
+| **Destino del Neumático** (7) | `tc_cat_destinos` cubre destruir y aproxima almacén y carcasa. **Faltan** comprada por el taller, reclamación, y distinguir almacén de flota de almacén de taller |
+| Montados con origen | Ya está (`origen`: almacén nuevo/usado, catálogo) |
+| Neumáticos nuevos por marca y unidades | Se deriva de las operaciones |
+| **Servicios realizados con cantidad** | **NO existe.** Hay `tc_cat_tipos_reparacion` con equilibrado, válvula y pinchazo, pero no líneas de servicio con cantidad — que es justo lo que se factura |
+| **Firmas de cliente y técnico** | **NO existe** |
+| **Posiciones 1IZI…22, Rpto 1/2** | `tc_posiciones_vehiculo` usa otro esquema (`E1_IZQ`). Hay que **mapear**, y no es mecánico |
+| **Cabeza tractora + remolque en un parte** | TyreControl trata **cada vehículo por separado**. Un parte que cubre tractora y remolque son DOS vehículos en un documento |
+
+### Lo que esto significa
+
+No es «rellenar un formulario con lo que ya sabemos». Faltan piezas de modelo
+—servicios facturables, firmas, seis motivos, cuatro destinos— y hay dos
+cuestiones de fondo:
+
+1. **Las posiciones.** Hay que decidir el mapeo entre la numeración de Conti360
+   y la de Mobilink, y eso depende de cómo estén tipados los vehículos. No me
+   lo puedo inventar.
+2. **Tractora y remolque en el mismo parte.** O el parte apunta a dos
+   vehículos, o se emiten dos partes, o se admite que el documento agrupe lo
+   que el sistema guarda por separado.
+
+Y una observación que conviene tener presente: esto es un documento **Conti360
+de Continental**, con casillas como «Carcasa a Continental» y «Reclamación».
+Es un parte contractual con un tercero, así que el aspecto y los códigos
+probablemente no son negociables.
 
 ## 4. Lo que hay que construir de verdad
 
@@ -154,5 +201,27 @@ Dos son importantes y los asumo:
 
 ## 8. Lo único que sigue faltando
 
-El **parte en blanco**, en PDF o escaneado. Mientras no lo haya, la plantilla
-del PDF es provisional y queda documentado cómo sustituirla.
+La plantilla ya está (`Parte_de_Servicio_conti360_SEA_III_2019.pdf`, A4 nativo).
+Lo que falta ahora es decidir, y son cosas que no puedo inventarme:
+
+1. **El mapeo de posiciones.** La numeración de Conti360 (`1IZI`, `2IZE`,
+   `3DE`… hasta 22, más `Rpto 1` y `Rpto 2`) contra la de Mobilink (`E1_IZQ`…).
+   Con un ejemplo de un vehículo tipado lo saco, pero adivinarlo sería colocar
+   mediciones en la rueda equivocada.
+2. **Tractora y remolque en el mismo parte**: ¿dos vehículos en un documento,
+   dos partes, o el documento agrupa lo que el sistema guarda por separado?
+3. **Los servicios facturables** (equilibrados, alineación, válvulas, horas de
+   oficial…). Hoy no existen en TyreControl. ¿Se añaden como catálogo con
+   cantidad por parte, o de momento el PDF los deja en blanco para rellenar a
+   mano?
+4. **Las firmas**: ¿se capturan en la tablet, o el PDF se imprime y se firma en
+   papel?
+5. Los **seis motivos y cuatro destinos** que faltan: ¿se añaden al catálogo
+   —lo que los pone también a disposición del resto del sistema— o solo se
+   usan dentro del parte?
+
+Mi recomendación para empezar: **hacer primero la mitad que ya encaja** —
+cabecera, desmontados, montados y neumáticos nuevos, que salen de datos que
+Mobilink ya tiene— y dejar servicios y firmas en blanco en el PDF hasta que
+decidas 3 y 4. Así hay algo utilizable pronto y ninguna decisión se toma a
+ciegas.
