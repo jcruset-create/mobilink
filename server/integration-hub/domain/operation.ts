@@ -57,6 +57,22 @@ export type OperationType =
   | "ERP_SYNC_CATALOG"
   | "ERP_SYNC_SALES_ORDERS"
   | "ERP_RETURN_EXECUTION"
+  /*
+   * TyreControl. Las tres primeras son de lectura o comprobación y ya se usan;
+   * las demás son el CONTRATO de las escrituras futuras, declarado desde ahora
+   * para que el outbox, los reintentos y la auditoría no haya que ampliarlos
+   * cuando llegue el momento. Ninguna está implementada todavía.
+   */
+  | "TC_AUTH_PROBE"
+  | "TC_VEHICLE_RESOLVE"
+  | "TC_VEHICLE_STATE"
+  | "TC_WRITE_PROBE"
+  | "TC_ASSISTANCE_RECORD"
+  | "TC_TYRE_MOUNT"
+  | "TC_TYRE_REMOVE"
+  | "TC_TYRE_REPLACE"
+  | "TC_TYRE_REPAIR"
+  | "TC_TYRE_ROTATE"
   | "TECH_IDENTIFY_VEHICLE"
   | "TECH_GET_COMPATIBLE_PARTS"
   | "TECH_GET_OE_REFERENCES"

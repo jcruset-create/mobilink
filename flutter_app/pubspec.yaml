@@ -3,7 +3,7 @@ description: App de operarios SEA Tarragona
 
 publish_to: 'none'
 
-version: 1.8.10+28
+version: 1.9.0+46
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -40,10 +40,10 @@ flutter_launcher_icons:
   android: true
   ios: true
   remove_alpha_ios: true
-  background_color_ios: "#000000"
+  background_color_ios: "#0E1B2E"
   image_path: "assets/icon_app.png"
   min_sdk_android: 21
-  adaptive_icon_background: "#000000"
+  adaptive_icon_background: "#0E1B2E"
   adaptive_icon_foreground: "assets/icon_app.png"
 
 flutter:
