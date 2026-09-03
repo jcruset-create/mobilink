@@ -68,6 +68,15 @@ jobs:
 
       - run: flutter pub get
 
+      # Regenera los mipmaps del lanzador desde assets/icon_app.png.
+      #
+      # Sin este paso el icono del APK NO cambia al cambiar el asset: los
+      # ficheros de android/app/src/main/res/mipmap-* están commiteados y son
+      # los que acaban dentro del APK. Antes había que acordarse de correr
+      # flutter_launcher_icons a mano y commitear el resultado; así el asset
+      # es la única fuente de verdad.
+      - run: dart run flutter_launcher_icons
+
       - run: flutter analyze --no-fatal-infos
 
       # Diagnóstico: solo longitudes, nunca el contenido. Sirve para distinguir

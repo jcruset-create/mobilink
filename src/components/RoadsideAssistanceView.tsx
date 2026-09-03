@@ -62,6 +62,7 @@ import {
 import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
 import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
+import TyreControlVehiculo from "./TyreControlVehiculo";
 import CorreoExpediente from "./CorreoExpediente";
 import SelectorSubcontrata, {
   guardarSubcontrata,
@@ -2941,6 +2942,21 @@ export default function RoadsideAssistanceView({
                   </div>
                   <SelectorSubcontrata valor={editSubcontrata} onChange={setEditSubcontrata} />
                 </div>
+
+                {/* Lo que TyreControl sabe de esta matrícula. Solo aparece si
+                    el vehículo está allí; si no, no se pinta nada, porque un
+                    aviso permanente de «no encontrado» es ruido que se aprende
+                    a ignorar. Solo lectura: no hay nada que tocar desde aquí. */}
+                {editingAssistance?.plate && (
+                  <div className="md:col-span-2">
+                    <TyreControlVehiculo
+                      plate={editingAssistance.plate}
+                      modo="resumen"
+                      assistanceId={editingAssistance.id}
+                      editable
+                    />
+                  </div>
+                )}
 
                 {/* Subcontratar a otra PLATAFORMA es distinto de mandarlo a un
                     taller: allí se abre un expediente aparte, con sus estados
