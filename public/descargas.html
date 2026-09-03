@@ -32,6 +32,7 @@
     .icon.lite { background: #8b5cf622; color: #a78bfa; }
     .icon.tyre { background: #7c3aed22; color: #a78bfa; }
     .icon.stock { background: #16a34a22; color: #4ade80; }
+    .icon.safety { background: #f59e0b22; color: #fbbf24; }
     .info { flex: 1; min-width: 0; }
     .info h2 { margin: 0; font-size: 16px; }
     .info .desc { color: #94a3b8; font-size: 13px; margin: 3px 0 0; }
@@ -71,7 +72,8 @@
       assist: { cls: "assist", ini: "A", desc: "Asistencias en carretera para operarios." },
       "assist-lite": { cls: "lite", ini: "L", desc: "Asistencias de la central para talleres colaboradores." },
       tyrecontrol: { cls: "tyre", ini: "T", desc: "Revisión de neumáticos en campo." },
-      stockflow: { cls: "stock", ini: "S", desc: "Gestión de traspasos de almacén." }
+      stockflow: { cls: "stock", ini: "S", desc: "Gestión de traspasos de almacén." },
+      safety: { cls: "safety", ini: "S", desc: "EPIs, documentos y formación para técnicos." }
     };
     fetch("/api/apps/list")
       .then(function (r) { return r.json(); })
