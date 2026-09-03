@@ -1,3 +1,23 @@
+\set ON_ERROR_STOP on
+-- ⛔ ESTO NO ES UNA MIGRACIÓN. NO LO PEGUES EN SUPABASE.
+--
+-- Es un banco de pruebas desechable, para un PostgreSQL vacío en local. Crea
+-- tablas de mentira y REDEFINE tc_is_superadmin(), tc_puede_ver_empresa() y
+-- auth.uid() como funciones que devuelven valores fijos. Contra una base real
+-- eso abriría los permisos de par en par.
+--
+-- Las migraciones que van a Supabase son las de supabase/migrations/.
+--
+-- Este cerrojo aborta antes de tocar nada si la base ya tiene TyreControl.
+do $$
+begin
+  if exists (select 1 from pg_tables where schemaname = 'public' and tablename = 'tc_vehiculos') then
+    raise exception 'ESTE FICHERO NO ES UNA MIGRACIÓN: es el banco de pruebas '
+      'desechable y esta base ya tiene TyreControl instalado. No se ha '
+      'ejecutado nada. Las migraciones están en supabase/migrations/.';
+  end if;
+end $$;
+
 -- ============================================================
 -- Banco desechable para tyrecontrol_parte_guiado_guardar.sql
 --
