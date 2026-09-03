@@ -1,206 +1,340 @@
 # Parte de servicio guiado desde la tablet
 
-Prompt previo. **No hay código todavía**: hay tres decisiones que no puedo
-tomar yo, y una de ellas toca una estructura central de Mobilink.
+Prompt de trabajo. **No hay código todavía.**
+
+Este fichero es tu prompt, revisado contra el código. Primero lo que hay que
+arreglar de él y por qué; después el prompt corregido, que es lo que se
+implementará cuando cierres las decisiones del final.
 
 ---
 
-## Lo que se pide
+# Parte 1 · Revisión de tu prompt
 
-Una pestaña nueva en Operaciones con el parte de servicio, para que el
-operario lo rellene **siguiendo los pasos del propio formulario** desde la
-tablet. Si la matrícula está en TyreControl, se traen todos los datos que ya
-hay. Si no está, se hace una parametrización pequeña la primera vez y el
-vehículo **se da de alta en TyreControl**.
+## Tres contradicciones que lo bloquean
 
----
+### 1. Pide implementar y a la vez prohíbe la única forma de hacerlo
 
-## Lo que he comprobado en el código antes de escribir esto
+Tu prompt dice tres cosas incompatibles:
 
-### 1. Un técnico HOY NO PUEDE dar de alta un vehículo
+- «Implementa la funcionalidad», «No te limites a explicar cómo hacerlo».
+- «Si consideras necesario añadir algo, indícalo antes de implementarlo».
+- «No amplíes permisos globales para resolver el flujo».
 
-`supabase/migrations/tyrecontrol_fase3.sql:75-78`
+El **Recorrido B** —crear el vehículo desde la tablet— es imposible hoy:
 
 ```sql
+-- tyrecontrol_fase3.sql:75-78
 create policy tc_vehiculos_write on tc_vehiculos for all
   using      ( tc_is_superadmin() or (tc_is_admin() and empresa_id = tc_auth_empresa_id()) )
   with check ( tc_is_superadmin() or (tc_is_admin() and empresa_id = tc_auth_empresa_id()) );
 ```
 
-El operador no está. La APK tampoco tiene ningún camino para crear vehículos
-(`supabase_service.dart` solo tiene `buscarVehiculos`, ninguna alta). Así que
-«si la matrícula no está, que se añada a TyreControl» **no se puede hacer sin
-abrir una puerta que hoy está cerrada**.
+El operador no está, y la APK no tiene ningún camino para crear vehículos.
+Hace falta abrir algo. Tu prompt exige la funcionalidad y prohíbe el
+mecanismo, así que tal cual está no se puede ejecutar. → **Decisión 1**.
 
-Esto es exactamente una estructura central, así que me paro aquí y lo explico
-antes de tocarlo. → **Decisión 1**.
+### 2. Pide una comprobación visual que aquí no se puede hacer
 
-### 2. «Una parametrización pequeña» no es tan pequeña
+«Comprueba visualmente el flujo en tamaño tablet» choca con tu propia última
+frase, «no afirmes que algo funciona si no lo has probado realmente».
 
-Para que un vehículo sirva de algo en TyreControl hacen falta:
+En este entorno **no hay Flutter**: el Dart lo compila la CI. Puedo dar build
+verde y análisis estático limpio, y puedo mirar el panel; **no puedo ver la
+APK corriendo**. Sustituido en el prompt corregido por lo que sí es
+verificable.
 
-| Campo | Para qué | ¿Se puede dejar para luego? |
+### 3. «El formulario existente» no existe como una sola cosa
+
+Dices «reutiliza el formulario existente» y «localiza el formulario actual».
+Hay **tres** cosas distintas:
+
+| Qué | Dónde | Qué escribe |
 |---|---|---|
-| `empresa_id` | De quién es. Sin esto no hay permisos ni RLS | **No** |
-| `matricula` | Identificarlo | **No** |
-| `tipo_vehiculo_id` | **Genera las posiciones** (`generarPosicionesDeTipo`) | **No** |
-| `config_ejes_id` | El plano y el «2x2x2» | **No** |
-| `medida_id` | Qué goma monta | **No** |
-| `tipo_llanta_id` | Llanta | Sí |
-| marca, modelo, nº de unidad, delegación | Ficha | Sí |
+| **Revisión** | `review_screen.dart` | `revisiones_vehiculo` + mediciones |
+| **Cambios / operaciones** | `cambio_neumatico_screen.dart` | `operaciones_neumaticos` + movimientos |
+| **Parte Conti360** | `parte_fotos_screen.dart` + `server/tyrecontrol/parte/` | cabecera y servicios de `tc_intervenciones`, y el PDF |
 
-Sin tipo de vehículo **no hay posiciones**, y sin posiciones el parte no puede
-decir de qué rueda salió cada neumático: se quedaría en una lista de gomas sin
-sitio, que es justo lo que el parte tiene que evitar. → **Decisión 2**.
+Tus catorce pasos **mezclan revisión y operaciones**: los pasos 5–6
+(«revisión de los neumáticos instalados», «registro de mediciones y estado»)
+son una revisión, y los 7–10 son una intervención. Hoy están separados a
+propósito.
 
-### 3. Ya hay dos maneras de hacer un parte, y no pueden competir
+Eso no es «reutilizar el formulario»: es **fusionar dos flujos**. Se puede
+hacer y probablemente sea lo correcto para el taller, pero hay que decirlo,
+porque cambia qué se escribe en la base de datos. → **Decisión 2**.
 
-Acabamos de meter el parte por fotografías. Si ahora aparece un flujo guiado
-al lado, el operario tiene dos botones que hacen lo mismo de dos maneras
-distintas, y eso siempre acaba en que la mitad de los partes se hacen de una
-forma y la otra mitad de otra. → **Decisión 3**.
+## Cuatro afirmaciones del prompt que el código desmiente
+
+### «Cualquier otro campo que el modelo de datos marque como obligatorio»
+
+En `tc_vehiculos` lo único `not null` es `empresa_id` y `matricula`
+(`km_actual` tiene defecto 0). **`tipo_vehiculo_id`, `marca` y `modelo` son
+nulables.**
+
+Pero sin `tipo_vehiculo_id` no se generan las posiciones, y sin posiciones el
+parte no puede decir de qué rueda salió cada goma. O sea:
+
+> obligatorio para la base de datos ≠ obligatorio para que sirva
+
+Si sigues el prompt tal cual, pedirás marca y modelo creyendo que la base de
+datos los exige —no los exige— y no pedirás el tipo, que sí hace falta.
+
+### «Evitar duplicados comprobando nuevamente la matrícula antes de guardar»
+
+Ya existe `unique (empresa_id, matricula)`. Comprobar y luego insertar es una
+carrera: entre la comprobación y el insert cabe otra tablet. Lo correcto es
+**intentar el alta y tratar el error de unicidad**, ofreciendo el vehículo que
+ya existía.
+
+### «Registrar quién lo creó»
+
+Para la intervención ya está: `tc_intervenciones.tecnico_id`.
+
+**Me corrijo**: en la versión anterior de este documento escribí que la
+intervención no tenía dueño. Sí lo tiene. Lo que falta es el dueño del
+**vehículo creado desde la tablet**.
+
+### «Todas las modificaciones en una única transacción»
+
+Es el mejor requisito de tu prompt, y tiene una consecuencia que conviene
+saber: **desde Flutter contra Supabase no hay transacción de cliente**. Varias
+llamadas seguidas no son atómicas; si la cuarta falla, las tres primeras ya
+están escritas.
+
+Para cumplirlo hace falta **una sola función de base de datos** que reciba el
+parte entero y lo escriba de una vez: `tc_guardar_parte_guiado(jsonb)`. No es
+un detalle de implementación, es el diseño.
+
+Y con eso, la doble pulsación se resuelve con una **clave de idempotencia**
+generada en la tablet al empezar el borrador, con índice único: si la petición
+llega dos veces, la segunda devuelve la misma intervención en vez de crear
+otra.
+
+## Lo que tu prompt tiene y el mío no tenía
+
+Me lo quedo entero:
+
+- Transacción única y todo-o-nada.
+- Idempotencia al finalizar.
+- Borrador con autoguardado, salir y continuar.
+- Aviso si el kilometraje es menor que el último registrado.
+- Pantalla de revisión final con cada apartado pulsable para volver a su paso.
+- Indicador de progreso, teclado numérico, valores frecuentes como botones.
+- «No inventes campos, botones, operaciones ni estados».
+- La lista de casos de prueba.
+
+## Lo que falta
+
+1. **Sin cobertura.** Lo tienes como caso de prueba, no como comportamiento
+   decidido. Hay que decidirlo.
+2. **Tractora y remolque.** Ya decidimos que son dos partes. El flujo guiado
+   tiene que saberlo.
+3. **Dónde vive la pestaña.** La barra de abajo de la APK ya tiene cinco
+   destinos; una sexta la aprieta.
+4. **Qué pasa con el vehículo creado en la tablet.** Si nadie lo repasa, se
+   queda para siempre sin marca ni modelo.
+5. **APK o panel.** No lo dices. Es la APK (Flutter). El panel es React: si se
+   entendiera mal, el trabajo sería otro completamente distinto.
+6. **«Paso 4 de 10»** pero la lista tiene catorce pasos.
+7. **Stock.** Das por hecho que siempre hay control de stock. En TyreControl
+   hay clientes **sin control de stock** y existe «montar fuera de almacén».
+   «Actualizar correctamente el stock» no siempre aplica.
 
 ---
 
-## Cómo lo haría
+# Parte 2 · Prompt corregido
 
-### El flujo, en el orden del formulario
+## Objetivo
 
-Una sola pantalla con pasos, como la de fotos, porque el operario está de pie
-al lado del camión y necesita ver dónde está y volver atrás sin perder nada.
+Una entrada nueva en la **APK de TyreControl** (Flutter, para tablet) llamada
+**«Realizar operación»**, que guíe al operario paso a paso siguiendo el orden
+del parte de servicio, con interfaz táctil y sencilla.
 
-**Paso 0 · La matrícula.** Se teclea, se escanea con la cámara (el OCR ya
-existe: `ocr_service.dart`) o se elige de los vehículos recientes.
+Reutilizar lo que ya hay: catálogo de neumáticos, clientes, vehículos,
+almacenes, operaciones, intervenciones, validaciones y permisos. **No** crear
+tablas de partes, catálogos paralelos ni sistemas de fotos nuevos.
 
-- **Está en TyreControl** → se traen empresa, flota, tipo, configuración de
-  ejes, medida, km conocidos y **el plano con las ruedas que hay montadas
-  ahora**. El operario no teclea nada de eso.
-- **No está** → salta la parametrización (abajo).
+No inventar campos, botones, operaciones ni estados. Si hace falta añadir algo,
+decirlo antes de implementarlo.
 
-**Paso 1 · Cabecera.** Flota, matrícula, km, fecha, orden de flota y lugar del
-servicio (taller / instalaciones de la flota / carretera). Todo relleno de
-antemano salvo km, orden y lugar.
+## Paso 1 · Identificar el vehículo
 
-**Paso 2 · Las ruedas.** El plano del vehículo, con sus posiciones reales. Se
-toca una rueda y se dice qué le pasa: se desmonta, se monta, se permuta, se
-repara. **Aquí está la diferencia que importa**: el formulario en papel tiene
-una tabla de desmontados y otra de montados, pero rellenarlas como dos listas
-sueltas produce filas sin posición. Se rellenan tocando la rueda, y las dos
-tablas del PDF salen solas de ahí.
+Matrícula a mano, por foto, o eligiendo de los vehículos recientes. El
+reconocimiento ya existe (`ocr_service.dart`).
 
-**Paso 3 · Neumáticos nuevos.** Los que se han montado, agrupados por marca,
-medida y modelo. Sale ya calculado del paso 2; solo se revisa.
+1. Normalizar antes de buscar.
+2. Buscar en TyreControl.
+3. Enseñar lo detectado para confirmar o corregir.
+4. **No** continuar solo si la lectura tiene poca confianza.
 
-**Paso 4 · Servicios.** Los doce del catálogo con su cantidad.
+### Recorrido A · La matrícula existe
 
-**Paso 5 · Alineación**, si la hubo.
+Traer sin volver a preguntar: cliente, matrícula, nº de flota, marca, modelo,
+tipo, configuración de ejes, kilometraje, neumáticos montados con su posición,
+marca, modelo, dimensión y número de serie, mediciones anteriores y almacén.
 
-**Paso 6 · Firmas.** Cliente (nombre y DNI) y técnico, con el dedo.
+Enseñar una ficha resumen para confirmar que es el camión. **Desde ese resumen
+no se editan datos maestros.**
 
-**Paso 7 · Hecho.** PDF.
+### Recorrido B · La matrícula no existe
 
-Nada se guarda hasta el paso 7, igual que en el de fotos.
+Decirlo claro: «Este vehículo todavía no está registrado en TyreControl», y
+ofrecer una parametrización rápida, solo la primera vez.
 
-### La parametrización, cuando la matrícula no existe
+**Lo imprescindible, y nada más:**
 
-Cuatro preguntas, no un formulario de alta completo:
+| Campo | Por qué |
+|---|---|
+| Cliente | De quién es. Se elige de los existentes; **no se crean clientes aquí** |
+| Matrícula | Ya viene del paso 1 |
+| Configuración de ejes | De ella sale el tipo, y del tipo las posiciones |
+| Medida principal | Qué goma monta |
+| Nº de flota | Si lo hay |
+| Kilometraje | Si se sabe |
 
-1. **¿De qué flota es?** — De las empresas que el operario tenga asignadas. Si
-   solo tiene una, ni se pregunta.
-2. **¿Cómo son los ejes?** — Las seis configuraciones que ya existen
-   (`2x2`, `2x4`, `2x2x2`, `2x2x4`, `2x4x4`, `2x2x2x2`), **en dibujos, no en
-   una lista de códigos**. El operario reconoce el camión de un vistazo; «2x2x4»
-   no lo dice nadie en un taller.
-3. **¿Qué medida lleva?** — Del catálogo, con las más usadas de esa flota
-   primero.
-4. **Matrícula y nº de unidad** — la matrícula ya viene del paso 0.
+**Marca, modelo, delegación y tipo de llanta no se preguntan**: son nulables y
+se completan después desde el panel.
 
-El tipo de vehículo se deduce de la configuración de ejes, que es lo que de
-verdad determina las posiciones. Marca, modelo, delegación y tipo de llanta
-**no se preguntan**: se rellenan después desde el panel.
+La configuración de ejes se elige **en dibujos**, de las que ya existen
+(`2x2`, `2x4`, `2x2x2`, `2x2x4`, `2x4x4`, `2x2x2x2`), siempre de delante hacia
+atrás. Si ninguna encaja, el parte continúa y queda anotado para que un
+administrador cree el tipo: **no se inventan configuraciones desde la tablet**,
+porque eso significa crear tipos de vehículo, que es otra cosa.
 
-El vehículo nace marcado **pendiente de validar**, igual que las referencias
-provisionales del catálogo (`tc_crear_referencia_provisional`): un
-administrador lo repasa, le pone marca y modelo, o lo fusiona si resulta que ya
-estaba dado de alta con la matrícula escrita de otra manera.
+Antes de guardar, enseñar el plano con los ejes y las posiciones para que el
+operario confirme.
+
+Al confirmar: crear el vehículo, asociarlo al cliente, generar sus posiciones,
+registrar quién lo creó y cuándo, **marcarlo pendiente de validar**, y seguir
+con el parte sin salir del flujo.
+
+El duplicado lo impide `unique (empresa_id, matricula)`: se intenta el alta y,
+si choca, se ofrece el vehículo que ya existía.
+
+## Pasos siguientes
+
+Se adaptan a lo que el parte y las operaciones ya guardan:
+
+1. Vehículo confirmado.
+2. Cabecera: kilometraje, lugar del servicio, orden de flota.
+3. Las ruedas, **sobre el plano**: se toca una posición y se dice qué le pasa.
+4. Mediciones y estado de la posición tocada (ver Decisión 2).
+5. Neumáticos desmontados y montados — salen del paso 3, aquí se revisan.
+6. Neumáticos del almacén, nuevo o usado, cuando corresponda.
+7. Servicios facturables con su cantidad.
+8. Fotografías y observaciones.
+9. Revisión final.
+10. Firmas.
+11. Guardar.
+
+**Las tablas de desmontados y montados no se rellenan como listas.** El papel
+las tiene así, pero copiarlas literalmente produce filas sin posición, y una
+fila sin posición no alimenta el histórico. Se rellenan tocando la rueda, y las
+dos tablas del PDF salen solas.
+
+El indicador de progreso dice el número real de pasos, no diez fijos.
+
+## Uso en tablet
+
+Botones grandes; un grupo de datos por pantalla; «Anterior» y «Continuar»
+fijos; «Continuar» solo activo con lo obligatorio cubierto; teclado numérico
+para kilómetros y milímetros; valores frecuentes como botones; el plano
+táctil, con la posición en curso resaltada y las hechas marcadas; nada de
+desplegables minúsculos; confirmación antes de terminar; errores en castellano
+llano.
+
+Estilo: el de TyreControl. Misma paleta, tipografía, componentes, iconos y
+navegación. No se rediseña la aplicación.
+
+## Fotografías
+
+Como ayuda para rellenar, nunca como confirmación. Se enseña lo detectado, se
+puede corregir todo, se avisa cuando la lectura es floja, **lo que no se lee se
+deja vacío**, no se confunden dimensión, DOT y número de serie, y se puede
+repetir la foto. La clave de IA no sale del servidor.
+
+## Discrepancias
+
+Si el neumático físico no es el registrado, el operario marca **«No coincide»**
+—ya existe, en la APK y en el panel— y se reutiliza tal cual: fotografiar,
+leer, corregir, buscar la ficha o crearla, y sustituir solo el registro de esa
+posición.
+
+No genera trabajo, coste, venta ni movimiento económico. Queda en el histórico
+con posición, lo que figuraba, lo encontrado, usuario, fecha, motivo y fotos.
+
+## Guardado
+
+Borrador local mientras se avanza, para no perder nada al salir.
+
+Al finalizar, **una sola llamada** —`tc_guardar_parte_guiado(jsonb)`— que
+escriba en una transacción la intervención, las operaciones, las mediciones,
+los cambios de posición, los montajes y desmontajes, los movimientos de
+almacén, las correcciones, las fotos, las observaciones y las firmas. Si algo
+falla, no queda nada a medias.
+
+Con **clave de idempotencia** generada al abrir el borrador: la segunda
+pulsación devuelve la misma intervención en vez de crear otra.
+
+## Validaciones
+
+Matrícula obligatoria y normalizada · alta de vehículo por unicidad, no por
+comprobación previa · cliente obligatorio en vehículos nuevos · configuración
+de ejes de las existentes · kilometraje numérico y no negativo, con aviso si es
+menor que el último · posiciones válidas para ese vehículo · campos
+obligatorios según la operación · un neumático no puede estar en dos
+posiciones · números de serie sin duplicar · no se finaliza con pasos
+obligatorios a medias · **nada definitivo se escribe hasta confirmar**.
+
+## Qué se verifica, y quién
+
+| Se comprueba aquí | Lo compruebas tú |
+|---|---|
+| `tsc`, build del panel, pruebas del servidor | El flujo en una tablet real |
+| Análisis estático y build de la APK en la CI | Que la lectura por foto acierta en tu taller |
+| La función de guardado, en un PostgreSQL de usar y tirar | Que el PDF sale bien impreso |
+
+**No afirmaré que la APK funciona por tener el build verde.** El build dice que
+compila, no que sirva.
+
+## Base de datos
+
+Migración aditiva e idempotente, sin borrar ni transformar nada. Solo lo
+imprescindible, con comprobación al final que la tumbe si algo no cuadra.
 
 ---
 
-## Las tres decisiones
+# Parte 3 · Decisiones pendientes
 
-### Decisión 1 · Quién puede dar de alta un vehículo desde la tablet
+## Decisión 1 · Quién da de alta un vehículo desde la tablet
 
 | Opción | Qué implica |
 |---|---|
-| **A. Abrir `tc_vehiculos` a los operadores** | Una línea de RLS. Pero abre la tabla entera: un operador podría crear, editar y borrar cualquier vehículo de su empresa desde cualquier sitio, no solo desde el parte. |
-| **B. Una función acotada** `tc_alta_vehiculo_desde_parte(...)` **(recomendada)** | `security definer`, crea el vehículo con exactamente esos cuatro campos, lo marca pendiente de validar y genera sus posiciones. El operador no gana permiso sobre la tabla: gana permiso para **una** operación concreta. Es el patrón que ya aprobaste para el catálogo. |
-| **C. No crear nada** | El parte guarda la matrícula como texto y ya lo dará de alta un administrador. Rechazada: un parte que no cuelga de un vehículo no alimenta el histórico, y alimentar lo que ya hay era el punto de partida. |
+| **A. Función acotada `tc_alta_vehiculo_desde_parte` (recomendada)** | `security definer`, crea el vehículo con esos campos, lo marca pendiente de validar y genera posiciones. El operador no gana permiso sobre la tabla: gana permiso para **una** operación. Mismo patrón que el catálogo provisional, que ya aprobaste |
+| B. Abrir `tc_vehiculos` a los operadores | Una línea. Pero podrían crear, editar y borrar cualquier vehículo de su empresa desde cualquier sitio |
+| C. No crear nada | Un parte que no cuelga de un vehículo no alimenta el histórico |
 
-**Recomiendo B.** Una puerta estrecha, no la pared entera.
+## Decisión 2 · ¿El flujo guiado hace también una revisión?
 
-### Decisión 2 · ¿Bastan esas cuatro preguntas?
-
-Empresa, configuración de ejes, medida y matrícula. Marca, modelo, delegación
-y llanta se dejan para el panel.
-
-El riesgo de pedir menos: un vehículo a medias que alguien tiene que arreglar
-después. El riesgo de pedir más: el operario abandona a mitad y hace el parte
-en papel, que es lo que hace hoy.
-
-### Decisión 3 · Qué pasa con la pantalla de fotos
+Tus pasos 5 y 6 piden mediciones y estado. Hoy eso es una **revisión**, no una
+operación.
 
 | Opción | Qué implica |
 |---|---|
-| **A. Fundirla dentro del flujo guiado (recomendada)** | En el paso 0 aparece «rellenar con fotos». La IA propone y el operario sigue por los mismos pasos. Un solo camino, con un atajo dentro. |
-| **B. Dejar las dos** | Dos botones que hacen lo mismo. Acaba en partes hechos de dos maneras y en dos pantallas que mantener. |
+| **A. Sí: crea revisión + intervención (recomendada)** | Lo que el operario mide se guarda donde se mide hoy, y el desgaste por mil kilómetros sigue saliendo. Es más trabajo, pero es el dato que da valor al sistema |
+| B. No: solo intervención | Más simple, pero las profundidades que teclee el operario no llegan al histórico de mediciones y se pierden |
 
-**Recomiendo A.**
+## Decisión 3 · Qué pasa con la pantalla de fotos que acabamos de hacer
 
----
+Fundirla dentro del flujo guiado como atajo del paso 1 **(recomendada)**, o
+dejar dos botones que hacen lo mismo.
 
-## Preguntas menores, pero que cambian el trabajo
+## Preguntas menores
 
-1. **¿Tractora y remolque en el mismo recorrido?** Ya decidimos que son dos
-   partes. En un flujo guiado eso significa preguntar al principio «¿lleva
-   remolque?» y encadenar el segundo parte al terminar el primero. ¿Se hace, o
-   se dejan como dos partes independientes?
-
-2. **¿Sin cobertura?** Propongo: el borrador se guarda en la tablet y no se
-   pierde nada, pero **finalizar necesita red**, y el alta de vehículo también.
-   Encolar un alta de vehículo sin saber si otro lo dio de alta mientras tanto
-   fabrica matrículas duplicadas, que es peor que esperar.
-
-3. **¿Pestaña abajo o azulejo en Inicio?** La barra de abajo tiene cinco
-   (Inicio, Revisiones, Herramientas, Sincronización, Perfil) y una sexta la
-   aprieta. Propongo azulejo en Inicio, junto a «Operaciones».
-
-4. **¿Puede el operario cerrar el parte de una intervención que abrió otro?**
-   Hoy la intervención no tiene dueño. Si el parte se firma, conviene que sí lo
-   tenga.
-
----
-
-## Lo que NO haría
-
-- **No** una tabla nueva de partes. El parte es la intervención, y ya lo es.
-- **No** un catálogo de vehículos paralelo para los dados de alta desde la
-  tablet.
-- **No** rellenar las tablas de desmontados y montados como listas de texto.
-  Sin posición, el parte deja de servir para el histórico.
-- **No** dar de alta el vehículo antes de que el operario termine el paso 0:
-  una matrícula mal tecleada crearía un vehículo fantasma cada vez.
-
----
-
-## Cuánto es
-
-Cuatro capas, como el parte por fotos:
-
-1. **Base de datos** — `tc_alta_vehiculo_desde_parte`, `pendiente_validar` en
-   `tc_vehiculos`, y el dueño de la intervención si se decide que sí.
-2. **Panel** — la pantalla donde el administrador valida los vehículos que han
-   nacido en la tablet.
-3. **APK** — el flujo guiado, que es el grueso.
-4. **Manual** — actualizar el que ya hay.
-
-Las capas 1 y 2 se pueden hacer sin tocar la 3, y la 3 sin la 4.
+1. **¿Sin cobertura?** Propuesta: borrador en la tablet, pero finalizar y dar
+   de alta un vehículo necesitan red. Encolar un alta fabrica matrículas
+   duplicadas.
+2. **¿Tractora y remolque encadenados**, o dos partes independientes?
+3. **¿Azulejo en Inicio o sexta pestaña abajo?** Propongo azulejo.
+4. **¿Quién valida los vehículos nacidos en la tablet**, y en qué pantalla del
+   panel?
