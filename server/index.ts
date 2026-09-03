@@ -3862,6 +3862,75 @@ app.get("/api/presencia-operator/historial", requirePresenciaEmployee, async (re
 });
 
 /* =========================================================
+   SAFETY MANAGER — subida de documentos (panel web)
+   Sube el PDF a Supabase Storage (bucket público) y devuelve
+   la URL pública para guardarla en sm_safety_documents.
+========================================================= */
+
+const SAFETY_DOCS_BUCKET = process.env.SUPABASE_SAFETY_DOCS_BUCKET || "safety-docs";
+let safetyDocsBucketReady = false;
+
+async function ensureSafetyDocsBucket() {
+  if (safetyDocsBucketReady) return;
+  const { data } = await supabase.storage.getBucket(SAFETY_DOCS_BUCKET);
+  if (!data) {
+    const { error } = await supabase.storage.createBucket(SAFETY_DOCS_BUCKET, {
+      public: true,
+      fileSizeLimit: "10MB",
+    });
+    if (error && !String(error.message || "").includes("already exists")) {
+      throw error;
+    }
+  }
+  safetyDocsBucketReady = true;
+}
+
+app.post(
+  "/api/safety/documents/upload",
+  protectWhenStrict(requirePanelRole),
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) return res.status(400).json({ error: "Falta el archivo" });
+
+      const ALLOWED = new Set([
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+      ]);
+      if (!ALLOWED.has(file.mimetype)) {
+        return res.status(400).json({ error: "Solo se admiten PDF o imágenes" });
+      }
+
+      await ensureSafetyDocsBucket();
+
+      const safeName = (file.originalname || "documento")
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .replace(/[^a-zA-Z0-9._-]+/g, "-")
+        .replace(/-+/g, "-")
+        .slice(-80);
+      const path = `${Date.now()}-${safeName}`;
+
+      const { error: upErr } = await supabase.storage
+        .from(SAFETY_DOCS_BUCKET)
+        .upload(path, file.buffer, { contentType: file.mimetype });
+      if (upErr) throw upErr;
+
+      const { data: pub } = supabase.storage
+        .from(SAFETY_DOCS_BUCKET)
+        .getPublicUrl(path);
+      res.json({ url: pub.publicUrl });
+    } catch (error) {
+      console.error("POST /api/safety/documents/upload error:", error);
+      res.status(500).json({ error: "Error subiendo el documento" });
+    }
+  }
+);
+
+/* =========================================================
    SAFETY OPERATOR (APK Mobilink Safety — técnicos)
    Reutiliza la auth de presencia (sea_employees + PIN, cabeceras
    x-presencia-employee + x-presencia-pin). Solo lectura de sus
