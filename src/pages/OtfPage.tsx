@@ -278,7 +278,7 @@ function PresupuestarModal({ otf, onClose }: { otf: any; onClose: () => void }) 
         if (!vivo) return;
         if (!res.ok) throw new Error(data?.message || data?.error || `Error ${res.status}`);
         setPreview(data);
-      } catch (e: any) {
+      } catch (e) {
         if (vivo) setError(e.message);
       }
     })();
@@ -413,14 +413,34 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
   const [detalle, setDetalle] = useState("");
   const [observaciones, setObservaciones] = useState("");
   const [adding, setAdding] = useState(false);
+  const [errorAlta, setErrorAlta] = useState<string | null>(null);
   // La consulta a TyreControl (y su antirrebote) vive ahora dentro de
   // TyreControlVehiculo: la hacían dos pantallas con dos copias del mismo
   // efecto.
 
+  /*
+   * Qué falta para poder añadir el trabajo.
+   *
+   * Antes esto era un `return` mudo dentro de `add()`: al pulsar el botón sin
+   * plantilla ni detalle no pasaba absolutamente nada, ni un aviso. Quien lo
+   * usaba daba por hecho que la aplicación estaba rota, y con razón: un botón
+   * que no responde y no explica por qué es indistinguible de uno averiado.
+   *
+   * Las observaciones NO valen como descripción del trabajo: son el «dónde
+   * está» —la plaza, el eje—, no el «qué hay que hacer», y aceptarlas dejaría
+   * trabajos sin decir qué se hace.
+   */
+  const faltaParaAnadir = !plate.trim()
+    ? "Indica la matrícula."
+    : !trabajoPlantilla.trim() && !detalle.trim()
+      ? "Elige un trabajo de la plantilla o escribe el detalle manual."
+      : null;
+
   async function add() {
     if (adding) return; // evita el doble clic → trabajo duplicado
-    if (!plate.trim() || (!trabajoPlantilla.trim() && !detalle.trim())) return;
+    if (faltaParaAnadir) { setErrorAlta(faltaParaAnadir); return; }
     setAdding(true);
+    setErrorAlta(null);
     try {
       await addOtfTrabajo(otf.id, {
         plate,
@@ -431,6 +451,14 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
       });
       setPlate(""); setTP(""); setDetalle(""); setObservaciones("");
       onChange();
+    } catch (e: any) {
+      /*
+       * Sin este catch, un fallo del servidor tambien se veia como «no hace
+       * nada»: la promesa se rechazaba, el `finally` quitaba el «Añadiendo…» y
+       * el trabajo no aparecia, sin ninguna explicacion.
+       */
+      const motivo = e instanceof Error ? e.message : "";
+      setErrorAlta(motivo || "No se ha podido añadir el trabajo. Vuelve a intentarlo.");
     } finally {
       setAdding(false);
     }
@@ -552,9 +580,20 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
         <div className="mt-2">
           <TyreControlVehiculo plate={plate} modo="completo" />
         </div>
+        {/*
+          El botón NO se deshabilita a propósito: un botón gris que tampoco
+          responde deja la misma duda que el fallo original. Se deja pulsable
+          para que el clic tenga siempre una consecuencia visible, y lo que
+          falta se dice antes y después de pulsar.
+        */}
         <button onClick={add} disabled={adding} className="mt-2 w-full rounded-lg bg-orange-600 px-3 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-50">
           {adding ? "Añadiendo…" : "+ Añadir trabajo"}
         </button>
+        {(errorAlta || faltaParaAnadir) && (
+          <p className={`mt-1.5 text-xs font-semibold ${errorAlta ? "text-amber-300" : "text-slate-400"}`}>
+            {errorAlta ?? faltaParaAnadir}
+          </p>
+        )}
       </div>
     </div>
   );

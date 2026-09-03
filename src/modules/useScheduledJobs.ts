@@ -14,6 +14,7 @@ import {
   loadScheduledJobsFromBackend,
   saveJobToBackend,
   saveScheduledJobStatusToBackend,
+  cancelScheduledJobOnBackend,
   saveTechToBackend,
 } from "./workshopApi";
 import { applyScheduledJobV2FieldsToJob } from "./scheduledJobToWorkV2Adapter";
@@ -181,10 +182,11 @@ export function useScheduledJobs({
     }
   }
 
+  /** Devuelve true si la agenda quedó guardada en el servidor. */
   async function saveScheduledJobsToBackend(
     items: ScheduledJob[],
     saveVersion: number
-  ) {
+  ): Promise<boolean> {
     try {
       const response = await fetchWithTimeout(`${API_BASE}/api/scheduled-jobs`, {
         method: "PUT",
@@ -198,15 +200,18 @@ export function useScheduledJobs({
         const text = await response.text();
         console.error("Error guardando agenda:", response.status, text);
         appendLog("Error guardando agenda.");
-        return;
+        return false;
       }
 
       if (scheduledJobsSaveVersionRef.current === saveVersion) {
         scheduledJobsDirtyRef.current = false;
       }
+
+      return true;
     } catch (error) {
       console.error("Error guardando agenda:", error);
       appendLog("Error guardando agenda.");
+      return false;
     }
   }
 
@@ -346,23 +351,49 @@ export function useScheduledJobs({
     );
   }
 
-  function cancelScheduledJob(id: number) {
+  /**
+   * Cancela una cita desde la agenda. La cita se queda pintada como cancelada;
+   * el estado se guarda con el endpoint de una sola cita, no con el PUT del
+   * listado completo, para que no lo pise una pestaña con datos antiguos.
+   */
+  async function cancelScheduledJob(id: number) {
     const scheduled = scheduledJobs.find((item) => item.id === id);
     if (!scheduled) return;
+    if (scheduled.status === "cancelado") return;
 
-    setScheduledJobsAndSave((prev) =>
+    const previousStatus = scheduled.status;
+
+    setScheduledJobs((prev) =>
       prev.map((item) =>
         item.id === id
           ? {
               ...item,
-              status: "cancelado",
+              status: "cancelado" as const,
               cancelledAtMs: nowMs(),
             }
           : item
       )
     );
 
-    appendLog(`Cita cancelada: ${scheduled.plate}.`);
+    try {
+      await cancelScheduledJobOnBackend(id);
+
+      appendLog(`Cita cancelada: ${scheduled.plate}.`);
+    } catch (error) {
+      console.error("Error cancelando cita:", error);
+
+      setScheduledJobs((prev) =>
+        prev.map((item) =>
+          item.id === id
+            ? { ...item, status: previousStatus, cancelledAtMs: null }
+            : item
+        )
+      );
+
+      appendLog(`Error cancelando la cita ${scheduled.plate}.`);
+
+      alert("No se pudo cancelar la cita. Se ha dejado como estaba.");
+    }
   }
 
   /**
@@ -422,47 +453,60 @@ export function useScheduledJobs({
 
   /**
    * "Cancelar" desde las tarjetas de citas pendientes de llegada (Operativo y
-   * Operativo 2): borra la cita de verdad.
+   * Operativo 2).
    *
-   * Antes se llamaba a `cancelScheduledJob`, que solo marcaba la cita como
-   * `cancelado` dentro del listado y lo guardaba con un PUT del array completo.
-   * La cita seguía existiendo en el estado local y en la fila de la BD, así que
-   * se quedaba pintada en la agenda. Aquí se quita del estado y se llama al
-   * DELETE del backend, que marca `deletedAtMs` (el GET ya no la devuelve) y
-   * devuelve el recordatorio de caducidad a PENDIENTE/AVISADO si la cita venía
-   * de uno.
+   * La cita NO se borra: se queda en la agenda marcada como cancelada, en rojo,
+   * para que quede constancia de que ese hueco estaba reservado y se anuló.
+   * Desaparece de LLEGADAS porque ese listado solo mira las `programado`. El
+   * borrado de verdad sigue estando en la agenda ("Eliminar").
    */
   async function deleteScheduledJobById(scheduledId: number) {
     const scheduled = scheduledJobs.find((item) => item.id === scheduledId);
 
     if (!scheduled) return;
 
+    if (scheduled.status === "cancelado") return;
+
     const ok = window.confirm(
-      `¿Cancelar la cita y borrarla de la agenda?\n\nMatrícula: ${
+      `¿Cancelar esta cita?\n\nMatrícula: ${
         scheduled.plate || "sin matrícula"
-      }\nFecha: ${scheduled.date} · ${scheduled.startTime}`
+      }\nFecha: ${scheduled.date} · ${scheduled.startTime}\n\n` +
+        `La cita se queda en la agenda marcada como CANCELADA. ` +
+        `Para borrarla del todo, usa "Eliminar" desde la agenda.`
     );
 
     if (!ok) return;
 
-    setScheduledJobs((prev) => prev.filter((item) => item.id !== scheduledId));
+    const previousStatus = scheduled.status;
+    const cancelledAtMs = nowMs();
+
+    setScheduledJobs((prev) =>
+      prev.map((item) =>
+        item.id === scheduledId
+          ? { ...item, status: "cancelado" as const, cancelledAtMs }
+          : item
+      )
+    );
 
     try {
-      await deleteScheduledJobFromBackend(scheduledId);
+      await cancelScheduledJobOnBackend(scheduledId);
 
-      appendLog(`Cita cancelada y borrada de la agenda: ${scheduled.plate}.`);
+      appendLog(`Cita cancelada (sigue en la agenda): ${scheduled.plate}.`);
     } catch (error) {
       console.error("Error cancelando cita:", error);
 
-      setScheduledJobs((prev) => {
-        const exists = prev.some((item) => item.id === scheduled.id);
-        return exists ? prev : [...prev, scheduled];
-      });
+      setScheduledJobs((prev) =>
+        prev.map((item) =>
+          item.id === scheduledId
+            ? { ...item, status: previousStatus, cancelledAtMs: null }
+            : item
+        )
+      );
 
       appendLog(`Error cancelando la cita ${scheduled.plate}.`);
 
       alert(
-        "No se pudo borrar la cita en el servidor. Se ha restaurado en pantalla."
+        "No se pudo cancelar la cita en el servidor. Se ha dejado como estaba."
       );
     }
   }
@@ -514,6 +558,44 @@ export function useScheduledJobs({
     }
   }
 
+  /**
+   * Busca la entrada rápida de una cita. Las citas guardan la clave de la
+   * plantilla, pero si esa plantilla se renombra o se borra la clave deja de
+   * existir y la llegada no se puede confirmar. Antes de rendirse se intenta
+   * localizarla por su etiqueta, que es lo que ve el usuario.
+   */
+  function resolverPlantillaDeCita(
+    templateKey: string | null | undefined,
+    etiquetas: (string | null | undefined)[]
+  ) {
+    const porClave = templateKey
+      ? quickTemplates.find((item) => item.key === templateKey)
+      : undefined;
+
+    if (porClave) return porClave;
+
+    const normaliza = (valor: string) =>
+      valor
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim()
+        .toLowerCase();
+
+    for (const etiqueta of etiquetas) {
+      if (!etiqueta) continue;
+
+      const buscada = normaliza(etiqueta);
+
+      const porEtiqueta = quickTemplates.find(
+        (item) => normaliza(item.label) === buscada
+      );
+
+      if (porEtiqueta) return porEtiqueta;
+    }
+
+    return undefined;
+  }
+
   async function confirmScheduledArrival(scheduled: ScheduledJob) {
     const currentScheduled =
       scheduledJobs.find((item) => item.id === scheduled.id) ?? scheduled;
@@ -530,11 +612,34 @@ export function useScheduledJobs({
       ? currentScheduled.firstTemplateKey
       : currentScheduled.templateKey;
 
-    const firstTemplate = quickTemplates.find(
-      (item) => item.key === firstTemplateKey
-    );
+    const firstTemplate = resolverPlantillaDeCita(firstTemplateKey, [
+      currentScheduled.templateLabel,
+      isLinkedJob ? currentScheduled.linkedTemplateLabel : null,
+    ]);
 
-    if (!firstTemplate) return;
+    // Sin plantilla no se puede crear el trabajo. Antes se salía en silencio:
+    // el usuario pulsaba "Llegó", no pasaba nada y la cita seguía en la lista.
+    if (!firstTemplate) {
+      const operacion =
+        currentScheduled.templateLabel ||
+        currentScheduled.linkedTemplateLabel ||
+        firstTemplateKey ||
+        "sin operación";
+
+      appendLog(
+        `No se pudo confirmar la llegada de ${currentScheduled.plate}: la operación "${operacion}" ya no existe en las entradas rápidas.`
+      );
+
+      alert(
+        `No se puede confirmar la llegada de ${currentScheduled.plate}.\n\n` +
+          `La operación de la cita ("${operacion}") ya no existe en las entradas rápidas ` +
+          `de este taller, así que no se puede crear el trabajo.\n\n` +
+          `Vuelve a crear la entrada rápida con ese nombre, o edita la cita en la agenda ` +
+          `y asígnale una operación existente.`
+      );
+
+      return;
+    }
 
     const createdAt = nowMs();
     const arrivedAtMs = nowMs();
@@ -625,9 +730,16 @@ export function useScheduledJobs({
     let createdSecondJobId: number | null = null;
 
     if (isLinkedJob) {
-      const secondTemplate = quickTemplates.find(
-        (item) => item.key === currentScheduled.secondTemplateKey
+      const secondTemplate = resolverPlantillaDeCita(
+        currentScheduled.secondTemplateKey,
+        [currentScheduled.linkedTemplateLabel]
       );
+
+      if (!secondTemplate) {
+        appendLog(
+          `Llegada de ${currentScheduled.plate}: la segunda operación del trabajo combinado ya no existe, se crea solo la primera.`
+        );
+      }
 
       if (secondTemplate) {
         const secondJobReasonBase = `Pendiente del trabajo anterior: ${firstTemplate.label}. Trabajo combinado: ${currentScheduled.linkedTemplateLabel}.`;
@@ -722,10 +834,22 @@ export function useScheduledJobs({
       // persista en backend aunque el usuario recargue la página enseguida.
       scheduledJobsDirtyRef.current = true;
       scheduledJobsSaveVersionRef.current += 1;
-      await saveScheduledJobsToBackend(
+      const agendaGuardada = await saveScheduledJobsToBackend(
         updatedScheduledJobs,
         scheduledJobsSaveVersionRef.current
       );
+
+      // Si esto falla, el trabajo existe pero la cita sigue "programada" en el
+      // servidor: al recargar volvería a aparecer en LLEGADAS. Mejor avisar que
+      // dejar que reaparezca sin explicación.
+      if (!agendaGuardada) {
+        alert(
+          `El trabajo de ${currentScheduled.plate} se ha creado, pero no se ha podido ` +
+            `guardar la llegada en la agenda.\n\n` +
+            `Si recargas la página, la cita volverá a aparecer en LLEGADAS. ` +
+            `Comprueba la conexión y vuelve a intentarlo.`
+        );
+      }
 
       appendLog(
         scheduledIncludedTasks.length > 0

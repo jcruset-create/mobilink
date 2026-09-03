@@ -67,6 +67,7 @@ import { initExcepciones } from "./excepciones/schema.ts";
 import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
+import { mountParte } from "./tyrecontrol/parte/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -11302,10 +11303,11 @@ app.get("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (_req,
     const result = await db.query(`
       SELECT data
       FROM scheduled_jobs
-      WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
-        'cancelado',
-        'eliminado'
-      )
+      -- Las citas canceladas SIGUEN en la agenda (se pintan en rojo como
+      -- histórico). Solo se ocultan las borradas de verdad, que son las que
+      -- llevan deletedAtMs o el estado 'eliminado'.
+      WHERE COALESCE(data::jsonb->>'status', '') <> 'eliminado'
+        AND data::jsonb->>'deletedAtMs' IS NULL
       ORDER BY id ASC
     `);
 
@@ -11340,6 +11342,141 @@ app.get("/api/scheduled-tech-statuses", protectWhenStrict(requirePanelRole), asy
     res.status(500).json({
       error: "Error cargando estados técnicos programados",
     });
+  }
+});
+
+/* =========================================================
+   VACACIONES: cupo anual y modo de cómputo
+========================================================= */
+
+/**
+ * Devuelve la configuración de un año: modo, días por defecto y los cupos
+ * propios por técnico. La fila con "techName" = '' es el valor por defecto.
+ */
+app.get("/api/vacaciones-config", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const anio = Number(req.query.anio) || new Date().getFullYear();
+    const workshopId = String(req.query.workshopId || "");
+
+    const result = await db.query(
+      `
+        SELECT "techName", modo, "diasPorDefecto", dias
+        FROM vacaciones_config
+        WHERE "workshopId" = $1 AND anio = $2
+      `,
+      [workshopId, anio]
+    );
+
+    const porDefecto = result.rows.find((row) => !row.techName);
+
+    const diasPorTecnico: Record<string, number> = {};
+
+    for (const row of result.rows) {
+      if (row.techName && row.dias != null) {
+        diasPorTecnico[row.techName] = Number(row.dias);
+      }
+    }
+
+    res.json({
+      anio,
+      workshopId,
+      modo: porDefecto?.modo === "laborables" ? "laborables" : "naturales",
+      diasPorDefecto:
+        porDefecto?.diasPorDefecto != null ? Number(porDefecto.diasPorDefecto) : 30,
+      diasPorTecnico,
+    });
+  } catch (error) {
+    console.error("GET /api/vacaciones-config error:", error);
+    res.status(500).json({ error: "Error cargando la configuración de vacaciones" });
+  }
+});
+
+/**
+ * Guarda la configuración de un año. Upsert fila a fila: un técnico sin cupo
+ * propio se borra de la tabla en vez de guardarse a null, para que se vea claro
+ * que hereda el valor por defecto.
+ */
+app.put("/api/vacaciones-config", requireSupervisorRole, async (req, res) => {
+  try {
+    const anio = Number(req.body?.anio);
+
+    if (!Number.isInteger(anio) || anio < 2000 || anio > 2100) {
+      return res.status(400).json({ error: "Año no válido" });
+    }
+
+    const workshopId = String(req.body?.workshopId || "");
+    const modo = req.body?.modo === "laborables" ? "laborables" : "naturales";
+
+    const diasPorDefecto = Number(req.body?.diasPorDefecto);
+
+    if (!Number.isInteger(diasPorDefecto) || diasPorDefecto < 0 || diasPorDefecto > 366) {
+      return res.status(400).json({ error: "Días por defecto no válidos" });
+    }
+
+    const diasPorTecnico =
+      req.body?.diasPorTecnico && typeof req.body.diasPorTecnico === "object"
+        ? (req.body.diasPorTecnico as Record<string, unknown>)
+        : {};
+
+    const now = Date.now();
+
+    await db.query("BEGIN");
+
+    await db.query(
+      `
+        INSERT INTO vacaciones_config (
+          "workshopId", anio, "techName", modo, "diasPorDefecto", dias,
+          "createdAtMs", "updatedAtMs"
+        )
+        VALUES ($1, $2, '', $3, $4, NULL, $5, $5)
+        ON CONFLICT ("workshopId", anio, "techName")
+        DO UPDATE SET
+          modo = EXCLUDED.modo,
+          "diasPorDefecto" = EXCLUDED."diasPorDefecto",
+          "updatedAtMs" = EXCLUDED."updatedAtMs"
+      `,
+      [workshopId, anio, modo, diasPorDefecto, now]
+    );
+
+    for (const [techName, valor] of Object.entries(diasPorTecnico)) {
+      const nombre = String(techName || "").trim();
+      if (!nombre) continue;
+
+      const dias = Number(valor);
+
+      // Sin cupo propio: se borra la fila y el técnico hereda el valor general.
+      if (!Number.isInteger(dias) || dias < 0 || dias > 366) {
+        await db.query(
+          `DELETE FROM vacaciones_config
+           WHERE "workshopId" = $1 AND anio = $2 AND "techName" = $3`,
+          [workshopId, anio, nombre]
+        );
+        continue;
+      }
+
+      await db.query(
+        `
+          INSERT INTO vacaciones_config (
+            "workshopId", anio, "techName", modo, "diasPorDefecto", dias,
+            "createdAtMs", "updatedAtMs"
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+          ON CONFLICT ("workshopId", anio, "techName")
+          DO UPDATE SET
+            dias = EXCLUDED.dias,
+            "updatedAtMs" = EXCLUDED."updatedAtMs"
+        `,
+        [workshopId, anio, nombre, modo, diasPorDefecto, dias, now]
+      );
+    }
+
+    await db.query("COMMIT");
+
+    res.json({ ok: true });
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    console.error("PUT /api/vacaciones-config error:", error);
+    res.status(500).json({ error: "Error guardando la configuración de vacaciones" });
   }
 });
 
@@ -11587,10 +11724,8 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
       const current = await db.query(`
         SELECT data
         FROM scheduled_jobs
-        WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
-          'cancelado',
-          'eliminado'
-        )
+        WHERE COALESCE(data::jsonb->>'status', '') <> 'eliminado'
+          AND data::jsonb->>'deletedAtMs' IS NULL
         ORDER BY id ASC
       `);
 
@@ -11618,18 +11753,20 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
         .toLowerCase()
         .trim();
 
-      if (
-        ["cancelado", "eliminado"].includes(existingStatus) &&
-        !["cancelado", "eliminado"].includes(incomingStatus)
-      ) {
+      const existingBorrada =
+        existingStatus === "eliminado" ||
+        existingData?.deletedAtMs != null;
+
+      if (existingBorrada && incomingStatus !== "eliminado") {
         console.warn(
           `PUT /api/scheduled-jobs ignorado: intento de reactivar cita eliminada id=${item.id}`
         );
         continue;
       }
 
+      // Solo 'eliminado' borra: 'cancelado' se queda visible en la agenda.
       const nextItem =
-        ["cancelado", "eliminado"].includes(incomingStatus)
+        incomingStatus === "eliminado"
           ? {
               ...item,
               status: incomingStatus,
@@ -11653,10 +11790,11 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
     const current = await db.query(`
       SELECT data
       FROM scheduled_jobs
-      WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
-        'cancelado',
-        'eliminado'
-      )
+      -- Las citas canceladas SIGUEN en la agenda (se pintan en rojo como
+      -- histórico). Solo se ocultan las borradas de verdad, que son las que
+      -- llevan deletedAtMs o el estado 'eliminado'.
+      WHERE COALESCE(data::jsonb->>'status', '') <> 'eliminado'
+        AND data::jsonb->>'deletedAtMs' IS NULL
       ORDER BY id ASC
     `);
 
@@ -11741,6 +11879,84 @@ app.put("/api/scheduled-jobs/:id/status", protectWhenStrict(requirePanelRole), a
   } catch (error) {
     console.error("PUT /api/scheduled-jobs/:id/status error:", error);
     res.status(500).json({ error: "Error cambiando el estado de la cita" });
+  }
+});
+
+/**
+ * Cancela UNA cita sin borrarla: se queda en la agenda, en rojo, como
+ * histórico de que ese hueco estaba reservado y se anuló. El borrado real
+ * sigue siendo el DELETE de más abajo.
+ */
+app.put("/api/scheduled-jobs/:id/cancelar", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de cita inválido" });
+    }
+
+    const now = Date.now();
+
+    const current = await db.query(
+      `
+      SELECT data
+      FROM scheduled_jobs
+      WHERE id = $1
+      LIMIT 1
+      `,
+      [id]
+    );
+
+    if (current.rowCount === 0) {
+      return res.status(404).json({ error: "Cita no encontrada" });
+    }
+
+    const currentData = current.rows[0].data ?? {};
+
+    if (currentData.deletedAtMs != null || currentData.status === "eliminado") {
+      return res.status(409).json({ error: "La cita ya está eliminada" });
+    }
+
+    const nextData = {
+      ...currentData,
+      status: "cancelado",
+      cancelledAtMs: currentData.cancelledAtMs ?? now,
+      motivoCancelacion:
+        typeof req.body?.motivo === "string" && req.body.motivo.trim()
+          ? req.body.motivo.trim()
+          : currentData.motivoCancelacion ?? null,
+    };
+
+    const result = await db.query(
+      `
+      UPDATE scheduled_jobs
+      SET
+        data = $2,
+        "updatedAtMs" = $3
+      WHERE id = $1
+      RETURNING data
+      `,
+      [id, JSON.stringify(nextData), now]
+    );
+
+    // Si la cita venía de un recordatorio de caducidad, este vuelve a un estado
+    // coherente, igual que al borrarla.
+    await db.query(
+      `UPDATE recordatorios_caducidad
+       SET estado = CASE
+             WHEN whatsapp_estado = 'enviado' OR sms_estado = 'enviado' THEN 'AVISADO'
+             ELSE 'PENDIENTE'
+           END,
+           cita_id = NULL,
+           actualizado_en_ms = $2
+       WHERE cita_id = $1 AND estado = 'CONVERTIDO_EN_CITA'`,
+      [id, now]
+    ).catch((e) => console.error("Error revirtiendo recordatorio de caducidad:", e));
+
+    res.json({ ok: true, scheduledJob: result.rows[0].data });
+  } catch (error) {
+    console.error("PUT /api/scheduled-jobs/:id/cancelar error:", error);
+    res.status(500).json({ error: "Error cancelando la cita" });
   }
 });
 
@@ -18086,6 +18302,10 @@ mountAsistente(app, authenticate, requireModule("tyrecontrol"));
 // Identificar un neumático por la foto de su flanco durante una revisión.
 // Solo propone: guardar lo decide el técnico. Ver server/tyrecontrol/flanco/.
 mountFlanco(app, authenticate, requireModule("tyrecontrol"));
+
+// Parte de servicio a partir de fotografías. Solo propone: guardar lo decide
+// el técnico, y aterriza en la intervención y los montajes que ya existen.
+mountParte(app, authenticate, requireModule("tyrecontrol"));
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
