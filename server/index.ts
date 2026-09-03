@@ -18194,6 +18194,7 @@ const APK_APPS: Record<
     pubspec: "tyrecontrol_app/pubspec.yaml",
   },
   stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
+  safety: { prefix: "mobilink-safety-", label: "Mobilink Safety" },
   taller: {
     prefix: "mobilink-taller-",
     label: "WorkPlanner Taller",
