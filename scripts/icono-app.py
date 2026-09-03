@@ -2,7 +2,7 @@
 """
 Prepara el logo de Mobilink Assist como icono de la APK.
 
-    python3 scripts/icono-app.py <origen.png> [--app flutter_app]
+    python3 scripts/icono-app.py <origen.png> [--app flutter_app] [--solo-marca --banda y0 y1]
 
 ── Los tres problemas del logo original ────────────────────────────────────────
 
@@ -61,11 +61,14 @@ def recortar_margen(img: Image.Image) -> Image.Image:
     px = img.load()
     an, al = img.size
 
+    # Mayoría, no unanimidad: un marco de un píxel con alguna mota oscura
+    # dejaba el borde claro sin recortar, y luego reaparecía como una línea
+    # blanca en el canto del icono.
     def fila_vacia(y):
-        return all(casi_blanco(px[x, y]) or transparente(px[x, y]) for x in range(an))
+        return sum(casi_blanco(px[x, y]) or transparente(px[x, y]) for x in range(an)) >= an * 0.97
 
     def col_vacia(x):
-        return all(casi_blanco(px[x, y]) or transparente(px[x, y]) for y in range(al))
+        return sum(casi_blanco(px[x, y]) or transparente(px[x, y]) for y in range(al)) >= al * 0.97
 
     arriba, abajo, izq, der = 0, al - 1, 0, an - 1
     while arriba < abajo and fila_vacia(arriba):
@@ -132,6 +135,63 @@ def rellenar_esquinas(img: Image.Image, fondo: tuple) -> Image.Image:
     return img
 
 
+def perfil_de_filas(img: Image.Image, umbral=110, minimo=40) -> None:
+    """
+    Imprime dónde hay dibujo, para poder elegir la banda a ojo.
+
+    Hubo aquí una detección automática y se ha quitado: el logo va apilado
+    —marca, «Mobilink», «ASSIST», los renglones de texto— pero los huecos
+    ENTRE bloques y los huecos DENTRO de la marca miden casi lo mismo, así que
+    cualquier umbral que no parta la marca por la mitad se come el texto de
+    abajo. Un recorte torcido en un icono se ve enseguida; una heurística que
+    acierta en un logo y falla en el siguiente, no. Mejor mirarlo.
+    """
+    gris = img.convert("L")
+    px = gris.load()
+    an, al = gris.size
+    print("\nfila   píxeles claros")
+    for y in range(0, al, max(1, al // 90)):
+        c = sum(1 for x in range(0, an, 2) if px[x, y] > umbral)
+        print(f"{y:5d} {c:5d} {'#' * min(50, c // 8)}{'' if c >= minimo else '  ·'}")
+    print("\nElige el primer bloque (la M + furgón) y pásalo con --banda y0 y1")
+
+
+def recortar_a_la_tinta(img: Image.Image, umbral=60, minimo=4) -> Image.Image:
+    """Ajusta el recorte al dibujo, ignorando píxeles sueltos del antialias."""
+    gris = img.convert("L")
+    px = gris.load()
+    an, al = gris.size
+    cols = [x for x in range(an) if sum(1 for y in range(al) if px[x, y] > umbral) >= minimo]
+    fils = [y for y in range(al) if sum(1 for x in range(an) if px[x, y] > umbral) >= minimo]
+    if not cols or not fils:
+        return img
+    return img.crop((cols[0], fils[0], cols[-1] + 1, fils[-1] + 1))
+
+
+def sobre_fondo(marca: Image.Image, fondo: tuple, alto_rel: float, lado=LADO) -> Image.Image:
+    """
+    Compone la marca centrada en un cuadrado.
+
+    El fondo se aplica con una mezcla «aclarar» (canal a canal, el máximo entre
+    el píxel y el fondo) en vez de pegar la marca encima. Pegarla dejaría el
+    negro del recorte como un rectángulo más oscuro; así el negro se convierte
+    en el color de fondo y el dibujo claro no se toca. Sin halos y sin tener
+    que acertar un umbral de transparencia.
+    """
+    an, al = marca.size
+    nuevo_al = int(lado * alto_rel)
+    nuevo_an = int(an * nuevo_al / al)
+    r = marca.convert("RGB").resize((nuevo_an, nuevo_al), Image.LANCZOS)
+    px = r.load()
+    for y in range(nuevo_al):
+        for x in range(nuevo_an):
+            a, b, c = px[x, y]
+            px[x, y] = (max(a, fondo[0]), max(b, fondo[1]), max(c, fondo[2]))
+    lienzo = Image.new("RGB", (lado, lado), fondo[:3])
+    lienzo.paste(r, ((lado - nuevo_an) // 2, (lado - nuevo_al) // 2))
+    return lienzo
+
+
 def cuadrar(img: Image.Image, fondo: tuple) -> Image.Image:
     an, al = img.size
     if an == al:
@@ -168,16 +228,42 @@ def main() -> int:
     img = rellenar_esquinas(img, fondo)
     img = cuadrar(img, fondo)
 
-    # 1 · A sangre, para iOS y para los Android antiguos sin icono adaptativo.
-    sangre = img.resize((LADO, LADO), Image.LANCZOS)
-    sangre.convert("RGB").save(destino / "icon_app.png")
+    if "--solo-marca" in sys.argv:
+        """
+        Solo la M con el furgón.
 
-    # 2 · Primer plano del icono adaptativo, dentro de la zona segura.
-    lado_util = int(LADO * ZONA_SEGURA)
-    primer_plano = Image.new("RGBA", (LADO, LADO), (0, 0, 0, 0))
-    borde = (LADO - lado_util) // 2
-    primer_plano.paste(img.resize((lado_util, lado_util), Image.LANCZOS), (borde, borde))
-    primer_plano.save(destino / "icon_app_foreground.png")
+        El logo entero lleva dos renglones de texto pequeño y una fila de
+        iconos: a 48 dp en el lanzador eso es una mancha ilegible. La marca
+        sola se reconoce al instante, que es lo único que un icono tiene que
+        conseguir.
+        """
+        if "--banda" not in sys.argv:
+            perfil_de_filas(img)
+            return 2
+        i = sys.argv.index("--banda")
+        y0, y1 = int(sys.argv[i + 1]), int(sys.argv[i + 2])
+        marca = recortar_a_la_tinta(img.crop((0, y0, img.size[0], y1)), minimo=4)
+        print(f"marca: filas {y0}–{y1} → {marca.size[0]}×{marca.size[1]}")
+
+        # 0.50 es el ajuste fino: la marca es muy apaisada (≈2,6:1) y a más
+        # altura empieza a salirse por los lados, comiéndose la pata izquierda
+        # de la M y la trasera del furgón.
+        # Un solo fichero, que hace de icono y de primer plano adaptativo.
+        # La zona segura NO se recorta aquí: el XML que genera
+        # flutter_launcher_icons ya mete el primer plano con un `inset` del
+        # 16 %, así que encogerlo antes lo encogería dos veces y el icono
+        # saldría pequeño y perdido en medio del fondo.
+        sobre_fondo(marca, fondo, 0.50).save(destino / "icon_app.png")
+    else:
+        # 1 · A sangre, para iOS y para los Android antiguos sin adaptativo.
+        img.resize((LADO, LADO), Image.LANCZOS).convert("RGB").save(destino / "icon_app.png")
+
+        # 2 · Primer plano del icono adaptativo, dentro de la zona segura.
+        lado_util = int(LADO * ZONA_SEGURA)
+        primer_plano = Image.new("RGBA", (LADO, LADO), (0, 0, 0, 0))
+        borde = (LADO - lado_util) // 2
+        primer_plano.paste(img.resize((lado_util, lado_util), Image.LANCZOS), (borde, borde))
+        primer_plano.save(destino / "icon_app_foreground.png")
 
     print(f"\nescrito {destino}/icon_app.png y {destino}/icon_app_foreground.png")
     print(f"pon en pubspec.yaml:  adaptive_icon_background: \"{hex_fondo}\"")
