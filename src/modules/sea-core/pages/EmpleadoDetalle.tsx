@@ -6,7 +6,8 @@ import { apiFetch } from "../../apiFetch";
 
 type Empleado = {
   id: string; nombre: string; apellidos: string | null;
-  dni_nie: string | null; telefono: string | null; email: string | null;
+  dni_nie: string | null; num_seguridad_social: string | null;
+  telefono: string | null; email: string | null;
   cargo: string | null; departamento: string | null; rol: string;
   codigo_operario: string | null; activo: boolean; fecha_alta: string | null;
   company_id: string | null; work_center_id: string | null;
@@ -301,6 +302,7 @@ export default function EmpleadoDetalle() {
 
       ${seccion("Datos personales", tabla([
         fila("DNI / NIE", empleado!.dni_nie),
+        fila("Nº Seguridad Social", empleado!.num_seguridad_social),
         fila("Email", empleado!.email),
         fila("Teléfono", empleado!.telefono),
         fila("Empresa", (empleado!.sea_companies as any)?.nombre),
@@ -442,6 +444,7 @@ export default function EmpleadoDetalle() {
             {[
               { label: "Nombre completo", value: `${empleado.nombre} ${empleado.apellidos ?? ""}` },
               { label: "DNI / NIE", value: empleado.dni_nie },
+              { label: "Nº Seguridad Social", value: empleado.num_seguridad_social },
               { label: "Email", value: empleado.email },
               { label: "Teléfono", value: empleado.telefono },
               { label: "Fecha de alta", value: empleado.fecha_alta ? new Date(empleado.fecha_alta).toLocaleDateString("es-ES") : null },

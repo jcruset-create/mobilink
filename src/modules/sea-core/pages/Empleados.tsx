@@ -8,6 +8,7 @@ type Empleado = {
   nombre: string;
   apellidos: string | null;
   dni_nie: string | null;
+  num_seguridad_social: string | null;
   telefono: string | null;
   email: string | null;
   cargo: string | null;
@@ -32,7 +33,7 @@ const ROL_BADGE: Record<string, string> = {
 };
 
 const EMPTY = {
-  nombre: "", apellidos: "", dni_nie: "", telefono: "", email: "",
+  nombre: "", apellidos: "", dni_nie: "", num_seguridad_social: "", telefono: "", email: "",
   cargo: "", departamento: "", rol: "operario", codigo_operario: "",
   fecha_alta: "", activo: true, roadside_capable: false, company_id: "", work_center_id: "",
 };
@@ -58,7 +59,7 @@ export default function Empleados() {
     setCargando(true);
     const [{ data: emps }, { data: emp }, { data: cent }] = await Promise.all([
       supabase.from("sea_employees")
-        .select("id, nombre, apellidos, dni_nie, telefono, email, cargo, departamento, rol, codigo_operario, activo, fecha_alta, sea_companies(nombre), sea_work_centers(nombre)")
+        .select("id, nombre, apellidos, dni_nie, num_seguridad_social, telefono, email, cargo, departamento, rol, codigo_operario, activo, fecha_alta, sea_companies(nombre), sea_work_centers(nombre)")
         .order("nombre"),
       supabase.from("sea_companies").select("id, nombre").eq("activa", true).order("nombre"),
       supabase.from("sea_work_centers").select("id, nombre").eq("activo", true).order("nombre"),
@@ -75,7 +76,7 @@ export default function Empleados() {
     if (filtroActivo === "inactivos" && e.activo) return false;
     if (filtroTexto.trim()) {
       const t = filtroTexto.toLowerCase();
-      const campos = [e.nombre, e.apellidos, e.email, e.codigo_operario, e.cargo, e.dni_nie].join(" ").toLowerCase();
+      const campos = [e.nombre, e.apellidos, e.email, e.codigo_operario, e.cargo, e.dni_nie, e.num_seguridad_social].join(" ").toLowerCase();
       if (!campos.includes(t)) return false;
     }
     return true;
@@ -91,6 +92,7 @@ export default function Empleados() {
   function abrirEditar(e: Empleado) {
     setForm({
       nombre: e.nombre, apellidos: e.apellidos ?? "", dni_nie: e.dni_nie ?? "",
+      num_seguridad_social: e.num_seguridad_social ?? "",
       telefono: e.telefono ?? "", email: e.email ?? "", cargo: e.cargo ?? "",
       departamento: e.departamento ?? "", rol: e.rol,
       codigo_operario: e.codigo_operario ?? "",
@@ -112,6 +114,7 @@ export default function Empleados() {
       nombre:          form.nombre.trim(),
       apellidos:       form.apellidos || null,
       dni_nie:         form.dni_nie || null,
+      num_seguridad_social: form.num_seguridad_social || null,
       telefono:        form.telefono || null,
       email:           form.email || null,
       cargo:           form.cargo || null,
@@ -262,6 +265,9 @@ export default function Empleados() {
                       className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
                   <div><label className="text-xs font-medium text-slate-300">DNI / NIE</label>
                     <input value={form.dni_nie} onChange={(e) => setForm({ ...form, dni_nie: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  <div><label className="text-xs font-medium text-slate-300">Nº Seguridad Social</label>
+                    <input value={form.num_seguridad_social} onChange={(e) => setForm({ ...form, num_seguridad_social: e.target.value })}
                       className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
                   <div><label className="text-xs font-medium text-slate-300">Teléfono</label>
                     <input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })}
