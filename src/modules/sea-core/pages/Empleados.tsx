@@ -9,6 +9,10 @@ type Empleado = {
   apellidos: string | null;
   dni_nie: string | null;
   num_seguridad_social: string | null;
+  direccion: string | null;
+  codigo_postal: string | null;
+  poblacion: string | null;
+  provincia: string | null;
   telefono: string | null;
   email: string | null;
   cargo: string | null;
@@ -36,6 +40,7 @@ const ROL_BADGE: Record<string, string> = {
 
 const EMPTY = {
   nombre: "", apellidos: "", dni_nie: "", num_seguridad_social: "", telefono: "", email: "",
+  direccion: "", codigo_postal: "", poblacion: "", provincia: "",
   cargo: "", departamento: "", rol: "operario", codigo_operario: "",
   fecha_alta: "", activo: true, roadside_capable: false, company_id: "", work_center_id: "",
 };
@@ -62,7 +67,7 @@ export default function Empleados() {
     setCargando(true);
     const [{ data: emps }, { data: emp }, { data: cent }] = await Promise.all([
       supabase.from("sea_employees")
-        .select("id, nombre, apellidos, dni_nie, num_seguridad_social, telefono, email, cargo, departamento, rol, codigo_operario, activo, fecha_alta, company_id, work_center_id, sea_companies(nombre), sea_work_centers(nombre)")
+        .select("id, nombre, apellidos, dni_nie, num_seguridad_social, direccion, codigo_postal, poblacion, provincia, telefono, email, cargo, departamento, rol, codigo_operario, activo, fecha_alta, company_id, work_center_id, sea_companies(nombre), sea_work_centers(nombre)")
         .order("nombre"),
       supabase.from("sea_companies").select("id, nombre").eq("activa", true).order("nombre"),
       supabase.from("sea_work_centers").select("id, nombre").eq("activo", true).order("nombre"),
@@ -97,6 +102,8 @@ export default function Empleados() {
     setForm({
       nombre: e.nombre, apellidos: e.apellidos ?? "", dni_nie: e.dni_nie ?? "",
       num_seguridad_social: e.num_seguridad_social ?? "",
+      direccion: e.direccion ?? "", codigo_postal: e.codigo_postal ?? "",
+      poblacion: e.poblacion ?? "", provincia: e.provincia ?? "",
       telefono: e.telefono ?? "", email: e.email ?? "", cargo: e.cargo ?? "",
       departamento: e.departamento ?? "", rol: e.rol,
       codigo_operario: e.codigo_operario ?? "",
@@ -119,6 +126,10 @@ export default function Empleados() {
       apellidos:       form.apellidos || null,
       dni_nie:         form.dni_nie || null,
       num_seguridad_social: form.num_seguridad_social || null,
+      direccion:       form.direccion || null,
+      codigo_postal:   form.codigo_postal || null,
+      poblacion:       form.poblacion || null,
+      provincia:       form.provincia || null,
       telefono:        form.telefono || null,
       email:           form.email || null,
       cargo:           form.cargo || null,
@@ -276,6 +287,18 @@ export default function Empleados() {
                       className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
                   <div><label className="text-xs font-medium text-slate-300">Nº Seguridad Social</label>
                     <input value={form.num_seguridad_social} onChange={(e) => setForm({ ...form, num_seguridad_social: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  <div className="col-span-2"><label className="text-xs font-medium text-slate-300">Dirección</label>
+                    <input value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  <div><label className="text-xs font-medium text-slate-300">Código postal</label>
+                    <input value={form.codigo_postal} onChange={(e) => setForm({ ...form, codigo_postal: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  <div><label className="text-xs font-medium text-slate-300">Población</label>
+                    <input value={form.poblacion} onChange={(e) => setForm({ ...form, poblacion: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
+                  <div className="col-span-2"><label className="text-xs font-medium text-slate-300">Provincia</label>
+                    <input value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value })}
                       className="mt-1 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-sky-500" /></div>
                   <div><label className="text-xs font-medium text-slate-300">Teléfono</label>
                     <input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })}

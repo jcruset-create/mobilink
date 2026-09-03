@@ -7,6 +7,8 @@ import { apiFetch } from "../../apiFetch";
 type Empleado = {
   id: string; nombre: string; apellidos: string | null;
   dni_nie: string | null; num_seguridad_social: string | null;
+  direccion: string | null; codigo_postal: string | null;
+  poblacion: string | null; provincia: string | null;
   telefono: string | null; email: string | null;
   cargo: string | null; departamento: string | null; rol: string;
   codigo_operario: string | null; activo: boolean; fecha_alta: string | null;
@@ -27,6 +29,12 @@ const NIVEL_BADGE: Record<string, string> = {
   basico: "bg-slate-700 text-slate-200", medio: "bg-blue-100 text-blue-700",
   avanzado: "bg-purple-100 text-purple-700", experto: "bg-orange-100 text-orange-700",
 };
+
+function direccionCompleta(e: { direccion: string | null; codigo_postal: string | null; poblacion: string | null; provincia: string | null }) {
+  const localidad = [e.codigo_postal, e.poblacion].filter(Boolean).join(" ");
+  const partes = [e.direccion, localidad, e.provincia].filter((x) => x && String(x).trim());
+  return partes.length ? partes.join(" · ") : null;
+}
 
 export default function EmpleadoDetalle() {
   const { id } = useParams<{ id: string }>();
@@ -303,6 +311,7 @@ export default function EmpleadoDetalle() {
       ${seccion("Datos personales", tabla([
         fila("DNI / NIE", empleado!.dni_nie),
         fila("Nº Seguridad Social", empleado!.num_seguridad_social),
+        fila("Dirección", direccionCompleta(empleado!)),
         fila("Email", empleado!.email),
         fila("Teléfono", empleado!.telefono),
         fila("Empresa", (empleado!.sea_companies as any)?.nombre),
@@ -445,6 +454,7 @@ export default function EmpleadoDetalle() {
               { label: "Nombre completo", value: `${empleado.nombre} ${empleado.apellidos ?? ""}` },
               { label: "DNI / NIE", value: empleado.dni_nie },
               { label: "Nº Seguridad Social", value: empleado.num_seguridad_social },
+              { label: "Dirección", value: direccionCompleta(empleado) },
               { label: "Email", value: empleado.email },
               { label: "Teléfono", value: empleado.telefono },
               { label: "Fecha de alta", value: empleado.fecha_alta ? new Date(empleado.fecha_alta).toLocaleDateString("es-ES") : null },
