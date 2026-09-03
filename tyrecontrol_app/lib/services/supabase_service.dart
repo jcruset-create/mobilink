@@ -824,6 +824,93 @@ class TyreControlApi {
     return (cuerpo as Map)['url'] as String;
   }
 
+  // ── Parte guiado (Realizar operación) ────────────────────────
+  //
+  // El operario recorre el parte paso a paso desde la tablet. Lo que aquí se
+  // añade es lo que ese recorrido necesita y no existía: dar de alta un
+  // vehículo que no está fichado, y guardarlo todo de una vez.
+
+  /// Los tipos de vehículo que SIRVEN para dar de alta desde la tablet.
+  ///
+  /// No vale la lista entera: las posiciones cuelgan del tipo, y un tipo sin
+  /// posiciones generadas da un vehículo que no puede sostener un parte. La
+  /// base de datos lo rechaza, pero enseñarlo y que falle al confirmar es
+  /// peor que no enseñarlo.
+  static Future<List<Map<String, dynamic>>> tiposVehiculoParaAlta() async {
+    final data = await _db
+        .from('tc_tipos_vehiculo')
+        .select('id, nombre, configuracion_ejes, numero_ejes, numero_ruedas, '
+                'imagen_chasis_url, posiciones:tc_posiciones_vehiculo(count)')
+        .eq('activo', true)
+        .order('nombre');
+    return (data as List)
+        .map((e) => Map<String, dynamic>.from(e))
+        .where((t) {
+          final p = t['posiciones'];
+          if (p is List && p.isNotEmpty) {
+            final c = (p.first as Map)['count'];
+            return c is int && c > 0;
+          }
+          return false;
+        })
+        .toList();
+  }
+
+  /// Las medidas del catálogo del vehículo (que NO es el de los neumáticos:
+  /// tc_vehiculos.medida_id apunta a tc_cat_medidas_neumatico).
+  static Future<List<Map<String, dynamic>>> listarMedidasVehiculo() async {
+    final data = await _db.from('tc_cat_medidas_neumatico').select('id, valor').order('valor');
+    return (data as List).map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  /// Las empresas sobre las que este operario puede trabajar. Si solo hay una,
+  /// la pantalla ni pregunta.
+  static Future<List<Map<String, dynamic>>> empresasDelOperario() async {
+    try {
+      final data = await _db.from('tc_empresas').select('id, nombre').order('nombre');
+      return (data as List).map((e) => Map<String, dynamic>.from(e)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Da de alta el vehículo con lo mínimo. Nace pendiente de validar y un
+  /// administrador le pone marca y modelo después.
+  ///
+  /// Si la matrícula ya existía NO falla: devuelve la que hay con
+  /// `ya_existia: true`, para que el parte siga con ella.
+  static Future<Map<String, dynamic>> altaVehiculoDesdeParte({
+    required String empresaId,
+    required String matricula,
+    required String tipoVehiculoId,
+    String? configEjesId,
+    String? medidaId,
+    String? numeroUnidad,
+    num? km,
+  }) async {
+    final data = await _db.rpc('tc_alta_vehiculo_desde_parte', params: {
+      'p_empresa': empresaId,
+      'p_matricula': matricula,
+      'p_tipo': tipoVehiculoId,
+      'p_config_ejes': configEjesId,
+      'p_medida': medidaId,
+      'p_numero_unidad': numeroUnidad,
+      'p_km': km,
+    });
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Guarda el parte entero DE UNA VEZ: revisión con mediciones, intervención
+  /// con operaciones, servicios, cabecera y firmas.
+  ///
+  /// La [clave] la genera la pantalla al abrir el borrador, no aquí: tiene que
+  /// sobrevivir a un reintento. Si la petición llega dos veces —doble toque,
+  /// red mala— la segunda devuelve el MISMO parte en vez de crear otro.
+  static Future<Map<String, dynamic>> guardarParteGuiado(Map<String, dynamic> parte) async {
+    final data = await _db.rpc('tc_guardar_parte_guiado', params: {'p_parte': parte});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
   // ── Incidencias (Fase 1: detección + pendientes) ─────────────
   /// Contador de incidencias pendientes (para el badge de Inicio). Se
   /// actualiza al llamar a [listarIncidencias] o [contarIncidenciasPendientes].
