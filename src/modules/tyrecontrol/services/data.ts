@@ -671,12 +671,45 @@ export async function corregirPosicion(params: { montajeId: string; posicionCorr
   return data as string;
 }
 
-export async function corregirMontado(params: { montajeId: string; neumaticoCorrectoId: string; observaciones?: string | null }): Promise<string> {
+export async function corregirMontado(params: {
+  montajeId: string; neumaticoCorrectoId: string; observaciones?: string | null;
+  revisionId?: string | null; metodo?: string | null;
+}): Promise<string> {
   const { data, error } = await supabase.rpc("tc_corregir_montado", {
     p_montaje: params.montajeId, p_neumatico_correcto: params.neumaticoCorrectoId, p_obs: params.observaciones ?? null,
+    // De qué revisión salió y cómo se identificó. Sin esto, dentro de seis
+    // meses la corrección es un cambio sin explicación.
+    p_revision: params.revisionId ?? null, p_metodo: params.metodo ?? null,
   });
   if (error) throw new Error(error.message);
   return data as string;
+}
+
+/**
+ * Neumáticos que pueden ser "el que de verdad hay puesto" en una posición.
+ *
+ * NO sirve listarNeumaticosDisponibles: esa solo devuelve almacén y reservado,
+ * y la goma que aparece en una revisión de papel suele estar en cualquier otro
+ * estado —no localizada, extraviada, usada, pendiente de reparar— justamente
+ * porque el registro estaba mal. Se excluyen las montadas (ya ruedan en otro
+ * sitio y la base de datos lo rechazaría) y las descartadas.
+ *
+ * Mismo criterio que buscarNeumaticosParaCorregir en la APK.
+ */
+export async function buscarNeumaticosParaCorregir(empresaId: string, texto: string): Promise<Neumatico[]> {
+  let q = supabase.from("tc_neumaticos").select("*")
+    .eq("empresa_id", empresaId).eq("activo", true)
+    .not("estado", "in", '("montado","descartado")');
+  const t = texto.trim();
+  if (t) {
+    q = q.or([
+      `numero_interno.ilike.%${t}%`, `codigo_interno.ilike.%${t}%`,
+      `numero_serie.ilike.%${t}%`, `rfid_epc.ilike.%${t}%`, `dot.ilike.%${t}%`,
+    ].join(","));
+  }
+  const { data, error } = await q.order("codigo_interno").limit(50);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Neumatico[];
 }
 
 export async function historialNeumatico(neumaticoId: string): Promise<HistorialMontaje[]> {
