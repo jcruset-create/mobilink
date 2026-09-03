@@ -237,6 +237,7 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "agenda", label: "Agenda" },
       { key: "tecnicos", label: "Pantalla técnicos" },
       { key: "plantillas", label: "Plantillas de checklist" },
+      { key: "ausencias", label: "Ausencias y vacaciones" },
       { key: "estadisticas", label: "Análisis y estadísticas" },
       { key: "configuracion", label: "Configuración" },
     ],

@@ -20,6 +20,8 @@ type Props = {
   config: AgendaConfig;
   onClose: () => void;
   onSaved: (config: AgendaConfig) => void;
+  /** Paleta oscura de Agenda 2 / WorkPlanner. Por defecto, tema claro. */
+  dark?: boolean;
 };
 
 function formatSpanishDateKey(dateKey: string) {
@@ -28,7 +30,13 @@ function formatSpanishDateKey(dateKey: string) {
   return `${match[3]}/${match[2]}/${match[1]}`;
 }
 
-export default function AgendaConfigModal({ open, config, onClose, onSaved }: Props) {
+export default function AgendaConfigModal({
+  open,
+  config,
+  onClose,
+  onSaved,
+  dark = false,
+}: Props) {
   const [draft, setDraft] = useState<AgendaConfig>(config);
   const [newHoliday, setNewHoliday] = useState("");
   const [newHolidayLabel, setNewHolidayLabel] = useState("");
@@ -275,21 +283,75 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
     }
   }
 
-  const timeClass = "w-full rounded-xl border border-slate-200 px-2 py-2 text-sm";
-  const labelClass = "mb-1 block text-xs font-medium text-slate-500";
+  // Paleta del modal. La rama clara reproduce exactamente las clases originales,
+  // así que la Agenda 1 queda igual; la oscura sigue los colores de Agenda 2.
+  const th = {
+    overlay: dark ? "bg-slate-950/70" : "bg-slate-900/40",
+    panel: dark
+      ? "border border-slate-700 bg-slate-800 text-slate-100"
+      : "bg-white text-slate-900",
+    subtitle: dark ? "text-slate-400" : "text-slate-500",
+    sectionTitle: dark ? "text-slate-300" : "text-slate-600",
+    hint: dark ? "text-slate-400" : "text-slate-500",
+    faint: dark ? "text-slate-500" : "text-slate-400",
+    body: dark ? "text-slate-300" : "text-slate-600",
+    card: dark ? "border-slate-700 bg-slate-900/60" : "border-slate-200",
+    input: dark
+      ? "border-slate-600 bg-slate-900 text-slate-100 placeholder:text-slate-500"
+      : "border-slate-200",
+    primaryBtn: dark
+      ? "bg-emerald-600 text-white hover:bg-emerald-500"
+      : "bg-slate-900 text-white",
+    neutralBtn: dark
+      ? "border-slate-600 bg-slate-700 text-slate-100 hover:bg-slate-600"
+      : "border-slate-200 text-slate-600 hover:bg-slate-50",
+    amberCard: dark ? "border-amber-700/60 bg-amber-950/30" : "border-amber-200 bg-amber-50",
+    amberText: dark ? "text-amber-200" : "text-amber-900",
+    amberFaint: dark ? "text-amber-500/70" : "text-amber-500",
+    amberBtnGhost: dark
+      ? "border-amber-700 text-amber-200 hover:bg-amber-900/40"
+      : "border-amber-300 text-amber-800 hover:bg-amber-100",
+    indigoCard: dark ? "border-indigo-800/60 bg-indigo-950/40" : "border-indigo-200 bg-indigo-50",
+    indigoTitle: dark ? "text-indigo-200" : "text-indigo-900",
+    indigoText: dark ? "text-indigo-300" : "text-indigo-700",
+    indigoInput: dark
+      ? "border-indigo-800 bg-slate-900 text-slate-100 placeholder:text-slate-500"
+      : "border-indigo-200",
+    indigoInner: dark ? "border-indigo-800/60 bg-slate-900" : "border-indigo-200 bg-white",
+    redCard: dark ? "border-rose-800/60 bg-rose-950/30 text-rose-200" : "border-red-200 bg-red-50 text-red-800",
+    redFaint: dark ? "text-rose-400/70" : "text-red-400",
+    redGhostBtn: dark
+      ? "border-rose-600 bg-rose-900/40 text-rose-200 hover:bg-rose-900/70"
+      : "border-red-400 bg-white text-red-700 hover:bg-red-100",
+    emeraldChip: dark
+      ? "border-emerald-700 bg-emerald-900/40 text-emerald-300"
+      : "border-emerald-400 bg-emerald-50 text-emerald-700",
+    errorBox: dark
+      ? "border-rose-800 bg-rose-950/40 text-rose-300"
+      : "border-red-200 bg-red-50 text-red-700",
+    scopeChip: dark ? "bg-slate-700 text-slate-300" : "bg-slate-100 text-slate-500",
+    ok: dark ? "text-emerald-400" : "text-emerald-600",
+    warn: dark ? "text-rose-400" : "text-red-600",
+    scopeChipLocal: dark
+      ? "bg-amber-900/50 font-bold text-amber-200"
+      : "bg-amber-100 font-bold text-amber-800",
+  };
+
+  const timeClass = `w-full rounded-xl border px-2 py-2 text-sm ${th.input}`;
+  const labelClass = `mb-1 block text-xs font-medium ${th.subtitle}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 ${th.overlay}`}>
+      <div className={`max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-3xl p-6 shadow-2xl ${th.panel}`}>
         <h3 className="text-xl font-semibold">Configuración de la agenda</h3>
-        <p className="mt-1 text-sm text-slate-500">
+        <p className={`mt-1 text-sm ${th.subtitle}`}>
           Define el horario de cada día y los festivos. Las horas fuera de horario y
           los días cerrados quedan bloqueados en la agenda.
         </p>
 
         <div className="mt-5 space-y-6">
           <section>
-            <h4 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-600">
+            <h4 className={`mb-2 text-sm font-black uppercase tracking-wide ${th.sectionTitle}`}>
               Horario semanal
             </h4>
 
@@ -297,7 +359,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
               {draft.days.map((day, index) => (
                 <div
                   key={index}
-                  className="grid items-end gap-2 rounded-2xl border border-slate-200 p-3 md:grid-cols-[130px_repeat(4,1fr)]"
+                  className={`grid items-end gap-2 rounded-2xl border p-3 md:grid-cols-[130px_repeat(4,1fr)] ${th.card}`}
                 >
                   <label className="flex items-center gap-2 text-sm font-semibold">
                     <input
@@ -309,7 +371,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                   </label>
 
                   {day.closed ? (
-                    <div className="text-sm text-slate-400 md:col-span-4">Cerrado todo el día</div>
+                    <div className={`text-sm md:col-span-4 ${th.faint}`}>Cerrado todo el día</div>
                   ) : (
                     <>
                       <div>
@@ -354,17 +416,17 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
               ))}
             </div>
 
-            <p className="mt-2 text-xs text-slate-500">
+            <p className={`mt-2 text-xs ${th.hint}`}>
               Deja el turno de tarde vacío para los días con jornada continua.
             </p>
           </section>
 
           <section>
-            <h4 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-600">
+            <h4 className={`mb-2 text-sm font-black uppercase tracking-wide ${th.sectionTitle}`}>
               Cierres especiales
             </h4>
 
-            <label className="flex items-center gap-2 rounded-2xl border border-slate-200 px-3 py-3 text-sm">
+            <label className={`flex items-center gap-2 rounded-2xl border px-3 py-3 text-sm ${th.card}`}>
               <input
                 type="checkbox"
                 checked={draft.closedSaturdaysInAugust}
@@ -377,27 +439,27 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
           </section>
 
           <section>
-            <h4 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-600">
+            <h4 className={`mb-2 text-sm font-black uppercase tracking-wide ${th.sectionTitle}`}>
               Días con horario especial
             </h4>
-            <p className="mb-2 text-xs text-slate-500">
+            <p className={`mb-2 text-xs ${th.hint}`}>
               Jornadas puntuales distintas al horario semanal, por ejemplo el 24 de
               diciembre de 8:30 a 14:00.
             </p>
 
-            <div className="rounded-2xl border border-slate-200 p-3">
+            <div className={`rounded-2xl border p-3 ${th.card}`}>
               <div className="grid gap-2 md:grid-cols-[170px_1fr]">
                 <input
                   type="date"
                   value={newSpecial.date}
                   onChange={(e) => setNewSpecial((p) => ({ ...p, date: e.target.value }))}
-                  className="rounded-2xl border border-slate-200 px-3 py-3"
+                  className={`rounded-2xl border px-3 py-3 ${th.input}`}
                 />
                 <input
                   value={newSpecial.label}
                   onChange={(e) => setNewSpecial((p) => ({ ...p, label: e.target.value }))}
                   placeholder="Motivo (p. ej. Nochebuena)"
-                  className="rounded-2xl border border-slate-200 px-3 py-3"
+                  className={`rounded-2xl border px-3 py-3 ${th.input}`}
                 />
               </div>
 
@@ -441,7 +503,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
               </div>
 
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                <label className="flex items-center gap-2 text-sm text-slate-600">
+                <label className={`flex items-center gap-2 text-sm ${th.body}`}>
                   <input
                     type="checkbox"
                     checked={newSpecial.yearly}
@@ -453,7 +515,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                 <button
                   type="button"
                   onClick={addSpecialDay}
-                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+                  className={`rounded-2xl px-4 py-2 text-sm font-medium ${th.primaryBtn}`}
                 >
                   Añadir jornada especial
                 </button>
@@ -461,7 +523,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
             </div>
 
             {draft.specialDays.length === 0 ? (
-              <p className="mt-3 text-sm text-slate-400">
+              <p className={`mt-3 text-sm ${th.faint}`}>
                 Todavía no hay jornadas especiales configuradas.
               </p>
             ) : (
@@ -469,14 +531,14 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                 {draft.specialDays.map((special) => (
                   <div
                     key={special.date}
-                    className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2"
+                    className={`rounded-2xl border px-3 py-2 ${th.amberCard}`}
                   >
-                    <div className="flex flex-wrap items-center gap-3 text-sm text-amber-900">
+                    <div className={`flex flex-wrap items-center gap-3 text-sm ${th.amberText}`}>
                       <span className="font-semibold">
                         {formatSpanishDateKey(special.date)}
                       </span>
                       <span className="flex-1 truncate">
-                        {special.label || <span className="text-amber-500">Sin motivo</span>}
+                        {special.label || <span className={th.amberFaint}>Sin motivo</span>}
                       </span>
 
                       <label className="flex items-center gap-2 text-xs">
@@ -553,15 +615,15 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
           </section>
 
           <section>
-            <h4 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-600">
+            <h4 className={`mb-2 text-sm font-black uppercase tracking-wide ${th.sectionTitle}`}>
               Días festivos
             </h4>
 
-            <div className="mb-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-3">
-              <p className="text-sm font-semibold text-indigo-900">
+            <div className={`mb-3 rounded-2xl border p-3 ${th.indigoCard}`}>
+              <p className={`text-sm font-semibold ${th.indigoTitle}`}>
                 Generar festivos automáticamente
               </p>
-              <p className="mt-1 text-xs text-indigo-700">
+              <p className={`mt-1 text-xs ${th.indigoText}`}>
                 Consulta con IA los festivos no laborables (nacionales, autonómicos y
                 locales) de una ciudad. Revísalos antes de añadirlos.
               </p>
@@ -571,14 +633,14 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                   value={aiCity}
                   onChange={(e) => setAiCity(e.target.value)}
                   placeholder="Ciudad (p. ej. Tarragona)"
-                  className="rounded-2xl border border-indigo-200 px-3 py-3"
+                  className={`rounded-2xl border px-3 py-3 ${th.indigoInput}`}
                 />
                 <input
                   type="number"
                   value={aiYear}
                   onChange={(e) => setAiYear(e.target.value)}
                   placeholder="Año"
-                  className="rounded-2xl border border-indigo-200 px-3 py-3"
+                  className={`rounded-2xl border px-3 py-3 ${th.indigoInput}`}
                 />
                 <button
                   type="button"
@@ -591,15 +653,15 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
               </div>
 
               {aiResult && (
-                <div className="mt-3 rounded-2xl border border-indigo-200 bg-white p-3">
-                  <p className="text-sm font-semibold text-slate-700">
+                <div className={`mt-3 rounded-2xl border p-3 ${th.indigoInner}`}>
+                  <p className={`text-sm font-semibold ${th.body}`}>
                     {aiResult.length} festivos encontrados en {aiCity} ({aiYear})
                     {" · "}
                     <span
                       className={
                         aiResult.filter((f) => f.scope === "local").length === 2
-                          ? "text-emerald-600"
-                          : "text-red-600"
+                          ? th.ok
+                          : th.warn
                       }
                     >
                       {aiResult.filter((f) => f.scope === "local").length} locales
@@ -607,7 +669,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                   </p>
 
                   {aiResult.filter((f) => f.scope === "local").length !== 2 && (
-                    <p className="mt-1 text-xs text-red-600">
+                    <p className={`mt-1 text-xs ${th.warn}`}>
                       En España cada municipio tiene 2 festivos locales. Revisa el
                       calendario oficial y añade a mano los que falten.
                     </p>
@@ -620,7 +682,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                       return (
                         <div
                           key={festivo.date}
-                          className="flex flex-wrap items-center gap-2 text-sm text-slate-700"
+                          className={`flex flex-wrap items-center gap-2 text-sm ${th.body}`}
                         >
                           <span className="w-24 font-semibold">
                             {formatSpanishDateKey(festivo.date)}
@@ -630,8 +692,8 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                             <span
                               className={`rounded-full px-2 py-0.5 text-[10px] uppercase ${
                                 festivo.scope === "local"
-                                  ? "bg-amber-100 font-bold text-amber-800"
-                                  : "bg-slate-100 text-slate-500"
+                                  ? th.scopeChipLocal
+                                  : th.scopeChip
                               }`}
                             >
                               {festivo.scope}
@@ -639,17 +701,17 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                           )}
                           {festivo.confidence === "baja" && (
                             <span
-                              className="text-xs font-semibold text-red-600"
+                              className={`text-xs font-semibold ${th.warn}`}
                               title="La IA no está segura de este festivo: compruébalo"
                             >
                               revisar
                             </span>
                           )}
-                          <span className="text-xs text-slate-400">
+                          <span className={`text-xs ${th.faint}`}>
                             {festivo.yearly ? "cada año" : "solo este año"}
                           </span>
                           {yaEsta && (
-                            <span className="text-xs font-semibold text-emerald-600">
+                            <span className={`text-xs font-semibold ${th.ok}`}>
                               ya añadido
                             </span>
                           )}
@@ -669,13 +731,13 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                     <button
                       type="button"
                       onClick={() => setAiResult(null)}
-                      className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                      className={`rounded-2xl border px-4 py-2 text-sm font-medium ${th.neutralBtn}`}
                     >
                       Descartar
                     </button>
                   </div>
 
-                  <p className="mt-2 text-xs text-slate-500">
+                  <p className={`mt-2 text-xs ${th.hint}`}>
                     Los festivos móviles (Semana Santa) se añaden solo para ese año; los
                     de fecha fija quedan marcados como "cada año".
                   </p>
@@ -688,7 +750,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                 type="date"
                 value={newHoliday}
                 onChange={(e) => setNewHoliday(e.target.value)}
-                className="rounded-2xl border border-slate-200 px-3 py-3"
+                className={`rounded-2xl border px-3 py-3 ${th.input}`}
               />
               <input
                 value={newHolidayLabel}
@@ -697,18 +759,18 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                   if (e.key === "Enter") addHoliday();
                 }}
                 placeholder="Motivo (p. ej. Diada de Catalunya)"
-                className="rounded-2xl border border-slate-200 px-3 py-3"
+                className={`rounded-2xl border px-3 py-3 ${th.input}`}
               />
               <button
                 type="button"
                 onClick={addHoliday}
-                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+                className={`rounded-2xl px-4 py-2 text-sm font-medium ${th.primaryBtn}`}
               >
                 Añadir
               </button>
             </div>
 
-            <label className="mt-2 flex items-center gap-2 text-sm text-slate-600">
+            <label className={`mt-2 flex items-center gap-2 text-sm ${th.body}`}>
               <input
                 type="checkbox"
                 checked={newHolidayYearly}
@@ -718,7 +780,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
             </label>
 
             {bridgePrompt && (
-              <div className="mt-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <div className={`mt-3 rounded-2xl border px-4 py-3 text-sm ${th.amberCard} ${th.amberText}`}>
                 <p>
                   El{" "}
                   <strong>{formatSpanishDateKey(bridgePrompt.holidayDate)}</strong>
@@ -738,7 +800,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                   <button
                     type="button"
                     onClick={() => setBridgePrompt(null)}
-                    className="rounded-2xl border border-amber-300 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
+                    className={`rounded-2xl border px-4 py-2 text-sm font-medium ${th.amberBtnGhost}`}
                   >
                     No, solo el viernes
                   </button>
@@ -747,7 +809,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
             )}
 
             {draft.holidays.length === 0 ? (
-              <p className="mt-3 text-sm text-slate-400">Todavía no hay festivos configurados.</p>
+              <p className={`mt-3 text-sm ${th.faint}`}>Todavía no hay festivos configurados.</p>
             ) : (
               <div className="mt-3 space-y-2">
                 {draft.holidays.map((holiday) => {
@@ -756,13 +818,13 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                   return (
                     <div
                       key={holiday.date}
-                      className="flex flex-wrap items-center gap-3 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+                      className={`flex flex-wrap items-center gap-3 rounded-2xl border px-3 py-2 text-sm ${th.redCard}`}
                     >
                       <span className="font-semibold">
                         {formatSpanishDateKey(holiday.date)}
                       </span>
                       <span className="flex-1 truncate">
-                        {holiday.label || <span className="text-red-400">Sin motivo</span>}
+                        {holiday.label || <span className={th.redFaint}>Sin motivo</span>}
                       </span>
 
                       {bridge.state === "pending" && (
@@ -775,7 +837,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                               saturday: bridge.saturday,
                             })
                           }
-                          className="flex items-center gap-1 rounded-full border border-red-400 bg-white px-2 py-0.5 text-xs font-semibold text-red-700 hover:bg-red-100"
+                          className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold ${th.redGhostBtn}`}
                           title={`Cae en viernes: puedes cerrar también el sábado ${formatSpanishDateKey(
                             bridge.saturday
                           )}`}
@@ -786,7 +848,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
 
                       {bridge.state === "done" && (
                         <span
-                          className="flex items-center gap-1 rounded-full border border-emerald-400 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700"
+                          className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold ${th.emeraldChip}`}
                           title={`Puente hecho: el sábado ${formatSpanishDateKey(
                             bridge.saturday
                           )} también está cerrado`}
@@ -818,14 +880,14 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
               </div>
             )}
 
-            <p className="mt-2 text-xs text-slate-500">
+            <p className={`mt-2 text-xs ${th.hint}`}>
               Los festivos marcados como "cada año" bloquean esa misma fecha en los
               años siguientes; el resto solo bloquean el día concreto.
             </p>
           </section>
 
           {error && (
-            <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className={`rounded-2xl border px-4 py-3 text-sm ${th.errorBox}`}>
               {error}
             </div>
           )}
@@ -834,7 +896,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
             <button
               type="button"
               onClick={() => setDraft(DEFAULT_AGENDA_CONFIG)}
-              className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              className={`rounded-2xl border px-4 py-2 text-sm font-medium ${th.neutralBtn}`}
             >
               Restaurar horario estándar
             </button>
@@ -843,7 +905,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-2xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                className={`rounded-2xl border px-4 py-2 text-sm font-medium ${th.neutralBtn}`}
               >
                 Cancelar
               </button>
@@ -851,7 +913,7 @@ export default function AgendaConfigModal({ open, config, onClose, onSaved }: Pr
                 type="button"
                 onClick={() => void save()}
                 disabled={saving}
-                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+                className={`rounded-2xl px-4 py-2 text-sm font-medium disabled:opacity-60 ${th.primaryBtn}`}
               >
                 {saving ? "Guardando..." : "Guardar configuración"}
               </button>
