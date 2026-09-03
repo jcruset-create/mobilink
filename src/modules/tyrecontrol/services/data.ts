@@ -2773,6 +2773,29 @@ export async function listarReferenciasPendientes(): Promise<ReferenciaNeumatico
   return (data ?? []) as unknown as ReferenciaNeumatico[];
 }
 
+/**
+ * Vehículos que un técnico dio de alta desde la tablet y nadie ha repasado.
+ *
+ * Nacen con lo imprescindible para sostener un parte —empresa, matrícula,
+ * tipo y medida— y sin marca ni modelo, porque preguntárselas al operario en
+ * el arcén es la forma de que abandone. Alguien tiene que completarlas, y sin
+ * esta lista nadie se entera de que están.
+ */
+export async function listarVehiculosPendientes(): Promise<Vehiculo[]> {
+  const { data, error } = await supabase.from("tc_vehiculos")
+    .select("*, empresa:tc_empresas(*), tipo:tc_tipos_vehiculo(*)")
+    .eq("activo", true).eq("pendiente_validar", true)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Vehiculo[];
+}
+
+/** Da por bueno un vehículo dado de alta desde la tablet. Solo administradores. */
+export async function validarVehiculo(id: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_validar_vehiculo", { p_vehiculo: id });
+  if (error) throw new Error(error.message);
+}
+
 /** Da por buena una referencia provisional. Solo administradores. */
 export async function validarReferencia(id: string): Promise<void> {
   const { error } = await supabase.rpc("tc_validar_referencia", { p_referencia: id });
