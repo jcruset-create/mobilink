@@ -190,7 +190,7 @@ Color statusColor(String status) {
 
 String statusLabel(String status) {
   switch (status) {
-    case 'pendiente':         return 'Pendiente';
+    case 'pendiente':         return 'Gestionada';
     case 'asignada':          return 'Asignada';
     case 'en_camino':         return 'En camino';
     case 'en_punto':          return 'En punto';
