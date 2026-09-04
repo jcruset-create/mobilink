@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Camera, HardHat, Plus } from "lucide-react";
 import SafetyLayout from "../components/SafetyLayout";
 import { supabase } from "../services/supabase";
+import { apiFetch } from "../../apiFetch";
+import { API_BASE } from "../../workshopApi";
 
 type Epi = {
   id: string;
@@ -16,6 +18,7 @@ type Epi = {
   coste_unitario: number | null;
   ubicacion: string | null;
   norma_ce: string | null;
+  foto_url: string | null;
   activo: boolean;
   category_id: string | null;
   sm_epi_categories: { nombre: string } | null;
@@ -26,7 +29,7 @@ type Categoria = { id: string; nombre: string };
 const EMPTY = {
   codigo: "", nombre: "", descripcion: "", fabricante: "", modelo: "", talla: "",
   stock_actual: 0, stock_minimo: 0, coste_unitario: "", ubicacion: "", norma_ce: "",
-  category_id: "", activo: true,
+  foto_url: "", category_id: "", activo: true,
 };
 
 const FIELD = "rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/40";
@@ -46,8 +49,31 @@ export default function Epis() {
   const [editId, setEditId] = useState<string | null>(null);
   const [formStock, setFormStock] = useState({ tipo: "compra", cantidad: "", observaciones: "" });
   const [guardando, setGuardando] = useState(false);
+  const [subiendoFoto, setSubiendoFoto] = useState(false);
+  const fotoInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
+
+  async function subirFoto(file: File) {
+    setSubiendoFoto(true);
+    setError("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await apiFetch(`${API_BASE}/api/safety/documents/upload`, {
+        method: "POST",
+        body: fd,
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || `Error ${res.status}`);
+      setForm((f: any) => ({ ...f, foto_url: data.url }));
+    } catch (e: any) {
+      setError(e.message || "Error subiendo la foto");
+    } finally {
+      setSubiendoFoto(false);
+      if (fotoInputRef.current) fotoInputRef.current.value = "";
+    }
+  }
 
   useEffect(() => { cargar(); }, []);
 
@@ -55,7 +81,7 @@ export default function Epis() {
     setCargando(true);
     const [{ data: epis }, { data: cats }] = await Promise.all([
       supabase.from("sm_epis")
-        .select("id, codigo, nombre, descripcion, fabricante, modelo, talla, stock_actual, stock_minimo, coste_unitario, ubicacion, norma_ce, activo, category_id, sm_epi_categories(nombre)")
+        .select("id, codigo, nombre, descripcion, fabricante, modelo, talla, stock_actual, stock_minimo, coste_unitario, ubicacion, norma_ce, foto_url, activo, category_id, sm_epi_categories(nombre)")
         .eq("activo", true).order("nombre"),
       supabase.from("sm_epi_categories").select("id, nombre").eq("activa", true).order("nombre"),
     ]);
@@ -97,7 +123,8 @@ export default function Epis() {
       fabricante: e.fabricante ?? "", modelo: e.modelo ?? "", talla: e.talla ?? "",
       stock_actual: e.stock_actual, stock_minimo: e.stock_minimo,
       coste_unitario: e.coste_unitario ?? "", ubicacion: e.ubicacion ?? "",
-      norma_ce: e.norma_ce ?? "", category_id: e.category_id ?? "", activo: e.activo,
+      norma_ce: e.norma_ce ?? "", foto_url: e.foto_url ?? "",
+      category_id: e.category_id ?? "", activo: e.activo,
     });
     setEditId(e.id);
     setError("");
@@ -114,6 +141,7 @@ export default function Epis() {
       stock_actual: Number(form.stock_actual) || 0, stock_minimo: Number(form.stock_minimo) || 0,
       coste_unitario: form.coste_unitario ? parseFloat(form.coste_unitario) : null,
       ubicacion: form.ubicacion || null, norma_ce: form.norma_ce || null,
+      foto_url: form.foto_url || null,
       category_id: form.category_id || null, activo: true,
     };
     const { error: err } = editId
@@ -191,6 +219,7 @@ export default function Epis() {
           <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-slate-950/60 text-left text-xs uppercase tracking-wide text-slate-400">
               <tr>
+                <th className="p-3">Foto</th>
                 <th className="p-3">Código</th>
                 <th className="p-3">Nombre</th>
                 <th className="p-3">Categoría</th>
@@ -207,6 +236,18 @@ export default function Epis() {
                 const stockBajo = e.stock_actual <= e.stock_minimo;
                 return (
                   <tr key={e.id} className="border-t border-slate-700/70 hover:bg-slate-700/40">
+                    <td className="p-3">
+                      {e.foto_url ? (
+                        <a href={e.foto_url} target="_blank" rel="noopener noreferrer">
+                          <img src={e.foto_url} alt={e.nombre}
+                            className="h-11 w-11 rounded-lg border border-slate-600 object-cover" />
+                        </a>
+                      ) : (
+                        <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-slate-700 bg-slate-950 text-slate-600">
+                          <HardHat className="h-5 w-5" />
+                        </div>
+                      )}
+                    </td>
                     <td className="p-3 font-mono font-semibold text-slate-200">{e.codigo}</td>
                     <td className="p-3 font-medium text-slate-100">{e.nombre}</td>
                     <td className="p-3 text-slate-400">{(e.sm_epi_categories as any)?.nombre ?? "—"}</td>
@@ -231,7 +272,7 @@ export default function Epis() {
                 );
               })}
               {filtrados.length === 0 && (
-                <tr><td colSpan={9} className="p-8 text-center text-slate-500">Sin EPIs registrados.</td></tr>
+                <tr><td colSpan={10} className="p-8 text-center text-slate-500">Sin EPIs registrados.</td></tr>
               )}
             </tbody>
           </table>
@@ -244,6 +285,28 @@ export default function Epis() {
           <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-800 p-6 shadow-xl">
             <h2 className="mb-4 text-lg font-bold text-slate-100">{editId ? "Editar EPI" : "Nuevo EPI"}</h2>
             <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                {form.foto_url ? (
+                  <img src={form.foto_url} alt="Foto del EPI"
+                    className="h-20 w-20 rounded-xl border border-slate-600 object-cover" />
+                ) : (
+                  <div className="flex h-20 w-20 items-center justify-center rounded-xl border border-slate-700 bg-slate-950 text-slate-600">
+                    <HardHat className="h-8 w-8" />
+                  </div>
+                )}
+                <div className="flex flex-col gap-1.5">
+                  <input ref={fotoInputRef} type="file" accept="image/*" hidden
+                    onChange={(ev) => { const f = ev.target.files?.[0]; if (f) void subirFoto(f); }} />
+                  <button type="button" onClick={() => fotoInputRef.current?.click()} disabled={subiendoFoto}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-600 disabled:opacity-50">
+                    <Camera className="h-4 w-4" /> {subiendoFoto ? "Subiendo..." : form.foto_url ? "Cambiar foto" : "Subir foto"}
+                  </button>
+                  {form.foto_url && (
+                    <button type="button" onClick={() => setForm({ ...form, foto_url: "" })}
+                      className="text-left text-xs text-slate-400 hover:text-red-400">Quitar foto</button>
+                  )}
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={LABEL}>Código *</label>
                   <input value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })}
