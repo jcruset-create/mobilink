@@ -90,7 +90,22 @@ export default function InformeIntervencion() {
 
   // ── Hechos derivados (deterministas, de las operaciones) ──────────────────
   const hechos = useMemo(() => {
-    const activas = ops.filter((o) => !o.is_anulada && o.status === "completada");
+    /*
+     * Lo que el camión YA LLEVABA no es trabajo.
+     *
+     * Cuando un vehículo llega sin ningún neumático fichado, el técnico declara
+     * en la tablet qué monta, y eso entra como un montaje desde catálogo para
+     * que exista en el sistema. Pero nadie ha puesto esas ruedas hoy: contarlas
+     * como montajes hacía que un parte donde se cambió UNA saliera con seis
+     * neumáticos montados. Mismo criterio que el PDF (filasDeOperaciones.ts).
+     */
+    const esDeclarado = (o: OperacionNeumatico) => {
+      const obs = o.observaciones ?? "";
+      return obs.includes("[DECLARADO]") || obs.includes("declarado en el parte");
+    };
+    const declaradas = ops.filter((o) => !o.is_anulada && esDeclarado(o));
+    const activas = ops.filter(
+      (o) => !o.is_anulada && o.status === "completada" && !esDeclarado(o));
     const montadosAlmacen = activas.filter((o) =>
       (o.tipo_operacion === "montaje" || o.tipo_operacion === "sustitucion") && o.estado_anterior === "almacen");
     const esUsado = (o: OperacionNeumatico) => (o.observaciones ?? "").includes("[USADO]");
@@ -103,6 +118,7 @@ export default function InformeIntervencion() {
     const pendientes = ops.filter((o) => !o.is_anulada && ESTADOS_ACTIVOS.has(o.status ?? ""));
     return {
       activas,
+      declaradas,
       montadosAlmacen,
       montadosNuevos: montadosAlmacen.filter((o) => !esUsado(o)),
       montadosUsados: montadosAlmacen.filter(esUsado),
@@ -304,6 +320,32 @@ export default function InformeIntervencion() {
                   ))}
                 </tbody>
               </TableWrap>
+            </div>
+          )}
+
+          {/*
+            Lo declarado se ENSEÑA, pero aparte y dicho con esas palabras: es
+            información de ficha, no trabajo hecho. Esconderlo del todo dejaría
+            al administrador sin saber de dónde salieron esas gomas.
+          */}
+          {hechos.declaradas.length > 0 && (
+            <div className="mt-3 rounded-lg border border-slate-700 bg-slate-800/60 p-3">
+              <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">
+                Lo que el vehículo ya llevaba
+              </div>
+              <div className="mb-2 text-[12px] text-slate-400">
+                El técnico lo declaró en la tablet porque no había ningún neumático
+                fichado. No es trabajo de esta intervención y no sale en el parte.
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {hechos.declaradas.map((o) => (
+                  <span key={o.id} className="rounded bg-slate-900 px-2 py-0.5 text-[11px] text-slate-300">
+                    {o.posicion_destino?.codigo_posicion ?? "—"}
+                    {o.neumatico?.marca ? ` · ${o.neumatico.marca}` : ""}
+                    {o.neumatico?.medida ? ` ${o.neumatico.medida}` : ""}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
 

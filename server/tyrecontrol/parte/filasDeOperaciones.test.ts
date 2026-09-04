@@ -6,7 +6,7 @@
  * tc_desmontar_neumatico y tc_montar_desde_catalogo no escriben.
  */
 import { describe, it, expect } from "vitest";
-import { filasDeOperaciones, tipoEnElPapel, serieDe, esNuevo,
+import { filasDeOperaciones, tipoEnElPapel, serieDe, esNuevo, esDeclarado,
          type OperacionFila } from "./filasDeOperaciones.ts";
 import { armarParte } from "./armarParte.ts";
 
@@ -136,5 +136,71 @@ describe("el parte del R1234ABC, entero", () => {
   it("la cabecera sigue siendo la de la intervención", () => {
     expect(p.numero).toBe("OP-2026-000301");
     expect(p.matricula).toBe("R1234ABC");
+  });
+});
+
+/**
+ * El parte OP-2026-000302: un camión que llegó sin ninguna goma fichada. El
+ * técnico declaró las seis que llevaba y cambió UNA. El papel salió con las
+ * seis en «Neumáticos Montados» y con «6 Sailun» en neumáticos nuevos, como si
+ * las hubiéramos puesto nosotros. Ese papel se le da al cliente.
+ */
+describe("lo que el camión ya llevaba no es trabajo", () => {
+  const declarada = (pos: string) => op({
+    tipo_operacion: "montaje", estado_anterior: "almacen",
+    observaciones: "Lo que ya llevaba, declarado en el parte [DECLARADO]",
+    motivo: null, destino: "vehiculo",
+    posicion_origen: null, posicion_destino: { codigo_posicion: pos },
+    neumatico: { marca: "Sailun", modelo: "STL1", medida: "385/55R22.5",
+                 numero_serie: null, dot: null, numero_interno: `NT-${pos}` },
+  });
+
+  it("una goma declarada se reconoce", () => {
+    expect(esDeclarado(declarada("E1_IZQ"))).toBe(true);
+    expect(esDeclarado(op({ tipo_operacion: "montaje" }))).toBe(false);
+  });
+
+  it("y también en los partes guardados antes de que existiera el marcador", () => {
+    expect(esDeclarado(op({ observaciones: "Lo que ya llevaba, declarado en el parte" })))
+      .toBe(true);
+  });
+
+  it("las declaradas NO salen en montados", () => {
+    const p = armarParte({}, filasDeOperaciones([
+      declarada("E1_IZQ"), declarada("E1_DER"), declarada("E2_IZQ"),
+    ]));
+    expect(p.montados).toHaveLength(0);
+  });
+
+  it("ni cuentan como neumáticos nuevos montados", () => {
+    const p = armarParte({}, filasDeOperaciones([
+      declarada("E1_IZQ"), declarada("E1_DER"),
+    ]));
+    expect(p.nuevos).toHaveLength(0);
+  });
+
+  it("pero DESMONTAR una de ellas sí es trabajo y sale", () => {
+    const p = armarParte({}, filasDeOperaciones([
+      declarada("E1_IZQ"),
+      op({ posicion_origen: { codigo_posicion: "E1_IZQ" } }),   // desmontaje
+    ]));
+    expect(p.desmontados).toHaveLength(1);
+    expect(p.montados).toHaveLength(0);
+  });
+
+  it("y la que se monta DE VERDAD en su sitio sí sale", () => {
+    const p = armarParte({}, filasDeOperaciones([
+      declarada("E1_IZQ"),
+      op({ posicion_origen: { codigo_posicion: "E1_IZQ" } }),
+      op({ tipo_operacion: "montaje", estado_anterior: "almacen",
+           observaciones: "montaje desde almacén", motivo: null, destino: "vehiculo",
+           posicion_origen: null, posicion_destino: { codigo_posicion: "E1_IZQ" },
+           neumatico: { marca: "Continental", modelo: "HDR", medida: "385/55R22.5",
+                        numero_serie: "S-1", dot: null, numero_interno: "NT-9" } }),
+    ]));
+    expect(p.montados).toHaveLength(1);
+    expect(p.montados![0].descripcion).toContain("Continental");
+    expect(p.nuevos).toHaveLength(1);
+    expect(p.nuevos![0].unidades).toBe(1);
   });
 });

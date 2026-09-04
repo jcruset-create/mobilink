@@ -544,7 +544,10 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
             'profundidad_actual_mm': r.profundidad!.toString(),
         },
         'p_km': km, 'p_fecha': null,
-        'p_obs': 'Lo que ya llevaba, declarado en el parte',
+        // El marcador NO es decorativo: es lo que hace que esta goma no salga
+        // en el parte como si la hubiéramos montado nosotros. Mismo estilo que
+        // el [USADO] que ya escriben los RPC de montaje.
+        'p_obs': 'Lo que ya llevaba, declarado en el parte [DECLARADO]',
         'p_forzar_medida': false, 'p_condicion': r.condicion,
       }});
     });
