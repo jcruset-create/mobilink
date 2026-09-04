@@ -776,6 +776,79 @@ export async function initCash(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS cash_deposit_swaps_pendientes_idx
       ON cash_deposit_swaps(register_id) WHERE bank_deposit_id IS NULL;
+
+    /* Deshacer un canje preparado.
+       No se borra la fila ni se revierte la operación original: días después
+       su jornada ya está cerrada y el libro mayor no se toca hacia atrás. Se
+       asienta el canje INVERSO en la jornada de hoy —que es lo que pasa de
+       verdad: alguien va al cajón y lo cambia al revés— y se apunta aquí. El
+       montón vuelve a su composición de antes porque esta fila deja de
+       contar, y el cajón vuelve solo porque las dos operaciones se compensan. */
+    ALTER TABLE cash_deposit_swaps
+      ADD COLUMN IF NOT EXISTS anulado_at_ms BIGINT;
+    ALTER TABLE cash_deposit_swaps
+      ADD COLUMN IF NOT EXISTS anulado_por UUID;
+    ALTER TABLE cash_deposit_swaps
+      ADD COLUMN IF NOT EXISTS anulado_operation_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT;
+  `);
+
+  /*
+   * Contra qué cierres se hizo cada canje.
+   *
+   * Un canje cambia la COMPOSICIÓN del montón: salen monedas y entra un
+   * billete. Sin saber de qué cierres salieron esas monedas, el canje era de
+   * la caja entera, y eso descuadraba en silencio en cuanto se ingresaba solo
+   * una parte de los cierres: el canje se aplicaba a un montón más pequeño
+   * —quitándole monedas que venían de los otros cierres— y encima quedaba
+   * consumido por ese ingreso, así que a los demás ya no les llegaba.
+   *
+   * Con esta tabla un canje pendiente solo cuenta cuando TODOS sus cierres
+   * están en la selección, y solo lo consume un ingreso que los incluya.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_deposit_swap_sessions (
+      swap_id INTEGER NOT NULL REFERENCES cash_deposit_swaps(id) ON DELETE CASCADE,
+      session_id INTEGER NOT NULL REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      PRIMARY KEY (swap_id, session_id)
+    );
+    CREATE INDEX IF NOT EXISTS cash_deposit_swap_sessions_sesion_idx
+      ON cash_deposit_swap_sessions(session_id);
+  `);
+
+  /*
+   * Relleno para los canjes que ya existen, que no saben contra qué se
+   * hicieron. Se hace UNA vez, solo sobre los que no tienen cierres apuntados:
+   *
+   * · Los ya consumidos por un ingreso: sus cierres son EXACTAMENTE los de ese
+   *   ingreso. Ahí no se pierde nada.
+   * · Los todavía pendientes: se les ponen todos los cierres pendientes de su
+   *   caja. Es una suposición, y es la conservadora —el canje solo se aplicará
+   *   cuando se ingrese el montón entero, que es justo lo que hace hoy la
+   *   pantalla— en vez de arriesgarse a aplicarlo a un montón al que no le
+   *   corresponde.
+   */
+  await pool.query(`
+    INSERT INTO cash_deposit_swap_sessions (swap_id, session_id)
+    SELECT s.id, l.session_id
+      FROM cash_deposit_swaps s
+      JOIN cash_bank_deposit_sessions l ON l.deposit_id = s.bank_deposit_id
+     WHERE s.bank_deposit_id IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM cash_deposit_swap_sessions x WHERE x.swap_id = s.id)
+    ON CONFLICT DO NOTHING;
+
+    INSERT INTO cash_deposit_swap_sessions (swap_id, session_id)
+    SELECT s.id, c.id
+      FROM cash_deposit_swaps s
+      JOIN cash_sessions c
+        ON c.register_id = s.register_id
+       AND c.estado = 'CLOSED'
+       AND c.ingreso_bancario_centimos > 0
+       AND NOT EXISTS (
+             SELECT 1 FROM cash_bank_deposit_sessions l
+              WHERE l.session_id = c.id AND l.vigente)
+     WHERE s.bank_deposit_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM cash_deposit_swap_sessions x WHERE x.swap_id = s.id)
+    ON CONFLICT DO NOTHING;
   `);
 
   /*

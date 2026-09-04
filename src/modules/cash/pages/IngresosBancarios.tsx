@@ -43,6 +43,7 @@ import type {
   PropuestaCanjeIngreso,
   PropuestaReposicion,
   ReposicionPendiente,
+  CanjePreparado,
 } from "../types";
 import * as api from "../services/api";
 
@@ -189,6 +190,21 @@ export default function IngresosBancarios() {
         gestiona={gestiona}
         onRepuesto={cargar}
       />
+
+      {/*
+        Canjear va aquí y no dentro de «Preparar ingreso»: cambiar las monedas
+        y llevar el dinero al banco son dos gestos distintos y en dos días
+        distintos. Trabaja sobre TODOS los cierres pendientes, no sobre lo que
+        esté marcado.
+      */}
+      <CanjeDeMonedas
+        registerId={cajaId}
+        sessionIds={panel.pendientes.map((c) => c.sessionId)}
+        gestiona={gestiona}
+        onCanjeado={cargar}
+      />
+
+      <CanjesPreparados canjes={panel.canjes} gestiona={gestiona} onDeshecho={cargar} />
 
       {/* ── Cierres pendientes ── */}
       <section className="space-y-2">
@@ -454,12 +470,7 @@ function PrepararIngreso({
             ))}
           </div>
 
-          {propuesta && <DesgloseYCanje
-            propuesta={propuesta}
-            registerId={registerId}
-            sessionIds={sessionIds}
-            onCanjeado={recargarPropuesta}
-          />}
+          {propuesta && <DesgloseDeLaBolsa propuesta={propuesta} />}
 
           <label className="mt-3 block">
             <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
@@ -748,6 +759,231 @@ function Historial({
  * A mano, como el canje: mover dinero entre bolsillos sin que nadie lo pulse
  * es de las cosas que después no sabe explicar nadie.
  */
+/**
+ * Canjear las monedas del montón por billetes, sin ingresar nada.
+ *
+ * Vive aparte del panel de preparar el ingreso a propósito: cambiar el dinero
+ * y llevarlo al banco dejaron de ser el mismo gesto. Se canjea el día que se
+ * tiene el billete en el cajón y el viaje al banco se hace cuando toca.
+ *
+ * Trabaja SIEMPRE sobre todos los cierres pendientes, no sobre lo que esté
+ * marcado: marcar cierres es para decidir qué se ingresa, y esto es otra cosa.
+ * El canje queda apuntado contra esos cierres, y solo se lo llevará un ingreso
+ * que los incluya a todos.
+ */
+function CanjeDeMonedas({
+  registerId,
+  sessionIds,
+  gestiona,
+  onCanjeado,
+}: {
+  registerId: number;
+  sessionIds: number[];
+  gestiona: boolean;
+  onCanjeado: () => Promise<void>;
+}) {
+  const { refrescar } = useCash();
+  const [datos, setDatos] = useState<PropuestaCanjeIngreso | null>(null);
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const clave = sessionIds.join(",");
+  const cargar = useCallback(async () => {
+    try {
+      setDatos(
+        await api.proponerCanjeIngreso(
+          registerId,
+          clave.split(",").filter(Boolean).map(Number)
+        )
+      );
+    } catch {
+      setDatos(null);
+    }
+  }, [registerId, clave]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  /*
+   * El panel sale cuando hay monedas que convertir O cuando hay un canje que
+   * proponer. Lo segundo importa desde que el canje también junta billetes
+   * chicos en gordos: con la bolsa entera en billetes no hay monedas y sigue
+   * habiendo algo que hacer.
+   */
+  if (!datos || (datos.enMonedasCentimos === 0 && !datos.canje)) return null;
+
+  const { canje } = datos;
+  const billetesAntes = datos.pendiente.billetes.reduce((a, l) => a + l.cantidad, 0);
+  const billetesDespues = canje
+    ? billetesAntes -
+      canje.billetesEntregados.reduce((a, l) => a + l.cantidad, 0) +
+      canje.billetesRecibidos.reduce((a, l) => a + l.cantidad, 0)
+    : billetesAntes;
+  const junta = billetesDespues < billetesAntes;
+
+  async function canjear() {
+    if (!canje) return;
+    setOcupado(true);
+    setError("");
+    try {
+      await api.registrarCanjeIngreso({
+        registerId,
+        sessionIds: clave.split(",").filter(Boolean).map(Number),
+        monedasEntregadas: canje.monedasEntregadas,
+        billetesEntregados: canje.billetesEntregados,
+        billetesRecibidos: canje.billetesRecibidos,
+      });
+      await cargar();
+      await onCanjeado();
+      // El canje acaba de mover el cajón de verdad: la cabecera y las demás
+      // pantallas tienen que enterarse ya, no en la próxima navegación.
+      await refrescar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido registrar el canje");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-emerald-600/40 bg-emerald-950/20 p-3">
+      <div className="text-[13px] font-bold text-emerald-200">
+        {datos.enMonedasCentimos > 0
+          ? `Hay ${euros(datos.enMonedasCentimos)} en monedas esperando al banco, y el banco no las admite`
+          : `La bolsa lleva ${billetesAntes} billetes al banco, y se pueden juntar en menos`}
+      </div>
+
+      {error && <div className="mt-1 text-[12px] text-rose-300">{error}</div>}
+
+      {!canje ? (
+        <p className="mt-1 text-[12px] text-slate-300">
+          {datos.sinJornadaAbierta
+            ? "Con la caja cerrada no se puede canjear: el billete sale del cajón. Abre la jornada y vuelve aquí."
+            : "Ahora mismo la caja no tiene billetes con los que cambiarlas. En cuanto tenga el que hace falta, aparecerá aquí la propuesta."}
+        </p>
+      ) : (
+        <>
+          <p className="mt-1 text-[12px] text-slate-300">
+            {canje.valorMonedasCentimos > 0 && (
+              <>
+                Se cambian <strong>{euros(canje.valorMonedasCentimos)}</strong> en monedas por
+                billetes del cajón
+                {junta ? ", " : ". "}
+              </>
+            )}
+            {junta && (
+              <>
+                {canje.valorMonedasCentimos > 0 ? "y la bolsa" : "La bolsa"} pasa de{" "}
+                <strong>{billetesAntes}</strong> a <strong>{billetesDespues}</strong> billetes, que
+                son los que hay que contar en el banco.{" "}
+              </>
+            )}
+            <strong>No se ingresa nada</strong>: el canje queda hecho y esperando al ingreso que se
+            lleve estos cierres.
+          </p>
+          <Piezas
+            titulo="Entregas al cajón"
+            lineas={[...canje.monedasEntregadas, ...canje.billetesEntregados].sort(
+              (a, b) => b.valor - a.valor
+            )}
+            tono="text-slate-300"
+          />
+          <Piezas titulo="Te llevas del cajón" lineas={canje.billetesRecibidos} tono="text-emerald-300" />
+          {gestiona && (
+            <button
+              onClick={() => void canjear()}
+              disabled={ocupado}
+              className="mt-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+            >
+              {ocupado
+                ? "Registrando…"
+                : `Canjear ${euros(canje.valorCanjeCentimos)} y dejarlo preparado`}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Los canjes ya hechos que todavía esperan al ingreso.
+ *
+ * No llevan importe en la lista de cierres porque un canje NO cambia el valor
+ * del montón, solo su composición: entra y sale lo mismo. Lo que hay que ver
+ * es que ya está hecho —para no volver a cambiarlo— y contra qué cierres, que
+ * es lo que decide qué ingreso se lo llevará.
+ */
+function CanjesPreparados({
+  canjes,
+  gestiona,
+  onDeshecho,
+}: {
+  canjes: CanjePreparado[];
+  gestiona: boolean;
+  onDeshecho: () => Promise<void>;
+}) {
+  const { refrescar } = useCash();
+  const [ocupado, setOcupado] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  if (canjes.length === 0) return null;
+
+  async function deshacer(id: number) {
+    setOcupado(id);
+    setError("");
+    try {
+      await api.deshacerCanjeIngreso(id);
+      await onDeshecho();
+      await refrescar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido deshacer el canje");
+    } finally {
+      setOcupado(null);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-600 bg-slate-800/60 p-3">
+      <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Canje preparado, pendiente de ingresar
+      </div>
+      {error && <div className="mt-1 text-[12px] text-rose-300">{error}</div>}
+      <ul className="mt-1 space-y-1">
+        {canjes.map((c) => (
+          <li key={c.id} className="flex flex-wrap items-center gap-2 text-[12px] text-slate-300">
+            <span className="tabular-nums text-slate-400">{fechaCorta(c.fecha)}</span>
+            <span>
+              <strong className="text-emerald-300">{euros(c.valorCentimos)}</strong> en monedas
+              cambiados por billetes
+            </span>
+            <span className="text-[11px] text-slate-500">
+              {c.sessionIds.length === 1
+                ? "de un cierre"
+                : `de ${c.sessionIds.length} cierres`}
+              , se ingresarán juntos
+            </span>
+            {gestiona && (
+              <button
+                onClick={() => void deshacer(c.id)}
+                disabled={ocupado === c.id}
+                className="ml-auto rounded-lg border border-slate-600 px-2 py-0.5 text-[11px] font-bold text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+              >
+                {ocupado === c.id ? "Deshaciendo…" : "Deshacer"}
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1 text-[11px] text-slate-500">
+        Deshacer no borra nada: asienta el canje al revés en la jornada de hoy, así que hace falta
+        tenerla abierta.
+      </p>
+    </div>
+  );
+}
+
 /** Un desglose de piezas en línea, con su rótulo. */
 function Piezas({
   titulo,
@@ -903,46 +1139,14 @@ function ReponerFondo({
 }
 
 /**
- * Desglose del montón pendiente y, si cabe, el canje que lo mejora.
+ * Desglose del montón pendiente: billetes y monedas por separado.
  *
  * Es la pieza que cambia la pantalla de «un número que hay que creerse» a «esto
  * es lo que hay en la bolsa»: se ven los billetes y las monedas por separado,
  * porque al banco solo van los billetes.
  */
-function DesgloseYCanje({
-  propuesta,
-  registerId,
-  sessionIds,
-  onCanjeado,
-}: {
-  propuesta: PropuestaCanjeIngreso;
-  registerId: number;
-  sessionIds: number[];
-  onCanjeado: () => Promise<void>;
-}) {
-  const [ocupado, setOcupado] = useState(false);
-  const [error, setError] = useState("");
+function DesgloseDeLaBolsa({ propuesta }: { propuesta: PropuestaCanjeIngreso }) {
   const { canje } = propuesta;
-
-  async function canjear() {
-    if (!canje) return;
-    setOcupado(true);
-    setError("");
-    try {
-      await api.registrarCanjeIngreso({
-        registerId,
-        sessionIds,
-        monedasEntregadas: canje.monedasEntregadas,
-        billetesEntregados: canje.billetesEntregados,
-        billetesRecibidos: canje.billetesRecibidos,
-      });
-      await onCanjeado();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "No se ha podido registrar el canje");
-    } finally {
-      setOcupado(false);
-    }
-  }
 
   return (
     <div className="mt-3 space-y-2 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
@@ -963,37 +1167,17 @@ function DesgloseYCanje({
         tono="text-amber-300"
       />
 
-      {error && <ErrorBox>{error}</ErrorBox>}
-
+      {/*
+        Aquí ya NO se canjea: el botón vive arriba, en su propio panel. Esto es
+        el desglose de la bolsa, que es lo que hay que mirar para decidir
+        cuánto se ingresa —al banco solo van los billetes— y sigue siendo justo
+        donde hace falta.
+      */}
       {canje && (
-        <div className="space-y-2 rounded-lg border border-emerald-600/40 bg-emerald-950/20 p-2">
-          <p className="text-[12px] text-slate-200">
-            Se pueden convertir <strong>{euros(canje.valorMonedasCentimos)}</strong> en monedas
-            cambiándolos por billetes de la caja.
-          </p>
-
-          <TablaPiezas
-            titulo="Entregas a la caja"
-            lineas={[...canje.monedasEntregadas, ...canje.billetesEntregados].sort(
-              (a, b) => b.valor - a.valor
-            )}
-            total={canje.valorCanjeCentimos}
-            tono="text-slate-200"
-          />
-          <TablaPiezas
-            titulo="Te llevas de la caja"
-            lineas={canje.billetesRecibidos}
-            total={canje.valorCanjeCentimos}
-            tono="text-emerald-300"
-          />
-          <button
-            onClick={() => void canjear()}
-            disabled={ocupado}
-            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
-          >
-            {ocupado ? "Registrando…" : `Canjear y subir el ingreso a ${euros(propuesta.ingresableCentimos + canje.valorMonedasCentimos)}`}
-          </button>
-        </div>
+        <p className="text-[12px] text-slate-400">
+          Se pueden convertir <strong>{euros(canje.valorMonedasCentimos)}</strong> de esas monedas
+          en billetes desde el panel de canje, arriba.
+        </p>
       )}
 
       {!canje && propuesta.enMonedasCentimos > 0 && (
