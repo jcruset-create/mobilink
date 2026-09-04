@@ -81,6 +81,11 @@ class _Rueda {
   String? fotoNeumatico;
   String? fotoDot;
 
+  /// Lo que la IA lee de esas fotos y el técnico confirma. Va a la ficha de la
+  /// goma que sale, y de ahí a la columna «Nº Serie / DOT» del parte.
+  String? numeroSerie;
+  String? dot;
+
   /// Lo que lleva puesto, DECLARADO por el técnico, cuando Mobilink no tiene
   /// nada fichado en esta posición. No es una acción de taller: es apuntar lo
   /// que ya estaba ahí. Se monta desde el catálogo al guardar el parte, y a
@@ -99,6 +104,7 @@ class _Rueda {
         'accion': accion.name, 'destinoPosicionId': destinoPosicionId,
         'motivo': motivo, 'destino': destino,
         'fotoSerie': fotoSerie, 'fotoNeumatico': fotoNeumatico, 'fotoDot': fotoDot,
+        'numeroSerie': numeroSerie, 'dot': dot,
         'referenciaId': referenciaId, 'referenciaTexto': referenciaTexto,
         'condicion': condicion,
       };
@@ -116,6 +122,8 @@ class _Rueda {
     ..fotoSerie = j['fotoSerie'] as String?
     ..fotoNeumatico = j['fotoNeumatico'] as String?
     ..fotoDot = j['fotoDot'] as String?
+    ..numeroSerie = j['numeroSerie'] as String?
+    ..dot = j['dot'] as String?
     ..referenciaId = j['referenciaId'] as String?
     ..referenciaTexto = j['referenciaTexto'] as String?
     ..condicion = (j['condicion'] as String?) ?? 'usado';
@@ -235,6 +243,39 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
       refrescar('destinos', TyreControlApi.listarDestinosNeumatico),
       refrescar('referencias', TyreControlApi.listarCatalogoReferencias),
     ]);
+  }
+
+  /// Qué posición se está leyendo ahora mismo (para el aviso de la ficha).
+  String? _leyendo;
+
+  /// Lee el número de serie y el DOT de una foto con el lector que ya existe
+  /// (el del flanco). PROPONE: rellena los campos y el técnico confirma o
+  /// corrige antes de que se guarde nada.
+  ///
+  /// Lo que ya estuviera escrito NO se pisa: si el técnico lo tecleó a mano,
+  /// su dato manda sobre el de la máquina.
+  Future<void> _leerDeLaFoto(_Rueda r, String url) async {
+    final pos = _posicionActiva;
+    setState(() => _leyendo = pos);
+    try {
+      final l = await TyreControlApi.leerFlanco(url);
+      if (!mounted) return;
+      final serie = (l['numero_serie'] as String?)?.trim();
+      final dot = (l['dot'] as String?)?.trim();
+      setState(() {
+        if ((r.numeroSerie?.trim().isEmpty ?? true) && (serie?.isNotEmpty ?? false)) {
+          r.numeroSerie = serie;
+        }
+        if ((r.dot?.trim().isEmpty ?? true) && (dot?.isNotEmpty ?? false)) {
+          r.dot = dot;
+        }
+      });
+      _guardarBorrador();
+    } catch (_) {
+      // Sin lector se sigue a mano: la foto ya está subida y el campo está ahí.
+    } finally {
+      if (mounted) setState(() => _leyendo = null);
+    }
   }
 
   /// Una foto: cámara, subida y URL. Se sube EN EL MOMENTO, no al guardar: si
@@ -536,6 +577,11 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
               'p_obs': r.observaciones,
             },
             'destino_codigo': r.destino,
+            // Lo leído de la foto y confirmado por el técnico. La base de
+            // datos lo escribe en la ficha de la goma que sale, y solo si
+            // estaba vacía: una lectura no le gana a un dato puesto a mano.
+            'numero_serie': (r.numeroSerie?.trim().isEmpty ?? true) ? null : r.numeroSerie!.trim(),
+            'dot': (r.dot?.trim().isEmpty ?? true) ? null : r.dot!.trim(),
             'adjuntos': [
               if (r.fotoSerie != null)
                 {'url': r.fotoSerie, 'descripcion': 'Número de serie'},
@@ -1289,13 +1335,46 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
                 style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
             const SizedBox(height: 8),
             _foto('Nº de serie', r.fotoSerie, obligatoria: true,
-                onHecha: (u) => r.fotoSerie = u),
+                onHecha: (u) { r.fotoSerie = u; if (u != null) _leerDeLaFoto(r, u); }),
             const SizedBox(height: 8),
             _foto('Neumático', r.fotoNeumatico, obligatoria: false,
                 onHecha: (u) => r.fotoNeumatico = u),
             const SizedBox(height: 8),
             _foto('DOT', r.fotoDot, obligatoria: false,
-                onHecha: (u) => r.fotoDot = u),
+                onHecha: (u) { r.fotoDot = u; if (u != null) _leerDeLaFoto(r, u); }),
+            const SizedBox(height: 12),
+            // Lo que la IA ha leído SE ENSEÑA y se puede corregir. Nunca se da
+            // por bueno solo: un número de serie inventado con aspecto de
+            // bueno es peor que un hueco, porque nadie lo va a repasar.
+            Row(children: [
+              Expanded(
+                child: TextFormField(
+                  key: ValueKey('serie-$posId-${r.numeroSerie ?? ''}'),
+                  initialValue: r.numeroSerie,
+                  decoration: InputDecoration(
+                    labelText: 'Nº de serie',
+                    isDense: true,
+                    helperText: _leyendo == posId ? 'Leyendo la foto…' : null,
+                    suffixIcon: _leyendo == posId
+                        ? const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: SizedBox(width: 16, height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2)))
+                        : null,
+                  ),
+                  onChanged: (v) => r.numeroSerie = v,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextFormField(
+                  key: ValueKey('dot-$posId-${r.dot ?? ''}'),
+                  initialValue: r.dot,
+                  decoration: const InputDecoration(labelText: 'DOT', isDense: true),
+                  onChanged: (v) => r.dot = v,
+                ),
+              ),
+            ]),
           ],
 
           const SizedBox(height: 12),
