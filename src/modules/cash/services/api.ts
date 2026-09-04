@@ -861,6 +861,12 @@ export const actualizarReglaPago = (
 export const borrarReglaPago = (id: number) =>
   pedir<{ ok: true }>(`/payment-rules/${id}`, { method: "DELETE" });
 
+export const deshacerCanjeIngreso = (swapId: number) =>
+  pedir<{ operacionId: number; numero: string; valorCentimos: number }>(
+    `/bank-deposits/swap/${swapId}/undo`,
+    { method: "POST" }
+  );
+
 // ── Reposición del fondo desde el dinero pendiente de ingresar ─────────────
 
 export const proponerReposicionFondo = (registerId: number, sessionIds: number[]) =>
