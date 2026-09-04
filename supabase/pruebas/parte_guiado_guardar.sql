@@ -73,6 +73,15 @@ create table tc_vehiculos (
 create table tc_neumaticos (id uuid primary key default gen_random_uuid(), empresa_id uuid,
   estado text, updated_at timestamptz not null default now());
 
+-- Los montajes actuales: es lo que se consulta para resolver una goma recién
+-- declarada, que todavía no tenía id de montaje cuando la tablet armó el parte.
+create table tc_montajes_actuales (
+  id uuid primary key default gen_random_uuid(),
+  empresa_id uuid, vehiculo_id uuid, neumatico_id uuid references tc_neumaticos(id),
+  posicion_id uuid, fecha_montaje date default current_date, km_montaje numeric,
+  tecnico_id uuid, observaciones text,
+  unique (vehiculo_id, posicion_id));
+
 -- Los catálogos de razones y destinos, con las filas que de verdad ofrece el
 -- formulario. El destino es el que decide en qué estado queda la goma.
 create table tc_cat_motivos (
@@ -174,9 +183,24 @@ create or replace function tc_ejecutar_en_intervencion(
 declare i record; v_neu uuid; v_ids uuid[]; begin
   if p_rpc = 'REVIENTA' then raise exception 'la operación ha fallado'; end if;
   select * into i from tc_intervenciones where id = p_intervencion;
-  -- Un neumático por operación, para poder comprobar en qué estado queda.
-  insert into tc_neumaticos (empresa_id, estado) values (i.empresa_id, p_args->>'p_nuevo_estado')
-  returning id into v_neu;
+
+  -- Montar deja el montaje hecho, como la RPC de verdad: es lo que después
+  -- permite resolver por posición una goma declarada en este mismo parte.
+  if p_rpc = 'tc_montar_desde_catalogo' then
+    insert into tc_neumaticos (empresa_id, estado) values (i.empresa_id, 'montado')
+    returning id into v_neu;
+    insert into tc_montajes_actuales (empresa_id, vehiculo_id, neumatico_id, posicion_id)
+    values (i.empresa_id, (p_args->>'p_vehiculo')::uuid, v_neu, (p_args->>'p_posicion')::uuid);
+  -- Desmontar lo quita, también como la de verdad.
+  elsif p_rpc = 'tc_desmontar_neumatico' and nullif(p_args->>'p_montaje','') is not null then
+    select neumatico_id into v_neu from tc_montajes_actuales where id = (p_args->>'p_montaje')::uuid;
+    delete from tc_montajes_actuales where id = (p_args->>'p_montaje')::uuid;
+    update tc_neumaticos set estado = p_args->>'p_nuevo_estado' where id = v_neu;
+  else
+    insert into tc_neumaticos (empresa_id, estado) values (i.empresa_id, p_args->>'p_nuevo_estado')
+    returning id into v_neu;
+  end if;
+
   insert into operaciones_neumaticos (intervencion_id, empresa_id, vehiculo_id, neumatico_id,
                                       destino, estado_nuevo)
   values (p_intervencion, i.empresa_id, i.vehiculo_id, v_neu,
@@ -431,3 +455,58 @@ select prueba('un destino inventado se rechaza',
           'rpc','tc_desmontar_neumatico','args','{}'::jsonb,
           'destino_codigo','me_lo_invento'))))) $q$,
   'no está en el catálogo');
+
+-- ── Declarar lo que ya lleva, y cambiar una en el mismo parte ───────────────
+-- Es el caso del camión que no tiene NI UNA goma fichada: el técnico declara
+-- qué monta y acto seguido cambia una. El desmontaje no puede traer el id del
+-- montaje, porque ese montaje se crea unas líneas antes, en esta transacción.
+update tc_intervenciones set cerrada_at = now() where cerrada_at is null;
+do $$
+declare r jsonb; v_veh uuid; v_p1 uuid; v_p2 uuid; n int; begin
+  select id into v_veh from tc_vehiculos where matricula='1234ABC';
+  select p.id into v_p1 from tc_posiciones_vehiculo p join tc_tipos_vehiculo t on t.id=p.tipo_vehiculo_id
+   where t.nombre='Camion 3 ejes' and p.codigo_posicion='E1_IZQ';
+  select p.id into v_p2 from tc_posiciones_vehiculo p join tc_tipos_vehiculo t on t.id=p.tipo_vehiculo_id
+   where t.nombre='Camion 3 ejes' and p.codigo_posicion='E1_DER';
+
+  r := tc_guardar_parte_guiado(parte('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    jsonb_build_object('acciones', jsonb_build_array(
+      -- Lo declarado: dos ruedas.
+      jsonb_build_object('rpc','tc_montar_desde_catalogo','args',
+        jsonb_build_object('p_vehiculo', v_veh, 'p_posicion', v_p1, 'p_condicion','usado')),
+      jsonb_build_object('rpc','tc_montar_desde_catalogo','args',
+        jsonb_build_object('p_vehiculo', v_veh, 'p_posicion', v_p2, 'p_condicion','usado')),
+      -- Y una de ellas se cambia, sin id de montaje: por posición.
+      jsonb_build_object('rpc','tc_desmontar_neumatico', 'posicion_origen', v_p1,
+        'args','{}'::jsonb, 'destino_codigo','desechado',
+        'adjuntos', jsonb_build_array(
+          jsonb_build_object('url','https://x/serie.jpg','descripcion','Número de serie')))))));
+
+  if (r->>'operaciones')::int = 3
+  then raise notice 'PASA · declarar dos ruedas y desmontar una sale en un solo parte';
+  else raise notice 'FALLA · operaciones = %', r->>'operaciones'; end if;
+
+  -- La declarada que no se tocó sigue montada; la otra ya no.
+  select count(*) into n from tc_montajes_actuales where vehiculo_id = v_veh;
+  if n = 1 and exists (select 1 from tc_montajes_actuales
+                        where vehiculo_id = v_veh and posicion_id = v_p2)
+  then raise notice 'PASA · queda montada la que no se tocó, y la otra no';
+  else raise notice 'FALLA · % montajes actuales', n; end if;
+
+  if (r->>'fotos')::int = 1
+  then raise notice 'PASA · la foto se cuelga del desmontaje resuelto por posicion';
+  else raise notice 'FALLA · fotos = %', r->>'fotos'; end if;
+end $$;
+
+-- Una posición sin nada montado cuando llega su turno: se rechaza, y con un
+-- mensaje que dice qué ha pasado en vez de un error de conversión a uuid.
+update tc_intervenciones set cerrada_at = now() where cerrada_at is null;
+select prueba('desmontar por posicion sin nada montado se rechaza',
+  $q$ select tc_guardar_parte_guiado(parte('cccccccc-cccc-cccc-cccc-cccccccccccc',
+        jsonb_build_object('acciones', jsonb_build_array(jsonb_build_object(
+          'rpc','tc_desmontar_neumatico','args','{}'::jsonb,
+          'destino_codigo','desechado',
+          'posicion_origen', (select p.id from tc_posiciones_vehiculo p
+                                join tc_tipos_vehiculo t on t.id=p.tipo_vehiculo_id
+                               where t.nombre='Camion 3 ejes' and p.codigo_posicion='E2_IZQ')))))) $q$,
+  'No hay ningún neumático montado en la posición');
