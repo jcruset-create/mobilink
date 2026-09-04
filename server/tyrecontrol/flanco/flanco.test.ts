@@ -9,7 +9,7 @@ const c = (valor: string | null, confianza: number | null = 0.95) => ({ valor, c
 const lectura = (over: Partial<LecturaFlanco> = {}): LecturaFlanco => ({
   marca: c("Michelin"), modelo: c("X Multi D"), medida: c("315/80R22.5"),
   indice_carga_simple: c("156"), indice_carga_doble: c("150"), codigo_velocidad: c("L"),
-  dot: c("2325"), otros_textos: [], ...over,
+  dot: c("2325"), numero_serie: c(null), otros_textos: [], ...over,
 });
 
 describe("qué se considera legible", () => {
@@ -124,5 +124,28 @@ describe("buscar en el catálogo", () => {
   it("una marca que no está en el catálogo no casa con ninguna parecida", () => {
     const r = buscarEnCatalogo(prepararPropuesta(lectura({ marca: c("Michelan") })), CATALOGO);
     expect(r).toEqual([]);
+  });
+});
+
+describe("el número de serie del flanco", () => {
+  it("se propone tal cual: cada fabricante lo estampa a su manera", () => {
+    expect(prepararPropuesta(lectura({ numero_serie: c(" AB-1234/567 ") })).numero_serie)
+      .toBe("AB-1234/567");
+  });
+
+  it("una rueda sin serie legible NO es un fallo: se queda vacío", () => {
+    const p = prepararPropuesta(lectura());
+    expect(p.numero_serie).toBeNull();
+    expect(p.aviso).toBeNull();
+  });
+
+  it("leído con poca confianza no se propone, pero se avisa de que había algo", () => {
+    const p = prepararPropuesta(lectura({ numero_serie: c("AB1234", 0.2) }));
+    expect(p.numero_serie).toBeNull();
+    expect(p.dudosos).toContain("numero_serie");
+  });
+
+  it("no impide buscar en el catálogo: para eso valen marca y medida", () => {
+    expect(prepararPropuesta(lectura()).suficienteParaBuscar).toBe(true);
   });
 });

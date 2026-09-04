@@ -71,7 +71,8 @@ create table tc_vehiculos (
   origen_km text not null default 'manual', activo boolean not null default true,
   updated_at timestamptz not null default now(), unique (empresa_id, matricula));
 create table tc_neumaticos (id uuid primary key default gen_random_uuid(), empresa_id uuid,
-  estado text, updated_at timestamptz not null default now());
+  estado text, numero_serie text, dot text,
+  updated_at timestamptz not null default now());
 
 -- Los montajes actuales: es lo que se consulta para resolver una goma recién
 -- declarada, que todavía no tenía id de montaje cuando la tablet armó el parte.
@@ -510,3 +511,47 @@ select prueba('desmontar por posicion sin nada montado se rechaza',
                                 join tc_tipos_vehiculo t on t.id=p.tipo_vehiculo_id
                                where t.nombre='Camion 3 ejes' and p.codigo_posicion='E2_IZQ')))))) $q$,
   'No hay ningún neumático montado en la posición');
+
+-- ── El número de serie que la IA lee de la foto ─────────────────────────────
+-- Se escribe en la ficha de la goma que sale: es de donde el PDF saca la
+-- columna «Nº Serie / DOT». Solo si estaba vacía.
+update tc_intervenciones set cerrada_at = now() where cerrada_at is null;
+do $$ declare r jsonb; o record; n record; begin
+  r := tc_guardar_parte_guiado(parte('dddddddd-dddd-dddd-dddd-dddddddddddd',
+    jsonb_build_object('acciones', jsonb_build_array(jsonb_build_object(
+      'rpc','tc_desmontar_neumatico','args','{}'::jsonb,
+      'destino_codigo','desechado',
+      'numero_serie','AB-1234/567', 'dot','2325')))));
+  select * into o from operaciones_neumaticos
+   where intervencion_id = (r->>'intervencion_id')::uuid;
+  select * into n from tc_neumaticos where id = o.neumatico_id;
+  if n.numero_serie = 'AB-1234/567' and n.dot = '2325'
+  then raise notice 'PASA · el numero de serie leido de la foto va a la ficha de la goma';
+  else raise notice 'FALLA · serie=% dot=%', n.numero_serie, n.dot; end if;
+end $$;
+
+-- Un dato puesto a mano NO se pisa con una lectura de una foto.
+update tc_intervenciones set cerrada_at = now() where cerrada_at is null;
+do $$ declare r jsonb; o record; n record; begin
+  r := tc_guardar_parte_guiado(parte('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+    jsonb_build_object('acciones', jsonb_build_array(jsonb_build_object(
+      'rpc','tc_desmontar_neumatico','args','{}'::jsonb,
+      'destino_codigo','desechado')))));
+  select * into o from operaciones_neumaticos
+   where intervencion_id = (r->>'intervencion_id')::uuid;
+  -- Alguien ya le había puesto el número a conciencia.
+  update tc_neumaticos set numero_serie = 'PUESTO-A-MANO' where id = o.neumatico_id;
+
+  -- Y ahora llega otro parte con una lectura distinta de la misma goma.
+  update tc_intervenciones set cerrada_at = now() where cerrada_at is null;
+  perform tc_guardar_parte_guiado(jsonb_build_object(
+    'clave','ffffffff-ffff-ffff-ffff-ffffffffffff',
+    'vehiculo_id', (select id from tc_vehiculos where matricula='1234ABC'),
+    'acciones', jsonb_build_array(jsonb_build_object(
+      'rpc','OTRA_COSA','args','{}'::jsonb))));
+
+  select * into n from tc_neumaticos where id = o.neumatico_id;
+  if n.numero_serie = 'PUESTO-A-MANO'
+  then raise notice 'PASA · una lectura de una foto no pisa un dato puesto a mano';
+  else raise notice 'FALLA · el serie quedo en %', n.numero_serie; end if;
+end $$;

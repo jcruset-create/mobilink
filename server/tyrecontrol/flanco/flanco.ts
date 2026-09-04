@@ -24,6 +24,7 @@ export interface LecturaFlanco {
   indice_carga_doble: CampoFlanco;
   codigo_velocidad: CampoFlanco;
   dot: CampoFlanco;
+  numero_serie: CampoFlanco;
   /** Otros textos del flanco, tal cual. Para que el técnico los vea. */
   otros_textos: string[];
   /** Motivo por el que no se ha podido leer, si aplica. */
@@ -89,6 +90,14 @@ export interface PropuestaFlanco {
   indice_carga_doble: string | null;
   codigo_velocidad: string | null;
   dot: string | null;
+  /**
+   * El número de serie estampado en el flanco, cuando lo lleva.
+   *
+   * Es lo que identifica ESA rueda y no otra igual, y es lo que pide la
+   * columna «Nº Serie / DOT» del parte. No todas lo llevan legible, así que
+   * puede venir vacío: eso es un dato, no un fallo.
+   */
+  numero_serie: string | null;
   otros_textos: string[];
   /** Campos que se leyeron pero no con bastante seguridad. */
   dudosos: string[];
@@ -98,7 +107,8 @@ export interface PropuestaFlanco {
 }
 
 const CAMPOS = [
-  "marca", "modelo", "medida", "indice_carga_simple", "indice_carga_doble", "codigo_velocidad", "dot",
+  "marca", "modelo", "medida", "indice_carga_simple", "indice_carga_doble",
+  "codigo_velocidad", "dot", "numero_serie",
 ] as const;
 
 /**
@@ -111,7 +121,7 @@ const CAMPOS = [
 export function prepararPropuesta(l: LecturaFlanco | null | undefined): PropuestaFlanco {
   const vacia: PropuestaFlanco = {
     marca: null, modelo: null, medida: null, indice_carga_simple: null,
-    indice_carga_doble: null, codigo_velocidad: null, dot: null,
+    indice_carga_doble: null, codigo_velocidad: null, dot: null, numero_serie: null,
     otros_textos: [], dudosos: [], suficienteParaBuscar: false,
     aviso: "No se ha podido leer el flanco",
   };
@@ -134,6 +144,9 @@ export function prepararPropuesta(l: LecturaFlanco | null | undefined): Propuest
     indice_carga_doble: valorFiable(l.indice_carga_doble)?.toUpperCase() ?? null,
     codigo_velocidad: valorFiable(l.codigo_velocidad)?.toUpperCase() ?? null,
     dot: normalizarDot(valorFiable(l.dot)),
+    // El serie NO se normaliza: cada fabricante lo estampa a su manera y
+    // recortarlo o pasarlo a un formato "bonito" sería inventárselo.
+    numero_serie: valorFiable(l.numero_serie)?.trim() || null,
     otros_textos: Array.isArray(l.otros_textos) ? l.otros_textos.filter((t) => !!t?.trim()) : [],
     dudosos,
     // Con marca y medida ya se puede buscar; el modelo afina pero no hace

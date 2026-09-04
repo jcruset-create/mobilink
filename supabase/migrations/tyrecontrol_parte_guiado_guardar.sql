@@ -62,6 +62,24 @@
 -- Se rellena el argumento que necesite cada RPC (p_montaje o p_neumatico) y
 -- nada más: las reglas siguen siendo las de la RPC de siempre.
 --
+-- EL NÚMERO DE SERIE QUE LEE LA IA
+--
+-- Al desmontar, el técnico hace una foto OBLIGATORIA del número de serie, y
+-- la IA lo lee de esa foto (el mismo lector del flanco). Lo leído se le enseña
+-- y él lo confirma o lo corrige; lo que llega aquí ya está confirmado.
+--
+-- Se escribe en tc_neumaticos.numero_serie de la goma que sale, que es de
+-- donde lo saca el PDF para la columna «Nº Serie / DOT». Se escribe DESDE AQUÍ
+-- porque tc_neumaticos solo la puede escribir un administrador (tc_neu_write) y
+-- el técnico no lo es; ampliar esa política le daría la ficha entera de
+-- cualquier neumático de la empresa, cuando lo único que hace falta es anotar
+-- un número en la rueda que tiene en la mano.
+--
+-- Solo se RELLENA lo que estaba vacío. Si la ficha ya tenía un número de serie,
+-- no se pisa: una lectura de una foto no puede ganarle a un dato que alguien
+-- metió a conciencia. Si no coinciden, eso es una corrección de ficha y tiene
+-- su propio camino (tc_corregir_montado), que además deja rastro.
+--
 -- EL DESTINO DEL NEUMÁTICO QUE SALE
 --
 -- El formulario ofrece los destinos de tc_cat_destinos («Carcasa a
@@ -307,6 +325,23 @@ begin
        where id = any(v_nuevas);
     end if;
 
+    -- El número de serie leído de la foto, en la ficha de la goma que sale.
+    -- Solo si estaba vacío: ver la nota de arriba.
+    if nullif(v_acc->>'numero_serie','') is not null then
+      update tc_neumaticos n
+         set numero_serie = v_acc->>'numero_serie', updated_at = now()
+        from operaciones_neumaticos o
+       where o.id = any(v_nuevas) and n.id = o.neumatico_id
+         and nullif(trim(n.numero_serie), '') is null;
+    end if;
+    if nullif(v_acc->>'dot','') is not null then
+      update tc_neumaticos n
+         set dot = v_acc->>'dot', updated_at = now()
+        from operaciones_neumaticos o
+       where o.id = any(v_nuevas) and n.id = o.neumatico_id
+         and nullif(trim(n.dot), '') is null;
+    end if;
+
     -- Las fotos del neumático que sale. Van a tc_operacion_adjuntos, que es la
     -- tabla de adjuntos que YA existe: no se crea otro sistema de fotos.
     -- Se cuelgan de la primera operación de la acción, que es la del
@@ -454,6 +489,13 @@ begin
   end if;
   if not exists (select 1 from tc_cat_motivos where activo) then
     raise exception 'No hay motivos activos en tc_cat_motivos: el desplegable saldría vacío';
+  end if;
+
+  -- DURO: las columnas donde aterriza lo que la IA lee de la foto. Es lo que
+  -- llena la columna «Nº Serie / DOT» del papel.
+  if not exists (select 1 from information_schema.columns
+                  where table_name = 'tc_neumaticos' and column_name = 'numero_serie') then
+    raise exception 'Falta tc_neumaticos.numero_serie';
   end if;
 
   select count(*) into v_n from tc_partes_guiados;
