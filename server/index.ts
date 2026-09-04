@@ -18227,63 +18227,39 @@ function latestApkFor(prefix: string): { file: string; version: string } | null 
 }
 
 // ── APK publicada como GitHub Release ───────────────────────────────────────
-// El repositorio es público, así que el asset se descarga sin credenciales y
-// basta con redirigir al navegador.
+// La URL del asset SE CONSTRUYE, no se pregunta.
 //
-// Se pregunta por la ETIQUETA EXACTA (…/releases/tags/assist-v1.8.3+31), no
-// por la lista de releases: la lista pagina, y con varias apps publicando a
-// diario la de una app que publique poco se caía de la primera página. La
-// etiqueta se construye con la versión del pubspec del repositorio, que la CI
-// guarda solo DESPUÉS de publicar la release; si está en el repo, existe.
+// Antes se consultaba la API de GitHub en cada visita para averiguar la
+// dirección del .apk, y eso dejó el centro de descargas en blanco: sin token
+// la API permite 60 peticiones por hora POR IP, y en Render la IP es
+// compartida con otros clientes, así que el cupo se agotaba solo. TyreControl,
+// Lite y Taller salían como "No disponible" —no tienen fichero local— y Assist
+// servía una versión vieja del repositorio sin decir nada.
 //
-// Se cachea porque la API sin token permite 60 peticiones por hora y el centro
-// de descargas la consultaría en cada visita.
+// No hacía falta preguntar. La CI publica siempre con el mismo patrón, y está
+// comprobado en las cuatro aplicaciones que publican release:
+//
+//   etiqueta  =  releaseTag + versión      taller-v0.12.1+157
+//   fichero   =  prefix     + versión      mobilink-taller-0.12.1+157.apk
+//
+// Así que basta la versión del pubspec, que ya se lee del propio repositorio.
+// Cero peticiones, cero cupo, cero token, y una cosa menos que se pueda caer.
+//
+// El '+' de la versión va codificado como %2B: GitHub lo escribe así en sus
+// propias URL, y sin codificar se interpreta como un espacio.
 const GH_REPO = process.env.GITHUB_REPO || "jcruset-create/mobilink";
-type ApkRelease = { version: string; url: string };
-const releaseCache = new Map<string, { hasta: number; valor: ApkRelease | null }>();
-const RELEASE_TTL_OK_MS = 10 * 60 * 1000;
-const RELEASE_TTL_FALLO_MS = 60 * 1000; // tras un fallo se reintenta antes
 
-async function releaseApkPorTag(tag: string, version: string): Promise<ApkRelease | null> {
-  const cache = releaseCache.get(tag);
-  if (cache && Date.now() < cache.hasta) return cache.valor;
-  try {
-    const headers: Record<string, string> = {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "mobilink-descargas",
-    };
-    // Opcional: solo sirve para subir el límite de peticiones.
-    if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-    const r = await fetch(
-      `https://api.github.com/repos/${GH_REPO}/releases/tags/${encodeURIComponent(tag)}`,
-      { headers, signal: AbortSignal.timeout(8000) }
-    );
-    // 404 = esa release no existe (app que todavía no ha publicado ninguna).
-    // Se cachea como "no hay" para no preguntar en cada visita.
-    if (r.status === 404) {
-      releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_OK_MS, valor: null });
-      return null;
-    }
-    if (!r.ok) throw new Error(`GitHub HTTP ${r.status}`);
-    const rel = (await r.json()) as any;
-    const asset = (rel?.assets ?? []).find((a: any) => String(a.name ?? "").endsWith(".apk"));
-    const valor = asset?.browser_download_url
-      ? { version, url: asset.browser_download_url as string }
-      : null;
-    releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_OK_MS, valor });
-    return valor;
-  } catch (e: any) {
-    console.warn("[descargas] no se pudo consultar la release de GitHub:", e?.message || e);
-    // Se conserva lo último bueno si lo había; si no, se reintenta en un minuto.
-    const valor = cache?.valor ?? null;
-    releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_FALLO_MS, valor });
-    return valor;
-  }
+function urlReleaseApk(app0: { prefix: string; releaseTag: string }, version: string): string {
+  const etiqueta = encodeURIComponent(`${app0.releaseTag}${version}`);
+  const fichero = encodeURIComponent(`${app0.prefix}${version}.apk`);
+  return `https://github.com/${GH_REPO}/releases/download/${etiqueta}/${fichero}`;
 }
 
 // Versión declarada en el pubspec de la app dentro del repositorio. La CI
 // guarda ese número DESPUÉS de publicar la release, así que si está aquí es
-// que su release existe.
+// que su release existe. De ese invariante depende que la URL construida
+// apunte a algo: si alguien edita el pubspec a mano sin publicar, el enlace
+// llevará a un 404 de GitHub.
 function versionDelPubspec(rel: string): string | null {
   try {
     const txt = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
@@ -18293,22 +18269,24 @@ function versionDelPubspec(rel: string): string | null {
   }
 }
 
-// Resuelve la descarga de una app, por orden de preferencia:
-//   1. La release cuya etiqueta corresponde a la versión del repositorio.
-//   2. Fichero suelto en public/ (apps que todavía no publican release, o
-//      mientras GitHub no responde).
-// Devolver el fichero local como respaldo es lo que permite añadir el
-// releaseTag a una app ANTES de que su CI haya publicado nada: mientras no
-// exista la release se sigue sirviendo lo de siempre.
+// Resuelve la descarga de una app:
+//   1. Si publica releases, la de la versión que declara el repositorio.
+//   2. Si no, el fichero suelto de public/ (las que aún se compilan a mano).
+//
+// Cuando algo va mal se devuelve el MOTIVO, no un hueco. "No disponible" a
+// secas hacía que una app que nunca ha publicado y un fallo de configuración
+// se vieran exactamente igual.
 async function resolverApk(
   app0: { prefix: string; releaseTag?: string; pubspec?: string }
-): Promise<{ version: string; url?: string; file?: string } | null> {
+): Promise<{ version: string; url?: string; file?: string; fallo?: string } | null> {
   if (app0.releaseTag && app0.pubspec) {
     const v = versionDelPubspec(app0.pubspec);
-    if (v) {
-      const rel = await releaseApkPorTag(`${app0.releaseTag}${v}`, v);
-      if (rel) return { version: rel.version, url: rel.url };
-    }
+    if (v) return { version: v, url: urlReleaseApk({ prefix: app0.prefix, releaseTag: app0.releaseTag }, v) };
+    // El pubspec está en el repositorio: si no se puede leer, es que el
+    // despliegue está mal, y eso hay que decirlo en vez de callarlo.
+    const local = latestApkFor(app0.prefix);
+    if (local) return { version: local.version, file: local.file };
+    return { version: "", fallo: `No se ha podido leer la versión en ${app0.pubspec}` };
   }
   const local = latestApkFor(app0.prefix);
   return local ? { version: local.version, file: local.file } : null;
@@ -18322,8 +18300,10 @@ app.get("/api/apps/list", async (_req, res) => {
       return {
         key,
         label: app0.label,
-        version: latest?.version ?? null,
-        url: latest ? `/apps/${key}` : null,
+        version: latest?.version || null,
+        url: latest && (latest.url || latest.file) ? `/apps/${key}` : null,
+        // null = no hay nada que contar. Con texto = algo va mal y se dice.
+        error: latest?.fallo ?? null,
       };
     })
   );
@@ -18335,7 +18315,9 @@ app.get("/apps/:app", async (req, res) => {
   const app0 = APK_APPS[String(req.params.app)];
   if (!app0) return res.status(404).json({ error: "App no encontrada" });
   const latest = await resolverApk(app0);
-  if (!latest) return res.status(404).json({ error: "Sin APK disponible" });
+  if (!latest || (!latest.url && !latest.file)) {
+    return res.status(404).json({ error: latest?.fallo || "Sin APK disponible" });
+  }
   // Con release se redirige al asset de GitHub: la descarga no pasa por
   // nuestro servidor y el binario no vive en el repositorio.
   if (latest.url) return res.redirect(302, latest.url);
