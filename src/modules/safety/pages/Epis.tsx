@@ -74,11 +74,21 @@ export default function Epis() {
     return true;
   });
 
-  function abrirNuevo() {
+  async function abrirNuevo() {
+    // Código correlativo EPI-001, EPI-002... a partir del mayor existente
+    // (también los desactivados, para no repetir códigos).
     setForm({ ...EMPTY });
     setEditId(null);
     setError("");
     setModal(true);
+    const { data } = await supabase.from("sm_epis").select("codigo");
+    let max = 0;
+    for (const row of data ?? []) {
+      const m = /^EPI-(\d+)$/i.exec((row.codigo ?? "").trim());
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    }
+    const siguiente = `EPI-${String(max + 1).padStart(3, "0")}`;
+    setForm((f: any) => (f.codigo ? f : { ...f, codigo: siguiente }));
   }
 
   function abrirEditar(e: Epi) {
