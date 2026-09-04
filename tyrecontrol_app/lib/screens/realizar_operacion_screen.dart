@@ -51,6 +51,9 @@ const _accionTexto = <_Accion, String>{
 /// Qué acciones tienen sentido según lo que haya en la posición. Enseñar
 /// "Desmontar" en un hueco vacío, o "Montar" donde ya hay goma, es ofrecer un
 /// camino que la base de datos va a rechazar al final del parte.
+///
+/// Una goma DECLARADA cuenta como goma: se monta antes que nada al guardar el
+/// parte, así que para cuando llegue el desmontaje ya estará ahí.
 List<_Accion> _accionesPara({required bool hayNeumatico}) => hayNeumatico
     ? const [_Accion.ninguna, _Accion.desmontar, _Accion.cambiarPosicion, _Accion.reparar]
     : const [_Accion.ninguna, _Accion.montar];
@@ -78,14 +81,17 @@ class _Rueda {
   String? fotoNeumatico;
   String? fotoDot;
 
-  // Montaje en una posición vacía.
+  /// Lo que lleva puesto, DECLARADO por el técnico, cuando Mobilink no tiene
+  /// nada fichado en esta posición. No es una acción de taller: es apuntar lo
+  /// que ya estaba ahí. Se monta desde el catálogo al guardar el parte, y a
+  /// partir de ese momento la rueda existe y se le puede hacer algo.
   String? referenciaId;
   String? referenciaTexto;   // solo para pintarlo; el id es lo que viaja
-  String condicion = 'nuevo';
+  String condicion = 'usado';
 
   bool get tocada =>
       profundidad != null || presion != null || accion != _Accion.ninguna ||
-      (observaciones?.isNotEmpty ?? false);
+      referenciaId != null || (observaciones?.isNotEmpty ?? false);
 
   Map<String, dynamic> aJson() => {
         'profundidad': profundidad, 'presion': presion,
@@ -112,7 +118,7 @@ class _Rueda {
     ..fotoDot = j['fotoDot'] as String?
     ..referenciaId = j['referenciaId'] as String?
     ..referenciaTexto = j['referenciaTexto'] as String?
-    ..condicion = (j['condicion'] as String?) ?? 'nuevo';
+    ..condicion = (j['condicion'] as String?) ?? 'usado';
 }
 
 class RealizarOperacionScreen extends StatefulWidget {
@@ -484,32 +490,46 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
   List<Map<String, dynamic>> _acciones() {
     final km = num.tryParse(_km.text.trim());
     final out = <Map<String, dynamic>>[];
+    // PRIMERO lo declarado. Lo que el técnico dice que ya lleva puesto tiene
+    // que estar montado antes de que se le haga nada; si el desmontaje fuera
+    // antes, no habría goma que desmontar.
+    _ruedas.forEach((posId, r) {
+      if (r.referenciaId == null || _montajes[posId] != null) return;
+      out.add({'rpc': 'tc_montar_desde_catalogo', 'args': {
+        'p_vehiculo': _vehiculo!.id, 'p_posicion': posId,
+        'p_referencia': r.referenciaId, 'p_control_individual': null,
+        'p_datos': <String, dynamic>{
+          if (r.condicion == 'usado' && r.profundidad != null)
+            'profundidad_actual_mm': r.profundidad!.toString(),
+        },
+        'p_km': km, 'p_fecha': null,
+        'p_obs': 'Lo que ya llevaba, declarado en el parte',
+        'p_forzar_medida': false, 'p_condicion': r.condicion,
+      }});
+    });
+
     _ruedas.forEach((posId, r) {
       final montaje = _montajes[posId];
+      // Una goma declarada todavía no tiene id de montaje: se acaba de crear
+      // arriba, dentro de la misma transacción. Se manda la POSICIÓN y la
+      // base de datos resuelve el montaje en ese momento.
+      final porPosicion = montaje == null && r.referenciaId != null;
+      if (montaje == null && !porPosicion) return;
+      // Con montaje fichado va su id; con goma declarada, la posición, y el
+      // argumento que necesite cada RPC lo pone la base de datos.
+      final ref = porPosicion ? <String, dynamic>{} : {'p_montaje': montaje!.id};
+      final hint = porPosicion ? {'posicion_origen': posId} : const {};
+
       switch (r.accion) {
         case _Accion.ninguna:
-          break;
         case _Accion.montar:
-          // Montar SÍ vale en una posición vacía: es justamente para eso.
-          if (montaje != null || r.referenciaId == null) break;
-          out.add({'rpc': 'tc_montar_desde_catalogo', 'args': {
-            'p_vehiculo': _vehiculo!.id, 'p_posicion': posId,
-            'p_referencia': r.referenciaId, 'p_control_individual': null,
-            'p_datos': <String, dynamic>{
-              if (r.condicion == 'usado' && r.profundidad != null)
-                'profundidad_actual_mm': r.profundidad!.toString(),
-            },
-            'p_km': km, 'p_fecha': null,
-            'p_obs': r.observaciones ?? 'Montaje desde el parte (tablet)',
-            'p_forzar_medida': false, 'p_condicion': r.condicion,
-          }});
           break;
         case _Accion.desmontar:
-          if (montaje == null) break; // sin goma montada no hay nada que quitar
           out.add({
             'rpc': 'tc_desmontar_neumatico',
+            ...hint,
             'args': {
-              'p_montaje': montaje.id, 'p_km': km, 'p_motivo': r.motivo,
+              ...ref, 'p_km': km, 'p_motivo': r.motivo,
               // El estado en que queda la goma lo decide el DESTINO, y esa
               // traducción la hace la base de datos con tc_cat_destinos: aquí
               // no se copia la tabla, solo se manda el código elegido.
@@ -527,16 +547,17 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
           });
           break;
         case _Accion.cambiarPosicion:
-          if (montaje == null || r.destinoPosicionId == null) break;
-          out.add({'rpc': 'tc_cambiar_posicion', 'args': {
-            'p_montaje': montaje.id, 'p_posicion_destino': r.destinoPosicionId,
+          if (r.destinoPosicionId == null) break;
+          out.add({'rpc': 'tc_cambiar_posicion', ...hint, 'args': {
+            ...ref, 'p_posicion_destino': r.destinoPosicionId,
             'p_km': km, 'p_obs': r.observaciones,
           }});
           break;
         case _Accion.reparar:
-          if (montaje?.neumatico == null) break;
-          out.add({'rpc': 'tc_registrar_reparacion', 'args': {
-            'p_neumatico': montaje!.neumatico!.id, 'p_tipo_reparacion': 'pinchazo',
+          if (!porPosicion && montaje!.neumatico == null) break;
+          out.add({'rpc': 'tc_registrar_reparacion', ...hint, 'args': {
+            if (!porPosicion) 'p_neumatico': montaje!.neumatico!.id,
+            'p_tipo_reparacion': 'pinchazo',
             'p_resultado': 'reparado', 'p_km': km, 'p_obs': r.observaciones,
           }});
           break;
@@ -555,7 +576,8 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
           .where((p) => p.id == posId)
           .map((p) => p.codigoPosicion)
           .followedBy(const ['?']).first;
-      if (r.accion == _Accion.desmontar && _montajes[posId] != null) {
+      final hay = _montajes[posId] != null || r.referenciaId != null;
+      if (r.accion == _Accion.desmontar && hay) {
         final falta = <String>[
           if (r.motivo == null) 'la razón',
           if (r.destino == null) 'el destino',
@@ -563,8 +585,7 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
         ];
         if (falta.isNotEmpty) pendientes.add('$nombre: falta ${falta.join(', ')}');
       }
-      if (r.accion == _Accion.montar && _montajes[posId] == null &&
-          r.referenciaId == null) {
+      if (r.accion == _Accion.montar && !hay) {
         pendientes.add('$nombre: falta elegir el neumático del catálogo');
       }
       if (r.accion == _Accion.cambiarPosicion && r.destinoPosicionId == null) {
@@ -668,7 +689,7 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
   // ── Pintado ────────────────────────────────────────────────────────────────
   bool get _puedeContinuar {
     switch (_paso) {
-      case _Paso.vehiculo:  return _vehiculo != null;
+      case _Paso.vehiculo:  return _vehiculo != null && !_faltaDeclarar;
       case _Paso.cabecera:  return num.tryParse(_km.text.trim()) != null;
       // Un parte sin tocar ruedas es válido; uno con una rueda a medias no.
       case _Paso.ruedas:    return _faltaEnRuedas == null;
@@ -885,8 +906,126 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
           ]),
         ),
       ),
+      if (_faltaDeclarar) ...[
+        const SizedBox(height: 14),
+        _tarjetaDeclarar(),
+      ] else if (_montajes.isEmpty && _declaradas > 0) ...[
+        const SizedBox(height: 14),
+        _tarjetaDeclarado(),
+      ],
     ],
   ];
+
+  /// Cuántas posiciones llevan ya declarado lo que montan.
+  int get _declaradas =>
+      _posiciones.where((p) => _ruedas[p.id]?.referenciaId != null).length;
+
+  /// El vehículo no tiene NI UNA goma fichada y todavía no se ha dicho qué
+  /// lleva. Sin eso el parte no puede seguir: una revisión de un camión del
+  /// que no se sabe qué monta no alimenta el histórico, y desmontar algo que
+  /// para Mobilink no existe es imposible.
+  bool get _faltaDeclarar =>
+      _vehiculo != null &&
+      _posiciones.isNotEmpty &&
+      _montajes.isEmpty &&
+      _declaradas < _posiciones.length;
+
+  Widget _tarjetaDeclarar() => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: AppColors.warning.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: AppColors.warning.withValues(alpha: 0.5)),
+    ),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Icon(Icons.tire_repair, color: AppColors.warning),
+        const SizedBox(width: 8),
+        const Expanded(
+          child: Text('Este vehículo no tiene ningún neumático registrado',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        ),
+      ]),
+      const SizedBox(height: 6),
+      Text('Antes de empezar hay que decir qué medida y modelo lleva montado '
+           'en las ${_posiciones.length} posiciones. Se apunta lo que YA está '
+           'puesto: no es trabajo hecho, es poner al día la ficha para que el '
+           'parte y el histórico signifiquen algo.',
+          style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+      const SizedBox(height: 12),
+      FilledButton.icon(
+        onPressed: _declararNeumaticos,
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+        icon: const Icon(Icons.add_circle_outline),
+        label: const Text('Decir qué lleva montado'),
+      ),
+    ]),
+  );
+
+  Widget _tarjetaDeclarado() => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: AppColors.success.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: AppColors.success.withValues(alpha: 0.5)),
+    ),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Icon(Icons.check_circle, color: AppColors.success),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text('Declarado lo que lleva en las $_declaradas posiciones',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      for (final p in _posiciones)
+        if (_ruedas[p.id]?.referenciaTexto != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(children: [
+              SizedBox(width: 90,
+                  child: Text(p.codigoPosicion,
+                      style: const TextStyle(fontSize: 13, color: AppColors.textSecondary))),
+              Expanded(child: Text(_ruedas[p.id]!.referenciaTexto!,
+                  style: const TextStyle(fontSize: 13))),
+            ]),
+          ),
+      const SizedBox(height: 8),
+      TextButton.icon(
+        onPressed: _declararNeumaticos,
+        icon: const Icon(Icons.edit, size: 18),
+        label: const Text('Cambiarlo'),
+      ),
+    ]),
+  );
+
+  Future<void> _declararNeumaticos() async {
+    final r = await showModalBottomSheet<Map<String, Map<String, String>>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      builder: (_) => _DeclararMontados(
+        posiciones: _posiciones,
+        referencias: _catReferencias,
+        yaPuesto: {
+          for (final p in _posiciones)
+            if (_ruedas[p.id]?.referenciaId != null)
+              p.id: _ruedas[p.id]!.referenciaId!,
+        },
+      ),
+    );
+    if (r == null) return;
+    setState(() {
+      r.forEach((posId, datos) {
+        final rueda = _ruedas.putIfAbsent(posId, () => _Rueda());
+        rueda.referenciaId = datos['id'];
+        rueda.referenciaTexto = datos['texto'];
+        rueda.condicion = datos['condicion'] ?? 'usado';
+      });
+    });
+    _guardarBorrador();
+  }
 
   Widget _dato(String etiqueta, String? valor) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 3),
@@ -1027,6 +1166,10 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     final pos = _posiciones.firstWhere((p) => p.id == posId);
     final montaje = _montajes[posId];
     final neu = montaje?.neumatico;
+    // Lo declarado en el paso 1 cuenta como goma puesta: se monta al guardar,
+    // antes que cualquier otra cosa.
+    final declarada = montaje == null && r.referenciaId != null;
+    final hayNeumatico = neu != null || declarada;
 
     return Card(
       color: AppColors.surface,
@@ -1036,10 +1179,12 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
           Text(pos.codigoPosicion,
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
           const SizedBox(height: 2),
-          Text(neu == null
-                  ? 'Posición vacía'
-                  : [neu.marca, neu.modelo, neu.medida]
-                      .whereType<String>().where((x) => x.isNotEmpty).join(' · '),
+          Text(neu != null
+                  ? [neu.marca, neu.modelo, neu.medida]
+                      .whereType<String>().where((x) => x.isNotEmpty).join(' · ')
+                  : declarada
+                      ? '${r.referenciaTexto} · declarado'
+                      : 'Posición vacía',
               style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
           const SizedBox(height: 14),
 
@@ -1056,7 +1201,7 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           Wrap(spacing: 8, runSpacing: 8, children: [
-            for (final a in _accionesPara(hayNeumatico: neu != null))
+            for (final a in _accionesPara(hayNeumatico: hayNeumatico))
               ChoiceChip(
                 label: Text(_accionTexto[a]!),
                 selected: r.accion == a,
@@ -1802,6 +1947,218 @@ class _ElegirReferenciaState extends State<_ElegirReferencia> {
                 );
               },
             ),
+          ),
+          TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar')),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Decir qué lleva montado un vehículo del que Mobilink no tiene ninguna goma
+/// fichada.
+///
+/// NO es un montaje de taller: es apuntar lo que ya está puesto. Por eso nace
+/// como "usado" y no descuenta almacén — la goma no ha salido de ningún stock,
+/// llevaba puesta desde antes de que llegáramos.
+///
+/// Lo normal es que las seis ruedas lleven lo mismo, así que se pregunta UNA
+/// vez y se aplica a todas. Cuando la directriz lleva otra cosa, se abre el
+/// desglose por eje, que es donde de verdad cambian las medidas: dos ruedas
+/// del mismo eje con neumáticos distintos es una avería, no una configuración.
+class _DeclararMontados extends StatefulWidget {
+  final List<PosicionVehiculo> posiciones;
+  final List<Map<String, dynamic>> referencias;
+  final Map<String, String> yaPuesto;
+  const _DeclararMontados({
+    required this.posiciones,
+    required this.referencias,
+    required this.yaPuesto,
+  });
+
+  @override
+  State<_DeclararMontados> createState() => _DeclararMontadosState();
+}
+
+class _DeclararMontadosState extends State<_DeclararMontados> {
+  Map<String, dynamic>? _todas;          // la referencia común
+  final Map<int, Map<String, dynamic>> _porEje = {};
+  bool _desglosar = false;
+  String _condicion = 'usado';
+
+  @override
+  void initState() {
+    super.initState();
+    // Al volver a abrirlo ("Cambiarlo") se ve lo que ya se dijo, en vez de
+    // empezar en blanco y tener que acordarse.
+    final refs = widget.yaPuesto.values.toSet();
+    if (refs.length == 1) {
+      final id = refs.first;
+      for (final r in widget.referencias) {
+        if (r['id'] == id) { _todas = r; break; }
+      }
+    } else if (refs.length > 1) {
+      _desglosar = true;
+      for (final p in widget.posiciones) {
+        final id = widget.yaPuesto[p.id];
+        if (id == null || p.eje == null) continue;
+        for (final r in widget.referencias) {
+          if (r['id'] == id) { _porEje[p.eje!] = r; break; }
+        }
+      }
+    }
+  }
+
+  List<int> get _ejes {
+    final v = widget.posiciones
+        .map((p) => p.eje)
+        .whereType<int>()
+        .toSet()
+        .toList()
+      ..sort();
+    return v;
+  }
+
+  Future<Map<String, dynamic>?> _elegir() => showModalBottomSheet<Map<String, dynamic>>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: AppColors.surface,
+        builder: (_) => _ElegirReferencia(referencias: widget.referencias),
+      );
+
+  String _texto(Map<String, dynamic> r) => [r['marca'], r['modelo'], r['medida']]
+      .whereType<String>().where((x) => x.isNotEmpty).join(' · ');
+
+  /// Qué falta por decir. Con desglose, cada eje; sin él, una sola referencia.
+  bool get _completo => _desglosar
+      ? _ejes.isNotEmpty && _ejes.every(_porEje.containsKey)
+      : _todas != null;
+
+  void _confirmar() {
+    final out = <String, Map<String, String>>{};
+    for (final p in widget.posiciones) {
+      final ref = _desglosar ? _porEje[p.eje] : _todas;
+      if (ref == null) continue;
+      out[p.id] = {
+        'id': ref['id'] as String,
+        'texto': _texto(ref),
+        'condicion': _condicion,
+      };
+    }
+    Navigator.pop(context, out);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16, right: 16, top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('¿Qué lleva montado?',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 4),
+          Text('${widget.posiciones.length} posiciones. Se apunta lo que ya está '
+               'puesto, no un montaje: no descuenta almacén.',
+              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+          const SizedBox(height: 16),
+
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: _desglosar,
+            onChanged: _ejes.isEmpty ? null : (v) => setState(() {
+              _desglosar = v;
+              // Lo ya elegido se propone en el primer eje, para no repetirlo.
+              if (v && _todas != null && _ejes.isNotEmpty) {
+                _porEje.putIfAbsent(_ejes.first, () => _todas!);
+              }
+            }),
+            title: const Text('Cada eje lleva un neumático distinto',
+                style: TextStyle(fontSize: 14)),
+          ),
+
+          if (!_desglosar)
+            OutlinedButton.icon(
+              onPressed: () async {
+                final r = await _elegir();
+                if (r != null) setState(() => _todas = r);
+              },
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(56)),
+              icon: const Icon(Icons.search),
+              label: Text(_todas == null
+                  ? 'Elegir medida y modelo del catálogo'
+                  : _texto(_todas!)),
+            )
+          else ...[
+            for (final eje in _ejes) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(children: [
+                  SizedBox(width: 62,
+                      child: Text('Eje $eje',
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700))),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () async {
+                        final r = await _elegir();
+                        if (r != null) setState(() => _porEje[eje] = r);
+                      },
+                      style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+                      child: Text(
+                          _porEje[eje] == null ? 'Elegir' : _texto(_porEje[eje]!),
+                          maxLines: 2, textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 13)),
+                    ),
+                  ),
+                ]),
+              ),
+            ],
+            if (_ejes.length > 1)
+              OutlinedButton.icon(
+                onPressed: _porEje[_ejes.first] == null
+                    ? null
+                    : () => setState(() {
+                          for (final e in _ejes.skip(1)) {
+                            _porEje[e] = _porEje[_ejes.first]!;
+                          }
+                        }),
+                icon: const Icon(Icons.content_copy, size: 18),
+                label: Text('Copiar la del eje ${_ejes.first} a todos'),
+              ),
+          ],
+
+          const SizedBox(height: 16),
+          const Text('¿Cómo están?',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Wrap(spacing: 8, children: [
+            for (final c in const ['usado', 'nuevo'])
+              ChoiceChip(
+                label: Text(c == 'usado' ? 'Ya rodados' : 'Nuevos'),
+                selected: _condicion == c,
+                onSelected: (_) => setState(() => _condicion = c),
+              ),
+          ]),
+          const SizedBox(height: 6),
+          const Text('Lo habitual es «ya rodados»: llevaban puestos desde antes. '
+                     'La profundidad real se apunta rueda por rueda en el paso '
+                     'de las ruedas.',
+              style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+
+          const SizedBox(height: 20),
+          FilledButton(
+            onPressed: _completo ? _confirmar : null,
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+            child: Text(
+                _desglosar
+                    ? 'Aplicar a las ${widget.posiciones.length} posiciones'
+                    : 'Poner en las ${widget.posiciones.length} posiciones',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
           ),
           TextButton(onPressed: () => Navigator.pop(context),
               child: const Text('Cancelar')),

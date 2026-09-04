@@ -46,6 +46,22 @@
 -- clave es la llave primaria de una tabla, así que dos llamadas simultáneas se
 -- serializan y la segunda espera y ve la primera.
 --
+-- UNA GOMA QUE SE ACABA DE DECLARAR
+--
+-- Si Mobilink no tiene NINGÚN neumático fichado en el vehículo, el técnico
+-- declara en el paso 1 qué lleva puesto, y eso se monta desde el catálogo al
+-- guardar el parte. Puede además cambiar una de esas ruedas en el mismo parte:
+-- primero se monta lo que ya llevaba, después se desmonta la que toque.
+--
+-- El problema es que la tablet no puede mandar el id del montaje de una goma
+-- que todavía no existe: se crea unas líneas más arriba, en esta misma
+-- transacción. Por eso una acción puede traer "posicion_origen" en vez de
+-- p_montaje, y aquí se resuelve contra tc_montajes_actuales EN EL MOMENTO de
+-- despacharla, cuando el montaje ya está hecho.
+--
+-- Se rellena el argumento que necesite cada RPC (p_montaje o p_neumatico) y
+-- nada más: las reglas siguen siendo las de la RPC de siempre.
+--
 -- EL DESTINO DEL NEUMÁTICO QUE SALE
 --
 -- El formulario ofrece los destinos de tc_cat_destinos («Carcasa a
@@ -124,6 +140,7 @@ declare
   v_estado   text;
   v_n_fotos  int := 0;
   v_args     jsonb;
+  v_mon      record;
 begin
   v_clave := nullif(p_parte->>'clave', '')::uuid;
   if v_clave is null then
@@ -217,6 +234,26 @@ begin
   for v_acc in select * from jsonb_array_elements(coalesce(p_parte->'acciones', '[]'::jsonb)) loop
     v_args := coalesce(v_acc->'args', '{}'::jsonb);
     v_dest_cod := null;
+
+    -- Goma declarada en este mismo parte: el montaje no existía cuando la
+    -- tablet armó la acción, pero sí existe ahora. Se busca por posición.
+    if nullif(v_acc->>'posicion_origen','') is not null then
+      select * into v_mon from tc_montajes_actuales
+       where vehiculo_id = v_veh.id
+         and posicion_id = (v_acc->>'posicion_origen')::uuid;
+      if not found then
+        raise exception 'No hay ningún neumático montado en la posición % '
+          'cuando le tocaba el turno a esta operación', v_acc->>'posicion_origen';
+      end if;
+      -- Cada RPC pide lo suyo; se rellena solo lo que le falta.
+      if v_acc->>'rpc' in ('tc_desmontar_neumatico','tc_cambiar_posicion') then
+        v_args := v_args || jsonb_build_object('p_montaje', v_mon.id);
+      elsif v_acc->>'rpc' = 'tc_registrar_reparacion' then
+        v_args := v_args || jsonb_build_object('p_neumatico', v_mon.neumatico_id);
+      else
+        raise exception 'La operación % no se puede resolver por posición', v_acc->>'rpc';
+      end if;
+    end if;
 
     -- El destino elegido decide con qué estado se desmonta. La traducción vive
     -- aquí y no en la tablet: si el catálogo cambia, cambia en un sitio.

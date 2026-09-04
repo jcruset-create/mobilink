@@ -1501,6 +1501,23 @@ async function tokenSesion(): Promise<string> {
   return token;
 }
 
+/**
+ * El parte de servicio en PDF (la plantilla Conti360) de una intervención.
+ *
+ * Devuelve un enlace firmado y caducable, no el PDF: es el mismo endpoint que
+ * usa la tablet, y así el navegador lo abre en una pestaña sin tener que
+ * meter el token en la URL —donde acabaría en el historial y en los registros.
+ */
+export async function enlaceParteInterventionPdf(intervencionId: string): Promise<string> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/parte/${intervencionId}/pdf/enlace`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "No se ha podido generar el PDF");
+  return (j as any).url as string;
+}
+
 export async function listarDocumentosVehiculo(vehiculoId: string): Promise<DocumentoVehiculo[]> {
   const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/vehiculos/${vehiculoId}/documentos`, {
     headers: { Authorization: `Bearer ${await tokenSesion()}` },
