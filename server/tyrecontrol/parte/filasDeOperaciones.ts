@@ -94,6 +94,27 @@ export function esNuevo(o: OperacionFila): boolean {
   return !(o.observaciones ?? "").includes("[USADO]");
 }
 
+/**
+ * ¿Es una goma DECLARADA, de las que el camión ya llevaba puestas?
+ *
+ * Cuando un vehículo llega sin ningún neumático fichado, el técnico declara en
+ * el paso 1 qué lleva, y eso se monta desde el catálogo para que exista en el
+ * sistema. Pero NO ES TRABAJO: nadie ha montado esas ruedas hoy.
+ *
+ * Salían en «Neumáticos Montados» y contadas en «Nº de Neumáticos Nuevos
+ * Montados» —seis ruedas Sailun en un parte donde solo se cambió una—, y ese
+ * papel es el que se le da al cliente. El parte tiene que decir lo que se ha
+ * hecho, no lo que ya estaba.
+ *
+ * El marcador lo pone la tablet. La frase suelta se reconoce también porque
+ * los partes guardados antes de que existiera el marcador la llevan, y esos
+ * papeles se siguen reimprimiendo.
+ */
+export function esDeclarado(o: OperacionFila): boolean {
+  const obs = o.observaciones ?? "";
+  return obs.includes("[DECLARADO]") || obs.includes("declarado en el parte");
+}
+
 export function filasDeOperaciones(
   ops: OperacionFila[],
   medicionPorPosicion: Record<string, MedicionPos> = {},
@@ -107,6 +128,10 @@ export function filasDeOperaciones(
 
     const tipo = tipoEnElPapel(o);
     if (tipo == null) continue;
+
+    // Lo que el camión ya llevaba no se monta hoy: fuera del papel. El
+    // DESMONTAJE de una de esas ruedas sí es trabajo y se queda.
+    if (tipo === "montaje" && esDeclarado(o)) continue;
 
     const origen = o.posicion_origen?.codigo_posicion ?? null;
     const destinoPos = o.posicion_destino?.codigo_posicion ?? null;
