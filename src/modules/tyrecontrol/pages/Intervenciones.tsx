@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { listarIntervencionesPagina, listarEmpresas, listarVehiculos, listarUsuarios, listarPosiciones, listarNeumaticosDisponibles, listarOperaciones, planificarIntervencion, cancelarIntervencion, estadoIntervencion } from "../services/data";
+import { listarIntervencionesPagina, listarEmpresas, listarVehiculos, listarUsuarios, listarPosiciones, listarNeumaticosDisponibles, listarOperaciones, planificarIntervencion, cancelarIntervencion, estadoIntervencion, enlaceParteInterventionPdf } from "../services/data";
 import type { Intervencion, EstadoIntervencion, FiltrosIntervenciones, OperacionPrevistaPlan } from "../services/data";
 import type { Empresa, Vehiculo, Perfil, PosicionVehiculo, Neumatico, OperacionNeumatico, TipoOperacion, PrioridadOperacion } from "../types";
 import { TIPO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, PRIORIDAD_OPERACION_LABELS } from "../types";
@@ -42,6 +42,8 @@ export default function Intervenciones() {
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
+  /** Qué parte se está generando ahora mismo, para apagar solo ese botón. */
+  const [pdf, setPdf] = useState<string | null>(null);
 
   const [fEmpresa, setFEmpresa] = useState(esCliente ? (perfil?.empresa_id ?? "") : "");
   const [fVehiculo, setFVehiculo] = useState("");
@@ -204,6 +206,25 @@ export default function Intervenciones() {
                   <div className="flex flex-wrap gap-1">
                     <Link to={`/tyrecontrol/intervenciones/${i.id}`} className="rounded border border-sky-600 px-1.5 py-0.5 text-[11px] font-semibold text-sky-300 hover:bg-sky-600/10">Informe</Link>
                     <button onClick={() => abrirDetalle(i)} className="rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700">Detalle</button>
+                    {/*
+                      El parte en la plantilla Conti360, sin tener que abrir el
+                      informe. Es el papel que se le da al cliente, y desde la
+                      oficina se pide de uno en uno: obligar a entrar en cada
+                      intervención para sacarlo son dos clics de más por parte.
+                    */}
+                    <button
+                      onClick={async () => {
+                        setPdf(i.id); setMsg("");
+                        try {
+                          window.open(await enlaceParteInterventionPdf(i.id), "_blank", "noopener");
+                        } catch (e: any) {
+                          setMsg(e?.message || "No se ha podido generar el PDF");
+                        } finally { setPdf(null); }
+                      }}
+                      disabled={pdf === i.id}
+                      className="rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-50">
+                      {pdf === i.id ? "Generando…" : "PDF"}
+                    </button>
                     {!esCliente && est !== "cerrada" && (
                       <button onClick={() => { setCancelar(i); setMotivoCancelar(""); }} className="rounded border border-rose-600 px-1.5 py-0.5 text-[11px] font-semibold text-rose-300 hover:bg-rose-600/10">Cancelar</button>
                     )}
