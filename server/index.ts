@@ -1694,8 +1694,31 @@ const upload = multer({
 ========================================================= */
 
 
+/*
+ * La versión del `package.json`, leída UNA vez al arrancar.
+ *
+ * Es la misma que el navegador enseña en la cabecera —de ahí sale
+ * `__APP_VERSION__` al compilar—, así que sirve para lo mismo desde fuera: si
+ * el número que devuelve el servidor no es el que se acaba de publicar, el
+ * despliegue no ha entrado todavía y «sigue sin funcionar» es una caché o un
+ * build viejo, no un fallo.
+ *
+ * Se lee al arrancar y no en cada petición porque a /api/health le pega el
+ * comprobador de salud cada pocos segundos, y eso serían miles de lecturas de
+ * disco al día para un fichero que no cambia sin reiniciar el proceso.
+ */
+const VERSION_APP: string | null = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version;
+  } catch {
+    // Sin package.json a mano el servidor sigue sirviendo: la versión es un
+    // dato para diagnosticar, no una condición para estar vivo.
+    return null;
+  }
+})();
+
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, version: VERSION_APP });
 });
 
 // ── TyreControl: cerrar una intervención de cambio de neumático ──
