@@ -46,6 +46,7 @@ import {
   ErrorCaja,
   cargarDenominaciones,
   enTransaccion,
+  movimientosDeOperacion,
   sesionAbierta,
   siguienteNumeroDe,
   codigoDeCaja,
@@ -299,15 +300,22 @@ export async function listarIngresos(
 
 /** Todo lo que necesita la pantalla, en una llamada. */
 export async function panelIngresos(empresaId: string, registerId: number) {
-  const [pendientes, reposiciones, remanente, ingresos] = await Promise.all([
+  const [pendientes, reposiciones, canjes, remanente, ingresos] = await Promise.all([
     cierresPendientes(empresaId, registerId),
     reposicionesPendientes(empresaId, registerId),
+    canjesPreparados(empresaId, registerId),
     remanenteActual(pool, registerId),
     listarIngresos(empresaId, registerId),
   ]);
   return {
     pendientes,
     reposiciones,
+    /*
+     * Los canjes hechos y sin ingresar. NO entran en ningún total: un canje
+     * cambia la composición del montón, no su valor. Están para que se vea que
+     * el dinero ya se cambió y no se vuelva a cambiar.
+     */
+    canjes,
     remanenteCentimos: remanente,
     /*
      * Los cierres MENOS lo que se devolvió al cajón. Es el total que de verdad
@@ -507,14 +515,24 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
     /* eslint-enable @typescript-eslint/no-explicit-any */
 
     /*
-     * Los canjes vigentes quedan consumidos por este ingreso: ya han cumplido
-     * su papel —convertir monedas en billetes de ESTE montón— y a partir de
-     * aquí no deben tocar el montón siguiente.
+     * Los canjes de ESTE montón quedan consumidos por este ingreso: ya han
+     * cumplido su papel —convertir sus monedas en billetes— y a partir de aquí
+     * no deben tocar el montón siguiente.
+     *
+     * Solo los que se hicieron contra cierres que van todos en este ingreso.
+     * Un canje preparado sobre tres cierres del que hoy solo se ingresa uno
+     * sigue esperando, entero, al ingreso que se lleve los tres: consumirlo
+     * aquí sería perderlo.
      */
     await client.query(
       `UPDATE cash_deposit_swaps SET bank_deposit_id = $1
-        WHERE register_id = $2 AND empresa_id = $3 AND bank_deposit_id IS NULL`,
-      [depositId, e.registerId, ctx.empresaId]
+        WHERE register_id = $2 AND empresa_id = $3 AND bank_deposit_id IS NULL
+          AND anulado_at_ms IS NULL
+          AND NOT EXISTS (
+                SELECT 1 FROM cash_deposit_swap_sessions cs
+                 WHERE cs.swap_id = cash_deposit_swaps.id
+                   AND NOT (cs.session_id = ANY($4::int[])))`,
+      [depositId, e.registerId, ctx.empresaId, sessionIds]
     );
     // Y las reposiciones de fondo, por lo mismo: ya han descontado de ESTE
     // montón y no deben volver a descontar del siguiente.
@@ -940,18 +958,32 @@ export async function composicionPendiente(
   }
 
   /*
-   * Canjes todavía vigentes de esta caja. La dirección se invierte a
-   * propósito: lo que ENTRA en la caja sale del montón, y al revés.
+   * Canjes que cuentan para ESTE montón. La dirección se invierte a propósito:
+   * lo que ENTRA en la caja sale del montón, y al revés.
+   *
+   * Un canje pendiente solo cuenta si TODOS los cierres contra los que se hizo
+   * están en la selección. Sin esa condición, ingresar una parte de los
+   * cierres le aplicaba al montón pequeño un canje que se llevó monedas de los
+   * otros: el desglose salía con cantidades negativas y se tiraban en
+   * silencio. Cuando se recompone un ingreso YA registrado (`canjesDe`), no
+   * hace falta la condición: sus canjes son suyos por definición.
+   *
+   * Los deshechos no cuentan: su inverso ya está asentado en el cajón y el
+   * montón vuelve a la composición que tenía.
    */
   const { rows: canjes } = await client.query(
     `SELECT m.valor_unitario_centimos AS valor, m.direccion, SUM(m.cantidad)::int AS n
        FROM cash_deposit_swaps s
        JOIN cash_denomination_movements m ON m.operation_id = s.operation_id
       WHERE s.empresa_id = $1 AND s.register_id = $2
+        AND s.anulado_at_ms IS NULL
         AND ($3::int IS NULL AND s.bank_deposit_id IS NULL
              OR s.bank_deposit_id = $3::int)
+        AND ($3::int IS NOT NULL OR NOT EXISTS (
+              SELECT 1 FROM cash_deposit_swap_sessions cs
+               WHERE cs.swap_id = s.id AND NOT (cs.session_id = ANY($4::int[]))))
       GROUP BY m.valor_unitario_centimos, m.direccion`,
-    [empresaId, registerId, canjesDe]
+    [empresaId, registerId, canjesDe, [...sessionIds]]
   );
   for (const r of canjes) {
     acumular(Number(r.valor), r.direccion === "IN" ? -Number(r.n) : Number(r.n));
@@ -1172,11 +1204,25 @@ export async function registrarCanje(
     concepto: "Canje de monedas por billetes para el ingreso bancario",
   });
 
-  await pool.query(
-    `INSERT INTO cash_deposit_swaps (empresa_id, register_id, operation_id, created_at_ms)
-     VALUES ($1,$2,$3,$4)`,
-    [ctx.empresaId, e.registerId, operacion.operacionId, Date.now()]
-  );
+  /*
+   * La fila del canje y sus cierres, juntas o ninguna: una fila sin cierres
+   * sería un canje que se aplica a cualquier montón, que es justo el fallo que
+   * esto viene a cerrar.
+   */
+  await enTransaccion(async (client) => {
+    const { rows } = await client.query(
+      `INSERT INTO cash_deposit_swaps (empresa_id, register_id, operation_id, created_at_ms)
+       VALUES ($1,$2,$3,$4) RETURNING id`,
+      [ctx.empresaId, e.registerId, operacion.operacionId, Date.now()]
+    );
+    for (const sessionId of e.sessionIds) {
+      await client.query(
+        `INSERT INTO cash_deposit_swap_sessions (swap_id, session_id)
+         VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+        [rows[0].id, sessionId]
+      );
+    }
+  });
 
   await registrarAuditoria({
     empresaId: ctx.empresaId,
@@ -1299,6 +1345,166 @@ export async function reemitirIngresos(
   });
 
   return { reenviados };
+}
+
+/** Un canje ya hecho que todavía espera a que se registre el ingreso. */
+export type CanjePreparado = {
+  id: number;
+  fecha: string;
+  /** Valor del canje. Entra y sale lo mismo: es UN importe, no dos. */
+  valorCentimos: Centimos;
+  /** Cierres contra los que se hizo. El ingreso tiene que llevarlos todos. */
+  sessionIds: number[];
+  /** Lo que se le dio al cajón: las monedas del montón más billetes de vuelta. */
+  entregado: LineaDenominacion[];
+  /** Los billetes que salieron del cajón al montón. */
+  recibido: LineaDenominacion[];
+};
+
+/**
+ * Canjes hechos y todavía sin ingresar.
+ *
+ * Existen porque canjear e ingresar dejaron de ser el mismo gesto: se cambia
+ * el dinero hoy y el viaje al banco se hace cuando toque. Mientras tanto hay
+ * que poder ver qué se cambió y contra qué cierres, que es lo que decide qué
+ * ingreso se lo llevará.
+ */
+export async function canjesPreparados(
+  empresaId: string,
+  registerId: number
+): Promise<CanjePreparado[]> {
+  const { rows } = await pool.query(
+    `SELECT s.id, s.created_at_ms, s.operation_id,
+            COALESCE(ARRAY_AGG(cs.session_id ORDER BY cs.session_id)
+                     FILTER (WHERE cs.session_id IS NOT NULL), '{}') AS sesiones
+       FROM cash_deposit_swaps s
+       LEFT JOIN cash_deposit_swap_sessions cs ON cs.swap_id = s.id
+      WHERE s.empresa_id = $1 AND s.register_id = $2
+        AND s.bank_deposit_id IS NULL AND s.anulado_at_ms IS NULL
+      GROUP BY s.id, s.created_at_ms, s.operation_id
+      ORDER BY s.created_at_ms, s.id`,
+    [empresaId, registerId]
+  );
+  if (rows.length === 0) return [];
+
+  const salida: CanjePreparado[] = [];
+  await enTransaccion(async (client) => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    for (const r of rows as any[]) {
+      const movs = await movimientosDeOperacion(client, r.operation_id);
+      const entregado = movs.filter((m) => m.direccion === "IN").flatMap((m) => m.lineas);
+      const recibido = movs.filter((m) => m.direccion === "OUT").flatMap((m) => m.lineas);
+      salida.push({
+        id: r.id,
+        fecha: new Date(Number(r.created_at_ms)).toISOString().slice(0, 10),
+        valorCentimos: entregado.reduce((a, l) => a + l.valor * l.cantidad, 0),
+        sessionIds: (r.sesiones as number[]).map(Number),
+        entregado: [...entregado].sort((a, b) => b.valor - a.valor),
+        recibido: [...recibido].sort((a, b) => b.valor - a.valor),
+      });
+    }
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+  });
+  return salida;
+}
+
+/**
+ * Deshace un canje que todavía no se ha ingresado.
+ *
+ * NO revierte la operación original. Un canje puede llevar días preparado y su
+ * jornada estar cerrada, y el libro mayor no se toca hacia atrás. Se asienta
+ * el canje INVERSO en la jornada de HOY, que además es lo que ocurre de
+ * verdad: alguien va al cajón y lo cambia al revés.
+ *
+ * Después de esto el montón vuelve a su composición de antes —la fila deja de
+ * contar— y el cajón vuelve solo, porque las dos operaciones se compensan
+ * pieza a pieza. El efectivo total de la tienda no se mueve en ningún momento.
+ */
+export async function deshacerCanje(
+  ctx: Contexto,
+  swapId: number
+): Promise<{ operacionId: number; numero: string; valorCentimos: Centimos }> {
+  const { rows } = await pool.query(
+    `SELECT id, register_id, operation_id, bank_deposit_id, anulado_at_ms
+       FROM cash_deposit_swaps WHERE id = $1 AND empresa_id = $2`,
+    [swapId, ctx.empresaId]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja("CANJE_NO_ENCONTRADO", "Ese canje no existe.", 404);
+  }
+  if (rows[0].anulado_at_ms != null) {
+    throw new ErrorCaja("CANJE_YA_DESHECHO", "Ese canje ya se deshizo.", 409);
+  }
+  if (rows[0].bank_deposit_id != null) {
+    throw new ErrorCaja(
+      "CANJE_YA_INGRESADO",
+      "Ese canje ya forma parte de un ingreso registrado. Para deshacerlo hay que anular antes el ingreso.",
+      409
+    );
+  }
+
+  const registerId: number = rows[0].register_id;
+  const abierta = await sesionAbierta(registerId);
+  if (!abierta) {
+    throw new ErrorCaja(
+      "JORNADA_NO_ABIERTA",
+      "Deshacer el canje mueve el cajón, así que hace falta una jornada abierta para asentarlo.",
+      409
+    );
+  }
+
+  /*
+   * El inverso, pieza a pieza: vuelven al cajón los billetes que salieron y
+   * salen del cajón las monedas que entraron. Se leen del libro mayor y no de
+   * lo que mande la pantalla, porque es el único sitio donde consta qué se
+   * movió de verdad.
+   */
+  const movimientos = await enTransaccion((client) =>
+    movimientosDeOperacion(client, rows[0].operation_id)
+  );
+  const entroEnElCajon = movimientos.filter((m) => m.direccion === "IN").flatMap((m) => m.lineas);
+  const salioDelCajon = movimientos.filter((m) => m.direccion === "OUT").flatMap((m) => m.lineas);
+  const valor = (l: readonly LineaDenominacion[]) =>
+    l.reduce((a, x) => a + x.valor * x.cantidad, 0);
+  const importe = valor(salioDelCajon);
+
+  if (importe <= 0 || importe !== valor(entroEnElCajon)) {
+    throw new ErrorCaja(
+      "EFECTIVO_NO_CUADRA",
+      "Los movimientos de ese canje no cuadran, así que no se deshace a ciegas.",
+      409
+    );
+  }
+
+  const { registrarOperacion } = await import("./service.ts");
+  const operacion = await registrarOperacion(ctx, {
+    sessionId: abierta.id,
+    tipo: "EXCHANGE",
+    importeCentimos: importe,
+    formasPago: [{ forma: "CASH", importe }],
+    efectivoRecibido: salioDelCajon,
+    efectivoEntregado: entroEnElCajon,
+    concepto: "Deshacer el canje de monedas del ingreso bancario",
+  });
+
+  await pool.query(
+    `UPDATE cash_deposit_swaps
+        SET anulado_at_ms = $2, anulado_por = $3, anulado_operation_id = $4
+      WHERE id = $1`,
+    [swapId, Date.now(), ctx.userId, operacion.operacionId]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.bank_deposit.swap_undo",
+    entidad: "cash_operations",
+    entidadId: String(operacion.operacionId),
+    detalle: { swapId, registerId, devueltoAlCajon: salioDelCajon, sacadoDelCajon: entroEnElCajon, valorCentimos: importe },
+    ip: ctx.ip,
+  });
+
+  return { operacionId: operacion.operacionId, numero: operacion.numero, valorCentimos: importe };
 }
 
 // ── Reposición del fondo desde el montón pendiente ─────────────────────────

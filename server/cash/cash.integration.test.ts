@@ -5329,6 +5329,220 @@ describe.runIf(RUN)("cuentas anteriores al maestro de bancos", () => {
   });
 });
 
+describe.runIf(RUN)("canjear hoy e ingresar otro día", () => {
+  /**
+   * Dos cierres pendientes, cada uno con su composición, y una jornada abierta
+   * con billetes en el cajón. Es el escenario donde el canje deja de ir pegado
+   * al ingreso y hay que decidir a qué montón pertenece.
+   */
+  async function dosCierres() {
+    const caja = await crearCaja(`canje2-${Date.now()}`);
+
+    // Cierre A: 30,00 € al banco, con 10,00 € en monedas de 1 €.
+    const A = [
+      { valor: 2000, cantidad: 1 },
+      { valor: 100, cantidad: 10 },
+    ];
+    const a = (await servicio.abrirJornada(ctx, { registerId: caja })).sesion;
+    await servicio.registrarOperacion(ctx, {
+      sessionId: a.id,
+      tipo: "MANUAL_IN",
+      importeCentimos: 3000,
+      formasPago: [{ forma: "CASH", importe: 3000 }],
+      efectivoRecibido: A,
+      concepto: "Cobros del día A",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: a.id, contado: A });
+    await servicio.cerrarJornada(ctx, { sessionId: a.id, cambioFinal: [] });
+
+    // Cierre B: 25,00 € al banco, con 5,00 € en monedas de 0,50 €.
+    const B = [
+      { valor: 2000, cantidad: 1 },
+      { valor: 50, cantidad: 10 },
+    ];
+    const b = (await servicio.abrirJornada(ctx, { registerId: caja })).sesion;
+    await servicio.registrarOperacion(ctx, {
+      sessionId: b.id,
+      tipo: "MANUAL_IN",
+      importeCentimos: 2500,
+      formasPago: [{ forma: "CASH", importe: 2500 }],
+      efectivoRecibido: B,
+      concepto: "Cobros del día B",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: b.id, contado: B });
+    await servicio.cerrarJornada(ctx, { sessionId: b.id, cambioFinal: [] });
+
+    // Hoy, abierta, con billetes de sobra en el cajón para canjear.
+    const hoy = (await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 2 },
+        { valor: 2000, cantidad: 4 },
+        { valor: 1000, cantidad: 4 },
+      ],
+    })).sesion;
+    return { caja, a: a.id, b: b.id, hoy };
+  }
+
+  const valor = (l: readonly { valor: number; cantidad: number }[]) =>
+    l.reduce((a, x) => a + x.valor * x.cantidad, 0);
+
+  it("se canjea hoy, no se ingresa, y mañana el canje sigue ahí", async () => {
+    const { caja, a, b } = await dosCierres();
+    const sessionIds = [a, b];
+
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    // 15,00 € en monedas: los 10 € de euros del cierre A y los 5 € del B.
+    expect(p.enMonedasCentimos).toBe(1500);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds,
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+
+    // Sin ingresar nada: el canje queda preparado y se ve.
+    const panel = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(panel.canjes).toHaveLength(1);
+    expect(panel.canjes[0].sessionIds.sort()).toEqual([a, b].sort());
+    expect(panel.ingresos).toHaveLength(0);
+    // Y no ha movido ni un céntimo del total pendiente: solo la composición.
+    expect(panel.totalPendienteCentimos).toBe(5500);
+
+    /*
+     * El montón tiene ahora menos monedas y más billetes, exactamente por el
+     * valor del canje. No se comprueba contra un número escrito a mano: lo que
+     * se puede convertir depende de los billetes que tenga el cajón, y lo que
+     * importa aquí es que el montón se mueva JUSTO lo que dijo la propuesta.
+     */
+    const convertido = p.canje!.valorMonedasCentimos;
+    expect(convertido).toBeGreaterThan(0);
+    const bolsa = await ingresos.composicionPendiente(EMPRESA, caja, sessionIds);
+    expect(valor(bolsa.monedas)).toBe(1500 - convertido);
+    expect(valor(bolsa.billetes)).toBe(4000 + convertido);
+    expect(valor(bolsa.billetes) + valor(bolsa.monedas)).toBe(5500);
+  });
+
+  it("ingresar SOLO uno de los cierres no se lleva el canje de los dos", async () => {
+    /*
+     * Es el descuadre que cerró esta funcionalidad. El canje se hizo contra A
+     * y B, así que un ingreso que solo lleve A no puede aplicárselo: se llevó
+     * monedas que venían de B. Antes se aplicaba igual —el desglose salía con
+     * cantidades negativas que se tiraban en silencio— y encima el ingreso lo
+     * consumía, así que a B no le llegaba nunca.
+     */
+    const { caja, a, b } = await dosCierres();
+    const p = await ingresos.proponerCanje(EMPRESA, caja, [a, b]);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+
+    // Mirando SOLO el cierre A, el canje no cuenta: A sigue con sus 10 € en
+    // monedas de 1 €, que es lo que hay si no se toca el montón entero.
+    const soloA = await ingresos.composicionPendiente(EMPRESA, caja, [a]);
+    expect(valor(soloA.monedas)).toBe(1000);
+    expect(valor(soloA.billetes) + valor(soloA.monedas)).toBe(3000);
+    // Ninguna línea en negativo, ni tirada en silencio.
+    for (const l of [...soloA.billetes, ...soloA.monedas]) {
+      expect(l.cantidad).toBeGreaterThan(0);
+    }
+
+    // Y al ingresar solo A, el canje NO se consume: sigue esperando.
+    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [a], importeCentimos: 2000 });
+    const panel = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(panel.canjes).toHaveLength(1);
+  });
+
+  it("el ingreso que se lleva TODOS sus cierres sí lo consume", async () => {
+    const { caja, a, b } = await dosCierres();
+    const p = await ingresos.proponerCanje(EMPRESA, caja, [a, b]);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+    await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      importeCentimos: 5500,
+    });
+    expect((await ingresos.panelIngresos(EMPRESA, caja)).canjes).toEqual([]);
+  });
+
+  it("deshacer devuelve el montón y el cajón a como estaban", async () => {
+    const { caja, a, b, hoy } = await dosCierres();
+    const sessionIds = [a, b];
+    const cajonAntes = (await servicio.detalleJornada(hoy.id)).totalStockCentimos;
+    const bolsaAntes = await ingresos.composicionPendiente(EMPRESA, caja, sessionIds);
+
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds,
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+
+    const preparado = (await ingresos.panelIngresos(EMPRESA, caja)).canjes[0];
+    await ingresos.deshacerCanje(ctx, preparado.id);
+
+    // El cajón, pieza a pieza como estaba.
+    expect((await servicio.detalleJornada(hoy.id)).totalStockCentimos).toBe(cajonAntes);
+    // Y el montón, con sus monedas otra vez.
+    const bolsaDespues = await ingresos.composicionPendiente(EMPRESA, caja, sessionIds);
+    expect(bolsaDespues.monedas).toEqual(bolsaAntes.monedas);
+    expect(bolsaDespues.billetes).toEqual(bolsaAntes.billetes);
+    // Y ya no figura como preparado.
+    expect((await ingresos.panelIngresos(EMPRESA, caja)).canjes).toEqual([]);
+  });
+
+  it("un canje deshecho no se deshace dos veces", async () => {
+    const { caja, a, b } = await dosCierres();
+    const p = await ingresos.proponerCanje(EMPRESA, caja, [a, b]);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+    const id = (await ingresos.panelIngresos(EMPRESA, caja)).canjes[0].id;
+    await ingresos.deshacerCanje(ctx, id);
+    await expect(ingresos.deshacerCanje(ctx, id)).rejects.toMatchObject({
+      codigo: "CANJE_YA_DESHECHO",
+    });
+  });
+
+  it("un canje YA ingresado no se deshace: hay que anular el ingreso antes", async () => {
+    const { caja, a, b } = await dosCierres();
+    const p = await ingresos.proponerCanje(EMPRESA, caja, [a, b]);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+    const id = (await ingresos.panelIngresos(EMPRESA, caja)).canjes[0].id;
+    await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      importeCentimos: 5500,
+    });
+    await expect(ingresos.deshacerCanje(ctx, id)).rejects.toMatchObject({
+      codigo: "CANJE_YA_INGRESADO",
+    });
+  });
+});
+
 describe.runIf(RUN)("reposición del fondo desde el dinero pendiente de ingresar", () => {
   /**
    * El caso real de Tarragona el 28/08/2026, reproducido.
