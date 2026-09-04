@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import {
   obtenerIntervencion, listarOperaciones, listarCatOperaciones, estadoIntervencion,
   listarMovimientosOperacion, listarHistorialEstados, listarAuditoriaOperacion, listarAdjuntosOperacion,
+  enlaceParteInterventionPdf,
 } from "../services/data";
 import type { Intervencion, EstadoHistorialEntry, AuditoriaEntry } from "../services/data";
 import type { OperacionNeumatico, OperacionMovimiento, OperacionAdjunto, CatDestino } from "../types";
@@ -43,6 +44,7 @@ export default function InformeIntervencion() {
   const [destinos, setDestinos] = useState<CatDestino[]>([]);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
+  const [pdf, setPdf] = useState(false);
 
   // Cargas perezosas por nivel (mismos datos, más profundidad).
   const [adjuntos, setAdjuntos] = useState<Map<string, OperacionAdjunto[]> | null>(null);
@@ -156,6 +158,27 @@ export default function InformeIntervencion() {
             </button>
           ))}
           <button onClick={() => window.print()} className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700">Imprimir</button>
+          {/*
+            El parte en la plantilla Conti360, que es el papel que se le da al
+            cliente. "Imprimir" saca ESTA pantalla, que es otra cosa: un
+            informe interno con trazabilidad. Hasta ahora el PDF solo se podía
+            sacar desde la tablet, y desde la oficina no había manera.
+          */}
+          <button
+            onClick={async () => {
+              setPdf(true); setMsg("");
+              try {
+                // Se abre en una pestaña, no se descarga: lo normal es mirarlo
+                // y decidir, y una descarga deja un fichero suelto por medio.
+                window.open(await enlaceParteInterventionPdf(id!), "_blank", "noopener");
+              } catch (e: any) {
+                setMsg(e?.message || "No se ha podido generar el PDF");
+              } finally { setPdf(false); }
+            }}
+            disabled={pdf}
+            className="rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-50">
+            {pdf ? "Generando…" : "Parte en PDF"}
+          </button>
         </div>
       </div>
       {msg && <div className="mb-3 text-sm text-red-300">{msg}</div>}

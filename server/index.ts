@@ -18362,13 +18362,27 @@ mountConnect(app, requireLicensesAdmin);
 app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
 app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRole));
 /*
- * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no
- * escribe nada en TC. Va con el guarda del back-office porque es información
- * de oficina; la pantalla del técnico no se toca.
+ * ⚠ EL ORDEN DE ESTOS TRES BLOQUES IMPORTA, Y NO ES UN DETALLE DE ESTILO.
+ *
+ * Las rutas de la APK (asistente, flanco y parte) cuelgan de /api/tyrecontrol,
+ * igual que el router del back-office. Ese router hace `router.use(guarda)`
+ * con el guarda del panel, que exige el token de administrador y responde 401
+ * "No autorizado" a cualquier otra cosa — incluida la sesión de un operario.
+ *
+ * Express prueba los middlewares EN EL ORDEN EN QUE SE REGISTRAN, así que si
+ * el `app.use("/api/tyrecontrol", …)` va primero, atrapa TODO lo que empiece
+ * por esa ruta y contesta 401 antes de que estas rutas lleguen a existir.
+ * Pasó de verdad: el técnico terminaba el parte, pulsaba "Ver el PDF" y le
+ * salía "No autorizado", con el parte ya guardado y bien.
+ *
+ * Por eso van ANTES. Sus caminos (/parte/*, /flanco/*, /asistente/*) no chocan
+ * con ninguno del router del panel (/empresas, /stock, /resolve…), de modo que
+ * todo lo demás sigue cayendo donde caía. Y no se afloja ningún permiso: cada
+ * una lleva su propio `authenticate` + `requireModule`, y el parte comprueba
+ * además empresa por empresa antes de devolver nada.
+ *
+ * Hay una prueba que lo vigila: server/rutasTyreControl.test.ts.
  */
-app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
-mountCorreo(app, requireSupervisorRole);
-app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
 
 // Asistente virtual de TyreControl (function calling sobre herramientas de
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
@@ -18378,9 +18392,19 @@ mountAsistente(app, authenticate, requireModule("tyrecontrol"));
 // Solo propone: guardar lo decide el técnico. Ver server/tyrecontrol/flanco/.
 mountFlanco(app, authenticate, requireModule("tyrecontrol"));
 
-// Parte de servicio a partir de fotografías. Solo propone: guardar lo decide
-// el técnico, y aterriza en la intervención y los montajes que ya existen.
+// Parte de servicio: lectura por fotografías y el PDF del parte. Solo propone:
+// guardar lo decide el técnico, y aterriza en la intervención y los montajes
+// que ya existen.
 mountParte(app, authenticate, requireModule("tyrecontrol"));
+
+/*
+ * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no
+ * escribe nada en TC. Va con el guarda del back-office porque es información
+ * de oficina; la pantalla del técnico no se toca.
+ */
+app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
+mountCorreo(app, requireSupervisorRole);
+app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
