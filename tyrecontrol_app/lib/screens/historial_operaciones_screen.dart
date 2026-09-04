@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
-import 'parte_fotos_screen.dart';
 import '../widgets/etiqueta_neumatico.dart';
 
 /// Histórico de operaciones de un vehículo, agrupado por intervención
@@ -258,24 +257,7 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
                                     ),
                                   ]),
                                   subtitle: Text(informe, style: const TextStyle(color: AppColors.textPrimary, fontSize: 14)),
-                                  // El parte de servicio por fotografías no es
-                                  // el camino normal: solo se levanta para las
-                                  // intervenciones que el técnico elige a mano,
-                                  // así que vive aquí como acción de la ficha y
-                                  // no como paso obligatorio del flujo.
-                                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                                    IconButton(
-                                      icon: const Icon(Icons.description_outlined, color: AppColors.info),
-                                      tooltip: 'Parte de servicio',
-                                      onPressed: () => Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => ParteFotosScreen(intervencionId: iv['id'] as String?),
-                                        ),
-                                      ),
-                                    ),
-                                    const Icon(Icons.chevron_right, color: AppColors.textHint),
-                                  ]),
+                                  trailing: const Icon(Icons.chevron_right, color: AppColors.textHint),
                                   onTap: () => _verDetalle(iv),
                                 ),
                               );
