@@ -191,7 +191,16 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
             if (ops.isEmpty)
               const Text('Sin operaciones registradas.', style: TextStyle(color: AppColors.textHint))
             else
-              ...ops.map(_filaOperacion),
+              // Con onCorregir: desde el detalle de un parte se puede arreglar
+              // lo que se apuntó mal. Lo de la lista suelta de arriba no, que
+              // ahí no hay contexto de qué parte es.
+              ...ops.map((o) => _filaOperacion(o, onCorregir: () async {
+                    final hecho = await _corregir(o);
+                    if (hecho == true && context.mounted) {
+                      Navigator.pop(context);   // cierra la hoja
+                      _cargar();
+                    }
+                  })),
           ],
         ),
       ),
@@ -258,7 +267,25 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
     return '$f · $h';
   }
 
-  Widget _filaOperacion(Map<String, dynamic> o) {
+  /// Corregir lo que se apuntó mal.
+  ///
+  /// SOLO DATOS: la razón, las observaciones, el número de serie y el DOT.
+  /// No mueve la goma ni toca el stock — eso no se puede deshacer desde aquí
+  /// sin arrastrar lo que haya pasado después—, y la pantalla lo dice para
+  /// que nadie crea que ha devuelto una rueda a su sitio.
+  Future<bool?> _corregir(Map<String, dynamic> o) async {
+    List<Map<String, dynamic>> motivos = [];
+    try { motivos = await TyreControlApi.listarMotivosDesmontaje(); } catch (_) {}
+    if (!mounted) return null;
+    return showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      builder: (_) => _CorregirOperacion(operacion: o, motivos: motivos),
+    );
+  }
+
+  Widget _filaOperacion(Map<String, dynamic> o, {VoidCallback? onCorregir}) {
     final tipo = _tipoLabels[o['tipo_operacion']] ?? '${o['tipo_operacion']}';
     final n = o['neumatico'];
     final neu = n is Map ? [n['marca'], n['medida']].whereType<String>().join(' ') : '';
@@ -276,6 +303,10 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
           Text([_fechaHora(o), neu, pos].where((s) => s.isNotEmpty).join(' · '),
               style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
         ])),
+        // Una operación anulada ya no cuenta para nada: corregirla daría a
+        // entender que vuelve a valer.
+        if (onCorregir != null && !anulada)
+          TextButton(onPressed: onCorregir, child: const Text('Corregir')),
       ]),
     );
   }
@@ -604,5 +635,174 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
         ]),
       );
     });
+  }
+}
+
+/// Corregir lo que se apuntó mal en una operación ya hecha.
+///
+/// SOLO DATOS. La razón, las observaciones, el número de serie y el DOT: cosas
+/// que no movieron nada. No cambia dónde está la goma ni toca el stock, y la
+/// pantalla lo dice, porque es justo lo que la gente asume que hace.
+///
+/// Deshacer un movimiento es otra cosa y no se puede hacer desde aquí: si la
+/// goma que se desmontó el lunes se montó el martes en otro camión, deshacer
+/// el lunes tendría que deshacer el martes, y nadie va a mirar eso a mano.
+class _CorregirOperacion extends StatefulWidget {
+  final Map<String, dynamic> operacion;
+  final List<Map<String, dynamic>> motivos;
+  const _CorregirOperacion({required this.operacion, required this.motivos});
+
+  @override
+  State<_CorregirOperacion> createState() => _CorregirOperacionState();
+}
+
+class _CorregirOperacionState extends State<_CorregirOperacion> {
+  late final TextEditingController _obs;
+  late final TextEditingController _serie;
+  late final TextEditingController _dot;
+  final _porQue = TextEditingController();
+  String? _motivo;
+  bool _guardando = false;
+  String? _error;
+
+  Map<String, dynamic>? get _neu =>
+      widget.operacion['neumatico'] is Map
+          ? Map<String, dynamic>.from(widget.operacion['neumatico'] as Map)
+          : null;
+
+  @override
+  void initState() {
+    super.initState();
+    _motivo = widget.operacion['motivo'] as String?;
+    _obs = TextEditingController(text: (widget.operacion['observaciones'] as String?) ?? '');
+    _serie = TextEditingController(text: (_neu?['numero_serie'] as String?) ?? '');
+    _dot = TextEditingController(text: (_neu?['dot'] as String?) ?? '');
+  }
+
+  @override
+  void dispose() {
+    for (final c in [_obs, _serie, _dot, _porQue]) { c.dispose(); }
+    super.dispose();
+  }
+
+  Future<void> _guardar() async {
+    if (_porQue.text.trim().isEmpty) {
+      setState(() => _error = 'Di por qué lo corriges: queda apuntado con tu nombre.');
+      return;
+    }
+    setState(() { _guardando = true; _error = null; });
+    try {
+      await TyreControlApi.corregirOperacion(
+        operacionId: widget.operacion['id'] as String,
+        motivoCorreccion: _porQue.text.trim(),
+        motivo: _motivo,
+        observaciones: _obs.text,
+        // Solo se mandan si hay ficha de neumático que corregir.
+        numeroSerie: _neu == null ? null : _serie.text,
+        dot: _neu == null ? null : _dot.text,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _guardando = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16, right: 16, top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Corregir lo apuntado',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.warning.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Text(
+                'Esto corrige el DATO, no mueve la rueda. El neumático se queda '
+                'donde está y el stock no cambia.',
+                style: TextStyle(fontSize: 12, color: AppColors.warning)),
+          ),
+          const SizedBox(height: 16),
+
+          if (widget.motivos.isNotEmpty) ...[
+            DropdownButtonFormField<String>(
+              initialValue: widget.motivos.any((m) => m['codigo'] == _motivo) ? _motivo : null,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Razón', isDense: true),
+              items: [
+                for (final m in widget.motivos)
+                  DropdownMenuItem(
+                    value: m['codigo'] as String?,
+                    child: Text((m['nombre'] ?? m['codigo'] ?? '') as String,
+                        overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+              onChanged: (v) => setState(() => _motivo = v),
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          if (_neu != null) ...[
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _serie,
+                  decoration: const InputDecoration(labelText: 'Nº de serie', isDense: true),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _dot,
+                  decoration: const InputDecoration(labelText: 'DOT', isDense: true),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 12),
+          ],
+
+          TextField(
+            controller: _obs,
+            maxLines: 2,
+            decoration: const InputDecoration(labelText: 'Observaciones', isDense: true),
+          ),
+          const SizedBox(height: 16),
+
+          TextField(
+            controller: _porQue,
+            decoration: const InputDecoration(
+              labelText: '¿Por qué lo corriges?',
+              helperText: 'Obligatorio. Queda apuntado con tu nombre y la fecha.',
+              isDense: true,
+            ),
+          ),
+
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(_error!, style: const TextStyle(color: AppColors.danger)),
+          ],
+          const SizedBox(height: 20),
+          FilledButton(
+            onPressed: _guardando ? null : _guardar,
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+            child: Text(_guardando ? 'Guardando…' : 'Guardar la corrección',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          ),
+          TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar')),
+        ]),
+      ),
+    );
   }
 }
