@@ -1420,13 +1420,44 @@ class TyreControlApi {
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  /// Corrige DATOS de una operación ya hecha: razón, observaciones, número de
+  /// serie y DOT.
+  ///
+  /// NO mueve neumáticos ni toca el stock, y no deja cambiar el destino: el
+  /// destino y el estado de la goma los pone la misma RPC a la vez, y cambiar
+  /// solo uno dejaría al papel y a la ficha contando cosas distintas.
+  ///
+  /// El motivo es obligatorio y queda escrito en la auditoría: una corrección
+  /// sin motivo es indistinguible de un error.
+  static Future<Map<String, dynamic>> corregirOperacion({
+    required String operacionId,
+    required String motivoCorreccion,
+    String? motivo,
+    String? observaciones,
+    String? numeroSerie,
+    String? dot,
+  }) async {
+    final cambios = <String, dynamic>{};
+    if (motivo != null) cambios['motivo'] = motivo;
+    if (observaciones != null) cambios['observaciones'] = observaciones;
+    if (numeroSerie != null) cambios['numero_serie'] = numeroSerie;
+    if (dot != null) cambios['dot'] = dot;
+    final r = await _db.rpc('tc_corregir_operacion', params: {
+      'p_operacion': operacionId,
+      'p_cambios': cambios,
+      'p_motivo': motivoCorreccion,
+    });
+    return Map<String, dynamic>.from(r as Map);
+  }
+
   /// Operaciones de una intervención (con posición y neumático).
   static Future<List<Map<String, dynamic>>> listarOperacionesDeIntervencion(String intervencionId) async {
     final data = await _db.from('operaciones_neumaticos').select(
         'id, tipo_operacion, motivo, is_anulada, fecha_operacion, created_at, '
         'posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), '
         'posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), '
-        'neumatico:tc_neumaticos(marca, modelo, medida, numero_interno)')
+        'observaciones, '
+        'neumatico:tc_neumaticos(id, marca, modelo, medida, numero_interno, numero_serie, dot)')
         .eq('intervencion_id', intervencionId).order('created_at', ascending: true);
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
