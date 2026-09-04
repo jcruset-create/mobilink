@@ -870,6 +870,11 @@ class TyreControlApi {
     String? medidaId,
     String? numeroUnidad,
     num? km,
+    /// Medidas por eje cuando no todos llevan la misma:
+    /// `[{'eje': 1, 'medida_id': '…'}, …]`. Las guarda la propia función en
+    /// tc_vehiculo_ejes; desde la tablet no se puede escribir esa tabla a mano
+    /// (tc_set_vehiculo_ejes pide administrador) y no se amplía ese permiso.
+    List<Map<String, dynamic>>? ejes,
   }) async {
     final data = await _db.rpc('tc_alta_vehiculo_desde_parte', params: {
       'p_empresa': empresaId,
@@ -879,8 +884,39 @@ class TyreControlApi {
       'p_medida': medidaId,
       'p_numero_unidad': numeroUnidad,
       'p_km': km,
+      'p_ejes': (ejes == null || ejes.isEmpty) ? null : ejes,
     });
     return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Las razones de sustitución del formulario: el catálogo que ya existe
+  /// (tc_cat_motivos), no una lista escrita en la APK. Se piden las comunes y
+  /// las del desmontaje; las de corrección administrativa no pintan aquí.
+  static Future<List<Map<String, dynamic>>> listarMotivosDesmontaje() async {
+    final data = await _db
+        .from('tc_cat_motivos')
+        .select('codigo, nombre, tipo_operacion, orden')
+        .eq('activo', true)
+        .order('orden');
+    return (data as List)
+        .map((e) => Map<String, dynamic>.from(e))
+        .where((m) {
+          final t = m['tipo_operacion'] as String?;
+          return t == null || t == 'sustitucion' || t == 'desmontaje';
+        })
+        .toList();
+  }
+
+  /// Los destinos del neumático retirado (tc_cat_destinos). Se lleva también
+  /// `estado_resultante` porque es lo que decide en qué estado queda la goma;
+  /// esa decisión la aplica la base de datos, aquí solo se enseña el nombre.
+  static Future<List<Map<String, dynamic>>> listarDestinosNeumatico() async {
+    final data = await _db
+        .from('tc_cat_destinos')
+        .select('codigo, nombre, estado_resultante, orden')
+        .eq('activo', true)
+        .order('orden');
+    return (data as List).map((e) => Map<String, dynamic>.from(e)).toList();
   }
 
   /// Guarda el parte entero DE UNA VEZ: revisión con mediciones, intervención
