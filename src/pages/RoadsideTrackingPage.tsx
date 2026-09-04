@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { loadRoadsideTrackingFromBackend } from "../modules/roadsideAssistanceApi";
+import { horaDelPaso } from "../modules/seguimientoPasos";
 const RoadsideMap = lazy(() => import("../components/RoadsideMap"));
 import type {
   RoadsideAssistance,
@@ -432,6 +433,7 @@ export default function RoadsideTrackingPage() {
             {ROADSIDE_ASSISTANCE_STATUS_FLOW.map((status, index) => {
               const done = index < currentStep;
               const current = index === currentStep;
+              const hora = horaDelPaso(status, assistance, data.events);
               return (
                 <div
                   key={status}
@@ -455,6 +457,20 @@ export default function RoadsideTrackingPage() {
                       {ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}
                     </div>
                   </div>
+                  {/*
+                    La hora solo si la hay. Un «-» en los pasos que aún no han
+                    ocurrido llenaría la rejilla de guiones sin decir nada: que
+                    estén en gris ya cuenta que no han pasado.
+                  */}
+                  {hora != null && (
+                    <div
+                      className={`mt-1 pl-6 text-xs font-semibold tabular-nums ${
+                        done ? "text-emerald-700" : current ? "text-orange-700" : "text-slate-400"
+                      }`}
+                    >
+                      {formatTime(hora)}
+                    </div>
+                  )}
                 </div>
               );
             })}
