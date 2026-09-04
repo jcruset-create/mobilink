@@ -53,4 +53,12 @@ for app in tyrecontrol_app flutter_app taller_app lite_app safety_app almacen_ap
   fi
 done
 
+# pub get reescribe los pubspec.lock, y npm install el package-lock.json. Si se
+# quedaran así, cada sesión empezaría con nueve ficheros modificados que nadie
+# ha tocado, y acabarían colándose en un commit. La resolución ya está en
+# .dart_tool, así que analizar y probar siguen funcionando con los lock
+# originales.
+git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" checkout -- '*pubspec.lock' package-lock.json 2>/dev/null || true
+git -C "${CLAUDE_PROJECT_DIR:-$(pwd)}" clean -fq -- '*pubspec.lock' 2>/dev/null || true
+
 echo "✔ Listo. flutter analyze y flutter test ya funcionan."
