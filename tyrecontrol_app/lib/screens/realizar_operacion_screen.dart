@@ -85,6 +85,8 @@ class _Rueda {
   /// goma que sale, y de ahí a la columna «Nº Serie / DOT» del parte.
   String? numeroSerie;
   String? dot;
+  /// El modelo leyó el serie pero sin estar seguro: se propone y se avisa.
+  bool serieDudosa = false;
 
   /// Lo que lleva puesto, DECLARADO por el técnico, cuando Mobilink no tiene
   /// nada fichado en esta posición. No es una acción de taller: es apuntar lo
@@ -262,9 +264,14 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
       if (!mounted) return;
       final serie = (l['numero_serie'] as String?)?.trim();
       final dot = (l['dot'] as String?)?.trim();
+      final dudosos = ((l['dudosos'] as List?) ?? const []).map((e) => '$e').toSet();
       setState(() {
         if ((r.numeroSerie?.trim().isEmpty ?? true) && (serie?.isNotEmpty ?? false)) {
           r.numeroSerie = serie;
+          // Si el modelo no las tenía todas consigo, se dice. La lectura se
+          // propone igual —vale más un número que comprobar que un hueco—,
+          // pero el técnico tiene que saber cuál mirar dos veces.
+          r.serieDudosa = dudosos.contains('numero_serie');
         }
         if ((r.dot?.trim().isEmpty ?? true) && (dot?.isNotEmpty ?? false)) {
           r.dot = dot;
@@ -1357,7 +1364,13 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
                   decoration: InputDecoration(
                     labelText: 'Nº de serie',
                     isDense: true,
-                    helperText: _leyendo == posId ? 'Leyendo la foto…' : null,
+                    helperText: _leyendo == posId
+                        ? 'Leyendo la foto…'
+                        : (r.serieDudosa && (r.numeroSerie?.isNotEmpty ?? false)
+                            ? 'Compruébalo: la foto no se leía del todo bien'
+                            : null),
+                    helperStyle: r.serieDudosa
+                        ? const TextStyle(color: AppColors.warning) : null,
                     suffixIcon: _leyendo == posId
                         ? const Padding(
                             padding: EdgeInsets.all(10),
@@ -1365,7 +1378,8 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
                                 child: CircularProgressIndicator(strokeWidth: 2)))
                         : null,
                   ),
-                  onChanged: (v) => r.numeroSerie = v,
+                  // Si lo toca una persona, deja de ser una lectura dudosa.
+                  onChanged: (v) { r.numeroSerie = v; r.serieDudosa = false; },
                 ),
               ),
               const SizedBox(width: 10),

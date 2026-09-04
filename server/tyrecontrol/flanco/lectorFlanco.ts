@@ -69,7 +69,9 @@ REGLAS QUE NO PUEDES SALTARTE:
 1. NO ADIVINES. Si un dato no se ve, ponlo a null. Un dato inventado con
    aspecto de bueno es peor que un hueco: lo confirmarán sin mirar.
 2. Si dudas entre dos lecturas (un 6 que puede ser un 8), da la que creas y
-   BAJA la confianza por debajo de 0.5.
+   BAJA la confianza por debajo de 0.5. PERO DALA: no la conviertas en null.
+   Un número con poca confianza se le enseña al técnico para que lo compruebe;
+   un hueco le obliga a teclear diez dígitos a mano.
 3. No deduzcas la medida del aspecto de la rueda ni el modelo del dibujo de la
    banda de rodadura. Solo texto leído.
 4. Si en la foto hay más de un neumático, lee el que esté en primer plano y
