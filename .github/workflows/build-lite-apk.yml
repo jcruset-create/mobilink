@@ -181,23 +181,63 @@ jobs:
             de los dos casos es.
           files: lite_app/build/app/outputs/flutter-apk/mobilink-assist-lite-*.apk
 
-      # Se guarda la versión nueva DESPUÉS de publicar: si el build falla, el
-      # número no se quema. El [skip ci] evita que este commit dispare otro
-      # build (pubspec.yaml está dentro de las rutas que vigila el workflow) y
-      # con él, un bucle infinito.
+      # ── Guardar la versión nueva en el repositorio ─────────────────────────
+      #
+      # Se guarda DESPUÉS de publicar: si el build falla, el número no se
+      # quema. El [skip ci] evita que este commit dispare otro build y, con
+      # él, un bucle infinito.
+      #
+      # POR QUÉ NO ES UN «git push» Y YA
+      #
+      # Mientras compilamos (seis minutos) alguien puede haber empujado a la
+      # rama, y entonces el push se rechaza. El reintento de antes hacía
+      # «git pull --rebase» y NUNCA funcionó: «flutter pub get» deja
+      # pubspec.lock modificado, git se niega a rebasar con cambios sin
+      # guardar, y el segundo push fallaba igual que el primero. Pasó tres
+      # veces en un día y nadie se enteró, porque el aviso decía que la APK
+      # estaba publicada —que era verdad— y que el centro de descargas ya la
+      # servía —que en una rama es MENTIRA: el centro de descargas sirve la
+      # versión de main—.
+      #
+      # Ahora no se rebasa nada: se coge la punta ACTUAL de la rama, se le
+      # escribe la versión encima y se empuja. Si vuelve a llegar alguien
+      # entre medias, se repite. Y nunca se baja: si la punta ya lleva un
+      # build más nuevo que el nuestro, no hay nada que guardar.
       - name: Guardar la versión nueva en el repositorio
         if: ${{ env.KS_B64 != '' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pubspec.yaml lib/config.dart
-          if git diff --cached --quiet; then
-            echo "El pubspec no ha cambiado; nada que guardar."
-            exit 0
-          fi
-          git commit -m "chore(lite): version ${{ steps.ver.outputs.version }} [skip ci]"
-          if ! git push origin HEAD:${{ github.ref_name }}; then
-            echo "::warning::No se ha podido guardar la versión" \
-                 "${{ steps.ver.outputs.version }} en ${{ github.ref_name }}" \
-                 "(seguramente otro push llegó antes). La APK publicada es válida."
-          fi
+          NOMBRE="${{ steps.ver.outputs.nombre }}"
+          BUILD="${{ steps.ver.outputs.build }}"
+          RAMA="${{ github.ref_name }}"
+
+          for INTENTO in 1 2 3 4; do
+            git fetch -q origin "$RAMA"
+            # La punta de verdad, limpia. Tira pubspec.lock y lo que haya
+            # dejado la compilación; el APK ya está publicado y no se toca.
+            git reset -q --hard "origin/$RAMA"
+
+            EN_PUNTA=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+            BUILD_PUNTA=${EN_PUNTA#*+}
+            if [ "${BUILD_PUNTA:-0}" -ge "$BUILD" ] 2>/dev/null; then
+              echo "La punta de $RAMA ya lleva $EN_PUNTA (build $BUILD_PUNTA ≥ $BUILD): nada que guardar."
+              exit 0
+            fi
+
+            sed -i "s/^version: .*/version: $NOMBRE+$BUILD/" pubspec.yaml
+            sed -i "s/^const String kAppVersion = .*/const String kAppVersion = '$NOMBRE+$BUILD';/" lib/config.dart
+            git add -A
+            git commit -q -m "chore(lite): version $NOMBRE+$BUILD [skip ci]"
+            if git push -q origin "HEAD:$RAMA"; then
+              echo "Guardada la versión $NOMBRE+$BUILD en $RAMA (intento $INTENTO)."
+              exit 0
+            fi
+            echo "Push rechazado (intento $INTENTO): alguien ha empujado a $RAMA entre medias. Se repite sobre la punta nueva."
+            sleep $((INTENTO * 3))
+          done
+
+          echo "::warning::No se ha podido guardar la versión $NOMBRE+$BUILD en $RAMA" \
+               "tras cuatro intentos. La release está publicada. Si $RAMA es main, el" \
+               "centro de descargas se ha quedado con la versión ANTERIOR: hay que" \
+               "poner $NOMBRE+$BUILD en el pubspec a mano."
