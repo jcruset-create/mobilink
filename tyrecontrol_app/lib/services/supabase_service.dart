@@ -1387,6 +1387,39 @@ class TyreControlApi {
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  /// Los partes de trabajo recientes de TODOS los vehículos que este operario
+  /// puede ver. Es el mismo histórico que la ficha del vehículo, sin filtrar
+  /// por vehículo: no hay dos históricos, hay uno con y sin filtro.
+  ///
+  /// La RLS de tc_intervenciones ya limita lo que se ve a la empresa del
+  /// operario; aquí no se comprueba nada por segunda vez ni se confía en un
+  /// filtro de pantalla para guardar un secreto.
+  ///
+  /// NO lleva filtro de texto: buscar por matrícula obligaría a filtrar sobre
+  /// la tabla embebida, que en PostgREST es delicado y desde aquí no se puede
+  /// probar contra el Supabase de verdad. Se traen los últimos y la pantalla
+  /// filtra sobre ellos, que para una lista de este tamaño da igual y no
+  /// depende de una sintaxis que nadie ha visto funcionar.
+  static Future<List<Map<String, dynamic>>> listarIntervencionesRecientes({
+    int limite = 200,
+    bool soloMias = false,
+  }) async {
+    // Igual que en la ficha: primero se recogen las operaciones que se
+    // quedaron sueltas, para que salgan con su número de parte.
+    try {
+      await _db.rpc('tc_agrupar_operaciones_sueltas', params: {'p_minutos': 30});
+    } catch (_) {/* se consolidará en la siguiente visita */}
+
+    var q = _db.from('tc_intervenciones')
+        .select('*, vehiculo:tc_vehiculos(matricula, numero_unidad)');
+    if (soloMias) {
+      final uid = _db.auth.currentUser?.id;
+      if (uid != null) q = q.eq('tecnico_id', uid);
+    }
+    final data = await q.order('created_at', ascending: false).limit(limite);
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
   /// Operaciones de una intervención (con posición y neumático).
   static Future<List<Map<String, dynamic>>> listarOperacionesDeIntervencion(String intervencionId) async {
     final data = await _db.from('operaciones_neumaticos').select(
