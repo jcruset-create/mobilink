@@ -176,10 +176,31 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.post("/api/payments/create-deposit", authenticate, requireModule("administracion"), async (req, res) => {
   try {
-    const { jobId, customerName, customerPhone, amountEuros, description } = req.body;
+    const {
+      jobId,
+      customerName,
+      customerPhone,
+      amountEuros,
+      description,
+      templateId,
+      totalAmountCents,
+      terms,
+    } = req.body;
 
     const reference = String(jobId || "").trim();
     const amountCents = Math.round(Number(amountEuros || 0) * 100);
+
+    /*
+     * La plantilla llega ya renderizada desde la pantalla y aquí solo se
+     * guarda. El servidor no la vuelve a componer a propósito: si compusiera
+     * su propia versión, el cliente podría acabar pagando con unas condiciones
+     * en el móvil y otras distintas archivadas, que es justo lo que este campo
+     * existe para impedir.
+     */
+    const template = String(templateId || "libre").trim() || "libre";
+    const termsText = String(terms || "");
+    const totalCents = Math.round(Number(totalAmountCents || 0));
+    const totalGuardado = Number.isFinite(totalCents) && totalCents > 0 ? totalCents : null;
 
     if (!reference) {
       return res.status(400).json({
@@ -192,6 +213,13 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
       return res.status(400).json({
         success: false,
         message: "El importe mínimo es 1 €",
+      });
+    }
+
+    if (totalGuardado !== null && totalGuardado < amountCents) {
+      return res.status(400).json({
+        success: false,
+        message: "El total del presupuesto no puede ser menor que la paga y señal",
       });
     }
 
@@ -223,6 +251,8 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
         customerName: String(customerName || ""),
         customerPhone: String(customerPhone || ""),
         amountEuros: String(amountEuros || ""),
+        // Para poder ver desde el panel de Stripe bajo qué condiciones se cobró.
+        templateId: template,
       },
     });
 
@@ -237,9 +267,12 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
           stripe_session_id,
           payment_url,
           created_at_ms,
-          description
+          description,
+          template_id,
+          total_amount_cents,
+          terms_text
         )
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11)
       `,
       [
         reference,
@@ -250,6 +283,9 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
         session.url,
         Date.now(),
         desc,
+        template,
+        totalGuardado,
+        termsText,
       ]
     );
 
@@ -340,7 +376,10 @@ app.get("/api/payments/status/:reference", authenticate, requireModule("administ
           stripe_payment_intent_id,
           payment_url,
           paid_at_ms,
-          created_at_ms
+          created_at_ms,
+          template_id,
+          total_amount_cents,
+          terms_text
         FROM payments
         WHERE reference = $1
         ORDER BY created_at_ms DESC
@@ -389,7 +428,9 @@ app.get("/api/payments/recent", authenticate, requireModule("administracion"), a
           payment_url,
           paid_at_ms,
           created_at_ms,
-          description
+          description,
+          template_id,
+          total_amount_cents
         FROM payments
         ORDER BY created_at_ms DESC
         LIMIT 50
