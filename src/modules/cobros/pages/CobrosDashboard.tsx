@@ -23,6 +23,7 @@ type Payment = {
   description: string;
   template_id: string | null;
   total_amount_cents: number | null;
+  job_id: number | null;
 };
 
 type PaymentStatus = {
@@ -39,7 +40,12 @@ export default function CobrosDashboard() {
   const navigate = useNavigate();
 
   // Form
-  const [jobId, setJobId] = useState("");
+  /** Asistencia a la que se imputa la señal. Opcional: la mayoría de cobros no la tienen. */
+  const [asistencia, setAsistencia] = useState("");
+  /** Referencia que se consulta en "estado del pago". Se rellena sola al crear un cobro. */
+  const [refConsulta, setRefConsulta] = useState("");
+  /** La que ha repartido el servidor en el último cobro creado. */
+  const [referenciaCreada, setReferenciaCreada] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [amountEuros, setAmountEuros] = useState("50");
@@ -110,7 +116,14 @@ export default function CobrosDashboard() {
         method: "POST",
         headers: await sessionHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
-          jobId: Number(jobId),
+          /*
+           * La referencia la reparte el servidor: es el único que puede
+           * garantizar que no se repita entre dos personas creando cobros a la
+           * vez. La asistencia, si la hay, viaja aparte.
+           */
+          autoReference: true,
+          reference: "",
+          jobId: asistencia.trim() ? Number(asistencia) : null,
           customerName,
           customerPhone,
           amountEuros: senalCentimos / 100,
@@ -128,7 +141,9 @@ export default function CobrosDashboard() {
       const data = await response.json();
       if (!data.success) throw new Error(data.message || "No se pudo crear el enlace");
       setPaymentUrl(data.url);
-      setMessage("Enlace de pago creado correctamente.");
+      setReferenciaCreada(String(data.reference ?? ""));
+      setRefConsulta(String(data.reference ?? ""));
+      setMessage(`Enlace de pago creado. Referencia ${data.reference}.`);
       loadHistory();
     } catch (error: any) {
       setMessage(error.message || "Error creando pago");
@@ -141,7 +156,7 @@ export default function CobrosDashboard() {
     setStatusLoading(true);
     setMessage("");
     try {
-      const response = await fetch(`/api/payments/status/${encodeURIComponent(jobId)}`, { headers: await sessionHeaders() });
+      const response = await fetch(`/api/payments/status/${encodeURIComponent(refConsulta.trim())}`, { headers: await sessionHeaders() });
       const data = await response.json();
       if (!data.success) throw new Error(data.message || "No se pudo consultar el estado");
       setPaymentStatus({
@@ -264,10 +279,23 @@ export default function CobrosDashboard() {
 
           <div>
             <label className="block text-sm font-bold mb-2">Referencia cobro</label>
+            <div className="w-full rounded-xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-slate-400">
+              {referenciaCreada
+                ? `Último cobro creado: nº ${referenciaCreada}`
+                : "Se asigna sola al crear el cobro."}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-bold mb-2">
+              Nº de asistencia <span className="font-normal text-slate-400">(opcional)</span>
+            </label>
             <input
-              value={jobId}
-              onChange={(e) => setJobId(e.target.value)}
-              placeholder="Ejemplo: 33"
+              type="number"
+              min="1"
+              value={asistencia}
+              onChange={(e) => setAsistencia(e.target.value)}
+              placeholder="Solo si el cobro es la señal de una asistencia"
               className="w-full rounded-xl bg-slate-800 border border-slate-600 px-4 py-3 text-white outline-none"
             />
           </div>
@@ -374,14 +402,6 @@ export default function CobrosDashboard() {
             {loading ? "Creando..." : "Crear enlace de pago"}
           </button>
 
-          <button
-            onClick={checkPaymentStatus}
-            disabled={statusLoading || !jobId}
-            className="w-full rounded-xl bg-blue-500 hover:bg-blue-400 disabled:bg-slate-600 text-white font-black py-3"
-          >
-            {statusLoading ? "Consultando..." : "Consultar estado del pago"}
-          </button>
-
           {paymentUrl && (
             <div className="bg-slate-800 border border-emerald-500 rounded-xl p-4 space-y-3">
               <div className="text-sm text-slate-300">Enlace generado:</div>
@@ -420,6 +440,27 @@ export default function CobrosDashboard() {
 
           <div className="bg-slate-800 rounded-xl p-4">
             <div className="text-sm text-slate-400">Estado del pago</div>
+
+            {/*
+              La consulta tiene su propio campo: la referencia ya no se teclea
+              al crear, pero sí hay que poder mirar un cobro de ayer.
+            */}
+            <div className="mt-2 flex flex-col sm:flex-row gap-2">
+              <input
+                value={refConsulta}
+                onChange={(e) => setRefConsulta(e.target.value)}
+                placeholder="Nº de cobro"
+                className="flex-1 rounded-xl bg-slate-900 border border-slate-600 px-4 py-2 text-white outline-none"
+              />
+              <button
+                onClick={checkPaymentStatus}
+                disabled={statusLoading || !refConsulta.trim()}
+                className="rounded-xl bg-blue-500 hover:bg-blue-400 disabled:bg-slate-600 text-white font-bold px-4 py-2"
+              >
+                {statusLoading ? "Consultando..." : "Consultar"}
+              </button>
+            </div>
+
             <div className="text-xl font-black mt-1">
               {!paymentStatus && "Sin consultar"}
               {paymentStatus && isPaid && "✅ Pagado"}
@@ -427,9 +468,9 @@ export default function CobrosDashboard() {
             </div>
             {paymentStatus && (
               <div className="mt-3 text-sm text-slate-300 space-y-1">
-                <div>Asistencia: {paymentStatus.id}</div>
-                <div>Matrícula: {paymentStatus.plate || "Sin matrícula"}</div>
-                <div>Importe pagado: {((paymentStatus.depositAmount || 0) / 100).toFixed(2)} €</div>
+                {/* Antes ponía "Asistencia" y "Matrícula" aquí: es el cobro y su referencia. */}
+                <div>Cobro nº {paymentStatus.plate || paymentStatus.id}</div>
+                <div>Importe: {euros(Number(paymentStatus.depositAmount || 0))}</div>
                 <div>
                   Fecha pago:{" "}
                   {paymentStatus.depositPaidAtMs
@@ -502,7 +543,10 @@ export default function CobrosDashboard() {
                   <div className="flex-1 min-w-0">
                     <div className="font-bold text-white">
                       {p.customer_name || "Sin nombre"}{" "}
-                      <span className="text-slate-400 font-normal text-sm">· ref. {p.reference}</span>
+                      <span className="text-slate-400 font-normal text-sm">
+                        · nº {p.reference}
+                        {p.job_id ? ` · asistencia ${p.job_id}` : ""}
+                      </span>
                     </div>
                     {p.description && (
                       <div className="text-sm text-slate-300 mt-0.5">{p.description}</div>
