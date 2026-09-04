@@ -73,6 +73,7 @@ import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenS
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
+import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 
 const twilioClient = twilio(
@@ -178,6 +179,8 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
   try {
     const {
       jobId,
+      reference: referenciaPedida,
+      autoReference,
       customerName,
       customerPhone,
       amountEuros,
@@ -187,7 +190,28 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
       terms,
     } = req.body;
 
-    const reference = String(jobId || "").trim();
+    /*
+     * La referencia la reparte el servidor salvo que llegue escrita.
+     *
+     * El orden importa: primero lo que mande quien llama (la APK sigue
+     * mandando la suya en `jobId`), y solo si viene vacío y lo pide se saca
+     * número. Así ningún cliente antiguo se queda sin referencia ni gasta
+     * números del contador sin querer.
+     */
+    const escrita = autoReference
+      ? String(referenciaPedida ?? "").trim()
+      : String(referenciaPedida ?? jobId ?? "").trim();
+    const reference = escrita || (autoReference ? await siguienteReferencia(db) : "");
+
+    /*
+     * La asistencia va aparte de la referencia. Solo con un número aquí se
+     * marca la señal como pagada en `jobs`: con la referencia automática, un
+     * cobro cualquiera dejaría de significar "asistencia con ese id".
+     */
+    const jobVinculado = Number(jobId);
+    const asistencia =
+      Number.isInteger(jobVinculado) && jobVinculado > 0 ? jobVinculado : null;
+
     const amountCents = Math.round(Number(amountEuros || 0) * 100);
 
     /*
@@ -247,7 +271,8 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
 
       metadata: {
         reference,
-        jobId: reference,
+        // Solo si hay asistencia de verdad: el webhook marca `jobs` con esto.
+        ...(asistencia !== null ? { jobId: String(asistencia) } : {}),
         customerName: String(customerName || ""),
         customerPhone: String(customerPhone || ""),
         amountEuros: String(amountEuros || ""),
@@ -270,9 +295,10 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
           description,
           template_id,
           total_amount_cents,
-          terms_text
+          terms_text,
+          job_id
         )
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12)
       `,
       [
         reference,
@@ -286,6 +312,7 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
         template,
         totalGuardado,
         termsText,
+        asistencia,
       ]
     );
 
@@ -430,7 +457,8 @@ app.get("/api/payments/recent", authenticate, requireModule("administracion"), a
           created_at_ms,
           description,
           template_id,
-          total_amount_cents
+          total_amount_cents,
+          job_id
         FROM payments
         ORDER BY created_at_ms DESC
         LIMIT 50
