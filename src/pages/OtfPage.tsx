@@ -12,13 +12,12 @@ import {
   fetchOtfPlantillas,
   createOtfPlantilla,
   updateOtfPlantilla,
-  fetchTyreControlInfo,
   cancelOtf,
   type OtfPlantilla,
-  type TyreControlInfo,
 } from "../modules/roadsideAssistanceApi";
 import type { KnownPlace } from "../modules/roadsideAssistanceTypes";
 import KnownPlaceMapModal from "../components/KnownPlaceMapModal";
+import TyreControlVehiculo from "../components/TyreControlVehiculo";
 import AssistSidebar from "../components/AssistSidebar";
 
 const STATUS_OTF: Record<string, string> = {
@@ -279,7 +278,7 @@ function PresupuestarModal({ otf, onClose }: { otf: any; onClose: () => void }) 
         if (!vivo) return;
         if (!res.ok) throw new Error(data?.message || data?.error || `Error ${res.status}`);
         setPreview(data);
-      } catch (e: any) {
+      } catch (e) {
         if (vivo) setError(e.message);
       }
     })();
@@ -414,24 +413,34 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
   const [detalle, setDetalle] = useState("");
   const [observaciones, setObservaciones] = useState("");
   const [adding, setAdding] = useState(false);
-  const [tyreInfo, setTyreInfo] = useState<TyreControlInfo | null>(null);
+  const [errorAlta, setErrorAlta] = useState<string | null>(null);
+  // La consulta a TyreControl (y su antirrebote) vive ahora dentro de
+  // TyreControlVehiculo: la hacían dos pantallas con dos copias del mismo
+  // efecto.
 
-  // Tarjeta TyreControl: al escribir una matrícula completa (>= 6 caracteres)
-  // se consulta el vehículo y su última revisión. Con debounce para no
-  // disparar una petición por tecla.
-  useEffect(() => {
-    const p = plate.trim();
-    if (p.replace(/[^A-Z0-9]/gi, "").length < 6) { setTyreInfo(null); return; }
-    const timer = setTimeout(() => {
-      fetchTyreControlInfo(p).then(setTyreInfo).catch(() => setTyreInfo(null));
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [plate]);
+  /*
+   * Qué falta para poder añadir el trabajo.
+   *
+   * Antes esto era un `return` mudo dentro de `add()`: al pulsar el botón sin
+   * plantilla ni detalle no pasaba absolutamente nada, ni un aviso. Quien lo
+   * usaba daba por hecho que la aplicación estaba rota, y con razón: un botón
+   * que no responde y no explica por qué es indistinguible de uno averiado.
+   *
+   * Las observaciones NO valen como descripción del trabajo: son el «dónde
+   * está» —la plaza, el eje—, no el «qué hay que hacer», y aceptarlas dejaría
+   * trabajos sin decir qué se hace.
+   */
+  const faltaParaAnadir = !plate.trim()
+    ? "Indica la matrícula."
+    : !trabajoPlantilla.trim() && !detalle.trim()
+      ? "Elige un trabajo de la plantilla o escribe el detalle manual."
+      : null;
 
   async function add() {
     if (adding) return; // evita el doble clic → trabajo duplicado
-    if (!plate.trim() || (!trabajoPlantilla.trim() && !detalle.trim())) return;
+    if (faltaParaAnadir) { setErrorAlta(faltaParaAnadir); return; }
     setAdding(true);
+    setErrorAlta(null);
     try {
       await addOtfTrabajo(otf.id, {
         plate,
@@ -442,6 +451,14 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
       });
       setPlate(""); setTP(""); setDetalle(""); setObservaciones("");
       onChange();
+    } catch (e: any) {
+      /*
+       * Sin este catch, un fallo del servidor tambien se veia como «no hace
+       * nada»: la promesa se rechazaba, el `finally` quitaba el «Añadiendo…» y
+       * el trabajo no aparecia, sin ninguna explicacion.
+       */
+      const motivo = e instanceof Error ? e.message : "";
+      setErrorAlta(motivo || "No se ha podido añadir el trabajo. Vuelve a intentarlo.");
     } finally {
       setAdding(false);
     }
@@ -554,33 +571,29 @@ function OtfDetail({ otf, plantillas, onChange }: { otf: any; plantillas: OtfPla
             className={`${inputCls} col-span-2`}
           />
         </div>
-        {tyreInfo?.found && tyreInfo.vehiculo && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-xs">
-            <span className="font-black text-cyan-300">🛞 TyreControl</span>
-            <span className="font-bold text-cyan-200">
-              {tyreInfo.vehiculo.matricula}
-              {tyreInfo.vehiculo.marca ? ` · ${tyreInfo.vehiculo.marca}${tyreInfo.vehiculo.modelo ? ` ${tyreInfo.vehiculo.modelo}` : ""}` : ""}
-              {tyreInfo.vehiculo.kmActual != null ? ` · ${tyreInfo.vehiculo.kmActual.toLocaleString("es-ES")} km` : ""}
-            </span>
-            {tyreInfo.ultimaRevision ? (
-              <span className={tyreInfo.ultimaRevision.alertas > 0 ? "font-bold text-red-300" : "text-cyan-300"}>
-                Última revisión {new Date(tyreInfo.ultimaRevision.fecha).toLocaleDateString("es-ES")}
-                {tyreInfo.ultimaRevision.minProfundidadMm != null ? ` · mín. ${tyreInfo.ultimaRevision.minProfundidadMm} mm` : ""}
-                {tyreInfo.ultimaRevision.alertas > 0 ? ` · ⚠ ${tyreInfo.ultimaRevision.alertas} alerta${tyreInfo.ultimaRevision.alertas !== 1 ? "s" : ""}` : " · sin alertas"}
-              </span>
-            ) : (
-              <span className="text-cyan-300">Sin revisiones registradas</span>
-            )}
-          </div>
-        )}
-        {tyreInfo && !tyreInfo.found && (
-          <div className="mt-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-500">
-            🛞 Matrícula no encontrada en TyreControl
-          </div>
-        )}
+        {/*
+          * Antes esta tarjeta enseñaba solo la última revisión. Ahora enseña la
+          * configuración real: ejes, posiciones y qué neumático hay montado en
+          * cada una. Sigue siendo SOLO LECTURA — todavía no se planifica nada
+          * por posición.
+          */}
+        <div className="mt-2">
+          <TyreControlVehiculo plate={plate} modo="completo" />
+        </div>
+        {/*
+          El botón NO se deshabilita a propósito: un botón gris que tampoco
+          responde deja la misma duda que el fallo original. Se deja pulsable
+          para que el clic tenga siempre una consecuencia visible, y lo que
+          falta se dice antes y después de pulsar.
+        */}
         <button onClick={add} disabled={adding} className="mt-2 w-full rounded-lg bg-orange-600 px-3 py-2 text-sm font-black text-white hover:bg-orange-500 disabled:opacity-50">
           {adding ? "Añadiendo…" : "+ Añadir trabajo"}
         </button>
+        {(errorAlta || faltaParaAnadir) && (
+          <p className={`mt-1.5 text-xs font-semibold ${errorAlta ? "text-amber-300" : "text-slate-400"}`}>
+            {errorAlta ?? faltaParaAnadir}
+          </p>
+        )}
       </div>
     </div>
   );

@@ -671,12 +671,45 @@ export async function corregirPosicion(params: { montajeId: string; posicionCorr
   return data as string;
 }
 
-export async function corregirMontado(params: { montajeId: string; neumaticoCorrectoId: string; observaciones?: string | null }): Promise<string> {
+export async function corregirMontado(params: {
+  montajeId: string; neumaticoCorrectoId: string; observaciones?: string | null;
+  revisionId?: string | null; metodo?: string | null;
+}): Promise<string> {
   const { data, error } = await supabase.rpc("tc_corregir_montado", {
     p_montaje: params.montajeId, p_neumatico_correcto: params.neumaticoCorrectoId, p_obs: params.observaciones ?? null,
+    // De qué revisión salió y cómo se identificó. Sin esto, dentro de seis
+    // meses la corrección es un cambio sin explicación.
+    p_revision: params.revisionId ?? null, p_metodo: params.metodo ?? null,
   });
   if (error) throw new Error(error.message);
   return data as string;
+}
+
+/**
+ * Neumáticos que pueden ser "el que de verdad hay puesto" en una posición.
+ *
+ * NO sirve listarNeumaticosDisponibles: esa solo devuelve almacén y reservado,
+ * y la goma que aparece en una revisión de papel suele estar en cualquier otro
+ * estado —no localizada, extraviada, usada, pendiente de reparar— justamente
+ * porque el registro estaba mal. Se excluyen las montadas (ya ruedan en otro
+ * sitio y la base de datos lo rechazaría) y las descartadas.
+ *
+ * Mismo criterio que buscarNeumaticosParaCorregir en la APK.
+ */
+export async function buscarNeumaticosParaCorregir(empresaId: string, texto: string): Promise<Neumatico[]> {
+  let q = supabase.from("tc_neumaticos").select("*")
+    .eq("empresa_id", empresaId).eq("activo", true)
+    .not("estado", "in", '("montado","descartado")');
+  const t = texto.trim();
+  if (t) {
+    q = q.or([
+      `numero_interno.ilike.%${t}%`, `codigo_interno.ilike.%${t}%`,
+      `numero_serie.ilike.%${t}%`, `rfid_epc.ilike.%${t}%`, `dot.ilike.%${t}%`,
+    ].join(","));
+  }
+  const { data, error } = await q.order("codigo_interno").limit(50);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Neumatico[];
 }
 
 export async function historialNeumatico(neumaticoId: string): Promise<HistorialMontaje[]> {
@@ -1188,6 +1221,8 @@ export async function listarIntervenciones(vehiculoId: string): Promise<Interven
 
 export interface FiltrosOperaciones {
   empresaId?: string; vehiculoId?: string; neumaticoId?: string; tipo?: TipoOperacion; estado?: string; intervencionId?: string; desde?: string; hasta?: string;
+  /** Fuera las correcciones de dato: no son trabajo. Ver filtrarOperaciones. */
+  sinCorrecciones?: boolean;
 }
 
 /**
@@ -1204,6 +1239,11 @@ function filtrarOperaciones<T>(q: T, f?: FiltrosOperaciones): T {
   if (f?.tipo) r = r.eq("tipo_operacion", f.tipo);
   if (f?.estado) r = r.eq("status", f.estado);
   if (f?.intervencionId) r = r.eq("intervencion_id", f.intervencionId);
+  // Una corrección no es un trabajo: no se monta ni se desmonta nada, no
+  // genera coste ni mano de obra. Para el cliente esta pantalla se llama
+  // "Trabajos realizados", así que enseñarle ahí una corrección de dato es
+  // decirle que se hizo algo en su vehículo que no se hizo.
+  if (f?.sinCorrecciones) r = r.eq("is_correccion", false);
   if (f?.desde) r = r.gte("fecha_operacion", f.desde);
   if (f?.hasta) r = r.lte("fecha_operacion", f.hasta);
   return r as T;
@@ -2719,6 +2759,48 @@ export async function listarFotosCatalogoPorModelo(): Promise<Record<string, str
 }
 
 const REFERENCIA_SELECT = "*, modelo:tc_cat_modelos_neumatico(*, marca:tc_cat_marcas_neumatico(*)), tyre_size:tyre_sizes(*)";
+
+/**
+ * Referencias que un técnico dio de alta desde una revisión y nadie ha
+ * repasado. Se listan aparte porque son las que pueden llevar el nombre mal
+ * escrito o duplicar una que ya existía con otra grafía.
+ */
+export async function listarReferenciasPendientes(): Promise<ReferenciaNeumatico[]> {
+  const { data, error } = await supabase.from("tc_referencias_neumatico")
+    .select(REFERENCIA_SELECT).eq("activo", true).eq("pendiente_validar", true)
+    .order("referencia_completa");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as ReferenciaNeumatico[];
+}
+
+/**
+ * Vehículos que un técnico dio de alta desde la tablet y nadie ha repasado.
+ *
+ * Nacen con lo imprescindible para sostener un parte —empresa, matrícula,
+ * tipo y medida— y sin marca ni modelo, porque preguntárselas al operario en
+ * el arcén es la forma de que abandone. Alguien tiene que completarlas, y sin
+ * esta lista nadie se entera de que están.
+ */
+export async function listarVehiculosPendientes(): Promise<Vehiculo[]> {
+  const { data, error } = await supabase.from("tc_vehiculos")
+    .select("*, empresa:tc_empresas(*), tipo:tc_tipos_vehiculo(*)")
+    .eq("activo", true).eq("pendiente_validar", true)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Vehiculo[];
+}
+
+/** Da por bueno un vehículo dado de alta desde la tablet. Solo administradores. */
+export async function validarVehiculo(id: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_validar_vehiculo", { p_vehiculo: id });
+  if (error) throw new Error(error.message);
+}
+
+/** Da por buena una referencia provisional. Solo administradores. */
+export async function validarReferencia(id: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_validar_referencia", { p_referencia: id });
+  if (error) throw new Error(error.message);
+}
 
 export async function listarReferenciasNeumatico(filtros?: {
   q?: string; marcaId?: string; modeloId?: string; eje?: string; aplicacion?: string; ms?: boolean; tresPmsf?: boolean;

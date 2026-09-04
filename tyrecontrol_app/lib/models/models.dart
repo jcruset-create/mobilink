@@ -64,6 +64,9 @@ class Vehiculo {
   final num kmActual;
   final bool activo;
   final String? webfleetVehicleId; // objeto Webfleet enlazado (para km automáticos)
+  /// Nació en la tablet con lo mínimo y le falta marca, modelo o delegación.
+  /// Un administrador lo completa desde el panel.
+  final bool pendienteValidar;
   // Relaciones embebidas opcionales (segun el select usado)
   final Empresa? empresa;
   final TipoVehiculo? tipo;
@@ -80,6 +83,7 @@ class Vehiculo {
     required this.kmActual,
     required this.activo,
     this.webfleetVehicleId,
+    this.pendienteValidar = false,
     this.empresa,
     this.tipo,
   });
@@ -103,6 +107,7 @@ class Vehiculo {
         kmActual: j['km_actual'] ?? 0,
         activo: j['activo'] ?? true,
         webfleetVehicleId: j['webfleet_vehicle_id'],
+        pendienteValidar: j['pendiente_validar'] ?? false,
         empresa: j['empresa'] is Map ? Empresa.fromJson(Map<String, dynamic>.from(j['empresa'])) : null,
         tipo: j['tipo'] is Map ? TipoVehiculo.fromJson(Map<String, dynamic>.from(j['tipo'])) : null,
       );

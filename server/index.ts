@@ -48,6 +48,14 @@ import {
   registrarFicheroDeAssist,
 } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
+import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
+import { createTyreControlRouter } from "./tyrecontrol/router.ts";
+import { engancheCierreTyreControl } from "./tyrecontrol/cierreAsistencia.ts";
+import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
+import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
+import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
+import { resolverVehiculo as resolverVehiculoTc } from "./tyrecontrol/vehiculos.ts";
+import { estadoDeVehiculo as estadoVehiculoTc } from "./tyrecontrol/estadoVehiculo.ts";
 import {
   initCorreo,
   mountCorreo,
@@ -58,6 +66,8 @@ import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
 import { initExcepciones } from "./excepciones/schema.ts";
 import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
+import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
+import { mountParte } from "./tyrecontrol/parte/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
@@ -3852,6 +3862,75 @@ app.get("/api/presencia-operator/historial", requirePresenciaEmployee, async (re
 });
 
 /* =========================================================
+   SAFETY MANAGER — subida de documentos (panel web)
+   Sube el PDF a Supabase Storage (bucket público) y devuelve
+   la URL pública para guardarla en sm_safety_documents.
+========================================================= */
+
+const SAFETY_DOCS_BUCKET = process.env.SUPABASE_SAFETY_DOCS_BUCKET || "safety-docs";
+let safetyDocsBucketReady = false;
+
+async function ensureSafetyDocsBucket() {
+  if (safetyDocsBucketReady) return;
+  const { data } = await supabase.storage.getBucket(SAFETY_DOCS_BUCKET);
+  if (!data) {
+    const { error } = await supabase.storage.createBucket(SAFETY_DOCS_BUCKET, {
+      public: true,
+      fileSizeLimit: "10MB",
+    });
+    if (error && !String(error.message || "").includes("already exists")) {
+      throw error;
+    }
+  }
+  safetyDocsBucketReady = true;
+}
+
+app.post(
+  "/api/safety/documents/upload",
+  protectWhenStrict(requirePanelRole),
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) return res.status(400).json({ error: "Falta el archivo" });
+
+      const ALLOWED = new Set([
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+      ]);
+      if (!ALLOWED.has(file.mimetype)) {
+        return res.status(400).json({ error: "Solo se admiten PDF o imágenes" });
+      }
+
+      await ensureSafetyDocsBucket();
+
+      const safeName = (file.originalname || "documento")
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .replace(/[^a-zA-Z0-9._-]+/g, "-")
+        .replace(/-+/g, "-")
+        .slice(-80);
+      const path = `${Date.now()}-${safeName}`;
+
+      const { error: upErr } = await supabase.storage
+        .from(SAFETY_DOCS_BUCKET)
+        .upload(path, file.buffer, { contentType: file.mimetype });
+      if (upErr) throw upErr;
+
+      const { data: pub } = supabase.storage
+        .from(SAFETY_DOCS_BUCKET)
+        .getPublicUrl(path);
+      res.json({ url: pub.publicUrl });
+    } catch (error) {
+      console.error("POST /api/safety/documents/upload error:", error);
+      res.status(500).json({ error: "Error subiendo el documento" });
+    }
+  }
+);
+
+/* =========================================================
    SAFETY OPERATOR (APK Mobilink Safety — técnicos)
    Reutiliza la auth de presencia (sea_employees + PIN, cabeceras
    x-presencia-employee + x-presencia-pin). Solo lectura de sus
@@ -6943,6 +7022,19 @@ app.post(
       let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
       // Generar reportToken al finalizar
+      /*
+       * TyreControl. Va DESPUÉS de que la asistencia ya esté guardada y sin
+       * `await`: el técnico no puede esperar a que conteste otro sistema, y un
+       * problema con TC no puede impedir que una asistencia se cierre.
+       *
+       * Hoy no manda nada — solo prepara y anota el sobre. Ver
+       * `server/tyrecontrol/cierreAsistencia.ts`.
+       */
+      if (status === "finalizada") {
+        void engancheCierreTyreControl(Number(id))
+          .catch((e) => console.error("[TyreControl] enganche de cierre:", e?.message));
+      }
+
       if (status === "finalizada" && !updated.reportToken) {
         const { randomUUID } = await import("crypto");
         const reportToken = randomUUID();
@@ -7709,6 +7801,19 @@ app.post(
       let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
       // ── Generar reportToken si se finaliza y no existe ya ──────────────────
+      /*
+       * TyreControl. Va DESPUÉS de que la asistencia ya esté guardada y sin
+       * `await`: el técnico no puede esperar a que conteste otro sistema, y un
+       * problema con TC no puede impedir que una asistencia se cierre.
+       *
+       * Hoy no manda nada — solo prepara y anota el sobre. Ver
+       * `server/tyrecontrol/cierreAsistencia.ts`.
+       */
+      if (status === "finalizada") {
+        void engancheCierreTyreControl(Number(id))
+          .catch((e) => console.error("[TyreControl] enganche de cierre:", e?.message));
+      }
+
       if (status === "finalizada" && !updated.reportToken) {
         const { randomUUID } = await import("crypto");
         const reportToken = randomUUID();
@@ -7798,11 +7903,14 @@ app.post(
 
 const PLATE_KINDS = new Set(["matricula_camion", "matricula_remolque"]);
 
+/*
+ * La regla vive en `server/tyrecontrol/matricula.ts`. Aquí se conserva el
+ * nombre porque lo usan una veintena de sitios, pero la comparación es una
+ * sola: tres copias de la misma normalización es como se acaba encontrando un
+ * vehículo por una vía y no por otra.
+ */
 function normalizePlateText(value: unknown) {
-  const cleaned = String(value || "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
-  return cleaned;
+  return normalizarMatriculaTc(value);
 }
 
 async function detectPlateFromImage(
@@ -11264,10 +11372,11 @@ app.get("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (_req,
     const result = await db.query(`
       SELECT data
       FROM scheduled_jobs
-      WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
-        'cancelado',
-        'eliminado'
-      )
+      -- Las citas canceladas SIGUEN en la agenda (se pintan en rojo como
+      -- histórico). Solo se ocultan las borradas de verdad, que son las que
+      -- llevan deletedAtMs o el estado 'eliminado'.
+      WHERE COALESCE(data::jsonb->>'status', '') <> 'eliminado'
+        AND data::jsonb->>'deletedAtMs' IS NULL
       ORDER BY id ASC
     `);
 
@@ -11302,6 +11411,141 @@ app.get("/api/scheduled-tech-statuses", protectWhenStrict(requirePanelRole), asy
     res.status(500).json({
       error: "Error cargando estados técnicos programados",
     });
+  }
+});
+
+/* =========================================================
+   VACACIONES: cupo anual y modo de cómputo
+========================================================= */
+
+/**
+ * Devuelve la configuración de un año: modo, días por defecto y los cupos
+ * propios por técnico. La fila con "techName" = '' es el valor por defecto.
+ */
+app.get("/api/vacaciones-config", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const anio = Number(req.query.anio) || new Date().getFullYear();
+    const workshopId = String(req.query.workshopId || "");
+
+    const result = await db.query(
+      `
+        SELECT "techName", modo, "diasPorDefecto", dias
+        FROM vacaciones_config
+        WHERE "workshopId" = $1 AND anio = $2
+      `,
+      [workshopId, anio]
+    );
+
+    const porDefecto = result.rows.find((row) => !row.techName);
+
+    const diasPorTecnico: Record<string, number> = {};
+
+    for (const row of result.rows) {
+      if (row.techName && row.dias != null) {
+        diasPorTecnico[row.techName] = Number(row.dias);
+      }
+    }
+
+    res.json({
+      anio,
+      workshopId,
+      modo: porDefecto?.modo === "laborables" ? "laborables" : "naturales",
+      diasPorDefecto:
+        porDefecto?.diasPorDefecto != null ? Number(porDefecto.diasPorDefecto) : 30,
+      diasPorTecnico,
+    });
+  } catch (error) {
+    console.error("GET /api/vacaciones-config error:", error);
+    res.status(500).json({ error: "Error cargando la configuración de vacaciones" });
+  }
+});
+
+/**
+ * Guarda la configuración de un año. Upsert fila a fila: un técnico sin cupo
+ * propio se borra de la tabla en vez de guardarse a null, para que se vea claro
+ * que hereda el valor por defecto.
+ */
+app.put("/api/vacaciones-config", requireSupervisorRole, async (req, res) => {
+  try {
+    const anio = Number(req.body?.anio);
+
+    if (!Number.isInteger(anio) || anio < 2000 || anio > 2100) {
+      return res.status(400).json({ error: "Año no válido" });
+    }
+
+    const workshopId = String(req.body?.workshopId || "");
+    const modo = req.body?.modo === "laborables" ? "laborables" : "naturales";
+
+    const diasPorDefecto = Number(req.body?.diasPorDefecto);
+
+    if (!Number.isInteger(diasPorDefecto) || diasPorDefecto < 0 || diasPorDefecto > 366) {
+      return res.status(400).json({ error: "Días por defecto no válidos" });
+    }
+
+    const diasPorTecnico =
+      req.body?.diasPorTecnico && typeof req.body.diasPorTecnico === "object"
+        ? (req.body.diasPorTecnico as Record<string, unknown>)
+        : {};
+
+    const now = Date.now();
+
+    await db.query("BEGIN");
+
+    await db.query(
+      `
+        INSERT INTO vacaciones_config (
+          "workshopId", anio, "techName", modo, "diasPorDefecto", dias,
+          "createdAtMs", "updatedAtMs"
+        )
+        VALUES ($1, $2, '', $3, $4, NULL, $5, $5)
+        ON CONFLICT ("workshopId", anio, "techName")
+        DO UPDATE SET
+          modo = EXCLUDED.modo,
+          "diasPorDefecto" = EXCLUDED."diasPorDefecto",
+          "updatedAtMs" = EXCLUDED."updatedAtMs"
+      `,
+      [workshopId, anio, modo, diasPorDefecto, now]
+    );
+
+    for (const [techName, valor] of Object.entries(diasPorTecnico)) {
+      const nombre = String(techName || "").trim();
+      if (!nombre) continue;
+
+      const dias = Number(valor);
+
+      // Sin cupo propio: se borra la fila y el técnico hereda el valor general.
+      if (!Number.isInteger(dias) || dias < 0 || dias > 366) {
+        await db.query(
+          `DELETE FROM vacaciones_config
+           WHERE "workshopId" = $1 AND anio = $2 AND "techName" = $3`,
+          [workshopId, anio, nombre]
+        );
+        continue;
+      }
+
+      await db.query(
+        `
+          INSERT INTO vacaciones_config (
+            "workshopId", anio, "techName", modo, "diasPorDefecto", dias,
+            "createdAtMs", "updatedAtMs"
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+          ON CONFLICT ("workshopId", anio, "techName")
+          DO UPDATE SET
+            dias = EXCLUDED.dias,
+            "updatedAtMs" = EXCLUDED."updatedAtMs"
+        `,
+        [workshopId, anio, nombre, modo, diasPorDefecto, dias, now]
+      );
+    }
+
+    await db.query("COMMIT");
+
+    res.json({ ok: true });
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    console.error("PUT /api/vacaciones-config error:", error);
+    res.status(500).json({ error: "Error guardando la configuración de vacaciones" });
   }
 });
 
@@ -11549,10 +11793,8 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
       const current = await db.query(`
         SELECT data
         FROM scheduled_jobs
-        WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
-          'cancelado',
-          'eliminado'
-        )
+        WHERE COALESCE(data::jsonb->>'status', '') <> 'eliminado'
+          AND data::jsonb->>'deletedAtMs' IS NULL
         ORDER BY id ASC
       `);
 
@@ -11580,18 +11822,20 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
         .toLowerCase()
         .trim();
 
-      if (
-        ["cancelado", "eliminado"].includes(existingStatus) &&
-        !["cancelado", "eliminado"].includes(incomingStatus)
-      ) {
+      const existingBorrada =
+        existingStatus === "eliminado" ||
+        existingData?.deletedAtMs != null;
+
+      if (existingBorrada && incomingStatus !== "eliminado") {
         console.warn(
           `PUT /api/scheduled-jobs ignorado: intento de reactivar cita eliminada id=${item.id}`
         );
         continue;
       }
 
+      // Solo 'eliminado' borra: 'cancelado' se queda visible en la agenda.
       const nextItem =
-        ["cancelado", "eliminado"].includes(incomingStatus)
+        incomingStatus === "eliminado"
           ? {
               ...item,
               status: incomingStatus,
@@ -11615,10 +11859,11 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
     const current = await db.query(`
       SELECT data
       FROM scheduled_jobs
-      WHERE COALESCE(data::jsonb->>'status', '') NOT IN (
-        'cancelado',
-        'eliminado'
-      )
+      -- Las citas canceladas SIGUEN en la agenda (se pintan en rojo como
+      -- histórico). Solo se ocultan las borradas de verdad, que son las que
+      -- llevan deletedAtMs o el estado 'eliminado'.
+      WHERE COALESCE(data::jsonb->>'status', '') <> 'eliminado'
+        AND data::jsonb->>'deletedAtMs' IS NULL
       ORDER BY id ASC
     `);
 
@@ -11703,6 +11948,84 @@ app.put("/api/scheduled-jobs/:id/status", protectWhenStrict(requirePanelRole), a
   } catch (error) {
     console.error("PUT /api/scheduled-jobs/:id/status error:", error);
     res.status(500).json({ error: "Error cambiando el estado de la cita" });
+  }
+});
+
+/**
+ * Cancela UNA cita sin borrarla: se queda en la agenda, en rojo, como
+ * histórico de que ese hueco estaba reservado y se anuló. El borrado real
+ * sigue siendo el DELETE de más abajo.
+ */
+app.put("/api/scheduled-jobs/:id/cancelar", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "ID de cita inválido" });
+    }
+
+    const now = Date.now();
+
+    const current = await db.query(
+      `
+      SELECT data
+      FROM scheduled_jobs
+      WHERE id = $1
+      LIMIT 1
+      `,
+      [id]
+    );
+
+    if (current.rowCount === 0) {
+      return res.status(404).json({ error: "Cita no encontrada" });
+    }
+
+    const currentData = current.rows[0].data ?? {};
+
+    if (currentData.deletedAtMs != null || currentData.status === "eliminado") {
+      return res.status(409).json({ error: "La cita ya está eliminada" });
+    }
+
+    const nextData = {
+      ...currentData,
+      status: "cancelado",
+      cancelledAtMs: currentData.cancelledAtMs ?? now,
+      motivoCancelacion:
+        typeof req.body?.motivo === "string" && req.body.motivo.trim()
+          ? req.body.motivo.trim()
+          : currentData.motivoCancelacion ?? null,
+    };
+
+    const result = await db.query(
+      `
+      UPDATE scheduled_jobs
+      SET
+        data = $2,
+        "updatedAtMs" = $3
+      WHERE id = $1
+      RETURNING data
+      `,
+      [id, JSON.stringify(nextData), now]
+    );
+
+    // Si la cita venía de un recordatorio de caducidad, este vuelve a un estado
+    // coherente, igual que al borrarla.
+    await db.query(
+      `UPDATE recordatorios_caducidad
+       SET estado = CASE
+             WHEN whatsapp_estado = 'enviado' OR sms_estado = 'enviado' THEN 'AVISADO'
+             ELSE 'PENDIENTE'
+           END,
+           cita_id = NULL,
+           actualizado_en_ms = $2
+       WHERE cita_id = $1 AND estado = 'CONVERTIDO_EN_CITA'`,
+      [id, now]
+    ).catch((e) => console.error("Error revirtiendo recordatorio de caducidad:", e));
+
+    res.json({ ok: true, scheduledJob: result.rows[0].data });
+  } catch (error) {
+    console.error("PUT /api/scheduled-jobs/:id/cancelar error:", error);
+    res.status(500).json({ error: "Error cancelando la cita" });
   }
 });
 
@@ -12096,6 +12419,15 @@ function startCaducidadRecordatoriosChecker() {
   console.log(`Avisos de caducidad de tacógrafo activos (a partir de las ${CADUCIDAD_NOTIFY_HOUR}).`);
   void checkCaducidadRecordatorios();
   setInterval(() => { void checkCaducidadRecordatorios(); }, CADUCIDAD_CHECK_INTERVAL_MS);
+
+  /*
+   * Worker de sincronización con TyreControl. Cada minuto, y solo hace algo si
+   * las dos llaves están puestas: `cicloReparaciones` sale enseguida si no.
+   * Va aquí y no en el cierre porque el técnico no puede esperar a otro sistema.
+   */
+  setInterval(() => {
+    void cicloReparaciones().catch((e) => console.error("[TyreControl] worker:", e?.message));
+  }, 60_000);
 }
 
 app.get("/api/recordatorios-caducidad", protectWhenStrict(requirePanelRole), async (req, res) => {
@@ -15425,75 +15757,64 @@ app.patch("/api/otf-plantillas/:id", requireSupervisorRole, async (req, res) => 
   }
 });
 
-// ── TyreControl por matrícula: resumen para la tarjeta de la OTF ──
-// Busca el vehículo en TyreControl (normalizando la matrícula) y devuelve la
-// última revisión completada con sus alertas. Solo lectura.
+/**
+ * TyreControl por matrícula: resumen para la tarjeta de la OTF.
+ *
+ * Antes traía hasta 2.000 vehículos de `tc_vehiculos` y comparaba la matrícula
+ * en JavaScript. Con una flota mayor **dejaba de encontrar vehículos sin dar
+ * ningún error**. Ahora la resolución la hace `server/tyrecontrol/`, que filtra
+ * en el servidor.
+ *
+ * El contrato antiguo (`found`, `vehiculo`, `ultimaRevision`) se mantiene tal
+ * cual para no tocar la pantalla; se AÑADEN `estado`, `candidatos` (para la
+ * matrícula ambigua, que antes se resolvía cogiendo la primera sin decirlo) y
+ * `configuracion`.
+ */
 app.get("/api/otf-tyrecontrol-info", requireSupervisorRole, async (req, res) => {
   try {
-    const plateRaw = String(req.query.plate ?? "").trim();
-    const norm = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    if (!norm) return res.status(400).json({ error: "plate requerida" });
+    const plate = String(req.query.plate ?? "").trim();
+    if (!plate) return res.status(400).json({ error: "plate requerida" });
 
-    // tc_vehiculos guarda la matrícula en mayúsculas pero puede llevar guiones
-    // o espacios: se normaliza en JS para comparar.
-    const { data: vehiculos, error: vErr } = await supabase
-      .from("tc_vehiculos")
-      .select("id, matricula, marca, modelo, km_actual, activo")
-      .limit(2000);
-    if (vErr) throw new Error(vErr.message);
-    const veh = (vehiculos ?? []).find(
-      (v: any) => String(v.matricula ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "") === norm
-    );
-    if (!veh) return res.json({ found: false });
-
-    const { data: revs } = await supabase
-      .from("revisiones_vehiculo")
-      .select("id, fecha_revision, km_vehiculo, estado_revision")
-      .eq("vehiculo_id", veh.id)
-      .in("estado_revision", ["completada", "enviada"])
-      .order("fecha_revision", { ascending: false })
-      .limit(1);
-    const rev = revs?.[0] ?? null;
-
-    let alertas = 0;
-    let minProfundidad: number | null = null;
-    let posiciones = 0;
-    if (rev) {
-      const { data: det } = await supabase
-        .from("revisiones_neumaticos_detalle")
-        .select("profundidad_mm, alerta_generada, neumatico_ausente")
-        .eq("revision_id", rev.id);
-      for (const d of det ?? []) {
-        posiciones++;
-        if ((d as any).alerta_generada === true) alertas++;
-        const p = (d as any).profundidad_mm != null ? Number((d as any).profundidad_mm) : null;
-        if (p != null && (minProfundidad == null || p < minProfundidad)) minProfundidad = p;
-      }
+    const r = await resolverVehiculoTc(plate);
+    if (r.estado === "NOT_FOUND") return res.json({ found: false, estado: "NOT_FOUND" });
+    if (r.estado === "AMBIGUOUS") {
+      // Antes se cogía el primero en silencio. Ahora se dice, porque pueden ser
+      // vehículos de empresas distintas con la misma matrícula.
+      return res.json({ found: false, estado: "AMBIGUOUS", candidatos: r.candidatos });
     }
+
+    const estado = await estadoVehiculoTc(r.vehiculo);
+    if (!estado) return res.json({ found: false, estado: "NOT_FOUND" });
 
     res.json({
       found: true,
+      estado: "FOUND",
       vehiculo: {
-        id: veh.id,
-        matricula: veh.matricula,
-        marca: veh.marca ?? null,
-        modelo: veh.modelo ?? null,
-        kmActual: veh.km_actual != null ? Number(veh.km_actual) : null,
-        activo: veh.activo !== false,
+        id: estado.vehiculo.tcVehicleId,
+        matricula: estado.vehiculo.matricula,
+        marca: estado.vehiculo.marca,
+        modelo: estado.vehiculo.modelo,
+        kmActual: estado.vehiculo.kmActual,
+        activo: estado.vehiculo.activo,
+        // Añadidos: no estaban antes y la tarjeta los puede ignorar.
+        tipoVehiculo: estado.vehiculo.tipoVehiculo,
+        empresaId: estado.vehiculo.empresaId,
+        empresaNombre: estado.vehiculo.empresaNombre,
       },
-      ultimaRevision: rev
+      ultimaRevision: estado.resumen.ultimaRevisionFecha
         ? {
-            fecha: rev.fecha_revision,
-            km: rev.km_vehiculo != null ? Number(rev.km_vehiculo) : null,
-            posiciones,
-            alertas,
-            minProfundidadMm: minProfundidad,
+            fecha: estado.resumen.ultimaRevisionFecha,
+            km: estado.vehiculo.kmActual,
+            posiciones: estado.resumen.posiciones,
+            alertas: estado.resumen.alertas,
+            minProfundidadMm: estado.resumen.profundidadMinimaMm,
           }
         : null,
+      configuracion: { ejes: estado.ejes, posiciones: estado.posiciones },
     });
   } catch (e) {
-    console.error("GET /api/otf/tyrecontrol-info error:", e);
-    res.status(500).json({ error: "Error consultando TyreControl" });
+    console.error("GET /api/otf-tyrecontrol-info error:", (e as any)?.message);
+    res.status(502).json({ error: "Error consultando TyreControl" });
   }
 });
 
@@ -17873,6 +18194,7 @@ const APK_APPS: Record<
     pubspec: "tyrecontrol_app/pubspec.yaml",
   },
   stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
+  safety: { prefix: "mobilink-safety-", label: "Mobilink Safety" },
   taller: {
     prefix: "mobilink-taller-",
     label: "WorkPlanner Taller",
@@ -18034,6 +18356,12 @@ mountConnect(app, requireLicensesAdmin);
  */
 app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
 app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRole));
+/*
+ * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no
+ * escribe nada en TC. Va con el guarda del back-office porque es información
+ * de oficina; la pantalla del técnico no se toca.
+ */
+app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
 mountCorreo(app, requireSupervisorRole);
 app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
 
@@ -18041,11 +18369,45 @@ app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
 mountAsistente(app, authenticate, requireModule("tyrecontrol"));
 
+// Identificar un neumático por la foto de su flanco durante una revisión.
+// Solo propone: guardar lo decide el técnico. Ver server/tyrecontrol/flanco/.
+mountFlanco(app, authenticate, requireModule("tyrecontrol"));
+
+// Parte de servicio a partir de fotografías. Solo propone: guardar lo decide
+// el técnico, y aterriza en la intervención y los montajes que ya existen.
+mountParte(app, authenticate, requireModule("tyrecontrol"));
+
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
 
 app.use(express.static(path.join(__dirname, "../dist")));
+
+/*
+ * Un trozo que no existe es un 404, no el index.html.
+ *
+ * El panel carga cada sub-aplicación con `lazy()`, y el nombre del trozo lleva
+ * un hash que cambia en cada compilación: /assets/TyreControlApp-<hash>.js.
+ * Quien tuviera la pestaña abierta durante un despliegue sigue con el
+ * index.html viejo en memoria y pide un trozo que aquí ya no está.
+ *
+ * Con el catch-all de abajo a secas, esa petición se llevaba el index.html con
+ * un 200 y content-type text/html. Comprobado en Chromium contra el dist real:
+ * el navegador rechaza el módulo ("Expected a JavaScript-or-Wasm module script
+ * but the server responded with a MIME type of text/html"), el import se rompe
+ * en pleno render y React desmonta el árbol entero. Pantalla en blanco, y a
+ * refrescar a mano.
+ *
+ * Devolver 404 no arregla por sí solo la pantalla —eso lo hace
+ * RecuperarDespliegue en el panel, recargando— pero es lo que hace que el
+ * fallo se pueda reconocer en vez de disfrazarse de página.
+ *
+ * Se limita a /assets/ a propósito: ahí y solo ahí deja Vite lo que lleva
+ * hash, así que ninguna ruta del panel puede caer aquí por accidente.
+ */
+app.use("/assets", (_req, res) => {
+  res.status(404).type("text/plain").send("No existe. Seguramente es de una versión anterior del panel.");
+});
 
 app.get(/.*/, (_req, res) => {
   res.sendFile(path.join(__dirname, "../dist/index.html"));
@@ -18246,6 +18608,8 @@ initDb()
   .then(() => prepararEsquema("Diario de asistencias", initEventLog))
   // Después del diario: registrar un documento anota un evento.
   .then(() => prepararEsquema("Documentos", initDocumentos))
+  .then(() => prepararEsquema("Mapeo TyreControl", initMapeoEmpresas))
+  .then(() => prepararEsquema("Sincronización TyreControl", initTyreControlAssist))
   // Después de documentos: los recordatorios miran qué documentación falta.
   .then(() => prepararEsquema("Correo del expediente", initCorreo))
   .then(() => prepararEsquema("Bandeja y costes", initExcepciones))

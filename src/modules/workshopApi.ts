@@ -206,6 +206,32 @@ export async function deleteScheduledJobFromBackend(id: number) {
   }
 }
 /**
+ * Cancela UNA cita sin borrarla: se queda en la agenda marcada como cancelada.
+ * Devuelve la cita tal y como ha quedado guardada en el servidor.
+ */
+export async function cancelScheduledJobOnBackend(id: number, motivo?: string) {
+  const response = await fetchWithTimeout(
+    `${API_BASE}/api/scheduled-jobs/${id}/cancelar`,
+    {
+      method: "PUT",
+      headers: getAdminHeaders({
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify({ motivo: motivo ?? null }),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await readApiError(response);
+    throw new Error(error?.error || "No se pudo cancelar la cita");
+  }
+
+  const data = await response.json();
+
+  return data?.scheduledJob ?? null;
+}
+
+/**
  * Cambia el estado de UNA cita sin reescribir toda la agenda.
  * Devuelve la cita tal y como ha quedado guardada en el servidor.
  */

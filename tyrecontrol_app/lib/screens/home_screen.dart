@@ -9,6 +9,7 @@ import 'identify_vehicle_screen.dart';
 import 'incidencias_screen.dart';
 import 'login_screen.dart';
 import 'planificacion_screen.dart';
+import 'realizar_operacion_screen.dart';
 import 'revisions_screen.dart';
 import 'vehiculos_screen.dart';
 import 'tools_screen.dart';
@@ -105,6 +106,22 @@ class _InicioTab extends StatelessWidget {
                   builder: (_) => const IdentifyVehicleScreen(destino: DestinoVehiculo.operaciones)));
               // Una operación puede haber cerrado incidencias: hay que
               // refrescar el contador de la pestaña, como hace Incidencias.
+              await TyreControlApi.contarIncidenciasPendientes();
+            },
+          ),
+          const SizedBox(height: 14),
+          // Realizar operación: el parte de servicio paso a paso. Va en un
+          // azulejo y no en la barra de abajo porque esa ya tiene cinco
+          // destinos y un sexto la aprieta. Y va aquí, junto a Operaciones,
+          // porque es lo mismo visto de otra manera: quien busca "hacer un
+          // trabajo" mira en esta zona.
+          _BigTile(
+            icon: Icons.assignment_outlined,
+            label: 'Realizar operación',
+            color: AppColors.tileGrisPastel,
+            onTap: () async {
+              await Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const RealizarOperacionScreen()));
               await TyreControlApi.contarIncidenciasPendientes();
             },
           ),

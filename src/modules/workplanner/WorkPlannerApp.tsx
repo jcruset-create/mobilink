@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
-import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks } from "lucide-react";
+import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks, CalendarX } from "lucide-react";
 import logoMobilink from "../../assets/logo-mobilink.png";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
 import PedidosErpPage from "./PedidosErpPage";
 import PlantillasChecklistPage from "./PlantillasChecklistPage";
+import AusenciasTecnicosPage from "./AusenciasTecnicosPage";
 import { supabase } from "../administracion/services/supabase";
 import { APP_VERSION } from "../../version";
 
@@ -19,6 +20,8 @@ const SECCIONES = [
   { key: "tecnicos", label: "Pantalla técnicos", icon: MonitorSmartphone, proximamente: false },
   { key: "pedidos", label: "Pedidos ERP", icon: FileInput, proximamente: false },
   { key: "plantillas", label: "Plantillas", icon: ListChecks, proximamente: false },
+  // Cupos y ausencias del personal: solo para administradores.
+  { key: "ausencias", label: "Ausencias", icon: CalendarX, proximamente: false, soloAdmin: true },
   { key: "estadisticas", label: "Análisis y estadísticas", icon: BarChart3, proximamente: true },
   { key: "configuracion", label: "Configuración", icon: Settings, proximamente: true },
 ] as const;
@@ -101,6 +104,48 @@ function SinLicencia() {
  *
  * Devuelve null mientras carga, true/false una vez resuelto.
  */
+/**
+ * Administrador del panel. Se apoya en el rol guardado en el login del panel
+ * (`sea-role`), que es el mismo que gobierna las herramientas de admin dentro
+ * de Operativo, y en el superadmin de plataforma.
+ */
+function useEsAdmin() {
+  const [esAdmin, setEsAdmin] = useState(
+    () => localStorage.getItem("sea-role") === "admin"
+  );
+
+  useEffect(() => {
+    let activo = true;
+
+    (async () => {
+      if (localStorage.getItem("sea-role") === "admin") {
+        if (activo) setEsAdmin(true);
+        return;
+      }
+
+      try {
+        const { data } = await supabase.auth.getSession();
+        const user = data.session?.user;
+        if (!user) return;
+
+        const { data: u } = await supabase
+          .from("app_usuarios")
+          .select("es_superadmin")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (activo && u?.es_superadmin) setEsAdmin(true);
+      } catch {
+        // Sin tablas SaaS: se queda con lo que diga el rol del panel.
+      }
+    })();
+
+    return () => { activo = false; };
+  }, []);
+
+  return esAdmin;
+}
+
 function useAccesoWorkplanner() {
   const [permitido, setPermitido] = useState<boolean | null>(null);
 
@@ -160,6 +205,7 @@ function useAccesoWorkplanner() {
 export default function WorkPlannerApp() {
   const navigate = useNavigate();
   const permitido = useAccesoWorkplanner();
+  const esAdmin = useEsAdmin();
 
   // El body de la app es claro (#f8fafc) porque el panel de taller lo es. En
   // WorkPlanner todo va en oscuro, así que se tiñe el fondo del documento con
@@ -208,7 +254,7 @@ export default function WorkPlannerApp() {
           <ReclamoWorkPlanner />
           {permitido && (
             <nav className="flex items-center gap-1">
-              {SECCIONES.map((s) => {
+              {SECCIONES.filter((s) => !("soloAdmin" in s && s.soloAdmin) || esAdmin).map((s) => {
                 const Icon = s.icon;
                 return (
                   <NavLink
@@ -289,6 +335,16 @@ export default function WorkPlannerApp() {
             }
           />
           <Route path="plantillas" element={<PlantillasChecklistPage />} />
+          <Route
+            path="ausencias"
+            element={
+              esAdmin ? (
+                <AusenciasTecnicosPage />
+              ) : (
+                <Navigate to="/workplanner/operativo2" replace />
+              )
+            }
+          />
           <Route path="estadisticas" element={<Proximamente titulo="Análisis y estadísticas" />} />
           <Route path="configuracion" element={<Proximamente titulo="Configuración" />} />
           <Route path="*" element={<Navigate to="/workplanner/operativo2" replace />} />

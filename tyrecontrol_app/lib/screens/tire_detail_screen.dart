@@ -6,6 +6,7 @@ import '../services/offline_store.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/campo_identidad.dart';
+import 'no_coincide_screen.dart';
 
 const _estadosVisuales = <String, String>{
   'correcto': 'Correcto',
@@ -163,6 +164,96 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
     }
   }
 
+  /// Los dos accesos de la tarjeta —identificar y "no coincide"— comparten
+  /// molde: recuadro, alto de dedo y letra legible. Antes eran dos enlaces de
+  /// 12 px sin borde y no se veían: en un taller, con guantes y la tablet
+  /// sucia, un enlace fino no es un botón.
+  Widget _botonTarjeta({
+    required IconData icono,
+    required String texto,
+    required Color color,
+    required VoidCallback? onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: onTap,
+          icon: Icon(icono, size: 20, color: color),
+          label: Text(texto,
+              style: TextStyle(color: color, fontSize: 15, fontWeight: FontWeight.w700)),
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(46),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            alignment: Alignment.centerLeft,
+            side: BorderSide(color: color, width: 1.5),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// "No coincide": la goma que hay puesta no es esta. Deliberadamente NO se
+  /// llama "Cambiar", que es una sustitución física y sí genera trabajo:
+  /// confundirlas es la forma más fácil de meter en el histórico un montaje
+  /// que nunca ocurrió.
+  Widget _lineaNoCoincide(Neumatico n) {
+    return _botonTarjeta(
+      icono: Icons.report_problem_outlined,
+      texto: 'No coincide',
+      color: AppColors.warning,
+      onTap: _guardando ? null : () => _noCoincide(n),
+    );
+  }
+
+  /// Abre la corrección. El id del montaje no viaja en esta pantalla, así que
+  /// se busca aquí: es una consulta y evita cambiar el constructor, que
+  /// obligaría a tocar la pantalla de revisión entera.
+  ///
+  /// Necesita red a propósito. La corrección cambia qué goma hay en una
+  /// posición, y encolarla sin saber si otra corrección tocó la misma mientras
+  /// tanto es peor que pedir cobertura para un caso que es raro.
+  Future<void> _noCoincide(Neumatico n) async {
+    setState(() => _guardando = true);
+    try {
+      final montajes = await TyreControlApi.listarMontajesVehiculo(widget.vehiculo.id);
+      final m = montajes.where((x) => x.posicionId == widget.posicion.id).firstOrNull;
+      if (!mounted) return;
+      if (m == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('No se encuentra el montaje de esta posición')));
+        return;
+      }
+      final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        builder: (_) => NoCoincideScreen(
+          registrado: n,
+          montajeId: m.id,
+          empresaId: widget.vehiculo.empresaId,
+          revisionId: widget.revision.id,
+          posicionId: widget.posicion.id,
+          posicionNombre: widget.posicion.nombre ?? widget.posicion.codigoPosicion,
+        ),
+      ));
+      if (!mounted) return;
+      if (ok == true) {
+        // La revisión NO se cierra ni se pierde lo tecleado: se vuelve a esta
+        // misma rueda para seguir con la profundidad y la presión.
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Corregido. Sin trabajo ni coste. Sigue con la medición.')));
+        setState(() {});
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Hace falta conexión para corregir: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _guardando = false);
+    }
+  }
+
   /// Identidad de la goma: la que trae o la que se acaba de poner. Si no
   /// lleva ninguna, el enlace para ponérsela.
   Widget _lineaIdentidad(Neumatico n) {
@@ -182,21 +273,15 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
         ]),
       );
     }
-    return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: InkWell(
-        onTap: _identificar,
-        child: const Row(children: [
-          Icon(Icons.nfc, size: 13, color: AppColors.info),
-          SizedBox(width: 4),
-          Text('Identificar esta rueda',
-              style: TextStyle(color: AppColors.info, fontSize: 12, fontWeight: FontWeight.w600)),
-        ]),
-      ),
+    return _botonTarjeta(
+      icono: Icons.nfc,
+      texto: 'Identificar este neumático',
+      color: AppColors.info,
+      onTap: _identificar,
     );
   }
 
-  /// Pone identidad a la rueda sin desmontarla. Es lo que permite que un
+  /// Pone identidad al neumático sin desmontarlo. Es lo que permite que un
   /// cliente que pasa a modo identificado no tenga que esperar años a que
   /// caiga cada goma para tenerla registrada.
   Future<void> _identificar() async {
@@ -208,7 +293,7 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Identificar esta rueda'),
+        title: const Text('Identificar este neumático'),
         content: SizedBox(
           width: 360,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -245,7 +330,7 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
       final txt = t.contains('IDENTIDAD_DUPLICADA')
           ? 'Esa identidad ya es de otra goma. Comprueba la etiqueta.'
           : t.contains('IDENTIDAD_YA_TIENE')
-              ? 'Esta rueda ya tenía identidad y no se pisa. Avisa a oficina si ha cambiado.'
+              ? 'Este neumático ya tenía identidad y no se pisa. Avisa a oficina si ha cambiado.'
               : 'No se ha podido identificar: $t';
       _avisar(txt, ok: false);
     }
@@ -280,34 +365,52 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Container(
-                        width: 64,
-                        height: 64,
-                        clipBehavior: Clip.antiAlias,
-                        decoration: BoxDecoration(color: AppColors.surfaceVariant, borderRadius: BorderRadius.circular(10)),
-                        child: widget.fotoModeloUrl != null
-                            ? Image.network(
-                                widget.fotoModeloUrl!,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => const Icon(Icons.trip_origin, color: AppColors.textSecondary),
-                              )
-                            : const Icon(Icons.trip_origin, color: AppColors.textSecondary),
+                      Row(
+                        children: [
+                          Container(
+                            width: 64,
+                            height: 64,
+                            clipBehavior: Clip.antiAlias,
+                            decoration: BoxDecoration(
+                              color: AppColors.surfaceVariant,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: widget.fotoModeloUrl != null
+                                ? Image.network(
+                                    widget.fotoModeloUrl!,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) =>
+                                        const Icon(Icons.trip_origin, color: AppColors.textSecondary),
+                                  )
+                                : const Icon(Icons.trip_origin, color: AppColors.textSecondary),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(n.numeroInterno ?? n.codigoInterno ?? '—',
+                                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                                Text('${n.marca ?? ''} ${n.modelo ?? ''}'.trim(),
+                                    style: const TextStyle(color: AppColors.textSecondary)),
+                                Text(n.medidaCompleta,
+                                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                                if (n.dot != null)
+                                  Text('DOT ${n.dot}',
+                                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(n.numeroInterno ?? n.codigoInterno ?? '—', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-                            Text('${n.marca ?? ''} ${n.modelo ?? ''}'.trim(), style: const TextStyle(color: AppColors.textSecondary)),
-                            Text(n.medidaCompleta, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                            if (n.dot != null) Text('DOT ${n.dot}', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                            _lineaIdentidad(n),
-                          ],
-                        ),
-                      ),
+                      // Los dos botones van DEBAJO y a lo ancho de la tarjeta, no
+                      // al lado de la foto: ahí les quedaban dos tercios del ancho
+                      // y el texto se partía.
+                      _lineaIdentidad(n),
+                      _lineaNoCoincide(n),
                     ],
                   ),
                 ),

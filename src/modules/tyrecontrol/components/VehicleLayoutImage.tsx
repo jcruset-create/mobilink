@@ -7,6 +7,7 @@ import {
   cambiarPosicion, intercambiarPosiciones, aplicarPlanTrabajo, listarMarcasRecauchutadas,
   actualizarImagenChasis, guardarCoordenadasPosicion, guardarOrdenRevisionPosicion, listarUltimasMedicionesVehiculo, listarPresionesCatalogoPorModelo,
   listarFotosCatalogoPorModelo, claveModeloCatalogo, listarProfundidadesCatalogoPorModelo,
+  buscarNeumaticosParaCorregir, corregirMontado,
 } from "../services/data";
 import { inputCls, Modal } from "./ui";
 import { mismaMedida } from "../services/medidas";
@@ -163,6 +164,15 @@ export default function VehicleLayoutImage({
   const [verTodasMedidas, setVerTodasMedidas] = useState(false);
   const [neumaticoElegido, setNeumaticoElegido] = useState("");
   const [menuContextual, setMenuContextual] = useState<{ codigo: string; x: number; y: number } | null>(null);
+
+  // "No coincide": la goma que hay puesta no es la que Mobilink dice. Es una
+  // CORRECCIÓN DE FICHA, no un trabajo: no se monta ni se desmonta nada.
+  const [correccion, setCorreccion] = useState<{ montajeId: string } | null>(null);
+  const [correccionBusqueda, setCorreccionBusqueda] = useState("");
+  const [correccionOpciones, setCorreccionOpciones] = useState<Neumatico[]>([]);
+  const [correccionElegido, setCorreccionElegido] = useState("");
+  const [correccionObs, setCorreccionObs] = useState("");
+  const [correccionMsg, setCorreccionMsg] = useState("");
   const [modalFicha, setModalFicha] = useState<null | { sustitucion: boolean }>(null);
   const [modalBulk, setModalBulk] = useState(false);
   const [modalFueraAlmacen, setModalFueraAlmacen] = useState(false);
@@ -425,6 +435,36 @@ export default function VehicleLayoutImage({
       await montarNeumatico({ vehiculoId, neumaticoId: neumaticoElegido, posicionId: posSeleccionada.id, km: null, fecha: new Date().toISOString().slice(0, 10), observaciones: null });
       setSeleccion(null); setNeumaticoElegido(""); onChanged?.();
     } catch (e: any) { setMsg(e?.message || "Error al montar"); } finally { setSaving(false); }
+  }
+
+  // Se busca al abrir y a cada tecla, con una espera corta: el técnico teclea
+  // el número que ve en el flanco y quiere verlo aparecer, no darle a un botón.
+  useEffect(() => {
+    if (!correccion) { setCorreccionOpciones([]); return; }
+    let vivo = true;
+    const t = setTimeout(() => {
+      buscarNeumaticosParaCorregir(empresaId, correccionBusqueda)
+        .then((r) => { if (vivo) setCorreccionOpciones(r); })
+        .catch(() => { if (vivo) setCorreccionOpciones([]); });
+    }, 250);
+    return () => { vivo = false; clearTimeout(t); };
+  }, [correccion, correccionBusqueda, empresaId]);
+
+  async function confirmarCorreccion() {
+    if (!correccion || !correccionElegido) return;
+    setSaving(true); setCorreccionMsg("");
+    try {
+      await corregirMontado({
+        montajeId: correccion.montajeId,
+        neumaticoCorrectoId: correccionElegido,
+        observaciones: correccionObs.trim() || null,
+        // Desde el panel se elige una ficha que ya existe, buscándola.
+        metodo: "busqueda",
+      });
+      setCorreccion(null); setSeleccion(null); onChanged?.();
+    } catch (e: any) {
+      setCorreccionMsg(e?.message || "Error en la corrección");
+    } finally { setSaving(false); }
   }
 
   async function confirmarDesmontar() {
@@ -792,6 +832,23 @@ export default function VehicleLayoutImage({
               {onFicha && <button onClick={() => onFicha(montajeSeleccionado.neumatico!.id)} className="rounded border border-slate-600 px-2 py-1 text-[12px] text-slate-200">Ver ficha</button>}
               {editable && <button onClick={() => setModalFicha({ sustitucion: true })} className="rounded bg-sky-600 px-2 py-1 text-[12px] font-bold text-white">Sustituir</button>}
               {editable && <button onClick={confirmarDesmontar} disabled={saving} className="rounded bg-rose-600 px-2 py-1 text-[12px] font-bold text-white disabled:opacity-50">Desmontar</button>}
+              {/* No va en la barra de Operaciones y no es un descuido: ahí
+                  todo genera trabajo, y esto no. Confundir "corregir" con
+                  "cambiar" es la forma más fácil de meter en el histórico un
+                  montaje que nunca ocurrió. Va con la rueda, discreto, porque
+                  es la excepción. */}
+              {editable && (
+                <button
+                  onClick={() => {
+                    setCorreccion({ montajeId: montajeSeleccionado.id });
+                    setCorreccionBusqueda(""); setCorreccionElegido("");
+                    setCorreccionObs(""); setCorreccionMsg("");
+                  }}
+                  className="rounded border border-amber-500 px-2 py-1 text-[12px] font-bold text-amber-300 hover:bg-amber-500/10"
+                >
+                  ⚠ No coincide
+                </button>
+              )}
             </div>
           </div>
         ) : (
@@ -900,6 +957,86 @@ export default function VehicleLayoutImage({
             onClose={() => setModalCopiar(false)}
             onDone={() => { cerrarCopia(); onChanged?.(); }}
           />
+        );
+      })()}
+
+      {correccion && (() => {
+        const m = montajes.find((x) => x.id === correccion.montajeId);
+        const actual = m?.neumatico;
+        const elegido = correccionOpciones.find((n) => n.id === correccionElegido);
+        return (
+          <Modal
+            title="No coincide: corregir el neumático registrado"
+            onClose={() => setCorreccion(null)}
+            footer={
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setCorreccion(null)} className="rounded border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
+                <button onClick={confirmarCorreccion} disabled={saving || !correccionElegido}
+                        className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+                  {saving ? "Corrigiendo…" : "Corregir el registro"}
+                </button>
+              </div>
+            }
+          >
+            <div className="space-y-3 text-sm">
+              <div className="rounded-lg border border-amber-600/40 bg-amber-500/5 p-3 text-[12px] text-amber-200">
+                Esto <b>no es un trabajo de taller</b>: no se registra montaje ni desmontaje y no
+                genera coste ni mano de obra. Solo corrige qué neumático dice Mobilink que hay en
+                esta posición, para que coincida con lo que hay de verdad.
+                <div className="mt-1">
+                  El que estaba mal registrado pasa a <b>no localizado</b>, no al almacén: que la
+                  ficha estuviera mal no significa que la goma esté en la estantería.
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+                  <div className="text-[11px] font-bold uppercase text-slate-500">Lo que hay registrado</div>
+                  <div className="mt-1 font-semibold text-slate-100">{actual?.numero_interno ?? actual?.codigo_interno ?? actual?.numero_serie ?? "—"}</div>
+                  <div className="text-[12px] text-slate-400">{[actual?.marca, actual?.modelo, actual?.medida].filter(Boolean).join(" · ") || "—"}</div>
+                </div>
+                <div className="rounded-lg border border-emerald-700/50 bg-emerald-500/5 p-3">
+                  <div className="text-[11px] font-bold uppercase text-emerald-500">Lo que hay de verdad</div>
+                  <div className="mt-1 font-semibold text-slate-100">{elegido ? (elegido.numero_interno ?? elegido.codigo_interno ?? elegido.numero_serie ?? "—") : "Elígelo abajo"}</div>
+                  <div className="text-[12px] text-slate-400">{elegido ? [elegido.marca, elegido.modelo, elegido.medida].filter(Boolean).join(" · ") : "—"}</div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold uppercase text-slate-400">Buscar la ficha</label>
+                <input className={inputCls} placeholder="Nº interno, nº de serie, RFID o DOT"
+                       value={correccionBusqueda} onChange={(e) => { setCorreccionBusqueda(e.target.value); setCorreccionElegido(""); }} />
+                {/* No salen las montadas: ofrecer una que ya rueda en otro
+                    vehículo solo sirve para que la base de datos lo rechace
+                    después. Sí salen las no localizadas y las usadas, que es
+                    donde suele estar la goma cuando el registro estaba mal. */}
+                <select className={`${inputCls} mt-2`} size={8} value={correccionElegido}
+                        onChange={(e) => setCorreccionElegido(e.target.value)}>
+                  {correccionOpciones.map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {(n.numero_interno ?? n.codigo_interno ?? n.numero_serie ?? n.id.slice(0, 8))}
+                      {" · "}{[n.marca, n.medida].filter(Boolean).join(" ")}
+                      {" · "}{n.estado}
+                    </option>
+                  ))}
+                </select>
+                {correccionOpciones.length === 0 && (
+                  <div className="mt-1 text-[11px] text-amber-300">
+                    No hay ninguna ficha libre que encaje. Si la goma que has encontrado no está
+                    dada de alta, créala primero desde el catálogo de neumáticos.
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold uppercase text-slate-400">Por qué se corrige</label>
+                <input className={inputCls} placeholder="P. ej.: revisión en papel del 01/09, la rueda no era la fichada"
+                       value={correccionObs} onChange={(e) => setCorreccionObs(e.target.value)} />
+              </div>
+
+              {correccionMsg && <div className="text-[12px] text-red-300">{correccionMsg}</div>}
+            </div>
+          </Modal>
         );
       })()}
 

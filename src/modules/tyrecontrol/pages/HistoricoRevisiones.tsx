@@ -264,15 +264,16 @@ export default function HistoricoRevisiones() {
       <TableWrap>
         <thead className="bg-slate-900"><tr>
           <th className={thCls}>Fecha</th><th className={thCls}>Hora</th><th className={thCls}>Matrícula</th>
+          <th className={thCls}>Nº unidad</th>
           <th className={thCls}>Cliente</th><th className={thCls}>Base</th><th className={thCls}>Operario</th>
           <th className={thCls}>Km</th><th className={thCls}>Incidencias</th><th className={thCls}>Estado</th>
           <th className={thCls}></th>
         </tr></thead>
         <tbody>
           {loading ? (
-            <tr><td className={tdCls + " text-slate-500"} colSpan={10}>Cargando…</td></tr>
+            <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Cargando…</td></tr>
           ) : filas.length === 0 ? (
-            <tr><td className={tdCls + " text-slate-500"} colSpan={10}>Sin revisiones en este periodo.</td></tr>
+            <tr><td className={tdCls + " text-slate-500"} colSpan={11}>Sin revisiones en este periodo.</td></tr>
           ) : filas.map((f) => {
             const meta = ESTADO_META[f.estado] ?? { label: f.estado, cls: "bg-slate-500/15 text-slate-300" };
             return (
@@ -290,8 +291,13 @@ export default function HistoricoRevisiones() {
                         {f.matricula}
                       </button>
                     : f.matricula}
-                  {f.unidad ? <span className="ml-1 text-[11px] font-normal text-slate-500">· {f.unidad}</span> : null}
                 </td>
+                {/* El número de unidad es como llaman al vehículo dentro de la
+                    empresa: al ir pegado a la matrícula y en letra pequeña se
+                    leía como una nota al margen. En su propia columna y con el
+                    mismo cuerpo que la matrícula se puede buscar con la vista
+                    bajando por la columna, que es como se usa. */}
+                <td className={tdCls + " font-bold text-slate-200"}>{f.unidad || "—"}</td>
                 <td className={tdCls + " text-slate-400"}>{f.cliente}</td>
                 <td className={tdCls + " text-slate-400"}>{f.base}</td>
                 <td className={tdCls + " text-slate-300"}>
