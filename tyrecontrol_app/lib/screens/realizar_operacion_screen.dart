@@ -103,6 +103,10 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
 
   // Vehículo
   final _matricula = TextEditingController();
+  /// ¿Hay lectura por fotografías? Si el servidor no tiene IA configurada el
+  /// botón NO se enseña: uno que falla es peor que uno que no está.
+  bool _hayIA = false;
+  final _carpetaFotos = DateTime.now().millisecondsSinceEpoch.toString();
   Vehiculo? _vehiculo;
   List<PosicionVehiculo> _posiciones = [];
   Map<String, MontajeActual> _montajes = {};
@@ -137,6 +141,8 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     super.initState();
     _clave = _uuid();
     _recuperarBorrador();
+    TyreControlApi.parteDisponible()
+        .then((v) { if (mounted) setState(() => _hayIA = v); });
     TyreControlApi.listarServiciosCatalogo()
         .then((v) { if (mounted) setState(() => _catServicios = v); })
         .catchError((_) {/* se puede seguir sin catálogo */});
@@ -312,6 +318,47 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
       }
     } catch (e) {
       if (mounted) setState(() => _error = 'No se ha podido leer la foto: $e');
+    } finally {
+      if (mounted) setState(() => _trabajando = false);
+    }
+  }
+
+  /// El atajo por fotografías.
+  ///
+  /// NO es un camino aparte: rellena ESTE formulario y el operario sigue por
+  /// los mismos pasos, confirmando o corrigiendo. Dos botones que hacen lo
+  /// mismo de dos maneras acaban en partes hechos de dos formas distintas.
+  Future<void> _rellenarConFotos() async {
+    final fotos = await ImagePicker().pickMultiImage(imageQuality: 85);
+    if (fotos.isEmpty) return;
+    setState(() { _trabajando = true; _error = null; });
+    try {
+      final urls = <String>[];
+      for (final f in fotos) {
+        urls.add(await TyreControlApi.subirFotoParte(File(f.path), carpeta: _carpetaFotos));
+      }
+      final r = await TyreControlApi.leerParte(urls);
+      if (!mounted) return;
+
+      final matricula = (r['plate'] as String?)?.trim() ?? '';
+      final km = (r['kilometers'] as String?)?.trim() ?? '';
+      setState(() {
+        // Lo leído SE ENSEÑA para que se confirme. Nada se da por bueno solo.
+        if (matricula.isNotEmpty) _matricula.text = matricula;
+        if (km.isNotEmpty && _km.text.isEmpty) {
+          _km.text = km.replaceAll(RegExp(r'[^0-9]'), '');
+        }
+        _avisos = ((r['warnings'] as List?) ?? const []).map((e) => e.toString()).toList();
+        _error = matricula.isEmpty
+            ? 'No se ha podido leer la matrícula en las fotos. Escríbela tú.'
+            : null;
+      });
+
+      // Con matrícula leída se busca sola, pero el operario ve la ficha del
+      // vehículo y la confirma antes de seguir: no se salta ningún paso.
+      if (matricula.isNotEmpty) await _buscarMatricula();
+    } catch (e) {
+      if (mounted) setState(() => _error = 'No se han podido leer las fotos: $e');
     } finally {
       if (mounted) setState(() => _trabajando = false);
     }
@@ -618,6 +665,32 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
       icon: const Icon(Icons.search),
       label: const Text('Buscar', style: TextStyle(fontSize: 16)),
     ),
+    if (_hayIA) ...[
+      const SizedBox(height: 10),
+      OutlinedButton.icon(
+        onPressed: _rellenarConFotos,
+        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+        icon: const Icon(Icons.auto_awesome),
+        label: const Text('Rellenar con fotos', style: TextStyle(fontSize: 16)),
+      ),
+      const Padding(
+        padding: EdgeInsets.only(top: 6),
+        child: Text('Matrícula, cuentakilómetros y flancos. Lo que se lea sale '
+                    'aquí para que lo confirmes: no se guarda nada solo.',
+            style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+      ),
+    ],
+    // Los avisos de la lectura van donde se lee, no escondidos al final.
+    for (final a in _avisos)
+      Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Icon(Icons.warning_amber_rounded, size: 16, color: AppColors.warning),
+          const SizedBox(width: 6),
+          Expanded(child: Text(a,
+              style: const TextStyle(fontSize: 12, color: AppColors.warning))),
+        ]),
+      ),
     if (_vehiculo != null) ...[
       const SizedBox(height: 20),
       // Ficha resumen para confirmar que es el camión. No se editan datos

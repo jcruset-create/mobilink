@@ -774,27 +774,10 @@ class TyreControlApi {
     }
   }
 
-  /// Las líneas de servicio facturables del parte. Se reemplazan enteras: es
-  /// más simple y no deja líneas viejas de un intento anterior.
-  static Future<void> guardarServiciosParte(
-      String intervencionId, Map<String, num> cantidades) async {
-    await _db.from('tc_intervencion_servicios').delete().eq('intervencion_id', intervencionId);
-    final filas = cantidades.entries
-        .where((e) => e.value > 0)
-        .map((e) => {'intervencion_id': intervencionId, 'servicio': e.key, 'cantidad': e.value})
-        .toList();
-    if (filas.isNotEmpty) await _db.from('tc_intervencion_servicios').insert(filas);
-  }
-
   /// El catálogo de servicios facturables, para pintar la lista.
   static Future<List<Map<String, dynamic>>> listarServiciosCatalogo() async {
     final d = await _db.from('tc_cat_servicios').select().eq('activo', true).order('orden');
     return (d as List).map((e) => Map<String, dynamic>.from(e)).toList();
-  }
-
-  /// Firmas y datos de cabecera que el parte pide y la intervención no traía.
-  static Future<void> guardarCabeceraParte(String intervencionId, Map<String, dynamic> datos) async {
-    await _db.from('tc_intervenciones').update(datos).eq('id', intervencionId);
   }
 
   /// Sube una firma dibujada en la tablet. Mismo bucket: no hay otro sistema
