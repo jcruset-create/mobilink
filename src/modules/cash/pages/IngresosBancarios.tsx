@@ -805,10 +805,22 @@ function CanjeDeMonedas({
     void cargar();
   }, [cargar]);
 
-  // Sin monedas en la bolsa no hay nada que canjear y el panel sobra.
-  if (!datos || datos.enMonedasCentimos === 0) return null;
+  /*
+   * El panel sale cuando hay monedas que convertir O cuando hay un canje que
+   * proponer. Lo segundo importa desde que el canje también junta billetes
+   * chicos en gordos: con la bolsa entera en billetes no hay monedas y sigue
+   * habiendo algo que hacer.
+   */
+  if (!datos || (datos.enMonedasCentimos === 0 && !datos.canje)) return null;
 
   const { canje } = datos;
+  const billetesAntes = datos.pendiente.billetes.reduce((a, l) => a + l.cantidad, 0);
+  const billetesDespues = canje
+    ? billetesAntes -
+      canje.billetesEntregados.reduce((a, l) => a + l.cantidad, 0) +
+      canje.billetesRecibidos.reduce((a, l) => a + l.cantidad, 0)
+    : billetesAntes;
+  const junta = billetesDespues < billetesAntes;
 
   async function canjear() {
     if (!canje) return;
@@ -837,8 +849,9 @@ function CanjeDeMonedas({
   return (
     <div className="rounded-lg border border-emerald-600/40 bg-emerald-950/20 p-3">
       <div className="text-[13px] font-bold text-emerald-200">
-        Hay {euros(datos.enMonedasCentimos)} en monedas esperando al banco, y el banco no las
-        admite
+        {datos.enMonedasCentimos > 0
+          ? `Hay ${euros(datos.enMonedasCentimos)} en monedas esperando al banco, y el banco no las admite`
+          : `La bolsa lleva ${billetesAntes} billetes al banco, y se pueden juntar en menos`}
       </div>
 
       {error && <div className="mt-1 text-[12px] text-rose-300">{error}</div>}
@@ -852,9 +865,22 @@ function CanjeDeMonedas({
       ) : (
         <>
           <p className="mt-1 text-[12px] text-slate-300">
-            Se cambian <strong>{euros(canje.valorMonedasCentimos)}</strong> en monedas por billetes
-            del cajón. <strong>No se ingresa nada</strong>: el canje queda hecho y esperando al
-            ingreso que se lleve estos cierres.
+            {canje.valorMonedasCentimos > 0 && (
+              <>
+                Se cambian <strong>{euros(canje.valorMonedasCentimos)}</strong> en monedas por
+                billetes del cajón
+                {junta ? ", " : ". "}
+              </>
+            )}
+            {junta && (
+              <>
+                {canje.valorMonedasCentimos > 0 ? "y la bolsa" : "La bolsa"} pasa de{" "}
+                <strong>{billetesAntes}</strong> a <strong>{billetesDespues}</strong> billetes, que
+                son los que hay que contar en el banco.{" "}
+              </>
+            )}
+            <strong>No se ingresa nada</strong>: el canje queda hecho y esperando al ingreso que se
+            lleve estos cierres.
           </p>
           <Piezas
             titulo="Entregas al cajón"
@@ -870,7 +896,9 @@ function CanjeDeMonedas({
               disabled={ocupado}
               className="mt-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
             >
-              {ocupado ? "Registrando…" : `Canjear ${euros(canje.valorMonedasCentimos)} y dejarlo preparado`}
+              {ocupado
+                ? "Registrando…"
+                : `Canjear ${euros(canje.valorCanjeCentimos)} y dejarlo preparado`}
             </button>
           )}
         </>
