@@ -80,7 +80,17 @@ type Alcanzables = {
   maximo: Centimos;
 };
 
-function alcanzables(inv: Inventario): Alcanzables {
+/**
+ * Con qué piezas se prefiere rehacer una suma.
+ *
+ * · `grandes` — para lo que se RECIBE: 50 € es un billete de 50, no 2×20 + 10.
+ * · `pequenas` — para lo que se ENTREGA de la propia bolsa: la gracia de
+ *   entregar billetes es soltar los pequeños y llevarse gordos, así que 100 €
+ *   se rehacen como 3×20 + 3×10 + 2×5 y no como 2×50, que no cambiaría nada.
+ */
+type Preferencia = "grandes" | "pequenas";
+
+function alcanzables(inv: Inventario, preferencia: Preferencia = "grandes"): Alcanzables {
   const maximo = totalInventario(inv);
   const posible = new Uint8Array(maximo + 1);
   const origen = new Int32Array(maximo + 1).fill(-1);
@@ -88,12 +98,14 @@ function alcanzables(inv: Inventario): Alcanzables {
   posible[0] = 1;
 
   /*
-   * De mayor a menor. El recorrido marca cada suma la primera vez que la
-   * alcanza, así que empezar por las denominaciones grandes hace que la
-   * reconstrucción salga con los billetes más gordos posibles: 50 € se rehace
-   * como un billete de 50 y no como 2×20 + 10.
+   * El recorrido marca cada suma la primera vez que la alcanza, así que el
+   * orden en que se recorren las denominaciones ES la reconstrucción que sale.
+   * Empezando por las grandes, 50 € se rehace como un billete de 50; empezando
+   * por las pequeñas, como 2×20 + 10.
    */
-  const porValorDesc = [...inv].sort((a, b) => b[0] - a[0]);
+  const porValorDesc = [...inv].sort((a, b) =>
+    preferencia === "grandes" ? b[0] - a[0] : a[0] - b[0]
+  );
 
   for (const [valor, cantidad] of porValorDesc) {
     if (valor <= 0 || cantidad <= 0) continue;
@@ -146,20 +158,32 @@ export function mejorCanje(
   billetesCaja: Inventario
 ): Canje | null {
   const monedas = alcanzables(monedasPendientes);
-  const propios = alcanzables(billetesPendientes);
+  // Los billetes propios se entregan de PEQUEÑOS a grandes: entregarlos sirve
+  // para soltarlos, y rehacer 100 € como 2×50 no soltaría ninguno.
+  const propios = alcanzables(billetesPendientes, "pequenas");
   const caja = alcanzables(billetesCaja);
 
   let mejor: Canje | null = null;
 
-  // De mayor a menor: la primera `x` que encuentre solución es la máxima, y a
-  // partir de ahí solo se siguen probando las `y` de esa misma `x`.
-  for (let x = monedas.maximo; x >= 1; x--) {
+  /*
+   * De mayor a menor: la primera `x` que encuentre solución es la máxima, y a
+   * partir de ahí solo se siguen probando las `y` de esa misma `x`.
+   *
+   * `x = 0` entra en el bucle a propósito. Sin monedas que convertir puede
+   * seguir habiendo un canje que merezca la pena: juntar los billetes chicos
+   * de la bolsa en billetes gordos no ingresa un euro más, pero deja al banco
+   * tres billetes en vez de ocho y al cajón la calderilla y los pequeños, que
+   * es con lo que da cambio.
+   */
+  for (let x = monedas.maximo; x >= 0; x--) {
     if (!monedas.posible[x]) continue;
 
-    for (let y = 0; y <= propios.maximo; y++) {
+    // `y` crece, así que en cuanto el total se pasa de lo que la caja puede
+    // dar, ninguna `y` mayor va a valer.
+    for (let y = 0; y + x <= caja.maximo && y <= propios.maximo; y++) {
       if (!propios.posible[y]) continue;
       const total = x + y;
-      if (total > caja.maximo || !caja.posible[total]) continue;
+      if (total === 0 || !caja.posible[total]) continue;
 
       const candidato: Canje = {
         monedasEntregadas: piezasDe(monedas, x),
@@ -168,6 +192,15 @@ export function mejorCanje(
         valorMonedasCentimos: x,
         valorCanjeCentimos: total,
       };
+
+      /*
+       * Un canje que no convierte monedas tiene que dejar MENOS billetes en la
+       * bolsa; si no, es cambiar por cambiar. Es lo que descarta el «entrega un
+       * billete de 50 y llévate otro de 50».
+       */
+      if (x === 0 && cuenta(candidato.billetesRecibidos) >= cuenta(candidato.billetesEntregados)) {
+        continue;
+      }
 
       if (mejor === null || preferible(candidato, mejor)) mejor = candidato;
     }
@@ -179,27 +212,37 @@ export function mejorCanje(
   return mejor;
 }
 
+const cuenta = (lineas: readonly LineaDenominacion[]) =>
+  lineas.reduce((n, l) => n + l.cantidad, 0);
+
 /**
  * Desempate entre canjes que convierten lo mismo.
  *
- * Manda el TAMAÑO del billete que se recibe: cuanto más grande, mejor. El cajón
- * paga el canje, y le conviene soltar el billete gordo y quedarse con los
- * pequeños y con la calderilla, que es con lo que da cambio.
+ * Manda **cuántos billetes quedan en la bolsa**. Como la bolsa es la misma
+ * para todos los candidatos, comparar `recibidos − entregados` es comparar el
+ * recuento final: entregar ocho billetes y llevarse dos deja seis menos que
+ * antes, y entregar tres para llevarse uno solo dos menos. Es lo que hace que
+ * la propuesta junte los billetes chicos en gordos en vez de conformarse con
+ * el canje más pequeño que cuadre.
  *
- * Los otros dos criterios solo entran cuando el primero empata: menos billetes
- * —para no llevarse cinco de 10 pudiendo llevarse uno de 50— y más piezas
- * entregadas, que es más cambio para el cajón.
+ * Y es lo que quiere el mostrador por los dos lados: al banco se va con menos
+ * billetes que contar, y el cajón se queda con los pequeños y la calderilla,
+ * que es con lo que da cambio.
+ *
+ * Los otros dos criterios solo entran cuando el primero empata: el billete
+ * recibido más grande —que en un mostrador no sirve para nada salvo para
+ * acabar en el banco— y más piezas entregadas, que es más cambio para el cajón.
  */
 function preferible(a: Canje, b: Canje): boolean {
+  const balance = (c: Canje) => cuenta(c.billetesRecibidos) - cuenta(c.billetesEntregados);
+  if (balance(a) !== balance(b)) return balance(a) < balance(b);
+
   const mayor = (c: Canje) => c.billetesRecibidos.reduce((n, l) => Math.max(n, l.valor), 0);
   if (mayor(a) !== mayor(b)) return mayor(a) > mayor(b);
 
-  const recibe = (c: Canje) => c.billetesRecibidos.reduce((n, l) => n + l.cantidad, 0);
-  if (recibe(a) !== recibe(b)) return recibe(a) < recibe(b);
-
   const entrega = (c: Canje) =>
     totalPiezas(new Map(c.monedasEntregadas.map((l) => [l.valor, l.cantidad]))) +
-    c.billetesEntregados.reduce((n, l) => n + l.cantidad, 0);
+    cuenta(c.billetesEntregados);
   return entrega(a) > entrega(b);
 }
 
