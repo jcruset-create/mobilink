@@ -52,6 +52,18 @@ export async function initDb() {
     ALTER TABLE payments ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
   `).catch(() => {});
 
+  /*
+   * Plantillas de cobro. `terms_text` no es un duplicado del texto que hay en
+   * el código: es LO QUE ACEPTÓ ESE CLIENTE, con sus importes y con la
+   * redacción del día en que pagó. Si mañana se cambia la plantilla, los cobros
+   * viejos tienen que seguir contando lo que se aceptó entonces.
+   */
+  await pool.query(`
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS template_id TEXT NOT NULL DEFAULT 'libre';
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS total_amount_cents INTEGER;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS terms_text TEXT NOT NULL DEFAULT '';
+  `).catch(() => {});
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS rules (
       id SERIAL PRIMARY KEY,
