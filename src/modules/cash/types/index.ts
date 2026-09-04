@@ -347,9 +347,23 @@ export type ReposicionPendiente = {
   importeCentimos: number;
 };
 
+/** Un canje ya hecho que todavía espera a que se registre el ingreso. */
+export type CanjePreparado = {
+  id: number;
+  fecha: string;
+  /** Entra y sale lo mismo: es UN importe, no dos. */
+  valorCentimos: number;
+  /** Cierres contra los que se hizo. El ingreso tiene que llevarlos todos. */
+  sessionIds: number[];
+  entregado: LineaDenominacion[];
+  recibido: LineaDenominacion[];
+};
+
 export type PanelIngresos = {
   pendientes: CierrePendiente[];
   reposiciones: ReposicionPendiente[];
+  /** Canjes hechos y sin ingresar. NO entran en ningún total. */
+  canjes: CanjePreparado[];
   remanenteCentimos: number;
   /** Cierres MENOS reposiciones: lo que de verdad se puede llevar al banco. */
   totalPendienteCentimos: number;

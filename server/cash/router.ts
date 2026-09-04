@@ -1215,6 +1215,17 @@ export function createCashRouter(): Router {
     })
   );
 
+  /** Deshace un canje ya hecho que todavía no se ha ingresado. */
+  r.post(
+    "/bank-deposits/swap/:id/undo",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      res.json(
+        await ingresos.deshacerCanje(contexto(req), enteroPositivo(req.params.id, "id"))
+      );
+    })
+  );
+
   /**
    * Cuánto le falta a la caja para su fondo, y con qué piezas del montón
    * pendiente se puede reponer. Consulta: no mueve nada.
