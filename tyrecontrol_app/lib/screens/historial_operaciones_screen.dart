@@ -1,15 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/etiqueta_neumatico.dart';
 
-/// Histórico de operaciones de un vehículo, agrupado por intervención
-/// (sesión de cambio) con su informe. Al tocar una intervención se ven sus
-/// operaciones (la "ficha" de cada una).
+/// Histórico de operaciones agrupado por intervención (parte de trabajo) con
+/// su informe. Al tocar una intervención se ven sus operaciones, su
+/// trazabilidad y se puede abrir el PDF del parte.
+///
+/// DOS MODOS, UNA PANTALLA. Con [vehiculoId] enseña el histórico de ESE
+/// camión, que es como se abre desde su ficha. Sin él, los últimos partes de
+/// todos los vehículos que el operario puede ver, que es el histórico general
+/// del menú. No son dos históricos: es el mismo, con y sin filtro. Duplicarlo
+/// habría acabado con dos pantallas que enseñan lo mismo de dos maneras
+/// distintas y que se corrigen por separado.
 class HistorialOperacionesScreen extends StatefulWidget {
-  final String vehiculoId;
+  final String? vehiculoId;
   final String matricula;
-  const HistorialOperacionesScreen({super.key, required this.vehiculoId, this.matricula = ''});
+  const HistorialOperacionesScreen({super.key, this.vehiculoId, this.matricula = ''});
 
   @override
   State<HistorialOperacionesScreen> createState() => _HistorialOperacionesScreenState();
@@ -28,32 +36,91 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
   List<Map<String, dynamic>> _intervenciones = [];
   List<Map<String, dynamic>> _sueltas = [];
 
+  /// Solo en el histórico general.
+  final _busca = TextEditingController();
+  bool _soloMias = false;
+  bool _pdf = false;
+
+  bool get _general => widget.vehiculoId == null;
+
   @override
   void initState() {
     super.initState();
     _cargar();
   }
 
+  @override
+  void dispose() { _busca.dispose(); super.dispose(); }
+
   Future<void> _cargar() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final res = await Future.wait([
-        TyreControlApi.listarIntervencionesVehiculo(widget.vehiculoId),
-        TyreControlApi.listarOperacionesVehiculo(widget.vehiculoId),
-      ]);
-      if (!mounted) return;
-      final todas = res[1];
-      setState(() {
-        _intervenciones = res[0];
-        // Movimientos que no pertenecen a ninguna intervención (p. ej. montar
-        // desde catálogo sin cerrar sesión de cambio): antes no salían aquí.
-        _sueltas = todas.where((o) => o['intervencion_id'] == null).toList();
-      });
+      if (_general) {
+        final ivs = await TyreControlApi.listarIntervencionesRecientes(soloMias: _soloMias);
+        if (!mounted) return;
+        // Sin vehículo no hay operaciones sueltas que recoger: las sueltas se
+        // buscan por vehículo, y aquí no hay uno.
+        setState(() { _intervenciones = ivs; _sueltas = []; });
+      } else {
+        final res = await Future.wait([
+          TyreControlApi.listarIntervencionesVehiculo(widget.vehiculoId!),
+          TyreControlApi.listarOperacionesVehiculo(widget.vehiculoId!),
+        ]);
+        if (!mounted) return;
+        final todas = res[1];
+        setState(() {
+          _intervenciones = res[0];
+          // Movimientos que no pertenecen a ninguna intervención (p. ej. montar
+          // desde catálogo sin cerrar sesión de cambio): antes no salían aquí.
+          _sueltas = todas.where((o) => o['intervencion_id'] == null).toList();
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '$e');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// La matrícula del camión de una intervención, cuando viene con ella (solo
+  /// en el general: en la ficha ya se sabe de qué camión se está hablando).
+  static String _matriculaDe(Map<String, dynamic> iv) {
+    final v = iv['vehiculo'];
+    return v is Map ? ((v['matricula'] as String?) ?? '') : '';
+  }
+
+  /// El filtro se aplica aquí, sobre lo ya traído. Por número de parte o por
+  /// matrícula, que es lo que uno tiene a mano: el papel que acaba de dar al
+  /// cliente, o el camión que tiene delante.
+  List<Map<String, dynamic>> get _filtradas {
+    final q = _busca.text.trim().toLowerCase();
+    if (q.isEmpty) return _intervenciones;
+    return _intervenciones.where((iv) {
+      final texto = [
+        (iv['numero'] as String?) ?? '',
+        _matriculaDe(iv),
+      ].join(' ').toLowerCase();
+      return texto.contains(q);
+    }).toList();
+  }
+
+  /// Abre el parte en PDF. El enlace lo firma el servidor y caduca en una
+  /// hora: el visor del sistema no lleva la sesión, así que pedirle la ruta
+  /// directamente devolvería un 401.
+  /// El aviso de "generando" lo lleva quien llama (la hoja de detalle tiene su
+  /// propio redibujado); aquí solo se abre.
+  Future<void> _abrirPdf(String intervencionId) async {
+    try {
+      final u = Uri.parse(await TyreControlApi.enlacePdfParte(intervencionId));
+      if (!await launchUrl(u, mode: LaunchMode.externalApplication)) {
+        throw Exception('No se ha podido abrir el PDF');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('No se ha podido abrir el PDF: $e')));
+      }
     }
   }
 
@@ -78,9 +145,30 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
                     : 'Intervención · ${_fecha(iv['fecha'] as String?)}',
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
             if (iv['numero'] != null)
-              Text(_fecha(iv['fecha'] as String?),
+              Text([
+                _fecha(iv['fecha'] as String?),
+                if (_matriculaDe(iv).isNotEmpty) _matriculaDe(iv),
+              ].join(' · '),
                   style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
+            // El papel que se le dio al cliente. Se puede volver a sacar en
+            // cualquier momento: el PDF se regenera de los datos, no se
+            // guarda una copia que se quede vieja.
+            StatefulBuilder(
+              builder: (_, redibuja) => OutlinedButton.icon(
+                onPressed: _pdf
+                    ? null
+                    : () async {
+                        redibuja(() => _pdf = true);
+                        await _abrirPdf(iv['id'] as String);
+                        redibuja(() => _pdf = false);
+                      },
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                icon: const Icon(Icons.picture_as_pdf_outlined),
+                label: Text(_pdf ? 'Generando…' : 'Ver el PDF del parte'),
+              ),
+            ),
+            const SizedBox(height: 10),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
@@ -203,15 +291,74 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.matricula.isEmpty ? 'Operaciones' : 'Operaciones · ${widget.matricula}')),
+      appBar: AppBar(
+        title: Text(_general
+            ? 'Partes de trabajo'
+            : widget.matricula.isEmpty
+                ? 'Operaciones'
+                : 'Operaciones · ${widget.matricula}'),
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)))
-              : (_intervenciones.isEmpty && _sueltas.isEmpty)
-                  ? const Center(child: Padding(padding: EdgeInsets.all(24),
-                      child: Text('Sin operaciones registradas para este vehículo.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.textHint))))
-                  : RefreshIndicator(
+              : Column(children: [
+                  if (_general) _barraBusqueda(),
+                  Expanded(child: _lista_()),
+                ]),
+    );
+  }
+
+  Widget _barraBusqueda() => Padding(
+    padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+    child: Column(children: [
+      TextField(
+        controller: _busca,
+        decoration: InputDecoration(
+          prefixIcon: const Icon(Icons.search),
+          hintText: 'Nº de parte o matrícula',
+          isDense: true,
+          suffixIcon: _busca.text.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () { _busca.clear(); setState(() {}); },
+                ),
+        ),
+        onChanged: (_) => setState(() {}),
+      ),
+      const SizedBox(height: 6),
+      Row(children: [
+        FilterChip(
+          label: const Text('Solo los míos'),
+          selected: _soloMias,
+          // Recarga: el filtro por técnico lo hace la consulta, no la
+          // pantalla, para no traerse los de todos y esconderlos.
+          onSelected: (v) { setState(() => _soloMias = v); _cargar(); },
+        ),
+        const Spacer(),
+        Text('${_filtradas.length} parte(s)',
+            style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+      ]),
+    ]),
+  );
+
+  Widget _lista_() {
+    final ivs = _filtradas;
+    if (ivs.isEmpty && _sueltas.isEmpty) {
+      return Center(child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Text(
+            _general
+                ? (_busca.text.trim().isEmpty
+                    ? 'Todavía no hay partes de trabajo.'
+                    : 'Ningún parte con esa búsqueda.')
+                : 'Sin operaciones registradas para este vehículo.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppColors.textHint)),
+      ));
+    }
+    return RefreshIndicator(
                       onRefresh: _cargar,
                       child: ListView(
                         padding: const EdgeInsets.all(12),
@@ -226,11 +373,11 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
                             ..._sueltas.map(_filaOperacion),
                             const SizedBox(height: 16),
                           ],
-                          if (_intervenciones.isNotEmpty) ...[
-                            const Text('INTERVENCIONES',
-                                style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800)),
+                          if (ivs.isNotEmpty) ...[
+                            Text(_general ? 'PARTES' : 'INTERVENCIONES',
+                                style: const TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800)),
                             const SizedBox(height: 6),
-                            ..._intervenciones.map((iv) {
+                            ...ivs.map((iv) {
                               final informe = ((iv['resumen_ia'] as String?)?.isNotEmpty == true ? iv['resumen_ia'] : iv['resumen']) as String? ?? '—';
                               return Card(
                                 color: AppColors.surface,
@@ -250,6 +397,16 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
                                               color: AppColors.info)),
                                       const SizedBox(width: 8),
                                     ],
+                                    // En el general la MATRÍCULA es lo que
+                                    // distingue una fila de otra: sin ella,
+                                    // veinte partes del mismo día son veinte
+                                    // líneas iguales.
+                                    if (_general && _matriculaDe(iv).isNotEmpty) ...[
+                                      Text(_matriculaDe(iv),
+                                          style: const TextStyle(
+                                              fontSize: 13, fontWeight: FontWeight.w800)),
+                                      const SizedBox(width: 8),
+                                    ],
                                     Expanded(
                                       child: Text('${_fecha(iv['fecha'] as String?)} · ${iv['n_operaciones'] ?? 0} operación(es)',
                                           style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
@@ -265,8 +422,7 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
                           ],
                         ],
                       ),
-                    ),
-    );
+                    );
   }
 }
 
