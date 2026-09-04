@@ -66,6 +66,13 @@ export interface PartePdf {
    * Tapa el diagrama de Conti360, que usa otra numeración de posiciones.
    */
   plano?: Uint8Array | null;
+  /**
+   * Las posiciones que se han tocado en este parte, en % del plano (0-100),
+   * tal y como están calibradas en Mobilink (pos_x / pos_y). Se marcan con una
+   * cruz roja al lado de la rueda: de un vistazo se ve en qué ruedas se ha
+   * trabajado sin tener que cruzar la tabla con el dibujo.
+   */
+  marcas?: { x: number; y: number }[] | null;
 }
 
 /** PNG o JPG: pdf-lib necesita saberlo, y la imagen viene de donde viene. */
@@ -76,6 +83,8 @@ async function meterImagen(doc: PDFDocument, bytes: Uint8Array) {
 
 const TAM = 8;
 const NEGRO = rgb(0, 0, 0);
+/** El rojo de las marcas del plano. El mismo que ya usa el papel para «1 cruz por posición». */
+const ROJO = rgb(0.8, 0.1, 0.1);
 
 /**
  * Escribe recortando al ancho disponible en vez de desbordar.
@@ -97,6 +106,56 @@ function escribir(p: PDFPage, texto: string, f: PDFFont, x: number, yArriba: num
     }
   }
   p.drawText(t, { x, y: C.aPdf(yArriba), size, font: f, color: NEGRO });
+}
+
+/**
+ * Lo mismo, pero CENTRADO en una casilla estrecha ([izquierda, derecha]).
+ *
+ * Se deja un pelo de aire a cada lado para no tocar el filete, y se encoge
+ * hasta caber. Es lo que hace una persona rellenando el papel: no empieza a
+ * escribir pegada a la raya.
+ */
+function escribirEnCaja(p: PDFPage, texto: string, f: PDFFont,
+                        caja: [number, number], yArriba: number, tam = TAM) {
+  const t = (texto ?? "").toString().trim();
+  if (!t) return;
+  const ancho = caja[1] - caja[0] - 2;
+  let size = tam;
+  while (size > 4.5 && f.widthOfTextAtSize(t, size) > ancho) size -= 0.25;
+  const w = f.widthOfTextAtSize(t, size);
+  p.drawText(t, {
+    x: caja[0] + (caja[1] - caja[0] - w) / 2,
+    y: C.aPdf(yArriba), size, font: f, color: NEGRO,
+  });
+}
+
+/**
+ * Mueve el filete que separa «Ps» de «Descripción» hacia la derecha, para que
+ * quepa un código de posición de Mobilink (E1_IZQ) y no se salga por encima.
+ *
+ * Tapar el filete viejo borra también el trocito de cada raya horizontal que
+ * lo cruza, así que se vuelven a pintar. Si no, la tabla quedaría con nueve
+ * mordiscos en el mismo sitio y se notaría más que el problema que arregla.
+ */
+function moverSeparadorPs(p: PDFPage, viejo: number, rayas: number[]) {
+  const izq = viejo - 1.2, der = viejo + 1.6;
+  const arriba = rayas[0], abajo = rayas[rayas.length - 1];
+
+  p.drawRectangle({
+    x: izq, y: C.aPdf(abajo), width: der - izq, height: abajo - arriba,
+    color: rgb(1, 1, 1),
+  });
+  // Las rayas horizontales, solo en el trozo que se acaba de borrar.
+  for (const y of rayas) {
+    p.drawRectangle({
+      x: izq, y: C.aPdf(y + 0.6), width: der - izq, height: 0.6, color: NEGRO,
+    });
+  }
+  // Y el filete nuevo, de arriba abajo de la tabla.
+  p.drawRectangle({
+    x: C.SEPARADOR_PS - 0.3, y: C.aPdf(abajo),
+    width: 0.6, height: abajo - arriba, color: NEGRO,
+  });
 }
 
 function cruz(p: PDFPage, f: PDFFont, x: number, yArriba: number) {
@@ -154,27 +213,53 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
         // al vehículo.
         const esc = Math.min(caja.ancho / img.width, caja.alto / img.height);
         const an = img.width * esc, al = img.height * esc;
+        const x0 = caja.x + (caja.ancho - an) / 2;
+        const y0 = caja.y + (caja.alto - al) / 2;   // desde arriba
         p.drawImage(img, {
-          x: caja.x + (caja.ancho - an) / 2,
-          y: C.aPdf(caja.y + caja.alto - (caja.alto - al) / 2),
-          width: an, height: al,
+          x: x0, y: C.aPdf(y0 + al), width: an, height: al,
         });
+
+        // Las ruedas en las que se ha trabajado, con una cruz roja AL LADO —
+        // no encima: tapar la rueda con la marca deja el papel sin decir qué
+        // rueda era. Las coordenadas son las mismas que usa la tablet.
+        for (const m of d.marcas ?? []) {
+          if (m.x == null || m.y == null) continue;
+          const cx = x0 + (m.x / 100) * an;
+          const cy = y0 + (m.y / 100) * al;
+          const t = "X";
+          const size = 7;
+          // A la derecha de la rueda, y si se sale por el borde, a la
+          // izquierda: en un remolque las posiciones llegan al filo del cuadro.
+          const w = negrita.widthOfTextAtSize(t, size);
+          const derecha = cx + 3 + w <= caja.x + caja.ancho - 1;
+          p.drawText(t, {
+            x: derecha ? cx + 3 : cx - 3 - w,
+            y: C.aPdf(cy + size * 0.36),
+            size, font: negrita, color: ROJO,
+          });
+        }
       } catch {
         // Un plano ilegible no puede tumbar el parte entero: se queda el hueco
         // en blanco y el resto del papel sale igual.
       }
     }
 
+    // La casilla «Ps» ensanchada, en las dos tablas. Va ANTES de escribir: es
+    // pintura sobre la plantilla, y el texto tiene que quedar encima.
+    moverSeparadorPs(p, 42.24, C.RAYAS_DESMONTADOS);
+    moverSeparadorPs(p, 41.72, C.RAYAS_MONTADOS);
+
     // Neumáticos de esta página.
     const desde = pag * C.DESMONTADOS.filas;
     desmontados.slice(desde, desde + C.DESMONTADOS.filas).forEach((n, i) => {
       const y = filas(C.DESMONTADOS, i);
       const col = C.DESMONTADOS.columnas;
-      escribir(p, n.posicion ?? "", normal, col.posicion, y, TAM, 24);
-      escribir(p, n.descripcion ?? "", normal, col.descripcion, y, TAM, 150);
-      escribir(p, n.bar ?? "", normal, col.bar, y, TAM, 32);
-      escribir(p, n.serie ?? "", normal, col.serie, y, TAM, 72);
-      escribir(p, n.mm ?? "", normal, col.mm, y, TAM, 20);
+      const caja = C.DESMONTADOS.cajas!;
+      escribirEnCaja(p, n.posicion ?? "", normal, caja.posicion, y);
+      escribir(p, n.descripcion ?? "", normal, col.descripcion, y, TAM, 146);
+      escribirEnCaja(p, n.bar ?? "", normal, caja.bar, y);
+      escribirEnCaja(p, n.serie ?? "", normal, caja.serie, y);
+      escribirEnCaja(p, n.mm ?? "", normal, caja.mm, y);
       if (n.razon && C.RAZON_X[n.razon]) cruz(p, negrita, C.RAZON_X[n.razon], y);
       if (n.destino && C.DESTINO_X[n.destino]) cruz(p, negrita, C.DESTINO_X[n.destino], y);
     });
@@ -183,13 +268,12 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
     montados.slice(desdeM, desdeM + C.MONTADOS.filas).forEach((n, i) => {
       const y = filas(C.MONTADOS, i);
       const col = C.MONTADOS.columnas;
-      escribir(p, n.posicion ?? "", normal, col.posicion, y, TAM, 24);
-      escribir(p, n.descripcion ?? "", normal, col.descripcion, y, TAM, 150);
-      escribir(p, n.origen ?? "", normal, col.origen, y, TAM, 50);
-      escribir(p, n.serie ?? "", normal, col.serie, y, TAM, 80);
-      // La columna Mm de montados es más estrecha que la de desmontados: a 8 pt
-      // el "13.0" se salía por el borde rosa.
-      escribir(p, n.mm ?? "", normal, col.mm, y, 6, 13);
+      const caja = C.MONTADOS.cajas!;
+      escribirEnCaja(p, n.posicion ?? "", normal, caja.posicion, y);
+      escribir(p, n.descripcion ?? "", normal, col.descripcion, y, TAM, 163);
+      escribirEnCaja(p, n.origen ?? "", normal, caja.origen, y);
+      escribirEnCaja(p, n.serie ?? "", normal, caja.serie, y);
+      escribirEnCaja(p, n.mm ?? "", normal, caja.mm, y);
     });
 
     // Lo que solo tiene sentido una vez va en la ÚLTIMA página: los servicios
