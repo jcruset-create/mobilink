@@ -8899,7 +8899,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         return w;
       }
       const STATUS_LABELS_PDF: Record<string, string> = {
-        pendiente: "Pendiente", asignada: "Asignada", en_camino: "En camino",
+        pendiente: "Gestionada", asignada: "Asignada", en_camino: "En camino",
         en_punto: "En punto", reparando: "Reparando", finalizada: "Finalizada",
         en_camino_base: "En camino a taller", llegada_taller: "En taller",
         cancelada: "Cancelada", redirigida: "Redirigida",
