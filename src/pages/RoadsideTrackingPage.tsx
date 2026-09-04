@@ -276,8 +276,15 @@ export default function RoadsideTrackingPage() {
 
   const files: RoadsideAssistanceFile[] = data?.files ?? [];
 
-  // Furgoneta tal y como la ve el cliente: marca (y modelo, si está) más la
-  // matrícula. El nombre interno solo aparece si no hay ninguno de los dos.
+  /*
+   * Furgoneta tal y como la ve el cliente: marca (y modelo, si está) más la
+   * matrícula. El nombre interno solo aparece si no hay ninguno de los dos.
+   *
+   * Cuando no hay ninguna se dice «Sin asignar», no «Pendiente»: en esta
+   * pantalla «pendiente» era también el nombre del primer estado —hoy
+   * «Gestionada»— y usar la misma palabra para dos cosas distintas hacía
+   * dudar de si faltaba la furgoneta o de en qué punto iba la asistencia.
+   */
   const vanLabel =
     [
       [data?.vanMarca, data?.vanModelo].filter(Boolean).join(" ").trim(),
@@ -286,7 +293,7 @@ export default function RoadsideTrackingPage() {
       .filter(Boolean)
       .join(" · ") ||
     assistance.assignedVehicleName ||
-    "Pendiente";
+    "Sin asignar";
   const isFinished =
     assistance.status === "llegada_taller" ||
     assistance.status === "cancelada";
@@ -486,7 +493,7 @@ export default function RoadsideTrackingPage() {
             </div>
             <div className="space-y-2 text-sm font-semibold text-slate-700">
               <div className="flex flex-wrap items-center gap-2">
-                <span>Operario: {assistance.assignedTechName || "Pendiente"}</span>
+                <span>Operario: {assistance.assignedTechName || "Sin asignar"}</span>
                 {data?.techPhone && (
                   <a
                     href={`tel:${data.techPhone}`}
