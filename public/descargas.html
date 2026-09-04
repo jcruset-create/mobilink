@@ -30,6 +30,7 @@
     }
     .icon.assist { background: #1e3a8a22; color: #60a5fa; }
     .icon.lite { background: #8b5cf622; color: #a78bfa; }
+    .fallo { margin: 4px 0 0; font-size: 12px; color: #fbbf24; }
     .icon.tyre { background: #7c3aed22; color: #a78bfa; }
     .icon.stock { background: #16a34a22; color: #4ade80; }
     .icon.safety { background: #f59e0b22; color: #fbbf24; }
@@ -68,6 +69,15 @@
   </div>
 
   <script>
+    // El texto del fallo lo compone el servidor, así que se escapa antes de
+    // meterlo en el HTML. Es de casa, pero pintar texto sin escapar es una
+    // costumbre que un día se paga.
+    function esc(t) {
+      return String(t == null ? "" : t).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+
     var META = {
       assist: { cls: "assist", ini: "A", desc: "Asistencias en carretera para operarios." },
       "assist-lite": { cls: "lite", ini: "L", desc: "Asistencias de la central para talleres colaboradores." },
@@ -84,14 +94,21 @@
           var m = META[a.key] || { cls: "assist", ini: "?", desc: "" };
           var card = document.createElement("div");
           card.className = "card";
+          // "No disponible" y "algo va mal" no son lo mismo: lo primero se
+          // acepta, lo segundo se arregla. Antes se veían igual y por eso
+          // hubo que investigar a mano por qué faltaban tres aplicaciones.
           var btn = a.url
             ? '<a class="btn" href="' + a.url + '">Descargar</a>'
-            : '<span class="ver">No disponible</span>';
+            : '<span class="ver">' + (a.error ? "Con problema" : "No disponible") + '</span>';
+          var aviso = a.error
+            ? '<p class="fallo">⚠ ' + esc(a.error) + '</p>'
+            : "";
           card.innerHTML =
             '<div class="icon ' + m.cls + '">' + m.ini + '</div>' +
-            '<div class="info"><h2>' + a.label + '</h2>' +
+            '<div class="info"><h2>' + esc(a.label) + '</h2>' +
             '<p class="desc">' + m.desc + '</p>' +
-            '<p class="ver">' + (a.version ? "Versión " + a.version : "") + '</p></div>' +
+            '<p class="ver">' + (a.version ? "Versión " + esc(a.version) : "") + '</p>' +
+            aviso + '</div>' +
             btn;
           grid.appendChild(card);
         });
