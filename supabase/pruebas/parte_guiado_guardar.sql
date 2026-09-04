@@ -70,7 +70,23 @@ create table tc_vehiculos (
   matricula text not null, km_actual numeric not null default 0,
   origen_km text not null default 'manual', activo boolean not null default true,
   updated_at timestamptz not null default now(), unique (empresa_id, matricula));
-create table tc_neumaticos (id uuid primary key default gen_random_uuid(), empresa_id uuid);
+create table tc_neumaticos (id uuid primary key default gen_random_uuid(), empresa_id uuid,
+  estado text, updated_at timestamptz not null default now());
+
+-- Los catálogos de razones y destinos, con las filas que de verdad ofrece el
+-- formulario. El destino es el que decide en qué estado queda la goma.
+create table tc_cat_motivos (
+  id uuid primary key default gen_random_uuid(), codigo text not null, nombre text not null,
+  tipo_operacion text, orden int default 100, activo boolean default true,
+  unique (codigo, tipo_operacion));
+insert into tc_cat_motivos (codigo, nombre) values ('desgaste','Desgaste'),('pinchazo','Pinchazo');
+create table tc_cat_destinos (
+  codigo text primary key, nombre text not null, estado_resultante text,
+  orden int default 100, activo boolean default true);
+insert into tc_cat_destinos (codigo, nombre, estado_resultante) values
+  ('almacen_taller','Almacenar en el taller','stock_usado'),
+  ('carcasa_continental','Carcasa a Continental','pendiente_recauchutado'),
+  ('desechado','Desechado','descartado');
 
 create table revisiones_vehiculo (
   id uuid primary key default gen_random_uuid(),
@@ -123,7 +139,19 @@ create table tc_intervencion_servicios (
 create table operaciones_neumaticos (
   id uuid primary key default gen_random_uuid(),
   intervencion_id uuid references tc_intervenciones(id) on delete set null,
-  empresa_id uuid, vehiculo_id uuid, created_at timestamptz not null default now());
+  empresa_id uuid, vehiculo_id uuid, neumatico_id uuid references tc_neumaticos(id),
+  -- Sin CHECK, como en la base de verdad desde la fase 1: aquí van CÓDIGOS del
+  -- catálogo de destinos, no las cuatro palabras de antes.
+  destino text, estado_nuevo text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now());
+
+-- La tabla de adjuntos que ya existe: es donde van las fotos de la operación.
+create table tc_operacion_adjuntos (
+  id uuid primary key default gen_random_uuid(),
+  operacion_id uuid not null references operaciones_neumaticos(id) on delete cascade,
+  file_url text not null, storage_path text, file_type text, descripcion text,
+  subido_por uuid default auth.uid(), created_at timestamptz not null default now());
 
 -- Las dos piezas que se reutilizan, en versión de banco.
 create or replace function tc_iniciar_intervencion(p_vehiculo uuid) returns jsonb
@@ -143,12 +171,22 @@ end $$;
 create or replace function tc_ejecutar_en_intervencion(
   p_intervencion uuid, p_rpc text, p_args jsonb default '{}'::jsonb, p_prevista uuid default null
 ) returns jsonb language plpgsql as $$
-declare i record; begin
+declare i record; v_neu uuid; v_ids uuid[]; begin
   if p_rpc = 'REVIENTA' then raise exception 'la operación ha fallado'; end if;
   select * into i from tc_intervenciones where id = p_intervencion;
-  insert into operaciones_neumaticos (intervencion_id, empresa_id, vehiculo_id)
-  values (p_intervencion, i.empresa_id, i.vehiculo_id);
-  return jsonb_build_object('resultado', p_rpc);
+  -- Un neumático por operación, para poder comprobar en qué estado queda.
+  insert into tc_neumaticos (empresa_id, estado) values (i.empresa_id, p_args->>'p_nuevo_estado')
+  returning id into v_neu;
+  insert into operaciones_neumaticos (intervencion_id, empresa_id, vehiculo_id, neumatico_id,
+                                      destino, estado_nuevo)
+  values (p_intervencion, i.empresa_id, i.vehiculo_id, v_neu,
+          p_args->>'p_nuevo_estado', p_args->>'p_nuevo_estado');
+  -- Como la de verdad: devuelve TODAS las operaciones de la intervención
+  -- creadas en esta transacción, no solo la de esta llamada.
+  select array_agg(id) into v_ids from operaciones_neumaticos
+   where intervencion_id = p_intervencion and created_at >= transaction_timestamp();
+  return jsonb_build_object('resultado', p_rpc, 'intervencion', p_intervencion,
+                            'operaciones_intervencion', to_jsonb(v_ids));
 end $$;
 
 insert into tc_tipos_vehiculo (nombre, configuracion_ejes) values ('Camion 3 ejes','2x2x2');
@@ -310,3 +348,86 @@ select prueba('un cliente no guarda partes',
   $q$ select tc_guardar_parte_guiado(parte('66666666-6666-6666-6666-666666666666')) $q$,
   'Sin permiso');
 update auth_ctx set rol = 'operador';
+
+-- ── El destino del catálogo y las fotos ─────────────────────────────────────
+-- Los partes de arriba han ido todos a la MISMA intervención (que es lo
+-- correcto: tc_iniciar_intervencion reutiliza la abierta del vehículo). Para
+-- que las comprobaciones de aquí abajo miren solo sus propias operaciones, se
+-- cierra esa intervención y cada parte nuevo abre la suya.
+update tc_intervenciones set cerrada_at = now() where cerrada_at is null;
+
+-- Un destino que NO deja la goma en el almacén: se desmonta a 'reparacion'
+-- (que no toca stock) y acaba en el estado que dice el catálogo.
+do $$ declare r jsonb; o record; n int; begin
+  r := tc_guardar_parte_guiado(parte('77777777-7777-7777-7777-777777777777',
+    jsonb_build_object('acciones', jsonb_build_array(jsonb_build_object(
+      'rpc','tc_desmontar_neumatico', 'args', jsonb_build_object('p_motivo','pinchazo'),
+      'destino_codigo','carcasa_continental',
+      'adjuntos', jsonb_build_array(
+        jsonb_build_object('url','https://x/serie.jpg','descripcion','Número de serie'),
+        jsonb_build_object('url','https://x/dot.jpg','descripcion','DOT'),
+        jsonb_build_object('url','','descripcion','vacía, se ignora')))))));
+
+  select * into o from operaciones_neumaticos
+   where intervencion_id = (r->>'intervencion_id')::uuid;
+  if o.destino = 'carcasa_continental' and o.estado_nuevo = 'pendiente_recauchutado'
+  then raise notice 'PASA · la operacion guarda el CODIGO del destino del catalogo';
+  else raise notice 'FALLA · destino=% estado_nuevo=%', o.destino, o.estado_nuevo; end if;
+
+  if (select estado from tc_neumaticos where id = o.neumatico_id) = 'pendiente_recauchutado'
+  then raise notice 'PASA · el neumatico acaba en el estado que dice el catalogo';
+  else raise notice 'FALLA · el neumatico quedo en %',
+    (select estado from tc_neumaticos where id = o.neumatico_id); end if;
+
+  select count(*) into n from tc_operacion_adjuntos where operacion_id = o.id;
+  if n = 2 then raise notice 'PASA · las dos fotos se cuelgan de la operacion (la vacia no)';
+  else raise notice 'FALLA · % adjuntos', n; end if;
+  if (r->>'fotos')::int = 2 then raise notice 'PASA · y lo devuelve contado';
+  else raise notice 'FALLA · fotos = %', r->>'fotos'; end if;
+end $$;
+
+-- Un destino que SÍ vuelve al almacén: se desmonta a 'almacen', que es lo que
+-- repone stock como usado. Ese camino no se toca.
+update tc_intervenciones set cerrada_at = now() where cerrada_at is null;
+do $$ declare r jsonb; o record; begin
+  r := tc_guardar_parte_guiado(parte('88888888-8888-8888-8888-888888888888',
+    jsonb_build_object('acciones', jsonb_build_array(jsonb_build_object(
+      'rpc','tc_desmontar_neumatico', 'args','{}'::jsonb,
+      'destino_codigo','almacen_taller')))));
+  select * into o from operaciones_neumaticos
+   where intervencion_id = (r->>'intervencion_id')::uuid;
+  -- El banco guarda en estado_nuevo el p_nuevo_estado con el que se llamó,
+  -- antes de la corrección: así se ve con qué estado se desmontó de verdad.
+  if (select estado from tc_neumaticos where id = o.neumatico_id) = 'stock_usado'
+     and o.destino = 'almacen_taller'
+  then raise notice 'PASA · el destino de almacen desmonta a almacen y queda como stock usado';
+  else raise notice 'FALLA · estado=% destino=%',
+    (select estado from tc_neumaticos where id = o.neumatico_id), o.destino; end if;
+end $$;
+
+-- DOS acciones en el mismo parte: cada foto va a SU operación, no a las dos.
+update tc_intervenciones set cerrada_at = now() where cerrada_at is null;
+do $$ declare r jsonb; ids uuid[]; n1 int; n2 int; begin
+  r := tc_guardar_parte_guiado(parte('99999999-9999-9999-9999-999999999999',
+    jsonb_build_object('acciones', jsonb_build_array(
+      jsonb_build_object('rpc','tc_desmontar_neumatico','args','{}'::jsonb,
+        'destino_codigo','desechado',
+        'adjuntos', jsonb_build_array(jsonb_build_object('url','https://x/1.jpg'))),
+      jsonb_build_object('rpc','tc_desmontar_neumatico','args','{}'::jsonb,
+        'destino_codigo','desechado',
+        'adjuntos', jsonb_build_array(jsonb_build_object('url','https://x/2.jpg')))))));
+  select array_agg(id order by created_at, id) into ids from operaciones_neumaticos
+   where intervencion_id = (r->>'intervencion_id')::uuid;
+  select count(*) into n1 from tc_operacion_adjuntos where operacion_id = ids[1];
+  select count(*) into n2 from tc_operacion_adjuntos where operacion_id = ids[2];
+  if array_length(ids,1) = 2 and n1 = 1 and n2 = 1
+  then raise notice 'PASA · con dos acciones cada foto va a SU operacion';
+  else raise notice 'FALLA · % operaciones, adjuntos %/%', array_length(ids,1), n1, n2; end if;
+end $$;
+
+select prueba('un destino inventado se rechaza',
+  $q$ select tc_guardar_parte_guiado(parte('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        jsonb_build_object('acciones', jsonb_build_array(jsonb_build_object(
+          'rpc','tc_desmontar_neumatico','args','{}'::jsonb,
+          'destino_codigo','me_lo_invento'))))) $q$,
+  'no está en el catálogo');

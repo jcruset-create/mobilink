@@ -38,14 +38,22 @@ const _titulos = <_Paso, String>{
 
 /// Qué se le hace a una rueda. Son las operaciones que ya existen; aquí no se
 /// inventa ninguna.
-enum _Accion { ninguna, desmontar, cambiarPosicion, reparar }
+enum _Accion { ninguna, desmontar, cambiarPosicion, reparar, montar }
 
 const _accionTexto = <_Accion, String>{
   _Accion.ninguna:         'Solo revisar',
   _Accion.desmontar:       'Desmontar',
   _Accion.cambiarPosicion: 'Mover a otra posición',
   _Accion.reparar:         'Reparar',
+  _Accion.montar:          'Montar uno',
 };
+
+/// Qué acciones tienen sentido según lo que haya en la posición. Enseñar
+/// "Desmontar" en un hueco vacío, o "Montar" donde ya hay goma, es ofrecer un
+/// camino que la base de datos va a rechazar al final del parte.
+List<_Accion> _accionesPara({required bool hayNeumatico}) => hayNeumatico
+    ? const [_Accion.ninguna, _Accion.desmontar, _Accion.cambiarPosicion, _Accion.reparar]
+    : const [_Accion.ninguna, _Accion.montar];
 
 /// Lo apuntado para una posición: lo medido y lo que se le hace.
 class _Rueda {
@@ -55,8 +63,25 @@ class _Rueda {
   String? observaciones;
   _Accion accion = _Accion.ninguna;
   String? destinoPosicionId; // solo para cambiarPosicion
-  String motivo = 'desgaste';
-  String destino = 'almacen';
+
+  /// Razón de sustitución y destino: CÓDIGOS de tc_cat_motivos y
+  /// tc_cat_destinos, no texto libre. Nacen vacíos a propósito: si trajeran un
+  /// valor por defecto, el parte saldría con "desgaste / almacén" cada vez que
+  /// al operario se le pasara elegirlos, y eso es peor que no tener el dato.
+  String? motivo;
+  String? destino;
+
+  /// Las fotos del neumático que se retira. La del número de serie es
+  /// OBLIGATORIA: es lo que ata la goma que sale a la ficha que hay en el
+  /// sistema. Las otras dos ayudan pero no bloquean.
+  String? fotoSerie;
+  String? fotoNeumatico;
+  String? fotoDot;
+
+  // Montaje en una posición vacía.
+  String? referenciaId;
+  String? referenciaTexto;   // solo para pintarlo; el id es lo que viaja
+  String condicion = 'nuevo';
 
   bool get tocada =>
       profundidad != null || presion != null || accion != _Accion.ninguna ||
@@ -67,6 +92,9 @@ class _Rueda {
         'estadoVisual': estadoVisual, 'observaciones': observaciones,
         'accion': accion.name, 'destinoPosicionId': destinoPosicionId,
         'motivo': motivo, 'destino': destino,
+        'fotoSerie': fotoSerie, 'fotoNeumatico': fotoNeumatico, 'fotoDot': fotoDot,
+        'referenciaId': referenciaId, 'referenciaTexto': referenciaTexto,
+        'condicion': condicion,
       };
 
   static _Rueda deJson(Map<String, dynamic> j) => _Rueda()
@@ -77,8 +105,14 @@ class _Rueda {
     ..accion = _Accion.values.firstWhere(
         (a) => a.name == j['accion'], orElse: () => _Accion.ninguna)
     ..destinoPosicionId = j['destinoPosicionId'] as String?
-    ..motivo = (j['motivo'] as String?) ?? 'desgaste'
-    ..destino = (j['destino'] as String?) ?? 'almacen';
+    ..motivo = j['motivo'] as String?
+    ..destino = j['destino'] as String?
+    ..fotoSerie = j['fotoSerie'] as String?
+    ..fotoNeumatico = j['fotoNeumatico'] as String?
+    ..fotoDot = j['fotoDot'] as String?
+    ..referenciaId = j['referenciaId'] as String?
+    ..referenciaTexto = j['referenciaTexto'] as String?
+    ..condicion = (j['condicion'] as String?) ?? 'nuevo';
 }
 
 class RealizarOperacionScreen extends StatefulWidget {
@@ -121,6 +155,14 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
   final Map<String, _Rueda> _ruedas = {};
   String? _posicionActiva;
 
+  /// Los catálogos que rellenan los desplegables. NO son listas escritas aquí:
+  /// vienen de tc_cat_motivos y tc_cat_destinos, los mismos que usa el panel.
+  /// Se guardan en la tablet porque cambian una vez al año y el arcén no
+  /// siempre tiene cobertura; sin esta caché, sin red no habría desplegables.
+  List<Map<String, dynamic>> _catMotivos = [];
+  List<Map<String, dynamic>> _catDestinos = [];
+  List<Map<String, dynamic>> _catReferencias = [];
+
   // Servicios
   List<Map<String, dynamic>> _catServicios = [];
   final Map<String, num> _cantidades = {};
@@ -146,6 +188,66 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     TyreControlApi.listarServiciosCatalogo()
         .then((v) { if (mounted) setState(() => _catServicios = v); })
         .catchError((_) {/* se puede seguir sin catálogo */});
+    _cargarCatalogos();
+  }
+
+  /// Motivos, destinos y referencias: de la base de datos si hay red, de la
+  /// última copia guardada si no. Lo que NO se hace es inventar una lista de
+  /// respaldo en la APK: sería un catálogo paralelo que se desincronizaría del
+  /// de verdad sin que nadie se enterara.
+  Future<void> _cargarCatalogos() async {
+    void poner(String clave, List<Map<String, dynamic>> v) {
+      switch (clave) {
+        case 'motivos':     _catMotivos = v; break;
+        case 'destinos':    _catDestinos = v; break;
+        case 'referencias': _catReferencias = v; break;
+      }
+    }
+
+    // Primero lo guardado: la pantalla se pinta ya, sin esperar a la red.
+    for (final c in ['motivos', 'destinos', 'referencias']) {
+      final j = OfflineStore.cachedJson('tc_cat_$c');
+      if (j is List) {
+        poner(c, j.map((e) => Map<String, dynamic>.from(e as Map)).toList());
+      }
+    }
+    if (mounted) setState(() {});
+
+    Future<void> refrescar(
+        String clave, Future<List<Map<String, dynamic>>> Function() traer) async {
+      try {
+        final v = await traer();
+        await OfflineStore.cacheJson('tc_cat_$clave', v);
+        if (mounted) setState(() => poner(clave, v));
+      } catch (_) {
+        // Sin red se sigue con la copia guardada.
+      }
+    }
+
+    await Future.wait([
+      refrescar('motivos', TyreControlApi.listarMotivosDesmontaje),
+      refrescar('destinos', TyreControlApi.listarDestinosNeumatico),
+      refrescar('referencias', TyreControlApi.listarCatalogoReferencias),
+    ]);
+  }
+
+  /// Una foto: cámara, subida y URL. Se sube EN EL MOMENTO, no al guardar: si
+  /// se acumularan para el final, un parte con doce fotos tardaría un minuto
+  /// en cerrarse con el cliente delante, y un corte de red lo perdería todo.
+  Future<String?> _hacerFoto() async {
+    final foto = await ImagePicker().pickImage(
+        source: ImageSource.camera, imageQuality: 85);
+    if (foto == null) return null;
+    setState(() { _trabajando = true; _error = null; });
+    try {
+      return await TyreControlApi.subirFotoParte(
+          File(foto.path), carpeta: _carpetaFotos);
+    } catch (e) {
+      if (mounted) setState(() => _error = 'No se ha podido subir la foto: $e');
+      return null;
+    } finally {
+      if (mounted) setState(() => _trabajando = false);
+    }
   }
 
   @override
@@ -384,33 +486,92 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     final out = <Map<String, dynamic>>[];
     _ruedas.forEach((posId, r) {
       final montaje = _montajes[posId];
-      if (montaje == null) return; // sin goma montada no hay nada que hacerle
       switch (r.accion) {
         case _Accion.ninguna:
           break;
-        case _Accion.desmontar:
-          out.add({'rpc': 'tc_desmontar_neumatico', 'args': {
-            'p_montaje': montaje.id, 'p_km': km, 'p_motivo': r.motivo,
-            'p_nuevo_estado': r.destino, 'p_obs': r.observaciones,
+        case _Accion.montar:
+          // Montar SÍ vale en una posición vacía: es justamente para eso.
+          if (montaje != null || r.referenciaId == null) break;
+          out.add({'rpc': 'tc_montar_desde_catalogo', 'args': {
+            'p_vehiculo': _vehiculo!.id, 'p_posicion': posId,
+            'p_referencia': r.referenciaId, 'p_control_individual': null,
+            'p_datos': <String, dynamic>{
+              if (r.condicion == 'usado' && r.profundidad != null)
+                'profundidad_actual_mm': r.profundidad!.toString(),
+            },
+            'p_km': km, 'p_fecha': null,
+            'p_obs': r.observaciones ?? 'Montaje desde el parte (tablet)',
+            'p_forzar_medida': false, 'p_condicion': r.condicion,
           }});
           break;
+        case _Accion.desmontar:
+          if (montaje == null) break; // sin goma montada no hay nada que quitar
+          out.add({
+            'rpc': 'tc_desmontar_neumatico',
+            'args': {
+              'p_montaje': montaje.id, 'p_km': km, 'p_motivo': r.motivo,
+              // El estado en que queda la goma lo decide el DESTINO, y esa
+              // traducción la hace la base de datos con tc_cat_destinos: aquí
+              // no se copia la tabla, solo se manda el código elegido.
+              'p_obs': r.observaciones,
+            },
+            'destino_codigo': r.destino,
+            'adjuntos': [
+              if (r.fotoSerie != null)
+                {'url': r.fotoSerie, 'descripcion': 'Número de serie'},
+              if (r.fotoNeumatico != null)
+                {'url': r.fotoNeumatico, 'descripcion': 'Neumático'},
+              if (r.fotoDot != null)
+                {'url': r.fotoDot, 'descripcion': 'DOT'},
+            ],
+          });
+          break;
         case _Accion.cambiarPosicion:
-          if (r.destinoPosicionId == null) break;
+          if (montaje == null || r.destinoPosicionId == null) break;
           out.add({'rpc': 'tc_cambiar_posicion', 'args': {
             'p_montaje': montaje.id, 'p_posicion_destino': r.destinoPosicionId,
             'p_km': km, 'p_obs': r.observaciones,
           }});
           break;
         case _Accion.reparar:
-          if (montaje.neumatico == null) break;
+          if (montaje?.neumatico == null) break;
           out.add({'rpc': 'tc_registrar_reparacion', 'args': {
-            'p_neumatico': montaje.neumatico!.id, 'p_tipo_reparacion': 'pinchazo',
+            'p_neumatico': montaje!.neumatico!.id, 'p_tipo_reparacion': 'pinchazo',
             'p_resultado': 'reparado', 'p_km': km, 'p_obs': r.observaciones,
           }});
           break;
       }
     });
     return out;
+  }
+
+  /// Qué le falta al paso de las ruedas para poder seguir. Devuelve el texto
+  /// que se le enseña al operario: un botón apagado sin explicación es la
+  /// forma más rápida de que alguien acabe apuntándolo en un papel.
+  String? get _faltaEnRuedas {
+    final pendientes = <String>[];
+    _ruedas.forEach((posId, r) {
+      final nombre = _posiciones
+          .where((p) => p.id == posId)
+          .map((p) => p.codigoPosicion)
+          .followedBy(const ['?']).first;
+      if (r.accion == _Accion.desmontar && _montajes[posId] != null) {
+        final falta = <String>[
+          if (r.motivo == null) 'la razón',
+          if (r.destino == null) 'el destino',
+          if (r.fotoSerie == null) 'la foto del número de serie',
+        ];
+        if (falta.isNotEmpty) pendientes.add('$nombre: falta ${falta.join(', ')}');
+      }
+      if (r.accion == _Accion.montar && _montajes[posId] == null &&
+          r.referenciaId == null) {
+        pendientes.add('$nombre: falta elegir el neumático del catálogo');
+      }
+      if (r.accion == _Accion.cambiarPosicion && r.destinoPosicionId == null) {
+        pendientes.add('$nombre: falta a qué posición se mueve');
+      }
+    });
+    return pendientes.isEmpty ? null : pendientes.join('\n');
   }
 
   List<Map<String, dynamic>> _mediciones() {
@@ -509,7 +670,8 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     switch (_paso) {
       case _Paso.vehiculo:  return _vehiculo != null;
       case _Paso.cabecera:  return num.tryParse(_km.text.trim()) != null;
-      case _Paso.ruedas:    return true;   // un parte sin tocar ruedas es válido
+      // Un parte sin tocar ruedas es válido; uno con una rueda a medias no.
+      case _Paso.ruedas:    return _faltaEnRuedas == null;
       case _Paso.servicios: return true;
       case _Paso.firmas:    return true;
       case _Paso.revision:  return true;
@@ -838,6 +1000,25 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
             style: TextStyle(color: AppColors.textHint))
       else
         _fichaRueda(activa),
+      if (_faltaEnRuedas != null) ...[
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppColors.warning.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppColors.warning.withValues(alpha: 0.5)),
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.info_outline, size: 18, color: AppColors.warning),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('Para seguir falta:\n$_faltaEnRuedas',
+                  style: const TextStyle(fontSize: 13, color: AppColors.warning)),
+            ),
+          ]),
+        ),
+      ],
     ];
   }
 
@@ -870,40 +1051,106 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
               (v) => setState(() => r.presion = v),
               sugeridos: const [7, 7.5, 8, 8.5, 9]),
 
-          if (neu != null) ...[
-            const SizedBox(height: 18),
-            const Text('¿Qué se le hace?',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              for (final a in _Accion.values)
+          const SizedBox(height: 18),
+          const Text('¿Qué se le hace?',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final a in _accionesPara(hayNeumatico: neu != null))
+              ChoiceChip(
+                label: Text(_accionTexto[a]!),
+                selected: r.accion == a,
+                onSelected: (_) => setState(() => r.accion = a),
+              ),
+          ]),
+
+          // ── Montar en un hueco vacío ──
+          if (r.accion == _Accion.montar) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final ref = await showModalBottomSheet<Map<String, dynamic>>(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: AppColors.surface,
+                  builder: (_) => _ElegirReferencia(referencias: _catReferencias),
+                );
+                if (ref == null) return;
+                setState(() {
+                  r.referenciaId = ref['id'] as String?;
+                  r.referenciaTexto = [ref['marca'], ref['modelo'], ref['medida']]
+                      .whereType<String>().where((x) => x.isNotEmpty).join(' · ');
+                });
+                _guardarBorrador();
+              },
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+              icon: const Icon(Icons.search),
+              label: Text(r.referenciaTexto ?? 'Elegir del catálogo'),
+            ),
+            const SizedBox(height: 10),
+            Wrap(spacing: 8, children: [
+              for (final c in const ['nuevo', 'usado'])
                 ChoiceChip(
-                  label: Text(_accionTexto[a]!),
-                  selected: r.accion == a,
-                  onSelected: (_) => setState(() => r.accion = a),
+                  label: Text(c == 'nuevo' ? 'Nuevo' : 'Usado'),
+                  selected: r.condicion == c,
+                  onSelected: (_) => setState(() => r.condicion = c),
                 ),
             ]),
-            if (r.accion == _Accion.cambiarPosicion) ...[
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: r.destinoPosicionId,
-                decoration: const InputDecoration(labelText: '¿A qué posición?'),
-                items: [
-                  for (final p in _posiciones)
-                    if (p.id != posId && _montajes[p.id] == null)
-                      DropdownMenuItem(value: p.id, child: Text(p.codigoPosicion)),
-                ],
-                onChanged: (v) => setState(() => r.destinoPosicionId = v),
+            if (r.condicion == 'usado')
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text('De un usado hace falta la profundidad de arriba: es '
+                            'la que se guarda como mm reales.',
+                    style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
               ),
-            ],
-            if (r.accion == _Accion.desmontar) ...[
-              const SizedBox(height: 12),
-              Row(children: [
-                Expanded(child: _texto('Motivo', r.motivo, (v) => r.motivo = v)),
-                const SizedBox(width: 10),
-                Expanded(child: _texto('Destino', r.destino, (v) => r.destino = v)),
-              ]),
-            ],
+          ],
+
+          if (r.accion == _Accion.cambiarPosicion) ...[
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: r.destinoPosicionId,
+              decoration: const InputDecoration(labelText: '¿A qué posición?'),
+              items: [
+                for (final p in _posiciones)
+                  if (p.id != posId && _montajes[p.id] == null)
+                    DropdownMenuItem(value: p.id, child: Text(p.codigoPosicion)),
+              ],
+              onChanged: (v) => setState(() => r.destinoPosicionId = v),
+            ),
+          ],
+
+          // ── Desmontar: razón, destino y las fotos ──
+          if (r.accion == _Accion.desmontar) ...[
+            const SizedBox(height: 12),
+            _catalogo(
+              etiqueta: 'Razón de sustitución',
+              valor: r.motivo,
+              opciones: _catMotivos,
+              onChanged: (v) { setState(() => r.motivo = v); _guardarBorrador(); },
+            ),
+            const SizedBox(height: 12),
+            _catalogo(
+              etiqueta: 'Destino del neumático',
+              valor: r.destino,
+              opciones: _catDestinos,
+              onChanged: (v) { setState(() => r.destino = v); _guardarBorrador(); },
+            ),
+            const SizedBox(height: 16),
+            const Text('Fotos del neumático que sale',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            const Text('La del número de serie es obligatoria: es lo que ata la '
+                       'goma que sale a su ficha. Las otras dos, si dan tiempo.',
+                style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+            const SizedBox(height: 8),
+            _foto('Nº de serie', r.fotoSerie, obligatoria: true,
+                onHecha: (u) => r.fotoSerie = u),
+            const SizedBox(height: 8),
+            _foto('Neumático', r.fotoNeumatico, obligatoria: false,
+                onHecha: (u) => r.fotoNeumatico = u),
+            const SizedBox(height: 8),
+            _foto('DOT', r.fotoDot, obligatoria: false,
+                onHecha: (u) => r.fotoDot = u),
           ],
 
           const SizedBox(height: 12),
@@ -923,12 +1170,72 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     );
   }
 
-  Widget _texto(String etiqueta, String valor, void Function(String) onChanged) =>
-      TextFormField(
-        initialValue: valor,
-        decoration: InputDecoration(labelText: etiqueta, isDense: true),
-        onChanged: onChanged,
-      );
+  /// Un desplegable alimentado por un CATÁLOGO de la base de datos. Si el
+  /// catálogo no ha llegado (primera vez sin red) se dice, en vez de enseñar
+  /// un desplegable vacío que parece roto.
+  Widget _catalogo({
+    required String etiqueta,
+    required String? valor,
+    required List<Map<String, dynamic>> opciones,
+    required void Function(String?) onChanged,
+  }) {
+    if (opciones.isEmpty) {
+      return Text('No se ha podido cargar «$etiqueta». Conecta una vez a la red '
+                  'y la lista queda guardada en la tablet.',
+          style: const TextStyle(fontSize: 12, color: AppColors.warning));
+    }
+    final codigos = opciones.map((o) => o['codigo'] as String?).toSet();
+    return DropdownButtonFormField<String>(
+      initialValue: codigos.contains(valor) ? valor : null,
+      isExpanded: true,
+      decoration: InputDecoration(labelText: etiqueta, isDense: true),
+      items: [
+        for (final o in opciones)
+          DropdownMenuItem(
+            value: o['codigo'] as String?,
+            child: Text((o['nombre'] ?? o['codigo'] ?? '') as String,
+                overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: onChanged,
+    );
+  }
+
+  /// Una foto: el botón, y cuando ya está hecha, que se vea que está hecha y
+  /// se pueda repetir. Con guantes y a contraluz, la primera sale movida más
+  /// veces de las que parece.
+  Widget _foto(String etiqueta, String? url,
+      {required bool obligatoria, required void Function(String?) onHecha}) {
+    final hecha = url != null;
+    return Row(children: [
+      Icon(hecha ? Icons.check_circle : Icons.photo_camera_outlined,
+          color: hecha
+              ? AppColors.success
+              : (obligatoria ? AppColors.warning : AppColors.textSecondary)),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(obligatoria && !hecha ? '$etiqueta (obligatoria)' : etiqueta,
+            style: const TextStyle(fontSize: 14)),
+      ),
+      TextButton(
+        onPressed: _trabajando
+            ? null
+            : () async {
+                final u = await _hacerFoto();
+                if (u == null) return;
+                setState(() => onHecha(u));
+                _guardarBorrador();
+              },
+        child: Text(hecha ? 'Repetir' : 'Hacer foto'),
+      ),
+      if (hecha)
+        IconButton(
+          tooltip: 'Quitar la foto',
+          onPressed: () { setState(() => onHecha(null)); _guardarBorrador(); },
+          icon: const Icon(Icons.close, size: 18),
+        ),
+    ]);
+  }
 
   /// Un número con teclado numérico Y botones de los valores de siempre. En el
   /// arcén, tocar "8,5" es más rápido y falla menos que teclearlo.
@@ -1152,6 +1459,10 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
   String? _empresaId;
   String? _tipoId;
   String? _medidaId;
+  /// La medida de cada eje, cuando no todos llevan la misma. La clave es el
+  /// número de eje (1, 2, 3…), que es como lo guarda tc_vehiculo_ejes.
+  final Map<int, String> _medidaEje = {};
+  bool _porEje = false;
   final _numeroUnidad = TextEditingController();
   bool _cargando = true;
   bool _guardando = false;
@@ -1165,6 +1476,18 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
 
   @override
   void dispose() { _numeroUnidad.dispose(); super.dispose(); }
+
+  /// Cuántos ejes tiene el tipo elegido. Sale del propio tipo (numero_ejes);
+  /// si no lo trae, se deduce de la configuración («2x2x4» son tres ejes).
+  int get _numeroEjes {
+    final t = _tipos.where((t) => t['id'] == _tipoId);
+    if (t.isEmpty) return 0;
+    final n = t.first['numero_ejes'];
+    if (n is int && n > 0) return n;
+    final cfg = (t.first['configuracion_ejes'] ?? '') as String? ?? '';
+    final trozos = cfg.split(RegExp(r'[xX]')).where((c) => c.trim().isNotEmpty);
+    return trozos.isEmpty ? 0 : trozos.length;
+  }
 
   Future<void> _cargar() async {
     try {
@@ -1195,7 +1518,13 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
         empresaId: _empresaId!,
         matricula: widget.matricula,
         tipoVehiculoId: _tipoId!,
-        medidaId: _medidaId,
+        // Con medidas por eje, la del vehículo es la del primero: es la que
+        // sale en los listados, y dejarla vacía haría parecer que no se sabe.
+        medidaId: _porEje ? (_medidaEje[1] ?? _medidaId) : _medidaId,
+        ejes: _porEje
+            ? [for (final e in _medidaEje.entries)
+                {'eje': e.key, 'medida_id': e.value}]
+            : null,
         numeroUnidad: _numeroUnidad.text.trim().isEmpty ? null : _numeroUnidad.text.trim(),
       );
       final id = r['vehiculo_id'] as String?;
@@ -1262,7 +1591,12 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: InkWell(
-                      onTap: () => setState(() => _tipoId = t['id'] as String),
+                      onTap: () => setState(() {
+                        _tipoId = t['id'] as String;
+                        // Otro tipo, otros ejes: lo elegido para ejes que ya no
+                        // existen se cae, en vez de viajar de tapadillo.
+                        _medidaEje.removeWhere((e, _) => e > _numeroEjes);
+                      }),
                       child: Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
@@ -1302,14 +1636,67 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
 
             const Text('¿Qué medida lleva?', style: TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
-            DropdownButtonFormField<String>(
-              initialValue: _medidaId,
-              decoration: const InputDecoration(hintText: 'Opcional'),
-              items: [for (final m in _medidas)
-                DropdownMenuItem(value: m['id'] as String,
-                    child: Text((m['valor'] ?? '') as String? ?? ''))],
-              onChanged: (v) => setState(() => _medidaId = v),
+            // Lo normal es que todos los ejes lleven la misma; el caso raro
+            // —una tractora con la directriz distinta— se pide aparte en vez
+            // de obligar a rellenar cuatro desplegables siempre.
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              value: _porEje,
+              onChanged: _numeroEjes == 0
+                  ? null
+                  : (v) => setState(() {
+                        _porEje = v;
+                        if (v && _medidaId != null) {
+                          // Al abrirlo, lo ya elegido se propone en el primer eje.
+                          _medidaEje.putIfAbsent(1, () => _medidaId!);
+                        }
+                      }),
+              title: const Text('Cada eje lleva una medida distinta',
+                  style: TextStyle(fontSize: 14)),
             ),
+            if (!_porEje)
+              DropdownButtonFormField<String>(
+                initialValue: _medidaId,
+                isExpanded: true,
+                decoration: const InputDecoration(hintText: 'Opcional'),
+                items: [for (final m in _medidas)
+                  DropdownMenuItem(value: m['id'] as String,
+                      child: Text((m['valor'] ?? '') as String? ?? ''))],
+                onChanged: (v) => setState(() => _medidaId = v),
+              )
+            else ...[
+              for (int eje = 1; eje <= _numeroEjes; eje++) ...[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _medidaEje[eje],
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                        labelText: 'Eje $eje', isDense: true),
+                    items: [for (final m in _medidas)
+                      DropdownMenuItem(value: m['id'] as String,
+                          child: Text((m['valor'] ?? '') as String? ?? '',
+                              overflow: TextOverflow.ellipsis))],
+                    onChanged: (v) => setState(() {
+                      if (v == null) { _medidaEje.remove(eje); } else { _medidaEje[eje] = v; }
+                    }),
+                  ),
+                ),
+              ],
+              if (_numeroEjes > 1)
+                OutlinedButton.icon(
+                  onPressed: _medidaEje[1] == null
+                      ? null
+                      : () => setState(() {
+                            for (int e = 2; e <= _numeroEjes; e++) {
+                              _medidaEje[e] = _medidaEje[1]!;
+                            }
+                          }),
+                  icon: const Icon(Icons.content_copy, size: 18),
+                  label: const Text('Copiar la del eje 1 a todos'),
+                ),
+            ],
             const SizedBox(height: 16),
             TextField(controller: _numeroUnidad,
                 decoration: const InputDecoration(labelText: 'Nº de unidad (opcional)')),
@@ -1325,6 +1712,96 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
             style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
             child: Text(_guardando ? 'Dando de alta…' : 'Dar de alta y seguir',
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          ),
+          TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar')),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Elegir un neumático del CATÁLOGO para montarlo en una posición vacía.
+///
+/// Es el catálogo que ya existe (tc_referencias_neumatico), el mismo que ve el
+/// panel. Aquí no se da de alta nada: si la referencia no está, la da de alta
+/// la pantalla de montaje de siempre, que ya sabe hacerlo (provisional y
+/// pendiente de validar). Duplicar eso aquí sería un segundo catálogo.
+class _ElegirReferencia extends StatefulWidget {
+  final List<Map<String, dynamic>> referencias;
+  const _ElegirReferencia({required this.referencias});
+
+  @override
+  State<_ElegirReferencia> createState() => _ElegirReferenciaState();
+}
+
+class _ElegirReferenciaState extends State<_ElegirReferencia> {
+  final _busca = TextEditingController();
+
+  @override
+  void dispose() { _busca.dispose(); super.dispose(); }
+
+  List<Map<String, dynamic>> get _filtradas {
+    final q = _busca.text.trim().toLowerCase();
+    final todas = widget.referencias;
+    if (q.isEmpty) return todas.take(60).toList();
+    final palabras = q.split(RegExp(r'\s+'));
+    return todas.where((r) {
+      final texto = [r['marca'], r['modelo'], r['medida']]
+          .whereType<String>().join(' ').toLowerCase();
+      return palabras.every(texto.contains);
+    }).take(60).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lista = _filtradas;
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16, right: 16, top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.75,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('¿Qué neumático se monta?',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _busca,
+            autofocus: true,
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search),
+              hintText: 'Marca, modelo o medida',
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 10),
+          if (widget.referencias.isEmpty)
+            const Text('El catálogo no se ha podido cargar. Conecta una vez a la '
+                       'red y queda guardado en la tablet.',
+                style: TextStyle(color: AppColors.warning))
+          else if (lista.isEmpty)
+            const Text('Nada con esa búsqueda.',
+                style: TextStyle(color: AppColors.textHint)),
+          Expanded(
+            child: ListView.separated(
+              itemCount: lista.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final r = lista[i];
+                final medida = (r['medida'] ?? '') as String? ?? '';
+                final idx = [r['indice_carga'], r['codigo_vel']]
+                    .where((x) => x != null && '$x'.isNotEmpty).join('');
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text([r['marca'], r['modelo']]
+                      .whereType<String>().where((x) => x.isNotEmpty).join(' ')),
+                  subtitle: Text([medida, idx].where((x) => x.isNotEmpty).join(' · ')),
+                  onTap: () => Navigator.pop(context, r),
+                );
+              },
+            ),
           ),
           TextButton(onPressed: () => Navigator.pop(context),
               child: const Text('Cancelar')),

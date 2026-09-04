@@ -46,6 +46,26 @@
 -- clave es la llave primaria de una tabla, así que dos llamadas simultáneas se
 -- serializan y la segunda espera y ve la primera.
 --
+-- EL DESTINO DEL NEUMÁTICO QUE SALE
+--
+-- El formulario ofrece los destinos de tc_cat_destinos («Carcasa a
+-- Continental», «Comprada por el taller», «Reclamación»…), pero
+-- tc_desmontar_neumatico solo admite cuatro estados: almacen, reparacion,
+-- descartado y pendiente_reciclaje. No se toca esa RPC —la usan el panel y las
+-- otras pantallas— y tampoco se recorta el desplegable a cuatro opciones.
+--
+-- Lo que se hace es: se desmonta con el estado de los cuatro que NO miente
+-- sobre el stock, y acto seguido, dentro de la misma transacción, se deja el
+-- neumático en el estado que dice el catálogo y se apunta el código del
+-- destino en la operación (operaciones_neumaticos.destino, que desde
+-- tyrecontrol_operaciones_fase1.sql ya no tiene CHECK precisamente para
+-- guardar códigos del catálogo; es lo que lee el informe del panel).
+--
+-- La regla de qué estado intermedio se usa es una sola: si el destino deja la
+-- goma en el almacén, se desmonta a 'almacen' y repone stock como usado (que
+-- es lo que ya hacía); si no, se desmonta a 'reparacion', que NO toca stock, y
+-- se corrige el estado después. Así ningún destino inventa ni pierde stock.
+--
 -- Idempotente.
 -- ============================================================
 
@@ -94,6 +114,16 @@ declare
   v_n_acc    int := 0;
   v_n_med    int := 0;
   v_cab      jsonb := '{}'::jsonb;
+  v_res      jsonb;
+  v_vistas   uuid[] := '{}';
+  v_nuevas   uuid[];
+  v_op       uuid;
+  v_adj      jsonb;
+  v_dest     record;
+  v_dest_cod text;
+  v_estado   text;
+  v_n_fotos  int := 0;
+  v_args     jsonb;
 begin
   v_clave := nullif(p_parte->>'clave', '')::uuid;
   if v_clave is null then
@@ -185,12 +215,75 @@ begin
   v_int := (tc_iniciar_intervencion(v_veh.id)->>'id')::uuid;
 
   for v_acc in select * from jsonb_array_elements(coalesce(p_parte->'acciones', '[]'::jsonb)) loop
+    v_args := coalesce(v_acc->'args', '{}'::jsonb);
+    v_dest_cod := null;
+
+    -- El destino elegido decide con qué estado se desmonta. La traducción vive
+    -- aquí y no en la tablet: si el catálogo cambia, cambia en un sitio.
+    if v_acc->>'rpc' = 'tc_desmontar_neumatico'
+       and nullif(v_acc->>'destino_codigo','') is not null then
+      select * into v_dest from tc_cat_destinos where codigo = v_acc->>'destino_codigo';
+      if not found then
+        raise exception 'Destino "%" no está en el catálogo', v_acc->>'destino_codigo';
+      end if;
+      v_dest_cod := v_dest.codigo;
+      v_estado := coalesce(v_dest.estado_resultante, 'almacen');
+      v_args := v_args || jsonb_build_object('p_nuevo_estado',
+        case
+          -- Vuelve al almacén: se desmonta como siempre y repone stock usado.
+          when v_estado in ('almacen','stock_usado','stock_nuevo','stock_recauchutado')
+            then 'almacen'
+          -- Sale del circuito: se da de baja.
+          when v_estado in ('descartado','vendido')
+            then 'descartado'
+          -- Todo lo demás (recauchutado, cuarentena, reparación…) se queda en
+          -- un estado que NO mueve stock, y se afina justo después.
+          else 'reparacion'
+        end);
+    end if;
+
     -- No se reimplementa ninguna operación: se despacha a la que ya existe,
     -- con el contexto de la intervención puesto. Si una falla, la excepción
     -- sube y se deshace TODO lo de este parte, mediciones incluidas.
-    perform tc_ejecutar_en_intervencion(
-      v_int, v_acc->>'rpc', coalesce(v_acc->'args', '{}'::jsonb));
+    v_res := tc_ejecutar_en_intervencion(v_int, v_acc->>'rpc', v_args);
     v_n_acc := v_n_acc + 1;
+
+    -- Qué operaciones ha creado ESTA acción. La función devuelve todas las de
+    -- la intervención creadas en la transacción, así que las de las acciones
+    -- anteriores hay que descontarlas: si no, la foto de la segunda rueda se
+    -- colgaría también de la primera.
+    select coalesce(array_agg(x), '{}'::uuid[]) into v_nuevas
+      from (select (jsonb_array_elements_text(
+              coalesce(v_res->'operaciones_intervencion', '[]'::jsonb)))::uuid as x) t
+     where not (x = any(v_vistas));
+    v_vistas := v_vistas || v_nuevas;
+
+    -- El destino del catálogo, ya con la operación creada.
+    if v_dest_cod is not null then
+      update tc_neumaticos n
+         set estado = v_estado, updated_at = now()
+        from operaciones_neumaticos o
+       where o.id = any(v_nuevas) and n.id = o.neumatico_id
+         and n.estado is distinct from v_estado;
+      update operaciones_neumaticos
+         set destino = v_dest_cod, estado_nuevo = v_estado, updated_at = now()
+       where id = any(v_nuevas);
+    end if;
+
+    -- Las fotos del neumático que sale. Van a tc_operacion_adjuntos, que es la
+    -- tabla de adjuntos que YA existe: no se crea otro sistema de fotos.
+    -- Se cuelgan de la primera operación de la acción, que es la del
+    -- desmontaje (una sustitución crearía dos: desmontaje y montaje).
+    v_op := v_nuevas[1];
+    if v_op is not null then
+      for v_adj in select * from jsonb_array_elements(coalesce(v_acc->'adjuntos', '[]'::jsonb)) loop
+        if nullif(v_adj->>'url','') is not null then
+          insert into tc_operacion_adjuntos (operacion_id, file_url, file_type, descripcion)
+          values (v_op, v_adj->>'url', 'antes', nullif(v_adj->>'descripcion',''));
+          v_n_fotos := v_n_fotos + 1;
+        end if;
+      end loop;
+    end if;
   end loop;
 
   -- ── Servicios facturables ──
@@ -245,7 +338,7 @@ begin
   return jsonb_build_object(
     'intervencion_id', v_int, 'revision_id', v_rev, 'numero', v_numero,
     'ya_guardado', false, 'operaciones', v_n_acc, 'mediciones', v_n_med,
-    'avisos', to_jsonb(v_avisos));
+    'fotos', v_n_fotos, 'avisos', to_jsonb(v_avisos));
 end $$;
 
 comment on function tc_guardar_parte_guiado(jsonb) is
@@ -297,6 +390,33 @@ begin
     select 1 from pg_constraint
      where conrelid = 'revisiones_neumaticos_detalle'::regclass and contype = 'u') then
     raise exception 'Falta el unique (revision_id, posicion_id) de revisiones_neumaticos_detalle';
+  end if;
+
+  -- DURO: la tabla de adjuntos, que es donde van las fotos del neumático que
+  -- sale. Si no estuviera, la tentación sería crear otra, y ya hay una.
+  if to_regclass('public.tc_operacion_adjuntos') is null then
+    raise exception 'Falta tc_operacion_adjuntos: es donde van las fotos de la operación';
+  end if;
+
+  -- DURO: operaciones_neumaticos.destino tiene que poder guardar CÓDIGOS del
+  -- catálogo. La fase 1 le quitó el CHECK justamente para eso; si alguien lo
+  -- vuelve a poner con la lista corta, los destinos del parte fallarían de uno
+  -- en uno y con el cliente delante.
+  if exists (
+    select 1 from pg_constraint
+     where conrelid = 'operaciones_neumaticos'::regclass and contype = 'c'
+       and pg_get_constraintdef(oid) like '%destino%'
+       and pg_get_constraintdef(oid) like '%descarte%') then
+    raise exception 'operaciones_neumaticos.destino ha vuelto a tener el CHECK corto: '
+      'los destinos del catálogo (carcasa, reclamación…) no cabrían';
+  end if;
+
+  -- DURO: los destinos que ofrece la tablet tienen que existir.
+  if not exists (select 1 from tc_cat_destinos where activo) then
+    raise exception 'No hay destinos activos en tc_cat_destinos: el desplegable saldría vacío';
+  end if;
+  if not exists (select 1 from tc_cat_motivos where activo) then
+    raise exception 'No hay motivos activos en tc_cat_motivos: el desplegable saldría vacío';
   end if;
 
   select count(*) into v_n from tc_partes_guiados;

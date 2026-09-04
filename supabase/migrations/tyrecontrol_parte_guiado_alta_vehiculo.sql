@@ -68,6 +68,11 @@ comment on column tc_vehiculos.pendiente_validar is
   'matrícula escrita de otra manera.';
 
 -- ── 2. El alta ──────────────────────────────────────────────────────────────
+-- La versión de siete argumentos se retira: con un "create or replace" y un
+-- argumento nuevo con defecto quedarían las DOS, y una llamada por nombre de
+-- parámetro sería ambigua o iría a parar a la vieja sin medidas por eje.
+drop function if exists tc_alta_vehiculo_desde_parte(uuid, text, uuid, uuid, uuid, text, numeric);
+
 create or replace function tc_alta_vehiculo_desde_parte(
   p_empresa       uuid,
   p_matricula     text,
@@ -75,11 +80,15 @@ create or replace function tc_alta_vehiculo_desde_parte(
   p_config_ejes   uuid    default null,
   p_medida        uuid    default null,
   p_numero_unidad text    default null,
-  p_km            numeric default null
+  p_km            numeric default null,
+  -- Medidas por eje: [{"eje":1,"medida_id":"…"}, …]. Es opcional; lo normal es
+  -- que todos los ejes lleven la misma y baste p_medida.
+  p_ejes          jsonb   default null
 ) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   v_mat text; v_id uuid; v_pos int; v_tipo record; v_existente record;
+  v_e jsonb; v_n_ejes int := 0;
 begin
   if not (tc_is_superadmin()
           or (tc_is_admin() and p_empresa = tc_auth_empresa_id())
@@ -141,6 +150,23 @@ begin
     raise exception 'Los kilómetros no pueden ser negativos';
   end if;
 
+  -- Las medidas por eje se validan ANTES de crear nada: si una es inventada,
+  -- mejor que no salga el vehículo a que salga con los ejes a medias.
+  if p_ejes is not null and jsonb_typeof(p_ejes) <> 'array' then
+    raise exception 'p_ejes tiene que ser una lista de {eje, medida_id}';
+  end if;
+  for v_e in select * from jsonb_array_elements(coalesce(p_ejes, '[]'::jsonb)) loop
+    if coalesce((v_e->>'eje')::int, 0) < 1 then
+      raise exception 'Número de eje no válido: %', v_e->>'eje';
+    end if;
+    if nullif(v_e->>'medida_id','') is not null
+       and not exists (select 1 from tc_cat_medidas_neumatico
+                        where id = (v_e->>'medida_id')::uuid) then
+      raise exception 'Medida del eje % no encontrada', v_e->>'eje';
+    end if;
+    v_n_ejes := v_n_ejes + 1;
+  end loop;
+
   -- Nace pendiente de validar y con su procedencia. Marca, modelo, delegación
   -- y llanta se quedan vacíos a propósito: son nulables, y preguntárselos al
   -- operario en el arcén es la forma de que abandone y lo apunte en papel.
@@ -155,17 +181,34 @@ begin
     true, auth.uid(), 'tablet')
   returning id into v_id;
 
+  -- ── Las medidas por eje ──
+  -- Van por aquí y no por tc_set_vehiculo_ejes porque esa pide administrador,
+  -- y ampliarla para que la llame un operario abriría la edición de los ejes
+  -- de CUALQUIER vehículo. Aquí solo se escriben los del que se acaba de
+  -- crear, en la misma llamada y en la misma transacción.
+  if v_n_ejes > 0 then
+    for v_e in select * from jsonb_array_elements(p_ejes) loop
+      insert into tc_vehiculo_ejes (vehiculo_id, eje, medida_id)
+      values (v_id, (v_e->>'eje')::int, nullif(v_e->>'medida_id','')::uuid)
+      -- El mismo eje dos veces en la lista: manda el último, no revienta.
+      on conflict (vehiculo_id, eje) do update set medida_id = excluded.medida_id;
+    end loop;
+    update tc_vehiculos set medidas_por_eje = true where id = v_id;
+  end if;
+
   return jsonb_build_object(
     'vehiculo_id', v_id, 'matricula', v_mat, 'ya_existia', false,
-    'pendiente_validar', true, 'posiciones', v_pos,
+    'pendiente_validar', true, 'posiciones', v_pos, 'ejes', v_n_ejes,
     'tipo', v_tipo.nombre, 'configuracion_ejes', v_tipo.configuracion_ejes);
 end $$;
 
-comment on function tc_alta_vehiculo_desde_parte(uuid, text, uuid, uuid, uuid, text, numeric) is
+comment on function tc_alta_vehiculo_desde_parte(uuid, text, uuid, uuid, uuid, text, numeric, jsonb) is
   'Da de alta un vehículo desde la tablet con lo mínimo para sostener un parte, '
   'sin abrir la escritura de tc_vehiculos. Nace pendiente_validar con su '
-  'creador. No genera posiciones: cuelgan del tipo de vehículo, que ya las '
-  'tiene. Si la matrícula ya existe devuelve la que hay en vez de fallar.';
+  'creador. Con p_ejes guarda además la medida de cada eje (tc_vehiculo_ejes), '
+  'que desde la tablet no se puede escribir de otra forma. No genera '
+  'posiciones: cuelgan del tipo de vehículo, que ya las tiene. Si la matrícula '
+  'ya existe devuelve la que hay en vez de fallar.';
 
 -- ── 3. Validarlo desde el panel ─────────────────────────────────────────────
 create or replace function tc_validar_vehiculo(p_vehiculo uuid)
@@ -185,19 +228,32 @@ begin
    where id = p_vehiculo;
 end $$;
 
-grant execute on function tc_alta_vehiculo_desde_parte(uuid, text, uuid, uuid, uuid, text, numeric) to authenticated;
+grant execute on function tc_alta_vehiculo_desde_parte(uuid, text, uuid, uuid, uuid, text, numeric, jsonb) to authenticated;
 grant execute on function tc_validar_vehiculo(uuid) to authenticated;
 
 -- ── Comprobación ────────────────────────────────────────────────────────────
 do $$
 declare v_n int; v_pol text;
 begin
-  -- DURO: la función tiene que existir con sus siete argumentos.
+  -- DURO: la función tiene que existir con sus ocho argumentos, y SOLO ella.
+  -- Dos versiones conviviendo harían que una llamada por nombre de parámetro
+  -- fuese ambigua, o peor: que fuera a parar a la vieja sin medidas por eje.
+  select count(*) into v_n from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'tc_alta_vehiculo_desde_parte';
+  if v_n <> 1 then
+    raise exception 'Hay % versiones de tc_alta_vehiculo_desde_parte; tiene que haber una', v_n;
+  end if;
   if not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                   where n.nspname = 'public'
                     and p.proname = 'tc_alta_vehiculo_desde_parte'
-                    and p.pronargs = 7) then
-    raise exception 'No se ha creado tc_alta_vehiculo_desde_parte con los 7 argumentos';
+                    and p.pronargs = 8) then
+    raise exception 'No se ha creado tc_alta_vehiculo_desde_parte con los 8 argumentos';
+  end if;
+
+  -- DURO: la tabla de ejes y su unique, del que depende el "on conflict".
+  if not exists (select 1 from pg_constraint
+                  where conrelid = 'tc_vehiculo_ejes'::regclass and contype = 'u') then
+    raise exception 'Falta el unique (vehiculo_id, eje) de tc_vehiculo_ejes';
   end if;
 
   -- DURO, Y ES EL IMPORTANTE: la política de tc_vehiculos NO se ha tocado.

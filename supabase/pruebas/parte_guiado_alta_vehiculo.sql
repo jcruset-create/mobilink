@@ -98,7 +98,18 @@ create table tc_vehiculos (
   config_ejes_id uuid references tc_config_ejes(id) on delete set null,
   medida_id uuid references tc_cat_medidas_neumatico(id) on delete set null,
   numero_unidad text,
+  medidas_por_eje boolean not null default false,
   unique (empresa_id, matricula));
+
+-- El desglose por eje, con su unique: es del que depende el "on conflict".
+create table tc_vehiculo_ejes (
+  id uuid primary key default gen_random_uuid(),
+  vehiculo_id uuid not null references tc_vehiculos(id) on delete cascade,
+  eje int not null, ruedas int,
+  medida_id uuid references tc_cat_medidas_neumatico(id) on delete set null,
+  tipo_llanta_id uuid,
+  unique (vehiculo_id, eje));
+insert into tc_cat_medidas_neumatico (valor) values ('315/80R22.5'), ('385/65R22.5');
 
 alter table tc_vehiculos enable row level security;
 create policy tc_vehiculos_write on tc_vehiculos for all
@@ -221,3 +232,56 @@ do $$ begin
   then raise notice 'PASA · el vehiculo creado por la funcion esta ahi';
   else raise notice 'FALLA · no se ha creado 3333BBB'; end if;
 end $$;
+
+-- ── Las medidas por eje ─────────────────────────────────────────────────────
+do $$ declare r jsonb; m1 uuid; m2 uuid; v record; begin
+  select id into m1 from tc_cat_medidas_neumatico where valor='315/80R22.5';
+  select id into m2 from tc_cat_medidas_neumatico where valor='385/65R22.5';
+  r := tc_alta_vehiculo_desde_parte(
+        '00000000-0000-0000-0000-0000000000e1','1111EJE',
+        (select id from tc_tipos_vehiculo where nombre='Camion 3 ejes'),
+        null, m2, null, null,
+        jsonb_build_array(
+          jsonb_build_object('eje',1,'medida_id',m2),
+          jsonb_build_object('eje',2,'medida_id',m1),
+          jsonb_build_object('eje',3,'medida_id',m1)));
+
+  select * into v from tc_vehiculos where matricula='1111EJE';
+  if (r->>'ejes')::int = 3 and v.medidas_por_eje
+  then raise notice 'PASA · el alta guarda las medidas por eje y lo marca en el vehiculo';
+  else raise notice 'FALLA · ejes=% medidas_por_eje=%', r->>'ejes', v.medidas_por_eje; end if;
+
+  if (select count(*) from tc_vehiculo_ejes where vehiculo_id = v.id) = 3
+     and (select medida_id from tc_vehiculo_ejes where vehiculo_id = v.id and eje = 1) = m2
+     and (select medida_id from tc_vehiculo_ejes where vehiculo_id = v.id and eje = 3) = m1
+  then raise notice 'PASA · cada eje se queda con la suya';
+  else raise notice 'FALLA · los ejes no cuadran'; end if;
+end $$;
+
+-- Sin p_ejes, nada cambia: el caso normal sigue siendo una medida para todos.
+do $$ declare v record; begin
+  select * into v from tc_vehiculos where matricula='1234ABC';
+  if not v.medidas_por_eje
+     and not exists (select 1 from tc_vehiculo_ejes where vehiculo_id = v.id)
+  then raise notice 'PASA · sin medidas por eje el alta no toca tc_vehiculo_ejes';
+  else raise notice 'FALLA · ha escrito ejes sin pedirselo'; end if;
+end $$;
+
+select prueba('una medida de eje inventada se rechaza',
+  $q$ select tc_alta_vehiculo_desde_parte('00000000-0000-0000-0000-0000000000e1','2222EJE',
+        (select id from tc_tipos_vehiculo where nombre='Camion 3 ejes'), null, null, null, null,
+        jsonb_build_array(jsonb_build_object(
+          'eje',1,'medida_id','00000000-0000-0000-0000-0000000000ff'))) $q$,
+  'Medida del eje 1 no encontrada');
+
+do $$ begin
+  if not exists (select 1 from tc_vehiculos where matricula='2222EJE')
+  then raise notice 'PASA · y el vehiculo no llega a crearse';
+  else raise notice 'FALLA · quedo un vehiculo con los ejes a medias'; end if;
+end $$;
+
+select prueba('un numero de eje cero se rechaza',
+  $q$ select tc_alta_vehiculo_desde_parte('00000000-0000-0000-0000-0000000000e1','3333EJE',
+        (select id from tc_tipos_vehiculo where nombre='Camion 3 ejes'), null, null, null, null,
+        jsonb_build_array(jsonb_build_object('eje',0))) $q$,
+  'Número de eje no válido');
