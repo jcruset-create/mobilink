@@ -46,6 +46,7 @@
     "server/cash/**/*.ts",
     "server/central/**/*.ts",
     "server/tacografos/**/*.ts",
+    "server/satisfaction/**/*.ts",
     "server/core/auditoria.ts",
     "server/core/auditoriaSchema.ts",
     "server/dbBackup.ts"

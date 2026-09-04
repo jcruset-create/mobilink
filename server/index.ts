@@ -65,6 +65,7 @@ import {
 import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
 import { initExcepciones } from "./excepciones/schema.ts";
 import { createExcepcionesRouter } from "./excepciones/router.ts";
+import { initSatisfaction } from "./satisfaction/schema.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
@@ -18714,6 +18715,9 @@ initDb()
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))
+  // Satisfaction: encuestas y casos de calidad. No engancha todavía con el
+  // cierre de asistencias — solo crea el esquema y siembra las plantillas.
+  .then(() => prepararEsquema("Satisfaction", initSatisfaction))
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
