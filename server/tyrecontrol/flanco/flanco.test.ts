@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   valorFiable, normalizarMedida, normalizarNombre, normalizarDot,
-  prepararPropuesta, buscarEnCatalogo, CONFIANZA_MINIMA,
+  prepararPropuesta, buscarEnCatalogo, CONFIANZA_MINIMA, CONFIANZA_MINIMA_ANOTAR,
   type LecturaFlanco, type ReferenciaCatalogo,
 } from "./flanco.ts";
 
@@ -139,10 +139,36 @@ describe("el número de serie del flanco", () => {
     expect(p.aviso).toBeNull();
   });
 
-  it("leído con poca confianza no se propone, pero se avisa de que había algo", () => {
-    const p = prepararPropuesta(lectura({ numero_serie: c("AB1234", 0.2) }));
-    expect(p.numero_serie).toBeNull();
+  /**
+   * El caso real: la misma foto que ChatGPT lee sin problema («1944778229»)
+   * salía en blanco en la tablet. No es que el modelo no lo leyera: lo leía y
+   * NOSOTROS lo tirábamos, porque a la instrucción le pedimos que baje la
+   * confianza cuando duda y luego exigíamos 0,7. Un número estampado en caucho
+   * negro casi nunca llega ahí.
+   */
+  it("un serie leído con confianza regular SÍ se propone: lo confirma una persona", () => {
+    const p = prepararPropuesta(lectura({ numero_serie: c("1944778229", 0.45) }));
+    expect(p.numero_serie).toBe("1944778229");
+  });
+
+  it("pero se marca como dudoso, para poder avisar", () => {
+    const p = prepararPropuesta(lectura({ numero_serie: c("1944778229", 0.45) }));
     expect(p.dudosos).toContain("numero_serie");
+  });
+
+  it("ruido de verdad sí se descarta", () => {
+    expect(prepararPropuesta(lectura({ numero_serie: c("AB1234", 0.1) })).numero_serie)
+      .toBeNull();
+  });
+
+  it("el DOT sigue el mismo criterio: se propone y se comprueba", () => {
+    expect(prepararPropuesta(lectura({ dot: c("2325", 0.45) })).dot).toBe("2325");
+  });
+
+  it("la MARCA no: con ella se busca en el catálogo sola, y ahí sigue el listón alto", () => {
+    const p = prepararPropuesta(lectura({ marca: c("Hankook", 0.45) }));
+    expect(p.marca).toBeNull();
+    expect(CONFIANZA_MINIMA_ANOTAR).toBeLessThan(CONFIANZA_MINIMA);
   });
 
   it("no impide buscar en el catálogo: para eso valen marca y medida", () => {

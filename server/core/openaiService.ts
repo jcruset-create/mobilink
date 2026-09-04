@@ -119,7 +119,16 @@ export async function pedirIA<T = string>(req: PeticionIA): Promise<RespuestaIA<
           role: "user",
           content: [
             { type: "input_text", text: req.prompt },
-            ...(req.imagenes ?? []).map((i) => ({ type: "input_image", image_url: i.url })),
+            // detail "high": el modelo trocea la imagen a resolución completa en
+            // vez de mirarla encogida. Todo lo que le pedimos por imagen es
+            // leer letra pequeña de una foto —un número de serie estampado en
+            // caucho negro, un DOT, una matrícula, la ficha técnica de un
+            // camión—, y encogida esos dígitos sencillamente no están.
+            // Cuesta más tokens; leer mal cuesta que alguien teclee diez
+            // dígitos a mano, o peor, que los teclee mal.
+            ...(req.imagenes ?? []).map((i) => ({
+              type: "input_image", image_url: i.url, detail: "high",
+            })),
             ...(req.archivos ?? []).map((a) =>
               a.fileId
                 ? { type: "input_file", file_id: a.fileId }
