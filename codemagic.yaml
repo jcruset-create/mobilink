@@ -79,9 +79,9 @@ workflows:
         # Versión de tienda. El pubspec lleva la versión de Android y NO se toca:
         # se pasa por flag.
         TC_BUILD_NAME: "1.0"
-        # ID numérico de la app en App Store Connect (App Information → Apple ID).
-        # Si se deja vacío, se resuelve por el bundle id en el paso de versión.
-        APP_STORE_APPLE_ID: ""
+        # APP_STORE_APPLE_ID (el ID numérico de la app en App Store Connect) se
+        # puede definir en la UI de Codemagic; si no está, el paso de versión lo
+        # resuelve por el bundle id.
     working_directory: tyrecontrol_app
     scripts:
       - name: Flutter pub get
@@ -101,7 +101,7 @@ workflows:
           # subido a TestFlight de esta app y se suma uno. Así nunca se repite
           # un número, que TestFlight rechazaría.
           set -e
-          APPLE_ID="$APP_STORE_APPLE_ID"
+          APPLE_ID="${APP_STORE_APPLE_ID:-}"
           if [ -z "$APPLE_ID" ]; then
             APPLE_ID=$(app-store-connect apps list --bundle-id "$BUNDLE_ID" --json | jq -r '.[0].id // empty')
           fi
