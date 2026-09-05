@@ -166,6 +166,15 @@ export async function initSatisfaction(): Promise<void> {
       -- comprobación de estado.
       UNIQUE ("surveyInstanceId")
     );
+
+    /*
+     * El cuadro de mando de 1F filtra SIEMPRE por «completedAtMs» —interesa
+     * cuándo contestó alguien, no cuándo se creó la encuesta— y ese rango es
+     * lo primero que se evalúa en todas sus consultas. Sin este índice, cada
+     * carga de la pantalla recorre la tabla entera de respuestas.
+     */
+    CREATE INDEX IF NOT EXISTS idx_survey_responses_periodo
+      ON survey_responses ("completedAtMs");
   `);
 
   /* ── Respuestas por pregunta ──────────────────────────────────────────── */
@@ -255,6 +264,13 @@ export async function initSatisfaction(): Promise<void> {
     -- El caso de una asistencia concreta, para la ficha.
     CREATE INDEX IF NOT EXISTS idx_quality_cases_asistencia
       ON quality_cases ("tenantId", "sourceSystem", "assistanceId");
+    /*
+     * El periodo del cuadro de mando: rango sobre «createdAtMs» SIN estado.
+     * El índice de la bandeja no sirve aquí porque lleva «status» delante y
+     * las métricas no lo filtran.
+     */
+    CREATE INDEX IF NOT EXISTS idx_quality_cases_periodo
+      ON quality_cases ("tenantId", "createdAtMs");
     -- «Lo mío»: parcial, porque la mayoría de casos no tienen responsable.
     CREATE INDEX IF NOT EXISTS idx_quality_cases_responsable
       ON quality_cases ("assigneeUserId", status)

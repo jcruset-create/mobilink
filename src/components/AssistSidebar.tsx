@@ -25,12 +25,13 @@ import {
   Home,
   X,
   Menu,
+  Gauge,
   Star,
 } from "lucide-react";
 
 type Props = {
   /** Clave de la entrada activa (p. ej. "otf"). */
-  active?: "flota" | "central" | "talleres" | "proveedores" | "clientes" | "lugares" | "otf" | "vehiculo" | "panel" | "bandeja" | "calidad";
+  active?: "flota" | "central" | "talleres" | "proveedores" | "clientes" | "lugares" | "otf" | "vehiculo" | "panel" | "bandeja" | "calidad" | "satisfaccion";
 };
 
 const itemCls = (activo: boolean) =>
@@ -109,6 +110,9 @@ export default function AssistSidebar({ active }: Props) {
           {/* Calidad va junto a la bandeja: las dos son trabajo pendiente. */}
           <a href="/asistencias/calidad" className={itemCls(active === "calidad")}>
             <Star className="h-4 w-4 shrink-0" /> Calidad
+          </a>
+          <a href="/asistencias/satisfaccion" className={itemCls(active === "satisfaccion")}>
+            <Gauge className="h-4 w-4 shrink-0" /> Satisfacción
           </a>
           <a href="/asistencias/proveedores" className={itemCls(active === "proveedores")}>
             <Building2 className="h-4 w-4 shrink-0" /> Proveedores
