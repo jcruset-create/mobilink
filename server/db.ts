@@ -610,6 +610,22 @@ export async function initDb() {
 
     CREATE INDEX IF NOT EXISTS roadside_assistances_taller_idx
       ON roadside_assistances("tallerId");
+
+    /*
+     * Las métricas de satisfacción cuentan asistencias TERMINADAS dentro de un
+     * periodo, y agrupan por cliente y por proveedor. Parcial sobre
+     * «finishedAtMs IS NOT NULL» porque las que siguen abiertas no entran nunca
+     * en ese recuento y no tienen por qué ocupar el índice.
+     */
+    CREATE INDEX IF NOT EXISTS roadside_assistances_finalizadas_idx
+      ON roadside_assistances("tallerId", "finishedAtMs")
+      WHERE "finishedAtMs" IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS roadside_assistances_cliente_idx
+      ON roadside_assistances("clienteFacturacionId")
+      WHERE "clienteFacturacionId" IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS roadside_assistances_proveedor_idx
+      ON roadside_assistances("proveedorTallerId")
+      WHERE "proveedorTallerId" IS NOT NULL;
     CREATE INDEX IF NOT EXISTS roadside_vehicles_taller_idx
       ON roadside_vehicles("tallerId");
     CREATE INDEX IF NOT EXISTS techs_taller_idx

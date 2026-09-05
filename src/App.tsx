@@ -19,6 +19,7 @@ import TalleresPage from "./pages/TalleresPage";
 import ProveedoresPage from "./pages/ProveedoresPage";
 import BandejaExcepcionesPage from "./pages/BandejaExcepcionesPage";
 import BandejaCalidadPage from "./pages/BandejaCalidadPage";
+import SatisfaccionPage from "./pages/SatisfaccionPage";
 import ClientesFacturacionPage from "./pages/ClientesFacturacionPage";
 import LugaresPage from "./pages/LugaresPage";
 import OtfHistorialPage from "./pages/OtfHistorialPage";
@@ -169,6 +170,7 @@ export default function App() {
       <Route path="/asistencias/talleres" element={<TalleresPage />} />
       <Route path="/asistencias/bandeja" element={<BandejaExcepcionesPage />} />
       <Route path="/asistencias/calidad" element={<BandejaCalidadPage />} />
+      <Route path="/asistencias/satisfaccion" element={<SatisfaccionPage />} />
       <Route path="/asistencias/proveedores" element={<ProveedoresPage />} />
       <Route path="/asistencias/clientes" element={<ClientesFacturacionPage />} />
       <Route path="/asistencias/lugares" element={<LugaresPage />} />

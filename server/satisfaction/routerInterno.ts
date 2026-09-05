@@ -26,6 +26,7 @@ import {
   type EstadoCaso, type Prioridad,
 } from "./dominio.ts";
 import { detalleCaso, listarCasos, obtenerSatisfactionDeAsistencia } from "./calidad.ts";
+import { calcularMetricas } from "./metricas.ts";
 import {
   MAX_NOTA, anadirNota, asignarCaso, cambiarEstadoCaso, cambiarPrioridad, type Actor,
 } from "./calidadServicio.ts";
@@ -64,6 +65,64 @@ const num = (v: unknown): number | null => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
+/* ── Periodo del cuadro de mando ─────────────────────────────────────────── */
+
+const DIA = 86_400_000;
+/** Por defecto, el último mes. Es lo que se mira a diario. */
+export const PERIODO_POR_DEFECTO_DIAS = 30;
+/**
+ * Tope duro del rango.
+ *
+ * No es una preferencia de producto: sin él, un `from=0` en la URL barre el
+ * histórico entero de todas las tablas en cada carga de pantalla. Un año largo
+ * cubre cualquier comparativa razonable y deja las consultas acotadas.
+ */
+export const PERIODO_MAXIMO_DIAS = 400;
+
+type Periodo = { desdeMs: number; hastaMs: number };
+
+/**
+ * Lee `from`/`to` de la query.
+ *
+ * Acepta epoch en milisegundos o `YYYY-MM-DD`. Devuelve un mensaje en vez de
+ * corregir por su cuenta: si alguien pide un rango imposible es mejor decírselo
+ * que enseñarle cifras de un periodo que no ha pedido.
+ */
+export function interpretarPeriodo(
+  from: unknown, to: unknown, ahoraMs: number,
+): { periodo: Periodo } | { error: string } {
+  const lee = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const t = String(v).trim();
+    if (/^\d{13}$/.test(t)) return Number(t);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) {
+      const ms = Date.parse(`${t}T00:00:00.000Z`);
+      return Number.isFinite(ms) ? ms : null;
+    }
+    return null;
+  };
+
+  const bruto = { from: from ?? null, to: to ?? null };
+  if (bruto.from != null && bruto.from !== "" && lee(bruto.from) == null) {
+    return { error: "El parámetro «from» debe ser epoch en ms o YYYY-MM-DD" };
+  }
+  if (bruto.to != null && bruto.to !== "" && lee(bruto.to) == null) {
+    return { error: "El parámetro «to» debe ser epoch en ms o YYYY-MM-DD" };
+  }
+
+  const hastaMs = lee(bruto.to) ?? ahoraMs;
+  // Una fecha suelta en «to» se entiende como el día entero, no como su medianoche.
+  const hastaFinal = /^\d{4}-\d{2}-\d{2}$/.test(String(bruto.to ?? ""))
+    ? hastaMs + DIA - 1 : hastaMs;
+  const desdeMs = lee(bruto.from) ?? hastaFinal - PERIODO_POR_DEFECTO_DIAS * DIA;
+
+  if (desdeMs >= hastaFinal) return { error: "El periodo pedido está al revés o vacío" };
+  if (hastaFinal - desdeMs > PERIODO_MAXIMO_DIAS * DIA) {
+    return { error: `El periodo no puede pasar de ${PERIODO_MAXIMO_DIAS} días` };
+  }
+  return { periodo: { desdeMs, hastaMs: hastaFinal } };
+}
+
 export function createCalidadRouter(
   guardaOperario: RequestHandler, guardaSupervisor: RequestHandler,
 ): Router {
@@ -84,6 +143,29 @@ export function createCalidadRouter(
   router.get("/asistencias/:id/satisfaction", guardaOperario, async (req, res) => {
     try {
       res.json(await obtenerSatisfactionDeAsistencia(Number(req.params.id), tallerDe(req)));
+    } catch (e) { fallo(res, e); }
+  });
+
+  /* ── Cuadro de mando ────────────────────────────────────────────────── */
+
+  /**
+   * Métricas agregadas del periodo.
+   *
+   * Supervisor, como la bandeja: son datos de todo el taller, no de un
+   * servicio concreto. El taller sale de `assistPanelUser` y NUNCA de la query
+   * —aceptarlo por URL sería dejar que cualquiera leyera las cifras de otro—.
+   */
+  router.get("/metricas", guardaSupervisor, async (req, res) => {
+    try {
+      const q = req.query;
+      const p = interpretarPeriodo(q.from ?? q.desde, q.to ?? q.hasta, Date.now());
+      if ("error" in p) return res.status(400).json({ error: p.error });
+
+      res.json(await calcularMetricas({
+        desdeMs: p.periodo.desdeMs, hastaMs: p.periodo.hastaMs,
+        clienteId: num(q.clientId ?? q.clienteId),
+        proveedorTallerId: num(q.providerId ?? q.proveedorId),
+      }, tallerDe(req)));
     } catch (e) { fallo(res, e); }
   });
 
