@@ -1,6 +1,6 @@
 workflows:
   ios-testflight:
-    name: SEA Asistencia · iOS → TestFlight
+    name: Mobilink Assist · iOS → TestFlight
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
@@ -9,11 +9,27 @@ workflows:
       cocoapods: default
       ios_signing:
         # Crea esta integración en Codemagic: Teams → Integrations → App Store Connect
-        # y registra el bundle id com.seatarragona.operario en Apple Developer.
+        # y registra el bundle id com.mobilink.assist en Apple Developer.
+        #
+        # OJO: antes ponía «com.seatarragona.operario». Si ese identificador ya
+        # está dado de alta en Apple Developer y quieres conservarlo, hay que
+        # revertir AQUÍ y en ios/Runner.xcodeproj/project.pbxproj a la vez: los
+        # dos tienen que decir lo mismo o la firma falla.
         distribution_type: app_store
-        bundle_identifier: com.seatarragona.operario
+        bundle_identifier: com.mobilink.assist
       vars:
         APP_STORE_APPLE_ID: "PENDIENTE"   # ID numérico de la app en App Store Connect (al crearla)
+        # ── La versión de iOS va aparte de la de Android, y hay motivo ─────
+        #
+        # «pubspec.yaml» dice 1.10.4+66 y esa numeración es la de la APK, que
+        # lleva 66 entregas a las tablets. Bajarla a 1.0.0 para estrenar en la
+        # App Store convertiría la siguiente APK en una actualización «hacia
+        # atrás» y Android no la instalaría encima.
+        #
+        # Así que el nombre de versión de iOS se pone aquí y el número de build
+        # lo pone Codemagic, que es monótono por definición. Para la segunda
+        # entrega, se sube este número y ya está.
+        IOS_VERSION: "1.0.0"
       groups:
         - appstore_connect            # grupo con las credenciales App Store Connect (UI de Codemagic)
     working_directory: flutter_app
@@ -22,14 +38,16 @@ workflows:
         script: flutter pub get
       - name: Instalar pods
         script: |
-          find . -name "Podfile" -execdir pod install \;
-      - name: Set build number (incremental)
-        script: |
-          # Usa el nº de build de Codemagic para no repetir versión en TestFlight
-          agvtool new-version -all $(($BUILD_NUMBER + 100)) || true
+          cd ios && pod install
       - name: Build IPA
         script: |
+          # La versión y el build se pasan a Flutter, no con agvtool: «flutter
+          # build» reescribe Generated.xcconfig con FLUTTER_BUILD_NAME y
+          # FLUTTER_BUILD_NUMBER, que es de donde el Info.plist saca los dos
+          # valores. Lo que hiciera agvtool antes se perdía en ese paso.
           flutter build ipa --release \
+            --build-name="$IOS_VERSION" \
+            --build-number="$BUILD_NUMBER" \
             --export-options-plist=/Users/builder/export_options.plist
     artifacts:
       - flutter_app/build/ios/ipa/*.ipa
