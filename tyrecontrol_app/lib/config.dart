@@ -12,4 +12,4 @@ const String kBackendUrl = 'https://sea-tarragona.onrender.com';
 // PROVISIONAL, para probar desde el PC: además de la cámara, deja elegir la
 // foto de un archivo (galería o explorador). Poner a false antes de cerrar
 // la versión para los técnicos: en la tablet la foto se hace en el momento.
-const bool kFotosDesdeArchivo = true;
+const bool kFotosDesdeArchivo = false;
