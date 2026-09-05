@@ -31,6 +31,19 @@ export const VALIDEZ_MS = 10 * 60_000;
 export interface VerificadorDeClave {
   /** ¿Es ésta la clave de este usuario? */
   verificar(userId: string, clave: string): Promise<boolean>;
+  /**
+   * ¿De quién son este usuario y esta clave? Devuelve su id, o `null`.
+   *
+   * Hace falta cuando quien se identifica NO es quien tiene la sesión abierta
+   * —un encargado que viene a autorizar una excepción del cajero—, porque
+   * entonces no hay un `userId` de partida: precisamente lo que se quiere
+   * averiguar es quién ha escrito la clave.
+   *
+   * Es opcional para no romper a quien ya tenga un verificador registrado con
+   * solo `verificar`; quien no la implemente, simplemente no puede autorizar
+   * en nombre de otro.
+   */
+  identificar?(usuario: string, clave: string): Promise<string | null>;
 }
 
 let verificador: VerificadorDeClave | null = null;
@@ -64,7 +77,51 @@ export function verificadorSupabase(): VerificadorDeClave {
       // la pareja correo/clave exista: si no, valdría la clave de otro.
       return !error && data.user?.id === userId;
     },
+
+    async identificar(usuario, clave) {
+      const { supabaseAnonAuth } = await import("../supabase.ts");
+      /*
+       * Se admite el correo o el nombre de usuario, porque en el mostrador
+       * nadie se sabe el correo del encargado de memoria. La búsqueda es
+       * insensible a mayúsculas y solo mira usuarios ACTIVOS: uno dado de baja
+       * no autoriza nada aunque su clave siga siendo válida en Supabase.
+       */
+      const { rows } = await pool.query(
+        `SELECT id, email FROM app_usuarios
+          WHERE activo AND (lower(email) = lower($1) OR lower(username) = lower($1))
+          LIMIT 1`,
+        [usuario.trim()]
+      );
+      const encontrado = rows[0];
+      if (!encontrado?.email) return null;
+
+      const { data, error } = await supabaseAnonAuth.auth.signInWithPassword({
+        email: encontrado.email,
+        password: clave,
+      });
+      if (error || data.user?.id !== encontrado.id) return null;
+      return encontrado.id as string;
+    },
   };
+}
+
+/**
+ * Quién es quien acaba de escribir usuario y clave.
+ *
+ * No deja marca de reautenticación: identificarse para autorizar lo de OTRO no
+ * es identificarse para seguir uno mismo. Si dejara marca, el encargado que
+ * autoriza un cobro quedaría reautenticado en una pantalla que no es suya.
+ */
+export async function identificarA(usuario: string, clave: string): Promise<string | null> {
+  const v = verificador;
+  if (!v?.identificar) {
+    throw new ErrorCaja(
+      "REAUTENTICACION_NO_DISPONIBLE",
+      "No se puede comprobar la clave en este servidor.",
+      503
+    );
+  }
+  return v.identificar(usuario, clave);
 }
 
 /** Deja constancia de que este usuario acaba de identificarse. */

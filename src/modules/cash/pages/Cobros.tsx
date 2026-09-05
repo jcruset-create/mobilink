@@ -14,6 +14,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Search, RefreshCw } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
+import AutorizarDuplicado from "../components/AutorizarDuplicado";
+import PanelCobroSinEfectivo from "../components/PanelCobroSinEfectivo";
 import DenominationGrid, {
   type CantidadesPorValor,
   cantidadesDesde,
@@ -133,6 +135,16 @@ export default function Cobros() {
    * limpia al confirmar, justo por eso.
    */
   const [seccionId, setSeccionId] = useState<number | null>(null);
+  /*
+   * Cobrar una factura que ya consta cobrada.
+   *
+   * `pidiendoAutorizacion` abre el modal; `autorizacion` es el permiso de un
+   * solo uso que devuelve el servidor. Se guarda aquí y no en el formulario
+   * porque muere con el cobro: en cuanto se registra, o en cuanto cambia la
+   * factura o el importe, deja de valer.
+   */
+  const [pidiendoAutorizacion, setPidiendoAutorizacion] = useState(false);
+  const [autorizacion, setAutorizacion] = useState<string | null>(null);
 
   const importe = aCentimos(importeTexto) ?? 0;
 
@@ -141,12 +153,17 @@ export default function Cobros() {
     [formasParaCobros]
   );
 
-  // El modo por defecto es el efectivo. Si la empresa lo tuviera desactivado
-  // —hoy no se puede, pero el catálogo es suyo— se cae a la primera forma.
-  useEffect(() => {
-    if (modo || formasParaCobros.length === 0) return;
-    setModo(formaEfectivo?.codigo ?? formasParaCobros[0].codigo);
-  }, [modo, formaEfectivo, formasParaCobros]);
+  /*
+   * NO hay forma de cobro por defecto.
+   *
+   * Antes arrancaba en efectivo, y eso convertía «no sé cómo pagó» en «pagó en
+   * efectivo» sin que nadie lo decidiera: bastaba con no fijarse. Es la misma
+   * regla que ya cumple el escáner —que ante la duda no propone nada— y no
+   * tenía sentido que la pantalla la rompiera por su cuenta al abrirse.
+   *
+   * Cuesta un clic en el cobro manual. Vale la pena: el clic se da en dos
+   * segundos y un cobro clasificado mal se descubre semanas después.
+   */
 
   useEffect(() => {
     if (seccionId != null || seccionesActivas.length === 0) return;
@@ -319,6 +336,31 @@ export default function Cobros() {
     setReferencia(d.external_reference ?? d.external_id);
   }
 
+  /*
+   * El cobro previo que dijo el escáner, si sigue siendo de ESTA factura.
+   *
+   * Se ata a la referencia que hay ahora en el formulario: si alguien corrige
+   * el número, el aviso de la factura anterior deja de aplicar y la pantalla
+   * vuelve al camino normal. El servidor lo comprobará otra vez de todas
+   * formas —él es quien manda—, pero enseñar un aviso de otra factura sería
+   * enseñar algo falso.
+   */
+  const duplicado =
+    escaneo?.cobroPrevio &&
+    escaneo.referencia.valor &&
+    escaneo.referencia.valor.trim().toUpperCase() === referencia.trim().toUpperCase()
+      ? escaneo.cobroPrevio
+      : null;
+
+  /*
+   * Una autorización vale para una factura y un importe. Si cambia cualquiera
+   * de los dos, la que hubiera ya no sirve: el servidor la rechazaría, y es
+   * mejor que la pantalla lo sepa antes de dejar pulsar.
+   */
+  const claveAutorizacion = `${referencia.trim().toUpperCase()}|${importe}`;
+  const [autorizadoPara, setAutorizadoPara] = useState("");
+  const autorizacionVigente = autorizacion != null && autorizadoPara === claveAutorizacion;
+
   const puedeConfirmar =
     importe > 0 &&
     Boolean(modo) &&
@@ -326,6 +368,8 @@ export default function Cobros() {
     referenciasQueFaltan.length === 0 &&
     (efectivo === 0 || totalRecibido >= efectivo) &&
     (cambioRequerido === 0 || totalCambio === cambioRequerido) &&
+    // Una factura ya cobrada no se confirma por el camino de siempre.
+    (!duplicado || autorizacionVigente) &&
     !guardando;
 
   async function confirmar() {
@@ -343,6 +387,7 @@ export default function Cobros() {
         partyNombre: cliente,
         concepto,
         referencia: referencia || null,
+        autorizacionDuplicado: autorizacionVigente ? autorizacion : null,
         documentoId: documento?.id ?? null,
         externalSystem: documento?.external_system ?? null,
         externalDocumentId: documento?.external_id ?? null,
@@ -729,9 +774,79 @@ export default function Cobros() {
             </>
           )}
 
-          <BotonAccion tono="cobro" onClick={() => void confirmar()} disabled={!puedeConfirmar}>
-            {guardando ? "Registrando…" : `Confirmar cobro de ${euros(importe)}`}
-          </BotonAccion>
+          {/*
+            El lateral de una forma que no mueve el cajón. No sale en mixto:
+            allí manda el reparto, que ya tiene su propio bloque, y encima
+            puede haber una parte en efectivo con su rejilla.
+          */}
+          {efectivo === 0 && !esMixto && formaElegida && importe > 0 && (
+            <PanelCobroSinEfectivo
+              forma={formaElegida}
+              importeCentimos={importe}
+              referencia={referencia}
+              escaneo={escaneo}
+              elegidaPorElEscaner={
+                !tocados.has("modo") && escaneo?.formaCobro.formaPago === modo
+              }
+            />
+          )}
+
+          {/*
+            Factura ya cobrada: aquí NO se enseña el botón de siempre. Que la
+            única defensa fuera un aviso encima del mismo botón es justo lo
+            que dejaba pasar el segundo cobro con un clic de más.
+          */}
+          {duplicado && !autorizacionVigente ? (
+            <div className="rounded-lg border border-rose-500/50 bg-rose-500/10 p-3">
+              <div className="text-[13px] font-black uppercase tracking-wide text-rose-200">
+                Factura ya cobrada
+              </div>
+              <p className="mt-1 text-[12px] text-slate-200">
+                La factura <strong>{referencia.trim()}</strong> consta cobrada en{" "}
+                <strong>{duplicado.numero}</strong> del {duplicado.fecha}
+                {duplicado.partyNombre ? ` (${duplicado.partyNombre})` : ""}, por{" "}
+                <strong>{euros(duplicado.importeCentimos)}</strong>.
+              </p>
+              <p className="mt-1 text-[12px] text-slate-300">
+                Registrar otro cobro duplicaría el ingreso. Si aun así hay que hacerlo, tiene que
+                autorizarlo alguien con permiso.
+              </p>
+              <button
+                type="button"
+                onClick={() => setPidiendoAutorizacion(true)}
+                disabled={!puede("cash.collection.create") || importe <= 0 || !modo}
+                className="mt-2 rounded-lg border border-rose-400/60 px-3 py-1.5 text-[12px] font-bold text-rose-200 hover:bg-rose-500/20 disabled:opacity-50"
+              >
+                Continuar de todas formas
+              </button>
+            </div>
+          ) : (
+            <>
+              {duplicado && autorizacionVigente && (
+                <p className="text-[12px] font-bold text-amber-300">
+                  Cobro duplicado autorizado. Queda registrado quién lo autorizó.
+                </p>
+              )}
+              <BotonAccion tono="cobro" onClick={() => void confirmar()} disabled={!puedeConfirmar}>
+                {guardando ? "Registrando…" : `Confirmar cobro de ${euros(importe)}`}
+              </BotonAccion>
+            </>
+          )}
+
+          {pidiendoAutorizacion && duplicado && (
+            <AutorizarDuplicado
+              cobroPrevio={duplicado}
+              referencia={referencia.trim()}
+              importeCentimos={importe}
+              formaNombre={formaElegida?.nombre ?? modo}
+              onCancelar={() => setPidiendoAutorizacion(false)}
+              onAutorizado={(token) => {
+                setAutorizacion(token);
+                setAutorizadoPara(claveAutorizacion);
+                setPidiendoAutorizacion(false);
+              }}
+            />
+          )}
 
           {!puede("cash.collection.create_manual") && !documento && (
             <Aviso tono="aviso">No tienes permiso para crear cobros manuales, solo para cobrar facturas de la ERP.</Aviso>
