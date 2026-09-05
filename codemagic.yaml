@@ -3,6 +3,8 @@ workflows:
     name: SEA Asistencia · iOS → TestFlight
     instance_type: mac_mini_m2
     max_build_duration: 60
+    integrations:
+      app_store_connect: Mobilink TyreControl
     environment:
       flutter: stable
       xcode: latest
@@ -47,3 +49,97 @@ workflows:
         notify:
           success: true
           failure: true
+
+  # ── Mobilink TyreControl · iOS → TestFlight ──────────────────────────────
+  # Workflow independiente del de SEA Asistencia: otra app, otro bundle id,
+  # otra carpeta. No toca Android (eso lo hace GitHub Actions).
+  ios-tyrecontrol-testflight:
+    name: Mobilink TyreControl · iOS → TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    # Integración creada en Codemagic (Teams → Integrations → Developer Portal)
+    # con este nombre exacto. Con ella Codemagic pide a Apple el certificado de
+    # distribución y el perfil para el bundle id de abajo, sube a TestFlight y
+    # deja las credenciales de la API de App Store Connect en el entorno para
+    # el paso que calcula el número de build.
+    integrations:
+      app_store_connect: Mobilink TyreControl
+    environment:
+      # Misma versión que compila el proyecto (Flutter 3.35.4 en local y en la CI
+      # de Android). Apple exige un SDK actual para subir a App Store Connect:
+      # `latest` en los Mac de Codemagic lo cumple.
+      flutter: 3.35.4
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.seatarragona.tyrecontrolApp
+      vars:
+        BUNDLE_ID: com.seatarragona.tyrecontrolApp
+        # Versión de tienda. El pubspec lleva la versión de Android y NO se toca:
+        # se pasa por flag.
+        TC_BUILD_NAME: "1.0"
+        # APP_STORE_APPLE_ID (el ID numérico de la app en App Store Connect) se
+        # puede definir en la UI de Codemagic; si no está, el paso de versión lo
+        # resuelve por el bundle id.
+    working_directory: tyrecontrol_app
+    scripts:
+      - name: Flutter pub get
+        script: flutter pub get
+      - name: Instalar pods
+        script: |
+          cd ios && pod install
+      - name: Aplicar la firma al proyecto Xcode
+        script: |
+          # Escribe en Runner.xcodeproj el equipo, el certificado y el perfil que
+          # Codemagic ha obtenido con la integración; genera
+          # /Users/builder/export_options.plist para el paso siguiente.
+          xcode-project use-profiles
+      - name: Número de build desde App Store Connect
+        script: |
+          # Patrón de Codemagic: se pregunta a App Store Connect el último build
+          # subido a TestFlight de esta app y se suma uno. Así nunca se repite
+          # un número, que TestFlight rechazaría.
+          set -e
+          APPLE_ID="${APP_STORE_APPLE_ID:-}"
+          if [ -z "$APPLE_ID" ]; then
+            APPLE_ID=$(app-store-connect apps list --bundle-id "$BUNDLE_ID" --json | jq -r '.[0].id // empty')
+          fi
+          if [ -z "$APPLE_ID" ]; then
+            echo "No encuentro la app $BUNDLE_ID en App Store Connect" >&2
+            exit 1
+          fi
+          ULTIMO=$(app-store-connect get-latest-testflight-build-number "$APPLE_ID" 2>/dev/null || true)
+          # Primer build: aún no hay nada en TestFlight. Se arranca en el 153, que
+          # es el previsto para la primera subida.
+          ULTIMO=${ULTIMO:-152}
+          echo "TC_BUILD_NUMBER=$((ULTIMO + 1))" >> "$CM_ENV"
+          echo "Último build en TestFlight: $ULTIMO → este será el $((ULTIMO + 1))"
+      - name: Build IPA
+        script: |
+          flutter build ipa --release \
+            --build-name="$TC_BUILD_NAME" \
+            --build-number="$TC_BUILD_NUMBER" \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      # Con working_directory, Codemagic resuelve los globs desde tyrecontrol_app/;
+      # se dejan también las rutas desde la raíz del repositorio por si acaso.
+      - build/ios/ipa/*.ipa
+      - build/ios/archive/*.xcarchive
+      - tyrecontrol_app/build/ios/ipa/*.ipa
+      - tyrecontrol_app/build/ios/archive/*.xcarchive
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        # Sube el .ipa a App Store Connect y lo pone en TestFlight. No envía a
+        # revisión de App Store: eso se hace a mano cuando el build esté probado.
+        submit_to_testflight: true
+        submit_to_app_store: false
+      email:
+        recipients:
+          - jcruset@gmail.com
+        notify:
+          success: true
+          failure: true
+

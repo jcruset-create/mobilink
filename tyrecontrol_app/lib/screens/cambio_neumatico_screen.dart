@@ -66,6 +66,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Map<int, ({num presion, num margen})> _presionesObjetivo = {}; // presión recomendada por eje
   Map<String, ({double? prof, double? pres})> _datosCat = {}; // catálogo por modelo (dibujo/presión máx)
   bool _trabajando = false;
+  /// Scroll propio de la franja de stock, para que su barra horizontal no se
+  /// confunda con el scroll vertical de la pantalla.
+  final _stockScroll = ScrollController();
   late final DateTime _abiertoEn = DateTime.now(); // para acotar el "deshacer" a esta sesión
   /// La intervención de esta sesión en BD (fase 3): se abre (o recupera) al
   /// cargar la pantalla y viaja en cada operación, que así nace dentro de su
@@ -146,6 +149,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   @override
   void dispose() {
     if (_stream != null && _listener != null) _stream!.removeListener(_listener!);
+    _stockScroll.dispose();
     super.dispose();
   }
 
@@ -1613,11 +1617,29 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                     style: TextStyle(color: AppColors.textHint, fontSize: 13)),
               )
             : SizedBox(
-                height: 58,
-                child: ListView(scrollDirection: Axis.horizontal, children: [
-                  if (nuevos.isNotEmpty) _grupoStock('Nuevos', nuevos, 'nuevo', AppColors.success, montarEn),
-                  if (usados.isNotEmpty) _grupoStock('Usados', usados, 'usado', AppColors.warning, montarEn),
-                ]),
+                // 58 de tarjetas + sitio para la barra de desplazamiento debajo.
+                height: 68,
+                // En un iPhone caben una tarjeta y poco: la barra siempre a la
+                // vista dice que hay más a la derecha y se mueve con el swipe.
+                child: RawScrollbar(
+                  controller: _stockScroll,
+                  thumbVisibility: true,
+                  thickness: 3,
+                  radius: const Radius.circular(2),
+                  thumbColor: AppColors.success.withValues(alpha: 0.7),
+                  trackVisibility: true,
+                  trackColor: AppColors.cardBorder,
+                  trackRadius: const Radius.circular(2),
+                  child: ListView(
+                    controller: _stockScroll,
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.only(bottom: 10),
+                    children: [
+                      if (nuevos.isNotEmpty) _grupoStock('Nuevos', nuevos, 'nuevo', AppColors.success, montarEn),
+                      if (usados.isNotEmpty) _grupoStock('Usados', usados, 'usado', AppColors.warning, montarEn),
+                    ],
+                  ),
+                ),
               ),
       ]),
     );
