@@ -98,7 +98,9 @@ export async function enviarRecordatorio(
   if (!["SENT", "DELIVERED"].includes(String(f.status))) return omitir(`estado_${String(f.status)}`);
   if (Number(f.expiresAtMs) <= ahoraMs + MARGEN_RECORDATORIO_MS) return omitir("sin_margen");
 
-  const config = await configEfectiva(a.clienteFacturacionId);
+  // Con el ámbito entero: el override vive por (sistema, taller, cliente).
+  const config = await configEfectiva(a.clienteFacturacionId,
+    { sourceSystem: a.sourceSystem as never, tenantId: a.tenantId });
   if (!config.activo) return omitir("satisfaction_disabled");
   if (!config.recordatorio) return omitir("reminder_disabled");
 

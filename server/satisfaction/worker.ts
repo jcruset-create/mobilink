@@ -26,6 +26,7 @@ import pool from "../db.ts";
 import { enviarInicial, reclamarParaEnvio } from "./envio.ts";
 import { enviarRecordatorio, pendientesDeRecordatorio } from "./recordatorio.ts";
 import { reconciliarAmbiguos } from "./reconciliacion.ts";
+import { configGlobal } from "./config.ts";
 
 /** Cada cinco minutos. Los retrasos se miden en minutos u horas, no en latidos. */
 const CADA_MS = 5 * 60_000;
@@ -118,6 +119,33 @@ export async function cicloSatisfaction(ahoraMs = Date.now()): Promise<CicloSati
   }
 
   const encoladas = await encolarMaduras(200, ahoraMs);
+
+  /*
+   * ── El interruptor de emergencia ──────────────────────────────────────
+   *
+   * Se mira UNA vez por pasada y, si está apagado, no se reclama ni una
+   * encuesta: ni envíos ni recordatorios. Antes esto se comprobaba solo dentro
+   * de `enviarInicial`, que ya impedía mandar, pero seguía reclamando fila por
+   * fila y anotando el bloqueo en cada una. Apagar tiene que ser apagar, no
+   * «seguir dando vueltas sin llegar a mandar».
+   *
+   * Lo que NO detiene, a propósito: caducar y reconciliar —ninguna de las dos
+   * escribe a nadie— y sobre todo la miniweb pública. Quien ya recibió su
+   * enlace tiene que poder terminar la encuesta aunque hayamos cerrado el grifo
+   * de los envíos nuevos; cortarle a mitad sería castigar al que sí contestó.
+   */
+  const global = await configGlobal();
+  if (!global.activo) {
+    if (caducadas || encoladas || reconciliadas) {
+      console.log(`[Satisfaction] worker: ${encoladas} encolada(s), ` +
+        `${caducadas} caducada(s), ${reconciliadas} reconciliada(s). ` +
+        "Envíos DESACTIVADOS (satisfaction.enabled = false).");
+    }
+    return {
+      encoladas, caducadas, reconciliadas,
+      enviadas: 0, bloqueadas: 0, reintentos: 0, recordatorios: 0,
+    };
+  }
 
   let enviadas = 0, bloqueadas = 0, reintentos = 0;
   try {
