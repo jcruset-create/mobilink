@@ -25,11 +25,12 @@ import {
   Home,
   X,
   Menu,
+  Star,
 } from "lucide-react";
 
 type Props = {
   /** Clave de la entrada activa (p. ej. "otf"). */
-  active?: "flota" | "central" | "talleres" | "proveedores" | "clientes" | "lugares" | "otf" | "vehiculo" | "panel" | "bandeja";
+  active?: "flota" | "central" | "talleres" | "proveedores" | "clientes" | "lugares" | "otf" | "vehiculo" | "panel" | "bandeja" | "calidad";
 };
 
 const itemCls = (activo: boolean) =>
@@ -104,6 +105,10 @@ export default function AssistSidebar({ active }: Props) {
               día, antes que por ninguna ficha. */}
           <a href="/asistencias/bandeja" className={itemCls(active === "bandeja")}>
             <AlertTriangle className="h-4 w-4 shrink-0" /> Bandeja
+          </a>
+          {/* Calidad va junto a la bandeja: las dos son trabajo pendiente. */}
+          <a href="/asistencias/calidad" className={itemCls(active === "calidad")}>
+            <Star className="h-4 w-4 shrink-0" /> Calidad
           </a>
           <a href="/asistencias/proveedores" className={itemCls(active === "proveedores")}>
             <Building2 className="h-4 w-4 shrink-0" /> Proveedores
