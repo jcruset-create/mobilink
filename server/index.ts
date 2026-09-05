@@ -63,6 +63,7 @@ import { initExcepciones } from "./excepciones/schema.ts";
 import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { initSatisfaction } from "./satisfaction/schema.ts";
 import { startSatisfactionWorker } from "./satisfaction/worker.ts";
+import { createSatisfactionPublicRouter } from "./satisfaction/routerPublico.ts";
 import {
   engancharPosteriores, prepararRespuestaTrasCambio,
 } from "./cierre/finalizacion.ts";
@@ -18417,6 +18418,13 @@ mountParte(app, authenticate, requireModule("tyrecontrol"));
 app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
 mountCorreo(app, requireSupervisorRole);
 app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
+
+/*
+ * Valoración pública. SIN guarda a propósito: quien abre el enlace no tiene
+ * sesión ni taller. El token es lo único que da acceso, y el propio router
+ * lleva su límite de peticiones y su límite de tamaño de cuerpo.
+ */
+app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
