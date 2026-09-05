@@ -73,6 +73,16 @@ export const PERMISOS = [
    * es de los errores que no se descubren hasta la conciliación del mes.
    */
   "cash.duplicate_payment.override",
+  /**
+   * Dar de alta y revocar escáneres de AutoScan, y descartar lo que dejan.
+   *
+   * De responsable: dar de alta un dispositivo es dar una llave que mete
+   * documentos en la caja de un centro sin que nadie inicie sesión, y
+   * descartar una factura es decidir que un papel no se cobra. Ver la bandeja,
+   * en cambio, va con `cash.view`: el cajero tiene que poder mirarla, que para
+   * eso trabaja con ella.
+   */
+  "cash.autoscan.manage",
   "cash.erp.view",
   "cash.erp.sync",
   "cash.erp.configure",
@@ -117,6 +127,7 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     "cash.adjustment.create",
     "cash.operation.reverse",
     "cash.duplicate_payment.override",
+    "cash.autoscan.manage",
     "cash.count.create",
     // Puede dar de alta una caja de su empresa, pero no tocar el catálogo de
     // denominaciones, que es de toda la instalación.

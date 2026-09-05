@@ -41,6 +41,9 @@ import type {
   ReglaPagoConfig,
   CampoRegla,
   PropuestaReposicion,
+  DocumentoAutoScan,
+  ResumenAutoScan,
+  DispositivoAutoScan,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -887,6 +890,48 @@ export const deshacerCanjeIngreso = (swapId: number) =>
     `/bank-deposits/swap/${swapId}/undo`,
     { method: "POST" }
   );
+
+// ── AutoScan ───────────────────────────────────────────────────────────────
+
+export const resumenAutoScan = () => pedir<ResumenAutoScan>("/autoscan/inbox/summary");
+
+export const bandejaAutoScan = () =>
+  pedir<{ documentos: DocumentoAutoScan[]; resumen: ResumenAutoScan }>("/autoscan/inbox");
+
+/**
+ * El documento con SU análisis, el que ya se hizo cuando llegó.
+ *
+ * Abrirlo NO vuelve a llamar a la IA: cuesta dinero, tarda, y podría dar un
+ * resultado distinto del que ya está auditado.
+ */
+export const documentoAutoScan = (id: number) =>
+  pedir<{ documento: DocumentoAutoScan; propuesta: PropuestaEscaneo | null }>(
+    `/autoscan/inbox/${id}`
+  );
+
+export const descartarAutoScan = (id: number, motivo?: string) =>
+  pedir<{ documento: DocumentoAutoScan }>(`/autoscan/inbox/${id}/discard`, json({ motivo }));
+
+export const reintentarAutoScan = (id: number) =>
+  pedir<{ documento: DocumentoAutoScan }>(`/autoscan/inbox/${id}/retry`, { method: "POST" });
+
+/** Cuelga el documento del cobro ya registrado. Es lo que lo pasa a USADO. */
+export const promoverAutoScan = (id: number, operationId: number) =>
+  pedir<{ documentoId: number; inboxId: number; operationId: number }>(
+    `/autoscan/inbox/${id}/promote`,
+    json({ operationId })
+  );
+
+export const dispositivosAutoScan = () =>
+  pedir<{ dispositivos: DispositivoAutoScan[] }>("/autoscan/devices");
+
+export const crearDispositivoAutoScan = (datos: { nombre: string; centroId?: string }) =>
+  pedir<{ codigo: string; expiraAtMs: number }>("/autoscan/devices", json(datos));
+
+export const revocarDispositivoAutoScan = (id: number) =>
+  pedir<{ dispositivo: DispositivoAutoScan }>(`/autoscan/devices/${id}/revoke`, {
+    method: "POST",
+  });
 
 // ── Reposición del fondo desde el dinero pendiente de ingresar ─────────────
 

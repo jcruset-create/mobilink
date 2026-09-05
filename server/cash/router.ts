@@ -1735,6 +1735,293 @@ export function createCashRouter(): Router {
     })
   );
 
+  // ── AutoScan ─────────────────────────────────────────────────────────────
+
+  /*
+   * Autenticación de MÁQUINA, aparte de la de personas.
+   *
+   * Estas tres rutas NO pasan por `authenticate` ni por `cargarPermisosCaja`:
+   * un escáner no es un usuario, no tiene permisos de interfaz y no puede
+   * mirar cajas, jornadas ni cobros. Lo único que puede hacer es dejar un
+   * documento de SU empresa y SU centro, y esos dos salen de la credencial —
+   * nunca del cuerpo de la petición, que ni se lee para eso.
+   */
+  const conDispositivo: RequestHandler = async (req, res, next) => {
+    const cabecera = String(req.headers["x-autoscan-key"] ?? "");
+    const { identificarDispositivo } = await import("./autoscan/devices.ts");
+    const identidad = cabecera ? await identificarDispositivo(cabecera) : null;
+    if (!identidad) {
+      // Sin decir si la credencial no existe o el dispositivo está revocado.
+      return res.status(401).json({ error: "Credencial de AutoScan no válida.", code: "AUTOSCAN_NO_AUTORIZADO" });
+    }
+    req.autoscan = identidad;
+    next();
+  };
+
+  /** Canjea el código de activación por la credencial. Sin autenticar. */
+  r.post(
+    "/autoscan/activate",
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { activarDispositivo } = await import("./autoscan/devices.ts");
+      const activado = await activarDispositivo({
+        codigo: String(b.codigo ?? ""),
+        version: typeof b.version === "string" ? b.version : null,
+      });
+      await registrarAuditoria({
+        empresaId: activado.empresaId,
+        userId: null,
+        accion: "cash.autoscan.device_activated",
+        entidad: "cash_autoscan_devices",
+        entidadId: String(activado.deviceId),
+        // El secreto NO: es lo único que no puede aparecer en ningún sitio.
+        detalle: { centroId: activado.centroId, nombre: activado.nombre },
+      });
+      res.status(201).json(activado);
+    })
+  );
+
+  /** El agente deja un documento. La empresa y el centro salen de él. */
+  r.post(
+    "/autoscan/documents",
+    conDispositivo,
+    subida(subidaDocumento.single("documento"), 15),
+    ruta(async (req, res) => {
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
+      }
+      const b = req.body ?? {};
+      const { recibirDocumento } = await import("./autoscan/inbox.ts");
+      const { documento, duplicado } = await recibirDocumento(req.autoscan!, {
+        fichero: req.file,
+        idempotencyKey: String(
+          b.idempotencyKey ?? req.headers["idempotency-key"] ?? ""
+        ),
+        escaneadoAtMs: b.escaneadoAtMs ? Number(b.escaneadoAtMs) : null,
+      });
+
+      await registrarAuditoria({
+        empresaId: req.autoscan!.empresaId,
+        userId: null,
+        accion: duplicado ? "cash.autoscan.document_duplicate" : "cash.autoscan.document_received",
+        entidad: "cash_autoscan_inbox",
+        entidadId: String(documento.id),
+        detalle: {
+          deviceId: req.autoscan!.deviceId,
+          centroId: req.autoscan!.centroId,
+          sha256: documento.sha256,
+          nombre: documento.nombreOriginal,
+        },
+      });
+
+      /*
+       * 202 y no 200: el documento está guardado pero todavía sin analizar. Y
+       * la respuesta es corta a propósito —el agente solo necesita saber que
+       * ya no tiene que reintentar—.
+       */
+      res.status(duplicado ? 200 : 202).json({
+        ok: true,
+        duplicado,
+        documentoId: documento.id,
+        estado: documento.estado,
+      });
+    })
+  );
+
+  /** Latido: sigo vivo, y ésta es mi versión. */
+  r.post(
+    "/autoscan/heartbeat",
+    conDispositivo,
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { latido } = await import("./autoscan/devices.ts");
+      await latido(req.autoscan!.deviceId, typeof b.version === "string" ? b.version : null);
+      res.json({ ok: true });
+    })
+  );
+
+  // ── AutoScan: lo que ven y hacen las personas ────────────────────────────
+
+  r.get(
+    "/autoscan/devices",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { listarDispositivos } = await import("./autoscan/devices.ts");
+      res.json({
+        dispositivos: await listarDispositivos(
+          req.authCtx!.empresaId,
+          // Un usuario limitado a un taller solo ve los suyos.
+          req.cashCentroId ?? (typeof req.query.centro === "string" ? req.query.centro : null)
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/autoscan/devices",
+    exigirPermiso("cash.autoscan.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { crearCodigoActivacion } = await import("./autoscan/devices.ts");
+      /*
+       * El centro sale del usuario cuando está limitado a uno. Si no lo está,
+       * tiene que decirlo: no hay un centro «por defecto» que adivinar.
+       */
+      const centroId = req.cashCentroId ?? String(b.centroId ?? "");
+      const creado = await crearCodigoActivacion({
+        empresaId: req.authCtx!.empresaId,
+        centroId,
+        nombre: String(b.nombre ?? ""),
+        creadoPor: req.authCtx!.userId,
+      });
+      await registrarAuditoria({
+        empresaId: req.authCtx!.empresaId,
+        userId: req.authCtx!.userId,
+        accion: "cash.autoscan.device_code_created",
+        entidad: "cash_autoscan_activation_codes",
+        entidadId: centroId,
+        // El código NO se audita: es una credencial mientras vive.
+        detalle: { centroId, nombre: String(b.nombre ?? "") },
+      });
+      res.status(201).json(creado);
+    })
+  );
+
+  r.post(
+    "/autoscan/devices/:id/revoke",
+    exigirPermiso("cash.autoscan.manage"),
+    ruta(async (req, res) => {
+      const { revocarDispositivo } = await import("./autoscan/devices.ts");
+      const dispositivo = await revocarDispositivo(
+        req.authCtx!.empresaId,
+        enteroPositivo(req.params.id, "id"),
+        req.authCtx!.userId
+      );
+      await registrarAuditoria({
+        empresaId: req.authCtx!.empresaId,
+        userId: req.authCtx!.userId,
+        accion: "cash.autoscan.device_revoked",
+        entidad: "cash_autoscan_devices",
+        entidadId: String(dispositivo.id),
+        detalle: { nombre: dispositivo.nombre, centroId: dispositivo.centroId },
+      });
+      res.json({ dispositivo });
+    })
+  );
+
+  /** La bandeja del centro, y el contador. Una sola regla, aquí. */
+  r.get(
+    "/autoscan/inbox",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const inbox = await import("./autoscan/inbox.ts");
+      const centro =
+        req.cashCentroId ?? (typeof req.query.centro === "string" ? req.query.centro : null);
+      const [documentos, resumen] = await Promise.all([
+        inbox.listar(req.authCtx!.empresaId, centro),
+        inbox.resumen(req.authCtx!.empresaId, centro),
+      ]);
+      res.json({ documentos, resumen });
+    })
+  );
+
+  r.get(
+    "/autoscan/inbox/summary",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { resumen } = await import("./autoscan/inbox.ts");
+      res.json(
+        await resumen(
+          req.authCtx!.empresaId,
+          req.cashCentroId ?? (typeof req.query.centro === "string" ? req.query.centro : null)
+        )
+      );
+    })
+  );
+
+  /** El análisis que ya se hizo. Abrir un documento NO vuelve a llamar a la IA. */
+  r.get(
+    "/autoscan/inbox/:id",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const inbox = await import("./autoscan/inbox.ts");
+      const doc = await inbox.documento(
+        req.authCtx!.empresaId,
+        enteroPositivo(req.params.id, "id")
+      );
+      if (!doc) {
+        throw new ErrorCaja("DOCUMENTO_NO_ENCONTRADO", "Ese documento no existe.", 404);
+      }
+      const { propuestaDeEscaneo } = await import("./invoice-scan/service.ts");
+      res.json({
+        documento: doc,
+        propuesta: doc.scanId == null ? null : await propuestaDeEscaneo(req.authCtx!.empresaId, doc.scanId),
+      });
+    })
+  );
+
+  r.get(
+    "/autoscan/inbox/:id/file",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { enlace } = await import("./autoscan/inbox.ts");
+      res.json({
+        url: await enlace(req.authCtx!.empresaId, enteroPositivo(req.params.id, "id")),
+      });
+    })
+  );
+
+  r.post(
+    "/autoscan/inbox/:id/discard",
+    exigirPermiso("cash.autoscan.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { descartar } = await import("./autoscan/inbox.ts");
+      const doc = await descartar(
+        req.authCtx!.empresaId,
+        enteroPositivo(req.params.id, "id"),
+        req.authCtx!.userId,
+        typeof b.motivo === "string" ? b.motivo : null
+      );
+      await registrarAuditoria({
+        empresaId: req.authCtx!.empresaId,
+        userId: req.authCtx!.userId,
+        accion: "cash.autoscan.document_discarded",
+        entidad: "cash_autoscan_inbox",
+        entidadId: String(doc.id),
+        detalle: { motivo: typeof b.motivo === "string" ? b.motivo : null, sha256: doc.sha256 },
+      });
+      res.json({ documento: doc });
+    })
+  );
+
+  r.post(
+    "/autoscan/inbox/:id/retry",
+    exigirPermiso("cash.autoscan.manage"),
+    ruta(async (req, res) => {
+      const { reintentar } = await import("./autoscan/inbox.ts");
+      res.json({
+        documento: await reintentar(req.authCtx!.empresaId, enteroPositivo(req.params.id, "id")),
+      });
+    })
+  );
+
+  /** Cuelga un documento de la bandeja de un cobro ya registrado. */
+  r.post(
+    "/autoscan/inbox/:id/promote",
+    exigirPermiso("cash.document.attach"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { promover } = await import("./autoscan/promote.ts");
+      res.status(201).json(
+        await promover(contexto(req), {
+          inboxId: enteroPositivo(req.params.id, "id"),
+          operationId: enteroPositivo(b.operationId, "operationId"),
+        })
+      );
+    })
+  );
+
   // ── Escaneo de facturas ──────────────────────────────────────────────────
 
   /**

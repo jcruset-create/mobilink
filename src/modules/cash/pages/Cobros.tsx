@@ -39,7 +39,13 @@ import { esFallo } from "../utils/result";
 import PaymentMethodPicker, { MIXTO } from "../components/PaymentMethodPicker";
 import Justificantes from "../components/Justificantes";
 import EscanerFactura from "../components/EscanerFactura";
-import { type AperturaCartucho, type DocumentoExterno, type PropuestaEscaneo } from "../types";
+import BandejaAutoScan from "../components/BandejaAutoScan";
+import {
+  type AperturaCartucho,
+  type DocumentoAutoScan,
+  type DocumentoExterno,
+  type PropuestaEscaneo,
+} from "../types";
 import * as api from "../services/api";
 
 /** Dónde se recuerda la última sección usada en este navegador. */
@@ -118,6 +124,19 @@ export default function Cobros() {
   const [justificante, setJustificante] = useState<File | null>(null);
 
   /*
+   * La factura de la bandeja de AutoScan que va a justificar este cobro.
+   *
+   * Solo el número. El fichero ya está subido desde que el escáner lo dejó, y
+   * volver a traérselo al navegador para volver a subirlo daría dos originales
+   * del mismo papel. Al confirmar, el servidor cuelga ESE blob de la operación.
+   *
+   * Es excluyente con `justificante`: o la factura viene del escáner o la
+   * adjunta una persona. Las dos a la vez serían dos justificantes para un
+   * cobro, y nadie sabría cuál es el bueno.
+   */
+  const [inboxId, setInboxId] = useState<number | null>(null);
+
+  /*
    * Lo que el escáner ha propuesto, y qué ha tocado la persona después.
    *
    * Las dos cosas hacen falta para la regla que más importa de esta pantalla:
@@ -145,6 +164,13 @@ export default function Cobros() {
    */
   const [pidiendoAutorizacion, setPidiendoAutorizacion] = useState(false);
   const [autorizacion, setAutorizacion] = useState<string | null>(null);
+  /*
+   * Para QUÉ factura e importe se dio esa autorización. Se guarda aquí arriba,
+   * con el resto del estado: por debajo hay un `return` temprano cuando no hay
+   * jornada, y un `useState` al otro lado de un `return` cambia el orden de
+   * los hooks entre renders.
+   */
+  const [autorizadoPara, setAutorizadoPara] = useState("");
 
   const importe = aCentimos(importeTexto) ?? 0;
 
@@ -280,6 +306,7 @@ export default function Cobros() {
     setCambioPropuesto({});
     setAvisoCambio("");
     setJustificante(null);
+    setInboxId(null);
     setEscaneo(null);
     setTocados(new Set());
   }
@@ -328,6 +355,22 @@ export default function Cobros() {
     setTocados(new Set());
   }
 
+  /**
+   * Se coge una factura de la bandeja de AutoScan.
+   *
+   * Rellena la pantalla exactamente igual que si la hubiera escaneado la
+   * persona en este momento: es el MISMO análisis, hecho antes. Por eso no se
+   * vuelve a llamar a la IA y por eso `aplicarEscaneo` no distingue de dónde
+   * viene la propuesta — solo hay un motor de lectura de facturas.
+   *
+   * Y suelta el adjunto manual si lo hubiera: un cobro, un justificante.
+   */
+  function elegirDeBandeja(d: DocumentoAutoScan, p: PropuestaEscaneo) {
+    setInboxId(d.id);
+    setJustificante(null);
+    aplicarEscaneo(p);
+  }
+
   function elegirDocumento(d: DocumentoExterno) {
     setDocumento(d);
     setImporteTexto(String(Number(d.pendiente_centimos) / 100).replace(".", ","));
@@ -358,7 +401,6 @@ export default function Cobros() {
    * mejor que la pantalla lo sepa antes de dejar pulsar.
    */
   const claveAutorizacion = `${referencia.trim().toUpperCase()}|${importe}`;
-  const [autorizadoPara, setAutorizadoPara] = useState("");
   const autorizacionVigente = autorizacion != null && autorizadoPara === claveAutorizacion;
 
   const puedeConfirmar =
@@ -415,6 +457,29 @@ export default function Cobros() {
           setError(
             `El cobro ${r.numero} ha quedado registrado, pero el justificante no se ha podido subir` +
               `${e instanceof Error ? `: ${e.message}` : "."} Vuelve a adjuntarlo aquí abajo.`
+          );
+        }
+      }
+
+      /*
+       * La factura de la bandeja pasa a ser el justificante de ESTE cobro.
+       *
+       * Mismo sitio y mismo trato que la subida manual: después del cobro y en
+       * su propia petición. Si falla, el dinero está contado y lo único que
+       * queda es volver a adjuntar — decir «no se ha podido registrar el
+       * cobro» sería mentira y llevaría a cobrar dos veces.
+       *
+       * El servidor marca el documento como USADO en la misma transacción, así
+       * que a partir de aquí desaparece de la bandeja y no puede justificar
+       * otro cobro.
+       */
+      if (inboxId != null) {
+        try {
+          await api.promoverAutoScan(inboxId, r.operacionId);
+        } catch (e) {
+          setError(
+            `El cobro ${r.numero} ha quedado registrado, pero la factura escaneada no se ha podido` +
+              ` colgar de él${e instanceof Error ? `: ${e.message}` : "."} Adjúntala aquí abajo.`
           );
         }
       }
@@ -641,9 +706,28 @@ export default function Cobros() {
                 mostrador es un gesto seguido —escanear, cobrar— sin tener que
                 buscar el cobro después. De paso se lee y rellena la pantalla,
                 pero lo que se confirma lo decide quien está delante. */}
+            {/* Lo que ya ha llegado solo, antes de ofrecer adjuntar nada a
+                mano: si la factura está en la bandeja, el gesto más corto es
+                cogerla de ahí. */}
+            <BandejaAutoScan
+              elegido={inboxId}
+              onElegir={elegirDeBandeja}
+              onSoltar={() => {
+                setInboxId(null);
+                setEscaneo(null);
+              }}
+              puedeGestionar={puede("cash.autoscan.manage")}
+              deshabilitado={guardando}
+              onError={setError}
+            />
+
             <EscanerFactura
               fichero={justificante}
-              onChange={setJustificante}
+              onChange={(f) => {
+                setJustificante(f);
+                // Adjuntar a mano suelta la de la bandeja: son excluyentes.
+                if (f) setInboxId(null);
+              }}
               onPropuesta={aplicarEscaneo}
               onOlvidar={() => setEscaneo(null)}
               puedeAdjuntar={puede("cash.document.attach")}

@@ -21,7 +21,7 @@ import { formasPagoActivas } from "../config.ts";
 import { clasificar, type ReglaFormaCobro } from "./classifier.ts";
 import { extractorIA, type DocumentoAdjunto, type ExtractorFacturas } from "./extractor.ts";
 import { evidenciaDeCobro, normalizar, sinDatosDeTarjeta } from "./normalize.ts";
-import type { PropuestaCobro } from "./types.ts";
+import type { Aviso, ExtraccionNormalizada, PropuestaCobro } from "./types.ts";
 import { validar } from "./validate.ts";
 
 /** Lo mismo que admite un justificante: es el mismo papel. */
@@ -155,6 +155,61 @@ async function apuntarFallo(
  * llamar a ningún proveedor: en las pruebas se pasa uno que devuelve la
  * extracción de una factura conocida.
  */
+/**
+ * La propuesta que se guardó de un escaneo, tal cual salió.
+ *
+ * Existe para que abrir un documento de AutoScan NO vuelva a llamar a la IA.
+ * El análisis ya se hizo cuando el escáner lo dejó; repetirlo costaría dinero,
+ * tardaría, y —lo peor— podría dar un resultado distinto del que ya está
+ * auditado.
+ */
+export async function propuestaDeEscaneo(
+  empresaId: string,
+  scanId: number
+): Promise<(PropuestaCobro & { scanId: number }) | null> {
+  const { rows } = await pool.query(
+    `SELECT extraccion_normalizada, forma_pago_propuesta, forma_pago_confianza,
+            forma_pago_motivo, regla_id, auto_seleccionada, avisos
+       FROM cash_invoice_scans WHERE id = $1 AND empresa_id = $2`,
+    [scanId, empresaId]
+  );
+  const fila = rows[0];
+  if (!fila?.extraccion_normalizada) return null;
+
+  /*
+   * Se rehace con `validar`, que es pura: mismas entradas, misma salida, sin
+   * IA y sin red. Guardar además la propuesta entera sería tener el mismo dato
+   * escrito dos veces y poder acabar con las dos versiones en desacuerdo.
+   */
+  const propuesta = validar(fila.extraccion_normalizada as ExtraccionNormalizada, {
+    formaPago: fila.forma_pago_propuesta ?? null,
+    confianza: Number(fila.forma_pago_confianza ?? 0),
+    motivo: fila.forma_pago_motivo ?? "",
+    autoSeleccionar: Boolean(fila.auto_seleccionada),
+    reglaId: fila.regla_id ?? null,
+  });
+  if (Array.isArray(fila.avisos)) propuesta.avisos = fila.avisos as Aviso[];
+
+  /*
+   * El duplicado SÍ se vuelve a mirar. El escaneo pudo ser anoche a las 20:40
+   * y entre medias alguien puede haber cobrado esa factura: el aviso guardado
+   * estaría desfasado justo en el caso que importa.
+   */
+  const previo = await cobroPrevioDeFactura(empresaId, propuesta.referencia.valor);
+  propuesta.cobroPrevio = previo;
+  if (previo && !propuesta.avisos.some((a) => a.codigo === "POSIBLE_DUPLICADO")) {
+    propuesta.avisos.push({
+      codigo: "POSIBLE_DUPLICADO",
+      mensaje:
+        `La factura ${propuesta.referencia.valor} ya está cobrada en ${previo.numero}. ` +
+        "Cobrarla otra vez tiene que autorizarlo alguien con permiso.",
+      grave: true,
+    });
+  }
+
+  return { ...propuesta, scanId };
+}
+
 export async function escanearFactura(
   entrada: EntradaEscaneo,
   extractor: ExtractorFacturas = extractorIA
