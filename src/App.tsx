@@ -7,6 +7,7 @@ import RoadsideOperatorPage from "./pages/RoadsideOperatorPage";
 import WorkshopOperatorPage from "./pages/WorkshopOperatorPage";
 import RoadsideTrackingPage from "./pages/RoadsideTrackingPage";
 import RoadsideReportPage from "./pages/RoadsideReportPage";
+import SatisfactionPublicPage from "./pages/SatisfactionPublicPage";
 import FlotaMapPage from "./pages/FlotaMapPage";
 import OtfPage from "./pages/OtfPage";
 import OtfTvPage from "./pages/OtfTvPage";
@@ -17,6 +18,8 @@ import CentralSharingPage from "./pages/CentralSharingPage";
 import TalleresPage from "./pages/TalleresPage";
 import ProveedoresPage from "./pages/ProveedoresPage";
 import BandejaExcepcionesPage from "./pages/BandejaExcepcionesPage";
+import BandejaCalidadPage from "./pages/BandejaCalidadPage";
+import SatisfaccionPage from "./pages/SatisfaccionPage";
 import ClientesFacturacionPage from "./pages/ClientesFacturacionPage";
 import LugaresPage from "./pages/LugaresPage";
 import OtfHistorialPage from "./pages/OtfHistorialPage";
@@ -155,6 +158,8 @@ export default function App() {
       <Route path="/seguimiento/:token" element={<RoadsideTrackingPage />} />
       <Route path="/track/:token" element={<RoadsideTrackingPage />} />
       <Route path="/informe/:token" element={<RoadsideReportPage />} />
+      {/* Valoración pública: sin sesión, igual que el seguimiento y el informe. */}
+      <Route path="/valoracion/:token" element={<SatisfactionPublicPage />} />
       <Route path="/flota" element={<FlotaMapPage />} />
       <Route path="/otf" element={<OtfPage />} />
       <Route path="/otf-tv" element={<OtfTvPage />} />
@@ -164,6 +169,8 @@ export default function App() {
       <Route path="/asistencias/central" element={<CentralSharingPage />} />
       <Route path="/asistencias/talleres" element={<TalleresPage />} />
       <Route path="/asistencias/bandeja" element={<BandejaExcepcionesPage />} />
+      <Route path="/asistencias/calidad" element={<BandejaCalidadPage />} />
+      <Route path="/asistencias/satisfaccion" element={<SatisfaccionPage />} />
       <Route path="/asistencias/proveedores" element={<ProveedoresPage />} />
       <Route path="/asistencias/clientes" element={<ClientesFacturacionPage />} />
       <Route path="/asistencias/lugares" element={<LugaresPage />} />

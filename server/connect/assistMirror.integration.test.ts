@@ -57,6 +57,21 @@ async function filaEspejo(coreId: number): Promise<any | null> {
   return r.rows[0] ?? null;
 }
 
+/**
+ * Una pasada del espejo lo bastante grande para incluir a la nuestra.
+ *
+ * `pasadaDeEspejos` procesa como mucho 50 asistencias por vuelta, ordenadas por
+ * id. Esta prueba mira la fila espejo de UNA asistencia concreta, y con la
+ * suite entera corriendo sobre la misma base hay decenas de asistencias de
+ * otros ficheros esperando espejo: la nuestra, que es la más nueva, se quedaba
+ * fuera del lote y la prueba fallaba sin que nada estuviera roto. Pasaba en
+ * local y fallaba en la CI según cuánta morralla hubiera dejado el fichero
+ * anterior.
+ *
+ * Lo que se prueba aquí es el ciclo del espejo, no el tamaño del lote.
+ */
+const pasada = () => espejo.pasadaDeEspejos(500);
+
 describe.skipIf(!RUN)("Espejo económico de Assist", () => {
   beforeAll(async () => {
     db = (await import("../db.ts")).default;
@@ -117,7 +132,7 @@ describe.skipIf(!RUN)("Espejo económico de Assist", () => {
   it("el ciclo completo: crear → estimar, asignar → congelar, llegar al taller → cerrar", async () => {
     const coreId = await coreAssistance();
 
-    let r = await espejo.pasadaDeEspejos();
+    let r = await pasada();
     expect(r.creados).toBeGreaterThanOrEqual(1);
 
     const e = await filaEspejo(coreId);
@@ -137,7 +152,7 @@ describe.skipIf(!RUN)("Espejo económico de Assist", () => {
       `UPDATE roadside_assistances SET status='asignada', "assignedAtMs" = $1,
               "assignedTechName" = 'Tecnico Uno' WHERE id = $2`,
       [VIERNES_DIA + 10 * 60_000, coreId]);
-    r = await espejo.pasadaDeEspejos();
+    r = await pasada();
     expect(r.bloqueados).toBeGreaterThanOrEqual(1);
 
     // Servicio hecho: el técnico anota 130 km; el vehículo llega al taller
@@ -149,7 +164,7 @@ describe.skipIf(!RUN)("Espejo económico de Assist", () => {
               "finishedAtMs" = $1, "arrivedAtWorkshopMs" = $2
         WHERE id = $3`,
       [VIERNES_DIA + 150 * 60_000, VIERNES_DIA + 170 * 60_000, coreId]);
-    r = await espejo.pasadaDeEspejos();
+    r = await pasada();
     expect(r.regularizados).toBeGreaterThanOrEqual(1);
 
     const e2 = await filaEspejo(coreId);
@@ -169,8 +184,8 @@ describe.skipIf(!RUN)("Espejo económico de Assist", () => {
 
   it("dos pases seguidos no duplican el espejo", async () => {
     const coreId = await coreAssistance();
-    await espejo.pasadaDeEspejos();
-    await espejo.pasadaDeEspejos();
+    await pasada();
+    await pasada();
     const n = await db.query(
       `SELECT COUNT(*)::int AS n FROM connect_assistances WHERE "coreAssistanceId" = $1`,
       [coreId]);
@@ -189,7 +204,7 @@ describe.skipIf(!RUN)("Espejo económico de Assist", () => {
        VALUES ($1,$2,$3,$4,'assigned','tyres','{}',$5,$5)`,
       [`iny-${sufijo}-${coreId}`, p.rows[0].id, centroId, coreId, now]);
 
-    await espejo.pasadaDeEspejos();
+    await pasada();
     const n = await db.query(
       `SELECT COUNT(*)::int AS n FROM connect_assistances WHERE "coreAssistanceId" = $1`,
       [coreId]);
@@ -198,7 +213,7 @@ describe.skipIf(!RUN)("Espejo económico de Assist", () => {
 
   it("el solicitante que no empareja EXACTO queda sin cliente, con el texto conservado", async () => {
     const coreId = await coreAssistance({ solicitante: "Cliente Espej" }); // errata
-    await espejo.pasadaDeEspejos();
+    await pasada();
     const e = await filaEspejo(coreId);
     expect(e.clientId).toBeNull();
     expect(e.clientName).toBe("Cliente Espej");
@@ -206,13 +221,13 @@ describe.skipIf(!RUN)("Espejo económico de Assist", () => {
 
   it("sin paso por taller, el fin es finishedAtMs; sin ninguno, no se inventa duración", async () => {
     const coreId = await coreAssistance();
-    await espejo.pasadaDeEspejos();
+    await pasada();
     await db.query(
       `UPDATE roadside_assistances
           SET status='finalizada', "serviceKm" = 20, "finishedAtMs" = $1
         WHERE id = $2`,
       [VIERNES_DIA + 95 * 60_000, coreId]);
-    await espejo.pasadaDeEspejos();
+    await pasada();
     const e = await filaEspejo(coreId);
     expect(Number(e.workedMinutes)).toBe(95);
   });
@@ -223,7 +238,7 @@ describe.skipIf(!RUN)("Espejo económico de Assist", () => {
           SET settings = $1 WHERE id = $2`,
       [JSON.stringify({ assistMirror: { activo: false, desdeMs: 1 } }), centroId]);
     const coreId = await coreAssistance();
-    const r = await espejo.pasadaDeEspejos();
+    const r = await pasada();
     expect(r.creados).toBe(0);
     expect(await filaEspejo(coreId)).toBeNull();
     // se deja encendido para el resto de la batería (orden de ficheros)

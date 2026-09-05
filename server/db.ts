@@ -378,6 +378,20 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "conductorDni" TEXT;
 
+    /*
+     * El instante en que empezó la reparación.
+     *
+     * Faltaba: el código lo lee (normalizeRoadsideAssistanceRow), lo escribe
+     * (getRoadsideStatusTimestampField lo devuelve para inicio_reparacion)
+     * y lo pinta el informe PDF, pero la columna no se creaba en ningún sitio.
+     * En una base nueva, poner una asistencia en «Reparando» reventaba con
+     * «column does not exist»; en la de producción existe de antes, así que el
+     * fallo solo se veía al desplegar desde cero o al montar la base de las
+     * pruebas.
+     */
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "inicioReparacionAtMs" BIGINT;
+
     -- Auto "En camino": se arma cuando la furgoneta asignada se ve DENTRO del
     -- radio del taller; al salir del radio (>500 m) se activa el estado solo.
     -- Evita falsos positivos si se asigna una furgoneta que ya esta en ruta.
@@ -596,6 +610,22 @@ export async function initDb() {
 
     CREATE INDEX IF NOT EXISTS roadside_assistances_taller_idx
       ON roadside_assistances("tallerId");
+
+    /*
+     * Las métricas de satisfacción cuentan asistencias TERMINADAS dentro de un
+     * periodo, y agrupan por cliente y por proveedor. Parcial sobre
+     * «finishedAtMs IS NOT NULL» porque las que siguen abiertas no entran nunca
+     * en ese recuento y no tienen por qué ocupar el índice.
+     */
+    CREATE INDEX IF NOT EXISTS roadside_assistances_finalizadas_idx
+      ON roadside_assistances("tallerId", "finishedAtMs")
+      WHERE "finishedAtMs" IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS roadside_assistances_cliente_idx
+      ON roadside_assistances("clienteFacturacionId")
+      WHERE "clienteFacturacionId" IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS roadside_assistances_proveedor_idx
+      ON roadside_assistances("proveedorTallerId")
+      WHERE "proveedorTallerId" IS NOT NULL;
     CREATE INDEX IF NOT EXISTS roadside_vehicles_taller_idx
       ON roadside_vehicles("tallerId");
     CREATE INDEX IF NOT EXISTS techs_taller_idx
