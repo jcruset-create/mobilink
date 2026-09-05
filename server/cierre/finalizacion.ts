@@ -9,25 +9,24 @@
  * la mitad de las asistencias no lo hacen, y nadie se entera hasta que alguien
  * mira por qué faltan datos.
  *
- * ── Y una divergencia que YA existía ────────────────────────────────────────
+ * ── La divergencia que había, y que ya está corregida ──────────────────────
  *
- * Al juntarlas salió a la luz que las dos rutas NO hacían lo mismo. La de la
- * APK se saltaba tres cosas que la de oficina sí hace:
+ * Al juntarlas se vio que las dos rutas NO hacían lo mismo. La de la APK se
+ * saltaba tres cosas que la de oficina sí hacía:
  *
- *   · `recalcularEstadoAdmin`      — el estado administrativo
- *   · `revisarDocumentacionAlFinalizar` — programar que se pida el albarán
- *   · `registrarEventoAsistencia`  — la línea del diario, incluido
- *                                    SERVICE_COMPLETED
+ *   · `recalcularEstadoAdmin`            — el estado administrativo
+ *   · `revisarDocumentacionAlFinalizar`  — programar que se pida el albarán
+ *   · `registrarEvento`                  — la línea del diario, SERVICE_COMPLETED
  *
- * O sea: **una asistencia cerrada desde la APK no deja SERVICE_COMPLETED en el
- * diario**, y es justo el caso más frecuente. Es un fallo real, no una
- * decisión.
+ * O sea que una asistencia cerrada desde la APK —el caso más frecuente— no
+ * dejaba SERVICE_COMPLETED. Era un fallo, no una decisión, y ahora los dos
+ * caminos ejecutan lo mismo.
  *
- * Aquí se reproduce TAL CUAL mediante `origen`, a propósito. Este cambio es un
- * refactor y un refactor que además arregla cosas no se puede demostrar
- * equivalente: si algo se rompiera, no se sabría si fue la extracción o el
- * arreglo. La divergencia queda documentada, con pruebas que la fijan, y se
- * corrige aparte.
+ * Lo que SÍ sigue siendo distinto es la auto-transición a «vuelta al taller»,
+ * y ésa es una diferencia legítima: desde el panel se puede estar cerrando una
+ * asistencia de hace tres días, y decir que el técnico está volviendo al
+ * taller sería mentira. Vive en `prepararRespuestaTrasCambio` y depende de
+ * `origen`; el resto ya no depende de nada.
  */
 
 import { randomUUID } from "crypto";
@@ -156,46 +155,119 @@ export async function prepararRespuestaTrasCambio(
  * No es `async` a propósito: quien llama no debe poder esperarlo por descuido.
  */
 export function engancharPosteriores(ctx: ContextoCambio): void {
-  const { assistanceId, estado, origen, ahoraMs } = ctx;
+  void ejecutarPosteriores(ctx)
+    .catch((e) => console.error("[Cierre] enganches posteriores:", e?.message));
+}
 
+/**
+ * El orden en que ocurren, y por qué ése.
+ *
+ * Van en serie y no en paralelo. Ninguno depende del anterior, pero cuatro
+ * consultas simultáneas contra la misma fila por cada cambio de estado —y hay
+ * muchos— es presión sobre la base que no compra nada: nadie está esperando
+ * este resultado.
+ *
+ * Cada uno traga su error y sigue: que TyreControl esté caído no puede impedir
+ * que se anote el diario. Lo que no se hace es tragarlo en silencio — todos
+ * dejan su línea en el log, que es el mecanismo que el proyecto ya usa.
+ */
+async function ejecutarPosteriores(ctx: ContextoCambio): Promise<void> {
+  const { assistanceId, estado } = ctx;
+
+  /*
+   * El taller sale de la ASISTENCIA, no de quien la cerró.
+   *
+   * La sesión de la APK no lleva taller —el operario se identifica por nombre
+   * y código— así que sin esto lo que se escribiera desde la APK iría sin
+   * tenant. Y en oficina pasaba algo parecido: se usaba el taller del usuario,
+   * que es `null` cuando cierra un administrador. Dos asistencias del mismo
+   * taller acababan con tenants distintos según quién las cerrara.
+   *
+   * El taller de la asistencia es siempre el mismo, lo cierre quien lo cierre.
+   */
+  let tenantId = ctx.tenantId ?? null;
+  let finishedAtMs = 0;
+  try {
+    const r = await db.query(
+      `SELECT "tallerId", "finishedAtMs" FROM roadside_assistances WHERE id = $1`,
+      [assistanceId],
+    );
+    const f = r.rows[0];
+    if (f) {
+      if (tenantId == null && f.tallerId != null) tenantId = String(f.tallerId);
+      finishedAtMs = Number(f.finishedAtMs ?? 0);
+    }
+  } catch (e: unknown) {
+    console.error("[Cierre] no se pudo leer la asistencia:",
+      e instanceof Error ? e.message : e);
+  }
+
+  const conTenant: ContextoCambio = { ...ctx, tenantId };
+
+  // 1 · TyreControl. Import perezoso, y no por gusto:
+  // `tyrecontrol/cierreAsistencia.ts` arrastra el cliente de Supabase, que
+  // revienta al cargarse si no hay SUPABASE_URL. Estático, cambiar el estado
+  // de una asistencia dependería de tener credenciales de TyreControl.
   if (estado === "finalizada") {
-    /*
-     * Import perezoso, y no por gusto: `tyrecontrol/cierreAsistencia.ts`
-     * arrastra el cliente de Supabase, que revienta al cargarse si no hay
-     * SUPABASE_URL. Cargándolo estático, cambiar el estado de una asistencia
-     * dependería de tener credenciales de TyreControl configuradas.
-     */
-    void import("../tyrecontrol/cierreAsistencia.ts")
+    await import("../tyrecontrol/cierreAsistencia.ts")
       .then((m) => m.engancheCierreTyreControl(assistanceId))
       .catch((e) => console.error("[TyreControl] enganche de cierre:", e?.message));
   }
 
-  /*
-   * Lo que hoy solo hace la ruta de oficina. Ver la divergencia explicada en la
-   * cabecera: se reproduce tal cual, no se arregla aquí.
-   */
-  if (origen !== "oficina") return;
-
-  void recalcularEstadoAdmin("assist", assistanceId)
+  // 2 · Estado administrativo. En TODO cambio de estado, no solo al finalizar:
+  // depende de si el servicio ha terminado y hay que recalcularlo siempre.
+  await recalcularEstadoAdmin("assist", assistanceId)
     .catch((e) => console.error("estado administrativo:", e?.message));
 
+  // 3 · Documentación pendiente, solo al terminar.
   if (estado === "finalizada") {
-    void revisarDocumentacionAlFinalizar("assist", assistanceId, ctx.tenantId ?? null)
+    await revisarDocumentacionAlFinalizar("assist", assistanceId, tenantId)
       .catch((e) => console.error("revisión de documentación:", e?.message));
   }
 
-  const tipo = tipoDesdeEstadoAssist(estado);
-  if (tipo) {
-    void registrarEvento({
-      system: "assist",
-      tenantId: ctx.tenantId == null ? null : String(ctx.tenantId),
-      assistanceId,
-      eventType: tipo,
-      actorType: "user",
-      actorName: ctx.actorNombre ?? null,
-      occurredAtMs: ahoraMs,
-      payload: { estado, tecnico: ctx.tecnico ?? null },
-      dedupeKey: `assist-estado-${assistanceId}-${estado}-${ahoraMs}`,
-    });
-  }
+  // 4 · El diario, el último: si algo de lo anterior explotara, la línea del
+  // diario sigue saliendo, y es la que reconstruye después qué pasó.
+  await anotarDiario(conTenant, finishedAtMs)
+    .catch((e) => console.error("[Diario] no se pudo anotar:", e?.message));
+}
+
+/**
+ * La línea del diario, con una clave de deduplicación que aguanta reintentos.
+ *
+ * ── Por qué la clave no puede llevar la hora ────────────────────────────────
+ *
+ * La original era `assist-estado-{id}-{estado}-{ahora}`. Con la hora dentro,
+ * dos intentos de anotar la MISMA finalización con un milisegundo de
+ * diferencia son dos claves distintas, así que el índice único no ve ningún
+ * conflicto y el diario acaba con dos SERVICE_COMPLETED del mismo servicio.
+ * Ahora que las dos rutas anotan, eso pasa de ser teórico a ser probable.
+ *
+ * Para la finalización hay una clave natural: `finishedAtMs`. Se pone con un
+ * COALESCE, o sea una vez y para siempre, así que identifica el hecho y no el
+ * intento. Dos anotaciones de la misma finalización dan la misma clave y la
+ * segunda choca contra el índice único.
+ *
+ * Para los demás estados se conserva la hora, y también a propósito: una
+ * asistencia puede ir y volver entre «en camino» y «en punto», y esas dos
+ * líneas tienen que salir las dos porque pasaron las dos.
+ */
+async function anotarDiario(ctx: ContextoCambio, finishedAtMs: number): Promise<void> {
+  const tipo = tipoDesdeEstadoAssist(ctx.estado);
+  if (!tipo) return;
+
+  const clave = ctx.estado === "finalizada" && finishedAtMs > 0
+    ? `assist-estado-${ctx.assistanceId}-finalizada-${finishedAtMs}`
+    : `assist-estado-${ctx.assistanceId}-${ctx.estado}-${ctx.ahoraMs}`;
+
+  await registrarEvento({
+    system: "assist",
+    tenantId: ctx.tenantId == null ? null : String(ctx.tenantId),
+    assistanceId: ctx.assistanceId,
+    eventType: tipo,
+    actorType: "user",
+    actorName: ctx.actorNombre ?? null,
+    occurredAtMs: ctx.ahoraMs,
+    payload: { estado: ctx.estado, tecnico: ctx.tecnico ?? null },
+    dedupeKey: clave,
+  });
 }

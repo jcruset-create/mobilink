@@ -6,9 +6,10 @@
  * Express, imposibles de probar sin levantar el servidor; ahora es una función
  * con su contexto, y se le puede preguntar directamente.
  *
- * Y fija además la divergencia que salió al juntarlas: la ruta de la APK NO
- * anota el diario. Está probado a propósito, con su nombre, para que quede
- * claro que se conoce y que corregirlo es un cambio de comportamiento aparte.
+ * Y fija que las dos rutas hacen ya LO MISMO. Hubo una fase en que no: la de
+ * la APK se saltaba el diario, el estado administrativo y la revisión de
+ * documentación. La prueba que lo documentaba está ahora invertida, que es
+ * como tenía que verse el arreglo.
  *
  * Solo con RUN_DB_TESTS=1 y DATABASE_URL a una base DESECHABLE.
  */
@@ -25,6 +26,15 @@ let mod: typeof import("./finalizacion.ts");
 
 const sufijo = String(process.hrtime.bigint()).slice(-9);
 let n = 0;
+/**
+ * Las asistencias creadas aquí, para poder borrar lo que dejan.
+ *
+ * `revisarDocumentacionAlFinalizar` programa recordatorios de albarán, y el
+ * worker de `correo` —que corre en OTRO fichero contra la misma base— procesa
+ * todo lo pendiente que encuentre, sean suyos o no. Sin esta limpieza, sus
+ * cuentas salen infladas por asistencias de aquí.
+ */
+const creadas: number[] = [];
 
 /** Una asistencia recién finalizada, como la deja el UPDATE de la ruta. */
 async function crearFinalizada(finishedAtMs: number | null = Date.now(), tallerId: number | null = null) {
@@ -39,7 +49,9 @@ async function crearFinalizada(finishedAtMs: number | null = Date.now(), tallerI
     [finishedAtMs ? "finalizada" : "en_punto", `tok-fin-${sufijo}-${++n}`,
      finishedAtMs, tallerId, Date.now()],
   );
-  return Number(r.rows[0].id);
+  const id = Number(r.rows[0].id);
+  creadas.push(id);
+  return id;
 }
 
 const fila = async (id: number) =>
@@ -60,7 +72,16 @@ beforeAll(async () => {
   await initCorreo();
 });
 
-afterAll(async () => { if (RUN) await db.end().catch(() => {}); });
+afterAll(async () => {
+  if (!RUN) return;
+  if (creadas.length) {
+    await db.query(`DELETE FROM assistance_reminders WHERE "assistanceId" = ANY($1)`,
+      [creadas.map(String)]).catch(() => {});
+    await db.query(`DELETE FROM roadside_assistances WHERE id = ANY($1)`,
+      [creadas]).catch(() => {});
+  }
+  await db.end().catch(() => {});
+});
 
 /* ── Elegibilidad ────────────────────────────────────────────────────────── */
 
@@ -188,24 +209,97 @@ describe.skipIf(!RUN)("enganches posteriores", () => {
   });
 
   /*
-   * ── La divergencia ──────────────────────────────────────────────────────
-   *
-   * Esta prueba NO describe lo correcto: describe lo que hay. La ruta de la
-   * APK nunca ha anotado el diario, así que una asistencia cerrada por el
-   * técnico —el caso más frecuente— no deja SERVICE_COMPLETED.
-   *
-   * Se fija aquí para que el refactor sea demostrablemente equivalente. El día
-   * que se arregle, esta prueba tiene que cambiar, y ese cambio será visible
-   * en el diff en vez de colarse dentro de una extracción.
+   * Ésta era la prueba de la divergencia, invertida. Antes decía que la APK NO
+   * anotaba el diario; ahora dice que sí, que es lo que tenía que pasar desde
+   * el principio: el técnico cierra la mayoría de las asistencias.
    */
-  it("desde la APK NO se anota el diario (divergencia previa, pendiente de arreglar)", async () => {
+  it("desde la APK TAMBIÉN se anota SERVICE_COMPLETED", async () => {
     const id = await crearFinalizada();
     mod.engancharPosteriores({
       assistanceId: id, estado: "finalizada", origen: "operario",
       actorNombre: "Anthoni", tecnico: "Anthoni", ahoraMs: Date.now(),
     });
     await respirar();
-    expect(await diario(id)).toHaveLength(0);
+    expect((await diario(id)).map((e: Fila) => e.eventType)).toContain("SERVICE_COMPLETED");
+  });
+
+  it("las dos rutas anotan exactamente lo mismo", async () => {
+    const ahora = Date.now();
+    const apk = await crearFinalizada();
+    const ofi = await crearFinalizada();
+    mod.engancharPosteriores({
+      assistanceId: apk, estado: "finalizada", origen: "operario",
+      actorNombre: "Anthoni", tecnico: "Anthoni", ahoraMs: ahora,
+    });
+    mod.engancharPosteriores({
+      assistanceId: ofi, estado: "finalizada", origen: "oficina",
+      actorNombre: "Oficina", tecnico: "Anthoni", ahoraMs: ahora,
+    });
+    await respirar();
+    const tipos = (f: Fila[]) => f.map((e) => e.eventType).sort();
+    expect(tipos(await diario(apk))).toEqual(tipos(await diario(ofi)));
+  });
+
+  /*
+   * ── La prueba del reintento ─────────────────────────────────────────────
+   *
+   * Antes esto habría dejado DOS líneas: la clave de deduplicación llevaba la
+   * hora, así que dos intentos separados por un milisegundo eran dos claves
+   * distintas y el índice único no veía ningún conflicto. Ahora la clave de la
+   * finalización se construye con `finishedAtMs`, que se pone una vez.
+   */
+  it("anotar dos veces la misma finalización deja UNA línea", async () => {
+    const id = await crearFinalizada();
+    mod.engancharPosteriores({
+      assistanceId: id, estado: "finalizada", origen: "operario",
+      actorNombre: "Anthoni", ahoraMs: Date.now(),
+    });
+    await respirar();
+    mod.engancharPosteriores({
+      assistanceId: id, estado: "finalizada", origen: "oficina",
+      actorNombre: "Oficina", ahoraMs: Date.now() + 5_000,
+    });
+    await respirar();
+
+    const ev = (await diario(id)).filter((e: Fila) => e.eventType === "SERVICE_COMPLETED");
+    expect(ev).toHaveLength(1);
+  });
+
+  /*
+   * Y lo contrario, que también tiene que seguir funcionando: una asistencia
+   * puede ir y volver entre dos estados, y esas líneas salen las dos porque
+   * pasaron las dos.
+   */
+  it("un ida y vuelta entre estados SÍ deja las dos líneas", async () => {
+    const id = await crearFinalizada(null);
+    mod.engancharPosteriores({
+      assistanceId: id, estado: "en_camino", origen: "oficina", ahoraMs: Date.now(),
+    });
+    await respirar();
+    mod.engancharPosteriores({
+      assistanceId: id, estado: "en_camino", origen: "oficina", ahoraMs: Date.now() + 60_000,
+    });
+    await respirar();
+    expect((await diario(id)).filter((e: Fila) => e.eventType === "EN_ROUTE")).toHaveLength(2);
+  });
+
+  /*
+   * El taller sale de la asistencia, no de quien cierra: la sesión de la APK
+   * no lleva taller, y en oficina es `null` cuando cierra un administrador.
+   * Sin esto, dos asistencias del mismo taller acababan con tenants distintos
+   * según quién las hubiera cerrado.
+   */
+  it("el tenant sale de la asistencia aunque quien cierra no lo aporte", async () => {
+    const id = await crearFinalizada(Date.now(), 5150);
+    mod.engancharPosteriores({
+      assistanceId: id, estado: "finalizada", origen: "operario",
+      actorNombre: "Anthoni", ahoraMs: Date.now(),
+    });
+    await respirar();
+    const r = await db.query(
+      `SELECT "tenantId" FROM assistance_events
+        WHERE "sourceSystem" = 'assist' AND "assistanceId" = $1`, [String(id)]);
+    expect(r.rows[0].tenantId).toBe("5150");
   });
 
   it("un estado sin evento de diario no anota nada", async () => {

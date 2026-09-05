@@ -7124,14 +7124,16 @@ app.post(
       });
       if (cambiada) updated = normalizeRoadsideAssistanceRow(cambiada);
 
+      await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
+      res.json(updated);
+
+      // Después de contestar, igual que en la ruta de oficina: el técnico no
+      // espera a TyreControl, al correo ni al diario.
       engancharPosteriores({
         assistanceId: Number(id), estado: status, origen: "operario",
         actorNombre: operator.techName, tecnico: updated.assignedTechName || null,
         ahoraMs: now,
       });
-
-      await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
-      res.json(updated);
 
       if (status === "finalizada" && updated.customerPhone && !updated.whatsappFinalizadaSentAtMs && updated.reportToken) {
         const reportUrl = `${getPublicAppBaseUrl(req)}/informe/${updated.reportToken}`;
