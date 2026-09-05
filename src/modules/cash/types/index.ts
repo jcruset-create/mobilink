@@ -659,6 +659,19 @@ export type PropuestaEscaneo = {
   /** null = no hay justificante con el que comparar. */
   importeCuadra: boolean | null;
   avisos: AvisoEscaneo[];
+  /**
+   * El cobro que ya existe de esta misma factura, si lo hay.
+   *
+   * Va aparte del aviso porque la pantalla necesita DATOS para decidir qué
+   * botón enseña, no un texto para leer. null = no consta cobrada.
+   */
+  cobroPrevio: {
+    operacionId: number;
+    numero: string;
+    fecha: string;
+    importeCentimos: number;
+    partyNombre: string | null;
+  } | null;
   extra: {
     fecha: string | null;
     cliente: { codigo: string | null; nombre: string | null; nif: string | null };
@@ -667,6 +680,9 @@ export type PropuestaEscaneo = {
       detectado: boolean;
       importeCentimos: number | null;
       tarjetaUltimos4: string | null;
+      /** Número de operación del datáfono: es lo que concilia con el banco. */
+      numOperacion: string | null;
+      codAutorizacion: string | null;
       adquirente: string | null;
       comercio: string | null;
       terminal: string | null;
