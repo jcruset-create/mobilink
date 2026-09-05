@@ -26,6 +26,7 @@ import {
   LIMITE_ENVIO, LIMITE_LECTURA, LIMITE_POR_ENCUESTA, consumir, type Limite,
 } from "./rateLimit.ts";
 import { hashToken } from "./servicio.ts";
+import { ipDe } from "./ipCliente.ts";
 
 /**
  * El cuerpo más grande que tiene sentido.
@@ -36,14 +37,6 @@ import { hashToken } from "./servicio.ts";
  * la aplicación es de 10 MB, que aquí sería una barbaridad.
  */
 const MAX_CUERPO = "16kb";
-
-function ipDe(req: Request): string {
-  // `trust proxy` no está activado en la aplicación, así que se usa la IP de la
-  // conexión y, si existe, la primera de X-Forwarded-For. Es best-effort: no es
-  // un control de identidad, es un freno.
-  const reenviada = String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
-  return reenviada || req.ip || "desconocida";
-}
 
 /** Aplica un límite y contesta 429 si toca. Devuelve `true` si se puede seguir. */
 function pasaLimite(req: Request, res: Response, sufijo: string, limite: Limite): boolean {

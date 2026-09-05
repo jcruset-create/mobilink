@@ -311,7 +311,13 @@ export async function enviarInicial(
     return { estado: "descartado", instanceId: a.id, motivo: "caducada" };
   }
 
-  const config = await configEfectiva(a.clienteFacturacionId);
+  /*
+   * El ámbito completo, no solo el cliente: el override se guarda por
+   * (sistema, taller, cliente) y sin el taller no se encuentra. Se pasaba solo
+   * el cliente y un cliente apagado a mano seguía recibiendo encuestas.
+   */
+  const config = await configEfectiva(a.clienteFacturacionId,
+    { sourceSystem: a.sourceSystem as never, tenantId: a.tenantId });
   if (!config.activo) {
     await anotarBloqueo(a.id, "satisfaction_disabled", ahoraMs);
     return { estado: "bloqueado", instanceId: a.id, motivo: "satisfaction_disabled" };
@@ -478,7 +484,8 @@ async function persistirResultado(p: {
  * mañana alguien cambia el retraso, esta encuesta no se mueve de hora.
  */
 async function marcarInicialEnviado(a: Reclamada, ahoraMs: number): Promise<void> {
-  const config = await configEfectiva(a.clienteFacturacionId);
+  const config = await configEfectiva(a.clienteFacturacionId,
+    { sourceSystem: a.sourceSystem as never, tenantId: a.tenantId });
   const recordatorio = ahoraMs + config.recordatorioHoras * 3_600_000;
   // Solo si el recordatorio caería con margen suficiente antes de caducar; si
   // no, no se programa y no hay nada que decidir después.

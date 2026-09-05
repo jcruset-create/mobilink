@@ -1,7 +1,7 @@
 {
   "name": "mobilink",
   "private": true,
-  "version": "1.33.0",
+  "version": "1.34.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,6 +18,8 @@
     "tecnicos:android": "npm run tecnicos:sync && cap open android --project android-tecnicos",
     "backup": "node scripts/backup.cjs",
     "test": "vitest run",
+    "satisfaction:check": "tsx scripts/satisfaction-check.ts",
+    "satisfaction:cobertura": "tsx scripts/satisfaction-cobertura.ts",
     "server": "tsx server/index.ts",
     "start": "tsx server/index.ts",
     "seed": "tsx server/seed.ts",

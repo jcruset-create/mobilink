@@ -784,6 +784,119 @@ describe.skipIf(!RUN)("una pasada del worker", () => {
   });
 });
 
+/* ── Override por cliente ────────────────────────────────────────────────── */
+
+describe.skipIf(!RUN)("un cliente apagado a mano", () => {
+  it("con Satisfaction global encendido, el override impide el envío", async () => {
+    // Un cliente al que NO se le quiere preguntar todavía.
+    const c = await db.query(
+      `INSERT INTO connect_clients (name, "contactPhone", "createdAtMs", "updatedAtMs")
+       VALUES ($1,'900111222',$2,$2) RETURNING id`,
+      [`Cliente apagado ${sufijo}-${++n}`, Date.now()]);
+    const clienteId = Number(c.rows[0].id);
+
+    const assistanceId = await crearAsistencia();
+    await db.query(`UPDATE roadside_assistances SET "clienteFacturacionId" = $2 WHERE id = $1`,
+                   [assistanceId, clienteId]);
+    const ambito = {
+      sourceSystem: "assist" as const, tenantId: String(TALLER), assistanceId: String(assistanceId),
+    };
+    const inst = await svc.crearSurveyInstance({
+      ambito, recipientRole: "DRIVER", recipientPhone: "+34600111222",
+    });
+    await db.query(`UPDATE survey_instances SET status = 'QUEUED' WHERE id = $1`,
+                   [inst.instancia.id]);
+
+    await cfg.guardarOverrideCliente({
+      sourceSystem: "assist", tenantId: String(TALLER), clientId: clienteId,
+      valores: { activo: false },
+      notas: "apagado para la prueba del override",
+    });
+
+    const { adaptador, llamadas } = adaptadorFalso(OK("SMno"));
+    const reclamada = (await envio.reclamarParaEnvio()).find((x) => x.id === inst.instancia.id)!;
+    const r = await envio.enviarInicial(reclamada, adaptador);
+
+    // El global sigue encendido —lo pone el beforeEach— y aun así no sale nada.
+    expect(r).toMatchObject({ estado: "bloqueado", motivo: "satisfaction_disabled" });
+    expect(llamadas).toHaveLength(0);
+    expect(await entregas(inst.instancia.id)).toHaveLength(0);
+  });
+});
+
+/* ── El interruptor de emergencia ────────────────────────────────────────── */
+
+describe.skipIf(!RUN)("kill switch", () => {
+  it("apagado, el worker NO reclama ni manda nada", async () => {
+    const worker = await import("./worker.ts");
+    const e = await encolada();
+    await cfg.guardarConfigGlobal({ activo: false });
+
+    const r = await worker.cicloSatisfaction();
+    expect(r.enviadas).toBe(0);
+    expect(r.recordatorios).toBe(0);
+    // Ni siquiera se reclama: la encuesta se queda intacta, sin lease puesto y
+    // sin fila de intento. Apagar es apagar, no dar vueltas sin llegar a mandar.
+    const i = await instancia(e.id);
+    expect(i.status).toBe("QUEUED");
+    expect(i.sendClaimedAtMs).toBeNull();
+    expect(await entregas(e.id)).toHaveLength(0);
+  });
+
+  it("apagado, tampoco sale ningún recordatorio pendiente", async () => {
+    const worker = await import("./worker.ts");
+    const e = await encolada();
+    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+                              adaptadorFalso(OK("SMks")).adaptador);
+    await cfg.guardarConfigGlobal({ recordatorio: true });
+    await db.query(`UPDATE survey_instances SET "reminderAfterMs" = $2 WHERE id = $1`,
+                   [e.id, Date.now() - 1000]);
+
+    await cfg.guardarConfigGlobal({ activo: false });
+    const r = await worker.cicloSatisfaction();
+    expect(r.recordatorios).toBe(0);
+    expect((await instancia(e.id)).reminderSentAtMs).toBeNull();
+    expect((await entregas(e.id)).filter((d) => d.messageType === "REMINDER")).toHaveLength(0);
+  });
+
+  it("apagado, quien ya recibió su enlace SÍ puede contestar", async () => {
+    const e = await encolada();
+    const { adaptador, llamadas } = adaptadorFalso(OK("SMabierta"));
+    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+                              adaptador);
+    const token = llamadas[0].url.split("/").pop()!;
+
+    // Se cierra el grifo DESPUÉS de que el WhatsApp saliera.
+    await cfg.guardarConfigGlobal({ activo: false });
+
+    const publico = await import("./publico.ts");
+    const abierta = await publico.resolverSurveyPublica(token);
+    expect(abierta.estado).toBe("ACTIVE");
+
+    const r = await svc.completarSurvey({
+      instanceId: e.id, ambito: e.ambito,
+      respuestas: [
+        { code: "overall_rating", value: 5 },
+        { code: "professional_rating", value: 5 },
+        { code: "resolution", value: "YES" },
+      ] as never,
+    });
+    expect(r.responseId).toBeTruthy();
+    expect((await instancia(e.id)).status).toBe("COMPLETED");
+  });
+
+  it("apagado, seguir caducando sí (no escribe a nadie)", async () => {
+    const worker = await import("./worker.ts");
+    const e = await encolada();
+    await db.query(`UPDATE survey_instances SET "expiresAtMs" = $2 WHERE id = $1`,
+                   [e.id, Date.now() - 1000]);
+    await cfg.guardarConfigGlobal({ activo: false });
+
+    await worker.cicloSatisfaction();
+    expect((await instancia(e.id)).status).toBe("EXPIRED");
+  });
+});
+
 /* ── Apagado ─────────────────────────────────────────────────────────────── */
 
 describe.skipIf(!RUN)("con Satisfaction apagado", () => {
