@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:image_picker/image_picker.dart';
+import 'fotos.dart';
 import '../config.dart';
 import '../models/models.dart';
 import '../models/incidencias.dart';
@@ -554,21 +556,22 @@ class TyreControlApi {
   // ── Fotos (Supabase Storage) ─────────────────────────────────
   static const _bucketFotos = 'tc-revisiones-fotos';
 
-  static Future<String> subirFotoRevision(File file, {required String revisionId, required String posicionId}) async {
-    final ext = file.path.split('.').last;
-    final path = 'revisiones/$revisionId/${posicionId}_${DateTime.now().microsecondsSinceEpoch}.$ext';
-    await _db.storage.from(_bucketFotos).upload(path, file);
+  /// Las fotos se suben por bytes y no por `File`: en la versión web (la que
+  /// se usa para probar desde el PC) no hay sistema de ficheros.
+  static Future<String> _subirBytes(String path, XFile file) async {
+    await _db.storage.from(_bucketFotos).uploadBinary(
+        path, await file.readAsBytes(),
+        fileOptions: FileOptions(contentType: mimeDe(file)));
     return _db.storage.from(_bucketFotos).getPublicUrl(path);
   }
 
+  static Future<String> subirFotoRevision(XFile file, {required String revisionId, required String posicionId}) =>
+      _subirBytes('revisiones/$revisionId/${posicionId}_${DateTime.now().microsecondsSinceEpoch}.${extensionDe(file)}', file);
+
   /// Foto del flanco para identificar la goma. Va al mismo bucket que el
   /// resto de fotos de revisión: no se monta otro sistema de archivos.
-  static Future<String> subirFotoFlanco(File file, {required String revisionId, required String posicionId}) async {
-    final ext = file.path.split('.').last;
-    final path = 'flancos/$revisionId/${posicionId}_${DateTime.now().microsecondsSinceEpoch}.$ext';
-    await _db.storage.from(_bucketFotos).upload(path, file);
-    return _db.storage.from(_bucketFotos).getPublicUrl(path);
-  }
+  static Future<String> subirFotoFlanco(XFile file, {required String revisionId, required String posicionId}) =>
+      _subirBytes('flancos/$revisionId/${posicionId}_${DateTime.now().microsecondsSinceEpoch}.${extensionDe(file)}', file);
 
   // ── Corrección del neumático registrado ──────────────────────
   //
@@ -743,12 +746,8 @@ class TyreControlApi {
   }
 
   /// Sube una foto del parte. Van al bucket que ya existe, en su carpeta.
-  static Future<String> subirFotoParte(File file, {required String carpeta}) async {
-    final ext = file.path.split('.').last;
-    final path = 'partes/$carpeta/${DateTime.now().microsecondsSinceEpoch}.$ext';
-    await _db.storage.from(_bucketFotos).upload(path, file);
-    return _db.storage.from(_bucketFotos).getPublicUrl(path);
-  }
+  static Future<String> subirFotoParte(XFile file, {required String carpeta}) =>
+      _subirBytes('partes/$carpeta/${DateTime.now().microsecondsSinceEpoch}.${extensionDe(file)}', file);
 
   /// Manda TODAS las fotos juntas: así el modelo puede cruzarlas y reconocer
   /// que dos son de la misma rueda. Devuelve lo que PROPONE, nunca lo guarda.
