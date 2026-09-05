@@ -1560,6 +1560,129 @@ export async function initCash(): Promise<void> {
     ALTER TABLE cash_invoice_scans ADD COLUMN IF NOT EXISTS error TEXT;
   `);
 
+  /*
+   * ── AutoScan ──────────────────────────────────────────────────────────────
+   *
+   * Va AQUÍ, detrás de `cash_invoice_scans`, y no arriba con `cash_reauth`,
+   * que es donde pegaría por tema: `cash_autoscan_inbox.scan_id` referencia
+   * esa tabla, y una clave ajena a algo que todavía no existe se lleva por
+   * delante el `initCash` entero sobre una base recién creada. Sobre una que
+   * ya lo tenía todo no se nota — que es justo por qué hay que probarlo en
+   * vacío.
+   *
+   * Un escáner del mostrador deja el PDF en una carpeta y el documento aparece
+   * en Mobilink Cash sin que nadie pulse «subir factura».
+   *
+   * La pieza que obliga a tener tablas propias: **un documento de AutoScan
+   * existe ANTES que la operación de caja**. `cash_operation_documents` cuelga
+   * de una jornada (`session_id NOT NULL`) y de un cobro, y un escáner no sabe
+   * de jornadas: alguien escanea a las 20:40 con la caja ya cerrada. Meterlo
+   * ahí obligaría a inventar una jornada o a rechazar el documento, y las dos
+   * cosas están mal.
+   *
+   * Cuando por fin se cobra con él, el documento SE PROMOCIONA a
+   * `cash_operation_documents` apuntando al MISMO objeto del bucket. Un
+   * documento físico, un blob.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_autoscan_devices (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      /* De app_centros. El dispositivo NO puede cambiarlo: lo hereda del
+         código con el que se activó, y ese lo creó una persona. */
+      centro_id UUID NOT NULL,
+      nombre TEXT NOT NULL,
+      /* Solo el hash. Una copia de la base de datos no debe permitir subir. */
+      secret_hash TEXT NOT NULL UNIQUE,
+      /* Versión del agente, que llega en el latido. Para saber a quién
+         actualizar sin tener que entrar en cada mostrador. */
+      version TEXT,
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL,
+      ultimo_visto_at_ms BIGINT,
+      revocado_por UUID,
+      revocado_at_ms BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS cash_autoscan_devices_centro_idx
+      ON cash_autoscan_devices(empresa_id, centro_id);
+
+    /* El código que se teclea UNA vez en el agente para activarlo.
+       Lleva dentro la empresa y el centro: es lo que hace que el dispositivo
+       no pueda elegirlos. */
+    CREATE TABLE IF NOT EXISTS cash_autoscan_activation_codes (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      centro_id UUID NOT NULL,
+      codigo_hash TEXT NOT NULL UNIQUE,
+      /* El nombre que llevará el dispositivo. Se decide al crear el código,
+         no al activarlo: si lo eligiera el agente, dos mostradores acabarían
+         llamándose «PC» y nadie sabría cuál revocar. */
+      nombre TEXT NOT NULL,
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL,
+      expira_at_ms BIGINT NOT NULL,
+      usado_at_ms BIGINT,
+      usado_device_id INTEGER REFERENCES cash_autoscan_devices(id) ON DELETE SET NULL
+    );
+
+    /* La bandeja: documentos recibidos que todavía no son de ningún cobro. */
+    CREATE TABLE IF NOT EXISTS cash_autoscan_inbox (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      centro_id UUID NOT NULL,
+      device_id INTEGER NOT NULL REFERENCES cash_autoscan_devices(id) ON DELETE RESTRICT,
+
+      sha256 TEXT NOT NULL,
+      /* Metadato, NUNCA identificador: factura.pdf y factura_copia.pdf con los
+         mismos bytes son el mismo documento. */
+      nombre_original TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      tamano_bytes INTEGER NOT NULL,
+      /* Ruta en el bucket privado. La URL se firma al pedirla y caduca. */
+      ruta TEXT NOT NULL,
+
+      estado TEXT NOT NULL DEFAULT 'PENDIENTE'
+        CHECK (estado IN ('PENDIENTE','ANALIZANDO','LISTO','USADO','FALLIDO','DESCARTADO')),
+      error TEXT,
+      intentos INTEGER NOT NULL DEFAULT 0,
+
+      /* Distinta del sha256 a propósito: el sha responde «¿este contenido ya
+         está?» y esto responde «¿esta misma petición ya se procesó?». Un
+         reintento tras perder la conexión trae la misma clave. */
+      idempotency_key TEXT NOT NULL,
+
+      /* El análisis, para no volver a llamar a la IA cuando alguien lo abra. */
+      scan_id INTEGER REFERENCES cash_invoice_scans(id) ON DELETE SET NULL,
+      /* El cobro que acabó usándolo. NULL mientras espera. */
+      operation_id INTEGER REFERENCES cash_operations(id) ON DELETE SET NULL,
+
+      escaneado_at_ms BIGINT,
+      recibido_at_ms BIGINT NOT NULL,
+      analizado_at_ms BIGINT,
+      usado_at_ms BIGINT,
+      usado_por UUID,
+      descartado_por UUID,
+      descartado_at_ms BIGINT,
+      descartado_motivo TEXT
+    );
+
+    /* Unicidad de CONTENIDO, por centro, y en la base de datos y no en la
+       aplicación: dos agentes pueden subir el mismo PDF a la vez y un SELECT
+       previo no lo impide. Excluye los descartados a propósito: si alguien
+       tira un documento y lo vuelve a escanear, es que lo quiere. */
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_autoscan_inbox_contenido_idx
+      ON cash_autoscan_inbox(empresa_id, centro_id, sha256)
+      WHERE estado <> 'DESCARTADO';
+
+    /* Idempotencia: el reintento de una subida cortada no crea otra fila. */
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_autoscan_inbox_idem_idx
+      ON cash_autoscan_inbox(device_id, idempotency_key);
+
+    /* La bandeja de un centro, que es la consulta de la pantalla. */
+    CREATE INDEX IF NOT EXISTS cash_autoscan_inbox_bandeja_idx
+      ON cash_autoscan_inbox(empresa_id, centro_id, estado, recibido_at_ms);
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 

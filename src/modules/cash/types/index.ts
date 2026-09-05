@@ -275,6 +275,56 @@ export type DocumentoOperacion = {
   url: string | null;
 };
 
+// ── AutoScan ───────────────────────────────────────────────────────────────
+
+export type EstadoAutoScan =
+  | "PENDIENTE"
+  | "ANALIZANDO"
+  | "LISTO"
+  | "USADO"
+  | "FALLIDO"
+  | "DESCARTADO";
+
+/** Una factura que ha dejado un escáner y todavía no es de ningún cobro. */
+export type DocumentoAutoScan = {
+  id: number;
+  centroId: string;
+  deviceId: number;
+  deviceNombre: string | null;
+  nombreOriginal: string;
+  mime: string;
+  tamanoBytes: number;
+  estado: EstadoAutoScan;
+  error: string | null;
+  scanId: number | null;
+  operationId: number | null;
+  recibidoAtMs: number;
+  /** Más de 30 días esperando. Derivado, no es un estado. */
+  esAntiguo: boolean;
+};
+
+export type ResumenAutoScan = {
+  /** false = el centro no tiene escáneres: la pantalla no enseña el bloque. */
+  hayDispositivos: boolean;
+  /** PENDIENTE + ANALIZANDO + LISTO + FALLIDO. Lo dice el servidor. */
+  pendientes: number;
+  listos: number;
+  analizando: number;
+  fallidos: number;
+  antiguos: number;
+};
+
+export type DispositivoAutoScan = {
+  id: number;
+  centroId: string;
+  nombre: string;
+  version: string | null;
+  ultimoVistoAtMs: number | null;
+  revocadoAtMs: number | null;
+  /** Derivado del último latido, no guardado. */
+  conectado: boolean;
+};
+
 // ── Ingresos bancarios ─────────────────────────────────────────────────────
 
 /** Cierre de jornada cuyo importe "para el banco" aún no se ha ingresado. */
