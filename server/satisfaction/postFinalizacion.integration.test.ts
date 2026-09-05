@@ -222,6 +222,27 @@ describe.skipIf(!RUN)("generación de encuestas", () => {
 /* ── Por el cierre entero ────────────────────────────────────────────────── */
 
 describe.skipIf(!RUN)("enganchado al cierre", () => {
+  /*
+   * Se espera a la condición, no a un rato fijo.
+   *
+   * `engancharPosteriores` no devuelve promesa a propósito y Satisfaction es
+   * el ÚLTIMO de la cadena: por delante va TyreControl, que sin red tarda unos
+   * siete segundos en rendirse. Con 400 ms fijos, esta prueba pasaba o fallaba
+   * según el orden de los ficheros del día.
+   */
+  const CON_ENGANCHES = 30_000;
+
+  async function esperarEncuestas(id: number, n: number) {
+    const limite = Date.now() + 20_000;
+    let filas = await encuestas(id);
+    while (filas.length < n && Date.now() < limite) {
+      await new Promise((r) => setTimeout(r, 50));
+      filas = await encuestas(id);
+    }
+    return filas;
+  }
+
+  /** Solo donde se comprueba que NO se genera nada: a una ausencia no se le sondea. */
   const respirar = () => new Promise((r) => setTimeout(r, 400));
 
   /*
@@ -236,11 +257,10 @@ describe.skipIf(!RUN)("enganchado al cierre", () => {
       assistanceId: id, estado: "finalizada", origen: "operario",
       actorNombre: "Anthoni", ahoraMs: Date.now(),
     });
-    await respirar();
+    expect(await esperarEncuestas(id, 2)).toHaveLength(2);
     expect((await db.query(`SELECT status FROM roadside_assistances WHERE id = $1`, [id]))
       .rows[0].status).toBe("en_camino_base");
-    expect(await encuestas(id)).toHaveLength(2);
-  });
+  }, CON_ENGANCHES);
 
   it("desde oficina se generan las mismas", async () => {
     await encender();
@@ -248,9 +268,9 @@ describe.skipIf(!RUN)("enganchado al cierre", () => {
     cierre.engancharPosteriores({
       assistanceId: id, estado: "finalizada", origen: "oficina", ahoraMs: Date.now(),
     });
-    await respirar();
-    expect((await encuestas(id)).map((e) => e.recipientRole)).toEqual(["CUSTOMER", "DRIVER"]);
-  });
+    expect((await esperarEncuestas(id, 2)).map((e) => e.recipientRole))
+      .toEqual(["CUSTOMER", "DRIVER"]);
+  }, CON_ENGANCHES);
 
   it("un cambio de estado que no es finalizar no genera nada", async () => {
     await encender();
@@ -260,5 +280,5 @@ describe.skipIf(!RUN)("enganchado al cierre", () => {
     });
     await respirar();
     expect(await encuestas(id)).toHaveLength(0);
-  });
+  }, CON_ENGANCHES);
 });
