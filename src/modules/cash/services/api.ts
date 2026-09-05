@@ -418,6 +418,25 @@ export const registrarCanjeIngreso = (datos: {
   billetesRecibidos: LineaDenominacion[];
 }) => pedir<{ operacionId: number; numero: string }>("/bank-deposits/swap", json(datos));
 
+/**
+ * Pide autorización para cobrar una factura que ya consta cobrada.
+ *
+ * Las credenciales son de QUIEN AUTORIZA, no de quien tiene la sesión abierta,
+ * y van solo en esta llamada: no se guardan en el estado de la pantalla ni
+ * vuelven en la respuesta. Lo que vuelve es un permiso de un solo uso.
+ */
+export const autorizarCobroDuplicado = (datos: {
+  autorizador: string;
+  clave: string;
+  referencia: string;
+  importeCentimos: number;
+  motivo?: string | null;
+}) =>
+  pedir<{ token: string; expiraAtMs: number; autorizadoPorNombre: string | null }>(
+    "/collections/duplicate-override",
+    json(datos)
+  );
+
 export const crearIngresoBancario = (datos: {
   registerId: number;
   sessionIds: number[];
@@ -600,6 +619,8 @@ export const registrarCobro = (datos: {
   externalDocumentReference?: string | null;
   /** Sección de negocio del cobro (taller, gasolinera…). */
   sectionId?: number | null;
+  /** Permiso de un solo uso para cobrar una factura que ya consta cobrada. */
+  autorizacionDuplicado?: string | null;
 }) => pedir<RespuestaOperacion>("/collections", json(datos));
 
 export const registrarPago = (datos: {

@@ -1196,6 +1196,46 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * Autorizaciones para cobrar una factura que ya consta cobrada.
+   *
+   * Una fila por excepción concedida, y CADA UNA VALE PARA UN SOLO COBRO. Todo
+   * lo que la ata está en la propia fila —empresa, número de factura, importe—
+   * porque una autorización que sirviera para otra factura o para otro importe
+   * no autorizaría nada: sería una llave maestra con fecha de caducidad.
+   *
+   * Del token solo se guarda el hash. Es una credencial que vale dinero
+   * mientras vive, y una copia de la base de datos no debe permitir cobrar.
+   *
+   * `solicitado_por` y `autorizado_por` van separados aunque a veces coincidan:
+   * quién cobra y quién levanta la protección son dos preguntas distintas, y
+   * mezclarlas es perder justo el dato por el que existe esta tabla.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_duplicate_overrides (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      /* Normalizada igual que se compara: sin espacios y en mayúsculas. */
+      referencia TEXT NOT NULL,
+      importe_centimos BIGINT NOT NULL CHECK (importe_centimos > 0),
+      /* El cobro que ya existía cuando se concedió. Para el rastro. */
+      operacion_previa_id INTEGER REFERENCES cash_operations(id) ON DELETE SET NULL,
+      solicitado_por UUID,
+      autorizado_por UUID NOT NULL,
+      motivo TEXT,
+      creado_at_ms BIGINT NOT NULL,
+      expira_at_ms BIGINT NOT NULL,
+      /* Al usarse queda marcada con el cobro que la gastó. No se borra: es el
+         rastro de que la excepción se ejerció, y contra qué. */
+      consumida_operation_id INTEGER REFERENCES cash_operations(id) ON DELETE SET NULL,
+      consumida_at_ms BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS cash_duplicate_overrides_vigentes_idx
+      ON cash_duplicate_overrides(empresa_id, referencia)
+      WHERE consumida_at_ms IS NULL;
+  `);
+
+  /*
    * Índice de cobertura para las consultas de consumo (fases 17 a 20).
    *
    * La predicción y el reparto preguntan lo mismo por cada caja: qué piezas han

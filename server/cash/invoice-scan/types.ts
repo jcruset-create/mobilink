@@ -14,6 +14,7 @@
 
 import type { Centimos } from "../domain/money.ts";
 import type { PlantillaRecibo, PropuestaFormaCobro } from "./classifier.ts";
+import type { CobroPrevio } from "../duplicates.ts";
 
 /** Lo que devuelve el modelo. Todo texto, todo opcional, nada calculado. */
 export type ExtraccionCruda = {
@@ -137,7 +138,7 @@ export type Aviso = {
   codigo: CodigoAviso;
   /** Escrito para el mostrador, no para el log. */
   mensaje: string;
-  /** Grave = no se preselecciona forma de cobro y se pide mirar. */
+  /** Grave = hay que mirarlo antes de seguir. */
   grave: boolean;
 };
 
@@ -151,6 +152,15 @@ export type PropuestaCobro = {
   /** null = no hay recibo con el que comparar. */
   importeCuadra: boolean | null;
   avisos: Aviso[];
+  /**
+   * El cobro que ya existe de esta misma factura, si lo hay.
+   *
+   * Va aparte del aviso a propósito: un texto sirve para leerlo, pero la
+   * pantalla necesita DATOS para decidir qué botón enseña, y el servidor los
+   * necesita para explicar de qué cobro estamos hablando. `null` = no consta
+   * cobrada.
+   */
+  cobroPrevio: CobroPrevio | null;
   /** Para el histórico y la auditoría, no para la pantalla. */
   extra: ExtraccionNormalizada;
 };

@@ -407,6 +407,36 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Autoriza cobrar una factura que ya consta cobrada.
+   *
+   * NO lleva `exigirPermiso`: quien tiene que tener el permiso es el que
+   * AUTORIZA —cuyas credenciales van en el cuerpo—, no el cajero que tiene la
+   * sesión abierta. Eso se comprueba dentro, junto con que sea de esta empresa
+   * y con la separación de funciones.
+   *
+   * La respuesta no dice nunca quién puede autorizar ni por qué falló una
+   * clave: un mostrador es un sitio público.
+   */
+  r.post(
+    "/collections/duplicate-override",
+    exigirPermiso("cash.collection.create"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { autorizarDuplicado } = await import("./duplicates.ts");
+      const r_ = await autorizarDuplicado({
+        empresaId: req.authCtx!.empresaId,
+        solicitanteId: req.authCtx!.userId,
+        autorizador: String(b.autorizador ?? ""),
+        clave: String(b.clave ?? ""),
+        referencia: String(b.referencia ?? ""),
+        importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
+        motivo: typeof b.motivo === "string" ? b.motivo : null,
+      });
+      res.json(r_);
+    })
+  );
+
   // ── Traslados entre cajas ────────────────────────────────────────────────
 
   r.get(
@@ -1783,6 +1813,10 @@ export function createCashRouter(): Router {
         partyNombre: typeof b.partyNombre === "string" ? b.partyNombre : "",
         concepto: typeof b.concepto === "string" ? b.concepto : "",
         referencia: typeof b.referencia === "string" ? b.referencia : null,
+        // La autorización para cobrar una factura ya cobrada. Se manda siempre
+        // que la pantalla la tenga; el servidor decide si hacía falta.
+        autorizacionDuplicado:
+          typeof b.autorizacionDuplicado === "string" ? b.autorizacionDuplicado : null,
         documentoId: b.documentoId ? enteroPositivo(b.documentoId, "documentoId") : null,
         externalSystem: typeof b.externalSystem === "string" ? b.externalSystem : null,
         externalDocumentId: typeof b.externalDocumentId === "string" ? b.externalDocumentId : null,
