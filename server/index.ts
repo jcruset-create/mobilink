@@ -64,6 +64,7 @@ import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { initSatisfaction } from "./satisfaction/schema.ts";
 import { startSatisfactionWorker } from "./satisfaction/worker.ts";
 import { createSatisfactionPublicRouter } from "./satisfaction/routerPublico.ts";
+import { createCalidadRouter } from "./satisfaction/routerInterno.ts";
 import {
   engancharPosteriores, prepararRespuestaTrasCambio,
 } from "./cierre/finalizacion.ts";
@@ -18425,6 +18426,12 @@ app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
  * lleva su límite de peticiones y su límite de tamaño de cuerpo.
  */
 app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
+
+/*
+ * Calidad: la ficha la puede ver quien ya ve la asistencia; la bandeja y las
+ * acciones sobre expedientes, solo supervisión.
+ */
+app.use("/api/calidad", createCalidadRouter(requireOperarioRole, requireSupervisorRole));
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)

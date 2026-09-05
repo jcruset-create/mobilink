@@ -378,6 +378,20 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "conductorDni" TEXT;
 
+    /*
+     * El instante en que empezó la reparación.
+     *
+     * Faltaba: el código lo lee (normalizeRoadsideAssistanceRow), lo escribe
+     * (getRoadsideStatusTimestampField lo devuelve para inicio_reparacion)
+     * y lo pinta el informe PDF, pero la columna no se creaba en ningún sitio.
+     * En una base nueva, poner una asistencia en «Reparando» reventaba con
+     * «column does not exist»; en la de producción existe de antes, así que el
+     * fallo solo se veía al desplegar desde cero o al montar la base de las
+     * pruebas.
+     */
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "inicioReparacionAtMs" BIGINT;
+
     -- Auto "En camino": se arma cuando la furgoneta asignada se ve DENTRO del
     -- radio del taller; al salir del radio (>500 m) se activa el estado solo.
     -- Evita falsos positivos si se asigna una furgoneta que ya esta en ruta.
