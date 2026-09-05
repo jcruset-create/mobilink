@@ -484,6 +484,14 @@ export type EntradaOperacion = {
   formasPago: { forma: FormaPago; importe: Centimos; referencia?: string | null }[];
   efectivoRecibido?: LineaDenominacion[];
   efectivoEntregado?: LineaDenominacion[];
+  /**
+   * Autorización para cobrar una factura que ya consta cobrada.
+   *
+   * Solo se mira en los cobros y solo cuando de verdad hay un cobro previo. Sin
+   * ella, un duplicado se rechaza aquí dentro aunque la pantalla creyera que no
+   * lo era: la comprobación de verdad es ésta, con la jornada ya bloqueada.
+   */
+  autorizacionDuplicado?: string | null;
   /** Tubos precintados que ENTRAN: `cantidad` son tubos, no monedas. */
   cartuchosRecibidos?: LineaDenominacion[];
   /** Tubos precintados que SALEN sin abrirse (al banco, por ejemplo). */
@@ -709,6 +717,61 @@ export async function registrarOperacion(
       userId: ctx.userId,
       ahora,
     });
+
+    /*
+     * Cobrar dos veces la misma factura.
+     *
+     * Aquí y no en el navegador: entre que la pantalla se pintó y se pulsó el
+     * botón, otra persona ha podido cobrarla. Y aquí dentro la jornada ya está
+     * bloqueada, así que dos peticiones simultáneas de la misma caja se ponen
+     * en fila solas y la segunda ve el cobro de la primera —que es lo que
+     * convierte el doble clic en un solo cobro—.
+     */
+    let autorizadoPor: string | null = null;
+    if (e.tipo === "COLLECTION" && e.referencia) {
+      const { cobroPrevioDeFactura, consumirAutorizacion } = await import("./duplicates.ts");
+      const previo = await cobroPrevioDeFactura(
+        ctx.empresaId,
+        e.referencia,
+        client,
+        operacionId
+      );
+      if (previo) {
+        if (!e.autorizacionDuplicado) {
+          throw new ErrorCaja(
+            "COBRO_DUPLICADO",
+            `La factura ${e.referencia.trim()} ya está cobrada en ${previo.numero}. Para cobrarla otra vez hace falta que lo autorice alguien con permiso.`,
+            409
+          );
+        }
+        autorizadoPor = String(
+          await consumirAutorizacion(client, {
+            empresaId: ctx.empresaId,
+            token: e.autorizacionDuplicado,
+            referencia: e.referencia,
+            importeCentimos: e.importeCentimos,
+            operacionId,
+          })
+        );
+        await registrarAuditoriaEnTransaccion(client, {
+          empresaId: ctx.empresaId,
+          userId: ctx.userId,
+          accion: "cash.collection.duplicate_override_used",
+          entidad: "cash_operations",
+          entidadId: String(operacionId),
+          detalle: {
+            referencia: e.referencia.trim(),
+            importeCentimos: e.importeCentimos,
+            cobroPrevio: previo.numero,
+            operacionPreviaId: previo.operacionId,
+            // Quién cobra y quién autoriza, separados a propósito.
+            realizadoPor: ctx.userId,
+            autorizadoPor,
+          },
+          ip: ctx.ip,
+        });
+      }
+    }
 
     await insertarFormasPago(client, operacionId, e.formasPago, ahora);
 

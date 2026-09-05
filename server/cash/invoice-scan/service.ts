@@ -14,13 +14,14 @@
  */
 
 import crypto from "node:crypto";
+import { cobroPrevioDeFactura } from "../duplicates.ts";
 import pool from "../../db.ts";
 import { ErrorCaja } from "../errors.ts";
 import { formasPagoActivas } from "../config.ts";
 import { clasificar, type ReglaFormaCobro } from "./classifier.ts";
 import { extractorIA, type DocumentoAdjunto, type ExtractorFacturas } from "./extractor.ts";
 import { evidenciaDeCobro, normalizar, sinDatosDeTarjeta } from "./normalize.ts";
-import type { Aviso, PropuestaCobro } from "./types.ts";
+import type { PropuestaCobro } from "./types.ts";
 import { validar } from "./validate.ts";
 
 /** Lo mismo que admite un justificante: es el mismo papel. */
@@ -101,39 +102,6 @@ export async function reglasDeEmpresa(empresaId: string): Promise<ReglaFormaCobr
   /* eslint-enable @typescript-eslint/no-explicit-any */
 }
 
-/**
- * ¿Está ya cobrada esta factura?
- *
- * Se busca por número de factura dentro de la empresa, que es lo que de verdad
- * identifica el documento; el importe y el cliente van en el aviso para que
- * quien lo lea sepa si es el mismo cobro o una factura rectificativa. No
- * bloquea: avisa. Hay casos legítimos —un cobro anulado y rehecho— y quien
- * está delante del cliente sabe más que la comprobación.
- */
-async function buscarDuplicado(
-  empresaId: string,
-  referencia: string | null
-): Promise<Aviso | null> {
-  if (!referencia) return null;
-  const { rows } = await pool.query(
-    `SELECT numero, importe_centimos, party_nombre, created_at_ms
-       FROM cash_operations
-      WHERE empresa_id = $1 AND tipo = 'COLLECTION' AND estado = 'CONFIRMED'
-        AND upper(trim(referencia)) = upper(trim($2))
-      ORDER BY id DESC LIMIT 1`,
-    [empresaId, referencia]
-  );
-  if (rows.length === 0) return null;
-  const previo = rows[0];
-  return {
-    codigo: "POSIBLE_DUPLICADO",
-    mensaje:
-      `La factura ${referencia} ya está cobrada en ${previo.numero}` +
-      `${previo.party_nombre ? ` (${previo.party_nombre})` : ""}. ` +
-      "Comprueba antes de volver a cobrarla.",
-    grave: true,
-  };
-}
 
 export type EntradaEscaneo = {
   empresaId: string;
@@ -227,11 +195,28 @@ export async function escanearFactura(
   const propuestaForma = clasificar(evidenciaDeCobro(normalizada), reglas, catalogo);
   const propuesta = validar(normalizada, propuestaForma);
 
-  const duplicado = await buscarDuplicado(entrada.empresaId, propuesta.referencia.valor);
-  if (duplicado) {
-    propuesta.avisos.push(duplicado);
-    // Un duplicado es grave: nada se preselecciona hasta que alguien mire.
-    propuesta.formaCobro = { ...propuesta.formaCobro, autoSeleccionar: false };
+  /*
+   * El duplicado NO toca ya la preselección de la forma de cobro.
+   *
+   * Antes la apagaba, por prudencia. Pero son dos cosas distintas: cómo se
+   * pagó esta factura —que el resguardo dice— y si ya se cobró antes —que dice
+   * el histórico—. Apagar la propuesta obligaba a elegir a mano la forma
+   * incluso cuando el papel la cantaba, y sobre todo no protegía de nada: el
+   * botón de confirmar seguía ahí. Ahora la pantalla se prepara entera y lo
+   * que cambia es la ACCIÓN disponible al final, que es donde se juega el
+   * dinero: sin autorización, el servidor no registra el segundo cobro.
+   */
+  const previo = await cobroPrevioDeFactura(entrada.empresaId, propuesta.referencia.valor);
+  if (previo) {
+    propuesta.avisos.push({
+      codigo: "POSIBLE_DUPLICADO",
+      mensaje:
+        `La factura ${propuesta.referencia.valor} ya está cobrada en ${previo.numero}` +
+        `${previo.partyNombre ? ` (${previo.partyNombre})` : ""}. ` +
+        "Cobrarla otra vez tiene que autorizarlo alguien con permiso.",
+      grave: true,
+    });
+    propuesta.cobroPrevio = previo;
   }
 
   /*

@@ -38,19 +38,16 @@ import { initConnect, mountConnect, startConnectWorker } from "./connect/index.t
 import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
 import { initEventLog } from "./eventlog/schema.ts";
 import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./eventlog/servicio.ts";
-import { tipoDesdeEstadoAssist } from "./eventlog/tipos.ts";
 import { initDocumentos } from "./documentos/schema.ts";
 import { createDocumentosRouter } from "./documentos/router.ts";
 import {
   olvidarFicheroDeAssist,
-  recalcularEstadoAdmin,
   registrarDocumento as registrarDocumentoDeAssist,
   registrarFicheroDeAssist,
 } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
-import { engancheCierreTyreControl } from "./tyrecontrol/cierreAsistencia.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
 import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
@@ -59,12 +56,20 @@ import { estadoDeVehiculo as estadoVehiculoTc } from "./tyrecontrol/estadoVehicu
 import {
   initCorreo,
   mountCorreo,
-  revisarDocumentacionAlFinalizar,
   startCorreoWorker,
 } from "./correo/index.ts";
 import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
 import { initExcepciones } from "./excepciones/schema.ts";
 import { createExcepcionesRouter } from "./excepciones/router.ts";
+import { initSatisfaction } from "./satisfaction/schema.ts";
+import { startSatisfactionWorker } from "./satisfaction/worker.ts";
+import { createSatisfactionPublicRouter } from "./satisfaction/routerPublico.ts";
+import { createCalidadRouter } from "./satisfaction/routerInterno.ts";
+import { createSatisfactionCallbackRouter } from "./satisfaction/routerCallback.ts";
+import { RUTA_CALLBACK } from "./satisfaction/urlPublica.ts";
+import {
+  engancharPosteriores, prepararRespuestaTrasCambio,
+} from "./cierre/finalizacion.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
@@ -73,12 +78,17 @@ import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenS
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
+import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
+import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+/*
+ * El cliente vive ahora en `core/twilio.ts`, para que lo pueda usar también el
+ * envío de Satisfaction: desde un worker no se puede importar este fichero.
+ * Es el mismo cliente y las mismas credenciales, solo que construido cuando se
+ * pide en vez de al arrancar.
+ */
+const twilioClient = clienteTwilio();
 
 const app = express();
 app.post(
@@ -176,10 +186,54 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.post("/api/payments/create-deposit", authenticate, requireModule("administracion"), async (req, res) => {
   try {
-    const { jobId, customerName, customerPhone, amountEuros, description } = req.body;
+    const {
+      jobId,
+      reference: referenciaPedida,
+      autoReference,
+      customerName,
+      customerPhone,
+      amountEuros,
+      description,
+      templateId,
+      totalAmountCents,
+      terms,
+    } = req.body;
 
-    const reference = String(jobId || "").trim();
+    /*
+     * La referencia la reparte el servidor salvo que llegue escrita.
+     *
+     * El orden importa: primero lo que mande quien llama (la APK sigue
+     * mandando la suya en `jobId`), y solo si viene vacío y lo pide se saca
+     * número. Así ningún cliente antiguo se queda sin referencia ni gasta
+     * números del contador sin querer.
+     */
+    const escrita = autoReference
+      ? String(referenciaPedida ?? "").trim()
+      : String(referenciaPedida ?? jobId ?? "").trim();
+    const reference = escrita || (autoReference ? await siguienteReferencia(db) : "");
+
+    /*
+     * La asistencia va aparte de la referencia. Solo con un número aquí se
+     * marca la señal como pagada en `jobs`: con la referencia automática, un
+     * cobro cualquiera dejaría de significar "asistencia con ese id".
+     */
+    const jobVinculado = Number(jobId);
+    const asistencia =
+      Number.isInteger(jobVinculado) && jobVinculado > 0 ? jobVinculado : null;
+
     const amountCents = Math.round(Number(amountEuros || 0) * 100);
+
+    /*
+     * La plantilla llega ya renderizada desde la pantalla y aquí solo se
+     * guarda. El servidor no la vuelve a componer a propósito: si compusiera
+     * su propia versión, el cliente podría acabar pagando con unas condiciones
+     * en el móvil y otras distintas archivadas, que es justo lo que este campo
+     * existe para impedir.
+     */
+    const template = String(templateId || "libre").trim() || "libre";
+    const termsText = String(terms || "");
+    const totalCents = Math.round(Number(totalAmountCents || 0));
+    const totalGuardado = Number.isFinite(totalCents) && totalCents > 0 ? totalCents : null;
 
     if (!reference) {
       return res.status(400).json({
@@ -192,6 +246,13 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
       return res.status(400).json({
         success: false,
         message: "El importe mínimo es 1 €",
+      });
+    }
+
+    if (totalGuardado !== null && totalGuardado < amountCents) {
+      return res.status(400).json({
+        success: false,
+        message: "El total del presupuesto no puede ser menor que la paga y señal",
       });
     }
 
@@ -219,10 +280,13 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
 
       metadata: {
         reference,
-        jobId: reference,
+        // Solo si hay asistencia de verdad: el webhook marca `jobs` con esto.
+        ...(asistencia !== null ? { jobId: String(asistencia) } : {}),
         customerName: String(customerName || ""),
         customerPhone: String(customerPhone || ""),
         amountEuros: String(amountEuros || ""),
+        // Para poder ver desde el panel de Stripe bajo qué condiciones se cobró.
+        templateId: template,
       },
     });
 
@@ -237,9 +301,13 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
           stripe_session_id,
           payment_url,
           created_at_ms,
-          description
+          description,
+          template_id,
+          total_amount_cents,
+          terms_text,
+          job_id
         )
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12)
       `,
       [
         reference,
@@ -250,6 +318,10 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
         session.url,
         Date.now(),
         desc,
+        template,
+        totalGuardado,
+        termsText,
+        asistencia,
       ]
     );
 
@@ -340,7 +412,10 @@ app.get("/api/payments/status/:reference", authenticate, requireModule("administ
           stripe_payment_intent_id,
           payment_url,
           paid_at_ms,
-          created_at_ms
+          created_at_ms,
+          template_id,
+          total_amount_cents,
+          terms_text
         FROM payments
         WHERE reference = $1
         ORDER BY created_at_ms DESC
@@ -389,7 +464,10 @@ app.get("/api/payments/recent", authenticate, requireModule("administracion"), a
           payment_url,
           paid_at_ms,
           created_at_ms,
-          description
+          description,
+          template_id,
+          total_amount_cents,
+          job_id
         FROM payments
         ORDER BY created_at_ms DESC
         LIMIT 50
@@ -561,25 +639,9 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
    HELPERS
 ========================================================= */
 
-function normalizeSpanishPhone(phone: string) {
-  const digits = String(phone || "").replace(/\D/g, "");
-
-  if (!digits) return "";
-
-  if (digits.startsWith("34") && digits.length === 11) {
-    return `+${digits}`;
-  }
-
-  if (digits.length === 9) {
-    return `+34${digits}`;
-  }
-
-  if (String(phone).trim().startsWith("+")) {
-    return String(phone).trim();
-  }
-
-  return `+${digits}`;
-}
+// La implementación se ha movido a `core/twilio.ts` para poder compartirla con
+// el envío de Satisfaction. El comportamiento es exactamente el mismo.
+const normalizeSpanishPhone = aE164;
 function safeJsonParse<T>(value: unknown, fallback: T): T {
   if (typeof value !== "string" || value.trim() === "") return fallback;
 
@@ -852,13 +914,8 @@ function getRoadsideStatusTimestampField(status: string) {
   return null;
 }
 
-function getWhatsAppFromNumber() {
-  return (
-    process.env.TWILIO_WHATSAPP_FROM ||
-    process.env.TWILIO_WHATSAPP_NUMBER ||
-    "whatsapp:+34610473079"
-  );
-}
+// También movida a `core/twilio.ts`, por el mismo motivo.
+const getWhatsAppFromNumber = numeroWhatsAppEmisor;
 
 // Dominio público de cara al cliente (enlaces de seguimiento/informe por WhatsApp).
 // Debe estar configurado como dominio personalizado en Render + DNS apuntando al servicio.
@@ -7044,46 +7101,27 @@ app.post(
 
       let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
-      // Generar reportToken al finalizar
       /*
-       * TyreControl. Va DESPUÉS de que la asistencia ya esté guardada y sin
-       * `await`: el técnico no puede esperar a que conteste otro sistema, y un
-       * problema con TC no puede impedir que una asistencia se cierre.
-       *
-       * Hoy no manda nada — solo prepara y anota el sobre. Ver
-       * `server/tyrecontrol/cierreAsistencia.ts`.
+       * El post-proceso del cambio de estado vive en `cierre/finalizacion.ts`,
+       * compartido con la ruta de oficina. Estaba duplicado en las dos y ya
+       * habían dejado de hacer lo mismo.
        */
-      if (status === "finalizada") {
-        void engancheCierreTyreControl(Number(id))
-          .catch((e) => console.error("[TyreControl] enganche de cierre:", e?.message));
-      }
-
-      if (status === "finalizada" && !updated.reportToken) {
-        const { randomUUID } = await import("crypto");
-        const reportToken = randomUUID();
-        const rtResult = await db.query(
-          `UPDATE roadside_assistances SET "reportToken" = $2 WHERE id = $1 RETURNING *`,
-          [id, reportToken]
-        );
-        updated = normalizeRoadsideAssistanceRow(rtResult.rows[0]);
-      }
-
-      // Auto-transición: al finalizar la reparación, pasar automáticamente a en_camino_base
-      if (status === "finalizada") {
-        await db.query(
-          `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
-           VALUES ($1, 'en_camino_base', 'Vuelta al taller automática', $2, $3)`,
-          [id, operator.techName, now + 1]
-        );
-        const baseResult = await db.query(
-          `UPDATE roadside_assistances SET status = 'en_camino_base', "enCaminoBaseAtMs" = COALESCE("enCaminoBaseAtMs", $2), "updatedAtMs" = $2 WHERE id = $1 RETURNING *`,
-          [id, now + 1]
-        );
-        updated = normalizeRoadsideAssistanceRow(baseResult.rows[0]);
-      }
+      const cambiada = await prepararRespuestaTrasCambio({
+        assistanceId: Number(id), estado: status, origen: "operario",
+        actorNombre: operator.techName, ahoraMs: now,
+      });
+      if (cambiada) updated = normalizeRoadsideAssistanceRow(cambiada);
 
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
+
+      // Después de contestar, igual que en la ruta de oficina: el técnico no
+      // espera a TyreControl, al correo ni al diario.
+      engancharPosteriores({
+        assistanceId: Number(id), estado: status, origen: "operario",
+        actorNombre: operator.techName, tecnico: updated.assignedTechName || null,
+        ahoraMs: now,
+      });
 
       if (status === "finalizada" && updated.customerPhone && !updated.whatsappFinalizadaSentAtMs && updated.reportToken) {
         const reportUrl = `${getPublicAppBaseUrl(req)}/informe/${updated.reportToken}`;
@@ -7823,29 +7861,12 @@ app.post(
 
       let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
-      // ── Generar reportToken si se finaliza y no existe ya ──────────────────
-      /*
-       * TyreControl. Va DESPUÉS de que la asistencia ya esté guardada y sin
-       * `await`: el técnico no puede esperar a que conteste otro sistema, y un
-       * problema con TC no puede impedir que una asistencia se cierre.
-       *
-       * Hoy no manda nada — solo prepara y anota el sobre. Ver
-       * `server/tyrecontrol/cierreAsistencia.ts`.
-       */
-      if (status === "finalizada") {
-        void engancheCierreTyreControl(Number(id))
-          .catch((e) => console.error("[TyreControl] enganche de cierre:", e?.message));
-      }
-
-      if (status === "finalizada" && !updated.reportToken) {
-        const { randomUUID } = await import("crypto");
-        const reportToken = randomUUID();
-        const rtResult = await db.query(
-          `UPDATE roadside_assistances SET "reportToken" = $2 WHERE id = $1 RETURNING *`,
-          [id, reportToken]
-        );
-        updated = normalizeRoadsideAssistanceRow(rtResult.rows[0]);
-      }
+      // El mismo post-proceso que la ruta de la APK, en `cierre/finalizacion.ts`.
+      const cambiada = await prepararRespuestaTrasCambio({
+        assistanceId: Number(id), estado: status, origen: "oficina",
+        actorNombre: body.createdBy ?? "oficina", ahoraMs: now,
+      });
+      if (cambiada) updated = normalizeRoadsideAssistanceRow(cambiada);
 
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
@@ -7862,35 +7883,13 @@ app.post(
        * recalcularlo o una asistencia recién finalizada se quedaría sin
        * aparecer como pendiente de albarán.
        */
-      void recalcularEstadoAdmin("assist", id)
-        .catch((e) => console.error("estado administrativo:", e?.message));
-
-      /*
-       * Al terminar el servicio se mira qué documentación falta y se programa
-       * que se pida. No manda nada aquí: encolarlo es lo que permite que la
-       * cadencia sea de días y que no salgan cuatro correos si el estado se
-       * toca cuatro veces.
-       */
-      if (status === "finalizada") {
-        void revisarDocumentacionAlFinalizar(
-          "assist", id, (req as any).assistPanelUser?.tallerId ?? null,
-        ).catch((e) => console.error("revisión de documentación:", e?.message));
-      }
-
-      const tipoDiario = tipoDesdeEstadoAssist(status);
-      if (tipoDiario) {
-        void registrarEventoAsistencia({
-          system: "assist",
-          tenantId: (req as any).assistPanelUser?.tallerId ?? null,
-          assistanceId: id,
-          eventType: tipoDiario,
-          actorType: "user",
-          actorName: (req as any).authCtx?.nombre ?? null,
-          occurredAtMs: now,
-          payload: { estado: status, tecnico: updated.assignedTechName || null },
-          dedupeKey: `assist-estado-${id}-${status}-${now}`,
-        });
-      }
+      engancharPosteriores({
+        assistanceId: Number(id), estado: status, origen: "oficina",
+        tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+        actorNombre: (req as any).authCtx?.nombre ?? null,
+        tecnico: updated.assignedTechName || null,
+        ahoraMs: now,
+      });
 
       // ── WhatsApp con deduplicación ─────────────────────────────────────────
       if (status === "asignada" && updated.customerPhone && !updated.whatsappAsignadaSentAtMs) {
@@ -8830,7 +8829,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         return w;
       }
       const STATUS_LABELS_PDF: Record<string, string> = {
-        pendiente: "Pendiente", asignada: "Asignada", en_camino: "En camino",
+        pendiente: "Gestionada", asignada: "Asignada", en_camino: "En camino",
         en_punto: "En punto", reparando: "Reparando", finalizada: "Finalizada",
         en_camino_base: "En camino a taller", llegada_taller: "En taller",
         cancelada: "Cancelada", redirigida: "Redirigida",
@@ -18406,6 +18405,27 @@ app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
 mountCorreo(app, requireSupervisorRole);
 app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
 
+/*
+ * Valoración pública. SIN guarda a propósito: quien abre el enlace no tiene
+ * sesión ni taller. El token es lo único que da acceso, y el propio router
+ * lleva su límite de peticiones y su límite de tamaño de cuerpo.
+ */
+app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
+
+/*
+ * Calidad: la ficha la puede ver quien ya ve la asistencia; la bandeja y las
+ * acciones sobre expedientes, solo supervisión.
+ */
+app.use("/api/calidad", createCalidadRouter(
+  requireOperarioRole, requireSupervisorRole, requireAdminRole));
+
+/*
+ * El callback de estado de las encuestas. Sin sesión —lo llama Twilio— pero con
+ * firma obligatoria: es lo que separa un aviso de entrega de cualquiera que
+ * quiera decir que un mensaje se entregó.
+ */
+app.use(RUTA_CALLBACK, createSatisfactionCallbackRouter());
+
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
 ========================================================= */
@@ -18645,6 +18665,9 @@ initDb()
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))
+  // Satisfaction: encuestas y casos de calidad. No engancha todavía con el
+  // cierre de asistencias — solo crea el esquema y siembra las plantillas.
+  .then(() => prepararEsquema("Satisfaction", initSatisfaction))
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
@@ -18661,6 +18684,9 @@ initDb()
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
       startDispatchWorker(); // reintentos de subcontratación a plataformas externas
       startCorreoWorker(); // recordatorios de documentación pendiente
+      // Satisfaction: encola lo que ya puede enviarse y caduca lo vencido.
+      // Todavía no manda nada; el envío real llega con WhatsApp.
+      startSatisfactionWorker();
       startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
       startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
       // Mobilink Cash: eventos de dominio hacia MC Central. Sin transporte

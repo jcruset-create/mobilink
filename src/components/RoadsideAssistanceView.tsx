@@ -63,6 +63,7 @@ import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
 import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
 import TyreControlVehiculo from "./TyreControlVehiculo";
+import SatisfactionSummaryCard from "./SatisfactionSummaryCard";
 import CorreoExpediente from "./CorreoExpediente";
 import SelectorSubcontrata, {
   guardarSubcontrata,
@@ -119,7 +120,7 @@ const STATUS_BADGES: Record<RoadsideAssistanceStatus, string> = {
 
 // Etiquetas cortas para la línea de estados de la tarjeta
 const STEP_LABELS: Partial<Record<RoadsideAssistanceStatus, string>> = {
-  pendiente: "Pendiente",
+  pendiente: "Gestionada",
   asignada: "Asignada",
   en_camino: "En camino",
   en_punto: "En punto",
@@ -2305,7 +2306,7 @@ export default function RoadsideAssistanceView({
                       className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100"
                     >
                       <option value="">Todos los estados</option>
-                      <option value="pendiente">Pendiente</option>
+                      <option value="pendiente">Gestionada</option>
                       <option value="asignada">Asignada</option>
                       <option value="en_camino">En camino</option>
                       <option value="en_punto">En punto</option>
@@ -2955,6 +2956,16 @@ export default function RoadsideAssistanceView({
                       assistanceId={editingAssistance.id}
                       editable
                     />
+                  </div>
+                )}
+
+                {/* Las valoraciones de esta asistencia. Como la tarjeta de
+                    TyreControl, no se pinta nada si no hay encuestas: hoy la
+                    inmensa mayoría no las tendrá, y una tarjeta vacía en cada
+                    expediente es ruido en la pantalla que más se mira. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <SatisfactionSummaryCard assistanceId={editingAssistance.id} />
                   </div>
                 )}
 

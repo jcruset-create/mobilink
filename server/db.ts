@@ -1,3 +1,4 @@
+import { initReferencias } from "./cobros/referencias.ts";
 import pg from "pg";
 import dotenv from "dotenv";
 
@@ -51,6 +52,33 @@ export async function initDb() {
   await pool.query(`
     ALTER TABLE payments ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
   `).catch(() => {});
+
+  /*
+   * Plantillas de cobro. `terms_text` no es un duplicado del texto que hay en
+   * el código: es LO QUE ACEPTÓ ESE CLIENTE, con sus importes y con la
+   * redacción del día en que pagó. Si mañana se cambia la plantilla, los cobros
+   * viejos tienen que seguir contando lo que se aceptó entonces.
+   */
+  await pool.query(`
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS template_id TEXT NOT NULL DEFAULT 'libre';
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS total_amount_cents INTEGER;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS terms_text TEXT NOT NULL DEFAULT '';
+  `).catch(() => {});
+
+  /*
+   * La asistencia, cuando la hay, aparte de la referencia.
+   *
+   * Antes eran lo mismo: la referencia se tecleaba con el número de asistencia
+   * y el webhook la usaba para marcar la señal en `jobs`. Con la referencia
+   * repartida automáticamente eso ya no vale —el cobro nº 33 no tiene nada que
+   * ver con la asistencia 33—, así que el vínculo pasa a ser un dato propio y
+   * opcional.
+   */
+  await pool.query(`
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS job_id INTEGER;
+  `).catch(() => {});
+
+  await initReferencias(pool);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS rules (
@@ -350,6 +378,20 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "conductorDni" TEXT;
 
+    /*
+     * El instante en que empezó la reparación.
+     *
+     * Faltaba: el código lo lee (normalizeRoadsideAssistanceRow), lo escribe
+     * (getRoadsideStatusTimestampField lo devuelve para inicio_reparacion)
+     * y lo pinta el informe PDF, pero la columna no se creaba en ningún sitio.
+     * En una base nueva, poner una asistencia en «Reparando» reventaba con
+     * «column does not exist»; en la de producción existe de antes, así que el
+     * fallo solo se veía al desplegar desde cero o al montar la base de las
+     * pruebas.
+     */
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "inicioReparacionAtMs" BIGINT;
+
     -- Auto "En camino": se arma cuando la furgoneta asignada se ve DENTRO del
     -- radio del taller; al salir del radio (>500 m) se activa el estado solo.
     -- Evita falsos positivos si se asigna una furgoneta que ya esta en ruta.
@@ -568,6 +610,22 @@ export async function initDb() {
 
     CREATE INDEX IF NOT EXISTS roadside_assistances_taller_idx
       ON roadside_assistances("tallerId");
+
+    /*
+     * Las métricas de satisfacción cuentan asistencias TERMINADAS dentro de un
+     * periodo, y agrupan por cliente y por proveedor. Parcial sobre
+     * «finishedAtMs IS NOT NULL» porque las que siguen abiertas no entran nunca
+     * en ese recuento y no tienen por qué ocupar el índice.
+     */
+    CREATE INDEX IF NOT EXISTS roadside_assistances_finalizadas_idx
+      ON roadside_assistances("tallerId", "finishedAtMs")
+      WHERE "finishedAtMs" IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS roadside_assistances_cliente_idx
+      ON roadside_assistances("clienteFacturacionId")
+      WHERE "clienteFacturacionId" IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS roadside_assistances_proveedor_idx
+      ON roadside_assistances("proveedorTallerId")
+      WHERE "proveedorTallerId" IS NOT NULL;
     CREATE INDEX IF NOT EXISTS roadside_vehicles_taller_idx
       ON roadside_vehicles("tallerId");
     CREATE INDEX IF NOT EXISTS techs_taller_idx

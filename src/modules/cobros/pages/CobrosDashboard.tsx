@@ -1,6 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { sessionHeaders } from "../../sessionHeaders";
+import {
+  PLANTILLAS,
+  aCentimos,
+  errorDeImportes,
+  euros,
+  plantillaPorId,
+  type IdPlantilla,
+} from "../plantillas/plantillas";
 
 type Payment = {
   id: number;
@@ -13,6 +21,9 @@ type Payment = {
   paid_at_ms: number | null;
   created_at_ms: number;
   description: string;
+  template_id: string | null;
+  total_amount_cents: number | null;
+  job_id: number | null;
 };
 
 type PaymentStatus = {
@@ -29,11 +40,38 @@ export default function CobrosDashboard() {
   const navigate = useNavigate();
 
   // Form
-  const [jobId, setJobId] = useState("");
+  /** Asistencia a la que se imputa la señal. Opcional: la mayoría de cobros no la tienen. */
+  const [asistencia, setAsistencia] = useState("");
+  /** Referencia que se consulta en "estado del pago". Se rellena sola al crear un cobro. */
+  const [refConsulta, setRefConsulta] = useState("");
+  /** La que ha repartido el servidor en el último cobro creado. */
+  const [referenciaCreada, setReferenciaCreada] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [amountEuros, setAmountEuros] = useState("50");
+  const [totalEuros, setTotalEuros] = useState("");
   const [description, setDescription] = useState("");
+  const [templateId, setTemplateId] = useState<IdPlantilla>("libre");
+  const [showPreview, setShowPreview] = useState(false);
+
+  const plantilla = plantillaPorId(templateId);
+  const senalCentimos = aCentimos(amountEuros);
+  const totalCentimos = plantilla.pideTotal ? aCentimos(totalEuros) : 0;
+  const errorImportes = errorDeImportes(plantilla, senalCentimos, totalCentimos);
+
+  /**
+   * Al cambiar de plantilla se propone su concepto, pero solo si el que hay
+   * escrito es el de la plantilla anterior: lo que haya escrito una persona no
+   * se pisa por cambiar de selector.
+   */
+  function elegirPlantilla(id: IdPlantilla) {
+    const anterior = plantillaPorId(templateId);
+    const nueva = plantillaPorId(id);
+    setTemplateId(id);
+    if (!description.trim() || description.trim() === anterior.conceptoPorDefecto) {
+      setDescription(nueva.conceptoPorDefecto);
+    }
+  }
 
   // State
   const [paymentUrl, setPaymentUrl] = useState("");
@@ -60,6 +98,16 @@ export default function CobrosDashboard() {
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
   async function createPaymentLink() {
+    /*
+     * Se valida aquí además de en el servidor porque la plantilla puede acabar
+     * diciéndole al cliente "Importe restante: -50 €", y eso el servidor no lo
+     * sabe: para él solo es un cobro con un importe válido.
+     */
+    if (errorImportes) {
+      setMessage(errorImportes);
+      return;
+    }
+
     setLoading(true);
     setMessage("");
     setPaymentUrl("");
@@ -68,17 +116,34 @@ export default function CobrosDashboard() {
         method: "POST",
         headers: await sessionHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
-          jobId: Number(jobId),
+          /*
+           * La referencia la reparte el servidor: es el único que puede
+           * garantizar que no se repita entre dos personas creando cobros a la
+           * vez. La asistencia, si la hay, viaja aparte.
+           */
+          autoReference: true,
+          reference: "",
+          jobId: asistencia.trim() ? Number(asistencia) : null,
           customerName,
           customerPhone,
-          amountEuros: Number(amountEuros),
+          amountEuros: senalCentimos / 100,
           description,
+          templateId: plantilla.id,
+          totalAmountCents: totalCentimos,
+          /*
+           * Las condiciones viajan ya rellenas: lo que el cliente acepta al
+           * pagar es este texto, con estos importes, y tiene que quedar
+           * guardado tal cual aunque mañana se reescriba la plantilla.
+           */
+          terms: condicionesActuales(),
         }),
       });
       const data = await response.json();
       if (!data.success) throw new Error(data.message || "No se pudo crear el enlace");
       setPaymentUrl(data.url);
-      setMessage("Enlace de pago creado correctamente.");
+      setReferenciaCreada(String(data.reference ?? ""));
+      setRefConsulta(String(data.reference ?? ""));
+      setMessage(`Enlace de pago creado. Referencia ${data.reference}.`);
       loadHistory();
     } catch (error: any) {
       setMessage(error.message || "Error creando pago");
@@ -91,7 +156,7 @@ export default function CobrosDashboard() {
     setStatusLoading(true);
     setMessage("");
     try {
-      const response = await fetch(`/api/payments/status/${encodeURIComponent(jobId)}`, { headers: await sessionHeaders() });
+      const response = await fetch(`/api/payments/status/${encodeURIComponent(refConsulta.trim())}`, { headers: await sessionHeaders() });
       const data = await response.json();
       if (!data.success) throw new Error(data.message || "No se pudo consultar el estado");
       setPaymentStatus({
@@ -133,13 +198,23 @@ export default function CobrosDashboard() {
     setMessage("Enlace copiado al portapapeles.");
   }
 
+  /** Los datos del formulario tal y como los espera la plantilla. */
+  function datosPlantilla(url: string) {
+    return {
+      cliente: customerName,
+      senalCentimos,
+      totalCentimos,
+      concepto: description,
+      enlace: url,
+    };
+  }
+
+  function condicionesActuales() {
+    return plantilla.condiciones(datosPlantilla(""));
+  }
+
   function buildWhatsAppText(url: string) {
-    const desc = description.trim();
-    return `Hola${customerName ? ` ${customerName}` : ""}, para confirmar la asistencia puede realizar la paga y señal aquí:
-
-${url}
-
-Importe: ${Number(amountEuros).toFixed(2)} €${desc ? `\nConcepto: ${desc}` : ""}`;
+    return plantilla.mensaje(datosPlantilla(url));
   }
 
   async function copyWhatsAppMessage() {
@@ -182,11 +257,45 @@ Importe: ${Number(amountEuros).toFixed(2)} €${desc ? `\nConcepto: ${desc}` : "
           <h2 className="text-lg font-bold text-slate-200">Nuevo enlace de pago</h2>
 
           <div>
+            <label className="block text-sm font-bold mb-2">Plantilla</label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {PLANTILLAS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => elegirPlantilla(p.id)}
+                  className={`rounded-xl border px-4 py-3 text-left ${
+                    p.id === templateId
+                      ? "border-emerald-500 bg-emerald-950/50"
+                      : "border-slate-600 bg-slate-800 hover:bg-slate-700"
+                  }`}
+                >
+                  <div className="font-bold text-white">{p.nombre}</div>
+                  <div className="text-xs text-slate-400 mt-0.5">{p.descripcion}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
             <label className="block text-sm font-bold mb-2">Referencia cobro</label>
+            <div className="w-full rounded-xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-slate-400">
+              {referenciaCreada
+                ? `Último cobro creado: nº ${referenciaCreada}`
+                : "Se asigna sola al crear el cobro."}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-bold mb-2">
+              Nº de asistencia <span className="font-normal text-slate-400">(opcional)</span>
+            </label>
             <input
-              value={jobId}
-              onChange={(e) => setJobId(e.target.value)}
-              placeholder="Ejemplo: 33"
+              type="number"
+              min="1"
+              value={asistencia}
+              onChange={(e) => setAsistencia(e.target.value)}
+              placeholder="Solo si el cobro es la señal de una asistencia"
               className="w-full rounded-xl bg-slate-800 border border-slate-600 px-4 py-3 text-white outline-none"
             />
           </div>
@@ -233,20 +342,64 @@ Importe: ${Number(amountEuros).toFixed(2)} €${desc ? `\nConcepto: ${desc}` : "
             />
           </div>
 
+          {plantilla.pideTotal && (
+            <div>
+              <label className="block text-sm font-bold mb-2">
+                Importe total del presupuesto €
+              </label>
+              <input
+                type="number"
+                min="1"
+                step="0.01"
+                value={totalEuros}
+                onChange={(e) => setTotalEuros(e.target.value)}
+                placeholder="Ejemplo: 250"
+                className="w-full rounded-xl bg-slate-800 border border-slate-600 px-4 py-3 text-white outline-none"
+              />
+              <div className="mt-2 text-sm text-slate-400">
+                Importe restante tras la paga y señal:{" "}
+                <span className="font-bold text-white">
+                  {totalCentimos >= senalCentimos
+                    ? euros(totalCentimos - senalCentimos)
+                    : "—"}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/*
+            Vista previa del mensaje. En la plantilla con condiciones no es un
+            adorno: lo que se manda tiene consecuencias (una señal no
+            reembolsable), así que se puede leer entero ANTES de crear nada en
+            Stripe, no solo después de que exista el enlace.
+          */}
+          <div className="rounded-xl border border-slate-700 bg-slate-800/60">
+            <button
+              type="button"
+              onClick={() => setShowPreview((v) => !v)}
+              className="w-full px-4 py-3 text-left text-sm font-bold text-slate-300"
+            >
+              {showPreview ? "▾" : "▸"} Vista previa del mensaje
+            </button>
+            {showPreview && (
+              <pre className="px-4 pb-4 text-sm text-slate-200 whitespace-pre-wrap break-words font-sans">
+                {buildWhatsAppText(paymentUrl || "[aquí irá el enlace de pago]")}
+              </pre>
+            )}
+          </div>
+
+          {errorImportes && (
+            <div className="rounded-xl border border-amber-600 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
+              {errorImportes}
+            </div>
+          )}
+
           <button
             onClick={createPaymentLink}
-            disabled={loading}
+            disabled={loading || !!errorImportes}
             className="w-full rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-600 text-black font-black py-3"
           >
             {loading ? "Creando..." : "Crear enlace de pago"}
-          </button>
-
-          <button
-            onClick={checkPaymentStatus}
-            disabled={statusLoading || !jobId}
-            className="w-full rounded-xl bg-blue-500 hover:bg-blue-400 disabled:bg-slate-600 text-white font-black py-3"
-          >
-            {statusLoading ? "Consultando..." : "Consultar estado del pago"}
           </button>
 
           {paymentUrl && (
@@ -287,6 +440,27 @@ Importe: ${Number(amountEuros).toFixed(2)} €${desc ? `\nConcepto: ${desc}` : "
 
           <div className="bg-slate-800 rounded-xl p-4">
             <div className="text-sm text-slate-400">Estado del pago</div>
+
+            {/*
+              La consulta tiene su propio campo: la referencia ya no se teclea
+              al crear, pero sí hay que poder mirar un cobro de ayer.
+            */}
+            <div className="mt-2 flex flex-col sm:flex-row gap-2">
+              <input
+                value={refConsulta}
+                onChange={(e) => setRefConsulta(e.target.value)}
+                placeholder="Nº de cobro"
+                className="flex-1 rounded-xl bg-slate-900 border border-slate-600 px-4 py-2 text-white outline-none"
+              />
+              <button
+                onClick={checkPaymentStatus}
+                disabled={statusLoading || !refConsulta.trim()}
+                className="rounded-xl bg-blue-500 hover:bg-blue-400 disabled:bg-slate-600 text-white font-bold px-4 py-2"
+              >
+                {statusLoading ? "Consultando..." : "Consultar"}
+              </button>
+            </div>
+
             <div className="text-xl font-black mt-1">
               {!paymentStatus && "Sin consultar"}
               {paymentStatus && isPaid && "✅ Pagado"}
@@ -294,9 +468,9 @@ Importe: ${Number(amountEuros).toFixed(2)} €${desc ? `\nConcepto: ${desc}` : "
             </div>
             {paymentStatus && (
               <div className="mt-3 text-sm text-slate-300 space-y-1">
-                <div>Asistencia: {paymentStatus.id}</div>
-                <div>Matrícula: {paymentStatus.plate || "Sin matrícula"}</div>
-                <div>Importe pagado: {((paymentStatus.depositAmount || 0) / 100).toFixed(2)} €</div>
+                {/* Antes ponía "Asistencia" y "Matrícula" aquí: es el cobro y su referencia. */}
+                <div>Cobro nº {paymentStatus.plate || paymentStatus.id}</div>
+                <div>Importe: {euros(Number(paymentStatus.depositAmount || 0))}</div>
                 <div>
                   Fecha pago:{" "}
                   {paymentStatus.depositPaidAtMs
@@ -330,7 +504,8 @@ Importe: ${Number(amountEuros).toFixed(2)} €${desc ? `\nConcepto: ${desc}` : "
           <div className="space-y-3">
             {history.map((p) => {
               const paid = p.status === "paid";
-              const euros = (p.amount_cents / 100).toFixed(2);
+              // No se llama `euros`: eso es el formateador de la plantilla.
+              const importe = euros(Number(p.amount_cents));
               const createdAt = new Date(Number(p.created_at_ms)).toLocaleString("es-ES", {
                 day: "2-digit", month: "2-digit", year: "2-digit",
                 hour: "2-digit", minute: "2-digit",
@@ -368,10 +543,21 @@ Importe: ${Number(amountEuros).toFixed(2)} €${desc ? `\nConcepto: ${desc}` : "
                   <div className="flex-1 min-w-0">
                     <div className="font-bold text-white">
                       {p.customer_name || "Sin nombre"}{" "}
-                      <span className="text-slate-400 font-normal text-sm">· ref. {p.reference}</span>
+                      <span className="text-slate-400 font-normal text-sm">
+                        · nº {p.reference}
+                        {p.job_id ? ` · asistencia ${p.job_id}` : ""}
+                      </span>
                     </div>
                     {p.description && (
                       <div className="text-sm text-slate-300 mt-0.5">{p.description}</div>
+                    )}
+                    {p.template_id && p.template_id !== "libre" && (
+                      <div className="text-xs text-slate-400 mt-1">
+                        {plantillaPorId(p.template_id).nombre}
+                        {p.total_amount_cents
+                          ? ` · presupuesto ${euros(Number(p.total_amount_cents))}`
+                          : ""}
+                      </div>
                     )}
                     <div className="text-xs text-slate-500 mt-1">
                       {p.customer_phone && <span>{p.customer_phone} · </span>}
@@ -382,7 +568,7 @@ Importe: ${Number(amountEuros).toFixed(2)} €${desc ? `\nConcepto: ${desc}` : "
 
                   {/* Amount */}
                   <div className={`text-lg font-black flex-shrink-0 ${paid ? "text-emerald-400" : "text-white"}`}>
-                    {euros} €
+                    {importe}
                   </div>
 
                   {/* Actions */}
