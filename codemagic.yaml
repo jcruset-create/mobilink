@@ -30,7 +30,23 @@ workflows:
       app_store_connect: Mobilink Assist
 
     environment:
-      flutter: stable
+      # ── Versión EXACTA, no «stable» ────────────────────────────────────
+      #
+      # «stable» es un blanco móvil y por eso este build se rompió solo: se
+      # configuró contra Flutter 3.35.4, que pide iOS 13.0, y para cuando se
+      # lanzó el primer build «stable» ya era 3.47.2, que pide 15.0. CocoaPods
+      # se encontró un proyecto en 13.0 y un motor que exige 15.0, y no pudo
+      # resolver: «required a higher minimum deployment target».
+      #
+      # Nadie cambió nada. Cambió el significado de la palabra «stable», que es
+      # la peor clase de rotura: la que aparece sin que haya un commit detrás.
+      # Con la versión fija, el build de dentro de tres meses compila lo mismo
+      # que el de hoy, y subir de Flutter pasa a ser una decisión con su commit.
+      flutter: 3.47.2
+      # Xcode SÍ se deja en «latest», y no es una incoherencia: Apple exige que
+      # lo que se sube esté compilado con un SDK reciente, así que fijarlo aquí
+      # acabaría provocando el rechazo de la subida por quedarse atrás. El
+      # riesgo se cubre al revés: Flutter fijo, Xcode al día.
       xcode: latest
       cocoapods: default
       ios_signing:
