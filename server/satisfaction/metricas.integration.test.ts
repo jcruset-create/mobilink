@@ -479,6 +479,90 @@ describe.skipIf(!RUN)("tasa de respuesta", () => {
   });
 });
 
+/* ── Tasa de respuesta con envíos reales (1G) ────────────────────────────── */
+
+describe.skipIf(!RUN)("tasa de respuesta sobre entregas reales", () => {
+  /** Une una entrega a la encuesta de una asistencia. */
+  async function entrega(
+    assistanceId: number, estado: string, tipo: "INITIAL" | "REMINDER" = "INITIAL",
+  ) {
+    const i = await db.query(
+      `SELECT id FROM survey_instances WHERE "assistanceId" = $1 LIMIT 1`, [String(assistanceId)]);
+    await db.query(
+      `INSERT INTO survey_deliveries
+         ("surveyInstanceId", channel, recipient, "messageType", attempt, status, "createdAtMs")
+       VALUES ($1,'WHATSAPP','+34600111222',$2,1,$3,$4)`,
+      [Number(i.rows[0].id), tipo, estado, AHORA - DIA],
+    );
+  }
+
+  it("sin entregas sigue diciendo «sin datos», no un 100 %", async () => {
+    await responder(await crearAsistencia(), "DRIVER", notas("DRIVER", 5));
+    const m = await metricas();
+    expect(m.resumen.envio.hayEntregas).toBe(false);
+    expect(m.resumen.tasaRespuestaPct).toBeNull();
+  });
+
+  it("un INITIAL aceptado entra en el denominador; contestado, en el numerador", async () => {
+    const contestada = await crearAsistencia();
+    await responder(contestada, "DRIVER", notas("DRIVER", 5));
+    await entrega(contestada, "SENT");
+
+    const muda = await crearAsistencia();
+    await responder(muda, "DRIVER", notas("DRIVER", 4));
+    await db.query(
+      `UPDATE survey_instances SET status = 'SENT' WHERE "assistanceId" = $1`, [String(muda)]);
+    await entrega(muda, "DELIVERED");
+
+    const m = await metricas();
+    expect(m.resumen.envio.hayEntregas).toBe(true);
+    expect(m.resumen.envio.entregadas).toBe(2);
+    // Dos salieron, una está COMPLETED.
+    expect(m.resumen.tasaRespuestaPct).toBe(50);
+  });
+
+  it("lo que no salió NO cuenta: SKIPPED, FAILED ni UNKNOWN", async () => {
+    for (const estado of ["SKIPPED", "FAILED", "UNKNOWN", "PENDING", "SENDING"]) {
+      const a = await crearAsistencia();
+      await responder(a, "DRIVER", notas("DRIVER", 5));
+      await entrega(a, estado);
+    }
+    const m = await metricas();
+    /*
+     * Ninguna llegó a salir. Meter las SKIPPED —a las que les faltaba la
+     * plantilla— hundiría la tasa por un problema de configuración que no tiene
+     * nada que ver con si la gente contesta.
+     */
+    expect(m.resumen.envio.hayEntregas).toBe(false);
+    expect(m.resumen.tasaRespuestaPct).toBeNull();
+  });
+
+  it("un recordatorio no aumenta el denominador", async () => {
+    const a = await crearAsistencia();
+    await responder(a, "DRIVER", notas("DRIVER", 5));
+    await entrega(a, "SENT", "INITIAL");
+    await entrega(a, "SENT", "REMINDER");
+
+    const m = await metricas();
+    // Una encuesta, no dos: el recordatorio es el mismo servicio insistiendo.
+    expect(m.resumen.envio.entregadas).toBe(1);
+    expect(m.resumen.tasaRespuestaPct).toBe(100);
+  });
+
+  it("una entrega de otro taller no se cuela", async () => {
+    const mio = await crearAsistencia({ tallerId: TALLER });
+    await responder(mio, "DRIVER", notas("DRIVER", 5), { tallerId: TALLER });
+    await entrega(mio, "SENT");
+
+    const suyo = await crearAsistencia({ tallerId: OTRO });
+    await responder(suyo, "DRIVER", notas("DRIVER", 1), { tallerId: OTRO });
+    await entrega(suyo, "SENT");
+
+    expect((await metricas({}, String(TALLER))).resumen.envio.entregadas).toBe(1);
+    expect((await metricas({}, String(OTRO))).resumen.envio.entregadas).toBe(1);
+  });
+});
+
 /* ── Tendencia y franjas ─────────────────────────────────────────────────── */
 
 describe.skipIf(!RUN)("tendencia", () => {

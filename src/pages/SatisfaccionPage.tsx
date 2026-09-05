@@ -46,6 +46,21 @@ type MetricasRol = {
   distribucion: { estrella: number; n: number; pct: number }[];
 };
 
+type EstadoTecnico = {
+  credenciales: boolean;
+  urlPublica: boolean;
+  plantillas: {
+    driverInitial: boolean; customerInitial: boolean;
+    driverReminder: boolean; customerReminder: boolean;
+  };
+};
+
+type Config = {
+  activo: boolean; conductor: boolean; cliente: boolean;
+  caducidadHoras: number; retrasoMinutos: number;
+  recordatorio: boolean; recordatorioHoras: number;
+};
+
 type Metricas = {
   periodo: { desdeMs: number; hastaMs: number; dias: number };
   resumen: {
@@ -459,6 +474,8 @@ export default function SatisfaccionPage() {
               />
             </Bloque>
 
+            <PanelConfig />
+
             {m.limitaciones.length > 0 && (
               <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
                 <h2 className="text-[11px] uppercase tracking-wide text-slate-500">Lo que todavía no se puede segmentar</h2>
@@ -497,5 +514,155 @@ function Tabla({ cabeceras, filas }: { cabeceras: string[]; filas: React.ReactNo
         </tbody>
       </table>
     </div>
+  );
+}
+
+
+/* ── Configuración ───────────────────────────────────────────────────────── */
+
+/**
+ * Los interruptores de Satisfaction, para no tener que entrar por SQL.
+ *
+ * No es una pantalla de administración: es lo mínimo para poder encender esto
+ * de forma controlada y ver por qué no manda nada cuando no manda nada. Lo que
+ * de verdad hace falta antes de encenderlo —plantillas aprobadas, credenciales,
+ * dominio público— NO se toca aquí: vive en variables de entorno y solo se
+ * enseña si está o no está. Un Content SID no se teclea en un navegador.
+ */
+function PanelConfig() {
+  const [config, setConfig] = useState<Config | null>(null);
+  const [tecnico, setTecnico] = useState<EstadoTecnico | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [guardando, setGuardando] = useState(false);
+  const [abierto, setAbierto] = useState(false);
+
+  useEffect(() => {
+    let vivo = true;
+    fetch(`${API_BASE}/api/calidad/config`, { headers: getAdminHeaders() })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Sin permiso para ver la configuración"))))
+      .then((j) => { if (vivo) { setConfig(j.config); setTecnico(j.tecnico); } })
+      .catch(() => { /* Un supervisor sin permiso no ve el bloque, y ya está. */ });
+    return () => { vivo = false; };
+  }, []);
+
+  async function guardar(cambio: Partial<Config>) {
+    setGuardando(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/calidad/config`, {
+        method: "PUT",
+        headers: { ...getAdminHeaders(), "content-type": "application/json" },
+        body: JSON.stringify(cambio),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || "No se ha podido guardar");
+      setConfig(j.config); setTecnico(j.tecnico); setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  if (!config) return null;
+
+  const faltan = tecnico
+    ? [
+        !tecnico.credenciales && "credenciales de WhatsApp",
+        !tecnico.urlPublica && "dominio público",
+        !tecnico.plantillas.driverInitial && "plantilla del conductor",
+        !tecnico.plantillas.customerInitial && "plantilla del cliente",
+        config.recordatorio && !tecnico.plantillas.driverReminder && "plantilla de recordatorio",
+      ].filter(Boolean) as string[]
+    : [];
+
+  return (
+    <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+      <button
+        onClick={() => setAbierto(!abierto)}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <h2 className="text-sm font-black uppercase tracking-wide text-slate-300">
+          Configuración de encuestas
+        </h2>
+        <span className={`text-xs ${config.activo ? "text-emerald-400" : "text-slate-500"}`}>
+          {config.activo ? "Activas" : "Apagadas"} · {abierto ? "ocultar" : "ver"}
+        </span>
+      </button>
+
+      {abierto && (
+        <div className="mt-3 space-y-3">
+          {faltan.length > 0 && (
+            <p className="rounded-lg border border-amber-900 bg-amber-950/30 p-2 text-[11px] text-amber-200">
+              Falta por configurar fuera de esta pantalla: {faltan.join(", ")}. Mientras falte,
+              las encuestas se preparan y se quedan en cola sin enviarse.
+            </p>
+          )}
+          {error && (
+            <p className="rounded-lg border border-rose-900 bg-rose-950/30 p-2 text-[11px] text-rose-200">
+              {error}
+            </p>
+          )}
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Interruptor texto="Satisfaction activo" valor={config.activo} desactivado={guardando}
+                         onCambio={(v) => guardar({ activo: v })} />
+            <Interruptor texto="Encuesta al conductor" valor={config.conductor} desactivado={guardando}
+                         onCambio={(v) => guardar({ conductor: v })} />
+            <Interruptor texto="Encuesta al cliente" valor={config.cliente} desactivado={guardando}
+                         onCambio={(v) => guardar({ cliente: v })} />
+            <Interruptor texto="Recordatorio" valor={config.recordatorio} desactivado={guardando}
+                         onCambio={(v) => guardar({ recordatorio: v })} />
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Numero texto="Retraso del envío (min)" valor={config.retrasoMinutos}
+                    onGuardar={(v) => guardar({ retrasoMinutos: v })} />
+            <Numero texto="Caducidad (horas)" valor={config.caducidadHoras}
+                    onGuardar={(v) => guardar({ caducidadHoras: v })} />
+            <Numero texto="Recordatorio (horas)" valor={config.recordatorioHoras}
+                    onGuardar={(v) => guardar({ recordatorioHoras: v })} />
+          </div>
+
+          <p className="text-[11px] text-slate-600">
+            Los cambios afectan a las encuestas que se creen a partir de ahora. Las ya creadas
+            conservan su hora de envío, su caducidad y su recordatorio: cambiar esto no mueve de
+            fecha lo que ya está en marcha.
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Interruptor({ texto, valor, desactivado, onCambio }: {
+  texto: string; valor: boolean; desactivado?: boolean; onCambio: (v: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 rounded-lg border border-slate-800 px-2.5 py-2 text-xs text-slate-300">
+      <input
+        type="checkbox" checked={valor} disabled={desactivado}
+        onChange={(e) => onCambio(e.target.checked)}
+      />
+      {texto}
+    </label>
+  );
+}
+
+function Numero({ texto, valor, onGuardar }: {
+  texto: string; valor: number; onGuardar: (v: number) => void;
+}) {
+  const [borrador, setBorrador] = useState(String(valor));
+  return (
+    <label className="flex flex-col gap-1 text-[11px] text-slate-500">
+      {texto}
+      <input
+        type="number" value={borrador}
+        onChange={(e) => setBorrador(e.target.value)}
+        // Se guarda al salir del campo, no en cada tecla: si no, teclear «120»
+        // mandaría un guardado con «1» y otro con «12».
+        onBlur={() => { const n = Number(borrador); if (Number.isFinite(n) && n !== valor) onGuardar(n); }}
+        className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100"
+      />
+    </label>
   );
 }

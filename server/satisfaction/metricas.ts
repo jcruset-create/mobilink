@@ -339,22 +339,47 @@ export async function calcularMetricas(
       [GENERADAS, f.desdeMs, f.hastaMs, tenantId, f.clienteId ?? null, f.proveedorTallerId ?? null],
     ),
     /*
-     * ¿Se ha mandado algo de verdad alguna vez?
+     * ── La tasa de respuesta, sobre envíos REALES (1G) ──────────────────
      *
-     * Mientras no exista el envío por WhatsApp no hay ni una entrega, y
-     * entonces «tasa de respuesta» no mide la eficacia de nada: mide cuántos
-     * enlaces se abrieron a mano para probar. Se devuelve `null` y la pantalla
-     * dice que no hay datos de envío, en vez de un 0 % que parecería un
-     * desastre o un 100 % que parecería un éxito.
+     * El denominador NO son las encuestas generadas: son las que salieron de
+     * verdad, o sea aquellas cuyo mensaje INICIAL aceptó el proveedor. Quedan
+     * fuera a propósito:
+     *
+     *  · `SKIPPED` — no se intentó, faltaba la plantilla. Contarlas hundiría la
+     *    tasa por un problema de configuración que no tiene que ver con si la
+     *    gente contesta.
+     *  · `FAILED` y `UNKNOWN` — nunca se supo que llegaran a mandarse.
+     *  · `QUEUED` y `CANCELLED` — ni siquiera se intentaron.
+     *  · Los `REMINDER` — un recordatorio no es otra encuesta. Contarlo
+     *    duplicaría el denominador de quien no contestó a la primera, que es
+     *    justo a quien se le manda.
+     *
+     * Y mientras no exista ni un envío aceptado, la tasa sale `null`: las
+     * respuestas que haya vienen de abrir el enlace a mano para probar, y un
+     * 100 % ahí no mide la eficacia de nada.
      */
     pool.query(
-      `SELECT COUNT(*)::int AS n FROM survey_deliveries WHERE status IN ('SENT','DELIVERED')`),
+      `SELECT COUNT(DISTINCT i.id)::int AS generadas,
+              COUNT(DISTINCT i.id) FILTER (WHERE i.status = 'COMPLETED')::int AS respondidas
+         FROM survey_deliveries d
+         JOIN survey_instances i ON i.id = d."surveyInstanceId"
+         LEFT JOIN roadside_assistances a ON a.id = i."assistanceId"::integer
+        WHERE d."messageType" = 'INITIAL'
+          AND d.status IN ('SENT','DELIVERED','READ')
+          AND i."createdAtMs" >= $1 AND i."createdAtMs" <= $2
+          AND ($3::text IS NULL OR i."tenantId" = $3)
+          AND ($4::int IS NULL OR a."clienteFacturacionId" = $4)
+          AND ($5::int IS NULL OR a."proveedorTallerId" = $5)`,
+      [f.desdeMs, f.hastaMs, tenantId, f.clienteId ?? null, f.proveedorTallerId ?? null],
+    ),
   ]);
 
   const nAsistencias = num(asistencias.rows[0].n);
   const generadas = num(encuestas.rows[0].generadas);
   const respondidas = num(encuestas.rows[0].respondidas);
-  const entregadas = num(entregas.rows[0].n);
+  // Lo que salió de verdad, y de eso cuántas se contestaron.
+  const entregadas = num(entregas.rows[0].generadas);
+  const respondidasDeEnviadas = num(entregas.rows[0].respondidas);
   const hayEntregas = entregadas > 0;
 
   const [driver, customer] = await Promise.all([
@@ -378,11 +403,12 @@ export async function calcularMetricas(
       asistenciasFinalizadas: nAsistencias,
       encuestasGeneradas: generadas,
       respuestas: respondidas,
-      tasaRespuestaPct: hayEntregas ? pct(respondidas, generadas) : null,
+      // Contestadas ENTRE LAS ENVIADAS, no entre las generadas.
+      tasaRespuestaPct: hayEntregas ? pct(respondidasDeEnviadas, entregadas) : null,
       envio: {
         hayEntregas, entregadas,
         motivo: hayEntregas ? null
-          : "Todavía no se envía ninguna encuesta: las respuestas que haya vienen de accesos manuales.",
+          : "Todavía no ha salido ninguna encuesta: las respuestas que haya vienen de accesos manuales.",
       },
       casosAbiertos: calidad.abiertos,
       casosCriticos: calidad.criticos,

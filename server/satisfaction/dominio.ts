@@ -374,6 +374,105 @@ export function evaluarCalidad(valores: Map<string, string | number | string[]>)
 
 /* ── Estados del caso de calidad ─────────────────────────────────────────── */
 
+/* ── 1G · Entregas ───────────────────────────────────────────────────────── */
+
+/**
+ * Los estados de UN INTENTO de envío, que no son los de la encuesta.
+ *
+ * Una encuesta puede tener tres intentos fallidos y un cuarto entregado; si
+ * una sola columna tuviera que contar las dos cosas, no se podría saber ni
+ * cuántas veces se intentó ni en qué quedó cada vez.
+ *
+ *  · `PENDING`  — la fila existe, todavía no se ha llamado a nadie.
+ *  · `SENDING`  — se está hablando con el proveedor ahora mismo.
+ *  · `SENT`     — **Twilio lo aceptó**. No significa que llegara al teléfono.
+ *  · `DELIVERED`— el proveedor confirma que llegó.
+ *  · `READ`     — y que lo abrieron. Twilio lo manda para WhatsApp.
+ *  · `FAILED`   — el proveedor lo rechazó, o se agotaron los intentos.
+ *  · `SKIPPED`  — no se llegó a intentar: faltaba configuración.
+ *  · `UNKNOWN`  — se mandó la petición y no se supo la respuesta. Ver abajo.
+ */
+export const ESTADOS_ENTREGA = [
+  "PENDING", "SENDING", "SENT", "DELIVERED", "READ", "FAILED", "SKIPPED", "UNKNOWN",
+] as const;
+export type EstadoEntrega = (typeof ESTADOS_ENTREGA)[number];
+
+export const TIPOS_MENSAJE = ["INITIAL", "REMINDER"] as const;
+export type TipoMensaje = (typeof TIPOS_MENSAJE)[number];
+
+/**
+ * Qué transiciones acepta un callback del proveedor.
+ *
+ * Los callbacks llegan desordenados: un «sent» tardío puede aparecer después
+ * de un «delivered». Sin esta tabla, ese mensaje haría RETROCEDER el estado y
+ * la ficha diría que algo entregado está solo enviado.
+ *
+ * `UNKNOWN` sí puede avanzar a cualquier cosa: es precisamente el estado del
+ * que se quiere salir en cuanto se sepa algo.
+ */
+export const TRANSICIONES_ENTREGA: Record<EstadoEntrega, readonly EstadoEntrega[]> = {
+  PENDING: ["SENDING", "SENT", "DELIVERED", "READ", "FAILED", "SKIPPED", "UNKNOWN"],
+  SENDING: ["SENT", "DELIVERED", "READ", "FAILED", "SKIPPED", "UNKNOWN"],
+  SENT: ["DELIVERED", "READ", "FAILED"],
+  DELIVERED: ["READ", "FAILED"],
+  READ: [],
+  // Un fallo definitivo no se deshace solo: reintentar crea OTRO intento.
+  FAILED: [],
+  SKIPPED: ["SENDING", "SENT", "FAILED", "UNKNOWN"],
+  UNKNOWN: ["SENT", "DELIVERED", "READ", "FAILED"],
+};
+
+export function transicionEntregaValida(desde: EstadoEntrega, hasta: EstadoEntrega): boolean {
+  if (desde === hasta) return true;
+  return (TRANSICIONES_ENTREGA[desde] ?? []).includes(hasta);
+}
+
+/**
+ * Cómo llama Twilio a cada cosa, y cómo se llama aquí.
+ *
+ * Sacado de los estados que manda el status callback de Twilio. Lo que no esté
+ * en esta lista NO se traduce a nada: inventar un mapeo sería contarse un
+ * cuento sobre un mensaje del que no se sabe nada.
+ */
+export const ESTADO_TWILIO: Record<string, EstadoEntrega> = {
+  queued: "SENT",
+  accepted: "SENT",
+  sending: "SENT",
+  sent: "SENT",
+  delivered: "DELIVERED",
+  read: "READ",
+  failed: "FAILED",
+  undelivered: "FAILED",
+};
+
+/**
+ * Cuánto vale un lease de envío.
+ *
+ * Un worker que reclama una encuesta y muere no puede dejarla bloqueada para
+ * siempre. Diez minutos es holgado para una llamada HTTP que normalmente tarda
+ * menos de un segundo, y corto comparado con la caducidad de la encuesta.
+ */
+export const LEASE_ENVIO_MS = 10 * 60_000;
+
+/**
+ * La escalera de reintentos del envío inicial.
+ *
+ * Nada de reintentar cada cinco minutos para siempre: si el número no existe,
+ * insistir cuatro veces no lo hace existir, y si el proveedor está caído hay
+ * que darle tiempo. Cuatro intentos repartidos en cinco horas cubren una caída
+ * larga sin machacar a nadie.
+ */
+export const ESPERAS_REINTENTO_MS = [15 * 60_000, 60 * 60_000, 4 * 3_600_000] as const;
+export const MAX_INTENTOS_ENVIO = ESPERAS_REINTENTO_MS.length + 1;
+
+/**
+ * Margen mínimo de vida útil para que un recordatorio tenga sentido.
+ *
+ * Mandar «valóranos» con un enlace que caduca en diez minutos es peor que no
+ * mandarlo: el que lo abra tarde se encuentra una página de caducado.
+ */
+export const MARGEN_RECORDATORIO_MS = 6 * 3_600_000;
+
 export const ESTADOS_CASO = [
   "NEW", "IN_REVIEW", "PENDING_PROVIDER", "PENDING_CUSTOMER", "RESOLVED", "CLOSED",
 ] as const;
@@ -417,11 +516,14 @@ export const ACCIONES_CASO = [
 export const CANALES = ["WHATSAPP", "SMS", "EMAIL"] as const;
 export type Canal = (typeof CANALES)[number];
 
-export const TIPOS_MENSAJE = ["INVITATION", "REMINDER"] as const;
-export type TipoMensaje = (typeof TIPOS_MENSAJE)[number];
-
-export const ESTADOS_ENTREGA = ["PENDING", "SENT", "DELIVERED", "FAILED", "SKIPPED"] as const;
-export type EstadoEntrega = (typeof ESTADOS_ENTREGA)[number];
+/*
+ * Los tipos de mensaje y los estados de entrega viven ahora en el bloque «1G ·
+ * Entregas», arriba: allí están junto a las transiciones que los gobiernan y
+ * al mapeo de lo que manda Twilio, que es donde se entienden.
+ *
+ * «INVITATION» se llama «INITIAL» desde 1G. No se ha migrado ninguna fila
+ * porque en 1B no se envió nunca nada: la tabla estaba vacía.
+ */
 
 /* ── Valores por defecto ─────────────────────────────────────────────────── */
 

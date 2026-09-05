@@ -13,9 +13,15 @@ export type TonoEstado = "neutro" | "espera" | "bien" | "aviso" | "apagado";
 /**
  * Cómo se llama cada estado de cara a la oficina.
  *
- * `QUEUED` dice **«en cola»**, no «enviada»: mientras no exista el envío real
- * por WhatsApp, decir que se mandó sería mentir en la ficha. Y `SENT` sigue
- * definido porque llegará, pero hoy no se produce.
+ * Las tres primeras dicen cosas distintas y no son intercambiables:
+ *
+ *  · `QUEUED`    — está lista y esperando turno. Nadie ha mandado nada.
+ *  · `SENT`      — **el proveedor aceptó el envío**. No dice que llegara al
+ *                  teléfono, y por eso no pone «Entregada».
+ *  · `DELIVERED` — el proveedor confirma que llegó al teléfono.
+ *
+ * Llamar «Entregada» a un `SENT` es la confusión fácil, y la que haría que
+ * alguien le dijera a un cliente que recibió un mensaje que quizá no recibió.
  */
 export const ESTADO_ENCUESTA: Record<string, { texto: string; tono: TonoEstado }> = {
   CREATED:   { texto: "Preparada",        tono: "neutro" },
