@@ -358,13 +358,23 @@ function Posicion() {
         <Card
           title="Esperando al banco"
           value={euros(p?.pendienteBancoCentimos ?? 0)}
-          hint="apartado en cierres"
+          hint={
+            p?.repuestoCentimos
+              ? `cierres menos ${euros(p.repuestoCentimos)} repuestos al cajón`
+              : "apartado en cierres"
+          }
+        />
+        <Card
+          title="Remanente en tienda"
+          value={euros(p?.remanenteCentimos ?? 0)}
+          hint="monedas que el banco no admitió"
         />
       </div>
 
       <p className="text-[11px] text-slate-500">
-        Las tres partes suman el total: el dinero que se fue al banco a cambiar o que lleva alguien
-        ya salió del cajón, así que se cuenta una vez y en un solo sitio.
+        Las cuatro partes suman el total: el dinero que se fue al banco a cambiar o que lleva alguien
+        ya salió del cajón, y lo que se sacó del montón para reponer el fondo ya volvió a él, así que
+        cada euro se cuenta una vez y en un solo sitio.
       </p>
 
       <TableWrap>
@@ -568,11 +578,16 @@ function Ingresos() {
                       centroId: filtros.centroId ?? null,
                       registerId: filtros.registerId ?? null,
                     });
+                    const partes = [
+                      r.reenviados > 0 &&
+                        `${r.reenviados} ingreso${r.reenviados === 1 ? "" : "s"}`,
+                      r.reposiciones > 0 &&
+                        `${r.reposiciones} reposici${r.reposiciones === 1 ? "ón" : "ones"} del fondo`,
+                    ].filter(Boolean);
                     setResync(
-                      r.reenviados === 0
-                        ? "No había ninguno que reenviar."
-                        : `${r.reenviados} reenviado${r.reenviados === 1 ? "" : "s"}. ` +
-                          "Tarda unos segundos en verse."
+                      partes.length === 0
+                        ? "No había nada que reenviar."
+                        : `${partes.join(" y ")} reenviado. Tarda unos segundos en verse.`
                     );
                     await cargar();
                   } catch (e) {

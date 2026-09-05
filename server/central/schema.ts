@@ -273,6 +273,40 @@ export async function initCentral(): Promise<void> {
   `);
 
   /*
+   * Las reposiciones del fondo, que RESTAN de lo que espera al banco.
+   *
+   * Cuando una caja se queda sin cambio se repone el fondo con billetes del
+   * montón que iba a ir al banco. Ese dinero vuelve al cajón: deja de estar
+   * esperando. La caja lo descuenta —`cash_float_topups`, con
+   * `bank_deposit_id IS NULL` mientras siga vivo— y Central tiene que
+   * descontarlo igual, o los mismos euros salen contados dos veces: en el
+   * cajón, porque el `MANUAL_IN` los metió, y esperando al banco, porque el
+   * cierre que los apartó sigue sin conciliar.
+   *
+   * `deposit_id` es el interruptor: NULL mientras reste, y con id cuando un
+   * ingreso se lo lleva —ahí el cierre pasa a conciliado y la resta ya no
+   * hace falta—. Anular el ingreso lo devuelve a NULL, igual que en la caja.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS central_float_topups (
+      topup_id INTEGER PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      centro_id UUID,
+      register_id INTEGER,
+      importe_centimos BIGINT NOT NULL DEFAULT 0,
+      fecha DATE,
+      -- NULL = todavia resta del monton. Con id = ya se lo llevo ese ingreso.
+      deposit_id INTEGER,
+      creado_en_ms BIGINT,
+      actualizado_en_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS central_topups_pendientes_idx
+      ON central_float_topups(empresa_id) WHERE deposit_id IS NULL;
+    CREATE INDEX IF NOT EXISTS central_topups_caja_idx
+      ON central_float_topups(register_id);
+  `);
+
+  /*
    * El cambio que tiene cada caja, pieza a pieza.
    *
    * Sale del último arqueo, que es la única foto FIABLE de qué monedas hay en

@@ -58,7 +58,16 @@ export type TipoEvento =
    * quién está mientras tanto.
    */
   | "TRANSIT_OPENED"
-  | "TRANSIT_SETTLED";
+  | "TRANSIT_SETTLED"
+  /*
+   * Se ha repuesto el fondo del cajón con dinero del montón que esperaba al
+   * banco. Necesita evento propio por la misma razón que los tránsitos: se
+   * asienta como un `MANUAL_IN` cualquiera, así que del movimiento de efectivo
+   * no se puede deducir. Y sin él, Central cuenta esos euros DOS VECES —en el
+   * cajón, porque el `MANUAL_IN` los mete, y esperando al banco, porque el
+   * cierre que los apartó sigue sin conciliar.
+   */
+  | "FLOAT_TOPUP_REGISTERED";
 
 /** Estados de la cola. La lista vive aquí y en el CHECK de `schema.ts`. */
 export type EstadoEvento =

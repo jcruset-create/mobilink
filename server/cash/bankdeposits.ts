@@ -536,11 +536,14 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
     );
     // Y las reposiciones de fondo, por lo mismo: ya han descontado de ESTE
     // montón y no deben volver a descontar del siguiente.
-    await client.query(
+    const { rows: repuestas } = await client.query(
       `UPDATE cash_float_topups SET bank_deposit_id = $1
-        WHERE register_id = $2 AND empresa_id = $3 AND bank_deposit_id IS NULL`,
+        WHERE register_id = $2 AND empresa_id = $3 AND bank_deposit_id IS NULL
+        RETURNING id`,
       [depositId, e.registerId, ctx.empresaId]
     );
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    const topups = repuestas.map((r: any) => Number(r.id));
 
     cierres.sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : a.sessionId - b.sessionId));
 
@@ -581,6 +584,11 @@ export async function crearIngreso(ctx: Contexto, e: EntradaIngreso): Promise<In
         fecha: fechaIso(creado[0].fecha_ingreso) ?? null,
         cierres: cierres.map((c) => c.sessionId),
         origen: cierres,
+        /*
+         * Y las reposiciones que este ingreso se lleva. Sin ellas, Central
+         * las seguiria restando del monton siguiente, que ya no las tiene.
+         */
+        topups,
       },
     });
 
@@ -830,8 +838,9 @@ export async function anularIngreso(
       `UPDATE cash_deposit_swaps SET bank_deposit_id = NULL WHERE bank_deposit_id = $1`,
       [ingresoId]
     );
-    await client.query(
-      `UPDATE cash_float_topups SET bank_deposit_id = NULL WHERE bank_deposit_id = $1`,
+    const { rows: liberadas } = await client.query(
+      `UPDATE cash_float_topups SET bank_deposit_id = NULL WHERE bank_deposit_id = $1
+        RETURNING id`,
       [ingresoId]
     );
     await client.query(
@@ -880,6 +889,9 @@ export async function anularIngreso(
           importeCentimos: Number(l.importe_centimos),
         })),
         motivo: motivo.trim(),
+        // Las reposiciones vuelven a restar: su dinero esta otra vez en el
+        // monton que reaparece.
+        topups: liberadas.map((r: any) => Number(r.id)),
       },
     });
 
@@ -1253,13 +1265,19 @@ export async function registrarCanje(
  * Los anulados van en dos pasos, alta y anulación, porque es como ocurrieron:
  * mandar solo el segundo dejaría en Central una fila que nunca se dio de alta.
  *
+ * Van también las REPOSICIONES DEL FONDO, y primero: son las que restan del
+ * montón que espera al banco, y sin ellas Central sigue contando en dos sitios
+ * a la vez los billetes que volvieron al cajón. Cada una viaja con el ingreso
+ * que se la llevó, si es que alguno se la llevó ya, para no revivir como
+ * pendiente algo que se ingresó hace meses.
+ *
  * Devuelve cuántos ha reenviado, que es lo que la pantalla necesita para poder
  * decir algo distinto de «hecho».
  */
 export async function reemitirIngresos(
   ctx: Contexto,
   filtros: { centroId?: string | null; registerId?: number | null } = {}
-): Promise<{ reenviados: number }> {
+): Promise<{ reenviados: number; reposiciones: number }> {
   const cond: string[] = ["d.empresa_id = $1"];
   const params: unknown[] = [ctx.empresaId];
   if (filtros.centroId) {
@@ -1281,6 +1299,64 @@ export async function reemitirIngresos(
     params
   );
 
+  /*
+   * Las reposiciones, con el mismo filtro pero por su propia tabla: una que
+   * todavía no ha entrado en ningún ingreso no cuelga de ninguno, y filtrando
+   * por ingresos se quedaría fuera justo la que hace falta.
+   */
+  const condT: string[] = ["t.empresa_id = $1"];
+  const paramsT: unknown[] = [ctx.empresaId];
+  if (filtros.centroId) {
+    paramsT.push(filtros.centroId);
+    condT.push(`r.centro_id = $${paramsT.length}`);
+  }
+  if (filtros.registerId) {
+    paramsT.push(filtros.registerId);
+    condT.push(`t.register_id = $${paramsT.length}`);
+  }
+  const { rows: topups } = await pool.query<any>(
+    `SELECT t.id, t.register_id, t.importe_centimos, t.bank_deposit_id,
+            t.created_at_ms, r.centro_id
+       FROM cash_float_topups t
+       JOIN cash_registers r ON r.id = t.register_id
+      WHERE ${condT.join(" AND ")}
+      ORDER BY t.id`,
+    paramsT
+  );
+
+  let reposiciones = 0;
+  for (const t of topups) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`SELECT id FROM cash_registers WHERE id = $1 FOR UPDATE`, [
+        Number(t.register_id),
+      ]);
+      await emitirEvento(client, {
+        empresaId: ctx.empresaId,
+        centroId: (t.centro_id ?? null) as string | null,
+        registerId: Number(t.register_id),
+        agregado: { tipo: "REGISTER" as const, id: Number(t.register_id) },
+        actorUserId: ctx.userId,
+        tipo: "FLOAT_TOPUP_REGISTERED",
+        ocurridoEnMs: Number(t.created_at_ms ?? Date.now()),
+        datos: {
+          topupId: Number(t.id),
+          importeCentimos: Number(t.importe_centimos),
+          fecha: new Date(Number(t.created_at_ms ?? Date.now())).toISOString().slice(0, 10),
+          depositId: t.bank_deposit_id == null ? null : Number(t.bank_deposit_id),
+        },
+      });
+      await client.query("COMMIT");
+      reposiciones++;
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
   let reenviados = 0;
   for (const d of rows) {
     const client = await pool.connect();
@@ -1293,6 +1369,29 @@ export async function reemitirIngresos(
         agregado: { tipo: "REGISTER" as const, id: Number(d.register_id) },
         actorUserId: ctx.userId,
       };
+
+      /*
+       * Los cierres que componen el ingreso y las reposiciones que se llevó.
+       * Sin ellos el reenvío deja el ingreso proyectado pero los cierres sin
+       * conciliar, y la posición de la red sigue contando como pendiente un
+       * dinero que está en el banco: justo lo que se venía a reparar.
+       */
+      const { rows: lineas } = await pool.query<any>(
+        `SELECT l.session_id, l.importe_centimos, s.fecha
+           FROM cash_bank_deposit_sessions l
+           JOIN cash_sessions s ON s.id = l.session_id
+          WHERE l.deposit_id = $1
+          ORDER BY s.fecha, s.id`,
+        [Number(d.id)]
+      );
+      const origen = lineas.map((l: any) => ({
+        sessionId: Number(l.session_id),
+        fecha: fechaIso(l.fecha),
+        importeCentimos: Number(l.importe_centimos),
+      }));
+      const suyas = topups
+        .filter((t: any) => Number(t.bank_deposit_id) === Number(d.id))
+        .map((t: any) => Number(t.id));
 
       await emitirEvento(client, {
         ...comun,
@@ -1307,6 +1406,9 @@ export async function reemitirIngresos(
           remanenteNuevoCentimos: Number(d.remanente_nuevo_centimos ?? 0),
           referencia: d.referencia ?? null,
           fecha: fechaIso(d.fecha_ingreso),
+          cierres: origen.map((o) => o.sessionId),
+          origen,
+          topups: suyas,
         },
       });
 
@@ -1319,6 +1421,19 @@ export async function reemitirIngresos(
             depositId: Number(d.id),
             importeCentimos: Number(d.importe_centimos),
             motivo: d.anulado_motivo ?? null,
+            /*
+             * Los cierres vuelven a pendientes, y las reposiciones a restar.
+             * Al anular, `bank_deposit_id` se puso a NULL, así que las suyas
+             * ya no se reconocen por el ingreso: son las que hoy están
+             * pendientes en esa caja.
+             */
+            cierres: origen.map((o) => o.sessionId),
+            origen,
+            topups: topups
+              .filter(
+                (t: any) => t.bank_deposit_id == null && Number(t.register_id) === Number(d.register_id)
+              )
+              .map((t: any) => Number(t.id)),
           },
         });
       }
@@ -1340,11 +1455,11 @@ export async function reemitirIngresos(
     accion: "central.ingresos.reemitir",
     entidad: "cash_bank_deposits",
     entidadId: String(filtros.registerId ?? filtros.centroId ?? "todos"),
-    detalle: { reenviados, filtros },
+    detalle: { reenviados, reposiciones, filtros },
     ip: ctx.ip,
   });
 
-  return { reenviados };
+  return { reenviados, reposiciones };
 }
 
 /** Un canje ya hecho que todavía espera a que se registre el ingreso. */
@@ -1778,21 +1893,65 @@ export async function registrarReposicion(
     concepto: "Reposición del fondo con dinero pendiente de ingresar",
   });
 
-  await pool.query(
-    `INSERT INTO cash_float_topups
-       (empresa_id, register_id, operation_id, importe_centimos, deficit_centimos,
-        creado_por, created_at_ms)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [
-      ctx.empresaId,
-      e.registerId,
-      operacion.operacionId,
-      importe,
-      deficit.deficitCentimos,
-      ctx.userId,
-      Date.now(),
-    ]
-  );
+  /*
+   * La fila y su evento van juntos, en una transaccion.
+   *
+   * El `MANUAL_IN` de arriba ya le ha contado a Central que entra dinero en el
+   * cajon. Si la fila se escribiera sin avisar, Central se quedaria contando
+   * esos mismos euros tambien como pendientes de ir al banco: en el cajon por
+   * la operacion, esperando al banco por el cierre que los aparto. Dos veces.
+   *
+   * Fuera de la transaccion de `registrarOperacion` a proposito: esa ya cerro,
+   * y meter la reposicion dentro obligaria a partir `registrarOperacion` por la
+   * mitad para colar un paso ajeno. Si esta fallara, el `MANUAL_IN` queda
+   * asentado y el montón sigue creyendo que tiene ese dinero, que es el estado
+   * que la pantalla de ingresos enseña y una persona puede corregir; al reves
+   * —evento sin dinero— no se podria.
+   */
+  const ahora = Date.now();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: fila } = await client.query(
+      `INSERT INTO cash_float_topups
+         (empresa_id, register_id, operation_id, importe_centimos, deficit_centimos,
+          creado_por, created_at_ms)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id`,
+      [
+        ctx.empresaId,
+        e.registerId,
+        operacion.operacionId,
+        importe,
+        deficit.deficitCentimos,
+        ctx.userId,
+        ahora,
+      ]
+    );
+    await client.query(`SELECT id FROM cash_registers WHERE id = $1 FOR UPDATE`, [e.registerId]);
+    await emitirEvento(client, {
+      empresaId: ctx.empresaId,
+      centroId: await centroDeCaja(client, e.registerId),
+      registerId: e.registerId,
+      agregado: { tipo: "REGISTER", id: e.registerId },
+      tipo: "FLOAT_TOPUP_REGISTERED",
+      ocurridoEnMs: ahora,
+      actorUserId: ctx.userId,
+      datos: {
+        topupId: Number(fila[0].id),
+        operacionId: operacion.operacionId,
+        importeCentimos: importe,
+        fecha: new Date(ahora).toISOString().slice(0, 10),
+        depositId: null,
+      },
+    });
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 
   await registrarAuditoria({
     empresaId: ctx.empresaId,
