@@ -4,13 +4,22 @@
 # Podfile-ios), con dos cosas encima. Se versiona en vez de dejar que se genere
 # sola precisamente por la segunda.
 #
-# ── 13.0 y no 12.0 ──────────────────────────────────────────────────────────
+# ── 15.0, y de dónde sale ese número ────────────────────────────────────────
 #
-# Flutter 3.35 publica sus pods con «deployment_target = 13.0». Con el proyecto
-# en 12.0, la app apunta más bajo que sus propias dependencias: Xcode avisa y,
-# según el pod, el enlazado falla. Se fija aquí y en el proyecto, que tienen que
-# decir lo mismo.
-platform :ios, '13.0'
+# Lo exige el motor de Flutter, no un capricho: la versión fijada en
+# codemagic.yaml (3.47.2) publica su pod con «s.ios.deployment_target = '15.0'»
+# —está en packages/flutter_tools/bin/podhelper.rb— y su propia plantilla de
+# Podfile trae «platform :ios, '15.0'».
+#
+# Los plugins de la app se conforman con mucho menos: el que más pide es 12.0
+# (video_player, shared_preferences, permission_handler, path_provider). Así que
+# el mínimo no sube para callar a CocoaPods, sube porque es lo que el motor
+# necesita para funcionar.
+#
+# Tiene que decir lo mismo que Runner.xcodeproj/project.pbxproj. Si no, o
+# CocoaPods no resuelve, o la app apunta más bajo que sus dependencias y falla
+# el enlazado.
+platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
