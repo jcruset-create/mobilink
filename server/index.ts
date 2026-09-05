@@ -62,6 +62,7 @@ import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
 import { initExcepciones } from "./excepciones/schema.ts";
 import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { initSatisfaction } from "./satisfaction/schema.ts";
+import { startSatisfactionWorker } from "./satisfaction/worker.ts";
 import {
   engancharPosteriores, prepararRespuestaTrasCambio,
 } from "./cierre/finalizacion.ts";
@@ -18675,6 +18676,9 @@ initDb()
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
       startDispatchWorker(); // reintentos de subcontratación a plataformas externas
       startCorreoWorker(); // recordatorios de documentación pendiente
+      // Satisfaction: encola lo que ya puede enviarse y caduca lo vencido.
+      // Todavía no manda nada; el envío real llega con WhatsApp.
+      startSatisfactionWorker();
       startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
       startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
       // Mobilink Cash: eventos de dominio hacia MC Central. Sin transporte

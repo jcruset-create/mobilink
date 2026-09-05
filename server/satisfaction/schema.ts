@@ -72,9 +72,25 @@ export async function initSatisfaction(): Promise<void> {
        * El token NUNCA en claro: solo su sha256. Quien pueda leer la base no
        * puede entrar a responder encuestas ajenas, y una copia de seguridad
        * filtrada no reparte accesos.
+       *
+       * Y es NULL hasta que se emite. Crear la encuesta y emitir su token son
+       * dos momentos distintos: la encuesta nace al cerrar la asistencia, el
+       * token se emite justo antes de mandar el mensaje. Guardar solo el hash
+       * significa que el valor en claro existe una vez y se pierde; si se
+       * generara al crear, media hora después —cuando toca enviar— ya no
+       * habría enlace que poner en el WhatsApp.
        */
-      "tokenHash" TEXT NOT NULL,
+      "tokenHash" TEXT,
+      "tokenIssuedAtMs" BIGINT,
       "expiresAtMs" BIGINT NOT NULL,
+
+      /*
+       * A partir de cuándo se puede mandar. Se calcula y se GUARDA al crear,
+       * no se deriva de la configuración en el momento de enviar: si mañana
+       * alguien cambia el retraso global, una encuesta creada hoy no puede
+       * moverse de hora por eso.
+       */
+      "sendAfterMs" BIGINT NOT NULL DEFAULT 0,
 
       "createdAtMs" BIGINT NOT NULL,
       "queuedAtMs" BIGINT,
@@ -100,17 +116,40 @@ export async function initSatisfaction(): Promise<void> {
     -- Por aquí entra la ficha: todas las encuestas de una asistencia.
     CREATE INDEX IF NOT EXISTS idx_survey_instances_asistencia
       ON survey_instances ("tenantId", "sourceSystem", "assistanceId");
-    -- Por aquí entrará el worker de 1C: lo que toca mandar.
-    CREATE INDEX IF NOT EXISTS idx_survey_instances_estado
-      ON survey_instances (status, "createdAtMs");
+    -- Por aquí entra el worker: lo que ya ha cumplido su espera. Parcial,
+    -- porque solo se busca entre las que todavía no se han encolado.
+    CREATE INDEX IF NOT EXISTS idx_survey_instances_maduras
+      ON survey_instances ("sendAfterMs")
+      WHERE status = 'CREATED';
     -- Y por aquí el que caduca: solo lo que sigue vivo.
     CREATE INDEX IF NOT EXISTS idx_survey_instances_caducidad
       ON survey_instances ("expiresAtMs")
       WHERE status NOT IN ('COMPLETED','EXPIRED','CANCELLED');
-    -- La miniweb de 1D busca EXACTAMENTE por aquí, y tiene que ser único: dos
-    -- instancias con el mismo hash harían ambigua la resolución del token.
+    /*
+     * La miniweb de 1D busca EXACTAMENTE por aquí, y tiene que ser único: dos
+     * instancias con el mismo hash harían ambigua la resolución del token.
+     *
+     * Parcial, porque una encuesta sin emitir no tiene hash y no debe ocupar
+     * sitio en el índice ni chocar con las demás sin emitir.
+     */
     CREATE UNIQUE INDEX IF NOT EXISTS idx_survey_instances_token
-      ON survey_instances ("tokenHash");
+      ON survey_instances ("tokenHash") WHERE "tokenHash" IS NOT NULL;
+  `);
+
+  /*
+   * Para las bases que ya tenían la tabla de la fase 1B: el token pasa a ser
+   * opcional y aparecen las dos columnas nuevas. `IF NOT EXISTS` y `DROP NOT
+   * NULL` son idempotentes, así que esto se puede ejecutar en cada arranque.
+   */
+  await db.query(`
+    ALTER TABLE survey_instances ALTER COLUMN "tokenHash" DROP NOT NULL;
+    ALTER TABLE survey_instances ADD COLUMN IF NOT EXISTS "tokenIssuedAtMs" BIGINT;
+    ALTER TABLE survey_instances ADD COLUMN IF NOT EXISTS "sendAfterMs" BIGINT NOT NULL DEFAULT 0;
+  `);
+  await db.query(`
+    DROP INDEX IF EXISTS idx_survey_instances_token;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_survey_instances_token
+      ON survey_instances ("tokenHash") WHERE "tokenHash" IS NOT NULL;
   `);
 
   /* ── Respuestas ───────────────────────────────────────────────────────── */

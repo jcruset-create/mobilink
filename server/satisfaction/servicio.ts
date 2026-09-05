@@ -1,28 +1,21 @@
 /**
  * Satisfaction: servicio.
  *
- * ── El problema del token en una creación idempotente ───────────────────────
+ * ── Crear la encuesta y emitir su token son dos momentos distintos ──────────
  *
- * Crear una encuesta devuelve el token en claro UNA vez: en la base solo queda
- * su sha256. Eso choca de frente con la idempotencia. Si la creación se repite
- * —el worker reintenta, dos peticiones a la vez— la segunda no puede devolver
- * un token: generar uno nuevo daría un enlace que no coincide con el hash
- * guardado, y el conductor recibiría un WhatsApp con una dirección que no abre
- * nada. Ese es exactamente el fallo silencioso que hay que evitar.
+ * En la base solo vive el sha256 del token, así que el valor en claro existe
+ * una vez y se pierde. Si se generara al crear la instancia —al cerrar la
+ * asistencia— media hora después, cuando el worker va a mandar el WhatsApp, ya
+ * no habría enlace que poner: solo un hash con el que no se puede construir
+ * nada.
  *
- * Por eso `crearSurveyInstance` devuelve un resultado que distingue los dos
- * casos y **solo lleva token cuando de verdad ha insertado**:
+ * Por eso `crearSurveyInstance` NO genera token. La instancia nace sin él
+ * (`tokenHash` a NULL) y `emitirToken` lo crea justo antes del envío,
+ * devolviéndolo una vez a quien va a redactar el mensaje.
  *
- *   { estado: "created",        instancia, token }   ← el token, una vez
- *   { estado: "already_exists", instancia }          ← sin token, a propósito
- *
- * Quien llame tiene que tratar los dos. En 1C el envío solo ocurre en el
- * `created`, que es cuando hay enlace que mandar; si la instancia ya existía,
- * o ya se mandó o ya hay una entrega registrada que mirar.
- *
- * Y si hiciera falta reenviar una encuesta cuyo token se perdió, la respuesta
- * no es «genera otro y ya»: es `rotarToken`, que reescribe el hash a propósito
- * e invalida el enlace anterior. Explícito, y con su propia línea de auditoría.
+ * Eso resuelve de paso el problema que tenía la creación idempotente: ya no
+ * hay nada que devolver «solo la primera vez», así que crear dos veces es
+ * sencillamente crear dos veces y la segunda no miente sobre nada.
  */
 
 import { createHash, randomBytes } from "crypto";
@@ -81,13 +74,17 @@ export type SurveyInstance = {
   templateVersion: number;
   status: EstadoEncuesta;
   expiresAtMs: number;
+  sendAfterMs: number;
   createdAtMs: number;
   completedAtMs: number | null;
+  /** `true` cuando ya se ha emitido el token. Nunca se expone el valor. */
+  tokenEmitido: boolean;
 };
 
-export type ResultadoCreacion =
-  | { estado: "created"; instancia: SurveyInstance; token: string }
-  | { estado: "already_exists"; instancia: SurveyInstance };
+export type ResultadoCreacion = {
+  estado: "created" | "already_exists";
+  instancia: SurveyInstance;
+};
 
 /** Una fila de `pg`: valores sin tipar hasta que se convierten. */
 type Fila = Record<string, unknown>;
@@ -103,14 +100,17 @@ function aInstancia(f: Fila): SurveyInstance {
     templateVersion: Number(f.templateVersion),
     status: String(f.status) as EstadoEncuesta,
     expiresAtMs: Number(f.expiresAtMs),
+    sendAfterMs: Number(f.sendAfterMs ?? 0),
     createdAtMs: Number(f.createdAtMs),
     completedAtMs: f.completedAtMs == null ? null : Number(f.completedAtMs),
+    tokenEmitido: f.tokenEmitido === true,
   };
 }
 
 const CAMPOS = `id, "sourceSystem", "tenantId", "assistanceId", "recipientRole",
                 "templateId", "templateVersion", status, "expiresAtMs",
-                "createdAtMs", "completedAtMs"`;
+                "sendAfterMs", "createdAtMs", "completedAtMs",
+                ("tokenHash" IS NOT NULL) AS "tokenEmitido"`;
 
 async function enTransaccion<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
@@ -160,7 +160,9 @@ export async function plantillaActiva(
 export async function crearSurveyInstance(p: {
   ambito: Ambito;
   recipientRole: RolDestinatario;
+  /** De la configuración efectiva, ya congelada por quien llama. */
   caducidadMs?: number;
+  retrasoMs?: number;
   ahoraMs?: number;
 }): Promise<ResultadoCreacion> {
   const ahora = p.ahoraMs ?? Date.now();
@@ -183,29 +185,30 @@ export async function crearSurveyInstance(p: {
     );
   }
 
-  const token = generarToken();
+  /*
+   * Las dos fechas se calculan AHORA y se guardan. Derivarlas después de la
+   * configuración global significaría que cambiar el retraso o la caducidad
+   * movería de sitio encuestas ya creadas, incluidas las que ya se mandaron.
+   */
   const expiresAtMs = ahora + (p.caducidadMs ?? CADUCIDAD_POR_DEFECTO_MS);
+  const sendAfterMs = ahora + (p.retrasoMs ?? 0);
 
   const insertado = await pool.query(
     `INSERT INTO survey_instances
        ("sourceSystem", "tenantId", "assistanceId", "recipientRole",
-        "templateId", "templateVersion", status, "tokenHash", "expiresAtMs", "createdAtMs")
+        "templateId", "templateVersion", status, "expiresAtMs", "sendAfterMs", "createdAtMs")
      VALUES ($1,$2,$3,$4,$5,$6,'CREATED',$7,$8,$9)
      ON CONFLICT ("sourceSystem", "assistanceId", "recipientRole") DO NOTHING
      RETURNING ${CAMPOS}`,
     [sourceSystem, tenantId, assistanceId, p.recipientRole,
-     plantilla.id, plantilla.version, hashToken(token), expiresAtMs, ahora],
+     plantilla.id, plantilla.version, expiresAtMs, sendAfterMs, ahora],
   );
 
   if (insertado.rows.length) {
-    return { estado: "created", instancia: aInstancia(insertado.rows[0]), token };
+    return { estado: "created", instancia: aInstancia(insertado.rows[0]) };
   }
 
-  /*
-   * Otro proceso ganó la carrera entre el SELECT y el INSERT. Se devuelve la
-   * suya SIN token: el token que acabamos de generar no es el que está
-   * guardado, y devolverlo daría un enlace muerto.
-   */
+  // Otro proceso ganó la carrera entre el SELECT y el INSERT: la suya vale.
   const carrera = await pool.query(
     `SELECT ${CAMPOS} FROM survey_instances
       WHERE "sourceSystem" = $1 AND "assistanceId" = $2 AND "recipientRole" = $3`,
@@ -214,12 +217,57 @@ export async function crearSurveyInstance(p: {
   return { estado: "already_exists", instancia: aInstancia(carrera.rows[0]) };
 }
 
+/* ── Emisión del token ───────────────────────────────────────────────────── */
+
+export type ResultadoToken =
+  | { estado: "emitido"; token: string }
+  | { estado: "ya_emitido" }
+  | { estado: "no_procede"; motivo: "completada" | "caducada" | "cancelada" };
+
+/**
+ * Emite el token público de una encuesta y lo devuelve UNA vez.
+ *
+ * Se llama justo antes de construir el mensaje, no al crear la encuesta: en la
+ * base solo queda el sha256, así que el valor en claro hay que usarlo en el
+ * momento o se pierde.
+ *
+ * **No reemite.** Si ya hay un hash, contesta `ya_emitido` y no devuelve nada.
+ * Es lo que impide que un reintento del worker genere un enlace nuevo y deje
+ * muerto el que ya se mandó por WhatsApp. Para el caso legítimo de reenvío
+ * está `rotarToken`, que es explícito y dice que invalida el anterior.
+ *
+ * El `WHERE "tokenHash" IS NULL` hace la emisión atómica: si dos procesos lo
+ * intentan a la vez, solo uno actualiza la fila y el otro se lleva
+ * `ya_emitido`, que es exactamente lo que debe pasar.
+ */
+export async function emitirToken(
+  instanceId: number, ambito: Ambito, ahoraMs = Date.now(),
+): Promise<ResultadoToken> {
+  const actual = await instanciaDelAmbito(instanceId, ambito);
+  if (!actual) throw new ErrorSatisfaction("instancia_no_encontrada", "Encuesta no encontrada.");
+  if (actual.status === "COMPLETED") return { estado: "no_procede", motivo: "completada" };
+  if (actual.status === "CANCELLED") return { estado: "no_procede", motivo: "cancelada" };
+  if (actual.expiresAtMs <= ahoraMs) return { estado: "no_procede", motivo: "caducada" };
+  if (actual.tokenEmitido) return { estado: "ya_emitido" };
+
+  const token = generarToken();
+  const r = await pool.query(
+    `UPDATE survey_instances
+        SET "tokenHash" = $2, "tokenIssuedAtMs" = $3
+      WHERE id = $1 AND "tokenHash" IS NULL
+      RETURNING id`,
+    [instanceId, hashToken(token), ahoraMs],
+  );
+  return r.rows.length ? { estado: "emitido", token } : { estado: "ya_emitido" };
+}
+
 /**
  * Cambia el token de una encuesta y devuelve el nuevo.
  *
- * Invalida el enlace anterior a propósito. Existe para el único caso legítimo
- * —hay que reenviar y el token original se perdió— y es explícito para que
- * nadie lo haga sin querer desde una creación repetida.
+ * **Invalida el enlace anterior**, y por eso está separado de `emitirToken`:
+ * ése no reemite nunca, precisamente para que un reintento no deje muerto un
+ * enlace ya enviado. Rotar es una decisión, y quien la toma sabe que el
+ * WhatsApp anterior deja de funcionar.
  */
 export async function rotarToken(instanceId: number, ambito: Ambito): Promise<string> {
   const token = generarToken();
