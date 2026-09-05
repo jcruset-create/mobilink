@@ -45,6 +45,7 @@ import { adaptadorTwilio, type Adaptador } from "./adaptadorWhatsApp.ts";
 import { configEfectiva } from "./config.ts";
 import { emitirToken, tokenDe } from "./servicio.ts";
 import { urlDeCallback, urlDeValoracion } from "./urlPublica.ts";
+import { unirAsistencia } from "./sqlAsistencia.ts";
 
 /* ── Tipos ───────────────────────────────────────────────────────────────── */
 
@@ -84,7 +85,7 @@ const CAMPOS = `i.id, i."sourceSystem", i."tenantId", i."assistanceId", i."recip
 
 const DESDE = `FROM survey_instances i
                LEFT JOIN roadside_assistances a
-                      ON i."sourceSystem" = 'assist' AND a.id = i."assistanceId"::integer`;
+                      ${unirAsistencia("i", true)}`;
 
 /**
  * Se lleva hasta `tope` encuestas listas para mandar y las marca como suyas.

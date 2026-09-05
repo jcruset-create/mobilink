@@ -20,6 +20,7 @@
  */
 
 import pool from "../db.ts";
+import { unirAsistencia } from "./sqlAsistencia.ts";
 
 /* ── Tipos ───────────────────────────────────────────────────────────────── */
 
@@ -188,7 +189,7 @@ async function metricasDeRol(
               BOOL_OR(x."questionCode" = 'comment' AND x.value <> '')                     AS "conComentario"
          FROM survey_responses r
          JOIN survey_instances i ON i.id = r."surveyInstanceId"
-         LEFT JOIN roadside_assistances a ON a.id = i."assistanceId"::integer
+         LEFT JOIN roadside_assistances a ${unirAsistencia("i")}
          JOIN survey_answers x ON x."surveyResponseId" = r.id
         WHERE ${cond.join(" AND ")}
         GROUP BY r.id
@@ -251,7 +252,7 @@ async function metricasDeCalidad(
   if (f.proveedorTallerId) mas(`a."proveedorTallerId" = ?`, f.proveedorTallerId);
 
   const DE = `FROM quality_cases q
-              LEFT JOIN roadside_assistances a ON a.id = q."assistanceId"::integer
+              LEFT JOIN roadside_assistances a ${unirAsistencia("q")}
               WHERE ${cond.join(" AND ")}`;
 
   const g = await pool.query(
@@ -330,7 +331,7 @@ export async function calcularMetricas(
       `SELECT COUNT(*)::int AS generadas,
               COUNT(*) FILTER (WHERE i.status = 'COMPLETED')::int AS respondidas
          FROM survey_instances i
-         LEFT JOIN roadside_assistances a ON a.id = i."assistanceId"::integer
+         LEFT JOIN roadside_assistances a ${unirAsistencia("i")}
         WHERE i.status = ANY($1)
           AND i."createdAtMs" >= $2 AND i."createdAtMs" <= $3
           AND ($4::text IS NULL OR i."tenantId" = $4)
@@ -363,7 +364,7 @@ export async function calcularMetricas(
               COUNT(DISTINCT i.id) FILTER (WHERE i.status = 'COMPLETED')::int AS respondidas
          FROM survey_deliveries d
          JOIN survey_instances i ON i.id = d."surveyInstanceId"
-         LEFT JOIN roadside_assistances a ON a.id = i."assistanceId"::integer
+         LEFT JOIN roadside_assistances a ${unirAsistencia("i")}
         WHERE d."messageType" = 'INITIAL'
           AND d.status IN ('SENT','DELIVERED','READ')
           AND i."createdAtMs" >= $1 AND i."createdAtMs" <= $2
@@ -450,7 +451,7 @@ async function agregarMotivos(
     `SELECT m.motivo, COUNT(*)::int AS n
        FROM survey_responses r
        JOIN survey_instances i ON i.id = r."surveyInstanceId"
-       LEFT JOIN roadside_assistances a ON a.id = i."assistanceId"::integer
+       LEFT JOIN roadside_assistances a ${unirAsistencia("i")}
        JOIN survey_answers x ON x."surveyResponseId" = r.id AND x."questionCode" = 'negative_reasons'
        CROSS JOIN LATERAL jsonb_array_elements_text(x.value::jsonb) AS m(motivo)
       WHERE r."completedAtMs" >= $1 AND r."completedAtMs" <= $2

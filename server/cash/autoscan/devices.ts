@@ -53,6 +53,50 @@ export const UMBRAL_ONLINE_MS = 5 * 60_000;
 
 const hash = (valor: string) => createHash("sha256").update(valor).digest("hex");
 
+/**
+ * ¿Tiene esta empresa la licencia de caja al día?
+ *
+ * Es un puerto enchufable, como el verificador de `reauth.ts`, y por la misma
+ * razón: el comprobador de verdad pregunta por `app_licencia_activa()`, una
+ * función que la base de las pruebas no tiene. Sin esto, la suite entera
+ * dependería de una pieza del SaaS que no es lo que se está probando.
+ *
+ * No hay valor por defecto a propósito. Un puerto sin registrar hace fallar la
+ * activación, que es lo correcto: la alternativa —dejar pasar cuando nadie ha
+ * dicho nada— convierte un despiste de montaje en una puerta abierta.
+ */
+export type ComprobadorDeLicencia = (empresaId: string) => Promise<boolean>;
+
+let comprobador: ComprobadorDeLicencia | null = null;
+
+export function registrarComprobadorDeLicencia(c: ComprobadorDeLicencia | null): void {
+  comprobador = c;
+}
+
+/** Lanza si la empresa no puede usar el módulo. Usado por las dos vías de máquina. */
+export async function exigirLicencia(empresaId: string): Promise<void> {
+  if (!comprobador) {
+    throw new ErrorCaja(
+      "LICENCIA_NO_COMPROBABLE",
+      "No se ha podido comprobar la licencia del módulo.",
+      503
+    );
+  }
+  if (!(await comprobador(empresaId))) {
+    /*
+     * 403 y no 401: la credencial del escáner es buena, lo que no vale es la
+     * licencia. Que el agente pueda distinguirlo es lo que evita que borre su
+     * credencial y obligue a reinstalar cuando lo único que pasa es que hay
+     * una factura pendiente.
+     */
+    throw new ErrorCaja(
+      "LICENCIA_CADUCADA",
+      "El módulo de caja no tiene licencia vigente para esta empresa.",
+      403
+    );
+  }
+}
+
 /** Un código legible por teléfono: MC-AS-8472-DFQ2. */
 function generarCodigo(): string {
   // Sin I, O, 0 ni 1: en un mostrador se dictan en voz alta.
@@ -188,6 +232,13 @@ export async function activarDispositivo(e: {
         401
       );
     }
+
+    /*
+     * La licencia se mira DESPUÉS de validar el código y ANTES de crear nada.
+     * Al revés quedaría un dispositivo dado de alta para una empresa que no
+     * puede usar el módulo, y el código —que es de un solo uso— ya gastado.
+     */
+    await exigirLicencia(fila.empresa_id);
 
     const secret = randomBytes(32).toString("base64url");
     const ahora = Date.now();

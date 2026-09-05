@@ -22,6 +22,7 @@ import { tokenDe } from "./servicio.ts";
 import { urlDeCallback, urlDeValoracion } from "./urlPublica.ts";
 import { cambiarEstadoEntrega, referenciaDe, reservarIntento, type Reclamada } from "./envio.ts";
 import { enmascararTelefono } from "../core/twilio.ts";
+import { unirAsistencia } from "./sqlAsistencia.ts";
 
 export type ResultadoRecordatorio =
   | { estado: "enviado"; instanceId: number; sid: string }
@@ -51,7 +52,7 @@ export async function pendientesDeRecordatorio(
             a."clienteFacturacionId", a.plate AS matricula
        FROM survey_instances i
        LEFT JOIN roadside_assistances a
-              ON i."sourceSystem" = 'assist' AND a.id = i."assistanceId"::integer
+              ${unirAsistencia("i", true)}
       WHERE i.status IN ('SENT','DELIVERED')
         AND i."reminderAfterMs" IS NOT NULL
         AND i."reminderAfterMs" <= $1

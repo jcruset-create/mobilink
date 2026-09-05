@@ -1737,109 +1737,6 @@ export function createCashRouter(): Router {
 
   // ── AutoScan ─────────────────────────────────────────────────────────────
 
-  /*
-   * Autenticación de MÁQUINA, aparte de la de personas.
-   *
-   * Estas tres rutas NO pasan por `authenticate` ni por `cargarPermisosCaja`:
-   * un escáner no es un usuario, no tiene permisos de interfaz y no puede
-   * mirar cajas, jornadas ni cobros. Lo único que puede hacer es dejar un
-   * documento de SU empresa y SU centro, y esos dos salen de la credencial —
-   * nunca del cuerpo de la petición, que ni se lee para eso.
-   */
-  const conDispositivo: RequestHandler = async (req, res, next) => {
-    const cabecera = String(req.headers["x-autoscan-key"] ?? "");
-    const { identificarDispositivo } = await import("./autoscan/devices.ts");
-    const identidad = cabecera ? await identificarDispositivo(cabecera) : null;
-    if (!identidad) {
-      // Sin decir si la credencial no existe o el dispositivo está revocado.
-      return res.status(401).json({ error: "Credencial de AutoScan no válida.", code: "AUTOSCAN_NO_AUTORIZADO" });
-    }
-    req.autoscan = identidad;
-    next();
-  };
-
-  /** Canjea el código de activación por la credencial. Sin autenticar. */
-  r.post(
-    "/autoscan/activate",
-    ruta(async (req, res) => {
-      const b = req.body ?? {};
-      const { activarDispositivo } = await import("./autoscan/devices.ts");
-      const activado = await activarDispositivo({
-        codigo: String(b.codigo ?? ""),
-        version: typeof b.version === "string" ? b.version : null,
-      });
-      await registrarAuditoria({
-        empresaId: activado.empresaId,
-        userId: null,
-        accion: "cash.autoscan.device_activated",
-        entidad: "cash_autoscan_devices",
-        entidadId: String(activado.deviceId),
-        // El secreto NO: es lo único que no puede aparecer en ningún sitio.
-        detalle: { centroId: activado.centroId, nombre: activado.nombre },
-      });
-      res.status(201).json(activado);
-    })
-  );
-
-  /** El agente deja un documento. La empresa y el centro salen de él. */
-  r.post(
-    "/autoscan/documents",
-    conDispositivo,
-    subida(subidaDocumento.single("documento"), 15),
-    ruta(async (req, res) => {
-      if (!req.file) {
-        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
-      }
-      const b = req.body ?? {};
-      const { recibirDocumento } = await import("./autoscan/inbox.ts");
-      const { documento, duplicado } = await recibirDocumento(req.autoscan!, {
-        fichero: req.file,
-        idempotencyKey: String(
-          b.idempotencyKey ?? req.headers["idempotency-key"] ?? ""
-        ),
-        escaneadoAtMs: b.escaneadoAtMs ? Number(b.escaneadoAtMs) : null,
-      });
-
-      await registrarAuditoria({
-        empresaId: req.autoscan!.empresaId,
-        userId: null,
-        accion: duplicado ? "cash.autoscan.document_duplicate" : "cash.autoscan.document_received",
-        entidad: "cash_autoscan_inbox",
-        entidadId: String(documento.id),
-        detalle: {
-          deviceId: req.autoscan!.deviceId,
-          centroId: req.autoscan!.centroId,
-          sha256: documento.sha256,
-          nombre: documento.nombreOriginal,
-        },
-      });
-
-      /*
-       * 202 y no 200: el documento está guardado pero todavía sin analizar. Y
-       * la respuesta es corta a propósito —el agente solo necesita saber que
-       * ya no tiene que reintentar—.
-       */
-      res.status(duplicado ? 200 : 202).json({
-        ok: true,
-        duplicado,
-        documentoId: documento.id,
-        estado: documento.estado,
-      });
-    })
-  );
-
-  /** Latido: sigo vivo, y ésta es mi versión. */
-  r.post(
-    "/autoscan/heartbeat",
-    conDispositivo,
-    ruta(async (req, res) => {
-      const b = req.body ?? {};
-      const { latido } = await import("./autoscan/devices.ts");
-      await latido(req.autoscan!.deviceId, typeof b.version === "string" ? b.version : null);
-      res.json({ ok: true });
-    })
-  );
-
   // ── AutoScan: lo que ven y hacen las personas ────────────────────────────
 
   r.get(
@@ -2659,3 +2556,156 @@ export function createCashRouter(): Router {
 }
 
 export { obtenerSesion };
+
+// ── Router de MÁQUINA de AutoScan ──────────────────────────────────────────
+
+/**
+ * Las tres rutas que habla un escáner, y ninguna más.
+ *
+ * Va en un router aparte porque `createCashRouter` monta
+ * `authenticate` para TODO lo suyo, y `authenticate` corta con 401 en cuanto no
+ * hay un Bearer de Supabase. Un escáner no tiene sesión —ése es el punto
+ * entero del diseño—, así que mientras estas rutas vivieron dentro de aquel
+ * router respondían «Falta el token de sesión» y el agente no podía ni
+ * activarse. Los comentarios decían «sin autenticar» y el montaje decía otra
+ * cosa; ganaba el montaje.
+ *
+ * Se monta ANTES que el de personas y sobre el mismo prefijo: Express prueba
+ * los routers en orden y lo que no case aquí —que es todo lo demás— sigue su
+ * camino hasta el de siempre, con su autenticación intacta.
+ *
+ * Lo que este router NO tiene es tan importante como lo que tiene: ni
+ * `cargarPermisosCaja`, ni `exigirPermiso`, ni acceso a cajas, jornadas,
+ * cobros o configuración. Una credencial de dispositivo no es un usuario
+ * recortado: es otra cosa, y solo puede dejar documentos de su empresa y su
+ * centro.
+ */
+export function createAutoScanMachineRouter(): Router {
+  const m = Router();
+
+  /*
+   * Autenticación de MÁQUINA, aparte de la de personas.
+   *
+   * Estas tres rutas NO pasan por `authenticate` ni por `cargarPermisosCaja`:
+   * un escáner no es un usuario, no tiene permisos de interfaz y no puede
+   * mirar cajas, jornadas ni cobros. Lo único que puede hacer es dejar un
+   * documento de SU empresa y SU centro, y esos dos salen de la credencial —
+   * nunca del cuerpo de la petición, que ni se lee para eso.
+   */
+  const conDispositivo: RequestHandler = async (req, res, next) => {
+    const cabecera = String(req.headers["x-autoscan-key"] ?? "");
+    const { identificarDispositivo } = await import("./autoscan/devices.ts");
+    const identidad = cabecera ? await identificarDispositivo(cabecera) : null;
+    if (!identidad) {
+      // Sin decir si la credencial no existe o el dispositivo está revocado.
+      return res.status(401).json({ error: "Credencial de AutoScan no válida.", code: "AUTOSCAN_NO_AUTORIZADO" });
+    }
+
+    /*
+     * La licencia, aquí y no en `requireModule`.
+     *
+     * Estas rutas ya no pasan por el middleware de personas, que era quien la
+     * comprobaba. Sin esta línea, una empresa con la licencia caducada seguiría
+     * ingiriendo facturas por la puerta de atrás mientras la interfaz le dice
+     * que no puede entrar: exactamente el agujero que se abre al sacar una ruta
+     * de debajo de su middleware.
+     */
+    try {
+      const { exigirLicencia } = await import("./autoscan/devices.ts");
+      await exigirLicencia(identidad.empresaId);
+    } catch (e) {
+      if (e instanceof ErrorCaja) {
+        return res.status(e.estado).json({ error: e.message, code: e.codigo });
+      }
+      throw e;
+    }
+
+    req.autoscan = identidad;
+    next();
+  };
+
+  /** Canjea el código de activación por la credencial. Sin autenticar. */
+  m.post(
+    "/autoscan/activate",
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { activarDispositivo } = await import("./autoscan/devices.ts");
+      const activado = await activarDispositivo({
+        codigo: String(b.codigo ?? ""),
+        version: typeof b.version === "string" ? b.version : null,
+      });
+      await registrarAuditoria({
+        empresaId: activado.empresaId,
+        userId: null,
+        accion: "cash.autoscan.device_activated",
+        entidad: "cash_autoscan_devices",
+        entidadId: String(activado.deviceId),
+        // El secreto NO: es lo único que no puede aparecer en ningún sitio.
+        detalle: { centroId: activado.centroId, nombre: activado.nombre },
+      });
+      res.status(201).json(activado);
+    })
+  );
+
+  /** El agente deja un documento. La empresa y el centro salen de él. */
+  m.post(
+    "/autoscan/documents",
+    conDispositivo,
+    subida(subidaDocumento.single("documento"), 15),
+    ruta(async (req, res) => {
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
+      }
+      const b = req.body ?? {};
+      const { recibirDocumento } = await import("./autoscan/inbox.ts");
+      const { documento, duplicado } = await recibirDocumento(req.autoscan!, {
+        fichero: req.file,
+        idempotencyKey: String(
+          b.idempotencyKey ?? req.headers["idempotency-key"] ?? ""
+        ),
+        escaneadoAtMs: b.escaneadoAtMs ? Number(b.escaneadoAtMs) : null,
+      });
+
+      await registrarAuditoria({
+        empresaId: req.autoscan!.empresaId,
+        userId: null,
+        accion: duplicado ? "cash.autoscan.document_duplicate" : "cash.autoscan.document_received",
+        entidad: "cash_autoscan_inbox",
+        entidadId: String(documento.id),
+        detalle: {
+          deviceId: req.autoscan!.deviceId,
+          centroId: req.autoscan!.centroId,
+          sha256: documento.sha256,
+          nombre: documento.nombreOriginal,
+        },
+      });
+
+      /*
+       * 202 y no 200: el documento está guardado pero todavía sin analizar. Y
+       * la respuesta es corta a propósito —el agente solo necesita saber que
+       * ya no tiene que reintentar—.
+       */
+      res.status(duplicado ? 200 : 202).json({
+        ok: true,
+        duplicado,
+        documentoId: documento.id,
+        estado: documento.estado,
+      });
+    })
+  );
+
+  /** Latido: sigo vivo, y ésta es mi versión. */
+  m.post(
+    "/autoscan/heartbeat",
+    conDispositivo,
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { latido } = await import("./autoscan/devices.ts");
+      await latido(req.autoscan!.deviceId, typeof b.version === "string" ? b.version : null);
+      res.json({ ok: true });
+    })
+  );
+
+
+  return m;
+}
