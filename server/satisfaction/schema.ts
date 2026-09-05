@@ -112,7 +112,28 @@ export async function initSatisfaction(): Promise<void> {
        */
       UNIQUE ("sourceSystem", "assistanceId", "recipientRole")
     );
+  `);
 
+  /*
+   * Para las bases que ya tenían la tabla de la fase 1B: el token pasa a ser
+   * opcional y aparecen las dos columnas nuevas. `IF NOT EXISTS` y `DROP NOT
+   * NULL` son idempotentes, así que esto se puede ejecutar en cada arranque.
+   *
+   * Va ANTES de los índices y no después, que es donde estaba. Sobre una base
+   * que ya tenía la tabla, el `CREATE TABLE IF NOT EXISTS` de arriba no hace
+   * nada, así que la columna «sendAfterMs» todavía no existe cuando se intenta
+   * indexar: el arranque moría con «column "sendAfterMs" does not exist» y se
+   * llevaba por delante todo el `initDb`. En una base recién creada no se
+   * notaba —la tabla nacía con la columna—, que es justo por qué la CI no lo
+   * vio.
+   */
+  await db.query(`
+    ALTER TABLE survey_instances ALTER COLUMN "tokenHash" DROP NOT NULL;
+    ALTER TABLE survey_instances ADD COLUMN IF NOT EXISTS "tokenIssuedAtMs" BIGINT;
+    ALTER TABLE survey_instances ADD COLUMN IF NOT EXISTS "sendAfterMs" BIGINT NOT NULL DEFAULT 0;
+  `);
+
+  await db.query(`
     -- Por aquí entra la ficha: todas las encuestas de una asistencia.
     CREATE INDEX IF NOT EXISTS idx_survey_instances_asistencia
       ON survey_instances ("tenantId", "sourceSystem", "assistanceId");
@@ -134,17 +155,6 @@ export async function initSatisfaction(): Promise<void> {
      */
     CREATE UNIQUE INDEX IF NOT EXISTS idx_survey_instances_token
       ON survey_instances ("tokenHash") WHERE "tokenHash" IS NOT NULL;
-  `);
-
-  /*
-   * Para las bases que ya tenían la tabla de la fase 1B: el token pasa a ser
-   * opcional y aparecen las dos columnas nuevas. `IF NOT EXISTS` y `DROP NOT
-   * NULL` son idempotentes, así que esto se puede ejecutar en cada arranque.
-   */
-  await db.query(`
-    ALTER TABLE survey_instances ALTER COLUMN "tokenHash" DROP NOT NULL;
-    ALTER TABLE survey_instances ADD COLUMN IF NOT EXISTS "tokenIssuedAtMs" BIGINT;
-    ALTER TABLE survey_instances ADD COLUMN IF NOT EXISTS "sendAfterMs" BIGINT NOT NULL DEFAULT 0;
   `);
 
   /*
