@@ -122,6 +122,10 @@ workflows:
             --build-number="$TC_BUILD_NUMBER" \
             --export-options-plist=/Users/builder/export_options.plist
     artifacts:
+      # Con working_directory, Codemagic resuelve los globs desde tyrecontrol_app/;
+      # se dejan también las rutas desde la raíz del repositorio por si acaso.
+      - build/ios/ipa/*.ipa
+      - build/ios/archive/*.xcarchive
       - tyrecontrol_app/build/ios/ipa/*.ipa
       - tyrecontrol_app/build/ios/archive/*.xcarchive
       - /tmp/xcodebuild_logs/*.log
