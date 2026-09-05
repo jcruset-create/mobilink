@@ -8,17 +8,25 @@ workflows:
       xcode: latest
       cocoapods: default
       ios_signing:
-        # Crea esta integración en Codemagic: Teams → Integrations → App Store Connect
-        # y registra el bundle id com.mobilink.assist en Apple Developer.
+        # El App ID «com.mobilink.assist» está dado de alta en Apple Developer y
+        # la app existe en App Store Connect asociada a él. Este identificador es
+        # el definitivo; el anterior («com.seatarragona.operario») no se usa ni
+        # se recupera.
         #
-        # OJO: antes ponía «com.seatarragona.operario». Si ese identificador ya
-        # está dado de alta en Apple Developer y quieres conservarlo, hay que
-        # revertir AQUÍ y en ios/Runner.xcodeproj/project.pbxproj a la vez: los
-        # dos tienen que decir lo mismo o la firma falla.
+        # Tiene que decir EXACTAMENTE lo mismo que
+        # ios/Runner.xcodeproj/project.pbxproj. Si los dos no coinciden, la
+        # firma falla al buscar el perfil.
+        #
+        # Requiere la integración de App Store Connect en Codemagic:
+        # Teams → Integrations → App Store Connect.
         distribution_type: app_store
         bundle_identifier: com.mobilink.assist
       vars:
-        APP_STORE_APPLE_ID: "PENDIENTE"   # ID numérico de la app en App Store Connect (al crearla)
+        # OPCIONAL, y este workflow NO lo usa: la publicación va con
+        # «auth: integration», que localiza la app por su bundle id. Se deja
+        # porque es el dato que pide cualquier script de App Store Connect que
+        # se quiera añadir después. No es un bloqueo para la primera build.
+        APP_STORE_APPLE_ID: "PENDIENTE"
         # ── La versión de iOS va aparte de la de Android, y hay motivo ─────
         #
         # «pubspec.yaml» dice 1.10.4+66 y esa numeración es la de la APK, que
@@ -56,7 +64,12 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
-        # Grupos de testers internos que reciben la build automáticamente:
+        # Grupos de testers internos que reciben la build automáticamente.
+        #
+        # ESTE GRUPO TIENE QUE EXISTIR YA en App Store Connect (TestFlight →
+        # Internal Testing) y llamarse exactamente así. Si no existe, la build
+        # se sube bien y la publicación falla al final, que es la peor forma de
+        # enterarse: cuarenta minutos de compilación tirados.
         beta_groups:
           - SEA Tecnicos
       email:
