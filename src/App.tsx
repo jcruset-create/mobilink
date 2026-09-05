@@ -7,6 +7,7 @@ import RoadsideOperatorPage from "./pages/RoadsideOperatorPage";
 import WorkshopOperatorPage from "./pages/WorkshopOperatorPage";
 import RoadsideTrackingPage from "./pages/RoadsideTrackingPage";
 import RoadsideReportPage from "./pages/RoadsideReportPage";
+import SatisfactionPublicPage from "./pages/SatisfactionPublicPage";
 import FlotaMapPage from "./pages/FlotaMapPage";
 import OtfPage from "./pages/OtfPage";
 import OtfTvPage from "./pages/OtfTvPage";
@@ -155,6 +156,8 @@ export default function App() {
       <Route path="/seguimiento/:token" element={<RoadsideTrackingPage />} />
       <Route path="/track/:token" element={<RoadsideTrackingPage />} />
       <Route path="/informe/:token" element={<RoadsideReportPage />} />
+      {/* Valoración pública: sin sesión, igual que el seguimiento y el informe. */}
+      <Route path="/valoracion/:token" element={<SatisfactionPublicPage />} />
       <Route path="/flota" element={<FlotaMapPage />} />
       <Route path="/otf" element={<OtfPage />} />
       <Route path="/otf-tv" element={<OtfTvPage />} />
