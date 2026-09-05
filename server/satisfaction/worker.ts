@@ -1,35 +1,42 @@
 /**
  * El worker de Satisfaction.
  *
- * Dos tareas en esta fase, y ninguna manda nada todavía:
+ * Cinco tareas, en este orden y por este motivo:
  *
- *  1. **Encolar lo maduro** — las encuestas cuya espera ya venció pasan de
- *     `CREATED` a `QUEUED`.
- *  2. **Caducar** — las que se pasaron de fecha sin contestar pasan a
- *     `EXPIRED`.
+ *  1. **Caducar** — lo que se pasó de fecha sin contestar pasa a `EXPIRED`.
+ *  2. **Reconciliar** — los intentos de los que no se supo la respuesta se
+ *     aclaran preguntándole al proveedor, ANTES de que a nadie se le ocurra
+ *     reintentarlos.
+ *  3. **Encolar** — lo que ya cumplió su espera pasa de `CREATED` a `QUEUED`.
+ *  4. **Enviar** — se reclaman encuestas encoladas y se mandan.
+ *  5. **Recordar** — un único recordatorio a quien no ha contestado.
  *
- * ── Por qué `QUEUED` y no `SENT` ────────────────────────────────────────────
+ * El orden importa en los dos primeros. Caducar antes de encolar evita meter en
+ * la cola algo que sale de ella acto seguido; reconciliar antes de enviar evita
+ * que un intento ambiguo se convierta en un segundo WhatsApp.
  *
- * Porque nadie ha mandado nada. Marcar `SENT` sin haber llamado a Twilio haría
- * que las métricas de entrega contaran envíos que no existen, y que el día que
- * el envío real llegue nadie sepa cuáles se mandaron de verdad. `QUEUED`
- * describe exactamente lo que hay: está lista y esperando a que alguien la
- * mande. Tampoco se crea ninguna fila de entrega — una entrega es un intento
- * real, y todavía no hay ninguno.
+ * ── Sigue apagado ───────────────────────────────────────────────────────────
  *
- * El token tampoco se emite aquí. Se emite justo antes de construir el
- * mensaje, en 1G: en la base solo queda su hash, así que el valor en claro hay
- * que usarlo en el momento o se pierde.
+ * El worker corre, pero la configuración viene apagada de fábrica: sin
+ * `satisfaction.enabled` no se crea ninguna encuesta y no hay nada que mandar.
+ * Encenderlo es una decisión, no un despliegue.
  */
 
 import pool from "../db.ts";
+import { enviarInicial, reclamarParaEnvio } from "./envio.ts";
+import { enviarRecordatorio, pendientesDeRecordatorio } from "./recordatorio.ts";
+import { reconciliarAmbiguos } from "./reconciliacion.ts";
 
 /** Cada cinco minutos. Los retrasos se miden en minutos u horas, no en latidos. */
 const CADA_MS = 5 * 60_000;
 
 let temporizador: NodeJS.Timeout | null = null;
 
-export type CicloSatisfaction = { encoladas: number; caducadas: number };
+export type CicloSatisfaction = {
+  encoladas: number; caducadas: number;
+  enviadas: number; bloqueadas: number; reintentos: number;
+  recordatorios: number; reconciliadas: number;
+};
 
 /**
  * Pasa a `QUEUED` las encuestas cuya espera ha vencido.
@@ -64,10 +71,10 @@ export async function encolarMaduras(limite = 200, ahoraMs = Date.now()): Promis
 /**
  * Caduca lo que se pasó de fecha sin contestar.
  *
- * Se caducan `CREATED`, `QUEUED` y `FAILED`: las tres son encuestas vivas que
- * ya no sirven. `SENT`, `DELIVERED` y `STARTED` también podrían caducar, pero
- * en esta fase no existen todavía —nadie manda nada— así que se dejan fuera
- * hasta que haya envío real y se pueda decidir con casos delante.
+ * Desde 1G se caducan también `SENT`, `DELIVERED` y `STARTED`: ahora sí
+ * existen, y una encuesta enviada hace tres semanas que nadie abrió está tan
+ * vencida como una que no llegó a mandarse. Que el WhatsApp saliera no la hace
+ * eterna; el enlace deja de valer igual.
  *
  * NO se tocan `COMPLETED` ni `CANCELLED`. La primera porque ya tiene respuesta
  * y caducarla dejaría una respuesta colgando de una encuesta que dice no
@@ -78,7 +85,7 @@ export async function caducarVencidas(limite = 500, ahoraMs = Date.now()): Promi
     `UPDATE survey_instances SET status = 'EXPIRED'
       WHERE id IN (
         SELECT id FROM survey_instances
-         WHERE status IN ('CREATED','QUEUED','FAILED')
+         WHERE status IN ('CREATED','QUEUED','FAILED','SENT','DELIVERED','STARTED')
            AND "expiresAtMs" <= $1
          ORDER BY "expiresAtMs"
          LIMIT $2
@@ -97,11 +104,64 @@ export async function caducarVencidas(limite = 500, ahoraMs = Date.now()): Promi
  */
 export async function cicloSatisfaction(ahoraMs = Date.now()): Promise<CicloSatisfaction> {
   const caducadas = await caducarVencidas(500, ahoraMs);
-  const encoladas = await encolarMaduras(200, ahoraMs);
-  if (caducadas || encoladas) {
-    console.log(`[Satisfaction] worker: ${encoladas} encolada(s), ${caducadas} caducada(s)`);
+
+  /*
+   * Reconciliar va ANTES de enviar, y ése es el punto entero: un intento del
+   * que no se supo la respuesta tiene que aclararse mirando qué mandó el
+   * proveedor, no reintentándose a ciegas.
+   */
+  let reconciliadas = 0;
+  try {
+    reconciliadas = (await reconciliarAmbiguos(undefined, ahoraMs)).length;
+  } catch (e: unknown) {
+    console.error("[Satisfaction] reconciliación:", (e as Error)?.message);
   }
-  return { encoladas, caducadas };
+
+  const encoladas = await encolarMaduras(200, ahoraMs);
+
+  let enviadas = 0, bloqueadas = 0, reintentos = 0;
+  try {
+    for (const a of await reclamarParaEnvio(ahoraMs)) {
+      /*
+       * Una encuesta que falla no puede llevarse por delante a las demás: cada
+       * una va en su propio try. Con un `Promise.all` un rechazo dejaría a las
+       * siguientes con el lease puesto durante diez minutos.
+       */
+      try {
+        const r = await enviarInicial(a, undefined, ahoraMs);
+        if (r.estado === "enviado") enviadas++;
+        else if (r.estado === "bloqueado") bloqueadas++;
+        else if (r.estado === "reintentar") reintentos++;
+      } catch (e: unknown) {
+        console.error(`[Satisfaction] envío de la encuesta#${a.id}:`, (e as Error)?.message);
+      }
+    }
+  } catch (e: unknown) {
+    console.error("[Satisfaction] reclamación de envíos:", (e as Error)?.message);
+  }
+
+  let recordatorios = 0;
+  try {
+    for (const a of await pendientesDeRecordatorio(ahoraMs)) {
+      try {
+        if ((await enviarRecordatorio(a, undefined, ahoraMs)).estado === "enviado") recordatorios++;
+      } catch (e: unknown) {
+        console.error(`[Satisfaction] recordatorio de la encuesta#${a.id}:`,
+          (e as Error)?.message);
+      }
+    }
+  } catch (e: unknown) {
+    console.error("[Satisfaction] pendientes de recordatorio:", (e as Error)?.message);
+  }
+
+  if (caducadas || encoladas || enviadas || bloqueadas || reintentos || recordatorios
+      || reconciliadas) {
+    console.log(`[Satisfaction] worker: ${encoladas} encolada(s), ${enviadas} enviada(s), ` +
+      `${recordatorios} recordatorio(s), ${reintentos} reintento(s), ` +
+      `${bloqueadas} bloqueada(s), ${reconciliadas} reconciliada(s), ` +
+      `${caducadas} caducada(s)`);
+  }
+  return { encoladas, caducadas, enviadas, bloqueadas, reintentos, recordatorios, reconciliadas };
 }
 
 /**

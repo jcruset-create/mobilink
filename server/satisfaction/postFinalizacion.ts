@@ -21,6 +21,7 @@ import {
   evaluarElegibilidad, type Elegibilidad, type MotivoBloqueo,
 } from "./elegibilidad.ts";
 import { crearSurveyInstance } from "./servicio.ts";
+import type { Destinatario } from "./destinatarios.ts";
 import type { RolDestinatario, Sistema } from "./dominio.ts";
 
 export type ResultadoRol =
@@ -91,14 +92,18 @@ export async function procesarSatisfactionTrasFinalizacion(p: {
   }
 
   const resultados: ResultadoRol[] = [];
-  const aCrear: { rol: RolDestinatario; elegible: boolean; motivo: MotivoBloqueo }[] = [
+  const aCrear: {
+    rol: RolDestinatario; elegible: boolean; motivo: MotivoBloqueo; destinatario: Destinatario;
+  }[] = [
     { rol: "DRIVER", elegible: decision.eligibleDriver,
-      motivo: motivoDe(decision, "DRIVER") },
+      motivo: motivoDe(decision, "DRIVER"),
+      destinatario: decision.driverRecipient },
     { rol: "CUSTOMER", elegible: decision.eligibleCustomer,
-      motivo: motivoDe(decision, "CUSTOMER") },
+      motivo: motivoDe(decision, "CUSTOMER"),
+      destinatario: decision.customerRecipient },
   ];
 
-  for (const { rol, elegible, motivo } of aCrear) {
+  for (const { rol, elegible, motivo, destinatario } of aCrear) {
     if (!elegible) {
       resultados.push({ rol, estado: "skipped", motivo });
       continue;
@@ -111,6 +116,13 @@ export async function procesarSatisfactionTrasFinalizacion(p: {
           assistanceId: String(p.assistanceId),
         },
         recipientRole: rol,
+        /*
+         * El teléfono se congela AQUÍ, con el que se acaba de resolver. A la
+         * hora del envío ya no se vuelve a mirar la ficha del cliente: si
+         * alguien la cambia entre medias, la encuesta sigue perteneciendo a
+         * quien se resolvió al crearla.
+         */
+        recipientPhone: destinatario.hay ? destinatario.normalizado : null,
         caducidadMs: decision.effectiveConfig.caducidadHoras * 3_600_000,
         retrasoMs: decision.effectiveConfig.retrasoMinutos * 60_000,
         ahoraMs: ahora,

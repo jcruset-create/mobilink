@@ -36,6 +36,7 @@ export const CLAVES = {
   caducidadHoras: "satisfaction.expiryHours",
   retrasoMinutos: "satisfaction.sendDelayMinutes",
   recordatorio: "satisfaction.reminderEnabled",
+  recordatorioHoras: "satisfaction.reminderDelayHours",
 } as const;
 
 export type ConfigSatisfaction = {
@@ -45,6 +46,8 @@ export type ConfigSatisfaction = {
   caducidadHoras: number;
   retrasoMinutos: number;
   recordatorio: boolean;
+  /** Cuántas horas después del envío ACEPTADO se manda el recordatorio. */
+  recordatorioHoras: number;
 };
 
 /**
@@ -61,6 +64,12 @@ export const POR_DEFECTO: ConfigSatisfaction = {
   caducidadHoras: CADUCIDAD_POR_DEFECTO_MS / 3_600_000,
   retrasoMinutos: 60,
   recordatorio: false,
+  /*
+   * Un día. Ni tan pronto que resulte insistente ni tan tarde que ya no se
+   * acuerden del servicio. Da igual mientras `recordatorio` siga apagado, que
+   * es como sale de fábrica.
+   */
+  recordatorioHoras: 24,
 };
 
 function aBooleano(v: string | undefined, sinValor: boolean): boolean {
@@ -98,6 +107,7 @@ export async function configGlobal(): Promise<ConfigSatisfaction> {
     caducidadHoras: aNumero(mapa[CLAVES.caducidadHoras], POR_DEFECTO.caducidadHoras),
     retrasoMinutos: aNumero(mapa[CLAVES.retrasoMinutos], POR_DEFECTO.retrasoMinutos),
     recordatorio: aBooleano(mapa[CLAVES.recordatorio], POR_DEFECTO.recordatorio),
+    recordatorioHoras: aNumero(mapa[CLAVES.recordatorioHoras], POR_DEFECTO.recordatorioHoras),
   };
 }
 
@@ -110,6 +120,7 @@ export async function guardarConfigGlobal(cambios: Partial<ConfigSatisfaction>):
   poner(CLAVES.caducidadHoras, cambios.caducidadHoras);
   poner(CLAVES.retrasoMinutos, cambios.retrasoMinutos);
   poner(CLAVES.recordatorio, cambios.recordatorio);
+  poner(CLAVES.recordatorioHoras, cambios.recordatorioHoras);
   for (const [k, v] of pares) {
     await db.query(
       `INSERT INTO workshop_config (key, value) VALUES ($1,$2)
@@ -212,6 +223,26 @@ export async function guardarOverrideCliente(p: {
  * tiene que poder parar el sistema entero de una vez, que es justo para lo que
  * está.
  */
+/**
+ * La configuración que se aplica a una encuesta concreta: global + override.
+ *
+ * Atajo para quien solo tiene el cliente a mano —el envío, el recordatorio— y
+ * no quiere repetir las tres líneas. Nunca lanza: ante cualquier problema
+ * devuelve lo global, que ya está apagado por defecto.
+ */
+export async function configEfectiva(
+  clientId: string | number | null | undefined,
+  ambito: { sourceSystem?: Sistema; tenantId?: string | null } = {},
+): Promise<ConfigSatisfaction> {
+  const global = await configGlobal();
+  const override = await overrideDeCliente({
+    sourceSystem: ambito.sourceSystem ?? "assist",
+    tenantId: ambito.tenantId ?? null,
+    clientId,
+  });
+  return combinar(global, override);
+}
+
 export function combinar(global: ConfigSatisfaction, override: OverrideCliente): ConfigSatisfaction {
   const y = (g: boolean, o: boolean | null) => (o == null ? g : g && o);
   return {

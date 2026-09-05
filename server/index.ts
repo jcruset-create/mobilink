@@ -65,6 +65,8 @@ import { initSatisfaction } from "./satisfaction/schema.ts";
 import { startSatisfactionWorker } from "./satisfaction/worker.ts";
 import { createSatisfactionPublicRouter } from "./satisfaction/routerPublico.ts";
 import { createCalidadRouter } from "./satisfaction/routerInterno.ts";
+import { createSatisfactionCallbackRouter } from "./satisfaction/routerCallback.ts";
+import { RUTA_CALLBACK } from "./satisfaction/urlPublica.ts";
 import {
   engancharPosteriores, prepararRespuestaTrasCambio,
 } from "./cierre/finalizacion.ts";
@@ -78,11 +80,15 @@ import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
+import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+/*
+ * El cliente vive ahora en `core/twilio.ts`, para que lo pueda usar también el
+ * envío de Satisfaction: desde un worker no se puede importar este fichero.
+ * Es el mismo cliente y las mismas credenciales, solo que construido cuando se
+ * pide en vez de al arrancar.
+ */
+const twilioClient = clienteTwilio();
 
 const app = express();
 app.post(
@@ -633,25 +639,9 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
    HELPERS
 ========================================================= */
 
-function normalizeSpanishPhone(phone: string) {
-  const digits = String(phone || "").replace(/\D/g, "");
-
-  if (!digits) return "";
-
-  if (digits.startsWith("34") && digits.length === 11) {
-    return `+${digits}`;
-  }
-
-  if (digits.length === 9) {
-    return `+34${digits}`;
-  }
-
-  if (String(phone).trim().startsWith("+")) {
-    return String(phone).trim();
-  }
-
-  return `+${digits}`;
-}
+// La implementación se ha movido a `core/twilio.ts` para poder compartirla con
+// el envío de Satisfaction. El comportamiento es exactamente el mismo.
+const normalizeSpanishPhone = aE164;
 function safeJsonParse<T>(value: unknown, fallback: T): T {
   if (typeof value !== "string" || value.trim() === "") return fallback;
 
@@ -924,13 +914,8 @@ function getRoadsideStatusTimestampField(status: string) {
   return null;
 }
 
-function getWhatsAppFromNumber() {
-  return (
-    process.env.TWILIO_WHATSAPP_FROM ||
-    process.env.TWILIO_WHATSAPP_NUMBER ||
-    "whatsapp:+34610473079"
-  );
-}
+// También movida a `core/twilio.ts`, por el mismo motivo.
+const getWhatsAppFromNumber = numeroWhatsAppEmisor;
 
 // Dominio público de cara al cliente (enlaces de seguimiento/informe por WhatsApp).
 // Debe estar configurado como dominio personalizado en Render + DNS apuntando al servicio.
@@ -18431,7 +18416,15 @@ app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
  * Calidad: la ficha la puede ver quien ya ve la asistencia; la bandeja y las
  * acciones sobre expedientes, solo supervisión.
  */
-app.use("/api/calidad", createCalidadRouter(requireOperarioRole, requireSupervisorRole));
+app.use("/api/calidad", createCalidadRouter(
+  requireOperarioRole, requireSupervisorRole, requireAdminRole));
+
+/*
+ * El callback de estado de las encuestas. Sin sesión —lo llama Twilio— pero con
+ * firma obligatoria: es lo que separa un aviso de entrega de cualquiera que
+ * quiera decir que un mensaje se entregó.
+ */
+app.use(RUTA_CALLBACK, createSatisfactionCallbackRouter());
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)

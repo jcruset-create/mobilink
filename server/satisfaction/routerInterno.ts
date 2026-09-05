@@ -27,6 +27,11 @@ import {
 } from "./dominio.ts";
 import { detalleCaso, listarCasos, obtenerSatisfactionDeAsistencia } from "./calidad.ts";
 import { calcularMetricas } from "./metricas.ts";
+import { POR_DEFECTO, configGlobal, guardarConfigGlobal } from "./config.ts";
+import { contentSidDe } from "./adaptadorWhatsApp.ts";
+import { hayCredencialesTwilio } from "../core/twilio.ts";
+import { baseUrlPublica } from "./urlPublica.ts";
+import { leerConfig } from "./configEntrada.ts";
 import {
   MAX_NOTA, anadirNota, asignarCaso, cambiarEstadoCaso, cambiarPrioridad, type Actor,
 } from "./calidadServicio.ts";
@@ -123,8 +128,29 @@ export function interpretarPeriodo(
   return { periodo: { desdeMs, hastaMs: hastaFinal } };
 }
 
+/**
+ * Qué falta para que esto pueda mandar algo.
+ *
+ * Se enseña junto a la configuración porque encender Satisfaction sin las
+ * plantillas aprobadas no manda nada y no dice por qué. Aquí se dice, y sin
+ * enseñar ni un SID: solo si está o no está.
+ */
+function estadoTecnico() {
+  return {
+    credenciales: hayCredencialesTwilio(),
+    urlPublica: Boolean(baseUrlPublica()),
+    plantillas: {
+      driverInitial: Boolean(contentSidDe("DRIVER", "INITIAL")),
+      customerInitial: Boolean(contentSidDe("CUSTOMER", "INITIAL")),
+      driverReminder: Boolean(contentSidDe("DRIVER", "REMINDER")),
+      customerReminder: Boolean(contentSidDe("CUSTOMER", "REMINDER")),
+    },
+  };
+}
+
 export function createCalidadRouter(
   guardaOperario: RequestHandler, guardaSupervisor: RequestHandler,
+  guardaAdmin?: RequestHandler,
 ): Router {
   const router = Router();
   // 8 kB: lo más grande que se manda aquí es una nota de 4.000 caracteres.
@@ -145,6 +171,48 @@ export function createCalidadRouter(
       res.json(await obtenerSatisfactionDeAsistencia(Number(req.params.id), tallerDe(req)));
     } catch (e) { fallo(res, e); }
   });
+
+  /* ── Configuración ──────────────────────────────────────────────────── */
+
+  /**
+   * Lo que rige Satisfaction hoy, con lo que le falta para funcionar.
+   *
+   * Lectura de supervisor: quien mira la bandeja necesita poder ver si las
+   * encuestas están apagadas antes de preguntarse por qué no llega ninguna.
+   */
+  router.get("/config", guardaSupervisor, async (_req, res) => {
+    try {
+      res.json({
+        config: await configGlobal(),
+        porDefecto: POR_DEFECTO,
+        tecnico: estadoTecnico(),
+      });
+    } catch (e) { fallo(res, e); }
+  });
+
+  /**
+   * Cambiarla es cosa de administración.
+   *
+   * Si no se pasa guarda de administrador, la ruta NO se monta: es preferible
+   * un 404 a dejar que la escriba un supervisor por un descuido al montar el
+   * router.
+   */
+  if (guardaAdmin) {
+    router.put("/config", guardaAdmin, async (req, res) => {
+      try {
+        const { cambios, errores } = leerConfig(req.body);
+        if (errores.length) return res.status(400).json({ error: errores.join("; "), errores });
+        if (!Object.keys(cambios).length) {
+          return res.status(400).json({ error: "No se ha enviado ningún cambio" });
+        }
+        await guardarConfigGlobal(cambios);
+        const actor = actorDe(req);
+        console.log(`[Satisfaction] configuración cambiada por ${actor.nombre ?? actor.userId ?? "?"}: ` +
+          Object.keys(cambios).join(", "));
+        res.json({ config: await configGlobal(), tecnico: estadoTecnico() });
+      } catch (e) { fallo(res, e); }
+    });
+  }
 
   /* ── Cuadro de mando ────────────────────────────────────────────────── */
 

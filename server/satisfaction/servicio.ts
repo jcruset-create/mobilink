@@ -77,6 +77,8 @@ export type SurveyInstance = {
   sendAfterMs: number;
   createdAtMs: number;
   completedAtMs: number | null;
+  /** El destinatario congelado al crear. Interno: no sale por ninguna API. */
+  recipientPhone: string | null;
   /** `true` cuando ya se ha emitido el token. Nunca se expone el valor. */
   tokenEmitido: boolean;
 };
@@ -103,13 +105,20 @@ function aInstancia(f: Fila): SurveyInstance {
     sendAfterMs: Number(f.sendAfterMs ?? 0),
     createdAtMs: Number(f.createdAtMs),
     completedAtMs: f.completedAtMs == null ? null : Number(f.completedAtMs),
+    recipientPhone: f.recipientPhone == null ? null : String(f.recipientPhone),
     tokenEmitido: f.tokenEmitido === true,
   };
 }
 
+/*
+ * Nótese que `token` NO está aquí: la instancia que circula por el código no
+ * lleva el valor en claro. Quien lo necesita —el envío y el recordatorio— lo
+ * pide expresamente con `tokenDe()`, y así no puede colarse en una respuesta
+ * de API por arrastre.
+ */
 const CAMPOS = `id, "sourceSystem", "tenantId", "assistanceId", "recipientRole",
                 "templateId", "templateVersion", status, "expiresAtMs",
-                "sendAfterMs", "createdAtMs", "completedAtMs",
+                "sendAfterMs", "createdAtMs", "completedAtMs", "recipientPhone",
                 ("tokenHash" IS NOT NULL) AS "tokenEmitido"`;
 
 async function enTransaccion<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
@@ -163,6 +172,15 @@ export async function crearSurveyInstance(p: {
   /** De la configuración efectiva, ya congelada por quien llama. */
   caducidadMs?: number;
   retrasoMs?: number;
+  /**
+   * El teléfono al que se mandará, **congelado aquí** (1G).
+   *
+   * Se guarda ya normalizado. Sin esto, una encuesta creada hoy para un número
+   * se mandaría mañana a otro porque alguien editó la ficha del cliente entre
+   * medias: la encuesta pertenece al destinatario que se resolvió cuando se
+   * creó, y cambiar de número tiene que ser una decisión explícita.
+   */
+  recipientPhone?: string | null;
   ahoraMs?: number;
 }): Promise<ResultadoCreacion> {
   const ahora = p.ahoraMs ?? Date.now();
@@ -196,12 +214,14 @@ export async function crearSurveyInstance(p: {
   const insertado = await pool.query(
     `INSERT INTO survey_instances
        ("sourceSystem", "tenantId", "assistanceId", "recipientRole",
-        "templateId", "templateVersion", status, "expiresAtMs", "sendAfterMs", "createdAtMs")
-     VALUES ($1,$2,$3,$4,$5,$6,'CREATED',$7,$8,$9)
+        "templateId", "templateVersion", status, "expiresAtMs", "sendAfterMs", "createdAtMs",
+        "recipientPhone")
+     VALUES ($1,$2,$3,$4,$5,$6,'CREATED',$7,$8,$9,$10)
      ON CONFLICT ("sourceSystem", "assistanceId", "recipientRole") DO NOTHING
      RETURNING ${CAMPOS}`,
     [sourceSystem, tenantId, assistanceId, p.recipientRole,
-     plantilla.id, plantilla.version, expiresAtMs, sendAfterMs, ahora],
+     plantilla.id, plantilla.version, expiresAtMs, sendAfterMs, ahora,
+     p.recipientPhone ?? null],
   );
 
   if (insertado.rows.length) {
@@ -219,9 +239,16 @@ export async function crearSurveyInstance(p: {
 
 /* ── Emisión del token ───────────────────────────────────────────────────── */
 
+/**
+ * `ya_emitido` trae el token desde 1G.
+ *
+ * En 1C.2 no traía nada, y ahí estaba el agujero: un reintento se enteraba de
+ * que el token existía y no podía usarlo. Sigue llevando `token` opcional
+ * porque una encuesta de antes de 1G tiene hash pero no valor en claro.
+ */
 export type ResultadoToken =
   | { estado: "emitido"; token: string }
-  | { estado: "ya_emitido" }
+  | { estado: "ya_emitido"; token?: string }
   | { estado: "no_procede"; motivo: "completada" | "caducada" | "cancelada" };
 
 /**
@@ -253,12 +280,25 @@ export async function emitirToken(
   const token = generarToken();
   const r = await pool.query(
     `UPDATE survey_instances
-        SET "tokenHash" = $2, "tokenIssuedAtMs" = $3
+        SET "tokenHash" = $2, token = $4, "tokenIssuedAtMs" = $3
       WHERE id = $1 AND "tokenHash" IS NULL
       RETURNING id`,
-    [instanceId, hashToken(token), ahoraMs],
+    [instanceId, hashToken(token), ahoraMs, token],
   );
-  return r.rows.length ? { estado: "emitido", token } : { estado: "ya_emitido" };
+  if (r.rows.length) return { estado: "emitido", token };
+
+  /*
+   * Ya estaba emitido: se devuelve EL MISMO, no otro.
+   *
+   * Es lo que arregla la ventana de caída de 1C.2. Antes, un proceso que moría
+   * entre emitir y llamar a Twilio dejaba en la base un hash irreconstruible y
+   * el enlace se perdía; y un recordatorio 24 h después no podía escribir la
+   * misma URL. Ahora el reintento recupera el token que ya se emitió y manda
+   * exactamente el enlace que tocaba. Ver el comentario del esquema sobre por
+   * qué el token se guarda en claro.
+   */
+  const guardado = await tokenDe(instanceId);
+  return guardado ? { estado: "ya_emitido", token: guardado } : { estado: "ya_emitido" };
 }
 
 /**
@@ -269,15 +309,27 @@ export async function emitirToken(
  * enlace ya enviado. Rotar es una decisión, y quien la toma sabe que el
  * WhatsApp anterior deja de funcionar.
  */
+/**
+ * El token en claro de una encuesta, si se emitió.
+ *
+ * De uso INTERNO: lo llaman el envío y el recordatorio para construir la URL.
+ * No sale por ninguna API, ni por la ficha, ni por la bandeja, ni por el
+ * dashboard, y no se escribe en ningún log.
+ */
+export async function tokenDe(instanceId: number): Promise<string | null> {
+  const r = await pool.query(`SELECT token FROM survey_instances WHERE id = $1`, [instanceId]);
+  return r.rows[0]?.token ?? null;
+}
+
 export async function rotarToken(instanceId: number, ambito: Ambito): Promise<string> {
   const token = generarToken();
   const r = await pool.query(
-    `UPDATE survey_instances SET "tokenHash" = $2
+    `UPDATE survey_instances SET "tokenHash" = $2, token = $6
       WHERE id = $1 AND "sourceSystem" = $3 AND "assistanceId" = $4
         AND ("tenantId" IS NOT DISTINCT FROM $5)
         AND status <> 'COMPLETED'
       RETURNING id`,
-    [instanceId, hashToken(token), ambito.sourceSystem, ambito.assistanceId, ambito.tenantId],
+    [instanceId, hashToken(token), ambito.sourceSystem, ambito.assistanceId, ambito.tenantId, token],
   );
   if (!r.rows.length) {
     throw new ErrorSatisfaction("instancia_no_encontrada", "No se ha podido rotar el token.");
