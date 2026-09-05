@@ -225,10 +225,27 @@ async function ejecutarPosteriores(ctx: ContextoCambio): Promise<void> {
       .catch((e) => console.error("revisión de documentación:", e?.message));
   }
 
-  // 4 · El diario, el último: si algo de lo anterior explotara, la línea del
-  // diario sigue saliendo, y es la que reconstruye después qué pasó.
+  // 4 · El diario. Antes que Satisfaction: si crear la encuesta fallara, la
+  // línea que reconstruye qué pasó ya está escrita.
   await anotarDiario(conTenant, finishedAtMs)
     .catch((e) => console.error("[Diario] no se pudo anotar:", e?.message));
+
+  /*
+   * 5 · Satisfaction. El último, y solo si el servicio terminó de verdad.
+   *
+   * La condición es `finishedAtMs`, no el estado: para cuando esto corre, la
+   * ruta de la APK ya ha dejado la asistencia en `en_camino_base`.
+   *
+   * El módulo se carga perezoso y no lanza nunca: una encuesta que no se crea
+   * es un problema, pero no uno que pueda estropear un cierre ya guardado.
+   */
+  if (estado === "finalizada" && finishedAtMs > 0) {
+    await import("../satisfaction/postFinalizacion.ts")
+      .then((m) => m.procesarSatisfactionTrasFinalizacion({
+        assistanceId, tenantId, ahoraMs: ctx.ahoraMs,
+      }))
+      .catch((e) => console.error("[Satisfaction] tras la finalización:", e?.message));
+  }
 }
 
 /**
