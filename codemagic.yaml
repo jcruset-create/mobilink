@@ -3,6 +3,8 @@ workflows:
     name: SEA Asistencia · iOS → TestFlight
     instance_type: mac_mini_m2
     max_build_duration: 60
+    integrations:
+      app_store_connect: Mobilink TyreControl
     environment:
       flutter: stable
       xcode: latest
