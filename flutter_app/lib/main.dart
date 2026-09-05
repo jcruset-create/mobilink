@@ -33,7 +33,7 @@ class SeaApp extends StatelessWidget {
       valueListenable: exteriorMode,
       builder: (_, exterior, __) {
         return MaterialApp(
-          title: 'Mobilink Asistencia',
+          title: 'Mobilink Assist',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.build(exterior: exterior),
           home: const SplashScreen(),

@@ -1,44 +1,93 @@
 workflows:
   ios-testflight:
-    name: SEA Asistencia · iOS → TestFlight
+    name: Mobilink Assist · iOS → TestFlight
     instance_type: mac_mini_m2
     max_build_duration: 60
+
+    # ── Las credenciales de Apple entran POR AQUÍ ───────────────────────────
+    #
+    # Es la clave de API de App Store Connect que ya está cargada en Codemagic
+    # (Settings → Developer Portal → Manage keys). Con esta sección, Codemagic
+    # la usa para las dos cosas que hacen falta:
+    #
+    #   · firmar   — «ios_signing» le pide a Apple el certificado de
+    #                distribución y el perfil de com.mobilink.assist;
+    #   · publicar — «publishing.app_store_connect.auth: integration» sube el
+    #                .ipa a TestFlight con esa misma clave.
+    #
+    # Y por eso NO hay que repetir Issuer ID, Key ID ni el .p8 como variables
+    # de entorno: duplicar un secreto es multiplicar por dos los sitios donde
+    # caduca sin que nadie se entere.
+    #
+    # Sin esta sección, Codemagic rechaza el fichero antes de compilar:
+    #   ios-testflight -> publishing
+    #   auth -> "integration" requires workflow -> integrations -> app_store_connect
+    integrations:
+      # El nombre de la clave en Codemagic → Settings → Developer Portal →
+      # Manage keys. Hay dos claves conectadas —la otra es la de TyreControl—,
+      # así que esto tiene que decir exactamente ésta, carácter por carácter:
+      # si no coincide, Codemagic no encuentra la integración y no compila.
+      app_store_connect: Mobilink Assist
+
     environment:
       flutter: stable
       xcode: latest
       cocoapods: default
       ios_signing:
-        # Crea esta integración en Codemagic: Teams → Integrations → App Store Connect
-        # y registra el bundle id com.seatarragona.operario en Apple Developer.
+        # El App ID está dado de alta en Apple Developer y la app creada en App
+        # Store Connect asociada a él. Es el identificador definitivo.
+        #
+        # Tiene que decir EXACTAMENTE lo mismo que
+        # flutter_app/ios/Runner.xcodeproj/project.pbxproj. Si los dos no
+        # coinciden, la firma falla al buscar el perfil.
         distribution_type: app_store
-        bundle_identifier: com.seatarragona.operario
+        bundle_identifier: com.mobilink.assist
       vars:
-        APP_STORE_APPLE_ID: "PENDIENTE"   # ID numérico de la app en App Store Connect (al crearla)
-      groups:
-        - appstore_connect            # grupo con las credenciales App Store Connect (UI de Codemagic)
+        # ── La versión de iOS va aparte de la de Android, y hay motivo ─────
+        #
+        # «pubspec.yaml» lleva la numeración de la APK, con decenas de entregas
+        # a las tablets. Bajarla para estrenar en la App Store convertiría la
+        # siguiente APK en una actualización «hacia atrás» y Android no la
+        # instalaría encima.
+        #
+        # Así que el nombre de versión de iOS se pone aquí y el número de build
+        # lo pone Codemagic, que es monótono por definición. Para la segunda
+        # entrega, se sube este número y ya está.
+        IOS_VERSION: "1.0.0"
+
     working_directory: flutter_app
     scripts:
       - name: Flutter pub get
         script: flutter pub get
       - name: Instalar pods
         script: |
-          find . -name "Podfile" -execdir pod install \;
-      - name: Set build number (incremental)
-        script: |
-          # Usa el nº de build de Codemagic para no repetir versión en TestFlight
-          agvtool new-version -all $(($BUILD_NUMBER + 100)) || true
+          cd ios && pod install
       - name: Build IPA
         script: |
+          # La versión y el build se pasan a Flutter, no con agvtool: «flutter
+          # build» reescribe Generated.xcconfig con FLUTTER_BUILD_NAME y
+          # FLUTTER_BUILD_NUMBER, que es de donde el Info.plist saca los dos
+          # valores. Lo que hiciera agvtool antes se perdía en ese paso.
           flutter build ipa --release \
+            --build-name="$IOS_VERSION" \
+            --build-number="$BUILD_NUMBER" \
             --export-options-plist=/Users/builder/export_options.plist
+
     artifacts:
       - flutter_app/build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
+
     publishing:
       app_store_connect:
+        # «integration» = usa la clave declarada arriba en «integrations».
         auth: integration
         submit_to_testflight: true
-        # Grupos de testers internos que reciben la build automáticamente:
+        # Grupos de testers internos que reciben la build automáticamente.
+        #
+        # ESTE GRUPO TIENE QUE EXISTIR YA en App Store Connect (TestFlight →
+        # Internal Testing) y llamarse exactamente así. Si no existe, la build
+        # se compila, se sube y falla al publicar: cuarenta minutos para
+        # enterarte al final.
         beta_groups:
           - SEA Tecnicos
       email:
