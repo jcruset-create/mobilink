@@ -3,9 +3,9 @@
  *
  * Lo que se fija aquí y no se puede fijar sin base de datos:
  *
- *   · crear la misma encuesta dos veces deja UNA, y la segunda NO devuelve
- *     token —devolver uno nuevo daría un enlace que no abre nada—;
- *   · la base guarda el hash y NUNCA el token en claro;
+ *   · crear la misma encuesta dos veces deja UNA;
+ *   · el token NO se genera al crear: se emite aparte, justo antes del envío,
+ *     y la base guarda su hash y nunca el valor en claro;
  *   · completar dos veces no duplica respuesta, respuestas por pregunta ni
  *     caso de calidad;
  *   · un tenant no llega a la encuesta de otro por ninguna función del
@@ -68,29 +68,28 @@ beforeAll(async () => {
 afterAll(async () => { if (RUN) await db.end().catch(() => {}); });
 
 describe.skipIf(!RUN)("crear encuestas", () => {
-  it("crea una y devuelve el token una sola vez", async () => {
+  it("crea la encuesta SIN token: se emite después", async () => {
     const a = nuevaAsistencia();
     const r = await svc.crearSurveyInstance({ ambito: ambito(a), recipientRole: "DRIVER" });
     expect(r.estado).toBe("created");
-    if (r.estado !== "created") return;
-    expect(r.token).toMatch(/^[A-Za-z0-9_-]{43}$/);   // 32 bytes en base64url
     expect(r.instancia.status).toBe("CREATED");
+    expect(r.instancia.tokenEmitido).toBe(false);
     expect(r.instancia.templateVersion).toBeGreaterThanOrEqual(1);
+
+    const f = await db.query(
+      `SELECT "tokenHash", "tokenIssuedAtMs" FROM survey_instances WHERE id = $1`,
+      [r.instancia.id]);
+    expect(f.rows[0].tokenHash).toBeNull();
+    expect(f.rows[0].tokenIssuedAtMs).toBeNull();
   });
 
-  /*
-   * La prueba que justifica el diseño del token: la segunda creación NO trae
-   * token. Si trajera uno nuevo, no coincidiría con el hash guardado y el
-   * WhatsApp llevaría un enlace muerto.
-   */
-  it("crear dos veces deja UNA instancia, y la segunda no trae token", async () => {
+  it("crear dos veces deja UNA instancia", async () => {
     const a = nuevaAsistencia();
     const uno = await svc.crearSurveyInstance({ ambito: ambito(a), recipientRole: "DRIVER" });
     const dos = await svc.crearSurveyInstance({ ambito: ambito(a), recipientRole: "DRIVER" });
 
     expect(uno.estado).toBe("created");
     expect(dos.estado).toBe("already_exists");
-    expect("token" in dos).toBe(false);
     expect(dos.instancia.id).toBe(uno.instancia.id);
 
     const cuenta = await db.query(
@@ -120,40 +119,119 @@ describe.skipIf(!RUN)("crear encuestas", () => {
     expect(await svc.instanciasDeAsistencia(ambito(a))).toHaveLength(2);
   });
 
-  it("la base guarda el hash y no el token", async () => {
+  it("la caducidad y el retraso se congelan al crear", async () => {
     const a = nuevaAsistencia();
-    const r = await svc.crearSurveyInstance({ ambito: ambito(a), recipientRole: "DRIVER" });
+    const ahora = Date.now();
+    const r = await svc.crearSurveyInstance({
+      ambito: ambito(a), recipientRole: "DRIVER",
+      caducidadMs: 3_600_000, retrasoMs: 600_000, ahoraMs: ahora,
+    });
+    expect(r.instancia.expiresAtMs).toBe(ahora + 3_600_000);
+    expect(r.instancia.sendAfterMs).toBe(ahora + 600_000);
+  });
+
+});
+
+/* ── Emisión del token ───────────────────────────────────────────────────── */
+
+describe.skipIf(!RUN)("emisión del token", () => {
+  async function creada(rol: "DRIVER" | "CUSTOMER" = "DRIVER") {
+    const a = nuevaAsistencia();
+    const r = await svc.crearSurveyInstance({ ambito: ambito(a), recipientRole: rol });
     if (r.estado !== "created") throw new Error("no creada");
+    return { a, instancia: r.instancia };
+  }
+
+  it("emite el token una vez y guarda solo su hash", async () => {
+    const { a, instancia } = await creada();
+    const r = await svc.emitirToken(instancia.id, ambito(a));
+    expect(r.estado).toBe("emitido");
+    if (r.estado !== "emitido") return;
+    expect(r.token).toMatch(/^[A-Za-z0-9_-]{43}$/);   // 32 bytes en base64url
 
     const f = await db.query(
-      `SELECT "tokenHash" FROM survey_instances WHERE id = $1`, [r.instancia.id]);
+      `SELECT "tokenHash", "tokenIssuedAtMs" FROM survey_instances WHERE id = $1`,
+      [instancia.id]);
     expect(f.rows[0].tokenHash).toBe(svc.hashToken(r.token));
     expect(f.rows[0].tokenHash).not.toBe(r.token);
+    expect(Number(f.rows[0].tokenIssuedAtMs)).toBeGreaterThan(0);
+  });
 
-    // Y en NINGUNA columna de texto aparece el token en claro.
+  it("el token en claro no queda en ninguna parte de la base", async () => {
+    const { a, instancia } = await creada();
+    const r = await svc.emitirToken(instancia.id, ambito(a));
+    if (r.estado !== "emitido") throw new Error("no emitido");
     const rastro = await db.query(
       `SELECT COUNT(*)::int AS n FROM survey_instances WHERE "tokenHash" = $1`, [r.token]);
     expect(rastro.rows[0].n).toBe(0);
   });
 
-  it("los hashes son únicos entre encuestas", async () => {
-    const a1 = nuevaAsistencia(); const a2 = nuevaAsistencia();
-    await svc.crearSurveyInstance({ ambito: ambito(a1), recipientRole: "DRIVER" });
-    await svc.crearSurveyInstance({ ambito: ambito(a2), recipientRole: "DRIVER" });
-    const d = await db.query(
-      `SELECT COUNT(DISTINCT "tokenHash")::int AS distintos, COUNT(*)::int AS total
-         FROM survey_instances WHERE "assistanceId" = ANY($1)`, [[a1, a2]]);
-    expect(d.rows[0].distintos).toBe(d.rows[0].total);
+  /*
+   * LA prueba del token diferido: un reintento del worker NO puede generar un
+   * enlace nuevo, porque el anterior ya viajó en un WhatsApp y dejaría de
+   * funcionar.
+   */
+  it("no reemite: la segunda llamada no devuelve token", async () => {
+    const { a, instancia } = await creada();
+    const uno = await svc.emitirToken(instancia.id, ambito(a));
+    const dos = await svc.emitirToken(instancia.id, ambito(a));
+    expect(uno.estado).toBe("emitido");
+    expect(dos.estado).toBe("ya_emitido");
+    expect("token" in dos).toBe(false);
   });
 
-  it("rotar el token da uno nuevo y deja el anterior sin valor", async () => {
-    const a = nuevaAsistencia();
-    const r = await svc.crearSurveyInstance({ ambito: ambito(a), recipientRole: "DRIVER" });
-    if (r.estado !== "created") throw new Error("no creada");
-    const nuevo = await svc.rotarToken(r.instancia.id, ambito(a));
-    expect(nuevo).not.toBe(r.token);
-    const f = await db.query(`SELECT "tokenHash" FROM survey_instances WHERE id = $1`, [r.instancia.id]);
+  it("dos emisiones a la vez: solo una gana", async () => {
+    const { a, instancia } = await creada();
+    const rs = await Promise.all([
+      svc.emitirToken(instancia.id, ambito(a)),
+      svc.emitirToken(instancia.id, ambito(a)),
+    ]);
+    expect(rs.filter((r) => r.estado === "emitido")).toHaveLength(1);
+  });
+
+  it("no se emite para una caducada, una completada ni una cancelada", async () => {
+    const cad = nuevaAsistencia();
+    const c = await svc.crearSurveyInstance({
+      ambito: ambito(cad), recipientRole: "DRIVER", caducidadMs: -1000,
+    });
+    expect(await svc.emitirToken(c.instancia.id, ambito(cad)))
+      .toMatchObject({ estado: "no_procede", motivo: "caducada" });
+
+    const { a, instancia } = await creada();
+    await svc.cambiarEstado(instancia.id, ambito(a), "CANCELLED");
+    expect(await svc.emitirToken(instancia.id, ambito(a)))
+      .toMatchObject({ estado: "no_procede", motivo: "cancelada" });
+
+    const { a: a2, instancia: i2 } = await creada("CUSTOMER");
+    await svc.completarSurvey({
+      instanceId: i2.id, ambito: ambito(a2),
+      respuestas: [
+        { code: "overall_rating", value: 5 }, { code: "speed_rating", value: 5 },
+        { code: "tracking_rating", value: 5 }, { code: "resolution", value: "YES" },
+      ],
+    });
+    expect(await svc.emitirToken(i2.id, ambito(a2)))
+      .toMatchObject({ estado: "no_procede", motivo: "completada" });
+  });
+
+  it("rotar sí da uno nuevo, e invalida el anterior", async () => {
+    const { a, instancia } = await creada();
+    const uno = await svc.emitirToken(instancia.id, ambito(a));
+    if (uno.estado !== "emitido") throw new Error("no emitido");
+    const nuevo = await svc.rotarToken(instancia.id, ambito(a));
+    expect(nuevo).not.toBe(uno.token);
+    const f = await db.query(`SELECT "tokenHash" FROM survey_instances WHERE id = $1`, [instancia.id]);
     expect(f.rows[0].tokenHash).toBe(svc.hashToken(nuevo));
+    expect(f.rows[0].tokenHash).not.toBe(svc.hashToken(uno.token));
+  });
+
+  it("otro taller no emite ni rota", async () => {
+    const { instancia } = await creada();
+    const ajeno = { sourceSystem: "assist" as const, tenantId: "otro", assistanceId: "0" };
+    await expect(svc.emitirToken(instancia.id, ajeno))
+      .rejects.toMatchObject({ codigo: "instancia_no_encontrada" });
+    await expect(svc.rotarToken(instancia.id, ajeno))
+      .rejects.toMatchObject({ codigo: "instancia_no_encontrada" });
   });
 });
 
