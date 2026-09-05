@@ -20,6 +20,7 @@
 
 import pool from "../db.ts";
 import type { EstadoCaso, Prioridad, RolDestinatario } from "./dominio.ts";
+import { unirAsistencia } from "./sqlAsistencia.ts";
 
 /* ── Satisfaction de una asistencia ──────────────────────────────────────── */
 
@@ -256,7 +257,7 @@ export async function listarCasos(
 
   const DE = `
     FROM quality_cases q
-    LEFT JOIN roadside_assistances a ON a.id = q."assistanceId"::integer
+    LEFT JOIN roadside_assistances a ${unirAsistencia("q")}
     LEFT JOIN connect_clients c ON c.id = a."clienteFacturacionId"
     LEFT JOIN connect_workshops w ON w.id = a."proveedorTallerId"
    WHERE ${donde}`;
@@ -363,7 +364,7 @@ export async function detalleCaso(
             a."createdAtMs" AS "solicitadaEnMs", a."assignedAtMs", a."departedAtMs",
             a."arrivedAtPointMs", a."inicioReparacionAtMs", a."finishedAtMs"
        FROM quality_cases q
-       LEFT JOIN roadside_assistances a ON a.id = q."assistanceId"::integer
+       LEFT JOIN roadside_assistances a ${unirAsistencia("q")}
        LEFT JOIN connect_clients c ON c.id = a."clienteFacturacionId"
        LEFT JOIN connect_workshops w ON w.id = a."proveedorTallerId"
       WHERE q.id = $1
