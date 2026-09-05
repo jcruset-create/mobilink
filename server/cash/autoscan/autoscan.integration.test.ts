@@ -57,6 +57,14 @@ beforeAll(async () => {
   db = (await import("../../db.ts")).default;
   await (await import("../schema.ts")).initCash();
   devices = await import("./devices.ts");
+  /*
+   * La licencia la contesta la prueba. El comprobador de verdad pregunta por
+   * `app_licencia_activa()`, que esta base no tiene, y no hay valor por
+   * defecto a propósito: un puerto sin registrar hace fallar la activación en
+   * vez de dejar pasar, que es lo que se quiere si algún día alguien olvida
+   * registrarlo al montar.
+   */
+  devices.registrarComprobadorDeLicencia(async () => true);
   inbox = await import("./inbox.ts");
   promote = await import("./promote.ts");
 }, 180_000);

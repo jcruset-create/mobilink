@@ -90,6 +90,19 @@ que no se puedan confundir.
 
 ## Rutas
 
+**De máquina** (`x-autoscan-key`, salvo la primera). Van en un **router
+aparte**, montado antes que el de personas sobre el mismo prefijo: el router de
+personas aplica `authenticate` a todo lo suyo, y un escáner no tiene sesión de
+Supabase. Mientras estas tres rutas vivieron dentro de aquél, respondían «Falta
+el token de sesión» y el agente no podía ni activarse.
+
+La licencia del módulo se comprueba aquí explícitamente, con la empresa del
+dispositivo: al salir de debajo de `requireModule("cash")` se perdía esa
+comprobación, y una empresa sin licencia habría seguido ingiriendo facturas por
+la puerta de atrás. Un fallo de licencia responde **403**, no 401: la credencial
+del escáner es buena, así que un agente bien hecho no debe borrarla ni obligar a
+reinstalar.
+
 **De máquina** (`x-autoscan-key`, salvo la primera):
 
 - `POST /api/cash/autoscan/activate` — canjea el código por la credencial.
@@ -155,10 +168,29 @@ vea, porque es el único momento del día en que alguien mira la caja entera.
   programa que corre en el PC del mostrador es trabajo aparte.
 - No cobra nada sola. Sigue habiendo una persona que confirma.
 
+## Lo que el agente TIENE que cumplir
+
+- **`Idempotency-Key` es obligatoria** en cada subida — por cabecera o como
+  campo del multipart. Sin ella, 400. Es lo que distingue «reintento de lo
+  mismo» de «ha llegado otro papel», y es la segunda columna del índice único.
+- **Si va como campo del multipart, tiene que ir ANTES del fichero.** `multer`
+  solo deja en `req.body` los campos que llegan antes; mandarla después parece
+  funcionar y deja la idempotencia muda.
+- **401 y 403 no significan lo mismo.** 401 es «esta credencial no vale»
+  (revocada o inventada) y pide volver a activarse. 403 con
+  `LICENCIA_CADUCADA` es «la credencial vale, la licencia no»: hay que esperar
+  y reintentar, no reinstalar.
+- Un fichero de más de 15 MB se rechaza con **400** `FICHERO_DEMASIADO_GRANDE`
+  desde el guardián de subida, antes de llegar al dominio.
+
 ## Cómo se ha comprobado
 
-- 27 casos de integración propios contra PostgreSQL real, y 2552 en total en
-  verde sin regresiones.
+- 27 casos de dominio y **18 por HTTP**, contra PostgreSQL real.
+- Los de HTTP montan con el **`mountCash` de verdad**, no con un montaje a
+  medida: es la única forma de que prueben lo que hay que probar —que el router
+  de máquina va delante—. Con el orden anterior, 15 de los 18 se ponen rojos.
+- 2851 en total en verde, dos veces seguidas y **contra una base creada desde
+  cero**, que es lo que hace la CI.
 - La bandeja y el aviso de cierre, renderizados y mirados en un navegador de
   verdad en sus cuatro estados (cerrada, abierta, con factura elegida, y el
   aviso).
