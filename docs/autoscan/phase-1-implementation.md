@@ -33,6 +33,7 @@ ESCÁNER ──POST /autoscan/documents──▶ cash_autoscan_inbox (PENDIENTE)
 | `server/cash/autoscan/promote.ts` | De la bandeja al justificante de un cobro. |
 | `server/cash/autoscan/autoscan.integration.test.ts` | 27 casos contra PostgreSQL real. |
 | `src/modules/cash/components/BandejaAutoScan.tsx` | La bandeja en Cobros y el aviso de cierre. |
+| `Configuracion.tsx` · `DispositivosAutoScan` | Dar de alta escáneres, ver cuáles responden y revocarlos. |
 
 ## Tablas
 
@@ -120,6 +121,25 @@ las tres estaban analizándose.
 La factura elegida se ve con la bandeja abierta o cerrada, y es **excluyente**
 con el adjunto manual: un cobro, un justificante.
 
+## Dar de alta un escáner
+
+En **Configuración → AutoScan · escáneres**. Sin esta pantalla la funcionalidad
+no es alcanzable: no hay otra forma de generar un código de activación, y sin
+código no se activa ningún escáner.
+
+Se pone nombre a la máquina, se elige el taller, y sale un código
+`MC-AS-XXXX-YYYY` que **se enseña una sola vez**. De la credencial se guarda
+solo el hash, así que no se puede volver a consultar: si se pierde, se genera
+otro. Guardarlo recuperable lo convertiría en una credencial permanente, que es
+justo lo que no es — por eso el código vive en memoria de la pantalla y en
+ningún sitio más.
+
+La tabla dice cuáles responden (`conectado` se deriva del último latido, nunca
+se guarda), con qué versión del agente, y permite revocar. **Los revocados no
+se esconden**: los documentos que dejaron apuntan a ellos, y saber de qué
+máquina vino una factura es lo que hace falta el día que se investiga algo.
+Revocar uno no toca a los demás del centro.
+
 ## Al cerrar la jornada
 
 Un aviso, **no un bloqueo**. Puede haber en la bandeja un albarán escaneado por
@@ -142,3 +162,6 @@ vea, porque es el único momento del día en que alguien mira la caja entera.
 - La bandeja y el aviso de cierre, renderizados y mirados en un navegador de
   verdad en sus cuatro estados (cerrada, abierta, con factura elegida, y el
   aviso).
+- La pantalla de escáneres, igual, en sus cuatro casos: con dispositivos, justo
+  después de generar el código, instalación nueva sin ninguno, y sin permiso de
+  gestión.

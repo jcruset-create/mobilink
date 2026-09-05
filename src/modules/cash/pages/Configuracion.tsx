@@ -40,6 +40,7 @@ import type {
   ReglaPagoConfig,
   CampoRegla,
   SeccionConfig,
+  DispositivoAutoScan,
 } from "../types";
 import * as api from "../services/api";
 
@@ -80,6 +81,7 @@ export default function Configuracion() {
       <Secciones />
       <FormasPago />
       <ReglasEscaner />
+      <DispositivosAutoScan />
       {puede("cash.denominations.configure") ? <Denominaciones /> : <DenominacionesSoloLectura />}
     </div>
   );
@@ -1927,6 +1929,273 @@ const ETIQUETA_CAMPO_REGLA: Record<CampoRegla, string> = {
   PLANTILLA: "Tipo de resguardo",
   TEXTO: "Texto del resguardo (poco fiable)",
 };
+
+// ── Dispositivos de AutoScan ───────────────────────────────────────────────
+
+/**
+ * Los escáneres del mostrador que pueden dejar facturas en la bandeja.
+ *
+ * Sin esta pantalla AutoScan no existe: no hay otra forma de generar un código
+ * de activación, y sin código no se da de alta ningún escáner.
+ *
+ * ## Un dispositivo no es una persona
+ *
+ * Podría parecer más simple guardar en el PC de recepción el token de un
+ * empleado. Sería el error que todo esto viene a evitar: ese token caduca, es
+ * personal, y el día que esa persona se va de baja la tienda se queda sin
+ * escáner sin que nadie entienda por qué. Una credencial de dispositivo no
+ * caduca, no es de nadie, y lo único que puede hacer es dejar un documento de
+ * SU empresa y SU centro.
+ *
+ * ## El código se enseña una vez
+ *
+ * De la credencial se guarda solo el hash, así que el código no se puede
+ * volver a consultar: si se pierde, se genera otro. Guardarlo recuperable lo
+ * convertiría en una credencial permanente, que es justo lo que no es. Por eso
+ * la pantalla insiste en copiarlo AHORA y no lo vuelve a enseñar al recargar.
+ */
+function DispositivosAutoScan() {
+  const { puede } = useCash();
+  const [dispositivos, setDispositivos] = useState<DispositivoAutoScan[]>([]);
+  const [centros, setCentros] = useState<Centro[]>([]);
+  const [nombre, setNombre] = useState("");
+  const [centroId, setCentroId] = useState("");
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  /*
+   * El código recién creado, en memoria y nada más. No se guarda en
+   * `localStorage` ni se vuelve a pedir: mientras vive es una credencial, y una
+   * credencial no se deja escrita en el navegador de recepción.
+   */
+  const [recien, setRecien] = useState<{ codigo: string; expiraAtMs: number } | null>(null);
+
+  const gestiona = puede("cash.autoscan.manage");
+
+  const cargar = useCallback(async () => {
+    try {
+      const [d, j] = await Promise.all([api.dispositivosAutoScan(), api.jerarquia()]);
+      setDispositivos(d.dispositivos);
+      setCentros(j.centros.filter((c) => c.activo));
+      // Con el usuario limitado a un taller, el centro no se pregunta.
+      if (j.ambitoCentroId) setCentroId(j.ambitoCentroId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando los dispositivos");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function alta() {
+    if (!nombre.trim()) return;
+    setOcupado(true);
+    setError("");
+    try {
+      const r = await api.crearDispositivoAutoScan({
+        nombre: nombre.trim(),
+        centroId: centroId || undefined,
+      });
+      setRecien(r);
+      setNombre("");
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido crear el código");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function revocar(d: DispositivoAutoScan) {
+    if (
+      !confirm(
+        `¿Revocar «${d.nombre}»?\n\nDejará de poder dejar facturas al momento. Las que ya dejó ` +
+          `siguen en la bandeja y los cobros hechos con ellas no se tocan. Los demás escáneres ` +
+          `del centro siguen funcionando.`
+      )
+    ) {
+      return;
+    }
+    setOcupado(true);
+    setError("");
+    try {
+      await api.revocarDispositivoAutoScan(d.id);
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido revocar");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  const nombreCentro = (id: string) => centros.find((c) => c.id === id)?.nombre ?? "—";
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        AutoScan · escáneres
+      </h2>
+      <p className="text-[12px] text-slate-500">
+        Los PC de mostrador que dejan facturas solas en la bandeja de Cobros. Se da de alta uno por
+        máquina: se genera un código, se teclea en el agente de esa máquina y a partir de ahí
+        trabaja sola. El código vale una hora y para un solo escáner.
+      </p>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {/*
+        Se enseña UNA vez y con todo el énfasis, porque no hay segunda
+        oportunidad: al recargar la pantalla ya no está en ningún sitio.
+      */}
+      {recien && (
+        <div className="rounded-lg border border-emerald-700/60 bg-emerald-950/30 p-3">
+          <div className="text-[11px] font-bold uppercase tracking-wide text-emerald-300">
+            Código de activación
+          </div>
+          <div className="my-1.5 select-all font-mono text-2xl font-black tracking-wider text-emerald-100">
+            {recien.codigo}
+          </div>
+          <p className="text-[12px] text-emerald-200/90">
+            Cópialo ahora: <strong>no se puede volver a consultar</strong>. Caduca a las{" "}
+            {new Date(recien.expiraAtMs).toLocaleTimeString("es-ES", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}{" "}
+            y solo sirve para activar un escáner. Si se pierde, se genera otro.
+          </p>
+          <button className={`${btnMini} mt-2`} onClick={() => setRecien(null)}>
+            Ya lo tengo
+          </button>
+        </div>
+      )}
+
+      {gestiona && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Nombre del escáner
+            </span>
+            <input
+              value={nombre}
+              onChange={(e) => setNombre(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void alta();
+              }}
+              placeholder="PC mostrador"
+              className={inputCls}
+            />
+          </label>
+          {centros.length > 0 && (
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                Taller
+              </span>
+              <select
+                value={centroId}
+                onChange={(e) => setCentroId(e.target.value)}
+                className={inputCls}
+              >
+                <option value="">Elige el taller</option>
+                {centros.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.nombre}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <button
+            className={btnPrimary}
+            disabled={ocupado || !nombre.trim()}
+            onClick={() => void alta()}
+          >
+            <Plus className="mr-1 inline h-4 w-4" /> Generar código
+          </button>
+        </div>
+      )}
+
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Escáner</th>
+            <th className={thCls}>Taller</th>
+            <th className={thCls}>Estado</th>
+            <th className={thCls}>Versión</th>
+            {gestiona && <th className={`${thCls} text-right`}>Acciones</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {dispositivos.length === 0 && (
+            <EmptyRow
+              cols={gestiona ? 5 : 4}
+              text="Todavía no hay ningún escáner. Sin escáneres, el bloque de AutoScan no sale en Cobros."
+            />
+          )}
+          {dispositivos.map((d) => (
+            /* Los revocados NO se esconden: los documentos que dejaron
+               apuntan a ellos, y saber de qué máquina vino una factura es
+               justo lo que hace falta el día que se investiga algo. */
+            <tr key={d.id} className={d.revocadoAtMs ? "opacity-50" : ""}>
+              <td className={tdCls}>
+                <span className="font-medium text-slate-100">{d.nombre}</span>
+              </td>
+              <td className={`${tdCls} text-slate-400`}>{nombreCentro(d.centroId)}</td>
+              <td className={tdCls}>
+                <EstadoDispositivo dispositivo={d} />
+              </td>
+              <td className={`${tdCls} font-mono text-[11px] text-slate-400`}>{d.version ?? "—"}</td>
+              {gestiona && (
+                <td className={`${tdCls} text-right`}>
+                  {!d.revocadoAtMs && (
+                    <button className={btnMini} disabled={ocupado} onClick={() => void revocar(d)}>
+                      Revocar
+                    </button>
+                  )}
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+    </section>
+  );
+}
+
+/**
+ * Conectado, sin conexión o revocado.
+ *
+ * «Sin conexión» lleva la hora del último latido porque el dato útil no es que
+ * esté caído, sino desde cuándo: cinco minutos es que acaban de apagar el PC;
+ * tres días es que nadie ha mirado ese mostrador.
+ */
+function EstadoDispositivo({ dispositivo: d }: { dispositivo: DispositivoAutoScan }) {
+  if (d.revocadoAtMs) {
+    return <span className="text-[12px] text-slate-500">Revocado</span>;
+  }
+  if (d.conectado) {
+    return (
+      <span className="flex items-center gap-1.5 text-[12px] text-emerald-300">
+        <span className="h-2 w-2 rounded-full bg-emerald-400" /> Conectado
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5 text-[12px] text-amber-300">
+      <span className="h-2 w-2 rounded-full bg-amber-500/70" />
+      {d.ultimoVistoAtMs
+        ? `Visto ${new Date(d.ultimoVistoAtMs).toLocaleString("es-ES", {
+            day: "2-digit",
+            month: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}`
+        : /* En la práctica no pasa: la fila nace al activar y ya trae la hora.
+             Queda por si acaso, sin inventarse un motivo que no se sabe. */
+          "Sin conexión"}
+    </span>
+  );
+}
+
 
 // ── Correo de la central ───────────────────────────────────────────────────
 
