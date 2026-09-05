@@ -43,6 +43,7 @@ let documentos: typeof import("./documents.ts");
 let ingresos: typeof import("./bankdeposits.ts");
 let informe: typeof import("./report.ts");
 let reauth: typeof import("./reauth.ts");
+let duplicates: typeof import("./duplicates.ts");
 let migracion: typeof import("./migration.ts");
 let eventos: typeof import("./events/worker.ts");
 let transporte: typeof import("./events/transport.ts");
@@ -123,6 +124,7 @@ beforeAll(async () => {
   ingresos = await import("./bankdeposits.ts");
   informe = await import("./report.ts");
   reauth = await import("./reauth.ts");
+  duplicates = await import("./duplicates.ts");
   migracion = await import("./migration.ts");
   eventos = await import("./events/worker.ts");
   transporte = await import("./events/transport.ts");
@@ -5326,6 +5328,291 @@ describe.runIf(RUN)("cuentas anteriores al maestro de bancos", () => {
       [rows[0].id]
     );
     expect(despues[0].bank_id).toBe(bbva.id);
+  });
+});
+
+describe.runIf(RUN)("cobrar dos veces la misma factura", () => {
+  /**
+   * La protección entera, de punta a punta: detectar, negarse, autorizar con
+   * las credenciales de OTRO, y gastar la autorización una sola vez.
+   *
+   * El verificador de claves es enchufable —igual que en la reautenticación—,
+   * así que la REGLA se prueba sin Supabase delante.
+   */
+  const CAJERO = "00000000-0000-4000-a000-00000000cc01";
+  const ENCARGADO = "00000000-0000-4000-a000-00000000cc02";
+
+  async function caja() {
+    const id = await crearCaja(`dup-${Date.now()}`);
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: id });
+    return { registerId: id, sessionId: sesion.id };
+  }
+
+  /*
+   * Dos importes, y el cliente paga justo con billetes que existen: la caja
+   * abre vacía y aquí no se está probando el cambio, sino el duplicado. Si
+   * hubiera que devolver, fallaría por no tener con qué y taparía lo que sí
+   * interesa.
+   */
+  const NORMAL = 21000;
+  const OTRO = 31000;
+  const PIEZAS: Record<number, { valor: number; cantidad: number }[]> = {
+    [NORMAL]: [{ valor: 20000, cantidad: 1 }, { valor: 1000, cantidad: 1 }],
+    [OTRO]: [
+      { valor: 20000, cantidad: 1 },
+      { valor: 10000, cantidad: 1 },
+      { valor: 1000, cantidad: 1 },
+    ],
+  };
+
+  async function cobrar(
+    sessionId: number,
+    referencia: string,
+    importeCentimos = NORMAL,
+    autorizacionDuplicado?: string
+  ) {
+    return servicio.registrarCobro(
+      { ...ctx, userId: CAJERO },
+      {
+        sessionId,
+        importeCentimos,
+        formasPago: [{ forma: "CASH", importe: importeCentimos }],
+        efectivoRecibido: PIEZAS[importeCentimos],
+        concepto: "Reparación",
+        referencia,
+        autorizacionDuplicado,
+      }
+    );
+  }
+
+  /**
+   * Pone a una encargada al otro lado: su clave la reconoce el verificador y
+   * el directorio dice de qué empresa es y qué puede hacer.
+   *
+   * Las dos piezas van enchufadas porque las de verdad hablan con Supabase y
+   * con las tablas del SaaS —que en una base del módulo pueden no estar—, y lo
+   * que se prueba aquí es la REGLA, no el conector.
+   */
+  function conEncargado(opciones: { clave?: string; conPermiso?: boolean; empresa?: string } = {}) {
+    const { clave = "buena", conPermiso = true, empresa = EMPRESA } = opciones;
+    reauth.registrarVerificador({
+      verificar: async () => true,
+      identificar: async (_usuario, c) => (c === clave ? ENCARGADO : null),
+    });
+    duplicates.registrarDirectorio({
+      buscar: async (id) =>
+        id === ENCARGADO
+          ? {
+              empresaId: empresa,
+              nombre: "Encargada",
+              permisos: conPermiso
+                ? ["cash.view", "cash.duplicate_payment.override"]
+                : ["cash.view"],
+            }
+          : null,
+    });
+    return ENCARGADO;
+  }
+
+  /** Deshace los dos enchufes. Se llama siempre, pase lo que pase. */
+  function sinEncargado() {
+    reauth.registrarVerificador(null);
+    duplicates.registrarDirectorio(null);
+  }
+
+  async function autorizar(referencia: string, importeCentimos = NORMAL, clave = "buena") {
+    const { autorizarDuplicado } = await import("./duplicates.ts");
+    return autorizarDuplicado({
+      empresaId: EMPRESA,
+      solicitanteId: CAJERO,
+      autorizador: "encargada",
+      clave,
+      referencia,
+      importeCentimos,
+    });
+  }
+
+  it("el primer cobro pasa; el segundo NO, aunque la pantalla no supiera nada", async () => {
+    const { sessionId } = await caja();
+    const ref = `F-${Date.now()}`;
+    await cobrar(sessionId, ref);
+
+    await expect(cobrar(sessionId, ref)).rejects.toMatchObject({ codigo: "COBRO_DUPLICADO" });
+  });
+
+  it("la protección vale también para una factura tecleada a mano", async () => {
+    /*
+     * No depende del escáner. Quien teclea el número de una factura que ya se
+     * cobró se topa con lo mismo, que es lo que hace que esto sea una
+     * protección y no un aviso de la pantalla.
+     */
+    const { sessionId } = await caja();
+    const ref = `MANO-${Date.now()}`;
+    await cobrar(sessionId, ref);
+    await expect(cobrar(sessionId, ref)).rejects.toMatchObject({ codigo: "COBRO_DUPLICADO" });
+  });
+
+  it("con autorización de otra persona sí pasa, y queda el rastro de los dos", async () => {
+    const { sessionId } = await caja();
+    const ref = `AUT-${Date.now()}`;
+    const primero = await cobrar(sessionId, ref);
+    const encargado = conEncargado();
+    try {
+      const a = await autorizar(ref);
+      expect(a.token).toBeTruthy();
+      const segundo = await cobrar(sessionId, ref, NORMAL, a.token);
+      expect(segundo.operacionId).not.toBe(primero.operacionId);
+
+      // Quién cobró y quién autorizó, separados.
+      const { rows } = await db.query(
+        `SELECT solicitado_por, autorizado_por, consumida_operation_id
+           FROM cash_duplicate_overrides WHERE referencia = $1`,
+        [ref.toUpperCase()]
+      );
+      expect(rows[0].solicitado_por).toBe(CAJERO);
+      expect(rows[0].autorizado_por).toBe(encargado);
+      expect(rows[0].consumida_operation_id).toBe(segundo.operacionId);
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("la autorización NO se puede usar dos veces", async () => {
+    const { sessionId } = await caja();
+    const ref = `UNA-${Date.now()}`;
+    await cobrar(sessionId, ref);
+    conEncargado();
+    try {
+      const a = await autorizar(ref);
+      await cobrar(sessionId, ref, NORMAL, a.token);
+      await expect(cobrar(sessionId, ref, NORMAL, a.token)).rejects.toMatchObject({
+        codigo: "AUTORIZACION_NO_VALIDA",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("la autorización de una factura NO sirve para otra", async () => {
+    const { sessionId } = await caja();
+    const a1 = `A-${Date.now()}`;
+    const a2 = `B-${Date.now()}`;
+    await cobrar(sessionId, a1);
+    await cobrar(sessionId, a2);
+    conEncargado();
+    try {
+      const a = await autorizar(a1);
+      await expect(cobrar(sessionId, a2, NORMAL, a.token)).rejects.toMatchObject({
+        codigo: "AUTORIZACION_NO_VALIDA",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("la autorización de un importe NO sirve para otro", async () => {
+    const { sessionId } = await caja();
+    const ref = `IMP-${Date.now()}`;
+    await cobrar(sessionId, ref);
+    conEncargado();
+    try {
+      const a = await autorizar(ref, NORMAL);
+      await expect(cobrar(sessionId, ref, OTRO, a.token)).rejects.toMatchObject({
+        codigo: "AUTORIZACION_NO_VALIDA",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("una clave equivocada no autoriza nada", async () => {
+    const { sessionId } = await caja();
+    const ref = `CLA-${Date.now()}`;
+    await cobrar(sessionId, ref);
+    conEncargado();
+    try {
+      await expect(autorizar(ref, NORMAL, "mala")).rejects.toMatchObject({
+        codigo: "CLAVE_NO_VALIDA",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("un cajero con clave buena pero SIN permiso tampoco autoriza", async () => {
+    const { sessionId } = await caja();
+    const ref = `PER-${Date.now()}`;
+    await cobrar(sessionId, ref);
+    // La clave sigue siendo buena; el permiso no está. Es el caso del cajero
+    // que se sabe la clave del encargado.
+    conEncargado({ conPermiso: false });
+    try {
+      await expect(autorizar(ref)).rejects.toMatchObject({
+        codigo: "AUTORIZADOR_SIN_PERMISO",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("no se autoriza lo que no es un duplicado", async () => {
+    // Si nadie ha cobrado esa factura, no hay protección que levantar: pedir la
+    // clave para nada sería acostumbrar a la gente a teclearla porque sí.
+    conEncargado();
+    try {
+      await expect(autorizar(`LIBRE-${Date.now()}`)).rejects.toMatchObject({
+        codigo: "SIN_DUPLICADO",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("dos cobros a la vez de la misma factura: uno solo", async () => {
+    /*
+     * El doble clic. No hace falta nada nuevo: el cobro ya bloquea su jornada,
+     * así que las dos peticiones se ponen en fila y la segunda ve el asiento de
+     * la primera.
+     */
+    const { sessionId } = await caja();
+    const ref = `CONC-${Date.now()}`;
+    const resultados = await Promise.allSettled([
+      cobrar(sessionId, ref),
+      cobrar(sessionId, ref),
+    ]);
+    expect(resultados.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const fallo = resultados.find((r) => r.status === "rejected");
+    expect((fallo as PromiseRejectedResult).reason).toMatchObject({ codigo: "COBRO_DUPLICADO" });
+
+    const { rows } = await db.query(
+      `SELECT count(*)::int AS n FROM cash_operations
+        WHERE empresa_id = $1 AND tipo = 'COLLECTION' AND estado = 'CONFIRMED'
+          AND upper(trim(referencia)) = $2`,
+      [EMPRESA, ref.toUpperCase()]
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("un cobro sin número de factura no se estorba a sí mismo", async () => {
+    // Sin referencia no hay nada con lo que comparar, y el mostrador cobra sin
+    // factura todos los días.
+    const { sessionId } = await caja();
+    await servicio.registrarCobro(ctx, {
+      sessionId,
+      importeCentimos: 1000,
+      formasPago: [{ forma: "CASH", importe: 1000 }],
+      efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+      concepto: "Sin factura",
+    });
+    await expect(
+      servicio.registrarCobro(ctx, {
+        sessionId,
+        importeCentimos: 1000,
+        formasPago: [{ forma: "CASH", importe: 1000 }],
+        efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+        concepto: "Sin factura",
+      })
+    ).resolves.toBeTruthy();
   });
 });
 

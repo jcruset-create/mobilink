@@ -177,6 +177,9 @@ export function validar(
     formaCobro,
     importeCuadra,
     avisos,
+    // Lo rellena el servicio si el histórico dice que ya se cobró: aquí no se
+    // consulta nada, que es lo que permite probar esta pieza sin base de datos.
+    cobroPrevio: null,
     extra: extraccion,
   };
 }

@@ -64,6 +64,15 @@ export const PERMISOS = [
    * hacer quien la registró sin que quede rastro.
    */
   "cash.document.void",
+  /**
+   * Autorizar el cobro de una factura que ya consta cobrada.
+   *
+   * Es de responsable y no de cajero A PROPÓSITO: quien está en el mostrador
+   * con la prisa del cliente delante es justo quien no debe poder levantar
+   * solo la protección que existe para él. Cobrar dos veces la misma factura
+   * es de los errores que no se descubren hasta la conciliación del mes.
+   */
+  "cash.duplicate_payment.override",
   "cash.erp.view",
   "cash.erp.sync",
   "cash.erp.configure",
@@ -107,6 +116,7 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     "cash.movement.create",
     "cash.adjustment.create",
     "cash.operation.reverse",
+    "cash.duplicate_payment.override",
     "cash.count.create",
     // Puede dar de alta una caja de su empresa, pero no tocar el catálogo de
     // denominaciones, que es de toda la instalación.
