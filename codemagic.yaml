@@ -23,16 +23,11 @@ workflows:
     #   ios-testflight -> publishing
     #   auth -> "integration" requires workflow -> integrations -> app_store_connect
     integrations:
-      # ⚠️  SUSTITUIR por el nombre EXACTO de la clave en Codemagic.
-      #
-      # Se lee en Codemagic → Settings → Developer Portal → Manage keys, en la
-      # columna del nombre. Distingue mayúsculas, espacios y acentos: tiene que
-      # ir carácter por carácter.
-      #
-      # Mientras ponga esto, el build falla diciendo que no encuentra la
-      # integración. Es a propósito: es preferible un error que dice qué falta
-      # a un nombre inventado que falle por un motivo que no se entiende.
-      app_store_connect: PON_AQUI_EL_NOMBRE_DE_LA_KEY
+      # El nombre de la clave en Codemagic → Settings → Developer Portal →
+      # Manage keys. Hay dos claves conectadas —la otra es la de TyreControl—,
+      # así que esto tiene que decir exactamente ésta, carácter por carácter:
+      # si no coincide, Codemagic no encuentra la integración y no compila.
+      app_store_connect: Mobilink Assist
 
     environment:
       flutter: stable
