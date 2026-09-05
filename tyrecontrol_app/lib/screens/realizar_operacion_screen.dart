@@ -1,8 +1,8 @@
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import '../services/fotos.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/models.dart';
 import '../services/offline_store.dart';
@@ -356,13 +356,11 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
   /// se acumularan para el final, un parte con doce fotos tardaría un minuto
   /// en cerrarse con el cliente delante, y un corte de red lo perdería todo.
   Future<String?> _hacerFoto() async {
-    final foto = await ImagePicker().pickImage(
-        source: ImageSource.camera, imageQuality: 85);
+    final foto = await elegirFoto(context);
     if (foto == null) return null;
     setState(() { _trabajando = true; _error = null; });
     try {
-      return await TyreControlApi.subirFotoParte(
-          File(foto.path), carpeta: _carpetaFotos);
+      return await TyreControlApi.subirFotoParte(foto, carpeta: _carpetaFotos);
     } catch (e) {
       if (mounted) setState(() => _error = 'No se ha podido subir la foto: $e');
       return null;
@@ -541,11 +539,11 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
   }
 
   Future<void> _escanearMatricula() async {
-    final foto = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 85);
+    final foto = await elegirFoto(context);
     if (foto == null) return;
     setState(() { _trabajando = true; _error = null; });
     try {
-      final leida = await OcrService.reconocerMatricula(File(foto.path));
+      final leida = await OcrService.reconocerMatricula(foto);
       if (!mounted) return;
       // La lectura SE ENSEÑA, no se da por buena: el operario la confirma o la
       // corrige antes de que se busque nada.
@@ -574,7 +572,7 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     try {
       final urls = <String>[];
       for (final f in fotos) {
-        urls.add(await TyreControlApi.subirFotoParte(File(f.path), carpeta: _carpetaFotos));
+        urls.add(await TyreControlApi.subirFotoParte(f, carpeta: _carpetaFotos));
       }
       final r = await TyreControlApi.leerParte(urls);
       if (!mounted) return;

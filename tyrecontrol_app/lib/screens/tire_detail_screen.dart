@@ -119,7 +119,7 @@ class _TireDetailScreenState extends State<TireDetailScreen> {
 
     if (_fotoLocalPath != null) {
       try {
-        final url = await TyreControlApi.subirFotoRevision(File(_fotoLocalPath!), revisionId: widget.revision.id, posicionId: widget.posicion.id);
+        final url = await TyreControlApi.subirFotoRevision(XFile(_fotoLocalPath!), revisionId: widget.revision.id, posicionId: widget.posicion.id);
         await TyreControlApi.guardarDetalleRevision({
           'revision_id': widget.revision.id,
           'posicion_id': widget.posicion.id,
