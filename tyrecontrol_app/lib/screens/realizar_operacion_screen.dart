@@ -38,14 +38,71 @@ const _titulos = <_Paso, String>{
 
 /// Qué se le hace a una rueda. Son las operaciones que ya existen; aquí no se
 /// inventa ninguna.
-enum _Accion { ninguna, desmontar, cambiarPosicion, reparar }
+enum _Accion { ninguna, desmontar, cambiarPosicion, reparar, montar }
 
 const _accionTexto = <_Accion, String>{
   _Accion.ninguna:         'Solo revisar',
   _Accion.desmontar:       'Desmontar',
   _Accion.cambiarPosicion: 'Mover a otra posición',
   _Accion.reparar:         'Reparar',
+  _Accion.montar:          'Montar uno',
 };
+
+/// Qué acciones tienen sentido según lo que haya en la posición. Enseñar
+/// "Desmontar" en un hueco vacío, o "Montar" donde ya hay goma, es ofrecer un
+/// camino que la base de datos va a rechazar al final del parte.
+///
+/// Una goma DECLARADA cuenta como goma: se monta antes que nada al guardar el
+/// parte, así que para cuando llegue el desmontaje ya estará ahí.
+List<_Accion> _accionesPara({required bool hayNeumatico}) => hayNeumatico
+    ? const [_Accion.ninguna, _Accion.desmontar, _Accion.cambiarPosicion, _Accion.reparar]
+    : const [_Accion.ninguna, _Accion.montar];
+
+/// La goma que se MONTA en una posición.
+///
+/// Nada que ver con lo declarado del paso 1: aquello es apuntar lo que el
+/// camión ya llevaba y no sale en el parte; esto es trabajo hecho hoy y sí
+/// sale. Se separan a propósito porque durante un rato compartieron campo y
+/// un montaje de verdad salía marcado como declarado, o sea, invisible en el
+/// papel que se le da al cliente.
+class _Montaje {
+  /// 'almacen' | 'catalogo'. Del almacén descuenta stock; del catálogo no,
+  /// y queda marcado como tal para que el inventario no mienta.
+  String origen = 'almacen';
+  String? productoId;      // almacén
+  String? referenciaId;    // catálogo
+  String? texto;           // solo para pintarlo
+  String condicion = 'nuevo';
+  /// Los milímetros reales de una goma usada. Sin ellos su ficha nace sin
+  /// profundidad y el histórico de esa rueda empieza en blanco.
+  double? profundidad;
+
+  /// La foto del número de serie de la que ENTRA es obligatoria, igual que la
+  /// de la que sale: es lo que ata esta goma concreta a su ficha.
+  String? fotoSerie;
+  String? numeroSerie;
+  String? dot;
+  bool serieDudosa = false;
+
+  bool get elegido => productoId != null || referenciaId != null;
+
+  Map<String, dynamic> aJson() => {
+        'origen': origen, 'productoId': productoId, 'referenciaId': referenciaId,
+        'texto': texto, 'condicion': condicion, 'profundidad': profundidad,
+        'fotoSerie': fotoSerie, 'numeroSerie': numeroSerie, 'dot': dot,
+      };
+
+  static _Montaje deJson(Map<String, dynamic> j) => _Montaje()
+    ..origen = (j['origen'] as String?) ?? 'almacen'
+    ..productoId = j['productoId'] as String?
+    ..referenciaId = j['referenciaId'] as String?
+    ..texto = j['texto'] as String?
+    ..condicion = (j['condicion'] as String?) ?? 'nuevo'
+    ..profundidad = (j['profundidad'] as num?)?.toDouble()
+    ..fotoSerie = j['fotoSerie'] as String?
+    ..numeroSerie = j['numeroSerie'] as String?
+    ..dot = j['dot'] as String?;
+}
 
 /// Lo apuntado para una posición: lo medido y lo que se le hace.
 class _Rueda {
@@ -55,18 +112,53 @@ class _Rueda {
   String? observaciones;
   _Accion accion = _Accion.ninguna;
   String? destinoPosicionId; // solo para cambiarPosicion
-  String motivo = 'desgaste';
-  String destino = 'almacen';
+
+  /// Razón de sustitución y destino: CÓDIGOS de tc_cat_motivos y
+  /// tc_cat_destinos, no texto libre. Nacen vacíos a propósito: si trajeran un
+  /// valor por defecto, el parte saldría con "desgaste / almacén" cada vez que
+  /// al operario se le pasara elegirlos, y eso es peor que no tener el dato.
+  String? motivo;
+  String? destino;
+
+  /// Las fotos del neumático que se retira. La del número de serie es
+  /// OBLIGATORIA: es lo que ata la goma que sale a la ficha que hay en el
+  /// sistema. Las otras dos ayudan pero no bloquean.
+  String? fotoSerie;
+  String? fotoNeumatico;
+  String? fotoDot;
+
+  /// Lo que la IA lee de esas fotos y el técnico confirma. Va a la ficha de la
+  /// goma que sale, y de ahí a la columna «Nº Serie / DOT» del parte.
+  String? numeroSerie;
+  String? dot;
+  /// El modelo leyó el serie pero sin estar seguro: se propone y se avisa.
+  bool serieDudosa = false;
+
+  /// Lo que lleva puesto, DECLARADO por el técnico, cuando Mobilink no tiene
+  /// nada fichado en esta posición. No es una acción de taller: es apuntar lo
+  /// que ya estaba ahí. Se monta desde el catálogo al guardar el parte, y a
+  /// partir de ese momento la rueda existe y se le puede hacer algo.
+  String? referenciaId;
+  String? referenciaTexto;   // solo para pintarlo; el id es lo que viaja
+  String condicion = 'usado';
+
+  /// La goma que se monta aquí HOY. Va aparte de lo declarado: ver _Montaje.
+  final _Montaje montaje = _Montaje();
 
   bool get tocada =>
       profundidad != null || presion != null || accion != _Accion.ninguna ||
-      (observaciones?.isNotEmpty ?? false);
+      referenciaId != null || (observaciones?.isNotEmpty ?? false);
 
   Map<String, dynamic> aJson() => {
         'profundidad': profundidad, 'presion': presion,
         'estadoVisual': estadoVisual, 'observaciones': observaciones,
         'accion': accion.name, 'destinoPosicionId': destinoPosicionId,
         'motivo': motivo, 'destino': destino,
+        'fotoSerie': fotoSerie, 'fotoNeumatico': fotoNeumatico, 'fotoDot': fotoDot,
+        'numeroSerie': numeroSerie, 'dot': dot,
+        'referenciaId': referenciaId, 'referenciaTexto': referenciaTexto,
+        'condicion': condicion,
+        'montaje': montaje.aJson(),
       };
 
   static _Rueda deJson(Map<String, dynamic> j) => _Rueda()
@@ -77,8 +169,27 @@ class _Rueda {
     ..accion = _Accion.values.firstWhere(
         (a) => a.name == j['accion'], orElse: () => _Accion.ninguna)
     ..destinoPosicionId = j['destinoPosicionId'] as String?
-    ..motivo = (j['motivo'] as String?) ?? 'desgaste'
-    ..destino = (j['destino'] as String?) ?? 'almacen';
+    ..motivo = j['motivo'] as String?
+    ..destino = j['destino'] as String?
+    ..fotoSerie = j['fotoSerie'] as String?
+    ..fotoNeumatico = j['fotoNeumatico'] as String?
+    ..fotoDot = j['fotoDot'] as String?
+    ..numeroSerie = j['numeroSerie'] as String?
+    ..dot = j['dot'] as String?
+    ..referenciaId = j['referenciaId'] as String?
+    ..referenciaTexto = j['referenciaTexto'] as String?
+    ..condicion = (j['condicion'] as String?) ?? 'usado'
+    ..montaje.aplicar(j['montaje']);
+}
+
+extension _AplicarMontaje on _Montaje {
+  void aplicar(dynamic j) {
+    if (j is! Map) return;
+    final m = _Montaje.deJson(Map<String, dynamic>.from(j));
+    origen = m.origen; productoId = m.productoId; referenciaId = m.referenciaId;
+    texto = m.texto; condicion = m.condicion; profundidad = m.profundidad;
+    fotoSerie = m.fotoSerie; numeroSerie = m.numeroSerie; dot = m.dot;
+  }
 }
 
 class RealizarOperacionScreen extends StatefulWidget {
@@ -121,6 +232,20 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
   final Map<String, _Rueda> _ruedas = {};
   String? _posicionActiva;
 
+  /// Los catálogos que rellenan los desplegables. NO son listas escritas aquí:
+  /// vienen de tc_cat_motivos y tc_cat_destinos, los mismos que usa el panel.
+  /// Se guardan en la tablet porque cambian una vez al año y el arcén no
+  /// siempre tiene cobertura; sin esta caché, sin red no habría desplegables.
+  List<Map<String, dynamic>> _catMotivos = [];
+  List<Map<String, dynamic>> _catDestinos = [];
+  List<Map<String, dynamic>> _catReferencias = [];
+
+  /// El stock del almacén del cliente. Es de dónde se coge la goma que se
+  /// monta, y solo si no hay se va al catálogo: montar del catálogo lo que
+  /// estaba en el almacén deja existencias que ya no están, y eso no se
+  /// descubre hasta cuadrar un inventario.
+  List<StockAlmacenLinea> _stock = [];
+
   // Servicios
   List<Map<String, dynamic>> _catServicios = [];
   final Map<String, num> _cantidades = {};
@@ -146,6 +271,104 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     TyreControlApi.listarServiciosCatalogo()
         .then((v) { if (mounted) setState(() => _catServicios = v); })
         .catchError((_) {/* se puede seguir sin catálogo */});
+    _cargarCatalogos();
+  }
+
+  /// Motivos, destinos y referencias: de la base de datos si hay red, de la
+  /// última copia guardada si no. Lo que NO se hace es inventar una lista de
+  /// respaldo en la APK: sería un catálogo paralelo que se desincronizaría del
+  /// de verdad sin que nadie se enterara.
+  Future<void> _cargarCatalogos() async {
+    void poner(String clave, List<Map<String, dynamic>> v) {
+      switch (clave) {
+        case 'motivos':     _catMotivos = v; break;
+        case 'destinos':    _catDestinos = v; break;
+        case 'referencias': _catReferencias = v; break;
+      }
+    }
+
+    // Primero lo guardado: la pantalla se pinta ya, sin esperar a la red.
+    for (final c in ['motivos', 'destinos', 'referencias']) {
+      final j = OfflineStore.cachedJson('tc_cat_$c');
+      if (j is List) {
+        poner(c, j.map((e) => Map<String, dynamic>.from(e as Map)).toList());
+      }
+    }
+    if (mounted) setState(() {});
+
+    Future<void> refrescar(
+        String clave, Future<List<Map<String, dynamic>>> Function() traer) async {
+      try {
+        final v = await traer();
+        await OfflineStore.cacheJson('tc_cat_$clave', v);
+        if (mounted) setState(() => poner(clave, v));
+      } catch (_) {
+        // Sin red se sigue con la copia guardada.
+      }
+    }
+
+    await Future.wait([
+      refrescar('motivos', TyreControlApi.listarMotivosDesmontaje),
+      refrescar('destinos', TyreControlApi.listarDestinosNeumatico),
+      refrescar('referencias', TyreControlApi.listarCatalogoReferencias),
+    ]);
+  }
+
+  /// Qué posición se está leyendo ahora mismo (para el aviso de la ficha).
+  String? _leyendo;
+
+  /// Lee el número de serie y el DOT de una foto con el lector que ya existe
+  /// (el del flanco). PROPONE: rellena los campos y el técnico confirma o
+  /// corrige antes de que se guarde nada.
+  ///
+  /// Lo que ya estuviera escrito NO se pisa: si el técnico lo tecleó a mano,
+  /// su dato manda sobre el de la máquina.
+  Future<void> _leerDeLaFoto(_Rueda r, String url) async {
+    final pos = _posicionActiva;
+    setState(() => _leyendo = pos);
+    try {
+      final l = await TyreControlApi.leerFlanco(url);
+      if (!mounted) return;
+      final serie = (l['numero_serie'] as String?)?.trim();
+      final dot = (l['dot'] as String?)?.trim();
+      final dudosos = ((l['dudosos'] as List?) ?? const []).map((e) => '$e').toSet();
+      setState(() {
+        if ((r.numeroSerie?.trim().isEmpty ?? true) && (serie?.isNotEmpty ?? false)) {
+          r.numeroSerie = serie;
+          // Si el modelo no las tenía todas consigo, se dice. La lectura se
+          // propone igual —vale más un número que comprobar que un hueco—,
+          // pero el técnico tiene que saber cuál mirar dos veces.
+          r.serieDudosa = dudosos.contains('numero_serie');
+        }
+        if ((r.dot?.trim().isEmpty ?? true) && (dot?.isNotEmpty ?? false)) {
+          r.dot = dot;
+        }
+      });
+      _guardarBorrador();
+    } catch (_) {
+      // Sin lector se sigue a mano: la foto ya está subida y el campo está ahí.
+    } finally {
+      if (mounted) setState(() => _leyendo = null);
+    }
+  }
+
+  /// Una foto: cámara, subida y URL. Se sube EN EL MOMENTO, no al guardar: si
+  /// se acumularan para el final, un parte con doce fotos tardaría un minuto
+  /// en cerrarse con el cliente delante, y un corte de red lo perdería todo.
+  Future<String?> _hacerFoto() async {
+    final foto = await ImagePicker().pickImage(
+        source: ImageSource.camera, imageQuality: 85);
+    if (foto == null) return null;
+    setState(() { _trabajando = true; _error = null; });
+    try {
+      return await TyreControlApi.subirFotoParte(
+          File(foto.path), carpeta: _carpetaFotos);
+    } catch (e) {
+      if (mounted) setState(() => _error = 'No se ha podido subir la foto: $e');
+      return null;
+    } finally {
+      if (mounted) setState(() => _trabajando = false);
+    }
   }
 
   @override
@@ -232,6 +455,19 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
   }
 
   // ── Paso 1: el vehículo ────────────────────────────────────────────────────
+  /// El stock del cliente de este vehículo. Sin empresa no hay stock, y sin
+  /// stock la pantalla ofrece el catálogo directamente: no es un fallo.
+  Future<void> _cargarStock() async {
+    final emp = _vehiculo?.empresaId;
+    if (emp == null) return;
+    try {
+      final v = await TyreControlApi.stockAlmacenEmpresa(emp);
+      if (mounted) setState(() => _stock = v);
+    } catch (_) {
+      if (mounted) setState(() => _stock = []);
+    }
+  }
+
   Future<void> _cargarVehiculoPorId(String id) async {
     try {
       final v = await TyreControlApi.obtenerVehiculo(id);
@@ -256,6 +492,9 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
         _imagenChasis = img;
         if (_km.text.isEmpty && v.kmActual > 0) _km.text = v.kmActual.toStringAsFixed(0);
       });
+      // El stock va aparte y sin bloquear: si el almacén no responde, el parte
+      // sigue y se monta del catálogo.
+      await _cargarStock();
     } catch (e) {
       if (mounted) setState(() => _error = 'No se ha podido cargar el vehículo: $e');
     } finally {
@@ -382,35 +621,177 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
   List<Map<String, dynamic>> _acciones() {
     final km = num.tryParse(_km.text.trim());
     final out = <Map<String, dynamic>>[];
+    // PRIMERO lo declarado. Lo que el técnico dice que ya lleva puesto tiene
+    // que estar montado antes de que se le haga nada; si el desmontaje fuera
+    // antes, no habría goma que desmontar.
+    _ruedas.forEach((posId, r) {
+      if (r.referenciaId == null || _montajes[posId] != null) return;
+      out.add({'rpc': 'tc_montar_desde_catalogo', 'args': {
+        'p_vehiculo': _vehiculo!.id, 'p_posicion': posId,
+        'p_referencia': r.referenciaId, 'p_control_individual': null,
+        'p_datos': <String, dynamic>{
+          if (r.condicion == 'usado' && r.profundidad != null)
+            'profundidad_actual_mm': r.profundidad!.toString(),
+        },
+        'p_km': km, 'p_fecha': null,
+        // El marcador NO es decorativo: es lo que hace que esta goma no salga
+        // en el parte como si la hubiéramos montado nosotros. Mismo estilo que
+        // el [USADO] que ya escriben los RPC de montaje.
+        'p_obs': 'Lo que ya llevaba, declarado en el parte [DECLARADO]',
+        'p_forzar_medida': false, 'p_condicion': r.condicion,
+      }});
+    });
+
     _ruedas.forEach((posId, r) {
       final montaje = _montajes[posId];
-      if (montaje == null) return; // sin goma montada no hay nada que hacerle
+      // Una goma declarada todavía no tiene id de montaje: se acaba de crear
+      // arriba, dentro de la misma transacción. Se manda la POSICIÓN y la
+      // base de datos resuelve el montaje en ese momento.
+      final porPosicion = montaje == null && r.referenciaId != null;
+      if (montaje == null && !porPosicion) return;
+      // Con montaje fichado va su id; con goma declarada, la posición, y el
+      // argumento que necesite cada RPC lo pone la base de datos.
+      final ref = porPosicion ? <String, dynamic>{} : {'p_montaje': montaje!.id};
+      final hint = porPosicion ? {'posicion_origen': posId} : const {};
+
       switch (r.accion) {
         case _Accion.ninguna:
           break;
+        case _Accion.montar:
+          break;   // el montaje se emite abajo, para todas las acciones
         case _Accion.desmontar:
-          out.add({'rpc': 'tc_desmontar_neumatico', 'args': {
-            'p_montaje': montaje.id, 'p_km': km, 'p_motivo': r.motivo,
-            'p_nuevo_estado': r.destino, 'p_obs': r.observaciones,
-          }});
+          out.add({
+            'rpc': 'tc_desmontar_neumatico',
+            ...hint,
+            'args': {
+              ...ref, 'p_km': km, 'p_motivo': r.motivo,
+              // El estado en que queda la goma lo decide el DESTINO, y esa
+              // traducción la hace la base de datos con tc_cat_destinos: aquí
+              // no se copia la tabla, solo se manda el código elegido.
+              'p_obs': r.observaciones,
+            },
+            'destino_codigo': r.destino,
+            // Lo leído de la foto y confirmado por el técnico. La base de
+            // datos lo escribe en la ficha de la goma que sale, y solo si
+            // estaba vacía: una lectura no le gana a un dato puesto a mano.
+            'numero_serie': (r.numeroSerie?.trim().isEmpty ?? true) ? null : r.numeroSerie!.trim(),
+            'dot': (r.dot?.trim().isEmpty ?? true) ? null : r.dot!.trim(),
+            'adjuntos': [
+              if (r.fotoSerie != null)
+                {'url': r.fotoSerie, 'descripcion': 'Número de serie'},
+              if (r.fotoNeumatico != null)
+                {'url': r.fotoNeumatico, 'descripcion': 'Neumático'},
+              if (r.fotoDot != null)
+                {'url': r.fotoDot, 'descripcion': 'DOT'},
+            ],
+          });
           break;
         case _Accion.cambiarPosicion:
           if (r.destinoPosicionId == null) break;
-          out.add({'rpc': 'tc_cambiar_posicion', 'args': {
-            'p_montaje': montaje.id, 'p_posicion_destino': r.destinoPosicionId,
+          out.add({'rpc': 'tc_cambiar_posicion', ...hint, 'args': {
+            ...ref, 'p_posicion_destino': r.destinoPosicionId,
             'p_km': km, 'p_obs': r.observaciones,
           }});
           break;
         case _Accion.reparar:
-          if (montaje.neumatico == null) break;
-          out.add({'rpc': 'tc_registrar_reparacion', 'args': {
-            'p_neumatico': montaje.neumatico!.id, 'p_tipo_reparacion': 'pinchazo',
+          if (!porPosicion && montaje!.neumatico == null) break;
+          out.add({'rpc': 'tc_registrar_reparacion', ...hint, 'args': {
+            if (!porPosicion) 'p_neumatico': montaje!.neumatico!.id,
+            'p_tipo_reparacion': 'pinchazo',
             'p_resultado': 'reparado', 'p_km': km, 'p_obs': r.observaciones,
           }});
           break;
       }
+
+      // Y la goma que ENTRA, después de la que sale. El orden importa: si el
+      // montaje fuera antes, la posición estaría ocupada y la base de datos
+      // tumbaría el parte entero.
+      final m = r.montaje;
+      if (m.elegido && (r.accion == _Accion.desmontar || r.accion == _Accion.montar)) {
+        final datos = <String, dynamic>{
+          if ((m.numeroSerie?.trim().isNotEmpty ?? false)) 'numero_serie': m.numeroSerie!.trim(),
+          if ((m.dot?.trim().isNotEmpty ?? false)) 'dot': m.dot!.trim(),
+          if (m.condicion == 'usado' && m.profundidad != null)
+            'profundidad_actual_mm': m.profundidad!.toString(),
+        };
+        out.add(m.origen == 'almacen'
+            ? {'rpc': 'tc_montar_desde_almacen', 'args': {
+                'p_vehiculo': _vehiculo!.id, 'p_posicion': posId,
+                'p_producto_almacen': m.productoId, 'p_control_individual': null,
+                'p_datos': datos, 'p_km': km, 'p_fecha': null,
+                'p_obs': null, 'p_forzar_medida': false, 'p_condicion': m.condicion,
+              }}
+            : {'rpc': 'tc_montar_desde_catalogo', 'args': {
+                'p_vehiculo': _vehiculo!.id, 'p_posicion': posId,
+                'p_referencia': m.referenciaId, 'p_control_individual': null,
+                'p_datos': datos, 'p_km': km, 'p_fecha': null,
+                'p_obs': 'Montado sin control de stock (no estaba en el almacén)',
+                'p_forzar_medida': false, 'p_condicion': m.condicion,
+              }});
+      }
     });
     return out;
+  }
+
+  /// Números de serie repetidos DENTRO de este parte.
+  ///
+  /// tc_neumaticos tiene único (empresa, numero_serie): si la IA lee el mismo
+  /// número en dos ruedas, el segundo montaje revienta y, como todo va en una
+  /// transacción, se cae el parte entero. Mejor decirlo aquí que con el
+  /// cliente delante.
+  List<String> get _seriesRepetidos {
+    final cuenta = <String, int>{};
+    _ruedas.forEach((_, r) {
+      for (final s in [r.numeroSerie, r.montaje.numeroSerie]) {
+        final t = s?.trim();
+        if (t != null && t.isNotEmpty) cuenta[t] = (cuenta[t] ?? 0) + 1;
+      }
+    });
+    return cuenta.entries.where((e) => e.value > 1).map((e) => e.key).toList();
+  }
+
+  /// Qué le falta al paso de las ruedas para poder seguir. Devuelve el texto
+  /// que se le enseña al operario: un botón apagado sin explicación es la
+  /// forma más rápida de que alguien acabe apuntándolo en un papel.
+  String? get _faltaEnRuedas {
+    final pendientes = <String>[];
+    _ruedas.forEach((posId, r) {
+      final nombre = _posiciones
+          .where((p) => p.id == posId)
+          .map((p) => p.codigoPosicion)
+          .followedBy(const ['?']).first;
+      final hay = _montajes[posId] != null || r.referenciaId != null;
+      if (r.accion == _Accion.desmontar && hay) {
+        final falta = <String>[
+          if (r.motivo == null) 'la razón',
+          if (r.destino == null) 'el destino',
+          if (r.fotoSerie == null) 'la foto del número de serie',
+        ];
+        if (falta.isNotEmpty) pendientes.add('$nombre: falta ${falta.join(', ')}');
+      }
+      if (r.accion == _Accion.montar && !hay && !r.montaje.elegido) {
+        pendientes.add('$nombre: falta elegir el neumático que se monta');
+      }
+      // Lo que se monta, si se monta: sin foto del serie no se puede atar esa
+      // goma a su ficha, y un usado sin milímetros nace sin histórico.
+      final m = r.montaje;
+      if (m.elegido) {
+        final falta = <String>[
+          if (m.fotoSerie == null) 'la foto del número de serie del que entra',
+          if (m.condicion == 'usado' && m.profundidad == null)
+            'la profundidad del usado que entra',
+        ];
+        if (falta.isNotEmpty) pendientes.add('$nombre: falta ${falta.join(', ')}');
+      }
+      if (r.accion == _Accion.cambiarPosicion && r.destinoPosicionId == null) {
+        pendientes.add('$nombre: falta a qué posición se mueve');
+      }
+    });
+    for (final s in _seriesRepetidos) {
+      pendientes.add('El número de serie $s está en dos ruedas: repásalo, '
+                     'la base de datos no admite dos gomas con el mismo');
+    }
+    return pendientes.isEmpty ? null : pendientes.join('\n');
   }
 
   List<Map<String, dynamic>> _mediciones() {
@@ -507,9 +888,10 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
   // ── Pintado ────────────────────────────────────────────────────────────────
   bool get _puedeContinuar {
     switch (_paso) {
-      case _Paso.vehiculo:  return _vehiculo != null;
+      case _Paso.vehiculo:  return _vehiculo != null && !_faltaDeclarar;
       case _Paso.cabecera:  return num.tryParse(_km.text.trim()) != null;
-      case _Paso.ruedas:    return true;   // un parte sin tocar ruedas es válido
+      // Un parte sin tocar ruedas es válido; uno con una rueda a medias no.
+      case _Paso.ruedas:    return _faltaEnRuedas == null;
       case _Paso.servicios: return true;
       case _Paso.firmas:    return true;
       case _Paso.revision:  return true;
@@ -723,8 +1105,126 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
           ]),
         ),
       ),
+      if (_faltaDeclarar) ...[
+        const SizedBox(height: 14),
+        _tarjetaDeclarar(),
+      ] else if (_montajes.isEmpty && _declaradas > 0) ...[
+        const SizedBox(height: 14),
+        _tarjetaDeclarado(),
+      ],
     ],
   ];
+
+  /// Cuántas posiciones llevan ya declarado lo que montan.
+  int get _declaradas =>
+      _posiciones.where((p) => _ruedas[p.id]?.referenciaId != null).length;
+
+  /// El vehículo no tiene NI UNA goma fichada y todavía no se ha dicho qué
+  /// lleva. Sin eso el parte no puede seguir: una revisión de un camión del
+  /// que no se sabe qué monta no alimenta el histórico, y desmontar algo que
+  /// para Mobilink no existe es imposible.
+  bool get _faltaDeclarar =>
+      _vehiculo != null &&
+      _posiciones.isNotEmpty &&
+      _montajes.isEmpty &&
+      _declaradas < _posiciones.length;
+
+  Widget _tarjetaDeclarar() => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: AppColors.warning.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: AppColors.warning.withValues(alpha: 0.5)),
+    ),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Icon(Icons.tire_repair, color: AppColors.warning),
+        const SizedBox(width: 8),
+        const Expanded(
+          child: Text('Este vehículo no tiene ningún neumático registrado',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        ),
+      ]),
+      const SizedBox(height: 6),
+      Text('Antes de empezar hay que decir qué medida y modelo lleva montado '
+           'en las ${_posiciones.length} posiciones. Se apunta lo que YA está '
+           'puesto: no es trabajo hecho, es poner al día la ficha para que el '
+           'parte y el histórico signifiquen algo.',
+          style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+      const SizedBox(height: 12),
+      FilledButton.icon(
+        onPressed: _declararNeumaticos,
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+        icon: const Icon(Icons.add_circle_outline),
+        label: const Text('Decir qué lleva montado'),
+      ),
+    ]),
+  );
+
+  Widget _tarjetaDeclarado() => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: AppColors.success.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: AppColors.success.withValues(alpha: 0.5)),
+    ),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Icon(Icons.check_circle, color: AppColors.success),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text('Declarado lo que lleva en las $_declaradas posiciones',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      for (final p in _posiciones)
+        if (_ruedas[p.id]?.referenciaTexto != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(children: [
+              SizedBox(width: 90,
+                  child: Text(p.codigoPosicion,
+                      style: const TextStyle(fontSize: 13, color: AppColors.textSecondary))),
+              Expanded(child: Text(_ruedas[p.id]!.referenciaTexto!,
+                  style: const TextStyle(fontSize: 13))),
+            ]),
+          ),
+      const SizedBox(height: 8),
+      TextButton.icon(
+        onPressed: _declararNeumaticos,
+        icon: const Icon(Icons.edit, size: 18),
+        label: const Text('Cambiarlo'),
+      ),
+    ]),
+  );
+
+  Future<void> _declararNeumaticos() async {
+    final r = await showModalBottomSheet<Map<String, Map<String, String>>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      builder: (_) => _DeclararMontados(
+        posiciones: _posiciones,
+        referencias: _catReferencias,
+        yaPuesto: {
+          for (final p in _posiciones)
+            if (_ruedas[p.id]?.referenciaId != null)
+              p.id: _ruedas[p.id]!.referenciaId!,
+        },
+      ),
+    );
+    if (r == null) return;
+    setState(() {
+      r.forEach((posId, datos) {
+        final rueda = _ruedas.putIfAbsent(posId, () => _Rueda());
+        rueda.referenciaId = datos['id'];
+        rueda.referenciaTexto = datos['texto'];
+        rueda.condicion = datos['condicion'] ?? 'usado';
+      });
+    });
+    _guardarBorrador();
+  }
 
   Widget _dato(String etiqueta, String? valor) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 3),
@@ -838,6 +1338,25 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
             style: TextStyle(color: AppColors.textHint))
       else
         _fichaRueda(activa),
+      if (_faltaEnRuedas != null) ...[
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppColors.warning.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppColors.warning.withValues(alpha: 0.5)),
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.info_outline, size: 18, color: AppColors.warning),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('Para seguir falta:\n$_faltaEnRuedas',
+                  style: const TextStyle(fontSize: 13, color: AppColors.warning)),
+            ),
+          ]),
+        ),
+      ],
     ];
   }
 
@@ -846,6 +1365,10 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     final pos = _posiciones.firstWhere((p) => p.id == posId);
     final montaje = _montajes[posId];
     final neu = montaje?.neumatico;
+    // Lo declarado en el paso 1 cuenta como goma puesta: se monta al guardar,
+    // antes que cualquier otra cosa.
+    final declarada = montaje == null && r.referenciaId != null;
+    final hayNeumatico = neu != null || declarada;
 
     return Card(
       color: AppColors.surface,
@@ -855,10 +1378,12 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
           Text(pos.codigoPosicion,
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
           const SizedBox(height: 2),
-          Text(neu == null
-                  ? 'Posición vacía'
-                  : [neu.marca, neu.modelo, neu.medida]
-                      .whereType<String>().where((x) => x.isNotEmpty).join(' · '),
+          Text(neu != null
+                  ? [neu.marca, neu.modelo, neu.medida]
+                      .whereType<String>().where((x) => x.isNotEmpty).join(' · ')
+                  : declarada
+                      ? '${r.referenciaTexto} · declarado'
+                      : 'Posición vacía',
               style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
           const SizedBox(height: 14),
 
@@ -870,40 +1395,111 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
               (v) => setState(() => r.presion = v),
               sugeridos: const [7, 7.5, 8, 8.5, 9]),
 
-          if (neu != null) ...[
-            const SizedBox(height: 18),
-            const Text('¿Qué se le hace?',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              for (final a in _Accion.values)
-                ChoiceChip(
-                  label: Text(_accionTexto[a]!),
-                  selected: r.accion == a,
-                  onSelected: (_) => setState(() => r.accion = a),
-                ),
-            ]),
-            if (r.accion == _Accion.cambiarPosicion) ...[
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: r.destinoPosicionId,
-                decoration: const InputDecoration(labelText: '¿A qué posición?'),
-                items: [
-                  for (final p in _posiciones)
-                    if (p.id != posId && _montajes[p.id] == null)
-                      DropdownMenuItem(value: p.id, child: Text(p.codigoPosicion)),
-                ],
-                onChanged: (v) => setState(() => r.destinoPosicionId = v),
+          const SizedBox(height: 18),
+          const Text('¿Qué se le hace?',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final a in _accionesPara(hayNeumatico: hayNeumatico))
+              ChoiceChip(
+                label: Text(_accionTexto[a]!),
+                selected: r.accion == a,
+                onSelected: (_) => setState(() => r.accion = a),
               ),
-            ],
-            if (r.accion == _Accion.desmontar) ...[
-              const SizedBox(height: 12),
-              Row(children: [
-                Expanded(child: _texto('Motivo', r.motivo, (v) => r.motivo = v)),
-                const SizedBox(width: 10),
-                Expanded(child: _texto('Destino', r.destino, (v) => r.destino = v)),
-              ]),
-            ],
+          ]),
+
+          // ── La goma que ENTRA ──
+          // Se ofrece tanto al desmontar (que es el caso normal: sale una y
+          // entra otra) como en un hueco vacío.
+          if (r.accion == _Accion.desmontar || r.accion == _Accion.montar)
+            ..._bloqueMontaje(posId, r),
+
+          if (r.accion == _Accion.cambiarPosicion) ...[
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: r.destinoPosicionId,
+              decoration: const InputDecoration(labelText: '¿A qué posición?'),
+              items: [
+                for (final p in _posiciones)
+                  if (p.id != posId && _montajes[p.id] == null)
+                    DropdownMenuItem(value: p.id, child: Text(p.codigoPosicion)),
+              ],
+              onChanged: (v) => setState(() => r.destinoPosicionId = v),
+            ),
+          ],
+
+          // ── Desmontar: razón, destino y las fotos ──
+          if (r.accion == _Accion.desmontar) ...[
+            const SizedBox(height: 12),
+            _catalogo(
+              etiqueta: 'Razón de sustitución',
+              valor: r.motivo,
+              opciones: _catMotivos,
+              onChanged: (v) { setState(() => r.motivo = v); _guardarBorrador(); },
+            ),
+            const SizedBox(height: 12),
+            _catalogo(
+              etiqueta: 'Destino del neumático',
+              valor: r.destino,
+              opciones: _catDestinos,
+              onChanged: (v) { setState(() => r.destino = v); _guardarBorrador(); },
+            ),
+            const SizedBox(height: 16),
+            const Text('Fotos del neumático que sale',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            const Text('La del número de serie es obligatoria: es lo que ata la '
+                       'goma que sale a su ficha. Las otras dos, si dan tiempo.',
+                style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+            const SizedBox(height: 8),
+            _foto('Nº de serie', r.fotoSerie, obligatoria: true,
+                onHecha: (u) { r.fotoSerie = u; if (u != null) _leerDeLaFoto(r, u); }),
+            const SizedBox(height: 8),
+            _foto('Neumático', r.fotoNeumatico, obligatoria: false,
+                onHecha: (u) => r.fotoNeumatico = u),
+            const SizedBox(height: 8),
+            _foto('DOT', r.fotoDot, obligatoria: false,
+                onHecha: (u) { r.fotoDot = u; if (u != null) _leerDeLaFoto(r, u); }),
+            const SizedBox(height: 12),
+            // Lo que la IA ha leído SE ENSEÑA y se puede corregir. Nunca se da
+            // por bueno solo: un número de serie inventado con aspecto de
+            // bueno es peor que un hueco, porque nadie lo va a repasar.
+            Row(children: [
+              Expanded(
+                child: TextFormField(
+                  key: ValueKey('serie-$posId-${r.numeroSerie ?? ''}'),
+                  initialValue: r.numeroSerie,
+                  decoration: InputDecoration(
+                    labelText: 'Nº de serie',
+                    isDense: true,
+                    helperText: _leyendo == posId
+                        ? 'Leyendo la foto…'
+                        : (r.serieDudosa && (r.numeroSerie?.isNotEmpty ?? false)
+                            ? 'Compruébalo: la foto no se leía del todo bien'
+                            : null),
+                    helperStyle: r.serieDudosa
+                        ? const TextStyle(color: AppColors.warning) : null,
+                    suffixIcon: _leyendo == posId
+                        ? const Padding(
+                            padding: EdgeInsets.all(10),
+                            child: SizedBox(width: 16, height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2)))
+                        : null,
+                  ),
+                  // Si lo toca una persona, deja de ser una lectura dudosa.
+                  onChanged: (v) { r.numeroSerie = v; r.serieDudosa = false; },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextFormField(
+                  key: ValueKey('dot-$posId-${r.dot ?? ''}'),
+                  initialValue: r.dot,
+                  decoration: const InputDecoration(labelText: 'DOT', isDense: true),
+                  onChanged: (v) => r.dot = v,
+                ),
+              ),
+            ]),
           ],
 
           const SizedBox(height: 12),
@@ -923,12 +1519,219 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     );
   }
 
-  Widget _texto(String etiqueta, String valor, void Function(String) onChanged) =>
-      TextFormField(
-        initialValue: valor,
-        decoration: InputDecoration(labelText: etiqueta, isDense: true),
-        onChanged: onChanged,
-      );
+  /// La goma que ENTRA en esta posición: de dónde sale, en qué estado, y su
+  /// foto del número de serie.
+  List<Widget> _bloqueMontaje(String posId, _Rueda r) {
+    final m = r.montaje;
+    return [
+      const SizedBox(height: 18),
+      const Divider(height: 1),
+      const SizedBox(height: 14),
+      Row(children: [
+        const Icon(Icons.add_circle_outline, size: 18, color: AppColors.textSecondary),
+        const SizedBox(width: 8),
+        const Expanded(
+          child: Text('¿Qué se monta aquí?',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        ),
+        if (m.elegido)
+          TextButton(
+            onPressed: () { setState(() => r.montaje.aplicar(<String, dynamic>{})); _guardarBorrador(); },
+            child: const Text('No monto nada'),
+          ),
+      ]),
+      const SizedBox(height: 2),
+      const Text('Si la rueda se queda vacía, déjalo sin elegir.',
+          style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+      const SizedBox(height: 10),
+      OutlinedButton.icon(
+        onPressed: () async {
+          final elegido = await showModalBottomSheet<Map<String, dynamic>>(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: AppColors.surface,
+            builder: (_) => _ElegirMontaje(
+              stock: _stock,
+              referencias: _catReferencias,
+            ),
+          );
+          if (elegido == null) return;
+          setState(() {
+            m.origen = elegido['origen'] as String;
+            m.productoId = elegido['productoId'] as String?;
+            m.referenciaId = elegido['referenciaId'] as String?;
+            m.texto = elegido['texto'] as String?;
+            m.condicion = (elegido['condicion'] as String?) ?? 'nuevo';
+          });
+          _guardarBorrador();
+        },
+        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+        icon: Icon(m.elegido ? Icons.check : Icons.inventory_2_outlined),
+        label: Text(m.texto ?? 'Elegir del almacén o del catálogo',
+            maxLines: 2, textAlign: TextAlign.center),
+      ),
+
+      if (m.elegido) ...[
+        const SizedBox(height: 8),
+        Row(children: [
+          Chip(
+            label: Text(m.origen == 'almacen' ? 'Del almacén' : 'Del catálogo'),
+            backgroundColor: m.origen == 'almacen'
+                ? AppColors.success.withValues(alpha: 0.15)
+                : AppColors.warning.withValues(alpha: 0.15),
+          ),
+          const SizedBox(width: 8),
+          Chip(label: Text(m.condicion == 'nuevo' ? 'Nuevo' : 'Usado')),
+        ]),
+        if (m.origen == 'catalogo')
+          const Text('Del catálogo NO descuenta stock del almacén del cliente.',
+              style: TextStyle(fontSize: 12, color: AppColors.warning)),
+
+        // De un usado hacen falta los milímetros reales: si no, su ficha nace
+        // sin profundidad y el histórico de esa rueda empieza en blanco.
+        if (m.condicion == 'usado') ...[
+          const SizedBox(height: 12),
+          _numero('Profundidad del que entra', 'mm', m.profundidad,
+              (v) => setState(() => m.profundidad = v),
+              sugeridos: const [5, 7, 9, 11, 13]),
+        ],
+
+        const SizedBox(height: 14),
+        const Text('Foto del que entra',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 2),
+        const Text('La del número de serie es obligatoria: es lo que ata esta '
+                   'goma concreta a su ficha.',
+            style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+        const SizedBox(height: 8),
+        _foto('Nº de serie', m.fotoSerie, obligatoria: true,
+            onHecha: (u) { m.fotoSerie = u; if (u != null) _leerMontaje(m, posId, u); }),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(
+            child: TextFormField(
+              key: ValueKey('mserie-$posId-${m.numeroSerie ?? ''}'),
+              initialValue: m.numeroSerie,
+              decoration: InputDecoration(
+                labelText: 'Nº de serie del que entra',
+                isDense: true,
+                helperText: _leyendoMontaje == posId
+                    ? 'Leyendo la foto…'
+                    : (m.serieDudosa && (m.numeroSerie?.isNotEmpty ?? false)
+                        ? 'Compruébalo: la foto no se leía del todo bien'
+                        : null),
+                helperStyle: m.serieDudosa
+                    ? const TextStyle(color: AppColors.warning) : null,
+              ),
+              onChanged: (v) { m.numeroSerie = v; m.serieDudosa = false; },
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextFormField(
+              key: ValueKey('mdot-$posId-${m.dot ?? ''}'),
+              initialValue: m.dot,
+              decoration: const InputDecoration(labelText: 'DOT', isDense: true),
+              onChanged: (v) => m.dot = v,
+            ),
+          ),
+        ]),
+      ],
+    ];
+  }
+
+  String? _leyendoMontaje;
+
+  /// Lo mismo que _leerDeLaFoto, pero para la goma que entra.
+  Future<void> _leerMontaje(_Montaje m, String posId, String url) async {
+    setState(() => _leyendoMontaje = posId);
+    try {
+      final l = await TyreControlApi.leerFlanco(url);
+      if (!mounted) return;
+      final serie = (l['numero_serie'] as String?)?.trim();
+      final dot = (l['dot'] as String?)?.trim();
+      final dudosos = ((l['dudosos'] as List?) ?? const []).map((e) => '$e').toSet();
+      setState(() {
+        if ((m.numeroSerie?.trim().isEmpty ?? true) && (serie?.isNotEmpty ?? false)) {
+          m.numeroSerie = serie;
+          m.serieDudosa = dudosos.contains('numero_serie');
+        }
+        if ((m.dot?.trim().isEmpty ?? true) && (dot?.isNotEmpty ?? false)) m.dot = dot;
+      });
+      _guardarBorrador();
+    } catch (_) {
+      // Sin lector se sigue a mano: la foto está subida y el campo está ahí.
+    } finally {
+      if (mounted) setState(() => _leyendoMontaje = null);
+    }
+  }
+
+  /// Un desplegable alimentado por un CATÁLOGO de la base de datos. Si el
+  /// catálogo no ha llegado (primera vez sin red) se dice, en vez de enseñar
+  /// un desplegable vacío que parece roto.
+  Widget _catalogo({
+    required String etiqueta,
+    required String? valor,
+    required List<Map<String, dynamic>> opciones,
+    required void Function(String?) onChanged,
+  }) {
+    if (opciones.isEmpty) {
+      return Text('No se ha podido cargar «$etiqueta». Conecta una vez a la red '
+                  'y la lista queda guardada en la tablet.',
+          style: const TextStyle(fontSize: 12, color: AppColors.warning));
+    }
+    final codigos = opciones.map((o) => o['codigo'] as String?).toSet();
+    return DropdownButtonFormField<String>(
+      initialValue: codigos.contains(valor) ? valor : null,
+      isExpanded: true,
+      decoration: InputDecoration(labelText: etiqueta, isDense: true),
+      items: [
+        for (final o in opciones)
+          DropdownMenuItem(
+            value: o['codigo'] as String?,
+            child: Text((o['nombre'] ?? o['codigo'] ?? '') as String,
+                overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: onChanged,
+    );
+  }
+
+  /// Una foto: el botón, y cuando ya está hecha, que se vea que está hecha y
+  /// se pueda repetir. Con guantes y a contraluz, la primera sale movida más
+  /// veces de las que parece.
+  Widget _foto(String etiqueta, String? url,
+      {required bool obligatoria, required void Function(String?) onHecha}) {
+    final hecha = url != null;
+    return Row(children: [
+      Icon(hecha ? Icons.check_circle : Icons.photo_camera_outlined,
+          color: hecha
+              ? AppColors.success
+              : (obligatoria ? AppColors.warning : AppColors.textSecondary)),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(obligatoria && !hecha ? '$etiqueta (obligatoria)' : etiqueta,
+            style: const TextStyle(fontSize: 14)),
+      ),
+      TextButton(
+        onPressed: _trabajando
+            ? null
+            : () async {
+                final u = await _hacerFoto();
+                if (u == null) return;
+                setState(() => onHecha(u));
+                _guardarBorrador();
+              },
+        child: Text(hecha ? 'Repetir' : 'Hacer foto'),
+      ),
+      if (hecha)
+        IconButton(
+          tooltip: 'Quitar la foto',
+          onPressed: () { setState(() => onHecha(null)); _guardarBorrador(); },
+          icon: const Icon(Icons.close, size: 18),
+        ),
+    ]);
+  }
 
   /// Un número con teclado numérico Y botones de los valores de siempre. En el
   /// arcén, tocar "8,5" es más rápido y falla menos que teclearlo.
@@ -1152,6 +1955,10 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
   String? _empresaId;
   String? _tipoId;
   String? _medidaId;
+  /// La medida de cada eje, cuando no todos llevan la misma. La clave es el
+  /// número de eje (1, 2, 3…), que es como lo guarda tc_vehiculo_ejes.
+  final Map<int, String> _medidaEje = {};
+  bool _porEje = false;
   final _numeroUnidad = TextEditingController();
   bool _cargando = true;
   bool _guardando = false;
@@ -1165,6 +1972,18 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
 
   @override
   void dispose() { _numeroUnidad.dispose(); super.dispose(); }
+
+  /// Cuántos ejes tiene el tipo elegido. Sale del propio tipo (numero_ejes);
+  /// si no lo trae, se deduce de la configuración («2x2x4» son tres ejes).
+  int get _numeroEjes {
+    final t = _tipos.where((t) => t['id'] == _tipoId);
+    if (t.isEmpty) return 0;
+    final n = t.first['numero_ejes'];
+    if (n is int && n > 0) return n;
+    final cfg = (t.first['configuracion_ejes'] ?? '') as String? ?? '';
+    final trozos = cfg.split(RegExp(r'[xX]')).where((c) => c.trim().isNotEmpty);
+    return trozos.isEmpty ? 0 : trozos.length;
+  }
 
   Future<void> _cargar() async {
     try {
@@ -1195,7 +2014,13 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
         empresaId: _empresaId!,
         matricula: widget.matricula,
         tipoVehiculoId: _tipoId!,
-        medidaId: _medidaId,
+        // Con medidas por eje, la del vehículo es la del primero: es la que
+        // sale en los listados, y dejarla vacía haría parecer que no se sabe.
+        medidaId: _porEje ? (_medidaEje[1] ?? _medidaId) : _medidaId,
+        ejes: _porEje
+            ? [for (final e in _medidaEje.entries)
+                {'eje': e.key, 'medida_id': e.value}]
+            : null,
         numeroUnidad: _numeroUnidad.text.trim().isEmpty ? null : _numeroUnidad.text.trim(),
       );
       final id = r['vehiculo_id'] as String?;
@@ -1262,7 +2087,12 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: InkWell(
-                      onTap: () => setState(() => _tipoId = t['id'] as String),
+                      onTap: () => setState(() {
+                        _tipoId = t['id'] as String;
+                        // Otro tipo, otros ejes: lo elegido para ejes que ya no
+                        // existen se cae, en vez de viajar de tapadillo.
+                        _medidaEje.removeWhere((e, _) => e > _numeroEjes);
+                      }),
                       child: Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
@@ -1302,14 +2132,67 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
 
             const Text('¿Qué medida lleva?', style: TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
-            DropdownButtonFormField<String>(
-              initialValue: _medidaId,
-              decoration: const InputDecoration(hintText: 'Opcional'),
-              items: [for (final m in _medidas)
-                DropdownMenuItem(value: m['id'] as String,
-                    child: Text((m['valor'] ?? '') as String? ?? ''))],
-              onChanged: (v) => setState(() => _medidaId = v),
+            // Lo normal es que todos los ejes lleven la misma; el caso raro
+            // —una tractora con la directriz distinta— se pide aparte en vez
+            // de obligar a rellenar cuatro desplegables siempre.
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              value: _porEje,
+              onChanged: _numeroEjes == 0
+                  ? null
+                  : (v) => setState(() {
+                        _porEje = v;
+                        if (v && _medidaId != null) {
+                          // Al abrirlo, lo ya elegido se propone en el primer eje.
+                          _medidaEje.putIfAbsent(1, () => _medidaId!);
+                        }
+                      }),
+              title: const Text('Cada eje lleva una medida distinta',
+                  style: TextStyle(fontSize: 14)),
             ),
+            if (!_porEje)
+              DropdownButtonFormField<String>(
+                initialValue: _medidaId,
+                isExpanded: true,
+                decoration: const InputDecoration(hintText: 'Opcional'),
+                items: [for (final m in _medidas)
+                  DropdownMenuItem(value: m['id'] as String,
+                      child: Text((m['valor'] ?? '') as String? ?? ''))],
+                onChanged: (v) => setState(() => _medidaId = v),
+              )
+            else ...[
+              for (int eje = 1; eje <= _numeroEjes; eje++) ...[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _medidaEje[eje],
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                        labelText: 'Eje $eje', isDense: true),
+                    items: [for (final m in _medidas)
+                      DropdownMenuItem(value: m['id'] as String,
+                          child: Text((m['valor'] ?? '') as String? ?? '',
+                              overflow: TextOverflow.ellipsis))],
+                    onChanged: (v) => setState(() {
+                      if (v == null) { _medidaEje.remove(eje); } else { _medidaEje[eje] = v; }
+                    }),
+                  ),
+                ),
+              ],
+              if (_numeroEjes > 1)
+                OutlinedButton.icon(
+                  onPressed: _medidaEje[1] == null
+                      ? null
+                      : () => setState(() {
+                            for (int e = 2; e <= _numeroEjes; e++) {
+                              _medidaEje[e] = _medidaEje[1]!;
+                            }
+                          }),
+                  icon: const Icon(Icons.content_copy, size: 18),
+                  label: const Text('Copiar la del eje 1 a todos'),
+                ),
+            ],
             const SizedBox(height: 16),
             TextField(controller: _numeroUnidad,
                 decoration: const InputDecoration(labelText: 'Nº de unidad (opcional)')),
@@ -1326,6 +2209,513 @@ class _AltaVehiculoState extends State<_AltaVehiculo> {
             child: Text(_guardando ? 'Dando de alta…' : 'Dar de alta y seguir',
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
           ),
+          TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar')),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Elegir un neumático del CATÁLOGO para montarlo en una posición vacía.
+///
+/// Es el catálogo que ya existe (tc_referencias_neumatico), el mismo que ve el
+/// panel. Aquí no se da de alta nada: si la referencia no está, la da de alta
+/// la pantalla de montaje de siempre, que ya sabe hacerlo (provisional y
+/// pendiente de validar). Duplicar eso aquí sería un segundo catálogo.
+class _ElegirReferencia extends StatefulWidget {
+  final List<Map<String, dynamic>> referencias;
+  /// Cuando va DENTRO de otra hoja (la de elegir montaje) no pinta su propio
+  /// buscador ni su propio título: los pone quien la contiene, y dos cajas de
+  /// búsqueda una encima de otra es lo peor que se puede hacer en una tablet.
+  final bool sinBuscador;
+  final String filtro;
+  /// Si se pasa, se llama en vez de cerrar la hoja: la de fuera decide.
+  final void Function(Map<String, dynamic>)? onElegida;
+  const _ElegirReferencia({
+    required this.referencias,
+    this.sinBuscador = false,
+    this.filtro = '',
+    this.onElegida,
+  });
+
+  @override
+  State<_ElegirReferencia> createState() => _ElegirReferenciaState();
+}
+
+class _ElegirReferenciaState extends State<_ElegirReferencia> {
+  final _busca = TextEditingController();
+
+  @override
+  void dispose() { _busca.dispose(); super.dispose(); }
+
+  List<Map<String, dynamic>> get _filtradas {
+    final q = (widget.sinBuscador ? widget.filtro : _busca.text).trim().toLowerCase();
+    final todas = widget.referencias;
+    if (q.isEmpty) return todas.take(60).toList();
+    final palabras = q.split(RegExp(r'\s+'));
+    return todas.where((r) {
+      final texto = [r['marca'], r['modelo'], r['medida']]
+          .whereType<String>().join(' ').toLowerCase();
+      return palabras.every(texto.contains);
+    }).take(60).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cuerpo = _cuerpo(context);
+    if (widget.sinBuscador) return cuerpo;
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16, right: 16, top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.75,
+        child: cuerpo,
+      ),
+    );
+  }
+
+  Widget _cuerpo(BuildContext context) {
+    final lista = _filtradas;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (!widget.sinBuscador) ...[
+            const Text('¿Qué neumático se monta?',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _busca,
+              autofocus: true,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                hintText: 'Marca, modelo o medida',
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 10),
+          ],
+          if (widget.referencias.isEmpty)
+            const Text('El catálogo no se ha podido cargar. Conecta una vez a la '
+                       'red y queda guardado en la tablet.',
+                style: TextStyle(color: AppColors.warning))
+          else if (lista.isEmpty)
+            const Text('Nada con esa búsqueda.',
+                style: TextStyle(color: AppColors.textHint)),
+          Expanded(
+            child: ListView.separated(
+              itemCount: lista.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final r = lista[i];
+                final medida = (r['medida'] ?? '') as String? ?? '';
+                final idx = [r['indice_carga'], r['codigo_vel']]
+                    .where((x) => x != null && '$x'.isNotEmpty).join('');
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text([r['marca'], r['modelo']]
+                      .whereType<String>().where((x) => x.isNotEmpty).join(' ')),
+                  subtitle: Text([medida, idx].where((x) => x.isNotEmpty).join(' · ')),
+                  onTap: () => widget.onElegida != null
+                      ? widget.onElegida!(r)
+                      : Navigator.pop(context, r),
+                );
+              },
+            ),
+          ),
+          if (!widget.sinBuscador)
+            TextButton(onPressed: () => Navigator.pop(context),
+                child: const Text('Cancelar')),
+        ]);
+  }
+}
+
+/// Decir qué lleva montado un vehículo del que Mobilink no tiene ninguna goma
+/// fichada.
+///
+/// NO es un montaje de taller: es apuntar lo que ya está puesto. Por eso nace
+/// como "usado" y no descuenta almacén — la goma no ha salido de ningún stock,
+/// llevaba puesta desde antes de que llegáramos.
+///
+/// Lo normal es que las seis ruedas lleven lo mismo, así que se pregunta UNA
+/// vez y se aplica a todas. Cuando la directriz lleva otra cosa, se abre el
+/// desglose por eje, que es donde de verdad cambian las medidas: dos ruedas
+/// del mismo eje con neumáticos distintos es una avería, no una configuración.
+class _DeclararMontados extends StatefulWidget {
+  final List<PosicionVehiculo> posiciones;
+  final List<Map<String, dynamic>> referencias;
+  final Map<String, String> yaPuesto;
+  const _DeclararMontados({
+    required this.posiciones,
+    required this.referencias,
+    required this.yaPuesto,
+  });
+
+  @override
+  State<_DeclararMontados> createState() => _DeclararMontadosState();
+}
+
+class _DeclararMontadosState extends State<_DeclararMontados> {
+  Map<String, dynamic>? _todas;          // la referencia común
+  final Map<int, Map<String, dynamic>> _porEje = {};
+  bool _desglosar = false;
+  String _condicion = 'usado';
+
+  @override
+  void initState() {
+    super.initState();
+    // Al volver a abrirlo ("Cambiarlo") se ve lo que ya se dijo, en vez de
+    // empezar en blanco y tener que acordarse.
+    final refs = widget.yaPuesto.values.toSet();
+    if (refs.length == 1) {
+      final id = refs.first;
+      for (final r in widget.referencias) {
+        if (r['id'] == id) { _todas = r; break; }
+      }
+    } else if (refs.length > 1) {
+      _desglosar = true;
+      for (final p in widget.posiciones) {
+        final id = widget.yaPuesto[p.id];
+        if (id == null || p.eje == null) continue;
+        for (final r in widget.referencias) {
+          if (r['id'] == id) { _porEje[p.eje!] = r; break; }
+        }
+      }
+    }
+  }
+
+  List<int> get _ejes {
+    final v = widget.posiciones
+        .map((p) => p.eje)
+        .whereType<int>()
+        .toSet()
+        .toList()
+      ..sort();
+    return v;
+  }
+
+  Future<Map<String, dynamic>?> _elegir() => showModalBottomSheet<Map<String, dynamic>>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: AppColors.surface,
+        builder: (_) => _ElegirReferencia(referencias: widget.referencias),
+      );
+
+  String _texto(Map<String, dynamic> r) => [r['marca'], r['modelo'], r['medida']]
+      .whereType<String>().where((x) => x.isNotEmpty).join(' · ');
+
+  /// Qué falta por decir. Con desglose, cada eje; sin él, una sola referencia.
+  bool get _completo => _desglosar
+      ? _ejes.isNotEmpty && _ejes.every(_porEje.containsKey)
+      : _todas != null;
+
+  void _confirmar() {
+    final out = <String, Map<String, String>>{};
+    for (final p in widget.posiciones) {
+      final ref = _desglosar ? _porEje[p.eje] : _todas;
+      if (ref == null) continue;
+      out[p.id] = {
+        'id': ref['id'] as String,
+        'texto': _texto(ref),
+        'condicion': _condicion,
+      };
+    }
+    Navigator.pop(context, out);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16, right: 16, top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('¿Qué lleva montado?',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 4),
+          Text('${widget.posiciones.length} posiciones. Se apunta lo que ya está '
+               'puesto, no un montaje: no descuenta almacén.',
+              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+          const SizedBox(height: 16),
+
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            value: _desglosar,
+            onChanged: _ejes.isEmpty ? null : (v) => setState(() {
+              _desglosar = v;
+              // Lo ya elegido se propone en el primer eje, para no repetirlo.
+              if (v && _todas != null && _ejes.isNotEmpty) {
+                _porEje.putIfAbsent(_ejes.first, () => _todas!);
+              }
+            }),
+            title: const Text('Cada eje lleva un neumático distinto',
+                style: TextStyle(fontSize: 14)),
+          ),
+
+          if (!_desglosar)
+            OutlinedButton.icon(
+              onPressed: () async {
+                final r = await _elegir();
+                if (r != null) setState(() => _todas = r);
+              },
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(56)),
+              icon: const Icon(Icons.search),
+              label: Text(_todas == null
+                  ? 'Elegir medida y modelo del catálogo'
+                  : _texto(_todas!)),
+            )
+          else ...[
+            for (final eje in _ejes) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(children: [
+                  SizedBox(width: 62,
+                      child: Text('Eje $eje',
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700))),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () async {
+                        final r = await _elegir();
+                        if (r != null) setState(() => _porEje[eje] = r);
+                      },
+                      style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+                      child: Text(
+                          _porEje[eje] == null ? 'Elegir' : _texto(_porEje[eje]!),
+                          maxLines: 2, textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 13)),
+                    ),
+                  ),
+                ]),
+              ),
+            ],
+            if (_ejes.length > 1)
+              OutlinedButton.icon(
+                onPressed: _porEje[_ejes.first] == null
+                    ? null
+                    : () => setState(() {
+                          for (final e in _ejes.skip(1)) {
+                            _porEje[e] = _porEje[_ejes.first]!;
+                          }
+                        }),
+                icon: const Icon(Icons.content_copy, size: 18),
+                label: Text('Copiar la del eje ${_ejes.first} a todos'),
+              ),
+          ],
+
+          const SizedBox(height: 16),
+          const Text('¿Cómo están?',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Wrap(spacing: 8, children: [
+            for (final c in const ['usado', 'nuevo'])
+              ChoiceChip(
+                label: Text(c == 'usado' ? 'Ya rodados' : 'Nuevos'),
+                selected: _condicion == c,
+                onSelected: (_) => setState(() => _condicion = c),
+              ),
+          ]),
+          const SizedBox(height: 6),
+          const Text('Lo habitual es «ya rodados»: llevaban puestos desde antes. '
+                     'La profundidad real se apunta rueda por rueda en el paso '
+                     'de las ruedas.',
+              style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+
+          const SizedBox(height: 20),
+          FilledButton(
+            onPressed: _completo ? _confirmar : null,
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+            child: Text(
+                _desglosar
+                    ? 'Aplicar a las ${widget.posiciones.length} posiciones'
+                    : 'Poner en las ${widget.posiciones.length} posiciones',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          ),
+          TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar')),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Elegir la goma que se monta: primero el almacén del cliente, y el catálogo
+/// solo si hace falta.
+///
+/// EL ORDEN NO ES ESTÉTICO. Del almacén descuenta stock y el inventario
+/// cuadra; del catálogo no, y queda marcado como tal. Montar del catálogo
+/// gomas que estaban en el almacén deja existencias que ya no están, y eso no
+/// se descubre hasta que alguien cuenta las ruedas de la estantería.
+///
+/// Por eso el catálogo está detrás de un aviso cuando hay stock: no se
+/// prohíbe —el que está delante del camión ve cosas que el sistema no— pero
+/// no se ofrece como si diera igual.
+class _ElegirMontaje extends StatefulWidget {
+  final List<StockAlmacenLinea> stock;
+  final List<Map<String, dynamic>> referencias;
+  const _ElegirMontaje({required this.stock, required this.referencias});
+
+  @override
+  State<_ElegirMontaje> createState() => _ElegirMontajeState();
+}
+
+class _ElegirMontajeState extends State<_ElegirMontaje> {
+  final _busca = TextEditingController();
+  /// ¿Se ha pasado al catálogo teniendo stock? Solo entonces se avisa.
+  bool _catalogo = false;
+
+  @override
+  void dispose() { _busca.dispose(); super.dispose(); }
+
+  bool get _hayStock => widget.stock.any((l) => l.nuevo > 0 || l.usado > 0);
+
+  List<StockAlmacenLinea> get _stockFiltrado {
+    final q = _busca.text.trim().toLowerCase();
+    final con = widget.stock.where((l) => l.nuevo > 0 || l.usado > 0);
+    if (q.isEmpty) return con.toList();
+    final palabras = q.split(RegExp(r'\s+'));
+    return con.where((l) {
+      final t = [l.marca, l.modelo ?? '', l.medida].join(' ').toLowerCase();
+      return palabras.every(t.contains);
+    }).toList();
+  }
+
+  void _elegirDelAlmacen(StockAlmacenLinea l, String condicion) {
+    Navigator.pop(context, {
+      'origen': 'almacen',
+      'productoId': l.productoId,
+      'texto': [l.marca, l.modelo ?? '', l.medida]
+          .where((x) => x.isNotEmpty).join(' · '),
+      'condicion': condicion,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16, right: 16, top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.8,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(_catalogo ? 'Del catálogo' : 'Del almacén del cliente',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _busca,
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search), hintText: 'Marca, modelo o medida'),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 10),
+
+          if (!_catalogo) ...[
+            if (!_hayStock)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 10),
+                child: Text('Este cliente no tiene neumáticos en su almacén. '
+                            'Puedes cogerlo del catálogo.',
+                    style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+              ),
+            Expanded(
+              child: ListView(children: [
+                for (final l in _stockFiltrado)
+                  Card(
+                    color: AppColors.surface,
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text([l.marca, l.modelo ?? ''].where((x) => x.isNotEmpty).join(' '),
+                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                        Text(l.medida,
+                            style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                        const SizedBox(height: 8),
+                        // Nuevo y usado son EXISTENCIAS distintas del mismo
+                        // producto: se eligen por separado, y lo que no hay ni
+                        // se enseña.
+                        Row(children: [
+                          if (l.nuevo > 0)
+                            Expanded(
+                              child: FilledButton(
+                                onPressed: () => _elegirDelAlmacen(l, 'nuevo'),
+                                child: Text('Nuevo · quedan ${l.nuevo}'),
+                              ),
+                            ),
+                          if (l.nuevo > 0 && l.usado > 0) const SizedBox(width: 8),
+                          if (l.usado > 0)
+                            Expanded(
+                              child: FilledButton.tonal(
+                                onPressed: () => _elegirDelAlmacen(l, 'usado'),
+                                child: Text('Usado · quedan ${l.usado}'),
+                              ),
+                            ),
+                        ]),
+                      ]),
+                    ),
+                  ),
+                if (_stockFiltrado.isEmpty && _hayStock)
+                  const Text('Nada en el almacén con esa búsqueda.',
+                      style: TextStyle(color: AppColors.textHint)),
+              ]),
+            ),
+            OutlinedButton.icon(
+              onPressed: () async {
+                if (_hayStock) {
+                  final seguir = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: const Text('¿Del catálogo?'),
+                      content: const Text(
+                          'Este cliente tiene neumáticos en su almacén. Si coges '
+                          'uno del catálogo NO se descuenta de sus existencias, y '
+                          'el inventario se quedará contando ruedas que ya no '
+                          'están.\n\n¿Seguro que no sale del almacén?'),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(context, false),
+                                   child: const Text('Vuelvo al almacén')),
+                        FilledButton(onPressed: () => Navigator.pop(context, true),
+                                     child: const Text('Sí, del catálogo')),
+                      ],
+                    ),
+                  );
+                  if (seguir != true) return;
+                }
+                setState(() => _catalogo = true);
+              },
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              icon: const Icon(Icons.menu_book_outlined),
+              label: const Text('Buscar en el catálogo'),
+            ),
+          ] else ...[
+            Expanded(
+              child: _ElegirReferencia(
+                referencias: widget.referencias,
+                sinBuscador: true,
+                filtro: _busca.text,
+                onElegida: (ref) => Navigator.pop(context, {
+                  'origen': 'catalogo',
+                  'referenciaId': ref['id'] as String?,
+                  'texto': [ref['marca'], ref['modelo'], ref['medida']]
+                      .whereType<String>().where((x) => x.isNotEmpty).join(' · '),
+                  // Del catálogo no hay existencias que distinguir: lo normal
+                  // es que sea nueva, y si no, se cambia en la ficha.
+                  'condicion': 'nuevo',
+                }),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: () => setState(() => _catalogo = false),
+              icon: const Icon(Icons.arrow_back, size: 18),
+              label: const Text('Volver al almacén'),
+            ),
+          ],
+
           TextButton(onPressed: () => Navigator.pop(context),
               child: const Text('Cancelar')),
         ]),

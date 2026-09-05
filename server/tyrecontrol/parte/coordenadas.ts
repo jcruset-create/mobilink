@@ -48,11 +48,15 @@ export const CABECERA = {
  * numeraciones distintas en el mismo papel es pedir que alguien apunte una
  * medición en la rueda equivocada.
  */
-// Medido sobre la plantilla: el marco del cuadro va de x 403,5 a 566,5 y de
-// y 87 a 190,5. Se tapa DESDE DEBAJO DEL TÍTULO —«Posición Ruedas» sigue
-// siendo cierto para el plano de Mobilink— y sin llegar al marco, para no
-// borrar la línea del recuadro.
-export const POSICION_RUEDAS = { x: 405, y: 99.3, ancho: 160, alto: 89.7 };
+// Medido sobre la plantilla: el marco del cuadro va de x 403,5 a 566,6 y de
+// y 87,0 a 194,1, y el rótulo ocupa hasta y 99,9. Se tapa DESDE DEBAJO DEL
+// TÍTULO —«Posición Ruedas» sigue siendo cierto para el plano de Mobilink— y
+// sin llegar al marco, para no borrar la línea del recuadro.
+//
+// El alto llega hasta 193,5 y no hasta 189: con el recorte anterior asomaban
+// por debajo las casillas «Rpto 1 / Rpto 2» del diagrama impreso, y quedaban
+// dos barras negras bajo el plano de Mobilink.
+export const POSICION_RUEDAS = { x: 404.3, y: 99.3, ancho: 161.8, alto: 94.2 };
 
 /** Las tres casillas de dónde se hizo el servicio. */
 export const LUGAR: Record<"taller" | "flota" | "carretera", Punto> = {
@@ -69,24 +73,104 @@ export interface Tabla {
   primeraFila: number;
   alturaFila: number;
   filas: number;
+  /** Dónde EMPIEZA el texto de cada columna (las anchas, alineadas a la izquierda). */
   columnas: Record<string, number>;
+  /**
+   * Las columnas ESTRECHAS, con su caja real [izquierda, derecha].
+   *
+   * Bar, Mm, Ps y Origen miden entre 14 y 29 puntos en la plantilla. Puestas a
+   * la izquierda con un ancho inventado, el texto se salía por encima de la
+   * raya de al lado — se veía «almacen» pisando el filete y el «14.0» tocando
+   * el borde. Con la caja de verdad, el texto se centra y se encoge para
+   * caber, que es lo que hace una persona rellenando el papel a mano.
+   */
+  cajas?: Record<string, [number, number]>;
 }
 
-/** Desmontados / permutados. */
+/**
+ * La casilla «Ps», ENSANCHADA.
+ *
+ * En el papel de Conti ahí va un número del diagrama (1, 2, 3…) y mide 14
+ * puntos. Los códigos de Mobilink son E1_IZQ, E1_DER…, que necesitan 28: no
+ * caben, y se salían por encima del filete.
+ *
+ * Así que el filete se MUEVE: se tapa el de 42 y se pinta uno nuevo en 60. La
+ * columna de la descripción pierde 18 puntos de los 170 que tenía, y ahí sigue
+ * cabiendo «385/65R22.5 158L Hankook TH31+» de sobra.
+ *
+ * Al tapar el filete viejo se borra también el trocito de cada raya horizontal
+ * que lo cruza, así que hay que volver a pintarlas: por eso están aquí las «y»
+ * de la rejilla, leídas de la plantilla.
+ */
+export const SEPARADOR_PS = 60;
+
+/** Las rayas horizontales de cada tabla, para recomponerlas al mover el filete. */
+export const RAYAS_DESMONTADOS = [
+  292.97, 304.25, 322.49, 340.61, 358.73, 376.85, 395.09, 413.23, 431.35, 449.59,
+];
+export const RAYAS_MONTADOS = [
+  462.21, 475.73, 492.74, 509.75, 526.75, 543.76, 560.77, 577.78, 594.78, 611.79,
+];
+
+/*
+ * Las dos tablas, MEDIDAS SOBRE LA PLANTILLA, no estimadas.
+ *
+ * Antes iban a ojo (primera fila 310, altura 15,6, nueve filas) y el resultado
+ * era el que se veía en el papel: la primera línea se metía debajo de la
+ * cabecera y la segunda salía tachada por la raya de la rejilla, porque el
+ * texto bajaba 15,6 y la rejilla 18,1 — cada fila se desviaba un poco más.
+ *
+ * Los números de aquí abajo salen de leer los rectángulos de la propia
+ * plantilla (parte_conti360.pdf):
+ *
+ *   Desmontados: cabecera 292,97–304,25; ocho filas de 18,15 desde 304,25.
+ *   Montados:    cabecera 462,21–475,73; ocho filas de 17,01 desde 475,73.
+ *
+ * `primeraFila` es la LÍNEA BASE del texto, no el borde de la casilla: se
+ * centra en la fila (borde + (alto + altura de mayúscula) / 2, con la
+ * mayúscula de Helvetica a 8 pt ≈ 5,7).
+ *
+ * Y son OCHO filas, no nueve: la novena caía fuera de la rejilla, encima del
+ * rótulo «Neumáticos Montados». Lo que no cabe pasa a la página siguiente,
+ * que para eso está.
+ */
+
+/**
+ * Desmontados / permutados.
+ * Columnas medidas: 28,32 | 42,24 | 212,21 | 226,25 | 325,75 | 339,91.
+ */
 export const DESMONTADOS: Tabla = {
-  primeraFila: 310,
-  alturaFila: 15.6,
-  filas: 9,
-  columnas: { posicion: 32, descripcion: 60, bar: 214, serie: 250, mm: 327 },
+  primeraFila: 316.2,
+  alturaFila: 18.15,
+  filas: 8,
+  columnas: { descripcion: 64, serie: 230 },
+  cajas: {
+    posicion: [28.32, SEPARADOR_PS],
+    descripcion: [SEPARADOR_PS, 212.21],
+    bar: [212.21, 226.25],
+    serie: [226.25, 325.75],
+    mm: [325.75, 339.91],
+  },
 };
 
-/** Montados. */
+/**
+ * Montados.
+ * Columnas medidas: 27,71 | 41,72 | 228,66 | 257,60 | 372,18 | 387,00.
+ */
 export const MONTADOS: Tabla = {
-  primeraFila: 484,
-  alturaFila: 15.6,
-  filas: 9,
-  columnas: { posicion: 32, descripcion: 60, origen: 234, serie: 292, mm: 377 },
+  primeraFila: 487.1,
+  alturaFila: 17.01,
+  filas: 8,
+  columnas: { descripcion: 64, serie: 261 },
+  cajas: {
+    posicion: [27.71, SEPARADOR_PS],
+    descripcion: [SEPARADOR_PS, 228.66],
+    origen: [228.66, 257.60],
+    serie: [257.60, 372.18],
+    mm: [372.18, 387.00],
+  },
 };
+
 
 /**
  * Las diez casillas de «Razón de Sustitución», por código de motivo.

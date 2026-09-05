@@ -3,6 +3,9 @@ import { hayIA } from "../../core/openaiService.ts";
 import { supabase } from "../../supabase.ts";
 import { LectorParteIA, type LectorParte } from "./lectorParte.ts";
 import { armarParte, type MovimientoFila } from "./armarParte.ts";
+import { filasDeOperaciones, type OperacionFila, type MedicionPos }
+  from "./filasDeOperaciones.ts";
+import { quitarFondoNegro } from "./fondoPlano.ts";
 import { generarPartePdf } from "./generarPdf.ts";
 
 /**
@@ -49,6 +52,64 @@ async function puedeVerEmpresa(req: any, empresaId: string): Promise<boolean> {
     .from("tc_operador_empresas").select("empresa_id")
     .eq("usuario_id", userId).eq("empresa_id", empresaId).maybeSingle();
   return !!asignado;
+}
+
+/**
+ * El plano del chasis del vehículo, en bytes, para el recuadro «Posición
+ * Ruedas» del parte.
+ *
+ * MISMO ORDEN QUE LA TABLET, y no por casualidad: la imagen propia de la marca
+ * para esa configuración de ejes, si no la genérica de la configuración, y si
+ * no la del tipo de vehículo. Si el papel enseñara un plano distinto del que
+ * el técnico acaba de usar en la pantalla, sería peor que no enseñar ninguno.
+ *
+ * Devuelve null en cuanto algo no cuadra —no hay imagen, no responde, no es
+ * una imagen—: el PDF deja el recuadro como estaba y el parte sale igual. Un
+ * plano que no se puede traer no es motivo para no entregar el papel.
+ */
+async function planoDelVehiculo(veh: any): Promise<Uint8Array | null> {
+  if (!veh) return null;
+  try {
+    const candidatos: (string | null | undefined)[] = [];
+
+    if (veh.config_ejes_id) {
+      // La mayoría de vehículos guardan la marca como texto suelto y no
+      // enlazada al catálogo, así que si no hay marca_id se busca por nombre.
+      let marcaId: string | null = veh.marca_id ?? null;
+      if (!marcaId && (veh.marca ?? "").trim()) {
+        const { data: m } = await supabase
+          .from("tc_cat_marcas_vehiculo").select("id")
+          .ilike("nombre", String(veh.marca).trim()).limit(1);
+        marcaId = (m?.[0] as any)?.id ?? null;
+      }
+      if (marcaId) {
+        const { data: cm } = await supabase
+          .from("tc_config_ejes_marca").select("imagen_chasis_url")
+          .eq("config_ejes_id", veh.config_ejes_id).eq("marca_id", marcaId).limit(1);
+        candidatos.push((cm?.[0] as any)?.imagen_chasis_url);
+      }
+      const { data: ce } = await supabase
+        .from("tc_config_ejes").select("imagen_chasis_url")
+        .eq("id", veh.config_ejes_id).maybeSingle();
+      candidatos.push((ce as any)?.imagen_chasis_url);
+    }
+    candidatos.push(veh.tipo?.imagen_chasis_url);
+
+    const url = candidatos.map((u) => (u ?? "").trim()).find(Boolean);
+    if (!url) return null;
+
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const tipo = r.headers.get("content-type") ?? "";
+    // pdf-lib solo sabe incrustar PNG y JPEG. Un SVG o un WebP reventarían al
+    // incrustarlo, y ese error no debe llevarse por delante el parte.
+    if (tipo && !/image\/(png|jpe?g)/i.test(tipo)) return null;
+    // Los planos son renders sobre fondo negro: metidos tal cual dejan un
+    // rectángulo negro en medio del papel. Ver fondoPlano.ts.
+    return await quitarFondoNegro(new Uint8Array(await r.arrayBuffer()));
+  } catch {
+    return null;
+  }
 }
 
 export function mountParte(app: Express, ...guards: RequestHandler[]): void {
@@ -112,7 +173,9 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
 
       const { data: interv, error: e1 } = await supabase
         .from("tc_intervenciones")
-        .select("*, vehiculo:tc_vehiculos(matricula, km_actual, empresa:tc_empresas(nombre))")
+        .select(`*, vehiculo:tc_vehiculos(id, matricula, km_actual, config_ejes_id,
+                   marca, marca_id, tipo:tc_tipos_vehiculo(imagen_chasis_url),
+                   empresa:tc_empresas(nombre))`)
         .eq("id", id).maybeSingle();
       if (e1) throw new Error(e1.message);
       if (!interv) return { estado: 404, error: "Parte no encontrado" };
@@ -126,35 +189,85 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
         return { estado: 403, error: "Sin permiso sobre este parte" };
       }
 
-      const { data: movs } = await supabase
-        .from("tc_operacion_movimientos")
-        .select(`movimiento_tipo, profundidad_anterior, profundidad_final,
-                 operacion:operaciones_neumaticos!inner(motivo, destino, intervencion_id),
-                 neumatico:tc_neumaticos(marca, modelo, medida, numero_serie, dot, estado),
-                 posicion:tc_posiciones_vehiculo!destino_posicion_id(codigo_posicion)`)
-        .eq("operacion.intervencion_id", id)
-        .order("orden");
+      // Las OPERACIONES, que es la tabla que escriben todas las RPC. Antes esto
+      // leía tc_operacion_movimientos, que tc_desmontar_neumatico y
+      // tc_montar_desde_catalogo no rellenan, y el papel salía en blanco
+      // aunque el parte estuviera perfectamente guardado. Ver
+      // filasDeOperaciones.ts.
+      const { data: ops } = await supabase
+        .from("operaciones_neumaticos")
+        .select(`tipo_operacion, motivo, destino, estado_anterior, estado_nuevo,
+                 observaciones, is_anulada, status,
+                 neumatico:tc_neumaticos(marca, modelo, medida, numero_serie, dot, numero_interno),
+                 posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion),
+                 posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion)`)
+        .eq("intervencion_id", id)
+        .order("created_at");
 
-      const filas: MovimientoFila[] = (movs ?? []).map((m: any) => ({
-        movimiento_tipo: m.movimiento_tipo,
-        profundidad_anterior: m.profundidad_anterior,
-        profundidad_final: m.profundidad_final,
-        posicion: m.posicion?.codigo_posicion ?? null,
-        marca: m.neumatico?.marca ?? null,
-        modelo: m.neumatico?.modelo ?? null,
-        medida: m.neumatico?.medida ?? null,
-        // El número de serie identifica la unidad; el DOT solo dice cuándo se
-        // fabricó. Se prefiere el primero y se cae al segundo.
-        serie: m.neumatico?.numero_serie ?? m.neumatico?.dot ?? null,
-        motivo: m.operacion?.motivo ?? null,
-        destino: m.operacion?.destino ?? null,
-      }));
+      // Los milímetros y la presión los mide el técnico en la revisión del
+      // propio parte, por posición: las RPC de montaje y desmontaje no guardan
+      // profundidades. Si la intervención no vino del parte guiado no hay
+      // revisión, y las casillas se quedan vacías en vez de inventarse.
+      const medicionPorPosicion: Record<string, MedicionPos> = {};
+      const { data: pg } = await supabase
+        .from("tc_partes_guiados").select("revision_id")
+        .eq("intervencion_id", id).maybeSingle();
+      if (pg?.revision_id) {
+        const { data: det } = await supabase
+          .from("revisiones_neumaticos_detalle")
+          .select("profundidad_mm, presion_bar, posicion:tc_posiciones_vehiculo(codigo_posicion)")
+          .eq("revision_id", pg.revision_id);
+        for (const d of (det ?? []) as any[]) {
+          const cod = d.posicion?.codigo_posicion;
+          if (cod) medicionPorPosicion[cod] = {
+            profundidad_mm: d.profundidad_mm, presion_bar: d.presion_bar,
+          };
+        }
+      }
+
+      const filas: MovimientoFila[] = filasDeOperaciones(
+        (ops ?? []) as OperacionFila[], medicionPorPosicion);
 
       const { data: servicios } = await supabase
         .from("tc_intervencion_servicios")
         .select("servicio, cantidad").eq("intervencion_id", id);
 
-      const pdf = await generarPartePdf(armarParte(
+      // El plano REAL del vehículo, encima del diagrama numerado de Conti360.
+      // El PDF ya sabía ponerlo; lo que faltaba era dárselo. Enseñar la
+      // numeración 1IZI/2IZE de la plantilla cuando Mobilink usa otra es pedir
+      // que alguien apunte una medición en la rueda equivocada.
+      const plano = await planoDelVehiculo(interv.vehiculo);
+
+      // Y dónde cae cada rueda en ese plano, para marcar las que se han
+      // tocado. Son las mismas coordenadas calibradas que usa la tablet.
+      const marcas: { x: number; y: number }[] = [];
+      if (plano && interv.vehiculo?.id) {
+        const { data: veh2 } = await supabase
+          .from("tc_vehiculos").select("tipo_vehiculo_id")
+          .eq("id", interv.vehiculo.id).maybeSingle();
+        if ((veh2 as any)?.tipo_vehiculo_id) {
+          const { data: pos } = await supabase
+            .from("tc_posiciones_vehiculo")
+            .select("codigo_posicion, pos_x, pos_y")
+            .eq("tipo_vehiculo_id", (veh2 as any).tipo_vehiculo_id);
+          const porCodigo = new Map<string, { x: number; y: number }>();
+          for (const q of (pos ?? []) as any[]) {
+            if (q.pos_x == null || q.pos_y == null) continue;
+            porCodigo.set(q.codigo_posicion, { x: Number(q.pos_x), y: Number(q.pos_y) });
+          }
+          // Una posición tocada dos veces (sale una goma y entra otra) se
+          // marca UNA vez: dos cruces encima de la misma rueda no dicen más.
+          const vistas = new Set<string>();
+          for (const f of filas) {
+            const c = f.posicion;
+            if (!c || vistas.has(c)) continue;
+            const p = porCodigo.get(c);
+            if (p) { marcas.push(p); vistas.add(c); }
+          }
+        }
+      }
+
+      const parte = armarParte(
         {
           ...interv,
           matricula: interv.vehiculo?.matricula ?? null,
@@ -163,7 +276,9 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
         },
         filas,
         (servicios ?? []) as { servicio: string; cantidad: number }[],
-      ));
+      );
+
+      const pdf = await generarPartePdf({ ...parte, plano, marcas });
 
       return { pdf, nombre: `parte-${(interv.numero || id).replace(/[^\w.-]/g, "_")}.pdf` };
   }

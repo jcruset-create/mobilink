@@ -870,6 +870,11 @@ class TyreControlApi {
     String? medidaId,
     String? numeroUnidad,
     num? km,
+    /// Medidas por eje cuando no todos llevan la misma:
+    /// `[{'eje': 1, 'medida_id': '…'}, …]`. Las guarda la propia función en
+    /// tc_vehiculo_ejes; desde la tablet no se puede escribir esa tabla a mano
+    /// (tc_set_vehiculo_ejes pide administrador) y no se amplía ese permiso.
+    List<Map<String, dynamic>>? ejes,
   }) async {
     final data = await _db.rpc('tc_alta_vehiculo_desde_parte', params: {
       'p_empresa': empresaId,
@@ -879,8 +884,39 @@ class TyreControlApi {
       'p_medida': medidaId,
       'p_numero_unidad': numeroUnidad,
       'p_km': km,
+      'p_ejes': (ejes == null || ejes.isEmpty) ? null : ejes,
     });
     return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Las razones de sustitución del formulario: el catálogo que ya existe
+  /// (tc_cat_motivos), no una lista escrita en la APK. Se piden las comunes y
+  /// las del desmontaje; las de corrección administrativa no pintan aquí.
+  static Future<List<Map<String, dynamic>>> listarMotivosDesmontaje() async {
+    final data = await _db
+        .from('tc_cat_motivos')
+        .select('codigo, nombre, tipo_operacion, orden')
+        .eq('activo', true)
+        .order('orden');
+    return (data as List)
+        .map((e) => Map<String, dynamic>.from(e))
+        .where((m) {
+          final t = m['tipo_operacion'] as String?;
+          return t == null || t == 'sustitucion' || t == 'desmontaje';
+        })
+        .toList();
+  }
+
+  /// Los destinos del neumático retirado (tc_cat_destinos). Se lleva también
+  /// `estado_resultante` porque es lo que decide en qué estado queda la goma;
+  /// esa decisión la aplica la base de datos, aquí solo se enseña el nombre.
+  static Future<List<Map<String, dynamic>>> listarDestinosNeumatico() async {
+    final data = await _db
+        .from('tc_cat_destinos')
+        .select('codigo, nombre, estado_resultante, orden')
+        .eq('activo', true)
+        .order('orden');
+    return (data as List).map((e) => Map<String, dynamic>.from(e)).toList();
   }
 
   /// Guarda el parte entero DE UNA VEZ: revisión con mediciones, intervención
@@ -1351,13 +1387,77 @@ class TyreControlApi {
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  /// Los partes de trabajo recientes de TODOS los vehículos que este operario
+  /// puede ver. Es el mismo histórico que la ficha del vehículo, sin filtrar
+  /// por vehículo: no hay dos históricos, hay uno con y sin filtro.
+  ///
+  /// La RLS de tc_intervenciones ya limita lo que se ve a la empresa del
+  /// operario; aquí no se comprueba nada por segunda vez ni se confía en un
+  /// filtro de pantalla para guardar un secreto.
+  ///
+  /// NO lleva filtro de texto: buscar por matrícula obligaría a filtrar sobre
+  /// la tabla embebida, que en PostgREST es delicado y desde aquí no se puede
+  /// probar contra el Supabase de verdad. Se traen los últimos y la pantalla
+  /// filtra sobre ellos, que para una lista de este tamaño da igual y no
+  /// depende de una sintaxis que nadie ha visto funcionar.
+  static Future<List<Map<String, dynamic>>> listarIntervencionesRecientes({
+    int limite = 200,
+    bool soloMias = false,
+  }) async {
+    // Igual que en la ficha: primero se recogen las operaciones que se
+    // quedaron sueltas, para que salgan con su número de parte.
+    try {
+      await _db.rpc('tc_agrupar_operaciones_sueltas', params: {'p_minutos': 30});
+    } catch (_) {/* se consolidará en la siguiente visita */}
+
+    var q = _db.from('tc_intervenciones')
+        .select('*, vehiculo:tc_vehiculos(matricula, numero_unidad)');
+    if (soloMias) {
+      final uid = _db.auth.currentUser?.id;
+      if (uid != null) q = q.eq('tecnico_id', uid);
+    }
+    final data = await q.order('created_at', ascending: false).limit(limite);
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// Corrige DATOS de una operación ya hecha: razón, observaciones, número de
+  /// serie y DOT.
+  ///
+  /// NO mueve neumáticos ni toca el stock, y no deja cambiar el destino: el
+  /// destino y el estado de la goma los pone la misma RPC a la vez, y cambiar
+  /// solo uno dejaría al papel y a la ficha contando cosas distintas.
+  ///
+  /// El motivo es obligatorio y queda escrito en la auditoría: una corrección
+  /// sin motivo es indistinguible de un error.
+  static Future<Map<String, dynamic>> corregirOperacion({
+    required String operacionId,
+    required String motivoCorreccion,
+    String? motivo,
+    String? observaciones,
+    String? numeroSerie,
+    String? dot,
+  }) async {
+    final cambios = <String, dynamic>{};
+    if (motivo != null) cambios['motivo'] = motivo;
+    if (observaciones != null) cambios['observaciones'] = observaciones;
+    if (numeroSerie != null) cambios['numero_serie'] = numeroSerie;
+    if (dot != null) cambios['dot'] = dot;
+    final r = await _db.rpc('tc_corregir_operacion', params: {
+      'p_operacion': operacionId,
+      'p_cambios': cambios,
+      'p_motivo': motivoCorreccion,
+    });
+    return Map<String, dynamic>.from(r as Map);
+  }
+
   /// Operaciones de una intervención (con posición y neumático).
   static Future<List<Map<String, dynamic>>> listarOperacionesDeIntervencion(String intervencionId) async {
     final data = await _db.from('operaciones_neumaticos').select(
         'id, tipo_operacion, motivo, is_anulada, fecha_operacion, created_at, '
         'posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), '
         'posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), '
-        'neumatico:tc_neumaticos(marca, modelo, medida, numero_interno)')
+        'observaciones, '
+        'neumatico:tc_neumaticos(id, marca, modelo, medida, numero_interno, numero_serie, dot)')
         .eq('intervencion_id', intervencionId).order('created_at', ascending: true);
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }

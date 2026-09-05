@@ -65,6 +65,7 @@ import {
 import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
 import { initExcepciones } from "./excepciones/schema.ts";
 import { createExcepcionesRouter } from "./excepciones/router.ts";
+import { initSatisfaction } from "./satisfaction/schema.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
@@ -73,6 +74,7 @@ import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenS
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
+import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 
 const twilioClient = twilio(
@@ -176,10 +178,54 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.post("/api/payments/create-deposit", authenticate, requireModule("administracion"), async (req, res) => {
   try {
-    const { jobId, customerName, customerPhone, amountEuros, description } = req.body;
+    const {
+      jobId,
+      reference: referenciaPedida,
+      autoReference,
+      customerName,
+      customerPhone,
+      amountEuros,
+      description,
+      templateId,
+      totalAmountCents,
+      terms,
+    } = req.body;
 
-    const reference = String(jobId || "").trim();
+    /*
+     * La referencia la reparte el servidor salvo que llegue escrita.
+     *
+     * El orden importa: primero lo que mande quien llama (la APK sigue
+     * mandando la suya en `jobId`), y solo si viene vacío y lo pide se saca
+     * número. Así ningún cliente antiguo se queda sin referencia ni gasta
+     * números del contador sin querer.
+     */
+    const escrita = autoReference
+      ? String(referenciaPedida ?? "").trim()
+      : String(referenciaPedida ?? jobId ?? "").trim();
+    const reference = escrita || (autoReference ? await siguienteReferencia(db) : "");
+
+    /*
+     * La asistencia va aparte de la referencia. Solo con un número aquí se
+     * marca la señal como pagada en `jobs`: con la referencia automática, un
+     * cobro cualquiera dejaría de significar "asistencia con ese id".
+     */
+    const jobVinculado = Number(jobId);
+    const asistencia =
+      Number.isInteger(jobVinculado) && jobVinculado > 0 ? jobVinculado : null;
+
     const amountCents = Math.round(Number(amountEuros || 0) * 100);
+
+    /*
+     * La plantilla llega ya renderizada desde la pantalla y aquí solo se
+     * guarda. El servidor no la vuelve a componer a propósito: si compusiera
+     * su propia versión, el cliente podría acabar pagando con unas condiciones
+     * en el móvil y otras distintas archivadas, que es justo lo que este campo
+     * existe para impedir.
+     */
+    const template = String(templateId || "libre").trim() || "libre";
+    const termsText = String(terms || "");
+    const totalCents = Math.round(Number(totalAmountCents || 0));
+    const totalGuardado = Number.isFinite(totalCents) && totalCents > 0 ? totalCents : null;
 
     if (!reference) {
       return res.status(400).json({
@@ -192,6 +238,13 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
       return res.status(400).json({
         success: false,
         message: "El importe mínimo es 1 €",
+      });
+    }
+
+    if (totalGuardado !== null && totalGuardado < amountCents) {
+      return res.status(400).json({
+        success: false,
+        message: "El total del presupuesto no puede ser menor que la paga y señal",
       });
     }
 
@@ -219,10 +272,13 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
 
       metadata: {
         reference,
-        jobId: reference,
+        // Solo si hay asistencia de verdad: el webhook marca `jobs` con esto.
+        ...(asistencia !== null ? { jobId: String(asistencia) } : {}),
         customerName: String(customerName || ""),
         customerPhone: String(customerPhone || ""),
         amountEuros: String(amountEuros || ""),
+        // Para poder ver desde el panel de Stripe bajo qué condiciones se cobró.
+        templateId: template,
       },
     });
 
@@ -237,9 +293,13 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
           stripe_session_id,
           payment_url,
           created_at_ms,
-          description
+          description,
+          template_id,
+          total_amount_cents,
+          terms_text,
+          job_id
         )
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12)
       `,
       [
         reference,
@@ -250,6 +310,10 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
         session.url,
         Date.now(),
         desc,
+        template,
+        totalGuardado,
+        termsText,
+        asistencia,
       ]
     );
 
@@ -340,7 +404,10 @@ app.get("/api/payments/status/:reference", authenticate, requireModule("administ
           stripe_payment_intent_id,
           payment_url,
           paid_at_ms,
-          created_at_ms
+          created_at_ms,
+          template_id,
+          total_amount_cents,
+          terms_text
         FROM payments
         WHERE reference = $1
         ORDER BY created_at_ms DESC
@@ -389,7 +456,10 @@ app.get("/api/payments/recent", authenticate, requireModule("administracion"), a
           payment_url,
           paid_at_ms,
           created_at_ms,
-          description
+          description,
+          template_id,
+          total_amount_cents,
+          job_id
         FROM payments
         ORDER BY created_at_ms DESC
         LIMIT 50
@@ -8830,7 +8900,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         return w;
       }
       const STATUS_LABELS_PDF: Record<string, string> = {
-        pendiente: "Pendiente", asignada: "Asignada", en_camino: "En camino",
+        pendiente: "Gestionada", asignada: "Asignada", en_camino: "En camino",
         en_punto: "En punto", reparando: "Reparando", finalizada: "Finalizada",
         en_camino_base: "En camino a taller", llegada_taller: "En taller",
         cancelada: "Cancelada", redirigida: "Redirigida",
@@ -18362,13 +18432,27 @@ mountConnect(app, requireLicensesAdmin);
 app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
 app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRole));
 /*
- * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no
- * escribe nada en TC. Va con el guarda del back-office porque es información
- * de oficina; la pantalla del técnico no se toca.
+ * ⚠ EL ORDEN DE ESTOS TRES BLOQUES IMPORTA, Y NO ES UN DETALLE DE ESTILO.
+ *
+ * Las rutas de la APK (asistente, flanco y parte) cuelgan de /api/tyrecontrol,
+ * igual que el router del back-office. Ese router hace `router.use(guarda)`
+ * con el guarda del panel, que exige el token de administrador y responde 401
+ * "No autorizado" a cualquier otra cosa — incluida la sesión de un operario.
+ *
+ * Express prueba los middlewares EN EL ORDEN EN QUE SE REGISTRAN, así que si
+ * el `app.use("/api/tyrecontrol", …)` va primero, atrapa TODO lo que empiece
+ * por esa ruta y contesta 401 antes de que estas rutas lleguen a existir.
+ * Pasó de verdad: el técnico terminaba el parte, pulsaba "Ver el PDF" y le
+ * salía "No autorizado", con el parte ya guardado y bien.
+ *
+ * Por eso van ANTES. Sus caminos (/parte/*, /flanco/*, /asistente/*) no chocan
+ * con ninguno del router del panel (/empresas, /stock, /resolve…), de modo que
+ * todo lo demás sigue cayendo donde caía. Y no se afloja ningún permiso: cada
+ * una lleva su propio `authenticate` + `requireModule`, y el parte comprueba
+ * además empresa por empresa antes de devolver nada.
+ *
+ * Hay una prueba que lo vigila: server/rutasTyreControl.test.ts.
  */
-app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
-mountCorreo(app, requireSupervisorRole);
-app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
 
 // Asistente virtual de TyreControl (function calling sobre herramientas de
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
@@ -18378,9 +18462,19 @@ mountAsistente(app, authenticate, requireModule("tyrecontrol"));
 // Solo propone: guardar lo decide el técnico. Ver server/tyrecontrol/flanco/.
 mountFlanco(app, authenticate, requireModule("tyrecontrol"));
 
-// Parte de servicio a partir de fotografías. Solo propone: guardar lo decide
-// el técnico, y aterriza en la intervención y los montajes que ya existen.
+// Parte de servicio: lectura por fotografías y el PDF del parte. Solo propone:
+// guardar lo decide el técnico, y aterriza en la intervención y los montajes
+// que ya existen.
 mountParte(app, authenticate, requireModule("tyrecontrol"));
+
+/*
+ * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no
+ * escribe nada en TC. Va con el guarda del back-office porque es información
+ * de oficina; la pantalla del técnico no se toca.
+ */
+app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
+mountCorreo(app, requireSupervisorRole);
+app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
@@ -18621,6 +18715,9 @@ initDb()
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))
+  // Satisfaction: encuestas y casos de calidad. No engancha todavía con el
+  // cierre de asistencias — solo crea el esquema y siembra las plantillas.
+  .then(() => prepararEsquema("Satisfaction", initSatisfaction))
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);

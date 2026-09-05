@@ -18,7 +18,7 @@ describe("el parte generado", () => {
   });
 
   it("con más neumáticos de los que caben, añade página en vez de perderlos", async () => {
-    // Nueve filas por tabla: diez desmontados NO caben en una hoja.
+    // Ocho filas por tabla: diez desmontados NO caben en una hoja.
     const muchos = Array.from({ length: 10 }, (_, i) => neu(i + 1));
     const d = await PDFDocument.load(await generarPartePdf({ desmontados: muchos }));
     expect(d.getPageCount()).toBe(2);
@@ -102,6 +102,48 @@ describe("las coordenadas", () => {
     // Y la última fila de cada tabla tampoco.
     for (const t of [C.DESMONTADOS, C.MONTADOS, C.NUEVOS]) {
       expect(t.primeraFila + (t.filas - 1) * t.alturaFila).toBeLessThan(C.ALTO);
+    }
+  });
+
+  /**
+   * Esto es lo que falló en el papel de verdad: la primera línea se metía
+   * debajo de la cabecera y la segunda salía tachada por la raya, porque el
+   * texto bajaba 15,6 por fila y la rejilla impresa baja 18,1.
+   *
+   * Las cifras de aquí abajo están MEDIDAS sobre parte_conti360.pdf leyendo
+   * sus rectángulos, no estimadas mirando el papel.
+   */
+  describe("las filas caen dentro de la rejilla impresa", () => {
+    const rejillas = [
+      { nombre: "desmontados", t: C.DESMONTADOS, arriba: 304.25, abajo: 449.59, alto: 18.15 },
+      { nombre: "montados",    t: C.MONTADOS,    arriba: 475.73, abajo: 611.79, alto: 17.01 },
+    ];
+
+    for (const { nombre, t, arriba, abajo, alto } of rejillas) {
+      it(`${nombre}: cada fila baja lo mismo que la rejilla`, () => {
+        expect(Math.abs(t.alturaFila - alto)).toBeLessThan(0.1);
+      });
+
+      it(`${nombre}: la primera línea no se mete en la cabecera`, () => {
+        // La línea base va dentro de la primera casilla, no por encima.
+        expect(t.primeraFila).toBeGreaterThan(arriba + 4);
+        expect(t.primeraFila).toBeLessThan(arriba + alto);
+      });
+
+      it(`${nombre}: ninguna línea cae sobre una raya`, () => {
+        for (let i = 0; i < t.filas; i++) {
+          const y = t.primeraFila + i * t.alturaFila;
+          const borde = arriba + i * alto;
+          // Al menos 2,5 puntos por debajo del filete de arriba y 2 por encima
+          // del de abajo: si no, el texto sale tachado.
+          expect(y - borde).toBeGreaterThan(2.5);
+          expect(borde + alto - y).toBeGreaterThan(2);
+        }
+      });
+
+      it(`${nombre}: la última fila no se sale de la tabla`, () => {
+        expect(t.primeraFila + (t.filas - 1) * t.alturaFila).toBeLessThan(abajo);
+      });
     }
   });
   it("aPdf da la vuelta al eje: arriba del todo es el alto de la hoja", () => {

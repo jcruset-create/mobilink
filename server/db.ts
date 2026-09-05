@@ -1,3 +1,4 @@
+import { initReferencias } from "./cobros/referencias.ts";
 import pg from "pg";
 import dotenv from "dotenv";
 
@@ -51,6 +52,33 @@ export async function initDb() {
   await pool.query(`
     ALTER TABLE payments ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
   `).catch(() => {});
+
+  /*
+   * Plantillas de cobro. `terms_text` no es un duplicado del texto que hay en
+   * el código: es LO QUE ACEPTÓ ESE CLIENTE, con sus importes y con la
+   * redacción del día en que pagó. Si mañana se cambia la plantilla, los cobros
+   * viejos tienen que seguir contando lo que se aceptó entonces.
+   */
+  await pool.query(`
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS template_id TEXT NOT NULL DEFAULT 'libre';
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS total_amount_cents INTEGER;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS terms_text TEXT NOT NULL DEFAULT '';
+  `).catch(() => {});
+
+  /*
+   * La asistencia, cuando la hay, aparte de la referencia.
+   *
+   * Antes eran lo mismo: la referencia se tecleaba con el número de asistencia
+   * y el webhook la usaba para marcar la señal en `jobs`. Con la referencia
+   * repartida automáticamente eso ya no vale —el cobro nº 33 no tiene nada que
+   * ver con la asistencia 33—, así que el vínculo pasa a ser un dato propio y
+   * opcional.
+   */
+  await pool.query(`
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS job_id INTEGER;
+  `).catch(() => {});
+
+  await initReferencias(pool);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS rules (

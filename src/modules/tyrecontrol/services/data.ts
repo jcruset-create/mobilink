@@ -981,6 +981,39 @@ export async function liberarReserva(reservaId: string, motivo?: string | null):
 }
 
 // ── Operaciones Fase 6: anulación, auditoría, detalle ─────────
+/**
+ * Corrige DATOS de una operación ya hecha: razón, observaciones, número de
+ * serie y DOT.
+ *
+ * NO mueve neumáticos ni toca el stock, y no deja cambiar el destino: el
+ * destino vive en la operación y el estado en la ficha de la goma, los pone la
+ * misma RPC a la vez, y cambiar solo uno los dejaría contando cosas distintas.
+ *
+ * Puede el técnico que la hizo, además del administrador. El motivo es
+ * obligatorio y queda en tc_operacion_auditoria.
+ */
+export async function corregirOperacion(params: {
+  operacionId: string;
+  motivoCorreccion: string;
+  motivo?: string | null;
+  observaciones?: string | null;
+  numeroSerie?: string | null;
+  dot?: string | null;
+}): Promise<{ cambiado: boolean }> {
+  const cambios: Record<string, unknown> = {};
+  if (params.motivo !== undefined) cambios.motivo = params.motivo;
+  if (params.observaciones !== undefined) cambios.observaciones = params.observaciones;
+  if (params.numeroSerie !== undefined) cambios.numero_serie = params.numeroSerie;
+  if (params.dot !== undefined) cambios.dot = params.dot;
+  const { data, error } = await supabase.rpc("tc_corregir_operacion", {
+    p_operacion: params.operacionId,
+    p_cambios: cambios,
+    p_motivo: params.motivoCorreccion,
+  });
+  if (error) throw new Error(error.message);
+  return (data ?? { cambiado: false }) as { cambiado: boolean };
+}
+
 export async function anularOperacion(operacionId: string, motivo: string): Promise<void> {
   const { error } = await supabase.rpc("tc_anular_operacion", { p_operacion: operacionId, p_motivo: motivo });
   if (error) throw new Error(error.message);
@@ -1499,6 +1532,23 @@ async function tokenSesion(): Promise<string> {
   const token = sess.session?.access_token;
   if (!token) throw new Error("Sesión no válida");
   return token;
+}
+
+/**
+ * El parte de servicio en PDF (la plantilla Conti360) de una intervención.
+ *
+ * Devuelve un enlace firmado y caducable, no el PDF: es el mismo endpoint que
+ * usa la tablet, y así el navegador lo abre en una pestaña sin tener que
+ * meter el token en la URL —donde acabaría en el historial y en los registros.
+ */
+export async function enlaceParteInterventionPdf(intervencionId: string): Promise<string> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/parte/${intervencionId}/pdf/enlace`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "No se ha podido generar el PDF");
+  return (j as any).url as string;
 }
 
 export async function listarDocumentosVehiculo(vehiculoId: string): Promise<DocumentoVehiculo[]> {

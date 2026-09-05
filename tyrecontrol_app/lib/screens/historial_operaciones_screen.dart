@@ -1,15 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/etiqueta_neumatico.dart';
 
-/// Histórico de operaciones de un vehículo, agrupado por intervención
-/// (sesión de cambio) con su informe. Al tocar una intervención se ven sus
-/// operaciones (la "ficha" de cada una).
+/// Histórico de operaciones agrupado por intervención (parte de trabajo) con
+/// su informe. Al tocar una intervención se ven sus operaciones, su
+/// trazabilidad y se puede abrir el PDF del parte.
+///
+/// DOS MODOS, UNA PANTALLA. Con [vehiculoId] enseña el histórico de ESE
+/// camión, que es como se abre desde su ficha. Sin él, los últimos partes de
+/// todos los vehículos que el operario puede ver, que es el histórico general
+/// del menú. No son dos históricos: es el mismo, con y sin filtro. Duplicarlo
+/// habría acabado con dos pantallas que enseñan lo mismo de dos maneras
+/// distintas y que se corrigen por separado.
 class HistorialOperacionesScreen extends StatefulWidget {
-  final String vehiculoId;
+  final String? vehiculoId;
   final String matricula;
-  const HistorialOperacionesScreen({super.key, required this.vehiculoId, this.matricula = ''});
+  const HistorialOperacionesScreen({super.key, this.vehiculoId, this.matricula = ''});
 
   @override
   State<HistorialOperacionesScreen> createState() => _HistorialOperacionesScreenState();
@@ -28,32 +36,91 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
   List<Map<String, dynamic>> _intervenciones = [];
   List<Map<String, dynamic>> _sueltas = [];
 
+  /// Solo en el histórico general.
+  final _busca = TextEditingController();
+  bool _soloMias = false;
+  bool _pdf = false;
+
+  bool get _general => widget.vehiculoId == null;
+
   @override
   void initState() {
     super.initState();
     _cargar();
   }
 
+  @override
+  void dispose() { _busca.dispose(); super.dispose(); }
+
   Future<void> _cargar() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final res = await Future.wait([
-        TyreControlApi.listarIntervencionesVehiculo(widget.vehiculoId),
-        TyreControlApi.listarOperacionesVehiculo(widget.vehiculoId),
-      ]);
-      if (!mounted) return;
-      final todas = res[1];
-      setState(() {
-        _intervenciones = res[0];
-        // Movimientos que no pertenecen a ninguna intervención (p. ej. montar
-        // desde catálogo sin cerrar sesión de cambio): antes no salían aquí.
-        _sueltas = todas.where((o) => o['intervencion_id'] == null).toList();
-      });
+      if (_general) {
+        final ivs = await TyreControlApi.listarIntervencionesRecientes(soloMias: _soloMias);
+        if (!mounted) return;
+        // Sin vehículo no hay operaciones sueltas que recoger: las sueltas se
+        // buscan por vehículo, y aquí no hay uno.
+        setState(() { _intervenciones = ivs; _sueltas = []; });
+      } else {
+        final res = await Future.wait([
+          TyreControlApi.listarIntervencionesVehiculo(widget.vehiculoId!),
+          TyreControlApi.listarOperacionesVehiculo(widget.vehiculoId!),
+        ]);
+        if (!mounted) return;
+        final todas = res[1];
+        setState(() {
+          _intervenciones = res[0];
+          // Movimientos que no pertenecen a ninguna intervención (p. ej. montar
+          // desde catálogo sin cerrar sesión de cambio): antes no salían aquí.
+          _sueltas = todas.where((o) => o['intervencion_id'] == null).toList();
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '$e');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// La matrícula del camión de una intervención, cuando viene con ella (solo
+  /// en el general: en la ficha ya se sabe de qué camión se está hablando).
+  static String _matriculaDe(Map<String, dynamic> iv) {
+    final v = iv['vehiculo'];
+    return v is Map ? ((v['matricula'] as String?) ?? '') : '';
+  }
+
+  /// El filtro se aplica aquí, sobre lo ya traído. Por número de parte o por
+  /// matrícula, que es lo que uno tiene a mano: el papel que acaba de dar al
+  /// cliente, o el camión que tiene delante.
+  List<Map<String, dynamic>> get _filtradas {
+    final q = _busca.text.trim().toLowerCase();
+    if (q.isEmpty) return _intervenciones;
+    return _intervenciones.where((iv) {
+      final texto = [
+        (iv['numero'] as String?) ?? '',
+        _matriculaDe(iv),
+      ].join(' ').toLowerCase();
+      return texto.contains(q);
+    }).toList();
+  }
+
+  /// Abre el parte en PDF. El enlace lo firma el servidor y caduca en una
+  /// hora: el visor del sistema no lleva la sesión, así que pedirle la ruta
+  /// directamente devolvería un 401.
+  /// El aviso de "generando" lo lleva quien llama (la hoja de detalle tiene su
+  /// propio redibujado); aquí solo se abre.
+  Future<void> _abrirPdf(String intervencionId) async {
+    try {
+      final u = Uri.parse(await TyreControlApi.enlacePdfParte(intervencionId));
+      if (!await launchUrl(u, mode: LaunchMode.externalApplication)) {
+        throw Exception('No se ha podido abrir el PDF');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('No se ha podido abrir el PDF: $e')));
+      }
     }
   }
 
@@ -78,9 +145,30 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
                     : 'Intervención · ${_fecha(iv['fecha'] as String?)}',
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
             if (iv['numero'] != null)
-              Text(_fecha(iv['fecha'] as String?),
+              Text([
+                _fecha(iv['fecha'] as String?),
+                if (_matriculaDe(iv).isNotEmpty) _matriculaDe(iv),
+              ].join(' · '),
                   style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
+            // El papel que se le dio al cliente. Se puede volver a sacar en
+            // cualquier momento: el PDF se regenera de los datos, no se
+            // guarda una copia que se quede vieja.
+            StatefulBuilder(
+              builder: (_, redibuja) => OutlinedButton.icon(
+                onPressed: _pdf
+                    ? null
+                    : () async {
+                        redibuja(() => _pdf = true);
+                        await _abrirPdf(iv['id'] as String);
+                        redibuja(() => _pdf = false);
+                      },
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                icon: const Icon(Icons.picture_as_pdf_outlined),
+                label: Text(_pdf ? 'Generando…' : 'Ver el PDF del parte'),
+              ),
+            ),
+            const SizedBox(height: 10),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
@@ -103,7 +191,16 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
             if (ops.isEmpty)
               const Text('Sin operaciones registradas.', style: TextStyle(color: AppColors.textHint))
             else
-              ...ops.map(_filaOperacion),
+              // Con onCorregir: desde el detalle de un parte se puede arreglar
+              // lo que se apuntó mal. Lo de la lista suelta de arriba no, que
+              // ahí no hay contexto de qué parte es.
+              ...ops.map((o) => _filaOperacion(o, onCorregir: () async {
+                    final hecho = await _corregir(o);
+                    if (hecho == true && context.mounted) {
+                      Navigator.pop(context);   // cierra la hoja
+                      _cargar();
+                    }
+                  })),
           ],
         ),
       ),
@@ -170,7 +267,25 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
     return '$f · $h';
   }
 
-  Widget _filaOperacion(Map<String, dynamic> o) {
+  /// Corregir lo que se apuntó mal.
+  ///
+  /// SOLO DATOS: la razón, las observaciones, el número de serie y el DOT.
+  /// No mueve la goma ni toca el stock — eso no se puede deshacer desde aquí
+  /// sin arrastrar lo que haya pasado después—, y la pantalla lo dice para
+  /// que nadie crea que ha devuelto una rueda a su sitio.
+  Future<bool?> _corregir(Map<String, dynamic> o) async {
+    List<Map<String, dynamic>> motivos = [];
+    try { motivos = await TyreControlApi.listarMotivosDesmontaje(); } catch (_) {}
+    if (!mounted) return null;
+    return showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      builder: (_) => _CorregirOperacion(operacion: o, motivos: motivos),
+    );
+  }
+
+  Widget _filaOperacion(Map<String, dynamic> o, {VoidCallback? onCorregir}) {
     final tipo = _tipoLabels[o['tipo_operacion']] ?? '${o['tipo_operacion']}';
     final n = o['neumatico'];
     final neu = n is Map ? [n['marca'], n['medida']].whereType<String>().join(' ') : '';
@@ -188,6 +303,10 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
           Text([_fechaHora(o), neu, pos].where((s) => s.isNotEmpty).join(' · '),
               style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
         ])),
+        // Una operación anulada ya no cuenta para nada: corregirla daría a
+        // entender que vuelve a valer.
+        if (onCorregir != null && !anulada)
+          TextButton(onPressed: onCorregir, child: const Text('Corregir')),
       ]),
     );
   }
@@ -203,15 +322,74 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.matricula.isEmpty ? 'Operaciones' : 'Operaciones · ${widget.matricula}')),
+      appBar: AppBar(
+        title: Text(_general
+            ? 'Partes de trabajo'
+            : widget.matricula.isEmpty
+                ? 'Operaciones'
+                : 'Operaciones · ${widget.matricula}'),
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)))
-              : (_intervenciones.isEmpty && _sueltas.isEmpty)
-                  ? const Center(child: Padding(padding: EdgeInsets.all(24),
-                      child: Text('Sin operaciones registradas para este vehículo.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.textHint))))
-                  : RefreshIndicator(
+              : Column(children: [
+                  if (_general) _barraBusqueda(),
+                  Expanded(child: _lista_()),
+                ]),
+    );
+  }
+
+  Widget _barraBusqueda() => Padding(
+    padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+    child: Column(children: [
+      TextField(
+        controller: _busca,
+        decoration: InputDecoration(
+          prefixIcon: const Icon(Icons.search),
+          hintText: 'Nº de parte o matrícula',
+          isDense: true,
+          suffixIcon: _busca.text.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () { _busca.clear(); setState(() {}); },
+                ),
+        ),
+        onChanged: (_) => setState(() {}),
+      ),
+      const SizedBox(height: 6),
+      Row(children: [
+        FilterChip(
+          label: const Text('Solo los míos'),
+          selected: _soloMias,
+          // Recarga: el filtro por técnico lo hace la consulta, no la
+          // pantalla, para no traerse los de todos y esconderlos.
+          onSelected: (v) { setState(() => _soloMias = v); _cargar(); },
+        ),
+        const Spacer(),
+        Text('${_filtradas.length} parte(s)',
+            style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+      ]),
+    ]),
+  );
+
+  Widget _lista_() {
+    final ivs = _filtradas;
+    if (ivs.isEmpty && _sueltas.isEmpty) {
+      return Center(child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Text(
+            _general
+                ? (_busca.text.trim().isEmpty
+                    ? 'Todavía no hay partes de trabajo.'
+                    : 'Ningún parte con esa búsqueda.')
+                : 'Sin operaciones registradas para este vehículo.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppColors.textHint)),
+      ));
+    }
+    return RefreshIndicator(
                       onRefresh: _cargar,
                       child: ListView(
                         padding: const EdgeInsets.all(12),
@@ -226,11 +404,11 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
                             ..._sueltas.map(_filaOperacion),
                             const SizedBox(height: 16),
                           ],
-                          if (_intervenciones.isNotEmpty) ...[
-                            const Text('INTERVENCIONES',
-                                style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800)),
+                          if (ivs.isNotEmpty) ...[
+                            Text(_general ? 'PARTES' : 'INTERVENCIONES',
+                                style: const TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w800)),
                             const SizedBox(height: 6),
-                            ..._intervenciones.map((iv) {
+                            ...ivs.map((iv) {
                               final informe = ((iv['resumen_ia'] as String?)?.isNotEmpty == true ? iv['resumen_ia'] : iv['resumen']) as String? ?? '—';
                               return Card(
                                 color: AppColors.surface,
@@ -250,6 +428,16 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
                                               color: AppColors.info)),
                                       const SizedBox(width: 8),
                                     ],
+                                    // En el general la MATRÍCULA es lo que
+                                    // distingue una fila de otra: sin ella,
+                                    // veinte partes del mismo día son veinte
+                                    // líneas iguales.
+                                    if (_general && _matriculaDe(iv).isNotEmpty) ...[
+                                      Text(_matriculaDe(iv),
+                                          style: const TextStyle(
+                                              fontSize: 13, fontWeight: FontWeight.w800)),
+                                      const SizedBox(width: 8),
+                                    ],
                                     Expanded(
                                       child: Text('${_fecha(iv['fecha'] as String?)} · ${iv['n_operaciones'] ?? 0} operación(es)',
                                           style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
@@ -265,8 +453,7 @@ class _HistorialOperacionesScreenState extends State<HistorialOperacionesScreen>
                           ],
                         ],
                       ),
-                    ),
-    );
+                    );
   }
 }
 
@@ -448,5 +635,174 @@ class _SnapshotPlanoState extends State<_SnapshotPlano> {
         ]),
       );
     });
+  }
+}
+
+/// Corregir lo que se apuntó mal en una operación ya hecha.
+///
+/// SOLO DATOS. La razón, las observaciones, el número de serie y el DOT: cosas
+/// que no movieron nada. No cambia dónde está la goma ni toca el stock, y la
+/// pantalla lo dice, porque es justo lo que la gente asume que hace.
+///
+/// Deshacer un movimiento es otra cosa y no se puede hacer desde aquí: si la
+/// goma que se desmontó el lunes se montó el martes en otro camión, deshacer
+/// el lunes tendría que deshacer el martes, y nadie va a mirar eso a mano.
+class _CorregirOperacion extends StatefulWidget {
+  final Map<String, dynamic> operacion;
+  final List<Map<String, dynamic>> motivos;
+  const _CorregirOperacion({required this.operacion, required this.motivos});
+
+  @override
+  State<_CorregirOperacion> createState() => _CorregirOperacionState();
+}
+
+class _CorregirOperacionState extends State<_CorregirOperacion> {
+  late final TextEditingController _obs;
+  late final TextEditingController _serie;
+  late final TextEditingController _dot;
+  final _porQue = TextEditingController();
+  String? _motivo;
+  bool _guardando = false;
+  String? _error;
+
+  Map<String, dynamic>? get _neu =>
+      widget.operacion['neumatico'] is Map
+          ? Map<String, dynamic>.from(widget.operacion['neumatico'] as Map)
+          : null;
+
+  @override
+  void initState() {
+    super.initState();
+    _motivo = widget.operacion['motivo'] as String?;
+    _obs = TextEditingController(text: (widget.operacion['observaciones'] as String?) ?? '');
+    _serie = TextEditingController(text: (_neu?['numero_serie'] as String?) ?? '');
+    _dot = TextEditingController(text: (_neu?['dot'] as String?) ?? '');
+  }
+
+  @override
+  void dispose() {
+    for (final c in [_obs, _serie, _dot, _porQue]) { c.dispose(); }
+    super.dispose();
+  }
+
+  Future<void> _guardar() async {
+    if (_porQue.text.trim().isEmpty) {
+      setState(() => _error = 'Di por qué lo corriges: queda apuntado con tu nombre.');
+      return;
+    }
+    setState(() { _guardando = true; _error = null; });
+    try {
+      await TyreControlApi.corregirOperacion(
+        operacionId: widget.operacion['id'] as String,
+        motivoCorreccion: _porQue.text.trim(),
+        motivo: _motivo,
+        observaciones: _obs.text,
+        // Solo se mandan si hay ficha de neumático que corregir.
+        numeroSerie: _neu == null ? null : _serie.text,
+        dot: _neu == null ? null : _dot.text,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _guardando = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16, right: 16, top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Corregir lo apuntado',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.warning.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Text(
+                'Esto corrige el DATO, no mueve la rueda. El neumático se queda '
+                'donde está y el stock no cambia.',
+                style: TextStyle(fontSize: 12, color: AppColors.warning)),
+          ),
+          const SizedBox(height: 16),
+
+          if (widget.motivos.isNotEmpty) ...[
+            DropdownButtonFormField<String>(
+              initialValue: widget.motivos.any((m) => m['codigo'] == _motivo) ? _motivo : null,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Razón', isDense: true),
+              items: [
+                for (final m in widget.motivos)
+                  DropdownMenuItem(
+                    value: m['codigo'] as String?,
+                    child: Text((m['nombre'] ?? m['codigo'] ?? '') as String,
+                        overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+              onChanged: (v) => setState(() => _motivo = v),
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          if (_neu != null) ...[
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _serie,
+                  decoration: const InputDecoration(labelText: 'Nº de serie', isDense: true),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _dot,
+                  decoration: const InputDecoration(labelText: 'DOT', isDense: true),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 12),
+          ],
+
+          TextField(
+            controller: _obs,
+            maxLines: 2,
+            decoration: const InputDecoration(labelText: 'Observaciones', isDense: true),
+          ),
+          const SizedBox(height: 16),
+
+          TextField(
+            controller: _porQue,
+            decoration: const InputDecoration(
+              labelText: '¿Por qué lo corriges?',
+              helperText: 'Obligatorio. Queda apuntado con tu nombre y la fecha.',
+              isDense: true,
+            ),
+          ),
+
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(_error!, style: const TextStyle(color: AppColors.danger)),
+          ],
+          const SizedBox(height: 20),
+          FilledButton(
+            onPressed: _guardando ? null : _guardar,
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+            child: Text(_guardando ? 'Guardando…' : 'Guardar la corrección',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          ),
+          TextButton(onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar')),
+        ]),
+      ),
+    );
   }
 }

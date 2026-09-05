@@ -18,9 +18,11 @@ export async function setup(): Promise<void> {
   const { initDb } = await import("./server/db.ts");
   const { initConnect } = await import("./server/connect/schema.ts");
   const { initTacografos } = await import("./server/tacografos/schema.ts");
+  const { initSatisfaction } = await import("./server/satisfaction/schema.ts");
   await initDb();
   await initConnect();
   await initTacografos();
+  await initSatisfaction();
 
   const db = (await import("./server/db.ts")).default;
   await db.end().catch(() => {});
