@@ -57,7 +57,36 @@ async function crearFinalizada(finishedAtMs: number | null = Date.now(), tallerI
 const fila = async (id: number) =>
   (await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [id])).rows[0];
 
-/** Espera a que corran los enganches que no se esperan. */
+/**
+ * Espera a que se cumpla una condición, no a que pase un rato.
+ *
+ * `engancharPosteriores` no devuelve promesa a propósito, así que la prueba
+ * tiene que esperar por fuera. Aquí había 250 ms fijos y era una apuesta: el
+ * primer enganche es el de TyreControl, que sin red tarda SIETE SEGUNDOS en
+ * darse por vencido, y hasta que no termina no se escribe el diario. La prueba
+ * pasaba o fallaba según el orden de los ficheros —añadir uno nuevo la
+ * rompía—, que es justo lo que no puede hacer una prueba.
+ *
+ * Sondeando, el caso bueno sigue tardando milisegundos y el malo falla con un
+ * mensaje que dice qué se esperaba.
+ */
+async function hasta<T>(
+  descripcion: string, f: () => Promise<T>, ok: (v: T) => boolean, topeMs = 20_000,
+): Promise<T> {
+  const limite = Date.now() + topeMs;
+  let ultimo = await f();
+  while (!ok(ultimo) && Date.now() < limite) {
+    await new Promise((r) => setTimeout(r, 50));
+    ultimo = await f();
+  }
+  if (!ok(ultimo)) throw new Error(`Se agotó la espera de ${descripcion}`);
+  return ultimo;
+}
+
+/**
+ * Para los casos en los que se comprueba que NO se anota nada: no hay
+ * condición que esperar, así que se le da margen a la cadena de enganches.
+ */
 const respirar = () => new Promise((r) => setTimeout(r, 250));
 
 beforeAll(async () => {
@@ -196,17 +225,31 @@ describe.skipIf(!RUN)("enganches posteriores", () => {
       `SELECT "eventType", payload FROM assistance_events
         WHERE "sourceSystem" = 'assist' AND "assistanceId" = $1`, [String(id)])).rows;
 
+  /*
+   * Margen amplio para las que esperan a los enganches.
+   *
+   * El primero de la cadena es TyreControl y, sin red, tarda unos siete
+   * segundos en rendirse; hasta que no vuelve no se escribe el diario. Los
+   * 5 s por defecto de vitest se quedan cortos. En un entorno con red el caso
+   * bueno sigue tardando milisegundos: esto es techo, no espera.
+   */
+  const CON_ENGANCHES = 30_000;
+
+  /** Espera a que el diario de una asistencia tenga al menos `n` líneas. */
+  const esperarDiario = (id: number, n = 1): Promise<Fila[]> =>
+    hasta(`${n} línea(s) de diario de la asistencia ${id}`,
+          () => diario(id) as Promise<Fila[]>, (ev) => ev.length >= n);
+
   it("desde oficina se anota SERVICE_COMPLETED en el diario", async () => {
     const id = await crearFinalizada();
     mod.engancharPosteriores({
       assistanceId: id, estado: "finalizada", origen: "oficina",
       tenantId: null, actorNombre: "Oficina", tecnico: "Anthoni", ahoraMs: Date.now(),
     });
-    await respirar();
-    const ev = await diario(id);
+    const ev = await esperarDiario(id);
     expect(ev.map((e: Fila) => e.eventType)).toContain("SERVICE_COMPLETED");
-    expect(JSON.parse(ev[0].payload).tecnico).toBe("Anthoni");
-  });
+    expect(JSON.parse(String(ev[0].payload)).tecnico).toBe("Anthoni");
+  }, CON_ENGANCHES);
 
   /*
    * Ésta era la prueba de la divergencia, invertida. Antes decía que la APK NO
@@ -219,9 +262,8 @@ describe.skipIf(!RUN)("enganches posteriores", () => {
       assistanceId: id, estado: "finalizada", origen: "operario",
       actorNombre: "Anthoni", tecnico: "Anthoni", ahoraMs: Date.now(),
     });
-    await respirar();
-    expect((await diario(id)).map((e: Fila) => e.eventType)).toContain("SERVICE_COMPLETED");
-  });
+    expect((await esperarDiario(id)).map((e: Fila) => e.eventType)).toContain("SERVICE_COMPLETED");
+  }, CON_ENGANCHES);
 
   it("las dos rutas anotan exactamente lo mismo", async () => {
     const ahora = Date.now();
@@ -235,10 +277,9 @@ describe.skipIf(!RUN)("enganches posteriores", () => {
       assistanceId: ofi, estado: "finalizada", origen: "oficina",
       actorNombre: "Oficina", tecnico: "Anthoni", ahoraMs: ahora,
     });
-    await respirar();
     const tipos = (f: Fila[]) => f.map((e) => e.eventType).sort();
-    expect(tipos(await diario(apk))).toEqual(tipos(await diario(ofi)));
-  });
+    expect(tipos(await esperarDiario(apk))).toEqual(tipos(await esperarDiario(ofi)));
+  }, CON_ENGANCHES);
 
   /*
    * ── La prueba del reintento ─────────────────────────────────────────────
@@ -254,16 +295,18 @@ describe.skipIf(!RUN)("enganches posteriores", () => {
       assistanceId: id, estado: "finalizada", origen: "operario",
       actorNombre: "Anthoni", ahoraMs: Date.now(),
     });
-    await respirar();
+    await esperarDiario(id);
     mod.engancharPosteriores({
       assistanceId: id, estado: "finalizada", origen: "oficina",
       actorNombre: "Oficina", ahoraMs: Date.now() + 5_000,
     });
+    // Aquí sí toca esperar a ciegas: lo que se comprueba es que NO aparece una
+    // segunda línea, y a una ausencia no se le puede sondear.
     await respirar();
 
     const ev = (await diario(id)).filter((e: Fila) => e.eventType === "SERVICE_COMPLETED");
     expect(ev).toHaveLength(1);
-  });
+  }, CON_ENGANCHES);
 
   /*
    * Y lo contrario, que también tiene que seguir funcionando: una asistencia
@@ -275,13 +318,13 @@ describe.skipIf(!RUN)("enganches posteriores", () => {
     mod.engancharPosteriores({
       assistanceId: id, estado: "en_camino", origen: "oficina", ahoraMs: Date.now(),
     });
-    await respirar();
+    await esperarDiario(id);
     mod.engancharPosteriores({
       assistanceId: id, estado: "en_camino", origen: "oficina", ahoraMs: Date.now() + 60_000,
     });
-    await respirar();
+    await esperarDiario(id, 2);
     expect((await diario(id)).filter((e: Fila) => e.eventType === "EN_ROUTE")).toHaveLength(2);
-  });
+  }, CON_ENGANCHES);
 
   /*
    * El taller sale de la asistencia, no de quien cierra: la sesión de la APK
@@ -295,12 +338,12 @@ describe.skipIf(!RUN)("enganches posteriores", () => {
       assistanceId: id, estado: "finalizada", origen: "operario",
       actorNombre: "Anthoni", ahoraMs: Date.now(),
     });
-    await respirar();
+    await esperarDiario(id);
     const r = await db.query(
       `SELECT "tenantId" FROM assistance_events
         WHERE "sourceSystem" = 'assist' AND "assistanceId" = $1`, [String(id)]);
     expect(r.rows[0].tenantId).toBe("5150");
-  });
+  }, CON_ENGANCHES);
 
   it("un estado sin evento de diario no anota nada", async () => {
     const id = await crearFinalizada(null);
@@ -309,7 +352,7 @@ describe.skipIf(!RUN)("enganches posteriores", () => {
     });
     await respirar();
     expect(await diario(id)).toHaveLength(0);
-  });
+  }, CON_ENGANCHES);
 
   it("no espera a nadie: devuelve antes de que terminen los enganches", () => {
     const r = mod.engancharPosteriores({
