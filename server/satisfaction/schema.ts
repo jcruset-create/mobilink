@@ -278,6 +278,9 @@ export async function initSatisfaction(): Promise<void> {
       ON survey_deliveries (status, "createdAtMs");
   `);
 
+  const { initSatisfactionConfig } = await import("./config.ts");
+  await initSatisfactionConfig();
+
   await sembrarPlantillas();
 }
 

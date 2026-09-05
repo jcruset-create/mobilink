@@ -38,19 +38,16 @@ import { initConnect, mountConnect, startConnectWorker } from "./connect/index.t
 import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
 import { initEventLog } from "./eventlog/schema.ts";
 import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./eventlog/servicio.ts";
-import { tipoDesdeEstadoAssist } from "./eventlog/tipos.ts";
 import { initDocumentos } from "./documentos/schema.ts";
 import { createDocumentosRouter } from "./documentos/router.ts";
 import {
   olvidarFicheroDeAssist,
-  recalcularEstadoAdmin,
   registrarDocumento as registrarDocumentoDeAssist,
   registrarFicheroDeAssist,
 } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
-import { engancheCierreTyreControl } from "./tyrecontrol/cierreAsistencia.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
 import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
@@ -59,13 +56,15 @@ import { estadoDeVehiculo as estadoVehiculoTc } from "./tyrecontrol/estadoVehicu
 import {
   initCorreo,
   mountCorreo,
-  revisarDocumentacionAlFinalizar,
   startCorreoWorker,
 } from "./correo/index.ts";
 import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
 import { initExcepciones } from "./excepciones/schema.ts";
 import { createExcepcionesRouter } from "./excepciones/router.ts";
 import { initSatisfaction } from "./satisfaction/schema.ts";
+import {
+  engancharPosteriores, prepararRespuestaTrasCambio,
+} from "./cierre/finalizacion.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
@@ -7114,43 +7113,22 @@ app.post(
 
       let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
-      // Generar reportToken al finalizar
       /*
-       * TyreControl. Va DESPUÉS de que la asistencia ya esté guardada y sin
-       * `await`: el técnico no puede esperar a que conteste otro sistema, y un
-       * problema con TC no puede impedir que una asistencia se cierre.
-       *
-       * Hoy no manda nada — solo prepara y anota el sobre. Ver
-       * `server/tyrecontrol/cierreAsistencia.ts`.
+       * El post-proceso del cambio de estado vive en `cierre/finalizacion.ts`,
+       * compartido con la ruta de oficina. Estaba duplicado en las dos y ya
+       * habían dejado de hacer lo mismo.
        */
-      if (status === "finalizada") {
-        void engancheCierreTyreControl(Number(id))
-          .catch((e) => console.error("[TyreControl] enganche de cierre:", e?.message));
-      }
+      const cambiada = await prepararRespuestaTrasCambio({
+        assistanceId: Number(id), estado: status, origen: "operario",
+        actorNombre: operator.techName, ahoraMs: now,
+      });
+      if (cambiada) updated = normalizeRoadsideAssistanceRow(cambiada);
 
-      if (status === "finalizada" && !updated.reportToken) {
-        const { randomUUID } = await import("crypto");
-        const reportToken = randomUUID();
-        const rtResult = await db.query(
-          `UPDATE roadside_assistances SET "reportToken" = $2 WHERE id = $1 RETURNING *`,
-          [id, reportToken]
-        );
-        updated = normalizeRoadsideAssistanceRow(rtResult.rows[0]);
-      }
-
-      // Auto-transición: al finalizar la reparación, pasar automáticamente a en_camino_base
-      if (status === "finalizada") {
-        await db.query(
-          `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
-           VALUES ($1, 'en_camino_base', 'Vuelta al taller automática', $2, $3)`,
-          [id, operator.techName, now + 1]
-        );
-        const baseResult = await db.query(
-          `UPDATE roadside_assistances SET status = 'en_camino_base', "enCaminoBaseAtMs" = COALESCE("enCaminoBaseAtMs", $2), "updatedAtMs" = $2 WHERE id = $1 RETURNING *`,
-          [id, now + 1]
-        );
-        updated = normalizeRoadsideAssistanceRow(baseResult.rows[0]);
-      }
+      engancharPosteriores({
+        assistanceId: Number(id), estado: status, origen: "operario",
+        actorNombre: operator.techName, tecnico: updated.assignedTechName || null,
+        ahoraMs: now,
+      });
 
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
@@ -7893,29 +7871,12 @@ app.post(
 
       let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
-      // ── Generar reportToken si se finaliza y no existe ya ──────────────────
-      /*
-       * TyreControl. Va DESPUÉS de que la asistencia ya esté guardada y sin
-       * `await`: el técnico no puede esperar a que conteste otro sistema, y un
-       * problema con TC no puede impedir que una asistencia se cierre.
-       *
-       * Hoy no manda nada — solo prepara y anota el sobre. Ver
-       * `server/tyrecontrol/cierreAsistencia.ts`.
-       */
-      if (status === "finalizada") {
-        void engancheCierreTyreControl(Number(id))
-          .catch((e) => console.error("[TyreControl] enganche de cierre:", e?.message));
-      }
-
-      if (status === "finalizada" && !updated.reportToken) {
-        const { randomUUID } = await import("crypto");
-        const reportToken = randomUUID();
-        const rtResult = await db.query(
-          `UPDATE roadside_assistances SET "reportToken" = $2 WHERE id = $1 RETURNING *`,
-          [id, reportToken]
-        );
-        updated = normalizeRoadsideAssistanceRow(rtResult.rows[0]);
-      }
+      // El mismo post-proceso que la ruta de la APK, en `cierre/finalizacion.ts`.
+      const cambiada = await prepararRespuestaTrasCambio({
+        assistanceId: Number(id), estado: status, origen: "oficina",
+        actorNombre: body.createdBy ?? "oficina", ahoraMs: now,
+      });
+      if (cambiada) updated = normalizeRoadsideAssistanceRow(cambiada);
 
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
@@ -7932,35 +7893,13 @@ app.post(
        * recalcularlo o una asistencia recién finalizada se quedaría sin
        * aparecer como pendiente de albarán.
        */
-      void recalcularEstadoAdmin("assist", id)
-        .catch((e) => console.error("estado administrativo:", e?.message));
-
-      /*
-       * Al terminar el servicio se mira qué documentación falta y se programa
-       * que se pida. No manda nada aquí: encolarlo es lo que permite que la
-       * cadencia sea de días y que no salgan cuatro correos si el estado se
-       * toca cuatro veces.
-       */
-      if (status === "finalizada") {
-        void revisarDocumentacionAlFinalizar(
-          "assist", id, (req as any).assistPanelUser?.tallerId ?? null,
-        ).catch((e) => console.error("revisión de documentación:", e?.message));
-      }
-
-      const tipoDiario = tipoDesdeEstadoAssist(status);
-      if (tipoDiario) {
-        void registrarEventoAsistencia({
-          system: "assist",
-          tenantId: (req as any).assistPanelUser?.tallerId ?? null,
-          assistanceId: id,
-          eventType: tipoDiario,
-          actorType: "user",
-          actorName: (req as any).authCtx?.nombre ?? null,
-          occurredAtMs: now,
-          payload: { estado: status, tecnico: updated.assignedTechName || null },
-          dedupeKey: `assist-estado-${id}-${status}-${now}`,
-        });
-      }
+      engancharPosteriores({
+        assistanceId: Number(id), estado: status, origen: "oficina",
+        tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+        actorNombre: (req as any).authCtx?.nombre ?? null,
+        tecnico: updated.assignedTechName || null,
+        ahoraMs: now,
+      });
 
       // ── WhatsApp con deduplicación ─────────────────────────────────────────
       if (status === "asignada" && updated.customerPhone && !updated.whatsappAsignadaSentAtMs) {
