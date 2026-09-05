@@ -792,6 +792,25 @@ export default function Cobros() {
           )}
 
           {/*
+            Sin forma de cobro elegida, esta columna se quedaba vacía y el
+            botón de confirmar flotaba solo arriba del todo, descolgado del
+            formulario. Pasa más desde que no hay forma por defecto, que es lo
+            correcto pero deja el hueco a la vista. Se dice qué falta y en
+            cuanto se elige algo lo sustituye su panel.
+          */}
+          {!modo && importe > 0 && (
+            <div className="rounded-lg border border-dashed border-slate-700 bg-slate-800/40 p-4 text-center">
+              <p className="text-[13px] font-bold text-slate-300">
+                Elige cómo se ha cobrado
+              </p>
+              <p className="mt-1 text-[12px] text-slate-500">
+                Pulsa una forma de cobro a la izquierda. Si es efectivo, aquí aparecerán los
+                billetes y las monedas para contar lo que entrega el cliente.
+              </p>
+            </div>
+          )}
+
+          {/*
             Factura ya cobrada: aquí NO se enseña el botón de siempre. Que la
             única defensa fuera un aviso encima del mismo botón es justo lo
             que dejaba pasar el segundo cobro con un clic de más.
