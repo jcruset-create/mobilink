@@ -78,16 +78,56 @@ workflows:
       - name: Instalar pods
         script: |
           cd ios && pod install
+      # ── El paso que faltaba ─────────────────────────────────────────────
+      #
+      # «Set up code signing identities» —el paso automático que sale de
+      # «environment.ios_signing»— baja el certificado y el perfil y los mete
+      # en el llavero. Ahí se acaba su trabajo: NO toca el proyecto de Xcode y
+      # NO escribe ningún export_options.plist.
+      #
+      # Eso es lo que hace «xcode-project use-profiles»: aplica los perfiles al
+      # proyecto y, de paso, genera el plist de exportación que luego pide
+      # «flutter build ipa». Sin este paso, el build muere diciendo
+      # «/Users/builder/export_options.plist property list does not exist», que
+      # es literalmente cierto: nadie lo había creado.
+      #
+      # ── Y por qué se le dice qué proyecto ────────────────────────────────
+      #
+      # Por defecto busca «**/*.xcodeproj» bajo el directorio de trabajo, y
+      # aquí eso es flutter_app, donde hay DOS: ios/Runner.xcodeproj y
+      # macos/Runner.xcodeproj. Dejarlo suelto le pondría perfiles de iOS al
+      # proyecto de macOS. Se le dice cuál.
+      - name: Aplicar los perfiles al proyecto Xcode
+        script: |
+          xcode-project use-profiles --project ios/Runner.xcodeproj
+
+          # Y se comprueba que el plist existe ANTES de compilar. Son cuarenta
+          # minutos de build: enterarse al final de que falta un fichero que se
+          # podía haber mirado en un segundo es tirarlos.
+          if [ ! -f "$HOME/export_options.plist" ]; then
+            echo "No se ha generado $HOME/export_options.plist."
+            echo "«xcode-project use-profiles» no encontró perfiles que aplicar:"
+            echo "revisa que la integración de App Store Connect tenga acceso a"
+            echo "com.mobilink.assist y que exista su perfil de distribución."
+            exit 1
+          fi
+          echo "export_options.plist generado en $HOME/export_options.plist"
+
       - name: Build IPA
         script: |
           # La versión y el build se pasan a Flutter, no con agvtool: «flutter
           # build» reescribe Generated.xcconfig con FLUTTER_BUILD_NAME y
           # FLUTTER_BUILD_NUMBER, que es de donde el Info.plist saca los dos
           # valores. Lo que hiciera agvtool antes se perdía en ese paso.
+          #
+          # «$HOME/export_options.plist» es la ruta por defecto que usa
+          # «xcode-project use-profiles» —en Codemagic, /Users/builder—, así que
+          # se escribe con la variable y no a mano: si el usuario del builder
+          # cambiara, esto sigue funcionando.
           flutter build ipa --release \
             --build-name="$IOS_VERSION" \
             --build-number="$BUILD_NUMBER" \
-            --export-options-plist=/Users/builder/export_options.plist
+            --export-options-plist="$HOME/export_options.plist"
 
     artifacts:
       - flutter_app/build/ios/ipa/*.ipa
