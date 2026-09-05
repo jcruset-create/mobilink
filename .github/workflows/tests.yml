@@ -15,6 +15,7 @@ on:
     paths:
       - "server/**"
       - "src/**"
+      - "autoscan_agent/**"
       - "package.json"
       - "package-lock.json"
       - "tsconfig*.json"
@@ -75,6 +76,12 @@ jobs:
       # sin esto, un error de tipos en server/ llega a producción.
       - name: Typecheck del servidor (Central Pro y Lite)
         run: npx tsc -p tsconfig.server.json
+
+      # El agente de AutoScan tiene su propio tsconfig y NO entra en el `tsc -b`
+      # de arriba. Sin esta línea, sus errores de tipos solo aparecerían el día
+      # de compilar el instalador, que es el peor momento para descubrirlos.
+      - name: Typecheck del agente de AutoScan
+        run: npx tsc -p autoscan_agent/tsconfig.json --noEmit
 
       # Los typechecks de arriba NO compilan el bundle, y Render sí: la entrega
       # #55 pasó la CI en verde y su deploy murió compilando, dejando en
