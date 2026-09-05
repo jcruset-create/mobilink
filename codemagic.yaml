@@ -3,43 +3,63 @@ workflows:
     name: Mobilink Assist · iOS → TestFlight
     instance_type: mac_mini_m2
     max_build_duration: 60
+
+    # ── Las credenciales de Apple entran POR AQUÍ ───────────────────────────
+    #
+    # Es la clave de API de App Store Connect que ya está cargada en Codemagic
+    # (Settings → Developer Portal → Manage keys). Con esta sección, Codemagic
+    # la usa para las dos cosas que hacen falta:
+    #
+    #   · firmar   — «ios_signing» le pide a Apple el certificado de
+    #                distribución y el perfil de com.mobilink.assist;
+    #   · publicar — «publishing.app_store_connect.auth: integration» sube el
+    #                .ipa a TestFlight con esa misma clave.
+    #
+    # Y por eso NO hay que repetir Issuer ID, Key ID ni el .p8 como variables
+    # de entorno: duplicar un secreto es multiplicar por dos los sitios donde
+    # caduca sin que nadie se entere.
+    #
+    # Sin esta sección, Codemagic rechaza el fichero antes de compilar:
+    #   ios-testflight -> publishing
+    #   auth -> "integration" requires workflow -> integrations -> app_store_connect
+    integrations:
+      # ⚠️  SUSTITUIR por el nombre EXACTO de la clave en Codemagic.
+      #
+      # Se lee en Codemagic → Settings → Developer Portal → Manage keys, en la
+      # columna del nombre. Distingue mayúsculas, espacios y acentos: tiene que
+      # ir carácter por carácter.
+      #
+      # Mientras ponga esto, el build falla diciendo que no encuentra la
+      # integración. Es a propósito: es preferible un error que dice qué falta
+      # a un nombre inventado que falle por un motivo que no se entiende.
+      app_store_connect: PON_AQUI_EL_NOMBRE_DE_LA_KEY
+
     environment:
       flutter: stable
       xcode: latest
       cocoapods: default
       ios_signing:
-        # El App ID «com.mobilink.assist» está dado de alta en Apple Developer y
-        # la app existe en App Store Connect asociada a él. Este identificador es
-        # el definitivo; el anterior («com.seatarragona.operario») no se usa ni
-        # se recupera.
+        # El App ID está dado de alta en Apple Developer y la app creada en App
+        # Store Connect asociada a él. Es el identificador definitivo.
         #
         # Tiene que decir EXACTAMENTE lo mismo que
-        # ios/Runner.xcodeproj/project.pbxproj. Si los dos no coinciden, la
-        # firma falla al buscar el perfil.
-        #
-        # Requiere la integración de App Store Connect en Codemagic:
-        # Teams → Integrations → App Store Connect.
+        # flutter_app/ios/Runner.xcodeproj/project.pbxproj. Si los dos no
+        # coinciden, la firma falla al buscar el perfil.
         distribution_type: app_store
         bundle_identifier: com.mobilink.assist
       vars:
-        # OPCIONAL, y este workflow NO lo usa: la publicación va con
-        # «auth: integration», que localiza la app por su bundle id. Se deja
-        # porque es el dato que pide cualquier script de App Store Connect que
-        # se quiera añadir después. No es un bloqueo para la primera build.
-        APP_STORE_APPLE_ID: "PENDIENTE"
         # ── La versión de iOS va aparte de la de Android, y hay motivo ─────
         #
-        # «pubspec.yaml» dice 1.10.4+66 y esa numeración es la de la APK, que
-        # lleva 66 entregas a las tablets. Bajarla a 1.0.0 para estrenar en la
-        # App Store convertiría la siguiente APK en una actualización «hacia
-        # atrás» y Android no la instalaría encima.
+        # «pubspec.yaml» lleva la numeración de la APK, con decenas de entregas
+        # a las tablets. Bajarla para estrenar en la App Store convertiría la
+        # siguiente APK en una actualización «hacia atrás» y Android no la
+        # instalaría encima.
         #
         # Así que el nombre de versión de iOS se pone aquí y el número de build
         # lo pone Codemagic, que es monótono por definición. Para la segunda
         # entrega, se sube este número y ya está.
         IOS_VERSION: "1.0.0"
-      groups:
-        - appstore_connect            # grupo con las credenciales App Store Connect (UI de Codemagic)
+
     working_directory: flutter_app
     scripts:
       - name: Flutter pub get
@@ -57,19 +77,22 @@ workflows:
             --build-name="$IOS_VERSION" \
             --build-number="$BUILD_NUMBER" \
             --export-options-plist=/Users/builder/export_options.plist
+
     artifacts:
       - flutter_app/build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
+
     publishing:
       app_store_connect:
+        # «integration» = usa la clave declarada arriba en «integrations».
         auth: integration
         submit_to_testflight: true
         # Grupos de testers internos que reciben la build automáticamente.
         #
         # ESTE GRUPO TIENE QUE EXISTIR YA en App Store Connect (TestFlight →
         # Internal Testing) y llamarse exactamente así. Si no existe, la build
-        # se sube bien y la publicación falla al final, que es la peor forma de
-        # enterarse: cuarenta minutos de compilación tirados.
+        # se compila, se sube y falla al publicar: cuarenta minutos para
+        # enterarte al final.
         beta_groups:
           - SEA Tecnicos
       email:
