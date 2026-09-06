@@ -696,11 +696,23 @@ export default function Configuracion() {
       await cargar();
     } catch (e: any) { setMsg(e?.message || "Error"); }
   }
+  // El aviso va AL LADO del formulario: el general de arriba queda fuera de la
+  // pantalla cuando se ha bajado hasta aquí, y parecía que el botón no hacía nada.
+  const [errConfig, setErrConfig] = useState("");
   async function guardarConfig() {
-    if (!nuevaConfig.trim()) return;
-    setMsg("");
-    try { await crearConfigEjes(nuevaConfig, nuevaConfigDesc); setNuevaConfig(""); setNuevaConfigDesc(""); await cargar(); }
-    catch (e: any) { setMsg(e?.message || "Error"); }
+    const nombre = nuevaConfig.trim();
+    if (!nombre) return;
+    setErrConfig("");
+    try { await crearConfigEjes(nombre, nuevaConfigDesc); setNuevaConfig(""); setNuevaConfigDesc(""); await cargar(); }
+    catch (e: any) {
+      const m = String(e?.message || "");
+      // El nombre es único (tc_config_ejes.nombre): dos configuraciones con la
+      // misma etiqueta no caben. Para una variante del mismo patrón de ejes
+      // se añade un sufijo; el número de ejes se sigue leyendo igual.
+      setErrConfig(/duplicate|unique/i.test(m)
+        ? `Ya existe una configuración llamada «${nombre}». Los nombres son únicos: para una variante usa otro nombre, por ejemplo «${nombre} TRACTORA», y pon la descripción aparte.`
+        : m || "Error");
+    }
   }
   async function guardarLlanta() {
     if (!nuevaLlantaMat.trim() || !nuevaLlantaMed.trim()) return;
@@ -774,6 +786,7 @@ export default function Configuracion() {
             <input className={`${inputCls} max-w-[130px]`} placeholder="2x2x2" value={nuevaConfig} onChange={(e) => setNuevaConfig(e.target.value)} />
             <input className={inputCls} placeholder="Descripción (opcional)" value={nuevaConfigDesc} onChange={(e) => setNuevaConfigDesc(e.target.value)} />
             <button onClick={guardarConfig} className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white">+</button>
+            {errConfig && <div className="w-full text-[12px] text-red-300">{errConfig}</div>}
           </div>
         )}
         <div className="mb-2 text-[11px] text-slate-500">
