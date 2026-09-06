@@ -190,15 +190,34 @@ workflows:
       app_store_connect:
         # «integration» = usa la clave declarada arriba en «integrations».
         auth: integration
+        # Envía la build a la revisión beta de TestFlight. Para los testers
+        # INTERNOS no hace falta —la tienen en cuanto Apple acaba de procesar—,
+        # pero es lo que habilita repartirla a grupos externos el día que haga
+        # falta, y en la última subida pasó sin problemas.
         submit_to_testflight: true
-        # Grupos de testers internos que reciben la build automáticamente.
+
+        # ── Y aquí NO va «beta_groups» ──────────────────────────────────────
         #
-        # ESTE GRUPO TIENE QUE EXISTIR YA en App Store Connect (TestFlight →
-        # Internal Testing) y llamarse exactamente así. Si no existe, la build
-        # se compila, se sube y falla al publicar: cuarenta minutos para
-        # enterarte al final.
-        beta_groups:
-          - SEA Tecnicos
+        # Lo llevaba con «SEA Tecnicos» y el post-procesado terminaba así:
+        #
+        #   Failed to add build ... to 'SEA Tecnicos' beta group
+        #   Builds cannot be assigned to this internal group.
+        #   - Cannot add internal group to a build.
+        #
+        # No es un nombre mal escrito ni un permiso que falte: es que la
+        # operación no existe para grupos internos. Codemagic implementa
+        # «beta_groups» con «POST /v1/betaGroups/{id}/relationships/builds» —la
+        # llamada «Add Builds to a Beta Group» de Apple—, y ese endpoint
+        # rechaza los grupos donde «isInternalGroup» es cierto.
+        #
+        # Y lo rechaza porque no hay nada que asignar: un grupo interno recibe
+        # TODAS las builds en cuanto Apple termina de procesarlas. Pedirlo
+        # explícitamente es pedir algo que ya está hecho, y por eso el workflow
+        # salía en rojo después de haber subido la build correctamente.
+        #
+        # Así que «SEA Tecnicos» sigue recibiendo las builds igual que hasta
+        # ahora; lo único que se va es la orden redundante que las tumbaba.
+        # Si algún día hay un grupo EXTERNO, ése sí se declara aquí.
       email:
         recipients:
           - jcruset@gmail.com
