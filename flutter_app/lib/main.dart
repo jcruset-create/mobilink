@@ -4,7 +4,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/login_screen.dart';
 import 'screens/assistances_screen.dart';
 import 'services/api_service.dart';
+import 'services/biometria.dart';
 import 'services/offline_store.dart';
+import 'services/sesion_segura.dart';
 import 'theme/app_theme.dart';
 
 // Notifier global accesible desde cualquier pantalla
@@ -58,27 +60,66 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _checkSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    final techName = prefs.getString('techName') ?? '';
-    final code = prefs.getString('code') ?? '';
+    // Primero de todo: sacar el PIN de SharedPreferences y meterlo en el
+    // Llavero. Es idempotente y en el segundo arranque no hace nada.
+    await SesionSegura.migrarDesdePrefs();
 
-    if (!mounted) return;
-
-    if (techName.isNotEmpty && code.isNotEmpty) {
-      try {
-        await ApiService.login(techName, code);
-        if (!mounted) return;
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => AssistancesScreen(
-              api: ApiService(techName: techName, code: code),
-            ),
-          ),
-        );
-        return;
-      } catch (_) {}
+    final cred = await SesionSegura.leer();
+    if (cred == null) {
+      _irALogin();
+      return;
     }
 
+    // ── La puerta biométrica ─────────────────────────────────────────
+    //
+    // Sólo se levanta si el operario la ha activado. Quien no la use entra
+    // igual que antes: esto no cambia el comportamiento de nadie por sorpresa.
+    if (await SesionSegura.biometriaActivada()) {
+      if (!await Biometria.disponible()) {
+        // La biometría se ha ido: desactivada en Ajustes, cara borrada,
+        // teléfono nuevo restaurado desde copia. El interruptor se queda
+        // apuntando a algo que ya no existe, así que se apaga y se pide el
+        // PIN. Dejarlo puesto sería ofrecer un botón que no puede funcionar.
+        await SesionSegura.desactivarBiometria();
+        _irALogin();
+        return;
+      }
+
+      final r = await Biometria.autenticar(
+        'Accede a Mobilink Assist con tu cara o tu huella',
+      );
+      if (r != ResultadoBiometria.ok) {
+        // Cancelado o fallido: NO se cierra la sesión ni se borra nada. Se
+        // manda al operario a la pantalla de acceso, donde puede volver a
+        // intentarlo con el botón o entrar con su PIN de siempre.
+        _irALogin();
+        return;
+      }
+    }
+
+    // ── Y aquí manda el backend, con o sin biometría ─────────────────
+    //
+    // La cara desbloquea la credencial guardada; NO sustituye al login. Si el
+    // PIN ha cambiado o el operario está dado de baja, esto falla y se acaba
+    // en la pantalla de acceso, que es lo correcto: Face ID no puede saltarse
+    // la autenticación del servidor.
+    try {
+      await ApiService.login(cred.techName, cred.code);
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => AssistancesScreen(
+            api: ApiService(techName: cred.techName, code: cred.code),
+          ),
+        ),
+      );
+      return;
+    } catch (_) {}
+
+    _irALogin();
+  }
+
+  void _irALogin() {
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
