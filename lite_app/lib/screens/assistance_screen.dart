@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -269,7 +271,12 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
       return;
     }
     final opciones = {
-      'Mapas del teléfono': Uri.parse('geo:$lat,$lng?q=$lat,$lng'),
+      // El esquema «geo:» solo existe en Android. En iPhone no lo atiende
+      // nadie: la opción se quedaba sin abrir nada, que es justo el fallo que
+      // App Review busca. Apple Maps se abre por su URL universal.
+      'Mapas del teléfono': Platform.isIOS
+          ? Uri.parse('https://maps.apple.com/?daddr=$lat,$lng&dirflg=d')
+          : Uri.parse('geo:$lat,$lng?q=$lat,$lng'),
       'Google Maps': Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng'),
       'Waze': Uri.parse('https://waze.com/ul?ll=$lat,$lng&navigate=yes'),
     };

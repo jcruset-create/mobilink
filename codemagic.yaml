@@ -337,3 +337,198 @@ workflows:
           success: true
           failure: true
 
+
+  # ── Mobilink Assist Lite · iOS → TestFlight ──────────────────────────────
+  #
+  # Workflow INDEPENDIENTE de los dos de arriba: otra app, otro bundle id, otra
+  # carpeta y su propia integración de App Store Connect. No comparte ninguna
+  # línea con «ios-testflight» (Mobilink Assist) ni con «ios-tyrecontrol-
+  # testflight», y no toca Android: la APK la sigue compilando GitHub Actions
+  # (.github/workflows/build-lite-apk.yml).
+  #
+  # Está escrito con las cinco averías que ya nos comimos en los otros dos:
+  # Flutter fijo, perfiles aplicados al proyecto, export_options comprobado,
+  # el .ipa buscado y copiado a una ruta absoluta, y publicación sin
+  # beta_groups.
+  ios-lite-testflight:
+    name: Mobilink Assist Lite · iOS → TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    # ── Credenciales de Apple ────────────────────────────────────────────
+    #
+    # Nombre EXACTO de la clave de API de App Store Connect en Codemagic →
+    # Settings → Developer Portal → Manage keys. Ya hay dos conectadas
+    # («Mobilink Assist» y «Mobilink TyreControl»); ésta es una TERCERA que hay
+    # que dar de alta con este nombre, carácter por carácter, antes del primer
+    # build. Si no existe, Codemagic no encuentra la integración y el workflow
+    # no arranca.
+    #
+    # (Si el equipo de Apple es el mismo que el de Mobilink Assist, la clave de
+    # aquélla serviría técnicamente: una clave de App Store Connect es de todo
+    # el equipo, no de una app. Se deja aparte a propósito para que caducar o
+    # revocar la de una app no tumbe la entrega de la otra.)
+    integrations:
+      app_store_connect: Mobilink Assist Lite
+
+    environment:
+      # Versión EXACTA, nunca «stable». Es la avería que se llevó por delante
+      # el build de Mobilink Assist: «stable» pasó de 3.35.4 a 3.47.2 sin un
+      # solo commit, y CocoaPods se encontró un proyecto en iOS 13 con un motor
+      # que exige iOS 15.
+      #
+      # 3.35.4 es la versión con la que se compila y se analiza lite_app hoy
+      # (la misma que usa la CI de Android y el workflow de TyreControl), y la
+      # que casa con IPHONEOS_DEPLOYMENT_TARGET = 13.0 y con el Podfile. Subir
+      # a 3.47.2 obliga a subir el mínimo a iOS 15 en el proyecto y en el
+      # Podfile: es un cambio con su propio commit y su propia prueba, no algo
+      # que se hace de paso al preparar la primera subida.
+      flutter: 3.35.4
+      # Xcode al día a propósito: Apple rechaza los binarios compilados con un
+      # SDK viejo, así que fijarlo aquí acabaría rompiendo la subida.
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        # Tiene que decir EXACTAMENTE lo mismo que PRODUCT_BUNDLE_IDENTIFIER en
+        # lite_app/ios/Runner.xcodeproj/project.pbxproj (las tres
+        # configuraciones: Debug, Release y Profile). Si no coinciden, la firma
+        # no encuentra el perfil.
+        distribution_type: app_store
+        bundle_identifier: com.mobilink.assistlite
+      vars:
+        BUNDLE_ID: com.mobilink.assistlite
+        # Versión de tienda de iOS. El pubspec lleva la numeración de la APK
+        # —con decenas de entregas a los talleres— y NO se toca: bajarla para
+        # estrenar en iOS convertiría la siguiente APK en una actualización
+        # «hacia atrás» que Android no instalaría. Se pasa por flag.
+        LITE_BUILD_NAME: "1.0"
+        # APP_STORE_APPLE_ID (el id numérico de la app en App Store Connect) NO
+        # se declara aquí: Codemagic no admite una variable vacía en vars. El
+        # paso del número de build lo lee del entorno si alguien lo define en la
+        # UI y, si no, lo resuelve por el bundle id.
+
+    working_directory: lite_app
+    scripts:
+      - name: Flutter pub get
+        script: flutter pub get
+
+      - name: Instalar pods
+        script: |
+          cd ios && pod install
+
+      - name: Aplicar los perfiles al proyecto Xcode
+        script: |
+          set -e
+          # «Set up code signing identities» solo baja el certificado y el
+          # perfil al llavero: NO toca el proyecto ni escribe el plist de
+          # exportación. Eso es lo que hace este comando, y sin él el build
+          # muere con «export_options.plist property list does not exist».
+          #
+          # Se le dice el proyecto en vez de dejar el glob por defecto: hoy
+          # lite_app/ios es el único .xcodeproj de la carpeta, pero el día que
+          # alguien añada macos/ el glob le pondría perfiles de iOS al proyecto
+          # de macOS sin avisar.
+          xcode-project use-profiles --project ios/Runner.xcodeproj
+
+          # Y se comprueba ANTES de gastar media hora compilando.
+          if [ ! -f "$HOME/export_options.plist" ]; then
+            echo "No se ha generado $HOME/export_options.plist."
+            echo "«xcode-project use-profiles» no encontró perfiles que aplicar."
+            echo "Revisa que la integración «Mobilink Assist Lite» tenga acceso"
+            echo "a $BUNDLE_ID y que exista su perfil de distribución de App Store."
+            exit 1
+          fi
+          echo "export_options.plist generado en $HOME/export_options.plist"
+
+      - name: Número de build desde App Store Connect
+        script: |
+          set -e
+          APPLE_ID="${APP_STORE_APPLE_ID:-}"
+          if [ -z "$APPLE_ID" ]; then
+            APPLE_ID=$(app-store-connect apps list --bundle-id "$BUNDLE_ID" --json | jq -r '.[0].id // empty')
+          fi
+          if [ -z "$APPLE_ID" ]; then
+            echo "No encuentro la app $BUNDLE_ID en App Store Connect." >&2
+            echo "Antes del primer build hay que crear su ficha (App Store" >&2
+            echo "Connect → Apps → +) con ese bundle id exacto." >&2
+            exit 1
+          fi
+          # Último build subido a TestFlight + 1: nunca se repite un número,
+          # que es lo único que TestFlight rechaza sin apelación. En la primera
+          # subida no hay ninguno todavía y sale el 1.
+          ULTIMO=$(app-store-connect get-latest-testflight-build-number "$APPLE_ID" 2>/dev/null || true)
+          ULTIMO=${ULTIMO:-0}
+          echo "LITE_BUILD_NUMBER=$((ULTIMO + 1))" >> "$CM_ENV"
+          echo "Último build en TestFlight: $ULTIMO → este será el $((ULTIMO + 1))"
+
+      - name: Build IPA
+        script: |
+          set -e
+          # La versión y el build se pasan a Flutter, no con agvtool: «flutter
+          # build» reescribe Generated.xcconfig con FLUTTER_BUILD_NAME y
+          # FLUTTER_BUILD_NUMBER, que es de donde el Info.plist saca los dos
+          # valores; lo que hiciera agvtool antes se perdía en ese paso.
+          flutter build ipa --release \
+            --build-name="$LITE_BUILD_NAME" \
+            --build-number="$LITE_BUILD_NUMBER" \
+            --export-options-plist="$HOME/export_options.plist"
+
+          # ── Un build verde sin .ipa es peor que uno rojo ──────────────────
+          #
+          # Le pasó a Mobilink Assist: compiló, Publishing dijo «No artifacts
+          # were found» y TestFlight se quedó en «No Builds», todo en verde.
+          # Aquí se busca el fichero, se enseña dónde está y, si no aparece, el
+          # paso muere.
+          echo "Directorio de trabajo: $(pwd)"
+          find . -type f -name "*.ipa" -print
+
+          IPA_ORIGEN="$(find build/ios/ipa -maxdepth 1 -type f -name "*.ipa" -print -quit 2>/dev/null || true)"
+          if [ -z "$IPA_ORIGEN" ]; then
+            echo "«flutter build ipa» ha terminado pero no hay ningún .ipa en" >&2
+            echo "$(pwd)/build/ios/ipa. Sin fichero no hay nada que subir." >&2
+            exit 1
+          fi
+
+          # Ruta ABSOLUTA a propósito: con «working_directory», Codemagic
+          # resuelve los globs de «artifacts:» desde esa carpeta, mientras que
+          # su documentación dice que van desde la raíz del checkout. Una ruta
+          # absoluta es correcta con las dos lecturas a la vez, y es lo que
+          # arregló el «No artifacts were found» de Mobilink Assist.
+          #
+          # El «rm -f» no es por compartir carpeta con otro workflow —cada build
+          # arranca en un Mac limpio y solo corre un workflow— sino para que un
+          # reintento dentro del mismo build no publique el .ipa anterior.
+          mkdir -p "$HOME/ipa_output"
+          rm -f "$HOME/ipa_output"/*.ipa
+          cp "$IPA_ORIGEN" "$HOME/ipa_output/"
+          echo "IPA listo para publicar: $HOME/ipa_output/$(basename "$IPA_ORIGEN")"
+          ls -lh "$HOME/ipa_output"
+
+    artifacts:
+      - $HOME/ipa_output/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      app_store_connect:
+        # «integration» = la clave declarada arriba en «integrations». No se
+        # repiten Issuer ID, Key ID ni el .p8 como variables: duplicar un
+        # secreto es duplicar los sitios donde caduca sin que nadie se entere.
+        auth: integration
+        # Sube el .ipa y lo deja en TestFlight. En «false» a propósito: esto NO
+        # es la subida, es pedir la REVISIÓN BETA de Apple, que solo hace falta
+        # para testers EXTERNOS. Los internos tienen la build en cuanto Apple
+        # termina de procesarla, y pedir el trámite exige la «Beta App Review
+        # Information» completa: si falta algo, el post-procesado sale en rojo
+        # con la build ya subida y disponible.
+        submit_to_testflight: false
+        submit_to_app_store: false
+        # Y aquí NO va «beta_groups»: con un grupo interno, la llamada que usa
+        # Codemagic («Add Builds to a Beta Group») la rechaza Apple —«Cannot add
+        # internal group to a build»— y el workflow acaba en rojo después de
+        # haber subido bien. Un grupo interno recibe todas las builds solo.
+      email:
+        recipients:
+          - jcruset@gmail.com
+        notify:
+          success: true
+          failure: true

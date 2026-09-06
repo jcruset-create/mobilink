@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Mobilink Assist Lite</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>lite_app</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<!-- Solo iPhone (TARGETED_DEVICE_FAMILY = 1). Por eso NO hay
+	     UISupportedInterfaceOrientations~ipad: declarar orientaciones de iPad
+	     en una app que no se instala en iPad es lo que provoca el rechazo
+	     90474 «Invalid bundle». El código no fija orientación con
+	     SystemChrome, así que se declaran las tres normales de iPhone. -->
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+
+	<!-- ── Permisos ────────────────────────────────────────────────────────
+	     Uno por uno, y solo los que el código pide de verdad. Un texto de uso
+	     de un permiso que la app no usa es motivo de rechazo, y al revés
+	     (permiso usado sin texto) la app revienta al pedirlo. -->
+
+	<!-- lib/services/camara.dart (image_picker + permission_handler): foto de
+	     la avería y del vehículo como evidencia de la asistencia. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Mobilink Assist Lite usa la cámara para fotografiar el vehículo y la avería como evidencia de la asistencia.</string>
+
+	<!-- Camara.elegirDeGaleria, usada desde lib/screens/photos_screen.dart:
+	     adjuntar una foto ya hecha. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Mobilink Assist Lite accede a tus fotos para adjuntar imágenes ya hechas como evidencia de la asistencia.</string>
+
+	<!-- lib/services/tracker.dart (geolocator). Solo «mientras se usa la app»:
+	     el seguimiento lo arranca el operario al pulsar «En camino» y se corta
+	     al cerrar la asistencia. NO se pide el permiso «siempre», así que no
+	     se declara NSLocationAlwaysAndWhenInUseUsageDescription. -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Mobilink Assist Lite comparte tu ubicación con la central solo mientras tienes una asistencia en curso, para que sepan cuándo llegas. Fuera de una asistencia no se envía ninguna posición.</string>
+
+	<!-- El equivalente en iOS del servicio en primer plano de Android: sin
+	     este modo, iOS corta el flujo de posiciones al bloquear la pantalla y
+	     el rastro llega a Central con agujeros. Con «location» y el permiso de
+	     «mientras se usa la app», el sistema mantiene las posiciones mientras
+	     se ve el indicador azul, que es el aviso permanente al operario.
+	     No se declara «remote-notification»: los avisos de Central llevan
+	     bloque «notification» (server/core/push.ts), que iOS muestra sin
+	     necesidad de despertar la app. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
+
+	<!-- La app no lleva criptografía propia: solo HTTPS del sistema contra la
+	     API. Sin esta clave, App Store Connect para cada subida a preguntar por
+	     el cumplimiento de exportación. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

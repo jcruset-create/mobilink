@@ -191,11 +191,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ListTile(
           leading: const Icon(Icons.privacy_tip),
           title: const Text('Privacidad y ubicación'),
-          subtitle: const Text(
+          subtitle: Text(
             'Tu ubicación solo se comparte durante una asistencia activa '
             '(en camino, en punto, trabajando y vuelta al taller). Nunca fuera '
-            'de un servicio. Mientras se comparte verás un aviso permanente en '
-            'la barra de notificaciones.',
+            'de un servicio. Mientras se comparte verás ${Platform.isIOS ? 'el indicador azul de ubicación en la parte de arriba de la pantalla' : 'un aviso permanente en la barra de notificaciones'}.',
           ),
         ),
         ListTile(
@@ -203,7 +202,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           title: const Text('Política de privacidad'),
           trailing: const Icon(Icons.open_in_new, size: 18),
           onTap: () => launchUrl(
-            Uri.parse('$kBackendUrl/privacidad'),
+            Uri.parse(kPrivacyUrl),
             mode: LaunchMode.externalApplication,
           ),
         ),
