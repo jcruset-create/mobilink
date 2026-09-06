@@ -3,6 +3,7 @@ import '../models/models.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import 'etiqueta_neumatico.dart';
+import 'plano_margen.dart';
 
 /// Plano del vehículo con la FOTO real de fondo y una tarjeta por posición,
 /// colocada en las coordenadas calibradas en el panel web (pos_x/y/w/h, en %).
@@ -97,7 +98,9 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
     if (_aspect == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    final aspect = _aspect!;
+    // El área es el PLANO: la imagen más su margen. Las coordenadas de las
+    // tarjetas son del plano, no de la foto (ver plano_margen.dart).
+    final aspect = aspectoPlano(_aspect!);
     return LayoutBuilder(
       builder: (context, c) {
         // Ajustar la imagen dentro del área disponible manteniendo su aspecto:
@@ -120,19 +123,25 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
             height: h,
             child: Stack(
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: Image.network(
-                    widget.imagenUrl,
-                    width: w,
-                    height: h,
-                    fit: BoxFit.fill, // la caja ya respeta el aspecto real
-                    errorBuilder: (_, __, ___) => Container(
-                      color: AppColors.surface,
-                      child: const Center(child: Icon(Icons.directions_car, size: 48, color: AppColors.textHint)),
+                Builder(builder: (_) {
+                  final ri = rectImagenEnPlano(w, h);
+                  return Positioned(
+                    left: ri.x, top: ri.y, width: ri.w, height: ri.h,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: Image.network(
+                        widget.imagenUrl,
+                        width: ri.w,
+                        height: ri.h,
+                        fit: BoxFit.fill, // la caja ya respeta el aspecto real
+                        errorBuilder: (_, __, ___) => Container(
+                          color: AppColors.surface,
+                          child: const Center(child: Icon(Icons.directions_car, size: 48, color: AppColors.textHint)),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
+                  );
+                }),
                 for (int i = 0; i < widget.posiciones.length; i++)
                   _cardPositioned(widget.posiciones[i], i, w, h),
               ],

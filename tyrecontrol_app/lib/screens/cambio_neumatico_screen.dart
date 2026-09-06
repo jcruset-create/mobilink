@@ -15,6 +15,7 @@ import '../widgets/etiqueta_neumatico.dart';
 import '../widgets/km_vehiculo.dart';
 import '../widgets/pausa_trabajo.dart';
 import 'catalogo_screen.dart';
+import '../widgets/plano_margen.dart';
 
 /// Cambio rápido de neumático (tablet, táctil).
 ///
@@ -887,14 +888,15 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       final w = c.maxWidth;
       final h = (c.maxHeight.isFinite && c.maxHeight > 0)
           ? c.maxHeight
-          : w / _aspect!;
-      // Rectángulo (ox,oy,iw,ih) donde se dibuja la imagen dentro del área w×h.
+          : w / aspectoPlano(_aspect!);
+      // Rectángulo (ox,oy,iw,ih) del PLANO (la imagen más su margen, ver
+      // plano_margen.dart) dentro del área w×h; la foto va dentro, más pequeña.
       // SIEMPRE se respeta el aspecto real de la foto (contain), con o sin
       // ejes separados: el camión no se deforma ni en horizontal ni en
       // vertical, y las ruedas no salen ovaladas ("de bici").
       // El hueco que sobra a los lados no se desperdicia: es justo donde las
       // tarjetas de posición se abren (ver el factor `k` en _tarjetaPosicion).
-      final a = _aspect!; // ancho / alto de la imagen
+      final a = aspectoPlano(_aspect!); // ancho / alto del plano
       double ox = 0, oy = 0, iw = w, ih = h;
       if (w / h >= a) {
         ih = h; iw = h * a; ox = (w - iw) / 2; oy = 0;
@@ -920,14 +922,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       return SizedBox(
         width: w, height: h,
         child: Stack(children: [
-          Positioned(
-            left: ox, top: oy, width: iw, height: ih,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: Image.network(_imagenChasis!, width: iw, height: ih, fit: BoxFit.fill,
-                  errorBuilder: (_, __, ___) => Container(color: AppColors.surface)),
-            ),
-          ),
+          Builder(builder: (_) {
+            final ri = rectImagenEnPlano(iw, ih);
+            return Positioned(
+              left: ox + ri.x, top: oy + ri.y, width: ri.w, height: ri.h,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Image.network(_imagenChasis!, width: ri.w, height: ri.h, fit: BoxFit.fill,
+                    errorBuilder: (_, __, ___) => Container(color: AppColors.surface)),
+              ),
+            );
+          }),
           for (int i = 0; i < _posiciones.length; i++)
             _tarjetaPosicion(_posiciones[i], i, ox, oy, iw, ih, k),
         ]),
