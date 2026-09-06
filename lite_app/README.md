@@ -114,6 +114,69 @@ no recortando a mano: se marca como fondo lo que cae en el rango del degradado
 y se deja todo lo demás, así las ventanillas y las ruedas del furgón —oscuras,
 pero fuera de ese rango— no se agujerean.
 
+## Acceso: condiciones, taller recordado y Face ID
+
+El objetivo de este flujo es que el operario abra la app y esté dentro. Tres
+piezas, en `lib/services/preferencias.dart` (ajustes del móvil),
+`lib/services/secure_store.dart` (llavero) y `lib/services/biometria.dart`.
+
+### Primera instalación
+
+```
+abrir → condiciones → permiso de ubicación → taller + usuario + PIN → ¿Face ID?
+```
+
+`onboarding_screen.dart` se enseña una sola vez y **es la que pide la
+ubicación**, justo después de aceptar. Antes el permiso se pedía en mitad del
+login, mientras el operario escribía su PIN: ahí el diálogo se contesta que no
+sin leerlo, y en iOS **no hay segunda oportunidad** —la única salida es
+Ajustes—. Se pide solo «mientras se usa la app», que es lo que necesita el
+seguimiento; nunca «siempre».
+
+Decir que no NO bloquea nada: se sigue al login y la app funciona, con el aviso
+de la bandeja explicando qué se pierde.
+
+### Accesos siguientes
+
+```
+abrir → Face ID → dentro
+```
+
+El código de taller se rellena solo (`Recordar el taller en este móvil`, marcado
+de serie; se borra con la X del campo o desde Perfil). Es un dato de
+organización, no una credencial: sin usuario y PIN no abre nada.
+
+Si el operario activó la biometría, `bloqueo_screen.dart` pide Face ID / huella
+al arrancar. **No reintenta solo**: si falla o se cancela queda el botón, y
+debajo «Entrar con usuario y PIN». Reintentar en bucle es la forma más rápida
+de que el sistema bloquee la biometría por intentos fallidos y deje al operario
+fuera con una avería esperando.
+
+### Qué se guarda y dónde
+
+| Dato | Dónde | Por qué |
+| --- | --- | --- |
+| Token de sesión | **Llavero** (Keychain / Keystore) | Es la credencial, y ahora la abre una huella |
+| Usuario, taller, configuración | `shared_preferences` | Datos de trabajo, no secretos |
+| Código de taller recordado | `shared_preferences` | No da acceso por sí solo |
+| PIN | **En ninguna parte** | Nunca se guarda, ni cifrado |
+
+El token se movió de `shared_preferences` al llavero con migración: quien ya
+tenía sesión abierta sigue dentro tras actualizar.
+
+Al cerrar sesión se olvida la biometría (esa cara abría *esa* sesión), pero el
+taller recordado se queda: es del móvil, no de la persona.
+
+### Lo que esto obliga en cada plataforma
+
+* **iOS** — `NSFaceIDUsageDescription` en el `Info.plist`. Sin ese texto, iOS
+  mata la app al pedir Face ID. Touch ID no necesita clave propia.
+* **Android** — `minSdk` sube de 21 a **24**, que es lo que exige
+  `local_auth_android` (`flutter_secure_storage` pide 23), y `MainActivity`
+  pasa a `FlutterFragmentActivity`, porque el diálogo de huella se dibuja como
+  fragmento. Más el permiso `USE_BIOMETRIC`, que es «normal»: no saca diálogo
+  ni da acceso a los datos biométricos.
+
 ## Plataforma Android
 
 `android/` **está en el repositorio** desde la versión 0.1.2. No hay que

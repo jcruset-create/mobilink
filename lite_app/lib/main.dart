@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'screens/bloqueo_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/inbox_screen.dart';
+import 'screens/onboarding_screen.dart';
 import 'services/api.dart';
+import 'services/biometria.dart';
 import 'services/file_queue.dart';
+import 'services/preferencias.dart';
 import 'services/push.dart';
 import 'services/queue.dart';
 import 'services/session.dart';
@@ -49,11 +53,44 @@ class _SplashScreenState extends State<SplashScreen> {
   Future<void> _restore() async {
     final session = await Session.restore();
     if (!mounted) return;
+
+    // Sin sesión: primera apertura → condiciones (que es donde se pide la
+    // ubicación); si ya se aceptaron, directo al login.
     if (session == null) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
+      final aceptado = await Preferencias.onboardingHecho();
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => aceptado ? const LoginScreen() : const OnboardingScreen(),
+      ));
       return;
+    }
+
+    // Quien ya tenía sesión abierta antes de que existiera esta pantalla no
+    // tiene que pasar por ella: aceptó y concedió el permiso en su día.
+    if (!await Preferencias.onboardingHecho()) {
+      await Preferencias.marcarOnboarding();
+    }
+
+    // Candado biométrico, si el operario lo activó en este dispositivo. Se
+    // comprueba que siga habiendo sensor y huella dada de alta: si se borró
+    // la huella del móvil, se entra como siempre en vez de dejar la app
+    // inservible.
+    if (await Preferencias.biometriaActivada() && await Biometria.disponible()) {
+      if (!mounted) return;
+      final ok = await Navigator.of(context).push<bool>(
+            MaterialPageRoute(builder: (_) => const BloqueoScreen()),
+          ) ??
+          false;
+      if (!mounted) return;
+      if (!ok) {
+        // No se identifica: al login. La sesión NO se borra —el token sigue
+        // válido y las operaciones pendientes con él— y un login correcto la
+        // sustituye sin más.
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+        );
+        return;
+      }
     }
     // La sesión se valida contra el servidor: si el taller ha revocado el
     // dispositivo o cambiado el PIN, se vuelve al login.
