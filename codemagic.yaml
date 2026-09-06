@@ -190,11 +190,30 @@ workflows:
       app_store_connect:
         # «integration» = usa la clave declarada arriba en «integrations».
         auth: integration
-        # Envía la build a la revisión beta de TestFlight. Para los testers
-        # INTERNOS no hace falta —la tienen en cuanto Apple acaba de procesar—,
-        # pero es lo que habilita repartirla a grupos externos el día que haga
-        # falta, y en la última subida pasó sin problemas.
-        submit_to_testflight: true
+        # ── En «false» a propósito ──────────────────────────────────────────
+        #
+        # Esto NO tiene nada que ver con subir el .ipa: la subida la hace
+        # «auth: integration» y ocurre igual con esta clave en false, que además
+        # es su valor por defecto. Lo que hace «submit_to_testflight» es enviar
+        # la build a la REVISIÓN BETA de Apple. La propia herramienta que
+        # Codemagic usa por debajo lo dice sin rodeos en su «--testflight»:
+        #
+        #   Enable submission of an app for Testflight beta app review
+        #   to allow external testing.
+        #
+        # «to allow EXTERNAL testing». Mobilink Assist se reparte sólo por
+        # TestFlight interno, y los testers internos no pasan por esa revisión:
+        # tienen la build en cuanto Apple termina de procesarla.
+        #
+        # Así que pedir la revisión aquí es pedir un trámite que no usamos, y
+        # ese trámite exige la «Beta App Review Information» completa en App
+        # Store Connect. Si falta algo, el post-procesado sale en rojo con la
+        # build ya subida y disponible: exactamente la clase de falso fallo que
+        # acabamos de quitarnos con «beta_groups».
+        #
+        # El día que haya testers EXTERNOS, esto vuelve a «true» y entonces sí
+        # hay que rellenar esa información.
+        submit_to_testflight: false
 
         # ── Y aquí NO va «beta_groups» ──────────────────────────────────────
         #
