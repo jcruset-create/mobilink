@@ -79,6 +79,14 @@
 		<string>location</string>
 	</array>
 
+	<!-- lib/services/biometria.dart (local_auth): el operario puede activar
+	     Face ID para abrir la sesión que ya está guardada en el llavero, en vez
+	     de escribir usuario y PIN en cada acceso. Sin este texto, iOS mata la
+	     app en el momento de pedir Face ID. Touch ID no necesita clave propia.
+	     La biometría es opcional: si no se activa, nada la pide. -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>Mobilink Assist Lite usa Face ID para que entres en tu sesión sin escribir el usuario y el PIN cada vez.</string>
+
 	<!-- La app no lleva criptografía propia: solo HTTPS del sistema contra la
 	     API. Sin esta clave, App Store Connect para cada subida a preguntar por
 	     el cumplimiento de exportación. -->

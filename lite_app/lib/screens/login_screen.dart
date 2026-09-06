@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../config.dart';
 import '../services/api.dart';
+import '../services/biometria.dart';
+import '../services/preferencias.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
 import '../theme.dart';
@@ -24,6 +26,24 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _busy = false;
   String? _error;
 
+  /// Recordar el taller viene marcado de serie: es un dato de organización que
+  /// no cambia nunca en un taller colaborador, y desmarcarlo es un toque para
+  /// quien lo necesite (un móvil compartido entre talleres) en vez de un toque
+  /// para todos los demás en cada acceso.
+  bool _recordar = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargarTaller();
+  }
+
+  Future<void> _cargarTaller() async {
+    final guardado = await Preferencias.tallerRecordado();
+    if (!mounted || guardado == null) return;
+    setState(() => _workshop.text = guardado);
+  }
+
   @override
   void dispose() {
     _workshop.dispose();
@@ -39,7 +59,10 @@ class _LoginScreenState extends State<LoginScreen> {
     }
     setState(() { _busy = true; _error = null; });
     try {
-      final gps = await Tracker.ensurePermission();
+      // Solo se consulta: el permiso se pidió al aceptar las condiciones. Un
+      // diálogo del sistema encima del PIN es lo que hacía que se contestara
+      // que no sin leerlo.
+      final gps = await Tracker.permissionStatus();
       final session = await Api.login(
         workshopCode: _workshop.text.trim(),
         username: _user.text.trim(),
@@ -53,6 +76,13 @@ class _LoginScreenState extends State<LoginScreen> {
         },
       );
       await session.save();
+      if (_recordar) {
+        await Preferencias.recordarTaller(_workshop.text);
+      } else {
+        await Preferencias.olvidarTaller();
+      }
+      if (!mounted) return;
+      await _ofrecerBiometria();
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => InboxScreen(session: session)),
@@ -65,6 +95,44 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _error = 'No se pudo iniciar sesión: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Una sola pregunta, una sola vez: si el dispositivo tiene Face ID o huella
+  /// y el operario aún no lo ha activado, se le ofrece aquí, que es el único
+  /// momento en el que acaba de demostrar quién es.
+  ///
+  /// Si dice que no, no se vuelve a preguntar en cada acceso —sería justo lo
+  /// contrario de quitar pulsaciones—: se activa cuando quiera desde Perfil.
+  Future<void> _ofrecerBiometria() async {
+    if (await Preferencias.biometriaActivada()) return;
+    if (await Preferencias.biometriaOfrecida()) return;
+    if (!await Biometria.disponible()) return;
+    await Preferencias.marcarBiometriaOfrecida();
+    final nombre = await Biometria.nombre();
+    if (!mounted) return;
+    final activar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.fingerprint, color: AppColors.primary),
+        title: Text('¿Entrar con $nombre?'),
+        content: Text('La próxima vez que abras la app entrarás con $nombre, '
+            'sin escribir el usuario ni el PIN.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Ahora no')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text('Activar $nombre')),
+        ],
+      ),
+    );
+    if (activar != true) return;
+    // Se comprueba en el momento: activar algo que luego no funciona deja al
+    // operario en la pantalla de candado sin poder pasar.
+    if (await Biometria.autenticar('Activa el acceso con $nombre')) {
+      await Preferencias.activarBiometria(true);
     }
   }
 
@@ -102,13 +170,36 @@ class _LoginScreenState extends State<LoginScreen> {
                   TextField(
                     controller: _workshop,
                     textCapitalization: TextCapitalization.characters,
-                    decoration: const InputDecoration(
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
                       labelText: 'Código de taller',
                       hintText: 'Te lo facilita la central',
-                      prefixIcon: Icon(Icons.store),
+                      prefixIcon: const Icon(Icons.store),
+                      // Borrarlo es un toque, sin menús: el mismo sitio donde
+                      // se escribe es donde se cambia.
+                      suffixIcon: _workshop.text.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Borrar el taller',
+                              icon: const Icon(Icons.close, size: 20),
+                              onPressed: () async {
+                                _workshop.clear();
+                                await Preferencias.olvidarTaller();
+                                if (mounted) setState(() {});
+                              },
+                            ),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  CheckboxListTile(
+                    value: _recordar,
+                    onChanged: (v) => setState(() => _recordar = v ?? true),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: const Text('Recordar el taller en este móvil',
+                        style: TextStyle(fontSize: 13)),
+                  ),
+                  const SizedBox(height: 4),
                   TextField(
                     controller: _user,
                     decoration: const InputDecoration(

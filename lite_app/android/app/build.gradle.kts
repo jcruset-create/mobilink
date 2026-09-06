@@ -47,7 +47,12 @@ android {
 
     defaultConfig {
         applicationId = "com.mobilink.assist_lite"
-        minSdk = flutter.minSdkVersion
+        // 24 (Android 7, 2016) en vez del 21 que trae Flutter: lo exige
+        // local_auth_android, que es lo que abre la app con la huella o la
+        // cara (flutter_secure_storage pide 23). Deja fuera Android 5 y 6,
+        // que a día de hoy es menos del 1 % de los móviles en uso y ninguna
+        // tablet que se compre hoy para un taller.
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

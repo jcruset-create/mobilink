@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../config.dart';
 import '../services/api.dart';
 import '../services/file_queue.dart';
 import '../services/push.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
+import '../services/tracker.dart';
 import '../theme.dart';
 import '../widgets/plate_badge.dart';
 import 'assistance_screen.dart';
@@ -35,6 +37,7 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
   String? _error;
   List<Map<String, dynamic>> _rows = const [];
   int _pending = 0;
+  String _gps = 'while_in_use';
 
   static const _scopes = ['pending', 'active', 'finished'];
   static const _labels = ['Pendientes', 'Activas', 'Finalizadas'];
@@ -52,6 +55,19 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     );
     _push = Push.events.listen(_alRecibirAviso);
     _registrarDispositivo();
+    _mirarUbicacion();
+  }
+
+  /// El permiso puede caerse mucho después de concederse: basta con que
+  /// alguien lo quite en Ajustes o apague la ubicación del móvil. Desde la app
+  /// no se nota —no hay error, simplemente no llegan posiciones— y la central
+  /// ve al operario parado. Se comprueba al abrir la bandeja y al volver a
+  /// ella, y solo se MIRA: pedirlo aquí no serviría de nada, porque cuando ya
+  /// está denegado el sistema no vuelve a preguntar.
+  Future<void> _mirarUbicacion() async {
+    final gps = await Tracker.permissionStatus();
+    if (!mounted || gps == _gps) return;
+    setState(() => _gps = gps);
   }
 
   /// El token de push viaja con el resto del estado del dispositivo, que es
@@ -98,7 +114,11 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _load(silent: true);
+    if (state == AppLifecycleState.resumed) {
+      _load(silent: true);
+      // Volver de Ajustes es justo cuando cambia el permiso.
+      _mirarUbicacion();
+    }
   }
 
   Future<void> _load({bool silent = false}) async {
@@ -175,6 +195,7 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
       ),
       body: Column(
         children: [
+          if (!Tracker.permisoOk(_gps)) _AvisoUbicacion(estado: _gps),
           if (_offline || _pending > 0 || conflicts.isNotEmpty)
             _StatusBanner(offline: _offline, pending: _pending, conflicts: conflicts.length),
           Padding(
@@ -251,6 +272,43 @@ class _StatusBanner extends StatelessWidget {
         Icon(conflicts > 0 ? Icons.warning_amber : Icons.cloud_off, color: color, size: 18),
         const SizedBox(width: 8),
         Expanded(child: Text(parts.join(' · '), style: TextStyle(color: color, fontSize: 13))),
+      ]),
+    );
+  }
+}
+
+/// Aviso de que la ubicación no se está compartiendo, con la salida al lado.
+///
+/// El botón lleva a los ajustes de la app (o a los del sistema si lo que está
+/// apagado es la ubicación entera del móvil), porque desde la app ya no se
+/// puede hacer nada: en iOS, una vez denegado, el diálogo no vuelve a salir.
+class _AvisoUbicacion extends StatelessWidget {
+  const _AvisoUbicacion({required this.estado});
+  final String estado;
+
+  @override
+  Widget build(BuildContext context) {
+    final apagada = estado == 'service_disabled';
+    return Container(
+      width: double.infinity,
+      color: AppColors.danger.withValues(alpha: 0.15),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      child: Row(children: [
+        const Icon(Icons.location_off, color: AppColors.danger, size: 18),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            apagada
+                ? 'La ubicación del móvil está apagada: la central no verá dónde estás.'
+                : 'Sin permiso de ubicación: la central no verá dónde estás durante las asistencias.',
+            style: const TextStyle(color: AppColors.danger, fontSize: 13),
+          ),
+        ),
+        TextButton(
+          onPressed: () =>
+              apagada ? Tracker.abrirAjustesDelSistema() : openAppSettings(),
+          child: const Text('Ajustes'),
+        ),
       ]),
     );
   }
