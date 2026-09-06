@@ -1,7 +1,7 @@
 name: lite_app
 description: "Mobilink Assist Lite — asistencias de Central Pro para talleres colaboradores"
 publish_to: "none"
-version: 0.5.1+85
+version: 0.5.2+86
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -40,3 +40,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # Solo el logotipo, en sus dos versiones. Los iconos de la app
+  # (icono_app.png e icono_app_fg.png) NO se empaquetan: son la fuente de los
+  # ficheros de Android e iOS, no algo que la app cargue en marcha, y meterlos
+  # aquí sería casi un mega de APK para nada.
+  assets:
+    - assets/logo_horizontal.png
+    - assets/logo_cabecera.png
