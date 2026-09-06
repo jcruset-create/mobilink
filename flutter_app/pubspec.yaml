@@ -3,7 +3,7 @@ description: App de operarios SEA Tarragona
 
 publish_to: 'none'
 
-version: 1.11.4+78
+version: 1.11.5+79
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -29,6 +29,13 @@ dependencies:
   hive_flutter: ^1.1.0
   connectivity_plus: ^6.0.5
   video_player: ^2.9.2
+  # ── Acceso biométrico ────────────────────────────────────────────────
+  # local_auth pide el Face ID / huella al sistema; flutter_secure_storage
+  # guarda las credenciales en el Llavero (iOS) y en el Keystore (Android),
+  # que es donde tienen que estar y donde NO estaban: hasta ahora el PIN
+  # vivía en SharedPreferences en texto plano.
+  local_auth: ^2.3.0
+  flutter_secure_storage: ^9.2.2
 
 dev_dependencies:
   flutter_test:
