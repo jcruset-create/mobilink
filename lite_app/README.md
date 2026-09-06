@@ -164,6 +164,14 @@ fuera con una avería esperando.
 El token se movió de `shared_preferences` al llavero con migración: quien ya
 tenía sesión abierta sigue dentro tras actualizar.
 
+Y una consecuencia del llavero que hay que atajar a mano: **en iOS sobrevive a
+desinstalar la app**. Borrarla y reinstalarla —lo primero que se prueba cuando
+algo va mal— dejaría el token dentro y la app entraría sola con una sesión que
+el operario creía cerrada. `Session.restore` lo detecta porque las
+preferencias sí se borran con la app: un token sin nada que lo acompañe solo
+puede ser basura de la instalación anterior, así que se tira y se pide login.
+Actualizar no cae ahí, que es lo que protege la migración.
+
 Al cerrar sesión se olvida la biometría (esa cara abría *esa* sesión), pero el
 taller recordado se queda: es del móvil, no de la persona.
 
