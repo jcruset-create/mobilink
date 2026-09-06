@@ -27,6 +27,19 @@ class Requisitos {
   static const catReparacion = 'work'; // "Trabajo realizado"
   static const catMontaje = 'mounting'; // "Montaje del neumático"
 
+  /// Cierres en los que NO se ha tocado el vehículo, así que no hay
+  /// reparación que fotografiar. Los códigos son los de SERVICE_RESULT_LABELS
+  /// (`server/connect/liteRules.ts`), los mismos que ofrece el desplegable de
+  /// la pantalla de cierre.
+  ///
+  /// El resto de resultados sí exigen la foto: en «no reparado» o «trasladado»
+  /// hubo intervención —se intentó, se cargó el vehículo— y esa es justo la
+  /// que la central necesita para justificar el servicio.
+  static const resultadosSinTrabajo = {
+    'customer_absent', // Cliente ausente: no había vehículo que tocar
+    'cancelled_on_site', // Servicio cancelado antes de empezar
+  };
+
   static const etiquetas = {
     catMatricula: 'Foto de la matrícula del vehículo',
     catAveria: 'Foto de la avería',
@@ -42,9 +55,20 @@ class Requisitos {
 
   /// Lo que hace falta para cerrar. Incluye lo de la llegada: si el operario
   /// llegó sin cobertura y se saltó algo, el cierre lo vuelve a pedir.
-  static List<String> alFinalizar(Evidencias e) => [
+  ///
+  /// `resultado` es el código elegido en el desplegable de cierre. Solo sirve
+  /// para una cosa: con «cliente ausente» o «servicio cancelado» no se pide la
+  /// foto de la reparación, porque no hay reparación. Todo lo demás —matrícula,
+  /// avería, montaje, firma, nombre y DNI— se exige igual: el operario se
+  /// desplazó y el cliente firma que el servicio se dio por cerrado.
+  ///
+  /// Sin `resultado` (el marcador de la pantalla de trabajo, donde todavía no
+  /// se ha elegido) se pide la foto: mientras se trabaja, lo previsible es que
+  /// haya reparación.
+  static List<String> alFinalizar(Evidencias e, {String resultado = ''}) => [
         ...alLlegar(e),
-        if (!e.tiene(catReparacion)) etiquetas[catReparacion]!,
+        if (!resultadosSinTrabajo.contains(resultado) && !e.tiene(catReparacion))
+          etiquetas[catReparacion]!,
         // Solo cuando hay un montaje confirmado de verdad: sin neumático
         // nuevo, esta foto no se pide.
         if (e.montajesConfirmados > 0 && !e.tiene(catMontaje))

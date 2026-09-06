@@ -198,6 +198,13 @@ es lo que deja avanzar.
 | **Cerrar** el servicio | Lo anterior + foto de la reparación + firma con nombre y DNI |
 | Si hay **neumático nuevo** confirmado | Foto del montaje |
 
+Con una excepción: en **«Cliente ausente»** y **«Servicio cancelado»** no se
+pide la foto de la reparación, porque no hubo vehículo que tocar. Todo lo
+demás se sigue exigiendo igual —el operario se desplazó y el cliente firma que
+el servicio se dio por cerrado—, y el resto de resultados sí la piden: en «no
+reparado» o «trasladado» hubo intervención, y esa es justo la foto que la
+central necesita. Los códigos están en `Requisitos.resultadosSinTrabajo`.
+
 `requisitos.dart` es el gemelo en el móvil de `validateFinish`
 (`server/connect/liteRules.ts`): mismos códigos de categoría, misma idea de
 devolver la lista de lo que falta en vez de un sí/no. El servidor sigue

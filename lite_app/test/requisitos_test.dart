@@ -132,6 +132,72 @@ void main() {
       }
     });
 
+    test('cliente ausente: no se pide la foto de la reparación', () {
+      final sinReparacion = completa(
+        categorias: {Requisitos.catMatricula, Requisitos.catAveria},
+      );
+      // Sin decir el resultado sí se pide...
+      expect(Requisitos.alFinalizar(sinReparacion),
+          [Requisitos.etiquetas[Requisitos.catReparacion]]);
+      // ...y con "cliente ausente" no, porque no hubo vehículo que tocar.
+      expect(
+          Requisitos.alFinalizar(sinReparacion, resultado: 'customer_absent'),
+          isEmpty);
+    });
+
+    test('servicio cancelado: tampoco se pide la foto de la reparación', () {
+      final sinReparacion = completa(
+        categorias: {Requisitos.catMatricula, Requisitos.catAveria},
+      );
+      expect(
+          Requisitos.alFinalizar(sinReparacion, resultado: 'cancelled_on_site'),
+          isEmpty);
+    });
+
+    test('en los dos casos especiales el RESTO se sigue exigiendo', () {
+      for (final resultado in Requisitos.resultadosSinTrabajo) {
+        final faltan = Requisitos.alFinalizar(con(), resultado: resultado);
+        expect(faltan, containsAll([
+          Requisitos.etiquetas[Requisitos.catMatricula],
+          Requisitos.etiquetas[Requisitos.catAveria],
+          'Firma del cliente',
+        ]), reason: resultado);
+        // Lo único que se cae de la lista es la foto de la reparación.
+        expect(faltan, isNot(contains(Requisitos.etiquetas[Requisitos.catReparacion])),
+            reason: resultado);
+      }
+    });
+
+    test('el neumático montado se sigue exigiendo aunque el cierre sea especial', () {
+      final faltan = Requisitos.alFinalizar(
+        completa(
+          categorias: {Requisitos.catMatricula, Requisitos.catAveria},
+          montajes: 1,
+        ),
+        resultado: 'customer_absent',
+      );
+      expect(faltan, [Requisitos.etiquetas[Requisitos.catMontaje]]);
+    });
+
+    test('un cierre normal SIGUE exigiendo la foto de la reparación', () {
+      final sinReparacion = completa(
+        categorias: {Requisitos.catMatricula, Requisitos.catAveria},
+      );
+      for (final resultado in [
+        'repaired_on_site',
+        'towed',
+        'taken_to_workshop',
+        'not_repaired',
+        'other',
+      ]) {
+        expect(
+          Requisitos.alFinalizar(sinReparacion, resultado: resultado),
+          [Requisitos.etiquetas[Requisitos.catReparacion]],
+          reason: resultado,
+        );
+      }
+    });
+
     test('el nombre y el DNI solo se exigen si hay firma que identificar', () {
       final faltan = Requisitos.alFinalizar(completa(firma: false, nombre: '', documento: ''));
       expect(faltan, ['Firma del cliente']);
