@@ -86,6 +86,22 @@ class Session {
       }
     }
     if (token == null || token.isEmpty) return null;
+
+    // Resto de una instalación anterior.
+    //
+    // El llavero de iOS SOBREVIVE a desinstalar la app: si alguien la borra y
+    // la vuelve a instalar —que es lo primero que se prueba cuando algo va
+    // mal— el token seguiría ahí y la app entraría sola con una sesión que el
+    // operario creía cerrada. Las preferencias sí se borran con la app, así
+    // que un token sin NADA que lo acompañe solo puede ser eso: basura de la
+    // instalación anterior. Se tira y se pide login.
+    //
+    // Actualizar la app no cae aquí: ahí las preferencias siguen enteras.
+    final huella = prefs.getString(_kUser) ?? prefs.getString(_kDeviceId);
+    if (huella == null || huella.isEmpty) {
+      await SecureStore.borrar(_kToken);
+      return null;
+    }
     Map<String, dynamic> decode(String? raw) {
       if (raw == null || raw.isEmpty) return {};
       try {

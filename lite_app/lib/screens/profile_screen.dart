@@ -127,7 +127,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         content: Text(pendientes > 0
             ? 'Tienes $pendientes operación(es) sin enviar. Si cierras sesión '
                 'ahora se perderán. ¿Seguro?'
-            : 'Tendrás que volver a introducir el código de taller, el usuario y el PIN.'),
+            : 'Tendrás que volver a introducir el usuario y el PIN. El código '
+                'de taller se conserva si lo tienes recordado.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Cerrar sesión')),
