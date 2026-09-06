@@ -88,17 +88,26 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.build_circle, size: 64, color: AppColors.primary),
-            SizedBox(height: 16),
-            Text('Mobilink Assist Lite',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            SizedBox(height: 24),
-            CircularProgressIndicator(),
+            // La misma portada que el login: el logotipo, sin repetir el
+            // nombre debajo en texto.
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 340),
+                child: Image.asset(
+                  'assets/logo_horizontal.png',
+                  fit: BoxFit.contain,
+                  semanticLabel: 'Mobilink Assist Lite',
+                ),
+              ),
+            ),
+            const SizedBox(height: 28),
+            const CircularProgressIndicator(),
           ],
         ),
       ),

@@ -81,12 +81,20 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.build_circle, size: 64, color: AppColors.primary),
-                  const SizedBox(height: 12),
-                  const Text('Mobilink Assist Lite',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 4),
+                  // El logotipo ya dice el nombre de la app, así que debajo
+                  // solo queda para quién es: repetir "Mobilink Assist Lite"
+                  // en texto sería decirlo dos veces.
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 360),
+                      child: Image.asset(
+                        'assets/logo_horizontal.png',
+                        fit: BoxFit.contain,
+                        semanticLabel: 'Mobilink Assist Lite',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                   const Text('Acceso para talleres colaboradores',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: AppColors.textMuted)),

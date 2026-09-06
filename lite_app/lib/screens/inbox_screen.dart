@@ -140,10 +140,20 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     final conflicts = OfflineQueue.conflicts();
     return Scaffold(
       appBar: AppBar(
+        // El logotipo en lugar del título: la versión de cabecera va sin el
+        // lema, que a 26 px de alto no se lee y solo ensucia. Debajo sigue el
+        // nombre del taller, que es el dato que el operario necesita ver.
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Asistencias', style: TextStyle(fontSize: 18)),
+            Image.asset(
+              'assets/logo_cabecera.png',
+              height: 26,
+              fit: BoxFit.contain,
+              semanticLabel: 'Mobilink Assist Lite',
+            ),
+            const SizedBox(height: 2),
             Text(widget.session.workshopName,
                 style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
           ],

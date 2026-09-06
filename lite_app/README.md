@@ -89,14 +89,30 @@ queda en 55 de los 108 dp, que es lo que cabe **entero** dentro del círculo de
 LITE» se queda fuera por abajo. El fondo lo pone `ic_launcher_background`
 (slate-900), el mismo del arte.
 
-`assets/` no se declara en `pubspec.yaml` a propósito: son la fuente de los
-iconos, no recursos que la app cargue en tiempo de ejecución, y empaquetarlos
-sería medio mega de APK para nada.
-
 Tampoco se usa `flutter_launcher_icons`, y también a propósito: regenera el
 catálogo de iOS con las entradas de iPad, que es justo lo que aquí se ha
 quitado (la app es solo iPhone). Para rehacer los iconos se parte de
 `assets/icono_app.png` y se respetan los tamaños que ya hay.
+
+De `assets/` solo se empaquetan los dos logotipos (`pubspec.yaml`). Los dos
+iconos, no: son la fuente de los ficheros de Android e iOS, no algo que la app
+cargue en marcha, y meterlos en la APK sería casi un mega por nada.
+
+## Logotipo
+
+`assets/logo_horizontal.png` — el logotipo completo, con el lema, sobre fondo
+transparente. Se usa en las dos portadas: la pantalla de arranque
+(`main.dart`) y el login.
+
+`assets/logo_cabecera.png` — el mismo, **sin el lema**, para la barra de la
+bandeja. A 26 px de alto la línea «asistencias en carretera para talleres
+furgón móviles» no se lee y solo ensucia; el nombre del taller sigue debajo,
+que es el dato que el operario necesita ver.
+
+El fondo se quitó por color (el original venía sobre un degradado azul marino),
+no recortando a mano: se marca como fondo lo que cae en el rango del degradado
+y se deja todo lo demás, así las ventanillas y las ruedas del furgón —oscuras,
+pero fuera de ese rango— no se agujerean.
 
 ## Plataforma Android
 
