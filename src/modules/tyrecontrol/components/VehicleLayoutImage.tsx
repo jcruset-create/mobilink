@@ -15,7 +15,7 @@ import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
 import ModalMontarFueraAlmacen from "./ModalMontarFueraAlmacen";
 import ModalCopiarNeumatico from "./ModalCopiarNeumatico";
 import { supabase } from "../services/supabase";
-import { MARGEN_PLANO_X, MARGEN_PLANO_Y, aspectoPlano } from "../../../../shared/planoMargen";
+import { MARGEN_PLANO_X, MARGEN_PLANO_Y, aspectoPlano, coordAVista, vistaACoord } from "../../../../shared/planoMargen";
 
 const BUCKET_CHASIS = "tc-chasis";
 
@@ -343,8 +343,11 @@ export default function VehicleLayoutImage({
     return { x: ((clientX - rect.left) / rect.width) * 100, y: ((clientY - rect.top) / rect.height) * 100 };
   }
 
+  // `coords` guarda el espacio de la base de datos; lo que se ve y se toca es
+  // el plano dibujado (ver shared/planoMargen.ts), de ahí la conversión.
   function zonaEn(x: number, y: number): string | null {
-    for (const [codigo, c] of Object.entries(coords)) {
+    for (const [codigo, c0] of Object.entries(coords)) {
+      const c = coordAVista(c0);
       if (x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) return codigo;
     }
     return null;
@@ -374,7 +377,12 @@ export default function VehicleLayoutImage({
     if (!arrastrando) return;
     const p = puntoPct(e.clientX, e.clientY);
     if (calibrando) {
-      setCoords((prev) => ({ ...prev, [arrastrando]: { ...prev[arrastrando], x: Math.max(0, Math.min(100 - prev[arrastrando].w, p.x - prev[arrastrando].w / 2)), y: Math.max(0, Math.min(100 - prev[arrastrando].h, p.y - prev[arrastrando].h / 2)) } }));
+      setCoords((prev) => {
+        const { w, h } = prev[arrastrando];
+        // Se suelta en el plano dibujado y se guarda en el espacio de la BD.
+        const v = { x: Math.max(0, Math.min(100 - w, p.x - w / 2)), y: Math.max(0, Math.min(100 - h, p.y - h / 2)), w, h };
+        return { ...prev, [arrastrando]: vistaACoord(v) };
+      });
     } else {
       const destino = zonaEn(p.x, p.y);
       setZonaSobrevolada(destino && destino !== arrastrando ? destino : null);
@@ -648,8 +656,9 @@ export default function VehicleLayoutImage({
           )}
 
           {posiciones.map((p) => {
-            const c = coords[p.codigo_posicion];
-            if (!c) return null;
+            const c0 = coords[p.codigo_posicion];
+            if (!c0) return null;
+            const c = coordAVista(c0);
             // En modo plan el plano enseña CÓMO VA A QUEDAR: cada posición
             // pinta la rueda que acabará ahí, con la etiqueta "viene de XX".
             const mReal = montajePorPosicionId.get(p.id);

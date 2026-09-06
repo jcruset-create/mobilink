@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import * as C from "./coordenadas.ts";
-import { aspectoPlano, rectImagenEnPlano } from "../../../shared/planoMargen.ts";
+import { aspectoPlano, rectImagenEnPlano, puntoCoordAVista } from "../../../shared/planoMargen.ts";
 
 /**
  * Rellena el parte de servicio Conti360.
@@ -230,8 +230,9 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
         // rueda era. Las coordenadas son las mismas que usa la tablet.
         for (const m of d.marcas ?? []) {
           if (m.x == null || m.y == null) continue;
-          const cx = x0 + (m.x / 100) * an;
-          const cy = y0 + (m.y / 100) * al;
+          const v = puntoCoordAVista(m.x, m.y);
+          const cx = x0 + (v.x / 100) * an;
+          const cy = y0 + (v.y / 100) * al;
           const t = "X";
           const size = 7;
           // A la derecha de la rueda, y si se sale por el borde, a la

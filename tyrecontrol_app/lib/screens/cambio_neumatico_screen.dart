@@ -1315,7 +1315,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   }
 
   Widget _tarjetaPosicion(PosicionVehiculo p, int i, double ox, double oy, double iw, double ih, double k) {
-    final co = _coords(p, i);
+    final co = cajaAVista(_coords(p, i));
     // `k` viene calculado en _plano(): es lo que se abren las tarjetas hacia
     // los lados para aprovechar el hueco que deja la foto proporcionada.
     final areaW = 2 * ox + iw;
