@@ -146,7 +146,7 @@ class _FinishScreenState extends State<FinishScreen> {
       // algo NO se llama a la API: se dice exactamente qué falta, una línea
       // por cosa, y el operario tiene el botón para resolverlo al lado.
       await _revisar();
-      final faltan = Requisitos.alFinalizar(_ev);
+      final faltan = Requisitos.alFinalizar(_ev, resultado: _resultado);
       if (faltan.isNotEmpty) {
         setState(() => _errores = faltan);
         return;
@@ -187,6 +187,7 @@ class _FinishScreenState extends State<FinishScreen> {
       body: ListView(padding: const EdgeInsets.all(16), children: [
         _Checklist(
           evidencias: _ev,
+          resultado: _resultado,
           revisando: _revisando,
           onResolver: _busy ? null : _resolver,
         ),
@@ -314,11 +315,16 @@ class _FinishScreenState extends State<FinishScreen> {
 class _Checklist extends StatelessWidget {
   const _Checklist({
     required this.evidencias,
+    required this.resultado,
     required this.revisando,
     required this.onResolver,
   });
 
   final Evidencias evidencias;
+
+  /// El resultado elegido: al cambiarlo a "cliente ausente" o "servicio
+  /// cancelado", la foto de la reparación desaparece de la lista en el acto.
+  final String resultado;
   final bool revisando;
   final Future<void> Function(String)? onResolver;
 
@@ -335,7 +341,7 @@ class _Checklist extends StatelessWidget {
         ]),
       );
     }
-    final faltan = Requisitos.alFinalizar(evidencias);
+    final faltan = Requisitos.alFinalizar(evidencias, resultado: resultado);
     if (faltan.isEmpty) {
       return Container(
         width: double.infinity,
