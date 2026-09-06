@@ -185,6 +185,60 @@ taller recordado se queda: es del móvil, no de la persona.
   fragmento. Más el permiso `USE_BIOMETRIC`, que es «normal»: no saca diálogo
   ni da acceso a los datos biométricos.
 
+## Evidencias obligatorias
+
+Hay tres momentos en los que la app no deja seguir sin la prueba del trabajo.
+El criterio vive en **un solo sitio**, `lib/services/requisitos.dart`, y es el
+mismo que enseña el marcador y el que bloquea el botón: lo que sale en verde
+es lo que deja avanzar.
+
+| Momento | Obligatorio |
+| --- | --- |
+| Pasar a **Trabajando** | Foto de la matrícula · foto de la avería |
+| **Cerrar** el servicio | Lo anterior + foto de la reparación + firma con nombre y DNI |
+| Si hay **neumático nuevo** confirmado | Foto del montaje |
+
+`requisitos.dart` es el gemelo en el móvil de `validateFinish`
+(`server/connect/liteRules.ts`): mismos códigos de categoría, misma idea de
+devolver la lista de lo que falta en vez de un sí/no. El servidor sigue
+validando por su cuenta —un cliente viejo no puede saltárselo—; esto solo
+evita que el operario se entere al final, con el cliente delante.
+
+**No se inventa ninguna categoría.** Se usan las de `EVIDENCE_CATEGORIES`:
+`arrival` para la matrícula, `damage` para la avería, `work` para la
+reparación y `mounting` para el montaje. El backend convierte a `other`
+cualquier código que no conozca, así que una categoría nueva se perdería de
+vista en Central.
+
+### Qué se ha traído de Assist Pro
+
+`arrival_photos_screen.dart` está calcado en estructura del de Pro
+(`flutter_app/lib/screens/arrival_photos_screen.dart`): huecos obligatorios,
+miniatura en cuanto se hace la foto, botón apagado hasta que están todas y el
+cambio de estado en su `onDone`. También sus dos calidades de compresión —la
+matrícula más grande, que hay que poder leerla; el resto más ligero, que sube
+con mala cobertura—, ahora en `Camara.fotoParaEvidencia`.
+
+Lo que **no** se ha traído: el OCR de matrícula (en Pro lo hace su backend, y
+la API de Lite no tiene esa ruta) y el hueco de matrícula de remolque.
+
+### Sin cobertura
+
+Las fotos y la firma van a `FileQueue`, como el resto de evidencias: se
+guardan en el almacenamiento privado antes de intentar subirlas, así que una
+foto hecha en un punto sin señal no se pierde ni al cerrar la app.
+
+La comprobación mira **tres sitios** y suma: lo que confirma el servidor, lo
+que espera en la cola y el rastro de categorías ya subidas
+(`FileQueue.categoriasSubidas`). Ese rastro existe por un motivo concreto: la
+cola borra el registro en cuanto la central confirma la subida, y sin él una
+comprobación sin cobertura diría que falta la foto de matrícula que el
+operario hizo hace media hora. Una evidencia **rechazada** por la central no
+cuenta: si contara, el servicio se cerraría creyéndola entregada.
+
+Cerrar el servicio **sí necesita conexión** —lo valida la central—, pero las
+evidencias se pueden registrar todas antes, sin señal.
+
 ## Plataforma Android
 
 `android/` **está en el repositorio** desde la versión 0.1.2. No hay que
