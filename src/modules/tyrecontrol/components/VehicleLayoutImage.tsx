@@ -15,6 +15,7 @@ import ModalMontarDesdeFicha from "./ModalMontarDesdeFicha";
 import ModalMontarFueraAlmacen from "./ModalMontarFueraAlmacen";
 import ModalCopiarNeumatico from "./ModalCopiarNeumatico";
 import { supabase } from "../services/supabase";
+import { MARGEN_PLANO_X, MARGEN_PLANO_Y, aspectoPlano } from "../../../../shared/planoMargen";
 
 const BUCKET_CHASIS = "tc-chasis";
 
@@ -625,11 +626,21 @@ export default function VehicleLayoutImage({
             <img
               src={calibrando ? urlDraft : imagenBase!}
               alt={tipo?.nombre}
-              className="absolute inset-0 h-full w-full object-contain"
+              // La imagen va MÁS PEQUEÑA que el plano, con margen a los lados:
+              // las coordenadas calibradas son del plano entero, así que los
+              // recuadros de las ruedas exteriores pueden quedar al lado de la
+              // rueda, fuera de la foto, sin salirse del área. Lo que sobra se
+              // ve del fondo oscuro del contenedor (una imagen con
+              // transparencia real se funde con él).
+              className="absolute object-contain"
+              style={{
+                left: `${MARGEN_PLANO_X * 100}%`, top: `${MARGEN_PLANO_Y * 100}%`,
+                width: `${(1 - 2 * MARGEN_PLANO_X) * 100}%`, height: `${(1 - 2 * MARGEN_PLANO_Y) * 100}%`,
+              }}
               draggable={false}
               onLoad={(e) => {
                 const { naturalWidth, naturalHeight } = e.currentTarget;
-                if (naturalWidth && naturalHeight) setAspecto(naturalWidth / naturalHeight);
+                if (naturalWidth && naturalHeight) setAspecto(aspectoPlano(naturalWidth / naturalHeight));
               }}
             />
           ) : (

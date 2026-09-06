@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import * as C from "./coordenadas.ts";
+import { aspectoPlano, rectImagenEnPlano } from "../../../shared/planoMargen.ts";
 
 /**
  * Rellena el parte de servicio Conti360.
@@ -209,14 +210,19 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
       });
       try {
         const img = await meterImagen(doc, d.plano);
-        // Se encaja sin deformarlo y centrado: un plano estirado no se parece
-        // al vehículo.
-        const esc = Math.min(caja.ancho / img.width, caja.alto / img.height);
-        const an = img.width * esc, al = img.height * esc;
+        // Se encaja el PLANO (la imagen más su margen, ver shared/planoMargen)
+        // sin deformarlo y centrado: un plano estirado no se parece al
+        // vehículo. Las coordenadas de las ruedas son del plano entero, así
+        // que la imagen va dentro, más pequeña, igual que en el panel y en la
+        // tablet.
+        const aspPlano = aspectoPlano(img.width / img.height);
+        const an = Math.min(caja.ancho, caja.alto * aspPlano);
+        const al = an / aspPlano;
         const x0 = caja.x + (caja.ancho - an) / 2;
         const y0 = caja.y + (caja.alto - al) / 2;   // desde arriba
+        const ri = rectImagenEnPlano(an, al);
         p.drawImage(img, {
-          x: x0, y: C.aPdf(y0 + al), width: an, height: al,
+          x: x0 + ri.x, y: C.aPdf(y0 + ri.y + ri.alto), width: ri.ancho, height: ri.alto,
         });
 
         // Las ruedas en las que se ha trabajado, con una cruz roja AL LADO —

@@ -15,6 +15,7 @@ import '../widgets/etiqueta_neumatico.dart';
 import '../widgets/km_vehiculo.dart';
 import '../widgets/pausa_trabajo.dart';
 import 'catalogo_screen.dart';
+import '../widgets/plano_margen.dart';
 
 /// Cambio rápido de neumático (tablet, táctil).
 ///
@@ -66,6 +67,9 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   Map<int, ({num presion, num margen})> _presionesObjetivo = {}; // presión recomendada por eje
   Map<String, ({double? prof, double? pres})> _datosCat = {}; // catálogo por modelo (dibujo/presión máx)
   bool _trabajando = false;
+  /// Scroll propio de la franja de stock, para que su barra horizontal no se
+  /// confunda con el scroll vertical de la pantalla.
+  final _stockScroll = ScrollController();
   late final DateTime _abiertoEn = DateTime.now(); // para acotar el "deshacer" a esta sesión
   /// La intervención de esta sesión en BD (fase 3): se abre (o recupera) al
   /// cargar la pantalla y viaja en cada operación, que así nace dentro de su
@@ -146,6 +150,7 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
   @override
   void dispose() {
     if (_stream != null && _listener != null) _stream!.removeListener(_listener!);
+    _stockScroll.dispose();
     super.dispose();
   }
 
@@ -883,14 +888,15 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       final w = c.maxWidth;
       final h = (c.maxHeight.isFinite && c.maxHeight > 0)
           ? c.maxHeight
-          : w / _aspect!;
-      // Rectángulo (ox,oy,iw,ih) donde se dibuja la imagen dentro del área w×h.
+          : w / aspectoPlano(_aspect!);
+      // Rectángulo (ox,oy,iw,ih) del PLANO (la imagen más su margen, ver
+      // plano_margen.dart) dentro del área w×h; la foto va dentro, más pequeña.
       // SIEMPRE se respeta el aspecto real de la foto (contain), con o sin
       // ejes separados: el camión no se deforma ni en horizontal ni en
       // vertical, y las ruedas no salen ovaladas ("de bici").
       // El hueco que sobra a los lados no se desperdicia: es justo donde las
       // tarjetas de posición se abren (ver el factor `k` en _tarjetaPosicion).
-      final a = _aspect!; // ancho / alto de la imagen
+      final a = aspectoPlano(_aspect!); // ancho / alto del plano
       double ox = 0, oy = 0, iw = w, ih = h;
       if (w / h >= a) {
         ih = h; iw = h * a; ox = (w - iw) / 2; oy = 0;
@@ -916,14 +922,17 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       return SizedBox(
         width: w, height: h,
         child: Stack(children: [
-          Positioned(
-            left: ox, top: oy, width: iw, height: ih,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: Image.network(_imagenChasis!, width: iw, height: ih, fit: BoxFit.fill,
-                  errorBuilder: (_, __, ___) => Container(color: AppColors.surface)),
-            ),
-          ),
+          Builder(builder: (_) {
+            final ri = rectImagenEnPlano(iw, ih);
+            return Positioned(
+              left: ox + ri.x, top: oy + ri.y, width: ri.w, height: ri.h,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Image.network(_imagenChasis!, width: ri.w, height: ri.h, fit: BoxFit.fill,
+                    errorBuilder: (_, __, ___) => Container(color: AppColors.surface)),
+              ),
+            );
+          }),
           for (int i = 0; i < _posiciones.length; i++)
             _tarjetaPosicion(_posiciones[i], i, ox, oy, iw, ih, k),
         ]),
@@ -1613,11 +1622,29 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
                     style: TextStyle(color: AppColors.textHint, fontSize: 13)),
               )
             : SizedBox(
-                height: 58,
-                child: ListView(scrollDirection: Axis.horizontal, children: [
-                  if (nuevos.isNotEmpty) _grupoStock('Nuevos', nuevos, 'nuevo', AppColors.success, montarEn),
-                  if (usados.isNotEmpty) _grupoStock('Usados', usados, 'usado', AppColors.warning, montarEn),
-                ]),
+                // 58 de tarjetas + sitio para la barra de desplazamiento debajo.
+                height: 68,
+                // En un iPhone caben una tarjeta y poco: la barra siempre a la
+                // vista dice que hay más a la derecha y se mueve con el swipe.
+                child: RawScrollbar(
+                  controller: _stockScroll,
+                  thumbVisibility: true,
+                  thickness: 3,
+                  radius: const Radius.circular(2),
+                  thumbColor: AppColors.success.withValues(alpha: 0.7),
+                  trackVisibility: true,
+                  trackColor: AppColors.cardBorder,
+                  trackRadius: const Radius.circular(2),
+                  child: ListView(
+                    controller: _stockScroll,
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.only(bottom: 10),
+                    children: [
+                      if (nuevos.isNotEmpty) _grupoStock('Nuevos', nuevos, 'nuevo', AppColors.success, montarEn),
+                      if (usados.isNotEmpty) _grupoStock('Usados', usados, 'usado', AppColors.warning, montarEn),
+                    ],
+                  ),
+                ),
               ),
       ]),
     );
