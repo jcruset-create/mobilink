@@ -1,4 +1,6 @@
+import { useState } from "react";
 import type { MontajeSnapshot } from "../services/data";
+import { MARGEN_PLANO_X, MARGEN_PLANO_Y, aspectoPlano } from "../../../../shared/planoMargen";
 
 // Plano de un snapshot pintado SOBRE la imagen real del chasis, con las
 // tarjetas de cada posición en sus coordenadas (%). Si no hay imagen o
@@ -9,6 +11,9 @@ export default function PlanoSnapshot({ titulo, snap, imagen, cambiadas, conAver
 }) {
   const items = snap ?? [];
   const tieneCoords = !!imagen && items.some((s) => s.x != null && s.y != null);
+  // Aspecto del PLANO (imagen + margen), para que las coordenadas calibradas
+  // caigan donde en el plano principal. Hasta que carga, 16/9.
+  const [aspecto, setAspecto] = useState(16 / 9);
 
   const clases = (s: MontajeSnapshot) => {
     const averia = conAveria && s.averias && s.averias.length;
@@ -38,8 +43,19 @@ export default function PlanoSnapshot({ titulo, snap, imagen, cambiadas, conAver
     <div className="flex-1 min-w-0">
       {titulo ? <div className="mb-1 text-[11px] font-semibold uppercase text-slate-400">{titulo}</div> : null}
       {tieneCoords ? (
-        <div className="relative w-full overflow-hidden rounded-lg border border-slate-700 bg-slate-950">
-          <img src={imagen!} alt={titulo ?? "Plano"} className="block w-full" />
+        <div className="relative w-full overflow-hidden rounded-lg border border-slate-700 bg-slate-950" style={{ aspectRatio: String(aspecto) }}>
+          <img
+            src={imagen!} alt={titulo ?? "Plano"}
+            className="absolute object-contain"
+            style={{
+              left: `${MARGEN_PLANO_X * 100}%`, top: `${MARGEN_PLANO_Y * 100}%`,
+              width: `${(1 - 2 * MARGEN_PLANO_X) * 100}%`, height: `${(1 - 2 * MARGEN_PLANO_Y) * 100}%`,
+            }}
+            onLoad={(e) => {
+              const { naturalWidth, naturalHeight } = e.currentTarget;
+              if (naturalWidth && naturalHeight) setAspecto(aspectoPlano(naturalWidth / naturalHeight));
+            }}
+          />
           {items.map((s, k) => (
             <div key={k}
               className={`absolute rounded border ${clases(s)} px-1 py-0.5 text-[8px] leading-tight`}
