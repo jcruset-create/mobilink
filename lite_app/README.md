@@ -109,6 +109,83 @@ sí lo cubriría es un servicio con motor Flutter propio
 `google-services.json` y `key.properties` no están en el repositorio, que es
 público: los inyecta la CI desde secretos.
 
+## Plataforma iOS (App Store / TestFlight)
+
+`ios/` está en el repositorio desde la versión 0.5.0. La app es **solo iPhone**
+(`TARGETED_DEVICE_FAMILY = 1` en las tres configuraciones): no se declara nada
+de iPad, ni orientaciones `~ipad`, ni iconos de iPad en el catálogo. Declarar
+soporte de iPad a medias es lo que provoca el rechazo `90474 Invalid bundle`.
+
+| | |
+| --- | --- |
+| Bundle id | `com.mobilink.assistlite` (Apple no admite `_`, así que no puede ser igual que el `com.mobilink.assist_lite` de Android) |
+| Nombre visible | Mobilink Assist Lite |
+| Mínimo | iOS 13.0, que es lo que piden `firebase_core` y `firebase_messaging`; el resto de plugins se conforman con menos |
+| Flutter | 3.35.4, fijo también en Codemagic |
+
+El mínimo de iOS y la versión de Flutter van atados: Flutter 3.47 sube el
+mínimo del motor a iOS 15 y entonces `pod install` falla con «required a higher
+minimum deployment target». Se cambian los dos a la vez —proyecto y Podfile— o
+no se cambia ninguno.
+
+### Permisos
+
+Solo los que el código pide de verdad; un texto de uso sobrante es motivo de
+rechazo y un permiso sin texto revienta la app al pedirlo.
+
+| Clave | Quién lo usa |
+| --- | --- |
+| `NSCameraUsageDescription` | `lib/services/camara.dart` (evidencias) |
+| `NSPhotoLibraryUsageDescription` | `Camara.elegirDeGaleria` desde `photos_screen.dart` |
+| `NSLocationWhenInUseUsageDescription` | `lib/services/tracker.dart` |
+| `UIBackgroundModes: location` | el equivalente del servicio en primer plano de Android |
+| `ITSAppUsesNonExemptEncryption = false` | solo HTTPS del sistema, sin criptografía propia |
+
+**No** se pide el permiso de ubicación «siempre», igual que en Android no se
+declara `ACCESS_BACKGROUND_LOCATION`: el seguimiento lo arranca el operario con
+la app delante y con `allowBackgroundLocationUpdates` basta para que iOS siga
+entregando posiciones con la pantalla bloqueada. Mientras dura, el sistema
+enseña el indicador azul, que hace de aviso permanente.
+
+`PrivacyInfo.xcprivacy` va registrado en el target Runner: sin tracking, sin
+APIs de motivo obligatorio propias, y los datos que sí se recogen (nombre,
+identificador de sesión, ubicación precisa, fotos y firma) vinculados al
+operario y solo para el funcionamiento de la app.
+
+### Subir a TestFlight
+
+Lo hace el workflow `ios-lite-testflight` de `codemagic.yaml`, independiente de
+los de Mobilink Assist y TyreControl. Pide el número de build a App Store
+Connect (último de TestFlight + 1), pasa la versión de tienda por flag —el
+`version:` del pubspec es la numeración de la APK y no se toca—, comprueba que
+`export_options.plist` existe antes de compilar y que el `.ipa` existe después,
+y lo copia a `$HOME/ipa_output` para que `artifacts:` lo encuentre con
+`working_directory` puesto.
+
+Antes del primer build hacen falta tres cosas fuera del repositorio:
+
+1. el App ID `com.mobilink.assistlite` en Apple Developer,
+2. la ficha de la app en App Store Connect con ese mismo bundle id,
+3. la integración de App Store Connect en Codemagic llamada exactamente
+   **Mobilink Assist Lite**.
+
+En local, en un Mac:
+
+```bash
+flutter pub get
+cd ios && pod install && cd ..
+flutter build ipa --release --build-name=1.0 --build-number=1
+```
+
+### Avisos push en iPhone
+
+Falta lo mismo que en Android y una cosa más: dar de alta
+`com.mobilink.assistlite` en el proyecto de Firebase, guardar su
+`GoogleService-Info.plist` (que **no** va al repositorio, es público) y subir a
+Firebase la clave de APNs. Hasta entonces `Firebase.initializeApp()` falla, se
+registra y la app se queda con el sondeo de la bandeja, exactamente igual que
+la APK sin `google-services.json`.
+
 ## Compilar
 
 Lo normal es **no compilar a mano**: el workflow `build-lite-apk.yml` compila,

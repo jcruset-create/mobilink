@@ -163,7 +163,27 @@ class Tracker {
   ///
   /// La notificación no se puede ocultar (`setOngoing`), y eso es intencionado:
   /// es el aviso permanente de que se está compartiendo ubicación.
+  ///
+  /// En iOS el equivalente es `AppleSettings.allowBackgroundLocationUpdates`
+  /// junto con el modo `location` del Info.plist: sin los dos, el sistema deja
+  /// de entregar posiciones en cuanto se bloquea la pantalla, igual que en
+  /// Android. Como el seguimiento arranca con la app en primer plano, basta el
+  /// permiso «mientras se usa la app»; iOS enseña el indicador azul mientras
+  /// dura, que hace de aviso permanente. `pauseLocationUpdatesAutomatically`
+  /// se apaga a propósito: iOS pausa el GPS cuando cree que el usuario se ha
+  /// parado y no lo reanuda solo, y en una asistencia eso es un agujero en el
+  /// rastro.
   LocationSettings _ajustes() {
+    if (Platform.isIOS) {
+      return AppleSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 15,
+        allowBackgroundLocationUpdates: true,
+        showBackgroundLocationIndicator: true,
+        pauseLocationUpdatesAutomatically: false,
+        activityType: ActivityType.automotiveNavigation,
+      );
+    }
     if (!Platform.isAndroid) {
       return const LocationSettings(
         accuracy: LocationAccuracy.high,
