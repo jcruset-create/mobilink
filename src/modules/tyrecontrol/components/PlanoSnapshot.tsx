@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { MontajeSnapshot } from "../services/data";
-import { MARGEN_PLANO_X, MARGEN_PLANO_Y, aspectoPlano } from "../../../../shared/planoMargen";
+import { MARGEN_PLANO_X, MARGEN_PLANO_Y, aspectoPlano, coordAVista } from "../../../../shared/planoMargen";
 
 // Plano de un snapshot pintado SOBRE la imagen real del chasis, con las
 // tarjetas de cada posición en sus coordenadas (%). Si no hay imagen o
@@ -59,7 +59,10 @@ export default function PlanoSnapshot({ titulo, snap, imagen, cambiadas, conAver
           {items.map((s, k) => (
             <div key={k}
               className={`absolute rounded border ${clases(s)} px-1 py-0.5 text-[8px] leading-tight`}
-              style={{ left: `${s.x}%`, top: `${s.y}%`, width: `${Math.max(s.w ?? 16, 12)}%` }}>
+              style={(() => {
+                const c = coordAVista({ x: s.x ?? 0, y: s.y ?? 0, w: Math.max(s.w ?? 16, 12), h: s.h ?? 12 });
+                return { left: `${c.x}%`, top: `${c.y}%`, width: `${c.w}%` };
+              })()}>
               {contenido(s)}
             </div>
           ))}
