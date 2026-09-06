@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Mobilink Asistencia</string>
+	<string>Mobilink Assist</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>sea_tarragona_operario</string>
+	<string>Mobilink Assist</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -31,25 +31,19 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSCameraUsageDescription</key>
-	<string>Mobilink Asistencia usa la cámara para fotografiar matrículas, averías y reparaciones de las asistencias.</string>
+	<string>Mobilink Assist usa la cámara para fotografiar matrículas, averías y reparaciones de las asistencias.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Mobilink Asistencia accede a tus fotos para adjuntar imágenes a las asistencias.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Mobilink Asistencia guarda imágenes de las asistencias en tu galería.</string>
+	<string>Mobilink Assist accede a tus fotos para adjuntar imágenes a las asistencias.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Mobilink Asistencia usa tu ubicación para el seguimiento del trayecto hasta el punto de avería y el regreso al taller.</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Mobilink Asistencia puede usar el micrófono al grabar vídeos de la asistencia.</string>
+	<string>Mobilink Assist usa tu ubicación para el seguimiento del trayecto hasta el punto de avería y el regreso al taller.</string>
 </dict>
 </plist>

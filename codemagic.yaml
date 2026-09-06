@@ -1,48 +1,242 @@
 workflows:
   ios-testflight:
-    name: SEA Asistencia · iOS → TestFlight
+    name: Mobilink Assist · iOS → TestFlight
     instance_type: mac_mini_m2
     max_build_duration: 60
+
+    # ── Las credenciales de Apple entran POR AQUÍ ───────────────────────────
+    #
+    # Es la clave de API de App Store Connect que ya está cargada en Codemagic
+    # (Settings → Developer Portal → Manage keys). Con esta sección, Codemagic
+    # la usa para las dos cosas que hacen falta:
+    #
+    #   · firmar   — «ios_signing» le pide a Apple el certificado de
+    #                distribución y el perfil de com.mobilink.assist;
+    #   · publicar — «publishing.app_store_connect.auth: integration» sube el
+    #                .ipa a TestFlight con esa misma clave.
+    #
+    # Y por eso NO hay que repetir Issuer ID, Key ID ni el .p8 como variables
+    # de entorno: duplicar un secreto es multiplicar por dos los sitios donde
+    # caduca sin que nadie se entere.
+    #
+    # Sin esta sección, Codemagic rechaza el fichero antes de compilar:
+    #   ios-testflight -> publishing
+    #   auth -> "integration" requires workflow -> integrations -> app_store_connect
     integrations:
-      app_store_connect: Mobilink TyreControl
+      # El nombre de la clave en Codemagic → Settings → Developer Portal →
+      # Manage keys. Hay dos claves conectadas —la otra es la de TyreControl—,
+      # así que esto tiene que decir exactamente ésta, carácter por carácter:
+      # si no coincide, Codemagic no encuentra la integración y no compila.
+      app_store_connect: Mobilink Assist
+
     environment:
-      flutter: stable
+      # ── Versión EXACTA, no «stable» ────────────────────────────────────
+      #
+      # «stable» es un blanco móvil y por eso este build se rompió solo: se
+      # configuró contra Flutter 3.35.4, que pide iOS 13.0, y para cuando se
+      # lanzó el primer build «stable» ya era 3.47.2, que pide 15.0. CocoaPods
+      # se encontró un proyecto en 13.0 y un motor que exige 15.0, y no pudo
+      # resolver: «required a higher minimum deployment target».
+      #
+      # Nadie cambió nada. Cambió el significado de la palabra «stable», que es
+      # la peor clase de rotura: la que aparece sin que haya un commit detrás.
+      # Con la versión fija, el build de dentro de tres meses compila lo mismo
+      # que el de hoy, y subir de Flutter pasa a ser una decisión con su commit.
+      flutter: 3.47.2
+      # Xcode SÍ se deja en «latest», y no es una incoherencia: Apple exige que
+      # lo que se sube esté compilado con un SDK reciente, así que fijarlo aquí
+      # acabaría provocando el rechazo de la subida por quedarse atrás. El
+      # riesgo se cubre al revés: Flutter fijo, Xcode al día.
       xcode: latest
       cocoapods: default
       ios_signing:
-        # Crea esta integración en Codemagic: Teams → Integrations → App Store Connect
-        # y registra el bundle id com.seatarragona.operario en Apple Developer.
+        # El App ID está dado de alta en Apple Developer y la app creada en App
+        # Store Connect asociada a él. Es el identificador definitivo.
+        #
+        # Tiene que decir EXACTAMENTE lo mismo que
+        # flutter_app/ios/Runner.xcodeproj/project.pbxproj. Si los dos no
+        # coinciden, la firma falla al buscar el perfil.
         distribution_type: app_store
-        bundle_identifier: com.seatarragona.operario
+        bundle_identifier: com.mobilink.assist
       vars:
-        APP_STORE_APPLE_ID: "PENDIENTE"   # ID numérico de la app en App Store Connect (al crearla)
-      groups:
-        - appstore_connect            # grupo con las credenciales App Store Connect (UI de Codemagic)
+        # ── La versión de iOS va aparte de la de Android, y hay motivo ─────
+        #
+        # «pubspec.yaml» lleva la numeración de la APK, con decenas de entregas
+        # a las tablets. Bajarla para estrenar en la App Store convertiría la
+        # siguiente APK en una actualización «hacia atrás» y Android no la
+        # instalaría encima.
+        #
+        # Así que el nombre de versión de iOS se pone aquí y el número de build
+        # lo pone Codemagic, que es monótono por definición. Para la segunda
+        # entrega, se sube este número y ya está.
+        IOS_VERSION: "1.0.0"
+
     working_directory: flutter_app
     scripts:
       - name: Flutter pub get
         script: flutter pub get
       - name: Instalar pods
         script: |
-          find . -name "Podfile" -execdir pod install \;
-      - name: Set build number (incremental)
+          cd ios && pod install
+      # ── El paso que faltaba ─────────────────────────────────────────────
+      #
+      # «Set up code signing identities» —el paso automático que sale de
+      # «environment.ios_signing»— baja el certificado y el perfil y los mete
+      # en el llavero. Ahí se acaba su trabajo: NO toca el proyecto de Xcode y
+      # NO escribe ningún export_options.plist.
+      #
+      # Eso es lo que hace «xcode-project use-profiles»: aplica los perfiles al
+      # proyecto y, de paso, genera el plist de exportación que luego pide
+      # «flutter build ipa». Sin este paso, el build muere diciendo
+      # «/Users/builder/export_options.plist property list does not exist», que
+      # es literalmente cierto: nadie lo había creado.
+      #
+      # ── Y por qué se le dice qué proyecto ────────────────────────────────
+      #
+      # Por defecto busca «**/*.xcodeproj» bajo el directorio de trabajo, y
+      # aquí eso es flutter_app, donde hay DOS: ios/Runner.xcodeproj y
+      # macos/Runner.xcodeproj. Dejarlo suelto le pondría perfiles de iOS al
+      # proyecto de macOS. Se le dice cuál.
+      - name: Aplicar los perfiles al proyecto Xcode
         script: |
-          # Usa el nº de build de Codemagic para no repetir versión en TestFlight
-          agvtool new-version -all $(($BUILD_NUMBER + 100)) || true
+          xcode-project use-profiles --project ios/Runner.xcodeproj
+
+          # Y se comprueba que el plist existe ANTES de compilar. Son cuarenta
+          # minutos de build: enterarse al final de que falta un fichero que se
+          # podía haber mirado en un segundo es tirarlos.
+          if [ ! -f "$HOME/export_options.plist" ]; then
+            echo "No se ha generado $HOME/export_options.plist."
+            echo "«xcode-project use-profiles» no encontró perfiles que aplicar:"
+            echo "revisa que la integración de App Store Connect tenga acceso a"
+            echo "com.mobilink.assist y que exista su perfil de distribución."
+            exit 1
+          fi
+          echo "export_options.plist generado en $HOME/export_options.plist"
+
       - name: Build IPA
         script: |
+          # La versión y el build se pasan a Flutter, no con agvtool: «flutter
+          # build» reescribe Generated.xcconfig con FLUTTER_BUILD_NAME y
+          # FLUTTER_BUILD_NUMBER, que es de donde el Info.plist saca los dos
+          # valores. Lo que hiciera agvtool antes se perdía en ese paso.
+          #
+          # «$HOME/export_options.plist» es la ruta por defecto que usa
+          # «xcode-project use-profiles» —en Codemagic, /Users/builder—, así que
+          # se escribe con la variable y no a mano: si el usuario del builder
+          # cambiara, esto sigue funcionando.
           flutter build ipa --release \
-            --export-options-plist=/Users/builder/export_options.plist
+            --build-name="$IOS_VERSION" \
+            --build-number="$BUILD_NUMBER" \
+            --export-options-plist="$HOME/export_options.plist"
+
+          # ── Y ahora se comprueba que el .ipa EXISTE de verdad ────────────
+          #
+          # El build anterior terminó entero en verde y TestFlight se quedó en
+          # «No Builds»: «flutter build ipa» compiló, pero Codemagic dijo
+          # «No artifacts were found» y no había nada que publicar. Un build
+          # verde que no entrega nada es peor que uno rojo, porque nadie va a
+          # mirar el log.
+          #
+          # Así que aquí se busca el fichero, se enseña dónde está —con el
+          # directorio de trabajo delante, que es justo el dato que faltaba en
+          # el log del fallo— y si no aparece, el paso muere.
+          echo "Directorio de trabajo: $(pwd)"
+          echo "Ficheros .ipa encontrados:"
+          find . -type f -name "*.ipa" -print
+
+          IPA_ORIGEN="$(find build/ios/ipa -maxdepth 1 -type f -name "*.ipa" -print -quit 2>/dev/null || true)"
+          if [ -z "$IPA_ORIGEN" ]; then
+            echo "«flutter build ipa» ha terminado pero no hay ningún .ipa en"
+            echo "$(pwd)/build/ios/ipa. Sin fichero no hay nada que subir a"
+            echo "TestFlight: se para aquí en lugar de acabar en verde vacío."
+            exit 1
+          fi
+
+          # ── Y se deja en una ruta ABSOLUTA, que es la única sin ambigüedad ─
+          #
+          # «artifacts:» no se resuelve donde dice la documentación. El texto
+          # afirma que los patrones van «relative to the clone directory», pero
+          # los propios ejemplos de Codemagic —repositorio codemagic-sample-
+          # projects, workflows con «working_directory: ios/…»— escriben
+          # «build/ios/ipa/*.ipa» SIN el prefijo de la subcarpeta. Es decir:
+          # van relativos al working_directory, no al raíz del checkout.
+          #
+          # Por eso el patrón anterior, «flutter_app/build/ios/ipa/*.ipa», se
+          # buscaba en flutter_app/flutter_app/… y no encontraba nada.
+          #
+          # En vez de apostar por una de las dos lecturas, se copia el .ipa a
+          # una ruta absoluta: la documentación dice explícitamente que
+          # «absolute paths are supported as well», y una ruta absoluta es
+          # correcta con las dos semánticas a la vez.
+          mkdir -p "$HOME/ipa_output"
+          rm -f "$HOME/ipa_output"/*.ipa
+          cp "$IPA_ORIGEN" "$HOME/ipa_output/"
+          echo "IPA listo para publicar: $HOME/ipa_output/$(basename "$IPA_ORIGEN")"
+          ls -lh "$HOME/ipa_output"
+
+    # Ruta ABSOLUTA a propósito: ver la explicación en «Build IPA». Con
+    # «working_directory: flutter_app» un patrón relativo depende de una
+    # semántica que la documentación y los ejemplos de Codemagic describen de
+    # forma distinta, y equivocarse ahí es exactamente lo que dejó el build
+    # anterior en «No artifacts were found» con TestFlight vacío.
+    #
+    # Las variables de entorno en los patrones SÍ están soportadas (los propios
+    # ejemplos de Codemagic usan «$HOME/Library/Developer/Xcode/...»).
     artifacts:
-      - flutter_app/build/ios/ipa/*.ipa
+      - $HOME/ipa_output/*.ipa
       - /tmp/xcodebuild_logs/*.log
+
     publishing:
       app_store_connect:
+        # «integration» = usa la clave declarada arriba en «integrations».
         auth: integration
-        submit_to_testflight: true
-        # Grupos de testers internos que reciben la build automáticamente:
-        beta_groups:
-          - SEA Tecnicos
+        # ── En «false» a propósito ──────────────────────────────────────────
+        #
+        # Esto NO tiene nada que ver con subir el .ipa: la subida la hace
+        # «auth: integration» y ocurre igual con esta clave en false, que además
+        # es su valor por defecto. Lo que hace «submit_to_testflight» es enviar
+        # la build a la REVISIÓN BETA de Apple. La propia herramienta que
+        # Codemagic usa por debajo lo dice sin rodeos en su «--testflight»:
+        #
+        #   Enable submission of an app for Testflight beta app review
+        #   to allow external testing.
+        #
+        # «to allow EXTERNAL testing». Mobilink Assist se reparte sólo por
+        # TestFlight interno, y los testers internos no pasan por esa revisión:
+        # tienen la build en cuanto Apple termina de procesarla.
+        #
+        # Así que pedir la revisión aquí es pedir un trámite que no usamos, y
+        # ese trámite exige la «Beta App Review Information» completa en App
+        # Store Connect. Si falta algo, el post-procesado sale en rojo con la
+        # build ya subida y disponible: exactamente la clase de falso fallo que
+        # acabamos de quitarnos con «beta_groups».
+        #
+        # El día que haya testers EXTERNOS, esto vuelve a «true» y entonces sí
+        # hay que rellenar esa información.
+        submit_to_testflight: false
+
+        # ── Y aquí NO va «beta_groups» ──────────────────────────────────────
+        #
+        # Lo llevaba con «SEA Tecnicos» y el post-procesado terminaba así:
+        #
+        #   Failed to add build ... to 'SEA Tecnicos' beta group
+        #   Builds cannot be assigned to this internal group.
+        #   - Cannot add internal group to a build.
+        #
+        # No es un nombre mal escrito ni un permiso que falte: es que la
+        # operación no existe para grupos internos. Codemagic implementa
+        # «beta_groups» con «POST /v1/betaGroups/{id}/relationships/builds» —la
+        # llamada «Add Builds to a Beta Group» de Apple—, y ese endpoint
+        # rechaza los grupos donde «isInternalGroup» es cierto.
+        #
+        # Y lo rechaza porque no hay nada que asignar: un grupo interno recibe
+        # TODAS las builds en cuanto Apple termina de procesarlas. Pedirlo
+        # explícitamente es pedir algo que ya está hecho, y por eso el workflow
+        # salía en rojo después de haber subido la build correctamente.
+        #
+        # Así que «SEA Tecnicos» sigue recibiendo las builds igual que hasta
+        # ahora; lo único que se va es la orden redundante que las tumbaba.
+        # Si algún día hay un grupo EXTERNO, ése sí se declara aquí.
       email:
         recipients:
           - jcruset@gmail.com
