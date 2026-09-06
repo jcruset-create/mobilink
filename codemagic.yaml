@@ -358,18 +358,25 @@ workflows:
     # ── Credenciales de Apple ────────────────────────────────────────────
     #
     # Nombre EXACTO de la clave de API de App Store Connect en Codemagic →
-    # Settings → Developer Portal → Manage keys. Ya hay dos conectadas
-    # («Mobilink Assist» y «Mobilink TyreControl»); ésta es una TERCERA que hay
-    # que dar de alta con este nombre, carácter por carácter, antes del primer
-    # build. Si no existe, Codemagic no encuentra la integración y el workflow
-    # no arranca.
+    # Settings → Developer Portal → Manage keys.
     #
-    # (Si el equipo de Apple es el mismo que el de Mobilink Assist, la clave de
-    # aquélla serviría técnicamente: una clave de App Store Connect es de todo
-    # el equipo, no de una app. Se deja aparte a propósito para que caducar o
-    # revocar la de una app no tumbe la entrega de la otra.)
+    # Se reutiliza la de «Mobilink Assist», que ya está conectada, en vez de dar
+    # de alta una tercera: una clave de App Store Connect es del EQUIPO de
+    # Apple, no de una app, así que la misma sirve para firmar y publicar
+    # com.mobilink.assistlite mientras las dos apps vivan en el mismo equipo.
+    # Lo único que hay que asegurar es que la clave tenga acceso a la app nueva
+    # (rol App Manager o superior en App Store Connect).
+    #
+    # A cambio, las dos entregas dependen de la misma clave: el día que caduque
+    # o se revoque, se paran Mobilink Assist y Assist Lite a la vez. Si algún
+    # día interesa aislarlas, se crea una clave propia y aquí se cambia esta
+    # línea, y solo esta línea.
+    #
+    # El bundle id NO cambia: sigue siendo com.mobilink.assistlite, que es lo
+    # que decide qué perfil se pide a Apple. Compartir la clave no comparte ni
+    # la app, ni el App ID, ni el perfil de aprovisionamiento.
     integrations:
-      app_store_connect: Mobilink Assist Lite
+      app_store_connect: Mobilink Assist
 
     environment:
       # Versión EXACTA, nunca «stable». Es la avería que se llevó por delante
@@ -434,7 +441,7 @@ workflows:
           if [ ! -f "$HOME/export_options.plist" ]; then
             echo "No se ha generado $HOME/export_options.plist."
             echo "«xcode-project use-profiles» no encontró perfiles que aplicar."
-            echo "Revisa que la integración «Mobilink Assist Lite» tenga acceso"
+            echo "Revisa que la integración «Mobilink Assist» tenga acceso"
             echo "a $BUNDLE_ID y que exista su perfil de distribución de App Store."
             exit 1
           fi
