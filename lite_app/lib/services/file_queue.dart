@@ -88,9 +88,45 @@ class FileQueue {
   static const _boxName = 'lite_files';
   static Box? _box;
 
+  /// Rastro de lo que YA se subió, por asistencia: `<id> -> [categorías]`.
+  ///
+  /// La cola borra el registro en cuanto la central confirma la subida, que es
+  /// lo correcto para no acumular binarios, pero deja al móvil sin memoria de
+  /// qué evidencias tiene ya el servicio. Sin cobertura eso se nota: la
+  /// comprobación de requisitos preguntaría a la central, no podría, y diría
+  /// que falta la foto de matrícula que el operario hizo hace media hora.
+  ///
+  /// Aquí solo se guardan códigos de categoría —cuatro letras por foto—, no
+  /// imágenes. Con cobertura manda la lista del servidor; sin ella, esto.
+  static const _boxCats = 'lite_evidencias';
+  static Box? _cats;
+
   static Future<void> init() async {
     _box = await Hive.openBox(_boxName);
+    _cats = await Hive.openBox(_boxCats);
     await _limpiarHuerfanos();
+  }
+
+  /// Categorías que constan como subidas para una asistencia.
+  static Set<String> categoriasSubidas(int assistanceId) {
+    final v = _cats?.get('$assistanceId');
+    if (v is List) return v.map((e) => e.toString()).toSet();
+    return {};
+  }
+
+  /// Anota una categoría como subida. La usa la propia cola al cerrar una
+  /// evidencia y quien suba en directo sin pasar por ella (la foto de montaje
+  /// de los conceptos), para que las dos vías cuenten igual.
+  static Future<void> anotarSubida(int assistanceId, String category) async {
+    final actual = categoriasSubidas(assistanceId)..add(category);
+    await _cats?.put('$assistanceId', actual.toList());
+  }
+
+  /// Refresca el rastro con lo que dice el servidor, que es la verdad cuando
+  /// se le puede preguntar.
+  static Future<void> sincronizarCategorias(
+      int assistanceId, Iterable<String> categorias) async {
+    await _cats?.put('$assistanceId', categorias.toSet().toList());
   }
 
   static List<PendingFile> all() {
@@ -197,6 +233,9 @@ class FileQueue {
 
   /// Borra el registro y el fichero: solo cuando el servidor ha confirmado.
   static Future<void> _cerrar(PendingFile f) async {
+    // Antes de perder el registro, se deja constancia de que esa evidencia ya
+    // existe: es lo que permite comprobar requisitos sin cobertura.
+    if (f.kind == 'photo') await anotarSubida(f.assistanceId, f.category);
     await _box?.delete(f.id);
     try {
       final file = File(f.path);

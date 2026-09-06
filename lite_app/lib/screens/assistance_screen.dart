@@ -7,10 +7,12 @@ import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api.dart';
 import '../services/queue.dart';
+import '../services/requisitos.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
 import '../theme.dart';
 import '../widgets/plate_badge.dart';
+import 'arrival_photos_screen.dart';
 import 'concepts_screen.dart';
 import 'finish_screen.dart';
 import 'photos_screen.dart';
@@ -41,6 +43,7 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
   bool _offline = false;
   String? _suggestion;
   int? _distanceM;
+  Evidencias _evidencias = Evidencias.vacio;
 
   @override
   void initState() {
@@ -78,6 +81,8 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
       try { conceptos = await _api.concepts(widget.assistanceId); } catch (_) {}
       if (!mounted) return;
       setState(() { _a = a; _conceptos = conceptos; _loading = false; _error = null; _offline = false; });
+      final ev = await Evidencias.cargar(_api, widget.assistanceId, conceptos: conceptos);
+      if (mounted) setState(() => _evidencias = ev);
       await _tracker.sync(
         widget.assistanceId,
         a['status']?.toString() ?? '',
@@ -167,6 +172,26 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
       });
       _aviso('Sin conexión: el estado "${statusStyle(target).label}" se enviará al recuperar cobertura.');
     }
+  }
+
+  /// Paso a "Trabajando": con las dos fotos hechas va directo; si falta
+  /// alguna, abre la pantalla que las pide y el estado cambia al terminarla.
+  Future<void> _empezarTrabajo() async {
+    final ev = await Evidencias.cargar(_api, widget.assistanceId);
+    if (!mounted) return;
+    setState(() => _evidencias = ev);
+    if (Requisitos.alLlegar(ev).isEmpty) {
+      await _confirmarEstado('in_progress');
+      return;
+    }
+    final hecho = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => ArrivalPhotosScreen(
+        api: _api,
+        assistanceId: widget.assistanceId,
+        onDone: () => _cambiarEstado('in_progress'),
+      ),
+    ));
+    if (hecho == true) await _load(silent: true);
   }
 
   Future<void> _confirmarEstado(String target) async {
@@ -397,6 +422,11 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
               : ListView(
                   padding: const EdgeInsets.only(bottom: 120),
                   children: [
+                    if (_status == 'arrived' || _status == 'in_progress')
+                      _Requisitos(
+                        evidencias: _evidencias,
+                        finalizando: _status == 'in_progress',
+                      ),
                     if (_offline)
                       Container(
                         color: AppColors.warn.withValues(alpha: 0.15),
@@ -691,6 +721,18 @@ class _AssistanceScreenState extends State<AssistanceScreen> {
       );
     }
     final st = statusStyle(next);
+    // Empezar a trabajar exige las evidencias de llegada. No es un aviso que
+    // se pueda cerrar: el botón lleva a hacerlas y, hechas, cambia el estado
+    // él solo (misma idea que el ArrivalPhotosScreen de Assist Pro, que
+    // recibe el cambio de estado en su onDone).
+    if (next == 'in_progress') {
+      return ElevatedButton.icon(
+        onPressed: _busy ? null : _empezarTrabajo,
+        style: ElevatedButton.styleFrom(backgroundColor: st.color),
+        icon: Icon(st.icon),
+        label: Text(st.label.toUpperCase()),
+      );
+    }
     return ElevatedButton.icon(
       onPressed: _busy ? null : () => _confirmarEstado(next),
       style: ElevatedButton.styleFrom(backgroundColor: st.color),
@@ -771,6 +813,69 @@ class _AccionFila extends StatelessWidget {
         trailing: const Icon(Icons.chevron_right),
         onTap: onTap,
       ),
+    );
+  }
+}
+
+/// Marcador de evidencias obligatorias, siempre a la vista mientras se
+/// trabaja: ✓ lo que está, ⚠ lo que falta. La misma idea que en Assist Pro,
+/// donde el operario ve los huecos pendientes antes de llegar al final.
+///
+/// No es un aviso decorativo: lo que aparezca aquí en amarillo es exactamente
+/// lo que va a impedir cerrar el servicio.
+class _Requisitos extends StatelessWidget {
+  const _Requisitos({required this.evidencias, required this.finalizando});
+
+  final Evidencias evidencias;
+  final bool finalizando;
+
+  @override
+  Widget build(BuildContext context) {
+    final faltan = finalizando
+        ? Requisitos.alFinalizar(evidencias)
+        : Requisitos.alLlegar(evidencias);
+    final total = finalizando ? 6 + (evidencias.montajesConfirmados > 0 ? 1 : 0) : 2;
+    final hechas = total - faltan.length;
+
+    return Container(
+      width: double.infinity,
+      color: (faltan.isEmpty ? AppColors.ok : AppColors.warn).withValues(alpha: 0.12),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(faltan.isEmpty ? Icons.check_circle : Icons.warning_amber,
+              size: 18, color: faltan.isEmpty ? AppColors.ok : AppColors.warn),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              faltan.isEmpty
+                  ? (finalizando
+                      ? 'Evidencias completas: se puede cerrar el servicio'
+                      : 'Evidencias de llegada completas')
+                  : 'Evidencias obligatorias: $hechas de $total',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: faltan.isEmpty ? AppColors.ok : AppColors.warn,
+              ),
+            ),
+          ),
+        ]),
+        for (final f in faltan)
+          Padding(
+            padding: const EdgeInsets.only(left: 26, top: 2),
+            child: Text('⚠  $f',
+                style: const TextStyle(fontSize: 12, color: AppColors.warn)),
+          ),
+        if (evidencias.sinConexion)
+          const Padding(
+            padding: EdgeInsets.only(left: 26, top: 4),
+            child: Text(
+              'Sin conexión: solo se comprueba lo que hay en el móvil.',
+              style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+            ),
+          ),
+      ]),
     );
   }
 }

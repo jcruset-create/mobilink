@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api.dart';
 import '../services/file_queue.dart';
+import '../services/camara.dart';
 import '../services/queue.dart';
+import '../services/requisitos.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
 import '../theme.dart';
+import 'photos_screen.dart';
+import 'signature_screen.dart';
 
 const Map<String, String> kResultados = {
   'repaired_on_site': 'Reparado en carretera',
@@ -37,6 +41,8 @@ class _FinishScreenState extends State<FinishScreen> {
   String _resultado = 'repaired_on_site';
   bool _busy = false;
   List<String> _errores = const [];
+  Evidencias _ev = Evidencias.vacio;
+  bool _revisando = true;
 
   /*
    * Por encima de esto el número deja de parecer los kilómetros de un servicio
@@ -49,6 +55,69 @@ class _FinishScreenState extends State<FinishScreen> {
   bool get _kmParecenOdometro {
     final v = int.tryParse(_km.text.trim());
     return v != null && v > _kmSospechosos;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _revisar();
+  }
+
+  /// Repasa las evidencias del servicio. Se llama al abrir y después de cada
+  /// cosa que las cambia, para que el marcador de arriba no mienta nunca.
+  Future<void> _revisar() async {
+    setState(() => _revisando = true);
+    List<Map<String, dynamic>> conceptos = const [];
+    try {
+      conceptos = await _api.concepts(widget.assistanceId);
+    } catch (_) {/* sin conceptos: el servicio no llevaba neumáticos pactados */}
+    final ev = await Evidencias.cargar(_api, widget.assistanceId, conceptos: conceptos);
+    if (!mounted) return;
+    setState(() { _ev = ev; _revisando = false; });
+  }
+
+  /// La foto del resultado del trabajo. Va por la cola como el resto: hecha
+  /// en un punto sin cobertura no se pierde.
+  Future<void> _fotoDeReparacion() async {
+    final archivo = await Camara.fotoParaEvidencia(context);
+    if (archivo == null) return;
+    setState(() => _busy = true);
+    try {
+      final pos = await Tracker.currentPosition();
+      await FileQueue.addPhoto(
+        assistanceId: widget.assistanceId,
+        file: archivo,
+        category: Requisitos.catReparacion,
+        lat: pos?.latitude,
+        lng: pos?.longitude,
+      );
+      try { await FileQueue.flush(_api); } catch (_) {/* queda en cola */}
+      await _revisar();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Lleva a la pantalla que resuelve lo que falta, en vez de dejar al
+  /// operario buscándola.
+  Future<void> _resolver(String falta) async {
+    if (falta == 'Firma del cliente' ||
+        falta.startsWith('Nombre') ||
+        falta.startsWith('DNI')) {
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => SignatureScreen(
+            session: widget.session, assistanceId: widget.assistanceId),
+      ));
+    } else if (falta == Requisitos.etiquetas[Requisitos.catReparacion]) {
+      await _fotoDeReparacion();
+      return;
+    } else {
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => PhotosScreen(
+            session: widget.session, assistanceId: widget.assistanceId),
+      ));
+    }
+    await _revisar();
   }
 
   @override
@@ -72,6 +141,16 @@ class _FinishScreenState extends State<FinishScreen> {
       try {
         await FileQueue.flush(_api);
       } catch (_) {/* si sigue sin cobertura, el cierre dirá lo que falta */}
+
+      // Comprobación única, con la foto recién hecha del estado real. Si falta
+      // algo NO se llama a la API: se dice exactamente qué falta, una línea
+      // por cosa, y el operario tiene el botón para resolverlo al lado.
+      await _revisar();
+      final faltan = Requisitos.alFinalizar(_ev);
+      if (faltan.isNotEmpty) {
+        setState(() => _errores = faltan);
+        return;
+      }
       final pos = await Tracker.currentPosition();
       await _api.finish(
         widget.assistanceId,
@@ -106,6 +185,12 @@ class _FinishScreenState extends State<FinishScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Finalizar servicio')),
       body: ListView(padding: const EdgeInsets.all(16), children: [
+        _Checklist(
+          evidencias: _ev,
+          revisando: _revisando,
+          onResolver: _busy ? null : _resolver,
+        ),
+        const SizedBox(height: 12),
         if (reglas.isNotEmpty)
           Card(
             color: AppColors.surfaceDeep,
@@ -195,7 +280,7 @@ class _FinishScreenState extends State<FinishScreen> {
               const Row(children: [
                 Icon(Icons.error_outline, color: AppColors.danger, size: 18),
                 SizedBox(width: 6),
-                Text('No se puede cerrar todavía',
+                Text('No puedes finalizar la asistencia. Falta:',
                     style: TextStyle(color: AppColors.danger, fontWeight: FontWeight.bold)),
               ]),
               const SizedBox(height: 6),
@@ -217,6 +302,91 @@ class _FinishScreenState extends State<FinishScreen> {
           style: TextStyle(color: AppColors.textMuted, fontSize: 12),
           textAlign: TextAlign.center,
         ),
+      ]),
+    );
+  }
+}
+
+/// Lo que falta para cerrar, con el botón que lo resuelve al lado.
+///
+/// Es el mismo criterio que aplica `_finalizar`, así que no puede haber
+/// sorpresa al final: lo que aquí sale en verde es lo que deja cerrar.
+class _Checklist extends StatelessWidget {
+  const _Checklist({
+    required this.evidencias,
+    required this.revisando,
+    required this.onResolver,
+  });
+
+  final Evidencias evidencias;
+  final bool revisando;
+  final Future<void> Function(String)? onResolver;
+
+  @override
+  Widget build(BuildContext context) {
+    if (revisando) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Row(children: [
+          SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+          SizedBox(width: 10),
+          Text('Repasando las evidencias…',
+              style: TextStyle(color: AppColors.textMuted, fontSize: 13)),
+        ]),
+      );
+    }
+    final faltan = Requisitos.alFinalizar(evidencias);
+    if (faltan.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.ok.withValues(alpha: 0.12),
+          border: Border.all(color: AppColors.ok),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Row(children: [
+          Icon(Icons.check_circle, color: AppColors.ok, size: 18),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text('Evidencias completas',
+                style: TextStyle(color: AppColors.ok, fontWeight: FontWeight.bold)),
+          ),
+        ]),
+      );
+    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.warn.withValues(alpha: 0.12),
+        border: Border.all(color: AppColors.warn),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Evidencias obligatorias pendientes',
+            style: TextStyle(color: AppColors.warn, fontWeight: FontWeight.bold)),
+        for (final f in faltan)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Row(children: [
+              const Icon(Icons.warning_amber, size: 16, color: AppColors.warn),
+              const SizedBox(width: 6),
+              Expanded(child: Text(f, style: const TextStyle(fontSize: 13))),
+              TextButton(
+                onPressed: onResolver == null ? null : () => onResolver!(f),
+                child: const Text('Hacer'),
+              ),
+            ]),
+          ),
+        if (evidencias.sinConexion)
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text(
+              'Sin conexión: solo se ha podido comprobar lo que hay en el móvil.',
+              style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+            ),
+          ),
       ]),
     );
   }
