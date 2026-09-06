@@ -2,7 +2,7 @@ name: tyrecontrol_app
 description: "Mobilink TyreControl — revision de neumaticos en campo"
 publish_to: 'none'
 
-version: 0.39.8+168
+version: 0.39.10+170
 
 environment:
   sdk: ^3.8.1
@@ -42,7 +42,10 @@ dev_dependencies:
 # partir del logo. Ejecutar: dart run flutter_launcher_icons
 flutter_launcher_icons:
   android: true
-  ios: false
+  ios: true
+  # Apple no admite canal alfa en el icono de 1024: se quita el canal (las
+  # esquinas transparentes del logo quedan negras, como su fondo).
+  remove_alpha_ios: true
   image_path: "assets/icono_app.png"
   min_sdk_android: 21
   # Negro del propio logo; el primer plano lleva margen de seguridad para que
