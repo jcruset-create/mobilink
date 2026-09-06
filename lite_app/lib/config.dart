@@ -5,7 +5,7 @@ const String kBackendUrl = 'https://sea-tarragona.onrender.com';
 /// La reescribe el workflow de compilación junto con pubspec.yaml: a mano se
 /// quedaba atrás (llegó a decir 0.1.0 con la 0.1.4 publicada) y Central veía a
 /// todos los dispositivos en la misma versión inicial.
-const String kAppVersion = '0.5.0+84';
+const String kAppVersion = '0.5.1+85';
 
 /// Política de privacidad publicada (public/privacidad-lite.html, que Vite
 /// copia a dist/ y Express sirve como estático).

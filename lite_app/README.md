@@ -70,6 +70,34 @@ solo vivía en memoria— y se suben solas al recuperar señal, con el mismo
 `clientActionId`. El envío se corta al primer corte de red: insistir con el
 resto solo gasta batería.
 
+## Icono
+
+El original está en `assets/icono_app.png` (1024×1024, sin canal alfa) y de ahí
+salen los dos juegos:
+
+* **iOS** — `ios/Runner/Assets.xcassets/AppIcon.appiconset`: el arte entero, tal
+  cual. La máscara de Apple redondea más que el marco del propio dibujo, así que
+  se come las esquinas negras y no queda ribete.
+* **Android** — `mipmap-*/ic_launcher.png` es el arte entero (lanzadores
+  antiguos) y `drawable-*/ic_launcher_foreground.png` es el contenido recortado
+  sobre transparente, sin el marco, que lo pone el sistema.
+
+El primer plano adaptativo va al **76 % de su lienzo**, y no es un número
+caprichoso: con el `inset` del 16 % de `mipmap-anydpi-v26/ic_launcher.xml`
+queda en 55 de los 108 dp, que es lo que cabe **entero** dentro del círculo de
+72 dp con el que recorta el lanzador de Pixel. Más grande y la línea «ASSIST
+LITE» se queda fuera por abajo. El fondo lo pone `ic_launcher_background`
+(slate-900), el mismo del arte.
+
+`assets/` no se declara en `pubspec.yaml` a propósito: son la fuente de los
+iconos, no recursos que la app cargue en tiempo de ejecución, y empaquetarlos
+sería medio mega de APK para nada.
+
+Tampoco se usa `flutter_launcher_icons`, y también a propósito: regenera el
+catálogo de iOS con las entradas de iPad, que es justo lo que aquí se ha
+quitado (la app es solo iPhone). Para rehacer los iconos se parte de
+`assets/icono_app.png` y se respetan los tamaños que ya hay.
+
 ## Plataforma Android
 
 `android/` **está en el repositorio** desde la versión 0.1.2. No hay que
