@@ -5,6 +5,8 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart' show exteriorMode;
+import '../services/biometria.dart';
+import '../services/sesion_segura.dart';
 import '../services/api_service.dart';
 import '../services/offline_store.dart';
 import '../theme/app_theme.dart';
@@ -37,12 +39,20 @@ class _AssistancesScreenState extends State<AssistancesScreen>
   String _appVersion = '';
   StreamSubscription<List<ConnectivityResult>>? _connSub;
 
+  /// El botón de biometría sólo aparece si el aparato puede hacerlo. En una
+  /// tablet de taller sin lector no pinta nada un icono que no lleva a ningún
+  /// sitio.
+  bool _biometriaSoportada = false;
+  bool _biometriaActivada = false;
+  bool _esFaceId = false;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 5, vsync: this);
     _loadTechName();
     _loadVersion();
+    _cargarEstadoBiometria();
     _load();
     // Al recuperar conexión, recargar (esto envía la cola de cambios pendientes)
     _connSub = Connectivity().onConnectivityChanged.listen((results) {
@@ -67,6 +77,19 @@ class _AssistancesScreenState extends State<AssistancesScreen>
         _tallerNombre = prefs.getString('tallerNombre') ?? '';
       });
     }
+  }
+
+  Future<void> _cargarEstadoBiometria() async {
+    final soportada = await Biometria.disponible();
+    if (!soportada) return;
+    final activada = await SesionSegura.biometriaActivada();
+    final face = await Biometria.esFaceId();
+    if (!mounted) return;
+    setState(() {
+      _biometriaSoportada = true;
+      _biometriaActivada = activada;
+      _esFaceId = face;
+    });
   }
 
   Future<void> _loadVersion() async {
@@ -107,8 +130,68 @@ class _AssistancesScreenState extends State<AssistancesScreen>
     await prefs.remove('empresaNombre');
     await prefs.remove('tallerNombre');
     await prefs.remove('tallerId');
+    // Cerrar sesión se lleva la credencial del Llavero y apaga el acceso
+    // biométrico: si no, la pantalla de acceso seguiría ofreciendo un «Entrar
+    // con Face ID» que abriría la sesión que el operario acaba de cerrar.
+    await SesionSegura.cerrarSesion();
     if (!mounted) return;
     Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen()));
+  }
+
+  /// Activar o desactivar el acceso biométrico desde la propia app.
+  Future<void> _gestionarBiometria() async {
+    final activada = await SesionSegura.biometriaActivada();
+    final face = await Biometria.esFaceId();
+    final nombre = face ? 'Face ID' : 'huella';
+    if (!mounted) return;
+
+    if (activada) {
+      final quitar = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Text('Desactivar $nombre', style: const TextStyle(color: AppColors.textPrimary)),
+          content: Text(
+            'Dejarás de poder entrar con $nombre. Seguirás entrando con tu '
+            'nombre y PIN de siempre.',
+            style: const TextStyle(color: AppColors.textSecondary),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar', style: TextStyle(color: AppColors.textSecondary))),
+            TextButton(onPressed: () => Navigator.pop(context, true),  child: const Text('Desactivar', style: TextStyle(color: AppColors.danger))),
+          ],
+        ),
+      );
+      if (quitar != true) return;
+      await SesionSegura.desactivarBiometria();
+      if (!mounted) return;
+      setState(() => _biometriaActivada = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Acceso con $nombre desactivado'), backgroundColor: AppColors.info));
+      return;
+    }
+
+    // Activar: se pide la biometría en el momento para que el operario vea
+    // que funciona, en vez de descubrirlo en el próximo arranque.
+    final r = await Biometria.autenticar(
+      'Confirma tu $nombre para activar el acceso rápido',
+    );
+    if (r == ResultadoBiometria.cancelado) return;
+    if (r != ResultadoBiometria.ok) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(r == ResultadoBiometria.noDisponible
+            ? 'Revisa la biometría en los ajustes del teléfono.'
+            : 'No se ha reconocido tu $nombre.'),
+        backgroundColor: AppColors.info));
+      return;
+    }
+    await SesionSegura.activarBiometria();
+    if (!mounted) return;
+    setState(() => _biometriaActivada = true);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Ya puedes entrar con $nombre'), backgroundColor: AppColors.info));
   }
 
   Future<void> _scanPlate() async {
@@ -240,6 +323,15 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                       ),
                       _TopBarIcon(icon: Icons.qr_code_scanner,        color: AppColors.info,          tooltip: 'Escanear matrícula', onPressed: _scanPlate),
                       _TopBarIcon(icon: Icons.refresh_outlined,      color: AppColors.textSecondary, tooltip: 'Actualizar',    onPressed: _load),
+                      if (_biometriaSoportada)
+                        _TopBarIcon(
+                          icon: _esFaceId ? Icons.face_retouching_natural : Icons.fingerprint,
+                          color: _biometriaActivada ? AppColors.primary : AppColors.textSecondary,
+                          tooltip: _biometriaActivada
+                              ? 'Acceso con ${_esFaceId ? 'Face ID' : 'huella'} activado'
+                              : 'Activar acceso con ${_esFaceId ? 'Face ID' : 'huella'}',
+                          onPressed: _gestionarBiometria,
+                        ),
                       _TopBarIcon(icon: Icons.logout,                 color: AppColors.danger,        tooltip: 'Cerrar sesión', onPressed: _logout),
                     ],
                   ),
