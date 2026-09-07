@@ -34,6 +34,8 @@ const MODULOS = [
   "workplanner",
   "cash",
   "central",
+  "tacografos",
+  "assist",
 ] as const;
 
 async function existe(tabla: string): Promise<boolean> {

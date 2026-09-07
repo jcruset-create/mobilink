@@ -21,7 +21,8 @@ export type ModuloApp = {
     | "workplanner"
     | "cash"
     | "central"
-    | "tacografos";
+    | "tacografos"
+    | "assist";
   label: string;
   roles: RolApp[];
   pantallas: PantallaApp[];
@@ -33,6 +34,14 @@ export type ModuloApp = {
 const ROL_ACCESO: RolApp[] = [{ value: "usuario", label: "Usuario" }];
 
 export const MODULOS_APP: ModuloApp[] = [
+  {
+    key: "assist",
+    label: "Mobilink Assist",
+    // Asistencias en carretera. Sin pantallas gateadas: el acceso es al
+    // módulo entero, y sirve para que la cabecera de los demás enseñe su icono.
+    roles: ROL_ACCESO,
+    pantallas: [],
+  },
   {
     key: "administracion",
     label: "Administración",
