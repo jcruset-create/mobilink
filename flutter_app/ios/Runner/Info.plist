@@ -43,6 +43,8 @@
 	<string>Mobilink Assist usa la cámara para fotografiar matrículas, averías y reparaciones de las asistencias.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Mobilink Assist accede a tus fotos para adjuntar imágenes a las asistencias.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Usamos Face ID para permitirte acceder rápidamente a Mobilink Assist de forma segura.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Mobilink Assist usa tu ubicación para el seguimiento del trayecto hasta el punto de avería y el regreso al taller.</string>
 </dict>
