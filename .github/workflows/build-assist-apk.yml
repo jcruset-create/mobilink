@@ -77,6 +77,20 @@ jobs:
       # es la única fuente de verdad.
       - run: dart run flutter_launcher_icons
 
+      # Y acto seguido se le quitan los iconos de iPad que acaba de meter.
+      #
+      # Mobilink Assist es iPhone only desde el rechazo 90474 de Apple, pero
+      # flutter_launcher_icons reescribe el Contents.json de iOS con TODOS los
+      # idioms. Sin este paso, cada cambio de icono devuelve al catálogo un
+      # iPad que la app ya no soporta, y nadie se entera hasta la siguiente
+      # subida. Limpiarlo a mano no vale: vuelve al siguiente cambio.
+      #
+      # El script es idempotente, así que da igual que se ejecute cuando no
+      # hay nada que podar.
+      - name: Quitar del catálogo de iOS los iconos de iPad
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/podar-iconos-ipad.py
+
       - run: flutter analyze --no-fatal-infos
 
       # Diagnóstico: solo longitudes, nunca el contenido. Sirve para distinguir

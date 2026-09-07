@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { Menu, LogOut, Home } from "lucide-react";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -6,8 +6,7 @@ import { NAV, navVisible, SIEMPRE_VISIBLES } from "../config/navigation";
 import { ROL_LABELS } from "../types";
 import AlertasWebfleet from "../components/AlertasWebfleet";
 import AsistenteChat from "../components/AsistenteChat";
-import { supabase } from "../services/supabase";
-import iconoAssist from "../../../assets/hub/icono-assist.png";
+import AccesosCabecera from "../../../components/AccesosCabecera";
 
 export default function TyreLayout() {
   const { perfil, pantallas, signOut } = useTyreAuth();
@@ -17,25 +16,6 @@ export default function TyreLayout() {
 
   const esSuperadmin = Boolean(perfil?.es_superadmin);
   const items = NAV.filter((i) => navVisible(i, perfil?.rol, esSuperadmin, pantallas));
-
-  // Acceso directo a Mobilink Assist: solo si la empresa tiene licencia del
-  // módulo y el usuario acceso a él. app_mis_modulos ya cruza las dos cosas;
-  // el superadmin lo ve siempre. Si la RPC no existe (base sin la fase SaaS)
-  // no se enseña nada: mejor un botón de menos que uno que lleva a un 403.
-  const [conAssist, setConAssist] = useState(false);
-  useEffect(() => {
-    let vivo = true;
-    (async () => {
-      if (esSuperadmin) { setConAssist(true); return; }
-      try {
-        const { data, error } = await supabase.rpc("app_mis_modulos");
-        if (error) throw error;
-        const mods = new Set((data ?? []).map((r: { modulo: string }) => r.modulo));
-        if (vivo) setConAssist(mods.has("assist") || mods.has("asistencias"));
-      } catch { if (vivo) setConAssist(false); }
-    })();
-    return () => { vivo = false; };
-  }, [esSuperadmin, perfil?.id]);
 
   // Gating por URL (usuarios unificados): bloquea también el acceso directo
   const pantallaActual = location.pathname.split("/")[2] || "dashboard";
@@ -80,13 +60,7 @@ export default function TyreLayout() {
               {perfil?.empresa?.nombre ? ` · ${perfil.empresa.nombre}` : ""}
             </div>
           </div>
-          {conAssist && (
-            <button onClick={() => navigate("/asistencias")} title="Ir a Mobilink Assist"
-              className="flex items-center gap-1.5 rounded-lg bg-slate-800 px-2 py-1 text-[12px] font-medium text-slate-200 hover:bg-slate-700">
-              <img src={iconoAssist} alt="Mobilink Assist" className="h-6 w-6 rounded-md" />
-              <span className="hidden md:inline">Assist</span>
-            </button>
-          )}
+          <AccesosCabecera actual="tyrecontrol" />
           <button onClick={() => navigate("/inicio")} title="Volver al inicio" className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700">
             <Home className="h-4 w-4" /> Inicio
           </button>
