@@ -70,6 +70,182 @@ solo vivía en memoria— y se suben solas al recuperar señal, con el mismo
 `clientActionId`. El envío se corta al primer corte de red: insistir con el
 resto solo gasta batería.
 
+## Icono
+
+El original está en `assets/icono_app.png` (1024×1024, sin canal alfa) y de ahí
+salen los dos juegos:
+
+* **iOS** — `ios/Runner/Assets.xcassets/AppIcon.appiconset`: el arte entero, tal
+  cual. La máscara de Apple redondea más que el marco del propio dibujo, así que
+  se come las esquinas negras y no queda ribete.
+* **Android** — `mipmap-*/ic_launcher.png` es el arte entero (lanzadores
+  antiguos) y `drawable-*/ic_launcher_foreground.png` es el contenido recortado
+  sobre transparente, sin el marco, que lo pone el sistema.
+
+El primer plano adaptativo va al **76 % de su lienzo**, y no es un número
+caprichoso: con el `inset` del 16 % de `mipmap-anydpi-v26/ic_launcher.xml`
+queda en 55 de los 108 dp, que es lo que cabe **entero** dentro del círculo de
+72 dp con el que recorta el lanzador de Pixel. Más grande y la línea «ASSIST
+LITE» se queda fuera por abajo. El fondo lo pone `ic_launcher_background`
+(slate-900), el mismo del arte.
+
+Tampoco se usa `flutter_launcher_icons`, y también a propósito: regenera el
+catálogo de iOS con las entradas de iPad, que es justo lo que aquí se ha
+quitado (la app es solo iPhone). Para rehacer los iconos se parte de
+`assets/icono_app.png` y se respetan los tamaños que ya hay.
+
+De `assets/` solo se empaquetan los dos logotipos (`pubspec.yaml`). Los dos
+iconos, no: son la fuente de los ficheros de Android e iOS, no algo que la app
+cargue en marcha, y meterlos en la APK sería casi un mega por nada.
+
+## Logotipo
+
+`assets/logo_horizontal.png` — el logotipo completo, con el lema, sobre fondo
+transparente. Se usa en las dos portadas: la pantalla de arranque
+(`main.dart`) y el login.
+
+`assets/logo_cabecera.png` — el mismo, **sin el lema**, para la barra de la
+bandeja. A 26 px de alto la línea «asistencias en carretera para talleres
+furgón móviles» no se lee y solo ensucia; el nombre del taller sigue debajo,
+que es el dato que el operario necesita ver.
+
+El fondo se quitó por color (el original venía sobre un degradado azul marino),
+no recortando a mano: se marca como fondo lo que cae en el rango del degradado
+y se deja todo lo demás, así las ventanillas y las ruedas del furgón —oscuras,
+pero fuera de ese rango— no se agujerean.
+
+## Acceso: condiciones, taller recordado y Face ID
+
+El objetivo de este flujo es que el operario abra la app y esté dentro. Tres
+piezas, en `lib/services/preferencias.dart` (ajustes del móvil),
+`lib/services/secure_store.dart` (llavero) y `lib/services/biometria.dart`.
+
+### Primera instalación
+
+```
+abrir → condiciones → permiso de ubicación → taller + usuario + PIN → ¿Face ID?
+```
+
+`onboarding_screen.dart` se enseña una sola vez y **es la que pide la
+ubicación**, justo después de aceptar. Antes el permiso se pedía en mitad del
+login, mientras el operario escribía su PIN: ahí el diálogo se contesta que no
+sin leerlo, y en iOS **no hay segunda oportunidad** —la única salida es
+Ajustes—. Se pide solo «mientras se usa la app», que es lo que necesita el
+seguimiento; nunca «siempre».
+
+Decir que no NO bloquea nada: se sigue al login y la app funciona, con el aviso
+de la bandeja explicando qué se pierde.
+
+### Accesos siguientes
+
+```
+abrir → Face ID → dentro
+```
+
+El código de taller se rellena solo (`Recordar el taller en este móvil`, marcado
+de serie; se borra con la X del campo o desde Perfil). Es un dato de
+organización, no una credencial: sin usuario y PIN no abre nada.
+
+Si el operario activó la biometría, `bloqueo_screen.dart` pide Face ID / huella
+al arrancar. **No reintenta solo**: si falla o se cancela queda el botón, y
+debajo «Entrar con usuario y PIN». Reintentar en bucle es la forma más rápida
+de que el sistema bloquee la biometría por intentos fallidos y deje al operario
+fuera con una avería esperando.
+
+### Qué se guarda y dónde
+
+| Dato | Dónde | Por qué |
+| --- | --- | --- |
+| Token de sesión | **Llavero** (Keychain / Keystore) | Es la credencial, y ahora la abre una huella |
+| Usuario, taller, configuración | `shared_preferences` | Datos de trabajo, no secretos |
+| Código de taller recordado | `shared_preferences` | No da acceso por sí solo |
+| PIN | **En ninguna parte** | Nunca se guarda, ni cifrado |
+
+El token se movió de `shared_preferences` al llavero con migración: quien ya
+tenía sesión abierta sigue dentro tras actualizar.
+
+Y una consecuencia del llavero que hay que atajar a mano: **en iOS sobrevive a
+desinstalar la app**. Borrarla y reinstalarla —lo primero que se prueba cuando
+algo va mal— dejaría el token dentro y la app entraría sola con una sesión que
+el operario creía cerrada. `Session.restore` lo detecta porque las
+preferencias sí se borran con la app: un token sin nada que lo acompañe solo
+puede ser basura de la instalación anterior, así que se tira y se pide login.
+Actualizar no cae ahí, que es lo que protege la migración.
+
+Al cerrar sesión se olvida la biometría (esa cara abría *esa* sesión), pero el
+taller recordado se queda: es del móvil, no de la persona.
+
+### Lo que esto obliga en cada plataforma
+
+* **iOS** — `NSFaceIDUsageDescription` en el `Info.plist`. Sin ese texto, iOS
+  mata la app al pedir Face ID. Touch ID no necesita clave propia.
+* **Android** — `minSdk` sube de 21 a **24**, que es lo que exige
+  `local_auth_android` (`flutter_secure_storage` pide 23), y `MainActivity`
+  pasa a `FlutterFragmentActivity`, porque el diálogo de huella se dibuja como
+  fragmento. Más el permiso `USE_BIOMETRIC`, que es «normal»: no saca diálogo
+  ni da acceso a los datos biométricos.
+
+## Evidencias obligatorias
+
+Hay tres momentos en los que la app no deja seguir sin la prueba del trabajo.
+El criterio vive en **un solo sitio**, `lib/services/requisitos.dart`, y es el
+mismo que enseña el marcador y el que bloquea el botón: lo que sale en verde
+es lo que deja avanzar.
+
+| Momento | Obligatorio |
+| --- | --- |
+| Pasar a **Trabajando** | Foto de la matrícula · foto de la avería |
+| **Cerrar** el servicio | Lo anterior + foto de la reparación + firma con nombre y DNI |
+| Si hay **neumático nuevo** confirmado | Foto del montaje |
+
+Con una excepción: en **«Cliente ausente»** y **«Servicio cancelado»** no se
+pide la foto de la reparación, porque no hubo vehículo que tocar. Todo lo
+demás se sigue exigiendo igual —el operario se desplazó y el cliente firma que
+el servicio se dio por cerrado—, y el resto de resultados sí la piden: en «no
+reparado» o «trasladado» hubo intervención, y esa es justo la foto que la
+central necesita. Los códigos están en `Requisitos.resultadosSinTrabajo`.
+
+`requisitos.dart` es el gemelo en el móvil de `validateFinish`
+(`server/connect/liteRules.ts`): mismos códigos de categoría, misma idea de
+devolver la lista de lo que falta en vez de un sí/no. El servidor sigue
+validando por su cuenta —un cliente viejo no puede saltárselo—; esto solo
+evita que el operario se entere al final, con el cliente delante.
+
+**No se inventa ninguna categoría.** Se usan las de `EVIDENCE_CATEGORIES`:
+`arrival` para la matrícula, `damage` para la avería, `work` para la
+reparación y `mounting` para el montaje. El backend convierte a `other`
+cualquier código que no conozca, así que una categoría nueva se perdería de
+vista en Central.
+
+### Qué se ha traído de Assist Pro
+
+`arrival_photos_screen.dart` está calcado en estructura del de Pro
+(`flutter_app/lib/screens/arrival_photos_screen.dart`): huecos obligatorios,
+miniatura en cuanto se hace la foto, botón apagado hasta que están todas y el
+cambio de estado en su `onDone`. También sus dos calidades de compresión —la
+matrícula más grande, que hay que poder leerla; el resto más ligero, que sube
+con mala cobertura—, ahora en `Camara.fotoParaEvidencia`.
+
+Lo que **no** se ha traído: el OCR de matrícula (en Pro lo hace su backend, y
+la API de Lite no tiene esa ruta) y el hueco de matrícula de remolque.
+
+### Sin cobertura
+
+Las fotos y la firma van a `FileQueue`, como el resto de evidencias: se
+guardan en el almacenamiento privado antes de intentar subirlas, así que una
+foto hecha en un punto sin señal no se pierde ni al cerrar la app.
+
+La comprobación mira **tres sitios** y suma: lo que confirma el servidor, lo
+que espera en la cola y el rastro de categorías ya subidas
+(`FileQueue.categoriasSubidas`). Ese rastro existe por un motivo concreto: la
+cola borra el registro en cuanto la central confirma la subida, y sin él una
+comprobación sin cobertura diría que falta la foto de matrícula que el
+operario hizo hace media hora. Una evidencia **rechazada** por la central no
+cuenta: si contara, el servicio se cerraría creyéndola entregada.
+
+Cerrar el servicio **sí necesita conexión** —lo valida la central—, pero las
+evidencias se pueden registrar todas antes, sin señal.
+
 ## Plataforma Android
 
 `android/` **está en el repositorio** desde la versión 0.1.2. No hay que
@@ -108,6 +284,83 @@ sí lo cubriría es un servicio con motor Flutter propio
 
 `google-services.json` y `key.properties` no están en el repositorio, que es
 público: los inyecta la CI desde secretos.
+
+## Plataforma iOS (App Store / TestFlight)
+
+`ios/` está en el repositorio desde la versión 0.5.0. La app es **solo iPhone**
+(`TARGETED_DEVICE_FAMILY = 1` en las tres configuraciones): no se declara nada
+de iPad, ni orientaciones `~ipad`, ni iconos de iPad en el catálogo. Declarar
+soporte de iPad a medias es lo que provoca el rechazo `90474 Invalid bundle`.
+
+| | |
+| --- | --- |
+| Bundle id | `com.mobilink.assistlite` (Apple no admite `_`, así que no puede ser igual que el `com.mobilink.assist_lite` de Android) |
+| Nombre visible | Mobilink Assist Lite |
+| Mínimo | iOS 13.0, que es lo que piden `firebase_core` y `firebase_messaging`; el resto de plugins se conforman con menos |
+| Flutter | 3.35.4, fijo también en Codemagic |
+
+El mínimo de iOS y la versión de Flutter van atados: Flutter 3.47 sube el
+mínimo del motor a iOS 15 y entonces `pod install` falla con «required a higher
+minimum deployment target». Se cambian los dos a la vez —proyecto y Podfile— o
+no se cambia ninguno.
+
+### Permisos
+
+Solo los que el código pide de verdad; un texto de uso sobrante es motivo de
+rechazo y un permiso sin texto revienta la app al pedirlo.
+
+| Clave | Quién lo usa |
+| --- | --- |
+| `NSCameraUsageDescription` | `lib/services/camara.dart` (evidencias) |
+| `NSPhotoLibraryUsageDescription` | `Camara.elegirDeGaleria` desde `photos_screen.dart` |
+| `NSLocationWhenInUseUsageDescription` | `lib/services/tracker.dart` |
+| `UIBackgroundModes: location` | el equivalente del servicio en primer plano de Android |
+| `ITSAppUsesNonExemptEncryption = false` | solo HTTPS del sistema, sin criptografía propia |
+
+**No** se pide el permiso de ubicación «siempre», igual que en Android no se
+declara `ACCESS_BACKGROUND_LOCATION`: el seguimiento lo arranca el operario con
+la app delante y con `allowBackgroundLocationUpdates` basta para que iOS siga
+entregando posiciones con la pantalla bloqueada. Mientras dura, el sistema
+enseña el indicador azul, que hace de aviso permanente.
+
+`PrivacyInfo.xcprivacy` va registrado en el target Runner: sin tracking, sin
+APIs de motivo obligatorio propias, y los datos que sí se recogen (nombre,
+identificador de sesión, ubicación precisa, fotos y firma) vinculados al
+operario y solo para el funcionamiento de la app.
+
+### Subir a TestFlight
+
+Lo hace el workflow `ios-lite-testflight` de `codemagic.yaml`, independiente de
+los de Mobilink Assist y TyreControl. Pide el número de build a App Store
+Connect (último de TestFlight + 1), pasa la versión de tienda por flag —el
+`version:` del pubspec es la numeración de la APK y no se toca—, comprueba que
+`export_options.plist` existe antes de compilar y que el `.ipa` existe después,
+y lo copia a `$HOME/ipa_output` para que `artifacts:` lo encuentre con
+`working_directory` puesto.
+
+Antes del primer build hacen falta tres cosas fuera del repositorio:
+
+1. el App ID `com.mobilink.assistlite` en Apple Developer,
+2. la ficha de la app en App Store Connect con ese mismo bundle id,
+3. la integración de App Store Connect en Codemagic llamada exactamente
+   **Mobilink Assist Lite**.
+
+En local, en un Mac:
+
+```bash
+flutter pub get
+cd ios && pod install && cd ..
+flutter build ipa --release --build-name=1.0 --build-number=1
+```
+
+### Avisos push en iPhone
+
+Falta lo mismo que en Android y una cosa más: dar de alta
+`com.mobilink.assistlite` en el proyecto de Firebase, guardar su
+`GoogleService-Info.plist` (que **no** va al repositorio, es público) y subir a
+Firebase la clave de APNs. Hasta entonces `Firebase.initializeApp()` falla, se
+registra y la app se queda con el sondeo de la bandeja, exactamente igual que
+la APK sin `google-services.json`.
 
 ## Compilar
 
