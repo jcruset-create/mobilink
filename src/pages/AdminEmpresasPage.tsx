@@ -30,6 +30,7 @@ type Licencia = {
 };
 
 const MODULOS = [
+  "assist",
   "taller",
   "workplanner",
   "administracion",
