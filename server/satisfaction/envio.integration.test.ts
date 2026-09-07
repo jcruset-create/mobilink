@@ -88,6 +88,19 @@ async function encolada(o: {
   return { id: c.instancia.id, assistanceId, ambito };
 }
 
+/**
+ * Reclama para envío la encuesta de esta prueba.
+ *
+ * El tope no es un capricho: `reclamarParaEnvio` se lleva las 25 más antiguas
+ * por `sendAfterMs`, y la base de pruebas acumula decenas de encuestas
+ * encoladas que dejan las demás pruebas. La recién creada es la más nueva, así
+ * que a partir de cierto momento se quedaba fuera del lote y la prueba fallaba
+ * por lo que había alrededor, no por lo que estaba comprobando. Con un tope
+ * amplio se reclama por lo que la prueba hace, no por cuántas la preceden.
+ */
+const reclamar = async (id: number, ahoraMs?: number) =>
+  (await envio.reclamarParaEnvio(ahoraMs, 1_000)).find((x) => x.id === id);
+
 const instancia = async (id: number) =>
   (await db.query(`SELECT * FROM survey_instances WHERE id = $1`, [id])).rows[0];
 const entregas = async (id: number) =>
@@ -157,10 +170,10 @@ describe.skipIf(!RUN)("envío inicial", () => {
     const e = await encolada();
     const { adaptador, llamadas } = adaptadorFalso(OK("SMuno"));
 
-    const reclamadas = await envio.reclamarParaEnvio();
-    expect(reclamadas.map((r) => r.id)).toContain(e.id);
+    const reclamada = await reclamar(e.id);
+    expect(reclamada).toBeDefined();
 
-    const r = await envio.enviarInicial(reclamadas.find((x) => x.id === e.id)!, adaptador);
+    const r = await envio.enviarInicial(reclamada!, adaptador);
     expect(r).toMatchObject({ estado: "enviado", sid: "SMuno" });
 
     expect(llamadas).toHaveLength(1);
@@ -187,7 +200,7 @@ describe.skipIf(!RUN)("envío inicial", () => {
   it("la URL del mensaje es la que abre la miniweb", async () => {
     const e = await encolada();
     const { adaptador, llamadas } = adaptadorFalso(OK("SMdos"));
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!, adaptador);
+    await envio.enviarInicial(await reclamar(e.id)!, adaptador);
 
     const token = llamadas[0].url.split("/").pop()!;
     const publico = await import("./publico.ts");
@@ -206,9 +219,9 @@ describe.skipIf(!RUN)("no se manda dos veces", () => {
      * Los dos reclaman antes de que ninguno haya enviado. Es exactamente la
      * carrera que puede darse con dos instancias en Render.
      */
-    const a = (await envio.reclamarParaEnvio(Date.now())).find((x) => x.id === e.id);
+    const a = await reclamar(e.id, Date.now());
     // El segundo no la ve porque el primero ya tiene el lease…
-    const b = (await envio.reclamarParaEnvio(Date.now())).find((x) => x.id === e.id);
+    const b = await reclamar(e.id, Date.now());
     expect(a).toBeTruthy();
     expect(b).toBeUndefined();
 
@@ -275,18 +288,17 @@ describe.skipIf(!RUN)("no se manda dos veces", () => {
   it("volver a pasar después de enviar no reenvía", async () => {
     const e = await encolada();
     const primera = adaptadorFalso(OK("SMx"));
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+    await envio.enviarInicial(await reclamar(e.id)!,
                               primera.adaptador);
 
     // La encuesta ya está en SENT: la reclamación ni la mira.
-    const otra = await envio.reclamarParaEnvio();
-    expect(otra.map((x) => x.id)).not.toContain(e.id);
+    expect(await reclamar(e.id)).toBeUndefined();
     expect((await entregas(e.id))).toHaveLength(1);
   });
 
   it("no manda si ya la han contestado entre reclamar y enviar", async () => {
     const e = await encolada();
-    const reclamada = (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!;
+    const reclamada = await reclamar(e.id)!;
     // Contesta justo ahora, con el worker ya en marcha.
     await db.query(
       `UPDATE survey_instances SET status = 'COMPLETED', "completedAtMs" = $2 WHERE id = $1`,
@@ -300,7 +312,7 @@ describe.skipIf(!RUN)("no se manda dos veces", () => {
 
   it("no manda una caducada, y la marca EXPIRED", async () => {
     const e = await encolada();
-    const reclamada = (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!;
+    const reclamada = await reclamar(e.id)!;
     await db.query(`UPDATE survey_instances SET "expiresAtMs" = $2 WHERE id = $1`,
                    [e.id, Date.now() - 1000]);
 
@@ -313,7 +325,7 @@ describe.skipIf(!RUN)("no se manda dos veces", () => {
 
   it("una cancelada tampoco se manda", async () => {
     const e = await encolada();
-    const reclamada = (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!;
+    const reclamada = await reclamar(e.id)!;
     await db.query(`UPDATE survey_instances SET status = 'CANCELLED' WHERE id = $1`, [e.id]);
     const { adaptador, llamadas } = adaptadorFalso(OK("SMno"));
     expect((await envio.enviarInicial(reclamada, adaptador)).estado).toBe("descartado");
@@ -326,7 +338,7 @@ describe.skipIf(!RUN)("no se manda dos veces", () => {
 describe.skipIf(!RUN)("el token sobrevive a una caída", () => {
   it("si el proceso muere entre emitir y enviar, el reintento usa el MISMO enlace", async () => {
     const e = await encolada();
-    const reclamada = (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!;
+    const reclamada = await reclamar(e.id)!;
 
     // Se emite el token y ahí se «muere» el proceso: nunca se llama a Twilio.
     const emision = await svc.emitirToken(e.id, e.ambito);
@@ -347,7 +359,7 @@ describe.skipIf(!RUN)("el token sobrevive a una caída", () => {
   it("el recordatorio manda el mismo enlace que el inicial, no uno nuevo", async () => {
     const e = await encolada();
     const inicial = adaptadorFalso(OK("SMini"));
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+    await envio.enviarInicial(await reclamar(e.id)!,
                               inicial.adaptador);
 
     await cfg.guardarConfigGlobal({ recordatorio: true });
@@ -367,7 +379,7 @@ describe.skipIf(!RUN)("el token sobrevive a una caída", () => {
 
   it("el token no sale por la API interna de la ficha", async () => {
     const e = await encolada();
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+    await envio.enviarInicial(await reclamar(e.id)!,
                               adaptadorFalso(OK("SMt")).adaptador);
     const cal = await import("./calidad.ts");
     const ficha = await cal.obtenerSatisfactionDeAsistencia(e.assistanceId, TALLER);
@@ -387,7 +399,7 @@ describe.skipIf(!RUN)("falta la plantilla", () => {
       estado: "sin_configurar", motivo: "no_template_satisfaction_driver",
     });
 
-    const reclamada = (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!;
+    const reclamada = await reclamar(e.id)!;
     const r = await envio.enviarInicial(reclamada, adaptador);
     expect(r).toMatchObject({ estado: "bloqueado", motivo: "no_template_satisfaction_driver" });
 
@@ -404,21 +416,20 @@ describe.skipIf(!RUN)("falta la plantilla", () => {
     expect((await entregas(e.id))[0].status).toBe("SKIPPED");
 
     // Otra pasada del worker: no la vuelve a coger, así que no crea otra fila.
-    const otra = await envio.reclamarParaEnvio();
-    expect(otra.map((x) => x.id)).not.toContain(e.id);
+    expect(await reclamar(e.id)).toBeUndefined();
     expect(await entregas(e.id)).toHaveLength(1);
   });
 
   it("cuando aparece la plantilla, sale sola", async () => {
     delete process.env.TWILIO_TEMPLATE_SATISFACTION_DRIVER;
     const e = await encolada();
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+    await envio.enviarInicial(await reclamar(e.id)!,
       adaptadorFalso({ estado: "sin_configurar", motivo: "no_template_satisfaction_driver" }).adaptador);
 
     // Se configura la plantilla y pasa la hora de espera.
     process.env.TWILIO_TEMPLATE_SATISFACTION_DRIVER = "HXya";
     const luego = Date.now() + 3_700_000;
-    const reclamada = (await envio.reclamarParaEnvio(luego)).find((x) => x.id === e.id);
+    const reclamada = await reclamar(e.id, luego);
     expect(reclamada).toBeTruthy();
 
     const ok = adaptadorFalso(OK("SMporfin"));
@@ -435,7 +446,7 @@ describe.skipIf(!RUN)("errores del proveedor", () => {
     const e = await encolada();
     const { adaptador } = adaptadorFalso(PASAJERO);
     const r = await envio.enviarInicial(
-      (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!, adaptador);
+      await reclamar(e.id)!, adaptador);
 
     expect(r.estado).toBe("reintentar");
     const i = await instancia(e.id);
@@ -444,7 +455,7 @@ describe.skipIf(!RUN)("errores del proveedor", () => {
     expect(Number(i.nextAttemptAtMs)).toBeGreaterThan(Date.now());
     expect((await entregas(e.id))[0].status).toBe("FAILED");
     // Y hasta que no llegue su hora, la reclamación no la coge.
-    expect((await envio.reclamarParaEnvio()).map((x) => x.id)).not.toContain(e.id);
+    expect(await reclamar(e.id)).toBeUndefined();
   });
 
   it("se agotan los intentos y la encuesta acaba en FAILED, sin bucle", async () => {
@@ -452,7 +463,7 @@ describe.skipIf(!RUN)("errores del proveedor", () => {
     const { adaptador, llamadas } = adaptadorFalso(PASAJERO);
     let ahora = Date.now();
     for (let i = 0; i < 8; i++) {
-      const reclamada = (await envio.reclamarParaEnvio(ahora)).find((x) => x.id === e.id);
+      const reclamada = await reclamar(e.id, ahora);
       if (!reclamada) break;
       await envio.enviarInicial(reclamada, adaptador, ahora);
       ahora += 5 * 3_600_000;
@@ -468,11 +479,11 @@ describe.skipIf(!RUN)("errores del proveedor", () => {
     const e = await encolada();
     const { adaptador, llamadas } = adaptadorFalso(PERMANENTE);
     const r = await envio.enviarInicial(
-      (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!, adaptador);
+      await reclamar(e.id)!, adaptador);
 
     expect(r).toMatchObject({ estado: "fallido", motivo: "error_permanente" });
     expect((await instancia(e.id)).status).toBe("FAILED");
-    expect((await envio.reclamarParaEnvio()).map((x) => x.id)).not.toContain(e.id);
+    expect(await reclamar(e.id)).toBeUndefined();
     expect(llamadas).toHaveLength(1);
     expect((await entregas(e.id))[0].errorCode).toBe("21211");
   });
@@ -482,7 +493,7 @@ describe.skipIf(!RUN)("errores del proveedor", () => {
     const e = await encolada({ caducaEnMs: 5 * 60_000 });
     const { adaptador } = adaptadorFalso(PASAJERO);
     const r = await envio.enviarInicial(
-      (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!, adaptador);
+      await reclamar(e.id)!, adaptador);
     expect(r).toMatchObject({ estado: "fallido", motivo: "sin_plazo" });
     expect((await instancia(e.id)).status).toBe("FAILED");
   });
@@ -495,7 +506,7 @@ describe.skipIf(!RUN)("intento ambiguo", () => {
     const e = await encolada();
     const { adaptador, llamadas } = adaptadorFalso(SIN_RESPUESTA);
     const r = await envio.enviarInicial(
-      (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!, adaptador);
+      await reclamar(e.id)!, adaptador);
 
     expect(r.estado).toBe("ambiguo");
     expect((await entregas(e.id))[0].status).toBe("UNKNOWN");
@@ -503,17 +514,15 @@ describe.skipIf(!RUN)("intento ambiguo", () => {
     expect(i.status).toBe("QUEUED");
     expect(i.blockedReason).toBe("reconcile_required");
     // LO IMPORTANTE: la siguiente pasada NO manda un segundo WhatsApp.
-    const otra = await envio.reclamarParaEnvio();
-    for (const a of otra.filter((x) => x.id === e.id)) {
-      await envio.enviarInicial(a, adaptador);
-    }
+    const otra = await reclamar(e.id);
+    if (otra) await envio.enviarInicial(otra, adaptador);
     expect(llamadas).toHaveLength(1);
   });
 
   it("si el proveedor dice que SÍ salió, se adopta su SID y queda enviada", async () => {
     const e = await encolada();
     await envio.enviarInicial(
-      (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+      await reclamar(e.id)!,
       adaptadorFalso(SIN_RESPUESTA).adaptador);
 
     const luego = Date.now() + 120_000;
@@ -532,7 +541,7 @@ describe.skipIf(!RUN)("intento ambiguo", () => {
   it("si el proveedor dice que NO salió, se puede reintentar sin duplicar", async () => {
     const e = await encolada();
     await envio.enviarInicial(
-      (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+      await reclamar(e.id)!,
       adaptadorFalso(SIN_RESPUESTA).adaptador);
 
     const luego = Date.now() + 120_000;
@@ -542,7 +551,7 @@ describe.skipIf(!RUN)("intento ambiguo", () => {
     expect(r.map((x) => x.estado)).toContain("no_se_mando");
 
     expect((await entregas(e.id))[0].status).toBe("FAILED");
-    const reclamada = (await envio.reclamarParaEnvio(luego)).find((x) => x.id === e.id);
+    const reclamada = await reclamar(e.id, luego);
     expect(reclamada).toBeTruthy();
     const ok = adaptadorFalso(OK("SMsegundo"));
     expect((await envio.enviarInicial(reclamada!, ok.adaptador, luego)).estado).toBe("enviado");
@@ -553,7 +562,7 @@ describe.skipIf(!RUN)("intento ambiguo", () => {
   it("sin poder preguntar al proveedor, sigue en duda y no se reenvía", async () => {
     const e = await encolada();
     await envio.enviarInicial(
-      (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+      await reclamar(e.id)!,
       adaptadorFalso(SIN_RESPUESTA).adaptador);
 
     const luego = Date.now() + 120_000;
@@ -562,7 +571,7 @@ describe.skipIf(!RUN)("intento ambiguo", () => {
     const r = await reconcil.reconciliarAmbiguos(async () => { throw new Error("sin red"); }, luego);
     expect(r[0].estado).toBe("sigue_en_duda");
     expect((await entregas(e.id))[0].status).toBe("UNKNOWN");
-    expect((await envio.reclamarParaEnvio(luego)).map((x) => x.id)).not.toContain(e.id);
+    expect(await reclamar(e.id, luego)).toBeUndefined();
   });
 });
 
@@ -571,12 +580,12 @@ describe.skipIf(!RUN)("intento ambiguo", () => {
 describe.skipIf(!RUN)("lease", () => {
   it("un worker muerto no deja la encuesta bloqueada para siempre", async () => {
     const e = await encolada();
-    await envio.reclamarParaEnvio();                    // alguien la reclama…
-    expect((await envio.reclamarParaEnvio()).map((x) => x.id)).not.toContain(e.id);
+    expect(await reclamar(e.id)).toBeDefined();         // alguien la reclama…
+    expect(await reclamar(e.id)).toBeUndefined();
 
     // …y no vuelve. Pasados los diez minutos, otro la recoge.
     const luego = Date.now() + 11 * 60_000;
-    expect((await envio.reclamarParaEnvio(luego)).map((x) => x.id)).toContain(e.id);
+    expect(await reclamar(e.id, luego)).toBeDefined();
   });
 });
 
@@ -585,7 +594,7 @@ describe.skipIf(!RUN)("lease", () => {
 describe.skipIf(!RUN)("estados del proveedor", () => {
   async function enviada() {
     const e = await encolada();
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+    await envio.enviarInicial(await reclamar(e.id)!,
                               adaptadorFalso(OK(`SM${e.id}`)).adaptador);
     return { ...e, sid: `SM${e.id}` };
   }
@@ -642,7 +651,7 @@ describe.skipIf(!RUN)("estados del proveedor", () => {
 describe.skipIf(!RUN)("recordatorio", () => {
   async function enviadaYVencida(o: { recordatorio?: boolean } = {}) {
     const e = await encolada();
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+    await envio.enviarInicial(await reclamar(e.id)!,
                               adaptadorFalso(OK(`SM${e.id}`)).adaptador);
     await cfg.guardarConfigGlobal({ recordatorio: o.recordatorio ?? true });
     await db.query(`UPDATE survey_instances SET "reminderAfterMs" = $2 WHERE id = $1`,
@@ -698,7 +707,7 @@ describe.skipIf(!RUN)("recordatorio", () => {
 
   it("no se manda si el inicial nunca llegó a aceptarse", async () => {
     const e = await encolada();
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+    await envio.enviarInicial(await reclamar(e.id)!,
                               adaptadorFalso(PERMANENTE).adaptador);
     await cfg.guardarConfigGlobal({ recordatorio: true });
     // Aunque alguien pusiera la fecha a mano, la encuesta está en FAILED.
@@ -710,7 +719,7 @@ describe.skipIf(!RUN)("recordatorio", () => {
   it("la hora del recordatorio se congela al aceptarse el envío", async () => {
     const e = await encolada();
     await cfg.guardarConfigGlobal({ recordatorioHoras: 24 });
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+    await envio.enviarInicial(await reclamar(e.id)!,
                               adaptadorFalso(OK("SMc")).adaptador);
     const antes = Number((await instancia(e.id)).reminderAfterMs);
 
@@ -731,7 +740,7 @@ describe.skipIf(!RUN)("destinatario", () => {
       [e.assistanceId]);
 
     const { adaptador, llamadas } = adaptadorFalso(OK("SMcongelado"));
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+    await envio.enviarInicial(await reclamar(e.id)!,
                               adaptador);
     expect(llamadas[0].telefono).toBe("+34600111222");
   });
@@ -740,7 +749,7 @@ describe.skipIf(!RUN)("destinatario", () => {
     const e = await encolada({ telefono: null });
     const { adaptador, llamadas } = adaptadorFalso(OK("SMno"));
     const r = await envio.enviarInicial(
-      (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!, adaptador);
+      await reclamar(e.id)!, adaptador);
     expect(r).toMatchObject({ estado: "bloqueado", motivo: "no_recipient" });
     expect(llamadas).toHaveLength(0);
     expect(await entregas(e.id)).toHaveLength(0);
@@ -814,7 +823,7 @@ describe.skipIf(!RUN)("un cliente apagado a mano", () => {
     });
 
     const { adaptador, llamadas } = adaptadorFalso(OK("SMno"));
-    const reclamada = (await envio.reclamarParaEnvio()).find((x) => x.id === inst.instancia.id)!;
+    const reclamada = (await reclamar(inst.instancia.id))!;
     const r = await envio.enviarInicial(reclamada, adaptador);
 
     // El global sigue encendido —lo pone el beforeEach— y aun así no sale nada.
@@ -846,7 +855,7 @@ describe.skipIf(!RUN)("kill switch", () => {
   it("apagado, tampoco sale ningún recordatorio pendiente", async () => {
     const worker = await import("./worker.ts");
     const e = await encolada();
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+    await envio.enviarInicial(await reclamar(e.id)!,
                               adaptadorFalso(OK("SMks")).adaptador);
     await cfg.guardarConfigGlobal({ recordatorio: true });
     await db.query(`UPDATE survey_instances SET "reminderAfterMs" = $2 WHERE id = $1`,
@@ -862,7 +871,7 @@ describe.skipIf(!RUN)("kill switch", () => {
   it("apagado, quien ya recibió su enlace SÍ puede contestar", async () => {
     const e = await encolada();
     const { adaptador, llamadas } = adaptadorFalso(OK("SMabierta"));
-    await envio.enviarInicial((await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!,
+    await envio.enviarInicial(await reclamar(e.id)!,
                               adaptador);
     const token = llamadas[0].url.split("/").pop()!;
 
@@ -905,7 +914,7 @@ describe.skipIf(!RUN)("con Satisfaction apagado", () => {
     await cfg.guardarConfigGlobal({ activo: false });
     const { adaptador, llamadas } = adaptadorFalso(OK("SMno"));
     const r = await envio.enviarInicial(
-      (await envio.reclamarParaEnvio()).find((x) => x.id === e.id)!, adaptador);
+      await reclamar(e.id)!, adaptador);
     expect(r).toMatchObject({ estado: "bloqueado", motivo: "satisfaction_disabled" });
     expect(llamadas).toHaveLength(0);
   });

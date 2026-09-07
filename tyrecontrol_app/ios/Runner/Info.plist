@@ -45,5 +45,13 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Mobilink TyreControl usa la cámara para fotografiar neumáticos, números de serie, DOT, matrículas e incidencias durante las revisiones e intervenciones.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Mobilink TyreControl accede a tus fotos para seleccionar imágenes necesarias para las revisiones e intervenciones.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Mobilink TyreControl usa Bluetooth para conectar con la sonda de medición compatible que lee la profundidad, la presión y las etiquetas RFID de los neumáticos.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

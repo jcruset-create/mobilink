@@ -59,6 +59,8 @@ import {
   ROADSIDE_ASSISTANCE_STATUS_FLOW,
   ROADSIDE_ASSISTANCE_STATUS_LABELS,
 } from "../modules/roadsideAssistanceTypes";
+import { formatCoords } from "../modules/roadsideCoordenadas";
+import { etiquetaMatricula, matriculasDe } from "../modules/roadsideMatricula";
 import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
 import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
@@ -439,7 +441,7 @@ function ClosedAssistanceCard({
     <div className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2.5">
       <div className="flex items-center justify-between gap-3">
         <div className="truncate text-sm font-bold text-slate-100">
-          {assistance.plate || assistance.customerName}
+          {etiquetaMatricula(assistance, "") || assistance.customerName}
         </div>
         <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-bold ${STATUS_BADGES[assistance.status]}`}>
           {ROADSIDE_ASSISTANCE_STATUS_LABELS[assistance.status]}
@@ -514,6 +516,7 @@ export default function RoadsideAssistanceView({
     null
   );
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [copiedCoordsId, setCopiedCoordsId] = useState<number | null>(null);
   const [photosAssistance, setPhotosAssistance] = useState<RoadsideAssistance | null>(null);
   const [photos, setPhotos] = useState<RoadsideAssistanceFile[]>([]);
   const [photosLoading, setPhotosLoading] = useState(false);
@@ -962,6 +965,24 @@ export default function RoadsideAssistanceView({
       window.setTimeout(() => setCopiedId(null), 1800);
     } catch {
       setLocalError("No se pudo copiar el enlace.");
+    }
+  }
+
+  /// Copia las coordenadas tal cual se ven: «41.154234, 1.106789».
+  ///
+  /// Ese formato es el que entienden Google Maps, Waze y el teclado de un
+  /// WhatsApp, que es donde acaban de verdad: la central se las dicta o se las
+  /// pega al operario cuando la direccion no basta para encontrar el camion.
+  async function copyCoords(assistance: RoadsideAssistance) {
+    const texto = formatCoords(assistance);
+    if (!texto) return;
+
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiedCoordsId(assistance.id);
+      window.setTimeout(() => setCopiedCoordsId(null), 1800);
+    } catch {
+      setLocalError("No se pudieron copiar las coordenadas.");
     }
   }
 
@@ -1897,19 +1918,32 @@ export default function RoadsideAssistanceView({
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
+                          {/* La matrícula que manda no siempre es la de la
+                             * tractora: si la avería es del remolque, la
+                             * asistencia va a nombre del remolque. La regla
+                             * está en matriculasDe, la misma que usan el PDF
+                             * del backend y la página de seguimiento. */}
                           <h3 className="truncate text-lg font-black">
-                            {assistance.plate ? (
+                            {matriculasDe(assistance).principal ? (
                               <a
-                                href={`/vehiculo?plate=${encodeURIComponent(assistance.plate)}`}
+                                href={`/vehiculo?plate=${encodeURIComponent(matriculasDe(assistance).principal)}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-slate-100 underline decoration-dotted hover:text-red-400"
                                 title="Ver historial del vehículo"
                               >
-                                {assistance.plate}
+                                {matriculasDe(assistance).principal}
                               </a>
                             ) : "Sin matricula"}
                           </h3>
+                          {/* Una matrícula suelta no dice si es tractora o
+                             * remolque, y aquí importa: el operario tiene que
+                             * saber a qué vehículo va. */}
+                          {matriculasDe(assistance).principalEsRemolque && (
+                            <span className="shrink-0 rounded-md border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 text-[11px] font-black uppercase tracking-wide text-amber-200">
+                              Remolque
+                            </span>
+                          )}
                           {assistance.priority === "urgente" && (
                             <span className="shrink-0 rounded-full border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-[11px] font-bold text-red-300">
                               Urgente
@@ -1925,6 +1959,25 @@ export default function RoadsideAssistanceView({
                             </span>
                           )}
                         </div>
+                        {/* La otra matrícula del conjunto, si la hay: la
+                           * tractora cuando el servicio es al remolque, o el
+                           * remolque cuando es a la tractora. Sin decir cuál
+                           * es cuál, dos matrículas juntas confunden más de lo
+                           * que aclaran. */}
+                        {matriculasDe(assistance).secundaria && (
+                          <div className="mt-1 truncate text-xs font-semibold text-slate-400">
+                            {matriculasDe(assistance).etiquetaSecundaria}{" "}
+                            <a
+                              href={`/vehiculo?plate=${encodeURIComponent(matriculasDe(assistance).secundaria)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline decoration-dotted hover:text-red-400"
+                              title="Ver historial del vehículo"
+                            >
+                              {matriculasDe(assistance).secundaria}
+                            </a>
+                          </div>
+                        )}
                         <div className="mt-1 truncate text-sm font-semibold text-slate-400">
                           {assistance.customerName || "Cliente sin nombre"}
                         </div>
@@ -2004,6 +2057,34 @@ export default function RoadsideAssistanceView({
                               "Ubicacion"}
                           </span>
                         </a>
+                      )}
+
+                      {/* Coordenadas GPS, debajo de la direccion.
+                         *
+                         * Va FUERA del enlace del mapa a proposito: dentro, el
+                         * boton de copiar se comeria el clic o abriria Google
+                         * Maps, que es lo contrario de lo que se pide.
+                         *
+                         * Y solo aparece si la asistencia las trae: una
+                         * asistencia dada de alta a mano con la direccion
+                         * escrita no tiene coordenadas, y una linea vacia con
+                         * un boton muerto no ayuda a nadie. */}
+                      {formatCoords(assistance) && (
+                        <div className="flex items-center gap-2 px-3 text-[11px] text-slate-500">
+                          <span className="font-mono">
+                            {formatCoords(assistance)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => copyCoords(assistance)}
+                            className="rounded px-1.5 py-0.5 font-semibold text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                            title="Copiar las coordenadas"
+                          >
+                            {copiedCoordsId === assistance.id
+                              ? "Copiado"
+                              : "Copiar"}
+                          </button>
+                        </div>
                       )}
 
                       <div className="grid gap-2 sm:grid-cols-2">
@@ -3065,7 +3146,7 @@ export default function RoadsideAssistanceView({
                     Fotos y firma
                   </div>
                   <div className="font-bold text-slate-100">
-                    #{photosAssistance.id} · {photosAssistance.plate || "Sin matrícula"}
+                    #{photosAssistance.id} · {etiquetaMatricula(photosAssistance)}
                   </div>
                 </div>
               </div>
@@ -3152,7 +3233,7 @@ export default function RoadsideAssistanceView({
                     Enviar informe
                   </div>
                   <div className="font-bold text-slate-100">
-                    #{reportAssistance.id} · {reportAssistance.plate || "Sin matrícula"}
+                    #{reportAssistance.id} · {etiquetaMatricula(reportAssistance)}
                   </div>
                 </div>
               </div>
@@ -3236,7 +3317,7 @@ export default function RoadsideAssistanceView({
                     Ubicación en vivo
                   </div>
                   <div className="font-bold text-slate-100">
-                    #{mapAssistance.id} · {mapAssistance.plate || "Sin matrícula"}
+                    #{mapAssistance.id} · {etiquetaMatricula(mapAssistance)}
                   </div>
                 </div>
               </div>
