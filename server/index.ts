@@ -13546,11 +13546,25 @@ async function reconcileTechRoadsideOccupation() {
       console.log(`Técnicos liberados (asistencia cerrada): ${r.rows.map((x: any) => x.name).join(", ")}`);
     }
 
-    // Cerrar capturas WhatsApp huérfanas (asistencia cerrada o inexistente)
+    /*
+     * Cerrar capturas WhatsApp huérfanas: las de una asistencia de Assist que
+     * ya está cerrada o que ya no existe.
+     *
+     * `job_id IS NOT NULL` no es un detalle: las capturas de Assist Central
+     * Pro nacen SIN asistencia del core (job_id nulo, porque la asistencia
+     * todavía no existe: se está dando de alta con lo que llegue por
+     * WhatsApp). Sin esta condición, `NOT EXISTS (... WHERE r.id = NULL)` es
+     * cierto para todas ellas y esta limpieza las cerraba a los dos minutos
+     * de abrirlas, o antes. Desde fuera parecía que la captura se cerraba
+     * sola sin motivo.
+     *
+     * Una captura de Central Pro solo la cierra quien la abrió.
+     */
     const cs = await db.query(
       `UPDATE whatsapp_capture_sessions s
        SET status = 'CLOSED', ended_at = $1
        WHERE s.status = 'ACTIVE'
+         AND s.job_id IS NOT NULL
          AND (
            NOT EXISTS (SELECT 1 FROM roadside_assistances r WHERE r.id = s.job_id)
            OR EXISTS (SELECT 1 FROM roadside_assistances r
