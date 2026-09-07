@@ -46,9 +46,20 @@ type Props = {
   onClose: () => void;
   /** Confirmación: coordenadas elegidas (y la dirección si vino del geocoder). */
   onPick: (lat: number, lng: number, direccion?: string | null) => void;
+  /**
+   * Buscador alternativo. Por defecto se usa el geocodificador del panel de
+   * Assist, que va con las cabeceras de administrador guardadas en el
+   * navegador. Connect Pro entra con OTRA sesión y no tiene esas cabeceras, así
+   * que allí ese buscador daría 401: le pasa el suyo por aquí.
+   *
+   * Poner el pin a mano no depende de esto y funciona en los dos sitios.
+   */
+  onBuscar?: (
+    consulta: string
+  ) => Promise<{ lat: number; lng: number; direccion?: string | null } | null>;
 };
 
-export default function LocationPickerModal({ initialLat, initialLng, initialQuery, onClose, onPick }: Props) {
+export default function LocationPickerModal({ initialLat, initialLng, initialQuery, onClose, onPick, onBuscar }: Props) {
   const [pin, setPin] = useState<[number, number] | null>(
     initialLat != null && initialLng != null ? [initialLat, initialLng] : null
   );
@@ -78,6 +89,16 @@ export default function LocationPickerModal({ initialLat, initialLng, initialQue
     setBuscando(true);
     setError("");
     try {
+      if (onBuscar) {
+        const r = await onBuscar(q);
+        if (r) {
+          ponPin(r.lat, r.lng, true);
+          setDireccion(r.direccion ?? q);
+        } else {
+          setError("No se encontró la dirección. Haz clic en el mapa.");
+        }
+        return;
+      }
       const r = await geocodeAddress(q);
       if (r?.lat != null && r?.lng != null) {
         ponPin(Number(r.lat), Number(r.lng), true);
