@@ -51,20 +51,45 @@ export interface IntervencionFila {
 
 export interface ServicioFila { servicio: string; cantidad: number }
 
-/** La hora, en HH:MM. El parte es de papel: la fecha ya está en su casilla. */
+/**
+ * Zona horaria del papel. Los timestamps de la base de datos van en UTC y el
+ * servidor de Render también: sin esto, un parte cerrado a las 17:53 en
+ * Tarragona salía a las 15:53.
+ */
+export const ZONA_HORARIA = "Europe/Madrid";
+
+function partes(d: Date): Record<string, string> {
+  const f = new Intl.DateTimeFormat("es-ES", {
+    timeZone: ZONA_HORARIA, hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+  const out: Record<string, string> = {};
+  for (const p of f.formatToParts(d)) out[p.type] = p.value;
+  // Algunos motores dan "24" a medianoche con hour12:false.
+  if (out.hour === "24") out.hour = "00";
+  return out;
+}
+
+/** La hora, en HH:MM y en la zona horaria del país. */
 export function hora(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const p = partes(d);
+  return `${p.hour}:${p.minute}`;
 }
 
-/** La fecha en el formato del papel: dd/mm/aaaa. */
+/** La fecha en el formato del papel: dd/mm/aaaa, en la zona horaria del país. */
 export function fechaCorta(iso: string | null | undefined): string | null {
   if (!iso) return null;
-  const d = new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
+  // Una fecha sin hora (date de Postgres) es un día del calendario: se
+  // devuelve tal cual, sin pasarla por ninguna zona.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
-  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+  const p = partes(d);
+  return `${p.day}/${p.month}/${p.year}`;
 }
 
 /**

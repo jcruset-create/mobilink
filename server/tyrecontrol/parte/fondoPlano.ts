@@ -46,6 +46,16 @@ export async function quitarFondoNegro(bytes: Uint8Array): Promise<Uint8Array> {
     const { data } = await img.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     const n = w * h;
 
+    // Si el plano ya viene con transparencia de verdad (PNG con canal alfa y
+    // el borde transparente), no hay nada que quitar: se incrusta tal cual.
+    // Pasarle el relleno se llevaría por delante las sombras oscuras del
+    // propio dibujo que tocan el borde.
+    let transparentes = 0, borde = 0;
+    const cuenta = (i: number) => { borde++; if (data[i * 4 + 3] < 128) transparentes++; };
+    for (let x = 0; x < w; x++) { cuenta(x); cuenta((h - 1) * w + x); }
+    for (let y = 0; y < h; y++) { cuenta(y * w); cuenta(y * w + w - 1); }
+    if (borde > 0 && transparentes / borde > 0.5) return bytes;
+
     // Relleno por anchura desde todo el borde. Cola de índices de píxel, no de
     // coordenadas: una imagen de 4K son 8 millones de píxeles y un array de
     // objetos ahí dentro se come la memoria.
