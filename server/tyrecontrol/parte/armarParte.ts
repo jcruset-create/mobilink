@@ -129,12 +129,17 @@ export function agruparNuevos(movs: MovimientoFila[]): NuevoPdf[] {
   const cuenta = new Map<string, NuevoPdf & { unidades: number }>();
   for (const m of movs) {
     if (!m.es_nuevo || m.movimiento_tipo !== "montaje") continue;
-    const clave = [m.marca, m.medida, m.modelo].map((x) => (x ?? "").trim().toUpperCase()).join("|");
+    // Lo que sale del almacén del cliente ya es suyo: se monta, pero no se
+    // factura. Lo que viene del catálogo (sin control de stock) lo pone el
+    // taller, y eso sí se cobra.
+    const facturable = (m.origen ?? "") !== "almacen";
+    const clave = [m.marca, m.medida, m.modelo, facturable ? "F" : "N"]
+      .map((x) => (x ?? "").toString().trim().toUpperCase()).join("|");
     const ya = cuenta.get(clave);
     if (ya) ya.unidades += 1;
     else cuenta.set(clave, {
       marca: m.marca ?? null, dimension: m.medida ?? null,
-      modelo: m.modelo ?? null, unidades: 1,
+      modelo: m.modelo ?? null, unidades: 1, facturable,
     });
   }
   return [...cuenta.values()];
