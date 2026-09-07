@@ -1796,15 +1796,20 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
         child: Row(children: [
           Expanded(child: Text((s['nombre'] ?? '') as String? ?? '',
               style: const TextStyle(fontSize: 15))),
+          // La caja tiene que dejar sitio al número: con 96 px y «unidad» de
+          // sufijo a tamaño normal, el número quedaba sin anchura y no se veía.
           SizedBox(
-            width: 96,
+            width: 140,
             child: TextFormField(
               initialValue: _cantidades[s['codigo']]?.toString() ?? '',
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               textAlign: TextAlign.right,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
               decoration: InputDecoration(
-                  isDense: true, suffixText: (s['unidad'] ?? '') as String? ?? ''),
+                  isDense: true,
+                  hintText: '0',
+                  suffixText: (s['unidad'] ?? '') as String? ?? '',
+                  suffixStyle: const TextStyle(fontSize: 11, color: AppColors.textHint)),
               onChanged: (v) {
                 final n = num.tryParse(v.replaceAll(',', '.'));
                 setState(() {
