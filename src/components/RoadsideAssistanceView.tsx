@@ -59,6 +59,7 @@ import {
   ROADSIDE_ASSISTANCE_STATUS_FLOW,
   ROADSIDE_ASSISTANCE_STATUS_LABELS,
 } from "../modules/roadsideAssistanceTypes";
+import { formatCoords } from "../modules/roadsideCoordenadas";
 import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
 import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
@@ -514,6 +515,7 @@ export default function RoadsideAssistanceView({
     null
   );
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [copiedCoordsId, setCopiedCoordsId] = useState<number | null>(null);
   const [photosAssistance, setPhotosAssistance] = useState<RoadsideAssistance | null>(null);
   const [photos, setPhotos] = useState<RoadsideAssistanceFile[]>([]);
   const [photosLoading, setPhotosLoading] = useState(false);
@@ -962,6 +964,24 @@ export default function RoadsideAssistanceView({
       window.setTimeout(() => setCopiedId(null), 1800);
     } catch {
       setLocalError("No se pudo copiar el enlace.");
+    }
+  }
+
+  /// Copia las coordenadas tal cual se ven: «41.154234, 1.106789».
+  ///
+  /// Ese formato es el que entienden Google Maps, Waze y el teclado de un
+  /// WhatsApp, que es donde acaban de verdad: la central se las dicta o se las
+  /// pega al operario cuando la direccion no basta para encontrar el camion.
+  async function copyCoords(assistance: RoadsideAssistance) {
+    const texto = formatCoords(assistance);
+    if (!texto) return;
+
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiedCoordsId(assistance.id);
+      window.setTimeout(() => setCopiedCoordsId(null), 1800);
+    } catch {
+      setLocalError("No se pudieron copiar las coordenadas.");
     }
   }
 
@@ -2004,6 +2024,34 @@ export default function RoadsideAssistanceView({
                               "Ubicacion"}
                           </span>
                         </a>
+                      )}
+
+                      {/* Coordenadas GPS, debajo de la direccion.
+                         *
+                         * Va FUERA del enlace del mapa a proposito: dentro, el
+                         * boton de copiar se comeria el clic o abriria Google
+                         * Maps, que es lo contrario de lo que se pide.
+                         *
+                         * Y solo aparece si la asistencia las trae: una
+                         * asistencia dada de alta a mano con la direccion
+                         * escrita no tiene coordenadas, y una linea vacia con
+                         * un boton muerto no ayuda a nadie. */}
+                      {formatCoords(assistance) && (
+                        <div className="flex items-center gap-2 px-3 text-[11px] text-slate-500">
+                          <span className="font-mono">
+                            {formatCoords(assistance)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => copyCoords(assistance)}
+                            className="rounded px-1.5 py-0.5 font-semibold text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                            title="Copiar las coordenadas"
+                          >
+                            {copiedCoordsId === assistance.id
+                              ? "Copiado"
+                              : "Copiar"}
+                          </button>
+                        </div>
                       )}
 
                       <div className="grid gap-2 sm:grid-cols-2">
