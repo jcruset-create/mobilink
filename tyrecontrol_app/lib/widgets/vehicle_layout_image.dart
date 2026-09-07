@@ -153,7 +153,7 @@ class _VehicleLayoutImageState extends State<VehicleLayoutImage> {
   }
 
   Widget _cardPositioned(PosicionVehiculo p, int i, double w, double h) {
-    final co = _coords(p, i);
+    final co = cajaAVista(_coords(p, i));
     // El ancho es EXACTAMENTE su porcentaje, sin suelo en píxeles: es lo único
     // que garantiza que dos tarjetas del mismo eje no se pisen ni invadan el
     // chasis por estrecha que sea la pantalla. Y se ancla por el centro.
