@@ -30,7 +30,12 @@ Future<XFile?> elegirFoto(BuildContext context, {int calidad = 85}) async {
     if (elegido == null) return null;
     origen = elegido;
   }
-  return ImagePicker().pickImage(source: origen, imageQuality: calidad);
+  // Con tope de tamaño: un iPhone saca fotos de 12 a 48 megapíxeles, de 10 a
+  // 15 MB cada una, y subir eso con dos rayas de cobertura tarda tanto que
+  // parece que la app se ha quedado colgada. A 2000 px un número de serie y
+  // un DOT se leen igual de bien, y pesa alrededor de 1 MB.
+  return ImagePicker().pickImage(
+      source: origen, imageQuality: calidad, maxWidth: 2000, maxHeight: 2000);
 }
 
 /// La extensión con la que se guarda en el bucket. En la web el `path` es una

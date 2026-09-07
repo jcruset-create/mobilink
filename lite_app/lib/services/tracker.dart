@@ -67,6 +67,15 @@ class Tracker {
 
   /// Comprueba y solicita permisos. Devuelve el estado para poder mostrarlo
   /// en el perfil y enviarlo al backend.
+  ///
+  /// Quien pide el permiso por primera vez es la pantalla de condiciones
+  /// (`onboarding_screen.dart`), justo después de que el operario acepte: es
+  /// el único momento en el que el sistema enseña el diálogo, y llegar ahí ya
+  /// sabiendo para qué es sube mucho la probabilidad de que lo conceda.
+  ///
+  /// Volver a llamar aquí no abre ningún diálogo nuevo —iOS solo pregunta una
+  /// vez por instalación— así que no hay bucle posible: si el operario dijo
+  /// que no, el sistema devuelve «denegado» sin molestarle otra vez.
   static Future<String> ensurePermission() async {
     if (!await Geolocator.isLocationServiceEnabled()) return 'service_disabled';
     var p = await Geolocator.checkPermission();
@@ -83,12 +92,39 @@ class Tracker {
     }
   }
 
+  /// El estado del permiso **sin pedir nada**: para pintar avisos y para
+  /// informar a Central sin arriesgarse a sacar un diálogo del sistema en
+  /// mitad de una pantalla que no viene a cuento.
+  static Future<String> permissionStatus() async {
+    if (!await Geolocator.isLocationServiceEnabled()) return 'service_disabled';
+    switch (await Geolocator.checkPermission()) {
+      case LocationPermission.always:
+        return 'always';
+      case LocationPermission.whileInUse:
+        return 'while_in_use';
+      case LocationPermission.deniedForever:
+        return 'denied_forever';
+      default:
+        return 'denied';
+    }
+  }
+
+  /// ¿Se puede compartir ubicación con este estado?
+  static bool permisoOk(String estado) =>
+      estado == 'always' || estado == 'while_in_use';
+
+  /// Ajustes de ubicación del SISTEMA (el interruptor general del móvil), que
+  /// no son los de la app: cuando lo apagado es el GPS entero, los ajustes de
+  /// la app no tienen nada que tocar.
+  static Future<void> abrirAjustesDelSistema() =>
+      Geolocator.openLocationSettings();
+
   static Future<Position?> currentPosition() async {
     try {
-      final perm = await ensurePermission();
-      if (perm == 'denied' || perm == 'denied_forever' || perm == 'service_disabled') {
-        return null;
-      }
+      // Solo mira, no pide: esto se llama al marcar un estado, y ahí un
+      // diálogo del sistema es una interrupción en mitad del trabajo. El
+      // permiso ya se pidió al aceptar las condiciones.
+      if (!permisoOk(await permissionStatus())) return null;
       return await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
       ).timeout(const Duration(seconds: 12));
@@ -163,7 +199,27 @@ class Tracker {
   ///
   /// La notificación no se puede ocultar (`setOngoing`), y eso es intencionado:
   /// es el aviso permanente de que se está compartiendo ubicación.
+  ///
+  /// En iOS el equivalente es `AppleSettings.allowBackgroundLocationUpdates`
+  /// junto con el modo `location` del Info.plist: sin los dos, el sistema deja
+  /// de entregar posiciones en cuanto se bloquea la pantalla, igual que en
+  /// Android. Como el seguimiento arranca con la app en primer plano, basta el
+  /// permiso «mientras se usa la app»; iOS enseña el indicador azul mientras
+  /// dura, que hace de aviso permanente. `pauseLocationUpdatesAutomatically`
+  /// se apaga a propósito: iOS pausa el GPS cuando cree que el usuario se ha
+  /// parado y no lo reanuda solo, y en una asistencia eso es un agujero en el
+  /// rastro.
   LocationSettings _ajustes() {
+    if (Platform.isIOS) {
+      return AppleSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 15,
+        allowBackgroundLocationUpdates: true,
+        showBackgroundLocationIndicator: true,
+        pauseLocationUpdatesAutomatically: false,
+        activityType: ActivityType.automotiveNavigation,
+      );
+    }
     if (!Platform.isAndroid) {
       return const LocationSettings(
         accuracy: LocationAccuracy.high,

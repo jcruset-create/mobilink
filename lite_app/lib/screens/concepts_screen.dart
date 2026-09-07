@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/api.dart';
+import '../services/file_queue.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
@@ -107,6 +108,10 @@ class _ConceptsScreenState extends State<ConceptsScreen> {
         lat: pos?.latitude,
         lng: pos?.longitude,
       );
+      // Esta foto sube en directo, sin pasar por la cola, así que la cola no
+      // se entera: se le anota aquí para que la comprobación de requisitos la
+      // cuente aunque después se pierda la cobertura.
+      await FileQueue.anotarSubida(widget.assistanceId, 'mounting');
       return 'c${subida['id']}';
     } on OfflineError {
       _aviso('Sin conexión: la foto no ha podido subir. Vuelve a intentarlo con cobertura.',

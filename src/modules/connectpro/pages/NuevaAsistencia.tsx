@@ -13,6 +13,7 @@ import ConfirmarImportacionIA, { type PropuestaIA, type ExtraIA } from "../compo
 import type { ServiceType, VehicleType } from "../types";
 import type { Client } from "./Clientes";
 import { useCentroDeTrabajo } from "../components/CentroDeTrabajo";
+import BuscarUbicacion from "../components/BuscarUbicacion";
 
 type Form = {
   expedientNumber: string; externalReference: string; clientName: string;
@@ -406,6 +407,18 @@ export default function NuevaAsistencia() {
         </Section>
 
         <Section title="Ubicación">
+          {/* Se escribe como venga —punto kilométrico, código postal, enlace de
+              Maps— y rellena dirección y coordenadas de una vez. */}
+          <BuscarUbicacion
+            onEncontrado={({ lat, lng, etiqueta }) =>
+              setF((prev) => ({
+                ...prev,
+                lat: String(lat),
+                lng: String(lng),
+                // La dirección escrita a mano manda: si ya hay algo, no se pisa
+                address: prev.address.trim() ? prev.address : etiqueta,
+              }))}
+          />
           <Field label="Dirección *" w="w-full"><Input value={f.address} onChange={set("address")} className="w-full" placeholder="Dirección o punto de referencia" /></Field>
           <Field label="Latitud"><Input value={f.lat} onChange={set("lat")} className="w-32" placeholder="41.1189" /></Field>
           <Field label="Longitud"><Input value={f.lng} onChange={set("lng")} className="w-32" placeholder="1.2445" /></Field>
