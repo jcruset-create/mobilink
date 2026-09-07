@@ -258,6 +258,16 @@ workflows:
     # el paso que calcula el número de build.
     integrations:
       app_store_connect: Mobilink TyreControl
+    # Se lanza empujando una etiqueta tyrecontrol-ios-<lo que sea> al commit
+    # que se quiera subir a TestFlight (además del botón de la UI):
+    #   git tag tyrecontrol-ios-1 && git push origin tyrecontrol-ios-1
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'tyrecontrol-ios-*'
+          include: true
+      cancel_previous_builds: false
     environment:
       # Misma versión que compila el proyecto (Flutter 3.35.4 en local y en la CI
       # de Android). Apple exige un SDK actual para subir a App Store Connect:
