@@ -559,10 +559,28 @@ class TyreControlApi {
   /// Las fotos se suben por bytes y no por `File`: en la versión web (la que
   /// se usa para probar desde el PC) no hay sistema de ficheros.
   static Future<String> _subirBytes(String path, XFile file) async {
-    await _db.storage.from(_bucketFotos).uploadBinary(
-        path, await file.readAsBytes(),
-        fileOptions: FileOptions(contentType: mimeDe(file)));
-    return _db.storage.from(_bucketFotos).getPublicUrl(path);
+    final bytes = await file.readAsBytes();
+    final tipo = mimeDe(file);
+    // Reintento por conexión rota. Entre que se abre la cámara y se vuelve,
+    // el servidor ha cerrado la conexión que la app tenía abierta, y el
+    // primer envío por ella muere a medias con «Broken pipe» / «Connection
+    // reset» sin que Dart lo vea venir. Se repite con conexión nueva; con
+    // upsert, por si la primera llegó entera y solo se perdió la respuesta.
+    Object? ultimo;
+    for (var intento = 1; intento <= 3; intento++) {
+      try {
+        await _db.storage.from(_bucketFotos).uploadBinary(
+            path, bytes,
+            fileOptions: FileOptions(contentType: tipo, upsert: intento > 1));
+        return _db.storage.from(_bucketFotos).getPublicUrl(path);
+      } on SocketException catch (e) {
+        ultimo = e;
+      } on http.ClientException catch (e) {
+        ultimo = e;
+      }
+      await Future.delayed(Duration(milliseconds: 400 * intento));
+    }
+    throw Exception('Sin conexión estable con el servidor de fotos ($ultimo)');
   }
 
   static Future<String> subirFotoRevision(XFile file, {required String revisionId, required String posicionId}) =>
