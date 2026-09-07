@@ -264,3 +264,218 @@ describe.runIf(RUN)("lo ya usado no se reinterpreta", () => {
     expect(r.activo).toBe(false);
   });
 });
+
+describe.runIf(RUN)("estadísticas de gasto", () => {
+  let stats: typeof import("./expensestats.ts");
+  let dietas = 0;
+  let ferreteria = 0;
+  let juan = 0;
+  let ana = 0;
+  let sesionAyer = 0;
+  let sesionHoy = 0;
+  const HOY = new Date().toISOString().slice(0, 10);
+
+  /*
+   * Fondo grande y en billetes pequeños a propósito. Con el fondo de los otros
+   * bloques, la caja se quedaba sin billetes de 20 € a mitad del escenario y
+   * los pagos fallaban por falta de stock: una prueba que mide sumas no debe
+   * depender de cuántas piezas le dejaron las anteriores.
+   */
+  const FONDO_GRANDE = [{ valor: 2000, cantidad: 100 }];
+
+  const nuevaCaja = async (nombre: string) => {
+    const { rows } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, activa, created_at_ms, updated_at_ms)
+       VALUES ($1,'Centro',$2,true,$3,$3) RETURNING id`,
+      [EMPRESA, `${nombre} ${sufijo}`, Date.now()]
+    );
+    return rows[0].id as number;
+  };
+
+  beforeAll(async () => {
+    stats = await import("./expensestats.ts");
+    dietas = (await config.crearConcepto(ctx, { nombre: `SD${sufijo}`, tipoDestino: "PERSONA" })).id;
+    ferreteria = (
+      await config.crearConcepto(ctx, { nombre: `SF${sufijo}`, tipoDestino: "CENTRO_COSTE" })
+    ).id;
+    juan = (await config.crearDestino(ctx, { nombre: `SJuan ${sufijo}`, tipo: "PERSONA" })).id;
+    ana = (await config.crearDestino(ctx, { nombre: `SAna ${sufijo}`, tipo: "PERSONA" })).id;
+
+    sesionHoy = (
+      await servicio.abrirJornada(ctx, {
+        registerId: await nuevaCaja("StatsHoy"),
+        fondoManual: FONDO_GRANDE,
+      })
+    ).sesion.id;
+
+    /*
+     * Una jornada anterior con su propia fecha: es lo que permite comprobar
+     * que el corte por periodo usa la FECHA DE LA JORNADA y no el reloj.
+     */
+    sesionAyer = (
+      await servicio.abrirJornada(ctx, {
+        registerId: await nuevaCaja("StatsAyer"),
+        fondoManual: FONDO_GRANDE,
+      })
+    ).sesion.id;
+    // Se fecha en el pasado a mano: `abrirJornada` siempre abre la de hoy.
+    await db.query(`UPDATE cash_sessions SET fecha = $2::date WHERE id = $1`, [
+      sesionAyer,
+      "2020-03-15",
+    ]);
+  });
+
+  const pagarEn = (sessionId: number, importe: number, extra: Record<string, unknown> = {}) =>
+    servicio.registrarOperacion(ctx, {
+      sessionId,
+      tipo: "PAYMENT",
+      importeCentimos: importe,
+      formasPago: [{ forma: "CASH", importe }],
+      efectivoEntregado: [{ valor: 2000, cantidad: importe / 2000 }],
+      concepto: "stats",
+      ...extra,
+    });
+
+  it("suma por concepto, y lo sin clasificar sale como una línea más", async () => {
+    await pagarEn(sesionHoy, 2000, { expenseConceptId: dietas, expenseTargetId: juan });
+    await pagarEn(sesionHoy, 4000, { expenseConceptId: dietas, expenseTargetId: ana });
+    await pagarEn(sesionHoy, 2000, { expenseConceptId: ferreteria });
+    await pagarEn(sesionHoy, 2000); // sin clasificar
+
+    const r = await stats.informeDeGasto(
+      { empresaId: EMPRESA, desde: HOY, hasta: HOY, granularidad: "dia", centroId: null, conceptoId: null },
+      false
+    );
+
+    const d = r.conceptos.find((c) => c.conceptoId === dietas)!;
+    expect(d.importeCentimos).toBe(6000);
+    expect(d.operaciones).toBe(2);
+
+    /*
+     * Lo sin clasificar NO se esconde. Si se filtrara, el total de aquí no
+     * cuadraría con el que ve quien cierra la caja y nadie sabría por qué.
+     */
+    const sin = r.conceptos.find((c) => c.conceptoId == null);
+    expect(sin).toBeTruthy();
+    expect(r.sinClasificarCentimos).toBeGreaterThanOrEqual(2000);
+    expect(r.totalCentimos).toBe(r.conceptos.reduce((a, c) => a + c.importeCentimos, 0));
+  });
+
+  it("desglosa por destino dentro de un concepto", async () => {
+    const r = await stats.informeDeGasto(
+      {
+        empresaId: EMPRESA,
+        desde: HOY,
+        hasta: HOY,
+        granularidad: "dia",
+        centroId: null,
+        conceptoId: dietas,
+      },
+      false
+    );
+    const porJuan = r.destinos.find((d) => d.destinoId === juan)!;
+    const porAna = r.destinos.find((d) => d.destinoId === ana)!;
+    expect(porJuan.importeCentimos).toBe(2000);
+    expect(porAna.importeCentimos).toBe(4000);
+    // Y no se cuela la ferretería, que es de otro concepto.
+    expect(r.destinos.reduce((a, d) => a + d.importeCentimos, 0)).toBe(6000);
+  });
+
+  it("el periodo se corta por la fecha de la JORNADA, no por el reloj", async () => {
+    /*
+     * El pago se registra AHORA, pero su jornada es de 2020. Si el corte usara
+     * `created_at_ms`, este importe aparecería hoy y el arqueo de aquel día no
+     * cuadraría nunca contra las estadísticas.
+     */
+    await pagarEn(sesionAyer, 2000, { expenseConceptId: dietas, expenseTargetId: juan });
+
+    const hoy = await stats.informeDeGasto(
+      { empresaId: EMPRESA, desde: HOY, hasta: HOY, granularidad: "dia", centroId: null, conceptoId: dietas },
+      false
+    );
+    const entonces = await stats.informeDeGasto(
+      {
+        empresaId: EMPRESA,
+        desde: "2020-03-15",
+        hasta: "2020-03-15",
+        granularidad: "dia",
+        centroId: null,
+        conceptoId: dietas,
+      },
+      false
+    );
+
+    expect(entonces.totalCentimos).toBe(2000);
+    expect(hoy.totalCentimos).toBe(6000);
+  });
+
+  it("compara contra un tramo de la MISMA longitud", async () => {
+    const r = await stats.informeDeGasto(
+      {
+        empresaId: EMPRESA,
+        desde: "2020-03-15",
+        hasta: "2020-03-15",
+        granularidad: "dia",
+        centroId: null,
+        conceptoId: null,
+      },
+      true
+    );
+    /*
+     * Un día contra el día anterior, no contra el mes: comparar 30 días con 31
+     * haría que «se ha gastado más» pudiera ser solo que el mes es más largo.
+     */
+    expect(r.comparacion?.desde).toBe("2020-03-14");
+    expect(r.comparacion?.hasta).toBe("2020-03-14");
+    expect(r.comparacion?.totalCentimos).toBe(0);
+    // Sin nada antes, la variación es null y no «+100 %», que sería mentira.
+    expect(r.comparacion?.variacion).toBeNull();
+  });
+
+  it("agrupa por mes cuando se le pide", async () => {
+    const r = await stats.informeDeGasto(
+      {
+        empresaId: EMPRESA,
+        desde: "2020-01-01",
+        hasta: "2020-12-31",
+        granularidad: "mes",
+        centroId: null,
+        conceptoId: null,
+      },
+      false
+    );
+    expect(r.serie).toHaveLength(1);
+    expect(r.serie[0]!.periodo).toBe("2020-03");
+  });
+
+  it("una fecha de inicio posterior a la de fin se rechaza", async () => {
+    await expect(
+      stats.informeDeGasto(
+        {
+          empresaId: EMPRESA,
+          desde: "2026-05-10",
+          hasta: "2026-05-01",
+          granularidad: "dia",
+          centroId: null,
+          conceptoId: null,
+        },
+        false
+      )
+    ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
+  });
+
+  it("el gasto de otra empresa no se suma nunca", async () => {
+    const r = await stats.informeDeGasto(
+      {
+        empresaId: "00000000-0000-4000-a000-0000000000ff",
+        desde: HOY,
+        hasta: HOY,
+        granularidad: "dia",
+        centroId: null,
+        conceptoId: null,
+      },
+      false
+    );
+    expect(r.totalCentimos).toBe(0);
+  });
+});

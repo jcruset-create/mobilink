@@ -2110,6 +2110,37 @@ export function createCashRouter(): Router {
 
   // ── Secciones de negocio ─────────────────────────────────────────────────
 
+  /**
+   * En qué se va el dinero. Solo lectura.
+   *
+   * `centro` vacío = consolidado de toda la empresa. Pero si el usuario está
+   * limitado a un taller, manda su ámbito: pedir el consolidado no puede ser la
+   * forma de ver el gasto de los centros que no te tocan.
+   */
+  r.get(
+    "/expense-stats",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const q = req.query;
+      const g = q.granularidad;
+      const { informeDeGasto } = await import("./expensestats.ts");
+      res.json(
+        await informeDeGasto(
+          {
+            empresaId: req.authCtx!.empresaId,
+            desde: String(q.desde ?? ""),
+            hasta: String(q.hasta ?? ""),
+            granularidad: g === "dia" || g === "mes" || g === "anio" ? g : "mes",
+            centroId:
+              req.cashCentroId ?? (typeof q.centro === "string" && q.centro ? q.centro : null),
+            conceptoId: q.conceptoId ? enteroPositivo(q.conceptoId, "conceptoId") : null,
+          },
+          q.comparar === "1" || q.comparar === "true"
+        )
+      );
+    })
+  );
+
   // ── Conceptos de gasto y sus destinos ────────────────────────────────────
 
   /*
