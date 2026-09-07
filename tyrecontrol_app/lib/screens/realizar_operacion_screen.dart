@@ -727,16 +727,21 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
           if (m.condicion == 'usado' && m.profundidad != null)
             'profundidad_actual_mm': m.profundidad!.toString(),
         };
+        // Con número de serie leído el montaje es INDIVIDUAL: así la base de
+        // datos guarda la serie en la ficha (con la política genérica la
+        // descarta) y, si esa goma ya tenía ficha, la reconoce en vez de
+        // crear otra. Sin serie se deja decidir a la política de la empresa.
+        final individual = datos.containsKey('numero_serie') ? true : null;
         out.add(m.origen == 'almacen'
             ? {'rpc': 'tc_montar_desde_almacen', 'args': {
                 'p_vehiculo': _vehiculo!.id, 'p_posicion': posId,
-                'p_producto_almacen': m.productoId, 'p_control_individual': null,
+                'p_producto_almacen': m.productoId, 'p_control_individual': individual,
                 'p_datos': datos, 'p_km': km, 'p_fecha': null,
                 'p_obs': null, 'p_forzar_medida': false, 'p_condicion': m.condicion,
               }}
             : {'rpc': 'tc_montar_desde_catalogo', 'args': {
                 'p_vehiculo': _vehiculo!.id, 'p_posicion': posId,
-                'p_referencia': m.referenciaId, 'p_control_individual': null,
+                'p_referencia': m.referenciaId, 'p_control_individual': individual,
                 'p_datos': datos, 'p_km': km, 'p_fecha': null,
                 'p_obs': 'Montado sin control de stock (no estaba en el almacén)',
                 'p_forzar_medida': false, 'p_condicion': m.condicion,
