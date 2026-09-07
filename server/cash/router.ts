@@ -2043,6 +2043,18 @@ export function createCashRouter(): Router {
         externalDocumentReference:
           typeof b.externalDocumentReference === "string" ? b.externalDocumentReference : null,
         /*
+         * En qué se ha gastado y a quién se imputa. Los dos opcionales: quien
+         * no los mande registra el pago igual, como hasta ahora. La coherencia
+         * entre los dos —que el destino sea del tipo que pide el concepto— la
+         * comprueba el servicio dentro de la transacción, no aquí.
+         */
+        expenseConceptId: b.expenseConceptId
+          ? enteroPositivo(b.expenseConceptId, "expenseConceptId")
+          : null,
+        expenseTargetId: b.expenseTargetId
+          ? enteroPositivo(b.expenseTargetId, "expenseTargetId")
+          : null,
+        /*
          * Los pagos no preguntan la sección: van todos al negocio principal.
          * El campo se guarda igual, relleno con la sección por defecto, para
          * que el día que se quiera imputar el gasto a cada negocio no haya que
@@ -2097,6 +2109,94 @@ export function createCashRouter(): Router {
   );
 
   // ── Secciones de negocio ─────────────────────────────────────────────────
+
+  // ── Conceptos de gasto y sus destinos ────────────────────────────────────
+
+  /*
+   * Los lee cualquiera que pueda ver caja: son los desplegables de Pagos. Solo
+   * quien configura puede tocarlos, igual que las secciones y las formas.
+   */
+  r.get(
+    "/expense-concepts",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const tipo = req.query.tipo;
+      res.json({
+        conceptos: await config.listarConceptos(req.authCtx!.empresaId),
+        destinos: await config.listarDestinos(
+          req.authCtx!.empresaId,
+          tipo === "PERSONA" || tipo === "CENTRO_COSTE" ? tipo : undefined
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/expense-concepts",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json({
+        concepto: await config.crearConcepto(contexto(req), {
+          nombre: typeof b.nombre === "string" ? b.nombre : "",
+          tipoDestino:
+            b.tipoDestino === "PERSONA" || b.tipoDestino === "CENTRO_COSTE"
+              ? b.tipoDestino
+              : "NINGUNO",
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
+
+  r.patch(
+    "/expense-concepts/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        concepto: await config.actualizarConcepto(contexto(req), enteroPositivo(req.params.id, "id"), {
+          nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+          tipoDestino:
+            b.tipoDestino === "PERSONA" || b.tipoDestino === "CENTRO_COSTE" || b.tipoDestino === "NINGUNO"
+              ? b.tipoDestino
+              : undefined,
+          activo: typeof b.activo === "boolean" ? b.activo : undefined,
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
+
+  r.post(
+    "/expense-targets",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json({
+        destino: await config.crearDestino(contexto(req), {
+          nombre: typeof b.nombre === "string" ? b.nombre : "",
+          tipo: b.tipo === "CENTRO_COSTE" ? "CENTRO_COSTE" : "PERSONA",
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
+
+  r.patch(
+    "/expense-targets/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        destino: await config.actualizarDestino(contexto(req), enteroPositivo(req.params.id, "id"), {
+          nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+          activo: typeof b.activo === "boolean" ? b.activo : undefined,
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
 
   r.get(
     "/sections",
