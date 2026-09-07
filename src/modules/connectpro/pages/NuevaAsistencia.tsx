@@ -14,6 +14,7 @@ import type { ServiceType, VehicleType } from "../types";
 import type { Client } from "./Clientes";
 import { useCentroDeTrabajo } from "../components/CentroDeTrabajo";
 import BuscarUbicacion from "../components/BuscarUbicacion";
+import MapaUbicacion from "../components/MapaUbicacion";
 
 type Form = {
   expedientNumber: string; externalReference: string; clientName: string;
@@ -434,6 +435,18 @@ export default function NuevaAsistencia() {
             >
               Ver en Maps ↗
             </a>
+          )}
+
+          {/* Con punto ya puesto, se afina a mano: el geocodificador acierta la
+              calle, pero quien atiende la llamada sabe el sitio. */}
+          {Number.isFinite(Number(f.lat)) && Number.isFinite(Number(f.lng)) &&
+           f.lat.trim() !== "" && f.lng.trim() !== "" && (
+            <MapaUbicacion
+              lat={Number(f.lat)}
+              lng={Number(f.lng)}
+              onMover={(lat, lng) =>
+                setF((prev) => ({ ...prev, lat: lat.toFixed(7), lng: lng.toFixed(7) }))}
+            />
           )}
         </Section>
 
