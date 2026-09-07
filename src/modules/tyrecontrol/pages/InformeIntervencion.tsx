@@ -36,6 +36,17 @@ function fmtDur(seg?: number | null): string {
 const fmtHora = (ts?: string | null) =>
   ts ? new Date(ts).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }) : "—";
 
+// Cómo se nombra una goma en las tablas del informe: el número interno de
+// TyreControl y, cuando los tiene, el número de serie del fabricante y el DOT
+// al lado. Son los datos que la tablet lee de la foto obligatoria.
+function identidadNeumatico(n: { numero_interno?: string | null; codigo_interno?: string | null; numero_serie?: string | null; dot?: string | null } | null | undefined) {
+  if (!n) return "—";
+  const partes = [n.numero_interno ?? n.codigo_interno ?? "—"];
+  if (n.numero_serie?.trim()) partes.push(`serie ${n.numero_serie.trim()}`);
+  if (n.dot?.trim()) partes.push(`DOT ${n.dot.trim()}`);
+  return partes.join(" · ");
+}
+
 export default function InformeIntervencion() {
   const { id } = useParams<{ id: string }>();
   const [nivel, setNivel] = useState<Nivel>("completo");
@@ -308,7 +319,7 @@ export default function InformeIntervencion() {
                 <tbody>
                   {[...hechos.montadosAlmacen, ...hechos.sinControl].map((o) => (
                     <tr key={o.id} className="border-t border-slate-700/60">
-                      <td className={tdCls + " text-slate-200"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
+                      <td className={tdCls + " text-slate-200"}>{identidadNeumatico(o.neumatico)}</td>
                       <td className={tdCls + " text-slate-400"}>{o.neumatico?.marca ?? ""} {o.neumatico?.modelo ?? ""} {o.neumatico?.medida ?? ""}</td>
                       <td className={tdCls + " text-slate-400"}>{o.posicion_destino?.nombre ?? o.posicion_destino?.codigo_posicion ?? "—"}</td>
                       <td className={tdCls}>
@@ -361,7 +372,7 @@ export default function InformeIntervencion() {
                 <tbody>
                   {hechos.retirados.map((o) => (
                     <tr key={o.id} className="border-t border-slate-700/60">
-                      <td className={tdCls + " text-slate-200"}>{o.neumatico?.numero_interno ?? o.neumatico?.codigo_interno ?? "—"}</td>
+                      <td className={tdCls + " text-slate-200"}>{identidadNeumatico(o.neumatico)}</td>
                       <td className={tdCls + " text-slate-400"}>{o.posicion_origen?.nombre ?? o.posicion_origen?.codigo_posicion ?? "—"}</td>
                       <td className={tdCls + " text-slate-400"}>{o.motivo ? MOTIVO_OPERACION_LABELS[o.motivo] ?? o.motivo : "—"}</td>
                       <td className={tdCls + " text-slate-300"}>{destinoLabel(o.estado_nuevo === "pendiente_reciclaje" ? "reciclaje" : o.destino)}</td>
@@ -434,8 +445,10 @@ export default function InformeIntervencion() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {(adjuntos.get(o.id) ?? []).map((f) => (
-                        <a key={f.id} href={f.file_url} target="_blank" rel="noreferrer">
-                          <img src={f.file_url} alt={f.descripcion ?? ""} title={f.file_type ?? ""} className="h-24 w-24 rounded bg-slate-950 object-cover" />
+                        <a key={f.id} href={f.file_url} target="_blank" rel="noreferrer" className="w-24 text-center">
+                          <img src={f.file_url} alt={f.descripcion ?? ""} title={f.descripcion ?? f.file_type ?? ""} className="h-24 w-24 rounded bg-slate-950 object-cover" />
+                          {/* El nombre con el que se hizo en la tablet: Nº de serie, Neumático, DOT */}
+                          <div className="mt-0.5 truncate text-[11px] text-slate-400">{f.descripcion ?? ""}</div>
                         </a>
                       ))}
                     </div>
