@@ -57,12 +57,37 @@ export const CABECERA = {
 // Medido sobre la plantilla: el marco del cuadro de posiciones va de x 403,5 a
 // 566,6 y de y 87,0 a 194,1, y los dos logos ocupan de y 52,4 a 86,5. Se tapa
 // de 398 a 568 y de 44 a 194, y el cuadro nuevo ocupa todo ese hueco.
-export const POSICION_RUEDAS_LIMPIAR = { x: 398, y: 44, ancho: 170, alto: 150 };
-/** El marco del cuadro nuevo. El rótulo va dentro, arriba a la izquierda. */
-export const POSICION_RUEDAS_MARCO = { x: 400, y: 46, ancho: 166, alto: 147.5 };
-export const POSICION_RUEDAS_TITULO = { x: 403, y: 55, tam: 7 };
+export const POSICION_RUEDAS_LIMPIAR = { x: 399, y: 42, ancho: 172, alto: 150.6 };
+/**
+ * El marco del cuadro nuevo, alineado con lo que tiene alrededor: por arriba y
+ * por abajo con la columna de casillas de la izquierda (de y 43,5 a 190,7) y
+ * por la derecha con la tabla de razones y destinos de debajo (x 566,6).
+ */
+export const POSICION_RUEDAS_MARCO = { x: 403.5, y: 43.5, ancho: 163.1, alto: 147.2 };
+export const POSICION_RUEDAS_TITULO = { x: 406.5, y: 52.5, tam: 7 };
 /** Dónde se dibuja el vehículo: todo el cuadro menos la línea del rótulo. */
-export const POSICION_RUEDAS = { x: 402, y: 57, ancho: 162, alto: 134.5 };
+export const POSICION_RUEDAS = { x: 405.5, y: 55, ancho: 159.1, alto: 133.7 };
+
+/**
+ * «Parte de Servicio nº» y su número. El rótulo viene impreso en la plantilla
+ * empezando en x 405,1; se tapa y se vuelve a escribir junto con el número,
+ * pegado a la derecha para que el final del número quede a plomo con el borde
+ * derecho del cuadro de posición de ruedas.
+ */
+export const TITULO_PARTE = {
+  limpiar: { x: 399, y: 20, ancho: 180, alto: 22 },
+  derecha: 566.6,
+  y: 36,
+  tam: 12,
+  tamNumero: 10,
+};
+
+/**
+ * El distintivo «Conti 360°» de la cabecera de la plantilla, entre los
+ * logotipos de Comercial SEA. El parte que emite Mobilink no lleva marcas de
+ * Continental: se tapa en blanco.
+ */
+export const CONTI360 = { x: 30.5, y: 93.5, ancho: 37, alto: 31 };
 
 /**
  * El cuadrado que se pinta al lado de cada rueda, con la cruz roja dentro si
@@ -229,6 +254,13 @@ export const NUEVOS: Tabla = {
 };
 
 /**
+ * La casilla de la derecha del rótulo «Nº de Neumàticos Nuevos Montados»:
+ * cuántos neumáticos nuevos hay que facturar (los que NO salen del almacén del
+ * cliente, que ya son suyos).
+ */
+export const NUEVOS_TOTAL = { x: 330.7, y: 616.4, ancho: 56.3, alto: 30.8, tam: 16 };
+
+/**
  * Los rellenos de color de las cuatro filas de marca, medidos sobre los
  * vectores de la plantilla. Se tapan en blanco.
  */
@@ -276,12 +308,17 @@ export const SERVICIOS_Y: Record<string, number> = {
 export const ALINEACION_X = { standard: 461, compleja: 506 };
 
 /** Firmas. */
+// Medido sobre la plantilla: la casilla del cliente («Firma / Sello») va de
+// x 274,2 a 423,0 y de y 767,5 a 830,9, con el rótulo arriba y el «He leído y
+// Acepto» abajo; la del técnico («Firma Técnico»), de x 423 a 576,7 y de
+// y 799,2 a 831,2, con su rótulo arriba. La firma se encaja dentro de eso,
+// sin pisar los rótulos.
 export const FIRMAS = {
   cliente_nombre: { x: 33, y: 786 },
   cliente_dni:    { x: 33, y: 816 },
-  cliente_firma:  { x: 280, y: 778, ancho: 250, alto: 60 },
+  cliente_firma:  { x: 277, y: 779, ancho: 144, alto: 42 },
   tecnico_nombre: { x: 430, y: 786 },
-  tecnico_firma:  { x: 430, y: 812, ancho: 140, alto: 40 },
+  tecnico_firma:  { x: 425, y: 809, ancho: 149, alto: 21 },
 };
 
 /** De «desde arriba» a lo que pdf-lib espera. */

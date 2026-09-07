@@ -36,6 +36,11 @@ export interface NeumaticoPdf {
 export interface NuevoPdf {
   marca?: string | null; dimension?: string | null;
   modelo?: string | null; unidades?: string | number | null;
+  /**
+   * ¿Hay que cobrarlo? Un neumático que sale del almacén del cliente ya es
+   * suyo: se monta, pero no se factura.
+   */
+  facturable?: boolean;
 }
 
 export interface PartePdf {
@@ -188,7 +193,8 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
 
     // La cabecera va en TODAS las páginas: una segunda hoja suelta sin
     // matrícula ni número no se puede archivar.
-    escribir(p, d.numero ?? "", negrita, C.CABECERA.numero.x, C.CABECERA.numero.y, C.CABECERA.numero.tam, C.CABECERA.numero.ancho);
+    // El número del parte se escribe con su rótulo, alineado a la derecha
+    // (ver el bloque del cuadro de posición de ruedas).
     escribir(p, d.orden_flota ?? "", normal, C.CABECERA.orden_flota.x, C.CABECERA.orden_flota.y, TAM, C.CABECERA.orden_flota.ancho);
     escribir(p, d.flota ?? "", normal, C.CABECERA.flota.x, C.CABECERA.flota.y, TAM, C.CABECERA.flota.ancho);
     escribir(p, d.matricula ?? "", negrita, C.CABECERA.matricula.x, C.CABECERA.matricula.y, 11);
@@ -206,6 +212,32 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
     // rótulo. Se hace SIEMPRE, haya plano o no: un parte de Mobilink con el
     // logo de otra marca no es el parte de Mobilink.
     {
+      // El distintivo Conti 360° de la cabecera, entre los logotipos de la
+      // casa: el parte de Mobilink no lleva marcas de Continental.
+      const c3 = C.CONTI360;
+      p.drawRectangle({
+        x: c3.x, y: C.aPdf(c3.y + c3.alto), width: c3.ancho, height: c3.alto, color: rgb(1, 1, 1),
+      });
+
+      // «Parte de Servicio nº 000304», pegado a la derecha: el final del
+      // número queda a plomo con el borde del cuadro de posición de ruedas.
+      const t = C.TITULO_PARTE;
+      p.drawRectangle({
+        x: t.limpiar.x, y: C.aPdf(t.limpiar.y + t.limpiar.alto),
+        width: t.limpiar.ancho, height: t.limpiar.alto, color: rgb(1, 1, 1),
+      });
+      const rotulo = "Parte de Servicio nº ";
+      const num = (d.numero ?? "").toString().trim();
+      const anchoRotulo = negrita.widthOfTextAtSize(rotulo, t.tam);
+      const anchoNum = negrita.widthOfTextAtSize(num, t.tamNumero);
+      const x0Titulo = t.derecha - anchoNum - anchoRotulo;
+      p.drawText(rotulo, { x: x0Titulo, y: C.aPdf(t.y), size: t.tam, font: negrita, color: NEGRO });
+      if (num) {
+        p.drawText(num, {
+          x: t.derecha - anchoNum, y: C.aPdf(t.y), size: t.tamNumero, font: negrita, color: NEGRO,
+        });
+      }
+
       const limpiar = C.POSICION_RUEDAS_LIMPIAR;
       p.drawRectangle({
         x: limpiar.x, y: C.aPdf(limpiar.y + limpiar.alto),
@@ -341,6 +373,15 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
         });
       }
 
+      // Cuántos neumáticos nuevos hay que facturar: los que NO han salido del
+      // almacén del cliente, que ya son suyos y están pagados.
+      const aFacturar = nuevos.reduce((n, x) => n + (x.facturable === false ? 0 : Number(x.unidades ?? 0)), 0);
+      if (aFacturar > 0) {
+        const t = C.NUEVOS_TOTAL;
+        escribirEnCaja(p, String(aFacturar), negrita, [t.x, t.x + t.ancho],
+                       t.y + (t.alto + t.tam * 0.72) / 2, t.tam);
+      }
+
       if (nuevos.length > C.NUEVOS.filas) {
         // Silenciarlo sería entregar un parte al que le faltan neumáticos.
         console.warn(`[parte] ${nuevos.length} marcas de neumático nuevo y solo caben ${C.NUEVOS.filas} filas en blanco`);
@@ -376,9 +417,12 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
         // Se encaja dentro del recuadro sin deformarla: una firma estirada no
         // se parece a la del cliente.
         const esc = Math.min(sitio.ancho / img.width, sitio.alto / img.height, 1);
+        const an = img.width * esc, al = img.height * esc;
+        // Centrada en su casilla: descuadrada a un lado parece de otro sitio.
         p.drawImage(img, {
-          x: sitio.x, y: C.aPdf(sitio.y + img.height * esc),
-          width: img.width * esc, height: img.height * esc,
+          x: sitio.x + (sitio.ancho - an) / 2,
+          y: C.aPdf(sitio.y + (sitio.alto - al) / 2 + al),
+          width: an, height: al,
         });
       }
     }
