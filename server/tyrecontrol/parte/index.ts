@@ -67,6 +67,25 @@ async function puedeVerEmpresa(req: any, empresaId: string): Promise<boolean> {
  * una imagen—: el PDF deja el recuadro como estaba y el parte sale igual. Un
  * plano que no se puede traer no es motivo para no entregar el papel.
  */
+/**
+ * Baja una imagen del bucket y la devuelve en bytes. pdf-lib solo sabe
+ * incrustar PNG y JPEG: un SVG o un WebP reventarían al meterlos, y ese error
+ * no debe llevarse por delante el parte.
+ */
+async function bajarImagen(url: string | null | undefined): Promise<Uint8Array | null> {
+  const u = (url ?? "").trim();
+  if (!u) return null;
+  try {
+    const r = await fetch(u);
+    if (!r.ok) return null;
+    const tipo = r.headers.get("content-type") ?? "";
+    if (tipo && !/image\/(png|jpe?g)/i.test(tipo)) return null;
+    return new Uint8Array(await r.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
 async function planoDelVehiculo(veh: any): Promise<Uint8Array | null> {
   if (!veh) return null;
   try {
@@ -269,6 +288,13 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
         }
       }
 
+      // Las firmas que se dibujaron en la tablet. Están en el mismo bucket que
+      // las fotos; el generador las incrusta en sus casillas.
+      const [firmaCliente, firmaTecnico] = await Promise.all([
+        bajarImagen((interv as any).firma_cliente_url),
+        bajarImagen((interv as any).firma_tecnico_url),
+      ]);
+
       const parte = armarParte(
         {
           ...interv,
@@ -280,7 +306,10 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
         (servicios ?? []) as { servicio: string; cantidad: number }[],
       );
 
-      const pdf = await generarPartePdf({ ...parte, plano, marcas });
+      const pdf = await generarPartePdf({
+        ...parte, plano, marcas,
+        firma_cliente: firmaCliente, firma_tecnico: firmaTecnico,
+      });
 
       return { pdf, nombre: `parte-${(interv.numero || id).replace(/[^\w.-]/g, "_")}.pdf` };
   }
