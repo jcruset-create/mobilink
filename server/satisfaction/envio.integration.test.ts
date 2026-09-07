@@ -69,6 +69,18 @@ async function crearAsistencia(o: { finishedAtMs?: number } = {}) {
 }
 
 /** Una encuesta ya encolada, lista para que el worker la mande. */
+/*
+ * La encuesta de la prueba se coloca la PRIMERA de la cola.
+ *
+ * `reclamarParaEnvio` ordena por `sendAfterMs` y se lleva 25. La base de
+ * pruebas la comparten todos los ficheros, y los demás dejan decenas de
+ * encuestas encoladas que nadie recoge: la recién creada era la más nueva y se
+ * quedaba fuera del lote, así que la prueba fallaba por lo que había alrededor
+ * y no por lo que comprobaba. Con una fecha antigua entra siempre, y sigue
+ * siendo verdad lo que representa: una encuesta cuya espera ya venció.
+ */
+const SENDAFTER_ANTIGUO = 1_000_000_000_000; // 2001; cualquier cosa vence antes
+
 async function encolada(o: {
   rol?: "DRIVER" | "CUSTOMER"; telefono?: string | null; caducaEnMs?: number;
 } = {}) {
@@ -83,8 +95,9 @@ async function encolada(o: {
   });
   if (c.estado !== "created") throw new Error("no creada");
   await db.query(
-    `UPDATE survey_instances SET status = 'QUEUED', "queuedAtMs" = $2 WHERE id = $1`,
-    [c.instancia.id, Date.now()]);
+    `UPDATE survey_instances
+        SET status = 'QUEUED', "queuedAtMs" = $2, "sendAfterMs" = $3 WHERE id = $1`,
+    [c.instancia.id, Date.now(), SENDAFTER_ANTIGUO]);
   return { id: c.instancia.id, assistanceId, ambito };
 }
 
@@ -765,7 +778,7 @@ describe.skipIf(!RUN)("una pasada del worker", () => {
     // Una que ya venció su espera y está lista para salir.
     const lista = await encolada();
     await db.query(`UPDATE survey_instances SET status = 'CREATED', "sendAfterMs" = $2
-                     WHERE id = $1`, [lista.id, Date.now() - 1000]);
+                     WHERE id = $1`, [lista.id, SENDAFTER_ANTIGUO]);
     // Y una pasada de fecha, que tiene que caducar y no salir.
     const vieja = await encolada();
     await db.query(`UPDATE survey_instances SET "expiresAtMs" = $2 WHERE id = $1`,
