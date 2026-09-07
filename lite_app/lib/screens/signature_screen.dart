@@ -41,7 +41,14 @@ class _SignatureScreenState extends State<SignatureScreen> {
 
   Future<void> _guardar() async {
     if (_nombre.text.trim().isEmpty) {
-      setState(() => _error = 'Indica el nombre del firmante.');
+      setState(() => _error = 'Indica el nombre y los apellidos del firmante.');
+      return;
+    }
+    // El documento pasa a ser obligatorio: la firma de un "Juan" sin más no
+    // identifica a nadie el día que el cliente discute el servicio, que es el
+    // único día en el que esta firma sirve para algo.
+    if (_documento.text.trim().isEmpty) {
+      setState(() => _error = 'Indica el DNI / NIE del firmante.');
       return;
     }
     if (_controller.isEmpty) {
@@ -65,7 +72,7 @@ class _SignatureScreenState extends State<SignatureScreen> {
         assistanceId: widget.assistanceId,
         png: png,
         signerName: _nombre.text.trim(),
-        signerDocument: _documento.text.trim().isEmpty ? null : _documento.text.trim(),
+        signerDocument: _documento.text.trim(),
         consentText: kConsentText,
         lat: pos?.latitude,
         lng: pos?.longitude,
@@ -108,7 +115,7 @@ class _SignatureScreenState extends State<SignatureScreen> {
           controller: _documento,
           textCapitalization: TextCapitalization.characters,
           decoration: const InputDecoration(
-            labelText: 'DNI / documento (si procede)',
+            labelText: 'DNI / NIE *',
             prefixIcon: Icon(Icons.badge),
           ),
         ),
