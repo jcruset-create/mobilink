@@ -689,9 +689,11 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
             // estaba vacía: una lectura no le gana a un dato puesto a mano.
             'numero_serie': (r.numeroSerie?.trim().isEmpty ?? true) ? null : r.numeroSerie!.trim(),
             'dot': (r.dot?.trim().isEmpty ?? true) ? null : r.dot!.trim(),
+            // Con el mismo nombre que llevan en esta pantalla: así se leen igual
+            // en el panel.
             'adjuntos': [
               if (r.fotoSerie != null)
-                {'url': r.fotoSerie, 'descripcion': 'Número de serie'},
+                {'url': r.fotoSerie, 'descripcion': 'Nº de serie'},
               if (r.fotoNeumatico != null)
                 {'url': r.fotoNeumatico, 'descripcion': 'Neumático'},
               if (r.fotoDot != null)
@@ -732,14 +734,19 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
         // descarta) y, si esa goma ya tenía ficha, la reconoce en vez de
         // crear otra. Sin serie se deja decidir a la política de la empresa.
         final individual = datos.containsKey('numero_serie') ? true : null;
+        // La foto obligatoria del serie de la goma que ENTRA se cuelga de su
+        // montaje, igual que las de la que sale se cuelgan del desmontaje.
+        final adjuntosEntra = [
+          if (m.fotoSerie != null) {'url': m.fotoSerie, 'descripcion': 'Nº de serie'},
+        ];
         out.add(m.origen == 'almacen'
-            ? {'rpc': 'tc_montar_desde_almacen', 'args': {
+            ? {'rpc': 'tc_montar_desde_almacen', 'adjuntos': adjuntosEntra, 'args': {
                 'p_vehiculo': _vehiculo!.id, 'p_posicion': posId,
                 'p_producto_almacen': m.productoId, 'p_control_individual': individual,
                 'p_datos': datos, 'p_km': km, 'p_fecha': null,
                 'p_obs': null, 'p_forzar_medida': false, 'p_condicion': m.condicion,
               }}
-            : {'rpc': 'tc_montar_desde_catalogo', 'args': {
+            : {'rpc': 'tc_montar_desde_catalogo', 'adjuntos': adjuntosEntra, 'args': {
                 'p_vehiculo': _vehiculo!.id, 'p_posicion': posId,
                 'p_referencia': m.referenciaId, 'p_control_individual': individual,
                 'p_datos': datos, 'p_km': km, 'p_fecha': null,

@@ -352,16 +352,20 @@ begin
          and nullif(trim(n.dot), '') is null;
     end if;
 
-    -- Las fotos del neumático que sale. Van a tc_operacion_adjuntos, que es la
-    -- tabla de adjuntos que YA existe: no se crea otro sistema de fotos.
-    -- Se cuelgan de la primera operación de la acción, que es la del
-    -- desmontaje (una sustitución crearía dos: desmontaje y montaje).
+    -- Las fotos de la acción (las de la goma que sale en el desmontaje, la
+    -- del serie de la que entra en el montaje). Van a tc_operacion_adjuntos,
+    -- que es la tabla de adjuntos que YA existe: no se crea otro sistema de
+    -- fotos. Se cuelgan de la primera operación de la acción, que es la del
+    -- desmontaje (una sustitución crearía dos: desmontaje y montaje). Las
+    -- de un montaje son «despues»: son de la rueda ya puesta.
     v_op := v_nuevas[1];
     if v_op is not null then
       for v_adj in select * from jsonb_array_elements(coalesce(v_acc->'adjuntos', '[]'::jsonb)) loop
         if nullif(v_adj->>'url','') is not null then
           insert into tc_operacion_adjuntos (operacion_id, file_url, file_type, descripcion)
-          values (v_op, v_adj->>'url', 'antes', nullif(v_adj->>'descripcion',''));
+          values (v_op, v_adj->>'url',
+                  case when v_acc->>'rpc' like 'tc_montar%' then 'despues' else 'antes' end,
+                  nullif(v_adj->>'descripcion',''));
           v_n_fotos := v_n_fotos + 1;
         end if;
       end loop;
