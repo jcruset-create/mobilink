@@ -205,6 +205,16 @@ export function normalizar(cruda: ExtraccionCruda): ExtraccionNormalizada {
     facturasDetectadas: Math.max(1, Math.round(Number(cruda.facturas_detectadas) || 1)),
     numeroFactura: textoOpcional(cruda.factura?.numero),
     fecha: fechaImpresa(cruda.factura?.fecha),
+    /*
+     * Las dos partes se normalizan igual. `emisor` puede venir vacío en los
+     * análisis ANTERIORES a que existiera el campo: se lee con `?.` y sale
+     * null, que es lo correcto — un documento viejo no sabe quién lo emitió y
+     * fingir que sí sería inventárselo.
+     */
+    emisor: {
+      nombre: textoOpcional(cruda.emisor?.nombre),
+      nif: textoOpcional(cruda.emisor?.nif),
+    },
     cliente: {
       codigo: textoOpcional(cruda.cliente?.codigo),
       nombre: textoOpcional(cruda.cliente?.nombre),
@@ -246,6 +256,7 @@ export function normalizar(cruda: ExtraccionCruda): ExtraccionNormalizada {
     confianza: {
       numeroFactura: confianza(cruda.confianza?.numero_factura),
       cliente: confianza(cruda.confianza?.cliente),
+      emisor: confianza(cruda.confianza?.emisor),
       total: confianza(cruda.confianza?.total),
       concepto: confianza(cruda.confianza?.concepto),
       recibo: confianza(cruda.confianza?.recibo),

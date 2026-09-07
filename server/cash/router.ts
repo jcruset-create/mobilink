@@ -1850,9 +1850,19 @@ export function createCashRouter(): Router {
         throw new ErrorCaja("DOCUMENTO_NO_ENCONTRADO", "Ese documento no existe.", 404);
       }
       const { propuestaDeEscaneo } = await import("./invoice-scan/service.ts");
+      /*
+       * El MISMO documento se abre desde Cobros y desde Pagos: la bandeja es
+       * una sola por centro y el papel no sabe si es una venta o una compra.
+       * Lo que cambia con el sentido no es la extracción —ya está hecha— sino
+       * contra qué se mira el duplicado.
+       */
+      const sentido = req.query.sentido === "PAGO" ? "PAGO" : "COBRO";
       res.json({
         documento: doc,
-        propuesta: doc.scanId == null ? null : await propuestaDeEscaneo(req.authCtx!.empresaId, doc.scanId),
+        propuesta:
+          doc.scanId == null
+            ? null
+            : await propuestaDeEscaneo(req.authCtx!.empresaId, doc.scanId, sentido),
       });
     })
   );
@@ -1934,18 +1944,43 @@ export function createCashRouter(): Router {
    */
   r.post(
     "/invoice-scan",
-    exigirPermiso("cash.collection.create_manual"),
+    /*
+     * El permiso depende del SENTIDO, y por eso se mira aquí dentro en vez de
+     * con `exigirPermiso`. Antes esta ruta pedía siempre el permiso de cobro
+     * manual, así que quien solo puede pagar no podía ni escanear el ticket de
+     * su compra — la funcionalidad existía y le estaba cerrada.
+     *
+     * El sentido llega en el cuerpo, y como es multipart tiene que ir ANTES
+     * del fichero para que multer lo deje en `req.body`. Por eso no se confía
+     * en que venga: sin él, se asume COBRO, que es el comportamiento de
+     * siempre.
+     */
     subida(subidaDocumento.single("documento"), 15),
     ruta(async (req, res) => {
       if (!req.file) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
       }
       const b = req.body ?? {};
+      const sentido = b.sentido === "PAGO" ? "PAGO" : "COBRO";
+      const permiso =
+        sentido === "PAGO" ? "cash.payment.create_manual" : "cash.collection.create_manual";
+      if (!req.cashPermisos?.includes(permiso)) {
+        return res.status(403).json({
+          error:
+            sentido === "PAGO"
+              ? "No tienes permiso para registrar pagos manuales."
+              : "No tienes permiso para registrar cobros manuales.",
+          code: "PERMISO_DENEGADO",
+          permiso,
+        });
+      }
+
       const propuesta = await escanearFactura({
         empresaId: req.authCtx!.empresaId,
         userId: req.authCtx!.userId ?? null,
         sessionId: b.sessionId ? enteroPositivo(b.sessionId, "sessionId") : null,
         fichero: req.file,
+        sentido,
       });
       res.json({ propuesta });
     })
