@@ -48,15 +48,27 @@ export const CABECERA = {
  * numeraciones distintas en el mismo papel es pedir que alguien apunte una
  * medición en la rueda equivocada.
  */
-// Medido sobre la plantilla: el marco del cuadro va de x 403,5 a 566,6 y de
-// y 87,0 a 194,1, y el rótulo ocupa hasta y 99,9. Se tapa DESDE DEBAJO DEL
-// TÍTULO —«Posición Ruedas» sigue siendo cierto para el plano de Mobilink— y
-// sin llegar al marco, para no borrar la línea del recuadro.
+// El cuadro entero de la esquina superior derecha, LOGOS INCLUIDOS: se tapa en
+// blanco y se vuelve a dibujar el marco y el rótulo. Los logos de Continental
+// y Conti360 son de la plantilla de papel de Conti; el parte que emite
+// Mobilink no los lleva, y quitarlos deja sitio para que el vehículo se vea
+// grande, que es lo que se mira.
 //
-// El alto llega hasta 193,5 y no hasta 189: con el recorte anterior asomaban
-// por debajo las casillas «Rpto 1 / Rpto 2» del diagrama impreso, y quedaban
-// dos barras negras bajo el plano de Mobilink.
-export const POSICION_RUEDAS = { x: 404.3, y: 99.3, ancho: 161.8, alto: 94.2 };
+// Medido sobre la plantilla: el marco del cuadro de posiciones va de x 403,5 a
+// 566,6 y de y 87,0 a 194,1, y los dos logos ocupan de y 52,4 a 86,5. Se tapa
+// de 398 a 568 y de 44 a 194, y el cuadro nuevo ocupa todo ese hueco.
+export const POSICION_RUEDAS_LIMPIAR = { x: 398, y: 44, ancho: 170, alto: 150 };
+/** El marco del cuadro nuevo. El rótulo va dentro, arriba a la izquierda. */
+export const POSICION_RUEDAS_MARCO = { x: 400, y: 46, ancho: 166, alto: 147.5 };
+export const POSICION_RUEDAS_TITULO = { x: 403, y: 55, tam: 7 };
+/** Dónde se dibuja el vehículo: todo el cuadro menos la línea del rótulo. */
+export const POSICION_RUEDAS = { x: 402, y: 57, ancho: 162, alto: 134.5 };
+
+/**
+ * El cuadrado que se pinta al lado de cada rueda, con la cruz roja dentro si
+ * esa posición se ha tocado, y el código de la posición debajo.
+ */
+export const CUADRO_POSICION = { lado: 13, separacion: 3, tamCruz: 11, tamCodigo: 5 };
 
 /** Las tres casillas de dónde se hizo el servicio. */
 export const LUGAR: Record<"taller" | "flota" | "carretera", Punto> = {
@@ -204,18 +216,45 @@ export const DESTINO_X: Record<string, number> = {
 /**
  * Neumáticos nuevos montados.
  *
- * Las cuatro primeras filas del papel llevan Continental y Semperit
- * PREIMPRESAS con su logo: escribir encima taparía el logo y quedaría sucio.
- * Se empieza en la quinta, que es la primera en blanco. Caben tres marcas
- * distintas; con más, la cuarta y siguientes no se imprimen y el generador lo
- * avisa en vez de amontonarlas.
+ * Las cuatro primeras filas del papel vienen con Continental y Semperit
+ * PREIMPRESAS sobre un fondo amarillo y otro gris. El parte de Mobilink no
+ * vende una marca concreta: se tapan esos cuatro rellenos en blanco, se vuelve
+ * a trazar la rejilla y se usan las SEIS filas, empezando por la primera.
  */
 export const NUEVOS: Tabla = {
-  primeraFila: 738,
-  alturaFila: 17.5,
-  filas: 3,
+  primeraFila: 670,
+  alturaFila: 17.02,
+  filas: 6,
   columnas: { marca: 33, dimension: 160, modelo: 290, unidades: 352 },
 };
+
+/**
+ * Los rellenos de color de las cuatro filas de marca, medidos sobre los
+ * vectores de la plantilla. Se tapan en blanco.
+ */
+export const NUEVOS_FONDOS = [
+  { x: 27.71, y: 661.10, ancho: 359.29, alto: 17.01 },
+  { x: 27.71, y: 678.11, ancho: 359.29, alto: 17.00 },
+  { x: 27.71, y: 694.96, ancho: 359.29, alto: 17.01 },
+  { x: 27.71, y: 712.23, ancho: 359.29, alto: 17.01 },
+] as const;
+
+/**
+ * Y la rejilla que hay que devolver encima: las mismas cuatro filas y la línea
+ * que separa la columna de Unidades, tal como están trazadas en la plantilla.
+ */
+export const NUEVOS_REJILLA = {
+  x: 27.7,
+  ancho: 359.3,
+  columnaUnidades: 330.7,
+  grosor: 0.5,
+  filas: [
+    { y: 661.2, alto: 17.0 },
+    { y: 678.2, alto: 17.0 },
+    { y: 695.2, alto: 17.0 },
+    { y: 712.2, alto: 17.0 },
+  ],
+} as const;
 
 /** Servicios realizados: la y de cada línea y la x de la cantidad. */
 export const SERVICIOS_X_CANTIDAD = 556;

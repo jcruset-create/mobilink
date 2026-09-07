@@ -238,9 +238,11 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
       // que alguien apunte una medición en la rueda equivocada.
       const plano = await planoDelVehiculo(interv.vehiculo);
 
-      // Y dónde cae cada rueda en ese plano, para marcar las que se han
-      // tocado. Son las mismas coordenadas calibradas que usa la tablet.
-      const marcas: { x: number; y: number }[] = [];
+      // Y dónde cae cada rueda en ese plano. Se mandan TODAS las posiciones
+      // del vehículo: cada una se pinta como un cuadrado con su código, y las
+      // que se han tocado en este parte llevan además la cruz roja.
+      const marcas: { x: number; y: number; w?: number | null; h?: number | null;
+                      codigo?: string | null; usada?: boolean }[] = [];
       if (plano && interv.vehiculo?.id) {
         const { data: veh2 } = await supabase
           .from("tc_vehiculos").select("tipo_vehiculo_id")
@@ -248,21 +250,21 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
         if ((veh2 as any)?.tipo_vehiculo_id) {
           const { data: pos } = await supabase
             .from("tc_posiciones_vehiculo")
-            .select("codigo_posicion, pos_x, pos_y")
-            .eq("tipo_vehiculo_id", (veh2 as any).tipo_vehiculo_id);
-          const porCodigo = new Map<string, { x: number; y: number }>();
+            .select("codigo_posicion, pos_x, pos_y, pos_w, pos_h, orden_visual")
+            .eq("tipo_vehiculo_id", (veh2 as any).tipo_vehiculo_id)
+            .order("orden_visual");
+          // Una posición tocada dos veces (sale una goma y entra otra) cuenta
+          // UNA vez: dos cruces encima de la misma rueda no dicen más.
+          const tocadas = new Set(filas.map((f) => f.posicion).filter(Boolean) as string[]);
           for (const q of (pos ?? []) as any[]) {
             if (q.pos_x == null || q.pos_y == null) continue;
-            porCodigo.set(q.codigo_posicion, { x: Number(q.pos_x), y: Number(q.pos_y) });
-          }
-          // Una posición tocada dos veces (sale una goma y entra otra) se
-          // marca UNA vez: dos cruces encima de la misma rueda no dicen más.
-          const vistas = new Set<string>();
-          for (const f of filas) {
-            const c = f.posicion;
-            if (!c || vistas.has(c)) continue;
-            const p = porCodigo.get(c);
-            if (p) { marcas.push(p); vistas.add(c); }
+            marcas.push({
+              x: Number(q.pos_x), y: Number(q.pos_y),
+              w: q.pos_w == null ? null : Number(q.pos_w),
+              h: q.pos_h == null ? null : Number(q.pos_h),
+              codigo: q.codigo_posicion,
+              usada: tocadas.has(q.codigo_posicion),
+            });
           }
         }
       }
