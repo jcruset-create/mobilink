@@ -160,22 +160,35 @@ class _InboxScreenState extends State<InboxScreen> with WidgetsBindingObserver {
     final conflicts = OfflineQueue.conflicts();
     return Scaffold(
       appBar: AppBar(
-        // El logotipo en lugar del título: la versión de cabecera va sin el
-        // lema, que a 26 px de alto no se lee y solo ensucia. Debajo sigue el
-        // nombre del taller, que es el dato que el operario necesita ver.
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
+        // El logotipo en lugar del título, y el taller A SU DERECHA en la
+        // misma línea: apilados, el logo se quedaba en 26 px —ilegible— para
+        // dejar sitio al nombre debajo. En horizontal el logo se lleva toda la
+        // altura de la barra y el taller ocupa el hueco que sobra.
+        //
+        // La versión de cabecera del logotipo va sin el lema; a esta altura
+        // tampoco se leería.
+        //
+        // El nombre es Flexible con ellipsis: un taller de nombre largo
+        // recorta su propio texto en vez de desbordar la barra y provocar el
+        // aviso amarillo y negro de Flutter.
+        titleSpacing: 12,
+        title: Row(
           children: [
             Image.asset(
               'assets/logo_cabecera.png',
-              height: 26,
+              height: 38,
               fit: BoxFit.contain,
               semanticLabel: 'Mobilink Assist Lite',
             ),
-            const SizedBox(height: 2),
-            Text(widget.session.workshopName,
-                style: const TextStyle(fontSize: 12, color: AppColors.textMuted)),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                widget.session.workshopName,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13, color: AppColors.textMuted),
+              ),
+            ),
           ],
         ),
         actions: [
