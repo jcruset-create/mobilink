@@ -14,8 +14,12 @@
 /// botón en vez de dejar al operario delante de una pantalla que no responde.
 library;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class Camara {
@@ -24,6 +28,41 @@ class Camara {
   /// Foto de la cámara, o null si no se pudo (ya avisado por pantalla).
   static Future<XFile?> hacerFoto(BuildContext context, {int calidad = 90, double? maxWidth}) =>
       _tomar(context, ImageSource.camera, calidad, maxWidth);
+
+  /// Foto ya lista para subir: hecha, comprimida y comprobada.
+  ///
+  /// Devuelve null si el operario cancela o si lo que sale de la cámara no
+  /// sirve. Una foto de cero bytes es una foto que no existe —la cámara del
+  /// sistema falló— y colarla como evidencia sería entregar un servicio sin
+  /// prueba, así que se avisa y se pide repetirla.
+  ///
+  /// `alta` sube la resolución para las fotos donde hay que LEER algo (la
+  /// matrícula). El resto se comprime más, que es lo que hace que suban con
+  /// cobertura mala. Las dos calidades vienen de Mobilink Assist Pro
+  /// (`flutter_app/lib/screens/arrival_photos_screen.dart`).
+  static Future<File?> fotoParaEvidencia(BuildContext context,
+      {bool alta = false}) async {
+    final origen = await hacerFoto(context, maxWidth: 1920);
+    if (origen == null) return null;
+    final tmp = await getTemporaryDirectory();
+    final destino = '${tmp.path}/ev_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final out = await FlutterImageCompress.compressAndGetFile(
+      origen.path,
+      destino,
+      quality: alta ? 85 : 70,
+      minWidth: alta ? 1920 : 1600,
+      minHeight: alta ? 1080 : 900,
+      keepExif: false,
+    );
+    final archivo = out == null ? File(origen.path) : File(out.path);
+    if (!await archivo.exists() || await archivo.length() < 1024) {
+      if (context.mounted) {
+        _avisar(context, 'La foto no se ha guardado bien. Vuelve a hacerla.');
+      }
+      return null;
+    }
+    return archivo;
+  }
 
   /// Imagen de la galería. También necesita permiso en Android 13 o superior.
   static Future<XFile?> elegirDeGaleria(BuildContext context, {int calidad = 90, double? maxWidth}) =>

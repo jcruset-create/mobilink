@@ -1,10 +1,13 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../config.dart';
 import '../services/api.dart';
+import '../services/biometria.dart';
 import '../services/file_queue.dart';
 import '../services/push.dart';
+import '../services/preferencias.dart';
 import '../services/queue.dart';
 import '../services/session.dart';
 import '../services/tracker.dart';
@@ -26,15 +29,59 @@ class _ProfileScreenState extends State<ProfileScreen> {
   late final Api _api = Api(widget.session.token);
   String _gps = 'comprobando…';
   bool _busy = false;
+  bool _bioDisponible = false;
+  bool _bioActivada = false;
+  String _bioNombre = 'Face ID';
+  String? _taller;
 
   @override
   void initState() {
     super.initState();
     _permisos();
+    _ajustesLocales();
+  }
+
+  Future<void> _ajustesLocales() async {
+    final disponible = await Biometria.disponible();
+    final activada = await Preferencias.biometriaActivada();
+    final nombre = await Biometria.nombre();
+    final taller = await Preferencias.tallerRecordado();
+    if (!mounted) return;
+    setState(() {
+      _bioDisponible = disponible;
+      _bioActivada = activada;
+      _bioNombre = nombre;
+      _taller = taller;
+    });
+  }
+
+  /// Activar exige identificarse en el momento: si el sensor falla, es mejor
+  /// saberlo aquí que en la pantalla de candado del próximo arranque.
+  /// Desactivar no pide nada: quitarse una comodidad no es una operación
+  /// peligrosa, y pedir la cara para poder dejar de usarla es absurdo.
+  Future<void> _cambiarBiometria(bool valor) async {
+    if (valor && !await Biometria.autenticar('Activa el acceso con $_bioNombre')) {
+      return;
+    }
+    await Preferencias.activarBiometria(valor);
+    if (!mounted) return;
+    setState(() => _bioActivada = valor);
+  }
+
+  Future<void> _olvidarTaller() async {
+    await Preferencias.olvidarTaller();
+    if (!mounted) return;
+    setState(() => _taller = null);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Taller olvidado: habrá que escribirlo en el próximo acceso.'),
+    ));
   }
 
   Future<void> _permisos() async {
-    final gps = await Tracker.ensurePermission();
+    // Se mira, no se pide: en iOS el diálogo solo sale una vez y ya salió al
+    // aceptar las condiciones. Lo único que hay aquí cuando está denegado es
+    // el botón de Ajustes, que es la única salida real.
+    final gps = await Tracker.permissionStatus();
     if (!mounted) return;
     setState(() => _gps = gps);
     // El estado de permisos se comparte con la central: si un operario no
@@ -80,7 +127,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         content: Text(pendientes > 0
             ? 'Tienes $pendientes operación(es) sin enviar. Si cierras sesión '
                 'ahora se perderán. ¿Seguro?'
-            : 'Tendrás que volver a introducir el código de taller, el usuario y el PIN.'),
+            : 'Tendrás que volver a introducir el usuario y el PIN. El código '
+                'de taller se conserva si lo tienes recordado.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Cerrar sesión')),
@@ -90,6 +138,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (ok != true) return;
     try { await _api.logout(); } catch (_) {}
     await Session.clear();
+    await Preferencias.olvidarBiometria();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()), (_) => false);
@@ -135,7 +184,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
               color: gpsOk ? AppColors.ok : AppColors.danger),
           title: const Text('Permiso de ubicación'),
           subtitle: Text(_gpsTexto(_gps)),
-          trailing: TextButton(onPressed: _permisos, child: const Text('Revisar')),
+          trailing: gpsOk
+              ? TextButton(onPressed: _permisos, child: const Text('Revisar'))
+              : TextButton(
+                  onPressed: () => _gps == 'service_disabled'
+                      ? Tracker.abrirAjustesDelSistema()
+                      : openAppSettings(),
+                  child: const Text('Ajustes'),
+                ),
         ),
         ListTile(
           leading: Icon(
@@ -188,14 +244,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
         const Divider(),
+        if (_bioDisponible)
+          SwitchListTile(
+            secondary: Icon(Icons.fingerprint,
+                color: _bioActivada ? AppColors.ok : AppColors.textMuted),
+            title: Text('Entrar con $_bioNombre'),
+            subtitle: Text(_bioActivada
+                ? 'Al abrir la app se pide $_bioNombre en vez del usuario y el PIN'
+                : 'Evita escribir el usuario y el PIN en cada acceso'),
+            value: _bioActivada,
+            onChanged: _cambiarBiometria,
+          ),
+        ListTile(
+          leading: const Icon(Icons.store_mall_directory),
+          title: const Text('Taller recordado'),
+          subtitle: Text(_taller == null
+              ? 'No se recuerda: habrá que escribirlo al entrar'
+              : 'Se rellenará solo con el código $_taller'),
+          trailing: _taller == null
+              ? null
+              : TextButton(onPressed: _olvidarTaller, child: const Text('Olvidar')),
+        ),
+        const Divider(),
         ListTile(
           leading: const Icon(Icons.privacy_tip),
           title: const Text('Privacidad y ubicación'),
-          subtitle: const Text(
+          subtitle: Text(
             'Tu ubicación solo se comparte durante una asistencia activa '
             '(en camino, en punto, trabajando y vuelta al taller). Nunca fuera '
-            'de un servicio. Mientras se comparte verás un aviso permanente en '
-            'la barra de notificaciones.',
+            'de un servicio. Mientras se comparte verás ${Platform.isIOS ? 'el indicador azul de ubicación en la parte de arriba de la pantalla' : 'un aviso permanente en la barra de notificaciones'}.',
           ),
         ),
         ListTile(
@@ -203,7 +280,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           title: const Text('Política de privacidad'),
           trailing: const Icon(Icons.open_in_new, size: 18),
           onTap: () => launchUrl(
-            Uri.parse('$kBackendUrl/privacidad'),
+            Uri.parse(kPrivacyUrl),
             mode: LaunchMode.externalApplication,
           ),
         ),
