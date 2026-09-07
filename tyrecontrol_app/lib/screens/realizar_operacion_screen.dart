@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -360,9 +361,23 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     if (foto == null) return null;
     setState(() { _trabajando = true; _error = null; });
     try {
-      return await TyreControlApi.subirFotoParte(foto, carpeta: _carpetaFotos);
+      // Con tope: sin él, una subida que no avanza deja la barra de progreso
+      // para siempre y el técnico no sabe si esperar o repetir.
+      return await TyreControlApi.subirFotoParte(foto, carpeta: _carpetaFotos)
+          .timeout(const Duration(seconds: 90));
     } catch (e) {
-      if (mounted) setState(() => _error = 'No se ha podido subir la foto: $e');
+      final msg = e is TimeoutException
+          ? 'La foto no se ha podido subir: sin cobertura suficiente. Prueba otra vez.'
+          : 'No se ha podido subir la foto: $e';
+      if (mounted) {
+        setState(() => _error = msg);
+        // El aviso de arriba queda fuera de la pantalla cuando se está en las
+        // fotos: se dice también aquí abajo, donde está el técnico.
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(msg), backgroundColor: AppColors.danger,
+          duration: const Duration(seconds: 6),
+        ));
+      }
       return null;
     } finally {
       if (mounted) setState(() => _trabajando = false);
