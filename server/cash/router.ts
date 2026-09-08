@@ -2860,7 +2860,19 @@ export function createAutoScanMachineRouter(): Router {
     })
   );
 
-  /** Latido: sigo vivo, y ésta es mi versión. */
+  /**
+   * Latido: sigo vivo, y ésta es mi versión.
+   *
+   * De vuelta va la versión del agente que hay publicada. El servidor NO decide
+   * si toca actualizar —no le corresponde: el agente es quien sabe qué lleva y
+   * quien manda en su propia máquina—; se limita a decir qué hay. La comparación
+   * y la decisión están en el agente, y ahí es donde vive la regla de que nunca
+   * se retrocede de versión.
+   *
+   * Va montado en el latido y no en una ruta propia porque el latido ya existe,
+   * ya viaja autenticado y ya lleva la versión en la ida. Una ruta más sería un
+   * sitio más que asegurar a cambio de nada.
+   */
   m.post(
     "/autoscan/heartbeat",
     conDispositivo,
@@ -2868,7 +2880,9 @@ export function createAutoScanMachineRouter(): Router {
       const b = req.body ?? {};
       const { latido } = await import("./autoscan/devices.ts");
       await latido(req.autoscan!.deviceId, typeof b.version === "string" ? b.version : null);
-      res.json({ ok: true });
+
+      const { agentePublicado } = await import("./autoscan/version.ts");
+      res.json({ ok: true, agente: agentePublicado() });
     })
   );
 

@@ -82,6 +82,44 @@ Add-Item "Reintentar los apartados" {
         "$n documento(s) vuelven a la cola.", "Mobilink AutoScan") | Out-Null
 } | Out-Null
 
+# ── Actualizar ─────────────────────────────────────────────────────────────
+#
+# La entrada esta SIEMPRE en el menu, y dice si hay algo o no. Esconderla
+# cuando no toca obligaria a redibujar el menu con cada latido, y ademas deja
+# al tecnico sin sitio donde mirar para saber si el agente esta al dia.
+#
+# Se pregunta al pulsar y no al pintar: el estado cambia solo cada minuto y un
+# menu que se abre tiene que abrirse ya.
+Add-Item "Actualizar el agente" {
+    $e = Invoke-Panel "/estado"
+    if ($null -eq $e) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "El agente no responde.", "Mobilink AutoScan") | Out-Null
+        return
+    }
+    if ($null -eq $e.actualizacion) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Ya tienes la ultima version ($($e.version)).", "Mobilink AutoScan") | Out-Null
+        return
+    }
+
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Hay una version nueva: $($e.actualizacion.version). Tienes la $($e.version).`n`n" +
+        "El agente se para unos segundos y vuelve solo. Lo que este en cola no se pierde, " +
+        "y si la version nueva no arranca se recupera la de ahora.`n`n" +
+        "Actualizar ahora?",
+        "Mobilink AutoScan", [System.Windows.Forms.MessageBoxButtons]::YesNo)
+    if ($r -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+    # NO se mira la respuesta: quien contesta es el agente, y el guion lo primero
+    # que hace es pararlo. Quedarse esperando una respuesta que no va a llegar
+    # dejaria el menu colgado y haria pensar que ha fallado.
+    Invoke-Panel "/actualizar" "Post" | Out-Null
+    [System.Windows.Forms.MessageBox]::Show(
+        "Actualizacion lanzada. El agente estara de vuelta en menos de un minuto; " +
+        "vuelve a abrir esta bandeja para comprobarlo.", "Mobilink AutoScan") | Out-Null
+} | Out-Null
+
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 
 Add-Item "Abrir la carpeta de escaneos" { Start-Process (Join-Path $Raiz "Inbox") } | Out-Null
