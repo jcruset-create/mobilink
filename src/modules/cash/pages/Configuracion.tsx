@@ -41,6 +41,9 @@ import type {
   CampoRegla,
   SeccionConfig,
   DispositivoAutoScan,
+  ConceptoGasto,
+  DestinoGasto,
+  TipoDestinoGasto,
 } from "../types";
 import * as api from "../services/api";
 
@@ -79,6 +82,7 @@ export default function Configuracion() {
       <CuentasBancarias />
       <CorreoCentral />
       <Secciones />
+      <ConceptosDeGasto />
       <FormasPago />
       <ReglasEscaner />
       <DispositivosAutoScan />
@@ -1929,6 +1933,315 @@ const ETIQUETA_CAMPO_REGLA: Record<CampoRegla, string> = {
   PLANTILLA: "Tipo de resguardo",
   TEXTO: "Texto del resguardo (poco fiable)",
 };
+
+// ── Conceptos de gasto y destinos ──────────────────────────────────────────
+
+/**
+ * Se dice en castellano llano y no «PERSONA» / «CENTRO_COSTE».
+ *
+ * Quien configura esto no ha leído el esquema: lo que tiene que entender es que
+ * elegir aquí decide qué desplegable le sale al cajero cuando pague.
+ */
+const ETIQUETA_DESTINO: Record<TipoDestinoGasto, string> = {
+  NINGUNO: "No se imputa a nadie",
+  PERSONA: "A un operario",
+  CENTRO_COSTE: "A un centro de coste",
+};
+
+/**
+ * En qué se gasta el dinero, y a quién se le imputa.
+ *
+ * Va justo después de las secciones porque son **el otro eje** y conviene
+ * verlos juntos para no confundirlos: la sección dice de qué negocio es el
+ * dinero —y el cierre desglosa por ella—; el concepto dice en qué se ha
+ * gastado. Un mismo pago es de la sección taller, concepto dietas, destino
+ * Juan.
+ *
+ * ## Lo que no se puede deshacer
+ *
+ * Un concepto **no se borra: se desactiva**. Borrarlo dejaría pagos apuntando
+ * a nada y las estadísticas de años anteriores cambiarían solas. Y a uno que ya
+ * tiene pagos **no se le puede cambiar a qué se imputa**: los anteriores
+ * quedarían colgando de un operario desde un concepto que ya no admite
+ * operarios, y el desglose mezclaría personas con centros de coste sin que
+ * nadie lo viera — el total seguiría cuadrando.
+ */
+function ConceptosDeGasto() {
+  const { puede } = useCash();
+  const [conceptos, setConceptos] = useState<ConceptoGasto[]>([]);
+  const [destinos, setDestinos] = useState<DestinoGasto[]>([]);
+  const [nombre, setNombre] = useState("");
+  const [tipoDestino, setTipoDestino] = useState<TipoDestinoGasto>("NINGUNO");
+  const [nombreDestino, setNombreDestino] = useState("");
+  const [tipoNuevoDestino, setTipoNuevoDestino] = useState<"PERSONA" | "CENTRO_COSTE">("PERSONA");
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const editable = puede("cash.configure");
+
+  const cargar = useCallback(async () => {
+    try {
+      const r = await api.conceptosDeGasto();
+      setConceptos(r.conceptos);
+      setDestinos(r.destinos);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando los conceptos de gasto");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function accion(fn: () => Promise<unknown>) {
+    setOcupado(true);
+    setError("");
+    try {
+      await fn();
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "La acción ha fallado");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  const operarios = destinos.filter((d) => d.tipo === "PERSONA");
+  const centros = destinos.filter((d) => d.tipo === "CENTRO_COSTE");
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Conceptos de gasto
+      </h2>
+      <p className="text-[12px] text-slate-500">
+        Con qué se clasifica un pago, para poder saber después cuánto se va en dietas o en
+        ferretería. Cada concepto dice si se imputa a alguien: eso es lo que hace que al elegirlo
+        en Pagos salga el segundo desplegable con los operarios o con los centros de coste. No es
+        obligatorio rellenarlo al pagar.
+      </p>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {editable && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Concepto
+            </span>
+            <input
+              value={nombre}
+              onChange={(e) => setNombre(e.target.value)}
+              placeholder="Dietas"
+              className={inputCls}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Se imputa
+            </span>
+            <select
+              value={tipoDestino}
+              onChange={(e) => setTipoDestino(e.target.value as typeof tipoDestino)}
+              className={inputCls}
+            >
+              {(Object.keys(ETIQUETA_DESTINO) as TipoDestinoGasto[]).map((t) => (
+                <option key={t} value={t}>
+                  {ETIQUETA_DESTINO[t]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className={btnPrimary}
+            disabled={ocupado || !nombre.trim()}
+            onClick={() =>
+              void accion(async () => {
+                await api.crearConceptoGasto({ nombre: nombre.trim(), tipoDestino });
+                setNombre("");
+                setTipoDestino("NINGUNO");
+              })
+            }
+          >
+            <Plus className="mr-1 inline h-4 w-4" /> Crear concepto
+          </button>
+        </div>
+      )}
+
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={thCls}>Concepto</th>
+            <th className={thCls}>Se imputa</th>
+            <th className={`${thCls} text-right`}>Pagos</th>
+            {editable && <th className={`${thCls} text-right`}>Acciones</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {conceptos.length === 0 && (
+            <EmptyRow
+              cols={editable ? 4 : 3}
+              text="Todavía no hay conceptos. Sin ellos, Pagos no enseña el desplegable y los gastos quedan sin clasificar."
+            />
+          )}
+          {conceptos.map((c) => (
+            /* Los desactivados se ven en gris: siguen contando en el histórico
+               y en las estadísticas de los años en que se usaron. */
+            <tr key={c.id} className={c.activo ? "" : "opacity-50"}>
+              <td className={tdCls}>
+                <span className="font-medium text-slate-100">{c.nombre}</span>
+                <div className="font-mono text-[10px] text-slate-500">{c.codigo}</div>
+              </td>
+              <td className={`${tdCls} text-slate-400`}>{ETIQUETA_DESTINO[c.tipoDestino]}</td>
+              <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{c.usos}</td>
+              {editable && (
+                <td className={`${tdCls} text-right`}>
+                  <button
+                    className={btnMini}
+                    disabled={ocupado}
+                    title={
+                      c.activo
+                        ? "Dejar de ofrecerlo en pagos nuevos. Los anteriores no se tocan."
+                        : "Volver a ofrecerlo"
+                    }
+                    onClick={() =>
+                      void accion(() => api.actualizarConceptoGasto(c.id, { activo: !c.activo }))
+                    }
+                  >
+                    {c.activo ? "Desactivar" : "Activar"}
+                  </button>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+
+      <h3 className="pt-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        A quién se imputa
+      </h3>
+      <p className="text-[12px] text-slate-500">
+        Los operarios y los centros de coste que salen en el segundo desplegable. Un centro de
+        coste es a lo que se le carga el gasto —taller turismo, taller camión, unidad móvil 1—, y
+        no tiene nada que ver con las secciones de negocio de arriba.
+      </p>
+
+      {editable && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Nombre
+            </span>
+            <input
+              value={nombreDestino}
+              onChange={(e) => setNombreDestino(e.target.value)}
+              placeholder="Juan Pérez"
+              className={inputCls}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Tipo
+            </span>
+            <select
+              value={tipoNuevoDestino}
+              onChange={(e) => setTipoNuevoDestino(e.target.value as typeof tipoNuevoDestino)}
+              className={inputCls}
+            >
+              <option value="PERSONA">Operario</option>
+              <option value="CENTRO_COSTE">Centro de coste</option>
+            </select>
+          </label>
+          <button
+            className={btnPrimary}
+            disabled={ocupado || !nombreDestino.trim()}
+            onClick={() =>
+              void accion(async () => {
+                await api.crearDestinoGasto({
+                  nombre: nombreDestino.trim(),
+                  tipo: tipoNuevoDestino,
+                });
+                setNombreDestino("");
+              })
+            }
+          >
+            <Plus className="mr-1 inline h-4 w-4" /> Añadir
+          </button>
+        </div>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <ListaDestinos
+          titulo="Operarios"
+          vacio="Ningún operario dado de alta."
+          destinos={operarios}
+          editable={editable}
+          ocupado={ocupado}
+          onAlternar={(d) =>
+            void accion(() => api.actualizarDestinoGasto(d.id, { activo: !d.activo }))
+          }
+        />
+        <ListaDestinos
+          titulo="Centros de coste"
+          vacio="Ningún centro de coste dado de alta."
+          destinos={centros}
+          editable={editable}
+          ocupado={ocupado}
+          onAlternar={(d) =>
+            void accion(() => api.actualizarDestinoGasto(d.id, { activo: !d.activo }))
+          }
+        />
+      </div>
+    </section>
+  );
+}
+
+function ListaDestinos({
+  titulo,
+  vacio,
+  destinos,
+  editable,
+  ocupado,
+  onAlternar,
+}: {
+  titulo: string;
+  vacio: string;
+  destinos: DestinoGasto[];
+  editable: boolean;
+  ocupado: boolean;
+  onAlternar: (d: DestinoGasto) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-800">
+      <div className="border-b border-slate-700 px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        {titulo} <span className="text-slate-500">({destinos.length})</span>
+      </div>
+      {destinos.length === 0 ? (
+        <p className="px-3 py-3 text-[12px] text-slate-500">{vacio}</p>
+      ) : (
+        <div className="divide-y divide-slate-700/60">
+          {destinos.map((d) => (
+            <div key={d.id} className={`flex items-center gap-2 px-3 py-1.5 ${d.activo ? "" : "opacity-50"}`}>
+              <span className="min-w-0 flex-1 truncate text-[13px] text-slate-200">{d.nombre}</span>
+              {/* Sin cabecera que lo explique, el número suelto no se entiende. */}
+              <span
+                className="shrink-0 text-[11px] tabular-nums text-slate-500"
+                title={`${d.usos} pago(s) imputados`}
+              >
+                {d.usos}
+              </span>
+              {editable && (
+                <button className={btnMini} disabled={ocupado} onClick={() => onAlternar(d)}>
+                  {d.activo ? "Desactivar" : "Activar"}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Dispositivos de AutoScan ───────────────────────────────────────────────
 
