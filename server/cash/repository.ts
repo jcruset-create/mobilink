@@ -770,7 +770,21 @@ export async function movimientosDeOperacion(
   operationId: number
 ): Promise<MovimientoDenominacion[]> {
   const { rows } = await client.query(
-    `SELECT direccion, motivo, valor_unitario_centimos, cantidad
+    /*
+     * `cartuchos` y `bolsas` van AQUÍ, y no son un adorno.
+     *
+     * Esto lo usa la reversión para asentar el movimiento contrario. Sin estas
+     * dos columnas, la inversa devolvía las monedas como SUELTAS aunque
+     * hubieran salido precintadas: los precintos no se compensaban nunca y se
+     * quedaban en el libro para siempre.
+     *
+     * Se vio en una caja de verdad. Al reabrir y recerrar una jornada varias
+     * veces, cada vuelta dejaba atrás sus cartuchos y sus bolsas, y el cambio
+     * que heredaba el día siguiente crecía solo: 337 € pasaron a 485,70 y luego
+     * a 567,10. Como el sobrante estaba en moneda precintada, los importes no
+     * eran ni múltiplos del cambio, que es lo que despistaba.
+     */
+    `SELECT direccion, motivo, valor_unitario_centimos, cantidad, cartuchos, bolsas
        FROM cash_denomination_movements
       WHERE operation_id = $1
       ORDER BY id`,
@@ -786,7 +800,12 @@ export async function movimientosDeOperacion(
       g = { direccion: r.direccion, motivo: r.motivo, lineas: [] };
       grupos.set(clave, g);
     }
-    g.lineas.push({ valor: r.valor_unitario_centimos, cantidad: r.cantidad });
+    g.lineas.push({
+      valor: r.valor_unitario_centimos,
+      cantidad: r.cantidad,
+      cartuchos: Number(r.cartuchos ?? 0),
+      bolsas: Number(r.bolsas ?? 0),
+    });
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
   return [...grupos.values()];
