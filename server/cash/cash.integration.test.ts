@@ -1416,6 +1416,62 @@ describe.runIf(RUN)("ingresos bancarios", () => {
     expect(manana.sesion.fondoInicialCentimos).toBe(40000);
   });
 
+  /*
+   * Y con TRES cierres encadenados, que es donde el primer criterio fallaba.
+   *
+   * Cada cierre malo deja su ajuste de +N € compensando el cambio que se
+   * llevó. Deshaciendo todos los cambios pero solo el ajuste del ÚLTIMO cierre
+   * —que era el criterio de la primera versión— la caja se quedaba inflada:
+   * salía bien con dos cierres y mal con tres.
+   */
+  it("repara una jornada cerrada TRES veces", async () => {
+    const caja = await crearCaja("reabrir-tres");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 2000, cantidad: 20 }], // 400 €
+    });
+
+    /* Tres vueltas de cerrar con el `reabrir` viejo por medio. */
+    for (let vuelta = 0; vuelta < 3; vuelta += 1) {
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 20 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        cambioFinal: [{ valor: 2000, cantidad: 20 }],
+      });
+      if (vuelta < 2) {
+        await db.query(`UPDATE cash_sessions SET estado = 'REOPENED' WHERE id = $1`, [sesion.id]);
+      }
+    }
+
+    const { rows: rotos } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_operations
+        WHERE session_id = $1 AND tipo = 'CLOSING_FLOAT'
+          AND estado = 'CONFIRMED' AND reversa_de_id IS NULL`,
+      [sesion.id]
+    );
+    expect(rotos[0].n).toBe(3);
+
+    await servicio.reabrirJornada(ctx, sesion.id, "reparar tres cierres");
+
+    /* Los 400 € de verdad, ni 800 ni 1.200. */
+    expect((await servicio.stockDeJornada(sesion.id)).totalCentimos).toBe(40000);
+
+    const trasReabrir = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: trasReabrir.lineas });
+    const bueno = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 2000, cantidad: 20 }],
+    });
+    expect(bueno.sesion.cambioFinalCentimos).toBe(40000);
+    expect(bueno.sesion.diferenciaCentimos).toBe(0);
+
+    const manana = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(manana.sesion.fondoInicialCentimos).toBe(40000);
+  });
+
   it("reabrir devuelve también el ingreso del banco, no solo el cambio", async () => {
     const caja = await crearCaja("reabrir-ingreso");
     const { sesion } = await servicio.abrirJornada(ctx, {

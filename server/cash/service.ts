@@ -1227,6 +1227,29 @@ export type ResultadoCierre = {
 };
 
 /**
+ * Los ajustes que asienta el CIERRE, por su concepto.
+ *
+ * Es lo que permite deshacerlos al reabrir sin tocar los que asentó una persona
+ * durante el día: `regularizarArqueo` escribe «Regularización de arqueo», que
+ * no está en esta lista y por tanto sobrevive.
+ *
+ * Van juntos aquí —y no escritos a mano en cada sitio— porque la consulta que
+ * los deshace y el código que los escribe tienen que decir exactamente lo
+ * mismo. Separarlos es la clase de cosa que se rompe en silencio: el ajuste
+ * dejaría de deshacerse y el fallo volvería con otro nombre.
+ */
+export const AJUSTE_DE_CIERRE = "Ajuste por diferencia de arqueo al cerrar";
+export const AJUSTE_CARTUCHOS = "Monedas precintadas en cartuchos, según el arqueo";
+export const AJUSTE_BOLSAS = "Monedas precintadas en bolsas, según el arqueo";
+
+/** Todos los que el cierre puede asentar. Los deshace `reabrirJornada`. */
+export const CONCEPTOS_DEL_CIERRE = [
+  AJUSTE_DE_CIERRE,
+  AJUSTE_CARTUCHOS,
+  AJUSTE_BOLSAS,
+] as const;
+
+/**
  * Cierra la jornada: registra el cambio que se queda, manda el resto al banco y
  * bloquea la caja.
  *
@@ -1413,7 +1436,7 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       denominaciones,
       anio,
       ahora,
-      concepto: "Ajuste por diferencia de arqueo al cerrar",
+      concepto: AJUSTE_DE_CIERRE,
     });
 
     /*
@@ -2011,11 +2034,19 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
        *   justo el momento de deshacer los dos. Esto es lo que repara sola una
        *   jornada que ya arrastre el fallo, sin tener que tocar la base a mano.
        *
-       * · **Ajustes: solo los de ESTE cierre.** Se reconocen por
-       *   `created_at_ms`, que es exactamente el `ahora` con el que el cierre
-       *   insertó su tanda dentro de una sola transacción. Un ajuste asentado
-       *   a media mañana al regularizar lo tecleó una persona y responde a un
-       *   descuadre real: reabrir no puede borrarlo.
+       * · **Ajustes: los que asentó UN cierre, por su CONCEPTO.** Un ajuste
+       *   de media mañana lo tecleó una persona y responde a un descuadre
+       *   real: reabrir no puede borrarlo, y por eso no basta con mirar el
+       *   tipo. Se distinguen por el texto, que solo escribe el cierre
+       *   (`CONCEPTOS_DEL_CIERRE`); `regularizarArqueo` escribe otro y
+       *   sobrevive.
+       *
+       *   Antes esto miraba `created_at_ms = cerrada_at_ms`, o sea solo la
+       *   tanda del ÚLTIMO cierre. Con una jornada cerrada dos veces salía
+       *   bien; con tres o más, no: cada cierre malo dejó su ajuste de +N €
+       *   compensando el cambio que se llevó, así que devolver todos los
+       *   cambios y solo el último ajuste inflaba la caja. Por concepto se
+       *   deshacen todos, y la cuenta sale para cualquier número de cierres.
        *
        * `reversa_de_id IS NULL` deja fuera las inversas: una inversa ya
        * compensa a la suya, y revertir la reversión volvería a sacar el dinero.
@@ -2025,9 +2056,9 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
           AND estado = 'CONFIRMED'
           AND reversa_de_id IS NULL
           AND (tipo IN ('CLOSING_FLOAT','BANK_DEPOSIT')
-               OR (tipo = 'ADJUSTMENT' AND created_at_ms = $2))
+               OR (tipo = 'ADJUSTMENT' AND concepto = ANY($2::text[])))
         ORDER BY id DESC`,
-      [sessionId, s.cerradaAtMs]
+      [sessionId, [...CONCEPTOS_DEL_CIERRE]]
     );
 
     for (const fila of delCierre) {
@@ -2964,8 +2995,8 @@ async function conciliarFormato(
       origen: "MANUAL",
       concepto:
         lote.campo === "cartuchos"
-          ? "Monedas precintadas en cartuchos, según el arqueo"
-          : "Monedas precintadas en bolsas, según el arqueo",
+          ? AJUSTE_CARTUCHOS
+          : AJUSTE_BOLSAS,
       importeCentimos: total,
       // Neto cero: el dinero no se mueve, cambia de envase.
       efectivoNetoCentimos: 0,
