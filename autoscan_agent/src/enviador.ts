@@ -37,7 +37,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import type { ClienteAutoScan } from "./api.ts";
+import type { ServidorDeAutoScan } from "./api.ts";
 import type { Cola, Tarea } from "./cola.ts";
 import type { Config } from "./config.ts";
 
@@ -64,13 +64,13 @@ const CICLO_VACIO = (): Ciclo => ({
 export class Enviador {
   readonly #cfg: Config;
   readonly #cola: Cola;
-  readonly #cliente: ClienteAutoScan;
+  readonly #cliente: ServidorDeAutoScan;
   readonly #log: (m: string) => void;
 
   #temporizador: NodeJS.Timeout | null = null;
   #enMarcha = false;
 
-  constructor(cfg: Config, cola: Cola, cliente: ClienteAutoScan, log: (m: string) => void = () => {}) {
+  constructor(cfg: Config, cola: Cola, cliente: ServidorDeAutoScan, log: (m: string) => void = () => {}) {
     this.#cfg = cfg;
     this.#cola = cola;
     this.#cliente = cliente;
