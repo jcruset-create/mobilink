@@ -1,5 +1,9 @@
 # AutoScan — diseño de la Fase 1
 
+> **Documento histórico.** Describe el momento en que se escribió, no el de
+> ahora. Lo vigente está en [`README.md`](./README.md); esto es el diseño de
+> la Fase 1, ya implementado.
+
 Con las cuatro decisiones tomadas: bandeja propia, unicidad por
 `empresa + centro + sha256`, nada se borra en silencio, y varios dispositivos
 por centro.
