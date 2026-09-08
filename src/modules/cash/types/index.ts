@@ -275,6 +275,38 @@ export type DocumentoOperacion = {
   url: string | null;
 };
 
+// ── Conceptos de gasto ─────────────────────────────────────────────────────
+
+/**
+ * Qué segundo desplegable pide un concepto.
+ *
+ * No es decoración: es lo que hace que al elegir «Dietas» salgan los operarios
+ * y al elegir «Ferretería» salgan los centros de coste. El servidor comprueba
+ * que la pareja encaja, así que esto solo decide qué se ENSEÑA.
+ */
+export type TipoDestinoGasto = "NINGUNO" | "PERSONA" | "CENTRO_COSTE";
+
+export type ConceptoGasto = {
+  id: number;
+  codigo: string;
+  nombre: string;
+  tipoDestino: TipoDestinoGasto;
+  activo: boolean;
+  orden: number;
+  /** Cuántos pagos lo usan. Es lo que impide cambiarlo sin enterarse. */
+  usos: number;
+};
+
+export type DestinoGasto = {
+  id: number;
+  tipo: "PERSONA" | "CENTRO_COSTE";
+  codigo: string;
+  nombre: string;
+  activo: boolean;
+  orden: number;
+  usos: number;
+};
+
 // ── AutoScan ───────────────────────────────────────────────────────────────
 
 export type EstadoAutoScan =
@@ -697,6 +729,14 @@ export type PropuestaEscaneo = {
   referencia: CampoPropuesto<string | null>;
   importeCentimos: CampoPropuesto<number | null>;
   cliente: CampoPropuesto<string | null>;
+  /**
+   * Quien EMITE el documento, que en un ticket de compra es el proveedor.
+   *
+   * Va al lado de `cliente` y no en su lugar: son las dos partes del mismo
+   * papel y cuál interesa depende de la pantalla. Cobros usa `cliente`, Pagos
+   * usa `proveedor`, y el análisis se hace UNA vez para los dos.
+   */
+  proveedor: CampoPropuesto<string | null>;
   concepto: CampoPropuesto<string | null>;
   formaCobro: {
     /** Código del catálogo, o null. null es NO LO SÉ, nunca «efectivo». */

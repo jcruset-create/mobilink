@@ -604,6 +604,14 @@ export async function insertarOperacion(
     motivoReversa?: string | null;
     /** Sección de negocio. `null` en las operaciones anteriores al catálogo. */
     sectionId?: number | null;
+    /*
+     * En qué se ha gastado y a quién se imputa. Solo pagos, y siempre
+     * opcionales: el mostrador no se para porque falte una entrada del
+     * catálogo. Van validados desde `validarClasificacionGasto`, que es quien
+     * comprueba que el destino es del tipo que pide el concepto.
+     */
+    expenseConceptId?: number | null;
+    expenseTargetId?: number | null;
     userId: string | null;
     ahora: number;
   }
@@ -613,8 +621,9 @@ export async function insertarOperacion(
        (empresa_id, session_id, numero, tipo, origen, external_system, external_document_id,
         external_document_reference, documento_id, party_nombre, concepto, referencia,
         importe_centimos, efectivo_neto_centimos, estado, reversa_de_id, motivo_reversa,
-        erp_sync_status, section_id, created_by, created_at_ms, confirmed_at_ms, updated_at_ms)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'CONFIRMED',$15,$16,$17,$18,$19,$20,$20,$20)
+        erp_sync_status, section_id, expense_concept_id, expense_target_id,
+        created_by, created_at_ms, confirmed_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'CONFIRMED',$15,$16,$17,$18,$19,$20,$21,$22,$22,$22)
      RETURNING id`,
     [
       o.empresaId,
@@ -635,6 +644,8 @@ export async function insertarOperacion(
       o.motivoReversa ?? null,
       o.erpSyncStatus,
       o.sectionId ?? null,
+      o.expenseConceptId ?? null,
+      o.expenseTargetId ?? null,
       o.userId,
       o.ahora,
     ]

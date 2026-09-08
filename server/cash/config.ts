@@ -1831,3 +1831,370 @@ export async function borrarReglaPago(ctx: Contexto, id: number): Promise<void> 
     ip: ctx.ip,
   });
 }
+
+// ── Conceptos de gasto y destinos ──────────────────────────────────────────
+
+/**
+ * El catálogo con el que se clasifica un pago, y a qué se imputa.
+ *
+ * Dos ejes que no se mezclan: la SECCIÓN dice de qué negocio es el dinero —y
+ * el cierre ya desglosa por ella—; el CONCEPTO dice en qué se ha gastado, y su
+ * DESTINO a quién o a qué se imputa. Un mismo pago es de la sección taller,
+ * concepto dietas, destino Juan.
+ *
+ * Nada de esto es obligatorio al pagar. Un catálogo que bloquea el mostrador
+ * el día que falta una entrada se rellena con lo primero que haya a mano, y
+ * entonces las estadísticas mienten con aire de exactitud.
+ */
+
+export type TipoDestino = "NINGUNO" | "PERSONA" | "CENTRO_COSTE";
+
+export type ConceptoGasto = {
+  id: number;
+  codigo: string;
+  nombre: string;
+  tipoDestino: TipoDestino;
+  activo: boolean;
+  orden: number;
+  /** Cuántos pagos lo usan. Es lo que impide borrarlo sin enterarse. */
+  usos: number;
+};
+
+export type DestinoGasto = {
+  id: number;
+  tipo: Exclude<TipoDestino, "NINGUNO">;
+  codigo: string;
+  nombre: string;
+  activo: boolean;
+  orden: number;
+  usos: number;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const aConcepto = (r: any): ConceptoGasto => ({
+  id: r.id,
+  codigo: r.codigo,
+  nombre: r.nombre,
+  tipoDestino: r.tipo_destino,
+  activo: r.activo,
+  orden: r.orden,
+  usos: Number(r.usos ?? 0),
+});
+
+const aDestino = (r: any): DestinoGasto => ({
+  id: r.id,
+  tipo: r.tipo,
+  codigo: r.codigo,
+  nombre: r.nombre,
+  activo: r.activo,
+  orden: r.orden,
+  usos: Number(r.usos ?? 0),
+});
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * El código sale del nombre y NO cambia nunca.
+ *
+ * Es lo que queda escrito en el histórico y en los informes: si «Dietas» se
+ * renombra a «Dietas y desplazamientos», el código sigue siendo DIETAS y las
+ * estadísticas de años anteriores siguen cuadrando. Mismo criterio que en
+ * secciones y formas de cobro.
+ */
+function codigoDesde(nombre: string): string {
+  return nombre
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 30);
+}
+
+export async function listarConceptos(empresaId: string): Promise<ConceptoGasto[]> {
+  const { rows } = await pool.query(
+    `SELECT c.*, (SELECT COUNT(*) FROM cash_operations o WHERE o.expense_concept_id = c.id) AS usos
+       FROM cash_expense_concepts c
+      WHERE c.empresa_id = $1
+      ORDER BY c.activo DESC, c.orden, c.nombre`,
+    [empresaId]
+  );
+  return rows.map(aConcepto);
+}
+
+export async function listarDestinos(
+  empresaId: string,
+  tipo?: "PERSONA" | "CENTRO_COSTE"
+): Promise<DestinoGasto[]> {
+  const { rows } = await pool.query(
+    `SELECT d.*, (SELECT COUNT(*) FROM cash_operations o WHERE o.expense_target_id = d.id) AS usos
+       FROM cash_expense_targets d
+      WHERE d.empresa_id = $1 AND ($2::text IS NULL OR d.tipo = $2::text)
+      ORDER BY d.tipo, d.activo DESC, d.orden, d.nombre`,
+    [empresaId, tipo ?? null]
+  );
+  return rows.map(aDestino);
+}
+
+export async function crearConcepto(
+  ctx: Contexto,
+  datos: { nombre: string; tipoDestino?: TipoDestino; orden?: number }
+): Promise<ConceptoGasto> {
+  const nombre = datos.nombre?.trim();
+  if (!nombre) throw new ErrorCaja("ENTRADA_NO_VALIDA", "El concepto necesita un nombre.", 400);
+
+  const tipoDestino = datos.tipoDestino ?? "NINGUNO";
+  const codigo = codigoDesde(nombre);
+  if (!codigo) throw new ErrorCaja("ENTRADA_NO_VALIDA", "El nombre no da un código válido.", 400);
+
+  const ahora = Date.now();
+  const { rows } = await pool.query(
+    `INSERT INTO cash_expense_concepts
+       (empresa_id, codigo, nombre, tipo_destino, activo, orden, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,true,$5,$6,$6)
+     ON CONFLICT (empresa_id, codigo) DO NOTHING
+     RETURNING *`,
+    [ctx.empresaId, codigo, nombre.slice(0, 80), tipoDestino, datos.orden ?? 0, ahora]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja("CONCEPTO_DUPLICADO", `Ya existe un concepto con el código ${codigo}.`, 409);
+  }
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.expense_concept.created",
+    entidad: "cash_expense_concepts",
+    entidadId: String(rows[0].id),
+    detalle: { codigo, nombre, tipoDestino },
+    ip: ctx.ip,
+  });
+  return aConcepto({ ...rows[0], usos: 0 });
+}
+
+export async function actualizarConcepto(
+  ctx: Contexto,
+  id: number,
+  datos: { nombre?: string; tipoDestino?: TipoDestino; activo?: boolean; orden?: number }
+): Promise<ConceptoGasto> {
+  const { rows: previas } = await pool.query(
+    `SELECT * FROM cash_expense_concepts WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  const antes = previas[0];
+  if (!antes) throw new ErrorCaja("CONCEPTO_NO_ENCONTRADO", "El concepto no existe.", 404);
+
+  /*
+   * El TIPO de destino no se cambia si ya se ha usado.
+   *
+   * Cambiar «Dietas» de PERSONA a CENTRO_COSTE dejaría los pagos anteriores
+   * apuntando a un operario desde un concepto que ya no admite operarios: la
+   * estadística seguiría sumando, pero el desglose por destino mezclaría
+   * personas con centros de coste sin que nadie lo viera. Se desactiva el
+   * concepto y se crea otro, que es honesto y no rompe el pasado.
+   */
+  const usos = Number(
+    (await pool.query(`SELECT COUNT(*) AS n FROM cash_operations WHERE expense_concept_id = $1`, [id]))
+      .rows[0].n
+  );
+  if (datos.tipoDestino && datos.tipoDestino !== antes.tipo_destino && usos > 0) {
+    throw new ErrorCaja(
+      "CONCEPTO_EN_USO",
+      `«${antes.nombre}» ya se ha usado en ${usos} ${usos === 1 ? "pago" : "pagos"}, así que no se ` +
+        `puede cambiar a qué se imputa. Desactívalo y crea uno nuevo.`,
+      409
+    );
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE cash_expense_concepts
+        SET nombre = $3, tipo_destino = $4, activo = $5, orden = $6, updated_at_ms = $7
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING *`,
+    [
+      id,
+      ctx.empresaId,
+      datos.nombre?.trim()?.slice(0, 80) || antes.nombre,
+      datos.tipoDestino ?? antes.tipo_destino,
+      datos.activo ?? antes.activo,
+      datos.orden ?? antes.orden,
+      Date.now(),
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.expense_concept.updated",
+    entidad: "cash_expense_concepts",
+    entidadId: String(id),
+    detalle: { antes: { nombre: antes.nombre, activo: antes.activo }, ahora: datos },
+    ip: ctx.ip,
+  });
+  return aConcepto({ ...rows[0], usos });
+}
+
+export async function crearDestino(
+  ctx: Contexto,
+  datos: { nombre: string; tipo: "PERSONA" | "CENTRO_COSTE"; orden?: number }
+): Promise<DestinoGasto> {
+  const nombre = datos.nombre?.trim();
+  if (!nombre) throw new ErrorCaja("ENTRADA_NO_VALIDA", "El destino necesita un nombre.", 400);
+  if (datos.tipo !== "PERSONA" && datos.tipo !== "CENTRO_COSTE") {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "El tipo de destino no es válido.", 400);
+  }
+
+  const codigo = codigoDesde(nombre);
+  if (!codigo) throw new ErrorCaja("ENTRADA_NO_VALIDA", "El nombre no da un código válido.", 400);
+
+  const ahora = Date.now();
+  const { rows } = await pool.query(
+    `INSERT INTO cash_expense_targets
+       (empresa_id, tipo, codigo, nombre, activo, orden, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,true,$5,$6,$6)
+     ON CONFLICT (empresa_id, tipo, codigo) DO NOTHING
+     RETURNING *`,
+    [ctx.empresaId, datos.tipo, codigo, nombre.slice(0, 80), datos.orden ?? 0, ahora]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja("DESTINO_DUPLICADO", `Ya existe «${nombre}» en esa lista.`, 409);
+  }
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.expense_target.created",
+    entidad: "cash_expense_targets",
+    entidadId: String(rows[0].id),
+    detalle: { tipo: datos.tipo, codigo, nombre },
+    ip: ctx.ip,
+  });
+  return aDestino({ ...rows[0], usos: 0 });
+}
+
+export async function actualizarDestino(
+  ctx: Contexto,
+  id: number,
+  datos: { nombre?: string; activo?: boolean; orden?: number }
+): Promise<DestinoGasto> {
+  const { rows: previas } = await pool.query(
+    `SELECT * FROM cash_expense_targets WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  const antes = previas[0];
+  if (!antes) throw new ErrorCaja("DESTINO_NO_ENCONTRADO", "Ese destino no existe.", 404);
+
+  /*
+   * El tipo NO se puede cambiar, ni siquiera sin usos. Un operario que pasa a
+   * ser centro de coste no es un cambio: es otra cosa con el mismo nombre.
+   */
+  const { rows } = await pool.query(
+    `UPDATE cash_expense_targets
+        SET nombre = $3, activo = $4, orden = $5, updated_at_ms = $6
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING *`,
+    [
+      id,
+      ctx.empresaId,
+      datos.nombre?.trim()?.slice(0, 80) || antes.nombre,
+      datos.activo ?? antes.activo,
+      datos.orden ?? antes.orden,
+      Date.now(),
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.expense_target.updated",
+    entidad: "cash_expense_targets",
+    entidadId: String(id),
+    detalle: { antes: { nombre: antes.nombre, activo: antes.activo }, ahora: datos },
+    ip: ctx.ip,
+  });
+  return aDestino({ ...rows[0], usos: 0 });
+}
+
+/**
+ * Comprueba que la pareja concepto/destino es coherente. Devuelve lo que hay
+ * que guardar.
+ *
+ * La regla no puede vivir en la pantalla: que el desplegable enseñe solo los
+ * operarios no impide que alguien llame a la API con el id de un centro de
+ * coste. Y una estadística de dietas que sume una unidad móvil no la detecta
+ * nadie mirándola.
+ */
+export async function validarClasificacionGasto(
+  empresaId: string,
+  conceptoId: number | null,
+  destinoId: number | null
+): Promise<{ conceptoId: number | null; destinoId: number | null }> {
+  if (conceptoId == null) {
+    /*
+     * Sin concepto no puede haber destino: un pago imputado a Juan sin decir en
+     * qué concepto no responde ninguna pregunta y ensucia el desglose.
+     */
+    if (destinoId != null) {
+      throw new ErrorCaja(
+        "ENTRADA_NO_VALIDA",
+        "No se puede decir a quién se imputa el gasto sin elegir antes el concepto.",
+        400
+      );
+    }
+    return { conceptoId: null, destinoId: null };
+  }
+
+  const { rows } = await pool.query(
+    `SELECT id, nombre, tipo_destino, activo FROM cash_expense_concepts
+      WHERE id = $1 AND empresa_id = $2`,
+    [conceptoId, empresaId]
+  );
+  const concepto = rows[0];
+  if (!concepto) {
+    throw new ErrorCaja("CONCEPTO_NO_ENCONTRADO", "Ese concepto de gasto no existe.", 400);
+  }
+  if (!concepto.activo) {
+    throw new ErrorCaja(
+      "CONCEPTO_INACTIVO",
+      `«${concepto.nombre}» está desactivado y no se puede usar en pagos nuevos.`,
+      400
+    );
+  }
+
+  if (concepto.tipo_destino === "NINGUNO") {
+    if (destinoId != null) {
+      throw new ErrorCaja(
+        "ENTRADA_NO_VALIDA",
+        `«${concepto.nombre}» no se imputa a nadie en concreto.`,
+        400
+      );
+    }
+    return { conceptoId, destinoId: null };
+  }
+
+  // El destino es opcional: nada obliga a rellenarlo al pagar.
+  if (destinoId == null) return { conceptoId, destinoId: null };
+
+  const { rows: destinos } = await pool.query(
+    `SELECT id, tipo, nombre, activo FROM cash_expense_targets
+      WHERE id = $1 AND empresa_id = $2`,
+    [destinoId, empresaId]
+  );
+  const destino = destinos[0];
+  if (!destino) throw new ErrorCaja("DESTINO_NO_ENCONTRADO", "Ese destino no existe.", 400);
+  if (destino.tipo !== concepto.tipo_destino) {
+    throw new ErrorCaja(
+      "DESTINO_NO_VALIDO",
+      `«${destino.nombre}» no vale para el concepto «${concepto.nombre}».`,
+      400
+    );
+  }
+  if (!destino.activo) {
+    throw new ErrorCaja(
+      "DESTINO_INACTIVO",
+      `«${destino.nombre}» está desactivado y no se puede usar en pagos nuevos.`,
+      400
+    );
+  }
+
+  return { conceptoId, destinoId };
+}

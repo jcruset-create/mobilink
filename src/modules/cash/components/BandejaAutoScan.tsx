@@ -56,6 +56,12 @@ type Props = {
   onSoltar: () => void;
   /** Puede descartar y reintentar. Ver es suficiente para elegir. */
   puedeGestionar: boolean;
+  /*
+   * Desde qué pantalla se abre. La bandeja es UNA por centro y el papel no sabe
+   * si es una venta o una compra, así que las dos pantallas ven los mismos
+   * documentos; lo que cambia es contra qué se mira el duplicado al elegir uno.
+   */
+  sentido?: "COBRO" | "PAGO";
   deshabilitado?: boolean;
   onError: (mensaje: string) => void;
 };
@@ -65,6 +71,7 @@ export default function BandejaAutoScan({
   onElegir,
   onSoltar,
   puedeGestionar,
+  sentido = "COBRO",
   deshabilitado = false,
   onError,
 }: Props) {
@@ -98,7 +105,7 @@ export default function BandejaAutoScan({
   async function elegir(d: DocumentoAutoScan) {
     setCargandoId(d.id);
     try {
-      const { documento, propuesta } = await api.documentoAutoScan(d.id);
+      const { documento, propuesta } = await api.documentoAutoScan(d.id, sentido);
       if (!propuesta) {
         onError("Ese documento todavía no está analizado. Espera un momento y vuelve a probar.");
         return;

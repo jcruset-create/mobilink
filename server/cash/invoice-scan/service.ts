@@ -108,6 +108,13 @@ export type EntradaEscaneo = {
   userId: string | null;
   sessionId: number | null;
   fichero: { originalname: string; mimetype: string; buffer: Buffer };
+  /*
+   * Para qué se escanea. Solo lo usa la comprobación de duplicado — la
+   * EXTRACCIÓN es la misma para los dos sentidos, y esa es la razón de que
+   * AutoScan pueda analizar en cuanto llega el papel sin saber todavía si es
+   * una venta o una compra.
+   */
+  sentido?: "COBRO" | "PAGO";
 };
 
 /**
@@ -165,7 +172,15 @@ async function apuntarFallo(
  */
 export async function propuestaDeEscaneo(
   empresaId: string,
-  scanId: number
+  scanId: number,
+  /*
+   * Desde qué pantalla se abre. Decide contra qué se mira el duplicado: un
+   * cobro anterior de esa factura, o un pago anterior de esa factura de
+   * proveedor.
+   *
+   * Por defecto COBRO, que es de donde viene todo lo anterior a esto.
+   */
+  sentido: "COBRO" | "PAGO" = "COBRO"
 ): Promise<(PropuestaCobro & { scanId: number }) | null> {
   const { rows } = await pool.query(
     `SELECT extraccion_normalizada, forma_pago_propuesta, forma_pago_confianza,
@@ -195,14 +210,23 @@ export async function propuestaDeEscaneo(
    * y entre medias alguien puede haber cobrado esa factura: el aviso guardado
    * estaría desfasado justo en el caso que importa.
    */
-  const previo = await cobroPrevioDeFactura(empresaId, propuesta.referencia.valor);
+  const previo = await cobroPrevioDeFactura(
+    empresaId,
+    propuesta.referencia.valor,
+    pool,
+    null,
+    sentido
+  );
   propuesta.cobroPrevio = previo;
   if (previo && !propuesta.avisos.some((a) => a.codigo === "POSIBLE_DUPLICADO")) {
     propuesta.avisos.push({
       codigo: "POSIBLE_DUPLICADO",
       mensaje:
-        `La factura ${propuesta.referencia.valor} ya está cobrada en ${previo.numero}. ` +
-        "Cobrarla otra vez tiene que autorizarlo alguien con permiso.",
+        sentido === "PAGO"
+          ? `La factura ${propuesta.referencia.valor} ya está pagada en ${previo.numero}. ` +
+            "Pagarla otra vez sale dinero de la caja dos veces por el mismo papel."
+          : `La factura ${propuesta.referencia.valor} ya está cobrada en ${previo.numero}. ` +
+            "Cobrarla otra vez tiene que autorizarlo alguien con permiso.",
       grave: true,
     });
   }
@@ -261,14 +285,24 @@ export async function escanearFactura(
    * que cambia es la ACCIÓN disponible al final, que es donde se juega el
    * dinero: sin autorización, el servidor no registra el segundo cobro.
    */
-  const previo = await cobroPrevioDeFactura(entrada.empresaId, propuesta.referencia.valor);
+  const sentido = entrada.sentido ?? "COBRO";
+  const previo = await cobroPrevioDeFactura(
+    entrada.empresaId,
+    propuesta.referencia.valor,
+    pool,
+    null,
+    sentido
+  );
   if (previo) {
+    const quien = previo.partyNombre ? ` (${previo.partyNombre})` : "";
     propuesta.avisos.push({
       codigo: "POSIBLE_DUPLICADO",
       mensaje:
-        `La factura ${propuesta.referencia.valor} ya está cobrada en ${previo.numero}` +
-        `${previo.partyNombre ? ` (${previo.partyNombre})` : ""}. ` +
-        "Cobrarla otra vez tiene que autorizarlo alguien con permiso.",
+        sentido === "PAGO"
+          ? `La factura ${propuesta.referencia.valor} ya está pagada en ${previo.numero}${quien}. ` +
+            "Pagarla otra vez sale dinero de la caja dos veces por el mismo papel."
+          : `La factura ${propuesta.referencia.valor} ya está cobrada en ${previo.numero}${quien}. ` +
+            "Cobrarla otra vez tiene que autorizarlo alguien con permiso.",
       grave: true,
     });
     propuesta.cobroPrevio = previo;

@@ -1683,6 +1683,110 @@ export async function initCash(): Promise<void> {
       ON cash_autoscan_inbox(empresa_id, centro_id, estado, recibido_at_ms);
   `);
 
+  /*
+   * ── Conceptos de gasto y su destino ───────────────────────────────────────
+   *
+   * Para qué: hoy `cash_operations.concepto` es texto libre, y con texto libre
+   * no hay estadística posible — «DIETA», «Dieta», «dietas Juan» y «DIETA JUAN»
+   * son cuatro conceptos distintos para un ordenador y uno solo para el que
+   * paga.
+   *
+   * ## Dos ejes que NO son el mismo, y por qué no se mezclan
+   *
+   * Ya existe `cash_sections`, y contesta **de qué negocio es este dinero**
+   * (taller, gasolinera). El cierre y los informes YA desglosan por ella.
+   *
+   * Esto contesta otra pregunta: **a qué se ha imputado el gasto** — a un
+   * operario, a la unidad móvil 1, a nada. Meter «taller turismo» y «taller
+   * camión» como secciones habría partido en tres una sección que el cierre ya
+   * usa, y los cierres anteriores se habrían quedado apuntando a algo que ya no
+   * existe. Son dos ejes y viven separados.
+   *
+   * ## Un concepto dice qué destino pide
+   *
+   *     Dietas      → PERSONA        → sale la lista de operarios
+   *     Ferretería  → CENTRO_COSTE   → taller turismo, taller camión, unidad móvil 1
+   *     Varios      → NINGUNO        → no sale el segundo desplegable
+   *
+   * Por eso el segundo desplegable cambia solo: lo decide el concepto elegido,
+   * no una regla escondida en la pantalla.
+   *
+   * ## Compatibilidad
+   *
+   * `concepto` se queda **exactamente como estaba**. Estas dos columnas son
+   * opcionales y se añaden al lado. No hay migración que adivine que «DIETA»
+   * era el concepto Dietas: adivinar el pasado es cómo se ensucian las
+   * estadísticas antes de tener ninguna. Lo viejo se reclasifica a mano, como
+   * ya se hace con la sección.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_expense_concepts (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      /* No cambia nunca: es lo que queda escrito en las operaciones. */
+      codigo TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      /* Qué segundo desplegable pide este concepto. */
+      tipo_destino TEXT NOT NULL DEFAULT 'NINGUNO',
+      activo BOOLEAN NOT NULL DEFAULT true,
+      orden INTEGER NOT NULL DEFAULT 0,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, codigo),
+      CONSTRAINT cash_expense_concepts_tipo
+        CHECK (tipo_destino IN ('NINGUNO','PERSONA','CENTRO_COSTE'))
+    );
+    CREATE INDEX IF NOT EXISTS cash_expense_concepts_empresa_idx
+      ON cash_expense_concepts(empresa_id, activo, orden);
+
+    /*
+     * Los destinos, en UNA tabla con su tipo y no en dos.
+     *
+     * Un operario y un centro de coste se manejan igual —nombre, activo,
+     * orden— y se eligen en el mismo desplegable. Dos tablas idénticas
+     * obligarían a duplicar el CRUD, la API y la pantalla para no ganar nada;
+     * el «tipo» ya separa lo que hay que separar y es justo por lo que se
+     * filtra al enseñar la lista.
+     */
+    CREATE TABLE IF NOT EXISTS cash_expense_targets (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      tipo TEXT NOT NULL,
+      codigo TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      orden INTEGER NOT NULL DEFAULT 0,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, tipo, codigo),
+      CONSTRAINT cash_expense_targets_tipo
+        CHECK (tipo IN ('PERSONA','CENTRO_COSTE'))
+    );
+    CREATE INDEX IF NOT EXISTS cash_expense_targets_empresa_idx
+      ON cash_expense_targets(empresa_id, tipo, activo, orden);
+  `);
+
+  /*
+   * Las dos columnas en las operaciones. `ADD COLUMN IF NOT EXISTS` y no
+   * dentro del CREATE TABLE de arriba: `cash_operations` existe desde el
+   * principio y su CREATE no se vuelve a ejecutar.
+   *
+   * `ON DELETE SET NULL` porque un concepto no se borra —se desactiva—, pero
+   * si alguien lo borrara a mano en la base, un pago debe perder su
+   * clasificación, no desaparecer.
+   */
+  await pool.query(`
+    ALTER TABLE cash_operations
+      ADD COLUMN IF NOT EXISTS expense_concept_id INTEGER
+        REFERENCES cash_expense_concepts(id) ON DELETE SET NULL;
+    ALTER TABLE cash_operations
+      ADD COLUMN IF NOT EXISTS expense_target_id INTEGER
+        REFERENCES cash_expense_targets(id) ON DELETE SET NULL;
+    /* Por aquí entra la pantalla de estadísticas: gasto por concepto y fecha. */
+    CREATE INDEX IF NOT EXISTS cash_operations_concepto_idx
+      ON cash_operations(empresa_id, expense_concept_id, created_at_ms);
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 

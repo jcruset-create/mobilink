@@ -95,11 +95,53 @@ const fichero = (nombre = "factura.pdf") => ({
 });
 
 /** Escanea con una extracción dada, sin tocar la red. */
-async function escanear(cruda: import("./types.ts").ExtraccionCruda, nombre?: string) {
+async function escanear(
+  cruda: import("./types.ts").ExtraccionCruda,
+  nombre?: string,
+  sentido?: "COBRO" | "PAGO"
+) {
   return escaneo.escanearFactura(
-    { empresaId: EMPRESA, userId: USUARIO, sessionId: null, fichero: fichero(nombre) },
+    { empresaId: EMPRESA, userId: USUARIO, sessionId: null, fichero: fichero(nombre), sentido },
     async () => cruda
   );
+}
+
+/** Un ticket de compra: lo emite la tienda y va dirigido al taller. */
+function ticketDeCompra(numero: string): import("./types.ts").ExtraccionCruda {
+  return {
+    es_factura: true,
+    facturas_detectadas: 1,
+    factura: { numero, fecha: "07/09/2026" },
+    emisor: { nombre: "FERRETERIA LA LLAVE SL", nif: "B43111222" },
+    cliente: { codigo: null, nombre: "TALLER MOBILINK SL", nif: "B43999888" },
+    vehiculo: { marca: null, modelo: null, matricula: null },
+    concepto: "Tornilleria y consumibles",
+    totales: {
+      base_imponible: "10,00",
+      iva_importe: "2,10",
+      iva_porcentaje: "21,00%",
+      total: "12,10 EUR",
+      moneda: "EUR",
+    },
+    recibo: {
+      detectado: false,
+      recibos_detectados: 0,
+      plantilla: "DESCONOCIDA",
+      importe: null,
+      tipo_operacion: null,
+      tarjeta: null,
+      num_operacion: null,
+      cod_autorizacion: null,
+      comercio: null,
+      terminal: null,
+      red: null,
+      adquirente: null,
+      cuenta: null,
+      fecha_hora: null,
+      texto: null,
+    },
+    confianza: { numero_factura: 0.99, cliente: 0.9, emisor: 0.98, total: 0.99, concepto: 0.8, recibo: 0 },
+  };
 }
 
 beforeAll(async () => {
@@ -520,5 +562,111 @@ describe.runIf(RUN)("cada empresa con lo suyo", () => {
     expect(p.avisos.some((a) => a.codigo === "POSIBLE_DUPLICADO")).toBe(false);
 
     await db.query(`DELETE FROM cash_operations WHERE empresa_id = $1`, [OTRA]);
+  });
+});
+
+
+describe.runIf(RUN)("un ticket de compra se lee por el otro lado", () => {
+  it("el proveedor sale del EMISOR, no del cliente", async () => {
+    const p = await escanear(ticketDeCompra(`FC-${Date.now()}`), "ticket.pdf", "PAGO");
+    /*
+     * Éste es el fallo que había que evitar. Con el prompt anterior —«el emisor
+     * es el taller»— este ticket habría rellenado «proveedor» con el nombre de
+     * nuestro propio taller, y con confianza alta porque está impreso y claro.
+     */
+    expect(p.proveedor.valor).toBe("FERRETERIA LA LLAVE SL");
+    expect(p.cliente.valor).toBe("TALLER MOBILINK SL");
+    expect(p.importeCentimos.valor).toBe(1210);
+  });
+
+  it("una factura de venta sigue rellenando el cliente igual que siempre", async () => {
+    const p = await escanear(extraccion580(), "B0020000580.pdf");
+    // Cero cambio de comportamiento en el camino que ya está en producción.
+    expect(p.cliente.valor).toBe("CARLOS GONZALEZ CABALLERO");
+  });
+
+  it("un análisis viejo, sin emisor, no revienta: devuelve null", async () => {
+    /*
+     * Los escaneos guardados antes de que existiera el campo se releen tal
+     * cual desde la bandeja. Un null honesto es la respuesta; inventarse un
+     * proveedor sería peor que no tenerlo.
+     */
+    const sinEmisor = extraccion580();
+    delete (sinEmisor as { emisor?: unknown }).emisor;
+    const p = await escanear(sinEmisor, "viejo.pdf");
+    expect(p.proveedor.valor).toBeNull();
+  });
+});
+
+describe.runIf(RUN)("pagar dos veces la misma factura de proveedor", () => {
+  it("avisa cuando esa factura ya se pagó", async () => {
+    const numero = `FC-DUP-${Date.now()}`;
+    const caja = (
+      await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, activa, created_at_ms, updated_at_ms)
+         VALUES ($1,'C',$2,true,$3,$3) RETURNING id`,
+        [EMPRESA, `Compra ${Date.now()}`, Date.now()]
+      )
+    ).rows[0].id;
+    const sesion = (
+      await servicio.abrirJornada(
+        { empresaId: EMPRESA, userId: USUARIO },
+        { registerId: caja, fondoManual: [{ valor: 2000, cantidad: 10 }] }
+      )
+    ).sesion.id;
+
+    await servicio.registrarOperacion(
+      { empresaId: EMPRESA, userId: USUARIO },
+      {
+        sessionId: sesion,
+        tipo: "PAYMENT",
+        importeCentimos: 1210,
+        formasPago: [{ forma: "CASH", importe: 1210 }],
+        efectivoEntregado: [{ valor: 2000, cantidad: 1 }],
+        efectivoRecibido: [{ valor: 500, cantidad: 1 }, { valor: 200, cantidad: 1 }, { valor: 50, cantidad: 1 }, { valor: 20, cantidad: 2 }],
+        referencia: numero,
+        concepto: "Tornilleria",
+      }
+    );
+
+    const p = await escanear(ticketDeCompra(numero), "otra-vez.pdf", "PAGO");
+    expect(p.cobroPrevio).not.toBeNull();
+    expect(p.avisos.some((a) => a.codigo === "POSIBLE_DUPLICADO" && a.grave)).toBe(true);
+    expect(p.avisos.find((a) => a.codigo === "POSIBLE_DUPLICADO")?.mensaje).toMatch(/pagada/i);
+  });
+
+  it("un COBRO con ese número no hace saltar el aviso de pago", async () => {
+    const numero = `MIXTO-${Date.now()}`;
+    const caja = (
+      await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, activa, created_at_ms, updated_at_ms)
+         VALUES ($1,'C',$2,true,$3,$3) RETURNING id`,
+        [EMPRESA, `Mixto ${Date.now()}`, Date.now()]
+      )
+    ).rows[0].id;
+    const sesion = (
+      await servicio.abrirJornada(
+        { empresaId: EMPRESA, userId: USUARIO },
+        { registerId: caja, fondoManual: [{ valor: 2000, cantidad: 10 }] }
+      )
+    ).sesion.id;
+    await servicio.registrarCobro(
+      { empresaId: EMPRESA, userId: USUARIO },
+      {
+        sessionId: sesion,
+        importeCentimos: 1000,
+        formasPago: [{ forma: "CASH", importe: 1000 }],
+        efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+        referencia: numero,
+      }
+    );
+
+    /*
+     * Que hayamos COBRADO la factura X a un cliente no dice nada sobre si
+     * hemos PAGADO la X de un proveedor. Avisar aquí sería un aviso falso, y
+     * los avisos falsos enseñan a ignorar los avisos.
+     */
+    const p = await escanear(ticketDeCompra(numero), "no-es-lo-mismo.pdf", "PAGO");
+    expect(p.cobroPrevio).toBeNull();
   });
 });
