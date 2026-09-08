@@ -519,6 +519,16 @@ export type EntradaOperacion = {
    * del cajón entero y no de un negocio.
    */
   sectionId?: number | null;
+  /**
+   * En qué se ha gastado y a quién se imputa. **Solo pagos.**
+   *
+   * Los dos son opcionales a propósito: obligar a clasificar pararía el
+   * mostrador el día que falte una entrada en el catálogo, y lo que se
+   * rellenaría entonces es lo primero que hubiera a mano — una estadística
+   * mentirosa con aire de exactitud es peor que un hueco honesto.
+   */
+  expenseConceptId?: number | null;
+  expenseTargetId?: number | null;
 };
 
 export type ResultadoOperacion = {
@@ -677,6 +687,39 @@ export async function registrarOperacion(
       }
     }
 
+    /*
+     * El concepto y su destino, aquí dentro y por la misma razón que la
+     * sección: entre que se pintó la pantalla y se pulsó confirmar, alguien ha
+     * podido desactivar el concepto. Y la comprobación de que el destino es del
+     * TIPO que pide el concepto no puede vivir en el navegador — que el
+     * desplegable enseñe solo operarios no impide llamar a la API con el id de
+     * un centro de coste, y una estadística de dietas que suma una unidad móvil
+     * no la detecta nadie mirándola.
+     */
+    let clasificacion: { conceptoId: number | null; destinoId: number | null } = {
+      conceptoId: null,
+      destinoId: null,
+    };
+    if (e.tipo === "PAYMENT" || e.tipo === "MANUAL_OUT") {
+      const { validarClasificacionGasto } = await import("./config.ts");
+      clasificacion = await validarClasificacionGasto(
+        ctx.empresaId,
+        e.expenseConceptId ?? null,
+        e.expenseTargetId ?? null
+      );
+    } else if (e.expenseConceptId != null || e.expenseTargetId != null) {
+      /*
+       * Se ignoraría en silencio si no fuera por esto. El catálogo es de
+       * GASTO: aceptarlo en un cobro y no guardarlo daría una pantalla que
+       * parece clasificar y unas estadísticas que no lo ven.
+       */
+      throw new ErrorCaja(
+        "ENTRADA_NO_VALIDA",
+        "Los conceptos de gasto solo se aplican a pagos y salidas.",
+        400
+      );
+    }
+
     codigosEfectivo = codigosEfectivoDe(catalogo);
     const validacion = validarOperacion(normalizada, stock, codigosEfectivo);
     if (esFallo(validacion)) {
@@ -714,6 +757,8 @@ export async function registrarOperacion(
       efectivoNetoCentimos: validacion.efectivoNeto,
       erpSyncStatus,
       sectionId: e.sectionId ?? null,
+      expenseConceptId: clasificacion.conceptoId,
+      expenseTargetId: clasificacion.destinoId,
       userId: ctx.userId,
       ahora,
     });

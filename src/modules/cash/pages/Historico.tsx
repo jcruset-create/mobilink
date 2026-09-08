@@ -24,6 +24,7 @@ import {
   inputCls,
   btnDanger,
   btnSecondary,
+  btnPrimary,
 } from "../components/ui";
 import { euros, eurosConSigno, fechaJornada } from "../utils/money";
 import {
@@ -76,6 +77,7 @@ export default function Historico() {
   const [estado, setEstado] = useState("");
   const [sesiones, setSesiones] = useState<FilaSesion[]>([]);
   const [detalle, setDetalle] = useState<number | null>(null);
+  const [reabrir, setReabrir] = useState<FilaSesion | null>(null);
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(false);
 
@@ -225,13 +227,30 @@ export default function Historico() {
                 */}
                 <td className={tdCls} onClick={(e) => e.stopPropagation()}>
                   {s.estado === "CLOSED" && (
-                    <BotonInforme
-                      ruta={`/sessions/${s.id}/report.pdf`}
-                      nombre={`cierre-${s.fecha.slice(0, 10)}`}
-                      className="flex items-center gap-1 rounded-lg bg-slate-700 px-2 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-600 disabled:opacity-50"
-                    >
-                      Informe
-                    </BotonInforme>
+                    <div className="flex items-center gap-1">
+                      <BotonInforme
+                        ruta={`/sessions/${s.id}/report.pdf`}
+                        nombre={`cierre-${s.fecha.slice(0, 10)}`}
+                        className="flex items-center gap-1 rounded-lg bg-slate-700 px-2 py-1 text-[11px] font-medium text-slate-200 hover:bg-slate-600 disabled:opacity-50"
+                      >
+                        Informe
+                      </BotonInforme>
+                      {/*
+                        Reabrir vive AQUÍ y no en Cierre porque en Cierre solo
+                        se ve la jornada de hoy, y lo que hay que corregir casi
+                        siempre es la de ayer: la factura que no se apuntó
+                        aparece cuando el cliente llama al día siguiente.
+                      */}
+                      {puede("cash.session.reopen") && (
+                        <button
+                          onClick={() => setReabrir(s)}
+                          title="Volver a abrir esta jornada para corregirla"
+                          className="rounded-lg bg-slate-700 px-2 py-1 text-[11px] font-medium text-amber-200 hover:bg-slate-600"
+                        >
+                          Reabrir
+                        </button>
+                      )}
+                    </div>
                   )}
                 </td>
               </tr>
@@ -239,6 +258,17 @@ export default function Historico() {
           })}
         </tbody>
       </TableWrap>
+
+      {reabrir && (
+        <ReabrirJornada
+          sesion={reabrir}
+          onCerrar={() => setReabrir(null)}
+          onHecho={() => {
+            setReabrir(null);
+            void buscar();
+          }}
+        />
+      )}
 
       {detalle && (
         <DetalleJornada
@@ -248,6 +278,106 @@ export default function Historico() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Volver a abrir una jornada cerrada para corregirla.
+ *
+ * El caso que lo justifica es real y aburrido: se cierra la caja y al día
+ * siguiente aparece una factura que no se apuntó. Sin esto, el histórico se
+ * queda mal para siempre o alguien la mete en la jornada de hoy, que es peor —
+ * el dinero acabaría contado en un día en el que no entró.
+ *
+ * ## Lo que esta pantalla NO decide
+ *
+ * Ni quién puede, ni si la jornada está ingresada. Las dos cosas las contesta
+ * el servidor dentro de la transacción, y aquí solo se enseña lo que responde:
+ *
+ *  · **Quien cerró la jornada no la reabre.** Reabrir permite recerrar con
+ *    otras cifras, así que es la otra mitad del camino que abre una anulación
+ *    y pide una segunda persona, igual que ella.
+ *  · **Una jornada ya ingresada en el banco se bloquea.** Al recerrarla
+ *    cambiaría su importe y el ingreso quedaría conciliando un número que ya no
+ *    existe. El servidor dice qué ingreso es, para poder ir a anularlo.
+ *
+ * Adelantar aquí esas comprobaciones sería copiarlas, y dos copias de una regla
+ * son dos reglas en cuanto una se toca.
+ */
+function ReabrirJornada({
+  sesion,
+  onCerrar,
+  onHecho,
+}: {
+  sesion: FilaSesion;
+  onCerrar: () => void;
+  onHecho: () => void;
+}) {
+  const [motivo, setMotivo] = useState("");
+  const [error, setError] = useState("");
+  const [guardando, setGuardando] = useState(false);
+
+  async function confirmar() {
+    setGuardando(true);
+    setError("");
+    try {
+      await api.reabrirJornada(sesion.id, motivo.trim());
+      onHecho();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido reabrir la jornada");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <Modal title={`Reabrir la jornada del ${fechaJornada(sesion.fecha)}`} onClose={onCerrar}>
+      <div className="space-y-3">
+        <p className="text-[13px] text-slate-300">
+          La jornada vuelve a quedar abierta y se le pueden añadir o corregir operaciones. Después
+          hay que <strong>volver a cerrarla</strong>: el cierre se rehace con las cifras nuevas.
+        </p>
+
+        <Aviso tono="aviso">
+          Tiene que reabrirla una persona <strong>distinta de quien la cerró</strong>, y no se puede
+          si su dinero ya forma parte de un ingreso bancario — en ese caso hay que anular antes el
+          ingreso.
+        </Aviso>
+
+        {/*
+          El motivo es obligatorio en el servidor y se queda en la auditoría.
+          Es lo que permite entender, meses después, por qué un cierre tiene dos
+          versiones.
+        */}
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+            Motivo
+          </span>
+          <textarea
+            value={motivo}
+            onChange={(e) => setMotivo(e.target.value)}
+            rows={3}
+            placeholder="Falta la factura T-1234, cobrada con tarjeta y no apuntada"
+            className={inputCls}
+          />
+        </label>
+
+        {error && <ErrorBox>{error}</ErrorBox>}
+      </div>
+
+      <div className="mt-4 flex justify-end gap-2">
+        <button onClick={onCerrar} className={btnSecondary} disabled={guardando}>
+          Cancelar
+        </button>
+        <button
+          onClick={() => void confirmar()}
+          disabled={guardando || !motivo.trim()}
+          className={btnPrimary}
+        >
+          {guardando ? "Reabriendo…" : "Reabrir jornada"}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
