@@ -738,6 +738,17 @@ export async function initDb() {
     -- login correcto se re-guardan aquí y se borra el valor en claro.
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPinHash" TEXT DEFAULT NULL;
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPinSalt" TEXT DEFAULT NULL;
+
+    -- Paso 2 de la unificación de usuarios: vínculo con la persona de Core.
+    -- `techs` está clavada por `name` y todo su histórico (partes, pausas,
+    -- cobros, asistencias) apunta por nombre. Ese histórico NO se toca: esta
+    -- columna solo sirve para las lecturas nuevas y para dejar de dar de alta
+    -- al mismo técnico dos veces.
+    --
+    -- La clave foránea contra sea_employees va en la migración manual
+    -- 010_techs_employee_id.sql, no aquí: esa tabla la crean las migraciones de
+    -- Supabase y en una base recién creada (la de la CI) todavía no existe.
+    ALTER TABLE techs ADD COLUMN IF NOT EXISTS employee_id UUID DEFAULT NULL;
   `);
 
   await pool.query(`
