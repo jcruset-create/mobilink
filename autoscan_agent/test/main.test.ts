@@ -17,10 +17,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Activacion, Resultado, ServidorDeAutoScan } from "../src/api.ts";
+import type { Activacion, Latido, Resultado, ServidorDeAutoScan } from "../src/api.ts";
 import { cargarConfig, prepararCarpetas, type Config } from "../src/config.ts";
 import { AlmacenEnMemoria, type Credencial } from "../src/credencial.ts";
-import { Agente } from "../src/main.ts";
+import { Agente, VERSION } from "../src/main.ts";
 
 const ACTIVACION: Activacion = {
   deviceId: 7,
@@ -54,9 +54,12 @@ class ServidorFalso implements ServidorDeAutoScan {
     };
   }
 
-  async latido(): Promise<boolean> {
+  /** Lo que el servidor dice que hay publicado. Cada prueba lo pone a su gusto. */
+  publicado: { version: string; url: string } | null = null;
+
+  async latido(): Promise<Latido> {
     this.latidos += 1;
-    return true;
+    return { ok: true, publicado: this.publicado };
   }
 }
 
@@ -104,6 +107,14 @@ const estado = async (): Promise<Record<string, unknown>> =>
 async function sincronizar(): Promise<void> {
   await panel("/sincronizar");
   await panel("/sincronizar");
+}
+
+/** Pulsa «actualizar» en la bandeja. Lanza con el mensaje que ella enseñaría. */
+async function actualizar(): Promise<{ version: string }> {
+  const res = await panel("/actualizar");
+  const cuerpo = (await res.json()) as { version?: string; error?: string };
+  if (!res.ok) throw new Error(cuerpo.error ?? `El panel ha respondido ${res.status}.`);
+  return { version: cuerpo.version! };
 }
 
 async function montar(conCredencial = false): Promise<Agente> {
@@ -256,6 +267,49 @@ describe("el recorrido entero, con credencial", () => {
     expect(e.archivadas).toBe(2);
     expect(e.pendientes).toBe(0);
     expect(e.centro).toBe(ACTIVACION.nombre);
+  });
+});
+
+describe("el aviso de versión nueva", () => {
+  /** Espera a que haya salido al menos un latido y llega el estado. */
+  const trasUnLatido = async () => {
+    agente = await montar(true);
+    await agente.arrancar(0);
+    await new Promise((listo) => setTimeout(listo, 60));
+    return estado();
+  };
+
+  it("ofrece la versión cuando de verdad es más nueva", async () => {
+    servidor.publicado = { version: "9.9.9", url: "https://github.com/x/y.zip" };
+    const e = await trasUnLatido();
+    expect(e.actualizacion).toEqual({ version: "9.9.9", url: "https://github.com/x/y.zip" });
+  });
+
+  it("NO ofrece la misma versión que ya corre", async () => {
+    servidor.publicado = { version: VERSION, url: "https://github.com/x/y.zip" };
+    expect((await trasUnLatido()).actualizacion).toBeNull();
+  });
+
+  it("NO ofrece una versión más vieja, diga lo que diga el servidor", async () => {
+    /*
+     * El filtro vive en el agente y no en el servidor a propósito: es la
+     * máquina del mostrador la que decide qué se ejecuta en ella. Un servidor
+     * confundido —o alguien puesto en su lugar— no puede devolver veinte
+     * agentes a una versión con un fallo ya arreglado.
+     */
+    servidor.publicado = { version: "0.0.1", url: "https://github.com/x/y.zip" };
+    expect((await trasUnLatido()).actualizacion).toBeNull();
+  });
+
+  it("sin nada publicado, no hay aviso", async () => {
+    servidor.publicado = null;
+    expect((await trasUnLatido()).actualizacion).toBeNull();
+  });
+
+  it("y sin versión que instalar, el botón se niega", async () => {
+    agente = await montar(true);
+    await agente.arrancar(0);
+    await expect(actualizar()).rejects.toThrow(/No hay ninguna versión nueva/);
   });
 });
 

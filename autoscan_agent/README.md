@@ -61,17 +61,45 @@ cuenta que se usa a diario: la credencial queda atada a ella.
 
 ## Actualizar
 
-```powershell
-.\actualizar.ps1 -Nueva C:\ruta\a\la\version\nueva
-```
+Lo normal es **desde la bandeja**: clic derecho en el icono → «Actualizar el
+agente». Si hay versión nueva lo dice, pregunta, y el resto va solo.
+
+El agente se entera porque cada latido le trae qué versión hay publicada. La
+descarga sale de las releases de GitHub de la casa, las mismas de las APK.
 
 Para, cambia, arranca y **comprueba que el agente responde**. Si la versión
 nueva no levanta, vuelve sola a la anterior. No toca la cola, ni los escaneos,
 ni la credencial: se puede actualizar con documentos pendientes de subir.
 
-No descarga nada. El canal de publicación —dónde se cuelgan las versiones y
-cómo se firman— **está sin decidir**; lo que está resuelto aquí es el cambio
-en sí, que es la parte que puede dejar un mostrador sin agente.
+A mano también, con un paquete o una carpeta:
+
+```powershell
+.\actualizar.ps1 -Zip   C:\ruta\mobilink-autoscan-1.0.3.zip
+.\actualizar.ps1 -Nueva C:\ruta\a\la\version\nueva
+```
+
+### Lo que el agente NO hace, y por qué
+
+**No se actualiza solo.** Hace falta que alguien pulse. El guion para el
+agente, mueve carpetas y deshace el cambio si la versión nueva no responde, y
+**nada de eso se ha ejecutado nunca en Windows**: en el entorno de desarrollo
+no hay PowerShell. Con una persona delante, un cambio que salga mal se ve en
+el momento y en un mostrador; desatendido saldría mal en los veinte a la vez.
+Cuando se haya usado unas cuantas veces de verdad, automatizarlo es mover una
+llamada a un temporizador.
+
+**No instala una versión que no sea más nueva que la suya.** Ni la misma, ni
+una anterior, diga lo que diga el servidor. Sin esa regla, quien pudiera
+contestar por el servidor devolvería veinte mostradores a una versión con un
+fallo ya arreglado, solos y en orden.
+
+**No descarga de cualquier sitio.** Solo de `github.com` y
+`objects.githubusercontent.com`, y solo por HTTPS. El agente ya se fía del
+servidor para subir facturas; fiarse de él para *ejecutar* lo que mande es otra
+cosa, y esa lista es lo que separa las dos.
+
+Las tres reglas están en `src/version.ts` y `src/actualizador.ts`, con sus
+pruebas al lado.
 
 ## Desinstalar
 

@@ -73,8 +73,20 @@ export interface ServidorDeAutoScan {
     idempotencyKey: string,
     escaneadoAtMs: number | null
   ): Promise<Resultado>;
-  latido(secret: string): Promise<boolean>;
+  latido(secret: string): Promise<Latido>;
 }
+
+/**
+ * Lo que vuelve del latido.
+ *
+ * `publicado` es lo que el servidor dice que hay colgado, **tal cual**: ni
+ * comparado con lo que llevamos ni validado. Quien decide si eso es una
+ * actualización es el agente, en `main.ts`, con las reglas de `version.ts`.
+ */
+export type Latido = {
+  ok: boolean;
+  publicado: { version: string; url: string } | null;
+};
 
 export type Activacion = {
   deviceId: number;
@@ -193,8 +205,15 @@ export class ClienteAutoScan {
     return this.#traducir(res, await this.#json(res));
   }
 
-  /** Sigo vivo, y ésta es mi versión. Que falle no es grave: se reintenta solo. */
-  async latido(secret: string): Promise<boolean> {
+  /**
+   * Sigo vivo, y ésta es mi versión. Que falle no es grave: se reintenta solo.
+   *
+   * De vuelta trae qué agente hay publicado, si es que hay alguno. Se lee con
+   * pinzas —tipos comprobados uno a uno— porque de aquí sale, más adelante, una
+   * descarga que se ejecuta: un `as` de conveniencia sobre esta respuesta sería
+   * la forma más barata de meterse un problema serio.
+   */
+  async latido(secret: string): Promise<Latido> {
     try {
       const res = await this.#pedir("/heartbeat", {
         method: "POST",
@@ -202,9 +221,17 @@ export class ClienteAutoScan {
         body: JSON.stringify({ version: this.#version }),
         señal: TIEMPO_CORTO_MS,
       });
-      return res.ok;
+      if (!res.ok) return { ok: false, publicado: null };
+
+      const cuerpo = await this.#json(res);
+      const a = cuerpo?.agente;
+      const publicado =
+        a && typeof a.version === "string" && typeof a.url === "string"
+          ? { version: a.version, url: a.url }
+          : null;
+      return { ok: true, publicado };
     } catch {
-      return false;
+      return { ok: false, publicado: null };
     }
   }
 
