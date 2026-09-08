@@ -1,5 +1,10 @@
 # Cómo entra hoy una factura en Mobilink Cash
 
+> **Documento histórico.** Describe el momento en que se escribió, no el de
+> ahora. Lo vigente está en [`README.md`](./README.md); aquí se retrata el
+> flujo manual **anterior** a AutoScan, que sigue existiendo tal cual porque
+> no se tocó.
+
 Fase 0 de AutoScan: **qué existe**, leído del código, no de la memoria. Todas
 las referencias son a ficheros y funciones reales de este repositorio.
 
