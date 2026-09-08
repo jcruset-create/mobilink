@@ -102,7 +102,7 @@ const BASES: Record<string, string> = {
 };
 
 function rutaModulo(modulo: string): string {
-  const base = BASES[modulo] ?? "/";
+  const base = BASES[modulo] ?? "/inicio";
   // administración y tyrecontrol tienen su portada en /dashboard
   if (modulo === "administracion" || modulo === "tyrecontrol") return `${base}/dashboard`;
   // Mobilink Cash abre por la jornada actual, que es lo que se mira al llegar
@@ -111,7 +111,7 @@ function rutaModulo(modulo: string): string {
 }
 
 function rutaPantalla(modulo: string, pantalla: string): string {
-  const base = BASES[modulo] ?? "/";
+  const base = BASES[modulo] ?? "/inicio";
   if (
     modulo === "administracion" ||
     modulo === "tyrecontrol" ||
@@ -405,7 +405,7 @@ export default function InicioPage() {
                   Planificación operativa del taller: técnicos, trabajos, entradas rápidas y agenda.
                 </p>
                 <button
-                  onClick={() => navigate("/")}
+                  onClick={() => navigate("/taller")}
                   className="mt-auto rounded-xl bg-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-600"
                 >
                   Entrar
