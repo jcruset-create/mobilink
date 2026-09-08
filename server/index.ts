@@ -78,6 +78,7 @@ import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenS
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
+import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
@@ -692,6 +693,9 @@ function normalizeTechRow(t: any) {
     // Sin la columna (base antigua) se asume de alta: nadie está de baja por
     // omisión.
     activo: t.activo !== false,
+    // Persona de Core con la que está vinculado (paso 2 de la unificación).
+    // null = todavía sin vincular; el histórico sigue yendo por nombre.
+    employeeId: t.employee_id ?? null,
   };
 }
 
@@ -2240,7 +2244,7 @@ app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => 
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
              "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
-             "statusChangedAtMs", "statusTotals", activo
+             "statusChangedAtMs", "statusTotals", activo, employee_id
       FROM techs
       ORDER BY id ASC
     `);
@@ -2349,7 +2353,8 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           "statusTotals",
           "roadsideCapable",
           "currentRoadsideAssistanceId",
-          phone
+          phone,
+          employee_id
         FROM techs
         WHERE name = $1
       `,
@@ -2424,6 +2429,100 @@ app.put("/api/techs/:name/activo", requireAdminRole, async (req, res) => {
   } catch (error) {
     console.error("PUT /api/techs/:name/activo error:", error);
     res.status(500).json({ error: "Error cambiando el alta del técnico" });
+  }
+});
+
+/* =========================================================
+   VÍNCULO TÉCNICO ↔ PERSONA DE CORE (paso 2 de la unificación)
+   Ver docs/FASE1_OPERARIOS_CORE_ESTUDIO.md, apartado 0.
+   El histórico del taller sigue apuntando por nombre: esto no lo toca.
+========================================================= */
+
+// Propuesta de emparejado, para revisarla ANTES de aplicar nada. No escribe.
+app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
+  try {
+    const [tecnicos, empleados] = await Promise.all([
+      db.query(`SELECT name, employee_id FROM techs ORDER BY name`),
+      db.query(
+        `SELECT id, nombre, apellidos, codigo_operario
+           FROM sea_employees
+          WHERE activo = true
+          ORDER BY nombre`
+      ),
+    ]);
+
+    const yaVinculados = new Map<string, string>(
+      tecnicos.rows
+        .filter((t: any) => t.employee_id)
+        .map((t: any) => [t.name, String(t.employee_id)])
+    );
+
+    const propuestas = proponerVinculos(
+      tecnicos.rows.map((t: any) => String(t.name)),
+      empleados.rows as EmpleadoCore[]
+    ).map((p) => ({
+      ...p,
+      // Lo que ya está vinculado se informa, pero no se vuelve a proponer.
+      vinculadoA: yaVinculados.get(p.tech) ?? null,
+    }));
+
+    res.json({
+      propuestas,
+      resumen: {
+        total: propuestas.length,
+        yaVinculados: yaVinculados.size,
+        exacta: propuestas.filter((p) => !p.vinculadoA && p.certeza === "exacta").length,
+        unica: propuestas.filter((p) => !p.vinculadoA && p.certeza === "unica").length,
+        ambigua: propuestas.filter((p) => !p.vinculadoA && p.certeza === "ambigua").length,
+        sinCandidato: propuestas.filter(
+          (p) => !p.vinculadoA && p.certeza === "sin_candidato"
+        ).length,
+      },
+    });
+  } catch (error) {
+    console.error("GET /api/techs/vinculo-core error:", error);
+    res.status(500).json({ error: "Error calculando los vínculos" });
+  }
+});
+
+// Confirma (o deshace, con employeeId null) el vínculo de un técnico.
+app.put("/api/techs/:name/vinculo-core", requireAdminRole, async (req, res) => {
+  try {
+    const name = String(req.params.name || "").trim();
+    const employeeId = req.body?.employeeId ? String(req.body.employeeId).trim() : null;
+    if (!name) return res.status(400).json({ error: "Nombre requerido" });
+
+    if (employeeId) {
+      const existe = await db.query(`SELECT id FROM sea_employees WHERE id = $1`, [
+        employeeId,
+      ]);
+      if (existe.rows.length === 0) {
+        return res.status(404).json({ error: "Ese empleado no existe" });
+      }
+      // Una persona no puede ser dos técnicos: sería el duplicado que se
+      // intenta eliminar, pero con vínculo.
+      const ocupado = await db.query(
+        `SELECT name FROM techs WHERE employee_id = $1 AND name <> $2 LIMIT 1`,
+        [employeeId, name]
+      );
+      if (ocupado.rows.length > 0) {
+        return res.status(409).json({
+          error: `Ese empleado ya está vinculado con "${ocupado.rows[0].name}"`,
+        });
+      }
+    }
+
+    const r = await db.query(
+      `UPDATE techs SET employee_id = $1 WHERE name = $2 RETURNING name, employee_id`,
+      [employeeId, name]
+    );
+    if (r.rows.length === 0) {
+      return res.status(404).json({ error: "Técnico no encontrado" });
+    }
+    res.json({ ok: true, name: r.rows[0].name, employeeId: r.rows[0].employee_id });
+  } catch (error) {
+    console.error("PUT /api/techs/:name/vinculo-core error:", error);
+    res.status(500).json({ error: "Error guardando el vínculo" });
   }
 });
 
