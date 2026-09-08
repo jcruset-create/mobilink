@@ -146,7 +146,11 @@ export default function App() {
     <RecuperarDespliegue>
     <Suspense fallback={<Cargando />}>
     <Routes>
-      <Route path="/" element={<SeaTarragonaV1 />} />
+      {/* La puerta de entrada es el hub, no el panel operativo. Quien no
+          tenga sesión acaba en /acceso desde ahí. */}
+      <Route path="/" element={<Navigate to="/inicio" replace />} />
+      {/* Panel operativo del taller, con la sesión unificada del hub. */}
+      <Route path="/taller" element={<SeaTarragonaV1 />} />
       {/* Login clásico del panel (pantallas de TV, supervisor por contraseña…) */}
       <Route path="/panel" element={<SeaTarragonaV1 permitirLoginClasico />} />
       <Route path="/sea" element={<SeaHub />} />

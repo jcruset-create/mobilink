@@ -244,7 +244,7 @@ export default function CobrosDashboard() {
               🏠 Inicio
             </button>
             <button
-              onClick={() => navigate("/")}
+              onClick={() => navigate("/taller")}
               className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700"
             >
               ← Volver a Operativo
