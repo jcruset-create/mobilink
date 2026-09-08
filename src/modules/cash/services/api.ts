@@ -46,6 +46,8 @@ import type {
   DispositivoAutoScan,
   ConceptoGasto,
   DestinoGasto,
+  GranularidadGasto,
+  InformeGasto,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -943,6 +945,37 @@ export const crearDestinoGasto = (datos: { nombre: string; tipo: "PERSONA" | "CE
 
 export const actualizarDestinoGasto = (id: number, datos: { nombre?: string; activo?: boolean }) =>
   pedir<{ destino: DestinoGasto }>(`/expense-targets/${id}`, { method: "PATCH", body: JSON.stringify(datos) });
+
+/**
+ * El informe de gasto.
+ *
+ * `centro` vacío pide el **consolidado de la empresa**; con un id, el de ese
+ * taller. A un usuario con el ámbito limitado a un taller el servidor le impone
+ * el suyo pase lo que pase: pedir el consolidado no puede ser la forma de ver
+ * el gasto de los centros que no le tocan.
+ *
+ * `conceptoId` es el modo detalle: con él, el desglose por destino pasa a ser
+ * «gasto en dietas por operario», que es la pregunta útil. Sin él, la lista de
+ * destinos mezclaría personas y centros de coste.
+ */
+export const estadisticasDeGasto = (p: {
+  desde: string;
+  hasta: string;
+  granularidad: GranularidadGasto;
+  centro?: string | null;
+  conceptoId?: number | null;
+  comparar?: boolean;
+}) => {
+  const q = new URLSearchParams({
+    desde: p.desde,
+    hasta: p.hasta,
+    granularidad: p.granularidad,
+  });
+  if (p.centro) q.set("centro", p.centro);
+  if (p.conceptoId != null) q.set("conceptoId", String(p.conceptoId));
+  if (p.comparar) q.set("comparar", "1");
+  return pedir<InformeGasto>(`/expense-stats?${q.toString()}`);
+};
 
 // ── AutoScan ───────────────────────────────────────────────────────────────
 
