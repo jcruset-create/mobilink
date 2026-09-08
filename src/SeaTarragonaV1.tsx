@@ -4393,6 +4393,16 @@ function removeSupportFromActiveJob(jobId: number) {
 
 
 
+// Sesión restaurada del navegador pero aún sin confirmar por el servidor: no
+// se enseña el panel hasta saber si sigue siendo válida.
+if (isAuthenticated && !sesionValidada) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-100 text-slate-500">
+      <div className="text-sm">Comprobando sesión…</div>
+    </div>
+  );
+}
+
 if (userRole === "tv75") {
   return (
     <WorkshopTV75View
@@ -4417,16 +4427,6 @@ if (userRole === "tv75") {
         if (!permitirLoginClasico) window.location.assign("/inicio");
       }}
     />
-  );
-}
-
-// Sesión restaurada del navegador pero aún sin confirmar por el servidor: no
-// se enseña el panel hasta saber si sigue siendo válida.
-if (isAuthenticated && !sesionValidada) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 text-slate-500">
-      <div className="text-sm">Comprobando sesión…</div>
-    </div>
   );
 }
 
