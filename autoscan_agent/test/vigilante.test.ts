@@ -141,6 +141,39 @@ describe("lo que NO se recoge todavía", () => {
   });
 });
 
+describe("un barrido no se pierde porque haya otro en marcha", () => {
+  it("dos barridos a la vez cuentan como DOS observaciones, no como una", async () => {
+    escanear("factura.pdf", 4_096);
+
+    /*
+     * Éste es el fallo que la CI destapó y que en local no salía.
+     *
+     * La primera versión descartaba: si ya había un barrido corriendo, el
+     * segundo se iba sin hacer nada. Y el watcher dispara el suyo en cuanto el
+     * escáner suelta el PDF, así que «Sincronizar ahora» pillaba ese barrido a
+     * medias, se iba en silencio y el botón no hacía NADA.
+     *
+     * Lanzados a la vez, los dos tienen que completarse: dos observaciones, y
+     * el fichero encolado.
+     */
+    await Promise.all([vigilante.barrer(), vigilante.barrer()]);
+
+    expect(cola.resumen().pendientes).toBe(1);
+  });
+
+  it("al volver de barrer(), el barrido ya ha terminado", async () => {
+    escanear("factura.pdf", 4_096);
+    await vigilante.barrer();
+    await vigilante.barrer();
+
+    /*
+     * Sin esperar de verdad, `sincronizarAhora` contestaría «hecho» con el
+     * barrido todavía a medias y el enviador no encontraría nada que subir.
+     */
+    expect(cola.resumen().pendientes).toBe(1);
+  });
+});
+
 describe("no se acuerda de ficheros que ya no existen", () => {
   it("un escaneo que alguien borra antes de subirse deja de vigilarse", async () => {
     const v = new Vigilante({ ...cfg, estabilidadMs: 60_000 }, cola);

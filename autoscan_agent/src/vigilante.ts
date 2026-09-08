@@ -68,8 +68,8 @@ export class Vigilante {
   #temporizador: NodeJS.Timeout | null = null;
   #encolados = 0;
   #atascados = new Set<string>();
-  /** Evita que dos barridos solapados encolen el mismo fichero dos veces. */
-  #barriendo = false;
+  /** El último barrido encadenado. Cada llamada nueva se pone detrás. */
+  #enCurso: Promise<void> | null = null;
 
   constructor(cfg: Config, cola: Cola, log: (m: string) => void = () => {}) {
     this.#cfg = cfg;
@@ -136,21 +136,47 @@ export class Vigilante {
    * Es idempotente: `Cola.encolar` ignora una ruta que ya conoce, así que
    * llamarlo de más no duplica nada. Esa garantía es la que permite que el
    * watcher sea tan tonto como es.
+   *
+   * ## Se hace COLA, no se descarta
+   *
+   * Dos barridos a la vez se pisarían: los dos leen la carpeta y los dos
+   * observan los mismos ficheros, así que uno se llevaría la observación que le
+   * tocaba al otro y `Estabilizador` contaría de más.
+   *
+   * La primera versión resolvía eso descartando: si ya había un barrido en
+   * marcha, el segundo se iba sin hacer nada. Y ahí estaba el fallo — el
+   * watcher dispara su propio barrido en cuanto el escáner suelta el PDF, así
+   * que «Sincronizar ahora» pillaba ese barrido a medias, se iba en silencio y
+   * el botón no hacía NADA. Quien lo pulsa acaba de dejar un papel en el
+   * escáner: que no haga nada es lo peor que puede hacer.
+   *
+   * Ahora se encadena: quien llama espera al que hay en marcha y después corre
+   * el suyo. Al volver de `barrer()` siempre ha habido un barrido COMPLETO
+   * posterior a la llamada, que es justo lo que «Sincronizar ahora» promete.
+   *
+   * Se probó a juntar las llamadas que aún no habían empezado, para que una
+   * ráfaga del watcher no diera veinte barridos. Se quitó: hace que dos
+   * llamadas a la vez cuenten como UNA observación, y `Estabilizador` necesita
+   * dos para dar un fichero por terminado — o sea, reintroducía el mismo fallo
+   * por otra puerta. Un `readdir` de una carpeta que casi siempre está vacía es
+   * barato; equivocarse aquí cuesta una factura.
    */
   async barrer(): Promise<void> {
-    if (this.#barriendo) return;
-    this.#barriendo = true;
-    try {
-      await this.#barrerUnaVez();
-    } catch (e) {
-      /*
-       * La carpeta puede no existir todavía —el instalador la crea, pero
-       * alguien puede borrarla— y eso no puede tumbar el agente.
-       */
-      this.#log(`[vigilante] barrido fallido: ${String(e)}`);
-    } finally {
-      this.#barriendo = false;
-    }
+    const enMarcha = this.#enCurso ?? Promise.resolve();
+    const mio = enMarcha.then(async () => {
+      try {
+        await this.#barrerUnaVez();
+      } catch (e) {
+        /*
+         * La carpeta puede no existir todavía —el instalador la crea, pero
+         * alguien puede borrarla— y eso no puede tumbar el agente.
+         */
+        this.#log(`[vigilante] barrido fallido: ${String(e)}`);
+      }
+    });
+
+    this.#enCurso = mio;
+    return mio;
   }
 
   async #barrerUnaVez(): Promise<void> {
