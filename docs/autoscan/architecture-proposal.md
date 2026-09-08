@@ -1,5 +1,10 @@
 # AutoScan — propuesta de arquitectura
 
+> **Documento histórico.** Describe el momento en que se escribió, no el de
+> ahora. Lo vigente está en [`README.md`](./README.md); esto es la propuesta,
+> con sus preguntas abiertas y sus nombres provisionales, no lo que se acabó
+> construyendo.
+
 Fase 0. Qué se reutiliza, qué hay que crear, qué decisiones quedan abiertas y
 qué riesgos hay. **Todavía no se ha escrito una línea de AutoScan.**
 
@@ -248,6 +253,11 @@ Kafka, Kubernetes, microservicios, event sourcing, Redis. Autoactualización del
 agente: la arquitectura queda preparada con `version` en el dispositivo, pero
 no se implementa. Nada de MC Central más allá de que los modelos llevan
 `empresa_id` y `centro_id` desde el principio.
+
+> **Nota posterior.** La autoactualización sí acabó haciéndose, y salió justo por
+> donde esta sección dejaba preparado: el `version` del dispositivo viaja en el
+> latido y de vuelta viene qué hay publicado. Se cuenta en
+> [`README.md` §4](./README.md). Lo demás de este párrafo sigue vigente.
 
 ---
 
