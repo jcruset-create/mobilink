@@ -54,6 +54,28 @@ export type Rechazado = {
 
 export type Resultado = Entregado | Reintentable | Rechazado;
 
+/**
+ * Lo único que el agente necesita del servidor.
+ *
+ * Deliberadamente más estrecho que `ClienteAutoScan`: escrito así, se ve de un
+ * vistazo que el agente NO lee cajas, ni jornadas, ni cobros. Si algún día
+ * aparece aquí un método de más, es que algo se ha entendido mal.
+ *
+ * Es además la costura por la que las pruebas meten un servidor de mentira, el
+ * mismo patrón que `AlmacenDeCredencial`: sin ella, probar el recorrido entero
+ * exigiría levantar un servidor o hurgar en campos privados.
+ */
+export interface ServidorDeAutoScan {
+  activar(codigo: string): Promise<Activacion>;
+  subir(
+    secret: string,
+    fichero: { ruta: string; nombre: string; tamano: number },
+    idempotencyKey: string,
+    escaneadoAtMs: number | null
+  ): Promise<Resultado>;
+  latido(secret: string): Promise<boolean>;
+}
+
 export type Activacion = {
   deviceId: number;
   secret: string;
