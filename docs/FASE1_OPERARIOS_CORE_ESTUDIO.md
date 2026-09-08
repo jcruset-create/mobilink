@@ -1,5 +1,106 @@
 # Fase 1 — Estudio: Core como fuente única de operarios y usuarios
 
+> **Revisado el 2026-09-08.** El estudio original (secciones 1–7, más abajo) sigue siendo
+> válido como inventario, pero se escribió antes de trabajar sobre el código. Lo que se
+> aprendió después cambia el plan: **el sistema unificado ya existe y funciona**, así que
+> esto no es diseñar algo nuevo sino terminar una migración a medias.
+
+---
+
+## 0. Estado real y plan vigente (2026-09-08)
+
+### Lo que YA está montado
+
+- `app_usuarios` + `app_usuario_modulos`: usuario único, con **rol y pantallas por módulo**.
+- El login unificado de `/acceso` que los usa.
+- **`app_usuarios.employee_id → sea_employees(id)`**: el puente entre el acceso y la
+  persona ya está en el esquema (`administracion_fase11_usuarios_unificados.sql:25`).
+- Superadmin de plataforma respetado por el hub y por los guardias de Administración,
+  Almacén y TyreControl (`src/modules/superadmin.ts`).
+- Alta y edición completas en **Administración → Usuarios** (`/administracion/usuarios`):
+  crea la cuenta de Auth con la contraseña bien salada, asigna módulos, roles y pantallas.
+
+### Lo que falta, y por qué
+
+| Sistema | Estado | Bloqueo |
+|---|---|---|
+| `perfiles_usuario` (Almacén) | Isla: **sin ningún vínculo** con el resto | Ninguno — es el más fácil |
+| `techs` (Taller) | **Sin vínculo**; clavada por `name`, no por id | Histórico por nombre en 7 tablas |
+| `app_users` (Panel) | La **contraseña ES el token de sesión** | Hay que separar credencial de sesión primero |
+
+### Plan por pasos
+
+**Paso 1 — Almacén: el rol viene de Core.** `perfiles_usuario` deja de ser almacén de
+identidad y pasa a ser **satélite del módulo** (ubicación, código de operario, clientes
+asignados). El rol se lee de `app_usuario_modulos` (`modulo = 'almacen'`), con vuelta atrás
+a `perfiles_usuario` mientras queden usuarios sin migrar. Los tres roles coinciden uno a uno
+(`admin` / `responsable` / `operario`), así que no hace falta traducir nada.
+
+> ⚠️ La APK de almacén (`almacen_app`) entra por `/api/almacen/login-operario` contra
+> `perfiles_usuario.codigo_operario`. **Ese camino no se toca en este paso**: la tabla sigue
+> viva y la APK sigue funcionando.
+
+**Comprobación antes de desplegar.** Como Core pasa a mandar, quien tenga rol distinto en las
+dos tablas cambia de permisos. Esta consulta saca la lista para revisarla:
+
+```sql
+select u.email,
+       a.username,
+       m.rol            as rol_core,
+       p.rol            as rol_ficha_almacen,
+       case
+         when m.rol is null then 'entra por la ficha (sin migrar)'
+         when p.rol is null then 'solo Core'
+         when m.rol = p.rol then 'coinciden'
+         else 'CAMBIA: mandará el de Core'
+       end as efecto
+from perfiles_usuario p
+full outer join app_usuario_modulos m
+  on m.user_id = p.user_id and m.modulo = 'almacen'
+left join app_usuarios a on a.id = coalesce(m.user_id, p.user_id)
+left join auth.users  u on u.id = coalesce(m.user_id, p.user_id)
+where p.activo is not false
+order by efecto, a.username;
+```
+
+Las filas con `CAMBIA` son las únicas que hay que mirar: o se corrige el rol en
+Administración → Usuarios, o se acepta el nuevo.
+
+**Efecto secundario conocido.** Un usuario con acceso en Core pero **sin ficha** de almacén
+entra, pero se queda sin `ubicacion`, así que las operaciones ligadas a una ubicación concreta
+le quedan cerradas (salvo que sea admin). Antes no entraba en absoluto, así que no es una
+regresión; simplemente indica que a esa persona le falta su ficha del módulo.
+
+**Paso 2 — Técnicos: vincular `techs` con la persona.** Añadir `techs.employee_id`, casar por
+nombre normalizado y sacar informe de no-casados. El histórico (partes, pausas, cobros,
+asistencias) **se queda apuntando por nombre**: solo se añade el id para las lecturas nuevas.
+Después, la pantalla *Técnicos* edita únicamente lo operativo y la identidad viene de Core.
+Es el paso que más ahorra en el día a día: elimina la tercera alta.
+
+**Paso 3 — Panel de taller (bloqueante).** En `app_users` la contraseña se entrega como
+`adminToken` y se reenvía en cada petición (`server/index.ts`, `login-sso`). Mientras siga
+así no se puede fusionar. Orden obligado:
+1. Separar credencial de sesión: hashear la contraseña e introducir tokens propios con
+   caducidad (ver `docs/SEGURIDAD_CREDENCIALES.md`, apartado A).
+2. Los roles del panel (`admin`/`supervisor`/`pantallas`/`tv75`) pasan a ser un módulo más en
+   `app_usuario_modulos`. El servidor ya sabe resolver el rol desde la sesión unificada.
+3. Las pantallas de TV necesitan lo suyo: **token de dispositivo**, no un usuario con
+   contraseña.
+
+**Paso 4 — Una sola alta.** Con los tres anteriores, Core → Empleados crea la persona y desde
+su ficha se le da acceso y módulos. Una pantalla, un alta.
+
+### Lo que NO se unifica
+
+Los clientes de TyreControl (`tc_usuarios` con `rol = 'cliente'`) y los usuarios de Connect
+Pro. **No son plantilla propia**: son terceros —flotas, talleres colaboradores— con otro ciclo
+de vida. Meterlos en el mismo saco complica el modelo sin ganar nada.
+
+---
+
+## Estudio original (2026-07-28)
+
+
 > Documento de estudio. **No se ha tocado código.** Pendiente de aprobación antes de Fase 2.
 >
 > Nota previa importante: el encargo menciona "Flutter/Firebase", pero el inventario confirma
