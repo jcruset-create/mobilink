@@ -37,6 +37,13 @@ type Props = {
   puedeAdjuntar: boolean;
   /** Se manda para poder atar el escaneo a la jornada en la auditoría. */
   sessionId: number | null;
+  /*
+   * Cobro o pago. Cambia el permiso que exige el servidor, contra qué se mira
+   * el duplicado y —aquí— qué se le llama al papel: en un cobro es «la
+   * factura», en un pago es «el ticket del proveedor», y llamarlo igual en los
+   * dos sitios haría dudar de si la pantalla sabe dónde está.
+   */
+  sentido?: "COBRO" | "PAGO";
   deshabilitado?: boolean;
   onError: (mensaje: string) => void;
 };
@@ -50,9 +57,11 @@ export default function EscanerFactura({
   onOlvidar,
   puedeAdjuntar,
   sessionId,
+  sentido = "COBRO",
   deshabilitado = false,
   onError,
 }: Props) {
+  const esPago = sentido === "PAGO";
   const entrada = useRef<HTMLInputElement>(null);
   const [estado, setEstado] = useState<Estado>("VACIO");
   const [resumen, setResumen] = useState<PropuestaEscaneo | null>(null);
@@ -70,7 +79,7 @@ export default function EscanerFactura({
     setResumen(null);
     setEstado("ANALIZANDO");
     try {
-      const { propuesta } = await api.escanearFactura(f, sessionId);
+      const { propuesta } = await api.escanearFactura(f, sessionId, sentido);
       setResumen(propuesta);
       setEstado("LISTO");
       onPropuesta(propuesta);
@@ -94,7 +103,7 @@ export default function EscanerFactura({
   return (
     <div className="mt-3 rounded-lg border border-slate-700 bg-slate-900/40 p-2.5">
       <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
-        Factura o justificante{" "}
+        {esPago ? "Ticket o factura del proveedor" : "Factura o justificante"}{" "}
         <span className="font-normal normal-case text-slate-500">(opcional)</span>
       </span>
 
@@ -121,10 +130,10 @@ export default function EscanerFactura({
             disabled={deshabilitado}
             className="flex items-center gap-2 rounded-lg border border-dashed border-slate-600 px-3 py-2 text-[12px] font-medium text-slate-300 hover:border-sky-500 hover:text-sky-200 disabled:opacity-50"
           >
-            <Paperclip className="h-3.5 w-3.5" /> Adjuntar factura
+            <Paperclip className="h-3.5 w-3.5" /> {esPago ? "Adjuntar el ticket" : "Adjuntar factura"}
           </button>
           <p className="mt-1 text-[11px] text-slate-500">
-            PDF, JPG o PNG. Se lee sola y rellena la pantalla; tú revisas y confirmas.
+            PDF, JPG o PNG. Se lee solo y rellena la pantalla; tú revisas y confirmas.
           </p>
         </>
       ) : (
