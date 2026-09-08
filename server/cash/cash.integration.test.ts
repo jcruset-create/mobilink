@@ -1539,6 +1539,62 @@ describe.runIf(RUN)("ingresos bancarios", () => {
     expect(manana.sesion.fondoInicialCentimos).toBe(7000);
   });
 
+  it("una jornada con reversiones viejas rotas ya no hereda de más", async () => {
+    /*
+     * La reparación de las cajas que ya tienen el fallo escrito.
+     *
+     * Arreglar la reversión sirve para las que vengan; las filas que ya están
+     * en el libro con los precintos a cero siguen ahí, y el libro no se toca.
+     * Lo que se arregla es quién manda al leerlas: las piezas netas, no los
+     * contadores de envase.
+     *
+     * Aquí se falsifica a mano el fallo viejo —reversiones con `cartuchos = 0`
+     * sobre un cierre que salió en cartuchos— y se comprueba que el día
+     * siguiente hereda lo que hay, no lo que dicen las columnas.
+     */
+    const caja = await crearCaja("herencia-rota");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 2000, cantidad: 1 },
+        { valor: 100, cantidad: 50 },
+      ],
+    });
+
+    const cerrarConPrecintos = async () => {
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 1 }],
+        cartuchos: [{ valor: 100, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        cambioFinal: [{ valor: 2000, cantidad: 1 }],
+        cambioFinalCartuchos: [{ valor: 100, cantidad: 2 }],
+      });
+    };
+
+    /* Dos vueltas de cerrar y reabrir con el fallo VIEJO puesto a mano. */
+    for (let i = 0; i < 2; i++) {
+      await cerrarConPrecintos();
+      await servicio.reabrirJornada(ctx, sesion.id, `vuelta ${i}`);
+      await db.query(
+        `UPDATE cash_denomination_movements m SET cartuchos = 0, bolsas = 0
+           FROM cash_operations o
+          WHERE o.id = m.operation_id AND o.session_id = $1 AND o.reversa_de_id IS NOT NULL`,
+        [sesion.id]
+      );
+    }
+
+    /* El teórico de la jornada nunca se equivocó: suma piezas, no envases. */
+    expect((await servicio.stockDeJornada(sesion.id)).totalCentimos).toBe(7000);
+
+    /* Y ahora lo que sí se equivocaba: lo que hereda el día siguiente. */
+    await cerrarConPrecintos();
+    const manana = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(manana.sesion.fondoInicialCentimos).toBe(7000);
+  });
+
   it("reabrir devuelve también el ingreso del banco, no solo el cambio", async () => {
     const caja = await crearCaja("reabrir-ingreso");
     const { sesion } = await servicio.abrirJornada(ctx, {
