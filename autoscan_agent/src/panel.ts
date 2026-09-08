@@ -60,6 +60,13 @@ export type Estado = {
   atascados: string[];
   /** Último problema que merezca contarse, ya en castellano. */
   ultimoError: string | null;
+  /**
+   * Versión nueva disponible, o `null` si estamos al día.
+   *
+   * Llega ya filtrada por quien monta el estado: si tiene valor, es más nueva
+   * que la que corre. Aquí no se compara nada.
+   */
+  actualizacion: { version: string; url: string } | null;
   carpetas: { inbox: string; sent: string; failed: string; logs: string };
 };
 
@@ -71,6 +78,14 @@ export type Acciones = {
   sincronizarAhora: () => Promise<void>;
   /** Canjea un código de activación. Lanza si no vale. */
   activar: (codigo: string) => Promise<void>;
+  /**
+   * Descarga la versión nueva y lanza el cambio. Devuelve cuál se instala.
+   *
+   * Vuelve cuando el cambio ESTÁ LANZADO, no cuando ha terminado: para entonces
+   * este proceso ya no existe, así que no hay a quién contestarle. La bandeja lo
+   * dice con esas palabras.
+   */
+  actualizar: () => Promise<string>;
 };
 
 /** El puerto por defecto. Alto y poco usado, y se puede cambiar por entorno. */
@@ -171,6 +186,15 @@ export class Panel {
       if (req.method === "POST" && url.pathname === "/sincronizar") {
         await this.#acciones.sincronizarAhora();
         return responder(res, 200, { ok: true });
+      }
+      if (req.method === "POST" && url.pathname === "/actualizar") {
+        /*
+         * La respuesta sale ANTES de que el guion mate al agente, con suerte.
+         * No hay forma de garantizarlo —el que se muere es quien contesta— así
+         * que la bandeja está escrita para no depender de recibirla.
+         */
+        const version = await this.#acciones.actualizar();
+        return responder(res, 200, { ok: true, version });
       }
       if (req.method === "POST" && url.pathname === "/activar") {
         const cuerpo = await leerJson(req);
@@ -280,6 +304,7 @@ function paginaDeEstado(res: http.ServerResponse, token: string): void {
  button:disabled{opacity:.5;cursor:default}
  ul{padding-left:18px} li{margin:2px 0;color:#fca5a5}
  code{color:#94a3b8;font-size:12px;word-break:break-all}
+ .nueva{background:#1e293b;border:1px solid #0284c7;border-radius:8px;padding:10px}
 </style></head><body>
 <h1>Mobilink AutoScan</h1>
 <div id="cuerpo">Cargando…</div>
@@ -300,12 +325,23 @@ async function pinta(){
    +(e.ultimoError?'<p class="mal">'+esc(e.ultimoError)+'</p>':'')
    +(e.atascados.length?'<p>Escaneos vacíos, seguramente cortados:</p><ul>'
       +e.atascados.map(a=>"<li>"+esc(a)+"</li>").join("")+'</ul>':'')
+   +(e.actualizacion?'<p class="nueva">Hay una versión nueva: <b>'+esc(e.actualizacion.version)+'</b>'
+      +' <button onclick="actualiza()">Actualizar ahora</button><br>'
+      +'<span class="et">El agente se para unos segundos. Lo que esté en cola no se pierde.</span></p>':'')
    +'<p><button onclick="accion(\\'/sincronizar\\')">Sincronizar ahora</button>'
    +'<button onclick="accion(\\'/reintentar\\')" '+(e.rechazadas?"":"disabled")+'>Reintentar apartadas</button></p>'
    +'<p class="et">Carpeta vigilada</p><code>'+esc(e.carpetas.inbox)+'</code>';
 }
 function caja(t,v,c){return '<div class="caja"><span class="et">'+t+'</span><b class="'+(c||"")+'">'+v+'</b></div>'}
 async function accion(r){await fetch(r,{method:"POST",headers:H});pinta()}
+/*
+ * Actualizar es aparte: el agente se muere a mitad, así que puede NO llegar
+ * respuesta. Perder la conexión aquí es lo esperado, no un error que enseñar.
+ */
+async function actualiza(){
+  document.getElementById("cuerpo").innerHTML="Actualizando… esta pantalla se queda sin servidor unos segundos. Vuelve a abrirla desde la bandeja.";
+  try{ await fetch("/actualizar",{method:"POST",headers:H}); }catch(_){ /* se ha ido, que es lo normal */ }
+}
 pinta(); setInterval(pinta,3000);
 </script></body></html>`;
   res.writeHead(200, {

@@ -80,6 +80,12 @@ Copy-Item -Path (Join-Path $Origen "src") -Destination $app -Recurse -Force
 Copy-Item -Path (Join-Path $Origen "bandeja") -Destination $app -Recurse -Force
 Copy-Item -Path (Join-Path $Origen "package.json") -Destination $app -Force
 
+# `instalador` tambien, y no es por completitud: dentro va `actualizar.ps1`, que
+# es lo que el agente busca en `app\instalador\` cuando alguien pulsa
+# "Actualizar el agente" en la bandeja. Sin esta linea, la primera actualizacion
+# de cada PC recien instalado falla por no encontrar el guion.
+Copy-Item -Path (Join-Path $Origen "instalador") -Destination $app -Recurse -Force
+
 # ── Configuración ───────────────────────────────────────────────────────────
 # Solo lo que no es secreto. La credencial NO va aquí: la entrega el servidor al
 # activar y vive cifrada con DPAPI. Un config.json en texto plano en el PC de

@@ -35,6 +35,7 @@
  * ha ido llenando sale sola.
  */
 
+import { Actualizador } from "./actualizador.ts";
 import { ClienteAutoScan, type ServidorDeAutoScan } from "./api.ts";
 import { Cola } from "./cola.ts";
 import { cargarConfig, prepararCarpetas, type Config } from "./config.ts";
@@ -44,9 +45,10 @@ import { Enviador } from "./enviador.ts";
 import { Panel, PUERTO_POR_DEFECTO, type Estado } from "./panel.ts";
 import { Registro } from "./registro.ts";
 import { Vigilante } from "./vigilante.ts";
+import { esMasNueva } from "./version.ts";
 
 /** La versión que se le dice al servidor en la activación y en cada latido. */
-export const VERSION = "1.0.2";
+export const VERSION = "1.0.3";
 
 export class Agente {
   readonly #cfg: Config;
@@ -57,8 +59,19 @@ export class Agente {
   readonly #vigilante: Vigilante;
   readonly #enviador: Enviador;
   readonly #panel: Panel;
+  readonly #actualizador: Actualizador;
 
   #credencial: Credencial | null = null;
+  /**
+   * La versión publicada que SÍ es más nueva que la nuestra, o `null`.
+   *
+   * Se guarda ya filtrada: lo que el servidor anuncia pasa por `esMasNueva`
+   * antes de llegar aquí, así que si esto tiene valor es que hay algo que
+   * instalar de verdad. Guardar lo anunciado en crudo obligaría a repetir la
+   * comparación en cada sitio que lo mire —el panel, la bandeja— y bastaría
+   * olvidarla en uno para ofrecer un botón que retrocede de versión.
+   */
+  #actualizacion: { version: string; url: string } | null = null;
   #ultimoLatidoMs: number | null = null;
   #ultimoError: string | null = null;
   #latido: NodeJS.Timeout | null = null;
@@ -92,6 +105,7 @@ export class Agente {
     const log = (m: string) => this.#registro.escribir(m);
     this.#vigilante = new Vigilante(cfg, this.#cola, log);
     this.#enviador = new Enviador(cfg, this.#cola, this.#cliente, log);
+    this.#actualizador = new Actualizador(cfg, log);
     this.#panel = new Panel(cfg, this.#acciones(), log);
   }
 
@@ -160,7 +174,15 @@ export class Agente {
 
     this.#enviador.arrancar(c.secret);
     const latir = async () => {
-      if (await this.#cliente.latido(c.secret)) this.#ultimoLatidoMs = Date.now();
+      const r = await this.#cliente.latido(c.secret);
+      if (!r.ok) return;
+      this.#ultimoLatidoMs = Date.now();
+      /*
+       * El filtro está AQUÍ y en un solo sitio. Lo que el servidor anuncia no
+       * es una orden: si no es más nueva que la nuestra, no existe.
+       */
+      this.#actualizacion =
+        r.publicado && esMasNueva(r.publicado.version, VERSION) ? r.publicado : null;
     };
     void latir();
     this.#latido = setInterval(() => void latir(), this.#cfg.latidoMs);
@@ -200,6 +222,7 @@ export class Agente {
           vigilados: v.vigilados,
           atascados: v.atascados,
           ultimoError: this.#ultimoError,
+          actualizacion: this.#actualizacion,
           carpetas: {
             inbox: this.#cfg.inbox,
             sent: this.#cfg.sent,
@@ -223,6 +246,25 @@ export class Agente {
       sincronizarAhora: async (): Promise<void> => {
         await this.#vigilante.barrer();
         if (this.#credencial) await this.#enviador.ciclo(this.#credencial.secret);
+      },
+
+      /*
+       * Actualizar lo pide una persona desde la bandeja, y no se hace solo.
+       *
+       * No es falta de ganas: el guion para el agente, mueve carpetas y vuelve
+       * atrás si la versión nueva no responde, y nada de eso se ha podido
+       * probar en Windows desde el entorno de desarrollo. Con alguien delante,
+       * un cambio que salga mal se ve en el momento y en un mostrador; sin
+       * nadie, saldría mal en los veinte a la vez y de madrugada.
+       *
+       * Cuando esto se haya usado unas cuantas veces de verdad, automatizarlo
+       * es mover esta llamada a un temporizador. Antes, no.
+       */
+      actualizar: async (): Promise<string> => {
+        const a = this.#actualizacion;
+        if (!a) throw new Error("No hay ninguna versión nueva que instalar.");
+        await this.#actualizador.aplicar(a, VERSION);
+        return a.version;
       },
 
       activar: async (codigo: string): Promise<void> => {

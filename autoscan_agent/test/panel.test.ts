@@ -40,11 +40,13 @@ const ESTADO = (): Estado => ({
   vigilados: 0,
   atascados: [],
   ultimoError: null,
+  actualizacion: null,
   carpetas: { inbox: "C:\\MobilinkAutoScan\\Inbox", sent: "s", failed: "f", logs: "l" },
 });
 
 const acciones = (): Acciones => ({
   estado: ESTADO,
+  actualizar: async () => "9.9.9",
   reintentarRechazadas: () => 1,
   sincronizarAhora: async () => {
     sincronizaciones += 1;

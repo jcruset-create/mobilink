@@ -1,0 +1,156 @@
+# Empaqueta el agente de Windows de Mobilink Cash AutoScan y lo publica como
+# GitHub Release "autoscan-v<version>", que es de donde lo descargan los propios
+# agentes cuando el mostrador pulsa "Actualizar" en la bandeja.
+#
+# Hermano de los tres workflows de APK, y con la misma forma, porque el servidor
+# resuelve las descargas igual en los cuatro casos (server/index.ts para las APK,
+# server/cash/autoscan/version.ts para esto):
+#
+#   etiqueta  =  autoscan-v          + versión    autoscan-v1.0.3
+#   fichero   =  mobilink-autoscan-  + versión    mobilink-autoscan-1.0.3.zip
+#
+# ── Por qué NO hay build ───────────────────────────────────────────────────
+#
+# El agente se ejecuta con `node --experimental-strip-types` sobre los .ts tal
+# cual, y no tiene dependencias de ejecución (ver el "_nota" de su package.json).
+# Compilar aquí produciría unos .js que en el mostrador nadie usa, y con ellos la
+# duda de cuál de los dos se está ejecutando. Se empaqueta el fuente, que es lo
+# que se instala.
+#
+# ── El orden importa: publicar ANTES de guardar la versión ─────────────────
+#
+# Es el mismo invariante del que dependen las APK, y aquí más: el servidor
+# CONSTRUYE la URL a partir de la versión que lee del repositorio, sin preguntar
+# a GitHub. Si el número estuviera en el repositorio antes de existir la release,
+# todos los agentes verían un aviso de actualización cuya descarga da 404.
+#
+# Por eso la versión se guarda al final. Si el empaquetado falla, el número no se
+# quema y nadie ve un aviso roto.
+
+name: Build AutoScan Agent
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "autoscan_agent/**"
+      - ".github/workflows/build-autoscan-agent.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Hace falta el historial para poder empujar el commit de la versión.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Subir la versión de parche
+        id: ver
+        run: |
+          cd autoscan_agent
+          ACTUAL=$(node -p "require('./package.json').version")
+          NUEVA=$(node -e "
+            const [a,b,c] = process.argv[1].split('.').map(Number);
+            console.log([a, b, (c || 0) + 1].join('.'));
+          " "$ACTUAL")
+          echo "Version: $ACTUAL -> $NUEVA"
+          echo "version=$NUEVA" >> "$GITHUB_OUTPUT"
+
+          # Los DOS sitios a la vez. Si se separan, el servidor anuncia una
+          # versión que ningún agente reconoce como suya y el aviso de la
+          # bandeja no se va nunca. Hay una prueba que lo vigila
+          # (test/version.test.ts), y aquí se evita que llegue a fallar.
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            p.version = process.argv[1];
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          " "$NUEVA"
+          sed -i "s/^export const VERSION = \".*\";/export const VERSION = \"$NUEVA\";/" src/main.ts
+
+          grep -n 'export const VERSION' src/main.ts
+
+      - name: Comprobar que el agente sigue en pie con la versión nueva
+        run: |
+          npm ci
+          npx tsc -p autoscan_agent/tsconfig.json --noEmit
+          npx vitest run autoscan_agent/
+
+      - name: Empaquetar
+        run: |
+          mkdir -p empaquetado/mobilink-autoscan
+          cp -r autoscan_agent/src autoscan_agent/bandeja autoscan_agent/instalador \
+                autoscan_agent/package.json autoscan_agent/README.md \
+                empaquetado/mobilink-autoscan/
+          cd empaquetado
+          zip -r "mobilink-autoscan-${{ steps.ver.outputs.version }}.zip" mobilink-autoscan
+          unzip -l "mobilink-autoscan-${{ steps.ver.outputs.version }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobilink-autoscan-${{ steps.ver.outputs.version }}
+          path: empaquetado/mobilink-autoscan-*.zip
+
+      - name: Publicar release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: autoscan-v${{ steps.ver.outputs.version }}
+          name: Mobilink AutoScan ${{ steps.ver.outputs.version }}
+          body: |
+            Agente de Windows de Mobilink Cash AutoScan, generado por CI desde ${{ github.sha }}.
+
+            Los agentes ya instalados ven este aviso en su bandeja dentro del
+            minuto siguiente y se actualizan pulsando «Actualizar el agente».
+            El cambio no toca la cola, ni los escaneos, ni la credencial, y si
+            la versión nueva no arranca se recupera sola la anterior.
+
+            Para una instalación desde cero, descomprimir y ejecutar
+            `instalador\instalar.ps1` como administrador.
+          files: empaquetado/mobilink-autoscan-*.zip
+
+      # ── La versión, al repositorio, DESPUÉS de publicar ────────────────────
+      #
+      # Mismo problema que en los workflows de APK: mientras esto corre, otra
+      # sesión puede haber empujado a la rama. Se reintenta trayendo lo de
+      # arriba y volviendo a aplicar SOLO los dos ficheros de la versión, que es
+      # lo único que este workflow toca.
+      - name: Guardar la versión nueva
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          for intento in 1 2 3; do
+            git add autoscan_agent/package.json autoscan_agent/src/main.ts
+            git diff --cached --quiet && { echo "Nada que guardar"; exit 0; }
+            git commit -m "chore(autoscan): version ${{ steps.ver.outputs.version }} [skip ci]"
+            if git push origin "HEAD:${{ github.ref_name }}"; then exit 0; fi
+
+            echo "Push rechazado; reintento $intento"
+            git reset --hard HEAD~1
+            git fetch origin "${{ github.ref_name }}"
+            git reset --hard "origin/${{ github.ref_name }}"
+            cd autoscan_agent
+            node -e "
+              const fs = require('fs');
+              const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+              p.version = process.argv[1];
+              fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+            " "${{ steps.ver.outputs.version }}"
+            sed -i "s/^export const VERSION = \".*\";/export const VERSION = \"${{ steps.ver.outputs.version }}\";/" src/main.ts
+            cd ..
+          done
+
+          # Que falle en rojo. La release YA está publicada con esa versión, así
+          # que el repositorio se ha quedado atrás y hay que arreglarlo a mano:
+          # callarlo dejaría el número sin guardar y el siguiente build lo
+          # reutilizaría, machacando una release existente.
+          echo "No se ha podido guardar la version tras 3 intentos." >&2
+          exit 1
