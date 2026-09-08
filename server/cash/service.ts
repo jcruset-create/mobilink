@@ -260,6 +260,8 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
      */
     const anterior = await ultimaSesionCerrada(client, e.registerId, fecha);
     const denominaciones = await cargarDenominaciones(client);
+    const porCartuchoCat = piezasPorCartuchoDe(denominaciones);
+    const porBolsaCat = piezasPorBolsaDe(denominaciones);
 
     // Composición heredada: las piezas que el cierre anterior dejó en caja.
     let composicion: LineaDenominacion[] = [];
@@ -269,7 +271,7 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
     let sesionHeredadaId: number | null = anterior?.id ?? null;
 
     if (anterior) {
-      let piezas = await composicionDeCierre(client, anterior.id);
+      let piezas = await composicionDeCierre(client, anterior.id, porCartuchoCat, porBolsaCat);
       if (
         piezas.composicion.length === 0 &&
         piezas.cartuchos.length === 0 &&
@@ -303,12 +305,10 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
       heredado = false;
     }
 
-    const porCartucho = piezasPorCartuchoDe(denominaciones);
-    const porBolsa = piezasPorBolsaDe(denominaciones);
     // Las líneas de envase se guardan como piezas (envases × piezas del
     // envase) con su contador: así el total de piezas no necesita casos aparte.
-    const lineasCartucho = aPiezas(cartuchos, porCartucho, "cartuchos");
-    const lineasBolsa = aPiezas(bolsas, porBolsa, "bolsas");
+    const lineasCartucho = aPiezas(cartuchos, porCartuchoCat, "cartuchos");
+    const lineasBolsa = aPiezas(bolsas, porBolsaCat, "bolsas");
 
     const inventarioInicial = inventarioDesdeLineas([
       ...composicion,
@@ -1717,7 +1717,9 @@ export async function proponerCierre(
  */
 async function composicionDeCierre(
   client: PoolClient | typeof pool,
-  sessionId: number
+  sessionId: number,
+  porCartucho: Map<Centimos, number>,
+  porBolsa: Map<Centimos, number>
 ): Promise<{
   composicion: LineaDenominacion[];
   cartuchos: LineaDenominacion[];
@@ -1734,13 +1736,9 @@ async function composicionDeCierre(
      * Pasa siempre que un cambio final se deshace, y hay dos caminos para eso:
      * reabrir la jornada, y anular la operación a mano desde el histórico. Con
      * la suma de salidas los dos daban el mismo número inflado.
-     *
-     * Las líneas que quedan a cero o en negativo las descarta el filtro de
-     * abajo, que es lo que corresponde: una denominación devuelta entera ya no
-     * se hereda.
      */
     `SELECT valor_unitario_centimos,
-            SUM(CASE WHEN cartuchos = 0 AND bolsas = 0 THEN cantidad * signo ELSE 0 END) AS sueltas,
+            SUM(cantidad * signo) AS piezas,
             SUM(cartuchos * signo) AS tubos,
             SUM(bolsas * signo) AS sacos
        FROM (
@@ -1752,17 +1750,54 @@ async function composicionDeCierre(
       GROUP BY valor_unitario_centimos`,
     [sessionId]
   );
+
+  const composicion: LineaDenominacion[] = [];
+  const cartuchos: LineaDenominacion[] = [];
+  const bolsas: LineaDenominacion[] = [];
+
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  const columna = (nombre: string) =>
-    (rows as any[])
-      .map((r) => ({ valor: r.valor_unitario_centimos, cantidad: Number(r[nombre]) }))
-      .filter((l) => l.cantidad > 0);
+  for (const r of rows as any[]) {
+    const valor: Centimos = r.valor_unitario_centimos;
+
+    /*
+     * Manda `piezas`, y las columnas de precinto solo REPARTEN.
+     *
+     * `cantidad` guarda siempre las piezas totales, precintadas incluidas, y es
+     * de donde sale el stock teórico. Los contadores de cartuchos y bolsas
+     * dicen cómo están envasadas esas mismas piezas, no cuántas hay.
+     *
+     * Antes esto se creía las columnas de precinto y sumaba las sueltas por su
+     * cuenta, así que una fila incoherente heredaba dinero que no existía. Y
+     * las hay: hasta el arreglo de las reversiones, el movimiento contrario
+     * devolvía las monedas como sueltas aunque hubieran salido en cartuchos,
+     * y esas filas ya están escritas en cajas de verdad. Con el neteo por
+     * columnas, los cartuchos de la operación original no los restaba nadie
+     * (+2 contra −0) mientras las sueltas quedaban en negativo y se
+     * descartaban: el cierre parecía dejar un cambio que el cajón no tenía.
+     *
+     * Partiendo de las piezas netas eso se cae solo. Si la jornada devolvió
+     * todo, `piezas` es cero y no se hereda nada por mucho cartucho que digan
+     * las columnas; el libro no se toca y la cuenta sale.
+     */
+    const netas = Number(r.piezas);
+    if (netas <= 0) continue;
+
+    const pb = porBolsa.get(valor) ?? 0;
+    const pc = porCartucho.get(valor) ?? 0;
+
+    /* Primero el envase grande: una bolsa contiene varios cartuchos. */
+    const sacos = pb > 0 ? Math.max(0, Math.min(Number(r.sacos), Math.floor(netas / pb))) : 0;
+    const trasBolsas = netas - sacos * pb;
+    const tubos = pc > 0 ? Math.max(0, Math.min(Number(r.tubos), Math.floor(trasBolsas / pc))) : 0;
+    const sueltas = trasBolsas - tubos * pc;
+
+    if (sueltas > 0) composicion.push({ valor, cantidad: sueltas });
+    if (tubos > 0) cartuchos.push({ valor, cantidad: tubos });
+    if (sacos > 0) bolsas.push({ valor, cantidad: sacos });
+  }
   /* eslint-enable @typescript-eslint/no-explicit-any */
-  return {
-    composicion: columna("sueltas"),
-    cartuchos: columna("tubos"),
-    bolsas: columna("sacos"),
-  };
+
+  return { composicion, cartuchos, bolsas };
 }
 
 /**
@@ -1803,7 +1838,7 @@ export async function ultimoCierreConCambio(
   const porBolsa = piezasPorBolsaDe(denominaciones);
 
   for (const s of rows) {
-    const piezas = await composicionDeCierre(client, s.id);
+    const piezas = await composicionDeCierre(client, s.id, porCartucho, porBolsa);
     const total = totalInventario(
       inventarioDesdeLineas([
         ...piezas.composicion,
@@ -1883,10 +1918,10 @@ export async function traerFondoDeCierre(
       throw new ErrorCaja("CAJA_DISTINTA", "Ese cierre es de otra caja.", 409);
     }
 
-    const piezas = await composicionDeCierre(client, origenId);
     const denominaciones = await cargarDenominaciones(client);
     const porCartucho = piezasPorCartuchoDe(denominaciones);
     const porBolsa = piezasPorBolsaDe(denominaciones);
+    const piezas = await composicionDeCierre(client, origenId, porCartucho, porBolsa);
     const lineasCartucho = aPiezas(piezas.cartuchos, porCartucho, "cartuchos");
     const lineasBolsa = aPiezas(piezas.bolsas, porBolsa, "bolsas");
     const lineas = [...piezas.composicion, ...lineasCartucho, ...lineasBolsa];
