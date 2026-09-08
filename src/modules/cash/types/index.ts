@@ -307,6 +307,60 @@ export type DestinoGasto = {
   usos: number;
 };
 
+/**
+ * El informe de gasto, tal cual lo devuelve `/expense-stats`.
+ *
+ * Los importes son céntimos enteros de punta a punta. Aquí no se divide entre
+ * 100 para guardarlo en el estado: se divide al pintarlo, con `euros()`.
+ */
+
+export type GranularidadGasto = "dia" | "mes" | "anio";
+
+export type LineaConceptoGasto = {
+  /** `null` es la línea de los pagos SIN clasificar. Se enseña, no se esconde. */
+  conceptoId: number | null;
+  codigo: string | null;
+  nombre: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type LineaDestinoGasto = {
+  destinoId: number | null;
+  nombre: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type PuntoGasto = {
+  /** `2026-09-07`, `2026-09` o `2026`, según la granularidad pedida. */
+  periodo: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type InformeGasto = {
+  desde: string;
+  hasta: string;
+  granularidad: GranularidadGasto;
+  centroId: string | null;
+  totalCentimos: number;
+  operaciones: number;
+  sinClasificarCentimos: number;
+  conceptos: LineaConceptoGasto[];
+  destinos: LineaDestinoGasto[];
+  serie: PuntoGasto[];
+  comparacion: {
+    desde: string;
+    hasta: string;
+    totalCentimos: number;
+    operaciones: number;
+    diferenciaCentimos: number;
+    /** `null` si el tramo anterior fue cero: eso no es «+100 %». */
+    variacion: number | null;
+  } | null;
+};
+
 // ── AutoScan ───────────────────────────────────────────────────────────────
 
 export type EstadoAutoScan =

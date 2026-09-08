@@ -20,6 +20,7 @@ import {
   Lock,
   History,
   FileText,
+  ChartColumn,
   Plug,
   Settings,
   type LucideIcon,
@@ -48,6 +49,7 @@ export const NAV: NavItem[] = [
   { key: "cierre", path: "cierre", label: "Cierre", icon: Lock, permiso: "cash.close_session" },
   { key: "historico", path: "historico", label: "Histórico", icon: History, permiso: "cash.view" },
   { key: "informes", path: "informes", label: "Informes", icon: FileText, permiso: "cash.view" },
+  { key: "gasto", path: "gasto", label: "Gasto por concepto", icon: ChartColumn, permiso: "cash.view" },
   { key: "erp", path: "erp", label: "Integración ERP", icon: Plug, permiso: "cash.erp.view" },
   { key: "configuracion", path: "configuracion", label: "Configuración", icon: Settings, permiso: "cash.configure" },
 ];

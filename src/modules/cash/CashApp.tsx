@@ -23,6 +23,7 @@ import Arqueo from "./pages/Arqueo";
 import Cierre from "./pages/Cierre";
 import Historico from "./pages/Historico";
 import Informes from "./pages/Informes";
+import GastoPorConcepto from "./pages/GastoPorConcepto";
 import IntegracionErp from "./pages/IntegracionErp";
 import Configuracion from "./pages/Configuracion";
 
@@ -70,6 +71,7 @@ function Contenido() {
         <Route path="cierre" element={<Cierre />} />
         <Route path="historico" element={<Historico />} />
         <Route path="informes" element={<Informes />} />
+        <Route path="gasto" element={<GastoPorConcepto />} />
         <Route path="erp" element={<IntegracionErp />} />
         <Route path="configuracion" element={<Configuracion />} />
       </Route>
