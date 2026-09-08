@@ -119,6 +119,25 @@ describe("no se acuerda de todo para siempre", () => {
     expect(e.observar("a.pdf", f(90_000), 1_000)).toBe("cambiando");
   });
 
+  it("olvida de golpe los que ya no están en la carpeta", () => {
+    const e = new Estabilizador(ESTABILIDAD);
+    e.observar("a.pdf", f(90_000), 0);
+    e.observar("b.pdf", f(90_000), 0);
+    e.observar("c.pdf", f(0), 0);
+
+    /*
+     * `olvidar()` cubre el fichero que se encola. Éste cubre el otro camino:
+     * el que alguien mueve o borra a mano ANTES de que se dé por terminado, y
+     * que si no nadie volvería a nombrar nunca.
+     */
+    const olvidados = e.olvidarLosQueNoEsten(new Set(["b.pdf"]));
+
+    expect(olvidados).toBe(2);
+    expect(e.vigilados).toBe(1);
+    expect(e.quietoDesdeMs("a.pdf")).toBeNull();
+    expect(e.quietoDesdeMs("b.pdf")).toBe(0);
+  });
+
   it("cada fichero lleva su propia cuenta", () => {
     const e = new Estabilizador(ESTABILIDAD);
     e.observar("a.pdf", f(90_000), 0);

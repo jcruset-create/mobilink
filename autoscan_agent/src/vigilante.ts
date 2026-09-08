@@ -203,10 +203,14 @@ export class Vigilante {
     }
 
     /*
-     * Lo que ya no está en la carpeta se olvida. Sin esto, el mapa del
-     * estabilizador crece con cada escaneo del día y un agente que lleva meses
-     * arrancado acaba guardando ficheros que ya no existen.
+     * Lo que ya no está en la carpeta se olvida, en las DOS listas.
+     *
+     * `olvidar()` se llama al encolar, que es el final feliz. Pero un fichero
+     * que alguien mueve o borra a mano antes de que se dé por terminado no pasa
+     * por ahí: se quedaría en el mapa para siempre, y un agente que lleva meses
+     * arrancado acabaría guardando ficheros que ya no existen.
      */
+    this.#estabilizador.olvidarLosQueNoEsten(presentes);
     for (const ruta of [...this.#atascados]) if (!presentes.has(ruta)) this.#atascados.delete(ruta);
   }
 

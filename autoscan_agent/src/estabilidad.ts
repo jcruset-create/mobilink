@@ -103,6 +103,27 @@ export class Estabilizador {
     this.#vistos.delete(ruta);
   }
 
+  /**
+   * Olvida todos los que ya no estén en la carpeta.
+   *
+   * `olvidar()` cubre el fichero que se encola, que es el final feliz. Éste
+   * cubre el otro camino: el que alguien mueve o borra a mano ANTES de que se
+   * dé por terminado —un escaneo repetido, una prueba— y que si no nadie
+   * volvería a nombrar nunca. Sin esto, el mapa crece con cada uno de esos y un
+   * agente que lleva meses arrancado guarda ficheros que ya no existen.
+   *
+   * @returns cuántos se han olvidado.
+   */
+  olvidarLosQueNoEsten(presentes: ReadonlySet<string>): number {
+    let n = 0;
+    for (const ruta of [...this.#vistos.keys()]) {
+      if (presentes.has(ruta)) continue;
+      this.#vistos.delete(ruta);
+      n += 1;
+    }
+    return n;
+  }
+
   /** Cuántos ficheros se están vigilando. Para el resumen de la bandeja. */
   get vigilados(): number {
     return this.#vistos.size;

@@ -141,6 +141,41 @@ describe("lo que NO se recoge todavía", () => {
   });
 });
 
+describe("no se acuerda de ficheros que ya no existen", () => {
+  it("un escaneo que alguien borra antes de subirse deja de vigilarse", async () => {
+    const v = new Vigilante({ ...cfg, estabilidadMs: 60_000 }, cola);
+    const ruta = escanear("se-lo-llevan.pdf", 1_024);
+
+    await v.barrer();
+    expect(v.estado().vigilados).toBe(1);
+
+    /*
+     * Pasa de verdad: alguien repite un escaneo y borra el anterior, o mueve el
+     * PDF a mano. Ese fichero nunca llega a encolarse, así que nunca pasa por
+     * `olvidar()`. Sin la limpieza del barrido se quedaría en el mapa para
+     * siempre, y un agente que lleva meses arrancado los acumularía todos.
+     */
+    fs.unlinkSync(ruta);
+    await v.barrer();
+
+    expect(v.estado().vigilados).toBe(0);
+    v.parar();
+  });
+
+  it("pero no olvida los que siguen ahí esperando", async () => {
+    const v = new Vigilante({ ...cfg, estabilidadMs: 60_000 }, cola);
+    escanear("sigue-creciendo.pdf", 1_024);
+    escanear("se-va.pdf", 1_024);
+
+    await v.barrer();
+    fs.unlinkSync(path.join(cfg.inbox, "se-va.pdf"));
+    await v.barrer();
+
+    expect(v.estado().vigilados).toBe(1);
+    v.parar();
+  });
+});
+
 describe("lo que se guarda de cada fichero", () => {
   it("el sha256 guardado es el del contenido, tal cual", async () => {
     const ruta = escanear("factura.pdf", 4_096);
