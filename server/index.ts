@@ -12878,6 +12878,44 @@ app.get("/api/me", authenticate, async (req, res) => {
   }
 });
 
+/**
+ * Valida la sesión del panel de taller y devuelve los permisos VIGENTES.
+ *
+ * El panel guardaba en localStorage una marca `sea-authenticated` y se fiaba de
+ * ella al arrancar: nadie comprobaba contra el servidor si esa sesión seguía
+ * siendo válida ni si el rol había cambiado. Este endpoint es esa comprobación.
+ *
+ * Acepta las dos vías (sesión unificada por Bearer y token clásico
+ * `x-admin-token`), porque el panel se usa con ambas.
+ */
+app.get("/api/panel/session", async (req, res) => {
+  try {
+    const role = await getRoleFromRequestAsync(req);
+    if (!role) {
+      return res.status(401).json({ error: "No autorizado" });
+    }
+
+    // Si la credencial corresponde a un usuario de la tabla, se devuelven
+    // también su nombre y sus pantallas: así el panel refresca los permisos en
+    // cada arranque en vez de arrastrar los que guardó el día del login.
+    let name: string | null = null;
+    let allowedViews: string[] | null = null;
+    const token = String(req.headers["x-admin-token"] ?? req.query?.token ?? "").trim();
+    if (token) {
+      const u = await findDbUserByPassword(token);
+      if (u) {
+        name = u.name || null;
+        allowedViews = u.allowedViews.length > 0 ? u.allowedViews : null;
+      }
+    }
+
+    res.json({ ok: true, role, name, allowedViews });
+  } catch (error) {
+    console.error("GET /api/panel/session error:", error);
+    res.status(500).json({ error: "Error validando la sesión" });
+  }
+});
+
 /* =========================================================
    USUARIOS (gestión de accesos)
 ========================================================= */

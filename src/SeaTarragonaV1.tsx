@@ -1,4 +1,5 @@
 import { apiFetch } from "./modules/apiFetch";
+import { decidirSesionPanel } from "./modules/panelSession";
 import React, {
   useEffect,
   useMemo,
@@ -302,6 +303,13 @@ useEffect(() => {
   return localStorage.getItem("sea-authenticated") === "true";
 });
 
+// Una sesión restaurada de localStorage NO está validada: hasta que el
+// servidor la confirme no se pinta el panel. Si el login se hace en esta misma
+// carga, ya viene validado del servidor y no hay nada que comprobar.
+const [sesionValidada, setSesionValidada] = useState(
+  () => localStorage.getItem("sea-authenticated") !== "true"
+);
+
 const [userName, setUserName] = useState<string | null>(() => {
   try { return localStorage.getItem("sea-user-name"); } catch { return null; }
 });
@@ -355,6 +363,9 @@ function forceLogout(reason?: string) {
   setUserName(null);
   setUserRole(null);
   setIsAuthenticated(false);
+  // Sin sesión no hay nada que validar: si no se levantara, la pantalla de
+  // "comprobando sesión" se quedaría puesta para siempre.
+  setSesionValidada(true);
   setView("operativo");
   if (reason) setLoginError(reason);
 }
@@ -1424,6 +1435,57 @@ setExternalAIAnswer(cleanText || "La IA no devolvió respuesta.");
     setExternalAILoading(false);
   }
 }
+// Validación de la sesión restaurada de localStorage.
+//
+// El panel guardaba `sea-authenticated` y se fiaba de esa marca al arrancar:
+// nadie preguntaba al servidor si la sesión seguía viva ni si el rol había
+// cambiado. Aquí se comprueba antes de pintar nada, y de paso se refrescan los
+// permisos, que hasta ahora se arrastraban desde el día del login.
+useEffect(() => {
+  if (sesionValidada) return;
+  let activo = true;
+  (async () => {
+    try {
+      const res = await apiFetch(`${API_BASE}/api/panel/session`, {
+        headers: getAdminHeaders(),
+      });
+      if (!activo) return;
+
+      const cuerpo = res.ok ? await res.json().catch(() => null) : null;
+      const decision = decidirSesionPanel(res.status, cuerpo);
+
+      if (decision.accion === "cerrar") {
+        forceLogout(decision.motivo);
+        return;
+      }
+      if (decision.accion === "mantener") {
+        setSesionValidada(true);
+        return;
+      }
+
+      localStorage.setItem("sea-role", decision.rol ?? "");
+      if (decision.vistas) {
+        localStorage.setItem("sea-allowed-views", JSON.stringify(decision.vistas));
+      } else {
+        localStorage.removeItem("sea-allowed-views");
+      }
+      if (decision.nombre) {
+        localStorage.setItem("sea-user-name", decision.nombre);
+        setUserName(decision.nombre);
+      }
+
+      setUserRole(decision.rol);
+      setAllowedViews(decision.vistas);
+      setSesionValidada(true);
+    } catch {
+      // Sin red tampoco se cierra sesión: el panel se usa en el taller.
+      if (activo) setSesionValidada(true);
+    }
+  })();
+  return () => { activo = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [sesionValidada]);
+
 // SSO: si hay sesión del acceso unificado (/acceso), entrar al panel sin
 // pedir la contraseña interna. Si no hay coincidencia, queda el login clásico.
 useEffect(() => {
@@ -1470,6 +1532,7 @@ useEffect(() => {
       setUserName(loggedName);
       setUserRole(role);
       setIsAuthenticated(true);
+      setSesionValidada(true); // viene del servidor: ya está validada
 
       // Al entrar por el hub, aterrizar en Operativo 2 (si el rol/permisos lo
       // permiten); si no, en la vista por defecto del rol. Si el montaje pidió
@@ -1536,6 +1599,7 @@ setUserName(loggedName);
 
 setUserRole(role);
 setIsAuthenticated(true);
+setSesionValidada(true); // acaba de validarla el servidor
 setLoginPassword("");
 setLoginUser("");
 
@@ -4328,6 +4392,16 @@ function removeSupportFromActiveJob(jobId: number) {
 
 
 
+
+// Sesión restaurada del navegador pero aún sin confirmar por el servidor: no
+// se enseña el panel hasta saber si sigue siendo válida.
+if (isAuthenticated && !sesionValidada) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-100 text-slate-500">
+      <div className="text-sm">Comprobando sesión…</div>
+    </div>
+  );
+}
 
 if (userRole === "tv75") {
   return (
