@@ -3748,6 +3748,21 @@ async function setTechManual(name: string, nextStatus: TechStatus) {
   const tech = techs.find((item) => item.name === name);
   if (!tech) return;
 
+  // Las ausencias van SIEMPRE por la agenda. Puestas a mano no llevaban fechas,
+  // así que nada las revertía: gente que ya había vuelto seguía saliendo de
+  // vacaciones o de permiso indefinidamente.
+  if (isUnavailableTechStatus(nextStatus)) {
+    window.alert(
+      `Las ausencias no se ponen aquí.\n\n` +
+        `Para dar ${getTechStatusLabel(nextStatus).toLowerCase()} a ${name}, ve a ` +
+        `Agenda → "+ Recordatorio fechas" → "Estado técnico" y marca las fechas ` +
+        `de inicio y fin.\n\n` +
+        `Así el técnico vuelve solo a disponible cuando termina el periodo.`
+    );
+
+    return;
+  }
+
   const changedAtMs = nowMs();
   const isGoingUnavailable = isUnavailableTechStatus(nextStatus);
   const isGoingHardBlocked = isHardBlockedTechStatus(nextStatus);
@@ -7363,34 +7378,38 @@ const textColor = "";
 
 <select
   value={displayedTechStatus}
-  disabled={Boolean(scheduledStatus && scheduledStatus.status !== "disponible")}
+  disabled={isUnavailableTechStatus(displayedTechStatus)}
   onChange={(e) =>
     setTechManual(tech.name, e.target.value as TechStatus)
   }
   className={`rounded-lg border border-slate-200 px-2 py-1 ${
-    scheduledStatus && scheduledStatus.status !== "disponible"
+    isUnavailableTechStatus(displayedTechStatus)
       ? "cursor-not-allowed bg-indigo-50 font-bold text-indigo-700"
       : "bg-white"
   }`}
 >
-{scheduledStatus && scheduledStatus.status !== "disponible" && (
+  {/* Las ausencias (vacaciones, baja, permiso, otro taller) ya no se ponen
+      aquí: se programan por fechas desde la agenda, que es lo único que sabe
+      cuándo vuelve el técnico. Aquí solo quedan los estados de la jornada. */}
+  <option value="disponible">disponible</option>
+  <option value="refuerzo">refuerzo</option>
+  <option value="ocupado">ocupado</option>
+
+  {/* El estado que venga de la agenda se enseña, pero no se puede elegir. */}
+  {isUnavailableTechStatus(displayedTechStatus) && (
+    <option value={displayedTechStatus}>
+      {getTechStatusLabel(displayedTechStatus)}
+    </option>
+  )}
+</select>
+
+{isUnavailableTechStatus(displayedTechStatus) && (
   <div className="mt-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold uppercase text-indigo-700">
-    Bloqueado por agenda · {scheduledStatus.startDate} →{" "}
-    {scheduledStatus.endDate}
+    {scheduledStatus && scheduledStatus.status !== "disponible"
+      ? `Desde la agenda · ${scheduledStatus.startDate} → ${scheduledStatus.endDate}`
+      : "Ausencia · se gestiona desde la agenda"}
   </div>
 )}
-
-                          <option value="disponible">disponible</option>
-<option value="refuerzo">refuerzo</option>
-<option value="ocupado">ocupado</option>
-<option value="nodisponible">nodisponible</option>
-<option value="no_disponible">no disponible</option>
-<option value="permiso">permiso</option>
-<option value="vacaciones">vacaciones</option>
-<option value="baja">baja</option>
-<option value="otro_taller">otro taller</option>
-
-                        </select>
                       </td>
 <td className={`py-2 text-xs ${textColor}`}>
  <div>
