@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import 'supabase_service.dart';
@@ -188,7 +189,7 @@ class OfflineStore {
         final path = item['localPath'] as String;
         final f = File(path);
         if (!await f.exists()) { await _remove(key); return true; }
-        final url = await TyreControlApi.subirFotoRevision(f, revisionId: item['revisionId'] as String, posicionId: item['posicionId'] as String);
+        final url = await TyreControlApi.subirFotoRevision(XFile(path), revisionId: item['revisionId'] as String, posicionId: item['posicionId'] as String);
         await TyreControlApi.guardarDetalleRevision({
           'revision_id': item['revisionId'], 'posicion_id': item['posicionId'],
           'empresa_id': item['empresaId'], 'vehiculo_id': item['vehiculoId'], 'foto_url': url,

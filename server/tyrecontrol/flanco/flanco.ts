@@ -24,6 +24,7 @@ export interface LecturaFlanco {
   indice_carga_doble: CampoFlanco;
   codigo_velocidad: CampoFlanco;
   dot: CampoFlanco;
+  numero_serie: CampoFlanco;
   /** Otros textos del flanco, tal cual. Para que el técnico los vea. */
   otros_textos: string[];
   /** Motivo por el que no se ha podido leer, si aplica. */
@@ -39,6 +40,27 @@ export interface LecturaFlanco {
  * confirma sin mirar. Ante la duda, que lo teclee.
  */
 export const CONFIANZA_MINIMA = 0.7;
+
+/**
+ * El listón para los datos que SOLO se proponen en una casilla editable.
+ *
+ * El 0,7 de arriba existe para los datos que se usan SOLOS: con la marca y la
+ * medida se busca en el catálogo y se propone una referencia. Ahí una lectura
+ * regular hace daño.
+ *
+ * El número de serie y el DOT no hacen nada solos: se escriben en un campo que
+ * el técnico ve y corrige antes de guardar. Descartarlos por poca confianza no
+ * protege de nada y sí quita: el campo sale vacío y el técnico teclea diez
+ * dígitos a mano, de una foto que el modelo había leído bien.
+ *
+ * Y hay un motivo más concreto: a la propia instrucción le decimos «si dudas
+ * entre un 6 y un 8, baja la confianza por debajo de 0,5». Un número de serie
+ * estampado en caucho negro casi nunca pasa de 0,7. Estábamos tirando a la
+ * basura justo lo que le habíamos pedido que nos diera.
+ *
+ * Lo que sí se hace es marcarlo como dudoso, para que se pueda avisar.
+ */
+export const CONFIANZA_MINIMA_ANOTAR = 0.3;
 
 /** El valor si es fiable; null si no lo es o no viene. */
 export function valorFiable(c: CampoFlanco | undefined | null, minima = CONFIANZA_MINIMA): string | null {
@@ -89,6 +111,14 @@ export interface PropuestaFlanco {
   indice_carga_doble: string | null;
   codigo_velocidad: string | null;
   dot: string | null;
+  /**
+   * El número de serie estampado en el flanco, cuando lo lleva.
+   *
+   * Es lo que identifica ESA rueda y no otra igual, y es lo que pide la
+   * columna «Nº Serie / DOT» del parte. No todas lo llevan legible, así que
+   * puede venir vacío: eso es un dato, no un fallo.
+   */
+  numero_serie: string | null;
   otros_textos: string[];
   /** Campos que se leyeron pero no con bastante seguridad. */
   dudosos: string[];
@@ -98,7 +128,8 @@ export interface PropuestaFlanco {
 }
 
 const CAMPOS = [
-  "marca", "modelo", "medida", "indice_carga_simple", "indice_carga_doble", "codigo_velocidad", "dot",
+  "marca", "modelo", "medida", "indice_carga_simple", "indice_carga_doble",
+  "codigo_velocidad", "dot", "numero_serie",
 ] as const;
 
 /**
@@ -111,12 +142,15 @@ const CAMPOS = [
 export function prepararPropuesta(l: LecturaFlanco | null | undefined): PropuestaFlanco {
   const vacia: PropuestaFlanco = {
     marca: null, modelo: null, medida: null, indice_carga_simple: null,
-    indice_carga_doble: null, codigo_velocidad: null, dot: null,
+    indice_carga_doble: null, codigo_velocidad: null, dot: null, numero_serie: null,
     otros_textos: [], dudosos: [], suficienteParaBuscar: false,
     aviso: "No se ha podido leer el flanco",
   };
   if (!l) return vacia;
 
+  // «Dudoso» sigue midiéndose con el listón ALTO, también para los que ahora
+  // se proponen igualmente: que el técnico sepa cuáles conviene mirar dos
+  // veces. Avisar y descartar no son lo mismo.
   const dudosos: string[] = [];
   for (const campo of CAMPOS) {
     const c = l[campo];
@@ -133,7 +167,13 @@ export function prepararPropuesta(l: LecturaFlanco | null | undefined): Propuest
     indice_carga_simple: valorFiable(l.indice_carga_simple)?.toUpperCase() ?? null,
     indice_carga_doble: valorFiable(l.indice_carga_doble)?.toUpperCase() ?? null,
     codigo_velocidad: valorFiable(l.codigo_velocidad)?.toUpperCase() ?? null,
-    dot: normalizarDot(valorFiable(l.dot)),
+    // El DOT y el número de serie van con el listón bajo: se proponen en una
+    // casilla que el técnico confirma, no se aplican solos. Ver la nota de
+    // CONFIANZA_MINIMA_ANOTAR.
+    dot: normalizarDot(valorFiable(l.dot, CONFIANZA_MINIMA_ANOTAR)),
+    // El serie NO se normaliza: cada fabricante lo estampa a su manera y
+    // recortarlo o pasarlo a un formato "bonito" sería inventárselo.
+    numero_serie: valorFiable(l.numero_serie, CONFIANZA_MINIMA_ANOTAR)?.trim() || null,
     otros_textos: Array.isArray(l.otros_textos) ? l.otros_textos.filter((t) => !!t?.trim()) : [],
     dudosos,
     // Con marca y medida ya se puede buscar; el modelo afina pero no hace

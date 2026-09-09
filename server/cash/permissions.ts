@@ -64,6 +64,25 @@ export const PERMISOS = [
    * hacer quien la registró sin que quede rastro.
    */
   "cash.document.void",
+  /**
+   * Autorizar el cobro de una factura que ya consta cobrada.
+   *
+   * Es de responsable y no de cajero A PROPÓSITO: quien está en el mostrador
+   * con la prisa del cliente delante es justo quien no debe poder levantar
+   * solo la protección que existe para él. Cobrar dos veces la misma factura
+   * es de los errores que no se descubren hasta la conciliación del mes.
+   */
+  "cash.duplicate_payment.override",
+  /**
+   * Dar de alta y revocar escáneres de AutoScan, y descartar lo que dejan.
+   *
+   * De responsable: dar de alta un dispositivo es dar una llave que mete
+   * documentos en la caja de un centro sin que nadie inicie sesión, y
+   * descartar una factura es decidir que un papel no se cobra. Ver la bandeja,
+   * en cambio, va con `cash.view`: el cajero tiene que poder mirarla, que para
+   * eso trabaja con ella.
+   */
+  "cash.autoscan.manage",
   "cash.erp.view",
   "cash.erp.sync",
   "cash.erp.configure",
@@ -99,7 +118,16 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     "cash.erp.sync",
     "cash.open_session",
     "cash.close_session",
-    "cash.session.reopen",
+    /*
+     * Reabrir NO es de responsable: es de admin.
+     *
+     * Reabrir permite recerrar con otras cifras, así que es la única acción que
+     * puede cambiar un cierre ya firmado —y con él el importe que va al banco y
+     * lo que se le contó a la gestoría—. Un responsable puede corregir dentro
+     * de su jornada; deshacer una que ya está cerrada es otra cosa y sube un
+     * escalón. `admin` lo tiene por `admin: PERMISOS`, y el superadministrador
+     * entra como admin en `rolDeCaja`.
+     */
     "cash.collection.create",
     "cash.collection.create_manual",
     "cash.payment.create",
@@ -107,6 +135,8 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     "cash.movement.create",
     "cash.adjustment.create",
     "cash.operation.reverse",
+    "cash.duplicate_payment.override",
+    "cash.autoscan.manage",
     "cash.count.create",
     // Puede dar de alta una caja de su empresa, pero no tocar el catálogo de
     // denominaciones, que es de toda la instalación.

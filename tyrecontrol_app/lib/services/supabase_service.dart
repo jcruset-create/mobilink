@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:image_picker/image_picker.dart';
+import 'fotos.dart';
 import '../config.dart';
 import '../models/models.dart';
 import '../models/incidencias.dart';
@@ -554,21 +556,40 @@ class TyreControlApi {
   // ── Fotos (Supabase Storage) ─────────────────────────────────
   static const _bucketFotos = 'tc-revisiones-fotos';
 
-  static Future<String> subirFotoRevision(File file, {required String revisionId, required String posicionId}) async {
-    final ext = file.path.split('.').last;
-    final path = 'revisiones/$revisionId/${posicionId}_${DateTime.now().microsecondsSinceEpoch}.$ext';
-    await _db.storage.from(_bucketFotos).upload(path, file);
-    return _db.storage.from(_bucketFotos).getPublicUrl(path);
+  /// Las fotos se suben por bytes y no por `File`: en la versión web (la que
+  /// se usa para probar desde el PC) no hay sistema de ficheros.
+  static Future<String> _subirBytes(String path, XFile file) async {
+    final bytes = await file.readAsBytes();
+    final tipo = mimeDe(file);
+    // Reintento por conexión rota. Entre que se abre la cámara y se vuelve,
+    // el servidor ha cerrado la conexión que la app tenía abierta, y el
+    // primer envío por ella muere a medias con «Broken pipe» / «Connection
+    // reset» sin que Dart lo vea venir. Se repite con conexión nueva; con
+    // upsert, por si la primera llegó entera y solo se perdió la respuesta.
+    Object? ultimo;
+    for (var intento = 1; intento <= 3; intento++) {
+      try {
+        await _db.storage.from(_bucketFotos).uploadBinary(
+            path, bytes,
+            fileOptions: FileOptions(contentType: tipo, upsert: intento > 1));
+        return _db.storage.from(_bucketFotos).getPublicUrl(path);
+      } on SocketException catch (e) {
+        ultimo = e;
+      } on http.ClientException catch (e) {
+        ultimo = e;
+      }
+      await Future.delayed(Duration(milliseconds: 400 * intento));
+    }
+    throw Exception('Sin conexión estable con el servidor de fotos ($ultimo)');
   }
+
+  static Future<String> subirFotoRevision(XFile file, {required String revisionId, required String posicionId}) =>
+      _subirBytes('revisiones/$revisionId/${posicionId}_${DateTime.now().microsecondsSinceEpoch}.${extensionDe(file)}', file);
 
   /// Foto del flanco para identificar la goma. Va al mismo bucket que el
   /// resto de fotos de revisión: no se monta otro sistema de archivos.
-  static Future<String> subirFotoFlanco(File file, {required String revisionId, required String posicionId}) async {
-    final ext = file.path.split('.').last;
-    final path = 'flancos/$revisionId/${posicionId}_${DateTime.now().microsecondsSinceEpoch}.$ext';
-    await _db.storage.from(_bucketFotos).upload(path, file);
-    return _db.storage.from(_bucketFotos).getPublicUrl(path);
-  }
+  static Future<String> subirFotoFlanco(XFile file, {required String revisionId, required String posicionId}) =>
+      _subirBytes('flancos/$revisionId/${posicionId}_${DateTime.now().microsecondsSinceEpoch}.${extensionDe(file)}', file);
 
   // ── Corrección del neumático registrado ──────────────────────
   //
@@ -720,6 +741,210 @@ class TyreControlApi {
       'p_metodo': metodo, 'p_foto_url': fotoUrl,
     });
     return Map<String, dynamic>.from(r as Map);
+  }
+
+  // ── Parte de servicio por fotografías ────────────────────────
+  //
+  // Una vía de entrada OPCIONAL: el técnico fotografía matrícula,
+  // cuentakilómetros y flancos, la IA propone y él confirma. Termina en una
+  // intervención con sus operaciones, no en un documento suelto.
+
+  /// ¿Se puede ofrecer? Sin IA configurada, mejor no enseñar el botón.
+  static Future<bool> parteDisponible() async {
+    try {
+      final r = await http.get(
+        Uri.parse('$kBackendUrl/api/tyrecontrol/parte/estado'),
+        headers: {if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken'},
+      ).timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return false;
+      return (jsonDecode(r.body) as Map)['disponible'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Sube una foto del parte. Van al bucket que ya existe, en su carpeta.
+  static Future<String> subirFotoParte(XFile file, {required String carpeta}) =>
+      _subirBytes('partes/$carpeta/${DateTime.now().microsecondsSinceEpoch}.${extensionDe(file)}', file);
+
+  /// Manda TODAS las fotos juntas: así el modelo puede cruzarlas y reconocer
+  /// que dos son de la misma rueda. Devuelve lo que PROPONE, nunca lo guarda.
+  static Future<Map<String, dynamic>> leerParte(List<String> imagenes) async {
+    try {
+      final r = await http.post(
+        Uri.parse('$kBackendUrl/api/tyrecontrol/parte/leer'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken',
+        },
+        body: jsonEncode({'imagenes': imagenes}),
+      ).timeout(const Duration(minutes: 3));
+      final cuerpo = jsonDecode(r.body);
+      if (r.statusCode != 200) {
+        return {'warnings': [(cuerpo is Map ? cuerpo['error'] : null) ?? 'No se ha podido leer el parte'],
+                'utilizable': false, 'tires': const []};
+      }
+      return Map<String, dynamic>.from(cuerpo as Map);
+    } catch (_) {
+      return {'warnings': const ['No hay conexión con el servicio de lectura'],
+              'utilizable': false, 'tires': const []};
+    }
+  }
+
+  /// El catálogo de servicios facturables, para pintar la lista.
+  static Future<List<Map<String, dynamic>>> listarServiciosCatalogo() async {
+    final d = await _db.from('tc_cat_servicios').select().eq('activo', true).order('orden');
+    return (d as List).map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  /// Sube una firma dibujada en la tablet. Mismo bucket: no hay otro sistema
+  /// de archivos, y una firma es una imagen como las demás.
+  static Future<String> subirFirma(Uint8List png, {required String intervencionId, required String quien}) async {
+    final path = 'firmas/$intervencionId/$quien.png';
+    await _db.storage.from(_bucketFotos).uploadBinary(path, png,
+        fileOptions: const FileOptions(upsert: true, contentType: 'image/png'));
+    return _db.storage.from(_bucketFotos).getPublicUrl(path);
+  }
+
+  /// Un enlace al PDF del parte que se pueda abrir con el visor del sistema.
+  ///
+  /// No se devuelve la ruta del servidor: el visor lanza una petición SIN la
+  /// cabecera de sesión y recibiría un 401. El servidor comprueba aquí el
+  /// permiso —con la sesión, como debe ser—, guarda el parte y devuelve un
+  /// enlace firmado y caducable.
+  static Future<String> enlacePdfParte(String intervencionId) async {
+    final r = await http.post(
+      Uri.parse('$kBackendUrl/api/tyrecontrol/parte/$intervencionId/pdf/enlace'),
+      headers: {if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken'},
+    ).timeout(const Duration(seconds: 60));
+    final cuerpo = jsonDecode(r.body);
+    if (r.statusCode != 200) {
+      throw Exception((cuerpo is Map ? cuerpo['error'] : null) ?? 'No se ha podido generar el PDF');
+    }
+    return (cuerpo as Map)['url'] as String;
+  }
+
+  // ── Parte guiado (Realizar operación) ────────────────────────
+  //
+  // El operario recorre el parte paso a paso desde la tablet. Lo que aquí se
+  // añade es lo que ese recorrido necesita y no existía: dar de alta un
+  // vehículo que no está fichado, y guardarlo todo de una vez.
+
+  /// Los tipos de vehículo que SIRVEN para dar de alta desde la tablet.
+  ///
+  /// No vale la lista entera: las posiciones cuelgan del tipo, y un tipo sin
+  /// posiciones generadas da un vehículo que no puede sostener un parte. La
+  /// base de datos lo rechaza, pero enseñarlo y que falle al confirmar es
+  /// peor que no enseñarlo.
+  static Future<List<Map<String, dynamic>>> tiposVehiculoParaAlta() async {
+    final data = await _db
+        .from('tc_tipos_vehiculo')
+        .select('id, nombre, configuracion_ejes, numero_ejes, numero_ruedas, '
+                'imagen_chasis_url, posiciones:tc_posiciones_vehiculo(count)')
+        .eq('activo', true)
+        .order('nombre');
+    return (data as List)
+        .map((e) => Map<String, dynamic>.from(e))
+        .where((t) {
+          final p = t['posiciones'];
+          if (p is List && p.isNotEmpty) {
+            final c = (p.first as Map)['count'];
+            return c is int && c > 0;
+          }
+          return false;
+        })
+        .toList();
+  }
+
+  /// Las medidas del catálogo del vehículo (que NO es el de los neumáticos:
+  /// tc_vehiculos.medida_id apunta a tc_cat_medidas_neumatico).
+  static Future<List<Map<String, dynamic>>> listarMedidasVehiculo() async {
+    final data = await _db.from('tc_cat_medidas_neumatico').select('id, valor').order('valor');
+    return (data as List).map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  /// Las empresas sobre las que este operario puede trabajar. Si solo hay una,
+  /// la pantalla ni pregunta.
+  static Future<List<Map<String, dynamic>>> empresasDelOperario() async {
+    try {
+      final data = await _db.from('tc_empresas').select('id, nombre').order('nombre');
+      return (data as List).map((e) => Map<String, dynamic>.from(e)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Da de alta el vehículo con lo mínimo. Nace pendiente de validar y un
+  /// administrador le pone marca y modelo después.
+  ///
+  /// Si la matrícula ya existía NO falla: devuelve la que hay con
+  /// `ya_existia: true`, para que el parte siga con ella.
+  static Future<Map<String, dynamic>> altaVehiculoDesdeParte({
+    required String empresaId,
+    required String matricula,
+    required String tipoVehiculoId,
+    String? configEjesId,
+    String? medidaId,
+    String? numeroUnidad,
+    num? km,
+    /// Medidas por eje cuando no todos llevan la misma:
+    /// `[{'eje': 1, 'medida_id': '…'}, …]`. Las guarda la propia función en
+    /// tc_vehiculo_ejes; desde la tablet no se puede escribir esa tabla a mano
+    /// (tc_set_vehiculo_ejes pide administrador) y no se amplía ese permiso.
+    List<Map<String, dynamic>>? ejes,
+  }) async {
+    final data = await _db.rpc('tc_alta_vehiculo_desde_parte', params: {
+      'p_empresa': empresaId,
+      'p_matricula': matricula,
+      'p_tipo': tipoVehiculoId,
+      'p_config_ejes': configEjesId,
+      'p_medida': medidaId,
+      'p_numero_unidad': numeroUnidad,
+      'p_km': km,
+      'p_ejes': (ejes == null || ejes.isEmpty) ? null : ejes,
+    });
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Las razones de sustitución del formulario: el catálogo que ya existe
+  /// (tc_cat_motivos), no una lista escrita en la APK. Se piden las comunes y
+  /// las del desmontaje; las de corrección administrativa no pintan aquí.
+  static Future<List<Map<String, dynamic>>> listarMotivosDesmontaje() async {
+    final data = await _db
+        .from('tc_cat_motivos')
+        .select('codigo, nombre, tipo_operacion, orden')
+        .eq('activo', true)
+        .order('orden');
+    return (data as List)
+        .map((e) => Map<String, dynamic>.from(e))
+        .where((m) {
+          final t = m['tipo_operacion'] as String?;
+          return t == null || t == 'sustitucion' || t == 'desmontaje';
+        })
+        .toList();
+  }
+
+  /// Los destinos del neumático retirado (tc_cat_destinos). Se lleva también
+  /// `estado_resultante` porque es lo que decide en qué estado queda la goma;
+  /// esa decisión la aplica la base de datos, aquí solo se enseña el nombre.
+  static Future<List<Map<String, dynamic>>> listarDestinosNeumatico() async {
+    final data = await _db
+        .from('tc_cat_destinos')
+        .select('codigo, nombre, estado_resultante, orden')
+        .eq('activo', true)
+        .order('orden');
+    return (data as List).map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  /// Guarda el parte entero DE UNA VEZ: revisión con mediciones, intervención
+  /// con operaciones, servicios, cabecera y firmas.
+  ///
+  /// La [clave] la genera la pantalla al abrir el borrador, no aquí: tiene que
+  /// sobrevivir a un reintento. Si la petición llega dos veces —doble toque,
+  /// red mala— la segunda devuelve el MISMO parte en vez de crear otro.
+  static Future<Map<String, dynamic>> guardarParteGuiado(Map<String, dynamic> parte) async {
+    final data = await _db.rpc('tc_guardar_parte_guiado', params: {'p_parte': parte});
+    return Map<String, dynamic>.from(data as Map);
   }
 
   // ── Incidencias (Fase 1: detección + pendientes) ─────────────
@@ -1179,13 +1404,77 @@ class TyreControlApi {
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
+  /// Los partes de trabajo recientes de TODOS los vehículos que este operario
+  /// puede ver. Es el mismo histórico que la ficha del vehículo, sin filtrar
+  /// por vehículo: no hay dos históricos, hay uno con y sin filtro.
+  ///
+  /// La RLS de tc_intervenciones ya limita lo que se ve a la empresa del
+  /// operario; aquí no se comprueba nada por segunda vez ni se confía en un
+  /// filtro de pantalla para guardar un secreto.
+  ///
+  /// NO lleva filtro de texto: buscar por matrícula obligaría a filtrar sobre
+  /// la tabla embebida, que en PostgREST es delicado y desde aquí no se puede
+  /// probar contra el Supabase de verdad. Se traen los últimos y la pantalla
+  /// filtra sobre ellos, que para una lista de este tamaño da igual y no
+  /// depende de una sintaxis que nadie ha visto funcionar.
+  static Future<List<Map<String, dynamic>>> listarIntervencionesRecientes({
+    int limite = 200,
+    bool soloMias = false,
+  }) async {
+    // Igual que en la ficha: primero se recogen las operaciones que se
+    // quedaron sueltas, para que salgan con su número de parte.
+    try {
+      await _db.rpc('tc_agrupar_operaciones_sueltas', params: {'p_minutos': 30});
+    } catch (_) {/* se consolidará en la siguiente visita */}
+
+    var q = _db.from('tc_intervenciones')
+        .select('*, vehiculo:tc_vehiculos(matricula, numero_unidad)');
+    if (soloMias) {
+      final uid = _db.auth.currentUser?.id;
+      if (uid != null) q = q.eq('tecnico_id', uid);
+    }
+    final data = await q.order('created_at', ascending: false).limit(limite);
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// Corrige DATOS de una operación ya hecha: razón, observaciones, número de
+  /// serie y DOT.
+  ///
+  /// NO mueve neumáticos ni toca el stock, y no deja cambiar el destino: el
+  /// destino y el estado de la goma los pone la misma RPC a la vez, y cambiar
+  /// solo uno dejaría al papel y a la ficha contando cosas distintas.
+  ///
+  /// El motivo es obligatorio y queda escrito en la auditoría: una corrección
+  /// sin motivo es indistinguible de un error.
+  static Future<Map<String, dynamic>> corregirOperacion({
+    required String operacionId,
+    required String motivoCorreccion,
+    String? motivo,
+    String? observaciones,
+    String? numeroSerie,
+    String? dot,
+  }) async {
+    final cambios = <String, dynamic>{};
+    if (motivo != null) cambios['motivo'] = motivo;
+    if (observaciones != null) cambios['observaciones'] = observaciones;
+    if (numeroSerie != null) cambios['numero_serie'] = numeroSerie;
+    if (dot != null) cambios['dot'] = dot;
+    final r = await _db.rpc('tc_corregir_operacion', params: {
+      'p_operacion': operacionId,
+      'p_cambios': cambios,
+      'p_motivo': motivoCorreccion,
+    });
+    return Map<String, dynamic>.from(r as Map);
+  }
+
   /// Operaciones de una intervención (con posición y neumático).
   static Future<List<Map<String, dynamic>>> listarOperacionesDeIntervencion(String intervencionId) async {
     final data = await _db.from('operaciones_neumaticos').select(
         'id, tipo_operacion, motivo, is_anulada, fecha_operacion, created_at, '
         'posicion_origen:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_origen_id_fkey(codigo_posicion, nombre), '
         'posicion_destino:tc_posiciones_vehiculo!operaciones_neumaticos_posicion_destino_id_fkey(codigo_posicion, nombre), '
-        'neumatico:tc_neumaticos(marca, modelo, medida, numero_interno)')
+        'observaciones, '
+        'neumatico:tc_neumaticos(id, marca, modelo, medida, numero_interno, numero_serie, dot)')
         .eq('intervencion_id', intervencionId).order('created_at', ascending: true);
     return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }

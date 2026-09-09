@@ -197,7 +197,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                     children: [
                       TileLayer(
                         urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.seatarragona.operario',
+                        userAgentPackageName: 'com.mobilink.assist',
                       ),
                       MarkerLayer(markers: [
                         // Marcador destino

@@ -9,6 +9,8 @@ import 'identify_vehicle_screen.dart';
 import 'incidencias_screen.dart';
 import 'login_screen.dart';
 import 'planificacion_screen.dart';
+import 'realizar_operacion_screen.dart';
+import 'historial_operaciones_screen.dart';
 import 'revisions_screen.dart';
 import 'vehiculos_screen.dart';
 import 'tools_screen.dart';
@@ -109,6 +111,22 @@ class _InicioTab extends StatelessWidget {
             },
           ),
           const SizedBox(height: 14),
+          // Realizar operación: el parte de servicio paso a paso. Va en un
+          // azulejo y no en la barra de abajo porque esa ya tiene cinco
+          // destinos y un sexto la aprieta. Y va aquí, junto a Operaciones,
+          // porque es lo mismo visto de otra manera: quien busca "hacer un
+          // trabajo" mira en esta zona.
+          _BigTile(
+            icon: Icons.assignment_outlined,
+            label: 'Realizar operación',
+            color: AppColors.tileGrisPastel,
+            onTap: () async {
+              await Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const RealizarOperacionScreen()));
+              await TyreControlApi.contarIncidenciasPendientes();
+            },
+          ),
+          const SizedBox(height: 14),
           // Planificación arriba (antes estaba abajo con Vehículos)
           Row(
             children: [
@@ -146,6 +164,20 @@ class _InicioTab extends StatelessWidget {
                   // Abre directamente la pestaña Historial (decisión usuario).
                   onTap: () => Navigator.of(context).push(
                       MaterialPageRoute(builder: (_) => const RevisionsScreen(initialTab: 1))),
+                ),
+              ),
+              const SizedBox(width: 14),
+              // Los partes de trabajo hechos, con su informe y su PDF. Es la
+              // misma pantalla que se abre desde la ficha de un vehículo, sin
+              // filtrar por vehículo: hasta ahora, para ver un parte hacía
+              // falta acordarse de en qué camión se hizo.
+              Expanded(
+                child: _BigTile(
+                  icon: Icons.receipt_long,
+                  label: 'Partes de trabajo',
+                  small: true,
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const HistorialOperacionesScreen())),
                 ),
               ),
               const SizedBox(width: 14),

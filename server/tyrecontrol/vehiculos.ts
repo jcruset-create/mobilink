@@ -1,0 +1,197 @@
+/**
+ * Resolver una matrícula de Assist contra un vehículo de TyreControl.
+ *
+ * Es la única puerta de entrada: cualquier consulta a TC empieza aquí, y por
+ * eso la regla de comparación vive en un solo sitio.
+ *
+ * ── Por qué no se coge «el primero» ─────────────────────────────────────────
+ *
+ * `tc_vehiculos` tiene `unique(empresa_id, matricula)`: la matrícula es única
+ * DENTRO de una empresa, no en toda la base. La misma matrícula puede existir
+ * en dos empresas de TyreControl y ser dos vehículos distintos.
+ *
+ * Coger el primero funcionaría casi siempre y fallaría en silencio el día que
+ * no —aplicando un trabajo al vehículo de otra empresa—. Así que cuando hay
+ * más de uno se dice `AMBIGUOUS` y se devuelven los candidatos, y quien llama
+ * decide. Hoy nadie sabe decidirlo automáticamente porque no existe relación
+ * entre los clientes de Assist y las empresas de TC (ver §8 del informe).
+ */
+
+import { supabase } from "../supabase.ts";
+import { coincideMatricula, normalizarMatricula, patronBusquedaMatricula } from "./matricula.ts";
+import type { Resolucion, VehiculoTc } from "./types.ts";
+
+export class ErrorTyreControl extends Error {
+  constructor(public codigo: string, mensaje: string, public estado = 502) {
+    super(mensaje);
+  }
+}
+
+/** Campos que se leen del vehículo. Lista blanca: TC tiene más y no hacen falta. */
+const CAMPOS = "id, empresa_id, matricula, marca, modelo, tipo_vehiculo_id, km_actual, origen_km, activo, updated_at";
+
+function aVehiculo(f: any, empresas: Map<string, string>, tipos: Map<string, string>): VehiculoTc {
+  return {
+    tcVehicleId: String(f.id),
+    empresaId: String(f.empresa_id),
+    empresaNombre: empresas.get(String(f.empresa_id)) ?? null,
+    matricula: String(f.matricula ?? ""),
+    tipoVehiculoId: f.tipo_vehiculo_id == null ? null : String(f.tipo_vehiculo_id),
+    tipoVehiculo: f.tipo_vehiculo_id == null ? null : (tipos.get(String(f.tipo_vehiculo_id)) ?? null),
+    marca: f.marca ?? null,
+    modelo: f.modelo ?? null,
+    kmActual: f.km_actual == null ? null : Number(f.km_actual),
+    origenKm: f.origen_km ?? null,
+    activo: f.activo !== false,
+    updatedAt: f.updated_at ?? null,
+  };
+}
+
+/** Nombres de empresa y tipo, en dos consultas y no una por fila. */
+async function etiquetas(filas: any[]): Promise<{ empresas: Map<string, string>; tipos: Map<string, string> }> {
+  const idsEmpresa = [...new Set(filas.map((f) => String(f.empresa_id)).filter(Boolean))];
+  const idsTipo = [...new Set(filas.map((f) => f.tipo_vehiculo_id).filter(Boolean).map(String))];
+
+  const [emp, tip] = await Promise.all([
+    idsEmpresa.length
+      ? supabase.from("tc_empresas").select("id, nombre").in("id", idsEmpresa)
+      : Promise.resolve({ data: [] as any[] }),
+    idsTipo.length
+      ? supabase.from("tc_tipos_vehiculo").select("id, nombre").in("id", idsTipo)
+      : Promise.resolve({ data: [] as any[] }),
+  ]);
+
+  return {
+    empresas: new Map((emp.data ?? []).map((e: any) => [String(e.id), String(e.nombre ?? "")])),
+    tipos: new Map((tip.data ?? []).map((t: any) => [String(t.id), String(t.nombre ?? "")])),
+  };
+}
+
+export type OpcionesResolucion = {
+  /**
+   * Empresa de TC con la que desambiguar.
+   *
+   * Hoy nadie la pasa porque no existe la relación cliente Assist ↔ empresa
+   * TC. El parámetro está desde el principio para que, cuando exista, no haya
+   * que reescribir nada: entra por aquí y la ambigüedad desaparece.
+   */
+  empresaId?: string | null;
+  /** Incluir vehículos dados de baja. Por defecto no: no se trabaja con ellos. */
+  incluirInactivos?: boolean;
+};
+
+/* ── Resolución con cliente ──────────────────────────────────────────────── */
+
+/**
+ * Matrícula + cliente de Assist → vehículo de TyreControl.
+ *
+ * Es la puerta que hay que usar cuando se conoce el cliente, porque es la que
+ * quita la ambigüedad de verdad. Los cinco casos, todos explícitos:
+ *
+ *   1. Cliente mapeado y matrícula en esa empresa      → FOUND (por mapping)
+ *   2. Cliente mapeado y matrícula NO en esa empresa   → NOT_FOUND
+ *   3. Sin mapeo y matrícula única en toda la base     → FOUND (por coincidencia)
+ *   4. Sin mapeo y matrícula en varias empresas        → AMBIGUOUS
+ *   5. El mapeo apunta a una empresa inexistente o de baja → MAPPING_ERROR
+ *
+ * El caso 2 es el que más importa: con el cliente mapeado NO se busca en otra
+ * empresa. Que ese cliente no tenga ese vehículo es una respuesta correcta;
+ * encontrarlo en la empresa de al lado y actuar sobre él, no.
+ */
+export async function resolverVehiculoDeCliente(
+  matricula: unknown,
+  clienteId: number | null | undefined,
+  tenantId?: string | null,
+): Promise<Resolucion> {
+  const { comprobarEmpresa, empresaDeCliente } = await import("./empresas.ts");
+  const mapeo = await empresaDeCliente(clienteId, tenantId);
+
+  if (!mapeo || !mapeo.activo) {
+    // Casos 3 y 4: sin mapeo utilizable se busca en toda la base, y si sale más
+    // de uno se dice que es ambiguo en vez de elegir.
+    return resolverVehiculo(matricula);
+  }
+
+  const empresa = await comprobarEmpresa(mapeo.tcEmpresaId);
+  if (!empresa) {
+    return {
+      estado: "MAPPING_ERROR", tcEmpresaId: mapeo.tcEmpresaId,
+      motivo: "El cliente está mapeado a una empresa que ya no existe en TyreControl",
+    };
+  }
+  if (!empresa.activa) {
+    return {
+      estado: "MAPPING_ERROR", tcEmpresaId: mapeo.tcEmpresaId,
+      motivo: `El cliente está mapeado a «${empresa.nombre}», que está dada de baja en TyreControl`,
+    };
+  }
+
+  const r = await resolverVehiculo(matricula, { empresaId: mapeo.tcEmpresaId });
+  return r.estado === "FOUND" ? { ...r, origenEmpresa: "mapping" } : r;
+}
+
+/**
+ * Matrícula → vehículo de TyreControl.
+ *
+ * Una sola consulta filtrada en el servidor, más dos de etiquetas. No se trae
+ * la tabla.
+ */
+/*
+ * Devuelve una unión MÁS ESTRECHA que `Resolucion` a propósito: sin cliente no
+ * hay mapeo, así que `MAPPING_ERROR` no puede darse. Declararlo evita que quien
+ * llame tenga que escribir una rama para un caso imposible.
+ */
+export async function resolverVehiculo(
+  matricula: unknown, opciones: OpcionesResolucion = {},
+): Promise<Exclude<Resolucion, { estado: "MAPPING_ERROR" }>> {
+  const buscada = normalizarMatricula(matricula);
+  const patron = patronBusquedaMatricula(buscada);
+  if (!patron) return { estado: "NOT_FOUND" };
+
+  let consulta = supabase.from("tc_vehiculos").select(CAMPOS).ilike("matricula", patron);
+  if (opciones.empresaId) consulta = consulta.eq("empresa_id", opciones.empresaId);
+  if (!opciones.incluirInactivos) consulta = consulta.eq("activo", true);
+  // Tope de seguridad, no de negocio: el patrón deja pocas filas. Si alguna vez
+  // se llenara, es que el patrón no discrimina y hay que mirarlo, no ampliarlo.
+  const { data, error } = await consulta.limit(50);
+
+  if (error) {
+    console.error("[TyreControl] error resolviendo matrícula:", error.message);
+    throw new ErrorTyreControl("tc_unavailable", "No se ha podido consultar TyreControl");
+  }
+
+  // El patrón admite separadores arbitrarios; la igualdad la decide la
+  // normalización, no el LIKE.
+  const exactos = (data ?? []).filter((f: any) => coincideMatricula(f.matricula, buscada));
+  if (exactos.length === 0) return { estado: "NOT_FOUND" };
+
+  const { empresas, tipos } = await etiquetas(exactos);
+  const vehiculos = exactos.map((f: any) => aVehiculo(f, empresas, tipos));
+
+  if (vehiculos.length === 1) {
+    return {
+      estado: "FOUND", vehiculo: vehiculos[0],
+      origenEmpresa: opciones.empresaId ? "indicada" : "unica",
+    };
+  }
+
+  console.warn(
+    `[TyreControl] matrícula ${buscada} ambigua: ${vehiculos.length} vehículos en ` +
+    `${new Set(vehiculos.map((v) => v.empresaId)).size} empresa(s)`,
+  );
+  return { estado: "AMBIGUOUS", candidatos: vehiculos };
+}
+
+/** Un vehículo por su id de TC. Para cuando ya se resolvió antes. */
+export async function cargarVehiculo(tcVehicleId: string): Promise<VehiculoTc | null> {
+  if (!tcVehicleId) return null;
+  const { data, error } = await supabase
+    .from("tc_vehiculos").select(CAMPOS).eq("id", tcVehicleId).maybeSingle();
+  if (error) {
+    console.error("[TyreControl] error cargando vehículo:", error.message);
+    throw new ErrorTyreControl("tc_unavailable", "No se ha podido consultar TyreControl");
+  }
+  if (!data) return null;
+  const { empresas, tipos } = await etiquetas([data]);
+  return aVehiculo(data, empresas, tipos);
+}

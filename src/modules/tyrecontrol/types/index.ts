@@ -406,6 +406,11 @@ export interface Vehiculo {
   medidas_por_eje?: boolean;
   revision_intervalo_dias?: number | null; // override de periodicidad por vehículo
   revision_intervalo_km?: number | null;
+  // Nació en la tablet con lo mínimo (tc_alta_vehiculo_desde_parte) y le
+  // faltan marca, modelo o delegación. Un administrador lo completa.
+  pendiente_validar?: boolean;
+  creado_por?: string | null;
+  creado_desde?: "panel" | "tablet" | "importacion" | null;
   // Los datos de la ficha técnica NO viven aquí: cada código de la tarjeta
   // (A.1, F.1.1, P.2, V.9…) es una fila de tc_vehiculo_atributos_tecnicos
   // enlazada al maestro tc_cat_campos_ficha_tecnica, y solo existe si trae

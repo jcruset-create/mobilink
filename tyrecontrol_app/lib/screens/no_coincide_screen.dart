@@ -1,6 +1,5 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import '../services/fotos.dart';
 import '../models/models.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
@@ -93,12 +92,12 @@ class _NoCoincideScreenState extends State<NoCoincideScreen> {
 
   // ── Camino C: la foto del flanco ───────────────────────────────────────────
   Future<void> _identificarConFoto() async {
-    final foto = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 85);
+    final foto = await elegirFoto(context);
     if (foto == null) return;
     setState(() { _trabajando = true; _error = null; _avisoIA = null; });
     try {
       final url = await TyreControlApi.subirFotoFlanco(
-        File(foto.path), revisionId: widget.revisionId, posicionId: widget.posicionId);
+        foto, revisionId: widget.revisionId, posicionId: widget.posicionId);
       final p = await TyreControlApi.leerFlanco(url);
       if (!mounted) return;
       setState(() {

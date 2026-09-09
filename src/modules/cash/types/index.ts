@@ -275,6 +275,142 @@ export type DocumentoOperacion = {
   url: string | null;
 };
 
+// ── Conceptos de gasto ─────────────────────────────────────────────────────
+
+/**
+ * Qué segundo desplegable pide un concepto.
+ *
+ * No es decoración: es lo que hace que al elegir «Dietas» salgan los operarios
+ * y al elegir «Ferretería» salgan los centros de coste. El servidor comprueba
+ * que la pareja encaja, así que esto solo decide qué se ENSEÑA.
+ */
+export type TipoDestinoGasto = "NINGUNO" | "PERSONA" | "CENTRO_COSTE";
+
+export type ConceptoGasto = {
+  id: number;
+  codigo: string;
+  nombre: string;
+  tipoDestino: TipoDestinoGasto;
+  activo: boolean;
+  orden: number;
+  /** Cuántos pagos lo usan. Es lo que impide cambiarlo sin enterarse. */
+  usos: number;
+};
+
+export type DestinoGasto = {
+  id: number;
+  tipo: "PERSONA" | "CENTRO_COSTE";
+  codigo: string;
+  nombre: string;
+  activo: boolean;
+  orden: number;
+  usos: number;
+};
+
+/**
+ * El informe de gasto, tal cual lo devuelve `/expense-stats`.
+ *
+ * Los importes son céntimos enteros de punta a punta. Aquí no se divide entre
+ * 100 para guardarlo en el estado: se divide al pintarlo, con `euros()`.
+ */
+
+export type GranularidadGasto = "dia" | "mes" | "anio";
+
+export type LineaConceptoGasto = {
+  /** `null` es la línea de los pagos SIN clasificar. Se enseña, no se esconde. */
+  conceptoId: number | null;
+  codigo: string | null;
+  nombre: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type LineaDestinoGasto = {
+  destinoId: number | null;
+  nombre: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type PuntoGasto = {
+  /** `2026-09-07`, `2026-09` o `2026`, según la granularidad pedida. */
+  periodo: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type InformeGasto = {
+  desde: string;
+  hasta: string;
+  granularidad: GranularidadGasto;
+  centroId: string | null;
+  totalCentimos: number;
+  operaciones: number;
+  sinClasificarCentimos: number;
+  conceptos: LineaConceptoGasto[];
+  destinos: LineaDestinoGasto[];
+  serie: PuntoGasto[];
+  comparacion: {
+    desde: string;
+    hasta: string;
+    totalCentimos: number;
+    operaciones: number;
+    diferenciaCentimos: number;
+    /** `null` si el tramo anterior fue cero: eso no es «+100 %». */
+    variacion: number | null;
+  } | null;
+};
+
+// ── AutoScan ───────────────────────────────────────────────────────────────
+
+export type EstadoAutoScan =
+  | "PENDIENTE"
+  | "ANALIZANDO"
+  | "LISTO"
+  | "USADO"
+  | "FALLIDO"
+  | "DESCARTADO";
+
+/** Una factura que ha dejado un escáner y todavía no es de ningún cobro. */
+export type DocumentoAutoScan = {
+  id: number;
+  centroId: string;
+  deviceId: number;
+  deviceNombre: string | null;
+  nombreOriginal: string;
+  mime: string;
+  tamanoBytes: number;
+  estado: EstadoAutoScan;
+  error: string | null;
+  scanId: number | null;
+  operationId: number | null;
+  recibidoAtMs: number;
+  /** Más de 30 días esperando. Derivado, no es un estado. */
+  esAntiguo: boolean;
+};
+
+export type ResumenAutoScan = {
+  /** false = el centro no tiene escáneres: la pantalla no enseña el bloque. */
+  hayDispositivos: boolean;
+  /** PENDIENTE + ANALIZANDO + LISTO + FALLIDO. Lo dice el servidor. */
+  pendientes: number;
+  listos: number;
+  analizando: number;
+  fallidos: number;
+  antiguos: number;
+};
+
+export type DispositivoAutoScan = {
+  id: number;
+  centroId: string;
+  nombre: string;
+  version: string | null;
+  ultimoVistoAtMs: number | null;
+  revocadoAtMs: number | null;
+  /** Derivado del último latido, no guardado. */
+  conectado: boolean;
+};
+
 // ── Ingresos bancarios ─────────────────────────────────────────────────────
 
 /** Cierre de jornada cuyo importe "para el banco" aún no se ha ingresado. */
@@ -347,9 +483,23 @@ export type ReposicionPendiente = {
   importeCentimos: number;
 };
 
+/** Un canje ya hecho que todavía espera a que se registre el ingreso. */
+export type CanjePreparado = {
+  id: number;
+  fecha: string;
+  /** Entra y sale lo mismo: es UN importe, no dos. */
+  valorCentimos: number;
+  /** Cierres contra los que se hizo. El ingreso tiene que llevarlos todos. */
+  sessionIds: number[];
+  entregado: LineaDenominacion[];
+  recibido: LineaDenominacion[];
+};
+
 export type PanelIngresos = {
   pendientes: CierrePendiente[];
   reposiciones: ReposicionPendiente[];
+  /** Canjes hechos y sin ingresar. NO entran en ningún total. */
+  canjes: CanjePreparado[];
   remanenteCentimos: number;
   /** Cierres MENOS reposiciones: lo que de verdad se puede llevar al banco. */
   totalPendienteCentimos: number;
@@ -633,6 +783,14 @@ export type PropuestaEscaneo = {
   referencia: CampoPropuesto<string | null>;
   importeCentimos: CampoPropuesto<number | null>;
   cliente: CampoPropuesto<string | null>;
+  /**
+   * Quien EMITE el documento, que en un ticket de compra es el proveedor.
+   *
+   * Va al lado de `cliente` y no en su lugar: son las dos partes del mismo
+   * papel y cuál interesa depende de la pantalla. Cobros usa `cliente`, Pagos
+   * usa `proveedor`, y el análisis se hace UNA vez para los dos.
+   */
+  proveedor: CampoPropuesto<string | null>;
   concepto: CampoPropuesto<string | null>;
   formaCobro: {
     /** Código del catálogo, o null. null es NO LO SÉ, nunca «efectivo». */
@@ -645,6 +803,19 @@ export type PropuestaEscaneo = {
   /** null = no hay justificante con el que comparar. */
   importeCuadra: boolean | null;
   avisos: AvisoEscaneo[];
+  /**
+   * El cobro que ya existe de esta misma factura, si lo hay.
+   *
+   * Va aparte del aviso porque la pantalla necesita DATOS para decidir qué
+   * botón enseña, no un texto para leer. null = no consta cobrada.
+   */
+  cobroPrevio: {
+    operacionId: number;
+    numero: string;
+    fecha: string;
+    importeCentimos: number;
+    partyNombre: string | null;
+  } | null;
   extra: {
     fecha: string | null;
     cliente: { codigo: string | null; nombre: string | null; nif: string | null };
@@ -653,6 +824,9 @@ export type PropuestaEscaneo = {
       detectado: boolean;
       importeCentimos: number | null;
       tarjetaUltimos4: string | null;
+      /** Número de operación del datáfono: es lo que concilia con el banco. */
+      numOperacion: string | null;
+      codAutorizacion: string | null;
       adquirente: string | null;
       comercio: string | null;
       terminal: string | null;

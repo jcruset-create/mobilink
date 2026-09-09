@@ -1,7 +1,6 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import '../services/fotos.dart';
 import '../models/models.dart';
 import '../services/ocr_service.dart';
 import '../services/offline_store.dart';
@@ -69,15 +68,14 @@ class _IdentifyVehicleScreenState extends State<IdentifyVehicleScreen> {
   }
 
   Future<void> _escanearMatricula() async {
-    final picker = ImagePicker();
-    final foto = await picker.pickImage(source: ImageSource.camera, imageQuality: 85);
+    final foto = await elegirFoto(context);
     if (foto == null) return;
     setState(() {
       _escaneando = true;
       _error = null;
     });
     try {
-      final plate = await OcrService.reconocerMatricula(File(foto.path));
+      final plate = await OcrService.reconocerMatricula(foto);
       if (plate == null) {
         setState(() => _error = 'No se ha podido leer la matrícula. Prueba de nuevo o escríbela a mano.');
         return;

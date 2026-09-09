@@ -407,6 +407,36 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Autoriza cobrar una factura que ya consta cobrada.
+   *
+   * NO lleva `exigirPermiso`: quien tiene que tener el permiso es el que
+   * AUTORIZA —cuyas credenciales van en el cuerpo—, no el cajero que tiene la
+   * sesión abierta. Eso se comprueba dentro, junto con que sea de esta empresa
+   * y con la separación de funciones.
+   *
+   * La respuesta no dice nunca quién puede autorizar ni por qué falló una
+   * clave: un mostrador es un sitio público.
+   */
+  r.post(
+    "/collections/duplicate-override",
+    exigirPermiso("cash.collection.create"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { autorizarDuplicado } = await import("./duplicates.ts");
+      const r_ = await autorizarDuplicado({
+        empresaId: req.authCtx!.empresaId,
+        solicitanteId: req.authCtx!.userId,
+        autorizador: String(b.autorizador ?? ""),
+        clave: String(b.clave ?? ""),
+        referencia: String(b.referencia ?? ""),
+        importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
+        motivo: typeof b.motivo === "string" ? b.motivo : null,
+      });
+      res.json(r_);
+    })
+  );
+
   // ── Traslados entre cajas ────────────────────────────────────────────────
 
   r.get(
@@ -1215,6 +1245,17 @@ export function createCashRouter(): Router {
     })
   );
 
+  /** Deshace un canje ya hecho que todavía no se ha ingresado. */
+  r.post(
+    "/bank-deposits/swap/:id/undo",
+    exigirPermiso("cash.treasury.manage"),
+    ruta(async (req, res) => {
+      res.json(
+        await ingresos.deshacerCanje(contexto(req), enteroPositivo(req.params.id, "id"))
+      );
+    })
+  );
+
   /**
    * Cuánto le falta a la caja para su fondo, y con qué piezas del montón
    * pendiente se puede reponer. Consulta: no mueve nada.
@@ -1694,6 +1735,200 @@ export function createCashRouter(): Router {
     })
   );
 
+  // ── AutoScan ─────────────────────────────────────────────────────────────
+
+  // ── AutoScan: lo que ven y hacen las personas ────────────────────────────
+
+  r.get(
+    "/autoscan/devices",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { listarDispositivos } = await import("./autoscan/devices.ts");
+      res.json({
+        dispositivos: await listarDispositivos(
+          req.authCtx!.empresaId,
+          // Un usuario limitado a un taller solo ve los suyos.
+          req.cashCentroId ?? (typeof req.query.centro === "string" ? req.query.centro : null)
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/autoscan/devices",
+    exigirPermiso("cash.autoscan.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { crearCodigoActivacion } = await import("./autoscan/devices.ts");
+      /*
+       * El centro sale del usuario cuando está limitado a uno. Si no lo está,
+       * tiene que decirlo: no hay un centro «por defecto» que adivinar.
+       */
+      const centroId = req.cashCentroId ?? String(b.centroId ?? "");
+      const creado = await crearCodigoActivacion({
+        empresaId: req.authCtx!.empresaId,
+        centroId,
+        nombre: String(b.nombre ?? ""),
+        creadoPor: req.authCtx!.userId,
+      });
+      await registrarAuditoria({
+        empresaId: req.authCtx!.empresaId,
+        userId: req.authCtx!.userId,
+        accion: "cash.autoscan.device_code_created",
+        entidad: "cash_autoscan_activation_codes",
+        entidadId: centroId,
+        // El código NO se audita: es una credencial mientras vive.
+        detalle: { centroId, nombre: String(b.nombre ?? "") },
+      });
+      res.status(201).json(creado);
+    })
+  );
+
+  r.post(
+    "/autoscan/devices/:id/revoke",
+    exigirPermiso("cash.autoscan.manage"),
+    ruta(async (req, res) => {
+      const { revocarDispositivo } = await import("./autoscan/devices.ts");
+      const dispositivo = await revocarDispositivo(
+        req.authCtx!.empresaId,
+        enteroPositivo(req.params.id, "id"),
+        req.authCtx!.userId
+      );
+      await registrarAuditoria({
+        empresaId: req.authCtx!.empresaId,
+        userId: req.authCtx!.userId,
+        accion: "cash.autoscan.device_revoked",
+        entidad: "cash_autoscan_devices",
+        entidadId: String(dispositivo.id),
+        detalle: { nombre: dispositivo.nombre, centroId: dispositivo.centroId },
+      });
+      res.json({ dispositivo });
+    })
+  );
+
+  /** La bandeja del centro, y el contador. Una sola regla, aquí. */
+  r.get(
+    "/autoscan/inbox",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const inbox = await import("./autoscan/inbox.ts");
+      const centro =
+        req.cashCentroId ?? (typeof req.query.centro === "string" ? req.query.centro : null);
+      const [documentos, resumen] = await Promise.all([
+        inbox.listar(req.authCtx!.empresaId, centro),
+        inbox.resumen(req.authCtx!.empresaId, centro),
+      ]);
+      res.json({ documentos, resumen });
+    })
+  );
+
+  r.get(
+    "/autoscan/inbox/summary",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { resumen } = await import("./autoscan/inbox.ts");
+      res.json(
+        await resumen(
+          req.authCtx!.empresaId,
+          req.cashCentroId ?? (typeof req.query.centro === "string" ? req.query.centro : null)
+        )
+      );
+    })
+  );
+
+  /** El análisis que ya se hizo. Abrir un documento NO vuelve a llamar a la IA. */
+  r.get(
+    "/autoscan/inbox/:id",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const inbox = await import("./autoscan/inbox.ts");
+      const doc = await inbox.documento(
+        req.authCtx!.empresaId,
+        enteroPositivo(req.params.id, "id")
+      );
+      if (!doc) {
+        throw new ErrorCaja("DOCUMENTO_NO_ENCONTRADO", "Ese documento no existe.", 404);
+      }
+      const { propuestaDeEscaneo } = await import("./invoice-scan/service.ts");
+      /*
+       * El MISMO documento se abre desde Cobros y desde Pagos: la bandeja es
+       * una sola por centro y el papel no sabe si es una venta o una compra.
+       * Lo que cambia con el sentido no es la extracción —ya está hecha— sino
+       * contra qué se mira el duplicado.
+       */
+      const sentido = req.query.sentido === "PAGO" ? "PAGO" : "COBRO";
+      res.json({
+        documento: doc,
+        propuesta:
+          doc.scanId == null
+            ? null
+            : await propuestaDeEscaneo(req.authCtx!.empresaId, doc.scanId, sentido),
+      });
+    })
+  );
+
+  r.get(
+    "/autoscan/inbox/:id/file",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { enlace } = await import("./autoscan/inbox.ts");
+      res.json({
+        url: await enlace(req.authCtx!.empresaId, enteroPositivo(req.params.id, "id")),
+      });
+    })
+  );
+
+  r.post(
+    "/autoscan/inbox/:id/discard",
+    exigirPermiso("cash.autoscan.manage"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { descartar } = await import("./autoscan/inbox.ts");
+      const doc = await descartar(
+        req.authCtx!.empresaId,
+        enteroPositivo(req.params.id, "id"),
+        req.authCtx!.userId,
+        typeof b.motivo === "string" ? b.motivo : null
+      );
+      await registrarAuditoria({
+        empresaId: req.authCtx!.empresaId,
+        userId: req.authCtx!.userId,
+        accion: "cash.autoscan.document_discarded",
+        entidad: "cash_autoscan_inbox",
+        entidadId: String(doc.id),
+        detalle: { motivo: typeof b.motivo === "string" ? b.motivo : null, sha256: doc.sha256 },
+      });
+      res.json({ documento: doc });
+    })
+  );
+
+  r.post(
+    "/autoscan/inbox/:id/retry",
+    exigirPermiso("cash.autoscan.manage"),
+    ruta(async (req, res) => {
+      const { reintentar } = await import("./autoscan/inbox.ts");
+      res.json({
+        documento: await reintentar(req.authCtx!.empresaId, enteroPositivo(req.params.id, "id")),
+      });
+    })
+  );
+
+  /** Cuelga un documento de la bandeja de un cobro ya registrado. */
+  r.post(
+    "/autoscan/inbox/:id/promote",
+    exigirPermiso("cash.document.attach"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { promover } = await import("./autoscan/promote.ts");
+      res.status(201).json(
+        await promover(contexto(req), {
+          inboxId: enteroPositivo(req.params.id, "id"),
+          operationId: enteroPositivo(b.operationId, "operationId"),
+        })
+      );
+    })
+  );
+
   // ── Escaneo de facturas ──────────────────────────────────────────────────
 
   /**
@@ -1709,18 +1944,43 @@ export function createCashRouter(): Router {
    */
   r.post(
     "/invoice-scan",
-    exigirPermiso("cash.collection.create_manual"),
+    /*
+     * El permiso depende del SENTIDO, y por eso se mira aquí dentro en vez de
+     * con `exigirPermiso`. Antes esta ruta pedía siempre el permiso de cobro
+     * manual, así que quien solo puede pagar no podía ni escanear el ticket de
+     * su compra — la funcionalidad existía y le estaba cerrada.
+     *
+     * El sentido llega en el cuerpo, y como es multipart tiene que ir ANTES
+     * del fichero para que multer lo deje en `req.body`. Por eso no se confía
+     * en que venga: sin él, se asume COBRO, que es el comportamiento de
+     * siempre.
+     */
     subida(subidaDocumento.single("documento"), 15),
     ruta(async (req, res) => {
       if (!req.file) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
       }
       const b = req.body ?? {};
+      const sentido = b.sentido === "PAGO" ? "PAGO" : "COBRO";
+      const permiso =
+        sentido === "PAGO" ? "cash.payment.create_manual" : "cash.collection.create_manual";
+      if (!req.cashPermisos?.includes(permiso)) {
+        return res.status(403).json({
+          error:
+            sentido === "PAGO"
+              ? "No tienes permiso para registrar pagos manuales."
+              : "No tienes permiso para registrar cobros manuales.",
+          code: "PERMISO_DENEGADO",
+          permiso,
+        });
+      }
+
       const propuesta = await escanearFactura({
         empresaId: req.authCtx!.empresaId,
         userId: req.authCtx!.userId ?? null,
         sessionId: b.sessionId ? enteroPositivo(b.sessionId, "sessionId") : null,
         fichero: req.file,
+        sentido,
       });
       res.json({ propuesta });
     })
@@ -1772,6 +2032,10 @@ export function createCashRouter(): Router {
         partyNombre: typeof b.partyNombre === "string" ? b.partyNombre : "",
         concepto: typeof b.concepto === "string" ? b.concepto : "",
         referencia: typeof b.referencia === "string" ? b.referencia : null,
+        // La autorización para cobrar una factura ya cobrada. Se manda siempre
+        // que la pantalla la tenga; el servidor decide si hacía falta.
+        autorizacionDuplicado:
+          typeof b.autorizacionDuplicado === "string" ? b.autorizacionDuplicado : null,
         documentoId: b.documentoId ? enteroPositivo(b.documentoId, "documentoId") : null,
         externalSystem: typeof b.externalSystem === "string" ? b.externalSystem : null,
         externalDocumentId: typeof b.externalDocumentId === "string" ? b.externalDocumentId : null,
@@ -1813,6 +2077,18 @@ export function createCashRouter(): Router {
         externalDocumentId: typeof b.externalDocumentId === "string" ? b.externalDocumentId : null,
         externalDocumentReference:
           typeof b.externalDocumentReference === "string" ? b.externalDocumentReference : null,
+        /*
+         * En qué se ha gastado y a quién se imputa. Los dos opcionales: quien
+         * no los mande registra el pago igual, como hasta ahora. La coherencia
+         * entre los dos —que el destino sea del tipo que pide el concepto— la
+         * comprueba el servicio dentro de la transacción, no aquí.
+         */
+        expenseConceptId: b.expenseConceptId
+          ? enteroPositivo(b.expenseConceptId, "expenseConceptId")
+          : null,
+        expenseTargetId: b.expenseTargetId
+          ? enteroPositivo(b.expenseTargetId, "expenseTargetId")
+          : null,
         /*
          * Los pagos no preguntan la sección: van todos al negocio principal.
          * El campo se guarda igual, relleno con la sección por defecto, para
@@ -1868,6 +2144,125 @@ export function createCashRouter(): Router {
   );
 
   // ── Secciones de negocio ─────────────────────────────────────────────────
+
+  /**
+   * En qué se va el dinero. Solo lectura.
+   *
+   * `centro` vacío = consolidado de toda la empresa. Pero si el usuario está
+   * limitado a un taller, manda su ámbito: pedir el consolidado no puede ser la
+   * forma de ver el gasto de los centros que no te tocan.
+   */
+  r.get(
+    "/expense-stats",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const q = req.query;
+      const g = q.granularidad;
+      const { informeDeGasto } = await import("./expensestats.ts");
+      res.json(
+        await informeDeGasto(
+          {
+            empresaId: req.authCtx!.empresaId,
+            desde: String(q.desde ?? ""),
+            hasta: String(q.hasta ?? ""),
+            granularidad: g === "dia" || g === "mes" || g === "anio" ? g : "mes",
+            centroId:
+              req.cashCentroId ?? (typeof q.centro === "string" && q.centro ? q.centro : null),
+            conceptoId: q.conceptoId ? enteroPositivo(q.conceptoId, "conceptoId") : null,
+          },
+          q.comparar === "1" || q.comparar === "true"
+        )
+      );
+    })
+  );
+
+  // ── Conceptos de gasto y sus destinos ────────────────────────────────────
+
+  /*
+   * Los lee cualquiera que pueda ver caja: son los desplegables de Pagos. Solo
+   * quien configura puede tocarlos, igual que las secciones y las formas.
+   */
+  r.get(
+    "/expense-concepts",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const tipo = req.query.tipo;
+      res.json({
+        conceptos: await config.listarConceptos(req.authCtx!.empresaId),
+        destinos: await config.listarDestinos(
+          req.authCtx!.empresaId,
+          tipo === "PERSONA" || tipo === "CENTRO_COSTE" ? tipo : undefined
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/expense-concepts",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json({
+        concepto: await config.crearConcepto(contexto(req), {
+          nombre: typeof b.nombre === "string" ? b.nombre : "",
+          tipoDestino:
+            b.tipoDestino === "PERSONA" || b.tipoDestino === "CENTRO_COSTE"
+              ? b.tipoDestino
+              : "NINGUNO",
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
+
+  r.patch(
+    "/expense-concepts/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        concepto: await config.actualizarConcepto(contexto(req), enteroPositivo(req.params.id, "id"), {
+          nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+          tipoDestino:
+            b.tipoDestino === "PERSONA" || b.tipoDestino === "CENTRO_COSTE" || b.tipoDestino === "NINGUNO"
+              ? b.tipoDestino
+              : undefined,
+          activo: typeof b.activo === "boolean" ? b.activo : undefined,
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
+
+  r.post(
+    "/expense-targets",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json({
+        destino: await config.crearDestino(contexto(req), {
+          nombre: typeof b.nombre === "string" ? b.nombre : "",
+          tipo: b.tipo === "CENTRO_COSTE" ? "CENTRO_COSTE" : "PERSONA",
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
+
+  r.patch(
+    "/expense-targets/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        destino: await config.actualizarDestino(contexto(req), enteroPositivo(req.params.id, "id"), {
+          nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+          activo: typeof b.activo === "boolean" ? b.activo : undefined,
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
 
   r.get(
     "/sections",
@@ -2327,3 +2722,170 @@ export function createCashRouter(): Router {
 }
 
 export { obtenerSesion };
+
+// ── Router de MÁQUINA de AutoScan ──────────────────────────────────────────
+
+/**
+ * Las tres rutas que habla un escáner, y ninguna más.
+ *
+ * Va en un router aparte porque `createCashRouter` monta
+ * `authenticate` para TODO lo suyo, y `authenticate` corta con 401 en cuanto no
+ * hay un Bearer de Supabase. Un escáner no tiene sesión —ése es el punto
+ * entero del diseño—, así que mientras estas rutas vivieron dentro de aquel
+ * router respondían «Falta el token de sesión» y el agente no podía ni
+ * activarse. Los comentarios decían «sin autenticar» y el montaje decía otra
+ * cosa; ganaba el montaje.
+ *
+ * Se monta ANTES que el de personas y sobre el mismo prefijo: Express prueba
+ * los routers en orden y lo que no case aquí —que es todo lo demás— sigue su
+ * camino hasta el de siempre, con su autenticación intacta.
+ *
+ * Lo que este router NO tiene es tan importante como lo que tiene: ni
+ * `cargarPermisosCaja`, ni `exigirPermiso`, ni acceso a cajas, jornadas,
+ * cobros o configuración. Una credencial de dispositivo no es un usuario
+ * recortado: es otra cosa, y solo puede dejar documentos de su empresa y su
+ * centro.
+ */
+export function createAutoScanMachineRouter(): Router {
+  const m = Router();
+
+  /*
+   * Autenticación de MÁQUINA, aparte de la de personas.
+   *
+   * Estas tres rutas NO pasan por `authenticate` ni por `cargarPermisosCaja`:
+   * un escáner no es un usuario, no tiene permisos de interfaz y no puede
+   * mirar cajas, jornadas ni cobros. Lo único que puede hacer es dejar un
+   * documento de SU empresa y SU centro, y esos dos salen de la credencial —
+   * nunca del cuerpo de la petición, que ni se lee para eso.
+   */
+  const conDispositivo: RequestHandler = async (req, res, next) => {
+    const cabecera = String(req.headers["x-autoscan-key"] ?? "");
+    const { identificarDispositivo } = await import("./autoscan/devices.ts");
+    const identidad = cabecera ? await identificarDispositivo(cabecera) : null;
+    if (!identidad) {
+      // Sin decir si la credencial no existe o el dispositivo está revocado.
+      return res.status(401).json({ error: "Credencial de AutoScan no válida.", code: "AUTOSCAN_NO_AUTORIZADO" });
+    }
+
+    /*
+     * La licencia, aquí y no en `requireModule`.
+     *
+     * Estas rutas ya no pasan por el middleware de personas, que era quien la
+     * comprobaba. Sin esta línea, una empresa con la licencia caducada seguiría
+     * ingiriendo facturas por la puerta de atrás mientras la interfaz le dice
+     * que no puede entrar: exactamente el agujero que se abre al sacar una ruta
+     * de debajo de su middleware.
+     */
+    try {
+      const { exigirLicencia } = await import("./autoscan/devices.ts");
+      await exigirLicencia(identidad.empresaId);
+    } catch (e) {
+      if (e instanceof ErrorCaja) {
+        return res.status(e.estado).json({ error: e.message, code: e.codigo });
+      }
+      throw e;
+    }
+
+    req.autoscan = identidad;
+    next();
+  };
+
+  /** Canjea el código de activación por la credencial. Sin autenticar. */
+  m.post(
+    "/autoscan/activate",
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { activarDispositivo } = await import("./autoscan/devices.ts");
+      const activado = await activarDispositivo({
+        codigo: String(b.codigo ?? ""),
+        version: typeof b.version === "string" ? b.version : null,
+      });
+      await registrarAuditoria({
+        empresaId: activado.empresaId,
+        userId: null,
+        accion: "cash.autoscan.device_activated",
+        entidad: "cash_autoscan_devices",
+        entidadId: String(activado.deviceId),
+        // El secreto NO: es lo único que no puede aparecer en ningún sitio.
+        detalle: { centroId: activado.centroId, nombre: activado.nombre },
+      });
+      res.status(201).json(activado);
+    })
+  );
+
+  /** El agente deja un documento. La empresa y el centro salen de él. */
+  m.post(
+    "/autoscan/documents",
+    conDispositivo,
+    subida(subidaDocumento.single("documento"), 15),
+    ruta(async (req, res) => {
+      if (!req.file) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
+      }
+      const b = req.body ?? {};
+      const { recibirDocumento } = await import("./autoscan/inbox.ts");
+      const { documento, duplicado } = await recibirDocumento(req.autoscan!, {
+        fichero: req.file,
+        idempotencyKey: String(
+          b.idempotencyKey ?? req.headers["idempotency-key"] ?? ""
+        ),
+        escaneadoAtMs: b.escaneadoAtMs ? Number(b.escaneadoAtMs) : null,
+      });
+
+      await registrarAuditoria({
+        empresaId: req.autoscan!.empresaId,
+        userId: null,
+        accion: duplicado ? "cash.autoscan.document_duplicate" : "cash.autoscan.document_received",
+        entidad: "cash_autoscan_inbox",
+        entidadId: String(documento.id),
+        detalle: {
+          deviceId: req.autoscan!.deviceId,
+          centroId: req.autoscan!.centroId,
+          sha256: documento.sha256,
+          nombre: documento.nombreOriginal,
+        },
+      });
+
+      /*
+       * 202 y no 200: el documento está guardado pero todavía sin analizar. Y
+       * la respuesta es corta a propósito —el agente solo necesita saber que
+       * ya no tiene que reintentar—.
+       */
+      res.status(duplicado ? 200 : 202).json({
+        ok: true,
+        duplicado,
+        documentoId: documento.id,
+        estado: documento.estado,
+      });
+    })
+  );
+
+  /**
+   * Latido: sigo vivo, y ésta es mi versión.
+   *
+   * De vuelta va la versión del agente que hay publicada. El servidor NO decide
+   * si toca actualizar —no le corresponde: el agente es quien sabe qué lleva y
+   * quien manda en su propia máquina—; se limita a decir qué hay. La comparación
+   * y la decisión están en el agente, y ahí es donde vive la regla de que nunca
+   * se retrocede de versión.
+   *
+   * Va montado en el latido y no en una ruta propia porque el latido ya existe,
+   * ya viaja autenticado y ya lleva la versión en la ida. Una ruta más sería un
+   * sitio más que asegurar a cambio de nada.
+   */
+  m.post(
+    "/autoscan/heartbeat",
+    conDispositivo,
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { latido } = await import("./autoscan/devices.ts");
+      await latido(req.autoscan!.deviceId, typeof b.version === "string" ? b.version : null);
+
+      const { agentePublicado } = await import("./autoscan/version.ts");
+      res.json({ ok: true, agente: agentePublicado() });
+    })
+  );
+
+
+  return m;
+}

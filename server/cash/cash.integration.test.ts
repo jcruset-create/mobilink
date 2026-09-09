@@ -43,6 +43,7 @@ let documentos: typeof import("./documents.ts");
 let ingresos: typeof import("./bankdeposits.ts");
 let informe: typeof import("./report.ts");
 let reauth: typeof import("./reauth.ts");
+let duplicates: typeof import("./duplicates.ts");
 let migracion: typeof import("./migration.ts");
 let eventos: typeof import("./events/worker.ts");
 let transporte: typeof import("./events/transport.ts");
@@ -123,6 +124,7 @@ beforeAll(async () => {
   ingresos = await import("./bankdeposits.ts");
   informe = await import("./report.ts");
   reauth = await import("./reauth.ts");
+  duplicates = await import("./duplicates.ts");
   migracion = await import("./migration.ts");
   eventos = await import("./events/worker.ts");
   transporte = await import("./events/transport.ts");
@@ -1278,6 +1280,380 @@ describe.runIf(RUN)("ingresos bancarios", () => {
       importeCentimos: 507600,
     });
     expect(otra.remanenteNuevoCentimos).toBe(25); // 435045 + 72580 − 507600
+  });
+
+  /*
+   * El caso real: se reabrió la jornada del 07/09, se volvió a cerrar, y la
+   * caja del día siguiente amaneció con 674 € en vez de 337 €. En el histórico
+   * de esa jornada había DOS «cambio que queda en caja» de 337 €.
+   */
+  it("reabrir y volver a cerrar NO duplica el cambio final", async () => {
+    const caja = await crearCaja("reabrir-duplicado");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 2000, cantidad: 20 }], // 400 € en billetes de 20
+    });
+
+    const teorico = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: teorico.lineas });
+    const primero = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 2000, cantidad: 20 }],
+    });
+    expect(primero.sesion.cambioFinalCentimos).toBe(40000);
+
+    await servicio.reabrirJornada(ctx, sesion.id, "faltaba una factura");
+
+    /*
+     * Al reabrir, el dinero del cierre TIENE que volver a la caja. Si no
+     * vuelve, el segundo arqueo cuenta 337 € que para el libro mayor ya no
+     * están, y de ahí salían la diferencia fantasma y el «denominaciones ≠».
+     */
+    const trasReabrir = await servicio.stockDeJornada(sesion.id);
+    expect(trasReabrir.totalCentimos).toBe(40000);
+
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: trasReabrir.lineas });
+    const segundo = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 2000, cantidad: 20 }],
+    });
+
+    // Lo que se queda en caja son 400 €, no 800 €.
+    expect(segundo.sesion.cambioFinalCentimos).toBe(40000);
+    // Y no hay diferencia de arqueo inventada, ni denominaciones descuadradas.
+    expect(segundo.sesion.diferenciaCentimos).toBe(0);
+    expect(segundo.sesion.denominacionesCuadran).toBe(true);
+
+    /*
+     * En el libro mayor hay TRES asientos de cambio final —el primero, su
+     * inversa y el segundo— y eso es lo correcto: aquí nada se borra. Lo que
+     * tiene que salir a cero es el NETO, que es el dinero de verdad: 400 €
+     * salen una sola vez.
+     *
+     * Se mira el neto y no el número de filas justamente porque contar filas
+     * daba dos «vivas» también con el arreglo puesto, y habría hecho fallar una
+     * prueba correcta.
+     */
+    const { rows: netas } = await db.query(
+      `SELECT COALESCE(SUM(efectivo_neto_centimos), 0)::bigint AS neto,
+              COUNT(*) FILTER (WHERE estado = 'REVERSED')::int AS revertidas
+         FROM cash_operations
+        WHERE session_id = $1 AND tipo = 'CLOSING_FLOAT' AND estado <> 'VOID'`,
+      [sesion.id]
+    );
+    expect(Number(netas[0].neto)).toBe(-40000);
+    expect(netas[0].revertidas).toBe(1);
+
+    // Y el día siguiente hereda 337 €, que es donde se vio el fallo.
+    const manana = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(manana.sesion.fondoInicialCentimos).toBe(40000);
+  });
+
+  /*
+   * La reparación de la jornada que YA quedó mal en producción.
+   *
+   * Se reproduce como ocurrió: el `reabrir` viejo era literalmente un UPDATE
+   * del estado, así que se hace ese UPDATE a pelo y se vuelve a cerrar por el
+   * camino de siempre. Sale exactamente el estado del 07/09 —dos cambios
+   * finales vivos y un ajuste de arqueo que compensa al primero— sin inventar
+   * filas a mano.
+   */
+  it("reabrir repara una jornada que ya venía con el cambio duplicado", async () => {
+    const caja = await crearCaja("reabrir-repara");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 2000, cantidad: 20 }], // 400 €
+    });
+    const teorico = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: teorico.lineas });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 2000, cantidad: 20 }],
+    });
+
+    /* El `reabrir` de antes del arreglo: cambiar el estado y nada más. */
+    await db.query(`UPDATE cash_sessions SET estado = 'REOPENED' WHERE id = $1`, [sesion.id]);
+
+    /* Se vuelve a cerrar contando el dinero que está encima del mostrador. */
+    await servicio.guardarArqueo(ctx, {
+      sessionId: sesion.id,
+      contado: [{ valor: 2000, cantidad: 20 }],
+    });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 2000, cantidad: 20 }],
+    });
+
+    // El estropicio, tal cual se vio: dos cambios finales vivos.
+    const { rows: rotos } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_operations
+        WHERE session_id = $1 AND tipo = 'CLOSING_FLOAT'
+          AND estado = 'CONFIRMED' AND reversa_de_id IS NULL`,
+      [sesion.id]
+    );
+    expect(rotos[0].n).toBe(2);
+
+    /*
+     * Y ahora la reparación, con el arreglo puesto: reabrir deshace LOS DOS.
+     * Sin la regla de «todos los vivos», el primero se quedaría dentro y la
+     * jornada seguiría rota después de reabrirla — habría que entrar en la
+     * base de datos a mano, que sobre un libro de dinero es lo último que uno
+     * quiere hacer.
+     */
+    await servicio.reabrirJornada(ctx, sesion.id, "reparar el cambio duplicado");
+    expect((await servicio.stockDeJornada(sesion.id)).totalCentimos).toBe(40000);
+
+    const trasReabrir = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: trasReabrir.lineas });
+    const bueno = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 2000, cantidad: 20 }],
+    });
+    expect(bueno.sesion.cambioFinalCentimos).toBe(40000);
+    expect(bueno.sesion.diferenciaCentimos).toBe(0);
+
+    const manana = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(manana.sesion.fondoInicialCentimos).toBe(40000);
+  });
+
+  /*
+   * Y con TRES cierres encadenados, que es donde el primer criterio fallaba.
+   *
+   * Cada cierre malo deja su ajuste de +N € compensando el cambio que se
+   * llevó. Deshaciendo todos los cambios pero solo el ajuste del ÚLTIMO cierre
+   * —que era el criterio de la primera versión— la caja se quedaba inflada:
+   * salía bien con dos cierres y mal con tres.
+   */
+  it("repara una jornada cerrada TRES veces", async () => {
+    const caja = await crearCaja("reabrir-tres");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 2000, cantidad: 20 }], // 400 €
+    });
+
+    /* Tres vueltas de cerrar con el `reabrir` viejo por medio. */
+    for (let vuelta = 0; vuelta < 3; vuelta += 1) {
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 20 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        cambioFinal: [{ valor: 2000, cantidad: 20 }],
+      });
+      if (vuelta < 2) {
+        await db.query(`UPDATE cash_sessions SET estado = 'REOPENED' WHERE id = $1`, [sesion.id]);
+      }
+    }
+
+    const { rows: rotos } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_operations
+        WHERE session_id = $1 AND tipo = 'CLOSING_FLOAT'
+          AND estado = 'CONFIRMED' AND reversa_de_id IS NULL`,
+      [sesion.id]
+    );
+    expect(rotos[0].n).toBe(3);
+
+    await servicio.reabrirJornada(ctx, sesion.id, "reparar tres cierres");
+
+    /* Los 400 € de verdad, ni 800 ni 1.200. */
+    expect((await servicio.stockDeJornada(sesion.id)).totalCentimos).toBe(40000);
+
+    const trasReabrir = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: trasReabrir.lineas });
+    const bueno = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 2000, cantidad: 20 }],
+    });
+    expect(bueno.sesion.cambioFinalCentimos).toBe(40000);
+    expect(bueno.sesion.diferenciaCentimos).toBe(0);
+
+    const manana = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(manana.sesion.fondoInicialCentimos).toBe(40000);
+  });
+
+  /*
+   * El fallo que de verdad rompió la caja del taller, y que costó encontrar
+   * porque los números no eran múltiplos del cambio: 337 € heredaban 485,70 y
+   * luego 567,10.
+   *
+   * `movimientosDeOperacion` leía valor y cantidad, pero NO `cartuchos` ni
+   * `bolsas`. Así que la reversión devolvía las monedas como SUELTAS aunque
+   * hubieran salido precintadas: los precintos no se compensaban nunca y se
+   * quedaban en el libro. Cada vuelta de reabrir y recerrar dejaba atrás los
+   * suyos, y el cambio del día siguiente crecía solo.
+   */
+  it("reabrir devuelve los precintos, no solo las monedas sueltas", async () => {
+    const caja = await crearCaja("reabrir-precintos");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      /* 1 billete de 20 € y 50 monedas de 1 €, que son DOS cartuchos de 25. */
+      fondoManual: [
+        { valor: 2000, cantidad: 1 },
+        { valor: 100, cantidad: 50 },
+      ],
+    });
+    expect((await servicio.stockDeJornada(sesion.id)).totalCentimos).toBe(7000);
+
+    /*
+     * El cierre de verdad: se cuenta y se deja el cambio con las monedas YA
+     * precintadas en dos cartuchos. Es lo que hace el cajero cuando ha llegado
+     * a los 25 de un tubo, y es la única forma de que los contadores de
+     * precinto entren en el libro.
+     */
+    const cerrarConPrecintos = async () => {
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 1 }],
+        cartuchos: [{ valor: 100, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        cambioFinal: [{ valor: 2000, cantidad: 1 }],
+        cambioFinalCartuchos: [{ valor: 100, cantidad: 2 }],
+      });
+    };
+
+    await cerrarConPrecintos();
+    await servicio.reabrirJornada(ctx, sesion.id, "corrección");
+
+    /* Reabrir deja el cajón como estaba al abrir: 70 € y ningún precinto. */
+    const tras = await servicio.stockDeJornada(sesion.id);
+    expect(tras.totalCentimos).toBe(7000);
+    expect(tras.cartuchos).toEqual([]);
+    expect(tras.bolsas).toEqual([]);
+
+    /*
+     * Y aquí está la trampa, que costó una vuelta entera de depuración: con UNA
+     * sola vuelta de reabrir, el fallo NO se ve. Sin leer `cartuchos` al
+     * revertir, las monedas vuelven como sueltas, y al netear por columnas esas
+     * sueltas de más tapan justo los cartuchos que se quedan dentro. El total
+     * sale redondo y las tres comprobaciones de arriba pasan igual.
+     *
+     * Lo que lo destapa es cerrar OTRA VEZ igual que la primera, que es lo que
+     * hizo la caja de verdad al repetir el cierre: cada vuelta deja atrás sus
+     * precintos y el día siguiente hereda de más. Aquí, 120 € en vez de 70.
+     */
+    await cerrarConPrecintos();
+    const manana = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(manana.sesion.fondoInicialCentimos).toBe(7000);
+  });
+
+  it("una jornada con reversiones viejas rotas ya no hereda de más", async () => {
+    /*
+     * La reparación de las cajas que ya tienen el fallo escrito.
+     *
+     * Arreglar la reversión sirve para las que vengan; las filas que ya están
+     * en el libro con los precintos a cero siguen ahí, y el libro no se toca.
+     * Lo que se arregla es quién manda al leerlas: las piezas netas, no los
+     * contadores de envase.
+     *
+     * Aquí se falsifica a mano el fallo viejo —reversiones con `cartuchos = 0`
+     * sobre un cierre que salió en cartuchos— y se comprueba que el día
+     * siguiente hereda lo que hay, no lo que dicen las columnas.
+     */
+    const caja = await crearCaja("herencia-rota");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 2000, cantidad: 1 },
+        { valor: 100, cantidad: 50 },
+      ],
+    });
+
+    const cerrarConPrecintos = async () => {
+      await servicio.guardarArqueo(ctx, {
+        sessionId: sesion.id,
+        contado: [{ valor: 2000, cantidad: 1 }],
+        cartuchos: [{ valor: 100, cantidad: 2 }],
+      });
+      await servicio.cerrarJornada(ctx, {
+        sessionId: sesion.id,
+        cambioFinal: [{ valor: 2000, cantidad: 1 }],
+        cambioFinalCartuchos: [{ valor: 100, cantidad: 2 }],
+      });
+    };
+
+    /* Dos vueltas de cerrar y reabrir con el fallo VIEJO puesto a mano. */
+    for (let i = 0; i < 2; i++) {
+      await cerrarConPrecintos();
+      await servicio.reabrirJornada(ctx, sesion.id, `vuelta ${i}`);
+      await db.query(
+        `UPDATE cash_denomination_movements m SET cartuchos = 0, bolsas = 0
+           FROM cash_operations o
+          WHERE o.id = m.operation_id AND o.session_id = $1 AND o.reversa_de_id IS NOT NULL`,
+        [sesion.id]
+      );
+    }
+
+    /* El teórico de la jornada nunca se equivocó: suma piezas, no envases. */
+    expect((await servicio.stockDeJornada(sesion.id)).totalCentimos).toBe(7000);
+
+    /* Y ahora lo que sí se equivocaba: lo que hereda el día siguiente. */
+    await cerrarConPrecintos();
+    const manana = await servicio.abrirJornada(ctx, { registerId: caja });
+    expect(manana.sesion.fondoInicialCentimos).toBe(7000);
+  });
+
+  it("reabrir devuelve también el ingreso del banco, no solo el cambio", async () => {
+    const caja = await crearCaja("reabrir-ingreso");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 2000, cantidad: 20 }], // 400 €
+    });
+    const teorico = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: teorico.lineas });
+
+    /* 400 € contados: 340 € se quedan y 60 € van al banco. */
+    const cierre = await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 2000, cantidad: 17 }],
+    });
+    expect(cierre.sesion.ingresoBancarioCentimos).toBe(6000);
+
+    await servicio.reabrirJornada(ctx, sesion.id, "el ingreso estaba mal");
+
+    /*
+     * Los 400 € enteros, no solo los 340 del cambio. Devolver una mitad y la
+     * otra no dejaría la caja creyendo que tiene 60 € menos de los que hay
+     * encima del mostrador.
+     */
+    expect((await servicio.stockDeJornada(sesion.id)).totalCentimos).toBe(40000);
+  });
+
+  it("reabrir no toca los ajustes que se asentaron durante el día", async () => {
+    const caja = await crearCaja("reabrir-ajustes");
+    const { sesion } = await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [{ valor: 2000, cantidad: 10 }], // 200 €
+    });
+
+    /* Un ajuste de media mañana: alguien regulariza antes de cerrar. */
+    const conMenos = [{ valor: 2000, cantidad: 9 }]; // faltan 20 €
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: conMenos });
+    await servicio.regularizarArqueo(ctx, { sessionId: sesion.id, motivo: "faltaban 20 €" });
+
+    const teorico = await servicio.stockDeJornada(sesion.id);
+    await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: teorico.lineas });
+    await servicio.cerrarJornada(ctx, {
+      sessionId: sesion.id,
+      cambioFinal: [{ valor: 2000, cantidad: 9 }],
+    });
+    await servicio.reabrirJornada(ctx, sesion.id, "corrección");
+
+    /*
+     * El ajuste de la mañana lo tecleó una persona y responde a un descuadre
+     * real: reabrir no puede borrarlo. Solo se deshace lo que asentó el cierre.
+     */
+    const { rows } = await db.query(
+      `SELECT estado FROM cash_operations
+        WHERE session_id = $1 AND tipo = 'ADJUSTMENT' AND concepto NOT LIKE '%al cerrar%'
+        ORDER BY id`,
+      [sesion.id]
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r: { estado: string }) => r.estado === "CONFIRMED")).toBe(true);
+    expect((await servicio.stockDeJornada(sesion.id)).totalCentimos).toBe(18000);
   });
 
   it("una jornada conciliada no se puede reabrir sin anular antes el ingreso", async () => {
@@ -5326,6 +5702,505 @@ describe.runIf(RUN)("cuentas anteriores al maestro de bancos", () => {
       [rows[0].id]
     );
     expect(despues[0].bank_id).toBe(bbva.id);
+  });
+});
+
+describe.runIf(RUN)("cobrar dos veces la misma factura", () => {
+  /**
+   * La protección entera, de punta a punta: detectar, negarse, autorizar con
+   * las credenciales de OTRO, y gastar la autorización una sola vez.
+   *
+   * El verificador de claves es enchufable —igual que en la reautenticación—,
+   * así que la REGLA se prueba sin Supabase delante.
+   */
+  const CAJERO = "00000000-0000-4000-a000-00000000cc01";
+  const ENCARGADO = "00000000-0000-4000-a000-00000000cc02";
+
+  async function caja() {
+    const id = await crearCaja(`dup-${Date.now()}`);
+    const { sesion } = await servicio.abrirJornada(ctx, { registerId: id });
+    return { registerId: id, sessionId: sesion.id };
+  }
+
+  /*
+   * Dos importes, y el cliente paga justo con billetes que existen: la caja
+   * abre vacía y aquí no se está probando el cambio, sino el duplicado. Si
+   * hubiera que devolver, fallaría por no tener con qué y taparía lo que sí
+   * interesa.
+   */
+  const NORMAL = 21000;
+  const OTRO = 31000;
+  const PIEZAS: Record<number, { valor: number; cantidad: number }[]> = {
+    [NORMAL]: [{ valor: 20000, cantidad: 1 }, { valor: 1000, cantidad: 1 }],
+    [OTRO]: [
+      { valor: 20000, cantidad: 1 },
+      { valor: 10000, cantidad: 1 },
+      { valor: 1000, cantidad: 1 },
+    ],
+  };
+
+  async function cobrar(
+    sessionId: number,
+    referencia: string,
+    importeCentimos = NORMAL,
+    autorizacionDuplicado?: string
+  ) {
+    return servicio.registrarCobro(
+      { ...ctx, userId: CAJERO },
+      {
+        sessionId,
+        importeCentimos,
+        formasPago: [{ forma: "CASH", importe: importeCentimos }],
+        efectivoRecibido: PIEZAS[importeCentimos],
+        concepto: "Reparación",
+        referencia,
+        autorizacionDuplicado,
+      }
+    );
+  }
+
+  /**
+   * Pone a una encargada al otro lado: su clave la reconoce el verificador y
+   * el directorio dice de qué empresa es y qué puede hacer.
+   *
+   * Las dos piezas van enchufadas porque las de verdad hablan con Supabase y
+   * con las tablas del SaaS —que en una base del módulo pueden no estar—, y lo
+   * que se prueba aquí es la REGLA, no el conector.
+   */
+  function conEncargado(opciones: { clave?: string; conPermiso?: boolean; empresa?: string } = {}) {
+    const { clave = "buena", conPermiso = true, empresa = EMPRESA } = opciones;
+    reauth.registrarVerificador({
+      verificar: async () => true,
+      identificar: async (_usuario, c) => (c === clave ? ENCARGADO : null),
+    });
+    duplicates.registrarDirectorio({
+      buscar: async (id) =>
+        id === ENCARGADO
+          ? {
+              empresaId: empresa,
+              nombre: "Encargada",
+              permisos: conPermiso
+                ? ["cash.view", "cash.duplicate_payment.override"]
+                : ["cash.view"],
+            }
+          : null,
+    });
+    return ENCARGADO;
+  }
+
+  /** Deshace los dos enchufes. Se llama siempre, pase lo que pase. */
+  function sinEncargado() {
+    reauth.registrarVerificador(null);
+    duplicates.registrarDirectorio(null);
+  }
+
+  async function autorizar(referencia: string, importeCentimos = NORMAL, clave = "buena") {
+    const { autorizarDuplicado } = await import("./duplicates.ts");
+    return autorizarDuplicado({
+      empresaId: EMPRESA,
+      solicitanteId: CAJERO,
+      autorizador: "encargada",
+      clave,
+      referencia,
+      importeCentimos,
+    });
+  }
+
+  it("el primer cobro pasa; el segundo NO, aunque la pantalla no supiera nada", async () => {
+    const { sessionId } = await caja();
+    const ref = `F-${Date.now()}`;
+    await cobrar(sessionId, ref);
+
+    await expect(cobrar(sessionId, ref)).rejects.toMatchObject({ codigo: "COBRO_DUPLICADO" });
+  });
+
+  it("la protección vale también para una factura tecleada a mano", async () => {
+    /*
+     * No depende del escáner. Quien teclea el número de una factura que ya se
+     * cobró se topa con lo mismo, que es lo que hace que esto sea una
+     * protección y no un aviso de la pantalla.
+     */
+    const { sessionId } = await caja();
+    const ref = `MANO-${Date.now()}`;
+    await cobrar(sessionId, ref);
+    await expect(cobrar(sessionId, ref)).rejects.toMatchObject({ codigo: "COBRO_DUPLICADO" });
+  });
+
+  it("con autorización de otra persona sí pasa, y queda el rastro de los dos", async () => {
+    const { sessionId } = await caja();
+    const ref = `AUT-${Date.now()}`;
+    const primero = await cobrar(sessionId, ref);
+    const encargado = conEncargado();
+    try {
+      const a = await autorizar(ref);
+      expect(a.token).toBeTruthy();
+      const segundo = await cobrar(sessionId, ref, NORMAL, a.token);
+      expect(segundo.operacionId).not.toBe(primero.operacionId);
+
+      // Quién cobró y quién autorizó, separados.
+      const { rows } = await db.query(
+        `SELECT solicitado_por, autorizado_por, consumida_operation_id
+           FROM cash_duplicate_overrides WHERE referencia = $1`,
+        [ref.toUpperCase()]
+      );
+      expect(rows[0].solicitado_por).toBe(CAJERO);
+      expect(rows[0].autorizado_por).toBe(encargado);
+      expect(rows[0].consumida_operation_id).toBe(segundo.operacionId);
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("la autorización NO se puede usar dos veces", async () => {
+    const { sessionId } = await caja();
+    const ref = `UNA-${Date.now()}`;
+    await cobrar(sessionId, ref);
+    conEncargado();
+    try {
+      const a = await autorizar(ref);
+      await cobrar(sessionId, ref, NORMAL, a.token);
+      await expect(cobrar(sessionId, ref, NORMAL, a.token)).rejects.toMatchObject({
+        codigo: "AUTORIZACION_NO_VALIDA",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("la autorización de una factura NO sirve para otra", async () => {
+    const { sessionId } = await caja();
+    const a1 = `A-${Date.now()}`;
+    const a2 = `B-${Date.now()}`;
+    await cobrar(sessionId, a1);
+    await cobrar(sessionId, a2);
+    conEncargado();
+    try {
+      const a = await autorizar(a1);
+      await expect(cobrar(sessionId, a2, NORMAL, a.token)).rejects.toMatchObject({
+        codigo: "AUTORIZACION_NO_VALIDA",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("la autorización de un importe NO sirve para otro", async () => {
+    const { sessionId } = await caja();
+    const ref = `IMP-${Date.now()}`;
+    await cobrar(sessionId, ref);
+    conEncargado();
+    try {
+      const a = await autorizar(ref, NORMAL);
+      await expect(cobrar(sessionId, ref, OTRO, a.token)).rejects.toMatchObject({
+        codigo: "AUTORIZACION_NO_VALIDA",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("una clave equivocada no autoriza nada", async () => {
+    const { sessionId } = await caja();
+    const ref = `CLA-${Date.now()}`;
+    await cobrar(sessionId, ref);
+    conEncargado();
+    try {
+      await expect(autorizar(ref, NORMAL, "mala")).rejects.toMatchObject({
+        codigo: "CLAVE_NO_VALIDA",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("un cajero con clave buena pero SIN permiso tampoco autoriza", async () => {
+    const { sessionId } = await caja();
+    const ref = `PER-${Date.now()}`;
+    await cobrar(sessionId, ref);
+    // La clave sigue siendo buena; el permiso no está. Es el caso del cajero
+    // que se sabe la clave del encargado.
+    conEncargado({ conPermiso: false });
+    try {
+      await expect(autorizar(ref)).rejects.toMatchObject({
+        codigo: "AUTORIZADOR_SIN_PERMISO",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("no se autoriza lo que no es un duplicado", async () => {
+    // Si nadie ha cobrado esa factura, no hay protección que levantar: pedir la
+    // clave para nada sería acostumbrar a la gente a teclearla porque sí.
+    conEncargado();
+    try {
+      await expect(autorizar(`LIBRE-${Date.now()}`)).rejects.toMatchObject({
+        codigo: "SIN_DUPLICADO",
+      });
+    } finally {
+      sinEncargado();
+    }
+  });
+
+  it("dos cobros a la vez de la misma factura: uno solo", async () => {
+    /*
+     * El doble clic. No hace falta nada nuevo: el cobro ya bloquea su jornada,
+     * así que las dos peticiones se ponen en fila y la segunda ve el asiento de
+     * la primera.
+     */
+    const { sessionId } = await caja();
+    const ref = `CONC-${Date.now()}`;
+    const resultados = await Promise.allSettled([
+      cobrar(sessionId, ref),
+      cobrar(sessionId, ref),
+    ]);
+    expect(resultados.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const fallo = resultados.find((r) => r.status === "rejected");
+    expect((fallo as PromiseRejectedResult).reason).toMatchObject({ codigo: "COBRO_DUPLICADO" });
+
+    const { rows } = await db.query(
+      `SELECT count(*)::int AS n FROM cash_operations
+        WHERE empresa_id = $1 AND tipo = 'COLLECTION' AND estado = 'CONFIRMED'
+          AND upper(trim(referencia)) = $2`,
+      [EMPRESA, ref.toUpperCase()]
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("un cobro sin número de factura no se estorba a sí mismo", async () => {
+    // Sin referencia no hay nada con lo que comparar, y el mostrador cobra sin
+    // factura todos los días.
+    const { sessionId } = await caja();
+    await servicio.registrarCobro(ctx, {
+      sessionId,
+      importeCentimos: 1000,
+      formasPago: [{ forma: "CASH", importe: 1000 }],
+      efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+      concepto: "Sin factura",
+    });
+    await expect(
+      servicio.registrarCobro(ctx, {
+        sessionId,
+        importeCentimos: 1000,
+        formasPago: [{ forma: "CASH", importe: 1000 }],
+        efectivoRecibido: [{ valor: 1000, cantidad: 1 }],
+        concepto: "Sin factura",
+      })
+    ).resolves.toBeTruthy();
+  });
+});
+
+describe.runIf(RUN)("canjear hoy e ingresar otro día", () => {
+  /**
+   * Dos cierres pendientes, cada uno con su composición, y una jornada abierta
+   * con billetes en el cajón. Es el escenario donde el canje deja de ir pegado
+   * al ingreso y hay que decidir a qué montón pertenece.
+   */
+  async function dosCierres() {
+    const caja = await crearCaja(`canje2-${Date.now()}`);
+
+    // Cierre A: 30,00 € al banco, con 10,00 € en monedas de 1 €.
+    const A = [
+      { valor: 2000, cantidad: 1 },
+      { valor: 100, cantidad: 10 },
+    ];
+    const a = (await servicio.abrirJornada(ctx, { registerId: caja })).sesion;
+    await servicio.registrarOperacion(ctx, {
+      sessionId: a.id,
+      tipo: "MANUAL_IN",
+      importeCentimos: 3000,
+      formasPago: [{ forma: "CASH", importe: 3000 }],
+      efectivoRecibido: A,
+      concepto: "Cobros del día A",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: a.id, contado: A });
+    await servicio.cerrarJornada(ctx, { sessionId: a.id, cambioFinal: [] });
+
+    // Cierre B: 25,00 € al banco, con 5,00 € en monedas de 0,50 €.
+    const B = [
+      { valor: 2000, cantidad: 1 },
+      { valor: 50, cantidad: 10 },
+    ];
+    const b = (await servicio.abrirJornada(ctx, { registerId: caja })).sesion;
+    await servicio.registrarOperacion(ctx, {
+      sessionId: b.id,
+      tipo: "MANUAL_IN",
+      importeCentimos: 2500,
+      formasPago: [{ forma: "CASH", importe: 2500 }],
+      efectivoRecibido: B,
+      concepto: "Cobros del día B",
+    });
+    await servicio.guardarArqueo(ctx, { sessionId: b.id, contado: B });
+    await servicio.cerrarJornada(ctx, { sessionId: b.id, cambioFinal: [] });
+
+    // Hoy, abierta, con billetes de sobra en el cajón para canjear.
+    const hoy = (await servicio.abrirJornada(ctx, {
+      registerId: caja,
+      fondoManual: [
+        { valor: 5000, cantidad: 2 },
+        { valor: 2000, cantidad: 4 },
+        { valor: 1000, cantidad: 4 },
+      ],
+    })).sesion;
+    return { caja, a: a.id, b: b.id, hoy };
+  }
+
+  const valor = (l: readonly { valor: number; cantidad: number }[]) =>
+    l.reduce((a, x) => a + x.valor * x.cantidad, 0);
+
+  it("se canjea hoy, no se ingresa, y mañana el canje sigue ahí", async () => {
+    const { caja, a, b } = await dosCierres();
+    const sessionIds = [a, b];
+
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    // 15,00 € en monedas: los 10 € de euros del cierre A y los 5 € del B.
+    expect(p.enMonedasCentimos).toBe(1500);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds,
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+
+    // Sin ingresar nada: el canje queda preparado y se ve.
+    const panel = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(panel.canjes).toHaveLength(1);
+    expect(panel.canjes[0].sessionIds.sort()).toEqual([a, b].sort());
+    expect(panel.ingresos).toHaveLength(0);
+    // Y no ha movido ni un céntimo del total pendiente: solo la composición.
+    expect(panel.totalPendienteCentimos).toBe(5500);
+
+    /*
+     * El montón tiene ahora menos monedas y más billetes, exactamente por el
+     * valor del canje. No se comprueba contra un número escrito a mano: lo que
+     * se puede convertir depende de los billetes que tenga el cajón, y lo que
+     * importa aquí es que el montón se mueva JUSTO lo que dijo la propuesta.
+     */
+    const convertido = p.canje!.valorMonedasCentimos;
+    expect(convertido).toBeGreaterThan(0);
+    const bolsa = await ingresos.composicionPendiente(EMPRESA, caja, sessionIds);
+    expect(valor(bolsa.monedas)).toBe(1500 - convertido);
+    expect(valor(bolsa.billetes)).toBe(4000 + convertido);
+    expect(valor(bolsa.billetes) + valor(bolsa.monedas)).toBe(5500);
+  });
+
+  it("ingresar SOLO uno de los cierres no se lleva el canje de los dos", async () => {
+    /*
+     * Es el descuadre que cerró esta funcionalidad. El canje se hizo contra A
+     * y B, así que un ingreso que solo lleve A no puede aplicárselo: se llevó
+     * monedas que venían de B. Antes se aplicaba igual —el desglose salía con
+     * cantidades negativas que se tiraban en silencio— y encima el ingreso lo
+     * consumía, así que a B no le llegaba nunca.
+     */
+    const { caja, a, b } = await dosCierres();
+    const p = await ingresos.proponerCanje(EMPRESA, caja, [a, b]);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+
+    // Mirando SOLO el cierre A, el canje no cuenta: A sigue con sus 10 € en
+    // monedas de 1 €, que es lo que hay si no se toca el montón entero.
+    const soloA = await ingresos.composicionPendiente(EMPRESA, caja, [a]);
+    expect(valor(soloA.monedas)).toBe(1000);
+    expect(valor(soloA.billetes) + valor(soloA.monedas)).toBe(3000);
+    // Ninguna línea en negativo, ni tirada en silencio.
+    for (const l of [...soloA.billetes, ...soloA.monedas]) {
+      expect(l.cantidad).toBeGreaterThan(0);
+    }
+
+    // Y al ingresar solo A, el canje NO se consume: sigue esperando.
+    await ingresos.crearIngreso(ctx, { registerId: caja, sessionIds: [a], importeCentimos: 2000 });
+    const panel = await ingresos.panelIngresos(EMPRESA, caja);
+    expect(panel.canjes).toHaveLength(1);
+  });
+
+  it("el ingreso que se lleva TODOS sus cierres sí lo consume", async () => {
+    const { caja, a, b } = await dosCierres();
+    const p = await ingresos.proponerCanje(EMPRESA, caja, [a, b]);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+    await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      importeCentimos: 5500,
+    });
+    expect((await ingresos.panelIngresos(EMPRESA, caja)).canjes).toEqual([]);
+  });
+
+  it("deshacer devuelve el montón y el cajón a como estaban", async () => {
+    const { caja, a, b, hoy } = await dosCierres();
+    const sessionIds = [a, b];
+    const cajonAntes = (await servicio.detalleJornada(hoy.id)).totalStockCentimos;
+    const bolsaAntes = await ingresos.composicionPendiente(EMPRESA, caja, sessionIds);
+
+    const p = await ingresos.proponerCanje(EMPRESA, caja, sessionIds);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds,
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+
+    const preparado = (await ingresos.panelIngresos(EMPRESA, caja)).canjes[0];
+    await ingresos.deshacerCanje(ctx, preparado.id);
+
+    // El cajón, pieza a pieza como estaba.
+    expect((await servicio.detalleJornada(hoy.id)).totalStockCentimos).toBe(cajonAntes);
+    // Y el montón, con sus monedas otra vez.
+    const bolsaDespues = await ingresos.composicionPendiente(EMPRESA, caja, sessionIds);
+    expect(bolsaDespues.monedas).toEqual(bolsaAntes.monedas);
+    expect(bolsaDespues.billetes).toEqual(bolsaAntes.billetes);
+    // Y ya no figura como preparado.
+    expect((await ingresos.panelIngresos(EMPRESA, caja)).canjes).toEqual([]);
+  });
+
+  it("un canje deshecho no se deshace dos veces", async () => {
+    const { caja, a, b } = await dosCierres();
+    const p = await ingresos.proponerCanje(EMPRESA, caja, [a, b]);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+    const id = (await ingresos.panelIngresos(EMPRESA, caja)).canjes[0].id;
+    await ingresos.deshacerCanje(ctx, id);
+    await expect(ingresos.deshacerCanje(ctx, id)).rejects.toMatchObject({
+      codigo: "CANJE_YA_DESHECHO",
+    });
+  });
+
+  it("un canje YA ingresado no se deshace: hay que anular el ingreso antes", async () => {
+    const { caja, a, b } = await dosCierres();
+    const p = await ingresos.proponerCanje(EMPRESA, caja, [a, b]);
+    await ingresos.registrarCanje(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      monedasEntregadas: p.canje!.monedasEntregadas,
+      billetesEntregados: p.canje!.billetesEntregados,
+      billetesRecibidos: p.canje!.billetesRecibidos,
+    });
+    const id = (await ingresos.panelIngresos(EMPRESA, caja)).canjes[0].id;
+    await ingresos.crearIngreso(ctx, {
+      registerId: caja,
+      sessionIds: [a, b],
+      importeCentimos: 5500,
+    });
+    await expect(ingresos.deshacerCanje(ctx, id)).rejects.toMatchObject({
+      codigo: "CANJE_YA_INGRESADO",
+    });
   });
 });
 

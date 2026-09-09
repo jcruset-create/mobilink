@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { loadRoadsideTrackingFromBackend } from "../modules/roadsideAssistanceApi";
+import { horaDelPaso } from "../modules/seguimientoPasos";
 const RoadsideMap = lazy(() => import("../components/RoadsideMap"));
 import type {
   RoadsideAssistance,
@@ -275,8 +276,15 @@ export default function RoadsideTrackingPage() {
 
   const files: RoadsideAssistanceFile[] = data?.files ?? [];
 
-  // Furgoneta tal y como la ve el cliente: marca (y modelo, si está) más la
-  // matrícula. El nombre interno solo aparece si no hay ninguno de los dos.
+  /*
+   * Furgoneta tal y como la ve el cliente: marca (y modelo, si está) más la
+   * matrícula. El nombre interno solo aparece si no hay ninguno de los dos.
+   *
+   * Cuando no hay ninguna se dice «Sin asignar», no «Pendiente»: en esta
+   * pantalla «pendiente» era también el nombre del primer estado —hoy
+   * «Gestionada»— y usar la misma palabra para dos cosas distintas hacía
+   * dudar de si faltaba la furgoneta o de en qué punto iba la asistencia.
+   */
   const vanLabel =
     [
       [data?.vanMarca, data?.vanModelo].filter(Boolean).join(" ").trim(),
@@ -285,7 +293,7 @@ export default function RoadsideTrackingPage() {
       .filter(Boolean)
       .join(" · ") ||
     assistance.assignedVehicleName ||
-    "Pendiente";
+    "Sin asignar";
   const isFinished =
     assistance.status === "llegada_taller" ||
     assistance.status === "cancelada";
@@ -432,6 +440,7 @@ export default function RoadsideTrackingPage() {
             {ROADSIDE_ASSISTANCE_STATUS_FLOW.map((status, index) => {
               const done = index < currentStep;
               const current = index === currentStep;
+              const hora = horaDelPaso(status, assistance, data.events);
               return (
                 <div
                   key={status}
@@ -455,6 +464,20 @@ export default function RoadsideTrackingPage() {
                       {ROADSIDE_ASSISTANCE_STATUS_LABELS[status]}
                     </div>
                   </div>
+                  {/*
+                    La hora solo si la hay. Un «-» en los pasos que aún no han
+                    ocurrido llenaría la rejilla de guiones sin decir nada: que
+                    estén en gris ya cuenta que no han pasado.
+                  */}
+                  {hora != null && (
+                    <div
+                      className={`mt-1 pl-6 text-xs font-semibold tabular-nums ${
+                        done ? "text-emerald-700" : current ? "text-orange-700" : "text-slate-400"
+                      }`}
+                    >
+                      {formatTime(hora)}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -470,7 +493,7 @@ export default function RoadsideTrackingPage() {
             </div>
             <div className="space-y-2 text-sm font-semibold text-slate-700">
               <div className="flex flex-wrap items-center gap-2">
-                <span>Operario: {assistance.assignedTechName || "Pendiente"}</span>
+                <span>Operario: {assistance.assignedTechName || "Sin asignar"}</span>
                 {data?.techPhone && (
                   <a
                     href={`tel:${data.techPhone}`}

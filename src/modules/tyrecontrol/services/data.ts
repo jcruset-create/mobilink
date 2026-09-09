@@ -671,12 +671,45 @@ export async function corregirPosicion(params: { montajeId: string; posicionCorr
   return data as string;
 }
 
-export async function corregirMontado(params: { montajeId: string; neumaticoCorrectoId: string; observaciones?: string | null }): Promise<string> {
+export async function corregirMontado(params: {
+  montajeId: string; neumaticoCorrectoId: string; observaciones?: string | null;
+  revisionId?: string | null; metodo?: string | null;
+}): Promise<string> {
   const { data, error } = await supabase.rpc("tc_corregir_montado", {
     p_montaje: params.montajeId, p_neumatico_correcto: params.neumaticoCorrectoId, p_obs: params.observaciones ?? null,
+    // De qué revisión salió y cómo se identificó. Sin esto, dentro de seis
+    // meses la corrección es un cambio sin explicación.
+    p_revision: params.revisionId ?? null, p_metodo: params.metodo ?? null,
   });
   if (error) throw new Error(error.message);
   return data as string;
+}
+
+/**
+ * Neumáticos que pueden ser "el que de verdad hay puesto" en una posición.
+ *
+ * NO sirve listarNeumaticosDisponibles: esa solo devuelve almacén y reservado,
+ * y la goma que aparece en una revisión de papel suele estar en cualquier otro
+ * estado —no localizada, extraviada, usada, pendiente de reparar— justamente
+ * porque el registro estaba mal. Se excluyen las montadas (ya ruedan en otro
+ * sitio y la base de datos lo rechazaría) y las descartadas.
+ *
+ * Mismo criterio que buscarNeumaticosParaCorregir en la APK.
+ */
+export async function buscarNeumaticosParaCorregir(empresaId: string, texto: string): Promise<Neumatico[]> {
+  let q = supabase.from("tc_neumaticos").select("*")
+    .eq("empresa_id", empresaId).eq("activo", true)
+    .not("estado", "in", '("montado","descartado")');
+  const t = texto.trim();
+  if (t) {
+    q = q.or([
+      `numero_interno.ilike.%${t}%`, `codigo_interno.ilike.%${t}%`,
+      `numero_serie.ilike.%${t}%`, `rfid_epc.ilike.%${t}%`, `dot.ilike.%${t}%`,
+    ].join(","));
+  }
+  const { data, error } = await q.order("codigo_interno").limit(50);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Neumatico[];
 }
 
 export async function historialNeumatico(neumaticoId: string): Promise<HistorialMontaje[]> {
@@ -948,6 +981,39 @@ export async function liberarReserva(reservaId: string, motivo?: string | null):
 }
 
 // ── Operaciones Fase 6: anulación, auditoría, detalle ─────────
+/**
+ * Corrige DATOS de una operación ya hecha: razón, observaciones, número de
+ * serie y DOT.
+ *
+ * NO mueve neumáticos ni toca el stock, y no deja cambiar el destino: el
+ * destino vive en la operación y el estado en la ficha de la goma, los pone la
+ * misma RPC a la vez, y cambiar solo uno los dejaría contando cosas distintas.
+ *
+ * Puede el técnico que la hizo, además del administrador. El motivo es
+ * obligatorio y queda en tc_operacion_auditoria.
+ */
+export async function corregirOperacion(params: {
+  operacionId: string;
+  motivoCorreccion: string;
+  motivo?: string | null;
+  observaciones?: string | null;
+  numeroSerie?: string | null;
+  dot?: string | null;
+}): Promise<{ cambiado: boolean }> {
+  const cambios: Record<string, unknown> = {};
+  if (params.motivo !== undefined) cambios.motivo = params.motivo;
+  if (params.observaciones !== undefined) cambios.observaciones = params.observaciones;
+  if (params.numeroSerie !== undefined) cambios.numero_serie = params.numeroSerie;
+  if (params.dot !== undefined) cambios.dot = params.dot;
+  const { data, error } = await supabase.rpc("tc_corregir_operacion", {
+    p_operacion: params.operacionId,
+    p_cambios: cambios,
+    p_motivo: params.motivoCorreccion,
+  });
+  if (error) throw new Error(error.message);
+  return (data ?? { cambiado: false }) as { cambiado: boolean };
+}
+
 export async function anularOperacion(operacionId: string, motivo: string): Promise<void> {
   const { error } = await supabase.rpc("tc_anular_operacion", { p_operacion: operacionId, p_motivo: motivo });
   if (error) throw new Error(error.message);
@@ -1466,6 +1532,23 @@ async function tokenSesion(): Promise<string> {
   const token = sess.session?.access_token;
   if (!token) throw new Error("Sesión no válida");
   return token;
+}
+
+/**
+ * El parte de servicio en PDF (la plantilla Conti360) de una intervención.
+ *
+ * Devuelve un enlace firmado y caducable, no el PDF: es el mismo endpoint que
+ * usa la tablet, y así el navegador lo abre en una pestaña sin tener que
+ * meter el token en la URL —donde acabaría en el historial y en los registros.
+ */
+export async function enlaceParteInterventionPdf(intervencionId: string): Promise<string> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/parte/${intervencionId}/pdf/enlace`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "No se ha podido generar el PDF");
+  return (j as any).url as string;
 }
 
 export async function listarDocumentosVehiculo(vehiculoId: string): Promise<DocumentoVehiculo[]> {
@@ -2738,6 +2821,29 @@ export async function listarReferenciasPendientes(): Promise<ReferenciaNeumatico
     .order("referencia_completa");
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as ReferenciaNeumatico[];
+}
+
+/**
+ * Vehículos que un técnico dio de alta desde la tablet y nadie ha repasado.
+ *
+ * Nacen con lo imprescindible para sostener un parte —empresa, matrícula,
+ * tipo y medida— y sin marca ni modelo, porque preguntárselas al operario en
+ * el arcén es la forma de que abandone. Alguien tiene que completarlas, y sin
+ * esta lista nadie se entera de que están.
+ */
+export async function listarVehiculosPendientes(): Promise<Vehiculo[]> {
+  const { data, error } = await supabase.from("tc_vehiculos")
+    .select("*, empresa:tc_empresas(*), tipo:tc_tipos_vehiculo(*)")
+    .eq("activo", true).eq("pendiente_validar", true)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as Vehiculo[];
+}
+
+/** Da por bueno un vehículo dado de alta desde la tablet. Solo administradores. */
+export async function validarVehiculo(id: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_validar_vehiculo", { p_vehiculo: id });
+  if (error) throw new Error(error.message);
 }
 
 /** Da por buena una referencia provisional. Solo administradores. */

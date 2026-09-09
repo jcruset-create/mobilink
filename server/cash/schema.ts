@@ -776,6 +776,79 @@ export async function initCash(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS cash_deposit_swaps_pendientes_idx
       ON cash_deposit_swaps(register_id) WHERE bank_deposit_id IS NULL;
+
+    /* Deshacer un canje preparado.
+       No se borra la fila ni se revierte la operación original: días después
+       su jornada ya está cerrada y el libro mayor no se toca hacia atrás. Se
+       asienta el canje INVERSO en la jornada de hoy —que es lo que pasa de
+       verdad: alguien va al cajón y lo cambia al revés— y se apunta aquí. El
+       montón vuelve a su composición de antes porque esta fila deja de
+       contar, y el cajón vuelve solo porque las dos operaciones se compensan. */
+    ALTER TABLE cash_deposit_swaps
+      ADD COLUMN IF NOT EXISTS anulado_at_ms BIGINT;
+    ALTER TABLE cash_deposit_swaps
+      ADD COLUMN IF NOT EXISTS anulado_por UUID;
+    ALTER TABLE cash_deposit_swaps
+      ADD COLUMN IF NOT EXISTS anulado_operation_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT;
+  `);
+
+  /*
+   * Contra qué cierres se hizo cada canje.
+   *
+   * Un canje cambia la COMPOSICIÓN del montón: salen monedas y entra un
+   * billete. Sin saber de qué cierres salieron esas monedas, el canje era de
+   * la caja entera, y eso descuadraba en silencio en cuanto se ingresaba solo
+   * una parte de los cierres: el canje se aplicaba a un montón más pequeño
+   * —quitándole monedas que venían de los otros cierres— y encima quedaba
+   * consumido por ese ingreso, así que a los demás ya no les llegaba.
+   *
+   * Con esta tabla un canje pendiente solo cuenta cuando TODOS sus cierres
+   * están en la selección, y solo lo consume un ingreso que los incluya.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_deposit_swap_sessions (
+      swap_id INTEGER NOT NULL REFERENCES cash_deposit_swaps(id) ON DELETE CASCADE,
+      session_id INTEGER NOT NULL REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      PRIMARY KEY (swap_id, session_id)
+    );
+    CREATE INDEX IF NOT EXISTS cash_deposit_swap_sessions_sesion_idx
+      ON cash_deposit_swap_sessions(session_id);
+  `);
+
+  /*
+   * Relleno para los canjes que ya existen, que no saben contra qué se
+   * hicieron. Se hace UNA vez, solo sobre los que no tienen cierres apuntados:
+   *
+   * · Los ya consumidos por un ingreso: sus cierres son EXACTAMENTE los de ese
+   *   ingreso. Ahí no se pierde nada.
+   * · Los todavía pendientes: se les ponen todos los cierres pendientes de su
+   *   caja. Es una suposición, y es la conservadora —el canje solo se aplicará
+   *   cuando se ingrese el montón entero, que es justo lo que hace hoy la
+   *   pantalla— en vez de arriesgarse a aplicarlo a un montón al que no le
+   *   corresponde.
+   */
+  await pool.query(`
+    INSERT INTO cash_deposit_swap_sessions (swap_id, session_id)
+    SELECT s.id, l.session_id
+      FROM cash_deposit_swaps s
+      JOIN cash_bank_deposit_sessions l ON l.deposit_id = s.bank_deposit_id
+     WHERE s.bank_deposit_id IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM cash_deposit_swap_sessions x WHERE x.swap_id = s.id)
+    ON CONFLICT DO NOTHING;
+
+    INSERT INTO cash_deposit_swap_sessions (swap_id, session_id)
+    SELECT s.id, c.id
+      FROM cash_deposit_swaps s
+      JOIN cash_sessions c
+        ON c.register_id = s.register_id
+       AND c.estado = 'CLOSED'
+       AND c.ingreso_bancario_centimos > 0
+       AND NOT EXISTS (
+             SELECT 1 FROM cash_bank_deposit_sessions l
+              WHERE l.session_id = c.id AND l.vigente)
+     WHERE s.bank_deposit_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM cash_deposit_swap_sessions x WHERE x.swap_id = s.id)
+    ON CONFLICT DO NOTHING;
   `);
 
   /*
@@ -1123,6 +1196,46 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * Autorizaciones para cobrar una factura que ya consta cobrada.
+   *
+   * Una fila por excepción concedida, y CADA UNA VALE PARA UN SOLO COBRO. Todo
+   * lo que la ata está en la propia fila —empresa, número de factura, importe—
+   * porque una autorización que sirviera para otra factura o para otro importe
+   * no autorizaría nada: sería una llave maestra con fecha de caducidad.
+   *
+   * Del token solo se guarda el hash. Es una credencial que vale dinero
+   * mientras vive, y una copia de la base de datos no debe permitir cobrar.
+   *
+   * `solicitado_por` y `autorizado_por` van separados aunque a veces coincidan:
+   * quién cobra y quién levanta la protección son dos preguntas distintas, y
+   * mezclarlas es perder justo el dato por el que existe esta tabla.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_duplicate_overrides (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      /* Normalizada igual que se compara: sin espacios y en mayúsculas. */
+      referencia TEXT NOT NULL,
+      importe_centimos BIGINT NOT NULL CHECK (importe_centimos > 0),
+      /* El cobro que ya existía cuando se concedió. Para el rastro. */
+      operacion_previa_id INTEGER REFERENCES cash_operations(id) ON DELETE SET NULL,
+      solicitado_por UUID,
+      autorizado_por UUID NOT NULL,
+      motivo TEXT,
+      creado_at_ms BIGINT NOT NULL,
+      expira_at_ms BIGINT NOT NULL,
+      /* Al usarse queda marcada con el cobro que la gastó. No se borra: es el
+         rastro de que la excepción se ejerció, y contra qué. */
+      consumida_operation_id INTEGER REFERENCES cash_operations(id) ON DELETE SET NULL,
+      consumida_at_ms BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS cash_duplicate_overrides_vigentes_idx
+      ON cash_duplicate_overrides(empresa_id, referencia)
+      WHERE consumida_at_ms IS NULL;
+  `);
+
+  /*
    * Índice de cobertura para las consultas de consumo (fases 17 a 20).
    *
    * La predicción y el reparto preguntan lo mismo por cada caja: qué piezas han
@@ -1445,6 +1558,233 @@ export async function initCash(): Promise<void> {
        tabla que ya existe, y sin esto el primer escaneo fallido después de
        actualizar reventaría al escribir su rastro. */
     ALTER TABLE cash_invoice_scans ADD COLUMN IF NOT EXISTS error TEXT;
+  `);
+
+  /*
+   * ── AutoScan ──────────────────────────────────────────────────────────────
+   *
+   * Va AQUÍ, detrás de `cash_invoice_scans`, y no arriba con `cash_reauth`,
+   * que es donde pegaría por tema: `cash_autoscan_inbox.scan_id` referencia
+   * esa tabla, y una clave ajena a algo que todavía no existe se lleva por
+   * delante el `initCash` entero sobre una base recién creada. Sobre una que
+   * ya lo tenía todo no se nota — que es justo por qué hay que probarlo en
+   * vacío.
+   *
+   * Un escáner del mostrador deja el PDF en una carpeta y el documento aparece
+   * en Mobilink Cash sin que nadie pulse «subir factura».
+   *
+   * La pieza que obliga a tener tablas propias: **un documento de AutoScan
+   * existe ANTES que la operación de caja**. `cash_operation_documents` cuelga
+   * de una jornada (`session_id NOT NULL`) y de un cobro, y un escáner no sabe
+   * de jornadas: alguien escanea a las 20:40 con la caja ya cerrada. Meterlo
+   * ahí obligaría a inventar una jornada o a rechazar el documento, y las dos
+   * cosas están mal.
+   *
+   * Cuando por fin se cobra con él, el documento SE PROMOCIONA a
+   * `cash_operation_documents` apuntando al MISMO objeto del bucket. Un
+   * documento físico, un blob.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_autoscan_devices (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      /* De app_centros. El dispositivo NO puede cambiarlo: lo hereda del
+         código con el que se activó, y ese lo creó una persona. */
+      centro_id UUID NOT NULL,
+      nombre TEXT NOT NULL,
+      /* Solo el hash. Una copia de la base de datos no debe permitir subir. */
+      secret_hash TEXT NOT NULL UNIQUE,
+      /* Versión del agente, que llega en el latido. Para saber a quién
+         actualizar sin tener que entrar en cada mostrador. */
+      version TEXT,
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL,
+      ultimo_visto_at_ms BIGINT,
+      revocado_por UUID,
+      revocado_at_ms BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS cash_autoscan_devices_centro_idx
+      ON cash_autoscan_devices(empresa_id, centro_id);
+
+    /* El código que se teclea UNA vez en el agente para activarlo.
+       Lleva dentro la empresa y el centro: es lo que hace que el dispositivo
+       no pueda elegirlos. */
+    CREATE TABLE IF NOT EXISTS cash_autoscan_activation_codes (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      centro_id UUID NOT NULL,
+      codigo_hash TEXT NOT NULL UNIQUE,
+      /* El nombre que llevará el dispositivo. Se decide al crear el código,
+         no al activarlo: si lo eligiera el agente, dos mostradores acabarían
+         llamándose «PC» y nadie sabría cuál revocar. */
+      nombre TEXT NOT NULL,
+      creado_por UUID,
+      creado_at_ms BIGINT NOT NULL,
+      expira_at_ms BIGINT NOT NULL,
+      usado_at_ms BIGINT,
+      usado_device_id INTEGER REFERENCES cash_autoscan_devices(id) ON DELETE SET NULL
+    );
+
+    /* La bandeja: documentos recibidos que todavía no son de ningún cobro. */
+    CREATE TABLE IF NOT EXISTS cash_autoscan_inbox (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      centro_id UUID NOT NULL,
+      device_id INTEGER NOT NULL REFERENCES cash_autoscan_devices(id) ON DELETE RESTRICT,
+
+      sha256 TEXT NOT NULL,
+      /* Metadato, NUNCA identificador: factura.pdf y factura_copia.pdf con los
+         mismos bytes son el mismo documento. */
+      nombre_original TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      tamano_bytes INTEGER NOT NULL,
+      /* Ruta en el bucket privado. La URL se firma al pedirla y caduca. */
+      ruta TEXT NOT NULL,
+
+      estado TEXT NOT NULL DEFAULT 'PENDIENTE'
+        CHECK (estado IN ('PENDIENTE','ANALIZANDO','LISTO','USADO','FALLIDO','DESCARTADO')),
+      error TEXT,
+      intentos INTEGER NOT NULL DEFAULT 0,
+
+      /* Distinta del sha256 a propósito: el sha responde «¿este contenido ya
+         está?» y esto responde «¿esta misma petición ya se procesó?». Un
+         reintento tras perder la conexión trae la misma clave. */
+      idempotency_key TEXT NOT NULL,
+
+      /* El análisis, para no volver a llamar a la IA cuando alguien lo abra. */
+      scan_id INTEGER REFERENCES cash_invoice_scans(id) ON DELETE SET NULL,
+      /* El cobro que acabó usándolo. NULL mientras espera. */
+      operation_id INTEGER REFERENCES cash_operations(id) ON DELETE SET NULL,
+
+      escaneado_at_ms BIGINT,
+      recibido_at_ms BIGINT NOT NULL,
+      analizado_at_ms BIGINT,
+      usado_at_ms BIGINT,
+      usado_por UUID,
+      descartado_por UUID,
+      descartado_at_ms BIGINT,
+      descartado_motivo TEXT
+    );
+
+    /* Unicidad de CONTENIDO, por centro, y en la base de datos y no en la
+       aplicación: dos agentes pueden subir el mismo PDF a la vez y un SELECT
+       previo no lo impide. Excluye los descartados a propósito: si alguien
+       tira un documento y lo vuelve a escanear, es que lo quiere. */
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_autoscan_inbox_contenido_idx
+      ON cash_autoscan_inbox(empresa_id, centro_id, sha256)
+      WHERE estado <> 'DESCARTADO';
+
+    /* Idempotencia: el reintento de una subida cortada no crea otra fila. */
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_autoscan_inbox_idem_idx
+      ON cash_autoscan_inbox(device_id, idempotency_key);
+
+    /* La bandeja de un centro, que es la consulta de la pantalla. */
+    CREATE INDEX IF NOT EXISTS cash_autoscan_inbox_bandeja_idx
+      ON cash_autoscan_inbox(empresa_id, centro_id, estado, recibido_at_ms);
+  `);
+
+  /*
+   * ── Conceptos de gasto y su destino ───────────────────────────────────────
+   *
+   * Para qué: hoy `cash_operations.concepto` es texto libre, y con texto libre
+   * no hay estadística posible — «DIETA», «Dieta», «dietas Juan» y «DIETA JUAN»
+   * son cuatro conceptos distintos para un ordenador y uno solo para el que
+   * paga.
+   *
+   * ## Dos ejes que NO son el mismo, y por qué no se mezclan
+   *
+   * Ya existe `cash_sections`, y contesta **de qué negocio es este dinero**
+   * (taller, gasolinera). El cierre y los informes YA desglosan por ella.
+   *
+   * Esto contesta otra pregunta: **a qué se ha imputado el gasto** — a un
+   * operario, a la unidad móvil 1, a nada. Meter «taller turismo» y «taller
+   * camión» como secciones habría partido en tres una sección que el cierre ya
+   * usa, y los cierres anteriores se habrían quedado apuntando a algo que ya no
+   * existe. Son dos ejes y viven separados.
+   *
+   * ## Un concepto dice qué destino pide
+   *
+   *     Dietas      → PERSONA        → sale la lista de operarios
+   *     Ferretería  → CENTRO_COSTE   → taller turismo, taller camión, unidad móvil 1
+   *     Varios      → NINGUNO        → no sale el segundo desplegable
+   *
+   * Por eso el segundo desplegable cambia solo: lo decide el concepto elegido,
+   * no una regla escondida en la pantalla.
+   *
+   * ## Compatibilidad
+   *
+   * `concepto` se queda **exactamente como estaba**. Estas dos columnas son
+   * opcionales y se añaden al lado. No hay migración que adivine que «DIETA»
+   * era el concepto Dietas: adivinar el pasado es cómo se ensucian las
+   * estadísticas antes de tener ninguna. Lo viejo se reclasifica a mano, como
+   * ya se hace con la sección.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_expense_concepts (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      /* No cambia nunca: es lo que queda escrito en las operaciones. */
+      codigo TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      /* Qué segundo desplegable pide este concepto. */
+      tipo_destino TEXT NOT NULL DEFAULT 'NINGUNO',
+      activo BOOLEAN NOT NULL DEFAULT true,
+      orden INTEGER NOT NULL DEFAULT 0,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, codigo),
+      CONSTRAINT cash_expense_concepts_tipo
+        CHECK (tipo_destino IN ('NINGUNO','PERSONA','CENTRO_COSTE'))
+    );
+    CREATE INDEX IF NOT EXISTS cash_expense_concepts_empresa_idx
+      ON cash_expense_concepts(empresa_id, activo, orden);
+
+    /*
+     * Los destinos, en UNA tabla con su tipo y no en dos.
+     *
+     * Un operario y un centro de coste se manejan igual —nombre, activo,
+     * orden— y se eligen en el mismo desplegable. Dos tablas idénticas
+     * obligarían a duplicar el CRUD, la API y la pantalla para no ganar nada;
+     * el «tipo» ya separa lo que hay que separar y es justo por lo que se
+     * filtra al enseñar la lista.
+     */
+    CREATE TABLE IF NOT EXISTS cash_expense_targets (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      tipo TEXT NOT NULL,
+      codigo TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      orden INTEGER NOT NULL DEFAULT 0,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, tipo, codigo),
+      CONSTRAINT cash_expense_targets_tipo
+        CHECK (tipo IN ('PERSONA','CENTRO_COSTE'))
+    );
+    CREATE INDEX IF NOT EXISTS cash_expense_targets_empresa_idx
+      ON cash_expense_targets(empresa_id, tipo, activo, orden);
+  `);
+
+  /*
+   * Las dos columnas en las operaciones. `ADD COLUMN IF NOT EXISTS` y no
+   * dentro del CREATE TABLE de arriba: `cash_operations` existe desde el
+   * principio y su CREATE no se vuelve a ejecutar.
+   *
+   * `ON DELETE SET NULL` porque un concepto no se borra —se desactiva—, pero
+   * si alguien lo borrara a mano en la base, un pago debe perder su
+   * clasificación, no desaparecer.
+   */
+  await pool.query(`
+    ALTER TABLE cash_operations
+      ADD COLUMN IF NOT EXISTS expense_concept_id INTEGER
+        REFERENCES cash_expense_concepts(id) ON DELETE SET NULL;
+    ALTER TABLE cash_operations
+      ADD COLUMN IF NOT EXISTS expense_target_id INTEGER
+        REFERENCES cash_expense_targets(id) ON DELETE SET NULL;
+    /* Por aquí entra la pantalla de estadísticas: gasto por concepto y fecha. */
+    CREATE INDEX IF NOT EXISTS cash_operations_concepto_idx
+      ON cash_operations(empresa_id, expense_concept_id, created_at_ms);
   `);
 
   await asignarCodigosDeCaja();

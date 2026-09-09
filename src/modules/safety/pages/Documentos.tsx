@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
-import { Plus, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { FileUp, Plus, X } from "lucide-react";
 import SafetyLayout from "../components/SafetyLayout";
 import { supabase } from "../services/supabase";
+import { apiFetch } from "../../apiFetch";
+import { API_BASE } from "../../workshopApi";
 
 type Documento = {
   id: string;
@@ -45,8 +47,31 @@ export default function Documentos() {
   const [form, setForm] = useState<any>({ ...EMPTY });
   const [editId, setEditId] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
+  const [subiendo, setSubiendo] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
+
+  async function subirArchivo(file: File) {
+    setSubiendo(true);
+    setError("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await apiFetch(`${API_BASE}/api/safety/documents/upload`, {
+        method: "POST",
+        body: fd,
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || `Error ${res.status}`);
+      setForm((f: any) => ({ ...f, archivo_url: data.url }));
+    } catch (e: any) {
+      setError(e.message || "Error subiendo el archivo");
+    } finally {
+      setSubiendo(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
 
   useEffect(() => { cargar(); }, []);
 
@@ -274,9 +299,22 @@ export default function Documentos() {
               <div><label className={LABEL}>Descripción</label>
                 <textarea value={form.descripcion} onChange={(e) => setForm({ ...form, descripcion: e.target.value })}
                   className={`mt-1 resize-none ${INPUT}`} rows={3} /></div>
-              <div><label className={LABEL}>URL archivo (PDF, etc.)</label>
-                <input value={form.archivo_url} onChange={(e) => setForm({ ...form, archivo_url: e.target.value })}
-                  className={`mt-1 ${INPUT}`} placeholder="https://..." /></div>
+              <div><label className={LABEL}>Archivo (PDF, etc.)</label>
+                <div className="mt-1 flex gap-2">
+                  <input value={form.archivo_url} onChange={(e) => setForm({ ...form, archivo_url: e.target.value })}
+                    className={INPUT} placeholder="https://... o sube un archivo" />
+                  <input ref={fileInputRef} type="file" accept="application/pdf,image/*" hidden
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) void subirArchivo(f); }} />
+                  <button type="button" onClick={() => fileInputRef.current?.click()} disabled={subiendo}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-600 disabled:opacity-50">
+                    <FileUp className="h-4 w-4" /> {subiendo ? "Subiendo..." : "Subir"}
+                  </button>
+                </div>
+                {form.archivo_url && (
+                  <a href={form.archivo_url} target="_blank" rel="noopener noreferrer"
+                    className="mt-1 block truncate text-xs text-amber-400 hover:underline">{form.archivo_url}</a>
+                )}
+              </div>
               <div><label className={LABEL}>Fecha caducidad</label>
                 <input type="date" value={form.fecha_caducidad} onChange={(e) => setForm({ ...form, fecha_caducidad: e.target.value })}
                   className={`mt-1 ${INPUT}`} /></div>

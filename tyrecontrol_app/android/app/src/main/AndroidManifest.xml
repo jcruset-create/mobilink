@@ -54,5 +54,12 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Android 11 o superior esconde las apps que no se declaran aqui.
+             Sin esto url_launcher no encuentra a nadie que abra el PDF del
+             parte y no pasa nada: ni error ni visor. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
     </queries>
 </manifest>

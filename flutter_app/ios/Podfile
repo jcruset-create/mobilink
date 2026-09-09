@@ -1,0 +1,111 @@
+# Podfile de Mobilink Assist.
+#
+# Es la plantilla que genera el propio Flutter 3.35 (templates/cocoapods/
+# Podfile-ios), con dos cosas encima. Se versiona en vez de dejar que se genere
+# sola precisamente por la segunda.
+#
+# ── 15.0, y de dónde sale ese número ────────────────────────────────────────
+#
+# Lo exige el motor de Flutter, no un capricho: la versión fijada en
+# codemagic.yaml (3.47.2) publica su pod con «s.ios.deployment_target = '15.0'»
+# —está en packages/flutter_tools/bin/podhelper.rb— y su propia plantilla de
+# Podfile trae «platform :ios, '15.0'».
+#
+# Los plugins de la app se conforman con mucho menos: el que más pide es 12.0
+# (video_player, shared_preferences, permission_handler, path_provider). Así que
+# el mínimo no sube para callar a CocoaPods, sube porque es lo que el motor
+# necesita para funcionar.
+#
+# Tiene que decir lo mismo que Runner.xcodeproj/project.pbxproj. Si no, o
+# CocoaPods no resuelve, o la app apunta más bajo que sus dependencias y falla
+# el enlazado.
+platform :ios, '15.0'
+
+# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first"
+  end
+
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
+end
+
+require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+flutter_ios_podfile_setup
+
+target 'Runner' do
+  use_frameworks!
+
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_ios_build_settings(target)
+
+    target.build_configurations.each do |config|
+      # ── Por qué esta lista existe ────────────────────────────────────────
+      #
+      # «permission_handler» compila POR DEFECTO el código de todos los
+      # permisos que sabe pedir: contactos, calendario, recordatorios,
+      # micrófono, reconocimiento de voz, seguimiento publicitario, Bluetooth…
+      # La app solo usa uno —la cámara, en services/camara.dart— pero el
+      # binario acabaría referenciando las APIs de todos los demás.
+      #
+      # Apple escanea eso al subir. Un binario que toca la API de contactos sin
+      # «NSContactsUsageDescription» en el Info.plist se rechaza en el momento
+      # (ITMS-90683), antes incluso de llegar a revisión. La alternativa sería
+      # declarar permisos que la app no ejerce, que es peor: pedirle a alguien
+      # acceso a su agenda «por si acaso».
+      #
+      # Así que se enciende lo que se usa y se apaga el resto. Si algún día se
+      # añade un permiso nuevo, hay que subirlo a 1 AQUÍ y poner su texto en el
+      # Info.plist: las dos cosas, o no funciona.
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
+        '$(inherited)',
+
+        'PERMISSION_CAMERA=1',
+
+        'PERMISSION_EVENTS=0',
+        'PERMISSION_EVENTS_FULL_ACCESS=0',
+        'PERMISSION_REMINDERS=0',
+        'PERMISSION_CONTACTS=0',
+        'PERMISSION_MICROPHONE=0',
+        'PERMISSION_SPEECH_RECOGNIZER=0',
+        'PERMISSION_PHOTOS=0',
+        'PERMISSION_NOTIFICATIONS=0',
+        'PERMISSION_MEDIA_LIBRARY=0',
+        'PERMISSION_SENSORS=0',
+        'PERMISSION_BLUETOOTH=0',
+        'PERMISSION_APP_TRACKING_TRANSPARENCY=0',
+        'PERMISSION_CRITICAL_ALERTS=0',
+        'PERMISSION_ASSISTANT=0',
+        'PERMISSION_LOCATION=0',
+      ]
+    end
+  end
+end
+
+# NOTA sobre PERMISSION_PHOTOS=0 y PERMISSION_LOCATION=0
+#
+# La app SÍ usa la galería y SÍ usa la ubicación, y sus textos siguen en el
+# Info.plist. Lo que no usa es a «permission_handler» para pedirlas: la galería
+# la pide «image_picker» y la ubicación «geolocator», cada uno con su propio
+# código. Estas macros solo apagan la parte de permission_handler.

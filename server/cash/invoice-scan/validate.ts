@@ -173,10 +173,14 @@ export function validar(
     referencia: campo(extraccion.numeroFactura, extraccion.confianza.numeroFactura, null),
     importeCentimos: campo(totalCentimos, extraccion.confianza.total, null),
     cliente: campo(nombreCliente, extraccion.confianza.cliente, null),
+    proveedor: campo(extraccion.emisor.nombre, extraccion.confianza.emisor, null),
     concepto: campo(extraccion.concepto, extraccion.confianza.concepto, null),
     formaCobro,
     importeCuadra,
     avisos,
+    // Lo rellena el servicio si el histórico dice que ya se cobró: aquí no se
+    // consulta nada, que es lo que permite probar esta pieza sin base de datos.
+    cobroPrevio: null,
     extra: extraccion,
   };
 }

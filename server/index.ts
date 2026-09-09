@@ -38,38 +38,58 @@ import { initConnect, mountConnect, startConnectWorker } from "./connect/index.t
 import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
 import { initEventLog } from "./eventlog/schema.ts";
 import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./eventlog/servicio.ts";
-import { tipoDesdeEstadoAssist } from "./eventlog/tipos.ts";
 import { initDocumentos } from "./documentos/schema.ts";
 import { createDocumentosRouter } from "./documentos/router.ts";
 import {
   olvidarFicheroDeAssist,
-  recalcularEstadoAdmin,
   registrarDocumento as registrarDocumentoDeAssist,
   registrarFicheroDeAssist,
 } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
+import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
+import { createTyreControlRouter } from "./tyrecontrol/router.ts";
+import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
+import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
+import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
+import { resolverVehiculo as resolverVehiculoTc } from "./tyrecontrol/vehiculos.ts";
+import { estadoDeVehiculo as estadoVehiculoTc } from "./tyrecontrol/estadoVehiculo.ts";
 import {
   initCorreo,
   mountCorreo,
-  revisarDocumentacionAlFinalizar,
   startCorreoWorker,
 } from "./correo/index.ts";
 import { resolverRecordatoriosPorDocumentos } from "./correo/servicio.ts";
 import { initExcepciones } from "./excepciones/schema.ts";
 import { createExcepcionesRouter } from "./excepciones/router.ts";
+import { initSatisfaction } from "./satisfaction/schema.ts";
+import { startSatisfactionWorker } from "./satisfaction/worker.ts";
+import { createSatisfactionPublicRouter } from "./satisfaction/routerPublico.ts";
+import { createCalidadRouter } from "./satisfaction/routerInterno.ts";
+import { createSatisfactionCallbackRouter } from "./satisfaction/routerCallback.ts";
+import { RUTA_CALLBACK } from "./satisfaction/urlPublica.ts";
+import {
+  engancharPosteriores, prepararRespuestaTrasCambio,
+} from "./cierre/finalizacion.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
+import { mountParte } from "./tyrecontrol/parte/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
+import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
+import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
+import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+/*
+ * El cliente vive ahora en `core/twilio.ts`, para que lo pueda usar también el
+ * envío de Satisfaction: desde un worker no se puede importar este fichero.
+ * Es el mismo cliente y las mismas credenciales, solo que construido cuando se
+ * pide en vez de al arrancar.
+ */
+const twilioClient = clienteTwilio();
 
 const app = express();
 app.post(
@@ -167,10 +187,54 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.post("/api/payments/create-deposit", authenticate, requireModule("administracion"), async (req, res) => {
   try {
-    const { jobId, customerName, customerPhone, amountEuros, description } = req.body;
+    const {
+      jobId,
+      reference: referenciaPedida,
+      autoReference,
+      customerName,
+      customerPhone,
+      amountEuros,
+      description,
+      templateId,
+      totalAmountCents,
+      terms,
+    } = req.body;
 
-    const reference = String(jobId || "").trim();
+    /*
+     * La referencia la reparte el servidor salvo que llegue escrita.
+     *
+     * El orden importa: primero lo que mande quien llama (la APK sigue
+     * mandando la suya en `jobId`), y solo si viene vacío y lo pide se saca
+     * número. Así ningún cliente antiguo se queda sin referencia ni gasta
+     * números del contador sin querer.
+     */
+    const escrita = autoReference
+      ? String(referenciaPedida ?? "").trim()
+      : String(referenciaPedida ?? jobId ?? "").trim();
+    const reference = escrita || (autoReference ? await siguienteReferencia(db) : "");
+
+    /*
+     * La asistencia va aparte de la referencia. Solo con un número aquí se
+     * marca la señal como pagada en `jobs`: con la referencia automática, un
+     * cobro cualquiera dejaría de significar "asistencia con ese id".
+     */
+    const jobVinculado = Number(jobId);
+    const asistencia =
+      Number.isInteger(jobVinculado) && jobVinculado > 0 ? jobVinculado : null;
+
     const amountCents = Math.round(Number(amountEuros || 0) * 100);
+
+    /*
+     * La plantilla llega ya renderizada desde la pantalla y aquí solo se
+     * guarda. El servidor no la vuelve a componer a propósito: si compusiera
+     * su propia versión, el cliente podría acabar pagando con unas condiciones
+     * en el móvil y otras distintas archivadas, que es justo lo que este campo
+     * existe para impedir.
+     */
+    const template = String(templateId || "libre").trim() || "libre";
+    const termsText = String(terms || "");
+    const totalCents = Math.round(Number(totalAmountCents || 0));
+    const totalGuardado = Number.isFinite(totalCents) && totalCents > 0 ? totalCents : null;
 
     if (!reference) {
       return res.status(400).json({
@@ -183,6 +247,13 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
       return res.status(400).json({
         success: false,
         message: "El importe mínimo es 1 €",
+      });
+    }
+
+    if (totalGuardado !== null && totalGuardado < amountCents) {
+      return res.status(400).json({
+        success: false,
+        message: "El total del presupuesto no puede ser menor que la paga y señal",
       });
     }
 
@@ -210,10 +281,13 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
 
       metadata: {
         reference,
-        jobId: reference,
+        // Solo si hay asistencia de verdad: el webhook marca `jobs` con esto.
+        ...(asistencia !== null ? { jobId: String(asistencia) } : {}),
         customerName: String(customerName || ""),
         customerPhone: String(customerPhone || ""),
         amountEuros: String(amountEuros || ""),
+        // Para poder ver desde el panel de Stripe bajo qué condiciones se cobró.
+        templateId: template,
       },
     });
 
@@ -228,9 +302,13 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
           stripe_session_id,
           payment_url,
           created_at_ms,
-          description
+          description,
+          template_id,
+          total_amount_cents,
+          terms_text,
+          job_id
         )
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9, $10, $11, $12)
       `,
       [
         reference,
@@ -241,6 +319,10 @@ app.post("/api/payments/create-deposit", authenticate, requireModule("administra
         session.url,
         Date.now(),
         desc,
+        template,
+        totalGuardado,
+        termsText,
+        asistencia,
       ]
     );
 
@@ -331,7 +413,10 @@ app.get("/api/payments/status/:reference", authenticate, requireModule("administ
           stripe_payment_intent_id,
           payment_url,
           paid_at_ms,
-          created_at_ms
+          created_at_ms,
+          template_id,
+          total_amount_cents,
+          terms_text
         FROM payments
         WHERE reference = $1
         ORDER BY created_at_ms DESC
@@ -380,7 +465,10 @@ app.get("/api/payments/recent", authenticate, requireModule("administracion"), a
           payment_url,
           paid_at_ms,
           created_at_ms,
-          description
+          description,
+          template_id,
+          total_amount_cents,
+          job_id
         FROM payments
         ORDER BY created_at_ms DESC
         LIMIT 50
@@ -552,25 +640,9 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
    HELPERS
 ========================================================= */
 
-function normalizeSpanishPhone(phone: string) {
-  const digits = String(phone || "").replace(/\D/g, "");
-
-  if (!digits) return "";
-
-  if (digits.startsWith("34") && digits.length === 11) {
-    return `+${digits}`;
-  }
-
-  if (digits.length === 9) {
-    return `+34${digits}`;
-  }
-
-  if (String(phone).trim().startsWith("+")) {
-    return String(phone).trim();
-  }
-
-  return `+${digits}`;
-}
+// La implementación se ha movido a `core/twilio.ts` para poder compartirla con
+// el envío de Satisfaction. El comportamiento es exactamente el mismo.
+const normalizeSpanishPhone = aE164;
 function safeJsonParse<T>(value: unknown, fallback: T): T {
   if (typeof value !== "string" || value.trim() === "") return fallback;
 
@@ -621,6 +693,9 @@ function normalizeTechRow(t: any) {
     // Sin la columna (base antigua) se asume de alta: nadie está de baja por
     // omisión.
     activo: t.activo !== false,
+    // Persona de Core con la que está vinculado (paso 2 de la unificación).
+    // null = todavía sin vincular; el histórico sigue yendo por nombre.
+    employeeId: t.employee_id ?? null,
   };
 }
 
@@ -843,13 +918,8 @@ function getRoadsideStatusTimestampField(status: string) {
   return null;
 }
 
-function getWhatsAppFromNumber() {
-  return (
-    process.env.TWILIO_WHATSAPP_FROM ||
-    process.env.TWILIO_WHATSAPP_NUMBER ||
-    "whatsapp:+34610473079"
-  );
-}
+// También movida a `core/twilio.ts`, por el mismo motivo.
+const getWhatsAppFromNumber = numeroWhatsAppEmisor;
 
 // Dominio público de cara al cliente (enlaces de seguimiento/informe por WhatsApp).
 // Debe estar configurado como dominio personalizado en Render + DNS apuntando al servicio.
@@ -1685,8 +1755,31 @@ const upload = multer({
 ========================================================= */
 
 
+/*
+ * La versión del `package.json`, leída UNA vez al arrancar.
+ *
+ * Es la misma que el navegador enseña en la cabecera —de ahí sale
+ * `__APP_VERSION__` al compilar—, así que sirve para lo mismo desde fuera: si
+ * el número que devuelve el servidor no es el que se acaba de publicar, el
+ * despliegue no ha entrado todavía y «sigue sin funcionar» es una caché o un
+ * build viejo, no un fallo.
+ *
+ * Se lee al arrancar y no en cada petición porque a /api/health le pega el
+ * comprobador de salud cada pocos segundos, y eso serían miles de lecturas de
+ * disco al día para un fichero que no cambia sin reiniciar el proceso.
+ */
+const VERSION_APP: string | null = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version;
+  } catch {
+    // Sin package.json a mano el servidor sigue sirviendo: la versión es un
+    // dato para diagnosticar, no una condición para estar vivo.
+    return null;
+  }
+})();
+
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, version: VERSION_APP });
 });
 
 // ── TyreControl: cerrar una intervención de cambio de neumático ──
@@ -2151,7 +2244,7 @@ app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => 
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
              "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
-             "statusChangedAtMs", "statusTotals", activo
+             "statusChangedAtMs", "statusTotals", activo, employee_id
       FROM techs
       ORDER BY id ASC
     `);
@@ -2260,7 +2353,8 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           "statusTotals",
           "roadsideCapable",
           "currentRoadsideAssistanceId",
-          phone
+          phone,
+          employee_id
         FROM techs
         WHERE name = $1
       `,
@@ -2335,6 +2429,100 @@ app.put("/api/techs/:name/activo", requireAdminRole, async (req, res) => {
   } catch (error) {
     console.error("PUT /api/techs/:name/activo error:", error);
     res.status(500).json({ error: "Error cambiando el alta del técnico" });
+  }
+});
+
+/* =========================================================
+   VÍNCULO TÉCNICO ↔ PERSONA DE CORE (paso 2 de la unificación)
+   Ver docs/FASE1_OPERARIOS_CORE_ESTUDIO.md, apartado 0.
+   El histórico del taller sigue apuntando por nombre: esto no lo toca.
+========================================================= */
+
+// Propuesta de emparejado, para revisarla ANTES de aplicar nada. No escribe.
+app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
+  try {
+    const [tecnicos, empleados] = await Promise.all([
+      db.query(`SELECT name, employee_id FROM techs ORDER BY name`),
+      db.query(
+        `SELECT id, nombre, apellidos, codigo_operario
+           FROM sea_employees
+          WHERE activo = true
+          ORDER BY nombre`
+      ),
+    ]);
+
+    const yaVinculados = new Map<string, string>(
+      tecnicos.rows
+        .filter((t: any) => t.employee_id)
+        .map((t: any) => [t.name, String(t.employee_id)])
+    );
+
+    const propuestas = proponerVinculos(
+      tecnicos.rows.map((t: any) => String(t.name)),
+      empleados.rows as EmpleadoCore[]
+    ).map((p) => ({
+      ...p,
+      // Lo que ya está vinculado se informa, pero no se vuelve a proponer.
+      vinculadoA: yaVinculados.get(p.tech) ?? null,
+    }));
+
+    res.json({
+      propuestas,
+      resumen: {
+        total: propuestas.length,
+        yaVinculados: yaVinculados.size,
+        exacta: propuestas.filter((p) => !p.vinculadoA && p.certeza === "exacta").length,
+        unica: propuestas.filter((p) => !p.vinculadoA && p.certeza === "unica").length,
+        ambigua: propuestas.filter((p) => !p.vinculadoA && p.certeza === "ambigua").length,
+        sinCandidato: propuestas.filter(
+          (p) => !p.vinculadoA && p.certeza === "sin_candidato"
+        ).length,
+      },
+    });
+  } catch (error) {
+    console.error("GET /api/techs/vinculo-core error:", error);
+    res.status(500).json({ error: "Error calculando los vínculos" });
+  }
+});
+
+// Confirma (o deshace, con employeeId null) el vínculo de un técnico.
+app.put("/api/techs/:name/vinculo-core", requireAdminRole, async (req, res) => {
+  try {
+    const name = String(req.params.name || "").trim();
+    const employeeId = req.body?.employeeId ? String(req.body.employeeId).trim() : null;
+    if (!name) return res.status(400).json({ error: "Nombre requerido" });
+
+    if (employeeId) {
+      const existe = await db.query(`SELECT id FROM sea_employees WHERE id = $1`, [
+        employeeId,
+      ]);
+      if (existe.rows.length === 0) {
+        return res.status(404).json({ error: "Ese empleado no existe" });
+      }
+      // Una persona no puede ser dos técnicos: sería el duplicado que se
+      // intenta eliminar, pero con vínculo.
+      const ocupado = await db.query(
+        `SELECT name FROM techs WHERE employee_id = $1 AND name <> $2 LIMIT 1`,
+        [employeeId, name]
+      );
+      if (ocupado.rows.length > 0) {
+        return res.status(409).json({
+          error: `Ese empleado ya está vinculado con "${ocupado.rows[0].name}"`,
+        });
+      }
+    }
+
+    const r = await db.query(
+      `UPDATE techs SET employee_id = $1 WHERE name = $2 RETURNING name, employee_id`,
+      [employeeId, name]
+    );
+    if (r.rows.length === 0) {
+      return res.status(404).json({ error: "Técnico no encontrado" });
+    }
+    res.json({ ok: true, name: r.rows[0].name, employeeId: r.rows[0].employee_id });
+  } catch (error) {
+    console.error("PUT /api/techs/:name/vinculo-core error:", error);
+    res.status(500).json({ error: "Error guardando el vínculo" });
   }
 });
 
@@ -3851,6 +4039,75 @@ app.get("/api/presencia-operator/historial", requirePresenciaEmployee, async (re
     res.status(500).json({ error: "Error consultando historial" });
   }
 });
+
+/* =========================================================
+   SAFETY MANAGER — subida de documentos (panel web)
+   Sube el PDF a Supabase Storage (bucket público) y devuelve
+   la URL pública para guardarla en sm_safety_documents.
+========================================================= */
+
+const SAFETY_DOCS_BUCKET = process.env.SUPABASE_SAFETY_DOCS_BUCKET || "safety-docs";
+let safetyDocsBucketReady = false;
+
+async function ensureSafetyDocsBucket() {
+  if (safetyDocsBucketReady) return;
+  const { data } = await supabase.storage.getBucket(SAFETY_DOCS_BUCKET);
+  if (!data) {
+    const { error } = await supabase.storage.createBucket(SAFETY_DOCS_BUCKET, {
+      public: true,
+      fileSizeLimit: "10MB",
+    });
+    if (error && !String(error.message || "").includes("already exists")) {
+      throw error;
+    }
+  }
+  safetyDocsBucketReady = true;
+}
+
+app.post(
+  "/api/safety/documents/upload",
+  protectWhenStrict(requirePanelRole),
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) return res.status(400).json({ error: "Falta el archivo" });
+
+      const ALLOWED = new Set([
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+      ]);
+      if (!ALLOWED.has(file.mimetype)) {
+        return res.status(400).json({ error: "Solo se admiten PDF o imágenes" });
+      }
+
+      await ensureSafetyDocsBucket();
+
+      const safeName = (file.originalname || "documento")
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .replace(/[^a-zA-Z0-9._-]+/g, "-")
+        .replace(/-+/g, "-")
+        .slice(-80);
+      const path = `${Date.now()}-${safeName}`;
+
+      const { error: upErr } = await supabase.storage
+        .from(SAFETY_DOCS_BUCKET)
+        .upload(path, file.buffer, { contentType: file.mimetype });
+      if (upErr) throw upErr;
+
+      const { data: pub } = supabase.storage
+        .from(SAFETY_DOCS_BUCKET)
+        .getPublicUrl(path);
+      res.json({ url: pub.publicUrl });
+    } catch (error) {
+      console.error("POST /api/safety/documents/upload error:", error);
+      res.status(500).json({ error: "Error subiendo el documento" });
+    }
+  }
+);
 
 /* =========================================================
    SAFETY OPERATOR (APK Mobilink Safety — técnicos)
@@ -6943,33 +7200,27 @@ app.post(
 
       let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
-      // Generar reportToken al finalizar
-      if (status === "finalizada" && !updated.reportToken) {
-        const { randomUUID } = await import("crypto");
-        const reportToken = randomUUID();
-        const rtResult = await db.query(
-          `UPDATE roadside_assistances SET "reportToken" = $2 WHERE id = $1 RETURNING *`,
-          [id, reportToken]
-        );
-        updated = normalizeRoadsideAssistanceRow(rtResult.rows[0]);
-      }
-
-      // Auto-transición: al finalizar la reparación, pasar automáticamente a en_camino_base
-      if (status === "finalizada") {
-        await db.query(
-          `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
-           VALUES ($1, 'en_camino_base', 'Vuelta al taller automática', $2, $3)`,
-          [id, operator.techName, now + 1]
-        );
-        const baseResult = await db.query(
-          `UPDATE roadside_assistances SET status = 'en_camino_base', "enCaminoBaseAtMs" = COALESCE("enCaminoBaseAtMs", $2), "updatedAtMs" = $2 WHERE id = $1 RETURNING *`,
-          [id, now + 1]
-        );
-        updated = normalizeRoadsideAssistanceRow(baseResult.rows[0]);
-      }
+      /*
+       * El post-proceso del cambio de estado vive en `cierre/finalizacion.ts`,
+       * compartido con la ruta de oficina. Estaba duplicado en las dos y ya
+       * habían dejado de hacer lo mismo.
+       */
+      const cambiada = await prepararRespuestaTrasCambio({
+        assistanceId: Number(id), estado: status, origen: "operario",
+        actorNombre: operator.techName, ahoraMs: now,
+      });
+      if (cambiada) updated = normalizeRoadsideAssistanceRow(cambiada);
 
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
+
+      // Después de contestar, igual que en la ruta de oficina: el técnico no
+      // espera a TyreControl, al correo ni al diario.
+      engancharPosteriores({
+        assistanceId: Number(id), estado: status, origen: "operario",
+        actorNombre: operator.techName, tecnico: updated.assignedTechName || null,
+        ahoraMs: now,
+      });
 
       if (status === "finalizada" && updated.customerPhone && !updated.whatsappFinalizadaSentAtMs && updated.reportToken) {
         const reportUrl = `${getPublicAppBaseUrl(req)}/informe/${updated.reportToken}`;
@@ -7709,16 +7960,12 @@ app.post(
 
       let updated = normalizeRoadsideAssistanceRow(result.rows[0]);
 
-      // ── Generar reportToken si se finaliza y no existe ya ──────────────────
-      if (status === "finalizada" && !updated.reportToken) {
-        const { randomUUID } = await import("crypto");
-        const reportToken = randomUUID();
-        const rtResult = await db.query(
-          `UPDATE roadside_assistances SET "reportToken" = $2 WHERE id = $1 RETURNING *`,
-          [id, reportToken]
-        );
-        updated = normalizeRoadsideAssistanceRow(rtResult.rows[0]);
-      }
+      // El mismo post-proceso que la ruta de la APK, en `cierre/finalizacion.ts`.
+      const cambiada = await prepararRespuestaTrasCambio({
+        assistanceId: Number(id), estado: status, origen: "oficina",
+        actorNombre: body.createdBy ?? "oficina", ahoraMs: now,
+      });
+      if (cambiada) updated = normalizeRoadsideAssistanceRow(cambiada);
 
       await syncTechRoadsideOccupation(updated.id, updated.status, updated.assignedTechName);
       res.json(updated);
@@ -7735,35 +7982,13 @@ app.post(
        * recalcularlo o una asistencia recién finalizada se quedaría sin
        * aparecer como pendiente de albarán.
        */
-      void recalcularEstadoAdmin("assist", id)
-        .catch((e) => console.error("estado administrativo:", e?.message));
-
-      /*
-       * Al terminar el servicio se mira qué documentación falta y se programa
-       * que se pida. No manda nada aquí: encolarlo es lo que permite que la
-       * cadencia sea de días y que no salgan cuatro correos si el estado se
-       * toca cuatro veces.
-       */
-      if (status === "finalizada") {
-        void revisarDocumentacionAlFinalizar(
-          "assist", id, (req as any).assistPanelUser?.tallerId ?? null,
-        ).catch((e) => console.error("revisión de documentación:", e?.message));
-      }
-
-      const tipoDiario = tipoDesdeEstadoAssist(status);
-      if (tipoDiario) {
-        void registrarEventoAsistencia({
-          system: "assist",
-          tenantId: (req as any).assistPanelUser?.tallerId ?? null,
-          assistanceId: id,
-          eventType: tipoDiario,
-          actorType: "user",
-          actorName: (req as any).authCtx?.nombre ?? null,
-          occurredAtMs: now,
-          payload: { estado: status, tecnico: updated.assignedTechName || null },
-          dedupeKey: `assist-estado-${id}-${status}-${now}`,
-        });
-      }
+      engancharPosteriores({
+        assistanceId: Number(id), estado: status, origen: "oficina",
+        tenantId: (req as any).assistPanelUser?.tallerId ?? null,
+        actorNombre: (req as any).authCtx?.nombre ?? null,
+        tecnico: updated.assignedTechName || null,
+        ahoraMs: now,
+      });
 
       // ── WhatsApp con deduplicación ─────────────────────────────────────────
       if (status === "asignada" && updated.customerPhone && !updated.whatsappAsignadaSentAtMs) {
@@ -7799,11 +8024,14 @@ app.post(
 
 const PLATE_KINDS = new Set(["matricula_camion", "matricula_remolque"]);
 
+/*
+ * La regla vive en `server/tyrecontrol/matricula.ts`. Aquí se conserva el
+ * nombre porque lo usan una veintena de sitios, pero la comparación es una
+ * sola: tres copias de la misma normalización es como se acaba encontrando un
+ * vehículo por una vía y no por otra.
+ */
 function normalizePlateText(value: unknown) {
-  const cleaned = String(value || "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
-  return cleaned;
+  return normalizarMatriculaTc(value);
 }
 
 async function detectPlateFromImage(
@@ -8700,7 +8928,7 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         return w;
       }
       const STATUS_LABELS_PDF: Record<string, string> = {
-        pendiente: "Pendiente", asignada: "Asignada", en_camino: "En camino",
+        pendiente: "Gestionada", asignada: "Asignada", en_camino: "En camino",
         en_punto: "En punto", reparando: "Reparando", finalizada: "Finalizada",
         en_camino_base: "En camino a taller", llegada_taller: "En taller",
         cancelada: "Cancelada", redirigida: "Redirigida",
@@ -12312,6 +12540,15 @@ function startCaducidadRecordatoriosChecker() {
   console.log(`Avisos de caducidad de tacógrafo activos (a partir de las ${CADUCIDAD_NOTIFY_HOUR}).`);
   void checkCaducidadRecordatorios();
   setInterval(() => { void checkCaducidadRecordatorios(); }, CADUCIDAD_CHECK_INTERVAL_MS);
+
+  /*
+   * Worker de sincronización con TyreControl. Cada minuto, y solo hace algo si
+   * las dos llaves están puestas: `cicloReparaciones` sale enseguida si no.
+   * Va aquí y no en el cierre porque el técnico no puede esperar a otro sistema.
+   */
+  setInterval(() => {
+    void cicloReparaciones().catch((e) => console.error("[TyreControl] worker:", e?.message));
+  }, 60_000);
 }
 
 app.get("/api/recordatorios-caducidad", protectWhenStrict(requirePanelRole), async (req, res) => {
@@ -12737,6 +12974,44 @@ app.get("/api/me", authenticate, async (req, res) => {
   } catch (error) {
     console.error("GET /api/me error:", error);
     res.status(500).json({ error: "Error cargando el perfil" });
+  }
+});
+
+/**
+ * Valida la sesión del panel de taller y devuelve los permisos VIGENTES.
+ *
+ * El panel guardaba en localStorage una marca `sea-authenticated` y se fiaba de
+ * ella al arrancar: nadie comprobaba contra el servidor si esa sesión seguía
+ * siendo válida ni si el rol había cambiado. Este endpoint es esa comprobación.
+ *
+ * Acepta las dos vías (sesión unificada por Bearer y token clásico
+ * `x-admin-token`), porque el panel se usa con ambas.
+ */
+app.get("/api/panel/session", async (req, res) => {
+  try {
+    const role = await getRoleFromRequestAsync(req);
+    if (!role) {
+      return res.status(401).json({ error: "No autorizado" });
+    }
+
+    // Si la credencial corresponde a un usuario de la tabla, se devuelven
+    // también su nombre y sus pantallas: así el panel refresca los permisos en
+    // cada arranque en vez de arrastrar los que guardó el día del login.
+    let name: string | null = null;
+    let allowedViews: string[] | null = null;
+    const token = String(req.headers["x-admin-token"] ?? req.query?.token ?? "").trim();
+    if (token) {
+      const u = await findDbUserByPassword(token);
+      if (u) {
+        name = u.name || null;
+        allowedViews = u.allowedViews.length > 0 ? u.allowedViews : null;
+      }
+    }
+
+    res.json({ ok: true, role, name, allowedViews });
+  } catch (error) {
+    console.error("GET /api/panel/session error:", error);
+    res.status(500).json({ error: "Error validando la sesión" });
   }
 });
 
@@ -13408,11 +13683,25 @@ async function reconcileTechRoadsideOccupation() {
       console.log(`Técnicos liberados (asistencia cerrada): ${r.rows.map((x: any) => x.name).join(", ")}`);
     }
 
-    // Cerrar capturas WhatsApp huérfanas (asistencia cerrada o inexistente)
+    /*
+     * Cerrar capturas WhatsApp huérfanas: las de una asistencia de Assist que
+     * ya está cerrada o que ya no existe.
+     *
+     * `job_id IS NOT NULL` no es un detalle: las capturas de Assist Central
+     * Pro nacen SIN asistencia del core (job_id nulo, porque la asistencia
+     * todavía no existe: se está dando de alta con lo que llegue por
+     * WhatsApp). Sin esta condición, `NOT EXISTS (... WHERE r.id = NULL)` es
+     * cierto para todas ellas y esta limpieza las cerraba a los dos minutos
+     * de abrirlas, o antes. Desde fuera parecía que la captura se cerraba
+     * sola sin motivo.
+     *
+     * Una captura de Central Pro solo la cierra quien la abrió.
+     */
     const cs = await db.query(
       `UPDATE whatsapp_capture_sessions s
        SET status = 'CLOSED', ended_at = $1
        WHERE s.status = 'ACTIVE'
+         AND s.job_id IS NOT NULL
          AND (
            NOT EXISTS (SELECT 1 FROM roadside_assistances r WHERE r.id = s.job_id)
            OR EXISTS (SELECT 1 FROM roadside_assistances r
@@ -15641,75 +15930,64 @@ app.patch("/api/otf-plantillas/:id", requireSupervisorRole, async (req, res) => 
   }
 });
 
-// ── TyreControl por matrícula: resumen para la tarjeta de la OTF ──
-// Busca el vehículo en TyreControl (normalizando la matrícula) y devuelve la
-// última revisión completada con sus alertas. Solo lectura.
+/**
+ * TyreControl por matrícula: resumen para la tarjeta de la OTF.
+ *
+ * Antes traía hasta 2.000 vehículos de `tc_vehiculos` y comparaba la matrícula
+ * en JavaScript. Con una flota mayor **dejaba de encontrar vehículos sin dar
+ * ningún error**. Ahora la resolución la hace `server/tyrecontrol/`, que filtra
+ * en el servidor.
+ *
+ * El contrato antiguo (`found`, `vehiculo`, `ultimaRevision`) se mantiene tal
+ * cual para no tocar la pantalla; se AÑADEN `estado`, `candidatos` (para la
+ * matrícula ambigua, que antes se resolvía cogiendo la primera sin decirlo) y
+ * `configuracion`.
+ */
 app.get("/api/otf-tyrecontrol-info", requireSupervisorRole, async (req, res) => {
   try {
-    const plateRaw = String(req.query.plate ?? "").trim();
-    const norm = plateRaw.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    if (!norm) return res.status(400).json({ error: "plate requerida" });
+    const plate = String(req.query.plate ?? "").trim();
+    if (!plate) return res.status(400).json({ error: "plate requerida" });
 
-    // tc_vehiculos guarda la matrícula en mayúsculas pero puede llevar guiones
-    // o espacios: se normaliza en JS para comparar.
-    const { data: vehiculos, error: vErr } = await supabase
-      .from("tc_vehiculos")
-      .select("id, matricula, marca, modelo, km_actual, activo")
-      .limit(2000);
-    if (vErr) throw new Error(vErr.message);
-    const veh = (vehiculos ?? []).find(
-      (v: any) => String(v.matricula ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "") === norm
-    );
-    if (!veh) return res.json({ found: false });
-
-    const { data: revs } = await supabase
-      .from("revisiones_vehiculo")
-      .select("id, fecha_revision, km_vehiculo, estado_revision")
-      .eq("vehiculo_id", veh.id)
-      .in("estado_revision", ["completada", "enviada"])
-      .order("fecha_revision", { ascending: false })
-      .limit(1);
-    const rev = revs?.[0] ?? null;
-
-    let alertas = 0;
-    let minProfundidad: number | null = null;
-    let posiciones = 0;
-    if (rev) {
-      const { data: det } = await supabase
-        .from("revisiones_neumaticos_detalle")
-        .select("profundidad_mm, alerta_generada, neumatico_ausente")
-        .eq("revision_id", rev.id);
-      for (const d of det ?? []) {
-        posiciones++;
-        if ((d as any).alerta_generada === true) alertas++;
-        const p = (d as any).profundidad_mm != null ? Number((d as any).profundidad_mm) : null;
-        if (p != null && (minProfundidad == null || p < minProfundidad)) minProfundidad = p;
-      }
+    const r = await resolverVehiculoTc(plate);
+    if (r.estado === "NOT_FOUND") return res.json({ found: false, estado: "NOT_FOUND" });
+    if (r.estado === "AMBIGUOUS") {
+      // Antes se cogía el primero en silencio. Ahora se dice, porque pueden ser
+      // vehículos de empresas distintas con la misma matrícula.
+      return res.json({ found: false, estado: "AMBIGUOUS", candidatos: r.candidatos });
     }
+
+    const estado = await estadoVehiculoTc(r.vehiculo);
+    if (!estado) return res.json({ found: false, estado: "NOT_FOUND" });
 
     res.json({
       found: true,
+      estado: "FOUND",
       vehiculo: {
-        id: veh.id,
-        matricula: veh.matricula,
-        marca: veh.marca ?? null,
-        modelo: veh.modelo ?? null,
-        kmActual: veh.km_actual != null ? Number(veh.km_actual) : null,
-        activo: veh.activo !== false,
+        id: estado.vehiculo.tcVehicleId,
+        matricula: estado.vehiculo.matricula,
+        marca: estado.vehiculo.marca,
+        modelo: estado.vehiculo.modelo,
+        kmActual: estado.vehiculo.kmActual,
+        activo: estado.vehiculo.activo,
+        // Añadidos: no estaban antes y la tarjeta los puede ignorar.
+        tipoVehiculo: estado.vehiculo.tipoVehiculo,
+        empresaId: estado.vehiculo.empresaId,
+        empresaNombre: estado.vehiculo.empresaNombre,
       },
-      ultimaRevision: rev
+      ultimaRevision: estado.resumen.ultimaRevisionFecha
         ? {
-            fecha: rev.fecha_revision,
-            km: rev.km_vehiculo != null ? Number(rev.km_vehiculo) : null,
-            posiciones,
-            alertas,
-            minProfundidadMm: minProfundidad,
+            fecha: estado.resumen.ultimaRevisionFecha,
+            km: estado.vehiculo.kmActual,
+            posiciones: estado.resumen.posiciones,
+            alertas: estado.resumen.alertas,
+            minProfundidadMm: estado.resumen.profundidadMinimaMm,
           }
         : null,
+      configuracion: { ejes: estado.ejes, posiciones: estado.posiciones },
     });
   } catch (e) {
-    console.error("GET /api/otf/tyrecontrol-info error:", e);
-    res.status(500).json({ error: "Error consultando TyreControl" });
+    console.error("GET /api/otf-tyrecontrol-info error:", (e as any)?.message);
+    res.status(502).json({ error: "Error consultando TyreControl" });
   }
 });
 
@@ -18089,6 +18367,7 @@ const APK_APPS: Record<
     pubspec: "tyrecontrol_app/pubspec.yaml",
   },
   stockflow: { prefix: "mobilink-stockflow-", label: "Mobilink Stock Flow" },
+  safety: { prefix: "mobilink-safety-", label: "Mobilink Safety" },
   taller: {
     prefix: "mobilink-taller-",
     label: "WorkPlanner Taller",
@@ -18121,63 +18400,39 @@ function latestApkFor(prefix: string): { file: string; version: string } | null 
 }
 
 // ── APK publicada como GitHub Release ───────────────────────────────────────
-// El repositorio es público, así que el asset se descarga sin credenciales y
-// basta con redirigir al navegador.
+// La URL del asset SE CONSTRUYE, no se pregunta.
 //
-// Se pregunta por la ETIQUETA EXACTA (…/releases/tags/assist-v1.8.3+31), no
-// por la lista de releases: la lista pagina, y con varias apps publicando a
-// diario la de una app que publique poco se caía de la primera página. La
-// etiqueta se construye con la versión del pubspec del repositorio, que la CI
-// guarda solo DESPUÉS de publicar la release; si está en el repo, existe.
+// Antes se consultaba la API de GitHub en cada visita para averiguar la
+// dirección del .apk, y eso dejó el centro de descargas en blanco: sin token
+// la API permite 60 peticiones por hora POR IP, y en Render la IP es
+// compartida con otros clientes, así que el cupo se agotaba solo. TyreControl,
+// Lite y Taller salían como "No disponible" —no tienen fichero local— y Assist
+// servía una versión vieja del repositorio sin decir nada.
 //
-// Se cachea porque la API sin token permite 60 peticiones por hora y el centro
-// de descargas la consultaría en cada visita.
+// No hacía falta preguntar. La CI publica siempre con el mismo patrón, y está
+// comprobado en las cuatro aplicaciones que publican release:
+//
+//   etiqueta  =  releaseTag + versión      taller-v0.12.1+157
+//   fichero   =  prefix     + versión      mobilink-taller-0.12.1+157.apk
+//
+// Así que basta la versión del pubspec, que ya se lee del propio repositorio.
+// Cero peticiones, cero cupo, cero token, y una cosa menos que se pueda caer.
+//
+// El '+' de la versión va codificado como %2B: GitHub lo escribe así en sus
+// propias URL, y sin codificar se interpreta como un espacio.
 const GH_REPO = process.env.GITHUB_REPO || "jcruset-create/mobilink";
-type ApkRelease = { version: string; url: string };
-const releaseCache = new Map<string, { hasta: number; valor: ApkRelease | null }>();
-const RELEASE_TTL_OK_MS = 10 * 60 * 1000;
-const RELEASE_TTL_FALLO_MS = 60 * 1000; // tras un fallo se reintenta antes
 
-async function releaseApkPorTag(tag: string, version: string): Promise<ApkRelease | null> {
-  const cache = releaseCache.get(tag);
-  if (cache && Date.now() < cache.hasta) return cache.valor;
-  try {
-    const headers: Record<string, string> = {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "mobilink-descargas",
-    };
-    // Opcional: solo sirve para subir el límite de peticiones.
-    if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-    const r = await fetch(
-      `https://api.github.com/repos/${GH_REPO}/releases/tags/${encodeURIComponent(tag)}`,
-      { headers, signal: AbortSignal.timeout(8000) }
-    );
-    // 404 = esa release no existe (app que todavía no ha publicado ninguna).
-    // Se cachea como "no hay" para no preguntar en cada visita.
-    if (r.status === 404) {
-      releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_OK_MS, valor: null });
-      return null;
-    }
-    if (!r.ok) throw new Error(`GitHub HTTP ${r.status}`);
-    const rel = (await r.json()) as any;
-    const asset = (rel?.assets ?? []).find((a: any) => String(a.name ?? "").endsWith(".apk"));
-    const valor = asset?.browser_download_url
-      ? { version, url: asset.browser_download_url as string }
-      : null;
-    releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_OK_MS, valor });
-    return valor;
-  } catch (e: any) {
-    console.warn("[descargas] no se pudo consultar la release de GitHub:", e?.message || e);
-    // Se conserva lo último bueno si lo había; si no, se reintenta en un minuto.
-    const valor = cache?.valor ?? null;
-    releaseCache.set(tag, { hasta: Date.now() + RELEASE_TTL_FALLO_MS, valor });
-    return valor;
-  }
+function urlReleaseApk(app0: { prefix: string; releaseTag: string }, version: string): string {
+  const etiqueta = encodeURIComponent(`${app0.releaseTag}${version}`);
+  const fichero = encodeURIComponent(`${app0.prefix}${version}.apk`);
+  return `https://github.com/${GH_REPO}/releases/download/${etiqueta}/${fichero}`;
 }
 
 // Versión declarada en el pubspec de la app dentro del repositorio. La CI
 // guarda ese número DESPUÉS de publicar la release, así que si está aquí es
-// que su release existe.
+// que su release existe. De ese invariante depende que la URL construida
+// apunte a algo: si alguien edita el pubspec a mano sin publicar, el enlace
+// llevará a un 404 de GitHub.
 function versionDelPubspec(rel: string): string | null {
   try {
     const txt = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
@@ -18187,22 +18442,24 @@ function versionDelPubspec(rel: string): string | null {
   }
 }
 
-// Resuelve la descarga de una app, por orden de preferencia:
-//   1. La release cuya etiqueta corresponde a la versión del repositorio.
-//   2. Fichero suelto en public/ (apps que todavía no publican release, o
-//      mientras GitHub no responde).
-// Devolver el fichero local como respaldo es lo que permite añadir el
-// releaseTag a una app ANTES de que su CI haya publicado nada: mientras no
-// exista la release se sigue sirviendo lo de siempre.
+// Resuelve la descarga de una app:
+//   1. Si publica releases, la de la versión que declara el repositorio.
+//   2. Si no, el fichero suelto de public/ (las que aún se compilan a mano).
+//
+// Cuando algo va mal se devuelve el MOTIVO, no un hueco. "No disponible" a
+// secas hacía que una app que nunca ha publicado y un fallo de configuración
+// se vieran exactamente igual.
 async function resolverApk(
   app0: { prefix: string; releaseTag?: string; pubspec?: string }
-): Promise<{ version: string; url?: string; file?: string } | null> {
+): Promise<{ version: string; url?: string; file?: string; fallo?: string } | null> {
   if (app0.releaseTag && app0.pubspec) {
     const v = versionDelPubspec(app0.pubspec);
-    if (v) {
-      const rel = await releaseApkPorTag(`${app0.releaseTag}${v}`, v);
-      if (rel) return { version: rel.version, url: rel.url };
-    }
+    if (v) return { version: v, url: urlReleaseApk({ prefix: app0.prefix, releaseTag: app0.releaseTag }, v) };
+    // El pubspec está en el repositorio: si no se puede leer, es que el
+    // despliegue está mal, y eso hay que decirlo en vez de callarlo.
+    const local = latestApkFor(app0.prefix);
+    if (local) return { version: local.version, file: local.file };
+    return { version: "", fallo: `No se ha podido leer la versión en ${app0.pubspec}` };
   }
   const local = latestApkFor(app0.prefix);
   return local ? { version: local.version, file: local.file } : null;
@@ -18216,8 +18473,10 @@ app.get("/api/apps/list", async (_req, res) => {
       return {
         key,
         label: app0.label,
-        version: latest?.version ?? null,
-        url: latest ? `/apps/${key}` : null,
+        version: latest?.version || null,
+        url: latest && (latest.url || latest.file) ? `/apps/${key}` : null,
+        // null = no hay nada que contar. Con texto = algo va mal y se dice.
+        error: latest?.fallo ?? null,
       };
     })
   );
@@ -18229,7 +18488,9 @@ app.get("/apps/:app", async (req, res) => {
   const app0 = APK_APPS[String(req.params.app)];
   if (!app0) return res.status(404).json({ error: "App no encontrada" });
   const latest = await resolverApk(app0);
-  if (!latest) return res.status(404).json({ error: "Sin APK disponible" });
+  if (!latest || (!latest.url && !latest.file)) {
+    return res.status(404).json({ error: latest?.fallo || "Sin APK disponible" });
+  }
   // Con release se redirige al asset de GitHub: la descarga no pasa por
   // nuestro servidor y el binario no vive en el repositorio.
   if (latest.url) return res.redirect(302, latest.url);
@@ -18250,8 +18511,28 @@ mountConnect(app, requireLicensesAdmin);
  */
 app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
 app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRole));
-mountCorreo(app, requireSupervisorRole);
-app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
+/*
+ * ⚠ EL ORDEN DE ESTOS TRES BLOQUES IMPORTA, Y NO ES UN DETALLE DE ESTILO.
+ *
+ * Las rutas de la APK (asistente, flanco y parte) cuelgan de /api/tyrecontrol,
+ * igual que el router del back-office. Ese router hace `router.use(guarda)`
+ * con el guarda del panel, que exige el token de administrador y responde 401
+ * "No autorizado" a cualquier otra cosa — incluida la sesión de un operario.
+ *
+ * Express prueba los middlewares EN EL ORDEN EN QUE SE REGISTRAN, así que si
+ * el `app.use("/api/tyrecontrol", …)` va primero, atrapa TODO lo que empiece
+ * por esa ruta y contesta 401 antes de que estas rutas lleguen a existir.
+ * Pasó de verdad: el técnico terminaba el parte, pulsaba "Ver el PDF" y le
+ * salía "No autorizado", con el parte ya guardado y bien.
+ *
+ * Por eso van ANTES. Sus caminos (/parte/*, /flanco/*, /asistente/*) no chocan
+ * con ninguno del router del panel (/empresas, /stock, /resolve…), de modo que
+ * todo lo demás sigue cayendo donde caía. Y no se afloja ningún permiso: cada
+ * una lleva su propio `authenticate` + `requireModule`, y el parte comprueba
+ * además empresa por empresa antes de devolver nada.
+ *
+ * Hay una prueba que lo vigila: server/rutasTyreControl.test.ts.
+ */
 
 // Asistente virtual de TyreControl (function calling sobre herramientas de
 // solo lectura). Ver server/tyrecontrol/asistente.ts.
@@ -18260,6 +18541,41 @@ mountAsistente(app, authenticate, requireModule("tyrecontrol"));
 // Identificar un neumático por la foto de su flanco durante una revisión.
 // Solo propone: guardar lo decide el técnico. Ver server/tyrecontrol/flanco/.
 mountFlanco(app, authenticate, requireModule("tyrecontrol"));
+
+// Parte de servicio: lectura por fotografías y el PDF del parte. Solo propone:
+// guardar lo decide el técnico, y aterriza en la intervención y los montajes
+// que ya existen.
+mountParte(app, authenticate, requireModule("tyrecontrol"));
+
+/*
+ * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no
+ * escribe nada en TC. Va con el guarda del back-office porque es información
+ * de oficina; la pantalla del técnico no se toca.
+ */
+app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
+mountCorreo(app, requireSupervisorRole);
+app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
+
+/*
+ * Valoración pública. SIN guarda a propósito: quien abre el enlace no tiene
+ * sesión ni taller. El token es lo único que da acceso, y el propio router
+ * lleva su límite de peticiones y su límite de tamaño de cuerpo.
+ */
+app.use("/api/public/satisfaction", createSatisfactionPublicRouter());
+
+/*
+ * Calidad: la ficha la puede ver quien ya ve la asistencia; la bandeja y las
+ * acciones sobre expedientes, solo supervisión.
+ */
+app.use("/api/calidad", createCalidadRouter(
+  requireOperarioRole, requireSupervisorRole, requireAdminRole));
+
+/*
+ * El callback de estado de las encuestas. Sin sesión —lo llama Twilio— pero con
+ * firma obligatoria: es lo que separa un aviso de entrega de cualquiera que
+ * quiera decir que un mensaje se entregó.
+ */
+app.use(RUTA_CALLBACK, createSatisfactionCallbackRouter());
 
 /* =========================================================
    STATIC / SPA CATCH-ALL (must be after all API routes)
@@ -18492,12 +18808,17 @@ initDb()
   .then(() => prepararEsquema("Diario de asistencias", initEventLog))
   // Después del diario: registrar un documento anota un evento.
   .then(() => prepararEsquema("Documentos", initDocumentos))
+  .then(() => prepararEsquema("Mapeo TyreControl", initMapeoEmpresas))
+  .then(() => prepararEsquema("Sincronización TyreControl", initTyreControlAssist))
   // Después de documentos: los recordatorios miran qué documentación falta.
   .then(() => prepararEsquema("Correo del expediente", initCorreo))
   .then(() => prepararEsquema("Bandeja y costes", initExcepciones))
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))
+  // Satisfaction: encuestas y casos de calidad. No engancha todavía con el
+  // cierre de asistencias — solo crea el esquema y siembra las plantillas.
+  .then(() => prepararEsquema("Satisfaction", initSatisfaction))
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
@@ -18514,6 +18835,9 @@ initDb()
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
       startDispatchWorker(); // reintentos de subcontratación a plataformas externas
       startCorreoWorker(); // recordatorios de documentación pendiente
+      // Satisfaction: encola lo que ya puede enviarse y caduca lo vencido.
+      // Todavía no manda nada; el envío real llega con WhatsApp.
+      startSatisfactionWorker();
       startAutoEnCaminoWatcher(); // auto "En camino" al salir la furgoneta del taller
       startCashErpWorker(); // Mobilink Cash: outbox de cobros/pagos hacia la ERP
       // Mobilink Cash: eventos de dominio hacia MC Central. Sin transporte

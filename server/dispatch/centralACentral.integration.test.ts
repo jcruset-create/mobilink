@@ -225,10 +225,38 @@ describe.skipIf(!RUN)("Central A → Central B por la capa de integración", () 
       `SELECT "payloadSnapshot" FROM external_dispatches
         WHERE "sourceAssistanceId" = $1 AND "sourceSystem" = 'central'`,
       [String(asistenciaA)]);
-    const sobre = String(d.rows[0].payloadSnapshot).toLowerCase();
-    for (const prohibido of ["cost", "coste", "precio", "margen", "195"]) {
-      expect(sobre).not.toContain(prohibido);
+    /*
+     * Se mira el sobre POR DENTRO, no como cadena.
+     *
+     * Antes se buscaba el texto «195» en el JSON entero, y eso es una lotería:
+     * un id, una marca de tiempo o un uuid con «195» dentro tumbaban la prueba
+     * sin que ningún importe hubiera cruzado. Falló una vez de cada varias
+     * ejecuciones y siempre en la CI, que es la peor forma de fallar.
+     *
+     * Lo que hay que comprobar es que no viaja ningún CAMPO de dinero ni
+     * ningún VALOR igual al importe. Eso se comprueba recorriendo el objeto.
+     */
+    const sobre = JSON.parse(String(d.rows[0].payloadSnapshot));
+    const claves: string[] = [];
+    const valores: unknown[] = [];
+    (function recorrer(v: unknown) {
+      if (Array.isArray(v)) { v.forEach(recorrer); return; }
+      if (v && typeof v === "object") {
+        for (const [k, x] of Object.entries(v)) { claves.push(k.toLowerCase()); recorrer(x); }
+        return;
+      }
+      valores.push(v);
+    })(sobre);
+
+    // Que el sobre traiga algo: si no, las comprobaciones de abajo no dirían nada.
+    expect(claves.length).toBeGreaterThan(3);
+    expect(valores.length).toBeGreaterThan(3);
+
+    for (const prohibida of ["cost", "coste", "precio", "margen", "importe", "amount"]) {
+      expect(claves.filter((k) => k.includes(prohibida))).toEqual([]);
     }
+    expect(valores).not.toContain(195);
+    expect(valores).not.toContain("195");
   });
 
   /*

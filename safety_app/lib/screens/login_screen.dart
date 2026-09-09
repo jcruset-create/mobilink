@@ -17,6 +17,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _pinCtrl = TextEditingController();
   bool _loading = false;
   bool _loadingEmployees = true;
+  bool _errorEmployees = false;
   String? _error;
 
   @override
@@ -26,16 +27,24 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _loadEmployees() async {
+    setState(() {
+      _loadingEmployees = true;
+      _errorEmployees = false;
+    });
     try {
       final e = await ApiService.employees();
       if (!mounted) return;
       setState(() {
         _employees = e;
         _loadingEmployees = false;
+        _errorEmployees = e.isEmpty;
       });
     } catch (_) {
       if (!mounted) return;
-      setState(() => _loadingEmployees = false);
+      setState(() {
+        _loadingEmployees = false;
+        _errorEmployees = true;
+      });
     }
   }
 
@@ -49,7 +58,8 @@ class _LoginScreenState extends State<LoginScreen> {
     final id = _selectedId;
     final pin = _pinCtrl.text.trim();
     if (id == null || pin.isEmpty) {
-      setState(() => _error = 'Elige tu nombre e introduce el PIN.');
+      setState(() =>
+          _error = 'Elige tu nombre en la lista e introduce el PIN.');
       return;
     }
     setState(() {
@@ -108,22 +118,99 @@ class _LoginScreenState extends State<LoginScreen> {
                 if (_loadingEmployees)
                   const Padding(
                     padding: EdgeInsets.all(16),
-                    child:
+                    child: Column(
+                      children: [
                         CircularProgressIndicator(color: AppColors.primary),
+                        SizedBox(height: 10),
+                        Text('Cargando empleados...',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                fontSize: 12, color: AppColors.textMuted)),
+                      ],
+                    ),
+                  )
+                else if (_errorEmployees)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'No se pudo cargar la lista de empleados.\n'
+                        'Comprueba la conexión e inténtalo de nuevo.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 13, color: AppColors.textMuted),
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: const BorderSide(color: AppColors.border),
+                        ),
+                        onPressed: _loadEmployees,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Reintentar'),
+                      ),
+                    ],
                   )
                 else
-                  DropdownButtonFormField<String>(
-                    value: _selectedId,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Empleado'),
-                    dropdownColor: AppColors.surface,
-                    items: _employees
-                        .map((e) => DropdownMenuItem(
-                              value: e['id'] as String,
-                              child: Text(_fullName(e)),
-                            ))
-                        .toList(),
-                    onChanged: (v) => setState(() => _selectedId = v),
+                  Autocomplete<Map<String, dynamic>>(
+                    displayStringForOption: _fullName,
+                    optionsBuilder: (value) {
+                      final q = value.text.trim().toLowerCase();
+                      if (q.isEmpty) return _employees;
+                      return _employees.where(
+                          (e) => _fullName(e).toLowerCase().contains(q));
+                    },
+                    onSelected: (e) =>
+                        setState(() => _selectedId = e['id'] as String),
+                    optionsViewBuilder: (context, onSelected, options) {
+                      return Align(
+                        alignment: Alignment.topLeft,
+                        child: Material(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(10),
+                          elevation: 6,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                                maxHeight: 260, maxWidth: 340),
+                            child: ListView.builder(
+                              padding: EdgeInsets.zero,
+                              shrinkWrap: true,
+                              itemCount: options.length,
+                              itemBuilder: (context, i) {
+                                final e = options.elementAt(i);
+                                return ListTile(
+                                  dense: true,
+                                  title: Text(_fullName(e),
+                                      style: const TextStyle(
+                                          color: Colors.white)),
+                                  onTap: () => onSelected(e),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                    fieldViewBuilder:
+                        (context, controller, focusNode, onSubmit) {
+                      return TextField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        decoration: InputDecoration(
+                          labelText: 'Empleado',
+                          hintText: 'Escribe tu nombre...',
+                          suffixIcon: const Icon(Icons.arrow_drop_down,
+                              color: AppColors.textMuted),
+                        ),
+                        onChanged: (_) {
+                          // Si edita el texto, invalidar la selección previa
+                          if (_selectedId != null) {
+                            setState(() => _selectedId = null);
+                          }
+                        },
+                      );
+                    },
                   ),
                 const SizedBox(height: 14),
                 TextField(

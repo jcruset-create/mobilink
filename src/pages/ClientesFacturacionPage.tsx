@@ -13,6 +13,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, RefreshCw, Contact, Plus, Search } from "lucide-react";
 import { API_BASE, getAdminHeaders } from "../modules/workshopApi";
 import ContactosBloque from "../components/ContactosBloque";
+import MapeoTyreControl from "../components/MapeoTyreControl";
 
 type Cliente = {
   id: number; name: string; legalName: string | null; commercialName: string | null;
@@ -262,6 +263,11 @@ export default function ClientesFacturacionPage() {
                           ))}
                         </div>
                       </div>
+
+                      {/* La correspondencia con TyreControl va en la ficha del
+                          cliente porque es de él: dice a qué empresa de TC
+                          pertenecen sus vehículos. */}
+                      <MapeoTyreControl clienteId={c.id} />
 
                       <ContactosBloque ownerType="client" ownerId={c.id} titulo="Contactos del cliente" />
                     </div>

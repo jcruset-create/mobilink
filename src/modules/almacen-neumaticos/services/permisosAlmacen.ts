@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { esSuperadmin } from "../../superadmin";
+import { resolverRolAlmacen, type OrigenRol, type RolResuelto } from "./rolAlmacen";
 
 export type PerfilAlmacen = {
   id: string;
@@ -20,6 +21,8 @@ export type ClientePermitido = {
 export type PermisosAlmacen = {
   perfil: PerfilAlmacen | null;
   clientesPermitidos: ClientePermitido[];
+  /** De dónde salió el rol efectivo: Core, ficha heredada o superadmin. */
+  origenRol: OrigenRol;
   esAdmin: boolean;
   esResponsable: boolean;
   esOperario: boolean;
@@ -29,6 +32,7 @@ export type PermisosAlmacen = {
 export const permisosIniciales: PermisosAlmacen = {
   perfil: null,
   clientesPermitidos: [],
+  origenRol: "ninguno",
   esAdmin: false,
   esResponsable: false,
   esOperario: false,
@@ -84,17 +88,21 @@ async function cargarClientesPermitidos(
 
 function construirPermisos(
   perfil: PerfilAlmacen | null,
-  clientesPermitidos: ClientePermitido[]
+  clientesPermitidos: ClientePermitido[],
+  // Rol ya resuelto (paso 1 de la unificación). Si no se pasa, se usa el de la
+  // ficha del módulo, que es lo que hacían las vías heredadas (APK por código).
+  rolResuelto?: RolResuelto
 ): PermisosAlmacen {
   if (!perfil) {
     return permisosIniciales;
   }
 
-  const rol = perfil.rol || "operario";
+  const rol = rolResuelto ? rolResuelto.rol : perfil.rol || "operario";
 
   return {
     perfil,
     clientesPermitidos,
+    origenRol: rolResuelto?.origen ?? "legacy",
     esAdmin: rol === "admin",
     esResponsable: rol === "responsable",
     esOperario: rol === "operario",
@@ -112,38 +120,60 @@ export async function cargarPermisosUsuarioActual(): Promise<PermisosAlmacen> {
 
   const user = sessionData.session.user;
 
-  const { data: perfilData, error: perfilError } = await supabase
-    .from("perfiles_usuario")
-    .select("id,user_id,nombre,email,codigo_operario,rol,ubicacion,activo")
-    .or(`user_id.eq.${user.id},email.eq.${user.email}`)
-    .eq("activo", true)
-    .maybeSingle();
+  // El rol sale de Core (`app_usuario_modulos`), que es lo que gestiona
+  // Administración → Usuarios. La ficha del módulo se sigue leyendo porque
+  // aporta lo suyo: ubicación, código de operario y los clientes asignados.
+  const [{ data: accesoCore }, { data: perfilData, error: perfilError }, superadmin] =
+    await Promise.all([
+      supabase
+        .from("app_usuario_modulos")
+        .select("rol")
+        .eq("user_id", user.id)
+        .eq("modulo", "almacen")
+        .maybeSingle(),
+      supabase
+        .from("perfiles_usuario")
+        .select("id,user_id,nombre,email,codigo_operario,rol,ubicacion,activo")
+        .or(`user_id.eq.${user.id},email.eq.${user.email}`)
+        .eq("activo", true)
+        .maybeSingle(),
+      esSuperadmin(user.id),
+    ]);
+
+  const rolResuelto = resolverRolAlmacen(
+    accesoCore?.rol,
+    perfilError ? null : (perfilData as PerfilAlmacen | null)?.rol,
+    superadmin
+  );
+
+  if (!rolResuelto.rol) {
+    return permisosIniciales;
+  }
 
   if (perfilError || !perfilData) {
-    // Un superadmin de la plataforma entra aunque no tenga ficha en
-    // perfiles_usuario: se le da un perfil de admin sintetico para el modulo.
-    if (await esSuperadmin(user.id)) {
-      return construirPermisos(
-        {
-          id: `superadmin:${user.id}`,
-          user_id: user.id,
-          nombre: user.email ?? "Superadmin",
-          email: user.email ?? "",
-          codigo_operario: null,
-          rol: "admin",
-          ubicacion: null,
-          activo: true,
-        } as unknown as PerfilAlmacen,
-        []
-      );
-    }
-    return permisosIniciales;
+    // Con acceso concedido en Core (o siendo superadmin) se entra aunque no
+    // exista ficha en perfiles_usuario: la ficha es un satélite del módulo, no
+    // la fuente de la identidad.
+    return construirPermisos(
+      {
+        id: `core:${user.id}`,
+        user_id: user.id,
+        nombre: user.email ?? "Usuario",
+        email: user.email ?? "",
+        codigo_operario: null,
+        rol: rolResuelto.rol,
+        ubicacion: null,
+        activo: true,
+      } as unknown as PerfilAlmacen,
+      [],
+      rolResuelto
+    );
   }
 
   const perfil = perfilData as PerfilAlmacen;
   const clientesPermitidos = await cargarClientesPermitidos(perfil.id);
 
-  return construirPermisos(perfil, clientesPermitidos);
+  return construirPermisos(perfil, clientesPermitidos, rolResuelto);
 }
 
 export async function cargarPermisosPorCodigoOperario(

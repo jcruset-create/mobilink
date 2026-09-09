@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   valorFiable, normalizarMedida, normalizarNombre, normalizarDot,
-  prepararPropuesta, buscarEnCatalogo, CONFIANZA_MINIMA,
+  prepararPropuesta, buscarEnCatalogo, CONFIANZA_MINIMA, CONFIANZA_MINIMA_ANOTAR,
   type LecturaFlanco, type ReferenciaCatalogo,
 } from "./flanco.ts";
 
@@ -9,7 +9,7 @@ const c = (valor: string | null, confianza: number | null = 0.95) => ({ valor, c
 const lectura = (over: Partial<LecturaFlanco> = {}): LecturaFlanco => ({
   marca: c("Michelin"), modelo: c("X Multi D"), medida: c("315/80R22.5"),
   indice_carga_simple: c("156"), indice_carga_doble: c("150"), codigo_velocidad: c("L"),
-  dot: c("2325"), otros_textos: [], ...over,
+  dot: c("2325"), numero_serie: c(null), otros_textos: [], ...over,
 });
 
 describe("qué se considera legible", () => {
@@ -124,5 +124,54 @@ describe("buscar en el catálogo", () => {
   it("una marca que no está en el catálogo no casa con ninguna parecida", () => {
     const r = buscarEnCatalogo(prepararPropuesta(lectura({ marca: c("Michelan") })), CATALOGO);
     expect(r).toEqual([]);
+  });
+});
+
+describe("el número de serie del flanco", () => {
+  it("se propone tal cual: cada fabricante lo estampa a su manera", () => {
+    expect(prepararPropuesta(lectura({ numero_serie: c(" AB-1234/567 ") })).numero_serie)
+      .toBe("AB-1234/567");
+  });
+
+  it("una rueda sin serie legible NO es un fallo: se queda vacío", () => {
+    const p = prepararPropuesta(lectura());
+    expect(p.numero_serie).toBeNull();
+    expect(p.aviso).toBeNull();
+  });
+
+  /**
+   * El caso real: la misma foto que ChatGPT lee sin problema («1944778229»)
+   * salía en blanco en la tablet. No es que el modelo no lo leyera: lo leía y
+   * NOSOTROS lo tirábamos, porque a la instrucción le pedimos que baje la
+   * confianza cuando duda y luego exigíamos 0,7. Un número estampado en caucho
+   * negro casi nunca llega ahí.
+   */
+  it("un serie leído con confianza regular SÍ se propone: lo confirma una persona", () => {
+    const p = prepararPropuesta(lectura({ numero_serie: c("1944778229", 0.45) }));
+    expect(p.numero_serie).toBe("1944778229");
+  });
+
+  it("pero se marca como dudoso, para poder avisar", () => {
+    const p = prepararPropuesta(lectura({ numero_serie: c("1944778229", 0.45) }));
+    expect(p.dudosos).toContain("numero_serie");
+  });
+
+  it("ruido de verdad sí se descarta", () => {
+    expect(prepararPropuesta(lectura({ numero_serie: c("AB1234", 0.1) })).numero_serie)
+      .toBeNull();
+  });
+
+  it("el DOT sigue el mismo criterio: se propone y se comprueba", () => {
+    expect(prepararPropuesta(lectura({ dot: c("2325", 0.45) })).dot).toBe("2325");
+  });
+
+  it("la MARCA no: con ella se busca en el catálogo sola, y ahí sigue el listón alto", () => {
+    const p = prepararPropuesta(lectura({ marca: c("Hankook", 0.45) }));
+    expect(p.marca).toBeNull();
+    expect(CONFIANZA_MINIMA_ANOTAR).toBeLessThan(CONFIANZA_MINIMA);
+  });
+
+  it("no impide buscar en el catálogo: para eso valen marca y medida", () => {
+    expect(prepararPropuesta(lectura()).suficienteParaBuscar).toBe(true);
   });
 });

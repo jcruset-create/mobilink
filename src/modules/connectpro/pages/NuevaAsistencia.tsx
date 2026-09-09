@@ -13,6 +13,8 @@ import ConfirmarImportacionIA, { type PropuestaIA, type ExtraIA } from "../compo
 import type { ServiceType, VehicleType } from "../types";
 import type { Client } from "./Clientes";
 import { useCentroDeTrabajo } from "../components/CentroDeTrabajo";
+import BuscarUbicacion from "../components/BuscarUbicacion";
+import LocationPickerModal from "../../../components/LocationPickerModal";
 
 type Form = {
   expedientNumber: string; externalReference: string; clientName: string;
@@ -67,6 +69,7 @@ export default function NuevaAsistencia() {
     providerCompanyId: null, workshopId: null, contactId: null,
   });
   const [error, setError] = useState<string | null>(null);
+  const [ajustandoEnMapa, setAjustandoEnMapa] = useState(false);
   const [busy, setBusy] = useState(false);
   const [conceptos, setConceptos] = useState<Concepto[]>([]);
   // Medidas y marcas del catálogo de la central: lo previsto se elige de
@@ -406,6 +409,18 @@ export default function NuevaAsistencia() {
         </Section>
 
         <Section title="Ubicación">
+          {/* Se escribe como venga —punto kilométrico, código postal, enlace de
+              Maps— y rellena dirección y coordenadas de una vez. */}
+          <BuscarUbicacion
+            onEncontrado={({ lat, lng, etiqueta }) =>
+              setF((prev) => ({
+                ...prev,
+                lat: String(lat),
+                lng: String(lng),
+                // La dirección escrita a mano manda: si ya hay algo, no se pisa
+                address: prev.address.trim() ? prev.address : etiqueta,
+              }))}
+          />
           <Field label="Dirección *" w="w-full"><Input value={f.address} onChange={set("address")} className="w-full" placeholder="Dirección o punto de referencia" /></Field>
           <Field label="Latitud"><Input value={f.lat} onChange={set("lat")} className="w-32" placeholder="41.1189" /></Field>
           <Field label="Longitud"><Input value={f.lng} onChange={set("lng")} className="w-32" placeholder="1.2445" /></Field>
@@ -413,6 +428,20 @@ export default function NuevaAsistencia() {
           <Field label="Km"><Input value={f.km} onChange={set("km")} className="w-20" /></Field>
           <Field label="Sentido"><Input value={f.direction} onChange={set("direction")} className="w-36" placeholder="Barcelona" /></Field>
           <Field label="Referencia del lugar"><Input value={f.placeRef} onChange={set("placeRef")} className="w-48" placeholder="Área de servicio…" /></Field>
+          {/* Afinar el punto a mano.
+             *
+             * El buscador sitúa la zona, pero muchas veces se queda en «zona
+             * aproximada, no un punto»: un polígono entero, un código postal.
+             * Mandar la grúa al centro de un polígono industrial es mandarla a
+             * dar vueltas. Aquí se abre el mapa y se pone el pin donde está el
+             * camión de verdad, igual que en la pantalla de asistencias. */}
+          <button
+            type="button"
+            onClick={() => setAjustandoEnMapa(true)}
+            className="self-end rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-[13px] font-bold text-slate-100 hover:bg-slate-600"
+          >
+            📍 Ajustar en el mapa
+          </button>
           {f.lat && f.lng && (
             <a
               href={`https://www.google.com/maps?q=${f.lat},${f.lng}`}
@@ -423,6 +452,35 @@ export default function NuevaAsistencia() {
             </a>
           )}
         </Section>
+
+        {ajustandoEnMapa && (
+          <LocationPickerModal
+            initialLat={f.lat ? Number(f.lat) : null}
+            initialLng={f.lng ? Number(f.lng) : null}
+            initialQuery={f.address}
+            onClose={() => setAjustandoEnMapa(false)}
+            // El buscador del panel de Assist va con otras cabeceras y aquí
+            // daría 401. Se le pasa el de Connect Pro, que es el mismo que usa
+            // el recuadro de arriba.
+            onBuscar={async (consulta) => {
+              const r = await boFetch<{
+                punto: { lat: number; lng: number };
+                etiqueta: string;
+              }>(`/geo/search?q=${encodeURIComponent(consulta)}`);
+              if (!r?.punto) return null;
+              return { lat: r.punto.lat, lng: r.punto.lng, direccion: r.etiqueta };
+            }}
+            onPick={(lat, lng, direccion) =>
+              setF((prev) => ({
+                ...prev,
+                lat: String(lat),
+                lng: String(lng),
+                // Igual que en el buscador: la dirección escrita a mano manda.
+                address: prev.address.trim() ? prev.address : (direccion ?? prev.address),
+              }))
+            }
+          />
+        )}
 
         <Section title="Vehículo o activo">
           <Field label="Tipo">

@@ -38,6 +38,7 @@
     "server/dispatch/**/*.ts",
     "server/acuerdos/**/*.ts",
     "server/enrutado/**/*.ts",
+    "server/tyrecontrol/**/*.ts",
     "server/eventlog/**/*.ts",
     "server/documentos/**/*.ts",
     "server/correo/**/*.ts",
@@ -45,6 +46,8 @@
     "server/cash/**/*.ts",
     "server/central/**/*.ts",
     "server/tacografos/**/*.ts",
+    "server/satisfaction/**/*.ts",
+    "server/cierre/**/*.ts",
     "server/core/auditoria.ts",
     "server/core/auditoriaSchema.ts",
     "server/dbBackup.ts"

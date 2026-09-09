@@ -62,6 +62,11 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Android 13+: sin esto los avisos de Central no se muestran nunca. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Acceso con huella o cara, opcional, para no escribir el PIN en cada
+         acceso (lib/services/biometria.dart). Es un permiso "normal": no
+         genera diálogo ni da acceso a los datos biométricos, solo permite
+         pedirle al sistema que identifique al usuario. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <!-- La app funciona igual en un móvil sin cámara trasera o sin GPS propio,
          así que no se exige hardware: sin esto Play ocultaría la app en tablets. -->

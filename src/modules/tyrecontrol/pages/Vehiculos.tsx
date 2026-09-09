@@ -5,6 +5,7 @@ import {
   listarConfigEjes, listarTiposLlanta, listarMedidas, listarEjesVehiculo, guardarEjesVehiculo,
   listarEstadoWebfleet, sincronizarWebfleet, listarRevisionEstado,
   listarMarcasVehiculo, aplicarFichaTecnica,
+  listarVehiculosPendientes, validarVehiculo,
 } from "../services/data";
 import ModalNuevaMedida from "../components/ModalNuevaMedida";
 import CrearVehiculoDesdeFicha, { type PendienteFicha } from "../components/CrearVehiculoDesdeFicha";
@@ -63,6 +64,28 @@ export default function Vehiculos() {
   const [medidas, setMedidas] = useState<MedidaNeumatico[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
+
+  // Vehículos que un técnico dio de alta desde la tablet y nadie ha repasado.
+  // Van arriba y no como una columna más: si no se ven, nadie los completa
+  // nunca y la flota se llena de camiones sin marca ni modelo.
+  const [pendientes, setPendientes] = useState<Vehiculo[]>([]);
+  const [validando, setValidando] = useState<string | null>(null);
+  const [msgPend, setMsgPend] = useState("");
+
+  async function cargarPendientes() {
+    try { setPendientes(await listarVehiculosPendientes()); }
+    catch { /* la columna puede no estar aún: el listado sigue siendo útil */ }
+  }
+  useEffect(() => { void cargarPendientes(); }, []);
+
+  async function validar(v: Vehiculo) {
+    setValidando(v.id); setMsgPend("");
+    try {
+      await validarVehiculo(v.id);
+      await cargarPendientes();
+    } catch (e: any) { setMsgPend(e?.message || "No se ha podido validar"); }
+    finally { setValidando(null); }
+  }
 
   // filtros
   const [q, setQ] = useState("");
@@ -337,6 +360,57 @@ export default function Vehiculos() {
         </div>
       </div>
       {msg && <div className={`mb-3 text-sm ${msg.startsWith("✔") ? "text-emerald-400" : "text-red-300"}`}>{msg}</div>}
+
+      {/* Los que nacieron en la tablet. Solo salen si los hay. */}
+      {pendientes.length > 0 && (
+        <div className="mb-4 rounded-lg border border-amber-600/40 bg-amber-500/5 p-3">
+          <div className="flex items-center gap-2">
+            <span className="text-amber-300">⚠</span>
+            <h2 className="text-sm font-bold text-amber-200">
+              {pendientes.length === 1
+                ? "Un vehículo dado de alta desde la tablet"
+                : `${pendientes.length} vehículos dados de alta desde la tablet`}
+            </h2>
+          </div>
+          <p className="mt-1 text-[12px] text-amber-200/80">
+            Nacieron con lo justo para poder hacer el parte: empresa, matrícula, tipo y
+            medida. Complétales la marca, el modelo y la delegación, o fusiónalos si el
+            camión ya estaba dado de alta con la matrícula escrita de otra manera.
+          </p>
+          {msgPend && <div className="mt-2 text-[12px] text-red-300">{msgPend}</div>}
+          <div className="mt-3 flex flex-col gap-2">
+            {pendientes.map((v) => (
+              <div key={v.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-slate-700 bg-slate-900/40 px-3 py-2">
+                <span className="font-mono text-sm font-bold text-slate-100">{v.matricula}</span>
+                <span className="text-[12px] text-slate-400">{v.empresa?.nombre ?? "—"}</span>
+                <span className="text-[12px] text-slate-500">{v.tipo?.nombre ?? "sin tipo"}</span>
+                {/* Se dice qué le falta, no solo que está pendiente: así se
+                    sabe si hay que abrirlo o basta con darlo por bueno. */}
+                <span className="text-[12px] text-amber-300">
+                  {[!v.marca && "marca", !v.modelo && "modelo", !v.delegacion_id && "delegación"]
+                    .filter(Boolean).join(", ") || "nada obvio"}
+                  {" pendiente"}
+                </span>
+                <div className="ml-auto flex gap-2">
+                  <button
+                    onClick={() => navigate(`/tyrecontrol/vehiculos/${v.id}`)}
+                    className="rounded border border-slate-600 px-2 py-1 text-[12px] text-slate-200 hover:bg-slate-700"
+                  >
+                    Abrir ficha
+                  </button>
+                  <button
+                    onClick={() => validar(v)}
+                    disabled={validando === v.id}
+                    className="rounded bg-emerald-600 px-2 py-1 text-[12px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+                  >
+                    {validando === v.id ? "…" : "Está bien"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* KPIs (clicables para filtrar) */}
       <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">

@@ -31,13 +31,13 @@ const ESQUEMA = {
   properties: {
     marca: CAMPO, modelo: CAMPO, medida: CAMPO,
     indice_carga_simple: CAMPO, indice_carga_doble: CAMPO,
-    codigo_velocidad: CAMPO, dot: CAMPO,
+    codigo_velocidad: CAMPO, dot: CAMPO, numero_serie: CAMPO,
     otros_textos: { type: "array", items: { type: "string" } },
     aviso: { type: ["string", "null"] },
   },
   required: [
     "marca", "modelo", "medida", "indice_carga_simple", "indice_carga_doble",
-    "codigo_velocidad", "dot", "otros_textos", "aviso",
+    "codigo_velocidad", "dot", "numero_serie", "otros_textos", "aviso",
   ],
 } as const;
 
@@ -54,6 +54,12 @@ Campos:
 - codigo_velocidad: la letra final ("L", "M", "K").
 - dot: los cuatro dígitos de semana y año ("2325"). Si ves el código de fábrica
   completo, devuelve la línea entera y ya se recortará.
+- numero_serie: el número de SERIE de esa rueda concreta, si está estampado.
+  Suele ir junto a la marca o cerca del DOT, y es una cadena larga de letras y
+  números que NO es la medida, ni los índices de carga, ni el DOT, ni un código
+  de homologación (E4, DOT, ECE, TWI, M+S, 3PMSF). Cópialo TAL CUAL, sin
+  quitarle espacios ni guiones. Muchas ruedas no lo llevan visible: si no lo
+  ves, null — es lo normal, no un fallo.
 - otros_textos: cualquier otro texto técnico legible del flanco.
 - aviso: si la foto no permite leer (borrosa, oscura, sucia, cortada, se ven
   varias ruedas…), explícalo en una frase. Si se lee bien, null.
@@ -63,7 +69,9 @@ REGLAS QUE NO PUEDES SALTARTE:
 1. NO ADIVINES. Si un dato no se ve, ponlo a null. Un dato inventado con
    aspecto de bueno es peor que un hueco: lo confirmarán sin mirar.
 2. Si dudas entre dos lecturas (un 6 que puede ser un 8), da la que creas y
-   BAJA la confianza por debajo de 0.5.
+   BAJA la confianza por debajo de 0.5. PERO DALA: no la conviertas en null.
+   Un número con poca confianza se le enseña al técnico para que lo compruebe;
+   un hueco le obliga a teclear diez dígitos a mano.
 3. No deduzcas la medida del aspecto de la rueda ni el modelo del dibujo de la
    banda de rodadura. Solo texto leído.
 4. Si en la foto hay más de un neumático, lee el que esté en primer plano y

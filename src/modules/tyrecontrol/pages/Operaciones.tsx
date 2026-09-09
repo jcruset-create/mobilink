@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { listarOperacionesPagina, listarOperacionesTodas, listarEmpresas, listarVehiculos, actualizarCosteOperacion, planificarOperacion, cambiarEstadoOperacion, listarUsuarios, listarReservas, liberarReserva, anularOperacion, listarHistorialEstados, listarAuditoriaOperacion, listarMovimientosOperacion, listarAdjuntosOperacion, listarEjecucionesDePrevista, obtenerPrevistaDe } from "../services/data";
+import { listarOperacionesPagina, listarOperacionesTodas, listarEmpresas, listarVehiculos, actualizarCosteOperacion, planificarOperacion, cambiarEstadoOperacion, listarUsuarios, listarReservas, liberarReserva, anularOperacion, listarHistorialEstados, listarAuditoriaOperacion, listarMovimientosOperacion, listarAdjuntosOperacion, listarEjecucionesDePrevista, obtenerPrevistaDe, corregirOperacion, listarCatOperaciones } from "../services/data";
 import type { EstadoHistorialEntry, AuditoriaEntry, OperacionVinculada } from "../services/data";
 import type { Empresa, OperacionNeumatico, TipoOperacion, Vehiculo, EstadoOperacion, Perfil, ReservaNeumatico, PrioridadOperacion, OperacionMovimiento, OperacionAdjunto } from "../types";
 import { TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS, ESTADO_OPERACION_BADGE, PRIORIDAD_OPERACION_LABELS } from "../types";
@@ -62,6 +62,16 @@ export default function Operaciones() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
   const [editCoste, setEditCoste] = useState<null | { id: string; material: string; mano: string }>(null);
+  /**
+   * Corregir DATOS de una operación ya hecha. No mueve la goma ni toca el
+   * stock: eso no se puede deshacer sin arrastrar lo que haya pasado después.
+   */
+  const [corregir, setCorregir] = useState<null | {
+    id: string; motivo: string; observaciones: string;
+    numeroSerie: string; dot: string; tieneNeumatico: boolean; porQue: string;
+  }>(null);
+  const [corrigiendo, setCorrigiendo] = useState(false);
+  const [catMotivos, setCatMotivos] = useState<{ codigo: string; nombre: string }[]>([]);
   const [savingCoste, setSavingCoste] = useState(false);
 
   // Fase 5: planificar operación + reservas
@@ -220,8 +230,36 @@ export default function Operaciones() {
   useEffect(() => { if (!esCliente) listarEmpresas().then(setEmpresas); }, [esCliente]);
   // Cambiar un filtro vuelve a la primera página: quedarse en la 7 de un
   // resultado que ahora tiene 2 enseña una tabla vacía que parece un fallo.
+  // Los motivos, para que corregir la razón sea elegir del catálogo y no
+  // escribir texto libre: es justo lo que se quitó de la tablet.
+  useEffect(() => {
+    void listarCatOperaciones()
+      .then((c) => setCatMotivos(c.motivos.map((m) => ({ codigo: m.codigo, nombre: m.nombre }))))
+      .catch(() => setCatMotivos([]));
+  }, []);
+
   useEffect(() => { setPagina(0); }, [fEmpresa, fVehiculo, fTipo, fEstado, fDesde, fHasta]);
   useEffect(() => { void cargar(); /* eslint-disable-next-line */ }, [fEmpresa, fVehiculo, fTipo, fEstado, fDesde, fHasta, pagina]);
+
+  async function guardarCorreccion() {
+    if (!corregir) return;
+    if (!corregir.porQue.trim()) { setMsg("Di por qué lo corriges: queda apuntado con tu nombre."); return; }
+    setCorrigiendo(true);
+    try {
+      await corregirOperacion({
+        operacionId: corregir.id,
+        motivoCorreccion: corregir.porQue,
+        motivo: corregir.motivo || null,
+        observaciones: corregir.observaciones,
+        // Solo se mandan si hay ficha de neumático que corregir.
+        ...(corregir.tieneNeumatico
+          ? { numeroSerie: corregir.numeroSerie, dot: corregir.dot }
+          : {}),
+      });
+      setCorregir(null); await cargar();
+    } catch (e: any) { setMsg(e?.message || "No se ha podido corregir"); }
+    finally { setCorrigiendo(false); }
+  }
 
   const num = (s: string) => (s.trim() === "" ? null : Number(s.replace(",", ".")));
   async function guardarCoste() {
@@ -320,6 +358,25 @@ export default function Operaciones() {
               <td className={tdCls}>
                 <div className="flex flex-wrap gap-1">
                   <button onClick={() => abrirDetalle(o)} className="rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700">Detalle</button>
+                  {/*
+                    Corregir el DATO, no la rueda. Una anulada ya no cuenta
+                    para nada: corregirla daría a entender que vuelve a valer.
+                  */}
+                  {!o.is_anulada && (
+                    <button
+                      onClick={() => setCorregir({
+                        id: o.id,
+                        motivo: o.motivo ?? "",
+                        observaciones: o.observaciones ?? "",
+                        numeroSerie: o.neumatico?.numero_serie ?? "",
+                        dot: o.neumatico?.dot ?? "",
+                        tieneNeumatico: !!o.neumatico,
+                        porQue: "",
+                      })}
+                      className="rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700">
+                      Corregir
+                    </button>
+                  )}
                   {accionesPara(o).map((a) => (
                     <button key={a.estado} onClick={() => accionEstado(o, a.estado)} disabled={accionando === o.id}
                       className={`rounded border border-slate-600 px-1.5 py-0.5 text-[11px] font-semibold hover:bg-slate-700 disabled:opacity-50 ${a.cls}`}>
@@ -356,6 +413,49 @@ export default function Operaciones() {
           <div className="grid gap-2 sm:grid-cols-2">
             <Field label="Coste material (€)"><input type="number" step="0.01" className={inputCls} value={editCoste.material} onChange={(e) => setEditCoste({ ...editCoste, material: e.target.value })} /></Field>
             <Field label="Coste mano de obra (€)"><input type="number" step="0.01" className={inputCls} value={editCoste.mano} onChange={(e) => setEditCoste({ ...editCoste, mano: e.target.value })} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {corregir && (
+        <Modal title="Corregir lo apuntado" onClose={() => setCorregir(null)}
+          footer={<div className="flex justify-end gap-2">
+            <button onClick={() => setCorregir(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
+            <button onClick={guardarCorreccion} disabled={corrigiendo} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{corrigiendo ? "Guardando…" : "Guardar la corrección"}</button>
+          </div>}>
+          <p className="mb-3 rounded-lg bg-amber-500/10 p-2 text-xs text-amber-300">
+            Esto corrige el <b>dato</b>, no mueve la rueda. El neumático se queda donde
+            está y el stock no cambia. Para deshacer un movimiento hay que hacerlo desde
+            la ficha del vehículo, y solo si es lo último que se hizo.
+          </p>
+          <div className="grid gap-2">
+            <Field label="Razón">
+              <select className={inputCls} value={corregir.motivo}
+                onChange={(e) => setCorregir({ ...corregir, motivo: e.target.value })}>
+                <option value="">Sin razón</option>
+                {catMotivos.map((m) => <option key={m.codigo} value={m.codigo}>{m.nombre}</option>)}
+              </select>
+            </Field>
+            {corregir.tieneNeumatico && (
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Field label="Nº de serie">
+                  <input className={inputCls} value={corregir.numeroSerie}
+                    onChange={(e) => setCorregir({ ...corregir, numeroSerie: e.target.value })} />
+                </Field>
+                <Field label="DOT">
+                  <input className={inputCls} value={corregir.dot}
+                    onChange={(e) => setCorregir({ ...corregir, dot: e.target.value })} />
+                </Field>
+              </div>
+            )}
+            <Field label="Observaciones">
+              <textarea rows={2} className={inputCls} value={corregir.observaciones}
+                onChange={(e) => setCorregir({ ...corregir, observaciones: e.target.value })} />
+            </Field>
+            <Field label="¿Por qué lo corriges? (obligatorio, queda apuntado)">
+              <input className={inputCls} value={corregir.porQue}
+                onChange={(e) => setCorregir({ ...corregir, porQue: e.target.value })} />
+            </Field>
           </div>
         </Modal>
       )}

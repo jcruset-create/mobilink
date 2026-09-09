@@ -6,6 +6,7 @@ import { NAV, navVisible, SIEMPRE_VISIBLES } from "../config/navigation";
 import { ROL_LABELS } from "../types";
 import AlertasWebfleet from "../components/AlertasWebfleet";
 import AsistenteChat from "../components/AsistenteChat";
+import AccesosCabecera from "../../../components/AccesosCabecera";
 
 export default function TyreLayout() {
   const { perfil, pantallas, signOut } = useTyreAuth();
@@ -59,6 +60,7 @@ export default function TyreLayout() {
               {perfil?.empresa?.nombre ? ` · ${perfil.empresa.nombre}` : ""}
             </div>
           </div>
+          <AccesosCabecera actual="tyrecontrol" />
           <button onClick={() => navigate("/inicio")} title="Volver al inicio" className="flex items-center gap-1 rounded-lg bg-slate-800 px-3 py-1.5 text-[12px] font-medium text-slate-200 hover:bg-slate-700">
             <Home className="h-4 w-4" /> Inicio
           </button>

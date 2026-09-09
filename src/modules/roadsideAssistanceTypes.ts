@@ -206,7 +206,10 @@ export const ROADSIDE_ASSISTANCE_STATUS_LABELS: Record<
   RoadsideAssistanceStatus,
   string
 > = {
-  pendiente: "Pendiente",
+  // El estado interno sigue llamándose `pendiente` en la base de datos y en
+  // la API. Lo que cambia es cómo se llama de cara a quien lo lee: una
+  // asistencia recién dada de alta ya está gestionada, no pendiente.
+  pendiente: "Gestionada",
   asignada: "Asignada",
   en_camino: "En camino",
   en_punto: "En punto",

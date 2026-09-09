@@ -31,6 +31,7 @@ import {
 import { euros, aCentimos, totalLineas } from "../utils/money";
 import type { LineaDenominacion } from "../types";
 import { AvisoPendientes } from "./CambioBanco";
+import { AvisoAutoScanPendiente } from "../components/BandejaAutoScan";
 import { repartirIngreso, valorEnvasado } from "../utils/cierre";
 import * as api from "../services/api";
 
@@ -255,6 +256,9 @@ export default function Cierre() {
       {/* Se puede cerrar con dinero fuera —el banco no contesta el mismo día y
           el empleado vuelve mañana—, pero quien cierra tiene que verlo. */}
       <AvisoPendientes />
+
+      {/* Las facturas que llegaron solas y nadie cobró. Avisa, no impide. */}
+      <AvisoAutoScanPendiente />
 
       {error && <ErrorBox>{error}</ErrorBox>}
 
