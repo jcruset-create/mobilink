@@ -29,6 +29,7 @@ import { timeToMinutes } from "./workshopPureHelpers";
 import { getAdminHeaders } from "./adminHeaders";
 import { addMinutesToTime, nowMs } from "./time";
 import { isBuiltInTemplateKey } from "./jobHelpers";
+import { isManualUnavailableStatus } from "./techSync";
 
 /**
  * Dependencias que el hook toma del componente.
@@ -826,7 +827,21 @@ export function useScheduledJobs({
         await saveJobToBackend(job);
       }
 
+      // Un técnico con estado programado vigente (vacaciones, baja...) llega
+      // aquí con ese estado ya aplicado por applyScheduledStatusesToTechs, no
+      // con el suyo de ficha. Guardarlo grababa el estado del rango en la base
+      // de datos y, al acabarse el rango, nadie lo revertía: el técnico se
+      // quedaba de vacaciones para siempre. allocateJob no los toca de todas
+      // formas, así que no hay nada que guardar de ellos.
       for (const tech of result.techs) {
+        // Un técnico de vacaciones, de baja o de permiso llega aquí con ese
+        // estado ya aplicado por applyScheduledStatusesToTechs, no con el de su
+        // ficha. Guardarlo grababa en la base de datos el estado del rango y,
+        // al terminarse el rango, nadie lo revertía: el técnico se quedaba de
+        // vacaciones para siempre. allocateJob no los toca de todas formas, así
+        // que no hay nada suyo que guardar.
+        if (isManualUnavailableStatus(String(tech.status || ""))) continue;
+
         await saveTechToBackend(tech);
       }
 
