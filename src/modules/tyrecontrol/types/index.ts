@@ -943,12 +943,13 @@ export const CATEGORIA_NEUMATICO_LABELS: Record<CategoriaNeumatico, string> = {
 };
 
 // Configuración de Webfleet por empresa (credenciales del cliente).
+// Configuración de Webfleet de un cliente, TAL COMO LA VE EL PANEL: sin
+// secretos. `password` y `apikey` existen en la tabla pero no se leen nunca
+// desde el navegador; se escriben con WebfleetConfigPatch (services/data.ts).
 export interface WebfleetConfig {
   empresa_id: string;
   account: string | null;
   username: string | null;
-  password: string | null;
-  apikey: string | null;
   base_url: string | null;
   activo: boolean;
 }

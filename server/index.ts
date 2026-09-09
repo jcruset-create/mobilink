@@ -47,6 +47,7 @@ import {
 } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
+import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc } from "./tyrecontrol/empresaAcceso.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
@@ -1272,6 +1273,39 @@ function globalWebfleetCreds(): WebfleetCreds | null {
 // globales (con las que ya funciona el módulo de asistencia). null si no hay ninguna.
 async function resolveWebfleetCreds(empresaId: string): Promise<WebfleetCreds | null> {
   return (await getWebfleetConfigForEmpresa(empresaId)) ?? globalWebfleetCreds();
+}
+
+/**
+ * Empresa de una petición de telemática, ya comprobada.
+ *
+ * Los endpoints de Webfleet reciben la empresa como parámetro y hasta ahora la
+ * usaban tal cual: quien llamaba elegía con QUÉ CUENTA se consultaba. Un
+ * usuario autenticado de cualquier cliente podía pedir la telemetría de otro
+ * poniendo su uuid en la URL. El middleware ya dejaba disponible `req.authCtx`,
+ * pero nadie lo miraba.
+ *
+ * Aquí se contrasta lo que pide la petición con lo que dice la sesión, usando
+ * el mismo criterio que la base de datos (`tc_puede_ver_empresa`). Devuelve la
+ * empresa si el acceso es legítimo, o responde y devuelve null si no lo es —de
+ * modo que quien llama solo tiene que comprobar el null y salir.
+ *
+ * Se responde 404, no 403: confirmar «esa empresa existe pero no es tuya» ya
+ * es contar algo de otro cliente.
+ */
+async function empresaTelematicaAutorizada(
+  req: express.Request,
+  res: express.Response,
+): Promise<string | null> {
+  const empresa = String(req.query.empresa || "");
+  if (!empresa) {
+    res.status(400).json({ error: "Falta el parámetro empresa" });
+    return null;
+  }
+  if (!(await puedeVerEmpresaTc(req, empresa))) {
+    res.status(404).json({ error: "Empresa no encontrada" });
+    return null;
+  }
+  return empresa;
 }
 
 function buildWebfleetRequest(action: string, extra: Record<string, string> = {}, creds?: WebfleetCreds): { url: string; headers: Record<string, string> } {
@@ -5961,8 +5995,8 @@ app.post("/api/tyrecontrol/checkpoint/revisar", authenticate, requireModule("tyr
 // Lista de objetos Webfleet de una empresa (para enlazar vehículos por su ID).
 app.get("/api/tyrecontrol/webfleet/objects", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
-    const empresa = String(req.query.empresa || "");
-    if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
+    const empresa = await empresaTelematicaAutorizada(req, res);
+    if (!empresa) return;
     const creds = await resolveWebfleetCreds(empresa);
     if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
@@ -5983,9 +6017,10 @@ app.get("/api/tyrecontrol/webfleet/objects", authenticate, requireModule("tyreco
 // Estado de un objeto: km (odómetro) + posición. Para sincronizar un vehículo.
 app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
-    const empresa = String(req.query.empresa || "");
     const objectno = String(req.query.objectno || "");
-    if (!empresa || !objectno) return res.status(400).json({ error: "Falta empresa u objectno" });
+    if (!objectno) return res.status(400).json({ error: "Falta empresa u objectno" });
+    const empresa = await empresaTelematicaAutorizada(req, res);
+    if (!empresa) return;
     const creds = await resolveWebfleetCreds(empresa);
     if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", { objectno }, creds);
@@ -6024,8 +6059,8 @@ app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrec
 //   /api/tyrecontrol/webfleet/conduccion?empresa=<uuid>&dias=30
 app.get("/api/tyrecontrol/webfleet/conduccion", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
-    const empresa = String(req.query.empresa || "");
-    if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
+    const empresa = await empresaTelematicaAutorizada(req, res);
+    if (!empresa) return;
     const dias = Math.min(90, Math.max(1, Number(req.query.dias) || 30));
     const creds = await resolveWebfleetCreds(empresa);
     if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
