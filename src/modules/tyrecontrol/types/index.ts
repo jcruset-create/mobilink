@@ -942,7 +942,6 @@ export const CATEGORIA_NEUMATICO_LABELS: Record<CategoriaNeumatico, string> = {
   turismo: "Turismo", "4x4": "4x4", furgoneta: "Furgoneta", camion: "Camión", otros: "Otros",
 };
 
-// Configuración de Webfleet por empresa (credenciales del cliente).
 // Configuración de Webfleet de un cliente, TAL COMO LA VE EL PANEL: sin
 // secretos. `password` y `apikey` existen en la tabla pero no se leen nunca
 // desde el navegador; se escriben con WebfleetConfigPatch (services/data.ts).
