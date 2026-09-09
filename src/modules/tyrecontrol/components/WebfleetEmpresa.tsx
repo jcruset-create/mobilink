@@ -26,22 +26,28 @@ export default function WebfleetEmpresa({ empresaId }: { empresaId: string }) {
       setConfigurado(!!c.account);
       setAccount(c.account ?? "");
       setUsername(c.username ?? "");
-      setPassword(c.password ?? "");
-      setApikey(c.apikey ?? "");
       setBaseUrl(c.base_url ?? "https://csv.webfleet.com/extern");
       setActivo(c.activo);
+      // La contraseña y la API key NO se traen: se escriben, no se leen.
+      // Se quedan en blanco y, si se dejan así, conservan su valor guardado.
     }).catch(() => {});
   }, [empresaId]);
 
   async function guardar() {
     setGuardando(true); setMsg("");
     try {
+      // Un secreto en blanco significa «déjalo como está», no «bórralo»: si se
+      // enviara null, abrir la pantalla y pulsar Guardar borraría la contraseña
+      // del cliente sin que nadie lo pidiera. Para vaciarlo de verdad está el
+      // interruptor de integración activa.
       await guardarWebfleetConfig(empresaId, {
         account: account.trim() || null, username: username.trim() || null,
-        password: password.trim() || null, apikey: apikey.trim() || null,
         base_url: baseUrl.trim() || "https://csv.webfleet.com/extern", activo,
+        ...(password.trim() ? { password: password.trim() } : {}),
+        ...(apikey.trim() ? { apikey: apikey.trim() } : {}),
       });
       setConfigurado(!!account.trim());
+      setPassword(""); setApikey("");
       setMsg("✔ Credenciales de Webfleet guardadas");
     } catch (e: any) { setMsg(e?.message || "Error al guardar"); } finally { setGuardando(false); }
   }
@@ -56,14 +62,14 @@ export default function WebfleetEmpresa({ empresaId }: { empresaId: string }) {
       </div>
       <div className="mb-3 text-[11px] text-slate-500">
         Credenciales de la cuenta Webfleet de este cliente (WEBFLEET.connect). Cuando estén rellenas, se podrán sincronizar los km y la posición de sus vehículos
-        (cada vehículo debe tener su «Webfleet Vehicle ID» en su ficha). Datos sensibles: solo visibles para administradores.
+        (cada vehículo debe tener su «Webfleet Vehicle ID» en su ficha). La contraseña y la API key no se muestran: escríbelas solo si quieres cambiarlas.
       </div>
 
       <div className="grid gap-2 sm:grid-cols-2">
         <Field label="Account"><input className={inputCls} value={account} disabled={!puedeEditar} onChange={(e) => setAccount(e.target.value)} placeholder="cuenta Webfleet del cliente" /></Field>
         <Field label="Usuario (API)"><input className={inputCls} value={username} disabled={!puedeEditar} onChange={(e) => setUsername(e.target.value)} /></Field>
-        <Field label="Contraseña (API)"><input type="password" className={inputCls} value={password} disabled={!puedeEditar} onChange={(e) => setPassword(e.target.value)} /></Field>
-        <Field label="API key"><input className={inputCls} value={apikey} disabled={!puedeEditar} onChange={(e) => setApikey(e.target.value)} /></Field>
+        <Field label="Contraseña (API)"><input type="password" autoComplete="new-password" className={inputCls} value={password} disabled={!puedeEditar} onChange={(e) => setPassword(e.target.value)} placeholder="sin cambios" /></Field>
+        <Field label="API key"><input type="password" autoComplete="off" className={inputCls} value={apikey} disabled={!puedeEditar} onChange={(e) => setApikey(e.target.value)} placeholder="sin cambios" /></Field>
         <Field label="Base URL"><input className={inputCls} value={baseUrl} disabled={!puedeEditar} onChange={(e) => setBaseUrl(e.target.value)} /></Field>
         <label className="flex items-center gap-2 self-end pb-2 text-[12px] text-slate-300">
           <input type="checkbox" checked={activo} disabled={!puedeEditar} onChange={(e) => setActivo(e.target.checked)} />

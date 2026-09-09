@@ -1,6 +1,7 @@
 import type { Express, RequestHandler } from "express";
 import { hayIA } from "../../core/openaiService.ts";
 import { supabase } from "../../supabase.ts";
+import { puedeVerEmpresaDeRequest } from "../empresaAcceso.ts";
 import { LectorParteIA, type LectorParte } from "./lectorParte.ts";
 import { armarParte, type MovimientoFila } from "./armarParte.ts";
 import { filasDeOperaciones, type OperacionFila, type MedicionPos }
@@ -31,28 +32,11 @@ const BUCKET_PARTES = "tc-revisiones-fotos";
 /**
  * ¿El usuario de la petición puede ver esta empresa?
  *
- * Reproduce a mano lo que hace tc_puede_ver_empresa en la base de datos,
- * porque aquí la RLS no protege: el cliente de servidor usa service_role.
+ * La regla vive ahora en `../empresaAcceso.ts`, en un solo sitio, porque los
+ * endpoints de telemática necesitan exactamente la misma comprobación. Aquí
+ * queda el nombre local para no tocar a quien ya lo llamaba.
  */
-async function puedeVerEmpresa(req: any, empresaId: string): Promise<boolean> {
-  const userId = req.authCtx?.userId as string | undefined;
-  if (!userId) return false;
-  if (req.authCtx?.esSuperadmin === true) return true;
-
-  const { data: u } = await supabase
-    .from("tc_usuarios").select("rol, empresa_id, es_superadmin, activo")
-    .eq("id", userId).maybeSingle();
-  if (!u || u.activo === false) return false;
-  if (u.es_superadmin) return true;
-  if (u.rol === "administrador" && u.empresa_id === empresaId) return true;
-  // Cliente: solo la suya, y solo para leer — que es lo único que hace esto.
-  if (u.rol === "cliente" && u.empresa_id === empresaId) return true;
-
-  const { data: asignado } = await supabase
-    .from("tc_operador_empresas").select("empresa_id")
-    .eq("usuario_id", userId).eq("empresa_id", empresaId).maybeSingle();
-  return !!asignado;
-}
+const puedeVerEmpresa = puedeVerEmpresaDeRequest;
 
 /**
  * El plano del chasis del vehículo, en bytes, para el recuadro «Posición

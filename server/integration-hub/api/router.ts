@@ -71,8 +71,18 @@ function tenantOf(req: Request): string | undefined {
  */
 function requireAdmin(req: Request, res: Response): boolean {
   const accepted = [process.env.ADMIN_TOKEN, process.env.ADMIN_PASSWORD].filter(Boolean) as string[];
-  // Si no hay ninguna credencial configurada, no bloqueamos (entorno de desarrollo).
-  if (accepted.length === 0) return true;
+  // Sin credencial configurada se deja pasar SOLO fuera de producción, que es
+  // para lo que se pensó («entorno de desarrollo»). En producción, una variable
+  // que falta no puede significar «abre la puerta»: si alguien despliega sin
+  // ADMIN_TOKEN, el Hub queda cerrado y se nota enseguida, en vez de quedar
+  // abierto y no notarse nunca.
+  if (accepted.length === 0) {
+    if (process.env.NODE_ENV === "production") {
+      res.status(503).json({ error: "admin_credential_not_configured" });
+      return false;
+    }
+    return true;
+  }
 
   const raw = req.header("x-admin-token") ?? String(req.query?.token ?? "");
   let got = raw;
@@ -106,6 +116,33 @@ function sendError(res: Response, err: unknown) {
 
 export function createIntegrationHubRouter(): Router {
   const router = express.Router();
+
+  /**
+   * Credencial exigida en TODO el Hub, no solo en /admin.
+   *
+   * Hasta ahora `requireAdmin` se llamaba ruta a ruta y solo en las de /admin.
+   * Las de negocio quedaban abiertas sin ninguna comprobación: crear un
+   * presupuesto de venta, modificar la planificación de un pedido, lanzar un
+   * pedido de compra a un proveedor o mandar un WhatsApp eran llamadas que
+   * cualquiera podía hacer, indicando además con qué tenant, porque el tenant
+   * viaja en una cabecera que pone quien llama.
+   *
+   * El guard sube aquí y cubre el router entero. No rompe a los dos paneles
+   * que lo usan: `api()` en PanelIntegraciones y `hubApi()` en PedidosErpPage
+   * ya mandan `x-admin-token` en todas sus llamadas, también en las de negocio.
+   *
+   * `/health` se queda fuera a propósito: es una sonda de disponibilidad y no
+   * revela datos de nadie.
+   *
+   * Las llamadas a `requireAdmin` que quedan dentro de cada ruta /admin son
+   * ahora redundantes. Se dejan a propósito: no cuestan nada y hacen que una
+   * ruta siga protegida aunque algún día se monte fuera de este router.
+   */
+  router.use((req, res, next) => {
+    if (req.path === "/health") return next();
+    if (!requireAdmin(req, res)) return;
+    next();
+  });
 
   // ── Health ──────────────────────────────────────────────────────────────
   router.get("/health", (_req, res) => {
