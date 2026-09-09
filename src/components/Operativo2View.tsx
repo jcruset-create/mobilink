@@ -9,6 +9,8 @@ import { getOperationLabel, getWorkedMinutes } from "../modules/jobHelpers";
 import { canAssignTechManuallyToJob, canSelectTechManuallyForJob } from "../modules/assignment";
 import { isHardBlockedTechStatus } from "../modules/techStatus";
 import { isManualUnavailableStatus } from "../modules/techSync";
+import { tecnicosNoDisponibles } from "../modules/tecnicosNoDisponibles";
+import { getTodayDateValue } from "../modules/techStatusScheduleHelpers";
 import type { ScheduledTechStatus } from "../modules/techStatusScheduleHelpers";
 import type { CustomExtraTask } from "../modules/quickTaskSelector";
 import type { QuickDraftState } from "../modules/quickEntryV2State";
@@ -213,6 +215,31 @@ export default function Operativo2View({
   const techColor = (n: string) => (responsables.has(n) ? "text-rose-400" : soportes.has(n) ? "text-orange-400" : maintTechNames.has(n) ? "text-yellow-300" : "text-slate-200");
   const agendados = agenda.dueScheduledJobs ?? [];
   const refuerzos = visibleTechs.filter((t) => !isTestTech(t.name) && t.status === "refuerzo");
+
+  // Quién NO puede coger trabajo y por qué. Sin esto, alguien de vacaciones o
+  // de baja simplemente no aparecía en la pantalla y no había forma de saber si
+  // faltaba por fichar o es que no estaba.
+  const noDisponibles = tecnicosNoDisponibles({
+    techs: visibleTechs.filter((t) => !isTestTech(t.name)),
+    trabajando: trabajandoNames,
+    estadosProgramados: scheduledTechStatuses,
+    hoy: getTodayDateValue(),
+    bloqueadoEnOtroTaller: isTechBlockedByOutsideMaintenance,
+  });
+
+  const colorMotivo = (status: string) =>
+    status === "baja"
+      ? "text-rose-300"
+      : status === "vacaciones"
+        ? "text-amber-300"
+        : status === "permiso"
+          ? "text-violet-300"
+          : "text-slate-300";
+
+  const fechaCorta = (fecha?: string) => {
+    const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(fecha || ""));
+    return m ? `${m[2]}/${m[1]}` : "";
+  };
   const bloqueadosCount = visibleJobs.filter((j) => j.status === "bloqueado").length;
 
   return (
@@ -241,7 +268,7 @@ export default function Operativo2View({
         </div>
       </div>
       {/* Cabecera */}
-      <div className="grid gap-2 md:grid-cols-3">
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-lg bg-slate-800 p-2">
           <div className="mb-1 text-[10px] font-bold text-sky-300">TRABAJANDO ({trabajando.length})</div>
           <div className="flex flex-wrap gap-1">
@@ -255,6 +282,44 @@ export default function Operativo2View({
           <div className="flex flex-wrap gap-1">
             {disponibles.length === 0 ? <span className="text-[11px] text-slate-500">—</span> :
               disponibles.map((t) => <span key={t.name} className="rounded bg-slate-700 px-1.5 py-0.5 text-[11px] text-emerald-300">{t.name}</span>)}
+          </div>
+        </div>
+        <div className="rounded-lg bg-slate-800 p-2">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold text-amber-300">
+              NO DISPONIBLES ({noDisponibles.length})
+            </span>
+            <button
+              type="button"
+              onClick={() => setView("operarios")}
+              className="rounded bg-slate-700 px-1.5 py-0.5 text-[9px] font-bold text-slate-300 hover:bg-slate-600"
+              title="El estado de cada técnico se cambia en Pantalla técnicos"
+            >
+              Cambiar estado
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {noDisponibles.length === 0 ? (
+              <span className="text-[11px] text-slate-500">Nadie ausente</span>
+            ) : (
+              noDisponibles.map((t) => (
+                <span
+                  key={t.name}
+                  className="rounded bg-slate-700 px-1.5 py-0.5 text-[11px]"
+                  title={
+                    t.hasta
+                      ? `${t.motivo} · ${t.desde} → ${t.hasta} (programado en la agenda)`
+                      : `${t.motivo} · estado puesto a mano en Pantalla técnicos`
+                  }
+                >
+                  <span className="font-semibold text-slate-200">{t.name}</span>{" "}
+                  <span className={colorMotivo(t.status)}>{t.motivo}</span>
+                  {t.hasta && (
+                    <span className="text-slate-400"> · hasta {fechaCorta(t.hasta)}</span>
+                  )}
+                </span>
+              ))
+            )}
           </div>
         </div>
         <div className="rounded-lg bg-slate-800 p-2">
@@ -595,7 +660,11 @@ export default function Operativo2View({
         </div>
         <div className="rounded-lg bg-slate-800 p-2">
           <div className="text-[10px] font-bold text-slate-400">Total técnicos</div>
-          <div className="mt-0.5 text-[11px] text-slate-200">{trabajando.length + disponibles.length} · trabajando {trabajando.length} · libres {disponibles.length}</div>
+          <div className="mt-0.5 text-[11px] text-slate-200">
+            {trabajando.length + disponibles.length + noDisponibles.length} · trabajando{" "}
+            {trabajando.length} · libres {disponibles.length} ·{" "}
+            <span className="text-amber-300">ausentes {noDisponibles.length}</span>
+          </div>
         </div>
       </div>
 
