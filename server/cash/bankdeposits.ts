@@ -1583,9 +1583,17 @@ export async function deficitDeCaja(
   let fondo = 0;
   if (ultimoCierre != null) {
     const { rows } = await pool.query(
-      `SELECT COALESCE(SUM(m.valor_unitario_centimos * m.cantidad),0)::bigint AS total
+      /*
+       * El NETO. Sumando solo las salidas, un cambio final deshecho —al
+       * reabrir la jornada o al anular la operación— seguía contando entero, y
+       * la caja se creía con el doble de fondo del que tenía. Con un fondo
+       * inflado no hay déficit, así que la reposición que tocaba hacer a la
+       * mañana siguiente no se ofrecía nunca.
+       */
+      `SELECT COALESCE(SUM(m.valor_unitario_centimos * m.cantidad
+                           * CASE WHEN m.direccion = 'OUT' THEN 1 ELSE -1 END),0)::bigint AS total
          FROM cash_denomination_movements m
-        WHERE m.session_id = $1 AND m.motivo = 'CLOSING_FLOAT' AND m.direccion = 'OUT'`,
+        WHERE m.session_id = $1 AND m.motivo = 'CLOSING_FLOAT'`,
       [ultimoCierre]
     );
     fondo = Number(rows[0].total);
@@ -1616,8 +1624,11 @@ export async function deficitDeCaja(
   let racha = 0;
   if (objetivo > 0) {
     const { rows: cierres } = await pool.query(
-      `SELECT COALESCE(SUM(CASE WHEN m.motivo = 'CLOSING_FLOAT' AND m.direccion = 'OUT'
-                                THEN m.valor_unitario_centimos * m.cantidad ELSE 0 END),0)::bigint AS cambio
+      /* Igual que arriba: el neto, para que la racha no cuente cierres deshechos. */
+      `SELECT COALESCE(SUM(CASE WHEN m.motivo = 'CLOSING_FLOAT'
+                                THEN m.valor_unitario_centimos * m.cantidad
+                                     * CASE WHEN m.direccion = 'OUT' THEN 1 ELSE -1 END
+                                ELSE 0 END),0)::bigint AS cambio
          FROM cash_sessions s
          LEFT JOIN cash_denomination_movements m ON m.session_id = s.id
         WHERE s.register_id = $1 AND s.estado = 'CLOSED'

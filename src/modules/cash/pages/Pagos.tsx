@@ -29,8 +29,16 @@ import { euros, aCentimos, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
 import PaymentMethodPicker from "../components/PaymentMethodPicker";
 import Justificantes from "../components/Justificantes";
-import JustificantePrevio from "../components/JustificantePrevio";
-import { type AperturaCartucho, type DocumentoExterno } from "../types";
+import EscanerFactura from "../components/EscanerFactura";
+import BandejaAutoScan from "../components/BandejaAutoScan";
+import {
+  type AperturaCartucho,
+  type ConceptoGasto,
+  type DestinoGasto,
+  type DocumentoAutoScan,
+  type DocumentoExterno,
+  type PropuestaEscaneo,
+} from "../types";
 import * as api from "../services/api";
 
 export default function Pagos() {
@@ -53,7 +61,27 @@ export default function Pagos() {
   const [ultimo, setUltimo] = useState<{ operacionId: number; numero: string } | null>(null);
   /** PDF elegido antes de confirmar; se sube en cuanto el pago existe. */
   const [justificante, setJustificante] = useState<File | null>(null);
+  /** Excluyente con el anterior: o lo trae el escáner o lo adjunta alguien. */
+  const [inboxId, setInboxId] = useState<number | null>(null);
   const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
+
+  /*
+   * Lo que ha leído el escáner, y qué ha tocado la persona después.
+   *
+   * `tocados` es lo que impide que un segundo escaneo pise un campo corregido
+   * a mano: se vacía justo al aplicar una propuesta, así que lo escrito a
+   * partir de ahí queda marcado como decisión de la persona.
+   */
+  const [escaneo, setEscaneo] = useState<PropuestaEscaneo | null>(null);
+  const [tocados, setTocados] = useState<Set<string>>(new Set());
+  const marcarTocado = (campo: string) =>
+    setTocados((t) => (t.has(campo) ? t : new Set(t).add(campo)));
+
+  /** Clasificación del gasto. Los dos opcionales: no bloquean el pago. */
+  const [conceptos, setConceptos] = useState<ConceptoGasto[]>([]);
+  const [destinos, setDestinos] = useState<DestinoGasto[]>([]);
+  const [conceptoId, setConceptoId] = useState<number | "">("");
+  const [destinoId, setDestinoId] = useState<number | "">("");
 
   const importe = aCentimos(importeTexto) ?? 0;
 
@@ -69,6 +97,36 @@ export default function Pagos() {
     if (forma || formasParaPagos.length === 0) return;
     setForma(formaEfectivo?.codigo ?? formasParaPagos[0].codigo);
   }, [forma, formaEfectivo, formasParaPagos]);
+
+  /*
+   * El catálogo se pide UNA vez al entrar. Los desplegables tienen que estar
+   * llenos antes de que alguien elija concepto, porque el segundo depende del
+   * primero y pedirlo entonces metería una espera en mitad del gesto.
+   */
+  useEffect(() => {
+    void api
+      .conceptosDeGasto()
+      .then((r) => {
+        setConceptos(r.conceptos.filter((c) => c.activo));
+        setDestinos(r.destinos.filter((d) => d.activo));
+      })
+      /*
+       * En silencio: que el catálogo no cargue no puede impedir pagar. Se queda
+       * sin clasificar, que es exactamente lo que pasa hoy con todos los pagos.
+       */
+      .catch(() => {});
+  }, []);
+
+  const conceptoElegido = useMemo(
+    () => conceptos.find((c) => c.id === conceptoId) ?? null,
+    [conceptos, conceptoId]
+  );
+
+  /** Los destinos que pide ESTE concepto. Vacío = no sale el desplegable. */
+  const destinosDelConcepto = useMemo(() => {
+    if (!conceptoElegido || conceptoElegido.tipoDestino === "NINGUNO") return [];
+    return destinos.filter((d) => d.tipo === conceptoElegido.tipoDestino);
+  }, [conceptoElegido, destinos]);
 
   const formaElegida = useMemo(
     () => formasParaPagos.find((f) => f.codigo === forma) ?? null,
@@ -128,7 +186,64 @@ export default function Pagos() {
     setTocadoAMano(false);
     setAvisoComposicion("");
     setJustificante(null);
+    setInboxId(null);
+    setEscaneo(null);
+    setTocados(new Set());
+    setConceptoId("");
+    setDestinoId("");
   }
+
+  /**
+   * Aplica lo que ha leído el escáner del ticket.
+   *
+   * Solo rellena lo que viene con confianza —lo que llega en estado VACIO no se
+   * toca— y NUNCA pisa lo que la persona haya escrito después. Un campo en
+   * blanco se rellena en diez segundos; uno mal relleno hay que descubrirlo
+   * primero.
+   *
+   * El proveedor sale de `proveedor`, que es el EMISOR del documento. En un
+   * ticket de compra el emisor es la tienda; usar `cliente` habría puesto aquí
+   * el nombre de nuestro propio taller.
+   */
+  function aplicarEscaneo(p: PropuestaEscaneo) {
+    setEscaneo(p);
+    if (p.referencia.estado !== "VACIO" && p.referencia.valor && !tocados.has("referencia")) {
+      setReferencia(p.referencia.valor);
+    }
+    if (
+      p.importeCentimos.estado !== "VACIO" &&
+      p.importeCentimos.valor != null &&
+      !tocados.has("importe")
+    ) {
+      setImporteTexto(euros(p.importeCentimos.valor).replace(" €", ""));
+    }
+    if (p.proveedor.estado !== "VACIO" && p.proveedor.valor && !tocados.has("proveedor")) {
+      setProveedor(p.proveedor.valor);
+    }
+    if (p.concepto.estado !== "VACIO" && p.concepto.valor && !tocados.has("concepto")) {
+      setConcepto(p.concepto.valor);
+    }
+    setTocados(new Set());
+  }
+
+  /** Una factura de la bandeja: mismo análisis, hecho antes. */
+  function elegirDeBandeja(d: DocumentoAutoScan, p: PropuestaEscaneo) {
+    setInboxId(d.id);
+    setJustificante(null);
+    aplicarEscaneo(p);
+  }
+
+  /*
+   * El pago anterior de esta misma factura de proveedor, si lo dijo el escáner
+   * y sigue siendo de ESTA referencia. Si alguien corrige el número, el aviso
+   * de la otra factura deja de aplicar.
+   */
+  const yaPagada =
+    escaneo?.cobroPrevio &&
+    escaneo.referencia.valor &&
+    escaneo.referencia.valor.trim().toUpperCase() === referencia.trim().toUpperCase()
+      ? escaneo.cobroPrevio
+      : null;
 
   function elegirDocumento(d: DocumentoExterno) {
     setDocumento(d);
@@ -162,6 +277,8 @@ export default function Pagos() {
         documentoId: documento?.id ?? null,
         externalSystem: documento?.external_system ?? null,
         externalDocumentId: documento?.external_id ?? null,
+        expenseConceptId: conceptoId === "" ? null : conceptoId,
+        expenseTargetId: destinoId === "" ? null : destinoId,
       });
       setUltimo({ operacionId: r.operacionId, numero: r.numero });
 
@@ -174,6 +291,22 @@ export default function Pagos() {
           setError(
             `El pago ${r.numero} ha quedado registrado, pero el justificante no se ha podido subir` +
               `${e instanceof Error ? `: ${e.message}` : "."} Vuelve a adjuntarlo aquí abajo.`
+          );
+        }
+      }
+
+      /*
+       * El ticket de la bandeja pasa a ser el justificante de ESTE pago.
+       * Después y aparte, como la subida manual: si falla, el dinero ya ha
+       * salido y lo único que queda es volver a adjuntar.
+       */
+      if (inboxId != null) {
+        try {
+          await api.promoverAutoScan(inboxId, r.operacionId);
+        } catch (e) {
+          setError(
+            `El pago ${r.numero} ha quedado registrado, pero el ticket escaneado no se ha podido` +
+              ` colgar de él${e instanceof Error ? `: ${e.message}` : "."} Adjúntalo aquí abajo.`
           );
         }
       }
@@ -273,15 +406,121 @@ export default function Pagos() {
               </label>
               <label className="block sm:col-span-2">
                 <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Concepto</span>
-                <input value={concepto} onChange={(e) => setConcepto(e.target.value)} className={inputCls} placeholder="Compra urgente de material" />
+                <input
+                  value={concepto}
+                  onChange={(e) => {
+                    setConcepto(e.target.value);
+                    marcarTocado("concepto");
+                  }}
+                  className={inputCls}
+                  placeholder="Compra urgente de material"
+                />
               </label>
+
+              {/*
+                En qué se ha gastado, y a quién se imputa.
+
+                Solo salen si hay catálogo: una instalación que no ha creado
+                ningún concepto no gana nada con dos desplegables vacíos.
+                Ninguno es obligatorio — obligar a clasificar pararía el
+                mostrador el día que falte una entrada, y lo que se rellenaría
+                entonces sería lo primero que hubiera a mano.
+              */}
+              {conceptos.length > 0 && (
+                <label className="block">
+                  <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                    Concepto de gasto{" "}
+                    <span className="font-normal normal-case text-slate-500">(opcional)</span>
+                  </span>
+                  <select
+                    value={conceptoId}
+                    onChange={(e) => {
+                      const v = e.target.value === "" ? "" : Number(e.target.value);
+                      setConceptoId(v);
+                      // El destino cuelga del concepto: cambiarlo lo invalida.
+                      setDestinoId("");
+                    }}
+                    className={inputCls}
+                  >
+                    <option value="">Sin clasificar</option>
+                    {conceptos.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              {destinosDelConcepto.length > 0 && (
+                <label className="block">
+                  <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                    {conceptoElegido?.tipoDestino === "PERSONA" ? "Operario" : "Se imputa a"}{" "}
+                    <span className="font-normal normal-case text-slate-500">(opcional)</span>
+                  </span>
+                  <select
+                    value={destinoId}
+                    onChange={(e) => setDestinoId(e.target.value === "" ? "" : Number(e.target.value))}
+                    className={inputCls}
+                  >
+                    <option value="">Sin especificar</option>
+                    {destinosDelConcepto.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
 
-            {/* La factura del proveedor, escaneada en el momento del pago. */}
-            <JustificantePrevio
+            {/*
+              Esta factura ya se pagó.
+
+              No bloquea —puede ser un pago fraccionado, o un número repetido
+              por el proveedor— pero pagar dos veces el mismo papel es dinero
+              que sale del cajón dos veces, y eso se dice fuerte y antes de
+              pulsar.
+            */}
+            {yaPagada && (
+              <div className="mt-3 rounded-lg border border-amber-600/60 bg-amber-950/30 px-3 py-2 text-[13px] text-amber-200">
+                <strong>Esta factura ya está pagada.</strong> Consta en{" "}
+                <strong>{yaPagada.numero}</strong>
+                {yaPagada.partyNombre ? ` (${yaPagada.partyNombre})` : ""} por{" "}
+                {euros(yaPagada.importeCentimos)}, el {yaPagada.fecha}. Compruébalo antes de volver
+                a pagarla.
+              </div>
+            )}
+
+            {/* Lo que ya ha llegado del escáner del mostrador, antes de
+                ofrecer adjuntar nada a mano. */}
+            <BandejaAutoScan
+              elegido={inboxId}
+              onElegir={elegirDeBandeja}
+              onSoltar={() => {
+                setInboxId(null);
+                setEscaneo(null);
+              }}
+              puedeGestionar={puede("cash.autoscan.manage")}
+              sentido="PAGO"
+              deshabilitado={guardando}
+              onError={setError}
+            />
+
+            {/* El ticket del proveedor: se lee y rellena la pantalla, y se
+                cuelga del pago en cuanto el pago existe. */}
+            <EscanerFactura
               fichero={justificante}
-              onChange={setJustificante}
+              onChange={(f) => {
+                setJustificante(f);
+                // Adjuntar a mano suelta el de la bandeja: son excluyentes.
+                if (f) setInboxId(null);
+              }}
+              onPropuesta={aplicarEscaneo}
+              onOlvidar={() => setEscaneo(null)}
               puedeAdjuntar={puede("cash.document.attach")}
+              sessionId={jornada?.sesion.id ?? null}
+              sentido="PAGO"
               deshabilitado={guardando}
               onError={setError}
             />

@@ -47,6 +47,7 @@ import {
 } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
+import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc } from "./tyrecontrol/empresaAcceso.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
@@ -78,6 +79,7 @@ import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenS
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
+import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
@@ -692,6 +694,9 @@ function normalizeTechRow(t: any) {
     // Sin la columna (base antigua) se asume de alta: nadie está de baja por
     // omisión.
     activo: t.activo !== false,
+    // Persona de Core con la que está vinculado (paso 2 de la unificación).
+    // null = todavía sin vincular; el histórico sigue yendo por nombre.
+    employeeId: t.employee_id ?? null,
   };
 }
 
@@ -1268,6 +1273,39 @@ function globalWebfleetCreds(): WebfleetCreds | null {
 // globales (con las que ya funciona el módulo de asistencia). null si no hay ninguna.
 async function resolveWebfleetCreds(empresaId: string): Promise<WebfleetCreds | null> {
   return (await getWebfleetConfigForEmpresa(empresaId)) ?? globalWebfleetCreds();
+}
+
+/**
+ * Empresa de una petición de telemática, ya comprobada.
+ *
+ * Los endpoints de Webfleet reciben la empresa como parámetro y hasta ahora la
+ * usaban tal cual: quien llamaba elegía con QUÉ CUENTA se consultaba. Un
+ * usuario autenticado de cualquier cliente podía pedir la telemetría de otro
+ * poniendo su uuid en la URL. El middleware ya dejaba disponible `req.authCtx`,
+ * pero nadie lo miraba.
+ *
+ * Aquí se contrasta lo que pide la petición con lo que dice la sesión, usando
+ * el mismo criterio que la base de datos (`tc_puede_ver_empresa`). Devuelve la
+ * empresa si el acceso es legítimo, o responde y devuelve null si no lo es —de
+ * modo que quien llama solo tiene que comprobar el null y salir.
+ *
+ * Se responde 404, no 403: confirmar «esa empresa existe pero no es tuya» ya
+ * es contar algo de otro cliente.
+ */
+async function empresaTelematicaAutorizada(
+  req: express.Request,
+  res: express.Response,
+): Promise<string | null> {
+  const empresa = String(req.query.empresa || "");
+  if (!empresa) {
+    res.status(400).json({ error: "Falta el parámetro empresa" });
+    return null;
+  }
+  if (!(await puedeVerEmpresaTc(req, empresa))) {
+    res.status(404).json({ error: "Empresa no encontrada" });
+    return null;
+  }
+  return empresa;
 }
 
 function buildWebfleetRequest(action: string, extra: Record<string, string> = {}, creds?: WebfleetCreds): { url: string; headers: Record<string, string> } {
@@ -2240,7 +2278,7 @@ app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => 
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
              "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
-             "statusChangedAtMs", "statusTotals", activo
+             "statusChangedAtMs", "statusTotals", activo, employee_id
       FROM techs
       ORDER BY id ASC
     `);
@@ -2349,7 +2387,8 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           "statusTotals",
           "roadsideCapable",
           "currentRoadsideAssistanceId",
-          phone
+          phone,
+          employee_id
         FROM techs
         WHERE name = $1
       `,
@@ -2424,6 +2463,100 @@ app.put("/api/techs/:name/activo", requireAdminRole, async (req, res) => {
   } catch (error) {
     console.error("PUT /api/techs/:name/activo error:", error);
     res.status(500).json({ error: "Error cambiando el alta del técnico" });
+  }
+});
+
+/* =========================================================
+   VÍNCULO TÉCNICO ↔ PERSONA DE CORE (paso 2 de la unificación)
+   Ver docs/FASE1_OPERARIOS_CORE_ESTUDIO.md, apartado 0.
+   El histórico del taller sigue apuntando por nombre: esto no lo toca.
+========================================================= */
+
+// Propuesta de emparejado, para revisarla ANTES de aplicar nada. No escribe.
+app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
+  try {
+    const [tecnicos, empleados] = await Promise.all([
+      db.query(`SELECT name, employee_id FROM techs ORDER BY name`),
+      db.query(
+        `SELECT id, nombre, apellidos, codigo_operario
+           FROM sea_employees
+          WHERE activo = true
+          ORDER BY nombre`
+      ),
+    ]);
+
+    const yaVinculados = new Map<string, string>(
+      tecnicos.rows
+        .filter((t: any) => t.employee_id)
+        .map((t: any) => [t.name, String(t.employee_id)])
+    );
+
+    const propuestas = proponerVinculos(
+      tecnicos.rows.map((t: any) => String(t.name)),
+      empleados.rows as EmpleadoCore[]
+    ).map((p) => ({
+      ...p,
+      // Lo que ya está vinculado se informa, pero no se vuelve a proponer.
+      vinculadoA: yaVinculados.get(p.tech) ?? null,
+    }));
+
+    res.json({
+      propuestas,
+      resumen: {
+        total: propuestas.length,
+        yaVinculados: yaVinculados.size,
+        exacta: propuestas.filter((p) => !p.vinculadoA && p.certeza === "exacta").length,
+        unica: propuestas.filter((p) => !p.vinculadoA && p.certeza === "unica").length,
+        ambigua: propuestas.filter((p) => !p.vinculadoA && p.certeza === "ambigua").length,
+        sinCandidato: propuestas.filter(
+          (p) => !p.vinculadoA && p.certeza === "sin_candidato"
+        ).length,
+      },
+    });
+  } catch (error) {
+    console.error("GET /api/techs/vinculo-core error:", error);
+    res.status(500).json({ error: "Error calculando los vínculos" });
+  }
+});
+
+// Confirma (o deshace, con employeeId null) el vínculo de un técnico.
+app.put("/api/techs/:name/vinculo-core", requireAdminRole, async (req, res) => {
+  try {
+    const name = String(req.params.name || "").trim();
+    const employeeId = req.body?.employeeId ? String(req.body.employeeId).trim() : null;
+    if (!name) return res.status(400).json({ error: "Nombre requerido" });
+
+    if (employeeId) {
+      const existe = await db.query(`SELECT id FROM sea_employees WHERE id = $1`, [
+        employeeId,
+      ]);
+      if (existe.rows.length === 0) {
+        return res.status(404).json({ error: "Ese empleado no existe" });
+      }
+      // Una persona no puede ser dos técnicos: sería el duplicado que se
+      // intenta eliminar, pero con vínculo.
+      const ocupado = await db.query(
+        `SELECT name FROM techs WHERE employee_id = $1 AND name <> $2 LIMIT 1`,
+        [employeeId, name]
+      );
+      if (ocupado.rows.length > 0) {
+        return res.status(409).json({
+          error: `Ese empleado ya está vinculado con "${ocupado.rows[0].name}"`,
+        });
+      }
+    }
+
+    const r = await db.query(
+      `UPDATE techs SET employee_id = $1 WHERE name = $2 RETURNING name, employee_id`,
+      [employeeId, name]
+    );
+    if (r.rows.length === 0) {
+      return res.status(404).json({ error: "Técnico no encontrado" });
+    }
+    res.json({ ok: true, name: r.rows[0].name, employeeId: r.rows[0].employee_id });
+  } catch (error) {
+    console.error("PUT /api/techs/:name/vinculo-core error:", error);
+    res.status(500).json({ error: "Error guardando el vínculo" });
   }
 });
 
@@ -5862,8 +5995,8 @@ app.post("/api/tyrecontrol/checkpoint/revisar", authenticate, requireModule("tyr
 // Lista de objetos Webfleet de una empresa (para enlazar vehículos por su ID).
 app.get("/api/tyrecontrol/webfleet/objects", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
-    const empresa = String(req.query.empresa || "");
-    if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
+    const empresa = await empresaTelematicaAutorizada(req, res);
+    if (!empresa) return;
     const creds = await resolveWebfleetCreds(empresa);
     if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
@@ -5884,9 +6017,10 @@ app.get("/api/tyrecontrol/webfleet/objects", authenticate, requireModule("tyreco
 // Estado de un objeto: km (odómetro) + posición. Para sincronizar un vehículo.
 app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
-    const empresa = String(req.query.empresa || "");
     const objectno = String(req.query.objectno || "");
-    if (!empresa || !objectno) return res.status(400).json({ error: "Falta empresa u objectno" });
+    if (!objectno) return res.status(400).json({ error: "Falta empresa u objectno" });
+    const empresa = await empresaTelematicaAutorizada(req, res);
+    if (!empresa) return;
     const creds = await resolveWebfleetCreds(empresa);
     if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", { objectno }, creds);
@@ -5925,8 +6059,8 @@ app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrec
 //   /api/tyrecontrol/webfleet/conduccion?empresa=<uuid>&dias=30
 app.get("/api/tyrecontrol/webfleet/conduccion", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
-    const empresa = String(req.query.empresa || "");
-    if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
+    const empresa = await empresaTelematicaAutorizada(req, res);
+    if (!empresa) return;
     const dias = Math.min(90, Math.max(1, Number(req.query.dias) || 30));
     const creds = await resolveWebfleetCreds(empresa);
     if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
@@ -12875,6 +13009,44 @@ app.get("/api/me", authenticate, async (req, res) => {
   } catch (error) {
     console.error("GET /api/me error:", error);
     res.status(500).json({ error: "Error cargando el perfil" });
+  }
+});
+
+/**
+ * Valida la sesión del panel de taller y devuelve los permisos VIGENTES.
+ *
+ * El panel guardaba en localStorage una marca `sea-authenticated` y se fiaba de
+ * ella al arrancar: nadie comprobaba contra el servidor si esa sesión seguía
+ * siendo válida ni si el rol había cambiado. Este endpoint es esa comprobación.
+ *
+ * Acepta las dos vías (sesión unificada por Bearer y token clásico
+ * `x-admin-token`), porque el panel se usa con ambas.
+ */
+app.get("/api/panel/session", async (req, res) => {
+  try {
+    const role = await getRoleFromRequestAsync(req);
+    if (!role) {
+      return res.status(401).json({ error: "No autorizado" });
+    }
+
+    // Si la credencial corresponde a un usuario de la tabla, se devuelven
+    // también su nombre y sus pantallas: así el panel refresca los permisos en
+    // cada arranque en vez de arrastrar los que guardó el día del login.
+    let name: string | null = null;
+    let allowedViews: string[] | null = null;
+    const token = String(req.headers["x-admin-token"] ?? req.query?.token ?? "").trim();
+    if (token) {
+      const u = await findDbUserByPassword(token);
+      if (u) {
+        name = u.name || null;
+        allowedViews = u.allowedViews.length > 0 ? u.allowedViews : null;
+      }
+    }
+
+    res.json({ ok: true, role, name, allowedViews });
+  } catch (error) {
+    console.error("GET /api/panel/session error:", error);
+    res.status(500).json({ error: "Error validando la sesión" });
   }
 });
 

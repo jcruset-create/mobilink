@@ -78,3 +78,17 @@ export function vistaACoord(c: Caja): Caja {
   const p = puntoVistaACoord(c.x + c.w / 2, c.y + c.h / 2);
   return { x: p.x - c.w / 2, y: p.y - c.h / 2, w: c.w, h: c.h };
 }
+
+/**
+ * Un punto guardado (en % del plano) llevado a coordenadas RELATIVAS A LA
+ * IMAGEN (0-1). Sirve para quien dibuja la imagen con su propio margen —el
+ * PDF del parte, donde el hueco de los lados es el que necesitan los
+ * cuadraditos de posición, no el 22 % de la pantalla— y necesita saber dónde
+ * cae cada rueda dentro de la foto.
+ */
+export function puntoCoordEnImagen(x: number, y: number) {
+  return {
+    fx: (x - MARGEN_COORD_X * 100) / ((1 - 2 * MARGEN_COORD_X) * 100),
+    fy: (y - MARGEN_COORD_Y * 100) / ((1 - 2 * MARGEN_COORD_Y) * 100),
+  };
+}

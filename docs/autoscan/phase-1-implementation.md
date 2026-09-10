@@ -1,5 +1,9 @@
 # AutoScan — Fase 1: lo que se ha construido
 
+> **Documento histórico.** Describe el momento en que se escribió, no el de
+> ahora. Lo vigente está en [`README.md`](./README.md); esto es la entrega de
+> la Fase 1, anterior al agente de escritorio y a la autoactualización.
+
 Qué existe ya en el código, dónde vive y por qué está donde está. El diseño y
 las decisiones que lo justifican están en `phase-1-design.md`; esto es el mapa
 de lo entregado.
@@ -166,6 +170,11 @@ vea, porque es el único momento del día en que alguien mira la caja entera.
   hace cinco semanas sin cobrar es exactamente lo que hay que mirar.
 - No hay agente de escritorio: la API de máquina existe y está probada, pero el
   programa que corre en el PC del mostrador es trabajo aparte.
+
+  > **Nota posterior.** Ese trabajo aparte se hizo: el agente está en
+  > `autoscan_agent/` y se entrega con su instalador, su bandeja y su
+  > actualización. Lo que sigue siendo cierto es que **nunca se ha ejecutado en
+  > Windows**; ver [`README.md` §5](./README.md).
 - No cobra nada sola. Sigue habiendo una persona que confirma.
 
 ## Lo que el agente TIENE que cumplir

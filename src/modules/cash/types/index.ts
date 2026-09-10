@@ -275,6 +275,92 @@ export type DocumentoOperacion = {
   url: string | null;
 };
 
+// ── Conceptos de gasto ─────────────────────────────────────────────────────
+
+/**
+ * Qué segundo desplegable pide un concepto.
+ *
+ * No es decoración: es lo que hace que al elegir «Dietas» salgan los operarios
+ * y al elegir «Ferretería» salgan los centros de coste. El servidor comprueba
+ * que la pareja encaja, así que esto solo decide qué se ENSEÑA.
+ */
+export type TipoDestinoGasto = "NINGUNO" | "PERSONA" | "CENTRO_COSTE";
+
+export type ConceptoGasto = {
+  id: number;
+  codigo: string;
+  nombre: string;
+  tipoDestino: TipoDestinoGasto;
+  activo: boolean;
+  orden: number;
+  /** Cuántos pagos lo usan. Es lo que impide cambiarlo sin enterarse. */
+  usos: number;
+};
+
+export type DestinoGasto = {
+  id: number;
+  tipo: "PERSONA" | "CENTRO_COSTE";
+  codigo: string;
+  nombre: string;
+  activo: boolean;
+  orden: number;
+  usos: number;
+};
+
+/**
+ * El informe de gasto, tal cual lo devuelve `/expense-stats`.
+ *
+ * Los importes son céntimos enteros de punta a punta. Aquí no se divide entre
+ * 100 para guardarlo en el estado: se divide al pintarlo, con `euros()`.
+ */
+
+export type GranularidadGasto = "dia" | "mes" | "anio";
+
+export type LineaConceptoGasto = {
+  /** `null` es la línea de los pagos SIN clasificar. Se enseña, no se esconde. */
+  conceptoId: number | null;
+  codigo: string | null;
+  nombre: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type LineaDestinoGasto = {
+  destinoId: number | null;
+  nombre: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type PuntoGasto = {
+  /** `2026-09-07`, `2026-09` o `2026`, según la granularidad pedida. */
+  periodo: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type InformeGasto = {
+  desde: string;
+  hasta: string;
+  granularidad: GranularidadGasto;
+  centroId: string | null;
+  totalCentimos: number;
+  operaciones: number;
+  sinClasificarCentimos: number;
+  conceptos: LineaConceptoGasto[];
+  destinos: LineaDestinoGasto[];
+  serie: PuntoGasto[];
+  comparacion: {
+    desde: string;
+    hasta: string;
+    totalCentimos: number;
+    operaciones: number;
+    diferenciaCentimos: number;
+    /** `null` si el tramo anterior fue cero: eso no es «+100 %». */
+    variacion: number | null;
+  } | null;
+};
+
 // ── AutoScan ───────────────────────────────────────────────────────────────
 
 export type EstadoAutoScan =
@@ -697,6 +783,14 @@ export type PropuestaEscaneo = {
   referencia: CampoPropuesto<string | null>;
   importeCentimos: CampoPropuesto<number | null>;
   cliente: CampoPropuesto<string | null>;
+  /**
+   * Quien EMITE el documento, que en un ticket de compra es el proveedor.
+   *
+   * Va al lado de `cliente` y no en su lugar: son las dos partes del mismo
+   * papel y cuál interesa depende de la pantalla. Cobros usa `cliente`, Pagos
+   * usa `proveedor`, y el análisis se hace UNA vez para los dos.
+   */
+  proveedor: CampoPropuesto<string | null>;
   concepto: CampoPropuesto<string | null>;
   formaCobro: {
     /** Código del catálogo, o null. null es NO LO SÉ, nunca «efectivo». */

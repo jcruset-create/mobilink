@@ -118,7 +118,16 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     "cash.erp.sync",
     "cash.open_session",
     "cash.close_session",
-    "cash.session.reopen",
+    /*
+     * Reabrir NO es de responsable: es de admin.
+     *
+     * Reabrir permite recerrar con otras cifras, así que es la única acción que
+     * puede cambiar un cierre ya firmado —y con él el importe que va al banco y
+     * lo que se le contó a la gestoría—. Un responsable puede corregir dentro
+     * de su jornada; deshacer una que ya está cerrada es otra cosa y sube un
+     * escalón. `admin` lo tiene por `admin: PERMISOS`, y el superadministrador
+     * entra como admin en `rolDeCaja`.
+     */
     "cash.collection.create",
     "cash.collection.create_manual",
     "cash.payment.create",

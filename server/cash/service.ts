@@ -85,6 +85,7 @@ import {
   ultimaSesionCerrada,
   type IncidenciaFormato,
 } from "./repository.ts";
+import type { OperacionGuardada } from "./repository.ts";
 import { conectorPara } from "./erp/registry.ts";
 import { exigirAmbitoCaja, exigirJornadaPropia } from "./hierarchy.ts";
 import { autorDeOperacion, exigirOtraPersona } from "./sod.ts";
@@ -259,6 +260,8 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
      */
     const anterior = await ultimaSesionCerrada(client, e.registerId, fecha);
     const denominaciones = await cargarDenominaciones(client);
+    const porCartuchoCat = piezasPorCartuchoDe(denominaciones);
+    const porBolsaCat = piezasPorBolsaDe(denominaciones);
 
     // Composición heredada: las piezas que el cierre anterior dejó en caja.
     let composicion: LineaDenominacion[] = [];
@@ -268,7 +271,7 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
     let sesionHeredadaId: number | null = anterior?.id ?? null;
 
     if (anterior) {
-      let piezas = await composicionDeCierre(client, anterior.id);
+      let piezas = await composicionDeCierre(client, anterior.id, porCartuchoCat, porBolsaCat);
       if (
         piezas.composicion.length === 0 &&
         piezas.cartuchos.length === 0 &&
@@ -302,12 +305,10 @@ export async function abrirJornada(ctx: Contexto, e: EntradaApertura): Promise<{
       heredado = false;
     }
 
-    const porCartucho = piezasPorCartuchoDe(denominaciones);
-    const porBolsa = piezasPorBolsaDe(denominaciones);
     // Las líneas de envase se guardan como piezas (envases × piezas del
     // envase) con su contador: así el total de piezas no necesita casos aparte.
-    const lineasCartucho = aPiezas(cartuchos, porCartucho, "cartuchos");
-    const lineasBolsa = aPiezas(bolsas, porBolsa, "bolsas");
+    const lineasCartucho = aPiezas(cartuchos, porCartuchoCat, "cartuchos");
+    const lineasBolsa = aPiezas(bolsas, porBolsaCat, "bolsas");
 
     const inventarioInicial = inventarioDesdeLineas([
       ...composicion,
@@ -519,6 +520,16 @@ export type EntradaOperacion = {
    * del cajón entero y no de un negocio.
    */
   sectionId?: number | null;
+  /**
+   * En qué se ha gastado y a quién se imputa. **Solo pagos.**
+   *
+   * Los dos son opcionales a propósito: obligar a clasificar pararía el
+   * mostrador el día que falte una entrada en el catálogo, y lo que se
+   * rellenaría entonces es lo primero que hubiera a mano — una estadística
+   * mentirosa con aire de exactitud es peor que un hueco honesto.
+   */
+  expenseConceptId?: number | null;
+  expenseTargetId?: number | null;
 };
 
 export type ResultadoOperacion = {
@@ -677,6 +688,39 @@ export async function registrarOperacion(
       }
     }
 
+    /*
+     * El concepto y su destino, aquí dentro y por la misma razón que la
+     * sección: entre que se pintó la pantalla y se pulsó confirmar, alguien ha
+     * podido desactivar el concepto. Y la comprobación de que el destino es del
+     * TIPO que pide el concepto no puede vivir en el navegador — que el
+     * desplegable enseñe solo operarios no impide llamar a la API con el id de
+     * un centro de coste, y una estadística de dietas que suma una unidad móvil
+     * no la detecta nadie mirándola.
+     */
+    let clasificacion: { conceptoId: number | null; destinoId: number | null } = {
+      conceptoId: null,
+      destinoId: null,
+    };
+    if (e.tipo === "PAYMENT" || e.tipo === "MANUAL_OUT") {
+      const { validarClasificacionGasto } = await import("./config.ts");
+      clasificacion = await validarClasificacionGasto(
+        ctx.empresaId,
+        e.expenseConceptId ?? null,
+        e.expenseTargetId ?? null
+      );
+    } else if (e.expenseConceptId != null || e.expenseTargetId != null) {
+      /*
+       * Se ignoraría en silencio si no fuera por esto. El catálogo es de
+       * GASTO: aceptarlo en un cobro y no guardarlo daría una pantalla que
+       * parece clasificar y unas estadísticas que no lo ven.
+       */
+      throw new ErrorCaja(
+        "ENTRADA_NO_VALIDA",
+        "Los conceptos de gasto solo se aplican a pagos y salidas.",
+        400
+      );
+    }
+
     codigosEfectivo = codigosEfectivoDe(catalogo);
     const validacion = validarOperacion(normalizada, stock, codigosEfectivo);
     if (esFallo(validacion)) {
@@ -714,6 +758,8 @@ export async function registrarOperacion(
       efectivoNetoCentimos: validacion.efectivoNeto,
       erpSyncStatus,
       sectionId: e.sectionId ?? null,
+      expenseConceptId: clasificacion.conceptoId,
+      expenseTargetId: clasificacion.destinoId,
       userId: ctx.userId,
       ahora,
     });
@@ -1181,6 +1227,29 @@ export type ResultadoCierre = {
 };
 
 /**
+ * Los ajustes que asienta el CIERRE, por su concepto.
+ *
+ * Es lo que permite deshacerlos al reabrir sin tocar los que asentó una persona
+ * durante el día: `regularizarArqueo` escribe «Regularización de arqueo», que
+ * no está en esta lista y por tanto sobrevive.
+ *
+ * Van juntos aquí —y no escritos a mano en cada sitio— porque la consulta que
+ * los deshace y el código que los escribe tienen que decir exactamente lo
+ * mismo. Separarlos es la clase de cosa que se rompe en silencio: el ajuste
+ * dejaría de deshacerse y el fallo volvería con otro nombre.
+ */
+export const AJUSTE_DE_CIERRE = "Ajuste por diferencia de arqueo al cerrar";
+export const AJUSTE_CARTUCHOS = "Monedas precintadas en cartuchos, según el arqueo";
+export const AJUSTE_BOLSAS = "Monedas precintadas en bolsas, según el arqueo";
+
+/** Todos los que el cierre puede asentar. Los deshace `reabrirJornada`. */
+export const CONCEPTOS_DEL_CIERRE = [
+  AJUSTE_DE_CIERRE,
+  AJUSTE_CARTUCHOS,
+  AJUSTE_BOLSAS,
+] as const;
+
+/**
  * Cierra la jornada: registra el cambio que se queda, manda el resto al banco y
  * bloquea la caja.
  *
@@ -1367,7 +1436,7 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       denominaciones,
       anio,
       ahora,
-      concepto: "Ajuste por diferencia de arqueo al cerrar",
+      concepto: AJUSTE_DE_CIERRE,
     });
 
     /*
@@ -1648,33 +1717,87 @@ export async function proponerCierre(
  */
 async function composicionDeCierre(
   client: PoolClient | typeof pool,
-  sessionId: number
+  sessionId: number,
+  porCartucho: Map<Centimos, number>,
+  porBolsa: Map<Centimos, number>
 ): Promise<{
   composicion: LineaDenominacion[];
   cartuchos: LineaDenominacion[];
   bolsas: LineaDenominacion[];
 }> {
   const { rows } = await client.query(
+    /*
+     * El NETO, no la suma de salidas.
+     *
+     * Antes esto sumaba solo `direccion = 'OUT'`, así que una reversión del
+     * cambio final —que entra por IN con el mismo motivo— no restaba nada. El
+     * día siguiente heredaba el cambio DOS veces: 674 € donde había 337.
+     *
+     * Pasa siempre que un cambio final se deshace, y hay dos caminos para eso:
+     * reabrir la jornada, y anular la operación a mano desde el histórico. Con
+     * la suma de salidas los dos daban el mismo número inflado.
+     */
     `SELECT valor_unitario_centimos,
-            SUM(CASE WHEN cartuchos = 0 AND bolsas = 0 THEN cantidad ELSE 0 END) AS sueltas,
-            SUM(cartuchos) AS tubos,
-            SUM(bolsas) AS sacos
-       FROM cash_denomination_movements
-      WHERE session_id = $1 AND motivo = 'CLOSING_FLOAT' AND direccion = 'OUT'
+            SUM(cantidad * signo) AS piezas,
+            SUM(cartuchos * signo) AS tubos,
+            SUM(bolsas * signo) AS sacos
+       FROM (
+         SELECT valor_unitario_centimos, cantidad, cartuchos, bolsas,
+                CASE WHEN direccion = 'OUT' THEN 1 ELSE -1 END AS signo
+           FROM cash_denomination_movements
+          WHERE session_id = $1 AND motivo = 'CLOSING_FLOAT'
+       ) m
       GROUP BY valor_unitario_centimos`,
     [sessionId]
   );
+
+  const composicion: LineaDenominacion[] = [];
+  const cartuchos: LineaDenominacion[] = [];
+  const bolsas: LineaDenominacion[] = [];
+
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  const columna = (nombre: string) =>
-    (rows as any[])
-      .map((r) => ({ valor: r.valor_unitario_centimos, cantidad: Number(r[nombre]) }))
-      .filter((l) => l.cantidad > 0);
+  for (const r of rows as any[]) {
+    const valor: Centimos = r.valor_unitario_centimos;
+
+    /*
+     * Manda `piezas`, y las columnas de precinto solo REPARTEN.
+     *
+     * `cantidad` guarda siempre las piezas totales, precintadas incluidas, y es
+     * de donde sale el stock teórico. Los contadores de cartuchos y bolsas
+     * dicen cómo están envasadas esas mismas piezas, no cuántas hay.
+     *
+     * Antes esto se creía las columnas de precinto y sumaba las sueltas por su
+     * cuenta, así que una fila incoherente heredaba dinero que no existía. Y
+     * las hay: hasta el arreglo de las reversiones, el movimiento contrario
+     * devolvía las monedas como sueltas aunque hubieran salido en cartuchos,
+     * y esas filas ya están escritas en cajas de verdad. Con el neteo por
+     * columnas, los cartuchos de la operación original no los restaba nadie
+     * (+2 contra −0) mientras las sueltas quedaban en negativo y se
+     * descartaban: el cierre parecía dejar un cambio que el cajón no tenía.
+     *
+     * Partiendo de las piezas netas eso se cae solo. Si la jornada devolvió
+     * todo, `piezas` es cero y no se hereda nada por mucho cartucho que digan
+     * las columnas; el libro no se toca y la cuenta sale.
+     */
+    const netas = Number(r.piezas);
+    if (netas <= 0) continue;
+
+    const pb = porBolsa.get(valor) ?? 0;
+    const pc = porCartucho.get(valor) ?? 0;
+
+    /* Primero el envase grande: una bolsa contiene varios cartuchos. */
+    const sacos = pb > 0 ? Math.max(0, Math.min(Number(r.sacos), Math.floor(netas / pb))) : 0;
+    const trasBolsas = netas - sacos * pb;
+    const tubos = pc > 0 ? Math.max(0, Math.min(Number(r.tubos), Math.floor(trasBolsas / pc))) : 0;
+    const sueltas = trasBolsas - tubos * pc;
+
+    if (sueltas > 0) composicion.push({ valor, cantidad: sueltas });
+    if (tubos > 0) cartuchos.push({ valor, cantidad: tubos });
+    if (sacos > 0) bolsas.push({ valor, cantidad: sacos });
+  }
   /* eslint-enable @typescript-eslint/no-explicit-any */
-  return {
-    composicion: columna("sueltas"),
-    cartuchos: columna("tubos"),
-    bolsas: columna("sacos"),
-  };
+
+  return { composicion, cartuchos, bolsas };
 }
 
 /**
@@ -1715,7 +1838,7 @@ export async function ultimoCierreConCambio(
   const porBolsa = piezasPorBolsaDe(denominaciones);
 
   for (const s of rows) {
-    const piezas = await composicionDeCierre(client, s.id);
+    const piezas = await composicionDeCierre(client, s.id, porCartucho, porBolsa);
     const total = totalInventario(
       inventarioDesdeLineas([
         ...piezas.composicion,
@@ -1795,10 +1918,10 @@ export async function traerFondoDeCierre(
       throw new ErrorCaja("CAJA_DISTINTA", "Ese cierre es de otra caja.", 409);
     }
 
-    const piezas = await composicionDeCierre(client, origenId);
     const denominaciones = await cargarDenominaciones(client);
     const porCartucho = piezasPorCartuchoDe(denominaciones);
     const porBolsa = piezasPorBolsaDe(denominaciones);
+    const piezas = await composicionDeCierre(client, origenId, porCartucho, porBolsa);
     const lineasCartucho = aPiezas(piezas.cartuchos, porCartucho, "cartuchos");
     const lineasBolsa = aPiezas(piezas.bolsas, porBolsa, "bolsas");
     const lineas = [...piezas.composicion, ...lineasCartucho, ...lineasBolsa];
@@ -1910,8 +2033,96 @@ export async function reabrirJornada(ctx: Contexto, sessionId: number, motivo: s
       );
     }
 
+    /*
+     * Se DESHACE lo que asentó el cierre. Sin esto, reabrir y volver a cerrar
+     * duplicaba el cambio final.
+     *
+     * El cierre no solo cambia el estado: asienta el cambio que se queda en
+     * caja, el ingreso del banco, el ajuste por la diferencia del arqueo y la
+     * conciliación de precintos. Reabrir solo ponía `REOPENED` y dejaba todo
+     * eso escrito, así que al recerrar se asentaba OTRA VEZ. Pasó de verdad:
+     * dos «cambio que queda en caja» de 337 € en la misma jornada y una caja
+     * que amaneció con 674 €.
+     *
+     * Y no era solo el importe. Al sacar el cambio dos veces, el teórico
+     * quedaba 337 € por debajo de lo contado, así que el segundo cierre
+     * apuntaba una diferencia de arqueo de +337 € que nunca existió y marcaba
+     * las denominaciones como descuadradas. Los tres síntomas son el mismo
+     * fallo.
+     *
+     * Se revierte en orden INVERSO al que se asentó (`id DESC`): el cierre
+     * saca dinero al final, así que devolverlo primero es lo que hace que cada
+     * paso encuentre en caja lo que necesita. Al revés, la reversión del ajuste
+     * podría intentar sacar piezas que el cambio final todavía se ha llevado.
+     *
+     * Nada se borra: cada operación queda `REVERSED` con su inversa enlazada,
+     * igual que una anulación a mano. El rastro del efectivo se conserva
+     * entero, que es la regla de la casa.
+     */
+    const { rows: delCierre } = await client.query<{ id: number }>(
+      /*
+       * Dos criterios distintos, y la diferencia importa:
+       *
+       * · **Cambio final e ingreso del banco: TODOS los vivos.** Solo los crea
+       *   el cierre, así que una jornada nunca debe tener más de uno de cada.
+       *   Si hay dos, es que ya se cerró dos veces — y entonces reabrir es
+       *   justo el momento de deshacer los dos. Esto es lo que repara sola una
+       *   jornada que ya arrastre el fallo, sin tener que tocar la base a mano.
+       *
+       * · **Ajustes: los que asentó UN cierre, por su CONCEPTO.** Un ajuste
+       *   de media mañana lo tecleó una persona y responde a un descuadre
+       *   real: reabrir no puede borrarlo, y por eso no basta con mirar el
+       *   tipo. Se distinguen por el texto, que solo escribe el cierre
+       *   (`CONCEPTOS_DEL_CIERRE`); `regularizarArqueo` escribe otro y
+       *   sobrevive.
+       *
+       *   Antes esto miraba `created_at_ms = cerrada_at_ms`, o sea solo la
+       *   tanda del ÚLTIMO cierre. Con una jornada cerrada dos veces salía
+       *   bien; con tres o más, no: cada cierre malo dejó su ajuste de +N €
+       *   compensando el cambio que se llevó, así que devolver todos los
+       *   cambios y solo el último ajuste inflaba la caja. Por concepto se
+       *   deshacen todos, y la cuenta sale para cualquier número de cierres.
+       *
+       * `reversa_de_id IS NULL` deja fuera las inversas: una inversa ya
+       * compensa a la suya, y revertir la reversión volvería a sacar el dinero.
+       */
+      `SELECT id FROM cash_operations
+        WHERE session_id = $1
+          AND estado = 'CONFIRMED'
+          AND reversa_de_id IS NULL
+          AND (tipo IN ('CLOSING_FLOAT','BANK_DEPOSIT')
+               OR (tipo = 'ADJUSTMENT' AND concepto = ANY($2::text[])))
+        ORDER BY id DESC`,
+      [sessionId, [...CONCEPTOS_DEL_CIERRE]]
+    );
+
+    for (const fila of delCierre) {
+      const original = await obtenerOperacion(client, fila.id);
+      if (!original) continue;
+      await asentarReversion(
+        client,
+        ctx,
+        s,
+        fila.id,
+        original,
+        `Reapertura de la jornada: ${motivo.trim()}`
+      );
+    }
+
     await client.query(
-      `UPDATE cash_sessions SET estado = 'REOPENED', updated_at_ms = $2 WHERE id = $1`,
+      `UPDATE cash_sessions
+          SET estado = 'REOPENED',
+              /*
+               * Las cifras del cierre se limpian con él. Dejarlas puestas
+               * mientras la jornada está abierta enseñaría en el histórico un
+               * cambio final y una diferencia que ya no responden a ninguna
+               * operación viva.
+               */
+              contado_centimos = NULL, diferencia_centimos = NULL,
+              denominaciones_cuadran = NULL,
+              cambio_final_centimos = NULL, ingreso_bancario_centimos = NULL,
+              updated_at_ms = $2
+        WHERE id = $1`,
       [sessionId, Date.now()]
     );
 
@@ -2091,6 +2302,142 @@ export async function anularJornada(
 }
 
 /**
+ * Asienta el movimiento inverso de una operación. DENTRO de una transacción.
+ *
+ * Es el corazón de anular, y vive aparte porque tiene DOS clientes con
+ * permisos distintos: `anularOperacion`, que exige testigo y motivo de una
+ * persona, y `reabrirJornada`, que deshace lo que asentó el cierre —ahí no hay
+ * a quién exigirle separación de funciones, porque esas operaciones no las
+ * tecleó nadie: las generó el propio cierre—.
+ *
+ * Lo que NO hace: comprobar quién puede. Eso es de quien llama, y por eso esta
+ * función no es pública.
+ */
+async function asentarReversion(
+  client: PoolClient,
+  ctx: Contexto,
+  sesion: Sesion,
+  operationId: number,
+  original: OperacionGuardada,
+  motivo: string
+): Promise<{ operacionId: number; numero: string }> {
+  const sessionId = sesion.id;
+  // Los mismos movimientos del revés.
+  const originales = await movimientosDeOperacion(client, operationId);
+  const inversos = originales.map((m) => ({
+    direccion: (m.direccion === "IN" ? "OUT" : "IN") as "IN" | "OUT",
+    motivo: m.motivo,
+    lineas: m.lineas,
+  }));
+
+  // Devolver lo que entró exige que siga estando: si el billete de 100 € ya se
+  // ha usado para dar un cambio, la reversión no puede hacerse a ciegas.
+  const stock = await stockTeorico(client, sessionId);
+  for (const mov of inversos.filter((m) => m.direccion === "OUT")) {
+    for (const l of mov.lineas) {
+      const disponible = stock.get(l.valor) ?? 0;
+      if (l.cantidad > disponible) {
+        throw new ErrorCaja(
+          "STOCK_INSUFICIENTE",
+          `Para anular hay que devolver ${l.cantidad} piezas de ${l.valor} céntimos y en caja quedan ${disponible}.`,
+          409
+        );
+      }
+    }
+  }
+
+  const denominaciones = await cargarDenominaciones(client);
+  const ahora = Date.now();
+  const anio = Number(sesion.fecha.slice(0, 4));
+  const numero = await siguienteNumero(client, sesion.id, original.tipo, anio);
+
+  const nuevaId = await insertarOperacion(client, {
+    empresaId: ctx.empresaId,
+    sessionId,
+    numero,
+    tipo: original.tipo,
+    origen: original.origen,
+    externalSystem: original.externalSystem,
+    externalDocumentId: original.externalDocumentId,
+    externalDocumentReference: original.externalDocumentReference,
+    partyNombre: original.partyNombre,
+    concepto: `Reversión de ${original.numero}`,
+    referencia: original.referencia,
+    importeCentimos: original.importeCentimos,
+    efectivoNetoCentimos: -original.efectivoNetoCentimos,
+    erpSyncStatus: original.erpSyncStatus === "SYNCED" ? "PENDING" : "NOT_APPLICABLE",
+    reversaDeId: operationId,
+    motivoReversa: motivo,
+    userId: ctx.userId,
+    ahora,
+  });
+
+  const formas = await formasPagoDeOperacion(client, operationId);
+  await insertarFormasPago(client, nuevaId, formas, ahora);
+
+  await insertarMovimientos(client, {
+    sessionId,
+    operationId: nuevaId,
+    movimientos: inversos,
+    denominaciones,
+    userId: ctx.userId,
+    ahora,
+  });
+
+  await client.query(
+    `UPDATE cash_operations SET estado = 'REVERSED', updated_at_ms = $2 WHERE id = $1`,
+    [operationId, ahora]
+  );
+
+  /*
+   * La anulación es un hecho nuevo, no la retirada del anterior. Central
+   * recibe los dos —el cobro y su reverso— porque así es como está en el
+   * libro mayor: aquí nada se borra, se compensa.
+   */
+  await emitirEvento(client, {
+    empresaId: ctx.empresaId,
+    centroId: await centroDeCaja(client, sesion.registerId),
+    registerId: sesion.registerId,
+    sessionId,
+    agregado: { tipo: "SESSION", id: sessionId },
+    tipo: "OPERATION_REVERSED",
+    ocurridoEnMs: ahora,
+    actorUserId: ctx.userId,
+    datos: {
+      operacionAnuladaId: operationId,
+      operacionInversaId: nuevaId,
+      numero,
+      tipoOperacion: original.tipo,
+      importeCentimos: original.importeCentimos,
+      motivo: motivo?.trim() ?? null,
+    },
+  });
+
+  // Si el cobro ya llegó a la ERP, hay que avisarla también de la anulación.
+  if (original.erpSyncStatus === "SYNCED" && original.externalDocumentId) {
+    const { conector } = await conectorPara(ctx.empresaId);
+    if (conector) {
+      await encolarEventoErp(client, {
+        empresaId: ctx.empresaId,
+        operationId: nuevaId,
+        connectorKey: conector.info.key,
+        evento: original.tipo === "COLLECTION" ? "COLLECTION_REVERSED" : "PAYMENT_REVERSED",
+        idempotencyKey: numero,
+        payload: {
+          externalSystem: original.externalSystem,
+          externalDocumentId: original.externalDocumentId,
+          operacionNumero: original.numero,
+          motivo,
+        },
+        ahora,
+      });
+    }
+  }
+
+  return { operacionId: nuevaId, numero };
+}
+
+/**
  * Anula una operación por reversión.
  *
  * Nunca se borra un movimiento que ya afectó al stock: se asienta la operación
@@ -2139,119 +2486,7 @@ export async function anularOperacion(
       "anular esta operación"
     );
 
-    // Los mismos movimientos del revés.
-    const originales = await movimientosDeOperacion(client, operationId);
-    const inversos = originales.map((m) => ({
-      direccion: (m.direccion === "IN" ? "OUT" : "IN") as "IN" | "OUT",
-      motivo: m.motivo,
-      lineas: m.lineas,
-    }));
-
-    // Devolver lo que entró exige que siga estando: si el billete de 100 € ya se
-    // ha usado para dar un cambio, la reversión no puede hacerse a ciegas.
-    const stock = await stockTeorico(client, sessionId);
-    for (const mov of inversos.filter((m) => m.direccion === "OUT")) {
-      for (const l of mov.lineas) {
-        const disponible = stock.get(l.valor) ?? 0;
-        if (l.cantidad > disponible) {
-          throw new ErrorCaja(
-            "STOCK_INSUFICIENTE",
-            `Para anular hay que devolver ${l.cantidad} piezas de ${l.valor} céntimos y en caja quedan ${disponible}.`,
-            409
-          );
-        }
-      }
-    }
-
-    const denominaciones = await cargarDenominaciones(client);
-    const ahora = Date.now();
-    const anio = Number(sesion.fecha.slice(0, 4));
-    const numero = await siguienteNumero(client, sesion.id, original.tipo, anio);
-
-    const nuevaId = await insertarOperacion(client, {
-      empresaId: ctx.empresaId,
-      sessionId,
-      numero,
-      tipo: original.tipo,
-      origen: original.origen,
-      externalSystem: original.externalSystem,
-      externalDocumentId: original.externalDocumentId,
-      externalDocumentReference: original.externalDocumentReference,
-      partyNombre: original.partyNombre,
-      concepto: `Reversión de ${original.numero}`,
-      referencia: original.referencia,
-      importeCentimos: original.importeCentimos,
-      efectivoNetoCentimos: -original.efectivoNetoCentimos,
-      erpSyncStatus: original.erpSyncStatus === "SYNCED" ? "PENDING" : "NOT_APPLICABLE",
-      reversaDeId: operationId,
-      motivoReversa: motivo,
-      userId: ctx.userId,
-      ahora,
-    });
-
-    const formas = await formasPagoDeOperacion(client, operationId);
-    await insertarFormasPago(client, nuevaId, formas, ahora);
-
-    await insertarMovimientos(client, {
-      sessionId,
-      operationId: nuevaId,
-      movimientos: inversos,
-      denominaciones,
-      userId: ctx.userId,
-      ahora,
-    });
-
-    await client.query(
-      `UPDATE cash_operations SET estado = 'REVERSED', updated_at_ms = $2 WHERE id = $1`,
-      [operationId, ahora]
-    );
-
-    /*
-     * La anulación es un hecho nuevo, no la retirada del anterior. Central
-     * recibe los dos —el cobro y su reverso— porque así es como está en el
-     * libro mayor: aquí nada se borra, se compensa.
-     */
-    await emitirEvento(client, {
-      empresaId: ctx.empresaId,
-      centroId: await centroDeCaja(client, sesion.registerId),
-      registerId: sesion.registerId,
-      sessionId,
-      agregado: { tipo: "SESSION", id: sessionId },
-      tipo: "OPERATION_REVERSED",
-      ocurridoEnMs: ahora,
-      actorUserId: ctx.userId,
-      datos: {
-        operacionAnuladaId: operationId,
-        operacionInversaId: nuevaId,
-        numero,
-        tipoOperacion: original.tipo,
-        importeCentimos: original.importeCentimos,
-        motivo: motivo?.trim() ?? null,
-      },
-    });
-
-    // Si el cobro ya llegó a la ERP, hay que avisarla también de la anulación.
-    if (original.erpSyncStatus === "SYNCED" && original.externalDocumentId) {
-      const { conector } = await conectorPara(ctx.empresaId);
-      if (conector) {
-        await encolarEventoErp(client, {
-          empresaId: ctx.empresaId,
-          operationId: nuevaId,
-          connectorKey: conector.info.key,
-          evento: original.tipo === "COLLECTION" ? "COLLECTION_REVERSED" : "PAYMENT_REVERSED",
-          idempotencyKey: numero,
-          payload: {
-            externalSystem: original.externalSystem,
-            externalDocumentId: original.externalDocumentId,
-            operacionNumero: original.numero,
-            motivo,
-          },
-          ahora,
-        });
-      }
-    }
-
-    return { operacionId: nuevaId, numero };
+    return asentarReversion(client, ctx, sesion, operationId, original, motivo);
   });
 
   await registrarAuditoria({
@@ -2795,8 +3030,8 @@ async function conciliarFormato(
       origen: "MANUAL",
       concepto:
         lote.campo === "cartuchos"
-          ? "Monedas precintadas en cartuchos, según el arqueo"
-          : "Monedas precintadas en bolsas, según el arqueo",
+          ? AJUSTE_CARTUCHOS
+          : AJUSTE_BOLSAS,
       importeCentimos: total,
       // Neto cero: el dinero no se mueve, cambia de envase.
       efectivoNetoCentimos: 0,
