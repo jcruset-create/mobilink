@@ -1,0 +1,485 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FileScan, Loader2, Send, Upload, Wand2 } from "lucide-react";
+import {
+  CLAVE_MATERIAL,
+  claveArticulo,
+  parteATrabajos,
+  resumenMateriales,
+  type LineaParte,
+  type MapaArticulos,
+  type ParteTrabajo,
+} from "../parteTrabajoATrabajos";
+import { allocateJobPure } from "../assignment";
+import {
+  API_BASE,
+  loadJobsFromBackend,
+  loadQuickTemplatesFromBackend,
+  loadTechsFromBackend,
+  saveJobToBackend,
+} from "../workshopApi";
+import { getAdminHeaders } from "../adminHeaders";
+import { DEFAULT_WORKSHOP_ID, normalizeWorkshopId } from "../workshops";
+import type { Job, QuickTemplate, Tech } from "../workshopTypes";
+
+/**
+ * Partes de trabajo — se escanea el parte del ERP, se sube aquí, y de sus
+ * líneas salen los trabajos pendientes de asignar, con técnico propuesto.
+ *
+ * La IA solo LEE el papel. Lo que ha leído se revisa en pantalla antes de
+ * crear nada: un OCR de un escaneo se equivoca, y una matrícula mal leída
+ * manda el trabajo al vehículo equivocado.
+ */
+
+type Estado = "vacio" | "leyendo" | "revisando" | "creando";
+
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: getAdminHeaders({ "Content-Type": "application/json" }),
+  });
+
+  const body = await res.json().catch(() => null);
+
+  if (!res.ok) throw new Error((body as any)?.error || `Error ${res.status}`);
+
+  return body as T;
+}
+
+function ficheroADataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const lector = new FileReader();
+    lector.onload = () => resolve(String(lector.result || ""));
+    lector.onerror = () => reject(new Error("No se pudo leer el fichero"));
+    lector.readAsDataURL(file);
+  });
+}
+
+export default function PartesTrabajoPage() {
+  const [estado, setEstado] = useState<Estado>("vacio");
+  const [error, setError] = useState("");
+  const [aviso, setAviso] = useState("");
+
+  const [parte, setParte] = useState<ParteTrabajo | null>(null);
+  const [mapa, setMapa] = useState<MapaArticulos>({});
+  const [plantillas, setPlantillas] = useState<QuickTemplate[]>([]);
+  const [techs, setTechs] = useState<Tech[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const workshopId = useMemo(
+    () =>
+      normalizeWorkshopId(
+        window.localStorage.getItem("sea-selected-workshop") || DEFAULT_WORKSHOP_ID
+      ),
+    []
+  );
+
+  const cargarBase = useCallback(async () => {
+    try {
+      const [tpl, tec, trabajos, articulos] = await Promise.all([
+        loadQuickTemplatesFromBackend().catch(() => []),
+        loadTechsFromBackend().catch(() => []),
+        loadJobsFromBackend().catch(() => []),
+        api<{ mapa: MapaArticulos }>(
+          `/api/partes-trabajo/articulos?workshopId=${encodeURIComponent(workshopId)}`
+        ).catch(() => ({ mapa: {} })),
+      ]);
+
+      setPlantillas(tpl as QuickTemplate[]);
+      setTechs((tec as Tech[]).filter((t) => t?.name));
+      setJobs(trabajos as Job[]);
+      setMapa(articulos.mapa ?? {});
+    } catch (e: any) {
+      setError(e?.message || "Error cargando los datos del taller.");
+    }
+  }, [workshopId]);
+
+  useEffect(() => { void cargarBase(); }, [cargarBase]);
+
+  const plantillasDelTaller = useMemo(
+    () =>
+      plantillas.filter(
+        (p) => !p.workshopId || normalizeWorkshopId(p.workshopId) === workshopId
+      ),
+    [plantillas, workshopId]
+  );
+
+  const conversion = useMemo(
+    () =>
+      parte
+        ? parteATrabajos({ parte, mapa, quickTemplates: plantillasDelTaller })
+        : null,
+    [parte, mapa, plantillasDelTaller]
+  );
+
+  async function subirParte(file: File) {
+    setError("");
+    setAviso("");
+    setEstado("leyendo");
+
+    try {
+      const dataUrl = await ficheroADataUrl(file);
+
+      const r = await api<{ parte: ParteTrabajo }>("/api/partes-trabajo/leer", {
+        method: "POST",
+        body: JSON.stringify({ imagenes: [dataUrl] }),
+      });
+
+      setParte(r.parte);
+      setEstado("revisando");
+    } catch (e: any) {
+      setError(e?.message || "No se pudo leer el parte.");
+      setEstado("vacio");
+    }
+  }
+
+  /** Enseña qué es un artículo y lo recuerda para la próxima vez. */
+  async function enseñarArticulo(linea: LineaParte, templateKey: string) {
+    const clave = claveArticulo(linea);
+
+    setMapa((prev) => ({ ...prev, [clave]: templateKey }));
+
+    try {
+      await api("/api/partes-trabajo/articulos", {
+        method: "PUT",
+        body: JSON.stringify({
+          workshopId,
+          articulos: [{ clave, templateKey, descripcion: linea.descripcion }],
+        }),
+      });
+    } catch (e: any) {
+      setError(
+        `Se ha aplicado en pantalla, pero no se ha podido recordar "${linea.descripcion}": ${e?.message}`
+      );
+    }
+  }
+
+  async function crearTrabajos() {
+    if (!conversion || conversion.trabajos.length === 0) return;
+
+    setEstado("creando");
+    setError("");
+
+    try {
+      const material = resumenMateriales(conversion.materiales);
+
+      let siguienteId =
+        jobs.reduce((max, j) => Math.max(max, Number(j.id) || 0), 0) + 1;
+
+      let jobsAcumulados = [...jobs];
+      let techsAcumulados = [...techs];
+      const creados: string[] = [];
+
+      for (const propuesto of conversion.trabajos) {
+        const base: Job = {
+          id: siguienteId,
+          workshopId,
+          area: propuesto.area,
+          plate: propuesto.plate,
+          urgent: false,
+          status: "validacion",
+          assignedNames: [],
+          reason: `Parte ${propuesto.ptNumero}: ${propuesto.descripcionOriginal}.`,
+          customerName: propuesto.customerName,
+          customerPhone: propuesto.customerPhone,
+          createdAtMs: Date.now(),
+          startedAtMs: null,
+          template: null,
+          quickEntryLabel: propuesto.label,
+          quickEntryMode: "team",
+          includedTasks: [],
+          quantity: propuesto.quantity,
+          unitMinutes: propuesto.unitMinutes,
+          ptNumero: propuesto.ptNumero,
+        };
+
+        // El motor de asignación de siempre: competencias, orden del área,
+        // quién es más rápido en esa operación y quién lleva menos carga.
+        const resultado = allocateJobPure(
+          base,
+          techsAcumulados,
+          [base, ...jobsAcumulados],
+          plantillasDelTaller,
+          [],
+          []
+        );
+
+        const conPropuesta =
+          resultado.jobs.find((j) => j.id === base.id) ?? base;
+
+        const jobFinal: Job = {
+          ...conPropuesta,
+          status: "validacion",
+          reason: material
+            ? `${conPropuesta.reason} Material: ${material}.`
+            : conPropuesta.reason,
+        };
+
+        await saveJobToBackend(jobFinal);
+
+        jobsAcumulados = [jobFinal, ...jobsAcumulados];
+        techsAcumulados = resultado.techs;
+        siguienteId += 1;
+
+        creados.push(
+          `${jobFinal.plate} · ${propuesto.label} ×${propuesto.quantity}` +
+            (jobFinal.assignedNames?.length
+              ? ` → ${jobFinal.assignedNames.join(" + ")}`
+              : " → sin técnico libre")
+        );
+      }
+
+      setAviso(
+        `${creados.length} trabajo(s) creados y pendientes de validar:\n${creados.join("\n")}`
+      );
+
+      setParte(null);
+      setEstado("vacio");
+      await cargarBase();
+    } catch (e: any) {
+      setError(e?.message || "No se pudieron crear los trabajos.");
+      setEstado("revisando");
+    }
+  }
+
+  return (
+    <div className="min-h-full bg-slate-900 p-4 text-slate-100">
+      <div className="mx-auto max-w-5xl">
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-bold">Partes de trabajo</h1>
+            <p className="text-xs text-slate-400">
+              Sube el parte escaneado y de sus líneas salen los trabajos, con
+              técnico propuesto. Revísalo antes de crear nada.
+            </p>
+          </div>
+
+          <div>
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/*,.pdf"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void subirParte(file);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              disabled={estado === "leyendo" || estado === "creando"}
+              className="flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
+            >
+              {estado === "leyendo" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="h-4 w-4" />
+              )}
+              {estado === "leyendo" ? "Leyendo el parte…" : "Subir parte escaneado"}
+            </button>
+          </div>
+        </div>
+
+        {error && (
+          <div className="mb-4 whitespace-pre-line rounded-lg border border-rose-800 bg-rose-950/40 px-4 py-2 text-sm text-rose-300">
+            {error}
+          </div>
+        )}
+
+        {aviso && (
+          <div className="mb-4 whitespace-pre-line rounded-lg border border-emerald-800 bg-emerald-950/40 px-4 py-2 text-sm text-emerald-300">
+            {aviso}
+          </div>
+        )}
+
+        {!parte && estado !== "leyendo" && (
+          <div className="rounded-2xl border border-dashed border-slate-700 p-10 text-center">
+            <FileScan className="mx-auto h-8 w-8 text-slate-600" />
+            <p className="mt-2 text-sm text-slate-400">
+              Escanea el parte y súbelo. Se leen la matrícula, el cliente y las
+              líneas de productos y servicios.
+            </p>
+          </div>
+        )}
+
+        {parte && conversion && (
+          <div className="space-y-4">
+            {/* Cabecera leída, editable: el OCR se equivoca */}
+            <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+              <h2 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-300">
+                Datos leídos del parte
+              </h2>
+
+              <div className="grid gap-3 md:grid-cols-4">
+                <Campo
+                  etiqueta="PT Nº"
+                  valor={parte.numero}
+                  onChange={(v) => setParte({ ...parte, numero: v })}
+                />
+                <Campo
+                  etiqueta="Matrícula"
+                  valor={parte.matricula}
+                  onChange={(v) => setParte({ ...parte, matricula: v })}
+                />
+                <Campo
+                  etiqueta="Fecha"
+                  valor={parte.fecha ?? ""}
+                  onChange={(v) => setParte({ ...parte, fecha: v })}
+                />
+                <Campo
+                  etiqueta="Entrada"
+                  valor={parte.horaEntrada ?? ""}
+                  onChange={(v) => setParte({ ...parte, horaEntrada: v })}
+                />
+                <div className="md:col-span-3">
+                  <Campo
+                    etiqueta="Cliente"
+                    valor={parte.clienteNombre ?? ""}
+                    onChange={(v) => setParte({ ...parte, clienteNombre: v })}
+                  />
+                </div>
+                <Campo
+                  etiqueta="Teléfono"
+                  valor={parte.clienteTelefono ?? ""}
+                  onChange={(v) => setParte({ ...parte, clienteTelefono: v })}
+                />
+              </div>
+            </div>
+
+            {conversion.avisos.length > 0 && (
+              <div className="rounded-2xl border border-amber-700/60 bg-amber-950/30 p-3 text-xs text-amber-200">
+                {conversion.avisos.map((a, i) => <div key={i}>· {a}</div>)}
+              </div>
+            )}
+
+            {/* Líneas por enseñar */}
+            {conversion.sinMapear.length > 0 && (
+              <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+                <h2 className="mb-1 text-sm font-black uppercase tracking-wide text-slate-300">
+                  Líneas por clasificar ({conversion.sinMapear.length})
+                </h2>
+                <p className="mb-3 text-xs text-slate-400">
+                  Di qué es cada una. Se recuerda para los próximos partes.
+                </p>
+
+                <div className="space-y-2">
+                  {conversion.sinMapear.map((linea) => (
+                    <div
+                      key={linea.clave}
+                      className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm"
+                    >
+                      <span className="flex-1 truncate">
+                        {linea.descripcion}
+                        <span className="ml-2 text-slate-500">×{linea.unidades}</span>
+                      </span>
+
+                      <select
+                        defaultValue=""
+                        onChange={(e) => {
+                          if (e.target.value) void enseñarArticulo(linea, e.target.value);
+                        }}
+                        className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs"
+                      >
+                        <option value="">¿Qué es?</option>
+                        <option value={CLAVE_MATERIAL}>Material (no genera trabajo)</option>
+                        {plantillasDelTaller.map((p) => (
+                          <option key={p.key} value={p.key}>{p.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Trabajos que se van a crear */}
+            <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+              <h2 className="mb-3 text-sm font-black uppercase tracking-wide text-slate-300">
+                Trabajos a crear ({conversion.trabajos.length})
+              </h2>
+
+              {conversion.trabajos.length === 0 ? (
+                <p className="text-xs text-slate-500">
+                  Ninguna línea de servicio reconocida todavía.
+                </p>
+              ) : (
+                <div className="space-y-1 text-sm">
+                  {conversion.trabajos.map((t) => (
+                    <div
+                      key={t.indiceLinea}
+                      className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-900 px-3 py-2"
+                    >
+                      <span className="font-semibold">{t.plate}</span>
+                      <span className="flex-1 truncate">{t.label}</span>
+                      <span className="text-slate-400">×{t.quantity}</span>
+                      <span className="text-slate-500">{t.estimatedMinutes} min</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {conversion.materiales.length > 0 && (
+                <p className="mt-3 text-xs text-slate-400">
+                  <b>Material:</b> {resumenMateriales(conversion.materiales)}
+                </p>
+              )}
+
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void crearTrabajos()}
+                  disabled={estado === "creando" || conversion.trabajos.length === 0}
+                  className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  {estado === "creando" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                  Crear y proponer técnico
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => { setParte(null); setEstado("vacio"); }}
+                  className="rounded-lg border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold hover:bg-slate-700"
+                >
+                  Descartar
+                </button>
+
+                <span className="flex items-center gap-1 text-xs text-slate-500">
+                  <Wand2 className="h-3.5 w-3.5" />
+                  Entran como propuesta en «Pendientes de validar» de Operativo 2.
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Campo({
+  etiqueta,
+  valor,
+  onChange,
+}: {
+  etiqueta: string;
+  valor: string;
+  onChange: (valor: string) => void;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs text-slate-400">{etiqueta}</label>
+      <input
+        value={valor}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm"
+      />
+    </div>
+  );
+}

@@ -1088,6 +1088,36 @@ export async function initDb() {
     );
   `);
 
+  // Qué es cada artículo del parte de trabajo: una entrada rápida del taller o
+  // material. Se enseña una vez por artículo y ya no se vuelve a preguntar.
+  // "templateKey" = '__material__' marca el material, que no genera tarea.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS erp_articulo_plantilla (
+      id            SERIAL PRIMARY KEY,
+      "workshopId"  TEXT NOT NULL DEFAULT '',
+      clave         TEXT NOT NULL,
+      "templateKey" TEXT NOT NULL,
+      descripcion   TEXT NOT NULL DEFAULT '',
+      "createdAtMs" BIGINT NOT NULL,
+      "updatedAtMs" BIGINT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS erp_articulo_plantilla_unica
+      ON erp_articulo_plantilla ("workshopId", clave);
+  `);
+
+  // Enlace del trabajo con el parte del que salió, para poder volver al papel
+  // y para no volcar dos veces el mismo parte.
+  await pool.query(`
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "ptNumero" TEXT DEFAULT NULL;
+
+    -- Cantidad y minutos estimados del trabajo. Vivían solo en memoria del
+    -- navegador, así que al recargar se perdían: un montaje de 4 ruedas volvía
+    -- como si fuera uno solo.
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT NULL;
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "unitMinutes" INTEGER DEFAULT NULL;
+  `);
+
   // Cupo anual de vacaciones y modo de cómputo. Una fila por taller y año con
   // "techName" = '' es el valor por defecto; las filas con nombre son el cupo
   // propio de ese técnico (antigüedad, jornada parcial, incorporación a mitad

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
-import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks, CalendarX, Users } from "lucide-react";
+import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks, CalendarX, Users, FileScan } from "lucide-react";
 import logoMobilink from "../../assets/logo-mobilink.png";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
 import PedidosErpPage from "./PedidosErpPage";
 import PlantillasChecklistPage from "./PlantillasChecklistPage";
 import AusenciasTecnicosPage from "./AusenciasTecnicosPage";
+import PartesTrabajoPage from "./PartesTrabajoPage";
 import { supabase } from "../administracion/services/supabase";
 import { APP_VERSION } from "../../version";
 
@@ -21,6 +22,7 @@ const SECCIONES = [
   // Fichas del personal: avatar, PIN del portal y alta/baja en la empresa.
   // Solo administradores, como Ausencias.
   { key: "personal", label: "Personal", icon: Users, proximamente: false, soloAdmin: true },
+  { key: "partes", label: "Partes de trabajo", icon: FileScan, proximamente: false },
   { key: "pedidos", label: "Pedidos ERP", icon: FileInput, proximamente: false },
   { key: "plantillas", label: "Plantillas", icon: ListChecks, proximamente: false },
   // Cupos y ausencias del personal: solo para administradores.
@@ -352,6 +354,7 @@ export default function WorkPlannerApp() {
               )
             }
           />
+          <Route path="partes" element={<PartesTrabajoPage />} />
           <Route path="plantillas" element={<PlantillasChecklistPage />} />
           <Route
             path="ausencias"
