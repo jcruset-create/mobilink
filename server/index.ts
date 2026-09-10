@@ -49,6 +49,10 @@ import {
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
 import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc } from "./tyrecontrol/empresaAcceso.ts";
+import {
+  resolveWebfleetCreds,
+  type WebfleetCreds,
+} from "./tyrecontrol/webfleetCredenciales.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
@@ -1253,31 +1257,9 @@ app.post("/api/geocode", protectWhenStrict(requirePanelRole), async (req, res) =
   }
 });
 
-type WebfleetCreds = { account?: string | null; username?: string | null; password?: string | null; apikey?: string | null; baseUrl?: string | null };
-
-// Lee las credenciales Webfleet de una empresa (cliente) de Supabase.
-async function getWebfleetConfigForEmpresa(empresaId: string): Promise<WebfleetCreds | null> {
-  const { data, error } = await supabase.from("tc_webfleet_config").select("*").eq("empresa_id", empresaId).maybeSingle();
-  if (error || !data || !(data as any).activo || !(data as any).account) return null;
-  const d = data as any;
-  return { account: d.account, username: d.username, password: d.password, apikey: d.apikey, baseUrl: d.base_url };
-}
-
-// Credenciales globales (variables de entorno) si están definidas.
-function globalWebfleetCreds(): WebfleetCreds | null {
-  if (!process.env.WEBFLEET_ACCOUNT || !process.env.WEBFLEET_USERNAME || !process.env.WEBFLEET_PASSWORD) return null;
-  return {
-    account: process.env.WEBFLEET_ACCOUNT, username: process.env.WEBFLEET_USERNAME,
-    password: process.env.WEBFLEET_PASSWORD, apikey: process.env.WEBFLEET_API_KEY,
-    baseUrl: process.env.WEBFLEET_BASE_URL,
-  };
-}
-
-// Credenciales a usar para una empresa: las suyas propias o, si no tiene, las
-// globales (con las que ya funciona el módulo de asistencia). null si no hay ninguna.
-async function resolveWebfleetCreds(empresaId: string): Promise<WebfleetCreds | null> {
-  return (await getWebfleetConfigForEmpresa(empresaId)) ?? globalWebfleetCreds();
-}
+// Las credenciales de Webfleet se resuelven en server/tyrecontrol/webfleetCredenciales.ts,
+// que es también donde están sus pruebas. El orden es: gestor de secretos de
+// esa empresa → tc_webfleet_config → variables globales de entorno.
 
 /**
  * Empresa de una petición de telemática, ya comprobada.
