@@ -396,10 +396,22 @@ export async function markChecklistRunAccepted(params: {
 }
 
 // ── Configuración de conectores por tenant ──────────────────────────────────
-export async function getConnectorConfig(tenantId: string, connectorKey: string) {
+//
+// Un cliente puede tener VARIAS cuentas del mismo conector (dos cuentas de
+// telemática, una por flota). `accountKey` las distingue y vale 'default'
+// cuando no se indica, que es el caso de todo lo que ya existía: quien tiene
+// una sola cuenta no nota ningún cambio.
+export const CUENTA_POR_DEFECTO = "default";
+
+export async function getConnectorConfig(
+  tenantId: string,
+  connectorKey: string,
+  accountKey: string = CUENTA_POR_DEFECTO
+) {
   const { rows } = await pool.query(
-    `SELECT * FROM integration_connector_configs WHERE tenant_id = $1 AND connector_key = $2`,
-    [tenantId, connectorKey]
+    `SELECT * FROM integration_connector_configs
+      WHERE tenant_id = $1 AND connector_key = $2 AND account_key = $3`,
+    [tenantId, connectorKey, accountKey]
   );
   return rows[0] ?? null;
 }
@@ -409,23 +421,40 @@ export async function upsertConnectorConfig(params: {
   connectorKey: string;
   enabled: boolean;
   config: Record<string, unknown>;
+  accountKey?: string;
+  /** Nombre legible de la cuenta, p. ej. «Plana autobuses». */
+  name?: string | null;
 }) {
   const ts = now();
   const { rows } = await pool.query(
     `INSERT INTO integration_connector_configs
-       (tenant_id, connector_key, enabled, config, created_at_ms, updated_at_ms)
-     VALUES ($1,$2,$3,$4,$5,$5)
-     ON CONFLICT (tenant_id, connector_key)
-     DO UPDATE SET enabled = EXCLUDED.enabled, config = EXCLUDED.config, updated_at_ms = $5
+       (tenant_id, connector_key, account_key, name, enabled, config, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
+     ON CONFLICT (tenant_id, connector_key, account_key)
+     DO UPDATE SET enabled = EXCLUDED.enabled,
+                   config = EXCLUDED.config,
+                   -- Sin nombre en el patch se conserva el que hubiera: guardar
+                   -- «activa/desactiva» no puede borrar cómo se llama la cuenta.
+                   name = COALESCE(EXCLUDED.name, integration_connector_configs.name),
+                   updated_at_ms = $7
      RETURNING *`,
-    [params.tenantId, params.connectorKey, params.enabled, JSON.stringify(params.config), ts]
+    [
+      params.tenantId,
+      params.connectorKey,
+      params.accountKey ?? CUENTA_POR_DEFECTO,
+      params.name ?? null,
+      params.enabled,
+      JSON.stringify(params.config),
+      ts,
+    ]
   );
   return rows[0];
 }
 
 export async function listConnectorConfigs(tenantId: string) {
   const { rows } = await pool.query(
-    `SELECT * FROM integration_connector_configs WHERE tenant_id = $1 ORDER BY connector_key`,
+    `SELECT * FROM integration_connector_configs
+      WHERE tenant_id = $1 ORDER BY connector_key, account_key`,
     [tenantId]
   );
   return rows;
@@ -440,23 +469,41 @@ export interface MappingRow {
   tenant_id: string;
   entity_type: string;
   system: string;
+  /** Cuenta del proveedor. 'default' en todo lo anterior a las cuentas múltiples. */
+  account_key: string;
   external_code: string;
   mobilink_id: string;
+  /** Un enlace desactivado se conserva por su histórico, pero ya no se usa. */
+  active: boolean;
   metadata: Record<string, unknown> | null;
 }
 
-/** Mobilink → sistema externo. Es la dirección que usa la creación de documentos. */
+/**
+ * Mobilink → sistema externo. Es la dirección que usa la creación de documentos.
+ *
+ * La búsqueda va acotada a una cuenta. Sin acotar, con dos cuentas del mismo
+ * proveedor el `LIMIT 1` devolvería la primera que apareciera, que es una
+ * forma silenciosa de consultar la plataforma equivocada.
+ */
 export async function findExternalCode(params: {
   tenantId: string;
   entityType: MappingEntityType;
   system: string;
   mobilinkId: string;
+  accountKey?: string;
 }): Promise<string | null> {
   const { rows } = await pool.query(
     `SELECT external_code FROM integration_mappings
-      WHERE tenant_id = $1 AND entity_type = $2 AND system = $3 AND mobilink_id = $4
+      WHERE tenant_id = $1 AND entity_type = $2 AND system = $3
+        AND account_key = $4 AND mobilink_id = $5
       LIMIT 1`,
-    [params.tenantId, params.entityType, params.system, params.mobilinkId]
+    [
+      params.tenantId,
+      params.entityType,
+      params.system,
+      params.accountKey ?? CUENTA_POR_DEFECTO,
+      params.mobilinkId,
+    ]
   );
   return rows[0]?.external_code ?? null;
 }
@@ -467,12 +514,20 @@ export async function findMobilinkId(params: {
   entityType: MappingEntityType;
   system: string;
   externalCode: string;
+  accountKey?: string;
 }): Promise<string | null> {
   const { rows } = await pool.query(
     `SELECT mobilink_id FROM integration_mappings
-      WHERE tenant_id = $1 AND entity_type = $2 AND system = $3 AND external_code = $4
+      WHERE tenant_id = $1 AND entity_type = $2 AND system = $3
+        AND account_key = $4 AND external_code = $5
       LIMIT 1`,
-    [params.tenantId, params.entityType, params.system, params.externalCode]
+    [
+      params.tenantId,
+      params.entityType,
+      params.system,
+      params.accountKey ?? CUENTA_POR_DEFECTO,
+      params.externalCode,
+    ]
   );
   return rows[0]?.mobilink_id ?? null;
 }
@@ -484,21 +539,25 @@ export async function upsertMapping(params: {
   externalCode: string;
   mobilinkId: string;
   metadata?: Record<string, unknown>;
+  /** Cuenta del proveedor a la que pertenece el mapeo. */
+  accountKey?: string;
 }): Promise<MappingRow> {
   const ts = now();
   const { rows } = await pool.query(
     `INSERT INTO integration_mappings
-       (tenant_id, entity_type, system, external_code, mobilink_id, metadata, created_at_ms, updated_at_ms)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$7)
-     ON CONFLICT (tenant_id, entity_type, system, external_code)
+       (tenant_id, entity_type, system, account_key, external_code, mobilink_id,
+        metadata, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+     ON CONFLICT (tenant_id, entity_type, system, account_key, external_code)
      DO UPDATE SET mobilink_id = EXCLUDED.mobilink_id,
                    metadata = EXCLUDED.metadata,
-                   updated_at_ms = $7
+                   updated_at_ms = $8
      RETURNING *`,
     [
       params.tenantId,
       params.entityType,
       params.system,
+      params.accountKey ?? CUENTA_POR_DEFECTO,
       params.externalCode,
       params.mobilinkId,
       params.metadata ? JSON.stringify(params.metadata) : null,
