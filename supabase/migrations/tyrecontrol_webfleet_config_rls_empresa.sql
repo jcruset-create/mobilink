@@ -22,6 +22,15 @@
 -- los datos del vehículo. Una credencial no puede estar menos protegida que
 -- la ficha del camión al que da acceso.
 --
+-- ── Si la tabla no existe ───────────────────────────────────────────────────
+--
+-- No en todos los proyectos está creada: tyrecontrol_webfleet_config.sql se
+-- pasa a mano, y donde no se pasó, Webfleet funciona con las credenciales
+-- globales de entorno (resolveWebfleetCreds cae a ellas cuando no hay fila).
+-- Ahí no hay nada que arreglar, así que esta migración lo dice y termina en
+-- vez de fallar con «relation does not exist». Se puede ejecutar en cualquier
+-- proyecto, tenga la tabla o no.
+--
 -- Nota sobre el backend: el servidor lee esta tabla con service_role, que no
 -- pasa por RLS. Esta migración no cambia nada de la sincronización ni de los
 -- endpoints; solo cierra el acceso directo desde el navegador.
@@ -29,20 +38,30 @@
 -- Idempotente. Pegar en Supabase (SQL Editor).
 -- ============================================================
 
-drop policy if exists tc_webfleet_config_all on public.tc_webfleet_config;
-
-create policy tc_webfleet_config_all on public.tc_webfleet_config
-  for all
-  using      ( tc_is_superadmin() or (tc_is_admin() and empresa_id = tc_auth_empresa_id()) )
-  with check ( tc_is_superadmin() or (tc_is_admin() and empresa_id = tc_auth_empresa_id()) );
-
--- ── Comprobación: que la política quede realmente acotada ────────────────────
--- Mismo patrón que tyrecontrol_parte_guiado_alta_vehiculo.sql: si una migración
--- posterior vuelve a dejarla abierta, esto lo dice en voz alta en vez de dejar
--- las credenciales expuestas en silencio.
 do $$
-declare v_pol text;
+declare
+  v_pol text;
 begin
+  if to_regclass('public.tc_webfleet_config') is null then
+    raise notice 'tc_webfleet_config no existe en este proyecto: no hay credenciales por empresa que proteger. Nada que hacer.';
+    return;
+  end if;
+
+  -- Por si la tabla existiera con RLS apagada.
+  execute 'alter table public.tc_webfleet_config enable row level security';
+
+  execute 'drop policy if exists tc_webfleet_config_all on public.tc_webfleet_config';
+  execute $pol$
+    create policy tc_webfleet_config_all on public.tc_webfleet_config
+      for all
+      using      ( tc_is_superadmin() or (tc_is_admin() and empresa_id = tc_auth_empresa_id()) )
+      with check ( tc_is_superadmin() or (tc_is_admin() and empresa_id = tc_auth_empresa_id()) )
+  $pol$;
+
+  -- ── Comprobación: que la política quede realmente acotada ─────────────────
+  -- Mismo patrón que tyrecontrol_parte_guiado_alta_vehiculo.sql: si una
+  -- migración posterior vuelve a dejarla abierta, esto lo dice en voz alta en
+  -- vez de dejar las credenciales expuestas en silencio.
   select pg_get_expr(polqual, polrelid) into v_pol
     from pg_policy
    where polname = 'tc_webfleet_config_all'
@@ -55,4 +74,6 @@ begin
   if v_pol not like '%tc_auth_empresa_id%' then
     raise exception 'tc_webfleet_config_all no filtra por empresa: %', v_pol;
   end if;
+
+  raise notice 'tc_webfleet_config: política acotada por empresa aplicada correctamente.';
 end $$;
