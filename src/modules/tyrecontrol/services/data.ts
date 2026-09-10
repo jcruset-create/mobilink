@@ -2234,6 +2234,39 @@ export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> 
 }
 
 // Lanza un ciclo de sincronización en el backend y devuelve nº actualizados.
+/** De dónde salen hoy las credenciales de Webfleet de un cliente. */
+export type OrigenCredencialesWebfleet = "secretos" | "tabla" | "globales" | "ninguno";
+
+export type EstadoWebfleet = {
+  origen: OrigenCredencialesWebfleet;
+  configurado: boolean;
+  /** Presentes solo si se pidió probar la conexión. */
+  probado?: boolean;
+  ok?: boolean;
+  mensaje?: string;
+  vehiculos?: number;
+};
+
+/**
+ * Estado de la integración Webfleet de un cliente.
+ *
+ * Lo pregunta al backend en vez de deducirlo de la tabla, porque desde que las
+ * credenciales pueden vivir en el gestor de secretos la tabla ya no cuenta toda
+ * la verdad: un cliente migrado, con la tabla vacía, funciona perfectamente.
+ *
+ * Nunca devuelve credenciales, solo su procedencia. Con `probar` hace una
+ * llamada real a Webfleet.
+ */
+export async function obtenerEstadoWebfleet(empresaId: string, probar = false): Promise<EstadoWebfleet> {
+  const qs = new URLSearchParams({ empresa: empresaId });
+  if (probar) qs.set("probar", "1");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/webfleet/estado?${qs}`, {
+    headers: await authHeaders(),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return (await r.json()) as EstadoWebfleet;
+}
+
 export async function sincronizarWebfleet(): Promise<{ actualizados?: number; error?: string }> {
   const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/webfleet/sync`, {
     method: "POST",

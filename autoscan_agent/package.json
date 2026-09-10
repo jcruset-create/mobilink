@@ -1,6 +1,6 @@
 {
   "name": "mobilink-autoscan-agent",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "description": "Agente de Windows de Mobilink Cash AutoScan: vigila la carpeta del escáner y entrega las facturas a la bandeja.",
   "type": "module",

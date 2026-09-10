@@ -40,6 +40,7 @@ vi.mock("../supabase.ts", () => {
 
 const { setSecretsProvider } = await import("../integration-hub/infrastructure/secrets.ts");
 const {
+  buildWebfleetRequest,
   credencialesCompletas,
   resolverCredencialesWebfleet,
   resolveWebfleetCreds,
@@ -248,5 +249,71 @@ describe("La forma corta que usan los endpoints", () => {
 
   it("y null cuando no hay ninguna", async () => {
     expect(await resolveWebfleetCreds(EMPRESA_A)).toBeNull();
+  });
+});
+
+describe("Construir la petición: las credenciales no se mezclan", () => {
+  /** Los parámetros de la URL, para poder mirarlos sin depender del orden. */
+  function params(url: string) {
+    return Object.fromEntries(new URL(url).searchParams.entries());
+  }
+  /** Usuario y contraseña van en Basic, así que hay que deshacerlo para verlos. */
+  function basic(headers: Record<string, string>) {
+    const b64 = headers.Authorization.replace(/^Basic /, "");
+    const [usuario, clave] = Buffer.from(b64, "base64").toString().split(":");
+    return { usuario, clave };
+  }
+
+  it("con credenciales de cliente NO se cuela la apikey global", () => {
+    // Este era el fallo: cada campo caía por su cuenta a su variable de entorno,
+    // así que un cliente con cuenta propia pero sin apikey propia mandaba la
+    // apikey de la casa junto a su cuenta y su usuario.
+    process.env.WEBFLEET_API_KEY = "apikey-de-la-casa";
+    process.env.WEBFLEET_BASE_URL = "https://global";
+    globalesPuestas();
+
+    const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, {
+      account: "cuenta-cliente", username: "usuario-cliente", password: "clave-cliente",
+      // sin apikey y sin baseUrl propias
+    });
+
+    const p = params(url);
+    expect(p.account).toBe("cuenta-cliente");
+    expect(p.apikey).toBeUndefined();
+    expect(url.startsWith("https://csv.webfleet.com/extern")).toBe(true);
+    expect(basic(headers)).toEqual({ usuario: "usuario-cliente", clave: "clave-cliente" });
+  });
+
+  it("si el cliente tiene apikey y URL propias, se usan las suyas", () => {
+    process.env.WEBFLEET_API_KEY = "apikey-de-la-casa";
+
+    const { url } = buildWebfleetRequest("showObjectReportExtern", {}, {
+      account: "cuenta-cliente", username: "u", password: "p",
+      apikey: "apikey-cliente", baseUrl: "https://cliente",
+    });
+
+    expect(params(url).apikey).toBe("apikey-cliente");
+    expect(url.startsWith("https://cliente")).toBe(true);
+  });
+
+  it("sin credenciales sigue leyendo el entorno, como el módulo de asistencia", () => {
+    globalesPuestas();
+    process.env.WEBFLEET_API_KEY = "apikey-de-la-casa";
+
+    const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
+    const p = params(url);
+    expect(p.account).toBe("cuenta-global");
+    expect(p.apikey).toBe("apikey-de-la-casa");
+    expect(basic(headers)).toEqual({ usuario: "usuario-global", clave: "clave-global" });
+  });
+
+  it("sin credenciales por ningún lado, avisa en vez de llamar a medias", () => {
+    expect(() => buildWebfleetRequest("showObjectReportExtern")).toThrow(/no configuradas/i);
+  });
+
+  it("los parámetros extra llegan a la URL", () => {
+    globalesPuestas();
+    const { url } = buildWebfleetRequest("showObjectReportExtern", { objectno: "ABC-1" });
+    expect(params(url).objectno).toBe("ABC-1");
   });
 });

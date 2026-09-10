@@ -163,3 +163,42 @@ export async function resolverCredencialesWebfleet(empresaId: string): Promise<R
 export async function resolveWebfleetCreds(empresaId: string): Promise<WebfleetCreds | null> {
   return (await resolverCredencialesWebfleet(empresaId)).creds;
 }
+
+export function buildWebfleetRequest(action: string, extra: Record<string, string> = {}, creds?: WebfleetCreds): { url: string; headers: Record<string, string> } {
+  // Cuando vienen credenciales de un cliente se usan ENTERAS, sin mezclarlas
+  // con las globales. Antes cada campo caía por su cuenta a su variable de
+  // entorno, así que un cliente con cuenta propia pero sin apikey propia
+  // acababa mandando la apikey de la casa junto a su cuenta y su usuario. Un
+  // juego mezclado falla de formas que no se parecen a su causa, y además haría
+  // mentir al estado que enseña el panel: diría «credenciales del cliente»
+  // cuando media petición va con las de la casa.
+  //
+  // Sin credenciales —el módulo de asistencia, que tiene una sola cuenta para
+  // todo— se sigue leyendo el entorno igual que siempre.
+  const fuente: WebfleetCreds = creds ?? {
+    account: process.env.WEBFLEET_ACCOUNT,
+    username: process.env.WEBFLEET_USERNAME,
+    password: process.env.WEBFLEET_PASSWORD,
+    apikey: process.env.WEBFLEET_API_KEY,
+    baseUrl: process.env.WEBFLEET_BASE_URL,
+  };
+  const account = fuente.account;
+  const username = fuente.username;
+  const password = fuente.password;
+  const apiKey = fuente.apikey;
+  const baseUrl = fuente.baseUrl || "https://csv.webfleet.com/extern";
+
+  if (!account || !username || !password) {
+    throw new Error("Credenciales Webfleet no configuradas (cuenta, usuario y contraseña)");
+  }
+
+  const params = new URLSearchParams({ account, action, lang: "en", outputformat: "json", useISO8601: "true", ...extra });
+  if (apiKey) params.set("apikey", apiKey);
+
+  const credentials = Buffer.from(`${username}:${password}`).toString("base64");
+
+  return {
+    url: `${baseUrl}?${params.toString()}`,
+    headers: { Authorization: `Basic ${credentials}` },
+  };
+}

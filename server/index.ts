@@ -50,7 +50,9 @@ import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipo
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
 import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc } from "./tyrecontrol/empresaAcceso.ts";
 import {
+  buildWebfleetRequest,
   resolveWebfleetCreds,
+  resolverCredencialesWebfleet,
   type WebfleetCreds,
 } from "./tyrecontrol/webfleetCredenciales.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
@@ -1294,27 +1296,8 @@ async function empresaTelematicaAutorizada(
   return empresa;
 }
 
-function buildWebfleetRequest(action: string, extra: Record<string, string> = {}, creds?: WebfleetCreds): { url: string; headers: Record<string, string> } {
-  const account = creds?.account || process.env.WEBFLEET_ACCOUNT;
-  const username = creds?.username || process.env.WEBFLEET_USERNAME;
-  const password = creds?.password || process.env.WEBFLEET_PASSWORD;
-  const apiKey = creds?.apikey || process.env.WEBFLEET_API_KEY;
-  const baseUrl = creds?.baseUrl || process.env.WEBFLEET_BASE_URL || "https://csv.webfleet.com/extern";
-
-  if (!account || !username || !password) {
-    throw new Error("Credenciales Webfleet no configuradas (cuenta, usuario y contraseña)");
-  }
-
-  const params = new URLSearchParams({ account, action, lang: "en", outputformat: "json", useISO8601: "true", ...extra });
-  if (apiKey) params.set("apikey", apiKey);
-
-  const credentials = Buffer.from(`${username}:${password}`).toString("base64");
-
-  return {
-    url: `${baseUrl}?${params.toString()}`,
-    headers: { Authorization: `Basic ${credentials}` },
-  };
-}
+// buildWebfleetRequest vive en server/tyrecontrol/webfleetCredenciales.ts,
+// junto a la resolución de credenciales y con sus pruebas.
 
 const STOPPED_SPEED_THRESHOLD_KMH = 3;
 
@@ -6047,6 +6030,54 @@ app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrec
       pos_time: o.pos_time ?? null,
     });
   } catch (e: any) { res.status(500).json({ error: e?.message || "Error Webfleet" }); }
+});
+
+// ── Estado de la integración Webfleet de un cliente ─────────────────────────
+//
+// Para poder migrar los clientes al gestor de secretos de uno en uno hace falta
+// poder VER por dónde va cada uno. Hasta ahora el panel deducía «Configurado»
+// de si la tabla tenía cuenta, y desde que las credenciales pueden vivir en el
+// gestor eso miente: un cliente ya migrado, con la tabla vacía, aparecería como
+// «Sin configurar» aunque funcione perfectamente.
+//
+// Devuelve de dónde salen las credenciales, nunca cuáles son. Con `probar=1`
+// además hace una llamada real a Webfleet, que es la única forma honesta de
+// decir que una migración ha salido bien: que las credenciales nuevas contestan.
+//
+//   /api/tyrecontrol/webfleet/estado?empresa=<uuid>[&probar=1]
+app.get("/api/tyrecontrol/webfleet/estado", authenticate, requireModule("tyrecontrol"), async (req, res) => {
+  const empresa = await empresaTelematicaAutorizada(req, res);
+  if (!empresa) return;
+
+  const { creds, origen } = await resolverCredencialesWebfleet(empresa);
+  const base = { origen, configurado: origen !== "ninguno" };
+
+  if (String(req.query.probar || "") !== "1") return res.json(base);
+  if (!creds) {
+    return res.json({ ...base, probado: true, ok: false, mensaje: "No hay credenciales configuradas" });
+  }
+
+  // El resultado de la prueba NUNCA es un error del endpoint: que Webfleet
+  // rechace unas credenciales es información, no un fallo del servidor. Por eso
+  // se responde 200 con ok:false y el motivo, y el try envuelve solo la llamada.
+  try {
+    // La llamada más barata que confirma que la cuenta responde. Se pide la
+    // flota entera, como el resto del módulo, pero solo se cuenta: aquí no
+    // interesan los vehículos, interesa que Webfleet conteste.
+    const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
+    const r = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) {
+      return res.json({ ...base, probado: true, ok: false, mensaje: `Webfleet respondió HTTP ${r.status}` });
+    }
+    const data = await r.json();
+    if (data?.errorCode) {
+      return res.json({ ...base, probado: true, ok: false, mensaje: `Webfleet ${data.errorCode}: ${data.errorMsg}` });
+    }
+    const objs = Array.isArray(data) ? data : data?.data ?? [];
+    res.json({ ...base, probado: true, ok: true, vehiculos: objs.length });
+  } catch (e: any) {
+    res.json({ ...base, probado: true, ok: false, mensaje: e?.message || "Error al probar Webfleet" });
+  }
 });
 
 // ── Conducción eficiente (Webfleet) ─────────────────────────────────────────
