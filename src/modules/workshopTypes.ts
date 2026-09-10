@@ -165,6 +165,9 @@ export type Job = {
   unitMinutes?: number | null;
   unitPrice?: number | null;
   totalPrice?: number | null;
+
+  /** Nº del parte de trabajo del ERP del que salió, si vino de uno. */
+  ptNumero?: string | null;
 };
 
 export type AllocationResult = {

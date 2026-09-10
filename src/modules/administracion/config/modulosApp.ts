@@ -245,6 +245,7 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "operativo2", label: "Operativo 2" },
       { key: "agenda", label: "Agenda" },
       { key: "tecnicos", label: "Pantalla técnicos" },
+      { key: "partes", label: "Partes de trabajo" },
       { key: "plantillas", label: "Plantillas de checklist" },
       { key: "personal", label: "Personal (fichas y bajas)" },
       { key: "ausencias", label: "Ausencias y vacaciones" },
