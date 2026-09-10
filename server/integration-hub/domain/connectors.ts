@@ -40,6 +40,11 @@ import type {
   SupplierOrderStatusResult,
 } from "./supplier.ts";
 import type { CommMessage, CommSendResult } from "./communication.ts";
+import type {
+  ProviderVehicle,
+  TelemetryWindow,
+  VehicleTelemetry,
+} from "./telematics.ts";
 import type { OperationContext } from "./identifiers.ts";
 import type { ConnectorKind } from "./operation.ts";
 
@@ -133,4 +138,71 @@ export interface ICommunicationConnector extends Connector {
   requestApproval(ctx: OperationContext, msg: CommMessage): Promise<CommSendResult>;
   requestSignature(ctx: OperationContext, msg: CommMessage): Promise<CommSendResult>;
   sendInvoiceNotification(ctx: OperationContext, msg: CommMessage): Promise<CommSendResult>;
+}
+
+/**
+ * Contrato del Telematics Hub (Movertis, Webfleet, Geotab, Samsara, OEM…).
+ *
+ * El objetivo de este hub es que TyreControl pueda decir «este neumático se
+ * montó a 512.480 km y se desmontó a 578.864 km» con una fuente verificable,
+ * sin que ninguna parte de la aplicación sepa de qué proveedor viene el dato.
+ *
+ * ── Tres reglas que el contrato da por supuestas ────────────────────────────
+ *
+ * 1. **Ninguna implementación pide credenciales.** El `tenantId` viaja en el
+ *    `OperationContext` y el conector resuelve su secreto por el
+ *    `SecretsProvider`. Un conector que reciba un token por parámetro acabaría
+ *    con ese token pasando por capas que no deberían verlo.
+ *
+ * 2. **Devolver menos es válido; inventar no.** Si el proveedor no da odómetro,
+ *    la lectura sale sin odómetro y se declara en `capabilities`. Nunca un
+ *    cero de relleno: en esta flota el cero de combustible ya significó
+ *    «no hay CAN», y confundir eso con «depósito vacío» es un error caro.
+ *
+ * 3. **`getTelemetryAt` no interpola.** Devuelve una lectura que existió, o
+ *    null. Fabricar un valor intermedio produce un número que no está en
+ *    ninguna fuente, que es lo contrario de lo que se busca. Quien quiera
+ *    interpolar que lo haga arriba y lo marque como tal.
+ */
+export interface ITelematicsConnector extends Connector {
+  /** Vehículos de la cuenta, para poder enlazarlos con los de TyreControl. */
+  listVehicles(ctx: OperationContext): Promise<ProviderVehicle[]>;
+
+  /** Última lectura conocida. `null` si el proveedor no sabe nada del vehículo. */
+  getCurrentTelemetry(
+    ctx: OperationContext,
+    providerVehicleId: string,
+  ): Promise<VehicleTelemetry | null>;
+
+  /**
+   * Lecturas dentro de una ventana, en orden cronológico.
+   *
+   * Devolver un array vacío es una respuesta legítima y frecuente: un camión
+   * parado en el taller puede no emitir nada durante horas, y ese es
+   * precisamente el momento en que se cambian los neumáticos.
+   */
+  getTelemetryHistory(
+    ctx: OperationContext,
+    providerVehicleId: string,
+    window: TelemetryWindow,
+  ): Promise<VehicleTelemetry[]>;
+
+  /**
+   * La lectura más cercana a un instante, dentro de `toleranceMinutes`.
+   *
+   * Es la operación que sostiene la trazabilidad del neumático: se le da el
+   * momento de la operación y devuelve con qué kilometraje se hizo. Quien
+   * llama decide la tolerancia —la escalera ±5, ±15, ±30, ±60— y guarda,
+   * junto al valor, la distancia temporal que hubo. Un kilometraje con
+   * «Δ 47 min» merece menos confianza que uno con «Δ 12 s», y esa diferencia
+   * tiene que quedar registrada, no perderse.
+   *
+   * `null` cuando no hay ninguna lectura dentro de la ventana.
+   */
+  getTelemetryAt(
+    ctx: OperationContext,
+    providerVehicleId: string,
+    at: Date,
+    toleranceMinutes: number,
+  ): Promise<VehicleTelemetry | null>;
 }
