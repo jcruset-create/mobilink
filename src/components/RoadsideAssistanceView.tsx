@@ -61,6 +61,7 @@ import {
 } from "../modules/roadsideAssistanceTypes";
 import { formatCoords } from "../modules/roadsideCoordenadas";
 import { etiquetaMatricula, matriculasDe } from "../modules/roadsideMatricula";
+import { filtrar as filtrarAsistencias, hayCriterios } from "../modules/roadsideFiltro";
 import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
 import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
@@ -603,6 +604,22 @@ export default function RoadsideAssistanceView({
     window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
   }, [estadoFiltro, panelTab]);
 
+  // ── Buscador del listado ────────────────────────────────────────────────────
+  // Un solo campo para matrícula y cliente, a propósito: quien busca sabe QUÉ
+  // busca, no en qué columna lo guardamos. Y un rango de fechas al lado, que
+  // es la otra pregunta que se hace la oficina.
+  const [busqueda, setBusqueda] = useState("");
+  const [fechaDesde, setFechaDesde] = useState("");
+  const [fechaHasta, setFechaHasta] = useState("");
+  const criteriosBusqueda = { texto: busqueda, desde: fechaDesde, hasta: fechaHasta };
+  const buscando = hayCriterios(criteriosBusqueda);
+
+  const limpiarBusqueda = () => {
+    setBusqueda("");
+    setFechaDesde("");
+    setFechaHasta("");
+  };
+
   const seleccionarEstado = (status: RoadsideAssistanceStatus) => {
     setEstadoFiltro((prev) => (prev === status ? null : status));
     setPanelTab("activas");
@@ -757,11 +774,15 @@ export default function RoadsideAssistanceView({
   // activas: "En taller ✓" es un estado cerrado y su contador debe cuadrar con
   // las filas que se ven al pulsarlo.
   const listaVisible = useMemo(
-    () =>
-      estadoFiltro
+    () => {
+      const porEstado = estadoFiltro
         ? assistances.filter((item) => item.status === estadoFiltro)
-        : activeAssistances,
-    [assistances, activeAssistances, estadoFiltro]
+        : activeAssistances;
+      // El buscador se aplica ENCIMA del estado, no en su lugar: se sigue
+      // pudiendo mirar «En taller ✓» y buscar una matrícula dentro.
+      return filtrarAsistencias(porEstado, { texto: busqueda, desde: fechaDesde, hasta: fechaHasta });
+    },
+    [assistances, activeAssistances, estadoFiltro, busqueda, fechaDesde, fechaHasta]
   );
   // Un estado cerrado se pinta con la tarjeta compacta de cerradas: no tiene
   // sentido ofrecer "siguiente estado" en una asistencia ya terminada.
@@ -1320,15 +1341,69 @@ export default function RoadsideAssistanceView({
             })}
           </section>
 
-          {estadoFiltro && panelTab === "activas" && (
+          {/* Buscador del listado.
+             *
+             * Con 85 asistencias en un estado, encontrar una era bajar con la
+             * rueda del ratón. Los cuadros de arriba responden «¿qué hay hoy en
+             * cada estado?»; esto responde «¿qué le hicimos al 3719LKK?». */}
+          {panelTab === "activas" && (
+            <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2">
+              <div className="min-w-[220px] flex-1">
+                <label className="mb-1 block text-[11px] font-bold uppercase text-slate-500">
+                  Matrícula o cliente
+                </label>
+                <input
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder="3719LKK · Autocares Plana · R7657BDM"
+                  className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-1.5 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-bold uppercase text-slate-500">
+                  Desde
+                </label>
+                <input
+                  type="date"
+                  value={fechaDesde}
+                  onChange={(e) => setFechaDesde(e.target.value)}
+                  className="rounded-lg border border-slate-600 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-bold uppercase text-slate-500">
+                  Hasta
+                </label>
+                <input
+                  type="date"
+                  value={fechaHasta}
+                  onChange={(e) => setFechaHasta(e.target.value)}
+                  className="rounded-lg border border-slate-600 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-orange-500"
+                />
+              </div>
+              {buscando && (
+                <button
+                  type="button"
+                  onClick={limpiarBusqueda}
+                  className="rounded-lg border border-slate-600 px-2.5 py-1.5 text-xs font-bold text-slate-200 hover:bg-slate-700"
+                >
+                  Limpiar
+                </button>
+              )}
+            </div>
+          )}
+
+          {(estadoFiltro || buscando) && panelTab === "activas" && (
             <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2">
               <span className="truncate text-xs font-bold text-slate-300">
-                Mostrando solo «{ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}» ·{" "}
-                {listaVisible.length}
+                {estadoFiltro
+                  ? `Mostrando solo «${ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}»`
+                  : "Resultados de la búsqueda"}
+                {buscando ? " · filtrado" : ""} · {listaVisible.length}
               </span>
               <button
                 type="button"
-                onClick={() => setEstadoFiltro(null)}
+                onClick={() => { setEstadoFiltro(null); limpiarBusqueda(); }}
                 className="shrink-0 rounded-lg border border-slate-600 px-2.5 py-1 text-xs font-bold text-slate-200 hover:bg-slate-700"
               >
                 Ver todas
@@ -1885,9 +1960,16 @@ export default function RoadsideAssistanceView({
             {/* ── Tab: Activas (todas o filtradas por estado) ── */}
             {panelTab === "activas" && listaVisible.length === 0 && (
               <div className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-8 text-center text-sm font-bold text-slate-400">
-                {estadoFiltro
-                  ? `Sin asistencias en «${ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}».`
-                  : "Sin asistencias activas."}
+                {/* Buscando, «Sin asistencias activas» despista: las hay, pero
+                    no encajan. Y con el estado puesto hay que decir que además
+                    se está buscando, o el vacío parece un fallo del estado. */}
+                {buscando
+                  ? estadoFiltro
+                    ? `Ninguna asistencia en «${ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}» encaja con la búsqueda.`
+                    : "Ninguna asistencia encaja con la búsqueda."
+                  : estadoFiltro
+                    ? `Sin asistencias en «${ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}».`
+                    : "Sin asistencias activas."}
               </div>
             )}
             {panelTab === "activas" && listaVisible.length > 0 && filtroEsCerrado && (
