@@ -25,6 +25,7 @@ import { initTacografos, mountTacografos } from "./tacografos/index.ts";
 import { initCentral, mountCentral } from "./central/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
+import { extractJson, hasAi } from "./core/ai.ts";
 import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
 // Las reglas de "esto es un dato de verdad" y la normalizacion viven en un
 // solo sitio: el mismo modulo que usa el panel, para que servidor y cliente
@@ -725,6 +726,9 @@ finishedWhatsappSentAtMs: job.finishedWhatsappSentAtMs ?? null,
 finishedWhatsappSid: job.finishedWhatsappSid ?? null,
 assignedVehicleId: job.assignedVehicleId ?? null,
 assignedVehicleName: job.assignedVehicleName ?? null,
+quantity: job.quantity ?? null,
+unitMinutes: job.unitMinutes ?? null,
+ptNumero: job.ptNumero ?? null,
   };
 }
 
@@ -2784,12 +2788,15 @@ if (interruptedMaintenanceTasks.length > 0) {
           "pausedAccumulatedMinutes",
           "pausedAtMs",
           "assignedVehicleId",
-          "assignedVehicleName"
+          "assignedVehicleName",
+          quantity,
+          "unitMinutes",
+          "ptNumero"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14, $15, $16, $17,
-          $18, $19, $20, $21
+          $18, $19, $20, $21, $22, $23, $24
         )
         ON CONFLICT (id) DO UPDATE SET
           area = EXCLUDED.area,
@@ -2811,7 +2818,13 @@ if (interruptedMaintenanceTasks.length > 0) {
           "pausedAccumulatedMinutes" = EXCLUDED."pausedAccumulatedMinutes",
           "pausedAtMs" = EXCLUDED."pausedAtMs",
           "assignedVehicleId" = EXCLUDED."assignedVehicleId",
-          "assignedVehicleName" = EXCLUDED."assignedVehicleName"
+          "assignedVehicleName" = EXCLUDED."assignedVehicleName",
+          -- COALESCE: quien no mande estos campos no debe borrarlos. El
+          -- operativo guarda el trabajo muchas veces a lo largo del día y no
+          -- todos los sitios conocen la cantidad ni el parte de origen.
+          quantity = COALESCE(EXCLUDED.quantity, jobs.quantity),
+          "unitMinutes" = COALESCE(EXCLUDED."unitMinutes", jobs."unitMinutes"),
+          "ptNumero" = COALESCE(EXCLUDED."ptNumero", jobs."ptNumero")
         RETURNING *
       `,
       [
@@ -2836,6 +2849,13 @@ if (interruptedMaintenanceTasks.length > 0) {
         job.pausedAtMs ?? null,
         Number.isFinite(Number(job.assignedVehicleId)) ? Number(job.assignedVehicleId) : null,
         String(job.assignedVehicleName || "").trim() || null,
+        Number.isFinite(Number(job.quantity)) && Number(job.quantity) > 0
+          ? Math.round(Number(job.quantity))
+          : null,
+        Number.isFinite(Number(job.unitMinutes)) && Number(job.unitMinutes) > 0
+          ? Math.round(Number(job.unitMinutes))
+          : null,
+        String(job.ptNumero || "").trim() || null,
       ]
     );
 
@@ -11566,6 +11586,166 @@ app.get("/api/scheduled-tech-statuses", protectWhenStrict(requirePanelRole), asy
     console.error("GET /api/scheduled-tech-statuses error:", error);
     res.status(500).json({
       error: "Error cargando estados técnicos programados",
+    });
+  }
+});
+
+/* =========================================================
+   PARTES DE TRABAJO: lectura del papel y correspondencias
+========================================================= */
+
+/** Correspondencias artículo → entrada rápida de un taller. */
+app.get("/api/partes-trabajo/articulos", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const workshopId = String(req.query.workshopId || "");
+
+    const result = await db.query(
+      `SELECT clave, "templateKey", descripcion
+       FROM erp_articulo_plantilla
+       WHERE "workshopId" = $1`,
+      [workshopId]
+    );
+
+    const mapa: Record<string, string> = {};
+
+    for (const row of result.rows) mapa[row.clave] = row.templateKey;
+
+    res.json({ workshopId, mapa, filas: result.rows });
+  } catch (error) {
+    console.error("GET /api/partes-trabajo/articulos error:", error);
+    res.status(500).json({ error: "Error cargando las correspondencias de artículos" });
+  }
+});
+
+/**
+ * Enseña qué es un artículo. Upsert fila a fila, nunca reemplazando la
+ * colección entera: es el error que ya ha costado varias pérdidas de datos.
+ */
+app.put("/api/partes-trabajo/articulos", requireSupervisorRole, async (req, res) => {
+  try {
+    const workshopId = String(req.body?.workshopId || "");
+
+    const entradas = Array.isArray(req.body?.articulos) ? req.body.articulos : [];
+
+    if (entradas.length === 0) {
+      return res.status(400).json({ error: "No se ha enviado ningún artículo" });
+    }
+
+    const now = Date.now();
+
+    await db.query("BEGIN");
+
+    for (const entrada of entradas) {
+      const clave = String(entrada?.clave || "").trim();
+      const templateKey = String(entrada?.templateKey || "").trim();
+
+      if (!clave || !templateKey) continue;
+
+      await db.query(
+        `INSERT INTO erp_articulo_plantilla (
+           "workshopId", clave, "templateKey", descripcion, "createdAtMs", "updatedAtMs"
+         )
+         VALUES ($1, $2, $3, $4, $5, $5)
+         ON CONFLICT ("workshopId", clave)
+         DO UPDATE SET
+           "templateKey" = EXCLUDED."templateKey",
+           descripcion = EXCLUDED.descripcion,
+           "updatedAtMs" = EXCLUDED."updatedAtMs"`,
+        [workshopId, clave, templateKey, String(entrada?.descripcion || ""), now]
+      );
+    }
+
+    await db.query("COMMIT");
+
+    res.json({ ok: true });
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    console.error("PUT /api/partes-trabajo/articulos error:", error);
+    res.status(500).json({ error: "Error guardando las correspondencias de artículos" });
+  }
+});
+
+/**
+ * Lee un parte de trabajo escaneado y devuelve sus campos.
+ *
+ * Solo extrae: no crea trabajos ni decide nada. Lo que salga de aquí lo revisa
+ * una persona antes de que se convierta en tarea, porque un OCR de un papel
+ * escaneado se equivoca y una matrícula mal leída manda el trabajo al vehículo
+ * equivocado.
+ */
+app.post("/api/partes-trabajo/leer", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    if (!hasAi()) {
+      return res.status(503).json({
+        error: "La lectura de partes por IA no está configurada (OPENAI_API_KEY).",
+      });
+    }
+
+    const imagenes = Array.isArray(req.body?.imagenes)
+      ? req.body.imagenes.filter((u: unknown) => typeof u === "string" && u)
+      : [];
+
+    if (imagenes.length === 0) {
+      return res.status(400).json({ error: "No se ha enviado ninguna imagen del parte" });
+    }
+
+    const datos = await extractJson({
+      strict: true,
+      maxTokens: 2000,
+      images: imagenes,
+      system: [
+        "Eres un lector de partes de trabajo de un taller de neumáticos.",
+        "Devuelve SOLO un JSON con esta forma exacta:",
+        "{",
+        '  "numero": string,            // el "PT Nº" del parte',
+        '  "fecha": string,             // "YYYY-MM-DD"',
+        '  "horaEntrada": string,       // "HH:MM:SS" de la casilla Entrada',
+        '  "matricula": string,',
+        '  "clienteNombre": string,',
+        '  "clienteTelefono": string,',
+        '  "cif": string,',
+        '  "km": number|null,',
+        '  "lineas": [                  // tabla PRODUCTOS Y SERVICIOS',
+        '    { "descripcion": string, "unidades": number,',
+        '      "precioUnitario": number|null, "precioTotal": number|null }',
+        "  ]",
+        "}",
+        "",
+        "Reglas:",
+        "- Copia las descripciones TAL CUAL aparecen, sin corregir ni traducir.",
+        "- Los números vienen en formato español (1.234,56): devuélvelos como",
+        "  número JSON (1234.56).",
+        "- Incluye TODAS las líneas, también las de precio 0.",
+        "- Si un campo no aparece en el papel, devuelve cadena vacía o null. No",
+        "  te lo inventes: es preferible un hueco a un dato falso.",
+      ].join("\n"),
+    });
+
+    res.json({
+      ok: true,
+      parte: {
+        numero: String(datos?.numero || ""),
+        fecha: String(datos?.fecha || ""),
+        horaEntrada: String(datos?.horaEntrada || ""),
+        matricula: String(datos?.matricula || ""),
+        clienteNombre: String(datos?.clienteNombre || ""),
+        clienteTelefono: String(datos?.clienteTelefono || ""),
+        cif: String(datos?.cif || ""),
+        km: datos?.km == null ? null : Number(datos.km),
+        lineas: Array.isArray(datos?.lineas)
+          ? datos.lineas.map((l: any) => ({
+              descripcion: String(l?.descripcion || ""),
+              unidades: Number(l?.unidades) || 0,
+              precioUnitario: l?.precioUnitario == null ? null : Number(l.precioUnitario),
+              precioTotal: l?.precioTotal == null ? null : Number(l.precioTotal),
+            }))
+          : [],
+      },
+    });
+  } catch (error: any) {
+    console.error("POST /api/partes-trabajo/leer error:", error);
+    res.status(502).json({
+      error: `No se pudo leer el parte: ${error?.message || "error desconocido"}`,
     });
   }
 });

@@ -52,6 +52,9 @@ export type TrabajoPropuesto = {
   area: AreaKey;
   plate: string;
   quantity: number;
+  /** Minutos por unidad de la plantilla. */
+  unitMinutes: number;
+  /** Minutos totales del trabajo (unitMinutes × cantidad si va por unidades). */
   estimatedMinutes: number;
   customerName?: string;
   customerPhone?: string;
@@ -102,6 +105,19 @@ export function unidadesDeLinea(linea: LineaParte): number {
 
   // El parte imprime "4,00": las fracciones de montaje no existen.
   return Math.round(valor);
+}
+
+/** Minutos que cuesta UNA unidad de la plantilla. */
+export function minutosPorUnidad(plantilla: QuickTemplate): number {
+  const porUnidad = Number(
+    plantilla.usesQuantity ? plantilla.unitMinutes : plantilla.standardMinutes
+  );
+
+  if (Number.isFinite(porUnidad) && porUnidad > 0) return porUnidad;
+
+  const estandar = Number(plantilla.standardMinutes);
+
+  return Number.isFinite(estandar) && estandar > 0 ? estandar : 0;
 }
 
 /** Minutos de una plantilla para una cantidad dada. */
@@ -218,6 +234,7 @@ export function parteATrabajos({
       area: plantilla.area,
       plate: matricula,
       quantity: cantidad,
+      unitMinutes: minutosPorUnidad(plantilla),
       estimatedMinutes: minutosDePlantilla(plantilla, cantidad),
       customerName: parte.clienteNombre?.trim() || undefined,
       customerPhone: parte.clienteTelefono?.trim() || undefined,
