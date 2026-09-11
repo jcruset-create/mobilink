@@ -147,8 +147,14 @@ function EquivalenciasErp() {
       <p className="text-[12px] text-slate-500">
         Cómo se llama en el ERP cada forma de cobro de aquí. Lo usa «Cotejar con el ERP» para
         emparejar las líneas: sin la equivalencia, esas líneas salen como no emparejadas y se dice
-        cuáles faltan. Copia la etiqueta tal cual la enseña el ERP, con sus puntos suspensivos si
-        los tiene.
+        cuáles faltan.
+      </p>
+      <p className="text-[12px] text-slate-500">
+        El ERP corta esta columna según la resolución de la pantalla, así que basta con que la
+        etiqueta <b>empiece igual</b>: vale copiarla con sus puntos suspensivos o escribirla
+        entera, y los acentos dan igual. Lo que sí importa es poner <b>letras suficientes para
+        distinguirla</b> de las demás — con dos datáfonos configurados, un «Datáfono...» a secas
+        encaja con los dos y el cotejo no elige ninguno.
       </p>
 
       {error && <ErrorBox>{error}</ErrorBox>}
