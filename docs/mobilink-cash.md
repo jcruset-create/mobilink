@@ -761,6 +761,36 @@ Lo resuelto por prefijo **se enseña en la pantalla**, con qué equivalencia ha
 casado. Es una deducción, no un dato, y el día que empareje mal tiene que haber
 dónde verlo.
 
+### No se cierra sin haber cotejado
+
+Regla de caja, no de pantalla: `cerrarJornada` la comprueba, igual que ya
+comprobaba que hubiera arqueo. Y es **puerta con llave, no muro**.
+
+**Por caja, y apagado por defecto** (`cash_registers.exigir_cotejo_erp`). Hay
+mostradores que no facturan contra Genes; encenderlo para todos los dejaría sin
+poder cerrar por una regla que no les toca, y su única salida sería escribir un
+motivo falso cada tarde. Una regla que obliga a mentir para trabajar deja de
+vigilar nada.
+
+**Se puede forzar, pero firmando.** El parámetro es el MOTIVO, no un booleano
+—un `true` se manda sin pensar— y queda escrito en las notas de la jornada y en
+la auditoría. Hace falta que se pueda: si el servicio que lee la captura está
+caído, no hay manera humana de cotejar y la caja tiene que cerrarse igual.
+
+**Un cotejo caduca**, y es la mitad de su valor. Cotejar a las seis, meter dos
+cobros a las siete y cerrar a las ocho enseñando el OK de las seis es peor que
+no cotejar: da por revisado algo que nadie ha mirado. Cada cotejo se guarda con
+una **huella** de la jornada —último id de operación y suma de importes, de las
+vivas— y si al cerrar no coincide, el OK no vale.
+
+El número de operaciones estuvo en la huella y se quitó: ninguna prueba podía
+matarlo, porque todo importe es mayor que cero y cualquier cambio en cuántas hay
+mueve la suma por fuerza.
+
+De cada cotejo se guardan **solo cifras** (`cash_erp_reconciliations`): cuántas
+líneas, cuántas cuadraron, por cuánto. Ni la captura, ni las líneas, ni un
+nombre de cliente.
+
 ## 8. Estado de la entrega
 
 El módulo está **en producción y en uso diario**. Implementado y probado:
