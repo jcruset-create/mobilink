@@ -29,9 +29,11 @@ import {
   knownTechnicalConnectorKeys,
   knownSupplierConnectorKeys,
   knownCommunicationConnectorKeys,
+  knownTelematicsConnectorKeys,
   buildTechnicalConnector,
   buildSupplierConnector,
   buildCommunicationConnector,
+  buildTelematicsConnector,
 } from "../connectors/ConnectorRegistry.ts";
 import { IntegrationError } from "../domain/errors.ts";
 import { nextCorrelationId } from "../infrastructure/repositories.ts";
@@ -153,6 +155,7 @@ export function createIntegrationHubRouter(): Router {
       technicalConnectors: knownTechnicalConnectorKeys(),
       supplierConnectors: knownSupplierConnectorKeys(),
       communicationConnectors: knownCommunicationConnectorKeys(),
+      telematicsConnectors: knownTelematicsConnectorKeys(),
     });
   });
 
@@ -389,6 +392,15 @@ export function createIntegrationHubRouter(): Router {
         const connector = await buildCommunicationConnector(tenantId, key);
         const result = await connector.testConnection(ctx);
         return res.json({ key, ...result });
+      }
+      if (knownTelematicsConnectorKeys().includes(key)) {
+        // La cuenta se puede pedir: en telemática un cliente tiene varias
+        // del mismo proveedor, y probar «la de por defecto» cuando el
+        // problema está en la auxiliar diría que todo va bien.
+        const accountKey = typeof req.query.accountKey === "string" ? req.query.accountKey : undefined;
+        const connector = await buildTelematicsConnector(tenantId, key, accountKey);
+        const result = await connector.testConnection(ctx);
+        return res.json({ key, accountKey: accountKey ?? "default", ...result });
       }
       return res.status(400).json({ error: "unsupported_connector", key });
     } catch (err) {
