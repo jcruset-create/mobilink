@@ -88,9 +88,11 @@ export default function AccesoPage() {
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-950 p-6 text-slate-100">
       {/*
-        Fondo de marca: dos halos azules muy difusos sobre el oscuro. Son
-        decorativos y van detrás de todo (-z-10), asi que no interfieren con el
-        formulario ni con el foco del teclado.
+        Fondo de marca: dos halos azules muy difusos sobre el oscuro.
+        Son decorativos (aria-hidden) y no capturan el ratón
+        (pointer-events-none); el contenido va por encima con z-10.
+        No llevan z negativo a propósito: con -z-10 quedaban DETRÁS del fondo
+        de este mismo contenedor, que los tapaba por completo.
       */}
       <div
         aria-hidden
