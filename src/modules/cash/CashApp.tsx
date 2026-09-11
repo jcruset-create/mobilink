@@ -24,6 +24,7 @@ import Cierre from "./pages/Cierre";
 import Historico from "./pages/Historico";
 import Informes from "./pages/Informes";
 import GastoPorConcepto from "./pages/GastoPorConcepto";
+import CotejoErp from "./pages/CotejoErp";
 import IntegracionErp from "./pages/IntegracionErp";
 import Configuracion from "./pages/Configuracion";
 
@@ -72,6 +73,7 @@ function Contenido() {
         <Route path="historico" element={<Historico />} />
         <Route path="informes" element={<Informes />} />
         <Route path="gasto" element={<GastoPorConcepto />} />
+        <Route path="cotejo-erp" element={<CotejoErp />} />
         <Route path="erp" element={<IntegracionErp />} />
         <Route path="configuracion" element={<Configuracion />} />
       </Route>

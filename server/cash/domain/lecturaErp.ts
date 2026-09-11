@@ -90,14 +90,28 @@ export type LecturaErp = {
   /** En castellano, para enseñar. Vacío = lectura limpia. */
   avisos: string[];
   /**
-   * ¿Se puede cotejar con esto?
-   *
-   * Solo si no hay ningún aviso Y los totales impresos cuadran con la suma de
-   * las líneas. Con `false`, la pantalla tiene que decir que no ha podido leer
-   * la captura y pedir otra — nunca seguir y enseñar un cotejo que se apoya en
-   * una lectura que ya se sabe mala.
+   * Lectura limpia: ni un aviso. Es el caso normal y el único sin matices.
    */
   fiable: boolean;
+  /**
+   * Hay algo que SABEMOS que está mal, y con esto no se coteja.
+   *
+   * La distinción con `fiable` costó pensarla y es la que decide si la pantalla
+   * sirve o estorba. No es lo mismo:
+   *
+   * · **Sé que está mal** — una línea que no se pudo leer, o el total impreso
+   *   que contradice la suma. Aquí seguir es peligroso: el cotejo diría «falta
+   *   este cobro» por una línea que el modelo no supo leer, y alguien acabaría
+   *   metiéndola dos veces. Se bloquea y se pide otra captura.
+   *
+   * · **No he podido comprobarlo** — la captura viene recortada y no enseña el
+   *   total. La lectura puede estar perfecta; simplemente no hay con qué
+   *   contrastarla. Bloquear aquí sería inventarse un problema y dejar inútil
+   *   un recorte que vale.
+   *
+   * Así que lo segundo avisa y deja pasar, y lo primero para.
+   */
+  bloqueante: boolean;
 };
 
 /**
@@ -148,24 +162,32 @@ function desenvolver(texto: string): string {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export function interpretarLecturaErp(textoDelModelo: string): LecturaErp {
   const avisos: string[] = [];
+  /** Avisos de los que paran: algo que sabemos mal, no algo sin comprobar. */
+  let duro = false;
+  const problema = (m: string) => {
+    duro = true;
+    avisos.push(m);
+  };
+
   const vacia: LecturaErp = {
     lineas: [],
     totalCobrosDeclarado: null,
     totalPagosDeclarado: null,
     avisos,
     fiable: false,
+    bloqueante: true,
   };
 
   let crudo: any;
   try {
     crudo = JSON.parse(desenvolver(textoDelModelo));
   } catch {
-    avisos.push("La respuesta no se ha podido leer como JSON. Vuelve a intentarlo.");
+    problema("La respuesta no se ha podido leer como JSON. Vuelve a intentarlo.");
     return vacia;
   }
 
   if (!crudo || !Array.isArray(crudo.lineas)) {
-    avisos.push("La respuesta no trae ninguna lista de líneas.");
+    problema("La respuesta no trae ninguna lista de líneas.");
     return vacia;
   }
 
@@ -175,32 +197,32 @@ export function interpretarLecturaErp(textoDelModelo: string): LecturaErp {
 
     const tipo = String(l?.tipo ?? "").trim().toUpperCase();
     if (tipo !== "COBRO" && tipo !== "PAGO") {
-      avisos.push(`Línea ${nº}: no se sabe si es un cobro o un pago.`);
+      problema(`Línea ${nº}: no se sabe si es un cobro o un pago.`);
       return;
     }
 
     const forma = typeof l?.forma === "string" ? l.forma.trim() : "";
     if (!forma) {
-      avisos.push(`Línea ${nº}: sin forma de pago.`);
+      problema(`Línea ${nº}: sin forma de pago.`);
       return;
     }
 
     if (l?.importe === null || l?.importe === undefined || l.importe === "") {
       /* El prompt pide que una fila ilegible venga con importe null en vez de
          inventada. Que llegue así es el sistema funcionando, no fallando. */
-      avisos.push(`Línea ${nº}: el importe no se ha podido leer en la captura.`);
+      problema(`Línea ${nº}: el importe no se ha podido leer en la captura.`);
       return;
     }
 
     const importe = importeAEnteros(String(l.importe));
     if (importe === null) {
-      avisos.push(
+      problema(
         `Línea ${nº}: «${String(l.importe)}» no es un importe que se pueda leer sin dudas.`
       );
       return;
     }
     if (importe < 0) {
-      avisos.push(`Línea ${nº}: importe negativo (${String(l.importe)}).`);
+      problema(`Línea ${nº}: importe negativo (${String(l.importe)}).`);
       return;
     }
 
@@ -217,7 +239,7 @@ export function interpretarLecturaErp(textoDelModelo: string): LecturaErp {
   const leerTotal = (v: unknown, nombre: string): Centimos | null => {
     if (v === null || v === undefined || v === "") return null;
     const t = importeAEnteros(String(v));
-    if (t === null) avisos.push(`El total de ${nombre} de la pantalla no se ha podido leer.`);
+    if (t === null) problema(`El total de ${nombre} de la pantalla no se ha podido leer.`);
     return t;
   };
   const totalCobrosDeclarado = leerTotal(crudo.totalCobros, "cobros");
@@ -249,7 +271,7 @@ export function interpretarLecturaErp(textoDelModelo: string): LecturaErp {
       return;
     }
     if (declarado !== sumado) {
-      avisos.push(
+      problema(
         `Las líneas de ${nombre} suman ${enEuros(sumado)} € y la pantalla dice ` +
           `${enEuros(declarado)} €. La lectura no es de fiar: falta alguna línea o ` +
           `hay un importe mal leído.`
@@ -259,8 +281,22 @@ export function interpretarLecturaErp(textoDelModelo: string): LecturaErp {
   comprobar(totalCobrosDeclarado, suma("COBRO"), "cobros");
   comprobar(totalPagosDeclarado, suma("PAGO"), "pagos");
 
-  if (lineas.length === 0 && avisos.length === 0) {
-    avisos.push("No se ha leído ninguna línea en la captura.");
+  /*
+   * Sin una sola línea utilizable no hay nada que cotejar, y eso PARA siempre
+   * — sin importar qué otros avisos haya.
+   *
+   * Antes esto solo saltaba si no había ningún otro aviso, para no amontonar
+   * mensajes. El efecto era que una captura de la que no se leía nada y que
+   * además venía sin totales se declaraba no bloqueante: dos avisos blandos
+   * tapaban el que de verdad importaba, y la pantalla habría enseñado un cotejo
+   * con cero líneas diciendo que en el ERP no hay nada.
+   */
+  if (lineas.length === 0) {
+    problema(
+      avisos.length > 0
+        ? "No ha quedado ninguna línea utilizable en la captura."
+        : "No se ha leído ninguna línea en la captura."
+    );
   }
 
   return {
@@ -269,6 +305,7 @@ export function interpretarLecturaErp(textoDelModelo: string): LecturaErp {
     totalPagosDeclarado,
     avisos,
     fiable: avisos.length === 0,
+    bloqueante: duro,
   };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */

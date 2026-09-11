@@ -2234,6 +2234,32 @@ export function createCashRouter(): Router {
     })
   );
 
+  /**
+   * Cotejar una captura del ERP contra la jornada.
+   *
+   * Solo LEE: ni crea cobros ni toca nada. Por eso basta permiso de vista —el
+   * mismo con el que ya se ven todas esas operaciones en Movimientos— y no el
+   * de configurar.
+   *
+   * La captura viaja en el cuerpo como data-URI y NO se guarda: se manda al
+   * modelo, se lee y se tira. Lleva nombres de clientes y números de factura, y
+   * guardarla sería crear un depósito de datos personales que nadie ha pedido.
+   */
+  r.post(
+    "/sessions/:id/erp-reconcile",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const { cotejarCapturaErp } = await import("./cotejoErp.ts");
+      res.json(
+        await cotejarCapturaErp(req.authCtx!.empresaId, {
+          sessionId: enteroPositivo(req.params.id, "id"),
+          imagen: typeof b.imagen === "string" ? b.imagen : "",
+        })
+      );
+    })
+  );
+
   // ── Equivalencias de formas de pago con el ERP ───────────────────────────
   //
   // Leer es permiso de vista porque la pantalla de cotejo las necesita para

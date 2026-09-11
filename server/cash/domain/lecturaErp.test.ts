@@ -68,6 +68,7 @@ describe("una lectura buena", () => {
     const r = interpretarLecturaErp(RESPUESTA_BUENA);
     expect(r.avisos).toEqual([]);
     expect(r.fiable).toBe(true);
+    expect(r.bloqueante).toBe(false);
     expect(r.lineas).toHaveLength(7);
     expect(r.totalCobrosDeclarado).toBe(88740);
     expect(r.lineas[0]!.importeCentimos).toBe(2969);
@@ -93,6 +94,8 @@ describe("la comprobación contra el total impreso", () => {
     const r = interpretarLecturaErp(JSON.stringify(crudo));
 
     expect(r.fiable).toBe(false);
+    /* Esto SÍ para: sabemos que está mal, no que no se ha podido comprobar. */
+    expect(r.bloqueante).toBe(true);
     expect(r.avisos.join(" ")).toMatch(/510,16 €.*887,40 €/);
     expect(r.avisos.join(" ")).toMatch(/no es de fiar/);
   });
@@ -105,10 +108,16 @@ describe("la comprobación contra el total impreso", () => {
   });
 
   it("sin total impreso NO se bloquea, pero se dice", () => {
-    /* Una captura recortada sigue sirviendo; lo que no vale es callarlo. */
+    /*
+     * La distinción que decide si la pantalla sirve o estorba: una captura
+     * recortada puede estar perfectamente leída, solo que no hay con qué
+     * contrastarla. Se avisa y se deja cotejar; bloquear aquí sería inventarse
+     * un problema y tirar a la basura un recorte que vale.
+     */
     const r = interpretarLecturaErp(RESPUESTA_BUENA.replace('"887,40"', "null"));
     expect(r.lineas).toHaveLength(7);
     expect(r.fiable).toBe(false);
+    expect(r.bloqueante).toBe(false);
     expect(r.avisos.join(" ")).toMatch(/no enseña el total de cobros/);
   });
 
@@ -129,6 +138,7 @@ describe("líneas que no se pueden usar", () => {
     const r = interpretarLecturaErp(JSON.stringify(crudo));
     expect(r.lineas).toHaveLength(6);
     expect(r.fiable).toBe(false);
+    expect(r.bloqueante).toBe(true);
     expect(r.avisos.join(" ")).toMatch(/Línea 3.*no se ha podido leer/);
   });
 
@@ -171,6 +181,30 @@ describe("líneas que no se pueden usar", () => {
     crudo.lineas[0].referencia = "   ";
     const r = interpretarLecturaErp(JSON.stringify(crudo));
     expect(r.lineas[0]!.referencia).toBeNull();
+  });
+});
+
+describe("qué para y qué solo avisa", () => {
+  /*
+   * Estas dos pruebas son la red de la distinción entera. Si alguien las
+   * fusiona —o hace que `bloqueante` sea `!fiable`— la pantalla vuelve a
+   * rechazar capturas recortadas que están bien, y nadie entenderá por qué.
+   */
+  it("no poder comprobar NO es lo mismo que saber que está mal", () => {
+    const sinTotal = interpretarLecturaErp(RESPUESTA_BUENA.replace('"887,40"', "null"));
+    const malLeido = interpretarLecturaErp(RESPUESTA_BUENA.replace('"377,24"', '"377,42"'));
+
+    /* Las dos tienen avisos... */
+    expect(sinTotal.fiable).toBe(false);
+    expect(malLeido.fiable).toBe(false);
+    /* ...pero solo una para. */
+    expect(sinTotal.bloqueante).toBe(false);
+    expect(malLeido.bloqueante).toBe(true);
+  });
+
+  it("una respuesta ilegible para, evidentemente", () => {
+    expect(interpretarLecturaErp("no puedo leer esto").bloqueante).toBe(true);
+    expect(interpretarLecturaErp('{"lineas":[]}').bloqueante).toBe(true);
   });
 });
 
