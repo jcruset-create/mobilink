@@ -11,11 +11,12 @@ import type {
   ITechnicalConnector,
   ISupplierConnector,
   ICommunicationConnector,
+  ITelematicsConnector,
 } from "../domain/connectors.ts";
 import type { CommChannel } from "../domain/communication.ts";
 import type { ConnectorKind } from "../domain/operation.ts";
 import { IntegrationError } from "../domain/errors.ts";
-import { getConnectorConfig, listConnectorConfigs } from "../infrastructure/repositories.ts";
+import { CUENTA_POR_DEFECTO, getConnectorConfig, listConnectorConfigs } from "../infrastructure/repositories.ts";
 import { BusinessCentralConnector, type BusinessCentralConfig } from "./erp/business-central/BusinessCentralConnector.ts";
 import { AutodataConnector, type AutodataConfig } from "./technical/autodata/AutodataConnector.ts";
 import { TecDocConnector, type TecDocConfig } from "./technical/tecdoc/TecDocConnector.ts";
@@ -29,6 +30,7 @@ import {
 } from "./suppliers/recambista-generico/RecambistaGenericoConnector.ts";
 import { TwilioWhatsAppConnector, type TwilioWhatsAppConfig } from "./communications/twilio-whatsapp/TwilioWhatsAppConnector.ts";
 import { SmtpEmailConnector, type SmtpEmailConfig } from "./communications/smtp-email/SmtpEmailConnector.ts";
+import { MovertisConnector, type MovertisConfig } from "./telematics/movertis/MovertisConnector.ts";
 
 /** Fábricas de conectores ERP disponibles, por key. */
 const ERP_FACTORIES: Record<string, (config: any) => IErpConnector> = {
@@ -302,4 +304,71 @@ const SUPPLIER_ID_TO_CONNECTOR: Record<string, string> = {
 
 export function supplierConnectorKeyForSupplierId(supplierId: string): string | null {
   return SUPPLIER_ID_TO_CONNECTOR[supplierId] ?? null;
+}
+
+// ── Telematics Hub ───────────────────────────────────────────────────────────
+
+/** Fábricas de conectores de telemática, por key. */
+const TELEMATICS_FACTORIES: Record<string, (config: any) => ITelematicsConnector> = {
+  movertis: (config: MovertisConfig) => new MovertisConnector(config),
+  // Futuro: "webfleet" (hoy vive fuera del Hub), "geotab", "samsara", OEM...
+};
+
+export function knownTelematicsConnectorKeys(): string[] {
+  return Object.keys(TELEMATICS_FACTORIES);
+}
+
+/**
+ * Construye un conector de telemática con la config de UNA cuenta del tenant.
+ *
+ * La cuenta es un parámetro de primera clase, no un detalle: en telemática un
+ * mismo cliente puede tener varias cuentas del mismo proveedor —la flota de
+ * autobuses y la auxiliar—, cada una con su token. Por eso
+ * `integration_connector_configs` dejó de tener UNIQUE (tenant, connector).
+ */
+export async function buildTelematicsConnector(
+  tenantId: string,
+  key: string,
+  accountKey: string = CUENTA_POR_DEFECTO
+): Promise<ITelematicsConnector> {
+  const factory = TELEMATICS_FACTORIES[key];
+  if (!factory) {
+    throw IntegrationError.validation(
+      "CONNECTOR_UNKNOWN",
+      `No hay implementación para el conector de telemática '${key}'`
+    );
+  }
+  const cfg = await getConnectorConfig(tenantId, key, accountKey);
+  // `accountKey` viaja a la config para que la lectura sepa decir de qué
+  // cuenta salió: sin eso, dos cuentas del mismo proveedor son indistinguibles
+  // en `VehicleTelemetry`.
+  return factory({ accountKey, ...(cfg?.config ?? {}) });
+}
+
+/**
+ * Resuelve TODAS las cuentas de telemática habilitadas del tenant.
+ *
+ * Devuelve una lista, no un conector: para saber el kilometraje de un vehículo
+ * hay que preguntar a la cuenta que lo tiene, y quién lo tiene no se sabe hasta
+ * haber listado. Una lista vacía significa que el tenant no tiene telemática
+ * configurada, y quien llame debe tratarlo como «no hay dato», nunca como cero.
+ */
+export async function resolveTelematicsConnectors(
+  tenantId: string
+): Promise<Array<ResolvedConnector<ITelematicsConnector> & { accountKey: string }>> {
+  const configs = await listConnectorConfigs(tenantId);
+  const enabled = configs.filter((c: any) => c.enabled && TELEMATICS_FACTORIES[c.connector_key]);
+
+  return Promise.all(
+    enabled.map(async (c: any) => {
+      const accountKey = (c.account_key as string) ?? CUENTA_POR_DEFECTO;
+      return {
+        key: c.connector_key as string,
+        accountKey,
+        connector: await buildTelematicsConnector(tenantId, c.connector_key, accountKey),
+        usingDefault: false,
+        config: (c.config ?? {}) as Record<string, unknown>,
+      };
+    })
+  );
 }
