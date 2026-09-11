@@ -605,17 +605,24 @@ export default function RoadsideAssistanceView({
   }, [estadoFiltro, panelTab]);
 
   // ── Buscador del listado ────────────────────────────────────────────────────
-  // Un solo campo para matrícula y cliente, a propósito: quien busca sabe QUÉ
-  // busca, no en qué columna lo guardamos. Y un rango de fechas al lado, que
-  // es la otra pregunta que se hace la oficina.
-  const [busqueda, setBusqueda] = useState("");
+  // Un campo por criterio: matrícula, cliente y fecha. Separados se pueden
+  // combinar —«las de Truck Service de la semana pasada»— y cada uno busca en
+  // lo suyo, así que el nombre del cliente no se cuela como matrícula.
+  const [buscMatricula, setBuscMatricula] = useState("");
+  const [buscCliente, setBuscCliente] = useState("");
   const [fechaDesde, setFechaDesde] = useState("");
   const [fechaHasta, setFechaHasta] = useState("");
-  const criteriosBusqueda = { texto: busqueda, desde: fechaDesde, hasta: fechaHasta };
+  const criteriosBusqueda = {
+    matricula: buscMatricula,
+    cliente: buscCliente,
+    desde: fechaDesde,
+    hasta: fechaHasta,
+  };
   const buscando = hayCriterios(criteriosBusqueda);
 
   const limpiarBusqueda = () => {
-    setBusqueda("");
+    setBuscMatricula("");
+    setBuscCliente("");
     setFechaDesde("");
     setFechaHasta("");
   };
@@ -780,9 +787,14 @@ export default function RoadsideAssistanceView({
         : activeAssistances;
       // El buscador se aplica ENCIMA del estado, no en su lugar: se sigue
       // pudiendo mirar «En taller ✓» y buscar una matrícula dentro.
-      return filtrarAsistencias(porEstado, { texto: busqueda, desde: fechaDesde, hasta: fechaHasta });
+      return filtrarAsistencias(porEstado, {
+        matricula: buscMatricula,
+        cliente: buscCliente,
+        desde: fechaDesde,
+        hasta: fechaHasta,
+      });
     },
-    [assistances, activeAssistances, estadoFiltro, busqueda, fechaDesde, fechaHasta]
+    [assistances, activeAssistances, estadoFiltro, buscMatricula, buscCliente, fechaDesde, fechaHasta]
   );
   // Un estado cerrado se pinta con la tarjeta compacta de cerradas: no tiene
   // sentido ofrecer "siguiente estado" en una asistencia ya terminada.
@@ -1348,14 +1360,25 @@ export default function RoadsideAssistanceView({
              * cada estado?»; esto responde «¿qué le hicimos al 3719LKK?». */}
           {panelTab === "activas" && (
             <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2">
-              <div className="min-w-[220px] flex-1">
+              <div className="min-w-[150px] flex-1">
                 <label className="mb-1 block text-[11px] font-bold uppercase text-slate-500">
-                  Matrícula o cliente
+                  Matrícula
                 </label>
                 <input
-                  value={busqueda}
-                  onChange={(e) => setBusqueda(e.target.value)}
-                  placeholder="3719LKK · Autocares Plana · R7657BDM"
+                  value={buscMatricula}
+                  onChange={(e) => setBuscMatricula(e.target.value)}
+                  placeholder="3719LKK · R7657BDM"
+                  className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-1.5 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-orange-500"
+                />
+              </div>
+              <div className="min-w-[170px] flex-1">
+                <label className="mb-1 block text-[11px] font-bold uppercase text-slate-500">
+                  Cliente
+                </label>
+                <input
+                  value={buscCliente}
+                  onChange={(e) => setBuscCliente(e.target.value)}
+                  placeholder="Autocares Plana"
                   className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-1.5 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-orange-500"
                 />
               </div>
