@@ -691,6 +691,11 @@ con su bandeja en PowerShell y su instalador. **Los `.ps1` no se han ejecutado
 nunca**: en el entorno de desarrollo no hay PowerShell. Están tipados y
 revisados, que no es lo mismo que probados.
 
+De ahí el único pendiente de AutoScan: **probarlo en un PC del mostrador**. El
+guion, paso a paso y con qué mirar cuando algo falle, está en
+`docs/autoscan/PRUEBA-EN-WINDOWS.md`. Hasta pasarlo, no se instala en más de un
+mostrador.
+
 ## 8. Estado de la entrega
 
 El módulo está **en producción y en uso diario**. Implementado y probado:
@@ -743,6 +748,11 @@ aparece, a propósito— y las **credenciales de Business Central** por variable
 de entorno, sin las cuales el conector ni siquiera se registra.
 
 ## 9. Lo que queda fuera, y por qué
+
+> Antes de nada, lo que NO queda fuera sino **pendiente**: la prueba de AutoScan
+> en un PC del mostrador (`docs/autoscan/PRUEBA-EN-WINDOWS.md`). Es lo único
+> entregado que todavía no se ha visto funcionar en su sitio.
+
 
 - **Webhooks de entrada** (`invoice.created`, `invoice.updated`…). El modelo los
   admite —`cash_external_documents` ya hace upsert por `(empresa, sistema, id)`—
