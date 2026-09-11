@@ -66,6 +66,34 @@ export default function Cierre() {
   const [cerrada, setCerrada] = useState<Awaited<ReturnType<typeof api.cerrarJornada>> | null>(null);
   // El texto de la pregunta cuando el cierre dejaría la caja a cero. Null = no hay pregunta.
   const [confirmarVacia, setConfirmarVacia] = useState<string | null>(null);
+  /*
+   * Cómo está el cotejo con el ERP. Se pide al entrar para poder avisar ANTES
+   * de que alguien reparta el cambio y pulse: enterarse de que hay que cotejar
+   * DESPUÉS de rellenar toda la pantalla es la manera de que la regla moleste
+   * en vez de ayudar.
+   */
+  const [cotejo, setCotejo] = useState<Awaited<ReturnType<typeof api.estadoCotejoErp>> | null>(null);
+  // El aviso del servidor cuando la puerta del cotejo para el cierre. Null = no ha parado.
+  const [paradoPorCotejo, setParadoPorCotejo] = useState<string | null>(null);
+  const [motivoSinCotejo, setMotivoSinCotejo] = useState("");
+
+  const sessionId = jornada?.sesion.id ?? null;
+  useEffect(() => {
+    if (sessionId === null) return;
+    let vivo = true;
+    void api
+      .estadoCotejoErp(sessionId)
+      /*
+       * Si esta consulta falla no se rompe el cierre: es un aviso, y la puerta
+       * de verdad está en el servidor. Dejar la pantalla inservible porque no
+       * se ha podido pintar una advertencia sería el peor de los dos fallos.
+       */
+      .then((r) => vivo && setCotejo(r))
+      .catch(() => {});
+    return () => {
+      vivo = false;
+    };
+  }, [sessionId]);
 
   const objetivo = aCentimos(objetivoTexto) ?? 0;
 
@@ -225,8 +253,10 @@ export default function Cierre() {
         cambioFinalBolsas,
         notas: notas || undefined,
         permitirCajaVacia,
+        motivoSinCotejo: motivoSinCotejo.trim() || undefined,
       });
       setConfirmarVacia(null);
+      setParadoPorCotejo(null);
       setCerrada(r);
       await refrescar();
     } catch (e) {
@@ -238,6 +268,18 @@ export default function Cierre() {
        */
       if (e instanceof api.ErrorApiCaja && e.codigo === "CIERRE_DEJA_CAJA_VACIA") {
         setConfirmarVacia(e.message);
+      } else if (
+        e instanceof api.ErrorApiCaja &&
+        (e.codigo === "FALTA_COTEJO" ||
+          e.codigo === "COTEJO_CADUCADO" ||
+          e.codigo === "COTEJO_NO_CUADRA")
+      ) {
+        /*
+         * Tampoco es un error: es la puerta del cotejo. Se enseña con las dos
+         * salidas delante —ir a cotejar, o firmar por qué se cierra igual— en
+         * vez de como un ErrorBox rojo que no dice qué hacer.
+         */
+        setParadoPorCotejo(e.message);
       } else {
         setError(e instanceof Error ? e.message : "No se ha podido cerrar la jornada");
       }
@@ -259,6 +301,33 @@ export default function Cierre() {
 
       {/* Las facturas que llegaron solas y nadie cobró. Avisa, no impide. */}
       <AvisoAutoScanPendiente />
+
+      {/*
+        El cotejo con el ERP, ANTES de repartir el cambio. Enterarse de que hay
+        que cotejar después de rellenar toda la pantalla es la manera de que la
+        regla moleste en vez de ayudar.
+      */}
+      {cotejo?.exigido && (cotejo.falta || cotejo.caducado || !cotejo.cuadra) && (
+        <Aviso tono="aviso">
+          {cotejo.falta ? (
+            <>
+              Esta jornada <strong>no se ha cotejado con el ERP</strong>. Hay que hacerlo antes de
+              cerrar: se pega la captura del arqueo de Genes en «Cotejar con el ERP».
+            </>
+          ) : cotejo.caducado ? (
+            <>
+              El cotejo con el ERP es <strong>anterior a los últimos movimientos</strong>: se han
+              metido o anulado cobros desde entonces, así que ese OK habla de otra caja. Vuelve a
+              cotejar.
+            </>
+          ) : (
+            <>
+              El último cotejo con el ERP <strong>no cuadraba</strong>. Revísalo antes de cerrar, o
+              tendrás que escribir por qué se cierra igual.
+            </>
+          )}
+        </Aviso>
+      )}
 
       {error && <ErrorBox>{error}</ErrorBox>}
 
@@ -523,6 +592,45 @@ export default function Cierre() {
         <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Notas del cierre</span>
         <input value={notas} onChange={(e) => setNotas(e.target.value)} className={inputCls} placeholder="Opcional" />
       </label>
+
+      {paradoPorCotejo && (
+        <Modal
+          title="Falta el OK del cotejo con el ERP"
+          onClose={() => setParadoPorCotejo(null)}
+          footer={
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setParadoPorCotejo(null)} className={btnSecondary}>
+                Volver y cotejar
+              </button>
+              <button
+                onClick={() => void cerrar()}
+                disabled={guardando || !motivoSinCotejo.trim()}
+                className={btnDanger}
+              >
+                {guardando ? "Cerrando…" : "Cerrar igualmente"}
+              </button>
+            </div>
+          }
+        >
+          <p className="text-sm text-slate-300">{paradoPorCotejo}</p>
+          <p className="mt-3 text-xs text-slate-400">
+            Se puede cerrar sin el cotejo —si el servicio que lee la captura no responde, la caja
+            tiene que poder cerrarse igual— pero hace falta decir por qué. Queda escrito en la
+            jornada y en la auditoría.
+          </p>
+          <label className="mt-3 block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Por qué se cierra sin cotejar
+            </span>
+            <input
+              value={motivoSinCotejo}
+              onChange={(ev) => setMotivoSinCotejo(ev.target.value)}
+              placeholder="Revisado a mano contra Genes; el lector de capturas no responde"
+              className={inputCls}
+            />
+          </label>
+        </Modal>
+      )}
 
       {confirmarVacia && (
         <Modal

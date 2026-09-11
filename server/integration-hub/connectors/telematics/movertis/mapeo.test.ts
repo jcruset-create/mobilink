@@ -1,0 +1,279 @@
+/**
+ * Pruebas del mapeo de Movertis.
+ *
+ * Son pruebas puras: ni red ni base. Eso es deliberado, porque el mapeo es la
+ * parte del conector que hoy NO se puede validar contra el proveedor —su API
+ * lleva caída desde que se montó la sonda— y a la vez la que decide si un
+ * kilometraje es de fiar. Lo que se fija aquí es el comportamiento que el
+ * contrato exige pase lo que pase: no inventar, no perder la fecha, no dar por
+ * buena una posición que no lo es.
+ *
+ * Cuando la sonda conteste y sepamos los nombres reales, estas pruebas son el
+ * sitio donde se clava la respuesta de verdad.
+ */
+
+import { describe, expect, it } from "vitest";
+import {
+  aKilometros,
+  aProviderVehicle,
+  aVehicleTelemetry,
+  fecha,
+  filasDe,
+  masCercana,
+  numero,
+  type OpcionesMapeo,
+} from "./mapeo.ts";
+import type { VehicleTelemetry } from "../../../domain/telematics.ts";
+
+const OPCIONES: OpcionesMapeo = {
+  provider: "movertis",
+  accountKey: "autobuses",
+  unidadOdometro: "km",
+};
+
+describe("numero()", () => {
+  it("no convierte la ausencia en cero", () => {
+    // El punto entero del modelo: un cero de relleno es indistinguible de un
+    // cero real, y en esta flota eso ya significó «no hay CAN».
+    expect(numero(undefined)).toBeUndefined();
+    expect(numero(null)).toBeUndefined();
+    expect(numero("")).toBeUndefined();
+    expect(numero("no disponible")).toBeUndefined();
+  });
+
+  it("acepta el cero real y la coma decimal", () => {
+    expect(numero(0)).toBe(0);
+    expect(numero("684327,4")).toBe(684327.4);
+  });
+});
+
+describe("fecha()", () => {
+  it("entiende ISO, epoch en segundos y epoch en milisegundos", () => {
+    const esperado = Date.UTC(2026, 6, 15, 9, 40, 0);
+    expect(fecha("2026-07-15T09:40:00Z")?.getTime()).toBe(esperado);
+    expect(fecha(esperado / 1000)?.getTime()).toBe(esperado);
+    expect(fecha(esperado)?.getTime()).toBe(esperado);
+  });
+
+  it("descarta lo que no es fecha en vez de propagar Invalid Date", () => {
+    expect(fecha("cualquier cosa")).toBeUndefined();
+    expect(fecha("")).toBeUndefined();
+    expect(fecha(new Date("nada"))).toBeUndefined();
+  });
+});
+
+describe("aKilometros()", () => {
+  it("convierte según la unidad declarada y no redondea", () => {
+    expect(aKilometros(684327.4, "km")).toBe(684327.4);
+    expect(aKilometros(684327400, "m")).toBe(684327.4);
+    expect(aKilometros(6843274, "hm")).toBe(684327.4);
+  });
+
+  it("deja pasar la ausencia", () => {
+    expect(aKilometros(undefined, "m")).toBeUndefined();
+  });
+
+  it("sin unidad declarada no devuelve número", () => {
+    // No hay unidad por defecto: 900.000 km y 900.000 m son indistinguibles
+    // por magnitud, así que asumir una convertiría el error en silencioso.
+    expect(aKilometros(684327.4, undefined)).toBeUndefined();
+  });
+});
+
+describe("aProviderVehicle()", () => {
+  it("lee los campos por sus nombres candidatos, en inglés o castellano", () => {
+    const v = aProviderVehicle({
+      id: "TSVETAN2",
+      nombre: "Bus 14",
+      matricula: "2321HZT",
+      bastidor: "VF1234567890",
+      marca: "Volvo",
+      modelo: "9700",
+      activo: "si",
+    });
+    expect(v).toMatchObject({
+      providerVehicleId: "TSVETAN2",
+      name: "Bus 14",
+      plate: "2321HZT",
+      vin: "VF1234567890",
+      brand: "Volvo",
+      model: "9700",
+      active: true,
+    });
+  });
+
+  it("acepta un vehículo sin matrícula", () => {
+    // En el ejemplo de Movertis la unidad se llama TSVETAN2, que es un alias.
+    // Sin matrícula no hay emparejamiento automático, pero el vehículo existe.
+    const v = aProviderVehicle({ id: "TSVETAN2", name: "TSVETAN2" });
+    expect(v?.providerVehicleId).toBe("TSVETAN2");
+    expect(v?.plate).toBeUndefined();
+  });
+
+  it("descarta el registro sin identificador", () => {
+    expect(aProviderVehicle({ nombre: "Sin id" })).toBeNull();
+  });
+
+  it("respeta los nombres de campo fijados en config", () => {
+    const v = aProviderVehicle(
+      { codigo_interno: "X9", id: "no-es-este" },
+      { vehicleId: ["codigo_interno"] },
+    );
+    expect(v?.providerVehicleId).toBe("X9");
+  });
+});
+
+describe("aVehicleTelemetry()", () => {
+  it("exige los tres campos que hacen la lectura auditable", () => {
+    // Sin fecha no se puede casar con el momento de una operación.
+    expect(aVehicleTelemetry({ id: "A1", odometer: 100 }, OPCIONES)).toBeNull();
+    // Sin vehículo no se sabe de qué es la lectura.
+    expect(aVehicleTelemetry({ timestamp: "2026-07-15T09:40:00Z" }, OPCIONES)).toBeNull();
+  });
+
+  it("usa el id del vehículo pedido cuando la fila no lo trae", () => {
+    // Las rutas por vehículo suelen omitirlo: ya está en la URL.
+    const l = aVehicleTelemetry({ timestamp: "2026-07-15T09:40:00Z" }, OPCIONES, "A1");
+    expect(l?.providerVehicleId).toBe("A1");
+    expect(l?.provider).toBe("movertis");
+    expect(l?.accountKey).toBe("autobuses");
+  });
+
+  it("no anuncia odómetro cuando no lo hay", () => {
+    const l = aVehicleTelemetry({ id: "A1", timestamp: "2026-07-15T09:40:00Z" }, OPCIONES);
+    expect(l?.odometerKm).toBeUndefined();
+    expect(l?.odometerSource).toBeUndefined();
+  });
+
+  it("declara la procedencia del odómetro en vez de adivinarla", () => {
+    const sinDeclarar = aVehicleTelemetry(
+      { id: "A1", timestamp: "2026-07-15T09:40:00Z", odometer: 684327.4 },
+      OPCIONES,
+    );
+    expect(sinDeclarar?.odometerSource).toBe("unknown");
+
+    const declarado = aVehicleTelemetry(
+      { id: "A1", timestamp: "2026-07-15T09:40:00Z", odometer: 684327.4 },
+      { ...OPCIONES, origenOdometro: "gps" },
+    );
+    expect(declarado?.odometerSource).toBe("gps");
+  });
+
+  it("sin unidad declarada entrega la lectura pero sin odómetro", () => {
+    // Lo que se protege: quien no ha pensado la unidad se queda sin el número,
+    // no con uno mil veces menor. La lectura sigue sirviendo para la posición.
+    const l = aVehicleTelemetry(
+      {
+        id: "A1",
+        timestamp: "2026-07-15T09:40:00Z",
+        odometer: 684327400,
+        latitud: 41.1189,
+        longitud: 1.2445,
+      },
+      { provider: "movertis", accountKey: "autobuses" },
+    );
+    expect(l).not.toBeNull();
+    expect(l?.odometerKm).toBeUndefined();
+    expect(l?.odometerSource).toBeUndefined();
+    expect(l?.latitude).toBeCloseTo(41.1189);
+  });
+
+  it("convierte el odómetro a km sin perder decimales", () => {
+    const l = aVehicleTelemetry(
+      { id: "A1", timestamp: "2026-07-15T09:40:00Z", odometer: 684327400 },
+      { ...OPCIONES, unidadOdometro: "m" },
+    );
+    expect(l?.odometerKm).toBe(684327.4);
+  });
+
+  it("descarta 0,0 como posición", () => {
+    // Es válida en el Golfo de Guinea y, en telemática, significa «sin GPS».
+    // Darla por buena pone autobuses de Tarragona en mitad del Atlántico.
+    const l = aVehicleTelemetry(
+      { id: "A1", timestamp: "2026-07-15T09:40:00Z", lat: 0, lon: 0 },
+      OPCIONES,
+    );
+    expect(l?.latitude).toBeUndefined();
+    expect(l?.longitude).toBeUndefined();
+  });
+
+  it("acepta una posición real", () => {
+    const l = aVehicleTelemetry(
+      { id: "A1", timestamp: "2026-07-15T09:40:00Z", latitud: 41.1189, longitud: 1.2445 },
+      OPCIONES,
+    );
+    expect(l?.latitude).toBeCloseTo(41.1189);
+    expect(l?.longitude).toBeCloseTo(1.2445);
+  });
+
+  it("solo fecha el odómetro aparte si el proveedor lo fecha aparte", () => {
+    const sinFechaPropia = aVehicleTelemetry(
+      { id: "A1", timestamp: "2026-07-15T09:40:00Z", odometer: 100 },
+      OPCIONES,
+    );
+    // No se da por hecho que coincida con capturedAt: son sensores distintos.
+    expect(sinFechaPropia?.odometerAt).toBeUndefined();
+
+    const conFechaPropia = aVehicleTelemetry(
+      {
+        id: "A1",
+        timestamp: "2026-07-15T09:40:00Z",
+        odometer: 100,
+        odometerTime: "2026-07-15T09:35:00Z",
+      },
+      OPCIONES,
+    );
+    expect(conFechaPropia?.odometerAt?.toISOString()).toBe("2026-07-15T09:35:00.000Z");
+  });
+});
+
+describe("filasDe()", () => {
+  it("saca la lista venga pelada o envuelta", () => {
+    expect(filasDe([{ a: 1 }])).toHaveLength(1);
+    expect(filasDe({ data: [{ a: 1 }, { a: 2 }] })).toHaveLength(2);
+    expect(filasDe({ vehiculos: [{ a: 1 }] })).toHaveLength(1);
+  });
+
+  it("devuelve vacío ante algo que no contiene filas", () => {
+    expect(filasDe(null)).toEqual([]);
+    expect(filasDe("texto")).toEqual([]);
+    expect(filasDe({ error: "vaya" })).toEqual([]);
+  });
+});
+
+describe("masCercana()", () => {
+  const lectura = (iso: string, km: number): VehicleTelemetry => ({
+    provider: "movertis",
+    accountKey: "autobuses",
+    providerVehicleId: "A1",
+    capturedAt: new Date(iso),
+    odometerKm: km,
+  });
+
+  it("elige la más próxima al instante pedido", () => {
+    const lecturas = [
+      lectura("2026-07-15T09:00:00Z", 100),
+      lectura("2026-07-15T09:50:00Z", 140),
+      lectura("2026-07-15T10:30:00Z", 180),
+    ];
+    const r = masCercana(lecturas, new Date("2026-07-15T09:40:00Z"), 60);
+    expect(r?.odometerKm).toBe(140);
+  });
+
+  it("devuelve null si nada cae dentro de la tolerancia", () => {
+    // Un autobús parado en el taller puede no emitir en horas, y ese es justo
+    // el momento en que se le cambian los neumáticos. El null es legítimo.
+    const lecturas = [lectura("2026-07-15T06:00:00Z", 100)];
+    expect(masCercana(lecturas, new Date("2026-07-15T09:40:00Z"), 15)).toBeNull();
+  });
+
+  it("no interpola entre dos lecturas", () => {
+    // Devuelve una que existió, nunca un valor intermedio fabricado.
+    const lecturas = [
+      lectura("2026-07-15T09:30:00Z", 100),
+      lectura("2026-07-15T09:50:00Z", 200),
+    ];
+    const r = masCercana(lecturas, new Date("2026-07-15T09:40:00Z"), 60);
+    expect([100, 200]).toContain(r?.odometerKm);
+  });
+});
