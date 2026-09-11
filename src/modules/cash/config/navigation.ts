@@ -21,6 +21,7 @@ import {
   History,
   FileText,
   ChartColumn,
+  ScanSearch,
   Plug,
   Settings,
   type LucideIcon,
@@ -50,6 +51,7 @@ export const NAV: NavItem[] = [
   { key: "historico", path: "historico", label: "Histórico", icon: History, permiso: "cash.view" },
   { key: "informes", path: "informes", label: "Informes", icon: FileText, permiso: "cash.view" },
   { key: "gasto", path: "gasto", label: "Gasto por concepto", icon: ChartColumn, permiso: "cash.view" },
+  { key: "cotejoErp", path: "cotejo-erp", label: "Cotejar con el ERP", icon: ScanSearch, permiso: "cash.view" },
   { key: "erp", path: "erp", label: "Integración ERP", icon: Plug, permiso: "cash.erp.view" },
   { key: "configuracion", path: "configuracion", label: "Configuración", icon: Settings, permiso: "cash.configure" },
 ];
