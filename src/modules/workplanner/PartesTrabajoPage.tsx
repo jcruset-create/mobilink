@@ -10,6 +10,8 @@ import {
   type ParteTrabajo,
 } from "../parteTrabajoATrabajos";
 import { allocateJobPure } from "../assignment";
+import { buildTechLoadStats, buildTechStats } from "../workshopReports";
+import { getOperationKey } from "../jobHelpers";
 import {
   API_BASE,
   loadJobsFromBackend,
@@ -19,7 +21,7 @@ import {
 } from "../workshopApi";
 import { getAdminHeaders } from "../adminHeaders";
 import { DEFAULT_WORKSHOP_ID, normalizeWorkshopId } from "../workshops";
-import type { Job, QuickTemplate, Tech } from "../workshopTypes";
+import type { Job, QuickTemplate, Tech, TechLoadStat } from "../workshopTypes";
 
 /**
  * Partes de trabajo — se escanea el parte del ERP, se sube aquí, y de sus
@@ -52,6 +54,48 @@ function ficheroADataUrl(file: File): Promise<string> {
     lector.onerror = () => reject(new Error("No se pudo leer el fichero"));
     lector.readAsDataURL(file);
   });
+}
+
+
+/**
+ * Por qué se propone a ese técnico. La tarjeta de «Pendientes de validar» solo
+ * enseñaba el nombre, y sin el motivo o te fías a ciegas o lo cambias a ojo.
+ */
+export function explicaPropuesta(
+  assignedNames: string[],
+  job: Pick<Job, "area" | "template" | "quickEntryLabel">,
+  techStats: { operation: string; fastestTech: string; bestTime: number; averageMinutes: number }[],
+  techLoadStats: TechLoadStat[]
+): string {
+  const responsable = assignedNames[0];
+
+  if (!responsable) return "Sin técnico libre para proponer.";
+
+  const motivos: string[] = [];
+
+  const stat = techStats.find((s) => s.operation === getOperationKey(job));
+
+  if (stat && stat.fastestTech === responsable && stat.bestTime > 0) {
+    motivos.push(`es el más rápido en esta operación (${Math.round(stat.bestTime)} min)`);
+  }
+
+  const carga = techLoadStats.find((c) => c.techName === responsable);
+
+  if (carga) {
+    motivos.push(
+      carga.activeCount === 0
+        ? "no tiene ningún trabajo abierto"
+        : `lleva ${carga.activeCount} trabajo(s) y ${Math.round(carga.totalOpenMinutes)} min abiertos`
+    );
+  }
+
+  const apoyo = assignedNames.slice(1);
+
+  const cola = apoyo.length > 0 ? ` Apoyo: ${apoyo.join(", ")}.` : "";
+
+  return motivos.length > 0
+    ? `Se propone a ${responsable} porque ${motivos.join(" y ")}.${cola}`
+    : `Se propone a ${responsable} por competencias y orden del área.${cola}`;
 }
 
 export default function PartesTrabajoPage() {
@@ -105,6 +149,19 @@ export default function PartesTrabajoPage() {
     [plantillas, workshopId]
   );
 
+  // Las mismas estadísticas que usa el panel para proponer: quién es más
+  // rápido en cada operación y quién lleva más carga abierta. Pasarlas vacías
+  // dejaba la propuesta en poco más que el orden del área.
+  const techStats = useMemo(
+    () => buildTechStats(jobs.filter((j) => j.status === "cerrado")),
+    [jobs]
+  );
+
+  const techLoadStats = useMemo<TechLoadStat[]>(
+    () => buildTechLoadStats(jobs, techs),
+    [jobs, techs]
+  );
+
   const conversion = useMemo(
     () =>
       parte
@@ -112,6 +169,32 @@ export default function PartesTrabajoPage() {
         : null,
     [parte, mapa, plantillasDelTaller]
   );
+
+  /**
+   * Pegar la captura del ERP (Impr Pant + Ctrl+V) hace lo mismo que subir el
+   * parte escaneado: es más rápido que imprimir y escanear, y la rejilla del
+   * ERP trae los mismos datos.
+   */
+  useEffect(() => {
+    function alPegar(e: ClipboardEvent) {
+      const items = Array.from(e.clipboardData?.items ?? []);
+      const imagen = items.find((i) => i.type.startsWith("image/"));
+
+      if (!imagen) return;
+
+      const file = imagen.getAsFile();
+
+      if (!file) return;
+
+      e.preventDefault();
+      void subirParte(file);
+    }
+
+    window.addEventListener("paste", alPegar);
+
+    return () => window.removeEventListener("paste", alPegar);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function subirParte(file: File) {
     setError("");
@@ -201,19 +284,30 @@ export default function PartesTrabajoPage() {
           techsAcumulados,
           [base, ...jobsAcumulados],
           plantillasDelTaller,
-          [],
-          []
+          techStats,
+          techLoadStats
         );
 
         const conPropuesta =
           resultado.jobs.find((j) => j.id === base.id) ?? base;
 
+        const porQue = explicaPropuesta(
+          conPropuesta.assignedNames ?? [],
+          base,
+          techStats,
+          techLoadStats
+        );
+
         const jobFinal: Job = {
           ...conPropuesta,
           status: "validacion",
-          reason: material
-            ? `${conPropuesta.reason} Material: ${material}.`
-            : conPropuesta.reason,
+          reason: [
+            conPropuesta.reason,
+            porQue,
+            material ? `Material: ${material}.` : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
         };
 
         await saveJobToBackend(jobFinal);
@@ -250,8 +344,9 @@ export default function PartesTrabajoPage() {
           <div>
             <h1 className="text-xl font-bold">Partes de trabajo</h1>
             <p className="text-xs text-slate-400">
-              Sube el parte escaneado y de sus líneas salen los trabajos, con
-              técnico propuesto. Revísalo antes de crear nada.
+              Sube el parte escaneado (PDF o foto) o pega aquí una captura del ERP
+              con Ctrl+V. De sus líneas salen los trabajos, con técnico propuesto.
+              Revísalo antes de crear nada.
             </p>
           </div>
 
@@ -299,8 +394,11 @@ export default function PartesTrabajoPage() {
           <div className="rounded-2xl border border-dashed border-slate-700 p-10 text-center">
             <FileScan className="mx-auto h-8 w-8 text-slate-600" />
             <p className="mt-2 text-sm text-slate-400">
-              Escanea el parte y súbelo. Se leen la matrícula, el cliente y las
-              líneas de productos y servicios.
+              Escanea el parte y súbelo, o pega una captura del ERP con{" "}
+              <kbd className="rounded bg-slate-800 px-1.5 py-0.5 text-xs">Ctrl</kbd>
+              {" + "}
+              <kbd className="rounded bg-slate-800 px-1.5 py-0.5 text-xs">V</kbd>.
+              Se leen la matrícula, el cliente y las líneas de productos y servicios.
             </p>
           </div>
         )}
