@@ -104,10 +104,17 @@ describe("lo que falta y lo que sobra", () => {
     const r = cotejar(GENES_10_09, torcido, EQUIV);
     expect(r.totales.diferenciaCobros).toBe(0);
     expect(r.cuadra).toBe(false);
-    expect(r.soloEnErp).toHaveLength(1);
-    expect(r.soloEnErp[0]!.justificante).toBe("20758");
-    expect(r.soloEnMobilink).toHaveLength(1);
-    expect(r.soloEnMobilink[0]!.id).toBe(6);
+
+    /*
+     * Sale como discrepancia de forma y no como dos huérfanas. Es la misma
+     * operación con la forma cambiada, y decirlo así ahorra el trabajo de
+     * cruzar dos tablas para darse cuenta de que el importe es el mismo.
+     */
+    expect(r.soloEnErp).toEqual([]);
+    expect(r.soloEnMobilink).toEqual([]);
+    expect(r.discrepanciasDeForma).toHaveLength(1);
+    expect(r.discrepanciasDeForma[0]!.erp.justificante).toBe("20758");
+    expect(r.discrepanciasDeForma[0]!.mobilink.id).toBe(6);
   });
 
   it("un importe mal por un céntimo sale como dos líneas sueltas, no como cuadrado", () => {
@@ -122,6 +129,131 @@ describe("lo que falta y lo que sobra", () => {
     expect(r.emparejadas).toHaveLength(7);
     expect(r.totales.diferenciaCobros).toBe(-1);
     expect(r.cuadra).toBe(false);
+  });
+});
+
+describe("mismo importe, distinta forma de pago", () => {
+  /*
+   * EL CASO REAL DEL 10/09, y el que destapó que faltaba esta categoría.
+   *
+   * El modelo leyó la fila 20762 —que en Genes pone CONTADO— como «Datáfono
+   * Clearone ta...», copiando la etiqueta de las filas de al lado. Los importes
+   * estaban todos bien, así que la comprobación contra el total impreso no lo
+   * cazó: 887,40 € a los dos lados.
+   *
+   * El resultado era que los 137,09 € salían DOS VECES —uno en «falta en
+   * Mobilink» y otro en «sobra en Mobilink»— sin que nada dijera que eran el
+   * mismo importe. La información estaba; el trabajo de verla se le dejaba
+   * entero a quien miraba, que es justo lo que este cotejo venía a evitar.
+   */
+  it("el cobro de RAMON BERENGUER: el modelo leyó mal la forma", () => {
+    const erp: LineaErp[] = [
+      {
+        justificante: "20762",
+        referencia: null,
+        /* Lo que el modelo leyó, MAL. En Genes pone CONTADO. */
+        formaErp: "Datáfono Clearone ta...",
+        importeCentimos: 13709,
+        tipo: "COBRO",
+        concepto: "RAMON BERENGUER",
+      },
+    ];
+    const mob: LineaMobilink[] = [
+      {
+        id: 59,
+        numero: "TAR1-C-26-059",
+        referencia: "B0020000609",
+        formaCodigo: "EFECTIVO",
+        importeCentimos: 13709,
+        tipo: "COBRO",
+      },
+    ];
+
+    const r = cotejar(erp, mob, EQUIV);
+
+    /* Ya NO salen como dos huérfanas por cada lado. */
+    expect(r.soloEnErp).toEqual([]);
+    expect(r.soloEnMobilink).toEqual([]);
+
+    expect(r.discrepanciasDeForma).toHaveLength(1);
+    const d = r.discrepanciasDeForma[0]!;
+    expect(d.erp.justificante).toBe("20762");
+    expect(d.mobilink.numero).toBe("TAR1-C-26-059");
+    expect(d.formaEsperada).toBe("CLEARONE");
+
+    /* Y NO se da por cuadrado: hay algo que mirar, sea del modelo o del cobro. */
+    expect(r.cuadra).toBe(false);
+    expect(r.totales.diferenciaCobros).toBe(0);
+  });
+
+  it("también caza el error de verdad: un cobro metido con la forma equivocada", () => {
+    /*
+     * La otra causa de lo mismo, y la que de verdad cuesta dinero: el dinero
+     * está, pero Mobilink cree que hay 377,24 € más en el cajón de los que hay,
+     * y el arqueo de la tarde descuadrará por esa cifra exacta.
+     */
+    const erp: LineaErp[] = [
+      { referencia: "B2_26/607", formaErp: "TPV CAIXA", importeCentimos: 37724, tipo: "COBRO" },
+    ];
+    const mob: LineaMobilink[] = [
+      { id: 6, numero: "A", referencia: null, formaCodigo: "EFECTIVO", importeCentimos: 37724, tipo: "COBRO" },
+    ];
+    const r = cotejar(erp, mob, EQUIV);
+    expect(r.discrepanciasDeForma).toHaveLength(1);
+    expect(r.discrepanciasDeForma[0]!.formaEsperada).toBe("TARJETA");
+    expect(r.cuadra).toBe(false);
+  });
+
+  it("va la ÚLTIMA: no le roba la pareja buena a nadie", () => {
+    /*
+     * Si esta pasada fuera antes, el cobro de 50 € por tarjeta del ERP podría
+     * emparejarse con el de 50 € en efectivo de Mobilink —por importe— y dejar
+     * huérfanos a los dos que sí se correspondían.
+     */
+    const erp: LineaErp[] = [
+      { formaErp: "TPV CAIXA", importeCentimos: 5000, tipo: "COBRO", concepto: "el de tarjeta" },
+      { formaErp: "CONTADO", importeCentimos: 5000, tipo: "COBRO", concepto: "el de efectivo" },
+    ];
+    const mob: LineaMobilink[] = [
+      { id: 1, numero: "EFECTIVO", formaCodigo: "EFECTIVO", importeCentimos: 5000, tipo: "COBRO" },
+      { id: 2, numero: "TARJETA", formaCodigo: "TARJETA", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const r = cotejar(erp, mob, EQUIV);
+
+    expect(r.cuadra).toBe(true);
+    expect(r.discrepanciasDeForma).toEqual([]);
+    expect(r.emparejadas).toHaveLength(2);
+    /* Cada uno con el suyo, no cruzados. */
+    expect(r.emparejadas.find((x) => x.erp.concepto === "el de tarjeta")!.mobilink.numero).toBe("TARJETA");
+    expect(r.emparejadas.find((x) => x.erp.concepto === "el de efectivo")!.mobilink.numero).toBe("EFECTIVO");
+  });
+
+  it("con dos candidatos del mismo importe sigue sin elegir", () => {
+    /* La regla de no inventar emparejamientos no se relaja aquí. Lo que se
+       relaja es la forma de pago, no la exigencia de que no haya dudas. */
+    const erp: LineaErp[] = [
+      { formaErp: "BIZUM DEL MOVIL", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const mob: LineaMobilink[] = [
+      { id: 1, numero: "A", formaCodigo: "EFECTIVO", importeCentimos: 5000, tipo: "COBRO" },
+      { id: 2, numero: "B", formaCodigo: "TARJETA", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const r = cotejar(erp, mob, EQUIV);
+    expect(r.discrepanciasDeForma).toEqual([]);
+    expect(r.ambiguas).toHaveLength(1);
+  });
+
+  it("y un cobro contra un pago del mismo importe NO se empareja ni aquí", () => {
+    const erp: LineaErp[] = [
+      { formaErp: "CONTADO", importeCentimos: 5000, tipo: "PAGO" },
+    ];
+    const mob: LineaMobilink[] = [
+      { id: 1, numero: "A", formaCodigo: "TARJETA", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const r = cotejar(erp, mob, EQUIV);
+    expect(r.discrepanciasDeForma).toEqual([]);
+    expect(r.soloEnErp).toHaveLength(1);
+    expect(r.soloEnMobilink).toHaveLength(1);
   });
 });
 
@@ -171,10 +303,19 @@ describe("las formas de pago no se adivinan", () => {
       { id: 1, numero: "A", formaCodigo: "EFECTIVO", importeCentimos: 5000, tipo: "COBRO" },
     ];
     const r = cotejar(erp, mob, EQUIV);
+
+    /*
+     * Lo esencial se mantiene: NO se da por emparejado, y la etiqueta sin
+     * configurar se sigue diciendo. Lo que cambia es dónde aparece — como
+     * discrepancia de forma, con `formaEsperada` a null para que la pantalla
+     * pueda decir «esta etiqueta ni siquiera está configurada» en vez de
+     * «la forma no coincide», que sería engañoso.
+     */
     expect(r.emparejadas).toEqual([]);
     expect(r.formasSinEquivalencia).toEqual(["BIZUM DEL MOVIL"]);
-    expect(r.soloEnErp).toHaveLength(1);
-    expect(r.soloEnMobilink).toHaveLength(1);
+    expect(r.cuadra).toBe(false);
+    expect(r.discrepanciasDeForma).toHaveLength(1);
+    expect(r.discrepanciasDeForma[0]!.formaEsperada).toBeNull();
   });
 
   it("la etiqueta se busca sin depender de mayúsculas ni espacios de más", () => {
