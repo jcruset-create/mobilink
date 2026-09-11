@@ -1767,6 +1767,56 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * Cómo se llama en el ERP cada forma de cobro nuestra.
+   *
+   * Para cotejar el cierre del ERP con el nuestro hay que saber que «Datáfono
+   * Clearone ta...» es lo que aquí llamamos CLEARONE. Eso es un dato del
+   * taller, no algo que se pueda deducir: los nombres los pone quien configuró
+   * el ERP hace años y no se parecen a los nuestros.
+   *
+   * ── Por qué una TABLA y no que lo adivine el modelo ───────────────────────
+   *
+   * Porque una tabla dice siempre lo mismo. Un modelo, no. El día que decidiera
+   * que «TPV CAIXA» es efectivo, el cotejo diría que todo cuadra con un cobro
+   * de tarjeta contado como caja, y el descuadre aparecería en el arqueo de la
+   * tarde sin nada que lo explicara.
+   *
+   * ── La etiqueta se guarda NORMALIZADA ─────────────────────────────────────
+   *
+   * En mayúsculas y sin espacios de sobra, que es como se compara. El ERP la
+   * imprime con mayúsculas inconsistentes —«CONTADO» y «Datáfono Clearone»— y
+   * el modelo la copia tal cual la ve; sin normalizar, la misma forma entraría
+   * dos veces y el cotejo fallaría solo a ratos, que es la peor forma de
+   * fallar.
+   *
+   * El UNIQUE es sobre la etiqueta, no sobre la forma: varias etiquetas del ERP
+   * pueden apuntar a la misma forma nuestra —un taller con dos datáfonos— pero
+   * una etiqueta no puede significar dos cosas a la vez.
+   *
+   * ── Sin clave ajena a cash_payment_methods, y a propósito ─────────────────
+   *
+   * Mismo criterio que `cash_payment_rules`: el catálogo de formas es editable
+   * y una forma dada de baja no debe tumbar una equivalencia ni al revés. Que
+   * el código siga existiendo se comprueba al leer, y si no existe se dice.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_erp_payment_map (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      /* La etiqueta del ERP, normalizada: mayúsculas y sin espacios dobles. */
+      etiqueta_erp TEXT NOT NULL,
+      /* Código de cash_payment_methods. Sin FK, ver arriba. */
+      forma_pago TEXT NOT NULL,
+      creado_por UUID,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, etiqueta_erp)
+    );
+    CREATE INDEX IF NOT EXISTS cash_erp_payment_map_empresa_idx
+      ON cash_erp_payment_map(empresa_id);
+  `);
+
+  /*
    * Las dos columnas en las operaciones. `ADD COLUMN IF NOT EXISTS` y no
    * dentro del CREATE TABLE de arriba: `cash_operations` existe desde el
    * principio y su CREATE no se vuelve a ejecutar.

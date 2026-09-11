@@ -20,6 +20,7 @@ import { ErrorCaja, sesionAbierta } from "./repository.ts";
 import { nombreDeCentro } from "./hierarchy.ts";
 import { entidadDeIban, ibanValido, normalizarIban } from "./domain/bankaccount.ts";
 import { BANCOS_SEMILLA, logoDeSemilla } from "./domain/banks.ts";
+import { etiquetaNormalizada } from "./domain/cotejo.ts";
 import type { CampoRegla } from "./invoice-scan/classifier.ts";
 import {
   CODIGO_MAX,
@@ -2197,4 +2198,118 @@ export async function validarClasificacionGasto(
   }
 
   return { conceptoId, destinoId };
+}
+
+// ── Equivalencias de formas de pago con el ERP ─────────────────────────────
+//
+// Para cotejar el cierre del ERP con el nuestro hay que saber que «Datáfono
+// Clearone ta...» es lo que aquí llamamos CLEARONE. Lo pone una persona, no lo
+// deduce un modelo: ver el porqué en el esquema y en `domain/cotejo.ts`.
+
+export type EquivalenciaErp = {
+  id: number;
+  etiquetaErp: string;
+  formaPago: string;
+  /** Nombre de esa forma en el catálogo, o null si ya no existe. */
+  formaNombre: string | null;
+  /** false = la forma está dada de baja o borrada. Se enseña, no se esconde. */
+  formaVigente: boolean;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const aEquivalencia = (r: any): EquivalenciaErp => ({
+  id: r.id,
+  etiquetaErp: r.etiqueta_erp,
+  formaPago: r.forma_pago,
+  formaNombre: r.forma_nombre ?? null,
+  formaVigente: Boolean(r.forma_nombre) && Boolean(r.forma_activa),
+});
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * Todas las equivalencias, con el estado real de la forma a la que apuntan.
+ *
+ * El LEFT JOIN no es un adorno: sin él, una equivalencia que apunta a una forma
+ * borrada desaparecería de la pantalla y nadie entendería por qué el cotejo
+ * sigue sin emparejar esas líneas. Sale, y sale marcada.
+ */
+export async function listarEquivalenciasErp(empresaId: string): Promise<EquivalenciaErp[]> {
+  const { rows } = await pool.query(
+    `SELECT m.*, p.nombre AS forma_nombre, p.activa AS forma_activa
+       FROM cash_erp_payment_map m
+       LEFT JOIN cash_payment_methods p
+         ON p.empresa_id = m.empresa_id AND p.codigo = m.forma_pago
+      WHERE m.empresa_id = $1
+      ORDER BY m.etiqueta_erp`,
+    [empresaId]
+  );
+  return rows.map(aEquivalencia);
+}
+
+/** El mapa que consume `cotejar`, ya normalizado por las dos puntas. */
+export async function mapaEquivalenciasErp(empresaId: string): Promise<Map<string, string>> {
+  const { rows } = await pool.query(
+    `SELECT etiqueta_erp, forma_pago FROM cash_erp_payment_map WHERE empresa_id = $1`,
+    [empresaId]
+  );
+  return new Map(rows.map((r) => [r.etiqueta_erp as string, r.forma_pago as string]));
+}
+
+export async function guardarEquivalenciaErp(
+  ctx: Contexto,
+  datos: { etiquetaErp: string; formaPago: string }
+): Promise<EquivalenciaErp> {
+  const etiqueta = etiquetaNormalizada(datos.etiquetaErp ?? "");
+  if (!etiqueta) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "Falta la etiqueta del ERP.", 400);
+  }
+  const codigo = (datos.formaPago ?? "").trim().toUpperCase();
+  if (!codigo) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "Falta la forma de cobro de Mobilink.", 400);
+  }
+
+  /*
+   * La forma tiene que existir AHORA. No hay clave ajena —el catálogo es
+   * editable y no debe tumbar equivalencias— pero dejar crear una que apunta a
+   * un código inventado daría un cotejo que no empareja nunca y no dice por qué.
+   */
+  const { rows: formas } = await pool.query(
+    `SELECT nombre, activa FROM cash_payment_methods WHERE empresa_id = $1 AND codigo = $2`,
+    [ctx.empresaId, codigo]
+  );
+  if (formas.length === 0) {
+    throw new ErrorCaja("FORMA_NO_ENCONTRADA", `No existe la forma de cobro «${codigo}».`, 400);
+  }
+
+  const ahora = Date.now();
+  /*
+   * UPSERT sobre la etiqueta: volver a guardar la misma la reapunta en vez de
+   * fallar. Es lo que se espera al corregir un mapeo desde la pantalla, y sin
+   * esto habría que borrar y crear para cambiar una letra.
+   */
+  const { rows } = await pool.query(
+    `INSERT INTO cash_erp_payment_map
+       (empresa_id, etiqueta_erp, forma_pago, creado_por, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$5)
+     ON CONFLICT (empresa_id, etiqueta_erp)
+       DO UPDATE SET forma_pago = EXCLUDED.forma_pago, updated_at_ms = EXCLUDED.updated_at_ms
+     RETURNING *`,
+    [ctx.empresaId, etiqueta, codigo, ctx.userId, ahora]
+  );
+
+  return aEquivalencia({
+    ...rows[0],
+    forma_nombre: formas[0]!.nombre,
+    forma_activa: formas[0]!.activa,
+  });
+}
+
+export async function borrarEquivalenciaErp(ctx: Contexto, id: number): Promise<void> {
+  const { rowCount } = await pool.query(
+    `DELETE FROM cash_erp_payment_map WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  if (!rowCount) {
+    throw new ErrorCaja("NO_ENCONTRADA", "Esa equivalencia ya no existe.", 404);
+  }
 }

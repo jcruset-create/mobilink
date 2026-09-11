@@ -2234,6 +2234,43 @@ export function createCashRouter(): Router {
     })
   );
 
+  // ── Equivalencias de formas de pago con el ERP ───────────────────────────
+  //
+  // Leer es permiso de vista porque la pantalla de cotejo las necesita para
+  // explicar por qué una línea no empareja. Escribir es de configuración: es la
+  // tabla de la que depende que un cobro por tarjeta no se cuente como caja.
+
+  r.get(
+    "/erp-payment-map",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({ equivalencias: await config.listarEquivalenciasErp(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.put(
+    "/erp-payment-map",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        equivalencia: await config.guardarEquivalenciaErp(contexto(req), {
+          etiquetaErp: typeof b.etiquetaErp === "string" ? b.etiquetaErp : "",
+          formaPago: typeof b.formaPago === "string" ? b.formaPago : "",
+        }),
+      });
+    })
+  );
+
+  r.delete(
+    "/erp-payment-map/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      await config.borrarEquivalenciaErp(contexto(req), enteroPositivo(req.params.id, "id"));
+      res.json({ ok: true });
+    })
+  );
+
   r.post(
     "/expense-targets",
     exigirPermiso("cash.configure"),
