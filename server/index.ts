@@ -11679,6 +11679,32 @@ app.put("/api/partes-trabajo/articulos", requireSupervisorRole, async (req, res)
 });
 
 /**
+ * Olvida una correspondencia. Al volver a aparecer ese artículo se preguntará
+ * otra vez, que es lo que se quiere cuando se enseñó mal.
+ */
+app.delete("/api/partes-trabajo/articulos", requireSupervisorRole, async (req, res) => {
+  try {
+    const workshopId = String(req.query.workshopId || "");
+    const clave = String(req.query.clave || "").trim();
+
+    if (!clave) {
+      return res.status(400).json({ error: "Falta la clave del artículo" });
+    }
+
+    const result = await db.query(
+      `DELETE FROM erp_articulo_plantilla
+       WHERE "workshopId" = $1 AND clave = $2`,
+      [workshopId, clave]
+    );
+
+    res.json({ ok: true, borradas: result.rowCount ?? 0 });
+  } catch (error) {
+    console.error("DELETE /api/partes-trabajo/articulos error:", error);
+    res.status(500).json({ error: "Error olvidando la correspondencia" });
+  }
+});
+
+/**
  * Lee un parte de trabajo escaneado y devuelve sus campos.
  *
  * Solo extrae: no crea trabajos ni decide nada. Lo que salga de aquí lo revisa
