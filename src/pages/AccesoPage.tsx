@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { KeyRound } from "lucide-react";
+import logoMobilink from "../assets/logo-mobilink.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { claveInterna } from "../modules/administracion/services/authClave";
 
@@ -86,55 +86,97 @@ export default function AccesoPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-900 p-6 text-slate-100">
-      <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-800 p-8">
-        <div className="mb-6 flex items-center gap-2">
-          <KeyRound className="h-6 w-6 text-sky-400" />
-          <div>
-            <h1 className="text-lg font-black leading-tight">Mobilink</h1>
-            <p className="text-xs text-slate-400">Acceso a la aplicación</p>
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-950 p-6 text-slate-100">
+      {/*
+        Fondo de marca: dos halos azules muy difusos sobre el oscuro. Son
+        decorativos y van detrás de todo (-z-10), asi que no interfieren con el
+        formulario ni con el foco del teclado.
+      */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -left-40 -top-40 h-[28rem] w-[28rem] rounded-full bg-sky-500/25 blur-3xl"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -bottom-48 -right-32 h-[30rem] w-[30rem] rounded-full bg-blue-600/25 blur-3xl"
+      />
+
+      <div className="relative z-10 w-full max-w-md">
+        <div className="rounded-3xl border border-slate-800 bg-slate-900/80 p-8 shadow-2xl shadow-black/40 backdrop-blur sm:p-10">
+          <div className="mb-8 flex flex-col items-center text-center">
+            <img
+              src={logoMobilink}
+              alt="Mobilink"
+              className="h-20 w-auto drop-shadow-[0_4px_12px_rgba(56,189,248,0.25)] sm:h-24"
+            />
+            <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.12em] text-sky-400/90 sm:text-[11px]">
+              Conectando vehículos, talleres y personas
+            </p>
           </div>
+
+          <label
+            htmlFor="acceso-usuario"
+            className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+          >
+            Usuario
+          </label>
+          <input
+            id="acceso-usuario"
+            value={usuario}
+            onChange={(e) => setUsuario(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && entrar()}
+            autoComplete="username"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            autoFocus
+            className="mb-4 w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/40"
+          />
+
+          <label
+            htmlFor="acceso-clave"
+            className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+          >
+            Contraseña
+          </label>
+          <input
+            id="acceso-clave"
+            type="password"
+            value={clave}
+            onChange={(e) => setClave(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && entrar()}
+            placeholder="••••"
+            autoComplete="current-password"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className="mb-4 w-full rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/40"
+          />
+
+          {error && (
+            <div
+              role="alert"
+              className="mb-4 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+            >
+              {error}
+            </div>
+          )}
+
+          <button
+            onClick={entrar}
+            disabled={cargando || !usuario.trim() || !clave}
+            className="w-full rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-900/40 transition hover:from-sky-400 hover:to-blue-500 focus:outline-none focus:ring-2 focus:ring-sky-400/60 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+          >
+            {cargando ? "Entrando…" : "Entrar"}
+          </button>
+
+          <p className="mt-5 text-center text-[11px] text-slate-500">
+            ¿Contraseña olvidada? Pídesela a un administrador.
+          </p>
         </div>
 
-        <label className="mb-1 block text-[11px] font-semibold uppercase text-slate-400">Usuario</label>
-        <input
-          value={usuario}
-          onChange={(e) => setUsuario(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && entrar()}
-          autoComplete="username"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          autoFocus
-          className="mb-3 w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-sky-500"
-        />
-
-        <label className="mb-1 block text-[11px] font-semibold uppercase text-slate-400">Contraseña</label>
-        <input
-          type="password"
-          value={clave}
-          onChange={(e) => setClave(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && entrar()}
-          placeholder="••••"
-          autoComplete="current-password"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          className="mb-3 w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-sky-500"
-        />
-
-        {error && <div className="mb-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>}
-
-        <button
-          onClick={entrar}
-          disabled={cargando || !usuario.trim() || !clave}
-          className="w-full rounded-xl bg-sky-600 px-4 py-3 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
-        >
-          {cargando ? "Entrando…" : "Entrar"}
-        </button>
-
-        <p className="mt-4 text-center text-[11px] text-slate-500">
-          ¿Contraseña olvidada? Pídesela a un administrador.
+        <p className="mt-6 text-center text-[11px] tracking-wide text-slate-600">
+          mobilink-solutions.com
         </p>
       </div>
     </div>
