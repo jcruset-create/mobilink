@@ -87,6 +87,8 @@ import {
 } from "./repository.ts";
 import type { OperacionGuardada } from "./repository.ts";
 import { conectorPara } from "./erp/registry.ts";
+import { puertaDeCierre } from "./domain/puertaDeCierre.ts";
+import { huellaDeLaJornada, ultimoCotejo } from "./cotejoRegistro.ts";
 import { exigirAmbitoCaja, exigirJornadaPropia } from "./hierarchy.ts";
 import { autorDeOperacion, exigirOtraPersona } from "./sod.ts";
 import { centroDeCaja, emitirEvento } from "./events/emitter.ts";
@@ -1210,6 +1212,16 @@ export type EntradaCierre = {
    * cierre— y ese cero rompe además la herencia del día siguiente.
    */
   permitirCajaVacia?: boolean;
+  /**
+   * La llave para cerrar sin el OK del cotejo con el ERP, y es el MOTIVO, no un
+   * booleano.
+   *
+   * Se puede forzar —si el servicio que lee la captura está caído no hay manera
+   * humana de cotejar, y la caja tiene que poder cerrarse igual— pero no en
+   * silencio: esto se queda escrito en la jornada y en la auditoría. Un `true`
+   * se pone sin pensar; una frase, no tanto.
+   */
+  motivoSinCotejo?: string;
 };
 
 export type ResultadoCierre = {
@@ -1224,6 +1236,8 @@ export type ResultadoCierre = {
   totalIngresoCentimos: Centimos;
   diferenciaCentimos: Centimos;
   denominacionesCuadran: boolean;
+  /** Se cerró saltándose el OK del cotejo con el ERP, con su motivo escrito. */
+  cierreForzado: boolean;
 };
 
 /**
@@ -1287,6 +1301,41 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       );
     }
     const arqueo = arqueos[0];
+
+    /*
+     * ── La puerta del cotejo con el ERP ──────────────────────────────────────
+     *
+     * Misma idea que la del arqueo de arriba: no se cierra una jornada que
+     * nadie ha comprobado. Y va con llave en vez de con muro, porque el cotejo
+     * se apoya en un modelo que lee una captura y eso falla por motivos que no
+     * tienen nada que ver con el dinero. El razonamiento entero, con sus casos,
+     * está en `domain/puertaDeCierre.ts`.
+     */
+    const { rows: cajaCfg } = await client.query(
+      `SELECT exigir_cotejo_erp FROM cash_registers WHERE id = $1`,
+      [sesion.registerId]
+    );
+    const exigeCotejo = Boolean(cajaCfg[0]?.exigir_cotejo_erp);
+
+    const veredicto = exigeCotejo
+      ? puertaDeCierre(
+          await ultimoCotejo(client, e.sessionId),
+          await huellaDeLaJornada(client, ctx.empresaId, e.sessionId),
+          e.motivoSinCotejo
+        )
+      : ({ deja: "SIGUE", forzado: false } as const);
+    if (veredicto.deja === "PARA") {
+      throw new ErrorCaja(
+        veredicto.motivo,
+        veredicto.motivo === "FALTA_COTEJO"
+          ? "Hay que cotejar la jornada con el ERP antes de cerrarla."
+          : veredicto.motivo === "COTEJO_CADUCADO"
+            ? "El cotejo con el ERP es anterior a los últimos movimientos. Vuelve a cotejar."
+            : "El cotejo con el ERP no cuadra. Revísalo o indica por qué se cierra igual.",
+        409
+      );
+    }
+    const cierreForzado = veredicto.forzado;
 
     // Se reparte lo CONTADO, no lo teórico: si hay descuadre, el dinero que
     // existe de verdad es el contado, y es el que se reparte entre caja y banco.
@@ -1537,6 +1586,21 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       });
     }
 
+    /*
+     * Un cierre forzado se apunta en la jornada, no solo en la auditoría. La
+     * auditoría hay que ir a buscarla; esto sale en el histórico al lado de las
+     * cifras, que es donde alguien se pregunta por qué esta jornada no cuadra.
+     */
+    if (cierreForzado) {
+      await client.query(
+        `UPDATE cash_sessions
+            SET notas = COALESCE(NULLIF(notas, '') || ' · ', '') || $2,
+                updated_at_ms = $3
+          WHERE id = $1`,
+        [e.sessionId, `Cerrada sin el OK del cotejo: ${e.motivoSinCotejo!.trim()}`, ahora]
+      );
+    }
+
     await client.query(
       `UPDATE cash_sessions
           SET estado = 'CLOSED', cerrada_por = $2, cerrada_at_ms = $3,
@@ -1589,6 +1653,7 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       totalIngresoCentimos: reparto.totalIngreso,
       diferenciaCentimos: comparacion.diferencia,
       denominacionesCuadran: comparacion.cuadranDenominaciones,
+      cierreForzado,
     };
   });
 
@@ -1605,6 +1670,9 @@ export async function cerrarJornada(ctx: Contexto, e: EntradaCierre): Promise<Re
       totalIngresoCentimos: resultado.totalIngresoCentimos,
       diferenciaCentimos: resultado.diferenciaCentimos,
       denominacionesCuadran: resultado.denominacionesCuadran,
+      cierreForzado: resultado.cierreForzado,
+      /* Solo cuando se ha forzado: en un cierre normal no hay motivo que contar. */
+      motivoSinCotejo: resultado.cierreForzado ? e.motivoSinCotejo?.trim() : undefined,
     },
     ip: ctx.ip,
   });

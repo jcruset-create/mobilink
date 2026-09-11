@@ -58,6 +58,8 @@ type CajaConfig = {
   codigo: string;
   /** Fondo fijo del cajón. 0 = sin fondo fijo. */
   fondoObjetivoCentimos: number;
+  /** Esta caja no se cierra sin haberla cotejado con el ERP. */
+  exigirCotejoErp: boolean;
   activa: boolean;
   jornadas: string;
   /*
@@ -608,6 +610,7 @@ function Cajas() {
             <th className={thCls}>Centro</th>
             <th className={thCls}>Código</th>
             <th className={`${thCls} text-right`}>Fondo fijo</th>
+            <th className={thCls}>Cotejo para cerrar</th>
             <th className={`${thCls} text-right`}>Jornadas</th>
             <th className={thCls}>Estado</th>
             <th className={thCls}></th>
@@ -696,6 +699,28 @@ function Cajas() {
                     deshabilitado={ocupado}
                     onGuardar={(v) => void accion(() => api.actualizarCaja(c.id, { fondoObjetivoCentimos: v }))}
                   />
+                </td>
+                <td className={tdCls}>
+                  {/*
+                    Apagado por defecto y por caja. Hay mostradores que no
+                    facturan contra Genes: encenderlo para todos los dejaría sin
+                    poder cerrar por una regla que no les toca, y su única salida
+                    sería escribir un motivo falso cada tarde. Una regla que
+                    obliga a mentir para trabajar deja de vigilar nada.
+                  */}
+                  <label className="flex items-center gap-2 text-[11px] text-slate-400">
+                    <input
+                      type="checkbox"
+                      checked={c.exigirCotejoErp}
+                      disabled={ocupado}
+                      onChange={(ev) =>
+                        void accion(() =>
+                          api.actualizarCaja(c.id, { exigirCotejoErp: ev.target.checked })
+                        )
+                      }
+                    />
+                    {c.exigirCotejoErp ? "Obligatorio" : "No se exige"}
+                  </label>
                 </td>
                 <td className={`${tdCls} text-right tabular-nums text-slate-400`}>{c.jornadas}</td>
                 <td className={tdCls}>
