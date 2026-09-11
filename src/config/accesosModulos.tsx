@@ -26,5 +26,5 @@ export const ACCESOS_MODULOS: AccesoModulo[] = [
   { key: "cash",           label: "Cash",            ruta: "/cash/jornada",             icono: <Coins className={cls} /> },
   { key: "central",        label: "Central",         ruta: "/central",                  icono: <Network className={cls} /> },
   { key: "tacografos",     label: "TachoCert",       ruta: "/tacografos",               icono: <Gauge className={cls} /> },
-  { key: "taller",         label: "Panel de taller", ruta: "/",                         icono: <Wrench className={cls} /> },
+  { key: "taller",         label: "Panel de taller", ruta: "/taller",                   icono: <Wrench className={cls} /> },
 ];

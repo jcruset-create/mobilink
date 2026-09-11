@@ -26,6 +26,11 @@ export async function extractJson(opts: {
   text?: string;
   /** URLs http(s) o data: URLs de imágenes a analizar. */
   images?: string[];
+  /**
+   * Documentos a analizar (PDF y demás). Van por `input_file`, no por
+   * `input_image`: un PDF mandado como imagen lo rechaza el proveedor.
+   */
+  archivos?: { nombre?: string; dataUri: string }[];
   maxTokens?: number;
   model?: string;
   /**
@@ -40,8 +45,9 @@ export async function extractJson(opts: {
     return {};
   }
   const images = (opts.images ?? []).filter((u) => typeof u === "string" && u.length > 0);
+  const archivos = (opts.archivos ?? []).filter((a) => a && typeof a.dataUri === "string" && a.dataUri);
   const text = (opts.text ?? "").trim();
-  if (!text && images.length === 0) return {};
+  if (!text && images.length === 0 && archivos.length === 0) return {};
 
   // Toda la comunicación con OpenAI pasa por la capa central (Responses API).
   const r = await pedirIA({
@@ -49,8 +55,9 @@ export async function extractJson(opts: {
     proposito: "asistente",
     prompt: `${opts.system}
 
-${text || "(sin texto: analiza las imágenes)"}`,
+${text || "(sin texto: analiza el material adjunto)"}`,
     imagenes: images.map((url) => ({ url })),
+    archivos: archivos.map((a) => ({ nombre: a.nombre, dataUri: a.dataUri })),
     temperatura: 0.1,
     maxTokens: opts.maxTokens ?? 800,
   });

@@ -10,8 +10,10 @@ const mov = (o: Partial<MovimientoFila> = {}): MovimientoFila => ({
 });
 
 describe("la hora y la fecha del papel", () => {
-  it("la hora sale en HH:MM", () => {
-    expect(hora("2026-09-01T08:05:00")).toBe("08:05");
+  it("la hora sale en HH:MM y en la hora del país, no en UTC", () => {
+    expect(hora("2026-09-01T08:05:00Z")).toBe("10:05");   // verano: UTC+2
+    expect(hora("2026-01-15T08:05:00Z")).toBe("09:05");   // invierno: UTC+1
+    expect(hora("2026-09-01T23:30:00Z")).toBe("01:30");   // ya es el día siguiente
   });
   it("una hora que no existe no se inventa", () => {
     expect(hora(null)).toBeNull();
@@ -19,6 +21,8 @@ describe("la hora y la fecha del papel", () => {
   });
   it("la fecha va como en el papel: dd/mm/aaaa", () => {
     expect(fechaCorta("2026-09-01")).toBe("01/09/2026");
+    // Un timestamp de última hora en UTC ya es el día siguiente en Tarragona.
+    expect(fechaCorta("2026-09-01T23:30:00Z")).toBe("02/09/2026");
   });
 });
 
@@ -111,7 +115,7 @@ describe("servicios y cabecera", () => {
     const p = armarParte({
       numero: "NT-2026-000123", matricula: "1234ABC", flota: "PLANA", km: 245817,
       fecha: "2026-09-01", lugar_servicio: "carretera",
-      inicio_at: "2026-09-01T08:15:00", mecanico_km: 42,
+      inicio_at: "2026-09-01T06:15:00Z", mecanico_km: 42,
       firma_cliente_nombre: "Jordi", firma_cliente_dni: "12345678Z",
     }, []);
     expect(p.numero).toBe("NT-2026-000123");

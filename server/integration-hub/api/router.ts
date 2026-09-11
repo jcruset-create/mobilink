@@ -29,9 +29,11 @@ import {
   knownTechnicalConnectorKeys,
   knownSupplierConnectorKeys,
   knownCommunicationConnectorKeys,
+  knownTelematicsConnectorKeys,
   buildTechnicalConnector,
   buildSupplierConnector,
   buildCommunicationConnector,
+  buildTelematicsConnector,
 } from "../connectors/ConnectorRegistry.ts";
 import { IntegrationError } from "../domain/errors.ts";
 import { nextCorrelationId } from "../infrastructure/repositories.ts";
@@ -71,8 +73,18 @@ function tenantOf(req: Request): string | undefined {
  */
 function requireAdmin(req: Request, res: Response): boolean {
   const accepted = [process.env.ADMIN_TOKEN, process.env.ADMIN_PASSWORD].filter(Boolean) as string[];
-  // Si no hay ninguna credencial configurada, no bloqueamos (entorno de desarrollo).
-  if (accepted.length === 0) return true;
+  // Sin credencial configurada se deja pasar SOLO fuera de producción, que es
+  // para lo que se pensó («entorno de desarrollo»). En producción, una variable
+  // que falta no puede significar «abre la puerta»: si alguien despliega sin
+  // ADMIN_TOKEN, el Hub queda cerrado y se nota enseguida, en vez de quedar
+  // abierto y no notarse nunca.
+  if (accepted.length === 0) {
+    if (process.env.NODE_ENV === "production") {
+      res.status(503).json({ error: "admin_credential_not_configured" });
+      return false;
+    }
+    return true;
+  }
 
   const raw = req.header("x-admin-token") ?? String(req.query?.token ?? "");
   let got = raw;
@@ -107,6 +119,33 @@ function sendError(res: Response, err: unknown) {
 export function createIntegrationHubRouter(): Router {
   const router = express.Router();
 
+  /**
+   * Credencial exigida en TODO el Hub, no solo en /admin.
+   *
+   * Hasta ahora `requireAdmin` se llamaba ruta a ruta y solo en las de /admin.
+   * Las de negocio quedaban abiertas sin ninguna comprobación: crear un
+   * presupuesto de venta, modificar la planificación de un pedido, lanzar un
+   * pedido de compra a un proveedor o mandar un WhatsApp eran llamadas que
+   * cualquiera podía hacer, indicando además con qué tenant, porque el tenant
+   * viaja en una cabecera que pone quien llama.
+   *
+   * El guard sube aquí y cubre el router entero. No rompe a los dos paneles
+   * que lo usan: `api()` en PanelIntegraciones y `hubApi()` en PedidosErpPage
+   * ya mandan `x-admin-token` en todas sus llamadas, también en las de negocio.
+   *
+   * `/health` se queda fuera a propósito: es una sonda de disponibilidad y no
+   * revela datos de nadie.
+   *
+   * Las llamadas a `requireAdmin` que quedan dentro de cada ruta /admin son
+   * ahora redundantes. Se dejan a propósito: no cuestan nada y hacen que una
+   * ruta siga protegida aunque algún día se monte fuera de este router.
+   */
+  router.use((req, res, next) => {
+    if (req.path === "/health") return next();
+    if (!requireAdmin(req, res)) return;
+    next();
+  });
+
   // ── Health ──────────────────────────────────────────────────────────────
   router.get("/health", (_req, res) => {
     res.json({
@@ -116,6 +155,7 @@ export function createIntegrationHubRouter(): Router {
       technicalConnectors: knownTechnicalConnectorKeys(),
       supplierConnectors: knownSupplierConnectorKeys(),
       communicationConnectors: knownCommunicationConnectorKeys(),
+      telematicsConnectors: knownTelematicsConnectorKeys(),
     });
   });
 
@@ -309,12 +349,16 @@ export function createIntegrationHubRouter(): Router {
     if (!requireAdmin(req, res)) return;
     const tenantId = tenantOf(req);
     if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
-    const { enabled, config } = req.body ?? {};
+    // `accountKey` y `name` son opcionales: quien no los mande sigue guardando
+    // la cuenta 'default' de siempre, que es lo que hace el panel hoy.
+    const { enabled, config, accountKey, name } = req.body ?? {};
     const saved = await upsertConnectorConfig({
       tenantId,
       connectorKey: req.params.key,
       enabled: Boolean(enabled),
       config: config ?? {},
+      ...(accountKey ? { accountKey: String(accountKey) } : {}),
+      ...(name !== undefined ? { name: name === null ? null : String(name) } : {}),
     });
     res.json(saved);
   });
@@ -348,6 +392,15 @@ export function createIntegrationHubRouter(): Router {
         const connector = await buildCommunicationConnector(tenantId, key);
         const result = await connector.testConnection(ctx);
         return res.json({ key, ...result });
+      }
+      if (knownTelematicsConnectorKeys().includes(key)) {
+        // La cuenta se puede pedir: en telemática un cliente tiene varias
+        // del mismo proveedor, y probar «la de por defecto» cuando el
+        // problema está en la auxiliar diría que todo va bien.
+        const accountKey = typeof req.query.accountKey === "string" ? req.query.accountKey : undefined;
+        const connector = await buildTelematicsConnector(tenantId, key, accountKey);
+        const result = await connector.testConnection(ctx);
+        return res.json({ key, accountKey: accountKey ?? "default", ...result });
       }
       return res.status(400).json({ error: "unsupported_connector", key });
     } catch (err) {

@@ -56,6 +56,37 @@ cash_erp_configs          integración por empresa/centro (sin secretos en claro
 cash_erp_outbox           eventos pendientes de enviar a la ERP (patrón outbox)
 ```
 
+Lo que se ha ido añadiendo después, por bloques (§7 bis y siguientes):
+
+```
+cash_payment_methods      formas de cobro por empresa (§7 bis)
+cash_payment_rules        reglas por forma de cobro (comercio, recargo…)
+cash_sections             secciones de negocio: taller, gasolinera… (§7 septies)
+cash_change_orders        pedidos de cambio al banco     ┐
+cash_change_order_lines   sus líneas                     │ tesorería
+cash_advances             entregas de dinero a personas  ┘ (§7 ter)
+cash_float_topups         reposiciones: del montón pendiente al cajón
+cash_operation_documents  justificantes; operation_id NULL = de la jornada (§7 quater)
+cash_invoice_scans        rastro de cada escaneo; operation_id NULL si no hubo cobro
+cash_bank_deposits        ingresos bancarios             ┐
+cash_bank_deposit_sessions  qué cierres van en cada uno  │ (§7 quinquies)
+cash_deposit_swaps        canjes de moneda contra el montón
+cash_deposit_swap_sessions  ídem, por cierre             ┘
+cash_banks / cash_bank_accounts  catálogo de bancos y cuentas
+cash_expense_concepts     catálogo de conceptos de gasto ┐ (§7 novies)
+cash_expense_targets      destinos: personas y centros   ┘
+cash_autoscan_devices     PCs con agente                 ┐
+cash_autoscan_activation_codes  altas de un solo uso     │ (§7 undecies)
+cash_autoscan_inbox       lo escaneado, pendiente        ┘
+cash_transfers / cash_transfer_lines  traslados de dinero entre cajas
+cash_duplicate_overrides  pagos repetidos aceptados a propósito
+cash_event_outbox         eventos de dominio hacia MC Central
+cash_reauth               reautenticación para acciones sensibles
+cash_settings             ajustes por empresa
+cash_document_counters    numeración por serie y año
+cash_erp_logs             traza de las llamadas a la ERP
+```
+
 El **stock teórico se reconstruye siempre** sumando
 `cash_denomination_movements` de la jornada. Es la única fuente de verdad; no
 hay saldo acumulado que se pueda desincronizar.
@@ -128,7 +159,8 @@ operación. Una ERP caída nunca revierte un movimiento físico que ya ocurrió.
 
 Rutas `/cash/*`, layout propio con la misma topbar+sidebar que Administración.
 Pantallas: Jornada actual · Cobros · Pagos · Movimientos · Stock de caja ·
-Arqueo · Cierre · Histórico · Integración ERP · Configuración.
+Arqueo · Cierre · Histórico · Informes · Ingresos bancarios · Cambio del banco ·
+Dar cambio · Entregas · Gasto por concepto · Integración ERP · Configuración.
 
 Componente central reutilizable: `DenominationGrid`, la rejilla de −/+ por
 denominación pensada para tablet, que se usa igual en cobro, pago, movimiento,
@@ -487,27 +519,311 @@ Detalles que costaron un fallo en producción:
 - **El motivo es obligatorio** en la pantalla. Un ajuste sin explicación no lo
   entiende nadie un mes después.
 
+## 7 novies. Conceptos de gasto y estadísticas
+
+Un pago llevaba un `concepto` de texto libre, y el texto libre no se puede
+sumar: «gasoil», «Gasoil», «gasóleo» y «combustible» son cuatro conceptos
+distintos para cualquier informe. Así que hay catálogo
+(`cash_expense_concepts`, por empresa) y el texto libre se queda como estaba,
+al lado, para el detalle que no cabe en una etiqueta.
+
+Dos decisiones que sostienen lo demás:
+
+- **Clasificar no es obligatorio.** Obligar pararía el mostrador el día que
+  falte una entrada del catálogo, y lo que se rellenaría entonces sería lo
+  primero que hubiera a mano — que es peor que no clasificar, porque parece un
+  dato. Lo sin clasificar sale **aparte y contado** en las estadísticas, no
+  repartido a ojo.
+- **`codigo` no se puede cambiar**, igual que en las formas de cobro: es lo que
+  queda escrito en las operaciones. El nombre sí, y arrastra a las pantallas a
+  propósito.
+
+Cada concepto declara `tipo_destino` (`NINGUNO` | `PERSONA` | `CENTRO_COSTE`),
+que es **qué segundo desplegable pide**. Los destinos van en **una sola tabla**
+(`cash_expense_targets`) con su tipo, no en dos: un operario y un centro de
+coste se manejan igual —nombre, activo, orden— y dos tablas gemelas serían dos
+CRUD, dos pantallas y dos sitios donde arreglar el mismo fallo.
+
+El destino **cuelga del concepto**: cambiar el concepto invalida el destino
+elegido y la pantalla lo limpia. Dejarlo puesto guardaría un operario bajo un
+concepto que no imputa a nadie.
+
+**Gasto por concepto** (`server/cash/expensestats.ts`, pantalla del mismo
+nombre) es lo que justifica todo esto: gasto por concepto y por periodo,
+desglose por destino, comparación contra el periodo anterior de la misma
+longitud, por centro y consolidado por empresa. Sin gráficas de librería: las
+barras son CSS, porque una dependencia nueva por cuatro rectángulos no se paga.
+
+El periodo por defecto es el mes en curso, y calcularlo tiene una trampa que
+está probada aparte (`utils/periodo.ts`): el servidor va en UTC y el taller en
+Madrid, así que en verano el día 1 a las 00:30 de Madrid son todavía las 22:30
+del día anterior en UTC. Un `mesEnCurso` ingenuo enseñaría el mes pasado
+durante dos horas cada noche de cambio de mes.
+
+## 7 decies. Reabrir una jornada
+
+Se cierra la caja y aparece una factura que se cobró y no se apuntó. El
+histórico deja **reabrir** la jornada, corregir y volver a cerrar.
+
+Es la acción más delicada del módulo, porque permite recerrar con otras cifras
+—y con ellas cambia el importe que va al banco y lo que se le contó a la
+gestoría—. De ahí las cinco puertas, todas dentro de la transacción:
+
+- **Exige motivo**, que queda auditado.
+- **Solo una jornada `CLOSED`.**
+- **Separación de funciones**: quien cerró no reabre. Es la otra mitad del
+  camino que abre la anulación.
+- **Ninguna otra jornada abierta en esa caja** (`JORNADA_YA_ABIERTA`).
+- **Ninguna conciliación viva**: si el importe ya forma parte de un ingreso
+  bancario confirmado, primero se anula el ingreso (`JORNADA_CONCILIADA`).
+
+Y **es permiso de admin, no de responsable** — el superadministrador entra como
+admin. Un responsable corrige dentro de su jornada; deshacer una ya cerrada
+sube un escalón.
+
+Lo que hace por dentro: **deshacer lo que el cierre asentó**, en orden inverso
+(`id DESC`) y con el mismo código que la anulación manual (`asentarReversion`),
+sin la comprobación de separación de funciones, que ya se hizo arriba. Se
+revierten el cambio final, el ingreso bancario y los ajustes del cierre; y se
+limpian del `cash_sessions` las cifras del cierre.
+
+Los ajustes del cierre se reconocen **por su concepto**, no por la marca de
+tiempo, y los tres textos viven en `CONCEPTOS_DEL_CIERRE` junto al código que
+los escribe. Si esa lista y quien los pone se separan, el ajuste dejaría de
+deshacerse. Lo que **no** se toca es «Regularización de arqueo»: ése lo tecleó
+una persona a media mañana y responde a un descuadre real.
+
+### Tres fallos que costaron dinero de verdad
+
+Los tres salieron de la misma caja, en cascada, y cada uno tapaba al siguiente.
+Vale la pena que queden escritos.
+
+1. **`reabrir` solo cambiaba el estado.** No deshacía nada. El cambio final
+   quedaba asentado dos veces y aparecía un descuadre de arqueo fantasma por el
+   importe exacto del cambio. Es también lo que encendía el aviso
+   `denominaciones ≠`.
+
+2. **Las consultas sumaban salidas en vez de netear.** `composicionDeCierre` y
+   dos de `bankdeposits.ts` filtraban `direccion = 'OUT'`, así que una reversión
+   —que entra por `IN` con el mismo motivo— no restaba nada. Afectaba también a
+   anular un cambio final a mano desde el histórico, no solo a reabrir. Y era
+   lo que hacía desaparecer una reposición de fondo de los ingresos bancarios.
+
+3. **La reversión perdía los precintos.** `movimientosDeOperacion` leía
+   `direccion, motivo, valor, cantidad` y **no leía `cartuchos` ni `bolsas`**.
+   Esas filas son las que usa la reversión para asentar el movimiento
+   contrario, así que toda reversión devolvía las monedas **como sueltas**
+   aunque hubieran salido precintadas. En el neteo por columnas eso no se
+   compensa jamás: los cartuchos de la original se quedaban dentro (+2 contra
+   −0) mientras las sueltas netean en negativo y las descartaba el filtro. Cada
+   vuelta de reabrir y recerrar dejaba los suyos.
+
+   Lo que despistó: como el sobrante estaba en **moneda precintada**, los
+   importes dejaron de ser múltiplos del cambio. Sobre 337 € de cierre, la
+   primera herencia mala fue 674 € —el cambio exacto dos veces, que señalaba al
+   fallo 1—, pero una vez arreglado ése vinieron 485,70 y 567,10, que no se
+   parecen a nada. Ahí se acabaron las hipótesis fáciles y hubo que pedir el
+   detalle de operaciones de la jornada: sus cuatro cierres anulados con sus
+   cuatro reversiones neteaban los 337 € correctos **en euros**, lo que
+   demostraba que la fuga estaba en una columna que no netea.
+
+Y la lección de método, que es la que se repite: **una sola vuelta de reabrir
+no destapa el fallo 3**. Las sueltas de más tapan exactamente los cartuchos que
+se quedan dentro, el total sale redondo y la prueba pasa en verde con el fallo
+puesto. La primera versión del test lo hacía y no valía nada. Hay que **cerrar
+dos veces con precintos**, que es lo que hizo el mostrador.
+
+### Y la reparación de lo ya escrito
+
+Arreglar los tres sirve para lo que venga. Las filas que ya están en el libro
+con los precintos a cero siguen ahí — y el libro es inmutable, no se toca.
+
+La reparación está en **quién manda al leer**. `cantidad` guarda siempre las
+piezas totales, precintadas incluidas, y es de donde sale el stock teórico, que
+por eso **nunca se equivocó**: daba el número correcto sobre las mismas filas
+que la composición del cierre leía mal. Esa discrepancia era la señal.
+
+Así que `composicionDeCierre` parte de las piezas netas y los contadores de
+envase solo **reparten**, recortados para no pasarse: primero la bolsa —que
+contiene varios cartuchos— y lo que sobra queda suelto. Si la jornada lo
+devolvió todo, las piezas netas son cero y no se hereda nada por mucho cartucho
+que digan las columnas. Sobre datos sanos no cambia nada, porque el recorte no
+recorta; sobre los rotos, se reparan solos al leerlos.
+
+## 7 undecies. AutoScan (agente de Windows)
+
+El justificante se escanea en el mostrador y tiene que aparecer en Mobilink sin
+que nadie suba nada a mano. El escáner deja el PDF en una carpeta vigilada y un
+agente lo sube.
+
+Reparto: `cash_autoscan_devices` (un PC dado de alta),
+`cash_autoscan_activation_codes` (alta por código de un solo uso) y
+`cash_autoscan_inbox` (lo subido, a la espera de que alguien lo enganche a un
+cobro o a un pago desde la bandeja).
+
+Decisiones que conviene no reabrir:
+
+- **Del dispositivo solo se guarda el hash del secreto.** Una copia de la base
+  de datos no debe permitir subir nada.
+- **El dispositivo no elige su centro**: lo hereda del código con el que se
+  activó, y ese código lo creó una persona. Si pudiera declararlo, un PC
+  cualquiera subiría documentos a cualquier centro.
+- **No se sube en cuanto salta el evento del sistema de ficheros.** El escáner
+  todavía está escribiendo: hay que esperar a que el tamaño se estabilice. Un
+  PDF a medias sube igual de bien y no se puede leer.
+- **Nada se borra**: lo entregado se mueve a `Sent`, lo rechazado a `Failed`.
+- **Se apunta en SQLite ANTES de subir**, así que un corte de luz no pierde el
+  documento: al arrancar se rescata lo que quedó a medias y se termina de
+  archivar lo entregado, y eso pasa **antes** de subir nada nuevo, para no
+  duplicar.
+- **Una sola instancia, y el portero es el puerto.** Dos agentes sobre la misma
+  carpeta se pisarían al archivar. No hace falta fichero de bloqueo con su PID
+  y su limpieza tras un cuelgue: el panel ya ocupa un puerto y el sistema
+  operativo no deja ocuparlo dos veces.
+- **Sin credencial no se para: se espera.** Un agente recién instalado no tiene
+  credencial y ése es su estado normal hasta que alguien pega el código. Salir
+  con error dejaría al técnico sin bandeja donde escribirlo.
+- **Tarea programada al iniciar sesión, no servicio.** DPAPI cifra la
+  credencial con ámbito `CurrentUser`; como servicio no podría leerla.
+
+El agente vive en `autoscan_agent/` (Node + TypeScript, sin Electron ni Tauri),
+con su bandeja en PowerShell y su instalador. **Los `.ps1` no se han ejecutado
+nunca**: en el entorno de desarrollo no hay PowerShell. Están tipados y
+revisados, que no es lo mismo que probados.
+
+De ahí el único pendiente de AutoScan: **probarlo en un PC del mostrador**. El
+guion, paso a paso y con qué mirar cuando algo falle, está en
+`docs/autoscan/PRUEBA-EN-WINDOWS.md`. Hasta pasarlo, no se instala en más de un
+mostrador.
+
+## 7 duodecies. Cotejar la caja del ERP con la de Mobilink
+
+Se copia la pantalla de arqueo del ERP (Genes), se pega en «Cotejar con el ERP»
+con Ctrl+V, y sale la comparación línea a línea: qué cuadra, qué falta en
+Mobilink, qué sobra y qué no se ha podido emparejar con seguridad.
+
+Cuatro piezas, y solo la primera habla con el modelo:
+
+| Pieza | Dónde | Qué decide |
+|---|---|---|
+| Lectura | `domain/lecturaErp.ts` | Qué de lo que el modelo dice haber leído se puede usar |
+| Equivalencias | `cash_erp_payment_map` | Qué etiqueta del ERP es qué forma de cobro de aquí |
+| Cotejo | `domain/cotejo.ts` | Qué línea del ERP es qué operación de Mobilink |
+| Pegamento | `cotejoErp.ts` | Junta las tres. No decide nada |
+
+**No registra nada.** Ni un INSERT: los cobros se siguen metiendo por Cobros,
+con sus validaciones y su detalle de piezas. Un botón que creara movimientos a
+partir de una captura es la automatización que sale mal en silencio el día que
+el modelo lea 377,24 como 377,74.
+
+**La captura no se guarda.** Se manda al modelo, se lee y se tira. Lleva
+nombres de clientes y números de factura.
+
+**La comprobación que lo sostiene.** El ERP imprime su propia suma («Sum =
+887,40»); se le pide al modelo que la lea también y se contrasta con la suma de
+las líneas. Si no cuadran, la lectura no vale y no se enseña ningún cotejo:
+diría «falta este cobro» por una línea que el modelo no supo leer, y alguien
+acabaría metiéndola dos veces. Ojo con lo que esta red **no** caza: contrasta
+importes, así que un error en la *forma de pago* pasa por debajo.
+
+**El emparejamiento manda la referencia.** Tres pasadas, de más segura a menos:
+referencia, importe+forma, y mismo importe con forma distinta. La tercera va la
+última a propósito —antes le robaría la pareja buena a otra línea— y su
+resultado **no cuenta como cuadrado**. Con dos candidatos del mismo importe no
+se elige: se declara ambiguo. Un emparejamiento inventado es peor que un hueco
+señalado, porque el hueco se ve y el invento no.
+
+### Las etiquetas que el ERP corta
+
+El ERP recorta la columna de forma de pago según la resolución del monitor: la
+misma etiqueta se lee `Datáfono Clearon...` en un PC y `Datáfono Clearone
+ta...` en otro. Compararlas letra a letra hace que el cotejo dependa de con qué
+ordenador se hizo la captura, que no tiene nada que ver con la caja.
+
+Por eso la comparación va en dos capas, y **son dos funciones distintas a
+propósito**:
+
+- `etiquetaNormalizada` es cómo se **guarda**: mayúsculas y espacios
+  colapsados, nada más. Lo que se ve en Configuración se parece a lo que se
+  tecleó.
+- `claveDeCotejo` es cómo se **compara**: además quita acentos y los puntos del
+  recorte final. El modelo lee «Datafono» tan a menudo como «Datáfono».
+
+Y encima, `resolverFormaErp`: igual → una es prefijo de la otra (**en los dos
+sentidos**, porque la etiqueta guardada también puede venir recortada de la
+pantalla de quien la configuró) → nada. Con **varias que encajan no se elige
+ninguna**, y eso se dice como «ambigua», que no es lo mismo que «sin
+configurar»: mandar a alguien a crear una equivalencia que ya existe es hacerle
+perder la tarde. El mínimo de cuatro letras evita que un «TP...» empareje con
+cualquier cosa.
+
+Lo resuelto por prefijo **se enseña en la pantalla**, con qué equivalencia ha
+casado. Es una deducción, no un dato, y el día que empareje mal tiene que haber
+dónde verlo.
+
+### No se cierra sin haber cotejado
+
+Regla de caja, no de pantalla: `cerrarJornada` la comprueba, igual que ya
+comprobaba que hubiera arqueo. Y es **puerta con llave, no muro**.
+
+**Por caja, y apagado por defecto** (`cash_registers.exigir_cotejo_erp`). Hay
+mostradores que no facturan contra Genes; encenderlo para todos los dejaría sin
+poder cerrar por una regla que no les toca, y su única salida sería escribir un
+motivo falso cada tarde. Una regla que obliga a mentir para trabajar deja de
+vigilar nada.
+
+**Se puede forzar, pero firmando.** El parámetro es el MOTIVO, no un booleano
+—un `true` se manda sin pensar— y queda escrito en las notas de la jornada y en
+la auditoría. Hace falta que se pueda: si el servicio que lee la captura está
+caído, no hay manera humana de cotejar y la caja tiene que cerrarse igual.
+
+**Un cotejo caduca**, y es la mitad de su valor. Cotejar a las seis, meter dos
+cobros a las siete y cerrar a las ocho enseñando el OK de las seis es peor que
+no cotejar: da por revisado algo que nadie ha mirado. Cada cotejo se guarda con
+una **huella** de la jornada —último id de operación y suma de importes, de las
+vivas— y si al cerrar no coincide, el OK no vale.
+
+El número de operaciones estuvo en la huella y se quitó: ninguna prueba podía
+matarlo, porque todo importe es mayor que cero y cualquier cambio en cuántas hay
+mueve la suma por fuerza.
+
+De cada cotejo se guardan **solo cifras** (`cash_erp_reconciliations`): cuántas
+líneas, cuántas cuadraron, por cuánto. Ni la captura, ni las líneas, ni un
+nombre de cliente.
+
 ## 8. Estado de la entrega
 
-Implementado y probado:
+El módulo está **en producción y en uso diario**. Implementado y probado:
 
 - Motor de dominio completo, con contraste contra búsqueda exhaustiva.
 - Esquema, migración y alta del módulo `cash` en `app_licencias`.
 - Servicio transaccional, API `/api/cash/*` y montaje en `server/index.ts`.
-- Conector ERP + mock + outbox con reintentos e idempotencia.
-- Las diez pantallas del módulo, dadas de alta en `/inicio` y en `modulosApp`.
-- Configuración: alta, renombrado y baja de cajas físicas, y edición del
-  catálogo de denominaciones, cartuchos y bolsas, con la foto de cada billete y
-  cada moneda. Con dos protecciones que evitan dejar
-  el módulo en un estado sin salida: no se toca una caja con la jornada abierta
+- Conector ERP + mock + **conector real de Business Central** + outbox con
+  reintentos e idempotencia.
+- Las dieciséis pantallas del módulo, dadas de alta en `/inicio` y en
+  `modulosApp`.
+- Configuración: cajas físicas, catálogo de denominaciones con cartuchos y
+  bolsas y la foto de cada pieza, formas de cobro, secciones de negocio,
+  conceptos de gasto y destinos. Con dos protecciones que evitan dejar el
+  módulo en un estado sin salida: no se toca una caja con la jornada abierta
   (quedaría dinero contado en una caja invisible que nadie podría cerrar), y no
   se desactiva una denominación que aún tiene piezas en una caja abierta (el
   arqueo no podría contarla ni el cierre sacarla).
+- Tesorería (cambio del banco y entregas), ingresos bancarios con su remanente,
+  justificantes e informes en PDF, días atrasados, reabrir jornada,
+  estadísticas de gasto y el agente de AutoScan.
 
-**975 pruebas en verde** (`npm test`), de las cuales 159 son de Mobilink Cash y
-68 corren contra PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del
-encargo sin ERP, concurrencia sobre la última pieza, ERP caída y reintento
-idempotente.
+**755 pruebas** cubren Mobilink Cash, sus pantallas y el agente, dentro de una
+suite de **3.035 en verde** (`npm test`). Las de integración corren contra
+PostgreSQL real (`RUN_DB_TESTS=1`): escenario completo del encargo sin ERP,
+concurrencia sobre la última pieza, ERP caída y reintento idempotente, y los
+casos de reabrir que se cuentan en §7 decies.
+
+> Al validar, **crear la base de datos desde cero** (`DROP DATABASE ci_test;
+> CREATE DATABASE ci_test`). La base de desarrollo persistida esconde los
+> fallos de esquema, que es justo lo que hay que ver. Y `npx tsc -b` **no**
+> comprueba `server/`: hacen falta los tres —`tsconfig.server.json`, el del
+> panel y el de `autoscan_agent/`—.
 
 Para estrenarlo hace falta, una sola vez, y los tres pasos se hacen desde la
 interfaz —no hace falta tocar la base de datos a mano:
@@ -517,19 +833,34 @@ interfaz —no hace falta tocar la base de datos a mano:
    arrancar el servidor; la licencia no, porque es una decisión comercial.
 2. **Permisos**: Administración → Usuarios, una fila por usuario en el módulo
    Mobilink Cash con su rol (`cajero` para mostrador, `responsable` para quien
-   abre y cierra).
+   abre y cierra, `admin` para quien puede reabrir).
 3. **La primera caja**: Mobilink Cash → Configuración. Sin ninguna caja dada de
    alta no se puede abrir jornada, así que este paso no es opcional.
 
-Queda fuera de esta fase, y conviene decirlo:
+Y dos que no son obligatorios pero que la gente echa de menos si faltan: los
+**conceptos de gasto** —sin ninguno dado de alta, el desplegable de Pagos no
+aparece, a propósito— y las **credenciales de Business Central** por variables
+de entorno, sin las cuales el conector ni siquiera se registra.
 
-- **Conector de una ERP real.** Solo está el mock. Escribir el de Business
-  Central (o Sage, o A3) es implementar `ICashErpConnector` y registrarlo; el
-  motor de caja no cambia.
+## 9. Lo que queda fuera, y por qué
+
+> Antes de nada, lo que NO queda fuera sino **pendiente**: la prueba de AutoScan
+> en un PC del mostrador (`docs/autoscan/PRUEBA-EN-WINDOWS.md`). Es lo único
+> entregado que todavía no se ha visto funcionar en su sitio.
+
+
 - **Webhooks de entrada** (`invoice.created`, `invoice.updated`…). El modelo los
-  admite —`cash_external_documents` ya hace upsert por
-  `(empresa, sistema, id)`— pero no hay endpoint de recepción.
-- **PDF del ingreso bancario.** Ahora se imprime la pantalla. El repo ya usa
-  `pdfkit` en `server/index.ts`, así que generarlo es un añadido pequeño.
-- **Exportación de una operación manual a la ERP.** El modelo lo permite
-  (`source = MANUAL` + `erp_sync_status`), pero no hay acción de interfaz.
+  admite —`cash_external_documents` ya hace upsert por `(empresa, sistema, id)`—
+  pero no hay endpoint de recepción: hoy los documentos externos solo llegan
+  cuando alguien los consulta. Es lo que más valor tiene si se va en serio con
+  Business Central.
+- **Exportar a la ERP una operación tecleada a mano.** Solo se sincroniza lo que
+  viene de un documento externo (`sincronizable` lo exige). El modelo lo permite
+  (`source = MANUAL` + `erp_sync_status`); faltan la decisión de negocio y el
+  botón.
+- **Autoactualización del agente de AutoScan.** El `actualizar.ps1` está
+  escrito y el dispositivo ya reporta su `version` en el latido, pero no hay
+  canal de publicación: nadie ha decidido de dónde se baja la versión nueva.
+- **Conectores de otras ERP** (Sage, A3, Odoo). Es implementar
+  `ICashErpConnector` y apuntarlo en `erp/registry.ts`; el motor de caja no
+  cambia. Business Central sirve de plantilla.

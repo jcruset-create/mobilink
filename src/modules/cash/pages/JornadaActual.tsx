@@ -15,6 +15,7 @@ import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, Modal, btnDanger, btnSeco
 import { euros, totalLineas } from "../utils/money";
 import { ETIQUETA_ESTADO_SESION, ETIQUETA_FORMA_PAGO } from "../types";
 import type { FormaPagoConfig, Operacion, SeccionConfig } from "../types";
+import Justificantes from "../components/Justificantes";
 import { AvisoPendientes } from "./CambioBanco";
 import * as api from "../services/api";
 
@@ -285,6 +286,8 @@ function DetalleDelDia({ sessionId }: { sessionId: number }) {
         formasPago={formasPago}
         secciones={secciones}
         puedeReclasificar={puede("cash.configure")}
+        puedeAdjuntar={puede("cash.document.attach")}
+        puedeAnularDocumento={puede("cash.document.void")}
         onSeccion={cambiarSeccion}
         cargando={cargando}
         onActualizar={() => void cargar()}
@@ -296,6 +299,8 @@ function DetalleDelDia({ sessionId }: { sessionId: number }) {
         formasPago={formasPago}
         secciones={secciones}
         puedeReclasificar={puede("cash.configure")}
+        puedeAdjuntar={puede("cash.document.attach")}
+        puedeAnularDocumento={puede("cash.document.void")}
         onSeccion={cambiarSeccion}
         cargando={cargando}
         onActualizar={() => void cargar()}
@@ -312,6 +317,8 @@ function ListaOperaciones({
   formasPago,
   secciones,
   puedeReclasificar,
+  puedeAdjuntar,
+  puedeAnularDocumento,
   onSeccion,
   cargando,
   onActualizar,
@@ -323,6 +330,8 @@ function ListaOperaciones({
   formasPago: FormaPagoConfig[];
   secciones: SeccionConfig[];
   puedeReclasificar: boolean;
+  puedeAdjuntar: boolean;
+  puedeAnularDocumento: boolean;
   onSeccion: (operationId: number, sectionId: number | null) => void;
   cargando: boolean;
   onActualizar: () => void;
@@ -421,6 +430,25 @@ function ListaOperaciones({
                       formasPago={formasPago}
                     />
                   ))}
+                </div>
+
+                {/*
+                  El justificante, aquí y no solo en el Histórico.
+
+                  La factura del proveedor aparece muchas veces DESPUÉS del
+                  pago, y hasta ahora había que acordarse de ir al Histórico a
+                  buscar la operación. Puesto en la lista del día, adjuntar es
+                  el mismo gesto que mirar, y de paso se ve de un vistazo qué
+                  ha quedado sin papel — que es lo que se descubre tarde, al
+                  cerrar o al pedirlo la gestoría.
+                */}
+                <div className="mt-1">
+                  <Justificantes
+                    operationId={o.id}
+                    puedeAdjuntar={puedeAdjuntar}
+                    puedeAnular={puedeAnularDocumento}
+                    compacto
+                  />
                 </div>
               </div>
 

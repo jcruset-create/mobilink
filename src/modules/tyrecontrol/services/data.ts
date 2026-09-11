@@ -2179,13 +2179,36 @@ export async function actualizarCosteOperacion(id: string, patch: {
 }
 
 // ── Webfleet: credenciales por empresa (cliente) ─────────────
+//
+// Las credenciales son de ESCRITURA, no de lectura: se pueden guardar desde el
+// panel, pero no se traen nunca al navegador. Antes se pedía `select("*")`, que
+// incluye `password` y `apikey`, y las contraseñas de Webfleet del cliente
+// acababan en memoria del front al abrir la pantalla de configuración.
+//
+// El backend no se ve afectado: lee la tabla con service_role para sincronizar.
+const CAMPOS_WEBFLEET_VISIBLES = "empresa_id, account, username, base_url, activo";
+
+/** Configuración de Webfleet SIN los secretos. Nunca devuelve password ni apikey. */
 export async function obtenerWebfleetConfig(empresaId: string): Promise<WebfleetConfig | null> {
-  const { data, error } = await supabase.from("tc_webfleet_config").select("*").eq("empresa_id", empresaId).maybeSingle();
+  const { data, error } = await supabase.from("tc_webfleet_config")
+    .select(CAMPOS_WEBFLEET_VISIBLES).eq("empresa_id", empresaId).maybeSingle();
   if (error) throw new Error(error.message);
   return (data as WebfleetConfig) ?? null;
 }
 
-export async function guardarWebfleetConfig(empresaId: string, patch: Partial<Omit<WebfleetConfig, "empresa_id">>): Promise<void> {
+/** Lo que se puede escribir: la config visible, más los secretos (que no se leen). */
+export type WebfleetConfigPatch = Partial<Omit<WebfleetConfig, "empresa_id">> & {
+  password?: string | null;
+  apikey?: string | null;
+};
+
+/**
+ * Guarda la configuración. Los secretos son opcionales a propósito: si no
+ * vienen en el patch, el upsert no los toca y conservan su valor. Así el panel
+ * puede guardar «base_url» o desactivar la integración sin tener que conocer la
+ * contraseña, que es justo lo que ya no puede leer.
+ */
+export async function guardarWebfleetConfig(empresaId: string, patch: WebfleetConfigPatch): Promise<void> {
   const { error } = await supabase.from("tc_webfleet_config")
     .upsert({ empresa_id: empresaId, ...patch, updated_at: new Date().toISOString() }, { onConflict: "empresa_id" });
   if (error) throw new Error(error.message);
@@ -2211,6 +2234,39 @@ export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> 
 }
 
 // Lanza un ciclo de sincronización en el backend y devuelve nº actualizados.
+/** De dónde salen hoy las credenciales de Webfleet de un cliente. */
+export type OrigenCredencialesWebfleet = "secretos" | "tabla" | "globales" | "ninguno";
+
+export type EstadoWebfleet = {
+  origen: OrigenCredencialesWebfleet;
+  configurado: boolean;
+  /** Presentes solo si se pidió probar la conexión. */
+  probado?: boolean;
+  ok?: boolean;
+  mensaje?: string;
+  vehiculos?: number;
+};
+
+/**
+ * Estado de la integración Webfleet de un cliente.
+ *
+ * Lo pregunta al backend en vez de deducirlo de la tabla, porque desde que las
+ * credenciales pueden vivir en el gestor de secretos la tabla ya no cuenta toda
+ * la verdad: un cliente migrado, con la tabla vacía, funciona perfectamente.
+ *
+ * Nunca devuelve credenciales, solo su procedencia. Con `probar` hace una
+ * llamada real a Webfleet.
+ */
+export async function obtenerEstadoWebfleet(empresaId: string, probar = false): Promise<EstadoWebfleet> {
+  const qs = new URLSearchParams({ empresa: empresaId });
+  if (probar) qs.set("probar", "1");
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/webfleet/estado?${qs}`, {
+    headers: await authHeaders(),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return (await r.json()) as EstadoWebfleet;
+}
+
 export async function sincronizarWebfleet(): Promise<{ actualizados?: number; error?: string }> {
   const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/webfleet/sync`, {
     method: "POST",

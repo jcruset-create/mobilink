@@ -1850,9 +1850,19 @@ export function createCashRouter(): Router {
         throw new ErrorCaja("DOCUMENTO_NO_ENCONTRADO", "Ese documento no existe.", 404);
       }
       const { propuestaDeEscaneo } = await import("./invoice-scan/service.ts");
+      /*
+       * El MISMO documento se abre desde Cobros y desde Pagos: la bandeja es
+       * una sola por centro y el papel no sabe si es una venta o una compra.
+       * Lo que cambia con el sentido no es la extracción —ya está hecha— sino
+       * contra qué se mira el duplicado.
+       */
+      const sentido = req.query.sentido === "PAGO" ? "PAGO" : "COBRO";
       res.json({
         documento: doc,
-        propuesta: doc.scanId == null ? null : await propuestaDeEscaneo(req.authCtx!.empresaId, doc.scanId),
+        propuesta:
+          doc.scanId == null
+            ? null
+            : await propuestaDeEscaneo(req.authCtx!.empresaId, doc.scanId, sentido),
       });
     })
   );
@@ -1934,18 +1944,43 @@ export function createCashRouter(): Router {
    */
   r.post(
     "/invoice-scan",
-    exigirPermiso("cash.collection.create_manual"),
+    /*
+     * El permiso depende del SENTIDO, y por eso se mira aquí dentro en vez de
+     * con `exigirPermiso`. Antes esta ruta pedía siempre el permiso de cobro
+     * manual, así que quien solo puede pagar no podía ni escanear el ticket de
+     * su compra — la funcionalidad existía y le estaba cerrada.
+     *
+     * El sentido llega en el cuerpo, y como es multipart tiene que ir ANTES
+     * del fichero para que multer lo deje en `req.body`. Por eso no se confía
+     * en que venga: sin él, se asume COBRO, que es el comportamiento de
+     * siempre.
+     */
     subida(subidaDocumento.single("documento"), 15),
     ruta(async (req, res) => {
       if (!req.file) {
         throw new ErrorCaja("ENTRADA_NO_VALIDA", "No ha llegado ningún documento.", 400);
       }
       const b = req.body ?? {};
+      const sentido = b.sentido === "PAGO" ? "PAGO" : "COBRO";
+      const permiso =
+        sentido === "PAGO" ? "cash.payment.create_manual" : "cash.collection.create_manual";
+      if (!req.cashPermisos?.includes(permiso)) {
+        return res.status(403).json({
+          error:
+            sentido === "PAGO"
+              ? "No tienes permiso para registrar pagos manuales."
+              : "No tienes permiso para registrar cobros manuales.",
+          code: "PERMISO_DENEGADO",
+          permiso,
+        });
+      }
+
       const propuesta = await escanearFactura({
         empresaId: req.authCtx!.empresaId,
         userId: req.authCtx!.userId ?? null,
         sessionId: b.sessionId ? enteroPositivo(b.sessionId, "sessionId") : null,
         fichero: req.file,
+        sentido,
       });
       res.json({ propuesta });
     })
@@ -2043,6 +2078,18 @@ export function createCashRouter(): Router {
         externalDocumentReference:
           typeof b.externalDocumentReference === "string" ? b.externalDocumentReference : null,
         /*
+         * En qué se ha gastado y a quién se imputa. Los dos opcionales: quien
+         * no los mande registra el pago igual, como hasta ahora. La coherencia
+         * entre los dos —que el destino sea del tipo que pide el concepto— la
+         * comprueba el servicio dentro de la transacción, no aquí.
+         */
+        expenseConceptId: b.expenseConceptId
+          ? enteroPositivo(b.expenseConceptId, "expenseConceptId")
+          : null,
+        expenseTargetId: b.expenseTargetId
+          ? enteroPositivo(b.expenseTargetId, "expenseTargetId")
+          : null,
+        /*
          * Los pagos no preguntan la sección: van todos al negocio principal.
          * El campo se guarda igual, relleno con la sección por defecto, para
          * que el día que se quiera imputar el gasto a cada negocio no haya que
@@ -2097,6 +2144,217 @@ export function createCashRouter(): Router {
   );
 
   // ── Secciones de negocio ─────────────────────────────────────────────────
+
+  /**
+   * En qué se va el dinero. Solo lectura.
+   *
+   * `centro` vacío = consolidado de toda la empresa. Pero si el usuario está
+   * limitado a un taller, manda su ámbito: pedir el consolidado no puede ser la
+   * forma de ver el gasto de los centros que no te tocan.
+   */
+  r.get(
+    "/expense-stats",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const q = req.query;
+      const g = q.granularidad;
+      const { informeDeGasto } = await import("./expensestats.ts");
+      res.json(
+        await informeDeGasto(
+          {
+            empresaId: req.authCtx!.empresaId,
+            desde: String(q.desde ?? ""),
+            hasta: String(q.hasta ?? ""),
+            granularidad: g === "dia" || g === "mes" || g === "anio" ? g : "mes",
+            centroId:
+              req.cashCentroId ?? (typeof q.centro === "string" && q.centro ? q.centro : null),
+            conceptoId: q.conceptoId ? enteroPositivo(q.conceptoId, "conceptoId") : null,
+          },
+          q.comparar === "1" || q.comparar === "true"
+        )
+      );
+    })
+  );
+
+  // ── Conceptos de gasto y sus destinos ────────────────────────────────────
+
+  /*
+   * Los lee cualquiera que pueda ver caja: son los desplegables de Pagos. Solo
+   * quien configura puede tocarlos, igual que las secciones y las formas.
+   */
+  r.get(
+    "/expense-concepts",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const tipo = req.query.tipo;
+      res.json({
+        conceptos: await config.listarConceptos(req.authCtx!.empresaId),
+        destinos: await config.listarDestinos(
+          req.authCtx!.empresaId,
+          tipo === "PERSONA" || tipo === "CENTRO_COSTE" ? tipo : undefined
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/expense-concepts",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json({
+        concepto: await config.crearConcepto(contexto(req), {
+          nombre: typeof b.nombre === "string" ? b.nombre : "",
+          tipoDestino:
+            b.tipoDestino === "PERSONA" || b.tipoDestino === "CENTRO_COSTE"
+              ? b.tipoDestino
+              : "NINGUNO",
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
+
+  r.patch(
+    "/expense-concepts/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        concepto: await config.actualizarConcepto(contexto(req), enteroPositivo(req.params.id, "id"), {
+          nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+          tipoDestino:
+            b.tipoDestino === "PERSONA" || b.tipoDestino === "CENTRO_COSTE" || b.tipoDestino === "NINGUNO"
+              ? b.tipoDestino
+              : undefined,
+          activo: typeof b.activo === "boolean" ? b.activo : undefined,
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
+
+  /**
+   * Cotejar una captura del ERP contra la jornada.
+   *
+   * Solo LEE: ni crea cobros ni toca nada. Por eso basta permiso de vista —el
+   * mismo con el que ya se ven todas esas operaciones en Movimientos— y no el
+   * de configurar.
+   *
+   * La captura viaja en el cuerpo como data-URI y NO se guarda: se manda al
+   * modelo, se lee y se tira. Lleva nombres de clientes y números de factura, y
+   * guardarla sería crear un depósito de datos personales que nadie ha pedido.
+   */
+  r.post(
+    "/sessions/:id/erp-reconcile",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const sessionId = enteroPositivo(req.params.id, "id");
+      const { cotejarCapturaErp } = await import("./cotejoErp.ts");
+      const { registrarCotejo } = await import("./cotejoRegistro.ts");
+
+      const resultado = await cotejarCapturaErp(req.authCtx!.empresaId, {
+        sessionId,
+        imagen: typeof b.imagen === "string" ? b.imagen : "",
+      });
+
+      /*
+       * Queda apuntado que se ha cotejado, con sus cifras y sin la captura. Es
+       * lo que luego mira el cierre para saber si esta jornada la ha revisado
+       * alguien. Se apunta también la lectura bloqueante —como NO cuadrada—
+       * porque pegar una captura ilegible no es haber cotejado, pero enterarse
+       * de que se intentó vale para entender un cierre forzado.
+       */
+      await registrarCotejo(
+        req.authCtx!.empresaId,
+        sessionId,
+        req.authCtx!.userId ?? null,
+        resultado.informe
+      );
+
+      res.json(resultado);
+    })
+  );
+
+  /* Lo que la pantalla de Cierre necesita para avisar ANTES de que pulsen. */
+  r.get(
+    "/sessions/:id/erp-reconcile/estado",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { estadoDelCotejo } = await import("./cotejoRegistro.ts");
+      res.json(
+        await estadoDelCotejo(req.authCtx!.empresaId, enteroPositivo(req.params.id, "id"))
+      );
+    })
+  );
+
+  // ── Equivalencias de formas de pago con el ERP ───────────────────────────
+  //
+  // Leer es permiso de vista porque la pantalla de cotejo las necesita para
+  // explicar por qué una línea no empareja. Escribir es de configuración: es la
+  // tabla de la que depende que un cobro por tarjeta no se cuente como caja.
+
+  r.get(
+    "/erp-payment-map",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({ equivalencias: await config.listarEquivalenciasErp(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.put(
+    "/erp-payment-map",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        equivalencia: await config.guardarEquivalenciaErp(contexto(req), {
+          etiquetaErp: typeof b.etiquetaErp === "string" ? b.etiquetaErp : "",
+          formaPago: typeof b.formaPago === "string" ? b.formaPago : "",
+        }),
+      });
+    })
+  );
+
+  r.delete(
+    "/erp-payment-map/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      await config.borrarEquivalenciaErp(contexto(req), enteroPositivo(req.params.id, "id"));
+      res.json({ ok: true });
+    })
+  );
+
+  r.post(
+    "/expense-targets",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.status(201).json({
+        destino: await config.crearDestino(contexto(req), {
+          nombre: typeof b.nombre === "string" ? b.nombre : "",
+          tipo: b.tipo === "CENTRO_COSTE" ? "CENTRO_COSTE" : "PERSONA",
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
+
+  r.patch(
+    "/expense-targets/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        destino: await config.actualizarDestino(contexto(req), enteroPositivo(req.params.id, "id"), {
+          nombre: typeof b.nombre === "string" ? b.nombre : undefined,
+          activo: typeof b.activo === "boolean" ? b.activo : undefined,
+          orden: b.orden != null ? entero(b.orden, "orden") : undefined,
+        }),
+      });
+    })
+  );
 
   r.get(
     "/sections",
@@ -2272,6 +2530,7 @@ export function createCashRouter(): Router {
           arqueoId: b.arqueoId ? enteroPositivo(b.arqueoId, "arqueoId") : undefined,
           notas: typeof b.notas === "string" ? b.notas : undefined,
           permitirCajaVacia: b.permitirCajaVacia === true,
+          motivoSinCotejo: typeof b.motivoSinCotejo === "string" ? b.motivoSinCotejo : undefined,
         })
       );
     })
@@ -2694,7 +2953,19 @@ export function createAutoScanMachineRouter(): Router {
     })
   );
 
-  /** Latido: sigo vivo, y ésta es mi versión. */
+  /**
+   * Latido: sigo vivo, y ésta es mi versión.
+   *
+   * De vuelta va la versión del agente que hay publicada. El servidor NO decide
+   * si toca actualizar —no le corresponde: el agente es quien sabe qué lleva y
+   * quien manda en su propia máquina—; se limita a decir qué hay. La comparación
+   * y la decisión están en el agente, y ahí es donde vive la regla de que nunca
+   * se retrocede de versión.
+   *
+   * Va montado en el latido y no en una ruta propia porque el latido ya existe,
+   * ya viaja autenticado y ya lleva la versión en la ida. Una ruta más sería un
+   * sitio más que asegurar a cambio de nada.
+   */
   m.post(
     "/autoscan/heartbeat",
     conDispositivo,
@@ -2702,7 +2973,9 @@ export function createAutoScanMachineRouter(): Router {
       const b = req.body ?? {};
       const { latido } = await import("./autoscan/devices.ts");
       await latido(req.autoscan!.deviceId, typeof b.version === "string" ? b.version : null);
-      res.json({ ok: true });
+
+      const { agentePublicado } = await import("./autoscan/version.ts");
+      res.json({ ok: true, agente: agentePublicado() });
     })
   );
 

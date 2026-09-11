@@ -1,6 +1,7 @@
 import type { Express, RequestHandler } from "express";
 import { hayIA } from "../../core/openaiService.ts";
 import { supabase } from "../../supabase.ts";
+import { puedeVerEmpresaDeRequest } from "../empresaAcceso.ts";
 import { LectorParteIA, type LectorParte } from "./lectorParte.ts";
 import { armarParte, type MovimientoFila } from "./armarParte.ts";
 import { filasDeOperaciones, type OperacionFila, type MedicionPos }
@@ -31,28 +32,11 @@ const BUCKET_PARTES = "tc-revisiones-fotos";
 /**
  * ¿El usuario de la petición puede ver esta empresa?
  *
- * Reproduce a mano lo que hace tc_puede_ver_empresa en la base de datos,
- * porque aquí la RLS no protege: el cliente de servidor usa service_role.
+ * La regla vive ahora en `../empresaAcceso.ts`, en un solo sitio, porque los
+ * endpoints de telemática necesitan exactamente la misma comprobación. Aquí
+ * queda el nombre local para no tocar a quien ya lo llamaba.
  */
-async function puedeVerEmpresa(req: any, empresaId: string): Promise<boolean> {
-  const userId = req.authCtx?.userId as string | undefined;
-  if (!userId) return false;
-  if (req.authCtx?.esSuperadmin === true) return true;
-
-  const { data: u } = await supabase
-    .from("tc_usuarios").select("rol, empresa_id, es_superadmin, activo")
-    .eq("id", userId).maybeSingle();
-  if (!u || u.activo === false) return false;
-  if (u.es_superadmin) return true;
-  if (u.rol === "administrador" && u.empresa_id === empresaId) return true;
-  // Cliente: solo la suya, y solo para leer — que es lo único que hace esto.
-  if (u.rol === "cliente" && u.empresa_id === empresaId) return true;
-
-  const { data: asignado } = await supabase
-    .from("tc_operador_empresas").select("empresa_id")
-    .eq("usuario_id", userId).eq("empresa_id", empresaId).maybeSingle();
-  return !!asignado;
-}
+const puedeVerEmpresa = puedeVerEmpresaDeRequest;
 
 /**
  * El plano del chasis del vehículo, en bytes, para el recuadro «Posición
@@ -67,6 +51,25 @@ async function puedeVerEmpresa(req: any, empresaId: string): Promise<boolean> {
  * una imagen—: el PDF deja el recuadro como estaba y el parte sale igual. Un
  * plano que no se puede traer no es motivo para no entregar el papel.
  */
+/**
+ * Baja una imagen del bucket y la devuelve en bytes. pdf-lib solo sabe
+ * incrustar PNG y JPEG: un SVG o un WebP reventarían al meterlos, y ese error
+ * no debe llevarse por delante el parte.
+ */
+async function bajarImagen(url: string | null | undefined): Promise<Uint8Array | null> {
+  const u = (url ?? "").trim();
+  if (!u) return null;
+  try {
+    const r = await fetch(u);
+    if (!r.ok) return null;
+    const tipo = r.headers.get("content-type") ?? "";
+    if (tipo && !/image\/(png|jpe?g)/i.test(tipo)) return null;
+    return new Uint8Array(await r.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
 async function planoDelVehiculo(veh: any): Promise<Uint8Array | null> {
   if (!veh) return null;
   try {
@@ -238,9 +241,11 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
       // que alguien apunte una medición en la rueda equivocada.
       const plano = await planoDelVehiculo(interv.vehiculo);
 
-      // Y dónde cae cada rueda en ese plano, para marcar las que se han
-      // tocado. Son las mismas coordenadas calibradas que usa la tablet.
-      const marcas: { x: number; y: number }[] = [];
+      // Y dónde cae cada rueda en ese plano. Se mandan TODAS las posiciones
+      // del vehículo: cada una se pinta como un cuadrado con su código, y las
+      // que se han tocado en este parte llevan además la cruz roja.
+      const marcas: { x: number; y: number; w?: number | null; h?: number | null;
+                      codigo?: string | null; usada?: boolean }[] = [];
       if (plano && interv.vehiculo?.id) {
         const { data: veh2 } = await supabase
           .from("tc_vehiculos").select("tipo_vehiculo_id")
@@ -248,24 +253,31 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
         if ((veh2 as any)?.tipo_vehiculo_id) {
           const { data: pos } = await supabase
             .from("tc_posiciones_vehiculo")
-            .select("codigo_posicion, pos_x, pos_y")
-            .eq("tipo_vehiculo_id", (veh2 as any).tipo_vehiculo_id);
-          const porCodigo = new Map<string, { x: number; y: number }>();
+            .select("codigo_posicion, pos_x, pos_y, pos_w, pos_h, orden_visual")
+            .eq("tipo_vehiculo_id", (veh2 as any).tipo_vehiculo_id)
+            .order("orden_visual");
+          // Una posición tocada dos veces (sale una goma y entra otra) cuenta
+          // UNA vez: dos cruces encima de la misma rueda no dicen más.
+          const tocadas = new Set(filas.map((f) => f.posicion).filter(Boolean) as string[]);
           for (const q of (pos ?? []) as any[]) {
             if (q.pos_x == null || q.pos_y == null) continue;
-            porCodigo.set(q.codigo_posicion, { x: Number(q.pos_x), y: Number(q.pos_y) });
-          }
-          // Una posición tocada dos veces (sale una goma y entra otra) se
-          // marca UNA vez: dos cruces encima de la misma rueda no dicen más.
-          const vistas = new Set<string>();
-          for (const f of filas) {
-            const c = f.posicion;
-            if (!c || vistas.has(c)) continue;
-            const p = porCodigo.get(c);
-            if (p) { marcas.push(p); vistas.add(c); }
+            marcas.push({
+              x: Number(q.pos_x), y: Number(q.pos_y),
+              w: q.pos_w == null ? null : Number(q.pos_w),
+              h: q.pos_h == null ? null : Number(q.pos_h),
+              codigo: q.codigo_posicion,
+              usada: tocadas.has(q.codigo_posicion),
+            });
           }
         }
       }
+
+      // Las firmas que se dibujaron en la tablet. Están en el mismo bucket que
+      // las fotos; el generador las incrusta en sus casillas.
+      const [firmaCliente, firmaTecnico] = await Promise.all([
+        bajarImagen((interv as any).firma_cliente_url),
+        bajarImagen((interv as any).firma_tecnico_url),
+      ]);
 
       const parte = armarParte(
         {
@@ -278,7 +290,10 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
         (servicios ?? []) as { servicio: string; cantidad: number }[],
       );
 
-      const pdf = await generarPartePdf({ ...parte, plano, marcas });
+      const pdf = await generarPartePdf({
+        ...parte, plano, marcas,
+        firma_cliente: firmaCliente, firma_tecnico: firmaTecnico,
+      });
 
       return { pdf, nombre: `parte-${(interv.numero || id).replace(/[^\w.-]/g, "_")}.pdf` };
   }

@@ -604,6 +604,14 @@ export async function insertarOperacion(
     motivoReversa?: string | null;
     /** Sección de negocio. `null` en las operaciones anteriores al catálogo. */
     sectionId?: number | null;
+    /*
+     * En qué se ha gastado y a quién se imputa. Solo pagos, y siempre
+     * opcionales: el mostrador no se para porque falte una entrada del
+     * catálogo. Van validados desde `validarClasificacionGasto`, que es quien
+     * comprueba que el destino es del tipo que pide el concepto.
+     */
+    expenseConceptId?: number | null;
+    expenseTargetId?: number | null;
     userId: string | null;
     ahora: number;
   }
@@ -613,8 +621,9 @@ export async function insertarOperacion(
        (empresa_id, session_id, numero, tipo, origen, external_system, external_document_id,
         external_document_reference, documento_id, party_nombre, concepto, referencia,
         importe_centimos, efectivo_neto_centimos, estado, reversa_de_id, motivo_reversa,
-        erp_sync_status, section_id, created_by, created_at_ms, confirmed_at_ms, updated_at_ms)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'CONFIRMED',$15,$16,$17,$18,$19,$20,$20,$20)
+        erp_sync_status, section_id, expense_concept_id, expense_target_id,
+        created_by, created_at_ms, confirmed_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'CONFIRMED',$15,$16,$17,$18,$19,$20,$21,$22,$22,$22)
      RETURNING id`,
     [
       o.empresaId,
@@ -635,6 +644,8 @@ export async function insertarOperacion(
       o.motivoReversa ?? null,
       o.erpSyncStatus,
       o.sectionId ?? null,
+      o.expenseConceptId ?? null,
+      o.expenseTargetId ?? null,
       o.userId,
       o.ahora,
     ]
@@ -759,7 +770,21 @@ export async function movimientosDeOperacion(
   operationId: number
 ): Promise<MovimientoDenominacion[]> {
   const { rows } = await client.query(
-    `SELECT direccion, motivo, valor_unitario_centimos, cantidad
+    /*
+     * `cartuchos` y `bolsas` van AQUÍ, y no son un adorno.
+     *
+     * Esto lo usa la reversión para asentar el movimiento contrario. Sin estas
+     * dos columnas, la inversa devolvía las monedas como SUELTAS aunque
+     * hubieran salido precintadas: los precintos no se compensaban nunca y se
+     * quedaban en el libro para siempre.
+     *
+     * Se vio en una caja de verdad. Al reabrir y recerrar una jornada varias
+     * veces, cada vuelta dejaba atrás sus cartuchos y sus bolsas, y el cambio
+     * que heredaba el día siguiente crecía solo: 337 € pasaron a 485,70 y luego
+     * a 567,10. Como el sobrante estaba en moneda precintada, los importes no
+     * eran ni múltiplos del cambio, que es lo que despistaba.
+     */
+    `SELECT direccion, motivo, valor_unitario_centimos, cantidad, cartuchos, bolsas
        FROM cash_denomination_movements
       WHERE operation_id = $1
       ORDER BY id`,
@@ -775,7 +800,12 @@ export async function movimientosDeOperacion(
       g = { direccion: r.direccion, motivo: r.motivo, lineas: [] };
       grupos.set(clave, g);
     }
-    g.lineas.push({ valor: r.valor_unitario_centimos, cantidad: r.cantidad });
+    g.lineas.push({
+      valor: r.valor_unitario_centimos,
+      cantidad: r.cantidad,
+      cartuchos: Number(r.cartuchos ?? 0),
+      bolsas: Number(r.bolsas ?? 0),
+    });
   }
   /* eslint-enable @typescript-eslint/no-explicit-any */
   return [...grupos.values()];

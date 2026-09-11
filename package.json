@@ -1,7 +1,7 @@
 {
   "name": "mobilink",
   "private": true,
-  "version": "1.34.11",
+  "version": "1.37.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -31,7 +31,8 @@
     "bc:check": "node scripts/bc-check.mjs",
     "bc:setup": "tsx scripts/bc-setup.ts",
     "bc:quote": "tsx scripts/bc-quote.ts",
-    "tarifa:cargar": "tsx scripts/cargar-tarifario.ts"
+    "tarifa:cargar": "tsx scripts/cargar-tarifario.ts",
+    "fotos:asistencia": "tsx scripts/asistencia-fotos.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",

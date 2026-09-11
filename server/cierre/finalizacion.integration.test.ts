@@ -15,6 +15,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+// Regla pura, sin base de datos: se importa estáticamente para que se
+// compruebe también en CI, donde no hay PostgreSQL.
+import { estaFinalizada } from "./elegibilidad.ts";
 
 /** Una fila de `pg` tal cual la devuelve el driver. */
 type Fila = Record<string, string | number | null>;
@@ -116,11 +119,22 @@ afterAll(async () => {
 
 describe("cuándo se considera terminado el servicio", () => {
   it("manda finishedAtMs, no el estado", () => {
-    expect(mod.estaFinalizada({ finishedAtMs: 1 })).toBe(true);
-    expect(mod.estaFinalizada({ finishedAtMs: 0 })).toBe(false);
-    expect(mod.estaFinalizada({ finishedAtMs: null })).toBe(false);
-    expect(mod.estaFinalizada({})).toBe(false);
-    expect(mod.estaFinalizada(null)).toBe(false);
+    expect(estaFinalizada({ finishedAtMs: 1 })).toBe(true);
+    expect(estaFinalizada({ finishedAtMs: 0 })).toBe(false);
+    expect(estaFinalizada({ finishedAtMs: null })).toBe(false);
+    expect(estaFinalizada({})).toBe(false);
+    expect(estaFinalizada(null)).toBe(false);
+
+    // Basura que podría llegar de la base o de un JSON: nada de esto es una
+    // hora válida, así que el servicio no está terminado.
+    expect(estaFinalizada({ finishedAtMs: -1 })).toBe(false);
+    expect(estaFinalizada({ finishedAtMs: "" })).toBe(false);
+    expect(estaFinalizada({ finishedAtMs: "no es un número" })).toBe(false);
+    expect(estaFinalizada({ finishedAtMs: Number.NaN })).toBe(false);
+    expect(estaFinalizada({ finishedAtMs: Infinity })).toBe(false);
+
+    // Una fecha en texto, como la devuelve pg para BIGINT: sí es válida.
+    expect(estaFinalizada({ finishedAtMs: "1757600000000" })).toBe(true);
   });
 
   /*

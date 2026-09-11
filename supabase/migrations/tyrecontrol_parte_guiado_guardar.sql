@@ -135,6 +135,8 @@ returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   v_clave    uuid;
+  v_serie    text;
+  v_dot      text;
   v_veh      record;
   v_ya       record;
   v_rev      uuid;
@@ -325,33 +327,45 @@ begin
        where id = any(v_nuevas);
     end if;
 
-    -- El número de serie leído de la foto, en la ficha de la goma que sale.
-    -- Solo si estaba vacío: ver la nota de arriba.
-    if nullif(v_acc->>'numero_serie','') is not null then
+    -- El número de serie leído de la foto, en la ficha de la goma. Para la que
+    -- SALE viene como campo de la acción; para la que ENTRA, dentro de
+    -- p_datos del montaje (y las RPC de montaje lo descartan cuando la
+    -- política de la empresa es genérica: aquí se recupera, porque la foto
+    -- del serie es obligatoria en el parte y sería absurdo tirarla). Solo si
+    -- la ficha lo tenía vacío: ver la nota de arriba.
+    v_serie := coalesce(nullif(v_acc->>'numero_serie',''), nullif(v_args->'p_datos'->>'numero_serie',''));
+    v_dot   := coalesce(nullif(v_acc->>'dot',''),          nullif(v_args->'p_datos'->>'dot',''));
+    if v_serie is not null then
       update tc_neumaticos n
-         set numero_serie = v_acc->>'numero_serie', updated_at = now()
+         set numero_serie = v_serie, updated_at = now()
         from operaciones_neumaticos o
        where o.id = any(v_nuevas) and n.id = o.neumatico_id
-         and nullif(trim(n.numero_serie), '') is null;
+         and nullif(trim(n.numero_serie), '') is null
+         and not exists (select 1 from tc_neumaticos x
+                          where x.empresa_id = n.empresa_id and x.numero_serie = v_serie and x.id <> n.id);
     end if;
-    if nullif(v_acc->>'dot','') is not null then
+    if v_dot is not null then
       update tc_neumaticos n
-         set dot = v_acc->>'dot', updated_at = now()
+         set dot = v_dot, updated_at = now()
         from operaciones_neumaticos o
        where o.id = any(v_nuevas) and n.id = o.neumatico_id
          and nullif(trim(n.dot), '') is null;
     end if;
 
-    -- Las fotos del neumático que sale. Van a tc_operacion_adjuntos, que es la
-    -- tabla de adjuntos que YA existe: no se crea otro sistema de fotos.
-    -- Se cuelgan de la primera operación de la acción, que es la del
-    -- desmontaje (una sustitución crearía dos: desmontaje y montaje).
+    -- Las fotos de la acción (las de la goma que sale en el desmontaje, la
+    -- del serie de la que entra en el montaje). Van a tc_operacion_adjuntos,
+    -- que es la tabla de adjuntos que YA existe: no se crea otro sistema de
+    -- fotos. Se cuelgan de la primera operación de la acción, que es la del
+    -- desmontaje (una sustitución crearía dos: desmontaje y montaje). Las
+    -- de un montaje son «despues»: son de la rueda ya puesta.
     v_op := v_nuevas[1];
     if v_op is not null then
       for v_adj in select * from jsonb_array_elements(coalesce(v_acc->'adjuntos', '[]'::jsonb)) loop
         if nullif(v_adj->>'url','') is not null then
           insert into tc_operacion_adjuntos (operacion_id, file_url, file_type, descripcion)
-          values (v_op, v_adj->>'url', 'antes', nullif(v_adj->>'descripcion',''));
+          values (v_op, v_adj->>'url',
+                  case when v_acc->>'rpc' like 'tc_montar%' then 'despues' else 'antes' end,
+                  nullif(v_adj->>'descripcion',''));
           v_n_fotos := v_n_fotos + 1;
         end if;
       end loop;
