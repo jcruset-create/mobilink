@@ -71,7 +71,10 @@ export interface MovertisConfig {
   /** Cuenta telemática dentro de Movertis. Un cliente puede tener varias. */
   accountKey?: string;
   endpoints?: EndpointsMovertis;
-  /** Unidad del odómetro. Ver la advertencia de `mapeo.ts`. */
+  /**
+   * Unidad del odómetro. SIN DEFECTO a propósito: si no se declara, las
+   * lecturas salen sin odómetro. Ver la trampa de las unidades en `mapeo.ts`.
+   */
   odometroEn?: UnidadOdometro;
   /** De dónde sale el odómetro, si Movertis lo aclara. */
   origenOdometro?: "vehicle" | "gps" | "unknown";
@@ -250,7 +253,9 @@ export class MovertisConnector implements ITelematicsConnector {
     return {
       provider: this.info.key,
       accountKey: this.config.accountKey ?? "default",
-      unidadOdometro: this.config.odometroEn ?? ("km" as UnidadOdometro),
+      // Sin declarar, se propaga `undefined` y la lectura sale sin odómetro:
+      // preferimos la ausencia a un kilometraje mil veces menor.
+      unidadOdometro: this.config.odometroEn,
       origenOdometro: this.config.origenOdometro,
       campos: this.config.campos,
     };
@@ -273,7 +278,16 @@ export class MovertisConnector implements ITelematicsConnector {
     try {
       const datos = await this.pedir(ctx, this.url(this.endpoints.vehicles));
       const filas = filasDe(datos);
-      return { ok: true, message: `Movertis responde: ${filas.length} vehículos en la cuenta.` };
+      // Conectar y traer kilometraje no es lo mismo: si falta la unidad, la
+      // conexión es buena pero las lecturas saldrán sin odómetro, y eso hay
+      // que decirlo aquí y no dejar que se descubra con un informe vacío.
+      const aviso = this.config.odometroEn
+        ? ""
+        : " Ojo: sin `odometroEn` declarado las lecturas saldrán SIN odómetro.";
+      return {
+        ok: true,
+        message: `Movertis responde: ${filas.length} vehículos en la cuenta.${aviso}`,
+      };
     } catch (e) {
       const err = e as IntegrationError;
       return { ok: false, message: `Movertis no responde: ${err.message}` };

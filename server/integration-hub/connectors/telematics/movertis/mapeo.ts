@@ -26,12 +26,18 @@
  *
  * El odómetro es el dato que sostiene la trazabilidad del neumático, y llega
  * en unidades distintas según proveedor (Webfleet ya obliga a dividir entre
- * 1000 o entre 10 según el campo). De Movertis no sabemos la suya, así que NO
- * se adivina por el tamaño del número —un camión con 900.000 km y uno con
- * 900.000 m son indistinguibles por magnitud—: se declara en
- * `MovertisConfig.odometroEn` y por defecto se asume `km`, que es lo que
- * anuncia la mayoría de APIs de flota. Confirmarlo con la sonda antes de dar
- * por bueno un kilometraje es parte del trabajo pendiente.
+ * 1000 o entre 10 según el campo). De Movertis no sabemos la suya, y NO se
+ * puede adivinar por el tamaño del número: un camión con 900.000 km y uno con
+ * 900.000 m son indistinguibles por magnitud.
+ *
+ * Por eso la unidad es OBLIGATORIA y explícita (`MovertisConfig.odometroEn`).
+ * Sin declararla, la lectura sale SIN odómetro —con su posición y su fecha
+ * intactas—, que es una respuesta legítima según el contrato. La alternativa,
+ * un `km` por defecto, sería cómoda y peligrosa: si Movertis reporta metros,
+ * quien configure el conector se lleva kilometrajes mil veces menores sin que
+ * nada chirríe, y un dato falso que nadie cuestiona es peor que la ausencia
+ * de dato. El que no ha pensado la unidad se queda sin el número, no con uno
+ * inventado.
  */
 
 import {
@@ -142,9 +148,17 @@ export function fecha(v: unknown): Date | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
-/** Pasa el odómetro a kilómetros según la unidad declarada. Sin redondear. */
-export function aKilometros(valor: number | undefined, unidad: UnidadOdometro): number | undefined {
-  if (valor === undefined) return undefined;
+/**
+ * Pasa el odómetro a kilómetros según la unidad declarada. Sin redondear.
+ *
+ * Sin unidad (`undefined`) devuelve `undefined`: ver la trampa de las unidades
+ * en la cabecera. No hay unidad por defecto a propósito.
+ */
+export function aKilometros(
+  valor: number | undefined,
+  unidad: UnidadOdometro | undefined,
+): number | undefined {
+  if (valor === undefined || unidad === undefined) return undefined;
   if (unidad === "m") return valor / 1000;
   if (unidad === "hm") return valor / 10;
   return valor;
@@ -165,7 +179,11 @@ export interface OpcionesMapeo {
   provider: string;
   /** Cuenta telemática dentro del proveedor. */
   accountKey: string;
-  unidadOdometro: UnidadOdometro;
+  /**
+   * Unidad del odómetro. Sin declarar, las lecturas salen sin odómetro.
+   * Opcional en el tipo, obligatoria en la práctica: ver la cabecera.
+   */
+  unidadOdometro?: UnidadOdometro;
   campos?: CamposMovertis;
   /**
    * De dónde sale el odómetro, si se sabe. Se declara, no se adivina: un

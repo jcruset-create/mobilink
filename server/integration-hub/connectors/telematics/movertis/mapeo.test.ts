@@ -72,6 +72,12 @@ describe("aKilometros()", () => {
   it("deja pasar la ausencia", () => {
     expect(aKilometros(undefined, "m")).toBeUndefined();
   });
+
+  it("sin unidad declarada no devuelve número", () => {
+    // No hay unidad por defecto: 900.000 km y 900.000 m son indistinguibles
+    // por magnitud, así que asumir una convertiría el error en silencioso.
+    expect(aKilometros(684327.4, undefined)).toBeUndefined();
+  });
 });
 
 describe("aProviderVehicle()", () => {
@@ -151,6 +157,25 @@ describe("aVehicleTelemetry()", () => {
       { ...OPCIONES, origenOdometro: "gps" },
     );
     expect(declarado?.odometerSource).toBe("gps");
+  });
+
+  it("sin unidad declarada entrega la lectura pero sin odómetro", () => {
+    // Lo que se protege: quien no ha pensado la unidad se queda sin el número,
+    // no con uno mil veces menor. La lectura sigue sirviendo para la posición.
+    const l = aVehicleTelemetry(
+      {
+        id: "A1",
+        timestamp: "2026-07-15T09:40:00Z",
+        odometer: 684327400,
+        latitud: 41.1189,
+        longitud: 1.2445,
+      },
+      { provider: "movertis", accountKey: "autobuses" },
+    );
+    expect(l).not.toBeNull();
+    expect(l?.odometerKm).toBeUndefined();
+    expect(l?.odometerSource).toBeUndefined();
+    expect(l?.latitude).toBeCloseTo(41.1189);
   });
 
   it("convierte el odómetro a km sin perder decimales", () => {
