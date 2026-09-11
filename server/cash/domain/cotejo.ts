@@ -72,7 +72,7 @@ export type LineaMobilink = {
 export type Equivalencias = ReadonlyMap<string, string>;
 
 /**
- * Cómo se escribe una etiqueta del ERP para poder compararla.
+ * Cómo se GUARDA una etiqueta del ERP.
  *
  * Vive aquí y se exporta porque la usan los DOS extremos: quien guarda la
  * equivalencia en Configuración y quien la busca al cotejar. Si cada uno
@@ -80,12 +80,134 @@ export type Equivalencias = ReadonlyMap<string, string>;
  * buscaría de otra, y el cotejo fallaría solo a ratos — que es la peor manera
  * de fallar, porque parece un problema de los datos.
  *
- * Mayúsculas y espacios colapsados. Nada más: los puntos suspensivos con los
- * que el ERP corta «Datáfono Clearone ta...» se conservan a propósito, porque
- * forman parte de lo que se ve en pantalla y es lo que el usuario va a copiar.
+ * Mayúsculas y espacios colapsados. Nada más: lo que se guarda se parece a lo
+ * que el usuario escribió, y los acentos y los puntos suspensivos siguen ahí
+ * para que la pantalla de Configuración enseñe lo que él tecleó y no una
+ * versión maltratada de su etiqueta.
+ *
+ * Lo tolerante viene aparte, en `claveDeCotejo`.
  */
 export function etiquetaNormalizada(etiqueta: string): string {
   return etiqueta.trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Cómo se COMPARA una etiqueta del ERP. Encima de la anterior, no en su lugar.
+ *
+ * El ERP corta la columna de forma de pago según la resolución de la pantalla.
+ * La misma etiqueta se ve «Datáfono Clearon...» en un monitor y «Datáfono
+ * Clearone ta...» en otro, y ninguna de las dos es la etiqueta entera. Comparar
+ * eso letra a letra es hacer que el cotejo dependa de con qué PC se hizo la
+ * captura, que no tiene nada que ver con la caja.
+ *
+ * Así que para comparar se quitan dos cosas que no distinguen nada:
+ *
+ * · **Los acentos.** El modelo lee «Datafono» tan a menudo como «Datáfono», y
+ *   dos formas de pago que solo se diferencien en una tilde no existen.
+ * · **Los puntos del recorte al final.** Son del ancho de la columna, no del
+ *   nombre.
+ *
+ * Lo que NO se quita es nada de en medio: el recorte se resuelve comparando por
+ * prefijo en `resolverFormaErp`, con su regla de no elegir cuando hay dudas.
+ */
+export function claveDeCotejo(etiqueta: string): string {
+  return (
+    etiquetaNormalizada(etiqueta)
+      /* NFD separa la tilde de la letra; el rango borra las tildes sueltas. */
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[.\u2026]+$/, "")
+      .trimEnd()
+  );
+}
+
+/**
+ * Cuántas letras tiene que haber para fiarse de un prefijo.
+ *
+ * Con menos, «TP» emparejaría con cualquier cosa que empiece por ahí y el
+ * emparejamiento diría más del azar que de la etiqueta. Una lectura tan corta
+ * es además señal de que la captura vino mal, y ahí lo que toca es decirlo, no
+ * adivinar.
+ */
+const MINIMO_PARA_PREFIJO = 4;
+
+/** A qué forma de Mobilink corresponde una etiqueta del ERP, y con cuánta certeza. */
+export type ResolucionDeForma =
+  | { estado: "resuelta"; codigo: string; /** La etiqueta configurada con la que casó. */ configurada: string; /** Ha hecho falta comparar por prefijo. */ porRecorte: boolean }
+  /** El recorte encaja con varias equivalencias configuradas. No se elige. */
+  | { estado: "ambigua"; candidatas: string[] }
+  | { estado: "sinConfigurar" };
+
+/**
+ * Buscar la equivalencia de una etiqueta del ERP, aguantando el recorte.
+ *
+ * Tres intentos, de más seguro a menos:
+ *
+ * 1. **Igual.** Comparando por `claveDeCotejo`, así que la tilde y los puntos
+ *    finales ya no estorban.
+ * 2. **Una es prefijo de la otra.** En los dos sentidos, y esto no es simetría
+ *    gratuita: la etiqueta guardada también puede venir recortada, porque quien
+ *    la configuró la copió de SU pantalla. Con una captura de un monitor más
+ *    ancho, lo largo es lo leído y lo corto lo guardado.
+ * 3. **Nada.** Se dice que falta configurarla.
+ *
+ * Y en el paso 2, **si encajan varias no se elige ninguna**. Es la misma regla
+ * que gobierna el emparejamiento de líneas: un acierto inventado es peor que un
+ * hueco señalado, porque el hueco se ve y el invento no. Con «Datáfono...»
+ * recortado y dos datáfonos configurados, elegir uno sería mandar cobros de
+ * tarjeta contra la forma equivocada sin que nada chirríe.
+ */
+export function resolverFormaErp(
+  formaErp: string,
+  equivalencias: Equivalencias
+): ResolucionDeForma {
+  const clave = claveDeCotejo(formaErp);
+  if (!clave) return { estado: "sinConfigurar" };
+
+  const exactas: { configurada: string; codigo: string }[] = [];
+  const porPrefijo: { configurada: string; codigo: string }[] = [];
+
+  for (const [configurada, codigo] of equivalencias) {
+    const suya = claveDeCotejo(configurada);
+    if (!suya) continue;
+
+    if (suya === clave) {
+      exactas.push({ configurada, codigo });
+      continue;
+    }
+    const corta = suya.length < clave.length ? suya : clave;
+    if (corta.length < MINIMO_PARA_PREFIJO) continue;
+    if (suya.startsWith(clave) || clave.startsWith(suya)) {
+      porPrefijo.push({ configurada, codigo });
+    }
+  }
+
+  /*
+   * Las exactas mandan sobre las de prefijo SIEMPRE, aunque haya diez prefijos
+   * que también encajen. Si alguien ha configurado la etiqueta entera, eso es
+   * lo que quería decir; ponerlas a competir convertiría una equivalencia bien
+   * puesta en ambigua por culpa de otra que solo se le parece.
+   */
+  const candidatos = exactas.length > 0 ? exactas : porPrefijo;
+  if (candidatos.length === 0) return { estado: "sinConfigurar" };
+
+  /*
+   * Varias que apuntan al MISMO código no son ninguna duda: da igual cuál se
+   * coja, la respuesta es la misma. Pasa solo con configurarla acentuada y sin
+   * acentuar, que es justo lo que `claveDeCotejo` viene a perdonar.
+   */
+  const codigos = new Set(candidatos.map((c) => c.codigo));
+  if (codigos.size > 1) {
+    return { estado: "ambigua", candidatas: candidatos.map((c) => c.configurada).sort() };
+  }
+
+  const elegida = candidatos[0]!;
+  return {
+    estado: "resuelta",
+    codigo: elegida.codigo,
+    configurada: elegida.configurada,
+    porRecorte: exactas.length === 0,
+  };
 }
 
 export type Emparejada = {
@@ -141,6 +263,22 @@ export type Informe = {
   discrepanciasDeForma: DiscrepanciaDeForma[];
   /** Etiquetas del ERP que no están en la tabla de equivalencias. */
   formasSinEquivalencia: string[];
+  /**
+   * Etiquetas recortadas que encajan con VARIAS equivalencias configuradas.
+   *
+   * No es lo mismo que no tenerla: la equivalencia está, lo que falta es saber
+   * cuál. Decir «sin configurar» mandaría a alguien a crear una que ya existe.
+   */
+  formasAmbiguas: { etiqueta: string; candidatas: string[] }[];
+  /**
+   * Las que han hecho falta resolver por prefijo, y contra qué.
+   *
+   * Se enseña porque es una deducción, no un dato: la equivalencia se ha
+   * decidido comparando un trozo de etiqueta. Con esto delante, el día que
+   * empareje mal se ve; sin esto, el cotejo daría por bueno algo que nadie
+   * llegó a configurar del todo.
+   */
+  formasPorRecorte: { etiqueta: string; configurada: string }[];
   totales: {
     erpCobros: Centimos;
     erpPagos: Centimos;
@@ -183,6 +321,28 @@ export function cotejar(
   const ambiguas: Ambigua[] = [];
   const discrepanciasDeForma: DiscrepanciaDeForma[] = [];
   const sinEquivalencia = new Set<string>();
+  const ambiguasDeForma = new Map<string, string[]>();
+  const porRecorte = new Map<string, string>();
+
+  /*
+   * La resolución se cachea por etiqueta. No es por velocidad —el mapa tiene
+   * cuatro filas— sino porque la misma etiqueta se resuelve en la segunda
+   * pasada y otra vez en la tercera, y que las dos vean lo mismo es lo que
+   * hace que `formaEsperada` concuerde con lo que se intentó emparejar.
+   */
+  const cache = new Map<string, ResolucionDeForma>();
+  const resolver = (formaErp: string): ResolucionDeForma => {
+    const guardada = cache.get(formaErp);
+    if (guardada) return guardada;
+    const r = resolverFormaErp(formaErp, equivalencias);
+    cache.set(formaErp, r);
+    if (r.estado === "resuelta" && r.porRecorte) {
+      porRecorte.set(formaErp.trim(), r.configurada);
+    } else if (r.estado === "ambigua") {
+      ambiguasDeForma.set(formaErp.trim(), r.candidatas);
+    }
+    return r;
+  };
 
   /* Lo que queda por emparejar de cada lado. Se va vaciando. */
   const pendientesErp = [...erp];
@@ -218,16 +378,18 @@ export function cotejar(
 
   // ── Segunda pasada: por importe y forma, y solo sin dudas ──────────────────
   for (const e of [...pendientesErp]) {
-    const codigo = equivalencias.get(etiquetaNormalizada(e.formaErp));
-    if (!codigo) {
+    const resolucion = resolver(e.formaErp);
+    if (resolucion.estado !== "resuelta") {
       /*
        * Sin equivalencia NO se empareja por importe a secas. Sería colar un
        * cobro por tarjeta contra uno en efectivo del mismo importe, que es
-       * precisamente el error que este cotejo tiene que encontrar.
+       * precisamente el error que este cotejo tiene que encontrar. Y con la
+       * equivalencia ambigua, tampoco: saber que es UNA de dos no es saber cuál.
        */
-      sinEquivalencia.add(e.formaErp.trim());
+      if (resolucion.estado === "sinConfigurar") sinEquivalencia.add(e.formaErp.trim());
       continue;
     }
+    const codigo = resolucion.codigo;
 
     const encajan = pendientesMob.filter(
       (m) =>
@@ -263,7 +425,10 @@ export function cotejar(
       discrepanciasDeForma.push({
         erp: e,
         mobilink: encajan[0]!,
-        formaEsperada: equivalencias.get(etiquetaNormalizada(e.formaErp)) ?? null,
+        formaEsperada: (() => {
+          const r = resolver(e.formaErp);
+          return r.estado === "resuelta" ? r.codigo : null;
+        })(),
       });
       pendientesErp.splice(pendientesErp.indexOf(e), 1);
       sacar(pendientesMob, encajan[0]!);
@@ -297,6 +462,12 @@ export function cotejar(
     ambiguas,
     discrepanciasDeForma,
     formasSinEquivalencia: [...sinEquivalencia].sort(),
+    formasAmbiguas: [...ambiguasDeForma]
+      .map(([etiqueta, candidatas]) => ({ etiqueta, candidatas }))
+      .sort((a, b) => a.etiqueta.localeCompare(b.etiqueta)),
+    formasPorRecorte: [...porRecorte]
+      .map(([etiqueta, configurada]) => ({ etiqueta, configurada }))
+      .sort((a, b) => a.etiqueta.localeCompare(b.etiqueta)),
     totales,
     cuadra:
       pendientesErp.length === 0 &&

@@ -329,6 +329,145 @@ describe("las formas de pago no se adivinan", () => {
   });
 });
 
+/**
+ * El ERP corta la columna de forma de pago según la resolución del monitor.
+ *
+ * No es un detalle cosmético: la misma etiqueta se lee «Datáfono Clearon...» en
+ * un PC y «Datáfono Clearone ta...» en otro, así que comparar letra a letra
+ * hace que el cotejo dependa de con qué ordenador se hizo la captura.
+ */
+describe("las etiquetas que el ERP corta", () => {
+  const mob = (formaCodigo: string): LineaMobilink[] => [
+    { id: 1, numero: "A", referencia: null, formaCodigo, importeCentimos: 5000, tipo: "COBRO" },
+  ];
+  const erp = (formaErp: string): LineaErp[] => [
+    { formaErp, importeCentimos: 5000, tipo: "COBRO" },
+  ];
+
+  it("la captura recortada encaja con la equivalencia entera", () => {
+    const equiv: Equivalencias = new Map([["DATÁFONO CLEARONE TARJETA", "CLEARONE"]]);
+    const r = cotejar(erp("Datáfono Clearon..."), mob("CLEARONE"), equiv);
+
+    expect(r.emparejadas).toHaveLength(1);
+    expect(r.cuadra).toBe(true);
+    expect(r.formasSinEquivalencia).toEqual([]);
+  });
+
+  it("y al revés: la equivalencia guardada también puede venir recortada", () => {
+    /*
+     * Quien la configuró la copió de SU pantalla, que corta antes. Luego llega
+     * una captura de un monitor más ancho y lo largo es lo leído.
+     */
+    const equiv: Equivalencias = new Map([["DATÁFONO CLEARON...", "CLEARONE"]]);
+    const r = cotejar(erp("Datáfono Clearone tarjeta"), mob("CLEARONE"), equiv);
+
+    expect(r.emparejadas).toHaveLength(1);
+    expect(r.cuadra).toBe(true);
+  });
+
+  it("la tilde no decide, porque el modelo la pone y la quita", () => {
+    const equiv: Equivalencias = new Map([["DATAFONO CLEARONE TARJETA", "CLEARONE"]]);
+    const r = cotejar(erp("Datáfono Clearone ta..."), mob("CLEARONE"), equiv);
+
+    expect(r.emparejadas).toHaveLength(1);
+  });
+
+  it("se dice que se ha emparejado por el principio de la etiqueta", () => {
+    /*
+     * Es una deducción, no un dato, y se enseña como tal: el día que empareje
+     * con la equivalencia equivocada tiene que haber dónde verlo.
+     */
+    const equiv: Equivalencias = new Map([["DATÁFONO CLEARONE TARJETA", "CLEARONE"]]);
+    const r = cotejar(erp("Datáfono Clearon..."), mob("CLEARONE"), equiv);
+
+    expect(r.formasPorRecorte).toEqual([
+      { etiqueta: "Datáfono Clearon...", configurada: "DATÁFONO CLEARONE TARJETA" },
+    ]);
+  });
+
+  it("la que casa exacta NO se anuncia como recortada", () => {
+    const r = cotejar(erp("CONTADO"), mob("EFECTIVO"), EQUIV);
+
+    expect(r.emparejadas).toHaveLength(1);
+    expect(r.formasPorRecorte).toEqual([]);
+  });
+
+  it("con dos equivalencias que encajan no se elige ninguna", () => {
+    /*
+     * LA REGLA QUE NO SE RELAJA. «Datáfono...» con dos datáfonos configurados
+     * podría ser cualquiera de los dos, y elegir uno mandaría cobros contra la
+     * forma equivocada sin que nada chirriara. Se dice y lo mira una persona.
+     */
+    const equiv: Equivalencias = new Map([
+      ["DATÁFONO CLEARONE TARJETA", "CLEARONE"],
+      ["DATÁFONO CAIXA TARJETA", "TARJETA"],
+    ]);
+    const r = cotejar(erp("Datáfono..."), mob("CLEARONE"), equiv);
+
+    expect(r.emparejadas).toEqual([]);
+    expect(r.formasAmbiguas).toEqual([
+      { etiqueta: "Datáfono...", candidatas: ["DATÁFONO CAIXA TARJETA", "DATÁFONO CLEARONE TARJETA"] },
+    ]);
+    expect(r.cuadra).toBe(false);
+  });
+
+  it("ambigua NO es lo mismo que sin configurar", () => {
+    /*
+     * Decir «sin configurar» mandaría a alguien a crear una equivalencia que ya
+     * existe, y a no entender por qué la nueva tampoco arregla nada.
+     */
+    const equiv: Equivalencias = new Map([
+      ["DATÁFONO CLEARONE TARJETA", "CLEARONE"],
+      ["DATÁFONO CAIXA TARJETA", "TARJETA"],
+    ]);
+    const r = cotejar(erp("Datáfono..."), mob("CLEARONE"), equiv);
+
+    expect(r.formasSinEquivalencia).toEqual([]);
+  });
+
+  it("dos equivalencias que apuntan a la MISMA forma no son ninguna duda", () => {
+    /* Da igual cuál se coja: la respuesta es la misma. */
+    const equiv: Equivalencias = new Map([
+      ["DATÁFONO CLEARONE TARJETA", "CLEARONE"],
+      ["DATAFONO CLEARONE TA", "CLEARONE"],
+    ]);
+    const r = cotejar(erp("Datáfono Clearon..."), mob("CLEARONE"), equiv);
+
+    expect(r.emparejadas).toHaveLength(1);
+    expect(r.formasAmbiguas).toEqual([]);
+  });
+
+  it("la exacta gana a la que solo encaja por prefijo", () => {
+    /*
+     * Si alguien se tomó la molestia de configurar la etiqueta entera, eso es
+     * lo que quería decir. Ponerlas a competir convertiría una equivalencia
+     * bien puesta en ambigua por culpa de otra que solo se le parece.
+     */
+    const equiv: Equivalencias = new Map([
+      ["TPV CAIXA", "TARJETA"],
+      ["TPV CAIXA COMERCIO 702", "CLEARONE"],
+    ]);
+    const r = cotejar(erp("TPV CAIXA"), mob("TARJETA"), equiv);
+
+    expect(r.emparejadas).toHaveLength(1);
+    expect(r.formasAmbiguas).toEqual([]);
+    expect(r.formasPorRecorte).toEqual([]);
+  });
+
+  it("un trozo demasiado corto no empareja nada", () => {
+    /*
+     * Con dos letras el emparejamiento diría más del azar que de la etiqueta, y
+     * una lectura así de corta es señal de que la captura vino mal. Ahí lo que
+     * toca es decirlo, no adivinar.
+     */
+    const equiv: Equivalencias = new Map([["TPV CAIXA", "TARJETA"]]);
+    const r = cotejar(erp("TP..."), mob("TARJETA"), equiv);
+
+    expect(r.emparejadas).toEqual([]);
+    expect(r.formasSinEquivalencia).toEqual(["TP..."]);
+  });
+});
+
 describe("la referencia, normalizada", () => {
   it("el mismo documento escrito de tres formas empareja igual", () => {
     const mob: LineaMobilink[] = [

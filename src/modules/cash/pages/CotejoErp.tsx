@@ -306,6 +306,53 @@ function Informe({ informe }: { informe: InformeCotejo }) {
         </Panel>
       )}
 
+      {informe.formasAmbiguas.length > 0 && (
+        <Panel tono="border-amber-500/40 bg-amber-500/5">
+          <p className="mb-1 text-sm font-bold text-amber-200">
+            Etiquetas del ERP que encajan con varias
+          </p>
+          <p className="mb-2 text-xs text-slate-300">
+            El ERP corta la columna de forma de pago y lo que queda encaja con más de una
+            equivalencia, así que no se elige ninguna. Se arregla configurando la etiqueta con{" "}
+            <b>más letras</b>, hasta que se distinga de la otra.
+          </p>
+          <ul className="ml-5 list-disc space-y-1 text-xs text-slate-200">
+            {informe.formasAmbiguas.map((f) => (
+              <li key={f.etiqueta}>
+                <code>{f.etiqueta}</code>{" "}
+                <span className="text-slate-400">
+                  podría ser {f.candidatas.map((c) => `«${c}»`).join(" o ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+
+      {/*
+        Se enseña sin alarma —tono neutro— porque no es un problema: es una
+        deducción que ha salido bien. Pero se enseña, porque es una DEDUCCIÓN.
+        El día que el recorte empareje con la equivalencia equivocada, aquí está
+        escrito con qué; sin esto, el cotejo daría por bueno un emparejamiento
+        que nadie llegó a configurar del todo y no habría por dónde verlo.
+      */}
+      {informe.formasPorRecorte.length > 0 && (
+        <Panel>
+          <p className="mb-1 text-sm font-bold text-slate-200">Etiquetas cortadas por el ERP</p>
+          <p className="mb-2 text-xs text-slate-400">
+            El ERP corta esta columna según la resolución de la pantalla, así que se ha emparejado
+            por el principio de la etiqueta. Comprueba que la equivalencia es la que esperabas:
+          </p>
+          <ul className="ml-5 list-disc space-y-1 text-xs text-slate-300">
+            {informe.formasPorRecorte.map((f) => (
+              <li key={f.etiqueta}>
+                <code>{f.etiqueta}</code> → <code>{f.configurada}</code>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+
       {informe.discrepanciasDeForma.length > 0 && (
         <Panel tono="border-amber-500/40 bg-amber-500/5">
           <p className="mb-1 text-sm font-bold text-amber-200">
