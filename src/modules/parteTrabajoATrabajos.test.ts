@@ -164,25 +164,67 @@ describe("entradaEnMs", () => {
 });
 
 describe("parteATrabajos", () => {
-  it("crea un trabajo por línea de servicio, con su cantidad y sus minutos", () => {
+  it("crea UN solo trabajo por parte, mandando la operación de más tiempo", () => {
     const r = parteATrabajos({ parte: PARTE, mapa: MAPA, quickTemplates: PLANTILLAS });
 
-    expect(r.trabajos).toHaveLength(2);
+    expect(r.trabajos).toHaveLength(1);
 
     expect(r.trabajos[0]).toMatchObject({
-      templateKey: "montaje-camion",
+      templateKey: "montaje-camion", // 100 min, frente a los 40 de la fijación
       area: "camion",
       plate: "8072MNC",
       quantity: 4,
-      estimatedMinutes: 100,
       ptNumero: "D2_26/62",
     });
+  });
 
-    expect(r.trabajos[1]).toMatchObject({
+  it("los minutos del trabajo son los de TODOS los servicios del parte", () => {
+    const r = parteATrabajos({ parte: PARTE, mapa: MAPA, quickTemplates: PLANTILLAS });
+
+    // 4 montajes × 25 min + 4 fijaciones × 10 min.
+    expect(r.trabajos[0].estimatedMinutes).toBe(140);
+  });
+
+  it("el resto de servicios viajan como tareas incluidas, con su cantidad", () => {
+    const r = parteATrabajos({ parte: PARTE, mapa: MAPA, quickTemplates: PLANTILLAS });
+
+    expect(r.trabajos[0].tareasIncluidas).toHaveLength(1);
+
+    expect(r.trabajos[0].tareasIncluidas[0]).toMatchObject({
       templateKey: "fijacion",
       quantity: 4,
-      estimatedMinutes: 40,
+      unitMinutes: 10,
+      standardMinutes: 40,
+      source: "quickTemplate",
     });
+  });
+
+  it("con un solo servicio no hay tareas incluidas", () => {
+    const parte = { ...PARTE, lineas: [PARTE.lineas[0], PARTE.lineas[4]] };
+
+    const r = parteATrabajos({ parte, mapa: MAPA, quickTemplates: PLANTILLAS });
+
+    expect(r.trabajos).toHaveLength(1);
+    expect(r.trabajos[0].tareasIncluidas).toEqual([]);
+    expect(r.trabajos[0].estimatedMinutes).toBe(100);
+  });
+
+  it("si la fijación pesa más que el montaje, manda la fijación", () => {
+    const parte = {
+      ...PARTE,
+      lineas: [
+        { descripcion: 'MONTAJE CAMION MAYOR 19.5"', unidades: 1 },
+        { descripcion: "MONTAJE FIJACIÓN(QUIT.PONER)CM", unidades: 8 },
+      ],
+    };
+
+    const r = parteATrabajos({ parte, mapa: MAPA, quickTemplates: PLANTILLAS });
+
+    // 8 × 10 = 80 min, frente a 1 × 25 = 25.
+    expect(r.trabajos[0].templateKey).toBe("fijacion");
+    expect(r.trabajos[0].quantity).toBe(8);
+    expect(r.trabajos[0].estimatedMinutes).toBe(105);
+    expect(r.trabajos[0].tareasIncluidas[0].templateKey).toBe("montaje-camion");
   });
 
   it("el material no genera trabajo pero se conserva como referencia", () => {
@@ -253,7 +295,7 @@ describe("parteATrabajos", () => {
     });
 
     expect(r.avisos.join(" ")).toContain("matrícula");
-    expect(r.trabajos).toHaveLength(2);
+    expect(r.trabajos).toHaveLength(1);
   });
 
   it("avisa si no hay hora de entrada legible", () => {
