@@ -4,6 +4,7 @@ import {
   claveArticulo,
   entradaEnMs,
   minutosDePlantilla,
+  normalizaMatricula,
   normalizaTexto,
   parteATrabajos,
   resumenMateriales,
@@ -77,6 +78,21 @@ const MAPA: MapaArticulos = {
 describe("normalizaTexto", () => {
   it("quita acentos, mayúsculas y espacios de sobra", () => {
     expect(normalizaTexto("  Montaje  Fijación ")).toBe("MONTAJE FIJACION");
+  });
+});
+
+describe("normalizaMatricula", () => {
+  it("quita el tipo de vehículo que antepone la captura del ERP", () => {
+    expect(normalizaMatricula("CAMION-8072MNC")).toBe("8072MNC");
+    expect(normalizaMatricula("REMOLQUE-R1234BCD")).toBe("R1234BCD");
+  });
+
+  it("deja intacta una matrícula normal", () => {
+    expect(normalizaMatricula(" 8072 mnc ")).toBe("8072MNC");
+  });
+
+  it("no recorta si lo de después del guion no parece matrícula", () => {
+    expect(normalizaMatricula("CAMION-SINDATOS")).toBe("CAMION-SINDATOS");
   });
 });
 
@@ -254,6 +270,16 @@ describe("parteATrabajos", () => {
   it("normaliza la matrícula del parte", () => {
     const r = parteATrabajos({
       parte: { ...PARTE, matricula: " 8072 mnc " },
+      mapa: MAPA,
+      quickTemplates: PLANTILLAS,
+    });
+
+    expect(r.trabajos[0].plate).toBe("8072MNC");
+  });
+
+  it("acepta la matrícula tal y como sale en la captura del ERP", () => {
+    const r = parteATrabajos({
+      parte: { ...PARTE, matricula: "CAMION-8072MNC" },
       mapa: MAPA,
       quickTemplates: PLANTILLAS,
     });

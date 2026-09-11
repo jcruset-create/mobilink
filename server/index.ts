@@ -11694,20 +11694,41 @@ app.post("/api/partes-trabajo/leer", protectWhenStrict(requirePanelRole), async 
       });
     }
 
-    const imagenes = Array.isArray(req.body?.imagenes)
+    // El escáner del taller produce PDF y el ERP se captura con Impr Pant, así
+    // que llegan las dos cosas. Un PDF NO puede ir como imagen: el proveedor lo
+    // rechaza, y ése era el motivo de que subir el parte tal cual salía del
+    // escáner no funcionase.
+    const adjuntos: string[] = Array.isArray(req.body?.imagenes)
       ? req.body.imagenes.filter((u: unknown) => typeof u === "string" && u)
       : [];
 
-    if (imagenes.length === 0) {
-      return res.status(400).json({ error: "No se ha enviado ninguna imagen del parte" });
+    if (adjuntos.length === 0) {
+      return res.status(400).json({ error: "No se ha enviado ningún parte" });
     }
+
+    const esPdf = (u: string) => /^data:application\/pdf[;,]/i.test(u) || /\.pdf($|\?)/i.test(u);
+
+    const imagenes = adjuntos.filter((u) => !esPdf(u));
+
+    const archivos = adjuntos
+      .filter(esPdf)
+      .map((dataUri, i) => ({ nombre: `parte-${i + 1}.pdf`, dataUri }));
 
     const datos = await extractJson({
       strict: true,
       maxTokens: 2000,
       images: imagenes,
+      archivos,
       system: [
         "Eres un lector de partes de trabajo de un taller de neumáticos.",
+        "Te llega una de estas dos cosas, y de ambas se saca lo mismo:",
+        "- El parte IMPRESO y escaneado, con cabecera del taller, cliente y la",
+        "  tabla PRODUCTOS Y SERVICIOS.",
+        "- Una CAPTURA DE PANTALLA del ERP (Formulario de Partes de Trabajo),",
+        "  con la rejilla de líneas. Ahí la matrícula suele estar abajo, en un",
+        "  rótulo del tipo CAMION-8072MNC: devuelve solo la matrícula (8072MNC).",
+        "  Las columnas son Descripcion, Uds., Dto., Precio U., Precio T., PVP.",
+        "  Usa Uds. como unidades y Precio U. como precio unitario.",
         "Devuelve SOLO un JSON con esta forma exacta:",
         "{",
         '  "numero": string,            // el "PT Nº" del parte',

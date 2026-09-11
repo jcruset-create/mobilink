@@ -97,6 +97,25 @@ export function normalizaTexto(valor: string): string {
     .trim();
 }
 
+/**
+ * Matrícula del parte.
+ *
+ * La captura del ERP la trae con el tipo de vehículo delante
+ * ("CAMION-8072MNC", "REMOLQUE-R1234BCD"): se queda con lo de después del
+ * guion, que es la matrícula de verdad. Sin guion, se devuelve tal cual.
+ */
+export function normalizaMatricula(valor: string): string {
+  const limpio = normalizaTexto(valor).replace(/\s+/g, "");
+
+  if (!limpio.includes("-")) return limpio;
+
+  const ultimo = limpio.split("-").filter(Boolean).pop() ?? "";
+
+  // Si lo de después del guion no parece matrícula, mejor dejar el original:
+  // es preferible un dato raro y visible que uno recortado a medias.
+  return /\d/.test(ultimo) ? ultimo : limpio;
+}
+
 /** Unidades de una línea: solo cuenta una cantidad positiva y finita. */
 export function unidadesDeLinea(linea: LineaParte): number {
   const valor = Number(linea?.unidades);
@@ -176,7 +195,7 @@ export function parteATrabajos({
   const sinMapear: LineaSinMapear[] = [];
   const avisos: string[] = [];
 
-  const matricula = normalizaTexto(parte.matricula).replace(/\s+/g, "");
+  const matricula = normalizaMatricula(parte.matricula);
 
   if (!matricula) avisos.push("El parte no trae matrícula.");
 
