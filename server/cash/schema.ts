@@ -82,6 +82,24 @@ export async function initCash(): Promise<void> {
     CREATE INDEX IF NOT EXISTS cash_registers_empresa_idx ON cash_registers(empresa_id, activa);
   `);
 
+  /*
+   * ¿Esta caja tiene que cotejarse con el ERP antes de cerrar?
+   *
+   * Por caja y APAGADO por defecto, que es lo único defendible: el cotejo se
+   * apoya en pegar una captura de Genes, y hay cajas que no cobran contra Genes
+   * —o que ni siquiera tienen configuradas las equivalencias—. Encenderlo para
+   * todo el mundo de golpe dejaría a esas cajas sin poder cerrar por una regla
+   * que no les toca, y su única salida sería escribir un motivo falso cada
+   * tarde. Una regla que obliga a mentir para trabajar deja de vigilar nada.
+   *
+   * Vive en la caja y no en la empresa por lo mismo: dentro de una empresa
+   * conviven el mostrador que factura por Genes y el que no.
+   */
+  await pool.query(`
+    ALTER TABLE cash_registers
+      ADD COLUMN IF NOT EXISTS exigir_cotejo_erp BOOLEAN NOT NULL DEFAULT false;
+  `);
+
   // ── Catálogo de formas de pago ────────────────────────────────────────────
   // Por empresa: cada una cobra por donde cobra. `codigo` es lo que se guarda
   // en cash_operation_payments, así que una forma dada de baja no cambia la
@@ -1814,6 +1832,49 @@ export async function initCash(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS cash_erp_payment_map_empresa_idx
       ON cash_erp_payment_map(empresa_id);
+  `);
+
+  /*
+   * ── El resultado de cada cotejo con el ERP ────────────────────────────────
+   *
+   * Se guarda porque el cierre lo exige: no se cierra una jornada sin haberla
+   * cotejado. Sin dejar rastro del cotejo, esa regla no se puede comprobar.
+   *
+   * ── Lo que NO se guarda, y es lo más importante de esta tabla ─────────────
+   *
+   * Ni la captura, ni las líneas, ni un solo nombre de cliente. La pantalla del
+   * ERP lleva nombres y números de factura, y conservarla sería montar un
+   * depósito de datos personales que nadie ha pedido y que nadie vigilaría.
+   *
+   * Aquí solo van CIFRAS: cuántas líneas, cuántas cuadraron y por cuánto. Es
+   * todo lo que la puerta del cierre necesita saber, y es lo que hace que
+   * guardar esto no tenga ningún coste de privacidad.
+   *
+   * `huella` es el estado de la jornada cuando se cotejó. Si al cerrar no
+   * coincide, el cotejo es de antes de los últimos cobros y no vale: un OK
+   * viejo enseñado como bueno es peor que no tener ninguno.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_erp_reconciliations (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      session_id INTEGER NOT NULL REFERENCES cash_sessions(id) ON DELETE CASCADE,
+      /* Falso también cuando la lectura salió bloqueante y no hubo informe. */
+      cuadra BOOLEAN NOT NULL,
+      /* Cómo estaba la jornada al cotejar: «operaciones:ultimoId:suma». */
+      huella TEXT NOT NULL,
+      lineas_erp INTEGER NOT NULL DEFAULT 0,
+      emparejadas INTEGER NOT NULL DEFAULT 0,
+      a_revisar INTEGER NOT NULL DEFAULT 0,
+      diferencia_cobros_centimos BIGINT NOT NULL DEFAULT 0,
+      diferencia_pagos_centimos BIGINT NOT NULL DEFAULT 0,
+      /* La lectura se declaró inservible: no llegó a haber informe. */
+      lectura_bloqueante BOOLEAN NOT NULL DEFAULT false,
+      cotejado_por UUID,
+      created_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cash_erp_reconciliations_sesion_idx
+      ON cash_erp_reconciliations(session_id, id DESC);
   `);
 
   /*

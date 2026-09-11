@@ -181,6 +181,8 @@ export const actualizarCaja = (
     activa?: boolean;
     /** Fondo fijo del cajón, en céntimos. 0 = sin fondo fijo. */
     fondoObjetivoCentimos?: number;
+    /** Esta caja no se cierra sin haberla cotejado con el ERP. */
+    exigirCotejoErp?: boolean;
   }
 ) =>
   pedir<{ caja: Caja & { activa: boolean } }>(`/registers/${id}`, {
@@ -706,6 +708,11 @@ export const cerrarJornada = (
     notas?: string;
     /** Confirmación explícita para dejar la caja a cero teniendo fondo fijo. */
     permitirCajaVacia?: boolean;
+    /**
+     * La llave para cerrar sin el OK del cotejo con el ERP: el MOTIVO escrito.
+     * Un booleano se manda sin pensar; una frase queda en la jornada.
+     */
+    motivoSinCotejo?: string;
   }
 ) =>
   pedir<{
@@ -716,7 +723,19 @@ export const cerrarJornada = (
     totalIngresoCentimos: number;
     diferenciaCentimos: number;
     denominacionesCuadran: boolean;
+    cierreForzado: boolean;
   }>(`/sessions/${sessionId}/close`, json(datos));
+
+/** Si esta jornada se ha cotejado con el ERP, y si ese cotejo sigue valiendo. */
+export const estadoCotejoErp = (sessionId: number) =>
+  pedir<{
+    /** Esta caja exige el cotejo para cerrar. Lo decide el servidor. */
+    exigido: boolean;
+    falta: boolean;
+    caducado: boolean;
+    cuadra: boolean;
+    cotejadoEnMs: number | null;
+  }>(`/sessions/${sessionId}/erp-reconcile/estado`);
 
 // ── Histórico y documentos ─────────────────────────────────────────────────
 

@@ -42,6 +42,8 @@ export type Caja = {
    * el día. 0 = sin fondo fijo, y entonces el cierre lo pregunta.
    */
   fondoObjetivoCentimos: number;
+  /** Esta caja no se cierra sin haberla cotejado con el ERP. Apagado por defecto. */
+  exigirCotejoErp: boolean;
 };
 
 export type EstadoSesion =

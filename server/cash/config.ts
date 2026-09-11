@@ -55,6 +55,8 @@ export type CajaConfig = {
   nombre: string;
   /** Fondo fijo del cajón. 0 = sin fondo fijo. */
   fondoObjetivoCentimos: number;
+  /** Esta caja no se cierra sin haberla cotejado con el ERP. */
+  exigirCotejoErp: boolean;
   activa: boolean;
   /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
   codigo: string;
@@ -78,6 +80,7 @@ export async function listarCajas(
 ): Promise<CajaConfig[]> {
   const { rows } = await pool.query(
     `SELECT c.id, c.centro, c.centro_id, c.nombre, c.codigo, c.activa, c.fondo_objetivo_centimos,
+            c.exigir_cotejo_erp,
             (SELECT COUNT(*) FROM cash_sessions s WHERE s.register_id = c.id) AS jornadas,
             (SELECT s.id FROM cash_sessions s
               WHERE s.register_id = c.id AND s.estado IN ('OPEN','PENDING_CLOSE','REOPENED')
@@ -96,6 +99,7 @@ export async function listarCajas(
     nombre: r.nombre,
     codigo: r.codigo ?? "",
     fondoObjetivoCentimos: Number(r.fondo_objetivo_centimos ?? 0),
+    exigirCotejoErp: Boolean(r.exigir_cotejo_erp),
     activa: r.activa,
     jornadas: Number(r.jornadas),
     jornadaAbierta: r.jornada_abierta,
@@ -192,7 +196,7 @@ export async function crearCaja(
     ip: ctx.ip,
   });
 
-  return { ...rows[0], fondoObjetivoCentimos: 0 };
+  return { ...rows[0], fondoObjetivoCentimos: 0, exigirCotejoErp: false };
 }
 
 export async function actualizarCaja(
@@ -205,6 +209,7 @@ export async function actualizarCaja(
     codigo?: string;
     activa?: boolean;
     fondoObjetivoCentimos?: number;
+    exigirCotejoErp?: boolean;
   }
 ): Promise<{
   id: number;
@@ -214,6 +219,7 @@ export async function actualizarCaja(
   codigo: string;
   activa: boolean;
   fondoObjetivoCentimos: number;
+  exigirCotejoErp: boolean;
 }> {
   const { rows: actual } = await pool.query(
     `SELECT * FROM cash_registers WHERE id = $1 AND empresa_id = $2`,
@@ -300,14 +306,19 @@ export async function actualizarCaja(
     );
   }
 
+  const exigirCotejo =
+    cambios.exigirCotejoErp === undefined
+      ? Boolean(actual[0].exigir_cotejo_erp)
+      : cambios.exigirCotejoErp === true;
+
   const { rows } = await pool.query(
     `UPDATE cash_registers
         SET nombre = $2, centro = $3, activa = $4, fondo_objetivo_centimos = $5,
-            codigo = $7, centro_id = $8, updated_at_ms = $6
+            codigo = $7, centro_id = $8, exigir_cotejo_erp = $9, updated_at_ms = $6
       WHERE id = $1
       RETURNING id, centro, centro_id AS "centroId", nombre, codigo, activa,
-                fondo_objetivo_centimos`,
-    [id, nombre, centro, activa, fondo, Date.now(), codigo, centroId]
+                fondo_objetivo_centimos, exigir_cotejo_erp`,
+    [id, nombre, centro, activa, fondo, Date.now(), codigo, centroId, exigirCotejo]
   );
 
   await registrarAuditoria({
@@ -324,13 +335,22 @@ export async function actualizarCaja(
         codigo: actual[0].codigo ?? "",
         activa: actual[0].activa,
         fondoObjetivoCentimos: Number(actual[0].fondo_objetivo_centimos ?? 0),
+        exigirCotejoErp: Boolean(actual[0].exigir_cotejo_erp),
       },
-      despues: { nombre, centro, centroId, codigo, activa, fondoObjetivoCentimos: fondo },
+      despues: {
+        nombre, centro, centroId, codigo, activa,
+        fondoObjetivoCentimos: fondo,
+        exigirCotejoErp: exigirCotejo,
+      },
     },
     ip: ctx.ip,
   });
 
-  return { ...rows[0], fondoObjetivoCentimos: Number(rows[0].fondo_objetivo_centimos ?? 0) };
+  return {
+    ...rows[0],
+    fondoObjetivoCentimos: Number(rows[0].fondo_objetivo_centimos ?? 0),
+    exigirCotejoErp: Boolean(rows[0].exigir_cotejo_erp),
+  };
 }
 
 // ── Denominaciones ─────────────────────────────────────────────────────────

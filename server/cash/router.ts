@@ -2250,12 +2250,41 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.view"),
     ruta(async (req, res) => {
       const b = req.body ?? {};
+      const sessionId = enteroPositivo(req.params.id, "id");
       const { cotejarCapturaErp } = await import("./cotejoErp.ts");
+      const { registrarCotejo } = await import("./cotejoRegistro.ts");
+
+      const resultado = await cotejarCapturaErp(req.authCtx!.empresaId, {
+        sessionId,
+        imagen: typeof b.imagen === "string" ? b.imagen : "",
+      });
+
+      /*
+       * Queda apuntado que se ha cotejado, con sus cifras y sin la captura. Es
+       * lo que luego mira el cierre para saber si esta jornada la ha revisado
+       * alguien. Se apunta también la lectura bloqueante —como NO cuadrada—
+       * porque pegar una captura ilegible no es haber cotejado, pero enterarse
+       * de que se intentó vale para entender un cierre forzado.
+       */
+      await registrarCotejo(
+        req.authCtx!.empresaId,
+        sessionId,
+        req.authCtx!.userId ?? null,
+        resultado.informe
+      );
+
+      res.json(resultado);
+    })
+  );
+
+  /* Lo que la pantalla de Cierre necesita para avisar ANTES de que pulsen. */
+  r.get(
+    "/sessions/:id/erp-reconcile/estado",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      const { estadoDelCotejo } = await import("./cotejoRegistro.ts");
       res.json(
-        await cotejarCapturaErp(req.authCtx!.empresaId, {
-          sessionId: enteroPositivo(req.params.id, "id"),
-          imagen: typeof b.imagen === "string" ? b.imagen : "",
-        })
+        await estadoDelCotejo(req.authCtx!.empresaId, enteroPositivo(req.params.id, "id"))
       );
     })
   );
@@ -2501,6 +2530,7 @@ export function createCashRouter(): Router {
           arqueoId: b.arqueoId ? enteroPositivo(b.arqueoId, "arqueoId") : undefined,
           notas: typeof b.notas === "string" ? b.notas : undefined,
           permitirCajaVacia: b.permitirCajaVacia === true,
+          motivoSinCotejo: typeof b.motivoSinCotejo === "string" ? b.motivoSinCotejo : undefined,
         })
       );
     })
