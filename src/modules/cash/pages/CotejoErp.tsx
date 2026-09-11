@@ -232,7 +232,10 @@ function Informe({ informe }: { informe: InformeCotejo }) {
   const { totales } = informe;
 
   const revisar =
-    informe.soloEnErp.length + informe.soloEnMobilink.length + informe.ambiguas.length;
+    informe.soloEnErp.length +
+    informe.soloEnMobilink.length +
+    informe.ambiguas.length +
+    informe.discrepanciasDeForma.length;
   const nada = revisar === 0;
 
   return (
@@ -275,14 +278,13 @@ function Informe({ informe }: { informe: InformeCotejo }) {
         )}
 
         {/*
-          Que los totales cuadren y aun así haya líneas sueltas es un caso real
-          y confuso: un cobro metido con la forma de pago equivocada. Se dice,
-          porque si no la cifra grande en verde tapa el problema.
+          Que los totales cuadren y aun así haya algo que revisar es un caso
+          real y confuso. Se dice, porque si no la cifra grande en verde tapa el
+          problema.
         */}
         {totales.diferenciaCobros === 0 && !nada && (
           <p className="mt-3 text-xs text-amber-200">
-            Los totales cuadran, pero hay líneas que no se emparejan. Suele ser un cobro metido con
-            otra forma de pago: el dinero está, pero el arqueo descuadrará.
+            Los totales cuadran, pero hay líneas que no encajan del todo. Míralas abajo.
           </p>
         )}
       </Panel>
@@ -301,6 +303,65 @@ function Informe({ informe }: { informe: InformeCotejo }) {
               </li>
             ))}
           </ul>
+        </Panel>
+      )}
+
+      {informe.discrepanciasDeForma.length > 0 && (
+        <Panel tono="border-amber-500/40 bg-amber-500/5">
+          <p className="mb-1 text-sm font-bold text-amber-200">
+            Mismo importe, distinta forma de pago
+          </p>
+          <p className="mb-2 text-xs text-slate-300">
+            Es la misma operación a los dos lados, pero la forma de cobro no coincide. Dos cosas
+            pueden estar pasando, y la de arriba se descarta sola mirando la captura:
+          </p>
+          <ul className="mb-3 ml-5 list-disc space-y-1 text-xs text-slate-300">
+            <li>
+              <b>La captura se leyó mal.</b> Comprueba en el ERP qué pone de verdad en esa fila: si
+              coincide con lo que dice Mobilink, no hay nada que corregir.
+            </li>
+            <li>
+              <b>El cobro se metió con la forma equivocada.</b> El dinero está, pero el arqueo
+              descuadrará por ese importe.
+            </li>
+          </ul>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-[10px] uppercase text-slate-500">
+                  <th className="py-1">Importe</th>
+                  <th>En el ERP</th>
+                  <th>En Mobilink</th>
+                  <th>Operación</th>
+                </tr>
+              </thead>
+              <tbody>
+                {informe.discrepanciasDeForma.map((d, i) => (
+                  <tr key={i} className="border-t border-slate-800 text-slate-200">
+                    <td className="py-1 font-medium">{euros(d.erp.importeCentimos)}</td>
+                    <td>
+                      {d.erp.formaErp}
+                      {/*
+                        Sin equivalencia configurada NO se dice «no coincide»:
+                        sería engañoso, porque no se ha comparado nada. Se dice
+                        lo que pasa de verdad.
+                      */}
+                      {d.formaEsperada === null && (
+                        <span className="ml-1 rounded bg-slate-600/40 px-1.5 py-0.5 text-[10px] text-slate-300">
+                          sin configurar
+                        </span>
+                      )}
+                    </td>
+                    <td>{d.mobilink.formaCodigo}</td>
+                    <td className="text-slate-400">
+                      {d.mobilink.numero}
+                      {d.erp.justificante ? ` · justif. ${d.erp.justificante}` : ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Panel>
       )}
 

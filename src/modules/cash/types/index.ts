@@ -931,6 +931,13 @@ export type InformeCotejo = {
   soloEnErp: LineaErp[];
   soloEnMobilink: LineaMobilink[];
   ambiguas: { erp: LineaErp; candidatos: LineaMobilink[] }[];
+  /** Mismo importe a los dos lados, pero la forma de pago no coincide. */
+  discrepanciasDeForma: {
+    erp: LineaErp;
+    mobilink: LineaMobilink;
+    /** Qué forma le tocaría según la tabla. null = etiqueta sin configurar. */
+    formaEsperada: string | null;
+  }[];
   formasSinEquivalencia: string[];
   totales: {
     erpCobros: number;
