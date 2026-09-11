@@ -31,6 +31,7 @@ import {
 import { TwilioWhatsAppConnector, type TwilioWhatsAppConfig } from "./communications/twilio-whatsapp/TwilioWhatsAppConnector.ts";
 import { SmtpEmailConnector, type SmtpEmailConfig } from "./communications/smtp-email/SmtpEmailConnector.ts";
 import { MovertisConnector, type MovertisConfig } from "./telematics/movertis/MovertisConnector.ts";
+import { WebfleetConnector, type WebfleetConfig } from "./telematics/webfleet/WebfleetConnector.ts";
 
 /** Fábricas de conectores ERP disponibles, por key. */
 const ERP_FACTORIES: Record<string, (config: any) => IErpConnector> = {
@@ -311,7 +312,8 @@ export function supplierConnectorKeyForSupplierId(supplierId: string): string | 
 /** Fábricas de conectores de telemática, por key. */
 const TELEMATICS_FACTORIES: Record<string, (config: any) => ITelematicsConnector> = {
   movertis: (config: MovertisConfig) => new MovertisConnector(config),
-  // Futuro: "webfleet" (hoy vive fuera del Hub), "geotab", "samsara", OEM...
+  webfleet: (config: WebfleetConfig) => new WebfleetConnector(config),
+  // Futuro: "geotab", "samsara", OEM...
 };
 
 export function knownTelematicsConnectorKeys(): string[] {
