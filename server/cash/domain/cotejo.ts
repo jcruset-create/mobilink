@@ -71,6 +71,23 @@ export type LineaMobilink = {
  */
 export type Equivalencias = ReadonlyMap<string, string>;
 
+/**
+ * Cómo se escribe una etiqueta del ERP para poder compararla.
+ *
+ * Vive aquí y se exporta porque la usan los DOS extremos: quien guarda la
+ * equivalencia en Configuración y quien la busca al cotejar. Si cada uno
+ * normalizara a su manera, la misma etiqueta se guardaría de una forma y se
+ * buscaría de otra, y el cotejo fallaría solo a ratos — que es la peor manera
+ * de fallar, porque parece un problema de los datos.
+ *
+ * Mayúsculas y espacios colapsados. Nada más: los puntos suspensivos con los
+ * que el ERP corta «Datáfono Clearone ta...» se conservan a propósito, porque
+ * forman parte de lo que se ve en pantalla y es lo que el usuario va a copiar.
+ */
+export function etiquetaNormalizada(etiqueta: string): string {
+  return etiqueta.trim().toUpperCase().replace(/\s+/g, " ");
+}
+
 export type Emparejada = {
   erp: LineaErp;
   mobilink: LineaMobilink;
@@ -171,7 +188,7 @@ export function cotejar(
 
   // ── Segunda pasada: por importe y forma, y solo sin dudas ──────────────────
   for (const e of [...pendientesErp]) {
-    const codigo = equivalencias.get(e.formaErp.trim().toUpperCase());
+    const codigo = equivalencias.get(etiquetaNormalizada(e.formaErp));
     if (!codigo) {
       /*
        * Sin equivalencia NO se empareja por importe a secas. Sería colar un

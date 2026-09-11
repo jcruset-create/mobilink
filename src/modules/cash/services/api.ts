@@ -48,6 +48,8 @@ import type {
   DestinoGasto,
   GranularidadGasto,
   InformeGasto,
+  EquivalenciaErp,
+  ResultadoCotejo,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -1036,3 +1038,26 @@ export const reponerFondo = (datos: {
     `/bank-deposits/float-topup`,
     json(datos)
   );
+
+// ── Cotejo con el ERP ──────────────────────────────────────────────────────
+
+export const equivalenciasErp = () =>
+  pedir<{ equivalencias: EquivalenciaErp[] }>(`/erp-payment-map`);
+
+export const guardarEquivalenciaErp = (datos: { etiquetaErp: string; formaPago: string }) =>
+  pedir<{ equivalencia: EquivalenciaErp }>(`/erp-payment-map`, {
+    ...json(datos),
+    method: "PUT",
+  });
+
+export const borrarEquivalenciaErp = (id: number) =>
+  pedir<{ ok: true }>(`/erp-payment-map/${id}`, { method: "DELETE" });
+
+/**
+ * Manda la captura y devuelve el cotejo.
+ *
+ * La imagen viaja como data-URI y no se guarda en ningún sitio: el servidor la
+ * lee y la tira. Lleva nombres de clientes y números de factura.
+ */
+export const cotejarConErp = (sessionId: number, imagen: string) =>
+  pedir<ResultadoCotejo>(`/sessions/${sessionId}/erp-reconcile`, json({ imagen }));

@@ -894,3 +894,64 @@ export type PropuestaReposicion = {
   reposicion: Reposicion | null;
   sinJornadaAbierta: boolean;
 };
+
+// ── Cotejo con el ERP ──────────────────────────────────────────────────────
+
+export type EquivalenciaErp = {
+  id: number;
+  etiquetaErp: string;
+  formaPago: string;
+  /** Nombre de esa forma en el catálogo, o null si ya no existe. */
+  formaNombre: string | null;
+  /** false = la forma está de baja o borrada. Se enseña, no se esconde. */
+  formaVigente: boolean;
+};
+
+export type LineaErp = {
+  justificante?: string | null;
+  referencia?: string | null;
+  formaErp: string;
+  importeCentimos: number;
+  tipo: "COBRO" | "PAGO";
+  concepto?: string | null;
+};
+
+export type LineaMobilink = {
+  id: number;
+  numero: string;
+  referencia?: string | null;
+  formaCodigo: string;
+  importeCentimos: number;
+  tipo: "COBRO" | "PAGO";
+  concepto?: string | null;
+};
+
+export type InformeCotejo = {
+  emparejadas: { erp: LineaErp; mobilink: LineaMobilink; por: "referencia" | "importe" }[];
+  soloEnErp: LineaErp[];
+  soloEnMobilink: LineaMobilink[];
+  ambiguas: { erp: LineaErp; candidatos: LineaMobilink[] }[];
+  formasSinEquivalencia: string[];
+  totales: {
+    erpCobros: number;
+    erpPagos: number;
+    mobilinkCobros: number;
+    mobilinkPagos: number;
+    diferenciaCobros: number;
+    diferenciaPagos: number;
+  };
+  cuadra: boolean;
+};
+
+export type ResultadoCotejo = {
+  lectura: {
+    lineas: LineaErp[];
+    totalCobrosDeclarado: number | null;
+    totalPagosDeclarado: number | null;
+    avisos: string[];
+    fiable: boolean;
+    /** true = se sabe que la lectura está mal; no hay informe que enseñar. */
+    bloqueante: boolean;
+  };
+  informe: InformeCotejo | null;
+};

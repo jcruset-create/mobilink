@@ -44,6 +44,7 @@ import type {
   ConceptoGasto,
   DestinoGasto,
   TipoDestinoGasto,
+  EquivalenciaErp,
 } from "../types";
 import * as api from "../services/api";
 
@@ -84,10 +85,173 @@ export default function Configuracion() {
       <Secciones />
       <ConceptosDeGasto />
       <FormasPago />
+      <EquivalenciasErp />
       <ReglasEscaner />
       <DispositivosAutoScan />
       {puede("cash.denominations.configure") ? <Denominaciones /> : <DenominacionesSoloLectura />}
     </div>
+  );
+}
+
+// ── Equivalencias de formas de pago con el ERP ─────────────────────────────
+
+/**
+ * Cómo se llama en el ERP cada forma de cobro nuestra.
+ *
+ * Es lo que hace posible cotejar el cierre del ERP con el de Mobilink. Y es una
+ * tabla y no algo que deduzca el modelo por una razón concreta: una tabla dice
+ * siempre lo mismo. El día que el modelo decidiera que «TPV CAIXA» es efectivo,
+ * el cotejo daría por bueno un cobro de tarjeta contado como caja y el
+ * descuadre saldría en el arqueo de la tarde sin nada que lo explicara.
+ */
+function EquivalenciasErp() {
+  const { formasPago, puede } = useCash();
+  const [equivalencias, setEquivalencias] = useState<EquivalenciaErp[]>([]);
+  const [etiqueta, setEtiqueta] = useState("");
+  const [forma, setForma] = useState("");
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const editable = puede("cash.configure");
+
+  const cargar = useCallback(async () => {
+    try {
+      setEquivalencias((await api.equivalenciasErp()).equivalencias);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando las equivalencias");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function accion(fn: () => Promise<unknown>) {
+    setOcupado(true);
+    setError("");
+    try {
+      await fn();
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "La acción ha fallado");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Equivalencias con el ERP
+      </h2>
+      <p className="text-[12px] text-slate-500">
+        Cómo se llama en el ERP cada forma de cobro de aquí. Lo usa «Cotejar con el ERP» para
+        emparejar las líneas: sin la equivalencia, esas líneas salen como no emparejadas y se dice
+        cuáles faltan. Copia la etiqueta tal cual la enseña el ERP, con sus puntos suspensivos si
+        los tiene.
+      </p>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {editable && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Etiqueta del ERP
+            </span>
+            <input
+              value={etiqueta}
+              onChange={(e) => setEtiqueta(e.target.value)}
+              placeholder="Datáfono Clearone ta..."
+              className={inputCls}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Es nuestra
+            </span>
+            <select
+              value={forma}
+              onChange={(e) => setForma(e.target.value)}
+              className={inputCls}
+            >
+              <option value="">Elegir…</option>
+              {formasPago
+                .filter((f) => f.activa)
+                .map((f) => (
+                  <option key={f.codigo} value={f.codigo}>
+                    {f.nombre}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <button
+            disabled={ocupado || !etiqueta.trim() || !forma}
+            onClick={() =>
+              void accion(async () => {
+                await api.guardarEquivalenciaErp({ etiquetaErp: etiqueta, formaPago: forma });
+                setEtiqueta("");
+                setForma("");
+              })
+            }
+            className={btnPrimary}
+          >
+            Guardar
+          </button>
+        </div>
+      )}
+
+      <TableWrap>
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr>
+              <th className={thCls}>Etiqueta del ERP</th>
+              <th className={thCls}>Forma de cobro</th>
+              {editable && <th className={thCls} />}
+            </tr>
+          </thead>
+          <tbody>
+            {equivalencias.length === 0 && (
+              <EmptyRow
+                cols={editable ? 3 : 2}
+                text="Todavía no hay ninguna. Sin ellas, el cotejo no puede emparejar por forma de pago."
+              />
+            )}
+            {equivalencias.map((eq) => (
+              <tr key={eq.id}>
+                <td className={tdCls}>
+                  <code className="text-slate-200">{eq.etiquetaErp}</code>
+                </td>
+                <td className={tdCls}>
+                  {eq.formaNombre ?? <span className="text-rose-300">{eq.formaPago}</span>}{" "}
+                  {/*
+                    Una forma de baja o borrada NO se esconde: si se escondiera,
+                    el cotejo dejaría de emparejar esas líneas y aquí no habría
+                    ni rastro del motivo.
+                  */}
+                  {!eq.formaVigente && (
+                    <span className="ml-1 rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-rose-300">
+                      {eq.formaNombre ? "de baja" : "ya no existe"}
+                    </span>
+                  )}
+                </td>
+                {editable && (
+                  <td className={tdCls}>
+                    <button
+                      disabled={ocupado}
+                      onClick={() => void accion(() => api.borrarEquivalenciaErp(eq.id))}
+                      className={btnMini}
+                    >
+                      Quitar
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableWrap>
+    </section>
   );
 }
 
