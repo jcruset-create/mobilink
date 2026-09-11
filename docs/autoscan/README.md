@@ -9,7 +9,11 @@ final.
 > ejecutado en Windows**. Ni una vez. Lo que está probado es la lógica en Node
 > —189 pruebas entre agente y servidor—; lo que toca el sistema operativo
 > —instalador, bandeja, DPAPI, tarea programada, actualizador— está escrito y
-> revisado y **sin ejecutar**. Ver «Lo que no está probado».
+> revisado y **sin ejecutar**.
+>
+> **Queda pendiente la prueba en un PC de verdad**, y hasta pasarla AutoScan no
+> se despliega en más de un mostrador. El guion está en
+> [`PRUEBA-EN-WINDOWS.md`](./PRUEBA-EN-WINDOWS.md).
 
 ---
 
@@ -187,6 +191,9 @@ mal en los veinte a la vez y de madrugada. Cuando se haya usado unas cuantas
 veces de verdad, automatizarlo es mover una llamada a un temporizador.
 
 ### La primera vez en un Windows, por orden
+
+El guion completo —con lo que tiene que pasar en cada paso y qué mirar si no
+pasa— está en [`PRUEBA-EN-WINDOWS.md`](./PRUEBA-EN-WINDOWS.md). En corto:
 
 1. Instalar en **un solo PC**, no en veinte.
 2. Comprobar que arranca sin credencial y que la bandeja pide el código.
