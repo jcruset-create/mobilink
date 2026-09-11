@@ -22,6 +22,8 @@
 
 import { clienteTyreControl } from "./sesion.ts";
 import { estadoDeVehiculo } from "./estadoVehiculo.ts";
+import { kilometrajeParaMontaje } from "./kilometrajeOperacion.ts";
+import { correlacionAsistencia } from "./operaciones.ts";
 import {
   datosParaRpc, sincronizacionSustitucionActiva, tieneIdentidad,
   type Condicion, type DestinoRetirado, type IdentidadEntrante, type MotivoDesmontaje,
@@ -260,6 +262,24 @@ export async function prepararSustitucion(p: PlanSustitucion): Promise<Preparaci
     );
   }
 
+  /*
+   * Kilometraje. En una sustitución el odómetro marca el final de la vida de
+   * un neumático y el principio de la del siguiente, así que es el dato que
+   * hace trazable la operación. Se resuelve por el Telematics Hub, que ya sabe
+   * a qué cuenta preguntar y con qué tolerancia.
+   *
+   * La nota se añade a los avisos SIEMPRE, haya kilometraje o no: un número
+   * sin su procedencia y su desfase es justo lo que el hub evita producir, y
+   * un null sin explicación deja al que mire sin saber si falta el enlace, la
+   * lectura o el proveedor.
+   */
+  const kilometraje = await kilometrajeParaMontaje({
+    tcEmpresaId: p.tcEmpresaId,
+    tcVehicleId: p.tcVehicleId,
+    correlationId: correlacionAsistencia(p.assistanceId, "sustitucion"),
+  });
+  avisos.push(kilometraje.nota);
+
   // 4 · La llamada que se haría. Se construye siempre: es lo que enseña el
   // simulacro y lo que se ejecutará sin cambiar nada cuando se encienda.
   const llamada: LlamadaPrevista = {
@@ -273,9 +293,10 @@ export async function prepararSustitucion(p: PlanSustitucion): Promise<Preparaci
       p_datos: datosParaRpc(p.identidad),
       p_motivo_desmontaje: p.motivoDesmontaje,
       p_destino_retirado: p.destinoRetirado,
-      // Sin odómetro fiable no se manda: `serviceKm` son los km del
-      // desplazamiento, no el cuentakilómetros del vehículo.
-      p_km: null,
+      // El cuentakilómetros del vehículo según la telemática, NO el `serviceKm`
+      // de Assist —que son los km del desplazamiento del técnico—. `null`
+      // cuando no hay lectura fiable; el motivo está en los avisos.
+      p_km: kilometraje.km,
       p_obs: p.observaciones,
       // NUNCA se fuerza la medida. Solo un administrador puede, y el usuario de
       // integración no lo es a propósito.
