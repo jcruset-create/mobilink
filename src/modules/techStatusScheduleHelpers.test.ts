@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   applyScheduledStatusesToTechs,
-  getExpiredScheduledStatusForTech,
   type ScheduledTechStatus,
 } from "./techStatusScheduleHelpers";
 import type { Tech, TechStatus } from "./workshopTypes";
@@ -37,47 +36,6 @@ function programado(
 
 const HOY = "2026-09-09";
 
-describe("getExpiredScheduledStatusForTech", () => {
-  it("encuentra el rango terminado que coincide con el estado guardado", () => {
-    const estados = [programado("Alejandro", "2026-09-01", "2026-09-08")];
-
-    const caducado = getExpiredScheduledStatusForTech({
-      techName: "Alejandro",
-      status: "vacaciones",
-      scheduledStatuses: estados,
-      dateValue: HOY,
-    });
-
-    expect(caducado?.endDate).toBe("2026-09-08");
-  });
-
-  it("no da por caducado un rango que aún está vigente hoy", () => {
-    const estados = [programado("Albert", "2026-08-31", "2026-09-13")];
-
-    expect(
-      getExpiredScheduledStatusForTech({
-        techName: "Albert",
-        status: "vacaciones",
-        scheduledStatuses: estados,
-        dateValue: HOY,
-      })
-    ).toBeNull();
-  });
-
-  it("solo mira los rangos del MISMO estado", () => {
-    const estados = [programado("Andrés", "2026-09-01", "2026-09-05", "baja")];
-
-    expect(
-      getExpiredScheduledStatusForTech({
-        techName: "Andrés",
-        status: "permiso",
-        scheduledStatuses: estados,
-        dateValue: HOY,
-      })
-    ).toBeNull();
-  });
-});
-
 describe("applyScheduledStatusesToTechs", () => {
   it("aplica el estado del rango vigente y bloquea al técnico", () => {
     const [albert] = applyScheduledStatusesToTechs({
@@ -101,24 +59,37 @@ describe("applyScheduledStatusesToTechs", () => {
     expect(alejandro.blocked).toBe(false);
   });
 
-  it("no toca un estado puesto a mano, sin ningún rango que lo explique", () => {
-    const [jesus] = applyScheduledStatusesToTechs({
-      techs: [tech("Jesús", "otro_taller")],
+  it("devuelve a disponible una ausencia SIN ningún rango detrás", () => {
+    // El caso de Alejandro: salía de vacaciones y en la agenda no había nada.
+    // Las ausencias solo las pone la agenda, así que sin rango no son ciertas.
+    const [alejandro] = applyScheduledStatusesToTechs({
+      techs: [tech("Alejandro", "vacaciones", { blocked: true })],
       scheduledStatuses: [],
       dateValue: HOY,
     });
 
-    expect(jesus.status).toBe("otro_taller");
+    expect(alejandro.status).toBe("disponible");
+    expect(alejandro.blocked).toBe(false);
   });
 
-  it("un rango terminado de otro estado no devuelve a disponible", () => {
+  it("también devuelve a disponible 'otro taller' y 'no disponible' sin rango", () => {
+    const resultado = applyScheduledStatusesToTechs({
+      techs: [tech("Jesús", "otro_taller"), tech("Sergio", "nodisponible")],
+      scheduledStatuses: [],
+      dateValue: HOY,
+    });
+
+    expect(resultado.map((t) => t.status)).toEqual(["disponible", "disponible"]);
+  });
+
+  it("un rango terminado de otro estado tampoco sostiene la ausencia", () => {
     const [andres] = applyScheduledStatusesToTechs({
       techs: [tech("Andrés", "permiso")],
       scheduledStatuses: [programado("Andrés", "2026-09-01", "2026-09-05", "baja")],
       dateValue: HOY,
     });
 
-    expect(andres.status).toBe("permiso");
+    expect(andres.status).toBe("disponible");
   });
 
   it("con un rango terminado y otro vigente manda el vigente", () => {

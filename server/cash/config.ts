@@ -20,6 +20,7 @@ import { ErrorCaja, sesionAbierta } from "./repository.ts";
 import { nombreDeCentro } from "./hierarchy.ts";
 import { entidadDeIban, ibanValido, normalizarIban } from "./domain/bankaccount.ts";
 import { BANCOS_SEMILLA, logoDeSemilla } from "./domain/banks.ts";
+import { etiquetaNormalizada } from "./domain/cotejo.ts";
 import type { CampoRegla } from "./invoice-scan/classifier.ts";
 import {
   CODIGO_MAX,
@@ -54,6 +55,8 @@ export type CajaConfig = {
   nombre: string;
   /** Fondo fijo del cajón. 0 = sin fondo fijo. */
   fondoObjetivoCentimos: number;
+  /** Esta caja no se cierra sin haberla cotejado con el ERP. */
+  exigirCotejoErp: boolean;
   activa: boolean;
   /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
   codigo: string;
@@ -77,6 +80,7 @@ export async function listarCajas(
 ): Promise<CajaConfig[]> {
   const { rows } = await pool.query(
     `SELECT c.id, c.centro, c.centro_id, c.nombre, c.codigo, c.activa, c.fondo_objetivo_centimos,
+            c.exigir_cotejo_erp,
             (SELECT COUNT(*) FROM cash_sessions s WHERE s.register_id = c.id) AS jornadas,
             (SELECT s.id FROM cash_sessions s
               WHERE s.register_id = c.id AND s.estado IN ('OPEN','PENDING_CLOSE','REOPENED')
@@ -95,6 +99,7 @@ export async function listarCajas(
     nombre: r.nombre,
     codigo: r.codigo ?? "",
     fondoObjetivoCentimos: Number(r.fondo_objetivo_centimos ?? 0),
+    exigirCotejoErp: Boolean(r.exigir_cotejo_erp),
     activa: r.activa,
     jornadas: Number(r.jornadas),
     jornadaAbierta: r.jornada_abierta,
@@ -191,7 +196,7 @@ export async function crearCaja(
     ip: ctx.ip,
   });
 
-  return { ...rows[0], fondoObjetivoCentimos: 0 };
+  return { ...rows[0], fondoObjetivoCentimos: 0, exigirCotejoErp: false };
 }
 
 export async function actualizarCaja(
@@ -204,6 +209,7 @@ export async function actualizarCaja(
     codigo?: string;
     activa?: boolean;
     fondoObjetivoCentimos?: number;
+    exigirCotejoErp?: boolean;
   }
 ): Promise<{
   id: number;
@@ -213,6 +219,7 @@ export async function actualizarCaja(
   codigo: string;
   activa: boolean;
   fondoObjetivoCentimos: number;
+  exigirCotejoErp: boolean;
 }> {
   const { rows: actual } = await pool.query(
     `SELECT * FROM cash_registers WHERE id = $1 AND empresa_id = $2`,
@@ -299,14 +306,19 @@ export async function actualizarCaja(
     );
   }
 
+  const exigirCotejo =
+    cambios.exigirCotejoErp === undefined
+      ? Boolean(actual[0].exigir_cotejo_erp)
+      : cambios.exigirCotejoErp === true;
+
   const { rows } = await pool.query(
     `UPDATE cash_registers
         SET nombre = $2, centro = $3, activa = $4, fondo_objetivo_centimos = $5,
-            codigo = $7, centro_id = $8, updated_at_ms = $6
+            codigo = $7, centro_id = $8, exigir_cotejo_erp = $9, updated_at_ms = $6
       WHERE id = $1
       RETURNING id, centro, centro_id AS "centroId", nombre, codigo, activa,
-                fondo_objetivo_centimos`,
-    [id, nombre, centro, activa, fondo, Date.now(), codigo, centroId]
+                fondo_objetivo_centimos, exigir_cotejo_erp`,
+    [id, nombre, centro, activa, fondo, Date.now(), codigo, centroId, exigirCotejo]
   );
 
   await registrarAuditoria({
@@ -323,13 +335,22 @@ export async function actualizarCaja(
         codigo: actual[0].codigo ?? "",
         activa: actual[0].activa,
         fondoObjetivoCentimos: Number(actual[0].fondo_objetivo_centimos ?? 0),
+        exigirCotejoErp: Boolean(actual[0].exigir_cotejo_erp),
       },
-      despues: { nombre, centro, centroId, codigo, activa, fondoObjetivoCentimos: fondo },
+      despues: {
+        nombre, centro, centroId, codigo, activa,
+        fondoObjetivoCentimos: fondo,
+        exigirCotejoErp: exigirCotejo,
+      },
     },
     ip: ctx.ip,
   });
 
-  return { ...rows[0], fondoObjetivoCentimos: Number(rows[0].fondo_objetivo_centimos ?? 0) };
+  return {
+    ...rows[0],
+    fondoObjetivoCentimos: Number(rows[0].fondo_objetivo_centimos ?? 0),
+    exigirCotejoErp: Boolean(rows[0].exigir_cotejo_erp),
+  };
 }
 
 // ── Denominaciones ─────────────────────────────────────────────────────────
@@ -2197,4 +2218,118 @@ export async function validarClasificacionGasto(
   }
 
   return { conceptoId, destinoId };
+}
+
+// ── Equivalencias de formas de pago con el ERP ─────────────────────────────
+//
+// Para cotejar el cierre del ERP con el nuestro hay que saber que «Datáfono
+// Clearone ta...» es lo que aquí llamamos CLEARONE. Lo pone una persona, no lo
+// deduce un modelo: ver el porqué en el esquema y en `domain/cotejo.ts`.
+
+export type EquivalenciaErp = {
+  id: number;
+  etiquetaErp: string;
+  formaPago: string;
+  /** Nombre de esa forma en el catálogo, o null si ya no existe. */
+  formaNombre: string | null;
+  /** false = la forma está dada de baja o borrada. Se enseña, no se esconde. */
+  formaVigente: boolean;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const aEquivalencia = (r: any): EquivalenciaErp => ({
+  id: r.id,
+  etiquetaErp: r.etiqueta_erp,
+  formaPago: r.forma_pago,
+  formaNombre: r.forma_nombre ?? null,
+  formaVigente: Boolean(r.forma_nombre) && Boolean(r.forma_activa),
+});
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * Todas las equivalencias, con el estado real de la forma a la que apuntan.
+ *
+ * El LEFT JOIN no es un adorno: sin él, una equivalencia que apunta a una forma
+ * borrada desaparecería de la pantalla y nadie entendería por qué el cotejo
+ * sigue sin emparejar esas líneas. Sale, y sale marcada.
+ */
+export async function listarEquivalenciasErp(empresaId: string): Promise<EquivalenciaErp[]> {
+  const { rows } = await pool.query(
+    `SELECT m.*, p.nombre AS forma_nombre, p.activa AS forma_activa
+       FROM cash_erp_payment_map m
+       LEFT JOIN cash_payment_methods p
+         ON p.empresa_id = m.empresa_id AND p.codigo = m.forma_pago
+      WHERE m.empresa_id = $1
+      ORDER BY m.etiqueta_erp`,
+    [empresaId]
+  );
+  return rows.map(aEquivalencia);
+}
+
+/** El mapa que consume `cotejar`, ya normalizado por las dos puntas. */
+export async function mapaEquivalenciasErp(empresaId: string): Promise<Map<string, string>> {
+  const { rows } = await pool.query(
+    `SELECT etiqueta_erp, forma_pago FROM cash_erp_payment_map WHERE empresa_id = $1`,
+    [empresaId]
+  );
+  return new Map(rows.map((r) => [r.etiqueta_erp as string, r.forma_pago as string]));
+}
+
+export async function guardarEquivalenciaErp(
+  ctx: Contexto,
+  datos: { etiquetaErp: string; formaPago: string }
+): Promise<EquivalenciaErp> {
+  const etiqueta = etiquetaNormalizada(datos.etiquetaErp ?? "");
+  if (!etiqueta) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "Falta la etiqueta del ERP.", 400);
+  }
+  const codigo = (datos.formaPago ?? "").trim().toUpperCase();
+  if (!codigo) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "Falta la forma de cobro de Mobilink.", 400);
+  }
+
+  /*
+   * La forma tiene que existir AHORA. No hay clave ajena —el catálogo es
+   * editable y no debe tumbar equivalencias— pero dejar crear una que apunta a
+   * un código inventado daría un cotejo que no empareja nunca y no dice por qué.
+   */
+  const { rows: formas } = await pool.query(
+    `SELECT nombre, activa FROM cash_payment_methods WHERE empresa_id = $1 AND codigo = $2`,
+    [ctx.empresaId, codigo]
+  );
+  if (formas.length === 0) {
+    throw new ErrorCaja("FORMA_NO_ENCONTRADA", `No existe la forma de cobro «${codigo}».`, 400);
+  }
+
+  const ahora = Date.now();
+  /*
+   * UPSERT sobre la etiqueta: volver a guardar la misma la reapunta en vez de
+   * fallar. Es lo que se espera al corregir un mapeo desde la pantalla, y sin
+   * esto habría que borrar y crear para cambiar una letra.
+   */
+  const { rows } = await pool.query(
+    `INSERT INTO cash_erp_payment_map
+       (empresa_id, etiqueta_erp, forma_pago, creado_por, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$5)
+     ON CONFLICT (empresa_id, etiqueta_erp)
+       DO UPDATE SET forma_pago = EXCLUDED.forma_pago, updated_at_ms = EXCLUDED.updated_at_ms
+     RETURNING *`,
+    [ctx.empresaId, etiqueta, codigo, ctx.userId, ahora]
+  );
+
+  return aEquivalencia({
+    ...rows[0],
+    forma_nombre: formas[0]!.nombre,
+    forma_activa: formas[0]!.activa,
+  });
+}
+
+export async function borrarEquivalenciaErp(ctx: Contexto, id: number): Promise<void> {
+  const { rowCount } = await pool.query(
+    `DELETE FROM cash_erp_payment_map WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  if (!rowCount) {
+    throw new ErrorCaja("NO_ENCONTRADA", "Esa equivalencia ya no existe.", 404);
+  }
 }

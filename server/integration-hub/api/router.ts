@@ -346,12 +346,16 @@ export function createIntegrationHubRouter(): Router {
     if (!requireAdmin(req, res)) return;
     const tenantId = tenantOf(req);
     if (!tenantId) return res.status(400).json({ error: "missing_tenant" });
-    const { enabled, config } = req.body ?? {};
+    // `accountKey` y `name` son opcionales: quien no los mande sigue guardando
+    // la cuenta 'default' de siempre, que es lo que hace el panel hoy.
+    const { enabled, config, accountKey, name } = req.body ?? {};
     const saved = await upsertConnectorConfig({
       tenantId,
       connectorKey: req.params.key,
       enabled: Boolean(enabled),
       config: config ?? {},
+      ...(accountKey ? { accountKey: String(accountKey) } : {}),
+      ...(name !== undefined ? { name: name === null ? null : String(name) } : {}),
     });
     res.json(saved);
   });

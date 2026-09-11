@@ -8,6 +8,61 @@
 
 import pool from "../../db.ts";
 
+/**
+ * Cambia una restricción UNIQUE por otra con más columnas, sin sobresaltos.
+ *
+ * Ampliar una UNIQUE no se puede hacer con `IF NOT EXISTS`: hay que quitar la
+ * vieja y poner la nueva, y esto se ejecuta en cada arranque del servidor. Así
+ * que tiene que ser idempotente de verdad y no fallar cuando ya está hecho.
+ *
+ * La vieja se localiza por SUS COLUMNAS, no por su nombre: la declararon en
+ * línea dentro del CREATE TABLE, así que se llama como PostgreSQL decidiera
+ * (`integration_mappings_tenant_id_entity_type_..._key`) y ese nombre puede no
+ * ser el mismo en todos los entornos. Se compara el conjunto de columnas
+ * ordenado, de modo que solo cae la restricción que es exactamente esa.
+ *
+ * @param columnasViejas nombres ORDENADOS ALFABÉTICAMENTE de la UNIQUE a quitar
+ */
+async function reemplazarUnique(
+  tabla: string,
+  columnasViejas: string[],
+  nombreNuevo: string,
+  columnasNuevas: string[],
+): Promise<void> {
+  // ¿Ya está la nueva? Entonces no hay nada que hacer: arranque normal.
+  const yaEsta = await pool.query(
+    `SELECT 1 FROM pg_constraint WHERE conname = $1 AND conrelid = $2::regclass`,
+    [nombreNuevo, tabla]
+  );
+  if ((yaEsta.rowCount ?? 0) > 0) return;
+
+  const vieja = await pool.query(
+    `SELECT con.conname
+       FROM pg_constraint con
+      WHERE con.conrelid = $1::regclass
+        AND con.contype = 'u'
+        AND (
+          -- attname es de tipo "name", no "text": sin el cast la comparación
+          -- no compila («operator does not exist: name[] = text[]») y, como
+          -- esto corre en el arranque, el servidor no llega a levantar.
+          SELECT array_agg(att.attname::text ORDER BY att.attname::text)
+            FROM unnest(con.conkey) AS k
+            JOIN pg_attribute att
+              ON att.attrelid = con.conrelid AND att.attnum = k
+        ) = $2::text[]`,
+    [tabla, columnasViejas]
+  );
+
+  const nombreViejo = vieja.rows[0]?.conname as string | undefined;
+  if (nombreViejo) {
+    await pool.query(`ALTER TABLE ${tabla} DROP CONSTRAINT "${nombreViejo}"`);
+  }
+
+  await pool.query(
+    `ALTER TABLE ${tabla} ADD CONSTRAINT "${nombreNuevo}" UNIQUE (${columnasNuevas.join(", ")})`
+  );
+}
+
 export async function initIntegrationHub(): Promise<void> {
   // ── Conectores registrados y su configuración por tenant ──────────────────
   await pool.query(`
@@ -34,6 +89,30 @@ export async function initIntegrationHub(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS ihcc_tenant_idx ON integration_connector_configs(tenant_id);
   `);
+
+  // ── Varias cuentas del MISMO proveedor para el mismo cliente ──────────────
+  //
+  // La UNIQUE original, (tenant_id, connector_key), permite exactamente una
+  // cuenta por cliente y conector. Con un ERP eso basta. Con telemática no:
+  // un cliente puede tener dos cuentas del mismo proveedor —la flota de
+  // autobuses y la auxiliar, cada una con su propio token— y el modelo tiene
+  // que poder distinguirlas.
+  //
+  // `account_key` es el discriminador, y `name` es cómo se llama esa cuenta
+  // para una persona («Plana autobuses»). Las filas que ya existen toman
+  // 'default' y no se enteran: para quien solo tiene una cuenta, nada cambia.
+  await pool.query(`
+    ALTER TABLE integration_connector_configs
+      ADD COLUMN IF NOT EXISTS account_key TEXT NOT NULL DEFAULT 'default';
+    ALTER TABLE integration_connector_configs
+      ADD COLUMN IF NOT EXISTS name TEXT;
+  `);
+  await reemplazarUnique(
+    "integration_connector_configs",
+    ["connector_key", "tenant_id"],
+    "ihcc_tenant_connector_account_uniq",
+    ["tenant_id", "connector_key", "account_key"],
+  );
 
   // ── Operaciones de integración: el corazón de la trazabilidad (§2.9) ──────
   await pool.query(`
@@ -115,6 +194,36 @@ export async function initIntegrationHub(): Promise<void> {
     ALTER TABLE integration_mappings ADD COLUMN IF NOT EXISTS last_sync_at_ms BIGINT;
     ALTER TABLE integration_mappings ADD COLUMN IF NOT EXISTS last_sync_error TEXT;
   `);
+
+  // ── El mapeo tiene que decir a QUÉ CUENTA pertenece ───────────────────────
+  //
+  // Con dos cuentas del mismo proveedor, `system` ya no identifica con cuál se
+  // consulta un vehículo: hace falta la cuenta. Y `active` permite conservar el
+  // enlace viejo cuando a un vehículo le cambian el equipo, en vez de borrarlo
+  // y perder de dónde venían los kilómetros de antes.
+  //
+  // La UNIQUE crece con `account_key`, lo que la hace MENOS restrictiva a
+  // propósito: el mismo identificador externo puede existir en cuentas
+  // distintas —son plataformas distintas—, pero sigue siendo único dentro de
+  // una. Las filas existentes llevan 'default', así que ninguna la viola.
+  //
+  // NO se añade una unique por el otro lado (una entidad de Mobilink → un solo
+  // mapeo activo). Sería lo natural para un vehículo, pero rompería un caso que
+  // el comentario de arriba declara explícitamente: la misma entidad puede
+  // vivir en varias empresas del mismo ERP. Esa regla es específica de la
+  // telemática y su sitio es la fase que cree los enlaces de vehículo, no aquí.
+  await pool.query(`
+    ALTER TABLE integration_mappings
+      ADD COLUMN IF NOT EXISTS account_key TEXT NOT NULL DEFAULT 'default';
+    ALTER TABLE integration_mappings
+      ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+  `);
+  await reemplazarUnique(
+    "integration_mappings",
+    ["entity_type", "external_code", "system", "tenant_id"],
+    "ihmap_tenant_entity_system_account_code_uniq",
+    ["tenant_id", "entity_type", "system", "account_key", "external_code"],
+  );
 
   // ── Referencias de producto externas normalizadas + ofertas de proveedor ──
   await pool.query(`

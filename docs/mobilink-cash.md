@@ -691,6 +691,106 @@ con su bandeja en PowerShell y su instalador. **Los `.ps1` no se han ejecutado
 nunca**: en el entorno de desarrollo no hay PowerShell. Están tipados y
 revisados, que no es lo mismo que probados.
 
+De ahí el único pendiente de AutoScan: **probarlo en un PC del mostrador**. El
+guion, paso a paso y con qué mirar cuando algo falle, está en
+`docs/autoscan/PRUEBA-EN-WINDOWS.md`. Hasta pasarlo, no se instala en más de un
+mostrador.
+
+## 7 duodecies. Cotejar la caja del ERP con la de Mobilink
+
+Se copia la pantalla de arqueo del ERP (Genes), se pega en «Cotejar con el ERP»
+con Ctrl+V, y sale la comparación línea a línea: qué cuadra, qué falta en
+Mobilink, qué sobra y qué no se ha podido emparejar con seguridad.
+
+Cuatro piezas, y solo la primera habla con el modelo:
+
+| Pieza | Dónde | Qué decide |
+|---|---|---|
+| Lectura | `domain/lecturaErp.ts` | Qué de lo que el modelo dice haber leído se puede usar |
+| Equivalencias | `cash_erp_payment_map` | Qué etiqueta del ERP es qué forma de cobro de aquí |
+| Cotejo | `domain/cotejo.ts` | Qué línea del ERP es qué operación de Mobilink |
+| Pegamento | `cotejoErp.ts` | Junta las tres. No decide nada |
+
+**No registra nada.** Ni un INSERT: los cobros se siguen metiendo por Cobros,
+con sus validaciones y su detalle de piezas. Un botón que creara movimientos a
+partir de una captura es la automatización que sale mal en silencio el día que
+el modelo lea 377,24 como 377,74.
+
+**La captura no se guarda.** Se manda al modelo, se lee y se tira. Lleva
+nombres de clientes y números de factura.
+
+**La comprobación que lo sostiene.** El ERP imprime su propia suma («Sum =
+887,40»); se le pide al modelo que la lea también y se contrasta con la suma de
+las líneas. Si no cuadran, la lectura no vale y no se enseña ningún cotejo:
+diría «falta este cobro» por una línea que el modelo no supo leer, y alguien
+acabaría metiéndola dos veces. Ojo con lo que esta red **no** caza: contrasta
+importes, así que un error en la *forma de pago* pasa por debajo.
+
+**El emparejamiento manda la referencia.** Tres pasadas, de más segura a menos:
+referencia, importe+forma, y mismo importe con forma distinta. La tercera va la
+última a propósito —antes le robaría la pareja buena a otra línea— y su
+resultado **no cuenta como cuadrado**. Con dos candidatos del mismo importe no
+se elige: se declara ambiguo. Un emparejamiento inventado es peor que un hueco
+señalado, porque el hueco se ve y el invento no.
+
+### Las etiquetas que el ERP corta
+
+El ERP recorta la columna de forma de pago según la resolución del monitor: la
+misma etiqueta se lee `Datáfono Clearon...` en un PC y `Datáfono Clearone
+ta...` en otro. Compararlas letra a letra hace que el cotejo dependa de con qué
+ordenador se hizo la captura, que no tiene nada que ver con la caja.
+
+Por eso la comparación va en dos capas, y **son dos funciones distintas a
+propósito**:
+
+- `etiquetaNormalizada` es cómo se **guarda**: mayúsculas y espacios
+  colapsados, nada más. Lo que se ve en Configuración se parece a lo que se
+  tecleó.
+- `claveDeCotejo` es cómo se **compara**: además quita acentos y los puntos del
+  recorte final. El modelo lee «Datafono» tan a menudo como «Datáfono».
+
+Y encima, `resolverFormaErp`: igual → una es prefijo de la otra (**en los dos
+sentidos**, porque la etiqueta guardada también puede venir recortada de la
+pantalla de quien la configuró) → nada. Con **varias que encajan no se elige
+ninguna**, y eso se dice como «ambigua», que no es lo mismo que «sin
+configurar»: mandar a alguien a crear una equivalencia que ya existe es hacerle
+perder la tarde. El mínimo de cuatro letras evita que un «TP...» empareje con
+cualquier cosa.
+
+Lo resuelto por prefijo **se enseña en la pantalla**, con qué equivalencia ha
+casado. Es una deducción, no un dato, y el día que empareje mal tiene que haber
+dónde verlo.
+
+### No se cierra sin haber cotejado
+
+Regla de caja, no de pantalla: `cerrarJornada` la comprueba, igual que ya
+comprobaba que hubiera arqueo. Y es **puerta con llave, no muro**.
+
+**Por caja, y apagado por defecto** (`cash_registers.exigir_cotejo_erp`). Hay
+mostradores que no facturan contra Genes; encenderlo para todos los dejaría sin
+poder cerrar por una regla que no les toca, y su única salida sería escribir un
+motivo falso cada tarde. Una regla que obliga a mentir para trabajar deja de
+vigilar nada.
+
+**Se puede forzar, pero firmando.** El parámetro es el MOTIVO, no un booleano
+—un `true` se manda sin pensar— y queda escrito en las notas de la jornada y en
+la auditoría. Hace falta que se pueda: si el servicio que lee la captura está
+caído, no hay manera humana de cotejar y la caja tiene que cerrarse igual.
+
+**Un cotejo caduca**, y es la mitad de su valor. Cotejar a las seis, meter dos
+cobros a las siete y cerrar a las ocho enseñando el OK de las seis es peor que
+no cotejar: da por revisado algo que nadie ha mirado. Cada cotejo se guarda con
+una **huella** de la jornada —último id de operación y suma de importes, de las
+vivas— y si al cerrar no coincide, el OK no vale.
+
+El número de operaciones estuvo en la huella y se quitó: ninguna prueba podía
+matarlo, porque todo importe es mayor que cero y cualquier cambio en cuántas hay
+mueve la suma por fuerza.
+
+De cada cotejo se guardan **solo cifras** (`cash_erp_reconciliations`): cuántas
+líneas, cuántas cuadraron, por cuánto. Ni la captura, ni las líneas, ni un
+nombre de cliente.
+
 ## 8. Estado de la entrega
 
 El módulo está **en producción y en uso diario**. Implementado y probado:
@@ -743,6 +843,11 @@ aparece, a propósito— y las **credenciales de Business Central** por variable
 de entorno, sin las cuales el conector ni siquiera se registra.
 
 ## 9. Lo que queda fuera, y por qué
+
+> Antes de nada, lo que NO queda fuera sino **pendiente**: la prueba de AutoScan
+> en un PC del mostrador (`docs/autoscan/PRUEBA-EN-WINDOWS.md`). Es lo único
+> entregado que todavía no se ha visto funcionar en su sitio.
+
 
 - **Webhooks de entrada** (`invoice.created`, `invoice.updated`…). El modelo los
   admite —`cash_external_documents` ya hace upsert por `(empresa, sistema, id)`—

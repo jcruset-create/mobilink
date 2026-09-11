@@ -48,7 +48,7 @@ import { Vigilante } from "./vigilante.ts";
 import { esMasNueva } from "./version.ts";
 
 /** La versión que se le dice al servidor en la activación y en cada latido. */
-export const VERSION = "1.0.5";
+export const VERSION = "1.0.9";
 
 export class Agente {
   readonly #cfg: Config;

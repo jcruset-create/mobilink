@@ -55,22 +55,11 @@ export type ContextoCambio = {
 
 /* ── Elegibilidad ────────────────────────────────────────────────────────── */
 
-/**
- * ¿Ha terminado el servicio?
- *
- * **Se mira `finishedAtMs`, nunca `status === "finalizada"`.** En la ruta de la
- * APK ese estado dura un instante: justo después una auto-transición deja la
- * asistencia en `en_camino_base`. Cualquier cosa que se despierte un segundo
- * más tarde y pregunte por el estado no encontraría ninguna asistencia
- * finalizada, y no porque no las haya.
- *
- * `finishedAtMs` se pone una vez y no se quita, así que es el hecho: el
- * servicio terminó a esa hora.
- */
-export function estaFinalizada(a: { finishedAtMs?: unknown } | null | undefined): boolean {
-  const ms = Number(a?.finishedAtMs ?? 0);
-  return Number.isFinite(ms) && ms > 0;
-}
+// La regla pura vive en elegibilidad.ts para poder probarla sin PostgreSQL:
+// este fichero importa db.ts, que revienta al cargarse sin DATABASE_URL. Se
+// reexporta para que quien la importe de aquí no note el cambio.
+export { estaFinalizada } from "./elegibilidad.ts";
+import { estaFinalizada } from "./elegibilidad.ts";
 
 /** La misma pregunta, contra la base. Devuelve `null` si la asistencia no existe. */
 export async function asistenciaFinalizada(
