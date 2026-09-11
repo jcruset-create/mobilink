@@ -44,6 +44,21 @@ vi.mock("./sesion.ts", () => ({
   }),
 }));
 
+/**
+ * El puente con el Telematics Hub. Se simula porque lo que aquí se prueba es
+ * que la sustitución USA el kilometraje, no cómo se calcula: eso tiene sus
+ * propias pruebas en kilometrajeOperacion.test.ts y en la fase 8.
+ */
+vi.mock("./kilometrajeOperacion.ts", () => ({
+  kilometrajeParaMontaje: vi.fn(async () => kilometraje),
+}));
+
+/** Lo que devuelve el puente en cada prueba. Por defecto, sin telemática. */
+let kilometraje: { km: number | null; nota: string } = {
+  km: null,
+  nota: "Sin kilometraje: este vehículo no está enlazado con ninguna cuenta de telemática.",
+};
+
 const { detectarSustitucionYaAplicada, prepararSustitucion, stockDeEmpresa } =
   await import("./sustitucionServicio.ts");
 
@@ -77,6 +92,13 @@ beforeEach(() => {
   llamadas = [];
   posiciones = [montada("E1_IZQ", "mont-1", "neu-viejo")];
   stock = [{ producto_id: "prod-1", marca: "Michelin", modelo: "X", medida: "315/80R22.5", nuevo: 4, usado: 1 }];
+  // Por defecto, sin telemática: es el estado de la mayoría de las pruebas de
+  // este fichero, que no van de kilometraje. Sin reponerlo aquí, la prueba que
+  // lo cambia contagiaría a las siguientes.
+  kilometraje = {
+    km: null,
+    nota: "Sin kilometraje: este vehículo no está enlazado con ninguna cuenta de telemática.",
+  };
   process.env.TYRE_CONTROL_WRITE_ENABLED = "false";
   process.env.TYRE_CONTROL_REPLACEMENT_SYNC_ENABLED = "false";
 });
@@ -112,10 +134,41 @@ describe("simulacro completo", () => {
       p_control_individual: true,
       // Nunca se fuerza la medida: el usuario de integración es operador.
       p_forzar_medida: false,
-      // `serviceKm` NO es el cuentakilómetros, así que no se manda odómetro.
+      // Sin telemática enlazada no hay odómetro que mandar. Que SÍ se manda
+      // cuando lo hay lo prueba «el kilometraje de la telemática viaja…».
       p_km: null,
     });
     expect(r.llamada.argumentos.p_datos).toEqual({ rfid_epc: "E280-1160", dot: "3623" });
+  });
+
+  it("el kilometraje de la telemática viaja en la llamada, con su procedencia en los avisos", async () => {
+    // Lo que la fase 9 añade: el p_km deja de ser null cuando hay un odómetro
+    // fiable. Es el dato que marca el final de la vida de un neumático y el
+    // principio de la del siguiente.
+    kilometraje = {
+      km: 512480.4,
+      nota: "Kilometraje 512480.4 km de webfleet/autobuses, leído 2 min antes de la operación (tolerancia ±5 min).",
+    };
+
+    const r = await prepararSustitucion(PLAN);
+    if (r.estado !== "READY_BUT_DISABLED") throw new Error(r.estado);
+
+    // Sin redondear: el decimal es el que la fase 7 recuperó de Webfleet.
+    expect(r.llamada.argumentos.p_km).toBe(512480.4);
+    expect(r.avisos.join(" ")).toMatch(/webfleet\/autobuses/);
+    expect(r.avisos.join(" ")).toMatch(/2 min antes/);
+  });
+
+  it("sin kilometraje explica POR QUÉ falta, en vez de callarse", async () => {
+    // Un null sin motivo deja al que audite sin saber si falta el enlace, la
+    // lectura o el proveedor, que son tres problemas distintos.
+    kilometraje = { km: null, nota: "Sin kilometraje: no se pudo consultar la telemática (HTTP 503)." };
+
+    const r = await prepararSustitucion(PLAN);
+    if (r.estado !== "READY_BUT_DISABLED") throw new Error(r.estado);
+
+    expect(r.llamada.argumentos.p_km).toBeNull();
+    expect(r.avisos.join(" ")).toMatch(/no se pudo consultar/);
   });
 
   it("sin identidad no impone control individual: decide la política de la empresa", async () => {
