@@ -1,0 +1,266 @@
+import { describe, expect, it } from "vitest";
+import { cotejar, type Equivalencias, type LineaErp, type LineaMobilink } from "./cotejo.ts";
+
+/** Las etiquetas del ERP de este taller, tal cual las escribe Genes. */
+const EQUIV: Equivalencias = new Map([
+  ["CONTADO", "EFECTIVO"],
+  ["DATÁFONO CLEARONE TA...", "CLEARONE"],
+  ["TPV CAIXA", "TARJETA"],
+]);
+
+/**
+ * El cierre real del 10/09/2026, leído de la pantalla de Genes.
+ *
+ * Se usa como caso principal a propósito: siete líneas, tres formas de pago
+ * distintas, dos cobros al mismo cliente y una suma que tiene que dar 887,40.
+ * Un caso inventado de dos líneas no habría enseñado nada de lo que este
+ * cotejo tiene que resolver.
+ */
+const GENES_10_09: LineaErp[] = [
+  { justificante: "20765", referencia: "B2_26/611", formaErp: "Datáfono Clearone ta...", importeCentimos: 2969, tipo: "COBRO", concepto: "JAVIER AMILCAR GAUNA" },
+  { justificante: "20764", referencia: "B2_26/610", formaErp: "Datáfono Clearone ta...", importeCentimos: 16069, tipo: "COBRO", concepto: "UBALDO SERRANO GONZALEZ" },
+  { justificante: "20762", referencia: null, formaErp: "CONTADO", importeCentimos: 13709, tipo: "COBRO", concepto: "RAMON BERENGUER" },
+  { justificante: "20760", referencia: null, formaErp: "TPV CAIXA", importeCentimos: 5000, tipo: "COBRO", concepto: "RAMON BERENGUER" },
+  { justificante: "20759", referencia: "B2_26/608", formaErp: "Datáfono Clearone ta...", importeCentimos: 10416, tipo: "COBRO", concepto: "EXCAVACIONES Y ROCALLAS CATALUNYA S.L." },
+  { justificante: "20758", referencia: "B2_26/607", formaErp: "TPV CAIXA", importeCentimos: 37724, tipo: "COBRO", concepto: "AGUSTI BUSQUET BES" },
+  { justificante: "20757", referencia: "B2_26/606", formaErp: "Datáfono Clearone ta...", importeCentimos: 2853, tipo: "COBRO", concepto: "PEDRO CANO DE LA VEGA" },
+];
+
+/** Lo mismo, como lo tendría Mobilink si estuviera todo metido. */
+const MOBILINK_10_09: LineaMobilink[] = [
+  { id: 1, numero: "MC-CO-2026-000101", referencia: "B2_26/611", formaCodigo: "CLEARONE", importeCentimos: 2969, tipo: "COBRO" },
+  { id: 2, numero: "MC-CO-2026-000102", referencia: "B2_26/610", formaCodigo: "CLEARONE", importeCentimos: 16069, tipo: "COBRO" },
+  { id: 3, numero: "MC-CO-2026-000103", referencia: null, formaCodigo: "EFECTIVO", importeCentimos: 13709, tipo: "COBRO" },
+  { id: 4, numero: "MC-CO-2026-000104", referencia: null, formaCodigo: "TARJETA", importeCentimos: 5000, tipo: "COBRO" },
+  { id: 5, numero: "MC-CO-2026-000105", referencia: "B2_26/608", formaCodigo: "CLEARONE", importeCentimos: 10416, tipo: "COBRO" },
+  { id: 6, numero: "MC-CO-2026-000106", referencia: "B2_26/607", formaCodigo: "TARJETA", importeCentimos: 37724, tipo: "COBRO" },
+  { id: 7, numero: "MC-CO-2026-000107", referencia: "B2_26/606", formaCodigo: "CLEARONE", importeCentimos: 2853, tipo: "COBRO" },
+];
+
+describe("el día que todo cuadra", () => {
+  it("empareja las siete y dice que cuadra", () => {
+    const r = cotejar(GENES_10_09, MOBILINK_10_09, EQUIV);
+    expect(r.cuadra).toBe(true);
+    expect(r.emparejadas).toHaveLength(7);
+    expect(r.soloEnErp).toEqual([]);
+    expect(r.soloEnMobilink).toEqual([]);
+    expect(r.ambiguas).toEqual([]);
+  });
+
+  it("los totales son los de la pantalla de Genes", () => {
+    const r = cotejar(GENES_10_09, MOBILINK_10_09, EQUIV);
+    expect(r.totales.erpCobros).toBe(88740); // 887,40 €
+    expect(r.totales.erpPagos).toBe(0);
+    expect(r.totales.diferenciaCobros).toBe(0);
+  });
+
+  it("dice CÓMO emparejó cada una, que no es lo mismo", () => {
+    const r = cotejar(GENES_10_09, MOBILINK_10_09, EQUIV);
+    /* Cinco tienen referencia; las dos de RAMON BERENGUER, no. */
+    expect(r.emparejadas.filter((e) => e.por === "referencia")).toHaveLength(5);
+    expect(r.emparejadas.filter((e) => e.por === "importe")).toHaveLength(2);
+  });
+});
+
+describe("lo que falta y lo que sobra", () => {
+  it("un cobro que está en Genes y no en Mobilink", () => {
+    const r = cotejar(GENES_10_09, MOBILINK_10_09.filter((m) => m.id !== 6), EQUIV);
+    expect(r.cuadra).toBe(false);
+    expect(r.soloEnErp).toHaveLength(1);
+    expect(r.soloEnErp[0]!.justificante).toBe("20758");
+    expect(r.totales.diferenciaCobros).toBe(37724);
+  });
+
+  it("un cobro que está en Mobilink y no en Genes", () => {
+    const extra: LineaMobilink = {
+      id: 99, numero: "MC-CO-2026-000199", referencia: "B2_26/612",
+      formaCodigo: "EFECTIVO", importeCentimos: 1000, tipo: "COBRO",
+    };
+    const r = cotejar(GENES_10_09, [...MOBILINK_10_09, extra], EQUIV);
+    expect(r.cuadra).toBe(false);
+    expect(r.soloEnMobilink).toHaveLength(1);
+    expect(r.soloEnMobilink[0]!.id).toBe(99);
+    expect(r.totales.diferenciaCobros).toBe(-1000);
+  });
+
+  it("los totales solos NO bastan: el mismo importe por la forma equivocada", () => {
+    /*
+     * El cobro de AGUSTI BUSQUET, 377,24 €, metido en Mobilink como EFECTIVO
+     * cuando en Genes fue TPV CAIXA. Los totales dan cero —el dinero está— y
+     * sin embargo hay un error que descuadrará el arqueo de la tarde, porque
+     * Mobilink cree que hay 377,24 € más en el cajón de los que hay.
+     *
+     * Es el caso que obliga a exigir líneas Y totales.
+     *
+     * La primera versión de esta prueba no valía: quitaba un cobro de 50 € por
+     * tarjeta y metía otro de 50 € por tarjeta con otra referencia, y el cotejo
+     * los emparejaba por importe —con razón, porque la línea de Genes no tenía
+     * referencia y eran indistinguibles—. Comprobaba que el código hacía algo
+     * mal cuando lo estaba haciendo bien.
+     */
+    const torcido = MOBILINK_10_09.map((m) =>
+      m.id === 6 ? { ...m, formaCodigo: "EFECTIVO", referencia: null } : m
+    );
+    const r = cotejar(GENES_10_09, torcido, EQUIV);
+    expect(r.totales.diferenciaCobros).toBe(0);
+    expect(r.cuadra).toBe(false);
+    expect(r.soloEnErp).toHaveLength(1);
+    expect(r.soloEnErp[0]!.justificante).toBe("20758");
+    expect(r.soloEnMobilink).toHaveLength(1);
+    expect(r.soloEnMobilink[0]!.id).toBe(6);
+  });
+
+  it("un importe mal por un céntimo sale como dos líneas sueltas, no como cuadrado", () => {
+    const torcido = MOBILINK_10_09.map((m) =>
+      m.id === 6 ? { ...m, importeCentimos: 37725 } : m
+    );
+    const r = cotejar(GENES_10_09, torcido, EQUIV);
+    /*
+     * Empareja igual, porque la referencia manda y es la misma operación. Lo
+     * que no puede es decir que cuadra: el total delata el céntimo.
+     */
+    expect(r.emparejadas).toHaveLength(7);
+    expect(r.totales.diferenciaCobros).toBe(-1);
+    expect(r.cuadra).toBe(false);
+  });
+});
+
+describe("cuándo NO se elige", () => {
+  it("dos candidatos igual de buenos se declaran ambiguos, no se empareja uno", () => {
+    /* Dos cobros de 50 € por tarjeta el mismo día: por importe son gemelos. */
+    const erp: LineaErp[] = [
+      { formaErp: "TPV CAIXA", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const mob: LineaMobilink[] = [
+      { id: 1, numero: "A", formaCodigo: "TARJETA", importeCentimos: 5000, tipo: "COBRO" },
+      { id: 2, numero: "B", formaCodigo: "TARJETA", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const r = cotejar(erp, mob, EQUIV);
+    expect(r.emparejadas).toEqual([]);
+    expect(r.ambiguas).toHaveLength(1);
+    expect(r.ambiguas[0]!.candidatos.map((c) => c.id)).toEqual([1, 2]);
+    expect(r.cuadra).toBe(false);
+  });
+
+  it("una referencia repetida en Mobilink es un aviso, no un emparejamiento", () => {
+    /* Dos operaciones con la misma referencia es un cobro duplicado, y taparlo
+       emparejando una al azar es lo contrario de lo que se pide. */
+    const erp: LineaErp[] = [
+      { referencia: "B2_26/611", formaErp: "TPV CAIXA", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const mob: LineaMobilink[] = [
+      { id: 1, numero: "A", referencia: "B2_26/611", formaCodigo: "TARJETA", importeCentimos: 5000, tipo: "COBRO" },
+      { id: 2, numero: "B", referencia: "B2_26/611", formaCodigo: "TARJETA", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const r = cotejar(erp, mob, EQUIV);
+    expect(r.ambiguas).toHaveLength(1);
+    expect(r.emparejadas).toEqual([]);
+  });
+});
+
+describe("las formas de pago no se adivinan", () => {
+  it("una etiqueta sin equivalencia NO se empareja por importe a secas", () => {
+    /*
+     * Colar un cobro por tarjeta contra uno en efectivo del mismo importe es
+     * justo el error que este cotejo tiene que encontrar, no cometer.
+     */
+    const erp: LineaErp[] = [
+      { formaErp: "BIZUM DEL MOVIL", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const mob: LineaMobilink[] = [
+      { id: 1, numero: "A", formaCodigo: "EFECTIVO", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const r = cotejar(erp, mob, EQUIV);
+    expect(r.emparejadas).toEqual([]);
+    expect(r.formasSinEquivalencia).toEqual(["BIZUM DEL MOVIL"]);
+    expect(r.soloEnErp).toHaveLength(1);
+    expect(r.soloEnMobilink).toHaveLength(1);
+  });
+
+  it("la etiqueta se busca sin depender de mayúsculas ni espacios de más", () => {
+    const erp: LineaErp[] = [
+      { formaErp: "  contado  ", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const mob: LineaMobilink[] = [
+      { id: 1, numero: "A", formaCodigo: "EFECTIVO", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    expect(cotejar(erp, mob, EQUIV).emparejadas).toHaveLength(1);
+  });
+});
+
+describe("la referencia, normalizada", () => {
+  it("el mismo documento escrito de tres formas empareja igual", () => {
+    const mob: LineaMobilink[] = [
+      { id: 1, numero: "A", referencia: "B2_26/611", formaCodigo: "TARJETA", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    for (const escrito of ["B2_26/611", "b2 26-611", "B2.26.611"]) {
+      const r = cotejar(
+        [{ referencia: escrito, formaErp: "TPV CAIXA", importeCentimos: 5000, tipo: "COBRO" }],
+        mob,
+        EQUIV
+      );
+      expect(r.emparejadas, escrito).toHaveLength(1);
+      expect(r.emparejadas[0]!.por).toBe("referencia");
+    }
+  });
+
+  it("una referencia vacía no empareja con otra vacía", () => {
+    /* Sin este cuidado, dos operaciones sin referencia se emparejarían por
+       «tener las dos ninguna», que no es tener la misma. */
+    const erp: LineaErp[] = [
+      { referencia: "", formaErp: "CONTADO", importeCentimos: 5000, tipo: "COBRO" },
+      { referencia: null, formaErp: "CONTADO", importeCentimos: 7000, tipo: "COBRO" },
+    ];
+    const mob: LineaMobilink[] = [
+      { id: 1, numero: "A", referencia: null, formaCodigo: "EFECTIVO", importeCentimos: 5000, tipo: "COBRO" },
+      { id: 2, numero: "B", referencia: "", formaCodigo: "EFECTIVO", importeCentimos: 7000, tipo: "COBRO" },
+    ];
+    const r = cotejar(erp, mob, EQUIV);
+    /* Emparejan, pero por IMPORTE, que es lo honesto: no había clave. */
+    expect(r.emparejadas.every((e) => e.por === "importe")).toBe(true);
+    expect(r.emparejadas).toHaveLength(2);
+  });
+});
+
+describe("los pagos", () => {
+  it("se cotejan aparte de los cobros y no se cruzan entre sí", () => {
+    /*
+     * Un cobro de 50 € y un pago de 50 € no son la misma operación. Sin separar
+     * por tipo, el cotejo los emparejaría y diría que cuadra un día en el que
+     * falta un cobro y sobra un pago.
+     */
+    const erp: LineaErp[] = [
+      { formaErp: "CONTADO", importeCentimos: 5000, tipo: "COBRO" },
+      { formaErp: "CONTADO", importeCentimos: 5000, tipo: "PAGO" },
+    ];
+    const mob: LineaMobilink[] = [
+      { id: 1, numero: "A", formaCodigo: "EFECTIVO", importeCentimos: 5000, tipo: "PAGO" },
+      { id: 2, numero: "B", formaCodigo: "EFECTIVO", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const r = cotejar(erp, mob, EQUIV);
+    expect(r.cuadra).toBe(true);
+    expect(r.emparejadas.find((e) => e.erp.tipo === "COBRO")!.mobilink.id).toBe(2);
+    expect(r.emparejadas.find((e) => e.erp.tipo === "PAGO")!.mobilink.id).toBe(1);
+  });
+
+  it("un pago que falta no se compensa con un cobro que sobra", () => {
+    const erp: LineaErp[] = [
+      { formaErp: "CONTADO", importeCentimos: 5000, tipo: "PAGO" },
+    ];
+    const mob: LineaMobilink[] = [
+      { id: 1, numero: "A", formaCodigo: "EFECTIVO", importeCentimos: 5000, tipo: "COBRO" },
+    ];
+    const r = cotejar(erp, mob, EQUIV);
+    expect(r.cuadra).toBe(false);
+    expect(r.totales.diferenciaPagos).toBe(5000);
+    expect(r.totales.diferenciaCobros).toBe(-5000);
+  });
+});
+
+describe("el día vacío", () => {
+  it("sin nada por ninguno de los dos lados, cuadra", () => {
+    const r = cotejar([], [], EQUIV);
+    expect(r.cuadra).toBe(true);
+    expect(r.totales.erpCobros).toBe(0);
+  });
+});
