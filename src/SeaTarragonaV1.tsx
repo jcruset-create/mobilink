@@ -228,7 +228,6 @@ import {
   getAutoStandbyStorageKey,
   getAutoStandbyTrigger,
 } from "./modules/workshopAutoStandby";
-import { applyManualTechStatusOverrides } from "./modules/workshopPureHelpers";
 import { getAdminHeaders } from "./modules/adminHeaders";
 import { useScheduledJobs } from "./modules/useScheduledJobs";
 
@@ -898,65 +897,16 @@ useEffect(() => {
   }, [log]);
 
 useEffect(() => {
-async function loadTechs() {
-  try {
-    const response = await fetchWithTimeout(`${API_BASE}/api/techs`);
-    const data = await response.json();
-
-    if (!Array.isArray(data)) return;
-
-    setTechs(() => {
-      const merged = INITIAL_TECHS.map((baseTech) => {
-        const found = data.find((t: any) => t.name === baseTech.name);
-
-        const hasCompetencies =
-          found?.competencies &&
-          Object.keys(found.competencies).length > 0;
-
-        const hasPriorities =
-          found?.priorities &&
-          Object.keys(found.priorities).length > 0;
-
-        if (!found) return baseTech;
-
-        const loadedStatus =
-  found.status === "supervisor"
-    ? ("disponible" as TechStatus)
-    : ((found.status ?? baseTech.status) as TechStatus);
-
-const isManualUnavailable = isManualUnavailableStatus(loadedStatus);
-
-return {
-  ...baseTech,
-  status: loadedStatus,
-  blocked: isManualUnavailable,
-  currentJobId: isManualUnavailable ? null : found.currentJobId ?? null,
-          competencies: hasCompetencies
-            ? found.competencies
-            : baseTech.competencies,
-          priorities: hasPriorities
-            ? found.priorities
-            : baseTech.priorities,
-          avatar: found.avatar ?? baseTech.avatar ?? null,
-          statusChangedAtMs:
-            found.statusChangedAtMs ?? baseTech.statusChangedAtMs,
-          statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
-          roadsideCapable: pendingRoadsideCapableRef.current.has(baseTech.name)
-            ? pendingRoadsideCapableRef.current.get(baseTech.name)!
-            : (found.roadsideCapable ?? baseTech.roadsideCapable ?? false),
-          currentRoadsideAssistanceId: found.currentRoadsideAssistanceId ?? null,
-        };
-      });
-
-      const synced = syncTechsWithActiveJobs(merged, jobs);
-
-      return applyManualTechStatusOverrides(synced);
-    });
-  } catch (error) {
-    console.error("Error cargando técnicos:", error);
-  }
-}
-  loadTechs();
+  // La plantilla la manda el SERVIDOR. Este efecto recorría INITIAL_TECHS —la
+  // lista escrita en el código— y buscaba a cada uno en la respuesta, así que
+  // ignoraba por completo la columna "activo": un técnico dado de baja en la
+  // empresa volvía a aparecer en cada carga de la página, y solo desaparecía
+  // si algo disparaba después una recarga de técnicos.
+  //
+  // reloadTechsFromBackend ya hace lo correcto (servidor manda, filtra las
+  // bajas y usa INITIAL_TECHS solo como valores por defecto), así que la carga
+  // inicial pasa por ahí en vez de tener su propia copia divergente.
+  void reloadTechsFromBackend([]);
 }, []);
 
   useEffect(() => {
