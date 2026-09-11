@@ -347,7 +347,7 @@ export default function PartesTrabajoPage() {
           template: null,
           quickEntryLabel: propuesto.label,
           quickEntryMode: "team",
-          includedTasks: [],
+          includedTasks: propuesto.tareasIncluidas,
           quantity: propuesto.quantity,
           unitMinutes: propuesto.unitMinutes,
           ptNumero: propuesto.ptNumero,
@@ -401,7 +401,9 @@ export default function PartesTrabajoPage() {
       }
 
       setAviso(
-        `${creados.length} trabajo(s) creados y pendientes de validar:\n${creados.join("\n")}`
+        creados.length === 1
+          ? `Trabajo creado y pendiente de validar:\n${creados[0]}`
+          : `${creados.length} trabajos creados y pendientes de validar:\n${creados.join("\n")}`
       );
 
       setParte(null);
@@ -651,7 +653,9 @@ export default function PartesTrabajoPage() {
             {/* Trabajos que se van a crear */}
             <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
               <h2 className="mb-3 text-sm font-black uppercase tracking-wide text-slate-300">
-                Trabajos a crear ({conversion.trabajos.length})
+                {conversion.trabajos.length === 1
+                  ? "Trabajo a crear"
+                  : `Trabajos a crear (${conversion.trabajos.length})`}
               </h2>
 
               {conversion.trabajos.length === 0 ? (
@@ -661,14 +665,21 @@ export default function PartesTrabajoPage() {
               ) : (
                 <div className="space-y-1 text-sm">
                   {conversion.trabajos.map((t) => (
-                    <div
-                      key={t.indiceLinea}
-                      className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-900 px-3 py-2"
-                    >
-                      <span className="font-semibold">{t.plate}</span>
-                      <span className="flex-1 truncate">{t.label}</span>
-                      <span className="text-slate-400">×{t.quantity}</span>
-                      <span className="text-slate-500">{t.estimatedMinutes} min</span>
+                    <div key={t.indiceLinea} className="rounded-lg bg-slate-900 px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold">{t.plate}</span>
+                        <span className="flex-1 truncate">{t.label}</span>
+                        <span className="text-slate-400">×{t.quantity}</span>
+                        <span className="text-slate-500">{t.estimatedMinutes} min</span>
+                      </div>
+
+                      {t.tareasIncluidas.length > 0 && (
+                        <div className="mt-1 text-xs text-slate-400">
+                          + {t.tareasIncluidas
+                            .map((tarea) => `${tarea.label} ×${tarea.quantity ?? 1}`)
+                            .join(" · ")}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

@@ -7,6 +7,7 @@
 //
 // Lógica pura, sin React ni red, para poder probarla aislada.
 
+import type { IncludedTask } from "./quickTaskSelector";
 import type { AreaKey, QuickTemplate } from "./workshopTypes";
 
 /** Una línea de "Productos y servicios" del parte. */
@@ -45,7 +46,7 @@ export const CLAVE_MATERIAL = "__material__";
 export type MapaArticulos = Record<string, string>;
 
 export type TrabajoPropuesto = {
-  /** Índice de la línea en el parte, para poder volver a ella. */
+  /** Índice de la línea principal en el parte, para poder volver a ella. */
   indiceLinea: number;
   templateKey: string;
   label: string;
@@ -62,6 +63,8 @@ export type TrabajoPropuesto = {
   /** Hora de entrada del parte en ms, no la hora de volcarlo. */
   arrivedAtMs: number | null;
   descripcionOriginal: string;
+  /** El resto de servicios del parte, que van dentro de este mismo trabajo. */
+  tareasIncluidas: IncludedTask[];
 };
 
 export type LineaSinMapear = LineaParte & { indiceLinea: number; clave: string };
@@ -175,8 +178,13 @@ export function entradaEnMs(parte: ParteTrabajo): number | null {
 }
 
 /**
- * Convierte un parte en trabajos. Una línea de servicio, un trabajo: es como se
- * factura y como se reparte en el taller.
+ * Convierte un parte en UN trabajo.
+ *
+ * El vehículo entra una vez y sale una vez: montar cuatro ruedas y apretarles
+ * la fijación no son dos entradas al taller, son un trabajo con dos cosas
+ * dentro. Se elige como operación principal la de más tiempo —que es la que
+ * manda para asignar técnico y hueco— y el resto de servicios viajan como
+ * tareas incluidas, que es el mecanismo que ya usan las entradas rápidas.
  *
  * Nada se descarta en silencio. Una línea que nadie ha enseñado sale en
  * `sinMapear` para que el usuario diga si es un servicio (y cuál) o material.
@@ -208,6 +216,14 @@ export function parteATrabajos({
   }
 
   const lineas = Array.isArray(parte.lineas) ? parte.lineas : [];
+
+  /** Líneas de servicio ya resueltas, antes de juntarlas en un solo trabajo. */
+  const servicios: {
+    linea: LineaParte;
+    indiceLinea: number;
+    plantilla: QuickTemplate;
+    cantidad: number;
+  }[] = [];
 
   lineas.forEach((linea, indiceLinea) => {
     const clave = claveArticulo(linea);
@@ -246,22 +262,56 @@ export function parteATrabajos({
       return;
     }
 
+    servicios.push({ linea, indiceLinea, plantilla, cantidad });
+  });
+
+  // Un parte, un trabajo. Manda la operación de más tiempo: es la que decide
+  // qué técnico hace falta y cuánto hueco ocupa.
+  if (servicios.length > 0) {
+    const principal = servicios.reduce((mejor, actual) =>
+      minutosDePlantilla(actual.plantilla, actual.cantidad) >
+      minutosDePlantilla(mejor.plantilla, mejor.cantidad)
+        ? actual
+        : mejor
+    );
+
+    const resto = servicios.filter((s) => s !== principal);
+
+    const tareasIncluidas: IncludedTask[] = resto.map((s) => ({
+      id: `parte-${s.indiceLinea}-${s.plantilla.key}`,
+      label: s.plantilla.label,
+      area: s.plantilla.area,
+      source: "quickTemplate",
+      templateKey: s.plantilla.key,
+      standardMinutes: minutosDePlantilla(s.plantilla, s.cantidad),
+      usesQuantity: s.plantilla.usesQuantity,
+      quantity: s.cantidad,
+      unitMinutes: minutosPorUnidad(s.plantilla),
+      unitPrice: s.plantilla.unitPrice ?? null,
+    }));
+
+    const minutosTotales = servicios.reduce(
+      (suma, s) => suma + minutosDePlantilla(s.plantilla, s.cantidad),
+      0
+    );
+
     trabajos.push({
-      indiceLinea,
-      templateKey: plantilla.key,
-      label: plantilla.label,
-      area: plantilla.area,
+      indiceLinea: principal.indiceLinea,
+      templateKey: principal.plantilla.key,
+      label: principal.plantilla.label,
+      area: principal.plantilla.area,
       plate: matricula,
-      quantity: cantidad,
-      unitMinutes: minutosPorUnidad(plantilla),
-      estimatedMinutes: minutosDePlantilla(plantilla, cantidad),
+      quantity: principal.cantidad,
+      unitMinutes: minutosPorUnidad(principal.plantilla),
+      estimatedMinutes: minutosTotales,
       customerName: parte.clienteNombre?.trim() || undefined,
       customerPhone: parte.clienteTelefono?.trim() || undefined,
       ptNumero: String(parte.numero || "").trim(),
       arrivedAtMs,
-      descripcionOriginal: linea.descripcion,
+      descripcionOriginal: principal.linea.descripcion,
+      tareasIncluidas,
     });
-  });
+  }
 
   if (trabajos.length === 0 && sinMapear.length === 0) {
     avisos.push("El parte no tiene ninguna línea de servicio: no hay trabajo que crear.");
