@@ -1,5 +1,5 @@
 /// Buscar dentro del listado de asistencias: por matrícula, por cliente y por
-/// fecha.
+/// fecha, cada cosa en su campo.
 ///
 /// Con 85 asistencias en «En taller ✓» —y creciendo cada día— encontrar una
 /// concreta era ir bajando con la rueda del ratón. Los cuadros de arriba
@@ -13,9 +13,14 @@ export type Filtrable = {
 };
 
 export type Criterios = {
-  /// Matrícula o cliente, indistintamente. Un solo campo a propósito: quien
-  /// busca sabe QUÉ busca, no en qué columna lo guardamos.
-  texto?: string;
+  /// Matrícula, del camión o del remolque.
+  ///
+  /// Va aparte del cliente para poder acotar: «todas las de Truck Service de
+  /// la semana pasada» es una pregunta, y «la 3719LKK» es otra. Con un solo
+  /// campo no se podían combinar.
+  matricula?: string;
+  /// Nombre del cliente.
+  cliente?: string;
   /// «AAAA-MM-DD», tal cual lo dan los <input type="date">.
   desde?: string;
   hasta?: string;
@@ -55,15 +60,23 @@ export function finDelDia(fecha: string): number | null {
 }
 
 export function coincide(item: Filtrable, criterios: Criterios): boolean {
-  const texto = (criterios.texto ?? "").trim();
-  if (texto) {
-    const aguja = normalizar(texto);
+  // Los criterios se suman: rellenar dos es acotar, no ampliar. Quien escribe
+  // matrícula Y cliente quiere las que cumplen las dos cosas.
+  const matricula = (criterios.matricula ?? "").trim();
+  if (matricula) {
+    const aguja = normalizar(matricula);
     // El remolque cuenta como matrícula: en una asistencia al remolque puede
     // ser la única que hay, y es la que el cliente da por teléfono.
-    const pajar = [item.plate, item.plateRemolque, item.customerName]
+    const matriculas = [item.plate, item.plateRemolque]
       .filter(Boolean)
       .map((v) => normalizar(String(v)));
-    if (!pajar.some((v) => v.includes(aguja))) return false;
+    if (!matriculas.some((v) => v.includes(aguja))) return false;
+  }
+
+  const cliente = (criterios.cliente ?? "").trim();
+  if (cliente) {
+    const aguja = normalizar(cliente);
+    if (!normalizar(String(item.customerName ?? "")).includes(aguja)) return false;
   }
 
   const creada = item.createdAtMs;
@@ -96,7 +109,8 @@ export function filtrar<T extends Filtrable>(lista: T[], criterios: Criterios): 
 /// enseñar el aviso de «estás viendo un subconjunto».
 export function hayCriterios(criterios: Criterios): boolean {
   return Boolean(
-    (criterios.texto ?? "").trim() ||
+    (criterios.matricula ?? "").trim() ||
+      (criterios.cliente ?? "").trim() ||
       (criterios.desde ?? "").trim() ||
       (criterios.hasta ?? "").trim()
   );
