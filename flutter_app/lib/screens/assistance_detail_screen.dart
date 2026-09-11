@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../main.dart' show exteriorMode;
 import '../services/api_service.dart';
+import '../services/offline_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/plate_badge.dart';
 import 'arrival_photos_screen.dart';
@@ -191,7 +192,94 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
     }
   }
 
+  /// Nombre de la foto tal y como la llama el operario, no como la llamamos
+  /// nosotros: «foto_averia» no le dice nada a quien está en el arcén.
+  static const _nombreKind = {
+    'matricula_camion': 'matrícula del camión',
+    'matricula_remolque': 'matrícula del remolque',
+    'foto_averia': 'avería',
+  };
+
+  String _listaDeFotos(List<String> kinds) =>
+      kinds.map((k) => _nombreKind[k] ?? k).join(', ');
+
+  /// ¿Se puede cerrar el servicio, o quedan fotos obligatorias sin subir?
+  ///
+  /// Las de llegada no se suben todas igual: la matrícula del camión va
+  /// bloqueante y la avería a la cola de segundo plano. Con mala cobertura la
+  /// avería se queda en el móvil, la pantalla deja seguir y el parte acaba
+  /// con una sola foto sin que nadie se entere hasta que alguien abre el PDF
+  /// días después. Para entonces el camión hace tiempo que se fue.
+  ///
+  /// Devuelve true si se puede seguir.
+  Future<bool> _comprobarFotosPendientes() async {
+    final id = _a['id'] as int;
+
+    // Primero se intenta subirlas: casi siempre es cosa de un momento sin
+    // cobertura y al llegar al taller ya hay wifi. Avisar sin intentarlo
+    // sería dar la lata por nada.
+    if (OfflineStore.obligatoriasPendientesDe(id).isNotEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Subiendo las fotos que faltan…'),
+          duration: Duration(seconds: 2),
+        ));
+      }
+      try {
+        await widget.api.flushOutbox();
+      } catch (_) {/* sin red: se avisa abajo */}
+    }
+
+    final pendientes = OfflineStore.obligatoriasPendientesDe(id);
+    final perdidas = OfflineStore.perdidasDe(id);
+    if (pendientes.isEmpty && perdidas.isEmpty) return true;
+    if (!mounted) return false;
+
+    final textos = <String>[];
+    if (pendientes.isNotEmpty) {
+      textos.add('Faltan por subir: ${_listaDeFotos(pendientes)}.\n\n'
+          'Busca cobertura o wifi y vuelve a intentarlo; se suben solas.');
+    }
+    if (perdidas.isNotEmpty) {
+      textos.add('No se han podido recuperar del teléfono: '
+          '${_listaDeFotos(perdidas.map((p) => p['kind'] as String).toList())}.\n\n'
+          'Estas hay que volver a hacerlas.');
+    }
+
+    // No se bloquea a cal y canto: un técnico en un arcén sin cobertura tiene
+    // que poder cerrar el servicio e irse. Pero cerrar deja de ser lo que
+    // pasa por defecto, y quien lo haga sabe lo que se está dejando.
+    final seguir = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('Faltan fotos del parte',
+            style: TextStyle(color: AppColors.textPrimary)),
+        content: Text(textos.join('\n\n'),
+            style: const TextStyle(color: AppColors.textSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Volver',
+                style: TextStyle(color: AppColors.primary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Finalizar sin ellas',
+                style: TextStyle(color: AppColors.danger)),
+          ),
+        ],
+      ),
+    );
+    return seguir == true;
+  }
+
   Future<void> _onFinalize() async {
+    if (!await _comprobarFotosPendientes()) return;
+    if (!mounted) return;
+
     // FinishScreen devuelve los kilómetros DEL SERVICIO que anotó el
     // técnico; el tiempo no se pide a nadie (creación → llegada al taller).
     final serviceKm = await Navigator.of(context).push<int>(
