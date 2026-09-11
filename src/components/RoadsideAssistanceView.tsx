@@ -60,6 +60,8 @@ import {
   ROADSIDE_ASSISTANCE_STATUS_LABELS,
 } from "../modules/roadsideAssistanceTypes";
 import { formatCoords } from "../modules/roadsideCoordenadas";
+import { etiquetaMatricula, matriculasDe } from "../modules/roadsideMatricula";
+import { filtrar as filtrarAsistencias, hayCriterios } from "../modules/roadsideFiltro";
 import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
 import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
@@ -440,7 +442,7 @@ function ClosedAssistanceCard({
     <div className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2.5">
       <div className="flex items-center justify-between gap-3">
         <div className="truncate text-sm font-bold text-slate-100">
-          {assistance.plate || assistance.customerName}
+          {etiquetaMatricula(assistance, "") || assistance.customerName}
         </div>
         <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-bold ${STATUS_BADGES[assistance.status]}`}>
           {ROADSIDE_ASSISTANCE_STATUS_LABELS[assistance.status]}
@@ -602,6 +604,29 @@ export default function RoadsideAssistanceView({
     window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
   }, [estadoFiltro, panelTab]);
 
+  // ── Buscador del listado ────────────────────────────────────────────────────
+  // Un campo por criterio: matrícula, cliente y fecha. Separados se pueden
+  // combinar —«las de Truck Service de la semana pasada»— y cada uno busca en
+  // lo suyo, así que el nombre del cliente no se cuela como matrícula.
+  const [buscMatricula, setBuscMatricula] = useState("");
+  const [buscCliente, setBuscCliente] = useState("");
+  const [fechaDesde, setFechaDesde] = useState("");
+  const [fechaHasta, setFechaHasta] = useState("");
+  const criteriosBusqueda = {
+    matricula: buscMatricula,
+    cliente: buscCliente,
+    desde: fechaDesde,
+    hasta: fechaHasta,
+  };
+  const buscando = hayCriterios(criteriosBusqueda);
+
+  const limpiarBusqueda = () => {
+    setBuscMatricula("");
+    setBuscCliente("");
+    setFechaDesde("");
+    setFechaHasta("");
+  };
+
   const seleccionarEstado = (status: RoadsideAssistanceStatus) => {
     setEstadoFiltro((prev) => (prev === status ? null : status));
     setPanelTab("activas");
@@ -756,11 +781,20 @@ export default function RoadsideAssistanceView({
   // activas: "En taller ✓" es un estado cerrado y su contador debe cuadrar con
   // las filas que se ven al pulsarlo.
   const listaVisible = useMemo(
-    () =>
-      estadoFiltro
+    () => {
+      const porEstado = estadoFiltro
         ? assistances.filter((item) => item.status === estadoFiltro)
-        : activeAssistances,
-    [assistances, activeAssistances, estadoFiltro]
+        : activeAssistances;
+      // El buscador se aplica ENCIMA del estado, no en su lugar: se sigue
+      // pudiendo mirar «En taller ✓» y buscar una matrícula dentro.
+      return filtrarAsistencias(porEstado, {
+        matricula: buscMatricula,
+        cliente: buscCliente,
+        desde: fechaDesde,
+        hasta: fechaHasta,
+      });
+    },
+    [assistances, activeAssistances, estadoFiltro, buscMatricula, buscCliente, fechaDesde, fechaHasta]
   );
   // Un estado cerrado se pinta con la tarjeta compacta de cerradas: no tiene
   // sentido ofrecer "siguiente estado" en una asistencia ya terminada.
@@ -1319,15 +1353,80 @@ export default function RoadsideAssistanceView({
             })}
           </section>
 
-          {estadoFiltro && panelTab === "activas" && (
+          {/* Buscador del listado.
+             *
+             * Con 85 asistencias en un estado, encontrar una era bajar con la
+             * rueda del ratón. Los cuadros de arriba responden «¿qué hay hoy en
+             * cada estado?»; esto responde «¿qué le hicimos al 3719LKK?». */}
+          {panelTab === "activas" && (
+            <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2">
+              <div className="min-w-[150px] flex-1">
+                <label className="mb-1 block text-[11px] font-bold uppercase text-slate-500">
+                  Matrícula
+                </label>
+                <input
+                  value={buscMatricula}
+                  onChange={(e) => setBuscMatricula(e.target.value)}
+                  placeholder="3719LKK · R7657BDM"
+                  className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-1.5 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-orange-500"
+                />
+              </div>
+              <div className="min-w-[170px] flex-1">
+                <label className="mb-1 block text-[11px] font-bold uppercase text-slate-500">
+                  Cliente
+                </label>
+                <input
+                  value={buscCliente}
+                  onChange={(e) => setBuscCliente(e.target.value)}
+                  placeholder="Autocares Plana"
+                  className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-1.5 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-bold uppercase text-slate-500">
+                  Desde
+                </label>
+                <input
+                  type="date"
+                  value={fechaDesde}
+                  onChange={(e) => setFechaDesde(e.target.value)}
+                  className="rounded-lg border border-slate-600 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-orange-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-bold uppercase text-slate-500">
+                  Hasta
+                </label>
+                <input
+                  type="date"
+                  value={fechaHasta}
+                  onChange={(e) => setFechaHasta(e.target.value)}
+                  className="rounded-lg border border-slate-600 bg-slate-950 px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-orange-500"
+                />
+              </div>
+              {buscando && (
+                <button
+                  type="button"
+                  onClick={limpiarBusqueda}
+                  className="rounded-lg border border-slate-600 px-2.5 py-1.5 text-xs font-bold text-slate-200 hover:bg-slate-700"
+                >
+                  Limpiar
+                </button>
+              )}
+            </div>
+          )}
+
+          {(estadoFiltro || buscando) && panelTab === "activas" && (
             <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2">
               <span className="truncate text-xs font-bold text-slate-300">
-                Mostrando solo «{ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}» ·{" "}
-                {listaVisible.length}
+                {estadoFiltro
+                  ? `Mostrando solo «${ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}»`
+                  : "Resultados de la búsqueda"}
+                {buscando ? " · filtrado" : ""} · {listaVisible.length}
               </span>
               <button
                 type="button"
-                onClick={() => setEstadoFiltro(null)}
+                onClick={() => { setEstadoFiltro(null); limpiarBusqueda(); }}
                 className="shrink-0 rounded-lg border border-slate-600 px-2.5 py-1 text-xs font-bold text-slate-200 hover:bg-slate-700"
               >
                 Ver todas
@@ -1884,9 +1983,16 @@ export default function RoadsideAssistanceView({
             {/* ── Tab: Activas (todas o filtradas por estado) ── */}
             {panelTab === "activas" && listaVisible.length === 0 && (
               <div className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-8 text-center text-sm font-bold text-slate-400">
-                {estadoFiltro
-                  ? `Sin asistencias en «${ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}».`
-                  : "Sin asistencias activas."}
+                {/* Buscando, «Sin asistencias activas» despista: las hay, pero
+                    no encajan. Y con el estado puesto hay que decir que además
+                    se está buscando, o el vacío parece un fallo del estado. */}
+                {buscando
+                  ? estadoFiltro
+                    ? `Ninguna asistencia en «${ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}» encaja con la búsqueda.`
+                    : "Ninguna asistencia encaja con la búsqueda."
+                  : estadoFiltro
+                    ? `Sin asistencias en «${ROADSIDE_ASSISTANCE_STATUS_LABELS[estadoFiltro]}».`
+                    : "Sin asistencias activas."}
               </div>
             )}
             {panelTab === "activas" && listaVisible.length > 0 && filtroEsCerrado && (
@@ -1917,19 +2023,32 @@ export default function RoadsideAssistanceView({
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
+                          {/* La matrícula que manda no siempre es la de la
+                             * tractora: si la avería es del remolque, la
+                             * asistencia va a nombre del remolque. La regla
+                             * está en matriculasDe, la misma que usan el PDF
+                             * del backend y la página de seguimiento. */}
                           <h3 className="truncate text-lg font-black">
-                            {assistance.plate ? (
+                            {matriculasDe(assistance).principal ? (
                               <a
-                                href={`/vehiculo?plate=${encodeURIComponent(assistance.plate)}`}
+                                href={`/vehiculo?plate=${encodeURIComponent(matriculasDe(assistance).principal)}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-slate-100 underline decoration-dotted hover:text-red-400"
                                 title="Ver historial del vehículo"
                               >
-                                {assistance.plate}
+                                {matriculasDe(assistance).principal}
                               </a>
                             ) : "Sin matricula"}
                           </h3>
+                          {/* Una matrícula suelta no dice si es tractora o
+                             * remolque, y aquí importa: el operario tiene que
+                             * saber a qué vehículo va. */}
+                          {matriculasDe(assistance).principalEsRemolque && (
+                            <span className="shrink-0 rounded-md border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 text-[11px] font-black uppercase tracking-wide text-amber-200">
+                              Remolque
+                            </span>
+                          )}
                           {assistance.priority === "urgente" && (
                             <span className="shrink-0 rounded-full border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-[11px] font-bold text-red-300">
                               Urgente
@@ -1945,6 +2064,25 @@ export default function RoadsideAssistanceView({
                             </span>
                           )}
                         </div>
+                        {/* La otra matrícula del conjunto, si la hay: la
+                           * tractora cuando el servicio es al remolque, o el
+                           * remolque cuando es a la tractora. Sin decir cuál
+                           * es cuál, dos matrículas juntas confunden más de lo
+                           * que aclaran. */}
+                        {matriculasDe(assistance).secundaria && (
+                          <div className="mt-1 truncate text-xs font-semibold text-slate-400">
+                            {matriculasDe(assistance).etiquetaSecundaria}{" "}
+                            <a
+                              href={`/vehiculo?plate=${encodeURIComponent(matriculasDe(assistance).secundaria)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline decoration-dotted hover:text-red-400"
+                              title="Ver historial del vehículo"
+                            >
+                              {matriculasDe(assistance).secundaria}
+                            </a>
+                          </div>
+                        )}
                         <div className="mt-1 truncate text-sm font-semibold text-slate-400">
                           {assistance.customerName || "Cliente sin nombre"}
                         </div>
@@ -3113,7 +3251,7 @@ export default function RoadsideAssistanceView({
                     Fotos y firma
                   </div>
                   <div className="font-bold text-slate-100">
-                    #{photosAssistance.id} · {photosAssistance.plate || "Sin matrícula"}
+                    #{photosAssistance.id} · {etiquetaMatricula(photosAssistance)}
                   </div>
                 </div>
               </div>
@@ -3200,7 +3338,7 @@ export default function RoadsideAssistanceView({
                     Enviar informe
                   </div>
                   <div className="font-bold text-slate-100">
-                    #{reportAssistance.id} · {reportAssistance.plate || "Sin matrícula"}
+                    #{reportAssistance.id} · {etiquetaMatricula(reportAssistance)}
                   </div>
                 </div>
               </div>
@@ -3284,7 +3422,7 @@ export default function RoadsideAssistanceView({
                     Ubicación en vivo
                   </div>
                   <div className="font-bold text-slate-100">
-                    #{mapAssistance.id} · {mapAssistance.plate || "Sin matrícula"}
+                    #{mapAssistance.id} · {etiquetaMatricula(mapAssistance)}
                   </div>
                 </div>
               </div>

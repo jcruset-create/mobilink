@@ -42,6 +42,8 @@ export type Caja = {
    * el día. 0 = sin fondo fijo, y entonces el cierre lo pregunta.
    */
   fondoObjetivoCentimos: number;
+  /** Esta caja no se cierra sin haberla cotejado con el ERP. Apagado por defecto. */
+  exigirCotejoErp: boolean;
 };
 
 export type EstadoSesion =
@@ -273,6 +275,92 @@ export type DocumentoOperacion = {
   subidoAtMs: number;
   /** Enlace temporal: caduca, así que no vale guardarlo en ningún sitio. */
   url: string | null;
+};
+
+// ── Conceptos de gasto ─────────────────────────────────────────────────────
+
+/**
+ * Qué segundo desplegable pide un concepto.
+ *
+ * No es decoración: es lo que hace que al elegir «Dietas» salgan los operarios
+ * y al elegir «Ferretería» salgan los centros de coste. El servidor comprueba
+ * que la pareja encaja, así que esto solo decide qué se ENSEÑA.
+ */
+export type TipoDestinoGasto = "NINGUNO" | "PERSONA" | "CENTRO_COSTE";
+
+export type ConceptoGasto = {
+  id: number;
+  codigo: string;
+  nombre: string;
+  tipoDestino: TipoDestinoGasto;
+  activo: boolean;
+  orden: number;
+  /** Cuántos pagos lo usan. Es lo que impide cambiarlo sin enterarse. */
+  usos: number;
+};
+
+export type DestinoGasto = {
+  id: number;
+  tipo: "PERSONA" | "CENTRO_COSTE";
+  codigo: string;
+  nombre: string;
+  activo: boolean;
+  orden: number;
+  usos: number;
+};
+
+/**
+ * El informe de gasto, tal cual lo devuelve `/expense-stats`.
+ *
+ * Los importes son céntimos enteros de punta a punta. Aquí no se divide entre
+ * 100 para guardarlo en el estado: se divide al pintarlo, con `euros()`.
+ */
+
+export type GranularidadGasto = "dia" | "mes" | "anio";
+
+export type LineaConceptoGasto = {
+  /** `null` es la línea de los pagos SIN clasificar. Se enseña, no se esconde. */
+  conceptoId: number | null;
+  codigo: string | null;
+  nombre: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type LineaDestinoGasto = {
+  destinoId: number | null;
+  nombre: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type PuntoGasto = {
+  /** `2026-09-07`, `2026-09` o `2026`, según la granularidad pedida. */
+  periodo: string;
+  importeCentimos: number;
+  operaciones: number;
+};
+
+export type InformeGasto = {
+  desde: string;
+  hasta: string;
+  granularidad: GranularidadGasto;
+  centroId: string | null;
+  totalCentimos: number;
+  operaciones: number;
+  sinClasificarCentimos: number;
+  conceptos: LineaConceptoGasto[];
+  destinos: LineaDestinoGasto[];
+  serie: PuntoGasto[];
+  comparacion: {
+    desde: string;
+    hasta: string;
+    totalCentimos: number;
+    operaciones: number;
+    diferenciaCentimos: number;
+    /** `null` si el tramo anterior fue cero: eso no es «+100 %». */
+    variacion: number | null;
+  } | null;
 };
 
 // ── AutoScan ───────────────────────────────────────────────────────────────
@@ -697,6 +785,14 @@ export type PropuestaEscaneo = {
   referencia: CampoPropuesto<string | null>;
   importeCentimos: CampoPropuesto<number | null>;
   cliente: CampoPropuesto<string | null>;
+  /**
+   * Quien EMITE el documento, que en un ticket de compra es el proveedor.
+   *
+   * Va al lado de `cliente` y no en su lugar: son las dos partes del mismo
+   * papel y cuál interesa depende de la pantalla. Cobros usa `cliente`, Pagos
+   * usa `proveedor`, y el análisis se hace UNA vez para los dos.
+   */
+  proveedor: CampoPropuesto<string | null>;
   concepto: CampoPropuesto<string | null>;
   formaCobro: {
     /** Código del catálogo, o null. null es NO LO SÉ, nunca «efectivo». */
@@ -799,4 +895,76 @@ export type PropuestaReposicion = {
   /** Qué sacar y qué devolver. null = no hay con qué reponer todavía. */
   reposicion: Reposicion | null;
   sinJornadaAbierta: boolean;
+};
+
+// ── Cotejo con el ERP ──────────────────────────────────────────────────────
+
+export type EquivalenciaErp = {
+  id: number;
+  etiquetaErp: string;
+  formaPago: string;
+  /** Nombre de esa forma en el catálogo, o null si ya no existe. */
+  formaNombre: string | null;
+  /** false = la forma está de baja o borrada. Se enseña, no se esconde. */
+  formaVigente: boolean;
+};
+
+export type LineaErp = {
+  justificante?: string | null;
+  referencia?: string | null;
+  formaErp: string;
+  importeCentimos: number;
+  tipo: "COBRO" | "PAGO";
+  concepto?: string | null;
+};
+
+export type LineaMobilink = {
+  id: number;
+  numero: string;
+  referencia?: string | null;
+  formaCodigo: string;
+  importeCentimos: number;
+  tipo: "COBRO" | "PAGO";
+  concepto?: string | null;
+};
+
+export type InformeCotejo = {
+  emparejadas: { erp: LineaErp; mobilink: LineaMobilink; por: "referencia" | "importe" }[];
+  soloEnErp: LineaErp[];
+  soloEnMobilink: LineaMobilink[];
+  ambiguas: { erp: LineaErp; candidatos: LineaMobilink[] }[];
+  /** Mismo importe a los dos lados, pero la forma de pago no coincide. */
+  discrepanciasDeForma: {
+    erp: LineaErp;
+    mobilink: LineaMobilink;
+    /** Qué forma le tocaría según la tabla. null = etiqueta sin configurar. */
+    formaEsperada: string | null;
+  }[];
+  formasSinEquivalencia: string[];
+  /** Etiquetas recortadas que encajan con varias equivalencias. No se elige ninguna. */
+  formasAmbiguas: { etiqueta: string; candidatas: string[] }[];
+  /** Las resueltas comparando por prefijo, y contra qué equivalencia configurada. */
+  formasPorRecorte: { etiqueta: string; configurada: string }[];
+  totales: {
+    erpCobros: number;
+    erpPagos: number;
+    mobilinkCobros: number;
+    mobilinkPagos: number;
+    diferenciaCobros: number;
+    diferenciaPagos: number;
+  };
+  cuadra: boolean;
+};
+
+export type ResultadoCotejo = {
+  lectura: {
+    lineas: LineaErp[];
+    totalCobrosDeclarado: number | null;
+    totalPagosDeclarado: number | null;
+    avisos: string[];
+    fiable: boolean;
+    /** true = se sabe que la lectura está mal; no hay informe que enseñar. */
+    bloqueante: boolean;
+  };
+  informe: InformeCotejo | null;
 };

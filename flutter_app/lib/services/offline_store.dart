@@ -20,6 +20,7 @@ class OfflineStore {
     _outbox = await Hive.openBox('sea_outbox');
     _track = await Hive.openBox('sea_track');
     pendingCount.value = _outbox.length;
+    perdidasCount.value = perdidas().length;
   }
 
   // ── Caché de asistencias (se guarda como JSON para evitar problemas de tipos) ──
@@ -80,6 +81,86 @@ class OfflineStore {
     await _outbox.delete(key);
     pendingCount.value = _outbox.length;
   }
+
+  // ── Qué evidencias faltan por subir ──────────────────────────────────
+  //
+  // Las fotos de llegada NO se suben todas igual: la matrícula del camión va
+  // bloqueante —el servidor le hace OCR y puede preguntar—, y la avería y el
+  // remolque van a esta cola. Si se pierde la cobertura justo después, la
+  // pantalla deja seguir y la avería se queda aquí sin que nadie se entere.
+  //
+  // De ahí que haga falta poder preguntar, antes de cerrar el servicio, qué
+  // hay pendiente DE ESTA asistencia.
+
+  /// Las fotos obligatorias del parte. Sin ellas el informe sale cojo y no se
+  /// puede justificar el servicio.
+  static const kindsObligatorios = {
+    'matricula_camion',
+    'matricula_remolque',
+    'foto_averia',
+  };
+
+  /// Tipos de foto de esta asistencia que siguen en la cola, sin repetir.
+  static List<String> subidasPendientesDe(int assistanceId) {
+    final kinds = <String>[];
+    for (final e in pending()) {
+      final item = e.value;
+      if (item['type'] != 'upload_file') continue;
+      if (item['assistanceId'] != assistanceId) continue;
+      final kind = item['kind'] as String?;
+      if (kind != null && !kinds.contains(kind)) kinds.add(kind);
+    }
+    return kinds;
+  }
+
+  /// De esas, las que el parte no puede permitirse perder.
+  static List<String> obligatoriasPendientesDe(int assistanceId) =>
+      subidasPendientesDe(assistanceId)
+          .where(kindsObligatorios.contains)
+          .toList();
+
+  // ── Evidencias perdidas ──────────────────────────────────────────────
+  //
+  // Una foto encolada cuyo fichero local ha desaparecido —el sistema limpió
+  // el directorio, se reinstaló la app— no se puede subir nunca. Antes se
+  // descartaba marcándola como enviada: la cola bajaba, el contador bajaba y
+  // no quedaba ni rastro de que esa foto existió.
+  //
+  // Ahora se apunta. No devuelve la foto, pero convierte una pérdida
+  // silenciosa en una pérdida que alguien puede ver y arreglar yendo a por
+  // otra foto mientras el camión sigue delante.
+  static final ValueNotifier<int> perdidasCount = ValueNotifier<int>(0);
+
+  static Future<void> registrarPerdida({
+    required int assistanceId,
+    required String kind,
+    required String localPath,
+  }) async {
+    final lista = perdidas();
+    lista.add({
+      'assistanceId': assistanceId,
+      'kind': kind,
+      'localPath': localPath,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    });
+    await _cache.put('evidencias_perdidas', jsonEncode(lista));
+    perdidasCount.value = lista.length;
+  }
+
+  static List<Map<String, dynamic>> perdidas() {
+    final raw = _cache.get('evidencias_perdidas') as String?;
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      return (jsonDecode(raw) as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static List<Map<String, dynamic>> perdidasDe(int assistanceId) =>
+      perdidas().where((p) => p['assistanceId'] == assistanceId).toList();
 
   // ── Cola de subida de fotos/firma ──
   static Future<void> enqueueUpload({

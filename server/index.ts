@@ -25,6 +25,7 @@ import { initTacografos, mountTacografos } from "./tacografos/index.ts";
 import { initCentral, mountCentral } from "./central/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
+import { extractJson, hasAi } from "./core/ai.ts";
 import { OpenAiFichaTecnicaOcr } from "./tyrecontrol/ficha-tecnica/ocrService.ts";
 // Las reglas de "esto es un dato de verdad" y la normalizacion viven en un
 // solo sitio: el mismo modulo que usa el panel, para que servidor y cliente
@@ -47,6 +48,13 @@ import {
 } from "./documentos/servicio.ts";
 import { tipoDesdeKindAssist as tipoDocumentoDesdeKind } from "./documentos/tipos.ts";
 import { normalizarMatricula as normalizarMatriculaTc } from "./tyrecontrol/matricula.ts";
+import { puedeVerEmpresaDeRequest as puedeVerEmpresaTc } from "./tyrecontrol/empresaAcceso.ts";
+import {
+  buildWebfleetRequest,
+  resolveWebfleetCreds,
+  resolverCredencialesWebfleet,
+  type WebfleetCreds,
+} from "./tyrecontrol/webfleetCredenciales.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
@@ -78,6 +86,7 @@ import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenS
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
+import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
@@ -692,6 +701,9 @@ function normalizeTechRow(t: any) {
     // Sin la columna (base antigua) se asume de alta: nadie está de baja por
     // omisión.
     activo: t.activo !== false,
+    // Persona de Core con la que está vinculado (paso 2 de la unificación).
+    // null = todavía sin vincular; el histórico sigue yendo por nombre.
+    employeeId: t.employee_id ?? null,
   };
 }
 
@@ -720,6 +732,9 @@ finishedWhatsappSentAtMs: job.finishedWhatsappSentAtMs ?? null,
 finishedWhatsappSid: job.finishedWhatsappSid ?? null,
 assignedVehicleId: job.assignedVehicleId ?? null,
 assignedVehicleName: job.assignedVehicleName ?? null,
+quantity: job.quantity ?? null,
+unitMinutes: job.unitMinutes ?? null,
+ptNumero: job.ptNumero ?? null,
   };
 }
 
@@ -1244,53 +1259,45 @@ app.post("/api/geocode", protectWhenStrict(requirePanelRole), async (req, res) =
   }
 });
 
-type WebfleetCreds = { account?: string | null; username?: string | null; password?: string | null; apikey?: string | null; baseUrl?: string | null };
+// Las credenciales de Webfleet se resuelven en server/tyrecontrol/webfleetCredenciales.ts,
+// que es también donde están sus pruebas. El orden es: gestor de secretos de
+// esa empresa → tc_webfleet_config → variables globales de entorno.
 
-// Lee las credenciales Webfleet de una empresa (cliente) de Supabase.
-async function getWebfleetConfigForEmpresa(empresaId: string): Promise<WebfleetCreds | null> {
-  const { data, error } = await supabase.from("tc_webfleet_config").select("*").eq("empresa_id", empresaId).maybeSingle();
-  if (error || !data || !(data as any).activo || !(data as any).account) return null;
-  const d = data as any;
-  return { account: d.account, username: d.username, password: d.password, apikey: d.apikey, baseUrl: d.base_url };
-}
-
-// Credenciales globales (variables de entorno) si están definidas.
-function globalWebfleetCreds(): WebfleetCreds | null {
-  if (!process.env.WEBFLEET_ACCOUNT || !process.env.WEBFLEET_USERNAME || !process.env.WEBFLEET_PASSWORD) return null;
-  return {
-    account: process.env.WEBFLEET_ACCOUNT, username: process.env.WEBFLEET_USERNAME,
-    password: process.env.WEBFLEET_PASSWORD, apikey: process.env.WEBFLEET_API_KEY,
-    baseUrl: process.env.WEBFLEET_BASE_URL,
-  };
-}
-
-// Credenciales a usar para una empresa: las suyas propias o, si no tiene, las
-// globales (con las que ya funciona el módulo de asistencia). null si no hay ninguna.
-async function resolveWebfleetCreds(empresaId: string): Promise<WebfleetCreds | null> {
-  return (await getWebfleetConfigForEmpresa(empresaId)) ?? globalWebfleetCreds();
-}
-
-function buildWebfleetRequest(action: string, extra: Record<string, string> = {}, creds?: WebfleetCreds): { url: string; headers: Record<string, string> } {
-  const account = creds?.account || process.env.WEBFLEET_ACCOUNT;
-  const username = creds?.username || process.env.WEBFLEET_USERNAME;
-  const password = creds?.password || process.env.WEBFLEET_PASSWORD;
-  const apiKey = creds?.apikey || process.env.WEBFLEET_API_KEY;
-  const baseUrl = creds?.baseUrl || process.env.WEBFLEET_BASE_URL || "https://csv.webfleet.com/extern";
-
-  if (!account || !username || !password) {
-    throw new Error("Credenciales Webfleet no configuradas (cuenta, usuario y contraseña)");
+/**
+ * Empresa de una petición de telemática, ya comprobada.
+ *
+ * Los endpoints de Webfleet reciben la empresa como parámetro y hasta ahora la
+ * usaban tal cual: quien llamaba elegía con QUÉ CUENTA se consultaba. Un
+ * usuario autenticado de cualquier cliente podía pedir la telemetría de otro
+ * poniendo su uuid en la URL. El middleware ya dejaba disponible `req.authCtx`,
+ * pero nadie lo miraba.
+ *
+ * Aquí se contrasta lo que pide la petición con lo que dice la sesión, usando
+ * el mismo criterio que la base de datos (`tc_puede_ver_empresa`). Devuelve la
+ * empresa si el acceso es legítimo, o responde y devuelve null si no lo es —de
+ * modo que quien llama solo tiene que comprobar el null y salir.
+ *
+ * Se responde 404, no 403: confirmar «esa empresa existe pero no es tuya» ya
+ * es contar algo de otro cliente.
+ */
+async function empresaTelematicaAutorizada(
+  req: express.Request,
+  res: express.Response,
+): Promise<string | null> {
+  const empresa = String(req.query.empresa || "");
+  if (!empresa) {
+    res.status(400).json({ error: "Falta el parámetro empresa" });
+    return null;
   }
-
-  const params = new URLSearchParams({ account, action, lang: "en", outputformat: "json", useISO8601: "true", ...extra });
-  if (apiKey) params.set("apikey", apiKey);
-
-  const credentials = Buffer.from(`${username}:${password}`).toString("base64");
-
-  return {
-    url: `${baseUrl}?${params.toString()}`,
-    headers: { Authorization: `Basic ${credentials}` },
-  };
+  if (!(await puedeVerEmpresaTc(req, empresa))) {
+    res.status(404).json({ error: "Empresa no encontrada" });
+    return null;
+  }
+  return empresa;
 }
+
+// buildWebfleetRequest vive en server/tyrecontrol/webfleetCredenciales.ts,
+// junto a la resolución de credenciales y con sus pruebas.
 
 const STOPPED_SPEED_THRESHOLD_KMH = 3;
 
@@ -2240,7 +2247,7 @@ app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => 
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
              "roadsideCapable", "compartidoCentral", "currentRoadsideAssistanceId", phone,
-             "statusChangedAtMs", "statusTotals", activo
+             "statusChangedAtMs", "statusTotals", activo, employee_id
       FROM techs
       ORDER BY id ASC
     `);
@@ -2349,7 +2356,8 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           "statusTotals",
           "roadsideCapable",
           "currentRoadsideAssistanceId",
-          phone
+          phone,
+          employee_id
         FROM techs
         WHERE name = $1
       `,
@@ -2424,6 +2432,100 @@ app.put("/api/techs/:name/activo", requireAdminRole, async (req, res) => {
   } catch (error) {
     console.error("PUT /api/techs/:name/activo error:", error);
     res.status(500).json({ error: "Error cambiando el alta del técnico" });
+  }
+});
+
+/* =========================================================
+   VÍNCULO TÉCNICO ↔ PERSONA DE CORE (paso 2 de la unificación)
+   Ver docs/FASE1_OPERARIOS_CORE_ESTUDIO.md, apartado 0.
+   El histórico del taller sigue apuntando por nombre: esto no lo toca.
+========================================================= */
+
+// Propuesta de emparejado, para revisarla ANTES de aplicar nada. No escribe.
+app.get("/api/techs/vinculo-core", requireAdminRole, async (_req, res) => {
+  try {
+    const [tecnicos, empleados] = await Promise.all([
+      db.query(`SELECT name, employee_id FROM techs ORDER BY name`),
+      db.query(
+        `SELECT id, nombre, apellidos, codigo_operario
+           FROM sea_employees
+          WHERE activo = true
+          ORDER BY nombre`
+      ),
+    ]);
+
+    const yaVinculados = new Map<string, string>(
+      tecnicos.rows
+        .filter((t: any) => t.employee_id)
+        .map((t: any) => [t.name, String(t.employee_id)])
+    );
+
+    const propuestas = proponerVinculos(
+      tecnicos.rows.map((t: any) => String(t.name)),
+      empleados.rows as EmpleadoCore[]
+    ).map((p) => ({
+      ...p,
+      // Lo que ya está vinculado se informa, pero no se vuelve a proponer.
+      vinculadoA: yaVinculados.get(p.tech) ?? null,
+    }));
+
+    res.json({
+      propuestas,
+      resumen: {
+        total: propuestas.length,
+        yaVinculados: yaVinculados.size,
+        exacta: propuestas.filter((p) => !p.vinculadoA && p.certeza === "exacta").length,
+        unica: propuestas.filter((p) => !p.vinculadoA && p.certeza === "unica").length,
+        ambigua: propuestas.filter((p) => !p.vinculadoA && p.certeza === "ambigua").length,
+        sinCandidato: propuestas.filter(
+          (p) => !p.vinculadoA && p.certeza === "sin_candidato"
+        ).length,
+      },
+    });
+  } catch (error) {
+    console.error("GET /api/techs/vinculo-core error:", error);
+    res.status(500).json({ error: "Error calculando los vínculos" });
+  }
+});
+
+// Confirma (o deshace, con employeeId null) el vínculo de un técnico.
+app.put("/api/techs/:name/vinculo-core", requireAdminRole, async (req, res) => {
+  try {
+    const name = String(req.params.name || "").trim();
+    const employeeId = req.body?.employeeId ? String(req.body.employeeId).trim() : null;
+    if (!name) return res.status(400).json({ error: "Nombre requerido" });
+
+    if (employeeId) {
+      const existe = await db.query(`SELECT id FROM sea_employees WHERE id = $1`, [
+        employeeId,
+      ]);
+      if (existe.rows.length === 0) {
+        return res.status(404).json({ error: "Ese empleado no existe" });
+      }
+      // Una persona no puede ser dos técnicos: sería el duplicado que se
+      // intenta eliminar, pero con vínculo.
+      const ocupado = await db.query(
+        `SELECT name FROM techs WHERE employee_id = $1 AND name <> $2 LIMIT 1`,
+        [employeeId, name]
+      );
+      if (ocupado.rows.length > 0) {
+        return res.status(409).json({
+          error: `Ese empleado ya está vinculado con "${ocupado.rows[0].name}"`,
+        });
+      }
+    }
+
+    const r = await db.query(
+      `UPDATE techs SET employee_id = $1 WHERE name = $2 RETURNING name, employee_id`,
+      [employeeId, name]
+    );
+    if (r.rows.length === 0) {
+      return res.status(404).json({ error: "Técnico no encontrado" });
+    }
+    res.json({ ok: true, name: r.rows[0].name, employeeId: r.rows[0].employee_id });
+  } catch (error) {
+    console.error("PUT /api/techs/:name/vinculo-core error:", error);
+    res.status(500).json({ error: "Error guardando el vínculo" });
   }
 });
 
@@ -2651,12 +2753,15 @@ if (interruptedMaintenanceTasks.length > 0) {
           "pausedAccumulatedMinutes",
           "pausedAtMs",
           "assignedVehicleId",
-          "assignedVehicleName"
+          "assignedVehicleName",
+          quantity,
+          "unitMinutes",
+          "ptNumero"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14, $15, $16, $17,
-          $18, $19, $20, $21
+          $18, $19, $20, $21, $22, $23, $24
         )
         ON CONFLICT (id) DO UPDATE SET
           area = EXCLUDED.area,
@@ -2678,7 +2783,13 @@ if (interruptedMaintenanceTasks.length > 0) {
           "pausedAccumulatedMinutes" = EXCLUDED."pausedAccumulatedMinutes",
           "pausedAtMs" = EXCLUDED."pausedAtMs",
           "assignedVehicleId" = EXCLUDED."assignedVehicleId",
-          "assignedVehicleName" = EXCLUDED."assignedVehicleName"
+          "assignedVehicleName" = EXCLUDED."assignedVehicleName",
+          -- COALESCE: quien no mande estos campos no debe borrarlos. El
+          -- operativo guarda el trabajo muchas veces a lo largo del día y no
+          -- todos los sitios conocen la cantidad ni el parte de origen.
+          quantity = COALESCE(EXCLUDED.quantity, jobs.quantity),
+          "unitMinutes" = COALESCE(EXCLUDED."unitMinutes", jobs."unitMinutes"),
+          "ptNumero" = COALESCE(EXCLUDED."ptNumero", jobs."ptNumero")
         RETURNING *
       `,
       [
@@ -2703,6 +2814,13 @@ if (interruptedMaintenanceTasks.length > 0) {
         job.pausedAtMs ?? null,
         Number.isFinite(Number(job.assignedVehicleId)) ? Number(job.assignedVehicleId) : null,
         String(job.assignedVehicleName || "").trim() || null,
+        Number.isFinite(Number(job.quantity)) && Number(job.quantity) > 0
+          ? Math.round(Number(job.quantity))
+          : null,
+        Number.isFinite(Number(job.unitMinutes)) && Number(job.unitMinutes) > 0
+          ? Math.round(Number(job.unitMinutes))
+          : null,
+        String(job.ptNumero || "").trim() || null,
       ]
     );
 
@@ -5862,8 +5980,8 @@ app.post("/api/tyrecontrol/checkpoint/revisar", authenticate, requireModule("tyr
 // Lista de objetos Webfleet de una empresa (para enlazar vehículos por su ID).
 app.get("/api/tyrecontrol/webfleet/objects", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
-    const empresa = String(req.query.empresa || "");
-    if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
+    const empresa = await empresaTelematicaAutorizada(req, res);
+    if (!empresa) return;
     const creds = await resolveWebfleetCreds(empresa);
     if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
@@ -5884,9 +6002,10 @@ app.get("/api/tyrecontrol/webfleet/objects", authenticate, requireModule("tyreco
 // Estado de un objeto: km (odómetro) + posición. Para sincronizar un vehículo.
 app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
-    const empresa = String(req.query.empresa || "");
     const objectno = String(req.query.objectno || "");
-    if (!empresa || !objectno) return res.status(400).json({ error: "Falta empresa u objectno" });
+    if (!objectno) return res.status(400).json({ error: "Falta empresa u objectno" });
+    const empresa = await empresaTelematicaAutorizada(req, res);
+    if (!empresa) return;
     const creds = await resolveWebfleetCreds(empresa);
     if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", { objectno }, creds);
@@ -5913,6 +6032,54 @@ app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrec
   } catch (e: any) { res.status(500).json({ error: e?.message || "Error Webfleet" }); }
 });
 
+// ── Estado de la integración Webfleet de un cliente ─────────────────────────
+//
+// Para poder migrar los clientes al gestor de secretos de uno en uno hace falta
+// poder VER por dónde va cada uno. Hasta ahora el panel deducía «Configurado»
+// de si la tabla tenía cuenta, y desde que las credenciales pueden vivir en el
+// gestor eso miente: un cliente ya migrado, con la tabla vacía, aparecería como
+// «Sin configurar» aunque funcione perfectamente.
+//
+// Devuelve de dónde salen las credenciales, nunca cuáles son. Con `probar=1`
+// además hace una llamada real a Webfleet, que es la única forma honesta de
+// decir que una migración ha salido bien: que las credenciales nuevas contestan.
+//
+//   /api/tyrecontrol/webfleet/estado?empresa=<uuid>[&probar=1]
+app.get("/api/tyrecontrol/webfleet/estado", authenticate, requireModule("tyrecontrol"), async (req, res) => {
+  const empresa = await empresaTelematicaAutorizada(req, res);
+  if (!empresa) return;
+
+  const { creds, origen } = await resolverCredencialesWebfleet(empresa);
+  const base = { origen, configurado: origen !== "ninguno" };
+
+  if (String(req.query.probar || "") !== "1") return res.json(base);
+  if (!creds) {
+    return res.json({ ...base, probado: true, ok: false, mensaje: "No hay credenciales configuradas" });
+  }
+
+  // El resultado de la prueba NUNCA es un error del endpoint: que Webfleet
+  // rechace unas credenciales es información, no un fallo del servidor. Por eso
+  // se responde 200 con ok:false y el motivo, y el try envuelve solo la llamada.
+  try {
+    // La llamada más barata que confirma que la cuenta responde. Se pide la
+    // flota entera, como el resto del módulo, pero solo se cuenta: aquí no
+    // interesan los vehículos, interesa que Webfleet conteste.
+    const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
+    const r = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) {
+      return res.json({ ...base, probado: true, ok: false, mensaje: `Webfleet respondió HTTP ${r.status}` });
+    }
+    const data = await r.json();
+    if (data?.errorCode) {
+      return res.json({ ...base, probado: true, ok: false, mensaje: `Webfleet ${data.errorCode}: ${data.errorMsg}` });
+    }
+    const objs = Array.isArray(data) ? data : data?.data ?? [];
+    res.json({ ...base, probado: true, ok: true, vehiculos: objs.length });
+  } catch (e: any) {
+    res.json({ ...base, probado: true, ok: false, mensaje: e?.message || "Error al probar Webfleet" });
+  }
+});
+
 // ── Conducción eficiente (Webfleet) ─────────────────────────────────────────
 // Los equipos de la flota no tienen enlace CAN/FMS, así que Webfleet devuelve
 // fuel_usage y co2 SIEMPRE a 0. Lo que sí trae, y es aprovechable, son los
@@ -5925,8 +6092,8 @@ app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrec
 //   /api/tyrecontrol/webfleet/conduccion?empresa=<uuid>&dias=30
 app.get("/api/tyrecontrol/webfleet/conduccion", authenticate, requireModule("tyrecontrol"), async (req, res) => {
   try {
-    const empresa = String(req.query.empresa || "");
-    if (!empresa) return res.status(400).json({ error: "Falta el parámetro empresa" });
+    const empresa = await empresaTelematicaAutorizada(req, res);
+    if (!empresa) return;
     const dias = Math.min(90, Math.max(1, Number(req.query.dias) || 30));
     const creds = await resolveWebfleetCreds(empresa);
     if (!creds) return res.status(503).json({ error: "Webfleet no configurado" });
@@ -11437,6 +11604,213 @@ app.get("/api/scheduled-tech-statuses", protectWhenStrict(requirePanelRole), asy
 });
 
 /* =========================================================
+   PARTES DE TRABAJO: lectura del papel y correspondencias
+========================================================= */
+
+/** Correspondencias artículo → entrada rápida de un taller. */
+app.get("/api/partes-trabajo/articulos", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    const workshopId = String(req.query.workshopId || "");
+
+    const result = await db.query(
+      `SELECT clave, "templateKey", descripcion
+       FROM erp_articulo_plantilla
+       WHERE "workshopId" = $1`,
+      [workshopId]
+    );
+
+    const mapa: Record<string, string> = {};
+
+    for (const row of result.rows) mapa[row.clave] = row.templateKey;
+
+    res.json({ workshopId, mapa, filas: result.rows });
+  } catch (error) {
+    console.error("GET /api/partes-trabajo/articulos error:", error);
+    res.status(500).json({ error: "Error cargando las correspondencias de artículos" });
+  }
+});
+
+/**
+ * Enseña qué es un artículo. Upsert fila a fila, nunca reemplazando la
+ * colección entera: es el error que ya ha costado varias pérdidas de datos.
+ */
+app.put("/api/partes-trabajo/articulos", requireSupervisorRole, async (req, res) => {
+  try {
+    const workshopId = String(req.body?.workshopId || "");
+
+    const entradas = Array.isArray(req.body?.articulos) ? req.body.articulos : [];
+
+    if (entradas.length === 0) {
+      return res.status(400).json({ error: "No se ha enviado ningún artículo" });
+    }
+
+    const now = Date.now();
+
+    await db.query("BEGIN");
+
+    for (const entrada of entradas) {
+      const clave = String(entrada?.clave || "").trim();
+      const templateKey = String(entrada?.templateKey || "").trim();
+
+      if (!clave || !templateKey) continue;
+
+      await db.query(
+        `INSERT INTO erp_articulo_plantilla (
+           "workshopId", clave, "templateKey", descripcion, "createdAtMs", "updatedAtMs"
+         )
+         VALUES ($1, $2, $3, $4, $5, $5)
+         ON CONFLICT ("workshopId", clave)
+         DO UPDATE SET
+           "templateKey" = EXCLUDED."templateKey",
+           descripcion = EXCLUDED.descripcion,
+           "updatedAtMs" = EXCLUDED."updatedAtMs"`,
+        [workshopId, clave, templateKey, String(entrada?.descripcion || ""), now]
+      );
+    }
+
+    await db.query("COMMIT");
+
+    res.json({ ok: true });
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    console.error("PUT /api/partes-trabajo/articulos error:", error);
+    res.status(500).json({ error: "Error guardando las correspondencias de artículos" });
+  }
+});
+
+/**
+ * Olvida una correspondencia. Al volver a aparecer ese artículo se preguntará
+ * otra vez, que es lo que se quiere cuando se enseñó mal.
+ */
+app.delete("/api/partes-trabajo/articulos", requireSupervisorRole, async (req, res) => {
+  try {
+    const workshopId = String(req.query.workshopId || "");
+    const clave = String(req.query.clave || "").trim();
+
+    if (!clave) {
+      return res.status(400).json({ error: "Falta la clave del artículo" });
+    }
+
+    const result = await db.query(
+      `DELETE FROM erp_articulo_plantilla
+       WHERE "workshopId" = $1 AND clave = $2`,
+      [workshopId, clave]
+    );
+
+    res.json({ ok: true, borradas: result.rowCount ?? 0 });
+  } catch (error) {
+    console.error("DELETE /api/partes-trabajo/articulos error:", error);
+    res.status(500).json({ error: "Error olvidando la correspondencia" });
+  }
+});
+
+/**
+ * Lee un parte de trabajo escaneado y devuelve sus campos.
+ *
+ * Solo extrae: no crea trabajos ni decide nada. Lo que salga de aquí lo revisa
+ * una persona antes de que se convierta en tarea, porque un OCR de un papel
+ * escaneado se equivoca y una matrícula mal leída manda el trabajo al vehículo
+ * equivocado.
+ */
+app.post("/api/partes-trabajo/leer", protectWhenStrict(requirePanelRole), async (req, res) => {
+  try {
+    if (!hasAi()) {
+      return res.status(503).json({
+        error: "La lectura de partes por IA no está configurada (OPENAI_API_KEY).",
+      });
+    }
+
+    // El escáner del taller produce PDF y el ERP se captura con Impr Pant, así
+    // que llegan las dos cosas. Un PDF NO puede ir como imagen: el proveedor lo
+    // rechaza, y ése era el motivo de que subir el parte tal cual salía del
+    // escáner no funcionase.
+    const adjuntos: string[] = Array.isArray(req.body?.imagenes)
+      ? req.body.imagenes.filter((u: unknown) => typeof u === "string" && u)
+      : [];
+
+    if (adjuntos.length === 0) {
+      return res.status(400).json({ error: "No se ha enviado ningún parte" });
+    }
+
+    const esPdf = (u: string) => /^data:application\/pdf[;,]/i.test(u) || /\.pdf($|\?)/i.test(u);
+
+    const imagenes = adjuntos.filter((u) => !esPdf(u));
+
+    const archivos = adjuntos
+      .filter(esPdf)
+      .map((dataUri, i) => ({ nombre: `parte-${i + 1}.pdf`, dataUri }));
+
+    const datos = await extractJson({
+      strict: true,
+      maxTokens: 2000,
+      images: imagenes,
+      archivos,
+      system: [
+        "Eres un lector de partes de trabajo de un taller de neumáticos.",
+        "Te llega una de estas dos cosas, y de ambas se saca lo mismo:",
+        "- El parte IMPRESO y escaneado, con cabecera del taller, cliente y la",
+        "  tabla PRODUCTOS Y SERVICIOS.",
+        "- Una CAPTURA DE PANTALLA del ERP (Formulario de Partes de Trabajo),",
+        "  con la rejilla de líneas. Ahí la matrícula suele estar abajo, en un",
+        "  rótulo del tipo CAMION-8072MNC: devuelve solo la matrícula (8072MNC).",
+        "  Las columnas son Descripcion, Uds., Dto., Precio U., Precio T., PVP.",
+        "  Usa Uds. como unidades y Precio U. como precio unitario.",
+        "Devuelve SOLO un JSON con esta forma exacta:",
+        "{",
+        '  "numero": string,            // el "PT Nº" del parte',
+        '  "fecha": string,             // "YYYY-MM-DD"',
+        '  "horaEntrada": string,       // "HH:MM:SS" de la casilla Entrada',
+        '  "matricula": string,',
+        '  "clienteNombre": string,',
+        '  "clienteTelefono": string,',
+        '  "cif": string,',
+        '  "km": number|null,',
+        '  "lineas": [                  // tabla PRODUCTOS Y SERVICIOS',
+        '    { "descripcion": string, "unidades": number,',
+        '      "precioUnitario": number|null, "precioTotal": number|null }',
+        "  ]",
+        "}",
+        "",
+        "Reglas:",
+        "- Copia las descripciones TAL CUAL aparecen, sin corregir ni traducir.",
+        "- Los números vienen en formato español (1.234,56): devuélvelos como",
+        "  número JSON (1234.56).",
+        "- Incluye TODAS las líneas, también las de precio 0.",
+        "- Si un campo no aparece en el papel, devuelve cadena vacía o null. No",
+        "  te lo inventes: es preferible un hueco a un dato falso.",
+      ].join("\n"),
+    });
+
+    res.json({
+      ok: true,
+      parte: {
+        numero: String(datos?.numero || ""),
+        fecha: String(datos?.fecha || ""),
+        horaEntrada: String(datos?.horaEntrada || ""),
+        matricula: String(datos?.matricula || ""),
+        clienteNombre: String(datos?.clienteNombre || ""),
+        clienteTelefono: String(datos?.clienteTelefono || ""),
+        cif: String(datos?.cif || ""),
+        km: datos?.km == null ? null : Number(datos.km),
+        lineas: Array.isArray(datos?.lineas)
+          ? datos.lineas.map((l: any) => ({
+              descripcion: String(l?.descripcion || ""),
+              unidades: Number(l?.unidades) || 0,
+              precioUnitario: l?.precioUnitario == null ? null : Number(l.precioUnitario),
+              precioTotal: l?.precioTotal == null ? null : Number(l.precioTotal),
+            }))
+          : [],
+      },
+    });
+  } catch (error: any) {
+    console.error("POST /api/partes-trabajo/leer error:", error);
+    res.status(502).json({
+      error: `No se pudo leer el parte: ${error?.message || "error desconocido"}`,
+    });
+  }
+});
+
+/* =========================================================
    VACACIONES: cupo anual y modo de cómputo
 ========================================================= */
 
@@ -12875,6 +13249,44 @@ app.get("/api/me", authenticate, async (req, res) => {
   } catch (error) {
     console.error("GET /api/me error:", error);
     res.status(500).json({ error: "Error cargando el perfil" });
+  }
+});
+
+/**
+ * Valida la sesión del panel de taller y devuelve los permisos VIGENTES.
+ *
+ * El panel guardaba en localStorage una marca `sea-authenticated` y se fiaba de
+ * ella al arrancar: nadie comprobaba contra el servidor si esa sesión seguía
+ * siendo válida ni si el rol había cambiado. Este endpoint es esa comprobación.
+ *
+ * Acepta las dos vías (sesión unificada por Bearer y token clásico
+ * `x-admin-token`), porque el panel se usa con ambas.
+ */
+app.get("/api/panel/session", async (req, res) => {
+  try {
+    const role = await getRoleFromRequestAsync(req);
+    if (!role) {
+      return res.status(401).json({ error: "No autorizado" });
+    }
+
+    // Si la credencial corresponde a un usuario de la tabla, se devuelven
+    // también su nombre y sus pantallas: así el panel refresca los permisos en
+    // cada arranque en vez de arrastrar los que guardó el día del login.
+    let name: string | null = null;
+    let allowedViews: string[] | null = null;
+    const token = String(req.headers["x-admin-token"] ?? req.query?.token ?? "").trim();
+    if (token) {
+      const u = await findDbUserByPassword(token);
+      if (u) {
+        name = u.name || null;
+        allowedViews = u.allowedViews.length > 0 ? u.allowedViews : null;
+      }
+    }
+
+    res.json({ ok: true, role, name, allowedViews });
+  } catch (error) {
+    console.error("GET /api/panel/session error:", error);
+    res.status(500).json({ error: "Error validando la sesión" });
   }
 });
 

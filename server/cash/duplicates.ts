@@ -115,19 +115,32 @@ export async function cobroPrevioDeFactura(
   empresaId: string,
   referencia: string | null,
   client: PoolClient | typeof pool = pool,
-  excluirOperacionId: number | null = null
+  excluirOperacionId: number | null = null,
+  /*
+   * Qué se busca: un cobro ya hecho de esta factura, o un PAGO ya hecho de esta
+   * factura de proveedor.
+   *
+   * Son la misma pregunta desde los dos lados del mostrador y por eso comparten
+   * consulta, pero **no se pueden mezclar**: que hayamos cobrado la factura
+   * A-123 a un cliente no dice nada sobre si hemos pagado la A-123 de un
+   * proveedor, y avisar de lo uno mirando lo otro sería un aviso falso — de los
+   * que enseñan a ignorar los avisos.
+   */
+  sentido: "COBRO" | "PAGO" = "COBRO"
 ): Promise<CobroPrevio | null> {
   const ref = referencia == null ? "" : normalizarReferencia(referencia);
   if (!ref) return null;
 
+  const tipos = sentido === "PAGO" ? ["PAYMENT", "MANUAL_OUT"] : ["COLLECTION"];
+
   const { rows } = await client.query(
     `SELECT id, numero, importe_centimos, party_nombre, created_at_ms
        FROM cash_operations
-      WHERE empresa_id = $1 AND tipo = 'COLLECTION' AND estado = 'CONFIRMED'
+      WHERE empresa_id = $1 AND tipo = ANY($4::text[]) AND estado = 'CONFIRMED'
         AND upper(trim(referencia)) = $2
         AND ($3::int IS NULL OR id <> $3::int)
       ORDER BY id DESC LIMIT 1`,
-    [empresaId, ref, excluirOperacionId]
+    [empresaId, ref, excluirOperacionId, tipos]
   );
   if (rows.length === 0) return null;
 

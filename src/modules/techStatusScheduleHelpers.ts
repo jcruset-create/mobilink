@@ -109,6 +109,21 @@ export function getScheduledStatusForTech({
   return matches[0] ?? null;
 }
 
+/** Estados que solo puede poner la agenda. */
+export function isEstadoDeAusencia(status?: string | null): boolean {
+  const valor = String(status || "").toLowerCase().trim();
+
+  return (
+    valor === "vacaciones" ||
+    valor === "baja" ||
+    valor === "permiso" ||
+    valor === "nodisponible" ||
+    valor === "no_disponible" ||
+    valor === "otro_taller" ||
+    valor === "en_otro_taller"
+  );
+}
+
 export function applyScheduledStatusesToTechs({
   techs,
   scheduledStatuses,
@@ -125,7 +140,20 @@ export function applyScheduledStatusesToTechs({
       dateValue,
     });
 
-    if (!scheduled) return tech;
+    // Las ausencias solo existen si hay un rango vigente en la agenda: es el
+    // único sitio donde se ponen. Si un técnico arrastra vacaciones, baja o
+    // permiso sin rango que lo sostenga, ese estado es basura de cuando se
+    // podían poner a mano —o de un rango ya borrado— y nada lo revertía: gente
+    // que llevaba semanas trabajando seguía saliendo de vacaciones.
+    if (!scheduled) {
+      if (!isEstadoDeAusencia(tech.status)) return tech;
+
+      return {
+        ...tech,
+        status: "disponible",
+        blocked: false,
+      };
+    }
 
     const isUnavailableStatus =
       scheduled.status === "vacaciones" ||

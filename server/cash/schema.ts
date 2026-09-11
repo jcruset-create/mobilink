@@ -82,6 +82,24 @@ export async function initCash(): Promise<void> {
     CREATE INDEX IF NOT EXISTS cash_registers_empresa_idx ON cash_registers(empresa_id, activa);
   `);
 
+  /*
+   * ¿Esta caja tiene que cotejarse con el ERP antes de cerrar?
+   *
+   * Por caja y APAGADO por defecto, que es lo único defendible: el cotejo se
+   * apoya en pegar una captura de Genes, y hay cajas que no cobran contra Genes
+   * —o que ni siquiera tienen configuradas las equivalencias—. Encenderlo para
+   * todo el mundo de golpe dejaría a esas cajas sin poder cerrar por una regla
+   * que no les toca, y su única salida sería escribir un motivo falso cada
+   * tarde. Una regla que obliga a mentir para trabajar deja de vigilar nada.
+   *
+   * Vive en la caja y no en la empresa por lo mismo: dentro de una empresa
+   * conviven el mostrador que factura por Genes y el que no.
+   */
+  await pool.query(`
+    ALTER TABLE cash_registers
+      ADD COLUMN IF NOT EXISTS exigir_cotejo_erp BOOLEAN NOT NULL DEFAULT false;
+  `);
+
   // ── Catálogo de formas de pago ────────────────────────────────────────────
   // Por empresa: cada una cobra por donde cobra. `codigo` es lo que se guarda
   // en cash_operation_payments, así que una forma dada de baja no cambia la
@@ -1681,6 +1699,203 @@ export async function initCash(): Promise<void> {
     /* La bandeja de un centro, que es la consulta de la pantalla. */
     CREATE INDEX IF NOT EXISTS cash_autoscan_inbox_bandeja_idx
       ON cash_autoscan_inbox(empresa_id, centro_id, estado, recibido_at_ms);
+  `);
+
+  /*
+   * ── Conceptos de gasto y su destino ───────────────────────────────────────
+   *
+   * Para qué: hoy `cash_operations.concepto` es texto libre, y con texto libre
+   * no hay estadística posible — «DIETA», «Dieta», «dietas Juan» y «DIETA JUAN»
+   * son cuatro conceptos distintos para un ordenador y uno solo para el que
+   * paga.
+   *
+   * ## Dos ejes que NO son el mismo, y por qué no se mezclan
+   *
+   * Ya existe `cash_sections`, y contesta **de qué negocio es este dinero**
+   * (taller, gasolinera). El cierre y los informes YA desglosan por ella.
+   *
+   * Esto contesta otra pregunta: **a qué se ha imputado el gasto** — a un
+   * operario, a la unidad móvil 1, a nada. Meter «taller turismo» y «taller
+   * camión» como secciones habría partido en tres una sección que el cierre ya
+   * usa, y los cierres anteriores se habrían quedado apuntando a algo que ya no
+   * existe. Son dos ejes y viven separados.
+   *
+   * ## Un concepto dice qué destino pide
+   *
+   *     Dietas      → PERSONA        → sale la lista de operarios
+   *     Ferretería  → CENTRO_COSTE   → taller turismo, taller camión, unidad móvil 1
+   *     Varios      → NINGUNO        → no sale el segundo desplegable
+   *
+   * Por eso el segundo desplegable cambia solo: lo decide el concepto elegido,
+   * no una regla escondida en la pantalla.
+   *
+   * ## Compatibilidad
+   *
+   * `concepto` se queda **exactamente como estaba**. Estas dos columnas son
+   * opcionales y se añaden al lado. No hay migración que adivine que «DIETA»
+   * era el concepto Dietas: adivinar el pasado es cómo se ensucian las
+   * estadísticas antes de tener ninguna. Lo viejo se reclasifica a mano, como
+   * ya se hace con la sección.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_expense_concepts (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      /* No cambia nunca: es lo que queda escrito en las operaciones. */
+      codigo TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      /* Qué segundo desplegable pide este concepto. */
+      tipo_destino TEXT NOT NULL DEFAULT 'NINGUNO',
+      activo BOOLEAN NOT NULL DEFAULT true,
+      orden INTEGER NOT NULL DEFAULT 0,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, codigo),
+      CONSTRAINT cash_expense_concepts_tipo
+        CHECK (tipo_destino IN ('NINGUNO','PERSONA','CENTRO_COSTE'))
+    );
+    CREATE INDEX IF NOT EXISTS cash_expense_concepts_empresa_idx
+      ON cash_expense_concepts(empresa_id, activo, orden);
+
+    /*
+     * Los destinos, en UNA tabla con su tipo y no en dos.
+     *
+     * Un operario y un centro de coste se manejan igual —nombre, activo,
+     * orden— y se eligen en el mismo desplegable. Dos tablas idénticas
+     * obligarían a duplicar el CRUD, la API y la pantalla para no ganar nada;
+     * el «tipo» ya separa lo que hay que separar y es justo por lo que se
+     * filtra al enseñar la lista.
+     */
+    CREATE TABLE IF NOT EXISTS cash_expense_targets (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      tipo TEXT NOT NULL,
+      codigo TEXT NOT NULL,
+      nombre TEXT NOT NULL,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      orden INTEGER NOT NULL DEFAULT 0,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, tipo, codigo),
+      CONSTRAINT cash_expense_targets_tipo
+        CHECK (tipo IN ('PERSONA','CENTRO_COSTE'))
+    );
+    CREATE INDEX IF NOT EXISTS cash_expense_targets_empresa_idx
+      ON cash_expense_targets(empresa_id, tipo, activo, orden);
+  `);
+
+  /*
+   * Cómo se llama en el ERP cada forma de cobro nuestra.
+   *
+   * Para cotejar el cierre del ERP con el nuestro hay que saber que «Datáfono
+   * Clearone ta...» es lo que aquí llamamos CLEARONE. Eso es un dato del
+   * taller, no algo que se pueda deducir: los nombres los pone quien configuró
+   * el ERP hace años y no se parecen a los nuestros.
+   *
+   * ── Por qué una TABLA y no que lo adivine el modelo ───────────────────────
+   *
+   * Porque una tabla dice siempre lo mismo. Un modelo, no. El día que decidiera
+   * que «TPV CAIXA» es efectivo, el cotejo diría que todo cuadra con un cobro
+   * de tarjeta contado como caja, y el descuadre aparecería en el arqueo de la
+   * tarde sin nada que lo explicara.
+   *
+   * ── La etiqueta se guarda NORMALIZADA ─────────────────────────────────────
+   *
+   * En mayúsculas y sin espacios de sobra, que es como se compara. El ERP la
+   * imprime con mayúsculas inconsistentes —«CONTADO» y «Datáfono Clearone»— y
+   * el modelo la copia tal cual la ve; sin normalizar, la misma forma entraría
+   * dos veces y el cotejo fallaría solo a ratos, que es la peor forma de
+   * fallar.
+   *
+   * El UNIQUE es sobre la etiqueta, no sobre la forma: varias etiquetas del ERP
+   * pueden apuntar a la misma forma nuestra —un taller con dos datáfonos— pero
+   * una etiqueta no puede significar dos cosas a la vez.
+   *
+   * ── Sin clave ajena a cash_payment_methods, y a propósito ─────────────────
+   *
+   * Mismo criterio que `cash_payment_rules`: el catálogo de formas es editable
+   * y una forma dada de baja no debe tumbar una equivalencia ni al revés. Que
+   * el código siga existiendo se comprueba al leer, y si no existe se dice.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_erp_payment_map (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      /* La etiqueta del ERP, normalizada: mayúsculas y sin espacios dobles. */
+      etiqueta_erp TEXT NOT NULL,
+      /* Código de cash_payment_methods. Sin FK, ver arriba. */
+      forma_pago TEXT NOT NULL,
+      creado_por UUID,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, etiqueta_erp)
+    );
+    CREATE INDEX IF NOT EXISTS cash_erp_payment_map_empresa_idx
+      ON cash_erp_payment_map(empresa_id);
+  `);
+
+  /*
+   * ── El resultado de cada cotejo con el ERP ────────────────────────────────
+   *
+   * Se guarda porque el cierre lo exige: no se cierra una jornada sin haberla
+   * cotejado. Sin dejar rastro del cotejo, esa regla no se puede comprobar.
+   *
+   * ── Lo que NO se guarda, y es lo más importante de esta tabla ─────────────
+   *
+   * Ni la captura, ni las líneas, ni un solo nombre de cliente. La pantalla del
+   * ERP lleva nombres y números de factura, y conservarla sería montar un
+   * depósito de datos personales que nadie ha pedido y que nadie vigilaría.
+   *
+   * Aquí solo van CIFRAS: cuántas líneas, cuántas cuadraron y por cuánto. Es
+   * todo lo que la puerta del cierre necesita saber, y es lo que hace que
+   * guardar esto no tenga ningún coste de privacidad.
+   *
+   * `huella` es el estado de la jornada cuando se cotejó. Si al cerrar no
+   * coincide, el cotejo es de antes de los últimos cobros y no vale: un OK
+   * viejo enseñado como bueno es peor que no tener ninguno.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_erp_reconciliations (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      session_id INTEGER NOT NULL REFERENCES cash_sessions(id) ON DELETE CASCADE,
+      /* Falso también cuando la lectura salió bloqueante y no hubo informe. */
+      cuadra BOOLEAN NOT NULL,
+      /* Cómo estaba la jornada al cotejar: «operaciones:ultimoId:suma». */
+      huella TEXT NOT NULL,
+      lineas_erp INTEGER NOT NULL DEFAULT 0,
+      emparejadas INTEGER NOT NULL DEFAULT 0,
+      a_revisar INTEGER NOT NULL DEFAULT 0,
+      diferencia_cobros_centimos BIGINT NOT NULL DEFAULT 0,
+      diferencia_pagos_centimos BIGINT NOT NULL DEFAULT 0,
+      /* La lectura se declaró inservible: no llegó a haber informe. */
+      lectura_bloqueante BOOLEAN NOT NULL DEFAULT false,
+      cotejado_por UUID,
+      created_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cash_erp_reconciliations_sesion_idx
+      ON cash_erp_reconciliations(session_id, id DESC);
+  `);
+
+  /*
+   * Las dos columnas en las operaciones. `ADD COLUMN IF NOT EXISTS` y no
+   * dentro del CREATE TABLE de arriba: `cash_operations` existe desde el
+   * principio y su CREATE no se vuelve a ejecutar.
+   *
+   * `ON DELETE SET NULL` porque un concepto no se borra —se desactiva—, pero
+   * si alguien lo borrara a mano en la base, un pago debe perder su
+   * clasificación, no desaparecer.
+   */
+  await pool.query(`
+    ALTER TABLE cash_operations
+      ADD COLUMN IF NOT EXISTS expense_concept_id INTEGER
+        REFERENCES cash_expense_concepts(id) ON DELETE SET NULL;
+    ALTER TABLE cash_operations
+      ADD COLUMN IF NOT EXISTS expense_target_id INTEGER
+        REFERENCES cash_expense_targets(id) ON DELETE SET NULL;
+    /* Por aquí entra la pantalla de estadísticas: gasto por concepto y fecha. */
+    CREATE INDEX IF NOT EXISTS cash_operations_concepto_idx
+      ON cash_operations(empresa_id, expense_concept_id, created_at_ms);
   `);
 
   await asignarCodigosDeCaja();

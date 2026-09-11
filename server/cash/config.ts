@@ -20,6 +20,7 @@ import { ErrorCaja, sesionAbierta } from "./repository.ts";
 import { nombreDeCentro } from "./hierarchy.ts";
 import { entidadDeIban, ibanValido, normalizarIban } from "./domain/bankaccount.ts";
 import { BANCOS_SEMILLA, logoDeSemilla } from "./domain/banks.ts";
+import { etiquetaNormalizada } from "./domain/cotejo.ts";
 import type { CampoRegla } from "./invoice-scan/classifier.ts";
 import {
   CODIGO_MAX,
@@ -54,6 +55,8 @@ export type CajaConfig = {
   nombre: string;
   /** Fondo fijo del cajón. 0 = sin fondo fijo. */
   fondoObjetivoCentimos: number;
+  /** Esta caja no se cierra sin haberla cotejado con el ERP. */
+  exigirCotejoErp: boolean;
   activa: boolean;
   /** Iniciales que abren el número de sus documentos: `TAR1-IB-26-001`. */
   codigo: string;
@@ -77,6 +80,7 @@ export async function listarCajas(
 ): Promise<CajaConfig[]> {
   const { rows } = await pool.query(
     `SELECT c.id, c.centro, c.centro_id, c.nombre, c.codigo, c.activa, c.fondo_objetivo_centimos,
+            c.exigir_cotejo_erp,
             (SELECT COUNT(*) FROM cash_sessions s WHERE s.register_id = c.id) AS jornadas,
             (SELECT s.id FROM cash_sessions s
               WHERE s.register_id = c.id AND s.estado IN ('OPEN','PENDING_CLOSE','REOPENED')
@@ -95,6 +99,7 @@ export async function listarCajas(
     nombre: r.nombre,
     codigo: r.codigo ?? "",
     fondoObjetivoCentimos: Number(r.fondo_objetivo_centimos ?? 0),
+    exigirCotejoErp: Boolean(r.exigir_cotejo_erp),
     activa: r.activa,
     jornadas: Number(r.jornadas),
     jornadaAbierta: r.jornada_abierta,
@@ -191,7 +196,7 @@ export async function crearCaja(
     ip: ctx.ip,
   });
 
-  return { ...rows[0], fondoObjetivoCentimos: 0 };
+  return { ...rows[0], fondoObjetivoCentimos: 0, exigirCotejoErp: false };
 }
 
 export async function actualizarCaja(
@@ -204,6 +209,7 @@ export async function actualizarCaja(
     codigo?: string;
     activa?: boolean;
     fondoObjetivoCentimos?: number;
+    exigirCotejoErp?: boolean;
   }
 ): Promise<{
   id: number;
@@ -213,6 +219,7 @@ export async function actualizarCaja(
   codigo: string;
   activa: boolean;
   fondoObjetivoCentimos: number;
+  exigirCotejoErp: boolean;
 }> {
   const { rows: actual } = await pool.query(
     `SELECT * FROM cash_registers WHERE id = $1 AND empresa_id = $2`,
@@ -299,14 +306,19 @@ export async function actualizarCaja(
     );
   }
 
+  const exigirCotejo =
+    cambios.exigirCotejoErp === undefined
+      ? Boolean(actual[0].exigir_cotejo_erp)
+      : cambios.exigirCotejoErp === true;
+
   const { rows } = await pool.query(
     `UPDATE cash_registers
         SET nombre = $2, centro = $3, activa = $4, fondo_objetivo_centimos = $5,
-            codigo = $7, centro_id = $8, updated_at_ms = $6
+            codigo = $7, centro_id = $8, exigir_cotejo_erp = $9, updated_at_ms = $6
       WHERE id = $1
       RETURNING id, centro, centro_id AS "centroId", nombre, codigo, activa,
-                fondo_objetivo_centimos`,
-    [id, nombre, centro, activa, fondo, Date.now(), codigo, centroId]
+                fondo_objetivo_centimos, exigir_cotejo_erp`,
+    [id, nombre, centro, activa, fondo, Date.now(), codigo, centroId, exigirCotejo]
   );
 
   await registrarAuditoria({
@@ -323,13 +335,22 @@ export async function actualizarCaja(
         codigo: actual[0].codigo ?? "",
         activa: actual[0].activa,
         fondoObjetivoCentimos: Number(actual[0].fondo_objetivo_centimos ?? 0),
+        exigirCotejoErp: Boolean(actual[0].exigir_cotejo_erp),
       },
-      despues: { nombre, centro, centroId, codigo, activa, fondoObjetivoCentimos: fondo },
+      despues: {
+        nombre, centro, centroId, codigo, activa,
+        fondoObjetivoCentimos: fondo,
+        exigirCotejoErp: exigirCotejo,
+      },
     },
     ip: ctx.ip,
   });
 
-  return { ...rows[0], fondoObjetivoCentimos: Number(rows[0].fondo_objetivo_centimos ?? 0) };
+  return {
+    ...rows[0],
+    fondoObjetivoCentimos: Number(rows[0].fondo_objetivo_centimos ?? 0),
+    exigirCotejoErp: Boolean(rows[0].exigir_cotejo_erp),
+  };
 }
 
 // ── Denominaciones ─────────────────────────────────────────────────────────
@@ -1830,4 +1851,485 @@ export async function borrarReglaPago(ctx: Contexto, id: number): Promise<void> 
     detalle: {},
     ip: ctx.ip,
   });
+}
+
+// ── Conceptos de gasto y destinos ──────────────────────────────────────────
+
+/**
+ * El catálogo con el que se clasifica un pago, y a qué se imputa.
+ *
+ * Dos ejes que no se mezclan: la SECCIÓN dice de qué negocio es el dinero —y
+ * el cierre ya desglosa por ella—; el CONCEPTO dice en qué se ha gastado, y su
+ * DESTINO a quién o a qué se imputa. Un mismo pago es de la sección taller,
+ * concepto dietas, destino Juan.
+ *
+ * Nada de esto es obligatorio al pagar. Un catálogo que bloquea el mostrador
+ * el día que falta una entrada se rellena con lo primero que haya a mano, y
+ * entonces las estadísticas mienten con aire de exactitud.
+ */
+
+export type TipoDestino = "NINGUNO" | "PERSONA" | "CENTRO_COSTE";
+
+export type ConceptoGasto = {
+  id: number;
+  codigo: string;
+  nombre: string;
+  tipoDestino: TipoDestino;
+  activo: boolean;
+  orden: number;
+  /** Cuántos pagos lo usan. Es lo que impide borrarlo sin enterarse. */
+  usos: number;
+};
+
+export type DestinoGasto = {
+  id: number;
+  tipo: Exclude<TipoDestino, "NINGUNO">;
+  codigo: string;
+  nombre: string;
+  activo: boolean;
+  orden: number;
+  usos: number;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const aConcepto = (r: any): ConceptoGasto => ({
+  id: r.id,
+  codigo: r.codigo,
+  nombre: r.nombre,
+  tipoDestino: r.tipo_destino,
+  activo: r.activo,
+  orden: r.orden,
+  usos: Number(r.usos ?? 0),
+});
+
+const aDestino = (r: any): DestinoGasto => ({
+  id: r.id,
+  tipo: r.tipo,
+  codigo: r.codigo,
+  nombre: r.nombre,
+  activo: r.activo,
+  orden: r.orden,
+  usos: Number(r.usos ?? 0),
+});
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * El código sale del nombre y NO cambia nunca.
+ *
+ * Es lo que queda escrito en el histórico y en los informes: si «Dietas» se
+ * renombra a «Dietas y desplazamientos», el código sigue siendo DIETAS y las
+ * estadísticas de años anteriores siguen cuadrando. Mismo criterio que en
+ * secciones y formas de cobro.
+ */
+function codigoDesde(nombre: string): string {
+  return nombre
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 30);
+}
+
+export async function listarConceptos(empresaId: string): Promise<ConceptoGasto[]> {
+  const { rows } = await pool.query(
+    `SELECT c.*, (SELECT COUNT(*) FROM cash_operations o WHERE o.expense_concept_id = c.id) AS usos
+       FROM cash_expense_concepts c
+      WHERE c.empresa_id = $1
+      ORDER BY c.activo DESC, c.orden, c.nombre`,
+    [empresaId]
+  );
+  return rows.map(aConcepto);
+}
+
+export async function listarDestinos(
+  empresaId: string,
+  tipo?: "PERSONA" | "CENTRO_COSTE"
+): Promise<DestinoGasto[]> {
+  const { rows } = await pool.query(
+    `SELECT d.*, (SELECT COUNT(*) FROM cash_operations o WHERE o.expense_target_id = d.id) AS usos
+       FROM cash_expense_targets d
+      WHERE d.empresa_id = $1 AND ($2::text IS NULL OR d.tipo = $2::text)
+      ORDER BY d.tipo, d.activo DESC, d.orden, d.nombre`,
+    [empresaId, tipo ?? null]
+  );
+  return rows.map(aDestino);
+}
+
+export async function crearConcepto(
+  ctx: Contexto,
+  datos: { nombre: string; tipoDestino?: TipoDestino; orden?: number }
+): Promise<ConceptoGasto> {
+  const nombre = datos.nombre?.trim();
+  if (!nombre) throw new ErrorCaja("ENTRADA_NO_VALIDA", "El concepto necesita un nombre.", 400);
+
+  const tipoDestino = datos.tipoDestino ?? "NINGUNO";
+  const codigo = codigoDesde(nombre);
+  if (!codigo) throw new ErrorCaja("ENTRADA_NO_VALIDA", "El nombre no da un código válido.", 400);
+
+  const ahora = Date.now();
+  const { rows } = await pool.query(
+    `INSERT INTO cash_expense_concepts
+       (empresa_id, codigo, nombre, tipo_destino, activo, orden, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,true,$5,$6,$6)
+     ON CONFLICT (empresa_id, codigo) DO NOTHING
+     RETURNING *`,
+    [ctx.empresaId, codigo, nombre.slice(0, 80), tipoDestino, datos.orden ?? 0, ahora]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja("CONCEPTO_DUPLICADO", `Ya existe un concepto con el código ${codigo}.`, 409);
+  }
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.expense_concept.created",
+    entidad: "cash_expense_concepts",
+    entidadId: String(rows[0].id),
+    detalle: { codigo, nombre, tipoDestino },
+    ip: ctx.ip,
+  });
+  return aConcepto({ ...rows[0], usos: 0 });
+}
+
+export async function actualizarConcepto(
+  ctx: Contexto,
+  id: number,
+  datos: { nombre?: string; tipoDestino?: TipoDestino; activo?: boolean; orden?: number }
+): Promise<ConceptoGasto> {
+  const { rows: previas } = await pool.query(
+    `SELECT * FROM cash_expense_concepts WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  const antes = previas[0];
+  if (!antes) throw new ErrorCaja("CONCEPTO_NO_ENCONTRADO", "El concepto no existe.", 404);
+
+  /*
+   * El TIPO de destino no se cambia si ya se ha usado.
+   *
+   * Cambiar «Dietas» de PERSONA a CENTRO_COSTE dejaría los pagos anteriores
+   * apuntando a un operario desde un concepto que ya no admite operarios: la
+   * estadística seguiría sumando, pero el desglose por destino mezclaría
+   * personas con centros de coste sin que nadie lo viera. Se desactiva el
+   * concepto y se crea otro, que es honesto y no rompe el pasado.
+   */
+  const usos = Number(
+    (await pool.query(`SELECT COUNT(*) AS n FROM cash_operations WHERE expense_concept_id = $1`, [id]))
+      .rows[0].n
+  );
+  if (datos.tipoDestino && datos.tipoDestino !== antes.tipo_destino && usos > 0) {
+    throw new ErrorCaja(
+      "CONCEPTO_EN_USO",
+      `«${antes.nombre}» ya se ha usado en ${usos} ${usos === 1 ? "pago" : "pagos"}, así que no se ` +
+        `puede cambiar a qué se imputa. Desactívalo y crea uno nuevo.`,
+      409
+    );
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE cash_expense_concepts
+        SET nombre = $3, tipo_destino = $4, activo = $5, orden = $6, updated_at_ms = $7
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING *`,
+    [
+      id,
+      ctx.empresaId,
+      datos.nombre?.trim()?.slice(0, 80) || antes.nombre,
+      datos.tipoDestino ?? antes.tipo_destino,
+      datos.activo ?? antes.activo,
+      datos.orden ?? antes.orden,
+      Date.now(),
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.expense_concept.updated",
+    entidad: "cash_expense_concepts",
+    entidadId: String(id),
+    detalle: { antes: { nombre: antes.nombre, activo: antes.activo }, ahora: datos },
+    ip: ctx.ip,
+  });
+  return aConcepto({ ...rows[0], usos });
+}
+
+export async function crearDestino(
+  ctx: Contexto,
+  datos: { nombre: string; tipo: "PERSONA" | "CENTRO_COSTE"; orden?: number }
+): Promise<DestinoGasto> {
+  const nombre = datos.nombre?.trim();
+  if (!nombre) throw new ErrorCaja("ENTRADA_NO_VALIDA", "El destino necesita un nombre.", 400);
+  if (datos.tipo !== "PERSONA" && datos.tipo !== "CENTRO_COSTE") {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "El tipo de destino no es válido.", 400);
+  }
+
+  const codigo = codigoDesde(nombre);
+  if (!codigo) throw new ErrorCaja("ENTRADA_NO_VALIDA", "El nombre no da un código válido.", 400);
+
+  const ahora = Date.now();
+  const { rows } = await pool.query(
+    `INSERT INTO cash_expense_targets
+       (empresa_id, tipo, codigo, nombre, activo, orden, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,true,$5,$6,$6)
+     ON CONFLICT (empresa_id, tipo, codigo) DO NOTHING
+     RETURNING *`,
+    [ctx.empresaId, datos.tipo, codigo, nombre.slice(0, 80), datos.orden ?? 0, ahora]
+  );
+  if (rows.length === 0) {
+    throw new ErrorCaja("DESTINO_DUPLICADO", `Ya existe «${nombre}» en esa lista.`, 409);
+  }
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.expense_target.created",
+    entidad: "cash_expense_targets",
+    entidadId: String(rows[0].id),
+    detalle: { tipo: datos.tipo, codigo, nombre },
+    ip: ctx.ip,
+  });
+  return aDestino({ ...rows[0], usos: 0 });
+}
+
+export async function actualizarDestino(
+  ctx: Contexto,
+  id: number,
+  datos: { nombre?: string; activo?: boolean; orden?: number }
+): Promise<DestinoGasto> {
+  const { rows: previas } = await pool.query(
+    `SELECT * FROM cash_expense_targets WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  const antes = previas[0];
+  if (!antes) throw new ErrorCaja("DESTINO_NO_ENCONTRADO", "Ese destino no existe.", 404);
+
+  /*
+   * El tipo NO se puede cambiar, ni siquiera sin usos. Un operario que pasa a
+   * ser centro de coste no es un cambio: es otra cosa con el mismo nombre.
+   */
+  const { rows } = await pool.query(
+    `UPDATE cash_expense_targets
+        SET nombre = $3, activo = $4, orden = $5, updated_at_ms = $6
+      WHERE id = $1 AND empresa_id = $2
+      RETURNING *`,
+    [
+      id,
+      ctx.empresaId,
+      datos.nombre?.trim()?.slice(0, 80) || antes.nombre,
+      datos.activo ?? antes.activo,
+      datos.orden ?? antes.orden,
+      Date.now(),
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.expense_target.updated",
+    entidad: "cash_expense_targets",
+    entidadId: String(id),
+    detalle: { antes: { nombre: antes.nombre, activo: antes.activo }, ahora: datos },
+    ip: ctx.ip,
+  });
+  return aDestino({ ...rows[0], usos: 0 });
+}
+
+/**
+ * Comprueba que la pareja concepto/destino es coherente. Devuelve lo que hay
+ * que guardar.
+ *
+ * La regla no puede vivir en la pantalla: que el desplegable enseñe solo los
+ * operarios no impide que alguien llame a la API con el id de un centro de
+ * coste. Y una estadística de dietas que sume una unidad móvil no la detecta
+ * nadie mirándola.
+ */
+export async function validarClasificacionGasto(
+  empresaId: string,
+  conceptoId: number | null,
+  destinoId: number | null
+): Promise<{ conceptoId: number | null; destinoId: number | null }> {
+  if (conceptoId == null) {
+    /*
+     * Sin concepto no puede haber destino: un pago imputado a Juan sin decir en
+     * qué concepto no responde ninguna pregunta y ensucia el desglose.
+     */
+    if (destinoId != null) {
+      throw new ErrorCaja(
+        "ENTRADA_NO_VALIDA",
+        "No se puede decir a quién se imputa el gasto sin elegir antes el concepto.",
+        400
+      );
+    }
+    return { conceptoId: null, destinoId: null };
+  }
+
+  const { rows } = await pool.query(
+    `SELECT id, nombre, tipo_destino, activo FROM cash_expense_concepts
+      WHERE id = $1 AND empresa_id = $2`,
+    [conceptoId, empresaId]
+  );
+  const concepto = rows[0];
+  if (!concepto) {
+    throw new ErrorCaja("CONCEPTO_NO_ENCONTRADO", "Ese concepto de gasto no existe.", 400);
+  }
+  if (!concepto.activo) {
+    throw new ErrorCaja(
+      "CONCEPTO_INACTIVO",
+      `«${concepto.nombre}» está desactivado y no se puede usar en pagos nuevos.`,
+      400
+    );
+  }
+
+  if (concepto.tipo_destino === "NINGUNO") {
+    if (destinoId != null) {
+      throw new ErrorCaja(
+        "ENTRADA_NO_VALIDA",
+        `«${concepto.nombre}» no se imputa a nadie en concreto.`,
+        400
+      );
+    }
+    return { conceptoId, destinoId: null };
+  }
+
+  // El destino es opcional: nada obliga a rellenarlo al pagar.
+  if (destinoId == null) return { conceptoId, destinoId: null };
+
+  const { rows: destinos } = await pool.query(
+    `SELECT id, tipo, nombre, activo FROM cash_expense_targets
+      WHERE id = $1 AND empresa_id = $2`,
+    [destinoId, empresaId]
+  );
+  const destino = destinos[0];
+  if (!destino) throw new ErrorCaja("DESTINO_NO_ENCONTRADO", "Ese destino no existe.", 400);
+  if (destino.tipo !== concepto.tipo_destino) {
+    throw new ErrorCaja(
+      "DESTINO_NO_VALIDO",
+      `«${destino.nombre}» no vale para el concepto «${concepto.nombre}».`,
+      400
+    );
+  }
+  if (!destino.activo) {
+    throw new ErrorCaja(
+      "DESTINO_INACTIVO",
+      `«${destino.nombre}» está desactivado y no se puede usar en pagos nuevos.`,
+      400
+    );
+  }
+
+  return { conceptoId, destinoId };
+}
+
+// ── Equivalencias de formas de pago con el ERP ─────────────────────────────
+//
+// Para cotejar el cierre del ERP con el nuestro hay que saber que «Datáfono
+// Clearone ta...» es lo que aquí llamamos CLEARONE. Lo pone una persona, no lo
+// deduce un modelo: ver el porqué en el esquema y en `domain/cotejo.ts`.
+
+export type EquivalenciaErp = {
+  id: number;
+  etiquetaErp: string;
+  formaPago: string;
+  /** Nombre de esa forma en el catálogo, o null si ya no existe. */
+  formaNombre: string | null;
+  /** false = la forma está dada de baja o borrada. Se enseña, no se esconde. */
+  formaVigente: boolean;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const aEquivalencia = (r: any): EquivalenciaErp => ({
+  id: r.id,
+  etiquetaErp: r.etiqueta_erp,
+  formaPago: r.forma_pago,
+  formaNombre: r.forma_nombre ?? null,
+  formaVigente: Boolean(r.forma_nombre) && Boolean(r.forma_activa),
+});
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * Todas las equivalencias, con el estado real de la forma a la que apuntan.
+ *
+ * El LEFT JOIN no es un adorno: sin él, una equivalencia que apunta a una forma
+ * borrada desaparecería de la pantalla y nadie entendería por qué el cotejo
+ * sigue sin emparejar esas líneas. Sale, y sale marcada.
+ */
+export async function listarEquivalenciasErp(empresaId: string): Promise<EquivalenciaErp[]> {
+  const { rows } = await pool.query(
+    `SELECT m.*, p.nombre AS forma_nombre, p.activa AS forma_activa
+       FROM cash_erp_payment_map m
+       LEFT JOIN cash_payment_methods p
+         ON p.empresa_id = m.empresa_id AND p.codigo = m.forma_pago
+      WHERE m.empresa_id = $1
+      ORDER BY m.etiqueta_erp`,
+    [empresaId]
+  );
+  return rows.map(aEquivalencia);
+}
+
+/** El mapa que consume `cotejar`, ya normalizado por las dos puntas. */
+export async function mapaEquivalenciasErp(empresaId: string): Promise<Map<string, string>> {
+  const { rows } = await pool.query(
+    `SELECT etiqueta_erp, forma_pago FROM cash_erp_payment_map WHERE empresa_id = $1`,
+    [empresaId]
+  );
+  return new Map(rows.map((r) => [r.etiqueta_erp as string, r.forma_pago as string]));
+}
+
+export async function guardarEquivalenciaErp(
+  ctx: Contexto,
+  datos: { etiquetaErp: string; formaPago: string }
+): Promise<EquivalenciaErp> {
+  const etiqueta = etiquetaNormalizada(datos.etiquetaErp ?? "");
+  if (!etiqueta) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "Falta la etiqueta del ERP.", 400);
+  }
+  const codigo = (datos.formaPago ?? "").trim().toUpperCase();
+  if (!codigo) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "Falta la forma de cobro de Mobilink.", 400);
+  }
+
+  /*
+   * La forma tiene que existir AHORA. No hay clave ajena —el catálogo es
+   * editable y no debe tumbar equivalencias— pero dejar crear una que apunta a
+   * un código inventado daría un cotejo que no empareja nunca y no dice por qué.
+   */
+  const { rows: formas } = await pool.query(
+    `SELECT nombre, activa FROM cash_payment_methods WHERE empresa_id = $1 AND codigo = $2`,
+    [ctx.empresaId, codigo]
+  );
+  if (formas.length === 0) {
+    throw new ErrorCaja("FORMA_NO_ENCONTRADA", `No existe la forma de cobro «${codigo}».`, 400);
+  }
+
+  const ahora = Date.now();
+  /*
+   * UPSERT sobre la etiqueta: volver a guardar la misma la reapunta en vez de
+   * fallar. Es lo que se espera al corregir un mapeo desde la pantalla, y sin
+   * esto habría que borrar y crear para cambiar una letra.
+   */
+  const { rows } = await pool.query(
+    `INSERT INTO cash_erp_payment_map
+       (empresa_id, etiqueta_erp, forma_pago, creado_por, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$5)
+     ON CONFLICT (empresa_id, etiqueta_erp)
+       DO UPDATE SET forma_pago = EXCLUDED.forma_pago, updated_at_ms = EXCLUDED.updated_at_ms
+     RETURNING *`,
+    [ctx.empresaId, etiqueta, codigo, ctx.userId, ahora]
+  );
+
+  return aEquivalencia({
+    ...rows[0],
+    forma_nombre: formas[0]!.nombre,
+    forma_activa: formas[0]!.activa,
+  });
+}
+
+export async function borrarEquivalenciaErp(ctx: Contexto, id: number): Promise<void> {
+  const { rowCount } = await pool.query(
+    `DELETE FROM cash_erp_payment_map WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  if (!rowCount) {
+    throw new ErrorCaja("NO_ENCONTRADA", "Esa equivalencia ya no existe.", 404);
+  }
 }

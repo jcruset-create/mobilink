@@ -1,4 +1,5 @@
 import { apiFetch } from "./modules/apiFetch";
+import { decidirSesionPanel } from "./modules/panelSession";
 import React, {
   useEffect,
   useMemo,
@@ -227,7 +228,6 @@ import {
   getAutoStandbyStorageKey,
   getAutoStandbyTrigger,
 } from "./modules/workshopAutoStandby";
-import { applyManualTechStatusOverrides } from "./modules/workshopPureHelpers";
 import { getAdminHeaders } from "./modules/adminHeaders";
 import { useScheduledJobs } from "./modules/useScheduledJobs";
 
@@ -302,6 +302,13 @@ useEffect(() => {
   return localStorage.getItem("sea-authenticated") === "true";
 });
 
+// Una sesión restaurada de localStorage NO está validada: hasta que el
+// servidor la confirme no se pinta el panel. Si el login se hace en esta misma
+// carga, ya viene validado del servidor y no hay nada que comprobar.
+const [sesionValidada, setSesionValidada] = useState(
+  () => localStorage.getItem("sea-authenticated") !== "true"
+);
+
 const [userName, setUserName] = useState<string | null>(() => {
   try { return localStorage.getItem("sea-user-name"); } catch { return null; }
 });
@@ -355,6 +362,9 @@ function forceLogout(reason?: string) {
   setUserName(null);
   setUserRole(null);
   setIsAuthenticated(false);
+  // Sin sesión no hay nada que validar: si no se levantara, la pantalla de
+  // "comprobando sesión" se quedaría puesta para siempre.
+  setSesionValidada(true);
   setView("operativo");
   if (reason) setLoginError(reason);
 }
@@ -887,65 +897,16 @@ useEffect(() => {
   }, [log]);
 
 useEffect(() => {
-async function loadTechs() {
-  try {
-    const response = await fetchWithTimeout(`${API_BASE}/api/techs`);
-    const data = await response.json();
-
-    if (!Array.isArray(data)) return;
-
-    setTechs(() => {
-      const merged = INITIAL_TECHS.map((baseTech) => {
-        const found = data.find((t: any) => t.name === baseTech.name);
-
-        const hasCompetencies =
-          found?.competencies &&
-          Object.keys(found.competencies).length > 0;
-
-        const hasPriorities =
-          found?.priorities &&
-          Object.keys(found.priorities).length > 0;
-
-        if (!found) return baseTech;
-
-        const loadedStatus =
-  found.status === "supervisor"
-    ? ("disponible" as TechStatus)
-    : ((found.status ?? baseTech.status) as TechStatus);
-
-const isManualUnavailable = isManualUnavailableStatus(loadedStatus);
-
-return {
-  ...baseTech,
-  status: loadedStatus,
-  blocked: isManualUnavailable,
-  currentJobId: isManualUnavailable ? null : found.currentJobId ?? null,
-          competencies: hasCompetencies
-            ? found.competencies
-            : baseTech.competencies,
-          priorities: hasPriorities
-            ? found.priorities
-            : baseTech.priorities,
-          avatar: found.avatar ?? baseTech.avatar ?? null,
-          statusChangedAtMs:
-            found.statusChangedAtMs ?? baseTech.statusChangedAtMs,
-          statusTotals: found.statusTotals ?? baseTech.statusTotals ?? {},
-          roadsideCapable: pendingRoadsideCapableRef.current.has(baseTech.name)
-            ? pendingRoadsideCapableRef.current.get(baseTech.name)!
-            : (found.roadsideCapable ?? baseTech.roadsideCapable ?? false),
-          currentRoadsideAssistanceId: found.currentRoadsideAssistanceId ?? null,
-        };
-      });
-
-      const synced = syncTechsWithActiveJobs(merged, jobs);
-
-      return applyManualTechStatusOverrides(synced);
-    });
-  } catch (error) {
-    console.error("Error cargando técnicos:", error);
-  }
-}
-  loadTechs();
+  // La plantilla la manda el SERVIDOR. Este efecto recorría INITIAL_TECHS —la
+  // lista escrita en el código— y buscaba a cada uno en la respuesta, así que
+  // ignoraba por completo la columna "activo": un técnico dado de baja en la
+  // empresa volvía a aparecer en cada carga de la página, y solo desaparecía
+  // si algo disparaba después una recarga de técnicos.
+  //
+  // reloadTechsFromBackend ya hace lo correcto (servidor manda, filtra las
+  // bajas y usa INITIAL_TECHS solo como valores por defecto), así que la carga
+  // inicial pasa por ahí en vez de tener su propia copia divergente.
+  void reloadTechsFromBackend([]);
 }, []);
 
   useEffect(() => {
@@ -1424,6 +1385,57 @@ setExternalAIAnswer(cleanText || "La IA no devolvió respuesta.");
     setExternalAILoading(false);
   }
 }
+// Validación de la sesión restaurada de localStorage.
+//
+// El panel guardaba `sea-authenticated` y se fiaba de esa marca al arrancar:
+// nadie preguntaba al servidor si la sesión seguía viva ni si el rol había
+// cambiado. Aquí se comprueba antes de pintar nada, y de paso se refrescan los
+// permisos, que hasta ahora se arrastraban desde el día del login.
+useEffect(() => {
+  if (sesionValidada) return;
+  let activo = true;
+  (async () => {
+    try {
+      const res = await apiFetch(`${API_BASE}/api/panel/session`, {
+        headers: getAdminHeaders(),
+      });
+      if (!activo) return;
+
+      const cuerpo = res.ok ? await res.json().catch(() => null) : null;
+      const decision = decidirSesionPanel(res.status, cuerpo);
+
+      if (decision.accion === "cerrar") {
+        forceLogout(decision.motivo);
+        return;
+      }
+      if (decision.accion === "mantener") {
+        setSesionValidada(true);
+        return;
+      }
+
+      localStorage.setItem("sea-role", decision.rol ?? "");
+      if (decision.vistas) {
+        localStorage.setItem("sea-allowed-views", JSON.stringify(decision.vistas));
+      } else {
+        localStorage.removeItem("sea-allowed-views");
+      }
+      if (decision.nombre) {
+        localStorage.setItem("sea-user-name", decision.nombre);
+        setUserName(decision.nombre);
+      }
+
+      setUserRole(decision.rol);
+      setAllowedViews(decision.vistas);
+      setSesionValidada(true);
+    } catch {
+      // Sin red tampoco se cierra sesión: el panel se usa en el taller.
+      if (activo) setSesionValidada(true);
+    }
+  })();
+  return () => { activo = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [sesionValidada]);
+
 // SSO: si hay sesión del acceso unificado (/acceso), entrar al panel sin
 // pedir la contraseña interna. Si no hay coincidencia, queda el login clásico.
 useEffect(() => {
@@ -1470,6 +1482,7 @@ useEffect(() => {
       setUserName(loggedName);
       setUserRole(role);
       setIsAuthenticated(true);
+      setSesionValidada(true); // viene del servidor: ya está validada
 
       // Al entrar por el hub, aterrizar en Operativo 2 (si el rol/permisos lo
       // permiten); si no, en la vista por defecto del rol. Si el montaje pidió
@@ -1536,6 +1549,7 @@ setUserName(loggedName);
 
 setUserRole(role);
 setIsAuthenticated(true);
+setSesionValidada(true); // acaba de validarla el servidor
 setLoginPassword("");
 setLoginUser("");
 
@@ -3684,6 +3698,21 @@ async function setTechManual(name: string, nextStatus: TechStatus) {
   const tech = techs.find((item) => item.name === name);
   if (!tech) return;
 
+  // Las ausencias van SIEMPRE por la agenda. Puestas a mano no llevaban fechas,
+  // así que nada las revertía: gente que ya había vuelto seguía saliendo de
+  // vacaciones o de permiso indefinidamente.
+  if (isUnavailableTechStatus(nextStatus)) {
+    window.alert(
+      `Las ausencias no se ponen aquí.\n\n` +
+        `Para dar ${getTechStatusLabel(nextStatus).toLowerCase()} a ${name}, ve a ` +
+        `Agenda → "+ Recordatorio fechas" → "Estado técnico" y marca las fechas ` +
+        `de inicio y fin.\n\n` +
+        `Así el técnico vuelve solo a disponible cuando termina el periodo.`
+    );
+
+    return;
+  }
+
   const changedAtMs = nowMs();
   const isGoingUnavailable = isUnavailableTechStatus(nextStatus);
   const isGoingHardBlocked = isHardBlockedTechStatus(nextStatus);
@@ -4328,6 +4357,16 @@ function removeSupportFromActiveJob(jobId: number) {
 
 
 
+
+// Sesión restaurada del navegador pero aún sin confirmar por el servidor: no
+// se enseña el panel hasta saber si sigue siendo válida.
+if (isAuthenticated && !sesionValidada) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-100 text-slate-500">
+      <div className="text-sm">Comprobando sesión…</div>
+    </div>
+  );
+}
 
 if (userRole === "tv75") {
   return (
@@ -7289,34 +7328,38 @@ const textColor = "";
 
 <select
   value={displayedTechStatus}
-  disabled={Boolean(scheduledStatus && scheduledStatus.status !== "disponible")}
+  disabled={isUnavailableTechStatus(displayedTechStatus)}
   onChange={(e) =>
     setTechManual(tech.name, e.target.value as TechStatus)
   }
   className={`rounded-lg border border-slate-200 px-2 py-1 ${
-    scheduledStatus && scheduledStatus.status !== "disponible"
+    isUnavailableTechStatus(displayedTechStatus)
       ? "cursor-not-allowed bg-indigo-50 font-bold text-indigo-700"
       : "bg-white"
   }`}
 >
-{scheduledStatus && scheduledStatus.status !== "disponible" && (
+  {/* Las ausencias (vacaciones, baja, permiso, otro taller) ya no se ponen
+      aquí: se programan por fechas desde la agenda, que es lo único que sabe
+      cuándo vuelve el técnico. Aquí solo quedan los estados de la jornada. */}
+  <option value="disponible">disponible</option>
+  <option value="refuerzo">refuerzo</option>
+  <option value="ocupado">ocupado</option>
+
+  {/* El estado que venga de la agenda se enseña, pero no se puede elegir. */}
+  {isUnavailableTechStatus(displayedTechStatus) && (
+    <option value={displayedTechStatus}>
+      {getTechStatusLabel(displayedTechStatus)}
+    </option>
+  )}
+</select>
+
+{isUnavailableTechStatus(displayedTechStatus) && (
   <div className="mt-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold uppercase text-indigo-700">
-    Bloqueado por agenda · {scheduledStatus.startDate} →{" "}
-    {scheduledStatus.endDate}
+    {scheduledStatus && scheduledStatus.status !== "disponible"
+      ? `Desde la agenda · ${scheduledStatus.startDate} → ${scheduledStatus.endDate}`
+      : "Ausencia · se gestiona desde la agenda"}
   </div>
 )}
-
-                          <option value="disponible">disponible</option>
-<option value="refuerzo">refuerzo</option>
-<option value="ocupado">ocupado</option>
-<option value="nodisponible">nodisponible</option>
-<option value="no_disponible">no disponible</option>
-<option value="permiso">permiso</option>
-<option value="vacaciones">vacaciones</option>
-<option value="baja">baja</option>
-<option value="otro_taller">otro taller</option>
-
-                        </select>
                       </td>
 <td className={`py-2 text-xs ${textColor}`}>
  <div>

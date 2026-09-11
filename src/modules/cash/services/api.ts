@@ -44,6 +44,12 @@ import type {
   DocumentoAutoScan,
   ResumenAutoScan,
   DispositivoAutoScan,
+  ConceptoGasto,
+  DestinoGasto,
+  GranularidadGasto,
+  InformeGasto,
+  EquivalenciaErp,
+  ResultadoCotejo,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -175,6 +181,8 @@ export const actualizarCaja = (
     activa?: boolean;
     /** Fondo fijo del cajón, en céntimos. 0 = sin fondo fijo. */
     fondoObjetivoCentimos?: number;
+    /** Esta caja no se cierra sin haberla cotejado con el ERP. */
+    exigirCotejoErp?: boolean;
   }
 ) =>
   pedir<{ caja: Caja & { activa: boolean } }>(`/registers/${id}`, {
@@ -639,6 +647,13 @@ export const registrarPago = (datos: {
   documentoId?: number | null;
   externalSystem?: string | null;
   externalDocumentId?: string | null;
+  /*
+   * En qué se ha gastado y a quién se imputa. Los dos opcionales: quien no los
+   * mande registra el pago igual. Que el destino sea del tipo que pide el
+   * concepto lo comprueba el servidor, no la pantalla.
+   */
+  expenseConceptId?: number | null;
+  expenseTargetId?: number | null;
 }) => pedir<RespuestaOperacion>("/payments", json(datos));
 
 export const registrarMovimiento = (datos: {
@@ -693,6 +708,11 @@ export const cerrarJornada = (
     notas?: string;
     /** Confirmación explícita para dejar la caja a cero teniendo fondo fijo. */
     permitirCajaVacia?: boolean;
+    /**
+     * La llave para cerrar sin el OK del cotejo con el ERP: el MOTIVO escrito.
+     * Un booleano se manda sin pensar; una frase queda en la jornada.
+     */
+    motivoSinCotejo?: string;
   }
 ) =>
   pedir<{
@@ -703,7 +723,19 @@ export const cerrarJornada = (
     totalIngresoCentimos: number;
     diferenciaCentimos: number;
     denominacionesCuadran: boolean;
+    cierreForzado: boolean;
   }>(`/sessions/${sessionId}/close`, json(datos));
+
+/** Si esta jornada se ha cotejado con el ERP, y si ese cotejo sigue valiendo. */
+export const estadoCotejoErp = (sessionId: number) =>
+  pedir<{
+    /** Esta caja exige el cotejo para cerrar. Lo decide el servidor. */
+    exigido: boolean;
+    falta: boolean;
+    caducado: boolean;
+    cuadra: boolean;
+    cotejadoEnMs: number | null;
+  }>(`/sessions/${sessionId}/erp-reconcile/estado`);
 
 // ── Histórico y documentos ─────────────────────────────────────────────────
 
@@ -833,10 +865,26 @@ export const regularizarArqueo = (sessionId: number, motivo?: string) =>
  * el original se cuelga del cobro por la vía de siempre, cuando el cobro
  * existe.
  */
-export const escanearFactura = (fichero: File, sessionId?: number | null) => {
+export const escanearFactura = (
+  fichero: File,
+  sessionId?: number | null,
+  /*
+   * Para qué se escanea. Decide dos cosas en el servidor: qué permiso se exige
+   * —cobro manual o pago manual— y contra qué se mira el duplicado, si esa
+   * factura ya se cobró o si esa factura de proveedor ya se pagó.
+   */
+  sentido: "COBRO" | "PAGO" = "COBRO"
+) => {
   const cuerpo = new FormData();
-  cuerpo.append("documento", fichero);
+  /*
+   * Los campos ANTES del fichero, y no es cosmético: `multer` solo deja en
+   * `req.body` lo que llega antes del adjunto. Estaban después, así que el
+   * `sessionId` no ha llegado nunca al servidor y los escaneos se guardaban
+   * sin jornada. Puesto así, el rastro vuelve a atarse a su día.
+   */
   if (sessionId != null) cuerpo.append("sessionId", String(sessionId));
+  cuerpo.append("sentido", sentido);
+  cuerpo.append("documento", fichero);
   return pedir<{ propuesta: PropuestaEscaneo }>(`/invoice-scan`, {
     method: "POST",
     body: cuerpo,
@@ -891,6 +939,65 @@ export const deshacerCanjeIngreso = (swapId: number) =>
     { method: "POST" }
   );
 
+// ── Conceptos de gasto ─────────────────────────────────────────────────────
+
+/**
+ * El catálogo entero de una vez: conceptos y destinos.
+ *
+ * Los dos juntos y no en dos peticiones porque la pantalla de Pagos necesita
+ * los dos para pintar el segundo desplegable en cuanto se elige el primero, y
+ * pedirlos por separado añadiría una espera justo en mitad de un gesto.
+ */
+export const conceptosDeGasto = () =>
+  pedir<{ conceptos: ConceptoGasto[]; destinos: DestinoGasto[] }>("/expense-concepts");
+
+export const crearConceptoGasto = (datos: {
+  nombre: string;
+  tipoDestino?: "NINGUNO" | "PERSONA" | "CENTRO_COSTE";
+}) => pedir<{ concepto: ConceptoGasto }>("/expense-concepts", json(datos));
+
+export const actualizarConceptoGasto = (
+  id: number,
+  datos: { nombre?: string; tipoDestino?: "NINGUNO" | "PERSONA" | "CENTRO_COSTE"; activo?: boolean }
+) => pedir<{ concepto: ConceptoGasto }>(`/expense-concepts/${id}`, { method: "PATCH", body: JSON.stringify(datos) });
+
+export const crearDestinoGasto = (datos: { nombre: string; tipo: "PERSONA" | "CENTRO_COSTE" }) =>
+  pedir<{ destino: DestinoGasto }>("/expense-targets", json(datos));
+
+export const actualizarDestinoGasto = (id: number, datos: { nombre?: string; activo?: boolean }) =>
+  pedir<{ destino: DestinoGasto }>(`/expense-targets/${id}`, { method: "PATCH", body: JSON.stringify(datos) });
+
+/**
+ * El informe de gasto.
+ *
+ * `centro` vacío pide el **consolidado de la empresa**; con un id, el de ese
+ * taller. A un usuario con el ámbito limitado a un taller el servidor le impone
+ * el suyo pase lo que pase: pedir el consolidado no puede ser la forma de ver
+ * el gasto de los centros que no le tocan.
+ *
+ * `conceptoId` es el modo detalle: con él, el desglose por destino pasa a ser
+ * «gasto en dietas por operario», que es la pregunta útil. Sin él, la lista de
+ * destinos mezclaría personas y centros de coste.
+ */
+export const estadisticasDeGasto = (p: {
+  desde: string;
+  hasta: string;
+  granularidad: GranularidadGasto;
+  centro?: string | null;
+  conceptoId?: number | null;
+  comparar?: boolean;
+}) => {
+  const q = new URLSearchParams({
+    desde: p.desde,
+    hasta: p.hasta,
+    granularidad: p.granularidad,
+  });
+  if (p.centro) q.set("centro", p.centro);
+  if (p.conceptoId != null) q.set("conceptoId", String(p.conceptoId));
+  if (p.comparar) q.set("comparar", "1");
+  return pedir<InformeGasto>(`/expense-stats?${q.toString()}`);
+};
+
 // ── AutoScan ───────────────────────────────────────────────────────────────
 
 export const resumenAutoScan = () => pedir<ResumenAutoScan>("/autoscan/inbox/summary");
@@ -904,9 +1011,9 @@ export const bandejaAutoScan = () =>
  * Abrirlo NO vuelve a llamar a la IA: cuesta dinero, tarda, y podría dar un
  * resultado distinto del que ya está auditado.
  */
-export const documentoAutoScan = (id: number) =>
+export const documentoAutoScan = (id: number, sentido: "COBRO" | "PAGO" = "COBRO") =>
   pedir<{ documento: DocumentoAutoScan; propuesta: PropuestaEscaneo | null }>(
-    `/autoscan/inbox/${id}`
+    `/autoscan/inbox/${id}?sentido=${sentido}`
   );
 
 export const descartarAutoScan = (id: number, motivo?: string) =>
@@ -950,3 +1057,26 @@ export const reponerFondo = (datos: {
     `/bank-deposits/float-topup`,
     json(datos)
   );
+
+// ── Cotejo con el ERP ──────────────────────────────────────────────────────
+
+export const equivalenciasErp = () =>
+  pedir<{ equivalencias: EquivalenciaErp[] }>(`/erp-payment-map`);
+
+export const guardarEquivalenciaErp = (datos: { etiquetaErp: string; formaPago: string }) =>
+  pedir<{ equivalencia: EquivalenciaErp }>(`/erp-payment-map`, {
+    ...json(datos),
+    method: "PUT",
+  });
+
+export const borrarEquivalenciaErp = (id: number) =>
+  pedir<{ ok: true }>(`/erp-payment-map/${id}`, { method: "DELETE" });
+
+/**
+ * Manda la captura y devuelve el cotejo.
+ *
+ * La imagen viaja como data-URI y no se guarda en ningún sitio: el servidor la
+ * lee y la tira. Lleva nombres de clientes y números de factura.
+ */
+export const cotejarConErp = (sessionId: number, imagen: string) =>
+  pedir<ResultadoCotejo>(`/sessions/${sessionId}/erp-reconcile`, json({ imagen }));

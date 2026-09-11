@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import * as C from "./coordenadas.ts";
-import { aspectoPlano, rectImagenEnPlano, puntoCoordAVista } from "../../../shared/planoMargen.ts";
+import { puntoCoordEnImagen } from "../../../shared/planoMargen.ts";
 
 /**
  * Rellena el parte de servicio Conti360.
@@ -36,6 +36,11 @@ export interface NeumaticoPdf {
 export interface NuevoPdf {
   marca?: string | null; dimension?: string | null;
   modelo?: string | null; unidades?: string | number | null;
+  /**
+   * ¿Hay que cobrarlo? Un neumático que sale del almacén del cliente ya es
+   * suyo: se monta, pero no se factura.
+   */
+  facturable?: boolean;
 }
 
 export interface PartePdf {
@@ -68,12 +73,14 @@ export interface PartePdf {
    */
   plano?: Uint8Array | null;
   /**
-   * Las posiciones que se han tocado en este parte, en % del plano (0-100),
-   * tal y como están calibradas en Mobilink (pos_x / pos_y). Se marcan con una
-   * cruz roja al lado de la rueda: de un vistazo se ve en qué ruedas se ha
-   * trabajado sin tener que cruzar la tabla con el dibujo.
+   * TODAS las posiciones del vehículo, en % del plano (0-100), tal y como
+   * están calibradas en Mobilink (pos_x / pos_y). Cada una se pinta como un
+   * cuadrado al lado de su rueda, con el código debajo; las que se han tocado
+   * en este parte (`usada`) llevan además una cruz roja dentro. De un vistazo
+   * se ve en qué ruedas se ha trabajado sin cruzar la tabla con el dibujo.
    */
-  marcas?: { x: number; y: number }[] | null;
+  marcas?: { x: number; y: number; w?: number | null; h?: number | null;
+              codigo?: string | null; usada?: boolean }[] | null;
 }
 
 /** PNG o JPG: pdf-lib necesita saberlo, y la imagen viene de donde viene. */
@@ -186,7 +193,8 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
 
     // La cabecera va en TODAS las páginas: una segunda hoja suelta sin
     // matrícula ni número no se puede archivar.
-    escribir(p, d.numero ?? "", negrita, C.CABECERA.numero.x, C.CABECERA.numero.y, C.CABECERA.numero.tam, C.CABECERA.numero.ancho);
+    // El número del parte se escribe con su rótulo, alineado a la derecha
+    // (ver el bloque del cuadro de posición de ruedas).
     escribir(p, d.orden_flota ?? "", normal, C.CABECERA.orden_flota.x, C.CABECERA.orden_flota.y, TAM, C.CABECERA.orden_flota.ancho);
     escribir(p, d.flota ?? "", normal, C.CABECERA.flota.x, C.CABECERA.flota.y, TAM, C.CABECERA.flota.ancho);
     escribir(p, d.matricula ?? "", negrita, C.CABECERA.matricula.x, C.CABECERA.matricula.y, 11);
@@ -199,51 +207,108 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
     escribir(p, d.km_mecanico ?? "", normal, C.CABECERA.km_mecanico.x, C.CABECERA.km_mecanico.y);
     if (d.lugar && C.LUGAR[d.lugar]) cruz(p, negrita, C.LUGAR[d.lugar].x, C.LUGAR[d.lugar].y);
 
-    // El plano de Mobilink encima del diagrama de Conti360. Se tapa primero en
-    // blanco: dejar el dibujo viejo asomando por detrás sería peor que no
-    // poner nada.
+    // La esquina superior derecha es nuestra: se tapa entera —logos de
+    // Continental y Conti360 incluidos— y se vuelve a dibujar el cuadro con su
+    // rótulo. Se hace SIEMPRE, haya plano o no: un parte de Mobilink con el
+    // logo de otra marca no es el parte de Mobilink.
+    {
+      // El distintivo Conti 360° de la cabecera, entre los logotipos de la
+      // casa: el parte de Mobilink no lleva marcas de Continental.
+      const c3 = C.CONTI360;
+      p.drawRectangle({
+        x: c3.x, y: C.aPdf(c3.y + c3.alto), width: c3.ancho, height: c3.alto, color: rgb(1, 1, 1),
+      });
+
+      // «Parte de Servicio nº 000304», pegado a la derecha: el final del
+      // número queda a plomo con el borde del cuadro de posición de ruedas.
+      const t = C.TITULO_PARTE;
+      p.drawRectangle({
+        x: t.limpiar.x, y: C.aPdf(t.limpiar.y + t.limpiar.alto),
+        width: t.limpiar.ancho, height: t.limpiar.alto, color: rgb(1, 1, 1),
+      });
+      const rotulo = "Parte de Servicio nº ";
+      const num = (d.numero ?? "").toString().trim();
+      const anchoRotulo = negrita.widthOfTextAtSize(rotulo, t.tam);
+      const anchoNum = negrita.widthOfTextAtSize(num, t.tamNumero);
+      const x0Titulo = t.derecha - anchoNum - anchoRotulo;
+      p.drawText(rotulo, { x: x0Titulo, y: C.aPdf(t.y), size: t.tam, font: negrita, color: NEGRO });
+      if (num) {
+        p.drawText(num, {
+          x: t.derecha - anchoNum, y: C.aPdf(t.y), size: t.tamNumero, font: negrita, color: NEGRO,
+        });
+      }
+
+      const limpiar = C.POSICION_RUEDAS_LIMPIAR;
+      p.drawRectangle({
+        x: limpiar.x, y: C.aPdf(limpiar.y + limpiar.alto),
+        width: limpiar.ancho, height: limpiar.alto, color: rgb(1, 1, 1),
+      });
+      const marco = C.POSICION_RUEDAS_MARCO;
+      p.drawRectangle({
+        x: marco.x, y: C.aPdf(marco.y + marco.alto),
+        width: marco.ancho, height: marco.alto,
+        borderColor: NEGRO, borderWidth: 0.8,
+      });
+      escribir(p, "Posición Ruedas", normal,
+               C.POSICION_RUEDAS_TITULO.x, C.POSICION_RUEDAS_TITULO.y, C.POSICION_RUEDAS_TITULO.tam);
+    }
+
     if (d.plano) {
       const caja = C.POSICION_RUEDAS;
-      p.drawRectangle({
-        x: caja.x, y: C.aPdf(caja.y + caja.alto), width: caja.ancho, height: caja.alto,
-        color: rgb(1, 1, 1),
-      });
+      const cu = C.CUADRO_POSICION;
       try {
         const img = await meterImagen(doc, d.plano);
-        // Se encaja el PLANO (la imagen más su margen, ver shared/planoMargen)
-        // sin deformarlo y centrado: un plano estirado no se parece al
-        // vehículo. Las coordenadas de las ruedas son del plano entero, así
-        // que la imagen va dentro, más pequeña, igual que en el panel y en la
-        // tablet.
-        const aspPlano = aspectoPlano(img.width / img.height);
-        const an = Math.min(caja.ancho, caja.alto * aspPlano);
-        const al = an / aspPlano;
-        const x0 = caja.x + (caja.ancho - an) / 2;
-        const y0 = caja.y + (caja.alto - al) / 2;   // desde arriba
-        const ri = rectImagenEnPlano(an, al);
-        p.drawImage(img, {
-          x: x0 + ri.x, y: C.aPdf(y0 + ri.y + ri.alto), width: ri.ancho, height: ri.alto,
-        });
+        // El vehículo, LO MÁS GRANDE que quepa dejando a cada lado el sitio
+        // justo de un cuadradito de posición. En la pantalla ese hueco es un
+        // 22 % porque ahí las etiquetas llevan marca, medida y milímetros;
+        // aquí solo cabe una cruz, así que se mide en puntos y la foto gana
+        // todo lo demás.
+        const hueco = cu.lado + cu.separacion + 2;
+        const dentro = {
+          x: caja.x + hueco, y: caja.y,
+          ancho: caja.ancho - 2 * hueco, alto: caja.alto - cu.tamCodigo - 2,
+        };
+        const esc = Math.min(dentro.ancho / img.width, dentro.alto / img.height);
+        const an = img.width * esc, al = img.height * esc;
+        const x0 = dentro.x + (dentro.ancho - an) / 2;
+        const y0 = dentro.y + (dentro.alto - al) / 2;   // desde arriba
+        p.drawImage(img, { x: x0, y: C.aPdf(y0 + al), width: an, height: al });
 
-        // Las ruedas en las que se ha trabajado, con una cruz roja AL LADO —
-        // no encima: tapar la rueda con la marca deja el papel sin decir qué
-        // rueda era. Las coordenadas son las mismas que usa la tablet.
+        // Un cuadrado AL LADO de cada rueda —no encima: tapar la rueda con la
+        // marca deja el papel sin decir qué rueda era—, con el código de la
+        // posición debajo. Las que se han tocado en este parte llevan la cruz
+        // roja dentro; las demás quedan en blanco, y así el papel enseña el
+        // vehículo entero. Las coordenadas son las mismas que usa la tablet.
         for (const m of d.marcas ?? []) {
           if (m.x == null || m.y == null) continue;
-          const v = puntoCoordAVista(m.x, m.y);
-          const cx = x0 + (v.x / 100) * an;
-          const cy = y0 + (v.y / 100) * al;
-          const t = "X";
-          const size = 7;
-          // A la derecha de la rueda, y si se sale por el borde, a la
-          // izquierda: en un remolque las posiciones llegan al filo del cuadro.
-          const w = negrita.widthOfTextAtSize(t, size);
-          const derecha = cx + 3 + w <= caja.x + caja.ancho - 1;
-          p.drawText(t, {
-            x: derecha ? cx + 3 : cx - 3 - w,
-            y: C.aPdf(cy + size * 0.36),
-            size, font: negrita, color: ROJO,
+          // El cuadro va donde el técnico dejó la etiqueta al calibrar: en su
+          // CENTRO. Esas etiquetas ya están puestas al lado de su rueda, así
+          // que no hay que inventarse ningún desplazamiento.
+          const f = puntoCoordEnImagen(m.x + (m.w ?? 0) / 2, m.y + (m.h ?? 0) / 2);
+          const cx = x0 + f.fx * an;
+          const cy = y0 + f.fy * al;
+          // Y sin salirse del cuadro, pase lo que pase con la calibración.
+          const qx = Math.min(Math.max(cx - cu.lado / 2, caja.x + 1),
+                              caja.x + caja.ancho - cu.lado - 1);
+          const qy = Math.min(Math.max(cy - cu.lado / 2, caja.y + 1),
+                              caja.y + caja.alto - cu.lado - cu.tamCodigo - 1);
+          p.drawRectangle({
+            x: qx, y: C.aPdf(qy + cu.lado), width: cu.lado, height: cu.lado,
+            color: rgb(1, 1, 1), borderColor: NEGRO, borderWidth: 0.8,
           });
+          if (m.usada !== false) {
+            const w = negrita.widthOfTextAtSize("X", cu.tamCruz);
+            p.drawText("X", {
+              x: qx + (cu.lado - w) / 2,
+              y: C.aPdf(qy + cu.lado - (cu.lado - cu.tamCruz * 0.72) / 2),
+              size: cu.tamCruz, font: negrita, color: ROJO,
+            });
+          }
+          const cod = (m.codigo ?? "").trim();
+          if (cod) {
+            escribirEnCaja(p, cod, normal, [qx - 7, qx + cu.lado + 7],
+                           qy + cu.lado + cu.tamCodigo, cu.tamCodigo);
+          }
         }
       } catch {
         // Un plano ilegible no puede tumbar el parte entero: se queda el hueco
@@ -287,6 +352,36 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
     // se facturan una vez y la firma se estampa donde se firma.
     if (pag === paginas - 1) {
       const nuevos = d.nuevos ?? [];
+      // Las cuatro filas con Continental y Semperit preimpresas: se tapan sus
+      // rellenos de color y se devuelve la rejilla, para que las seis filas
+      // queden iguales y sirvan para cualquier marca.
+      for (const f of C.NUEVOS_FONDOS) {
+        p.drawRectangle({
+          x: f.x, y: C.aPdf(f.y + f.alto), width: f.ancho, height: f.alto, color: rgb(1, 1, 1),
+        });
+      }
+      for (const f of C.NUEVOS_REJILLA.filas) {
+        p.drawRectangle({
+          x: C.NUEVOS_REJILLA.x, y: C.aPdf(f.y + f.alto),
+          width: C.NUEVOS_REJILLA.ancho, height: f.alto,
+          borderColor: NEGRO, borderWidth: C.NUEVOS_REJILLA.grosor,
+        });
+        p.drawLine({
+          start: { x: C.NUEVOS_REJILLA.columnaUnidades, y: C.aPdf(f.y) },
+          end:   { x: C.NUEVOS_REJILLA.columnaUnidades, y: C.aPdf(f.y + f.alto) },
+          thickness: C.NUEVOS_REJILLA.grosor, color: NEGRO,
+        });
+      }
+
+      // Cuántos neumáticos nuevos hay que facturar: los que NO han salido del
+      // almacén del cliente, que ya son suyos y están pagados.
+      const aFacturar = nuevos.reduce((n, x) => n + (x.facturable === false ? 0 : Number(x.unidades ?? 0)), 0);
+      if (aFacturar > 0) {
+        const t = C.NUEVOS_TOTAL;
+        escribirEnCaja(p, String(aFacturar), negrita, [t.x, t.x + t.ancho],
+                       t.y + (t.alto + t.tam * 0.72) / 2, t.tam);
+      }
+
       if (nuevos.length > C.NUEVOS.filas) {
         // Silenciarlo sería entregar un parte al que le faltan neumáticos.
         console.warn(`[parte] ${nuevos.length} marcas de neumático nuevo y solo caben ${C.NUEVOS.filas} filas en blanco`);
@@ -322,9 +417,12 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
         // Se encaja dentro del recuadro sin deformarla: una firma estirada no
         // se parece a la del cliente.
         const esc = Math.min(sitio.ancho / img.width, sitio.alto / img.height, 1);
+        const an = img.width * esc, al = img.height * esc;
+        // Centrada en su casilla: descuadrada a un lado parece de otro sitio.
         p.drawImage(img, {
-          x: sitio.x, y: C.aPdf(sitio.y + img.height * esc),
-          width: img.width * esc, height: img.height * esc,
+          x: sitio.x + (sitio.ancho - an) / 2,
+          y: C.aPdf(sitio.y + (sitio.alto - al) / 2 + al),
+          width: an, height: al,
         });
       }
     }

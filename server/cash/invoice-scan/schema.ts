@@ -61,6 +61,29 @@ export const ESQUEMA_FACTURA = objeto({
     },
     nif: { ...texto, description: "NIF o CIF del cliente, no el del emisor." },
   }),
+  /*
+   * Quién EMITE el documento. Se añade sin tocar `cliente`, y ese detalle es
+   * todo el diseño:
+   *
+   * En una factura de venta el emisor es el taller y no interesa —cobros sigue
+   * leyendo `cliente` exactamente igual que antes, sin cambio de
+   * comportamiento—. En un ticket de compra es al revés: el emisor es la
+   * ferretería y es justo el dato que hay que poner en «proveedor».
+   *
+   * Se extraen los DOS y se decide al usarlos, en vez de tener dos prompts
+   * según el sentido. La razón es AutoScan: analiza en cuanto el escáner deja
+   * el papel, cuando todavía nadie sabe si es una venta o una compra. Con dos
+   * prompts habría que adivinar, o analizar dos veces y pagar el doble.
+   */
+  emisor: objeto({
+    nombre: {
+      ...texto,
+      description:
+        "Nombre o razón social de QUIEN EMITE el documento: el que cobra. En un ticket " +
+        "de compra es la tienda o el proveedor; en una factura de venta, el propio taller.",
+    },
+    nif: { ...texto, description: "NIF o CIF del emisor, no el del destinatario." },
+  }),
   vehiculo: objeto({
     marca: { ...texto, description: "Marca. null si no consta o si pone «S/D»." },
     modelo: { ...texto, description: "Modelo. null si no consta o si pone «S/D»." },
@@ -135,6 +158,7 @@ export const ESQUEMA_FACTURA = objeto({
   confianza: objeto({
     numero_factura: { type: "number", description: "0 a 1." },
     cliente: { type: "number", description: "0 a 1." },
+    emisor: { type: "number", description: "0 a 1: seguridad al leer QUIÉN EMITE." },
     total: { type: "number", description: "0 a 1." },
     concepto: { type: "number", description: "0 a 1." },
     recibo: {
@@ -158,10 +182,10 @@ Reglas:
 
 1. Copia lo que ves, TAL Y COMO ESTÁ IMPRESO. No conviertas importes ni fechas, no quites símbolos, no calcules nada. Si en el papel pone «195,10 EUR», devuelve «195,10 EUR».
 2. Ante la duda, null. Un campo vacío es mejor que uno inventado.
-3. El cliente es a quien va dirigida la factura, no quien la emite. El emisor es el taller.
-4. El total es el importe final con impuestos, el que paga el cliente.
+3. Hay dos partes y las dos se copian: el EMISOR es quien cobra —el que firma el documento— y el CLIENTE es a quien va dirigido. En una factura del taller el emisor es el taller; en un ticket de compra el emisor es la tienda. No decidas cuál importa: copia las dos.
+4. El total es el importe final con impuestos, el que se paga.
 5. El justificante de pago solo existe si lo ves: un recibo de TPV o un ticket de datáfono, dentro del mismo documento. Que la factura esté pagada no es un justificante.
 6. No decidas de qué banco o de qué proveedor es el TPV. Copia el número de comercio, el terminal, la red y el nombre del adquirente si aparecen, y ya está: la clasificación no es tuya.
 7. Las confianzas son tuyas de verdad: 0,99 cuando el dato está impreso y claro; por debajo de 0,7 cuando estás adivinando.
 
-El documento puede ser un PDF digital, un PDF escaneado o una foto, y puede traer el ticket del datáfono pegado encima, torcido o mal enfocado.`;
+El documento puede ser una factura de venta del taller o un ticket de compra a un proveedor, y puede ser un PDF digital, un PDF escaneado o una foto, con el ticket del datáfono pegado encima, torcido o mal enfocado. Un ticket de compra muchas veces no tiene número de factura ni NIF del comprador: eso no es un fallo, es null.`;

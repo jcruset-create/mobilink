@@ -144,7 +144,23 @@ class ApiService {
         } else if (type == 'upload_file') {
           final path = item['localPath'] as String;
           final f = File(path);
-          if (!await f.exists()) { ok = true; } // archivo ya no existe → descartar
+          if (!await f.exists()) {
+            // El fichero ya no está: el sistema limpió el directorio o se
+            // reinstaló la app. No se puede subir NUNCA, así que hay que
+            // sacarlo de la cola o se reintentará eternamente.
+            //
+            // Pero antes se apunta. Marcarlo como enviado —que es lo que se
+            // hacía— borraba la evidencia y el rastro a la vez: la cola
+            // bajaba, el contador bajaba, y esa foto desaparecía como si
+            // nunca hubiera existido. Una pérdida silenciosa es peor que una
+            // pérdida, porque nadie puede ir a por otra foto.
+            await OfflineStore.registrarPerdida(
+              assistanceId: id,
+              kind: item['kind'] as String? ?? 'desconocido',
+              localPath: path,
+            );
+            ok = true;
+          }
           else {
             final req = http.MultipartRequest(
               'POST', Uri.parse('$kBackendUrl/api/roadside-assistances/$id/files'));

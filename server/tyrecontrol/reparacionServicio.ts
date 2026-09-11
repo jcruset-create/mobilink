@@ -206,8 +206,20 @@ async function repararEnTaller(p: PlanReparacion, neumaticoId: string): Promise<
     p_resultado: p.resultado,
     p_proveedor: p.proveedor ?? null,
     p_coste: p.coste ?? null,
-    // El kilometraje NO se manda: `serviceKm` de Assist son los km del
-    // desplazamiento, no el cuentakilómetros, y el RPC lo admite nulo.
+    /*
+     * El kilometraje NO se manda, y ahora hay dos motivos distintos.
+     *
+     * El de siempre: `serviceKm` de Assist son los km del desplazamiento del
+     * técnico, no el cuentakilómetros del vehículo.
+     *
+     * Y el que importa desde que existe el Telematics Hub: aquí SÍ se podría
+     * preguntar el odómetro real —`kilometrajeParaMontaje` lo resuelve—, pero
+     * no se hace a propósito. En una reparación en taller el neumático lleva
+     * desmontado un rato, a veces días, y el vehículo ha seguido rodando sin
+     * él. El cuentakilómetros de hoy no completaría el registro: le atribuiría
+     * al neumático kilómetros que no hizo. El odómetro es el dato del montaje y
+     * del desmontaje, no el de la reparación.
+     */
     p_km: null,
     p_obs: p.observaciones,
   });
