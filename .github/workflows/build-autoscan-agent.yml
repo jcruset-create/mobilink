@@ -29,12 +29,30 @@
 
 name: Build AutoScan Agent
 
+# ── Solo desde main, y esto NO es como los workflows de APK ────────────────
+#
+# Los de APK publican desde cualquier rama, y ahí tiene sentido: una APK de rama
+# es un artefacto que alguien instala a mano para probar. Una release del agente
+# NO es eso. Es lo que los agentes instalados se descargan cuando el mostrador
+# pulsa «Actualizar», así que publicar desde una rama es ofrecer a producción
+# código que nadie ha mergeado.
+#
+# Y hay una segunda razón, que es la que lo destapó. El filtro `paths` compara la
+# punta VIEJA de la rama con la nueva, así que cualquier rama que integre `main`
+# por primera vez después de que esto existiera ve aparecer `autoscan_agent/**`
+# entero y dispara la publicación. Pasó seis veces en dos días —1.0.4 a 1.0.9,
+# todas con el MISMO código del agente— desde ramas que no tenían nada que ver:
+# assist, movertis, workplanner. Cada una dejó su release y le metió un commit de
+# versión a una rama ajena.
+#
+# Con `branches: [main]` las dos cosas se acaban: solo se publica lo mergeado, y
+# el número de versión vuelve a significar algo.
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
       - "autoscan_agent/**"
-      - ".github/workflows/build-autoscan-agent.yml"
 
 permissions:
   contents: write
