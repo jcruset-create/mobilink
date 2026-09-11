@@ -432,7 +432,8 @@ export default function Operativo2View({
             {validationJobs.map((job) => {
               const assignedNames = job.assignedNames ?? [];
               return (
-                <div key={job.id} className="flex flex-wrap items-center gap-1.5 rounded-lg bg-slate-900 p-2">
+                <div key={job.id} className="rounded-lg bg-slate-900 p-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-[12px] font-bold">{job.plate}{job.urgent ? " ⚠️" : ""}</span>
                   <span className="text-[11px] text-slate-400">{getOperationLabel(job)}</span>
                   <select
@@ -472,6 +473,17 @@ export default function Operativo2View({
                   <button type="button" onClick={() => sendValidationJobToQueue(job.id)} className="rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-300">Cola</button>
                   <button type="button" onClick={() => { void rejectProposedJob(job.id); }} className="rounded border border-slate-500/40 bg-slate-700 px-2 py-1 text-[11px] text-slate-200">Rechazar</button>
                   <button type="button" onClick={() => { void deleteValidationJob(job.id); }} className="rounded bg-rose-600 px-2 py-1 text-[11px] font-bold text-white">Eliminar</button>
+                  </div>
+
+                  {/* Por qué se propone a ese técnico: sin el motivo, o te fías
+                      a ciegas o lo cambias a ojo. */}
+                  {job.reason && (
+                    <div className="mt-1 text-[10px] leading-snug text-slate-400">
+                      {job.reason}
+                      {job.quantity && job.quantity > 1 ? ` · Cantidad: ${job.quantity}` : ""}
+                      {job.ptNumero ? ` · Parte ${job.ptNumero}` : ""}
+                    </div>
+                  )}
                 </div>
               );
             })}
