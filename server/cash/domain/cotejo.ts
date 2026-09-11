@@ -95,6 +95,33 @@ export type Emparejada = {
   por: "referencia" | "importe";
 };
 
+/**
+ * Mismo importe, distinta forma de pago.
+ *
+ * Ni cuadra ni es un hueco: es LA MISMA operación con algo que no encaja, y
+ * merece su propia categoría porque tiene dos causas muy distintas y las dos
+ * hay que poder verlas:
+ *
+ * · **El cobro se metió con la forma equivocada.** El dinero está, pero el
+ *   arqueo descuadrará por ese importe. Es un error de verdad.
+ *
+ * · **El modelo leyó mal la columna.** Pasó el primer día de uso: el ERP decía
+ *   CONTADO y el modelo copió el «Datáfono Clearone ta...» de las filas de al
+ *   lado. La comprobación contra el total impreso NO lo caza, porque los
+ *   importes estaban bien.
+ *
+ * Antes esto salía como dos líneas sueltas —una en «falta» y otra en «sobra»—
+ * sin decir en ningún sitio que fueran el mismo importe. Funcionaba: la
+ * información estaba. Pero el trabajo de verlo se lo dejaba entero al que
+ * miraba, que es justo lo que este cotejo venía a evitar.
+ */
+export type DiscrepanciaDeForma = {
+  erp: LineaErp;
+  mobilink: LineaMobilink;
+  /** La forma que le corresponde a la etiqueta del ERP, si está configurada. */
+  formaEsperada: string | null;
+};
+
 export type Ambigua = {
   erp: LineaErp;
   /** Los que encajaban igual de bien. Ninguno se ha elegido. */
@@ -110,6 +137,8 @@ export type Informe = {
   soloEnMobilink: LineaMobilink[];
   /** Encajaba con varios. No se elige por su cuenta. */
   ambiguas: Ambigua[];
+  /** Mismo importe a los dos lados, pero la forma de pago no coincide. */
+  discrepanciasDeForma: DiscrepanciaDeForma[];
   /** Etiquetas del ERP que no están en la tabla de equivalencias. */
   formasSinEquivalencia: string[];
   totales: {
@@ -152,6 +181,7 @@ export function cotejar(
 ): Informe {
   const emparejadas: Emparejada[] = [];
   const ambiguas: Ambigua[] = [];
+  const discrepanciasDeForma: DiscrepanciaDeForma[] = [];
   const sinEquivalencia = new Set<string>();
 
   /* Lo que queda por emparejar de cada lado. Se va vaciando. */
@@ -215,6 +245,34 @@ export function cotejar(
     }
   }
 
+  // ── Tercera pasada: mismo importe, forma distinta ─────────────────────────
+  //
+  // Va LA ÚLTIMA a propósito. Solo llegan aquí las líneas que no encontraron
+  // pareja ni por referencia ni por importe+forma, así que emparejar por
+  // importe a secas ya no puede robarle la pareja buena a nadie.
+  //
+  // Y sigue exigiendo que no haya dudas: con dos candidatos del mismo importe
+  // no se elige, se declara ambigua. La regla de no inventar emparejamientos
+  // no se relaja aquí; lo que se relaja es la forma de pago, y por eso el
+  // resultado se cuenta aparte y NO como cuadrado.
+  for (const e of [...pendientesErp]) {
+    const encajan = pendientesMob.filter(
+      (m) => m.tipo === e.tipo && m.importeCentimos === e.importeCentimos
+    );
+    if (encajan.length === 1) {
+      discrepanciasDeForma.push({
+        erp: e,
+        mobilink: encajan[0]!,
+        formaEsperada: equivalencias.get(etiquetaNormalizada(e.formaErp)) ?? null,
+      });
+      pendientesErp.splice(pendientesErp.indexOf(e), 1);
+      sacar(pendientesMob, encajan[0]!);
+    } else if (encajan.length > 1) {
+      ambiguas.push({ erp: e, candidatos: encajan });
+      pendientesErp.splice(pendientesErp.indexOf(e), 1);
+    }
+  }
+
   const suma = (ls: readonly { importeCentimos: Centimos; tipo: string }[], t: string) =>
     ls.filter((l) => l.tipo === t).reduce((a, l) => a + l.importeCentimos, 0);
 
@@ -237,12 +295,14 @@ export function cotejar(
     soloEnErp: pendientesErp,
     soloEnMobilink: pendientesMob,
     ambiguas,
+    discrepanciasDeForma,
     formasSinEquivalencia: [...sinEquivalencia].sort(),
     totales,
     cuadra:
       pendientesErp.length === 0 &&
       pendientesMob.length === 0 &&
       ambiguas.length === 0 &&
+      discrepanciasDeForma.length === 0 &&
       totales.diferenciaCobros === 0 &&
       totales.diferenciaPagos === 0,
   };
