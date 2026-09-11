@@ -28,7 +28,7 @@ describe("normalizar", () => {
   });
 });
 
-describe("coincide · texto", () => {
+describe("coincide · matrícula y cliente", () => {
   const item = {
     plate: "3719LKK",
     plateRemolque: "R7657BDM",
@@ -37,36 +37,50 @@ describe("coincide · texto", () => {
   };
 
   it("encuentra por matrícula del camión", () => {
-    expect(coincide(item, { texto: "3719LKK" })).toBe(true);
-    expect(coincide(item, { texto: "3719" })).toBe(true);
+    expect(coincide(item, { matricula: "3719LKK" })).toBe(true);
+    expect(coincide(item, { matricula: "3719" })).toBe(true);
   });
 
   it("encuentra aunque se escriba con espacios o guiones", () => {
     // El operario la copia del albarán, donde va separada.
-    expect(coincide(item, { texto: "3719 LKK" })).toBe(true);
-    expect(coincide(item, { texto: "3719-lkk" })).toBe(true);
+    expect(coincide(item, { matricula: "3719 LKK" })).toBe(true);
+    expect(coincide(item, { matricula: "3719-lkk" })).toBe(true);
   });
 
   it("encuentra por matrícula del REMOLQUE", () => {
     // En una asistencia al remolque puede ser la única matrícula que hay.
-    expect(coincide(item, { texto: "R7657BDM" })).toBe(true);
-    expect(coincide(item, { texto: "7657" })).toBe(true);
+    expect(coincide(item, { matricula: "R7657BDM" })).toBe(true);
+    expect(coincide(item, { matricula: "7657" })).toBe(true);
   });
 
   it("encuentra por cliente, sin importar mayúsculas ni acentos", () => {
-    expect(coincide(item, { texto: "plana" })).toBe(true);
-    expect(coincide(item, { texto: "AUTOCARES" })).toBe(true);
-    expect(coincide({ ...item, customerName: "Logística Pérez" }, { texto: "logistica perez" })).toBe(true);
+    expect(coincide(item, { cliente: "plana" })).toBe(true);
+    expect(coincide(item, { cliente: "AUTOCARES" })).toBe(true);
+    expect(coincide({ ...item, customerName: "Logística Pérez" }, { cliente: "logistica perez" })).toBe(true);
+  });
+
+  it("cada campo busca en LO SUYO y no en el otro", () => {
+    // Es lo que se gana separándolos: el nombre del cliente no puede colarse
+    // como matrícula ni al revés.
+    expect(coincide(item, { matricula: "Autocares" })).toBe(false);
+    expect(coincide(item, { cliente: "3719LKK" })).toBe(false);
+  });
+
+  it("los dos a la vez ACOTAN, no amplían", () => {
+    expect(coincide(item, { matricula: "3719", cliente: "Plana" })).toBe(true);
+    // La matrícula es de esta asistencia, el cliente no: no vale.
+    expect(coincide(item, { matricula: "3719", cliente: "Transmaber" })).toBe(false);
+    expect(coincide(item, { matricula: "9999XXX", cliente: "Plana" })).toBe(false);
   });
 
   it("no encuentra lo que no está", () => {
-    expect(coincide(item, { texto: "9999XXX" })).toBe(false);
-    expect(coincide(item, { texto: "Transmaber" })).toBe(false);
+    expect(coincide(item, { matricula: "9999XXX" })).toBe(false);
+    expect(coincide(item, { cliente: "Transmaber" })).toBe(false);
   });
 
   it("los campos vacíos no rompen la búsqueda", () => {
-    expect(coincide({ plate: null, plateRemolque: null, customerName: null, createdAtMs: 1 }, { texto: "x" })).toBe(false);
-    expect(coincide({}, { texto: "x" })).toBe(false);
+    expect(coincide({ plate: null, plateRemolque: null, customerName: null, createdAtMs: 1 }, { matricula: "x" })).toBe(false);
+    expect(coincide({}, { cliente: "x" })).toBe(false);
   });
 });
 
@@ -110,24 +124,26 @@ describe("filtrar", () => {
 
   it("sin criterios devuelve la lista tal cual, sin copiarla", () => {
     expect(filtrar(lista, {})).toBe(lista);
-    expect(filtrar(lista, { texto: "   " })).toBe(lista);
+    expect(filtrar(lista, { matricula: "   ", cliente: "  " })).toBe(lista);
   });
 
-  it("combina texto y fechas", () => {
-    expect(filtrar(lista, { texto: "truck" }).map((i) => i.plate)).toEqual([""]);
+  it("combina los tres criterios", () => {
+    expect(filtrar(lista, { cliente: "truck" }).map((i) => i.plate)).toEqual([""]);
+    expect(filtrar(lista, { matricula: "R5547" }).map((i) => i.customerName)).toEqual(["Truck Service"]);
     expect(filtrar(lista, { desde: "2026-09-08" }).length).toBe(2);
     expect(filtrar(lista, { desde: "2026-09-08", hasta: "2026-09-08" }).map((i) => i.plate)).toEqual(["8693HDC"]);
-    // Los dos criterios a la vez: «truck» está en la del 09, no en las otras.
-    expect(filtrar(lista, { texto: "truck", desde: "2026-09-09" }).length).toBe(1);
-    expect(filtrar(lista, { texto: "truck", hasta: "2026-09-08" }).length).toBe(0);
+    // Cliente y fecha a la vez: «truck» está en la del 09, no en las otras.
+    expect(filtrar(lista, { cliente: "truck", desde: "2026-09-09" }).length).toBe(1);
+    expect(filtrar(lista, { cliente: "truck", hasta: "2026-09-08" }).length).toBe(0);
   });
 });
 
 describe("hayCriterios", () => {
   it("distingue vacío de espacios de contenido", () => {
     expect(hayCriterios({})).toBe(false);
-    expect(hayCriterios({ texto: "  " })).toBe(false);
-    expect(hayCriterios({ texto: "a" })).toBe(true);
+    expect(hayCriterios({ matricula: "  ", cliente: "  " })).toBe(false);
+    expect(hayCriterios({ matricula: "a" })).toBe(true);
+    expect(hayCriterios({ cliente: "a" })).toBe(true);
     expect(hayCriterios({ desde: "2026-09-01" })).toBe(true);
   });
 });
