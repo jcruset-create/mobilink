@@ -939,6 +939,10 @@ export type InformeCotejo = {
     formaEsperada: string | null;
   }[];
   formasSinEquivalencia: string[];
+  /** Etiquetas recortadas que encajan con varias equivalencias. No se elige ninguna. */
+  formasAmbiguas: { etiqueta: string; candidatas: string[] }[];
+  /** Las resueltas comparando por prefijo, y contra qué equivalencia configurada. */
+  formasPorRecorte: { etiqueta: string; configurada: string }[];
   totales: {
     erpCobros: number;
     erpPagos: number;
