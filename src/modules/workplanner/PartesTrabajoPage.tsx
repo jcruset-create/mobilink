@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FileScan, Loader2, Send, Upload, Wand2 } from "lucide-react";
+import { BookOpen, FileScan, Loader2, Send, Trash2, Upload, Wand2 } from "lucide-react";
 import {
   CLAVE_MATERIAL,
   claveArticulo,
@@ -33,6 +33,13 @@ import type { Job, QuickTemplate, Tech, TechLoadStat } from "../workshopTypes";
  */
 
 type Estado = "vacio" | "leyendo" | "revisando" | "creando";
+
+/** Una correspondencia ya enseñada, tal como la devuelve el servidor. */
+type ArticuloAprendido = {
+  clave: string;
+  templateKey: string;
+  descripcion: string;
+};
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -105,6 +112,8 @@ export default function PartesTrabajoPage() {
 
   const [parte, setParte] = useState<ParteTrabajo | null>(null);
   const [mapa, setMapa] = useState<MapaArticulos>({});
+  const [aprendidos, setAprendidos] = useState<ArticuloAprendido[]>([]);
+  const [aprendidosAbiertos, setAprendidosAbiertos] = useState(false);
   const [plantillas, setPlantillas] = useState<QuickTemplate[]>([]);
   const [techs, setTechs] = useState<Tech[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -125,15 +134,20 @@ export default function PartesTrabajoPage() {
         loadQuickTemplatesFromBackend().catch(() => []),
         loadTechsFromBackend().catch(() => []),
         loadJobsFromBackend().catch(() => []),
-        api<{ mapa: MapaArticulos }>(
+        api<{ mapa: MapaArticulos; filas: ArticuloAprendido[] }>(
           `/api/partes-trabajo/articulos?workshopId=${encodeURIComponent(workshopId)}`
-        ).catch(() => ({ mapa: {} })),
+        ).catch(() => ({ mapa: {}, filas: [] as ArticuloAprendido[] })),
       ]);
 
       setPlantillas(tpl as QuickTemplate[]);
       setTechs((tec as Tech[]).filter((t) => t?.name));
       setJobs(trabajos as Job[]);
       setMapa(articulos.mapa ?? {});
+      setAprendidos(
+        [...(articulos.filas ?? [])].sort((a, b) =>
+          a.descripcion.localeCompare(b.descripcion, "es")
+        )
+      );
     } catch (e: any) {
       setError(e?.message || "Error cargando los datos del taller.");
     }
@@ -223,6 +237,14 @@ export default function PartesTrabajoPage() {
 
     setMapa((prev) => ({ ...prev, [clave]: templateKey }));
 
+    setAprendidos((prev) => {
+      const sin = prev.filter((a) => a.clave !== clave);
+
+      return [...sin, { clave, templateKey, descripcion: linea.descripcion }].sort(
+        (a, b) => a.descripcion.localeCompare(b.descripcion, "es")
+      );
+    });
+
     try {
       await api("/api/partes-trabajo/articulos", {
         method: "PUT",
@@ -235,6 +257,60 @@ export default function PartesTrabajoPage() {
       setError(
         `Se ha aplicado en pantalla, pero no se ha podido recordar "${linea.descripcion}": ${e?.message}`
       );
+    }
+  }
+
+  /** Corrige una correspondencia ya enseñada. */
+  async function cambiarAprendido(articulo: ArticuloAprendido, templateKey: string) {
+    setMapa((prev) => ({ ...prev, [articulo.clave]: templateKey }));
+
+    setAprendidos((prev) =>
+      prev.map((a) => (a.clave === articulo.clave ? { ...a, templateKey } : a))
+    );
+
+    try {
+      await api("/api/partes-trabajo/articulos", {
+        method: "PUT",
+        body: JSON.stringify({
+          workshopId,
+          articulos: [
+            { clave: articulo.clave, templateKey, descripcion: articulo.descripcion },
+          ],
+        }),
+      });
+    } catch (e: any) {
+      setError(`No se pudo guardar el cambio: ${e?.message}`);
+      await cargarBase();
+    }
+  }
+
+  /** Olvida una correspondencia: el artículo volverá a preguntarse. */
+  async function olvidarAprendido(articulo: ArticuloAprendido) {
+    const ok = window.confirm(
+      `¿Olvidar "${articulo.descripcion}"?\n\n` +
+        "La próxima vez que aparezca en un parte se volverá a preguntar qué es."
+    );
+
+    if (!ok) return;
+
+    setMapa((prev) => {
+      const siguiente = { ...prev };
+      delete siguiente[articulo.clave];
+      return siguiente;
+    });
+
+    setAprendidos((prev) => prev.filter((a) => a.clave !== articulo.clave));
+
+    try {
+      await api(
+        `/api/partes-trabajo/articulos?workshopId=${encodeURIComponent(
+          workshopId
+        )}&clave=${encodeURIComponent(articulo.clave)}`,
+        { method: "DELETE" }
+      );
+    } catch (e: any) {
+      setError(`No se pudo olvidar la correspondencia: ${e?.message}`);
+      await cargarBase();
     }
   }
 
@@ -364,6 +440,15 @@ export default function PartesTrabajoPage() {
             />
             <button
               type="button"
+              onClick={() => setAprendidosAbiertos((v) => !v)}
+              className="mr-2 inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm font-semibold hover:bg-slate-700"
+            >
+              <BookOpen className="h-4 w-4" />
+              Artículos aprendidos ({aprendidos.length})
+            </button>
+
+            <button
+              type="button"
               onClick={() => inputRef.current?.click()}
               disabled={estado === "leyendo" || estado === "creando"}
               className="flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
@@ -387,6 +472,76 @@ export default function PartesTrabajoPage() {
         {aviso && (
           <div className="mb-4 whitespace-pre-line rounded-lg border border-emerald-800 bg-emerald-950/40 px-4 py-2 text-sm text-emerald-300">
             {aviso}
+          </div>
+        )}
+
+        {aprendidosAbiertos && (
+          <div className="mb-4 rounded-2xl border border-slate-700 bg-slate-800 p-4">
+            <h2 className="mb-1 text-sm font-black uppercase tracking-wide text-slate-300">
+              Artículos aprendidos
+            </h2>
+            <p className="mb-3 text-xs text-slate-400">
+              Lo que la aplicación ya sabe de cada artículo del ERP. Cámbialo si se
+              enseñó mal, u olvídalo para que vuelva a preguntar.
+            </p>
+
+            {aprendidos.length === 0 ? (
+              <p className="text-xs text-slate-500">
+                Todavía no se ha enseñado ningún artículo.
+              </p>
+            ) : (
+              <div className="max-h-80 space-y-1 overflow-y-auto">
+                {aprendidos.map((a) => {
+                  const plantilla = plantillasDelTaller.find((p) => p.key === a.templateKey);
+
+                  const huerfano =
+                    a.templateKey !== CLAVE_MATERIAL && !plantilla;
+
+                  return (
+                    <div
+                      key={a.clave}
+                      className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm"
+                    >
+                      <span className="flex-1 truncate" title={a.clave}>
+                        {a.descripcion || <span className="text-slate-500">(sin descripción)</span>}
+                      </span>
+
+                      {huerfano && (
+                        <span
+                          className="rounded bg-amber-900/50 px-1.5 py-0.5 text-[10px] font-bold text-amber-200"
+                          title={`La entrada rápida "${a.templateKey}" ya no existe`}
+                        >
+                          plantilla borrada
+                        </span>
+                      )}
+
+                      <select
+                        value={huerfano ? "" : a.templateKey}
+                        onChange={(e) => {
+                          if (e.target.value) void cambiarAprendido(a, e.target.value);
+                        }}
+                        className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs"
+                      >
+                        {huerfano && <option value="">Elige una entrada rápida…</option>}
+                        <option value={CLAVE_MATERIAL}>Material (no genera trabajo)</option>
+                        {plantillasDelTaller.map((p) => (
+                          <option key={p.key} value={p.key}>{p.label}</option>
+                        ))}
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => void olvidarAprendido(a)}
+                        title="Olvidar: volverá a preguntar la próxima vez"
+                        className="rounded border border-rose-700 bg-rose-950/40 p-1.5 text-rose-300 hover:bg-rose-900/40"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
