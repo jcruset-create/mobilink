@@ -83,6 +83,8 @@ type Props = {
   moveJobToStandBy: (jobId: number) => void;
   getOperationLabel: (job: OperationLabelJob) => string;
   onBack: () => void;
+  /** Texto del botón de volver. Dentro de WorkPlanner vuelve a Operativo 2. */
+  etiquetaVolver?: string;
   onGoWorkshopScreen?: () => void;
   canGoBack?: boolean;
   onLogout?: () => void;
@@ -610,6 +612,7 @@ export default function OperariosTVView({
   moveJobToStandBy,
   getOperationLabel,
   onBack,
+  etiquetaVolver,
   onGoWorkshopScreen,
   canGoBack = true,
   onLogout,
@@ -1222,7 +1225,7 @@ export default function OperariosTVView({
               onClick={onBack}
               className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium"
             >
-              Volver a operativo
+              {etiquetaVolver ?? "Volver a operativo"}
             </button>
           )}
 
