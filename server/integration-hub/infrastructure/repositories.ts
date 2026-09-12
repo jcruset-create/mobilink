@@ -484,6 +484,14 @@ export interface MappingRow {
  * La búsqueda va acotada a una cuenta. Sin acotar, con dos cuentas del mismo
  * proveedor el `LIMIT 1` devolvería la primera que apareciera, que es una
  * forma silenciosa de consultar la plataforma equivocada.
+ *
+ * ── Por qué filtra por `active` ─────────────────────────────────────────────
+ *
+ * Desvincular no borra la fila: la deja con `active = false` para conservar el
+ * histórico. Sin este filtro, desvincular no serviría de nada —el odómetro
+ * seguiría preguntando por el vehículo del que alguien acaba de decir que ya no
+ * es—. Para los mapeos anteriores no cambia nada: la columna nació con
+ * `NOT NULL DEFAULT true`, así que todas las filas que ya existían están activas.
  */
 export async function findExternalCode(params: {
   tenantId: string;
@@ -495,7 +503,7 @@ export async function findExternalCode(params: {
   const { rows } = await pool.query(
     `SELECT external_code FROM integration_mappings
       WHERE tenant_id = $1 AND entity_type = $2 AND system = $3
-        AND account_key = $4 AND mobilink_id = $5
+        AND account_key = $4 AND mobilink_id = $5 AND active
       LIMIT 1`,
     [
       params.tenantId,
@@ -508,7 +516,11 @@ export async function findExternalCode(params: {
   return rows[0]?.external_code ?? null;
 }
 
-/** Sistema externo → Mobilink. Para importaciones y webhooks entrantes. */
+/**
+ * Sistema externo → Mobilink. Para importaciones y webhooks entrantes.
+ *
+ * Filtra por `active` por el mismo motivo que `findExternalCode`.
+ */
 export async function findMobilinkId(params: {
   tenantId: string;
   entityType: MappingEntityType;
@@ -519,7 +531,7 @@ export async function findMobilinkId(params: {
   const { rows } = await pool.query(
     `SELECT mobilink_id FROM integration_mappings
       WHERE tenant_id = $1 AND entity_type = $2 AND system = $3
-        AND account_key = $4 AND external_code = $5
+        AND account_key = $4 AND external_code = $5 AND active
       LIMIT 1`,
     [
       params.tenantId,
@@ -541,16 +553,24 @@ export async function upsertMapping(params: {
   metadata?: Record<string, unknown>;
   /** Cuenta del proveedor a la que pertenece el mapeo. */
   accountKey?: string;
+  /**
+   * Estado del enlace. Por defecto `true`: un upsert dice «este enlace vale
+   * ahora», y eso incluye revivir uno que se había desvinculado, que es el
+   * caso «volver a vincular». Los llamantes anteriores no lo pasan y siguen
+   * comportándose igual, porque las filas que ya existen están todas activas.
+   */
+  active?: boolean;
 }): Promise<MappingRow> {
   const ts = now();
   const { rows } = await pool.query(
     `INSERT INTO integration_mappings
        (tenant_id, entity_type, system, account_key, external_code, mobilink_id,
-        metadata, created_at_ms, updated_at_ms)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+        metadata, active, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$9,$8,$8)
      ON CONFLICT (tenant_id, entity_type, system, account_key, external_code)
      DO UPDATE SET mobilink_id = EXCLUDED.mobilink_id,
                    metadata = EXCLUDED.metadata,
+                   active = EXCLUDED.active,
                    updated_at_ms = $8
      RETURNING *`,
     [
@@ -562,9 +582,182 @@ export async function upsertMapping(params: {
       params.mobilinkId,
       params.metadata ? JSON.stringify(params.metadata) : null,
       ts,
+      params.active ?? true,
     ]
   );
   return rows[0];
+}
+
+// ── Enlaces de vehículo: lo que necesita la conciliación ────────────────────
+//
+// Van aquí, junto al resto del Mapping Engine, y no en una infraestructura
+// nueva: son consultas sobre `integration_mappings` con `entity_type='vehicle'`.
+
+/**
+ * Todos los enlaces de vehículo de una cuenta, activos e inactivos.
+ *
+ * Los inactivos hacen falta: son los que explican que un vehículo que hoy
+ * aparece como «solo en TyreControl» estuvo enlazado hasta el mes pasado.
+ */
+export async function listVehicleMappings(params: {
+  tenantId: string;
+  system: string;
+  accountKey?: string;
+}): Promise<MappingRow[]> {
+  const { rows } = await pool.query(
+    `SELECT id, tenant_id, entity_type, system, account_key, external_code,
+            mobilink_id, active, metadata, last_seen_at_ms
+       FROM integration_mappings
+      WHERE tenant_id = $1 AND entity_type = 'vehicle' AND system = $2
+        AND account_key = $3
+      ORDER BY updated_at_ms DESC`,
+    [params.tenantId, params.system, params.accountKey ?? CUENTA_POR_DEFECTO]
+  );
+  return rows;
+}
+
+/**
+ * Desactiva un enlace conservándolo. Nunca borra.
+ *
+ * Devuelve la fila resultante, o `null` si no había enlace que desactivar: la
+ * diferencia importa para no contestar «desvinculado» cuando no había nada.
+ */
+export async function setVehicleMappingActive(params: {
+  tenantId: string;
+  system: string;
+  accountKey?: string;
+  mobilinkId: string;
+  externalCode: string;
+  active: boolean;
+}): Promise<MappingRow | null> {
+  const { rows } = await pool.query(
+    `UPDATE integration_mappings
+        SET active = $6, updated_at_ms = $7
+      WHERE tenant_id = $1 AND entity_type = 'vehicle' AND system = $2
+        AND account_key = $3 AND mobilink_id = $4 AND external_code = $5
+      RETURNING *`,
+    [
+      params.tenantId,
+      params.system,
+      params.accountKey ?? CUENTA_POR_DEFECTO,
+      params.mobilinkId,
+      params.externalCode,
+      params.active,
+      now(),
+    ]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Marca que estos vehículos externos se acaban de ver en el proveedor.
+ *
+ * Quien llame es responsable de invocarla SOLO cuando la cuenta respondió y el
+ * listado se obtuvo entero. Ese contrato no se puede comprobar desde aquí, y de
+ * él depende que una caída no envejezca la flota: por eso el listado de códigos
+ * que llega tiene que salir de una respuesta buena, nunca de una parcial.
+ */
+export async function touchVehiclesLastSeen(params: {
+  tenantId: string;
+  system: string;
+  accountKey?: string;
+  externalCodes: string[];
+  at?: number;
+}): Promise<number> {
+  if (params.externalCodes.length === 0) return 0;
+  const { rowCount } = await pool.query(
+    `UPDATE integration_mappings
+        SET last_seen_at_ms = $5
+      WHERE tenant_id = $1 AND entity_type = 'vehicle' AND system = $2
+        AND account_key = $3 AND external_code = ANY($4::text[])`,
+    [
+      params.tenantId,
+      params.system,
+      params.accountKey ?? CUENTA_POR_DEFECTO,
+      params.externalCodes,
+      params.at ?? now(),
+    ]
+  );
+  return rowCount ?? 0;
+}
+
+// ── Externos ignorados ──────────────────────────────────────────────────────
+
+export interface IgnoredExternalRow {
+  id: number;
+  tenant_id: string;
+  entity_type: string;
+  system: string;
+  account_key: string;
+  external_code: string;
+  reason: string | null;
+  created_at_ms: number;
+}
+
+export async function listIgnoredExternals(params: {
+  tenantId: string;
+  entityType: MappingEntityType;
+  system: string;
+  accountKey?: string;
+}): Promise<IgnoredExternalRow[]> {
+  const { rows } = await pool.query(
+    `SELECT * FROM integration_ignored_externals
+      WHERE tenant_id = $1 AND entity_type = $2 AND system = $3 AND account_key = $4
+      ORDER BY created_at_ms DESC`,
+    [params.tenantId, params.entityType, params.system, params.accountKey ?? CUENTA_POR_DEFECTO]
+  );
+  return rows;
+}
+
+export async function ignoreExternal(params: {
+  tenantId: string;
+  entityType: MappingEntityType;
+  system: string;
+  accountKey?: string;
+  externalCode: string;
+  reason?: string | null;
+}): Promise<IgnoredExternalRow> {
+  const { rows } = await pool.query(
+    `INSERT INTO integration_ignored_externals
+       (tenant_id, entity_type, system, account_key, external_code, reason, created_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (tenant_id, entity_type, system, account_key, external_code)
+     DO UPDATE SET reason = EXCLUDED.reason
+     RETURNING *`,
+    [
+      params.tenantId,
+      params.entityType,
+      params.system,
+      params.accountKey ?? CUENTA_POR_DEFECTO,
+      params.externalCode,
+      params.reason ?? null,
+      now(),
+    ]
+  );
+  return rows[0];
+}
+
+/** Deshace un «ignorar». Devuelve true si había algo que deshacer. */
+export async function unignoreExternal(params: {
+  tenantId: string;
+  entityType: MappingEntityType;
+  system: string;
+  accountKey?: string;
+  externalCode: string;
+}): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `DELETE FROM integration_ignored_externals
+      WHERE tenant_id = $1 AND entity_type = $2 AND system = $3
+        AND account_key = $4 AND external_code = $5`,
+    [
+      params.tenantId,
+      params.entityType,
+      params.system,
+      params.accountKey ?? CUENTA_POR_DEFECTO,
+      params.externalCode,
+    ]
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 export async function listMappings(filters: {

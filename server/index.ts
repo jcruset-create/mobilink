@@ -56,6 +56,7 @@ import {
   type WebfleetCreds,
 } from "./tyrecontrol/webfleetCredenciales.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
+import { createConciliacionRouter } from "./tyrecontrol/conciliacion/router.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
 import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
@@ -18968,7 +18969,17 @@ mountParte(app, authenticate, requireModule("tyrecontrol"));
  * Lectura de TyreControl desde Assist. Solo lectura: en esta fase el módulo no
  * escribe nada en TC. Va con el guarda del back-office porque es información
  * de oficina; la pantalla del técnico no se toca.
+ *
+ * Justo antes va la conciliación telemática, que lleva su propio guarda —sesión
+ * de administrador de TyreControl— porque la usa el administrador de un CLIENTE
+ * sobre su propia flota, y su empresa se deriva del perfil, nunca de la
+ * petición. El orden no es indiferente: el router de abajo aplica
+ * `requireSupervisorRole` con un `router.use()`, que corre para todo lo que
+ * entre en `/api/tyrecontrol` aunque después ninguna de sus rutas encaje. Al
+ * revés, la conciliación quedaría detrás de un guarda que no es el suyo y
+ * respondería 401 a quien sí tiene permiso.
  */
+app.use("/api/tyrecontrol/conciliacion", createConciliacionRouter());
 app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
 mountCorreo(app, requireSupervisorRole);
 app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
