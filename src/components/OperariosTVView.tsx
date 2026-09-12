@@ -1,6 +1,7 @@
 // @ts-nocheck — maintenance functions kept for future re-activation (UI removed in v2.2.10)
 import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
+import { resumenTarjeta } from "../modules/tarjetaTrabajo";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -33,7 +34,15 @@ type JobForOperarios = {
     source: "quickTemplate" | "customExtra";
     templateKey?: string | null;
     standardMinutes?: number | null;
+    quantity?: number | null;
+    unitMinutes?: number | null;
   }[];
+  quantity?: number | null;
+  ptNumero?: string | null;
+  materiales?: {
+    descripcion: string;
+    unidades: number;
+  }[] | null;
 };
 
 type TechForOperarios = {
@@ -488,6 +497,109 @@ function saveAssignedMaintenanceTasksToLocalStorage(
   } catch {
     // No rompemos la pantalla si localStorage falla.
   }
+}
+
+
+/**
+ * Lo que el trabajo trae del parte: mano de obra —que es lo imputable— y
+ * material. Sin importes: el técnico necesita saber qué montar y cuánto se
+ * tarda; lo que se factura se ve en el panel de oficina.
+ */
+function BloquesDelParte({ job, etiqueta }: { job: JobForOperarios; etiqueta: string }) {
+  const resumen = resumenTarjeta({
+    operacionPrincipal: etiqueta,
+    cantidadPrincipal: job.quantity,
+    minutosPrincipal: minutosDeLaPrincipal(job),
+    includedTasks: job.includedTasks as never,
+    materiales: job.materiales as never,
+  });
+
+  if (resumen.manoDeObra.length === 0 && resumen.materiales.length === 0) return null;
+
+  return (
+    <>
+      {resumen.manoDeObra.length > 0 && (
+        <div className="mt-3 rounded-2xl border border-emerald-200 bg-white p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-xs font-black uppercase tracking-wide text-emerald-700">
+              Mano de obra
+            </span>
+            {resumen.minutosTotales > 0 && (
+              <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-black text-white">
+                {resumen.minutosTotales} min
+              </span>
+            )}
+          </div>
+
+          <div className="grid gap-1">
+            {resumen.manoDeObra.map((linea) => (
+              <div
+                key={linea.id}
+                className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-900"
+              >
+                <span className="truncate">
+                  ✓ {linea.label}
+                  {linea.cantidad > 1 && (
+                    <span className="ml-2 font-black">×{linea.cantidad}</span>
+                  )}
+                </span>
+
+                {linea.minutos > 0 && (
+                  <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                    {linea.minutos} min
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Solo si hay material: la mayoría de entradas rápidas no lo tienen y
+          una sección vacía estorba en una pantalla que se mira de lejos. */}
+      {resumen.materiales.length > 0 && (
+        <div className="mt-2 rounded-2xl border border-sky-200 bg-white p-3">
+          <div className="mb-2 text-xs font-black uppercase tracking-wide text-sky-700">
+            Material
+          </div>
+
+          <div className="grid gap-1">
+            {resumen.materiales.map((material) => (
+              <div
+                key={material.id}
+                className="flex items-center justify-between gap-2 rounded-xl bg-sky-50 px-3 py-2 text-sm font-bold text-sky-900"
+              >
+                <span className="truncate">· {material.descripcion}</span>
+                <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-black text-sky-700">
+                  ×{material.unidades}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * Minutos de la operación principal: los del trabajo menos los de las tareas
+ * incluidas, porque `estimatedMinutes` es el total del parte.
+ */
+function minutosDeLaPrincipal(job: JobForOperarios): number {
+  const incluidas = (job.includedTasks ?? []).reduce(
+    (suma, t) => suma + (Number(t?.standardMinutes) || 0),
+    0
+  );
+
+  const porUnidad = Number((job as { unitMinutes?: number | null }).unitMinutes) || 0;
+  const cantidad = Number(job.quantity) || 1;
+
+  if (porUnidad > 0) return porUnidad * cantidad;
+
+  const total = Number((job as { estimatedMinutes?: number | null }).estimatedMinutes) || 0;
+
+  return Math.max(0, total - incluidas);
 }
 
 export default function OperariosTVView({
@@ -1190,6 +1302,15 @@ export default function OperariosTVView({
                           <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-500">
                             #{job.id}
                           </span>
+
+                          {job.ptNumero && (
+                            <span
+                              className="rounded-full bg-slate-900 px-3 py-1 text-xs font-bold text-white"
+                              title="Nº del parte de trabajo"
+                            >
+                              Parte {job.ptNumero}
+                            </span>
+                          )}
                         </div>
 
                         <div className="text-4xl font-black tracking-wide">
@@ -1204,30 +1325,7 @@ export default function OperariosTVView({
                           Tiempo trabajando: {formatWorkedTime(workedMinutes)}
                         </div>
 
-                        {job.includedTasks && job.includedTasks.length > 0 && (
-                          <div className="mt-3 rounded-2xl border border-emerald-200 bg-white p-3">
-                            <div className="mb-2 text-xs font-black uppercase tracking-wide text-emerald-700">
-                              Tareas incluidas
-                            </div>
-
-                            <div className="grid gap-1">
-                              {job.includedTasks.map((task) => (
-                                <div
-                                  key={task.id}
-                                  className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-900"
-                                >
-                                  <span>✓ {task.label}</span>
-
-                                  {task.standardMinutes != null && (
-                                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black text-emerald-700">
-                                      {task.standardMinutes} min
-                                    </span>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
+                        <BloquesDelParte job={job} etiqueta={getOperationLabel(job)} />
                       </div>
 
                       <div className="grid min-w-[190px] gap-2">

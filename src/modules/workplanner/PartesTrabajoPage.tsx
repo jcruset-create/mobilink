@@ -348,6 +348,7 @@ export default function PartesTrabajoPage() {
           quickEntryLabel: propuesto.label,
           quickEntryMode: "team",
           includedTasks: propuesto.tareasIncluidas,
+          materiales: propuesto.materiales,
           quantity: propuesto.quantity,
           unitMinutes: propuesto.unitMinutes,
           ptNumero: propuesto.ptNumero,
