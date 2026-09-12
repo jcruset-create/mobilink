@@ -5158,6 +5158,71 @@ app.get("/api/roadside-assistances/:id/timeline", requireSupervisorRole, async (
   }
 });
 
+/**
+ * Kilómetros del servicio a partir del rastro GPS del móvil del técnico.
+ *
+ * El mismo cálculo y el mismo criterio que en Assist Central Pro: está en
+ * `server/connect/recorrido.ts` y lo usan los dos paneles, para que dentro de
+ * un año no enseñen kilómetros distintos del mismo servicio.
+ *
+ * El rastro del técnico no guarda el estado en cada punto, así que se toma del
+ * historial de estados de la asistencia: el estado de un punto es el del
+ * último cambio anterior a él. Con eso sale el mismo desglose de ida, trabajo
+ * y vuelta sin tocar la app.
+ *
+ * Solo calcula: lo que se factura sigue siendo `serviceKm`, y para escribirlo
+ * hay que confirmarlo abajo.
+ */
+app.get("/api/roadside-assistances/:id/recorrido", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(422).json({ error: "Id inválido" });
+    const { recorridoDeAsistenciaCore } = await import("./connect/recorrido.ts");
+    res.json({ data: await recorridoDeAsistenciaCore(id) });
+  } catch (error) {
+    console.error("GET /api/roadside-assistances/:id/recorrido error:", error);
+    res.status(500).json({ error: "Error calculando el recorrido" });
+  }
+});
+
+/**
+ * Da por buenos los kilómetros calculados. Los escribe una persona, aunque los
+ * haya calculado la máquina: de aquí sale un importe.
+ *
+ * No se pisa lo que ya haya anotado el técnico. Corregir a la baja lo que
+ * declaró quien hizo el servicio no es cosa de un botón.
+ */
+app.post("/api/roadside-assistances/:id/recorrido/aplicar", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const km = Math.round(Number(req.body?.km));
+    if (!Number.isInteger(id)) return res.status(422).json({ error: "Id inválido" });
+    if (!Number.isFinite(km) || km < 0 || km > 2000) {
+      return res.status(422).json({ error: "Kilómetros no válidos (0-2000)" });
+    }
+    const cur = await db.query(
+      `SELECT "serviceKm" FROM roadside_assistances WHERE id = $1`, [id]);
+    if (!cur.rows[0]) return res.status(404).json({ error: "Asistencia no encontrada" });
+    if (cur.rows[0].serviceKm != null && Number(cur.rows[0].serviceKm) > 0) {
+      return res.status(409).json({
+        error: `Ya hay ${cur.rows[0].serviceKm} km anotados por el técnico. Cámbialos a mano si procede.`,
+      });
+    }
+    await db.query(
+      `UPDATE roadside_assistances SET "serviceKm" = $2, "updatedAtMs" = $3 WHERE id = $1`,
+      [id, km, Date.now()]);
+    await db.query(
+      `INSERT INTO roadside_assistance_events ("assistanceId", status, note, "createdBy", "createdAtMs")
+       SELECT $1, status, $2, $3, $4 FROM roadside_assistances WHERE id = $1`,
+      [id, `Kilómetros del servicio fijados en ${km} a partir del rastro GPS`,
+       (req as any).authCtx?.nombre ?? "oficina", Date.now()]);
+    res.json({ data: { serviceKm: km } });
+  } catch (error) {
+    console.error("POST /api/roadside-assistances/:id/recorrido/aplicar error:", error);
+    res.status(500).json({ error: "Error guardando los kilómetros" });
+  }
+});
+
 app.get("/api/roadside-assistances/mi-contexto", async (req, res) => {
   try {
     const panelUser = await getAssistPanelUser(req);
