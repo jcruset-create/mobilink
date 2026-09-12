@@ -6581,7 +6581,7 @@ app.post(
       }
 
       const check = await db.query(
-        `SELECT id FROM roadside_assistances WHERE id = $1 AND "assignedTechName" = $2 LIMIT 1`,
+        `SELECT id, status FROM roadside_assistances WHERE id = $1 AND "assignedTechName" = $2 LIMIT 1`,
         [id, operator.techName]
       );
 
@@ -6589,14 +6589,55 @@ app.post(
         return res.status(403).json({ error: "Asistencia no encontrada o no asignada a ti" });
       }
 
+      const ahora = Date.now();
+
       await db.query(
         `
           UPDATE roadside_assistances
           SET "operatorLat" = $2, "operatorLng" = $3, "operatorLocationAtMs" = $4
           WHERE id = $1
         `,
-        [id, lat, lng, Date.now()]
+        [id, lat, lng, ahora]
       );
+
+      /*
+       * Y la posición se GUARDA como rastro, no solo se pisa la última.
+       *
+       * Antes solo dejaban rastro las migas de pan que llegaban por lote al
+       * recuperar cobertura: un técnico con cobertura todo el rato no dejaba
+       * ninguna, así que de la mayoría de asistencias no quedaba por dónde
+       * había ido, y sin eso no se pueden calcular los kilómetros del
+       * servicio.
+       *
+       * No se guarda si el punto es prácticamente el mismo que el anterior y
+       * reciente: la app manda cada treinta segundos y una furgoneta parada
+       * llenaría la tabla de filas que no dicen nada.
+       */
+      const previo = await db.query(
+        `SELECT lat, lng, "ts" FROM roadside_operator_track
+          WHERE "assistanceId" = $1 ORDER BY "ts" DESC LIMIT 1`,
+        [id]
+      );
+      const p = previo.rows[0];
+      const repetido = p != null
+        && ahora - Number(p.ts) < 120_000
+        && haversineDistanceM(Number(p.lat), Number(p.lng), lat, lng) < 25;
+
+      if (!repetido) {
+        const numeroONulo = (v: unknown) => {
+          const n = Number(v);
+          return Number.isFinite(n) ? n : null;
+        };
+        await db.query(
+          `INSERT INTO roadside_operator_track
+             ("assistanceId", lat, lng, "ts", "accuracyM", "speedKmh", status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [id, lat, lng, ahora,
+           numeroONulo(req.body?.accuracyM ?? req.body?.accuracy),
+           numeroONulo(req.body?.speedKmh ?? req.body?.speed),
+           String(check.rows[0].status ?? "") || null]
+        );
+      }
 
       // Geofencing automático: si el operario está dentro del radio del taller, pasar a llegada_taller
       const cfg = await getWorkshopConfig();
@@ -6646,23 +6687,45 @@ app.post(
       if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
 
       const check = await db.query(
-        `SELECT id FROM roadside_assistances WHERE id = $1 AND "assignedTechName" = $2 LIMIT 1`,
+        `SELECT id, status FROM roadside_assistances WHERE id = $1 AND "assignedTechName" = $2 LIMIT 1`,
         [id, operator.techName]
       );
       if (check.rows.length === 0) {
         return res.status(403).json({ error: "Asistencia no encontrada o no asignada a ti" });
       }
 
-      // Guardar todas las migas de pan (rastro), ordenadas por hora
+      /*
+       * Guardar todas las migas de pan (rastro), ordenadas por hora.
+       *
+       * La precisión y la velocidad vienen de la app cuando las manda; las
+       * versiones anteriores no las mandan y se quedan nulas, que es justo lo
+       * que el cálculo de kilómetros espera para no filtrar a ciegas.
+       *
+       * El ESTADO lo pone el servidor con el que tiene la asistencia en este
+       * momento. Es lo que permite separar la ida de la vuelta sin depender de
+       * que la app lo cuente, y empieza a funcionar sin actualizar ningún
+       * móvil.
+       */
+      const estadoAhora = String(check.rows[0].status ?? "") || null;
+      const numeroONulo = (v: unknown) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
       const valid = points
-        .map((p: any) => ({ lat: Number(p.lat), lng: Number(p.lng), ts: Number(p.ts) || Date.now() }))
+        .map((p: any) => ({
+          lat: Number(p.lat), lng: Number(p.lng), ts: Number(p.ts) || Date.now(),
+          accuracyM: numeroONulo(p.accuracyM ?? p.accuracy),
+          speedKmh: numeroONulo(p.speedKmh ?? p.speed),
+        }))
         .filter((p: any) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
         .sort((a: any, b: any) => a.ts - b.ts);
 
       for (const p of valid) {
         await db.query(
-          `INSERT INTO roadside_operator_track ("assistanceId", lat, lng, "ts") VALUES ($1,$2,$3,$4)`,
-          [id, p.lat, p.lng, p.ts]
+          `INSERT INTO roadside_operator_track
+             ("assistanceId", lat, lng, "ts", "accuracyM", "speedKmh", status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [id, p.lat, p.lng, p.ts, p.accuracyM, p.speedKmh, estadoAhora]
         );
       }
 

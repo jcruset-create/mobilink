@@ -249,7 +249,7 @@ export async function recorridoDeAsistenciaCore(coreAssistanceId: number): Promi
   const db = (await import("../db.ts")).default;
   const [puntos, historial] = await Promise.all([
     db.query(
-      `SELECT lat, lng, ts FROM roadside_operator_track
+      `SELECT lat, lng, ts, "accuracyM", status FROM roadside_operator_track
         WHERE "assistanceId" = $1 ORDER BY ts`,
       [coreAssistanceId],
     ),
@@ -259,8 +259,26 @@ export async function recorridoDeAsistenciaCore(coreAssistanceId: number): Promi
       [coreAssistanceId],
     ),
   ]);
-  return calcularRecorrido(conEstadoDelHistorial(
-    puntos.rows.map((r: any) => ({ lat: Number(r.lat), lng: Number(r.lng), ts: Number(r.ts) })),
+
+  const filas: PuntoRastro[] = puntos.rows.map((r: any) => ({
+    lat: Number(r.lat),
+    lng: Number(r.lng),
+    ts: Number(r.ts),
+    accuracyM: r.accuracyM == null ? null : Number(r.accuracyM),
+    status: r.status ?? null,
+  }));
+
+  /*
+   * El estado del propio punto manda; el historial solo rellena los que no lo
+   * tienen. Las filas guardadas antes de que el rastro llevara estado siguen
+   * valiendo exactamente igual: se les pone el del último cambio anterior.
+   */
+  const conEstado = conEstadoDelHistorial(
+    filas.filter((p) => p.status == null),
     historial.rows.map((r: any) => ({ status: String(r.status), ts: Number(r.ts) })),
-  ));
+  );
+  const rellenados = new Map(conEstado.map((p) => [p.ts, p.status]));
+
+  return calcularRecorrido(filas.map((p) =>
+    p.status != null ? p : { ...p, status: rellenados.get(p.ts) ?? null }));
 }
