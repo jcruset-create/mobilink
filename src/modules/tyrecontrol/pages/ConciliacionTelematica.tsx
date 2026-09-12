@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Link2, Link2Off, Plus, RefreshCw, Trash2, XCircle } from "lucide-react";
 import {
   conciliar, crearVehiculo, darDeBaja, dejarDeIgnorar, desvincular, ignorar, listarCuentas, vincular,
+  vincularLote,
   type Conciliacion, type CuentaTelematica, type VehiculoInterno,
 } from "../services/conciliacion";
 import { listarEmpresas } from "../services/data";
@@ -125,6 +126,8 @@ export default function ConciliacionTelematica() {
   }
 
   const base = cuenta ? { empresaId, connectorKey: cuenta.connectorKey, accountKey: cuenta.accountKey } : null;
+  /** Cuántas filas de «solo proveedor» traen candidato único por matrícula. */
+  const propuestas = datos?.soloProveedor.filter((f) => f.propuesta).length ?? 0;
   const r = datos?.resumen;
   const completa = r?.status === "complete";
 
@@ -300,6 +303,49 @@ export default function ConciliacionTelematica() {
 
           {/* ── B. Solo en el proveedor ── */}
           {tab === "soloProveedor" && (
+            <>
+              {/*
+                Con 750 vehículos, confirmar de uno en uno no es cuidado: es una
+                barrera. Estas propuestas ya son coincidencia ÚNICA y EXACTA de
+                matrícula —las ambiguas están en discrepancias y las que no traen
+                matrícula no proponen nada—, así que enlazarlas juntas es la misma
+                decisión repetida. El servidor las recalcula antes de escribir: no
+                se fía de esta lista.
+              */}
+              {propuestas > 0 && (
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sky-700 bg-sky-500/10 p-4">
+                  <div className="text-sm">
+                    <b>{propuestas}</b> de estos vehículos coinciden por matrícula exacta con uno de
+                    TyreControl.
+                    <div className="text-xs text-slate-400">
+                      Se puede deshacer: desvincular conserva el enlace desactivado.
+                    </div>
+                  </div>
+                  <button
+                    className={`${BOTON} border-sky-500 py-2 text-sky-200 hover:bg-sky-500/20`}
+                    disabled={cargando}
+                    onClick={() =>
+                      confirm(
+                        `Se van a enlazar ${propuestas} vehículos por coincidencia exacta de ` +
+                          `matrícula.\n\nNo se crea ni se da de baja nada, y cada enlace se puede ` +
+                          `deshacer después.\n\n¿Seguir?`,
+                      ) &&
+                      void accion(async () => {
+                        const r = await vincularLote({ ...base, esperados: propuestas });
+                        if (r.fallidos.length) {
+                          throw new Error(
+                            `Enlazados ${r.enlazados}, pero ${r.fallidos.length} fallaron. ` +
+                              `El primero: ${r.fallidos[0].error}`,
+                          );
+                        }
+                      }, `${propuestas} vehículos enlazados.`)
+                    }
+                  >
+                    <Link2 className="mr-1 inline h-3.5 w-3.5" />
+                    Vincular las {propuestas} coincidencias exactas
+                  </button>
+                </div>
+              )}
             <div className={`${CAJA} divide-y divide-slate-700`}>
               {datos!.soloProveedor.length === 0 && <div className="p-6 text-center text-slate-400">Ninguno.</div>}
               {datos!.soloProveedor.map((f) => (
@@ -384,6 +430,7 @@ export default function ConciliacionTelematica() {
                 </div>
               ))}
             </div>
+            </>
           )}
 
           {/* ── C. Solo en TyreControl ── */}
