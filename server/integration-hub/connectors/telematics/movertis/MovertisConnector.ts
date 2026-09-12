@@ -82,6 +82,7 @@ import { IntegrationError } from "../../../domain/errors.ts";
 import { getSecretsProvider } from "../../../infrastructure/secrets.ts";
 import {
   TELEMATICS_CAPABILITIES,
+  type IFleetPositionProvider,
   type ITripSummaryProvider,
   type ProviderVehicle,
   type TelemetryWindow,
@@ -91,6 +92,7 @@ import {
 import {
   aLecturaDeFlota,
   aLecturaDePunto,
+  aPosicionDeFlota,
   aVehiculoDeFlota,
   filasDe,
   masCercana,
@@ -209,7 +211,9 @@ interface Credenciales {
   password?: string;
 }
 
-export class MovertisConnector implements ITelematicsConnector, ITripSummaryProvider {
+export class MovertisConnector
+  implements ITelematicsConnector, ITripSummaryProvider, IFleetPositionProvider
+{
   readonly info: ConnectorInfo = {
     key: "movertis",
     kind: "telematics",
@@ -233,6 +237,7 @@ export class MovertisConnector implements ITelematicsConnector, ITripSummaryProv
       TELEMATICS_CAPABILITIES.ODOMETER,
       TELEMATICS_CAPABILITIES.POSITION,
       TELEMATICS_CAPABILITIES.TRIP_SUMMARY,
+      TELEMATICS_CAPABILITIES.FLEET_POSITIONS,
     ],
   };
 
@@ -445,19 +450,33 @@ export class MovertisConnector implements ITelematicsConnector, ITripSummaryProv
    * Cuerpo de `showvehicles`.
    *
    * `id: []` significa «toda la flota», y las banderas deciden qué secciones
-   * vienen. Solo existen tres —`basicData`, `counters`, `sensors`—; cualquier
-   * otro nombre se contesta con «Flag incorrecta» dentro de un 201. Y
-   * `basicData` no es opcional: sin él, un 500 con «El flag basicData es
-   * obligatorio».
+   * vienen. Las que la sonda confirmó válidas son cuatro: `basicData`,
+   * `counters`, `sensors` y `lastMessagePosition`; cualquier otro nombre se
+   * contesta con «Flag incorrecta» dentro de un 201. Y `basicData` no es
+   * opcional: sin él, un 500 con «El flag basicData es obligatorio».
    *
    * `sensors` se pide solo cuando se necesita: con la flota entera esa bandera
    * devolvió 502 de la pasarela —son 32 sensores por vehículo y 751 vehículos—,
    * así que pedirla «por si acaso» es la forma de convertir una consulta que
    * funciona en una que se cae.
+   *
+   * `lastMessagePosition` NO tiene ese problema: con la flota entera y
+   * contadores incluidos, la respuesta medida fueron 134 KB en 1,4 s. Es lo
+   * que hace viable el barrido de presencia en bases.
    */
-  private cuerpoVehiculos(ids: string[], conContadores: boolean, conSensores = false) {
+  private cuerpoVehiculos(
+    ids: string[],
+    conContadores: boolean,
+    conSensores = false,
+    conPosicion = false,
+  ) {
     return {
-      flags: { basicData: true, ...(conContadores ? { counters: true } : {}), ...(conSensores ? { sensors: true } : {}) },
+      flags: {
+        basicData: true,
+        ...(conContadores ? { counters: true } : {}),
+        ...(conSensores ? { sensors: true } : {}),
+        ...(conPosicion ? { lastMessagePosition: true } : {}),
+      },
       // Los ids son numéricos en Movertis. Lo que no sea un número se descarta
       // antes de preguntar: mandarlo como cadena devuelve la flota entera, y
       // «pregunté por uno y me contestaron por 751» es un fallo silencioso.
@@ -628,6 +647,42 @@ export class MovertisConnector implements ITelematicsConnector, ITripSummaryProv
       positionAt: posicion.positionAt,
       raw: { ...lectura.raw, ...posicion.raw },
     };
+  }
+
+  /**
+   * La posición de TODA la cuenta en una sola llamada.
+   *
+   * Es `showvehicles` con `lastMessagePosition`, y sustituye a 751 llamadas a
+   * `getCurrentTelemetry` por una. Se piden también los contadores porque
+   * vienen en la misma fila: el odómetro sale de propina, ya fechado con la
+   * posición, y quien barre las bases se ahorra otra vuelta si además quiere
+   * apuntar kilómetros.
+   *
+   * Los vehículos sin posición utilizable NO aparecen en la respuesta de esta
+   * función, y eso es deliberado: «no lo menciono» y «está fuera de las bases»
+   * son cosas distintas, y colarlo como una posición vacía obligaría a quien
+   * llama a volver a distinguirlas. `evaluarPresencia` recibe la ausencia y la
+   * clasifica como `NO_POSITION`.
+   *
+   * Aquí no se filtra por antigüedad. En esta cuenta el 21 % de la flota lleva
+   * más de un día sin emitir y el percentil 90 está en 16 días; decidir a
+   * partir de cuándo una posición ya no vale es política del que consume, no
+   * del conector, y va en `ANTIGUEDAD_MAX_MIN`.
+   */
+  async getFleetPositions(ctx: OperationContext): Promise<VehicleTelemetry[]> {
+    if (await this.enSimulacion(ctx)) return [];
+    const datos = await this.postear(
+      ctx,
+      this.rutas.vehicles,
+      this.cuerpoVehiculos([], true, false, true),
+    );
+    return filasDe(datos)
+      .map((f) => {
+        const id = f.idVehicle;
+        if (id === undefined || id === null || String(id) === "") return null;
+        return aPosicionDeFlota(f, this.opcionesMapeo, String(id));
+      })
+      .filter((l): l is VehicleTelemetry => l !== null);
   }
 
   /**

@@ -153,6 +153,19 @@ export const TELEMATICS_CAPABILITIES = {
    * este vehículo en septiembre» y recibir un número, no 40.000 puntos GPS.
    */
   TRIP_SUMMARY: "telematics:trip-summary",
+  /**
+   * Sabe dar la última posición de TODA la cuenta en UNA llamada.
+   *
+   * Es una capacidad aparte de `POSITION` porque la diferencia no es de
+   * información, es de coste: preguntar «¿dónde está cada uno?» vehículo a
+   * vehículo son 751 llamadas para esta flota, y el cupo del proveedor se
+   * agota antes. Movertis lo resuelve con la bandera `lastMessagePosition` de
+   * `showvehicles`: una petición, 751 posiciones, 134 KB, 1,4 s medidos.
+   *
+   * Sin esta capacidad NO hay presencia en bases: un barrido que tarda horas
+   * no contesta «qué autobuses hay ahora en el taller».
+   */
+  FLEET_POSITIONS: "telematics:fleet-positions",
 } as const;
 
 export type TelematicsCapability =
@@ -229,4 +242,34 @@ export interface ITripSummaryProvider {
 /** Comprueba en tiempo de ejecución si un conector sabe resumir distancias. */
 export function sabeResumirViajes(c: unknown): c is ITripSummaryProvider {
   return !!c && typeof (c as ITripSummaryProvider).getTripSummary === "function";
+}
+
+/**
+ * Proveedores que saben dar la posición de la cuenta entera de golpe.
+ *
+ * Interfaz aparte, por el mismo motivo que `ITripSummaryProvider`: Webfleet no
+ * lo implementa y no tiene por qué enterarse. Quien lo necesite comprueba
+ * `FLEET_POSITIONS` en las capacidades —o pregunta con
+ * `sabeDarPosicionesDeFlota`— y hace el cast, en vez de toparse con un
+ * `undefined` a mitad de un barrido.
+ */
+export interface IFleetPositionProvider {
+  /**
+   * Última posición conocida de cada vehículo de la cuenta.
+   *
+   * Devuelve una entrada por vehículo del que el proveedor diga algo. Un
+   * vehículo AUSENTE de la lista no está «fuera de las bases»: es que no se
+   * sabe, y quien llame tiene que distinguirlo —es la diferencia entre
+   * `OUTSIDE_BASES` y `NO_POSITION`—.
+   *
+   * Las lecturas llevan su `capturedAt` del proveedor, no la hora de la
+   * consulta: media flota emite hace minutos y la otra mitad hace semanas, así
+   * que sin esa fecha no se puede decidir si la posición sigue valiendo.
+   */
+  getFleetPositions(ctx: OperationContext): Promise<VehicleTelemetry[]>;
+}
+
+/** Comprueba en tiempo de ejecución si un conector sabe barrer la flota. */
+export function sabeDarPosicionesDeFlota(c: unknown): c is IFleetPositionProvider {
+  return !!c && typeof (c as IFleetPositionProvider).getFleetPositions === "function";
 }

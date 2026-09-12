@@ -53,11 +53,11 @@ export interface Delegacion {
   email?: string | null;
   activo: boolean;
   // Geo-zona de la base (Webfleet "vehículos en base")
-  webfleet_lat?: number | null;
-  webfleet_lng?: number | null;
-  webfleet_radio_m?: number | null;
-  webfleet_zona_nombre?: string | null;
-  webfleet_genera_avisos?: boolean;
+  base_lat?: number | null;
+  base_lng?: number | null;
+  base_radio_m?: number | null;
+  zona_externa_nombre?: string | null;
+  base_genera_avisos?: boolean;
   created_at?: string;
   updated_at?: string;
   empresa?: Empresa | null;
