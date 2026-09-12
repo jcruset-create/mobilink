@@ -56,6 +56,18 @@ export const FUENTE = "summarytrips";
 export const MESES_HISTORICO_POR_DEFECTO = 12;
 const UNIDADES_POR_PETICION_POR_DEFECTO = 25;
 const UNIDADES_POR_PETICION_MAXIMO = 100;
+/**
+ * Cortacircuito: tantos lotes SEGUIDOS rechazados por el proveedor y se
+ * abandona la cuenta en esta pasada.
+ *
+ * Visto en producción: Movertis empezó a contestar «Core Error: 4» a todo, y
+ * sin esto el job habría lanzado las cuatrocientas peticiones restantes una
+ * tras otra, fallando todas. Eso no es insistir, es martillear a un proveedor
+ * que ya ha dicho que no, y es la forma más rápida de que bloquee el token.
+ * La pasada siguiente lo vuelve a intentar desde donde se quedó (los meses
+ * cerrados ya no se piden).
+ */
+const LOTES_SEGUIDOS_FALLIDOS_MAXIMO = 5;
 
 /** Prefijo de la entrada en `integration_sync_state`; la cuenta va detrás. */
 export const ENTIDAD_SYNC = "vehicle_monthly_mileage";
@@ -193,6 +205,7 @@ async function sincronizarCuenta(
     const procesados = new Set<string>();
     const conKm = new Set<string>();
     const sinDatos = new Set<string>();
+    let lotesSeguidosFallidos = 0;
 
     for (const mes of meses) {
       const limites = limitesDelMes(mes, zona);
@@ -217,6 +230,11 @@ async function sincronizarCuenta(
         r.peticiones += 1;
         const porVehiculo = await pedirLote(ctx, conector, tanda, limites);
 
+        // Un lote entero en error es una respuesta del proveedor, no un
+        // vehículo raro: se cuentan seguidos y, pasado el tope, se para.
+        const loteFallido = tanda.length > 0 && tanda.every((e) => porVehiculo.get(e.mobilink_id)?.tipo === "error");
+        lotesSeguidosFallidos = loteFallido ? lotesSeguidosFallidos + 1 : 0;
+
         for (const enlace of tanda) {
           const res = porVehiculo.get(enlace.mobilink_id) ?? { tipo: "vacio" as const };
           procesados.add(enlace.mobilink_id);
@@ -237,6 +255,18 @@ async function sincronizarCuenta(
             sinDatos.add(enlace.mobilink_id);
           }
           await guardarFila(op.tenantId, cuenta, enlace, mes, limites, zona, res, cerrado);
+        }
+
+        if (lotesSeguidosFallidos >= LOTES_SEGUIDOS_FALLIDOS_MAXIMO) {
+          const ultimo = porVehiculo.get(tanda[0].mobilink_id);
+          r.abandonada =
+            `${LOTES_SEGUIDOS_FALLIDOS_MAXIMO} lotes seguidos rechazados por el proveedor; se deja para la ` +
+            `siguiente pasada. Último error: ${ultimo?.tipo === "error" ? ultimo.mensaje : "?"}`;
+          r.vehiculosProcesados = procesados.size;
+          r.vehiculosConKm = conKm.size;
+          r.vehiculosSinDatos = [...sinDatos].filter((id) => !conKm.has(id)).length;
+          await cerrarAuditoria(op.tenantId, cuenta, r, "error");
+          return r;
         }
       }
     }
