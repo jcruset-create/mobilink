@@ -4,6 +4,8 @@ import {
   conciliar, crearVehiculo, darDeBaja, dejarDeIgnorar, desvincular, ignorar, listarCuentas, vincular,
   type Conciliacion, type CuentaTelematica, type VehiculoInterno,
 } from "../services/conciliacion";
+import { listarEmpresas } from "../services/data";
+import type { Empresa } from "../types";
 
 /**
  * Conciliación telemática: qué vehículos del proveedor son cuáles de aquí.
@@ -55,6 +57,8 @@ function Externo({ v }: { v: { providerVehicleId: string; plate?: string; name?:
 }
 
 export default function ConciliacionTelematica() {
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [empresaId, setEmpresaId] = useState("");
   const [cuentas, setCuentas] = useState<CuentaTelematica[]>([]);
   const [cuenta, setCuenta] = useState<CuentaTelematica | null>(null);
   const [datos, setDatos] = useState<Conciliacion | null>(null);
@@ -63,28 +67,45 @@ export default function ConciliacionTelematica() {
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Cuadrante>("enlazados");
 
+  // Las empresas que la sesión puede ver: un administrador solo la suya, un
+  // super-admin todas. Sin este selector la pantalla se quedaba clavada en la
+  // empresa del perfil, y un super-admin no podía llegar a la de su cliente.
   useEffect(() => {
-    listarCuentas()
-      .then((r) => {
-        setCuentas(r.cuentas);
-        if (r.cuentas.length === 1) setCuenta(r.cuentas[0]);
+    listarEmpresas()
+      .then((e) => {
+        setEmpresas(e);
+        if (e.length && !empresaId) setEmpresaId(e[0].id);
       })
       .catch((e) => setError(e.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!empresaId) return;
+    setCuenta(null);
+    setDatos(null);
+    listarCuentas(empresaId)
+      .then((r) => {
+        setCuentas(r.cuentas);
+        // Con una sola cuenta se elige sola; con varias hay que decidir.
+        setCuenta(r.cuentas.length === 1 ? r.cuentas[0] : null);
+      })
+      .catch((e) => setError(e.message));
+  }, [empresaId]);
+
   const cargar = useCallback(async () => {
-    if (!cuenta) return;
+    if (!cuenta || !empresaId) return;
     setCargando(true);
     setError("");
     try {
-      setDatos(await conciliar({ connectorKey: cuenta.connectorKey, accountKey: cuenta.accountKey }));
+      setDatos(await conciliar({ empresaId, connectorKey: cuenta.connectorKey, accountKey: cuenta.accountKey }));
     } catch (e: any) {
       setError(e.message);
       setDatos(null);
     } finally {
       setCargando(false);
     }
-  }, [cuenta]);
+  }, [cuenta, empresaId]);
 
   useEffect(() => {
     void cargar();
@@ -103,7 +124,7 @@ export default function ConciliacionTelematica() {
     }
   }
 
-  const base = cuenta ? { connectorKey: cuenta.connectorKey, accountKey: cuenta.accountKey } : null;
+  const base = cuenta ? { empresaId, connectorKey: cuenta.connectorKey, accountKey: cuenta.accountKey } : null;
   const r = datos?.resumen;
   const completa = r?.status === "complete";
 
@@ -123,10 +144,22 @@ export default function ConciliacionTelematica() {
             Qué vehículos del proveedor son cuáles de TyreControl. Nada se enlaza ni se da de baja solo.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm"
+            value={empresaId}
+            onChange={(e) => setEmpresaId(e.target.value)}
+            aria-label="Empresa"
+          >
+            {empresas.length === 0 && <option value="">Cargando empresas…</option>}
+            {empresas.map((e) => (
+              <option key={e.id} value={e.id}>{e.nombre}</option>
+            ))}
+          </select>
           <select
             className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm"
             value={cuenta ? `${cuenta.connectorKey}|${cuenta.accountKey}` : ""}
+            aria-label="Cuenta telemática"
             onChange={(e) => {
               const [connectorKey, accountKey] = e.target.value.split("|");
               setCuenta(cuentas.find((c) => c.connectorKey === connectorKey && c.accountKey === accountKey) ?? null);
@@ -153,9 +186,10 @@ export default function ConciliacionTelematica() {
       {error && <div className="mb-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
       {msg && <div className="mb-3 rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-300">{msg}</div>}
 
-      {cuentas.length === 0 && !error && (
+      {empresaId && cuentas.length === 0 && !error && (
         <div className={`${CAJA} p-8 text-center text-slate-400`}>
-          Esta empresa no tiene ninguna cuenta de telemática configurada.
+          <b>{empresas.find((e) => e.id === empresaId)?.nombre ?? "Esta empresa"}</b> no tiene
+          ninguna cuenta de telemática configurada.
         </div>
       )}
 
