@@ -738,6 +738,7 @@ unitMinutes: job.unitMinutes ?? null,
 ptNumero: job.ptNumero ?? null,
 includedTasks: Array.isArray(job.includedTasks) ? job.includedTasks : [],
 materiales: Array.isArray(job.materiales) ? job.materiales : [],
+ptEntradaMs: job.ptEntradaMs ?? null,
   };
 }
 
@@ -2761,12 +2762,13 @@ if (interruptedMaintenanceTasks.length > 0) {
           "unitMinutes",
           "ptNumero",
           "includedTasks",
-          materiales
+          materiales,
+          "ptEntradaMs"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14, $15, $16, $17,
-          $18, $19, $20, $21, $22, $23, $24, $25, $26
+          $18, $19, $20, $21, $22, $23, $24, $25, $26, $27
         )
         ON CONFLICT (id) DO UPDATE SET
           area = EXCLUDED.area,
@@ -2796,7 +2798,8 @@ if (interruptedMaintenanceTasks.length > 0) {
           "unitMinutes" = COALESCE(EXCLUDED."unitMinutes", jobs."unitMinutes"),
           "ptNumero" = COALESCE(EXCLUDED."ptNumero", jobs."ptNumero"),
           "includedTasks" = COALESCE(EXCLUDED."includedTasks", jobs."includedTasks"),
-          materiales = COALESCE(EXCLUDED.materiales, jobs.materiales)
+          materiales = COALESCE(EXCLUDED.materiales, jobs.materiales),
+          "ptEntradaMs" = COALESCE(EXCLUDED."ptEntradaMs", jobs."ptEntradaMs")
         RETURNING *
       `,
       [
@@ -2833,6 +2836,9 @@ if (interruptedMaintenanceTasks.length > 0) {
           : null,
         Array.isArray(job.materiales) && job.materiales.length > 0
           ? JSON.stringify(job.materiales)
+          : null,
+        Number.isFinite(Number(job.ptEntradaMs)) && Number(job.ptEntradaMs) > 0
+          ? Math.round(Number(job.ptEntradaMs))
           : null,
       ]
     );

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resumenTarjeta } from "./tarjetaTrabajo";
+import { formatoEntradaParte, resumenTarjeta } from "./tarjetaTrabajo";
 import type { IncludedTask } from "./quickTaskSelector";
 
 function tarea(parcial: Partial<IncludedTask>): IncludedTask {
@@ -151,5 +151,31 @@ describe("resumenTarjeta · datos corruptos", () => {
     const r = resumenTarjeta({ operacionPrincipal: "  ", includedTasks: [], materiales: [] });
 
     expect(r.manoDeObra).toEqual([]);
+  });
+});
+
+describe("formatoEntradaParte", () => {
+  const entrada = new Date(2026, 8, 10, 17, 27, 57).getTime(); // 10/09/2026 17:27:57
+
+  it("enseña fecha y hora, sin segundos", () => {
+    expect(formatoEntradaParte(entrada)).toBe("10/09/2026 17:27");
+  });
+
+  it("acepta el BIGINT que Postgres devuelve como cadena", () => {
+    expect(formatoEntradaParte(String(entrada))).toBe("10/09/2026 17:27");
+  });
+
+  it("rellena con cero el día, el mes y la hora", () => {
+    const temprano = new Date(2026, 0, 5, 8, 5, 0).getTime();
+    expect(formatoEntradaParte(temprano)).toBe("05/01/2026 08:05");
+  });
+
+  it("devuelve cadena vacía si no hay hora: la tarjeta no pinta nada", () => {
+    expect(formatoEntradaParte(null)).toBe("");
+    expect(formatoEntradaParte(undefined)).toBe("");
+    expect(formatoEntradaParte(0)).toBe("");
+    expect(formatoEntradaParte(-1)).toBe("");
+    expect(formatoEntradaParte("")).toBe("");
+    expect(formatoEntradaParte("no es una fecha")).toBe("");
   });
 });

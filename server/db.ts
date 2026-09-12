@@ -1143,6 +1143,10 @@ export async function initDb() {
     --    suelta dentro del motivo, ni consultable ni imputable.
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "includedTasks" JSONB DEFAULT NULL;
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS materiales JSONB DEFAULT NULL;
+
+    -- Fecha y hora de ENTRADA que trae el parte, no la de volcarlo a la
+    -- aplicación. Se calculaba y se tiraba.
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "ptEntradaMs" BIGINT DEFAULT NULL;
   `);
 
   // Cupo anual de vacaciones y modo de cómputo. Una fila por taller y año con

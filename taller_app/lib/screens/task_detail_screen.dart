@@ -180,8 +180,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
             _info('Asignado a',
                 _job.assignedNames.isEmpty ? 'Sin asignar' : _job.assignedNames.join(', ')),
             if (_job.customerName.isNotEmpty) _info('Cliente', _job.customerName),
-            if (_job.ptNumero != null && _job.ptNumero!.isNotEmpty)
-              _info('Parte de trabajo', _job.ptNumero!),
+            if (_job.parteConEntrada.isNotEmpty)
+              _info('Parte de trabajo', _job.parteConEntrada),
             if (_job.actualMinutes != null)
               _info('Tiempo total', '${_job.actualMinutes} min'),
             ..._bloquesDelParte(),

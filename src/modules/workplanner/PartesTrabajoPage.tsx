@@ -366,6 +366,8 @@ export default function PartesTrabajoPage() {
           quantity: propuesto.quantity,
           unitMinutes: propuesto.unitMinutes,
           ptNumero: propuesto.ptNumero,
+          // La hora del parte, no la de volcarlo: es cuando entró el vehículo.
+          ptEntradaMs: propuesto.arrivedAtMs,
         };
 
         // El motor de asignación de siempre: competencias, orden del área,

@@ -8,6 +8,7 @@ import 'package:taller_app/models/job.dart';
 /// técnico en blanco sin ningún error visible.
 void main() {
   _pruebasDelParte();
+  _pruebasDelParteConEntrada();
   group('Job.fromJson', () {
     test('lee un trabajo completo del backend', () {
       final job = Job.fromJson({
@@ -195,6 +196,54 @@ void _pruebasDelParte() {
       expect(job.quantity, 4);
       expect(job.materiales.single.unidades, 4);
       expect(job.minutosManoDeObra('Montaje'), 100);
+    });
+  });
+}
+
+void _pruebasDelParteConEntrada() {
+  group('parte con hora de entrada', () {
+    test('junta número y fecha y hora del parte', () {
+      final entrada = DateTime(2026, 9, 10, 17, 27, 57).millisecondsSinceEpoch;
+
+      final job = Job.fromJson({
+        'id': 1,
+        'area': 'camion',
+        'plate': '8072MNC',
+        'status': 'activo',
+        'ptNumero': 'D2_26/62',
+        'ptEntradaMs': entrada,
+      });
+
+      expect(job.parteConEntrada, 'D2_26/62 · 10/09/2026 17:27');
+    });
+
+    test('lee la hora aunque Postgres la mande como cadena', () {
+      final entrada = DateTime(2026, 1, 5, 8, 5).millisecondsSinceEpoch;
+
+      final job = Job.fromJson({
+        'id': 1,
+        'area': 'camion',
+        'plate': '8072MNC',
+        'status': 'activo',
+        'ptNumero': 'B2_26/3.857',
+        'ptEntradaMs': '$entrada',
+      });
+
+      expect(job.parteConEntrada, 'B2_26/3.857 · 05/01/2026 08:05');
+    });
+
+    test('sin hora, solo el número; sin número, nada', () {
+      final sinHora = Job.fromJson({
+        'id': 1, 'area': 'camion', 'plate': 'X', 'status': 'activo',
+        'ptNumero': 'D2_26/62',
+      });
+
+      final sinParte = Job.fromJson({
+        'id': 2, 'area': 'camion', 'plate': 'X', 'status': 'activo',
+      });
+
+      expect(sinHora.parteConEntrada, 'D2_26/62');
+      expect(sinParte.parteConEntrada, '');
     });
   });
 }

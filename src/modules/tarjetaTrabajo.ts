@@ -129,3 +129,29 @@ export function resumenTarjeta({
     materiales: materialesLimpios,
   };
 }
+
+/**
+ * Fecha y hora de entrada del parte, para ponerla junto a su número.
+ *
+ * Llega de una columna BIGINT, que el driver de Postgres serializa como
+ * CADENA para no perder precisión: hay que tolerarlo o la tarjeta se queda
+ * sin el dato sin decir por qué.
+ */
+export function formatoEntradaParte(valor: unknown): string {
+  const ms =
+    typeof valor === "string" ? Number(valor.trim()) : Number(valor);
+
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+
+  const fecha = new Date(ms);
+
+  if (Number.isNaN(fecha.getTime())) return "";
+
+  const dd = String(fecha.getDate()).padStart(2, "0");
+  const mm = String(fecha.getMonth() + 1).padStart(2, "0");
+  const aaaa = fecha.getFullYear();
+  const hh = String(fecha.getHours()).padStart(2, "0");
+  const min = String(fecha.getMinutes()).padStart(2, "0");
+
+  return `${dd}/${mm}/${aaaa} ${hh}:${min}`;
+}

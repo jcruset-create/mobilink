@@ -1,7 +1,7 @@
 // @ts-nocheck — maintenance functions kept for future re-activation (UI removed in v2.2.10)
 import { apiFetch } from "../modules/apiFetch";
 import { useEffect, useState } from "react";
-import { resumenTarjeta } from "../modules/tarjetaTrabajo";
+import { formatoEntradaParte, resumenTarjeta } from "../modules/tarjetaTrabajo";
 
 type AreaKey = "camion" | "movil" | "tacografo" | "turismo" | "mecanica";
 
@@ -39,6 +39,7 @@ type JobForOperarios = {
   }[];
   quantity?: number | null;
   ptNumero?: string | null;
+  ptEntradaMs?: number | string | null;
   materiales?: {
     descripcion: string;
     unidades: number;
@@ -1309,9 +1310,14 @@ export default function OperariosTVView({
                           {job.ptNumero && (
                             <span
                               className="rounded-full bg-slate-900 px-3 py-1 text-xs font-bold text-white"
-                              title="Nº del parte de trabajo"
+                              title="Parte de trabajo y hora de entrada del vehículo"
                             >
                               Parte {job.ptNumero}
+                              {formatoEntradaParte(job.ptEntradaMs) && (
+                                <span className="ml-2 font-medium text-slate-300">
+                                  {formatoEntradaParte(job.ptEntradaMs)}
+                                </span>
+                              )}
                             </span>
                           )}
                         </div>
