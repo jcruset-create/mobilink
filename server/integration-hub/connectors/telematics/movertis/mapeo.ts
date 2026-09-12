@@ -516,3 +516,93 @@ export function puntosDeUnidad(
   const coords = (suya as Record<string, unknown> | undefined)?.coords;
   return Array.isArray(coords) ? (coords as Record<string, unknown>[]) : [];
 }
+
+// ── Resúmenes de viajes (`summarytrips`) ────────────────────────────────────
+
+/**
+ * Un resumen de distancia tal y como lo cuenta Movertis, ya separado por
+ * unidad y con los números limpios. Sin unidad de medida todavía: eso lo
+ * resuelve el conector con su config, igual que con el odómetro.
+ */
+export interface ResumenViajeCrudo {
+  unit: string;
+  total?: number;
+  inicial?: number;
+  final?: number;
+  viajes?: number;
+  raw: Record<string, unknown>;
+}
+
+/** Con qué nombres puede venir la unidad dentro de un resumen. */
+const CLAVES_UNIDAD = ["unit", "unit_id", "unitId", "id", "vehicle_id", "vehicleId"];
+
+function unidadDe(fila: Record<string, unknown>): string | undefined {
+  for (const k of CLAVES_UNIDAD) {
+    const v = fila[k];
+    if (v !== undefined && v !== null && v !== "") return String(v);
+  }
+  return undefined;
+}
+
+function aResumen(fila: Record<string, unknown>, unit: string): ResumenViajeCrudo {
+  return {
+    unit,
+    total: numero(fila.total_mileage),
+    inicial: numero(fila.initial_mileage),
+    final: numero(fila.final_mileage),
+    viajes: Array.isArray(fila.trips) ? fila.trips.length : numero(fila.trips),
+    raw: fila,
+  };
+}
+
+/**
+ * Separa la respuesta de `summarytrips` por unidad.
+ *
+ * La forma exacta de la respuesta con VARIAS unidades no está confirmada por
+ * la sonda —el proxy de este entorno no llega a Movertis—, así que se aceptan
+ * las tres que puede tener sin inventar ninguna:
+ *
+ *   1. Una lista de objetos, cada uno con su `unit` (como hace `showtrips`).
+ *   2. Un objeto indexado por identificador de unidad: `{"26053725": {...}}`.
+ *   3. Un único objeto con los campos directamente, cuando se pidió UNA
+ *      unidad y el proveedor no la repite. Solo se acepta si se pidió una:
+ *      con varias, un objeto suelto no se puede atribuir a nadie y se
+ *      devuelve vacío en vez de colgárselo a la primera.
+ *
+ * Lo que no trae `total_mileage` ni odómetros no es un resumen: se descarta.
+ */
+export function resumenesDe(respuesta: unknown, pedidas: string[]): ResumenViajeCrudo[] {
+  const tieneDatos = (f: Record<string, unknown>) =>
+    numero(f.total_mileage) !== undefined ||
+    numero(f.initial_mileage) !== undefined ||
+    numero(f.final_mileage) !== undefined;
+
+  // Forma 1, o un envoltorio `data`/`results` alrededor de la lista.
+  const lista = filasDe(respuesta);
+  if (lista.length) {
+    return lista
+      .filter((f) => f && typeof f === "object" && tieneDatos(f))
+      .map((f) => {
+        const unit = unidadDe(f) ?? (pedidas.length === 1 ? pedidas[0] : undefined);
+        return unit ? aResumen(f, unit) : null;
+      })
+      .filter((r): r is ResumenViajeCrudo => r !== null);
+  }
+
+  if (!respuesta || typeof respuesta !== "object") return [];
+  const o = respuesta as Record<string, unknown>;
+
+  // Forma 3: un solo objeto con los campos, y una sola unidad pedida.
+  if (tieneDatos(o)) {
+    const unit = unidadDe(o) ?? (pedidas.length === 1 ? pedidas[0] : undefined);
+    return unit ? [aResumen(o, unit)] : [];
+  }
+
+  // Forma 2: indexado por unidad.
+  const pedidasSet = new Set(pedidas.map(String));
+  return Object.entries(o)
+    .filter(([k, v]) => pedidasSet.has(String(k)) && v && typeof v === "object" && !Array.isArray(v))
+    .map(([unit, v]) => ({ unit, f: v as Record<string, unknown> }))
+    .filter(({ f }) => tieneDatos(f))
+    .map(({ f, unit }) => aResumen(f, unidadDe(f) ?? unit));
+}

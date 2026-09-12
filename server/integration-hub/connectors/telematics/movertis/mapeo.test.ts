@@ -26,6 +26,7 @@ import {
   numero,
   odometroDeCounters,
   puntosDeUnidad,
+  resumenesDe,
   valorMovertis,
   type OpcionesMapeo,
 } from "./mapeo.ts";
@@ -447,5 +448,57 @@ describe("puntosDeUnidad()", () => {
     expect(puntosDeUnidad([{ unit: 1, coords: [] }], "1")).toEqual([]);
     expect(puntosDeUnidad([], "1")).toEqual([]);
     expect(puntosDeUnidad(null, "1")).toEqual([]);
+  });
+});
+
+/**
+ * `summarytrips`: la forma con varias unidades NO está confirmada por la
+ * sonda. Se fijan las tres formas que puede tener y, sobre todo, lo que no se
+ * hace: colgarle a la primera unidad un objeto suelto cuando se pidieron dos.
+ */
+describe("resumenesDe()", () => {
+  const RESUMEN = { initial_mileage: 512480, final_mileage: 520322, total_mileage: 7842, max_speed: 96, trips: 41 };
+
+  it("forma 1: lista con `unit` por entrada", () => {
+    const r = resumenesDe(
+      [{ unit: 26053725, ...RESUMEN }, { unit: 30089320, ...RESUMEN, total_mileage: 8104 }],
+      ["26053725", "30089320"],
+    );
+    expect(r.map((x) => [x.unit, x.total])).toEqual([["26053725", 7842], ["30089320", 8104]]);
+    expect(r[0].inicial).toBe(512480);
+    expect(r[0].final).toBe(520322);
+    expect(r[0].viajes).toBe(41);
+  });
+
+  it("forma 1 con `trips` como lista: se cuenta la lista", () => {
+    const r = resumenesDe([{ unit: 1, ...RESUMEN, trips: [{}, {}, {}] }], ["1"]);
+    expect(r[0].viajes).toBe(3);
+  });
+
+  it("forma 2: objeto indexado por unidad", () => {
+    const r = resumenesDe({ "26053725": RESUMEN, "30089320": { ...RESUMEN, total_mileage: 1 } }, ["26053725", "30089320"]);
+    expect(r.map((x) => [x.unit, x.total])).toEqual([["26053725", 7842], ["30089320", 1]]);
+  });
+
+  it("forma 3: un objeto suelto se atribuye SOLO si se pidió una unidad", () => {
+    expect(resumenesDe(RESUMEN, ["26053725"])).toMatchObject([{ unit: "26053725", total: 7842 }]);
+    // Con dos pedidas, ¿de quién es? De nadie: vacío en vez de adivinar.
+    expect(resumenesDe(RESUMEN, ["26053725", "30089320"])).toEqual([]);
+  });
+
+  it("una entrada sin ningún kilometraje no es un resumen", () => {
+    expect(resumenesDe([{ unit: 1, max_speed: 90 }], ["1"])).toEqual([]);
+  });
+
+  it("respuesta vacía, nula o rara: vacío, no excepción", () => {
+    expect(resumenesDe([], ["1"])).toEqual([]);
+    expect(resumenesDe(null, ["1"])).toEqual([]);
+    expect(resumenesDe("nada", ["1"])).toEqual([]);
+    expect(resumenesDe({ data: [] }, ["1"])).toEqual([]);
+  });
+
+  it("los números vienen como cadena con coma y se leen igual", () => {
+    const r = resumenesDe([{ unit: "7", total_mileage: "7842,5" }], ["7"]);
+    expect(r[0].total).toBe(7842.5);
   });
 });

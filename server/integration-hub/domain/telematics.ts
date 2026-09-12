@@ -27,6 +27,8 @@
  * número, porque una operación de neumático se casa con la lectura más cercana
  * en el tiempo y hay que poder decir a cuánta distancia estaba.
  */
+import type { OperationContext } from "./identifiers.ts";
+
 export interface VehicleTelemetry {
   /** Conector que la produjo: `movertis`, `webfleet`… Es el `connector_key`. */
   provider: string;
@@ -144,6 +146,13 @@ export const TELEMATICS_CAPABILITIES = {
   POSITION: "telematics:position",
   /** Sus lecturas traen combustible. */
   FUEL: "telematics:fuel",
+  /**
+   * Sabe resumir la distancia recorrida en una ventana, sin bajar a posiciones.
+   *
+   * Es lo que hace falta para el kilometraje mensual: pedir «cuánto se movió
+   * este vehículo en septiembre» y recibir un número, no 40.000 puntos GPS.
+   */
+  TRIP_SUMMARY: "telematics:trip-summary",
 } as const;
 
 export type TelematicsCapability =
@@ -166,4 +175,58 @@ export function esPosicionValida(lat: unknown, lng: unknown): boolean {
   if (!Number.isFinite(la) || !Number.isFinite(ln)) return false;
   if (la === 0 && ln === 0) return false;
   return la >= -90 && la <= 90 && ln >= -180 && ln <= 180;
+}
+
+/**
+ * Distancia recorrida por un vehículo en una ventana, según el proveedor.
+ *
+ * Es un RESUMEN que calcula el proveedor, no una lectura del equipo: por eso
+ * no lleva `capturedAt` ni entra en `VehicleTelemetry`. El odómetro inicial y
+ * final se conservan cuando vienen, porque permiten comprobar el total
+ * (`final - initial` debería cuadrar) y detectar un resumen roto sin volver a
+ * preguntar.
+ */
+export interface TripSummary {
+  provider: string;
+  accountKey: string;
+  providerVehicleId: string;
+  window: TelemetryWindow;
+  /** Kilómetros recorridos en la ventana. Ya en km, con la unidad resuelta. */
+  distanceKm: number;
+  /** Odómetro al inicio y al final de la ventana, en km, si el proveedor los da. */
+  initialOdometerKm?: number;
+  finalOdometerKm?: number;
+  /** Número de viajes contados por el proveedor, si lo dice. */
+  trips?: number;
+  raw?: Record<string, unknown>;
+}
+
+/**
+ * Proveedores que saben resumir distancias.
+ *
+ * Es una interfaz APARTE de `ITelematicsConnector`, no un método opcional
+ * dentro: así Webfleet, que no lo implementa, ni se entera de que existe, y
+ * quien lo necesite comprueba `TRIP_SUMMARY` en las capacidades y hace el
+ * cast, en vez de encontrarse un `undefined` a mitad de una sincronización.
+ */
+export interface ITripSummaryProvider {
+  /**
+   * Resumen de VARIOS vehículos en UNA llamada.
+   *
+   * Que acepte una lista es deliberado: el proveedor limita las peticiones,
+   * no los vehículos por petición, así que agruparlos es la diferencia entre
+   * 30 llamadas y 750. Devuelve una entrada por vehículo con datos; los que
+   * el proveedor no menciona simplemente no aparecen, y quien llama decide
+   * qué significa esa ausencia.
+   */
+  getTripSummary(
+    ctx: OperationContext,
+    providerVehicleIds: string[],
+    window: TelemetryWindow,
+  ): Promise<TripSummary[]>;
+}
+
+/** Comprueba en tiempo de ejecución si un conector sabe resumir distancias. */
+export function sabeResumirViajes(c: unknown): c is ITripSummaryProvider {
+  return !!c && typeof (c as ITripSummaryProvider).getTripSummary === "function";
 }

@@ -17,6 +17,7 @@ import {
 import { runCatalogSync } from "./application/services/CatalogSyncService.ts";
 import { runSalesOrderSync } from "./application/services/SalesOrderSyncService.ts";
 import { tenantsWithEnabledConnector } from "./infrastructure/repositories.ts";
+import { startMonthlyMileageWorker } from "./workers/MonthlyMileageWorker.ts";
 
 export { initIntegrationHub, stopIntegrationWorker };
 
@@ -68,6 +69,9 @@ function runOrdersSyncForAllTenants(): Promise<void> {
 /** Arranca el worker de reprocesos y, si procede, la sync programada de catálogo. */
 export function startIntegrationWorker(): void {
   startRetryWorker();
+  // Kilómetros mensuales desde la telemática: diario, de madrugada, con la
+  // cadencia anclada en la base y no en este arranque.
+  startMonthlyMileageWorker();
   if (CATALOG_SYNC_HOURS > 0 && !catalogTimer) {
     catalogTimer = setInterval(() => void runCatalogSyncForAllTenants(), CATALOG_SYNC_HOURS * 3600_000);
     // Primera pasada al arrancar, con retardo corto para no competir con el boot.

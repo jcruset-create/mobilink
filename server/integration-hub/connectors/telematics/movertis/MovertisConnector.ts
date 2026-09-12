@@ -82,8 +82,10 @@ import { IntegrationError } from "../../../domain/errors.ts";
 import { getSecretsProvider } from "../../../infrastructure/secrets.ts";
 import {
   TELEMATICS_CAPABILITIES,
+  type ITripSummaryProvider,
   type ProviderVehicle,
   type TelemetryWindow,
+  type TripSummary,
   type VehicleTelemetry,
 } from "../../../domain/telematics.ts";
 import {
@@ -93,6 +95,8 @@ import {
   filasDe,
   masCercana,
   puntosDeUnidad,
+  resumenesDe,
+  aKilometros,
   type UnidadOdometro,
 } from "./mapeo.ts";
 
@@ -108,6 +112,8 @@ export interface RutasMovertis {
   vehicles?: string;
   /** Histórico de posiciones. POST. */
   trips?: string;
+  /** Resumen de distancia por unidad y ventana. POST. */
+  summary?: string;
 }
 
 export interface MovertisConfig {
@@ -143,6 +149,19 @@ export interface MovertisConfig {
    * `"bearer"` le pone el prefijo, por si alguna instalación lo espera.
    */
   esquemaToken?: "raw" | "bearer";
+  /**
+   * Unidad de `total_mileage` en `summarytrips`. Si no se declara, se usa la
+   * del odómetro (`odometroEn`); si tampoco, el resumen sale SIN kilómetros,
+   * por la misma trampa de las unidades que se explica en `mapeo.ts`.
+   */
+  distanciaEn?: UnidadOdometro;
+  /** Unidades por petición a `summarytrips`. Ver `UNIDADES_POR_PETICION`. */
+  unidadesPorPeticion?: number;
+  /**
+   * Zona horaria con la que se cortan los meses del kilometraje mensual.
+   * Por defecto Europe/Madrid, que es la de toda la casa.
+   */
+  zonaHoraria?: string;
   /** Timeout por petición en ms (por defecto 30 s). */
   timeoutMs?: number;
   /** Reintentos ante 429/5xx/red antes de rendirse. */
@@ -152,7 +171,25 @@ export interface MovertisConfig {
 const RUTAS_POR_DEFECTO: Required<RutasMovertis> = {
   vehicles: "/vehicle/showvehicles",
   trips: "/vehicle/showtrips",
+  summary: "/vehicle/summarytrips",
 };
+
+/**
+ * Cuántas unidades van en cada `summarytrips` si la config no dice otra cosa.
+ *
+ * Veinticinco es un punto de partida sobrio, no un óptimo medido: la sonda de
+ * este entorno no llega a Movertis, así que la respuesta de la API con 50 no
+ * se ha visto. Con 751 vehículos son 31 peticiones por mes; cabe de sobra en
+ * el cupo y deja sitio para subirlo cuando se haya visto que aguanta.
+ */
+export const UNIDADES_POR_PETICION = 25;
+
+/**
+ * Tope al `Retry-After` que se obedece. Un proveedor que pida esperar una hora
+ * se respeta hasta aquí; más allá, se rinde y lo cuenta, porque un job colgado
+ * sesenta minutos en un `await` es peor de diagnosticar que un fallo.
+ */
+const RETRY_AFTER_MAXIMO_MS = 120_000;
 
 /**
  * Cuánto se mira hacia atrás buscando la última emisión del vehículo.
@@ -172,7 +209,7 @@ interface Credenciales {
   password?: string;
 }
 
-export class MovertisConnector implements ITelematicsConnector {
+export class MovertisConnector implements ITelematicsConnector, ITripSummaryProvider {
   readonly info: ConnectorInfo = {
     key: "movertis",
     kind: "telematics",
@@ -195,6 +232,7 @@ export class MovertisConnector implements ITelematicsConnector {
       TELEMATICS_CAPABILITIES.HISTORY,
       TELEMATICS_CAPABILITIES.ODOMETER,
       TELEMATICS_CAPABILITIES.POSITION,
+      TELEMATICS_CAPABILITIES.TRIP_SUMMARY,
     ],
   };
 
@@ -308,6 +346,11 @@ export class MovertisConnector implements ITelematicsConnector {
           throw IntegrationError.notFound("MOVERTIS_NOT_FOUND", `Movertis no conoce ${ruta}`);
         }
 
+        // Ante un 429 el proveedor puede decir cuánto esperar. Se obedece
+        // (con tope): dormir lo que pide es lo que evita el bloqueo del token,
+        // que es el fallo que más cuesta deshacer.
+        const retryAfterMs = esperaPedida(r);
+
         const texto = await r.text();
         let datos: unknown;
         try {
@@ -317,10 +360,12 @@ export class MovertisConnector implements ITelematicsConnector {
           // de la pasarela llega como HTML y es transitorio, no un JSON roto.
           if (r.status === 429 || r.status >= 500) {
             ultimo = IntegrationError.transient(
-              "MOVERTIS_UNAVAILABLE",
-              `Movertis no disponible (HTTP ${r.status})`,
+              r.status === 429 ? "MOVERTIS_RATE_LIMITED" : "MOVERTIS_UNAVAILABLE",
+              r.status === 429
+                ? "Movertis está limitando las peticiones (HTTP 429)"
+                : `Movertis no disponible (HTTP ${r.status})`,
             );
-            if (intento < maxRetries) { await espera(2 ** intento * 500); continue; }
+            if (intento < maxRetries) { await espera(retryAfterMs ?? 2 ** intento * 500); continue; }
             throw ultimo;
           }
           throw IntegrationError.permanent(
@@ -340,10 +385,12 @@ export class MovertisConnector implements ITelematicsConnector {
             );
           }
           ultimo = IntegrationError.transient(
-            "MOVERTIS_UNAVAILABLE",
-            `Movertis no disponible (HTTP ${r.status})`,
+            r.status === 429 ? "MOVERTIS_RATE_LIMITED" : "MOVERTIS_UNAVAILABLE",
+            r.status === 429
+              ? "Movertis está limitando las peticiones (HTTP 429)"
+              : `Movertis no disponible (HTTP ${r.status})`,
           );
-          if (intento < maxRetries) { await espera(2 ** intento * 500); continue; }
+          if (intento < maxRetries) { await espera(retryAfterMs ?? 2 ** intento * 500); continue; }
           throw ultimo;
         }
 
@@ -427,6 +474,73 @@ export class MovertisConnector implements ITelematicsConnector {
         end_date: window.to.getTime(),
       },
     ];
+  }
+
+  /**
+   * Cuerpo de `summarytrips`: varias unidades, una ventana. La API pide rangos
+   * de como mucho un mes; quien llame corta por meses, aquí no se comprueba
+   * porque la ventana ya llega cortada.
+   */
+  private cuerpoResumen(providerVehicleIds: string[], window: TelemetryWindow) {
+    return {
+      units: providerVehicleIds.map((x) => Number(x)).filter((n) => Number.isFinite(n)),
+      initial_date: window.from.getTime(),
+      end_date: window.to.getTime(),
+    };
+  }
+
+  /** Unidad de la distancia: la declarada, o la del odómetro. Ver la config. */
+  private get unidadDistancia(): UnidadOdometro | undefined {
+    return this.config.distanciaEn ?? this.config.odometroEn;
+  }
+
+  /**
+   * Resumen de distancia de varias unidades en una ventana (`summarytrips`).
+   *
+   * Una llamada por lote, no por vehículo: es lo que hace viable la flota de
+   * 751 sin acercarse al cupo. Devuelve solo las unidades de las que Movertis
+   * dijo algo; una que falte es «sin datos en la ventana» para quien llame.
+   *
+   * Sin unidad de medida declarada no se llama siquiera: se lanza un error de
+   * configuración, que es lo único honesto. Guardar metros como kilómetros
+   * dejaría un histórico mil veces menor que nadie cuestionaría.
+   */
+  async getTripSummary(
+    ctx: OperationContext,
+    providerVehicleIds: string[],
+    window: TelemetryWindow,
+  ): Promise<TripSummary[]> {
+    if (providerVehicleIds.length === 0) return [];
+    if (await this.enSimulacion(ctx)) return [];
+    const unidad = this.unidadDistancia;
+    if (!unidad) {
+      throw IntegrationError.validation(
+        "MOVERTIS_SIN_UNIDAD",
+        "Movertis sin `distanciaEn` ni `odometroEn` en la config: no se puede saber si " +
+          "`total_mileage` viene en km o en m, y no se va a adivinar.",
+      );
+    }
+
+    const datos = await this.postear(ctx, this.rutas.summary, this.cuerpoResumen(providerVehicleIds, window));
+    return resumenesDe(datos, providerVehicleIds)
+      .map((r): TripSummary | null => {
+        const distanceKm = aKilometros(r.total, unidad);
+        // Sin total no hay resumen; los odómetros solos no dicen cuánto se movió
+        // (podría faltar un tramo) y no se reconstruye restando.
+        if (distanceKm === undefined) return null;
+        return {
+          provider: this.info.key,
+          accountKey: this.config.accountKey ?? "default",
+          providerVehicleId: r.unit,
+          window,
+          distanceKm,
+          initialOdometerKm: aKilometros(r.inicial, unidad),
+          finalOdometerKm: aKilometros(r.final, unidad),
+          trips: r.viajes,
+          raw: r.raw,
+        };
+      })
+      .filter((r): r is TripSummary => r !== null);
   }
 
   // ── Contrato ───────────────────────────────────────────────────────────────
@@ -584,6 +698,28 @@ export function mensajeDeError(datos: unknown): string | null {
 }
 
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Cuánto pide esperar el proveedor en `Retry-After`, en ms, o `undefined`.
+ *
+ * Acepta segundos (lo habitual) y una fecha HTTP. Se acota a
+ * `RETRY_AFTER_MAXIMO_MS`: obedecer es lo correcto, colgarse una hora no.
+ */
+export function esperaPedida(r: { status: number; headers: { get(n: string): string | null } }): number | undefined {
+  if (r.status !== 429 && r.status !== 503) return undefined;
+  const v = r.headers.get("retry-after");
+  if (!v) return undefined;
+  const seg = Number(v);
+  let ms: number;
+  if (Number.isFinite(seg)) ms = seg * 1000;
+  else {
+    const fecha = Date.parse(v);
+    if (!Number.isFinite(fecha)) return undefined;
+    ms = fecha - Date.now();
+  }
+  if (ms <= 0) return undefined;
+  return Math.min(ms, RETRY_AFTER_MAXIMO_MS);
+}
 
 /**
  * Por qué no se pudo ni hablar con Movertis, dicho de forma accionable.
