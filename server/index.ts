@@ -735,6 +735,8 @@ assignedVehicleName: job.assignedVehicleName ?? null,
 quantity: job.quantity ?? null,
 unitMinutes: job.unitMinutes ?? null,
 ptNumero: job.ptNumero ?? null,
+includedTasks: Array.isArray(job.includedTasks) ? job.includedTasks : [],
+materiales: Array.isArray(job.materiales) ? job.materiales : [],
   };
 }
 
@@ -2756,12 +2758,14 @@ if (interruptedMaintenanceTasks.length > 0) {
           "assignedVehicleName",
           quantity,
           "unitMinutes",
-          "ptNumero"
+          "ptNumero",
+          "includedTasks",
+          materiales
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9,
           $10, $11, $12, $13, $14, $15, $16, $17,
-          $18, $19, $20, $21, $22, $23, $24
+          $18, $19, $20, $21, $22, $23, $24, $25, $26
         )
         ON CONFLICT (id) DO UPDATE SET
           area = EXCLUDED.area,
@@ -2789,7 +2793,9 @@ if (interruptedMaintenanceTasks.length > 0) {
           -- todos los sitios conocen la cantidad ni el parte de origen.
           quantity = COALESCE(EXCLUDED.quantity, jobs.quantity),
           "unitMinutes" = COALESCE(EXCLUDED."unitMinutes", jobs."unitMinutes"),
-          "ptNumero" = COALESCE(EXCLUDED."ptNumero", jobs."ptNumero")
+          "ptNumero" = COALESCE(EXCLUDED."ptNumero", jobs."ptNumero"),
+          "includedTasks" = COALESCE(EXCLUDED."includedTasks", jobs."includedTasks"),
+          materiales = COALESCE(EXCLUDED.materiales, jobs.materiales)
         RETURNING *
       `,
       [
@@ -2821,6 +2827,12 @@ if (interruptedMaintenanceTasks.length > 0) {
           ? Math.round(Number(job.unitMinutes))
           : null,
         String(job.ptNumero || "").trim() || null,
+        Array.isArray(job.includedTasks) && job.includedTasks.length > 0
+          ? JSON.stringify(job.includedTasks)
+          : null,
+        Array.isArray(job.materiales) && job.materiales.length > 0
+          ? JSON.stringify(job.materiales)
+          : null,
       ]
     );
 
@@ -11767,7 +11779,8 @@ app.post("/api/partes-trabajo/leer", protectWhenStrict(requirePanelRole), async 
         '  "km": number|null,',
         '  "lineas": [                  // tabla PRODUCTOS Y SERVICIOS',
         '    { "descripcion": string, "unidades": number,',
-        '      "precioUnitario": number|null, "precioTotal": number|null }',
+        '      "precioUnitario": number|null, "precioTotal": number|null,',
+        '      "pvp": number|null }',
         "  ]",
         "}",
         "",
@@ -11798,6 +11811,7 @@ app.post("/api/partes-trabajo/leer", protectWhenStrict(requirePanelRole), async 
               unidades: Number(l?.unidades) || 0,
               precioUnitario: l?.precioUnitario == null ? null : Number(l.precioUnitario),
               precioTotal: l?.precioTotal == null ? null : Number(l.precioTotal),
+              pvp: l?.pvp == null ? null : Number(l.pvp),
             }))
           : [],
       },
