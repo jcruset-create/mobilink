@@ -27,9 +27,11 @@ instante que importa ya es pasado, **y Movertis no sabe decir el odómetro de un
 instante pasado** (`showtrips` devuelve `{time, timeString, pos}`: posiciones,
 sin odómetro ni distancia). Autocares Plana es Movertis.
 
-## Solo una flota tiene arco, y es de Movertis
+## Antes del diseño: quién tiene arco, y cómo no se mezclan las flotas
 
-Esto condiciona todo lo que viene detrás, así que va antes que el diseño.
+Todo esto condiciona lo que viene detrás, así que va delante.
+
+### El arco lo tiene una sola flota, y es de Movertis
 
 El CheckPoint está en **una sola flota, y su telemática es Movertis**. Webfleet
 no pinta nada en esta fase. Y toda la detección de base vive hoy en
@@ -64,6 +66,60 @@ produce nada.
    Es el mismo acoplamiento por el que `server/tyrecontrol/kilometrajeOperacion.ts`
    importa el Hub dentro de la función y no arriba: lee su cabecera antes de
    decidir cómo cruzarlas.
+
+### La API por cliente: el Hub lo tiene resuelto, el sync de hoy NO
+
+Pueden haber 10 clientes de Webfleet con su API y 10 de Movertis con la suya, y
+la información de las flotas no puede mezclarse. Esto es lo que hay:
+
+**El Hub lo tiene resuelto**, con tres barreras y no una:
+
+1. `integration_connector_configs` tiene clave `(tenant_id, connector_key,
+   account_key)`: 10 clientes de Webfleet son 10 filas con distinto `tenant_id`, y
+   un mismo cliente puede tener **varias cuentas del mismo proveedor** (el
+   comentario de `upsertConnectorConfig` ya pone «Plana autobuses» como ejemplo).
+   `resolveTelematicsConnectors(tenantId)` devuelve todas las cuentas habilitadas
+   de ese tenant con su `accountKey`.
+2. Las credenciales no están en la BD ni en el código, y son por tenant:
+   `IH_SECRET__<TENANT>__<CONNECTOR>__<NAME>` con fallback global del conector
+   (`server/integration-hub/infrastructure/secrets.ts`).
+3. El mapeo de vehículos también es por tenant y cuenta: `integration_mappings`
+   por `(tenant_id, entity_type, system, account_key, mobilink_id)`
+   (`findExternalCode`). Aunque las credenciales fueran las equivocadas, un
+   vehículo del cliente A no puede resolver a un id de la cuenta de B. Y la
+   lectura lleva grabado `provider` / `accountKey` / `providerVehicleId`: la
+   procedencia no se deduce, está escrita.
+
+**`server/webfleetSync.ts` no usa nada de eso.** Lee env globales
+(`WEBFLEET_ACCOUNT/USERNAME/PASSWORD/API_KEY`, líneas 21-25), arranca solo si
+existe `WEBFLEET_ACCOUNT` (línea 282), su config es un singleton
+(`tc_webfleet_sync_config` con `.eq("id", 1)`) y consulta `tc_vehiculos` **sin
+filtro de empresa** (línea 73), casando por `webfleet_vehicle_id` contra el
+`objectno` de esa única cuenta. Es UNA cuenta de Webfleet para todo el servidor.
+Hoy no se mezcla porque solo hay una; con el segundo cliente de Webfleet se
+mezcla, y de la peor manera: los `objectno` son por cuenta, así que dos clientes
+pueden tener el mismo número y se cruzarían posiciones y odómetros entre flotas
+sin que nada chirríe.
+
+De ahí dos cosas:
+
+- El sync nuevo se monta **sobre el Hub** (`resolveTelematicsConnectors` +
+  `findExternalCode`), NO sobre el molde de env de `webfleetSync`. Un bucle **por
+  tenant × cuenta** que habla por `ITelematicsConnector` y no sabe quién hay
+  debajo. Ni «sync de Movertis» ni «sync de Webfleet».
+- **Migrar `webfleetSync` al Hub es tarea aparte y hay que apuntarla como bug
+  latente**, no como mejora. Tal como está, el día que entre el segundo cliente
+  de Webfleet falla, y falla en silencio. No se arregla dentro de esta fase, pero
+  tampoco se deja sin escribir.
+
+### Webfleet también, desde el principio
+
+Cuesta casi nada si el sync es del Hub, y Webfleet es además el caso fácil: su
+conector ya tiene histórico **con odómetro** (`showLogbook`,
+`WebfleetConnector.ts:199`), así que ahí no hace falta ninguna prueba de
+inmovilidad — `getTelemetryAt` funciona de verdad. Lo que no cambia es que la
+fila de estancia guarda `provider` y `account_key`: es lo que impide que dos
+flotas se pisen.
 
 ### En qué orden entregar
 
@@ -123,16 +179,21 @@ es el mismo camino con la latencia a cero: no se tira nada.
    `km_entrada_capturado_at`, `salida_at`, `km_salida`,
    `km_salida_capturado_at`, `provider`, `account_key`. Único por
    `(vehiculo_id, delegacion_id, entrada_at)`, igual que ya hace
-   `tc_webfleet_alertas` con la estancia. Retención: decidirla y dejarla escrita.
+   `tc_webfleet_alertas` con la estancia. `provider` y `account_key` no son
+   decorativos: son lo que impide que dos flotas se pisen, y van en la fila
+   aunque hoy haya un solo proveedor en juego. Solo se abre estancia en las
+   delegaciones con la bandera puesta (ver más abajo). Retención: decidirla y dejarla escrita.
    Los `capturado_at` son el `pos_time` de cada lectura y NO son lo mismo que la
    hora de entrada o de salida: ver las trampas.
 2. Abrir y cerrar la estancia donde ya se detecta la transición en
    `webfleetSync.ts` (busca `esNuevaEntrada` y el `previos` que lo alimenta). No
    inventar un segundo detector ni un segundo criterio de base.
-3. Sync de Movertis con la misma lógica de geocerco: `showvehicles` trae
-   posición y `counters.odometer`, así que la cuenta es idéntica a la de
-   `webfleetSync.ts`. Cópiale el criterio, no lo reinventes, y ojo con lo que ya
-   hace de más: ventana de antigüedad de la posición, `mismaEstancia` para no
+3. Sync de presencia en base **del Hub**, no de un proveedor: recorre tenant ×
+   cuenta con `resolveTelematicsConnectors`, resuelve el id del vehículo con
+   `findExternalCode` y habla por `ITelematicsConnector`. Para Movertis,
+   `showvehicles` trae posición y `counters.odometer`, así que la cuenta del
+   geocerco es idéntica a la de `webfleetSync.ts`. Cópiale el criterio, no lo
+   reinventes, y ojo con lo que ya hace de más: ventana de antigüedad de la posición, `mismaEstancia` para no
    reabrir una estancia que sigue, y no contar como entrada nueva una posición
    vieja (evita alertas falsas con un GPS dormido).
    Sobre `tc_vehiculo_webfleet_estado`: es de Webfleet por historia, no por
@@ -150,6 +211,30 @@ es el mismo camino con la latencia a cero: no se tira nada.
    **no se usa**. Ahí hay un descuadre —un paso por el arco sin entrada
    detectada, o una entrada sin paso— y vale más un null con su motivo que un
    número casado a la fuerza.
+
+### Varias bases, y solo una con arco
+
+El cliente tiene varias bases y de momento el arco está en una. En las demás el
+vehículo queda igualmente geolocalizado, pero **ahí no hace falta guardar
+kilómetros**.
+
+Bandera por delegación, con precedente en la misma tabla
+(`tc_delegaciones.webfleet_genera_avisos` ya es exactamente eso): añadir
+`guarda_odometro` —o `tiene_arco`—, **apagada por defecto** y encendida solo en
+la base del arco. Entrar en las otras se sigue detectando, porque el panel de
+bases y las alertas lo necesitan, pero no abre estancia con odómetro.
+
+Dos matices que no se pueden perder:
+
+- **La bandera no solo ahorra escrituras: hace verificable la regla de casado.**
+  Si el arco está en una sola base, una revisión del arco cuya estancia más
+  cercana sea de OTRA base es un descuadre, no un dato. Filtrar por base con arco
+  convierte eso en un error detectable en vez de un número plausible y falso.
+- **Lo que se pierde**: si un autobús duerme en otra base, esa jornada no tiene
+  sus dos lecturas y el «km por jornada» queda con un hueco. Para el dato del
+  arco no importa; para el desgaste por 1.000 km importaría. Por eso es
+  **configuración y no código**: encenderla en el resto de bases es marcar una
+  casilla el día que se quiera, no reabrir la fase.
 
 ### Las trampas
 
