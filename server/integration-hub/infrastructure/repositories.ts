@@ -460,6 +460,25 @@ export async function listConnectorConfigs(tenantId: string) {
   return rows;
 }
 
+/**
+ * Clientes con alguno de estos conectores activo.
+ *
+ * Lo necesita el proceso quincenal de conciliación: sin esto tendría que
+ * recorrer la tabla de empresas de TyreControl y preguntar por cada una, y la
+ * inmensa mayoría no tiene telemática. Se pregunta por la configuración, que es
+ * donde consta quién la tiene.
+ */
+export async function listTenantsWithConnectors(connectorKeys: string[]): Promise<string[]> {
+  if (connectorKeys.length === 0) return [];
+  const { rows } = await pool.query(
+    `SELECT DISTINCT tenant_id FROM integration_connector_configs
+      WHERE enabled AND connector_key = ANY($1::text[])
+      ORDER BY tenant_id`,
+    [connectorKeys]
+  );
+  return rows.map((r: any) => String(r.tenant_id));
+}
+
 // ── Mapeos entre identificadores de Mobilink y de sistemas externos (§4.3) ──
 
 export type MappingEntityType = "customer" | "product" | "vehicle" | "warehouse";
