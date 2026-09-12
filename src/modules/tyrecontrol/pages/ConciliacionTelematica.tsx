@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Link2, Link2Off, Plus, RefreshCw, Trash2, XCircle } from "lucide-react";
 import {
-  conciliar, crearVehiculo, darDeBaja, dejarDeIgnorar, desvincular, ignorar, listarCuentas, vincular,
-  vincularLote,
+  conciliar, crearVehiculo, crearVehiculosLote, darDeBaja, dejarDeIgnorar, desvincular, ignorar,
+  ignorarLote, listarCuentas, vincular, vincularLote,
+  type ResultadoLoteExternos,
   type Conciliacion, type CuentaTelematica, type VehiculoInterno,
 } from "../services/conciliacion";
 import { listarEmpresas } from "../services/data";
@@ -67,6 +68,16 @@ export default function ConciliacionTelematica() {
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Cuadrante>("enlazados");
+  /*
+   * Los que están marcados en «solo proveedor».
+   *
+   * Con setecientos vehículos, decidir uno a uno es inviable, pero «todos de
+   * golpe» tampoco vale: en la misma lista conviven remolques que hay que dar
+   * de alta y cabezas tractoras de un tercero que no pintan nada aquí. Marcar
+   * a mano y actuar sobre lo marcado es el término medio, y deja la decisión
+   * donde tiene que estar.
+   */
+  const [marcados, setMarcados] = useState<Set<string>>(new Set());
 
   // Las empresas que la sesión puede ver: un administrador solo la suya, un
   // super-admin todas. Sin este selector la pantalla se quedaba clavada en la
@@ -100,6 +111,9 @@ export default function ConciliacionTelematica() {
     setError("");
     try {
       setDatos(await conciliar({ empresaId, connectorKey: cuenta.connectorKey, accountKey: cuenta.accountKey }));
+      // La lista es otra: mantener marcas de la anterior sería actuar a ciegas
+      // sobre filas que a lo mejor ya no están.
+      setMarcados(new Set());
     } catch (e: any) {
       setError(e.message);
       setDatos(null);
@@ -128,6 +142,52 @@ export default function ConciliacionTelematica() {
   const base = cuenta ? { empresaId, connectorKey: cuenta.connectorKey, accountKey: cuenta.accountKey } : null;
   /** Cuántas filas de «solo proveedor» traen candidato único por matrícula. */
   const propuestas = datos?.soloProveedor.filter((f) => f.propuesta).length ?? 0;
+
+  const filasProveedor = datos?.soloProveedor ?? [];
+  const seleccion = filasProveedor.filter((f) => marcados.has(f.externo.providerVehicleId));
+  // Crear exige matrícula: sin ella no hay con qué dar de alta el vehículo.
+  const creables = seleccion.filter((f) => f.externo.plate).length;
+
+  function alternar(id: string) {
+    setMarcados((antes) => {
+      const s = new Set(antes);
+      if (s.has(id)) s.delete(id); else s.add(id);
+      return s;
+    });
+  }
+
+  function marcar(filas: typeof filasProveedor) {
+    setMarcados(new Set(filas.map((f) => f.externo.providerVehicleId)));
+  }
+
+  /** Cuenta lo hecho y lo que no, sin esconder los fallos detrás de un «listo». */
+  function resumenLote(r: ResultadoLoteExternos, verbo: string): string {
+    const partes = [`${r.hechos} ${verbo}`];
+    if (r.fallidos.length) partes.push(`${r.fallidos.length} con error (${r.fallidos[0].error})`);
+    if (r.omitidos.length) partes.push(`${r.omitidos.length} ya no estaban en el proveedor`);
+    return partes.join(" · ");
+  }
+
+  /**
+   * Un lote se recarga SIEMPRE, salga como salga.
+   *
+   * A diferencia de una acción suelta, un lote puede acabar a medias: veinte
+   * creados y tres con la matrícula repetida. Dejar la pantalla como estaba
+   * después de eso enseñaría una lista que ya no es verdad.
+   */
+  async function accionLote(fn: () => Promise<ResultadoLoteExternos>, verbo: string) {
+    setError("");
+    setMsg("");
+    try {
+      const r = await fn();
+      const texto = resumenLote(r, verbo);
+      if (r.fallidos.length) setError(texto);
+      else setMsg(texto);
+      await cargar();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
   const r = datos?.resumen;
   const completa = r?.status === "complete";
 
@@ -346,10 +406,98 @@ export default function ConciliacionTelematica() {
                   </button>
                 </div>
               )}
+            {filasProveedor.length > 0 && (
+              <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-slate-700 bg-slate-800 p-3 text-xs">
+                <span className="font-bold text-slate-200">
+                  {seleccion.length > 0 ? `${seleccion.length} seleccionados` : "Selecciona vehículos"}
+                </span>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-slate-400">
+                  <button className="underline hover:text-slate-200" onClick={() => marcar(filasProveedor)}>
+                    Todos ({filasProveedor.length})
+                  </button>
+                  <button
+                    className="underline hover:text-slate-200"
+                    onClick={() => marcar(filasProveedor.filter((f) => !f.propuesta && f.externo.plate))}
+                  >
+                    Solo los que no coinciden
+                  </button>
+                  <button className="underline hover:text-slate-200" onClick={() => setMarcados(new Set())}>
+                    Ninguno
+                  </button>
+                </div>
+
+                <div className="ml-auto flex flex-wrap gap-2">
+                  <button
+                    className={`${BOTON} border-emerald-700 text-emerald-300 hover:bg-emerald-500/10`}
+                    disabled={creables === 0 || cargando}
+                    title={
+                      seleccion.length > creables
+                        ? `${seleccion.length - creables} de los marcados no traen matrícula y no se pueden crear`
+                        : ""
+                    }
+                    onClick={() =>
+                      confirm(
+                        `Se crearán ${creables} vehículos en TyreControl PENDIENTES DE VALIDAR.\n\n` +
+                          `No se rellenan tipo, ejes ni medidas: hay que completarlos después.\n\n` +
+                          `¿Seguir?`,
+                      ) &&
+                      void accionLote(
+                        () =>
+                          crearVehiculosLote({
+                            ...base,
+                            externalVehicleIds: seleccion
+                              .filter((f) => f.externo.plate)
+                              .map((f) => f.externo.providerVehicleId),
+                          }),
+                        "creados pendientes de validar",
+                      )
+                    }
+                  >
+                    <Plus className="mr-1 inline h-3.5 w-3.5" />
+                    Crear {creables} en TyreControl
+                  </button>
+                  <button
+                    className={`${BOTON} border-slate-600 text-slate-300 hover:bg-slate-700`}
+                    disabled={seleccion.length === 0 || cargando}
+                    onClick={() =>
+                      confirm(
+                        `Se apartarán ${seleccion.length} vehículos de la lista.\n\n` +
+                          `No se crea ni se borra nada, y se puede deshacer desde «Ignorados».\n\n` +
+                          `¿Seguir?`,
+                      ) &&
+                      void accionLote(
+                        () =>
+                          ignorarLote({
+                            ...base,
+                            externalVehicleIds: seleccion.map((f) => f.externo.providerVehicleId),
+                          }),
+                        "ignorados",
+                      )
+                    }
+                  >
+                    <XCircle className="mr-1 inline h-3.5 w-3.5" />
+                    Ignorar {seleccion.length}
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className={`${CAJA} divide-y divide-slate-700`}>
-              {datos!.soloProveedor.length === 0 && <div className="p-6 text-center text-slate-400">Ninguno.</div>}
-              {datos!.soloProveedor.map((f) => (
-                <div key={f.externo.providerVehicleId} className="grid gap-3 p-4 md:grid-cols-3 md:items-center">
+              {filasProveedor.length === 0 && <div className="p-6 text-center text-slate-400">Ninguno.</div>}
+              {filasProveedor.map((f) => (
+                <div
+                  key={f.externo.providerVehicleId}
+                  className={`grid gap-3 p-4 md:grid-cols-[auto_1fr_1fr_auto] md:items-center ${
+                    marcados.has(f.externo.providerVehicleId) ? "bg-sky-500/10" : ""
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-sky-500"
+                    aria-label={`Seleccionar ${f.externo.plate || f.externo.providerVehicleId}`}
+                    checked={marcados.has(f.externo.providerVehicleId)}
+                    onChange={() => alternar(f.externo.providerVehicleId)}
+                  />
                   <Externo v={f.externo} />
                   <div className="text-xs">
                     {f.propuesta ? (
