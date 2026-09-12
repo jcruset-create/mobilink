@@ -1,15 +1,14 @@
 /**
  * Pruebas del mapeo de Movertis.
  *
- * Son pruebas puras: ni red ni base. Eso es deliberado, porque el mapeo es la
- * parte del conector que hoy NO se puede validar contra el proveedor —su API
- * lleva caída desde que se montó la sonda— y a la vez la que decide si un
- * kilometraje es de fiar. Lo que se fija aquí es el comportamiento que el
+ * Son pruebas puras: ni red ni base. El mapeo es la parte que decide si un
+ * kilometraje es de fiar, y lo que se fija aquí es el comportamiento que el
  * contrato exige pase lo que pase: no inventar, no perder la fecha, no dar por
  * buena una posición que no lo es.
  *
- * Cuando la sonda conteste y sepamos los nombres reales, estas pruebas son el
- * sitio donde se clava la respuesta de verdad.
+ * La segunda mitad son las formas REALES, con literales copiados de respuestas
+ * de `devapi.hellomovertis.com`. Para lo que hace falta la API de verdad está
+ * `MovertisConnector.integration.test.ts` (RUN_MOVERTIS=1).
  */
 
 import { describe, expect, it } from "vitest";
@@ -19,8 +18,15 @@ import {
   aVehicleTelemetry,
   fecha,
   filasDe,
+  aLecturaDeFlota,
+  aLecturaDePunto,
+  aVehiculoDeFlota,
   masCercana,
+  matriculaDeNombre,
   numero,
+  odometroDeCounters,
+  puntosDeUnidad,
+  valorMovertis,
   type OpcionesMapeo,
 } from "./mapeo.ts";
 import type { VehicleTelemetry } from "../../../domain/telematics.ts";
@@ -275,5 +281,171 @@ describe("masCercana()", () => {
     ];
     const r = masCercana(lecturas, new Date("2026-07-15T09:40:00Z"), 60);
     expect([100, 200]).toContain(r?.odometerKm);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Las formas reales de Movertis
+// ════════════════════════════════════════════════════════════════════════════
+
+describe("valorMovertis()", () => {
+  it("los dos centinelas son ausencia, no lectura", () => {
+    expect(valorMovertis(-348201.3876)).toBeUndefined();
+    // El cero también: 17 de los 751 vehículos de la cuenta tienen odometer 0 y
+    // son los marcados «Desinstalado» o «sin uso». Un odómetro total a cero no
+    // existe en una flota que rueda.
+    expect(valorMovertis(0)).toBeUndefined();
+  });
+
+  it("un valor real pasa, con sus decimales", () => {
+    expect(valorMovertis(809052.369502)).toBe(809052.369502);
+    expect(valorMovertis(809052)).toBe(809052);
+  });
+});
+
+describe("matriculaDeNombre()", () => {
+  it("saca la matrícula con cualquiera de los separadores que usa la cuenta", () => {
+    // Los cuatro estilos que conviven en los 751 nombres reales.
+    expect(matriculaDeNombre("604 - 1678 GCM")).toBe("1678GCM");
+    expect(matriculaDeNombre("848 5053-HKC")).toBe("5053HKC");
+    expect(matriculaDeNombre("977-4008-GWS")).toBe("4008GWS");
+    expect(matriculaDeNombre("1260 -- 2001-JJR")).toBe("2001JJR");
+  });
+
+  it("no confunde el número de unidad con la matrícula", () => {
+    // «1244» es la unidad y «5324-KLN» la matrícula: los dos son cuatro
+    // dígitos, y lo que decide es que solo uno lleve tres letras detrás.
+    expect(matriculaDeNombre("1244-5324-KLN")).toBe("5324KLN");
+  });
+
+  it("aguanta la cola que algunos nombres llevan detrás", () => {
+    expect(matriculaDeNombre("1231- 4468-GJK- Desinstalado")).toBe("4468GJK");
+    expect(matriculaDeNombre("1485 - 3639 GWM sin uso")).toBe("3639GWM");
+  });
+
+  it("no inventa matrícula donde no hay: son equipos sin vehículo", () => {
+    for (const n of ["0000", "NO FUNCIONA", "Nueva_60007", "BUS 4 (1534)", "", null, 7]) {
+      expect(matriculaDeNombre(n)).toBeUndefined();
+    }
+  });
+});
+
+describe("aVehiculoDeFlota()", () => {
+  const FILA = { name: "604 - 1678 GCM", idVehicle: 26134116, classId: 2 };
+
+  it("lee el id y el nombre por sus nombres reales y deduce la matrícula", () => {
+    const v = aVehiculoDeFlota(FILA)!;
+    expect(v.providerVehicleId).toBe("26134116");
+    expect(v.name).toBe("604 - 1678 GCM");
+    expect(v.plate).toBe("1678GCM");
+  });
+
+  it("sin matrícula deducible, el vehículo sigue valiendo", () => {
+    const v = aVehiculoDeFlota({ name: "Nueva_60007", idVehicle: 1 })!;
+    expect(v.providerVehicleId).toBe("1");
+    expect(v.plate).toBeUndefined();
+  });
+});
+
+describe("odometroDeCounters()", () => {
+  it("lee counters.odometer con la unidad declarada", () => {
+    expect(odometroDeCounters({ odometer: 809052, engineHours: 3394.15 }, "km")).toBe(809052);
+  });
+
+  it("un odometer a 0 es sin dato, no un vehículo a estrenar", () => {
+    expect(odometroDeCounters({ odometer: 0, engineHours: 3240.28 }, "km")).toBeUndefined();
+  });
+
+  it("sin unidad declarada no hay odómetro, aunque el número esté ahí", () => {
+    expect(odometroDeCounters({ odometer: 809052 }, undefined)).toBeUndefined();
+  });
+
+  it("sin counters no se cae", () => {
+    expect(odometroDeCounters(undefined, "km")).toBeUndefined();
+    expect(odometroDeCounters(null, "km")).toBeUndefined();
+  });
+});
+
+describe("aLecturaDeFlota()", () => {
+  it("la lectura actual trae odómetro y NO posición: showvehicles no la da", () => {
+    const cuando = new Date("2026-09-12T08:35:50Z");
+    const l = aLecturaDeFlota(
+      { name: "604 - 1678 GCM", idVehicle: 26134116, counters: { odometer: 809052 } },
+      OPCIONES,
+      "26134116",
+      cuando,
+    );
+    expect(l.odometerKm).toBe(809052);
+    expect(l.capturedAt).toEqual(cuando);
+    expect(l.latitude).toBeUndefined();
+    expect(l.longitude).toBeUndefined();
+  });
+});
+
+describe("aLecturaDePunto()", () => {
+  const PUNTO = {
+    time: 1789202150000,
+    timeString: "2026-09-12T08:35:50.000Z",
+    pos: "41.1299667358,1.18569278717",
+  };
+
+  it("parte la cadena «lat,lng», que es UN campo y no dos", () => {
+    const l = aLecturaDePunto(PUNTO, OPCIONES, "26134116")!;
+    expect(l.latitude).toBeCloseTo(41.1299667358, 8);
+    expect(l.longitude).toBeCloseTo(1.18569278717, 8);
+    expect(l.positionAt).toEqual(l.capturedAt);
+  });
+
+  it("el epoch viene en milisegundos", () => {
+    const l = aLecturaDePunto(PUNTO, OPCIONES, "26134116")!;
+    expect(l.capturedAt.toISOString()).toBe("2026-09-12T08:35:50.000Z");
+  });
+
+  it("NUNCA trae odómetro: es la ausencia sobre la que se decidió la fase", () => {
+    expect(aLecturaDePunto(PUNTO, OPCIONES, "26134116")!.odometerKm).toBeUndefined();
+  });
+
+  it("sin fecha no hay lectura: el instante es lo que la hace auditable", () => {
+    expect(aLecturaDePunto({ pos: "41.1,1.1" }, OPCIONES, "1")).toBeNull();
+  });
+
+  it("una posición imposible se descarta y la lectura sobrevive sin ella", () => {
+    const l = aLecturaDePunto({ time: 1789202150000, pos: "0,0" }, OPCIONES, "1")!;
+    expect(l.capturedAt).toBeInstanceOf(Date);
+    expect(l.latitude).toBeUndefined();
+  });
+
+  it("aguanta un pos que no tiene la forma esperada", () => {
+    for (const pos of ["41.1", "", "a,b", null, 41.1]) {
+      const l = aLecturaDePunto({ time: 1789202150000, pos }, OPCIONES, "1")!;
+      expect(l.latitude).toBeUndefined();
+    }
+  });
+});
+
+describe("puntosDeUnidad()", () => {
+  const RESP = [{ unit: 26134116, coords: [{ time: 1, pos: "41,1" }, { time: 2, pos: "41,1" }] }];
+
+  it("saca los puntos de la unidad pedida", () => {
+    expect(puntosDeUnidad(RESP, "26134116")).toHaveLength(2);
+  });
+
+  it("con varias unidades elige la suya", () => {
+    const dos = [{ unit: 1, coords: [{ time: 1 }] }, { unit: 2, coords: [{ time: 1 }, { time: 2 }] }];
+    expect(puntosDeUnidad(dos, "2")).toHaveLength(2);
+  });
+
+  it("con una sola unidad no exige que el id case", () => {
+    // Movertis no promete el tipo del id —número en la respuesta, cadena en su
+    // documentación— y tirar la única respuesta buena por eso sería absurdo.
+    expect(puntosDeUnidad(RESP, "26134116  ")).toHaveLength(2);
+  });
+
+  it("un vehículo que no ha emitido devuelve vacío, no un fallo", () => {
+    // Pasa constantemente: de 10 vehículos con ventana de 15 minutos, 3
+    // volvieron sin un solo punto. Están parados.
+    expect(puntosDeUnidad([{ unit: 1, coords: [] }], "1")).toEqual([]);
+    expect(puntosDeUnidad([], "1")).toEqual([]);
+    expect(puntosDeUnidad(null, "1")).toEqual([]);
   });
 });
