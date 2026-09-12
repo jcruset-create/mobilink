@@ -125,14 +125,19 @@ describe("repasarEmpresa()", () => {
     const r = await repasarEmpresa("empresa-A");
 
     expect(r?.estado.enlazadosAuto).toBe(615);
-    expect(vincularLote).toHaveBeenCalledWith({
-      empresaId: "empresa-A", connectorKey: "movertis", accountKey: "buses",
-    });
+    expect(vincularLote).toHaveBeenCalledWith(
+      { empresaId: "empresa-A", connectorKey: "movertis", accountKey: "buses" },
+      { automatico: true },
+    );
   });
 
-  it("el lote se pide SIN «esperados»: no hay pantalla que pueda ir desfasada", async () => {
+  it("el lote se pide SIN «esperados» y marcado como AUTOMÁTICO", async () => {
+    // Sin `esperados` porque aquí no hay pantalla que pueda ir desfasada: el
+    // servidor enlaza lo que él mismo acaba de calcular. Y `automatico` porque
+    // nadie está mirando, que es lo que distingue estos enlaces de los que
+    // confirma una persona desde el botón de la pantalla.
     await repasarEmpresa("empresa-A");
-    expect(vi.mocked(vincularLote).mock.calls[0][1]).toBeUndefined();
+    expect(vi.mocked(vincularLote).mock.calls[0][1]).toEqual({ automatico: true });
   });
 
   it("que no haya nada que enlazar es lo normal, no un fallo", async () => {

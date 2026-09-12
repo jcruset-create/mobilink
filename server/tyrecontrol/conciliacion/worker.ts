@@ -89,7 +89,11 @@ export async function repasarEmpresa(empresaId: string): Promise<ResultadoQuince
     try {
       // Sin `esperados`: aquí no hay pantalla que pueda ir desfasada, y el
       // servidor enlaza exactamente lo que él mismo acaba de calcular.
-      const r = await vincularLote({ empresaId, connectorKey: c.key, accountKey: c.accountKey });
+      const r = await vincularLote(
+        { empresaId, connectorKey: c.key, accountKey: c.accountKey },
+        // Nadie está mirando: los enlaces quedan marcados como automáticos.
+        { automatico: true },
+      );
       enlazadosAuto += r.enlazados;
       for (const f of r.fallidos) {
         console.warn(`[conciliacion-quincenal] ${empresaId} no se pudo enlazar: ${f.error}`);

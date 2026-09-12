@@ -293,7 +293,10 @@ export function createConciliacionRouter(): Router {
       const ambito = ambitoDe(empresaId, req.body);
       const esperados =
         req.body?.esperados === undefined ? undefined : Number(req.body.esperados);
-      res.json({ ok: true, ...(await vincularLote(ambito, { esperados })) });
+      // Lo pulsa una persona en la pantalla, así que los enlaces se guardan
+      // como confirmados y NO como automáticos: enlazar ciento veintidós
+      // propuestas de golpe sigue siendo una decisión de alguien.
+      res.json({ ok: true, ...(await vincularLote(ambito, { esperados, automatico: false })) });
     } catch (e) {
       fallo(res, e);
     }
