@@ -80,6 +80,16 @@ const workshopIcon = L.divIcon({
   className: "", iconSize: [24, 24], iconAnchor: [12, 12],
 });
 
+/** Lo que devuelve el cálculo de kilómetros del servidor. */
+type Recorrido = {
+  ida: number; trabajo: number; vuelta: number; total: number;
+  propuestaKm: number; puntos: number; puntosDescartados: number;
+  huecos: Array<{ minutos: number; kmEnLineaRecta: number }>;
+  minutosSinRastro: number;
+  calidad: "bueno" | "con_huecos" | "insuficiente";
+  origen: "lite" | "assist" | "sin_rastro";
+};
+
 export default function SeguimientoLiteTab({ assistanceId, canOperate, onChanged }: {
   assistanceId: number; canOperate: boolean; onChanged: () => void;
 }) {
@@ -191,7 +201,11 @@ export default function SeguimientoLiteTab({ assistanceId, canOperate, onChanged
         </div>
       )}
 
-      {/* Cierre reportado por el taller */}
+          {/* Kilómetros a partir del rastro del móvil */}
+      <KilometrosDelRastro assistanceId={assistanceId} declarados={a.odometerKm}
+                           canOperate={canOperate} onAplicado={() => { load(); onChanged(); }} />
+
+  {/* Cierre reportado por el taller */}
       {(a.resultCode || a.resolutionNotes) && (
         <div className="rounded-xl border border-slate-700 p-3 text-[13px]">
           <h4 className="mb-1 font-semibold text-slate-200">Cierre del servicio</h4>
@@ -285,6 +299,99 @@ export default function SeguimientoLiteTab({ assistanceId, canOperate, onChanged
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+/**
+ * Los kilómetros que dice el rastro del móvil.
+ *
+ * Calcula y explica; no escribe. El botón de darlos por buenos solo aparece
+ * cuando el taller no ha declarado ninguno: corregir a la baja lo que ha dicho
+ * quien hizo el servicio no es cosa de un botón, para eso está el ajuste
+ * manual, que queda auditado.
+ *
+ * Y enseña de qué se fía uno: cuántos puntos, qué se descartó y qué agujeros
+ * tiene el rastro. Un rastro con huecos da de menos y eso no se ve mirando el
+ * número.
+ */
+function KilometrosDelRastro({ assistanceId, declarados, canOperate, onAplicado }: {
+  assistanceId: number;
+  declarados: number | null;
+  canOperate: boolean;
+  onAplicado: () => void;
+}) {
+  const [r, setR] = useState<Recorrido | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    boFetch<Recorrido>(`/assistances/${assistanceId}/recorrido`)
+      .then(setR).catch((e) => setError(e.message));
+  }, [assistanceId]);
+
+  if (error) return null;
+  if (!r) return null;
+  if (r.origen === "sin_rastro" || r.calidad === "insuficiente") {
+    return (
+      <div className="rounded-xl border border-slate-700 p-3 text-[13px] text-slate-500">
+        Sin rastro suficiente para calcular los kilómetros
+        {r.puntos > 0 && ` (${r.puntos} punto${r.puntos === 1 ? "" : "s"})`}.
+      </div>
+    );
+  }
+
+  const aplicar = async () => {
+    setBusy(true); setError(null);
+    try {
+      await boFetch(`/assistances/${assistanceId}/recorrido/aplicar`, {
+        method: "POST", body: { km: r.propuestaKm },
+      });
+      onAplicado();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-700 p-3 text-[13px]">
+      <h4 className="mb-1 font-semibold text-slate-200">Kilómetros según el rastro del móvil</h4>
+      <p className="text-slate-300">
+        Ida {r.ida} km · Vuelta {r.vuelta} km
+        {r.trabajo > 0 && <span className="text-slate-500"> · en el punto {r.trabajo} km</span>}
+      </p>
+      <p className="mt-1 text-slate-200">
+        Desplazamiento del servicio: <b>{r.propuestaKm} km</b>
+        <span className="text-slate-500"> (ida y vuelta)</span>
+      </p>
+
+      <p className="mt-1 text-[12px] text-slate-500">
+        {r.puntos} puntos{r.puntosDescartados > 0 && `, ${r.puntosDescartados} descartados por saltos o mala precisión`}
+        {r.origen === "assist" && " · rastro de la app del técnico: sin dato de precisión, la cifra es más ruidosa"}
+      </p>
+
+      {r.huecos.length > 0 && (
+        <p className="mt-1 text-[12px] text-amber-300">
+          ⚠ El rastro tiene {r.huecos.length} agujero{r.huecos.length === 1 ? "" : "s"} que suman{" "}
+          {r.minutosSinRastro} min sin posiciones: lo calculado se queda corto.
+        </p>
+      )}
+
+      {declarados != null && declarados > 0 ? (
+        <p className="mt-2 text-[12px] text-slate-500">
+          El taller declaró {declarados} km.
+          {Math.abs(declarados - r.propuestaKm) > Math.max(10, r.propuestaKm * 0.25) &&
+            " La diferencia con el rastro es grande: conviene mirarla antes de facturar."}
+        </p>
+      ) : canOperate ? (
+        <div className="mt-2 flex items-center gap-2">
+          <Button onClick={aplicar} disabled={busy}>
+            Dar por buenos {r.propuestaKm} km
+          </Button>
+          <span className="text-[12px] text-slate-500">Se guarda como kilómetros del servicio.</span>
+        </div>
+      ) : null}
+
+      {error && <p className="mt-1 text-[12px] text-red-300">{error}</p>}
     </div>
   );
 }

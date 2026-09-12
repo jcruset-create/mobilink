@@ -199,12 +199,22 @@ class OfflineStore {
   }
 
   // ── Migas de pan GPS (offline) ──
-  static Future<void> enqueueLocation(int assistanceId, double lat, double lng) async {
+  static Future<void> enqueueLocation(
+    int assistanceId,
+    double lat,
+    double lng, {
+    double? accuracyM,
+    double? speedKmh,
+  }) async {
     await _track.add({
       'assistanceId': assistanceId,
       'lat': lat,
       'lng': lng,
       'ts': DateTime.now().millisecondsSinceEpoch,
+      // Viajan con la miga de pan: al reconectar se mandan igual que en vivo,
+      // así el rastro recuperado vale lo mismo que el que llegó a su hora.
+      if (accuracyM != null) 'accuracyM': accuracyM,
+      if (speedKmh != null) 'speedKmh': speedKmh,
     });
   }
 

@@ -317,3 +317,53 @@ describe("Construir la petición: las credenciales no se mezclan", () => {
     expect(params(url).objectno).toBe("ABC-1");
   });
 });
+
+/**
+ * Dos cuentas de Webfleet del mismo cliente.
+ *
+ * El gestor de secretos ya distingue cuentas. Aquí se comprueba que la cuenta
+ * llega de verdad hasta él desde este módulo, y que quien no la pasa —los tres
+ * endpoints del panel, que no saben de cuentas— resuelve igual que siempre.
+ */
+describe("credenciales por cuenta", () => {
+  it("cada cuenta resuelve las suyas", async () => {
+    setSecretsProvider({
+      async get(tenantId: string, connectorKey: string, name: string, accountKey?: string) {
+        const juego = accountKey === "auxiliar"
+          ? { ACCOUNT: "cuenta-aux", USERNAME: "user-aux", PASSWORD: "pass-aux" }
+          : { ACCOUNT: "cuenta-buses", USERNAME: "user-buses", PASSWORD: "pass-buses" };
+        return connectorKey === "webfleet" ? (juego as Record<string, string>)[name] : undefined;
+      },
+    });
+
+    const buses = await resolverCredencialesWebfleet("empresa-1", "buses");
+    const aux = await resolverCredencialesWebfleet("empresa-1", "auxiliar");
+
+    expect(buses.origen).toBe("secretos");
+    expect(buses.creds?.account).toBe("cuenta-buses");
+    expect(aux.creds?.account).toBe("cuenta-aux");
+  });
+
+  it("una cuenta sin secreto propio cae al del cliente, no se queda sin nada", async () => {
+    setSecretsProvider({
+      async get(_t: string, connectorKey: string, name: string, accountKey?: string) {
+        // Solo hay secreto del cliente: el proveedor real haría este fallback,
+        // así que aquí se imita devolviendo lo mismo con o sin cuenta.
+        if (connectorKey !== "webfleet") return undefined;
+        void accountKey;
+        return { ACCOUNT: "cuenta-cliente", USERNAME: "u", PASSWORD: "p" }[name];
+      },
+    });
+
+    const r = await resolverCredencialesWebfleet("empresa-1", "una-cuenta-nueva");
+    expect(r.origen).toBe("secretos");
+    expect(r.creds?.account).toBe("cuenta-cliente");
+  });
+
+  it("sin cuenta se comporta igual que antes del cambio", async () => {
+    secretosDe("empresa-1");
+    const r = await resolverCredencialesWebfleet("empresa-1");
+    expect(r.origen).toBe("secretos");
+    expect(r.creds?.account).toBe("cuenta-secreta");
+  });
+});

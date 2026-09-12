@@ -225,6 +225,73 @@ export async function initIntegrationHub(): Promise<void> {
     ["tenant_id", "entity_type", "system", "account_key", "external_code"],
   );
 
+  // ── Cuándo se vio por última vez ESTE vehículo en el proveedor ────────────
+  //
+  // No vale `last_sync_at_ms`, que ya existe y significa otra cosa: «cuándo se
+  // sincronizó este mapeo». La conciliación necesita responder «¿cuándo apareció
+  // por última vez este vehículo en la cuenta?», y la diferencia entre las dos
+  // preguntas es justo lo que separa un vehículo retirado de una API caída.
+  //
+  // Solo se toca cuando se cumplen las tres condiciones a la vez: la cuenta
+  // respondió, el listado se obtuvo entero, y el vehículo venía en él. Una
+  // sincronización fallida no lo mueve, así que un fallo del proveedor no
+  // envejece la flota entera de golpe.
+  await pool.query(`
+    ALTER TABLE integration_mappings ADD COLUMN IF NOT EXISTS last_seen_at_ms BIGINT;
+  `);
+
+  // ── Un vehículo, un enlace activo por cuenta ──────────────────────────────
+  //
+  // El comentario de la UNIQUE de arriba dejó esta regla pendiente para la fase
+  // que creara los enlaces de vehículo, y es esta. Se implementa con dos índices
+  // ÚNICOS PARCIALES en vez de constraints por dos motivos:
+  //
+  //  1. Solo deben aplicar a `entity_type = 'vehicle'`. Un producto o un cliente
+  //     sí pueden vivir en varias empresas del mismo ERP, que es el caso que la
+  //     UNIQUE general protege a propósito. Una constraint no admite WHERE.
+  //  2. Solo cuentan los enlaces ACTIVOS. Desvincular deja la fila con
+  //     `active = false` para conservar el histórico, y esas filas no deben
+  //     estorbar a un vínculo nuevo.
+  //
+  // Van los dos sentidos: ni un vehículo de TyreControl con dos equipos activos
+  // en la misma cuenta, ni un equipo del proveedor repartido entre dos vehículos.
+  // La base es la última línea de defensa; el servicio valida antes y da un
+  // mensaje entendible, pero una carrera entre dos pestañas la para esto.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ihmap_vehiculo_un_enlace_activo
+      ON integration_mappings (tenant_id, system, account_key, mobilink_id)
+      WHERE entity_type = 'vehicle' AND active;
+    CREATE UNIQUE INDEX IF NOT EXISTS ihmap_vehiculo_externo_unico
+      ON integration_mappings (tenant_id, system, account_key, external_code)
+      WHERE entity_type = 'vehicle' AND active;
+  `);
+
+  // ── Vehículos del proveedor que no queremos gestionar ─────────────────────
+  //
+  // Una cuenta telemática trae remolques auxiliares, vehículos de empresa y
+  // cosas que en TyreControl no pintan nada. Sin una forma de apartarlos, cada
+  // conciliación los volvería a listar como pendientes para siempre, y una
+  // lista que siempre tiene ruido deja de leerse.
+  //
+  // NO se resuelve con un mapeo falso apuntando a un `mobilink_id` inventado:
+  // eso metería vehículos fantasma en la misma tabla que usa el odómetro para
+  // decidir a quién preguntar. Tabla aparte, pequeña y reversible.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS integration_ignored_externals (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      system TEXT NOT NULL,
+      account_key TEXT NOT NULL DEFAULT 'default',
+      external_code TEXT NOT NULL,
+      reason TEXT,
+      created_at_ms BIGINT NOT NULL,
+      UNIQUE (tenant_id, entity_type, system, account_key, external_code)
+    );
+    CREATE INDEX IF NOT EXISTS ihign_lookup_idx
+      ON integration_ignored_externals(tenant_id, entity_type, system, account_key);
+  `);
+
   // ── Referencias de producto externas normalizadas + ofertas de proveedor ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS external_product_references (
