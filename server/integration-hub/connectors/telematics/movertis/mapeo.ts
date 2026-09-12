@@ -343,3 +343,176 @@ export function masCercana(
   }
   return mejor;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// Las formas REALES de Movertis, confirmadas con la sonda
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Lo de arriba nació sin conocer la API: busca cada campo por una lista de
+// nombres plausibles. Sigue valiendo para lo plano —el id y el nombre—, pero no
+// para lo que Movertis devuelve de verdad, que está ANIDADO y no se puede
+// expresar con una lista de nombres:
+//
+//   showvehicles → { name, idVehicle, classId, counters: {...}, sensors: {...} }
+//   showtrips    → [{ unit, coords: [{ time, timeString, pos: "lat,lng" }] }]
+//
+// De ahí estas funciones: una por forma, cada una con su trampa documentada.
+
+/**
+ * Valores que Movertis usa para «no hay lectura».
+ *
+ * `-348201.3876` es el centinela del dispositivo. El `0` lo confirmó el cliente
+ * y se ve en los datos: 17 de los 751 vehículos tienen `odometer: 0`, y son los
+ * marcados «Desinstalado», «sin uso» o recién dados de alta. Un cero de
+ * odómetro total no existe en una flota que rueda; tratarlo como lectura
+ * pondría un autobús a 0 km y borraría la vida de sus neumáticos.
+ */
+export const SIN_DATO = [-348201.3876, 0] as const;
+
+/** Un número de Movertis, o `undefined` si es uno de sus «sin dato». */
+export function valorMovertis(v: unknown): number | undefined {
+  const n = numero(v);
+  if (n === undefined) return undefined;
+  return SIN_DATO.includes(n as (typeof SIN_DATO)[number]) ? undefined : n;
+}
+
+/**
+ * La matrícula, sacada del NOMBRE, porque Movertis no tiene campo de matrícula.
+ *
+ * Los nombres de esta cuenta son «<nº de unidad> <separador> <matrícula>» con
+ * todos los separadores imaginables: «604 - 1678 GCM», «848 5053-HKC»,
+ * «977-4008-GWS», «1260 -- 2001-JJR», y alguno con cola («1231- 4468-GJK-
+ * Desinstalado»). De 751 nombres, 715 llevan matrícula del formato nuevo y 2
+ * del antiguo; los 34 restantes no la llevan porque no son vehículos con placa
+ * («NO FUNCIONA», «Nueva_60007», «0000»): equipos sin asignar.
+ *
+ * Se devuelve SIN separadores y en mayúsculas, que es como guarda las
+ * matrículas TyreControl (`String(matricula).trim().toUpperCase()` en el
+ * importador del CheckPoint). Así el emparejamiento es una comparación directa.
+ *
+ * El número de unidad de delante NO se confunde con la matrícula: el patrón
+ * exige tres letras detrás de los cuatro dígitos, y «1244-5324-KLN» solo casa
+ * en «5324-KLN».
+ */
+const MATRICULA_NUEVA = /(\d{4})[\s.·-]*([A-Z]{3})(?![A-Z0-9])/;
+const MATRICULA_ANTIGUA = /\b([A-Z]{1,2})[\s.·-]*(\d{4})[\s.·-]*([A-Z]{1,2})\b/;
+
+export function matriculaDeNombre(nombre: unknown): string | undefined {
+  if (typeof nombre !== "string" || !nombre.trim()) return undefined;
+  const s = nombre.toUpperCase();
+  const nueva = s.match(MATRICULA_NUEVA);
+  if (nueva) return `${nueva[1]}${nueva[2]}`;
+  const antigua = s.match(MATRICULA_ANTIGUA);
+  if (antigua) return `${antigua[1]}${antigua[2]}${antigua[3]}`;
+  return undefined;
+}
+
+/** Un vehículo de `showvehicles` al modelo normalizado. */
+export function aVehiculoDeFlota(fila: Record<string, unknown>): ProviderVehicle | null {
+  const base = aProviderVehicle(fila, { vehicleId: ["idVehicle"], name: ["name"] });
+  if (!base) return null;
+  const plate = matriculaDeNombre(fila.name);
+  return plate ? { ...base, plate } : base;
+}
+
+/**
+ * El odómetro de `counters`, en kilómetros.
+ *
+ * Se usa `counters.odometer` y NO el sensor con decimales, aunque exista. En
+ * esta cuenta hay un sensor «KM2» con fórmula `odometer/const1000` cuyo valor
+ * (809052.369502) es el mismo número con decimales que `counters.odometer`
+ * (809052), y es tentador preferirlo. No se hace: la fórmula de cada sensor la
+ * configura Movertis POR VEHÍCULO, así que no hay garantía de que signifique lo
+ * mismo en los 751, y el precio de equivocarse —un odómetro mil veces mayor o
+ * menor— no lo compensan 370 metros de precisión en la vida de un neumático.
+ *
+ * La unidad de `counters.odometer` sigue siendo la declarada en la config. El
+ * indicio es fuerte (km, por lo del sensor KM2) pero indicio no es prueba, y la
+ * regla de `aKilometros` no cambia: sin unidad declarada, sin odómetro.
+ */
+export function odometroDeCounters(
+  counters: unknown,
+  unidad: UnidadOdometro | undefined,
+): number | undefined {
+  if (!counters || typeof counters !== "object") return undefined;
+  return aKilometros(valorMovertis((counters as Record<string, unknown>).odometer), unidad);
+}
+
+/** Lectura «actual» de `showvehicles`: odómetro sí, posición no. */
+export function aLecturaDeFlota(
+  fila: Record<string, unknown>,
+  opciones: OpcionesMapeo,
+  providerVehicleId: string,
+  capturedAt: Date,
+): VehicleTelemetry {
+  return {
+    provider: opciones.provider,
+    accountKey: opciones.accountKey,
+    providerVehicleId,
+    capturedAt,
+    odometerKm: odometroDeCounters(fila.counters, opciones.unidadOdometro),
+    odometerSource: opciones.origenOdometro,
+    raw: { name: fila.name, idVehicle: fila.idVehicle, counters: fila.counters },
+  };
+}
+
+/**
+ * Un punto de `showtrips` a lectura.
+ *
+ * `pos` viene como UNA cadena, «41.0792007446,1.13263237476», no como dos
+ * campos. Y `time` es epoch en milisegundos, que `fecha()` ya distingue de los
+ * segundos por el corte en 10^11.
+ *
+ * La lectura sale SIN odómetro, y no por falta de mapeo: el histórico de
+ * Movertis no lo trae. Es la ausencia que decide que `getTelemetryAt` no pueda
+ * dar kilometraje de un instante pasado.
+ */
+export function aLecturaDePunto(
+  punto: Record<string, unknown>,
+  opciones: OpcionesMapeo,
+  providerVehicleId: string,
+): VehicleTelemetry | null {
+  const capturedAt = fecha(punto.time) ?? fecha(punto.timeString);
+  if (!capturedAt) return null;
+
+  const lectura: VehicleTelemetry = {
+    provider: opciones.provider,
+    accountKey: opciones.accountKey,
+    providerVehicleId,
+    capturedAt,
+    raw: { time: punto.time, pos: punto.pos },
+  };
+
+  const pos = typeof punto.pos === "string" ? punto.pos.split(",") : null;
+  if (pos && pos.length === 2) {
+    const lat = numero(pos[0]);
+    const lng = numero(pos[1]);
+    if (esPosicionValida(lat, lng)) {
+      lectura.latitude = lat;
+      lectura.longitude = lng;
+      lectura.positionAt = capturedAt;
+    }
+  }
+  return lectura;
+}
+
+/**
+ * Los puntos que `showtrips` devuelve para un vehículo.
+ *
+ * La respuesta es una lista de unidades, no de puntos, y puede traer más de una
+ * si se preguntó por varias. Se busca por `unit`; si solo viene una, se acepta
+ * sin comparar, porque Movertis no promete el tipo del id (número aquí, cadena
+ * en su documentación) y fallar por eso sería tirar la respuesta buena.
+ */
+export function puntosDeUnidad(
+  respuesta: unknown,
+  providerVehicleId: string,
+): Record<string, unknown>[] {
+  const unidades = Array.isArray(respuesta) ? respuesta : [];
+  if (!unidades.length) return [];
+  const suya = unidades.length === 1
+    ? unidades[0]
+    : unidades.find((u) => String((u as Record<string, unknown>)?.unit) === String(providerVehicleId));
+  const coords = (suya as Record<string, unknown> | undefined)?.coords;
+  return Array.isArray(coords) ? (coords as Record<string, unknown>[]) : [];
+}
