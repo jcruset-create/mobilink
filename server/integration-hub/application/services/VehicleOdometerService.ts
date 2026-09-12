@@ -240,3 +240,171 @@ export async function kilometrajeEnOperacion(
 
   return { estado: "sin_lectura", cuentasConsultadas: consultadas };
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// El kilometraje de un instante PASADO, cuando el proveedor no lo tiene
+// ════════════════════════════════════════════════════════════════════════════
+//
+// `kilometrajeEnOperacion` pregunta por una ventana de ±60 min alrededor del
+// instante y se queda con la lectura que traiga odómetro. Con Webfleet funciona:
+// su histórico (`showLogbook`) trae odómetro. Con Movertis NO, y no por falta de
+// mapeo: `showtrips` devuelve posiciones y nada más, así que para un instante de
+// hace tres días no hay ningún kilometraje que elegir y la respuesta correcta es
+// `sin_lectura`.
+//
+// Eso deja sin kilometraje justo el caso que lo necesita: las revisiones del
+// CheckPoint. El arco de Bridgestone mide presión y profundidad al entrar en la
+// base y su informe llega días después por correo, así que cuando se importa, el
+// instante que importa ya es pasado.
+//
+// La salida es la de `domain/inmovilidad.ts`: si el vehículo NO se ha movido
+// desde entonces, el odómetro de ahora es el de entonces. Y eso sí se puede
+// demostrar con posiciones.
+
+import {
+  decidirLecturaEnReposo,
+  evaluarInmovilidad,
+  type PruebaInmovilidad,
+} from "../../domain/inmovilidad.ts";
+// El haversine bueno ya existe y es puro: `liteRules.ts` no importa nada y se
+// anuncia como compartible. Una tercera copia de la fórmula en este repositorio
+// sería una de más.
+import { haversineMeters } from "../../../connect/liteRules.ts";
+
+/** Un kilometraje atribuido a un instante pasado, con la prueba que lo sostiene. */
+export interface KilometrajeEnReposo {
+  /** Odómetro en kilómetros, sin redondear. */
+  odometerKm: number;
+  provider: string;
+  accountKey: string;
+  providerVehicleId: string;
+  /** Instante de la lectura, según el proveedor. */
+  capturedAt: Date;
+  /** Minutos entre la lectura y el instante pedido, con signo. */
+  deltaMinutos: number;
+  odometerSource?: "vehicle" | "gps" | "unknown";
+  /** Qué dijeron las posiciones. Es lo que justifica atribuir el número. */
+  prueba: PruebaInmovilidad;
+}
+
+/**
+ * Lo que se pudo averiguar. Cinco casos, y el segundo es nuevo.
+ *
+ *  - `encontrado`     — hay odómetro y está respaldado.
+ *  - `se_movio`       — hay odómetro y NO vale: el vehículo salió después. No es
+ *                       un fallo ni una ausencia, es una negativa razonada, y
+ *                       merece decirse distinto para que quien lo lea no crea
+ *                       que la telemática no contestó.
+ *  - `sin_lectura`    — se preguntó y no había odómetro que ofrecer.
+ *  - `sin_telematica` — el vehículo no está enlazado con ninguna cuenta.
+ *  - `no_disponible`  — no se pudo preguntar. Esto sí merece reintento.
+ */
+export type ResultadoReposo =
+  | { estado: "encontrado"; kilometraje: KilometrajeEnReposo }
+  | { estado: "se_movio"; motivo: string; cuentasConsultadas: string[] }
+  | { estado: "sin_lectura"; cuentasConsultadas: string[] }
+  | { estado: "sin_telematica" }
+  | { estado: "no_disponible"; motivo: string };
+
+/**
+ * Kilometraje de un instante pasado, si se puede demostrar que el vehículo no
+ * se ha movido desde entonces.
+ *
+ * Dos llamadas por cuenta, y las dos hacen falta: la lectura actual trae el
+ * odómetro y las posiciones traen la prueba. Con Movertis, además, la lectura
+ * actual YA hace por dentro esas dos llamadas —`showvehicles` no fecha nada y su
+ * `capturedAt` sale de la última posición—, así que esto no añade una ronda
+ * gratuita: añade la ventana que va del instante pedido hasta ahora.
+ *
+ * Si varias cuentas responden con un número aceptable, gana la de menor desfase.
+ * Y si ninguna lo acepta pero alguna vio movimiento, eso es lo que se cuenta:
+ * «se movió» explica el null, y `sin_lectura` no lo explicaría.
+ */
+export async function kilometrajeSiSigueParado(
+  ctx: OperationContext,
+  vehiculoMobilinkId: string,
+  desde: Date,
+  opciones: { radioM?: number; ahora?: Date } = {},
+): Promise<ResultadoReposo> {
+  const cuentas = await resolveTelematicsConnectors(ctx.tenantId);
+  if (cuentas.length === 0) return { estado: "sin_telematica" };
+
+  const ahora = opciones.ahora ?? new Date();
+  const consultadas: string[] = [];
+  const fallos: string[] = [];
+  let mejor: KilometrajeEnReposo | null = null;
+  let movimiento: string | null = null;
+
+  for (const cuenta of cuentas) {
+    const providerVehicleId = await findExternalCode({
+      tenantId: ctx.tenantId,
+      entityType: "vehicle",
+      system: cuenta.key,
+      mobilinkId: vehiculoMobilinkId,
+      accountKey: cuenta.accountKey,
+    });
+    // Sin enlace, esta cuenta no sabe de este vehículo. No es un fallo suyo.
+    if (!providerVehicleId) continue;
+
+    const etiqueta = `${cuenta.key}/${cuenta.accountKey}`;
+    try {
+      const [actual, posiciones] = await Promise.all([
+        cuenta.connector.getCurrentTelemetry(ctx, providerVehicleId),
+        cuenta.connector.getTelemetryHistory(ctx, providerVehicleId, { from: desde, to: ahora }),
+      ]);
+      consultadas.push(etiqueta);
+
+      // Sin odómetro no hay kilometraje que atribuir, por mucha prueba que haya.
+      if (!actual || actual.odometerKm === undefined) continue;
+
+      const prueba = evaluarInmovilidad({
+        posiciones,
+        desde,
+        radioM: opciones.radioM,
+        distanciaMetros: haversineMeters,
+      });
+      const veredicto = decidirLecturaEnReposo({
+        capturedAt: actual.capturedAt,
+        desde,
+        prueba,
+      });
+
+      if (!veredicto.aceptado) {
+        // Solo el rechazo por movimiento merece contarse: es el único que
+        // explica el null con algo que se ha visto, y no con una ausencia.
+        if (prueba.estado === "se_movio") {
+          movimiento =
+            `${etiqueta}: el vehículo salió de donde estaba ` +
+            `(${Math.round(prueba.desplazamientoMaxM)} m, primera salida a las ` +
+            `${prueba.primerMovimientoAt.toISOString()})`;
+        }
+        continue;
+      }
+
+      const candidato: KilometrajeEnReposo = {
+        odometerKm: actual.odometerKm,
+        provider: actual.provider,
+        accountKey: actual.accountKey,
+        providerVehicleId,
+        capturedAt: actual.capturedAt,
+        deltaMinutos: veredicto.deltaMinutos,
+        odometerSource: actual.odometerSource,
+        prueba,
+      };
+      if (!mejor || Math.abs(candidato.deltaMinutos) < Math.abs(mejor.deltaMinutos)) {
+        mejor = candidato;
+      }
+    } catch (e) {
+      // Se anota y se sigue: otra cuenta puede tener la respuesta.
+      fallos.push(`${etiqueta}: ${(e as Error)?.message ?? e}`);
+    }
+  }
+
+  if (mejor) return { estado: "encontrado", kilometraje: mejor };
+  // Una negativa razonada manda sobre una ausencia: si se vio al vehículo salir,
+  // eso explica el null mucho mejor que «no había lectura».
+  if (movimiento) return { estado: "se_movio", motivo: movimiento, cuentasConsultadas: consultadas };
+  if (consultadas.length === 0 && fallos.length === 0) return { estado: "sin_telematica" };
+  if (consultadas.length === 0) return { estado: "no_disponible", motivo: fallos.join(" · ") };
+  return { estado: "sin_lectura", cuentasConsultadas: consultadas };
+}
