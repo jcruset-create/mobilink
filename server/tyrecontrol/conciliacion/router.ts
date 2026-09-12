@@ -46,9 +46,29 @@ export interface Solicitante {
   usuarioId: string;
   empresaPropia: string;
   esSuperadmin: boolean;
+  /**
+   * Si puede administrar (administrador de su empresa o super-admin).
+   *
+   * Se informa porque hay pantallas que se MIRAN sin administrar: la presencia
+   * en bases la consulta quien organiza el taller para decidir a qué autobús le
+   * toca revisión. Para la conciliación no cambia nada —ahí el guarda sigue
+   * exigiendo administrador antes de devolver el perfil—.
+   */
+  esAdmin: boolean;
 }
 
-export async function resolverSolicitante(req: Request): Promise<Solicitante | null> {
+/**
+ * Resuelve el perfil del que llama.
+ *
+ * `exigirAdmin` es `true` por defecto, que es el comportamiento de siempre y el
+ * que necesita la conciliación: sin ser administrador, ni perfil. Se puede
+ * aflojar para endpoints de solo lectura, y entonces quien llame comprueba
+ * `esAdmin` en el endpoint que lo necesite.
+ */
+export async function resolverSolicitante(
+  req: Request,
+  opciones: { exigirAdmin?: boolean } = {},
+): Promise<Solicitante | null> {
   const cabecera = String(req.headers.authorization ?? "");
   const token = cabecera.startsWith("Bearer ") ? cabecera.slice(7) : "";
   if (!token) return null;
@@ -64,13 +84,15 @@ export async function resolverSolicitante(req: Request): Promise<Solicitante | n
   if (!perfil || (perfil as any).activo === false) return null;
 
   const esSuperadmin = (perfil as any).es_superadmin === true;
+  const esAdmin = esSuperadmin || (perfil as any).rol === "administrador";
   // La conciliación crea vehículos y da de baja: es cosa de administradores.
-  if (!esSuperadmin && (perfil as any).rol !== "administrador") return null;
+  if (opciones.exigirAdmin !== false && !esAdmin) return null;
 
   return {
     usuarioId: String((perfil as any).id),
     empresaPropia: String((perfil as any).empresa_id ?? ""),
     esSuperadmin,
+    esAdmin,
   };
 }
 

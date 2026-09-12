@@ -359,3 +359,82 @@ describe("esperaPedida()", () => {
   it("se acota: una hora pedida son dos minutos obedecidos", () => expect(esperaPedida(con(429, "3600"))).toBe(120_000));
   it("basura: nada", () => expect(esperaPedida(con(429, "mañana"))).toBeUndefined());
 });
+
+/**
+ * El barrido de la flota: una petición para todos.
+ *
+ * Lo que se fija aquí es el cuerpo. La bandera se llama `lastMessagePosition`
+ * y `id: []` significa «toda la flota»: equivocarse en cualquiera de las dos
+ * no da un error, da un 201 con «Flag incorrecta» dentro o la respuesta de un
+ * solo vehículo, que son fallos que entran como datos.
+ */
+describe("getFleetPositions()", () => {
+  const CTX = { tenantId: "empresa-plana", correlationId: "COR-1" };
+
+  function conToken<T>(fn: () => Promise<T>): Promise<T> {
+    const anterior = getSecretsProvider();
+    setSecretsProvider({ get: async (_t, _c, nombre) => (nombre === "token" ? "tok" : undefined) });
+    return fn().finally(() => setSecretsProvider(anterior));
+  }
+
+  function fingirFetch(body: unknown) {
+    const llamadas: Array<{ url: string; body: any }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: any) => {
+      llamadas.push({ url, body: JSON.parse(init.body) });
+      return {
+        status: 201,
+        ok: true,
+        headers: { get: () => null },
+        text: async () => JSON.stringify(body),
+      };
+    }));
+    return llamadas;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  const FILA = {
+    idVehicle: 26053725,
+    name: "604 - 1678 GCM",
+    counters: { odometer: 809052 },
+    lastPosition: { date: 1789229448, lat: 41.1299667358, lon: 1.18569278717, speed: 0, course: 166 },
+  };
+
+  it("pide la flota entera con la bandera de posición, en UNA petición", async () => {
+    const llamadas = fingirFetch([FILA, { ...FILA, idVehicle: 30089320 }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km", accountKey: "buses" });
+
+    const r = await conToken(() => c.getFleetPositions(CTX));
+
+    expect(llamadas).toHaveLength(1);
+    expect(llamadas[0].url).toBe("https://devapi.invalid/vehicle/showvehicles");
+    expect(llamadas[0].body).toEqual({
+      flags: { basicData: true, counters: true, lastMessagePosition: true },
+      id: [],
+    });
+    expect(r.map((p) => p.providerVehicleId)).toEqual(["26053725", "30089320"]);
+    expect(r[0].latitude).toBeCloseTo(41.1299667358);
+    expect(r[0].odometerKm).toBe(809052);
+  });
+
+  it("los vehículos sin posición utilizable no salen: ausencia, no coordenada vacía", async () => {
+    fingirFetch([
+      FILA,
+      { idVehicle: 1, name: "NO FUNCIONA" },
+      { idVehicle: 2, name: "sin fijación", lastPosition: { date: 1789229448, lat: 0, lon: 0 } },
+    ]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km" });
+
+    const r = await conToken(() => c.getFleetPositions(CTX));
+
+    expect(r).toHaveLength(1);
+    expect(r[0].providerVehicleId).toBe("26053725");
+  });
+
+  it("sin baseUrl no llama a nadie y devuelve vacío, no una flota inventada", async () => {
+    const llamadas = fingirFetch([FILA]);
+    const r = await conToken(() => new MovertisConnector({}).getFleetPositions(CTX));
+    expect(r).toEqual([]);
+    expect(llamadas).toHaveLength(0);
+  });
+});

@@ -2,8 +2,9 @@
 -- SEA TyreControl — Geo-zonas de las bases (delegaciones) de Autocares Plana.
 --
 -- La base ES la delegación: el centro (lat/lng) y el radio viven en
--- tc_delegaciones (columnas webfleet_lat / webfleet_lng / webfleet_radio_m,
--- creadas en tyrecontrol_webfleet_bases_fase0.sql). Ningún nombre ni
+-- tc_delegaciones (columnas base_lat / base_lng / base_radio_m; nacieron en
+-- tyrecontrol_webfleet_bases_fase0.sql como webfleet_* y las renombra
+-- tyrecontrol_bases_geozona_renombrado.sql, que hay que ejecutar ANTES). Ningún nombre ni
 -- coordenada se escribe en código: sólo aquí, en datos.
 --
 -- Centros obtenidos de las posiciones reales de la flota (Movertis,
@@ -50,16 +51,16 @@ begin
 
     if v_cuantas = 1 then
       update tc_delegaciones
-         set webfleet_lat     = b.lat,
-             webfleet_lng     = b.lng,
-             webfleet_radio_m = b.radio_m,
+         set base_lat     = b.lat,
+             base_lng     = b.lng,
+             base_radio_m = b.radio_m,
              updated_at       = now()
        where empresa_id = v_empresa
          and nombre ilike '%' || b.nombre || '%'
       returning id into v_id;
       raise notice 'Base "%": geo-zona actualizada en la delegación existente %', b.nombre, v_id;
     else
-      insert into tc_delegaciones (empresa_id, nombre, webfleet_lat, webfleet_lng, webfleet_radio_m)
+      insert into tc_delegaciones (empresa_id, nombre, base_lat, base_lng, base_radio_m)
       values (v_empresa, b.nombre, b.lat, b.lng, b.radio_m)
       returning id into v_id;
       raise notice 'Base "%": delegación creada %', b.nombre, v_id;
@@ -68,7 +69,7 @@ begin
 end $$;
 
 -- Comprobación: las seis bases con su geo-zona.
-select nombre, webfleet_lat, webfleet_lng, webfleet_radio_m, activo
+select nombre, base_lat, base_lng, base_radio_m, activo
   from tc_delegaciones
  where empresa_id = 'a51c9662-4b6f-4681-8e2b-599e109659eb'
- order by webfleet_lat is null, nombre;
+ order by base_lat is null, nombre;
