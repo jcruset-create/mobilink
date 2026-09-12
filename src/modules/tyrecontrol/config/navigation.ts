@@ -18,6 +18,7 @@ export const NAV: NavItem[] = [
   { key: "delegaciones", path: "delegaciones", label: "Delegaciones", icon: MapPin, roles: ["administrador"] },
   { key: "usuarios", path: "usuarios", label: "Usuarios", icon: Users, roles: ["administrador"] },
   { key: "vehiculos", path: "vehiculos", label: "Vehículos", icon: Truck, roles: ["administrador"] },
+  { key: "conciliacion-telematica", path: "conciliacion-telematica", label: "Conciliación telemática", icon: Link2, roles: ["administrador"] },
   { key: "disponibles-revisar", path: "disponibles-revisar", label: "Disponibles para revisar", icon: CalendarCheck, roles: ["administrador"] },
   { key: "planificacion", path: "planificacion", label: "Planificación de revisiones", icon: ClipboardList, roles: ["administrador"] },
   { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, roles: ["administrador"] },

@@ -69,11 +69,21 @@ export function credencialesCompletas(c: WebfleetCreds | null | undefined): c is
   return !!(c && c.account && c.username && c.password);
 }
 
-/** Credenciales de una empresa en el gestor de secretos. null si no están. */
-export async function credencialesDeSecretos(empresaId: string): Promise<WebfleetCreds | null> {
+/**
+ * Credenciales de una empresa en el gestor de secretos. null si no están.
+ *
+ * Con `cuenta` se busca primero el secreto de esa cuenta concreta y, si no lo
+ * hay, el del cliente. Un cliente con dos cuentas de Webfleet —cada una con su
+ * usuario— necesita ese primer escalón; uno con una sola no tiene que tocar
+ * nada, porque el segundo es el de siempre.
+ */
+export async function credencialesDeSecretos(
+  empresaId: string,
+  cuenta?: string,
+): Promise<WebfleetCreds | null> {
   if (!empresaId) return null;
   const secretos = getSecretsProvider();
-  const leer = (nombre: string) => secretos.get(empresaId, CONECTOR, nombre);
+  const leer = (nombre: string) => secretos.get(empresaId, CONECTOR, nombre, cuenta);
 
   const [account, username, password, apikey, baseUrl] = await Promise.all([
     leer("ACCOUNT"),
@@ -141,9 +151,17 @@ export type ResolucionCredenciales = {
  * único que se puede registrar de esto— y para que el panel pueda enseñar si un
  * cliente ya está migrado al gestor sin tener que mirar ningún valor.
  */
-export async function resolverCredencialesWebfleet(empresaId: string): Promise<ResolucionCredenciales> {
-  const deSecretos = await credencialesDeSecretos(empresaId);
+export async function resolverCredencialesWebfleet(
+  empresaId: string,
+  cuenta?: string,
+): Promise<ResolucionCredenciales> {
+  const deSecretos = await credencialesDeSecretos(empresaId, cuenta);
   if (deSecretos) return { creds: deSecretos, origen: "secretos" };
+
+  // Los dos escalones de abajo NO distinguen cuenta y no pueden: `tc_webfleet_config`
+  // tiene una fila por empresa y las variables globales son una sola. Es la vía
+  // de transición, y para un cliente con dos cuentas la respuesta correcta es
+  // ponerle su secreto por cuenta, no repartir el de la tabla entre las dos.
 
   const deTabla = await credencialesDeTabla(empresaId);
   if (deTabla) return { creds: deTabla, origen: "tabla" };
@@ -160,8 +178,11 @@ export async function resolverCredencialesWebfleet(empresaId: string): Promise<R
  * Mantiene la firma que tenía en `index.ts` para que los tres sitios que la
  * llaman no se enteren del cambio.
  */
-export async function resolveWebfleetCreds(empresaId: string): Promise<WebfleetCreds | null> {
-  return (await resolverCredencialesWebfleet(empresaId)).creds;
+export async function resolveWebfleetCreds(
+  empresaId: string,
+  cuenta?: string,
+): Promise<WebfleetCreds | null> {
+  return (await resolverCredencialesWebfleet(empresaId, cuenta)).creds;
 }
 
 export function buildWebfleetRequest(action: string, extra: Record<string, string> = {}, creds?: WebfleetCreds): { url: string; headers: Record<string, string> } {

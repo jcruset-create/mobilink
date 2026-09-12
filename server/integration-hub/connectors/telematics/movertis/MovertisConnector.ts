@@ -45,9 +45,14 @@
  * contrato): el `tenantId` viaja en el `OperationContext` y el secreto se
  * resuelve aquí. Nombres esperados, por el `SecretsProvider`:
  *
- *   IH_SECRET__<TENANT>__MOVERTIS__TOKEN      (lo primero que se mira)
- *   IH_SECRET__<TENANT>__MOVERTIS__API_KEY    (cabecera X-Api-Key)
- *   IH_SECRET__<TENANT>__MOVERTIS__USERNAME   + __PASSWORD  (Basic)
+ *   IH_SECRET__<TENANT>__MOVERTIS__<CUENTA>__TOKEN   (lo primero que se mira)
+ *   IH_SECRET__<TENANT>__MOVERTIS__TOKEN             (todas las cuentas del cliente)
+ *   IH_SECRET__<TENANT>__MOVERTIS__<…>__API_KEY      (cabecera X-Api-Key)
+ *   IH_SECRET__<TENANT>__MOVERTIS__<…>__USERNAME + __PASSWORD  (Basic)
+ *
+ * El escalón de la CUENTA hace falta porque un cliente puede tener dos cuentas
+ * de Movertis con tokens distintos. Sin él las dos leerían la misma variable:
+ * la segunda daría 401, o —peor— devolvería la flota de la primera.
  *
  * Con el fallback global sin tenant que ya define `secrets.ts`. Ese fallback es
  * cómodo para probar y peligroso para quedarse: con dos clientes de Movertis,
@@ -196,11 +201,15 @@ export class MovertisConnector implements ITelematicsConnector {
 
   private async credenciales(ctx: OperationContext): Promise<Credenciales> {
     const secrets = getSecretsProvider();
+    // La cuenta va en la resolución: dos cuentas del mismo cliente tienen
+    // tokens distintos, y sin esto las dos leerían el mismo.
+    const cuenta = this.config.accountKey;
+    const leer = (nombre: string) => secrets.get(ctx.tenantId, this.info.key, nombre, cuenta);
     const [token, apiKey, username, password] = await Promise.all([
-      secrets.get(ctx.tenantId, this.info.key, "token"),
-      secrets.get(ctx.tenantId, this.info.key, "api_key"),
-      secrets.get(ctx.tenantId, this.info.key, "username"),
-      secrets.get(ctx.tenantId, this.info.key, "password"),
+      leer("token"),
+      leer("api_key"),
+      leer("username"),
+      leer("password"),
     ]);
     return { token, apiKey, username, password };
   }

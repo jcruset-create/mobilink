@@ -1,0 +1,306 @@
+/**
+ * API de la conciliación telemática.
+ *
+ * ── Por qué vive aquí y no en el router del Integration Hub ─────────────────
+ *
+ * El Hub resuelve su tenant con `tenantOf(req)`, que lee `x-tenant-id`, el
+ * cuerpo o la query, y lo protege con una credencial global de administrador.
+ * Ese modelo funciona para un panel de integraciones que maneja un
+ * administrador de la casa, pero no vale aquí: la conciliación la usa un
+ * administrador DE UN CLIENTE, y aceptar la empresa que venga en una cabecera
+ * le dejaría conciliar la flota de otro. Cambiar `tenantOf` afectaría a todos
+ * los endpoints del Hub y no toca en esta fase.
+ *
+ * Así que la empresa se deriva de la sesión de TyreControl, exactamente igual
+ * que hacen los endpoints de gestión de usuarios de `server/index.ts`: se
+ * valida el token contra Supabase, se lee el perfil de `tc_usuarios`, y un
+ * administrador normal solo opera sobre su empresa. Un super-admin puede
+ * nombrar otra, y solo él.
+ */
+
+import { Router, json, type Request, type Response } from "express";
+
+import { supabase } from "../../supabase.ts";
+import { normalizarMatricula } from "../matricula.ts";
+import { conciliarFlota } from "../../integration-hub/application/services/VehicleReconciliationService.ts";
+import { listIgnoredExternals, nextCorrelationId } from "../../integration-hub/infrastructure/repositories.ts";
+import { leerFlotaInterna } from "./flota.ts";
+import {
+  crearPendiente,
+  darDeBaja,
+  dejarDeIgnorar,
+  desvincular,
+  ErrorConciliacion,
+  ignorar,
+  vincular,
+  type Ambito,
+} from "./acciones.ts";
+
+/** Perfil del que llama, resuelto contra la base. Nunca contra la petición. */
+interface Solicitante {
+  usuarioId: string;
+  empresaPropia: string;
+  esSuperadmin: boolean;
+}
+
+async function resolverSolicitante(req: Request): Promise<Solicitante | null> {
+  const cabecera = String(req.headers.authorization ?? "");
+  const token = cabecera.startsWith("Bearer ") ? cabecera.slice(7) : "";
+  if (!token) return null;
+
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user) return null;
+
+  const { data: perfil } = await supabase
+    .from("tc_usuarios")
+    .select("id, rol, empresa_id, es_superadmin, activo")
+    .eq("id", data.user.id)
+    .maybeSingle();
+  if (!perfil || (perfil as any).activo === false) return null;
+
+  const esSuperadmin = (perfil as any).es_superadmin === true;
+  // La conciliación crea vehículos y da de baja: es cosa de administradores.
+  if (!esSuperadmin && (perfil as any).rol !== "administrador") return null;
+
+  return {
+    usuarioId: String((perfil as any).id),
+    empresaPropia: String((perfil as any).empresa_id ?? ""),
+    esSuperadmin,
+  };
+}
+
+/**
+ * Qué empresa se va a tocar.
+ *
+ * Un administrador normal: la suya, y punto — lo que pida en la petición se
+ * ignora, no se rechaza, porque no hay nada que negociar. Un super-admin puede
+ * nombrar otra, y si no nombra ninguna se usa la suya.
+ */
+function empresaDe(solicitante: Solicitante, pedida: unknown): string | null {
+  if (!solicitante.esSuperadmin) return solicitante.empresaPropia || null;
+  const p = String(pedida ?? "").trim();
+  return p || solicitante.empresaPropia || null;
+}
+
+/**
+ * La petición después del guarda.
+ *
+ * El perfil se resuelve una vez, en el middleware, y viaja aquí. Tiparlo evita
+ * repartir `(req as any)` por cada endpoint, que además de feo esconde el día
+ * en que alguien lea el perfil en una ruta que no pasa por el guarda.
+ */
+type PeticionConciliacion = Request & { solicitante: Solicitante };
+
+function fallo(res: Response, e: unknown) {
+  if (e instanceof ErrorConciliacion) {
+    return res.status(e.estado).json({ error: e.message, code: e.codigo });
+  }
+  console.error("[conciliacion] error:", (e as any)?.message ?? e);
+  return res.status(500).json({ error: "Error en la conciliación" });
+}
+
+/** Ámbito común a todas las acciones, ya validado. */
+function ambitoDe(empresaId: string, body: any): Ambito {
+  const connectorKey = String(body?.connectorKey ?? "").trim();
+  const accountKey = String(body?.accountKey ?? "").trim();
+  if (!connectorKey) {
+    throw new ErrorConciliacion("SIN_CONECTOR", "Falta el proveedor telemático.");
+  }
+  // La cuenta NO cae a 'default' por su cuenta: con varias cuentas, adivinar
+  // significa escribir el enlace en la plataforma equivocada.
+  if (!accountKey) {
+    throw new ErrorConciliacion("SIN_CUENTA", "Falta la cuenta del proveedor.");
+  }
+  return { empresaId, connectorKey, accountKey };
+}
+
+export function createConciliacionRouter(): Router {
+  const router = Router();
+  router.use(json({ limit: "256kb" }));
+
+  // Todo lo de aquí exige sesión de administrador de TyreControl.
+  router.use(async (req, res, next) => {
+    try {
+      const solicitante = await resolverSolicitante(req);
+      if (!solicitante) {
+        return res.status(401).json({ error: "Solo un administrador de TyreControl puede conciliar" });
+      }
+      (req as PeticionConciliacion).solicitante = solicitante;
+      next();
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Cuentas telemáticas disponibles para la empresa.
+   *
+   * La pantalla la necesita para poder elegir, y para no asumir 'default'
+   * cuando hay más de una.
+   */
+  router.get("/cuentas", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+
+      const { resolveTelematicsConnectors } = await import(
+        "../../integration-hub/connectors/ConnectorRegistry.ts"
+      );
+      const cuentas = await resolveTelematicsConnectors(empresaId);
+      res.json({
+        empresaId,
+        cuentas: cuentas.map((c) => ({
+          connectorKey: c.key,
+          accountKey: c.accountKey,
+          nombre: (c.config as any)?.nombre ?? null,
+        })),
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /** La conciliación. Solo lee TyreControl; lo único que escribe es last_seen. */
+  router.get("/", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+
+      const connectorKey = req.query.connector ? String(req.query.connector) : undefined;
+      const accountKey = req.query.cuenta ? String(req.query.cuenta) : undefined;
+
+      const resultado = await conciliarFlota(
+        { tenantId: empresaId, correlationId: await nextCorrelationId() },
+        { connectorKey, accountKey, leerFlotaInterna, normalizarMatricula },
+      );
+
+      // Los ignorados no salen en los cuadrantes, pero la pantalla tiene que
+      // poder enseñarlos para que «dejar de ignorar» sea alcanzable.
+      const ignorados = connectorKey && accountKey
+        ? await listIgnoredExternals({
+            tenantId: empresaId,
+            entityType: "vehicle",
+            system: connectorKey,
+            accountKey,
+          })
+        : [];
+
+      res.json({
+        empresaId,
+        ...resultado,
+        ignorados: ignorados.map((i) => ({
+          externalVehicleId: i.external_code,
+          motivo: i.reason,
+          desde: i.created_at_ms,
+        })),
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.post("/vincular", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      const enlace = await vincular(ambito, {
+        tcVehicleId: String(req.body?.tcVehicleId ?? ""),
+        externalVehicleId: String(req.body?.externalVehicleId ?? ""),
+        matchMethod: req.body?.matchMethod,
+        externalPlate: req.body?.externalPlate ?? null,
+        externalName: req.body?.externalName ?? null,
+      });
+      res.json({ ok: true, enlace });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.post("/desvincular", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      const enlace = await desvincular(ambito, {
+        tcVehicleId: String(req.body?.tcVehicleId ?? ""),
+        externalVehicleId: String(req.body?.externalVehicleId ?? ""),
+      });
+      res.json({ ok: true, enlace });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.post("/ignorar", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      const fila = await ignorar(ambito, {
+        externalVehicleId: String(req.body?.externalVehicleId ?? ""),
+        motivo: req.body?.motivo ?? null,
+      });
+      res.json({ ok: true, ignorado: fila });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.post("/dejar-de-ignorar", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      res.json(await dejarDeIgnorar(ambito, {
+        externalVehicleId: String(req.body?.externalVehicleId ?? ""),
+      }));
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.post("/crear-vehiculo", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      const r = await crearPendiente(ambito, {
+        externalVehicleId: String(req.body?.externalVehicleId ?? ""),
+        matricula: String(req.body?.matricula ?? ""),
+        bastidor: req.body?.bastidor ?? null,
+        numeroUnidad: req.body?.numeroUnidad ?? null,
+        externalName: req.body?.externalName ?? null,
+      });
+      res.json({ ok: true, ...r });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.post("/dar-de-baja", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      const r = await darDeBaja(ambito, {
+        tcVehicleId: String(req.body?.tcVehicleId ?? ""),
+        neumaticosMontadosVistos: Number(req.body?.neumaticosMontadosVistos ?? -1),
+        desvincularTambien: req.body?.desvincularTambien === true,
+      });
+      res.json({ ok: true, ...r });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  return router;
+}

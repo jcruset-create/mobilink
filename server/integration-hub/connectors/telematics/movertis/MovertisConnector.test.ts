@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import { MovertisConnector, mensajeDeError } from "./MovertisConnector.ts";
+import { getSecretsProvider, setSecretsProvider } from "../../../infrastructure/secrets.ts";
 
 describe("cabeceras de autenticación", () => {
   it("manda el token EN CRUDO, sin «Bearer», que es lo que pide Movertis", () => {
@@ -93,5 +94,60 @@ describe("mensajeDeError()", () => {
     expect(mensajeDeError([{ name: "604 - 1678 GCM", idVehicle: 26134116 }])).toBeNull();
     expect(mensajeDeError({ name: "604 - 1678 GCM", idVehicle: 26134116 })).toBeNull();
     expect(mensajeDeError(null)).toBeNull();
+  });
+});
+
+/**
+ * El token que pide cada cuenta.
+ *
+ * Un cliente puede tener dos cuentas de Movertis con tokens distintos. Antes de
+ * que el gestor de secretos distinguiera cuentas, las dos leían la misma
+ * variable: la segunda daba 401 con la credencial correcta o, si el token valía
+ * para ambas, devolvía la flota de la primera sin dar ningún error. Esto fija
+ * que la cuenta llega hasta la resolución del secreto.
+ */
+describe("credenciales por cuenta", () => {
+  it("pide el secreto de SU cuenta, no el del cliente a secas", async () => {
+    const pedidos: Array<[string, string, string, string | undefined]> = [];
+    const anterior = getSecretsProvider();
+    try {
+      setSecretsProvider({
+        get: async (tenant, conector, nombre, cuenta) => {
+          pedidos.push([tenant, conector, nombre, cuenta]);
+          return nombre === "token" && cuenta === "auxiliar" ? "token-auxiliar" : undefined;
+        },
+      });
+
+      const conector = new MovertisConnector({ baseUrl: "https://api.invalid", accountKey: "auxiliar" });
+      const r = await conector.testConnection({ tenantId: "empresa-plana", correlationId: "COR-1" });
+
+      // Todas las lecturas llevan la cuenta.
+      expect(pedidos.length).toBeGreaterThan(0);
+      expect(pedidos.every(([, , , cuenta]) => cuenta === "auxiliar")).toBe(true);
+      // Y con credencial encontrada NO se queda en «sin credenciales».
+      expect(r.message).not.toContain("sin credenciales");
+    } finally {
+      setSecretsProvider(anterior);
+    }
+  });
+
+  it("sin cuenta declarada no inventa ninguna", async () => {
+    const cuentas: Array<string | undefined> = [];
+    const anterior = getSecretsProvider();
+    try {
+      setSecretsProvider({
+        get: async (_t, _c, _n, cuenta) => {
+          cuentas.push(cuenta);
+          return undefined;
+        },
+      });
+      await new MovertisConnector({ baseUrl: "https://api.invalid" }).testConnection({
+        tenantId: "empresa-plana",
+        correlationId: "COR-1",
+      });
+      expect(cuentas.every((c) => c === undefined)).toBe(true);
+    } finally {
+      setSecretsProvider(anterior);
+    }
   });
 });
