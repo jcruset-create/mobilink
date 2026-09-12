@@ -36,14 +36,22 @@ import {
   calcularCambios,
   guardarEstado,
   leerEstado,
+  LATIDO_REPASO_MS,
+  PERIODO_REPASO_MS,
   type Cambios,
   type EstadoConciliacion,
 } from "./estado.ts";
 
-/** Cada cuánto toca de verdad. */
-export const PERIODO_MS = 14 * 24 * 60 * 60 * 1000;
-/** Cada cuánto se mira el reloj. Barato: una consulta por cliente. */
-const LATIDO_MS = 6 * 60 * 60 * 1000;
+/**
+ * Cada cuánto toca de verdad, y cada cuánto se mira el reloj.
+ *
+ * Los dos números viven en `estado.ts`, no aquí: de ellos depende también
+ * cuánto sigue valiendo el estado guardado para afirmar una ausencia, y
+ * tenerlos en dos sitios es la forma de que un día dejen de cuadrar. Se
+ * reexporta `PERIODO_MS` porque es el nombre por el que ya se conoce.
+ */
+export const PERIODO_MS = PERIODO_REPASO_MS;
+const LATIDO_MS = LATIDO_REPASO_MS;
 /** Cuántas filas se enumeran en el correo antes de resumir con «y N más». */
 const MAX_FILAS_CORREO = 50;
 

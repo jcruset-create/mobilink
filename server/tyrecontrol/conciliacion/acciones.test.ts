@@ -18,10 +18,23 @@ vi.mock("../../integration-hub/infrastructure/repositories.ts", () => ({
   unignoreExternal: vi.fn(),
   nextCorrelationId: vi.fn(async () => "COR-1"),
 }));
+// El estado guardado se finge para poder decidir, prueba a prueba, si la última
+// conciliación permite afirmar ausencias. `permisoDeBaja` es puro y se prueba
+// aparte en estado.test.ts; lo que se fija aquí es que `darDeBaja` lo EXIJA.
+vi.mock("./estado.ts", async () => {
+  const real: any = await vi.importActual("./estado.ts");
+  return { ...real, leerEstado: vi.fn() };
+});
 // El servicio de conciliación se finge entero: aquí no se prueba QUÉ propone
 // —eso está en reconciliation.test.ts— sino qué hace el lote con lo propuesto.
 vi.mock("../../integration-hub/application/services/VehicleReconciliationService.ts", () => ({
   conciliarFlota: vi.fn(),
+}));
+// El registro de conectores: es la fuente de verdad de «esta cuenta existe, está
+// habilitada y es de esta empresa», y de ella sale la flota con la que se
+// comprueba que el vehículo externo existe de verdad.
+vi.mock("../../integration-hub/connectors/ConnectorRegistry.ts", () => ({
+  resolveTelematicsConnectors: vi.fn(),
 }));
 
 const { supabase } = await import("../../supabase.ts");
@@ -30,12 +43,67 @@ const { upsertMapping, listVehicleMappings, setVehicleMappingActive, unignoreExt
 const { conciliarFlota } = await import(
   "../../integration-hub/application/services/VehicleReconciliationService.ts"
 );
+const { resolveTelematicsConnectors } = await import(
+  "../../integration-hub/connectors/ConnectorRegistry.ts"
+);
+const { leerEstado, MOTIVOS_BAJA_BLOQUEADA, PERIODO_REPASO_MS, VENTANA_FRESCURA_MS } =
+  await import("./estado.ts");
 const {
   vincular, desvincular, darDeBaja, crearPendiente, dejarDeIgnorar, vincularLote, ErrorConciliacion,
   crearPendientesLote, ignorarLote,
 } = await import("./acciones.ts");
 
 const AMBITO = { empresaId: "empresa-A", connectorKey: "movertis", accountKey: "buses" };
+
+/**
+ * Finge la cuenta telemática de `AMBITO` con la flota indicada.
+ *
+ * `externos` son los identificadores que el proveedor devuelve AHORA: lo que
+ * decide si un enlace apunta a un vehículo que existe.
+ */
+function fingirCuenta(externos: string[] = ["EXT-1"], over: Record<string, unknown> = {}) {
+  vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+    {
+      key: "movertis",
+      accountKey: "buses",
+      usingDefault: false,
+      config: {},
+      connector: {
+        listVehicles: vi.fn(async () => externos.map((id) => ({ providerVehicleId: id }))),
+      },
+      ...over,
+    },
+  ] as any);
+}
+
+/** Finge lo que devuelve la conciliación, con el molde en un solo sitio. */
+function fingirConciliacion(r: Record<string, unknown>) {
+  vi.mocked(conciliarFlota).mockResolvedValue({
+    enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [], soloProveedor: [],
+    ...r,
+  } as any);
+}
+
+/** Un resumen de conciliación completo, que es lo que permite autoenlazar. */
+const RESUMEN_COMPLETO = {
+  status: "complete",
+  cuentas: [{ connectorKey: "movertis", accountKey: "buses", ok: true, vehiculos: 1 }],
+};
+
+/** Una última conciliación completa, reciente y con ESTA cuenta respondiendo. */
+function estadoQuePermiteBaja(sobrescribir: Record<string, unknown> = {}): any {
+  return {
+    version: 1 as const,
+    ejecutadoMs: Date.now() - 60_000,
+    status: "complete",
+    enlazadosAuto: 0,
+    pendientes: { soloProveedor: 0, soloTyreControl: 0, discrepancias: 0 },
+    cuentas: [{ connectorKey: "movertis", accountKey: "buses", ok: true }],
+    externosVistos: [],
+    externosCompletos: true,
+    ...sobrescribir,
+  };
+}
 
 /**
  * Finge `supabase.from(tabla)`.
@@ -76,6 +144,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(listVehicleMappings).mockResolvedValue([] as any);
   vi.mocked(upsertMapping).mockResolvedValue({ id: 1 } as any);
+  // Por defecto, la última conciliación permite la baja: las pruebas que van
+  // de otra cosa no deberían tener que saber de esto.
+  vi.mocked(leerEstado).mockResolvedValue(estadoQuePermiteBaja());
+  // Por defecto la cuenta existe y su flota contiene los identificadores que
+  // usan las pruebas: las que van de otra cosa no deberían tener que saberlo.
+  // «MALO» queda fuera a propósito: es el que usan las pruebas de rechazo.
+  fingirCuenta(["E1", "E2", "E-DEL-SERVIDOR", "CON", "SIN", "25269015"]);
   vi.mocked(setVehicleMappingActive).mockResolvedValue({ id: 1, active: false } as any);
 });
 
@@ -249,6 +324,145 @@ function fingirBaja(opciones: { montajes: number; empresa?: string; activo?: boo
   return actualizaciones;
 }
 
+/**
+ * El bloqueo de bajas en el SERVIDOR.
+ *
+ * La pantalla ya deshabilitaba el botón cuando la conciliación no era completa,
+ * y eso no protegía nada: un POST directo, una pestaña abierta desde antes de
+ * que el proveedor se cayera o un cliente modificado se lo saltaban. Una baja
+ * masiva equivocada es el peor desenlace posible de esta pantalla —arrastra
+ * neumáticos montados, histórico y facturación— así que lo que se fija aquí es
+ * que el servidor se niegue por su cuenta, sin fiarse de nadie.
+ *
+ * Y en cada rechazo se comprueba lo mismo: que NO se ha tocado nada.
+ */
+describe("dar de baja: el servidor exige poder afirmar la ausencia", () => {
+  /** Nada de lo que la baja podría tocar se ha tocado. */
+  function nadaTocado(actualizaciones: any[]) {
+    // Ni `activo`, ni ninguna otra columna: la lista de updates está vacía.
+    expect(actualizaciones).toEqual([]);
+    // Ni el enlace con el proveedor.
+    expect(setVehicleMappingActive).not.toHaveBeenCalled();
+    // Ni montajes, ni stock, ni histórico: esas tablas no se llegan a tocar,
+    // y la única escritura posible de esta acción es el update de arriba.
+    expect(upsertMapping).not.toHaveBeenCalled();
+  }
+
+  it("permite la baja cuando la última conciliación fue completa y reciente", async () => {
+    const actualizaciones = fingirBaja({ montajes: 6 });
+    vi.mocked(leerEstado).mockResolvedValue(estadoQuePermiteBaja());
+
+    const r = await darDeBaja(AMBITO, { tcVehicleId: "v1", neumaticosMontadosVistos: 6 });
+    expect(actualizaciones).toEqual([{ activo: false }]);
+    expect(r.matricula).toBe("8543LZZ");
+  });
+
+  it("rechaza si la conciliación fue INCOMPLETA", async () => {
+    const actualizaciones = fingirBaja({ montajes: 6 });
+    vi.mocked(leerEstado).mockResolvedValue(estadoQuePermiteBaja({ status: "incomplete" }));
+
+    await expect(
+      darDeBaja(AMBITO, { tcVehicleId: "v1", neumaticosMontadosVistos: 6 }),
+    ).rejects.toMatchObject({ codigo: MOTIVOS_BAJA_BLOQUEADA.INCOMPLETA, estado: 409 });
+    nadaTocado(actualizaciones);
+  });
+
+  it("rechaza si la conciliación acabó en ERROR", async () => {
+    const actualizaciones = fingirBaja({ montajes: 6 });
+    vi.mocked(leerEstado).mockResolvedValue(estadoQuePermiteBaja({ status: "error" }));
+
+    await expect(
+      darDeBaja(AMBITO, { tcVehicleId: "v1", neumaticosMontadosVistos: 6 }),
+    ).rejects.toMatchObject({ codigo: MOTIVOS_BAJA_BLOQUEADA.CON_ERROR, estado: 409 });
+    nadaTocado(actualizaciones);
+  });
+
+  it("rechaza si NUNCA se ha conciliado esta empresa", async () => {
+    const actualizaciones = fingirBaja({ montajes: 6 });
+    vi.mocked(leerEstado).mockResolvedValue(null);
+
+    await expect(
+      darDeBaja(AMBITO, { tcVehicleId: "v1", neumaticosMontadosVistos: 6 }),
+    ).rejects.toMatchObject({ codigo: MOTIVOS_BAJA_BLOQUEADA.SIN_CONCILIACION, estado: 409 });
+    nadaTocado(actualizaciones);
+  });
+
+  it("rechaza si la última conciliación es demasiado antigua", async () => {
+    // Más vieja que el periodo del repaso más su latido: el proceso NO ha
+    // corrido, así que esa foto no demuestra nada.
+    const actualizaciones = fingirBaja({ montajes: 6 });
+    vi.mocked(leerEstado).mockResolvedValue(
+      estadoQuePermiteBaja({ ejecutadoMs: Date.now() - VENTANA_FRESCURA_MS - 1 }),
+    );
+
+    await expect(
+      darDeBaja(AMBITO, { tcVehicleId: "v1", neumaticosMontadosVistos: 6 }),
+    ).rejects.toMatchObject({ codigo: MOTIVOS_BAJA_BLOQUEADA.CADUCADA, estado: 409 });
+    nadaTocado(actualizaciones);
+  });
+
+  it("una conciliación de hace trece días SÍ vale: el repaso es quincenal", async () => {
+    // La regla no es «24 horas»: sale de la cadencia real del proceso.
+    const actualizaciones = fingirBaja({ montajes: 6 });
+    vi.mocked(leerEstado).mockResolvedValue(
+      estadoQuePermiteBaja({ ejecutadoMs: Date.now() - (PERIODO_REPASO_MS - 24 * 3600_000) }),
+    );
+
+    await darDeBaja(AMBITO, { tcVehicleId: "v1", neumaticosMontadosVistos: 6 });
+    expect(actualizaciones).toEqual([{ activo: false }]);
+  });
+
+  it("rechaza si la cuenta desde la que se pide NO estaba en la última pasada", async () => {
+    // Con dos cuentas, que la de autobuses conteste no dice nada de los
+    // vehículos de la auxiliar.
+    const actualizaciones = fingirBaja({ montajes: 6 });
+    vi.mocked(leerEstado).mockResolvedValue(
+      estadoQuePermiteBaja({
+        cuentas: [{ connectorKey: "movertis", accountKey: "auxiliar", ok: true }],
+      }),
+    );
+
+    await expect(
+      darDeBaja(AMBITO, { tcVehicleId: "v1", neumaticosMontadosVistos: 6 }),
+    ).rejects.toMatchObject({ codigo: MOTIVOS_BAJA_BLOQUEADA.CUENTA_NO_CONCILIADA, estado: 409 });
+    nadaTocado(actualizaciones);
+  });
+
+  it("rechaza si la cuenta estaba pero falló", async () => {
+    const actualizaciones = fingirBaja({ montajes: 6 });
+    vi.mocked(leerEstado).mockResolvedValue(
+      estadoQuePermiteBaja({
+        status: "complete",
+        cuentas: [{ connectorKey: "movertis", accountKey: "buses", ok: false, error: "HTTP 503" }],
+      }),
+    );
+
+    await expect(
+      darDeBaja(AMBITO, { tcVehicleId: "v1", neumaticosMontadosVistos: 6 }),
+    ).rejects.toMatchObject({ codigo: MOTIVOS_BAJA_BLOQUEADA.CUENTA_NO_CONCILIADA, estado: 409 });
+    nadaTocado(actualizaciones);
+  });
+
+  it("el estado se consulta ANTES de mirar el vehículo: ni se llega a leer la ficha", async () => {
+    // Importa el orden: un rechazo por conciliación no debe confirmar ni negar
+    // que ese identificador de vehículo exista.
+    const actualizaciones = fingirBaja({ montajes: 6 });
+    vi.mocked(leerEstado).mockResolvedValue(null);
+
+    await expect(
+      darDeBaja(AMBITO, { tcVehicleId: "v1", neumaticosMontadosVistos: 6 }),
+    ).rejects.toMatchObject({ codigo: MOTIVOS_BAJA_BLOQUEADA.SIN_CONCILIACION });
+    expect(supabase.from).not.toHaveBeenCalled();
+    nadaTocado(actualizaciones);
+  });
+
+  it("el estado se lee de la EMPRESA de la sesión, no de lo que venga en el cuerpo", async () => {
+    fingirBaja({ montajes: 0 });
+    await darDeBaja(AMBITO, { tcVehicleId: "v1", neumaticosMontadosVistos: 0 });
+    expect(leerEstado).toHaveBeenCalledWith("empresa-A");
+  });
+});
+
 describe("dar de baja", () => {
   it("solo pone activo = false y no toca nada más", async () => {
     const actualizaciones = fingirBaja({ montajes: 6 });
@@ -336,17 +550,16 @@ describe("ErrorConciliacion", () => {
 describe("vincularLote", () => {
   /** Finge una conciliación que propone estos pares. */
   function proponer(pares: Array<{ id: string; externo: string; plate?: string }>) {
-    vi.mocked(conciliarFlota).mockResolvedValue({
-      enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [],
+    fingirConciliacion({
       soloProveedor: pares.map((p) => ({
         externo: { providerVehicleId: p.externo, plate: p.plate ?? "1234ABC" },
         propuesta: { id: p.id, matricula: p.plate ?? "1234ABC", activo: true, neumaticosMontados: 0 },
       })),
-      resumen: {},
-    } as any);
+      resumen: RESUMEN_COMPLETO,
+    });
   }
 
-  it("enlaza todas las propuestas con el método de matrícula exacta", async () => {
+  it("enlaza las propuestas con el método AUTOMÁTICO, distinto del manual", async () => {
     proponer([{ id: "v1", externo: "E1" }, { id: "v2", externo: "E2" }]);
     fingirTablas(vehiculoEn("empresa-A"));
 
@@ -356,7 +569,7 @@ describe("vincularLote", () => {
     expect(r.fallidos).toHaveLength(0);
     expect(upsertMapping).toHaveBeenCalledTimes(2);
     for (const llamada of vi.mocked(upsertMapping).mock.calls) {
-      expect(llamada[0].metadata).toMatchObject({ match_method: "plate_exact" });
+      expect(llamada[0].metadata).toMatchObject({ match_method: "automatic_plate_exact" });
     }
   });
 
@@ -372,7 +585,7 @@ describe("vincularLote", () => {
   });
 
   it("no toca las filas sin propuesta", async () => {
-    vi.mocked(conciliarFlota).mockResolvedValue({
+    fingirConciliacion({
       enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [],
       soloProveedor: [
         { externo: { providerVehicleId: "CON", plate: "1234ABC" },
@@ -380,8 +593,8 @@ describe("vincularLote", () => {
         // Sin matrícula y sin candidato: este no se enlaza jamás solo.
         { externo: { providerVehicleId: "SIN", name: "TSVETAN2" } },
       ],
-      resumen: {},
-    } as any);
+      resumen: RESUMEN_COMPLETO,
+    });
     fingirTablas(vehiculoEn("empresa-A"));
 
     const r = await vincularLote(AMBITO);
@@ -448,13 +661,13 @@ describe("vincularLote", () => {
 describe("crearPendientesLote", () => {
   /** Finge una conciliación con estos vehículos sin enlazar. */
   function sinEnlazar(externos: Array<{ id: string; plate?: string; vin?: string; name?: string }>) {
-    vi.mocked(conciliarFlota).mockResolvedValue({
+    fingirConciliacion({
       enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [], externosVistos: [],
       soloProveedor: externos.map((e) => ({
         externo: { providerVehicleId: e.id, plate: e.plate, vin: e.vin, name: e.name },
       })),
-      resumen: {},
-    } as any);
+      resumen: RESUMEN_COMPLETO,
+    });
   }
 
   /** Una base en la que no hay ninguna matrícula repetida y el insert va bien. */
@@ -602,5 +815,223 @@ describe("ignorarLote", () => {
 
     expect(r.hechos).toBe(2);
     expect(r.fallidos).toEqual([{ externalVehicleId: "MALO", error: "la base dijo que no" }]);
+  });
+});
+
+/**
+ * Lo que hace falta comprobar ANTES de escribir un enlace.
+ *
+ * `connectorKey` y `accountKey` llegan en el cuerpo de la petición, y con eso
+ * un administrador podía escribir mapeos en cuentas que no existen y hacia
+ * identificadores externos inventados. No filtra datos de otro cliente —el
+ * tenant sale de la sesión— pero deja basura que la propia conciliación
+ * reporta luego como «desaparecido». Aquí se fija que no se pueda.
+ *
+ * En todos los rechazos se comprueba lo mismo: NO se escribe ningún mapeo.
+ */
+describe("vincular: la cuenta y el vehículo externo se comprueban de verdad", () => {
+  it("vincula cuando la cuenta existe y el externo está en su flota", async () => {
+    fingirTablas(vehiculoEn("empresa-A"));
+    fingirCuenta(["E1"]);
+
+    await vincular(AMBITO, { tcVehicleId: "v1", externalVehicleId: "E1" });
+    expect(upsertMapping).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechaza una cuenta que esta empresa no tiene configurada", async () => {
+    fingirTablas(vehiculoEn("empresa-A"));
+    // El registro no devuelve nada: ni existe, ni está habilitada, ni es suya.
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([]);
+
+    await expect(
+      vincular(AMBITO, { tcVehicleId: "v1", externalVehicleId: "E1" }),
+    ).rejects.toMatchObject({ codigo: "CUENTA_NO_CONFIGURADA", estado: 404 });
+    expect(upsertMapping).not.toHaveBeenCalled();
+  });
+
+  it("rechaza otra cuenta del mismo proveedor", async () => {
+    fingirTablas(vehiculoEn("empresa-A"));
+    // La empresa tiene «auxiliar», y la petición pide «buses».
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      { key: "movertis", accountKey: "auxiliar", usingDefault: false, config: {},
+        connector: { listVehicles: vi.fn(async () => [{ providerVehicleId: "E1" }]) } },
+    ] as any);
+
+    await expect(
+      vincular(AMBITO, { tcVehicleId: "v1", externalVehicleId: "E1" }),
+    ).rejects.toMatchObject({ codigo: "CUENTA_NO_CONFIGURADA" });
+    expect(upsertMapping).not.toHaveBeenCalled();
+  });
+
+  it("rechaza otro proveedor con el mismo nombre de cuenta", async () => {
+    fingirTablas(vehiculoEn("empresa-A"));
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      { key: "webfleet", accountKey: "buses", usingDefault: false, config: {},
+        connector: { listVehicles: vi.fn(async () => [{ providerVehicleId: "E1" }]) } },
+    ] as any);
+
+    await expect(
+      vincular(AMBITO, { tcVehicleId: "v1", externalVehicleId: "E1" }),
+    ).rejects.toMatchObject({ codigo: "CUENTA_NO_CONFIGURADA" });
+    expect(upsertMapping).not.toHaveBeenCalled();
+  });
+
+  it("rechaza un externo que el proveedor NO devuelve: nada de IDs inventados", async () => {
+    // El caso del payload manipulado: la pantalla nunca enseñó este id.
+    fingirTablas(vehiculoEn("empresa-A"));
+    fingirCuenta(["E1", "E2"]);
+
+    await expect(
+      vincular(AMBITO, { tcVehicleId: "v1", externalVehicleId: "INVENTADO" }),
+    ).rejects.toMatchObject({ codigo: "EXTERNO_NO_EXISTE", estado: 404 });
+    expect(upsertMapping).not.toHaveBeenCalled();
+  });
+
+  it("rechaza un externo que existe pero en OTRA cuenta", async () => {
+    // La cuenta «buses» no lo tiene; que lo tenga la auxiliar no vale.
+    fingirTablas(vehiculoEn("empresa-A"));
+    fingirCuenta(["E1"]);
+
+    await expect(
+      vincular(AMBITO, { tcVehicleId: "v1", externalVehicleId: "SOLO-EN-AUXILIAR" }),
+    ).rejects.toMatchObject({ codigo: "EXTERNO_NO_EXISTE" });
+    expect(upsertMapping).not.toHaveBeenCalled();
+  });
+
+  it("la cuenta y el externo se comprueban ANTES del vehículo de TyreControl", async () => {
+    // Un enlace hacia una cuenta ajena no debe llegar a consultar la flota
+    // propia: el rechazo no confirma ni niega que ese vehículo exista.
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([]);
+
+    await expect(
+      vincular(AMBITO, { tcVehicleId: "v1", externalVehicleId: "E1" }),
+    ).rejects.toMatchObject({ codigo: "CUENTA_NO_CONFIGURADA" });
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
+  it("un vehículo de otra empresa sigue rechazándose, con la cuenta buena", async () => {
+    fingirTablas(vehiculoEn("empresa-B"));
+    fingirCuenta(["E1"]);
+
+    await expect(
+      vincular(AMBITO, { tcVehicleId: "v1", externalVehicleId: "E1" }),
+    ).rejects.toMatchObject({ codigo: "VEHICULO_NO_ENCONTRADO", estado: 404 });
+    expect(upsertMapping).not.toHaveBeenCalled();
+  });
+
+  it("la flota del proveedor se pide UNA vez por enlace, no dos", async () => {
+    fingirTablas(vehiculoEn("empresa-A"));
+    fingirCuenta(["E1"]);
+    const cuentas: any = await vi.mocked(resolveTelematicsConnectors).mock.results[0]?.value;
+
+    await vincular(AMBITO, { tcVehicleId: "v1", externalVehicleId: "E1" });
+    // Una sola resolución del registro: la preparación no se repite.
+    expect(vi.mocked(resolveTelematicsConnectors)).toHaveBeenCalledTimes(1);
+    void cuentas;
+  });
+});
+
+/**
+ * El autoenlace del repaso quincenal, con sus reglas escritas.
+ *
+ * Enlaza sin que nadie lo mire, así que las condiciones tienen que ser
+ * explícitas y probadas: lo que no cumpla se queda como propuesta o como
+ * discrepancia, y no como un enlace que nadie ha visto.
+ */
+describe("vincularLote: reglas del autoenlace", () => {
+  it("NO autoenlaza con una conciliación incompleta", async () => {
+    // La regla más importante: una caída del proveedor no puede acabar
+    // escribiendo enlaces sobre una foto a medias.
+    fingirTablas(vehiculoEn("empresa-A"));
+    fingirConciliacion({
+      enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [],
+      soloProveedor: [
+        { externo: { providerVehicleId: "E1", plate: "1234ABC" },
+          propuesta: { id: "v1", matricula: "1234ABC", activo: true, neumaticosMontados: 0 } },
+      ],
+      resumen: {
+        status: "incomplete",
+        cuentas: [
+          { connectorKey: "movertis", accountKey: "buses", ok: true, vehiculos: 1 },
+          { connectorKey: "movertis", accountKey: "auxiliar", ok: false, vehiculos: 0, error: "HTTP 503" },
+        ],
+      },
+    });
+
+    await expect(vincularLote(AMBITO)).rejects.toMatchObject({
+      codigo: "CONCILIACION_INCOMPLETA",
+      estado: 409,
+    });
+    expect(upsertMapping).not.toHaveBeenCalled();
+  });
+
+  it("NO autoenlaza si el proveedor devolvió error", async () => {
+    fingirTablas(vehiculoEn("empresa-A"));
+    fingirConciliacion({
+      enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [],
+      soloProveedor: [
+        { externo: { providerVehicleId: "E1", plate: "1234ABC" },
+          propuesta: { id: "v1", matricula: "1234ABC", activo: true, neumaticosMontados: 0 } },
+      ],
+      resumen: {
+        status: "error",
+        cuentas: [{ connectorKey: "movertis", accountKey: "buses", ok: false, vehiculos: 0, error: "fetch failed" }],
+      },
+    });
+
+    await expect(vincularLote(AMBITO)).rejects.toMatchObject({ codigo: "CONCILIACION_INCOMPLETA" });
+    expect(upsertMapping).not.toHaveBeenCalled();
+  });
+
+  it("el mensaje del rechazo dice QUÉ cuenta falló", async () => {
+    fingirTablas(vehiculoEn("empresa-A"));
+    fingirConciliacion({
+      enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [],
+      soloProveedor: [
+        { externo: { providerVehicleId: "E1", plate: "1234ABC" },
+          propuesta: { id: "v1", matricula: "1234ABC", activo: true, neumaticosMontados: 0 } },
+      ],
+      resumen: {
+        status: "incomplete",
+        cuentas: [{ connectorKey: "movertis", accountKey: "auxiliar", ok: false, vehiculos: 0 }],
+      },
+    });
+
+    await expect(vincularLote(AMBITO)).rejects.toThrow(/auxiliar/);
+  });
+
+  it("un externo sin propuesta no se autoenlaza, aunque la pasada sea completa", async () => {
+    // Sin matrícula reconocible no hay propuesta: `clasificarFlota` no la crea,
+    // y el lote solo enlaza propuestas.
+    fingirTablas(vehiculoEn("empresa-A"));
+    fingirConciliacion({
+      enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [],
+      soloProveedor: [{ externo: { providerVehicleId: "SIN", name: "Nueva_60007" } }],
+      resumen: RESUMEN_COMPLETO,
+    });
+
+    await expect(vincularLote(AMBITO)).rejects.toMatchObject({ codigo: "SIN_PROPUESTAS" });
+    expect(upsertMapping).not.toHaveBeenCalled();
+  });
+
+  it("un vehículo interno YA enlazado no se autoenlaza otra vez", async () => {
+    // Se comprueba contra la base, no contra la foto de la conciliación.
+    fingirTablas(vehiculoEn("empresa-A"));
+    vi.mocked(listVehicleMappings).mockResolvedValue([
+      { mobilink_id: "v1", external_code: "OTRO", active: true },
+    ] as any);
+    fingirConciliacion({
+      enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [],
+      soloProveedor: [
+        { externo: { providerVehicleId: "E1", plate: "1234ABC" },
+          propuesta: { id: "v1", matricula: "1234ABC", activo: true, neumaticosMontados: 0 } },
+      ],
+      resumen: RESUMEN_COMPLETO,
+    });
+
+    const r = await vincularLote(AMBITO);
+    expect(r.enlazados).toBe(0);
+    expect(r.fallidos[0].error).toContain("ya está enlazado");
+    expect(upsertMapping).not.toHaveBeenCalled();
   });
 });

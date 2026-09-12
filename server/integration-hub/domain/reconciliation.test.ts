@@ -341,3 +341,148 @@ describe("resumen y estado de la sincronización", () => {
     expect(r.bajasPermitidas).toBe(true);
   });
 });
+
+/**
+ * El snapshot de matrícula, usado de verdad.
+ *
+ * Se guardaba desde el principio y no se leía nunca: la discrepancia se
+ * calculaba comparando el proveedor contra TyreControl, con dos consecuencias
+ * que se notan a la semana de usar la pantalla. Una, que no se sabía de qué lado
+ * se había movido la matrícula. Y dos, peor: un enlace hecho a mano entre dos
+ * vehículos con matrículas distintas salía como discrepancia en cada pasada,
+ * para siempre, y una lista que repite lo ya decidido se deja de leer.
+ */
+describe("discrepancias de matrícula con snapshot", () => {
+  const enlaceCon = (over: Partial<EnlaceVehiculo> = {}): EnlaceVehiculo => ({
+    mobilinkId: "v1",
+    externalCode: "E1",
+    activo: true,
+    metodo: "plate_exact",
+    ...over,
+  });
+
+  it("caso A: cambió la del PROVEEDOR", () => {
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "1234ABD" })],
+      [interno({ id: "v1", matricula: "1234ABC" })],
+      [enlaceCon({ matriculaSnapshot: "1234ABC", matriculaInternaSnapshot: "1234ABC" })],
+    );
+    expect(r.enlazados).toHaveLength(0);
+    expect(r.discrepancias).toHaveLength(1);
+    const d = r.discrepancias[0];
+    expect(d.motivo).toBe(MOTIVOS_DISCREPANCIA.MATRICULA_CAMBIO_PROVEEDOR);
+    expect(d.matriculas).toEqual({
+      snapshotProveedor: "1234ABC",
+      snapshotTyreControl: "1234ABC",
+      proveedor: "1234ABD",
+      tyrecontrol: "1234ABC",
+    });
+    expect(d.detalle).toContain("El proveedor ha cambiado");
+    expect(d.detalle).toContain("no se toca");
+  });
+
+  it("caso B: cambió la de TYRECONTROL", () => {
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "1234ABC" })],
+      [interno({ id: "v1", matricula: "1234ABD" })],
+      [enlaceCon({ matriculaSnapshot: "1234ABC", matriculaInternaSnapshot: "1234ABC" })],
+    );
+    expect(r.discrepancias[0].motivo).toBe(MOTIVOS_DISCREPANCIA.MATRICULA_CAMBIO_TYRECONTROL);
+    expect(r.discrepancias[0].detalle).toContain("TyreControl ha cambiado");
+  });
+
+  it("caso C: las dos siguen coincidiendo, ninguna discrepancia", () => {
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "1234ABC" })],
+      [interno({ id: "v1", matricula: "1234ABC" })],
+      [enlaceCon({ matriculaSnapshot: "1234ABC", matriculaInternaSnapshot: "1234ABC" })],
+    );
+    expect(r.discrepancias).toHaveLength(0);
+    expect(r.enlazados).toHaveLength(1);
+    expect(r.enlazados[0].diferenciaAceptada).toBeUndefined();
+  });
+
+  it("caso D: diferencia ACEPTADA al enlazar, no se repite cada pasada", () => {
+    // Alguien enlazó a mano dos matrículas distintas porque sabía algo que el
+    // sistema no. Sigue siendo un enlace, no una discrepancia nueva.
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "9999ZZZ" })],
+      [interno({ id: "v1", matricula: "1234ABC" })],
+      [enlaceCon({
+        metodo: "manual",
+        matriculaSnapshot: "9999ZZZ",
+        matriculaInternaSnapshot: "1234ABC",
+      })],
+    );
+    expect(r.discrepancias).toHaveLength(0);
+    expect(r.enlazados).toHaveLength(1);
+    // Pero se marca, para que la pantalla lo pueda enseñar sin preguntar otra vez.
+    expect(r.enlazados[0].diferenciaAceptada).toBe(true);
+  });
+
+  it("cambiaron las DOS, cada una por su lado", () => {
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "5555EEE" })],
+      [interno({ id: "v1", matricula: "7777FFF" })],
+      [enlaceCon({ matriculaSnapshot: "1234ABC", matriculaInternaSnapshot: "1234ABC" })],
+    );
+    expect(r.discrepancias[0].motivo).toBe(MOTIVOS_DISCREPANCIA.MATRICULA_CAMBIO_AMBOS);
+  });
+
+  it("enlace ANTIGUO sin snapshots: difieren y NO se atribuye el cambio", () => {
+    // Los enlaces de antes de guardar los snapshots. La única respuesta honesta
+    // es decir que no coinciden sin inventar quién cambió.
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "1234ABD" })],
+      [interno({ id: "v1", matricula: "1234ABC" })],
+      [enlaceCon()],
+    );
+    expect(r.discrepancias[0].motivo).toBe(MOTIVOS_DISCREPANCIA.MATRICULA_DISTINTA);
+    expect(r.discrepancias[0].detalle).toContain("no se puede saber cuál de las dos cambió");
+    expect(r.discrepancias[0].matriculas?.snapshotTyreControl).toBeNull();
+  });
+
+  it("con solo el snapshot del proveedor tampoco se atribuye a TyreControl", () => {
+    // El estado de los enlaces creados hasta ahora: media referencia no basta
+    // para decir que el que cambió fue el otro.
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "1234ABC" })],
+      [interno({ id: "v1", matricula: "1234ABD" })],
+      [enlaceCon({ matriculaSnapshot: "1234ABC" })],
+    );
+    expect(r.discrepancias[0].motivo).toBe(MOTIVOS_DISCREPANCIA.MATRICULA_DISTINTA);
+  });
+
+  it("los separadores no cuentan: la comparación va normalizada", () => {
+    // «1234-ABC» y «1234 ABC» son la misma matrícula, y un cambio de formato en
+    // la plataforma del proveedor no es un cambio de vehículo.
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "1234-ABC" })],
+      [interno({ id: "v1", matricula: "1234 ABC" })],
+      [enlaceCon({ matriculaSnapshot: "1234ABC", matriculaInternaSnapshot: "1234abc" })],
+    );
+    expect(r.discrepancias).toHaveLength(0);
+    expect(r.enlazados).toHaveLength(1);
+  });
+
+  it("un externo sin matrícula legible no contradice a nadie", () => {
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", name: "Nueva_60007" })],
+      [interno({ id: "v1", matricula: "1234ABC" })],
+      [enlaceCon({ matriculaSnapshot: "1234ABC", matriculaInternaSnapshot: "1234ABC" })],
+    );
+    expect(r.discrepancias).toHaveLength(0);
+    expect(r.enlazados).toHaveLength(1);
+  });
+
+  it("si las dos cambian pero acaban IGUALES, no hay nada que resolver", () => {
+    // Le cambiaron la matrícula al autobús y se actualizó en los dos sitios.
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "5555EEE" })],
+      [interno({ id: "v1", matricula: "5555EEE" })],
+      [enlaceCon({ matriculaSnapshot: "1234ABC", matriculaInternaSnapshot: "1234ABC" })],
+    );
+    expect(r.discrepancias).toHaveLength(0);
+    expect(r.enlazados).toHaveLength(1);
+  });
+});
