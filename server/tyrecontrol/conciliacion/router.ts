@@ -153,7 +153,7 @@ export function createConciliacionRouter(): Router {
         cuentas: cuentas.map((c) => ({
           connectorKey: c.key,
           accountKey: c.accountKey,
-          nombre: (c.config as any)?.nombre ?? null,
+          nombre: c.nombre,
         })),
       });
     } catch (e) {

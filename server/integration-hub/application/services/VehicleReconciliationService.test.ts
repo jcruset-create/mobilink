@@ -101,6 +101,7 @@ describe("conciliarFlota()", () => {
     expect(r.resumen.status).toBe("error");
     // Lo importante: NO salen dos vehículos «solo en TyreControl».
     expect(r.soloTyreControl).toHaveLength(0);
+    expect(r.resumen.tyrecontrolUnknownCount).toBe(2);
     expect(r.resumen.bajasPermitidas).toBe(false);
   });
 
@@ -149,10 +150,31 @@ describe("conciliarFlota()", () => {
     expect(r.resumen.tyrecontrolUnknownCount).toBe(1);
   });
 
-  it("un vehículo sin enlace de una cuenta caída tampoco se juzga como ausente", async () => {
-    // v3 no tiene enlace en ninguna cuenta: es legítimamente «solo TyreControl»,
-    // y eso sí se puede afirmar aunque otra cuenta haya fallado. Lo que no se
-    // puede es ofrecer la baja, y de eso se encarga `bajasPermitidas`.
+  it("con la única cuenta caída, NINGÚN vehículo cae en solo-TyreControl", async () => {
+    // El fallo visto en producción: primera conciliación de una flota de 719
+    // vehículos sin enlazar, Movertis sin contestar, y los 719 salían como
+    // «solo en TyreControl» con su botón de baja al lado.
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "default", new Error("No se pudo hablar con Movertis: fetch failed")),
+    ] as any);
+
+    const flota = Array.from({ length: 719 }, (_, i) => ({
+      id: `v${i}`, matricula: `${1000 + i}ABC`, activo: true, neumaticosMontados: 6,
+    }));
+    const r = await conciliarFlota(CTX, opciones(flota));
+
+    expect(r.resumen.status).toBe("error");
+    expect(r.soloTyreControl).toHaveLength(0);
+    expect(r.resumen.tyrecontrolOnlyCount).toBe(0);
+    expect(r.resumen.tyrecontrolUnknownCount).toBe(719);
+    expect(r.resumen.bajasPermitidas).toBe(false);
+  });
+
+  it("un vehículo sin enlace tampoco se juzga si OTRA cuenta ha fallado", async () => {
+    // v3 no tiene enlace en ninguna cuenta, pero podría estar perfectamente en
+    // la cuenta que no contestó. Afirmar que solo está en TyreControl sería
+    // decir que ha desaparecido, y lo único que ha pasado es que no se ha
+    // podido preguntar.
     vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
       cuenta("movertis", "buses", []),
       cuenta("movertis", "auxiliar", new Error("timeout")),
@@ -162,7 +184,8 @@ describe("conciliarFlota()", () => {
       { id: "v3", matricula: "0000XXX", activo: true, neumaticosMontados: 2 },
     ]));
 
-    expect(r.soloTyreControl.map((f) => f.interno.id)).toEqual(["v3"]);
+    expect(r.soloTyreControl).toHaveLength(0);
+    expect(r.resumen.tyrecontrolUnknownCount).toBe(1);
     expect(r.resumen.bajasPermitidas).toBe(false);
   });
 
