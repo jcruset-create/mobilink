@@ -353,10 +353,7 @@ export class MovertisConnector implements ITelematicsConnector {
           throw e;
         }
         // Fallo de red o timeout: transitorio.
-        ultimo = IntegrationError.transient(
-          "MOVERTIS_NETWORK",
-          `No se pudo hablar con Movertis: ${(e as Error)?.message ?? e}`,
-        );
+        ultimo = IntegrationError.transient("MOVERTIS_NETWORK", motivoDeRed(e, url));
         if (intento < maxRetries) { await espera(2 ** intento * 500); continue; }
         throw ultimo;
       }
@@ -571,3 +568,47 @@ export function mensajeDeError(datos: unknown): string | null {
 }
 
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Por qué no se pudo ni hablar con Movertis, dicho de forma accionable.
+ *
+ * El `fetch` de Node contesta «fetch failed» a TODO lo que pase por debajo —DNS
+ * que no resuelve, conexión rechazada, certificado caducado, timeout— y guarda
+ * el motivo de verdad en `cause`. Sin desenvolverlo, el panel enseña tres
+ * palabras que no distinguen «la URL está mal escrita» de «su HTTPS está roto»
+ * de «el servidor no nos deja salir», que son tres problemas con tres arreglos
+ * distintos y ninguno se parece al otro.
+ *
+ * Se incluye también la URL. No es un secreto —el token va en la cabecera, no
+ * aquí— y es la mitad de la respuesta: en esta integración conviven una URL de
+ * pruebas y una de producción, y saber contra cuál se ha intentado ahorra la
+ * primera media hora de cualquier diagnóstico.
+ */
+export function motivoDeRed(e: unknown, url: string): string {
+  const err = e as { message?: string; name?: string; cause?: unknown };
+  const causa = err?.cause as { code?: string; message?: string } | undefined;
+
+  // El timeout de AbortSignal llega como AbortError, sin causa que desenvolver.
+  if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+    return `Movertis no contestó a tiempo (${url}).`;
+  }
+
+  const codigo = causa?.code;
+  const explicacion: Record<string, string> = {
+    ENOTFOUND: "el nombre no resuelve en DNS: revisa que la URL esté bien escrita",
+    EAI_AGAIN: "el DNS no responde ahora mismo",
+    ECONNREFUSED: "el servidor rechaza la conexión en ese puerto",
+    ECONNRESET: "el servidor cortó la conexión",
+    ETIMEDOUT: "la conexión no llegó a abrirse",
+    CERT_HAS_EXPIRED: "su certificado HTTPS está caducado",
+    UNABLE_TO_VERIFY_LEAF_SIGNATURE: "su certificado HTTPS no se puede verificar",
+    DEPTH_ZERO_SELF_SIGNED_CERT: "su certificado HTTPS es autofirmado",
+    ERR_TLS_CERT_ALTNAME_INVALID: "su certificado HTTPS no vale para ese dominio",
+  };
+
+  const detalle = codigo
+    ? `${explicacion[codigo] ?? causa?.message ?? codigo} (${codigo})`
+    : (causa?.message ?? err?.message ?? String(e));
+
+  return `No se pudo hablar con Movertis en ${url}: ${detalle}`;
+}
