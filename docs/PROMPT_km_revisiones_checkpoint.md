@@ -211,6 +211,25 @@ es el mismo camino con la latencia a cero: no se tira nada.
    detectada, o una entrada sin paso— y vale más un null con su motivo que un
    número casado a la fuerza.
 
+### El conector de Movertis ya habla con su API
+
+Ya no hay que escribirlo: `MovertisConnector` hace POST con los cuerpos reales
+(`showvehicles` con banderas, `showtrips` con epoch en ms), saca la matrícula del
+nombre —Movertis no tiene campo de matrícula—, y atrapa las dos formas que tiene
+Movertis de fallar diciendo 201. Se comprueba contra la API de verdad con
+`RUN_MOVERTIS=1 npx vitest run …/MovertisConnector.integration.test.ts`.
+
+Dos cosas heredadas que hay que saber al construir el sync sobre él:
+
+- `getCurrentTelemetry` hace DOS llamadas, no una, porque `showvehicles` no
+  fecha nada: el odómetro se fecha con la última posición de `showtrips`
+  (ventana de 7 días). Si el equipo no ha emitido en una semana, devuelve `null`
+  en vez de fechar el dato con `now()`. Para el sync de presencia en base eso
+  encaja: la llamada que da la posición es la misma que da el instante.
+- El histórico no trae odómetro, así que `kilometrajeEnOperacion` devolverá
+  «sin_lectura» para cualquier instante pasado con Movertis. Es correcto, no un
+  fallo que haya que rodear.
+
 ### De dónde sale la posición en Movertis (comprobado con la sonda)
 
 Esto lo daba por hecho una versión anterior de este documento y era FALSO:

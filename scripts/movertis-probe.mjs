@@ -364,8 +364,9 @@ async function modoContrato() {
   // ── Veredicto ─────────────────────────────────────────────────────────────
   console.log(`\n${"═".repeat(66)}`);
   console.log(`Lo que esto significa para el conector:`);
-  console.log(`  1. POST con cuerpo JSON, no GET con query. Las plantillas de URL`);
-  console.log(`     de MovertisConnector.endpoints no sirven tal como están.`);
+  console.log(`  1. POST con cuerpo JSON, no GET con query. Es lo que ya hace`);
+  console.log(`     MovertisConnector.postear(); para comprobar el conector`);
+  console.log(`     entero: RUN_MOVERTIS=1 npx vitest run …/MovertisConnector.integration`);
   console.log(`  2. El odómetro REAL está en counters.odometer de showvehicles,`);
   console.log(`     y solo del instante actual.`);
   console.log(`  3. El histórico es de POSICIONES. No hay odómetro por fecha, así`);
