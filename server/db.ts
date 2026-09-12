@@ -506,6 +506,24 @@ export async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS rot_assist_idx ON roadside_operator_track("assistanceId");
 
+    /*
+     * El rastro del técnico, al nivel del de Assist Lite.
+     *
+     * Guardaba solo punto y hora, y con eso no se puede ni descartar un punto
+     * malo —sin saber su precisión, un punto con ±200 m pesa igual que uno
+     * bueno— ni separar la ida de la vuelta al calcular los kilómetros.
+     *
+     * Las tres columnas son NULLABLE a propósito: las filas que ya existen se
+     * quedan como están y se siguen leyendo igual. El estado lo pone el
+     * SERVIDOR con el que tiene la asistencia al recibir el punto, así que
+     * empieza a haberlo sin esperar a que nadie actualice la app.
+     */
+    ALTER TABLE roadside_operator_track ADD COLUMN IF NOT EXISTS "accuracyM" DOUBLE PRECISION;
+    ALTER TABLE roadside_operator_track ADD COLUMN IF NOT EXISTS "speedKmh" DOUBLE PRECISION;
+    ALTER TABLE roadside_operator_track ADD COLUMN IF NOT EXISTS status TEXT;
+    CREATE INDEX IF NOT EXISTS rot_assist_ts_idx
+      ON roadside_operator_track("assistanceId", "ts");
+
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "redirectionLat" DOUBLE PRECISION;
 

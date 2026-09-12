@@ -119,7 +119,14 @@ class _AssistanceDetailScreenState extends State<AssistanceDetailScreen> {
           timeLimit: Duration(seconds: 10),
         ),
       );
-      await widget.api.sendLocation(_a['id'] as int, pos.latitude, pos.longitude);
+      await widget.api.sendLocation(
+        _a['id'] as int,
+        pos.latitude,
+        pos.longitude,
+        accuracyM: pos.accuracy,
+        // Geolocator la da en m/s; el resto del sistema habla en km/h
+        speedKmh: pos.speed >= 0 ? pos.speed * 3.6 : null,
+      );
     } catch (_) {
       // silencioso — no interrumpir al técnico por un fallo de GPS
     }

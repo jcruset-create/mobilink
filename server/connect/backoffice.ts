@@ -2424,6 +2424,52 @@ Responde SOLO con un objeto JSON, sin markdown, y omite las claves que no conozc
   });
 
   // Editar (solo en draft/pending: datos aún no enviados al proveedor)
+  /**
+   * Kilómetros del servicio calculados del rastro GPS del móvil.
+   *
+   * Solo calcula y explica: no escribe nada. Lo que se factura sigue siendo
+   * `odometerKm`, y para ponerlo hay que confirmarlo abajo. Un número que
+   * aparece solo en una factura no lo mira nadie.
+   */
+  router.get("/assistances/:id/recorrido", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const a = await db.query(`SELECT id FROM connect_assistances WHERE id = $1`, [id]);
+    if (!a.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    const { recorridoDeAsistencia } = await import("./recorrido.ts");
+    res.json(await recorridoDeAsistencia(id));
+  });
+
+  /**
+   * Da por buenos los kilómetros. Los escribe una persona, aunque los haya
+   * calculado la máquina: de aquí sale un importe.
+   *
+   * No se pisa lo que ya hubiera puesto el taller. Corregir a la baja lo que
+   * ha declarado quien hizo el servicio no es cosa de un botón; para eso está
+   * el ajuste manual, que queda auditado.
+   */
+  router.post("/assistances/:id/recorrido/aplicar", ...requireConnectRole("operator"), async (req, res) => {
+    const id = Number(req.params.id);
+    const km = Number(req.body?.km);
+    if (!Number.isFinite(km) || km < 0 || km > 2000) {
+      return err(res, 422, "validation_failed", "Kilómetros no válidos (0-2000)");
+    }
+    const cur = await db.query(
+      `SELECT "odometerKm" FROM connect_assistances WHERE id = $1`, [id]);
+    if (!cur.rows[0]) return err(res, 404, "not_found", "Asistencia no encontrada");
+    if (cur.rows[0].odometerKm != null && Number(cur.rows[0].odometerKm) > 0) {
+      return err(res, 409, "ya_declarados",
+        `Ya hay ${cur.rows[0].odometerKm} km declarados por el taller. Cámbialos con un ajuste manual, que queda registrado.`);
+    }
+    await db.query(
+      `UPDATE connect_assistances SET "odometerKm" = $2, "updatedAtMs" = $3 WHERE id = $1`,
+      [id, Math.round(km), Date.now()]);
+    await auditConnect({
+      req, action: "assistance.odometer_from_track", resourceType: "assistance",
+      resourceId: id, detail: { km: Math.round(km) },
+    });
+    res.json({ ok: true, odometerKm: Math.round(km) });
+  });
+
   router.patch("/assistances/:id", ...requireConnectRole("operator"), async (req, res) => {
     const id = Number(req.params.id);
     const cur = await db.query(`SELECT status FROM connect_assistances WHERE id = $1`, [id]);
