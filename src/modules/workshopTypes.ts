@@ -169,6 +169,9 @@ export type Job = {
   /** Nº del parte de trabajo del ERP del que salió, si vino de uno. */
   ptNumero?: string | null;
 
+  /** Fecha y hora de ENTRADA del parte, no la de volcarlo a la aplicación. */
+  ptEntradaMs?: number | null;
+
   /**
    * Material del parte: lo que hay que montar. No consume tiempo de taller y
    * no genera tarea, pero el técnico necesita verlo.

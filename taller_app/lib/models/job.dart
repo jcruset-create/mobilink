@@ -68,6 +68,7 @@ class Job {
 
   /// Lo que trae el parte de trabajo.
   final String? ptNumero;
+  final int? ptEntradaMs;
   final int? quantity;
   final int? unitMinutes;
   final List<LineaManoObra> tareasIncluidas;
@@ -90,6 +91,7 @@ class Job {
     this.actualMinutes,
     this.workshopId,
     this.ptNumero,
+    this.ptEntradaMs,
     this.quantity,
     this.unitMinutes,
     this.tareasIncluidas = const [],
@@ -117,6 +119,7 @@ class Job {
       actualMinutes: _entero(j['actualMinutes']),
       workshopId: (j['workshopId'])?.toString(),
       ptNumero: (j['ptNumero'])?.toString(),
+      ptEntradaMs: _entero(j['ptEntradaMs']),
       quantity: _entero(j['quantity']),
       unitMinutes: _entero(j['unitMinutes']),
       tareasIncluidas: _tareas(j['includedTasks']),
@@ -148,6 +151,24 @@ class Job {
     lineas.addAll(tareasIncluidas);
 
     return lineas;
+  }
+
+  /// «D2_26/62 · 10/09/2026 17:27». Solo el número si no hay hora de entrada.
+  String get parteConEntrada {
+    final numero = (ptNumero ?? '').trim();
+
+    if (numero.isEmpty) return '';
+
+    final ms = ptEntradaMs;
+
+    if (ms == null || ms <= 0) return numero;
+
+    final f = DateTime.fromMillisecondsSinceEpoch(ms);
+
+    String dos(int n) => n.toString().padLeft(2, '0');
+
+    return '$numero · ${dos(f.day)}/${dos(f.month)}/${f.year} '
+        '${dos(f.hour)}:${dos(f.minute)}';
   }
 
   int minutosManoDeObra(String etiquetaPrincipal) =>
