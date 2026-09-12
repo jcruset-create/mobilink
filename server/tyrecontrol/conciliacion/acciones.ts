@@ -389,3 +389,116 @@ export async function darDeBaja(ambito: Ambito, datos: DatosBaja) {
         : null,
   };
 }
+
+// ── Vincular todas las coincidencias exactas de una vez ─────────────────────
+
+export interface ResultadoLote {
+  enlazados: number;
+  fallidos: Array<{ tcVehicleId: string; externalVehicleId: string; error: string }>;
+}
+
+/**
+ * Enlaza de golpe todas las propuestas por matrícula exacta.
+ *
+ * ── Por qué el servidor NO se fía de la lista que le manden ─────────────────
+ *
+ * La tentación es que el navegador envíe los pares que ve en pantalla. No se
+ * hace: eso convertiría «vincular las coincidencias exactas» en «vincular lo
+ * que yo diga, etiquetado como exacto», y bastaría un fallo del cliente —o una
+ * petición fabricada a mano— para escribir enlaces cruzados con el sello de
+ * automáticos. Aquí se vuelve a conciliar y se enlaza únicamente lo que el
+ * servidor calcula como propuesta suya.
+ *
+ * Una propuesta es, por construcción, coincidencia ÚNICA y EXACTA de matrícula
+ * normalizada: las ambiguas se van a discrepancias y las que no traen matrícula
+ * no proponen nada. Confirmarlas en bloque es la misma decisión repetida, no una
+ * decisión distinta, y sigue siendo reversible porque desvincular conserva el
+ * enlace desactivado.
+ *
+ * ── La pantalla desfasada ───────────────────────────────────────────────────
+ *
+ * `esperados` es lo que decía la pantalla cuando alguien pulsó. Si el servidor
+ * calcula otro número, la conciliación ha cambiado por debajo —alguien enlazó
+ * desde otra pestaña, el proveedor devolvió otra cosa— y se rechaza en vez de
+ * enlazar un conjunto que nadie ha visto. Es el mismo criterio que la baja con
+ * su recuento de neumáticos.
+ */
+export async function vincularLote(
+  ambito: Ambito,
+  datos: { esperados?: number } = {},
+): Promise<ResultadoLote> {
+  // Se importa aquí, no arriba, por lo mismo que `kilometrajeOperacion.ts`: el
+  // servicio arrastra la base del Hub, y TyreControl no tiene por qué exigirla
+  // solo por cargar este módulo.
+  const { conciliarFlota } = await import(
+    "../../integration-hub/application/services/VehicleReconciliationService.ts"
+  );
+  const { leerFlotaInterna } = await import("./flota.ts");
+  const { normalizarMatricula } = await import("../matricula.ts");
+  const { nextCorrelationId } = await import("../../integration-hub/infrastructure/repositories.ts");
+
+  const resultado = await conciliarFlota(
+    { tenantId: ambito.empresaId, correlationId: await nextCorrelationId() },
+    {
+      connectorKey: ambito.connectorKey,
+      accountKey: ambito.accountKey,
+      leerFlotaInterna,
+      normalizarMatricula,
+      // Ya se registró al conciliar para pintar la pantalla; no hace falta otra vez.
+      registrarUltimaVez: false,
+    },
+  );
+
+  const propuestas = resultado.soloProveedor.filter((f) => f.propuesta);
+
+  if (datos.esperados !== undefined && datos.esperados !== propuestas.length) {
+    throw new ErrorConciliacion(
+      "PROPUESTAS_CAMBIARON",
+      `Ahora hay ${propuestas.length} coincidencias exactas y la pantalla decía ` +
+        `${datos.esperados}. Vuelve a conciliar antes de enlazar en bloque.`,
+      409,
+    );
+  }
+  if (propuestas.length === 0) {
+    throw new ErrorConciliacion("SIN_PROPUESTAS", "No hay ninguna coincidencia exacta que enlazar.");
+  }
+
+  const fallidos: ResultadoLote["fallidos"] = [];
+  let enlazados = 0;
+
+  // Por tandas: seiscientos upserts a la vez agotan el pool de conexiones, y en
+  // serie son seiscientas idas y venidas. Veinte es un término medio sobrio.
+  const TANDA = 20;
+  for (let i = 0; i < propuestas.length; i += TANDA) {
+    const tanda = propuestas.slice(i, i + TANDA);
+    await Promise.all(
+      tanda.map(async (f) => {
+        const externalVehicleId = f.externo.providerVehicleId;
+        const tcVehicleId = f.propuesta!.id;
+        try {
+          // Se reutiliza `vincular`, que revalida la empresa y las invariantes.
+          // Repetir la comprobación por cada fila cuesta una consulta y evita
+          // que un camino nuevo se salte lo que el camino de uno en uno respeta.
+          await vincular(ambito, {
+            tcVehicleId,
+            externalVehicleId,
+            matchMethod: METODOS_VINCULO.MATRICULA_EXACTA,
+            externalPlate: f.externo.plate ?? null,
+            externalName: f.externo.name ?? null,
+          });
+          enlazados++;
+        } catch (e) {
+          // Un fallo suelto no tumba el lote: se apunta y se sigue. Lo contrario
+          // dejaría media flota enlazada y sin decir cuál es la mitad.
+          fallidos.push({
+            tcVehicleId,
+            externalVehicleId,
+            error: e instanceof ErrorConciliacion ? e.message : String((e as Error)?.message ?? e),
+          });
+        }
+      }),
+    );
+  }
+
+  return { enlazados, fallidos };
+}

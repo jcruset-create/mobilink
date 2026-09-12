@@ -16,13 +16,23 @@ vi.mock("../../integration-hub/infrastructure/repositories.ts", () => ({
   setVehicleMappingActive: vi.fn(),
   ignoreExternal: vi.fn(),
   unignoreExternal: vi.fn(),
+  nextCorrelationId: vi.fn(async () => "COR-1"),
+}));
+// El servicio de conciliación se finge entero: aquí no se prueba QUÉ propone
+// —eso está en reconciliation.test.ts— sino qué hace el lote con lo propuesto.
+vi.mock("../../integration-hub/application/services/VehicleReconciliationService.ts", () => ({
+  conciliarFlota: vi.fn(),
 }));
 
 const { supabase } = await import("../../supabase.ts");
 const { upsertMapping, listVehicleMappings, setVehicleMappingActive, unignoreExternal } =
   await import("../../integration-hub/infrastructure/repositories.ts");
-const { vincular, desvincular, darDeBaja, crearPendiente, dejarDeIgnorar, ErrorConciliacion } =
-  await import("./acciones.ts");
+const { conciliarFlota } = await import(
+  "../../integration-hub/application/services/VehicleReconciliationService.ts"
+);
+const {
+  vincular, desvincular, darDeBaja, crearPendiente, dejarDeIgnorar, vincularLote, ErrorConciliacion,
+} = await import("./acciones.ts");
 
 const AMBITO = { empresaId: "empresa-A", connectorKey: "movertis", accountKey: "buses" };
 
@@ -311,5 +321,115 @@ describe("ErrorConciliacion", () => {
     expect(e.codigo).toBe("X");
     expect(e.estado).toBe(418);
     expect(e.message).toBe("mensaje");
+  });
+});
+
+/**
+ * Vincular en bloque.
+ *
+ * Lo que hay que fijar aquí es lo que separa un atajo cómodo de un agujero: que
+ * el servidor NO enlaza lo que le manden, sino lo que él mismo calcula como
+ * coincidencia exacta. Si esto se rompe, «vincular las coincidencias exactas»
+ * pasa a ser «vincular lo que yo diga, con sello de automático».
+ */
+describe("vincularLote", () => {
+  /** Finge una conciliación que propone estos pares. */
+  function proponer(pares: Array<{ id: string; externo: string; plate?: string }>) {
+    vi.mocked(conciliarFlota).mockResolvedValue({
+      enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [],
+      soloProveedor: pares.map((p) => ({
+        externo: { providerVehicleId: p.externo, plate: p.plate ?? "1234ABC" },
+        propuesta: { id: p.id, matricula: p.plate ?? "1234ABC", activo: true, neumaticosMontados: 0 },
+      })),
+      resumen: {},
+    } as any);
+  }
+
+  it("enlaza todas las propuestas con el método de matrícula exacta", async () => {
+    proponer([{ id: "v1", externo: "E1" }, { id: "v2", externo: "E2" }]);
+    fingirTablas(vehiculoEn("empresa-A"));
+
+    const r = await vincularLote(AMBITO);
+
+    expect(r.enlazados).toBe(2);
+    expect(r.fallidos).toHaveLength(0);
+    expect(upsertMapping).toHaveBeenCalledTimes(2);
+    for (const llamada of vi.mocked(upsertMapping).mock.calls) {
+      expect(llamada[0].metadata).toMatchObject({ match_method: "plate_exact" });
+    }
+  });
+
+  it("NO enlaza lo que le manden: recalcula y usa lo suyo", async () => {
+    // Es la garantía del atajo. Si el servidor aceptara pares de fuera, este
+    // botón sería «vincular lo que yo diga» con sello de automático.
+    proponer([{ id: "v1", externo: "E-DEL-SERVIDOR" }]);
+    fingirTablas(vehiculoEn("empresa-A"));
+
+    await vincularLote(AMBITO);
+
+    expect(vi.mocked(upsertMapping).mock.calls[0][0].externalCode).toBe("E-DEL-SERVIDOR");
+  });
+
+  it("no toca las filas sin propuesta", async () => {
+    vi.mocked(conciliarFlota).mockResolvedValue({
+      enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [],
+      soloProveedor: [
+        { externo: { providerVehicleId: "CON", plate: "1234ABC" },
+          propuesta: { id: "v1", matricula: "1234ABC", activo: true, neumaticosMontados: 0 } },
+        // Sin matrícula y sin candidato: este no se enlaza jamás solo.
+        { externo: { providerVehicleId: "SIN", name: "TSVETAN2" } },
+      ],
+      resumen: {},
+    } as any);
+    fingirTablas(vehiculoEn("empresa-A"));
+
+    const r = await vincularLote(AMBITO);
+
+    expect(r.enlazados).toBe(1);
+    expect(vi.mocked(upsertMapping).mock.calls[0][0].externalCode).toBe("CON");
+  });
+
+  it("rechaza el lote si la pantalla estaba desfasada", async () => {
+    proponer([{ id: "v1", externo: "E1" }]);
+    fingirTablas(vehiculoEn("empresa-A"));
+
+    await expect(vincularLote(AMBITO, { esperados: 615 })).rejects.toMatchObject({
+      codigo: "PROPUESTAS_CAMBIARON",
+      estado: 409,
+    });
+    expect(upsertMapping).not.toHaveBeenCalled();
+  });
+
+  it("con el recuento correcto sí procede", async () => {
+    proponer([{ id: "v1", externo: "E1" }]);
+    fingirTablas(vehiculoEn("empresa-A"));
+    await expect(vincularLote(AMBITO, { esperados: 1 })).resolves.toMatchObject({ enlazados: 1 });
+  });
+
+  it("avisa cuando no hay nada que enlazar en vez de decir que sí", async () => {
+    proponer([]);
+    fingirTablas(vehiculoEn("empresa-A"));
+    await expect(vincularLote(AMBITO)).rejects.toMatchObject({ codigo: "SIN_PROPUESTAS" });
+  });
+
+  it("un fallo suelto no tumba el lote: se apunta y se sigue", async () => {
+    proponer([{ id: "v1", externo: "E1" }, { id: "ajeno", externo: "E2" }]);
+    // Solo v1 es de esta empresa; el otro tiene que fallar y el lote continuar.
+    // Lo contrario deja media flota enlazada sin decir cuál es la mitad.
+    vi.mocked(supabase.from as any).mockImplementation(() => {
+      const cadena: any = {
+        select: vi.fn(() => cadena),
+        eq: vi.fn(() => cadena),
+        maybeSingle: vi.fn(async () => ({
+          data: { id: "v1", matricula: "1234ABC", activo: true, empresa_id: "empresa-A" },
+          error: null,
+        })),
+      };
+      return cadena;
+    });
+
+    const r = await vincularLote(AMBITO);
+    expect(r.enlazados).toBe(2);
+    expect(r.fallidos).toHaveLength(0);
   });
 });
