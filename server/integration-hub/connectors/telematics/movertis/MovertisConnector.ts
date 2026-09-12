@@ -108,7 +108,20 @@ export interface RutasMovertis {
 }
 
 export interface MovertisConfig {
-  /** Base de la API, p. ej. https://api.hellomovertis.com */
+  /**
+   * Base de la API.
+   *
+   * La que contesta es **https://devapi.hellomovertis.com**, comprobado con la
+   * sonda: devuelve la flota entera de Autocares Plana. `api.hellomovertis.com`
+   * responde 502 y no sirve la API, así que configurarla ahí deja la pantalla de
+   * conciliación en «no se pudo sincronizar» sin que nada esté mal en el código.
+   * Este comentario decía justo eso como ejemplo, y de aquí salió la
+   * configuración equivocada de la cuenta de Plana.
+   *
+   * Ojo: `*.hellomovertis.com` tiene DNS comodín, así que cualquier subdominio
+   * resuelve y un host equivocado no falla como «no existe». Ver la cabecera de
+   * `scripts/movertis-probe.mjs`, que nació de ese mismo engaño.
+   */
   baseUrl?: string;
   /** Cuenta telemática dentro de Movertis. Un cliente puede tener varias. */
   accountKey?: string;
