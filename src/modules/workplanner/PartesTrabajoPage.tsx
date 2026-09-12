@@ -317,6 +317,20 @@ export default function PartesTrabajoPage() {
   async function crearTrabajos() {
     if (!conversion || conversion.trabajos.length === 0) return;
 
+    // Una línea sin clasificar no viaja al trabajo: ni como tarea ni como
+    // material. Antes se perdía en silencio, y el técnico se encontraba la
+    // tarjeta sin el material que tenía que montar.
+    if (conversion.sinMapear.length > 0) {
+      const ok = window.confirm(
+        `Quedan ${conversion.sinMapear.length} línea(s) sin clasificar:\n\n` +
+          conversion.sinMapear.map((l) => `· ${l.descripcion}`).join("\n") +
+          `\n\nSi creas el trabajo ahora NO aparecerán en la tarjeta del técnico.\n` +
+          `Cancela y di qué es cada una: se recuerda para los próximos partes.`
+      );
+
+      if (!ok) return;
+    }
+
     setEstado("creando");
     setError("");
 
@@ -613,12 +627,14 @@ export default function PartesTrabajoPage() {
 
             {/* Líneas por enseñar */}
             {conversion.sinMapear.length > 0 && (
-              <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
-                <h2 className="mb-1 text-sm font-black uppercase tracking-wide text-slate-300">
-                  Líneas por clasificar ({conversion.sinMapear.length})
+              <div className="rounded-2xl border border-amber-600/70 bg-amber-950/30 p-4">
+                <h2 className="mb-1 text-sm font-black uppercase tracking-wide text-amber-300">
+                  ⚠ Líneas por clasificar ({conversion.sinMapear.length})
                 </h2>
-                <p className="mb-3 text-xs text-slate-400">
-                  Di qué es cada una. Se recuerda para los próximos partes.
+                <p className="mb-3 text-xs text-amber-200/90">
+                  Di qué es cada una: se recuerda para los próximos partes.
+                  <b> Lo que quede sin clasificar no llega a la tarjeta del
+                  técnico</b>, ni como tarea ni como material.
                 </p>
 
                 <div className="space-y-2">
