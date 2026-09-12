@@ -24,7 +24,7 @@ const { resolveTelematicsConnectors } = await import("../../connectors/Connector
 const { listVehicleMappings, listIgnoredExternals, touchVehiclesLastSeen } = await import(
   "../../infrastructure/repositories.ts"
 );
-const { conciliarFlota } = await import("./VehicleReconciliationService.ts");
+const { conciliarFlota, msDeBigint } = await import("./VehicleReconciliationService.ts");
 const { normalizarMatricula } = await import("../../../tyrecontrol/matricula.ts");
 
 const CTX = { tenantId: "empresa-A", correlationId: "COR-1" };
@@ -255,5 +255,41 @@ describe("filtros de conector y cuenta", () => {
     expect(r.resumen.cuentas).toHaveLength(1);
     expect(r.resumen.cuentas[0].connectorKey).toBe("movertis");
     expect(r.resumen.providerVehicleCount).toBe(1);
+  });
+});
+
+/**
+ * El BIGINT que llegaba a la pantalla como «Invalid Date».
+ *
+ * node-postgres devuelve los BIGINT como CADENA para no perder precisión, y
+ * `new Date("1789204588796")` no es esa fecha: es Invalid Date, porque a
+ * `new Date` una cadena se le parsea como texto de fecha. La conciliación
+ * enseñaba «visto: Invalid Date» en todas sus filas por esto, y la guarda
+ * `if (!ms)` de la pantalla no lo atrapaba porque una cadena no vacía es
+ * truthy.
+ */
+describe("msDeBigint()", () => {
+  it("convierte la cadena que devuelve el driver", () => {
+    // Y se comprueba que el resultado SÍ es una fecha, que es lo que falló.
+    expect(msDeBigint("1789204588796")).toBe(1789204588796);
+    expect(new Date(msDeBigint("1789204588796") as number).toISOString())
+      .toBe("2026-09-12T09:16:28.796Z");
+  });
+
+  it("deja pasar un número tal cual", () => {
+    expect(msDeBigint(1789204588796)).toBe(1789204588796);
+  });
+
+  it("la ausencia sigue siendo ausencia, no la época de Unix", () => {
+    // `new Date(null)` es el 1 de enero de 1970, que en una columna de «última
+    // vez visto» sería una fecha creíble y falsa.
+    expect(msDeBigint(null)).toBeNull();
+    expect(msDeBigint(undefined)).toBeNull();
+  });
+
+  it("lo que no es una marca de tiempo se descarta en vez de propagarse", () => {
+    for (const basura of ["", "   ", "ayer", {}, [], NaN, 0, -1]) {
+      expect(msDeBigint(basura)).toBeNull();
+    }
   });
 });
