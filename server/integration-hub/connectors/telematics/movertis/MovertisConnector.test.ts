@@ -14,6 +14,8 @@ import { getSecretsProvider, setSecretsProvider } from "../../../infrastructure/
 
 describe("cabeceras de autenticación", () => {
   it("manda el token EN CRUDO, sin «Bearer», que es lo que pide Movertis", () => {
+    // Comprobado contra la cuenta real: con el token en crudo, «Probar
+    // conexión» devuelve los 751 vehículos de Autocares Plana.
     const h = new MovertisConnector({}).cabecerasDe({ token: "abc123" });
     expect(h.authorization).toBe("abc123");
     expect(h.authorization).not.toContain("Bearer");

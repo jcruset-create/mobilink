@@ -138,7 +138,15 @@ export interface PosicionVehiculo {
   pos_h?: number | null;
 }
 
-export type OrigenKm = "manual" | "webfleet" | "importacion_excel";
+/**
+ * De qué clase de fuente salió un kilometraje.
+ *
+ * `telematica` es genérico a propósito: de QUÉ proveedor y de qué cuenta vino
+ * queda escrito en `integration_mappings`, que es su sitio. Con un valor por
+ * proveedor este catálogo acabaría contando dos cosas distintas y habría que
+ * ampliarlo cada vez que se enchufa uno nuevo.
+ */
+export type OrigenKm = "manual" | "webfleet" | "importacion_excel" | "telematica";
 
 // ── Webfleet: vehículos en base ─────────────────────────────────
 export type EstadoWebfleet = "en_base" | "otra_base" | "en_ruta" | "sin_conexion" | "sin_dispositivo";
@@ -547,6 +555,7 @@ export const ORIGEN_KM_LABELS: Record<OrigenKm, string> = {
   manual: "Manual",
   webfleet: "Webfleet",
   importacion_excel: "Importación Excel",
+  telematica: "Telemática",
 };
 
 export type EstadoNeumatico = "almacen" | "reservado" | "montado" | "reparacion" | "descartado" | "pendiente_reciclaje";

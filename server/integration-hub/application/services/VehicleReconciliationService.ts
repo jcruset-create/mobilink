@@ -76,8 +76,35 @@ interface LecturaCuenta {
   error?: string;
 }
 
+/**
+ * Un `BIGINT` de PostgreSQL a número, o null.
+ *
+ * Hace falta porque node-postgres devuelve los BIGINT como CADENA, y no por
+ * capricho: un bigint no cabe en el number de JavaScript, así que el driver
+ * prefiere no perder precisión a que nadie se dé cuenta. Aquí sí cabe —son
+ * milisegundos de época, unos 13 dígitos— pero la cadena viaja intacta hasta la
+ * pantalla, y allí `new Date("1789204588796")` no es la fecha: es **Invalid
+ * Date**, porque a `new Date` una cadena se le parsea como texto de fecha y no
+ * como marca de tiempo.
+ *
+ * Eso es lo que ponía «visto: Invalid Date» en todas las filas de la
+ * conciliación, y por qué la guarda `if (!ms) return "—"` de la pantalla no lo
+ * atrapaba: una cadena no vacía es truthy. La pista estaba en
+ * `enlacesVehiculo.integration.test.ts`, que compara con `Number(...)` alrededor
+ * del valor: quien escribió esa prueba ya sabía que llegaba como cadena.
+ *
+ * Se convierte AQUÍ, en la frontera, y no en la pantalla: el dominio, la API y
+ * la interfaz declaran todos `number | null`, así que la cadena era una mentira
+ * de tipos desde la primera línea.
+ */
+export function msDeBigint(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 /** Traduce una fila de `integration_mappings` al vocabulario del dominio. */
-function aEnlace(fila: MappingRow & { last_seen_at_ms?: number | null }): EnlaceVehiculo {
+function aEnlace(fila: MappingRow & { last_seen_at_ms?: number | string | null }): EnlaceVehiculo {
   const meta = (fila.metadata ?? {}) as Record<string, unknown>;
   const texto = (v: unknown) => (typeof v === "string" && v.trim() !== "" ? v : null);
   return {
@@ -87,7 +114,7 @@ function aEnlace(fila: MappingRow & { last_seen_at_ms?: number | null }): Enlace
     metodo: texto(meta.match_method),
     matriculaSnapshot: texto(meta.external_plate_snapshot),
     nombreSnapshot: texto(meta.external_name_snapshot),
-    ultimaVezVistoMs: fila.last_seen_at_ms ?? null,
+    ultimaVezVistoMs: msDeBigint(fila.last_seen_at_ms),
   };
 }
 

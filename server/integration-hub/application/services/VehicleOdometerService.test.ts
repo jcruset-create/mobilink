@@ -20,9 +20,12 @@ vi.mock("../../infrastructure/repositories.ts", () => ({
 
 const { resolveTelematicsConnectors } = await import("../../connectors/ConnectorRegistry.ts");
 const { findExternalCode } = await import("../../infrastructure/repositories.ts");
-const { elegirKilometraje, kilometrajeEnOperacion, ESCALERA_TOLERANCIA } = await import(
-  "./VehicleOdometerService.ts"
-);
+const {
+  elegirKilometraje,
+  kilometrajeEnOperacion,
+  kilometrajeSiSigueParado,
+  ESCALERA_TOLERANCIA,
+} = await import("./VehicleOdometerService.ts");
 
 const T = new Date("2026-07-15T09:40:00Z");
 
@@ -250,5 +253,210 @@ describe("kilometrajeEnOperacion()", () => {
       expect(r.kilometraje.odometerSource).toBe("vehicle");
       expect(r.kilometraje.providerVehicleId).toBe("001");
     }
+  });
+});
+
+/**
+ * `kilometrajeSiSigueParado` — el kilometraje de un instante pasado cuando el
+ * proveedor no guarda odómetro histórico.
+ *
+ * Lo que se fija aquí no es el cálculo —eso está en
+ * `domain/inmovilidad.test.ts`— sino que la orquestación distingue los cinco
+ * casos, y en particular que «se movió» no se confunde con «no había lectura».
+ * Los dos acaban en un `null` para quien llame, y no significan lo mismo: uno
+ * es una negativa razonada y el otro una ausencia.
+ */
+describe("kilometrajeSiSigueParado()", () => {
+  const ctx = { tenantId: "empresa-1", correlationId: "COR-20260912-000001" };
+  const PASO = new Date("2026-09-10T18:00:00Z");
+  const AHORA = new Date("2026-09-12T09:00:00Z");
+
+  const cuenta = (key: string, accountKey: string, connector: unknown) => ({
+    key, accountKey, connector, usingDefault: false, config: {},
+  });
+
+  // La base de Plana en Vila-seca, que es de donde salen las posiciones reales.
+  const BASE = { lat: 41.1299667358, lng: 1.18569278717 };
+  const pos = (minDesdePaso: number, desviacionM = 0): VehicleTelemetry => ({
+    provider: "movertis",
+    accountKey: "default",
+    providerVehicleId: "26134116",
+    capturedAt: new Date(PASO.getTime() + minDesdePaso * 60_000),
+    latitude: BASE.lat + desviacionM / 111_320,
+    longitude: BASE.lng,
+  });
+
+  /** Un conector que contesta lo que se le diga a cada una de las dos llamadas. */
+  const conector = (actual: VehicleTelemetry | null, historico: VehicleTelemetry[]) => ({
+    getCurrentTelemetry: vi.fn().mockResolvedValue(actual),
+    getTelemetryHistory: vi.fn().mockResolvedValue(historico),
+  });
+
+  const actualCon = (km: number | undefined, capturadoMin: number): VehicleTelemetry => ({
+    provider: "movertis",
+    accountKey: "default",
+    providerVehicleId: "26134116",
+    capturedAt: new Date(PASO.getTime() + capturadoMin * 60_000),
+    ...(km === undefined ? {} : { odometerKm: km, odometerSource: "vehicle" as const }),
+  });
+
+  beforeEach(() => {
+    vi.mocked(resolveTelematicsConnectors).mockReset();
+    vi.mocked(findExternalCode).mockReset();
+  });
+
+  it("parado desde el paso: el odómetro de ahora vale para entonces", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "default", conector(actualCon(809052, 600), [pos(10), pos(300, 40)])),
+    ] as any);
+    vi.mocked(findExternalCode).mockResolvedValue("26134116");
+
+    const r = await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA });
+    expect(r.estado).toBe("encontrado");
+    if (r.estado === "encontrado") {
+      expect(r.kilometraje.odometerKm).toBe(809052);
+      expect(r.kilometraje.deltaMinutos).toBe(600);
+      expect(r.kilometraje.odometerSource).toBe("vehicle");
+      expect(r.kilometraje.prueba.estado).toBe("quieto");
+      expect(r.kilometraje.providerVehicleId).toBe("26134116");
+    }
+  });
+
+  it("salió después del paso: NO da número, y lo llama por su nombre", async () => {
+    // El caso que hay que no equivocar: el odómetro de ahora lleva los km de
+    // una jornada que el neumático no había hecho cuando se le midió.
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "default", conector(actualCon(809500, 900), [pos(10), pos(800, 30_000)])),
+    ] as any);
+    vi.mocked(findExternalCode).mockResolvedValue("26134116");
+
+    const r = await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA });
+    expect(r.estado).toBe("se_movio");
+    if (r.estado === "se_movio") {
+      expect(r.motivo).toContain("movertis/default");
+      expect(r.motivo).toMatch(/\d+ m/);
+      expect(r.cuentasConsultadas).toEqual(["movertis/default"]);
+    }
+  });
+
+  it("el equipo dormido desde antes del paso: vale, con el desfase en negativo", async () => {
+    // Lo normal en esta flota. Una lectura ANTERIOR al arco no puede llevar
+    // kilómetros posteriores a él.
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "default", conector(actualCon(809052, -25), [])),
+    ] as any);
+    vi.mocked(findExternalCode).mockResolvedValue("26134116");
+
+    const r = await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA });
+    expect(r.estado).toBe("encontrado");
+    if (r.estado === "encontrado") {
+      expect(r.kilometraje.deltaMinutos).toBe(-25);
+      expect(r.kilometraje.prueba.estado).toBe("sin_emisiones");
+    }
+  });
+
+  it("lectura posterior al paso sin ninguna posición: no se cuela como exacta", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "default", conector(actualCon(809052, 120), [])),
+    ] as any);
+    vi.mocked(findExternalCode).mockResolvedValue("26134116");
+
+    const r = await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA });
+    expect(r.estado).toBe("sin_lectura");
+  });
+
+  it("lectura sin odómetro: no hay kilometraje que atribuir, por mucha prueba que haya", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "default", conector(actualCon(undefined, 60), [pos(10), pos(300)])),
+    ] as any);
+    vi.mocked(findExternalCode).mockResolvedValue("26134116");
+
+    const r = await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA });
+    expect(r.estado).toBe("sin_lectura");
+  });
+
+  it("sin cuentas: 'sin_telematica', que no es un fallo", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([]);
+    expect((await kilometrajeSiSigueParado(ctx, "veh-1", PASO)).estado).toBe("sin_telematica");
+  });
+
+  it("vehículo sin enlazar en ninguna cuenta: tampoco es un fallo", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "default", conector(actualCon(1, 0), [])),
+    ] as any);
+    vi.mocked(findExternalCode).mockResolvedValue(null);
+
+    expect((await kilometrajeSiSigueParado(ctx, "veh-1", PASO)).estado).toBe("sin_telematica");
+  });
+
+  it("proveedor caído: 'no_disponible', que sí merece reintento", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "default", {
+        getCurrentTelemetry: vi.fn().mockRejectedValue(new Error("HTTP 503")),
+        getTelemetryHistory: vi.fn().mockResolvedValue([]),
+      }),
+    ] as any);
+    vi.mocked(findExternalCode).mockResolvedValue("26134116");
+
+    const r = await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA });
+    expect(r.estado).toBe("no_disponible");
+    if (r.estado === "no_disponible") expect(r.motivo).toContain("503");
+  });
+
+  it("una cuenta caída no cancela a la que sí contesta", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "auxiliar", {
+        getCurrentTelemetry: vi.fn().mockRejectedValue(new Error("HTTP 503")),
+        getTelemetryHistory: vi.fn().mockResolvedValue([]),
+      }),
+      cuenta("movertis", "default", conector(actualCon(809052, 30), [pos(5), pos(200, 20)])),
+    ] as any);
+    vi.mocked(findExternalCode).mockResolvedValue("26134116");
+
+    const r = await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA });
+    expect(r.estado).toBe("encontrado");
+  });
+
+  it("con dos cuentas que valen, gana la de menor desfase", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "lejana", conector(actualCon(111, 900), [pos(10), pos(500, 10)])),
+      cuenta("movertis", "cercana", conector(actualCon(222, 20), [pos(5), pos(15, 10)])),
+    ] as any);
+    vi.mocked(findExternalCode).mockResolvedValue("26134116");
+
+    const r = await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA });
+    expect(r.estado).toBe("encontrado");
+    if (r.estado === "encontrado") expect(r.kilometraje.odometerKm).toBe(222);
+  });
+
+  it("se pide la ventana que va del instante a ahora, no una de ±60 min", async () => {
+    // Es la diferencia con `kilometrajeEnOperacion`: aquí lo que interesa es
+    // TODO lo que ha pasado desde entonces, porque cualquier salida invalida.
+    const c = conector(actualCon(809052, 30), [pos(5)]);
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "default", c),
+    ] as any);
+    vi.mocked(findExternalCode).mockResolvedValue("26134116");
+
+    await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA });
+    expect(c.getTelemetryHistory).toHaveBeenCalledWith(ctx, "26134116", { from: PASO, to: AHORA });
+  });
+
+  it("el radio se puede estrechar por si alguna base es pequeña", async () => {
+    const historico = [pos(10), pos(300, 250)];
+    vi.mocked(findExternalCode).mockResolvedValue("26134116");
+
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "default", conector(actualCon(809052, 600), historico)),
+    ] as any);
+    expect((await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA })).estado)
+      .toBe("encontrado");
+
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "default", conector(actualCon(809052, 600), historico)),
+    ] as any);
+    expect(
+      (await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA, radioM: 100 })).estado,
+    ).toBe("se_movio");
   });
 });

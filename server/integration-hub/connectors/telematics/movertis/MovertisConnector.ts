@@ -66,11 +66,14 @@
  * credencial correcta, que es de los fallos más caros de diagnosticar porque
  * todo apunta al secreto.
  *
- * No se deja fijo, se deja en la config (`esquemaToken`), porque el valor del
- * ejemplo venía tapado y no se puede leer de ahí si el prefijo estaba dentro:
- * lo que sí se sabe es que la cabecera va en minúsculas y sin nada delante en
- * la documentación del proveedor. Por defecto, crudo; `"bearer"` para volver al
- * comportamiento anterior sin tocar código el día que haga falta.
+ * COMPROBADO contra la cuenta real de Autocares Plana: con el token en crudo,
+ * «Probar conexión» devuelve los 751 vehículos de la cuenta. Y `testConnection`
+ * rechaza antes de llamar si no hay credencial, así que la mandó y Movertis la
+ * aceptó sin prefijo. Hasta ese momento era una suposición razonada —el ejemplo
+ * del proveedor traía el valor tapado— y por eso quedó en la config y no fija.
+ *
+ * Se queda configurable de todas formas: `"bearer"` vuelve al comportamiento
+ * anterior sin tocar código, por si alguna instalación de Movertis lo espera.
  */
 
 import type { ConnectorInfo, ITelematicsConnector } from "../../../domain/connectors.ts";
@@ -108,7 +111,20 @@ export interface RutasMovertis {
 }
 
 export interface MovertisConfig {
-  /** Base de la API, p. ej. https://api.hellomovertis.com */
+  /**
+   * Base de la API.
+   *
+   * La que contesta es **https://devapi.hellomovertis.com**, comprobado con la
+   * sonda: devuelve la flota entera de Autocares Plana. `api.hellomovertis.com`
+   * responde 502 y no sirve la API, así que configurarla ahí deja la pantalla de
+   * conciliación en «no se pudo sincronizar» sin que nada esté mal en el código.
+   * Este comentario decía justo eso como ejemplo, y de aquí salió la
+   * configuración equivocada de la cuenta de Plana.
+   *
+   * Ojo: `*.hellomovertis.com` tiene DNS comodín, así que cualquier subdominio
+   * resuelve y un host equivocado no falla como «no existe». Ver la cabecera de
+   * `scripts/movertis-probe.mjs`, que nació de ese mismo engaño.
+   */
   baseUrl?: string;
   /** Cuenta telemática dentro de Movertis. Un cliente puede tener varias. */
   accountKey?: string;
