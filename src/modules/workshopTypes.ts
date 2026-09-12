@@ -168,6 +168,22 @@ export type Job = {
 
   /** Nº del parte de trabajo del ERP del que salió, si vino de uno. */
   ptNumero?: string | null;
+
+  /**
+   * Material del parte: lo que hay que montar. No consume tiempo de taller y
+   * no genera tarea, pero el técnico necesita verlo.
+   */
+  materiales?: MaterialTrabajo[] | null;
+};
+
+/** Una línea de material del parte de trabajo. */
+export type MaterialTrabajo = {
+  descripcion: string;
+  unidades: number;
+  /** Se guardan para imputar; NO se enseñan en las pantallas del taller. */
+  precioUnitario?: number | null;
+  precioTotal?: number | null;
+  pvp?: number | null;
 };
 
 export type AllocationResult = {
