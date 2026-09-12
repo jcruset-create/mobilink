@@ -7,6 +7,7 @@ import {
   type Conciliacion, type CuentaTelematica, type VehiculoInterno,
 } from "../services/conciliacion";
 import { listarEmpresas } from "../services/data";
+import SincronizacionKilometraje from "../components/SincronizacionKilometraje";
 import type { Empresa } from "../types";
 
 /**
@@ -263,6 +264,8 @@ export default function ConciliacionTelematica() {
           </button>
         </div>
       </div>
+
+      <SincronizacionKilometraje empresaId={empresaId} cuenta={cuenta} />
 
       {error && <div className="mb-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
       {msg && <div className="mb-3 rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-300">{msg}</div>}

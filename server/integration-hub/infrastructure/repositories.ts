@@ -1261,3 +1261,170 @@ export async function tenantsWithEnabledConnector(connectorKey: string): Promise
   );
   return rows.map((r) => r.tenant_id);
 }
+
+// ── Kilómetros mensuales por vehículo, desde la telemática ──────────────────
+
+export interface MonthlyMileageRow {
+  id: number;
+  tenant_id: string;
+  system: string;
+  account_key: string;
+  mobilink_id: string;
+  external_code: string;
+  year: number;
+  month: number;
+  period_start_ms: number;
+  period_end_ms: number;
+  timezone: string;
+  distance_km: number | null;
+  initial_odometer_km: number | null;
+  final_odometer_km: number | null;
+  trips: number | null;
+  source: string;
+  sync_status: "ok" | "empty" | "error";
+  closed: boolean;
+  synced_at_ms: number;
+  last_error: string | null;
+}
+
+export interface MonthlyMileageUpsert {
+  tenantId: string;
+  system: string;
+  accountKey: string;
+  mobilinkId: string;
+  externalCode: string;
+  year: number;
+  month: number;
+  periodStartMs: number;
+  periodEndMs: number;
+  timezone: string;
+  distanceKm: number | null;
+  initialOdometerKm?: number | null;
+  finalOdometerKm?: number | null;
+  trips?: number | null;
+  source: string;
+  syncStatus: MonthlyMileageRow["sync_status"];
+  closed: boolean;
+  lastError?: string | null;
+}
+
+/**
+ * Escribe el mes de un vehículo. Idempotente: la misma (vehículo, cuenta, mes)
+ * es siempre la misma fila, se sincronice las veces que se sincronice.
+ *
+ * Un error NO pisa un dato bueno: si la fila ya tenía kilómetros y esta vez
+ * el proveedor falló, se conserva la distancia y se anota el error aparte. Lo
+ * contrario dejaría la ficha en blanco cada vez que Movertis tuviera un mal
+ * día, que es justo cuando alguien mira el histórico para ver si pasa algo.
+ */
+export async function upsertMonthlyMileage(r: MonthlyMileageUpsert): Promise<void> {
+  const ts = now();
+  await pool.query(
+    `INSERT INTO integration_vehicle_monthly_mileage
+       (tenant_id, system, account_key, mobilink_id, external_code, year, month,
+        period_start_ms, period_end_ms, timezone, distance_km, initial_odometer_km,
+        final_odometer_km, trips, source, sync_status, closed, synced_at_ms, last_error,
+        created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)
+     ON CONFLICT (tenant_id, system, account_key, mobilink_id, year, month)
+     DO UPDATE SET
+       external_code = EXCLUDED.external_code,
+       period_start_ms = EXCLUDED.period_start_ms,
+       period_end_ms = EXCLUDED.period_end_ms,
+       timezone = EXCLUDED.timezone,
+       distance_km = CASE WHEN EXCLUDED.sync_status = 'error'
+                          THEN integration_vehicle_monthly_mileage.distance_km
+                          ELSE EXCLUDED.distance_km END,
+       initial_odometer_km = CASE WHEN EXCLUDED.sync_status = 'error'
+                          THEN integration_vehicle_monthly_mileage.initial_odometer_km
+                          ELSE EXCLUDED.initial_odometer_km END,
+       final_odometer_km = CASE WHEN EXCLUDED.sync_status = 'error'
+                          THEN integration_vehicle_monthly_mileage.final_odometer_km
+                          ELSE EXCLUDED.final_odometer_km END,
+       trips = CASE WHEN EXCLUDED.sync_status = 'error'
+                    THEN integration_vehicle_monthly_mileage.trips
+                    ELSE EXCLUDED.trips END,
+       source = EXCLUDED.source,
+       -- Un error tampoco degrada el estado de un mes que ya estaba bien: se
+       -- deja en 'ok' y el fallo queda en last_error, que es donde se mira.
+       sync_status = CASE WHEN EXCLUDED.sync_status = 'error'
+                               AND integration_vehicle_monthly_mileage.sync_status = 'ok'
+                          THEN 'ok' ELSE EXCLUDED.sync_status END,
+       closed = CASE WHEN EXCLUDED.sync_status = 'error'
+                     THEN integration_vehicle_monthly_mileage.closed
+                     ELSE EXCLUDED.closed END,
+       synced_at_ms = CASE WHEN EXCLUDED.sync_status = 'error'
+                           THEN integration_vehicle_monthly_mileage.synced_at_ms
+                           ELSE EXCLUDED.synced_at_ms END,
+       last_error = EXCLUDED.last_error,
+       updated_at_ms = EXCLUDED.updated_at_ms`,
+    [
+      r.tenantId, r.system, r.accountKey, r.mobilinkId, r.externalCode, r.year, r.month,
+      r.periodStartMs, r.periodEndMs, r.timezone, r.distanceKm, r.initialOdometerKm ?? null,
+      r.finalOdometerKm ?? null, r.trips ?? null, r.source, r.syncStatus, r.closed, ts,
+      r.lastError ?? null, ts,
+    ]
+  );
+}
+
+/** Todos los meses guardados de un vehículo, del más reciente al más antiguo. */
+export async function listMonthlyMileage(params: {
+  tenantId: string;
+  mobilinkId: string;
+}): Promise<MonthlyMileageRow[]> {
+  const { rows } = await pool.query(
+    `SELECT * FROM integration_vehicle_monthly_mileage
+      WHERE tenant_id = $1 AND mobilink_id = $2
+      ORDER BY year DESC, month DESC`,
+    [params.tenantId, params.mobilinkId]
+  );
+  return rows.map(aFilaMensual);
+}
+
+/**
+ * Qué vehículos de una cuenta tienen ya CERRADO un mes.
+ *
+ * Es lo que permite no volver a preguntar por agosto cada noche: la
+ * sincronización pide el mes a todos los enlazados MENOS a estos.
+ */
+export async function listVehiclesWithClosedMonth(params: {
+  tenantId: string;
+  system: string;
+  accountKey: string;
+  year: number;
+  month: number;
+}): Promise<Set<string>> {
+  const { rows } = await pool.query(
+    `SELECT mobilink_id FROM integration_vehicle_monthly_mileage
+      WHERE tenant_id = $1 AND system = $2 AND account_key = $3
+        AND year = $4 AND month = $5 AND closed`,
+    [params.tenantId, params.system, params.accountKey, params.year, params.month]
+  );
+  return new Set(rows.map((r: any) => String(r.mobilink_id)));
+}
+
+function aFilaMensual(r: any): MonthlyMileageRow {
+  const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+  return {
+    id: Number(r.id),
+    tenant_id: String(r.tenant_id),
+    system: String(r.system),
+    account_key: String(r.account_key),
+    mobilink_id: String(r.mobilink_id),
+    external_code: String(r.external_code),
+    year: Number(r.year),
+    month: Number(r.month),
+    period_start_ms: Number(r.period_start_ms),
+    period_end_ms: Number(r.period_end_ms),
+    timezone: String(r.timezone),
+    distance_km: num(r.distance_km),
+    initial_odometer_km: num(r.initial_odometer_km),
+    final_odometer_km: num(r.final_odometer_km),
+    trips: num(r.trips),
+    source: String(r.source),
+    sync_status: r.sync_status,
+    closed: r.closed === true,
+    synced_at_ms: Number(r.synced_at_ms),
+    last_error: r.last_error ?? null,
+  };
+}

@@ -8,8 +8,8 @@
  * vuelva a pasar.
  */
 
-import { describe, expect, it } from "vitest";
-import { MovertisConnector, mensajeDeError, motivoDeRed } from "./MovertisConnector.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MovertisConnector, esperaPedida, mensajeDeError, motivoDeRed } from "./MovertisConnector.ts";
 import { getSecretsProvider, setSecretsProvider } from "../../../infrastructure/secrets.ts";
 
 describe("cabeceras de autenticación", () => {
@@ -195,4 +195,167 @@ describe("motivoDeRed()", () => {
   it("un código desconocido no se traga el mensaje: se enseña tal cual", () => {
     expect(motivoDeRed(conCausa("ERARO_1234"), url)).toContain("ERARO_1234");
   });
+});
+
+/**
+ * `summarytrips` y el trato al proveedor cuando limita.
+ *
+ * Con `fetch` sustituido: lo que se fija es el cuerpo que se manda (varias
+ * unidades en UNA llamada, fechas en epoch ms), que sin unidad de medida no se
+ * llama, y que ante un 429 se obedece `Retry-After` en vez del backoff propio.
+ */
+describe("getTripSummary()", () => {
+  const CTX = { tenantId: "empresa-plana", correlationId: "COR-1" };
+  const VENTANA = { from: new Date(1788213600000), to: new Date(1790805600000) };
+
+  function conToken<T>(fn: () => Promise<T>): Promise<T> {
+    const anterior = getSecretsProvider();
+    setSecretsProvider({ get: async (_t, _c, nombre) => (nombre === "token" ? "tok" : undefined) });
+    return fn().finally(() => setSecretsProvider(anterior));
+  }
+
+  /** Un `fetch` que contesta con lo que se le diga y apunta lo que recibió. */
+  function fingirFetch(respuestas: Array<{ status: number; body: unknown; headers?: Record<string, string> }>) {
+    const llamadas: Array<{ url: string; body: any }> = [];
+    let i = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: any) => {
+      llamadas.push({ url, body: JSON.parse(init.body) });
+      const r = respuestas[Math.min(i++, respuestas.length - 1)];
+      const cabeceras = new Map(Object.entries(r.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+      return {
+        status: r.status,
+        ok: r.status >= 200 && r.status < 300,
+        headers: { get: (n: string) => cabeceras.get(n.toLowerCase()) ?? null },
+        text: async () => (typeof r.body === "string" ? r.body : JSON.stringify(r.body)),
+      };
+    }));
+    return llamadas;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("manda varias unidades en UNA petición, con las fechas en epoch ms", async () => {
+    const llamadas = fingirFetch([{ status: 201, body: [
+      { unit: 1, total_mileage: 7842, initial_mileage: 100, final_mileage: 7942 },
+      { unit: 2, total_mileage: 8104 },
+    ] }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km", accountKey: "buses" });
+
+    const r = await conToken(() => c.getTripSummary(CTX, ["1", "2"], VENTANA));
+
+    expect(llamadas).toHaveLength(1);
+    expect(llamadas[0].url).toBe("https://devapi.invalid/vehicle/summarytrips");
+    expect(llamadas[0].body).toEqual({ units: [1, 2], initial_date: 1788213600000, end_date: 1790805600000 });
+    expect(r.map((s) => [s.providerVehicleId, s.distanceKm])).toEqual([["1", 7842], ["2", 8104]]);
+    expect(r[0].initialOdometerKm).toBe(100);
+    expect(r[0].accountKey).toBe("buses");
+  });
+
+  it("con `distanciaEn: m` convierte a km; `distanciaEn` manda sobre `odometroEn`", async () => {
+    fingirFetch([{ status: 201, body: [{ unit: 1, total_mileage: 7842000 }] }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km", distanciaEn: "m" });
+    const r = await conToken(() => c.getTripSummary(CTX, ["1"], VENTANA));
+    expect(r[0].distanceKm).toBe(7842);
+  });
+
+  it("sin unidad de medida NO llama: metros guardados como km es peor que nada", async () => {
+    const llamadas = fingirFetch([{ status: 201, body: [] }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid" });
+    await expect(conToken(() => c.getTripSummary(CTX, ["1"], VENTANA))).rejects.toMatchObject({ code: "MOVERTIS_SIN_UNIDAD" });
+    expect(llamadas).toHaveLength(0);
+  });
+
+  it("una unidad que el proveedor no menciona simplemente no aparece", async () => {
+    fingirFetch([{ status: 201, body: [{ unit: 1, total_mileage: 10 }] }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km" });
+    const r = await conToken(() => c.getTripSummary(CTX, ["1", "2"], VENTANA));
+    expect(r.map((s) => s.providerVehicleId)).toEqual(["1"]);
+  });
+
+  it("sin unidades pedidas no llama a nadie", async () => {
+    const llamadas = fingirFetch([{ status: 201, body: [] }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km" });
+    expect(await conToken(() => c.getTripSummary(CTX, [], VENTANA))).toEqual([]);
+    expect(llamadas).toHaveLength(0);
+  });
+
+  it("429 con Retry-After: espera lo que pide y reintenta", async () => {
+    const esperas: number[] = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => {
+      esperas.push(ms ?? 0); fn(); return 0 as any;
+    }) as any);
+    fingirFetch([
+      { status: 429, body: "", headers: { "Retry-After": "7" } },
+      { status: 201, body: [{ unit: 1, total_mileage: 5 }] },
+    ]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km" });
+
+    const r = await conToken(() => c.getTripSummary(CTX, ["1"], VENTANA));
+
+    expect(r[0].distanceKm).toBe(5);
+    expect(esperas).toContain(7000);
+    vi.restoreAllMocks();
+  });
+
+  it("429 persistente: se rinde tras los reintentos con un error transitorio, no infinito", async () => {
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void) => { fn(); return 0 as any; }) as any);
+    const llamadas = fingirFetch([{ status: 429, body: "", headers: { "Retry-After": "1" } }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km", maxRetries: 2 });
+
+    await expect(conToken(() => c.getTripSummary(CTX, ["1"], VENTANA))).rejects.toMatchObject({
+      code: "MOVERTIS_RATE_LIMITED", retryable: true,
+    });
+    expect(llamadas).toHaveLength(3);
+    vi.restoreAllMocks();
+  });
+
+  it("500 sin cuerpo útil: transitorio; 500 con mensaje: permanente y sin reintentar", async () => {
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void) => { fn(); return 0 as any; }) as any);
+    const l1 = fingirFetch([{ status: 500, body: "<html>bad gateway</html>" }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km", maxRetries: 1 });
+    await expect(conToken(() => c.getTripSummary(CTX, ["1"], VENTANA))).rejects.toMatchObject({ retryable: true });
+    expect(l1).toHaveLength(2);
+
+    const l2 = fingirFetch([{ status: 500, body: { statusCode: 500, message: "Cannot read properties of undefined" } }]);
+    await expect(conToken(() => c.getTripSummary(CTX, ["1"], VENTANA))).rejects.toMatchObject({ retryable: false });
+    expect(l2).toHaveLength(1);
+    vi.restoreAllMocks();
+  });
+
+  it("401: error de credencial, sin reintentos", async () => {
+    const llamadas = fingirFetch([{ status: 401, body: { error: "No valid auth method" } }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km" });
+    await expect(conToken(() => c.getTripSummary(CTX, ["1"], VENTANA))).rejects.toMatchObject({ kind: "AUTH" });
+    expect(llamadas).toHaveLength(1);
+  });
+
+  it("JSON inválido con 2xx: permanente, y el texto va en el mensaje", async () => {
+    fingirFetch([{ status: 201, body: "esto no es json" }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km" });
+    await expect(conToken(() => c.getTripSummary(CTX, ["1"], VENTANA))).rejects.toMatchObject({ code: "MOVERTIS_BAD_JSON" });
+  });
+
+  it("timeout: transitorio con el motivo de red", async () => {
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void) => { fn(); return 0 as any; }) as any);
+    vi.stubGlobal("fetch", vi.fn(async () => { throw Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" }); }));
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km", maxRetries: 0 });
+    await expect(conToken(() => c.getTripSummary(CTX, ["1"], VENTANA))).rejects.toMatchObject({ code: "MOVERTIS_NETWORK", retryable: true });
+    vi.restoreAllMocks();
+  });
+});
+
+describe("esperaPedida()", () => {
+  const con = (status: number, v: string | null) => ({ status, headers: { get: () => v } });
+
+  it("segundos → ms", () => expect(esperaPedida(con(429, "30"))).toBe(30_000));
+  it("solo ante 429/503", () => expect(esperaPedida(con(500, "30"))).toBeUndefined());
+  it("sin cabecera, nada", () => expect(esperaPedida(con(429, null))).toBeUndefined());
+  it("una fecha HTTP futura se convierte", () => {
+    const en10s = new Date(Date.now() + 10_000).toUTCString();
+    const ms = esperaPedida(con(429, en10s))!;
+    expect(ms).toBeGreaterThan(8_000);
+    expect(ms).toBeLessThanOrEqual(10_000);
+  });
+  it("se acota: una hora pedida son dos minutos obedecidos", () => expect(esperaPedida(con(429, "3600"))).toBe(120_000));
+  it("basura: nada", () => expect(esperaPedida(con(429, "mañana"))).toBeUndefined());
 });

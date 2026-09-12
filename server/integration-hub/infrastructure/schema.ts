@@ -292,6 +292,50 @@ export async function initIntegrationHub(): Promise<void> {
       ON integration_ignored_externals(tenant_id, entity_type, system, account_key);
   `);
 
+  // ── Kilómetros mensuales por vehículo, desde la telemática ───────────────
+  //
+  // Una fila por vehículo de TyreControl y mes, con lo que el proveedor resumió
+  // para ese mes. Vive aquí y no en `tc_*` por lo mismo que `integration_mappings`:
+  // es dato DEL PROVEEDOR, atado a una cuenta y a un identificador externo, y
+  // la ficha del vehículo lo lee de aquí sin volver a preguntar a nadie.
+  //
+  // La UNIQUE va por `mobilink_id`, no por `external_code`: lo que se enseña en
+  // la ficha son los kilómetros DEL VEHÍCULO, y si algún día se reenlaza a otra
+  // unidad del proveedor, el mes sigue siendo el mismo mes de ese vehículo.
+  // `external_code` se guarda para saber de qué unidad salió cada fila.
+  //
+  // `closed`: el mes ya se resumió DESPUÉS de terminar, así que no hace falta
+  // volver a pedirlo. Un mes en curso se refresca cada día; uno cerrado, no.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS integration_vehicle_monthly_mileage (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      system TEXT NOT NULL,
+      account_key TEXT NOT NULL DEFAULT 'default',
+      mobilink_id TEXT NOT NULL,
+      external_code TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+      period_start_ms BIGINT NOT NULL,
+      period_end_ms BIGINT NOT NULL,
+      timezone TEXT NOT NULL,
+      distance_km NUMERIC(12,3),
+      initial_odometer_km NUMERIC(12,3),
+      final_odometer_km NUMERIC(12,3),
+      trips INTEGER,
+      source TEXT NOT NULL,               -- 'summarytrips'
+      sync_status TEXT NOT NULL,          -- 'ok' | 'empty' | 'error'
+      closed BOOLEAN NOT NULL DEFAULT false,
+      synced_at_ms BIGINT NOT NULL,
+      last_error TEXT,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (tenant_id, system, account_key, mobilink_id, year, month)
+    );
+    CREATE INDEX IF NOT EXISTS ihvmm_vehiculo_idx
+      ON integration_vehicle_monthly_mileage(tenant_id, mobilink_id, year, month);
+  `);
+
   // ── Referencias de producto externas normalizadas + ofertas de proveedor ──
   await pool.query(`
     CREATE TABLE IF NOT EXISTS external_product_references (
