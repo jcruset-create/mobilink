@@ -1116,6 +1116,15 @@ export async function initDb() {
     -- como si fuera uno solo.
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT NULL;
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "unitMinutes" INTEGER DEFAULT NULL;
+
+    -- Lo que trae el parte de trabajo y hasta ahora se perdía:
+    --  · includedTasks: el resto de servicios del parte, la mano de obra que
+    --    va dentro del mismo trabajo. Vivía SOLO en memoria del navegador, así
+    --    que al primer refresco desaparecía.
+    --  · materiales: lo que hay que montar. Solo sobrevivía como una frase
+    --    suelta dentro del motivo, ni consultable ni imputable.
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "includedTasks" JSONB DEFAULT NULL;
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS materiales JSONB DEFAULT NULL;
   `);
 
   // Cupo anual de vacaciones y modo de cómputo. Una fila por taller y año con
