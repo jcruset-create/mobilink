@@ -4481,11 +4481,16 @@ if (view === "operarios" && canView("operarios")) {
       moveJobToStandBy={pauseJob}
       getOperationLabel={getOperationLabel}
       onBack={() => {
+        // Dentro de WorkPlanner la vuelta es a Operativo 2, que es la pantalla
+        // de trabajo del módulo; el operativo clásico solo existe en el panel.
         if (embebido && onVolverModulo) { onVolverModulo(); return; }
         setView("operativo");
         void reloadMaintenanceAvailabilityFromBackend();
       }}
-      onGoWorkshopScreen={() => setView("pantalla")}
+      etiquetaVolver={embebido ? "Volver a Operativo 2" : undefined}
+      // Dentro de WorkPlanner no se ofrece: cambiaría la vista interna sin
+      // mover la ruta del módulo, y la navegación la lleva su propio menú.
+      onGoWorkshopScreen={embebido ? undefined : () => setView("pantalla")}
       canGoBack={canView("operativo")}
       onLogout={() => {
         localStorage.removeItem("sea-authenticated");
