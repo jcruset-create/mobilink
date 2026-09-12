@@ -24,6 +24,10 @@ import {
 export interface ResultadoCheckpoint {
   mediciones: number;
   revisiones: number;
+  /** Revisiones nuevas a las que la telemática pudo ponerle kilometraje. */
+  conKilometraje: number;
+  /** Y las que se quedaron sin él, con el motivo de cada una. */
+  sinKilometraje: string[];
   altas: string[];
   yaCargados: string[];
   sinMedir: string[];
@@ -120,11 +124,11 @@ export async function importarCheckpoint(filas: any[]): Promise<ResultadoCheckpo
     }
   }
 
-  const { mediciones, revisiones, avisos: avisosCarga } =
-    await cargar(nuevas, porMatricula, lectura.vehiculos);
+  const { mediciones, revisiones, conKilometraje, sinKilometraje, avisos: avisosCarga } =
+    await cargar(nuevas, porMatricula, lectura.vehiculos, empresaId);
 
   return {
-    mediciones, revisiones, altas,
+    mediciones, revisiones, altas, conKilometraje, sinKilometraje,
     yaCargados: yaEstaban,
     sinMedir: lectura.sinMedir,
     avisos: [...avisos, ...avisosCarga],
@@ -132,14 +136,27 @@ export async function importarCheckpoint(filas: any[]): Promise<ResultadoCheckpo
   };
 }
 
+interface ResultadoCarga {
+  mediciones: number;
+  revisiones: number;
+  conKilometraje: number;
+  sinKilometraje: string[];
+  avisos: string[];
+}
+
+const CARGA_VACIA: ResultadoCarga = {
+  mediciones: 0, revisiones: 0, conKilometraje: 0, sinKilometraje: [], avisos: [],
+};
+
 /** Crea las revisiones y su detalle. Reimportar actualiza, no duplica. */
 async function cargar(
   filas: FilaCheckpoint[],
   porMatricula: Map<string, { id: string; empresa_id: string; tipo_vehiculo_id: string | null }>,
   vehiculos: VehiculoCheckpoint[],
-): Promise<{ mediciones: number; revisiones: number; avisos: string[] }> {
+  empresaId: string | null,
+): Promise<ResultadoCarga> {
   const avisos = new Set<string>();
-  if (!filas.length) return { mediciones: 0, revisiones: 0, avisos: [] };
+  if (!filas.length) return CARGA_VACIA;
 
   // Posiciones por tipo, una vez.
   const tiposUsados = [...new Set(
@@ -174,7 +191,7 @@ async function cargar(
     if (f.medidoAt! > g.medido) g.medido = f.medidoAt!;
     g.filas.push(f);
   }
-  if (!grupos.size) return { mediciones: 0, revisiones: 0, avisos: [...avisos] };
+  if (!grupos.size) return { ...CARGA_VACIA, avisos: [...avisos] };
 
   // Las revisiones que ya existen para esos vehículos y fechas.
   const vehIds = [...new Set([...grupos.values()].map((g) => g.veh.id))];
@@ -216,6 +233,19 @@ async function cargar(
       mapRev.set(`${r.vehiculo_id}|${String(r.fecha_revision).slice(0, 10)}`, r.id);
     }
   }
+
+  // ── El kilometraje de cada revisión nueva ─────────────────────────────────
+  //
+  // Va DESPUÉS de crear las revisiones, y no dentro del insert, a propósito: es
+  // la única parte de esta importación que depende de que un proveedor externo
+  // conteste. Preguntando antes, una caída de Movertis se llevaría por delante
+  // las profundidades y las presiones de toda la flota; preguntando después, lo
+  // único que falta es un número, y la revisión ya está guardada.
+  //
+  // El arco no lee kilómetros: salen de la telemática, y solo valen si se puede
+  // demostrar que el vehículo no se ha movido desde que se le midió. Eso lo
+  // decide `kilometrajeParaRevision`, que nunca lanza.
+  const kmDeRevisiones = await ponerKilometraje(porCrear, mapRev, empresaId);
 
   // Montajes existentes, para colgar cada medición de su neumático si lo hay.
   const mapMontaje = new Map<string, string>();
@@ -259,7 +289,13 @@ async function cargar(
     if (error) throw new Error("Detalle de revisión: " + error.message);
   }
 
-  return { mediciones: detalles.length, revisiones: porCrear.length, avisos: [...avisos] };
+  return {
+    mediciones: detalles.length,
+    revisiones: porCrear.length,
+    conKilometraje: kmDeRevisiones.conKilometraje,
+    sinKilometraje: kmDeRevisiones.sinKilometraje,
+    avisos: [...avisos],
+  };
 }
 
 const iso = (d: Date) =>
@@ -292,4 +328,88 @@ function tipoPara(
     if (t) return t.id;
   }
   return null;
+}
+
+/**
+ * Le pone kilometraje a las revisiones que se acaban de crear.
+ *
+ * ── Solo a las NUEVAS ───────────────────────────────────────────────────────
+ *
+ * Reimportar el informe de la semana pasada no debe volver a preguntar por 196
+ * vehículos ni, peor, reescribir un kilometraje que ya se guardó con su prueba
+ * en el momento bueno. Cuanto más se tarda en preguntar, más probable es que el
+ * autobús haya salido y la respuesta pase de un número a un null: un segundo
+ * intento no mejora el dato, lo empeora.
+ *
+ * ── De a poco, y sin poder atascarse ────────────────────────────────────────
+ *
+ * Son dos llamadas HTTP al proveedor por vehículo, y un informe semanal trae la
+ * flota entera. En serie eso son minutos con el worker del correo bloqueado; de
+ * golpe, doscientas peticiones simultáneas contra una API que ya devuelve 502
+ * cuando se le pide de más. Así que van en tandas pequeñas.
+ *
+ * Y ninguna puede tumbar la importación: `kilometrajeParaRevision` no lanza, y
+ * el `update` que falla se anota como aviso. Las presiones y profundidades ya
+ * están guardadas antes de llegar aquí.
+ */
+const TANDA_KM = 5;
+
+async function ponerKilometraje(
+  porCrear: { veh: { id: string }; fecha: string; medido: Date }[],
+  mapRev: Map<string, string>,
+  empresaId: string | null,
+): Promise<{ conKilometraje: number; sinKilometraje: string[] }> {
+  const sinKilometraje: string[] = [];
+  if (!porCrear.length) return { conKilometraje: 0, sinKilometraje };
+  if (!empresaId) {
+    // Sin empresa no hay tenant al que preguntar. Pasa cuando el informe trae
+    // solo vehículos que no conocemos, y entonces no hay revisiones tampoco.
+    return { conKilometraje: 0, sinKilometraje: ["sin empresa: no se pudo preguntar a la telemática"] };
+  }
+
+  const { kilometrajeParaRevision } = await import("./kilometrajeRevision.ts");
+  let conKilometraje = 0;
+
+  for (let i = 0; i < porCrear.length; i += TANDA_KM) {
+    const tanda = porCrear.slice(i, i + TANDA_KM);
+    await Promise.all(
+      tanda.map(async (g) => {
+        const revId = mapRev.get(`${g.veh.id}|${g.fecha}`);
+        if (!revId) return;
+
+        const km = await kilometrajeParaRevision({
+          tcEmpresaId: empresaId,
+          tcVehicleId: g.veh.id,
+          medidoAt: g.medido,
+          correlationId: `checkpoint:${g.fecha}:${revId}`,
+        });
+
+        if (km.km === null) {
+          sinKilometraje.push(`${g.veh.id}: ${km.nota}`);
+          return;
+        }
+
+        const { error } = await supabase
+          .from("revisiones_vehiculo")
+          .update({
+            km_vehiculo: km.km,
+            origen_km: km.origen,
+            km_capturado_at: km.capturadoAt?.toISOString() ?? null,
+            km_desfase_min: km.desfaseMin,
+            // La nota va a las observaciones de la revisión porque es donde la
+            // ve quien audita el dato después. Un número sin procedencia es lo
+            // que el Telematics Hub existe para no producir.
+            observaciones: km.nota,
+          })
+          .eq("id", revId);
+        if (error) {
+          sinKilometraje.push(`${g.veh.id}: no se pudo guardar el kilometraje (${error.message})`);
+          return;
+        }
+        conKilometraje++;
+      }),
+    );
+  }
+
+  return { conKilometraje, sinKilometraje };
 }

@@ -42,7 +42,7 @@
 // cuenta «Movertis Autocares Plana» para todo *.hellomovertis.com, así que no
 // hacen falta claves. Fuera de ese entorno se pueden pasar por variables de
 // entorno o por el .env de la raíz:
-//   MOVERTIS_BASE_URL   (por defecto https://api.hellomovertis.com)
+//   MOVERTIS_BASE_URL   (por defecto https://devapi.hellomovertis.com, la que contesta)
 //   MOVERTIS_TOKEN      (Bearer)  | MOVERTIS_API_KEY (cabecera X-Api-Key)
 //   MOVERTIS_USERNAME + MOVERTIS_PASSWORD  (Basic)
 //

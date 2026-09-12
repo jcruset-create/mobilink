@@ -156,11 +156,26 @@ async function procesarCorreo(cliente: ImapFlow, uid: number): Promise<"importad
       [
         `Fichero: ${base.fichero}`,
         `Mediciones: ${r.mediciones} · Revisiones: ${r.revisiones}`,
+        // El kilometraje se dice SIEMPRE que haya revisiones nuevas, aunque
+        // salga a cero. Quedarse callado cuando no se ha podido poner ninguno
+        // haría pasar por normal lo que puede ser una telemática caída o una
+        // flota sin enlazar en la conciliación.
+        r.revisiones
+          ? `Con kilometraje: ${r.conKilometraje} de ${r.revisiones}` +
+            (r.sinKilometraje.length ? ` · sin kilometraje: ${r.sinKilometraje.length}` : "")
+          : "",
         r.altas.length ? `Vehículos dados de alta (${r.altas.length}): ${r.altas.join(", ")}` : "",
         r.sinMedir.length ? `Sin cruzar el arco: ${r.sinMedir.length}` : "",
         "",
         r.avisos.length ? "Avisos:" : "",
         ...r.avisos.map((a) => ` · ${a}`),
+        // Los motivos de los kilometrajes que faltan van al final y recortados:
+        // con la flota entera sin enlazar serían doscientas líneas iguales, y
+        // lo que hace falta saber es el motivo, no repetirlo.
+        ...(r.sinKilometraje.length
+          ? ["", "Revisiones sin kilometraje:", ...r.sinKilometraje.slice(0, 10).map((m) => ` · ${m}`),
+             r.sinKilometraje.length > 10 ? ` · … y ${r.sinKilometraje.length - 10} más` : ""]
+          : []),
       ].filter(Boolean).join("\n"),
     );
   }
