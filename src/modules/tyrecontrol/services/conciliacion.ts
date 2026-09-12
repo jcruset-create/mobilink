@@ -117,6 +117,26 @@ export function conciliar(params: { empresaId?: string; connectorKey: string; ac
   return pedir<Conciliacion>(`/?${q.toString()}`);
 }
 
+/**
+ * Contadores de la última conciliación guardada.
+ *
+ * No dispara una conciliación: devuelve lo que dejó la última, que es lo que
+ * puede permitirse el distintivo del menú. Puede no haber ninguna todavía.
+ */
+export interface Pendientes {
+  empresaId: string;
+  hayDatos: boolean;
+  total: number;
+  pendientes?: { soloProveedor: number; soloTyreControl: number; discrepancias: number };
+  status?: EstadoSincronizacion;
+  ejecutadoMs?: number;
+}
+
+export function pendientes(empresaId?: string) {
+  const q = empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : "";
+  return pedir<Pendientes>(`/pendientes${q}`);
+}
+
 const post = <T,>(ruta: string, cuerpo: unknown) =>
   pedir<T>(ruta, { method: "POST", body: JSON.stringify(cuerpo) });
 
