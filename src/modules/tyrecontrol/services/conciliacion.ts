@@ -87,6 +87,8 @@ export interface Conciliacion {
     externo?: VehiculoProveedor;
     enlace?: { mobilinkId: string; externalCode: string };
   }>;
+  /** Vehículos sobre los que la conciliación no dice nada. No es un cuadrante. */
+  noEvaluados: VehiculoInterno[];
   ignorados: Array<{ externalVehicleId: string; motivo?: string | null; desde: number }>;
 }
 

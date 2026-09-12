@@ -139,7 +139,10 @@ export async function conciliarFlota(
   // entera como «solo en TyreControl», que es lo que saldría al clasificar
   // contra una lista vacía.
   if (cuentas.length === 0) {
-    const vacios = { enlazados: [], soloProveedor: [], soloTyreControl: [], discrepancias: [] };
+    const vacios = {
+      enlazados: [], soloProveedor: [], soloTyreControl: [], discrepancias: [],
+      noEvaluados: internos,
+    };
     return {
       ...vacios,
       resumen: resumir({
@@ -147,6 +150,7 @@ export async function conciliarFlota(
         cuentas: [],
         internos: internos.length,
         externos: 0,
+        desconocidos: internos.length,
         startedAt,
         completedAt: new Date(),
       }),
@@ -216,11 +220,18 @@ export async function conciliarFlota(
     );
   }
 
+  // Solo se puede afirmar que un vehículo NO está en el proveedor si TODAS las
+  // cuentas han contestado. Con una caída, un vehículo sin enlace podría estar
+  // en la que falló, y declararlo «solo en TyreControl» es exactamente la lista
+  // falsa que esta conciliación existe para no producir.
+  const todasRespondieron = lecturas.length > 0 && lecturas.every((l) => l.ok);
+
   const cuadrantes = clasificarFlota({
     externos,
     internos: internosEvaluables,
     enlaces,
     ignorados,
+    puedeAfirmarAusencias: todasRespondieron,
     normalizarMatricula: opciones.normalizarMatricula,
   });
 
@@ -239,7 +250,7 @@ export async function conciliarFlota(
       cuentas: resultadoCuentas,
       internos: internos.length,
       externos: externos.length,
-      desconocidos: sinEvaluar.size,
+      desconocidos: sinEvaluar.size + cuadrantes.noEvaluados.length,
       startedAt,
       completedAt: new Date(),
     }),

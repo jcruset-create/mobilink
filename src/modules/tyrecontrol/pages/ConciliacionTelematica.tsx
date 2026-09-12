@@ -231,7 +231,12 @@ export default function ConciliacionTelematica() {
                     No se puede determinar qué vehículos han desaparecido, así que{" "}
                     <b>las bajas están deshabilitadas</b>.
                     {r.tyrecontrolUnknownCount > 0 && (
-                      <> Hay {r.tyrecontrolUnknownCount} vehículo(s) sobre los que esta conciliación no dice nada.</>
+                      <>
+                        {" "}Los <b>{r.tyrecontrolUnknownCount}</b> vehículos de TyreControl se
+                        quedan sin clasificar: podrían estar perfectamente en la cuenta que no ha
+                        contestado, y meterlos en «solo en TyreControl» sería decir que han
+                        desaparecido.
+                      </>
                     )}
                   </div>
                 )}
