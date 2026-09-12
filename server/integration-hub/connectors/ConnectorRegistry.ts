@@ -357,7 +357,7 @@ export async function buildTelematicsConnector(
  */
 export async function resolveTelematicsConnectors(
   tenantId: string
-): Promise<Array<ResolvedConnector<ITelematicsConnector> & { accountKey: string }>> {
+): Promise<Array<ResolvedConnector<ITelematicsConnector> & { accountKey: string; nombre: string | null }>> {
   const configs = await listConnectorConfigs(tenantId);
   const enabled = configs.filter((c: any) => c.enabled && TELEMATICS_FACTORIES[c.connector_key]);
 
@@ -367,6 +367,11 @@ export async function resolveTelematicsConnectors(
       return {
         key: c.connector_key as string,
         accountKey,
+        // El nombre legible de la cuenta («Plana autobuses») vive en su propia
+        // columna, no dentro de `config`. Sin propagarlo, el panel solo podía
+        // enseñar el `account_key` y una cuenta llamada 'default' se veía como
+        // «default», que no dice nada de qué flota es.
+        nombre: (c.name as string | null) ?? null,
         connector: await buildTelematicsConnector(tenantId, c.connector_key, accountKey),
         usingDefault: false,
         config: (c.config ?? {}) as Record<string, unknown>,

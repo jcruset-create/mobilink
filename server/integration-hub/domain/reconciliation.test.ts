@@ -213,6 +213,42 @@ describe("los cuatro cuadrantes", () => {
   });
 });
 
+describe("cuando no se puede afirmar una ausencia", () => {
+  it("un vehículo sin enlace NO cae en solo-TyreControl si falta una respuesta", () => {
+    // El caso real: primera conciliación, ningún enlace todavía, y el proveedor
+    // no contesta. Sin esto la flota entera aparecía como candidata a baja.
+    const r = clasificarFlota({
+      externos: [],
+      internos: [interno({ id: "v1", matricula: "1234ABC" }), interno({ id: "v2", matricula: "5678DEF" })],
+      enlaces: [],
+      puedeAfirmarAusencias: false,
+      normalizarMatricula,
+    });
+    expect(r.soloTyreControl).toHaveLength(0);
+    expect(r.noEvaluados.map((v) => v.id)).toEqual(["v1", "v2"]);
+  });
+
+  it("con respuesta completa sí se afirma, que es el caso normal", () => {
+    const r = clasificar([], [interno({ id: "v1", matricula: "1234ABC" })]);
+    expect(r.soloTyreControl).toHaveLength(1);
+    expect(r.noEvaluados).toHaveLength(0);
+  });
+
+  it("un enlace roto SIGUE siendo discrepancia: de esa cuenta sí hubo respuesta", () => {
+    // Apartar lo de las cuentas caídas es cosa del servicio; lo que llega aquí
+    // ya viene filtrado, así que un enlace presente se juzga igual.
+    const r = clasificarFlota({
+      externos: [],
+      internos: [interno({ id: "v1", matricula: "1234ABC" })],
+      enlaces: [{ mobilinkId: "v1", externalCode: "E1", activo: true }],
+      puedeAfirmarAusencias: false,
+      normalizarMatricula,
+    });
+    expect(r.discrepancias[0].motivo).toBe(MOTIVOS_DISCREPANCIA.EXTERNO_DESAPARECIDO);
+    expect(r.noEvaluados).toHaveLength(0);
+  });
+});
+
 describe("enlaces rotos", () => {
   it("el externo ya no aparece: discrepancia, no baja", () => {
     const r = clasificar(

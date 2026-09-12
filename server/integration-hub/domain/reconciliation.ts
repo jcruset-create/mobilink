@@ -133,6 +133,14 @@ export interface Cuadrantes {
   soloProveedor: FilaSoloProveedor[];
   soloTyreControl: FilaSoloTyreControl[];
   discrepancias: FilaDiscrepancia[];
+  /**
+   * Vehículos de TyreControl sobre los que esta conciliación no dice nada.
+   *
+   * No es un cuadrante: es lo que queda fuera de los cuatro. Se cuenta para que
+   * la suma cuadre y para poder decirlo en la pantalla, en vez de que parezca
+   * que se han perdido vehículos por el camino.
+   */
+  noEvaluados: VehiculoInterno[];
 }
 
 /** Lo que hace falta para clasificar. Todo dato, ninguna conexión. */
@@ -142,6 +150,18 @@ export interface EntradaClasificacion {
   enlaces: EnlaceVehiculo[];
   /** Identificadores externos que alguien marcó como «no me interesa». */
   ignorados?: Set<string>;
+  /**
+   * Si se puede afirmar que un vehículo NO está en el proveedor.
+   *
+   * Solo cuando TODAS las cuentas consultadas han respondido. Con una caída,
+   * un vehículo sin enlace podría estar perfectamente en la cuenta que no
+   * contestó, y meterlo en «solo en TyreControl» es afirmar que ha desaparecido
+   * cuando lo único que ha pasado es que no se ha podido preguntar.
+   *
+   * Por defecto `true`: quien no lo declara es porque tiene la respuesta
+   * completa, que es el caso normal.
+   */
+  puedeAfirmarAusencias?: boolean;
   /** Normalizador de matrícula. Se inyecta para no duplicar el de TyreControl. */
   normalizarMatricula: (valor: unknown) => string;
 }
@@ -183,7 +203,9 @@ export function clasificarFlota(entrada: EntradaClasificacion): Cuadrantes {
     soloProveedor: [],
     soloTyreControl: [],
     discrepancias: [],
+    noEvaluados: [],
   };
+  const puedeAfirmarAusencias = entrada.puedeAfirmarAusencias !== false;
 
   const internosEnlazados = new Set<string>();
   const externosEnlazados = new Set<string>();
@@ -334,6 +356,12 @@ export function clasificarFlota(entrada: EntradaClasificacion): Cuadrantes {
     if (internosEnlazados.has(interno.id)) continue;
     // Regla 4: si es la propuesta única de un externo, ese es su sitio.
     if (internosPropuestos.has(interno.id)) continue;
+    // Sin respuesta completa no se puede decir que este vehículo no esté en el
+    // proveedor: podría estar en la cuenta que falló. Se aparta.
+    if (!puedeAfirmarAusencias) {
+      cuadrantes.noEvaluados.push(interno);
+      continue;
+    }
     const historico = historicoPorInterno.get(interno.id);
     cuadrantes.soloTyreControl.push({
       interno,
