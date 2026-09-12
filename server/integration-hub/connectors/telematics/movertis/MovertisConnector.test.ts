@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { MovertisConnector, mensajeDeError } from "./MovertisConnector.ts";
+import { MovertisConnector, mensajeDeError, motivoDeRed } from "./MovertisConnector.ts";
 import { getSecretsProvider, setSecretsProvider } from "../../../infrastructure/secrets.ts";
 
 describe("cabeceras de autenticación", () => {
@@ -149,5 +149,48 @@ describe("credenciales por cuenta", () => {
     } finally {
       setSecretsProvider(anterior);
     }
+  });
+});
+
+/**
+ * Por qué no se pudo ni hablar con Movertis.
+ *
+ * «fetch failed» a secas costó una tarde de diagnóstico: no distingue una URL
+ * mal escrita de un certificado roto de una salida de red cerrada, y las tres
+ * se arreglan en sitios distintos. Esto fija que el motivo real —que Node
+ * esconde en `cause`— llega hasta el mensaje, y que la URL va con él.
+ */
+describe("motivoDeRed()", () => {
+  const url = "https://api.hellomovertis.com/vehicle/showvehicles";
+  const conCausa = (code: string) =>
+    Object.assign(new Error("fetch failed"), { cause: Object.assign(new Error(code), { code }) });
+
+  it("desenvuelve el DNS que no resuelve, que es el fallo más probable de una URL mal puesta", () => {
+    const m = motivoDeRed(conCausa("ENOTFOUND"), url);
+    expect(m).toContain("DNS");
+    expect(m).toContain("ENOTFOUND");
+    expect(m).not.toBe("fetch failed");
+  });
+
+  it("distingue un certificado caducado de todo lo demás", () => {
+    expect(motivoDeRed(conCausa("CERT_HAS_EXPIRED"), url)).toContain("caducado");
+  });
+
+  it("dice cuándo el servidor rechaza la conexión", () => {
+    expect(motivoDeRed(conCausa("ECONNREFUSED"), url)).toContain("rechaza la conexión");
+  });
+
+  it("siempre incluye la URL: con dos entornos, saber cuál se intentó es media respuesta", () => {
+    expect(motivoDeRed(conCausa("ENOTFOUND"), url)).toContain(url);
+    expect(motivoDeRed(new Error("lo que sea"), url)).toContain(url);
+  });
+
+  it("el timeout se dice como timeout, no como un código de red", () => {
+    const m = motivoDeRed(Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" }), url);
+    expect(m).toContain("no contestó a tiempo");
+  });
+
+  it("un código desconocido no se traga el mensaje: se enseña tal cual", () => {
+    expect(motivoDeRed(conCausa("ERARO_1234"), url)).toContain("ERARO_1234");
   });
 });
