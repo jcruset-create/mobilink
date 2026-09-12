@@ -18,8 +18,20 @@ import type { ProviderVehicle } from "./telematics.ts";
 
 /** Cómo se estableció un vínculo. Va en el `metadata` del mapeo. */
 export const METODOS_VINCULO = {
-  /** La matrícula normalizada coincidía y había un único candidato. */
+  /**
+   * Una persona confirmó una propuesta de coincidencia exacta desde la pantalla.
+   */
   MATRICULA_EXACTA: "plate_exact",
+  /**
+   * Lo enlazó el repaso quincenal, sin que nadie lo mirara.
+   *
+   * Se distingue de `plate_exact` a propósito, aunque la regla de emparejamiento
+   * sea la misma: un enlace que nadie ha visto y uno que alguien confirmó no
+   * merecen la misma confianza el día que haya que auditar de dónde salió el
+   * kilometraje de un neumático. Antes los dos se guardaban como `plate_exact` y
+   * eran indistinguibles.
+   */
+  MATRICULA_EXACTA_AUTO: "automatic_plate_exact",
   /** Lo eligió una persona en la pantalla de conciliación. */
   MANUAL: "manual",
   /** El vehículo se creó en TyreControl a partir del proveedor. */
@@ -63,6 +75,15 @@ export interface EnlaceVehiculo {
   metodo?: string | null;
   /** Matrícula que tenía el vehículo externo cuando se enlazó. */
   matriculaSnapshot?: string | null;
+  /**
+   * Matrícula que tenía el vehículo de TyreControl cuando se enlazó.
+   *
+   * Hace falta para poder atribuir un cambio: con la del proveedor sola se
+   * puede ver que las dos ya no coinciden, pero no de qué lado se movió. En los
+   * enlaces creados antes de guardarla viene `null`, y entonces la discrepancia
+   * se reporta sin atribuir: se dice que difieren y no se inventa quién cambió.
+   */
+  matriculaInternaSnapshot?: string | null;
   /** Nombre o alias que tenía el vehículo externo cuando se enlazó. */
   nombreSnapshot?: string | null;
   /** Última vez que ESTE vehículo apareció en el proveedor. Ver `last_seen_at_ms`. */
@@ -71,8 +92,17 @@ export interface EnlaceVehiculo {
 
 /** Motivos por los que un caso no se puede resolver solo. */
 export const MOTIVOS_DISCREPANCIA = {
-  /** Hay enlace, pero la matrícula del proveedor ya no es la de TyreControl. */
+  /**
+   * Hay enlace y las matrículas no coinciden, pero no se puede decir quién
+   * cambió porque el enlace es de antes de que se guardaran los snapshots.
+   */
   MATRICULA_DISTINTA: "plate_mismatch",
+  /** La del proveedor ha cambiado desde que se creó el vínculo. */
+  MATRICULA_CAMBIO_PROVEEDOR: "plate_changed_on_provider",
+  /** La de TyreControl ha cambiado desde que se creó el vínculo. */
+  MATRICULA_CAMBIO_TYRECONTROL: "plate_changed_on_tyrecontrol",
+  /** Han cambiado las dos, cada una por su lado. */
+  MATRICULA_CAMBIO_AMBOS: "plate_changed_both",
   /** Hay enlace, pero el vehículo externo ya no aparece en la cuenta. */
   EXTERNO_DESAPARECIDO: "external_missing",
   /** Hay enlace, pero el vehículo de TyreControl ya no está en esta empresa. */
@@ -94,6 +124,15 @@ export interface FilaEnlazada {
   externo: ProviderVehicle;
   metodo?: string | null;
   ultimaVezVistoMs?: number | null;
+  /**
+   * Las matrículas difieren, y difieren desde que se creó el vínculo.
+   *
+   * No es una discrepancia: alguien enlazó a mano dos vehículos con matrículas
+   * distintas y sabía algo que nosotros no. Marcarlo cada quincena como si
+   * fuera nuevo es la forma de que la lista de discrepancias deje de leerse. Se
+   * enseña en el enlace, discreto, y no se vuelve a preguntar.
+   */
+  diferenciaAceptada?: boolean;
 }
 
 /** B. Solo en el proveedor: sin enlace y sin correspondencia inequívoca. */
@@ -126,6 +165,19 @@ export interface FilaDiscrepancia {
   enlace?: EnlaceVehiculo;
   /** Explicación en una línea, para la pantalla. */
   detalle: string;
+  /**
+   * Las cuatro matrículas en juego, sin normalizar, cuando la discrepancia es
+   * de matrícula. Es lo que permite a la pantalla enseñar el antes y el ahora
+   * de los dos lados en vez de un «no coinciden» que no dice qué mirar.
+   */
+  matriculas?: {
+    /** La del proveedor cuando se enlazó. `null` en enlaces antiguos. */
+    snapshotProveedor?: string | null;
+    /** La de TyreControl cuando se enlazó. `null` en enlaces antiguos. */
+    snapshotTyreControl?: string | null;
+    proveedor?: string | null;
+    tyrecontrol?: string | null;
+  };
 }
 
 export interface Cuadrantes {
@@ -164,6 +216,115 @@ export interface EntradaClasificacion {
   puedeAfirmarAusencias?: boolean;
   /** Normalizador de matrícula. Se inyecta para no duplicar el de TyreControl. */
   normalizarMatricula: (valor: unknown) => string;
+}
+
+/**
+ * ¿Ha cambiado alguna matrícula desde que se creó el vínculo?
+ *
+ * Antes se comparaba la matrícula del proveedor con la de TyreControl y punto:
+ * si diferían, discrepancia. Eso tiene dos defectos que se notan a la semana de
+ * usar la pantalla.
+ *
+ * El primero es que no dice de qué lado se movió. «TyreControl dice 1234ABC y el
+ * proveedor dice 1234ABD» obliga a ir a buscar cuál de las dos es la buena, y la
+ * respuesta ya está guardada: el snapshot del momento del enlace.
+ *
+ * El segundo es peor. Un enlace hecho a mano entre dos vehículos con matrículas
+ * distintas —porque alguien sabía algo que el sistema no— aparecía como
+ * discrepancia en cada pasada, para siempre. Una lista que repite cada quincena
+ * lo mismo que ya se decidió es una lista que se deja de leer, y entonces las
+ * discrepancias de verdad se pierden dentro.
+ *
+ * Con los dos snapshots se distinguen los cuatro casos. Sin ellos —enlaces
+ * anteriores a que se guardaran— se informa de que difieren y NO se atribuye el
+ * cambio a nadie, que es la única respuesta honesta.
+ *
+ * Ninguna de estas ramas escribe nada: los snapshots no se refrescan al
+ * sincronizar. Si se sobrescribieran, se perdería la referencia histórica y el
+ * cambio dejaría de poder detectarse justo a partir de la vez siguiente.
+ */
+function compararMatriculas(params: {
+  interno: VehiculoInterno;
+  externo: ProviderVehicle;
+  enlace: EnlaceVehiculo;
+  normalizarMatricula: (valor: unknown) => string;
+}): {
+  motivo?: MotivoDiscrepancia;
+  detalle?: string;
+  matriculas?: FilaDiscrepancia["matriculas"];
+  diferenciaAceptada?: boolean;
+} {
+  const { interno, externo, enlace, normalizarMatricula } = params;
+
+  const ahoraProv = normalizarMatricula(externo.plate);
+  const ahoraInt = normalizarMatricula(interno.matricula);
+  const antesProv = normalizarMatricula(enlace.matriculaSnapshot);
+  const antesInt = normalizarMatricula(enlace.matriculaInternaSnapshot);
+
+  const matriculas = {
+    snapshotProveedor: enlace.matriculaSnapshot ?? null,
+    snapshotTyreControl: enlace.matriculaInternaSnapshot ?? null,
+    proveedor: externo.plate ?? null,
+    tyrecontrol: interno.matricula ?? null,
+  };
+
+  // Sin una de las dos actuales no hay nada que comparar: un vehículo del
+  // proveedor sin matrícula legible no contradice a nadie.
+  if (!ahoraProv || !ahoraInt) return {};
+
+  const cambioProv = antesProv !== "" && ahoraProv !== antesProv;
+  const cambioInt = antesInt !== "" && ahoraInt !== antesInt;
+
+  // Coinciden ahora. Puede que alguna haya cambiado —las dos a la vez, o una
+  // para acercarse a la otra— pero si acaban iguales no hay nada que resolver.
+  if (ahoraProv === ahoraInt) return {};
+
+  if (cambioProv && cambioInt) {
+    return {
+      motivo: MOTIVOS_DISCREPANCIA.MATRICULA_CAMBIO_AMBOS,
+      matriculas,
+      detalle:
+        `Han cambiado las dos desde que se enlazaron: el proveedor pasó de ` +
+        `${enlace.matriculaSnapshot} a ${externo.plate} y TyreControl de ` +
+        `${enlace.matriculaInternaSnapshot} a ${interno.matricula}.`,
+    };
+  }
+  if (cambioProv) {
+    return {
+      motivo: MOTIVOS_DISCREPANCIA.MATRICULA_CAMBIO_PROVEEDOR,
+      matriculas,
+      detalle:
+        `El proveedor ha cambiado la matrícula desde que se creó el vínculo: ` +
+        `era ${enlace.matriculaSnapshot} y ahora es ${externo.plate}. ` +
+        `TyreControl sigue con ${interno.matricula} y no se toca.`,
+    };
+  }
+  if (cambioInt) {
+    return {
+      motivo: MOTIVOS_DISCREPANCIA.MATRICULA_CAMBIO_TYRECONTROL,
+      matriculas,
+      detalle:
+        `La matrícula de TyreControl ha cambiado desde que se creó el vínculo: ` +
+        `era ${enlace.matriculaInternaSnapshot} y ahora es ${interno.matricula}. ` +
+        `El proveedor sigue con ${externo.plate}.`,
+    };
+  }
+
+  // Ninguna ha cambiado y aun así difieren: la diferencia venía del momento del
+  // enlace. Si los dos snapshots constan, alguien la aceptó a sabiendas.
+  if (antesProv !== "" && antesInt !== "") {
+    return { diferenciaAceptada: true };
+  }
+
+  // Enlace antiguo, sin snapshots: difieren y no se puede decir quién cambió.
+  return {
+    motivo: MOTIVOS_DISCREPANCIA.MATRICULA_DISTINTA,
+    matriculas,
+    detalle:
+      `TyreControl dice ${interno.matricula} y el proveedor dice ${externo.plate}. ` +
+      `Este vínculo es anterior a que se guardara la matrícula del momento del enlace, ` +
+      `así que no se puede saber cuál de las dos cambió. No se sobrescribe ninguna.`,
+  };
 }
 
 /**
@@ -255,17 +416,15 @@ export function clasificarFlota(entrada: EntradaClasificacion): Cuadrantes {
     }
 
     // Los dos están. ¿Siguen siendo el mismo vehículo?
-    const matriculaExterna = normalizarMatricula(externo.plate);
-    const matriculaInterna = normalizarMatricula(interno.matricula);
-    if (matriculaExterna && matriculaInterna && matriculaExterna !== matriculaInterna) {
+    const cambio = compararMatriculas({ interno, externo, enlace, normalizarMatricula });
+    if (cambio.motivo) {
       cuadrantes.discrepancias.push({
-        motivo: MOTIVOS_DISCREPANCIA.MATRICULA_DISTINTA,
+        motivo: cambio.motivo,
         interno,
         externo,
         enlace,
-        detalle:
-          `TyreControl dice ${interno.matricula} y el proveedor dice ${externo.plate}. ` +
-          `No se sobrescribe ninguno de los dos.`,
+        detalle: cambio.detalle,
+        matriculas: cambio.matriculas,
       });
       continue;
     }
@@ -275,6 +434,7 @@ export function clasificarFlota(entrada: EntradaClasificacion): Cuadrantes {
       externo,
       metodo: enlace.metodo ?? null,
       ultimaVezVistoMs: enlace.ultimaVezVistoMs ?? null,
+      ...(cambio.diferenciaAceptada ? { diferenciaAceptada: true } : {}),
     });
   }
 

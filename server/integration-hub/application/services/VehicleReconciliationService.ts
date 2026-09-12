@@ -113,6 +113,7 @@ function aEnlace(fila: MappingRow & { last_seen_at_ms?: number | string | null }
     activo: fila.active !== false,
     metodo: texto(meta.match_method),
     matriculaSnapshot: texto(meta.external_plate_snapshot),
+    matriculaInternaSnapshot: texto(meta.internal_plate_snapshot),
     nombreSnapshot: texto(meta.external_name_snapshot),
     ultimaVezVistoMs: msDeBigint(fila.last_seen_at_ms),
   };
