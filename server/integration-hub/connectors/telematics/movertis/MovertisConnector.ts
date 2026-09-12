@@ -66,11 +66,14 @@
  * credencial correcta, que es de los fallos más caros de diagnosticar porque
  * todo apunta al secreto.
  *
- * No se deja fijo, se deja en la config (`esquemaToken`), porque el valor del
- * ejemplo venía tapado y no se puede leer de ahí si el prefijo estaba dentro:
- * lo que sí se sabe es que la cabecera va en minúsculas y sin nada delante en
- * la documentación del proveedor. Por defecto, crudo; `"bearer"` para volver al
- * comportamiento anterior sin tocar código el día que haga falta.
+ * COMPROBADO contra la cuenta real de Autocares Plana: con el token en crudo,
+ * «Probar conexión» devuelve los 751 vehículos de la cuenta. Y `testConnection`
+ * rechaza antes de llamar si no hay credencial, así que la mandó y Movertis la
+ * aceptó sin prefijo. Hasta ese momento era una suposición razonada —el ejemplo
+ * del proveedor traía el valor tapado— y por eso quedó en la config y no fija.
+ *
+ * Se queda configurable de todas formas: `"bearer"` vuelve al comportamiento
+ * anterior sin tocar código, por si alguna instalación de Movertis lo espera.
  */
 
 import type { ConnectorInfo, ITelematicsConnector } from "../../../domain/connectors.ts";
