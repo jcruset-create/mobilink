@@ -47,7 +47,8 @@
 //   MOVERTIS_USERNAME + MOVERTIS_PASSWORD  (Basic)
 //
 // Uso:
-//   node scripts/movertis-probe.mjs                 (diagnóstico + barrido)
+//   node scripts/movertis-probe.mjs --contrato      (LO NORMAL: la API conocida)
+//   node scripts/movertis-probe.mjs                 (descubrimiento a ciegas)
 //   node scripts/movertis-probe.mjs --path /api/vehicles
 //   node scripts/movertis-probe.mjs --path /api/login --method POST \
 //        --body '{"user":"x"}'
@@ -61,6 +62,29 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+
+/*
+ * El `fetch` de Node NO lee HTTPS_PROXY, y esta sonda existe para no dar
+ * veredictos falsos.
+ *
+ * En el entorno remoto las credenciales de Movertis las inyecta el proxy. Si
+ * las peticiones salen por fuera, llegan sin credencial y vuelven 403: la sonda
+ * diría «Movertis nos rechaza» cuando lo que pasa es que nunca ha pasado por el
+ * proxy. Es el mismo error de método que el del DNS comodín, con otro disfraz.
+ *
+ * Se arregla con NODE_USE_ENV_PROXY=1 (Node >= 22.21), que solo se lee al
+ * arrancar. Así que si falta, el proceso se vuelve a lanzar con ella en vez de
+ * avisar y seguir: un aviso que se puede ignorar acaba ignorándose.
+ */
+if (process.env.HTTPS_PROXY && !process.env.NODE_USE_ENV_PROXY) {
+  const r = spawnSync(
+    process.execPath,
+    ["--no-warnings", fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    { stdio: "inherit", env: { ...process.env, NODE_USE_ENV_PROXY: "1" } },
+  );
+  process.exit(r.status ?? 1);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const raiz = path.resolve(__dirname, "..");
@@ -89,7 +113,7 @@ const sinControl = args.includes("--sin-control");
 const unaRuta = arg("path");
 const metodo = (arg("method", "GET") || "GET").toUpperCase();
 const cuerpo = arg("body");
-const baseUrl = (arg("base") || process.env.MOVERTIS_BASE_URL || "https://api.hellomovertis.com")
+const baseUrl = (arg("base") || process.env.MOVERTIS_BASE_URL || "https://devapi.hellomovertis.com")
   .replace(/\/+$/, "");
 
 const { MOVERTIS_TOKEN: token, MOVERTIS_API_KEY: apikey,
@@ -113,13 +137,13 @@ const POS = /lat|lon|lng|posic|position|coord|gps/i;
 const MAT = /plate|matric|matr[ií]cula|license|registration/i;
 
 // ── Una llamada, contada con detalle ─────────────────────────────────────────
-async function llamar(ruta, { method = "GET", body = null, base = baseUrl } = {}) {
+async function llamar(ruta, { method = "GET", body = null, base = baseUrl, contentType = false } = {}) {
   const url = ruta.startsWith("http") ? ruta : `${base}${ruta.startsWith("/") ? "" : "/"}${ruta}`;
   const t0 = Date.now();
   try {
     const r = await fetch(url, {
       method,
-      headers: cabeceras(),
+      headers: contentType ? { ...cabeceras(), "Content-Type": "application/json" } : cabeceras(),
       body: body ?? undefined,
       redirect: "manual",
       signal: AbortSignal.timeout(30000),
@@ -130,12 +154,12 @@ async function llamar(ruta, { method = "GET", body = null, base = baseUrl } = {}
     try { datos = JSON.parse(texto); } catch { /* no era JSON */ }
     const cab = {};
     r.headers.forEach((v, k) => { cab[k.toLowerCase()] = v; });
-    return { ok: r.ok, http: r.status, ms, url, texto, datos, cabeceras: cab,
+    return { ok: r.ok, http: r.status, ms, url, texto, datos, cabeceras: cab, metodo: method,
              contentType: cab["content-type"] || "",
              location: cab["location"] || null };
   } catch (e) {
     return { error: e?.name === "TimeoutError" ? "timeout (30s)" : (e?.message || String(e)),
-             url, ms: Date.now() - t0 };
+             url, metodo: method, ms: Date.now() - t0 };
   }
 }
 
@@ -183,7 +207,10 @@ function informar(etiqueta, res) {
   console.log(`  muestra:\n${sangrar(JSON.stringify(filas[0], null, 2).slice(0, 1200))}`);
 }
 
-const metodoDe = (res) => (unaRuta || cuerpo ? metodo : "GET");
+// El método que se ENSEÑA. Antes salía «GET» para todo lo que no viniera por
+// --path, y el modo contrato manda POST: un informe que miente sobre el verbo
+// no sirve para copiar la llamada a mano.
+const metodoDe = (res) => res.metodo ?? (unaRuta || cuerpo ? metodo : "GET");
 const sangrar = (s) => s.split("\n").map((l) => `    ${l}`).join("\n");
 
 // ── ¿Hay una aplicación detrás, o solo el comodín? ──────────────────────────
@@ -255,6 +282,103 @@ const CANDIDATAS = [
   "/docs", "/api-docs", "/swagger.json", "/openapi.json",
 ];
 
+// ── El contrato REAL, una vez conocido ──────────────────────────────────────
+//
+// El barrido de abajo es de cuando no se sabía nada. Ya se sabe, así que lo
+// primero que debe hacer la sonda es comprobar lo que el conector va a usar de
+// verdad. Dos rutas, las dos POST, y ninguna se parece a lo que se adivinó:
+//
+//   POST /vehicle/showvehicles  {"flags":{...},"id":[]}   ← id vacío = toda la flota
+//   POST /vehicle/showtrips     [{"id":N,"initial_date":ms,"end_date":ms}]
+//
+// Las dos contestan 201, no 200, y validan los nombres de las banderas: una
+// bandera que no existe devuelve «Flag incorrecta» dentro de un cuerpo 201, lo
+// cual es su manera de decir 500. Y un campo que falta devuelve un 500 con el
+// error de JavaScript en crudo («Cannot read properties of undefined»), así que
+// probar a ciegas aquí sale caro: se prueba con lo que se sabe.
+const FLAGS_CONOCIDAS = ["basicData", "counters", "sensors"];
+const CENTINELAS = [-348201.3876, 0];
+
+async function postJson(ruta, cuerpoObj) {
+  const body = JSON.stringify(cuerpoObj);
+  console.log(`\n  cuerpo enviado: ${body.length > 200 ? body.slice(0, 200) + "…" : body}`);
+  return llamar(ruta, { method: "POST", body, contentType: true });
+}
+
+async function modoContrato() {
+  console.log(`\n${"═".repeat(66)}`);
+  console.log(`CONTRATO CONOCIDO DE LA API`);
+
+  // ── 1 · La flota ──────────────────────────────────────────────────────────
+  const flota = await postJson("/vehicle/showvehicles", { flags: { basicData: true }, id: [] });
+  informar("POST /vehicle/showvehicles · basicData", flota);
+  if (!Array.isArray(flota.datos) || !flota.datos.length) {
+    console.log(`\n✗ showvehicles no devolvió flota. Sin esto no se puede seguir.`);
+    return 4;
+  }
+  const flotaOk = flota.datos;
+  const conNombre = flotaOk.filter((v) => v?.idVehicle != null);
+  console.log(`\n  ► ${flotaOk.length} vehículos · con idVehicle: ${conNombre.length}`);
+  console.log(`  ► OJO: no hay NI UN campo de posición en showvehicles.`);
+
+  // ── 2 · Contadores y sensores de uno ──────────────────────────────────────
+  const uno = conNombre[1] ?? conNombre[0];
+  const det = await postJson("/vehicle/showvehicles", {
+    flags: { basicData: true, counters: true, sensors: true },
+    id: [uno.idVehicle],
+  });
+  informar(`POST /vehicle/showvehicles · ${uno.name}`, det);
+  const fila = Array.isArray(det.datos) ? det.datos[0] : null;
+  if (fila?.counters) {
+    console.log(`\n  ► counters: ${Object.keys(fila.counters).join(", ")}`);
+    console.log(`  ► odometer = ${fila.counters.odometer}`);
+  }
+  if (fila?.sensors) {
+    const ss = Object.values(fila.sensors);
+    const sinDato = ss.filter((x) => CENTINELAS.includes(x?.value));
+    console.log(`  ► sensores: ${ss.length} · sin dato (${CENTINELAS.join(" / ")}): ${sinDato.length}`);
+    // La unidad del odómetro no se adivina por la magnitud, pero Movertis la
+    // delata: si algún sensor calcula `odometer/1000` y lo llama KM, entonces
+    // el crudo va en metros y `counters.odometer` —que vale lo mismo— va en km.
+    const pista = ss.filter((x) => /odometer/i.test(x?.formula ?? ""));
+    for (const x of pista) console.log(`  ► pista de unidad: «${x.name}» = ${x.value}  (formula: ${x.formula})`);
+  }
+
+  // ── 3 · Histórico ─────────────────────────────────────────────────────────
+  const end = Date.now();
+  const ini = end - 24 * 60 * 60 * 1000;
+  const trips = await postJson("/vehicle/showtrips", [
+    { id: uno.idVehicle, initial_date: ini, end_date: end },
+  ]);
+  informar(`POST /vehicle/showtrips · últimas 24 h de ${uno.name}`, trips);
+  const unidad = Array.isArray(trips.datos) ? trips.datos[0] : null;
+  const coords = unidad?.coords ?? [];
+  console.log(`\n  ► ${coords.length} posiciones`);
+  if (coords.length) {
+    console.log(`  ► claves de cada punto: ${Object.keys(coords[0]).join(", ")}`);
+    console.log(`  ► última: ${coords[coords.length - 1].timeString} · ${coords[coords.length - 1].pos}`);
+    const conOdo = Object.keys(coords[0]).filter((k) => ODO.test(k));
+    console.log(`  ► odómetro/distancia en el histórico: ${conOdo.length ? conOdo.join(", ") : "NINGUNO"}`);
+  }
+
+  // ── Veredicto ─────────────────────────────────────────────────────────────
+  console.log(`\n${"═".repeat(66)}`);
+  console.log(`Lo que esto significa para el conector:`);
+  console.log(`  1. POST con cuerpo JSON, no GET con query. Las plantillas de URL`);
+  console.log(`     de MovertisConnector.endpoints no sirven tal como están.`);
+  console.log(`  2. El odómetro REAL está en counters.odometer de showvehicles,`);
+  console.log(`     y solo del instante actual.`);
+  console.log(`  3. El histórico es de POSICIONES. No hay odómetro por fecha, así`);
+  console.log(`     que getTelemetryAt no puede dar kilometraje de un instante`);
+  console.log(`     pasado: sirve para demostrar que el vehículo no se ha movido.`);
+  console.log(`  4. showvehicles NO trae posición. La posición actual se saca de`);
+  console.log(`     showtrips con una ventana corta, y un vehículo parado no emite`);
+  console.log(`     nada: hay que ensanchar la ventana y coger el último punto.`);
+  const ok = coords.length > 0 && fila?.counters?.odometer != null;
+  console.log(`\n${ok ? "✓ Las dos rutas responden con datos reales." : "⚠ Alguna ruta respondió vacía: mira arriba."}`);
+  return ok ? 0 : 2;
+}
+
 // ── Ejecución ─────────────────────────────────────────────────────────────────
 const tieneCreds = !!(token || apikey || (username && password));
 console.log(`Base: ${baseUrl}`);
@@ -279,6 +403,10 @@ if (unaRuta) {
     informar(`${unaRuta} [${otro}]`, res);
   }
   process.exit(res.error || !res.ok ? 1 : 0);
+}
+
+if (args.includes("--contrato")) {
+  process.exit(await modoContrato());
 }
 
 // ── 1 · ¿Con quién estamos hablando? ────────────────────────────────────────

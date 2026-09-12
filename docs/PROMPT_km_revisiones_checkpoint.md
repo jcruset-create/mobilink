@@ -190,10 +190,9 @@ es el mismo camino con la latencia a cero: no se tira nada.
    inventar un segundo detector ni un segundo criterio de base.
 3. Sync de presencia en base **del Hub**, no de un proveedor: recorre tenant ×
    cuenta con `resolveTelematicsConnectors`, resuelve el id del vehículo con
-   `findExternalCode` y habla por `ITelematicsConnector`. Para Movertis,
-   `showvehicles` trae posición y `counters.odometer`, así que la cuenta del
-   geocerco es idéntica a la de `webfleetSync.ts`. Cópiale el criterio, no lo
-   reinventes, y ojo con lo que ya hace de más: ventana de antigüedad de la posición, `mismaEstancia` para no
+   `findExternalCode` y habla por `ITelematicsConnector`. El criterio del
+   geocerco es el de `webfleetSync.ts`: cópialo, no lo reinventes, y ojo con lo
+   que ya hace de más: ventana de antigüedad de la posición, `mismaEstancia` para no
    reabrir una estancia que sigue, y no contar como entrada nueva una posición
    vieja (evita alertas falsas con un GPS dormido).
    Sobre `tc_vehiculo_webfleet_estado`: es de Webfleet por historia, no por
@@ -211,6 +210,34 @@ es el mismo camino con la latencia a cero: no se tira nada.
    **no se usa**. Ahí hay un descuadre —un paso por el arco sin entrada
    detectada, o una entrada sin paso— y vale más un null con su motivo que un
    número casado a la fuerza.
+
+### De dónde sale la posición en Movertis (comprobado con la sonda)
+
+Esto lo daba por hecho una versión anterior de este documento y era FALSO:
+**`showvehicles` no trae posición.** Ni un campo, en ningún vehículo de los 751
+de la cuenta. Trae `counters.odometer` (el odómetro real) y `sensors`, y nada
+más. La única fuente de posición es `showtrips`, que es histórico.
+
+Consecuencias para la detección de base, que hay que asumir de entrada:
+
+- La posición «actual» se pide a `showtrips` con una ventana corta y se coge el
+  último punto. Acepta varios vehículos en la misma llamada
+  (`[{id, initial_date, end_date}, …]`), así que la flota entera son unas pocas
+  llamadas por lote, no una por vehículo. Medido: 10 vehículos con ventana de 15
+  minutos, 11,8 KB y 2,3 s.
+- **Un vehículo parado no emite nada**, así que con ventana corta sale sin
+  posición —de 10 vehículos, 3 volvieron con cero puntos—. Hay que ensanchar la
+  ventana y coger el último punto conocido. Es exactamente el caso que
+  `webfleetSync.ts` ya trata con `antiguedad_max_pos_min` («camión aparcado con
+  el contacto quitado y el GPS dormido»), y aquí es lo normal, no la excepción:
+  el autobús que acaba de entrar en base es justo el que ha dejado de emitir.
+- La unidad del odómetro: hay indicio fuerte de **km**, porque el propio Movertis
+  publica un sensor `KM2` con la fórmula `odometer/const1000` cuyo valor
+  (809052.369502) coincide con `counters.odometer` (809052). **No basta**:
+  confírmalo contra el cuadro de mandos de UN autobús antes de declarar
+  `odometroEn`. Y no intentes validarlo con `engineHours`: el ratio km/hora
+  sale entre 30 y 400 según el vehículo, porque las horas se cuentan desde que
+  se instaló el dispositivo y el odómetro no.
 
 ### Varias bases, y solo una con arco
 

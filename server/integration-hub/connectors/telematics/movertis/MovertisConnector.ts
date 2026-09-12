@@ -6,18 +6,38 @@
  * neumático se montó a 512.480 km y se desmontó a 578.864 km» con una fuente
  * verificable.
  *
- * ── Estado: esqueleto real, mapeo por confirmar ─────────────────────────────
+ * ── Estado: la API ya se conoce, y NO es la que este fichero supone ─────────
  *
- * El conector está completo en lo que NO depende de conocer la API: contrato,
- * credenciales por el gestor de secretos, timeouts, reintentos, clasificación
- * de errores y modo simulación. Lo que sigue abierto es la forma exacta de la
- * respuesta de Movertis —rutas y nombres de campo—, porque su API lleva caída
- * desde que se montó la sonda (`scripts/movertis-probe.mjs`, 503 en las 27
- * rutas tanteadas).
+ * Hasta ahora este comentario decía que la API de Movertis llevaba caída y que
+ * no se conocían sus rutas ni sus nombres de campo. Ya se conocen: la sonda
+ * (`scripts/movertis-probe.mjs --contrato`) habla con ella y trae datos reales
+ * de la flota. Lo que se sabe, y que este conector todavía NO hace:
  *
- * Por eso las rutas viven en la config (`endpoints`) y los nombres de campo en
- * `mapeo.ts`, no repartidos por el código: cuando la sonda conteste, cerrar la
- * incógnita es ajustar esos dos sitios y un test, sin tocar la lógica.
+ *   POST /vehicle/showvehicles   {"flags":{...},"id":[]}
+ *        Banderas válidas: basicData, counters, sensors. Una que no exista
+ *        devuelve «Flag incorrecta» DENTRO de un cuerpo con HTTP 201. `id`
+ *        vacío = toda la flota. Responde 201, no 200.
+ *        El odómetro real está en `counters.odometer`; `sensors` trae los
+ *        cálculos del dispositivo, y ahí `-348201.3876` y `0` significan los
+ *        dos «sin lectura».
+ *        NO trae posición: ni un campo, en ningún vehículo.
+ *
+ *   POST /vehicle/showtrips      [{"id":N,"initial_date":ms,"end_date":ms}]
+ *        Histórico. Devuelve `[{unit, coords:[{time, timeString, pos}]}]`, con
+ *        `pos` como cadena "lat,lng" y `time` en epoch de milisegundos.
+ *        SOLO posiciones: no hay odómetro ni distancia. Por eso `getTelemetryAt`
+ *        no puede dar kilometraje de un instante pasado; sirve para demostrar
+ *        que un vehículo no se ha movido, que no es lo mismo pero resuelve el
+ *        caso que se buscaba.
+ *
+ * Un campo que falta en el cuerpo se responde con un 500 y el error de
+ * JavaScript en crudo («Cannot read properties of undefined»), así que tantear
+ * a ciegas sale caro: se prueba con la sonda, que ya sabe las formas buenas.
+ *
+ * Lo que queda por hacer aquí es el transporte: este fichero hace GET con
+ * plantillas de URL (`endpoints`, `{id}`, `{from}`, `{to}`) y la API quiere POST
+ * con cuerpo JSON. La lógica de reintentos, timeouts, clasificación de errores
+ * y simulación sí vale tal como está.
  *
  * ── Credenciales ────────────────────────────────────────────────────────────
  *
@@ -25,11 +45,27 @@
  * contrato): el `tenantId` viaja en el `OperationContext` y el secreto se
  * resuelve aquí. Nombres esperados, por el `SecretsProvider`:
  *
- *   IH_SECRET__<TENANT>__MOVERTIS__TOKEN      (Bearer; lo primero que se mira)
+ *   IH_SECRET__<TENANT>__MOVERTIS__TOKEN      (lo primero que se mira)
  *   IH_SECRET__<TENANT>__MOVERTIS__API_KEY    (cabecera X-Api-Key)
  *   IH_SECRET__<TENANT>__MOVERTIS__USERNAME   + __PASSWORD  (Basic)
  *
- * Con el fallback global sin tenant que ya define `secrets.ts`.
+ * Con el fallback global sin tenant que ya define `secrets.ts`. Ese fallback es
+ * cómodo para probar y peligroso para quedarse: con dos clientes de Movertis,
+ * los dos cogerían el mismo token. El nombre con tenant es el que vale.
+ *
+ * ── El token va EN CRUDO, sin «Bearer» ──────────────────────────────────────
+ *
+ * Esta versión mandaba `Authorization: Bearer <token>`, que es lo habitual y no
+ * es lo que Movertis pide: su ejemplo documentado manda la cabecera
+ * `authorization` con el token tal cual. Un `Bearer` de más es un 401 con la
+ * credencial correcta, que es de los fallos más caros de diagnosticar porque
+ * todo apunta al secreto.
+ *
+ * No se deja fijo, se deja en la config (`esquemaToken`), porque el valor del
+ * ejemplo venía tapado y no se puede leer de ahí si el prefijo estaba dentro:
+ * lo que sí se sabe es que la cabecera va en minúsculas y sin nada delante en
+ * la documentación del proveedor. Por defecto, crudo; `"bearer"` para volver al
+ * comportamiento anterior sin tocar código el día que haga falta.
  */
 
 import type { ConnectorInfo, ITelematicsConnector } from "../../../domain/connectors.ts";
@@ -78,6 +114,13 @@ export interface MovertisConfig {
   odometroEn?: UnidadOdometro;
   /** De dónde sale el odómetro, si Movertis lo aclara. */
   origenOdometro?: "vehicle" | "gps" | "unknown";
+  /**
+   * Cómo se manda el token en la cabecera `authorization`.
+   *
+   * `"raw"` (por defecto) manda el token tal cual, que es lo que pide Movertis.
+   * `"bearer"` le pone el prefijo, por si alguna instalación lo espera.
+   */
+  esquemaToken?: "raw" | "bearer";
   /** Nombres de campo, una vez confirmados por la sonda. */
   campos?: CamposMovertis;
   /** Timeout por petición en ms (por defecto 30 s). */
@@ -157,6 +200,25 @@ export class MovertisConnector implements ITelematicsConnector {
   }
 
   /**
+   * Cabeceras de autenticación, aparte para poder probarlas sin red.
+   *
+   * El token manda sobre lo demás, y va en crudo salvo que la config diga
+   * `esquemaToken: "bearer"`: ver la cabecera del fichero. Basic solo se usa si
+   * no hay token, y la API key se acumula, porque hay instalaciones que piden
+   * las dos cosas.
+   */
+  cabecerasDe(cred: Credenciales): Record<string, string> {
+    const h: Record<string, string> = { Accept: "application/json" };
+    if (cred.token) {
+      h.authorization = this.config.esquemaToken === "bearer" ? `Bearer ${cred.token}` : cred.token;
+    } else if (cred.username && cred.password) {
+      h.authorization = `Basic ${Buffer.from(`${cred.username}:${cred.password}`).toString("base64")}`;
+    }
+    if (cred.apiKey) h["X-Api-Key"] = cred.apiKey;
+    return h;
+  }
+
+  /**
    * GET con reintentos, timeout y errores clasificados.
    *
    * La clasificación importa más de lo que parece: el Queue Manager decide si
@@ -166,12 +228,7 @@ export class MovertisConnector implements ITelematicsConnector {
    */
   private async pedir(ctx: OperationContext, url: string): Promise<unknown> {
     const cred = await this.credenciales(ctx);
-    const cabeceras: Record<string, string> = { Accept: "application/json" };
-    if (cred.token) cabeceras.Authorization = `Bearer ${cred.token}`;
-    else if (cred.username && cred.password) {
-      cabeceras.Authorization = `Basic ${Buffer.from(`${cred.username}:${cred.password}`).toString("base64")}`;
-    }
-    if (cred.apiKey) cabeceras["X-Api-Key"] = cred.apiKey;
+    const cabeceras = this.cabecerasDe(cred);
 
     const timeoutMs = this.config.timeoutMs ?? 30_000;
     const maxRetries = this.config.maxRetries ?? 2;
