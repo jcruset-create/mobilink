@@ -86,6 +86,37 @@ describe.skipIf(!RUN)("kilómetros del rastro de Assist", () => {
     expect(r.calidad).toBe("bueno");
   });
 
+  it("el estado guardado en el punto manda sobre el del historial", async () => {
+    // Rastro nuevo: el servidor ya sella el estado en cada punto. Aquí se
+    // sella "en_camino_base" a una hora en la que el historial dice
+    // "en_camino": si mandara el historial, saldría como ida.
+    const a = await db.query(
+      `INSERT INTO roadside_assistances
+         (status, "customerName", "customerPhone", address, "trackingToken", "createdAtMs", "updatedAtMs")
+       VALUES ('finalizada','Con estado','600000002','Ctra.',$1,$2,$2) RETURNING id`,
+      [`tk-est-${sufijo}`, T0],
+    );
+    const id = Number(a.rows[0].id);
+    await db.query(
+      `INSERT INTO roadside_assistance_events ("assistanceId", status, "createdAtMs")
+       VALUES ($1,'en_camino',$2)`, [id, T0]);
+
+    for (let i = 0; i < 6; i++) {
+      const p = punto(i * 1000, i * 80);
+      await db.query(
+        `INSERT INTO roadside_operator_track
+           ("assistanceId", lat, lng, ts, "accuracyM", status)
+         VALUES ($1,$2,$3,$4,8,'en_camino_base')`,
+        [id, p.lat, p.lng, p.ts]);
+    }
+
+    const r = await recorridoDeAsistenciaCore(id);
+    expect(r.vuelta).toBeGreaterThan(4);
+    expect(r.ida).toBe(0);
+    await db.query(`DELETE FROM roadside_operator_track WHERE "assistanceId" = $1`, [id]);
+    await db.query(`DELETE FROM roadside_assistances WHERE id = $1`, [id]);
+  });
+
   it("una asistencia sin rastro no inventa kilómetros", async () => {
     const a = await db.query(
       `INSERT INTO roadside_assistances

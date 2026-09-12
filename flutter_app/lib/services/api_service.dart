@@ -358,19 +358,38 @@ class ApiService {
     return {...found, 'status': status};
   }
 
-  Future<void> sendLocation(int id, double lat, double lng) async {
+  /// Manda la posición con su PRECISIÓN y su VELOCIDAD.
+  ///
+  /// Las dos son opcionales y el servidor las acepta vacías —las versiones
+  /// anteriores de la app no las mandan— pero con ellas el cálculo de los
+  /// kilómetros del servicio puede tirar los puntos malos: sin saber la
+  /// precisión, un punto con ±200 metros pesa igual que uno bueno y acaba
+  /// inflando la cifra que se factura.
+  Future<void> sendLocation(
+    int id,
+    double lat,
+    double lng, {
+    double? accuracyM,
+    double? speedKmh,
+  }) async {
     try {
       await http
           .post(
             Uri.parse('$kBackendUrl/api/roadside-operator/assistances/$id/location'),
             headers: await _authHeaders(),
-            body: jsonEncode({'lat': lat, 'lng': lng}),
+            body: jsonEncode({
+              'lat': lat,
+              'lng': lng,
+              if (accuracyM != null) 'accuracyM': accuracyM,
+              if (speedKmh != null) 'speedKmh': speedKmh,
+            }),
           )
           .timeout(const Duration(seconds: 10));
     } catch (e) {
       if (_isNetworkError(e)) {
         // Sin red → guardar la posición como miga de pan para enviarla al reconectar
-        await OfflineStore.enqueueLocation(id, lat, lng);
+        await OfflineStore.enqueueLocation(id, lat, lng,
+            accuracyM: accuracyM, speedKmh: speedKmh);
       }
       // No relanzamos: el seguimiento GPS no debe interrumpir al técnico
     }
