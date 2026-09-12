@@ -57,6 +57,7 @@ import {
 } from "./tyrecontrol/webfleetCredenciales.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { createConciliacionRouter } from "./tyrecontrol/conciliacion/router.ts";
+import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
 import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
@@ -18987,6 +18988,8 @@ mountParte(app, authenticate, requireModule("tyrecontrol"));
  * respondería 401 a quien sí tiene permiso.
  */
 app.use("/api/tyrecontrol/conciliacion", createConciliacionRouter());
+// Kilómetros mensuales: mismo motivo que la conciliación para ir ANTES del router general.
+app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter());
 app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
 mountCorreo(app, requireSupervisorRole);
 app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));

@@ -11,6 +11,7 @@ import PlanoSnapshot from "../components/PlanoSnapshot";
 import FichaTecnicaVehiculo from "../components/FichaTecnicaVehiculo";
 import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
+import KilometrajeMensual from "../components/KilometrajeMensual";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
@@ -173,6 +174,10 @@ export default function VehiculoDetalle() {
           <WebfleetVehiculo vehiculo={v} onUpdated={cargar} />
         </div>
       )}
+
+      {/* Kilómetros mensuales desde la telemática: se leen de nuestra base,
+          nunca del proveedor al abrir la ficha. Sin telemática no se enseña. */}
+      <KilometrajeMensual vehiculoId={v.id} />
 
       {/* Plan de mantenimiento (revisiones periódicas) + historial */}
       <PlanMantenimientoVehiculo vehiculo={v} puedeEditar={!esCliente} />

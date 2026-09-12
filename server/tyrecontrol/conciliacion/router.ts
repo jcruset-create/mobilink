@@ -42,13 +42,13 @@ import {
 } from "./acciones.ts";
 
 /** Perfil del que llama, resuelto contra la base. Nunca contra la petición. */
-interface Solicitante {
+export interface Solicitante {
   usuarioId: string;
   empresaPropia: string;
   esSuperadmin: boolean;
 }
 
-async function resolverSolicitante(req: Request): Promise<Solicitante | null> {
+export async function resolverSolicitante(req: Request): Promise<Solicitante | null> {
   const cabecera = String(req.headers.authorization ?? "");
   const token = cabecera.startsWith("Bearer ") ? cabecera.slice(7) : "";
   if (!token) return null;
@@ -81,7 +81,7 @@ async function resolverSolicitante(req: Request): Promise<Solicitante | null> {
  * ignora, no se rechaza, porque no hay nada que negociar. Un super-admin puede
  * nombrar otra, y si no nombra ninguna se usa la suya.
  */
-function empresaDe(solicitante: Solicitante, pedida: unknown): string | null {
+export function empresaDe(solicitante: Solicitante, pedida: unknown): string | null {
   if (!solicitante.esSuperadmin) return solicitante.empresaPropia || null;
   const p = String(pedida ?? "").trim();
   return p || solicitante.empresaPropia || null;
