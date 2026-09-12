@@ -285,6 +285,45 @@ describe("errores", () => {
     expect(vi.mocked(upsertSyncState).mock.calls[0][0].status).toBe("partial");
   });
 
+  it("cinco lotes seguidos rechazados: se abandona la pasada en vez de martillear", async () => {
+    // Lo visto en producción: «Core Error: 4» a todo. Sin cortacircuito, las
+    // 400 peticiones restantes habrían salido igual, fallando todas.
+    const llamadas = cuenta({
+      config: { unidadesPorPeticion: 1 },
+      fallo: IntegrationError.permanent("MOVERTIS_PETICION", "Movertis rechazó la petición: Core Error: 4"),
+    });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(40) as any);
+
+    const r = await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 9 }], ahora: AHORA });
+
+    expect(llamadas).toHaveLength(5);
+    expect(r.cuentas[0].abandonada).toContain("5 lotes seguidos");
+    expect(r.cuentas[0].abandonada).toContain("Core Error: 4");
+    expect(r.cuentas[0].vehiculosProcesados).toBe(5);
+    expect(vi.mocked(upsertSyncState).mock.calls[0][0].status).toBe("error");
+  });
+
+  it("un lote bueno entre medias reinicia la cuenta de fallos seguidos", async () => {
+    let n = 0;
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([{
+      key: "movertis", accountKey: "buses", nombre: null, usingDefault: false, config: { unidadesPorPeticion: 1 },
+      connector: {
+        getTripSummary: vi.fn(async (_c: any, ids: string[], w: any) => {
+          // Falla 4, acierta 1, falla 4, acierta 1: nunca cinco seguidos.
+          if (++n % 5 !== 0) throw IntegrationError.permanent("MOVERTIS_PETICION", "Core Error: 4");
+          return ids.map((id) => ({ provider: "movertis", accountKey: "buses", providerVehicleId: id, window: w, distanceKm: 1 }));
+        }),
+      },
+    }] as any);
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(10) as any);
+
+    const r = await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 9 }], ahora: AHORA });
+
+    expect(r.cuentas[0].abandonada).toBeUndefined();
+    expect(r.cuentas[0].peticiones).toBe(10);
+    expect(r.cuentas[0].vehiculosConKm).toBe(2);
+  });
+
   it("con la credencial rechazada se abandona la cuenta: seguir es quemar cupo", async () => {
     const llamadas = cuenta({ config: { unidadesPorPeticion: 1 }, fallo: IntegrationError.auth("MOVERTIS_AUTH", "HTTP 401") });
     vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(5) as any);
