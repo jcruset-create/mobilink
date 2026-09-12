@@ -7,7 +7,22 @@
  * que funciona y un conector que funciona caben un verbo equivocado, un cuerpo
  * mal montado y un campo leído de donde no está.
  *
- * Solo con RUN_MOVERTIS=1, como las pruebas con base real. Y hace falta poder
+ * ── Por qué hay un caso que NO se salta nunca ───────────────────────────────
+ *
+ * La CI comprueba que todo fichero de integración tenga al menos un caso en
+ * verde, y con razón: unas pruebas que se saltan en silencio dan una falsa
+ * sensación de cobertura, que es peor que no tenerlas. El filtro mira la RUTA,
+ * y todo lo que vive en `server/integration-hub/` la cumple, así que un fichero
+ * entero bajo `describe.skipIf` tumba el job —y renombrarlo no lo arregla, solo
+ * lo esconde—.
+ *
+ * Las de base real pasan porque el workflow pone `RUN_DB_TESTS=1`. Estas no
+ * pueden: necesitan credenciales de Movertis que la CI no tiene ni debe tener.
+ * Así que el fichero deja SIEMPRE fuera del salto lo que no necesita red —las
+ * capacidades que el conector anuncia, que es una afirmación de verdad y no un
+ * relleno para contentar a la guarda— y salta solo lo que sale a Internet.
+ *
+ * Lo demás, solo con RUN_MOVERTIS=1. Y hace falta poder
  * salir a *.hellomovertis.com: en el entorno remoto el proxy inyecta las
  * credenciales de la cuenta «Movertis Autocares Plana», así que el token que se
  * pone aquí da igual —se comprobó: el proxy sustituye la cabecera
@@ -39,7 +54,7 @@ beforeAll(() => {
   setSecretsProvider({ get: async (_t, _c, n) => (n === "token" ? token : undefined) });
 });
 
-describe.skipIf(!RUN)("MovertisConnector contra la API real", () => {
+describe("MovertisConnector", () => {
   it("no anuncia capacidades que no tiene", () => {
     // El histórico de Movertis es de posiciones: si aquí apareciera ODOMETER
     // como capacidad general, el panel ofrecería informes de kilometraje
@@ -49,8 +64,13 @@ describe.skipIf(!RUN)("MovertisConnector contra la API real", () => {
     // El depósito de esta flota viene siempre «sin dato»: anunciarlo sería
     // prometer un informe de combustible que saldría vacío.
     expect(conector.info.capabilities).not.toContain(TELEMATICS_CAPABILITIES.FUEL);
+    // El odómetro sí, y con la asimetría documentada en el conector: está en la
+    // lectura actual y no en el histórico, porque showtrips solo da posiciones.
+    expect(conector.info.capabilities).toContain(TELEMATICS_CAPABILITIES.ODOMETER);
   });
+});
 
+describe.skipIf(!RUN)("MovertisConnector contra la API real", () => {
   it("testConnection cuenta cuántos vehículos hay", async () => {
     const r = await conector.testConnection(ctx);
     expect(r.ok).toBe(true);
