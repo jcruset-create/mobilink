@@ -554,7 +554,25 @@ export interface ResultadoLote {
  */
 export async function vincularLote(
   ambito: Ambito,
-  datos: { esperados?: number } = {},
+  datos: {
+    esperados?: number;
+    /**
+     * Quién está enlazando: el repaso quincenal o una persona.
+     *
+     * OBLIGATORIO y sin valor por defecto a propósito. Esta función la llaman
+     * dos sitios —el worker (`worker.ts`) y el botón «enlazar en bloque» de la
+     * pantalla (`router.ts`)— y el método que se guarda tiene que decir cuál de
+     * los dos fue. Con un defecto, el día que aparezca un tercer llamador
+     * heredaría en silencio la etiqueta equivocada, y este campo existe justo
+     * para contestar «¿quién decidió este vínculo?» cuando haya que auditar de
+     * dónde salió el kilometraje de un neumático.
+     *
+     * Poner aquí `MATRICULA_EXACTA_AUTO` a secas fue un error: registraba como
+     * automáticas las ciento veintidós propuestas que una persona confirma de
+     * golpe desde la pantalla, que es lo contrario de lo que se quería saber.
+     */
+    automatico: boolean;
+  },
 ): Promise<ResultadoLote> {
   // Se importa aquí, no arriba, por lo mismo que `kilometrajeOperacion.ts`: el
   // servicio arrastra la base del Hub, y TyreControl no tiene por qué exigirla
@@ -656,8 +674,9 @@ export async function vincularLote(
           await vincular(ambito, {
             tcVehicleId,
             externalVehicleId,
-            // Enlace automático: se distingue del que confirma una persona.
-            matchMethod: METODOS_VINCULO.MATRICULA_EXACTA_AUTO,
+            matchMethod: datos.automatico
+              ? METODOS_VINCULO.MATRICULA_EXACTA_AUTO
+              : METODOS_VINCULO.MATRICULA_EXACTA,
             externalPlate: f.externo.plate ?? null,
             externalName: f.externo.name ?? null,
           }, preparada);
