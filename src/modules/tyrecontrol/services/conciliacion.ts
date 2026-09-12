@@ -149,6 +149,19 @@ export const vincularLote = (b: Record<string, unknown>) =>
     fallidos: Array<{ tcVehicleId: string; externalVehicleId: string; error: string }>;
   }>("/vincular-lote", b);
 export const ignorar = (b: Record<string, unknown>) => post<{ ok: true }>("/ignorar", b);
+
+/** Resultado de un lote elegido a mano en la pantalla. */
+export interface ResultadoLoteExternos {
+  hechos: number;
+  fallidos: Array<{ externalVehicleId: string; error: string }>;
+  /** Pedidos que el proveedor ya no devuelve. */
+  omitidos: string[];
+}
+
+export const ignorarLote = (b: Record<string, unknown>) =>
+  post<ResultadoLoteExternos>("/ignorar-lote", b);
+export const crearVehiculosLote = (b: Record<string, unknown>) =>
+  post<ResultadoLoteExternos>("/crear-vehiculos-lote", b);
 export const dejarDeIgnorar = (b: Record<string, unknown>) => post<{ ok: true }>("/dejar-de-ignorar", b);
 export const crearVehiculo = (b: Record<string, unknown>) =>
   post<{ ok: true; vehiculo: { id: string; matricula: string } }>("/crear-vehiculo", b);

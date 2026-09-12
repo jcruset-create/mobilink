@@ -502,3 +502,144 @@ export async function vincularLote(
 
   return { enlazados, fallidos };
 }
+
+// ── Lotes elegidos a mano ───────────────────────────────────────────────────
+
+export interface ResultadoLoteExternos {
+  hechos: number;
+  fallidos: Array<{ externalVehicleId: string; error: string }>;
+  /** Pedidos que no estaban en la respuesta del proveedor. */
+  omitidos: string[];
+}
+
+/** Un tope sobrio: si alguien pide más, es que se ha equivocado de botón. */
+const MAX_LOTE = 500;
+
+function externosPedidos(datos: { externalVehicleIds?: unknown }): string[] {
+  const brutos = Array.isArray(datos.externalVehicleIds) ? datos.externalVehicleIds : [];
+  const ids = Array.from(new Set(brutos.map((x) => String(x ?? "").trim()).filter(Boolean)));
+  if (ids.length === 0) {
+    throw new ErrorConciliacion("LOTE_VACIO", "No has seleccionado ningún vehículo.");
+  }
+  if (ids.length > MAX_LOTE) {
+    throw new ErrorConciliacion(
+      "LOTE_DEMASIADO_GRANDE",
+      `Como mucho ${MAX_LOTE} vehículos de una vez; has pedido ${ids.length}.`,
+    );
+  }
+  return ids;
+}
+
+/**
+ * Los vehículos que el proveedor devuelve AHORA, sin enlazar, por identificador.
+ *
+ * Aquí sí llega una lista del navegador —es el usuario quien elige cuáles—,
+ * pero solo llegan IDENTIFICADORES: la matrícula, el bastidor y el nombre con
+ * los que se crea salen de esta lectura, no de la petición. Es la diferencia
+ * entre «crea estos que he marcado» y «crea un vehículo con los datos que yo
+ * te diga», que es lo que no debe poder pedirse desde fuera.
+ */
+async function sinEnlazarAhora(ambito: Ambito) {
+  const { conciliarFlota } = await import(
+    "../../integration-hub/application/services/VehicleReconciliationService.ts"
+  );
+  const { leerFlotaInterna } = await import("./flota.ts");
+  const { normalizarMatricula } = await import("../matricula.ts");
+  const { nextCorrelationId } = await import("../../integration-hub/infrastructure/repositories.ts");
+
+  const resultado = await conciliarFlota(
+    { tenantId: ambito.empresaId, correlationId: await nextCorrelationId() },
+    {
+      connectorKey: ambito.connectorKey,
+      accountKey: ambito.accountKey,
+      leerFlotaInterna,
+      normalizarMatricula,
+      registrarUltimaVez: false,
+    },
+  );
+
+  return new Map(resultado.soloProveedor.map((f) => [f.externo.providerVehicleId, f.externo]));
+}
+
+/**
+ * Crea de golpe los vehículos marcados, pendientes de validar.
+ *
+ * Cada uno pasa por `crearPendiente`, que revalida la matrícula y rechaza los
+ * choques: repetir la comprobación por fila cuesta una consulta y evita que
+ * este camino se salte lo que respeta el de uno en uno.
+ */
+export async function crearPendientesLote(
+  ambito: Ambito,
+  datos: { externalVehicleIds: string[] },
+): Promise<ResultadoLoteExternos> {
+  const pedidos = externosPedidos(datos);
+  const disponibles = await sinEnlazarAhora(ambito);
+
+  const fallidos: ResultadoLoteExternos["fallidos"] = [];
+  const omitidos: string[] = [];
+  let hechos = 0;
+
+  // En serie: cada alta hace una búsqueda de matrícula, un insert y un enlace.
+  // En paralelo, además de agotar el pool, dos matrículas iguales en la misma
+  // tanda se colarían las dos porque ninguna vería a la otra.
+  for (const id of pedidos) {
+    const externo = disponibles.get(id);
+    if (!externo) {
+      omitidos.push(id);
+      continue;
+    }
+    try {
+      await crearPendiente(ambito, {
+        externalVehicleId: id,
+        matricula: externo.plate ?? "",
+        bastidor: externo.vin ?? null,
+        externalName: externo.name ?? null,
+      });
+      hechos++;
+    } catch (e) {
+      fallidos.push({
+        externalVehicleId: id,
+        error: e instanceof ErrorConciliacion ? e.message : String((e as Error)?.message ?? e),
+      });
+    }
+  }
+
+  return { hechos, fallidos, omitidos };
+}
+
+/**
+ * Aparta de golpe los vehículos marcados.
+ *
+ * Ignorar no escribe nada en la flota: solo deja de enseñarlos, y se deshace
+ * desde la propia pantalla. Por eso no se revalida contra el proveedor —un
+ * identificador que ya no exista se ignora igual, y no molesta a nadie.
+ */
+export async function ignorarLote(
+  ambito: Ambito,
+  datos: { externalVehicleIds: string[]; motivo?: string | null },
+): Promise<ResultadoLoteExternos> {
+  const pedidos = externosPedidos(datos);
+
+  const fallidos: ResultadoLoteExternos["fallidos"] = [];
+  let hechos = 0;
+
+  const TANDA = 20;
+  for (let i = 0; i < pedidos.length; i += TANDA) {
+    await Promise.all(
+      pedidos.slice(i, i + TANDA).map(async (id) => {
+        try {
+          await ignorar(ambito, { externalVehicleId: id, motivo: datos.motivo ?? null });
+          hechos++;
+        } catch (e) {
+          fallidos.push({
+            externalVehicleId: id,
+            error: e instanceof ErrorConciliacion ? e.message : String((e as Error)?.message ?? e),
+          });
+        }
+      }),
+    );
+  }
+
+  return { hechos, fallidos, omitidos: [] };
+}
+

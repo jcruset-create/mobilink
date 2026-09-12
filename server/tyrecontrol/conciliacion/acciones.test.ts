@@ -25,13 +25,14 @@ vi.mock("../../integration-hub/application/services/VehicleReconciliationService
 }));
 
 const { supabase } = await import("../../supabase.ts");
-const { upsertMapping, listVehicleMappings, setVehicleMappingActive, unignoreExternal } =
+const { upsertMapping, listVehicleMappings, setVehicleMappingActive, unignoreExternal, ignoreExternal } =
   await import("../../integration-hub/infrastructure/repositories.ts");
 const { conciliarFlota } = await import(
   "../../integration-hub/application/services/VehicleReconciliationService.ts"
 );
 const {
   vincular, desvincular, darDeBaja, crearPendiente, dejarDeIgnorar, vincularLote, ErrorConciliacion,
+  crearPendientesLote, ignorarLote,
 } = await import("./acciones.ts");
 
 const AMBITO = { empresaId: "empresa-A", connectorKey: "movertis", accountKey: "buses" };
@@ -431,5 +432,175 @@ describe("vincularLote", () => {
     const r = await vincularLote(AMBITO);
     expect(r.enlazados).toBe(2);
     expect(r.fallidos).toHaveLength(0);
+  });
+});
+
+/**
+ * Lotes elegidos a mano.
+ *
+ * Aquí sí llega una lista del navegador, y por eso hay que fijar exactamente
+ * qué parte de esa lista se cree: los IDENTIFICADORES de las filas marcadas, y
+ * nada más. La matrícula y el bastidor con los que se da el alta salen de lo
+ * que el proveedor está devolviendo, no de la petición. Sin esa separación,
+ * «crear los que he marcado» sería «crear un vehículo con los datos que yo te
+ * diga», que es otra cosa.
+ */
+describe("crearPendientesLote", () => {
+  /** Finge una conciliación con estos vehículos sin enlazar. */
+  function sinEnlazar(externos: Array<{ id: string; plate?: string; vin?: string; name?: string }>) {
+    vi.mocked(conciliarFlota).mockResolvedValue({
+      enlazados: [], soloTyreControl: [], discrepancias: [], noEvaluados: [], externosVistos: [],
+      soloProveedor: externos.map((e) => ({
+        externo: { providerVehicleId: e.id, plate: e.plate, vin: e.vin, name: e.name },
+      })),
+      resumen: {},
+    } as any);
+  }
+
+  /** Una base en la que no hay ninguna matrícula repetida y el insert va bien. */
+  function baseLimpia() {
+    let n = 0;
+    vi.mocked(supabase.from as any).mockImplementation(() => {
+      const cadena: any = {
+        select: vi.fn(() => cadena),
+        insert: vi.fn(() => cadena),
+        eq: vi.fn(() => cadena),
+        ilike: vi.fn(() => Promise.resolve({ data: [], error: null })),
+        single: vi.fn(async () => ({ data: { id: `nuevo-${++n}`, matricula: "1234ABC" }, error: null })),
+        // `crearPendiente` acaba llamando a `vincular`, que revalida que el
+        // vehículo recién creado es de esta empresa.
+        maybeSingle: vi.fn(async () => ({
+          data: { id: `nuevo-${n}`, matricula: "1234ABC", activo: true, empresa_id: "empresa-A" },
+          error: null,
+        })),
+        range: vi.fn(async () => ({ data: [], error: null })),
+      };
+      return cadena;
+    });
+  }
+
+  it("crea solo los marcados, no toda la lista", async () => {
+    sinEnlazar([{ id: "E1", plate: "1111AAA" }, { id: "E2", plate: "2222BBB" }, { id: "E3", plate: "3333CCC" }]);
+    baseLimpia();
+
+    const r = await crearPendientesLote(AMBITO, { externalVehicleIds: ["E1", "E3"] });
+
+    expect(r.hechos).toBe(2);
+    expect(upsertMapping).toHaveBeenCalledTimes(2);
+    const creados = vi.mocked(upsertMapping).mock.calls.map((c) => c[0].externalCode);
+    expect(creados).toEqual(["E1", "E3"]);
+  });
+
+  it("la matrícula sale del proveedor, no de la petición", async () => {
+    sinEnlazar([{ id: "E1", plate: "REAL111", vin: "VIN-REAL" }]);
+    baseLimpia();
+
+    await crearPendientesLote(AMBITO, {
+      // Aunque alguien fabrique la petición a mano, esto no viaja a ningún sitio.
+      externalVehicleIds: ["E1"],
+      ...({ matricula: "INVENTADA" } as any),
+    });
+
+    expect(vi.mocked(upsertMapping).mock.calls[0][0].metadata).toMatchObject({
+      external_plate_snapshot: "REAL111",
+    });
+  });
+
+  it("un identificador que el proveedor no devuelve no crea nada", async () => {
+    // Es la puerta que cerraría un «crea un vehículo con este id que me invento».
+    sinEnlazar([{ id: "E1", plate: "1111AAA" }]);
+    baseLimpia();
+
+    const r = await crearPendientesLote(AMBITO, { externalVehicleIds: ["E1", "FANTASMA"] });
+
+    expect(r.hechos).toBe(1);
+    expect(r.omitidos).toEqual(["FANTASMA"]);
+  });
+
+  it("uno con la matrícula repetida no tumba el resto", async () => {
+    sinEnlazar([{ id: "E1", plate: "1111AAA" }, { id: "E2", plate: "2222BBB" }]);
+    let llamada = 0;
+    vi.mocked(supabase.from as any).mockImplementation(() => {
+      const cadena: any = {
+        select: vi.fn(() => cadena),
+        insert: vi.fn(() => cadena),
+        eq: vi.fn(() => cadena),
+        // El primero choca con uno que ya existe; el segundo pasa limpio.
+        ilike: vi.fn(async () =>
+          ++llamada === 1
+            ? { data: [{ id: "v9", matricula: "1111AAA" }], error: null }
+            : { data: [], error: null },
+        ),
+        single: vi.fn(async () => ({ data: { id: "nuevo", matricula: "2222BBB" }, error: null })),
+        maybeSingle: vi.fn(async () => ({
+          data: { id: "nuevo", matricula: "2222BBB", activo: true, empresa_id: "empresa-A" },
+          error: null,
+        })),
+      };
+      return cadena;
+    });
+
+    const r = await crearPendientesLote(AMBITO, { externalVehicleIds: ["E1", "E2"] });
+
+    expect(r.hechos).toBe(1);
+    expect(r.fallidos).toHaveLength(1);
+    expect(r.fallidos[0].error).toContain("Ya hay un vehículo");
+  });
+
+  it("uno sin matrícula se apunta como fallo, no se crea a medias", async () => {
+    sinEnlazar([{ id: "E1", name: "TSVETAN2" }]);
+    baseLimpia();
+
+    const r = await crearPendientesLote(AMBITO, { externalVehicleIds: ["E1"] });
+
+    expect(r.hechos).toBe(0);
+    expect(r.fallidos[0].error).toContain("no da matrícula");
+  });
+
+  it("una selección vacía se rechaza en vez de conciliar para nada", async () => {
+    await expect(
+      crearPendientesLote(AMBITO, { externalVehicleIds: [] }),
+    ).rejects.toMatchObject({ codigo: "LOTE_VACIO" });
+    expect(conciliarFlota).not.toHaveBeenCalled();
+  });
+
+  it("una selección desmesurada se rechaza: es un botón mal pulsado", async () => {
+    const muchos = Array.from({ length: 501 }, (_, i) => `E${i}`);
+    await expect(
+      crearPendientesLote(AMBITO, { externalVehicleIds: muchos }),
+    ).rejects.toMatchObject({ codigo: "LOTE_DEMASIADO_GRANDE" });
+  });
+});
+
+describe("ignorarLote", () => {
+  it("aparta los marcados y los cuenta", async () => {
+    const r = await ignorarLote(AMBITO, { externalVehicleIds: ["E1", "E2", "E3"] });
+
+    expect(r.hechos).toBe(3);
+    expect(ignoreExternal).toHaveBeenCalledTimes(3);
+  });
+
+  it("los repetidos se apartan una sola vez", async () => {
+    const r = await ignorarLote(AMBITO, { externalVehicleIds: ["E1", "E1", "E2"] });
+
+    expect(r.hechos).toBe(2);
+    expect(ignoreExternal).toHaveBeenCalledTimes(2);
+  });
+
+  it("NO pregunta al proveedor: ignorar no escribe nada en la flota", async () => {
+    await ignorarLote(AMBITO, { externalVehicleIds: ["E1"] });
+    expect(conciliarFlota).not.toHaveBeenCalled();
+  });
+
+  it("un fallo suelto se apunta y el resto sigue", async () => {
+    vi.mocked(ignoreExternal).mockImplementation(async ({ externalCode }: any) => {
+      if (externalCode === "MALO") throw new Error("la base dijo que no");
+      return {} as any;
+    });
+
+    const r = await ignorarLote(AMBITO, { externalVehicleIds: ["E1", "MALO", "E2"] });
+
+    expect(r.hechos).toBe(2);
+    expect(r.fallidos).toEqual([{ externalVehicleId: "MALO", error: "la base dijo que no" }]);
   });
 });
