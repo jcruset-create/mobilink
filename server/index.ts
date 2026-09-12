@@ -57,8 +57,10 @@ import {
 } from "./tyrecontrol/webfleetCredenciales.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { createConciliacionRouter } from "./tyrecontrol/conciliacion/router.ts";
+import { createPresenciaRouter } from "./tyrecontrol/presencia/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
 import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
+import { startPresenciaBases } from "./tyrecontrol/presencia/worker.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
 import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
@@ -18988,6 +18990,7 @@ mountParte(app, authenticate, requireModule("tyrecontrol"));
  * respondería 401 a quien sí tiene permiso.
  */
 app.use("/api/tyrecontrol/conciliacion", createConciliacionRouter());
+app.use("/api/tyrecontrol/presencia-bases", createPresenciaRouter());
 // Kilómetros mensuales: mismo motivo que la conciliación para ir ANTES del router general.
 app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter());
 app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
@@ -19285,6 +19288,7 @@ initDb()
       // exactas, guarda el recuento que ve el menú y avisa por correo. La
       // cadencia sale de la marca guardada, no de este arranque.
       startConciliacionQuincenal();
+      startPresenciaBases(); // barrido de "vehículos en bases" desde telemática
     });
   })
   .catch((error) => {

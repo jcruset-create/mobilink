@@ -20,6 +20,7 @@ import {
   filasDe,
   aLecturaDeFlota,
   aLecturaDePunto,
+  aPosicionDeFlota,
   aVehiculoDeFlota,
   masCercana,
   matriculaDeNombre,
@@ -500,5 +501,70 @@ describe("resumenesDe()", () => {
   it("los números vienen como cadena con coma y se leen igual", () => {
     const r = resumenesDe([{ unit: "7", total_mileage: "7842,5" }], ["7"]);
     expect(r[0].total).toBe(7842.5);
+  });
+});
+
+describe("aPosicionDeFlota()", () => {
+  /**
+   * La fila tal como la devuelve `showvehicles` con `lastMessagePosition`,
+   * copiada de la respuesta real de la cuenta. Los nombres son los que son:
+   * `lon` (no `lng`), `date` en segundos, y ni contacto ni precisión.
+   */
+  const FILA = {
+    idVehicle: 26053725,
+    name: "604 - 1678 GCM",
+    counters: { odometer: 809052 },
+    lastPosition: {
+      date: 1789229448,
+      lat: 41.1299667358,
+      lon: 1.18569278717,
+      speed: 0,
+      course: 166,
+      lastMessage: 1789230829,
+    },
+  };
+
+  it("lee la posición real, con `lon` y epoch en segundos", () => {
+    const r = aPosicionDeFlota(FILA, OPCIONES, "26053725");
+    expect(r?.latitude).toBeCloseTo(41.1299667358);
+    expect(r?.longitude).toBeCloseTo(1.18569278717);
+    // 1789229448 son segundos: si se tomaran por milisegundos saldría 1970.
+    expect(r?.capturedAt.getUTCFullYear()).toBe(2026);
+    expect(r?.positionAt?.getTime()).toBe(r?.capturedAt.getTime());
+  });
+
+  it("velocidad 0 es un dato, no una ausencia: el autobús está parado", () => {
+    expect(aPosicionDeFlota(FILA, OPCIONES, "26053725")?.speedKmh).toBe(0);
+  });
+
+  it("el odómetro viene de propina y fechado con la posición", () => {
+    const r = aPosicionDeFlota(FILA, OPCIONES, "26053725");
+    expect(r?.odometerKm).toBe(809052);
+    expect(r?.odometerAt?.getTime()).toBe(r?.capturedAt.getTime());
+  });
+
+  it("sin contadores hay posición pero no odómetro, y sin instante de odómetro", () => {
+    const r = aPosicionDeFlota({ ...FILA, counters: undefined }, OPCIONES, "26053725");
+    expect(r?.latitude).toBeCloseTo(41.1299667358);
+    expect(r?.odometerKm).toBeUndefined();
+    expect(r?.odometerAt).toBeUndefined();
+  });
+
+  it("sin `lastPosition`, sin fecha o en 0,0 devuelve null: mejor ausencia que invento", () => {
+    expect(aPosicionDeFlota({ ...FILA, lastPosition: undefined }, OPCIONES, "1")).toBeNull();
+    expect(
+      aPosicionDeFlota({ ...FILA, lastPosition: { ...FILA.lastPosition, date: null } }, OPCIONES, "1"),
+    ).toBeNull();
+    expect(
+      aPosicionDeFlota({ ...FILA, lastPosition: { ...FILA.lastPosition, lat: 0, lon: 0 } }, OPCIONES, "1"),
+    ).toBeNull();
+  });
+
+  it("el centinela de «sin dato» no se cuela como coordenada", () => {
+    const conCentinela = {
+      ...FILA,
+      lastPosition: { ...FILA.lastPosition, lat: -348201.3876, lon: -348201.3876 },
+    };
+    expect(aPosicionDeFlota(conCentinela, OPCIONES, "1")).toBeNull();
   });
 });

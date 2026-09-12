@@ -457,6 +457,72 @@ export function aLecturaDeFlota(
 }
 
 /**
+ * La posición de `lastMessagePosition` a lectura, para el barrido de flota.
+ *
+ * La forma se comprobó contra la cuenta real antes de escribir esto, porque
+ * inventarse nombres de campo es la manera de hacer un barrido que devuelve
+ * 751 vehículos «sin posición». Lo que llega es:
+ *
+ *     "lastPosition": { "date": 1789229448, "lat": 41.1299667358,
+ *                       "lon": 1.18569278717, "speed": 0, "course": 166,
+ *                       "lastMessage": 1789230829 }
+ *
+ * Tres detalles que no se adivinan: el campo es `lon`, no `lng` ni
+ * `longitude`; `date` es epoch en SEGUNDOS (`fecha()` lo distingue por el
+ * corte en 10^11, así que no hay que multiplicar aquí); y no hay `ignition`,
+ * ni `accuracy`, ni dirección en texto. Sin contacto no se puede decir si el
+ * motor está en marcha, y `speed: 0` es lo único que hay —que para «está
+ * aparcado en la base» basta—.
+ *
+ * `date` es el instante de la posición y `lastMessage` el del último mensaje
+ * del equipo, que suele ser posterior. Se fecha con `date`: lo que interesa es
+ * cuándo estuvo el vehículo AHÍ, no cuándo habló el aparato por última vez.
+ *
+ * Devuelve `null` sin fecha o sin posición válida. Un vehículo así sale del
+ * barrido como ausente, y `evaluarPresencia` lo clasificará como
+ * `NO_POSITION`, que es la verdad: no se sabe dónde está.
+ */
+export function aPosicionDeFlota(
+  fila: Record<string, unknown>,
+  opciones: OpcionesMapeo,
+  providerVehicleId: string,
+): VehicleTelemetry | null {
+  const pos = fila.lastPosition;
+  if (!pos || typeof pos !== "object") return null;
+  const p = pos as Record<string, unknown>;
+
+  const capturedAt = fecha(p.date);
+  if (!capturedAt) return null;
+
+  const lat = valorMovertis(p.lat);
+  const lng = valorMovertis(p.lon);
+  if (!esPosicionValida(lat, lng)) return null;
+
+  // El odómetro viaja de propina: si el barrido pide `counters`, ya está en la
+  // misma fila y no cuesta otra llamada. Se fecha con el instante de la
+  // posición porque es lo más cercano que da Movertis —`showvehicles` no fecha
+  // los contadores— y sin fecha no sería auditable.
+  const odometerKm = odometroDeCounters(fila.counters, opciones.unidadOdometro);
+
+  return {
+    provider: opciones.provider,
+    accountKey: opciones.accountKey,
+    providerVehicleId,
+    capturedAt,
+    latitude: lat,
+    longitude: lng,
+    positionAt: capturedAt,
+    // La velocidad sí admite el cero: un autobús parado marca 0 y eso es un
+    // dato, no una ausencia. Por eso `numero` y no `valorMovertis`.
+    speedKmh: numero(p.speed),
+    odometerKm,
+    odometerSource: odometerKm !== undefined ? opciones.origenOdometro : undefined,
+    odometerAt: odometerKm !== undefined ? capturedAt : undefined,
+    raw: { name: fila.name, idVehicle: fila.idVehicle, lastPosition: p },
+  };
+}
+
+/**
  * Un punto de `showtrips` a lectura.
  *
  * `pos` viene como UNA cadena, «41.0792007446,1.13263237476», no como dos

@@ -34,7 +34,7 @@ function pick<T extends Record<string, any>>(obj: T, cols: readonly string[]): R
 }
 
 const COLS_EMPRESA = ["nombre", "cif", "codigo_cliente", "telefono", "email", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "activo"] as const;
-const COLS_DELEGACION = ["empresa_id", "nombre", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "responsable", "telefono", "email", "activo", "webfleet_lat", "webfleet_lng", "webfleet_radio_m", "webfleet_zona_nombre", "webfleet_genera_avisos"] as const;
+const COLS_DELEGACION = ["empresa_id", "nombre", "direccion", "ciudad", "provincia", "codigo_postal", "pais", "responsable", "telefono", "email", "activo", "base_lat", "base_lng", "base_radio_m", "zona_externa_nombre", "base_genera_avisos"] as const;
 const COLS_VEHICULO = [
   "empresa_id", "delegacion_id", "tipo_vehiculo_id", "matricula", "numero_unidad", "marca", "modelo", "bastidor",
   "fecha_matriculacion", "webfleet_vehicle_id", "km_actual", "origen_km", "activo", "config_ejes_id", "medida_id",

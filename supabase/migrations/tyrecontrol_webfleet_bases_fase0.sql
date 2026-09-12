@@ -10,6 +10,18 @@
 -- (showObjectReportExtern) con la geo-zona de las delegaciones.
 --
 -- Estado Webfleet: en_base | otra_base | en_ruta | sin_conexion | sin_dispositivo.
+--
+-- ── AVISO: los nombres de las columnas de la geo-zona han cambiado ──────────
+--
+-- `webfleet_lat`, `webfleet_lng`, `webfleet_radio_m`, `webfleet_genera_avisos`
+-- y `webfleet_zona_nombre` se renombraron a `base_lat`, `base_lng`,
+-- `base_radio_m`, `base_genera_avisos` y `zona_externa_nombre` en
+-- `tyrecontrol_bases_geozona_renombrado.sql`, porque la geo-zona la lee ahora
+-- cualquier proveedor de telemática y no solo Webfleet.
+--
+-- Este fichero se deja como está, tal cual se aplicó. NO volver a ejecutarlo
+-- después del renombrado: sus `add column if not exists webfleet_*` crearían
+-- otra vez las columnas viejas, vacías y al lado de las buenas.
 -- ============================================================
 
 -- Si existía la tabla de bases separada de una versión previa, se elimina:

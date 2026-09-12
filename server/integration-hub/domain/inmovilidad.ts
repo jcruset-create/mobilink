@@ -36,7 +36,7 @@ import type { VehicleTelemetry } from "./telematics.ts";
  * Cuánto puede alejarse un vehículo sin que cuente como haberse movido.
  *
  * 300 m, el mismo radio que el geocerco de las bases
- * (`tc_delegaciones.webfleet_radio_m`), y por el mismo motivo: dentro de una
+ * (`tc_delegaciones.base_radio_m`), y por el mismo motivo: dentro de una
  * base el autobús maniobra, va al lavadero y cambia de calle. Eso no son
  * kilómetros de servicio y no debe invalidar la lectura. Además absorbe la
  * deriva del GPS de un aparato quieto, que en una hora larga inventa cientos de

@@ -12,8 +12,10 @@
 import { supabase } from "./supabase.ts";
 
 type WfObject = Record<string, any>;
-// La base es una DELEGACIÓN con geo-zona definida (webfleet_lat/lng + radio).
-type Base = { id: string; empresa_id: string; nombre: string; webfleet_lat: number | null; webfleet_lng: number | null; webfleet_radio_m: number | null; webfleet_genera_avisos: boolean };
+// La base es una DELEGACIÓN con geo-zona definida (base_lat/lng + radio).
+// Las columnas se llamaban webfleet_* hasta que dejó de ser cosa solo de
+// Webfleet: la misma geo-zona la lee ahora el barrido de telemática del Hub.
+type Base = { id: string; empresa_id: string; nombre: string; base_lat: number | null; base_lng: number | null; base_radio_m: number | null; base_genera_avisos: boolean };
 type EstadoPrevio = { estado: string; delegacion_id: string | null; entrada_base_at: string | null };
 
 // ── Petición a Webfleet (cuenta global por env; los vehículos viven ahí) ─────
@@ -50,8 +52,8 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
 }
 
 function baseContiene(b: Base, lat: number, lng: number): boolean {
-  if (b.webfleet_lat == null || b.webfleet_lng == null) return false;
-  return haversineM(lat, lng, b.webfleet_lat, b.webfleet_lng) <= (b.webfleet_radio_m ?? 300);
+  if (b.base_lat == null || b.base_lng == null) return false;
+  return haversineM(lat, lng, b.base_lat, b.base_lng) <= (b.base_radio_m ?? 300);
 }
 
 // Odómetro total en km: odometer_long en metros; odometer en hectómetros.
@@ -69,7 +71,7 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
     const [{ data: cfg }, { data: basesRaw }, { data: vehiculos }, { data: estadosRaw }, { data: opsRaw }] = await Promise.all([
       supabase.from("tc_webfleet_sync_config").select("*").eq("id", 1).maybeSingle(),
       // Bases = delegaciones con geo-zona definida.
-      supabase.from("tc_delegaciones").select("id, empresa_id, nombre, webfleet_lat, webfleet_lng, webfleet_radio_m, webfleet_genera_avisos").not("webfleet_lat", "is", null),
+      supabase.from("tc_delegaciones").select("id, empresa_id, nombre, base_lat, base_lng, base_radio_m, base_genera_avisos").not("base_lat", "is", null),
       supabase.from("tc_vehiculos").select("id, empresa_id, delegacion_id, matricula, km_actual, webfleet_vehicle_id").eq("activo", true),
       supabase.from("tc_vehiculo_webfleet_estado").select("vehiculo_id, estado, delegacion_id, entrada_base_at"),
       supabase.from("tc_operaciones_mantenimiento").select("id, nombre"),
@@ -175,7 +177,7 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
       }
       // Entrada nueva en CUALQUIER base de su empresa (la asignada u otra) →
       // candidata a alerta: se puede revisar allí igualmente.
-      if (esNuevaEntrada && (estado === "en_base" || estado === "otra_base") && delegId && alertasActivas && basePorId.get(delegId)?.webfleet_genera_avisos) {
+      if (esNuevaEntrada && (estado === "en_base" || estado === "otra_base") && delegId && alertasActivas && basePorId.get(delegId)?.base_genera_avisos) {
         entradas.push({ vehiculo_id: v.id, empresa_id: v.empresa_id, delegacion_id: delegId, entrada,
           matricula: v.matricula, baseNom: basePorId.get(delegId)?.nombre ?? "la base" });
       }
