@@ -180,8 +180,11 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
             _info('Asignado a',
                 _job.assignedNames.isEmpty ? 'Sin asignar' : _job.assignedNames.join(', ')),
             if (_job.customerName.isNotEmpty) _info('Cliente', _job.customerName),
+            if (_job.ptNumero != null && _job.ptNumero!.isNotEmpty)
+              _info('Parte de trabajo', _job.ptNumero!),
             if (_job.actualMinutes != null)
               _info('Tiempo total', '${_job.actualMinutes} min'),
+            ..._bloquesDelParte(),
             const SizedBox(height: 24),
             if (_busy)
               const Center(child: CircularProgressIndicator(color: AppColors.primary))
@@ -312,6 +315,99 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     return widgets;
   }
 
+  /// Lo que el trabajo trae del parte: mano de obra —lo imputable— y material.
+  ///
+  /// Sin importes: el técnico necesita saber qué montar y cuánto se tarda; lo
+  /// que se factura se ve en el panel de oficina.
+  List<Widget> _bloquesDelParte() {
+    final manoDeObra = _job.manoDeObra(_job.area);
+    final minutos = _job.minutosManoDeObra(_job.area);
+
+    final bloques = <Widget>[];
+
+    // Con una sola línea sin minutos no hay nada que el «Área» no diga ya.
+    final mereceLaPena =
+        manoDeObra.length > 1 || (manoDeObra.isNotEmpty && minutos > 0);
+
+    if (mereceLaPena) {
+      bloques.add(_seccionParte(
+        titulo: 'MANO DE OBRA',
+        sufijo: minutos > 0 ? '$minutos min' : null,
+        color: AppColors.primary,
+        lineas: manoDeObra
+            .map((l) => _LineaParte(
+                  texto: l.cantidad > 1 ? '${l.label}  ×${l.cantidad}' : l.label,
+                  sufijo: l.minutos > 0 ? '${l.minutos} min' : null,
+                ))
+            .toList(),
+      ));
+    }
+
+    if (_job.materiales.isNotEmpty) {
+      bloques.add(_seccionParte(
+        titulo: 'MATERIAL',
+        color: AppColors.textMuted,
+        lineas: _job.materiales
+            .map((m) => _LineaParte(
+                  texto: m.descripcion,
+                  sufijo: '×${m.unidades}',
+                ))
+            .toList(),
+      ));
+    }
+
+    return bloques;
+  }
+
+  Widget _seccionParte({
+    required String titulo,
+    required Color color,
+    required List<_LineaParte> lineas,
+    String? sufijo,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(titulo,
+                  style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textMuted,
+                      letterSpacing: 0.4)),
+              const Spacer(),
+              if (sufijo != null)
+                Text(sufijo,
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: color)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ...lineas.map((l) => Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(l.texto,
+                          style: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600)),
+                    ),
+                    if (l.sufijo != null)
+                      Text(l.sufijo!,
+                          style: const TextStyle(
+                              fontSize: 14, color: AppColors.textMuted)),
+                  ],
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+
   Widget _bigButton(String label, IconData icon, Color color, VoidCallback onTap) {
     return SizedBox(
       width: double.infinity,
@@ -347,4 +443,12 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         child: Text(text,
             style: TextStyle(fontWeight: FontWeight.bold, color: color)),
       );
+}
+
+/// Una línea de los bloques del parte, con su sufijo a la derecha.
+class _LineaParte {
+  final String texto;
+  final String? sufijo;
+
+  const _LineaParte({required this.texto, this.sufijo});
 }

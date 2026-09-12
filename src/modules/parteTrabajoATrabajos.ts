@@ -8,7 +8,7 @@
 // Lógica pura, sin React ni red, para poder probarla aislada.
 
 import type { IncludedTask } from "./quickTaskSelector";
-import type { AreaKey, QuickTemplate } from "./workshopTypes";
+import type { AreaKey, MaterialTrabajo, QuickTemplate } from "./workshopTypes";
 
 /** Una línea de "Productos y servicios" del parte. */
 export type LineaParte = {
@@ -16,6 +16,8 @@ export type LineaParte = {
   unidades: number;
   precioUnitario?: number | null;
   precioTotal?: number | null;
+  /** Columna PVP del parte. Se guarda para imputar; no se enseña en el taller. */
+  pvp?: number | null;
   /** Código de artículo del ERP, si el parte lo trae. */
   codigo?: string | null;
 };
@@ -65,6 +67,8 @@ export type TrabajoPropuesto = {
   descripcionOriginal: string;
   /** El resto de servicios del parte, que van dentro de este mismo trabajo. */
   tareasIncluidas: IncludedTask[];
+  /** Material del parte: lo que hay que montar. No consume tiempo. */
+  materiales: MaterialTrabajo[];
 };
 
 export type LineaSinMapear = LineaParte & { indiceLinea: number; clave: string };
@@ -310,6 +314,13 @@ export function parteATrabajos({
       arrivedAtMs,
       descripcionOriginal: principal.linea.descripcion,
       tareasIncluidas,
+      materiales: materiales.map((m) => ({
+        descripcion: m.descripcion,
+        unidades: unidadesDeLinea(m),
+        precioUnitario: m.precioUnitario ?? null,
+        precioTotal: m.precioTotal ?? null,
+        pvp: m.pvp ?? null,
+      })),
     });
   }
 

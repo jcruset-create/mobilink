@@ -7,6 +7,7 @@ import 'package:taller_app/models/job.dart';
 /// es lo que más duele si se rompe: un fallo aquí deja la lista de tareas del
 /// técnico en blanco sin ningún error visible.
 void main() {
+  _pruebasDelParte();
   group('Job.fromJson', () {
     test('lee un trabajo completo del backend', () {
       final job = Job.fromJson({
@@ -96,6 +97,104 @@ void main() {
       expect(cerrado.isClosed, isTrue);
       expect(cerrado.isActive, isFalse);
       expect(cerrado.isPaused, isFalse);
+    });
+  });
+}
+
+void _pruebasDelParte() {
+  group('lo que trae el parte de trabajo', () {
+    test('lee las tareas incluidas y los materiales del JSONB', () {
+      final job = Job.fromJson({
+        'id': 1,
+        'area': 'Montaje camión',
+        'plate': '8072MNC',
+        'status': 'activo',
+        'quantity': 4,
+        'unitMinutes': 25,
+        'ptNumero': 'D2_26/62',
+        'includedTasks': [
+          {'label': 'Montaje fijación', 'quantity': 4, 'standardMinutes': 40},
+        ],
+        'materiales': [
+          {'descripcion': '315/70X22.5 SAILUN', 'unidades': 4, 'precioTotal': 2400},
+        ],
+      });
+
+      expect(job.ptNumero, 'D2_26/62');
+      expect(job.tareasIncluidas.length, 1);
+      expect(job.materiales.single.descripcion, '315/70X22.5 SAILUN');
+      expect(job.materiales.single.unidades, 4);
+    });
+
+    test('la mano de obra junta la principal y las incluidas, y suma minutos', () {
+      final job = Job.fromJson({
+        'id': 1,
+        'area': 'camion',
+        'plate': '8072MNC',
+        'status': 'activo',
+        'quantity': 4,
+        'unitMinutes': 25,
+        'includedTasks': [
+          {'label': 'Montaje fijación', 'quantity': 4, 'standardMinutes': 40},
+        ],
+      });
+
+      final lineas = job.manoDeObra('Montaje camión mayor 19.5"');
+
+      expect(lineas.length, 2);
+      expect(lineas.first.principal, isTrue);
+      expect(lineas.first.minutos, 100);
+      expect(job.minutosManoDeObra('Montaje camión mayor 19.5"'), 140);
+    });
+
+    test('aguanta null, listas vacías y basura en las dos columnas', () {
+      final job = Job.fromJson({
+        'id': 1,
+        'area': 'camion',
+        'plate': '8072MNC',
+        'status': 'activo',
+        'includedTasks': null,
+        'materiales': 'no es una lista',
+      });
+
+      expect(job.tareasIncluidas, isEmpty);
+      expect(job.materiales, isEmpty);
+      expect(job.manoDeObra('Pinchazo').length, 1);
+    });
+
+    test('descarta material sin descripción o sin unidades', () {
+      final job = Job.fromJson({
+        'id': 1,
+        'area': 'camion',
+        'plate': '8072MNC',
+        'status': 'activo',
+        'materiales': [
+          {'descripcion': '', 'unidades': 4},
+          {'descripcion': 'Sin unidades', 'unidades': 0},
+          {'descripcion': 'Válida', 'unidades': 1},
+        ],
+      });
+
+      expect(job.materiales.length, 1);
+      expect(job.materiales.single.descripcion, 'Válida');
+    });
+
+    test('las cantidades llegan como cadena desde Postgres y se leen igual', () {
+      final job = Job.fromJson({
+        'id': 1,
+        'area': 'camion',
+        'plate': '8072MNC',
+        'status': 'activo',
+        'quantity': '4',
+        'unitMinutes': '25',
+        'materiales': [
+          {'descripcion': 'Neumático', 'unidades': '4'},
+        ],
+      });
+
+      expect(job.quantity, 4);
+      expect(job.materiales.single.unidades, 4);
+      expect(job.minutosManoDeObra('Montaje'), 100);
     });
   });
 }
