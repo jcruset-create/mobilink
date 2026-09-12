@@ -33,6 +33,7 @@ import {
   ErrorConciliacion,
   ignorar,
   vincular,
+  vincularLote,
   type Ambito,
 } from "./acciones.ts";
 
@@ -215,6 +216,26 @@ export function createConciliacionRouter(): Router {
         externalName: req.body?.externalName ?? null,
       });
       res.json({ ok: true, enlace });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Vincula de golpe todas las coincidencias exactas de matrícula.
+   *
+   * NO recibe la lista: la recalcula el servidor. Lo que llega del navegador es
+   * solo cuántas creía ver, para poder rechazar una pantalla desfasada.
+   */
+  router.post("/vincular-lote", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      const esperados =
+        req.body?.esperados === undefined ? undefined : Number(req.body.esperados);
+      res.json({ ok: true, ...(await vincularLote(ambito, { esperados })) });
     } catch (e) {
       fallo(res, e);
     }

@@ -122,6 +122,12 @@ const post = <T,>(ruta: string, cuerpo: unknown) =>
 
 export const vincular = (b: Record<string, unknown>) => post<{ ok: true }>("/vincular", b);
 export const desvincular = (b: Record<string, unknown>) => post<{ ok: true }>("/desvincular", b);
+export const vincularLote = (b: Record<string, unknown>) =>
+  post<{
+    ok: true;
+    enlazados: number;
+    fallidos: Array<{ tcVehicleId: string; externalVehicleId: string; error: string }>;
+  }>("/vincular-lote", b);
 export const ignorar = (b: Record<string, unknown>) => post<{ ok: true }>("/ignorar", b);
 export const dejarDeIgnorar = (b: Record<string, unknown>) => post<{ ok: true }>("/dejar-de-ignorar", b);
 export const crearVehiculo = (b: Record<string, unknown>) =>
