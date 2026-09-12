@@ -26,6 +26,7 @@ import { conciliarFlota } from "../../integration-hub/application/services/Vehic
 import { listIgnoredExternals, nextCorrelationId } from "../../integration-hub/infrastructure/repositories.ts";
 import { leerFlotaInterna } from "./flota.ts";
 import { leerEstado } from "./estado.ts";
+import { METODOS_VINCULO, type MetodoVinculo } from "../../integration-hub/domain/reconciliation.ts";
 import {
   crearPendiente,
   crearPendientesLote,
@@ -101,6 +102,26 @@ function fallo(res: Response, e: unknown) {
   }
   console.error("[conciliacion] error:", (e as any)?.message ?? e);
   return res.status(500).json({ error: "Error en la conciliación" });
+}
+
+/**
+ * El método del enlace, filtrado.
+ *
+ * Llegaba del cuerpo tal cual, así que un cliente podía declarar cualquier
+ * procedencia —incluido `automatic_plate_exact`, que solo debería escribir el
+ * repaso, o `created_from_provider`, que solo debería escribir un alta—. No es
+ * un agujero de permisos, pero sí de trazabilidad: el `match_method` existe
+ * para poder contestar «¿de dónde salió este vínculo?», y si el navegador lo
+ * dicta, contesta lo que le convenga.
+ *
+ * Por la red solo se admiten los dos que una persona puede elegir de verdad en
+ * la pantalla. Cualquier otra cosa cae a `manual`, que es lo que de hecho está
+ * pasando: alguien lo está enlazando a mano.
+ */
+function metodoPedido(valor: unknown): MetodoVinculo {
+  return valor === METODOS_VINCULO.MATRICULA_EXACTA
+    ? METODOS_VINCULO.MATRICULA_EXACTA
+    : METODOS_VINCULO.MANUAL;
 }
 
 /** Ámbito común a todas las acciones, ya validado. */
@@ -248,7 +269,7 @@ export function createConciliacionRouter(): Router {
       const enlace = await vincular(ambito, {
         tcVehicleId: String(req.body?.tcVehicleId ?? ""),
         externalVehicleId: String(req.body?.externalVehicleId ?? ""),
-        matchMethod: req.body?.matchMethod,
+        matchMethod: metodoPedido(req.body?.matchMethod),
         externalPlate: req.body?.externalPlate ?? null,
         externalName: req.body?.externalName ?? null,
       });

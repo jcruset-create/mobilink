@@ -25,6 +25,7 @@ import {
   upsertMapping,
 } from "../../integration-hub/infrastructure/repositories.ts";
 import { vehiculoDeLaEmpresa } from "./flota.ts";
+import { leerEstado, permisoDeBaja } from "./estado.ts";
 
 /** Un fallo que la pantalla puede enseñar tal cual, con su código HTTP. */
 export class ErrorConciliacion extends Error {
@@ -56,6 +57,81 @@ async function exigirVehiculoPropio(ambito: Ambito, tcVehicleId: string) {
   return v;
 }
 
+// ── Lo que hay que comprobar antes de escribir un enlace ────────────────────
+//
+// `connectorKey` y `accountKey` llegan en el cuerpo de la petición, y hasta
+// ahora solo se comprobaba que no vinieran vacíos. Con eso, un administrador
+// podía escribir enlaces en una cuenta que no existe: no se filtra nada de otro
+// cliente —el `tenant_id` sale de la sesión— pero quedan mapeos en cuentas
+// fantasma, y el vehículo externo tampoco se verificaba, así que un
+// identificador inventado creaba un enlace huérfano que la propia conciliación
+// reportaba después como «desaparecido».
+
+/**
+ * Una cuenta ya comprobada y su flota, para no repetir el trabajo por fila.
+ *
+ * Se pasa explícitamente en vez de con un booleano tipo `yaValidado`: un
+ * parámetro que dijera «confía en mí» es justo lo que acaba colándose desde un
+ * sitio que no había validado nada. Esto solo se puede construir llamando a
+ * `prepararVinculacion`, que es la que comprueba.
+ */
+export interface Vinculacion {
+  /** Los identificadores que el proveedor devuelve AHORA en esa cuenta. */
+  externosValidos: Set<string>;
+}
+
+/**
+ * Comprueba la cuenta y trae su flota.
+ *
+ * `resolveTelematicsConnectors` resuelve de una vez cuatro cosas que había que
+ * comprobar por separado: que la configuración existe, que está habilitada, que
+ * es de telemática y que es de ESTE tenant —lee
+ * `integration_connector_configs` filtrando por `tenant_id`—. No se añade otra
+ * fuente de verdad porque ya la hay.
+ */
+export async function prepararVinculacion(ambito: Ambito): Promise<Vinculacion> {
+  const { resolveTelematicsConnectors } = await import(
+    "../../integration-hub/connectors/ConnectorRegistry.ts"
+  );
+  const { nextCorrelationId } = await import("../../integration-hub/infrastructure/repositories.ts");
+
+  const cuentas = await resolveTelematicsConnectors(ambito.empresaId);
+  const cuenta = cuentas.find(
+    (c) => c.key === ambito.connectorKey && c.accountKey === ambito.accountKey,
+  );
+  if (!cuenta) {
+    // El mismo mensaje para «no existe», «está deshabilitada» y «es de otra
+    // empresa»: distinguirlas confirmaría la existencia de una cuenta ajena.
+    throw new ErrorConciliacion(
+      "CUENTA_NO_CONFIGURADA",
+      `Esta empresa no tiene configurada la cuenta «${ambito.accountKey}» de ${ambito.connectorKey}.`,
+      404,
+    );
+  }
+
+  const ctx = { tenantId: ambito.empresaId, correlationId: await nextCorrelationId() };
+  const flota = await cuenta.connector.listVehicles(ctx);
+  return { externosValidos: new Set(flota.map((v) => v.providerVehicleId)) };
+}
+
+/**
+ * El vehículo externo existe AHORA en esa cuenta, o se acaba aquí.
+ *
+ * No se acepta que el navegador lo haya visto antes: entre lo que la pantalla
+ * pintó y lo que se envía cabe un identificador editado a mano, y el proveedor
+ * es el único que puede decir qué vehículos tiene.
+ */
+function exigirExternoDeLaCuenta(ambito: Ambito, externalCode: string, v: Vinculacion) {
+  if (!v.externosValidos.has(externalCode)) {
+    throw new ErrorConciliacion(
+      "EXTERNO_NO_EXISTE",
+      `El proveedor no devuelve ningún vehículo ${externalCode} en la cuenta ` +
+        `«${ambito.accountKey}». Vuelve a conciliar: puede que ya no exista o que sea de otra cuenta.`,
+      404,
+    );
+  }
+}
+
 // ── Vincular ────────────────────────────────────────────────────────────────
 
 export interface DatosVinculo {
@@ -75,13 +151,27 @@ export interface DatosVinculo {
  * entienda. El índice único parcial de la base la comprueba también, y esa es
  * la que de verdad protege: entre la lectura y la escritura cabe otra pestaña.
  */
-export async function vincular(ambito: Ambito, datos: DatosVinculo) {
-  await exigirVehiculoPropio(ambito, datos.tcVehicleId);
-
+export async function vincular(
+  ambito: Ambito,
+  datos: DatosVinculo,
+  /**
+   * Cuenta y flota ya comprobadas. Solo lo pasa `vincularLote`, que las
+   * comprueba una vez para seiscientas filas en vez de seiscientas veces.
+   * Sin esto, cada enlace hace su propia comprobación.
+   */
+  preparada?: Vinculacion,
+) {
   const externalCode = String(datos.externalVehicleId ?? "").trim();
   if (!externalCode) {
     throw new ErrorConciliacion("EXTERNO_VACIO", "Falta el identificador del vehículo del proveedor.");
   }
+
+  // La cuenta y el externo, antes del vehículo propio: así un enlace hacia una
+  // cuenta que no es de esta empresa se corta sin llegar a mirar su flota.
+  const vinculacion = preparada ?? (await prepararVinculacion(ambito));
+  exigirExternoDeLaCuenta(ambito, externalCode, vinculacion);
+
+  const vehiculo = await exigirVehiculoPropio(ambito, datos.tcVehicleId);
 
   const enlaces = await listVehicleMappings({
     tenantId: ambito.empresaId,
@@ -123,11 +213,15 @@ export async function vincular(ambito: Ambito, datos: DatosVinculo) {
     active: true,
     metadata: {
       match_method: datos.matchMethod ?? METODOS_VINCULO.MANUAL,
-      // Las fotos del momento del enlace. Sirven para detectar después que al
-      // vehículo le han cambiado la matrícula en la plataforma del proveedor,
-      // sin sobrescribir nada en TyreControl.
+      // Las fotos del momento del enlace. Son la referencia contra la que se
+      // detecta un cambio posterior, y por eso NO se refrescan al sincronizar:
+      // sobrescribirlas perdería justo la referencia que las hace útiles.
       external_plate_snapshot: datos.externalPlate ?? null,
       external_name_snapshot: datos.externalName ?? null,
+      // También la de TyreControl, y no por simetría: con la del proveedor sola
+      // se puede ver que las dos ya no coinciden, pero no de qué lado se movió.
+      // Sale de la ficha, no de lo que mande quien llama.
+      internal_plate_snapshot: vehiculo.matricula ?? null,
       linked_at_ms: Date.now(),
     },
   });
@@ -219,7 +313,12 @@ export interface DatosAlta {
  * existe y un administrador le completa la ficha antes de que se pueda operar
  * con él. Es el mismo camino que un alta desde la tablet.
  */
-export async function crearPendiente(ambito: Ambito, datos: DatosAlta) {
+export async function crearPendiente(
+  ambito: Ambito,
+  datos: DatosAlta,
+  /** Igual que en `vincular`: la pasa el lote para no repetir la comprobación. */
+  preparada?: Vinculacion,
+) {
   const matricula = String(datos.matricula ?? "").trim();
   if (!matricula) {
     throw new ErrorConciliacion(
@@ -279,13 +378,17 @@ export async function crearPendiente(ambito: Ambito, datos: DatosAlta) {
   }
 
   const vehiculo = { id: String((data as any).id), matricula: String((data as any).matricula) };
-  const enlace = await vincular(ambito, {
-    tcVehicleId: vehiculo.id,
-    externalVehicleId: datos.externalVehicleId,
-    matchMethod: METODOS_VINCULO.CREADO_DESDE_PROVEEDOR,
-    externalPlate: matricula,
-    externalName: datos.externalName ?? null,
-  });
+  const enlace = await vincular(
+    ambito,
+    {
+      tcVehicleId: vehiculo.id,
+      externalVehicleId: datos.externalVehicleId,
+      matchMethod: METODOS_VINCULO.CREADO_DESDE_PROVEEDOR,
+      externalPlate: matricula,
+      externalName: datos.externalName ?? null,
+    },
+    preparada,
+  );
 
   return { vehiculo, enlace, pendienteValidar: true };
 }
@@ -321,6 +424,32 @@ export interface DatosBaja {
  * `desvincularTambien` es explícito.
  */
 export async function darDeBaja(ambito: Ambito, datos: DatosBaja) {
+  /*
+   * Lo PRIMERO, antes incluso de mirar el vehículo: ¿demuestra el estado
+   * guardado que se puede afirmar una ausencia en esta cuenta?
+   *
+   * La pantalla ya deshabilita el botón cuando la conciliación no es completa, y
+   * eso no protege nada: un POST directo, una pestaña abierta desde antes de que
+   * el proveedor se cayera o un cliente modificado se lo saltan. Y el servidor
+   * no puede fiarse de un booleano que venga del navegador, así que la respuesta
+   * sale de `integration_sync_state`, que es donde la escribió la última pasada.
+   *
+   * Va dentro de `darDeBaja` y no en el router porque esta función es la baja DE
+   * LA CONCILIACIÓN —su único llamador es ese router— y así cualquier camino
+   * nuevo hereda la regla en vez de tener que acordarse de repetirla. Las bajas
+   * de vehículos que existan fuera de esta pantalla no pasan por aquí y siguen
+   * funcionando igual.
+   */
+  const permiso = permisoDeBaja({
+    estado: await leerEstado(ambito.empresaId),
+    connectorKey: ambito.connectorKey,
+    accountKey: ambito.accountKey,
+    ahoraMs: Date.now(),
+  });
+  if (permiso.estado === "bloqueado") {
+    throw new ErrorConciliacion(permiso.codigo, permiso.mensaje, 409);
+  }
+
   const vehiculo = await exigirVehiculoPropio(ambito, datos.tcVehicleId);
   if (!vehiculo.activo) {
     throw new ErrorConciliacion("YA_DE_BAJA", "Este vehículo ya estaba dado de baja.", 409);
@@ -449,6 +578,44 @@ export async function vincularLote(
     },
   );
 
+  /*
+   * ── Cuándo se puede enlazar sin que nadie lo mire ─────────────────────────
+   *
+   * La conciliación de ESTA cuenta tiene que haber sido completa. Con una
+   * pasada incompleta, `clasificarFlota` ya se guarda de proponer nada de la
+   * cuenta que falló —los vehículos sin enlace se apartan en vez de darse por
+   * ausentes—, así que esta comprobación es un cinturón sobre un tirante que ya
+   * existe. Se pone igualmente y explícita: la regla «no se autoenlaza sobre
+   * una foto incompleta» tiene que estar escrita donde se autoenlaza, no
+   * deducirse de tres módulos más abajo.
+   */
+  if (resultado.resumen.status !== "complete") {
+    const fallando = resultado.resumen.cuentas.filter((c) => !c.ok).map((c) => c.accountKey);
+    throw new ErrorConciliacion(
+      "CONCILIACION_INCOMPLETA",
+      "No se enlaza en bloque con una conciliación incompleta: " +
+        (fallando.length
+          ? `la cuenta «${fallando.join(", ")}» no respondió.`
+          : "el proveedor no respondió.") +
+        " Vuelve a conciliar.",
+      409,
+    );
+  }
+
+  /*
+   * De aquí sale el resto de las condiciones, y no de comprobarlas otra vez:
+   *
+   *  - `soloProveedor` con `propuesta` ya significa matrícula reconocible,
+   *    normalizada, coincidente, con UN único candidato y sin ambigüedad: las
+   *    ambiguas y las que proponen el mismo vehículo interno se van a
+   *    discrepancias, y las que no traen matrícula no proponen nada
+   *    (`clasificarFlota`, reglas 2 a 4).
+   *  - Los ignorados no llegan a `soloProveedor`.
+   *  - La cuenta es de este tenant y el externo existe: `vincular` lo comprueba
+   *    con la preparación de abajo.
+   *  - Que ni el vehículo interno ni el externo tengan ya un enlace activo lo
+   *    comprueba `vincular` fila a fila, contra la base y no contra esta foto.
+   */
   const propuestas = resultado.soloProveedor.filter((f) => f.propuesta);
 
   if (datos.esperados !== undefined && datos.esperados !== propuestas.length) {
@@ -462,6 +629,13 @@ export async function vincularLote(
   if (propuestas.length === 0) {
     throw new ErrorConciliacion("SIN_PROPUESTAS", "No hay ninguna coincidencia exacta que enlazar.");
   }
+
+  // Los identificadores salen de la conciliación que se acaba de hacer, así que
+  // están probados contra el proveedor. Se prepara UNA vez para todas las filas:
+  // seiscientas comprobaciones de cuenta serían seiscientas consultas.
+  const preparada: Vinculacion = {
+    externosValidos: new Set(propuestas.map((f) => f.externo.providerVehicleId)),
+  };
 
   const fallidos: ResultadoLote["fallidos"] = [];
   let enlazados = 0;
@@ -482,10 +656,11 @@ export async function vincularLote(
           await vincular(ambito, {
             tcVehicleId,
             externalVehicleId,
-            matchMethod: METODOS_VINCULO.MATRICULA_EXACTA,
+            // Enlace automático: se distingue del que confirma una persona.
+            matchMethod: METODOS_VINCULO.MATRICULA_EXACTA_AUTO,
             externalPlate: f.externo.plate ?? null,
             externalName: f.externo.name ?? null,
-          });
+          }, preparada);
           enlazados++;
         } catch (e) {
           // Un fallo suelto no tumba el lote: se apunta y se sigue. Lo contrario
@@ -574,6 +749,10 @@ export async function crearPendientesLote(
 ): Promise<ResultadoLoteExternos> {
   const pedidos = externosPedidos(datos);
   const disponibles = await sinEnlazarAhora(ambito);
+  // Los identificadores de `disponibles` salen de una conciliación en vivo, así
+  // que ya están probados contra el proveedor: no hace falta pedirle la flota
+  // otra vez por cada alta.
+  const preparada: Vinculacion = { externosValidos: new Set(disponibles.keys()) };
 
   const fallidos: ResultadoLoteExternos["fallidos"] = [];
   const omitidos: string[] = [];
@@ -589,12 +768,16 @@ export async function crearPendientesLote(
       continue;
     }
     try {
-      await crearPendiente(ambito, {
-        externalVehicleId: id,
-        matricula: externo.plate ?? "",
-        bastidor: externo.vin ?? null,
-        externalName: externo.name ?? null,
-      });
+      await crearPendiente(
+        ambito,
+        {
+          externalVehicleId: id,
+          matricula: externo.plate ?? "",
+          bastidor: externo.vin ?? null,
+          externalName: externo.name ?? null,
+        },
+        preparada,
+      );
       hechos++;
     } catch (e) {
       fallidos.push({

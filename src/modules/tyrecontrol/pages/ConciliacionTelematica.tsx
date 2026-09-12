@@ -26,6 +26,24 @@ type Cuadrante = "enlazados" | "soloProveedor" | "soloTyreControl" | "discrepanc
 const CAJA = "rounded-2xl border border-slate-700 bg-slate-800";
 const BOTON = "rounded-lg border px-3 py-1.5 text-xs font-bold disabled:opacity-40";
 
+/**
+ * El método del enlace, legible.
+ *
+ * Importa distinguir `plate_exact` de `automatic_plate_exact`: la regla de
+ * emparejamiento es la misma, pero uno lo confirmó una persona y el otro lo
+ * escribió el repaso quincenal sin que nadie lo mirara. El día que haya que
+ * auditar de dónde salió el kilometraje de un neumático, no valen lo mismo.
+ */
+function metodoLegible(metodo?: string | null): string {
+  switch (metodo) {
+    case "plate_exact": return "matrícula exacta (confirmada)";
+    case "automatic_plate_exact": return "matrícula exacta (automático)";
+    case "manual": return "manual";
+    case "created_from_provider": return "creado desde el proveedor";
+    default: return metodo ?? "—";
+  }
+}
+
 function fechaCorta(ms?: number | null): string {
   if (!ms) return "—";
   return new Date(ms).toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" });
@@ -333,8 +351,17 @@ export default function ConciliacionTelematica() {
                   <Externo v={f.externo} />
                   <div className="text-xs text-slate-400">
                     <div>{cuenta?.accountKey}</div>
-                    <div>método: {f.metodo ?? "—"}</div>
+                    <div>método: {metodoLegible(f.metodo)}</div>
                     <div>visto: {fechaCorta(f.ultimaVezVistoMs)}</div>
+                    {/*
+                      Las matrículas difieren desde que se creó el vínculo:
+                      alguien lo aceptó a sabiendas. Se enseña aquí, discreto, y
+                      NO como discrepancia: repetirla cada quincena es la forma
+                      de que la lista de discrepancias se deje de leer.
+                    */}
+                    {f.diferenciaAceptada && (
+                      <div className="text-slate-500">matrículas distintas, aceptado al vincular</div>
+                    )}
                   </div>
                   <div className="md:text-right">
                     <button
@@ -641,6 +668,28 @@ export default function ConciliacionTelematica() {
                     <AlertTriangle className="h-3.5 w-3.5" />
                     {d.detalle}
                   </div>
+                  {/*
+                    El antes y el ahora de los dos lados. Sin esto, «no
+                    coinciden» obliga a ir a buscar cuál de las dos es la buena,
+                    y la respuesta ya está guardada del momento del enlace.
+                  */}
+                  {d.matriculas && (d.matriculas.snapshotProveedor || d.matriculas.snapshotTyreControl) && (
+                    <div className="mb-3 grid gap-x-6 gap-y-1 font-mono text-[11px] text-slate-400 sm:grid-cols-3">
+                      <div>
+                        <div className="text-slate-500">Al vincular</div>
+                        <div>TC {d.matriculas.snapshotTyreControl ?? "—"}</div>
+                        <div>Prov. {d.matriculas.snapshotProveedor ?? "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-500">TyreControl ahora</div>
+                        <div className="text-slate-200">{d.matriculas.tyrecontrol ?? "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-slate-500">Proveedor ahora</div>
+                        <div className="text-slate-200">{d.matriculas.proveedor ?? "—"}</div>
+                      </div>
+                    </div>
+                  )}
                   <div className="grid gap-3 md:grid-cols-3 md:items-center">
                     <div>{d.interno ? <Interno v={d.interno} /> : <span className="text-slate-500">—</span>}</div>
                     <div>{d.externo ? <Externo v={d.externo} /> : <span className="text-slate-500">—</span>}</div>

@@ -72,6 +72,8 @@ export interface Conciliacion {
     externo: VehiculoProveedor;
     metodo?: string | null;
     ultimaVezVistoMs?: number | null;
+    /** Las matrículas difieren, y difieren desde que se creó el vínculo. */
+    diferenciaAceptada?: boolean;
   }>;
   soloProveedor: Array<{ externo: VehiculoProveedor; propuesta?: VehiculoInterno }>;
   soloTyreControl: Array<{
@@ -82,6 +84,13 @@ export interface Conciliacion {
   discrepancias: Array<{
     motivo: string;
     detalle: string;
+    /** Las cuatro matrículas en juego, para poder enseñar el antes y el ahora. */
+    matriculas?: {
+      snapshotProveedor?: string | null;
+      snapshotTyreControl?: string | null;
+      proveedor?: string | null;
+      tyrecontrol?: string | null;
+    };
     interno?: VehiculoInterno;
     candidatos?: VehiculoInterno[];
     externo?: VehiculoProveedor;
