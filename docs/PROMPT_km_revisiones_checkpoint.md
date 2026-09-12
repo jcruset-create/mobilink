@@ -27,6 +27,52 @@ instante que importa ya es pasado, **y Movertis no sabe decir el odómetro de un
 instante pasado** (`showtrips` devuelve `{time, timeString, pos}`: posiciones,
 sin odómetro ni distancia). Autocares Plana es Movertis.
 
+## Solo una flota tiene arco, y es de Movertis
+
+Esto condiciona todo lo que viene detrás, así que va antes que el diseño.
+
+El CheckPoint está en **una sola flota, y su telemática es Movertis**. Webfleet
+no pinta nada en esta fase. Y toda la detección de base vive hoy en
+`server/webfleetSync.ts`, que escribe en `tc_vehiculo_webfleet_estado`; en
+`server/index.ts` solo se arranca `startWebfleetSync()`. **No hay sync de
+Movertis.**
+
+Consecuencia directa: `webfleetSync.ts` NO es un sitio donde enganchar. Es una
+plantilla de la que copiar el criterio. Lo que hay que escribir —posiciones,
+odómetro, geocerco, estado y transiciones de entrada/salida para Movertis— no
+existe, y es más trabajo que la parte del arco. No es esfuerzo perdido: ese sync
+le hace falta a esa flota de todas formas (panel de bases, `km_actual`, planes
+por km), pero cuenta para el tamaño de la fase.
+
+### Dos requisitos que fallan EN SILENCIO
+
+Compruébalos antes de escribir nada; si faltan, todo lo demás funciona y no
+produce nada.
+
+1. **El geocerco de la base no está puesto.** Las columnas son
+   `tc_delegaciones.webfleet_lat / webfleet_lng / webfleet_radio_m` y se
+   rellenaron para las flotas de Webfleet. Sin lat/lng, `baseContiene` no acierta
+   nunca: todos los vehículos salen `en_ruta` para siempre, no se registra ni una
+   entrada y **no salta ningún error**. Es el primer dato que hay que meter y lo
+   primero que hay que verificar.
+2. **El id del vehículo en Movertis no está donde lo busca la plantilla.**
+   `webfleetSync.ts` lee `tc_vehiculos.webfleet_vehicle_id`; Movertis resuelve
+   por el Hub, con `findExternalCode` sobre `integration_mappings`
+   (`server/integration-hub/infrastructure/repositories.ts:488`). Y eso arrastra
+   algo que no es menor: **son dos bases de datos distintas**. Los mapeos del Hub
+   están en Postgres por `pool`/`db.ts` y el estado de TyreControl en Supabase.
+   Es el mismo acoplamiento por el que `server/tyrecontrol/kilometrajeOperacion.ts`
+   importa el Hub dentro de la función y no arriba: lee su cabecera antes de
+   decidir cómo cruzarlas.
+
+### En qué orden entregar
+
+1. **La red primero** (ver más abajo: odómetro actual + prueba de inmovilidad con
+   `showtrips`). Es lo único que funciona sin sync y sin geocerco, y da km a las
+   revisiones del arco desde el primer día.
+2. **El histórico de estancias después**, que es el que da el dato exacto y
+   confirmado, y que necesita el sync de Movertis por debajo.
+
 ## El dato que lo resuelve: el arco está A LA ENTRADA
 
 El autobús cruza el arco **al terminar servicio** y acto seguido se queda parado
@@ -83,11 +129,18 @@ es el mismo camino con la latencia a cero: no se tira nada.
 2. Abrir y cerrar la estancia donde ya se detecta la transición en
    `webfleetSync.ts` (busca `esNuevaEntrada` y el `previos` que lo alimenta). No
    inventar un segundo detector ni un segundo criterio de base.
-3. Enchufarle a Movertis la misma lógica de geocerco: `showvehicles` trae
-   posición y `counters.odometer`, así que la cuenta es idéntica. Ojo con el
-   nombre `tc_vehiculo_webfleet_estado`: es de Webfleet por historia, no por
-   diseño. Decide si se generaliza o si Movertis escribe en ella, pero no
-   dupliques la lógica.
+3. Sync de Movertis con la misma lógica de geocerco: `showvehicles` trae
+   posición y `counters.odometer`, así que la cuenta es idéntica a la de
+   `webfleetSync.ts`. Cópiale el criterio, no lo reinventes, y ojo con lo que ya
+   hace de más: ventana de antigüedad de la posición, `mismaEstancia` para no
+   reabrir una estancia que sigue, y no contar como entrada nueva una posición
+   vieja (evita alertas falsas con un GPS dormido).
+   Sobre `tc_vehiculo_webfleet_estado`: es de Webfleet por historia, no por
+   diseño. Para el arco no hace falta generalizarla, pero la leen el panel
+   (`src/modules/tyrecontrol/services/data.ts`), la APK
+   (`tyrecontrol_app/lib/services/supabase_service.dart`) y Connect
+   (`server/connect/mobileunits.ts`), y esa flota va a querer su panel de bases
+   igual. Decídelo una vez, con ese motivo, y no dos.
 4. **Regla de casado**, en la importación del arco
    (`server/tyrecontrol/checkpointImport.ts`, el insert de `revisiones_vehiculo`
    sobre la línea 208, y su gemela del panel
@@ -117,11 +170,9 @@ es el mismo camino con la latencia a cero: no se tira nada.
   cambio de unidad o un cambio de dispositivo: se descarta, no se apunta un
   delta negativo.
 
-## Red: preguntar el actual, con prueba de inmovilidad
+## Primer entregable / red: el actual con prueba de inmovilidad
 
-Para la revisión que no tenga estancia con la que casar —las de antes de
-desplegar esto, o un vehículo cuyo geocerco no esté configurado—. Se pregunta el
-odómetro actual y **se demuestra que no se ha movido** desde `medido_at`: aquí
+Se pregunta el odómetro actual y **se demuestra que no se ha movido** desde `medido_at`: aquí
 `showtrips` sirve justo para eso. No tiene odómetro, pero tiene posiciones, así
 que prueba que un vehículo NO se ha movido. El histórico de posiciones es
 inútil para reconstruir kilómetros y perfecto para validar que los de hoy siguen
@@ -131,9 +182,13 @@ siendo los de ayer.
 - Se ha movido → `null` con su motivo, o estimado y marcado como tal. **Nunca**
   el actual disfrazado de exacto.
 
-Con el histórico de estancias en marcha esto es un caso de borde, no el camino
-principal. Y tiene su propia trampa: **los autobuses salen muy temprano**, así
-que si el informe entra a las 08:00 y el autocar salió a las 06:30, la red ya ha
+**Esto es lo primero que se entrega**, no un caso de borde: sin sync de Movertis
+y sin geocerco es lo único que funciona, y no necesita tabla nueva. Cuando el
+histórico de estancias esté en marcha se queda como red para las revisiones que
+no tengan estancia con la que casar —las de antes de desplegarlo, o un vehículo
+cuyo geocerco no esté configurado—.
+
+Tiene su propia trampa: **los autobuses salen muy temprano**, así que si el informe entra a las 08:00 y el autocar salió a las 06:30, la red ya ha
 perdido para esa unidad. Por eso la consulta va **encadenada a la importación**,
 no a una hora fija. Antes de invertir aquí, **mide sobre datos reales cuántas
 unidades siguen en base cuando llega el informe**.
