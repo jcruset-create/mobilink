@@ -559,17 +559,17 @@ describe("vincularLote", () => {
     });
   }
 
-  it("enlaza las propuestas con el método AUTOMÁTICO, distinto del manual", async () => {
+  it("enlaza todas las propuestas, con el método de coincidencia por matrícula", async () => {
     proponer([{ id: "v1", externo: "E1" }, { id: "v2", externo: "E2" }]);
     fingirTablas(vehiculoEn("empresa-A"));
 
-    const r = await vincularLote(AMBITO);
+    const r = await vincularLote(AMBITO, { automatico: false });
 
     expect(r.enlazados).toBe(2);
     expect(r.fallidos).toHaveLength(0);
     expect(upsertMapping).toHaveBeenCalledTimes(2);
     for (const llamada of vi.mocked(upsertMapping).mock.calls) {
-      expect(llamada[0].metadata).toMatchObject({ match_method: "automatic_plate_exact" });
+      expect(llamada[0].metadata).toMatchObject({ match_method: "plate_exact" });
     }
   });
 
@@ -579,7 +579,7 @@ describe("vincularLote", () => {
     proponer([{ id: "v1", externo: "E-DEL-SERVIDOR" }]);
     fingirTablas(vehiculoEn("empresa-A"));
 
-    await vincularLote(AMBITO);
+    await vincularLote(AMBITO, { automatico: false });
 
     expect(vi.mocked(upsertMapping).mock.calls[0][0].externalCode).toBe("E-DEL-SERVIDOR");
   });
@@ -597,7 +597,7 @@ describe("vincularLote", () => {
     });
     fingirTablas(vehiculoEn("empresa-A"));
 
-    const r = await vincularLote(AMBITO);
+    const r = await vincularLote(AMBITO, { automatico: false });
 
     expect(r.enlazados).toBe(1);
     expect(vi.mocked(upsertMapping).mock.calls[0][0].externalCode).toBe("CON");
@@ -607,7 +607,7 @@ describe("vincularLote", () => {
     proponer([{ id: "v1", externo: "E1" }]);
     fingirTablas(vehiculoEn("empresa-A"));
 
-    await expect(vincularLote(AMBITO, { esperados: 615 })).rejects.toMatchObject({
+    await expect(vincularLote(AMBITO, { esperados: 615, automatico: false })).rejects.toMatchObject({
       codigo: "PROPUESTAS_CAMBIARON",
       estado: 409,
     });
@@ -617,13 +617,13 @@ describe("vincularLote", () => {
   it("con el recuento correcto sí procede", async () => {
     proponer([{ id: "v1", externo: "E1" }]);
     fingirTablas(vehiculoEn("empresa-A"));
-    await expect(vincularLote(AMBITO, { esperados: 1 })).resolves.toMatchObject({ enlazados: 1 });
+    await expect(vincularLote(AMBITO, { esperados: 1, automatico: false })).resolves.toMatchObject({ enlazados: 1 });
   });
 
   it("avisa cuando no hay nada que enlazar en vez de decir que sí", async () => {
     proponer([]);
     fingirTablas(vehiculoEn("empresa-A"));
-    await expect(vincularLote(AMBITO)).rejects.toMatchObject({ codigo: "SIN_PROPUESTAS" });
+    await expect(vincularLote(AMBITO, { automatico: false })).rejects.toMatchObject({ codigo: "SIN_PROPUESTAS" });
   });
 
   it("un fallo suelto no tumba el lote: se apunta y se sigue", async () => {
@@ -642,7 +642,7 @@ describe("vincularLote", () => {
       return cadena;
     });
 
-    const r = await vincularLote(AMBITO);
+    const r = await vincularLote(AMBITO, { automatico: false });
     expect(r.enlazados).toBe(2);
     expect(r.fallidos).toHaveLength(0);
   });
@@ -938,6 +938,51 @@ describe("vincular: la cuenta y el vehículo externo se comprueban de verdad", (
  * explícitas y probadas: lo que no cumpla se queda como propuesta o como
  * discrepancia, y no como un enlace que nadie ha visto.
  */
+describe("vincularLote: quién enlaza queda registrado", () => {
+  /*
+   * `vincularLote` la llaman DOS sitios: el repaso quincenal y el botón
+   * «enlazar en bloque» de la pantalla. El método guardado tiene que decir cuál
+   * de los dos fue, porque es lo que se consulta el día que haya que auditar de
+   * dónde salió el kilometraje de un neumático: un vínculo que alguien confirmó
+   * y uno que nadie miró no valen lo mismo.
+   *
+   * Este par de pruebas nace de un fallo real: se puso el método automático a
+   * secas dentro de la función, así que las propuestas que una persona
+   * confirmaba de golpe quedaban registradas como automáticas.
+   */
+  /** Una propuesta lista para enlazar, con la pasada completa. */
+  function unaPropuesta() {
+    fingirConciliacion({
+      soloProveedor: [
+        { externo: { providerVehicleId: "E1", plate: "1234ABC" },
+          propuesta: { id: "v1", matricula: "1234ABC", activo: true, neumaticosMontados: 0 } },
+      ],
+      resumen: RESUMEN_COMPLETO,
+    });
+    fingirTablas(vehiculoEn("empresa-A"));
+  }
+
+  it("el repaso quincenal marca sus enlaces como AUTOMÁTICOS", async () => {
+    unaPropuesta();
+
+    await vincularLote(AMBITO, { automatico: true });
+    expect(vi.mocked(upsertMapping).mock.calls[0][0].metadata).toMatchObject({
+      match_method: "automatic_plate_exact",
+    });
+  });
+
+  it("el botón de la pantalla marca los suyos como CONFIRMADOS", async () => {
+    // Enlazar ciento veintidós propuestas de golpe sigue siendo una decisión
+    // de alguien, y así tiene que constar.
+    unaPropuesta();
+
+    await vincularLote(AMBITO, { automatico: false });
+    expect(vi.mocked(upsertMapping).mock.calls[0][0].metadata).toMatchObject({
+      match_method: "plate_exact",
+    });
+  });
+});
+
 describe("vincularLote: reglas del autoenlace", () => {
   it("NO autoenlaza con una conciliación incompleta", async () => {
     // La regla más importante: una caída del proveedor no puede acabar
@@ -958,7 +1003,7 @@ describe("vincularLote: reglas del autoenlace", () => {
       },
     });
 
-    await expect(vincularLote(AMBITO)).rejects.toMatchObject({
+    await expect(vincularLote(AMBITO, { automatico: false })).rejects.toMatchObject({
       codigo: "CONCILIACION_INCOMPLETA",
       estado: 409,
     });
@@ -979,7 +1024,7 @@ describe("vincularLote: reglas del autoenlace", () => {
       },
     });
 
-    await expect(vincularLote(AMBITO)).rejects.toMatchObject({ codigo: "CONCILIACION_INCOMPLETA" });
+    await expect(vincularLote(AMBITO, { automatico: false })).rejects.toMatchObject({ codigo: "CONCILIACION_INCOMPLETA" });
     expect(upsertMapping).not.toHaveBeenCalled();
   });
 
@@ -997,7 +1042,7 @@ describe("vincularLote: reglas del autoenlace", () => {
       },
     });
 
-    await expect(vincularLote(AMBITO)).rejects.toThrow(/auxiliar/);
+    await expect(vincularLote(AMBITO, { automatico: false })).rejects.toThrow(/auxiliar/);
   });
 
   it("un externo sin propuesta no se autoenlaza, aunque la pasada sea completa", async () => {
@@ -1010,7 +1055,7 @@ describe("vincularLote: reglas del autoenlace", () => {
       resumen: RESUMEN_COMPLETO,
     });
 
-    await expect(vincularLote(AMBITO)).rejects.toMatchObject({ codigo: "SIN_PROPUESTAS" });
+    await expect(vincularLote(AMBITO, { automatico: false })).rejects.toMatchObject({ codigo: "SIN_PROPUESTAS" });
     expect(upsertMapping).not.toHaveBeenCalled();
   });
 
@@ -1029,7 +1074,7 @@ describe("vincularLote: reglas del autoenlace", () => {
       resumen: RESUMEN_COMPLETO,
     });
 
-    const r = await vincularLote(AMBITO);
+    const r = await vincularLote(AMBITO, { automatico: false });
     expect(r.enlazados).toBe(0);
     expect(r.fallidos[0].error).toContain("ya está enlazado");
     expect(upsertMapping).not.toHaveBeenCalled();
