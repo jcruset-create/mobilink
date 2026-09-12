@@ -28,11 +28,13 @@ import { leerFlotaInterna } from "./flota.ts";
 import { leerEstado } from "./estado.ts";
 import {
   crearPendiente,
+  crearPendientesLote,
   darDeBaja,
   dejarDeIgnorar,
   desvincular,
   ErrorConciliacion,
   ignorar,
+  ignorarLote,
   vincular,
   vincularLote,
   type Ambito,
@@ -303,6 +305,50 @@ export function createConciliacionRouter(): Router {
         motivo: req.body?.motivo ?? null,
       });
       res.json({ ok: true, ignorado: fila });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Ignorar en bloque los que se hayan marcado en la pantalla.
+   *
+   * Aquí la lista SÍ viene del navegador, y no es lo mismo que en
+   * `/vincular-lote`: allí el servidor decide qué enlazar y no admite que se lo
+   * digan; aquí es el usuario quien elige uno a uno cuáles aparta, y lo único
+   * que llegan son identificadores.
+   */
+  router.post("/ignorar-lote", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      res.json(await ignorarLote(ambito, {
+        externalVehicleIds: req.body?.externalVehicleIds,
+        motivo: req.body?.motivo ?? null,
+      }));
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Crear en bloque los que se hayan marcado.
+   *
+   * De la petición se toman los identificadores y nada más: la matrícula, el
+   * bastidor y el nombre con los que se da el alta salen de lo que el proveedor
+   * está devolviendo en este momento.
+   */
+  router.post("/crear-vehiculos-lote", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      res.json(await crearPendientesLote(ambito, {
+        externalVehicleIds: req.body?.externalVehicleIds,
+      }));
     } catch (e) {
       fallo(res, e);
     }
