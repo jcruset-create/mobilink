@@ -93,7 +93,9 @@ export class WebfleetConnector implements ITelematicsConnector {
   }
 
   private async credenciales(ctx: OperationContext): Promise<WebfleetCreds | null> {
-    return (await resolverCredencialesWebfleet(ctx.tenantId)).creds;
+    // La cuenta entra en la resolución: con dos cuentas del mismo cliente, cada
+    // una tiene su usuario y su contraseña.
+    return (await resolverCredencialesWebfleet(ctx.tenantId, this.config.accountKey)).creds;
   }
 
   /**
@@ -161,7 +163,7 @@ export class WebfleetConnector implements ITelematicsConnector {
   }
 
   async testConnection(ctx: OperationContext): Promise<{ ok: boolean; message: string }> {
-    const { creds, origen } = await resolverCredencialesWebfleet(ctx.tenantId);
+    const { creds, origen } = await resolverCredencialesWebfleet(ctx.tenantId, this.config.accountKey);
     if (!creds) {
       return { ok: false, message: "Webfleet sin credenciales por ninguna vía (gestor, tabla ni globales)." };
     }

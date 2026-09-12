@@ -80,9 +80,10 @@ la información de las flotas no puede mezclarse. Esto es lo que hay:
    comentario de `upsertConnectorConfig` ya pone «Plana autobuses» como ejemplo).
    `resolveTelematicsConnectors(tenantId)` devuelve todas las cuentas habilitadas
    de ese tenant con su `accountKey`.
-2. Las credenciales no están en la BD ni en el código, y son por tenant:
-   `IH_SECRET__<TENANT>__<CONNECTOR>__<NAME>` con fallback global del conector
-   (`server/integration-hub/infrastructure/secrets.ts`).
+2. Las credenciales no están en la BD ni en el código, y son por tenant Y por
+   cuenta: `IH_SECRET__<TENANT>__<CONNECTOR>__<CUENTA>__<NAME>`, con fallback al
+   secreto del cliente (`…__<CONNECTOR>__<NAME>`) y después al global del
+   conector (`server/integration-hub/infrastructure/secrets.ts`).
 3. El mapeo de vehículos también es por tenant y cuenta: `integration_mappings`
    por `(tenant_id, entity_type, system, account_key, mobilink_id)`
    (`findExternalCode`). Aunque las credenciales fueran las equivocadas, un
