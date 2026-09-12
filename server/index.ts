@@ -57,6 +57,7 @@ import {
 } from "./tyrecontrol/webfleetCredenciales.ts";
 import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { createConciliacionRouter } from "./tyrecontrol/conciliacion/router.ts";
+import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
 import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
@@ -19277,6 +19278,10 @@ initDb()
       // Mobilink Cash: eventos de dominio hacia MC Central. Sin transporte
       // registrado no hace nada: la cola espera destino (fase 3).
       startCashEventWorker();
+      // Repaso quincenal de la flota telemática: enlaza las coincidencias
+      // exactas, guarda el recuento que ve el menú y avisa por correo. La
+      // cadencia sale de la marca guardada, no de este arranque.
+      startConciliacionQuincenal();
     });
   })
   .catch((error) => {

@@ -430,6 +430,16 @@ export interface ResumenConciliacion {
 
 export interface ResultadoConciliacion extends Cuadrantes {
   resumen: ResumenConciliacion;
+  /**
+   * Identificadores de TODO lo que devolvieron las cuentas que contestaron.
+   *
+   * No se deduce de los cuadrantes: los ignorados no aparecen en ninguno, y sin
+   * ellos una lista de externos «vistos» se quedaría corta y el proceso
+   * quincenal los contaría como bajas cada quince días. Aquí está la respuesta
+   * cruda del proveedor, que es lo único con lo que tiene sentido comparar una
+   * pasada con la siguiente.
+   */
+  externosVistos: string[];
 }
 
 /** Cuenta los cuadrantes y decide si la conciliación es de fiar. */

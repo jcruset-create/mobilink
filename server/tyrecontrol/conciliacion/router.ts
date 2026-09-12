@@ -25,6 +25,7 @@ import { normalizarMatricula } from "../matricula.ts";
 import { conciliarFlota } from "../../integration-hub/application/services/VehicleReconciliationService.ts";
 import { listIgnoredExternals, nextCorrelationId } from "../../integration-hub/infrastructure/repositories.ts";
 import { leerFlotaInterna } from "./flota.ts";
+import { leerEstado } from "./estado.ts";
 import {
   crearPendiente,
   darDeBaja,
@@ -156,6 +157,40 @@ export function createConciliacionRouter(): Router {
           accountKey: c.accountKey,
           nombre: c.nombre,
         })),
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Contadores de la ÚLTIMA conciliación guardada. No pregunta al proveedor.
+   *
+   * Es lo que alimenta el distintivo del menú, y por eso tiene que ser barato:
+   * conciliar de verdad descarga la flota entera del proveedor, y eso no puede
+   * pasar cada vez que alguien abre una pantalla cualquiera del panel.
+   */
+  router.get("/pendientes", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+
+      const estado = await leerEstado(empresaId);
+      if (!estado) {
+        return res.json({ empresaId, hayDatos: false, total: 0 });
+      }
+      const total =
+        estado.pendientes.soloProveedor +
+        estado.pendientes.soloTyreControl +
+        estado.pendientes.discrepancias;
+      res.json({
+        empresaId,
+        hayDatos: true,
+        total,
+        pendientes: estado.pendientes,
+        status: estado.status,
+        ejecutadoMs: estado.ejecutadoMs,
       });
     } catch (e) {
       fallo(res, e);

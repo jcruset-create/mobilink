@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { Menu, LogOut, Home } from "lucide-react";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
@@ -7,6 +7,7 @@ import { ROL_LABELS } from "../types";
 import AlertasWebfleet from "../components/AlertasWebfleet";
 import AsistenteChat from "../components/AsistenteChat";
 import AccesosCabecera from "../../../components/AccesosCabecera";
+import { pendientes } from "../services/conciliacion";
 
 export default function TyreLayout() {
   const { perfil, pantallas, signOut } = useTyreAuth();
@@ -16,6 +17,28 @@ export default function TyreLayout() {
 
   const esSuperadmin = Boolean(perfil?.es_superadmin);
   const items = NAV.filter((i) => navVisible(i, perfil?.rol, esSuperadmin, pantallas));
+
+  /*
+   * Distintivo de la conciliación telemática.
+   *
+   * Lee los contadores GUARDADOS por el repaso quincenal, no concilia: una
+   * conciliación de verdad descarga la flota entera del proveedor, y eso no
+   * puede pasar cada vez que alguien entra en el panel. Si no hay ninguna
+   * pasada todavía, no se enseña nada: un cero daría a entender que se ha
+   * comprobado y está todo al día.
+   */
+  const verConciliacion = items.some((i) => i.key === "conciliacion-telematica");
+  const [porRevisar, setPorRevisar] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!verConciliacion) return;
+    let vivo = true;
+    pendientes()
+      .then((p) => { if (vivo) setPorRevisar(p.hayDatos ? p.total : null); })
+      // Un contador que no carga no es motivo para romper el menú.
+      .catch(() => { if (vivo) setPorRevisar(null); });
+    return () => { vivo = false; };
+  }, [verConciliacion]);
 
   // Gating por URL (usuarios unificados): bloquea también el acceso directo
   const pantallaActual = location.pathname.split("/")[2] || "dashboard";
@@ -87,7 +110,16 @@ export default function TyreLayout() {
                     }`
                   }
                 >
-                  <Icon className="h-4 w-4" /> {item.label}
+                  <Icon className="h-4 w-4" />
+                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                  {item.key === "conciliacion-telematica" && porRevisar ? (
+                    <span
+                      title={`${porRevisar} vehículos por revisar en la última conciliación`}
+                      className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-slate-900"
+                    >
+                      {porRevisar > 99 ? "99+" : porRevisar}
+                    </span>
+                  ) : null}
                 </NavLink>
               );
             })}
