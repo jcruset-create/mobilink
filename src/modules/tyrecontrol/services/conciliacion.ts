@@ -117,12 +117,51 @@ export function conciliar(params: { empresaId?: string; connectorKey: string; ac
   return pedir<Conciliacion>(`/?${q.toString()}`);
 }
 
+/**
+ * Contadores de la última conciliación guardada.
+ *
+ * No dispara una conciliación: devuelve lo que dejó la última, que es lo que
+ * puede permitirse el distintivo del menú. Puede no haber ninguna todavía.
+ */
+export interface Pendientes {
+  empresaId: string;
+  hayDatos: boolean;
+  total: number;
+  pendientes?: { soloProveedor: number; soloTyreControl: number; discrepancias: number };
+  status?: EstadoSincronizacion;
+  ejecutadoMs?: number;
+}
+
+export function pendientes(empresaId?: string) {
+  const q = empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : "";
+  return pedir<Pendientes>(`/pendientes${q}`);
+}
+
 const post = <T,>(ruta: string, cuerpo: unknown) =>
   pedir<T>(ruta, { method: "POST", body: JSON.stringify(cuerpo) });
 
 export const vincular = (b: Record<string, unknown>) => post<{ ok: true }>("/vincular", b);
 export const desvincular = (b: Record<string, unknown>) => post<{ ok: true }>("/desvincular", b);
+export const vincularLote = (b: Record<string, unknown>) =>
+  post<{
+    ok: true;
+    enlazados: number;
+    fallidos: Array<{ tcVehicleId: string; externalVehicleId: string; error: string }>;
+  }>("/vincular-lote", b);
 export const ignorar = (b: Record<string, unknown>) => post<{ ok: true }>("/ignorar", b);
+
+/** Resultado de un lote elegido a mano en la pantalla. */
+export interface ResultadoLoteExternos {
+  hechos: number;
+  fallidos: Array<{ externalVehicleId: string; error: string }>;
+  /** Pedidos que el proveedor ya no devuelve. */
+  omitidos: string[];
+}
+
+export const ignorarLote = (b: Record<string, unknown>) =>
+  post<ResultadoLoteExternos>("/ignorar-lote", b);
+export const crearVehiculosLote = (b: Record<string, unknown>) =>
+  post<ResultadoLoteExternos>("/crear-vehiculos-lote", b);
 export const dejarDeIgnorar = (b: Record<string, unknown>) => post<{ ok: true }>("/dejar-de-ignorar", b);
 export const crearVehiculo = (b: Record<string, unknown>) =>
   post<{ ok: true; vehiculo: { id: string; matricula: string } }>("/crear-vehiculo", b);

@@ -25,14 +25,18 @@ import { normalizarMatricula } from "../matricula.ts";
 import { conciliarFlota } from "../../integration-hub/application/services/VehicleReconciliationService.ts";
 import { listIgnoredExternals, nextCorrelationId } from "../../integration-hub/infrastructure/repositories.ts";
 import { leerFlotaInterna } from "./flota.ts";
+import { leerEstado } from "./estado.ts";
 import {
   crearPendiente,
+  crearPendientesLote,
   darDeBaja,
   dejarDeIgnorar,
   desvincular,
   ErrorConciliacion,
   ignorar,
+  ignorarLote,
   vincular,
+  vincularLote,
   type Ambito,
 } from "./acciones.ts";
 
@@ -161,6 +165,40 @@ export function createConciliacionRouter(): Router {
     }
   });
 
+  /**
+   * Contadores de la ÚLTIMA conciliación guardada. No pregunta al proveedor.
+   *
+   * Es lo que alimenta el distintivo del menú, y por eso tiene que ser barato:
+   * conciliar de verdad descarga la flota entera del proveedor, y eso no puede
+   * pasar cada vez que alguien abre una pantalla cualquiera del panel.
+   */
+  router.get("/pendientes", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+
+      const estado = await leerEstado(empresaId);
+      if (!estado) {
+        return res.json({ empresaId, hayDatos: false, total: 0 });
+      }
+      const total =
+        estado.pendientes.soloProveedor +
+        estado.pendientes.soloTyreControl +
+        estado.pendientes.discrepancias;
+      res.json({
+        empresaId,
+        hayDatos: true,
+        total,
+        pendientes: estado.pendientes,
+        status: estado.status,
+        ejecutadoMs: estado.ejecutadoMs,
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
   /** La conciliación. Solo lee TyreControl; lo único que escribe es last_seen. */
   router.get("/", async (req, res) => {
     try {
@@ -220,6 +258,26 @@ export function createConciliacionRouter(): Router {
     }
   });
 
+  /**
+   * Vincula de golpe todas las coincidencias exactas de matrícula.
+   *
+   * NO recibe la lista: la recalcula el servidor. Lo que llega del navegador es
+   * solo cuántas creía ver, para poder rechazar una pantalla desfasada.
+   */
+  router.post("/vincular-lote", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      const esperados =
+        req.body?.esperados === undefined ? undefined : Number(req.body.esperados);
+      res.json({ ok: true, ...(await vincularLote(ambito, { esperados })) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
   router.post("/desvincular", async (req, res) => {
     try {
       const { solicitante } = req as PeticionConciliacion;
@@ -247,6 +305,50 @@ export function createConciliacionRouter(): Router {
         motivo: req.body?.motivo ?? null,
       });
       res.json({ ok: true, ignorado: fila });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Ignorar en bloque los que se hayan marcado en la pantalla.
+   *
+   * Aquí la lista SÍ viene del navegador, y no es lo mismo que en
+   * `/vincular-lote`: allí el servidor decide qué enlazar y no admite que se lo
+   * digan; aquí es el usuario quien elige uno a uno cuáles aparta, y lo único
+   * que llegan son identificadores.
+   */
+  router.post("/ignorar-lote", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      res.json(await ignorarLote(ambito, {
+        externalVehicleIds: req.body?.externalVehicleIds,
+        motivo: req.body?.motivo ?? null,
+      }));
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Crear en bloque los que se hayan marcado.
+   *
+   * De la petición se toman los identificadores y nada más: la matrícula, el
+   * bastidor y el nombre con los que se da el alta salen de lo que el proveedor
+   * está devolviendo en este momento.
+   */
+  router.post("/crear-vehiculos-lote", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const empresaId = empresaDe(solicitante, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const ambito = ambitoDe(empresaId, req.body);
+      res.json(await crearPendientesLote(ambito, {
+        externalVehicleIds: req.body?.externalVehicleIds,
+      }));
     } catch (e) {
       fallo(res, e);
     }

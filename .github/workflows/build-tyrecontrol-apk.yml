@@ -183,6 +183,20 @@ jobs:
           BUILD="${{ steps.ver.outputs.build }}"
           RAMA="${{ github.ref_name }}"
 
+          # La rama puede haber desaparecido mientras compilábamos: al mergear
+          # una PR, GitHub borra la rama de origen. Entonces no hay dónde
+          # guardar la versión, y eso NO es un error —la APK está publicada y
+          # el número de build sale de github.run_number, que nunca se repite,
+          # así que no se pierde nada—. Antes el `git fetch` de abajo moría con
+          # "couldn't find remote ref" y tumbaba el job entero, dejando en rojo
+          # un build que había ido bien.
+          if ! git ls-remote --exit-code --heads origin "$RAMA" >/dev/null 2>&1; then
+            echo "La rama $RAMA ya no existe en el remoto (lo normal tras mergear" \
+                 "su PR). No hay dónde guardar $NOMBRE+$BUILD; la release está" \
+                 "publicada y el build $BUILD no se reutiliza."
+            exit 0
+          fi
+
           for INTENTO in 1 2 3 4; do
             git fetch -q origin "$RAMA"
             # La punta de verdad, limpia. Tira pubspec.lock y lo que haya
@@ -201,6 +215,13 @@ jobs:
             git commit -q -m "chore(tyrecontrol): version $NOMBRE+$BUILD [skip ci]"
             if git push -q origin "HEAD:$RAMA"; then
               echo "Guardada la versión $NOMBRE+$BUILD en $RAMA (intento $INTENTO)."
+              exit 0
+            fi
+            # O alguien ha empujado, o la rama se ha borrado justo ahora. Lo
+            # segundo no tiene arreglo ni hace falta: no se avisa de un
+            # problema que no existe.
+            if ! git ls-remote --exit-code --heads origin "$RAMA" >/dev/null 2>&1; then
+              echo "La rama $RAMA se ha borrado mientras se guardaba la versión: nada que hacer."
               exit 0
             fi
             echo "Push rechazado (intento $INTENTO): alguien ha empujado a $RAMA entre medias. Se repite sobre la punta nueva."

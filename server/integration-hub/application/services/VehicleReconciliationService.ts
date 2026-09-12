@@ -145,6 +145,7 @@ export async function conciliarFlota(
     };
     return {
       ...vacios,
+      externosVistos: [],
       resumen: resumir({
         cuadrantes: vacios,
         cuentas: [],
@@ -245,6 +246,7 @@ export async function conciliarFlota(
 
   return {
     ...cuadrantes,
+    externosVistos: externos.map((v) => v.providerVehicleId),
     resumen: resumir({
       cuadrantes,
       cuentas: resultadoCuentas,
