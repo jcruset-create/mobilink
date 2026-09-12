@@ -64,6 +64,7 @@ import { etiquetaMatricula, matriculasDe } from "../modules/roadsideMatricula";
 import { filtrar as filtrarAsistencias, hayCriterios } from "../modules/roadsideFiltro";
 import SubcontratacionExterna from "./SubcontratacionExterna";
 import TimelineAsistencia from "./TimelineAsistencia";
+import KilometrosDelRastro from "./KilometrosDelRastro";
 import ExpedienteAdministrativo from "./ExpedienteAdministrativo";
 import TyreControlVehiculo from "./TyreControlVehiculo";
 import SatisfactionSummaryCard from "./SatisfactionSummaryCard";
@@ -3186,6 +3187,17 @@ export default function RoadsideAssistanceView({
                 {editingAssistance && (
                   <div className="md:col-span-2">
                     <TimelineAsistencia assistanceId={editingAssistance.id} />
+                  </div>
+                )}
+
+                {/* Los kilómetros que dice el rastro del móvil del técnico:
+                    el mismo cálculo que usa Assist Central Pro. */}
+                {editingAssistance && (
+                  <div className="md:col-span-2">
+                    <KilometrosDelRastro
+                      assistanceId={editingAssistance.id}
+                      serviceKm={(editingAssistance as any).serviceKm ?? null}
+                    />
                   </div>
                 )}
 

@@ -8,7 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  calcularRecorrido, PRECISION_MAXIMA_M, TRAMO_MINIMO_M, type PuntoRastro,
+  calcularRecorrido, conEstadoDelHistorial, PRECISION_MAXIMA_M, TRAMO_MINIMO_M,
+  type PuntoRastro,
 } from "./recorrido.ts";
 
 const T0 = Date.parse("2026-09-11T17:49:00+02:00");
@@ -114,5 +115,43 @@ describe("kilómetros del rastro", () => {
     ]);
     expect(r.ida).toBeCloseTo(5, 1);
     expect(r.trabajo).toBe(0);
+  });
+});
+
+describe("el rastro de Assist toma el estado del historial", () => {
+  it("cada punto hereda el estado del último cambio anterior", () => {
+    // Rastro denso, como el real: un punto cada pocos segundos.
+    const puntos: PuntoRastro[] = [
+      punto(0, 0, { status: null }),
+      // Ida: 5 km entre el minuto 5 y el 20
+      ...Array.from({ length: 6 }, (_, i) => punto(i * 1000, 300 + i * 120, { status: null })),
+      // Quieto en el punto de servicio
+      punto(5000, 1500, { status: null }),
+      // Vuelta: 5 km entre el minuto 40 y el 50
+      ...Array.from({ length: 6 }, (_, i) => punto(5000 - i * 1000, 2400 + i * 120, { status: null })),
+    ];
+    const conEstado = conEstadoDelHistorial(puntos, [
+      { status: "asignada", ts: T0 - 60_000 },
+      { status: "en_camino", ts: T0 + 300 * 1000 },
+      { status: "en_punto", ts: T0 + 1200 * 1000 },
+      { status: "en_camino_base", ts: T0 + 2400 * 1000 },
+    ]);
+
+    expect(conEstado[0].status).toBe("asignada");
+    expect(conEstado[conEstado.length - 1].status).toBe("en_camino_base");
+
+    const r = calcularRecorrido(conEstado);
+    expect(r.ida).toBeGreaterThan(4);
+    expect(r.vuelta).toBeGreaterThan(3);
+    // Ida y vuelta son 10 km; el reparto exacto entre tramos puede bailar un
+    // segmento en cada cambio de estado, que en un rastro real son metros.
+    expect(r.total).toBeCloseTo(10, 0);
+  });
+
+  it("un punto anterior a cualquier cambio se queda sin estado, no se inventa", () => {
+    const [p] = conEstadoDelHistorial([punto(0, 0)], [
+      { status: "en_camino", ts: T0 + 60_000 },
+    ]);
+    expect(p.status).toBeNull();
   });
 });

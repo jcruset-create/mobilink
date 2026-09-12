@@ -168,6 +168,30 @@ export function calcularRecorrido(puntos: PuntoRastro[]): Recorrido {
 }
 
 /**
+ * Reparte los puntos por el estado en que estaba la asistencia a esa hora.
+ *
+ * El rastro de la app del técnico de Assist solo guarda punto y hora: no
+ * lleva el estado dentro, como sí hace el de Lite. Pero el historial de
+ * estados tiene la hora de cada cambio, así que el estado de un punto es el
+ * del último cambio anterior a él. Con eso sale el mismo desglose —ida,
+ * trabajo, vuelta— sin tocar la app ni pedirle nada más al técnico.
+ */
+export function conEstadoDelHistorial(
+  puntos: PuntoRastro[],
+  historial: Array<{ status: string; ts: number }>,
+): PuntoRastro[] {
+  const cambios = [...historial].sort((a, b) => a.ts - b.ts);
+  return puntos.map((p) => {
+    let estado: string | null = null;
+    for (const c of cambios) {
+      if (c.ts > p.ts) break;
+      estado = c.status;
+    }
+    return { ...p, status: estado };
+  });
+}
+
+/**
  * El rastro de una asistencia de Connect.
  *
  * Se mira primero el de Lite, que es el completo —lleva precisión y el estado
@@ -202,21 +226,41 @@ export async function recorridoDeAsistencia(
   }
 
   const core = await db.query(
-    `SELECT t.lat, t.lng, t.ts
-       FROM roadside_operator_track t
-       JOIN connect_assistances ca ON ca."coreAssistanceId" = t."assistanceId"
-      WHERE ca.id = $1
-      ORDER BY t.ts`,
+    `SELECT ca."coreAssistanceId" AS id FROM connect_assistances ca WHERE ca.id = $1`,
     [assistanceId],
   );
-  if (core.rows.length > 0) {
-    return {
-      ...calcularRecorrido(core.rows.map((r: any) => ({
-        lat: Number(r.lat), lng: Number(r.lng), ts: Number(r.ts),
-      }))),
-      origen: "assist",
-    };
+  const coreId = core.rows[0]?.id;
+  if (coreId != null) {
+    const r = await recorridoDeAsistenciaCore(Number(coreId));
+    if (r.puntos > 0) return { ...r, origen: "assist" };
   }
 
   return { ...calcularRecorrido([]), origen: "sin_rastro" };
+}
+
+/**
+ * El rastro de una asistencia de Mobilink Assist, por su id del core.
+ *
+ * Sirve tanto al panel de Assist como al espejo de Connect: es el mismo
+ * rastro y el mismo criterio, y tenerlo en un solo sitio evita que dentro de
+ * un año los dos paneles enseñen kilómetros distintos del mismo servicio.
+ */
+export async function recorridoDeAsistenciaCore(coreAssistanceId: number): Promise<Recorrido> {
+  const db = (await import("../db.ts")).default;
+  const [puntos, historial] = await Promise.all([
+    db.query(
+      `SELECT lat, lng, ts FROM roadside_operator_track
+        WHERE "assistanceId" = $1 ORDER BY ts`,
+      [coreAssistanceId],
+    ),
+    db.query(
+      `SELECT status, "createdAtMs" AS ts FROM roadside_assistance_events
+        WHERE "assistanceId" = $1 ORDER BY "createdAtMs"`,
+      [coreAssistanceId],
+    ),
+  ]);
+  return calcularRecorrido(conEstadoDelHistorial(
+    puntos.rows.map((r: any) => ({ lat: Number(r.lat), lng: Number(r.lng), ts: Number(r.ts) })),
+    historial.rows.map((r: any) => ({ status: String(r.status), ts: Number(r.ts) })),
+  ));
 }
