@@ -178,14 +178,27 @@ describe.skipIf(!RUN)("Documentos y estado administrativo", () => {
   it("la factura de un proveedor NO sale hacia la contraparte", async () => {
     const propios = await svc.listarDocumentos("assist", asistenciaSubcontratada, "propio");
     expect(propios.map((d) => d.tipo)).toContain("factura");
+    // El importe SÍ está de este lado: sin esto, la comprobación de abajo
+    // pasaría igual aunque nadie estuviera guardando importes, y entonces no
+    // estaría demostrando nada.
+    expect(propios.map((d) => d.amount)).toContain(120);
 
     const deLaContraparte = await svc.listarDocumentos(
       "assist", asistenciaSubcontratada, "contraparte", CORR);
     expect(deLaContraparte.map((d) => d.tipo)).not.toContain("factura");
     expect(deLaContraparte.map((d) => d.tipo)).toContain("albaran");
 
-    // Y el importe no viaja por ningún lado.
-    expect(JSON.stringify(deLaContraparte)).not.toContain("120");
+    /*
+     * Y el importe no viaja por ningún lado.
+     *
+     * Se mira el CAMPO, no una subcadena del JSON entero. Buscar «120» dentro
+     * de todo el serializado tumbaba la prueba a lo tonto cada vez que un
+     * uuid aleatorio o la marca de tiempo llevaban esos tres dígitos seguidos:
+     * medido, pasa en un 1,3 % de las ejecuciones, y ya tiró una de CI con el
+     * código sano. Así además se comprueba algo más fuerte que antes: que NO
+     * cruza ningún importe, no solo que no cruza ese.
+     */
+    expect(deLaContraparte.filter((d) => d.amount != null)).toEqual([]);
   });
 
   it("el cliente final solo ve lo suyo: albarán y parte", async () => {
