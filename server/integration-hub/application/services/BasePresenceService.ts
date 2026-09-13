@@ -52,6 +52,20 @@ export interface VehiculoConBase {
   /** Delegación asignada, si tiene. Sirve para distinguir «su base» de otra. */
   delegacionId: string | null;
   activo: boolean;
+  /**
+   * Un enlace con el proveedor que quien llama YA conocía, sin pasar por el Hub.
+   *
+   * Existe por los clientes de Webfleet de toda la vida: su vínculo vive en
+   * `tc_vehiculos.webfleet_vehicle_id` desde antes de que hubiera Hub, y la
+   * sincronización de siempre lo usa cada cinco minutos. Exigirles conciliar
+   * la flota otra vez solo para aparecer en esta pantalla sería pedirles que
+   * rehagan un trabajo que ya está hecho, y dejaría la pantalla vacía hasta
+   * que alguien lo hiciera.
+   *
+   * El enlace del Hub MANDA sobre este: si alguien concilió de verdad, esa es
+   * la vinculación buena. Este es el respaldo para quien no lo ha hecho.
+   */
+  enlaceHeredado?: { connectorKey: string; externo: string } | null;
 }
 
 /** Las bases (geo-zonas) de la empresa. Lo implementa TyreControl. */
@@ -144,6 +158,31 @@ function contadorVacio(): Record<EstadoPresencia, number> {
 }
 
 /**
+ * El enlace que traía el propio vehículo, colocado en su cuenta.
+ *
+ * Solo se usa cuando el Hub no tiene enlace para ese vehículo, y solo si el
+ * proveedor tiene una única cuenta consultada: un `webfleet_vehicle_id` no
+ * dice a qué cuenta pertenece, y con dos plataformas del mismo proveedor
+ * adivinar significaría preguntar por el vehículo equivocado.
+ */
+function enlaceHeredadoDe(
+  v: VehiculoConBase,
+  cuentasPorConector: Map<string, string[]>,
+): { clave: string; externo: string; connectorKey: string; accountKey: string } | undefined {
+  const h = v.enlaceHeredado;
+  if (!h || !h.externo) return undefined;
+  const cuentas = cuentasPorConector.get(h.connectorKey);
+  if (!cuentas || cuentas.length !== 1) return undefined;
+  const clave = cuentas[0];
+  return {
+    clave,
+    externo: h.externo,
+    connectorKey: h.connectorKey,
+    accountKey: clave.slice(h.connectorKey.length + 2),
+  };
+}
+
+/**
  * Barre la flota de un cliente y dice quién está en base.
  *
  * `ctx.tenantId` es la empresa, y de ahí no se sale: las bases se filtran por
@@ -202,6 +241,17 @@ export async function barrerPresenciaBases(
    * de discrecionales sin tocar a la otra.
    */
   const umbralPorCuenta = new Map<string, number>();
+
+  // Cuentas por proveedor, para poder colocar los enlaces heredados: uno de
+  // esos no dice de qué cuenta es, así que solo se puede usar cuando el
+  // proveedor tiene UNA sola cuenta consultada. Con dos, elegir sería apostar
+  // a qué plataforma pertenece el vehículo.
+  const cuentasPorConector = new Map<string, string[]>();
+  for (const c of conectores) {
+    const lista = cuentasPorConector.get(c.key) ?? [];
+    lista.push(`${c.key}::${c.accountKey}`);
+    cuentasPorConector.set(c.key, lista);
+  }
 
   for (const c of conectores) {
     const clave = `${c.key}::${c.accountKey}`;
@@ -280,7 +330,7 @@ export async function barrerPresenciaBases(
     // y llenar la pantalla con ellos esconde a los que sí.
     if (!v.activo) continue;
 
-    const enlace = enlacePorVehiculo.get(v.id);
+    const enlace = enlacePorVehiculo.get(v.id) ?? enlaceHeredadoDe(v, cuentasPorConector);
     // Vehículo de una cuenta que ha fallado: no se toca. Su fila anterior sigue
     // siendo lo último que se supo, y eso es más útil que un «no se sabe».
     if (enlace && cuentasCaidas.has(enlace.clave)) {
