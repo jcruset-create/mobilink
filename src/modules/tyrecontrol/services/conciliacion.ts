@@ -57,6 +57,8 @@ export interface Resumen {
   providerVehicleCount: number;
   tyrecontrolVehicleCount: number;
   tyrecontrolUnknownCount: number;
+  /** Vehículos de baja apartados: no están en ningún cuadrante, a propósito. */
+  tyrecontrolInactiveCount: number;
   linkedCount: number;
   providerOnlyCount: number;
   tyrecontrolOnlyCount: number;
@@ -98,6 +100,8 @@ export interface Conciliacion {
   }>;
   /** Vehículos sobre los que la conciliación no dice nada. No es un cuadrante. */
   noEvaluados: VehiculoInterno[];
+  /** Los dados de baja a los que el proveedor no reclama. Se apartan. */
+  bajas: VehiculoInterno[];
   ignorados: Array<{ externalVehicleId: string; motivo?: string | null; desde: number }>;
 }
 

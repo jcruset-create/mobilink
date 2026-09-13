@@ -191,15 +191,75 @@ describe("los cuatro cuadrantes", () => {
     expect(r.soloTyreControl[0].externoAnterior).toBe("NUEVO");
   });
 
-  it("un vehículo de TyreControl inactivo que reaparece se propone igual", () => {
-    // Un inactivo que vuelve a emitir es información, no ruido: por eso se
-    // clasifica en vez de descartarse.
+  it("un vehículo de TyreControl de baja que reaparece se AVISA, no se propone", () => {
+    // Esta prueba decía antes lo contrario: que se proponía igual, «porque un
+    // inactivo que vuelve a emitir es información». Lo es, pero proponerlo lo
+    // metía en el enlace en bloque y acababa enlazando vehículos retirados sin
+    // que nadie lo mirara. Sigue siendo información; ahora se da como aviso.
     const r = clasificar(
       [externo({ providerVehicleId: "E1", plate: "1234ABC" })],
       [interno({ id: "v1", matricula: "1234ABC", activo: false })],
     );
-    expect(r.soloProveedor[0].propuesta?.id).toBe("v1");
-    expect(r.soloProveedor[0].propuesta?.activo).toBe(false);
+    expect(r.soloProveedor).toHaveLength(0);
+    expect(r.discrepancias).toHaveLength(1);
+    expect(r.discrepancias[0].motivo).toBe(MOTIVOS_DISCREPANCIA.INTERNO_DE_BAJA);
+    expect(r.discrepancias[0].interno?.id).toBe("v1");
+    expect(r.discrepancias[0].externo?.providerVehicleId).toBe("E1");
+    // Y no reaparece además como «solo en TyreControl».
+    expect(r.soloTyreControl).toHaveLength(0);
+  });
+
+  it("una baja a la que nadie reclama se aparta: no es «solo en TyreControl»", () => {
+    // Era la queja de la pantalla: 98 «solo en TyreControl» llenos de
+    // histórico. Un vehículo retirado que ya no está en la telemática no tiene
+    // nada que conciliar.
+    const r = clasificar(
+      [],
+      [interno({ id: "v1", matricula: "1234ABC" }), interno({ id: "v2", matricula: "5678DEF", activo: false })],
+    );
+    expect(r.soloTyreControl.map((f) => f.interno.id)).toEqual(["v1"]);
+    expect(r.bajas.map((v) => v.id)).toEqual(["v2"]);
+    expect(r.discrepancias).toHaveLength(0);
+  });
+
+  it("una baja ENLAZADA que el proveedor sigue viendo se avisa, y no cuenta como enlazada", () => {
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "1234ABC" })],
+      [interno({ id: "v1", matricula: "1234ABC", activo: false })],
+      [{ mobilinkId: "v1", externalCode: "E1", activo: true }],
+    );
+    expect(r.enlazados).toHaveLength(0);
+    expect(r.discrepancias[0].motivo).toBe(MOTIVOS_DISCREPANCIA.INTERNO_DE_BAJA);
+    expect(r.discrepancias[0].enlace?.externalCode).toBe("E1");
+  });
+
+  it("una baja NO crea ambigüedad cuando hay un activo con la misma matrícula", () => {
+    // El bueno es el activo y se resuelve solo; dejar que el retirado creara
+    // ambigüedad mandaba a discrepancias un caso que no la tiene.
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "1234ABC" })],
+      [
+        interno({ id: "vivo", matricula: "1234ABC" }),
+        interno({ id: "muerto", matricula: "1234ABC", activo: false }),
+      ],
+    );
+    expect(r.discrepancias).toHaveLength(0);
+    expect(r.soloProveedor[0].propuesta?.id).toBe("vivo");
+    expect(r.bajas.map((v) => v.id)).toEqual(["muerto"]);
+  });
+
+  it("dos bajas con la misma matrícula se avisan juntas, sin proponer ninguna", () => {
+    const r = clasificar(
+      [externo({ providerVehicleId: "E1", plate: "1234ABC" })],
+      [
+        interno({ id: "b1", matricula: "1234ABC", activo: false }),
+        interno({ id: "b2", matricula: "1234ABC", activo: false }),
+      ],
+    );
+    expect(r.soloProveedor).toHaveLength(0);
+    expect(r.discrepancias[0].motivo).toBe(MOTIVOS_DISCREPANCIA.INTERNO_DE_BAJA);
+    expect(r.discrepancias[0].candidatos?.map((c) => c.id)).toEqual(["b1", "b2"]);
+    expect(r.discrepancias[0].interno).toBeUndefined();
   });
 
   it("un externo ignorado desaparece de la lista sin tocar nada más", () => {
@@ -278,8 +338,20 @@ describe("enlaces rotos", () => {
 });
 
 describe("resumen y estado de la sincronización", () => {
-  const vacio = { enlazados: [], soloProveedor: [], soloTyreControl: [], discrepancias: [] };
+  const vacio = { enlazados: [], soloProveedor: [], soloTyreControl: [], discrepancias: [], noEvaluados: [], bajas: [] };
   const fechas = { startedAt: new Date(0), completedAt: new Date(1000) };
+
+  it("las bajas apartadas se cuentan, para que la suma cuadre", () => {
+    const r = resumir({
+      cuadrantes: { ...vacio, bajas: [interno({ id: "b1", matricula: "X", activo: false })] },
+      cuentas: [{ connectorKey: "movertis", accountKey: "a", ok: true, vehiculos: 10 }],
+      internos: 11,
+      externos: 10,
+      ...fechas,
+    });
+    expect(r.tyrecontrolInactiveCount).toBe(1);
+    expect(r.tyrecontrolOnlyCount).toBe(0);
+  });
 
   it("todas las cuentas bien: completa y con bajas permitidas", () => {
     const r = resumir({

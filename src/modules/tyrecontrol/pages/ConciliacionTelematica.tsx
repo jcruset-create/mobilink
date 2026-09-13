@@ -302,6 +302,14 @@ export default function ConciliacionTelematica() {
                 <div className="text-xs text-slate-400">
                   {new Date(r.completedAt).toLocaleString("es-ES")} · {r.providerVehicleCount} vehículos leídos ·{" "}
                   {r.tyrecontrolVehicleCount} en TyreControl
+                  {/*
+                    Los de baja se apartan, y se dice cuántos: si no, la suma
+                    de los cuadrantes no cuadra con el total y parece que se
+                    han perdido vehículos por el camino.
+                  */}
+                  {r.tyrecontrolInactiveCount > 0 && (
+                    <> · <b>{r.tyrecontrolInactiveCount}</b> de baja, apartados</>
+                  )}
                 </div>
                 {r.cuentas
                   .filter((c) => !c.ok)
@@ -716,7 +724,12 @@ export default function ConciliacionTelematica() {
                             )
                           }
                         >
-                          Vincular con {c.matricula}
+                          {/*
+                            Si el candidato está de baja se dice AQUÍ, en el
+                            botón. El distintivo de la ficha de al lado lo pone,
+                            pero quien pulsa mira el botón, no la ficha.
+                          */}
+                          Vincular con {c.matricula}{c.activo === false ? " (de baja)" : ""}
                         </button>
                       ))}
                       {d.interno && d.enlace && (

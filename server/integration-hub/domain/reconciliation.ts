@@ -113,6 +113,16 @@ export const MOTIVOS_DISCREPANCIA = {
   CANDIDATOS_AMBIGUOS: "ambiguous_candidates",
   /** Dos vehículos del proveedor proponen el mismo vehículo de TyreControl. */
   EXTERNOS_DUPLICADOS: "duplicate_externals",
+  /**
+   * El proveedor sigue informando de un vehículo que en TyreControl está de baja.
+   *
+   * Un vehículo dado de baja al que nadie reclama no es noticia: se retiró y ya
+   * está. Pero si el proveedor lo sigue viendo —enlazado, o con la matrícula de
+   * un externo sin enlazar— entonces las dos versiones no cuadran: o la baja
+   * está mal puesta, o hay que quitar el equipo de la cuenta. Lo decide una
+   * persona, y por eso se avisa en vez de resolverlo solo.
+   */
+  INTERNO_DE_BAJA: "internal_inactive",
 } as const;
 
 export type MotivoDiscrepancia =
@@ -193,6 +203,19 @@ export interface Cuadrantes {
    * que se han perdido vehículos por el camino.
    */
   noEvaluados: VehiculoInterno[];
+  /**
+   * Vehículos de TyreControl dados de baja a los que el proveedor no reclama.
+   *
+   * Tampoco es un cuadrante: es lo que se aparta a propósito. Un vehículo
+   * retirado que ya no está en la telemática no tiene nada que conciliar, y
+   * dejarlo en «solo en TyreControl» llenaba esa lista de histórico para
+   * siempre. Se cuentan aquí para que la suma cuadre y se pueda decir cuántos
+   * se han apartado, en vez de que parezca que faltan.
+   *
+   * Los que SÍ reclama el proveedor no están aquí: esos van a discrepancias
+   * con `INTERNO_DE_BAJA`, que es justo el aviso que hay que dar.
+   */
+  bajas: VehiculoInterno[];
 }
 
 /** Lo que hace falta para clasificar. Todo dato, ninguna conexión. */
@@ -365,6 +388,7 @@ export function clasificarFlota(entrada: EntradaClasificacion): Cuadrantes {
     soloTyreControl: [],
     discrepancias: [],
     noEvaluados: [],
+    bajas: [],
   };
   const puedeAfirmarAusencias = entrada.puedeAfirmarAusencias !== false;
 
@@ -415,7 +439,25 @@ export function clasificarFlota(entrada: EntradaClasificacion): Cuadrantes {
       continue;
     }
 
-    // Los dos están. ¿Siguen siendo el mismo vehículo?
+    // Los dos están, pero el de TyreControl está de baja. El proveedor lo
+    // sigue viendo, así que alguien tiene que decidir cuál de las dos
+    // versiones es la buena. Va antes que la comparación de matrículas: que
+    // esté retirado importa más que cómo se llame.
+    if (!interno.activo) {
+      cuadrantes.discrepancias.push({
+        motivo: MOTIVOS_DISCREPANCIA.INTERNO_DE_BAJA,
+        interno,
+        externo,
+        enlace,
+        detalle:
+          `${interno.matricula} está de baja en TyreControl y el proveedor lo sigue ` +
+          `informando como ${externo.plate ?? externo.providerVehicleId}. O la baja está ` +
+          `mal puesta, o hay que quitarlo de la cuenta del proveedor.`,
+      });
+      continue;
+    }
+
+    // ¿Siguen siendo el mismo vehículo?
     const cambio = compararMatriculas({ interno, externo, enlace, normalizarMatricula });
     if (cambio.motivo) {
       cuadrantes.discrepancias.push({
@@ -471,7 +513,33 @@ export function clasificarFlota(entrada: EntradaClasificacion): Cuadrantes {
   }
 
   const internosPropuestos = new Set<string>();
-  for (const { externo, candidatos } of pendientes) {
+  for (const { externo, candidatos: todos } of pendientes) {
+    /*
+     * Un vehículo de baja no compite por la coincidencia.
+     *
+     * Si la matrícula encaja con uno activo y con uno retirado, el bueno es el
+     * activo y no hay ambigüedad ninguna: dejar que el retirado la creara
+     * mandaba a discrepancias un caso que se resuelve solo. Solo cuando TODOS
+     * los candidatos están de baja hay algo que contar, y entonces se cuenta.
+     */
+    const candidatos = todos.filter((c) => c.activo);
+    const deBaja = todos.filter((c) => !c.activo);
+
+    if (candidatos.length === 0 && deBaja.length > 0) {
+      for (const b of deBaja) internosPropuestos.add(b.id);
+      cuadrantes.discrepancias.push({
+        motivo: MOTIVOS_DISCREPANCIA.INTERNO_DE_BAJA,
+        externo,
+        interno: deBaja.length === 1 ? deBaja[0] : undefined,
+        candidatos: deBaja,
+        detalle:
+          `${externo.plate ?? externo.providerVehicleId} está en el proveedor y en ` +
+          `TyreControl ${deBaja.length === 1 ? `${deBaja[0].matricula} está` : "sus coincidencias están"} ` +
+          `de baja. Si el vehículo sigue en la flota hay que reactivarlo antes de enlazarlo.`,
+      });
+      continue;
+    }
+
     if (candidatos.length > 1) {
       cuadrantes.discrepancias.push({
         motivo: MOTIVOS_DISCREPANCIA.CANDIDATOS_AMBIGUOS,
@@ -516,6 +584,13 @@ export function clasificarFlota(entrada: EntradaClasificacion): Cuadrantes {
     if (internosEnlazados.has(interno.id)) continue;
     // Regla 4: si es la propuesta única de un externo, ese es su sitio.
     if (internosPropuestos.has(interno.id)) continue;
+    // Un vehículo de baja al que el proveedor no reclama no es noticia: se
+    // retiró y ya está. Se aparta ANTES que nada, incluso sin respuesta
+    // completa, porque su ausencia en el proveedor no cambia nada.
+    if (!interno.activo) {
+      cuadrantes.bajas.push(interno);
+      continue;
+    }
     // Sin respuesta completa no se puede decir que este vehículo no esté en el
     // proveedor: podría estar en la cuenta que falló. Se aparta.
     if (!puedeAfirmarAusencias) {
@@ -579,6 +654,14 @@ export interface ResumenConciliacion {
   tyrecontrolOnlyCount: number;
   discrepancyCount: number;
   /**
+   * Vehículos de TyreControl dados de baja y apartados de la conciliación.
+   *
+   * No están en ningún cuadrante a propósito: ver `Cuadrantes.bajas`. Se
+   * cuentan para que la suma cuadre y para poder decir en la pantalla cuántos
+   * se han dejado fuera.
+   */
+  tyrecontrolInactiveCount: number;
+  /**
    * Si se pueden ofrecer bajas a partir de esta conciliación.
    *
    * Falso en cuanto una cuenta falla. Que un proveedor no conteste no es que
@@ -630,6 +713,7 @@ export function resumir(params: {
     providerOnlyCount: cuadrantes.soloProveedor.length,
     tyrecontrolOnlyCount: cuadrantes.soloTyreControl.length,
     discrepancyCount: cuadrantes.discrepancias.length,
+    tyrecontrolInactiveCount: cuadrantes.bajas.length,
     bajasPermitidas: status === "complete",
   };
 }
