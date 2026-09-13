@@ -36,6 +36,7 @@ import {
 import {
   agruparPorBase,
   desde,
+  fechaCorta,
   dormidosPorBase,
   minutosEnPalabras,
   revisablesEnBase,
@@ -151,10 +152,22 @@ export default function VehiculosEnBases() {
             </div>
           </div>
           {rev && (
-            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${chip}`}>
-              {ESTADO_PERIODICIDAD_LABELS[rev.estado]}
-              {rev.estado === "vencida" && (rev.dias_vencido ?? 0) > 0 ? ` · ${rev.dias_vencido} d` : ""}
-            </span>
+            <div className="flex shrink-0 items-center gap-2">
+              {/*
+                La fecha de la última revisión, al lado del distintivo.
+                «Vencida» o «Próxima» dicen en qué situación está; esto dice
+                desde cuándo, que es lo que se mira para decidir si merece la
+                pena cogerlo ahora que está en la base.
+              */}
+              <span className="text-right text-[11px] leading-tight text-slate-400">
+                <span className="block text-[9px] uppercase text-slate-500">Últ. revisión</span>
+                {fechaCorta(rev.ultima_revision)}
+              </span>
+              <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${chip}`}>
+                {ESTADO_PERIODICIDAD_LABELS[rev.estado]}
+                {rev.estado === "vencida" && (rev.dias_vencido ?? 0) > 0 ? ` · ${rev.dias_vencido} d` : ""}
+              </span>
+            </div>
           )}
         </div>
 

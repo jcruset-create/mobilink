@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   agruparPorBase,
   desde,
+  fechaCorta,
   dormidosPorBase,
   minutosEnPalabras,
   prioridadRevision,
@@ -158,5 +159,17 @@ describe("desde() y minutosEnPalabras()", () => {
 
   it("un instante en el futuro no se enseña como una duración negativa", () => {
     expect(desde("2026-09-13T12:30:00Z", ahora)).toBe("—");
+  });
+});
+
+describe("fechaCorta()", () => {
+  it("da la fecha en formato de aquí", () => {
+    expect(fechaCorta("2026-03-12T09:30:00Z")).toBe("12/03/2026");
+  });
+
+  it("sin fecha, una raya: el distintivo de al lado ya dice «Sin revisión»", () => {
+    expect(fechaCorta(null)).toBe("—");
+    expect(fechaCorta(undefined)).toBe("—");
+    expect(fechaCorta("no es una fecha")).toBe("—");
   });
 });
