@@ -11,6 +11,10 @@ export default function MisVehiculos() {
   const [items, setItems] = useState<Vehiculo[]>([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
+  // Los de baja tampoco salen aquí si no se piden: la pantalla del cliente
+  // tiene el mismo problema que la de administración, y un cliente con la
+  // mitad de la lista en histórico no encuentra su camión.
+  const [verBajas, setVerBajas] = useState(false);
 
   useEffect(() => {
     if (!perfil?.empresa_id) return;
@@ -19,14 +23,29 @@ export default function MisVehiculos() {
 
   const visibles = useMemo(() => {
     const s = q.trim().toLowerCase();
-    return items.filter((v) => !s || v.matricula.toLowerCase().includes(s) || (v.numero_unidad ?? "").toLowerCase().includes(s));
-  }, [items, q]);
+    return items.filter((v) => {
+      if (!verBajas && !v.activo) return false;
+      return !s || v.matricula.toLowerCase().includes(s) || (v.numero_unidad ?? "").toLowerCase().includes(s);
+    });
+  }, [items, q, verBajas]);
 
   return (
     <div>
       <h1 className="mb-1 text-lg font-black">Mis vehículos</h1>
       <p className="mb-3 text-sm text-slate-400">Pulsa una fila para ver la ficha del vehículo: plano, profundidades y presiones.</p>
-      <input className={`${inputCls} mb-3 max-w-xs`} placeholder="Buscar matrícula o nº unidad…" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <input className={`${inputCls} max-w-xs`} placeholder="Buscar matrícula o nº unidad…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-300">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 accent-sky-500"
+            checked={verBajas}
+            onChange={(e) => setVerBajas(e.target.checked)}
+          />
+          Ver también los de baja
+        </label>
+        <span className="text-xs text-slate-500">{visibles.length} vehículo(s)</span>
+      </div>
       <TableWrap>
         <thead className="bg-slate-900"><tr>
           <th className={thCls}>Matrícula</th><th className={thCls}>Nº unidad</th><th className={thCls}>Delegación</th><th className={thCls}>Marca</th>

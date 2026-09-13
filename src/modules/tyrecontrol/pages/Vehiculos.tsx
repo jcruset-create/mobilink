@@ -92,7 +92,15 @@ export default function Vehiculos() {
   const [fEmpresa, setFEmpresa] = useState("");
   const [fDele, setFDele] = useState("");
   const [fTipo, setFTipo] = useState("");
-  const [fEstado, setFEstado] = useState<"todos" | "activos" | "inactivos">("todos");
+  /*
+   * Los de baja NO salen si no se piden.
+   *
+   * La lista es de trabajo diario y los vehículos dados de baja se quedan ahí
+   * para siempre: con la flota de un cliente grande, la mitad de lo que se ve
+   * al abrir la pantalla es histórico. Se empieza en «activos» y hay una
+   * casilla para verlos; el filtro fijado sigue guardando lo que se elija.
+   */
+  const [fEstado, setFEstado] = useState<"todos" | "activos" | "inactivos">("activos");
 
   // Filtro fijado: para trabajar un rato con un solo cliente sin que se pierda
   // el filtro al ir y volver de una ficha. Se guarda en el navegador, así que
@@ -453,9 +461,18 @@ export default function Vehiculos() {
           <option value="">Todos los tipos</option>
           {tipos.map((t) => <option key={t.id} value={t.id}>{t.descripcion ?? t.nombre}</option>)}
         </select>
-        <select className={`${inputCls} w-auto`} value={fEstado} onChange={(e) => setFEstado(e.target.value as any)}>
-          <option value="todos">Todos</option><option value="activos">Activos</option><option value="inactivos">Inactivos</option>
-        </select>
+        <label
+          className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-300"
+          title="Los vehículos dados de baja no se enseñan salvo que los pidas"
+        >
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 accent-sky-500"
+            checked={fEstado !== "activos"}
+            onChange={(e) => setFEstado(e.target.checked ? "todos" : "activos")}
+          />
+          Ver también los de baja
+        </label>
         <span className="text-xs text-slate-500">{visibles.length} vehículo(s)</span>
         {fijado && (
           <span className="text-[11px] text-amber-300">

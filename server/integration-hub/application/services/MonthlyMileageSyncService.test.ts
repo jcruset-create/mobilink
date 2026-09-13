@@ -172,7 +172,49 @@ describe("lotes y ventanas", () => {
     expect(r.cuentas[0].abandonada).toContain("Cupo agotado");
     expect(r.cuentas[0].abandonada).toContain("240 s");
     expect(upsertMonthlyMileage).not.toHaveBeenCalled();
-    expect(vi.mocked(upsertSyncState).mock.calls[0][0].status).toBe("partial");
+    // Ni auditoría: no se preguntó nada, así que no hay nada que informar y
+    // el informe de la pasada anterior sigue siendo el bueno. Ver la prueba
+    // «una pasada sin cupo y sin peticiones NO pisa el informe de la anterior».
+    expect(upsertSyncState).not.toHaveBeenCalled();
+  });
+
+  it("una pasada sin cupo y sin peticiones NO pisa el informe de la anterior", async () => {
+    // Dos clics seguidos: el segundo no tiene turno y no pregunta nada. Si
+    // escribiera su auditoría, taparía los veinte vehículos del primero.
+    const ritmo: any = await import("../../infrastructure/ritmo.ts");
+    vi.mocked(ritmo.limitadorDe).mockReturnValueOnce({
+      ritmo: { maximo: 1, ventanaMs: 300_000 },
+      turno: async () => { throw new ritmo.ErrorRitmo(241_000); },
+    });
+    cuenta({});
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(626) as any);
+
+    const r = await syncMonthlyMileage({
+      tenantId: "empresa-A", meses: [{ year: 2026, month: 9 }], ahora: AHORA, esperaMaximaMs: 45_000,
+    });
+
+    expect(r.cuentas[0].peticiones).toBe(0);
+    expect(r.cuentas[0].sinCupo).toBe(true);
+    expect(upsertSyncState).not.toHaveBeenCalled();
+  });
+
+  it("pero si llegó a preguntar algo, aunque se quede sin cupo, sí informa", async () => {
+    const ritmo: any = await import("../../infrastructure/ritmo.ts");
+    let n = 0;
+    vi.mocked(ritmo.limitadorDe).mockReturnValueOnce({
+      ritmo: { maximo: 1, ventanaMs: 300_000 },
+      turno: async () => { if (++n > 1) throw new ritmo.ErrorRitmo(300_000); },
+    });
+    cuenta({ config: { unidadesPorPeticion: 20 } });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(626) as any);
+
+    const r = await syncMonthlyMileage({
+      tenantId: "empresa-A", meses: [{ year: 2026, month: 9 }], ahora: AHORA, esperaMaximaMs: 45_000,
+    });
+
+    expect(r.cuentas[0].peticiones).toBe(1);
+    expect(r.cuentas[0].vehiculosProcesados).toBe(20);
+    expect(upsertSyncState).toHaveBeenCalledTimes(1);
   });
 
   it("el job NO pone espera máxima: él sí puede esperar", async () => {
@@ -226,6 +268,31 @@ describe("meses cerrados", () => {
 
     expect(listVehiclesWithClosedMonth).not.toHaveBeenCalled();
     expect(vi.mocked(upsertMonthlyMileage).mock.calls[0][0]).toMatchObject({ year: 2026, month: 9, closed: false });
+  });
+
+  it("un mes «sin datos» se cierra si el proveedor SÍ contestó a otros del lote", async () => {
+    // El vehículo no se movió en agosto: es un cero legítimo y no hay que
+    // volver a preguntarlo nunca.
+    cuenta({ responder: (ids, w) => [{ provider: "movertis", accountKey: "buses", providerVehicleId: ids[0], window: w, distanceKm: 500 }] });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(2) as any);
+
+    await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+
+    const porVehiculo = new Map(vi.mocked(upsertMonthlyMileage).mock.calls.map((c) => [c[0].mobilinkId, c[0]]));
+    expect(porVehiculo.get("v1")).toMatchObject({ syncStatus: "ok", closed: true });
+    expect(porVehiculo.get("v2")).toMatchObject({ syncStatus: "empty", closed: true });
+  });
+
+  it("pero un lote entero vacío NO cierra nada: eso huele a mal momento del proveedor", async () => {
+    // Cerrarlo dejaría el mes en blanco para siempre sin que nadie lo reintente.
+    cuenta({ responder: () => [] });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(3) as any);
+
+    await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+
+    for (const [fila] of vi.mocked(upsertMonthlyMileage).mock.calls) {
+      expect(fila).toMatchObject({ syncStatus: "empty", closed: false });
+    }
   });
 
   it("un mes terminado, pedido después del margen, se guarda cerrado", async () => {
