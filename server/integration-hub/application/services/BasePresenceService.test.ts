@@ -300,3 +300,118 @@ describe("barrerPresenciaBases()", () => {
     expect(guardar.mock.calls[0][0][0].tenantId).toBe("plana");
   });
 });
+
+/**
+ * Los clientes de Webfleet de siempre.
+ *
+ * Su vínculo con el proveedor vive en `tc_vehiculos.webfleet_vehicle_id` desde
+ * antes de que hubiera Hub. Sin esto, la pantalla les saldría vacía hasta que
+ * alguien conciliara la flota entera otra vez, que es un trabajo ya hecho.
+ */
+describe("enlace heredado", () => {
+  it("un vehículo sin enlace en el Hub se sitúa con el que traía", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("webfleet", "default", [
+        { ...posicion("WF-1"), provider: "webfleet", accountKey: "default" },
+      ]),
+    ] as any);
+    vi.mocked(listVehicleMappings).mockResolvedValue([] as any);
+
+    const r = await barrerPresenciaBases(
+      CTX,
+      opciones({
+        leerFlota: async () => [
+          {
+            id: "v1",
+            matricula: "1234ABC",
+            delegacionId: "base-reus",
+            activo: true,
+            enlaceHeredado: { connectorKey: "webfleet", externo: "WF-1" },
+          },
+        ],
+      }),
+    );
+
+    expect(r.porEstado.IN_BASE).toBe(1);
+    expect(r.filas[0].proveedor).toBe("webfleet");
+    expect(r.filas[0].externo).toBe("WF-1");
+  });
+
+  it("el enlace del Hub manda sobre el heredado", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "buses", [posicion("E1")]),
+    ] as any);
+    vi.mocked(listVehicleMappings).mockResolvedValue([mapeo("v1", "E1")] as any);
+
+    const r = await barrerPresenciaBases(
+      CTX,
+      opciones({
+        leerFlota: async () => [
+          {
+            id: "v1",
+            matricula: "1234ABC",
+            delegacionId: "base-reus",
+            activo: true,
+            // Un resto de otra época que ya no es el bueno.
+            enlaceHeredado: { connectorKey: "webfleet", externo: "WF-VIEJO" },
+          },
+        ],
+      }),
+    );
+
+    expect(r.filas[0].proveedor).toBe("movertis");
+    expect(r.filas[0].externo).toBe("E1");
+  });
+
+  it("con DOS cuentas del mismo proveedor no se adivina a cuál pertenece", async () => {
+    // Un `webfleet_vehicle_id` no dice de qué cuenta es. Con dos plataformas,
+    // colocarlo en una sería preguntar por el vehículo equivocado.
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("webfleet", "norte", []),
+      cuenta("webfleet", "sur", []),
+    ] as any);
+    vi.mocked(listVehicleMappings).mockResolvedValue([] as any);
+
+    const r = await barrerPresenciaBases(
+      CTX,
+      opciones({
+        leerFlota: async () => [
+          {
+            id: "v1",
+            matricula: "1234ABC",
+            delegacionId: null,
+            activo: true,
+            enlaceHeredado: { connectorKey: "webfleet", externo: "WF-1" },
+          },
+        ],
+      }),
+    );
+
+    expect(r.porEstado.NO_POSITION).toBe(1);
+    expect(r.filas[0].motivo).toBe("sin_enlace");
+  });
+
+  it("un heredado de un proveedor que no se está consultando no cuenta", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "buses", []),
+    ] as any);
+    vi.mocked(listVehicleMappings).mockResolvedValue([] as any);
+
+    const r = await barrerPresenciaBases(
+      CTX,
+      opciones({
+        leerFlota: async () => [
+          {
+            id: "v1",
+            matricula: "1234ABC",
+            delegacionId: null,
+            activo: true,
+            enlaceHeredado: { connectorKey: "webfleet", externo: "WF-1" },
+          },
+        ],
+      }),
+    );
+
+    expect(r.filas[0].motivo).toBe("sin_enlace");
+  });
+});
