@@ -269,6 +269,17 @@ async function sincronizarCuenta(
         const loteFallido = tanda.length > 0 && tanda.every((e) => porVehiculo.get(e.mobilink_id)?.tipo === "error");
         lotesSeguidosFallidos = loteFallido ? lotesSeguidosFallidos + 1 : 0;
 
+        // ¿Estaba el proveedor contestando de verdad en esta petición?
+        //
+        // Importa para poder DAR POR CERRADO un mes sin datos. Un mes pasado
+        // en el que un vehículo no se movió es un cero legítimo y no hay que
+        // volver a preguntarlo nunca. Pero una respuesta vacía para los veinte
+        // del lote se parece demasiado a un mal momento del proveedor, y
+        // cerrar eso dejaría el mes en blanco para siempre sin que nadie lo
+        // reintente. Si al menos uno trajo kilómetros, el vacío de los demás
+        // es suyo; si no trajo ninguno, no se cierra nada y mañana se repite.
+        const proveedorContesto = tanda.some((e) => porVehiculo.get(e.mobilink_id)?.tipo === "ok");
+
         for (const enlace of tanda) {
           const res = porVehiculo.get(enlace.mobilink_id) ?? { tipo: "vacio" as const };
           procesados.add(enlace.mobilink_id);
@@ -288,7 +299,11 @@ async function sincronizarCuenta(
           } else {
             sinDatos.add(enlace.mobilink_id);
           }
-          await guardarFila(op.tenantId, cuenta, enlace, mes, limites, zona, res, cerrado);
+          await guardarFila(
+            op.tenantId, cuenta, enlace, mes, limites, zona, res,
+            // Un «sin datos» solo se cierra si el proveedor estaba contestando.
+            cerrado && (res.tipo === "ok" || proveedorContesto),
+          );
         }
 
         if (lotesSeguidosFallidos >= LOTES_SEGUIDOS_FALLIDOS_MAXIMO) {

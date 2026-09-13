@@ -270,6 +270,31 @@ describe("meses cerrados", () => {
     expect(vi.mocked(upsertMonthlyMileage).mock.calls[0][0]).toMatchObject({ year: 2026, month: 9, closed: false });
   });
 
+  it("un mes «sin datos» se cierra si el proveedor SÍ contestó a otros del lote", async () => {
+    // El vehículo no se movió en agosto: es un cero legítimo y no hay que
+    // volver a preguntarlo nunca.
+    cuenta({ responder: (ids, w) => [{ provider: "movertis", accountKey: "buses", providerVehicleId: ids[0], window: w, distanceKm: 500 }] });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(2) as any);
+
+    await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+
+    const porVehiculo = new Map(vi.mocked(upsertMonthlyMileage).mock.calls.map((c) => [c[0].mobilinkId, c[0]]));
+    expect(porVehiculo.get("v1")).toMatchObject({ syncStatus: "ok", closed: true });
+    expect(porVehiculo.get("v2")).toMatchObject({ syncStatus: "empty", closed: true });
+  });
+
+  it("pero un lote entero vacío NO cierra nada: eso huele a mal momento del proveedor", async () => {
+    // Cerrarlo dejaría el mes en blanco para siempre sin que nadie lo reintente.
+    cuenta({ responder: () => [] });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(3) as any);
+
+    await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 8 }], ahora: AHORA });
+
+    for (const [fila] of vi.mocked(upsertMonthlyMileage).mock.calls) {
+      expect(fila).toMatchObject({ syncStatus: "empty", closed: false });
+    }
+  });
+
   it("un mes terminado, pedido después del margen, se guarda cerrado", async () => {
     cuenta({});
     vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(1) as any);
