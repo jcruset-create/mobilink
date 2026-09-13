@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it, beforeEach } from "vitest";
-import { LimitadorDeRitmo, limitadorDe, reiniciarLimitadoresParaPruebas } from "./ritmo.ts";
+import { ErrorRitmo, LimitadorDeRitmo, limitadorDe, reiniciarLimitadoresParaPruebas, ritmoDeConfig } from "./ritmo.ts";
 
 /** Reloj falso: `esperar` adelanta el tiempo en vez de dormir. */
 function relojFalso() {
@@ -79,5 +79,96 @@ describe("limitadorDe()", () => {
     // se comprueba el recuento tras 100.
     for (let i = 0; i < 100; i++) await l.turno();
     expect(l.enVentana()).toBe(100);
+  });
+});
+
+describe("espera máxima", () => {
+  it("si el turno no llega a tiempo, se rinde en vez de colgar la pantalla", async () => {
+    const r = relojFalso();
+    const l = new LimitadorDeRitmo({ maximo: 1, ventanaMs: 300_000, ...r });
+    await l.turno();
+
+    // Quedan 300 s para el siguiente turno y solo se pueden esperar 45.
+    await expect(l.turno(45_000)).rejects.toBeInstanceOf(ErrorRitmo);
+    // Y no ha dormido nada: rendirse es inmediato.
+    expect(r.esperas).toEqual([]);
+  });
+
+  it("el error dice cuánto falta, para poder contarlo", async () => {
+    const r = relojFalso();
+    const l = new LimitadorDeRitmo({ maximo: 1, ventanaMs: 300_000, ...r });
+    await l.turno();
+    r.avanzar(100_000);
+    await l.turno(1000).catch((e: ErrorRitmo) => {
+      expect(e.esperaMs).toBe(200_000);
+      expect(e.message).toContain("200 s");
+    });
+  });
+
+  it("si cabe dentro del margen, espera y pasa", async () => {
+    const r = relojFalso();
+    const l = new LimitadorDeRitmo({ maximo: 1, ventanaMs: 1000, ...r });
+    await l.turno();
+    await expect(l.turno(5000)).resolves.toBeUndefined();
+    expect(r.esperas).toEqual([1000]);
+  });
+
+  it("sin margen declarado espera lo que haga falta: es lo que hace el job", async () => {
+    const r = relojFalso();
+    const l = new LimitadorDeRitmo({ maximo: 1, ventanaMs: 300_000, ...r });
+    await l.turno();
+    await expect(l.turno()).resolves.toBeUndefined();
+    expect(r.esperas).toEqual([300_000]);
+  });
+
+  it("un turno que se rinde no rompe la cola: el siguiente sigue funcionando", async () => {
+    const r = relojFalso();
+    const l = new LimitadorDeRitmo({ maximo: 1, ventanaMs: 1000, ...r });
+    await l.turno();
+    await expect(l.turno(1)).rejects.toBeInstanceOf(ErrorRitmo);
+    await expect(l.turno()).resolves.toBeUndefined();
+  });
+});
+
+describe("ritmoDeConfig()", () => {
+  it("sin config, el techo documentado", () => {
+    expect(ritmoDeConfig(undefined)).toEqual({ maximo: 100, ventanaMs: 300_000 });
+    expect(ritmoDeConfig({})).toEqual({ maximo: 100, ventanaMs: 300_000 });
+  });
+
+  it("una cuenta puede pedir MENOS: una petición cada cinco minutos", () => {
+    expect(ritmoDeConfig({ ritmo: { maximo: 1, ventanaMs: 300_000 } })).toEqual({ maximo: 1, ventanaMs: 300_000 });
+  });
+
+  it("una cuenta NO puede subirse el límite del proveedor", () => {
+    expect(ritmoDeConfig({ ritmo: { maximo: 5000 } }).maximo).toBe(100);
+    // Una ventana más corta es pedir más: se ignora.
+    expect(ritmoDeConfig({ ritmo: { ventanaMs: 1000 } }).ventanaMs).toBe(300_000);
+  });
+
+  it("una ventana más larga sí vale: es pedir menos", () => {
+    expect(ritmoDeConfig({ ritmo: { maximo: 20, ventanaMs: 600_000 } })).toEqual({ maximo: 20, ventanaMs: 600_000 });
+  });
+
+  it("basura en la config no rompe nada: se cae al techo", () => {
+    expect(ritmoDeConfig({ ritmo: { maximo: "mucho", ventanaMs: null } })).toEqual({ maximo: 100, ventanaMs: 300_000 });
+    expect(ritmoDeConfig({ ritmo: { maximo: 0 } }).maximo).toBe(100);
+  });
+});
+
+describe("limitadorDe() con ritmos distintos", () => {
+  beforeEach(() => reiniciarLimitadoresParaPruebas());
+
+  it("cambiar el ritmo en la config construye otro limitador, sin reiniciar", () => {
+    const antes = limitadorDe("cuenta", { maximo: 100, ventanaMs: 300_000 });
+    const despues = limitadorDe("cuenta", { maximo: 1, ventanaMs: 300_000 });
+    expect(despues).not.toBe(antes);
+    expect(despues.ritmo).toEqual({ maximo: 1, ventanaMs: 300_000 });
+  });
+
+  it("con el mismo ritmo se comparte, que es lo que reparte el cupo", () => {
+    const a = limitadorDe("cuenta", { maximo: 20, ventanaMs: 300_000 });
+    const b = limitadorDe("cuenta", { maximo: 20, ventanaMs: 300_000 });
+    expect(a).toBe(b);
   });
 });

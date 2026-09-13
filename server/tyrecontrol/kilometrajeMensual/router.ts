@@ -30,6 +30,12 @@ import { resumirKilometraje } from "./resumen.ts";
 
 /** Cuántos meses se pueden pedir de golpe a mano. Más es un job, no un botón. */
 const MAX_MESES_MANUAL = 12;
+/**
+ * Cuánto puede esperar por el cupo del proveedor una petición con alguien
+ * delante. Pasado esto se contesta con lo hecho y se dice que el job de fondo
+ * terminará el resto: mejor que una pantalla colgada y un timeout del proxy.
+ */
+const ESPERA_MAXIMA_MS = 45_000;
 
 type Peticion = Request & { solicitante?: Solicitante };
 
@@ -171,6 +177,7 @@ export function createKilometrajeMensualRouter(): Router {
         tenantId: empresaId, connectorKey, accountKey, meses,
         mobilinkIds: vehiculoIds?.length ? vehiculoIds : undefined,
         forzar: req.body?.forzar === true,
+        esperaMaximaMs: ESPERA_MAXIMA_MS,
       });
       res.json(r);
     } catch (e) {

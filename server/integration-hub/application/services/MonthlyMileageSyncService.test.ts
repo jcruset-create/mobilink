@@ -18,10 +18,17 @@ vi.mock("../../infrastructure/repositories.ts", () => ({
   upsertMonthlyMileage: vi.fn(),
   upsertSyncState: vi.fn(),
 }));
-vi.mock("../../infrastructure/ritmo.ts", () => {
-  const turnos: number[] = [];
+vi.mock("../../infrastructure/ritmo.ts", async () => {
+  const real: any = await vi.importActual("../../infrastructure/ritmo.ts");
+  const turnos: Array<number | undefined> = [];
   return {
-    limitadorDe: () => ({ turno: async () => { turnos.push(Date.now()); } }),
+    ...real,
+    // El limitador de verdad ya tiene sus pruebas; aquí solo interesa QUÉ se
+    // le pide, no que duerma. Salvo cuando la prueba pone su propio doble.
+    limitadorDe: vi.fn((_clave: string, ritmo?: any) => ({
+      ritmo,
+      turno: async (esperaMaximaMs?: number) => { turnos.push(esperaMaximaMs); },
+    })),
     __turnos: turnos,
   };
 });
@@ -123,6 +130,60 @@ describe("lotes y ventanas", () => {
     vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(1) as any);
     await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 9 }], ahora: AHORA });
     expect(llamadas[0].from.toISOString()).toBe("2026-09-01T00:00:00.000Z");
+  });
+
+  it("el ritmo sale de la config de la cuenta: se puede bajar sin desplegar", async () => {
+    cuenta({ config: { ritmo: { maximo: 1, ventanaMs: 300_000 }, unidadesPorPeticion: 20 } });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(20) as any);
+    const ritmo: any = await import("../../infrastructure/ritmo.ts");
+
+    const r = await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 9 }], ahora: AHORA });
+
+    expect(vi.mocked(ritmo.limitadorDe).mock.calls[0][1]).toEqual({ maximo: 1, ventanaMs: 300_000 });
+    expect(r.cuentas[0].ritmo).toEqual({ maximo: 1, ventanaMs: 300_000 });
+    expect(r.cuentas[0].unidadesPorPeticion).toBe(20);
+  });
+
+  it("`mesesHistorico` de la config manda cuando no lo pide quien llama", async () => {
+    cuenta({ config: { mesesHistorico: 0 } });
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(1) as any);
+
+    const r = await syncMonthlyMileage({ tenantId: "empresa-A", ahora: AHORA });
+
+    // Solo el mes en curso: ni el anterior ni el histórico.
+    expect(r.cuentas[0].meses).toEqual(["2026-09"]);
+  });
+
+  it("sin cupo a tiempo se contesta con lo hecho y NO se marca error en las filas", async () => {
+    // Con alguien delante: el proveedor ni se entera, así que escribir «error»
+    // en los vehículos diría que Movertis falló, y no ha fallado nadie.
+    const ritmo: any = await import("../../infrastructure/ritmo.ts");
+    vi.mocked(ritmo.limitadorDe).mockReturnValueOnce({
+      ritmo: { maximo: 1, ventanaMs: 300_000 },
+      turno: async () => { throw new ritmo.ErrorRitmo(240_000); },
+    });
+    cuenta({});
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(3) as any);
+
+    const r = await syncMonthlyMileage({
+      tenantId: "empresa-A", meses: [{ year: 2026, month: 9 }], ahora: AHORA, esperaMaximaMs: 45_000,
+    });
+
+    expect(r.cuentas[0].abandonada).toContain("Cupo agotado");
+    expect(r.cuentas[0].abandonada).toContain("240 s");
+    expect(upsertMonthlyMileage).not.toHaveBeenCalled();
+    expect(vi.mocked(upsertSyncState).mock.calls[0][0].status).toBe("partial");
+  });
+
+  it("el job NO pone espera máxima: él sí puede esperar", async () => {
+    cuenta({});
+    vi.mocked(listVehicleMappings).mockResolvedValue(enlaces(1) as any);
+    const ritmo: any = await import("../../infrastructure/ritmo.ts");
+    const antes = ritmo.__turnos.length;
+
+    await syncMonthlyMileage({ tenantId: "empresa-A", meses: [{ year: 2026, month: 9 }], ahora: AHORA });
+
+    expect(ritmo.__turnos.slice(antes)).toEqual([undefined]);
   });
 
   it("pide turno al limitador antes de CADA petición", async () => {

@@ -17,6 +17,14 @@
  * cuentas con dos tokens no se estorban. El registro de abajo los reparte.
  */
 
+/** No hay turno a tiempo. Lleva cuánto habría que esperar, para poder decirlo. */
+export class ErrorRitmo extends Error {
+  constructor(public readonly esperaMs: number) {
+    super(`No hay cupo con el proveedor ahora mismo: habría que esperar ${Math.ceil(esperaMs / 1000)} s`);
+    this.name = "ErrorRitmo";
+  }
+}
+
 export interface OpcionesRitmo {
   /** Peticiones permitidas dentro de la ventana. */
   maximo: number;
@@ -39,15 +47,23 @@ export class LimitadorDeRitmo {
     this.esperar = opciones.esperar ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
-  /** Espera hasta que se pueda hacer una petición más, y la apunta. */
-  turno(): Promise<void> {
-    const mio = this.cola.then(() => this.esperarHueco());
+  /**
+   * Espera hasta que se pueda hacer una petición más, y la apunta.
+   *
+   * `esperaMaximaMs` es para quien tiene a alguien delante mirando: si el
+   * turno no va a llegar a tiempo, se rinde con `ErrorRitmo` en vez de dejar
+   * la petición HTTP colgada cinco minutos. Un job nocturno no lo pasa nunca:
+   * él sí puede esperar, y esperar es exactamente lo que debe hacer.
+   */
+  turno(esperaMaximaMs?: number): Promise<void> {
+    const mio = this.cola.then(() => this.esperarHueco(esperaMaximaMs));
     // La cola no se rompe por un rechazo: el siguiente sigue esperando lo suyo.
     this.cola = mio.catch(() => undefined);
     return mio;
   }
 
-  private async esperarHueco(): Promise<void> {
+  private async esperarHueco(esperaMaximaMs?: number): Promise<void> {
+    const limite = esperaMaximaMs === undefined ? undefined : this.ahora() + esperaMaximaMs;
     for (;;) {
       const t = this.ahora();
       this.marcas = this.marcas.filter((m) => t - m < this.opciones.ventanaMs);
@@ -57,8 +73,16 @@ export class LimitadorDeRitmo {
       }
       // Hasta que caduque la más antigua, ni un milisegundo antes.
       const libera = this.marcas[0] + this.opciones.ventanaMs - t;
+      if (limite !== undefined && t + libera > limite) {
+        throw new ErrorRitmo(Math.max(1, libera));
+      }
       await this.esperar(Math.max(1, libera));
     }
+  }
+
+  /** El ritmo con el que se construyó, para saber si la config ya no cuadra. */
+  get ritmo(): Pick<OpcionesRitmo, "maximo" | "ventanaMs"> {
+    return { maximo: this.opciones.maximo, ventanaMs: this.opciones.ventanaMs };
   }
 
   /** Cuántas peticiones se han hecho dentro de la ventana actual. */
@@ -68,11 +92,44 @@ export class LimitadorDeRitmo {
   }
 }
 
-/** Movertis: 150 / 5 min documentados. Se trabaja a dos tercios. */
+/**
+ * Movertis: 150 / 5 min documentados. Se trabaja a dos tercios.
+ *
+ * Es el TECHO, no lo que se usa: la cuenta puede pedir menos desde su config
+ * (`ritmo`), y en Autocares Plana se pide bastante menos. Ver `ritmoDeConfig`.
+ */
 export const RITMO_MOVERTIS: Pick<OpcionesRitmo, "maximo" | "ventanaMs"> = {
   maximo: 100,
   ventanaMs: 5 * 60_000,
 };
+
+/**
+ * El ritmo que pide la config de una cuenta, saneado.
+ *
+ * Existe porque el límite documentado NO es necesariamente el límite real: la
+ * primera importación de Plana empezó a recibir «Core Error: 4» a todo sin que
+ * hubiera documentación de qué significa. Poder bajar el ritmo desde una
+ * columna, sin desplegar, es la diferencia entre probar una hipótesis esta
+ * tarde y probarla la semana que viene.
+ *
+ * Se acepta `{"ritmo":{"maximo":1,"ventanaMs":300000}}` en la config del
+ * conector. Nunca por encima del techo documentado: una config no puede
+ * subirse el límite del proveedor, solo bajárselo.
+ */
+export function ritmoDeConfig(
+  config: Record<string, unknown> | undefined,
+  techo: Pick<OpcionesRitmo, "maximo" | "ventanaMs"> = RITMO_MOVERTIS,
+): Pick<OpcionesRitmo, "maximo" | "ventanaMs"> {
+  const r = (config?.ritmo ?? {}) as Record<string, unknown>;
+  const maximo = Number(r.maximo);
+  const ventanaMs = Number(r.ventanaMs);
+  return {
+    maximo: Number.isFinite(maximo) && maximo >= 1 ? Math.min(Math.floor(maximo), techo.maximo) : techo.maximo,
+    // La ventana sí puede ser MÁS larga que la del techo: alargarla es pedir
+    // menos, y eso siempre se permite. Más corta, no.
+    ventanaMs: Number.isFinite(ventanaMs) && ventanaMs >= techo.ventanaMs ? Math.floor(ventanaMs) : techo.ventanaMs,
+  };
+}
 
 const registro = new Map<string, LimitadorDeRitmo>();
 
@@ -85,11 +142,15 @@ export function limitadorDe(
   clave: string,
   opciones: Pick<OpcionesRitmo, "maximo" | "ventanaMs"> = RITMO_MOVERTIS,
 ): LimitadorDeRitmo {
-  let l = registro.get(clave);
-  if (!l) {
-    l = new LimitadorDeRitmo(opciones);
-    registro.set(clave, l);
+  const existente = registro.get(clave);
+  // Si la config cambió el ritmo, se construye otro: quedarse con el de antes
+  // haría que bajar el límite en la base no sirviera de nada hasta reiniciar,
+  // que es justo cuando más prisa hay por bajarlo.
+  if (existente && existente.ritmo.maximo === opciones.maximo && existente.ritmo.ventanaMs === opciones.ventanaMs) {
+    return existente;
   }
+  const l = new LimitadorDeRitmo(opciones);
+  registro.set(clave, l);
   return l;
 }
 
