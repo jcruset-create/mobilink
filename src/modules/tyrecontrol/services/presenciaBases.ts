@@ -62,10 +62,23 @@ export interface BaseGeo {
   radioM: number | null;
 }
 
+/** Una cuenta de telemática del cliente, tal como está dada de alta en el Hub. */
+export interface CuentaTelematicaBases {
+  proveedor: string;
+  cuenta: string;
+  nombre: string | null;
+  activa: boolean;
+}
+
 export interface PresenciaBases {
   ok: boolean;
   vehiculos: VehiculoPresencia[];
   bases: BaseGeo[];
+  /**
+   * Cuentas dadas de alta en el Hub. Vacío significa que el barrido no tiene a
+   * quién preguntar, que es el motivo más habitual de una pantalla en blanco.
+   */
+  cuentas: CuentaTelematicaBases[];
   porEstado: Partial<Record<EstadoPresencia, number>>;
   /** Cuándo se barrió lo que se está viendo. `null` si nunca se ha barrido. */
   calculadoAt: string | null;

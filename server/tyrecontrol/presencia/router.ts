@@ -62,6 +62,46 @@ async function leerPresencia(empresaId: string): Promise<any[]> {
   return out;
 }
 
+/**
+ * Las cuentas de telemática que tiene esta empresa dada de alta en el Hub.
+ *
+ * La pantalla salía con cuatro ceros y un «todavía no se ha barrido ninguna
+ * vez» sin decir por qué, y el motivo más frecuente no se ve desde ahí: la
+ * empresa no tiene ninguna cuenta habilitada, así que el barrido no tiene a
+ * quién preguntar. Con esto la pantalla puede decirlo en vez de hacer que uno
+ * lo adivine.
+ *
+ * Se leen las CONFIGURACIONES, no los conectores: es una consulta a la base del
+ * Hub y no resuelve credenciales ni llama a nadie. Y va en su propio try: si la
+ * base del Hub no contesta, la pantalla enseña lo que ya sabía en vez de caerse
+ * por un dato que solo sirve para explicar.
+ */
+async function cuentasDeTelematica(
+  empresaId: string,
+): Promise<Array<{ proveedor: string; cuenta: string; nombre: string | null; activa: boolean }>> {
+  try {
+    const { listConnectorConfigs } = await import(
+      "../../integration-hub/infrastructure/repositories.ts"
+    );
+    const { knownTelematicsConnectorKeys } = await import(
+      "../../integration-hub/connectors/ConnectorRegistry.ts"
+    );
+    const claves = new Set(knownTelematicsConnectorKeys());
+    const configs = await listConnectorConfigs(empresaId);
+    return (configs ?? [])
+      .filter((c: any) => claves.has(String(c.connector_key)))
+      .map((c: any) => ({
+        proveedor: String(c.connector_key),
+        cuenta: String(c.account_key ?? "default"),
+        nombre: c.name ?? null,
+        activa: c.enabled === true,
+      }));
+  } catch (e) {
+    console.warn("[presencia-bases] no se pudieron leer las cuentas:", (e as any)?.message ?? e);
+    return [];
+  }
+}
+
 export function createPresenciaRouter(): Router {
   const router = Router();
   router.use(json({ limit: "64kb" }));
@@ -91,13 +131,14 @@ export function createPresenciaRouter(): Router {
       const empresaId = empresaDe(solicitante, req.query?.empresaId);
       if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
 
-      const [filas, { data: bases }] = await Promise.all([
+      const [filas, { data: bases }, cuentas] = await Promise.all([
         leerPresencia(empresaId),
         supabase
           .from("tc_delegaciones")
           .select("id, nombre, base_lat, base_lng, base_radio_m")
           .eq("empresa_id", empresaId)
           .not("base_lat", "is", null),
+        cuentasDeTelematica(empresaId),
       ]);
 
       const porEstado: Record<string, number> = {};
@@ -109,6 +150,9 @@ export function createPresenciaRouter(): Router {
       res.json({
         ok: true,
         vehiculos: filas,
+        // Para que la pantalla pueda explicar un barrido vacío en vez de
+        // enseñar ceros sin motivo.
+        cuentas,
         bases: (bases ?? []).map((b: any) => ({
           id: b.id,
           nombre: b.nombre,
