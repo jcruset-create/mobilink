@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Download, CalendarClock, Coins, Network, Gauge, type LucideIcon } from "lucide-react";
+import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Download, CalendarClock, Coins, Network, Gauge, Plug, type LucideIcon } from "lucide-react";
 import logoMobilink from "../assets/logo-mobilink.png";
 // Copias a la medida del hub: los originales pesan 350-670 KB cada uno y aquí
 // se ven a 36 px de alto. Con cinco tarjetas con logo eso eran 2,4 MB de
@@ -387,6 +387,27 @@ export default function InicioPage() {
                 <button
                   onClick={() => navigate("/connect")}
                   className="mt-auto rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-500"
+                >
+                  Entrar
+                </button>
+              </div>
+            )}
+
+            {esSuperadmin && (
+              <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4 transition hover:border-slate-500">
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-500/15">
+                    <Plug className="h-5 w-5 text-teal-400" />
+                  </div>
+                  <span className="text-sm font-bold">Mobilink Hub</span>
+                  <span className="ml-auto whitespace-nowrap rounded-full bg-teal-500/15 px-2 py-0.5 text-[11px] font-bold text-teal-300">Superadmin</span>
+                </div>
+                <p className="mb-3 text-[12px] text-slate-500">
+                  Integration Hub: conectores con ERP, datos técnicos, telemática y proveedores. Operaciones, errores y reproceso.
+                </p>
+                <button
+                  onClick={() => navigate("/integraciones")}
+                  className="mt-auto rounded-xl bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500"
                 >
                   Entrar
                 </button>

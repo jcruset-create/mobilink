@@ -104,7 +104,10 @@ export async function barrerBases(
       return {
         ok: false,
         estado: r.estado,
-        nota: "Esta empresa no tiene ninguna cuenta de telemática habilitada.",
+        nota:
+          "Esta empresa no tiene ninguna cuenta de telemática habilitada en el Hub, " +
+          "así que no hay a quién preguntar dónde están sus vehículos. Se activa en el " +
+          "panel de integraciones, eligiendo esta empresa y su proveedor.",
       };
     }
 

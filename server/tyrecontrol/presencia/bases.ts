@@ -68,18 +68,25 @@ export async function leerFlota(empresaId: string): Promise<VehiculoConBase[]> {
   for (let desde = 0; ; desde += TAMANO) {
     const { data, error } = await supabase
       .from("tc_vehiculos")
-      .select("id, matricula, delegacion_id, activo")
+      .select("id, matricula, delegacion_id, activo, webfleet_vehicle_id")
       .eq("empresa_id", empresaId)
       .order("matricula")
       .range(desde, desde + TAMANO - 1);
     if (error) throw new Error(`No se pudo leer la flota: ${error.message}`);
     const pagina = data ?? [];
     for (const f of pagina as any[]) {
+      // El vínculo de Webfleet de toda la vida. Se pasa como enlace heredado
+      // para que un cliente de Webfleet aparezca en la pantalla sin tener que
+      // conciliar su flota otra vez: ese trabajo ya está hecho desde antes de
+      // que existiera el Hub, y la sincronización de siempre lo usa cada cinco
+      // minutos. Si además hay enlace en el Hub, manda el del Hub.
+      const wf = String(f.webfleet_vehicle_id ?? "").trim();
       out.push({
         id: String(f.id),
         matricula: String(f.matricula ?? ""),
         delegacionId: f.delegacion_id ? String(f.delegacion_id) : null,
         activo: f.activo !== false,
+        enlaceHeredado: wf ? { connectorKey: "webfleet", externo: wf } : null,
       });
     }
     if (pagina.length < TAMANO) break;

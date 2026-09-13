@@ -146,3 +146,22 @@ export function fechaCorta(iso: string | null | undefined): string {
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
+
+/**
+ * Quién hizo la última revisión, para enseñarlo debajo de la fecha.
+ *
+ * Un nombre y una máquina no dicen lo mismo: «David» es alguien que miró la
+ * rueda, y «CheckPoint» es el arco de la entrada, que mide al pasar y no
+ * levanta el vehículo. Quien decide a cuál coger ahora que está en la base
+ * quiere saber cuál de las dos fue.
+ *
+ * Una revisión de técnico sin nombre —porque los permisos no dejan ver ese
+ * usuario— se queda en «Técnico» genérico, que es verdad, en vez de en una
+ * raya que haría pensar que no la hizo nadie.
+ */
+export function quienRevisó(rev: RevisionEstado | undefined): string {
+  if (!rev) return "—";
+  if (rev.ultima_revision_origen === "checkpoint") return "CheckPoint";
+  if (rev.ultima_revision_origen === "tecnico") return rev.ultima_revision_por || "Técnico";
+  return "—";
+}

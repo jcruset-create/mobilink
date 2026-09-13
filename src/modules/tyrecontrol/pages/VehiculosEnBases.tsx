@@ -39,6 +39,7 @@ import {
   fechaCorta,
   dormidosPorBase,
   minutosEnPalabras,
+  quienRevisó,
   revisablesEnBase,
   revisablesPorBase,
   tieneRevisionPendiente,
@@ -170,6 +171,10 @@ export default function VehiculosEnBases() {
               <span className="text-right text-[11px] leading-tight text-slate-400">
                 <span className="block text-[9px] uppercase text-slate-500">Últ. revisión</span>
                 {fechaCorta(rev.ultima_revision)}
+                {/* Y quién la hizo: una persona o el arco. No es lo mismo. */}
+                <span className="block truncate text-[10px] text-slate-500">
+                  {quienRevisó(rev)}
+                </span>
               </span>
               <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${chip}`}>
                 {ESTADO_PERIODICIDAD_LABELS[rev.estado]}
@@ -219,7 +224,9 @@ export default function VehiculosEnBases() {
           <p className="text-xs text-slate-500">
             {datos?.calculadoAt
               ? `Último barrido hace ${desde(datos.calculadoAt)}`
-              : "Todavía no se ha barrido ninguna vez"}
+              : (datos?.cuentas ?? []).some((c) => c.activa)
+                ? "Todavía no se ha barrido ninguna vez · pulsa «Barrer ahora»"
+                : "Todavía no se ha barrido ninguna vez"}
             {datos ? ` · ${datos.bases.length} base(s) con geo-zona` : ""}
           </p>
         </div>
@@ -253,6 +260,30 @@ export default function VehiculosEnBases() {
 
       {error && <div className="mb-3 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-300">{error}</div>}
       {msg && <div className="mb-3 rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-300">{msg}</div>}
+
+      {/*
+        Por qué está vacío, dicho en la propia pantalla.
+
+        Antes salían cuatro ceros y un «todavía no se ha barrido ninguna vez»
+        sin más, y el motivo más frecuente no se veía desde aquí: la empresa no
+        tiene ninguna cuenta de telemática dada de alta en el Hub, así que el
+        barrido no tiene a quién preguntar.
+      */}
+      {datos && datos.bases.length > 0 && (datos.cuentas ?? []).length === 0 && (
+        <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-[13px] text-amber-200">
+          Esta empresa no tiene ninguna cuenta de telemática dada de alta en el Hub, así que
+          no hay a quién preguntar dónde están sus vehículos. Se activa en el panel de
+          integraciones, eligiendo esta empresa y su proveedor (Webfleet o Movertis).
+        </div>
+      )}
+      {datos && (datos.cuentas ?? []).length > 0 && datos.cuentas.every((c) => !c.activa) && (
+        <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-[13px] text-amber-200">
+          Las cuentas de telemática de esta empresa (
+          {datos.cuentas.map((c) => `${c.nombre ?? c.cuenta} · ${c.proveedor}`).join(", ")}) están
+          dadas de alta pero <b>desactivadas</b>. Márcalas como activas en el panel de
+          integraciones.
+        </div>
+      )}
 
       {cargando && !datos ? (
         <div className="text-slate-500">Cargando…</div>

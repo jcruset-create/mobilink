@@ -210,6 +210,10 @@ export interface RevisionEstado {
   proxima_revision?: string | null;
   dias_vencido?: number | null;
   estado: EstadoPeriodicidad;
+  /** Nombre del técnico que firmó la última revisión, si la hizo una persona. */
+  ultima_revision_por?: string | null;
+  /** Cómo se hizo: una persona («tecnico») o una importación automática. */
+  ultima_revision_origen?: "tecnico" | "checkpoint" | null;
 }
 
 export interface RevisionFlag {

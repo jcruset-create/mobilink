@@ -34,6 +34,7 @@ import type { OperationContext } from "../../../domain/identifiers.ts";
 import { IntegrationError } from "../../../domain/errors.ts";
 import {
   TELEMATICS_CAPABILITIES,
+  type IFleetPositionProvider,
   type ProviderVehicle,
   type TelemetryWindow,
   type VehicleTelemetry,
@@ -65,7 +66,7 @@ export interface WebfleetConfig {
   accionHistorico?: "showLogbook" | "showTripReportExtern";
 }
 
-export class WebfleetConnector implements ITelematicsConnector {
+export class WebfleetConnector implements ITelematicsConnector, IFleetPositionProvider {
   readonly info: ConnectorInfo = {
     key: "webfleet",
     kind: "telematics",
@@ -83,6 +84,7 @@ export class WebfleetConnector implements ITelematicsConnector {
       TELEMATICS_CAPABILITIES.HISTORY,
       TELEMATICS_CAPABILITIES.ODOMETER,
       TELEMATICS_CAPABILITIES.POSITION,
+      TELEMATICS_CAPABILITIES.FLEET_POSITIONS,
     ],
   };
 
@@ -183,6 +185,27 @@ export class WebfleetConnector implements ITelematicsConnector {
     return filas
       .map((f) => objetoAVehiculo(f))
       .filter((v): v is ProviderVehicle => v !== null);
+  }
+
+  /**
+   * La posición de TODA la cuenta en una sola llamada.
+   *
+   * Es la misma acción que ya usa `listVehicles` —`showObjectReportExtern`
+   * devuelve la flota entera con su última posición—, así que no hay ninguna
+   * petición de más: lo que cambia es qué se saca de cada fila. Es lo que
+   * necesita el barrido de presencia en bases para no preguntar vehículo a
+   * vehículo.
+   *
+   * Los equipos sin posición utilizable no salen. `objetoALectura` devuelve
+   * `null` sin `pos_time` o con la posición en `0,0`, que en Webfleet es «sin
+   * fijación GPS» y no una coordenada del Golfo de Guinea. Quien llame
+   * distingue esa ausencia de un «está fuera de la base».
+   */
+  async getFleetPositions(ctx: OperationContext): Promise<VehicleTelemetry[]> {
+    const filas = await this.llamar(ctx, "showObjectReportExtern");
+    return filas
+      .map((f) => objetoALectura(f, this.opcionesMapeo))
+      .filter((l): l is VehicleTelemetry => l !== null);
   }
 
   async getCurrentTelemetry(
