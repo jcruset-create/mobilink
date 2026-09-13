@@ -39,6 +39,7 @@ export interface ResumenCuentaMensual {
   nombre: string | null;
   zonaHoraria: string;
   unidadesPorPeticion: number;
+  ritmo?: { maximo: number; ventanaMs: number };
   inicioMs: number;
   finMs: number;
   meses: string[];

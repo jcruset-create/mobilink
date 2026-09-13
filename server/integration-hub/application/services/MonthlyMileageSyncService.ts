@@ -49,7 +49,7 @@ import {
   upsertSyncState,
   type MappingRow,
 } from "../../infrastructure/repositories.ts";
-import { limitadorDe } from "../../infrastructure/ritmo.ts";
+import { ErrorRitmo, limitadorDe, ritmoDeConfig } from "../../infrastructure/ritmo.ts";
 import { resolveTelematicsConnectors } from "../../connectors/ConnectorRegistry.ts";
 
 export const FUENTE = "summarytrips";
@@ -90,6 +90,14 @@ export interface OpcionesSyncMensual {
   mesesHistorico?: number;
   /** Volver a pedir también los meses cerrados. Solo tiene sentido a mano. */
   forzar?: boolean;
+  /**
+   * Cuánto se puede esperar por el cupo del proveedor antes de rendirse.
+   *
+   * Lo pone quien tiene a alguien delante: una pantalla no puede quedarse
+   * colgada cinco minutos esperando turno. El job no lo pone, porque él sí
+   * puede esperar.
+   */
+  esperaMaximaMs?: number;
   /** Para pruebas. */
   ahora?: Date;
 }
@@ -100,6 +108,8 @@ export interface ResumenCuentaMensual {
   nombre: string | null;
   zonaHoraria: string;
   unidadesPorPeticion: number;
+  /** El ritmo que se ha usado, para poder verlo sin abrir la config. */
+  ritmo: { maximo: number; ventanaMs: number };
   inicioMs: number;
   finMs: number;
   meses: string[];
@@ -154,6 +164,7 @@ async function sincronizarCuenta(
   const inicioMs = Date.now();
   const zona = String(cuenta.config.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
   const lote = tamanoDeLote(cuenta.config.unidadesPorPeticion);
+  const ritmo = ritmoDeConfig(cuenta.config);
 
   const r: ResumenCuentaMensual = {
     connectorKey: cuenta.key,
@@ -161,6 +172,7 @@ async function sincronizarCuenta(
     nombre: cuenta.nombre,
     zonaHoraria: zona,
     unidadesPorPeticion: lote,
+    ritmo,
     inicioMs,
     finMs: inicioMs,
     meses: [],
@@ -198,10 +210,14 @@ async function sincronizarCuenta(
     r.vehiculosEnlazados = enlaces.length;
     if (enlaces.length === 0) return r;
 
-    const meses = op.meses?.length ? op.meses : mesesQueTocan(ahora, zona, op.mesesHistorico);
+    // El histórico también sale de la config si no lo pide quien llama: con un
+    // ritmo muy bajo, trece meses de flota entera son días de peticiones, y
+    // poder decir «de momento solo el mes en curso» es media prueba.
+    const historico = op.mesesHistorico ?? numeroDeConfig(cuenta.config.mesesHistorico);
+    const meses = op.meses?.length ? op.meses : mesesQueTocan(ahora, zona, historico);
     r.meses = meses.map(claveDeMes);
 
-    const limitador = limitadorDe(`${op.tenantId}/${cuenta.key}/${cuenta.accountKey}`);
+    const limitador = limitadorDe(`${op.tenantId}/${cuenta.key}/${cuenta.accountKey}`, ritmo);
     const procesados = new Set<string>();
     const conKm = new Set<string>();
     const sinDatos = new Set<string>();
@@ -226,7 +242,22 @@ async function sincronizarCuenta(
         const tanda = pendientes.slice(i, i + lote);
         r.lotes += 1;
 
-        await limitador.turno();
+        try {
+          await limitador.turno(op.esperaMaximaMs);
+        } catch (e) {
+          if (!(e instanceof ErrorRitmo)) throw e;
+          // Nada que guardar: al proveedor no se le ha llegado a preguntar, y
+          // escribir un error en las filas diría que Movertis falló cuando lo
+          // que pasa es que aquí se ha decidido no molestarlo todavía.
+          r.abandonada =
+            `Cupo agotado con el proveedor: quedan ${Math.ceil(e.esperaMs / 1000)} s para el siguiente turno. ` +
+            `Lo terminará la sincronización de fondo.`;
+          r.vehiculosProcesados = procesados.size;
+          r.vehiculosConKm = conKm.size;
+          r.vehiculosSinDatos = [...sinDatos].filter((id) => !conKm.has(id)).length;
+          await cerrarAuditoria(op.tenantId, cuenta, r, r.errores > 0 ? "error" : "partial");
+          return r;
+        }
         r.peticiones += 1;
         const porVehiculo = await pedirLote(ctx, conector, tanda, limites);
 
@@ -298,6 +329,12 @@ export function mesesQueTocan(ahora: Date, zona: string, mesesHistorico = MESES_
     lista.push(m);
   }
   return lista;
+}
+
+/** Un entero de la config, o `undefined` si no lo hay. */
+function numeroDeConfig(v: unknown): number | undefined {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
 }
 
 function tamanoDeLote(v: unknown): number {
@@ -393,7 +430,7 @@ async function cerrarAuditoria(
         inicioMs: r.inicioMs, finMs: r.finMs, meses: r.meses,
         vehiculosEnlazados: r.vehiculosEnlazados, vehiculosProcesados: r.vehiculosProcesados,
         vehiculosConKm: r.vehiculosConKm, vehiculosSinDatos: r.vehiculosSinDatos,
-        lotes: r.lotes, peticiones: r.peticiones, errores: r.errores,
+        lotes: r.lotes, peticiones: r.peticiones, errores: r.errores, ritmo: r.ritmo,
         muestraErrores: r.muestraErrores, kmTotales: redondear(r.kmTotales),
         unidadesPorPeticion: r.unidadesPorPeticion, zonaHoraria: r.zonaHoraria,
         abandonada: r.abandonada ?? null,
