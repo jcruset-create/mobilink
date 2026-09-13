@@ -123,12 +123,23 @@ export function ritmoDeConfig(
   const r = (config?.ritmo ?? {}) as Record<string, unknown>;
   const maximo = Number(r.maximo);
   const ventanaMs = Number(r.ventanaMs);
-  return {
-    maximo: Number.isFinite(maximo) && maximo >= 1 ? Math.min(Math.floor(maximo), techo.maximo) : techo.maximo,
-    // La ventana sí puede ser MÁS larga que la del techo: alargarla es pedir
-    // menos, y eso siempre se permite. Más corta, no.
-    ventanaMs: Number.isFinite(ventanaMs) && ventanaMs >= techo.ventanaMs ? Math.floor(ventanaMs) : techo.ventanaMs,
+  if (!Number.isFinite(maximo) || maximo < 1) return techo;
+
+  const pedido = {
+    maximo: Math.floor(maximo),
+    // Menos de un segundo no es un ritmo, es un descuido.
+    ventanaMs: Number.isFinite(ventanaMs) && ventanaMs >= 1000 ? Math.floor(ventanaMs) : techo.ventanaMs,
   };
+  // Se compara el RITMO —peticiones por milisegundo—, no la ventana.
+  //
+  // La primera versión exigía una ventana al menos tan larga como la del
+  // techo, y eso rechazaba justo lo que hacía falta: «una petición por
+  // minuto» es la vigésima parte de 100 cada 5 minutos, pero con la ventana
+  // más corta. Y la ventana corta no es un detalle, es lo único que ESPACIA:
+  // con 12/5 min el limitador deja salir doce seguidas, que es exactamente la
+  // ráfaga que tumbó a Movertis —seis peticiones de cuarenta segundos una
+  // detrás de otra, sin respiro—.
+  return pedido.maximo / pedido.ventanaMs > techo.maximo / techo.ventanaMs ? techo : pedido;
 }
 
 const registro = new Map<string, LimitadorDeRitmo>();
