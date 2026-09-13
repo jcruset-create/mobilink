@@ -125,6 +125,8 @@ export interface ResumenCuentaMensual {
   kmTotales: number;
   /** Si la cuenta se abandonó (credencial rechazada, sin capacidad…). */
   abandonada?: string;
+  /** Se abandonó por no tener turno con el proveedor, sin llegar a preguntar. */
+  sinCupo?: boolean;
 }
 
 export interface ResumenSyncMensual {
@@ -252,6 +254,7 @@ async function sincronizarCuenta(
           r.abandonada =
             `Cupo agotado con el proveedor: quedan ${Math.ceil(e.esperaMs / 1000)} s para el siguiente turno. ` +
             `Lo terminará la sincronización de fondo.`;
+          r.sinCupo = true;
           r.vehiculosProcesados = procesados.size;
           r.vehiculosConKm = conKm.size;
           r.vehiculosSinDatos = [...sinDatos].filter((id) => !conKm.has(id)).length;
@@ -265,6 +268,17 @@ async function sincronizarCuenta(
         // vehículo raro: se cuentan seguidos y, pasado el tope, se para.
         const loteFallido = tanda.length > 0 && tanda.every((e) => porVehiculo.get(e.mobilink_id)?.tipo === "error");
         lotesSeguidosFallidos = loteFallido ? lotesSeguidosFallidos + 1 : 0;
+
+        // ¿Estaba el proveedor contestando de verdad en esta petición?
+        //
+        // Importa para poder DAR POR CERRADO un mes sin datos. Un mes pasado
+        // en el que un vehículo no se movió es un cero legítimo y no hay que
+        // volver a preguntarlo nunca. Pero una respuesta vacía para los veinte
+        // del lote se parece demasiado a un mal momento del proveedor, y
+        // cerrar eso dejaría el mes en blanco para siempre sin que nadie lo
+        // reintente. Si al menos uno trajo kilómetros, el vacío de los demás
+        // es suyo; si no trajo ninguno, no se cierra nada y mañana se repite.
+        const proveedorContesto = tanda.some((e) => porVehiculo.get(e.mobilink_id)?.tipo === "ok");
 
         for (const enlace of tanda) {
           const res = porVehiculo.get(enlace.mobilink_id) ?? { tipo: "vacio" as const };
@@ -285,7 +299,11 @@ async function sincronizarCuenta(
           } else {
             sinDatos.add(enlace.mobilink_id);
           }
-          await guardarFila(op.tenantId, cuenta, enlace, mes, limites, zona, res, cerrado);
+          await guardarFila(
+            op.tenantId, cuenta, enlace, mes, limites, zona, res,
+            // Un «sin datos» solo se cierra si el proveedor estaba contestando.
+            cerrado && (res.tipo === "ok" || proveedorContesto),
+          );
         }
 
         if (lotesSeguidosFallidos >= LOTES_SEGUIDOS_FALLIDOS_MAXIMO) {
@@ -420,6 +438,13 @@ async function cerrarAuditoria(
   status: "ok" | "partial" | "error",
 ): Promise<void> {
   r.finMs = Date.now();
+
+  // Una pasada que no llegó a preguntar NADA no tiene nada que informar, y
+  // guardarla borraría el informe de la que sí hizo algo. Pasó en la primera
+  // prueba de Autocares Plana: dos clics seguidos, y el segundo —sin turno—
+  // dejó la tarjeta en ceros tapando los veinte vehículos del primero.
+  if (r.sinCupo && r.peticiones === 0) return;
+
   try {
     await upsertSyncState({
       tenantId,
