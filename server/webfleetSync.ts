@@ -10,6 +10,12 @@
 // Toda la lógica queda aquí, desacoplada del resto del backend.
 // ============================================================
 import { supabase } from "./supabase.ts";
+import {
+  buildWebfleetRequest,
+  resolverCredencialesWebfleet,
+  type WebfleetCreds,
+} from "./tyrecontrol/webfleetCredenciales.ts";
+import { agruparPorCuenta } from "./tyrecontrol/webfleetCuentas.ts";
 
 type WfObject = Record<string, any>;
 // La base es una DELEGACIÓN con geo-zona definida (base_lat/lng + radio).
@@ -18,27 +24,80 @@ type WfObject = Record<string, any>;
 type Base = { id: string; empresa_id: string; nombre: string; base_lat: number | null; base_lng: number | null; base_radio_m: number | null; base_genera_avisos: boolean };
 type EstadoPrevio = { estado: string; delegacion_id: string | null; entrada_base_at: string | null };
 
-// ── Petición a Webfleet (cuenta global por env; los vehículos viven ahí) ─────
-function buildReq(action: string, extra: Record<string, string> = {}): { url: string; headers: Record<string, string> } {
-  const account = process.env.WEBFLEET_ACCOUNT;
-  const username = process.env.WEBFLEET_USERNAME;
-  const password = process.env.WEBFLEET_PASSWORD;
-  const apiKey = process.env.WEBFLEET_API_KEY;
-  const baseUrl = process.env.WEBFLEET_BASE_URL || "https://csv.webfleet.com/extern";
-  if (!account || !username || !password) throw new Error("Credenciales Webfleet no configuradas");
-  const params = new URLSearchParams({ account, action, lang: "en", outputformat: "json", useISO8601: "true", ...extra });
-  if (apiKey) params.set("apikey", apiKey);
-  const credentials = Buffer.from(`${username}:${password}`).toString("base64");
-  return { url: `${baseUrl}?${params.toString()}`, headers: { Authorization: `Basic ${credentials}` } };
-}
+// ── Petición a Webfleet, con las credenciales de CADA cliente ────────────────
+//
+// Hasta aquí este servicio leía las variables globales de entorno y hacía UNA
+// llamada para toda la instalación: una sola cuenta de Webfleet para todos los
+// clientes. Con un cliente funcionaba; con dos, el segundo veía la flota del
+// primero o no veía nada.
+//
+// Ahora las credenciales se resuelven por empresa con la misma función que ya
+// usan el Hub y los endpoints —gestor de secretos → tabla → globales—, así que
+// un cliente con su propio juego de credenciales consulta SU cuenta, y quien no
+// tenga ninguno sigue cayendo a las de la casa exactamente como antes.
+//
+// Y se arregla de paso algo que no se veía: los `objectno` de Webfleet son
+// únicos DENTRO de una cuenta, no entre cuentas. Con un único mapa global, dos
+// clientes con el mismo número de objeto se leían la posición el uno al otro.
+// Ahora cada empresa busca solo en los objetos de su cuenta.
 
-async function fetchObjetos(): Promise<WfObject[]> {
-  const { url, headers } = buildReq("showObjectReportExtern");
+async function fetchObjetos(creds: WebfleetCreds): Promise<WfObject[]> {
+  const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
   const r = await fetch(url, { headers });
   if (!r.ok) throw new Error(`Webfleet HTTP ${r.status}`);
   const data = await r.json();
   if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
   return Array.isArray(data) ? data : data?.data ?? [];
+}
+
+interface FlotaPorEmpresa {
+  /** empresa → objetos de SU cuenta, por `objectno`. */
+  porEmpresa: Map<string, Map<string, WfObject>>;
+  /** Cuántas cuentas distintas se han consultado. */
+  cuentas: number;
+  /** Empresas que no se han podido consultar, y por qué. */
+  fallos: Map<string, string>;
+  /** Empresas sin credenciales por ninguna vía. */
+  sinCredenciales: string[];
+}
+
+/**
+ * Descarga la flota de cada empresa, una llamada por cuenta distinta.
+ *
+ * Una cuenta que falla no tumba a las demás: sus empresas se apartan con el
+ * motivo y el resto del ciclo sigue. Es la misma regla que en el barrido de
+ * presencia del Hub, y por el mismo motivo: si no se ha podido preguntar, lo
+ * honesto es no tocar el último estado conocido de esa flota.
+ */
+async function flotaPorEmpresa(empresaIds: string[]): Promise<FlotaPorEmpresa> {
+  const credsPorEmpresa = new Map<string, WebfleetCreds>();
+  const sinCredenciales: string[] = [];
+
+  for (const empresaId of empresaIds) {
+    const { creds } = await resolverCredencialesWebfleet(empresaId);
+    if (creds) credsPorEmpresa.set(empresaId, creds);
+    else sinCredenciales.push(empresaId);
+  }
+
+  // Empresas agrupadas por la cuenta que les toca: una llamada por cuenta.
+  const grupos = agruparPorCuenta(credsPorEmpresa);
+
+  const porEmpresa = new Map<string, Map<string, WfObject>>();
+  const fallos = new Map<string, string>();
+
+  for (const g of grupos) {
+    try {
+      const objetos = await fetchObjetos(g.creds);
+      const porObjectno = new Map<string, WfObject>();
+      for (const o of objetos) porObjectno.set(String(o.objectno), o);
+      for (const empresaId of g.empresas) porEmpresa.set(empresaId, porObjectno);
+    } catch (e: any) {
+      const motivo = e?.message || "Webfleet no contestó";
+      for (const empresaId of g.empresas) fallos.set(empresaId, motivo);
+    }
+  }
+
+  return { porEmpresa, cuentas: grupos.length, fallos, sinCredenciales };
 }
 
 // ── Geometría ────────────────────────────────────────────────────────────────
@@ -66,7 +125,16 @@ function odometroKm(o: WfObject): number | null {
 }
 
 // ── Un ciclo de sincronización ───────────────────────────────────────────────
-export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { error: string }> {
+export async function syncWebfleetOnce(): Promise<
+  | {
+      actualizados: number;
+      /** Cuentas de Webfleet distintas consultadas en este ciclo. */
+      cuentas?: number;
+      /** Vehículos no tocados porque su cuenta falló o no tenía credenciales. */
+      omitidos?: number;
+    }
+  | { error: string }
+> {
   try {
     const [{ data: cfg }, { data: basesRaw }, { data: vehiculos }, { data: estadosRaw }, { data: opsRaw }] = await Promise.all([
       supabase.from("tc_webfleet_sync_config").select("*").eq("id", 1).maybeSingle(),
@@ -88,12 +156,32 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
     const entradas: { vehiculo_id: string; empresa_id: string; delegacion_id: string; entrada: string | null; matricula: string; baseNom: string }[] = [];
     const kmUpdates: { id: string; km: number }[] = [];
 
-    const objetos = await fetchObjetos();
-    const porObjectno = new Map<string, WfObject>();
-    for (const o of objetos) porObjectno.set(String(o.objectno), o);
+    // Una llamada por CUENTA de Webfleet, no una por empresa ni una para todos.
+    // Solo se pregunta por las empresas que tienen algún vehículo con equipo:
+    // el resto no necesita credenciales para nada.
+    const conEquipo = [
+      ...new Set(
+        (vehiculos ?? [])
+          .filter((v: any) => String(v.webfleet_vehicle_id ?? "").trim())
+          .map((v: any) => String(v.empresa_id)),
+      ),
+    ];
+    const flota = await flotaPorEmpresa(conEquipo);
+
+    // Sin una sola cuenta que conteste no hay nada que sincronizar, y decirlo
+    // es mejor que escribir «sin conexión» en toda la flota.
+    if (conEquipo.length > 0 && flota.porEmpresa.size === 0) {
+      const motivo =
+        flota.fallos.size > 0
+          ? [...new Set(flota.fallos.values())].join("; ")
+          : "Credenciales Webfleet no configuradas para ninguna empresa";
+      return { error: motivo };
+    }
 
     const ahora = Date.now();
     const filas: any[] = [];
+    /** Vehículos no tocados porque su cuenta falló o no tiene credenciales. */
+    let omitidos = 0;
 
     for (const v of vehiculos ?? []) {
       const base: any = { vehiculo_id: v.id, empresa_id: v.empresa_id, updated_at: new Date().toISOString() };
@@ -103,6 +191,17 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
         filas.push({ ...base, estado: "sin_dispositivo", delegacion_id: null, lat: null, lng: null, postext: null, velocidad_kmh: null, odometro_km: null, pos_time: null, entrada_base_at: null });
         continue;
       }
+
+      // Los objetos de SU cuenta, no los de una flota común. Si su cuenta no se
+      // ha podido consultar, este vehículo no se toca: lo último que se supo de
+      // él sigue siendo más cierto que un «sin conexión» que en realidad
+      // significa «no he podido preguntar».
+      const porObjectno = flota.porEmpresa.get(String(v.empresa_id));
+      if (!porObjectno) {
+        omitidos += 1;
+        continue;
+      }
+
       const o = porObjectno.get(wfId);
       if (!o) {
         filas.push({ ...base, estado: "sin_conexion", delegacion_id: null, entrada_base_at: null });
@@ -222,7 +321,7 @@ export async function syncWebfleetOnce(): Promise<{ actualizados: number } | { e
     if (alertas.length > 0) {
       await supabase.from("tc_webfleet_alertas").upsert(alertas, { onConflict: "vehiculo_id,delegacion_id,entrada_base_at", ignoreDuplicates: true });
     }
-    return { actualizados: filas.length };
+    return { actualizados: filas.length, cuentas: flota.cuentas, omitidos };
   } catch (e: any) {
     return { error: e?.message || "Error sync Webfleet" };
   }
@@ -280,8 +379,27 @@ export function startMantenimientoAvisos(): void {
 // ── Arranque del bucle periódico (intervalo configurable) ────────────────────
 let timer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * ¿Hay Webfleet configurado en esta instalación, por la vía que sea?
+ *
+ * Antes bastaba con mirar `WEBFLEET_ACCOUNT`, porque era la única forma de
+ * tener credenciales. Ahora un cliente puede tener las suyas en el gestor de
+ * secretos y no haber ninguna global: con la comprobación de antes, el
+ * servicio no arrancaba y ese cliente se quedaba sin sincronizar sin que nada
+ * lo dijera.
+ *
+ * No se resuelven credenciales aquí —eso es por empresa y hace falta la base—:
+ * basta con saber si existe alguna variable de Webfleet. Si no hay ninguna, el
+ * temporizador no se monta y no se consulta la base cada cinco minutos para
+ * nada.
+ */
+function hayWebfleetConfigurado(): boolean {
+  if (process.env.WEBFLEET_ACCOUNT) return true;
+  return Object.keys(process.env).some((k) => /^IH_SECRET__.*__WEBFLEET__/.test(k));
+}
+
 export async function startWebfleetSync(): Promise<void> {
-  if (!process.env.WEBFLEET_ACCOUNT) {
+  if (!hayWebfleetConfigurado()) {
     console.log("[webfleet-sync] sin credenciales Webfleet: servicio no iniciado");
     return;
   }
@@ -289,7 +407,13 @@ export async function startWebfleetSync(): Promise<void> {
     const { data: cfg } = await supabase.from("tc_webfleet_sync_config").select("intervalo_min").eq("id", 1).maybeSingle();
     const res = await syncWebfleetOnce();
     if ("error" in res) console.warn("[webfleet-sync]", res.error);
-    else console.log(`[webfleet-sync] ${res.actualizados} vehículos actualizados`);
+    else {
+      const extra = res.omitidos ? `, ${res.omitidos} sin consultar` : "";
+      console.log(
+        `[webfleet-sync] ${res.actualizados} vehículos actualizados` +
+          `${res.cuentas != null ? ` (${res.cuentas} cuenta(s))` : ""}${extra}`,
+      );
+    }
     const min = Math.max(1, cfg?.intervalo_min ?? 5);
     timer = setTimeout(tick, min * 60 * 1000);
   };
