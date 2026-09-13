@@ -95,7 +95,11 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
           <span>Errores: <b className={d.errores ? "text-amber-300" : ""}>{d.errores ?? "—"}</b></span>
           <span>Tiempo: <b>{d.inicioMs && d.finMs ? `${Math.round((d.finMs - d.inicioMs) / 1000)} s` : "—"}</b></span>
           <span>Km del conjunto: <b>{d.kmTotales != null ? `${Math.round(d.kmTotales).toLocaleString("es-ES")} km` : "—"}</b></span>
-          <span>Lote: <b>{d.unidadesPorPeticion ?? "—"}</b> uds · {d.zonaHoraria ?? ""}</span>
+          <span>
+            Lote: <b>{d.unidadesPorPeticion ?? "—"}</b> uds
+            {d.ritmo && <> · ritmo <b>{d.ritmo.maximo}</b>/{Math.round(d.ritmo.ventanaMs / 60000)} min</>}
+            {d.zonaHoraria ? ` · ${d.zonaHoraria}` : ""}
+          </span>
           <span>Meses: <b>{(d.meses ?? []).join(", ") || "—"}</b></span>
           {d.abandonada && <span className="text-amber-300 sm:col-span-3 lg:col-span-5">Abandonada: {d.abandonada}</span>}
           {!!d.muestraErrores?.length && (
