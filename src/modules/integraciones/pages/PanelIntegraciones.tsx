@@ -15,7 +15,7 @@ import { getAdminHeaders } from "../../adminHeaders";
 
 const TENANT_STORAGE_KEY = "mobilink-tenant-id";
 
-type ConnectorKind = "erp" | "technical" | "supplier" | "communication";
+type ConnectorKind = "erp" | "technical" | "supplier" | "communication" | "telematics";
 
 const CONNECTOR_META: Record<string, { nombre: string; kind: ConnectorKind; descripcion: string; secretos: string[] }> = {
   "business-central": {
@@ -61,6 +61,33 @@ const CONNECTOR_META: Record<string, { nombre: string; kind: ConnectorKind; desc
     descripcion: 'Envío por email. Config: {"sendReal": true, "from": "Mobilink <taller@...>"} — sin sendReal, simula.',
     secretos: ["host", "user", "pass"],
   },
+  /*
+   * Telemática.
+   *
+   * Activar aquí la cuenta de un cliente es lo que le mete en la conciliación
+   * de flota, en el kilometraje mensual y en «Vehículos en bases»: todo eso
+   * recorre los clientes que tienen un conector de telemática habilitado, y
+   * quien no lo tiene no existe para ellos. Un cliente de Webfleet de los de
+   * siempre sigue teniendo su sincronización aparte, que no se toca, pero para
+   * el Hub no existe hasta que se le da de alta aquí.
+   */
+  webfleet: {
+    nombre: "Webfleet",
+    kind: "telematics",
+    descripcion:
+      "Telemática de Webfleet (Bridgestone): posición, odómetro e histórico. " +
+      'Config: {"accionHistorico": "showLogbook"} — o "showTripReportExtern" si la cuenta no tiene libro de ruta. ' +
+      "Sin secretos propios cae a las credenciales de la casa, que es como funcionaba hasta ahora.",
+    secretos: ["account", "username", "password", "api_key"],
+  },
+  movertis: {
+    nombre: "Movertis",
+    kind: "telematics",
+    descripcion:
+      "Telemática de Movertis: posición, odómetro y resumen de kilómetros. " +
+      'Config: {"baseUrl": "https://devapi.hellomovertis.com", "odometroEn": "km"} — sin unidad declarada NO se lee el odómetro, a propósito.',
+    secretos: ["token", "api_key"],
+  },
 };
 
 const KIND_LABEL: Record<ConnectorKind, { label: string; clase: string }> = {
@@ -68,6 +95,7 @@ const KIND_LABEL: Record<ConnectorKind, { label: string; clase: string }> = {
   technical: { label: "Datos técnicos", clase: "bg-emerald-500/15 text-emerald-300" },
   supplier: { label: "Proveedor", clase: "bg-amber-500/15 text-amber-300" },
   communication: { label: "Comunicación", clase: "bg-violet-500/15 text-violet-300" },
+  telematics: { label: "Telemática", clase: "bg-sky-500/15 text-sky-300" },
 };
 
 const ESTADOS = [
@@ -275,12 +303,17 @@ function PestanaConectores({ tenantId }: { tenantId: string }) {
         technicalConnectors: string[];
         supplierConnectors: string[];
         communicationConnectors?: string[];
+        telematicsConnectors?: string[];
       }>("/api/v1/health");
+      // Los de telemática los devolvía `/health` desde siempre y este panel no
+      // los enseñaba, así que la única forma de dar de alta la cuenta de un
+      // cliente era escribir en la base a mano. Ahora salen como los demás.
       setKeys([
         ...health.erpConnectors,
         ...health.technicalConnectors,
         ...health.supplierConnectors,
         ...(health.communicationConnectors ?? []),
+        ...(health.telematicsConnectors ?? []),
       ]);
       const data = await api<{ configs: ConfigRow[] }>(`/api/v1/admin/connectors?tenantId=${encodeURIComponent(tenantId)}`);
       setConfigs(data.configs);
