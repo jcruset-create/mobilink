@@ -60,6 +60,28 @@ export function agruparPorBase(
   return m;
 }
 
+/**
+ * Cuántos, por base, están dentro AHORA y con revisión pendiente.
+ *
+ * Es el número que decide a qué patio bajar: «155 dentro» dice cuántos hay,
+ * pero no cuántos hay algo que hacerles. Se cuenta sobre los mismos que
+ * devuelve `agruparPorBase` —posición reciente, nada de «probablemente sigan
+ * ahí»— para que el recuento de la tarjeta y la lista que se abre al pulsarla
+ * hablen de los mismos vehículos.
+ */
+export function revisablesPorBase(
+  vehiculos: VehiculoPresencia[],
+  revisiones: Map<string, RevisionEstado>,
+): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const v of vehiculos) {
+    if (v.estado !== "IN_BASE" || !v.delegacion_id) continue;
+    if (!tieneRevisionPendiente(revisiones.get(v.vehiculo_id))) continue;
+    m.set(v.delegacion_id, (m.get(v.delegacion_id) ?? 0) + 1);
+  }
+  return m;
+}
+
 /** Cuántos, por base, tienen la última posición dentro pero ya vieja. */
 export function dormidosPorBase(vehiculos: VehiculoPresencia[]): Map<string, number> {
   const m = new Map<string, number>();
