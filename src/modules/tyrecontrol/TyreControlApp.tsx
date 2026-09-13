@@ -10,6 +10,7 @@ import EmpresaDetalle from "./pages/EmpresaDetalle";
 import Delegaciones from "./pages/Delegaciones";
 import Vehiculos from "./pages/Vehiculos";
 import ConciliacionTelematica from "./pages/ConciliacionTelematica";
+import VehiculosEnBases from "./pages/VehiculosEnBases";
 import VehiculoDetalle from "./pages/VehiculoDetalle";
 import DisponiblesRevisar from "./pages/DisponiblesRevisar";
 import PlanificacionRevisiones from "./pages/PlanificacionRevisiones";
@@ -121,6 +122,7 @@ export default function TyreControlApp() {
               <Route path="usuarios" element={<Usuarios />} />
               <Route path="vehiculos" element={<Vehiculos />} />
               <Route path="conciliacion-telematica" element={<ConciliacionTelematica />} />
+              <Route path="vehiculos-en-bases" element={<VehiculosEnBases />} />
               <Route path="disponibles-revisar" element={<DisponiblesRevisar />} />
               <Route path="planificacion" element={<PlanificacionRevisiones />} />
               <Route path="incidencias" element={<Incidencias />} />
