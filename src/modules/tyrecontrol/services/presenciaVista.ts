@@ -110,3 +110,17 @@ export function minutosEnPalabras(min: number | null | undefined): string {
   const h = Math.floor(min / 60);
   return h < 24 ? `${h} h` : `${Math.floor(h / 24)} d`;
 }
+
+/**
+ * Una fecha de revisión, corta y en castellano. `—` si no hay ninguna.
+ *
+ * La ausencia se enseña como raya y no como «nunca»: el distintivo de al lado
+ * ya dice «Sin revisión», y repetirlo con otras palabras en la misma línea no
+ * añade nada.
+ */
+export function fechaCorta(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
