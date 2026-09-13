@@ -15,6 +15,7 @@ import {
   minutosEnPalabras,
   prioridadRevision,
   revisablesEnBase,
+  revisablesPorBase,
   tieneRevisionPendiente,
 } from "./presenciaVista";
 import type { VehiculoPresencia } from "./presenciaBases";
@@ -171,5 +172,66 @@ describe("fechaCorta()", () => {
     expect(fechaCorta(null)).toBe("—");
     expect(fechaCorta(undefined)).toBe("—");
     expect(fechaCorta("no es una fecha")).toBe("—");
+  });
+});
+
+/**
+ * El recuento de pendientes por base.
+ *
+ * Es el número que decide a qué patio bajar, así que tiene que contar
+ * exactamente lo mismo que la lista que se abre al pulsar la tarjeta: ni los
+ * de posición vieja, ni los que están al día.
+ */
+describe("revisablesPorBase()", () => {
+  const revisiones = new Map<string, RevisionEstado>([
+    ["v1", rev("vencida", 40)],
+    ["v2", rev("sin_revision")],
+    ["v3", rev("al_dia")],
+    ["v4", rev("vencida", 3)],
+    ["v5", rev("proxima")],
+  ]);
+
+  it("cuenta por base solo los que están dentro y tienen algo pendiente", () => {
+    const m = revisablesPorBase(
+      [
+        veh("v1"), veh("v2"), veh("v3"),                       // Reus: 2 de 3
+        veh("v4", { delegacion_id: "vilanova" }),              // Vilanova: 1
+      ],
+      revisiones,
+    );
+    expect(m.get("reus")).toBe(2);
+    expect(m.get("vilanova")).toBe(1);
+  });
+
+  it("un vehículo con la posición vieja NO cuenta, aunque esté vencido", () => {
+    // Es la misma regla que `agruparPorBase`: «probablemente siga ahí» no es a
+    // quien se manda buscar al patio.
+    const m = revisablesPorBase([veh("v1", { estado: "STALE_POSITION" })], revisiones);
+    expect(m.get("reus")).toBeUndefined();
+  });
+
+  it("los que están fuera o sin posición tampoco", () => {
+    const m = revisablesPorBase(
+      [veh("v1", { estado: "OUTSIDE_BASES" }), veh("v2", { estado: "NO_POSITION" })],
+      revisiones,
+    );
+    expect(m.size).toBe(0);
+  });
+
+  it("sin base asignada no se cuenta en ninguna", () => {
+    const m = revisablesPorBase([veh("v1", { delegacion_id: null })], revisiones);
+    expect(m.size).toBe(0);
+  });
+
+  it("una base donde todos están al día no aparece: cero es no tener entrada", () => {
+    const m = revisablesPorBase([veh("v3")], revisiones);
+    expect(m.get("reus")).toBeUndefined();
+  });
+
+  it("la suma por base coincide con el total de revisablesEnBase()", () => {
+    const flota = [veh("v1"), veh("v2"), veh("v3"), veh("v4", { delegacion_id: "vilanova" }), veh("v5")];
+    const porBase = revisablesPorBase(flota, revisiones);
+    const total = [...porBase.values()].reduce((a, b) => a + b, 0);
+    expect(total).toBe(revisablesEnBase(flota, revisiones).length);
   });
 });

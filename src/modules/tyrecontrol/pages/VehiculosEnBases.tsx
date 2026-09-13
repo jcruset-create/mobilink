@@ -40,6 +40,7 @@ import {
   dormidosPorBase,
   minutosEnPalabras,
   revisablesEnBase,
+  revisablesPorBase,
   tieneRevisionPendiente,
 } from "../services/presenciaVista";
 import type { Empresa, RevisionEstado } from "../types";
@@ -126,9 +127,16 @@ export default function VehiculosEnBases() {
     () => revisablesEnBase(datos?.vehiculos ?? [], revisiones),
     [datos, revisiones],
   );
+  // Pendientes POR base: es el número que decide a qué patio bajar. «155
+  // dentro» dice cuántos hay, no a cuántos hay algo que hacerles.
+  const pendientesPorBase = useMemo(
+    () => revisablesPorBase(datos?.vehiculos ?? [], revisiones),
+    [datos, revisiones],
+  );
 
   const sinEnlace = (datos?.vehiculos ?? []).filter((v) => v.motivo === "sin_enlace").length;
   const lista = baseSel ? (enBase.get(baseSel) ?? []) : revisables;
+  const pendientesEnLista = baseSel ? (pendientesPorBase.get(baseSel) ?? 0) : lista.length;
 
   function Ficha({ v }: { v: VehiculoPresencia }) {
     const rev = revisiones.get(v.vehiculo_id);
@@ -296,6 +304,7 @@ export default function VehiculosEnBases() {
             {datos.bases.map((b) => {
               const dentro = enBase.get(b.id)?.length ?? 0;
               const conPosicionVieja = dormidos.get(b.id) ?? 0;
+              const pendientes = pendientesPorBase.get(b.id) ?? 0;
               return (
                 <button
                   key={b.id}
@@ -313,6 +322,16 @@ export default function VehiculosEnBases() {
                     {dentro} dentro
                     {conPosicionVieja > 0 && ` · ${conPosicionVieja} con posición antigua`}
                   </div>
+                  {/*
+                    Los pendientes, destacados y solo cuando los hay: una base
+                    con cero no necesita una línea que lo diga, y en gris se
+                    perdería justo el dato por el que se abre esta pantalla.
+                  */}
+                  {pendientes > 0 && (
+                    <div className="mt-0.5 font-bold text-emerald-300">
+                      {pendientes} con revisión pendiente
+                    </div>
+                  )}
                 </button>
               );
             })}
@@ -321,7 +340,8 @@ export default function VehiculosEnBases() {
           <div className="mb-2 flex items-center gap-2 text-[13px] text-slate-400">
             <Truck size={14} />
             {baseSel
-              ? `${lista.length} vehículo(s) en ${nombreBase.get(baseSel) ?? "la base"}`
+              ? `${lista.length} vehículo(s) en ${nombreBase.get(baseSel) ?? "la base"}` +
+                (pendientesEnLista > 0 ? ` · ${pendientesEnLista} con revisión pendiente, los primeros` : "")
               : `${lista.length} vehículo(s) en base y con revisión pendiente`}
           </div>
 
