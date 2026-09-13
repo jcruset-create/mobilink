@@ -61,7 +61,12 @@ export function createPresenciaRouter(): Router {
           .select(
             "vehiculo_id, estado, delegacion_id, es_su_base, distancia_m, antiguedad_min, " +
               "lat, lng, velocidad_kmh, posicion_at, entrada_base_at, proveedor, cuenta, " +
-              "externo, motivo, calculado_at",
+              "externo, motivo, calculado_at, " +
+              // La matrícula viaja con la fila: la pantalla la necesita para
+              // cada vehículo, y sin esto tendría que leerse la flota entera
+              // aparte solo para poner un nombre a cada línea.
+              "vehiculo:tc_vehiculos(id, matricula, numero_unidad), " +
+              "delegacion:tc_delegaciones(id, nombre)",
           )
           .eq("empresa_id", empresaId),
         supabase
