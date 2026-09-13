@@ -14,6 +14,7 @@ import {
   dormidosPorBase,
   minutosEnPalabras,
   prioridadRevision,
+  quienRevisó,
   revisablesEnBase,
   tieneRevisionPendiente,
 } from "./presenciaVista";
@@ -171,5 +172,26 @@ describe("fechaCorta()", () => {
     expect(fechaCorta(null)).toBe("—");
     expect(fechaCorta(undefined)).toBe("—");
     expect(fechaCorta("no es una fecha")).toBe("—");
+  });
+});
+
+describe("quienRevisó()", () => {
+  it("una persona sale con su nombre", () => {
+    expect(quienRevisó({ ...rev("al_dia"), ultima_revision_origen: "tecnico", ultima_revision_por: "David" })).toBe("David");
+  });
+
+  it("el arco sale como CheckPoint, no como un técnico sin nombre", () => {
+    expect(quienRevisó({ ...rev("al_dia"), ultima_revision_origen: "checkpoint", ultima_revision_por: null })).toBe("CheckPoint");
+  });
+
+  it("un técnico cuyo nombre no se puede ver no se convierte en «nadie»", () => {
+    // Pasa si los permisos esconden ese usuario: la revisión la hizo alguien,
+    // y decirlo genérico es más cierto que dejarlo en blanco.
+    expect(quienRevisó({ ...rev("al_dia"), ultima_revision_origen: "tecnico", ultima_revision_por: null })).toBe("Técnico");
+  });
+
+  it("sin origen conocido no se inventa nada", () => {
+    expect(quienRevisó(rev("sin_revision"))).toBe("—");
+    expect(quienRevisó(undefined)).toBe("—");
   });
 });

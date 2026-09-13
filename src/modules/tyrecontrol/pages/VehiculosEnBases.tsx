@@ -39,6 +39,7 @@ import {
   fechaCorta,
   dormidosPorBase,
   minutosEnPalabras,
+  quienRevisó,
   revisablesEnBase,
   tieneRevisionPendiente,
 } from "../services/presenciaVista";
@@ -162,6 +163,10 @@ export default function VehiculosEnBases() {
               <span className="text-right text-[11px] leading-tight text-slate-400">
                 <span className="block text-[9px] uppercase text-slate-500">Últ. revisión</span>
                 {fechaCorta(rev.ultima_revision)}
+                {/* Y quién la hizo: una persona o el arco. No es lo mismo. */}
+                <span className="block truncate text-[10px] text-slate-500">
+                  {quienRevisó(rev)}
+                </span>
               </span>
               <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${chip}`}>
                 {ESTADO_PERIODICIDAD_LABELS[rev.estado]}
