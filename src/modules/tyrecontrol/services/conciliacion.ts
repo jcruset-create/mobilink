@@ -141,6 +141,11 @@ export interface Pendientes {
   ejecutadoMs?: number;
 }
 
+/** De qué telemática es cada vehículo, para la columna de la lista. */
+export function enlacesTelematica() {
+  return pedir<{ enlaces: import("./telematicaVehiculo").EnlaceTelematica[] }>("/enlaces-telematica");
+}
+
 export function pendientes(empresaId?: string) {
   const q = empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : "";
   return pedir<Pendientes>(`/pendientes${q}`);
