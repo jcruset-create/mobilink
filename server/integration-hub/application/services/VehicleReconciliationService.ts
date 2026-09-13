@@ -169,7 +169,7 @@ export async function conciliarFlota(
   if (cuentas.length === 0) {
     const vacios = {
       enlazados: [], soloProveedor: [], soloTyreControl: [], discrepancias: [],
-      noEvaluados: internos,
+      noEvaluados: internos, bajas: [],
     };
     return {
       ...vacios,
