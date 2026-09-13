@@ -141,13 +141,26 @@ describe("ritmoDeConfig()", () => {
   });
 
   it("una cuenta NO puede subirse el límite del proveedor", () => {
-    expect(ritmoDeConfig({ ritmo: { maximo: 5000 } }).maximo).toBe(100);
-    // Una ventana más corta es pedir más: se ignora.
-    expect(ritmoDeConfig({ ritmo: { ventanaMs: 1000 } }).ventanaMs).toBe(300_000);
+    expect(ritmoDeConfig({ ritmo: { maximo: 5000 } })).toEqual({ maximo: 100, ventanaMs: 300_000 });
+    // Cien en un segundo es trescientas veces el techo: se ignora entero.
+    expect(ritmoDeConfig({ ritmo: { maximo: 100, ventanaMs: 1000 } })).toEqual({ maximo: 100, ventanaMs: 300_000 });
   });
 
-  it("una ventana más larga sí vale: es pedir menos", () => {
+  it("una ventana más larga vale: es pedir menos", () => {
     expect(ritmoDeConfig({ ritmo: { maximo: 20, ventanaMs: 600_000 } })).toEqual({ maximo: 20, ventanaMs: 600_000 });
+  });
+
+  it("una ventana más CORTA también vale si el ritmo resultante es menor", () => {
+    // «Una por minuto» es la vigésima parte de 100/5 min, y es lo único que
+    // ESPACIA de verdad: con 12/5 min salen doce seguidas, que es la ráfaga
+    // que tumbó a Movertis.
+    expect(ritmoDeConfig({ ritmo: { maximo: 1, ventanaMs: 60_000 } })).toEqual({ maximo: 1, ventanaMs: 60_000 });
+    expect(ritmoDeConfig({ ritmo: { maximo: 2, ventanaMs: 60_000 } })).toEqual({ maximo: 2, ventanaMs: 60_000 });
+  });
+
+  it("una ventana absurdamente corta se sanea en vez de aceptarse a ciegas", () => {
+    // Menos de un segundo no es un ritmo, es un descuido.
+    expect(ritmoDeConfig({ ritmo: { maximo: 1, ventanaMs: 10 } })).toEqual({ maximo: 1, ventanaMs: 300_000 });
   });
 
   it("basura en la config no rompe nada: se cae al techo", () => {
