@@ -636,6 +636,36 @@ export async function listVehicleMappings(params: {
 }
 
 /**
+ * Enlaces de vehículo ACTIVOS, de todos los conectores y cuentas.
+ *
+ * Lo pide la lista de vehículos del panel, para poder decir de qué telemática
+ * es cada uno en vez de preguntar solo por Webfleet. Devuelve el `system` tal
+ * cual: quien lo enseñe decide cómo se llama cada proveedor, y así un conector
+ * nuevo aparece sin tocar esta consulta.
+ *
+ * Sin `tenantIds` devuelve los de todos los clientes; con ellos, solo esos. La
+ * lista vacía devuelve vacío y NO todos, que es el fallo caro de este patrón.
+ */
+export async function listActiveVehicleLinks(params: { tenantIds?: string[] } = {}): Promise<
+  Array<{ tenant_id: string; mobilink_id: string; system: string; account_key: string }>
+> {
+  if (params.tenantIds && params.tenantIds.length === 0) return [];
+  const filtro = params.tenantIds ? ` AND tenant_id = ANY($1::text[])` : "";
+  const { rows } = await pool.query(
+    `SELECT tenant_id, mobilink_id, system, account_key
+       FROM integration_mappings
+      WHERE entity_type = 'vehicle' AND active${filtro}`,
+    params.tenantIds ? [params.tenantIds] : []
+  );
+  return rows.map((r: any) => ({
+    tenant_id: String(r.tenant_id),
+    mobilink_id: String(r.mobilink_id),
+    system: String(r.system),
+    account_key: String(r.account_key),
+  }));
+}
+
+/**
  * Desactiva un enlace conservándolo. Nunca borra.
  *
  * Devuelve la fila resultante, o `null` si no había enlace que desactivar: la

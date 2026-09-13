@@ -15,6 +15,10 @@ import type {
   EstadoWebfleet, VehiculoWebfleetEstado, RevisionEstado,
 } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
+import { enlacesTelematica } from "../services/conciliacion";
+import {
+  conectoresDe, etiquetaTelematica, porVehiculo, type EnlaceTelematica,
+} from "../services/telematicaVehiculo";
 import { Badge, Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
 
 // "hace X" legible a partir de un ISO (para tiempo en base / última posición).
@@ -136,6 +140,8 @@ export default function Vehiculos() {
 
   // Webfleet: estado por vehículo, estado de revisión, filtros y popup.
   const [estados, setEstados] = useState<Map<string, VehiculoWebfleetEstado>>(new Map());
+  // Con qué telemática está enlazado cada vehículo. Del Hub, no solo Webfleet.
+  const [enlacesTel, setEnlacesTel] = useState<EnlaceTelematica[]>([]);
   const [revEstados, setRevEstados] = useState<Map<string, RevisionEstado>>(new Map());
   const [sincronizando, setSincronizando] = useState(false);
   const [fWebfleet, setFWebfleet] = useState<"" | "en_base" | "en_ruta" | "pend_base" | "venc_base">("");
@@ -144,6 +150,11 @@ export default function Vehiculos() {
   async function refrescarWebfleet() {
     try {
       const [est, rev] = await Promise.all([listarEstadoWebfleet(), listarRevisionEstado()]);
+      // Los enlaces van aparte: que falten no puede dejar la lista sin estado
+      // de Webfleet, que es lo que se miraba antes de que existiera esto.
+      enlacesTelematica()
+        .then((r) => setEnlacesTel(r.enlaces))
+        .catch(() => setEnlacesTel([]));
       setEstados(new Map(est.map((e) => [e.vehiculo_id, e])));
       setRevEstados(new Map(rev.map((r) => [r.vehiculo_id, r])));
     } catch { /* módulo Webfleet aún no migrado: se ignora */ }
@@ -183,6 +194,7 @@ export default function Vehiculos() {
   }
 
   const estadoDe = (id: string): EstadoWebfleet => estados.get(id)?.estado ?? "sin_dispositivo";
+  const telematicaPorVehiculo = useMemo(() => porVehiculo(enlacesTel), [enlacesTel]);
 
   // KPIs: en base, pendientes en base, vencidas en base, en ruta, sin conexión.
   const kpis = useMemo(() => {
@@ -492,7 +504,7 @@ export default function Vehiculos() {
               {label}{orden.col === col && <span className="ml-1 text-sky-300">{orden.asc ? "▲" : "▼"}</span>}
             </th>
           ))}
-          <th className={thCls}>Webfleet</th>
+          <th className={thCls}>Telemática</th>
           <th className={`${thCls} cursor-pointer select-none hover:text-slate-100`}
             onClick={() => ordenarPor("estado")} title="Ordenar por estado">
             Estado{orden.col === "estado" && <span className="ml-1 text-sky-300">{orden.asc ? "▲" : "▼"}</span>}
@@ -516,6 +528,7 @@ export default function Vehiculos() {
                 {(() => {
                   const est = estados.get(v.id);
                   const e = est?.estado ?? "sin_dispositivo";
+                  const conectores = conectoresDe(v, telematicaPorVehiculo);
                   const enBase = e === "en_base" || e === "otra_base";
                   const revisar = enBase && esPendiente(v.id);
                   // Nombre de la base donde está (delegación detectada por Webfleet).
@@ -526,18 +539,40 @@ export default function Vehiculos() {
                   const posAntigua = enBase && est?.pos_time != null
                     && Date.now() - new Date(est.pos_time).getTime() > 30 * 60 * 1000;
                   return (
-                    <button
-                      onClick={() => est && setPopup({ v, est })}
-                      disabled={!est}
-                      className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${revisar ? "bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/60" : ESTADO_WEBFLEET_BADGE[e]} ${est ? "cursor-pointer" : "cursor-default opacity-70"}`}
-                      title={est ? (posAntigua ? "Última posición con más de 30 min (GPS dormido) · Ver detalle" : "Ver detalle") : "Sin datos Webfleet"}
-                    >
-                      {revisar
-                        ? `🟢 ${enBaseTxt} · REVISAR`
-                        : enBase
-                          ? `${ESTADO_WEBFLEET_PUNTO[e]} ${enBaseTxt}${posAntigua ? " · POS. ANT." : ""}`
-                          : `${ESTADO_WEBFLEET_PUNTO[e]} ${ESTADO_WEBFLEET_LABELS[e].toUpperCase()}${posAntigua ? " · POS. ANT." : ""}`}
-                    </button>
+                    <div className="flex flex-col items-start gap-1">
+                      {/*
+                        Qué telemática lleva. Antes esta columna solo sabía de
+                        Webfleet y le decía «SIN WEBFLEET» a un autobús con
+                        Movertis montado desde hace meses.
+                      */}
+                      <span
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                          conectores.length
+                            ? "bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/30"
+                            : "bg-slate-700/40 text-slate-400 ring-1 ring-slate-600/40"
+                        }`}
+                      >
+                        {etiquetaTelematica(conectores).toUpperCase()}
+                      </span>
+                      {/*
+                        El estado de posición, que hoy solo lo da Webfleet. Va
+                        aparte: es OTRA cosa que saber de quién es el equipo, y
+                        cuando otro proveedor sepa darlo cabrá aquí igual.
+                      */}
+                      {est && (
+                        <button
+                          onClick={() => setPopup({ v, est })}
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${revisar ? "bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/60" : ESTADO_WEBFLEET_BADGE[e]}`}
+                          title={posAntigua ? "Última posición con más de 30 min (GPS dormido) · Ver detalle" : "Ver detalle"}
+                        >
+                          {revisar
+                            ? `🟢 ${enBaseTxt} · REVISAR`
+                            : enBase
+                              ? `${ESTADO_WEBFLEET_PUNTO[e]} ${enBaseTxt}${posAntigua ? " · POS. ANT." : ""}`
+                              : `${ESTADO_WEBFLEET_PUNTO[e]} ${ESTADO_WEBFLEET_LABELS[e].toUpperCase()}${posAntigua ? " · POS. ANT." : ""}`}
+                        </button>
+                      )}
+                    </div>
                   );
                 })()}
               </td>
