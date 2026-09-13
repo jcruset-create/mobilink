@@ -23,7 +23,7 @@ import { Router, json, type Request, type Response } from "express";
 import { supabase } from "../../supabase.ts";
 import { normalizarMatricula } from "../matricula.ts";
 import { conciliarFlota } from "../../integration-hub/application/services/VehicleReconciliationService.ts";
-import { listIgnoredExternals, nextCorrelationId } from "../../integration-hub/infrastructure/repositories.ts";
+import { listActiveVehicleLinks, listIgnoredExternals, nextCorrelationId } from "../../integration-hub/infrastructure/repositories.ts";
 import { leerFlotaInterna } from "./flota.ts";
 import { leerEstado } from "./estado.ts";
 import { METODOS_VINCULO, type MetodoVinculo } from "../../integration-hub/domain/reconciliation.ts";
@@ -236,6 +236,35 @@ export function createConciliacionRouter(): Router {
         pendientes: estado.pendientes,
         status: estado.status,
         ejecutadoMs: estado.ejecutadoMs,
+      });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * De qué telemática es cada vehículo. Solo la base, sin llamar al proveedor.
+   *
+   * La lista de vehículos lo usa para su columna «Telemática». Devuelve el
+   * `connectorKey` sin traducir: los nombres bonitos los pone el panel, y así
+   * un conector nuevo sale solo sin tocar el servidor.
+   *
+   * Un administrador normal ve los de su empresa; un super-admin, todos —la
+   * lista de vehículos también los enseña todos cuando él la abre.
+   */
+  router.get("/enlaces-telematica", async (req, res) => {
+    try {
+      const { solicitante } = req as PeticionConciliacion;
+      const enlaces = await listActiveVehicleLinks(
+        solicitante.esSuperadmin ? {} : { tenantIds: [solicitante.empresaPropia].filter(Boolean) },
+      );
+      res.json({
+        enlaces: enlaces.map((e) => ({
+          empresaId: e.tenant_id,
+          vehiculoId: e.mobilink_id,
+          connectorKey: e.system,
+          accountKey: e.account_key,
+        })),
       });
     } catch (e) {
       fallo(res, e);
