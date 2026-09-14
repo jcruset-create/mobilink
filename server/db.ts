@@ -451,6 +451,45 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "subcontrataSnapshotAtMs" BIGINT;
 
+    -- Subcontratadas sin seguimiento: cuando el servicio lo hace un taller de
+    -- la red no hay operario nuestro con la APK, así que nadie va marcando los
+    -- ocho estados y la asistencia se queda en «Asignada» para siempre.
+    --
+    -- Es una marca ORTOGONAL, no un estado nuevo: el estado operativo sigue
+    -- siendo el que era y esto solo dice que nadie lo va a ir moviendo. Un
+    -- estado más en el flujo tocaría los contadores de la pantalla, el PDF, el
+    -- espejo de Connect y la página pública de seguimiento; esto no toca nada
+    -- de eso. Mismo principio que el expediente administrativo, que ya es
+    -- independiente del estado del servicio.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "sinSeguimiento" BOOLEAN NOT NULL DEFAULT false;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "sinSeguimientoAtMs" BIGINT;
+
+    -- El número de autorización que damos NOSOTROS al taller subcontratado
+    -- para que lo ponga en su albarán y en su factura.
+    --
+    -- OJO: no confundir con "solicitanteAutorizacion", que es la autorización
+    -- ENTRANTE, la que nos da la aseguradora o el gestor de flota. Son dos
+    -- cosas distintas y mezclarlas es un lío de facturación.
+    --
+    -- Se guarda aunque su valor salga del id de la asistencia: hace falta
+    -- poder BUSCAR por él cuando llega la factura con ese número escrito, y el
+    -- día que haya que autorizar dos veces el mismo servicio a dos talleres
+    -- una columna se amplía y un id no.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "autorizacionTaller" TEXT;
+
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "autorizacionTallerAtMs" BIGINT;
+
+    -- Buscar por la autorización es el caso de uso principal: llega la factura
+    -- del taller con «A-137» escrito y hay que dar con el expediente.
+    CREATE INDEX IF NOT EXISTS idx_roadside_autorizacion_taller
+      ON roadside_assistances ("autorizacionTaller")
+      WHERE "autorizacionTaller" IS NOT NULL;
+
     -- Kilómetros DEL SERVICIO que anota el técnico al finalizar (no el
     -- cuentakilómetros). Los usa el espejo económico de Connect para cobrar
     -- los kilómetros de más; el tiempo NO se anota: va de la creación a la

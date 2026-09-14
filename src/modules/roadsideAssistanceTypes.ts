@@ -75,6 +75,18 @@ export type RoadsideAssistance = {
   longitude?: number | null;
   plate: string;
   plateRemolque?: string | null;
+  /**
+   * El servicio lo hace un taller de la red y nadie va a ir mandando los ocho
+   * estados. Marca ORTOGONAL: el estado operativo sigue siendo el que era.
+   */
+  sinSeguimiento?: boolean;
+  sinSeguimientoAtMs?: number | null;
+  /**
+   * La autorización que damos NOSOTROS al taller subcontratado, para que la
+   * ponga en su albarán y su factura. No confundir con `solicitanteAutorizacion`,
+   * que es la que nos dan a nosotros la aseguradora o el gestor de flota.
+   */
+  autorizacionTaller?: string | null;
   esRemolque?: boolean;
   origen?: "central" | "taller";
   expedienteCentral?: string | null;
