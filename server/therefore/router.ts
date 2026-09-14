@@ -30,6 +30,8 @@ import {
   type EstadoActuacion,
 } from "./domain/estados.ts";
 import { ErrorTherefore } from "./errors.ts";
+import * as decisionesServicio from "./decisiones.ts";
+import * as ingesta from "./ingesta.ts";
 import { cargarPermisos, exigirPermiso } from "./permissions.ts";
 import * as repo from "./repository.ts";
 import * as servicio from "./service.ts";
@@ -91,6 +93,118 @@ function booleano(v: unknown): boolean | undefined {
   if (s === "true" || s === "1") return true;
   if (s === "false" || s === "0") return false;
   return undefined;
+}
+
+/**
+ * Un instante ISO. Se exige que sea una fecha de verdad y no texto libre.
+ *
+ * La fecha del correo no es un adorno: de ella sale la antigüedad del
+ * expediente, y de la antigüedad, la prioridad. Un `"ayer"` que se colara aquí
+ * daría un `Invalid Date` que acabaría en la base sin que nadie lo viera hasta
+ * que la bandeja ordenara raro.
+ */
+function instante(v: unknown, campo: string): string {
+  const s = texto(v);
+  if (!s) throw new ErrorTherefore("FECHA_REQUERIDA", `Falta ${campo}.`);
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) {
+    throw new ErrorTherefore("FECHA_INVALIDA", `${campo} no es una fecha válida: ${s}.`);
+  }
+  return d.toISOString();
+}
+
+/**
+ * Lee el correo que llega por la API.
+ *
+ * Valida FORMA, no contenido: que la acción sea una de las que hay, que el
+ * importe venga en céntimos enteros, que la fecha sea una fecha. Lo que
+ * signifique el correo lo decide `ingesta.ts`.
+ */
+function correoEntranteDe(cuerpo: unknown): ingesta.CorreoEntrante {
+  const body = (cuerpo ?? {}) as Record<string, unknown>;
+  const tipo = texto(body.tipo) || "INCIDENCIA_ALBARAN";
+  if (!esTipoExpediente(tipo)) {
+    throw new ErrorTherefore(
+      "TIPO_INVALIDO",
+      `El tipo debe ser uno de: ${TIPOS_EXPEDIENTE.join(", ")}.`
+    );
+  }
+
+  const acciones = Array.isArray(body.acciones) ? body.acciones : [];
+  const leidas = acciones.map((x, i) => {
+    const a = (x ?? {}) as Record<string, unknown>;
+    const accion = texto(a.accion).toUpperCase();
+    if (!esTipoAccion(accion)) {
+      throw new ErrorTherefore(
+        "ACCION_INVALIDA",
+        `La acción ${i + 1} debe ser una de: ${TIPOS_ACCION.join(", ")}.`
+      );
+    }
+    const confianza = a.confianza === undefined ? undefined : Number(a.confianza);
+    return {
+      accion,
+      albaran: texto(a.albaran) || null,
+      importeCentimos: centimos(a.importeCentimos),
+      indicador: texto(a.indicador) || null,
+      confianza:
+        confianza !== undefined && Number.isFinite(confianza)
+          ? Math.min(Math.max(confianza, 0), 1)
+          : undefined,
+    };
+  });
+
+  const adjuntos = (Array.isArray(body.adjuntos) ? body.adjuntos : []).map((x, i) => {
+    const a = (x ?? {}) as Record<string, unknown>;
+    const hash = texto(a.hash);
+    // Sin hash el adjunto no sirve para nada de lo que hace falta: ni cruza
+    // documentos entre correos ni evita analizar dos veces el mismo PDF.
+    if (!hash) {
+      throw new ErrorTherefore("HASH_REQUERIDO", `Al adjunto ${i + 1} le falta el hash.`);
+    }
+    const tamano = a.tamanoBytes === undefined ? null : Number(a.tamanoBytes);
+    return {
+      nombre: texto(a.nombre),
+      mimeType: texto(a.mimeType),
+      tamanoBytes: tamano !== null && Number.isFinite(tamano) ? Math.trunc(tamano) : null,
+      hash,
+      storagePath: texto(a.storagePath) || null,
+    };
+  });
+
+  return {
+    messageId: texto(body.messageId),
+    gmailMessageId: texto(body.gmailMessageId) || null,
+    gmailThreadId: texto(body.gmailThreadId) || null,
+    inReplyTo: texto(body.inReplyTo) || null,
+    fecha: instante(body.fecha, "la fecha del correo"),
+    de: texto(body.de),
+    para: texto(body.para),
+    asunto: texto(body.asunto),
+    texto: typeof body.texto === "string" ? body.texto : "",
+
+    tipo,
+    empresaCodigo: texto(body.empresaCodigo) || null,
+    empresaNombre: texto(body.empresaNombre) || null,
+    proveedorCodigo: texto(body.proveedorCodigo) || null,
+    proveedorNombre: texto(body.proveedorNombre) || null,
+    cuentaContable: texto(body.cuentaContable) || null,
+    facturaNumero: texto(body.facturaNumero) || null,
+    facturaFecha: fecha(body.facturaFecha),
+    importeCentimos: centimos(body.importeCentimos),
+    casoReferencia: texto(body.casoReferencia) || null,
+    persona: texto(body.persona) || null,
+
+    urgente: booleano(body.urgente) ?? false,
+    tareaVencida: booleano(body.tareaVencida) ?? false,
+    reclamacion: booleano(body.reclamacion) ?? false,
+
+    acciones: leidas,
+    adjuntos,
+    albaranesAmbiguos: (Array.isArray(body.albaranesAmbiguos) ? body.albaranesAmbiguos : [])
+      .map((x) => texto(x))
+      .filter(Boolean),
+    parseado: body.parseado ?? null,
+  };
 }
 
 function contextoDe(req: Request): servicio.Contexto {
@@ -406,6 +520,114 @@ export function createThereforeRouter(): Router {
     );
   }
 
+
+  /* ── Correo ────────────────────────────────────────────────────────────── */
+
+  /**
+   * Mete un correo en la cola de trabajo.
+   *
+   * Recibe CAMPOS, no el .eml: quién lo manda, de qué factura habla, qué
+   * albaranes cita y qué hay que hacer con cada uno. El parser que saca eso del
+   * cuerpo llegará con los correos reales; hasta entonces esta boca permite que
+   * la deduplicación, la idempotencia y los cambios de instrucción estén
+   * probados y en uso.
+   *
+   * Contesta 200 siempre que el correo quede colocado, incluido el caso de que
+   * ya estuviera: repetir un correo no es un error del cliente, es la situación
+   * normal cuando el buzón se relee.
+   */
+  r.post(
+    "/correos",
+    exigirPermiso("therefore.correo.importar"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const resultado = await ingesta.procesarCorreo(ctx, correoEntranteDe(req.body));
+
+      // El duplicado no se audita: no ha cambiado nada, y una auditoría por
+      // cada relectura del buzón enterraría las entradas que sí importan.
+      if (!resultado.duplicado) {
+        await registrarAuditoria({
+          empresaId: ctx.empresaId,
+          userId: ctx.userId,
+          accion: "therefore.correo.importar",
+          entidad: "thf_notificaciones",
+          entidadId: resultado.notificacionId,
+          detalle: {
+            resultado: resultado.resultado,
+            expediente: resultado.expedienteNumero,
+            actuaciones: resultado.actuacionesCreadas,
+          },
+          ip: req.ip,
+        });
+      }
+      res.json(resultado);
+    })
+  );
+
+  r.get(
+    "/expedientes/:id/notificaciones",
+    exigirPermiso("therefore.view"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const id = String(req.params.id);
+      // Por el expediente y no por la notificación directamente: así la
+      // comprobación de empresa la hace la misma consulta que ya la hacía.
+      const expediente = await repo.obtenerExpediente(ctx.empresaId, id);
+      if (!expediente) {
+        throw new ErrorTherefore("NO_ENCONTRADO", "No se encuentra el expediente.", 404);
+      }
+      const [notificaciones, adjuntos] = await Promise.all([
+        repo.listarNotificaciones(ctx.empresaId, id),
+        repo.adjuntosDeExpediente(ctx.empresaId, id),
+      ]);
+      res.json({ notificaciones, adjuntos });
+    })
+  );
+
+  /* ── Decisiones ────────────────────────────────────────────────────────── */
+
+  r.get(
+    "/decisiones",
+    exigirPermiso("therefore.view"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const estado = texto(req.query.estado).toUpperCase();
+      const decisiones = await repo.listarDecisiones(ctx.empresaId, {
+        estado: estado === "DECIDIDA" ? "DECIDIDA" : estado === "" ? undefined : "PENDIENTE",
+        expedienteId: texto(req.query.expedienteId) || undefined,
+      });
+      res.json({ decisiones, respuestas: decisionesServicio.RESPUESTAS });
+    })
+  );
+
+  r.post(
+    "/decisiones/:id",
+    exigirPermiso("therefore.decision.resolve"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const resultado = await decisionesServicio.resolver(ctx, String(req.params.id), {
+        decision: texto(body.decision).toUpperCase(),
+        expedienteId: texto(body.expedienteId) || null,
+        motivo: texto(body.motivo) || null,
+      });
+      await registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "therefore.decision.resolver",
+        entidad: "thf_decisiones",
+        entidadId: resultado.decision.id,
+        detalle: {
+          tipo: resultado.decision.tipo,
+          decision: resultado.decision.decision,
+          expediente: resultado.expedienteNumero,
+        },
+        ip: req.ip,
+      });
+      res.json(resultado);
+    })
+  );
+
   /* ── Configuración ─────────────────────────────────────────────────────── */
 
   r.get(
@@ -421,10 +643,15 @@ export function createThereforeRouter(): Router {
     exigirPermiso("therefore.config.edit"),
     ruta(async (req, res) => {
       const ctx = contextoDe(req);
-      const body = (req.body ?? {}) as { pesos?: unknown; umbrales?: unknown };
+      const body = (req.body ?? {}) as {
+        pesos?: unknown;
+        umbrales?: unknown;
+        dedupe?: unknown;
+      };
       const config = await guardarConfig(ctx.empresaId, {
         pesos: (body.pesos ?? undefined) as never,
         umbrales: (body.umbrales ?? undefined) as never,
+        dedupe: (body.dedupe ?? undefined) as never,
       });
       await registrarAuditoria({
         empresaId: ctx.empresaId,

@@ -31,6 +31,23 @@ export const PERMISOS = [
    * terminado, y eso es una decisión de quien lleva la cola, no del día a día.
    */
   "therefore.expediente.reopen",
+  /**
+   * Resolver las dudas del sistema: duplicados, cambios de instrucción,
+   * reclamaciones sobre lo ya resuelto.
+   *
+   * Es trabajo diario y no de administración: quien lleva la cola es quien
+   * sabe si dos correos hablan del mismo albarán. Reservarlo al admin
+   * garantizaría que la cola de revisión no se vaciara nunca.
+   */
+  "therefore.decision.resolve",
+  /**
+   * Meter un correo en el sistema por la API.
+   *
+   * Va aparte y sólo para admin: no es una acción del día a día, es la boca de
+   * entrada del módulo. Quien pueda llamarla puede crear expedientes con los
+   * datos que quiera, sin el correo que los respalde.
+   */
+  "therefore.correo.importar",
   /** Pesos de la prioridad y demás ajustes del módulo. */
   "therefore.config.edit",
 ] as const;
@@ -56,6 +73,7 @@ const POR_ROL: Record<RolTherefore, readonly Permiso[]> = {
     "therefore.expediente.create",
     "therefore.actuacion.manage",
     "therefore.expediente.reopen",
+    "therefore.decision.resolve",
   ],
   admin: PERMISOS,
 };
