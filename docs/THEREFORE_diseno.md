@@ -1,10 +1,16 @@
 # Therefore — expedientes, actuaciones y albaranes a partir del correo: diseño
 
-Documento de diseño previo a la implementación. **Nada de esto está
-implementado todavía.** Responde al prompt maestro del módulo Therefore con
-las secciones A–O que pide, y es el resultado de leer el repositorio con una
-sola pregunta: «¿dónde encaja esto sin estrenar nada?». Cada apartado dice qué
-se reutiliza, qué se toca y por qué.
+Documento de diseño del módulo Therefore, con las secciones A–O que pide el
+encargo. Es el resultado de leer el repositorio con una sola pregunta: «¿dónde
+encaja esto sin estrenar nada?». Cada apartado dice qué se reutiliza, qué se
+toca y por qué.
+
+> **Estado: la FASE 1 está implementada** (ver §O). Existen los expedientes,
+> las actuaciones, el histórico, los permisos, la numeración, la configuración
+> de la prioridad, la API, la bandeja y el detalle. Los expedientes se crean a
+> mano. Lo que **no** existe todavía: la ingesta de correo, la deduplicación,
+> los adjuntos y el análisis del albarán dentro del PDF. Las secciones que los
+> describen siguen siendo diseño.
 
 Principio que gobierna todo: **la unidad de trabajo es el expediente, no el
 correo.** Un expediente agrupa N actuaciones, N notificaciones, N documentos,
@@ -53,7 +59,20 @@ localizado y desglosado.
 ### A.3 Convenciones que se respetan
 
 - Dominio en castellano, tablas con prefijo de módulo y `snake_case`, valores de estado en mayúsculas, `empresa_id UUID NOT NULL` **sin FK** en el DDL de arranque (las pruebas levantan una base sin la fundación SaaS), tenant desde `ctx.empresaId` y nunca del cuerpo, 404 y no 403.
-- Un módulo nuevo se da de alta en **ocho sitios**: `tsconfig.server.json`, `vitest.setup.ts`, cadena `prepararEsquema` + `mount` + `start` de `server/index.ts`, migración del CHECK de `app_licencias.modulo` (molde `saas_modulo_assist.sql`), `MODULOS_APP`, `ACCESOS_MODULOS`, `ICONOS`/`COLORES`/`BASES` de `InicioPage.tsx`, y `lazy()` + ruta en `App.tsx`.
+- Un módulo nuevo se da de alta en **diez sitios**. Ocho se deducen leyendo otro módulo; los **dos primeros no**, y costaron un fallo real al implementar la fase 1 (ver nota abajo):
+  1. `MODULOS_LICENCIABLES` en `server/db.ts` — reconstruye el CHECK de `app_licencias.modulo` y `app_usuario_modulos.modulo` en cada arranque.
+  2. `MODULOS` en `server/central/schema.ts` — lo reconstruye **otra vez**, y su DROP y su ADD no van en la misma transacción.
+  3. `tsconfig.server.json` (`include`), 4. `vitest.setup.ts`, 5. cadena `prepararEsquema` + `mount` de `server/index.ts`, 6. migración del CHECK (molde `saas_modulo_assist.sql`), 7. `MODULOS_APP`, 8. `ACCESOS_MODULOS`, 9. `ICONOS`/`COLORES`/`BASES` de `InicioPage.tsx`, 10. `lazy()` + ruta en `App.tsx`.
+
+  > **La lista de módulos vive en TRES sitios que se pisan.** Los dos de código
+  > se ejecutan en cada arranque; el de la migración, a mano. Si a uno le falta
+  > un módulo y ya existe una fila con ese valor, su `ALTER TABLE` falla. En
+  > `db.ts` el DO block es atómico y no pasa nada grave; en
+  > `central/schema.ts` el `DROP CONSTRAINT` y el `ADD CONSTRAINT` son dos
+  > consultas sueltas, así que **la tabla se queda sin restricción** y el error
+  > sólo aparece en el log del despliegue, porque `prepararEsquema` lo traga.
+  > Lo destapó la prueba de integración de la fase 1, que es donde apareció la
+  > primera fila con `modulo = 'therefore'`.
 - `docs/PROMPT_avisos_presion_por_correo.md` ya fijó el criterio para consumir correo automático: **regex determinista para la plantilla, IA solo como respaldo y marcada como tal, y no escribir un segundo sistema de correo.**
 
 ---
@@ -221,7 +240,9 @@ proveedor_codigo TEXT, proveedor_nombre TEXT, cuenta_contable TEXT,
 factura_numero TEXT, factura_fecha DATE, importe_centimos BIGINT, moneda TEXT DEFAULT 'EUR',
 caso_referencia TEXT,
 fecha_primera_notificacion TIMESTAMPTZ NOT NULL, fecha_ultima_notificacion TIMESTAMPTZ NOT NULL,
-numero_notificaciones INTEGER DEFAULT 1, numero_reclamaciones INTEGER DEFAULT 0,   -- nivel_reclamacion
+-- Cero, y no uno: un expediente creado a mano todavía no tiene ningún correo
+-- detrás. La ingesta pone 1 al enlazar la primera notificación.
+numero_notificaciones INTEGER DEFAULT 0, numero_reclamaciones INTEGER DEFAULT 0,   -- nivel_reclamacion
 urgente BOOLEAN DEFAULT false, tarea_vencida BOOLEAN DEFAULT false,
 asignado_usuario_id UUID, fecha_inicio_gestion TIMESTAMPTZ,
 fecha_resolucion TIMESTAMPTZ, resuelto_por_usuario_id UUID, fecha_cierre TIMESTAMPTZ,
@@ -1029,12 +1050,31 @@ rutas existentes.
 
 Cada fase es un PR mergeable con CI verde, y el módulo es usable al final.
 
-**Fase 1 — Cimientos.** `server/therefore/{index,schema,errors,permissions,repository,router,config}.ts`,
-`domain/{estados,prioridad,albaran}.ts` con tests, `erp/puerto.ts` + `sinErp.ts`,
-alta en los ocho sitios, migraciones (`therefore_fase1.sql`, `saas_modulo_therefore.sql`),
-`.env.example`. Panel: `ThereforeApp`, contexto, layout, Bandeja y Detalle
-(sin análisis todavía), tarjeta en hub. Integración: aislamiento, permisos,
-transiciones.
+**Fase 1 — Cimientos. HECHA.**
+`server/therefore/{index,schema,errors,permissions,repository,service,router,config}.ts`,
+`domain/{estados,prioridad,albaran}.ts` con sus pruebas, `erp/{puerto,sinErp}.ts`,
+alta en los diez sitios, migraciones (`therefore_fase1.sql`,
+`saas_modulo_therefore.sql`). Panel: `ThereforeApp`, contexto, layout, bandeja
+con pestañas y filtros, detalle con actuaciones e histórico, configuración de
+la prioridad, tarjeta en el hub. 115 pruebas: 54 de dominio puro, 44 de
+integración por HTTP contra PostgreSQL (aislamiento entre empresas, permisos
+por rol, transiciones, numeración, importe negativo, índice único de
+actuaciones e inmutabilidad del histórico) y 17 de los ayudantes del panel.
+
+Tres cosas salieron distintas de lo previsto, y conviene saber por qué:
+
+- **El esquema de esta fase son CINCO tablas, no las diez de §D.** Se crean
+  `thf_expedientes`, `thf_actuaciones`, `thf_eventos`, `thf_contadores` y
+  `thf_config`. Las del correo y las del análisis llegan con el código que las
+  escribe: una tabla vacía que nadie toca es una promesa sin cumplir en medio
+  del esquema, y además nadie sabría si su DDL es correcto hasta usarla.
+- **No hay variables de entorno nuevas.** Estaban previstas en esta fase, pero
+  las de IMAP y almacenamiento no hacen falta hasta que haya buzón y ficheros,
+  y la configuración de la prioridad vive en la base. Se añadirán a
+  `.env.example` en su fase, con su código al lado.
+- **El alta del módulo son diez sitios y no ocho** (ver §A.3): la lista de
+  módulos también se reconstruye desde `server/db.ts` y
+  `server/central/schema.ts` en cada arranque.
 
 **Fase 2 — Correo, ingesta, dedupe.** `domain/correo/*`, `normalizar`,
 `dedupe`, `ingesta.ts`, `storage.ts`, `thf_decisiones`, `POST /importar`,
