@@ -15,6 +15,8 @@ import {
   minutosEnPalabras,
   prioridadRevision,
   quienRevisó,
+  sinPeriodicidad,
+  sinPeriodicidadEnBase,
   revisablesEnBase,
   revisablesPorBase,
   tieneRevisionPendiente,
@@ -255,5 +257,52 @@ describe("quienRevisó()", () => {
   it("sin origen conocido no se inventa nada", () => {
     expect(quienRevisó(rev("sin_revision"))).toBe("—");
     expect(quienRevisó(undefined)).toBe("—");
+  });
+});
+
+/**
+ * El «al día» que no significa nada.
+ *
+ * Un vehículo sin periodicidad —ni la suya ni la de su tipo— sale «al día» por
+ * descarte en cuanto se le hace una revisión, y ya no vuelve a aparecer como
+ * pendiente nunca. Es el caso de los que se dan de alta desde la tablet, que
+ * nacen sin tipo.
+ */
+describe("sinPeriodicidad()", () => {
+  it("al día sin intervalo es un al día vacío", () => {
+    expect(sinPeriodicidad({ ...rev("al_dia"), intervalo_dias: null })).toBe(true);
+    expect(sinPeriodicidad({ ...rev("al_dia"), intervalo_dias: undefined })).toBe(true);
+  });
+
+  it("al día CON intervalo es un al día de verdad", () => {
+    expect(sinPeriodicidad({ ...rev("al_dia"), intervalo_dias: 180 })).toBe(false);
+  });
+
+  it("los pendientes no se marcan como huérfanos: ya salen por su cuenta", () => {
+    expect(sinPeriodicidad({ ...rev("vencida"), intervalo_dias: null })).toBe(false);
+    expect(sinPeriodicidad({ ...rev("sin_revision"), intervalo_dias: null })).toBe(false);
+    expect(sinPeriodicidad({ ...rev("proxima"), intervalo_dias: 30 })).toBe(false);
+    expect(sinPeriodicidad(undefined)).toBe(false);
+  });
+});
+
+describe("sinPeriodicidadEnBase()", () => {
+  it("solo los que están en base ahora", () => {
+    const vs = [
+      veh("enBase"),
+      veh("fuera", { estado: "OUTSIDE_BASES", delegacion_id: null }),
+      veh("dormido", { estado: "STALE_POSITION" }),
+    ];
+    const revisiones = new Map([
+      ["enBase", { ...rev("al_dia"), intervalo_dias: null }],
+      ["fuera", { ...rev("al_dia"), intervalo_dias: null }],
+      ["dormido", { ...rev("al_dia"), intervalo_dias: null }],
+    ]);
+    expect(sinPeriodicidadEnBase(vs, revisiones).map((v) => v.vehiculo_id)).toEqual(["enBase"]);
+  });
+
+  it("un vehículo con periodicidad no entra en la lista", () => {
+    const revisiones = new Map([["v", { ...rev("al_dia"), intervalo_dias: 90 }]]);
+    expect(sinPeriodicidadEnBase([veh("v")], revisiones)).toEqual([]);
   });
 });
