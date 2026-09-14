@@ -6,7 +6,7 @@
  * `useMemo` que nadie puede comprobar.
  */
 
-import type { RevisionEstado } from "../types";
+import type { PresenciaEnBase, RevisionEstado, VehiculoWebfleetEstado } from "../types";
 import type { VehiculoPresencia } from "./presenciaBases";
 
 /**
@@ -191,4 +191,41 @@ export function sinPeriodicidadEnBase(
   return vehiculos.filter(
     (v) => v.estado === "IN_BASE" && sinPeriodicidad(revisiones.get(v.vehiculo_id)),
   );
+}
+
+/** Dónde está un vehículo, dicho en una línea, o `null` si no se sabe. */
+export interface EtiquetaBase {
+  /** Nombre de la base. */
+  base: string;
+  /** `true` si la posición es reciente; `false` si es lo último que se supo. */
+  ahora: boolean;
+}
+
+/**
+ * En qué base está un vehículo, mirando las dos fuentes que hay.
+ *
+ * Son dos porque son dos: el barrido del Hub —que vale para cualquier
+ * proveedor— y la sincronización Webfleet de siempre, que solo sabe de los
+ * suyos. Manda la del Hub cuando dice algo, porque es la que se calcula con
+ * las geo-zonas actuales; la de Webfleet es el respaldo para los clientes que
+ * todavía no tienen cuenta en el Hub.
+ *
+ * `ahora: false` es «aquí se le vio por última vez», no «está aquí»: una
+ * posición vieja dentro de una base es un indicio bueno —el equipo se duerme
+ * al aparcar— pero no una certeza, y quien lea la etiqueta tiene que poder
+ * distinguirlo antes de bajar al patio a buscarlo.
+ */
+export function etiquetaBase(
+  presencia: PresenciaEnBase | undefined,
+  webfleet: VehiculoWebfleetEstado | undefined,
+): EtiquetaBase | null {
+  const nombreHub = presencia?.delegacion?.nombre;
+  if (nombreHub && presencia?.estado === "IN_BASE") return { base: nombreHub, ahora: true };
+  if (nombreHub && presencia?.estado === "STALE_POSITION") return { base: nombreHub, ahora: false };
+
+  const nombreWf = webfleet?.delegacion?.nombre;
+  if (nombreWf && (webfleet?.estado === "en_base" || webfleet?.estado === "otra_base")) {
+    return { base: nombreWf, ahora: true };
+  }
+  return null;
 }

@@ -14,7 +14,7 @@ import type {
   ConfigEjes, TipoLlanta, VehiculoEje, UmbralesEmpresa, UmbralMedida, UmbralCategoria, PrecioMedida, WebfleetConfig,
   ConfigIdentificacion, IdentificacionMedida, ModoIdentificacion, PendienteIdentificar,
   UsadoEnAlmacen, ResumenAlmacenUsados,
-  VehiculoWebfleetEstado, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
+  VehiculoWebfleetEstado, PresenciaEnBase, WebfleetSyncConfig, RevisionEstado, RevisionFlag, WebfleetAlerta,
   OperacionMantenimiento, PlanMantenimiento, PlanMantenimientoInput, PlanEstado, MantenimientoRealizada,
   PlantillaMantenimiento, PlantillaItem, LoteRevision, LoteVehiculo,
   CatTipoOperacion, CatMotivo, CatDestino, CatTipoReparacion, CatResultadoReparacion, OperacionAdjunto, ReservaNeumatico, OperacionMovimiento,
@@ -2231,6 +2231,22 @@ export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> 
     .select("*, delegacion:tc_delegaciones(id, nombre)");
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as VehiculoWebfleetEstado[];
+}
+
+/**
+ * Dónde está cada vehículo según el barrido de telemática del Hub.
+ *
+ * Es la tabla que llena «Vehículos en bases», y se lee directamente porque la
+ * RLS ya la acota a las empresas que la sesión puede ver. Sirve para los
+ * clientes de cualquier proveedor —Movertis incluido—, al revés que
+ * `listarEstadoWebfleet`, que solo sabe de los de Webfleet.
+ */
+export async function listarPresenciaEnBases(): Promise<PresenciaEnBase[]> {
+  const { data, error } = await supabase
+    .from("tc_vehiculo_presencia_base")
+    .select("vehiculo_id, estado, delegacion_id, posicion_at, entrada_base_at, delegacion:tc_delegaciones(id, nombre)");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as PresenciaEnBase[];
 }
 
 // Lanza un ciclo de sincronización en el backend y devuelve nº actualizados.

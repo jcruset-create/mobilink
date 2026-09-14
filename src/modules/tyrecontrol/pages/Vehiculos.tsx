@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   listarVehiculos, crearVehiculo, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarConfigEjes, listarTiposLlanta, listarMedidas, listarEjesVehiculo, guardarEjesVehiculo,
-  listarEstadoWebfleet, sincronizarWebfleet, listarRevisionEstado,
+  listarEstadoWebfleet, listarPresenciaEnBases, sincronizarWebfleet, listarRevisionEstado,
   listarMarcasVehiculo, aplicarFichaTecnica,
   listarVehiculosPendientes, validarVehiculo,
 } from "../services/data";
@@ -12,10 +12,11 @@ import CrearVehiculoDesdeFicha, { type PendienteFicha } from "../components/Crea
 import type {
   Delegacion, Empresa, TipoVehiculo, Vehiculo, VehiculoInput, OrigenKm,
   ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje, MarcaVehiculo,
-  EstadoWebfleet, VehiculoWebfleetEstado, RevisionEstado,
+  EstadoWebfleet, VehiculoWebfleetEstado, PresenciaEnBase, RevisionEstado,
 } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { enlacesTelematica } from "../services/conciliacion";
+import { etiquetaBase } from "../services/presenciaVista";
 import {
   conectoresDe, etiquetaTelematica, porVehiculo, type EnlaceTelematica,
 } from "../services/telematicaVehiculo";
@@ -140,6 +141,15 @@ export default function Vehiculos() {
 
   // Webfleet: estado por vehículo, estado de revisión, filtros y popup.
   const [estados, setEstados] = useState<Map<string, VehiculoWebfleetEstado>>(new Map());
+  /*
+   * Dónde está cada vehículo según el barrido del Hub.
+   *
+   * Hace falta además del estado Webfleet porque ese solo sabe de los clientes
+   * de Webfleet: para uno de Movertis está vacío, y entonces el aviso de los
+   * vehículos de la tablet no podría decir en qué base están, que es justo
+   * cuando conviene ir a completarles la ficha.
+   */
+  const [presencias, setPresencias] = useState<Map<string, PresenciaEnBase>>(new Map());
   // Con qué telemática está enlazado cada vehículo. Del Hub, no solo Webfleet.
   const [enlacesTel, setEnlacesTel] = useState<EnlaceTelematica[]>([]);
   const [revEstados, setRevEstados] = useState<Map<string, RevisionEstado>>(new Map());
@@ -149,7 +159,14 @@ export default function Vehiculos() {
 
   async function refrescarWebfleet() {
     try {
-      const [est, rev] = await Promise.all([listarEstadoWebfleet(), listarRevisionEstado()]);
+      const [est, rev, pres] = await Promise.all([
+        listarEstadoWebfleet(),
+        listarRevisionEstado(),
+        // Mejor esfuerzo: si el barrido del Hub no está disponible, la página
+        // sigue funcionando con lo de Webfleet, como hasta ahora.
+        listarPresenciaEnBases().catch(() => [] as PresenciaEnBase[]),
+      ]);
+      setPresencias(new Map(pres.map((p) => [p.vehiculo_id, p])));
       // Los enlaces van aparte: que falten no puede dejar la lista sin estado
       // de Webfleet, que es lo que se miraba antes de que existiera esto.
       enlacesTelematica()
@@ -404,6 +421,32 @@ export default function Vehiculos() {
                 <span className="font-mono text-sm font-bold text-slate-100">{v.matricula}</span>
                 <span className="text-[12px] text-slate-400">{v.empresa?.nombre ?? "—"}</span>
                 <span className="text-[12px] text-slate-500">{v.tipo?.nombre ?? "sin tipo"}</span>
+                {/*
+                  Dónde está AHORA, si se sabe. Es lo que convierte este aviso
+                  en algo accionable: el técnico puede ir al patio, mirarle la
+                  marca y el modelo, y completarle la ficha de una vez, en vez
+                  de esperar a que el camión aparezca por casualidad.
+                */}
+                {(() => {
+                  const donde = etiquetaBase(presencias.get(v.id), estados.get(v.id));
+                  if (!donde) return null;
+                  return (
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                        donde.ahora
+                          ? "bg-emerald-500/15 text-emerald-300"
+                          : "bg-slate-700/60 text-slate-300"
+                      }`}
+                      title={
+                        donde.ahora
+                          ? "Está en esta base ahora mismo"
+                          : "Aquí se le vio por última vez; su equipo lleva rato sin emitir"
+                      }
+                    >
+                      📍 {donde.ahora ? "En" : "Última vez en"} {donde.base}
+                    </span>
+                  );
+                })()}
                 {/* Se dice qué le falta, no solo que está pendiente: así se
                     sabe si hay que abrirlo o basta con darlo por bueno. */}
                 <span className="text-[12px] text-amber-300">

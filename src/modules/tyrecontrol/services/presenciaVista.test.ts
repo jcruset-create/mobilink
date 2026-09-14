@@ -15,6 +15,7 @@ import {
   minutosEnPalabras,
   prioridadRevision,
   quienRevisó,
+  etiquetaBase,
   sinPeriodicidad,
   sinPeriodicidadEnBase,
   revisablesEnBase,
@@ -304,5 +305,47 @@ describe("sinPeriodicidadEnBase()", () => {
   it("un vehículo con periodicidad no entra en la lista", () => {
     const revisiones = new Map([["v", { ...rev("al_dia"), intervalo_dias: 90 }]]);
     expect(sinPeriodicidadEnBase([veh("v")], revisiones)).toEqual([]);
+  });
+});
+
+/**
+ * En qué base está un vehículo, para el aviso de los dados de alta en tablet.
+ *
+ * Hay dos fuentes y no dicen lo mismo: el barrido del Hub vale para cualquier
+ * proveedor y la sincronización Webfleet solo para los suyos.
+ */
+describe("etiquetaBase()", () => {
+  const enBase = { vehiculo_id: "v", estado: "IN_BASE" as const, delegacion: { id: "b", nombre: "Reus" } };
+  const wfEnBase = { vehiculo_id: "v", empresa_id: "e", estado: "en_base" as const, delegacion: { id: "b2", nombre: "Vilanova" } };
+
+  it("con posición reciente dice que está ahí ahora", () => {
+    expect(etiquetaBase(enBase, undefined)).toEqual({ base: "Reus", ahora: true });
+  });
+
+  it("con posición vieja dice dónde se le vio, no que esté", () => {
+    // La diferencia importa: alguien va a bajar al patio a buscarlo.
+    expect(etiquetaBase({ ...enBase, estado: "STALE_POSITION" }, undefined)).toEqual({
+      base: "Reus",
+      ahora: false,
+    });
+  });
+
+  it("fuera de las bases o sin posición no se etiqueta", () => {
+    expect(etiquetaBase({ ...enBase, estado: "OUTSIDE_BASES", delegacion: null }, undefined)).toBeNull();
+    expect(etiquetaBase({ ...enBase, estado: "NO_POSITION", delegacion: null }, undefined)).toBeNull();
+    expect(etiquetaBase(undefined, undefined)).toBeNull();
+  });
+
+  it("sin dato del Hub vale el de Webfleet, que es el de los clientes de siempre", () => {
+    expect(etiquetaBase(undefined, wfEnBase)).toEqual({ base: "Vilanova", ahora: true });
+    expect(etiquetaBase(undefined, { ...wfEnBase, estado: "otra_base" })).toEqual({
+      base: "Vilanova",
+      ahora: true,
+    });
+    expect(etiquetaBase(undefined, { ...wfEnBase, estado: "en_ruta" })).toBeNull();
+  });
+
+  it("manda el Hub cuando los dos dicen algo", () => {
+    expect(etiquetaBase(enBase, wfEnBase)).toEqual({ base: "Reus", ahora: true });
   });
 });
