@@ -59,6 +59,16 @@ describe("coincide · matrícula y cliente", () => {
     expect(coincide({ ...item, customerName: "Logística Pérez" }, { cliente: "logistica perez" })).toBe(true);
   });
 
+  it("encuentra por la autorización del taller subcontratado", () => {
+    // El caso real: llega la factura del taller con «A-137» escrito y hay que
+    // dar con el expediente. Va en el campo de matrícula porque es donde quien
+    // la tiene en la mano la teclea primero.
+    const conAutorizacion = { ...item, autorizacionTaller: "A-137" };
+    expect(coincide(conAutorizacion, { matricula: "A-137" })).toBe(true);
+    expect(coincide(conAutorizacion, { matricula: "a137" })).toBe(true);
+    expect(coincide(conAutorizacion, { matricula: "A-999" })).toBe(false);
+  });
+
   it("cada campo busca en LO SUYO y no en el otro", () => {
     // Es lo que se gana separándolos: el nombre del cliente no puede colarse
     // como matrícula ni al revés.

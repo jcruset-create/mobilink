@@ -1007,6 +1007,63 @@ export default function RoadsideAssistanceView({
   /// Ese formato es el que entienden Google Maps, Waze y el teclado de un
   /// WhatsApp, que es donde acaban de verdad: la central se las dicta o se las
   /// pega al operario cuando la direccion no basta para encontrar el camion.
+  const [marcandoId, setMarcandoId] = useState<number | null>(null);
+  const [copiedAutorizacionId, setCopiedAutorizacionId] = useState<number | null>(null);
+
+  /**
+   * Copia la autorización. El taller la va a escribir a mano en su albarán y
+   * en su factura, así que dictarla por teléfono o pegarla en un correo es
+   * exactamente lo que se hace con ella.
+   */
+  async function copyAutorizacion(assistance: RoadsideAssistance) {
+    const texto = assistance.autorizacionTaller;
+    if (!texto) return;
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiedAutorizacionId(assistance.id);
+      window.setTimeout(() => setCopiedAutorizacionId(null), 1800);
+    } catch {
+      setLocalError("No se pudo copiar la autorización.");
+    }
+  }
+
+  /**
+   * Marca o quita «sin seguimiento».
+   *
+   * Cuando el servicio lo hace un taller de la red no hay operario nuestro con
+   * la APK: nadie manda los ocho estados y la asistencia se queda en
+   * «Asignada» para siempre. Esto no la mueve de estado —la marca es
+   * ortogonal— sino que dice que nadie lo va a hacer, y habilita cerrarla a
+   * mano desde aquí.
+   */
+  async function toggleSinSeguimiento(
+    assistance: RoadsideAssistance,
+    activar: boolean
+  ) {
+    setMarcandoId(assistance.id);
+    setLocalError("");
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/roadside-assistances/${assistance.id}/sin-seguimiento`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("sea-admin-token") ?? ""}`,
+          },
+          body: JSON.stringify({ activar }),
+        }
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || "No se pudo cambiar el seguimiento.");
+      onRefresh();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : "No se pudo cambiar el seguimiento.");
+    } finally {
+      setMarcandoId(null);
+    }
+  }
+
   async function copyCoords(assistance: RoadsideAssistance) {
     const texto = formatCoords(assistance);
     if (!texto) return;
@@ -2133,7 +2190,41 @@ export default function RoadsideAssistanceView({
                     </div>
 
                     <div className="mt-4">
-                      <StatusStepper status={assistance.status} assistance={assistance} />
+                      {/* Sin seguimiento, los ocho pasos son una promesa que
+                         * nadie va a cumplir: nadie los va a ir marcando. En su
+                         * lugar se dice lo que de verdad pasa —está en manos del
+                         * taller— y se enseña la autorización, que es el dato
+                         * que hace falta para casar su factura con esto. */}
+                      {assistance.sinSeguimiento && !isClosed(assistance.status) ? (
+                        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-black uppercase tracking-wide text-amber-300">
+                              ⏸ Sin seguimiento · pendiente de terminar
+                            </span>
+                            <span className="text-[11px] text-amber-200/70">
+                              lo ejecuta el taller subcontratado
+                            </span>
+                          </div>
+                          {assistance.autorizacionTaller && (
+                            <div className="mt-1.5 flex items-center gap-2 text-[12px]">
+                              <span className="text-slate-400">Autorización para el taller:</span>
+                              <span className="font-mono font-bold text-slate-100">
+                                {assistance.autorizacionTaller}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => copyAutorizacion(assistance)}
+                                className="rounded px-1.5 py-0.5 text-[11px] font-semibold text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                                title="Copiar la autorización"
+                              >
+                                {copiedAutorizacionId === assistance.id ? "Copiado" : "Copiar"}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <StatusStepper status={assistance.status} assistance={assistance} />
+                      )}
                     </div>
 
                     <div className="mt-4 grid gap-2 text-sm">
@@ -2416,6 +2507,49 @@ export default function RoadsideAssistanceView({
                         >
                           ↪ {redirectingId === assistance.id ? "Redirigiendo…" : "Redirigir a nueva asistencia"}
                         </button>
+                      )}
+
+                      {/* Subcontratadas: la marca y el cierre a mano.
+                         *
+                         * Solo con taller subcontratado. En una propia hay un
+                         * operario con la APK y quitarle el seguimiento sería
+                         * esconder información que sí existe. */}
+                      {assistance.proveedorTallerId != null &&
+                        !isClosed(assistance.status) &&
+                        !assistance.sinSeguimiento && (
+                          <button
+                            type="button"
+                            onClick={() => toggleSinSeguimiento(assistance, true)}
+                            disabled={marcandoId === assistance.id}
+                            className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-sm font-bold text-amber-300 hover:bg-amber-500/25 disabled:opacity-50"
+                          >
+                            ⏸ {marcandoId === assistance.id ? "Marcando…" : "Sin seguimiento"}
+                          </button>
+                        )}
+
+                      {assistance.sinSeguimiento && !isClosed(assistance.status) && (
+                        <>
+                          {/* Terminar pasa por el MISMO cambio de estado que
+                             * todo lo demás, no por una ruta propia: así se
+                             * ejecutan los enganches posteriores —expediente
+                             * administrativo, diario, documentación— sin
+                             * repetirlos en un sitio nuevo. */}
+                          <button
+                            type="button"
+                            onClick={() => handleStatusChange(assistance, "finalizada")}
+                            className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/20 px-3 py-2 text-sm font-bold text-emerald-300 hover:bg-emerald-500/30"
+                          >
+                            ✓ Terminar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => toggleSinSeguimiento(assistance, false)}
+                            disabled={marcandoId === assistance.id}
+                            className="inline-flex items-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                          >
+                            ↺ Recuperar seguimiento
+                          </button>
+                        </>
                       )}
 
                       <button

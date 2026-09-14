@@ -12,6 +12,11 @@ import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 import db, { initDb } from "./db.ts";
 import { supabase, supabaseAnonAuth, SUPABASE_STORAGE_BUCKET, SUPABASE_ROADSIDE_BUCKET } from "./supabase.ts";
+import {
+  autorizacionParaTaller,
+  puedeMarcarSinSeguimiento,
+  puedeQuitarSinSeguimiento,
+} from "./subcontratacion/marcaSeguimiento.ts";
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
 import { getMailTransport } from "./mail.ts";
 import { startCheckpointMail, revisarBuzonCheckpoint } from "./checkpointMail.ts";
@@ -842,6 +847,13 @@ function normalizeRoadsideAssistanceRow(row: any) {
     proveedorContactoId: row.proveedorContactoId != null ? Number(row.proveedorContactoId) : null,
     clienteFacturacionId: row.clienteFacturacionId != null ? Number(row.clienteFacturacionId) : null,
     subcontrataSnapshot: row.subcontrataSnapshot ?? null,
+    // Marca ortogonal: el servicio lo hace un taller de la red y nadie va a ir
+    // mandando los estados. No cambia el estado operativo, solo dice eso.
+    sinSeguimiento: row.sinSeguimiento === true,
+    sinSeguimientoAtMs: row.sinSeguimientoAtMs != null ? Number(row.sinSeguimientoAtMs) : null,
+    // La autorización que damos al taller, no la que nos dan a nosotros
+    // (ésa es `solicitanteAutorizacion`).
+    autorizacionTaller: row.autorizacionTaller ?? null,
     // Salida registrada por el vigilante de Webfleet, no por el tecnico
     enCaminoAutomatico: row.enCaminoAutomatico === true,
     descripcionAveria: row.descripcionAveria ?? null,
@@ -8234,6 +8246,82 @@ app.post(
     } catch (error) {
       console.error("POST /api/roadside-assistances/:id/status error:", error);
       res.status(500).json({ error: "Error cambiando estado de asistencia" });
+    }
+  }
+);
+
+/* =========================================================
+   SUBCONTRATADAS SIN SEGUIMIENTO
+   =========================================================
+
+   Cuando el servicio lo hace un taller de la red no hay operario nuestro con
+   la APK: nadie manda los ocho estados y la asistencia se queda en «Asignada»
+   para siempre. Estas tres rutas son la salida.
+
+   La marca es ORTOGONAL: no toca el estado operativo ni el flujo. Terminar a
+   mano usa la MISMA ruta de cambio de estado que todo lo demás —pasando por
+   `aplicarEngancesTrasCambio`— para no repetir los enganches posteriores. Ese
+   fichero existe porque ya hubo dos copias divergentes y una se saltaba el
+   recálculo del estado administrativo; no vamos a crear la tercera.
+========================================================= */
+
+app.post(
+  "/api/roadside-assistances/:id/sin-seguimiento",
+  requireSupervisorRole,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "ID de asistencia no valido" });
+      }
+
+      // `activar: false` quita la marca. Es reversible a propósito: se pone por
+      // error, o el taller acaba pasándole el servicio a un operario nuestro.
+      const activar = req.body?.activar !== false;
+
+      const actual = await db.query(
+        `SELECT id, status, "proveedorTallerId", "sinSeguimiento",
+                "finishedAtMs", "cancelledAtMs", "autorizacionTaller"
+           FROM roadside_assistances WHERE id = $1`,
+        [id]
+      );
+      if (actual.rows.length === 0) {
+        return res.status(404).json({ error: "Asistencia no encontrada" });
+      }
+
+      const a = actual.rows[0];
+      const veredicto = activar
+        ? puedeMarcarSinSeguimiento(a)
+        : puedeQuitarSinSeguimiento(a);
+      if (!veredicto.ok) {
+        return res.status(409).json({ error: veredicto.motivo });
+      }
+
+      const now = Date.now();
+
+      // La autorización se genera al marcar y NO se borra al desmarcar: si ya
+      // se le dio al taller, ese número está en su albarán y tiene que seguir
+      // llevando a este expediente aunque la asistencia recupere seguimiento.
+      const autorizacion =
+        activar && !a.autorizacionTaller ? autorizacionParaTaller(id) : null;
+
+      const result = await db.query(
+        `UPDATE roadside_assistances
+            SET "sinSeguimiento" = $2,
+                "sinSeguimientoAtMs" = $3,
+                "autorizacionTaller" = COALESCE($4, "autorizacionTaller"),
+                "autorizacionTallerAtMs" = CASE
+                  WHEN $4 IS NOT NULL THEN $3 ELSE "autorizacionTallerAtMs" END,
+                "updatedAtMs" = $3
+          WHERE id = $1
+          RETURNING *`,
+        [id, activar, activar ? now : null, autorizacion]
+      );
+
+      res.json(normalizeRoadsideAssistanceRow(result.rows[0]));
+    } catch (error) {
+      console.error("POST /api/roadside-assistances/:id/sin-seguimiento error:", error);
+      res.status(500).json({ error: "Error cambiando el seguimiento" });
     }
   }
 );

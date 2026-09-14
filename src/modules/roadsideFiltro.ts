@@ -10,10 +10,17 @@ export type Filtrable = {
   plateRemolque?: string | null;
   customerName?: string | null;
   createdAtMs?: number | null;
+  /**
+   * La autorización que se le dio al taller subcontratado. Entra en el campo
+   * de matrícula a propósito: cuando llega la factura del taller con «A-137»
+   * escrito, quien la tiene en la mano la teclea donde primero ve, y obligarle
+   * a adivinar en qué casilla va es regalarle una forma de no encontrarla.
+   */
+  autorizacionTaller?: string | null;
 };
 
 export type Criterios = {
-  /// Matrícula, del camión o del remolque.
+  /// Matrícula —del camión o del remolque— o la autorización del taller.
   ///
   /// Va aparte del cliente para poder acotar: «todas las de Truck Service de
   /// la semana pasada» es una pregunta, y «la 3719LKK» es otra. Con un solo
@@ -67,10 +74,10 @@ export function coincide(item: Filtrable, criterios: Criterios): boolean {
     const aguja = normalizar(matricula);
     // El remolque cuenta como matrícula: en una asistencia al remolque puede
     // ser la única que hay, y es la que el cliente da por teléfono.
-    const matriculas = [item.plate, item.plateRemolque]
+    const agujas = [item.plate, item.plateRemolque, item.autorizacionTaller]
       .filter(Boolean)
       .map((v) => normalizar(String(v)));
-    if (!matriculas.some((v) => v.includes(aguja))) return false;
+    if (!agujas.some((v) => v.includes(aguja))) return false;
   }
 
   const cliente = (criterios.cliente ?? "").trim();
