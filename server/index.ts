@@ -9351,6 +9351,16 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
       if (kmTotal) operativoLines.push(["Kilómetros:", kmTotal]);
       if (a.redirectedToId) operativoLines.push(["Redirigida a:", `#${a.redirectedToId}`]);
       if (a.redirectedFromId) operativoLines.push(["Procede de:", `#${a.redirectedFromId}`]);
+      // Subcontratada: el informe tiene que decir quién la hizo y con qué
+      // número, porque es el papel con el que luego se casa su factura.
+      {
+        let snap: any = a.subcontrataSnapshot;
+        if (typeof snap === "string") { try { snap = JSON.parse(snap); } catch { snap = null; } }
+        const taller = snap?.tallerNombre || snap?.proveedorNombre || null;
+        if (taller) operativoLines.push(["Realizada por:", String(taller)]);
+      }
+      if (a.autorizacionTaller) operativoLines.push(["Autorización:", String(a.autorizacionTaller)]);
+      if (a.sinSeguimiento) operativoLines.push(["Seguimiento:", "Sin seguimiento en tiempo real"]);
       if (!operativoLines.length) operativoLines.push(["Operario:", "-"]);
 
       drawCards([
@@ -9374,7 +9384,23 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
           ? new Date(Number(ms)).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Madrid" })
           : "–";
       sectionTitle("Tiempos");
-      {
+      if (a.sinSeguimiento) {
+        // Ocho hitos vacíos no informan de nada y hacen dudar del informe: en
+        // una subcontratada sin seguimiento solo hay aviso y cierre de verdad.
+        const hitos = [
+          `Aviso: ${formatDateEs(a.createdAtMs)}`,
+          a.finishedAtMs ? `Finalizada: ${formatDateEs(a.finishedAtMs)}` : "Pendiente de terminar",
+        ];
+        doc.fontSize(9).font("Helvetica").fillColor("#334155")
+          .text(hitos.join("   ·   "), M, doc.y, { width: contentW });
+        doc.fontSize(8).fillColor("#64748b").text(
+          "Servicio realizado por un taller externo: no se registran hitos intermedios.",
+          M, doc.y + 2, { width: contentW },
+        );
+        doc.fillColor("#000000");
+        doc.x = M;
+        doc.y += 6;
+      } else {
         const steps: { label: string; ms: number | null }[] = [
           { label: "Aviso", ms: a.createdAtMs },
           { label: "Asignada", ms: a.assignedAtMs },
@@ -9408,11 +9434,13 @@ async function buildAssistanceReportPdfBuffer(id: number): Promise<{ buffer: Buf
         doc.x = M;
         doc.y = yLine + 20;
       }
-      doc.fontSize(8).font("Helvetica").fillColor("#64748b").text(
-        `Trayecto: ${diffMinutes(a.departedAtMs, a.arrivedAtPointMs)}   ·   Intervención: ${diffMinutes(a.arrivedAtPointMs, a.finishedAtMs)}   ·   Total: ${diffMinutes(a.departedAtMs, a.arrivedAtWorkshopMs)}`,
-        M, doc.y, { width: contentW }
-      );
-      doc.fillColor("#000000");
+      if (!a.sinSeguimiento) {
+        doc.fontSize(8).font("Helvetica").fillColor("#64748b").text(
+          `Trayecto: ${diffMinutes(a.departedAtMs, a.arrivedAtPointMs)}   ·   Intervención: ${diffMinutes(a.arrivedAtPointMs, a.finishedAtMs)}   ·   Total: ${diffMinutes(a.departedAtMs, a.arrivedAtWorkshopMs)}`,
+          M, doc.y, { width: contentW }
+        );
+        doc.fillColor("#000000");
+      }
 
       // ── Mapa con la ruta real ──
       if (a.latitude != null && a.longitude != null) {
@@ -10322,18 +10350,56 @@ app.patch("/api/roadside-assistances/:id/subcontrata", requireSupervisorRole, as
       }
     }
 
+    /*
+     * Al asignar taller subcontratado, la asistencia queda SIN SEGUIMIENTO por
+     * defecto y con su autorización.
+     *
+     * No es una suposición: los talleres de la red no usan Assist Lite, así que
+     * NINGUNA subcontratada va a tener quien mande los ocho estados. Dejarlo a
+     * que alguien se acuerde de pulsar el botón es garantizar que unas cuantas
+     * se queden colgadas en «Asignada» hasta que alguien mire.
+     *
+     * Se puede deshacer: «Recuperar seguimiento» sigue estando, por si alguna
+     * acaba llevándola un operario nuestro.
+     *
+     * Dos cautelas:
+     *  · Sólo al ASIGNAR taller, no al quitarlo. Quitar el taller no debe
+     *    arrastrar la marca: puede haberse puesto a mano por otro motivo.
+     *  · Sólo si el servicio sigue en curso. Rellenar la subcontratación de una
+     *    asistencia cerrada —que se hace para reparar el histórico— no puede
+     *    reescribir cómo se gestionó en su día.
+     */
+    const antes = await db.query(
+      `SELECT status, "proveedorTallerId", "sinSeguimiento",
+              "finishedAtMs", "cancelledAtMs"
+         FROM roadside_assistances WHERE id = $1`, [id]);
+    const marcaAuto =
+      tallerId != null &&
+      antes.rows[0] != null &&
+      puedeMarcarSinSeguimiento({ ...antes.rows[0], proveedorTallerId: tallerId }).ok;
+
     const r = await db.query(
       `UPDATE roadside_assistances SET
          "proveedorId" = $2, "proveedorTallerId" = $3,
          "proveedorContactoId" = $4, "clienteFacturacionId" = $5,
-         "updatedAtMs" = $6
+         "updatedAtMs" = $6,
+         "sinSeguimiento" = CASE WHEN $7 THEN true ELSE "sinSeguimiento" END,
+         "sinSeguimientoAtMs" = CASE
+           WHEN $7 AND "sinSeguimientoAtMs" IS NULL THEN $6 ELSE "sinSeguimientoAtMs" END,
+         "autorizacionTaller" = CASE
+           WHEN $7 THEN COALESCE("autorizacionTaller", $8) ELSE "autorizacionTaller" END,
+         "autorizacionTallerAtMs" = CASE
+           WHEN $7 AND "autorizacionTallerAtMs" IS NULL THEN $6
+           ELSE "autorizacionTallerAtMs" END
        WHERE id = $1 RETURNING *`,
       [id,
        b.proveedorId != null ? Number(b.proveedorId) : null,
        tallerId,
        b.proveedorContactoId != null ? Number(b.proveedorContactoId) : null,
        b.clienteFacturacionId != null ? Number(b.clienteFacturacionId) : null,
-       Date.now()],
+       Date.now(),
+       marcaAuto,
+       autorizacionParaTaller(id)],
     );
     if (!r.rows[0]) return res.status(404).json({ error: "Asistencia no encontrada" });
 

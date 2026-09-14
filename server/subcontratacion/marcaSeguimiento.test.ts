@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { referenciaDe } from "../correo/referencia.ts";
 import {
   autorizacionParaTaller,
   puedeMarcarSinSeguimiento,
@@ -71,15 +72,24 @@ describe("quitar la marca", () => {
 });
 
 describe("autorización para el taller", () => {
-  it("sale del número de asistencia, con prefijo", () => {
-    expect(autorizacionParaTaller(137)).toBe("A-137");
+  it("ES la referencia del expediente, no un número aparte", () => {
+    // `AST-137` ya viaja en el asunto de los correos del expediente. Mandarle
+    // al taller además un «A-137» casi idéntico es pedirle que distinga dos
+    // números parecidos y elija bien.
+    expect(autorizacionParaTaller(137)).toBe("AST-137");
+  });
+
+  it("coincide con la referencia que el correo pone en el asunto", () => {
+    // Si estos dos se separan, el taller recibe un número en el asunto y otro
+    // en el cuerpo, y su respuesta deja de engancharse al expediente.
+    expect(referenciaDe(autorizacionParaTaller(137))).toBe("[AST-137]");
   });
 
   it("el prefijo la distingue de la autorización que nos dan a nosotros", () => {
     // `solicitanteAutorizacion` es ENTRANTE —la da la aseguradora o el gestor
     // de flota— y ésta es SALIENTE. Confundirlas es un lío de facturación, y
     // el prefijo evita que un número suelto se lea como la otra.
-    expect(autorizacionParaTaller(1)).toMatch(/^A-/);
+    expect(autorizacionParaTaller(1)).toMatch(/^AST-/);
   });
 
   it("es única por asistencia", () => {

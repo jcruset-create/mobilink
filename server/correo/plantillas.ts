@@ -30,6 +30,15 @@ export function esMotivo(v: unknown): v is Motivo {
 /** Lo que hace falta saber de la asistencia para escribir el correo. */
 export type DatosCorreo = {
   expediente: string;
+  /**
+   * El número con el que el taller tiene autorizado el servicio.
+   *
+   * Para las subcontratadas es la misma referencia del expediente, a propósito:
+   * el taller apunta un número, no dos, y el que apunta es el que viaja en el
+   * asunto del correo. Cuando coinciden se escribe una sola línea; se dejan dos
+   * por si algún día dejan de coincidir, no porque hoy se espere que pase.
+   */
+  autorizacion?: string | null;
   matricula?: string | null;
   direccion?: string | null;
   fechaServicio?: number | null;
@@ -51,8 +60,12 @@ function fecha(ms: number | null | undefined): string {
 
 /** La cabecera común: de qué servicio se habla. Siempre la misma, para que se reconozca. */
 function encabezado(d: DatosCorreo): string {
+  const aut = (d.autorizacion ?? "").trim();
   const partes = [
-    `Expediente: ${d.expediente}`,
+    aut && aut === d.expediente
+      ? `Expediente y nº de autorización: ${d.expediente}`
+      : `Expediente: ${d.expediente}`,
+    aut && aut !== d.expediente ? `Nº de autorización: ${aut}` : null,
     d.matricula ? `Matrícula: ${d.matricula}` : null,
     d.fechaServicio ? `Fecha del servicio: ${fecha(d.fechaServicio)}` : null,
     d.direccion ? `Lugar: ${d.direccion}` : null,
@@ -91,7 +104,12 @@ export function construirMensaje(motivo: Motivo, d: DatosCorreo): Mensaje {
         texto: `Hola,\n\nTenemos un servicio y queremos saber si podéis atenderlo.\n\n${cab}` +
           (d.descripcion ? `\n\nServicio: ${d.descripcion}` : "") +
           `\n\nContesta a este correo indicando si lo aceptáis y en cuánto tiempo` +
-          ` podríais estar allí.${firma(d)}`,
+          ` podríais estar allí.` +
+          (d.autorizacion
+            ? `\n\nSi lo aceptáis, queda autorizado con el número ${d.autorizacion};` +
+              ` indícalo en el albarán y en la factura.`
+            : "") +
+          `${firma(d)}`,
       };
 
     case "solicitud_albaran":

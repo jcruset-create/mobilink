@@ -97,20 +97,29 @@ export function puedeQuitarSinSeguimiento(a: AsistenciaParaMarca): Veredicto {
 /**
  * El número de autorización que se le da al taller subcontratado.
  *
- * Sale del número de asistencia y NO de un contador propio: inventar una
- * segunda numeración obliga a reconciliar dos series, y el nº de asistencia ya
- * es único, corto, lo ve el operador en pantalla y viaja en el PDF.
+ * Es LA REFERENCIA DEL EXPEDIENTE, `AST-137`, y no un número aparte.
  *
- * Aun así se guarda en su propia columna en vez de derivarlo del id cada vez.
- * El día que haya que autorizar dos veces el mismo servicio a dos talleres, o
- * que un proveedor exija su formato, una columna se amplía y un id no. Y hace
- * falta poder BUSCAR por él cuando llegue la factura con ese número escrito.
+ * ── Por qué no una serie propia ────────────────────────────────────────────
  *
- * El prefijo distingue de un vistazo esta autorización —la que damos NOSOTROS
- * al taller— de `solicitanteAutorizacion`, que es la que nos dan a nosotros la
- * aseguradora o el gestor de flota. Son dos cosas distintas y confundirlas es
- * un lío de facturación.
+ * La primera versión de esto inventó `A-137`. Estaba mal, y se vio al llevar la
+ * autorización al correo: `AST-137` YA viaja en el asunto de todos los correos
+ * del expediente —es lo que permite reconocer la respuesta del taller tres días
+ * después, aunque reenvíe el correo o reescriba el asunto—. Mandarle además un
+ * `A-137` casi idéntico es pedirle que distinga dos números que se parecen y
+ * elija bien: la mitad de las veces pondría el otro.
+ *
+ * Un solo número: el que ve en el asunto, el que pone en su albarán y el que
+ * escribe en su factura. Y como es el mismo que engancha su respuesta, buscar
+ * por él lleva al mismo sitio desde los tres caminos.
+ *
+ * Se sigue guardando en su propia columna, y eso no cambia: hace falta poder
+ * BUSCAR por él, y el día que un proveedor exija su formato una columna se
+ * amplía y un id no.
+ *
+ * El prefijo `AST-` lo distingue de `solicitanteAutorizacion`, que es la
+ * autorización ENTRANTE —la que nos dan la aseguradora o el gestor de flota—.
+ * Son dos cosas distintas y confundirlas es un lío de facturación.
  */
 export function autorizacionParaTaller(assistanceId: number): string {
-  return `A-${assistanceId}`;
+  return `AST-${assistanceId}`;
 }
