@@ -382,6 +382,16 @@ export async function listAppUsuarios(): Promise<AppUsuario[]> {
   return (data ?? []) as AppUsuario[];
 }
 
+/** Cuenta de la plataforma vinculada a un empleado de Core, si la tiene. */
+export async function getAppUsuarioDeEmpleado(employeeId: string): Promise<AppUsuario | null> {
+  const { data, error } = await supabase.from("app_usuarios")
+    .select("*, accesos:app_usuario_modulos(modulo, rol, pantallas, empresa_id)")
+    .eq("employee_id", employeeId)
+    .maybeSingle();
+  if (error) fail(error.message, "acceso del empleado");
+  return (data as AppUsuario | null) ?? null;
+}
+
 export async function crearUsuarioAuth(username: string, nombre: string, pin: string): Promise<string> {
   const res = await apiFetch("/api/administracion/usuarios/crear-auth", {
     method: "POST",
