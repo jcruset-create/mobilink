@@ -118,12 +118,13 @@ export function createCorreoRouter(system: Sistema, guarda: RequestHandler): Rou
 async function datosDe(system: Sistema, id: string) {
   if (system === "assist") {
     const r = await db.query(
-      `SELECT id, plate, address, "finishedAtMs", "descripcionAveria"
+      `SELECT id, plate, address, "finishedAtMs", "descripcionAveria", "autorizacionTaller"
          FROM roadside_assistances WHERE id = $1`, [Number(id)]);
     const a = r.rows[0];
     if (!a) return null;
     return {
       expediente: `AST-${a.id}`,
+      autorizacion: a.autorizacionTaller || null,
       matricula: a.plate || null,
       direccion: a.address || null,
       fechaServicio: a.finishedAtMs != null ? Number(a.finishedAtMs) : null,

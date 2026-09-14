@@ -485,7 +485,18 @@ export async function initDb() {
     ADD COLUMN IF NOT EXISTS "autorizacionTallerAtMs" BIGINT;
 
     -- Buscar por la autorización es el caso de uso principal: llega la factura
-    -- del taller con «A-137» escrito y hay que dar con el expediente.
+    -- del taller con «AST-137» escrito y hay que dar con el expediente.
+    -- La primera versión generó «A-137». Se unificó con la referencia del
+    -- expediente, «AST-137», que es la que ya viaja en el asunto de los correos
+    -- al taller: dos números casi idénticos obligaban al taller a elegir bien
+    -- entre ellos, y la mitad de las veces habría puesto el otro.
+    --
+    -- Sólo toca las del formato viejo y sólo si coinciden con su propio id, así
+    -- que es idempotente y no puede pisar una autorización escrita a mano.
+    UPDATE roadside_assistances
+       SET "autorizacionTaller" = 'AST-' || id
+     WHERE "autorizacionTaller" = 'A-' || id;
+
     CREATE INDEX IF NOT EXISTS idx_roadside_autorizacion_taller
       ON roadside_assistances ("autorizacionTaller")
       WHERE "autorizacionTaller" IS NOT NULL;
