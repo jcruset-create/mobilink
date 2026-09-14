@@ -87,8 +87,18 @@ así no se puede fusionar. Orden obligado:
 3. Las pantallas de TV necesitan lo suyo: **token de dispositivo**, no un usuario con
    contraseña.
 
-**Paso 4 — Una sola alta.** Con los tres anteriores, Core → Empleados crea la persona y desde
-su ficha se le da acceso y módulos. Una pantalla, un alta.
+**Paso 4 — Una sola alta. HECHO (14-09-2026).** Core → Empleados crea la persona y desde su
+ficha, pestaña **Acceso**, se le da usuario, contraseña y módulos. Escribe en `app_usuarios`
+con `employee_id` ya vinculado, así que la cuenta y la ficha nacen unidas y no hay que pasar
+por Administración → Usuarios. Las dos pantallas comparten el editor de accesos
+(`src/modules/administracion/components/AccesosModulos.tsx`) para que añadir un módulo al
+catálogo las actualice a la vez.
+
+Al hacerlo salió a la luz que `app_guardar_usuario` **nunca rellenaba `app_usuarios.empresa_id`**,
+que la fase SaaS 1 había declarado `not null` después. Toda alta o edición de usuario fallaba con
+`null value in column "empresa_id"`. Lo arregla
+`supabase/migrations/administracion_fase11b_usuario_empresa.sql`, que además impide con un índice
+único que un mismo empleado acabe con dos cuentas.
 
 ### Lo que NO se unifica
 
