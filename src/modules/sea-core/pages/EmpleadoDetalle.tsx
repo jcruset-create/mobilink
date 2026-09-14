@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import CoreLayout from "../layouts/CoreLayout";
 import { supabase } from "../../almacen-neumaticos/services/supabase";
 import { apiFetch } from "../../apiFetch";
+import AccesoEmpleado from "../components/AccesoEmpleado";
 
 type Empleado = {
   id: string; nombre: string; apellidos: string | null;
@@ -17,7 +18,7 @@ type Empleado = {
   sea_work_centers: { nombre: string } | null;
 };
 
-const TABS = ["Datos personales", "Competencias", "Certificaciones", "Autorizaciones", "Formación", "Vestuario"];
+const TABS = ["Datos personales", "Competencias", "Certificaciones", "Autorizaciones", "Formación", "Vestuario", "Acceso"];
 
 const ROL_BADGE: Record<string, string> = {
   admin: "bg-red-500/20 text-red-800", responsable: "bg-orange-100 text-orange-800",
@@ -874,6 +875,8 @@ export default function EmpleadoDetalle() {
           </div>
         </div>
       )}
+      {tabActiva === 6 && <AccesoEmpleado empleado={empleado} />}
+
     </CoreLayout>
   );
 }
