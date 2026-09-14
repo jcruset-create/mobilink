@@ -188,6 +188,22 @@ export interface VehiculoWebfleetEstado {
   delegacion?: { id: string; nombre: string } | null; // base detectada
 }
 
+/**
+ * Presencia en bases, calculada por el Hub desde el proveedor del cliente.
+ *
+ * Convive con `VehiculoWebfleetEstado`, que es lo mismo pero solo para los
+ * clientes de Webfleet y con otros estados. Ver la cabecera de la migración
+ * `tyrecontrol_presencia_bases.sql` para por qué son dos tablas y no una.
+ */
+export interface PresenciaEnBase {
+  vehiculo_id: string;
+  estado: "IN_BASE" | "OUTSIDE_BASES" | "STALE_POSITION" | "NO_POSITION" | "INVALID_POSITION";
+  delegacion_id?: string | null;
+  posicion_at?: string | null;
+  entrada_base_at?: string | null;
+  delegacion?: { id: string; nombre: string } | null;
+}
+
 export interface WebfleetSyncConfig {
   id: number;
   intervalo_min: number;
