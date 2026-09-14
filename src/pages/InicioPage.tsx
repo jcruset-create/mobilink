@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Download, CalendarClock, Coins, Network, Gauge, Plug, type LucideIcon } from "lucide-react";
+import { LogOut, Wallet, Warehouse, Truck, Wrench, Users, Hammer, HardHat, Clock, LifeBuoy, ShieldCheck, Plus, Download, CalendarClock, Coins, Network, Gauge, Inbox, Plug, type LucideIcon } from "lucide-react";
 import logoMobilink from "../assets/logo-mobilink.png";
 // Copias a la medida del hub: los originales pesan 350-670 KB cada uno y aquí
 // se ven a 36 px de alto. Con cinco tarjetas con logo eso eran 2,4 MB de
@@ -40,6 +40,7 @@ const ICONOS: Record<string, LucideIcon> = {
   cash: Coins,
   central: Network,
   tacografos: Gauge,
+  therefore: Inbox,
 };
 
 /**
@@ -85,6 +86,7 @@ const COLORES: Record<string, { bg: string; text: string }> = {
   cash: { bg: "bg-emerald-500/15", text: "text-emerald-400" },
   central: { bg: "bg-indigo-500/15", text: "text-indigo-400" },
   tacografos: { bg: "bg-amber-500/15", text: "text-amber-400" },
+  therefore: { bg: "bg-sky-500/15", text: "text-sky-400" },
 };
 
 const BASES: Record<string, string> = {
@@ -99,6 +101,7 @@ const BASES: Record<string, string> = {
   cash: "/cash",
   central: "/central",
   tacografos: "/tacografos",
+  therefore: "/therefore",
 };
 
 function rutaModulo(modulo: string): string {

@@ -46,10 +46,15 @@
     "server/cash/**/*.ts",
     "server/central/**/*.ts",
     "server/tacografos/**/*.ts",
+    "server/therefore/**/*.ts",
     "server/satisfaction/**/*.ts",
     "server/cierre/**/*.ts",
     "server/core/auditoria.ts",
     "server/core/auditoriaSchema.ts",
-    "server/dbBackup.ts"
+    "server/dbBackup.ts",
+    // La herramienta del lote de calibración de Therefore. Va aquí porque es
+    // lo único de scripts/ que importa código de server/ y conviene que un
+    // error de tipos salga en la CI y no al ejecutarla con el buzón delante.
+    "scripts/therefore-anonimizar.ts"
   ]
 }
