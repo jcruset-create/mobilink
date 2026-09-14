@@ -41,6 +41,8 @@ import {
   minutosEnPalabras,
   quienRevisó,
   revisablesEnBase,
+  sinPeriodicidad,
+  sinPeriodicidadEnBase,
   revisablesPorBase,
   tieneRevisionPendiente,
 } from "../services/presenciaVista";
@@ -128,6 +130,10 @@ export default function VehiculosEnBases() {
     () => revisablesEnBase(datos?.vehiculos ?? [], revisiones),
     [datos, revisiones],
   );
+  const huerfanos = useMemo(
+    () => sinPeriodicidadEnBase(datos?.vehiculos ?? [], revisiones),
+    [datos, revisiones],
+  );
   // Pendientes POR base: es el número que decide a qué patio bajar. «155
   // dentro» dice cuántos hay, no a cuántos hay algo que hacerles.
   const pendientesPorBase = useMemo(
@@ -136,18 +142,29 @@ export default function VehiculosEnBases() {
   );
 
   const sinEnlace = (datos?.vehiculos ?? []).filter((v) => v.motivo === "sin_enlace").length;
-  const lista = baseSel ? (enBase.get(baseSel) ?? []) : revisables;
+  const lista =
+    baseSel === "__sin_periodicidad__"
+      ? huerfanos
+      : baseSel
+        ? (enBase.get(baseSel) ?? [])
+        : revisables;
   const pendientesEnLista = baseSel ? (pendientesPorBase.get(baseSel) ?? 0) : lista.length;
 
   function Ficha({ v }: { v: VehiculoPresencia }) {
     const rev = revisiones.get(v.vehiculo_id);
     const pendiente = tieneRevisionPendiente(rev);
+    // Un «al día» sin periodicidad definida no es un «al día»: es que nadie ha
+    // dicho cada cuánto toca. Se marca aparte para que se pueda arreglar, en
+    // vez de dejar al vehículo fuera del ciclo para siempre.
+    const huerfano = sinPeriodicidad(rev);
     const chip =
       rev?.estado === "proxima"
         ? "bg-amber-500/15 text-amber-300"
         : pendiente
           ? "bg-rose-500/15 text-rose-300"
-          : "bg-slate-700/60 text-slate-300";
+          : huerfano
+            ? "bg-orange-500/15 text-orange-300"
+            : "bg-slate-700/60 text-slate-300";
     return (
       <div className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800 p-4">
         <div className="flex items-start justify-between gap-2">
@@ -176,8 +193,15 @@ export default function VehiculosEnBases() {
                   {quienRevisó(rev)}
                 </span>
               </span>
-              <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${chip}`}>
-                {ESTADO_PERIODICIDAD_LABELS[rev.estado]}
+              <span
+                className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${chip}`}
+                title={
+                  huerfano
+                    ? "Revisado, pero este vehículo no tiene periodicidad: ni la suya ni la de su tipo. Mientras siga así no volverá a salir como pendiente."
+                    : undefined
+                }
+              >
+                {huerfano ? "Sin periodicidad" : ESTADO_PERIODICIDAD_LABELS[rev.estado]}
                 {rev.estado === "vencida" && (rev.dias_vencido ?? 0) > 0 ? ` · ${rev.dias_vencido} d` : ""}
               </span>
             </div>
@@ -332,6 +356,19 @@ export default function VehiculosEnBases() {
               <div className="font-bold">Con revisión pendiente</div>
               <div className="text-slate-400">{revisables.length} en base ahora</div>
             </button>
+            {huerfanos.length > 0 && (
+              <button
+                onClick={() => setBaseSel("__sin_periodicidad__")}
+                className={`rounded-xl border px-3 py-2 text-left text-[12px] ${
+                  baseSel === "__sin_periodicidad__"
+                    ? "border-orange-500 bg-orange-500/10 text-orange-200"
+                    : "border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
+                }`}
+              >
+                <div className="font-bold">Sin periodicidad</div>
+                <div className="text-slate-400">{huerfanos.length} en base ahora</div>
+              </button>
+            )}
             {datos.bases.map((b) => {
               const dentro = enBase.get(b.id)?.length ?? 0;
               const conPosicionVieja = dormidos.get(b.id) ?? 0;
@@ -370,17 +407,21 @@ export default function VehiculosEnBases() {
 
           <div className="mb-2 flex items-center gap-2 text-[13px] text-slate-400">
             <Truck size={14} />
-            {baseSel
-              ? `${lista.length} vehículo(s) en ${nombreBase.get(baseSel) ?? "la base"}` +
-                (pendientesEnLista > 0 ? ` · ${pendientesEnLista} con revisión pendiente, los primeros` : "")
-              : `${lista.length} vehículo(s) en base y con revisión pendiente`}
+            {baseSel === "__sin_periodicidad__"
+              ? `${lista.length} vehículo(s) en base revisados pero sin periodicidad definida`
+              : baseSel
+                ? `${lista.length} vehículo(s) en ${nombreBase.get(baseSel) ?? "la base"}` +
+                  (pendientesEnLista > 0 ? ` · ${pendientesEnLista} con revisión pendiente, los primeros` : "")
+                : `${lista.length} vehículo(s) en base y con revisión pendiente`}
           </div>
 
           {lista.length === 0 ? (
             <div className="rounded-2xl border border-slate-700 bg-slate-800 p-8 text-center text-slate-400">
-              {baseSel
-                ? "Ahora mismo no hay ningún vehículo con posición reciente dentro de esta base."
-                : "Ningún vehículo en base tiene revisión pendiente ahora mismo."}
+              {baseSel === "__sin_periodicidad__"
+                ? "Ningún vehículo en base está en ese caso ahora mismo."
+                : baseSel
+                  ? "Ahora mismo no hay ningún vehículo con posición reciente dentro de esta base."
+                  : "Ningún vehículo en base tiene revisión pendiente ahora mismo."}
             </div>
           ) : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
