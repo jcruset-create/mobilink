@@ -124,6 +124,47 @@ async function anadirActuacion(
   return api(`/expedientes/${expedienteId}/actuaciones`, quien, { method: "POST", body: cuerpo });
 }
 
+/**
+ * Vacía el histórico de estas empresas sin que nadie más lo note.
+ *
+ * El histórico tiene un candado que rechaza UPDATE y DELETE, así que para
+ * limpiarlo hay que desactivar el disparador. El detalle que importa es que
+ * las tres sentencias van en UNA transacción, y no sueltas en autocommit.
+ *
+ * ── Por qué ────────────────────────────────────────────────────────────────
+ *
+ * `ALTER TABLE ... DISABLE TRIGGER` es GLOBAL: lo ve toda la base, no sólo
+ * esta conexión. Con las tres sentencias sueltas, entre la primera y la
+ * tercera el histórico queda modificable PARA TODO EL MUNDO, y vitest ejecuta
+ * los ficheros de prueba en paralelo contra la misma base. La prueba que
+ * comprueba que el histórico es inmutable, corriendo en otro worker, hacía su
+ * UPDATE justo en esa ventana, le funcionaba, y fallaba.
+ *
+ * No era una hipótesis: el mismo commit salió rojo en una ejecución de la CI y
+ * verde en otra. Dentro de la transacción, el ALTER mantiene el lock exclusivo
+ * de la tabla hasta el COMMIT, así que ninguna otra sesión llega a ver el
+ * candado abierto: espera, y cuando entra ya está cerrado otra vez.
+ *
+ * Reactivarlo es obligatorio pase lo que pase: dejarlo desactivado haría que
+ * la prueba de inmutabilidad pasara sin que nada la protegiera, que es la peor
+ * clase de prueba verde.
+ */
+async function limpiarHistorico(empresas: readonly string[]): Promise<void> {
+  const cliente = await db.connect();
+  try {
+    await cliente.query("BEGIN");
+    await cliente.query(`ALTER TABLE thf_eventos DISABLE TRIGGER thf_eventos_inmutable_trg`);
+    await cliente.query(`DELETE FROM thf_eventos WHERE empresa_id = ANY($1)`, [empresas]);
+    await cliente.query(`ALTER TABLE thf_eventos ENABLE TRIGGER thf_eventos_inmutable_trg`);
+    await cliente.query("COMMIT");
+  } catch (e) {
+    await cliente.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    cliente.release();
+  }
+}
+
 afterAll(async () => {
   servidor?.close();
   await db?.end().catch(() => {});
@@ -183,16 +224,9 @@ describe.runIf(RUN)("Therefore por HTTP contra PostgreSQL", () => {
     /*
      * El histórico no se puede borrar: para eso está su candado, y que esta
      * limpieza tenga que desactivarlo a propósito es la primera prueba de que
-     * funciona. Se vuelve a activar en el `finally` pase lo que pase, porque
-     * dejarlo desactivado haría pasar la prueba de inmutabilidad sin que nada
-     * la protegiera, que es la peor clase de prueba verde.
+     * funciona.
      */
-    await db.query(`ALTER TABLE thf_eventos DISABLE TRIGGER thf_eventos_inmutable_trg`);
-    try {
-      await db.query(`DELETE FROM thf_eventos WHERE empresa_id = ANY($1)`, [empresas]);
-    } finally {
-      await db.query(`ALTER TABLE thf_eventos ENABLE TRIGGER thf_eventos_inmutable_trg`);
-    }
+    await limpiarHistorico(empresas);
 
     await db.query(`DELETE FROM thf_actuaciones WHERE empresa_id = ANY($1)`, [empresas]);
     await db.query(`DELETE FROM thf_expedientes WHERE empresa_id = ANY($1)`, [empresas]);

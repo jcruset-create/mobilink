@@ -5,19 +5,24 @@
  * `initTacografos()`. El equivalente para pegar en el SQL Editor de Supabase
  * está en `supabase/migrations/therefore_fase1.sql`.
  *
- * ── Qué hay aquí y qué no (fase 1) ──────────────────────────────────────────
+ * ── Qué hay aquí y qué no ───────────────────────────────────────────────────
  *
- * Las cinco tablas que sostienen la cola de trabajo: expedientes, actuaciones,
- * el histórico, el contador de numeración y la configuración. Las de correo
- * (notificaciones, adjuntos, decisiones) llegan con la ingesta, y las del
- * análisis de albaranes (documentos, líneas, descuentos, validaciones) con el
- * parser de documentos. Se crean cuando haya código que las use: una tabla
- * vacía que nadie escribe es una promesa sin cumplir en medio del esquema.
+ * Ocho tablas. Las cinco de la cola de trabajo (expedientes, actuaciones,
+ * histórico, contador de numeración y configuración) y las tres de la ingesta
+ * de correo (notificaciones, adjuntos, decisiones). Las del análisis de
+ * albaranes —documentos, líneas, descuentos, validaciones— llegan con el
+ * parser de documentos que las escribirá.
  *
- * Por eso `thf_eventos` tiene columnas `notificacion_id` y
- * `albaran_analizado_id` **sin clave ajena**: el histórico va a apuntar a esas
- * filas en cuanto existan, y una clave ajena a una tabla que aún no está
- * impediría arrancar.
+ * El criterio es que cada tabla entra con el código que la usa: una tabla
+ * vacía que nadie escribe es una promesa sin cumplir en medio del esquema, y
+ * además nadie sabe si su DDL es correcto hasta que algo la usa de verdad.
+ *
+ * Por eso `thf_eventos` tiene una columna `albaran_analizado_id` **sin clave
+ * ajena**: el histórico va a apuntar a esas filas en cuanto existan, y una
+ * clave ajena a una tabla que aún no está impediría arrancar. Lo mismo valía
+ * para `notificacion_id` hasta esta fase, y se ha quedado igual a propósito:
+ * ponerle ahora la clave ajena obligaría a que las dos tablas se creasen en
+ * orden, y el histórico tiene que poder escribirse pase lo que pase.
  *
  * ── empresa_id sin clave ajena ──────────────────────────────────────────────
  *
@@ -348,5 +353,248 @@ export async function initTherefore(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (empresa_id, clave)
     );
+  `);
+
+  /*
+   * La misma normalización que `domain/dedupe.ts`, pero en SQL.
+   *
+   * Hace falta aquí porque la consulta de candidatos tiene que cruzar la
+   * factura `0000123514` de un correo con la `123514` de un expediente, y
+   * traerse a Node todos los expedientes de la ventana para compararlos sería
+   * leer miles de filas para quedarse con dos.
+   *
+   * Que la regla esté escrita dos veces es un riesgo real —se cambia una y se
+   * olvida la otra—, así que hay una prueba de integración que pasa la misma
+   * lista de valores por las dos y exige el mismo resultado. Es la única forma
+   * honesta de tener las dos: o coinciden, o la CI se pone roja.
+   *
+   * IMMUTABLE no es decorativo: sin eso no se puede indexar por ella.
+   */
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION thf_normalizar_id(v TEXT) RETURNS TEXT AS $$
+      SELECT NULLIF(
+        regexp_replace(
+          regexp_replace(upper(COALESCE(v, '')), '[^A-Z0-9]', '', 'g'),
+          '^0+', ''),
+        '')
+    $$ LANGUAGE sql IMMUTABLE;
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS thf_exp_factura_norm_idx
+      ON thf_expedientes(empresa_id, thf_normalizar_id(factura_numero));
+  `);
+
+  // ── Notificaciones ────────────────────────────────────────────────────────
+  //
+  // Un correo. NO es la unidad de trabajo: un expediente tiene muchos, y un
+  // correo puede quedarse sin expediente mientras una persona decide a cuál va.
+  // De ahí que `expediente_id` sea NULL-able y no al revés.
+  //
+  // El texto original NUNCA se borra ni se edita: es la única prueba de qué
+  // pidió Therefore exactamente. Cuando el parser se equivoque —y se va a
+  // equivocar— lo que se corrige es lo interpretado, y esta columna es contra
+  // lo que se compara.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS thf_notificaciones (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      -- SET NULL y no CASCADE: si un expediente se borra, sus correos siguen
+      -- siendo correos que llegaron. Borrarlos sería falsear el buzón.
+      expediente_id UUID REFERENCES thf_expedientes(id) ON DELETE SET NULL,
+
+      /*
+       * El Message-ID del RFC, que es lo que existe en CUALQUIER buzón. El
+       * encargo pedía que el único fuera el identificador de Gmail, pero eso
+       * ataría el módulo a un proveedor concreto: aquí el buzón es cdmon. El de
+       * Gmail se guarda aparte y con su propio índice único parcial, para
+       * cuando el servidor sea Gmail y lo mande.
+       */
+      message_id TEXT NOT NULL,
+      gmail_message_id TEXT,
+      gmail_thread_id TEXT,
+      in_reply_to TEXT,
+
+      fecha_email TIMESTAMPTZ NOT NULL,
+      remitente TEXT NOT NULL DEFAULT '',
+      destinatario TEXT NOT NULL DEFAULT '',
+      asunto TEXT NOT NULL DEFAULT '',
+
+      texto_original TEXT NOT NULL,
+      html_original TEXT,
+      -- El .eml tal cual, cuando haya buzón y almacenamiento (fase 4).
+      eml_storage_path TEXT,
+
+      tipo_notificacion TEXT NOT NULL DEFAULT 'SOLICITUD'
+        CHECK (tipo_notificacion IN
+          ('SOLICITUD','RECORDATORIO','RECLAMACION','TAREA_VENCIDA','CAMBIO_INSTRUCCION','APROBACION','OTRO')),
+
+      urgente_detectado BOOLEAN NOT NULL DEFAULT false,
+      persona_solicitante TEXT,
+      fecha_solicitud_texto TEXT,
+
+      -- sha256 del texto normalizado. Cruza reenvíos que llegan con otro
+      -- Message-ID pero el mismo cuerpo, que es lo que hace el reenvío manual.
+      hash_contenido TEXT NOT NULL,
+
+      -- Lo que entendió el parser, con sus confianzas: la EVIDENCIA. Lo que se
+      -- mira cuando alguien pregunta por qué se creó esta actuación.
+      parseado JSONB,
+
+      estado_proceso TEXT NOT NULL DEFAULT 'PROCESADA'
+        CHECK (estado_proceso IN ('PROCESADA','PENDIENTE_DECISION','ERROR_PARSER','IGNORADA')),
+      error_proceso TEXT,
+
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+      /*
+       * La idempotencia de la ingesta, y por eso es un UNIQUE de la base y no
+       * un «¿ya existe?» antes de insertar: dos pasadas del buzón a la vez
+       * pasarían las dos por la comprobación previa. El mismo correo dos veces
+       * tiene que dar cero filas nuevas, no un duplicado ni un error.
+       */
+      UNIQUE (empresa_id, message_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS thf_notif_expediente_idx
+      ON thf_notificaciones(expediente_id, fecha_email);
+    CREATE INDEX IF NOT EXISTS thf_notif_hash_idx
+      ON thf_notificaciones(empresa_id, hash_contenido);
+    CREATE INDEX IF NOT EXISTS thf_notif_hilo_idx
+      ON thf_notificaciones(empresa_id, gmail_thread_id)
+      WHERE gmail_thread_id IS NOT NULL;
+    -- Lo que hay que atender: las que NO están procesadas. Parcial porque las
+    -- procesadas son el 99 % y no se buscan nunca por este campo.
+    CREATE INDEX IF NOT EXISTS thf_notif_pendientes_idx
+      ON thf_notificaciones(empresa_id, estado_proceso)
+      WHERE estado_proceso <> 'PROCESADA';
+    CREATE UNIQUE INDEX IF NOT EXISTS thf_notif_gmail_idx
+      ON thf_notificaciones(empresa_id, gmail_message_id)
+      WHERE gmail_message_id IS NOT NULL;
+  `);
+
+  // ── Adjuntos ──────────────────────────────────────────────────────────────
+  //
+  // Los ficheros del correo. En esta fase se registran su nombre, su tipo y su
+  // HASH; el contenido se guarda cuando haya almacenamiento (fase 3). El hash
+  // ya sirve para algo desde hoy: es una de las señales del deduplicador —el
+  // mismo PDF adjunto en dos correos es el mismo asunto— y es lo que evitará
+  // volver a analizar un documento ya analizado.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS thf_adjuntos (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      notificacion_id UUID NOT NULL REFERENCES thf_notificaciones(id) ON DELETE CASCADE,
+      expediente_id UUID REFERENCES thf_expedientes(id) ON DELETE SET NULL,
+
+      nombre_archivo TEXT NOT NULL DEFAULT '',
+      mime_type TEXT NOT NULL DEFAULT '',
+      tamano_bytes INTEGER,
+
+      tipo_documento TEXT NOT NULL DEFAULT 'OTRO'
+        CHECK (tipo_documento IN ('PDF_FACTURA','PDF_ABONO','XML_FACTURA','OTRO')),
+
+      hash_archivo TEXT NOT NULL,
+      -- <empresa>/<hash[0:2]>/<hash>.<ext>. NULL mientras no haya dónde
+      -- guardarlo: el mismo fichero se guardará UNA vez aunque llegue diez.
+      storage_path TEXT,
+
+      paginas INTEGER,
+      tiene_texto BOOLEAN,
+      parsed BOOLEAN NOT NULL DEFAULT false,
+      parse_error TEXT,
+
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+      -- El mismo fichero en el mismo correo es el mismo adjunto.
+      UNIQUE (notificacion_id, hash_archivo)
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS thf_adj_hash_idx ON thf_adjuntos(empresa_id, hash_archivo);
+    CREATE INDEX IF NOT EXISTS thf_adj_expediente_idx ON thf_adjuntos(expediente_id);
+  `);
+
+  // ── Decisiones ────────────────────────────────────────────────────────────
+  //
+  // Lo que el sistema NO decide por su cuenta.
+  //
+  // Es la tabla que sostiene la regla de todo el módulo: cuando no se sabe, se
+  // pregunta. Un motor que siempre elige acierta el 95 % y el 5 % restante
+  // aparece en contabilidad semanas después, cuando ya nadie recuerda de qué
+  // correo salió. Aquí el correo se queda esperando, con sus candidatos y la
+  // puntuación de cada uno, hasta que una persona diga.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS thf_decisiones (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+
+      tipo TEXT NOT NULL
+        CHECK (tipo IN
+          ('POSIBLE_DUPLICADO','CAMBIO_INSTRUCCION','RECLAMACION_SOBRE_RESUELTO','REQUIERE_REVISION','ERROR_PARSER')),
+
+      notificacion_id UUID REFERENCES thf_notificaciones(id) ON DELETE CASCADE,
+      -- El expediente al que afecta, cuando lo hay: un POSIBLE_DUPLICADO
+      -- todavía no tiene, y un CAMBIO_INSTRUCCION sí.
+      expediente_id UUID REFERENCES thf_expedientes(id) ON DELETE CASCADE,
+      /*
+       * La actuación concreta, para los CAMBIO_INSTRUCCION. Un mismo correo
+       * puede cambiar la instrucción de tres albaranes, y son tres decisiones
+       * distintas: aceptar una y mantener otra es una respuesta perfectamente
+       * razonable. Sin esta columna serían una sola y habría que decidir las
+       * tres a la vez.
+       */
+      actuacion_id UUID REFERENCES thf_actuaciones(id) ON DELETE CASCADE,
+
+      -- [{id, numero, estado, score, motivos:[{clave,puntos,texto}]}]. Se
+      -- guarda la puntuación TAL Y COMO se calculó, no una referencia: los
+      -- pesos se pueden cambiar, y entonces la pantalla enseñaría una razón
+      -- distinta de la que hubo. Lo que se decidió se decidió con estos números.
+      candidatos JSONB NOT NULL DEFAULT '[]',
+      detalle JSONB,
+
+      estado TEXT NOT NULL DEFAULT 'PENDIENTE'
+        CHECK (estado IN ('PENDIENTE','DECIDIDA')),
+      decision TEXT,
+      motivo TEXT,
+      decidida_por_usuario_id UUID,
+      decidida_por_nombre TEXT,
+      decidida_at TIMESTAMPTZ,
+
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    -- La cola de revisión: lo único que se consulta a diario.
+    CREATE INDEX IF NOT EXISTS thf_dec_pendientes_idx
+      ON thf_decisiones(empresa_id, created_at DESC)
+      WHERE estado = 'PENDIENTE';
+    CREATE INDEX IF NOT EXISTS thf_dec_expediente_idx ON thf_decisiones(expediente_id);
+    CREATE INDEX IF NOT EXISTS thf_dec_notificacion_idx ON thf_decisiones(notificacion_id);
+  `);
+
+  /*
+   * Una decisión pendiente por correo, tipo y actuación, y no más.
+   *
+   * Sin esto, reprocesar un correo —algo que se hace a mano cuando el parser
+   * falla— dejaría dos «posible duplicado» idénticos en la cola, y quien
+   * resolviera el primero se encontraría el segundo sin saber si es otro caso.
+   *
+   * El COALESCE es necesario y no un adorno: en un índice único de PostgreSQL
+   * dos NULL son distintos, así que sin él las decisiones sin actuación —que
+   * son casi todas— no se deduplicarían entre sí.
+   *
+   * Deja fuera las DECIDIDAS: el histórico de lo que ya se decidió no estorba.
+   */
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS thf_dec_unica_idx
+      ON thf_decisiones(
+        notificacion_id, tipo,
+        COALESCE(actuacion_id, '00000000-0000-0000-0000-000000000000'::uuid))
+      WHERE estado = 'PENDIENTE' AND notificacion_id IS NOT NULL;
   `);
 }

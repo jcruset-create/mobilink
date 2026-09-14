@@ -1,10 +1,17 @@
 /**
- * Los números con los que el módulo decide qué corre más.
+ * Los números con los que el módulo decide qué corre más y qué es lo mismo.
  *
- * Sólo están los de la prioridad, que son los únicos que hoy hace algo: los
- * pesos del motor de deduplicación y los umbrales del parser aparecerán aquí
- * cuando exista el código que los lee. Una pantalla con mandos desconectados es
- * peor que no tenerla, porque alguien los mueve y se cree que ha cambiado algo.
+ * Están los de la prioridad y los del motor de deduplicación, que son los que
+ * hoy hacen algo. Los umbrales del parser de documentos aparecerán aquí cuando
+ * exista el código que los lee: una pantalla con mandos desconectados es peor
+ * que no tenerla, porque alguien los mueve y se cree que ha cambiado algo.
+ *
+ * ── Los castigos son negativos, y eso cambia el lector ──────────────────────
+ *
+ * «Factura distinta» resta 40. El lector de los pesos de prioridad rechaza los
+ * negativos a propósito —un peso de prioridad negativo no significa nada— así
+ * que aquí hace falta otro que los admita. Con el primero, un −40 se habría
+ * guardado en silencio como el valor por defecto.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -41,6 +48,12 @@ export default function Configuracion() {
   const num = (v: string, sinValor: number) => {
     const n = Number(v.replace(",", "."));
     return Number.isFinite(n) && n >= 0 ? n : sinValor;
+  };
+
+  /** Igual, pero admitiendo el signo: los castigos del deduplicador restan. */
+  const numConSigno = (v: string, sinValor: number) => {
+    const n = Number(v.replace(",", "."));
+    return Number.isFinite(n) ? n : sinValor;
   };
 
   async function guardar() {
@@ -126,6 +139,95 @@ export default function Configuracion() {
             value={String(config.umbrales.critica)}
             onChange={(v) =>
               setConfig({ ...config, umbrales: { ...config.umbrales, critica: num(v, 0) } })
+            }
+          />
+        </div>
+      </section>
+
+      <section className="mb-4 rounded-2xl border border-slate-700 bg-slate-800 p-4">
+        <h2 className="mb-1 text-sm font-bold">Cuándo dos correos son el mismo asunto</h2>
+        <p className="mb-3 text-[12px] text-slate-400">
+          Cada coincidencia entre el correo que llega y un expediente que ya existe suma (o resta)
+          puntos. Por encima del umbral de fusión se enlazan sin preguntar; entre los dos umbrales
+          se deja en Revisión; por debajo del de revisión, se abre un expediente nuevo.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {(
+            [
+              ["mismaFactura", "Misma factura"],
+              ["mismoAlbaran", "Mismo albarán"],
+              ["mismoProveedor", "Mismo proveedor"],
+              ["mismoImporte", "Mismo importe"],
+              ["mismaEmpresa", "Misma sociedad"],
+              ["mismoDocumento", "Mismo adjunto"],
+              ["mismaAccion", "Misma acción sobre el albarán"],
+              ["mismoHilo", "Mismo hilo de correo"],
+              ["facturaDiferente", "Factura distinta (resta)"],
+              ["proveedorDiferente", "Proveedor distinto (resta)"],
+              ["tipoIncompatible", "Incidencia frente a aprobación (resta)"],
+            ] as const
+          ).map(([clave, rotulo]) => (
+            <TextField
+              key={clave}
+              label={rotulo}
+              value={String(config.dedupe.pesos[clave])}
+              onChange={(v) =>
+                setConfig({
+                  ...config,
+                  dedupe: {
+                    ...config.dedupe,
+                    pesos: {
+                      ...config.dedupe.pesos,
+                      [clave]: numConSigno(v, config.dedupe.pesos[clave]),
+                    },
+                  },
+                })
+              }
+            />
+          ))}
+        </div>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <TextField
+            label="A partir de aquí se enlaza solo"
+            value={String(config.dedupe.umbrales.fusionar)}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                dedupe: {
+                  ...config.dedupe,
+                  umbrales: {
+                    ...config.dedupe.umbrales,
+                    fusionar: num(v, config.dedupe.umbrales.fusionar),
+                  },
+                },
+              })
+            }
+          />
+          <TextField
+            label="A partir de aquí se pregunta"
+            value={String(config.dedupe.umbrales.revisar)}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                dedupe: {
+                  ...config.dedupe,
+                  umbrales: {
+                    ...config.dedupe.umbrales,
+                    revisar: num(v, config.dedupe.umbrales.revisar),
+                  },
+                },
+              })
+            }
+          />
+          <TextField
+            label="Días hacia atrás que se miran"
+            value={String(config.dedupe.ventanaDias)}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                dedupe: { ...config.dedupe, ventanaDias: num(v, config.dedupe.ventanaDias) },
+              })
             }
           />
         </div>
