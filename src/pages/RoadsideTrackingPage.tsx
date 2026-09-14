@@ -434,7 +434,31 @@ export default function RoadsideTrackingPage() {
           </section>
         )}
 
-        {/* Progress steps */}
+        {/*
+          Sin seguimiento: el servicio lo hace un taller de la red y nadie va a
+          ir marcando los siete pasos. Enseñar la rejilla completa prometería un
+          detalle que no va a llegar nunca, y el cliente acaba llamando para
+          preguntar por qué lleva dos horas en «Asignada». Se dice lo que de
+          verdad se sabe: está en manos del taller, y avisamos al terminar.
+        */}
+        {assistance.sinSeguimiento && !isFinished ? (
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-start gap-3">
+              <Clock3 className="mt-0.5 h-5 w-5 shrink-0 text-orange-500" />
+              <div>
+                <div className="text-sm font-black text-slate-800">
+                  Servicio en manos de un taller colaborador
+                </div>
+                <p className="mt-1 text-sm font-semibold text-slate-500">
+                  Esta asistencia la atiende un taller de nuestra red, así que no
+                  tiene seguimiento paso a paso en el mapa. Te avisamos en cuanto
+                  esté terminada.
+                </p>
+              </div>
+            </div>
+          </section>
+        ) : (
+        /* Progress steps */
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="grid gap-2 grid-cols-2 md:grid-cols-7">
             {ROADSIDE_ASSISTANCE_STATUS_FLOW.map((status, index) => {
@@ -483,6 +507,7 @@ export default function RoadsideTrackingPage() {
             })}
           </div>
         </section>
+        )}
 
         {/* Info cards */}
         <section className="grid gap-4 md:grid-cols-2">

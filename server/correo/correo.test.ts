@@ -133,6 +133,35 @@ describe("plantillas", () => {
     }
   });
 
+  /*
+   * La autorización del taller es la misma referencia del expediente a
+   * propósito: el taller apunta UN número y es el que viaja en el asunto.
+   * Si se escribieran dos líneas iguales, la mitad copiaría la que no toca.
+   */
+  it("cuando la autorización es el propio expediente, va en una sola línea", () => {
+    const t = construirMensaje("solicitud_albaran", { ...datos, autorizacion: "AST-4210" }).texto;
+    expect(t).toContain("Expediente y nº de autorización: AST-4210");
+    expect(t).not.toContain("Expediente: AST-4210");
+  });
+
+  it("si algún día no coinciden, se escriben las dos", () => {
+    const t = construirMensaje("solicitud_albaran", { ...datos, autorizacion: "PROV-77" }).texto;
+    expect(t).toContain("Expediente: AST-4210");
+    expect(t).toContain("Nº de autorización: PROV-77");
+  });
+
+  it("sin autorización la cabecera no cambia", () => {
+    const t = construirMensaje("solicitud_albaran", datos).texto;
+    expect(t).toContain("Expediente: AST-4210");
+    expect(t.toLowerCase()).not.toContain("autorizaci");
+  });
+
+  it("al pedir aceptación se dice con qué número queda autorizado", () => {
+    const t = construirMensaje("solicitud_aceptacion", { ...datos, autorizacion: "AST-4210" }).texto;
+    expect(t).toContain("queda autorizado con el número AST-4210");
+    expect(t).toContain("albarán");
+  });
+
   it("cada una pide UNA cosa", () => {
     expect(construirMensaje("solicitud_albaran", datos).texto.toLowerCase()).toContain("albarán");
     expect(construirMensaje("solicitud_albaran", datos).texto.toLowerCase()).not.toContain("factura");

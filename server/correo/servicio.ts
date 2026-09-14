@@ -449,12 +449,13 @@ export async function enviarRecordatoriosPendientes(limite = 20): Promise<number
 async function datosDelExpediente(system: Sistema, assistanceId: string): Promise<DatosCorreo | null> {
   if (system === "assist") {
     const a = await db.query(
-      `SELECT id, plate, address, "finishedAtMs", "descripcionAveria"
+      `SELECT id, plate, address, "finishedAtMs", "descripcionAveria", "autorizacionTaller"
          FROM roadside_assistances WHERE id = $1`, [Number(assistanceId)]);
     const f = a.rows[0];
     if (!f) return null;
     return {
       expediente: `AST-${f.id}`,
+      autorizacion: f.autorizacionTaller || null,
       matricula: f.plate || null,
       direccion: f.address || null,
       fechaServicio: f.finishedAtMs != null ? Number(f.finishedAtMs) : null,
