@@ -20,6 +20,11 @@ import type { PoolClient, QueryResult, QueryResultRow } from "pg";
 import pool from "../db.ts";
 import { claveAlbaran } from "./domain/albaran.ts";
 import type {
+  CandidatoPuntuado,
+  ExpedienteCandidato,
+  TipoNotificacion,
+} from "./domain/dedupe.ts";
+import type {
   EstadoActuacion,
   EstadoExpediente,
   Prioridad,
@@ -396,7 +401,41 @@ export type CambiosExpediente = Partial<{
   resuelto_por_usuario_id: string | null;
   fecha_cierre: string | null;
   observaciones: string;
+  // Las mueve la ingesta de correo al enlazar una notificación.
+  numero_notificaciones: number;
+  numero_reclamaciones: number;
+  fecha_ultima_notificacion: string;
+  urgente: boolean;
+  tarea_vencida: boolean;
 }>;
+
+/**
+ * Las columnas que `actualizarExpediente` puede escribir, en tiempo de
+ * ejecución.
+ *
+ * El nombre de la columna se interpola en el SQL —no hay forma de pasarlo como
+ * parámetro— y el tipo de arriba sólo existe al compilar. Con esta lista, un
+ * objeto que llegue con una clave rara desde un `JSON.parse` no puede acabar
+ * dentro de un UPDATE.
+ */
+const COLUMNAS_EXPEDIENTE = new Set<string>([
+  "estado",
+  "prioridad",
+  "prioridad_score",
+  "prioridad_manual",
+  "requiere_revision",
+  "asignado_usuario_id",
+  "fecha_inicio_gestion",
+  "fecha_resolucion",
+  "resuelto_por_usuario_id",
+  "fecha_cierre",
+  "observaciones",
+  "numero_notificaciones",
+  "numero_reclamaciones",
+  "fecha_ultima_notificacion",
+  "urgente",
+  "tarea_vencida",
+]);
 
 export async function actualizarExpediente(
   empresaId: string,
@@ -404,7 +443,9 @@ export async function actualizarExpediente(
   cambios: CambiosExpediente,
   ejecutor?: Ejecutor
 ): Promise<Expediente | null> {
-  const columnas = Object.keys(cambios) as (keyof CambiosExpediente)[];
+  const columnas = (Object.keys(cambios) as (keyof CambiosExpediente)[]).filter((c) =>
+    COLUMNAS_EXPEDIENTE.has(c)
+  );
   if (columnas.length === 0) return obtenerExpediente(empresaId, id, ejecutor);
 
   const set = columnas.map((c, i) => `${c} = $${i + 3}`).join(", ");
@@ -779,4 +820,720 @@ export async function listarEventos(
     [empresaId, expedienteId]
   );
   return rows.map(aEvento);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   NOTIFICACIONES, ADJUNTOS Y DECISIONES
+   ════════════════════════════════════════════════════════════════════════════
+
+   La parte que recibe el correo. El orden de arriba abajo es el de la ingesta:
+   se registra el correo, se buscan expedientes candidatos, y si no se sabe a
+   cuál va, se levanta una decisión para que la mire una persona.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+export type Notificacion = {
+  id: string;
+  expedienteId: string | null;
+  messageId: string;
+  gmailMessageId: string | null;
+  gmailThreadId: string | null;
+  inReplyTo: string | null;
+  fechaEmail: string;
+  remitente: string;
+  destinatario: string;
+  asunto: string;
+  textoOriginal: string;
+  tipoNotificacion: TipoNotificacion;
+  urgenteDetectado: boolean;
+  personaSolicitante: string | null;
+  hashContenido: string;
+  parseado: unknown;
+  estadoProceso: EstadoProcesoNotificacion;
+  errorProceso: string | null;
+  createdAt: string;
+};
+
+export const ESTADOS_PROCESO_NOTIFICACION = [
+  "PROCESADA",
+  "PENDIENTE_DECISION",
+  "ERROR_PARSER",
+  "IGNORADA",
+] as const;
+export type EstadoProcesoNotificacion = (typeof ESTADOS_PROCESO_NOTIFICACION)[number];
+
+const CAMPOS_NOTIF = `
+  id, expediente_id, message_id, gmail_message_id, gmail_thread_id, in_reply_to,
+  fecha_email, remitente, destinatario, asunto, texto_original, tipo_notificacion,
+  urgente_detectado, persona_solicitante, hash_contenido, parseado,
+  estado_proceso, error_proceso, created_at`;
+
+function aNotificacion(r: QueryResultRow): Notificacion {
+  return {
+    id: String(r.id),
+    expedienteId: r.expediente_id ? String(r.expediente_id) : null,
+    messageId: String(r.message_id),
+    gmailMessageId: r.gmail_message_id ? String(r.gmail_message_id) : null,
+    gmailThreadId: r.gmail_thread_id ? String(r.gmail_thread_id) : null,
+    inReplyTo: r.in_reply_to ? String(r.in_reply_to) : null,
+    fechaEmail: new Date(r.fecha_email).toISOString(),
+    remitente: String(r.remitente ?? ""),
+    destinatario: String(r.destinatario ?? ""),
+    asunto: String(r.asunto ?? ""),
+    textoOriginal: String(r.texto_original ?? ""),
+    tipoNotificacion: r.tipo_notificacion as TipoNotificacion,
+    urgenteDetectado: Boolean(r.urgente_detectado),
+    personaSolicitante: r.persona_solicitante ? String(r.persona_solicitante) : null,
+    hashContenido: String(r.hash_contenido),
+    parseado: r.parseado ?? null,
+    estadoProceso: r.estado_proceso as EstadoProcesoNotificacion,
+    errorProceso: r.error_proceso ? String(r.error_proceso) : null,
+    createdAt: new Date(r.created_at).toISOString(),
+  };
+}
+
+export type DatosNotificacion = {
+  messageId: string;
+  gmailMessageId?: string | null;
+  gmailThreadId?: string | null;
+  inReplyTo?: string | null;
+  fechaEmail: string;
+  remitente?: string;
+  destinatario?: string;
+  asunto?: string;
+  textoOriginal: string;
+  htmlOriginal?: string | null;
+  tipoNotificacion?: TipoNotificacion;
+  urgenteDetectado?: boolean;
+  personaSolicitante?: string | null;
+  hashContenido: string;
+  parseado?: unknown;
+  estadoProceso?: EstadoProcesoNotificacion;
+};
+
+/**
+ * Registra el correo, o devuelve el que ya estaba.
+ *
+ * `yaEstaba` es toda la idempotencia de la ingesta. El `ON CONFLICT DO NOTHING`
+ * sobre `(empresa_id, message_id)` y no una comprobación previa: dos pasadas
+ * del buzón a la vez pasarían las dos por un «¿ya existe?» y las dos
+ * insertarían. Aquí la base decide, que es la única que puede.
+ *
+ * Cuando ya estaba, se devuelve la fila existente en vez de `null`: quien llama
+ * casi siempre quiere saber a qué expediente fue a parar la primera vez.
+ */
+export async function registrarNotificacion(
+  empresaId: string,
+  datos: DatosNotificacion,
+  ejecutor?: Ejecutor
+): Promise<{ notificacion: Notificacion; yaEstaba: boolean }> {
+  const { rows } = await db(ejecutor).query(
+    `INSERT INTO thf_notificaciones
+       (empresa_id, message_id, gmail_message_id, gmail_thread_id, in_reply_to,
+        fecha_email, remitente, destinatario, asunto, texto_original, html_original,
+        tipo_notificacion, urgente_detectado, persona_solicitante, hash_contenido,
+        parseado, estado_proceso)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+     ON CONFLICT (empresa_id, message_id) DO NOTHING
+     RETURNING ${CAMPOS_NOTIF}`,
+    [
+      empresaId,
+      datos.messageId,
+      datos.gmailMessageId ?? null,
+      datos.gmailThreadId ?? null,
+      datos.inReplyTo ?? null,
+      datos.fechaEmail,
+      datos.remitente ?? "",
+      datos.destinatario ?? "",
+      datos.asunto ?? "",
+      datos.textoOriginal,
+      datos.htmlOriginal ?? null,
+      datos.tipoNotificacion ?? "SOLICITUD",
+      datos.urgenteDetectado ?? false,
+      datos.personaSolicitante ?? null,
+      datos.hashContenido,
+      datos.parseado === undefined ? null : JSON.stringify(datos.parseado),
+      datos.estadoProceso ?? "PROCESADA",
+    ]
+  );
+
+  if (rows[0]) return { notificacion: aNotificacion(rows[0]), yaEstaba: false };
+
+  const previa = await db(ejecutor).query(
+    `SELECT ${CAMPOS_NOTIF} FROM thf_notificaciones
+      WHERE empresa_id = $1 AND message_id = $2`,
+    [empresaId, datos.messageId]
+  );
+  if (!previa.rows[0]) {
+    // El INSERT dijo que ya existía y el SELECT no la encuentra: alguien la ha
+    // borrado entre las dos consultas. Se dice, en vez de reventar más abajo
+    // con un error de propiedad de `undefined` que no explicaría nada.
+    throw new ErrorTherefore(
+      "NOTIFICACION_DESAPARECIDA",
+      "El correo existía al insertarlo y ya no está. Vuelve a intentarlo.",
+      409
+    );
+  }
+  return { notificacion: aNotificacion(previa.rows[0]), yaEstaba: true };
+}
+
+export async function obtenerNotificacion(
+  empresaId: string,
+  id: string,
+  ejecutor?: Ejecutor
+): Promise<Notificacion | null> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_NOTIF} FROM thf_notificaciones WHERE empresa_id = $1 AND id = $2`,
+    [empresaId, id]
+  );
+  return rows[0] ? aNotificacion(rows[0]) : null;
+}
+
+export async function listarNotificaciones(
+  empresaId: string,
+  expedienteId: string,
+  ejecutor?: Ejecutor
+): Promise<Notificacion[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_NOTIF} FROM thf_notificaciones
+      WHERE empresa_id = $1 AND expediente_id = $2
+      ORDER BY fecha_email, created_at, id`,
+    [empresaId, expedienteId]
+  );
+  return rows.map(aNotificacion);
+}
+
+export type CambiosNotificacion = Partial<{
+  expedienteId: string | null;
+  tipoNotificacion: TipoNotificacion;
+  estadoProceso: EstadoProcesoNotificacion;
+  errorProceso: string | null;
+  parseado: unknown;
+}>;
+
+export async function actualizarNotificacion(
+  empresaId: string,
+  id: string,
+  cambios: CambiosNotificacion,
+  ejecutor?: Ejecutor
+): Promise<Notificacion | null> {
+  const sets: string[] = [];
+  const vals: unknown[] = [empresaId, id];
+  const poner = (col: string, v: unknown) => {
+    vals.push(v);
+    sets.push(`${col} = $${vals.length}`);
+  };
+
+  if (cambios.expedienteId !== undefined) poner("expediente_id", cambios.expedienteId);
+  if (cambios.tipoNotificacion !== undefined) poner("tipo_notificacion", cambios.tipoNotificacion);
+  if (cambios.estadoProceso !== undefined) poner("estado_proceso", cambios.estadoProceso);
+  if (cambios.errorProceso !== undefined) poner("error_proceso", cambios.errorProceso);
+  if (cambios.parseado !== undefined) poner("parseado", JSON.stringify(cambios.parseado));
+  if (sets.length === 0) return obtenerNotificacion(empresaId, id, ejecutor);
+
+  const { rows } = await db(ejecutor).query(
+    `UPDATE thf_notificaciones SET ${sets.join(", ")}
+      WHERE empresa_id = $1 AND id = $2
+      RETURNING ${CAMPOS_NOTIF}`,
+    vals
+  );
+  return rows[0] ? aNotificacion(rows[0]) : null;
+}
+
+/* ── Adjuntos ────────────────────────────────────────────────────────────── */
+
+export const TIPOS_DOCUMENTO_ADJUNTO = [
+  "PDF_FACTURA",
+  "PDF_ABONO",
+  "XML_FACTURA",
+  "OTRO",
+] as const;
+export type TipoDocumentoAdjunto = (typeof TIPOS_DOCUMENTO_ADJUNTO)[number];
+
+export type Adjunto = {
+  id: string;
+  notificacionId: string;
+  expedienteId: string | null;
+  nombreArchivo: string;
+  mimeType: string;
+  tamanoBytes: number | null;
+  tipoDocumento: TipoDocumentoAdjunto;
+  hashArchivo: string;
+  storagePath: string | null;
+  parsed: boolean;
+  createdAt: string;
+};
+
+const CAMPOS_ADJ = `
+  id, notificacion_id, expediente_id, nombre_archivo, mime_type, tamano_bytes,
+  tipo_documento, hash_archivo, storage_path, parsed, created_at`;
+
+function aAdjunto(r: QueryResultRow): Adjunto {
+  return {
+    id: String(r.id),
+    notificacionId: String(r.notificacion_id),
+    expedienteId: r.expediente_id ? String(r.expediente_id) : null,
+    nombreArchivo: String(r.nombre_archivo ?? ""),
+    mimeType: String(r.mime_type ?? ""),
+    tamanoBytes: r.tamano_bytes === null ? null : Number(r.tamano_bytes),
+    tipoDocumento: r.tipo_documento as TipoDocumentoAdjunto,
+    hashArchivo: String(r.hash_archivo),
+    storagePath: r.storage_path ? String(r.storage_path) : null,
+    parsed: Boolean(r.parsed),
+    createdAt: new Date(r.created_at).toISOString(),
+  };
+}
+
+export type DatosAdjunto = {
+  nombreArchivo?: string;
+  mimeType?: string;
+  tamanoBytes?: number | null;
+  tipoDocumento?: TipoDocumentoAdjunto;
+  hashArchivo: string;
+  storagePath?: string | null;
+};
+
+/** El mismo fichero en el mismo correo no se registra dos veces. */
+export async function registrarAdjunto(
+  empresaId: string,
+  notificacionId: string,
+  expedienteId: string | null,
+  datos: DatosAdjunto,
+  ejecutor?: Ejecutor
+): Promise<Adjunto | null> {
+  const { rows } = await db(ejecutor).query(
+    `INSERT INTO thf_adjuntos
+       (empresa_id, notificacion_id, expediente_id, nombre_archivo, mime_type,
+        tamano_bytes, tipo_documento, hash_archivo, storage_path)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     ON CONFLICT (notificacion_id, hash_archivo) DO NOTHING
+     RETURNING ${CAMPOS_ADJ}`,
+    [
+      empresaId,
+      notificacionId,
+      expedienteId,
+      datos.nombreArchivo ?? "",
+      datos.mimeType ?? "",
+      datos.tamanoBytes ?? null,
+      datos.tipoDocumento ?? "OTRO",
+      datos.hashArchivo,
+      datos.storagePath ?? null,
+    ]
+  );
+  return rows[0] ? aAdjunto(rows[0]) : null;
+}
+
+export async function adjuntosDeNotificacion(
+  empresaId: string,
+  notificacionId: string,
+  ejecutor?: Ejecutor
+): Promise<Adjunto[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_ADJ} FROM thf_adjuntos
+      WHERE empresa_id = $1 AND notificacion_id = $2 ORDER BY created_at, id`,
+    [empresaId, notificacionId]
+  );
+  return rows.map(aAdjunto);
+}
+
+export async function adjuntosDeExpediente(
+  empresaId: string,
+  expedienteId: string,
+  ejecutor?: Ejecutor
+): Promise<Adjunto[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_ADJ} FROM thf_adjuntos
+      WHERE empresa_id = $1 AND expediente_id = $2 ORDER BY created_at, id`,
+    [empresaId, expedienteId]
+  );
+  return rows.map(aAdjunto);
+}
+
+/**
+ * Cuelga del expediente los adjuntos de un correo que acaba de enlazarse.
+ *
+ * Va aparte de `registrarAdjunto` porque el orden importa: cuando el correo
+ * queda esperando una decisión, sus adjuntos existen pero todavía no son de
+ * ningún expediente. Se les pone el expediente cuando lo hay, y no antes.
+ */
+export async function asignarAdjuntosAExpediente(
+  empresaId: string,
+  notificacionId: string,
+  expedienteId: string,
+  ejecutor?: Ejecutor
+): Promise<void> {
+  await db(ejecutor).query(
+    `UPDATE thf_adjuntos SET expediente_id = $3
+      WHERE empresa_id = $1 AND notificacion_id = $2`,
+    [empresaId, notificacionId, expedienteId]
+  );
+}
+
+/* ── Candidatos para deduplicar (F.1) ────────────────────────────────────── */
+
+/**
+ * Los expedientes que PODRÍAN ser el mismo asunto que este correo.
+ *
+ * No decide nada: recorta. Lo que sale de aquí lo puntúa `domain/dedupe.ts`,
+ * que es código puro y se prueba sin base de datos. El reparto es deliberado:
+ * la consulta hace lo que SQL hace bien —filtrar muchas filas por índice— y la
+ * decisión vive donde se puede leer y probar caso a caso.
+ *
+ * Se incluyen los RESUELTO y CERRADO a propósito. Un expediente cerrado que
+ * recibe una reclamación no es un expediente nuevo: es una reclamación sobre
+ * uno cerrado, y hay que verla como tal. Si se filtraran por estado, el
+ * sistema abriría un duplicado y nadie notaría que ya se había hecho.
+ *
+ * La ventana de días está aquí y no en el dominio porque es lo único que evita
+ * recorrer el histórico entero: dos años de incidencias del mismo proveedor
+ * puntuarían todas, y la más antigua ganaría algún empate tonto.
+ */
+export type ClavesCandidatos = {
+  facturaNumero: string | null;
+  albaranes: readonly string[];
+  hashesAdjuntos: readonly string[];
+  hilo: string | null;
+  enRespuestaA: string | null;
+  hashContenido: string | null;
+  ventanaDias: number;
+};
+
+export async function candidatosDedupe(
+  empresaId: string,
+  claves: ClavesCandidatos,
+  ejecutor?: Ejecutor
+): Promise<ExpedienteCandidato[]> {
+  const e = db(ejecutor);
+  const albaranes = [...claves.albaranes];
+  const hashes = [...claves.hashesAdjuntos];
+
+  /*
+   * Un OR de subconsultas y no un montón de LEFT JOIN: cada rama usa su propio
+   * índice y ninguna multiplica filas. La ventana se aplica una sola vez,
+   * fuera, para que no haya que repetirla en cada rama y olvidarla en una.
+   */
+  const { rows: ids } = await e.query<{ id: string }>(
+    `SELECT id FROM thf_expedientes x
+      WHERE x.empresa_id = $1
+        AND x.fecha_ultima_notificacion >= now() - make_interval(days => $2::int)
+        AND (
+          ($3::text IS NOT NULL AND thf_normalizar_id(x.factura_numero) = thf_normalizar_id($3))
+          OR EXISTS (
+            SELECT 1 FROM thf_actuaciones a
+             WHERE a.expediente_id = x.id
+               AND a.estado <> 'DESCARTADA'
+               AND a.albaran_normalizado = ANY($4::text[])
+          )
+          OR EXISTS (
+            SELECT 1 FROM thf_adjuntos d
+             WHERE d.expediente_id = x.id AND d.hash_archivo = ANY($5::text[])
+          )
+          OR EXISTS (
+            SELECT 1 FROM thf_notificaciones n
+             WHERE n.expediente_id = x.id
+               AND (
+                 ($6::text IS NOT NULL AND n.gmail_thread_id = $6)
+                 OR ($7::text IS NOT NULL AND n.message_id = $7)
+                 OR ($8::text IS NOT NULL AND n.hash_contenido = $8)
+               )
+          )
+        )`,
+    [
+      empresaId,
+      Math.max(1, Math.trunc(claves.ventanaDias)),
+      claves.facturaNumero,
+      albaranes,
+      hashes,
+      claves.hilo,
+      claves.enRespuestaA,
+      claves.hashContenido,
+    ]
+  );
+
+  if (ids.length === 0) return [];
+  return armarCandidatos(empresaId, ids.map((r) => String(r.id)), ejecutor);
+}
+
+/**
+ * Un expediente concreto con la forma que espera el deduplicador.
+ *
+ * Lo usa la resolución de decisiones: cuando una persona dice «fúndelo en
+ * INC-452», hay que aplicar la MISMA fusión que habría aplicado el motor, no
+ * una versión simplificada escrita aparte. Dos caminos distintos para el mismo
+ * resultado acaban divergiendo, y el que menos se usa es el que se rompe.
+ */
+export async function candidatoPorId(
+  empresaId: string,
+  expedienteId: string,
+  ejecutor?: Ejecutor
+): Promise<ExpedienteCandidato | null> {
+  const [uno] = await armarCandidatos(empresaId, [expedienteId], ejecutor);
+  return uno ?? null;
+}
+
+async function armarCandidatos(
+  empresaId: string,
+  lista: readonly string[],
+  ejecutor?: Ejecutor
+): Promise<ExpedienteCandidato[]> {
+  if (lista.length === 0) return [];
+  const e = db(ejecutor);
+
+  /*
+   * Cuatro consultas, UNA detrás de otra y no en un `Promise.all`.
+   *
+   * `e` puede ser el cliente de una transacción, y un cliente de `pg` no admite
+   * dos consultas a la vez: lanzarlas en paralelo da un aviso de obsolescencia
+   * hoy y un error en pg@9. Con el puñado de identificadores que llegan aquí, lo
+   * que se pierde por ir en serie no se nota.
+   */
+  const expedientes = await e.query(
+    `SELECT id, numero, estado, tipo, empresa_codigo, proveedor_codigo, proveedor_nombre,
+            factura_numero, importe_centimos, fecha_ultima_notificacion, numero_notificaciones
+       FROM thf_expedientes WHERE empresa_id = $1 AND id = ANY($2::uuid[])`,
+    [empresaId, lista]
+  );
+  const actuaciones = await e.query(
+    `SELECT id, expediente_id, tipo_accion, albaran_normalizado, estado
+       FROM thf_actuaciones WHERE empresa_id = $1 AND expediente_id = ANY($2::uuid[])`,
+    [empresaId, lista]
+  );
+  const adjuntos = await e.query(
+    `SELECT expediente_id, hash_archivo
+       FROM thf_adjuntos WHERE empresa_id = $1 AND expediente_id = ANY($2::uuid[])`,
+    [empresaId, lista]
+  );
+  const notificaciones = await e.query(
+    `SELECT expediente_id, message_id, gmail_thread_id
+       FROM thf_notificaciones WHERE empresa_id = $1 AND expediente_id = ANY($2::uuid[])`,
+    [empresaId, lista]
+  );
+
+  const porExpediente = <T>(filas: readonly QueryResultRow[], saca: (r: QueryResultRow) => T) => {
+    const mapa = new Map<string, T[]>();
+    for (const f of filas) {
+      const k = String(f.expediente_id);
+      const l = mapa.get(k);
+      if (l) l.push(saca(f));
+      else mapa.set(k, [saca(f)]);
+    }
+    return mapa;
+  };
+
+  const acts = porExpediente(actuaciones.rows, (r) => ({
+    id: String(r.id),
+    accion: r.tipo_accion as TipoAccion,
+    albaranNormalizado: r.albaran_normalizado ? String(r.albaran_normalizado) : null,
+    descartada: r.estado === "DESCARTADA",
+  }));
+  const hs = porExpediente(adjuntos.rows, (r) => String(r.hash_archivo));
+  const mids = porExpediente(notificaciones.rows, (r) => String(r.message_id));
+  const hilos = porExpediente(
+    notificaciones.rows.filter((r) => r.gmail_thread_id),
+    (r) => String(r.gmail_thread_id)
+  );
+
+  return expedientes.rows.map((r) => ({
+    id: String(r.id),
+    numero: String(r.numero),
+    estado: r.estado as EstadoExpediente,
+    tipo: r.tipo as TipoExpediente,
+    empresaCodigo: r.empresa_codigo ? String(r.empresa_codigo) : null,
+    proveedorCodigo: r.proveedor_codigo ? String(r.proveedor_codigo) : null,
+    proveedorNombre: r.proveedor_nombre ? String(r.proveedor_nombre) : null,
+    facturaNumero: r.factura_numero ? String(r.factura_numero) : null,
+    importeCentimos: r.importe_centimos === null ? null : Number(r.importe_centimos),
+    fechaUltimaNotificacion: new Date(r.fecha_ultima_notificacion).toISOString(),
+    actuaciones: acts.get(String(r.id)) ?? [],
+    hashesAdjuntos: hs.get(String(r.id)) ?? [],
+    hilos: hilos.get(String(r.id)) ?? [],
+    messageIds: mids.get(String(r.id)) ?? [],
+    numeroNotificaciones: Number(r.numero_notificaciones ?? 0),
+  }));
+}
+
+/* ── Decisiones ──────────────────────────────────────────────────────────── */
+
+export const TIPOS_DECISION = [
+  "POSIBLE_DUPLICADO",
+  "CAMBIO_INSTRUCCION",
+  "RECLAMACION_SOBRE_RESUELTO",
+  "REQUIERE_REVISION",
+  "ERROR_PARSER",
+] as const;
+export type TipoDecision = (typeof TIPOS_DECISION)[number];
+
+export type Decision = {
+  id: string;
+  tipo: TipoDecision;
+  notificacionId: string | null;
+  expedienteId: string | null;
+  actuacionId: string | null;
+  candidatos: CandidatoPuntuado[];
+  detalle: Record<string, unknown> | null;
+  estado: "PENDIENTE" | "DECIDIDA";
+  decision: string | null;
+  motivo: string | null;
+  decididaPorNombre: string | null;
+  decididaAt: string | null;
+  createdAt: string;
+};
+
+const CAMPOS_DEC = `
+  id, tipo, notificacion_id, expediente_id, actuacion_id, candidatos, detalle,
+  estado, decision, motivo, decidida_por_nombre, decidida_at, created_at`;
+
+function aDecision(r: QueryResultRow): Decision {
+  return {
+    id: String(r.id),
+    tipo: r.tipo as TipoDecision,
+    notificacionId: r.notificacion_id ? String(r.notificacion_id) : null,
+    expedienteId: r.expediente_id ? String(r.expediente_id) : null,
+    actuacionId: r.actuacion_id ? String(r.actuacion_id) : null,
+    candidatos: (r.candidatos ?? []) as CandidatoPuntuado[],
+    detalle: (r.detalle ?? null) as Record<string, unknown> | null,
+    estado: r.estado as "PENDIENTE" | "DECIDIDA",
+    decision: r.decision ? String(r.decision) : null,
+    motivo: r.motivo ? String(r.motivo) : null,
+    decididaPorNombre: r.decidida_por_nombre ? String(r.decidida_por_nombre) : null,
+    decididaAt: r.decidida_at ? new Date(r.decidida_at).toISOString() : null,
+    createdAt: new Date(r.created_at).toISOString(),
+  };
+}
+
+export type DatosDecision = {
+  tipo: TipoDecision;
+  notificacionId: string | null;
+  expedienteId?: string | null;
+  actuacionId?: string | null;
+  candidatos?: CandidatoPuntuado[];
+  detalle?: Record<string, unknown> | null;
+};
+
+/**
+ * Levanta una decisión, o devuelve `null` si ya había una igual pendiente.
+ *
+ * `null` no es un error: significa que el mismo correo ya está esperando por lo
+ * mismo. Pasa al reprocesar un correo a mano, y dejar dos entradas idénticas en
+ * la cola haría que quien resolviera la primera se encontrara la segunda sin
+ * saber si es otro caso.
+ */
+export async function crearDecision(
+  empresaId: string,
+  datos: DatosDecision,
+  ejecutor?: Ejecutor
+): Promise<Decision | null> {
+  const { rows } = await db(ejecutor).query(
+    `INSERT INTO thf_decisiones
+       (empresa_id, tipo, notificacion_id, expediente_id, actuacion_id, candidatos, detalle)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb)
+     ON CONFLICT (notificacion_id, tipo,
+                  COALESCE(actuacion_id, '00000000-0000-0000-0000-000000000000'::uuid))
+       WHERE estado = 'PENDIENTE' AND notificacion_id IS NOT NULL
+       DO NOTHING
+     RETURNING ${CAMPOS_DEC}`,
+    [
+      empresaId,
+      datos.tipo,
+      datos.notificacionId,
+      datos.expedienteId ?? null,
+      datos.actuacionId ?? null,
+      JSON.stringify(datos.candidatos ?? []),
+      datos.detalle === undefined || datos.detalle === null ? null : JSON.stringify(datos.detalle),
+    ]
+  );
+  return rows[0] ? aDecision(rows[0]) : null;
+}
+
+export async function obtenerDecision(
+  empresaId: string,
+  id: string,
+  ejecutor?: Ejecutor
+): Promise<Decision | null> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_DEC} FROM thf_decisiones WHERE empresa_id = $1 AND id = $2`,
+    [empresaId, id]
+  );
+  return rows[0] ? aDecision(rows[0]) : null;
+}
+
+/** Igual que `obtenerExpedienteBloqueado`: para decidir sin que dos a la vez. */
+export async function obtenerDecisionBloqueada(
+  empresaId: string,
+  id: string,
+  cliente: PoolClient
+): Promise<Decision | null> {
+  const { rows } = await cliente.query(
+    `SELECT ${CAMPOS_DEC} FROM thf_decisiones
+      WHERE empresa_id = $1 AND id = $2 FOR UPDATE`,
+    [empresaId, id]
+  );
+  return rows[0] ? aDecision(rows[0]) : null;
+}
+
+export async function listarDecisiones(
+  empresaId: string,
+  filtro: { estado?: "PENDIENTE" | "DECIDIDA"; expedienteId?: string; limite?: number } = {},
+  ejecutor?: Ejecutor
+): Promise<Decision[]> {
+  const vals: unknown[] = [empresaId];
+  const cond: string[] = ["empresa_id = $1"];
+  if (filtro.estado) {
+    vals.push(filtro.estado);
+    cond.push(`estado = $${vals.length}`);
+  }
+  if (filtro.expedienteId) {
+    vals.push(filtro.expedienteId);
+    cond.push(`expediente_id = $${vals.length}`);
+  }
+  vals.push(Math.min(Math.max(filtro.limite ?? 100, 1), 500));
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_DEC} FROM thf_decisiones
+      WHERE ${cond.join(" AND ")}
+      ORDER BY created_at DESC, id
+      LIMIT $${vals.length}`,
+    vals
+  );
+  return rows.map(aDecision);
+}
+
+export async function contarDecisionesPendientes(
+  empresaId: string,
+  ejecutor?: Ejecutor
+): Promise<number> {
+  const { rows } = await db(ejecutor).query<{ n: string }>(
+    `SELECT COUNT(*)::text AS n FROM thf_decisiones
+      WHERE empresa_id = $1 AND estado = 'PENDIENTE'`,
+    [empresaId]
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** Cierra la decisión. Devuelve `null` si otra sesión se adelantó. */
+export async function cerrarDecision(
+  empresaId: string,
+  id: string,
+  resolucion: {
+    decision: string;
+    motivo?: string | null;
+    usuarioId?: string | null;
+    usuarioNombre?: string | null;
+  },
+  ejecutor?: Ejecutor
+): Promise<Decision | null> {
+  const { rows } = await db(ejecutor).query(
+    `UPDATE thf_decisiones
+        SET estado = 'DECIDIDA', decision = $3, motivo = $4,
+            decidida_por_usuario_id = $5, decidida_por_nombre = $6, decidida_at = now()
+      WHERE empresa_id = $1 AND id = $2 AND estado = 'PENDIENTE'
+      RETURNING ${CAMPOS_DEC}`,
+    [
+      empresaId,
+      id,
+      resolucion.decision,
+      resolucion.motivo ?? null,
+      resolucion.usuarioId ?? null,
+      resolucion.usuarioNombre ?? null,
+    ]
+  );
+  return rows[0] ? aDecision(rows[0]) : null;
 }

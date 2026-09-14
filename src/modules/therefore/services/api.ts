@@ -10,7 +10,17 @@
  */
 
 import { sessionHeaders } from "../../sessionHeaders";
-import type { Bootstrap, Config, Ficha, FilaBandeja, Contadores, Prioridad } from "../types";
+import type {
+  Adjunto,
+  Bootstrap,
+  Config,
+  Contadores,
+  Decision,
+  Ficha,
+  FilaBandeja,
+  Notificacion,
+  Prioridad,
+} from "../types";
 
 const BASE = "/api/therefore";
 
@@ -144,6 +154,31 @@ export function moverActuacion(
     method: "POST",
     body: JSON.stringify(datos),
   });
+}
+
+/* ── Correos y decisiones ────────────────────────────────────────────────── */
+
+export function notificacionesDe(
+  expedienteId: string
+): Promise<{ notificaciones: Notificacion[]; adjuntos: Adjunto[] }> {
+  return pedir(`/expedientes/${expedienteId}/notificaciones`);
+}
+
+export function listarDecisiones(
+  filtro: { estado?: "PENDIENTE" | "DECIDIDA"; expedienteId?: string } = {}
+): Promise<{ decisiones: Decision[]; respuestas: Record<string, string[]> }> {
+  const q = new URLSearchParams();
+  if (filtro.estado) q.set("estado", filtro.estado);
+  if (filtro.expedienteId) q.set("expedienteId", filtro.expedienteId);
+  const cadena = q.toString();
+  return pedir(`/decisiones${cadena ? `?${cadena}` : ""}`);
+}
+
+export function resolverDecision(
+  id: string,
+  respuesta: { decision: string; expedienteId?: string; motivo?: string }
+): Promise<{ decision: Decision; expedienteId: string | null; expedienteNumero: string | null }> {
+  return pedir(`/decisiones/${id}`, { method: "POST", body: JSON.stringify(respuesta) });
 }
 
 export function leerConfig(): Promise<Config> {

@@ -22,6 +22,7 @@ import {
   Dato,
   ErrorBox,
   Modal,
+  Pill,
   SelectField,
   TextAreaField,
   TextField,
@@ -29,12 +30,12 @@ import {
   btnPrimary,
   btnSecondary,
 } from "../components/ui";
-import { ETIQUETA_TIPO } from "../types";
-import type { Actuacion, Ficha } from "../types";
+import { COLOR_NOTIFICACION, ETIQUETA_NOTIFICACION, ETIQUETA_TIPO } from "../types";
+import type { Actuacion, Adjunto, Ficha, Notificacion } from "../types";
 import { fmtFecha, fmtFechaHora } from "../../administracion/types";
 import { aCentimos, eurosConSigno } from "../../cash/utils/money";
 
-const PESTANAS = ["Resumen", "Actuaciones", "Histórico"] as const;
+const PESTANAS = ["Resumen", "Actuaciones", "Correos", "Histórico"] as const;
 type PestanaDetalle = (typeof PESTANAS)[number];
 
 export default function Expediente() {
@@ -173,6 +174,7 @@ export default function Expediente() {
           onError={setError}
         />
       )}
+      {pestana === "Correos" && <Correos expedienteId={e.id} />}
       {pestana === "Histórico" && <Historico eventos={eventos} />}
 
       {anadiendo && (
@@ -200,6 +202,84 @@ export default function Expediente() {
           onError={setError}
         />
       )}
+    </div>
+  );
+}
+
+/* ── Correos ─────────────────────────────────────────────────────────────── */
+
+/**
+ * Los correos que han ido cayendo en este expediente, con su texto entero.
+ *
+ * Se piden aparte de la ficha y no con ella: son la parte más pesada —el cuerpo
+ * completo de cada correo— y la mayoría de las veces nadie los abre. Cargarlos
+ * siempre haría lenta la pantalla que sí se usa a diario.
+ *
+ * El texto se enseña TAL Y COMO llegó, sin recortar. Es la única prueba de qué
+ * se pidió exactamente, y es lo que hay que mirar cuando una actuación no
+ * cuadra con lo que el sistema entendió.
+ */
+function Correos({ expedienteId }: { expedienteId: string }) {
+  const [datos, setDatos] = useState<{ notificaciones: Notificacion[]; adjuntos: Adjunto[] } | null>(
+    null
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    api
+      .notificacionesDe(expedienteId)
+      .then((d) => vivo && setDatos(d))
+      .catch((e) => vivo && setError(e instanceof Error ? e.message : "No se han podido cargar"));
+    return () => {
+      vivo = false;
+    };
+  }, [expedienteId]);
+
+  if (error) return <ErrorBox>{error}</ErrorBox>;
+  if (!datos) return <p className="text-[13px] text-slate-400">Cargando…</p>;
+  if (datos.notificaciones.length === 0) {
+    return (
+      <Aviso tono="info">
+        Este expediente no tiene correos: se abrió a mano. Los que lleguen de Therefore se irán
+        añadiendo aquí.
+      </Aviso>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {datos.notificaciones.map((n) => {
+        const suyos = datos.adjuntos.filter((a) => a.notificacionId === n.id);
+        return (
+          <article key={n.id} className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+            <header className="mb-2 flex flex-wrap items-center gap-2">
+              <Pill className={COLOR_NOTIFICACION[n.tipoNotificacion] ?? "bg-slate-700 text-slate-400"}>
+                {ETIQUETA_NOTIFICACION[n.tipoNotificacion] ?? n.tipoNotificacion}
+              </Pill>
+              <span className="text-[13px] font-bold">{n.asunto || "(sin asunto)"}</span>
+              <span className="text-[12px] text-slate-500">
+                {new Date(n.fechaEmail).toLocaleString("es-ES", {
+                  dateStyle: "short",
+                  timeStyle: "short",
+                })}
+              </span>
+            </header>
+            <p className="mb-2 text-[12px] text-slate-400">
+              De {n.remitente || "—"}
+              {n.personaSolicitante ? ` · ${n.personaSolicitante}` : ""}
+            </p>
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-900 p-3 text-[12px] text-slate-300">
+              {n.textoOriginal}
+            </pre>
+            {suyos.length > 0 && (
+              <p className="mt-2 text-[12px] text-slate-400">
+                Adjuntos: {suyos.map((a) => a.nombreArchivo || a.hashArchivo.slice(0, 8)).join(", ")}
+              </p>
+            )}
+          </article>
+        );
+      })}
     </div>
   );
 }

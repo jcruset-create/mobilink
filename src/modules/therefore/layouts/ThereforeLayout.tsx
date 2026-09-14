@@ -11,12 +11,16 @@
 
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Inbox, Menu, Settings } from "lucide-react";
+import { HelpCircle, Inbox, Menu, Settings } from "lucide-react";
 import AccesosCabecera from "../../../components/AccesosCabecera";
 import { useTherefore } from "../contexts/ThereforeContext";
 
 const NAV = [
   { a: "/therefore/bandeja", texto: "Bandeja", icono: Inbox, permiso: "therefore.view" },
+  // Se ve con «therefore.view» aunque resolver pida su propio permiso: saber
+  // qué está parado esperando una decisión le sirve a cualquiera que mire la
+  // cola, aunque no sea quien decida.
+  { a: "/therefore/revision", texto: "Revisión", icono: HelpCircle, permiso: "therefore.view" },
   {
     a: "/therefore/configuracion",
     texto: "Configuración",

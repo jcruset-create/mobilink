@@ -138,6 +138,102 @@ export type Bootstrap = {
 export type Config = {
   pesos: { diasAbierto: number; reclamaciones: number; urgente: number; tareaVencida: number };
   umbrales: { baja: number; alta: number; critica: number };
+  dedupe: {
+    pesos: {
+      mismaFactura: number;
+      mismoAlbaran: number;
+      mismoProveedor: number;
+      mismoImporte: number;
+      mismaEmpresa: number;
+      mismoDocumento: number;
+      mismaAccion: number;
+      mismoHilo: number;
+      facturaDiferente: number;
+      proveedorDiferente: number;
+      tipoIncompatible: number;
+    };
+    umbrales: { fusionar: number; revisar: number };
+    ventanaDias: number;
+  };
+};
+
+/* ── Correos y decisiones ────────────────────────────────────────────────── */
+
+export type TipoNotificacion =
+  | "SOLICITUD"
+  | "RECORDATORIO"
+  | "RECLAMACION"
+  | "TAREA_VENCIDA"
+  | "CAMBIO_INSTRUCCION"
+  | "APROBACION"
+  | "OTRO";
+
+export type Notificacion = {
+  id: string;
+  expedienteId: string | null;
+  messageId: string;
+  fechaEmail: string;
+  remitente: string;
+  destinatario: string;
+  asunto: string;
+  textoOriginal: string;
+  tipoNotificacion: TipoNotificacion;
+  urgenteDetectado: boolean;
+  personaSolicitante: string | null;
+  estadoProceso: "PROCESADA" | "PENDIENTE_DECISION" | "ERROR_PARSER" | "IGNORADA";
+  createdAt: string;
+};
+
+export type Adjunto = {
+  id: string;
+  notificacionId: string;
+  expedienteId: string | null;
+  nombreArchivo: string;
+  mimeType: string;
+  tamanoBytes: number | null;
+  tipoDocumento: string;
+  hashArchivo: string;
+  parsed: boolean;
+};
+
+export type TipoDecision =
+  | "POSIBLE_DUPLICADO"
+  | "CAMBIO_INSTRUCCION"
+  | "RECLAMACION_SOBRE_RESUELTO"
+  | "REQUIERE_REVISION"
+  | "ERROR_PARSER";
+
+/**
+ * El desglose de por qué se sospechó que dos correos eran lo mismo.
+ *
+ * Se enseña entero en la pantalla de revisión: quien decide necesita ver el
+ * motivo, no un número. «60 puntos» no ayuda a nadie; «misma factura 0000555111,
+ * albarán 501234 ya en INC-452, factura distinta» sí.
+ */
+export type MotivoPuntuacion = { clave: string; puntos: number; texto: string };
+
+export type CandidatoDecision = {
+  id: string;
+  numero: string;
+  estado: EstadoExpediente;
+  score: number;
+  motivos: MotivoPuntuacion[];
+};
+
+export type Decision = {
+  id: string;
+  tipo: TipoDecision;
+  notificacionId: string | null;
+  expedienteId: string | null;
+  actuacionId: string | null;
+  candidatos: CandidatoDecision[];
+  detalle: Record<string, unknown> | null;
+  estado: "PENDIENTE" | "DECIDIDA";
+  decision: string | null;
+  motivo: string | null;
+  decididaPorNombre: string | null;
+  decididaAt: string | null;
+  createdAt: string;
 };
 
 /* ── Etiquetas ───────────────────────────────────────────────────────────── */
@@ -200,6 +296,61 @@ export const COLOR_PRIORIDAD: Record<string, string> = {
   NORMAL: "bg-sky-500/20 text-sky-300",
   ALTA: "bg-amber-500/20 text-amber-300",
   CRITICA: "bg-rose-500/20 text-rose-300",
+};
+
+export const ETIQUETA_DECISION: Record<string, string> = {
+  POSIBLE_DUPLICADO: "¿Es el mismo asunto?",
+  CAMBIO_INSTRUCCION: "Han cambiado la instrucción",
+  RECLAMACION_SOBRE_RESUELTO: "Reclaman algo ya resuelto",
+  REQUIERE_REVISION: "Hay que mirarlo",
+  ERROR_PARSER: "No se ha podido leer",
+};
+
+export const ETIQUETA_NOTIFICACION: Record<string, string> = {
+  SOLICITUD: "Solicitud",
+  RECORDATORIO: "Recordatorio",
+  RECLAMACION: "Reclamación",
+  TAREA_VENCIDA: "Tarea vencida",
+  CAMBIO_INSTRUCCION: "Cambio de instrucción",
+  APROBACION: "Aprobación",
+  OTRO: "Otro",
+};
+
+export const COLOR_NOTIFICACION: Record<string, string> = {
+  SOLICITUD: "bg-sky-500/20 text-sky-300",
+  RECORDATORIO: "bg-amber-500/20 text-amber-300",
+  RECLAMACION: "bg-rose-500/20 text-rose-300",
+  TAREA_VENCIDA: "bg-rose-500/20 text-rose-300",
+  CAMBIO_INSTRUCCION: "bg-indigo-500/20 text-indigo-300",
+  APROBACION: "bg-emerald-500/20 text-emerald-300",
+  OTRO: "bg-slate-700 text-slate-400",
+};
+
+/**
+ * Qué se puede responder a cada clase de duda, y con qué palabras.
+ *
+ * El servidor manda su propia lista en `GET /decisiones`; ésta es la de las
+ * etiquetas, que es lo que el servidor no tiene por qué saber. Si llegara un
+ * tipo nuevo, la pantalla enseñaría los códigos en crudo en vez de quedarse sin
+ * botones, que es lo que dejaría una decisión atascada para siempre.
+ */
+export const OPCIONES_DECISION: Record<string, { valor: string; texto: string }[]> = {
+  POSIBLE_DUPLICADO: [
+    { valor: "FUSIONAR", texto: "Es el mismo" },
+    { valor: "CREAR_NUEVO", texto: "Es otro asunto" },
+  ],
+  RECLAMACION_SOBRE_RESUELTO: [
+    { valor: "REABRIR", texto: "Reabrir" },
+    { valor: "CONFIRMAR_RESUELTO", texto: "Sigue resuelto" },
+    { valor: "CREAR_RELACIONADO", texto: "Abrir uno nuevo" },
+  ],
+  CAMBIO_INSTRUCCION: [
+    { valor: "ACEPTAR", texto: "Aceptar la nueva" },
+    { valor: "MANTENER", texto: "Mantener la anterior" },
+    { valor: "BLOQUEAR", texto: "Dejar bloqueado" },
+  ],
+  REQUIERE_REVISION: [{ valor: "REVISADO", texto: "Revisado" }],
+  ERROR_PARSER: [{ valor: "IGNORAR", texto: "Ignorar" }],
 };
 
 /** El punto de color de la primera columna de la bandeja. */

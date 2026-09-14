@@ -5,12 +5,16 @@ encargo. Es el resultado de leer el repositorio con una sola pregunta: «¿dónd
 encaja esto sin estrenar nada?». Cada apartado dice qué se reutiliza, qué se
 toca y por qué.
 
-> **Estado: la FASE 1 está implementada** (ver §O). Existen los expedientes,
-> las actuaciones, el histórico, los permisos, la numeración, la configuración
-> de la prioridad, la API, la bandeja y el detalle. Los expedientes se crean a
-> mano. Lo que **no** existe todavía: la ingesta de correo, la deduplicación,
-> los adjuntos y el análisis del albarán dentro del PDF. Las secciones que los
-> describen siguen siendo diseño.
+> **Estado: las FASES 1 y 2 están implementadas** (ver §O). Existen los
+> expedientes, las actuaciones, el histórico, los permisos, la numeración, la
+> API, la bandeja y el detalle; y entra el correo: notificaciones, adjuntos,
+> motor de deduplicación con sus pesos configurables, cola de decisiones
+> humanas y pantalla de revisión.
+>
+> Lo que **no** existe todavía: el **parser del correo** (el texto libre se
+> convierte en campos fuera del módulo; la API recibe campos ya estructurados),
+> el **buzón IMAP** y el **análisis del albarán dentro del PDF**. Las secciones
+> que los describen —E, G, H, I— siguen siendo diseño.
 
 Principio que gobierna todo: **la unidad de trabajo es el expediente, no el
 correo.** Un expediente agrupa N actuaciones, N notificaciones, N documentos,
@@ -1076,11 +1080,46 @@ Tres cosas salieron distintas de lo previsto, y conviene saber por qué:
   módulos también se reconstruye desde `server/db.ts` y
   `server/central/schema.ts` en cada arranque.
 
-**Fase 2 — Correo, ingesta, dedupe.** `domain/correo/*`, `normalizar`,
-`dedupe`, `ingesta.ts`, `storage.ts`, `thf_decisiones`, `POST /importar`,
-página Revisión, decisiones humanas. Casos 1–9 y 24.
+**Fase 2 — Correo, ingesta, dedupe. HECHA.**
+`domain/dedupe.ts` (puntuación, decisión, plan de fusión y clasificación de la
+notificación), `ingesta.ts`, `decisiones.ts`, las tablas `thf_notificaciones`,
+`thf_adjuntos` y `thf_decisiones`, la función SQL `thf_normalizar_id`, las rutas
+`POST /correos`, `GET /expedientes/:id/notificaciones`, `GET /decisiones` y
+`POST /decisiones/:id`, dos permisos nuevos, los pesos del deduplicador en la
+configuración, y en el panel la pantalla de Revisión y la pestaña de Correos del
+expediente. Migración `therefore_fase2.sql`. 93 pruebas nuevas: 42 de dominio
+puro y 51 de integración por HTTP contra PostgreSQL (los casos 1–9 y 24).
 
-**Fase 3 — Análisis de albaranes.** `documentos/texto.ts`, `domain/documento/*`
+Cuatro cosas salieron distintas de lo previsto:
+
+- **La ingesta recibe CAMPOS, no un `.eml`.** El parser del texto libre se ha
+  separado y se queda para cuando haya correos reales con los que calibrarlo
+  (N.3). No es un recorte: permite que la idempotencia, la deduplicación, los
+  cambios de instrucción y los contadores de reclamaciones estén probados y en
+  uso antes de que exista una línea de parser, y que el día que el parser falle
+  se sepa que el fallo es suyo. `buzon.ts` y `storage.ts` van con él, en la
+  fase 4.
+- **La normalización de identificadores está escrita DOS veces**, en
+  TypeScript y en SQL (`thf_normalizar_id`), porque la consulta de candidatos
+  tiene que cruzar `0000555111` con `555111` sin traerse a Node los
+  expedientes de la ventana entera. Hay una prueba de integración que pasa la
+  misma lista de valores por las dos y exige el mismo resultado: o coinciden,
+  o la CI se pone roja.
+- **Una decisión por cambio de instrucción y ACTUACIÓN, no por correo.** Un
+  mismo correo puede cambiar la instrucción de tres albaranes, y aceptar una y
+  mantener otra es una respuesta razonable. De ahí la columna `actuacion_id` de
+  `thf_decisiones` y el `COALESCE` de su índice único (en PostgreSQL dos NULL
+  son distintos, así que sin él las decisiones sin actuación no se
+  deduplicarían entre sí).
+- **`thf_notificaciones.parseado` guarda la entrada entera**, no sólo lo que
+  dijera el parser. Un correo que espera una decisión hay que poder volver a
+  aplicarlo cuando alguien decida, días después; reconstruir sus campos del
+  texto en ese momento sería inventárselos. Si falta, la decisión lo dice y
+  pide reprocesar el correo, en vez de adivinar.
+
+**Fase 3 — Parser del correo y análisis de albaranes.**
+Primero `domain/correo/*` con el lote de calibración real (ver
+`server/therefore/fixtures/README.md`), y después `documentos/texto.ts`, `domain/documento/*`
 (parser genérico, secciones, líneas, descuentos, complementarios, conceptos),
 `validaciones.ts`, `thf_albaranes_analizados` + líneas + descuentos +
 validaciones, worker con cola, `extractorIA.ts` como respaldo, pestañas
@@ -1095,5 +1134,7 @@ documentos reales (N.3).
 `IErpConnector`, adaptador, `erp_estado` en la actuación, comparación PDF vs
 ERP para `MODIFICAR`.
 
-Orden: 1 → 2 → 3 → 4; 5 cuando haya ERP. Las decisiones N.1–N.3 se
-necesitan al empezar la fase 2; hasta entonces todo se prueba con fixtures.
+Orden: 1 → 2 → 3 → 4; 5 cuando haya ERP. Las decisiones N.1–N.3 se necesitan
+para la fase 3: sin correos reales no se calibra un parser, y afinarlo contra
+ejemplos inventados da un 100 % de acierto que se desmorona con el primer
+correo de verdad.

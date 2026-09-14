@@ -12,6 +12,7 @@ import { ThereforeProvider, useTherefore } from "./contexts/ThereforeContext";
 import ThereforeLayout from "./layouts/ThereforeLayout";
 import Bandeja from "./pages/Bandeja";
 import Expediente from "./pages/Expediente";
+import Revision from "./pages/Revision";
 import Configuracion from "./pages/Configuracion";
 
 function Contenido() {
@@ -42,6 +43,7 @@ function Contenido() {
         <Route index element={<Navigate to="/therefore/bandeja" replace />} />
         <Route path="bandeja" element={<Bandeja />} />
         <Route path="expedientes/:id" element={<Expediente />} />
+        <Route path="revision" element={<Revision />} />
         <Route path="configuracion" element={<Configuracion />} />
         <Route path="*" element={<Navigate to="/therefore/bandeja" replace />} />
       </Route>
