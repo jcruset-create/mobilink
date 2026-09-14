@@ -21,6 +21,14 @@ import pool from "../db.ts";
  * proyecto ya aprendió por las malas: cuando dos bloques recrean el mismo
  * CHECK, el de arriba se queda con la lista vieja y el servidor deja de
  * arrancar en cuanto existe la primera fila con el valor nuevo.
+ *
+ * **Al crear un módulo nuevo del SaaS, añádelo aquí en el mismo commit.** No
+ * basta con la migración de Supabase: esto se ejecuta en CADA arranque y
+ * reconstruye el CHECK con esta lista, así que un módulo que falte aquí hace
+ * que el `ADD CONSTRAINT` falle en cuanto exista su primera licencia... y el
+ * `DROP CONSTRAINT` de la línea anterior ya ha pasado. El resultado es una
+ * base SIN restricción y un error en el log del despliegue. Lo destapó la
+ * prueba de integración de Therefore, que es donde apareció la primera fila.
  */
 const MODULOS = [
   "administracion",
@@ -36,6 +44,7 @@ const MODULOS = [
   "central",
   "tacografos",
   "assist",
+  "therefore",
 ] as const;
 
 async function existe(tabla: string): Promise<boolean> {

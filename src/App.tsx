@@ -99,6 +99,7 @@ const TyreControlApp = lazy(() => import("./modules/tyrecontrol/TyreControlApp")
 const AdministracionApp = lazy(() => import("./modules/administracion/AdministracionApp"));
 const CashApp = lazy(() => import("./modules/cash/CashApp"));
 const TacografosApp = lazy(() => import("./modules/tacografos/TacografosApp"));
+const ThereforeApp = lazy(() => import("./modules/therefore/ThereforeApp"));
 const CentralApp = lazy(() => import("./modules/central/CentralApp"));
 import AccesoPage from "./pages/AccesoPage";
 import InicioPage from "./pages/InicioPage";
@@ -397,6 +398,7 @@ export default function App() {
       {/* Mobilink Cash — caja física: cobros, pagos, denominaciones y arqueo */}
       <Route path="/cash/*" element={<CashApp />} />
       <Route path="/tacografos/*" element={<TacografosApp />} />
+      <Route path="/therefore/*" element={<ThereforeApp />} />
       <Route path="/central/*" element={<CentralApp />} />
 
       {/* Mobilink Integration Hub — panel de integraciones */}

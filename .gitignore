@@ -63,3 +63,16 @@ key.properties
 # este repositorio es PUBLICO. La CI la escribe desde un secret.
 google-services.json
 GoogleService-Info.plist
+
+# Lote de calibración de Therefore: correos REALES y su versión anonimizada.
+#
+# Este repositorio es PÚBLICO. Un albarán de proveedor lleva sus referencias,
+# sus precios de compra y su escala de descuentos: aunque se le quite el nombre,
+# publicarlo es publicar las condiciones de compra. Y el correo original lleva
+# además direcciones, matrículas y bastidores de clientes.
+#
+# Los casos se generan en local con scripts/therefore-anonimizar.ts y se quedan
+# en local. Lo que sí se versiona son los casos SINTÉTICOS de fixtures/sinteticos,
+# que llevan números inventados y sirven para la CI.
+server/therefore/fixtures/originales/
+server/therefore/fixtures/reales/

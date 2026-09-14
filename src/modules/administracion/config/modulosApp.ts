@@ -22,6 +22,7 @@ export type ModuloApp = {
     | "cash"
     | "central"
     | "tacografos"
+    | "therefore"
     | "assist";
   label: string;
   roles: RolApp[];
@@ -128,6 +129,22 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "expedientes", label: "Expedientes" },
       { key: "custodia", label: "Custodia y trámites" },
       { key: "centro", label: "Centro técnico" },
+    ],
+  },
+  {
+    key: "therefore",
+    label: "Therefore",
+    // Mismos roles que traduce server/therefore/permissions.ts: el catálogo y
+    // el backend tienen que decir lo mismo, o alguien quedará con un rol que
+    // aquí se ve y allí no existe.
+    roles: [
+      { value: "admin", label: "Admin" },
+      { value: "gestor", label: "Gestor" },
+      { value: "consulta", label: "Solo consulta" },
+    ],
+    pantallas: [
+      { key: "bandeja", label: "Bandeja" },
+      { key: "configuracion", label: "Configuración" },
     ],
   },
   {

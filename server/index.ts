@@ -27,6 +27,7 @@ import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initCash, mountCash, startCashErpWorker, startCashEventWorker } from "./cash/index.ts";
 import { initTacografos, mountTacografos } from "./tacografos/index.ts";
+import { initTherefore, mountTherefore } from "./therefore/index.ts";
 import { initCentral, mountCentral } from "./central/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
@@ -18962,6 +18963,7 @@ mountIntegrationHub(app);
 mountCash(app);
 mountCentral(app);
 mountTacografos(app);
+mountTherefore(app);
 
 /* =========================================================
    MOBILINK LICENCIAS (API bajo /api/licenses)
@@ -19488,6 +19490,10 @@ initDb()
   .then(() => prepararEsquema("Mobilink Cash", initCash))
   .then(() => prepararEsquema("MC Central", initCentral))
   .then(() => prepararEsquema("Tacógrafos", initTacografos))
+  // Therefore: expedientes de las incidencias que llegan por correo. No
+  // depende de ningún otro esquema, así que su sitio en la cadena da igual;
+  // va detrás de Tacógrafos por ser el último módulo que se añadió.
+  .then(() => prepararEsquema("Therefore", initTherefore))
   // Satisfaction: encuestas y casos de calidad. No engancha todavía con el
   // cierre de asistencias — solo crea el esquema y siembra las plantillas.
   .then(() => prepararEsquema("Satisfaction", initSatisfaction))
