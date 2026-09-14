@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generarPosiciones, ruedasPorEje } from "./posicionesDesdeConfig.ts";
+import { generarPosiciones, ruedasPorEje, cotejarPlano } from "./posicionesDesdeConfig.ts";
 
 describe("ruedasPorEje", () => {
   it("2x4x2 son tres ejes con 2, 4 y 2 neumáticos", () => {
@@ -127,5 +127,67 @@ describe("generarPosiciones — no inventa planos", () => {
     for (const [config, total] of casos) {
       expect(generarPosiciones(config), config).toHaveLength(total);
     }
+  });
+});
+
+/**
+ * Cotejar el plano con la configuración.
+ *
+ * El caso que lo motiva: un autobús 2x4x2 cuyo plano tenía cuatro ruedas en el
+ * tercer eje. El generador estaba bien —«2x4x2» siempre dio 2, 4 y 2—, pero
+ * nadie volvía a mirar un plano ya creado, así que el error se quedaba puesto.
+ */
+describe("cotejarPlano()", () => {
+  const codigos = (config: string) => generarPosiciones(config).map((p) => p.codigo_posicion);
+
+  it("un plano correcto cuadra y no propone tocar nada", () => {
+    const c = cotejarPlano("2x4x2", codigos("2x4x2"));
+    expect(c.cuadra).toBe(true);
+    expect(c.faltan).toEqual([]);
+    expect(c.sobran).toEqual([]);
+    expect(c.ruedasEsperadas).toBe(8);
+  });
+
+  it("el caso real: un 2x4x2 con cuatro ruedas en el tercer eje", () => {
+    const c = cotejarPlano("2x4x2", codigos("2x4x4"));
+    expect(c.cuadra).toBe(false);
+    expect(c.ruedasEsperadas).toBe(8);
+    expect(c.ruedasActuales).toBe(10);
+    expect(c.faltan).toEqual(["E3_IZQ", "E3_DER"]);
+    expect(c.sobran).toEqual(["E3_IZQ_EXT", "E3_IZQ_INT", "E3_DER_INT", "E3_DER_EXT"]);
+  });
+
+  it("un plano al que solo le faltan ruedas lo dice sin inventar sobrantes", () => {
+    const c = cotejarPlano("2x4x2", codigos("2x4"));
+    expect(c.faltan).toEqual(["E3_IZQ", "E3_DER"]);
+    expect(c.sobran).toEqual([]);
+  });
+
+  it("un plano vacío es «faltan todas», no «sobra todo»", () => {
+    const c = cotejarPlano("2x4x2", []);
+    expect(c.faltan).toHaveLength(8);
+    expect(c.sobran).toEqual([]);
+  });
+
+  it("una configuración que no se entiende no coteja nada: no se inventa un plano", () => {
+    const c = cotejarPlano("2x3x2", codigos("2x4x2"));
+    expect(c.valida).toBe(false);
+    expect(c.cuadra).toBe(false);
+    expect(c.sobran).toEqual([]);
+    expect(c.faltan).toEqual([]);
+    // Pero sí dice cuántas hay, que es lo que se enseña.
+    expect(c.ruedasActuales).toBe(8);
+  });
+
+  it("sin configuración tampoco", () => {
+    expect(cotejarPlano(null, codigos("2x4x2")).valida).toBe(false);
+    expect(cotejarPlano("", []).valida).toBe(false);
+  });
+
+  it("los códigos repetidos o con espacios no cuentan dos veces", () => {
+    // «2x2» son DOS ejes de dos ruedas, no un eje: cuatro códigos.
+    const c = cotejarPlano("2x2", ["E1_IZQ", " E1_IZQ ", "E1_DER", "", "E2_IZQ", "E2_DER"]);
+    expect(c.cuadra).toBe(true);
+    expect(c.ruedasActuales).toBe(4);
   });
 });
