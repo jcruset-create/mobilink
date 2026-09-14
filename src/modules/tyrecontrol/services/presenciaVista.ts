@@ -165,3 +165,30 @@ export function quienRevisó(rev: RevisionEstado | undefined): string {
   if (rev.ultima_revision_origen === "tecnico") return rev.ultima_revision_por || "Técnico";
   return "—";
 }
+
+/**
+ * ¿Es este «Al día» un «al día» de verdad?
+ *
+ * El estado sale de comparar la última revisión con la periodicidad del
+ * vehículo o de su tipo. Cuando no hay ninguna de las dos, no hay con qué
+ * comparar y el cálculo se queda en «al día» por descarte: no porque la
+ * revisión esté en plazo, sino porque nadie ha dicho cuál es el plazo.
+ *
+ * Pasa con los vehículos dados de alta desde la tablet, que nacen sin tipo:
+ * en cuanto se les hace la primera revisión salen «Al día» para siempre y no
+ * vuelven a aparecer como pendientes. Un «al día» que no significa nada es
+ * peor que un hueco, porque nadie va a ir a mirarlo.
+ */
+export function sinPeriodicidad(rev: RevisionEstado | undefined): boolean {
+  return !!rev && rev.estado === "al_dia" && rev.intervalo_dias == null;
+}
+
+/** Los que están en base ahora y arrastran ese «al día» que no dice nada. */
+export function sinPeriodicidadEnBase(
+  vehiculos: VehiculoPresencia[],
+  revisiones: Map<string, RevisionEstado>,
+): VehiculoPresencia[] {
+  return vehiculos.filter(
+    (v) => v.estado === "IN_BASE" && sinPeriodicidad(revisiones.get(v.vehiculo_id)),
+  );
+}
