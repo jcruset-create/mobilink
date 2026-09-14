@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, imagenChasisDeMarca, generarPosicionesDeTipo } from "../services/data";
+import { obtenerVehiculo, listarPosiciones, listarMontajesVehiculo, listarMedidas, listarTiposLlanta, listarEjesVehiculo, listarRevisiones, listarDetalleRevision, listarOperaciones, listarIntervenciones, imagenChasisDeMarca, generarPosicionesDeTipo, cotejarPlanoDeTipo, type CotejoPlano } from "../services/data";
 import type { Intervencion } from "../services/data";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
@@ -47,6 +47,16 @@ export default function VehiculoDetalle() {
   // Imagen de chasis propia de la marca para esta configuración (un 2x4 de
   // MAN no se dibuja como uno de Volvo). Si no hay, manda la de la config.
   const [imagenMarca, setImagenMarca] = useState<string | null>(null);
+  /*
+   * ¿El plano cuadra con la configuración de ejes?
+   *
+   * Las posiciones se creaban una vez y nadie las volvía a mirar: un plano
+   * hecho con la configuración equivocada se quedaba así para siempre. El caso
+   * que lo destapó fue un 2x4x2 con cuatro ruedas en el tercer eje.
+   */
+  const [cotejo, setCotejo] = useState<CotejoPlano | null>(null);
+  const [arreglandoPlano, setArreglandoPlano] = useState(false);
+  const [msgPlano, setMsgPlano] = useState("");
 
   async function cargar() {
     const veh = await obtenerVehiculo(id);
@@ -63,6 +73,8 @@ export default function VehiculoDetalle() {
         } catch { /* configuración inválida: se avisa en el bloque de posiciones */ }
       }
       setPosiciones(pos);
+      // Solo informa; que falle no puede dejar la ficha sin plano.
+      cotejarPlanoDeTipo(veh.tipo_vehiculo_id).then(setCotejo).catch(() => setCotejo(null));
     }
     setMontajes(await listarMontajesVehiculo(id));
 
@@ -210,6 +222,53 @@ export default function VehiculoDetalle() {
       {/* Plano gráfico del vehículo */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
         <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Plano del vehículo</div>
+
+        {/*
+          El plano no cuadra con la configuración. Se avisa aquí, encima del
+          dibujo, porque es donde se ve el error; y el arreglo lo pulsa una
+          persona: quitar una posición con un neumático montado se llevaría por
+          delante su histórico, así que esas se dejan y se dice cuáles son.
+        */}
+        {cotejo && cotejo.valida && !cotejo.cuadra && !esCliente && (
+          <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-[12px] text-amber-200">
+            <div>
+              El plano tiene <b>{cotejo.ruedasActuales}</b> ruedas y la configuración{" "}
+              <b>{cotejo.configuracion}</b> pide <b>{cotejo.ruedasEsperadas}</b>.
+              {cotejo.sobran.length > 0 && <> Sobran: {cotejo.sobran.join(", ")}.</>}
+              {cotejo.faltan.length > 0 && <> Faltan: {cotejo.faltan.join(", ")}.</>}
+            </div>
+            <button
+              onClick={async () => {
+                if (!v.tipo_vehiculo_id) return;
+                if (!confirm(
+                  `Se ajustará el plano de «${v.tipo?.nombre ?? "este tipo"}» a la configuración ${cotejo.configuracion}.\n\n` +
+                  `Las posiciones que sobran se desactivan (no se borran) y las que tengan un neumático montado se dejan como están.\n\n` +
+                  `Afecta a TODOS los vehículos de este tipo. ¿Seguir?`,
+                )) return;
+                setArreglandoPlano(true); setMsgPlano("");
+                try {
+                  const r = await generarPosicionesDeTipo(v.tipo_vehiculo_id, { corregir: true });
+                  const partes = [`${r.creadas} creadas`, `${r.desactivadas} desactivadas`];
+                  if (r.bloqueadas.length) {
+                    partes.push(`${r.bloqueadas.length} con neumático montado sin tocar (${r.bloqueadas.join(", ")})`);
+                  }
+                  setMsgPlano(partes.join(" · "));
+                  await cargar();
+                } catch (e: any) {
+                  setMsgPlano(e?.message ?? "No se pudo ajustar el plano");
+                } finally {
+                  setArreglandoPlano(false);
+                }
+              }}
+              disabled={arreglandoPlano}
+              className="mt-2 rounded-lg border border-amber-500 px-3 py-1.5 text-[12px] font-bold text-amber-200 hover:bg-amber-500/20 disabled:opacity-40"
+            >
+              {arreglandoPlano ? "Ajustando…" : "Ajustar el plano a la configuración"}
+            </button>
+            {msgPlano && <div className="mt-2 text-slate-200">{msgPlano}</div>}
+          </div>
+        )}
+
         <VehicleLayoutImage
           tipo={v.tipo}
           imagenConfig={imagenMarca ?? v.config_ejes?.imagen_chasis_url ?? null}
