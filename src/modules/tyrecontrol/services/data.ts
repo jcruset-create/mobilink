@@ -2590,14 +2590,38 @@ export async function subirImagenConfigEjes(configId: string, file: File): Promi
  * el catálogo de posiciones exige super-admin, y así funciona para cualquier
  * usuario del panel. Idempotente: no duplica ni borra nada.
  */
-export async function generarPosicionesDeTipo(tipoId: string): Promise<{ creadas: number; total: number }> {
+export async function generarPosicionesDeTipo(
+  tipoId: string,
+  opciones: { corregir?: boolean } = {},
+): Promise<{ creadas: number; total: number; desactivadas: number; bloqueadas: string[] }> {
   const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/tipos/${tipoId}/generar-posiciones`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+    headers: { Authorization: `Bearer ${await tokenSesion()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ corregir: opciones.corregir === true }),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j as any)?.error || "Error generando las posiciones");
   return j as any;
+}
+
+/** Si el plano de un tipo cuadra con su configuración de ejes. Solo lee. */
+export interface CotejoPlano {
+  configuracion: string | null;
+  valida: boolean;
+  faltan: string[];
+  sobran: string[];
+  ruedasEsperadas: number;
+  ruedasActuales: number;
+  cuadra: boolean;
+}
+
+export async function cotejarPlanoDeTipo(tipoId: string): Promise<CotejoPlano> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/tipos/${tipoId}/plano`, {
+    headers: { Authorization: `Bearer ${await tokenSesion()}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as any)?.error || "Error comprobando el plano");
+  return j as CotejoPlano;
 }
 
 export async function actualizarImagenConfigEjes(configId: string, url: string | null): Promise<void> {

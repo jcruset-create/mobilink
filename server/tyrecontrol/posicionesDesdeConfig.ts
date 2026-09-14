@@ -96,3 +96,70 @@ export function generarPosiciones(config: string | null | undefined): PosicionGe
 
   return posiciones;
 }
+
+/**
+ * Compara el plano que hay con el que dice la configuración.
+ *
+ * Existe porque las posiciones solo se generaban cuando un tipo NO tenía
+ * ninguna, y a partir de ahí nadie las volvía a mirar: un plano creado con la
+ * configuración equivocada —o antes de que existiera el generador— se quedaba
+ * así para siempre, y la única salida era borrar filas a mano. Se vio en un
+ * autobús 2x4x2 cuyo plano tenía cuatro ruedas en el tercer eje.
+ *
+ * No decide nada: dice qué falta y qué sobra. Quitar una posición que sobra
+ * puede llevarse por delante el histórico de un neumático montado, así que esa
+ * decisión no se toma aquí.
+ */
+export interface CotejoPlano {
+  configuracion: string | null;
+  /** Falso si la etiqueta no se entiende: entonces no se puede cotejar nada. */
+  valida: boolean;
+  /** Los códigos que la configuración exige, en orden. */
+  esperadas: string[];
+  /** Esperados que no están activos en el plano. */
+  faltan: string[];
+  /** Activos en el plano que la configuración no contempla. */
+  sobran: string[];
+  ruedasEsperadas: number;
+  ruedasActuales: number;
+  /** Si el plano dice exactamente lo que dice la configuración. */
+  cuadra: boolean;
+}
+
+export function cotejarPlano(
+  config: string | null | undefined,
+  codigosActivos: string[],
+): CotejoPlano {
+  const generadas = generarPosiciones(config);
+  const esperadas = generadas.map((p) => p.codigo_posicion);
+  const actuales = [...new Set(codigosActivos.map((c) => String(c ?? "").trim()).filter(Boolean))];
+
+  if (!esperadas.length) {
+    return {
+      configuracion: config ?? null,
+      valida: false,
+      esperadas: [],
+      faltan: [],
+      sobran: [],
+      ruedasEsperadas: 0,
+      ruedasActuales: actuales.length,
+      cuadra: false,
+    };
+  }
+
+  const esperado = new Set(esperadas);
+  const actual = new Set(actuales);
+  const faltan = esperadas.filter((c) => !actual.has(c));
+  const sobran = actuales.filter((c) => !esperado.has(c));
+
+  return {
+    configuracion: config ?? null,
+    valida: true,
+    esperadas,
+    faltan,
+    sobran,
+    ruedasEsperadas: esperadas.length,
+    ruedasActuales: actuales.length,
+    cuadra: faltan.length === 0 && sobran.length === 0,
+  };
+}

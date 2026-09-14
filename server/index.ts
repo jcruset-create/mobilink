@@ -34,7 +34,7 @@ import { hasRealValue, normalizarValor } from "../src/modules/tyrecontrol/servic
 import { resumenOperaciones } from "../src/modules/tyrecontrol/services/resumenOperaciones.ts";
 import { calcularConfiguracion, avisosCoherencia } from "./tyrecontrol/ficha-tecnica/axleMapper.ts";
 import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
-import { generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
+import { cotejarPlano, generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
 import { initEventLog } from "./eventlog/schema.ts";
@@ -17918,10 +17918,87 @@ app.post("/api/tyrecontrol/tipos/:id/generar-posiciones", requireTyreControlPane
       if (error) throw new Error(error.message);
     }
 
-    res.json({ ok: true, creadas: nuevas.length, total: generadas.length, yaExistian: generadas.length - nuevas.length });
+    /*
+     * Quitar del plano lo que la configuración NO contempla.
+     *
+     * Solo si lo piden expresamente (`corregir`). El caso que lo motiva es un
+     * autobús 2x4x2 cuyo plano tenía cuatro ruedas en el tercer eje: el
+     * generador estaba bien, pero las posiciones se crearon una vez y nadie
+     * las volvía a mirar, así que el error se quedaba puesto para siempre.
+     *
+     * Se DESACTIVAN, no se borran, y nunca las que tienen un neumático
+     * montado: detrás de una posición hay montajes, revisiones y operaciones,
+     * y borrarla se lleva por delante el histórico del neumático. Una posición
+     * ocupada se deja como está y se devuelve en `bloqueadas` para que la
+     * pantalla pida desmontar primero.
+     */
+    let desactivadas = 0;
+    let bloqueadas: string[] = [];
+    if (req.body?.corregir === true) {
+      const esperados = new Set(generadas.map((p) => p.codigo_posicion));
+      const { data: activas } = await supabase
+        .from("tc_posiciones_vehiculo").select("id, codigo_posicion")
+        .eq("tipo_vehiculo_id", tipoId).eq("activo", true);
+      const sobrantes = ((activas ?? []) as any[]).filter((p) => !esperados.has(p.codigo_posicion));
+
+      if (sobrantes.length) {
+        const { data: ocupadas } = await supabase
+          .from("tc_montajes_actuales").select("posicion_id")
+          .in("posicion_id", sobrantes.map((p) => p.id));
+        const conNeumatico = new Set(((ocupadas ?? []) as any[]).map((m) => m.posicion_id));
+
+        const libres = sobrantes.filter((p) => !conNeumatico.has(p.id));
+        bloqueadas = sobrantes.filter((p) => conNeumatico.has(p.id)).map((p) => p.codigo_posicion);
+
+        if (libres.length) {
+          const { error } = await supabase.from("tc_posiciones_vehiculo")
+            .update({ activo: false }).in("id", libres.map((p) => p.id));
+          if (error) throw new Error(error.message);
+          desactivadas = libres.length;
+        }
+      }
+    }
+
+    res.json({
+      ok: true,
+      creadas: nuevas.length,
+      total: generadas.length,
+      yaExistian: generadas.length - nuevas.length,
+      desactivadas,
+      bloqueadas,
+    });
   } catch (e: any) {
     console.error("POST tipos/:id/generar-posiciones error:", e);
     res.status(500).json({ error: e?.message || "Error generando las posiciones" });
+  }
+});
+
+/**
+ * ¿Cuadra el plano de un tipo con su configuración de ejes?
+ *
+ * Solo lee. La ficha del vehículo lo usa para avisar cuando el plano tiene más
+ * o menos ruedas de las que dice la configuración, en vez de que se descubra
+ * mirando el dibujo.
+ */
+app.get("/api/tyrecontrol/tipos/:id/plano", requireTyreControlPanelUser, async (req, res) => {
+  try {
+    const tipoId = String(req.params.id);
+    const { data: tipo } = await supabase
+      .from("tc_tipos_vehiculo").select("id, nombre, configuracion_ejes").eq("id", tipoId).maybeSingle();
+    if (!tipo) return res.status(404).json({ error: "Tipo de vehículo no encontrado" });
+
+    const { data: activas } = await supabase
+      .from("tc_posiciones_vehiculo").select("codigo_posicion")
+      .eq("tipo_vehiculo_id", tipoId).eq("activo", true);
+
+    res.json({
+      tipoId,
+      tipo: (tipo as any).nombre,
+      ...cotejarPlano((tipo as any).configuracion_ejes, ((activas ?? []) as any[]).map((p) => p.codigo_posicion)),
+    });
+  } catch (e: any) {
+    console.error("GET tipos/:id/plano error:", e);
+    res.status(500).json({ error: e?.message || "Error comprobando el plano" });
   }
 });
 
