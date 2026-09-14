@@ -1,7 +1,7 @@
 name: lite_app
 description: "Mobilink Assist Lite — asistencias de Central Pro para talleres colaboradores"
 publish_to: "none"
-version: 0.10.0+149
+version: 0.10.1+150
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
