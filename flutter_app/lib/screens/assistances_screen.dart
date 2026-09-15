@@ -13,6 +13,7 @@ import '../theme/app_theme.dart';
 import '../widgets/plate_badge.dart';
 import 'assistance_detail_screen.dart';
 import 'cobros_screen.dart';
+import 'fotos_guardadas_screen.dart';
 import 'history_screen.dart';
 import 'login_screen.dart';
 import 'otf_screen.dart';
@@ -332,6 +333,14 @@ class _AssistancesScreenState extends State<AssistancesScreen>
                               : 'Activar acceso con ${_esFaceId ? 'Face ID' : 'huella'}',
                           onPressed: _gestionarBiometria,
                         ),
+                      _TopBarIcon(
+                        icon: Icons.photo_library_outlined,
+                        color: AppColors.textSecondary,
+                        tooltip: 'Fotos guardadas en la tablet',
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => FotosGuardadasScreen(api: widget.api),
+                        )),
+                      ),
                       _TopBarIcon(icon: Icons.logout,                 color: AppColors.danger,        tooltip: 'Cerrar sesión', onPressed: _logout),
                     ],
                   ),

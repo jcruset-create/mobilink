@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -5,6 +7,7 @@ import 'screens/login_screen.dart';
 import 'screens/assistances_screen.dart';
 import 'services/api_service.dart';
 import 'services/biometria.dart';
+import 'services/copia_local.dart';
 import 'services/offline_store.dart';
 import 'services/sesion_segura.dart';
 import 'theme/app_theme.dart';
@@ -21,6 +24,10 @@ void main() async {
     DeviceOrientation.portraitDown,
   ]);
   await OfflineStore.init(); // base de datos local (modo offline)
+  await CopiaLocal.init();   // copia en la tablet de las fotos hechas
+  // La caducidad se aplica al arrancar y no se espera: si tarda, que tarde sin
+  // retrasar la pantalla de login. Nunca toca las fotos que están sin subir.
+  unawaited(CopiaLocal.limpiar());
   final prefs = await SharedPreferences.getInstance();
   exteriorMode.value = prefs.getBool('exteriorMode') ?? false;
   runApp(const SeaApp());
