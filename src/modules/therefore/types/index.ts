@@ -157,6 +157,147 @@ export type Config = {
     umbrales: { fusionar: number; revisar: number };
     ventanaDias: number;
   };
+  albaran: {
+    umbrales: { match: number; incierto: number };
+    /** Céntimos. Absorbe redondeos, NO diferencias. */
+    toleranciaCentimos: number;
+    umbralConfianzaCampo: number;
+    maxIntentos: number;
+    maxPaginas: number;
+  };
+};
+
+/* ── Análisis de albaranes ───────────────────────────────────────────────── */
+
+export type ResultadoMatch = "MATCH" | "UNCERTAIN" | "NO_MATCH";
+export type EstadoAnalisis = "OK" | "REVISAR" | "ERROR";
+export type EstadoProcesoAnalisis = "PENDIENTE" | "PROCESANDO" | "COMPLETADO" | "ERROR";
+
+export type DescuentoLinea = { orden: number; porcentaje: number; raw: string };
+
+export type ConfianzaLinea = {
+  referencia: number;
+  descripcion: number;
+  cantidad: number;
+  precio: number;
+  importe: number;
+  descuentos: number;
+};
+
+export type LineaAlbaran = {
+  id: string;
+  numeroLinea: number;
+  referencia: string | null;
+  descripcion: string | null;
+  cantidad: number | null;
+  precioUnitarioCentimos: number | null;
+  importeCentimos: number | null;
+  descuentos: DescuentoLinea[];
+  descuentosRaw: string;
+  confianza: ConfianzaLinea;
+  /** `null` = faltan datos para comprobarlo, que no es lo mismo que fallar. */
+  cuadraAritmetica: boolean | null;
+  rawText: string;
+  pagina: number | null;
+  bbox: { x: number; y: number; w: number; h: number } | null;
+};
+
+export type TipoValidacion =
+  | "DOCUMENTO"
+  | "ALBARAN_MATCH"
+  | "SEPARACION_ALBARANES"
+  | "LINEAS"
+  | "DESCUENTOS"
+  | "CAMPOS_CRITICOS"
+  | "IMPORTE"
+  | "CORREO_VS_DOCUMENTO";
+
+export type ValidacionAnalisis = {
+  id: string;
+  tipo: TipoValidacion;
+  estado: EstadoAnalisis;
+  mensaje: string;
+  valorEsperado: string | null;
+  valorObtenido: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type ConceptoAdicional = {
+  etiqueta: string;
+  importeCentimos: number | null;
+  raw: string;
+  pagina: number;
+};
+
+export type AlbaranAnalizado = {
+  id: string;
+  expedienteId: string;
+  actuacionId: string;
+  adjuntoId: string | null;
+  documentoId: string | null;
+  numeroSolicitado: string;
+  numeroDocumento: string | null;
+  numeroNormalizado: string | null;
+  confianzaMatch: number | null;
+  resultadoMatch: ResultadoMatch | null;
+  fecha: string | null;
+  matricula: string | null;
+  bastidor: string | null;
+  observaciones: string | null;
+  importeIncidenciaCentimos: number | null;
+  importeLineasCentimos: number | null;
+  diferenciaCentimos: number | null;
+  estadoAnalisis: EstadoAnalisis | null;
+  estadoProceso: EstadoProcesoAnalisis;
+  intentos: number;
+  error: string | null;
+  paginaInicio: number | null;
+  paginaFin: number | null;
+  parserUsado: string | null;
+  origen: string | null;
+  metadata: {
+    modoTabla?: "CABECERA" | "POSICIONAL" | null;
+    conceptosAdicionales?: ConceptoAdicional[];
+    otros?: Record<string, string>;
+    parecidos?: string[];
+    seccionesVecinas?: { anterior: string | null; siguiente: string | null } | null;
+    sustituidaPor?: string;
+  };
+  createdAt: string | null;
+  lineas: LineaAlbaran[];
+  validaciones: ValidacionAnalisis[];
+};
+
+export type DocumentoAnalizado = {
+  id: string;
+  hashArchivo: string;
+  tipoDocumento: string;
+  numeroDocumento: string | null;
+  fechaDocumento: string | null;
+  proveedorNombre: string | null;
+  proveedorNif: string | null;
+  baseCentimos: number | null;
+  ivaCentimos: number | null;
+  totalCentimos: number | null;
+  origen: string | null;
+  parserUsado: string | null;
+  validacion: "SIN_COMPARAR" | "VALIDADO" | "DISCREPANCIA";
+};
+
+export type AnalisisDeExpediente = {
+  albaranes: AlbaranAnalizado[];
+  documentos: DocumentoAnalizado[];
+};
+
+export const ETIQUETA_VALIDACION: Record<TipoValidacion, string> = {
+  DOCUMENTO: "Documento",
+  ALBARAN_MATCH: "Coincidencia del albarán",
+  SEPARACION_ALBARANES: "Separación de albaranes",
+  LINEAS: "Líneas",
+  DESCUENTOS: "Descuentos",
+  CAMPOS_CRITICOS: "Campos dudosos",
+  IMPORTE: "Importe",
+  CORREO_VS_DOCUMENTO: "Correo contra documento",
 };
 
 /* ── Correos y decisiones ────────────────────────────────────────────────── */

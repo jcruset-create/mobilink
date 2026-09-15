@@ -13,16 +13,18 @@
  * es el correo sino el expediente**, y donde un expediente agrupa todas las
  * actuaciones, notificaciones y documentos del mismo problema.
  *
- * De momento (fase 1) están los expedientes y sus actuaciones, que se crean a
- * mano. La ingesta de correo y el análisis del albarán dentro del PDF llegan
- * después, sobre estas mismas tablas.
+ * Están los expedientes con sus actuaciones (fase 1), la ingesta del correo con
+ * su deduplicación (fase 2), el parser del correo (fase 3a) y el análisis del
+ * albarán dentro del PDF (fase 3b). El buzón IMAP que trae los correos solos
+ * llega después, sobre estas mismas tablas.
  */
 
 import type { Express } from "express";
 import { initTherefore } from "./schema.ts";
 import { createThereforeRouter } from "./router.ts";
+import { startThereforeWorkers, stopThereforeWorkers } from "./documentos/worker.ts";
 
-export { initTherefore };
+export { initTherefore, startThereforeWorkers, stopThereforeWorkers };
 
 export function mountTherefore(app: Express): void {
   app.use("/api/therefore", createThereforeRouter());

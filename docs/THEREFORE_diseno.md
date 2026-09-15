@@ -5,7 +5,7 @@ encargo. Es el resultado de leer el repositorio con una sola pregunta: «¿dónd
 encaja esto sin estrenar nada?». Cada apartado dice qué se reutiliza, qué se
 toca y por qué.
 
-> **Estado: las FASES 1, 2 y 3a están implementadas** (ver §O). Existen los
+> **Estado: las FASES 1, 2, 3a y 3b están implementadas** (ver §O). Existen los
 > expedientes, las actuaciones, el histórico, los permisos, la numeración, la
 > API, la bandeja y el detalle; entra el correo —notificaciones, adjuntos,
 > deduplicación con pesos configurables, decisiones humanas y pantalla de
@@ -1156,11 +1156,50 @@ número sale incompleta y pide revisión. Hay una prueba contra el corpus real
 que falla si algún albarán devuelto no está escrito, letra por letra, en el
 correo.
 
-**Fase 3b — Análisis de albaranes.** `documentos/texto.ts`, `domain/documento/*`
-(parser genérico, secciones, líneas, descuentos, complementarios, conceptos),
-`validaciones.ts`, `thf_albaranes_analizados` + líneas + descuentos +
-validaciones, worker con cola, `extractorIA.ts` como respaldo, pestañas
-Albaranes analizados y Validaciones, visor con resalte. Casos 10–23.
+**Fase 3b — Análisis de albaranes. HECHA.**
+`documentos/{texto,analisis,worker,extractorIA,servicio}.ts`, `storage.ts`,
+`domain/documento/{tipos,conceptos,secciones,tabla,descuentos,lineas,complementarios,generico,index}.ts`,
+`domain/validaciones.ts`, las cinco tablas de D.5–D.8, cuatro rutas
+(`POST /expedientes/:id/documentos`, `GET /expedientes/:id/analisis`,
+`POST /actuaciones/:id/reanalizar`, `GET /albaranes/:id/documento`), los
+umbrales `albaran.*` en la configuración, y en el panel las pestañas Albaranes
+y Validaciones con las celdas dudosas marcadas. Migración
+`therefore_fase3b.sql`, comprobada columna a columna contra el arranque.
+112 pruebas nuevas: 39 del dominio con las páginas escritas a mano, 15 de las
+validaciones, 12 sobre PDF generados en la propia prueba, 12 de los ayudantes
+del panel, 19 de integración por HTTP con los casos 10–23, y las de la cola.
+
+Cuatro cosas salieron distintas de lo previsto:
+
+- **El PDF se lee CARÁCTER A CARÁCTER, no por las «líneas» que agrupa mupdf.**
+  mupdf junta el texto por proximidad: en una fila de albarán pega la
+  referencia con la descripción —van seguidas— y deja el importe aparte —va
+  lejos—, de modo que la referencia acaba dentro de la descripción sin que
+  nada falle. `walk()` da la posición exacta de cada carácter; con eso se
+  construyen las palabras de verdad, cada una con su `x`, y la rejilla deja de
+  ser una estimación. Y un detalle que costó un rato: mupdf entrega los
+  caracteres en ORDEN DE DIBUJO, no de lectura. Hay que repartirlos por altura
+  y ordenar cada fila por `x` ANTES de formar palabras, o el final de una fila
+  se pega al principio de otra.
+- **`domain/albaran.ts` ya hacía H.2 desde la fase 1.** No se ha reescrito:
+  `elegirAlbaran` es exactamente lo que hacía falta, incluido bajar a
+  UNCERTAIN cuando el mismo albarán aparece dos veces.
+- **La IA lee las celdas, nunca localiza el albarán.** Y su lectura pasa por el
+  MISMO `extraerLineas` que el camino determinista, con techo 0,85: lo único
+  que aporta el modelo es el contenido de las celdas; la aritmética, los
+  descuentos y la confianza los calcula el código ya probado.
+- **El pie de la factura no cuenta como líneas huérfanas.** La primera versión
+  contaba lo que quedaba tras el último albarán como «sin asignar», y todo
+  documento bien formado salía en revisión por mala separación. Sólo cuentan
+  cuando hay otra marca de albarán detrás. Lo destapó la prueba de integración
+  del caso 10, no una unitaria.
+
+Lo que NO se ha hecho, y por qué: **ningún parser específico de proveedor**
+(§48–49: no hay ningún documento real que lo justifique; el corpus de correos
+no trae los PDF), **ni el visor con resalte del `bbox`** —se guarda el `bbox`
+de cada línea y el PDF se abre por enlace firmado, pero pintar el rectángulo
+encima exige un visor de PDF embebido que el panel no tiene y merece su
+propia decisión—, ni XML (N.5 sigue sin respuesta).
 
 **Fase 4 — Buzón y trabajo diario.** `buzon.ts` (IMAP, pasadas, botón),
 carga del histórico, recálculo diario de prioridad, autocierre,

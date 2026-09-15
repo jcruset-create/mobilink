@@ -14,6 +14,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
+import multer from "multer";
 import { authenticate, requireModule } from "../core/auth.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { guardarConfig, leerConfig } from "./config.ts";
@@ -32,6 +33,7 @@ import {
 import { ErrorTherefore } from "./errors.ts";
 import { parsearCorreo, type CorreoParseado } from "./domain/correo/index.ts";
 import * as decisionesServicio from "./decisiones.ts";
+import * as documentos from "./documentos/servicio.ts";
 import * as ingesta from "./ingesta.ts";
 import { cargarPermisos, exigirPermiso } from "./permissions.ts";
 import * as repo from "./repository.ts";
@@ -736,6 +738,87 @@ export function createThereforeRouter(): Router {
     })
   );
 
+  /* ── Análisis de documentos ────────────────────────────────────────────── */
+
+  /*
+   * El límite de tamaño va aquí y no en el análisis porque hay que rechazar
+   * ANTES de leer el fichero entero en memoria: un PDF de 200 MB no puede
+   * llegar a `leerDocumento` para que allí se decida que era demasiado grande.
+   */
+  const subidaDocumento = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 15 * 1024 * 1024, files: 1 },
+  });
+
+  r.post(
+    "/expedientes/:id/documentos",
+    exigirPermiso("therefore.actuacion.manage"),
+    subidaDocumento.single("archivo"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const f = (req as Request & { file?: Express.Multer.File }).file;
+      if (!f) {
+        return res.status(400).json({ error: "Falta el fichero.", code: "SIN_FICHERO" });
+      }
+      const salida = await documentos.adjuntarDocumento(ctx, String(req.params.id), {
+        nombre: f.originalname,
+        mimeType: f.mimetype,
+        contenido: f.buffer,
+      });
+      await registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "therefore.documento.adjuntar",
+        entidad: "thf_adjuntos",
+        entidadId: salida.adjuntoId,
+        // El hash recortado basta para cruzarlo; el contenido no se registra.
+        detalle: { expedienteId: String(req.params.id), hash: salida.hash.slice(0, 12) },
+        ip: req.ip,
+      });
+      res.status(201).json(salida);
+    })
+  );
+
+  r.get(
+    "/expedientes/:id/analisis",
+    exigirPermiso("therefore.view"),
+    ruta(async (req, res) => {
+      res.json(await documentos.analisisDe(contextoDe(req), String(req.params.id)));
+    })
+  );
+
+  r.post(
+    "/actuaciones/:id/reanalizar",
+    exigirPermiso("therefore.actuacion.manage"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const fila = await documentos.reanalizar(ctx, String(req.params.id));
+      await registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "therefore.albaran.reanalizar",
+        entidad: "thf_albaranes_analizados",
+        entidadId: fila.id,
+        detalle: { actuacionId: String(req.params.id), albaran: fila.numeroSolicitado },
+        ip: req.ip,
+      });
+      res.status(202).json(fila);
+    })
+  );
+
+  /*
+   * El PDF va por enlace firmado y con caducidad, no por una ruta del servidor.
+   * Un albarán lleva los precios de compra y la escala de descuentos de un
+   * proveedor: una URL permanente reenviada por ahí las publica para siempre.
+   */
+  r.get(
+    "/albaranes/:id/documento",
+    exigirPermiso("therefore.view"),
+    ruta(async (req, res) => {
+      res.json({ url: await documentos.enlaceDelDocumento(contextoDe(req), String(req.params.id)) });
+    })
+  );
+
   /* ── Configuración ─────────────────────────────────────────────────────── */
 
   r.get(
@@ -755,11 +838,13 @@ export function createThereforeRouter(): Router {
         pesos?: unknown;
         umbrales?: unknown;
         dedupe?: unknown;
+        albaran?: unknown;
       };
       const config = await guardarConfig(ctx.empresaId, {
         pesos: (body.pesos ?? undefined) as never,
         umbrales: (body.umbrales ?? undefined) as never,
         dedupe: (body.dedupe ?? undefined) as never,
+        albaran: (body.albaran ?? undefined) as never,
       });
       await registrarAuditoria({
         empresaId: ctx.empresaId,
