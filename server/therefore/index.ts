@@ -15,16 +15,17 @@
  *
  * Están los expedientes con sus actuaciones (fase 1), la ingesta del correo con
  * su deduplicación (fase 2), el parser del correo (fase 3a) y el análisis del
- * albarán dentro del PDF (fase 3b). El buzón IMAP que trae los correos solos
- * llega después, sobre estas mismas tablas.
+ * albarán dentro del PDF (fase 3b) y el buzón IMAP que trae los correos solos
+ * (fase 4).
  */
 
 import type { Express } from "express";
 import { initTherefore } from "./schema.ts";
 import { createThereforeRouter } from "./router.ts";
 import { startThereforeWorkers, stopThereforeWorkers } from "./documentos/worker.ts";
+import { startThereforeBuzon, stopThereforeBuzon } from "./buzon.ts";
 
-export { initTherefore, startThereforeWorkers, stopThereforeWorkers };
+export { initTherefore, startThereforeWorkers, stopThereforeWorkers, startThereforeBuzon, stopThereforeBuzon };
 
 export function mountTherefore(app: Express): void {
   app.use("/api/therefore", createThereforeRouter());

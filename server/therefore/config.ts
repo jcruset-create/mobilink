@@ -282,3 +282,69 @@ export async function guardarConfig(
 
   return leerConfig(empresaId);
 }
+
+/* ── Claves de texto: el buzón ───────────────────────────────────────────── */
+
+/**
+ * Las del buzón son TEXTO, no números, y van aparte por eso.
+ *
+ * `buzon.remitentes` es la lista de direcciones desde las que manda Therefore,
+ * separadas por comas. Si está vacía se acepta todo lo que llegue al buzón
+ * —y se dice en el log—, porque un buzón dedicado sin filtro es preferible a
+ * un filtro mal escrito que descarta en silencio los correos que sí importan.
+ *
+ * `buzon.activado_el` es el instante de la primera pasada: el listener no
+ * mira nada anterior. Se escribe una sola vez y no se toca, para que un
+ * reinicio del servidor no «reactive» el buzón y se trague meses de correo.
+ */
+export const CLAVES_BUZON = {
+  remitentes: "buzon.remitentes",
+  activadoEl: "buzon.activado_el",
+} as const;
+
+export async function leerTextoConfig(empresaId: string, clave: string): Promise<string | null> {
+  try {
+    const r = await pool.query<{ valor: string | null }>(
+      `SELECT valor FROM thf_config WHERE empresa_id = $1 AND clave = $2`,
+      [empresaId, clave]
+    );
+    return r.rows[0]?.valor ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function guardarTextoConfig(empresaId: string, clave: string, valor: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO thf_config (empresa_id, clave, valor, updated_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (empresa_id, clave)
+       DO UPDATE SET valor = EXCLUDED.valor, updated_at = now()`,
+    [empresaId, clave, valor]
+  );
+}
+
+/** Direcciones en minúsculas y sin espacios. Una lista vacía significa «todas». */
+export function partirRemitentes(valor: string | null | undefined): string[] {
+  return (valor ?? "")
+    .split(/[,;\s]+/)
+    .map((v) => v.trim().toLowerCase())
+    .filter((v) => v.includes("@"));
+}
+
+export async function leerRemitentes(empresaId: string): Promise<string[]> {
+  return partirRemitentes(await leerTextoConfig(empresaId, CLAVES_BUZON.remitentes));
+}
+
+/**
+ * La fecha de activación. Si no existe, se fija AHORA y se devuelve.
+ *
+ * Es el único sitio que la escribe, y sólo cuando falta: lo que ya estaba en
+ * el buzón antes de este instante no se procesa nunca solo.
+ */
+export async function fechaDeActivacion(empresaId: string, ahora = new Date()): Promise<Date> {
+  const guardada = await leerTextoConfig(empresaId, CLAVES_BUZON.activadoEl);
+  if (guardada && !Number.isNaN(new Date(guardada).getTime())) return new Date(guardada);
+  await guardarTextoConfig(empresaId, CLAVES_BUZON.activadoEl, ahora.toISOString());
+  return ahora;
+}

@@ -235,3 +235,39 @@ export function reanalizar(actuacionId: string): Promise<AlbaranAnalizado> {
 export function enlaceDocumento(albaranAnalizadoId: string): Promise<{ url: string }> {
   return pedir(`/albaranes/${albaranAnalizadoId}/documento`);
 }
+
+/* ── El buzón ────────────────────────────────────────────────────────────── */
+
+export type PasadaBuzon = {
+  id: string;
+  iniciada_at: string;
+  terminada_at: string | null;
+  correos: number;
+  procesados: number;
+  ignorados: number;
+  errores: number;
+  error: string | null;
+  origen: "temporizador" | "manual";
+  detalle: { messageId: string; asunto: string; resultado: string; expedienteNumero?: string; error?: string }[];
+};
+
+export type EstadoBuzon = {
+  configurado: boolean;
+  usuario: string | null;
+  cadaMinutos: number | null;
+  activadoEl: string | null;
+  remitentes: string[];
+  pasadas: PasadaBuzon[];
+};
+
+export function estadoBuzon(): Promise<EstadoBuzon> {
+  return pedir("/buzon");
+}
+
+export function guardarRemitentes(remitentes: string): Promise<{ remitentes: string[] }> {
+  return pedir("/buzon/remitentes", { method: "PUT", body: JSON.stringify({ remitentes }) });
+}
+
+export function revisarBuzon(): Promise<Omit<PasadaBuzon, "id" | "iniciada_at" | "terminada_at" | "error" | "origen">> {
+  return pedir("/buzon/revisar", { method: "POST" });
+}

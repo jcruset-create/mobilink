@@ -1,0 +1,51 @@
+/**
+ * Lo puro del buzón: qué se acepta y cómo se lee el cuerpo.
+ *
+ * La pasada entera —abrir el buzón, parsear, guardar el PDF, abrir el
+ * expediente— va en la de integración con un buzón falso. Aquí sólo las reglas
+ * que se pueden probar sin nada por debajo.
+ */
+
+import { describe, expect, it } from "vitest";
+import { cuerpoEnTexto, remitenteAceptado } from "./buzon.ts";
+import { partirRemitentes } from "./config.ts";
+
+describe("la lista de remitentes", () => {
+  it("se parte por comas, puntos y coma o espacios, y se normaliza", () => {
+    expect(partirRemitentes(" Therefore@Ejemplo.invalid , otro@ejemplo.invalid;tercero@ejemplo.invalid ")).toEqual([
+      "therefore@ejemplo.invalid",
+      "otro@ejemplo.invalid",
+      "tercero@ejemplo.invalid",
+    ]);
+  });
+
+  it("lo que no es una dirección se descarta en vez de colarse como filtro", () => {
+    expect(partirRemitentes("therefore, sin-arroba, a@b.c")).toEqual(["a@b.c"]);
+  });
+
+  it("vacía significa «todos»: es preferible a un filtro mal escrito", () => {
+    expect(remitenteAceptado("cualquiera@ejemplo.invalid", [])).toBe(true);
+  });
+
+  it("con lista, sólo lo que está en ella, sin distinguir mayúsculas", () => {
+    const lista = ["therefore@ejemplo.invalid"];
+    expect(remitenteAceptado("Therefore@Ejemplo.invalid", lista)).toBe(true);
+    expect(remitenteAceptado("persona@ejemplo.invalid", lista)).toBe(false);
+  });
+});
+
+describe("el cuerpo en texto", () => {
+  it("prefiere el texto plano cuando lo hay", () => {
+    expect(cuerpoEnTexto({ text: "hola\nmundo", html: "<p>otra cosa</p>" })).toBe("hola\nmundo");
+  });
+
+  it("si sólo hay HTML, se le quitan las etiquetas conservando las líneas", () => {
+    const t = cuerpoEnTexto({ text: "", html: "<p>Albar&aacute;n: 0501234</p><div>GRABAR<br>&nbsp;T2</div>" });
+    expect(t).toContain("0501234");
+    expect(t.split("\n").map((l) => l.trim()).filter(Boolean)).toEqual(["Albar&aacute;n: 0501234", "GRABAR", "T2"]);
+  });
+
+  it("sin nada, devuelve vacío y no inventa", () => {
+    expect(cuerpoEnTexto({ text: undefined, html: false })).toBe("");
+  });
+});

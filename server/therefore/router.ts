@@ -31,10 +31,13 @@ import {
   type EstadoActuacion,
 } from "./domain/estados.ts";
 import { ErrorTherefore } from "./errors.ts";
-import { parsearCorreo, type CorreoParseado } from "./domain/correo/index.ts";
+import { parsearCorreo } from "./domain/correo/index.ts";
 import * as decisionesServicio from "./decisiones.ts";
 import * as documentos from "./documentos/servicio.ts";
+import * as buzon from "./buzon.ts";
+import { CLAVES_BUZON, guardarTextoConfig, leerRemitentes, leerTextoConfig, partirRemitentes } from "./config.ts";
 import * as ingesta from "./ingesta.ts";
+import { aCorreoEntrante } from "./ingesta.ts";
 import { cargarPermisos, exigirPermiso } from "./permissions.ts";
 import * as repo from "./repository.ts";
 import * as servicio from "./service.ts";
@@ -219,43 +222,6 @@ function correoEntranteDe(cuerpo: unknown): ingesta.CorreoEntrante {
  * no saben —ni tienen por qué— si el correo lo leyó una máquina o lo tecleó
  * una persona.
  */
-function aCorreoEntrante(
-  leido: CorreoParseado,
-  sobre: Pick<
-    ingesta.CorreoEntrante,
-    "messageId" | "gmailMessageId" | "gmailThreadId" | "inReplyTo" | "fecha" | "de" | "para" | "asunto" | "texto"
-  >
-): ingesta.CorreoEntrante {
-  return {
-    ...sobre,
-    tipo: leido.tipo,
-    empresaCodigo: leido.empresaCodigo,
-    empresaNombre: leido.empresaNombre,
-    proveedorCodigo: leido.proveedorCodigo,
-    proveedorNombre: leido.proveedorNombre,
-    cuentaContable: leido.cuentaContable,
-    facturaNumero: leido.facturaNumero,
-    facturaFecha: leido.facturaFecha,
-    importeCentimos: leido.importeCentimos,
-    casoReferencia: leido.casoReferencia,
-    persona: leido.persona,
-    urgente: leido.urgente,
-    tareaVencida: leido.tareaVencida,
-    reclamacion: leido.reclamacion,
-    acciones: leido.acciones.map((a) => ({
-      accion: a.accion,
-      accionTexto: a.accionTexto,
-      albaran: a.albaran,
-      importeCentimos: a.importeCentimos,
-      indicador: a.indicador,
-      observaciones: a.observaciones,
-      confianza: a.confianza,
-    })),
-    albaranesAmbiguos: leido.albaranesAmbiguos,
-    parseado: leido,
-  };
-}
-
 function contextoDe(req: Request): servicio.Contexto {
   const ctx = req.authCtx!;
   return { empresaId: ctx.empresaId, userId: ctx.userId, userNombre: ctx.nombre };
@@ -816,6 +782,72 @@ export function createThereforeRouter(): Router {
     exigirPermiso("therefore.view"),
     ruta(async (req, res) => {
       res.json({ url: await documentos.enlaceDelDocumento(contextoDe(req), String(req.params.id)) });
+    })
+  );
+
+  /* ── El buzón ──────────────────────────────────────────────────────────── */
+
+  /** Estado del buzón y sus últimas pasadas. Sólo quien puede configurarlo. */
+  r.get(
+    "/buzon",
+    exigirPermiso("therefore.config.edit"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const cfg = buzon.configBuzon();
+      res.json({
+        // Sin credenciales no hay nada que enseñar salvo que está apagado. Lo
+        // que NO se manda nunca es la contraseña ni el servidor: la pantalla
+        // dice si está configurado, no cómo.
+        configurado: cfg !== null && cfg.empresaId === ctx.empresaId,
+        usuario: cfg && cfg.empresaId === ctx.empresaId ? cfg.user : null,
+        cadaMinutos: cfg?.minutos ?? null,
+        activadoEl: await leerTextoConfig(ctx.empresaId, CLAVES_BUZON.activadoEl),
+        remitentes: await leerRemitentes(ctx.empresaId),
+        pasadas: await buzon.ultimasPasadas(ctx.empresaId),
+      });
+    })
+  );
+
+  r.put(
+    "/buzon/remitentes",
+    exigirPermiso("therefore.config.edit"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const lista = partirRemitentes(texto((req.body ?? {}).remitentes));
+      await guardarTextoConfig(ctx.empresaId, CLAVES_BUZON.remitentes, lista.join(","));
+      await registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "therefore.buzon.remitentes",
+        entidad: "thf_config",
+        detalle: { remitentes: lista },
+        ip: req.ip,
+      });
+      res.json({ remitentes: lista });
+    })
+  );
+
+  /** El botón «Revisar buzón»: una pasada ahora, sin esperar al temporizador. */
+  r.post(
+    "/buzon/revisar",
+    exigirPermiso("therefore.config.edit"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const cfg = buzon.configBuzon();
+      if (!cfg || cfg.empresaId !== ctx.empresaId) {
+        throw new ErrorTherefore("BUZON_APAGADO", "El buzón no está configurado para esta empresa.", 409);
+      }
+      const r = await buzon.revisarBuzon({ origen: "manual" });
+      await registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "therefore.buzon.revisar",
+        entidad: "thf_buzon_pasadas",
+        detalle: "error" in r ? { error: r.error } : { correos: r.correos, procesados: r.procesados, errores: r.errores },
+        ip: req.ip,
+      });
+      if ("error" in r) throw new ErrorTherefore("BUZON_ERROR", r.error, 502);
+      res.json(r);
     })
   );
 

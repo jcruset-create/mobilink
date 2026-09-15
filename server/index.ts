@@ -27,7 +27,7 @@ import Stripe from "stripe";
 import { initIntegrationHub, mountIntegrationHub, startIntegrationWorker } from "./integration-hub/index.ts";
 import { initCash, mountCash, startCashErpWorker, startCashEventWorker } from "./cash/index.ts";
 import { initTacografos, mountTacografos } from "./tacografos/index.ts";
-import { initTherefore, mountTherefore, startThereforeWorkers } from "./therefore/index.ts";
+import { initTherefore, mountTherefore, startThereforeWorkers, startThereforeBuzon } from "./therefore/index.ts";
 import { initCentral, mountCentral } from "./central/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
@@ -19509,6 +19509,7 @@ initDb()
       startCheckpointMail(); // informe del arco CheckPoint por correo (apagado sin credenciales)
       startIntegrationWorker(); // reproceso de operaciones de integración RETRY_PENDING
       startThereforeWorkers(); // análisis de los albaranes que van llegando por correo
+      startThereforeBuzon(); // el buzón de Therefore (apagado sin credenciales)
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks
