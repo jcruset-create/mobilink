@@ -425,3 +425,58 @@ que tu código no añada categorías nuevas de problema.
 **Versiones.** Varias sesiones tocan el repositorio a la vez. Antes de cada
 commit: `bash scripts/check-versions.sh`. Si marca `CONFLICTO`, se hace
 `git merge origin/main` y se sube la versión **por encima** de la de `main`.
+
+## 15. Recepciones: control de la recepción física, no del stock
+
+`server/recepciones/` (tablas `rcp_*`, API `/api/recepciones`, panel en
+`src/modules/recepciones/`). Controla el ciclo **pedido a proveedor → albarán
+del proveedor (en tránsito) → recepción física → albarán recepcionado**. El
+primer proveedor es Neumáticos Soledad; el modelo no sabe nada de él salvo su
+fila en `rcp_proveedores`.
+
+La decisión que gobierna el módulo: **no gestiona existencias.** No escribe
+en `movimientos_stock`, no conoce el saldo de ningún artículo, no integra con
+GENES. La entrada del albarán en el ERP la sigue haciendo una persona,
+después, con el papel que sale de aquí. Hay una prueba de integración que
+recorre el código del módulo y falla si aparece una referencia a una tabla
+del almacén; no es decorativa: es lo que impide que «ya que estamos» meta una
+entrada de stock por la puerta de atrás.
+
+Decisiones fijadas con pruebas:
+
+- **Tres cantidades, tres tablas.** `pedida` (`rcp_pedido_lineas`),
+  `expedida` (`rcp_albaran_lineas`), `recibida` (`rcp_recepcion_lineas`).
+  `pedida ≠ expedida` es pendiente de suministro, no incidencia;
+  `expedida ≠ recibida` sí lo es. Los estados de pedido y albarán se
+  **derivan** de las cantidades con funciones puras (`domain/estados.ts`) y
+  se recalculan en la misma transacción que las cambia; nunca los fija una
+  pantalla.
+- **Expedir no es recibir.** Un albarán nace `EN_TRANSITO`; sólo
+  `cerrarRecepcion()` con un usuario autenticado lo mueve de ahí. Usuario,
+  fecha y hora los pone el servidor: el operario no escribe ninguno.
+- **El cierre es una transacción con cerrojo.** `SELECT … FOR UPDATE` sobre
+  el albarán; lo pendiente se recalcula dentro, con lo que hay en la base, no
+  con lo que vio la pantalla. Dos operarios a la vez: uno crea, el otro 409.
+  Además una `Idempotency-Key` generada al abrir la pantalla: el doble toque
+  devuelve la misma recepción.
+- **Una recepción cerrada no se edita.** Corregir es una `rcp_rectificaciones`
+  numerada (`RECT-…`) con quién, cuándo, por qué y de qué cantidad a cuál.
+  `rcp_eventos` es inmutable por trigger, como `thf_eventos`.
+- **Dos ficheros, nunca uno encima de otro.** El PDF original del proveedor
+  se guarda byte a byte por hash (`…_ORIGINAL.pdf`, un único por albarán, un
+  segundo es 409). El recepcionado (`…_<REC-…>.pdf`) copia sus páginas con
+  pdf-lib y añade la hoja del sello (pdfkit); una rectificación genera otro
+  y conserva el anterior. Ambos con SHA-256 y verificación bajo demanda.
+- **El mapeo de artículos nunca bloquea.** Sin artículo Mobilink, la línea
+  dice «sin mapear» y se recepciona por la descripción del proveedor.
+- **El documento se genera DESPUÉS del COMMIT.** Que falle el PDF no deshace
+  una recepción hecha en el muelle: queda `documento_estado = ERROR` y se
+  regenera desde la ficha.
+- **Impresión:** no hay infraestructura silenciosa en el proyecto; el panel
+  abre el PDF con la sesión en un iframe y lanza `window.print()`. Un agente
+  por centro, si llega, colgará de aquí sin tocar el cierre.
+
+Preparado para la fase del correo (no implementada): `origen`,
+`external_message_id`, `source_received_at` en pedidos y albaranes, y el
+`UNIQUE` por número normalizado (`B-2026-5688837` y `5688837` son el mismo
+pedido) que impedirá que el mismo correo cree dos.
