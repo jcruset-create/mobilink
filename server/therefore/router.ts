@@ -35,6 +35,7 @@ import { parsearCorreo } from "./domain/correo/index.ts";
 import * as decisionesServicio from "./decisiones.ts";
 import * as documentos from "./documentos/servicio.ts";
 import * as buzon from "./buzon.ts";
+import { componerXlsx, nombreFichero } from "./exportar.ts";
 import { CLAVES_BUZON, guardarTextoConfig, leerRemitentes, leerTextoConfig, partirRemitentes } from "./config.ts";
 import * as ingesta from "./ingesta.ts";
 import { aCorreoEntrante } from "./ingesta.ts";
@@ -344,6 +345,43 @@ export function createThereforeRouter(): Router {
         desplazamiento: Number(q.desplazamiento) || undefined,
       };
       res.json(await servicio.bandeja(contextoDe(req), filtro));
+    })
+  );
+
+  /**
+   * La bandeja a Excel, con los MISMOS filtros que la pantalla. Se exporta lo
+   * que se está viendo; una exportación de «todo» se vuelve a filtrar a mano
+   * en Excel, que es justo el trabajo que la pantalla ya había hecho.
+   */
+  r.get(
+    "/expedientes/exportar",
+    exigirPermiso("therefore.view"),
+    ruta(async (req, res) => {
+      const q = req.query;
+      const filtro: repo.FiltroExpedientes = {
+        pestana: (texto(q.pestana) || undefined) as repo.FiltroExpedientes["pestana"],
+        estado: texto(q.estado) || undefined,
+        prioridad: texto(q.prioridad) || undefined,
+        empresaCodigo: texto(q.empresa) || undefined,
+        proveedor: texto(q.proveedor) || undefined,
+        accion: texto(q.accion) || undefined,
+        asignado: texto(q.usuario) || undefined,
+        reclamado: booleano(q.reclamado),
+        urgente: booleano(q.urgente),
+        requiereRevision: booleano(q.revision),
+        desde: texto(q.desde) || undefined,
+        hasta: texto(q.hasta) || undefined,
+        texto: texto(q.texto) || undefined,
+        orden: (texto(q.orden) || undefined) as repo.FiltroExpedientes["orden"],
+        // Sin paginar: una exportación a medias es peor que ninguna.
+        limite: 5000,
+        desplazamiento: 0,
+      };
+      const { expedientes } = await servicio.bandeja(contextoDe(req), filtro);
+      const fichero = componerXlsx(expedientes);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${nombreFichero()}"`);
+      res.send(fichero);
     })
   );
 
@@ -851,6 +889,61 @@ export function createThereforeRouter(): Router {
     })
   );
 
+  /**
+   * La carga del histórico: lo anterior a la activación, a propósito.
+   *
+   * Es una acción que hay que pedir, con una fecha, y sólo quien configura el
+   * módulo. Se repite hasta que devuelva cero correos: cada pasada coge un
+   * lote y los que ya se procesaron son duplicados, no dobles.
+   */
+  r.post(
+    "/buzon/historico",
+    exigirPermiso("therefore.config.edit"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const cfg = buzon.configBuzon();
+      if (!cfg || cfg.empresaId !== ctx.empresaId) {
+        throw new ErrorTherefore("BUZON_APAGADO", "El buzón no está configurado para esta empresa.", 409);
+      }
+      const desde = instante((req.body ?? {}).desde, "la fecha desde la que cargar");
+      const r = await buzon.revisarBuzon({ historico: { desde: new Date(desde) } });
+      await registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "therefore.buzon.historico",
+        entidad: "thf_buzon_pasadas",
+        detalle: "error" in r ? { desde, error: r.error } : { desde, correos: r.correos, procesados: r.procesados, errores: r.errores },
+        ip: req.ip,
+      });
+      if ("error" in r) throw new ErrorTherefore("BUZON_ERROR", r.error, 502);
+      res.json(r);
+    })
+  );
+
+  /** Un correo importado a mano como .eml: la misma puerta que el buzón. */
+  r.post(
+    "/correos/eml",
+    exigirPermiso("therefore.correo.importar"),
+    subidaDocumento.single("archivo"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const f = (req as Request & { file?: Express.Multer.File }).file;
+      if (!f?.buffer?.length) {
+        return res.status(400).json({ error: "Falta el fichero .eml.", code: "SIN_FICHERO" });
+      }
+      const d = await buzon.importarEml(ctx.empresaId, f.buffer);
+      await registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "therefore.correo.importar_eml",
+        entidad: "thf_notificaciones",
+        detalle: { resultado: d.resultado, expediente: d.expedienteNumero ?? null, error: d.error ?? null },
+        ip: req.ip,
+      });
+      res.status(d.resultado === "error" ? 422 : 200).json(d);
+    })
+  );
+
   /* ── Configuración ─────────────────────────────────────────────────────── */
 
   r.get(
@@ -871,8 +964,10 @@ export function createThereforeRouter(): Router {
         umbrales?: unknown;
         dedupe?: unknown;
         albaran?: unknown;
+        diasAutocierre?: unknown;
       };
       const config = await guardarConfig(ctx.empresaId, {
+        diasAutocierre: typeof body.diasAutocierre === "number" ? body.diasAutocierre : undefined,
         pesos: (body.pesos ?? undefined) as never,
         umbrales: (body.umbrales ?? undefined) as never,
         dedupe: (body.dedupe ?? undefined) as never,

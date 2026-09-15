@@ -39,6 +39,13 @@ import { UMBRAL_CONFIANZA_CAMPO_POR_DEFECTO } from "./domain/validaciones.ts";
 import { MAX_PAGINAS_POR_DEFECTO } from "./documentos/texto.ts";
 
 export const CLAVES = {
+  /**
+   * Días que un expediente RESUELTO espera antes de cerrarse solo. Un cierre
+   * por antigüedad se puede reabrir, así que equivocarse por poco no cuesta
+   * nada; equivocarse por mucho deja la bandeja de resueltos llena de cosas
+   * que nadie va a volver a tocar.
+   */
+  diasAutocierre: "expediente.dias_autocierre",
   pesoDiasAbierto: "prioridad.peso.dias_abierto",
   pesoReclamaciones: "prioridad.peso.reclamaciones",
   pesoUrgente: "prioridad.peso.urgente",
@@ -104,7 +111,10 @@ export const CONFIG_ALBARAN_POR_DEFECTO: ConfigAlbaran = {
   maxPaginas: MAX_PAGINAS_POR_DEFECTO,
 };
 
+export const DIAS_AUTOCIERRE_POR_DEFECTO = 30;
+
 export type ConfigTherefore = {
+  diasAutocierre: number;
   pesos: PesosPrioridad;
   umbrales: UmbralesPrioridad;
   dedupe: {
@@ -116,6 +126,7 @@ export type ConfigTherefore = {
 };
 
 export const POR_DEFECTO: ConfigTherefore = {
+  diasAutocierre: DIAS_AUTOCIERRE_POR_DEFECTO,
   pesos: PESOS_POR_DEFECTO,
   umbrales: UMBRALES_POR_DEFECTO,
   dedupe: {
@@ -153,6 +164,8 @@ export async function leerConfig(empresaId: string): Promise<ConfigTherefore> {
     mapa = {};
   }
   return {
+    // Mínimo un día: con cero, todo lo resuelto se cerraría en la misma hora.
+    diasAutocierre: Math.max(1, aNumero(mapa[CLAVES.diasAutocierre], DIAS_AUTOCIERRE_POR_DEFECTO)),
     pesos: {
       diasAbierto: aNumero(mapa[CLAVES.pesoDiasAbierto], POR_DEFECTO.pesos.diasAbierto),
       reclamaciones: aNumero(mapa[CLAVES.pesoReclamaciones], POR_DEFECTO.pesos.reclamaciones),
@@ -207,6 +220,7 @@ export async function leerConfig(empresaId: string): Promise<ConfigTherefore> {
 }
 
 export type CambiosConfig = {
+  diasAutocierre?: number;
   pesos?: Partial<PesosPrioridad>;
   umbrales?: Partial<UmbralesPrioridad>;
   dedupe?: {
@@ -233,6 +247,7 @@ export async function guardarConfig(
     if (v !== undefined && Number.isFinite(v) && v >= 0) pares.push([clave, v]);
   };
 
+  poner(CLAVES.diasAutocierre, cambios.diasAutocierre);
   poner(CLAVES.pesoDiasAbierto, cambios.pesos?.diasAbierto);
   poner(CLAVES.pesoReclamaciones, cambios.pesos?.reclamaciones);
   poner(CLAVES.pesoUrgente, cambios.pesos?.urgente);

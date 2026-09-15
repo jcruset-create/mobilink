@@ -202,20 +202,26 @@ async function guardarAdjuntos(empresaId: string, correo: ParsedMail): Promise<A
   return salida;
 }
 
-/** Procesa UN correo. Devuelve qué pasó; nunca lanza. */
-async function procesarUno(
-  cliente: ClienteBuzon,
-  uid: number,
+/**
+ * Procesa un correo a partir de su fuente MIME. Devuelve qué pasó; nunca lanza.
+ *
+ * Es la pieza que comparten las tres puertas —el temporizador, la carga del
+ * histórico y el .eml importado a mano— y por eso recibe los bytes y no un
+ * cliente IMAP. `desde` en `null` significa «sin suelo de fecha»: es lo que
+ * usa la carga del histórico, que existe justamente para lo anterior a la
+ * activación.
+ */
+export async function procesarFuente(
+  source: Buffer,
   cfg: Pick<ConfigBuzon, "empresaId">,
   remitentes: readonly string[],
-  desde: Date
+  desde: Date | null,
+  messageIdPorDefecto = "sin-message-id"
 ): Promise<DetalleCorreo> {
   let correo: ParsedMail;
-  let messageId = `uid-${uid}`;
+  let messageId = messageIdPorDefecto;
   try {
-    const msg = await cliente.fetchOne(String(uid), { source: true }, { uid: true });
-    if (!msg || !msg.source) return { messageId, asunto: "", resultado: "ignorado", error: "Sin contenido" };
-    correo = await simpleParser(msg.source);
+    correo = await simpleParser(source);
     messageId = correo.messageId || messageId;
   } catch (e) {
     return { messageId, asunto: "", resultado: "error", error: (e as Error).message };
@@ -225,7 +231,7 @@ async function procesarUno(
   const de = direccion(correo.from);
 
   // `since` en IMAP es por DÍA; aquí se afina al instante, con margen.
-  if (correo.date && correo.date.getTime() < desde.getTime() - MARGEN_ACTIVACION_MS) {
+  if (desde && correo.date && correo.date.getTime() < desde.getTime() - MARGEN_ACTIVACION_MS) {
     return { messageId, asunto, resultado: "ignorado", error: "Anterior a la activación del buzón" };
   }
   if (!remitenteAceptado(de, remitentes)) {
@@ -265,14 +271,42 @@ async function procesarUno(
   }
 }
 
+/** Baja UN correo del buzón y lo procesa. */
+async function procesarUno(
+  cliente: ClienteBuzon,
+  uid: number,
+  cfg: Pick<ConfigBuzon, "empresaId">,
+  remitentes: readonly string[],
+  desde: Date | null
+): Promise<DetalleCorreo> {
+  let msg: { source?: Buffer } | false;
+  try {
+    msg = await cliente.fetchOne(String(uid), { source: true }, { uid: true });
+  } catch (e) {
+    return { messageId: `uid-${uid}`, asunto: "", resultado: "error", error: (e as Error).message };
+  }
+  if (!msg || !msg.source) return { messageId: `uid-${uid}`, asunto: "", resultado: "ignorado", error: "Sin contenido" };
+  return procesarFuente(msg.source, cfg, remitentes, desde, `uid-${uid}`);
+}
+
 export type OpcionesPasada = {
   /** Un buzón falso, para las pruebas. */
   cliente?: ClienteBuzon;
   /** Configuración explícita, para las pruebas. Sin ella se lee del entorno. */
   config?: ConfigBuzon;
-  origen?: "temporizador" | "manual";
+  origen?: "temporizador" | "manual" | "historico";
   ahora?: Date;
+  /**
+   * La carga del histórico: TODO lo que haya desde esa fecha, leído o no, y
+   * sin el suelo de la activación. Es la única forma de procesar lo anterior
+   * a activar el módulo, y es a propósito que sea una acción aparte que hay
+   * que pedir: lo que ya estaba en el buzón no entra nunca por accidente.
+   */
+  historico?: { desde: Date };
 };
+
+/** Cuántos correos por pasada de histórico. Se puede repetir hasta vaciar. */
+const LOTE_HISTORICO = 200;
 
 /**
  * Una pasada: mira el buzón, procesa lo nuevo y deja constancia.
@@ -287,7 +321,7 @@ export async function revisarBuzon(opciones: OpcionesPasada = {}): Promise<Pasad
   const pasada: PasadaBuzon = { correos: 0, procesados: 0, ignorados: 0, errores: 0, detalle: [] };
   const { rows } = await pool.query<{ id: string }>(
     `INSERT INTO thf_buzon_pasadas (empresa_id, origen) VALUES ($1, $2) RETURNING id`,
-    [cfg.empresaId, opciones.origen ?? "temporizador"]
+    [cfg.empresaId, opciones.origen ?? (opciones.historico ? "historico" : "temporizador")]
   );
   const pasadaId = rows[0].id;
 
@@ -316,13 +350,18 @@ export async function revisarBuzon(opciones: OpcionesPasada = {}): Promise<Pasad
     if (remitentes.length === 0) {
       console.warn("[Therefore] buzón sin lista de remitentes: se acepta todo lo que llegue");
     }
-    const desde = await fechaDeActivacion(cfg.empresaId, opciones.ahora);
+    const activacion = await fechaDeActivacion(cfg.empresaId, opciones.ahora);
+    const historico = opciones.historico ?? null;
+    // En el histórico no hay suelo: se está pidiendo justamente lo anterior.
+    const desde = historico ? null : activacion;
 
     await cliente.connect();
     const lock = await cliente.getMailboxLock(cfg.carpeta);
     try {
-      const sinLeer = await cliente.search({ seen: false, since: desde }, { uid: true });
-      for (const uid of (sinLeer || []).slice(0, LOTE)) {
+      const uids = historico
+        ? await cliente.search({ since: historico.desde }, { uid: true })
+        : await cliente.search({ seen: false, since: activacion }, { uid: true });
+      for (const uid of (uids || []).slice(0, historico ? LOTE_HISTORICO : LOTE)) {
         pasada.correos++;
         const d = await procesarUno(cliente, uid, cfg, remitentes, desde);
         pasada.detalle.push(d);
@@ -352,6 +391,36 @@ export async function revisarBuzon(opciones: OpcionesPasada = {}): Promise<Pasad
 
   await cerrar(null);
   return pasada;
+}
+
+/**
+ * Un correo importado a mano, como fichero .eml.
+ *
+ * Misma puerta que el buzón —`procesarFuente`— y su propia fila de pasada con
+ * origen 'eml', para que en el panel se vea que alguien lo trajo a mano. Sin
+ * suelo de fecha ni filtro de remitente: quien lo importa ya ha decidido que
+ * es de Therefore, y un .eml exportado de otro buzón puede llevar cualquier
+ * fecha.
+ */
+export async function importarEml(empresaId: string, source: Buffer): Promise<DetalleCorreo> {
+  const { rows } = await pool.query<{ id: string }>(
+    `INSERT INTO thf_buzon_pasadas (empresa_id, origen, correos) VALUES ($1, 'eml', 1) RETURNING id`,
+    [empresaId]
+  );
+  const d = await procesarFuente(source, { empresaId }, [], null);
+  await pool.query(
+    `UPDATE thf_buzon_pasadas
+        SET terminada_at = now(), procesados = $2, ignorados = $3, errores = $4, detalle = $5
+      WHERE id = $1`,
+    [
+      rows[0].id,
+      d.resultado === "procesado" || d.resultado === "duplicado" ? 1 : 0,
+      d.resultado === "ignorado" ? 1 : 0,
+      d.resultado === "error" ? 1 : 0,
+      JSON.stringify([{ ...d, asunto: d.asunto.slice(0, 200) }]),
+    ]
+  ).catch((e) => console.error("[Therefore] no se ha podido cerrar la pasada del .eml:", (e as Error).message));
+  return d;
 }
 
 /** Las últimas pasadas, para la pantalla de configuración. */

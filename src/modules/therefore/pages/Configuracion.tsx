@@ -324,6 +324,22 @@ export default function Configuracion() {
         </div>
       </section>
 
+      <section className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+        <h2 className="mb-1 text-sm font-bold">Autocierre</h2>
+        <p className="mb-3 text-[12px] text-slate-400">
+          Un expediente resuelto que nadie vuelve a tocar se cierra solo pasados estos días. Se
+          puede reabrir, así que equivocarse por poco no cuesta nada; con una reclamación pendiente
+          no se cierra nunca.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <TextField
+            label="Días resuelto antes de cerrar"
+            value={String(config.diasAutocierre)}
+            onChange={(v) => setConfig({ ...config, diasAutocierre: num(v, config.diasAutocierre) })}
+          />
+        </div>
+      </section>
+
       <Buzon />
 
       <div className="flex items-center gap-3">
@@ -355,6 +371,8 @@ function Buzon() {
   const [error, setError] = useState<string | null>(null);
   const [revisando, setRevisando] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
+  const [desdeHistorico, setDesdeHistorico] = useState("");
+  const [cargandoHistorico, setCargandoHistorico] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
@@ -393,6 +411,24 @@ function Buzon() {
       setError(e instanceof Error ? e.message : "No se ha podido revisar el buzón");
     } finally {
       setRevisando(false);
+    }
+  }
+
+  async function cargarHistorico() {
+    if (!desdeHistorico) return;
+    setCargandoHistorico(true);
+    setAviso(null);
+    try {
+      const r = await api.cargarHistorico(new Date(desdeHistorico).toISOString());
+      setAviso(
+        `Histórico: ${r.correos} correo(s), ${r.procesados} procesado(s), ${r.ignorados} ignorado(s), ${r.errores} error(es).` +
+          (r.correos > 0 ? " Repite la carga hasta que salga a cero." : "")
+      );
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido cargar el histórico");
+    } finally {
+      setCargandoHistorico(false);
     }
   }
 
@@ -435,6 +471,27 @@ function Buzon() {
             </button>
             <button onClick={() => void revisar()} className={btnSecondary} disabled={!estado.configurado || revisando}>
               {revisando ? "Revisando…" : "Revisar buzón ahora"}
+            </button>
+          </div>
+          {/*
+            El histórico es una acción aparte a propósito: lo anterior a la
+            activación no entra nunca por accidente. Se pide con una fecha y se
+            repite hasta que la pasada salga a cero.
+          */}
+          <div className="mb-3 flex flex-wrap items-end gap-2">
+            <div className="min-w-[200px]">
+              <TextField
+                label="Cargar histórico desde (aaaa-mm-dd)"
+                value={desdeHistorico}
+                onChange={setDesdeHistorico}
+              />
+            </div>
+            <button
+              onClick={() => void cargarHistorico()}
+              className={btnSecondary}
+              disabled={!estado.configurado || cargandoHistorico || !desdeHistorico}
+            >
+              {cargandoHistorico ? "Cargando…" : "Cargar histórico"}
             </button>
           </div>
           {aviso && <p className="mb-3 text-[12px] text-emerald-300">{aviso}</p>}

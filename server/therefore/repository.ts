@@ -2248,3 +2248,75 @@ export async function ultimoAnalisisDeActuacion(
   );
   return rows[0] ? aAlbaranAnalizado(rows[0]) : null;
 }
+
+/* ── Trabajo diario (fase 4b) ────────────────────────────────────────────── */
+
+/** Las empresas que tienen algo abierto o resuelto: las únicas con trabajo diario. */
+export async function empresasConTrabajoDiario(ejecutor?: Ejecutor): Promise<string[]> {
+  const { rows } = await db(ejecutor).query<{ empresa_id: string }>(
+    `SELECT DISTINCT empresa_id FROM thf_expedientes WHERE estado <> 'CERRADO'`
+  );
+  return rows.map((r) => String(r.empresa_id));
+}
+
+/**
+ * Los expedientes abiertos cuya prioridad no se ha recalculado hoy.
+ *
+ * Sólo los abiertos: la prioridad de un resuelto no le importa a nadie, y
+ * recalcularla cada día sería escribir filas para nada.
+ */
+export async function expedientesSinRecalcularHoy(
+  empresaId: string,
+  ejecutor?: Ejecutor
+): Promise<Expediente[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_EXP} FROM thf_expedientes
+      WHERE empresa_id = $1
+        AND estado IN ('NUEVO','PENDIENTE','EN_PROCESO','BLOQUEADO')
+        AND (recalculado_el IS NULL OR recalculado_el < CURRENT_DATE)
+      ORDER BY created_at`,
+    [empresaId]
+  );
+  return rows.map(aExpediente);
+}
+
+export async function marcarRecalculadoHoy(
+  empresaId: string,
+  ids: readonly string[],
+  ejecutor?: Ejecutor
+): Promise<void> {
+  if (ids.length === 0) return;
+  await db(ejecutor).query(
+    `UPDATE thf_expedientes SET recalculado_el = CURRENT_DATE
+      WHERE empresa_id = $1 AND id = ANY($2)`,
+    [empresaId, ids]
+  );
+}
+
+/**
+ * Los RESUELTO que llevan al menos `dias` días así y no esperan a nadie.
+ *
+ * Se excluyen los que tienen una decisión pendiente: una reclamación sobre un
+ * expediente resuelto deja una pregunta abierta (caso 24), y cerrar por
+ * antigüedad algo que alguien todavía tiene que contestar sería enterrar la
+ * pregunta con el expediente.
+ */
+export async function resueltosParaCerrar(
+  empresaId: string,
+  dias: number,
+  ejecutor?: Ejecutor
+): Promise<Expediente[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_EXP} FROM thf_expedientes e
+      WHERE e.empresa_id = $1
+        AND e.estado = 'RESUELTO'
+        AND e.fecha_resolucion IS NOT NULL
+        AND e.fecha_resolucion < now() - ($2 || ' days')::interval
+        AND NOT EXISTS (
+          SELECT 1 FROM thf_decisiones d
+           WHERE d.expediente_id = e.id AND d.estado = 'PENDIENTE')
+      ORDER BY e.fecha_resolucion`,
+    [empresaId, String(dias)]
+  );
+  return rows.map(aExpediente);
+}
