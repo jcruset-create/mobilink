@@ -1971,6 +1971,63 @@ export async function albaranAnalizadoPorId(
   return rows[0] ? aAlbaranAnalizado(rows[0]) : null;
 }
 
+export type DocumentoParaRevision = {
+  adjuntoId: string;
+  nombreArchivo: string;
+  storagePath: string;
+  hashArchivo: string;
+  expedienteNumero: string;
+  numeroSolicitado: string;
+  estadoAnalisis: string | null;
+  estadoProceso: string;
+  error: string | null;
+  createdAt: string;
+};
+
+/**
+ * Los PDF cuyo análisis vigente pidió revisión o falló, en los últimos días.
+ *
+ * Es el corpus para afinar el parser: lo que el genérico no supo leer. Un
+ * mismo PDF con varios albaranes en revisión sale una vez, con el análisis
+ * más reciente.
+ */
+export async function documentosParaRevision(
+  empresaId: string,
+  dias: number,
+  ejecutor?: Ejecutor
+): Promise<DocumentoParaRevision[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT DISTINCT ON (adj.id)
+            adj.id AS adjunto_id, adj.nombre_archivo, adj.storage_path, adj.hash_archivo,
+            e.numero AS expediente_numero, a.numero_solicitado, a.estado_analisis,
+            a.estado_proceso, a.error, a.created_at
+       FROM thf_albaranes_analizados a
+       JOIN thf_adjuntos adj ON adj.id = a.adjunto_id AND adj.empresa_id = a.empresa_id
+       JOIN thf_expedientes e ON e.id = a.expediente_id
+      WHERE a.empresa_id = $1
+        AND (a.metadata_json->>'sustituidaPor') IS NULL
+        AND (a.estado_analisis IN ('REVISAR', 'ERROR') OR a.estado_proceso = 'ERROR')
+        AND adj.storage_path IS NOT NULL
+        AND a.created_at >= now() - make_interval(days => $2)
+      ORDER BY adj.id, a.created_at DESC`,
+    [empresaId, dias]
+  );
+  return rows
+    .map((r) => ({
+      adjuntoId: String(r.adjunto_id),
+      nombreArchivo: String(r.nombre_archivo ?? ""),
+      storagePath: String(r.storage_path),
+      hashArchivo: String(r.hash_archivo),
+      expedienteNumero: String(r.expediente_numero),
+      numeroSolicitado: String(r.numero_solicitado),
+      estadoAnalisis: r.estado_analisis ? String(r.estado_analisis) : null,
+      estadoProceso: String(r.estado_proceso),
+      error: r.error ? String(r.error) : null,
+      createdAt: new Date(r.created_at).toISOString(),
+    }))
+    .sort((x, y) => x.expedienteNumero.localeCompare(y.expedienteNumero));
+}
+
 export async function albaranesDeExpediente(
   empresaId: string,
   expedienteId: string,

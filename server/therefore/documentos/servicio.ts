@@ -9,7 +9,8 @@
 
 import { ErrorTherefore } from "../errors.ts";
 import * as repo from "../repository.ts";
-import { guardarDocumento, hashDeFichero, rutaDocumento, urlFirmada } from "../storage.ts";
+import { guardarDocumento, hashDeFichero, leerDocumento, rutaDocumento, urlFirmada } from "../storage.ts";
+import { componerZip, type EntradaZip } from "../zip.ts";
 import type { Contexto } from "../service.ts";
 
 export type FicheroSubido = {
@@ -186,6 +187,55 @@ export async function reanalizar(ctx: Contexto, actuacionId: string): Promise<re
 }
 
 /** Enlace temporal al PDF de un análisis, para el visor. */
+/** Lo que puede ir en un nombre de fichero dentro del zip. */
+function nombreSeguro(v: string): string {
+  return v.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "documento";
+}
+
+/**
+ * Los PDF que el análisis no supo leer, en un zip con su índice.
+ *
+ * Para afinar el parser hace falta el papel de verdad, y el papel está en el
+ * almacén, no en el repositorio. Esto lo saca de una vez: cada PDF con el
+ * expediente, el albarán pedido y el estado en el nombre, y un `indice.csv`
+ * con el motivo. Sólo quien puede configurar el módulo; lleva precios de
+ * compra.
+ */
+export async function loteParaRevision(
+  ctx: Contexto,
+  dias: number
+): Promise<{ zip: Buffer; documentos: number; omitidos: number }> {
+  const filas = await repo.documentosParaRevision(ctx.empresaId, dias);
+  const entradas: EntradaZip[] = [];
+  const indice: string[] = ["expediente;albaran_pedido;estado;error;fichero;hash"];
+  const usados = new Set<string>();
+  let omitidos = 0;
+
+  for (const f of filas) {
+    const contenido = await leerDocumento(f.storagePath);
+    if (!contenido) {
+      omitidos++;
+      continue;
+    }
+    const estado = f.estadoProceso === "ERROR" ? "ERROR" : (f.estadoAnalisis ?? f.estadoProceso);
+    let nombre = `${nombreSeguro(f.expedienteNumero)}_${nombreSeguro(f.numeroSolicitado)}_${estado}.pdf`;
+    for (let n = 2; usados.has(nombre); n++) {
+      nombre = `${nombreSeguro(f.expedienteNumero)}_${nombreSeguro(f.numeroSolicitado)}_${estado}_${n}.pdf`;
+    }
+    usados.add(nombre);
+    entradas.push({ nombre, contenido, fecha: new Date(f.createdAt) });
+    const celda = (v: string | null) => (v ?? "").replace(/[;\r\n]+/g, " ").trim();
+    indice.push(
+      [f.expedienteNumero, f.numeroSolicitado, estado, celda(f.error), nombre, f.hashArchivo.slice(0, 12)]
+        .map(celda)
+        .join(";")
+    );
+  }
+
+  entradas.push({ nombre: "indice.csv", contenido: Buffer.from(indice.join("\n") + "\n", "utf8") });
+  return { zip: componerZip(entradas), documentos: entradas.length - 1, omitidos };
+}
+
 /**
  * El enlace de cualquier adjunto del expediente —el PDF que vino con el correo,
  * tenga o no análisis—, por la misma vía firmada y con la misma caducidad.

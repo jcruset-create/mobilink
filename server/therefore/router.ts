@@ -824,6 +824,40 @@ export function createThereforeRouter(): Router {
     })
   );
 
+  /**
+   * Los PDF en revisión, en un zip, para afinar el parser con papel real.
+   * Sólo configuración: lleva precios de compra de los proveedores.
+   */
+  r.get(
+    "/documentos/revision",
+    exigirPermiso("therefore.config.edit"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const pedidos = Number(texto(req.query.dias) || 30);
+      const dias = Number.isFinite(pedidos) ? Math.min(365, Math.max(1, Math.round(pedidos))) : 30;
+      const lote = await documentos.loteParaRevision(ctx, dias);
+      if (lote.documentos === 0) {
+        return res.status(404).json({
+          error: `No hay documentos en revisión en los últimos ${dias} días.`,
+          code: "SIN_DOCUMENTOS",
+        });
+      }
+      await registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "therefore.documentos.revision",
+        entidad: "thf_adjuntos",
+        entidadId: null,
+        detalle: { dias, documentos: lote.documentos, omitidos: lote.omitidos },
+        ip: req.ip,
+      });
+      const fecha = new Date().toISOString().slice(0, 10);
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="therefore-revision-${fecha}.zip"`);
+      res.send(lote.zip);
+    })
+  );
+
   /** Lo mismo para un adjunto del correo, con o sin análisis. */
   r.get(
     "/adjuntos/:id/documento",

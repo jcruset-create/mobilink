@@ -1339,6 +1339,16 @@ que es donde está impresa: se enseña aparte y no se suma.
 Los documentos reales viven en `server/therefore/fixtures/originales/`,
 ignorada por Git; las pruebas reproducen cada caso con datos inventados.
 
+**Descarga de documentos para revisión.** En Configuración, «Descargar
+documentos para revisión» baja en un zip los PDF cuyo análisis vigente quedó
+en REVISAR o ERROR en los últimos N días (`GET /documentos/revision?dias=`),
+cada uno con el expediente, el albarán pedido y el estado en el nombre, más
+un `indice.csv` con el motivo. Es el corpus para las siguientes tandas de
+N.3 sin ir expediente a expediente. Sólo `therefore.config.edit` y con
+auditoría: lleva precios de compra. El zip se escribe a mano
+(`server/therefore/zip.ts`, método «store», sin dependencias): lo de dentro
+ya está comprimido.
+
 **Pestaña «Documentos» (tras el primer correo real).** El PDF que viene con
 el correo se ve dentro del expediente: la pestaña lista los adjuntos
 (nombre, tamaño, fecha) y enseña el elegido en un visor incrustado, con
