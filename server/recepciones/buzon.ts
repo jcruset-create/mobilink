@@ -10,15 +10,29 @@
  * MIME, saca los PDF adjuntos y llama a `procesarCorreo`, que es la MISMA
  * puerta por la que entra un `.eml` importado a mano desde el panel.
  *
- * ── Tres reglas del buzón ───────────────────────────────────────────────────
+ * ── El buzón puede ser de personas: aquí se entra sin tocar nada ────────────
  *
- * · SÓLO LO NO LEÍDO Y POSTERIOR A LA ACTIVACIÓN (`buzon.activado_el` pone el
- *   suelo; un reinicio no lo cambia). Lo anterior se carga a propósito con
- *   la carga del histórico, nunca por accidente.
- * · UN CORREO QUE FALLA SE QUEDA SIN LEER y se reintenta en la siguiente pasada.
- * · LO QUE NO ES DE UN PROVEEDOR CONOCIDO SE IGNORA Y SE MARCA LEÍDO. Los
- *   remitentes admitidos son los de `rcp_proveedores.remitentes_correo`; sin
- *   ninguno configurado se acepta todo y se avisa en el log.
+ * El buzón real es `pedidos@…`, donde además de los avisos del proveedor hay
+ * correo de gente que trabaja. Por eso Mobilink lo lee como un invitado:
+ *
+ * · NO SE TOCA NINGUNA BANDERA. Marcar `\Seen` le borraría a una persona la
+ *   señal de «esto está sin leer» en SUS correos. El progreso se lleva aparte,
+ *   en `rcp_config` (`buzon.progreso.<carpeta>`): hasta qué UID se miró ya,
+ *   junto con el UIDVALIDITY de la carpeta. Si el servidor renumera la carpeta
+ *   (UIDVALIDITY distinto), la marca se descarta y se vuelve a mirar desde el
+ *   suelo de la activación: repetir es inofensivo porque el Message-ID ya
+ *   identifica lo procesado, y perderse un albarán no lo es.
+ * · SÓLO SE LEE LO POSTERIOR A LA ACTIVACIÓN (`buzon.activado_el`, que no
+ *   cambia con un reinicio). Lo anterior se carga a propósito con la carga del
+ *   histórico, nunca por accidente.
+ * · UN CORREO QUE FALLA NO DEJA AVANZAR LA MARCA, así que se reintenta en la
+ *   pasada siguiente. Los que vengan detrás sí se procesan; volver a pasarlos
+ *   es inocuo (el UNIQUE de `message_id` los reconoce).
+ * · SIN REMITENTES CONFIGURADOS NO SE PROCESA NADA. En un buzón compartido,
+ *   aceptar «todo lo que llegue» sería copiar a la base correos de clientes y
+ *   de compañeros que no son de ningún proveedor. Los remitentes admitidos
+ *   viven en `rcp_proveedores.remitentes_correo`; el `.eml` importado a mano
+ *   sí se acepta sin lista, porque lo trae una persona a propósito.
  *
  * Configuración (variables de entorno):
  *   RECEPCIONES_IMAP_HOST        servidor de entrada
@@ -32,7 +46,7 @@
 
 import { ImapFlow } from "imapflow";
 import { simpleParser, type ParsedMail } from "mailparser";
-import { fechaDeActivacion } from "./config.ts";
+import { fechaDeActivacion, guardarProgresoBuzon, leerProgresoBuzon, type ProgresoBuzon } from "./config.ts";
 import { procesarCorreo, remitenteCasa, type AdjuntoPdf, type ResultadoIngesta } from "./ingesta.ts";
 import * as repo from "./repository.ts";
 
@@ -69,14 +83,20 @@ export function configBuzon(): ConfigBuzon | null {
   };
 }
 
-/** Lo que se usa de ImapFlow, y nada más: las pruebas meten un buzón falso. */
+/**
+ * Lo que se usa de ImapFlow, y nada más: las pruebas meten un buzón falso.
+ *
+ * No hay `messageFlagsAdd` a propósito: este módulo no escribe en el buzón.
+ * `mailbox` lo expone ImapFlow una vez abierta la carpeta; es opcional para
+ * que un buzón falso no tenga que fingirlo.
+ */
 export type ClienteBuzon = {
   connect(): Promise<unknown>;
   getMailboxLock(carpeta: string): Promise<{ release(): void }>;
-  search(query: { seen?: boolean; since?: Date }, opciones: { uid: true }): Promise<number[] | false>;
+  search(query: { seen?: boolean; since?: Date; uid?: string }, opciones: { uid: true }): Promise<number[] | false>;
   fetchOne(uid: string, campos: { source: true }, opciones: { uid: true }): Promise<{ source?: Buffer } | false>;
-  messageFlagsAdd(rango: { uid: string }, flags: string[], opciones: { uid: true }): Promise<unknown>;
   logout(): Promise<unknown>;
+  readonly mailbox?: { uidValidity?: number | bigint } | false;
 };
 
 export type ResultadoCorreo = "procesado" | "duplicado" | "ignorado" | "revision" | "error";
@@ -128,6 +148,14 @@ function adjuntosPdf(correo: ParsedMail): AdjuntoPdf[] {
     if (esPdf) salida.push({ nombre: a.filename ?? "albaran.pdf", contenido });
   }
   return salida;
+}
+
+/** El UIDVALIDITY de la carpeta abierta, si el cliente lo expone. */
+function uidValidityDe(cliente: ClienteBuzon): number | null {
+  const v = cliente.mailbox && typeof cliente.mailbox === "object" ? cliente.mailbox.uidValidity : undefined;
+  if (v === undefined || v === null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 function aDetalle(messageId: string, asunto: string, r: ResultadoIngesta): DetalleCorreo {
@@ -215,10 +243,18 @@ export async function revisarBuzon(opciones: OpcionesPasada = {}): Promise<Pasad
       detalle: pasada.detalle.map((d) => ({ ...d, asunto: d.asunto.slice(0, 200) })),
     });
 
+  const remitentes = (await repo.remitentesAdmitidos(cfg.empresaId)).map((r) => r.remitente);
+  if (remitentes.length === 0) {
+    const motivo =
+      "Ningún proveedor tiene remitentes de correo configurados. El buzón no procesa nada mientras sea así: " +
+      "en un buzón compartido, aceptar todo lo que llegue guardaría correo ajeno. Ponlos en la ficha del proveedor.";
+    console.warn("[Recepciones] buzón:", motivo);
+    await cerrar(motivo);
+    return { error: motivo };
+  }
+
   const cliente = opciones.cliente ?? clienteReal(cfg);
   try {
-    const remitentes = (await repo.remitentesAdmitidos(cfg.empresaId)).map((r) => r.remitente);
-    if (remitentes.length === 0) console.warn("[Recepciones] buzón sin remitentes en los proveedores: se acepta todo lo que llegue");
     const activacion = await fechaDeActivacion(cfg.empresaId, opciones.ahora);
     const historico = opciones.historico ?? null;
     const desde = historico ? null : activacion;
@@ -226,18 +262,47 @@ export async function revisarBuzon(opciones: OpcionesPasada = {}): Promise<Pasad
     await cliente.connect();
     const lock = await cliente.getMailboxLock(cfg.carpeta);
     try {
-      const uids = historico ? await cliente.search({ since: historico.desde }, { uid: true }) : await cliente.search({ seen: false, since: activacion }, { uid: true });
-      for (const uid of (uids || []).slice(0, historico ? LOTE_HISTORICO : LOTE)) {
+      // La marca de progreso: hasta qué UID se miró ya. El histórico la ignora
+      // (se está pidiendo justamente lo de antes) y tampoco la mueve.
+      const guardado = await leerProgresoBuzon(cfg.empresaId, cfg.carpeta);
+      const uidValidity = uidValidityDe(cliente);
+      const renumerada = guardado.ultimoUid > 0 && uidValidity !== null && guardado.uidValidity !== null && guardado.uidValidity !== uidValidity;
+      if (renumerada) {
+        console.warn(`[Recepciones] la carpeta ${cfg.carpeta} se ha renumerado (UIDVALIDITY ${guardado.uidValidity} → ${uidValidity}): se vuelve a mirar desde la activación.`);
+      }
+      const ultimoVisto = historico || renumerada ? 0 : guardado.ultimoUid;
+
+      const encontrados = historico
+        ? await cliente.search({ since: historico.desde }, { uid: true })
+        : await cliente.search(ultimoVisto > 0 ? { uid: `${ultimoVisto + 1}:*`, since: activacion } : { since: activacion }, { uid: true });
+
+      // `uid: "N:*"` devuelve además el último mensaje de la carpeta aunque su
+      // UID sea menor que N, así que el filtro no sobra.
+      const uids = (encontrados || [])
+        .filter((uid) => historico || uid > ultimoVisto)
+        .sort((a, b) => a - b)
+        .slice(0, historico ? LOTE_HISTORICO : LOTE);
+
+      let tope = ultimoVisto;
+      let huboError = false;
+      for (const uid of uids) {
         pasada.correos++;
         const d = await procesarUno(cliente, uid, cfg, remitentes, desde);
         pasada.detalle.push(d);
         if (d.resultado === "error") {
           pasada.errores++;
-          continue; // sin leer: se reintenta en la siguiente pasada
+          huboError = true; // la marca no pasa de aquí: se reintenta
+          continue;
         }
         if (d.resultado === "ignorado") pasada.ignorados++;
         else pasada.procesados++;
-        await cliente.messageFlagsAdd({ uid: String(uid) }, ["\\Seen"], { uid: true });
+        if (!huboError) tope = uid;
+      }
+
+      // El histórico no mueve la marca: lo suyo es lo viejo, y lo nuevo lo
+      // sigue trayendo el temporizador.
+      if (!historico && (tope > ultimoVisto || renumerada || guardado.uidValidity !== uidValidity)) {
+        await guardarProgresoBuzon(cfg.empresaId, cfg.carpeta, { uidValidity, ultimoUid: tope } satisfies ProgresoBuzon);
       }
     } finally {
       lock.release();

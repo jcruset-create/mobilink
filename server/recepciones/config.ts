@@ -21,6 +21,12 @@ export const CLAVES = {
    * el muelle si no cuadra. En «0» el albarán queda pendiente de revisión.
    */
   asumirExpedicionCompleta: "correo.asumir_expedicion_completa",
+  /**
+   * Hasta qué UID se ha mirado ya en cada carpeta, con su UIDVALIDITY. Es la
+   * marca de progreso del buzón, y sustituye a marcar los correos como
+   * leídos: ver la cabecera de `buzon.ts`.
+   */
+  progresoBuzon: "buzon.progreso",
 } as const;
 
 export async function leerTextoConfig(empresaId: string, clave: string): Promise<string | null> {
@@ -43,6 +49,36 @@ export async function guardarTextoConfig(empresaId: string, clave: string, valor
 export async function asumirExpedicionCompleta(empresaId: string): Promise<boolean> {
   const v = await leerTextoConfig(empresaId, CLAVES.asumirExpedicionCompleta);
   return v === null || v === "" ? true : v !== "0" && v.toLowerCase() !== "false";
+}
+
+export type ProgresoBuzon = { uidValidity: number | null; ultimoUid: number };
+
+const SIN_PROGRESO: ProgresoBuzon = { uidValidity: null, ultimoUid: 0 };
+
+const claveProgreso = (carpeta: string) => `${CLAVES.progresoBuzon}.${carpeta.toLowerCase()}`;
+
+/**
+ * Hasta dónde se miró la última vez en esta carpeta. Nunca lanza: sin marca
+ * (o con una ilegible) se empieza por el suelo de la activación, y lo que ya
+ * se procesó se reconoce por su Message-ID.
+ */
+export async function leerProgresoBuzon(empresaId: string, carpeta: string): Promise<ProgresoBuzon> {
+  const crudo = await leerTextoConfig(empresaId, claveProgreso(carpeta));
+  if (!crudo) return SIN_PROGRESO;
+  try {
+    const v = JSON.parse(crudo) as Partial<ProgresoBuzon>;
+    const ultimoUid = Number(v.ultimoUid);
+    return {
+      uidValidity: v.uidValidity == null ? null : Number(v.uidValidity),
+      ultimoUid: Number.isFinite(ultimoUid) && ultimoUid > 0 ? ultimoUid : 0,
+    };
+  } catch {
+    return SIN_PROGRESO;
+  }
+}
+
+export async function guardarProgresoBuzon(empresaId: string, carpeta: string, progreso: ProgresoBuzon): Promise<void> {
+  await guardarTextoConfig(empresaId, claveProgreso(carpeta), JSON.stringify(progreso));
 }
 
 /**

@@ -15,8 +15,10 @@
  *   · el albarán que llega ANTES que el pedido queda en revisión y se
  *     reprocesa solo cuando llega el pedido;
  *   · un remitente desconocido se ignora; un correo que no se entiende, también;
- *   · el buzón falso: sólo lo no leído, marca leído lo procesado, deja sin
- *     leer lo que falla, y cada pasada deja su fila;
+ *   · el buzón falso: lee sin tocar ninguna bandera (es un buzón de personas),
+ *     lleva el progreso por UID, no deja avanzar la marca tras un error,
+ *     rehace la marca si la carpeta se renumera, y no procesa nada mientras
+ *     ningún proveedor tenga remitentes;
  *   · el enlace al PDF se descarga de un servidor HTTP local y queda como
  *     ORIGINAL; si el enlace no devuelve un PDF, el albarán se crea igual y el
  *     motivo lo dice.
@@ -110,9 +112,16 @@ async function mensaje(sobre: { de?: string; asunto: string; texto: string; fech
   return { uid, source: await composer.compile().build(), seen: false, date: fecha };
 }
 
-function buzonFalso(mensajes: Mensaje[], opciones: { falloAlAbrir?: string; falloAlLeer?: number } = {}): ClienteBuzon & { mensajes: Mensaje[] } {
+function buzonFalso(
+  mensajes: Mensaje[],
+  opciones: { falloAlAbrir?: string; falloAlLeer?: number; uidValidity?: number } = {}
+): ClienteBuzon & { mensajes: Mensaje[]; flagsAplicadas: string[]; busquedas: Record<string, unknown>[]; messageFlagsAdd(r: { uid: string }, f: string[]): Promise<void> } {
   return {
     mensajes,
+    // Espías: el módulo NO debe escribir en el buzón de nadie.
+    flagsAplicadas: [],
+    busquedas: [],
+    mailbox: { uidValidity: opciones.uidValidity ?? 1 },
     async connect() {
       if (opciones.falloAlAbrir) throw new Error(opciones.falloAlAbrir);
     },
@@ -120,15 +129,26 @@ function buzonFalso(mensajes: Mensaje[], opciones: { falloAlAbrir?: string; fall
       return { release() {} };
     },
     async search(q) {
+      this.busquedas.push({ ...q });
       const diaDesde = q.since ? new Date(new Date(q.since).toDateString()) : null;
-      return mensajes.filter((m) => (q.seen === undefined || m.seen === q.seen) && (!diaDesde || m.date >= diaDesde)).map((m) => m.uid);
+      // `N:*` como en IMAP: el rango, y además el último mensaje de la carpeta.
+      let porUid: (m: Mensaje) => boolean = () => true;
+      if (q.uid) {
+        const desde = Number(String(q.uid).split(":")[0]);
+        const ultimo = Math.max(0, ...mensajes.map((m) => m.uid));
+        porUid = (m) => m.uid >= desde || m.uid === ultimo;
+      }
+      return mensajes
+        .filter((m) => (q.seen === undefined || m.seen === q.seen) && (!diaDesde || m.date >= diaDesde) && porUid(m))
+        .map((m) => m.uid);
     },
     async fetchOne(uid) {
       if (opciones.falloAlLeer !== undefined && String(opciones.falloAlLeer) === uid) throw new Error("se cayó la conexión");
       const m = mensajes.find((x) => String(x.uid) === uid);
       return m ? { source: m.source } : false;
     },
-    async messageFlagsAdd(rango, flags) {
+    async messageFlagsAdd(rango: { uid: string }, flags: string[]) {
+      this.flagsAplicadas.push(`${rango.uid}:${flags.join(",")}`);
       const m = mensajes.find((x) => String(x.uid) === rango.uid);
       if (m && flags.includes("\\Seen")) m.seen = true;
     },
@@ -426,44 +446,91 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
   });
 
   describe("el buzón IMAP (falso)", () => {
-    it("procesa lo no leído, marca leído lo procesado e ignorado, deja sin leer lo que falla y registra la pasada", async () => {
+    it("procesa lo nuevo SIN tocar ninguna bandera del buzón y lleva el progreso por UID", async () => {
       const numero = unico("5694");
       const albaranN = unico("2034");
       const mensajes = [
         await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) }),
         await mensaje({ asunto: asuntoAlbaran(albaranN), texto: correoAlbaran(numero, albaranN), pdf: await pdfDePrueba("X") }),
-        await mensaje({ de: "otro@otro.example", asunto: "Publicidad", texto: "Compre neumáticos" }),
+        await mensaje({ de: "companera@comercialsea.com", asunto: "Reunión del viernes", texto: "¿Nos vemos a las 9?" }),
         await mensaje({ asunto: asuntoPedido("viejo"), texto: correoPedido("viejo"), fecha: new Date(Date.now() - 3 * 24 * 3600 * 1000) }),
       ];
-      const cliente = buzonFalso(mensajes, { falloAlLeer: mensajes[2].uid });
-      const r = await buzon.revisarBuzon({ cliente, config: CFG, origen: "manual" });
-      expect("error" in r).toBe(false);
-      const pasada = r as Exclude<typeof r, { error: string }>;
-      // El viejo queda fuera por la fecha de activación (since por día en IMAP + suelo por instante).
-      expect(pasada.procesados).toBe(2);
-      expect(pasada.errores).toBe(1);
-      expect(mensajes[0].seen).toBe(true);
-      expect(mensajes[1].seen).toBe(true);
-      expect(mensajes[2].seen).toBe(false); // falló al leer: se reintenta
-      const detalle = pasada.detalle.map((d) => d.resultado);
-      expect(detalle).toContain("procesado");
-      expect(detalle).toContain("error");
+      const cliente = buzonFalso(mensajes);
+      const r = (await buzon.revisarBuzon({ cliente, config: CFG, origen: "manual" })) as any;
+      // El viejo queda fuera por el suelo de la activación.
+      expect(r.procesados).toBe(2);
+      expect(r.ignorados).toBe(1);
+      expect(r.errores).toBe(0);
+
+      // Lo que más importa en un buzón de personas: no se ha tocado nada.
+      expect(cliente.flagsAplicadas).toEqual([]);
+      expect(mensajes.every((m) => m.seen === false)).toBe(true);
+      // Y el correo de la compañera no se guarda: ni su texto ni su asunto en rcp_correos.
+      const correos = await api("/correo");
+      expect(correos.body.correos.some((c: any) => c.asunto === "Reunión del viernes")).toBe(false);
 
       const pedidos = await api(`/pedidos?q=${numero}`);
       const ficha = await api(`/pedidos/${pedidos.body.pedidos[0].id}`);
       expect(ficha.body.albaranes[0].estado).toBe("EN_TRANSITO");
 
-      // La siguiente pasada sólo reintenta el que falló (que ahora se ignora por remitente).
+      // Segunda pasada: nada nuevo que mirar, y la búsqueda ya arranca del UID siguiente.
       const cliente2 = buzonFalso(mensajes);
       const r2 = (await buzon.revisarBuzon({ cliente: cliente2, config: CFG, origen: "manual" })) as any;
-      expect(r2.correos).toBe(1);
-      expect(r2.ignorados).toBe(1);
-      expect(mensajes[2].seen).toBe(true);
+      expect(r2.correos).toBe(0);
+      expect(String(cliente2.busquedas[0].uid ?? "")).toMatch(/^\d+:\*$/);
 
+      // Un correo nuevo sí entra.
+      mensajes.push(await mensaje({ asunto: asuntoPedido(unico("5695")), texto: correoPedido(unico("5695")) }));
+      const r3 = (await buzon.revisarBuzon({ cliente: buzonFalso(mensajes), config: CFG })) as any;
+      expect(r3.correos).toBe(1);
+      expect(r3.procesados).toBe(1);
+    });
+
+    it("el correo que falla no deja avanzar la marca y se reintenta en la pasada siguiente", async () => {
+      const numero = unico("5696");
+      const mensajes = [
+        await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) }),
+        await mensaje({ asunto: asuntoPedido(unico("5697")), texto: correoPedido(unico("5697")) }),
+      ];
+      const r = (await buzon.revisarBuzon({ cliente: buzonFalso(mensajes, { falloAlLeer: mensajes[0].uid }), config: CFG })) as any;
+      expect(r.errores).toBe(1);
+      expect(r.procesados).toBe(1);
+
+      // La marca se quedó antes del que falló: la siguiente pasada trae los dos.
+      const cliente2 = buzonFalso(mensajes);
+      const r2 = (await buzon.revisarBuzon({ cliente: cliente2, config: CFG })) as any;
+      expect(r2.correos).toBe(2);
+      expect(r2.procesados).toBe(2); // el que falló, ahora sí; el otro, duplicado
+      const pedidos = await api(`/pedidos?q=${numero}`);
+      expect(pedidos.body.pedidos).toHaveLength(1);
+    });
+
+    it("si la carpeta se renumera (UIDVALIDITY distinto) se vuelve a mirar desde la activación, sin duplicar", async () => {
+      const numero = unico("5698");
+      const mensajes = [await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) })];
+      expect(((await buzon.revisarBuzon({ cliente: buzonFalso(mensajes, { uidValidity: 7 }), config: CFG })) as any).procesados).toBe(1);
+
+      const cliente = buzonFalso(mensajes, { uidValidity: 99 });
+      const r = (await buzon.revisarBuzon({ cliente, config: CFG })) as any;
+      expect(cliente.busquedas[0].uid).toBeUndefined(); // sin rango: se mira todo lo posterior a la activación
+      expect(r.correos).toBe(1);
+      expect(r.procesados).toBe(1); // se relee, pero es duplicado
+      const pedidos = await api(`/pedidos?q=${numero}`);
+      expect(pedidos.body.pedidos).toHaveLength(1);
+    });
+
+    it("sin remitentes en ningún proveedor, el buzón no procesa nada y lo dice", async () => {
+      const proveedores = await api("/proveedores");
+      await api(`/proveedores/${proveedores.body.proveedores[0].id}`, { method: "PATCH", body: { remitentesCorreo: [] } });
+      const mensajes = [await mensaje({ asunto: asuntoPedido(unico("5699")), texto: correoPedido(unico("5699")) })];
+      const cliente = buzonFalso(mensajes);
+      const r = await buzon.revisarBuzon({ cliente, config: CFG });
+      expect("error" in r).toBe(true);
+      expect((r as { error: string }).error).toMatch(/remitentes/i);
+      expect((await api("/pedidos")).body.pedidos).toHaveLength(0);
+      expect(cliente.busquedas).toEqual([]);
       const estado = await api("/correo/buzon");
-      expect(estado.body.pasadas.length).toBeGreaterThanOrEqual(2);
-      expect(estado.body.remitentes).toEqual([REMITENTE]);
-      expect(estado.body.activadoEl).toBeTruthy();
+      expect(estado.body.pasadas[0].error).toMatch(/remitentes/i);
     });
 
     it("un buzón que no abre deja una pasada con su error", async () => {
