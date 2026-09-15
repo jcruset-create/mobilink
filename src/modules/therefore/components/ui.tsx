@@ -113,3 +113,59 @@ export function Dato({ rotulo, valor }: { rotulo: string; valor: ReactNode }) {
     </div>
   );
 }
+
+/** El estado de un análisis: verde si cuadra, ámbar si hay que mirarlo, rosa si falló. */
+const COLOR_ANALISIS: Record<string, string> = {
+  OK: "bg-emerald-500/15 text-emerald-300",
+  REVISAR: "bg-amber-500/15 text-amber-300",
+  ERROR: "bg-rose-500/15 text-rose-300",
+  PENDIENTE: "bg-slate-700 text-slate-300",
+  PROCESANDO: "bg-sky-500/15 text-sky-300",
+};
+
+const ETIQUETA_ANALISIS: Record<string, string> = {
+  OK: "Cuadra",
+  REVISAR: "Revisar",
+  ERROR: "Error",
+  PENDIENTE: "En cola",
+  PROCESANDO: "Analizando",
+  COMPLETADO: "Analizado",
+};
+
+export function ChipAnalisis({ estado }: { estado: string }) {
+  return <Pill className={color(COLOR_ANALISIS, estado)}>{etiqueta(ETIQUETA_ANALISIS, estado)}</Pill>;
+}
+
+/**
+ * Una celda que el parser no leyó bien.
+ *
+ * Dos avisos distintos a propósito: ámbar cuando el valor está pero con poca
+ * confianza, y rosa con «sin leer» cuando no está. Pintarlos igual haría que un
+ * hueco pareciera un dato dudoso, y un hueco hay que rellenarlo a mano.
+ */
+export function Celda({
+  valor,
+  confianza,
+  umbral = 0.85,
+  className = "",
+}: {
+  valor: ReactNode;
+  confianza: number;
+  umbral?: number;
+  className?: string;
+}) {
+  if (valor === null || valor === undefined || valor === "") {
+    return <span className={`text-rose-300 ${className}`}>sin leer</span>;
+  }
+  if (confianza < umbral) {
+    return (
+      <span
+        className={`text-amber-300 ${className}`}
+        title={`Leído con confianza ${(confianza * 100).toFixed(0)} %`}
+      >
+        {valor}
+      </span>
+    );
+  }
+  return <span className={className}>{valor}</span>;
+}

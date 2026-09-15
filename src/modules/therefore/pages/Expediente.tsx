@@ -2,20 +2,24 @@
  * El detalle del expediente.
  *
  * Cabecera con lo que hay que saber de un vistazo —qué piden, cómo de urgente
- * es, cuánto lleva abierto— y debajo las pestañas. En esta fase son tres:
- * resumen, actuaciones e histórico. Las de albaranes analizados, documentos,
- * notificaciones y validaciones aparecen cuando haya algo que enseñar en ellas;
- * una pestaña vacía que promete información es peor que no tenerla.
+ * es, cuánto lleva abierto— y debajo las pestañas: resumen, actuaciones,
+ * albaranes analizados, validaciones, correos e histórico.
+ *
+ * Las de albaranes y validaciones cargan aparte y no con la ficha. Es a
+ * propósito: el análisis puede estar todavía en la cola cuando se abre el
+ * expediente, y quien sólo quiere ver qué se pide no tiene por qué esperar a
+ * que se lea un PDF de sesenta páginas.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Plus } from "lucide-react";
+import { ArrowLeft, Plus, Upload } from "lucide-react";
 import * as api from "../services/api";
 import { textoActuacion } from "../services/bandeja";
 import { useTherefore } from "../contexts/ThereforeContext";
 import {
   Aviso,
+  ChipAnalisis,
   ChipEstado,
   ChipEstadoActuacion,
   ChipPrioridad,
@@ -30,12 +34,25 @@ import {
   btnPrimary,
   btnSecondary,
 } from "../components/ui";
+import AlbaranAnalizadoCard from "../components/AlbaranAnalizado";
+import ValidacionesLista from "../components/Validaciones";
+import { esHistorico, estadoParaPantalla } from "../services/analisis";
 import { COLOR_NOTIFICACION, ETIQUETA_NOTIFICACION, ETIQUETA_TIPO } from "../types";
-import type { Actuacion, Adjunto, Ficha, Notificacion } from "../types";
+import type { Actuacion, Adjunto, AnalisisDeExpediente, Ficha, Notificacion } from "../types";
 import { fmtFecha, fmtFechaHora } from "../../administracion/types";
 import { aCentimos, eurosConSigno } from "../../cash/utils/money";
 
-const PESTANAS = ["Resumen", "Actuaciones", "Correos", "Histórico"] as const;
+const PESTANAS = ["Resumen", "Actuaciones", "Albaranes", "Validaciones", "Correos", "Histórico"] as const;
+
+/**
+ * El umbral por debajo del cual una celda se enseña como dudosa.
+ *
+ * Es el valor por defecto del servidor (`albaran.umbral_confianza_campo`). El
+ * panel no lee la configuración —sólo la ve quien puede editarla— así que usa
+ * el mismo número; el que decide de verdad es el del servidor, que es quien
+ * levanta la validación CAMPOS_CRITICOS.
+ */
+const UMBRAL_CAMPO = 0.85;
 type PestanaDetalle = (typeof PESTANAS)[number];
 
 export default function Expediente() {
@@ -174,6 +191,10 @@ export default function Expediente() {
           onError={setError}
         />
       )}
+      {pestana === "Albaranes" && (
+        <Albaranes expedienteId={e.id} actuaciones={ficha.actuaciones} puedeReanalizar={puede("therefore.actuacion.manage")} />
+      )}
+      {pestana === "Validaciones" && <ValidacionesDelExpediente expedienteId={e.id} />}
       {pestana === "Correos" && <Correos expedienteId={e.id} />}
       {pestana === "Histórico" && <Historico eventos={eventos} />}
 
@@ -219,6 +240,158 @@ export default function Expediente() {
  * se pidió exactamente, y es lo que hay que mirar cuando una actuación no
  * cuadra con lo que el sistema entendió.
  */
+/**
+ * Carga el análisis del expediente. Devuelve también un recargador, porque
+ * adjuntar un PDF o pedir un reanálisis cambia lo que hay que enseñar.
+ */
+function useAnalisis(expedienteId: string) {
+  const [datos, setDatos] = useState<AnalisisDeExpediente | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const cargar = useCallback(async () => {
+    try {
+      setDatos(await api.analisisDeExpediente(expedienteId));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido cargar el análisis");
+    }
+  }, [expedienteId]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  return { datos, error, cargar };
+}
+
+function Albaranes({
+  expedienteId,
+  actuaciones,
+  puedeReanalizar,
+}: {
+  expedienteId: string;
+  actuaciones: Actuacion[];
+  puedeReanalizar: boolean;
+}) {
+  const { datos, error, cargar } = useAnalisis(expedienteId);
+  const [subiendo, setSubiendo] = useState(false);
+  const [errorSubida, setErrorSubida] = useState<string | null>(null);
+
+  async function subir(archivo: File | undefined) {
+    if (!archivo) return;
+    setSubiendo(true);
+    setErrorSubida(null);
+    try {
+      await api.subirDocumento(expedienteId, archivo);
+      /*
+       * El análisis lo hace un worker cada quince segundos, así que justo
+       * después de subir todavía no hay nada. Se recarga igualmente —la fila
+       * aparece «en cola», que es información— y quien mire volverá a entrar.
+       */
+      await cargar();
+    } catch (e) {
+      setErrorSubida(e instanceof Error ? e.message : "No se ha podido subir el documento");
+    } finally {
+      setSubiendo(false);
+    }
+  }
+
+  if (error) return <ErrorBox>{error}</ErrorBox>;
+  if (!datos) return <p className="text-[13px] text-slate-400">Cargando…</p>;
+
+  const vigentes = datos.albaranes.filter((a) => !esHistorico(a));
+  const enCurso = vigentes.filter((a) => estadoParaPantalla(a).enCurso);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className={`${btnSecondary} cursor-pointer`}>
+          <Upload className="mr-1 inline h-3 w-3" />
+          {subiendo ? "Subiendo…" : "Adjuntar PDF"}
+          <input
+            type="file"
+            accept="application/pdf"
+            className="hidden"
+            disabled={subiendo}
+            onChange={(ev) => void subir(ev.target.files?.[0])}
+          />
+        </label>
+        <button onClick={() => void cargar()} className={btnMini}>
+          Actualizar
+        </button>
+        {enCurso.length > 0 && (
+          <span className="text-[12px] text-slate-400">
+            {enCurso.length} en cola: el análisis va por detrás, vuelve en un momento.
+          </span>
+        )}
+      </div>
+
+      {errorSubida && <ErrorBox>{errorSubida}</ErrorBox>}
+
+      {vigentes.length === 0 && (
+        <Aviso tono="info">
+          Ninguna actuación de este expediente pide un albarán, o todavía no ha llegado ninguna.
+        </Aviso>
+      )}
+
+      {vigentes.map((a) => (
+        <div key={a.id} className="space-y-2">
+          <AlbaranAnalizadoCard
+            albaran={a}
+            actuacion={actuaciones.find((x) => x.id === a.actuacionId)}
+            umbralCampo={UMBRAL_CAMPO}
+            puedeReanalizar={puedeReanalizar}
+            onReanalizado={() => void cargar()}
+          />
+        </div>
+      ))}
+
+      {datos.documentos.length > 0 && (
+        <article className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+          <p className="mb-2 text-[13px] font-bold">Documentos</p>
+          <ul className="space-y-1 text-[12px] text-slate-400">
+            {datos.documentos.map((d) => (
+              <li key={d.id} className="flex flex-wrap items-center gap-2">
+                <span className="font-mono">{d.hashArchivo.slice(0, 8)}</span>
+                <span>{d.numeroDocumento ?? "(sin número)"}</span>
+                {d.validacion === "DISCREPANCIA" && (
+                  <Pill className="bg-amber-500/15 text-amber-300">No es la factura del correo</Pill>
+                )}
+              </li>
+            ))}
+          </ul>
+        </article>
+      )}
+    </div>
+  );
+}
+
+function ValidacionesDelExpediente({ expedienteId }: { expedienteId: string }) {
+  const { datos, error } = useAnalisis(expedienteId);
+
+  if (error) return <ErrorBox>{error}</ErrorBox>;
+  if (!datos) return <p className="text-[13px] text-slate-400">Cargando…</p>;
+
+  const vigentes = datos.albaranes.filter((a) => !esHistorico(a));
+  if (vigentes.length === 0) {
+    return <Aviso tono="info">No hay ningún albarán analizado todavía.</Aviso>;
+  }
+
+  return (
+    <div className="space-y-3">
+      {vigentes.map((a) => (
+        <article key={a.id} className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+          <header className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-[13px] font-bold">Albarán {a.numeroSolicitado}</span>
+            <ChipAnalisis estado={a.estadoAnalisis ?? a.estadoProceso} />
+          </header>
+          <ValidacionesLista validaciones={a.validaciones} />
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function Correos({ expedienteId }: { expedienteId: string }) {
   const [datos, setDatos] = useState<{ notificaciones: Notificacion[]; adjuntos: Adjunto[] } | null>(
     null

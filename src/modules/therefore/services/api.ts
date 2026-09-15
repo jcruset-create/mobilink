@@ -12,6 +12,8 @@
 import { sessionHeaders } from "../../sessionHeaders";
 import type {
   Adjunto,
+  AlbaranAnalizado,
+  AnalisisDeExpediente,
   Bootstrap,
   Config,
   Contadores,
@@ -187,4 +189,49 @@ export function leerConfig(): Promise<Config> {
 
 export function guardarConfig(cambios: Partial<Config>): Promise<Config> {
   return pedir("/config", { method: "PUT", body: JSON.stringify(cambios) });
+}
+
+/* ── Análisis de albaranes ───────────────────────────────────────────────── */
+
+export function analisisDeExpediente(id: string): Promise<AnalisisDeExpediente> {
+  return pedir(`/expedientes/${id}/analisis`);
+}
+
+/**
+ * Sube un PDF al expediente.
+ *
+ * Va por `FormData` y **sin** `Content-Type`: el navegador tiene que poner el
+ * suyo con el `boundary`, y ponerlo a mano rompe el multipart de una forma que
+ * el servidor sólo puede describir como «falta el fichero».
+ */
+export async function subirDocumento(
+  expedienteId: string,
+  archivo: File
+): Promise<{ adjuntoId: string; hash: string; reencolados: number }> {
+  const cabeceras = await sessionHeaders();
+  const cuerpo = new FormData();
+  cuerpo.append("archivo", archivo);
+  const r = await fetch(`${BASE}/expedientes/${expedienteId}/documentos`, {
+    method: "POST",
+    headers: cabeceras,
+    body: cuerpo,
+  });
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    throw new ApiError(
+      json?.error ?? "No se ha podido subir el documento",
+      json?.code ?? "ERROR",
+      r.status,
+      json?.detalle
+    );
+  }
+  return json;
+}
+
+export function reanalizar(actuacionId: string): Promise<AlbaranAnalizado> {
+  return pedir(`/actuaciones/${actuacionId}/reanalizar`, { method: "POST" });
+}
+
+export function enlaceDocumento(albaranAnalizadoId: string): Promise<{ url: string }> {
+  return pedir(`/albaranes/${albaranAnalizadoId}/documento`);
 }

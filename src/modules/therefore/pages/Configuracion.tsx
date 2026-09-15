@@ -233,6 +233,97 @@ export default function Configuracion() {
         </div>
       </section>
 
+      {/*
+        Los del análisis del albarán. La tolerancia merece la advertencia que
+        lleva escrita: no está para que cuadren más albaranes, está para que un
+        redondeo de céntimo no llene la cola de revisiones. Subirla a un euro no
+        arregla nada, sólo deja de enseñar los descuadres de un euro.
+      */}
+      <section className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+        <h2 className="mb-1 text-sm font-bold">Análisis de albaranes</h2>
+        <p className="mb-3 text-[12px] text-slate-400">
+          Cuánto tiene que parecerse el número del papel al pedido para darlo por bueno, y a partir
+          de qué diferencia se pide revisión.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <TextField
+            label="Coincidencia segura (0 a 1)"
+            value={String(config.albaran.umbrales.match)}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                albaran: {
+                  ...config.albaran,
+                  umbrales: { ...config.albaran.umbrales, match: num(v, config.albaran.umbrales.match) },
+                },
+              })
+            }
+          />
+          <TextField
+            label="Coincidencia dudosa (0 a 1)"
+            value={String(config.albaran.umbrales.incierto)}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                albaran: {
+                  ...config.albaran,
+                  umbrales: {
+                    ...config.albaran.umbrales,
+                    incierto: num(v, config.albaran.umbrales.incierto),
+                  },
+                },
+              })
+            }
+          />
+          <TextField
+            label="Tolerancia en céntimos (sólo redondeos)"
+            value={String(config.albaran.toleranciaCentimos)}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                albaran: {
+                  ...config.albaran,
+                  toleranciaCentimos: num(v, config.albaran.toleranciaCentimos),
+                },
+              })
+            }
+          />
+          <TextField
+            label="Confianza mínima por campo (0 a 1)"
+            value={String(config.albaran.umbralConfianzaCampo)}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                albaran: {
+                  ...config.albaran,
+                  umbralConfianzaCampo: num(v, config.albaran.umbralConfianzaCampo),
+                },
+              })
+            }
+          />
+          <TextField
+            label="Intentos antes de rendirse"
+            value={String(config.albaran.maxIntentos)}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                albaran: { ...config.albaran, maxIntentos: num(v, config.albaran.maxIntentos) },
+              })
+            }
+          />
+          <TextField
+            label="Páginas máximas por documento"
+            value={String(config.albaran.maxPaginas)}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                albaran: { ...config.albaran, maxPaginas: num(v, config.albaran.maxPaginas) },
+              })
+            }
+          />
+        </div>
+      </section>
+
       <div className="flex items-center gap-3">
         <button onClick={() => void guardar()} className={btnPrimary} disabled={guardando}>
           {guardando ? "Guardando…" : "Guardar"}
