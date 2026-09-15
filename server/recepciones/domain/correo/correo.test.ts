@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectarTipo, localidadDe, parsearCorreo } from "./index.ts";
+import { asuntoLimpio, detectarTipo, esConcepto, filaDeTabla, localidadDe, parsearCorreo, remitenteReenviado } from "./index.ts";
 
 /** El correo de pedido tal y como lo describe el encargo (valor en la línea siguiente). */
 const PEDIDO_SOLEDAD = `
@@ -145,5 +145,141 @@ describe("localidadDe", () => {
     expect(localidadDe("TARRAGONA")).toBe("TARRAGONA");
     expect(localidadDe("08243 - MANRESA (BARCELONA)")).toBe("MANRESA");
     expect(localidadDe(null)).toBeNull();
+  });
+});
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * El correo REAL de Soledad, copiado tal cual de un reenvío del 15/09/2026.
+ * No lleva ni una etiqueta: el albarán está en el asunto, el pedido en una
+ * frase y el contenido en una tabla. Si este test se rompe, es que Soledad ha
+ * cambiado la plantilla: hay que traer el correo nuevo, no adaptar el test.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+const ASUNTO_REAL = "Fwd: Emisión de Albarán B /2028450459 con fecha 15/09/2026.";
+
+const ALBARAN_REAL = `---------- Forwarded message ---------
+From: noreply@gruposoledad.net
+Date: Tue, 15 Sep 2026 15:08:05 +0000
+Subject: Emisión de Albarán B /2028450459 con fecha 15/09/2026.
+To: jordi.cruset@gruposoledad.net
+
+Información Entrega de Pedido
+
+Estimado COMERCIAL SEA, S.A.,
+tu pedido 5687439 ha sido emitido por nuestro centro logístico y la
+entrega se realizará a través de TRANSAHER.
+
+Para ver el estado del envío accede al siguiente link:
+PULSA ESTE ENLACE PARA ACCEDER INFORMACION SEGUIMIENTO
+<http://www.transaher.es/index.php/seguimiento-de-envios>
+
+Escribe el número de pedido entero T0100007878018 en el apartado
+¿Dónde está tu envío? y te mostraremos el número de expedición del pedido.
+
+Si tienes alguna duda puedes llamarnos al
+965112533 o escribirnos a
+http://www.transaher.es/index.php/seguimiento-de-envios  y pregunta por el
+número de expedición facilitado.
+
+El pedido será entregado a:
+COMERCIAL SEA, S.A.
+PI RIU CLAR C/COURE 27,
+43006 TARRAGONA
+TARRAGONA ESPAÑA
+
+El contenido del pedido es:
+
+Cantidad
+Descripción
+Importe
+2.00 245/70X17.5 HANKOOK AH35 136M 248.45
+-2.00 10 EUR DTO UD HANKOOK 10.00
+2.00 S.I.Gestión de NFU Cat.D1T 6.05
+Pulsar enlace para ver albarán adjunto.
+<https://ws.gruposoledad.com/b2b?serviceName=descargarAlbaran&message=execute&r=L1VOSURBREVT&p=VVNVQVJJTz1hZG1pbmlzdHJhZG9y&e=MQ==>
+
+Si tienes alguna duda, por favor NO respondas a esta dirección de e-mail.
+Puedes contactar con nosotros utilizando nuestro servicio de chat entre las
+9:00 -20:00 horas, nuestro
+e-mail b2b@gruposoledad.com o nuestro teléfono 911 910 910.
+
+Un saludo,
+
+Grupo Soledad
+`;
+
+describe("parsearCorreo · el albarán real de Soledad", () => {
+  const r = parsearCorreo(ASUNTO_REAL, ALBARAN_REAL);
+
+  it("lo reconoce como albarán aunque venga reenviado", () => {
+    expect(r.tipo).toBe("ALBARAN");
+  });
+
+  it("saca el albarán del asunto y el pedido de la frase", () => {
+    expect(r.albaran!.numeroAlbaran).toBe("B/2028450459");
+    expect(r.albaran!.numeroPedido).toBe("5687439");
+  });
+
+  it("no confunde el número de expedición del transportista con el del pedido", () => {
+    expect(r.albaran!.numeroPedido).not.toContain("0100007878018");
+  });
+
+  it("lee la fecha del asunto y el transportista de la frase", () => {
+    expect(r.albaran!.fecha).toBe("2026-09-15");
+    expect(r.albaran!.transportista).toBe("TRANSAHER");
+  });
+
+  it("lee la tabla: sólo el neumático es mercancía", () => {
+    expect(r.albaran!.lineas).toEqual([
+      { cantidad: 2, descripcion: "245/70X17.5 HANKOOK AH35 136M", precioCentimos: 24845, referencia: null },
+    ]);
+  });
+
+  it("guarda el descuento y la gestión de NFU aparte, sin tirarlos", () => {
+    expect(r.albaran!.conceptos.map((l) => l.descripcion)).toEqual(["10 EUR DTO UD HANKOOK", "S.I.Gestión de NFU Cat.D1T"]);
+  });
+
+  it("se queda con el enlace de descarga del albarán, no con el del transportista", () => {
+    expect(r.albaran!.enlacesPdf[0]).toContain("descargarAlbaran");
+  });
+
+  it("no tiene nada que avisar", () => {
+    expect(r.avisos).toEqual([]);
+  });
+});
+
+describe("piezas sueltas del correo real", () => {
+  it("asuntoLimpio quita los prefijos de reenvío", () => {
+    expect(asuntoLimpio("Fwd: RV: Emisión de Albarán B /1234")).toBe("Emisión de Albarán B /1234");
+    expect(asuntoLimpio("Emisión de Albarán")).toBe("Emisión de Albarán");
+  });
+
+  it("remitenteReenviado encuentra el remitente original", () => {
+    expect(remitenteReenviado(ALBARAN_REAL)).toBe("noreply@gruposoledad.net");
+    expect(remitenteReenviado("Sin cabeceras de reenvío")).toBeNull();
+  });
+
+  it("filaDeTabla sólo acepta filas de verdad", () => {
+    expect(filaDeTabla("2.00 245/70X17.5 HANKOOK AH35 136M 248.45")).toEqual({
+      cantidad: 2,
+      descripcion: "245/70X17.5 HANKOOK AH35 136M",
+      precioCentimos: 24845,
+      referencia: null,
+    });
+    expect(filaDeTabla("43006 TARRAGONA")).toBeNull();
+    expect(filaDeTabla("9:00 -20:00 horas, nuestro")).toBeNull();
+    expect(filaDeTabla("2016/679 y a la Ley Orgánica 3/2018 de")).toBeNull();
+    expect(filaDeTabla("Cantidad")).toBeNull();
+  });
+
+  it("esConcepto deja pasar la mercancía y para lo que sólo se cobra", () => {
+    expect(esConcepto({ cantidad: 2, descripcion: "245/70X17.5 HANKOOK AH35 136M" })).toBe(false);
+    expect(esConcepto({ cantidad: -2, descripcion: "10 EUR DTO UD HANKOOK" })).toBe(true);
+    expect(esConcepto({ cantidad: 2, descripcion: "S.I.Gestión de NFU Cat.D1T" })).toBe(true);
+  });
+
+  it("localidadDe quita el país de la última línea", () => {
+    expect(localidadDe("PI RIU CLAR C/COURE 27,\n43006 TARRAGONA\nTARRAGONA ESPAÑA")).toBe("TARRAGONA");
   });
 });

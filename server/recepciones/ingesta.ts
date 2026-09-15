@@ -33,7 +33,7 @@ import { createHash } from "node:crypto";
 import { asumirExpedicionCompleta } from "./config.ts";
 import { descripcionNormalizada } from "./domain/articulos.ts";
 import { pendienteDeExpedir } from "./domain/cantidades.ts";
-import { normalizar, parsearCorreo, type CorreoParseado } from "./domain/correo/index.ts";
+import { normalizar, parsearCorreo, remitenteReenviado, type CorreoParseado } from "./domain/correo/index.ts";
 import { normalizarNumero } from "./domain/numero.ts";
 import { ErrorRecepciones } from "./errors.ts";
 import * as repo from "./repository.ts";
@@ -162,9 +162,16 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
   };
 
   try {
-    const proveedor = await proveedorDe(ctx.empresaId, correo.remitente ?? "");
+    // Si el correo llega reenviado por una persona, el remitente del sobre es
+    // ella, no el proveedor: se mira también el «From:» del bloque reenviado.
+    // Sólo para saber DE QUIÉN es; quién puede meter correo lo sigue
+    // decidiendo el remitente del sobre, antes de llegar hasta aquí.
+    const reenviadoPor = remitenteReenviado(correo.texto);
+    const proveedor =
+      (await proveedorDe(ctx.empresaId, correo.remitente ?? "")) ?? (reenviadoPor ? await proveedorDe(ctx.empresaId, reenviadoPor) : null);
     if (!proveedor) {
-      return terminar({ resultado: "IGNORADO", motivo: `El remitente ${correo.remitente ?? "(vacío)"} no es de ningún proveedor conocido.` });
+      const quien = reenviadoPor ? `${correo.remitente ?? "(vacío)"} (reenvía un correo de ${reenviadoPor})` : (correo.remitente ?? "(vacío)");
+      return terminar({ resultado: "IGNORADO", motivo: `El remitente ${quien} no es de ningún proveedor conocido.` });
     }
 
     const leido = parsearCorreo(correo.asunto, correo.texto);

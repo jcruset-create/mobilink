@@ -17,6 +17,12 @@ import { Aviso, EmptyRow, ErrorBox, Modal, Pill, TableWrap, btnMini, btnPrimary,
 import { COLOR_RESULTADO_CORREO, ETIQUETA_RESULTADO_CORREO, type Correo as TCorreo, type EstadoBuzon } from "../types";
 import { fmtFechaHora } from "../../administracion/types";
 
+/** El resultado por correo de una pasada viene en minúsculas y abreviado. */
+function colorDetalle(resultado: string): string {
+  const clave = resultado === "revision" ? "PENDIENTE_REVISION" : resultado.toUpperCase();
+  return COLOR_RESULTADO_CORREO[clave] ?? "bg-slate-600/40 text-slate-300";
+}
+
 export default function Correo() {
   const { puede, refrescar } = useRecepciones();
   const [estado, setEstado] = useState<EstadoBuzon | null>(null);
@@ -123,6 +129,20 @@ export default function Correo() {
             <>
               <div className="mt-1 text-sm">{fmtFechaHora(estado.pasadas[0].iniciada_at)} · {estado.pasadas[0].origen}</div>
               <div className={`text-[12px] ${estado.pasadas[0].error ? "text-rose-300" : "text-slate-400"}`}>{estado.pasadas[0].error ?? resumenPasada(estado.pasadas[0])}</div>
+              {/* Correo a correo. Un correo descartado por remitente o por
+                  fecha no llega a la tabla de abajo, así que éste es el único
+                  sitio donde se puede ver POR QUÉ no se procesó. */}
+              {estado.pasadas[0].detalle.length > 0 && (
+                <ul className="mt-2 max-h-40 space-y-1 overflow-auto border-t border-slate-700 pt-2">
+                  {estado.pasadas[0].detalle.map((d, i) => (
+                    <li key={`${d.messageId}-${i}`} className="text-[11px] leading-tight">
+                      <Pill className={colorDetalle(d.resultado)}>{d.resultado}</Pill>{" "}
+                      <span className="text-slate-300">{d.asunto || "(sin asunto)"}</span>
+                      {d.error && <div className="text-slate-500">{d.error}</div>}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </>
           ) : (
             <div className="mt-1 text-sm text-slate-500">Todavía ninguna.</div>
