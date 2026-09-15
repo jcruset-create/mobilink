@@ -147,14 +147,14 @@ Importar .eml (panel)        ──┤──► procesarFuente() ─► simplePa
   (documentadas en `.env.example`). Sin ellas el buzón queda apagado y todo
   sigue funcionando por `.eml` importado a mano. En producción:
   `imap.comercialsea.com` (cdmon) y `pedidos@comercialsea.com`.
-- **El buzón es de trabajo, no dedicado**, así que el módulo lo lee como
-  invitado: no marca `\Seen` ni toca ninguna bandera, y lleva su avance por
-  UID en `rcp_config` (`buzon.progreso.<carpeta>`, con el UIDVALIDITY). Un
-  correo que falla no deja avanzar la marca. Y sin remitentes configurados en
-  ningún proveedor, el buzón no procesa nada: en un buzón compartido, aceptar
-  todo guardaría correo ajeno en la base. Lo recomendable en producción es una
-  carpeta dedicada con una regla de cdmon, o directamente un buzón dedicado
-  (la credencial de la variable abre el buzón entero).
+- **El buzón es dedicado** (nadie trabaja dentro), y aun así el módulo no
+  escribe en él: no marca `\Seen` ni toca ninguna bandera, y lleva su avance
+  por UID en `rcp_config` (`buzon.progreso.<carpeta>`, con el UIDVALIDITY).
+  Con `\Seen`, un vistazo por webmail bastaría para saltarse un correo o para
+  reprocesarlos todos; el UID sólo lo mueve este módulo. Un correo que falla
+  no deja avanzar la marca. Y sin remitentes configurados en ningún proveedor
+  el buzón no procesa nada: también llega publicidad, y guardarla sería meter
+  su cuerpo en la base.
 - **Rutas**: `GET /correo/buzon` (estado, remitentes, pasadas, correos en
   revisión) · `PUT /correo/config` · `POST /correo/buzon/revisar` ·
   `POST /correo/buzon/historico {desde}` · `POST /correo/eml` (multipart
