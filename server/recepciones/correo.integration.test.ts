@@ -15,10 +15,10 @@
  *   · el albarán que llega ANTES que el pedido queda en revisión y se
  *     reprocesa solo cuando llega el pedido;
  *   · un remitente desconocido se ignora; un correo que no se entiende, también;
- *   · el buzón falso: lee sin tocar ninguna bandera (es un buzón de personas),
- *     lleva el progreso por UID, no deja avanzar la marca tras un error,
- *     rehace la marca si la carpeta se renumera, y no procesa nada mientras
- *     ningún proveedor tenga remitentes;
+ *   · el buzón falso: lee sin escribir (ninguna bandera tocada), lleva el
+ *     progreso por UID, no deja avanzar la marca tras un error, rehace la
+ *     marca si la carpeta se renumera, y no procesa nada mientras ningún
+ *     proveedor tenga remitentes;
  *   · el enlace al PDF se descarga de un servidor HTTP local y queda como
  *     ORIGINAL; si el enlace no devuelve un PDF, el albarán se crea igual y el
  *     motivo lo dice.
@@ -452,7 +452,7 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
       const mensajes = [
         await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) }),
         await mensaje({ asunto: asuntoAlbaran(albaranN), texto: correoAlbaran(numero, albaranN), pdf: await pdfDePrueba("X") }),
-        await mensaje({ de: "companera@comercialsea.com", asunto: "Reunión del viernes", texto: "¿Nos vemos a las 9?" }),
+        await mensaje({ de: "newsletter@publicidad.example", asunto: "Ofertas de la semana", texto: "Compre neumáticos baratos" }),
         await mensaje({ asunto: asuntoPedido("viejo"), texto: correoPedido("viejo"), fecha: new Date(Date.now() - 3 * 24 * 3600 * 1000) }),
       ];
       const cliente = buzonFalso(mensajes);
@@ -462,12 +462,12 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
       expect(r.ignorados).toBe(1);
       expect(r.errores).toBe(0);
 
-      // Lo que más importa en un buzón de personas: no se ha tocado nada.
+      // No se escribe en el buzón: ni una bandera.
       expect(cliente.flagsAplicadas).toEqual([]);
       expect(mensajes.every((m) => m.seen === false)).toBe(true);
-      // Y el correo de la compañera no se guarda: ni su texto ni su asunto en rcp_correos.
+      // Y lo que no es de un proveedor no se guarda: ni su texto ni su asunto.
       const correos = await api("/correo");
-      expect(correos.body.correos.some((c: any) => c.asunto === "Reunión del viernes")).toBe(false);
+      expect(correos.body.correos.some((c: any) => c.asunto === "Ofertas de la semana")).toBe(false);
 
       const pedidos = await api(`/pedidos?q=${numero}`);
       const ficha = await api(`/pedidos/${pedidos.body.pedidos[0].id}`);

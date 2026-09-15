@@ -10,29 +10,35 @@
  * MIME, saca los PDF adjuntos y llama a `procesarCorreo`, que es la MISMA
  * puerta por la que entra un `.eml` importado a mano desde el panel.
  *
- * ── El buzón puede ser de personas: aquí se entra sin tocar nada ────────────
+ * ── Se lee sin escribir: el avance se lleva aparte ──────────────────────────
  *
- * El buzón real es `pedidos@…`, donde además de los avisos del proveedor hay
- * correo de gente que trabaja. Por eso Mobilink lo lee como un invitado:
+ * El buzón es dedicado (`pedidos@…`, en cdmon; nadie trabaja dentro), pero aun
+ * así este módulo NO escribe en él. Cuatro reglas:
  *
- * · NO SE TOCA NINGUNA BANDERA. Marcar `\Seen` le borraría a una persona la
- *   señal de «esto está sin leer» en SUS correos. El progreso se lleva aparte,
- *   en `rcp_config` (`buzon.progreso.<carpeta>`): hasta qué UID se miró ya,
- *   junto con el UIDVALIDITY de la carpeta. Si el servidor renumera la carpeta
- *   (UIDVALIDITY distinto), la marca se descarta y se vuelve a mirar desde el
- *   suelo de la activación: repetir es inofensivo porque el Message-ID ya
- *   identifica lo procesado, y perderse un albarán no lo es.
+ * · NO SE TOCA NINGUNA BANDERA. El progreso va en `rcp_config`
+ *   (`buzon.progreso.<carpeta>`): hasta qué UID se miró ya, junto con el
+ *   UIDVALIDITY de la carpeta. Se hace así y no con `\Seen` porque el estado
+ *   del buzón lo puede cambiar cualquiera —alguien que abra el webmail para
+ *   comprobar si llegó un albarán deja «leído» lo que no se ha procesado, y
+ *   basta un «marcar como no leído» para volver a procesarlo todo—, mientras
+ *   que el UID sólo lo mueve este módulo. Además deja el buzón intacto el día
+ *   que alguien mire, y no hace falta permiso de escritura.
+ *   Si el servidor renumera la carpeta (UIDVALIDITY distinto), la marca se
+ *   descarta y se vuelve a mirar desde el suelo de la activación: repetir es
+ *   inofensivo porque el Message-ID ya identifica lo procesado, y perderse un
+ *   albarán no lo es.
  * · SÓLO SE LEE LO POSTERIOR A LA ACTIVACIÓN (`buzon.activado_el`, que no
  *   cambia con un reinicio). Lo anterior se carga a propósito con la carga del
  *   histórico, nunca por accidente.
  * · UN CORREO QUE FALLA NO DEJA AVANZAR LA MARCA, así que se reintenta en la
  *   pasada siguiente. Los que vengan detrás sí se procesan; volver a pasarlos
  *   es inocuo (el UNIQUE de `message_id` los reconoce).
- * · SIN REMITENTES CONFIGURADOS NO SE PROCESA NADA. En un buzón compartido,
- *   aceptar «todo lo que llegue» sería copiar a la base correos de clientes y
- *   de compañeros que no son de ningún proveedor. Los remitentes admitidos
- *   viven en `rcp_proveedores.remitentes_correo`; el `.eml` importado a mano
- *   sí se acepta sin lista, porque lo trae una persona a propósito.
+ * · SIN REMITENTES CONFIGURADOS NO SE PROCESA NADA. A un buzón dedicado
+ *   también le llega publicidad y correo equivocado, y guardarlo sería meter
+ *   en la base el cuerpo de correos que no son de nadie de aquí. Los
+ *   remitentes admitidos viven en `rcp_proveedores.remitentes_correo`; el
+ *   `.eml` importado a mano sí se acepta sin lista, porque lo trae una persona
+ *   a propósito.
  *
  * Configuración (variables de entorno):
  *   RECEPCIONES_IMAP_HOST        servidor de entrada
@@ -247,7 +253,7 @@ export async function revisarBuzon(opciones: OpcionesPasada = {}): Promise<Pasad
   if (remitentes.length === 0) {
     const motivo =
       "Ningún proveedor tiene remitentes de correo configurados. El buzón no procesa nada mientras sea así: " +
-      "en un buzón compartido, aceptar todo lo que llegue guardaría correo ajeno. Ponlos en la ficha del proveedor.";
+      "aceptar todo lo que llegue guardaría también la publicidad y el correo equivocado. Ponlos en la ficha del proveedor.";
     console.warn("[Recepciones] buzón:", motivo);
     await cerrar(motivo);
     return { error: motivo };
