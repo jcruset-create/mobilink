@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 import '../config.dart';
+import 'copia_local.dart';
 import 'offline_store.dart';
 
 /// ¿El error indica falta de conexión (no un error real del servidor)?
@@ -171,7 +171,15 @@ class ApiService {
             final streamed = await req.send().timeout(const Duration(seconds: 40));
             await streamed.stream.drain();
             ok = streamed.statusCode == 200;
-            if (ok) { try { await f.delete(); } catch (_) {} }
+            /*
+             * Antes aquí se borraba el fichero. Se deja: la copia en la tablet
+             * es justamente para cuando la foto se pierde DESPUÉS de subir, y
+             * borrarla al recibir el 200 es quitarla en el único momento en que
+             * ya no hace falta para la cola pero sí para el operario.
+             *
+             * Caduca sola a los 30 días o al llegar al giga.
+             */
+            if (ok) await CopiaLocal.marcarSubida(path);
           }
         } else if (type == 'save_conductor') {
           final res = await http
@@ -696,6 +704,16 @@ class ApiService {
 
   Future<Map<String, dynamic>> uploadFile(
       int id, File file, String kind, {String? actionId}) async {
+    /*
+     * La copia se hace ANTES de intentar subir, no solo cuando falla la red.
+     *
+     * Ésta es la vía directa —matrícula y firma— y hasta ahora era la única
+     * que no dejaba rastro en la tablet: si salía bien, la foto existía solo
+     * en el servidor; si la app moría a mitad de la subida, no existía en
+     * ninguna parte. El fichero que llega aquí está en la caché temporal del
+     * sistema, que Android vacía cuando le hace falta sitio.
+     */
+    final copia = await CopiaLocal.guardar(file, assistanceId: id, kind: kind);
     try {
       final req = http.MultipartRequest(
         'POST',
@@ -715,13 +733,14 @@ class ApiService {
         throw Exception(data['error'] ?? 'Error subiendo foto');
       }
       OfflineStore.offline.value = false;
+      await CopiaLocal.marcarSubida(copia);
       return data;
     } catch (e) {
       if (_isNetworkError(e)) {
-        // Sin red → copiar el archivo a almacenamiento persistente y encolar
+        // Sin red → encolar. La copia ya está hecha arriba, así que se encola
+        // ésa: no hace falta una segunda.
         OfflineStore.offline.value = true;
-        final persisted = await _persistFile(file, kind);
-        await OfflineStore.enqueueUpload(assistanceId: id, kind: kind, localPath: persisted);
+        await OfflineStore.enqueueUpload(assistanceId: id, kind: kind, localPath: copia);
         return {'plateAction': 'none', 'offline': true};
       }
       rethrow;
@@ -732,21 +751,18 @@ class ApiService {
   /// la encola en el outbox (con reintentos e idempotencia) y dispara la
   /// subida sin bloquear. El operario puede seguir con el siguiente paso.
   Future<void> uploadFileInBackground(int id, File file, String kind) async {
-    final persisted = await _persistFile(file, kind);
+    final persisted = await _persistFile(file, kind, id);
     await OfflineStore.enqueueUpload(assistanceId: id, kind: kind, localPath: persisted);
     // Dispara la subida ya (sin esperar). Si falla, reintenta en el próximo
     // refresco de la lista (getAssistances → flushOutbox).
     unawaited(flushOutbox());
   }
 
-  // Copia un archivo a un directorio permanente (sobrevive hasta subirse)
-  Future<String> _persistFile(File file, String kind) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final outDir = Directory('${dir.path}/offline_uploads');
-    if (!await outDir.exists()) await outDir.create(recursive: true);
-    final ext = file.path.split('.').last;
-    final dest = '${outDir.path}/${kind}_${DateTime.now().microsecondsSinceEpoch}.$ext';
-    await file.copy(dest);
-    return dest;
-  }
+  /// Copia la foto al almacenamiento permanente y devuelve su ruta.
+  ///
+  /// Es la MISMA copia que se queda en la tablet después de subir: la que
+  /// viaja y la que se guarda son el mismo fichero, así que esto no ocupa el
+  /// doble. Lo que cambia al subir es una marca, no el sitio.
+  Future<String> _persistFile(File file, String kind, int assistanceId) =>
+      CopiaLocal.guardar(file, assistanceId: assistanceId, kind: kind);
 }
