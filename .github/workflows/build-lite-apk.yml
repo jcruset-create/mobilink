@@ -98,6 +98,24 @@ jobs:
 
       - run: flutter analyze --no-fatal-infos
 
+      # ¿Hace falta todavía el jetifier?
+      #
+      # `android.enableJetifier=true` existe para traducir a AndroidX las
+      # bibliotecas que todavía usan la vieja support library de Android. Es
+      # una transformación cara —es donde Assist se quedó sin memoria— y hoy
+      # probablemente no la necesite nadie, pero «probablemente» no basta para
+      # quitar una bandera: si alguna dependencia la necesitaba, lo que sale no
+      # es un error de compilación sino un cierre inesperado en el terminal.
+      #
+      # `checkJetifier` es la tarea que AGP trae justo para responder esto:
+      # recorre el grafo de dependencias y NOMBRA las que aún la necesitan.
+      # De momento solo informa (no rompe el build) mientras se decide.
+      - name: ¿Hace falta el jetifier?
+        continue-on-error: true
+        run: |
+          flutter build apk --release --config-only
+          cd android && ./gradlew checkJetifier --no-daemon
+
       # Diagnóstico: solo longitudes, nunca el contenido. Sirve para distinguir
       # "el secret no existe" de "existe pero está mal pegado".
       - name: Estado de los secrets de firma
