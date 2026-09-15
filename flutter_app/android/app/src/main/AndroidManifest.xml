@@ -42,6 +42,11 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Copia de las fotos en la Galería del terminal. De Android 10 en
+         adelante se escribe por MediaStore sin permiso alguno; el
+         maxSdkVersion evita pedirlo donde ya no hace falta. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <queries>
         <!-- Android 11 o superior esconde las apps que no se declaran aqui.

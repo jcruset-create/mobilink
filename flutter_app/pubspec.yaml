@@ -36,6 +36,11 @@ dependencies:
   # vivía en SharedPreferences en texto plano.
   local_auth: ^2.3.0
   flutter_secure_storage: ^9.2.2
+  # ── Copia local de las fotos ─────────────────────────────────────────
+  # gal copia la foto al álbum del terminal. La copia que sirve para
+  # reenviar es la privada de la app (services/copia_local.dart); ésta es
+  # la que sigue estando si se reinstala la app o falla la propia app.
+  gal: ^2.3.0
 
 dev_dependencies:
   flutter_test:
