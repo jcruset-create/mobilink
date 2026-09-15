@@ -13,6 +13,10 @@ import { sessionHeaders } from "../../sessionHeaders";
 import type {
   Bootstrap,
   Contadores,
+  Correo,
+  EstadoBuzon,
+  ResultadoEml,
+  ResultadoPasada,
   FichaAlbaran,
   FichaPedido,
   FichaRecepcion,
@@ -159,3 +163,22 @@ export const actualizarProveedor = (id: string, datos: Partial<{ nombre: string;
 export const listarMapeos = (proveedorId?: string) => pedir<{ mapeos: MapeoArticulo[] }>(`/mapeo${query({ proveedorId })}`);
 export const confirmarMapeo = (datos: { proveedorId: string; descripcionProveedor: string; productoTexto?: string; productoId?: string; ean?: string; referenciaProveedor?: string }) =>
   pedir<{ mapeo: MapeoArticulo }>("/mapeo", json(datos));
+
+/* ── Fase 2: correo del proveedor ────────────────────────────────────────── */
+
+export const estadoBuzon = () => pedir<EstadoBuzon>("/correo/buzon");
+export const revisarBuzon = () => pedir<ResultadoPasada>("/correo/buzon/revisar", json({}));
+export const cargarHistorico = (desde: string) => pedir<ResultadoPasada>("/correo/buzon/historico", json({ desde }));
+export const guardarConfigCorreo = (datos: { asumirExpedicionCompleta?: boolean }) =>
+  pedir<{ asumirExpedicionCompleta: boolean }>("/correo/config", json(datos, "PUT"));
+export const importarEml = (archivo: File) => {
+  const form = new FormData();
+  form.append("archivo", archivo, archivo.name);
+  return pedir<ResultadoEml>("/correo/eml", { method: "POST", body: form });
+};
+export const listarCorreos = (f: { resultado?: string; tipo?: string }) => pedir<{ correos: Correo[] }>(`/correo${query(f)}`);
+export const fichaCorreo = (id: string) => pedir<{ correo: Correo }>(`/correo/${id}`);
+export const reprocesarCorreo = (id: string) =>
+  pedir<{ correoId: string; resultado: string; motivo: string | null; pedidoId: string | null; albaranId: string | null }>(`/correo/${id}/reprocesar`, json({}));
+export const descargarOriginal = (albaranId: string, enlace?: string) =>
+  pedir<{ documento: FichaAlbaran["documentos"][number] }>(`/albaranes/${albaranId}/original/descargar`, json({ enlace }));

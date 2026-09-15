@@ -73,7 +73,9 @@ export default function Pedido() {
           <Dato rotulo="Transportista" valor={pedido.transportista} />
           <Dato rotulo="Usuario pedido" valor={pedido.usuarioPedido} />
           <Dato rotulo="Creado por" valor={pedido.creadoNombre} />
-          <Dato rotulo="Origen del dato" valor={pedido.origen === "MANUAL" ? "Manual" : "Correo"} />
+          <Dato rotulo="Origen del dato" valor={pedido.origen === "MANUAL" ? "Manual" : "Correo del proveedor"} />
+          <Dato rotulo="Cliente (según proveedor)" valor={pedido.clienteProveedor} />
+          <Dato rotulo="Dirección de destino" valor={pedido.destinoTexto ? <span className="whitespace-pre-line">{pedido.destinoTexto}</span> : null} />
           {pedido.canceladoMotivo && <Dato rotulo="Cancelado" valor={pedido.canceladoMotivo} />}
         </div>
         {pedido.observaciones && <p className="mt-2 text-[13px] text-slate-400">{pedido.observaciones}</p>}

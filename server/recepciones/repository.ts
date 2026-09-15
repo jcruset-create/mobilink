@@ -78,6 +78,8 @@ export type Pedido = {
   centroNombre: string;
   almacenOrigen: string | null;
   transportista: string | null;
+  destinoTexto: string | null;
+  clienteProveedor: string | null;
   estado: EstadoPedido;
   canceladoAt: string | null;
   canceladoMotivo: string | null;
@@ -118,6 +120,7 @@ export type Albaran = {
   cerradoMotivo: string | null;
   observaciones: string | null;
   origen: string;
+  enlacePdfProveedor: string | null;
   centroId: string | null;
   centroNombre: string;
   creadoNombre: string | null;
@@ -285,6 +288,8 @@ const aPedido = (r: any): Pedido => ({
   centroNombre: r.centro_nombre ?? "",
   almacenOrigen: r.almacen_origen ?? null,
   transportista: r.transportista ?? null,
+  destinoTexto: r.destino_texto ?? null,
+  clienteProveedor: r.cliente_proveedor ?? null,
   estado: r.estado,
   canceladoAt: iso(r.cancelado_at),
   canceladoMotivo: r.cancelado_motivo ?? null,
@@ -325,6 +330,7 @@ const aAlbaran = (r: any): Albaran => ({
   cerradoMotivo: r.cerrado_motivo ?? null,
   observaciones: r.observaciones ?? null,
   origen: r.origen,
+  enlacePdfProveedor: r.enlace_pdf_proveedor ?? null,
   centroId: r.centro_id ?? null,
   centroNombre: r.centro_nombre ?? "",
   creadoNombre: r.creado_nombre ?? null,
@@ -702,6 +708,8 @@ export async function crearPedido(
     origen: "MANUAL" | "CORREO";
     externalMessageId?: string | null;
     sourceReceivedAt?: string | null;
+    destinoTexto?: string | null;
+    clienteProveedor?: string | null;
     creadoPor: string | null;
     creadoNombre: string | null;
   },
@@ -711,8 +719,8 @@ export async function crearPedido(
     `INSERT INTO rcp_pedidos
        (empresa_id, proveedor_id, numero_proveedor, numero_normalizado, fecha_pedido, usuario_pedido,
         centro_id, centro_nombre, almacen_origen, transportista, observaciones, origen,
-        external_message_id, source_received_at, creado_por, creado_nombre)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        external_message_id, source_received_at, creado_por, creado_nombre, destino_texto, cliente_proveedor)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
      RETURNING id`,
     [
       empresaId,
@@ -731,6 +739,8 @@ export async function crearPedido(
       datos.sourceReceivedAt ?? null,
       datos.creadoPor,
       datos.creadoNombre,
+      datos.destinoTexto ?? null,
+      datos.clienteProveedor ?? null,
     ]
   );
   return (await pedidoPorId(empresaId, rows[0].id, ejecutor))!;
@@ -1569,4 +1579,227 @@ export async function listarCentros(empresaId: string): Promise<Centro[]> {
   );
   /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
   return rows.map((r: any) => ({ id: r.id, nombre: r.nombre, activo: Boolean(r.activo) }));
+}
+
+/* ══ Fase 2: correos del proveedor ═════════════════════════════════════════ */
+
+export type ResultadoCorreo = "RECIBIDO" | "PROCESADO" | "DUPLICADO" | "IGNORADO" | "PENDIENTE_REVISION" | "ERROR";
+
+export type Correo = {
+  id: string;
+  proveedorId: string | null;
+  proveedorNombre: string | null;
+  messageId: string;
+  asunto: string;
+  remitente: string | null;
+  fecha: string | null;
+  texto: string;
+  tipo: "PEDIDO" | "ALBARAN" | "DESCONOCIDO";
+  resultado: ResultadoCorreo;
+  motivo: string | null;
+  datosExtraidos: unknown;
+  avisos: string[];
+  pedidoId: string | null;
+  pedidoNumero: string | null;
+  albaranId: string | null;
+  albaranNumero: string | null;
+  origen: string;
+  intentos: number;
+  procesadoAt: string | null;
+  createdAt: string;
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const aCorreo = (r: any): Correo => ({
+  id: r.id,
+  proveedorId: r.proveedor_id ?? null,
+  proveedorNombre: r.proveedor_nombre ?? null,
+  messageId: r.message_id,
+  asunto: r.asunto ?? "",
+  remitente: r.remitente ?? null,
+  fecha: iso(r.fecha),
+  texto: r.texto ?? "",
+  tipo: r.tipo,
+  resultado: r.resultado,
+  motivo: r.motivo ?? null,
+  datosExtraidos: r.datos_extraidos ?? null,
+  avisos: r.avisos ?? [],
+  pedidoId: r.pedido_id ?? null,
+  pedidoNumero: r.pedido_numero ?? null,
+  albaranId: r.albaran_id ?? null,
+  albaranNumero: r.albaran_numero ?? null,
+  origen: r.origen,
+  intentos: Number(r.intentos ?? 0),
+  procesadoAt: iso(r.procesado_at),
+  createdAt: iso(r.created_at)!,
+});
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+const SELECT_CORREO = `
+  SELECT c.*, pr.nombre AS proveedor_nombre, p.numero_proveedor AS pedido_numero, a.numero_proveedor AS albaran_numero
+    FROM rcp_correos c
+    LEFT JOIN rcp_proveedores pr ON pr.id = c.proveedor_id
+    LEFT JOIN rcp_pedidos p ON p.id = c.pedido_id
+    LEFT JOIN rcp_albaranes a ON a.id = c.albaran_id`;
+
+/**
+ * Registra la llegada de un correo. Si ya estaba (mismo message_id), devuelve
+ * la fila existente y `nuevo: false`: el UNIQUE es quien decide, no un
+ * «¿existe?» previo que dos pasadas a la vez pasarían las dos.
+ */
+export async function registrarCorreo(
+  empresaId: string,
+  datos: {
+    messageId: string;
+    inReplyTo: string | null;
+    hashContenido: string | null;
+    asunto: string;
+    remitente: string | null;
+    fecha: string | null;
+    texto: string;
+    origen: "buzon" | "eml" | "api";
+  },
+  ejecutor?: Ejecutor
+): Promise<{ correo: Correo; nuevo: boolean }> {
+  const { rows } = await db(ejecutor).query(
+    `INSERT INTO rcp_correos (empresa_id, message_id, in_reply_to, hash_contenido, asunto, remitente, fecha, texto, origen)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     ON CONFLICT (empresa_id, message_id) DO NOTHING
+     RETURNING id`,
+    [empresaId, datos.messageId, datos.inReplyTo, datos.hashContenido, datos.asunto, datos.remitente, datos.fecha, datos.texto, datos.origen]
+  );
+  if (rows[0]) return { correo: (await correoPorId(empresaId, rows[0].id, ejecutor))!, nuevo: true };
+  const { rows: previas } = await db(ejecutor).query(`${SELECT_CORREO} WHERE c.empresa_id = $1 AND c.message_id = $2`, [empresaId, datos.messageId]);
+  return { correo: aCorreo(previas[0]), nuevo: false };
+}
+
+export async function correoPorId(empresaId: string, id: string, ejecutor?: Ejecutor): Promise<Correo | null> {
+  const { rows } = await db(ejecutor).query(`${SELECT_CORREO} WHERE c.empresa_id = $1 AND c.id = $2`, [empresaId, id]);
+  return rows[0] ? aCorreo(rows[0]) : null;
+}
+
+export async function actualizarCorreo(
+  empresaId: string,
+  id: string,
+  datos: {
+    proveedorId?: string | null;
+    tipo?: "PEDIDO" | "ALBARAN" | "DESCONOCIDO";
+    resultado: ResultadoCorreo;
+    motivo: string | null;
+    datosExtraidos?: unknown;
+    avisos?: string[];
+    pedidoId?: string | null;
+    albaranId?: string | null;
+  },
+  ejecutor?: Ejecutor
+): Promise<void> {
+  await db(ejecutor).query(
+    `UPDATE rcp_correos SET
+        proveedor_id = COALESCE($3, proveedor_id),
+        tipo = COALESCE($4, tipo),
+        resultado = $5,
+        motivo = $6,
+        datos_extraidos = COALESCE($7, datos_extraidos),
+        avisos = COALESCE($8, avisos),
+        pedido_id = COALESCE($9, pedido_id),
+        albaran_id = COALESCE($10, albaran_id),
+        intentos = intentos + 1,
+        procesado_at = now()
+      WHERE empresa_id = $1 AND id = $2`,
+    [
+      empresaId,
+      id,
+      datos.proveedorId ?? null,
+      datos.tipo ?? null,
+      datos.resultado,
+      datos.motivo,
+      datos.datosExtraidos === undefined ? null : JSON.stringify(datos.datosExtraidos),
+      datos.avisos ?? null,
+      datos.pedidoId ?? null,
+      datos.albaranId ?? null,
+    ]
+  );
+}
+
+export async function listarCorreos(
+  empresaId: string,
+  f: { resultado?: string; tipo?: string; limite?: number },
+  ejecutor?: Ejecutor
+): Promise<Correo[]> {
+  const params: unknown[] = [empresaId];
+  const cond = ["c.empresa_id = $1"];
+  if (f.resultado) {
+    params.push(f.resultado);
+    cond.push(`c.resultado = $${params.length}`);
+  }
+  if (f.tipo) {
+    params.push(f.tipo);
+    cond.push(`c.tipo = $${params.length}`);
+  }
+  params.push(Math.min(Math.max(f.limite ?? 100, 1), 500));
+  const { rows } = await db(ejecutor).query(`${SELECT_CORREO} WHERE ${cond.join(" AND ")} ORDER BY c.created_at DESC LIMIT $${params.length}`, params);
+  return rows.map(aCorreo);
+}
+
+/** Los correos de albarán que esperan a que exista este pedido. */
+export async function correosDeAlbaranEnEspera(empresaId: string, numeroPedidoNormalizado: string, ejecutor?: Ejecutor): Promise<Correo[]> {
+  const { rows } = await db(ejecutor).query(
+    `${SELECT_CORREO}
+      WHERE c.empresa_id = $1 AND c.tipo = 'ALBARAN' AND c.resultado = 'PENDIENTE_REVISION'
+        AND c.datos_extraidos->>'pedidoNormalizado' = $2
+      ORDER BY c.created_at`,
+    [empresaId, numeroPedidoNormalizado]
+  );
+  return rows.map(aCorreo);
+}
+
+export async function contarCorreosEnRevision(empresaId: string, ejecutor?: Ejecutor): Promise<number> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT COUNT(*)::int AS n FROM rcp_correos WHERE empresa_id = $1 AND resultado IN ('PENDIENTE_REVISION','ERROR')`,
+    [empresaId]
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/* ── Pasadas del buzón ───────────────────────────────────────────────────── */
+
+export async function abrirPasada(empresaId: string, origen: "temporizador" | "manual" | "historico" | "eml", correos = 0): Promise<string> {
+  const { rows } = await pool.query<{ id: string }>(
+    `INSERT INTO rcp_buzon_pasadas (empresa_id, origen, correos) VALUES ($1, $2, $3) RETURNING id`,
+    [empresaId, origen, correos]
+  );
+  return rows[0].id;
+}
+
+export async function cerrarPasada(
+  id: string,
+  datos: { correos: number; procesados: number; ignorados: number; errores: number; error: string | null; detalle: unknown[] }
+): Promise<void> {
+  await pool
+    .query(
+      `UPDATE rcp_buzon_pasadas
+          SET terminada_at = now(), correos = $2, procesados = $3, ignorados = $4, errores = $5, error = $6, detalle = $7
+        WHERE id = $1`,
+      [id, datos.correos, datos.procesados, datos.ignorados, datos.errores, datos.error, JSON.stringify(datos.detalle)]
+    )
+    .catch((e) => console.error("[Recepciones] no se ha podido cerrar la pasada:", (e as Error).message));
+}
+
+export async function ultimasPasadas(empresaId: string, limite = 10): Promise<Record<string, unknown>[]> {
+  const { rows } = await pool.query(
+    `SELECT id, iniciada_at, terminada_at, correos, procesados, ignorados, errores, error, origen, detalle
+       FROM rcp_buzon_pasadas WHERE empresa_id = $1 ORDER BY iniciada_at DESC LIMIT $2`,
+    [empresaId, limite]
+  );
+  return rows;
+}
+
+/** Los remitentes admitidos: la unión de los de todos los proveedores activos. */
+export async function remitentesAdmitidos(empresaId: string, ejecutor?: Ejecutor): Promise<{ proveedorId: string; remitente: string }[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT id, unnest(remitentes_correo) AS remitente FROM rcp_proveedores WHERE empresa_id = $1 AND activo`,
+    [empresaId]
+  );
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  return rows.map((r: any) => ({ proveedorId: r.id, remitente: String(r.remitente).toLowerCase() }));
 }

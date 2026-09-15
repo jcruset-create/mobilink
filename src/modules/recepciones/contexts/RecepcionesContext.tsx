@@ -19,6 +19,7 @@ type Estado = {
   proveedores: Bootstrap["proveedores"];
   centros: Bootstrap["centros"];
   contadores: Contadores | null;
+  buzonConfigurado: boolean;
   vocabulario: Bootstrap["vocabulario"] | null;
   puede: (permiso: string) => boolean;
   etiquetaEstadoPedido: (e: string) => string;
@@ -31,7 +32,12 @@ type Estado = {
 const Ctx = createContext<Estado | null>(null);
 
 const mismos = (a: Contadores | null | undefined, b: Contadores) =>
-  !!a && a.pendientes === b.pendientes && a.recibidos === b.recibidos && a.incidenciasAbiertas === b.incidenciasAbiertas && a.pedidosPendientes === b.pedidosPendientes;
+  !!a &&
+  a.pendientes === b.pendientes &&
+  a.recibidos === b.recibidos &&
+  a.incidenciasAbiertas === b.incidenciasAbiertas &&
+  a.pedidosPendientes === b.pedidosPendientes &&
+  (a.correosEnRevision ?? 0) === (b.correosEnRevision ?? a.correosEnRevision ?? 0);
 
 export function RecepcionesProvider({ children }: { children: ReactNode }) {
   const [cargando, setCargando] = useState(true);
@@ -50,8 +56,11 @@ export function RecepcionesProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // La bandeja manda sus contadores sin el del correo: se conserva el que ya había.
   const fijarContadores = useCallback((c: Contadores) => {
-    setDatos((d) => (!d || mismos(d.contadores, c) ? d : { ...d, contadores: c }));
+    setDatos((d) =>
+      !d || mismos(d.contadores, c) ? d : { ...d, contadores: { ...c, correosEnRevision: c.correosEnRevision ?? d.contadores.correosEnRevision } }
+    );
   }, []);
 
   useEffect(() => {
@@ -86,6 +95,7 @@ export function RecepcionesProvider({ children }: { children: ReactNode }) {
       proveedores: datos?.proveedores ?? [],
       centros: datos?.centros ?? [],
       contadores: datos?.contadores ?? null,
+      buzonConfigurado: Boolean(datos?.buzonConfigurado),
       vocabulario: datos?.vocabulario ?? null,
       puede: (p: string) => (datos?.permisos ?? []).includes(p),
       etiquetaEstadoPedido: (e: string) => et?.estadoPedido[e] ?? e,

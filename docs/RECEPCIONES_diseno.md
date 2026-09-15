@@ -1,10 +1,11 @@
 # Recepciones — control de la recepción física de mercancía: diseño e implementación
 
-> **Estado: FASE 1 implementada** (circuito manual completo). Pedidos y albaranes
-> se crean a mano; la recepción se cierra desde la pantalla del operario; el
-> albarán recepcionado se genera, se guarda y se imprime con el navegador.
-> **No existe todavía** la lectura automática de los correos de Soledad
-> (IMAP): los campos que necesitará ya están en el modelo (§F).
+> **Estado: FASES 1 y 2 implementadas.** Fase 1: circuito manual completo
+> (pedidos, albaranes, recepción desde la pantalla del operario, albarán
+> recepcionado generado e impreso con el navegador). Fase 2: los correos de
+> Soledad (aviso de pedido y emisión de albarán) entran solos por un buzón
+> IMAP o importados como `.eml`, crean el pedido, asocian el albarán y guardan
+> el PDF original (§F).
 
 Principio que gobierna el módulo: **Mobilink controla la recepción física, no el
 stock.** Cerrar una recepción registra qué llegó, quién lo contó, cuándo y con
@@ -120,14 +121,51 @@ botones de 64 px, −/+ de 44 px sólo si hay incidencia, confirmación en dos
 toques, `Idempotency-Key` al abrir) · Recepción (sello en pantalla, PDF con
 Imprimir, rectificar) · Incidencias · Proveedores (+ mapeo de artículos).
 
-## F. Preparado para el correo de Soledad (fase 2, no implementada)
+## F. El correo de Soledad (fase 2)
 
-`rcp_pedidos` y `rcp_albaranes` llevan `origen ('MANUAL'|'CORREO')`,
-`external_message_id` (índice único parcial), `source_received_at` y
-`enlace_pdf_proveedor`. `normalizarNumero()` cruza `B-2026-5688837` con
-`5688837`. `rcp_proveedores.remitentes_correo` guarda desde qué direcciones
-manda cada proveedor. La ingesta llamará a `service.crearPedido` /
-`crearAlbaran` con `origen: "CORREO"`; el buzón copiará `therefore/buzon.ts`.
+```
+IMAP (buzon.ts, cada N min) ──┐
+Importar .eml (panel)        ──┤──► procesarFuente() ─► simpleParser ─► adjuntos PDF
+                               │                                   │
+                               │                                   ▼
+                               │    ingesta.procesarCorreo(): rcp_correos UNIQUE(empresa, message_id)
+                               │        ├─ proveedor por remitente (rcp_proveedores.remitentes_correo)
+                               │        ├─ domain/correo: detectarTipo · parsearPedido · parsearAlbaran (puros)
+                               │        ├─ PEDIDO  → service.crearPedido(origen CORREO) → despierta albaranes en espera
+                               │        ├─ ALBARAN → busca pedido por número normalizado
+                               │        │     · no existe → PENDIENTE_REVISION (se reprocesa al llegar el pedido)
+                               │        │     · existe   → service.crearAlbaran(EN_TRANSITO) + ORIGINAL (adjunto o descarga del enlace)
+                               │        └─ resultado: PROCESADO · DUPLICADO · IGNORADO · PENDIENTE_REVISION · ERROR
+                               └─ rcp_buzon_pasadas: qué llegó en cada pasada (nunca el cuerpo)
+```
+
+- **Tablas nuevas**: `rcp_correos` (el correo entero, su resultado y a qué
+  pedido/albarán dio lugar), `rcp_buzon_pasadas`, `rcp_config`
+  (`buzon.activado_el`, `correo.asumir_expedicion_completa`). `rcp_pedidos`
+  gana `destino_texto` y `cliente_proveedor`.
+- **Variables**: `RECEPCIONES_IMAP_HOST/PORT/USER/PASS/CARPETA/MIN/EMPRESA_ID`
+  (documentadas en `.env.example`). Sin ellas el buzón queda apagado y todo
+  sigue funcionando por `.eml` importado a mano.
+- **Rutas**: `GET /correo/buzon` (estado, remitentes, pasadas, correos en
+  revisión) · `PUT /correo/config` · `POST /correo/buzon/revisar` ·
+  `POST /correo/buzon/historico {desde}` · `POST /correo/eml` (multipart
+  `archivo`) · `GET /correo?resultado=` · `GET /correo/:id` ·
+  `POST /correo/:id/reprocesar` · `POST /albaranes/:id/original/descargar`.
+- **Pantalla «Correo del proveedor»**: estado del buzón, remitentes, última
+  pasada, importar `.eml`, revisar ahora, cargar histórico, lista de correos
+  con resultado y enlace al pedido/albarán, reprocesar, ver el texto original.
+- **Líneas del albarán**: las que detalle el correo (casadas por descripción
+  normalizada), o una «cantidad expedida» total si el pedido tiene una línea,
+  o todo lo pendiente si la configuración lo asume. Nunca más de lo pendiente.
+- **Centro destino**: la localidad del bloque «Destino» (`43006 TARRAGONA` →
+  `TARRAGONA`) casada con `app_centros` por nombre; si no casa, se guarda como
+  texto y el correo lo dice en su motivo.
+- **Pruebas** (`domain/correo/correo.test.ts`, `correo.integration.test.ts`):
+  los dos correos reales; pedido → albarán con adjunto; duplicados por
+  Message-ID y por número; albarán antes que pedido; remitente desconocido;
+  pedido sin líneas; descarga del enlace (portal HTTP local) y enlace que no es
+  PDF; cantidad expedida parcial; buzón falso (no leído, marca leído, deja sin
+  leer lo que falla, pasadas) y buzón que no abre.
 
 ## G. Documentos e impresión
 

@@ -476,7 +476,28 @@ Decisiones fijadas con pruebas:
   abre el PDF con la sesión en un iframe y lanza `window.print()`. Un agente
   por centro, si llega, colgará de aquí sin tocar el cierre.
 
-Preparado para la fase del correo (no implementada): `origen`,
-`external_message_id`, `source_received_at` en pedidos y albaranes, y el
-`UNIQUE` por número normalizado (`B-2026-5688837` y `5688837` son el mismo
-pedido) que impedirá que el mismo correo cree dos.
+**El correo del proveedor (fase 2).** Los avisos de pedido y de albarán de
+Soledad entran solos por un buzón IMAP (`server/recepciones/buzon.ts`, molde
+de `therefore/buzon.ts`: sólo lo no leído y posterior a la activación, lo que
+falla se queda sin leer, lo que no es de un proveedor conocido se ignora). El
+parser (`domain/correo/`) es puro y no se inventa nada: lo que no reconoce va
+a `avisos`. La ingesta (`ingesta.ts`) crea pedidos y albaranes por las MISMAS
+funciones que el alta manual, con `origen = 'CORREO'` y el Message-ID en
+`external_message_id`. Decisiones fijadas con pruebas:
+
+- **La idempotencia es el UNIQUE de `(empresa_id, message_id)` en
+  `rcp_correos`**, y detrás los UNIQUE por número normalizado: el mismo pedido
+  con dos Message-ID es `DUPLICADO` y queda enlazado al que ya existe.
+- **El albarán que llega antes que el pedido no se inventa un pedido**: queda
+  `PENDIENTE_REVISION` con el número que buscaba y se reprocesa solo cuando el
+  pedido entra. Lo que el sistema no sabe decidir lo enseña, no lo adivina.
+- **Los remitentes admitidos viven en la ficha del proveedor**
+  (`rcp_proveedores.remitentes_correo`), no en el buzón: es el proveedor
+  quien manda, y el mismo buzón puede recibir de varios.
+- **El PDF del albarán se guarda como ORIGINAL desde el adjunto o, si no,
+  descargándolo del enlace del correo** (HTTP acotado en tiempo y tamaño, y
+  sólo si lo que vuelve empieza por `%PDF-`). Si no se puede, el albarán se
+  crea igual, lo dice, y el enlace queda para reintentarlo desde la ficha.
+- **Sin cantidades en el correo de albarán se da por expedido todo lo
+  pendiente** (configurable, `correo.asumir_expedicion_completa`): es lo que
+  hace Soledad en la práctica, y el operario corrige en el muelle si no cuadra.

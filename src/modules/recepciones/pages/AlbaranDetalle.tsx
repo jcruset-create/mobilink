@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, FileText, PackageCheck, Upload } from "lucide-react";
+import { ArrowLeft, Download, FileText, PackageCheck, Upload } from "lucide-react";
 import * as api from "../services/api";
 import { useRecepciones } from "../contexts/RecepcionesContext";
 import { Aviso, ChipEstadoAlbaran, ChipEstadoIncidencia, ChipResultado, Dato, ErrorBox, Modal, SinMapear, TextField, btnPrimary, btnSecondary } from "../components/ui";
@@ -57,6 +57,18 @@ export default function AlbaranDetalle() {
     }
   }
 
+  async function descargar() {
+    setSubiendo(true);
+    try {
+      await api.descargarOriginal(albaran.id);
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido descargar el original");
+    } finally {
+      setSubiendo(false);
+    }
+  }
+
   async function cerrarConDiferencia() {
     try {
       await api.cerrarAlbaranConDiferencia(albaran.id, motivo);
@@ -99,6 +111,7 @@ export default function AlbaranDetalle() {
           <Dato rotulo="Expedición" valor={fmtFecha(albaran.fechaExpedicion)} />
           <Dato rotulo="Transportista" valor={albaran.transportista} />
           <Dato rotulo="Centro destino" valor={albaran.centroNombre} />
+          <Dato rotulo="Origen del dato" valor={albaran.origen === "CORREO" ? "Correo del proveedor" : "Manual"} />
           {albaran.cerradoMotivo && <Dato rotulo="Cerrado con diferencia" valor={albaran.cerradoMotivo} />}
         </div>
       </div>
@@ -156,12 +169,17 @@ export default function AlbaranDetalle() {
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-slate-600 bg-slate-800/50 p-3">
           <span className="text-sm text-slate-400">Sin PDF original. La recepción se puede hacer igual; el recepcionado llevará sólo la hoja del sello.</span>
           {puede("recepciones.albaran.create") && (
-            <>
+            <div className="flex flex-wrap gap-2">
+              {albaran.enlacePdfProveedor && (
+                <button className={`${btnSecondary} flex items-center gap-2`} onClick={() => void descargar()} disabled={subiendo} title={albaran.enlacePdfProveedor}>
+                  <Download className="h-4 w-4" /> {subiendo ? "Descargando…" : "Descargar del enlace del proveedor"}
+                </button>
+              )}
               <input ref={input} type="file" accept="application/pdf" className="hidden" onChange={(e) => e.target.files?.[0] && void subir(e.target.files[0])} />
               <button className={`${btnPrimary} flex items-center gap-2`} onClick={() => input.current?.click()} disabled={subiendo}>
                 <Upload className="h-4 w-4" /> {subiendo ? "Subiendo…" : "Subir PDF original"}
               </button>
-            </>
+            </div>
           )}
         </div>
       )}

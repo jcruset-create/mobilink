@@ -46,7 +46,15 @@ export default function RecepcionesLayout() {
           <nav className={`${abierto ? "block" : "hidden"} w-56 shrink-0 border-r border-slate-800 bg-slate-900 p-2 md:block print:hidden`}>
             {items.map((i) => {
               const n =
-                i.key === "bandeja" ? contadores?.pendientes : i.key === "incidencias" ? contadores?.incidenciasAbiertas : i.key === "pedidos" ? contadores?.pedidosPendientes : undefined;
+                i.key === "bandeja"
+                  ? contadores?.pendientes
+                  : i.key === "incidencias"
+                    ? contadores?.incidenciasAbiertas
+                    : i.key === "pedidos"
+                      ? contadores?.pedidosPendientes
+                      : i.key === "correo"
+                        ? contadores?.correosEnRevision
+                        : undefined;
               return (
                 <NavLink
                   key={i.key}

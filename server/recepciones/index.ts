@@ -19,8 +19,9 @@
 import type { Express } from "express";
 import { initRecepciones } from "./schema.ts";
 import { createRecepcionesRouter } from "./router.ts";
+import { startRecepcionesBuzon, stopRecepcionesBuzon } from "./buzon.ts";
 
-export { initRecepciones };
+export { initRecepciones, startRecepcionesBuzon, stopRecepcionesBuzon };
 
 export function mountRecepciones(app: Express): void {
   app.use("/api/recepciones", createRecepcionesRouter());
