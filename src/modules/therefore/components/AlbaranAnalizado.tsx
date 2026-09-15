@@ -24,6 +24,7 @@
 import { useState } from "react";
 import { FileText, RefreshCw } from "lucide-react";
 import * as api from "../services/api";
+import { abrirEnPestana } from "../services/documentos";
 import { celdasFlojas, sumaDeLineas, tituloAnalisis } from "../services/analisis";
 import { Aviso, Celda, ChipAnalisis, Dato, ErrorBox, Pill, btnMini, thCls, tdCls } from "./ui";
 import type { AlbaranAnalizado as Albaran, Actuacion } from "../types";
@@ -66,8 +67,7 @@ export default function AlbaranAnalizado({
   async function abrirPdf() {
     setError(null);
     try {
-      const { url } = await api.enlaceDocumento(albaran.id);
-      window.open(url, "_blank", "noopener");
+      await abrirEnPestana(async () => (await api.enlaceDocumento(albaran.id)).url);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido abrir el documento");
     }

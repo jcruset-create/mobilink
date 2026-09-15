@@ -824,6 +824,15 @@ export function createThereforeRouter(): Router {
     })
   );
 
+  /** Lo mismo para un adjunto del correo, con o sin análisis. */
+  r.get(
+    "/adjuntos/:id/documento",
+    exigirPermiso("therefore.view"),
+    ruta(async (req, res) => {
+      res.json({ url: await documentos.enlaceDelAdjunto(contextoDe(req), String(req.params.id)) });
+    })
+  );
+
   /* ── El buzón ──────────────────────────────────────────────────────────── */
 
   /** Estado del buzón y sus últimas pasadas. Sólo quien puede configurarlo. */

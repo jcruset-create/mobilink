@@ -3,7 +3,7 @@
  *
  * Cabecera con lo que hay que saber de un vistazo —qué piden, cómo de urgente
  * es, cuánto lleva abierto— y debajo las pestañas: resumen, actuaciones,
- * albaranes analizados, validaciones, correos e histórico.
+ * albaranes analizados, documentos, validaciones, correos e histórico.
  *
  * Las de albaranes y validaciones cargan aparte y no con la ficha. Es a
  * propósito: el análisis puede estar todavía en la cola cuando se abre el
@@ -13,9 +13,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Plus, Upload } from "lucide-react";
+import { ArrowLeft, ExternalLink, FileText, Plus, Upload } from "lucide-react";
 import * as api from "../services/api";
 import { textoActuacion } from "../services/bandeja";
+import { abrirEnPestana, esVisible, nombreAdjunto, tamanoLegible } from "../services/documentos";
 import { useTherefore } from "../contexts/ThereforeContext";
 import {
   Aviso,
@@ -42,7 +43,7 @@ import type { Actuacion, Adjunto, AnalisisDeExpediente, ConsultaErp, Ficha, Noti
 import { fmtFecha, fmtFechaHora } from "../../administracion/types";
 import { aCentimos, eurosConSigno } from "../../cash/utils/money";
 
-const PESTANAS = ["Resumen", "Actuaciones", "Albaranes", "Validaciones", "Correos", "Histórico"] as const;
+const PESTANAS = ["Resumen", "Actuaciones", "Albaranes", "Documentos", "Validaciones", "Correos", "Histórico"] as const;
 
 /**
  * El umbral por debajo del cual una celda se enseña como dudosa.
@@ -194,6 +195,7 @@ export default function Expediente() {
       {pestana === "Albaranes" && (
         <Albaranes expedienteId={e.id} actuaciones={ficha.actuaciones} puedeReanalizar={puede("therefore.actuacion.manage")} />
       )}
+      {pestana === "Documentos" && <Documentos expedienteId={e.id} />}
       {pestana === "Validaciones" && <ValidacionesDelExpediente expedienteId={e.id} />}
       {pestana === "Correos" && <Correos expedienteId={e.id} />}
       {pestana === "Histórico" && <Historico eventos={eventos} />}
@@ -409,6 +411,15 @@ function Correos({ expedienteId }: { expedienteId: string }) {
     };
   }, [expedienteId]);
 
+  async function abrirAdjunto(id: string) {
+    setError(null);
+    try {
+      await abrirEnPestana(async () => (await api.enlaceAdjunto(id)).url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido abrir el documento");
+    }
+  }
+
   if (error) return <ErrorBox>{error}</ErrorBox>;
   if (!datos) return <p className="text-[13px] text-slate-400">Cargando…</p>;
   if (datos.notificaciones.length === 0) {
@@ -446,13 +457,154 @@ function Correos({ expedienteId }: { expedienteId: string }) {
               {n.textoOriginal}
             </pre>
             {suyos.length > 0 && (
-              <p className="mt-2 text-[12px] text-slate-400">
-                Adjuntos: {suyos.map((a) => a.nombreArchivo || a.hashArchivo.slice(0, 8)).join(", ")}
+              <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-slate-400">
+                <span>Adjuntos:</span>
+                {suyos.map((a) =>
+                  a.storagePath ? (
+                    <button
+                      key={a.id}
+                      onClick={() => void abrirAdjunto(a.id)}
+                      className="inline-flex items-center gap-1 text-sky-300 hover:underline"
+                      title="Abrir en otra pestaña"
+                    >
+                      <FileText className="h-3 w-3" />
+                      {nombreAdjunto(a)}
+                    </button>
+                  ) : (
+                    <span key={a.id}>{nombreAdjunto(a)}</span>
+                  )
+                )}
               </p>
             )}
           </article>
         );
       })}
+    </div>
+  );
+}
+
+/* ── Documentos ──────────────────────────────────────────────────────────── */
+
+/**
+ * Los ficheros que llegaron con los correos —normalmente el PDF de la
+ * factura— y los adjuntados a mano, con el visor dentro de la pestaña.
+ *
+ * El enlace es firmado y caduca, así que se pide cada vez que se elige un
+ * documento en vez de guardarlo con la lista. Abrirlo en otra pestaña usa el
+ * mismo enlace: el PDF nunca sale del almacén por una URL fija.
+ */
+function Documentos({ expedienteId }: { expedienteId: string }) {
+  const [adjuntos, setAdjuntos] = useState<Adjunto[] | null>(null);
+  const [elegido, setElegido] = useState<string | null>(null);
+  const [enlace, setEnlace] = useState<{ id: string; url: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    api
+      .notificacionesDe(expedienteId)
+      .then((d) => {
+        if (!vivo) return;
+        setAdjuntos(d.adjuntos);
+        setElegido(d.adjuntos.find(esVisible)?.id ?? null);
+      })
+      .catch((e) => vivo && setError(e instanceof Error ? e.message : "No se han podido cargar"));
+    return () => {
+      vivo = false;
+    };
+  }, [expedienteId]);
+
+  useEffect(() => {
+    if (!elegido) return;
+    let vivo = true;
+    api
+      .enlaceAdjunto(elegido)
+      .then((r) => vivo && setEnlace({ id: elegido, url: r.url }))
+      .catch((e) => vivo && setError(e instanceof Error ? e.message : "No se ha podido abrir el documento"));
+    return () => {
+      vivo = false;
+    };
+  }, [elegido]);
+
+  async function abrirFuera(id: string) {
+    setError(null);
+    try {
+      await abrirEnPestana(async () => (await api.enlaceAdjunto(id)).url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido abrir el documento");
+    }
+  }
+
+  if (!adjuntos && !error) return <p className="text-[13px] text-slate-400">Cargando…</p>;
+  if (adjuntos && adjuntos.length === 0) {
+    return (
+      <Aviso tono="info">
+        Este expediente no tiene documentos. Los PDF que lleguen con los correos de Therefore
+        aparecerán aquí; también puedes adjuntar uno desde la pestaña Albaranes.
+      </Aviso>
+    );
+  }
+
+  const actual = adjuntos?.find((a) => a.id === elegido) ?? null;
+  // El enlace de otro documento no sirve para el que se acaba de elegir.
+  const url = enlace && enlace.id === elegido ? enlace.url : null;
+
+  return (
+    <div className="space-y-3">
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      <article className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+        <ul className="divide-y divide-slate-700/60">
+          {(adjuntos ?? []).map((a) => {
+            const visible = esVisible(a);
+            return (
+              <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-[12px]">
+                <button
+                  onClick={() => visible && setElegido(a.id)}
+                  disabled={!visible}
+                  className={`inline-flex items-center gap-1.5 text-[13px] ${
+                    a.id === elegido ? "font-semibold text-sky-300" : "text-slate-200 hover:text-sky-300"
+                  } disabled:cursor-default disabled:text-slate-500 disabled:hover:text-slate-500`}
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  {nombreAdjunto(a)}
+                </button>
+                <span className="text-slate-500">
+                  {[tamanoLegible(a.tamanoBytes), fmtFechaHora(a.createdAt)].filter(Boolean).join(" · ")}
+                </span>
+                {!a.storagePath && (
+                  <Pill className="bg-slate-700 text-slate-400">Fichero no guardado</Pill>
+                )}
+                {a.storagePath && (
+                  <button
+                    onClick={() => void abrirFuera(a.id)}
+                    className={`${btnMini} ml-auto`}
+                    title="Abrir en otra pestaña"
+                  >
+                    <ExternalLink className="mr-1 inline h-3 w-3" />
+                    Abrir en otra pestaña
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </article>
+
+      {actual && (
+        <article className="rounded-2xl border border-slate-700 bg-slate-800 p-2">
+          {url ? (
+            <iframe
+              key={url}
+              title={nombreAdjunto(actual)}
+              src={url}
+              className="h-[75vh] w-full rounded-xl border border-slate-700 bg-white"
+            />
+          ) : (
+            <p className="p-2 text-[13px] text-slate-400">Abriendo {nombreAdjunto(actual)}…</p>
+          )}
+        </article>
+      )}
     </div>
   );
 }
