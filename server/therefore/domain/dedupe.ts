@@ -533,12 +533,27 @@ export function planDeFusion(
   for (const entrante of correo.actuaciones) {
     if (!entrante.albaranNormalizado) {
       /*
-       * Sin albarán no hay con qué comparar, así que se crea. Es una acción
-       * suelta («gestionar», «aprobar»), y el índice único de la base tampoco
-       * la cubre —sólo mira las que tienen albarán—, de modo que la única
-       * manera de no duplicarla sería adivinar, y adivinar aquí es perderla.
+       * Una acción suelta, sin albarán: «aprobar la factura», o un «GRABAR» que
+       * llegó sin número. El índice único de la base NO la cubre —sólo mira las
+       * que tienen albarán—, así que si aquí se creara siempre, el expediente
+       * acabaría con una fila por correo.
+       *
+       * Y eso pasa de verdad: una aprobación de factura que nadie atiende
+       * genera una tarea vencida cada semana, y cinco correos dejarían cinco
+       * «aprobar» idénticos sobre el mismo expediente. Lo mismo con dos correos
+       * que piden grabar sin decir qué.
+       *
+       * De modo que una acción sin albarán cuenta como repetida cuando el
+       * expediente ya tiene esa misma acción viva. Es la lectura conservadora:
+       * no inventa trabajo. Si de verdad eran dos peticiones distintas, las dos
+       * eran indistinguibles —ninguna decía sobre qué— y la que quedó ya pide
+       * revisión.
        */
-      plan.nuevas.push(entrante);
+      const yaEsta = vigentes.some(
+        (a) => a.albaranNormalizado === null && a.accion === entrante.accion
+      );
+      if (yaEsta) plan.repetidas.push(entrante);
+      else plan.nuevas.push(entrante);
       continue;
     }
 

@@ -101,11 +101,15 @@ export function textoAntiguedad(dias: number): string {
 /**
  * El texto corto de una actuación: `GRABAR 9011223344`.
  *
+ * Manda el MATIZ sobre la acción normalizada: si el correo pedía «MODIFICAR
+ * FECHA», eso es lo que se enseña, y no un «MODIFICAR» a secas que deja a quien
+ * lo grabe sin saber qué hay que cambiar.
+ *
  * El indicador adicional («T2») va detrás y entre paréntesis: no se sabe qué
  * significa, así que se enseña sin interpretarlo pero sin esconderlo.
  */
 export function textoActuacion(a: Actuacion): string {
-  const partes: string[] = [a.tipoAccion];
+  const partes: string[] = [a.accionTexto?.trim() || a.tipoAccion];
   if (a.albaranSolicitado) partes.push(a.albaranSolicitado);
   const base = partes.join(" ");
   return a.indicadorAdicional ? `${base} (${a.indicadorAdicional})` : base;

@@ -104,6 +104,8 @@ export type Actuacion = {
   id: string;
   expedienteId: string;
   tipoAccion: TipoAccion;
+  /** «MODIFICAR FECHA», «Costes (modificar)». `null` si no hubo matiz. */
+  accionTexto: string | null;
   albaranSolicitado: string | null;
   albaranNormalizado: string | null;
   importeCentimos: number | null;
@@ -215,6 +217,7 @@ function aActuacion(f: any): Actuacion {
     id: f.id,
     expedienteId: f.expediente_id,
     tipoAccion: f.tipo_accion,
+    accionTexto: f.accion_texto ?? null,
     albaranSolicitado: f.albaran_solicitado ?? null,
     albaranNormalizado: f.albaran_normalizado ?? null,
     importeCentimos: aEntero(f.importe_centimos),
@@ -261,7 +264,7 @@ const CAMPOS_EXP = `id, numero, empresa_codigo, empresa_nombre, tipo, estado, pr
   numero_reclamaciones, urgente, tarea_vencida, asignado_usuario_id, fecha_inicio_gestion,
   fecha_resolucion, resuelto_por_usuario_id, fecha_cierre, observaciones, created_at, updated_at`;
 
-const CAMPOS_ACT = `id, expediente_id, tipo_accion, albaran_solicitado, albaran_normalizado,
+const CAMPOS_ACT = `id, expediente_id, tipo_accion, accion_texto, albaran_solicitado, albaran_normalizado,
   importe_centimos, indicador_adicional, estado, obligatoria, resultado, erp_referencia,
   erp_estado, erp_consultado_at, confianza, origen_notificacion_id, iniciada_por_usuario_id,
   iniciada_at, resuelta_por_usuario_id, resuelta_at, observaciones, created_at, updated_at`;
@@ -627,6 +630,7 @@ export async function contarPestanas(empresaId: string): Promise<Record<string, 
 
 export type DatosActuacion = {
   tipoAccion: TipoAccion;
+  accionTexto?: string | null;
   albaranSolicitado: string | null;
   importeCentimos: number | null;
   indicadorAdicional: string | null;
@@ -655,8 +659,8 @@ export async function crearActuacion(
     `INSERT INTO thf_actuaciones
        (empresa_id, expediente_id, tipo_accion, albaran_solicitado, albaran_normalizado,
         importe_centimos, indicador_adicional, obligatoria, confianza, observaciones,
-        origen_notificacion_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        origen_notificacion_id, accion_texto)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      ON CONFLICT (expediente_id, tipo_accion, albaran_normalizado)
        WHERE albaran_normalizado IS NOT NULL AND estado <> 'DESCARTADA'
        DO NOTHING
@@ -673,6 +677,7 @@ export async function crearActuacion(
       datos.confianza ?? 1,
       datos.observaciones ?? "",
       datos.origenNotificacionId ?? null,
+      datos.accionTexto ?? null,
     ]
   );
   return rows[0] ? aActuacion(rows[0]) : null;
@@ -686,7 +691,7 @@ export async function listarActuaciones(
   const { rows } = await db(ejecutor).query(
     `SELECT ${CAMPOS_ACT} FROM thf_actuaciones
       WHERE empresa_id = $1 AND expediente_id = $2
-      ORDER BY created_at, id`,
+      ORDER BY orden`,
     [empresaId, expedienteId]
   );
   return rows.map(aActuacion);
@@ -702,7 +707,7 @@ export async function actuacionesDe(
   const { rows } = await pool.query(
     `SELECT ${CAMPOS_ACT} FROM thf_actuaciones
       WHERE empresa_id = $1 AND expediente_id = ANY($2::uuid[])
-      ORDER BY created_at, id`,
+      ORDER BY expediente_id, orden`,
     [empresaId, [...expedienteIds]]
   );
   for (const f of rows) {

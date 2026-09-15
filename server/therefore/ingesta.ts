@@ -57,11 +57,15 @@ import { cambiosDePrioridad, type Contexto } from "./service.ts";
 
 export type AccionEntrante = {
   accion: TipoAccion;
+  /** El matiz literal de la instrucción: «MODIFICAR FECHA». */
+  accionTexto?: string | null;
   /** Tal y como lo escribe el correo. Se conserva sin normalizar. */
   albaran?: string | null;
   importeCentimos?: number | null;
   /** Lo que venía pegado al albarán y no se interpreta: «T2». */
   indicador?: string | null;
+  /** Lo que la persona escribió en la misma línea del albarán. */
+  observaciones?: string;
   /** Del parser. Por debajo del umbral, el expediente pide revisión. */
   confianza?: number;
 };
@@ -741,9 +745,11 @@ async function crearActuaciones(
       expedienteId,
       {
         tipoAccion: a.accion,
+        accionTexto: a.accionTexto ?? null,
         albaranSolicitado: a.albaran ?? null,
         importeCentimos: a.importeCentimos ?? null,
         indicadorAdicional: a.indicador ?? null,
+        observaciones: a.observaciones ?? "",
         confianza: a.confianza ?? 1,
         origenNotificacionId: notificacionId,
       },
@@ -766,7 +772,7 @@ async function crearActuaciones(
           albaran: actuacion.albaranSolicitado,
           importeCentimos: actuacion.importeCentimos,
         },
-        descripcion: `Actuación ${actuacion.tipoAccion}${
+        descripcion: `Actuación ${actuacion.accionTexto ?? actuacion.tipoAccion}${
           actuacion.albaranSolicitado ? ` ${actuacion.albaranSolicitado}` : ""
         }, del correo.`,
       },

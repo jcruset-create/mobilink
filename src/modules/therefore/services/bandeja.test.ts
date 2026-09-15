@@ -23,6 +23,7 @@ const actuacion = (sobre: Partial<Actuacion> = {}): Actuacion => ({
   id: "a1",
   expedienteId: "e1",
   tipoAccion: "GRABAR",
+  accionTexto: null,
   albaranSolicitado: "9011223344",
   albaranNormalizado: "9011223344",
   importeCentimos: -4563,
@@ -115,6 +116,16 @@ describe("texto de una actuación", () => {
   /* «T2» no se sabe qué significa: se enseña sin interpretarlo y sin esconderlo. */
   it("enseña el indicador que no se sabe interpretar", () => {
     expect(textoActuacion(actuacion({ indicadorAdicional: "T2" }))).toBe("GRABAR 9011223344 (T2)");
+  });
+
+  /*
+   * `MODIFICAR` y `MODIFICAR FECHA` son la misma acción normalizada. Enseñar el
+   * verbo a secas deja a quien lo grabe sin saber qué hay que cambiar.
+   */
+  it("el matiz de la instrucción manda sobre la acción normalizada", () => {
+    expect(
+      textoActuacion(actuacion({ tipoAccion: "MODIFICAR", accionTexto: "MODIFICAR FECHA" }))
+    ).toBe("MODIFICAR FECHA 9011223344");
   });
 
   it("una actuación sin albarán es sólo la acción", () => {

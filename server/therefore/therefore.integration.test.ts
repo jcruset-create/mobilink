@@ -814,7 +814,7 @@ describe.runIf(RUN)("Therefore por HTTP contra PostgreSQL", () => {
 
       expect((await api("/expedientes?texto=9011223344", gestorA)).body.total).toBe(1);
       expect((await api("/expedientes?texto=0000555111", gestorA)).body.total).toBe(1);
-      expect((await api("/expedientes?texto=EJEMPLO", gestorA)).body.total).toBe(1);
+      expect((await api("/expedientes?texto=NEUMATICOS", gestorA)).body.total).toBe(1);
       expect((await api("/expedientes?texto=nada-de-esto", gestorA)).body.total).toBe(0);
     });
 

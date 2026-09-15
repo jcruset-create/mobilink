@@ -72,6 +72,8 @@ export type Actuacion = {
   id: string;
   expedienteId: string;
   tipoAccion: TipoAccion;
+  /** «MODIFICAR FECHA», «Costes (modificar)». `null` si no hubo matiz. */
+  accionTexto: string | null;
   albaranSolicitado: string | null;
   albaranNormalizado: string | null;
   importeCentimos: number | null;

@@ -41,7 +41,7 @@ function escapar(s: string): string {
  * con el resto del nombre real. Ordenar por longitud lo evita.
  *
  * Sin distinguir mayúsculas, porque el mismo proveedor aparece como
- * «NEUMATICOS EJEMPLO» en la factura y «Neumaticos Soledad» en el correo.
+ * «NEUMATICOS EJEMPLO» en la factura y «Neumaticos Ejemplo» en el correo.
  */
 export function sustituir(texto: string, mapa: MapaSustituciones): string {
   const claves = Object.keys(mapa)

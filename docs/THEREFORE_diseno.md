@@ -5,16 +5,17 @@ encargo. Es el resultado de leer el repositorio con una sola pregunta: «¿dónd
 encaja esto sin estrenar nada?». Cada apartado dice qué se reutiliza, qué se
 toca y por qué.
 
-> **Estado: las FASES 1 y 2 están implementadas** (ver §O). Existen los
+> **Estado: las FASES 1, 2 y 3a están implementadas** (ver §O). Existen los
 > expedientes, las actuaciones, el histórico, los permisos, la numeración, la
-> API, la bandeja y el detalle; y entra el correo: notificaciones, adjuntos,
-> motor de deduplicación con sus pesos configurables, cola de decisiones
-> humanas y pantalla de revisión.
+> API, la bandeja y el detalle; entra el correo —notificaciones, adjuntos,
+> deduplicación con pesos configurables, decisiones humanas y pantalla de
+> revisión—; y el **parser lee el correo tal cual llega**: clasifica, saca los
+> campos de la plantilla y convierte el bloque «Información Adicional» en
+> actuaciones, calibrado contra un corpus de veinte correos reales.
 >
-> Lo que **no** existe todavía: el **parser del correo** (el texto libre se
-> convierte en campos fuera del módulo; la API recibe campos ya estructurados),
-> el **buzón IMAP** y el **análisis del albarán dentro del PDF**. Las secciones
-> que los describen —E, G, H, I— siguen siendo diseño.
+> Lo que **no** existe todavía: el **buzón IMAP** que traiga los correos solo, y
+> el **análisis del albarán dentro del PDF**. Las secciones que los describen
+> —G, H, I— siguen siendo diseño.
 
 Principio que gobierna todo: **la unidad de trabajo es el expediente, no el
 correo.** Un expediente agrupa N actuaciones, N notificaciones, N documentos,
@@ -1117,9 +1118,45 @@ Cuatro cosas salieron distintas de lo previsto:
   texto en ese momento sería inventárselos. Si falta, la decisión lo dice y
   pide reprocesar el correo, en vez de adivinar.
 
-**Fase 3 — Parser del correo y análisis de albaranes.**
-Primero `domain/correo/*` con el lote de calibración real (ver
-`server/therefore/fixtures/README.md`), y después `documentos/texto.ts`, `domain/documento/*`
+**Fase 3a — Parser del correo. HECHA.**
+`domain/correo/{texto,importes,plantilla,acciones,index}.ts`, la ruta
+`POST /correos/texto`, dos columnas nuevas en `thf_actuaciones`
+(`accion_texto` y `orden`) y la migración `therefore_fase3.sql`. 54 pruebas de
+dominio con valores inventados, 9 invariantes contra el corpus real —que no se
+versiona y por eso se saltan en la CI— y 10 de integración por HTTP.
+
+Calibrado contra **veinte correos reales**. Lo que enseñaron:
+
+- **Las dos convenciones de número conviven en el mismo correo.** La plantilla
+  escribe el total a la española (`3.217,66`) y la persona el importe del
+  albarán a la inglesa (`1010.07€`). La regla que lo resuelve sin adivinar: con
+  los dos separadores, el último es el decimal. Queda un caso ambiguo de verdad
+  —tres dígitos detrás de un separador solo— y ahí se baja la confianza en vez
+  de elegir en silencio, que es como se cuela un error de tres ceros.
+- **Una cabecera manda sobre la prosa.** «Necesitamos que gestionéis los
+  siguientes albaranes:» seguido de `GRABAR` es una petición de GRABAR: lo
+  primero es el saludo. Una acción sacada de la prosa que no ha recogido ningún
+  número desaparece en cuanto llega una cabecera explícita.
+- **El matiz de la instrucción no se puede tirar.** `MODIFICAR` y
+  `MODIFICAR FECHA` normalizan a la misma acción, y quien lo grabe en el ERP
+  necesita saber que lo que cambia es la fecha. De ahí `accion_texto`.
+- **Una tarea vencida no pide trabajo nuevo.** Es el mismo, que sigue sin
+  hacerse. Si generara su propia actuación, una aprobación desatendida acabaría
+  con cinco «aprobar» idénticos. Y por el mismo motivo `planDeFusion` dejó de
+  crear siempre las acciones sin albarán: ahora cuentan como repetidas cuando
+  ya hay una viva igual.
+- **`created_at` no sirve para ordenar.** Su valor por defecto es `now()`, que
+  es la hora de INICIO DE LA TRANSACCIÓN, así que las cuatro actuaciones de un
+  correo nacen con el mismo instante y el desempate caía en un UUID aleatorio:
+  «graba éste y cambia la fecha de estos tres» salía barajado. De ahí `orden`.
+
+Lo que el parser NO hace, y es la mitad del trabajo: no inventa. Un número sin
+acción no se convierte en actuación —se anota como ambiguo—, y una acción sin
+número sale incompleta y pide revisión. Hay una prueba contra el corpus real
+que falla si algún albarán devuelto no está escrito, letra por letra, en el
+correo.
+
+**Fase 3b — Análisis de albaranes.** `documentos/texto.ts`, `domain/documento/*`
 (parser genérico, secciones, líneas, descuentos, complementarios, conceptos),
 `validaciones.ts`, `thf_albaranes_analizados` + líneas + descuentos +
 validaciones, worker con cola, `extractorIA.ts` como respaldo, pestañas
