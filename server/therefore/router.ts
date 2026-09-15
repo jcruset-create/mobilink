@@ -18,7 +18,8 @@ import multer from "multer";
 import { authenticate, requireModule } from "../core/auth.ts";
 import { registrarAuditoria } from "../core/auditoria.ts";
 import { guardarConfig, leerConfig } from "./config.ts";
-import { consultaErpDe } from "./erp/sinErp.ts";
+import { consultaErpDe } from "./erp/hub.ts";
+import { consultarAlbaranEnErp } from "./erp/consultar.ts";
 import {
   ESTADOS_EXPEDIENTE,
   PRIORIDADES,
@@ -314,7 +315,7 @@ export function createThereforeRouter(): Router {
           acciones: TIPOS_ACCION,
         },
         // Para que el detalle no ofrezca una consulta que nadie va a contestar.
-        erp: { disponible: consultaErpDe().disponible() },
+        erp: { disponible: (await consultaErpDe(ctx.empresaId)).disponible() },
       });
     })
   );
@@ -941,6 +942,33 @@ export function createThereforeRouter(): Router {
         ip: req.ip,
       });
       res.status(d.resultado === "error" ? 422 : 200).json(d);
+    })
+  );
+
+  /* ── ERP ───────────────────────────────────────────────────────────────── */
+
+  /**
+   * Pregunta al ERP por el albarán de una actuación y guarda lo que dijo.
+   *
+   * No mueve la actuación: que el ERP diga que ya está grabado es información
+   * para quien decide, no una decisión. Puede estar grabado mal.
+   */
+  r.post(
+    "/actuaciones/:id/consultar-erp",
+    exigirPermiso("therefore.actuacion.manage"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const r = await consultarAlbaranEnErp(ctx, String(req.params.id));
+      await registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "therefore.actuacion.consultar_erp",
+        entidad: "thf_actuaciones",
+        entidadId: String(req.params.id),
+        detalle: { fuente: r.fuente, existe: r.estado?.existe ?? null, coincide: r.comparacion?.coincide ?? null },
+        ip: req.ip,
+      });
+      res.json(r);
     })
   );
 

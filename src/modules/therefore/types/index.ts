@@ -82,6 +82,8 @@ export type Actuacion = {
   obligatoria: boolean;
   resultado: string | null;
   erpReferencia: string | null;
+  erpEstado: unknown | null;
+  erpConsultadoAt: string | null;
   confianza: number;
   iniciadaAt: string | null;
   resueltaAt: string | null;
@@ -504,4 +506,47 @@ export const PUNTO_PRIORIDAD: Record<string, string> = {
   NORMAL: "bg-sky-400",
   ALTA: "bg-amber-400",
   CRITICA: "bg-rose-500",
+};
+
+/* ── ERP ─────────────────────────────────────────────────────────────────── */
+
+export type LineaErp = {
+  referencia: string | null;
+  descripcion: string | null;
+  cantidad: number | null;
+  precioUnitarioCentimos: number | null;
+  importeCentimos: number | null;
+};
+
+export type EstadoErp = {
+  existe: boolean;
+  grabado: boolean;
+  contabilizado: boolean;
+  importeCentimos: number | null;
+  facturaAsociada: string | null;
+  lineas: LineaErp[] | null;
+  consultadoAt: string;
+  fuente: string;
+};
+
+export type DiferenciaErp =
+  | { tipo: "IGUAL"; referencia: string }
+  | { tipo: "DIFIERE"; referencia: string; campos: ("cantidad" | "importe")[]; papel: { cantidad: number | null; importeCentimos: number | null }; erp: LineaErp }
+  | { tipo: "FALTA_EN_ERP"; referencia: string; papel: { cantidad: number | null; importeCentimos: number | null } }
+  | { tipo: "SOBRA_EN_ERP"; referencia: string; erp: LineaErp }
+  | { tipo: "SIN_REFERENCIA" };
+
+export type ComparacionErp = {
+  coincide: boolean;
+  lineas: DiferenciaErp[];
+  diferenciaTotalCentimos: number | null;
+  resumen: { iguales: number; difieren: number; faltanEnErp: number; sobranEnErp: number; sinReferencia: number };
+};
+
+/** Lo que se guarda en la actuación tras consultar: la respuesta y la comparación. */
+export type ConsultaErp = {
+  /** `null` = no se pudo consultar; `existe: false` = el ERP dijo que no está. */
+  estado: EstadoErp | null;
+  comparacion: ComparacionErp | null;
+  fuente: string;
 };

@@ -32,6 +32,8 @@ const actuacion = (sobre: Partial<Actuacion> = {}): Actuacion => ({
   obligatoria: true,
   resultado: null,
   erpReferencia: null,
+  erpEstado: null,
+  erpConsultadoAt: null,
   confianza: 1,
   iniciadaAt: null,
   resueltaAt: null,
