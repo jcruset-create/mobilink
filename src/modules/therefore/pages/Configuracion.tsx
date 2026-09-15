@@ -324,6 +324,8 @@ export default function Configuracion() {
         </div>
       </section>
 
+      <SeccionRevision />
+
       <section className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
         <h2 className="mb-1 text-sm font-bold">Autocierre</h2>
         <p className="mb-3 text-[12px] text-slate-400">
@@ -529,6 +531,62 @@ function Buzon() {
           )}
         </>
       )}
+    </section>
+  );
+}
+
+/* ── Documentos para revisión ────────────────────────────────────────────── */
+
+/**
+ * Los PDF que el análisis no supo leer, en un zip, para afinar el parser con
+ * papel de verdad. Cada fichero lleva el expediente, el albarán pedido y el
+ * estado en el nombre, y el zip trae un índice con el motivo.
+ */
+function SeccionRevision() {
+  const [dias, setDias] = useState("30");
+  const [descargando, setDescargando] = useState(false);
+  const [aviso, setAviso] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function descargar() {
+    setDescargando(true);
+    setAviso(null);
+    setError(null);
+    try {
+      const n = Math.min(365, Math.max(1, Math.round(Number(dias) || 30)));
+      const blob = await api.descargarRevision(n);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `therefore-revision-${new Date().toISOString().slice(0, 10)}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setAviso("Descargado. Pásale el zip a quien afine el parser: lleva precios de compra, no lo reenvíes por ahí.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido descargar");
+    } finally {
+      setDescargando(false);
+    }
+  }
+
+  return (
+    <section className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+      <h2 className="mb-1 text-sm font-bold">Documentos para revisión</h2>
+      <p className="mb-3 text-[12px] text-slate-400">
+        Los PDF cuyo análisis quedó en REVISAR o en ERROR, en un solo zip con un índice
+        (expediente, albarán pedido, estado y motivo). Es lo que hace falta para afinar el parser
+        con documentos reales.
+      </p>
+      {error && <ErrorBox>{error}</ErrorBox>}
+      {aviso && <Aviso tono="info">{aviso}</Aviso>}
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="w-40">
+          <TextField label="Últimos días" value={dias} onChange={setDias} />
+        </div>
+        <button onClick={() => void descargar()} className={btnSecondary} disabled={descargando}>
+          {descargando ? "Preparando…" : "Descargar documentos para revisión"}
+        </button>
+      </div>
     </section>
   );
 }

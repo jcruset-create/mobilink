@@ -378,6 +378,34 @@ describe.runIf(RUN)("El análisis de albaranes de Therefore", () => {
     expect(ficha.body.expediente.requiereRevision).toBe(true);
   });
 
+  it("16b · los PDF en revisión se descargan en un zip con índice, sólo para quien configura", async () => {
+    const { indiceZip } = await import("../zip.ts");
+    const pdf = await pdfDeFactura({
+      albaranes: [uno("0501234", [LINEA_UNO, LINEA_DOS])],
+      totales: { base: "213,90", total: "258,82" },
+    });
+    const { analisis } = await analizar([{ accion: "GRABAR", albaran: "0501234", importeCentimos: 19995 }], pdf);
+    expect(analisis.albaranes[0].estadoAnalisis).toBe("REVISAR");
+
+    const cabeceras = (q: Quien) => ({ "x-test-user": q.usuario, "x-test-empresa": q.empresa });
+    const r = await fetch(`${base}/api/therefore/documentos/revision?dias=7`, { headers: cabeceras(adminA) });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("application/zip");
+    const entradas = indiceZip(Buffer.from(await r.arrayBuffer()));
+    const nombres = entradas.map((e) => e.nombre);
+    expect(nombres).toContain("indice.csv");
+    expect(nombres.some((n) => /^INC-\d+_0501234_REVISAR\.pdf$/.test(n))).toBe(true);
+    // El PDF va entero, sin comprimir.
+    expect(entradas.find((e) => e.nombre.endsWith(".pdf"))?.tamano).toBe(pdf.length);
+
+    // Consulta no puede: lleva precios de compra.
+    const sinPermiso = await fetch(`${base}/api/therefore/documentos/revision`, { headers: cabeceras(consultaA) });
+    expect(sinPermiso.status).toBe(403);
+    // Otra empresa no ve nada suyo.
+    const otra = await fetch(`${base}/api/therefore/documentos/revision`, { headers: cabeceras(adminB) });
+    expect(otra.status).toBe(404);
+  });
+
   /* ── Casos 17 y 18 ─────────────────────────────────────────────────────── */
 
   it("17 · una referencia ilegible se deja en null y NO se corrige", async () => {
