@@ -5,7 +5,7 @@ encargo. Es el resultado de leer el repositorio con una sola pregunta: «¿dónd
 encaja esto sin estrenar nada?». Cada apartado dice qué se reutiliza, qué se
 toca y por qué.
 
-> **Estado: las FASES 1, 2, 3a, 3b y 4a (el buzón) están implementadas** (ver §O). Existen los
+> **Estado: las FASES 1, 2, 3a, 3b, 4a y 4b están implementadas** (ver §O). Queda el ajuste con documentos reales (N.3) y la fase 5 (ERP). Existen los
 > expedientes, las actuaciones, el histórico, los permisos, la numeración, la
 > API, la bandeja y el detalle; entra el correo —notificaciones, adjuntos,
 > deduplicación con pesos configurables, decisiones humanas y pantalla de
@@ -1226,11 +1226,37 @@ Decisiones tomadas al implementarlo:
 - **Las credenciales no están en la base**: `THEREFORE_IMAP_*` en el
   servidor, como el CheckPoint. La pantalla dice si está leyendo, no cómo.
 
-**Fase 4b — Trabajo diario. PENDIENTE.** Carga del histórico a propósito
-(marcar como no leído o importar `.eml`), recálculo diario de prioridad,
-autocierre a `expediente.dias_autocierre`, exportación a Excel, y el ajuste
-del parser con los primeros correos y documentos reales que entren por el
-buzón (N.3, que sigue siendo el riesgo principal).
+**Fase 4b — Trabajo diario. HECHA.** `diario.ts` (recálculo de prioridad y
+autocierre, cada hora, sólo sobre lo que no se recalculó hoy), `exportar.ts`
+(la bandeja a Excel con `xlsx`), la carga del histórico a propósito
+(`POST /buzon/historico`, con fecha) y el `.eml` importado a mano
+(`POST /correos/eml`), los dos por el mismo `procesarFuente` que el
+temporizador. La columna `thf_expedientes.recalculado_el` y el CHECK de
+`thf_buzon_pasadas.origen` ampliado a `historico` y `eml`. Migración
+`therefore_fase4b.sql`. Panel: «Exportar Excel» e «Importar .eml» en la
+bandeja, días de autocierre y carga del histórico en Configuración. 13
+pruebas: 5 puras de la exportación, 6 de integración del trabajo diario y 2
+más del buzón.
+
+Tres decisiones tomadas al implementarlo:
+
+- **Cada hora, no cada día.** Render reinicia el servidor cuando quiere, y un
+  temporizador diario que arranca a las 15:00 hace su primera pasada mañana a
+  las 15:00. La pasada sólo mira lo que no se recalculó HOY (`recalculado_el`,
+  un DATE), así que repetirla cada hora no cuesta nada y garantiza que algún
+  día se haga.
+- **El autocierre respeta al que espera.** Un RESUELTO con una decisión
+  pendiente no se cierra: es el caso 24, y cerrarlo por antigüedad sería
+  enterrar la pregunta con el expediente. Y se relee bloqueado antes de
+  cerrar, por si alguien lo reabrió entre la lista y el cierre.
+- **El histórico es una acción aparte**, con fecha, que hay que pedir y
+  repetir hasta que salga a cero. Lo anterior a la activación no entra nunca
+  por accidente. El `.eml` importado no lleva suelo de fecha ni filtro de
+  remitente: quien lo importa ya ha decidido que es de Therefore.
+
+**Lo que sigue pendiente y no depende de código:** el ajuste del parser
+genérico con los primeros correos y PDF reales que entren por el buzón (N.3).
+Es el riesgo principal del módulo y no se puede hacer hasta que entren.
 
 **Fase 5 — ERP.** Cuando N.7 tenga respuesta: métodos opcionales en
 `IErpConnector`, adaptador, `erp_estado` en la actuación, comparación PDF vs

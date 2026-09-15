@@ -879,4 +879,25 @@ export async function initTherefore(): Promise<void> {
     CREATE INDEX IF NOT EXISTS thf_buzon_pasadas_idx
       ON thf_buzon_pasadas(empresa_id, iniciada_at DESC);
   `);
+  /* ══ Trabajo diario (fase 4b) ═════════════════════════════════════════════ */
+
+  // ── Cuándo se recalculó por última vez la prioridad ───────────────────────
+  //
+  // Un DATE y no un TIMESTAMPTZ a propósito: la pregunta que contesta es «¿ya
+  // se hizo hoy?», y los puntos por antigüedad cambian una vez al día. Va por
+  // ALTER porque la tabla ya existe en producción.
+  await pool.query(`
+    ALTER TABLE thf_expedientes ADD COLUMN IF NOT EXISTS recalculado_el DATE;
+  `);
+
+  // ── De dónde salió cada pasada del buzón ──────────────────────────────────
+  //
+  // La fase 4a sólo distinguía temporizador y botón; la carga del histórico y
+  // el .eml importado a mano son pasadas también, y conviene que se lean como
+  // lo que son. Se rehace el CHECK: PostgreSQL no permite ampliarlo en sitio.
+  await pool.query(`
+    ALTER TABLE thf_buzon_pasadas DROP CONSTRAINT IF EXISTS thf_buzon_pasadas_origen_check;
+    ALTER TABLE thf_buzon_pasadas ADD CONSTRAINT thf_buzon_pasadas_origen_check
+      CHECK (origen IN ('temporizador','manual','historico','eml'));
+  `);
 }

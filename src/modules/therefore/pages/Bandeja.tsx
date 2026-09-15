@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Plus, RefreshCw } from "lucide-react";
+import { Download, Plus, RefreshCw, Upload } from "lucide-react";
 import * as api from "../services/api";
 import {
   avisosDeFila,
@@ -44,6 +44,9 @@ export default function Bandeja() {
   const { contadores, fijarContadores, puede, vocabulario } = useTherefore();
 
   const [pestana, setPestana] = useState("pendientes");
+  const [exportando, setExportando] = useState(false);
+  const [importando, setImportando] = useState(false);
+  const [avisoImportacion, setAvisoImportacion] = useState<string | null>(null);
   const [texto, setTexto] = useState("");
   const [prioridad, setPrioridad] = useState(TODAS);
   const [accion, setAccion] = useState(TODAS);
@@ -87,10 +90,76 @@ export default function Bandeja() {
 
   const pestanasVisibles = useMemo(() => calcularPestanas(contadores), [contadores]);
 
+
+  /** El filtro tal y como se está aplicando: es lo que se exporta. */
+  function filtroActual(): api.FiltroBandeja {
+    return {
+      pestana,
+      texto: texto || undefined,
+      prioridad: prioridad || undefined,
+      accion: accion || undefined,
+      proveedor: proveedor || undefined,
+    };
+  }
+
+  async function exportar() {
+    setExportando(true);
+    try {
+      const blob = await api.exportarExcel(filtroActual());
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `therefore-expedientes-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido exportar");
+    } finally {
+      setExportando(false);
+    }
+  }
+
+  async function importarEml(archivo: File | undefined) {
+    if (!archivo) return;
+    setImportando(true);
+    setAvisoImportacion(null);
+    try {
+      const r = await api.importarEml(archivo);
+      setAvisoImportacion(
+        r.resultado === "procesado"
+          ? `Importado: expediente ${r.expedienteNumero ?? ""}.`
+          : r.resultado === "duplicado"
+            ? `Ese correo ya estaba: expediente ${r.expedienteNumero ?? ""}.`
+            : `No se ha importado: ${r.error ?? r.resultado}.`
+      );
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido importar el correo");
+    } finally {
+      setImportando(false);
+    }
+  }
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <h1 className="mr-auto text-lg font-black">Therefore</h1>
+        <button onClick={() => void exportar()} className={btnSecondary} disabled={exportando}>
+          <Download className="mr-1 inline h-3 w-3" />
+          {exportando ? "Exportando…" : "Exportar Excel"}
+        </button>
+        {puede("therefore.correo.importar") && (
+          <label className={`${btnSecondary} cursor-pointer`}>
+            <Upload className="mr-1 inline h-3 w-3" />
+            {importando ? "Importando…" : "Importar .eml"}
+            <input
+              type="file"
+              accept=".eml,message/rfc822"
+              className="hidden"
+              disabled={importando}
+              onChange={(ev) => void importarEml(ev.target.files?.[0])}
+            />
+          </label>
+        )}
         <button onClick={() => void cargar()} className={btnSecondary} disabled={cargando}>
           <RefreshCw className={`mr-1 inline h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
           Actualizar
@@ -171,6 +240,8 @@ export default function Bandeja() {
       </div>
 
       {error && <ErrorBox>{error}</ErrorBox>}
+
+      {avisoImportacion && <p className="mb-2 text-[12px] text-emerald-300">{avisoImportacion}</p>}
 
       <TableWrap>
         <thead className="bg-slate-800/60">
