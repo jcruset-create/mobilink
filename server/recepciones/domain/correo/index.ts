@@ -97,6 +97,14 @@ export type AlbaranLeido = {
   numeroAlbaran: string | null;
   transportista: string | null;
   fecha: string | null;
+  /**
+   * El albarán de Soledad trae también a dónde va y a nombre de quién. No hace
+   * falta para el albarán, pero sí para DEDUCIR el pedido cuando su correo no
+   * ha llegado: de aquí sale el centro.
+   */
+  destino: string | null;
+  destinoLocalidad: string | null;
+  cliente: string | null;
   /** Total expedido si el correo lo dice y no detalla líneas. */
   cantidadExpedida: number | null;
   lineas: LineaLeida[];
@@ -364,6 +372,13 @@ export function fechaEnProsa(texto: string): string | null {
   return m ? leerFecha(m[1]) : null;
 }
 
+/** «Estimado COMERCIAL SEA, S.A.,» — a nombre de quién va la mercancía. */
+export function clienteEnProsa(texto: string): string | null {
+  const m = texto.match(/^\s*estimad[oa]s?\s+(.+?)\s*[,:]\s*$/im);
+  const v = m ? m[1].trim() : "";
+  return v && v.length <= 120 && !/^(cliente|se[nñ]or)/i.test(v) ? v : null;
+}
+
 /** «…la entrega se realizará a través de TRANSAHER.» */
 export function transportistaEnProsa(texto: string): string | null {
   const m = texto.match(/\ba trav[eé]s de\s+([^.,\n]+)/i);
@@ -508,6 +523,7 @@ export function parsearAlbaran(asunto: string, texto: string): { albaran: Albara
   const avisos: string[] = [];
   const limpio = asuntoLimpio(asunto);
   const leidas = leerLineas(tokens);
+  const destino = valorDe(tokens, "DESTINO");
   const etiquetado = primeraLinea(valorDe(tokens, "PEDIDO") ?? "");
   const numerosPedido = etiquetado ? [etiquetado] : pedidosEnProsa(texto).length > 0 ? pedidosEnProsa(texto) : pedidosEnProsa(limpio);
   const albaran: AlbaranLeido = {
@@ -518,6 +534,9 @@ export function parsearAlbaran(asunto: string, texto: string): { albaran: Albara
     transportista: primeraLinea(valorDe(tokens, "TRANSPORTISTA") ?? "") || transportistaEnProsa(texto),
     fecha: leerFecha(primeraLinea(valorDe(tokens, "FECHA") ?? "")) ?? fechaEnProsa(limpio) ?? fechaEnProsa(texto),
     cantidadExpedida: numero(valorDe(tokens, "CANTIDAD_EXPEDIDA")),
+    destino,
+    destinoLocalidad: localidadDe(destino),
+    cliente: primeraLinea(valorDe(tokens, "CLIENTE") ?? "") || clienteEnProsa(texto),
     lineas: leidas.filter((l) => !esConcepto(l)),
     conceptos: leidas.filter((l) => esConcepto(l)),
     enlacesPdf: enlacesDe(texto),

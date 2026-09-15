@@ -539,6 +539,9 @@ export async function initRecepciones(): Promise<void> {
   // queda con la localidad, y aquí se conserva lo que decía el proveedor.
   await pool.query(`ALTER TABLE rcp_pedidos ADD COLUMN IF NOT EXISTS destino_texto TEXT;`);
   await pool.query(`ALTER TABLE rcp_pedidos ADD COLUMN IF NOT EXISTS cliente_proveedor TEXT;`);
+  // Un pedido que no mandó el proveedor: lo dedujimos de su albarán. Mientras
+  // sea true, la cantidad pedida es «lo expedido hasta ahora», no lo que se pidió.
+  await pool.query(`ALTER TABLE rcp_pedidos ADD COLUMN IF NOT EXISTS derivado_de_albaran BOOLEAN NOT NULL DEFAULT FALSE;`);
 
   await registrarModuloRecepciones();
 }

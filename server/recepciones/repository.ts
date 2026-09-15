@@ -85,6 +85,12 @@ export type Pedido = {
   canceladoMotivo: string | null;
   observaciones: string | null;
   origen: string;
+  /**
+   * El pedido se dedujo de un albarán porque su correo no había llegado (o no
+   * llega nunca). Mientras sea true, `cantidadPedida` es «lo expedido hasta
+   * ahora», no lo que se pidió.
+   */
+  derivadoDeAlbaran: boolean;
   creadoNombre: string | null;
   createdAt: string;
   updatedAt: string;
@@ -295,6 +301,7 @@ const aPedido = (r: any): Pedido => ({
   canceladoMotivo: r.cancelado_motivo ?? null,
   observaciones: r.observaciones ?? null,
   origen: r.origen,
+  derivadoDeAlbaran: r.derivado_de_albaran === true,
   creadoNombre: r.creado_nombre ?? null,
   createdAt: iso(r.created_at)!,
   updatedAt: iso(r.updated_at)!,
@@ -710,6 +717,7 @@ export async function crearPedido(
     sourceReceivedAt?: string | null;
     destinoTexto?: string | null;
     clienteProveedor?: string | null;
+    derivadoDeAlbaran?: boolean;
     creadoPor: string | null;
     creadoNombre: string | null;
   },
@@ -719,8 +727,9 @@ export async function crearPedido(
     `INSERT INTO rcp_pedidos
        (empresa_id, proveedor_id, numero_proveedor, numero_normalizado, fecha_pedido, usuario_pedido,
         centro_id, centro_nombre, almacen_origen, transportista, observaciones, origen,
-        external_message_id, source_received_at, creado_por, creado_nombre, destino_texto, cliente_proveedor)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        external_message_id, source_received_at, creado_por, creado_nombre, destino_texto, cliente_proveedor,
+        derivado_de_albaran)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
      RETURNING id`,
     [
       empresaId,
@@ -741,9 +750,73 @@ export async function crearPedido(
       datos.creadoNombre,
       datos.destinoTexto ?? null,
       datos.clienteProveedor ?? null,
+      datos.derivadoDeAlbaran === true,
     ]
   );
   return (await pedidoPorId(empresaId, rows[0].id, ejecutor))!;
+}
+
+/**
+ * Sube la cantidad pedida de una línea. Sólo sube: es para completar un pedido
+ * derivado, y bajarla por debajo de lo ya expedido dejaría el pedido incoherente.
+ */
+export async function subirCantidadPedida(empresaId: string, lineaId: string, cantidad: number, cliente: Ejecutor): Promise<void> {
+  await cliente.query(
+    `UPDATE rcp_pedido_lineas SET cantidad_pedida = GREATEST(cantidad_pedida, $3::numeric)
+      WHERE empresa_id = $1 AND id = $2`,
+    [empresaId, lineaId, cantidad]
+  );
+}
+
+/** Rellena los huecos de la cabecera de un pedido. Nunca pisa lo que ya tiene valor. */
+export async function rellenarCabeceraPedido(
+  empresaId: string,
+  pedidoId: string,
+  datos: {
+    /** El único que sí se pisa: el correo del pedido trae el número con su serie. */
+    numeroProveedor?: string | null;
+    fechaPedido?: string | null;
+    usuarioPedido?: string | null;
+    centroId?: string | null;
+    centroNombre?: string | null;
+    almacenOrigen?: string | null;
+    transportista?: string | null;
+    destinoTexto?: string | null;
+    clienteProveedor?: string | null;
+    derivadoDeAlbaran?: boolean;
+  },
+  cliente: Ejecutor
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rcp_pedidos SET
+       -- El número del correo del pedido manda: el del albarán venía sin serie.
+       numero_proveedor   = COALESCE($3, numero_proveedor),
+       fecha_pedido       = COALESCE(fecha_pedido, $4::date),
+       usuario_pedido     = COALESCE(usuario_pedido, $5),
+       centro_id          = COALESCE(centro_id, $6::uuid),
+       centro_nombre      = CASE WHEN centro_nombre = '' THEN COALESCE($7, '') ELSE centro_nombre END,
+       almacen_origen     = COALESCE(almacen_origen, $8),
+       transportista      = COALESCE(transportista, $9),
+       destino_texto      = COALESCE(destino_texto, $10),
+       cliente_proveedor  = COALESCE(cliente_proveedor, $11),
+       derivado_de_albaran = COALESCE($12::boolean, derivado_de_albaran),
+       updated_at         = now()
+     WHERE empresa_id = $1 AND id = $2`,
+    [
+      empresaId,
+      pedidoId,
+      datos.numeroProveedor ?? null,
+      datos.fechaPedido ?? null,
+      datos.usuarioPedido ?? null,
+      datos.centroId ?? null,
+      datos.centroNombre ?? null,
+      datos.almacenOrigen ?? null,
+      datos.transportista ?? null,
+      datos.destinoTexto ?? null,
+      datos.clienteProveedor ?? null,
+      datos.derivadoDeAlbaran ?? null,
+    ]
+  );
 }
 
 export async function crearPedidoLinea(

@@ -57,6 +57,8 @@ export type Pedido = {
   canceladoMotivo: string | null;
   observaciones: string | null;
   origen: string;
+  /** Se dedujo de un albarán: la cantidad pedida es lo expedido, no lo pedido. */
+  derivadoDeAlbaran: boolean;
   creadoNombre: string | null;
   createdAt: string;
   updatedAt: string;
