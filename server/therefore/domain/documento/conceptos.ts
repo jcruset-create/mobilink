@@ -38,10 +38,44 @@ export const CONCEPTOS_GLOBALES_POR_DEFECTO = [
   "portes",
   "transporte",
   "gastos de envio",
+  "gastos de tratamiento",
+  "gastos de gestion",
   "tasa",
   "tasas",
   "recargo",
   "rappel",
+] as const;
+
+/**
+ * Tasas ambientales: se reconocen aunque no vayan al principio de la fila.
+ *
+ * «S.I. Gestión de NFU», «Gastos de ecovalor», «Ecotasa»: cada proveedor las
+ * escribe con su prefijo, y todas cuestan dinero sin ser material. Por eso
+ * esta lista se busca CONTENIDA en el texto, como palabra entera, y no sólo
+ * al principio como el resto.
+ */
+export const CONCEPTOS_AMBIENTALES_POR_DEFECTO = [
+  "ecovalor",
+  "ecotasa",
+  "nfu",
+  "sigaus",
+  "sigrauto",
+  "punto verde",
+  "gestion de residuos",
+] as const;
+
+/**
+ * Arrastres entre páginas: «Suma y sigue», «Suma anterior».
+ *
+ * Repiten dinero que ya está contado y NO cierran nada: el albarán sigue en
+ * la página siguiente. Ni línea, ni concepto, ni pie. Se ignoran.
+ */
+export const ARRASTRES_POR_DEFECTO = [
+  "suma y sigue",
+  "suma anterior",
+  "a cuenta nueva",
+  "sigue en",
+  "continua en",
 ] as const;
 
 /**
@@ -52,8 +86,10 @@ export const CONCEPTOS_GLOBALES_POR_DEFECTO = [
  * entero.
  */
 export const TOTALES_DOCUMENTO_POR_DEFECTO = [
+  "importe bruto",
   "base imponible",
   "base imp",
+  "total sin iva",
   "total factura",
   "total documento",
   "iva",
@@ -66,12 +102,32 @@ export const TOTALES_DOCUMENTO_POR_DEFECTO = [
 export type VocabularioConceptos = {
   globales: readonly string[];
   totales: readonly string[];
+  /** Se buscan contenidas, como palabra entera. Opcional por compatibilidad. */
+  ambientales?: readonly string[];
+  arrastres?: readonly string[];
 };
 
 export const VOCABULARIO_CONCEPTOS: VocabularioConceptos = {
   globales: CONCEPTOS_GLOBALES_POR_DEFECTO,
   totales: TOTALES_DOCUMENTO_POR_DEFECTO,
+  ambientales: CONCEPTOS_AMBIENTALES_POR_DEFECTO,
+  arrastres: ARRASTRES_POR_DEFECTO,
 };
+
+/** Minúsculas, sin acentos, con la puntuación de relleno convertida en espacio. */
+function llano(texto: string): string {
+  return normalizar(texto)
+    .toLowerCase()
+    .replace(/[.:·-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function contieneEntera(texto: string, etiqueta: string): boolean {
+  const t = ` ${llano(texto)} `;
+  const e = ` ${llano(etiqueta)} `;
+  return e.trim().length > 0 && t.includes(e);
+}
 
 /**
  * ¿El texto EMPIEZA por una de estas etiquetas?
@@ -106,7 +162,49 @@ export function conceptoGlobal(
   texto: string,
   vocabulario: VocabularioConceptos = VOCABULARIO_CONCEPTOS
 ): string | null {
-  return empiezaPorAlguna(texto, vocabulario.globales);
+  const alPrincipio = empiezaPorAlguna(texto, vocabulario.globales);
+  if (alPrincipio) return alPrincipio;
+  for (const e of vocabulario.ambientales ?? []) {
+    if (contieneEntera(texto, e)) return e;
+  }
+  return null;
+}
+
+/** ¿Es un arrastre entre páginas («Suma y sigue»)? Se ignora del todo. */
+export function esArrastre(
+  texto: string,
+  vocabulario: VocabularioConceptos = VOCABULARIO_CONCEPTOS
+): boolean {
+  return (vocabulario.arrastres ?? []).some((e) => contieneEntera(texto, e));
+}
+
+/**
+ * ¿Es la fila de TÍTULOS del pie de la factura?
+ *
+ * Hay plantillas que ponen «Base imponible  IVA  Total» en una fila y los
+ * importes en la de debajo. Esa fila de títulos no tiene ningún importe y aun
+ * así es el pie: dos o más etiquetas de total, sin ningún número con
+ * decimales. Una sola («Total», que también es título de columna) no basta.
+ */
+export function esCabeceraDeTotales(
+  texto: string,
+  vocabulario: VocabularioConceptos = VOCABULARIO_CONCEPTOS
+): boolean {
+  if (/\d[.,]\d{2}/.test(texto)) return false;
+  let t = ` ${llano(texto)} `;
+  let n = 0;
+  // De la más larga a la más corta, retirando lo reconocido para no contar
+  // «base imponible» y «base imp» dos veces.
+  const etiquetas = [...vocabulario.totales].sort((a, b) => b.length - a.length);
+  for (const e of etiquetas) {
+    const marca = ` ${llano(e)} `;
+    if (!marca.trim()) continue;
+    if (t.includes(marca)) {
+      n++;
+      t = t.split(marca).join("  ");
+    }
+  }
+  return n >= 2;
 }
 
 /** La etiqueta del total de documento, o `null` si no lo es. */

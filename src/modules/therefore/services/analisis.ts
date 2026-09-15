@@ -64,8 +64,12 @@ export function celdasFlojas(lineas: LineaAlbaran[], umbral: number): ResumenCel
       [l.importeCentimos, l.confianza.importe],
     ];
     for (const [valor, confianza] of campos) {
-      if (valor === null || valor === undefined || valor === "") vacias++;
-      else if (confianza < umbral) dudosas++;
+      // Vacía CON confianza es una celda que el documento no trae (una tabla
+      // sin columna de referencia): no hay nada que leer ni que rellenar.
+      // Vacía sin confianza es un hueco, y un hueco se rellena a mano.
+      if (valor === null || valor === undefined || valor === "") {
+        if (confianza < umbral) vacias++;
+      } else if (confianza < umbral) dudosas++;
     }
   }
   return { dudosas, vacias };

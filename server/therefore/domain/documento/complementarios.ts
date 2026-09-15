@@ -36,6 +36,13 @@ const BASTIDOR = /\b[A-HJ-NPR-Z0-9]{17}\b/;
 /** Matrícula española moderna: cuatro dígitos y tres consonantes. */
 const MATRICULA_MODERNA = /\b\d{4}[ -]?[BCDFGHJKLMNPRSTVWXYZ]{3}\b/;
 
+/** Remolque o semirremolque: R o S, cuatro dígitos y tres consonantes. */
+const MATRICULA_REMOLQUE = /\b[RS][ -]?\d{4}[ -]?[BCDFGHJKLMNPRSTVWXYZ]{3}\b/;
+
+/** Una fila con importes es un artículo; ahí no vive la matrícula salvo etiquetada. */
+const CON_DECIMALES = /\d[.,]\d{2}/;
+const ETIQUETA_MATRICULA = /^\s*MATR?[ÍI]?C?U?L?A?\s*[.:]/;
+
 /** Las antiguas, con letra o letras de provincia delante. */
 const MATRICULA_ANTIGUA = /\b[A-Z]{1,2}[ -]?\d{4}[ -]?[A-Z]{1,2}\b/;
 
@@ -119,8 +126,11 @@ export function extraerComplementarios(
           t = t.replace(b[0], " ");
         }
       }
-      if (!salida.matricula) {
-        const m = t.match(MATRICULA_MODERNA) ?? t.match(MATRICULA_ANTIGUA);
+      // «CF1100 A/T» en la descripción de un neumático tiene la forma de una
+      // matrícula antigua y no lo es. En una fila de artículo sólo se lee la
+      // matrícula si va etiquetada.
+      if (!salida.matricula && (!CON_DECIMALES.test(t) || ETIQUETA_MATRICULA.test(t))) {
+        const m = t.match(MATRICULA_REMOLQUE) ?? t.match(MATRICULA_MODERNA) ?? t.match(MATRICULA_ANTIGUA);
         if (m) salida.matricula = m[0].replace(/[ -]/g, "");
       }
       if (salida.bastidor && salida.matricula) return;

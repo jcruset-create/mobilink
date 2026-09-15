@@ -304,8 +304,7 @@ export function validarAnalisis(entrada: EntradaValidacion): Validacion[] {
     const mismaFactura =
       !entrada.correo.facturaNumero ||
       !entrada.documento.facturaNumero ||
-      entrada.correo.facturaNumero.replace(/\W/g, "").toUpperCase() ===
-        entrada.documento.facturaNumero.replace(/\W/g, "").toUpperCase();
+      mismoNumeroDeFactura(entrada.correo.facturaNumero, entrada.documento.facturaNumero);
     salida.push(
       mismaFactura
         ? val("CORREO_VS_DOCUMENTO", "OK", "El documento es de la factura que decía el correo.", entrada.correo.facturaNumero, entrada.documento.facturaNumero)
@@ -320,6 +319,26 @@ export function validarAnalisis(entrada: EntradaValidacion): Validacion[] {
   }
 
   return salida;
+}
+
+/**
+ * «N-123456» y «N0000123456» son la misma factura: el papel rellena con ceros
+ * y el correo no. Se comparan sin separadores y sin ceros de relleno, y vale
+ * también que uno termine en el otro («FAC-1-N-123456» frente a «N123456»),
+ * siempre que el corto tenga entidad.
+ */
+function mismoNumeroDeFactura(a: string, b: string): boolean {
+  const limpio = (v: string) =>
+    v
+      .replace(/\W/g, "")
+      .toUpperCase()
+      .replace(/(^|[A-Z])0+(?=\d)/g, "$1");
+  const x = limpio(a);
+  const y = limpio(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [corto, largo] = x.length <= y.length ? [x, y] : [y, x];
+  return corto.length >= 5 && largo.endsWith(corto);
 }
 
 const ORDEN: Record<EstadoValidacion, number> = { OK: 0, REVISAR: 1, ERROR: 2 };

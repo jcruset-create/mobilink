@@ -34,6 +34,7 @@ import { normalizar } from "../correo/texto.ts";
 import {
   VOCABULARIO_CONCEPTOS,
   conceptoGlobal,
+  esArrastre,
   totalDocumento,
   type VocabularioConceptos,
 } from "./conceptos.ts";
@@ -42,6 +43,7 @@ import {
   SINONIMOS_COLUMNA_POR_DEFECTO,
   detectarRejilla,
   repartirEnColumnas,
+  titulosEnLaFila,
   type Rejilla,
   type SinonimosColumna,
 } from "./tabla.ts";
@@ -103,6 +105,13 @@ export type ExtraccionLineas = {
   rejilla: Rejilla;
   /** Filas con texto que no se pudieron leer como artículo ni como concepto. */
   descartadas: number;
+  /**
+   * Filas de texto dentro de la tabla que no son artículo: «SE ANULA
+   * PULMÓN», «3er EJE IZQUIERDO», «CASO 4711». Llevan cantidad o un número
+   * suelto pero ningún importe. Se guardan como observaciones del albarán:
+   * no se suman y no se pierden.
+   */
+  notas: string[];
 };
 
 export type OpcionesLineas = {
@@ -115,6 +124,37 @@ export type OpcionesLineas = {
 
 /** Un importe al final de la fila: lo que la convierte en candidata. */
 const IMPORTE_AL_FINAL = /[-−+]?\d[\d.,]*\s*(?:€|EUR)?\s*$/i;
+
+/** Todos los números del final de la fila: «-2,00 4,00 -8,00», «4 1,80 € 7,20 €». */
+const NUMEROS_AL_FINAL = /(?:(?:^|\s+)[-−+]?\d[\d.,]*\s*(?:%|€|EUR)?)+\s*$/i;
+
+/** Sólo los que llevan decimales: la cantidad de una nota («... 1,00»), no su número («CASO 4711»). */
+const DECIMALES_AL_FINAL = /(?:(?:^|\s+)[-−+]?\d+[.,]\d{1,3}\s*(?:%|€|EUR)?)+\s*$/i;
+
+/** El texto de una fila sin los números de sus columnas ni el guion de viñeta. */
+function textoSinNumeros(texto: string, patron: RegExp = NUMEROS_AL_FINAL): string {
+  return texto
+    .trim()
+    .replace(/^[-–—•·*\s]+/, "")
+    .replace(patron, "")
+    .trim();
+}
+
+/** Cuánto de su columna llena el texto de una fila: 1 es hasta el borde. */
+function llenadoDeColumna(fila: LineaTexto, rejilla: Rejilla, tipo: "descripcion"): number | null {
+  const col = rejilla.columnas.find((c) => c.tipo === tipo);
+  if (!col || !Number.isFinite(col.x1) || fila.palabras.length === 0) return null;
+  const dentro = fila.palabras.filter((p) => p.x + p.w / 2 >= col.x0 && p.x + p.w / 2 < col.x1);
+  if (dentro.length === 0) return null;
+  // La primera columna no tiene borde izquierdo: se toma donde empieza el texto.
+  const inicio = Number.isFinite(col.x0) ? col.x0 : Math.min(...dentro.map((p) => p.x));
+  const fin = Math.max(...dentro.map((p) => p.x + p.w));
+  if (col.x1 <= inicio) return null;
+  return (fin - inicio) / (col.x1 - inicio);
+}
+
+/** A partir de qué llenado una descripción «se sale» y sigue en la fila de abajo. */
+const LLENADO_QUE_DESBORDA = 0.75;
 
 /** Letras que se confunden con dígitos en un escaneo o una fuente estrecha. */
 const CONFUNDIBLES = /[OoIilSs]/;
@@ -141,7 +181,7 @@ function comoConcepto(
   // quita los acentos y pone en mayúsculas, que sirve para reconocer y no para
   // enseñar («Tasa de reciclaje» no se guarda como «TASA DE RECICLAJE»).
   const original = fila.texto.trim();
-  const sinImporteOriginal = original.replace(IMPORTE_AL_FINAL, "").trim();
+  const sinImporteOriginal = textoSinNumeros(original);
   const paraComparar = normalizar(sinImporteOriginal);
   const etiqueta = conceptoGlobal(paraComparar, vocabulario) ?? totalDocumento(paraComparar, vocabulario);
   if (!etiqueta) return null;
@@ -202,35 +242,97 @@ export function extraerLineas(
 
   const lineas: LineaArticulo[] = [];
   const conceptos: ConceptoAdicional[] = [];
+  const notas: string[] = [];
   const filasDeCadaLinea: LineaTexto[][] = [];
-  let descartadas = 0;
+  // Con rejilla, lo que no es artículo ni concepto es nota; sin rejilla, todo
+  // lo que tiene un importe se lee como fila. Ya no queda nada que descartar,
+  // pero el contador sigue en el contrato porque se guarda y se enseña.
+  const descartadas = 0;
+  const hayColumna = (tipo: "referencia" | "descripcion") =>
+    rejilla.modo === "CABECERA" && rejilla.columnas.some((c) => c.tipo === tipo);
+  /*
+   * Un título de bloque sin importe («TASAS Y OTROS CONCEPTOS») abre un bloque:
+   * lo que viene debajo, hasta el final de la sección, es concepto aunque
+   * tenga forma de artículo con su cantidad y su precio.
+   */
+  let bloqueDeConceptos = false;
+
+  const anotar = (texto: string) => {
+    const limpio = textoSinNumeros(texto, DECIMALES_AL_FINAL);
+    if (/[A-Za-z0-9]/.test(limpio)) notas.push(limpio);
+  };
 
   for (const fila of seccion) {
     if (fila === rejilla.filaCabecera) continue;
     const texto = fila.texto.trim();
     if (!texto) continue;
+    // La cabecera de la tabla repetida en la página siguiente.
+    if (titulosEnLaFila(fila, sinonimos) >= 3) continue;
+    // «Suma y sigue»: dinero ya contado.
+    if (esArrastre(texto, vocabulario)) continue;
 
     const concepto = comoConcepto(fila, vocabulario);
     if (concepto) {
       conceptos.push(concepto);
+      if (concepto.importeCentimos === null && !/\d[.,]\d{2}/.test(texto)) bloqueDeConceptos = true;
       continue;
     }
 
     if (!pareceArticulo(fila)) {
       const ultima = lineas[lineas.length - 1];
       if (ultima && esContinuacion(fila)) {
-        ultima.descripcion = [ultima.descripcion, texto].filter(Boolean).join(" ");
-        ultima.rawText += `\n${fila.texto}`;
-        filasDeCadaLinea[filasDeCadaLinea.length - 1].push(fila);
+        /*
+         * ¿Continuación o nota? Una descripción sigue en la fila de abajo
+         * porque no cabía: la de arriba llega hasta el borde de su columna.
+         * Si la de arriba se queda corta, lo de abajo es otra cosa —el nombre
+         * de la flota, el taller— y va a observaciones, no pegado al artículo.
+         */
+        const primera = filasDeCadaLinea[filasDeCadaLinea.length - 1][0];
+        const llenado = rejilla.modo === "CABECERA" ? llenadoDeColumna(primera, rejilla, "descripcion") : null;
+        if (llenado === null || llenado >= LLENADO_QUE_DESBORDA) {
+          ultima.descripcion = [ultima.descripcion, texto].filter(Boolean).join(" ");
+          ultima.rawText += `\n${fila.texto}`;
+          filasDeCadaLinea[filasDeCadaLinea.length - 1].push(fila);
+        } else {
+          anotar(texto);
+        }
         continue;
       }
       // Una fila sin importe antes de la primera línea es cabecera de la
-      // sección (fecha, matrícula, destinatario): no se cuenta como descartada.
-      if (lineas.length > 0 && /\d/.test(texto)) descartadas++;
+      // sección (fecha, matrícula, destinatario): la lee `complementarios`.
+      // Después de la primera, es una nota del albarán («CASO 4711»).
+      if (lineas.length > 0 && /\d/.test(texto)) anotar(texto);
+      continue;
+    }
+
+    if (bloqueDeConceptos) {
+      conceptos.push({
+        etiqueta: textoSinNumeros(texto),
+        importeCentimos: leerImporte(texto.match(IMPORTE_AL_FINAL)?.[0] ?? "").centimos,
+        raw: texto,
+        pagina: fila.pagina,
+      });
       continue;
     }
 
     const celdas = repartirEnColumnas(fila, rejilla);
+
+    // Con rejilla, una fila sin nada en la columna del importe no es un
+    // artículo: es texto con una cantidad al lado («SE ANULA PULMÓN 1,00»).
+    if (rejilla.modo === "CABECERA" && !celdas.importe?.trim()) {
+      anotar(texto);
+      continue;
+    }
+
+    // Sin columna de descripción, el texto largo bajo «Referencia» es la
+    // descripción: una referencia no lleva espacios. La referencia no falta:
+    // el documento no la trae.
+    let referenciaAusente = !hayColumna("referencia");
+    if (!hayColumna("descripcion") && celdas.referencia && /\s/.test(celdas.referencia.trim())) {
+      celdas.descripcion = celdas.referencia;
+      delete celdas.referencia;
+      referenciaAusente = true;
+    }
     const cantidad = leerCantidad(celdas.cantidad);
     const precio = leerImporte(celdas.precio ?? "");
     const importe = leerImporte(celdas.importe ?? "");
@@ -246,7 +348,10 @@ export function extraerLineas(
       descuentos: dtos.descuentos,
       descuentosRaw: dtos.raw,
       confianza: {
-        referencia: celdas.referencia ? rejilla.confianza : 0,
+        // Sin columna de referencia en la tabla, la referencia no falta: no
+        // existe en este documento. Se deja vacía con la confianza de la
+        // rejilla para que no cuente como «sin leer».
+        referencia: celdas.referencia || referenciaAusente ? rejilla.confianza : 0,
         descripcion: celdas.descripcion ? rejilla.confianza : 0,
         cantidad: cantidad.valor === null ? 0 : Math.min(rejilla.confianza, cantidad.confianza),
         precio: precio.centimos === null ? 0 : Math.min(rejilla.confianza, precio.confianza),
@@ -268,7 +373,7 @@ export function extraerLineas(
   }
   marcarReferenciasDudosas(lineas);
 
-  return { lineas, conceptos, rejilla, descartadas };
+  return { lineas, conceptos, rejilla, descartadas, notas };
 }
 
 /**

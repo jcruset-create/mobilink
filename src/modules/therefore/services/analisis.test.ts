@@ -71,6 +71,11 @@ describe("celdas flojas", () => {
   it("con todo leído y confiado no hay nada que marcar", () => {
     expect(celdasFlojas([linea()], 0.85)).toEqual({ dudosas: 0, vacias: 0 });
   });
+
+  it("una referencia vacía CON confianza es una columna que el documento no trae", () => {
+    const r = celdasFlojas([linea({ referencia: null, confianza: { ...linea().confianza, referencia: 0.95 } })], 0.85);
+    expect(r).toEqual({ dudosas: 0, vacias: 0 });
+  });
 });
 
 describe("el estado general", () => {

@@ -207,6 +207,11 @@ export function analizarAlbaran(
 
   const extraidas = parser.extraerLineas(seccion, opciones.lineas, localizacion.cabeceraDocumento);
   const complementarios = parser.extraerComplementarios(seccion, localizacion.cabeceraDocumento);
+  if (extraidas.notas.length > 0) {
+    complementarios.observaciones = [complementarios.observaciones, ...extraidas.notas]
+      .filter(Boolean)
+      .join(" · ");
+  }
 
   return {
     ...base,

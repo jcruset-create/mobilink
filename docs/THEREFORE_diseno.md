@@ -1295,6 +1295,50 @@ Sigue sin código: dar de alta el conector de BC del cliente en el Hub y la
 clave `erp.company.<codigo>` por sociedad, cuando el cliente entregue los
 datos del ERP (N.7).
 
+**Ajuste con documentos reales (N.3), primera tanda. HECHO.** Con las cinco
+primeras facturas y abonos reales —dos proveedores, plantillas distintas— el
+parser genérico fallaba en todo lo que no se puede inventar sin papel delante:
+
+- **Marcas.** «ALB:0501234» sin espacio no era marca; ahora `alb:` está en
+  las cabeceras por defecto y todas se buscan por palabra entera (por la
+  izquierda). El identificador admite puntos («01.123456»). Una etiqueta
+  corta justo encima de la marca («REF: …») es la primera línea del albarán.
+- **El pie en dos filas.** Hay plantillas con los títulos («IMPORTE BRUTO …
+  BASE IMPONIBLE … TOTAL») en una fila y los importes en la de abajo. La
+  fila de títulos, sin ningún importe, cierra la sección; y la cabecera del
+  documento (número, fecha, totales) lee el valor que hay DEBAJO de la
+  etiqueta cuando no lo hay detrás. «factura» dentro de un correo
+  electrónico ya no es una etiqueta: se buscan palabras enteras.
+- **«Suma y sigue» / «Suma anterior»** no son el pie ni una línea: se
+  ignoran, y el albarán sigue en la página siguiente. El pie legal que
+  «flota» (a distinta altura en cada página) se retira igualmente si es un
+  párrafo largo idéntico sin importes; «Página 1 de 2» se reconoce por la
+  palabra.
+- **Lo que no es línea.** Una fila con cantidad y sin importe («SE ANULA
+  PULMÓN 1,00», «CASO 4711») es una nota del albarán y va a observaciones.
+  Un título de bloque sin importe («TASAS Y OTROS CONCEPTOS») abre un bloque
+  de conceptos. Las tasas ambientales (NFU, ecovalor, ecotasa…) se
+  reconocen contenidas, no sólo al principio. Una descripción sólo continúa
+  en la fila de abajo si la de arriba llenaba su columna; si no, lo de abajo
+  es una nota (el nombre de la flota, el taller).
+- **Columnas que no existen.** Sin columna de referencia, la referencia no
+  está «sin leer»: no existe, y el panel la pinta como ausente. Sin columna
+  de descripción, el texto bajo «Referencia» es la descripción.
+- **Vehículo.** Matrícula de remolque (R/S + 4 dígitos + 3 letras); en una
+  fila de artículo sólo se lee etiquetada, porque «CF1100 A/T» de un
+  neumático tiene forma de matrícula antigua.
+- **Correo contra papel.** «N-123456» y «N0000123456» son la misma factura:
+  se comparan sin ceros de relleno y vale que uno termine en el otro.
+
+Lo que se ha visto y NO se ha tocado, porque el correo manda: el nombre y el
+NIF del emisor que saca la cabecera son heurísticos y en estas plantillas
+cogen el bloque del cliente; la comparación es contra lo que dijo Therefore.
+Y la tasa ambiental de una factura con varios albaranes cae en el último,
+que es donde está impresa: se enseña aparte y no se suma.
+
+Los documentos reales viven en `server/therefore/fixtures/originales/`,
+ignorada por Git; las pruebas reproducen cada caso con datos inventados.
+
 **Pestaña «Documentos» (tras el primer correo real).** El PDF que viene con
 el correo se ve dentro del expediente: la pestaña lista los adjuntos
 (nombre, tamaño, fecha) y enseña el elegido en un visor incrustado, con

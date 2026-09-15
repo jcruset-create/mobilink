@@ -195,6 +195,21 @@ describe("validaciones del análisis", () => {
     });
     expect(de(vs, "CORREO_VS_DOCUMENTO").estado).toBe("OK");
 
+    // El papel rellena con ceros y el correo abrevia: son la misma factura.
+    for (const [correo, papel] of [
+      ["N-123456", "N0000123456"],
+      ["FAC-1-N-123456", "N0000123456"],
+      ["123456", "N0000123456"],
+    ]) {
+      const v = validarAnalisis({
+        analisis: analisis(),
+        importeIncidenciaCentimos: 1000,
+        correo: { facturaNumero: correo, importeCentimos: 1000 },
+        documento: { facturaNumero: papel, totalCentimos: 1210 },
+      });
+      expect(de(v, "CORREO_VS_DOCUMENTO").estado, `${correo} vs ${papel}`).toBe("OK");
+    }
+
     const distintos = validarAnalisis({
       analisis: analisis(),
       importeIncidenciaCentimos: 1000,

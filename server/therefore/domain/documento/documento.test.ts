@@ -15,7 +15,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { conceptoGlobal, esConcepto, totalDocumento } from "./conceptos.ts";
+import { conceptoGlobal, esArrastre, esCabeceraDeTotales, esConcepto, totalDocumento } from "./conceptos.ts";
+import { parserGenerico } from "./generico.ts";
 import { factorRestante, leerDescuentos } from "./descuentos.ts";
 import { extraerComplementarios } from "./complementarios.ts";
 import { extraerLineas, sumaDeLineas } from "./lineas.ts";
@@ -336,14 +337,29 @@ describe("extraer líneas", () => {
   });
 
   it("una descripción que salta de línea se pega a la anterior", () => {
+    // Salta de línea porque no cabía: la de arriba llega al borde de su columna.
     const r = extraerLineas(
       conCabecera([
-        lineaArticulo(1, 120, "111111", "PASTILLA FRENO", "1,00", "10,00", "-", "10,00"),
-        fila(1, 132, [["DELANTERA IZQUIERDA", 110]]),
+        lineaArticulo(1, 120, "111111", "PASTILLA DE FRENO DELANT.", "1,00", "10,00", "-", "10,00"),
+        fila(1, 132, [["EJE IZQUIERDO", 110]]),
       ])
     );
     expect(r.lineas).toHaveLength(1);
-    expect(r.lineas[0].descripcion).toContain("DELANTERA IZQUIERDA");
+    expect(r.lineas[0].descripcion).toContain("EJE IZQUIERDO");
+    expect(r.notas).toEqual([]);
+  });
+
+  it("texto suelto bajo una descripción corta es una nota, no una continuación", () => {
+    // «FLOTA NORTE» debajo de «PASTILLA FRENO»: la descripción no llenaba la
+    // columna, así que no se salió; lo de abajo es otra cosa y va a notas.
+    const r = extraerLineas(
+      conCabecera([
+        lineaArticulo(1, 120, "111111", "PASTILLA FRENO", "1,00", "10,00", "-", "10,00"),
+        fila(1, 132, [["FLOTA NORTE", 110]]),
+      ])
+    );
+    expect(r.lineas[0].descripcion).toBe("PASTILLA FRENO");
+    expect(r.notas).toEqual(["FLOTA NORTE"]);
   });
 
   it("«Portes» va a conceptos, no a líneas, y no entra en la suma", () => {
@@ -499,5 +515,248 @@ describe("analizar un albarán dentro de una factura", () => {
       { numero: 1, lineas: [fila(1, 20, [["A2", 40]]), fila(1, 10, [["A1", 40]])] },
     ]);
     expect(aplanar(dos).map((l) => l.texto)).toEqual(["A1", "A2", "B"]);
+  });
+});
+
+/* ── Lo que enseñaron las primeras facturas reales ────────────────────────── */
+
+describe("lo que enseñaron las primeras facturas reales", () => {
+  /** Cabecera de tabla sin columna de referencia, como la de un proveedor de neumáticos. */
+  const SIN_REF: [string, number][] = [
+    ["Denominacion", 110],
+    ["Cantidad", 300],
+    ["Precio", 350],
+    ["Descuento", 430],
+    ["Importe", 500],
+  ];
+  const TOTALES_EN_DOS_FILAS = [
+    fila(1, 572, [
+      ["IMPORTE BRUTO", 50],
+      ["BASE IMPONIBLE", 237],
+      ["% I.V.A.", 339],
+      ["IMPORTE I.V.A.", 407],
+      ["TOTAL ABONO", 505],
+    ]),
+    fila(1, 587, [
+      ["-37,71", 66],
+      ["-37,71", 254],
+      ["21,00", 341],
+      ["-7,92", 423],
+      ["-45,63", 503],
+    ]),
+  ];
+
+  it("«ALB:0501234» sin espacio es una marca; «ALB 580798» en una nota no lo es", () => {
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 50, [["FACTURA F-2026-0001", 40]]),
+          fila(1, 100, SIN_REF),
+          fila(1, 110, [["REF: X4711", 110]]),
+          fila(1, 120, [["ALB:0501234 FECHA: 26/08/2026", 110]]),
+          fila(1, 130, [["PASTILLA FRENO", 110], ["2,00", 300], ["10,00", 350], ["20,00", 500]]),
+          fila(1, 140, [["ALB 580798", 110], ["1,00", 300]]),
+          ...TOTALES_EN_DOS_FILAS,
+        ],
+      },
+    ]);
+    const loc = localizarAlbaranes(doc);
+    expect(loc.secciones).toHaveLength(1);
+    expect(loc.secciones[0].numeroDocumento).toBe("0501234");
+    // La fila de títulos del pie, sin ningún importe, cierra la sección.
+    expect(loc.secciones[0].finPor).toBe("TOTALES");
+    // La etiqueta corta de justo encima («REF: …») es del albarán, no de la cabecera.
+    expect(loc.secciones[0].lineas[0].texto).toBe("REF: X4711");
+    expect(loc.secciones[0].lineas.map((l) => l.texto)).not.toContain("IMPORTE BRUTO BASE IMPONIBLE % I.V.A. IMPORTE I.V.A. TOTAL ABONO");
+    expect(loc.cabeceraDocumento.map((l) => l.texto)).toEqual(["FACTURA F-2026-0001", "Denominacion Cantidad Precio Descuento Importe"]);
+  });
+
+  it("«Suma y sigue» no cierra el albarán, y la plantilla repetida se retira esté donde esté", () => {
+    const legal = "Le informamos de que tratamos sus datos con el fin de prestarle el servicio solicitado";
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 80, [["Albaran: 0501234", 40]]),
+          fila(1, 100, CABECERA_TABLA),
+          lineaArticulo(1, 120, "111111", "UNO", "1,00", "10,00", "-", "10,00"),
+          fila(1, 140, [["SUMA Y SIGUE: 10,00", 350]]),
+          fila(1, 160, [[legal, 40]]),
+          fila(1, 180, [["Pagina 1 de 2", 500]]),
+        ],
+      },
+      {
+        numero: 2,
+        lineas: [
+          fila(2, 60, [["Fecha expedicion: 01/09/2026 Suma anterior: 10,00", 40]]),
+          fila(2, 100, CABECERA_TABLA),
+          lineaArticulo(2, 120, "222222", "DOS", "1,00", "20,00", "-", "20,00"),
+          fila(2, 160, [["Base imponible", 350], ["30,00", 500]]),
+          fila(2, 175, [["Total factura", 350], ["36,30", 500]]),
+          fila(2, 300, [[legal, 40]]),
+          fila(2, 400, [["Pagina 2 de 2", 500]]),
+        ],
+      },
+    ]);
+    const loc = localizarAlbaranes(doc, { sinonimosColumna: Object.values(SINONIMOS_COLUMNA_POR_DEFECTO).flat() });
+    expect(loc.lineasRepetidasRetiradas).toBe(4);
+    expect(loc.secciones).toHaveLength(1);
+    expect(loc.secciones[0].finPor).toBe("TOTALES");
+    expect(loc.secciones[0].paginaFin).toBe(2);
+
+    const r = extraerLineas(loc.secciones[0].lineas);
+    expect(r.lineas.map((l) => l.descripcion)).toEqual(["UNO", "DOS"]);
+    expect(r.conceptos).toEqual([]);
+    expect(r.notas).toEqual([]);
+  });
+
+  it("sin columna de referencia, la referencia no está «sin leer»: no existe", () => {
+    const r = extraerLineas([
+      fila(1, 100, SIN_REF),
+      fila(1, 130, [["PASTILLA FRENO", 110], ["2,00", 300], ["10,00", 350], ["20,00", 500]]),
+    ]);
+    expect(r.lineas).toHaveLength(1);
+    expect(r.lineas[0].referencia).toBeNull();
+    expect(r.lineas[0].confianza.referencia).toBeGreaterThanOrEqual(0.95);
+    expect(r.lineas[0].cuadraAritmetica).toBe(true);
+  });
+
+  it("una fila con cantidad y sin importe es una nota del albarán, no una línea", () => {
+    const r = extraerLineas([
+      fila(1, 100, SIN_REF),
+      fila(1, 130, [["MANO OBRA MECANICA", 110], ["0,50", 300], ["58,13", 350], ["20,00", 430], ["23,25", 500]]),
+      fila(1, 140, [["SE ANULA PULMON", 110], ["1,00", 300]]),
+      fila(1, 150, [["CASO 4711", 110]]),
+      fila(1, 160, [["------------------------------", 110], ["1,00", 300]]),
+    ]);
+    expect(r.lineas).toHaveLength(1);
+    // El descuento sin «%» cuenta como porcentaje y la fila cuadra.
+    expect(r.lineas[0].cuadraAritmetica).toBe(true);
+    expect(r.notas).toEqual(["SE ANULA PULMON", "CASO 4711"]);
+    expect(r.descartadas).toBe(0);
+  });
+
+  it("un título de bloque sin importe abre un bloque de conceptos", () => {
+    const r = extraerLineas([
+      fila(1, 100, SIN_REF),
+      fila(1, 130, [["NEUMATICO EJEMPLO", 110], ["2,00", 300], ["21,11", 350], ["42,21", 500]]),
+      fila(1, 140, [["PORTES DE DEVOLUCION", 110], ["-2,00", 300], ["4,00", 350], ["-8,00", 500]]),
+      fila(1, 150, [["TASAS Y OTROS CONCEPTOS", 110]]),
+      fila(1, 160, [["Gestion de residuos Cat.BT", 110], ["2,00", 300], ["1,75", 350], ["3,50", 500]]),
+    ]);
+    expect(r.lineas.map((l) => l.descripcion)).toEqual(["NEUMATICO EJEMPLO"]);
+    expect(r.conceptos.map((c) => [c.etiqueta, c.importeCentimos])).toEqual([
+      ["PORTES DE DEVOLUCION", -800],
+      ["TASAS Y OTROS CONCEPTOS", null],
+      ["Gestion de residuos Cat.BT", 350],
+    ]);
+  });
+
+  it("las tasas ambientales se reconocen aunque no vayan al principio", () => {
+    expect(conceptoGlobal("- Gastos de ecovalor")).toBe("ecovalor");
+    expect(conceptoGlobal("S.I.Gestión de NFU Cat.BT")).toBe("nfu");
+    expect(conceptoGlobal("NEUMATICO CONFUSION 205")).toBeNull();
+    expect(esArrastre("SUMA Y SIGUE: 5.385,18")).toBe(true);
+    expect(esArrastre("Suma de las líneas")).toBe(false);
+    expect(esCabeceraDeTotales("IMPORTE BRUTO DESCUENTO BASE IMPONIBLE % I.V.A. IMPORTE I.V.A. TOTAL ABONO")).toBe(true);
+    expect(esCabeceraDeTotales("Ref Descripcion Cant Precio Total")).toBe(false);
+    expect(esCabeceraDeTotales("Base imponible 100,00 Total 121,00")).toBe(false);
+  });
+
+  it("sin columna de descripción, el texto bajo «Referencia» es la descripción", () => {
+    const r = extraerLineas([
+      fila(1, 100, [["Referencia", 40], ["Cantidad", 300], ["Precio", 350], ["Total", 500]]),
+      fila(1, 130, [["255/65 R17 NEUMATICO EJEMPLO", 40], ["4", 300], ["93,47 €", 350], ["373,88 €", 500]]),
+      fila(1, 140, [["- Gastos de ecovalor", 40], ["4", 300], ["1,80 €", 350], ["7,20 €", 500]]),
+    ]);
+    expect(r.lineas).toHaveLength(1);
+    expect(r.lineas[0].referencia).toBeNull();
+    expect(r.lineas[0].descripcion).toBe("255/65 R17 NEUMATICO EJEMPLO");
+    expect(r.lineas[0].cantidad).toBe(4);
+    expect(r.lineas[0].importeCentimos).toBe(37388);
+    expect(r.lineas[0].cuadraAritmetica).toBe(true);
+    expect(r.lineas[0].confianza.referencia).toBeGreaterThanOrEqual(0.95);
+    expect(r.conceptos.map((c) => [c.etiqueta, c.importeCentimos])).toEqual([["Gastos de ecovalor", 720]]);
+  });
+
+  it("la cabecera lee los valores que van DEBAJO de sus etiquetas, y el correo electrónico no es un número", () => {
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 60, [["PROVEEDOR EJEMPLO SL", 40]]),
+          fila(1, 70, [["facturacion@ejemplo.invalid", 40]]),
+          fila(1, 164, [["ABONO", 70], ["FECHA", 180]]),
+          fila(1, 175, [["A0000123", 52], ["31/08/2026", 164]]),
+          fila(1, 203, SIN_REF),
+          fila(1, 219, [["ALB:0501234 FECHA: 26/08/2026", 110]]),
+          fila(1, 232, [["NEUMATICO EJEMPLO", 110], ["2,00", 300], ["21,11", 350], ["42,21", 500]]),
+          ...TOTALES_EN_DOS_FILAS,
+        ],
+      },
+    ]);
+    const c = parserGenerico.extraerCabecera(doc);
+    expect(c.tipoDocumento).toBe("ABONO");
+    expect(c.numeroDocumento).toBe("A0000123");
+    expect(c.fechaDocumento).toBe("2026-08-31");
+    expect(c.baseCentimos).toBe(-3771);
+    // La cuota, no el 21 % que hay bajo «% I.V.A.».
+    expect(c.ivaCentimos).toBe(-792);
+    expect(c.totalCentimos).toBe(-4563);
+  });
+
+  it("«Nº : F-2026-0001» al lado, y «Total sin IVA / IVA / Total IVA incluido» en dos filas", () => {
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 18, [["Factura", 40]]),
+          fila(1, 38, [["Nº", 40], [":", 55], ["F-2026-0001", 65]]),
+          fila(1, 50, [["Fecha : 11/08/2026", 40]]),
+          fila(1, 128, [["Nº IVA: ESW0000000X", 40]]),
+          fila(1, 747, [["TOTAL SIN IVA", 200], ["IVA", 300], ["TOTAL IVA INCLUIDO", 400]]),
+          fila(1, 763, [["383,08 €", 200], ["80,45 €", 300], ["463,53 €", 400]]),
+        ],
+      },
+    ]);
+    const c = parserGenerico.extraerCabecera(doc);
+    expect(c.tipoDocumento).toBe("FACTURA");
+    expect(c.numeroDocumento).toBe("F-2026-0001");
+    expect(c.baseCentimos).toBe(38308);
+    expect(c.ivaCentimos).toBe(8045);
+    expect(c.totalCentimos).toBe(46353);
+  });
+
+  it("lee la matrícula de un remolque y no confunde «CF1100 A/T» de un neumático con una", () => {
+    expect(extraerComplementarios([fila(1, 100, [["MAT: R1234BCD KILOMETROS:0", 40]])]).matricula).toBe("R1234BCD");
+    const articulo = fila(1, 120, [["255/65 R17 CF1100 A/T", 110], ["4", 300], ["93,47", 350], ["373,88", 500]]);
+    expect(extraerComplementarios([articulo]).matricula).toBeNull();
+    // Etiquetada sí, aunque la fila lleve una cantidad.
+    expect(extraerComplementarios([fila(1, 120, [["MATR.: 1234BCD", 110], ["1,00", 300]])]).matricula).toBe("1234BCD");
+  });
+
+  it("las notas de un albarán acaban en observaciones y sus tasas en conceptos", () => {
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 50, [["FACTURA F-2026-0001", 40]]),
+          fila(1, 100, SIN_REF),
+          fila(1, 120, [["ALB:0501234 FECHA: 26/08/2026", 110]]),
+          fila(1, 125, [["MAT: 1234BCD KILOMETROS:0", 110]]),
+          fila(1, 130, [["MANO OBRA MECANICA", 110], ["0,50", 300], ["58,13", 350], ["20,00", 430], ["23,25", 500]]),
+          fila(1, 140, [["3er EJE IZQUIERDO", 110], ["1,00", 300]]),
+          fila(1, 150, [["Base imponible", 350], ["23,25", 500]]),
+        ],
+      },
+    ]);
+    const a = analizarAlbaran(doc, "0501234");
+    expect(a.resultadoMatch).toBe("MATCH");
+    expect(a.lineas).toHaveLength(1);
+    expect(a.sumaLineasCentimos).toBe(2325);
+    expect(a.complementarios.matricula).toBe("1234BCD");
+    expect(a.complementarios.observaciones).toBe("3er EJE IZQUIERDO");
+    expect(a.filasDescartadas).toBe(0);
   });
 });
