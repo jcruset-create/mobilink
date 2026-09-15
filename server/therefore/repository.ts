@@ -1542,3 +1542,666 @@ export async function cerrarDecision(
   );
   return rows[0] ? aDecision(rows[0]) : null;
 }
+
+/* ── Análisis de documentos (fase 3b) ────────────────────────────────────── */
+
+const CAMPOS_DOC = `
+  id, empresa_id, expediente_id, adjunto_id, hash_archivo, tipo_documento,
+  numero_documento, fecha_documento, proveedor_nombre, proveedor_nif,
+  cliente_nombre, cliente_nif, base_centimos, iva_centimos, total_centimos,
+  moneda, albaranes_detectados, origen, parser_usado, confianza, metadata_json,
+  validacion, discrepancias, created_at, updated_at`;
+
+export type Documento = {
+  id: string;
+  expedienteId: string;
+  adjuntoId: string | null;
+  hashArchivo: string;
+  tipoDocumento: string;
+  numeroDocumento: string | null;
+  fechaDocumento: string | null;
+  proveedorNombre: string | null;
+  proveedorNif: string | null;
+  baseCentimos: number | null;
+  ivaCentimos: number | null;
+  totalCentimos: number | null;
+  albaranesDetectados: unknown[];
+  origen: string | null;
+  parserUsado: string | null;
+  validacion: string;
+  createdAt: string | null;
+};
+
+function aDocumento(r: QueryResultRow): Documento {
+  return {
+    id: String(r.id),
+    expedienteId: String(r.expediente_id),
+    adjuntoId: r.adjunto_id ? String(r.adjunto_id) : null,
+    hashArchivo: String(r.hash_archivo),
+    tipoDocumento: String(r.tipo_documento),
+    numeroDocumento: r.numero_documento ? String(r.numero_documento) : null,
+    fechaDocumento: aFecha(r.fecha_documento as Date | string | null),
+    proveedorNombre: r.proveedor_nombre ? String(r.proveedor_nombre) : null,
+    proveedorNif: r.proveedor_nif ? String(r.proveedor_nif) : null,
+    baseCentimos: aEntero(r.base_centimos as string | number | null),
+    ivaCentimos: aEntero(r.iva_centimos as string | number | null),
+    totalCentimos: aEntero(r.total_centimos as string | number | null),
+    albaranesDetectados: Array.isArray(r.albaranes_detectados) ? r.albaranes_detectados : [],
+    origen: r.origen ? String(r.origen) : null,
+    parserUsado: r.parser_usado ? String(r.parser_usado) : null,
+    validacion: String(r.validacion),
+    createdAt: aIso(r.created_at as Date | string | null),
+  };
+}
+
+export type DatosDocumento = {
+  adjuntoId: string | null;
+  hashArchivo: string;
+  tipoDocumento?: string;
+  numeroDocumento?: string | null;
+  fechaDocumento?: string | null;
+  proveedorNombre?: string | null;
+  proveedorNif?: string | null;
+  baseCentimos?: number | null;
+  ivaCentimos?: number | null;
+  totalCentimos?: number | null;
+  albaranesDetectados?: unknown[];
+  origen?: string | null;
+  parserUsado?: string | null;
+  confianza?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  validacion?: string;
+  discrepancias?: unknown[];
+};
+
+/**
+ * Guarda la cabecera del documento. El mismo fichero se analiza una vez.
+ *
+ * Es un upsert y no un insert porque reanalizar tiene que poder actualizar lo
+ * que se leyó del papel sin perder el id: las filas de análisis apuntan a él.
+ */
+export async function guardarDocumento(
+  empresaId: string,
+  expedienteId: string,
+  datos: DatosDocumento,
+  ejecutor?: Ejecutor
+): Promise<Documento> {
+  const { rows } = await db(ejecutor).query(
+    `INSERT INTO thf_documentos
+       (empresa_id, expediente_id, adjunto_id, hash_archivo, tipo_documento,
+        numero_documento, fecha_documento, proveedor_nombre, proveedor_nif,
+        base_centimos, iva_centimos, total_centimos, albaranes_detectados,
+        origen, parser_usado, confianza, metadata_json, validacion, discrepancias)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+     ON CONFLICT (expediente_id, hash_archivo) DO UPDATE SET
+       tipo_documento = EXCLUDED.tipo_documento,
+       numero_documento = EXCLUDED.numero_documento,
+       fecha_documento = EXCLUDED.fecha_documento,
+       proveedor_nombre = EXCLUDED.proveedor_nombre,
+       proveedor_nif = EXCLUDED.proveedor_nif,
+       base_centimos = EXCLUDED.base_centimos,
+       iva_centimos = EXCLUDED.iva_centimos,
+       total_centimos = EXCLUDED.total_centimos,
+       albaranes_detectados = EXCLUDED.albaranes_detectados,
+       origen = EXCLUDED.origen,
+       parser_usado = EXCLUDED.parser_usado,
+       confianza = EXCLUDED.confianza,
+       metadata_json = EXCLUDED.metadata_json,
+       validacion = EXCLUDED.validacion,
+       discrepancias = EXCLUDED.discrepancias,
+       updated_at = now()
+     RETURNING ${CAMPOS_DOC}`,
+    [
+      empresaId,
+      expedienteId,
+      datos.adjuntoId,
+      datos.hashArchivo,
+      datos.tipoDocumento ?? "OTRO",
+      datos.numeroDocumento ?? null,
+      datos.fechaDocumento ?? null,
+      datos.proveedorNombre ?? null,
+      datos.proveedorNif ?? null,
+      datos.baseCentimos ?? null,
+      datos.ivaCentimos ?? null,
+      datos.totalCentimos ?? null,
+      JSON.stringify(datos.albaranesDetectados ?? []),
+      datos.origen ?? null,
+      datos.parserUsado ?? null,
+      JSON.stringify(datos.confianza ?? {}),
+      JSON.stringify(datos.metadata ?? {}),
+      datos.validacion ?? "SIN_COMPARAR",
+      JSON.stringify(datos.discrepancias ?? []),
+    ]
+  );
+  return aDocumento(rows[0]);
+}
+
+export async function documentosDeExpediente(
+  empresaId: string,
+  expedienteId: string,
+  ejecutor?: Ejecutor
+): Promise<Documento[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_DOC} FROM thf_documentos
+      WHERE empresa_id = $1 AND expediente_id = $2 ORDER BY created_at, id`,
+    [empresaId, expedienteId]
+  );
+  return rows.map(aDocumento);
+}
+
+const CAMPOS_ALB = `
+  id, empresa_id, expediente_id, actuacion_id, adjunto_id, documento_id,
+  numero_solicitado, numero_documento, numero_normalizado, confianza_match,
+  resultado_match, fecha, matricula, bastidor, observaciones,
+  importe_incidencia_centimos, importe_lineas_centimos, diferencia_centimos,
+  estado_analisis, estado_proceso, intentos, error, pagina_inicio, pagina_fin,
+  parser_usado, origen, metadata_json, created_at, updated_at`;
+
+export type EstadoProcesoAnalisis = "PENDIENTE" | "PROCESANDO" | "COMPLETADO" | "ERROR";
+
+export type AlbaranAnalizado = {
+  id: string;
+  expedienteId: string;
+  actuacionId: string;
+  adjuntoId: string | null;
+  documentoId: string | null;
+  numeroSolicitado: string;
+  numeroDocumento: string | null;
+  numeroNormalizado: string | null;
+  confianzaMatch: number | null;
+  resultadoMatch: string | null;
+  fecha: string | null;
+  matricula: string | null;
+  bastidor: string | null;
+  observaciones: string | null;
+  importeIncidenciaCentimos: number | null;
+  importeLineasCentimos: number | null;
+  diferenciaCentimos: number | null;
+  estadoAnalisis: string | null;
+  estadoProceso: EstadoProcesoAnalisis;
+  intentos: number;
+  error: string | null;
+  paginaInicio: number | null;
+  paginaFin: number | null;
+  parserUsado: string | null;
+  origen: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string | null;
+};
+
+function aAlbaranAnalizado(r: QueryResultRow): AlbaranAnalizado {
+  return {
+    id: String(r.id),
+    expedienteId: String(r.expediente_id),
+    actuacionId: String(r.actuacion_id),
+    adjuntoId: r.adjunto_id ? String(r.adjunto_id) : null,
+    documentoId: r.documento_id ? String(r.documento_id) : null,
+    numeroSolicitado: String(r.numero_solicitado),
+    numeroDocumento: r.numero_documento ? String(r.numero_documento) : null,
+    numeroNormalizado: r.numero_normalizado ? String(r.numero_normalizado) : null,
+    confianzaMatch: r.confianza_match === null ? null : Number(r.confianza_match),
+    resultadoMatch: r.resultado_match ? String(r.resultado_match) : null,
+    fecha: aFecha(r.fecha as Date | string | null),
+    matricula: r.matricula ? String(r.matricula) : null,
+    bastidor: r.bastidor ? String(r.bastidor) : null,
+    observaciones: r.observaciones ? String(r.observaciones) : null,
+    importeIncidenciaCentimos: aEntero(r.importe_incidencia_centimos as string | number | null),
+    importeLineasCentimos: aEntero(r.importe_lineas_centimos as string | number | null),
+    diferenciaCentimos: aEntero(r.diferencia_centimos as string | number | null),
+    estadoAnalisis: r.estado_analisis ? String(r.estado_analisis) : null,
+    estadoProceso: String(r.estado_proceso) as EstadoProcesoAnalisis,
+    intentos: Number(r.intentos ?? 0),
+    error: r.error ? String(r.error) : null,
+    paginaInicio: aEntero(r.pagina_inicio as string | number | null),
+    paginaFin: aEntero(r.pagina_fin as string | number | null),
+    parserUsado: r.parser_usado ? String(r.parser_usado) : null,
+    origen: r.origen ? String(r.origen) : null,
+    metadata: (r.metadata_json ?? {}) as Record<string, unknown>,
+    createdAt: aIso(r.created_at as Date | string | null),
+  };
+}
+
+/**
+ * Pone un albarán en la cola de análisis.
+ *
+ * Se encola aunque todavía no haya PDF: la fila saldrá en ERROR «documento no
+ * disponible» y se reencolará cuando llegue un adjunto. Es mejor que no
+ * encolar: así la pantalla enseña que ese albarán ESPERA un documento, en vez
+ * de no enseñar nada y parecer que no hacía falta ninguno.
+ */
+export async function encolarAnalisis(
+  empresaId: string,
+  expedienteId: string,
+  actuacionId: string,
+  numeroSolicitado: string,
+  importeIncidenciaCentimos: number | null,
+  ejecutor?: Ejecutor
+): Promise<AlbaranAnalizado> {
+  const { rows } = await db(ejecutor).query(
+    `INSERT INTO thf_albaranes_analizados
+       (empresa_id, expediente_id, actuacion_id, numero_solicitado,
+        numero_normalizado, importe_incidencia_centimos)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     RETURNING ${CAMPOS_ALB}`,
+    [empresaId, expedienteId, actuacionId, numeroSolicitado, claveAlbaran(numeroSolicitado), importeIncidenciaCentimos]
+  );
+  return aAlbaranAnalizado(rows[0]);
+}
+
+/**
+ * Coge UNA fila pendiente y la marca en curso, atómicamente.
+ *
+ * `FOR UPDATE SKIP LOCKED` dentro del propio UPDATE es lo que permite que haya
+ * varias instancias: la que no reciba fila es que no la tenía. Sin él, en
+ * Render dos procesos analizarían el mismo documento y el segundo machacaría
+ * el resultado del primero.
+ */
+export async function cogerAnalisisPendiente(ejecutor?: Ejecutor): Promise<AlbaranAnalizado | null> {
+  const { rows } = await db(ejecutor).query(
+    `UPDATE thf_albaranes_analizados
+        SET estado_proceso = 'PROCESANDO',
+            intentos = intentos + 1,
+            procesando_desde = now(),
+            updated_at = now()
+      WHERE id = (
+        SELECT id FROM thf_albaranes_analizados
+         WHERE estado_proceso = 'PENDIENTE'
+         ORDER BY created_at
+         FOR UPDATE SKIP LOCKED
+         LIMIT 1)
+     RETURNING ${CAMPOS_ALB}`
+  );
+  return rows[0] ? aAlbaranAnalizado(rows[0]) : null;
+}
+
+/**
+ * Devuelve a la cola lo que lleva demasiado en curso.
+ *
+ * Una instancia que se reinicia a mitad deja su fila en PROCESANDO para
+ * siempre, y ese albarán no lo vuelve a mirar nadie. No hay forma de
+ * distinguir «se está procesando» de «se estaba procesando cuando el proceso
+ * murió» salvo por el tiempo, así que se usa el tiempo.
+ */
+export async function reencolarHuerfanos(minutos = 10, ejecutor?: Ejecutor): Promise<number> {
+  const { rowCount } = await db(ejecutor).query(
+    `UPDATE thf_albaranes_analizados
+        SET estado_proceso = 'PENDIENTE', procesando_desde = NULL, updated_at = now()
+      WHERE estado_proceso = 'PROCESANDO'
+        AND procesando_desde < now() - ($1 || ' minutes')::interval`,
+    [String(minutos)]
+  );
+  return rowCount ?? 0;
+}
+
+export type ResultadoAnalisis = {
+  documentoId?: string | null;
+  adjuntoId?: string | null;
+  numeroDocumento?: string | null;
+  numeroNormalizado?: string | null;
+  confianzaMatch?: number | null;
+  resultadoMatch?: string | null;
+  fecha?: string | null;
+  matricula?: string | null;
+  bastidor?: string | null;
+  observaciones?: string | null;
+  importeLineasCentimos?: number | null;
+  diferenciaCentimos?: number | null;
+  estadoAnalisis?: string | null;
+  paginaInicio?: number | null;
+  paginaFin?: number | null;
+  parserUsado?: string | null;
+  origen?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export async function guardarResultadoAnalisis(
+  id: string,
+  estadoProceso: EstadoProcesoAnalisis,
+  datos: ResultadoAnalisis,
+  ejecutor?: Ejecutor
+): Promise<AlbaranAnalizado | null> {
+  const { rows } = await db(ejecutor).query(
+    `UPDATE thf_albaranes_analizados SET
+        estado_proceso = $2,
+        documento_id = COALESCE($3, documento_id),
+        adjunto_id = COALESCE($4, adjunto_id),
+        numero_documento = $5,
+        numero_normalizado = COALESCE($6, numero_normalizado),
+        confianza_match = $7,
+        resultado_match = $8,
+        fecha = $9,
+        matricula = $10,
+        bastidor = $11,
+        observaciones = $12,
+        importe_lineas_centimos = $13,
+        diferencia_centimos = $14,
+        estado_analisis = $15,
+        pagina_inicio = $16,
+        pagina_fin = $17,
+        parser_usado = $18,
+        origen = $19,
+        metadata_json = $20,
+        error = NULL,
+        procesando_desde = NULL,
+        updated_at = now()
+      WHERE id = $1
+      RETURNING ${CAMPOS_ALB}`,
+    [
+      id,
+      estadoProceso,
+      datos.documentoId ?? null,
+      datos.adjuntoId ?? null,
+      datos.numeroDocumento ?? null,
+      datos.numeroNormalizado ?? null,
+      datos.confianzaMatch ?? null,
+      datos.resultadoMatch ?? null,
+      datos.fecha ?? null,
+      datos.matricula ?? null,
+      datos.bastidor ?? null,
+      datos.observaciones ?? null,
+      datos.importeLineasCentimos ?? null,
+      datos.diferenciaCentimos ?? null,
+      datos.estadoAnalisis ?? null,
+      datos.paginaInicio ?? null,
+      datos.paginaFin ?? null,
+      datos.parserUsado ?? null,
+      datos.origen ?? null,
+      JSON.stringify(datos.metadata ?? {}),
+    ]
+  );
+  return rows[0] ? aAlbaranAnalizado(rows[0]) : null;
+}
+
+/**
+ * Marca el fallo.
+ *
+ * `reintentable` separa las dos familias que el diseño distingue: un fallo
+ * TÉCNICO (la IA no responde, el almacenamiento no contesta) vuelve a la cola
+ * hasta agotar los intentos, y uno de DOMINIO (el albarán no está en el
+ * documento) es terminal y se enseña. Reintentar el segundo sería repetir
+ * tres veces la misma lectura correcta.
+ */
+export async function marcarErrorAnalisis(
+  id: string,
+  motivo: string,
+  reintentable: boolean,
+  maxIntentos: number,
+  ejecutor?: Ejecutor
+): Promise<AlbaranAnalizado | null> {
+  const { rows } = await db(ejecutor).query(
+    `UPDATE thf_albaranes_analizados SET
+        estado_proceso = CASE
+          WHEN $3 AND intentos < $4 THEN 'PENDIENTE'
+          ELSE 'ERROR' END,
+        estado_analisis = CASE WHEN $3 AND intentos < $4 THEN estado_analisis ELSE 'ERROR' END,
+        error = $2,
+        procesando_desde = NULL,
+        updated_at = now()
+      WHERE id = $1
+      RETURNING ${CAMPOS_ALB}`,
+    [id, motivo.slice(0, 1000), reintentable, maxIntentos]
+  );
+  return rows[0] ? aAlbaranAnalizado(rows[0]) : null;
+}
+
+export async function albaranAnalizadoPorId(
+  empresaId: string,
+  id: string,
+  ejecutor?: Ejecutor
+): Promise<AlbaranAnalizado | null> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_ALB} FROM thf_albaranes_analizados WHERE empresa_id = $1 AND id = $2`,
+    [empresaId, id]
+  );
+  return rows[0] ? aAlbaranAnalizado(rows[0]) : null;
+}
+
+export async function albaranesDeExpediente(
+  empresaId: string,
+  expedienteId: string,
+  ejecutor?: Ejecutor
+): Promise<AlbaranAnalizado[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_ALB} FROM thf_albaranes_analizados
+      WHERE empresa_id = $1 AND expediente_id = $2
+      ORDER BY created_at, id`,
+    [empresaId, expedienteId]
+  );
+  return rows.map(aAlbaranAnalizado);
+}
+
+/**
+ * Marca la fila anterior como sustituida por un reanálisis.
+ *
+ * No se borra: la comparación «antes y después» de un parser corregido es lo
+ * que permite responder a «¿por qué ahora dice otra cosa?».
+ */
+export async function marcarSustituida(
+  id: string,
+  nuevaId: string,
+  ejecutor?: Ejecutor
+): Promise<void> {
+  await db(ejecutor).query(
+    `UPDATE thf_albaranes_analizados
+        SET metadata_json = metadata_json || jsonb_build_object('sustituidaPor', $2::text),
+            updated_at = now()
+      WHERE id = $1`,
+    [id, nuevaId]
+  );
+}
+
+export type LineaGuardada = {
+  numeroLinea: number;
+  referencia: string | null;
+  descripcion: string | null;
+  cantidad: number | null;
+  precioUnitarioCentimos: number | null;
+  importeCentimos: number | null;
+  confianza: {
+    referencia: number;
+    descripcion: number;
+    cantidad: number;
+    precio: number;
+    importe: number;
+    descuentos: number;
+  };
+  cuadraAritmetica: boolean | null;
+  descuentosRaw: string;
+  descuentos: { orden: number; porcentaje: number; raw: string }[];
+  rawText: string;
+  pagina: number | null;
+  bbox: unknown;
+};
+
+/**
+ * Reemplaza las líneas de un análisis.
+ *
+ * Se borran y se vuelven a escribir en la misma transacción: un análisis
+ * a medias —la mitad de las líneas viejas y la mitad de las nuevas— sumaría un
+ * total que no es de ninguna de las dos lecturas.
+ */
+export async function guardarLineas(
+  empresaId: string,
+  albaranAnalizadoId: string,
+  lineas: LineaGuardada[],
+  ejecutor?: Ejecutor
+): Promise<void> {
+  const e = db(ejecutor);
+  await e.query(`DELETE FROM thf_albaran_lineas WHERE albaran_analizado_id = $1`, [albaranAnalizadoId]);
+
+  for (const l of lineas) {
+    const { rows } = await e.query(
+      `INSERT INTO thf_albaran_lineas
+         (empresa_id, albaran_analizado_id, numero_linea, referencia, descripcion,
+          cantidad, precio_unitario_centimos, importe_centimos,
+          confianza_referencia, confianza_descripcion, confianza_cantidad,
+          confianza_precio, confianza_importe, confianza_descuentos,
+          cuadra_aritmetica, raw_text, pagina, bbox)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+       RETURNING id`,
+      [
+        empresaId,
+        albaranAnalizadoId,
+        l.numeroLinea,
+        l.referencia,
+        l.descripcion,
+        l.cantidad,
+        l.precioUnitarioCentimos,
+        l.importeCentimos,
+        l.confianza.referencia,
+        l.confianza.descripcion,
+        l.confianza.cantidad,
+        l.confianza.precio,
+        l.confianza.importe,
+        l.confianza.descuentos,
+        l.cuadraAritmetica,
+        l.rawText,
+        l.pagina,
+        l.bbox === null || l.bbox === undefined ? null : JSON.stringify(l.bbox),
+      ]
+    );
+    const lineaId = String(rows[0].id);
+    for (const d of l.descuentos) {
+      await e.query(
+        `INSERT INTO thf_albaran_linea_descuentos (linea_id, orden, porcentaje, raw_value)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (linea_id, orden) DO NOTHING`,
+        [lineaId, d.orden, d.porcentaje, d.raw]
+      );
+    }
+  }
+}
+
+export type LineaConDescuentos = LineaGuardada & { id: string };
+
+export async function lineasDeAlbaran(
+  empresaId: string,
+  albaranAnalizadoId: string,
+  ejecutor?: Ejecutor
+): Promise<LineaConDescuentos[]> {
+  const e = db(ejecutor);
+  const { rows } = await e.query(
+    `SELECT l.*,
+            COALESCE(
+              (SELECT jsonb_agg(jsonb_build_object('orden', d.orden, 'porcentaje', d.porcentaje, 'raw', d.raw_value)
+                                ORDER BY d.orden)
+                 FROM thf_albaran_linea_descuentos d WHERE d.linea_id = l.id),
+              '[]'::jsonb) AS descuentos
+       FROM thf_albaran_lineas l
+      WHERE l.empresa_id = $1 AND l.albaran_analizado_id = $2
+      ORDER BY l.numero_linea`,
+    [empresaId, albaranAnalizadoId]
+  );
+  return rows.map((r) => ({
+    id: String(r.id),
+    numeroLinea: Number(r.numero_linea),
+    referencia: r.referencia ? String(r.referencia) : null,
+    descripcion: r.descripcion ? String(r.descripcion) : null,
+    cantidad: r.cantidad === null ? null : Number(r.cantidad),
+    precioUnitarioCentimos: aEntero(r.precio_unitario_centimos as string | number | null),
+    importeCentimos: aEntero(r.importe_centimos as string | number | null),
+    confianza: {
+      referencia: Number(r.confianza_referencia ?? 0),
+      descripcion: Number(r.confianza_descripcion ?? 0),
+      cantidad: Number(r.confianza_cantidad ?? 0),
+      precio: Number(r.confianza_precio ?? 0),
+      importe: Number(r.confianza_importe ?? 0),
+      descuentos: Number(r.confianza_descuentos ?? 0),
+    },
+    cuadraAritmetica: r.cuadra_aritmetica === null ? null : Boolean(r.cuadra_aritmetica),
+    descuentosRaw: (r.descuentos as { raw: string }[]).map((d) => d.raw).join(" + "),
+    descuentos: (r.descuentos as { orden: number; porcentaje: string | number; raw: string }[]).map((d) => ({
+      orden: Number(d.orden),
+      porcentaje: Number(d.porcentaje),
+      raw: String(d.raw),
+    })),
+    rawText: String(r.raw_text),
+    pagina: aEntero(r.pagina as string | number | null),
+    bbox: r.bbox ?? null,
+  }));
+}
+
+export type ValidacionGuardada = {
+  tipo: string;
+  estado: string;
+  mensaje: string;
+  valorEsperado: string | null;
+  valorObtenido: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type ValidacionFila = ValidacionGuardada & { id: string; albaranAnalizadoId: string | null };
+
+/** Reemplaza las validaciones de un análisis: son el retrato de ESTA lectura. */
+export async function guardarValidaciones(
+  empresaId: string,
+  expedienteId: string,
+  actuacionId: string | null,
+  albaranAnalizadoId: string,
+  validaciones: ValidacionGuardada[],
+  ejecutor?: Ejecutor
+): Promise<void> {
+  const e = db(ejecutor);
+  await e.query(`DELETE FROM thf_validaciones WHERE albaran_analizado_id = $1`, [albaranAnalizadoId]);
+  for (const v of validaciones) {
+    await e.query(
+      `INSERT INTO thf_validaciones
+         (empresa_id, expediente_id, actuacion_id, albaran_analizado_id,
+          tipo, estado, mensaje, valor_esperado, valor_obtenido, metadata_json)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [
+        empresaId,
+        expedienteId,
+        actuacionId,
+        albaranAnalizadoId,
+        v.tipo,
+        v.estado,
+        v.mensaje,
+        v.valorEsperado,
+        v.valorObtenido,
+        JSON.stringify(v.metadata ?? {}),
+      ]
+    );
+  }
+}
+
+function aValidacion(r: QueryResultRow): ValidacionFila {
+  return {
+    id: String(r.id),
+    albaranAnalizadoId: r.albaran_analizado_id ? String(r.albaran_analizado_id) : null,
+    tipo: String(r.tipo),
+    estado: String(r.estado),
+    mensaje: String(r.mensaje),
+    valorEsperado: r.valor_esperado ? String(r.valor_esperado) : null,
+    valorObtenido: r.valor_obtenido ? String(r.valor_obtenido) : null,
+    metadata: (r.metadata_json ?? {}) as Record<string, unknown>,
+  };
+}
+
+export async function validacionesDeExpediente(
+  empresaId: string,
+  expedienteId: string,
+  ejecutor?: Ejecutor
+): Promise<ValidacionFila[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT * FROM thf_validaciones
+      WHERE empresa_id = $1 AND expediente_id = $2
+      ORDER BY created_at, id`,
+    [empresaId, expedienteId]
+  );
+  return rows.map(aValidacion);
+}
+
+/** ¿Queda alguna validación sin resolver? Alimenta `requiere_revision`. */
+export async function hayValidacionesVivas(
+  empresaId: string,
+  expedienteId: string,
+  ejecutor?: Ejecutor
+): Promise<boolean> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT 1 FROM thf_validaciones
+      WHERE empresa_id = $1 AND expediente_id = $2 AND estado <> 'OK' LIMIT 1`,
+    [empresaId, expedienteId]
+  );
+  return rows.length > 0;
+}

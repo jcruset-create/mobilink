@@ -7,22 +7,20 @@
  *
  * ── Qué hay aquí y qué no ───────────────────────────────────────────────────
  *
- * Ocho tablas. Las cinco de la cola de trabajo (expedientes, actuaciones,
- * histórico, contador de numeración y configuración) y las tres de la ingesta
- * de correo (notificaciones, adjuntos, decisiones). Las del análisis de
- * albaranes —documentos, líneas, descuentos, validaciones— llegan con el
- * parser de documentos que las escribirá.
+ * Trece tablas. Las cinco de la cola de trabajo (expedientes, actuaciones,
+ * histórico, contador de numeración y configuración), las tres de la ingesta
+ * de correo (notificaciones, adjuntos, decisiones) y las cinco del análisis de
+ * documentos (documentos, albaranes analizados, líneas, descuentos de línea y
+ * validaciones).
  *
  * El criterio es que cada tabla entra con el código que la usa: una tabla
  * vacía que nadie escribe es una promesa sin cumplir en medio del esquema, y
  * además nadie sabe si su DDL es correcto hasta que algo la usa de verdad.
  *
- * Por eso `thf_eventos` tiene una columna `albaran_analizado_id` **sin clave
- * ajena**: el histórico va a apuntar a esas filas en cuanto existan, y una
- * clave ajena a una tabla que aún no está impediría arrancar. Lo mismo valía
- * para `notificacion_id` hasta esta fase, y se ha quedado igual a propósito:
- * ponerle ahora la clave ajena obligaría a que las dos tablas se creasen en
- * orden, y el histórico tiene que poder escribirse pase lo que pase.
+ * `thf_eventos` sigue sin clave ajena hacia `notificacion_id` ni hacia
+ * `albaran_analizado_id`, y es a propósito: ponérsela obligaría a que las
+ * tablas se creasen en un orden concreto, y el histórico tiene que poder
+ * escribirse pase lo que pase.
  *
  * ── empresa_id sin clave ajena ──────────────────────────────────────────────
  *
@@ -630,5 +628,223 @@ export async function initTherefore(): Promise<void> {
         notificacion_id, tipo,
         COALESCE(actuacion_id, '00000000-0000-0000-0000-000000000000'::uuid))
       WHERE estado = 'PENDIENTE' AND notificacion_id IS NOT NULL;
+  `);
+  /* ══ Análisis de documentos (fase 3b) ═════════════════════════════════════
+   *
+   * Cinco tablas que cuelgan del expediente y de la actuación. La frontera
+   * entre ellas responde a una pregunta: ¿esto es de la FACTURA o del
+   * ALBARÁN? `thf_documentos` es la cabecera del fichero —una factura entera,
+   * con su número y sus totales—; `thf_albaranes_analizados` es lo que se ha
+   * sacado de UN albarán para UNA actuación. Una factura con cinco albaranes
+   * da una fila de documento y cinco de análisis, y cada una puede estar en un
+   * estado distinto, que es lo normal.
+   */
+
+  // ── El documento, una vez por fichero ─────────────────────────────────────
+  //
+  // El correo y el papel se comparan y NUNCA se sobrescribe el dato del
+  // correo: si el número de factura no coincide, se guardan los dos y sale una
+  // validación. El que manda lo decide una persona, no el parser.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS thf_documentos (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      expediente_id UUID NOT NULL REFERENCES thf_expedientes(id) ON DELETE CASCADE,
+      adjunto_id UUID REFERENCES thf_adjuntos(id) ON DELETE SET NULL,
+
+      hash_archivo TEXT NOT NULL,
+
+      tipo_documento TEXT NOT NULL DEFAULT 'OTRO'
+        CHECK (tipo_documento IN ('FACTURA','ABONO','ALBARAN','OTRO')),
+      numero_documento TEXT,
+      fecha_documento DATE,
+
+      proveedor_nombre TEXT,
+      proveedor_nif TEXT,
+      cliente_nombre TEXT,
+      cliente_nif TEXT,
+
+      -- Céntimos CON SIGNO, como en todo el módulo: un abono es negativo.
+      base_centimos BIGINT,
+      iva_centimos BIGINT,
+      total_centimos BIGINT,
+      moneda TEXT NOT NULL DEFAULT 'EUR',
+
+      -- [{numeroDocumento, normalizado, paginaInicio, paginaFin}]
+      albaranes_detectados JSONB NOT NULL DEFAULT '[]',
+
+      origen TEXT CHECK (origen IN ('XML','PDF_TEXTO','PDF_IA')),
+      parser_usado TEXT,
+      confianza JSONB NOT NULL DEFAULT '{}',
+      metadata_json JSONB NOT NULL DEFAULT '{}',
+
+      validacion TEXT NOT NULL DEFAULT 'SIN_COMPARAR'
+        CHECK (validacion IN ('SIN_COMPARAR','VALIDADO','DISCREPANCIA')),
+      discrepancias JSONB NOT NULL DEFAULT '[]',
+
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+      -- El mismo fichero en el mismo expediente se analiza UNA vez.
+      UNIQUE (expediente_id, hash_archivo)
+    );
+    CREATE INDEX IF NOT EXISTS thf_doc_expediente_idx ON thf_documentos(expediente_id);
+    CREATE INDEX IF NOT EXISTS thf_doc_hash_idx ON thf_documentos(empresa_id, hash_archivo);
+  `);
+
+  /*
+   * ── El albarán analizado, y la cola ──────────────────────────────────────
+   *
+   * `estado_proceso` ES la cola. No hay infraestructura nueva: es el patrón
+   * del proyecto —la tabla como cola, `FOR UPDATE SKIP LOCKED` para repartir
+   * entre instancias— y cuesta una columna en vez de un servicio.
+   *
+   * Una fila por INTENTO VIVO. Reanalizar no machaca: crea otra fila y deja la
+   * anterior como histórico, porque la comparación «antes y después» de un
+   * parser corregido es justo lo que hay que poder enseñar el día que alguien
+   * pregunte por qué ahora sale otra cosa.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS thf_albaranes_analizados (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      expediente_id UUID NOT NULL REFERENCES thf_expedientes(id) ON DELETE CASCADE,
+      actuacion_id UUID NOT NULL REFERENCES thf_actuaciones(id) ON DELETE CASCADE,
+      adjunto_id UUID REFERENCES thf_adjuntos(id) ON DELETE SET NULL,
+      documento_id UUID REFERENCES thf_documentos(id) ON DELETE SET NULL,
+
+      -- El que pedía la incidencia y el que trae el papel. Se guardan los dos:
+      -- la diferencia entre ellos es la mitad de la información.
+      numero_solicitado TEXT NOT NULL,
+      numero_documento TEXT,
+      numero_normalizado TEXT,
+
+      confianza_match NUMERIC(3,2),
+      resultado_match TEXT CHECK (resultado_match IN ('MATCH','UNCERTAIN','NO_MATCH')),
+
+      fecha DATE,
+      matricula TEXT,
+      bastidor TEXT,
+      observaciones TEXT,
+
+      -- Copia del importe de la actuación EN EL MOMENTO del análisis: si luego
+      -- llega una corrección, el análisis sigue explicando lo que comparó.
+      importe_incidencia_centimos BIGINT,
+      importe_lineas_centimos BIGINT,
+      diferencia_centimos BIGINT,
+
+      estado_analisis TEXT CHECK (estado_analisis IN ('OK','REVISAR','ERROR')),
+
+      estado_proceso TEXT NOT NULL DEFAULT 'PENDIENTE'
+        CHECK (estado_proceso IN ('PENDIENTE','PROCESANDO','COMPLETADO','ERROR')),
+      intentos INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      procesando_desde TIMESTAMPTZ,
+
+      pagina_inicio INTEGER,
+      pagina_fin INTEGER,
+      parser_usado TEXT,
+      origen TEXT,
+
+      metadata_json JSONB NOT NULL DEFAULT '{}',
+
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS thf_alb_actuacion_idx ON thf_albaranes_analizados(actuacion_id);
+    CREATE INDEX IF NOT EXISTS thf_alb_expediente_idx ON thf_albaranes_analizados(expediente_id);
+    -- La cola: sólo lo que queda por hacer, que es lo que se consulta cada 15 s.
+    CREATE INDEX IF NOT EXISTS thf_alb_cola_idx
+      ON thf_albaranes_analizados(empresa_id, created_at)
+      WHERE estado_proceso IN ('PENDIENTE','PROCESANDO');
+  `);
+
+  // ── Las líneas ────────────────────────────────────────────────────────────
+  //
+  // `raw_text`, `pagina` y `bbox` no son metadatos de adorno: son lo que
+  // permite enseñar de dónde salió cada celda. Sin ellos, «el precio es 77,50»
+  // es una afirmación que nadie puede comprobar sin reabrir el PDF a mano.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS thf_albaran_lineas (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      albaran_analizado_id UUID NOT NULL REFERENCES thf_albaranes_analizados(id) ON DELETE CASCADE,
+      numero_linea INTEGER NOT NULL,
+
+      referencia TEXT,
+      descripcion TEXT,
+      cantidad NUMERIC(12,3),
+      precio_unitario_centimos BIGINT,
+      importe_centimos BIGINT,
+
+      confianza_referencia NUMERIC(3,2),
+      confianza_descripcion NUMERIC(3,2),
+      confianza_cantidad NUMERIC(3,2),
+      confianza_precio NUMERIC(3,2),
+      confianza_importe NUMERIC(3,2),
+      confianza_descuentos NUMERIC(3,2),
+
+      -- cantidad · precio · Π(1 − dᵢ) ≈ importe. NULL si faltan datos para
+      -- comprobarlo, que no es lo mismo que fallar.
+      cuadra_aritmetica BOOLEAN,
+
+      raw_text TEXT NOT NULL,
+      pagina INTEGER,
+      bbox JSONB,
+      metadata_json JSONB NOT NULL DEFAULT '{}',
+
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+      UNIQUE (albaran_analizado_id, numero_linea)
+    );
+    CREATE INDEX IF NOT EXISTS thf_alb_lin_albaran_idx ON thf_albaran_lineas(albaran_analizado_id);
+  `);
+
+  // ── Los descuentos de cada línea ──────────────────────────────────────────
+  //
+  // Una fila por descuento y en orden: `60% + 10%` son DOS, nunca uno del 64 %.
+  // `raw_value` conserva lo impreso porque es lo que el ERP pide y lo que está
+  // pactado con el proveedor; «64 %» no aparece en ningún papel.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS thf_albaran_linea_descuentos (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      linea_id UUID NOT NULL REFERENCES thf_albaran_lineas(id) ON DELETE CASCADE,
+      orden INTEGER NOT NULL,
+      porcentaje NUMERIC(6,3),
+      raw_value TEXT NOT NULL,
+      UNIQUE (linea_id, orden)
+    );
+  `);
+
+  // ── Las validaciones ──────────────────────────────────────────────────────
+  //
+  // Es lo que explica POR QUÉ algo está en revisión. Un estado sin motivo
+  // obliga a quien lo recibe a repetir a mano el trabajo del parser.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS thf_validaciones (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      expediente_id UUID NOT NULL REFERENCES thf_expedientes(id) ON DELETE CASCADE,
+      actuacion_id UUID REFERENCES thf_actuaciones(id) ON DELETE CASCADE,
+      albaran_analizado_id UUID REFERENCES thf_albaranes_analizados(id) ON DELETE CASCADE,
+
+      tipo TEXT NOT NULL CHECK (tipo IN (
+        'ALBARAN_MATCH','IMPORTE','LINEAS','DESCUENTOS','CAMPOS_CRITICOS',
+        'SEPARACION_ALBARANES','DOCUMENTO','CORREO_VS_DOCUMENTO')),
+      estado TEXT NOT NULL CHECK (estado IN ('OK','REVISAR','ERROR')),
+
+      -- Escrito para la pantalla, no para el log.
+      mensaje TEXT NOT NULL,
+      valor_esperado TEXT,
+      valor_obtenido TEXT,
+      metadata_json JSONB NOT NULL DEFAULT '{}',
+
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS thf_val_albaran_idx ON thf_validaciones(albaran_analizado_id);
+    -- Lo que no está OK es lo único que se busca por expediente.
+    CREATE INDEX IF NOT EXISTS thf_val_pendientes_idx
+      ON thf_validaciones(expediente_id, estado)
+      WHERE estado <> 'OK';
   `);
 }
