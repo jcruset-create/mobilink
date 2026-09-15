@@ -47,6 +47,7 @@
     "server/central/**/*.ts",
     "server/tacografos/**/*.ts",
     "server/therefore/**/*.ts",
+    "server/recepciones/**/*.ts",
     "server/satisfaction/**/*.ts",
     "server/cierre/**/*.ts",
     "server/core/auditoria.ts",

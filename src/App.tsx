@@ -101,6 +101,7 @@ const CashApp = lazy(() => import("./modules/cash/CashApp"));
 const TacografosApp = lazy(() => import("./modules/tacografos/TacografosApp"));
 const ThereforeApp = lazy(() => import("./modules/therefore/ThereforeApp"));
 const CentralApp = lazy(() => import("./modules/central/CentralApp"));
+const RecepcionesApp = lazy(() => import("./modules/recepciones/RecepcionesApp"));
 import AccesoPage from "./pages/AccesoPage";
 import InicioPage from "./pages/InicioPage";
 
@@ -400,6 +401,8 @@ export default function App() {
       <Route path="/tacografos/*" element={<TacografosApp />} />
       <Route path="/therefore/*" element={<ThereforeApp />} />
       <Route path="/central/*" element={<CentralApp />} />
+      {/* Recepciones — control de la recepción física de mercancía de proveedores */}
+      <Route path="/recepciones/*" element={<RecepcionesApp />} />
 
       {/* Mobilink Integration Hub — panel de integraciones */}
       <Route path="/integraciones" element={<Protegida><PanelIntegraciones /></Protegida>} />

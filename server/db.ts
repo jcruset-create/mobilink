@@ -1255,7 +1255,7 @@ export async function initDb() {
   // alguno le falta un módulo con filas ya guardadas, el ALTER falla y el
   // servidor no levanta.
   const MODULOS_LICENCIABLES =
-    "'administracion','tyrecontrol','almacen','sea-core','toolcontrol','safety','presencia','taller','workplanner','cash','central','tacografos','assist','therefore'";
+    "'administracion','tyrecontrol','almacen','sea-core','toolcontrol','safety','presencia','taller','workplanner','cash','central','tacografos','assist','therefore','recepciones'";
   const EMPRESA_SEMILLA = "00000000-0000-4000-a000-000000000001";
 
   await pool

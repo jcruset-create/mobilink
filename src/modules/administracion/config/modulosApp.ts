@@ -23,6 +23,7 @@ export type ModuloApp = {
     | "central"
     | "tacografos"
     | "therefore"
+    | "recepciones"
     | "assist";
   label: string;
   roles: RolApp[];
@@ -145,6 +146,23 @@ export const MODULOS_APP: ModuloApp[] = [
     pantallas: [
       { key: "bandeja", label: "Bandeja" },
       { key: "configuracion", label: "Configuración" },
+    ],
+  },
+  {
+    key: "recepciones",
+    label: "Recepciones",
+    // Mismos roles que traduce server/recepciones/permissions.ts.
+    roles: [
+      { value: "admin", label: "Admin" },
+      { value: "gestor", label: "Gestor" },
+      { value: "operario", label: "Operario (recepciona)" },
+      { value: "consulta", label: "Solo consulta" },
+    ],
+    pantallas: [
+      { key: "bandeja", label: "Recepciones pendientes" },
+      { key: "pedidos", label: "Pedidos" },
+      { key: "incidencias", label: "Incidencias" },
+      { key: "proveedores", label: "Proveedores" },
     ],
   },
   {
