@@ -349,8 +349,16 @@ export function localizarAlbaranes(
       documentoEntero: false,
       vecinaAnterior: m > 0 ? marcas[m - 1].numeroRaw : null,
       vecinaSiguiente: m + 1 < marcas.length ? marcas[m + 1].numeroRaw : null,
-      // Lo que quedó entre el corte por totales y la marca siguiente.
-      huerfanas: tope - hasta,
+      /*
+       * Lo que quedó entre el corte por totales y la MARCA SIGUIENTE.
+       *
+       * Sólo cuenta si hay marca siguiente. Detrás del último albarán está el
+       * pie de la factura —base imponible, IVA, total—, que no es de nadie por
+       * definición; contarlo como huérfano pondría en revisión todos los
+       * documentos bien formados, que es la manera más rápida de que nadie
+       * mire las revisiones.
+       */
+      huerfanas: m + 1 < marcas.length ? tope - hasta : 0,
     });
   }
 

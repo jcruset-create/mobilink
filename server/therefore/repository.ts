@@ -767,6 +767,7 @@ export type Anotacion = {
   expedienteId?: string | null;
   actuacionId?: string | null;
   notificacionId?: string | null;
+  albaranAnalizadoId?: string | null;
   tipo: string;
   actorTipo?: "sistema" | "usuario";
   usuarioId?: string | null;
@@ -792,14 +793,15 @@ export async function anotarEvento(
 ): Promise<void> {
   await db(ejecutor).query(
     `INSERT INTO thf_eventos
-       (empresa_id, expediente_id, actuacion_id, notificacion_id, tipo, actor_tipo,
-        usuario_id, usuario_nombre, datos_anteriores, datos_nuevos, descripcion)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+       (empresa_id, expediente_id, actuacion_id, notificacion_id, albaran_analizado_id,
+        tipo, actor_tipo, usuario_id, usuario_nombre, datos_anteriores, datos_nuevos, descripcion)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
     [
       empresaId,
       a.expedienteId ?? null,
       a.actuacionId ?? null,
       a.notificacionId ?? null,
+      a.albaranAnalizadoId ?? null,
       a.tipo,
       a.actorTipo ?? "sistema",
       a.usuarioId ?? null,
@@ -1701,6 +1703,7 @@ export type EstadoProcesoAnalisis = "PENDIENTE" | "PROCESANDO" | "COMPLETADO" | 
 
 export type AlbaranAnalizado = {
   id: string;
+  empresaId: string;
   expedienteId: string;
   actuacionId: string;
   adjuntoId: string | null;
@@ -1732,6 +1735,7 @@ export type AlbaranAnalizado = {
 function aAlbaranAnalizado(r: QueryResultRow): AlbaranAnalizado {
   return {
     id: String(r.id),
+    empresaId: String(r.empresa_id),
     expedienteId: String(r.expediente_id),
     actuacionId: String(r.actuacion_id),
     adjuntoId: r.adjunto_id ? String(r.adjunto_id) : null,
@@ -2204,4 +2208,43 @@ export async function hayValidacionesVivas(
     [empresaId, expedienteId]
   );
   return rows.length > 0;
+}
+
+/**
+ * Devuelve a la cola los análisis del expediente que fallaron.
+ *
+ * Se llama cuando llega un documento nuevo. Un análisis que falló por no tener
+ * PDF —o por tener el que no era— merece otra oportunidad en cuanto aparece
+ * otro papel; dejarlo en ERROR para siempre obligaría a pedirlo a mano justo
+ * cuando por fin se podía hacer solo. Los intentos se ponen a cero: es una
+ * situación nueva, no el mismo intento repetido.
+ */
+export async function reencolarDeExpediente(
+  empresaId: string,
+  expedienteId: string,
+  ejecutor?: Ejecutor
+): Promise<number> {
+  const { rowCount } = await db(ejecutor).query(
+    `UPDATE thf_albaranes_analizados
+        SET estado_proceso = 'PENDIENTE', intentos = 0, error = NULL,
+            procesando_desde = NULL, updated_at = now()
+      WHERE empresa_id = $1 AND expediente_id = $2 AND estado_proceso = 'ERROR'`,
+    [empresaId, expedienteId]
+  );
+  return rowCount ?? 0;
+}
+
+/** El último análisis vivo de una actuación, para saber si hay algo que rehacer. */
+export async function ultimoAnalisisDeActuacion(
+  empresaId: string,
+  actuacionId: string,
+  ejecutor?: Ejecutor
+): Promise<AlbaranAnalizado | null> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_ALB} FROM thf_albaranes_analizados
+      WHERE empresa_id = $1 AND actuacion_id = $2
+      ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [empresaId, actuacionId]
+  );
+  return rows[0] ? aAlbaranAnalizado(rows[0]) : null;
 }

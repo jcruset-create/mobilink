@@ -13,10 +13,10 @@
  *
  * ── Sólo lo que se usa ──────────────────────────────────────────────────────
  *
- * La prioridad y la deduplicación. Los umbrales del parser de documentos se
- * añadirán con el código que los lea: una pantalla de configuración con mandos
- * que no están conectados a nada es peor que no tenerla, porque alguien los
- * mueve y se cree que ha cambiado algo.
+ * La prioridad, la deduplicación y —desde la fase 3b— los umbrales del análisis
+ * de albaranes. Cada mando entra con el código que lo lee: una pantalla de
+ * configuración con mandos que no están conectados a nada es peor que no
+ * tenerla, porque alguien los mueve y se cree que ha cambiado algo.
  */
 
 import pool from "../db.ts";
@@ -33,6 +33,10 @@ import {
   type PesosPrioridad,
   type UmbralesPrioridad,
 } from "./domain/prioridad.ts";
+import { UMBRALES_ALBARAN_POR_DEFECTO, type UmbralesAlbaran } from "./domain/albaran.ts";
+import { TOLERANCIA_CENTIMOS_POR_DEFECTO } from "./domain/documento/lineas.ts";
+import { UMBRAL_CONFIANZA_CAMPO_POR_DEFECTO } from "./domain/validaciones.ts";
+import { MAX_PAGINAS_POR_DEFECTO } from "./documentos/texto.ts";
 
 export const CLAVES = {
   pesoDiasAbierto: "prioridad.peso.dias_abierto",
@@ -67,6 +71,39 @@ export const CLAVES_DEDUPE = {
   ventanaDias: "dedupe.ventana_dias",
 } as const;
 
+/**
+ * Los umbrales del análisis de documentos.
+ *
+ * Todos son números y todos son positivos, así que van con el lector normal.
+ * `tolerancia` es la única que merece una nota: son céntimos, y está para
+ * absorber REDONDEOS, no diferencias. Subirla a 100 no hace que cuadren más
+ * albaranes: hace que un euro de diferencia deje de verse.
+ */
+export const CLAVES_ALBARAN = {
+  umbralMatch: "albaran.umbral_match",
+  umbralIncierto: "albaran.umbral_incierto",
+  toleranciaCentimos: "albaran.tolerancia_centimos",
+  umbralConfianzaCampo: "albaran.umbral_confianza_campo",
+  maxIntentos: "albaran.max_intentos",
+  maxPaginas: "albaran.max_paginas",
+} as const;
+
+export type ConfigAlbaran = {
+  umbrales: UmbralesAlbaran;
+  toleranciaCentimos: number;
+  umbralConfianzaCampo: number;
+  maxIntentos: number;
+  maxPaginas: number;
+};
+
+export const CONFIG_ALBARAN_POR_DEFECTO: ConfigAlbaran = {
+  umbrales: UMBRALES_ALBARAN_POR_DEFECTO,
+  toleranciaCentimos: TOLERANCIA_CENTIMOS_POR_DEFECTO,
+  umbralConfianzaCampo: UMBRAL_CONFIANZA_CAMPO_POR_DEFECTO,
+  maxIntentos: 3,
+  maxPaginas: MAX_PAGINAS_POR_DEFECTO,
+};
+
 export type ConfigTherefore = {
   pesos: PesosPrioridad;
   umbrales: UmbralesPrioridad;
@@ -75,6 +112,7 @@ export type ConfigTherefore = {
     umbrales: UmbralesDedupe;
     ventanaDias: number;
   };
+  albaran: ConfigAlbaran;
 };
 
 export const POR_DEFECTO: ConfigTherefore = {
@@ -85,6 +123,7 @@ export const POR_DEFECTO: ConfigTherefore = {
     umbrales: UMBRALES_DEDUPE_POR_DEFECTO,
     ventanaDias: VENTANA_DIAS_POR_DEFECTO,
   },
+  albaran: CONFIG_ALBARAN_POR_DEFECTO,
 };
 
 function aNumero(v: string | undefined, sinValor: number): number {
@@ -104,7 +143,10 @@ export async function leerConfig(empresaId: string): Promise<ConfigTherefore> {
   try {
     const r = await pool.query<{ clave: string; valor: string | null }>(
       `SELECT clave, valor FROM thf_config WHERE empresa_id = $1 AND clave = ANY($2)`,
-      [empresaId, [...Object.values(CLAVES), ...Object.values(CLAVES_DEDUPE)]]
+      [
+        empresaId,
+        [...Object.values(CLAVES), ...Object.values(CLAVES_DEDUPE), ...Object.values(CLAVES_ALBARAN)],
+      ]
     );
     for (const f of r.rows) mapa[String(f.clave)] = String(f.valor ?? "");
   } catch {
@@ -144,6 +186,23 @@ export async function leerConfig(empresaId: string): Promise<ConfigTherefore> {
       // y el módulo abriría un expediente por correo sin decir por qué.
       ventanaDias: Math.max(1, aNumero(mapa[CLAVES_DEDUPE.ventanaDias], VENTANA_DIAS_POR_DEFECTO)),
     },
+    albaran: {
+      umbrales: {
+        match: aNumero(mapa[CLAVES_ALBARAN.umbralMatch], UMBRALES_ALBARAN_POR_DEFECTO.match),
+        incierto: aNumero(mapa[CLAVES_ALBARAN.umbralIncierto], UMBRALES_ALBARAN_POR_DEFECTO.incierto),
+      },
+      toleranciaCentimos: aNumero(
+        mapa[CLAVES_ALBARAN.toleranciaCentimos],
+        TOLERANCIA_CENTIMOS_POR_DEFECTO
+      ),
+      umbralConfianzaCampo: aNumero(
+        mapa[CLAVES_ALBARAN.umbralConfianzaCampo],
+        UMBRAL_CONFIANZA_CAMPO_POR_DEFECTO
+      ),
+      // Sin al menos un intento la cola no avanzaría nunca.
+      maxIntentos: Math.max(1, aNumero(mapa[CLAVES_ALBARAN.maxIntentos], CONFIG_ALBARAN_POR_DEFECTO.maxIntentos)),
+      maxPaginas: Math.max(1, aNumero(mapa[CLAVES_ALBARAN.maxPaginas], MAX_PAGINAS_POR_DEFECTO)),
+    },
   };
 }
 
@@ -155,6 +214,7 @@ export type CambiosConfig = {
     umbrales?: Partial<UmbralesDedupe>;
     ventanaDias?: number;
   };
+  albaran?: Partial<Omit<ConfigAlbaran, "umbrales">> & { umbrales?: Partial<UmbralesAlbaran> };
 };
 
 /**
@@ -201,6 +261,14 @@ export async function guardarConfig(
   poner(CLAVES_DEDUPE.umbralFusionar, d?.umbrales?.fusionar);
   poner(CLAVES_DEDUPE.umbralRevisar, d?.umbrales?.revisar);
   poner(CLAVES_DEDUPE.ventanaDias, d?.ventanaDias);
+
+  const alb = cambios.albaran;
+  poner(CLAVES_ALBARAN.umbralMatch, alb?.umbrales?.match);
+  poner(CLAVES_ALBARAN.umbralIncierto, alb?.umbrales?.incierto);
+  poner(CLAVES_ALBARAN.toleranciaCentimos, alb?.toleranciaCentimos);
+  poner(CLAVES_ALBARAN.umbralConfianzaCampo, alb?.umbralConfianzaCampo);
+  poner(CLAVES_ALBARAN.maxIntentos, alb?.maxIntentos);
+  poner(CLAVES_ALBARAN.maxPaginas, alb?.maxPaginas);
 
   for (const [clave, valor] of pares) {
     await pool.query(

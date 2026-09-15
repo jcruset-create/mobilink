@@ -759,6 +759,25 @@ async function crearActuaciones(
     // siempre, que es justo lo que el índice único está ahí para absorber.
     if (!actuacion) continue;
     creadas++;
+
+    /*
+     * La actuación entra en la cola de análisis EN LA MISMA TRANSACCIÓN.
+     *
+     * Aunque todavía no haya ningún PDF: la fila saldrá en ERROR «documento no
+     * disponible» y se reencolará cuando llegue uno. Es mejor que no encolar,
+     * porque así la pantalla enseña que ese albarán ESPERA un documento en vez
+     * de no enseñar nada y parecer que no hacía falta ninguno.
+     */
+    if (actuacion.albaranSolicitado) {
+      await repo.encolarAnalisis(
+        ctx.empresaId,
+        expedienteId,
+        actuacion.id,
+        actuacion.albaranSolicitado,
+        actuacion.importeCentimos,
+        c
+      );
+    }
     await repo.anotarEvento(
       ctx.empresaId,
       {
