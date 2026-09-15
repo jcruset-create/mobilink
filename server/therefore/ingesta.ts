@@ -51,6 +51,7 @@ import {
 import type { TipoAccion, TipoExpediente } from "./domain/estados.ts";
 import { ErrorTherefore } from "./errors.ts";
 import * as repo from "./repository.ts";
+import type { CorreoParseado } from "./domain/correo/index.ts";
 import { cambiosDePrioridad, type Contexto } from "./service.ts";
 
 /* ── Lo que entra ────────────────────────────────────────────────────────── */
@@ -866,4 +867,50 @@ async function refrescarPrioridad(
     },
     c
   );
+}
+
+/**
+ * De lo que entendió el parser a lo que la ingesta acepta.
+ *
+ * Vive aquí y no en el router porque lo usan DOS puertas: la ruta
+ * `/correos/texto` (importar a mano) y el buzón IMAP. Si cada una hiciera su
+ * propia conversión, el día que se añadiera un campo al parser una de las dos
+ * lo perdería sin que nada avisara. `parseado` guarda lo leído entero: es la
+ * evidencia de por qué se abrió lo que se abrió.
+ */
+export function aCorreoEntrante(
+  leido: CorreoParseado,
+  sobre: Pick<
+    CorreoEntrante,
+    "messageId" | "gmailMessageId" | "gmailThreadId" | "inReplyTo" | "fecha" | "de" | "para" | "asunto" | "texto"
+  >
+): CorreoEntrante {
+  return {
+    ...sobre,
+    tipo: leido.tipo,
+    empresaCodigo: leido.empresaCodigo,
+    empresaNombre: leido.empresaNombre,
+    proveedorCodigo: leido.proveedorCodigo,
+    proveedorNombre: leido.proveedorNombre,
+    cuentaContable: leido.cuentaContable,
+    facturaNumero: leido.facturaNumero,
+    facturaFecha: leido.facturaFecha,
+    importeCentimos: leido.importeCentimos,
+    casoReferencia: leido.casoReferencia,
+    persona: leido.persona,
+    urgente: leido.urgente,
+    tareaVencida: leido.tareaVencida,
+    reclamacion: leido.reclamacion,
+    acciones: leido.acciones.map((a) => ({
+      accion: a.accion,
+      accionTexto: a.accionTexto,
+      albaran: a.albaran,
+      importeCentimos: a.importeCentimos,
+      indicador: a.indicador,
+      observaciones: a.observaciones,
+      confianza: a.confianza,
+    })),
+    albaranesAmbiguos: leido.albaranesAmbiguos,
+    parseado: leido,
+  };
 }

@@ -5,7 +5,7 @@ encargo. Es el resultado de leer el repositorio con una sola pregunta: «¿dónd
 encaja esto sin estrenar nada?». Cada apartado dice qué se reutiliza, qué se
 toca y por qué.
 
-> **Estado: las FASES 1, 2, 3a y 3b están implementadas** (ver §O). Existen los
+> **Estado: las FASES 1, 2, 3a, 3b y 4a (el buzón) están implementadas** (ver §O). Existen los
 > expedientes, las actuaciones, el histórico, los permisos, la numeración, la
 > API, la bandeja y el detalle; entra el correo —notificaciones, adjuntos,
 > deduplicación con pesos configurables, decisiones humanas y pantalla de
@@ -1201,10 +1201,36 @@ de cada línea y el PDF se abre por enlace firmado, pero pintar el rectángulo
 encima exige un visor de PDF embebido que el panel no tiene y merece su
 propia decisión—, ni XML (N.5 sigue sin respuesta).
 
-**Fase 4 — Buzón y trabajo diario.** `buzon.ts` (IMAP, pasadas, botón),
-carga del histórico, recálculo diario de prioridad, autocierre,
-configuración en pantalla, exportación a Excel, ajuste del parser con
-documentos reales (N.3).
+**Fase 4a — El buzón. HECHA.** `buzon.ts` sobre el molde de
+`checkpointMail.ts`, la tabla `thf_buzon_pasadas`, las claves de texto
+`buzon.remitentes` y `buzon.activado_el`, tres rutas (`GET /buzon`,
+`PUT /buzon/remitentes`, `POST /buzon/revisar`) y la sección del buzón en
+Configuración con el botón «Revisar buzón ahora». `aCorreoEntrante` salió del
+router a `ingesta.ts`: dos puertas —importar a mano y el buzón— y un solo
+camino. Migración `therefore_fase4.sql`. 13 pruebas: 7 puras y 6 de
+integración con un buzón falso que compone MIME real con nodemailer, contra
+PostgreSQL.
+
+Decisiones tomadas al implementarlo:
+
+- **Sólo lo no leído y posterior a la activación** (N.1/N.2, elegido por el
+  cliente: «sólo los nuevos»). `buzon.activado_el` se escribe UNA vez y un
+  reinicio no lo mueve. La comparación fina lleva **cinco minutos de margen**
+  porque la cabecera `Date` la pone el reloj del remitente, no el nuestro.
+- **La empresa del SaaS va por variable de entorno** (`THEREFORE_IMAP_EMPRESA_ID`):
+  el correo dice la sociedad (007…) pero no el tenant, y adivinarlo abriría
+  expedientes en la empresa equivocada sin que nada fallara.
+- **Un correo que falla se queda sin leer** y se reintenta; lo que no es de
+  Therefore se ignora, se marca leído y consta en la pasada (N.4: se guarda
+  la constancia, no el correo).
+- **Las credenciales no están en la base**: `THEREFORE_IMAP_*` en el
+  servidor, como el CheckPoint. La pantalla dice si está leyendo, no cómo.
+
+**Fase 4b — Trabajo diario. PENDIENTE.** Carga del histórico a propósito
+(marcar como no leído o importar `.eml`), recálculo diario de prioridad,
+autocierre a `expediente.dias_autocierre`, exportación a Excel, y el ajuste
+del parser con los primeros correos y documentos reales que entren por el
+buzón (N.3, que sigue siendo el riesgo principal).
 
 **Fase 5 — ERP.** Cuando N.7 tenga respuesta: métodos opcionales en
 `IErpConnector`, adaptador, `erp_estado` en la actuación, comparación PDF vs

@@ -7,11 +7,11 @@
  *
  * ── Qué hay aquí y qué no ───────────────────────────────────────────────────
  *
- * Trece tablas. Las cinco de la cola de trabajo (expedientes, actuaciones,
+ * Catorce tablas. Las cinco de la cola de trabajo (expedientes, actuaciones,
  * histórico, contador de numeración y configuración), las tres de la ingesta
- * de correo (notificaciones, adjuntos, decisiones) y las cinco del análisis de
+ * de correo (notificaciones, adjuntos, decisiones), las cinco del análisis de
  * documentos (documentos, albaranes analizados, líneas, descuentos de línea y
- * validaciones).
+ * validaciones) y la del buzón (una fila por pasada del listener).
  *
  * El criterio es que cada tabla entra con el código que la usa: una tabla
  * vacía que nadie escribe es una promesa sin cumplir en medio del esquema, y
@@ -846,5 +846,37 @@ export async function initTherefore(): Promise<void> {
     CREATE INDEX IF NOT EXISTS thf_val_pendientes_idx
       ON thf_validaciones(expediente_id, estado)
       WHERE estado <> 'OK';
+  `);
+  /* ══ El buzón (fase 4) ═══════════════════════════════════════════════════ */
+
+  // ── Una fila por pasada del listener ──────────────────────────────────────
+  //
+  // Como `tc_checkpoint_ejecuciones`: es lo que permite contestar «¿está
+  // leyendo el buzón?» sin entrar en el servidor. Una pasada sin correos
+  // también se registra; que no haya nada que leer es información, y una tabla
+  // que sólo crece cuando llega algo no distingue «tranquilo» de «caído».
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS thf_buzon_pasadas (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      iniciada_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      terminada_at TIMESTAMPTZ,
+
+      correos INTEGER NOT NULL DEFAULT 0,
+      procesados INTEGER NOT NULL DEFAULT 0,
+      ignorados INTEGER NOT NULL DEFAULT 0,
+      errores INTEGER NOT NULL DEFAULT 0,
+
+      -- El fallo de la pasada entera (no se pudo abrir el buzón). Los de cada
+      -- correo van en "detalle".
+      error TEXT,
+      -- [{messageId, asunto, resultado, expedienteNumero?, error?}]
+      detalle JSONB NOT NULL DEFAULT '[]',
+      -- Quién la lanzó: el temporizador o el botón del panel.
+      origen TEXT NOT NULL DEFAULT 'temporizador'
+        CHECK (origen IN ('temporizador','manual'))
+    );
+    CREATE INDEX IF NOT EXISTS thf_buzon_pasadas_idx
+      ON thf_buzon_pasadas(empresa_id, iniciada_at DESC);
   `);
 }

@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import * as api from "../services/api";
-import { Aviso, ErrorBox, TextField, btnPrimary } from "../components/ui";
+import { Aviso, ErrorBox, TextField, btnPrimary, btnSecondary } from "../components/ui";
 import type { Config } from "../types";
 
 export default function Configuracion() {
@@ -324,6 +324,8 @@ export default function Configuracion() {
         </div>
       </section>
 
+      <Buzon />
+
       <div className="flex items-center gap-3">
         <button onClick={() => void guardar()} className={btnPrimary} disabled={guardando}>
           {guardando ? "Guardando…" : "Guardar"}
@@ -335,5 +337,141 @@ export default function Configuracion() {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * El estado del buzón y sus últimas pasadas.
+ *
+ * Lo que se enseña es si está leyendo y qué ha hecho, nunca cómo se conecta:
+ * las credenciales son variables de entorno del servidor y esta pantalla no
+ * las ve ni las pide. Lo único que se edita aquí es la lista de remitentes,
+ * porque ésa sí es una decisión de quien gestiona el módulo y no de quien
+ * despliega.
+ */
+function Buzon() {
+  const [estado, setEstado] = useState<api.EstadoBuzon | null>(null);
+  const [remitentes, setRemitentes] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [revisando, setRevisando] = useState(false);
+  const [aviso, setAviso] = useState<string | null>(null);
+
+  const cargar = useCallback(async () => {
+    try {
+      const e = await api.estadoBuzon();
+      setEstado(e);
+      setRemitentes(e.remitentes.join(", "));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido leer el estado del buzón");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function guardarLista() {
+    setAviso(null);
+    try {
+      const r = await api.guardarRemitentes(remitentes);
+      setRemitentes(r.remitentes.join(", "));
+      setAviso(r.remitentes.length ? "Lista guardada." : "Lista vacía: se aceptará todo lo que llegue al buzón.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido guardar la lista");
+    }
+  }
+
+  async function revisar() {
+    setRevisando(true);
+    setAviso(null);
+    try {
+      const r = await api.revisarBuzon();
+      setAviso(`${r.correos} correo(s): ${r.procesados} procesado(s), ${r.ignorados} ignorado(s), ${r.errores} error(es).`);
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido revisar el buzón");
+    } finally {
+      setRevisando(false);
+    }
+  }
+
+  const fecha = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" }) : "—";
+
+  return (
+    <section className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+      <h2 className="mb-1 text-sm font-bold">Buzón de Therefore</h2>
+      {error && <ErrorBox>{error}</ErrorBox>}
+      {!estado ? (
+        <p className="text-[13px] text-slate-400">Cargando…</p>
+      ) : (
+        <>
+          <p className="mb-3 text-[12px] text-slate-400">
+            {estado.configurado ? (
+              <>
+                Leyendo <span className="text-slate-200">{estado.usuario}</span> cada {estado.cadaMinutos} min
+                {estado.activadoEl && <> · activado el {fecha(estado.activadoEl)}</>}
+              </>
+            ) : (
+              <>
+                Apagado: faltan las credenciales del buzón en el servidor (variables{" "}
+                <span className="font-mono">THEREFORE_IMAP_*</span>). Los correos se pueden importar a mano
+                mientras tanto.
+              </>
+            )}
+          </p>
+
+          <div className="mb-3 flex flex-wrap items-end gap-2">
+            <div className="min-w-[280px] flex-1">
+              <TextField
+                label="Remitentes admitidos (separados por comas; vacío = todos)"
+                value={remitentes}
+                onChange={setRemitentes}
+              />
+            </div>
+            <button onClick={() => void guardarLista()} className={btnSecondary}>
+              Guardar lista
+            </button>
+            <button onClick={() => void revisar()} className={btnSecondary} disabled={!estado.configurado || revisando}>
+              {revisando ? "Revisando…" : "Revisar buzón ahora"}
+            </button>
+          </div>
+          {aviso && <p className="mb-3 text-[12px] text-emerald-300">{aviso}</p>}
+
+          {estado.pasadas.length > 0 && (
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="text-left text-slate-500">
+                  <th className="py-1 font-normal">Cuándo</th>
+                  <th className="py-1 font-normal">Correos</th>
+                  <th className="py-1 font-normal">Procesados</th>
+                  <th className="py-1 font-normal">Ignorados</th>
+                  <th className="py-1 font-normal">Errores</th>
+                  <th className="py-1 font-normal">Resultado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {estado.pasadas.map((p) => (
+                  <tr key={p.id} className="border-t border-slate-700/60">
+                    <td className="py-1">
+                      {fecha(p.iniciada_at)}
+                      {p.origen === "manual" && <span className="ml-1 text-slate-500">(a mano)</span>}
+                    </td>
+                    <td className="py-1">{p.correos}</td>
+                    <td className="py-1">{p.procesados}</td>
+                    <td className="py-1">{p.ignorados}</td>
+                    <td className={`py-1 ${p.errores ? "text-amber-300" : ""}`}>{p.errores}</td>
+                    <td className={`py-1 ${p.error ? "text-rose-300" : "text-slate-400"}`}>
+                      {p.error ?? (p.terminada_at ? "OK" : "en curso")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </section>
   );
 }
