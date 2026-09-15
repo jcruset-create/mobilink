@@ -271,3 +271,48 @@ export function guardarRemitentes(remitentes: string): Promise<{ remitentes: str
 export function revisarBuzon(): Promise<Omit<PasadaBuzon, "id" | "iniciada_at" | "terminada_at" | "error" | "origen">> {
   return pedir("/buzon/revisar", { method: "POST" });
 }
+
+/**
+ * Descarga la bandeja como Excel con los filtros dados.
+ *
+ * Va a mano y no por `pedir` porque lo que vuelve no es JSON: es un fichero,
+ * y hay que entregárselo al navegador como tal.
+ */
+export async function exportarExcel(filtro: FiltroBandeja): Promise<Blob> {
+  const q = new URLSearchParams();
+  for (const [clave, valor] of Object.entries(filtro)) {
+    if (valor === undefined || valor === "" || valor === null) continue;
+    q.set(clave, String(valor));
+  }
+  const cabeceras = await sessionHeaders();
+  const r = await fetch(`${BASE}/expedientes/exportar?${q.toString()}`, { headers: cabeceras });
+  if (!r.ok) {
+    const json = await r.json().catch(() => ({}));
+    throw new ApiError(json?.error ?? "No se ha podido exportar", json?.code ?? "ERROR", r.status, json?.detalle);
+  }
+  return r.blob();
+}
+
+export type ResultadoEml = {
+  messageId: string;
+  asunto: string;
+  resultado: "procesado" | "duplicado" | "ignorado" | "error";
+  expedienteNumero?: string;
+  error?: string;
+};
+
+export async function importarEml(archivo: File): Promise<ResultadoEml> {
+  const cabeceras = await sessionHeaders();
+  const cuerpo = new FormData();
+  cuerpo.append("archivo", archivo);
+  const r = await fetch(`${BASE}/correos/eml`, { method: "POST", headers: cabeceras, body: cuerpo });
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok && r.status !== 422) {
+    throw new ApiError(json?.error ?? "No se ha podido importar el correo", json?.code ?? "ERROR", r.status, json?.detalle);
+  }
+  return json;
+}
+
+export function cargarHistorico(desde: string): Promise<Omit<PasadaBuzon, "id" | "iniciada_at" | "terminada_at" | "error" | "origen">> {
+  return pedir("/buzon/historico", { method: "POST", body: JSON.stringify({ desde }) });
+}

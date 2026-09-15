@@ -24,8 +24,17 @@ import { initTherefore } from "./schema.ts";
 import { createThereforeRouter } from "./router.ts";
 import { startThereforeWorkers, stopThereforeWorkers } from "./documentos/worker.ts";
 import { startThereforeBuzon, stopThereforeBuzon } from "./buzon.ts";
+import { startThereforeDiario, stopThereforeDiario } from "./diario.ts";
 
-export { initTherefore, startThereforeWorkers, stopThereforeWorkers, startThereforeBuzon, stopThereforeBuzon };
+export {
+  initTherefore,
+  startThereforeWorkers,
+  stopThereforeWorkers,
+  startThereforeBuzon,
+  stopThereforeBuzon,
+  startThereforeDiario,
+  stopThereforeDiario,
+};
 
 export function mountTherefore(app: Express): void {
   app.use("/api/therefore", createThereforeRouter());

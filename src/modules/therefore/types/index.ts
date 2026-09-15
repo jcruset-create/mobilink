@@ -138,6 +138,8 @@ export type Bootstrap = {
 };
 
 export type Config = {
+  /** Días que un RESUELTO espera antes de cerrarse solo. */
+  diasAutocierre: number;
   pesos: { diasAbierto: number; reclamaciones: number; urgente: number; tareaVencida: number };
   umbrales: { baja: number; alta: number; critica: number };
   dedupe: {

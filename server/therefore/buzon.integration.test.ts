@@ -266,4 +266,32 @@ describe.runIf(RUN)("El buzón de Therefore", () => {
     );
     expect(rows).toEqual([{ error: "AUTHENTICATIONFAILED", cerrada: true }]);
   });
+  it("la carga del histórico procesa lo anterior a la activación, leído o no, y sólo cuando se pide", async () => {
+    const activacion = new Date("2026-09-10T10:00:00Z");
+    const viejo = await mensaje({ texto: CUERPO, fecha: new Date("2026-08-20T08:00:00Z") });
+    viejo.seen = true; // ya leído por una persona hace semanas
+    const buzon = buzonFalso([viejo]);
+
+    // La pasada normal no lo toca: ni está sin leer ni es posterior a la activación.
+    const normal = await revisarBuzon({ cliente: buzon, config: CFG, ahora: activacion });
+    if ("error" in normal) throw new Error(normal.error);
+    expect(normal.correos).toBe(0);
+
+    // El histórico, pedido con fecha, sí.
+    const hist = await revisarBuzon({ cliente: buzon, config: CFG, historico: { desde: new Date("2026-08-01") } });
+    if ("error" in hist) throw new Error(hist.error);
+    expect(hist).toMatchObject({ correos: 1, procesados: 1 });
+    const { rows } = await db.query(`SELECT origen FROM thf_buzon_pasadas WHERE empresa_id = $1 ORDER BY iniciada_at DESC LIMIT 1`, [EMPRESA]);
+    expect(rows[0].origen).toBe("historico");
+  });
+
+  it("un .eml importado a mano entra por la misma puerta y deja su pasada", async () => {
+    const { importarEml } = await import("./buzon.ts");
+    const m = await mensaje({ texto: CUERPO, fecha: new Date("2025-01-15T08:00:00Z") });
+    const d = await importarEml(EMPRESA, m.source);
+    expect(d.resultado).toBe("procesado");
+    expect(d.expedienteNumero).toMatch(/^INC-/);
+    const { rows } = await db.query(`SELECT origen, procesados FROM thf_buzon_pasadas WHERE empresa_id = $1`, [EMPRESA]);
+    expect(rows).toEqual([{ origen: "eml", procesados: 1 }]);
+  });
 });
