@@ -155,6 +155,15 @@ export function Celda({
   className?: string;
 }) {
   if (valor === null || valor === undefined || valor === "") {
+    // Vacía con confianza: el documento no trae esa columna. No hay hueco
+    // que rellenar, así que no se pinta como fallo.
+    if (confianza >= umbral) {
+      return (
+        <span className={`text-slate-500 ${className}`} title="El documento no trae este dato">
+          —
+        </span>
+      );
+    }
     return <span className={`text-rose-300 ${className}`}>sin leer</span>;
   }
   if (confianza < umbral) {

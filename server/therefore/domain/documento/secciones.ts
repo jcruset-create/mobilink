@@ -34,6 +34,8 @@
 import { normalizar } from "../correo/texto.ts";
 import {
   VOCABULARIO_CONCEPTOS,
+  esArrastre,
+  esCabeceraDeTotales,
   totalDocumento,
   type VocabularioConceptos,
 } from "./conceptos.ts";
@@ -44,6 +46,7 @@ export const CABECERAS_ALBARAN_POR_DEFECTO = [
   "albarán",
   "albaran",
   "alb.",
+  "alb:",
   "nº albarán",
   "n. albarán",
   "delivery note",
@@ -58,7 +61,16 @@ export const CABECERAS_ALBARAN_POR_DEFECTO = [
  * opcional, y al menos tres dígitos, con más grupos detrás. Cubre `0501234`,
  * `ENT-770199-0501234` y `ALB 2024 001` sin conocer a ningún proveedor.
  */
-const IDENTIFICADOR = /[A-Z]{0,4}[-\s]?\d{3,}(?:[-\s]\d+)*/;
+const IDENTIFICADOR = /[A-Z]{0,4}[-\s]?\d{2,}(?:[-\s.]\d+)+|[A-Z]{0,4}[-\s]?\d{3,}/;
+
+/** Un número con dos decimales: lo que distingue una fila de tabla. */
+const CON_DECIMALES = /\d[.,]\d{2}/;
+
+/** «REF: D000004711», «Pedido: 4711»: una etiqueta corta con su valor. */
+const ETIQUETA_CORTA = /^[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ .º]{1,20}:\s*\S+$/i;
+
+/** Longitud a partir de la cual un texto idéntico en dos páginas es plantilla. */
+const LARGO_PLANTILLA = 30;
 
 /** Tolerancia al comparar posiciones entre páginas, en puntos. */
 const TOLERANCIA_PT = 2;
@@ -177,10 +189,25 @@ function retirarRepetidas(
     const iguales: Candidata[] = [a];
     for (let j = i + 1; j < todas.length; j++) {
       const b = todas[j];
-      if (b.pagina === a.pagina || !mismaPosicion(a.linea, b.linea)) continue;
+      if (b.pagina === a.pagina) continue;
       const identicas = clave(a.linea.texto) === clave(b.linea.texto);
-      const mismaForma = a.enBorde && b.enBorde && forma(a.linea.texto) === forma(b.linea.texto);
-      if (identicas || mismaForma) iguales.push(b);
+      const mismaForma = forma(a.linea.texto) === forma(b.linea.texto);
+      if (mismaPosicion(a.linea, b.linea)) {
+        if (identicas || (mismaForma && a.enBorde && b.enBorde)) iguales.push(b);
+        continue;
+      }
+      /*
+       * Esté donde esté: hay plantillas que no ponen el pie legal al pie de la
+       * página sino justo debajo del contenido, así que en cada página cae a
+       * una altura distinta. Un párrafo largo, sin importes, idéntico en dos
+       * páginas es plantilla; una fila de artículo repetida lleva sus importes
+       * y no entra aquí. Y «Página 1 de 2» / «Página 2 de 2» se reconocen por
+       * la palabra, vayan donde vayan.
+       */
+      const sinImportes = !CON_DECIMALES.test(a.linea.texto);
+      const largas = sinImportes && clave(a.linea.texto).length >= LARGO_PLANTILLA;
+      const paginacion = sinImportes && /\bpag(?:ina|\.)?\b/.test(clave(a.linea.texto));
+      if ((identicas && largas) || (mismaForma && paginacion)) iguales.push(b);
     }
     if (iguales.length >= 2 && !iguales.some((c) => esCabeceraDeTabla(c.linea))) {
       for (const c of iguales) aRetirar.add(c.linea);
@@ -193,6 +220,23 @@ function retirarRepetidas(
     },
     retiradas: aRetirar.size,
   };
+}
+
+/**
+ * Dónde empieza la cabecera dentro del texto, si empieza por palabra entera.
+ *
+ * «alb.» dentro de «calb.» no es una cabecera. Sólo se mira el lado
+ * izquierdo: por la derecha la cabecera puede continuar («albaranes») y eso
+ * sí es un albarán.
+ */
+function posicionEntera(texto: string, cabecera: string): number {
+  let desde = 0;
+  for (;;) {
+    const pos = texto.indexOf(cabecera, desde);
+    if (pos < 0) return -1;
+    if (pos === 0 || !/[a-z0-9]/i.test(texto[pos - 1])) return pos;
+    desde = pos + 1;
+  }
 }
 
 /**
@@ -214,7 +258,7 @@ function numeroDeLaMarca(
   let mejorPos = -1;
   let fin = -1;
   for (const c of cabeceras) {
-    const pos = minus.indexOf(c.toLowerCase());
+    const pos = posicionEntera(minus, c.toLowerCase());
     if (pos < 0) continue;
     // Gana la cabecera que aparece antes: «Nº albarán» delante de «albarán».
     if (mejorPos < 0 || pos < mejorPos) {
@@ -250,8 +294,17 @@ function numeroDeLaMarca(
  * y por eso se exige que en la línea no haya una tirada larga de dígitos
  * (referencia) ni más de dos números.
  */
-function esPieDeFactura(linea: LineaTexto, conceptos: VocabularioConceptos): boolean {
+function esPieDeFactura(
+  linea: LineaTexto,
+  conceptos: VocabularioConceptos,
+  esCabeceraDeTabla: (l: LineaTexto) => boolean
+): boolean {
   const t = normalizar(linea.texto);
+  // «Suma y sigue» no es el pie: el albarán continúa en la página siguiente.
+  if (esArrastre(t, conceptos)) return false;
+  // La fila de títulos del pie («Base imponible  IVA  Total»), con los
+  // importes debajo. Una cabecera de tabla no lo es aunque lleve «Total».
+  if (esCabeceraDeTotales(t, conceptos) && !esCabeceraDeTabla(linea)) return true;
   const sinImporte = t.replace(/[-−+]?[\d.,]+\s*(?:€|EUR)?\s*$/i, "").trim();
   if (!totalDocumento(sinImporte, conceptos)) return false;
   if (/\d{6,}/.test(sinImporte)) return false;
@@ -274,6 +327,12 @@ export function localizarAlbaranes(
   const sinonimosColumna = opciones.sinonimosColumna ?? [];
 
   const { paginas: limpio, retiradas } = retirarRepetidas(doc, sinonimosColumna);
+  const esCabeceraDeTabla = (l: LineaTexto): boolean => {
+    const t = clave(l.texto);
+    let n = 0;
+    for (const s of sinonimosColumna) if (t.includes(s)) n++;
+    return n >= 3;
+  };
 
   const lineas: LineaTexto[] = [];
   for (const p of [...limpio.paginas].sort((a, b) => a.numero - b.numero)) {
@@ -322,15 +381,33 @@ export function localizarAlbaranes(
     };
   }
 
+  /*
+   * Una etiqueta corta justo encima de la marca («REF: D000004711») es la
+   * primera línea del albarán, no la última del anterior: hay plantillas que
+   * imprimen su referencia interna una línea por encima del número. Sólo una
+   * línea, en la misma página, sin importes y con forma de «etiqueta: valor».
+   */
+  const inicio = marcas.map((marca, m) => {
+    const i = marca.indice - 1;
+    if (i < 0) return marca.indice;
+    const previa = lineas[i];
+    if (previa.pagina !== marca.pagina) return marca.indice;
+    if (m > 0 && marcas[m - 1].indice >= i) return marca.indice;
+    const t = normalizar(previa.texto).trim();
+    if (CON_DECIMALES.test(t) || !ETIQUETA_CORTA.test(t)) return marca.indice;
+    if (numeroDeLaMarca(previa, [], cabeceras)) return marca.indice;
+    return i;
+  });
+
   const secciones: SeccionAlbaran[] = [];
   for (let m = 0; m < marcas.length; m++) {
-    const desde = marcas[m].indice;
-    const tope = m + 1 < marcas.length ? marcas[m + 1].indice : lineas.length;
+    const desde = inicio[m];
+    const tope = m + 1 < marcas.length ? inicio[m + 1] : lineas.length;
 
     let hasta = tope;
     let finPor: FinDeSeccion = m + 1 < marcas.length ? "SIGUIENTE_MARCA" : "FIN_DOCUMENTO";
-    for (let i = desde + 1; i < tope; i++) {
-      if (esPieDeFactura(lineas[i], conceptos)) {
+    for (let i = marcas[m].indice + 1; i < tope; i++) {
+      if (esPieDeFactura(lineas[i], conceptos, esCabeceraDeTabla)) {
         hasta = i;
         finPor = "TOTALES";
         break;
@@ -364,7 +441,7 @@ export function localizarAlbaranes(
 
   return {
     secciones,
-    cabeceraDocumento: lineas.slice(0, marcas[0].indice),
+    cabeceraDocumento: lineas.slice(0, inicio[0]),
     lineasRepetidasRetiradas: retiradas,
   };
 }
