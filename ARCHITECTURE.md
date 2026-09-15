@@ -491,9 +491,22 @@ funciones que el alta manual, con `origen = 'CORREO'` y el Message-ID en
 - **El albarán que llega antes que el pedido no se inventa un pedido**: queda
   `PENDIENTE_REVISION` con el número que buscaba y se reprocesa solo cuando el
   pedido entra. Lo que el sistema no sabe decidir lo enseña, no lo adivina.
+- **El buzón es de personas, y se lee como un invitado.** El buzón real
+  (`pedidos@comercialsea.com`, en cdmon) es el de trabajo de la empresa, no
+  uno dedicado como el del CheckPoint. Por eso el módulo **no toca ninguna
+  bandera**: marcar `\Seen` le borraría a alguien la señal de «sin leer» en
+  sus propios correos. El avance se lleva aparte, en `rcp_config`
+  (`buzon.progreso.<carpeta>`: hasta qué UID se miró, con el UIDVALIDITY de la
+  carpeta); si el servidor renumera, la marca se descarta y se vuelve a mirar
+  desde la activación, que es inofensivo porque el Message-ID reconoce lo ya
+  procesado. Un correo que falla no deja avanzar la marca.
 - **Los remitentes admitidos viven en la ficha del proveedor**
   (`rcp_proveedores.remitentes_correo`), no en el buzón: es el proveedor
-  quien manda, y el mismo buzón puede recibir de varios.
+  quien manda, y el mismo buzón puede recibir de varios. **Sin ninguno
+  configurado el buzón automático no procesa nada**, y lo dice en la pasada:
+  en un buzón compartido, «aceptar todo lo que llegue» sería copiar a la base
+  el correo de clientes y compañeros. El `.eml` importado a mano sí se acepta
+  sin lista, porque lo trae una persona a propósito.
 - **El PDF del albarán se guarda como ORIGINAL desde el adjunto o, si no,
   descargándolo del enlace del correo** (HTTP acotado en tiempo y tamaño, y
   sólo si lo que vuelve empieza por `%PDF-`). Si no se puede, el albarán se
