@@ -131,6 +131,8 @@ export type PedidoEntrante = {
   sourceReceivedAt?: string | null;
   destinoTexto?: string | null;
   clienteProveedor?: string | null;
+  /** El pedido se deduce de un albarán porque su correo no ha llegado. */
+  derivadoDeAlbaran?: boolean;
 };
 
 export type FichaPedido = {
@@ -193,6 +195,7 @@ export async function crearPedido(ctx: Contexto, datos: PedidoEntrante): Promise
           sourceReceivedAt: datos.sourceReceivedAt ?? null,
           destinoTexto: datos.destinoTexto?.trim() || null,
           clienteProveedor: datos.clienteProveedor?.trim() || null,
+          derivadoDeAlbaran: datos.derivadoDeAlbaran === true,
           creadoPor: ctx.userId,
           creadoNombre: ctx.userNombre,
         },
@@ -238,8 +241,10 @@ export async function crearPedido(ctx: Contexto, datos: PedidoEntrante): Promise
         tipo: "PEDIDO_CREADO",
         usuarioId: ctx.userId,
         usuarioNombre: ctx.userNombre,
-        datos: { numero: numeroProveedor, lineas: lineas.length, origen: datos.origen ?? "MANUAL" },
-        descripcion: `Pedido ${numeroProveedor} de ${proveedor.nombre} creado con ${lineas.length} línea(s).`,
+        datos: { numero: numeroProveedor, lineas: lineas.length, origen: datos.origen ?? "MANUAL", derivado: datos.derivadoDeAlbaran === true },
+        descripcion: datos.derivadoDeAlbaran
+          ? `Pedido ${numeroProveedor} de ${proveedor.nombre} DEDUCIDO de su albarán, con ${lineas.length} línea(s): el correo del pedido no había llegado.`
+          : `Pedido ${numeroProveedor} de ${proveedor.nombre} creado con ${lineas.length} línea(s).`,
       },
       c
     );
@@ -336,6 +341,140 @@ export type AlbaranEntrante = {
  * encima del pedido es un error de captura o un problema con el proveedor,
  * y las dos cosas hay que verlas antes de que lleguen al muelle.
  */
+/* ── Pedidos deducidos de un albarán ─────────────────────────────────────── */
+
+export type LineaConocida = {
+  descripcionProveedor: string;
+  referenciaProveedor?: string | null;
+  cantidad: number;
+  precioUnitarioCentimos?: number | null;
+};
+
+/**
+ * Completa un pedido que se dedujo de un albarán, con lo que se sepa de él
+ * ahora. Dos llamadas, la misma operación:
+ *
+ *  · Llega OTRO albarán del mismo pedido. `definitivo: false`. Lo pedido sigue
+ *    sin saberse, así que crece hasta cubrir lo que este albarán trae: si no,
+ *    el servicio lo rechazaría por expedir más de lo pedido, que aquí no
+ *    significa nada.
+ *  · Llega el correo del PEDIDO. `definitivo: true`. Ahora sí se sabe: las
+ *    cantidades son las suyas y el pedido deja de ser derivado.
+ *
+ * Las cantidades sólo SUBEN, nunca bajan de lo ya expedido: bajarlas dejaría
+ * un pedido con más expedido que pedido. Y de la cabecera sólo se rellenan los
+ * huecos, para no pisar lo que alguien haya corregido a mano; la excepción es
+ * el número, porque el del albarán viene sin serie («5687439») y el del correo
+ * del pedido la trae («B-2026-5687439»).
+ *
+ * No toca nada si el pedido no es derivado: quien mande es el pedido de verdad.
+ */
+export async function completarPedidoDerivado(
+  ctx: Contexto,
+  pedidoId: string,
+  datos: {
+    lineas: LineaConocida[];
+    definitivo: boolean;
+    numeroProveedor?: string | null;
+    fechaPedido?: string | null;
+    usuarioPedido?: string | null;
+    centroId?: string | null;
+    centroNombre?: string | null;
+    almacenOrigen?: string | null;
+    transportista?: string | null;
+    destinoTexto?: string | null;
+    clienteProveedor?: string | null;
+  }
+): Promise<{ completado: boolean; lineasNuevas: number; lineasAmpliadas: number }> {
+  return repo.enTransaccion(async (c) => {
+    const pedido = await repo.bloquearPedido(ctx.empresaId, pedidoId, c);
+    if (!pedido) throw new ErrorRecepciones("PEDIDO_NO_ENCONTRADO", "Pedido no encontrado.", 404);
+    if (!pedido.derivadoDeAlbaran) return { completado: false, lineasNuevas: 0, lineasAmpliadas: 0 };
+
+    const lineasPedido = await repo.lineasDePedido(ctx.empresaId, pedidoId, c, true);
+    const usadas = new Set<string>();
+    let siguiente = lineasPedido.reduce((m, l) => Math.max(m, l.numeroLinea), 0);
+    let nuevas = 0;
+    let ampliadas = 0;
+
+    for (const l of datos.lineas) {
+      const descripcion = String(l.descripcionProveedor ?? "").trim();
+      const cuanta = Number(l.cantidad);
+      if (!descripcion || !Number.isFinite(cuanta) || cuanta <= 0) continue;
+      const clave = descripcionNormalizada(descripcion);
+      const lp = lineasPedido.find((x) => !usadas.has(x.id) && descripcionNormalizada(x.descripcionProveedor) === clave);
+
+      if (!lp) {
+        siguiente += 1;
+        const mapeo = await repo.mapeoConfirmado(ctx.empresaId, pedido.proveedorId, clave, c);
+        await repo.crearPedidoLinea(
+          ctx.empresaId,
+          {
+            pedidoId,
+            numeroLinea: siguiente,
+            referenciaProveedor: l.referenciaProveedor?.trim() || null,
+            descripcionProveedor: descripcion,
+            productoId: mapeo?.productoId ?? null,
+            productoTexto: mapeo?.productoTexto ?? null,
+            mapeoId: mapeo?.id ?? null,
+            cantidadPedida: cuanta,
+            precioUnitarioCentimos: l.precioUnitarioCentimos ?? null,
+          },
+          c
+        );
+        if (mapeo) await repo.contarUsoMapeo(mapeo.id, c);
+        nuevas += 1;
+        continue;
+      }
+
+      usadas.add(lp.id);
+      // Otro albarán: lo pedido es al menos lo ya expedido más lo que trae.
+      // El correo del pedido: lo pedido es lo que él diga, nunca menos de lo expedido.
+      const objetivo = datos.definitivo ? Math.max(cuanta, lp.cantidadExpedida) : redondear(lp.cantidadExpedida + cuanta);
+      if (objetivo > lp.cantidadPedida) {
+        await repo.subirCantidadPedida(ctx.empresaId, lp.id, objetivo, c);
+        ampliadas += 1;
+      }
+    }
+
+    await repo.rellenarCabeceraPedido(
+      ctx.empresaId,
+      pedidoId,
+      {
+        numeroProveedor: datos.definitivo ? (datos.numeroProveedor?.trim() || null) : null,
+        fechaPedido: fechaISO(datos.fechaPedido, "La fecha del pedido"),
+        usuarioPedido: datos.usuarioPedido?.trim() || null,
+        centroId: datos.centroId?.trim() || null,
+        centroNombre: datos.centroNombre?.trim() || null,
+        almacenOrigen: datos.almacenOrigen?.trim() || null,
+        transportista: datos.transportista?.trim() || null,
+        destinoTexto: datos.destinoTexto?.trim() || null,
+        clienteProveedor: datos.clienteProveedor?.trim() || null,
+        derivadoDeAlbaran: datos.definitivo ? false : undefined,
+      },
+      c
+    );
+
+    await recalcularEstadoPedido(ctx.empresaId, pedidoId, c);
+    await repo.anotarEvento(
+      ctx.empresaId,
+      {
+        pedidoId,
+        tipo: datos.definitivo ? "PEDIDO_CONFIRMADO" : "PEDIDO_AMPLIADO",
+        usuarioId: ctx.userId,
+        usuarioNombre: ctx.userNombre,
+        datos: { lineasNuevas: nuevas, lineasAmpliadas: ampliadas },
+        descripcion: datos.definitivo
+          ? `Ha llegado el correo del pedido: deja de estar deducido del albarán (${nuevas} línea(s) nueva(s), ${ampliadas} ampliada(s)).`
+          : `Pedido deducido ampliado con otro albarán: ${nuevas} línea(s) nueva(s), ${ampliadas} ampliada(s).`,
+      },
+      c
+    );
+
+    return { completado: true, lineasNuevas: nuevas, lineasAmpliadas: ampliadas };
+  });
+}
+
 export async function crearAlbaran(ctx: Contexto, pedidoId: string, datos: AlbaranEntrante): Promise<FichaPedido> {
   const numeroProveedor = String(datos.numeroProveedor ?? "").trim();
   const numeroNormalizado = normalizarNumero(numeroProveedor);
