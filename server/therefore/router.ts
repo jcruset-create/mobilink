@@ -30,6 +30,7 @@ import {
   type EstadoActuacion,
 } from "./domain/estados.ts";
 import { ErrorTherefore } from "./errors.ts";
+import { parsearCorreo, type CorreoParseado } from "./domain/correo/index.ts";
 import * as decisionesServicio from "./decisiones.ts";
 import * as ingesta from "./ingesta.ts";
 import { cargarPermisos, exigirPermiso } from "./permissions.ts";
@@ -143,6 +144,7 @@ function correoEntranteDe(cuerpo: unknown): ingesta.CorreoEntrante {
     const confianza = a.confianza === undefined ? undefined : Number(a.confianza);
     return {
       accion,
+      accionTexto: texto(a.accionTexto) || null,
       albaran: texto(a.albaran) || null,
       importeCentimos: centimos(a.importeCentimos),
       indicador: texto(a.indicador) || null,
@@ -204,6 +206,51 @@ function correoEntranteDe(cuerpo: unknown): ingesta.CorreoEntrante {
       .map((x) => texto(x))
       .filter(Boolean),
     parseado: body.parseado ?? null,
+  };
+}
+
+/**
+ * Del resultado del parser a lo que la ingesta sabe tratar.
+ *
+ * Las dos formas guardan lo mismo, y por eso la ruta de texto y la de campos
+ * acaban en el mismo sitio: la deduplicación, la idempotencia y las decisiones
+ * no saben —ni tienen por qué— si el correo lo leyó una máquina o lo tecleó
+ * una persona.
+ */
+function aCorreoEntrante(
+  leido: CorreoParseado,
+  sobre: Pick<
+    ingesta.CorreoEntrante,
+    "messageId" | "gmailMessageId" | "gmailThreadId" | "inReplyTo" | "fecha" | "de" | "para" | "asunto" | "texto"
+  >
+): ingesta.CorreoEntrante {
+  return {
+    ...sobre,
+    tipo: leido.tipo,
+    empresaCodigo: leido.empresaCodigo,
+    empresaNombre: leido.empresaNombre,
+    proveedorCodigo: leido.proveedorCodigo,
+    proveedorNombre: leido.proveedorNombre,
+    cuentaContable: leido.cuentaContable,
+    facturaNumero: leido.facturaNumero,
+    facturaFecha: leido.facturaFecha,
+    importeCentimos: leido.importeCentimos,
+    casoReferencia: leido.casoReferencia,
+    persona: leido.persona,
+    urgente: leido.urgente,
+    tareaVencida: leido.tareaVencida,
+    reclamacion: leido.reclamacion,
+    acciones: leido.acciones.map((a) => ({
+      accion: a.accion,
+      accionTexto: a.accionTexto,
+      albaran: a.albaran,
+      importeCentimos: a.importeCentimos,
+      indicador: a.indicador,
+      observaciones: a.observaciones,
+      confianza: a.confianza,
+    })),
+    albaranesAmbiguos: leido.albaranesAmbiguos,
+    parseado: leido,
   };
 }
 
@@ -561,6 +608,67 @@ export function createThereforeRouter(): Router {
         });
       }
       res.json(resultado);
+    })
+  );
+
+  /**
+   * Mete un correo TAL Y COMO LLEGA: asunto y cuerpo, y el parser hace el resto.
+   *
+   * Es la boca que usará el buzón. La otra —`POST /correos`— sigue existiendo y
+   * recibe campos ya interpretados: sirve para reprocesar algo que el parser
+   * leyó mal sin tener que arreglar el parser a las tres de la tarde.
+   *
+   * Lo que el parser entendió se guarda entero junto al correo. Cuando alguien
+   * pregunte por qué existe esta actuación, la respuesta está ahí, con la
+   * confianza de cada campo y los avisos de lo que quedó dudoso.
+   */
+  r.post(
+    "/correos/texto",
+    exigirPermiso("therefore.correo.importar"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+
+      const asunto = texto(body.asunto);
+      const cuerpo = typeof body.texto === "string" ? body.texto : "";
+      if (!cuerpo.trim()) {
+        throw new ErrorTherefore(
+          "TEXTO_REQUERIDO",
+          "El correo llega sin cuerpo. El texto original es la única prueba de qué se pidió."
+        );
+      }
+
+      const leido = parsearCorreo(asunto, cuerpo);
+      const entrada = aCorreoEntrante(leido, {
+        messageId: texto(body.messageId),
+        gmailMessageId: texto(body.gmailMessageId) || null,
+        gmailThreadId: texto(body.gmailThreadId) || null,
+        inReplyTo: texto(body.inReplyTo) || null,
+        fecha: instante(body.fecha, "la fecha del correo"),
+        de: texto(body.de),
+        para: texto(body.para),
+        asunto,
+        texto: cuerpo,
+      });
+
+      const resultado = await ingesta.procesarCorreo(ctx, entrada);
+      if (!resultado.duplicado) {
+        await registrarAuditoria({
+          empresaId: ctx.empresaId,
+          userId: ctx.userId,
+          accion: "therefore.correo.importar",
+          entidad: "thf_notificaciones",
+          entidadId: resultado.notificacionId,
+          detalle: {
+            resultado: resultado.resultado,
+            expediente: resultado.expedienteNumero,
+            actuaciones: resultado.actuacionesCreadas,
+            confianza: leido.confianza,
+          },
+          ip: req.ip,
+        });
+      }
+      res.json({ ...resultado, parseado: leido });
     })
   );
 

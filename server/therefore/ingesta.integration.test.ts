@@ -1175,6 +1175,229 @@ describe.runIf(RUN)("La ingesta de correo de Therefore", () => {
     });
   });
 
+  /* ── El correo tal cual, con el parser por medio ─────────────────────────── */
+
+  describe("un correo entero, sin campos ya masticados", () => {
+    /*
+     * Aquí entra el correo como llega —asunto y cuerpo— y el parser hace el
+     * resto. Los valores son inventados; lo que se conserva del correo real es
+     * la FORMA: dónde va cada campo, con qué puntuación y cómo se pega un
+     * importe a un albarán.
+     */
+    const EMPRESA_ERP = "031 Comercial Ejemplo_New";
+    const ASUNTO_INC = `Incidencia en factura recibida. Empresa ${EMPRESA_ERP}`;
+    const ASUNTO_APR = "Aprobación de Factura recibida. 031-Comercial Ejemplo_New";
+    const ASUNTO_TV = `Tarea vencida. ${ASUNTO_APR}`;
+    const PIE = "Este es un mensaje enviado automáticamente.\n\nUn saludo.\n";
+
+    function cuerpoIncidencia(bloqueLibre: string, sobre: Record<string, string> = {}) {
+      const c = {
+        proveedor: "77",
+        razon: "NEUMATICOS EJEMPLO, S.L.",
+        cuenta: "4040000077",
+        factura: "0000555111",
+        fecha: "31/08/2026",
+        importe: "1.234,56",
+        ...sobre,
+      };
+      return (
+        `Por favor procese la incidencia de la factura recibida. Empresa ${EMPRESA_ERP}:\n\n` +
+        `Información Adicional:\n${bloqueLibre}\n` +
+        `Código Proveedor: ${c.proveedor}.\nRazón Social: ${c.razon}.\n` +
+        `Cuenta Contable: ${c.cuenta}.\nNúmero Factura: ${c.factura}.\n` +
+        `Fecha Factura:${c.fecha}.\nImporte: ${c.importe}.\n\n` + PIE
+      );
+    }
+
+    function cuerpoAprobacion(factura: string, instancia: string, vencida: boolean) {
+      return (
+        "Por favor apruebe la factura recibida:\n\n" +
+        "Código Proveedor: 100999.\nRazón Social: SERVICIOS EJEMPLO, S.L.U..\n" +
+        `Cuenta Contable: 4100000999.\nNúmero Factura: ${factura}.\n` +
+        "Fecha Factura:01/08/2026.\nImporte: 321,45.\n\n" +
+        "Haga clic en el siguiente enlace para acceder al documento y procesarlo:\n" +
+        `https://therefore.ejemplo.invalid/TWA/tdwv/#/workflows/instance/${instancia}/1\n` +
+        (vencida ? "\nHan pasado 7 días desde que recibio la primera notificación.\n" : "") +
+        "\nUn saludo.\n"
+      );
+    }
+
+    const enviar = (asunto: string, cuerpo: string, fecha: string, quien = adminA) =>
+      api("/correos/texto", quien, {
+        method: "POST",
+        body: { messageId: messageId(), asunto, texto: cuerpo, fecha },
+      });
+
+    it("una incidencia con dos instrucciones se convierte en cuatro actuaciones", async () => {
+      const r = await enviar(
+        ASUNTO_INC,
+        cuerpoIncidencia(
+          "04/09/2026 Persona A\n\nBuenas,\nNecesitamos que gestionéis los siguientes albaranes:\n" +
+            "Gracias\nGRABAR\n9011223344\n\nMODIFICAR FECHA\n9011229901\n9011229902\n9011229903\n"
+        ),
+        "2026-09-04T08:00:00.000Z"
+      );
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.actuacionesCreadas).toBe(4);
+
+      const f = await ficha(r.body.expedienteId);
+      const porAccion = f.actuaciones.map((a: any) => [a.tipoAccion, a.accionTexto, a.albaranSolicitado]);
+      expect(porAccion).toEqual([
+        ["GRABAR", null, "9011223344"],
+        ["MODIFICAR", "MODIFICAR FECHA", "9011229901"],
+        ["MODIFICAR", "MODIFICAR FECHA", "9011229902"],
+        ["MODIFICAR", "MODIFICAR FECHA", "9011229903"],
+      ]);
+    });
+
+    it("el importe del albarán, su indicador y su observación llegan enteros", async () => {
+      const r = await enviar(
+        ASUNTO_INC,
+        cuerpoIncidencia("Grabar\n0501234 199.95e T2\n9011229999 2020.50€ FALTAN PIEZAS SON 3\n"),
+        "2026-09-02T08:00:00.000Z"
+      );
+      const f = await ficha(r.body.expedienteId);
+      expect(f.actuaciones[0]).toMatchObject({
+        albaranSolicitado: "0501234",
+        importeCentimos: 19995,
+        indicadorAdicional: "T2",
+      });
+      expect(f.actuaciones[1]).toMatchObject({
+        importeCentimos: 202050,
+        observaciones: "FALTAN PIEZAS SON 3",
+      });
+      // Y el total de la factura, que es OTRA cifra, no se ha pisado.
+      expect(f.expediente.importeCentimos).toBe(123456);
+    });
+
+    /*
+     * El caso 10 del encargo: se pide grabar y no se escribe el número. No se
+     * inventa: la actuación queda incompleta y el expediente pide revisión.
+     */
+    it("pedir grabar sin decir qué deja el expediente pidiendo revisión", async () => {
+      const r = await enviar(
+        ASUNTO_INC,
+        cuerpoIncidencia("Por favor, necesitamos que grabéis los siguientes albaranes.\nGracias de antemano.\n"),
+        "2026-08-25T08:00:00.000Z"
+      );
+      const f = await ficha(r.body.expedienteId);
+      expect(f.actuaciones).toHaveLength(1);
+      expect(f.actuaciones[0].albaranSolicitado).toBeNull();
+      expect(f.expediente.requiereRevision).toBe(true);
+      expect((await decisionesPendientes()).map((d: any) => d.tipo)).toContain("REQUIERE_REVISION");
+    });
+
+    it("un número citado sin acción no se convierte en actuación", async () => {
+      const r = await enviar(
+        ASUNTO_INC,
+        cuerpoIncidencia("9011220000\nGrabar\n9011223344\n"),
+        "2026-09-02T09:00:00.000Z"
+      );
+      const f = await ficha(r.body.expedienteId);
+      expect(f.actuaciones.map((a: any) => a.albaranSolicitado)).toEqual(["9011223344"]);
+      expect(f.expediente.requiereRevision).toBe(true);
+    });
+
+    /*
+     * El caso que el encargo pide explícitamente: una aprobación y sus cuatro
+     * tareas vencidas son UN expediente con cinco correos, no cinco
+     * expedientes. Lo que las une es la terna sociedad + proveedor + factura.
+     */
+    it("una aprobación y sus cuatro tareas vencidas son un solo expediente", async () => {
+      const original = await enviar(
+        ASUNTO_APR,
+        cuerpoAprobacion("0000007777", "9998887", false),
+        "2026-08-25T07:00:00.000Z"
+      );
+      expect(original.body.resultado).toBe("CREADO");
+      expect(original.body.tipoNotificacion).toBe("APROBACION");
+
+      for (const dia of ["11", "12", "13", "14"]) {
+        const v = await enviar(
+          ASUNTO_TV,
+          cuerpoAprobacion("0000007777", "9998887", true),
+          `2026-09-${dia}T07:00:00.000Z`
+        );
+        expect(v.status, JSON.stringify(v.body)).toBe(200);
+        expect(v.body.resultado).toBe("FUSIONADO");
+        expect(v.body.expedienteId).toBe(original.body.expedienteId);
+        expect(v.body.tipoNotificacion).toBe("TAREA_VENCIDA");
+      }
+
+      const f = await ficha(original.body.expedienteId);
+      expect(f.expediente.tipo).toBe("APROBACION_FACTURA");
+      expect(f.expediente.numeroNotificaciones).toBe(5);
+      expect(f.expediente.numeroReclamaciones).toBe(4);
+      expect(f.expediente.tareaVencida).toBe(true);
+      expect(f.expediente.casoReferencia).toBe("9998887");
+
+      /*
+       * Y UNA sola actuación. Las tareas vencidas no piden nada nuevo: es el
+       * mismo trabajo, que sigue sin hacerse. Una por recordatorio dejaría el
+       * expediente con cinco «aprobar» idénticos.
+       */
+      expect(f.actuaciones).toHaveLength(1);
+      expect(f.actuaciones[0].tipoAccion).toBe("APROBAR");
+
+      const { rows } = await db.query(
+        `SELECT COUNT(*)::int AS n FROM thf_expedientes WHERE empresa_id = $1`,
+        [EMPRESA_A]
+      );
+      expect(rows[0].n).toBe(1);
+    });
+
+    it("una tarea vencida de OTRA factura no cae en ese expediente", async () => {
+      const uno = await enviar(
+        ASUNTO_APR,
+        cuerpoAprobacion("0000007777", "9998887", false),
+        "2026-08-25T07:00:00.000Z"
+      );
+      const otra = await enviar(
+        ASUNTO_TV,
+        cuerpoAprobacion("0000009999", "7776665", true),
+        "2026-09-14T07:00:00.000Z"
+      );
+      expect(otra.body.resultado).toBe("CREADO");
+      expect(otra.body.expedienteId).not.toBe(uno.body.expedienteId);
+    });
+
+    it("el texto original se guarda entero y sin tocar", async () => {
+      const bloqueLibre = "PTE. AVERIGUAR JUSTIFICANTE MERCANCIA\n\n20/07/2026 Persona B\nGrabar\n9011223344\n";
+      const cuerpo = cuerpoIncidencia(bloqueLibre);
+      const r = await enviar(ASUNTO_INC, cuerpo, "2026-07-20T08:00:00.000Z");
+
+      const n = await api(`/expedientes/${r.body.expedienteId}/notificaciones`, adminA);
+      expect(n.body.notificaciones[0].textoOriginal).toBe(cuerpo);
+      // Y lo que el parser entendió queda al lado, con sus avisos.
+      expect(r.body.parseado.informacionAdicional).toContain("PTE. AVERIGUAR JUSTIFICANTE MERCANCIA");
+    });
+
+    it("el mismo correo por texto dos veces sigue sin duplicar nada", async () => {
+      const id = messageId();
+      const cuerpo = cuerpoIncidencia("Grabar\n9011223344\n");
+      const enviarDosVeces = () =>
+        api("/correos/texto", adminA, {
+          method: "POST",
+          body: { messageId: id, asunto: ASUNTO_INC, texto: cuerpo, fecha: "2026-09-02T08:00:00.000Z" },
+        });
+
+      const primera = await enviarDosVeces();
+      const segunda = await enviarDosVeces();
+      expect(primera.body.duplicado).toBe(false);
+      expect(segunda.body.duplicado).toBe(true);
+      expect((await ficha(primera.body.expedienteId)).actuaciones).toHaveLength(1);
+    });
+
+    it("un correo sin cuerpo se rechaza antes de tocar nada", async () => {
+      const r = await api("/correos/texto", adminA, {
+        method: "POST",
+        body: { messageId: messageId(), asunto: ASUNTO_INC, texto: "", fecha: "2026-09-02T08:00:00.000Z" },
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe("TEXTO_REQUERIDO");
+    });
+  });
+
   /* ── Los pesos se pueden cambiar ─────────────────────────────────────────── */
 
   it("bajar el umbral de fusión cambia la decisión sin tocar el código", async () => {

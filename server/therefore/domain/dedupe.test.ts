@@ -66,7 +66,7 @@ describe("normalizar identificadores", () => {
   it("la misma factura escrita con y sin ceros es la misma", () => {
     expect(normalizarIdentificador("0000555111")).toBe("555111");
     expect(normalizarIdentificador("555111")).toBe("555111");
-    expect(normalizarIdentificador("123.514")).toBe("555111");
+    expect(normalizarIdentificador("555.111")).toBe("555111");
   });
 
   /*
@@ -491,17 +491,44 @@ describe("plan de fusión", () => {
     expect(plan.nuevas.map((a) => a.accion)).toEqual(["MODIFICAR"]);
   });
 
-  /*
-   * Sin albarán no hay con qué comparar, y el índice único de la base tampoco
-   * la cubre —sólo mira las que lo tienen—. La única alternativa a crearla
-   * sería adivinar que es la misma, y adivinar aquí es perder trabajo.
-   */
-  it("una acción sin albarán se crea siempre", () => {
+  it("una acción sin albarán se crea cuando el expediente no la tenía", () => {
     const plan = planDeFusion(
       correo({ actuaciones: [{ accion: "GESTIONAR", albaranNormalizado: null }] }),
       expediente()
     );
     expect(plan.nuevas).toHaveLength(1);
+  });
+
+  /*
+   * Y NO se vuelve a crear si ya está. El índice único de la base no cubre las
+   * actuaciones sin albarán, así que sin esto una aprobación de factura que
+   * nadie atiende —y que genera una tarea vencida cada semana— acabaría con un
+   * «aprobar» por correo recibido.
+   */
+  it("una acción sin albarán que ya está no se duplica", () => {
+    const plan = planDeFusion(
+      correo({ actuaciones: [{ accion: "APROBAR", albaranNormalizado: null }] }),
+      expediente({
+        tipo: "APROBACION_FACTURA",
+        actuaciones: [
+          { id: "act-1", accion: "APROBAR", albaranNormalizado: null, descartada: false },
+        ],
+      })
+    );
+    expect(plan.nuevas).toHaveLength(0);
+    expect(plan.repetidas).toHaveLength(1);
+  });
+
+  it("pero otra acción distinta sin albarán sí entra", () => {
+    const plan = planDeFusion(
+      correo({ actuaciones: [{ accion: "GESTIONAR", albaranNormalizado: null }] }),
+      expediente({
+        actuaciones: [
+          { id: "act-1", accion: "APROBAR", albaranNormalizado: null, descartada: false },
+        ],
+      })
+    );
+    expect(plan.nuevas.map((a) => a.accion)).toEqual(["GESTIONAR"]);
   });
 
   it("un correo sin actuaciones no cambia nada", () => {

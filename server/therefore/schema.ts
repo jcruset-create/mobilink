@@ -212,6 +212,40 @@ export async function initTherefore(): Promise<void> {
     );
   `);
 
+  /*
+   * El matiz de la instrucción, cuando el correo lo trae.
+   *
+   * `MODIFICAR` y `MODIFICAR FECHA` son la misma acción normalizada, pero quien
+   * lo grabe en el ERP necesita saber que lo que hay que cambiar es la fecha.
+   * Lo mismo con «Costes (modificar)». Guardar sólo el verbo es quedarse con la
+   * mitad de la frase.
+   *
+   * Va con ALTER y no dentro del CREATE de arriba porque la tabla ya existe en
+   * producción desde la fase 1: un `CREATE TABLE IF NOT EXISTS` con la columna
+   * añadida no haría nada sobre una tabla que ya está.
+   */
+  await pool.query(`
+    ALTER TABLE thf_actuaciones ADD COLUMN IF NOT EXISTS accion_texto TEXT;
+  `);
+
+  /*
+   * El orden en que se pidieron.
+   *
+   * Hace falta porque `created_at` NO sirve para ordenarlas: su valor por
+   * defecto es `now()`, que en PostgreSQL es la hora de inicio de la
+   * TRANSACCIÓN, así que las cuatro actuaciones de un mismo correo nacen con el
+   * mismo instante al milisegundo. El desempate caía entonces en el UUID, que
+   * es aleatorio, y un correo que pide «graba éste y cambia la fecha de estos
+   * tres» salía barajado en pantalla.
+   *
+   * Un contador es exacto y no depende del reloj. Al añadirlo, PostgreSQL
+   * rellena las filas que ya había en su orden físico, que para lo que existe
+   * hoy es el de creación.
+   */
+  await pool.query(`
+    ALTER TABLE thf_actuaciones ADD COLUMN IF NOT EXISTS orden BIGSERIAL;
+  `);
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS thf_act_expediente_idx
       ON thf_actuaciones(expediente_id);
