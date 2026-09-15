@@ -740,6 +740,9 @@ export type CambiosActuacion = Partial<{
   iniciada_at: string | null;
   resuelta_por_usuario_id: string | null;
   resuelta_at: string | null;
+  /** Lo que dijo el ERP, tal cual, y cuándo. JSONB: se guarda serializado. */
+  erp_estado: string | null;
+  erp_consultado_at: string | null;
 }>;
 
 export async function actualizarActuacion(

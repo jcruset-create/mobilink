@@ -38,7 +38,7 @@ import AlbaranAnalizadoCard from "../components/AlbaranAnalizado";
 import ValidacionesLista from "../components/Validaciones";
 import { esHistorico, estadoParaPantalla } from "../services/analisis";
 import { COLOR_NOTIFICACION, ETIQUETA_NOTIFICACION, ETIQUETA_TIPO } from "../types";
-import type { Actuacion, Adjunto, AnalisisDeExpediente, Ficha, Notificacion } from "../types";
+import type { Actuacion, Adjunto, AnalisisDeExpediente, ConsultaErp, Ficha, Notificacion } from "../types";
 import { fmtFecha, fmtFechaHora } from "../../administracion/types";
 import { aCentimos, eurosConSigno } from "../../cash/utils/money";
 
@@ -581,6 +581,21 @@ function TarjetaActuacion({
 }) {
   const [ocupado, setOcupado] = useState(false);
   const [pidiendo, setPidiendo] = useState<string | null>(null);
+  const [consultando, setConsultando] = useState(false);
+  // Lo guardado en la actuación, o lo recién consultado: el último manda.
+  const [erp, setErp] = useState<ConsultaErp | null>((a.erpEstado as ConsultaErp | null) ?? null);
+
+  async function consultarErp() {
+    setConsultando(true);
+    onError(null);
+    try {
+      setErp(await api.consultarErp(a.id));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "No se ha podido consultar el ERP");
+    } finally {
+      setConsultando(false);
+    }
+  }
 
   async function mover(verbo: string, datos: { motivo?: string; resultado?: string; erpReferencia?: string } = {}) {
     setOcupado(true);
@@ -634,9 +649,31 @@ function TarjetaActuacion({
         </div>
       )}
 
-      <div className="mt-2 text-[11px] text-slate-500">
-        {erpDisponible ? "Consulta al ERP disponible" : "Sin datos del ERP"}
+      {/*
+        Tres respuestas que no son lo mismo y se enseñan distinto: no se pudo
+        consultar (null), el ERP dijo que no consta (existe: false), y aquí
+        está. Y cuando hay papel y ERP, la comparación línea a línea: no se
+        dice quién tiene razón, se enseñan los dos valores y decide quien mira.
+      */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+        {erpDisponible && a.albaranSolicitado && puedeGestionar ? (
+          <button onClick={() => void consultarErp()} className={btnMini} disabled={consultando}>
+            {consultando ? "Consultando…" : erp ? "Volver a consultar en el ERP" : "Consultar en el ERP"}
+          </button>
+        ) : (
+          <span>{erpDisponible ? "Consulta al ERP disponible" : "Sin datos del ERP"}</span>
+        )}
+        {erp && (
+          <span>
+            {erp.estado === null
+              ? `No se ha podido consultar (${erp.fuente}).`
+              : erp.estado.existe
+                ? `Según el ERP (${erp.fuente}) a las ${fmtFechaHora(erp.estado.consultadoAt)}: grabado${erp.estado.contabilizado ? " y contabilizado" : ""}${erp.estado.importeCentimos !== null ? `, ${eurosConSigno(erp.estado.importeCentimos)}` : ""}${erp.estado.facturaAsociada ? `, factura ${erp.estado.facturaAsociada}` : ""}.`
+                : `No consta en el ERP (${erp.fuente}) a las ${fmtFechaHora(erp.estado.consultadoAt)}.`}
+          </span>
+        )}
       </div>
+      {erp?.comparacion && <ComparacionErpBloque comparacion={erp.comparacion} />}
 
       {puedeGestionar && disponibles.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
@@ -960,5 +997,35 @@ function Historico({ eventos }: { eventos: Ficha["eventos"] }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+/** El papel contra el ERP, línea a línea. Los dos valores al lado; decide quien mira. */
+function ComparacionErpBloque({ comparacion: c }: { comparacion: NonNullable<ConsultaErp["comparacion"]> }) {
+  const eur = (v: number | null) => (v === null ? "—" : eurosConSigno(v));
+  return (
+    <div className={`mt-2 rounded-xl border p-2 text-[12px] ${c.coincide ? "border-emerald-500/40" : "border-amber-500/40"}`}>
+      <p className={`mb-1 font-bold ${c.coincide ? "text-emerald-300" : "text-amber-300"}`}>
+        {c.coincide
+          ? "El papel y el ERP coinciden línea a línea."
+          : `${c.resumen.difieren} difieren · ${c.resumen.faltanEnErp} faltan en el ERP · ${c.resumen.sobranEnErp} sobran en el ERP` +
+            (c.diferenciaTotalCentimos !== null ? ` · total papel − ERP: ${eur(c.diferenciaTotalCentimos)}` : "")}
+      </p>
+      {!c.coincide && (
+        <ul className="space-y-0.5 text-slate-300">
+          {c.lineas
+            .filter((l) => l.tipo !== "IGUAL")
+            .map((l, i) => (
+              <li key={i} className="font-mono">
+                {l.tipo === "DIFIERE" &&
+                  `${l.referencia}: papel ${l.papel.cantidad ?? "—"} × ${eur(l.papel.importeCentimos)} · ERP ${l.erp.cantidad ?? "—"} × ${eur(l.erp.importeCentimos)} (${l.campos.join(", ")})`}
+                {l.tipo === "FALTA_EN_ERP" && `${l.referencia}: en el papel (${l.papel.cantidad ?? "—"} × ${eur(l.papel.importeCentimos)}), no en el ERP`}
+                {l.tipo === "SOBRA_EN_ERP" && `${l.referencia}: en el ERP (${l.erp.cantidad ?? "—"} × ${eur(l.erp.importeCentimos)}), no en el papel`}
+                {l.tipo === "SIN_REFERENCIA" && "Una línea del papel sin referencia: no se puede comparar"}
+              </li>
+            ))}
+        </ul>
+      )}
+    </div>
   );
 }

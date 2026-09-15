@@ -5,7 +5,7 @@ encargo. Es el resultado de leer el repositorio con una sola pregunta: «¿dónd
 encaja esto sin estrenar nada?». Cada apartado dice qué se reutiliza, qué se
 toca y por qué.
 
-> **Estado: las FASES 1, 2, 3a, 3b, 4a y 4b están implementadas** (ver §O). Queda el ajuste con documentos reales (N.3) y la fase 5 (ERP). Existen los
+> **Estado: las FASES 1, 2, 3a, 3b, 4a, 4b y 5 están implementadas** (ver §O). Queda el ajuste con documentos reales (N.3) y el alta del ERP por sociedad. Existen los
 > expedientes, las actuaciones, el histórico, los permisos, la numeración, la
 > API, la bandeja y el detalle; entra el correo —notificaciones, adjuntos,
 > deduplicación con pesos configurables, decisiones humanas y pantalla de
@@ -1258,11 +1258,44 @@ Tres decisiones tomadas al implementarlo:
 genérico con los primeros correos y PDF reales que entren por el buzón (N.3).
 Es el riesgo principal del módulo y no se puede hacer hasta que entren.
 
-**Fase 5 — ERP.** Cuando N.7 tenga respuesta: métodos opcionales en
-`IErpConnector`, adaptador, `erp_estado` en la actuación, comparación PDF vs
-ERP para `MODIFICAR`.
+**Fase 5 — ERP. HECHA.** Método opcional `getPurchaseReceipt` en
+`IErpConnector` (contrato del Hub, `connectors.ts`), implementado en el
+conector de Business Central (`purchaseReceipts` filtrado por el número de
+albarán del proveedor, con `$expand` de las líneas). Adaptador
+`therefore/erp/hub.ts` que resuelve el conector del tenant por el registro
+del Hub y traduce el recibo a `EstadoAlbaran` (céntimos, líneas), caso de uso
+`erp/consultar.ts` (`POST /actuaciones/:id/consultar-erp`), comparación pura
+en `domain/comparar.ts` (líneas del PDF contra líneas del ERP por
+referencia: IGUAL, DIFIERE con los campos, FALTA_EN_ERP, SOBRA_EN_ERP,
+SIN_REFERENCIA, y la diferencia total en céntimos) y el resultado en
+`thf_actuaciones.erp_estado` / `erp_consultado_at` con evento
+`ERP_CONSULTADO`. Panel: botón «Consultar en el ERP» en la actuación y un
+bloque con las dos versiones, línea a línea. 31 pruebas: 9 puras de la
+comparación, 6 del adaptador, 12 del conector y 4 de integración del caso
+de uso.
 
-Orden: 1 → 2 → 3 → 4; 5 cuando haya ERP. Las decisiones N.1–N.3 se necesitan
+Tres decisiones tomadas al implementarlo (N.7 sigue sin respuesta formal y
+se ha dejado configurable en vez de adivinar):
+
+- **El campo por el que BC guarda el número del proveedor es configuración**
+  (`purchaseReceiptVendorField`, por defecto `vendorShipmentNumber`), y la
+  sociedad de Therefore (007…) se mapea a la `company` de BC con la clave
+  `erp.company.<codigo>` de `thf_config`. Ni el módulo ni el conector
+  presuponen cómo está dado de alta el ERP del cliente.
+- **«No lo sé» y «no existe» son cosas distintas.** Sin conector, en modo
+  simulación o con error de red la consulta devuelve `null` y la actuación
+  no cambia de estado; sólo un ERP que responde puede decir `existe: false`.
+  Confundir ambas sería marcar como inexistente lo que no se pudo mirar.
+- **La comparación enseña las dos versiones, no decide.** Tolerancia de dos
+  céntimos, sin emparejamiento aproximado de referencias: la misma
+  referencia repetida se compara en orden. Lo que difiere lo resuelve la
+  persona; el módulo sólo se lo pone delante.
+
+Sigue sin código: dar de alta el conector de BC del cliente en el Hub y la
+clave `erp.company.<codigo>` por sociedad, cuando el cliente entregue los
+datos del ERP (N.7).
+
+Orden: 1 → 2 → 3 → 4 → 5, hecho. Las decisiones N.1–N.3 se necesitan
 para la fase 3: sin correos reales no se calibra un parser, y afinarlo contra
 ejemplos inventados da un 100 % de acierto que se desmorona con el primer
 correo de verdad.

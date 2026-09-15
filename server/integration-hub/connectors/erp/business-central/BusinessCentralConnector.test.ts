@@ -200,4 +200,74 @@ describe("BusinessCentralConnector", () => {
     expect(resultado.message).toMatch(/simulaci/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+  describe("albaranes de compra", () => {
+    const recibo = {
+      id: "g-1",
+      number: "REC-0001",
+      vendorShipmentNumber: "0501234",
+      vendorNumber: "V8",
+      vendorName: "PROVEEDOR EJEMPLO SL",
+      postingDate: "2026-09-02",
+      invoiceNumber: "F-2026-0001",
+      totalAmountExcludingTax: 213.9,
+      purchaseReceiptLines: [
+        { lineType: "Item", lineObjectNumber: "4400111222333", description: "PASTILLA", quantity: 1, unitCost: 77.5, amountExcludingTax: 27.9 },
+        { lineType: "Comment", description: "Entregar en el muelle" },
+        { lineType: "Item", lineObjectNumber: "4400111222444", description: "DISCO", quantity: 2, unitCost: 155, amountExcludingTax: 186 },
+      ],
+    };
+
+    it("filtra por el número del proveedor, expande las líneas y deja fuera los comentarios", async () => {
+      const fetchMock = vi.fn(async (url: string) => {
+        if (String(url).includes("login.microsoftonline.com")) return tokenResponse();
+        return jsonResponse({ value: [recibo] });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const bc = new BusinessCentralConnector(CONFIG);
+      const r = await bc.getPurchaseReceipt(CTX, { vendorShipmentNumber: "0501234" });
+      expect(r).not.toBeNull();
+      expect(r!.found).toBe(true);
+      if (!r || !r.found) return;
+      expect(r.receipt.vendorShipmentNumber).toBe("0501234");
+      expect(r.receipt.lines).toHaveLength(2);
+      expect(r.receipt.lines[0].itemNumber).toBe("4400111222333");
+      expect(r.receipt.totalExcludingTax).toBe(213.9);
+
+      const url = urlsOf(fetchMock).find((u) => u.includes("purchaseReceipts"))!;
+      expect(decodeURIComponent(url)).toContain("vendorShipmentNumber eq '0501234'");
+      expect(url).toContain("$expand=purchaseReceiptLines");
+      expect(url).toContain("companies(COMPANY-GUID)");
+    });
+
+    it("una company distinta y un campo distinto van a la URL, y una comilla se escapa", async () => {
+      const fetchMock = vi.fn(async (url: string) => {
+        if (String(url).includes("login.microsoftonline.com")) return tokenResponse();
+        return jsonResponse({ value: [] });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const bc = new BusinessCentralConnector({ ...CONFIG, purchaseReceiptVendorField: "vendorOrderNumber" });
+      const r = await bc.getPurchaseReceipt(CTX, { vendorShipmentNumber: "A'B", companyId: "OTRA" });
+      expect(r).toEqual({ found: false });
+      const url = decodeURIComponent(urlsOf(fetchMock).find((u) => u.includes("purchaseReceipts"))!);
+      expect(url).toContain("companies(OTRA)");
+      expect(url).toContain("vendorOrderNumber eq 'A''B'");
+    });
+
+    it("con dos recepciones con el mismo número se queda con la más reciente", async () => {
+      const fetchMock = vi.fn(async (url: string) => {
+        if (String(url).includes("login.microsoftonline.com")) return tokenResponse();
+        return jsonResponse({ value: [{ ...recibo, id: "vieja", postingDate: "2025-01-01" }, { ...recibo, id: "nueva", postingDate: "2026-09-02" }] });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const r = await new BusinessCentralConnector(CONFIG).getPurchaseReceipt(CTX, { vendorShipmentNumber: "0501234" });
+      expect(r && r.found && r.receipt.externalId).toBe("nueva");
+    });
+
+    it("en simulación contesta null: no lo sé, no «no consta»", async () => {
+      const bc = new BusinessCentralConnector({});
+      expect(await bc.getPurchaseReceipt(CTX, { vendorShipmentNumber: "0501234" })).toBeNull();
+    });
+  });
 });

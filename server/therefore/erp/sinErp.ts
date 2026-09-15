@@ -22,15 +22,3 @@ export const sinErp: ConsultaAlbaranesErp = {
     return null;
   },
 };
-
-/**
- * Quién contesta a las preguntas sobre albaranes.
- *
- * Una función y no una constante para que el día que haya un adaptador de
- * verdad se decida aquí —mirando la configuración de la empresa— sin tocar a
- * quien la llama. Hoy no recibe la empresa porque no hay nada que decidir con
- * ella; el día que lo haya, se le añade el parámetro y nada más cambia.
- */
-export function consultaErpDe(): ConsultaAlbaranesErp {
-  return sinErp;
-}

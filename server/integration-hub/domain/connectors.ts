@@ -96,6 +96,68 @@ export interface IErpConnector extends Connector {
   /** Empuja la asistencia y su economía al ERP. También opcionales. */
   pushAssistance?(ctx: OperationContext, input: MobilinkAssistancePush): Promise<{ externalId?: string }>;
   pushBillingData?(ctx: OperationContext, input: MobilinkBillingPush): Promise<{ externalId?: string }>;
+
+  /**
+   * Consulta un albarán de compra. Opcional, como los proveedores.
+   *
+   * Devuelve `null` cuando NO PUEDE SABERLO (sin credenciales, en simulación),
+   * que es distinto de haber mirado y no encontrarlo: para eso el resultado
+   * trae `found: false`. La diferencia importa a quien lo enseña: «no consta
+   * en el ERP» y «no se ha podido preguntar» piden reacciones distintas.
+   */
+  getPurchaseReceipt?(
+    ctx: OperationContext,
+    query: PurchaseReceiptQuery
+  ): Promise<{ found: true; receipt: PurchaseReceipt } | { found: false } | null>;
+}
+
+/* ── Albaranes de compra (recepciones) ──────────────────────────────────── */
+
+/**
+ * Un albarán de compra tal y como lo tiene el ERP: la recepción de mercancía
+ * de un proveedor, registrada o no. Los importes van en las unidades del ERP
+ * (decimales), y cada módulo los convierte a lo suyo; este vocabulario no
+ * decide cómo viaja el dinero dentro de Mobilink.
+ */
+export interface PurchaseReceiptLine {
+  /** Referencia del artículo, tal y como la tiene el ERP. */
+  itemNumber: string | null;
+  description: string | null;
+  quantity: number | null;
+  unitCost: number | null;
+  /** Importe de la línea sin impuestos. */
+  amountExcludingTax: number | null;
+}
+
+export interface PurchaseReceipt {
+  /** El identificador interno del ERP. */
+  externalId: string;
+  /** El número del documento EN EL ERP (su serie), no el del proveedor. */
+  number: string;
+  /** El número del albarán DEL PROVEEDOR, que es el que citan los correos. */
+  vendorShipmentNumber: string | null;
+  vendorNumber: string | null;
+  vendorName: string | null;
+  postingDate: string | null;
+  /** Registrado (contabilizado) en el ERP. */
+  posted: boolean;
+  /** Número de la factura de compra con la que quedó casado, si el ERP lo dice. */
+  invoiceNumber: string | null;
+  totalExcludingTax: number | null;
+  lines: PurchaseReceiptLine[];
+}
+
+export interface PurchaseReceiptQuery {
+  /** El número del proveedor: lo normal. */
+  vendorShipmentNumber?: string;
+  /** El número del ERP, cuando se conoce. */
+  number?: string;
+  /**
+   * La company del ERP a la que preguntar, si no es la de la configuración.
+   * Un ERP con varias sociedades tiene varias companies, y el tenant de
+   * Mobilink es uno solo.
+   */
+  companyId?: string;
 }
 
 /**

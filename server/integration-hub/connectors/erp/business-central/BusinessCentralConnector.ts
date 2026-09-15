@@ -11,7 +11,13 @@
  * la respuesta (`simulated: true`) y en el audit log, para no confundir datos simulados con reales.
  */
 
-import type { IErpConnector, ConnectorInfo } from "../../../domain/connectors.ts";
+import type {
+  IErpConnector,
+  ConnectorInfo,
+  PurchaseReceipt,
+  PurchaseReceiptLine,
+  PurchaseReceiptQuery,
+} from "../../../domain/connectors.ts";
 import type { OperationContext } from "../../../domain/identifiers.ts";
 import { IntegrationError } from "../../../domain/errors.ts";
 import { getSecretsProvider } from "../../../infrastructure/secrets.ts";
@@ -30,6 +36,13 @@ import type {
 } from "../../../domain/models.ts";
 
 export interface BusinessCentralConfig {
+  /**
+   * El campo de `purchaseReceipts` que lleva el número de albarán DEL
+   * PROVEEDOR. En la API v2.0 estándar es `vendorShipmentNumber`; una
+   * extensión de la empresa puede exponerlo con otro nombre. Se deja
+   * configurable porque es justo lo que sólo se sabe con un inquilino delante.
+   */
+  purchaseReceiptVendorField?: string;
   /** Base de la API, p. ej. https://api.businesscentral.dynamics.com/v2.0/{aadTenant}/{env}/api/v2.0 */
   baseUrl?: string;
   /** GUID de la company de BC. */
@@ -140,6 +153,7 @@ export class BusinessCentralConnector implements IErpConnector {
       "createPurchaseOrder",
       "createCustomer",
       "updateCustomer",
+      "getPurchaseReceipt",
     ],
   };
 
@@ -342,6 +356,49 @@ export class BusinessCentralConnector implements IErpConnector {
       url = data["@odata.nextLink"];
     }
     return out;
+  }
+
+
+  // ── Albaranes de compra ────────────────────────────────────────────────────
+
+  /**
+   * Un albarán de compra por el número del proveedor (o por el del ERP).
+   *
+   * `purchaseReceipts` es la recepción REGISTRADA (Posted Purchase Receipt):
+   * lo que hay ahí ya se ha dado por recibido. Si el albarán todavía está sólo
+   * en un pedido sin registrar, no aparece, y eso es una respuesta («no
+   * consta»), no un fallo.
+   *
+   * En simulación devuelve `null`: no lo sé. Inventar un albarán plausible
+   * sería peor que no contestar, porque la pantalla diría que ya está grabado
+   * y alguien se lo creería.
+   */
+  async getPurchaseReceipt(
+    ctx: OperationContext,
+    query: PurchaseReceiptQuery
+  ): Promise<{ found: true; receipt: PurchaseReceipt } | { found: false } | null> {
+    if (await this.useSimulation(ctx)) return null;
+
+    const campoProveedor = this.config.purchaseReceiptVendorField || "vendorShipmentNumber";
+    const filtro = query.number
+      ? `number eq ${odataLiteral(query.number)}`
+      : query.vendorShipmentNumber
+        ? `${campoProveedor} eq ${odataLiteral(query.vendorShipmentNumber)}`
+        : null;
+    if (!filtro) return { found: false };
+
+    const path = `purchaseReceipts?$filter=${encodeURIComponent(filtro)}&$expand=purchaseReceiptLines`;
+    const company = query.companyId || this.config.companyId;
+    const url = `${this.config.baseUrl}/companies(${company})/${path}`;
+    const data: { value?: BcPurchaseReceipt[] } = await this.bcRequest(ctx, url, undefined, path);
+    const filas = data.value ?? [];
+    if (filas.length === 0) return { found: false };
+
+    // Dos recepciones con el mismo número del proveedor es un caso real (el
+    // proveedor reutiliza numeración entre años). Se devuelve la más reciente
+    // y quien llama ve en `postingDate` con cuál se ha quedado.
+    const [r] = [...filas].sort((a, b) => String(b.postingDate ?? "").localeCompare(String(a.postingDate ?? "")));
+    return { found: true, receipt: mapPurchaseReceipt(r, campoProveedor) };
   }
 
   // ── testConnection ──────────────────────────────────────────────────────────
@@ -777,4 +834,62 @@ export class BusinessCentralConnector implements IErpConnector {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/* ── Albaranes de compra: forma cruda de BC y su mapeo ───────────────────── */
+
+interface BcPurchaseReceiptLine {
+  id?: string;
+  lineType?: string;
+  lineObjectNumber?: string;
+  description?: string;
+  quantity?: number;
+  unitCost?: number;
+  amountExcludingTax?: number;
+}
+
+interface BcPurchaseReceipt {
+  id: string;
+  number: string;
+  vendorNumber?: string;
+  vendorName?: string;
+  postingDate?: string;
+  orderNumber?: string;
+  invoiceNumber?: string;
+  totalAmountExcludingTax?: number;
+  purchaseReceiptLines?: BcPurchaseReceiptLine[];
+  [campo: string]: unknown;
+}
+
+function numeroONull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function mapPurchaseReceipt(r: BcPurchaseReceipt, campoProveedor: string): PurchaseReceipt {
+  const lines: PurchaseReceiptLine[] = (r.purchaseReceiptLines ?? [])
+    // Las líneas de comentario no llevan artículo ni importe: no son mercancía.
+    .filter((l) => !l.lineType || l.lineType !== "Comment")
+    .map((l) => ({
+      itemNumber: l.lineObjectNumber ?? null,
+      description: l.description ?? null,
+      quantity: numeroONull(l.quantity),
+      unitCost: numeroONull(l.unitCost),
+      amountExcludingTax: numeroONull(l.amountExcludingTax),
+    }));
+  const proveedor = r[campoProveedor];
+  return {
+    externalId: r.id,
+    number: r.number,
+    vendorShipmentNumber: typeof proveedor === "string" && proveedor ? proveedor : null,
+    vendorNumber: r.vendorNumber ?? null,
+    vendorName: r.vendorName ?? null,
+    postingDate: r.postingDate ?? null,
+    // Está en purchaseReceipts: es la colección de recepciones registradas.
+    posted: true,
+    invoiceNumber: r.invoiceNumber ?? null,
+    totalExcludingTax:
+      numeroONull(r.totalAmountExcludingTax) ??
+      (lines.length ? lines.reduce((t, l) => t + (l.amountExcludingTax ?? 0), 0) : null),
+    lines,
+  };
 }

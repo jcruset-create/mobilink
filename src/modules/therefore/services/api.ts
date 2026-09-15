@@ -13,6 +13,7 @@ import { sessionHeaders } from "../../sessionHeaders";
 import type {
   Adjunto,
   AlbaranAnalizado,
+  ConsultaErp,
   AnalisisDeExpediente,
   Bootstrap,
   Config,
@@ -315,4 +316,10 @@ export async function importarEml(archivo: File): Promise<ResultadoEml> {
 
 export function cargarHistorico(desde: string): Promise<Omit<PasadaBuzon, "id" | "iniciada_at" | "terminada_at" | "error" | "origen">> {
   return pedir("/buzon/historico", { method: "POST", body: JSON.stringify({ desde }) });
+}
+
+/* ── ERP ─────────────────────────────────────────────────────────────────── */
+
+export function consultarErp(actuacionId: string): Promise<ConsultaErp> {
+  return pedir(`/actuaciones/${actuacionId}/consultar-erp`, { method: "POST" });
 }
