@@ -1145,6 +1145,14 @@ export async function adjuntosDeNotificacion(
   return rows.map(aAdjunto);
 }
 
+export async function adjuntoPorId(empresaId: string, id: string, ejecutor?: Ejecutor): Promise<Adjunto | null> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT ${CAMPOS_ADJ} FROM thf_adjuntos WHERE empresa_id = $1 AND id = $2`,
+    [empresaId, id]
+  );
+  return rows[0] ? aAdjunto(rows[0]) : null;
+}
+
 export async function adjuntosDeExpediente(
   empresaId: string,
   expedienteId: string,

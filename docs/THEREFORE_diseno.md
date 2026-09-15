@@ -1295,6 +1295,17 @@ Sigue sin código: dar de alta el conector de BC del cliente en el Hub y la
 clave `erp.company.<codigo>` por sociedad, cuando el cliente entregue los
 datos del ERP (N.7).
 
+**Pestaña «Documentos» (tras el primer correo real).** El PDF que viene con
+el correo se ve dentro del expediente: la pestaña lista los adjuntos
+(nombre, tamaño, fecha) y enseña el elegido en un visor incrustado, con
+«Abrir en otra pestaña» al lado. El enlace sigue siendo firmado y con
+caducidad (`GET /adjuntos/:id/documento`), se pide cada vez que se elige un
+documento y no se guarda con la lista. Los adjuntos de la pestaña «Correos»
+también se abren. Y un arreglo de paso: el «Ver el PDF» de los albaranes
+abría la ventana DESPUÉS de pedir el enlace, y el navegador la bloqueaba
+sin decir nada; ahora se abre vacía con el clic y se le pone la URL cuando
+llega.
+
 Orden: 1 → 2 → 3 → 4 → 5, hecho. Las decisiones N.1–N.3 se necesitan
 para la fase 3: sin correos reales no se calibra un parser, y afinarlo contra
 ejemplos inventados da un 100 % de acierto que se desmorona con el primer

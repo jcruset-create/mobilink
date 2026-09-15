@@ -186,6 +186,21 @@ export async function reanalizar(ctx: Contexto, actuacionId: string): Promise<re
 }
 
 /** Enlace temporal al PDF de un análisis, para el visor. */
+/**
+ * El enlace de cualquier adjunto del expediente —el PDF que vino con el correo,
+ * tenga o no análisis—, por la misma vía firmada y con la misma caducidad.
+ */
+export async function enlaceDelAdjunto(ctx: Contexto, adjuntoId: string): Promise<string> {
+  const adjunto = await repo.adjuntoPorId(ctx.empresaId, adjuntoId);
+  if (!adjunto) throw new ErrorTherefore("SIN_DOCUMENTO", "Ese adjunto no existe.", 404);
+  if (!adjunto.storagePath) {
+    throw new ErrorTherefore("SIN_DOCUMENTO", "El fichero de ese adjunto no se guardó.", 404);
+  }
+  const url = await urlFirmada(adjunto.storagePath);
+  if (!url) throw new ErrorTherefore("SIN_DOCUMENTO", "No se ha podido abrir el documento.", 502);
+  return url;
+}
+
 export async function enlaceDelDocumento(ctx: Contexto, albaranAnalizadoId: string): Promise<string> {
   const fila = await repo.albaranAnalizadoPorId(ctx.empresaId, albaranAnalizadoId);
   if (!fila?.adjuntoId) {

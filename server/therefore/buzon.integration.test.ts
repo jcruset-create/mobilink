@@ -179,6 +179,13 @@ describe.runIf(RUN)("El buzón de Therefore", () => {
     expect(adjuntos[0].storagePath).toBeTruthy();
     expect(adjuntos[0].tipoDocumento).toBe("PDF_FACTURA");
 
+    // El PDF del correo se puede abrir desde el panel, por enlace firmado.
+    const documentos = await import("./documentos/servicio.ts");
+    const ctx = { empresaId: EMPRESA, userId: null };
+    await expect(documentos.enlaceDelAdjunto(ctx, adjuntos[0].id)).resolves.toMatch(/^\/uploads\/therefore\//);
+    await expect(documentos.enlaceDelAdjunto({ ...ctx, empresaId: "00000000-0000-4000-a000-00000000ea02" }, adjuntos[0].id))
+      .rejects.toMatchObject({ codigo: "SIN_DOCUMENTO", estado: 404 });
+
     const { rows: cola } = await db.query(
       `SELECT numero_solicitado, estado_proceso FROM thf_albaranes_analizados WHERE expediente_id = $1`,
       [exps[0].id]

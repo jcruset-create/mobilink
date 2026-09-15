@@ -237,6 +237,10 @@ export function enlaceDocumento(albaranAnalizadoId: string): Promise<{ url: stri
   return pedir(`/albaranes/${albaranAnalizadoId}/documento`);
 }
 
+export function enlaceAdjunto(adjuntoId: string): Promise<{ url: string }> {
+  return pedir(`/adjuntos/${adjuntoId}/documento`);
+}
+
 /* ── El buzón ────────────────────────────────────────────────────────────── */
 
 export type PasadaBuzon = {

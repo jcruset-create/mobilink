@@ -340,7 +340,9 @@ export type Adjunto = {
   tamanoBytes: number | null;
   tipoDocumento: string;
   hashArchivo: string;
+  storagePath: string | null;
   parsed: boolean;
+  createdAt: string;
 };
 
 export type TipoDecision =
