@@ -55,6 +55,42 @@ const EMPRESA = "00000000-0000-4000-a000-00000000cd01";
 const GESTOR = "00000000-0000-4000-a000-000000000d01";
 const gestor = { usuario: GESTOR, empresa: EMPRESA, nombre: "Gestora Prueba" };
 const REMITENTE = "pedidos@soledad.example";
+/**
+ * El correo REAL de Soledad, copiado de un reenvío del 15/09/2026. Aquí se
+ * prueba entero, desde el .eml hasta el albarán en la base.
+ */
+const ASUNTO_REAL = "Fwd: Emisión de Albarán B /2028450459 con fecha 15/09/2026.";
+const ALBARAN_REAL = `---------- Forwarded message ---------
+From: noreply@gruposoledad.net
+Date: Tue, 15 Sep 2026 15:08:05 +0000
+Subject: Emisión de Albarán B /2028450459 con fecha 15/09/2026.
+To: jordi.cruset@gruposoledad.net
+
+Estimado COMERCIAL SEA, S.A.,
+tu pedido 5687439 ha sido emitido por nuestro centro logístico y la
+entrega se realizará a través de TRANSAHER.
+
+El pedido será entregado a:
+COMERCIAL SEA, S.A.
+PI RIU CLAR C/COURE 27,
+43006 TARRAGONA
+TARRAGONA ESPAÑA
+
+El contenido del pedido es:
+
+Cantidad
+Descripción
+Importe
+2.00 245/70X17.5 HANKOOK AH35 136M 248.45
+-2.00 10 EUR DTO UD HANKOOK 10.00
+2.00 S.I.Gestión de NFU Cat.D1T 6.05
+Pulsar enlace para ver albarán adjunto.
+
+Un saludo,
+
+Grupo Soledad
+`;
+
 const CFG: ConfigBuzon = { host: "imap.ejemplo.invalid", port: 993, user: "recepciones@ejemplo.invalid", pass: "no", carpeta: "INBOX", minutos: 5, empresaId: EMPRESA };
 
 let base = "";
@@ -320,6 +356,56 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
     const bandeja = await api("/bandeja");
     expect(bandeja.body.albaranes.map((a: any) => a.id)).toContain(alb.id);
     expect(ficha2.body.eventos.map((e: any) => e.tipo)).toEqual(["PEDIDO_CREADO", "ALBARAN_CREADO", "ORIGINAL_ADJUNTADO"]);
+  });
+
+  it("el albarán REAL de Soledad, reenviado a mano, crea el albarán del pedido que le toca", async () => {
+    // El correo de arriba, con sus números: el pedido tiene que existir ya.
+    const alta = await api("/pedidos", {
+      method: "POST",
+      body: {
+        proveedorId,
+        numeroProveedor: "B-2026-5687439",
+        centroNombre: "TARRAGONA",
+        lineas: [{ descripcionProveedor: "245/70X17.5 HANKOOK AH35 136M", cantidadPedida: 2, precioUnitarioCentimos: 24845 }],
+      },
+    });
+    expect(alta.status, JSON.stringify(alta.body)).toBe(201);
+    const pedidoId = alta.body.pedido.id;
+
+    // Llega reenviado desde una dirección personal: al proveedor se le
+    // reconoce por el «From:» del bloque reenviado.
+    await api(`/proveedores/${proveedorId}`, { method: "PATCH", body: { remitentesCorreo: [REMITENTE, "gruposoledad.net"] } });
+    const m = await mensaje({ de: "jordi.cruset@gruposoledad.net", asunto: ASUNTO_REAL, texto: ALBARAN_REAL });
+    const r = await importarEml(m.source);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.resultado).toBe("procesado");
+    expect(r.body.tipo).toBe("ALBARAN");
+    expect(r.body.albaranNumero).toBe("B/2028450459");
+
+    const ficha = await api(`/pedidos/${pedidoId}`);
+    expect(ficha.body.albaranes).toHaveLength(1);
+    const alb = ficha.body.albaranes[0];
+    expect(alb.transportista).toBe("TRANSAHER");
+    expect(alb.fechaExpedicion).toContain("2026-09-15");
+    // Una sola línea: ni el descuento ni la gestión de NFU se cuentan en el muelle.
+    expect(alb.lineas).toHaveLength(1);
+    expect(alb.lineas[0]).toMatchObject({ descripcionProveedor: "245/70X17.5 HANKOOK AH35 136M", cantidadExpedida: 2 });
+    expect(ficha.body.pedido.estado).toBe("EXPEDIDO");
+  });
+
+  it("un albarán que agrupa pedidos DISTINTOS no se reparte solo: queda en revisión diciéndolo", async () => {
+    const alta = await api("/pedidos", {
+      method: "POST",
+      body: { proveedorId, numeroProveedor: "5690526", centroNombre: "TARRAGONA", lineas: [{ descripcionProveedor: "385/65X22.5 SAILUN STR1+ 164K", cantidadPedida: 10 }] },
+    });
+    expect(alta.status, JSON.stringify(alta.body)).toBe(201);
+
+    const texto = ALBARAN_REAL.replace("tu pedido 5687439 ha sido emitido", "tus pedidos (5690526,5690999) han sido emitidos");
+    const m = await mensaje({ asunto: "Fwd: Emisión de Albarán B /2028452141 con fecha 15/09/2026.", texto });
+    const r = await importarEml(m.source);
+    expect(r.body.resultado).toBe("revision");
+    expect(r.body.error).toContain("agrupa varios pedidos");
+    expect((await api(`/pedidos/${alta.body.pedido.id}`)).body.albaranes).toHaveLength(0);
   });
 
   it("el mismo correo dos veces es DUPLICADO: un solo pedido, un solo albarán", async () => {

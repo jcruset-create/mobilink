@@ -145,6 +145,11 @@ export function cuerpoEnTexto(correo: Pick<ParsedMail, "text" | "html">): string
   return "";
 }
 
+/** Una fecha legible y sin ambigüedad de huso, para los motivos. */
+function enUtc(d: Date): string {
+  return `${d.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
 function adjuntosPdf(correo: ParsedMail): AdjuntoPdf[] {
   const salida: AdjuntoPdf[] = [];
   for (const a of correo.attachments ?? []) {
@@ -194,11 +199,23 @@ export async function procesarFuente(
   const asunto = correo.subject ?? "";
   const de = direccion(correo.from);
 
+  // Los motivos dicen además qué hacer: son lo único que se ve en pantalla
+  // cuando un correo no entra, y «ignorado» a secas no se puede diagnosticar.
   if (desde && correo.date && correo.date.getTime() < desde.getTime() - MARGEN_ACTIVACION_MS) {
-    return { messageId, asunto, resultado: "ignorado", error: "Anterior a la activación del buzón" };
+    return {
+      messageId,
+      asunto,
+      resultado: "ignorado",
+      error: `Anterior a la activación del buzón (${enUtc(desde)}). Para traerlo, «Cargar el histórico anterior a la activación».`,
+    };
   }
   if (remitentes.length > 0 && !remitentes.some((r) => remitenteCasa(de, r))) {
-    return { messageId, asunto, resultado: "ignorado", error: `Remitente no admitido: ${de}` };
+    return {
+      messageId,
+      asunto,
+      resultado: "ignorado",
+      error: `Remitente no admitido: ${de || "(sin remitente)"}. Los admitidos son ${remitentes.join(", ")}; se ponen en la ficha del proveedor.`,
+    };
   }
   const texto = cuerpoEnTexto(correo);
   if (!texto.trim()) return { messageId, asunto, resultado: "ignorado", error: "Sin cuerpo" };

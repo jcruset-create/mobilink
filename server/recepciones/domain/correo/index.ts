@@ -4,35 +4,54 @@
  * Código PURO: ni base de datos, ni red. Se prueba con un asunto y un texto,
  * que es como se puede probar de verdad un parser.
  *
- * ── Los dos correos ─────────────────────────────────────────────────────────
+ * ── El correo de verdad ─────────────────────────────────────────────────────
  *
- * TIPO 1 · «Aviso de nuevo Pedido número B-2026-5688837»
+ * Soledad NO escribe etiquetas. Lo cuenta en prosa y pone el contenido en una
+ * tabla. Un albarán real, entero:
  *
- *     Pedido:                          Contenido:
- *     B-2026-5688837                   Cantidad:
- *     Fecha:                           2
- *     15/09/2026                       Producto:
- *     Cliente:                         245/70X17.5 HANKOOK AH35 136M
- *     COMERCIAL SEA, S.A.              Precio unitario:
- *     Usuario que realiza el pedido:   248,45 €
- *     comercialseatarragona            Centro logístico:
- *     Destino:                         227 - ALMACEN MANRESA (CATALUÑA)
- *     COMERCIAL SEA, S.A.              Transportista:
- *     PIRIU CLAR C/COURE 27            TRANSAHER
+ *     Asunto: Emisión de Albarán B /2028450459 con fecha 15/09/2026.
+ *
+ *     Estimado COMERCIAL SEA, S.A.,
+ *     tu pedido 5687439 ha sido emitido por nuestro centro logístico y la
+ *     entrega se realizará a través de TRANSAHER.
+ *     ...
+ *     El pedido será entregado a:
+ *     COMERCIAL SEA, S.A.
+ *     PI RIU CLAR C/COURE 27,
  *     43006 TARRAGONA
+ *     TARRAGONA ESPAÑA
  *
- * TIPO 2 · «Emisión de Albarán»
+ *     El contenido del pedido es:
  *
- *     Pedido: 5688837
- *     Albarán: 2028450461
- *     Transportista: TRANSAHER
- *     (enlace al PDF del albarán)
+ *     Cantidad
+ *     Descripción
+ *     Importe
+ *     2.00 245/70X17.5 HANKOOK AH35 136M 248.45
+ *     -2.00 10 EUR DTO UD HANKOOK 10.00
+ *     2.00 S.I.Gestión de NFU Cat.D1T 6.05
+ *     Pulsar enlace para ver albarán adjunto.
+ *     <https://ws.gruposoledad.com/b2b?serviceName=descargarAlbaran&...>
  *
- * Las etiquetas pueden llevar el valor en la misma línea («Pedido: 5688837»)
- * o en la siguiente; el parser admite las dos formas, ignora acentos y
- * mayúsculas en las etiquetas, y NO se inventa nada: lo que no reconoce va a
- * `avisos`, y la ingesta decide si con eso se puede crear algo o hay que
- * dejarlo para que lo mire una persona.
+ * De ahí salen: el albarán «B/2028450459» y su fecha, del ASUNTO; el pedido
+ * «5687439», de la FRASE; el transportista, de «a través de TRANSAHER»; y una
+ * línea de mercancía, de la TABLA.
+ *
+ * ── Qué es mercancía y qué no ───────────────────────────────────────────────
+ *
+ * La tabla mezcla lo que se recibe en el muelle con lo que sólo se cobra: el
+ * descuento (cantidad negativa) y la gestión de neumáticos fuera de uso. Esas
+ * filas se leen y se guardan en `conceptos`, pero NO son líneas: si entraran,
+ * cada recepción pediría al almacén contar un descuento.
+ *
+ * ── Y las etiquetas, por si acaso ───────────────────────────────────────────
+ *
+ * Se siguen reconociendo «Pedido: 5688837», «Albarán:», «Cantidad:», etc., con
+ * el valor en la misma línea o en la siguiente: el proveedor cambia sus
+ * plantillas sin avisar y un `.eml` viejo tiene que poder reprocesarse. Cuando
+ * hay tabla, la tabla manda.
+ *
+ * El parser NO se inventa nada: lo que no reconoce va a `avisos`, y la ingesta
+ * decide si con eso se puede crear algo o hay que dejarlo para una persona.
  *
  * Importes y fechas se leen con las mismas funciones que Therefore
  * (`leerImporte`, `leerFecha`): son puras, están probadas y resuelven ya el
@@ -62,16 +81,27 @@ export type PedidoLeido = {
   almacenOrigen: string | null;
   transportista: string | null;
   lineas: LineaLeida[];
+  /** Filas de la tabla que no son mercancía: descuentos, gestión de NFU… */
+  conceptos: LineaLeida[];
 };
 
 export type AlbaranLeido = {
   numeroPedido: string | null;
+  /**
+   * Todos los pedidos que nombra el correo, sin repetir. Casi siempre uno,
+   * pero Soledad agrupa: «tus pedidos (5690526,5690526,…) han sido emitidos».
+   * Si salen varios DISTINTOS, el albarán viene de más de un pedido y eso no
+   * lo decide el parser.
+   */
+  numerosPedido: string[];
   numeroAlbaran: string | null;
   transportista: string | null;
   fecha: string | null;
   /** Total expedido si el correo lo dice y no detalla líneas. */
   cantidadExpedida: number | null;
   lineas: LineaLeida[];
+  /** Filas de la tabla que no son mercancía: descuentos, gestión de NFU… */
+  conceptos: LineaLeida[];
   /** Enlaces al PDF, el más probable primero. */
   enlacesPdf: string[];
 };
@@ -127,6 +157,10 @@ type Campo =
  */
 const ETIQUETAS: [string, Campo][] = [
   ["USUARIO QUE REALIZA EL PEDIDO", "USUARIO"],
+  // Las frases con las que Soledad abre un bloque, que son etiquetas sin serlo.
+  ["EL PEDIDO SERA ENTREGADO A", "DESTINO"],
+  ["EL CONTENIDO DEL PEDIDO ES", "CONTENIDO"],
+  ["EL CONTENIDO DEL PEDIDO", "CONTENIDO"],
   ["USUARIO", "USUARIO"],
   ["NUMERO DE PEDIDO", "PEDIDO"],
   ["N PEDIDO", "PEDIDO"],
@@ -151,6 +185,7 @@ const ETIQUETAS: [string, Campo][] = [
   ["REFERENCIA", "REFERENCIA"],
   ["PRECIO UNITARIO", "PRECIO"],
   ["PRECIO", "PRECIO"],
+  ["IMPORTE", "PRECIO"],
   ["CENTRO LOGISTICO", "CENTRO_LOGISTICO"],
   ["ALMACEN DE ORIGEN", "CENTRO_LOGISTICO"],
   ["ALMACEN", "CENTRO_LOGISTICO"],
@@ -158,7 +193,51 @@ const ETIQUETAS: [string, Campo][] = [
   ["AGENCIA", "TRANSPORTISTA"],
 ];
 
-type Token = { campo: Campo; valor: string } | { texto: string };
+type Token = { campo: Campo; valor: string } | { fila: LineaLeida } | { texto: string };
+
+/* ── La tabla de contenido ───────────────────────────────────────────────── */
+
+/**
+ * Una fila entera en una línea: cantidad, descripción e importe.
+ *
+ *     2.00 245/70X17.5 HANKOOK AH35 136M 248.45
+ *     -2.00 10 EUR DTO UD HANKOOK 10.00
+ *
+ * La forma es estrecha a propósito —empieza por un número y acaba por un
+ * importe con dos decimales— para que no se trague prosa: «43006 TARRAGONA»
+ * no es una fila, y «911 910 910.» tampoco.
+ *
+ * El importe es el precio UNITARIO, aunque la cabecera diga «Importe»: en el
+ * correo de arriba hay 2 unidades y pone 248.45, que es lo que vale una.
+ */
+const FILA = /^(-?\d+(?:[.,]\d+)?)\s+(\S.*?)\s+(-?\d{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*(?:€|EUR)?\.?$/;
+
+export function filaDeTabla(linea: string): LineaLeida | null {
+  const m = linea.trim().match(FILA);
+  if (!m) return null;
+  const cantidad = Number(m[1].replace(",", "."));
+  const descripcion = m[2].trim();
+  if (!Number.isFinite(cantidad) || descripcion.length < 3) return null;
+  return { cantidad, descripcion, precioCentimos: leerImporte(m[3]).centimos, referencia: null };
+}
+
+/**
+ * Lo que la tabla cobra pero no llega al muelle: el descuento por unidad y la
+ * gestión de neumáticos fuera de uso. Se leen y se guardan aparte para que se
+ * vean, pero no se convierten en líneas a contar.
+ *
+ * La lista es corta y explícita a propósito: ante la duda, una fila es
+ * mercancía. Colar un concepto de más se ve en pantalla; perder una línea de
+ * neumáticos, no.
+ */
+const CONCEPTOS = [/\bDTO\b/, /\bDESCUENTOS?\b/, /\bNFU\b/, /\bECOTASA\b/, /GESTION DE RESIDUOS/, /\bPORTES?\b/, /\bTRANSPORTE\b/];
+
+export function esConcepto(linea: Pick<LineaLeida, "cantidad" | "descripcion">): boolean {
+  if (linea.cantidad !== null && linea.cantidad < 0) return true; // un descuento
+  if (!linea.descripcion) return false;
+  const d = normalizar(linea.descripcion);
+  return CONCEPTOS.some((r) => r.test(d));
+}
 
 /**
  * Reconoce una etiqueta al principio de la línea: «Pedido:», «Pedido: 5688837»,
@@ -185,6 +264,12 @@ function tokenizar(texto: string): Token[] {
     actual = null;
   };
   for (const l of lineas(texto)) {
+    const fila = filaDeTabla(l);
+    if (fila) {
+      cerrar();
+      tokens.push({ fila });
+      continue;
+    }
     const e = etiquetaDe(l);
     if (e) {
       cerrar();
@@ -192,8 +277,9 @@ function tokenizar(texto: string): Token[] {
       continue;
     }
     if (!l) {
-      // Una línea en blanco cierra el valor salvo en los bloques multilínea.
-      if (actual && actual.campo !== "DESTINO") cerrar();
+      // Una línea en blanco cierra el valor, pero no lo que aún no ha
+      // empezado: «Destino:», una línea vacía y debajo la dirección.
+      if (actual && actual.valores.length > 0) cerrar();
       continue;
     }
     if (actual) actual.valores.push(l);
@@ -203,10 +289,92 @@ function tokenizar(texto: string): Token[] {
   return tokens;
 }
 
+/* ── Reenvíos ────────────────────────────────────────────────────────────── */
+
+/** «Fwd:», «RV:», «Re:»… delante del asunto de verdad, y a veces varias veces. */
+export function asuntoLimpio(asunto: string): string {
+  let a = asunto;
+  for (let i = 0; i < 5; i += 1) {
+    const sig = a.replace(/^\s*(?:fwd?|rv|re|tr)\s*(?:\[\d+\])?\s*:\s*/i, "");
+    if (sig === a) break;
+    a = sig;
+  }
+  return a.trim();
+}
+
+/**
+ * El remitente ORIGINAL de un correo reenviado: la línea «From:» que mete el
+ * cliente de correo al reenviar.
+ *
+ * Sirve SÓLO para saber de qué proveedor es el correo. Quién puede meter
+ * correo en el módulo lo sigue decidiendo el remitente de verdad del sobre,
+ * que esto no toca: el cuerpo lo escribe cualquiera.
+ */
+export function remitenteReenviado(texto: string): string | null {
+  const m = texto.match(/^[>\s]*(?:From|De|Remitente)\s*:.*?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)/im);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/* ── Prosa ───────────────────────────────────────────────────────────────── */
+
+/** Un número de documento: «B /2028450459», «B-2026-5688837», «5687439». */
+const NUMERO_DOC = "((?:[A-Z]{1,3}\\s*[-/]?\\s*)?\\d{4,}(?:[-/]\\d{2,})*)";
+
+function busca(texto: string, patron: string): string | null {
+  const m = texto.match(new RegExp(patron, "i"));
+  return m ? m[1].replace(/\s+/g, "") : null;
+}
+
+/**
+ * Los pedidos que nombra la frase, en orden y sin repetir:
+ *
+ *     tu pedido 5687439 ha sido emitido…            → ["5687439"]
+ *     tus pedidos (5690526,5690526,5690526) han…    → ["5690526"]
+ *
+ * Se recorren TODAS las apariciones de «pedido» porque hay varias que no
+ * llevan número («Información Entrega de Pedido», «Escribe el número de
+ * pedido entero T0100007879100»): vale la primera que dé números, y la lista
+ * se corta en la primera palabra que ya no lo es.
+ */
+export function pedidosEnProsa(texto: string): string[] {
+  const doc = new RegExp(`^${NUMERO_DOC}$`, "i");
+  // Sólo espacios, nunca saltos de línea: si no, un «…Entrega de Pedido» al
+  // final de una línea se tragaría la siguiente y con ella el número de verdad.
+  for (const m of texto.matchAll(/\bpedidos?\b[ \t]*(?:n[ºo°]?\.?[ \t]*)?[:(]?[ \t]*([^)\n]*)/gi)) {
+    const numeros: string[] = [];
+    for (const trozo of (m[1] ?? "").split(/[,;\s]+/)) {
+      const t = trozo.trim();
+      if (!t) continue;
+      if (!doc.test(t)) break;
+      if (!numeros.includes(t)) numeros.push(t);
+    }
+    if (numeros.length > 0) return numeros;
+  }
+  return [];
+}
+
+/** «Emisión de Albarán B /2028450459 con fecha…», en el asunto o en el cuerpo. */
+export function albaranEnProsa(texto: string): string | null {
+  return busca(texto, `\\balbar[aá]n(?:es)?\\s+(?:n[ºo°]?\\.?\\s*)?${NUMERO_DOC}`);
+}
+
+/** «…con fecha 15/09/2026.» */
+export function fechaEnProsa(texto: string): string | null {
+  const m = texto.match(/\bcon fecha\s+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
+  return m ? leerFecha(m[1]) : null;
+}
+
+/** «…la entrega se realizará a través de TRANSAHER.» */
+export function transportistaEnProsa(texto: string): string | null {
+  const m = texto.match(/\ba trav[eé]s de\s+([^.,\n]+)/i);
+  const v = m ? m[1].trim() : "";
+  return v && v.length <= 60 ? v : null;
+}
+
 /* ── Clasificación ───────────────────────────────────────────────────────── */
 
 export function detectarTipo(asunto: string, texto: string): TipoCorreo {
-  const a = normalizar(asunto);
+  const a = normalizar(asuntoLimpio(asunto));
   if (/AVISO DE NUEVO PEDIDO|NUEVO PEDIDO/.test(a)) return "PEDIDO";
   if (/EMISION DE ALBARAN|ALBARAN/.test(a)) return "ALBARAN";
   const t = normalizar(texto);
@@ -235,13 +403,23 @@ export function localidadDe(destino: string | null): string | null {
   const ls = destino.split("\n").map((l) => l.trim()).filter(Boolean);
   for (let i = ls.length - 1; i >= 0; i -= 1) {
     const sinCp = ls[i].replace(/^\d{4,5}\s*[-,]?\s*/, "").trim();
-    if (sinCp && !/\d{3,}/.test(sinCp)) return sinCp.replace(/\s*\(.*\)$/, "").trim();
+    // «TARRAGONA ESPAÑA» es la localidad y el país en la misma línea.
+    const sinPais = sinCp.replace(/[,\s]+(ESPA[NÑ]A|SPAIN|PORTUGAL|FRANCIA|FRANCE)\.?$/i, "").trim();
+    if (sinPais && !/\d{3,}/.test(sinPais)) return sinPais.replace(/\s*\(.*\)$/, "").replace(/[,.]$/, "").trim();
   }
   return null;
 }
 
-/** Las líneas de producto: cada «Cantidad» abre una, y lo demás se le pega. */
+/**
+ * Las líneas de producto. Si el correo trae tabla, son sus filas y punto: las
+ * etiquetas sueltas que quedan alrededor («Cantidad», «Descripción», «Importe»
+ * de cabecera) son el encabezado de esa misma tabla, no una línea.
+ * Si no hay tabla, se arma a la antigua: cada «Cantidad» abre una línea.
+ */
 function leerLineas(tokens: Token[]): LineaLeida[] {
+  const filas = tokens.filter((t): t is { fila: LineaLeida } => "fila" in t).map((t) => t.fila);
+  if (filas.length > 0) return filas;
+
   const salida: LineaLeida[] = [];
   let actual: LineaLeida | null = null;
   const nueva = (): LineaLeida => {
@@ -297,20 +475,23 @@ function enlacesDe(texto: string): string[] {
   return todos.sort((a, b) => puntua(b) - puntua(a));
 }
 
-export function parsearPedido(texto: string): { pedido: PedidoLeido; avisos: string[] } {
+export function parsearPedido(texto: string, asunto = ""): { pedido: PedidoLeido; avisos: string[] } {
   const tokens = tokenizar(texto);
   const avisos: string[] = [];
   const destino = valorDe(tokens, "DESTINO");
+  const leidas = leerLineas(tokens);
   const pedido: PedidoLeido = {
-    numeroPedido: primeraLinea(valorDe(tokens, "PEDIDO") ?? "") || null,
-    fecha: leerFecha(primeraLinea(valorDe(tokens, "FECHA") ?? "")),
+    // Primero la etiqueta, si la hay; si no, la frase; y por último el asunto.
+    numeroPedido: primeraLinea(valorDe(tokens, "PEDIDO") ?? "") || pedidosEnProsa(texto)[0] || pedidosEnProsa(asunto)[0] || null,
+    fecha: leerFecha(primeraLinea(valorDe(tokens, "FECHA") ?? "")) ?? fechaEnProsa(asunto) ?? fechaEnProsa(texto),
     cliente: primeraLinea(valorDe(tokens, "CLIENTE") ?? "") || null,
     usuario: primeraLinea(valorDe(tokens, "USUARIO") ?? "") || null,
     destino,
     destinoLocalidad: localidadDe(destino),
     almacenOrigen: primeraLinea(valorDe(tokens, "CENTRO_LOGISTICO") ?? "") || null,
-    transportista: primeraLinea(valorDe(tokens, "TRANSPORTISTA") ?? "") || null,
-    lineas: leerLineas(tokens),
+    transportista: primeraLinea(valorDe(tokens, "TRANSPORTISTA") ?? "") || transportistaEnProsa(texto),
+    lineas: leidas.filter((l) => !esConcepto(l)),
+    conceptos: leidas.filter((l) => esConcepto(l)),
   };
   if (!pedido.numeroPedido) avisos.push("No se ha encontrado el número de pedido.");
   if (pedido.lineas.length === 0) avisos.push("No se ha encontrado ninguna línea de producto.");
@@ -325,20 +506,20 @@ export function parsearPedido(texto: string): { pedido: PedidoLeido; avisos: str
 export function parsearAlbaran(asunto: string, texto: string): { albaran: AlbaranLeido; avisos: string[] } {
   const tokens = tokenizar(texto);
   const avisos: string[] = [];
-  let numeroAlbaran = primeraLinea(valorDe(tokens, "ALBARAN") ?? "") || null;
-  if (!numeroAlbaran) {
-    // «Emisión de Albarán 2028450461» en el asunto.
-    const m = normalizar(asunto).match(/ALBARAN\s*(?:N[ºO]?\.?)?\s*([A-Z0-9-]*\d{4,}[A-Z0-9-]*)/);
-    if (m) numeroAlbaran = m[1];
-  }
-  const lineasLeidas = leerLineas(tokens);
+  const limpio = asuntoLimpio(asunto);
+  const leidas = leerLineas(tokens);
+  const etiquetado = primeraLinea(valorDe(tokens, "PEDIDO") ?? "");
+  const numerosPedido = etiquetado ? [etiquetado] : pedidosEnProsa(texto).length > 0 ? pedidosEnProsa(texto) : pedidosEnProsa(limpio);
   const albaran: AlbaranLeido = {
-    numeroPedido: primeraLinea(valorDe(tokens, "PEDIDO") ?? "") || null,
-    numeroAlbaran,
-    transportista: primeraLinea(valorDe(tokens, "TRANSPORTISTA") ?? "") || null,
-    fecha: leerFecha(primeraLinea(valorDe(tokens, "FECHA") ?? "")),
+    numeroPedido: numerosPedido[0] ?? null,
+    numerosPedido,
+    // El número del albarán vive en el asunto («Emisión de Albarán B /2028450459»).
+    numeroAlbaran: primeraLinea(valorDe(tokens, "ALBARAN") ?? "") || albaranEnProsa(limpio) || albaranEnProsa(texto),
+    transportista: primeraLinea(valorDe(tokens, "TRANSPORTISTA") ?? "") || transportistaEnProsa(texto),
+    fecha: leerFecha(primeraLinea(valorDe(tokens, "FECHA") ?? "")) ?? fechaEnProsa(limpio) ?? fechaEnProsa(texto),
     cantidadExpedida: numero(valorDe(tokens, "CANTIDAD_EXPEDIDA")),
-    lineas: lineasLeidas,
+    lineas: leidas.filter((l) => !esConcepto(l)),
+    conceptos: leidas.filter((l) => esConcepto(l)),
     enlacesPdf: enlacesDe(texto),
   };
   if (!albaran.numeroPedido) avisos.push("No se ha encontrado el número de pedido.");
@@ -350,7 +531,7 @@ export function parsearAlbaran(asunto: string, texto: string): { albaran: Albara
 export function parsearCorreo(asunto: string, texto: string): CorreoParseado {
   const tipo = detectarTipo(asunto, texto);
   if (tipo === "PEDIDO") {
-    const r = parsearPedido(texto);
+    const r = parsearPedido(texto, asunto);
     return { tipo, pedido: r.pedido, albaran: null, avisos: r.avisos };
   }
   if (tipo === "ALBARAN") {
