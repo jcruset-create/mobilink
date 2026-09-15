@@ -163,6 +163,7 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "pedidos", label: "Pedidos" },
       { key: "incidencias", label: "Incidencias" },
       { key: "proveedores", label: "Proveedores" },
+      { key: "correo", label: "Correo del proveedor" },
     ],
   },
   {

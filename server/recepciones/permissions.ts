@@ -33,6 +33,11 @@ export const PERMISOS = [
   "recepciones.rectificar",
   /** Proveedores y mapeo de artículos. */
   "recepciones.proveedores.manage",
+  /**
+   * El correo del proveedor: importar un .eml a mano, forzar una pasada del
+   * buzón, reprocesar un correo que quedó en revisión.
+   */
+  "recepciones.correo.importar",
 ] as const;
 
 export type Permiso = (typeof PERMISOS)[number];
@@ -57,6 +62,7 @@ const POR_ROL: Record<RolRecepciones, readonly Permiso[]> = {
     "recepciones.incidencia.manage",
     "recepciones.rectificar",
     "recepciones.proveedores.manage",
+    "recepciones.correo.importar",
   ],
   admin: PERMISOS,
 };

@@ -38,9 +38,11 @@ import {
 import { normalizarNumero } from "./domain/numero.ts";
 import { ErrorRecepciones } from "./errors.ts";
 import * as repo from "./repository.ts";
-import { generarDocumentoRecepcion } from "./documentos/generar.ts";
+import { generarDocumentoRecepcion, limpio } from "./documentos/generar.ts";
+import { guardarDocumento, hashDeFichero, rutaDocumento } from "./storage.ts";
 
-export type Contexto = { empresaId: string; userId: string; userNombre: string; ip?: string };
+/** `userId` es `null` cuando actúa el sistema (el correo del proveedor). */
+export type Contexto = { empresaId: string; userId: string | null; userNombre: string; ip?: string };
 
 /* ── Proveedores y mapeo ─────────────────────────────────────────────────── */
 
@@ -127,6 +129,8 @@ export type PedidoEntrante = {
   origen?: "MANUAL" | "CORREO";
   externalMessageId?: string | null;
   sourceReceivedAt?: string | null;
+  destinoTexto?: string | null;
+  clienteProveedor?: string | null;
 };
 
 export type FichaPedido = {
@@ -187,6 +191,8 @@ export async function crearPedido(ctx: Contexto, datos: PedidoEntrante): Promise
           origen: datos.origen ?? "MANUAL",
           externalMessageId: datos.externalMessageId ?? null,
           sourceReceivedAt: datos.sourceReceivedAt ?? null,
+          destinoTexto: datos.destinoTexto?.trim() || null,
+          clienteProveedor: datos.clienteProveedor?.trim() || null,
           creadoPor: ctx.userId,
           creadoNombre: ctx.userNombre,
         },
@@ -272,6 +278,7 @@ export async function fichaPedido(ctx: Contexto, pedidoId: string): Promise<Fich
 }
 
 export async function cancelarPedido(ctx: Contexto, pedidoId: string, motivo: string): Promise<repo.Pedido> {
+  const userId = usuarioObligatorio(ctx);
   const motivoLimpio = String(motivo ?? "").trim();
   if (!motivoLimpio) throw new ErrorRecepciones("MOTIVO_REQUERIDO", "Cancelar un pedido necesita un motivo.");
   return repo.enTransaccion(async (c) => {
@@ -282,7 +289,7 @@ export async function cancelarPedido(ctx: Contexto, pedidoId: string, motivo: st
     if (recepciones.length > 0) {
       throw new ErrorRecepciones("PEDIDO_CON_RECEPCIONES", "No se puede cancelar un pedido con recepciones registradas.", 409);
     }
-    await repo.cancelarPedido(ctx.empresaId, pedidoId, { userId: ctx.userId, motivo: motivoLimpio }, c);
+    await repo.cancelarPedido(ctx.empresaId, pedidoId, { userId, motivo: motivoLimpio }, c);
     await repo.anotarEvento(
       ctx.empresaId,
       {
@@ -496,6 +503,7 @@ export type ResultadoCierre = {
 };
 
 export async function cerrarRecepcion(ctx: Contexto, albaranId: string, datos: CierreEntrante): Promise<ResultadoCierre> {
+  const userId = usuarioObligatorio(ctx);
   if (datos.resultado !== "OK" && datos.resultado !== "CON_INCIDENCIA") {
     throw new ErrorRecepciones("RESULTADO_INVALIDO", "El resultado tiene que ser OK o CON_INCIDENCIA.");
   }
@@ -571,7 +579,7 @@ export async function cerrarRecepcion(ctx: Contexto, albaranId: string, datos: C
         centroId: pedido?.centroId ?? null,
         centroNombre: pedido?.centroNombre ?? "",
         resultado: datos.resultado,
-        recibidoPor: ctx.userId,
+        recibidoPor: userId,
         recibidoNombre: ctx.userNombre,
         observaciones: datos.observaciones?.trim() || null,
         idempotencyKey: clave,
@@ -631,7 +639,7 @@ export async function cerrarRecepcion(ctx: Contexto, albaranId: string, datos: C
             cantidadRecibida: recibida,
             diferencia: dif,
             observaciones: entrada?.incidencia?.observaciones?.trim() || null,
-            userId: ctx.userId,
+            userId,
             userNombre: ctx.userNombre,
           },
           c
@@ -761,6 +769,7 @@ export type RectificacionEntrante = {
  * recalculan con la cantidad corregida, que es la que vale a partir de ahora.
  */
 export async function rectificarRecepcion(ctx: Contexto, recepcionId: string, datos: RectificacionEntrante): Promise<repo.Rectificacion> {
+  const userId = usuarioObligatorio(ctx);
   const motivo = String(datos.motivo ?? "").trim();
   if (!motivo) throw new ErrorRecepciones("MOTIVO_REQUERIDO", "Una rectificación necesita un motivo.");
   if (!datos.lineas?.length) throw new ErrorRecepciones("SIN_LINEAS", "Indica qué líneas se corrigen.");
@@ -786,7 +795,7 @@ export async function rectificarRecepcion(ctx: Contexto, recepcionId: string, da
     const numero = await repo.siguienteNumero(ctx.empresaId, "RECT", c);
     const r = await repo.crearRectificacion(
       ctx.empresaId,
-      { numero, recepcionId, albaranId: albaran.id, motivo, userId: ctx.userId, userNombre: ctx.userNombre, lineas: cambios },
+      { numero, recepcionId, albaranId: albaran.id, motivo, userId, userNombre: ctx.userNombre, lineas: cambios },
       c
     );
     for (const ch of cambios) {
@@ -844,6 +853,7 @@ export async function cambiarEstadoIncidencia(
   incidenciaId: string,
   datos: { estado: string; resolucion?: string | null }
 ): Promise<repo.Incidencia> {
+  const userId = usuarioObligatorio(ctx);
   if (!esEstadoIncidencia(datos.estado)) throw new ErrorRecepciones("ESTADO_INVALIDO", `Estado no válido: ${datos.estado}.`);
   const estado: EstadoIncidencia = datos.estado;
   const resolucion = datos.resolucion?.trim() || null;
@@ -856,7 +866,7 @@ export async function cambiarEstadoIncidencia(
     if (incidencia.estado === "RESUELTA" || incidencia.estado === "CANCELADA") {
       throw new ErrorRecepciones("INCIDENCIA_CERRADA", "La incidencia ya está cerrada.", 409);
     }
-    await repo.cambiarEstadoIncidencia(ctx.empresaId, incidenciaId, { estado, resolucion, userId: ctx.userId, userNombre: ctx.userNombre }, c);
+    await repo.cambiarEstadoIncidencia(ctx.empresaId, incidenciaId, { estado, resolucion, userId, userNombre: ctx.userNombre }, c);
     await repo.anotarEvento(
       ctx.empresaId,
       {
@@ -887,6 +897,7 @@ export async function cambiarEstadoIncidencia(
  * y deja el albarán RECIBIDO_CON_INCIDENCIA, que es lo que fue.
  */
 export async function cerrarAlbaranConDiferencia(ctx: Contexto, albaranId: string, motivo: string): Promise<repo.Albaran> {
+  const userId = usuarioObligatorio(ctx);
   const motivoLimpio = String(motivo ?? "").trim();
   if (!motivoLimpio) throw new ErrorRecepciones("MOTIVO_REQUERIDO", "Cerrar un albarán con diferencia necesita un motivo.");
   return repo.enTransaccion(async (c) => {
@@ -897,7 +908,7 @@ export async function cerrarAlbaranConDiferencia(ctx: Contexto, albaranId: strin
     if (!lineas.some((l) => l.cantidadRecibida > 0)) {
       throw new ErrorRecepciones("ALBARAN_SIN_RECEPCION", "No se puede cerrar un albarán del que no se ha recibido nada.", 409);
     }
-    await repo.cerrarAlbaran(ctx.empresaId, albaranId, { userId: ctx.userId, motivo: motivoLimpio }, c);
+    await repo.cerrarAlbaran(ctx.empresaId, albaranId, { userId, motivo: motivoLimpio }, c);
     const nuevoEstado = estadoAlbaran(
       lineas.map((l) => ({ expedida: l.cantidadExpedida, recibida: l.cantidadRecibida })),
       { conIncidencia: true, cerrado: true }
@@ -921,7 +932,109 @@ export async function cerrarAlbaranConDiferencia(ctx: Contexto, albaranId: strin
   });
 }
 
+/* ── El PDF original del proveedor ───────────────────────────────────────── */
+
+/**
+ * Guarda el PDF original de un albarán, byte a byte y por hash. Sólo uno por
+ * albarán: un segundo es 409, no una sustitución. Misma puerta para la subida
+ * manual, el adjunto del correo y la descarga del enlace.
+ */
+export async function adjuntarOriginal(
+  ctx: Contexto,
+  albaranId: string,
+  contenido: Buffer,
+  origen: "SUBIDA_MANUAL" | "CORREO" | "DESCARGA_PROVEEDOR"
+): Promise<repo.Documento> {
+  if (contenido.subarray(0, 5).toString() !== "%PDF-") throw new ErrorRecepciones("NO_ES_PDF", "El albarán original tiene que ser un PDF.");
+  const albaran = await repo.albaranPorId(ctx.empresaId, albaranId);
+  if (!albaran) throw new ErrorRecepciones("ALBARAN_NO_ENCONTRADO", "Albarán no encontrado.", 404);
+  if (await repo.originalDeAlbaran(ctx.empresaId, albaran.id)) {
+    throw new ErrorRecepciones("ORIGINAL_YA_EXISTE", "Este albarán ya tiene su original. No se sobrescribe.", 409);
+  }
+  const hash = hashDeFichero(contenido);
+  const ruta = rutaDocumento(ctx.empresaId, hash);
+  await guardarDocumento(ruta, contenido);
+  const documento = await repo.crearDocumento(ctx.empresaId, {
+    tipo: "ALBARAN_ORIGINAL",
+    albaranId: albaran.id,
+    recepcionId: null,
+    nombreFichero: `${albaran.proveedorCodigo}_${limpio(albaran.numeroProveedor)}_ORIGINAL.pdf`,
+    storagePath: ruta,
+    hashSha256: hash,
+    tamanoBytes: contenido.length,
+    mime: "application/pdf",
+    origen,
+    generadoDesdeHash: null,
+    subidoPor: ctx.userId,
+    subidoNombre: ctx.userNombre,
+  });
+  await repo.anotarEvento(ctx.empresaId, {
+    pedidoId: albaran.pedidoId,
+    albaranId: albaran.id,
+    tipo: "ORIGINAL_ADJUNTADO",
+    actorTipo: ctx.userId ? "usuario" : "sistema",
+    usuarioId: ctx.userId,
+    usuarioNombre: ctx.userNombre,
+    datos: { documentoId: documento.id, hash, origen },
+    descripcion: `PDF original del albarán ${albaran.numeroProveedor} guardado (${documento.nombreFichero}, ${origen === "SUBIDA_MANUAL" ? "subido a mano" : origen === "CORREO" ? "adjunto del correo" : "descargado del enlace del proveedor"}).`,
+  });
+  return documento;
+}
+
+const DESCARGA_TIMEOUT_MS = 20_000;
+const DESCARGA_MAX_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Descarga el PDF del albarán desde el enlace que trae el correo del
+ * proveedor y lo guarda como original. Sin enlace explícito, usa el que quedó
+ * en el albarán. Sólo HTTPS/HTTP, con tiempo y tamaño acotados, y sólo si lo
+ * que vuelve es un PDF de verdad: un portal que devuelva una página de login
+ * no se guarda como albarán.
+ */
+export async function descargarOriginal(ctx: Contexto, albaranId: string, enlace?: string | null): Promise<repo.Documento> {
+  const albaran = await repo.albaranPorId(ctx.empresaId, albaranId);
+  if (!albaran) throw new ErrorRecepciones("ALBARAN_NO_ENCONTRADO", "Albarán no encontrado.", 404);
+  const url = (enlace ?? "").trim() || (await enlaceGuardado(ctx.empresaId, albaranId));
+  if (!url) throw new ErrorRecepciones("SIN_ENLACE", "El albarán no tiene enlace al PDF del proveedor.");
+  if (!/^https?:\/\//i.test(url)) throw new ErrorRecepciones("ENLACE_INVALIDO", "El enlace tiene que ser http(s).");
+
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), DESCARGA_TIMEOUT_MS);
+  let contenido: Buffer;
+  try {
+    const r = await fetch(url, { signal: controlador.signal, redirect: "follow", headers: { Accept: "application/pdf,*/*" } });
+    if (!r.ok) throw new ErrorRecepciones("DESCARGA_FALLIDA", `El proveedor ha contestado ${r.status} al pedir el PDF.`, 502);
+    const largo = Number(r.headers.get("content-length") ?? 0);
+    if (largo > DESCARGA_MAX_BYTES) throw new ErrorRecepciones("PDF_DEMASIADO_GRANDE", "El PDF supera los 15 MB.", 502);
+    const bytes = Buffer.from(await r.arrayBuffer());
+    if (bytes.length > DESCARGA_MAX_BYTES) throw new ErrorRecepciones("PDF_DEMASIADO_GRANDE", "El PDF supera los 15 MB.", 502);
+    contenido = bytes;
+  } catch (e) {
+    if (e instanceof ErrorRecepciones) throw e;
+    throw new ErrorRecepciones("DESCARGA_FALLIDA", `No se ha podido descargar el PDF: ${e instanceof Error ? e.message : String(e)}`, 502);
+  } finally {
+    clearTimeout(temporizador);
+  }
+  if (contenido.subarray(0, 5).toString() !== "%PDF-") {
+    throw new ErrorRecepciones("NO_ES_PDF", "Lo que devuelve el enlace no es un PDF (¿pide sesión en el portal del proveedor?).", 502);
+  }
+  return adjuntarOriginal(ctx, albaranId, contenido, "DESCARGA_PROVEEDOR");
+}
+
+async function enlaceGuardado(empresaId: string, albaranId: string): Promise<string | null> {
+  const { rows } = await (await import("../db.ts")).default.query<{ enlace: string | null }>(
+    `SELECT enlace_pdf_proveedor AS enlace FROM rcp_albaranes WHERE empresa_id = $1 AND id = $2`,
+    [empresaId, albaranId]
+  );
+  return rows[0]?.enlace ?? null;
+}
+
 /* ── Ayudantes ───────────────────────────────────────────────────────────── */
+
+function usuarioObligatorio(ctx: Contexto): string {
+  if (!ctx.userId) throw new ErrorRecepciones("USUARIO_REQUERIDO", "Esta operación necesita un usuario autenticado.", 401);
+  return ctx.userId;
+}
 
 /**
  * Recalcula los acumulados del pedido y su estado a partir de sus albaranes.

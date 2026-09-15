@@ -16,7 +16,7 @@ export type ResultadoRecepcion = "OK" | "CON_INCIDENCIA";
 export type Proveedor = { id: string; codigo: string; nombre: string; nif: string | null; remitentesCorreo: string[]; activo: boolean };
 export type Centro = { id: string; nombre: string; activo: boolean };
 
-export type Contadores = { pendientes: number; recibidos: number; incidenciasAbiertas: number; pedidosPendientes: number };
+export type Contadores = { pendientes: number; recibidos: number; incidenciasAbiertas: number; pedidosPendientes: number; correosEnRevision?: number };
 
 export type Bootstrap = {
   rol: string | null;
@@ -26,6 +26,7 @@ export type Bootstrap = {
   proveedores: Proveedor[];
   centros: Centro[];
   contadores: Contadores;
+  buzonConfigurado: boolean;
   vocabulario: {
     estadosPedido: EstadoPedido[];
     estadosAlbaran: EstadoAlbaran[];
@@ -49,6 +50,8 @@ export type Pedido = {
   centroNombre: string;
   almacenOrigen: string | null;
   transportista: string | null;
+  destinoTexto: string | null;
+  clienteProveedor: string | null;
   estado: EstadoPedido;
   canceladoAt: string | null;
   canceladoMotivo: string | null;
@@ -88,6 +91,7 @@ export type Albaran = {
   cerradoMotivo: string | null;
   observaciones: string | null;
   origen: string;
+  enlacePdfProveedor: string | null;
   centroId: string | null;
   centroNombre: string;
   creadoNombre: string | null;
@@ -322,3 +326,77 @@ export function fmtEuros(centimos: number | null | undefined): string {
   if (centimos === null || centimos === undefined) return "—";
   return (centimos / 100).toLocaleString("es-ES", { style: "currency", currency: "EUR" });
 }
+
+/* ── Fase 2: correo del proveedor ────────────────────────────────────────── */
+
+export type ResultadoCorreo = "RECIBIDO" | "PROCESADO" | "DUPLICADO" | "IGNORADO" | "PENDIENTE_REVISION" | "ERROR";
+
+export type Correo = {
+  id: string;
+  proveedorId: string | null;
+  proveedorNombre: string | null;
+  messageId: string;
+  asunto: string;
+  remitente: string | null;
+  fecha: string | null;
+  texto: string;
+  tipo: "PEDIDO" | "ALBARAN" | "DESCONOCIDO";
+  resultado: ResultadoCorreo;
+  motivo: string | null;
+  datosExtraidos: unknown;
+  avisos: string[];
+  pedidoId: string | null;
+  pedidoNumero: string | null;
+  albaranId: string | null;
+  albaranNumero: string | null;
+  origen: string;
+  intentos: number;
+  procesadoAt: string | null;
+  createdAt: string;
+};
+
+export type PasadaBuzon = {
+  id: string;
+  iniciada_at: string;
+  terminada_at: string | null;
+  correos: number;
+  procesados: number;
+  ignorados: number;
+  errores: number;
+  error: string | null;
+  origen: string;
+  detalle: { messageId: string; asunto: string; resultado: string; tipo?: string; pedidoNumero?: string | null; albaranNumero?: string | null; error?: string }[];
+};
+
+export type EstadoBuzon = {
+  configurado: boolean;
+  usuario: string | null;
+  cadaMinutos: number | null;
+  activadoEl: string | null;
+  remitentes: string[];
+  asumirExpedicionCompleta: boolean;
+  enRevision: number;
+  pasadas: PasadaBuzon[];
+};
+
+export type ResultadoPasada = { correos: number; procesados: number; ignorados: number; errores: number; detalle: PasadaBuzon["detalle"] };
+
+export type ResultadoEml = { messageId: string; asunto: string; resultado: string; tipo?: string; pedidoNumero?: string | null; albaranNumero?: string | null; error?: string };
+
+export const COLOR_RESULTADO_CORREO: Record<string, string> = {
+  RECIBIDO: "bg-slate-600/40 text-slate-200",
+  PROCESADO: "bg-emerald-500/15 text-emerald-300",
+  DUPLICADO: "bg-slate-600/40 text-slate-300",
+  IGNORADO: "bg-slate-600/40 text-slate-400",
+  PENDIENTE_REVISION: "bg-amber-500/20 text-amber-200",
+  ERROR: "bg-rose-500/15 text-rose-300",
+};
+
+export const ETIQUETA_RESULTADO_CORREO: Record<string, string> = {
+  RECIBIDO: "Recibido",
+  PROCESADO: "Procesado",
+  DUPLICADO: "Duplicado",
+  IGNORADO: "Ignorado",
+  PENDIENTE_REVISION: "Pendiente de revisión",
+  ERROR: "Error",
+};

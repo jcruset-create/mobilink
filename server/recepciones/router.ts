@@ -31,8 +31,10 @@ import { ErrorRecepciones } from "./errors.ts";
 import { cargarPermisos, exigirPermiso } from "./permissions.ts";
 import * as repo from "./repository.ts";
 import * as servicio from "./service.ts";
-import { guardarDocumento, hashDeFichero, leerDocumento, rutaDocumento } from "./storage.ts";
-import { limpio } from "./documentos/generar.ts";
+import * as buzon from "./buzon.ts";
+import * as ingesta from "./ingesta.ts";
+import { CLAVES, asumirExpedicionCompleta, guardarTextoConfig, leerTextoConfig } from "./config.ts";
+import { hashDeFichero, leerDocumento } from "./storage.ts";
 
 /** Envuelve un manejador para que un fallo no se lleve por delante el proceso. */
 function ruta(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -84,10 +86,11 @@ export function createRecepcionesRouter(): Router {
     exigirPermiso("recepciones.view"),
     ruta(async (req, res) => {
       const ctx = contextoDe(req);
-      const [proveedores, centros, contadores] = await Promise.all([
+      const [proveedores, centros, contadores, correosEnRevision] = await Promise.all([
         repo.listarProveedores(ctx.empresaId),
         repo.listarCentros(ctx.empresaId),
         repo.contarBandeja(ctx.empresaId, req.recepcionesCentroId ?? null),
+        repo.contarCorreosEnRevision(ctx.empresaId),
       ]);
       res.json({
         rol: req.recepcionesRol ?? null,
@@ -96,7 +99,8 @@ export function createRecepcionesRouter(): Router {
         usuario: { id: ctx.userId, nombre: ctx.userNombre },
         proveedores,
         centros,
-        contadores,
+        contadores: { ...contadores, correosEnRevision },
+        buzonConfigurado: buzon.configBuzon()?.empresaId === ctx.empresaId,
         // Los vocabularios los manda el servidor para que el panel no tenga
         // una copia que se quede vieja.
         vocabulario: {
@@ -351,40 +355,139 @@ export function createRecepcionesRouter(): Router {
       const ctx = contextoDe(req);
       const fichero = req.file;
       if (!fichero) throw new ErrorRecepciones("FICHERO_REQUERIDO", "Falta el PDF del albarán (campo «documento»).");
-      const esPdf = fichero.mimetype === "application/pdf" || fichero.buffer.subarray(0, 5).toString() === "%PDF-";
-      if (!esPdf) throw new ErrorRecepciones("NO_ES_PDF", "El albarán original tiene que ser un PDF.");
-      const albaran = await repo.albaranPorId(ctx.empresaId, String(req.params.id));
-      if (!albaran) throw new ErrorRecepciones("ALBARAN_NO_ENCONTRADO", "Albarán no encontrado.", 404);
-      if (await repo.originalDeAlbaran(ctx.empresaId, albaran.id)) {
-        throw new ErrorRecepciones("ORIGINAL_YA_EXISTE", "Este albarán ya tiene su original. No se sobrescribe.", 409);
-      }
-      const hash = hashDeFichero(fichero.buffer);
-      const ruta = rutaDocumento(ctx.empresaId, hash);
-      await guardarDocumento(ruta, fichero.buffer);
-      const documento = await repo.crearDocumento(ctx.empresaId, {
-        tipo: "ALBARAN_ORIGINAL",
-        albaranId: albaran.id,
-        recepcionId: null,
-        nombreFichero: `${albaran.proveedorCodigo}_${limpio(albaran.numeroProveedor)}_ORIGINAL.pdf`,
-        storagePath: ruta,
-        hashSha256: hash,
-        tamanoBytes: fichero.buffer.length,
-        mime: "application/pdf",
-        origen: "SUBIDA_MANUAL",
-        generadoDesdeHash: null,
-        subidoPor: ctx.userId,
-        subidoNombre: ctx.userNombre,
-      });
-      await repo.anotarEvento(ctx.empresaId, {
-        pedidoId: albaran.pedidoId,
-        albaranId: albaran.id,
-        tipo: "ORIGINAL_ADJUNTADO",
-        usuarioId: ctx.userId,
-        usuarioNombre: ctx.userNombre,
-        datos: { documentoId: documento.id, hash },
-        descripcion: `PDF original del albarán ${albaran.numeroProveedor} adjuntado (${documento.nombreFichero}).`,
-      });
+      const documento = await servicio.adjuntarOriginal(contextoDe(req), String(req.params.id), fichero.buffer, "SUBIDA_MANUAL");
       res.status(201).json({ documento });
+    })
+  );
+
+  /** Descarga (o reintenta) el PDF original desde el enlace del correo del proveedor. */
+  r.post(
+    "/albaranes/:id/original/descargar",
+    exigirPermiso("recepciones.albaran.create"),
+    ruta(async (req, res) => {
+      const documento = await servicio.descargarOriginal(contextoDe(req), String(req.params.id), texto((req.body ?? {}).enlace) || null);
+      res.status(201).json({ documento });
+    })
+  );
+
+  /* ── El correo del proveedor ───────────────────────────────────────────── */
+
+  /** Estado del buzón, sus últimas pasadas y cuántos correos esperan revisión. */
+  r.get(
+    "/correo/buzon",
+    exigirPermiso("recepciones.view"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const cfg = buzon.configBuzon();
+      const remitentes = await repo.remitentesAdmitidos(ctx.empresaId);
+      res.json({
+        // Lo que NO se manda nunca es la contraseña ni el servidor: la
+        // pantalla dice si está configurado, no cómo.
+        configurado: cfg !== null && cfg.empresaId === ctx.empresaId,
+        usuario: cfg && cfg.empresaId === ctx.empresaId ? cfg.user : null,
+        cadaMinutos: cfg?.minutos ?? null,
+        activadoEl: await leerTextoConfig(ctx.empresaId, CLAVES.buzonActivadoEl),
+        remitentes: remitentes.map((x) => x.remitente),
+        asumirExpedicionCompleta: await asumirExpedicionCompleta(ctx.empresaId),
+        enRevision: await repo.contarCorreosEnRevision(ctx.empresaId),
+        pasadas: await repo.ultimasPasadas(ctx.empresaId),
+      });
+    })
+  );
+
+  r.put(
+    "/correo/config",
+    exigirPermiso("recepciones.correo.importar"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof b.asumirExpedicionCompleta === "boolean") {
+        await guardarTextoConfig(ctx.empresaId, CLAVES.asumirExpedicionCompleta, b.asumirExpedicionCompleta ? "1" : "0");
+      }
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.correo.config", entidad: "rcp_config", detalle: b, ip: req.ip });
+      res.json({ asumirExpedicionCompleta: await asumirExpedicionCompleta(ctx.empresaId) });
+    })
+  );
+
+  /** El botón «Revisar buzón»: una pasada ahora, sin esperar al temporizador. */
+  r.post(
+    "/correo/buzon/revisar",
+    exigirPermiso("recepciones.correo.importar"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const cfg = buzon.configBuzon();
+      if (!cfg || cfg.empresaId !== ctx.empresaId) throw new ErrorRecepciones("BUZON_APAGADO", "El buzón no está configurado para esta empresa.", 409);
+      const r = await buzon.revisarBuzon({ origen: "manual" });
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.buzon.revisar", entidad: "rcp_buzon_pasadas", detalle: r, ip: req.ip });
+      if ("error" in r) throw new ErrorRecepciones("BUZON_ERROR", r.error, 502);
+      res.json(r);
+    })
+  );
+
+  /** La carga del histórico: lo anterior a la activación, a propósito y con fecha. */
+  r.post(
+    "/correo/buzon/historico",
+    exigirPermiso("recepciones.correo.importar"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const cfg = buzon.configBuzon();
+      if (!cfg || cfg.empresaId !== ctx.empresaId) throw new ErrorRecepciones("BUZON_APAGADO", "El buzón no está configurado para esta empresa.", 409);
+      const desde = new Date(texto((req.body ?? {}).desde));
+      if (Number.isNaN(desde.getTime())) throw new ErrorRecepciones("FECHA_INVALIDA", "Indica desde qué fecha cargar.");
+      const r = await buzon.revisarBuzon({ historico: { desde } });
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.buzon.historico", entidad: "rcp_buzon_pasadas", detalle: { desde, ...r }, ip: req.ip });
+      if ("error" in r) throw new ErrorRecepciones("BUZON_ERROR", r.error, 502);
+      res.json(r);
+    })
+  );
+
+  /** Un correo importado a mano como .eml: la misma puerta que el buzón. */
+  r.post(
+    "/correo/eml",
+    exigirPermiso("recepciones.correo.importar"),
+    (req, res, next) =>
+      subidaPdf.single("archivo")(req, res, (e) => {
+        if (e) return res.status(400).json({ error: "No se ha podido leer el fichero (máx. 15 MB).", code: "FICHERO_INVALIDO" });
+        next();
+      }),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const f = req.file;
+      if (!f?.buffer?.length) throw new ErrorRecepciones("SIN_FICHERO", "Falta el fichero .eml (campo «archivo»).");
+      const d = await buzon.importarEml(ctx.empresaId, f.buffer);
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.correo.importar_eml", entidad: "rcp_correos", detalle: d, ip: req.ip });
+      res.status(d.resultado === "error" ? 422 : 200).json(d);
+    })
+  );
+
+  r.get(
+    "/correo",
+    exigirPermiso("recepciones.view"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      res.json({ correos: await repo.listarCorreos(ctx.empresaId, { resultado: texto(req.query.resultado) || undefined, tipo: texto(req.query.tipo) || undefined }) });
+    })
+  );
+
+  r.get(
+    "/correo/:id",
+    exigirPermiso("recepciones.view"),
+    ruta(async (req, res) => {
+      const correo = await repo.correoPorId(contextoDe(req).empresaId, String(req.params.id));
+      if (!correo) throw new ErrorRecepciones("CORREO_NO_ENCONTRADO", "Correo no encontrado.", 404);
+      res.json({ correo });
+    })
+  );
+
+  /** Vuelve a pasar un correo por la ingesta (tras crear el pedido a mano, por ejemplo). */
+  r.post(
+    "/correo/:id/reprocesar",
+    exigirPermiso("recepciones.correo.importar"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const r = await ingesta.reprocesar({ empresaId: ctx.empresaId }, String(req.params.id));
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.correo.reprocesar", entidad: "rcp_correos", entidadId: r.correoId, detalle: r, ip: req.ip });
+      res.json(r);
     })
   );
 
