@@ -19,8 +19,6 @@ void _plantarPathProvider(Directory dir) {
   );
 }
 
-const int _dia = 24 * 60 * 60 * 1000;
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
