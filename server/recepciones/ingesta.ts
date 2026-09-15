@@ -251,6 +251,21 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
         return terminar({ resultado: "PENDIENTE_REVISION", motivo: "El correo no trae número de pedido o de albarán.", avisos: leido.avisos }, baseA);
       }
 
+      // Soledad agrupa: «tus pedidos (…) han sido emitidos». Si son de verdad
+      // varios, un albarán no puede ir contra uno solo y repartirlo no lo
+      // decide el sistema.
+      const distintos = Array.from(new Set(a.numerosPedido.map((n) => normalizarNumero(n)).filter(Boolean)));
+      if (distintos.length > 1) {
+        return terminar(
+          {
+            resultado: "PENDIENTE_REVISION",
+            motivo: `El albarán ${a.numeroAlbaran} agrupa varios pedidos (${a.numerosPedido.join(", ")}). Un albarán va contra un pedido: hay que repartirlo a mano.`,
+            avisos: leido.avisos,
+          },
+          baseA
+        );
+      }
+
       const pedido = await repo.pedidoPorNumero(ctx.empresaId, proveedor.id, pedidoNormalizado);
       if (!pedido) {
         return terminar(

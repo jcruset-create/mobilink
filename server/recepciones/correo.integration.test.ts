@@ -393,6 +393,21 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
     expect(ficha.body.pedido.estado).toBe("EXPEDIDO");
   });
 
+  it("un albarán que agrupa pedidos DISTINTOS no se reparte solo: queda en revisión diciéndolo", async () => {
+    const alta = await api("/pedidos", {
+      method: "POST",
+      body: { proveedorId, numeroProveedor: "5690526", centroNombre: "TARRAGONA", lineas: [{ descripcionProveedor: "385/65X22.5 SAILUN STR1+ 164K", cantidadPedida: 10 }] },
+    });
+    expect(alta.status, JSON.stringify(alta.body)).toBe(201);
+
+    const texto = ALBARAN_REAL.replace("tu pedido 5687439 ha sido emitido", "tus pedidos (5690526,5690999) han sido emitidos");
+    const m = await mensaje({ asunto: "Fwd: Emisión de Albarán B /2028452141 con fecha 15/09/2026.", texto });
+    const r = await importarEml(m.source);
+    expect(r.body.resultado).toBe("revision");
+    expect(r.body.error).toContain("agrupa varios pedidos");
+    expect((await api(`/pedidos/${alta.body.pedido.id}`)).body.albaranes).toHaveLength(0);
+  });
+
   it("el mismo correo dos veces es DUPLICADO: un solo pedido, un solo albarán", async () => {
     const numero = unico("5689");
     const m1 = await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) });

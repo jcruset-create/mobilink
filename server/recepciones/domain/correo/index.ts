@@ -87,6 +87,13 @@ export type PedidoLeido = {
 
 export type AlbaranLeido = {
   numeroPedido: string | null;
+  /**
+   * Todos los pedidos que nombra el correo, sin repetir. Casi siempre uno,
+   * pero Soledad agrupa: «tus pedidos (5690526,5690526,…) han sido emitidos».
+   * Si salen varios DISTINTOS, el albarán viene de más de un pedido y eso no
+   * lo decide el parser.
+   */
+  numerosPedido: string[];
   numeroAlbaran: string | null;
   transportista: string | null;
   fecha: string | null;
@@ -318,9 +325,32 @@ function busca(texto: string, patron: string): string | null {
   return m ? m[1].replace(/\s+/g, "") : null;
 }
 
-/** «tu pedido 5687439 ha sido emitido…»: el número va en la frase, sin etiqueta. */
-export function pedidoEnProsa(texto: string): string | null {
-  return busca(texto, `\\bpedidos?\\s+(?:n[ºo°]?\\.?\\s*)?${NUMERO_DOC}`);
+/**
+ * Los pedidos que nombra la frase, en orden y sin repetir:
+ *
+ *     tu pedido 5687439 ha sido emitido…            → ["5687439"]
+ *     tus pedidos (5690526,5690526,5690526) han…    → ["5690526"]
+ *
+ * Se recorren TODAS las apariciones de «pedido» porque hay varias que no
+ * llevan número («Información Entrega de Pedido», «Escribe el número de
+ * pedido entero T0100007879100»): vale la primera que dé números, y la lista
+ * se corta en la primera palabra que ya no lo es.
+ */
+export function pedidosEnProsa(texto: string): string[] {
+  const doc = new RegExp(`^${NUMERO_DOC}$`, "i");
+  // Sólo espacios, nunca saltos de línea: si no, un «…Entrega de Pedido» al
+  // final de una línea se tragaría la siguiente y con ella el número de verdad.
+  for (const m of texto.matchAll(/\bpedidos?\b[ \t]*(?:n[ºo°]?\.?[ \t]*)?[:(]?[ \t]*([^)\n]*)/gi)) {
+    const numeros: string[] = [];
+    for (const trozo of (m[1] ?? "").split(/[,;\s]+/)) {
+      const t = trozo.trim();
+      if (!t) continue;
+      if (!doc.test(t)) break;
+      if (!numeros.includes(t)) numeros.push(t);
+    }
+    if (numeros.length > 0) return numeros;
+  }
+  return [];
 }
 
 /** «Emisión de Albarán B /2028450459 con fecha…», en el asunto o en el cuerpo. */
@@ -452,7 +482,7 @@ export function parsearPedido(texto: string, asunto = ""): { pedido: PedidoLeido
   const leidas = leerLineas(tokens);
   const pedido: PedidoLeido = {
     // Primero la etiqueta, si la hay; si no, la frase; y por último el asunto.
-    numeroPedido: primeraLinea(valorDe(tokens, "PEDIDO") ?? "") || pedidoEnProsa(texto) || pedidoEnProsa(asunto),
+    numeroPedido: primeraLinea(valorDe(tokens, "PEDIDO") ?? "") || pedidosEnProsa(texto)[0] || pedidosEnProsa(asunto)[0] || null,
     fecha: leerFecha(primeraLinea(valorDe(tokens, "FECHA") ?? "")) ?? fechaEnProsa(asunto) ?? fechaEnProsa(texto),
     cliente: primeraLinea(valorDe(tokens, "CLIENTE") ?? "") || null,
     usuario: primeraLinea(valorDe(tokens, "USUARIO") ?? "") || null,
@@ -478,8 +508,11 @@ export function parsearAlbaran(asunto: string, texto: string): { albaran: Albara
   const avisos: string[] = [];
   const limpio = asuntoLimpio(asunto);
   const leidas = leerLineas(tokens);
+  const etiquetado = primeraLinea(valorDe(tokens, "PEDIDO") ?? "");
+  const numerosPedido = etiquetado ? [etiquetado] : pedidosEnProsa(texto).length > 0 ? pedidosEnProsa(texto) : pedidosEnProsa(limpio);
   const albaran: AlbaranLeido = {
-    numeroPedido: primeraLinea(valorDe(tokens, "PEDIDO") ?? "") || pedidoEnProsa(texto) || pedidoEnProsa(limpio),
+    numeroPedido: numerosPedido[0] ?? null,
+    numerosPedido,
     // El número del albarán vive en el asunto («Emisión de Albarán B /2028450459»).
     numeroAlbaran: primeraLinea(valorDe(tokens, "ALBARAN") ?? "") || albaranEnProsa(limpio) || albaranEnProsa(texto),
     transportista: primeraLinea(valorDe(tokens, "TRANSPORTISTA") ?? "") || transportistaEnProsa(texto),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asuntoLimpio, detectarTipo, esConcepto, filaDeTabla, localidadDe, parsearCorreo, remitenteReenviado } from "./index.ts";
+import { asuntoLimpio, detectarTipo, esConcepto, filaDeTabla, localidadDe, parsearCorreo, pedidosEnProsa, remitenteReenviado } from "./index.ts";
 
 /** El correo de pedido tal y como lo describe el encargo (valor en la línea siguiente). */
 const PEDIDO_SOLEDAD = `
@@ -281,5 +281,101 @@ describe("piezas sueltas del correo real", () => {
 
   it("localidadDe quita el país de la última línea", () => {
     expect(localidadDe("PI RIU CLAR C/COURE 27,\n43006 TARRAGONA\nTARRAGONA ESPAÑA")).toBe("TARRAGONA");
+  });
+});
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * Otros dos albaranes reales del mismo día. Del cuerpo se ha quitado sólo el
+ * pie legal, que ocupa media pantalla y no dice nada; lo demás va tal cual.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+const cuerpoReal = (pedidos: string, tabla: string) => `---------- Forwarded message ---------
+From: noreply@gruposoledad.net
+Date: Tue, 15 Sep 2026 17:13:54 +0000
+To: jordi.cruset@gruposoledad.net
+
+Información Entrega de Pedido
+
+Estimado COMERCIAL SEA, S.A.,
+${pedidos}
+entrega se realizará a través de TRANSAHER.
+
+Escribe el número de pedido entero T0100007879100 en el apartado
+¿Dónde está tu envío? y te mostraremos el número de expedición del pedido.
+
+El pedido será entregado a:
+COMERCIAL SEA, S.A.
+PI RIU CLAR C/COURE 27,
+43006 TARRAGONA
+TARRAGONA ESPAÑA
+
+El contenido del pedido es:
+
+Cantidad
+Descripción
+Importe
+${tabla}
+Pulsar enlace para ver albarán adjunto.
+<https://ws.gruposoledad.com/b2b?serviceName=descargarAlbaran&message=execute&r=L1VOSURBREVT&p=VVNVQVJJTz1h&e=MQ==>
+
+Un saludo,
+
+Grupo Soledad
+`;
+
+/** Cuatro medidas en el mismo albarán, y los pedidos agrupados entre paréntesis. */
+const ALBARAN_VARIAS_LINEAS = cuerpoReal(
+  "tus pedidos (5690526,5690526,5690526,5690526) han sido emitidos por nuestro\ncentro logístico y la",
+  ["10.00 385/65X22.5 SAILUN STR1+ 164K 261.35",
+   "2.00 385/65X22.5 SAILUN SFR1 160K 270.12",
+   "8.00 315/80X22.5 SAILUN TRNSP.D156L 251.32",
+   "2.00 315/80X22.5 SAILUN SFR1 158L 229.55",
+   "22.00 S.I.Gestión de NFU Cat.D2T 12.18"].join("\n")
+);
+
+const ALBARAN_UNA_LINEA = cuerpoReal(
+  "tu pedido 5562580 ha sido emitido por nuestro centro logístico y la",
+  "12.00 275/70X22.5 HANK.AU04+ 152J149 336.69\n12.00 S.I.Gestión de NFU Cat.D2T 12.18"
+);
+
+describe("parsearCorreo · más albaranes reales", () => {
+  it("lee las cuatro medidas de un albarán agrupado, y sólo ellas", () => {
+    const a = parsearCorreo("Fwd: Emisión de Albarán B /2028452141 con fecha 15/09/2026.", ALBARAN_VARIAS_LINEAS).albaran!;
+    expect(a.numeroAlbaran).toBe("B/2028452141");
+    expect(a.lineas.map((l) => [l.cantidad, l.descripcion, l.precioCentimos])).toEqual([
+      [10, "385/65X22.5 SAILUN STR1+ 164K", 26135],
+      [2, "385/65X22.5 SAILUN SFR1 160K", 27012],
+      [8, "315/80X22.5 SAILUN TRNSP.D156L", 25132],
+      [2, "315/80X22.5 SAILUN SFR1 158L", 22955],
+    ]);
+    expect(a.conceptos.map((l) => l.descripcion)).toEqual(["S.I.Gestión de NFU Cat.D2T"]);
+  });
+
+  it("«tus pedidos (5690526,5690526,…)» es UN pedido repetido, no cuatro", () => {
+    const a = parsearCorreo("Fwd: Emisión de Albarán B /2028452141 con fecha 15/09/2026.", ALBARAN_VARIAS_LINEAS).albaran!;
+    expect(a.numerosPedido).toEqual(["5690526"]);
+    expect(a.numeroPedido).toBe("5690526");
+  });
+
+  it("una descripción que acaba en números no se come el importe", () => {
+    const a = parsearCorreo("Fwd: Emisión de Albarán B /2028452173 con fecha 15/09/2026.", ALBARAN_UNA_LINEA).albaran!;
+    expect(a.numeroPedido).toBe("5562580");
+    expect(a.lineas).toEqual([{ cantidad: 12, descripcion: "275/70X22.5 HANK.AU04+ 152J149", precioCentimos: 33669, referencia: null }]);
+  });
+});
+
+describe("pedidosEnProsa", () => {
+  it("salta las apariciones de «pedido» que no llevan número", () => {
+    // «Información Entrega de Pedido» va ANTES que el número de verdad.
+    expect(pedidosEnProsa("Información Entrega de Pedido\n\ntu pedido 5687439 ha sido emitido")).toEqual(["5687439"]);
+  });
+
+  it("no confunde el número de seguimiento del transportista con el del pedido", () => {
+    expect(pedidosEnProsa("Escribe el número de pedido entero T0100007879100 en el apartado")).toEqual([]);
+  });
+
+  it("devuelve varios cuando de verdad son varios", () => {
+    expect(pedidosEnProsa("tus pedidos (5690526,5690527) han sido emitidos")).toEqual(["5690526", "5690527"]);
   });
 });
