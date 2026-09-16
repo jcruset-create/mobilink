@@ -2249,6 +2249,36 @@ export async function listarPresenciaEnBases(): Promise<PresenciaEnBase[]> {
   return (data ?? []) as unknown as PresenciaEnBase[];
 }
 
+/**
+ * Dónde está UN vehículo, según las dos fuentes que hay.
+ *
+ * Se leen las dos porque son dos: el barrido del Hub vale para cualquier
+ * proveedor y la sincronización Webfleet solo para los suyos. Van a mejor
+ * esfuerzo —la ficha no se cae porque falte una— y quien decide cuál manda es
+ * `ubicacionDeVehiculo`, no esta consulta.
+ */
+export async function ubicacionDeVehiculoBD(vehiculoId: string): Promise<{
+  presencia?: PresenciaEnBase;
+  webfleet?: VehiculoWebfleetEstado;
+}> {
+  const [pres, wf] = await Promise.all([
+    supabase
+      .from("tc_vehiculo_presencia_base")
+      .select("vehiculo_id, estado, delegacion_id, posicion_at, entrada_base_at, delegacion:tc_delegaciones(id, nombre)")
+      .eq("vehiculo_id", vehiculoId)
+      .maybeSingle(),
+    supabase
+      .from("tc_vehiculo_webfleet_estado")
+      .select("*, delegacion:tc_delegaciones(id, nombre)")
+      .eq("vehiculo_id", vehiculoId)
+      .maybeSingle(),
+  ]);
+  return {
+    presencia: (pres.data ?? undefined) as unknown as PresenciaEnBase | undefined,
+    webfleet: (wf.data ?? undefined) as unknown as VehiculoWebfleetEstado | undefined,
+  };
+}
+
 // Lanza un ciclo de sincronización en el backend y devuelve nº actualizados.
 /** De dónde salen hoy las credenciales de Webfleet de un cliente. */
 export type OrigenCredencialesWebfleet = "secretos" | "tabla" | "globales" | "ninguno";
