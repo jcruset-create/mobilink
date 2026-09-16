@@ -2972,6 +2972,20 @@ export async function validarVehiculo(id: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+/**
+ * Borra un vehículo que no llegó a usarse. Solo administradores.
+ *
+ * La función de la base se niega si el vehículo tiene historial —revisiones,
+ * montajes, operaciones, intervenciones o incidencias— y lo dice en el
+ * mensaje de error, que es el que se enseña tal cual: media docena de claves
+ * ajenas son ON DELETE SET NULL, así que un borrado con historial detrás no
+ * fallaría, dejaría huérfana la vida del neumático.
+ */
+export async function eliminarVehiculo(id: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_eliminar_vehiculo", { p_vehiculo: id });
+  if (error) throw new Error(error.message);
+}
+
 /** Da por buena una referencia provisional. Solo administradores. */
 export async function validarReferencia(id: string): Promise<void> {
   const { error } = await supabase.rpc("tc_validar_referencia", { p_referencia: id });

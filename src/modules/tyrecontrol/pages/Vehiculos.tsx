@@ -4,7 +4,7 @@ import {
   listarVehiculos, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
   listarMedidas,
   listarEstadoWebfleet, listarPresenciaEnBases, sincronizarWebfleet, listarRevisionEstado,
-  listarVehiculosPendientes, validarVehiculo,
+  listarVehiculosPendientes, validarVehiculo, eliminarVehiculo,
 } from "../services/data";
 import EditorVehiculo from "../components/EditorVehiculo";
 import type {
@@ -68,6 +68,30 @@ export default function Vehiculos() {
       await cargarPendientes();
     } catch (e: any) { setMsgPend(e?.message || "No se ha podido validar"); }
     finally { setValidando(null); }
+  }
+
+  /*
+   * Borrar un vehículo que no debería existir: un alta duplicada desde la
+   * tablet, una matrícula de prueba, una importación equivocada.
+   *
+   * Se pregunta antes porque no tiene vuelta atrás, y la base solo deja
+   * borrar lo que no tiene nada detrás. Si tiene historial, el mensaje que
+   * llega ya explica qué tiene y que lo que toca es darlo de baja; se enseña
+   * tal cual en vez de traducirlo, que es donde se pierden los matices.
+   */
+  const [borrando, setBorrando] = useState<string | null>(null);
+  const [aBorrar, setABorrar] = useState<Vehiculo | null>(null);
+
+  async function eliminar(v: Vehiculo) {
+    setBorrando(v.id); setMsgPend("");
+    try {
+      await eliminarVehiculo(v.id);
+      setABorrar(null);
+      setMsgPend(`✔ ${v.matricula} eliminado`);
+      await cargarPendientes();
+      await cargar();
+    } catch (e: any) { setMsgPend(e?.message || "No se ha podido eliminar"); }
+    finally { setBorrando(null); }
   }
 
   // filtros
@@ -360,6 +384,14 @@ export default function Vehiculos() {
                   >
                     {validando === v.id ? "…" : "Está bien"}
                   </button>
+                  <button
+                    onClick={() => setABorrar(v)}
+                    disabled={borrando === v.id}
+                    title="Borrarlo del todo. Solo si no tiene historial."
+                    className="rounded border border-rose-700 px-2 py-1 text-[12px] font-bold text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+                  >
+                    {borrando === v.id ? "…" : "Eliminar"}
+                  </button>
                 </div>
               </div>
             ))}
@@ -560,6 +592,40 @@ export default function Vehiculos() {
           ))}
         </tbody>
       </TableWrap>
+
+      {/*
+        Confirmar el borrado. Se dice qué vehículo es y qué va a pasar, en
+        vez de un «¿seguro?» que nadie lee: de la lista de pendientes, todas
+        las matrículas se parecen.
+      */}
+      {aBorrar && (
+        <Modal title="Eliminar vehículo" onClose={() => setABorrar(null)}
+          footer={<div className="flex justify-end gap-2">
+            <button onClick={() => setABorrar(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
+            <button onClick={() => void eliminar(aBorrar)} disabled={borrando === aBorrar.id}
+              className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+              {borrando === aBorrar.id ? "Eliminando…" : "Eliminar de verdad"}
+            </button>
+          </div>}>
+          <div className="text-sm text-slate-200">
+            Se va a borrar <span className="font-mono font-bold">{aBorrar.matricula}</span>
+            {aBorrar.numero_unidad ? ` · unidad ${aBorrar.numero_unidad}` : ""} de{" "}
+            {aBorrar.empresa?.nombre ?? "su empresa"}.
+          </div>
+          <ul className="mt-3 list-disc space-y-1 pl-5 text-[12px] text-slate-400">
+            <li>No tiene vuelta atrás.</li>
+            <li>
+              Solo se borra si no tiene <strong>nada</strong> detrás: ni revisiones, ni neumáticos
+              montados, ni operaciones, ni intervenciones, ni incidencias. Si tiene algo, no se
+              borra y se dice qué tiene.
+            </li>
+            <li>
+              Para un vehículo que sí se ha usado, lo que toca es <strong>darlo de baja</strong>:
+              deja de salir en las listas y conserva la vida de sus neumáticos.
+            </li>
+          </ul>
+        </Modal>
+      )}
 
       {editando && (
         <EditorVehiculo
