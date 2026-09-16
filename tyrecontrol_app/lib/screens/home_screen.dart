@@ -4,6 +4,7 @@ import '../services/probe_session.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/status_bar.dart';
+import 'alta_vehiculos_screen.dart';
 import 'analitica_screen.dart';
 import 'identify_vehicle_screen.dart';
 import 'incidencias_screen.dart';
@@ -32,6 +33,9 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     // Refresca el contador de incidencias para el badge de Inicio.
     TyreControlApi.contarIncidenciasPendientes();
+    // El de vehículos pendientes de alta, por lo mismo: el badge del menú
+    // tiene que llevar un número de verdad antes de que nadie lo mire.
+    TyreControlApi.contarPendientesDeAlta();
     // Deja la sonda guardada vigilada (autoConnect): el técnico no la conecta
     // a mano, se enlaza sola al encenderla y se rearma si se apaga o se aleja.
     ProbeSession.instance.vigilar();
@@ -150,6 +154,23 @@ class _InicioTab extends StatelessWidget {
               onTap: () async {
                 await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const IncidenciasScreen()));
                 await TyreControlApi.contarIncidenciasPendientes();
+              },
+            ),
+          ),
+          const SizedBox(height: 14),
+          // Alta de vehículos: los que todavía no se pueden revisar porque les
+          // falta tipo, plano o el inventario inicial de gomas. Va aquí, con
+          // Incidencias, porque es lo mismo: una cola de trabajo de patio.
+          ValueListenableBuilder<int>(
+            valueListenable: TyreControlApi.altaPendienteCount,
+            builder: (_, n, __) => _BigTile(
+              icon: Icons.local_shipping_outlined,
+              label: n > 0 ? 'Alta de vehículos ($n)' : 'Alta de vehículos',
+              color: AppColors.tileVerdePastel,
+              onTap: () async {
+                await Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const AltaVehiculosScreen()));
+                await TyreControlApi.contarPendientesDeAlta();
               },
             ),
           ),

@@ -73,6 +73,7 @@ import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { createConciliacionRouter } from "./tyrecontrol/conciliacion/router.ts";
 import { createPresenciaRouter } from "./tyrecontrol/presencia/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
+import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
 import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
 import { startPresenciaBases } from "./tyrecontrol/presencia/worker.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
@@ -19236,6 +19237,9 @@ app.use("/api/tyrecontrol/conciliacion", createConciliacionRouter());
 app.use("/api/tyrecontrol/presencia-bases", createPresenciaRouter());
 // Kilómetros mensuales: mismo motivo que la conciliación para ir ANTES del router general.
 app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter());
+// El alta operativa va ANTES del router general de TyreControl, igual que el
+// de kilometraje mensual: si no, la ruta genérica se lo come.
+app.use("/api/tyrecontrol/alta-operativa", createAltaOperativaRouter());
 app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
 mountCorreo(app, requireSupervisorRole);
 app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
