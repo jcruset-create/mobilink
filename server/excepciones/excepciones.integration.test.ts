@@ -220,10 +220,21 @@ describe.skipIf(!RUN)("Bandeja de excepciones y costes", () => {
     });
     expect(r.aplicado).toBe(true);
 
+    /*
+     * Se mira COLUMNA A COLUMNA, no buscando "120" en el JSON de la fila.
+     * Buscarlo en el texto entero dejaba la CI en rojo por el reloj: las
+     * marcas de tiempo en milisegundos llevan "120" dentro una de cada cien
+     * veces más o menos (createdAtMs 1789581559120, el 16 de septiembre), y
+     * eso no es ninguna fuga. Lo que se vigila es que ninguna columna haya
+     * guardado el coste del proveedor ni su margen.
+     */
     const fila = await db.query(
       `SELECT * FROM roadside_assistances WHERE id = $1`, [conDespacho]);
-    const texto = JSON.stringify(fila.rows[0]);
-    expect(texto).not.toContain("120");
+    const ajenos = [120, 35];
+    const coladas = Object.entries(fila.rows[0]).filter(
+      ([, v]) => v != null && typeof v !== "object" && ajenos.includes(Number(v)),
+    );
+    expect(coladas, `columnas con datos del otro lado: ${JSON.stringify(coladas)}`).toEqual([]);
     expect(Number(fila.rows[0].importeDestino)).toBe(155);
     expect(fila.rows[0].conceptoDestino).toBe("Asistencia en carretera");
   });
