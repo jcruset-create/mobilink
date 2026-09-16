@@ -1945,6 +1945,39 @@ class TyreControlApi {
     return Map<String, dynamic>.from(data as Map);
   }
 
+  // ── Kilómetros por telemetría ────────────────────────────────
+  /// El cuentakilómetros del vehículo AHORA, sea cual sea su telemática.
+  ///
+  /// Sustituye a `obtenerKmWebfleet`, que solo servía para los clientes de
+  /// Webfleet y dejaba a los de Movertis tecleando los km a mano aunque su
+  /// equipo los estuviera dando.
+  ///
+  /// La petición la hace el BACKEND: la credencial del proveedor vive en el
+  /// gestor de secretos del Hub y no puede salir de ahí. Una APK se descompila,
+  /// así que una clave dentro de una APK es una clave pública.
+  ///
+  /// Nunca lanza por culpa del proveedor: si la telemática falla devuelve
+  /// estado `error` con una frase en cristiano. Un parte que no se pudiera
+  /// abrir porque Movertis está caído sería peor que el problema que resuelve.
+  static Future<Map<String, dynamic>> kilometrajeActual(String vehiculoId) async {
+    final vacio = {
+      'estado': 'error', 'km': null, 'capturadoAt': null, 'antiguedadMin': null,
+      'texto': 'No se ha podido consultar la telemática.', 'aviso': null,
+    };
+    try {
+      final token = currentSessionToken;
+      if (token == null) return vacio;
+      final res = await http.get(
+        Uri.parse('$kBackendUrl/api/tyrecontrol/kilometraje-actual/vehiculo/$vehiculoId'),
+        headers: {'Authorization': 'Bearer $token'},
+      ).timeout(const Duration(seconds: 20));
+      if (res.statusCode != 200) return vacio;
+      return Map<String, dynamic>.from(jsonDecode(res.body) as Map);
+    } catch (_) {
+      return vacio;
+    }
+  }
+
   // ── Planificación de revisiones ──────────────────────────────
   /// Estado calculado de cada plan (próxima fecha/km, días restantes, estado,
   /// prioridad). Reusa el mismo RPC que el panel web; no reimplementa lógica.

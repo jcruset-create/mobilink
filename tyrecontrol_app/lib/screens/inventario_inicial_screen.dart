@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/km_telematica.dart';
 
 /// Inventario inicial de neumáticos: apuntar las gomas que YA ESTÁN puestas.
 ///
@@ -49,6 +50,9 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
   String? _error;
   /// La última referencia usada, para poder copiarla a la siguiente rueda.
   Map<String, dynamic>? _ultimaReferencia;
+  /// Los km que se guardarán con la revisión inicial, y de dónde salieron.
+  num? _km;
+  String _origenKm = 'manual';
 
   @override
   void initState() {
@@ -140,7 +144,8 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
 
   Future<void> _finalizar() async {
     try {
-      await TyreControlApi.finalizarInventarioInicial(vehiculoId: widget.vehiculoId);
+      await TyreControlApi.finalizarInventarioInicial(
+        vehiculoId: widget.vehiculoId, km: _km, origenKm: _origenKm);
       if (!mounted) return;
       await showDialog<void>(
         context: context,
@@ -232,6 +237,16 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
       const Text('DETRÁS', style: TextStyle(color: AppColors.textHint, fontSize: 11, letterSpacing: 1.5)),
       const SizedBox(height: 16),
       const _Leyenda(),
+      const SizedBox(height: 20),
+      // Los km de la revisión inicial. Se consultan solos a la telemática; si
+      // no hay, el técnico los teclea. No impiden terminar el alta: un camión
+      // sin telemática y sin nadie que mire el cuadro se puede inventariar
+      // igual, y sus gomas se siguen midiendo.
+      KmTelematica(
+        vehiculoId: widget.vehiculoId,
+        matricula: widget.matricula,
+        onConfirmado: (km, origen) => setState(() { _km = km; _origenKm = origen; }),
+      ),
     ]);
   }
 

@@ -133,13 +133,25 @@ class _ReviewScreenState extends State<ReviewScreen> {
         // pantalla anterior. Antes se creaba la revisión con 0 y ya no había
         // forma de arreglarlo.
         _kmRevision = widget.kmManual ?? 0;
-        final wfId = widget.vehiculo.webfleetVehicleId;
-        if (wfId != null && wfId.isNotEmpty) {
-          final kmWf = await TyreControlApi.obtenerKmWebfleet(widget.vehiculo.empresaId, wfId);
-          if (kmWf != null) {
-            _kmRevision = kmWf;
-            await TyreControlApi.actualizarKmVehiculo(widget.vehiculo.id, kmWf);
-          }
+        /*
+         * Los km, de la telemática que tenga el vehículo.
+         *
+         * Antes esto solo miraba `webfleetVehicleId`, así que un cliente de
+         * Movertis tecleaba los kilómetros a mano aunque su equipo los
+         * estuviera dando. Ahora se pregunta al Hub, que sabe de qué
+         * proveedor es cada vehículo, y el origen queda guardado con la
+         * revisión en vez de perderse.
+         */
+        final lectura = await TyreControlApi.kilometrajeActual(widget.vehiculo.id);
+        final kmTel = (lectura['km'] as num?)?.round();
+        if (kmTel != null) {
+          _kmRevision = kmTel;
+          // 'telematica' y no el nombre del proveedor: el panel traduce el
+          // origen con una lista fija (ORIGEN_KM_LABELS) y un 'movertis' que
+          // no está en ella dejaría la ficha enseñando un hueco. Cuál fue el
+          // proveedor se sabe por el enlace del Hub, no por este campo.
+          await TyreControlApi.actualizarKmVehiculo(
+              widget.vehiculo.id, kmTel, origen: 'telematica');
         }
       }
 
