@@ -2244,7 +2244,7 @@ export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> 
 export async function listarPresenciaEnBases(): Promise<PresenciaEnBase[]> {
   const { data, error } = await supabase
     .from("tc_vehiculo_presencia_base")
-    .select("vehiculo_id, estado, delegacion_id, posicion_at, entrada_base_at, delegacion:tc_delegaciones(id, nombre)");
+    .select("vehiculo_id, estado, delegacion_id, es_su_base, posicion_at, entrada_base_at, delegacion:tc_delegaciones(id, nombre)");
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as PresenciaEnBase[];
 }
@@ -2264,7 +2264,7 @@ export async function ubicacionDeVehiculoBD(vehiculoId: string): Promise<{
   const [pres, wf] = await Promise.all([
     supabase
       .from("tc_vehiculo_presencia_base")
-      .select("vehiculo_id, estado, delegacion_id, posicion_at, entrada_base_at, delegacion:tc_delegaciones(id, nombre)")
+      .select("vehiculo_id, estado, delegacion_id, es_su_base, posicion_at, entrada_base_at, delegacion:tc_delegaciones(id, nombre)")
       .eq("vehiculo_id", vehiculoId)
       .maybeSingle(),
     supabase
