@@ -1,26 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  listarVehiculos, crearVehiculo, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
-  listarConfigEjes, listarTiposLlanta, listarMedidas, listarEjesVehiculo, guardarEjesVehiculo,
+  listarVehiculos, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
+  listarMedidas,
   listarEstadoWebfleet, listarPresenciaEnBases, sincronizarWebfleet, listarRevisionEstado,
-  listarMarcasVehiculo, aplicarFichaTecnica,
   listarVehiculosPendientes, validarVehiculo,
 } from "../services/data";
-import ModalNuevaMedida from "../components/ModalNuevaMedida";
-import CrearVehiculoDesdeFicha, { type PendienteFicha } from "../components/CrearVehiculoDesdeFicha";
+import EditorVehiculo from "../components/EditorVehiculo";
 import type {
-  Delegacion, Empresa, TipoVehiculo, Vehiculo, VehiculoInput, OrigenKm,
-  ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje, MarcaVehiculo,
+  Delegacion, Empresa, TipoVehiculo, Vehiculo,
+  MedidaNeumatico,
   EstadoWebfleet, VehiculoWebfleetEstado, PresenciaEnBase, RevisionEstado,
 } from "../types";
-import { ORIGEN_KM_LABELS, tipoLlantaLabel, ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
+import { ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { enlacesTelematica } from "../services/conciliacion";
 import { etiquetaBase } from "../services/presenciaVista";
 import {
   conectoresDe, etiquetaTelematica, porVehiculo, type EnlaceTelematica,
 } from "../services/telematicaVehiculo";
-import { Badge, Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
+import { Badge, Modal, TableWrap, tdCls, thCls, inputCls } from "../components/ui";
 
 // "hace X" legible a partir de un ISO (para tiempo en base / última posición).
 function duracionDesde(iso?: string | null): string {
@@ -38,22 +36,6 @@ function fechaHoraCorta(iso?: string | null): string {
   return new Date(iso).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-const VACIO: VehiculoInput = {
-  empresa_id: "", delegacion_id: null, tipo_vehiculo_id: null, matricula: "", numero_unidad: "",
-  marca: "", modelo: "", bastidor: "", fecha_matriculacion: null, webfleet_vehicle_id: "",
-  km_actual: 0, origen_km: "manual", activo: true,
-  config_ejes_id: null, medida_id: null, tipo_llanta_id: null, medidas_por_eje: false,
-  revision_intervalo_dias: null, revision_intervalo_km: null,
-};
-
-// "2x2x2" → [2,2,2] (nº de ejes y ruedas por eje)
-function ruedasDeConfig(nombre: string | undefined): number[] {
-  if (!nombre) return [];
-  return nombre.split(/x/i).map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
-}
-
-type ModalState = { id: string | null; draft: VehiculoInput; ejes: VehiculoEje[] };
-
 export default function Vehiculos() {
   const navigate = useNavigate();
   const [items, setItems] = useState<Vehiculo[]>([]);
@@ -62,10 +44,6 @@ export default function Vehiculos() {
   const [tipos, setTipos] = useState<TipoVehiculo[]>([]);
   // Catálogo de marcas de vehículo: el desplegable de MARCA se filtra por el
   // tipo elegido (tractora → MAN/Scania…, semirremolque → Krone/Schmitz…).
-  const [marcasVeh, setMarcasVeh] = useState<MarcaVehiculo[]>([]);
-  const [marcaLibre, setMarcaLibre] = useState(false);
-  const [configEjes, setConfigEjes] = useState<ConfigEjes[]>([]);
-  const [tiposLlanta, setTiposLlanta] = useState<TipoLlanta[]>([]);
   const [medidas, setMedidas] = useState<MedidaNeumatico[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
@@ -134,10 +112,8 @@ export default function Vehiculos() {
     setFijado(true);
   }
 
-  const [modal, setModal] = useState<null | ModalState>(null);
-  const [saving, setSaving] = useState(false);
-  const [crearDesdeFicha, setCrearDesdeFicha] = useState(false);
-  const [pendienteFicha, setPendienteFicha] = useState<PendienteFicha | null>(null);
+  // El formulario vive en EditorVehiculo: null = cerrado, undefined = nuevo.
+  const [editando, setEditando] = useState<null | { vehiculo?: Vehiculo }>(null);
 
   // Webfleet: estado por vehículo, estado de revisión, filtros y popup.
   const [estados, setEstados] = useState<Map<string, VehiculoWebfleetEstado>>(new Map());
@@ -187,18 +163,16 @@ export default function Vehiculos() {
   async function cargar() {
     setLoading(true);
     try {
-      const [v, e, d, t, c, l, m] = await Promise.all([
+      const [v, e, d, t, m] = await Promise.all([
         listarVehiculos(), listarEmpresas(), listarDelegaciones(), listarTiposVehiculo(),
-        listarConfigEjes(), listarTiposLlanta(), listarMedidas(),
+        listarMedidas(),
       ]);
-      setItems(v); setEmpresas(e); setDelegaciones(d); setTipos(t);
-      setConfigEjes(c); setTiposLlanta(l); setMedidas(m);
+      setItems(v); setEmpresas(e); setDelegaciones(d); setTipos(t); setMedidas(m);
     } catch (er: any) { setMsg(er?.message || "Error cargando"); }
     finally { setLoading(false); }
     await refrescarWebfleet();
   }
   useEffect(() => { void cargar(); }, []);
-  useEffect(() => { listarMarcasVehiculo().then(setMarcasVeh).catch(() => setMarcasVeh([])); }, []);
 
   async function sincronizar() {
     setSincronizando(true); setMsg("");
@@ -290,99 +264,6 @@ export default function Vehiculos() {
     });
   }, [filtrados, orden, medidas]);
 
-  const delegacionesForm = useMemo(
-    () => delegaciones.filter((d) => !modal?.draft.empresa_id || d.empresa_id === modal.draft.empresa_id),
-    [delegaciones, modal?.draft.empresa_id]
-  );
-
-  // Recalcula las filas de ejes a partir de la configuración elegida,
-  // conservando la medida/llanta ya seleccionada por eje.
-  function sincronizarEjes(configId: string | null | undefined, previos: VehiculoEje[]): VehiculoEje[] {
-    const conf = configEjes.find((c) => c.id === configId);
-    const ruedas = ruedasDeConfig(conf?.nombre);
-    return ruedas.map((r, i) => {
-      const prev = previos.find((e) => e.eje === i + 1);
-      return { eje: i + 1, ruedas: r, medida_id: prev?.medida_id ?? null, tipo_llanta_id: prev?.tipo_llanta_id ?? null };
-    });
-  }
-
-  async function abrirEditar(v: Vehiculo) {
-    let ejes: VehiculoEje[] = [];
-    if (v.medidas_por_eje) {
-      try {
-        const guardados = await listarEjesVehiculo(v.id);
-        ejes = sincronizarEjes(v.config_ejes_id, guardados);
-      } catch { /* sin ejes guardados */ }
-    }
-    setModal({ id: v.id, draft: { ...VACIO, ...v }, ejes });
-  }
-
-  // Cambia la configuración de ejes y re-sincroniza el desglose
-  function cambiarConfig(configId: string | null) {
-    if (!modal) return;
-    setModal({
-      ...modal,
-      draft: { ...modal.draft, config_ejes_id: configId },
-      ejes: modal.draft.medidas_por_eje ? sincronizarEjes(configId, modal.ejes) : modal.ejes,
-    });
-  }
-
-  // Activa/desactiva el desglose por eje
-  function cambiarPorEje(activo: boolean) {
-    if (!modal) return;
-    setModal({
-      ...modal,
-      draft: { ...modal.draft, medidas_por_eje: activo },
-      ejes: activo ? sincronizarEjes(modal.draft.config_ejes_id, modal.ejes) : modal.ejes,
-    });
-  }
-
-  async function guardar() {
-    if (!modal) return;
-    const d = modal.draft;
-    if (!d.empresa_id) { setMsg("Selecciona empresa"); return; }
-    if (!d.matricula.trim()) { setMsg("La matrícula es obligatoria"); return; }
-    setSaving(true);
-    try {
-      let vehiculoId = modal.id;
-      const esNuevo = !vehiculoId;
-      if (vehiculoId) await actualizarVehiculo(vehiculoId, d);
-      else vehiculoId = await crearVehiculo(d);
-      if (d.medidas_por_eje && vehiculoId) {
-        await guardarEjesVehiculo(vehiculoId, modal.ejes);
-      }
-      let avisoFicha = "";
-      if (esNuevo && vehiculoId && pendienteFicha) {
-        try {
-          await aplicarFichaTecnica(pendienteFicha.docId, {
-            ejes: pendienteFicha.ejes,
-            configuracion: pendienteFicha.configuracion,
-            atributos: pendienteFicha.atributos,
-            vehiculoId,
-          });
-        } catch (e: any) {
-          avisoFicha = ` (el vehículo se creó, pero no se pudieron guardar todos los datos de la ficha: ${e?.message || "error"})`;
-        }
-      }
-      setModal(null); setPendienteFicha(null); setMsg(`✔ Guardado${avisoFicha}`); await cargar();
-    } catch (e: any) {
-      setMsg(/duplicate|unique/i.test(e?.message || "") ? "Ya existe un vehículo con esa matrícula en la empresa." : (e?.message || "Error"));
-    } finally { setSaving(false); }
-  }
-
-  const set = (p: Partial<VehiculoInput>) => modal && setModal({ ...modal, draft: { ...modal.draft, ...p } });
-  const setEje = (eje: number, p: Partial<VehiculoEje>) =>
-    modal && setModal({ ...modal, ejes: modal.ejes.map((e) => (e.eje === eje ? { ...e, ...p } : e)) });
-
-  // Abre el modal de crear medida; al crearla la selecciona donde toque.
-  const [modalMedida, setModalMedida] = useState<null | ((id: string) => void)>(null);
-  async function medidaCreada(id: string) {
-    setMedidas(await listarMedidas());
-    modalMedida?.(id);
-    setModalMedida(null);
-  }
-
-  const filasEjes = modal?.draft.medidas_por_eje ? modal.ejes : [];
 
   return (
     <div>
@@ -393,7 +274,7 @@ export default function Vehiculos() {
           <button onClick={sincronizar} disabled={sincronizando} className="rounded-lg border border-sky-600 px-3 py-2 text-sm font-bold text-sky-300 hover:bg-sky-500/10 disabled:opacity-50">
             {sincronizando ? "Sincronizando…" : "↻ Sincronizar Webfleet"}
           </button>
-          <button onClick={() => { setPendienteFicha(null); setModal({ id: null, draft: { ...VACIO }, ejes: [] }); }} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">+ Nuevo vehículo</button>
+          <button onClick={() => setEditando({})} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">+ Nuevo vehículo</button>
         </div>
       </div>
       {msg && <div className={`mb-3 text-sm ${msg.startsWith("✔") ? "text-emerald-400" : "text-red-300"}`}>{msg}</div>}
@@ -623,7 +504,7 @@ export default function Vehiculos() {
               <td className={tdCls}>
                 <div className="flex gap-2">
                   <button onClick={() => navigate(`/tyrecontrol/vehiculos/${v.id}`)} className="text-sky-300 hover:underline">Ficha</button>
-                  <button onClick={() => void abrirEditar(v)} className="text-slate-300 hover:underline">Editar</button>
+                  <button onClick={() => setEditando({ vehiculo: v })} className="text-slate-300 hover:underline">Editar</button>
                   <button onClick={async () => { await actualizarVehiculo(v.id, { activo: !v.activo }); await cargar(); }} className="text-amber-300 hover:underline">{v.activo ? "Desactivar" : "Activar"}</button>
                 </div>
               </td>
@@ -632,192 +513,12 @@ export default function Vehiculos() {
         </tbody>
       </TableWrap>
 
-      {modal && (
-        <Modal title={modal.id ? "Editar vehículo" : "Nuevo vehículo"} onClose={() => { setModal(null); setPendienteFicha(null); }}
-          footer={<div className="flex justify-end gap-2">
-            <button onClick={() => { setModal(null); setPendienteFicha(null); }} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
-            <button onClick={guardar} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{saving ? "Guardando…" : "Guardar"}</button>
-          </div>}>
-          {!modal.id && (
-            <div className="mb-3 flex items-center gap-2 rounded-lg border border-sky-700/50 bg-sky-950/30 p-2">
-              <button type="button" onClick={() => setCrearDesdeFicha(true)} disabled={!modal.draft.empresa_id}
-                className="rounded-lg bg-sky-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">
-                📎 Crear desde ficha técnica (PDF/foto)
-              </button>
-              <span className="text-[11px] text-slate-400">
-                {modal.draft.empresa_id ? (pendienteFicha ? "Datos de la ficha listos para guardar." : "Rellena el resto a mano o adjunta la ficha.") : "Elige antes la empresa."}
-              </span>
-            </div>
-          )}
-          <div className="grid gap-2 sm:grid-cols-2">
-            <Field label="Empresa *">
-              <select className={inputCls} value={modal.draft.empresa_id} onChange={(e) => set({ empresa_id: e.target.value, delegacion_id: null })}>
-                <option value="">Selecciona…</option>
-                {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
-              </select>
-            </Field>
-            <Field label="Delegación">
-              <select className={inputCls} value={modal.draft.delegacion_id ?? ""} onChange={(e) => set({ delegacion_id: e.target.value || null })}>
-                <option value="">—</option>
-                {delegacionesForm.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}
-              </select>
-            </Field>
-            <TextField label="Matrícula *" value={modal.draft.matricula ?? ""} onChange={(v) => set({ matricula: v })} />
-            <TextField label="Nº de unidad (flota)" value={modal.draft.numero_unidad ?? ""} onChange={(v) => set({ numero_unidad: v })} />
-            <Field label="Tipo de vehículo">
-              <select className={inputCls} value={modal.draft.tipo_vehiculo_id ?? ""} onChange={(e) => { setMarcaLibre(false); set({ tipo_vehiculo_id: e.target.value || null }); }}>
-                <option value="">—</option>
-                {tipos.map((t) => <option key={t.id} value={t.id}>{t.descripcion ?? t.nombre}</option>)}
-              </select>
-            </Field>
-            <Field label="Marca">
-              {(() => {
-                const tipoId = modal.draft.tipo_vehiculo_id ?? "";
-                const delTipo = tipoId ? marcasVeh.filter((m) => m.tipo_ids.includes(tipoId)) : [];
-                const actual = modal.draft.marca ?? "";
-                // Sin tipo elegido, o si la marca guardada no está en el
-                // catálogo, se escribe a mano para no bloquear el alta.
-                const enCatalogo = delTipo.some((m) => m.nombre === actual);
-                if (marcaLibre || !tipoId || (actual && !enCatalogo && delTipo.length === 0)) {
-                  return (
-                    <div className="flex gap-2">
-                      <input className={inputCls} value={actual} onChange={(e) => set({ marca: e.target.value })}
-                        placeholder={tipoId ? "Marca…" : "Elige antes el tipo de vehículo"} />
-                      {tipoId && (
-                        <button type="button" onClick={() => setMarcaLibre(false)}
-                          className="rounded border border-slate-600 px-2 text-[11px] text-slate-300">lista</button>
-                      )}
-                    </div>
-                  );
-                }
-                return (
-                  <div className="flex items-center gap-2">
-                    {(() => {
-                      const logo = delTipo.find((m) => m.nombre === actual)?.logo_url;
-                      return logo ? <img src={logo} alt={actual} className="h-7 w-10 rounded border border-slate-700 bg-slate-950 object-contain" /> : null;
-                    })()}
-                    <select className={inputCls} value={enCatalogo ? actual : ""}
-                      onChange={(e) => {
-                        if (e.target.value === "__otra__") { setMarcaLibre(true); set({ marca: "" }); return; }
-                        set({ marca: e.target.value });
-                      }}>
-                      <option value="">—</option>
-                      {actual && !enCatalogo && <option value={actual}>{actual} (fuera de catálogo)</option>}
-                      {delTipo.map((m) => <option key={m.id} value={m.nombre}>{m.nombre}</option>)}
-                      <option value="__otra__">Otra…</option>
-                    </select>
-                  </div>
-                );
-              })()}
-            </Field>
-            <TextField label="Modelo" value={modal.draft.modelo ?? ""} onChange={(v) => set({ modelo: v })} />
-            <TextField label="Bastidor" value={modal.draft.bastidor ?? ""} onChange={(v) => set({ bastidor: v })} />
-
-            {/* Configuración de neumáticos */}
-            <Field label="Configuración de ejes">
-              <select className={inputCls} value={modal.draft.config_ejes_id ?? ""} onChange={(e) => cambiarConfig(e.target.value || null)}>
-                <option value="">—</option>
-                {configEjes.map((c) => <option key={c.id} value={c.id}>{c.nombre}{c.descripcion ? ` · ${c.descripcion}` : ""}</option>)}
-              </select>
-            </Field>
-            <Field label="Medidas diferentes por eje">
-              <select className={inputCls} value={modal.draft.medidas_por_eje ? "1" : "0"} onChange={(e) => cambiarPorEje(e.target.value === "1")}>
-                <option value="0">No · misma medida en todo el vehículo</option>
-                <option value="1">Sí · indicar medida por cada eje</option>
-              </select>
-            </Field>
-
-            {!modal.draft.medidas_por_eje && (
-              <>
-                <Field label="Medida de neumático">
-                  <div className="flex gap-1">
-                    <select className={inputCls} value={modal.draft.medida_id ?? ""} onChange={(e) => set({ medida_id: e.target.value || null })}>
-                      <option value="">—</option>
-                      {medidas.map((m) => <option key={m.id} value={m.id}>{m.valor}</option>)}
-                    </select>
-                    <button type="button" onClick={() => setModalMedida(() => (id: string) => set({ medida_id: id }))}
-                      className="shrink-0 rounded-lg border border-emerald-600 px-2 text-sm font-bold text-emerald-300 hover:bg-emerald-600/10" title="Crear nueva medida">+</button>
-                  </div>
-                </Field>
-                <Field label="Tipo de llanta">
-                  <select className={inputCls} value={modal.draft.tipo_llanta_id ?? ""} onChange={(e) => set({ tipo_llanta_id: e.target.value || null })}>
-                    <option value="">—</option>
-                    {tiposLlanta.map((l) => <option key={l.id} value={l.id}>{tipoLlantaLabel(l)}</option>)}
-                  </select>
-                </Field>
-              </>
-            )}
-
-            <Field label="Fecha matriculación">
-              <input type="date" className={inputCls} value={modal.draft.fecha_matriculacion ?? ""} onChange={(e) => set({ fecha_matriculacion: e.target.value || null })} />
-            </Field>
-            <Field label="Km actual">
-              <input type="number" className={inputCls} value={modal.draft.km_actual} onChange={(e) => set({ km_actual: Number(e.target.value) || 0 })} />
-            </Field>
-            <Field label="Origen km">
-              <select className={inputCls} value={modal.draft.origen_km} onChange={(e) => set({ origen_km: e.target.value as OrigenKm })}>
-                {(Object.keys(ORIGEN_KM_LABELS) as OrigenKm[]).map((o) => <option key={o} value={o}>{ORIGEN_KM_LABELS[o]}</option>)}
-              </select>
-            </Field>
-            <TextField label="Webfleet Vehicle ID" value={modal.draft.webfleet_vehicle_id ?? ""} onChange={(v) => set({ webfleet_vehicle_id: v })} />
-            <Field label="Revisión cada (días)">
-              <input type="number" className={inputCls} value={modal.draft.revision_intervalo_dias ?? ""} onChange={(e) => set({ revision_intervalo_dias: e.target.value === "" ? null : Number(e.target.value) })} placeholder="por defecto del tipo" />
-            </Field>
-            <Field label="Estado">
-              <select className={inputCls} value={modal.draft.activo ? "1" : "0"} onChange={(e) => set({ activo: e.target.value === "1" })}>
-                <option value="1">Activo</option><option value="0">Inactivo</option>
-              </select>
-            </Field>
-          </div>
-
-          {/* Desglose por eje */}
-          {modal.draft.medidas_por_eje && (
-            <div className="mt-3 rounded-lg border border-slate-700 p-3">
-              <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Medida y llanta por eje</div>
-              {filasEjes.length === 0 ? (
-                <div className="text-[12px] text-slate-500">Elige una configuración de ejes para desglosar los ejes.</div>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {filasEjes.map((f) => (
-                    <div key={f.eje} className="grid items-center gap-2 sm:grid-cols-[110px_1fr_1fr]">
-                      <span className="text-[12px] font-semibold text-slate-300">Eje {f.eje} · {f.ruedas} rueda{f.ruedas === 1 ? "" : "s"}</span>
-                      <div className="flex gap-1">
-                        <select className={inputCls} value={f.medida_id ?? ""} onChange={(e) => setEje(f.eje, { medida_id: e.target.value || null })}>
-                          <option value="">Medida…</option>
-                          {medidas.map((m) => <option key={m.id} value={m.id}>{m.valor}</option>)}
-                        </select>
-                        <button type="button" onClick={() => setModalMedida(() => (id: string) => setEje(f.eje, { medida_id: id }))}
-                          className="shrink-0 rounded-lg border border-emerald-600 px-2 text-sm font-bold text-emerald-300 hover:bg-emerald-600/10" title="Crear nueva medida">+</button>
-                      </div>
-                      <select className={inputCls} value={f.tipo_llanta_id ?? ""} onChange={(e) => setEje(f.eje, { tipo_llanta_id: e.target.value || null })}>
-                        <option value="">Llanta…</option>
-                        {tiposLlanta.map((l) => <option key={l.id} value={l.id}>{tipoLlantaLabel(l)}</option>)}
-                      </select>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </Modal>
-      )}
-
-      {modalMedida && (
-        <ModalNuevaMedida onClose={() => setModalMedida(null)} onCreated={medidaCreada} />
-      )}
-
-      {crearDesdeFicha && modal && (
-        <CrearVehiculoDesdeFicha
-          empresaId={modal.draft.empresa_id}
-          tipos={tipos}
-          configEjes={configEjes}
+      {editando && (
+        <EditorVehiculo
+          vehiculo={editando.vehiculo}
           matriculasExistentes={new Set(items.map((v) => v.matricula.toUpperCase()))}
-          onClose={() => setCrearDesdeFicha(false)}
-          onListo={(draft, pendiente) => {
-            setModal({ ...modal, draft: { ...modal.draft, ...draft } });
-            setPendienteFicha(pendiente);
-            setCrearDesdeFicha(false);
-          }}
+          onClose={() => setEditando(null)}
+          onGuardado={async () => { setMsg("✔ Guardado"); await cargar(); }}
         />
       )}
 

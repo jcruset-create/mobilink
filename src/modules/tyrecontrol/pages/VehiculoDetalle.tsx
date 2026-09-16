@@ -13,6 +13,7 @@ import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import KilometrajeMensual from "../components/KilometrajeMensual";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
+import EditorVehiculo from "../components/EditorVehiculo";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Fecha + hora de una revisión: el día de fecha_revision y la hora del
@@ -56,6 +57,8 @@ export default function VehiculoDetalle() {
    */
   const [cotejo, setCotejo] = useState<CotejoPlano | null>(null);
   const [arreglandoPlano, setArreglandoPlano] = useState(false);
+  // Editar la ficha aquí mismo, con el mismo formulario del listado.
+  const [editando, setEditando] = useState(false);
   const [msgPlano, setMsgPlano] = useState("");
 
   async function cargar() {
@@ -159,11 +162,32 @@ export default function VehiculoDetalle() {
           {Number(v.km_actual).toLocaleString("es-ES")} <span className="text-xs font-normal text-slate-400">km</span>
         </span>
         <span className="text-[11px] text-slate-500">({ORIGEN_KM_LABELS[v.origen_km]})</span>
+        {!esCliente && (
+          <button
+            onClick={() => setEditando(true)}
+            className="ml-auto rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500"
+          >
+            ✎ Editar vehículo
+          </button>
+        )}
       </div>
+
+      {editando && (
+        <EditorVehiculo
+          vehiculo={v}
+          onClose={() => setEditando(false)}
+          onGuardado={async () => { await cargar(); }}
+        />
+      )}
 
       {/* Datos generales: todo lo que traiga la ficha técnica, no solo lo que tiene columna propia */}
       <div className="rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Datos generales</div>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-[11px] font-bold uppercase text-slate-400">Datos generales</div>
+          {!esCliente && (
+            <button onClick={() => setEditando(true)} className="text-[11px] font-semibold text-emerald-300 hover:underline">Editar</button>
+          )}
+        </div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {dato("Empresa", v.empresa?.nombre)}{dato("Delegación", v.delegacion?.nombre)}
           {dato("Nº de unidad", v.numero_unidad)}
@@ -196,7 +220,12 @@ export default function VehiculoDetalle() {
 
       {/* Configuración de neumáticos */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Configuración de neumáticos</div>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-[11px] font-bold uppercase text-slate-400">Configuración de neumáticos</div>
+          {!esCliente && (
+            <button onClick={() => setEditando(true)} className="text-[11px] font-semibold text-emerald-300 hover:underline">Editar</button>
+          )}
+        </div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {dato("Configuración de ejes", configEjesLabel)}
           {dato("Medidas por eje", v.medidas_por_eje ? "Sí · distintas por eje" : "No · misma medida")}
