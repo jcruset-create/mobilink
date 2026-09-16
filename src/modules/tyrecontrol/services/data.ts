@@ -2244,7 +2244,7 @@ export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> 
 export async function listarPresenciaEnBases(): Promise<PresenciaEnBase[]> {
   const { data, error } = await supabase
     .from("tc_vehiculo_presencia_base")
-    .select("vehiculo_id, estado, delegacion_id, es_su_base, posicion_at, entrada_base_at, delegacion:tc_delegaciones(id, nombre)");
+    .select("vehiculo_id, estado, delegacion_id, es_su_base, posicion_at, entrada_base_at, lat, lng, velocidad_kmh, delegacion:tc_delegaciones(id, nombre)");
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as PresenciaEnBase[];
 }
@@ -2264,7 +2264,7 @@ export async function ubicacionDeVehiculoBD(vehiculoId: string): Promise<{
   const [pres, wf] = await Promise.all([
     supabase
       .from("tc_vehiculo_presencia_base")
-      .select("vehiculo_id, estado, delegacion_id, es_su_base, posicion_at, entrada_base_at, delegacion:tc_delegaciones(id, nombre)")
+      .select("vehiculo_id, estado, delegacion_id, es_su_base, posicion_at, entrada_base_at, lat, lng, velocidad_kmh, delegacion:tc_delegaciones(id, nombre)")
       .eq("vehiculo_id", vehiculoId)
       .maybeSingle(),
     supabase
@@ -2969,6 +2969,20 @@ export async function listarVehiculosPendientes(): Promise<Vehiculo[]> {
 /** Da por bueno un vehículo dado de alta desde la tablet. Solo administradores. */
 export async function validarVehiculo(id: string): Promise<void> {
   const { error } = await supabase.rpc("tc_validar_vehiculo", { p_vehiculo: id });
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Borra un vehículo que no llegó a usarse. Solo administradores.
+ *
+ * La función de la base se niega si el vehículo tiene historial —revisiones,
+ * montajes, operaciones, intervenciones o incidencias— y lo dice en el
+ * mensaje de error, que es el que se enseña tal cual: media docena de claves
+ * ajenas son ON DELETE SET NULL, así que un borrado con historial detrás no
+ * fallaría, dejaría huérfana la vida del neumático.
+ */
+export async function eliminarVehiculo(id: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_eliminar_vehiculo", { p_vehiculo: id });
   if (error) throw new Error(error.message);
 }
 

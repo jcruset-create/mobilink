@@ -324,6 +324,84 @@ export function ubicacionDeVehiculo(params: {
   };
 }
 
+/* ── Llevar el vehículo al mapa ──────────────────────────────────────────── */
+
+/** Una posición que se puede abrir en un mapa. */
+export interface PosicionMapa {
+  lat: number;
+  lng: number;
+  /** Instante de la posición según el proveedor, si lo dice. */
+  cuando?: string | null;
+  /** De dónde salió, para poder explicarlo en la ficha. */
+  fuente: "hub" | "webfleet";
+}
+
+/**
+ * ¿Es una coordenada de verdad?
+ *
+ * El 0,0 se descarta a propósito: es lo que devuelven varios equipos cuando
+ * NO tienen fijación GPS, y llevaría al vehículo al golfo de Guinea con toda
+ * la seguridad del mundo. Mejor no ofrecer el mapa que señalar un sitio falso.
+ */
+function coordenadaValida(lat: unknown, lng: unknown): boolean {
+  const la = Number(lat), lo = Number(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return false;
+  if (Math.abs(la) > 90 || Math.abs(lo) > 180) return false;
+  return !(la === 0 && lo === 0);
+}
+
+/**
+ * La posición del vehículo para enseñarla en un mapa, de las dos fuentes que
+ * hay: el barrido del Hub (vale para cualquier proveedor) y la sincronización
+ * Webfleet (solo para los suyos).
+ *
+ * Manda la MÁS RECIENTE, no una fuente fija: las dos se actualizan por su
+ * cuenta y a distinto ritmo, así que cuál va por delante cambia con la hora
+ * del día. Si ninguna dice de cuándo es su posición, manda el Hub, que es la
+ * que cubre a toda la flota.
+ */
+export function coordenadasDeVehiculo(params: {
+  presencia?: PresenciaEnBase;
+  webfleet?: VehiculoWebfleetEstado;
+}): PosicionMapa | null {
+  const candidatas: PosicionMapa[] = [];
+  const { presencia, webfleet } = params;
+
+  if (presencia && coordenadaValida(presencia.lat, presencia.lng)) {
+    candidatas.push({
+      lat: Number(presencia.lat), lng: Number(presencia.lng),
+      cuando: presencia.posicion_at ?? null, fuente: "hub",
+    });
+  }
+  if (webfleet && coordenadaValida(webfleet.lat, webfleet.lng)) {
+    candidatas.push({
+      lat: Number(webfleet.lat), lng: Number(webfleet.lng),
+      cuando: webfleet.pos_time ?? null, fuente: "webfleet",
+    });
+  }
+  if (candidatas.length === 0) return null;
+
+  const instante = (p: PosicionMapa) => {
+    const t = p.cuando ? new Date(p.cuando).getTime() : NaN;
+    return Number.isFinite(t) ? t : -Infinity;
+  };
+  // Empate (las dos sin fecha, o con la misma): se queda la primera, que es
+  // la del Hub por el orden en que se han metido.
+  return candidatas.reduce((mejor, p) => (instante(p) > instante(mejor) ? p : mejor));
+}
+
+/**
+ * El enlace al mapa. Google Maps con la coordenada y nada más: no se manda ni
+ * la matrícula ni el cliente, y no hace falta ninguna clave de API —así no hay
+ * ninguna que exponer en el panel—.
+ *
+ * Misma forma que usa ConnectPro para sus unidades y sus asistencias
+ * (`maps?q=lat,lng`): un solo modo de abrir un mapa en todo Mobilink.
+ */
+export function enlaceDeMapa(pos: PosicionMapa): string {
+  return `https://www.google.com/maps?q=${pos.lat.toFixed(6)},${pos.lng.toFixed(6)}`;
+}
+
 /**
  * El estado de ubicación de un vehículo, sea de quien sea su telemática.
  *

@@ -203,6 +203,10 @@ export interface PresenciaEnBase {
   es_su_base?: boolean | null;
   posicion_at?: string | null;
   entrada_base_at?: string | null;
+  /** Última coordenada conocida, para poder llevarla a un mapa. */
+  lat?: number | null;
+  lng?: number | null;
+  velocidad_kmh?: number | null;
   delegacion?: { id: string; nombre: string } | null;
 }
 
