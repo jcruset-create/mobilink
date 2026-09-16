@@ -14,7 +14,7 @@ import type {
 } from "../types";
 import { ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { enlacesTelematica } from "../services/conciliacion";
-import { etiquetaBase } from "../services/presenciaVista";
+import { etiquetaBase, ubicacionDeVehiculo } from "../services/presenciaVista";
 import {
   conectoresDe, etiquetaTelematica, porVehiculo, type EnlaceTelematica,
 } from "../services/telematicaVehiculo";
@@ -453,6 +453,23 @@ export default function Vehiculos() {
                   const est = estados.get(v.id);
                   const e = est?.estado ?? "sin_dispositivo";
                   const conectores = conectoresDe(v, telematicaPorVehiculo);
+                  /*
+                   * El estado de Webfleet solo se enseña si el vehículo ES de
+                   * Webfleet.
+                   *
+                   * La sincronización de Webfleet recorre TODOS los vehículos
+                   * activos de TODAS las empresas y escribe `sin_dispositivo`
+                   * al que no tiene `webfleet_vehicle_id`. Eso llenaba la
+                   * columna de «SIN WEBFLEET» en autobuses de Movertis, donde
+                   * es verdad y no significa nada: no les falta un equipo, es
+                   * que su equipo es de otro proveedor.
+                   */
+                  const esDeWebfleet = conectores.includes("webfleet");
+                  // Para los demás, dónde está según el barrido del Hub, que
+                  // sí sabe de cualquier proveedor.
+                  const ubic = esDeWebfleet
+                    ? null
+                    : ubicacionDeVehiculo({ presencia: presencias.get(v.id) });
                   const enBase = e === "en_base" || e === "otra_base";
                   const revisar = enBase && esPendiente(v.id);
                   // Nombre de la base donde está (delegación detectada por Webfleet).
@@ -483,7 +500,27 @@ export default function Vehiculos() {
                         aparte: es OTRA cosa que saber de quién es el equipo, y
                         cuando otro proveedor sepa darlo cabrá aquí igual.
                       */}
-                      {est && (
+                      {/*
+                        La ubicación de los que no son de Webfleet. No es un
+                        botón: el detalle que abre el otro es de Webfleet y no
+                        aplica aquí. Si no se sabe dónde está, no se pone nada:
+                        la chapa de arriba ya dice de quién es el equipo.
+                      */}
+                      {ubic && ubic.tono !== "desconocido" && (
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                            ubic.tono === "base"
+                              ? "bg-emerald-500/15 text-emerald-300"
+                              : ubic.tono === "ruta"
+                                ? "bg-sky-500/15 text-sky-300"
+                                : "bg-amber-500/15 text-amber-300"
+                          }`}
+                          title={ubic.detalle}
+                        >
+                          {ubic.texto.toUpperCase()}
+                        </span>
+                      )}
+                      {est && esDeWebfleet && (
                         <button
                           onClick={() => setPopup({ v, est })}
                           className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${revisar ? "bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/60" : ESTADO_WEBFLEET_BADGE[e]}`}
