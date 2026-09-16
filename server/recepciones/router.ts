@@ -239,13 +239,14 @@ export function createRecepcionesRouter(): Router {
     ruta(async (req, res) => {
       const ctx = contextoDe(req);
       const b = (req.body ?? {}) as Record<string, unknown>;
-      const proveedor = await repo.actualizarProveedor(ctx.empresaId, String(req.params.id), {
-        nombre: texto(b.nombre) || undefined,
+      const proveedor = await servicio.actualizarProveedor(ctx, String(req.params.id), {
+        codigo: b.codigo === undefined ? undefined : texto(b.codigo),
+        nombre: b.nombre === undefined ? undefined : texto(b.nombre),
         nif: b.nif === undefined ? undefined : texto(b.nif) || null,
         remitentesCorreo: Array.isArray(b.remitentesCorreo) ? b.remitentesCorreo.map(String) : undefined,
         activo: typeof b.activo === "boolean" ? b.activo : undefined,
       });
-      if (!proveedor) throw new ErrorRecepciones("PROVEEDOR_NO_ENCONTRADO", "Proveedor no encontrado.", 404);
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.proveedor.actualizar", entidad: "rcp_proveedores", entidadId: proveedor.id, ip: req.ip });
       res.json({ proveedor });
     })
   );
@@ -282,12 +283,17 @@ export function createRecepcionesRouter(): Router {
     exigirPermiso("recepciones.view"),
     ruta(async (req, res) => {
       const ctx = contextoDe(req);
-      const pedidos = await repo.listarPedidos(ctx.empresaId, {
+      const filas = await repo.listarPedidos(ctx.empresaId, {
         estado: texto(req.query.estado) || undefined,
         centroId: centroDe(req),
         proveedorId: texto(req.query.proveedorId) || undefined,
         texto: texto(req.query.q) || undefined,
       });
+      // El mismo nombre bonito que la bandeja y la ficha.
+      const pedidos = filas.map((p) => ({
+        ...p,
+        articulos: p.articulos.map((l) => ({ ...l, articuloLeido: l.productoTexto ?? leerDescripcion(l.descripcionProveedor).bonito })),
+      }));
       res.json({ pedidos });
     })
   );

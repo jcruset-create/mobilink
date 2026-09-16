@@ -517,19 +517,20 @@ export async function crearProveedor(
 export async function actualizarProveedor(
   empresaId: string,
   id: string,
-  datos: Partial<{ nombre: string; nif: string | null; remitentesCorreo: string[]; activo: boolean }>,
+  datos: Partial<{ codigo: string; nombre: string; nif: string | null; remitentesCorreo: string[]; activo: boolean }>,
   ejecutor?: Ejecutor
 ): Promise<Proveedor | null> {
   const { rows } = await db(ejecutor).query(
     `UPDATE rcp_proveedores
-        SET nombre = COALESCE($3, nombre),
+        SET codigo = COALESCE($7, codigo),
+            nombre = COALESCE($3, nombre),
             nif = CASE WHEN $4::text IS NULL THEN nif ELSE NULLIF($4, '') END,
             remitentes_correo = COALESCE($5, remitentes_correo),
             activo = COALESCE($6, activo),
             updated_at = now()
       WHERE empresa_id = $1 AND id = $2
       RETURNING *`,
-    [empresaId, id, datos.nombre ?? null, datos.nif === undefined ? null : datos.nif ?? "", datos.remitentesCorreo ?? null, datos.activo ?? null]
+    [empresaId, id, datos.nombre ?? null, datos.nif === undefined ? null : datos.nif ?? "", datos.remitentesCorreo ?? null, datos.activo ?? null, datos.codigo ?? null]
   );
   return rows[0] ? aProveedor(rows[0]) : null;
 }
@@ -776,7 +777,10 @@ export type FiltroPedidos = {
   limite?: number;
 };
 
-export async function listarPedidos(empresaId: string, f: FiltroPedidos, ejecutor?: Ejecutor): Promise<Pedido[]> {
+/** Un pedido de la lista, con lo que se encargó: es lo que se busca en pantalla. */
+export type FilaPedido = Pedido & { articulos: ArticuloBandeja[] };
+
+export async function listarPedidos(empresaId: string, f: FiltroPedidos, ejecutor?: Ejecutor): Promise<FilaPedido[]> {
   const params: unknown[] = [empresaId];
   const cond: string[] = ["p.empresa_id = $1"];
   if (f.estado) {
@@ -801,10 +805,35 @@ export async function listarPedidos(empresaId: string, f: FiltroPedidos, ejecuto
   }
   params.push(Math.min(Math.max(f.limite ?? 200, 1), 500));
   const { rows } = await db(ejecutor).query(
-    `${SELECT_PEDIDO} WHERE ${cond.join(" AND ")} ORDER BY p.created_at DESC LIMIT $${params.length}`,
+    `${SELECT_PEDIDO.replace(
+      "SELECT p.*",
+      `SELECT p.*,
+         (SELECT json_agg(json_build_object(
+                    'descripcion_proveedor', l.descripcion_proveedor,
+                    'producto_texto', l.producto_texto,
+                    'cantidad_expedida', l.cantidad_pedida,
+                    'cantidad_pendiente', GREATEST(l.cantidad_pedida - l.cantidad_expedida, 0)
+                  ) ORDER BY l.numero_linea)
+            FROM rcp_pedido_lineas l WHERE l.pedido_id = p.id) AS articulos`
+    )}
+      WHERE ${cond.join(" AND ")}
+      -- Como la bandeja: lo más viejo primero, que es el orden en que se
+      -- espera la mercancía.
+      ORDER BY COALESCE(p.fecha_pedido, p.created_at::date) ASC, p.created_at ASC
+      LIMIT $${params.length}`,
     params
   );
-  return rows.map(aPedido);
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  return rows.map((r: any) => ({
+    ...aPedido(r),
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    articulos: ((r.articulos ?? []) as any[]).map((l) => ({
+      descripcionProveedor: l.descripcion_proveedor,
+      productoTexto: l.producto_texto ?? null,
+      cantidadExpedida: numero(l.cantidad_expedida),
+      cantidadPendiente: numero(l.cantidad_pendiente),
+    })),
+  }));
 }
 
 export async function crearPedido(
@@ -1117,8 +1146,13 @@ export async function listarAlbaranes(empresaId: string, f: FiltroAlbaranes, eje
          (SELECT d.id FROM rcp_documentos d
             WHERE d.albaran_id = a.id AND d.tipo = 'ALBARAN_ORIGINAL' LIMIT 1) AS documento_original_id`)}
       WHERE ${cond.join(" AND ")}
+      -- Lo más viejo primero: el muelle es una cola, y lo que lleva más días
+      -- expedido es lo que antes hay que contar. Se ordena por la fecha de
+      -- EXPEDICIÓN, que es la que se ve en pantalla; cuando el albarán no la
+      -- trae, por cuándo entró, para que el orden nunca quede indefinido.
       ORDER BY CASE a.estado WHEN 'EN_TRANSITO' THEN 0 WHEN 'PARCIALMENTE_RECIBIDO' THEN 1 WHEN 'EMITIDO' THEN 2 ELSE 3 END,
-               a.created_at DESC
+               COALESCE(a.fecha_expedicion, a.created_at::date) ASC,
+               a.created_at ASC
       LIMIT $${params.length}`,
     params
   );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { asuntoLimpio, detectarTipo, esConcepto, filaDeTabla, localidadDe, parsearCorreo, pedidosEnProsa, remitenteReenviado } from "./index.ts";
+import { almacenEnProsa, asuntoLimpio, detectarTipo, esConcepto, filaDeTabla, localidadDe, parsearCorreo, pedidosEnProsa, remitenteReenviado, usuarioEnProsa } from "./index.ts";
 
 /** El correo de pedido tal y como lo describe el encargo (valor en la línea siguiente). */
 const PEDIDO_SOLEDAD = `
@@ -377,5 +377,106 @@ describe("pedidosEnProsa", () => {
 
   it("devuelve varios cuando de verdad son varios", () => {
     expect(pedidosEnProsa("tus pedidos (5690526,5690527) han sido emitidos")).toEqual(["5690526", "5690527"]);
+  });
+});
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * El correo de PEDIDO real, del 16/09/2026. Tampoco lleva etiquetas: el
+ * número va en una frase («Tu número de pedido es B -2026-5693921», con la
+ * serie separada por un espacio), el usuario en otra y el almacén de origen
+ * dentro de la frase que anuncia la expedición — con la errata «logísitico»
+ * que trae el proveedor, que se copia tal cual a propósito.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+const ASUNTO_PEDIDO_REAL = "Fwd: Aviso de nuevo Pedido número: B -2026-5693921 con fecha 16/09/2026.";
+
+const PEDIDO_REAL = `---------- Forwarded message ---------
+From: noreply@gruposoledad.net
+Date: Wed, 16 Sep 2026 14:28:43 +0000
+To: jordi.cruset@gruposoledad.net
+
+ Notificación Pedido Recibido
+
+Estimado COMERCIAL SEA, S.A.,
+acabamos de registrar con éxito un pedido en nuestro sistema.
+
+Tu número de pedido es B -2026-5693921
+Realizado por comercialseatarragona
+
+El pedido será entregado a:
+COMERCIAL SEA, S.A.
+PIRIU CLAR C/COURE 27
+43006 TARRAGONA
+TARRAGONA ESPAÑA
+
+El contenido del pedido es:
+
+Cantidad
+Descripción
+Importe
+2.00 385/65X22.5 SAILUN STR1+ 164K 261.35
+La mercancía será expedida por nuestro centro logísitico  54 - GETAFE
+ALMACEN
+La entrega se realizará a través de TRANSAHER
+
+Cuando la mercancía sea emitida por nuestro centro logístico, recibirás
+otro correo con la copia del albarán de salida y más información.
+
+Un saludo,
+
+Grupo Soledad
+`;
+
+describe("parsearCorreo · el pedido real de Soledad", () => {
+  const r = parsearCorreo(ASUNTO_PEDIDO_REAL, PEDIDO_REAL);
+
+  it("lo reconoce como pedido y no tiene nada que avisar", () => {
+    expect(r.tipo).toBe("PEDIDO");
+    expect(r.avisos).toEqual([]);
+  });
+
+  it("pega la serie que el correo separa: «B -2026-5693921» es un número, no dos", () => {
+    expect(r.pedido!.numeroPedido).toBe("B-2026-5693921");
+  });
+
+  it("lee de la prosa el usuario, el cliente y el almacén de origen", () => {
+    expect(r.pedido!.usuario).toBe("comercialseatarragona");
+    expect(r.pedido!.cliente).toBe("COMERCIAL SEA, S.A.");
+    expect(r.pedido!.almacenOrigen).toBe("54 - GETAFE");
+    expect(r.pedido!.transportista).toBe("TRANSAHER");
+  });
+
+  it("lee la fecha del asunto, el destino y la línea", () => {
+    expect(r.pedido!.fecha).toBe("2026-09-16");
+    expect(r.pedido!.destinoLocalidad).toBe("TARRAGONA");
+    expect(r.pedido!.lineas).toEqual([
+      { cantidad: 2, descripcion: "385/65X22.5 SAILUN STR1+ 164K", precioCentimos: 26135, referencia: null },
+    ]);
+  });
+
+  it("su número casa con el que dirá el albarán: los dos normalizan igual", async () => {
+    const { normalizarNumero } = await import("../numero.ts");
+    expect(normalizarNumero(r.pedido!.numeroPedido)).toBe("5693921");
+    expect(normalizarNumero("5693921")).toBe("5693921");
+  });
+});
+
+describe("las frases del pedido, sueltas", () => {
+  it("pedidosEnProsa salta el relleno pero no se traga otras palabras", () => {
+    expect(pedidosEnProsa("Tu número de pedido es B -2026-5693921")).toEqual(["B-2026-5693921"]);
+    expect(pedidosEnProsa("Pedido número: B -2026-5693921")).toEqual(["B-2026-5693921"]);
+    expect(pedidosEnProsa("tu pedido 5687439 ha sido emitido")).toEqual(["5687439"]);
+    // «entero» no es relleno: sigue sin colarse el número del transportista.
+    expect(pedidosEnProsa("Escribe el número de pedido entero T0100007879100")).toEqual([]);
+  });
+
+  it("usuarioEnProsa y almacenEnProsa leen sus frases, con errata incluida", () => {
+    expect(usuarioEnProsa("Realizado por comercialseatarragona")).toBe("comercialseatarragona");
+    expect(usuarioEnProsa("Sin esa frase")).toBeNull();
+    expect(almacenEnProsa("expedida por nuestro centro logísitico  54 - GETAFE")).toBe("54 - GETAFE");
+    expect(almacenEnProsa("expedida por nuestro centro logístico 227 - MANRESA")).toBe("227 - MANRESA");
+    // Con la etiqueta y el valor debajo no hay nada en la misma línea: manda la etiqueta.
+    expect(almacenEnProsa("Centro logístico:\n227 - ALMACEN MANRESA")).toBeNull();
   });
 });

@@ -328,6 +328,22 @@ export function remitenteReenviado(texto: string): string | null {
 /** Un número de documento: «B /2028450459», «B-2026-5688837», «5687439». */
 const NUMERO_DOC = "((?:[A-Z]{1,3}\\s*[-/]?\\s*)?\\d{4,}(?:[-/]\\d{2,})*)";
 
+/**
+ * Soledad separa la serie del número: «B -2026-5693921», «B /2028450459».
+ * Se pega antes de buscar para que el número sea UNA palabra y no dos.
+ */
+function pegarSerie(texto: string): string {
+  return texto.replace(/\b([A-Z])\s+([-/])\s*(\d)/g, "$1$2$3");
+}
+
+/**
+ * Palabras de relleno entre «pedido» y su número: «pedido ES B-2026-…»,
+ * «Pedido NÚMERO: B -2026-…». La lista es corta a propósito: cualquier otra
+ * cosa corta la búsqueda, que es lo que evita tragarse el número de
+ * seguimiento de «escribe el número de pedido ENTERO T0100007879100».
+ */
+const RELLENO = new Set(["ES", "NUMERO", "NUM", "N", "NO", "DE", "DEL", "EL", "LA", "TU", "SU"]);
+
 function busca(texto: string, patron: string): string | null {
   const m = texto.match(new RegExp(patron, "i"));
   return m ? m[1].replace(/\s+/g, "") : null;
@@ -348,11 +364,13 @@ export function pedidosEnProsa(texto: string): string[] {
   const doc = new RegExp(`^${NUMERO_DOC}$`, "i");
   // Sólo espacios, nunca saltos de línea: si no, un «…Entrega de Pedido» al
   // final de una línea se tragaría la siguiente y con ella el número de verdad.
-  for (const m of texto.matchAll(/\bpedidos?\b[ \t]*(?:n[ºo°]?\.?[ \t]*)?[:(]?[ \t]*([^)\n]*)/gi)) {
+  for (const m of pegarSerie(texto).matchAll(/\bpedidos?\b[ \t]*[:(]?[ \t]*([^)\n]*)/gi)) {
     const numeros: string[] = [];
     for (const trozo of (m[1] ?? "").split(/[,;\s]+/)) {
-      const t = trozo.trim();
+      const t = trozo.replace(/[.:,]+$/, "").trim();
       if (!t) continue;
+      // El relleno se salta; lo demás corta.
+      if (numeros.length === 0 && RELLENO.has(normalizar(t).replace(/[ºo°.]/g, ""))) continue;
       if (!doc.test(t)) break;
       if (!numeros.includes(t)) numeros.push(t);
     }
@@ -361,9 +379,32 @@ export function pedidosEnProsa(texto: string): string[] {
   return [];
 }
 
+/** «Realizado por comercialseatarragona». */
+export function usuarioEnProsa(texto: string): string | null {
+  const m = texto.match(/^\s*realizado por\s+(.+?)\s*$/im);
+  const v = m ? m[1].trim() : "";
+  return v && v.length <= 80 ? v : null;
+}
+
+/**
+ * «…expedida por nuestro centro logísitico  54 - GETAFE». Sí, con la errata
+ * que trae el correo del proveedor: se admiten las dos formas.
+ */
+export function almacenEnProsa(texto: string): string | null {
+  // En la MISMA línea, y se recorren todas: el mismo correo dice después
+  // «emitida por nuestro centro logístico, recibirás otro correo», y eso no es
+  // un almacén. Un valor que empieza por coma o punto es esa frase, no un dato.
+  for (const m of texto.matchAll(/centro[ \t]+log[ií]s[ií]?tico[ \t]*:?[ \t]*([^\n]*)/gi)) {
+    const v = (m[1] ?? "").trim().replace(/[.,]+$/, "");
+    if (!v || /^[,.;:]/.test(v) || v.length > 80) continue;
+    return v;
+  }
+  return null;
+}
+
 /** «Emisión de Albarán B /2028450459 con fecha…», en el asunto o en el cuerpo. */
 export function albaranEnProsa(texto: string): string | null {
-  return busca(texto, `\\balbar[aá]n(?:es)?\\s+(?:n[ºo°]?\\.?\\s*)?${NUMERO_DOC}`);
+  return busca(pegarSerie(texto), `\\balbar[aá]n(?:es)?\\s*:?\\s*(?:n[ºo°]?\\.?\\s*)?${NUMERO_DOC}`);
 }
 
 /** «…con fecha 15/09/2026.» */
@@ -499,11 +540,13 @@ export function parsearPedido(texto: string, asunto = ""): { pedido: PedidoLeido
     // Primero la etiqueta, si la hay; si no, la frase; y por último el asunto.
     numeroPedido: primeraLinea(valorDe(tokens, "PEDIDO") ?? "") || pedidosEnProsa(texto)[0] || pedidosEnProsa(asunto)[0] || null,
     fecha: leerFecha(primeraLinea(valorDe(tokens, "FECHA") ?? "")) ?? fechaEnProsa(asunto) ?? fechaEnProsa(texto),
-    cliente: primeraLinea(valorDe(tokens, "CLIENTE") ?? "") || null,
-    usuario: primeraLinea(valorDe(tokens, "USUARIO") ?? "") || null,
+    cliente: primeraLinea(valorDe(tokens, "CLIENTE") ?? "") || clienteEnProsa(texto),
+    usuario: primeraLinea(valorDe(tokens, "USUARIO") ?? "") || usuarioEnProsa(texto),
     destino,
     destinoLocalidad: localidadDe(destino),
-    almacenOrigen: primeraLinea(valorDe(tokens, "CENTRO_LOGISTICO") ?? "") || null,
+    // La prosa primero: la etiqueta suelta «ALMACEN» casa con cualquier línea
+    // que sólo diga eso y se traga la siguiente.
+    almacenOrigen: almacenEnProsa(texto) || primeraLinea(valorDe(tokens, "CENTRO_LOGISTICO") ?? "") || null,
     transportista: primeraLinea(valorDe(tokens, "TRANSPORTISTA") ?? "") || transportistaEnProsa(texto),
     lineas: leidas.filter((l) => !esConcepto(l)),
     conceptos: leidas.filter((l) => esConcepto(l)),
