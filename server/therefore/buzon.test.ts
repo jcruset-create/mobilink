@@ -19,8 +19,24 @@ describe("la lista de remitentes", () => {
     ]);
   });
 
-  it("lo que no es una dirección se descarta en vez de colarse como filtro", () => {
-    expect(partirRemitentes("therefore, sin-arroba, a@b.c")).toEqual(["a@b.c"]);
+  it("lo que no es una dirección ni un dominio se descarta en vez de colarse como filtro", () => {
+    expect(partirRemitentes("therefore, sin-arroba, a@b.c, @, @sin-punto")).toEqual(["a@b.c"]);
+  });
+
+  it("un dominio, con arroba o sin ella, se guarda como «@dominio»", () => {
+    expect(partirRemitentes("Proveedor.invalid, @otro.invalid, persona@tercero.invalid")).toEqual([
+      "@proveedor.invalid",
+      "@otro.invalid",
+      "persona@tercero.invalid",
+    ]);
+  });
+
+  it("«@dominio» acepta cualquier buzón del dominio y de sus subdominios, y nada más", () => {
+    const lista = ["@proveedor.invalid"];
+    expect(remitenteAceptado("Persona@Proveedor.invalid", lista)).toBe(true);
+    expect(remitenteAceptado("otra@correo.proveedor.invalid", lista)).toBe(true);
+    expect(remitenteAceptado("persona@noproveedor.invalid", lista)).toBe(false);
+    expect(remitenteAceptado("persona@proveedor.invalid.falso", lista)).toBe(false);
   });
 
   it("vacía significa «todos»: es preferible a un filtro mal escrito", () => {

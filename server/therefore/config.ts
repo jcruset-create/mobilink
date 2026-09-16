@@ -339,12 +339,24 @@ export async function guardarTextoConfig(empresaId: string, clave: string, valor
   );
 }
 
-/** Direcciones en minúsculas y sin espacios. Una lista vacía significa «todas». */
+/** Con forma de dominio: «proveedor.com», sin arroba ni espacios. */
+const DOMINIO = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
+
+/**
+ * Direcciones o dominios, en minúsculas y sin espacios. Una lista vacía
+ * significa «todas».
+ *
+ * Un dominio se guarda como «@proveedor.com», se escriba con arroba o sin
+ * ella, y admite cualquier buzón de ese dominio (y de sus subdominios). Lo
+ * que no es ni dirección ni dominio se descarta: un filtro mal escrito que se
+ * colara dejaría el buzón sordo sin que nadie lo viera.
+ */
 export function partirRemitentes(valor: string | null | undefined): string[] {
   return (valor ?? "")
     .split(/[,;\s]+/)
     .map((v) => v.trim().toLowerCase())
-    .filter((v) => v.includes("@"));
+    .map((v) => (DOMINIO.test(v) ? `@${v}` : v))
+    .filter((v) => v.includes("@") && (v.startsWith("@") ? DOMINIO.test(v.slice(1)) : true));
 }
 
 export async function leerRemitentes(empresaId: string): Promise<string[]> {
