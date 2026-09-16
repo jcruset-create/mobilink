@@ -20,13 +20,27 @@
  * mismo pedido llegara con dos Message-ID distintos, el segundo sería
  * DUPLICADO y quedaría enlazado al pedido que ya existe.
  *
+ * ── El albarán entra siempre ────────────────────────────────────────────────
+ *
+ * Un albarán no espera a su pedido. Si el pedido no existe, se DEDUCE del
+ * propio albarán: su número, sus líneas, su destino. Queda marcado como
+ * deducido (`derivado_de_albaran`), porque lo que sabemos de «lo pedido» es en
+ * realidad lo expedido; crece con cada albarán nuevo del mismo pedido, y
+ * cuando llega el correo del pedido éste lo confirma con las cantidades de
+ * verdad y la marca se apaga.
+ *
+ * Lo hacemos así, y no con un albarán sin pedido, porque `rcp_albaranes.
+ * pedido_id` es NOT NULL y de él cuelgan la ficha, la bandeja, los estados y
+ * la recepción: el albarán entra igual y el resto del módulo no se entera.
+ *
  * ── Cuando no se sabe, se pregunta ──────────────────────────────────────────
  *
- * Un albarán cuyo pedido no existe todavía no se inventa: queda
- * PENDIENTE_REVISION con el número que buscaba, y cuando llegue el pedido (el
- * correo del pedido puede entrar después que el del albarán) se reprocesa
- * solo. Un pedido sin líneas, o un correo que no se reconoce, también quedan
- * en revisión: lo que no se entiende no se convierte en un pedido a medias.
+ * Lo único que sigue esperando es el albarán que NO trae líneas legibles y
+ * cuyo pedido no existe: no hay con qué deducirlo, así que queda
+ * PENDIENTE_REVISION con el número que buscaba y se reprocesa solo cuando el
+ * pedido llegue. Un pedido sin líneas, o un correo que no se reconoce, también
+ * quedan en revisión: lo que no se entiende no se convierte en un pedido a
+ * medias.
  */
 
 import { createHash } from "node:crypto";
@@ -196,6 +210,41 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
 
       const existente = await repo.pedidoPorNumero(ctx.empresaId, proveedor.id, numeroNormalizado);
       if (existente) {
+        // Si el pedido se había DEDUCIDO de un albarán, este correo es el que
+        // faltaba: trae las cantidades de verdad y lo deja de ser.
+        if (existente.derivadoDeAlbaran) {
+          const centroP = await centroDe(ctx.empresaId, p.destinoLocalidad);
+          const hecho = await servicio.completarPedidoDerivado(ctxSistema, existente.id, {
+            definitivo: true,
+            lineas: lineas.map((l) => ({
+              descripcionProveedor: l.descripcion!,
+              referenciaProveedor: l.referencia,
+              cantidad: l.cantidad!,
+              precioUnitarioCentimos: l.precioCentimos,
+            })),
+            numeroProveedor: p.numeroPedido,
+            fechaPedido: p.fecha,
+            usuarioPedido: p.usuario,
+            centroId: centroP?.id ?? null,
+            centroNombre: centroP?.nombre ?? p.destinoLocalidad ?? null,
+            almacenOrigen: p.almacenOrigen,
+            transportista: p.transportista,
+            destinoTexto: p.destino,
+            clienteProveedor: p.cliente,
+          });
+          const r = await terminar(
+            {
+              resultado: "PROCESADO",
+              motivo: `El pedido ${p.numeroPedido} estaba deducido de su albarán: este correo lo confirma (${hecho.lineasNuevas} línea(s) nueva(s), ${hecho.lineasAmpliadas} ampliada(s)).`,
+              pedidoId: existente.id,
+              pedidoNumero: p.numeroPedido,
+              avisos: leido.avisos,
+            },
+            base
+          );
+          await despertarAlbaranesEnEspera(ctx, numeroNormalizado);
+          return r;
+        }
         const r = await terminar(
           { resultado: "DUPLICADO", motivo: `El pedido ${existente.numeroProveedor} ya existía.`, pedidoId: existente.id, pedidoNumero: existente.numeroProveedor, avisos: leido.avisos },
           base
@@ -266,12 +315,45 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
         );
       }
 
-      const pedido = await repo.pedidoPorNumero(ctx.empresaId, proveedor.id, pedidoNormalizado);
+      // El albarán entra SIEMPRE. Si su pedido no está, se deduce del propio
+      // albarán: lo que el proveedor dice haber expedido es lo único que se
+      // sabe de lo pedido, y queda marcado como deducido para que se vea que
+      // la cantidad pedida es provisional. Cuando llegue el correo del pedido,
+      // lo confirma.
+      let pedido = await repo.pedidoPorNumero(ctx.empresaId, proveedor.id, pedidoNormalizado);
+      let deducido = false;
       if (!pedido) {
-        return terminar(
-          { resultado: "PENDIENTE_REVISION", motivo: `El pedido ${a.numeroPedido} no existe todavía. Se reprocesará cuando llegue.`, avisos: leido.avisos },
-          baseA
-        );
+        const mercancia = a.lineas.filter((l) => l.descripcion && l.cantidad && l.cantidad > 0);
+        if (mercancia.length === 0) {
+          return terminar(
+            { resultado: "PENDIENTE_REVISION", motivo: `El pedido ${a.numeroPedido} no existe y el albarán no trae líneas legibles con las que deducirlo.`, avisos: leido.avisos },
+            baseA
+          );
+        }
+        const centroA = await centroDe(ctx.empresaId, a.destinoLocalidad);
+        const ficha = await servicio.crearPedido(ctxSistema, {
+          proveedorId: proveedor.id,
+          numeroProveedor: a.numeroPedido!,
+          // La fecha del pedido NO se sabe: la del correo es la de expedición.
+          fechaPedido: null,
+          centroId: centroA?.id ?? null,
+          centroNombre: centroA?.nombre ?? a.destinoLocalidad ?? "",
+          transportista: a.transportista,
+          destinoTexto: a.destino,
+          clienteProveedor: a.cliente,
+          lineas: mercancia.map((l) => ({
+            descripcionProveedor: l.descripcion!,
+            referenciaProveedor: l.referencia,
+            cantidadPedida: l.cantidad!,
+            precioUnitarioCentimos: l.precioCentimos,
+          })),
+          origen: "CORREO",
+          externalMessageId: correo.messageId,
+          sourceReceivedAt: correo.fecha,
+          derivadoDeAlbaran: true,
+        });
+        pedido = ficha.pedido;
+        deducido = true;
       }
 
       // ¿Ya está este albarán? Entonces el correo es un duplicado del que lo creó.
@@ -283,6 +365,18 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
           { resultado: "DUPLICADO", motivo: `El albarán ${yaExiste.numeroProveedor} ya existía.`, pedidoId: pedido.id, pedidoNumero: pedido.numeroProveedor, albaranId: yaExiste.id, albaranNumero: yaExiste.numeroProveedor, avisos: leido.avisos },
           baseA
         );
+      }
+
+      // Otro albarán de un pedido deducido: lo pedido sigue sin saberse, así
+      // que crece hasta cubrir lo que este albarán trae. Si no, el servicio lo
+      // rechazaría por expedir más de lo pedido, y aquí eso no significa nada.
+      if (pedido.derivadoDeAlbaran && !deducido) {
+        await servicio.completarPedidoDerivado(ctxSistema, pedido.id, {
+          definitivo: false,
+          lineas: a.lineas
+            .filter((l) => l.descripcion && l.cantidad && l.cantidad > 0)
+            .map((l) => ({ descripcionProveedor: l.descripcion!, referenciaProveedor: l.referencia, cantidad: l.cantidad!, precioUnitarioCentimos: l.precioCentimos })),
+        });
       }
 
       const lineasPedido = await repo.lineasDePedido(ctx.empresaId, pedido.id);
@@ -314,10 +408,11 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
       });
       const albaran = ficha.albaranes.find((x) => x.numeroNormalizado === albaranNormalizado)!;
       const avisoPdf = await adjuntarOriginalSiFalta(ctxSistema, albaran.id, adjuntosPdf, a.enlacesPdf);
+      const nota = deducido ? `El pedido ${pedido.numeroProveedor} no existía: se ha deducido de este albarán y las cantidades pedidas son provisionales.` : null;
       return terminar(
         {
           resultado: "PROCESADO",
-          motivo: avisoPdf,
+          motivo: [nota, avisoPdf].filter(Boolean).join(" ") || null,
           pedidoId: pedido.id,
           pedidoNumero: pedido.numeroProveedor,
           albaranId: albaran.id,

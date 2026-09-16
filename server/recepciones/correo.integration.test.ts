@@ -408,6 +408,83 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
     expect((await api(`/pedidos/${alta.body.pedido.id}`)).body.albaranes).toHaveLength(0);
   });
 
+  describe("el albarán entra aunque su pedido no exista", () => {
+    it("deduce el pedido del propio albarán, lo marca como deducido y lo deja recepcionable", async () => {
+      const m = await mensaje({ asunto: ASUNTO_REAL, texto: ALBARAN_REAL });
+      const r = await importarEml(m.source);
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.resultado).toBe("procesado");
+      expect(r.body.albaranNumero).toBe("B/2028450459");
+
+      const pedidos = await api("/pedidos?q=5687439");
+      expect(pedidos.body.pedidos).toHaveLength(1);
+      const ficha = await api(`/pedidos/${pedidos.body.pedidos[0].id}`);
+      expect(ficha.body.pedido.derivadoDeAlbaran).toBe(true);
+      // Lo que no se sabe no se inventa: la fecha del pedido no es la del albarán.
+      expect(ficha.body.pedido.fechaPedido).toBeNull();
+      expect(ficha.body.pedido.centroNombre).toBe("TARRAGONA");
+      expect(ficha.body.pedido.clienteProveedor).toBe("COMERCIAL SEA, S.A.");
+      expect(ficha.body.lineas).toHaveLength(1);
+      expect(ficha.body.lineas[0]).toMatchObject({ descripcionProveedor: "245/70X17.5 HANKOOK AH35 136M", cantidadPedida: 2, cantidadExpedida: 2 });
+      expect(ficha.body.albaranes).toHaveLength(1);
+      expect(ficha.body.albaranes[0].estado).toBe("EN_TRANSITO");
+
+      // Y está en la bandeja, listo para recepcionar: ese era el objetivo.
+      const bandeja = await api("/bandeja");
+      expect(bandeja.body.albaranes.map((a: any) => a.id)).toContain(ficha.body.albaranes[0].id);
+      expect(ficha.body.eventos.map((e: any) => e.tipo)).toContain("PEDIDO_CREADO");
+    });
+
+    it("un segundo albarán del mismo pedido deducido lo amplía en vez de rebotar", async () => {
+      expect((await importarEml((await mensaje({ asunto: ASUNTO_REAL, texto: ALBARAN_REAL })).source)).body.resultado).toBe("procesado");
+
+      // Mismo pedido, otro albarán, otras 3 unidades de la misma medida.
+      const texto2 = ALBARAN_REAL.replace("2.00 245/70X17.5 HANKOOK AH35 136M 248.45", "3.00 245/70X17.5 HANKOOK AH35 136M 248.45");
+      const m2 = await mensaje({ asunto: "Fwd: Emisión de Albarán B /2028450999 con fecha 15/09/2026.", texto: texto2 });
+      const r2 = await importarEml(m2.source);
+      expect(r2.status, JSON.stringify(r2.body)).toBe(200);
+      expect(r2.body.resultado).toBe("procesado");
+
+      const pedidos = await api("/pedidos?q=5687439");
+      const ficha = await api(`/pedidos/${pedidos.body.pedidos[0].id}`);
+      expect(ficha.body.albaranes).toHaveLength(2);
+      // 2 + 3: lo pedido ha crecido con lo expedido, porque sigue sin saberse.
+      expect(ficha.body.lineas[0]).toMatchObject({ cantidadPedida: 5, cantidadExpedida: 5 });
+      expect(ficha.body.pedido.derivadoDeAlbaran).toBe(true);
+      expect(ficha.body.pedido.estado).toBe("EXPEDIDO");
+    });
+
+    it("cuando llega el correo del pedido, lo confirma: cantidades de verdad y deja de ser deducido", async () => {
+      expect((await importarEml((await mensaje({ asunto: ASUNTO_REAL, texto: ALBARAN_REAL })).source)).body.resultado).toBe("procesado");
+
+      // El correo del pedido, con su serie y 10 unidades pedidas (se expidieron 2).
+      const m2 = await mensaje({ asunto: asuntoPedido("B-2026-5687439"), texto: correoPedido("B-2026-5687439").replace("Cantidad:\n2\n", "Cantidad:\n10\n") });
+      const r2 = await importarEml(m2.source);
+      expect(r2.status, JSON.stringify(r2.body)).toBe(200);
+      expect(r2.body.resultado).toBe("procesado");
+      expect(r2.body.error).toContain("estaba deducido");
+
+      const pedidos = await api("/pedidos?q=5687439");
+      expect(pedidos.body.pedidos).toHaveLength(1);
+      const ficha = await api(`/pedidos/${pedidos.body.pedidos[0].id}`);
+      expect(ficha.body.pedido.derivadoDeAlbaran).toBe(false);
+      expect(ficha.body.pedido.numeroProveedor).toBe("B-2026-5687439");
+      expect(ficha.body.pedido.usuarioPedido).toBe("comercialseatarragona");
+      expect(ficha.body.pedido.fechaPedido).toContain("2026-09-15");
+      expect(ficha.body.lineas[0]).toMatchObject({ cantidadPedida: 10, cantidadExpedida: 2 });
+      // Ya no está todo expedido: quedan 8 por venir.
+      expect(ficha.body.pedido.estado).toBe("PARCIALMENTE_EXPEDIDO");
+      expect(ficha.body.eventos.map((e: any) => e.tipo)).toContain("PEDIDO_CONFIRMADO");
+    });
+
+    it("un pedido que NO es deducido no lo toca el correo del pedido: sigue siendo DUPLICADO", async () => {
+      const numero = unico("5691");
+      expect((await importarEml((await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) })).source)).body.resultado).toBe("procesado");
+      const otra = await importarEml((await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) })).source);
+      expect(otra.body.resultado).toBe("duplicado");
+    });
+  });
+
   it("el mismo correo dos veces es DUPLICADO: un solo pedido, un solo albarán", async () => {
     const numero = unico("5689");
     const m1 = await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) });
@@ -435,13 +512,17 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
     expect(correos.body.correos.filter((c: any) => c.resultado === "DUPLICADO")).toHaveLength(2);
   });
 
-  it("el albarán que llega antes que el pedido espera en revisión y se reprocesa solo cuando llega el pedido", async () => {
+  it("un albarán SIN líneas legibles y sin pedido sí espera en revisión, y se reprocesa solo cuando llega el pedido", async () => {
+    // El albarán entra aunque no haya pedido… siempre que traiga con qué
+    // deducirlo. Éste sólo dice «Pedido: N / Albarán: M», sin contenido: no
+    // hay nada que poner en las líneas, así que espera. Es el único caso que
+    // sigue quedándose fuera.
     const numero = unico("5690");
     const albaranN = unico("2030");
     const m2 = await mensaje({ asunto: asuntoAlbaran(albaranN), texto: correoAlbaran(numero, albaranN) });
     const r2 = await importarEml(m2.source);
     expect(r2.body.resultado).toBe("revision");
-    expect(r2.body.error).toMatch(/no existe todavía/);
+    expect(r2.body.error).toMatch(/no trae líneas legibles con las que deducirlo/);
     const boot = await api("/bootstrap");
     expect(boot.body.contadores.correosEnRevision).toBe(1);
 

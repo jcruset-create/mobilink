@@ -9,7 +9,7 @@ import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, PackageCheck, Plus } from "lucide-react";
 import * as api from "../services/api";
 import { useRecepciones } from "../contexts/RecepcionesContext";
-import { ChipEstadoAlbaran, ChipEstadoIncidencia, ChipEstadoPedido, ChipResultado, Dato, ErrorBox, Modal, SinMapear, TextField, btnDanger, btnPrimary, btnSecondary, inputCls } from "../components/ui";
+import { Aviso, ChipEstadoAlbaran, ChipEstadoIncidencia, ChipEstadoPedido, ChipResultado, Dato, ErrorBox, Modal, SinMapear, TextField, btnDanger, btnPrimary, btnSecondary, inputCls } from "../components/ui";
 import Timeline from "../components/Timeline";
 import { fmtCantidad, fmtEuros, type FichaPedido } from "../types";
 import { fmtFecha, fmtFechaHora } from "../../administracion/types";
@@ -78,6 +78,18 @@ export default function Pedido() {
           <Dato rotulo="Dirección de destino" valor={pedido.destinoTexto ? <span className="whitespace-pre-line">{pedido.destinoTexto}</span> : null} />
           {pedido.canceladoMotivo && <Dato rotulo="Cancelado" valor={pedido.canceladoMotivo} />}
         </div>
+        {/* Sin este aviso, «cantidad pedida» se lee como lo que se encargó, y
+            en un pedido deducido es sólo lo que el proveedor dice haber
+            expedido hasta ahora. */}
+        {pedido.derivadoDeAlbaran && (
+          <div className="mt-3">
+            <Aviso tono="aviso">
+              Este pedido no lo mandó el proveedor: se ha <b>deducido de su albarán</b> porque el correo del pedido no había llegado. La
+              cantidad pedida es lo expedido hasta ahora, no lo que se encargó, y crecerá con cada albarán nuevo. Cuando llegue el correo del
+              pedido se confirmará solo.
+            </Aviso>
+          </div>
+        )}
         {pedido.observaciones && <p className="mt-2 text-[13px] text-slate-400">{pedido.observaciones}</p>}
         <div className="mt-3 flex flex-wrap gap-2">
           {puedeAlbaran && (
