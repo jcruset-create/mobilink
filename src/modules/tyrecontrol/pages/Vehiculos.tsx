@@ -14,7 +14,7 @@ import type {
 } from "../types";
 import { ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { enlacesTelematica } from "../services/conciliacion";
-import { etiquetaBase } from "../services/presenciaVista";
+import { estadoUbicacion, etiquetaBase, ubicacionDeVehiculo } from "../services/presenciaVista";
 import {
   conectoresDe, etiquetaTelematica, porVehiculo, type EnlaceTelematica,
 } from "../services/telematicaVehiculo";
@@ -157,7 +157,18 @@ export default function Vehiculos() {
   const esPendiente = (id: string) => { const e = revEstados.get(id)?.estado; return e === "sin_revision" || e === "vencida" || e === "proxima"; };
   const esVencida = (id: string) => { const e = revEstados.get(id)?.estado; return e === "sin_revision" || e === "vencida"; };
   // "En base" a efectos de revisión = en su base asignada O en otra base de su empresa.
-  const enAlgunaBase = (id: string) => { const e = estados.get(id)?.estado; return e === "en_base" || e === "otra_base"; };
+  /*
+   * El estado de ubicación, venga del proveedor que venga.
+   *
+   * Antes salía solo de Webfleet, y para un cliente de Movertis eso eran cero
+   * en base, cero en ruta y toda la flota «sin dispositivo»: los contadores de
+   * arriba y sus filtros no servían para nada. `estadoUbicacion` mira primero
+   * el barrido del Hub y cae a Webfleet, así que los mismos contadores valen
+   * ahora para cualquier cliente.
+   */
+  const ubicacionDe = (id: string): EstadoWebfleet =>
+    estadoUbicacion(presencias.get(id), estados.get(id));
+  const enAlgunaBase = (id: string) => { const e = ubicacionDe(id); return e === "en_base" || e === "otra_base"; };
   const revisarEnBase = (id: string) => enAlgunaBase(id) && esPendiente(id);
 
   async function cargar() {
@@ -184,14 +195,14 @@ export default function Vehiculos() {
     finally { setSincronizando(false); }
   }
 
-  const estadoDe = (id: string): EstadoWebfleet => estados.get(id)?.estado ?? "sin_dispositivo";
+  const estadoDe = (id: string): EstadoWebfleet => ubicacionDe(id);
   const telematicaPorVehiculo = useMemo(() => porVehiculo(enlacesTel), [enlacesTel]);
 
   // KPIs: en base, pendientes en base, vencidas en base, en ruta, sin conexión.
   const kpis = useMemo(() => {
     let en_base = 0, pend_base = 0, venc_base = 0, en_ruta = 0, sin_conexion = 0;
     for (const v of items) {
-      const e = estados.get(v.id)?.estado ?? "sin_dispositivo";
+      const e = estadoUbicacion(presencias.get(v.id), estados.get(v.id));
       if (e === "en_ruta") en_ruta++;
       else if (e === "sin_conexion") sin_conexion++;
       else if (e === "en_base" || e === "otra_base") {
@@ -202,7 +213,7 @@ export default function Vehiculos() {
       }
     }
     return { en_base, pend_base, venc_base, en_ruta, sin_conexion };
-  }, [items, estados, revEstados]);
+  }, [items, estados, presencias, revEstados]);
 
   const filtrados = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -220,7 +231,7 @@ export default function Vehiculos() {
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, q, fEmpresa, fDele, fTipo, fEstado, fWebfleet, estados, revEstados]);
+  }, [items, q, fEmpresa, fDele, fTipo, fEstado, fWebfleet, estados, presencias, revEstados]);
 
   // ── Orden por columna ──────────────────────────────────────────────
   // Se pulsa la cabecera: primera vez ascendente, segunda descendente.
@@ -453,6 +464,23 @@ export default function Vehiculos() {
                   const est = estados.get(v.id);
                   const e = est?.estado ?? "sin_dispositivo";
                   const conectores = conectoresDe(v, telematicaPorVehiculo);
+                  /*
+                   * El estado de Webfleet solo se enseña si el vehículo ES de
+                   * Webfleet.
+                   *
+                   * La sincronización de Webfleet recorre TODOS los vehículos
+                   * activos de TODAS las empresas y escribe `sin_dispositivo`
+                   * al que no tiene `webfleet_vehicle_id`. Eso llenaba la
+                   * columna de «SIN WEBFLEET» en autobuses de Movertis, donde
+                   * es verdad y no significa nada: no les falta un equipo, es
+                   * que su equipo es de otro proveedor.
+                   */
+                  const esDeWebfleet = conectores.includes("webfleet");
+                  // Para los demás, dónde está según el barrido del Hub, que
+                  // sí sabe de cualquier proveedor.
+                  const ubic = esDeWebfleet
+                    ? null
+                    : ubicacionDeVehiculo({ presencia: presencias.get(v.id) });
                   const enBase = e === "en_base" || e === "otra_base";
                   const revisar = enBase && esPendiente(v.id);
                   // Nombre de la base donde está (delegación detectada por Webfleet).
@@ -483,7 +511,27 @@ export default function Vehiculos() {
                         aparte: es OTRA cosa que saber de quién es el equipo, y
                         cuando otro proveedor sepa darlo cabrá aquí igual.
                       */}
-                      {est && (
+                      {/*
+                        La ubicación de los que no son de Webfleet. No es un
+                        botón: el detalle que abre el otro es de Webfleet y no
+                        aplica aquí. Si no se sabe dónde está, no se pone nada:
+                        la chapa de arriba ya dice de quién es el equipo.
+                      */}
+                      {ubic && ubic.tono !== "desconocido" && (
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                            ubic.tono === "base"
+                              ? "bg-emerald-500/15 text-emerald-300"
+                              : ubic.tono === "ruta"
+                                ? "bg-sky-500/15 text-sky-300"
+                                : "bg-amber-500/15 text-amber-300"
+                          }`}
+                          title={ubic.detalle}
+                        >
+                          {ubic.texto.toUpperCase()}
+                        </span>
+                      )}
+                      {est && esDeWebfleet && (
                         <button
                           onClick={() => setPopup({ v, est })}
                           className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${revisar ? "bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/60" : ESTADO_WEBFLEET_BADGE[e]}`}

@@ -199,6 +199,8 @@ export interface PresenciaEnBase {
   vehiculo_id: string;
   estado: "IN_BASE" | "OUTSIDE_BASES" | "STALE_POSITION" | "NO_POSITION" | "INVALID_POSITION";
   delegacion_id?: string | null;
+  /** Si la base detectada es la delegación asignada al vehículo. */
+  es_su_base?: boolean | null;
   posicion_at?: string | null;
   entrada_base_at?: string | null;
   /** Última coordenada conocida, para poder llevarla a un mapa. */
