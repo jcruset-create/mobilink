@@ -6,7 +6,12 @@
  * `useMemo` que nadie puede comprobar.
  */
 
-import type { PresenciaEnBase, RevisionEstado, VehiculoWebfleetEstado } from "../types";
+import type {
+  EstadoWebfleet,
+  PresenciaEnBase,
+  RevisionEstado,
+  VehiculoWebfleetEstado,
+} from "../types";
 import type { VehiculoPresencia } from "./presenciaBases";
 
 /**
@@ -317,4 +322,40 @@ export function ubicacionDeVehiculo(params: {
     detalle: "no está vinculado con la telemática, o su proveedor no dice nada de él",
     tono: "desconocido",
   };
+}
+
+/**
+ * El estado de ubicación de un vehículo, sea de quien sea su telemática.
+ *
+ * Se devuelve en el vocabulario de siempre —`en_base`, `otra_base`, `en_ruta`,
+ * `sin_conexion`, `sin_dispositivo`— porque es el que hablan los contadores y
+ * los filtros de la lista de vehículos, que llevan años ahí. Lo que cambia es
+ * de dónde sale: antes solo de Webfleet, y para un cliente de Movertis eso
+ * significaba cero en base, cero en ruta y toda la flota «sin dispositivo».
+ *
+ * ── Una posición vieja DENTRO de una base sigue contando como en base ───────
+ *
+ * No es una licencia: es exactamente lo que hace la sincronización de Webfleet
+ * desde siempre —solo baja a «sin conexión» cuando la posición es vieja Y está
+ * fuera de toda base—, y tiene su razón: el equipo de un autobús aparcado se
+ * duerme, y sacarlo de la lista de «en base» por eso escondería justo a los
+ * que se pueden revisar. Quien necesite el matiz lo tiene en la chapa de la
+ * fila, que sí distingue «está» de «se le vio».
+ */
+export function estadoUbicacion(
+  presencia: PresenciaEnBase | undefined,
+  webfleet: VehiculoWebfleetEstado | undefined,
+): EstadoWebfleet {
+  if (presencia) {
+    const enSuBase = presencia.es_su_base !== false;
+    if (presencia.estado === "IN_BASE") return enSuBase ? "en_base" : "otra_base";
+    if (presencia.estado === "OUTSIDE_BASES") return "en_ruta";
+    if (presencia.estado === "STALE_POSITION") {
+      if (presencia.delegacion_id) return enSuBase ? "en_base" : "otra_base";
+      return "sin_conexion";
+    }
+    if (presencia.estado === "INVALID_POSITION") return "sin_conexion";
+    // NO_POSITION no afirma nada: se mira si Webfleet sabe algo de él.
+  }
+  return webfleet?.estado ?? "sin_dispositivo";
 }

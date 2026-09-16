@@ -15,6 +15,7 @@ import {
   minutosEnPalabras,
   prioridadRevision,
   quienRevisó,
+  estadoUbicacion,
   etiquetaBase,
   ubicacionDeVehiculo,
   sinPeriodicidad,
@@ -24,7 +25,7 @@ import {
   tieneRevisionPendiente,
 } from "./presenciaVista";
 import type { VehiculoPresencia } from "./presenciaBases";
-import type { RevisionEstado } from "../types";
+import type { PresenciaEnBase, RevisionEstado } from "../types";
 
 function veh(id: string, over: Partial<VehiculoPresencia> = {}): VehiculoPresencia {
   return {
@@ -442,5 +443,54 @@ describe("ubicacionDeVehiculo()", () => {
       ahora: AHORA,
     });
     expect(u.texto).toBe("En ruta");
+  });
+});
+
+/**
+ * El estado de ubicación que alimenta los contadores y filtros de la lista.
+ *
+ * Antes salía solo de Webfleet: para un cliente de Movertis, cero en base,
+ * cero en ruta y toda la flota «sin dispositivo».
+ */
+describe("estadoUbicacion()", () => {
+  const pres = (over: Partial<PresenciaEnBase>): PresenciaEnBase => ({
+    vehiculo_id: "v",
+    estado: "IN_BASE",
+    delegacion_id: "b",
+    ...over,
+  });
+
+  it("en su base y en otra base se distinguen, como en Webfleet", () => {
+    expect(estadoUbicacion(pres({ es_su_base: true }), undefined)).toBe("en_base");
+    expect(estadoUbicacion(pres({ es_su_base: false }), undefined)).toBe("otra_base");
+  });
+
+  it("fuera de las bases es en ruta", () => {
+    expect(estadoUbicacion(pres({ estado: "OUTSIDE_BASES", delegacion_id: null }), undefined)).toBe("en_ruta");
+  });
+
+  it("posición vieja DENTRO de una base sigue contando como en base", () => {
+    // Es lo que hace la sincronización de Webfleet desde siempre: el equipo de
+    // un autobús aparcado se duerme, y sacarlo de «en base» escondería justo a
+    // los que se pueden revisar.
+    expect(estadoUbicacion(pres({ estado: "STALE_POSITION", es_su_base: true }), undefined)).toBe("en_base");
+  });
+
+  it("posición vieja FUERA de toda base es sin conexión", () => {
+    expect(estadoUbicacion(pres({ estado: "STALE_POSITION", delegacion_id: null }), undefined)).toBe("sin_conexion");
+  });
+
+  it("una posición inválida es sin conexión, no una ubicación", () => {
+    expect(estadoUbicacion(pres({ estado: "INVALID_POSITION", delegacion_id: null }), undefined)).toBe("sin_conexion");
+  });
+
+  it("si el Hub no sabe nada de él, manda lo que diga Webfleet", () => {
+    const wf = { vehiculo_id: "v", empresa_id: "e", estado: "en_ruta" as const };
+    expect(estadoUbicacion(pres({ estado: "NO_POSITION", delegacion_id: null }), wf)).toBe("en_ruta");
+    expect(estadoUbicacion(undefined, wf)).toBe("en_ruta");
+  });
+
+  it("sin ninguna de las dos, sin dispositivo", () => {
+    expect(estadoUbicacion(undefined, undefined)).toBe("sin_dispositivo");
   });
 });
