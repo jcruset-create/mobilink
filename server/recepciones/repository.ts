@@ -949,11 +949,23 @@ export type FiltroAlbaranes = {
   limite?: number;
 };
 
+/** Un artículo del albarán, para enseñarlo en la bandeja sin abrir la ficha. */
+export type ArticuloBandeja = {
+  descripcionProveedor: string;
+  productoTexto: string | null;
+  cantidadExpedida: number;
+  cantidadPendiente: number;
+};
+
 export type FilaBandeja = Albaran & {
   unidadesExpedidas: number;
   unidadesRecibidas: number;
   lineas: number;
   incidenciasAbiertas: number;
+  /** Lo que trae el albarán. Es lo que mira quien está en el muelle. */
+  articulos: ArticuloBandeja[];
+  /** El PDF del proveedor, si está guardado: para consultarlo antes de contar. */
+  documentoOriginalId: string | null;
 };
 
 export async function listarAlbaranes(empresaId: string, f: FiltroAlbaranes, ejecutor?: Ejecutor): Promise<FilaBandeja[]> {
@@ -986,7 +998,16 @@ export async function listarAlbaranes(empresaId: string, f: FiltroAlbaranes, eje
          (SELECT COALESCE(SUM(l.cantidad_expedida),0) FROM rcp_albaran_lineas l WHERE l.albaran_id = a.id) AS unidades_expedidas,
          (SELECT COALESCE(SUM(l.cantidad_recibida),0) FROM rcp_albaran_lineas l WHERE l.albaran_id = a.id) AS unidades_recibidas,
          (SELECT COUNT(*) FROM rcp_albaran_lineas l WHERE l.albaran_id = a.id) AS lineas,
-         (SELECT COUNT(*) FROM rcp_incidencias i WHERE i.albaran_id = a.id AND i.estado IN ('ABIERTA','EN_GESTION')) AS incidencias_abiertas`)}
+         (SELECT COUNT(*) FROM rcp_incidencias i WHERE i.albaran_id = a.id AND i.estado IN ('ABIERTA','EN_GESTION')) AS incidencias_abiertas,
+         (SELECT json_agg(json_build_object(
+                    'descripcion_proveedor', l.descripcion_proveedor,
+                    'producto_texto', l.producto_texto,
+                    'cantidad_expedida', l.cantidad_expedida,
+                    'cantidad_pendiente', GREATEST(l.cantidad_expedida - l.cantidad_recibida, 0)
+                  ) ORDER BY l.numero_linea)
+            FROM rcp_albaran_lineas l WHERE l.albaran_id = a.id) AS articulos,
+         (SELECT d.id FROM rcp_documentos d
+            WHERE d.albaran_id = a.id AND d.tipo = 'ALBARAN_ORIGINAL' LIMIT 1) AS documento_original_id`)}
       WHERE ${cond.join(" AND ")}
       ORDER BY CASE a.estado WHEN 'EN_TRANSITO' THEN 0 WHEN 'PARCIALMENTE_RECIBIDO' THEN 1 WHEN 'EMITIDO' THEN 2 ELSE 3 END,
                a.created_at DESC
@@ -1000,6 +1021,14 @@ export async function listarAlbaranes(empresaId: string, f: FiltroAlbaranes, eje
     unidadesRecibidas: numero(r.unidades_recibidas),
     lineas: Number(r.lineas),
     incidenciasAbiertas: Number(r.incidencias_abiertas),
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    articulos: ((r.articulos ?? []) as any[]).map((l) => ({
+      descripcionProveedor: l.descripcion_proveedor,
+      productoTexto: l.producto_texto ?? null,
+      cantidadExpedida: numero(l.cantidad_expedida),
+      cantidadPendiente: numero(l.cantidad_pendiente),
+    })),
+    documentoOriginalId: r.documento_original_id ?? null,
   }));
 }
 

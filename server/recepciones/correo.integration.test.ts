@@ -431,7 +431,12 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
 
       // Y está en la bandeja, listo para recepcionar: ese era el objetivo.
       const bandeja = await api("/bandeja");
-      expect(bandeja.body.albaranes.map((a: any) => a.id)).toContain(ficha.body.albaranes[0].id);
+      const fila = bandeja.body.albaranes.find((x: any) => x.id === ficha.body.albaranes[0].id);
+      expect(fila, "el albarán tiene que salir en la bandeja").toBeTruthy();
+      // La bandeja dice QUÉ viene sin abrir la ficha: es lo que mira el muelle.
+      expect(fila.articulos).toHaveLength(1);
+      expect(fila.articulos[0]).toMatchObject({ descripcionProveedor: "245/70X17.5 HANKOOK AH35 136M", cantidadExpedida: 2, cantidadPendiente: 2 });
+      expect(fila.articulos[0].articuloLeido).toBe("HANKOOK AH35 245/70 R17.5 136M");
       expect(ficha.body.eventos.map((e: any) => e.tipo)).toContain("PEDIDO_CREADO");
     });
 

@@ -3,16 +3,44 @@
  *
  * Cada fila es un albarán, que es contra lo que se recepciona. En escritorio,
  * tabla; en móvil, tarjetas con el botón de recibir bien grande.
+ *
+ * Lo primero que se lee es LO QUE VIENE: quien está en el muelle mira los
+ * neumáticos, no el número del albarán. Por eso los artículos van en grande y
+ * el papel del proveedor a un toque, para cotejarlo antes de contar.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { PackageCheck, RefreshCw } from "lucide-react";
+import { FileText, PackageCheck, RefreshCw } from "lucide-react";
 import * as api from "../services/api";
 import { useRecepciones } from "../contexts/RecepcionesContext";
-import { ChipEstadoAlbaran, EmptyRow, ErrorBox, TableWrap, btnSecondary, inputCls, tdCls, thCls } from "../components/ui";
-import { fmtCantidad, type FilaBandeja } from "../types";
+import { ChipEstadoAlbaran, EmptyRow, ErrorBox, Modal, TableWrap, btnSecondary, inputCls, tdCls, thCls } from "../components/ui";
+import VisorDocumento from "../components/VisorDocumento";
+import { fmtCantidad, type ArticuloBandeja, type FilaBandeja } from "../types";
 import { fmtFecha } from "../../administracion/types";
+
+/**
+ * Lo que trae el albarán, que es lo que importa. En la tabla caben pocas
+ * líneas sin romper la fila, así que a partir de `tope` se resume.
+ */
+function Articulos({ articulos, tope = 4, compacto = false }: { articulos: ArticuloBandeja[]; tope?: number; compacto?: boolean }) {
+  if (articulos.length === 0) return <span className="text-slate-500">—</span>;
+  const visibles = articulos.slice(0, tope);
+  const resto = articulos.length - visibles.length;
+  return (
+    <div className={compacto ? "space-y-0.5" : "space-y-1"}>
+      {visibles.map((l, i) => (
+        <div key={i} className="flex items-baseline gap-2">
+          <span className={`tabular-nums font-black ${compacto ? "text-[13px]" : "text-base"} ${l.cantidadPendiente > 0 ? "text-emerald-300" : "text-slate-500"}`}>
+            {fmtCantidad(l.cantidadPendiente > 0 ? l.cantidadPendiente : l.cantidadExpedida)}×
+          </span>
+          <span className={`${compacto ? "text-[13px]" : "text-base font-semibold"} leading-tight text-slate-100`}>{l.articuloLeido}</span>
+        </div>
+      ))}
+      {resto > 0 && <div className="text-[12px] text-slate-400">y {resto} artículo(s) más</div>}
+    </div>
+  );
+}
 
 const PESTANAS = [
   { key: "pendientes", label: "Pendientes" },
@@ -30,6 +58,7 @@ export default function Bandeja() {
   const [filas, setFilas] = useState<FilaBandeja[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pdf, setPdf] = useState<FilaBandeja | null>(null);
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -118,21 +147,25 @@ export default function Bandeja() {
               <div className="text-[11px] font-semibold uppercase text-slate-400">{a.proveedorNombre}</div>
               <ChipEstadoAlbaran estado={a.estado} />
             </div>
-            <div className="mt-1 text-lg font-black">Albarán {a.numeroProveedor}</div>
-            <div className="text-[13px] text-slate-300">
-              Pedido {a.pedidoNumero} · {a.centroNombre || "—"} · {a.transportista ?? "—"}
+            {/* Lo que viene, en grande: es lo que se va a contar. */}
+            <div className="mt-2 rounded-xl bg-slate-900/60 p-3">
+              <Articulos articulos={a.articulos} />
             </div>
-            <div className="mt-2 flex items-center justify-between">
-              <div className="text-sm">
-                <span className="text-slate-400">Expedido</span> <b>{fmtCantidad(a.unidadesExpedidas)}</b> · <span className="text-slate-400">Recibido</span>{" "}
-                <b>{fmtCantidad(a.unidadesRecibidas)}</b>
-              </div>
+            <div className="mt-2 text-[12px] text-slate-400">
+              Albarán <b className="text-slate-200">{a.numeroProveedor}</b> · Pedido {a.pedidoNumero} · {a.centroNombre || "—"} · {a.transportista ?? "—"}
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              {a.documentoOriginalId && (
+                <button type="button" onClick={() => setPdf(a)} className="flex h-11 items-center gap-2 rounded-xl bg-slate-700 px-3 text-sm font-bold text-slate-100 active:bg-slate-600">
+                  <FileText className="h-4 w-4" /> Albarán PDF
+                </button>
+              )}
               {puede("recepciones.recibir") && (a.estado === "EN_TRANSITO" || a.estado === "PARCIALMENTE_RECIBIDO") ? (
-                <Link to={`/recepciones/recibir/${a.id}`} className="flex h-11 items-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white">
+                <Link to={`/recepciones/recibir/${a.id}`} className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white">
                   <PackageCheck className="h-4 w-4" /> Recibir
                 </Link>
               ) : (
-                <Link to={`/recepciones/albaranes/${a.id}`} className={btnSecondary}>
+                <Link to={`/recepciones/albaranes/${a.id}`} className={`${btnSecondary} flex-1 text-center`}>
                   Ver
                 </Link>
               )}
@@ -146,7 +179,7 @@ export default function Bandeja() {
         <TableWrap>
           <thead>
             <tr>
-              <th className={thCls}>Proveedor</th>
+              <th className={thCls}>Qué viene</th>
               <th className={thCls}>Albarán</th>
               <th className={thCls}>Pedido</th>
               <th className={thCls}>Expedición</th>
@@ -162,7 +195,10 @@ export default function Bandeja() {
             {filas.length === 0 && <EmptyRow cols={10} text={cargando ? "Cargando…" : "Nada pendiente de recibir."} />}
             {filas.map((a) => (
               <tr key={a.id} className="border-t border-slate-700/60 hover:bg-slate-700/30">
-                <td className={tdCls}>{a.proveedorNombre}</td>
+                <td className={`${tdCls} min-w-[280px]`}>
+                  <Articulos articulos={a.articulos} compacto />
+                  <div className="mt-1 text-[11px] uppercase text-slate-500">{a.proveedorNombre}</div>
+                </td>
                 <td className={`${tdCls} font-bold`}>
                   <Link to={`/recepciones/albaranes/${a.id}`} className="hover:underline">
                     {a.numeroProveedor}
@@ -183,17 +219,31 @@ export default function Bandeja() {
                   <ChipEstadoAlbaran estado={a.estado} />
                 </td>
                 <td className={`${tdCls} text-right`}>
-                  {puede("recepciones.recibir") && (a.estado === "EN_TRANSITO" || a.estado === "PARCIALMENTE_RECIBIDO") && (
-                    <Link to={`/recepciones/recibir/${a.id}`} className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500">
-                      <PackageCheck className="h-4 w-4" /> Recibir
-                    </Link>
-                  )}
+                  <div className="flex items-center justify-end gap-1">
+                    {a.documentoOriginalId && (
+                      <button type="button" onClick={() => setPdf(a)} title="Albarán del proveedor en PDF" className="inline-flex items-center gap-1 rounded-xl bg-slate-700 px-2.5 py-1.5 text-[12px] font-bold text-slate-100 hover:bg-slate-600">
+                        <FileText className="h-4 w-4" /> PDF
+                      </button>
+                    )}
+                    {puede("recepciones.recibir") && (a.estado === "EN_TRANSITO" || a.estado === "PARCIALMENTE_RECIBIDO") && (
+                      <Link to={`/recepciones/recibir/${a.id}`} className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500">
+                        <PackageCheck className="h-4 w-4" /> Recibir
+                      </Link>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </TableWrap>
       </div>
+
+      {/* El papel del proveedor, para cotejarlo antes de contar. */}
+      {pdf?.documentoOriginalId && (
+        <Modal title={`Albarán ${pdf.numeroProveedor} · ${pdf.proveedorNombre}`} onClose={() => setPdf(null)} wide>
+          <VisorDocumento documentoId={pdf.documentoOriginalId} nombre={`albaran-${pdf.numeroProveedor}.pdf`} />
+        </Modal>
+      )}
     </div>
   );
 }

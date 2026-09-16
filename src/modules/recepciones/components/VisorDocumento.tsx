@@ -7,6 +7,16 @@
  * un iframe; «Imprimir» lanza el diálogo del sistema sobre ese iframe. En
  * móvil o tablet, «Abrir» lo manda al visor del sistema, que tiene Imprimir y
  * Compartir.
+ *
+ * ── Por qué en móvil no se imprime solo ─────────────────────────────────────
+ *
+ * En escritorio, `autoImprimir` lanza el diálogo en cuanto carga el PDF. En
+ * móvil NO: imprimir un iframe no es fiable en Safari —no lanza el diálogo y
+ * tampoco falla, así que no hay a qué agarrarse para caer al plan B—, y abrir
+ * el visor del sistema sin que nadie haya tocado nada lo bloquea el navegador.
+ * Antes eso dejaba la impresión en nada y sin decirlo. Ahora, cuando toca
+ * imprimir y no se puede solo, sale un botón grande arriba: un toque en vez de
+ * ninguno, pero visible.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -19,6 +29,7 @@ export default function VisorDocumento({ documentoId, nombre, autoImprimir = fal
   const [error, setError] = useState<string | null>(null);
   const iframe = useRef<HTMLIFrameElement>(null);
   const impreso = useRef(false);
+  const [pendienteDeImprimir, setPendienteDeImprimir] = useState(false);
 
   useEffect(() => {
     let vivo = true;
@@ -41,6 +52,7 @@ export default function VisorDocumento({ documentoId, nombre, autoImprimir = fal
   }, [documentoId]);
 
   function imprimir() {
+    setPendienteDeImprimir(false);
     const w = iframe.current?.contentWindow;
     if (w) {
       try {
@@ -56,6 +68,15 @@ export default function VisorDocumento({ documentoId, nombre, autoImprimir = fal
 
   return (
     <div className="space-y-2">
+      {pendienteDeImprimir && (
+        <button
+          type="button"
+          onClick={imprimir}
+          className="flex h-16 w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 text-lg font-black text-white active:bg-emerald-500 print:hidden"
+        >
+          <Printer className="h-6 w-6" /> IMPRIMIR EL ALBARÁN
+        </button>
+      )}
       <div className="flex flex-wrap items-center gap-2 print:hidden">
         <button type="button" className={`${btnPrimary} flex items-center gap-2`} onClick={imprimir} disabled={!url}>
           <Printer className="h-4 w-4" /> Imprimir
@@ -78,9 +99,11 @@ export default function VisorDocumento({ documentoId, nombre, autoImprimir = fal
           onLoad={() => {
             if (autoImprimir && !impreso.current) {
               impreso.current = true;
-              // Sólo en escritorio: en móvil el diálogo de impresión sobre un
-              // iframe no es fiable y el operario ya tiene el botón.
+              // En escritorio se lanza solo; en móvil se pide el toque, porque
+              // ahí ni el iframe imprime ni el navegador deja abrir el visor
+              // sin que nadie haya tocado nada.
               if (window.matchMedia("(min-width: 768px)").matches) imprimir();
+              else setPendienteDeImprimir(true);
             }
           }}
         />
