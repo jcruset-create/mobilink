@@ -6,7 +6,7 @@ import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
 import { ubicacionDeVehiculoBD } from "../services/data";
-import { ubicacionDeVehiculo, type Ubicacion } from "../services/presenciaVista";
+import { ubicacionDeVehiculo, coordenadasDeVehiculo, enlaceDeMapa, type Ubicacion, type PosicionMapa } from "../services/presenciaVista";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
@@ -40,6 +40,14 @@ export default function VehiculoDetalle() {
    * identificar el vehículo.
    */
   const [ubicacion, setUbicacion] = useState<Ubicacion | null>(null);
+  /*
+   * La coordenada, para poder abrirla en un mapa.
+   *
+   * Es la misma consulta que la chapa de arriba, así que abrir la ficha NO
+   * pregunta a la telemática: se enseña lo último que se barrió. Si no hay
+   * coordenada buena, el botón no sale y se dice por qué.
+   */
+  const [posicionMapa, setPosicionMapa] = useState<PosicionMapa | null>(null);
   const [posiciones, setPosiciones] = useState<PosicionVehiculo[]>([]);
   const [montajes, setMontajes] = useState<MontajeActual[]>([]);
   const [medidasMap, setMedidasMap] = useState<Map<string, string>>(new Map());
@@ -105,11 +113,9 @@ export default function VehiculoDetalle() {
     );
 
     // Dónde está. A mejor esfuerzo: si falla, la chapa no sale y ya está.
-    setUbicacion(
-      await ubicacionDeVehiculoBD(id)
-        .then((fuentes) => ubicacionDeVehiculo(fuentes))
-        .catch(() => null),
-    );
+    const fuentes = await ubicacionDeVehiculoBD(id).catch(() => null);
+    setUbicacion(fuentes ? ubicacionDeVehiculo(fuentes) : null);
+    setPosicionMapa(fuentes ? coordenadasDeVehiculo(fuentes) : null);
   }
 
   async function abrirIntervencion(interv: Intervencion) {
@@ -202,6 +208,27 @@ export default function VehiculoDetalle() {
             {ubicacion.texto}
             {ubicacion.detalle ? <span className="ml-1 font-normal opacity-70">· {ubicacion.detalle}</span> : null}
           </span>
+        )}
+
+        {/*
+          Ver dónde está en un mapa. Es un enlace, no una llamada: se abre
+          Google Maps en otra pestaña con la coordenada que ya teníamos
+          guardada. Sin coordenada buena no hay botón, porque un mapa que
+          señala el sitio equivocado manda a alguien a buscar el vehículo
+          donde no está.
+        */}
+        {posicionMapa && (
+          <a
+            href={enlaceDeMapa(posicionMapa)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`${posicionMapa.lat.toFixed(5)}, ${posicionMapa.lng.toFixed(5)}${
+              posicionMapa.cuando ? ` · posición del ${new Date(posicionMapa.cuando).toLocaleString("es-ES")}` : ""
+            }`}
+            className="rounded-lg border border-sky-600 px-3 py-1.5 text-[12px] font-bold text-sky-300 hover:bg-sky-500/10"
+          >
+            🗺 Ver en el mapa
+          </a>
         )}
         {!esCliente && (
           <button

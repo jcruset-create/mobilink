@@ -201,6 +201,10 @@ export interface PresenciaEnBase {
   delegacion_id?: string | null;
   posicion_at?: string | null;
   entrada_base_at?: string | null;
+  /** Última coordenada conocida, para poder llevarla a un mapa. */
+  lat?: number | null;
+  lng?: number | null;
+  velocidad_kmh?: number | null;
   delegacion?: { id: string; nombre: string } | null;
 }
 
