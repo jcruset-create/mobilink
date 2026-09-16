@@ -169,10 +169,19 @@ export function cuerpoEnTexto(correo: Pick<ParsedMail, "text" | "html">): string
   return "";
 }
 
-/** ¿Se acepta este remitente? Lista vacía = todos. */
+/**
+ * ¿Se acepta este remitente? Lista vacía = todos.
+ *
+ * Una entrada «@proveedor.com» acepta cualquier dirección de ese dominio y de
+ * sus subdominios; el resto se compara exacta.
+ */
 export function remitenteAceptado(de: string, remitentes: readonly string[]): boolean {
   if (remitentes.length === 0) return true;
-  return remitentes.includes(de.toLowerCase());
+  const direccion = de.toLowerCase().trim();
+  const dominio = direccion.slice(direccion.lastIndexOf("@") + 1);
+  return remitentes.some((r) =>
+    r.startsWith("@") ? dominio === r.slice(1) || dominio.endsWith(`.${r.slice(1)}`) : r === direccion
+  );
 }
 
 async function guardarAdjuntos(empresaId: string, correo: ParsedMail): Promise<AdjuntoEntrante[]> {
