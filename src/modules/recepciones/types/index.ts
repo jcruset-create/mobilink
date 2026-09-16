@@ -136,6 +136,9 @@ export type ArticuloBandeja = {
   cantidadPendiente: number;
 };
 
+/** Un pedido de la lista, con lo que se encargó. */
+export type FilaPedido = Pedido & { articulos: ArticuloBandeja[] };
+
 export type FilaBandeja = Albaran & {
   unidadesExpedidas: number;
   unidadesRecibidas: number;

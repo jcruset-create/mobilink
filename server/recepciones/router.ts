@@ -283,12 +283,17 @@ export function createRecepcionesRouter(): Router {
     exigirPermiso("recepciones.view"),
     ruta(async (req, res) => {
       const ctx = contextoDe(req);
-      const pedidos = await repo.listarPedidos(ctx.empresaId, {
+      const filas = await repo.listarPedidos(ctx.empresaId, {
         estado: texto(req.query.estado) || undefined,
         centroId: centroDe(req),
         proveedorId: texto(req.query.proveedorId) || undefined,
         texto: texto(req.query.q) || undefined,
       });
+      // El mismo nombre bonito que la bandeja y la ficha.
+      const pedidos = filas.map((p) => ({
+        ...p,
+        articulos: p.articulos.map((l) => ({ ...l, articuloLeido: l.productoTexto ?? leerDescripcion(l.descripcionProveedor).bonito })),
+      }));
       res.json({ pedidos });
     })
   );

@@ -251,6 +251,23 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
 
   /* ── El orden de la bandeja ──────────────────────────────────────────── */
 
+  it("la lista de pedidos dice QUÉ se pidió, y va también de lo más viejo a lo más nuevo", async () => {
+    const viejo = await crearPedido(2, { fechaPedido: "2026-09-10" });
+    const nuevo = await crearPedido(4, { fechaPedido: "2026-09-16" });
+
+    const r = await api("/pedidos", operarioA);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const fila = r.body.pedidos.find((p: any) => p.id === nuevo.pedido.id);
+    // Lo pedido, sin abrir la ficha, con el nombre bonito de siempre.
+    expect(fila.articulos).toHaveLength(1);
+    expect(fila.articulos[0]).toMatchObject({ descripcionProveedor: "245/70X17.5 HANKOOK AH35 136M", cantidadExpedida: 4 });
+    expect(fila.articulos[0].articuloLeido).toBe("HANKOOK AH35 245/70 R17.5 136M");
+
+    const ids = r.body.pedidos.map((p: any) => p.id);
+    expect(ids.indexOf(viejo.pedido.id)).toBeLessThan(ids.indexOf(nuevo.pedido.id));
+  });
+
+
   it("la bandeja va de lo más viejo a lo más nuevo: el muelle es una cola", async () => {
     const viejo = await crearPedido(2);
     const nuevo = await crearPedido(2);

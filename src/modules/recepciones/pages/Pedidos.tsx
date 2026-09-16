@@ -13,7 +13,8 @@ import { Plus, Trash2 } from "lucide-react";
 import * as api from "../services/api";
 import { useRecepciones } from "../contexts/RecepcionesContext";
 import { ChipEstadoPedido, EmptyRow, ErrorBox, Modal, TableWrap, TextField, btnPrimary, btnSecondary, inputCls, tdCls, thCls } from "../components/ui";
-import { fmtCantidad, type Pedido } from "../types";
+import Articulos from "../components/Articulos";
+import { fmtCantidad, type FilaPedido } from "../types";
 import { fmtFecha } from "../../administracion/types";
 
 type LineaForm = { descripcionProveedor: string; referenciaProveedor: string; cantidadPedida: string; precio: string };
@@ -29,7 +30,7 @@ function aCentimos(v: string): number | null {
 
 export default function Pedidos() {
   const { proveedores, centros, centroId, puede, vocabulario, refrescar } = useRecepciones();
-  const [pedidos, setPedidos] = useState<Pedido[]>([]);
+  const [pedidos, setPedidos] = useState<FilaPedido[]>([]);
   const [q, setQ] = useState("");
   const [estado, setEstado] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -85,8 +86,8 @@ export default function Pedidos() {
       <TableWrap>
         <thead>
           <tr>
+            <th className={thCls}>Qué se pidió</th>
             <th className={thCls}>Pedido</th>
-            <th className={thCls}>Proveedor</th>
             <th className={thCls}>Fecha</th>
             <th className={thCls}>Centro</th>
             <th className={thCls}>Origen</th>
@@ -98,12 +99,18 @@ export default function Pedidos() {
           {pedidos.length === 0 && <EmptyRow cols={7} text={cargando ? "Cargando…" : "No hay pedidos."} />}
           {pedidos.map((p) => (
             <tr key={p.id} className="border-t border-slate-700/60 hover:bg-slate-700/30">
+              {/* Lo que se encargó, primero: es lo que se busca al mirar. */}
+              <td className={`${tdCls} min-w-[280px]`}>
+                <Link to={`/recepciones/pedidos/${p.id}`} className="block hover:opacity-80">
+                  <Articulos articulos={p.articulos} compacto />
+                </Link>
+                <div className="mt-1 text-[11px] uppercase text-slate-500">{p.proveedorNombre}</div>
+              </td>
               <td className={`${tdCls} font-bold`}>
                 <Link to={`/recepciones/pedidos/${p.id}`} className="hover:underline">
                   {p.numeroProveedor}
                 </Link>
               </td>
-              <td className={tdCls}>{p.proveedorNombre}</td>
               <td className={tdCls}>{fmtFecha(p.fechaPedido)}</td>
               <td className={tdCls}>{p.centroNombre || "—"}</td>
               <td className={tdCls}>{p.almacenOrigen ?? "—"}</td>

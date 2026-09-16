@@ -21,6 +21,7 @@ import type {
   FichaPedido,
   FichaRecepcion,
   FilaBandeja,
+  FilaPedido,
   Incidencia,
   MapeoArticulo,
   Operario,
@@ -79,7 +80,7 @@ export const bandeja = (f: { pestana?: string; estado?: string; centroId?: strin
   pedir<{ albaranes: FilaBandeja[]; contadores: Contadores }>(`/bandeja${query(f)}`);
 
 export const listarPedidos = (f: { estado?: string; centroId?: string; proveedorId?: string; q?: string }) =>
-  pedir<{ pedidos: Pedido[] }>(`/pedidos${query(f)}`);
+  pedir<{ pedidos: FilaPedido[] }>(`/pedidos${query(f)}`);
 
 export const fichaPedido = (id: string) => pedir<FichaPedido>(`/pedidos/${id}`);
 
