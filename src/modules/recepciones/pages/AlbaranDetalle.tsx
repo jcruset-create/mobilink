@@ -198,7 +198,7 @@ export default function AlbaranDetalle() {
             <div>
               <b>{r.numero}</b>
               <div className="text-[12px] text-slate-400">
-                {fmtFechaHora(r.recibidoAt)} · {r.recibidoNombre} · {fmtCantidad(r.lineas.reduce((s, l) => s + l.cantidadRecibida, 0))} uds.
+                {fmtFechaHora(r.recibidoAt)} · {r.operarioNombre || r.recibidoNombre} · {fmtCantidad(r.lineas.reduce((s, l) => s + l.cantidadRecibida, 0))} uds.
                 {r.rectificaciones.length > 0 ? ` · ${r.rectificaciones.length} rectificación(es)` : ""}
                 {r.documentoEstado !== "GENERADO" ? ` · documento ${r.documentoEstado.toLowerCase()}` : ""}
               </div>

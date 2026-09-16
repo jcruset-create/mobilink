@@ -146,6 +146,66 @@ export function createRecepcionesRouter(): Router {
     })
   );
 
+  /* ── Operarios del muelle ──────────────────────────────────────────────── */
+
+  // El desplegable de quién recibe. Sale filtrado por el centro del usuario
+  // (o el que pida quien no tiene centro fijo) y nunca lleva el PIN encima.
+  r.get(
+    "/operarios",
+    exigirPermiso("recepciones.view"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const gestiona = (req.recepcionesPermisos ?? []).includes("recepciones.operarios.manage");
+      res.json({
+        operarios: await repo.listarOperarios(ctx.empresaId, {
+          // `centroDe` ya decide: el centro del usuario si lo tiene fijo (y
+          // entonces no se puede saltar), y si no, el que pida por query.
+          centroId: centroDe(req),
+          // Quien los gestiona ve también las bajas, para poder reactivarlas.
+          soloActivos: !gestiona || texto(req.query.soloActivos) === "1",
+        }),
+      });
+    })
+  );
+
+  r.post(
+    "/operarios",
+    exigirPermiso("recepciones.operarios.manage"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const operario = await servicio.crearOperario(ctx, { nombre: texto(b.nombre), centroId: texto(b.centroId) || null, pin: texto(b.pin) });
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.operario.crear", entidad: "rcp_operarios", entidadId: operario.id, ip: req.ip });
+      res.status(201).json({ operario });
+    })
+  );
+
+  r.patch(
+    "/operarios/:id",
+    exigirPermiso("recepciones.operarios.manage"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const operario = await servicio.actualizarOperario(ctx, String(req.params.id), {
+        nombre: b.nombre === undefined ? undefined : texto(b.nombre),
+        centroId: b.centroId === undefined ? undefined : texto(b.centroId) || null,
+        activo: typeof b.activo === "boolean" ? b.activo : undefined,
+        pin: b.pin === undefined ? undefined : texto(b.pin),
+      });
+      // Nunca se apunta el PIN en la auditoría, sólo que se cambió.
+      void registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "recepciones.operario.actualizar",
+        entidad: "rcp_operarios",
+        entidadId: operario.id,
+        detalle: { cambiaPin: b.pin !== undefined, activo: operario.activo },
+        ip: req.ip,
+      });
+      res.json({ operario });
+    })
+  );
+
   /* ── Proveedores y mapeo ───────────────────────────────────────────────── */
 
   r.get(
@@ -324,6 +384,8 @@ export function createRecepcionesRouter(): Router {
         resultado: texto(b.resultado) as "OK" | "CON_INCIDENCIA",
         observaciones: texto(b.observaciones) || null,
         idempotencyKey: clave,
+        operarioId: texto(b.operarioId) || null,
+        pin: texto(b.pin) || null,
         lineas: lineas.map((l) => {
           const inc = (l.incidencia ?? null) as Record<string, unknown> | null;
           return {

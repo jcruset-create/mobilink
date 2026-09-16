@@ -183,7 +183,7 @@ export default function Pedido() {
                 <div>
                   <b>{r.numero}</b>
                   <div className="text-[12px] text-slate-400">
-                    {fmtFechaHora(r.recibidoAt)} · {r.recibidoNombre} · {r.lineas.reduce((s, l) => s + l.cantidadRecibida, 0)} uds.
+                    {fmtFechaHora(r.recibidoAt)} · {r.operarioNombre || r.recibidoNombre} · {r.lineas.reduce((s, l) => s + l.cantidadRecibida, 0)} uds.
                   </div>
                 </div>
                 <ChipResultado resultado={r.resultado} />
