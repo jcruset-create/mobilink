@@ -517,19 +517,20 @@ export async function crearProveedor(
 export async function actualizarProveedor(
   empresaId: string,
   id: string,
-  datos: Partial<{ nombre: string; nif: string | null; remitentesCorreo: string[]; activo: boolean }>,
+  datos: Partial<{ codigo: string; nombre: string; nif: string | null; remitentesCorreo: string[]; activo: boolean }>,
   ejecutor?: Ejecutor
 ): Promise<Proveedor | null> {
   const { rows } = await db(ejecutor).query(
     `UPDATE rcp_proveedores
-        SET nombre = COALESCE($3, nombre),
+        SET codigo = COALESCE($7, codigo),
+            nombre = COALESCE($3, nombre),
             nif = CASE WHEN $4::text IS NULL THEN nif ELSE NULLIF($4, '') END,
             remitentes_correo = COALESCE($5, remitentes_correo),
             activo = COALESCE($6, activo),
             updated_at = now()
       WHERE empresa_id = $1 AND id = $2
       RETURNING *`,
-    [empresaId, id, datos.nombre ?? null, datos.nif === undefined ? null : datos.nif ?? "", datos.remitentesCorreo ?? null, datos.activo ?? null]
+    [empresaId, id, datos.nombre ?? null, datos.nif === undefined ? null : datos.nif ?? "", datos.remitentesCorreo ?? null, datos.activo ?? null, datos.codigo ?? null]
   );
   return rows[0] ? aProveedor(rows[0]) : null;
 }
@@ -1117,8 +1118,13 @@ export async function listarAlbaranes(empresaId: string, f: FiltroAlbaranes, eje
          (SELECT d.id FROM rcp_documentos d
             WHERE d.albaran_id = a.id AND d.tipo = 'ALBARAN_ORIGINAL' LIMIT 1) AS documento_original_id`)}
       WHERE ${cond.join(" AND ")}
+      -- Lo más viejo primero: el muelle es una cola, y lo que lleva más días
+      -- expedido es lo que antes hay que contar. Se ordena por la fecha de
+      -- EXPEDICIÓN, que es la que se ve en pantalla; cuando el albarán no la
+      -- trae, por cuándo entró, para que el orden nunca quede indefinido.
       ORDER BY CASE a.estado WHEN 'EN_TRANSITO' THEN 0 WHEN 'PARCIALMENTE_RECIBIDO' THEN 1 WHEN 'EMITIDO' THEN 2 ELSE 3 END,
-               a.created_at DESC
+               COALESCE(a.fecha_expedicion, a.created_at::date) ASC,
+               a.created_at ASC
       LIMIT $${params.length}`,
     params
   );

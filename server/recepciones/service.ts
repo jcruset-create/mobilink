@@ -71,6 +71,43 @@ export async function crearProveedor(
   }
 }
 
+/**
+ * Editar un proveedor. Mismas reglas de forma que el alta —el código en
+ * mayúsculas y sin adornos, los remitentes en minúsculas— para que no acaben
+ * dos proveedores que sólo se distinguen en cómo se escribieron.
+ *
+ * El código SÍ se puede cambiar: un remitente mal escrito obliga a dar de alta
+ * otro proveedor con un código libre («SOLEDAD1»), y sin poder editarlo esa
+ * cicatriz se queda para siempre.
+ */
+export async function actualizarProveedor(
+  ctx: Contexto,
+  id: string,
+  datos: { codigo?: string; nombre?: string; nif?: string | null; remitentesCorreo?: string[]; activo?: boolean }
+): Promise<repo.Proveedor> {
+  const codigo = datos.codigo === undefined ? undefined : String(datos.codigo).trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+  if (codigo !== undefined && !codigo) throw new ErrorRecepciones("CODIGO_REQUERIDO", "El proveedor necesita un código (p. ej. SOLEDAD).");
+  const nombre = datos.nombre === undefined ? undefined : String(datos.nombre).trim();
+  if (nombre !== undefined && !nombre) throw new ErrorRecepciones("NOMBRE_REQUERIDO", "El proveedor necesita un nombre.");
+
+  try {
+    const proveedor = await repo.actualizarProveedor(ctx.empresaId, id, {
+      codigo,
+      nombre,
+      nif: datos.nif === undefined ? undefined : datos.nif?.trim() || null,
+      remitentesCorreo: datos.remitentesCorreo?.map((s) => String(s).trim().toLowerCase()).filter(Boolean),
+      activo: datos.activo,
+    });
+    if (!proveedor) throw new ErrorRecepciones("PROVEEDOR_NO_ENCONTRADO", "Proveedor no encontrado.", 404);
+    return proveedor;
+  } catch (e) {
+    if ((e as { code?: string }).code === "23505") {
+      throw new ErrorRecepciones("PROVEEDOR_DUPLICADO", `Ya hay otro proveedor con el código ${codigo}.`, 409);
+    }
+    throw e;
+  }
+}
+
 export async function confirmarMapeo(
   ctx: Contexto,
   datos: {

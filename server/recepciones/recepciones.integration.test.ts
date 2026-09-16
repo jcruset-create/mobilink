@@ -249,6 +249,91 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
     expect(r.body.code).toBe("PERMISO_DENEGADO");
   });
 
+  /* ── El orden de la bandeja ──────────────────────────────────────────── */
+
+  it("la bandeja va de lo más viejo a lo más nuevo: el muelle es una cola", async () => {
+    const viejo = await crearPedido(2);
+    const nuevo = await crearPedido(2);
+    // El más viejo se expidió antes, aunque se dé de alta primero el otro.
+    const albaranNuevo = await api(`/pedidos/${nuevo.pedido.id}/albaranes`, gestorA, {
+      method: "POST",
+      body: { numeroProveedor: numeroUnico("20291"), fechaExpedicion: "2026-09-16", lineas: [{ pedidoLineaId: nuevo.lineas[0].id, cantidadExpedida: 2 }] },
+    });
+    const albaranViejo = await api(`/pedidos/${viejo.pedido.id}/albaranes`, gestorA, {
+      method: "POST",
+      body: { numeroProveedor: numeroUnico("20290"), fechaExpedicion: "2026-09-10", lineas: [{ pedidoLineaId: viejo.lineas[0].id, cantidadExpedida: 2 }] },
+    });
+    expect(albaranNuevo.status).toBe(201);
+    expect(albaranViejo.status).toBe(201);
+
+    const ids = (await api("/bandeja", operarioA)).body.albaranes.map((a: any) => a.id);
+    const idViejo = albaranViejo.body.albaranes.at(-1).id;
+    const idNuevo = albaranNuevo.body.albaranes.at(-1).id;
+    expect(ids.indexOf(idViejo)).toBeLessThan(ids.indexOf(idNuevo));
+  });
+
+  /* ── Editar proveedores ──────────────────────────────────────────────── */
+
+  describe("editar un proveedor", () => {
+    it("se le puede cambiar el código, el nombre, el NIF y los remitentes", async () => {
+      const alta = await api("/proveedores", gestorA, {
+        method: "POST",
+        body: { codigo: `TMP${Date.now() % 100000}`, nombre: "NEUMÁTICOS SOLEDAD", remitentesCorreo: ["jordi.cruset@gruposedad.net"] },
+      });
+      expect(alta.status, JSON.stringify(alta.body)).toBe(201);
+      const id = alta.body.proveedor.id;
+      const nuevoCodigo = `SOL${Date.now() % 100000}`;
+
+      const r = await api(`/proveedores/${id}`, gestorA, {
+        method: "PATCH",
+        body: { codigo: nuevoCodigo, nombre: "NEUMÁTICOS SOLEDAD, S.A.", nif: "A03012345", remitentesCorreo: ["noreply@gruposoledad.net", "gruposoledad.net"] },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.proveedor.codigo).toBe(nuevoCodigo);
+      expect(r.body.proveedor.nombre).toBe("NEUMÁTICOS SOLEDAD, S.A.");
+      expect(r.body.proveedor.nif).toBe("A03012345");
+      expect(r.body.proveedor.remitentesCorreo).toEqual(["noreply@gruposoledad.net", "gruposoledad.net"]);
+    });
+
+    it("el código se normaliza igual que al darlo de alta, y no puede chocar con otro", async () => {
+      const codigoA = `UNO${Date.now() % 100000}`;
+      const a = await api("/proveedores", gestorA, { method: "POST", body: { codigo: codigoA, nombre: "Uno" } });
+      const b = await api("/proveedores", gestorA, { method: "POST", body: { codigo: `DOS${Date.now() % 100000}`, nombre: "Dos" } });
+      expect(a.status).toBe(201);
+      expect(b.status).toBe(201);
+
+      // Minúsculas y adornos se limpian, como en el alta.
+      const sufijo = `${Date.now() % 100000}`;
+      const limpio = await api(`/proveedores/${b.body.proveedor.id}`, gestorA, { method: "PATCH", body: { codigo: ` sol edad${sufijo}! ` } });
+      expect(limpio.status, JSON.stringify(limpio.body)).toBe(200);
+      expect(limpio.body.proveedor.codigo).toBe(`SOLEDAD${sufijo}`);
+
+      // Y pisarle el código a otro se rechaza en vez de reventar con un 500.
+      const choque = await api(`/proveedores/${b.body.proveedor.id}`, gestorA, { method: "PATCH", body: { codigo: codigoA } });
+      expect(choque.status).toBe(409);
+      expect(choque.body.code).toBe("PROVEEDOR_DUPLICADO");
+    });
+
+    it("cambiar los remitentes cambia de quién reconoce el buzón cada correo", async () => {
+      const alta = await api("/proveedores", gestorA, {
+        method: "POST",
+        body: { codigo: `REM${Date.now() % 100000}`, nombre: "Con remitente malo", remitentesCorreo: ["NoReply@GRUPOSEDAD.net"] },
+      });
+      // Se guardan en minúsculas: si no, el mismo remitente escrito de dos
+      // formas sería dos remitentes distintos.
+      expect(alta.body.proveedor.remitentesCorreo).toEqual(["noreply@gruposedad.net"]);
+
+      const r = await api(`/proveedores/${alta.body.proveedor.id}`, gestorA, { method: "PATCH", body: { remitentesCorreo: ["  GrupoSoledad.NET  "] } });
+      expect(r.body.proveedor.remitentesCorreo).toEqual(["gruposoledad.net"]);
+    });
+
+    it("el operario del muelle no puede editar proveedores", async () => {
+      const alta = await api("/proveedores", gestorA, { method: "POST", body: { codigo: `NOP${Date.now() % 100000}`, nombre: "Ni tocarlo" } });
+      const r = await api(`/proveedores/${alta.body.proveedor.id}`, operarioA, { method: "PATCH", body: { nombre: "Colado" } });
+      expect(r.status).toBe(403);
+    });
+  });
+
   /* ── El operario que firma ───────────────────────────────────────────── */
 
   describe("quién recibe la mercancía", () => {

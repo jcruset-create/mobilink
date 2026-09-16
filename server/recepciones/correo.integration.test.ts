@@ -91,6 +91,42 @@ Un saludo,
 Grupo Soledad
 `;
 
+/** El correo de PEDIDO real, del 16/09/2026. Sin etiquetas, como el albarán. */
+const ASUNTO_PEDIDO_REAL = "Fwd: Aviso de nuevo Pedido número: B -2026-5693921 con fecha 16/09/2026.";
+const PEDIDO_REAL = `---------- Forwarded message ---------
+From: noreply@gruposoledad.net
+Date: Wed, 16 Sep 2026 14:28:43 +0000
+To: jordi.cruset@gruposoledad.net
+
+ Notificación Pedido Recibido
+
+Estimado COMERCIAL SEA, S.A.,
+acabamos de registrar con éxito un pedido en nuestro sistema.
+
+Tu número de pedido es B -2026-5693921
+Realizado por comercialseatarragona
+
+El pedido será entregado a:
+COMERCIAL SEA, S.A.
+PIRIU CLAR C/COURE 27
+43006 TARRAGONA
+TARRAGONA ESPAÑA
+
+El contenido del pedido es:
+
+Cantidad
+Descripción
+Importe
+2.00 385/65X22.5 SAILUN STR1+ 164K 261.35
+La mercancía será expedida por nuestro centro logísitico  54 - GETAFE
+ALMACEN
+La entrega se realizará a través de TRANSAHER
+
+Un saludo,
+
+Grupo Soledad
+`;
+
 const CFG: ConfigBuzon = { host: "imap.ejemplo.invalid", port: 993, user: "recepciones@ejemplo.invalid", pass: "no", carpeta: "INBOX", minutos: 5, empresaId: EMPRESA };
 
 let base = "";
@@ -488,6 +524,39 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
       const otra = await importarEml((await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) })).source);
       expect(otra.body.resultado).toBe("duplicado");
     });
+  });
+
+  it("el circuito con los DOS correos reales: el pedido entra, y su albarán se le engancha", async () => {
+    const r1 = await importarEml((await mensaje({ asunto: ASUNTO_PEDIDO_REAL, texto: PEDIDO_REAL })).source);
+    expect(r1.status, JSON.stringify(r1.body)).toBe(200);
+    expect(r1.body.resultado).toBe("procesado");
+    expect(r1.body.tipo).toBe("PEDIDO");
+    expect(r1.body.pedidoNumero).toBe("B-2026-5693921");
+
+    const pedidos = await api("/pedidos?q=5693921");
+    expect(pedidos.body.pedidos).toHaveLength(1);
+    const ficha = await api(`/pedidos/${pedidos.body.pedidos[0].id}`);
+    expect(ficha.body.pedido.usuarioPedido).toBe("comercialseatarragona");
+    expect(ficha.body.pedido.almacenOrigen).toBe("54 - GETAFE");
+    expect(ficha.body.pedido.centroNombre).toBe("TARRAGONA");
+    expect(ficha.body.pedido.derivadoDeAlbaran).toBe(false); // vino de su propio correo
+    expect(ficha.body.lineas[0]).toMatchObject({ descripcionProveedor: "385/65X22.5 SAILUN STR1+ 164K", cantidadPedida: 2 });
+
+    // Y ahora el albarán de ESE pedido, con el formato real del otro correo:
+    // lo nombra sin serie («5693921») y tiene que encontrarlo igual.
+    const textoAlbaran = ALBARAN_REAL.replace("tu pedido 5687439 ha sido emitido", "tu pedido 5693921 ha sido emitido").replace(
+      "2.00 245/70X17.5 HANKOOK AH35 136M 248.45",
+      "2.00 385/65X22.5 SAILUN STR1+ 164K 261.35"
+    );
+    const r2 = await importarEml((await mensaje({ asunto: "Fwd: Emisión de Albarán B /2028460001 con fecha 16/09/2026.", texto: textoAlbaran })).source);
+    expect(r2.status, JSON.stringify(r2.body)).toBe(200);
+    expect(r2.body.resultado).toBe("procesado");
+    expect(r2.body.albaranNumero).toBe("B/2028460001");
+
+    const ficha2 = await api(`/pedidos/${pedidos.body.pedidos[0].id}`);
+    expect(ficha2.body.albaranes).toHaveLength(1);
+    expect(ficha2.body.albaranes[0].lineas[0].cantidadExpedida).toBe(2);
+    expect(ficha2.body.pedido.estado).toBe("EXPEDIDO");
   });
 
   it("el mismo correo dos veces es DUPLICADO: un solo pedido, un solo albarán", async () => {

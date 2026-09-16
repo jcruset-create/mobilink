@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { Pencil, Plus } from "lucide-react";
 import * as api from "../services/api";
 import { useRecepciones } from "../contexts/RecepcionesContext";
 import { EmptyRow, ErrorBox, Modal, TableWrap, TextField, btnMini, btnPrimary, btnSecondary, inputCls, tdCls, thCls } from "../components/ui";
@@ -19,6 +19,7 @@ export default function Proveedores() {
   const [mapeos, setMapeos] = useState<MapeoArticulo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [creando, setCreando] = useState(false);
+  const [editando, setEditando] = useState<Proveedor | null>(null);
   const [mapeando, setMapeando] = useState<Proveedor | null>(null);
 
   const cargar = useCallback(async () => {
@@ -87,9 +88,14 @@ export default function Proveedores() {
                   </button>
                 )}
                 {puede("recepciones.proveedores.manage") && (
-                  <button className={`${btnMini} ml-1`} onClick={() => void alternar(p)}>
-                    {p.activo ? "Dar de baja" : "Reactivar"}
-                  </button>
+                  <>
+                    <button className={`${btnMini} ml-1 inline-flex items-center gap-1`} onClick={() => setEditando(p)}>
+                      <Pencil className="h-3.5 w-3.5" /> Editar
+                    </button>
+                    <button className={`${btnMini} ml-1`} onClick={() => void alternar(p)}>
+                      {p.activo ? "Dar de baja" : "Reactivar"}
+                    </button>
+                  </>
                 )}
               </td>
             </tr>
@@ -102,6 +108,16 @@ export default function Proveedores() {
           onClose={() => setCreando(false)}
           onCreado={async () => {
             setCreando(false);
+            await Promise.all([cargar(), refrescar()]);
+          }}
+        />
+      )}
+      {editando && (
+        <EditarProveedor
+          proveedor={editando}
+          onClose={() => setEditando(null)}
+          onGuardado={async () => {
+            setEditando(null);
             await Promise.all([cargar(), refrescar()]);
           }}
         />
@@ -159,6 +175,75 @@ function NuevoProveedor({ onClose, onCreado }: { onClose: () => void; onCreado: 
         <TextField label="Remitentes de correo (para la fase siguiente)" value={remitentes} onChange={setRemitentes} placeholder="pedidos@soledad.es, albaranes@soledad.es" />
       </div>
       <p className="mt-2 text-[11px] text-slate-500">El código va en el nombre de los ficheros: SOLEDAD_2028450461_ORIGINAL.pdf.</p>
+    </Modal>
+  );
+}
+
+/**
+ * Editar un proveedor ya dado de alta. Todos sus campos, el código incluido:
+ * un remitente mal escrito obliga a dar de alta otro proveedor con un código
+ * libre («SOLEDAD1»), y sin poder editarlo esa cicatriz se queda para siempre.
+ *
+ * Los remitentes son lo que decide de quién es cada correo que entra, así que
+ * van con su aviso: cambiarlos cambia qué correos reconoce el buzón.
+ */
+function EditarProveedor({ proveedor, onClose, onGuardado }: { proveedor: Proveedor; onClose: () => void; onGuardado: () => Promise<void> }) {
+  const [codigo, setCodigo] = useState(proveedor.codigo);
+  const [nombre, setNombre] = useState(proveedor.nombre);
+  const [nif, setNif] = useState(proveedor.nif ?? "");
+  const [remitentes, setRemitentes] = useState(proveedor.remitentesCorreo.join(", "));
+  const [error, setError] = useState<string | null>(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const lista = remitentes.split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+
+  async function guardar() {
+    setGuardando(true);
+    try {
+      await api.actualizarProveedor(proveedor.id, {
+        codigo: codigo.trim(),
+        nombre: nombre.trim(),
+        nif: nif.trim(),
+        remitentesCorreo: lista,
+      });
+      await onGuardado();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido guardar el proveedor");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`Editar ${proveedor.codigo}`}
+      onClose={onClose}
+      footer={
+        <div className="flex justify-end gap-2">
+          <button className={btnSecondary} onClick={onClose}>
+            Cancelar
+          </button>
+          <button className={btnPrimary} onClick={() => void guardar()} disabled={guardando || !codigo.trim() || !nombre.trim()}>
+            {guardando ? "Guardando…" : "Guardar"}
+          </button>
+        </div>
+      }
+    >
+      {error && <ErrorBox>{error}</ErrorBox>}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <TextField label="Código" value={codigo} onChange={setCodigo} placeholder="SOLEDAD" />
+        <TextField label="Nombre" value={nombre} onChange={setNombre} placeholder="NEUMÁTICOS SOLEDAD" />
+        <TextField label="NIF" value={nif} onChange={setNif} />
+        <TextField label="Remitentes de correo" value={remitentes} onChange={setRemitentes} placeholder="noreply@gruposoledad.net, gruposoledad.net" />
+      </div>
+      <div className="mt-2 space-y-1 text-[11px] text-slate-500">
+        <p>El código va en el nombre de los ficheros: {codigo.trim() || "SOLEDAD"}_2028450461_ORIGINAL.pdf. Cambiarlo no toca los ya guardados.</p>
+        <p>
+          Los remitentes deciden de quién es cada correo que entra. Vale la dirección entera (<code>noreply@gruposoledad.net</code>) o el dominio suelto
+          (<code>gruposoledad.net</code>), que admite cualquier buzón de esa casa.
+        </p>
+        {lista.length > 0 && <p className="text-slate-400">Quedarán {lista.length}: {lista.join(" · ")}</p>}
+      </div>
     </Modal>
   );
 }

@@ -170,7 +170,7 @@ export const cambiarEstadoIncidencia = (id: string, estado: string, resolucion?:
 export const listarProveedores = () => pedir<{ proveedores: Proveedor[] }>("/proveedores");
 export const crearProveedor = (datos: { codigo: string; nombre: string; nif?: string; remitentesCorreo?: string[] }) =>
   pedir<{ proveedor: Proveedor }>("/proveedores", json(datos));
-export const actualizarProveedor = (id: string, datos: Partial<{ nombre: string; nif: string; remitentesCorreo: string[]; activo: boolean }>) =>
+export const actualizarProveedor = (id: string, datos: Partial<{ codigo: string; nombre: string; nif: string; remitentesCorreo: string[]; activo: boolean }>) =>
   pedir<{ proveedor: Proveedor }>(`/proveedores/${id}`, json(datos, "PATCH"));
 
 export const listarMapeos = (proveedorId?: string) => pedir<{ mapeos: MapeoArticulo[] }>(`/mapeo${query({ proveedorId })}`);
