@@ -8,6 +8,14 @@
  *
  * La `Idempotency-Key` se genera al abrir la pantalla: un doble toque en el
  * botón —o un reintento tras perder la red— devuelve la misma recepción.
+ *
+ * ── Quién firma ─────────────────────────────────────────────────────────────
+ *
+ * El tablet del muelle lo abre un encargado y por él pasan cinco personas en
+ * el turno, así que la sesión NO dice quién ha contado. Al confirmar se elige
+ * al operario y se teclea su PIN: eso es lo que firma el papel. Mientras no
+ * haya operarios dados de alta no se pide nada y firma la sesión, para que el
+ * módulo se pueda usar desde el primer día.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -17,7 +25,7 @@ import * as api from "../services/api";
 import { useRecepciones } from "../contexts/RecepcionesContext";
 import { Aviso, ChipEstadoAlbaran, ErrorBox, Modal, SinMapear, inputCls } from "../components/ui";
 import VisorDocumento from "../components/VisorDocumento";
-import { fmtCantidad, fmtDiferencia, type FichaAlbaran, type TipoIncidencia } from "../types";
+import { fmtCantidad, fmtDiferencia, type FichaAlbaran, type Operario, type TipoIncidencia } from "../types";
 
 type Edicion = { cantidad: number; tipo: TipoIncidencia | ""; observaciones: string };
 
@@ -38,6 +46,9 @@ export default function Recepcion() {
   const [confirmando, setConfirmando] = useState<"OK" | "CON_INCIDENCIA" | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [verPdf, setVerPdf] = useState(false);
+  const [operarios, setOperarios] = useState<Operario[]>([]);
+  const [operarioId, setOperarioId] = useState("");
+  const [pin, setPin] = useState("");
   const [clave] = useState(claveIdempotencia);
 
   const cargar = useCallback(async () => {
@@ -55,6 +66,25 @@ export default function Recepcion() {
     void cargar();
   }, [cargar]);
 
+  // El padrón de quién puede firmar en este centro. Si está vacío, la pantalla
+  // no pide nada: firma la sesión, como hasta ahora.
+  useEffect(() => {
+    let vivo = true;
+    void api
+      .listarOperarios(ficha?.albaran.centroId ?? undefined)
+      .then((r) => {
+        if (!vivo) return;
+        setOperarios(r.operarios);
+        if (r.operarios.length === 1) setOperarioId(r.operarios[0].id);
+      })
+      .catch(() => {
+        /* sin padrón accesible se cierra como siempre; el servidor manda */
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [ficha?.albaran.centroId]);
+
   const lineas = ficha?.lineas ?? [];
   const pendientes = useMemo(() => lineas.filter((l) => l.cantidadPendiente > 0), [lineas]);
 
@@ -71,6 +101,8 @@ export default function Recepcion() {
         {
           resultado,
           observaciones: observaciones || undefined,
+          operarioId: operarioId || undefined,
+          pin: pin || undefined,
           lineas:
             resultado === "CON_INCIDENCIA"
               ? pendientes.map((l) => {
@@ -88,6 +120,7 @@ export default function Recepcion() {
       navigate(`/recepciones/recepciones/${r.recepcion.id}?imprimir=1`, { replace: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido cerrar la recepción");
+      setPin(""); // un PIN que no valió no se queda escrito en pantalla
       setConfirmando(null);
       // Si otro la cerró mientras tanto, la pantalla tiene que enseñar lo nuevo.
       void cargar();
@@ -279,7 +312,39 @@ export default function Recepcion() {
                 ? `Se dan por recibidas las ${fmtCantidad(pendientes.reduce((s, l) => s + l.cantidadPendiente, 0))} unidades pendientes del albarán ${albaran.numeroProveedor}.`
                 : "Se registran las cantidades indicadas y se abre una incidencia por cada diferencia."}
             </p>
-            <p className="mt-1 text-[12px] text-slate-500">Quedará a nombre de {usuario?.nombre ?? "tu usuario"} con la fecha y hora del servidor, y se generará el albarán recepcionado para imprimir.</p>
+            {/* Quién recibe. La sesión no vale: por el tablet del muelle pasa
+                medio turno, y el papel tiene que decir quién contó. */}
+            {operarios.length > 0 ? (
+              <div className="mt-4 space-y-2">
+                <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-400">Quién recibe la mercancía</label>
+                <select className={`${inputCls} h-12 text-base`} value={operarioId} onChange={(e) => setOperarioId(e.target.value)} disabled={enviando}>
+                  <option value="">Elige el operario…</option>
+                  {operarios.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.nombre}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  placeholder="Su PIN"
+                  className={`${inputCls} h-12 text-center text-2xl font-black tracking-[0.5em]`}
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                  disabled={enviando || !operarioId}
+                />
+                <p className="text-[11px] text-slate-500">
+                  Firma {operarios.find((o) => o.id === operarioId)?.nombre ?? "el operario que elijas"}; queda constancia de que se registró desde la sesión de{" "}
+                  {usuario?.nombre ?? "tu usuario"}.
+                </p>
+              </div>
+            ) : (
+              <p className="mt-1 text-[12px] text-slate-500">
+                Quedará a nombre de {usuario?.nombre ?? "tu usuario"} con la fecha y hora del servidor, y se generará el albarán recepcionado para imprimir.
+              </p>
+            )}
             <div className="mt-4 flex gap-2">
               <button type="button" className="h-12 flex-1 rounded-xl bg-slate-700 font-bold" onClick={() => setConfirmando(null)} disabled={enviando}>
                 Cancelar
@@ -288,7 +353,7 @@ export default function Recepcion() {
                 type="button"
                 className={`h-12 flex-1 rounded-xl font-black text-white ${confirmando === "OK" ? "bg-emerald-600" : "bg-amber-600"} disabled:opacity-50`}
                 onClick={() => void cerrar(confirmando)}
-                disabled={enviando}
+                disabled={enviando || (operarios.length > 0 && (!operarioId || pin.length < 4))}
               >
                 {enviando ? "Cerrando…" : "Confirmar"}
               </button>

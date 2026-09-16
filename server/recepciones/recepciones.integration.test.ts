@@ -214,6 +214,7 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
       "rcp_pedidos",
       "rcp_proveedor_articulos",
       "rcp_proveedores",
+      "rcp_operarios",
       "rcp_contadores",
     ]) {
       if (t === "rcp_rectificacion_lineas") {
@@ -246,6 +247,111 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
     const r = await api("/pedidos", operarioA, { method: "POST", body: { proveedorId, numeroProveedor: "1", lineas: [] } });
     expect(r.status).toBe(403);
     expect(r.body.code).toBe("PERMISO_DENEGADO");
+  });
+
+  /* ── El operario que firma ───────────────────────────────────────────── */
+
+  describe("quién recibe la mercancía", () => {
+    const alta = (nombre: string, pin: string, centroId: string | null = null) =>
+      api("/operarios", gestorA, { method: "POST", body: { nombre, pin, centroId } });
+
+    it("sin padrón de operarios firma la sesión: el módulo se puede usar desde el primer día", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      const r = await api(`/albaranes/${albaran.id}/recepcion`, operarioA, { method: "POST", body: { resultado: "OK" } });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+      expect(r.body.recepcion.operarioNombre).toBeNull();
+      expect(r.body.recepcion.recibidoNombre).toBe("Juan Pérez");
+    });
+
+    it("en cuanto hay un operario, cerrar sin elegirlo se rechaza y la respuesta trae el desplegable", async () => {
+      const nombre = `Paco Muelle ${Date.now()}`;
+      expect((await alta(nombre, "4321")).status).toBe(201);
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+
+      const r = await api(`/albaranes/${albaran.id}/recepcion`, operarioA, { method: "POST", body: { resultado: "OK" } });
+      expect(r.status, JSON.stringify(r.body)).toBe(400);
+      expect(r.body.code).toBe("OPERARIO_REQUERIDO");
+      expect(r.body.detalle.operarios.map((o: any) => o.nombre)).toContain(nombre);
+    });
+
+    it("con el PIN bueno firma el operario, no el usuario de la sesión, y así sale en el documento", async () => {
+      const nombre = `Paco Muelle ${Date.now()}`;
+      const operario = (await alta(nombre, "4321")).body.operario;
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+
+      const r = await api(`/albaranes/${albaran.id}/recepcion`, operarioA, {
+        method: "POST",
+        body: { resultado: "OK", operarioId: operario.id, pin: "4321" },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+      expect(r.body.recepcion.operarioNombre).toBe(nombre);
+      // La sesión NO se pierde: las dos preguntas tienen respuesta.
+      expect(r.body.recepcion.recibidoNombre).toBe("Juan Pérez");
+      expect(r.body.recepcion.recibidoPor).toBe(OPERARIO_A);
+
+      const ficha = await api(`/recepciones/${r.body.recepcion.id}`, operarioA);
+      const evento = ficha.body.eventos?.find((e: any) => e.tipo === "RECEPCION_OK");
+      if (evento) expect(evento.descripcion).toContain(nombre);
+    });
+
+    it("el PIN nunca sale por la API, ni al crearlo ni al listar", async () => {
+      const nombre = `Paco Muelle ${Date.now()}`;
+      const creado = await alta(nombre, "4321");
+      const texto = JSON.stringify(creado.body) + JSON.stringify((await api("/operarios", operarioA)).body);
+      expect(texto).not.toContain("4321");
+      expect(texto).not.toContain("pinHash");
+      expect(texto).not.toContain("pin_hash");
+    });
+
+    it("un PIN equivocado no cierra nada, y a los cinco fallos el operario queda bloqueado", async () => {
+      const nombre = `Paco Muelle ${Date.now()}`;
+      const operario = (await alta(nombre, "4321")).body.operario;
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      const intento = (pin: string) =>
+        api(`/albaranes/${albaran.id}/recepcion`, operarioA, { method: "POST", body: { resultado: "OK", operarioId: operario.id, pin } });
+
+      for (let i = 0; i < 4; i += 1) {
+        const malo = await intento("0000");
+        expect(malo.status, `intento ${i + 1}`).toBe(401);
+        expect(malo.body.code).toBe("PIN_INCORRECTO");
+      }
+      // El quinto fallo bloquea, y a partir de ahí ni con el PIN bueno.
+      expect((await intento("0000")).status).toBe(401);
+      const bloqueado = await intento("4321");
+      expect(bloqueado.status).toBe(429);
+      expect(bloqueado.body.code).toBe("OPERARIO_BLOQUEADO");
+
+      // Y el albarán sigue sin recepcionar: nada se ha colado.
+      expect((await api(`/albaranes/${albaran.id}`, operarioA)).body.albaran.estado).toBe("EN_TRANSITO");
+
+      // Cambiarle el PIN lo desatasca: es la salida para el encargado.
+      expect((await api(`/operarios/${operario.id}`, gestorA, { method: "PATCH", body: { pin: "9876" } })).status).toBe(200);
+      expect((await intento("9876")).status).toBe(201);
+    });
+
+    it("un operario dado de baja no firma, y uno de otro centro tampoco", async () => {
+      const nombre = `Paco Muelle ${Date.now()}`;
+      const operario = (await alta(nombre, "4321")).body.operario;
+      expect((await api(`/operarios/${operario.id}`, gestorA, { method: "PATCH", body: { activo: false } })).status).toBe(200);
+
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      const r = await api(`/albaranes/${albaran.id}/recepcion`, operarioA, {
+        method: "POST",
+        body: { resultado: "OK", operarioId: operario.id, pin: "4321" },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(404);
+      expect(r.body.code).toBe("OPERARIO_NO_ENCONTRADO");
+    });
+
+    it("el operario del muelle no puede dar de alta operarios: eso es del gestor", async () => {
+      expect((await api("/operarios", operarioA, { method: "POST", body: { nombre: "Colado", pin: "1111" } })).status).toBe(403);
+      expect((await alta(`Legítimo ${Date.now()}`, "123")).status).toBe(400); // PIN corto
+    });
   });
 
   /* ── Caso 1 ──────────────────────────────────────────────────────────── */

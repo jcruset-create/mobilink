@@ -16,6 +16,7 @@ import AlbaranDetalle from "./pages/AlbaranDetalle";
 import Recepcion from "./pages/Recepcion";
 import RecepcionDetalle from "./pages/RecepcionDetalle";
 import Incidencias from "./pages/Incidencias";
+import Operarios from "./pages/Operarios";
 import Proveedores from "./pages/Proveedores";
 import Correo from "./pages/Correo";
 
@@ -49,6 +50,7 @@ function Contenido() {
         <Route path="recepciones/:id" element={<RecepcionDetalle />} />
         <Route path="incidencias" element={<Incidencias />} />
         <Route path="proveedores" element={<Proveedores />} />
+        <Route path="operarios" element={<Operarios />} />
         <Route path="correo" element={<Correo />} />
         <Route path="*" element={<Navigate to="/recepciones/bandeja" replace />} />
       </Route>

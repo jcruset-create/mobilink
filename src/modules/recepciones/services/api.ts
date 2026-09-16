@@ -23,6 +23,7 @@ import type {
   FilaBandeja,
   Incidencia,
   MapeoArticulo,
+  Operario,
   Pedido,
   Proveedor,
   Recepcion,
@@ -110,12 +111,24 @@ export const crearAlbaran = (
 
 export const fichaAlbaran = (id: string) => pedir<FichaAlbaran>(`/albaranes/${id}`);
 
+export const listarOperarios = (centroId?: string, soloActivos?: boolean) =>
+  pedir<{ operarios: Operario[] }>(`/operarios${query({ centroId, soloActivos: soloActivos ? "1" : undefined })}`);
+
+export const crearOperario = (datos: { nombre: string; pin: string; centroId?: string | null }) =>
+  pedir<{ operario: Operario }>("/operarios", json(datos));
+
+export const actualizarOperario = (id: string, datos: { nombre?: string; pin?: string; centroId?: string | null; activo?: boolean }) =>
+  pedir<{ operario: Operario }>(`/operarios/${id}`, { ...json(datos), method: "PATCH" });
+
 export const cerrarRecepcion = (
   albaranId: string,
   datos: {
     resultado: "OK" | "CON_INCIDENCIA";
     observaciones?: string;
     lineas?: { albaranLineaId: string; cantidadRecibida: number; incidencia?: { tipo: TipoIncidencia; observaciones?: string } | null }[];
+    /** Quién recibe y su PIN, cuando el centro tiene operarios dados de alta. */
+    operarioId?: string | null;
+    pin?: string | null;
   },
   idempotencyKey: string
 ) =>

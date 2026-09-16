@@ -14,6 +14,17 @@ export type TipoIncidencia = "FALTA_MERCANCIA" | "SOBRA_MERCANCIA" | "PRODUCTO_I
 export type ResultadoRecepcion = "OK" | "CON_INCIDENCIA";
 
 export type Proveedor = { id: string; codigo: string; nombre: string; nif: string | null; remitentesCorreo: string[]; activo: boolean };
+
+/** Quien cuenta la mercancía en el muelle. El PIN nunca viaja. */
+export type Operario = {
+  id: string;
+  centroId: string | null;
+  nombre: string;
+  activo: boolean;
+  bloqueadoHasta: string | null;
+  creadoNombre: string | null;
+  createdAt: string;
+};
 export type Centro = { id: string; nombre: string; activo: boolean };
 
 export type Contadores = { pendientes: number; recibidos: number; incidenciasAbiertas: number; pedidosPendientes: number; correosEnRevision?: number };
@@ -145,7 +156,11 @@ export type Recepcion = {
   centroNombre: string;
   resultado: ResultadoRecepcion;
   recibidoPor: string;
+  /** La sesión desde la que se cerró. */
   recibidoNombre: string;
+  /** Quien contó la mercancía y puso su PIN. Es lo que firma el documento. */
+  operarioId: string | null;
+  operarioNombre: string | null;
   recibidoAt: string;
   observaciones: string | null;
   documentoId: string | null;

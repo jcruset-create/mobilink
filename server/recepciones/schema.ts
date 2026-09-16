@@ -157,6 +157,42 @@ export async function initRecepciones(): Promise<void> {
     CREATE INDEX IF NOT EXISTS rcp_pedido_lineas_pedido_idx ON rcp_pedido_lineas(pedido_id);
   `);
 
+  // ── Operarios del muelle ──────────────────────────────────────────────────
+  //
+  // Quien cuenta la mercancía casi nunca es quien tiene la sesión de Mobilink
+  // abierta: el tablet del muelle lo abre un encargado por la mañana y por él
+  // pasan cinco personas. Este padrón es el de esas personas, y su PIN es lo
+  // que firma la recepción.
+  //
+  // Tabla propia porque no hay ninguna reutilizable: `techs` es el taller
+  // (sin PIN ni empresa) y `connect_lite_users` son los operarios de los
+  // talleres de Connect (con `workshopId`, otro censo). Lo que SÍ se reutiliza
+  // es el hasheo, `server/core/credentials.ts`, que ya existía justo para
+  // esto: PBKDF2-SHA256 con salt por credencial. El PIN nunca se guarda.
+  //
+  // `centro_id` NULL significa «vale en todos los centros»; con centro, el
+  // operario sólo aparece y sólo firma en el suyo.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS rcp_operarios (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      centro_id UUID,
+      nombre TEXT NOT NULL,
+      pin_hash TEXT NOT NULL,
+      pin_salt TEXT NOT NULL,
+      activo BOOLEAN NOT NULL DEFAULT true,
+      -- Freno a la fuerza bruta: cuatro dígitos son 10.000 combinaciones.
+      intentos_fallidos INTEGER NOT NULL DEFAULT 0,
+      bloqueado_hasta TIMESTAMPTZ,
+      creado_por UUID,
+      creado_nombre TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (empresa_id, nombre)
+    );
+    CREATE INDEX IF NOT EXISTS rcp_operarios_centro_idx ON rcp_operarios(empresa_id, centro_id) WHERE activo;
+  `);
+
   // ── Albaranes (expediciones del proveedor) ────────────────────────────────
   //
   // Un pedido, N albaranes. Que el proveedor emita un albarán NO significa que
@@ -542,6 +578,13 @@ export async function initRecepciones(): Promise<void> {
   // Un pedido que no mandó el proveedor: lo dedujimos de su albarán. Mientras
   // sea true, la cantidad pedida es «lo expedido hasta ahora», no lo que se pidió.
   await pool.query(`ALTER TABLE rcp_pedidos ADD COLUMN IF NOT EXISTS derivado_de_albaran BOOLEAN NOT NULL DEFAULT FALSE;`);
+
+  // Quién contó la mercancía, confirmado con su PIN. Es lo que firma el
+  // documento. `recibido_por` sigue siendo la SESIÓN desde la que se cerró:
+  // las dos cosas se guardan porque las dos hacen falta para responder «¿quién
+  // dijo que esto llegó?» y «¿desde qué usuario se registró?».
+  await pool.query(`ALTER TABLE rcp_recepciones ADD COLUMN IF NOT EXISTS operario_id UUID;`);
+  await pool.query(`ALTER TABLE rcp_recepciones ADD COLUMN IF NOT EXISTS operario_nombre TEXT;`);
 
   await registrarModuloRecepciones();
 }

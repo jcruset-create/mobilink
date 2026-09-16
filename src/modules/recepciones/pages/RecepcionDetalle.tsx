@@ -106,7 +106,10 @@ export default function RecepcionDetalle() {
           <Dato rotulo="Pedido" valor={albaran?.pedidoNumero} />
           <Dato rotulo="Albarán" valor={albaran?.numeroProveedor} />
           <Dato rotulo="Transportista" valor={albaran?.transportista} />
-          <Dato rotulo="Recibido por" valor={<b>{recepcion.recibidoNombre}</b>} />
+          <Dato rotulo="Recibido por" valor={<b>{recepcion.operarioNombre || recepcion.recibidoNombre}</b>} />
+          {/* Quién contó y desde qué sesión se registró son dos cosas: si no
+              coinciden, las dos se enseñan. */}
+          {recepcion.operarioNombre && <Dato rotulo="Registrado desde" valor={recepcion.recibidoNombre} />}
           <Dato rotulo="Fecha y hora" valor={fh} />
           <Dato rotulo="Centro" valor={recepcion.centroNombre} />
           <Dato rotulo="Resultado" valor={<ChipResultado resultado={recepcion.resultado} />} />

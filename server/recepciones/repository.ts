@@ -158,8 +158,12 @@ export type Recepcion = {
   centroId: string | null;
   centroNombre: string;
   resultado: ResultadoRecepcion;
+  /** La SESIÓN desde la que se cerró. */
   recibidoPor: string;
   recibidoNombre: string;
+  /** Quien contó la mercancía, confirmado con su PIN. Es lo que firma el papel. */
+  operarioId: string | null;
+  operarioNombre: string | null;
   recibidoAt: string;
   observaciones: string | null;
   documentoId: string | null;
@@ -370,6 +374,8 @@ const aRecepcion = (r: any): Recepcion => ({
   resultado: r.resultado,
   recibidoPor: r.recibido_por,
   recibidoNombre: r.recibido_nombre,
+  operarioId: r.operario_id ?? null,
+  operarioNombre: r.operario_nombre ?? null,
   recibidoAt: iso(r.recibido_at)!,
   observaciones: r.observaciones ?? null,
   documentoId: r.documento_id ?? null,
@@ -632,6 +638,108 @@ export async function aplicarMapeoALineas(
         AND l.producto_id IS NULL
         AND upper(regexp_replace(l.descripcion_proveedor, '\\s+', ' ', 'g')) = upper($5)`,
     [empresaId, proveedorId, mapeo.productoId, mapeo.productoTexto, mapeo.descripcionProveedor.trim()]
+  );
+}
+
+/* ── Operarios del muelle ────────────────────────────────────────────────── */
+
+/** Lo que se puede enseñar de un operario: nunca el PIN ni su hash. */
+export type Operario = {
+  id: string;
+  centroId: string | null;
+  nombre: string;
+  activo: boolean;
+  bloqueadoHasta: string | null;
+  creadoNombre: string | null;
+  createdAt: string;
+};
+
+/** Con el secreto dentro: sólo para verificar, nunca para devolver por la API. */
+export type OperarioConPin = Operario & { pinHash: string; pinSalt: string; intentosFallidos: number };
+
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+const aOperario = (r: any): Operario => ({
+  id: r.id,
+  centroId: r.centro_id ?? null,
+  nombre: r.nombre,
+  activo: r.activo === true,
+  bloqueadoHasta: iso(r.bloqueado_hasta),
+  creadoNombre: r.creado_nombre ?? null,
+  createdAt: iso(r.created_at)!,
+});
+
+/**
+ * Los operarios de la empresa. Con `centroId` salen los de ese centro más los
+ * que valen para todos; sin él, todos, que es lo que ve quien los gestiona.
+ */
+export async function listarOperarios(
+  empresaId: string,
+  filtro: { centroId?: string | null; soloActivos?: boolean } = {},
+  ejecutor?: Ejecutor
+): Promise<Operario[]> {
+  const params: unknown[] = [empresaId];
+  const cond = ["empresa_id = $1"];
+  if (filtro.soloActivos) cond.push("activo");
+  if (filtro.centroId) {
+    params.push(filtro.centroId);
+    cond.push(`(centro_id IS NULL OR centro_id = $${params.length}::uuid)`);
+  }
+  const { rows } = await db(ejecutor).query(`SELECT * FROM rcp_operarios WHERE ${cond.join(" AND ")} ORDER BY nombre`, params);
+  return rows.map(aOperario);
+}
+
+export async function operarioPorId(empresaId: string, id: string, ejecutor?: Ejecutor): Promise<OperarioConPin | null> {
+  const { rows } = await db(ejecutor).query(`SELECT * FROM rcp_operarios WHERE empresa_id = $1 AND id = $2`, [empresaId, id]);
+  if (!rows[0]) return null;
+  return { ...aOperario(rows[0]), pinHash: rows[0].pin_hash, pinSalt: rows[0].pin_salt, intentosFallidos: Number(rows[0].intentos_fallidos ?? 0) };
+}
+
+export async function crearOperario(
+  empresaId: string,
+  datos: { nombre: string; centroId: string | null; pinHash: string; pinSalt: string; creadoPor: string | null; creadoNombre: string | null },
+  ejecutor?: Ejecutor
+): Promise<Operario> {
+  const { rows } = await db(ejecutor).query(
+    `INSERT INTO rcp_operarios (empresa_id, nombre, centro_id, pin_hash, pin_salt, creado_por, creado_nombre)
+     VALUES ($1,$2,$3::uuid,$4,$5,$6,$7) RETURNING *`,
+    [empresaId, datos.nombre, datos.centroId, datos.pinHash, datos.pinSalt, datos.creadoPor, datos.creadoNombre]
+  );
+  return aOperario(rows[0]);
+}
+
+export async function actualizarOperario(
+  empresaId: string,
+  id: string,
+  datos: { nombre?: string; centroId?: string | null; activo?: boolean; pinHash?: string; pinSalt?: string },
+  ejecutor?: Ejecutor
+): Promise<Operario | null> {
+  const { rows } = await db(ejecutor).query(
+    `UPDATE rcp_operarios SET
+       nombre    = COALESCE($3, nombre),
+       centro_id = CASE WHEN $4::boolean THEN $5::uuid ELSE centro_id END,
+       activo    = COALESCE($6::boolean, activo),
+       pin_hash  = COALESCE($7, pin_hash),
+       pin_salt  = COALESCE($8, pin_salt),
+       -- Un PIN nuevo levanta el bloqueo: es la forma de desatascar a alguien.
+       intentos_fallidos = CASE WHEN $7 IS NULL THEN intentos_fallidos ELSE 0 END,
+       bloqueado_hasta   = CASE WHEN $7 IS NULL THEN bloqueado_hasta ELSE NULL END,
+       updated_at = now()
+     WHERE empresa_id = $1 AND id = $2 RETURNING *`,
+    [empresaId, id, datos.nombre ?? null, datos.centroId !== undefined, datos.centroId ?? null, datos.activo ?? null, datos.pinHash ?? null, datos.pinSalt ?? null]
+  );
+  return rows[0] ? aOperario(rows[0]) : null;
+}
+
+/** Deja constancia de cómo fue el intento de PIN. Fuera de la transacción del cierre. */
+export async function anotarIntentoPin(
+  empresaId: string,
+  id: string,
+  estado: { intentos: number; bloqueadoHasta: Date | null }
+): Promise<void> {
+  await pool.query(
+    `UPDATE rcp_operarios SET intentos_fallidos = $3, bloqueado_hasta = $4, updated_at = now()
+      WHERE empresa_id = $1 AND id = $2`,
+    [empresaId, id, estado.intentos, estado.bloqueadoHasta]
   );
 }
 
@@ -1246,6 +1354,8 @@ export async function crearRecepcion(
     resultado: ResultadoRecepcion;
     recibidoPor: string;
     recibidoNombre: string;
+    operarioId: string | null;
+    operarioNombre: string | null;
     observaciones: string | null;
     idempotencyKey: string | null;
   },
@@ -1254,8 +1364,8 @@ export async function crearRecepcion(
   const { rows } = await cliente.query(
     `INSERT INTO rcp_recepciones
        (empresa_id, numero, albaran_id, pedido_id, proveedor_id, centro_id, centro_nombre, resultado,
-        recibido_por, recibido_nombre, observaciones, idempotency_key)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        recibido_por, recibido_nombre, observaciones, idempotency_key, operario_id, operario_nombre)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::uuid,$14)
      RETURNING *`,
     [
       empresaId,
@@ -1270,6 +1380,8 @@ export async function crearRecepcion(
       datos.recibidoNombre,
       datos.observaciones,
       datos.idempotencyKey,
+      datos.operarioId,
+      datos.operarioNombre,
     ]
   );
   return aRecepcion(rows[0]);

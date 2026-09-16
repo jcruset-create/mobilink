@@ -43,7 +43,10 @@ export type DatosSello = {
   albaranNumero: string;
   transportista: string | null;
   centroNombre: string;
+  /** Quien contó la mercancía: el operario que puso su PIN, si lo hubo. */
   recibidoNombre: string;
+  /** La sesión desde la que se cerró, cuando no es la misma persona. */
+  registradoNombre: string | null;
   recibidoAt: Date;
   resultado: "OK" | "CON_INCIDENCIA";
   numeroRecepcion: string;
@@ -124,6 +127,9 @@ export function dibujarSello(d: DatosSello): Promise<Buffer> {
   fila("Albarán", d.albaranNumero, true);
   if (d.transportista) fila("Transportista", d.transportista);
   fila("Recibido por", d.recibidoNombre, true);
+  // Quién lo contó y desde qué sesión se registró son dos cosas distintas, y
+  // el papel tiene que poder responder a las dos.
+  if (d.registradoNombre && d.registradoNombre !== d.recibidoNombre) fila("Registrado desde", d.registradoNombre);
   fila("Fecha", fecha);
   fila("Hora", hora);
 
@@ -332,7 +338,9 @@ export async function generarDocumentoRecepcion(
     albaranNumero: albaran.numeroProveedor,
     transportista: albaran.transportista,
     centroNombre: recepcion.centroNombre,
-    recibidoNombre: recepcion.recibidoNombre,
+    // Firma el operario que puso su PIN; sin padrón todavía, la sesión.
+    recibidoNombre: recepcion.operarioNombre || recepcion.recibidoNombre,
+    registradoNombre: recepcion.operarioNombre ? recepcion.recibidoNombre : null,
     recibidoAt: new Date(recepcion.recibidoAt),
     resultado: recepcion.resultado,
     numeroRecepcion: recepcion.numero,
@@ -367,7 +375,7 @@ export async function generarDocumentoRecepcion(
   });
 
   const { fecha, hora } = fechaHora(new Date(recepcion.recibidoAt));
-  const marca = `RECEPCIONADO ${recepcion.numero} · ${fecha} ${hora} · ${recepcion.recibidoNombre} · ${recepcion.resultado === "OK" ? "OK" : "CON INCIDENCIA"}`;
+  const marca = `RECEPCIONADO ${recepcion.numero} · ${fecha} ${hora} · ${recepcion.operarioNombre || recepcion.recibidoNombre} · ${recepcion.resultado === "OK" ? "OK" : "CON INCIDENCIA"}`;
   const { pdf, originalIncrustado } = await montarRecepcionado(contenidoOriginal, sello, marca);
   if (contenidoOriginal && !originalIncrustado) {
     // Se guarda igual: el sello es el justificante; el aviso queda en el log.

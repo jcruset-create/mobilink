@@ -23,6 +23,7 @@
  */
 
 import { registrarAuditoriaEnTransaccion } from "../core/auditoria.ts";
+import { hashSecret, newSalt, verifySecret } from "../core/credentials.ts";
 import { descripcionNormalizada, leerDescripcion } from "./domain/articulos.ts";
 import { cantidad, diferencia, pendienteDeRecibir, redondear } from "./domain/cantidades.ts";
 import {
@@ -36,6 +37,7 @@ import {
   type TipoIncidencia,
 } from "./domain/estados.ts";
 import { normalizarNumero } from "./domain/numero.ts";
+import { estaBloqueado, minutosRestantes, pinValido, trasFallo, PIN_MAX, PIN_MIN } from "./domain/pin.ts";
 import { ErrorRecepciones } from "./errors.ts";
 import * as repo from "./repository.ts";
 import { generarDocumentoRecepcion, limpio } from "./documentos/generar.ts";
@@ -104,6 +106,95 @@ export async function confirmarMapeo(
     await repo.aplicarMapeoALineas(ctx.empresaId, proveedor.id, mapeo, c);
     return mapeo;
   });
+}
+
+/* ── Operarios del muelle ────────────────────────────────────────────────── */
+
+/**
+ * Quién cuenta la mercancía, y cómo se prueba que es esa persona.
+ *
+ * El tablet del muelle lo abre un encargado por la mañana y por él pasan cinco
+ * personas en el turno. Si la recepción la firmara la sesión, todas las
+ * recepciones del día llevarían el mismo nombre y el papel no valdría para
+ * responder a «¿quién contó esto?», que es justo para lo que existe.
+ *
+ * El PIN nunca se guarda: se hashea con `core/credentials.ts`, el mismo
+ * PBKDF2 que usan los operarios de Connect Lite.
+ */
+export async function crearOperario(ctx: Contexto, datos: { nombre: string; centroId?: string | null; pin: string }): Promise<repo.Operario> {
+  const nombre = String(datos.nombre ?? "").trim();
+  if (!nombre) throw new ErrorRecepciones("NOMBRE_REQUERIDO", "El operario necesita un nombre.");
+  const pin = String(datos.pin ?? "").trim();
+  if (!pinValido(pin)) throw new ErrorRecepciones("PIN_INVALIDO", `El PIN son entre ${PIN_MIN} y ${PIN_MAX} dígitos.`);
+  const salt = newSalt();
+  try {
+    return await repo.crearOperario(ctx.empresaId, {
+      nombre,
+      centroId: datos.centroId?.trim() || null,
+      pinHash: hashSecret(pin, salt),
+      pinSalt: salt,
+      creadoPor: ctx.userId,
+      creadoNombre: ctx.userNombre,
+    });
+  } catch (e) {
+    if ((e as { code?: string }).code === "23505") {
+      throw new ErrorRecepciones("OPERARIO_DUPLICADO", `Ya hay un operario que se llama ${nombre}.`, 409);
+    }
+    throw e;
+  }
+}
+
+export async function actualizarOperario(
+  ctx: Contexto,
+  id: string,
+  datos: { nombre?: string; centroId?: string | null; activo?: boolean; pin?: string }
+): Promise<repo.Operario> {
+  let pinHash: string | undefined;
+  let pinSalt: string | undefined;
+  if (datos.pin !== undefined) {
+    const pin = String(datos.pin).trim();
+    if (!pinValido(pin)) throw new ErrorRecepciones("PIN_INVALIDO", `El PIN son entre ${PIN_MIN} y ${PIN_MAX} dígitos.`);
+    pinSalt = newSalt();
+    pinHash = hashSecret(pin, pinSalt);
+  }
+  const operario = await repo.actualizarOperario(ctx.empresaId, id, {
+    nombre: datos.nombre?.trim() || undefined,
+    centroId: datos.centroId === undefined ? undefined : datos.centroId?.trim() || null,
+    activo: datos.activo,
+    pinHash,
+    pinSalt,
+  });
+  if (!operario) throw new ErrorRecepciones("OPERARIO_NO_ENCONTRADO", "Operario no encontrado.", 404);
+  return operario;
+}
+
+/**
+ * Comprueba el PIN y devuelve quién firma. FUERA de la transacción del cierre
+ * a propósito: si contara los fallos dentro, el rollback del error los
+ * borraría y el freno a la fuerza bruta no frenaría nada.
+ */
+export async function verificarOperario(ctx: Contexto, operarioId: string, pin: string, centroId: string | null): Promise<repo.Operario> {
+  const operario = await repo.operarioPorId(ctx.empresaId, operarioId);
+  if (!operario || !operario.activo) throw new ErrorRecepciones("OPERARIO_NO_ENCONTRADO", "Ese operario no existe o está dado de baja.", 404);
+  if (operario.centroId && centroId && operario.centroId !== centroId) {
+    throw new ErrorRecepciones("OPERARIO_DE_OTRO_CENTRO", `${operario.nombre} no está asignado a este centro.`, 409);
+  }
+  const bloqueadoHasta = operario.bloqueadoHasta ? new Date(operario.bloqueadoHasta) : null;
+  if (bloqueadoHasta && estaBloqueado(bloqueadoHasta)) {
+    throw new ErrorRecepciones(
+      "OPERARIO_BLOQUEADO",
+      `Demasiados PIN fallidos. ${operario.nombre} puede volver a intentarlo en ${minutosRestantes(bloqueadoHasta)} minuto(s).`,
+      429
+    );
+  }
+  if (!verifySecret(String(pin ?? "").trim(), operario.pinHash, operario.pinSalt)) {
+    await repo.anotarIntentoPin(ctx.empresaId, operario.id, trasFallo(operario.intentosFallidos));
+    throw new ErrorRecepciones("PIN_INCORRECTO", "PIN incorrecto.", 401);
+  }
+  if (operario.intentosFallidos > 0 || bloqueadoHasta) {
+    await repo.anotarIntentoPin(ctx.empresaId, operario.id, { intentos: 0, bloqueadoHasta: null });
+  }
+  return operario;
 }
 
 /* ── Pedidos ─────────────────────────────────────────────────────────────── */
@@ -630,6 +721,9 @@ export type CierreEntrante = {
   lineas?: LineaRecibida[];
   observaciones?: string | null;
   idempotencyKey?: string | null;
+  /** Quién cuenta, y su PIN. Obligatorios si el centro tiene operarios dados de alta. */
+  operarioId?: string | null;
+  pin?: string | null;
 };
 
 export type ResultadoCierre = {
@@ -641,12 +735,42 @@ export type ResultadoCierre = {
   repetida: boolean;
 };
 
+/**
+ * Resuelve quién firma esta recepción, o explica por qué no se puede cerrar.
+ *
+ * La regla no tiene interruptor: si el centro del albarán tiene operarios
+ * dados de alta, uno de ellos tiene que confirmarse con su PIN. Un módulo
+ * recién estrenado no tiene ninguno, y entonces firma la sesión: así se puede
+ * usar desde el primer día y el día que se dé de alta al primer operario la
+ * regla entra sola, sin tocar configuración.
+ */
+async function quienFirma(ctx: Contexto, albaranId: string, datos: CierreEntrante): Promise<repo.Operario | null> {
+  const albaran = await repo.albaranPorId(ctx.empresaId, albaranId);
+  const centroId = albaran ? (await repo.pedidoPorId(ctx.empresaId, albaran.pedidoId))?.centroId ?? null : null;
+  const disponibles = await repo.listarOperarios(ctx.empresaId, { centroId, soloActivos: true });
+
+  const operarioId = datos.operarioId?.trim() || null;
+  if (!operarioId) {
+    if (disponibles.length === 0) return null;
+    throw new ErrorRecepciones("OPERARIO_REQUERIDO", "Elige quién recibe la mercancía y confirma con su PIN.", 400, {
+      operarios: disponibles.map((o) => ({ id: o.id, nombre: o.nombre })),
+    });
+  }
+  return verificarOperario(ctx, operarioId, String(datos.pin ?? ""), centroId);
+}
+
 export async function cerrarRecepcion(ctx: Contexto, albaranId: string, datos: CierreEntrante): Promise<ResultadoCierre> {
   const userId = usuarioObligatorio(ctx);
   if (datos.resultado !== "OK" && datos.resultado !== "CON_INCIDENCIA") {
     throw new ErrorRecepciones("RESULTADO_INVALIDO", "El resultado tiene que ser OK o CON_INCIDENCIA.");
   }
   const clave = datos.idempotencyKey?.trim() || null;
+
+  // Quién firma. Se resuelve ANTES de abrir la transacción: verificar el PIN
+  // escribe (los fallos acumulados) y eso no puede irse con el rollback del
+  // cierre. El padrón manda: si hay operarios para este centro, hay que elegir
+  // uno; si no hay ninguno todavía, firma la sesión y el módulo sigue usable.
+  const operario = await quienFirma(ctx, albaranId, datos);
 
   const resultado = await repo.enTransaccion(async (c) => {
     // 1. El cerrojo. Todo lo que sigue se lee con el albarán bloqueado.
@@ -720,6 +844,8 @@ export async function cerrarRecepcion(ctx: Contexto, albaranId: string, datos: C
         resultado: datos.resultado,
         recibidoPor: userId,
         recibidoNombre: ctx.userNombre,
+        operarioId: operario?.id ?? null,
+        operarioNombre: operario?.nombre ?? null,
         observaciones: datos.observaciones?.trim() || null,
         idempotencyKey: clave,
       },
@@ -834,11 +960,15 @@ export async function cerrarRecepcion(ctx: Contexto, albaranId: string, datos: C
           resultado: datos.resultado,
           lineas: lineasRecepcion.map((l) => ({ albaranLineaId: l.albaranLineaId, esperada: l.cantidadEsperada, recibida: l.cantidadRecibida })),
           estadoAlbaran: nuevoEstado,
+          operario: operario ? { id: operario.id, nombre: operario.nombre } : null,
+          sesion: ctx.userNombre,
         },
+        // Quién contó primero, y desde qué sesión se registró después: el
+        // histórico responde a las dos preguntas sin tener que cruzar tablas.
         descripcion:
-          datos.resultado === "OK"
-            ? `Recepción ${numero}: OK, mercancía recibida conforme al albarán. Recibido por ${ctx.userNombre}.`
-            : `Recepción ${numero}: CON INCIDENCIA (${incidencias.length}). Recibido por ${ctx.userNombre}.`,
+          `Recepción ${numero}: ${datos.resultado === "OK" ? "OK, mercancía recibida conforme al albarán" : `CON INCIDENCIA (${incidencias.length})`}. ` +
+          `Recibido por ${operario ? operario.nombre : ctx.userNombre}` +
+          `${operario ? ` (PIN confirmado; registrado desde la sesión de ${ctx.userNombre})` : ""}.`,
       },
       c
     );
@@ -848,7 +978,14 @@ export async function cerrarRecepcion(ctx: Contexto, albaranId: string, datos: C
       accion: "recepciones.cerrar",
       entidad: "rcp_recepciones",
       entidadId: recepcion.id,
-      detalle: { numero, albaran: albaran.numeroProveedor, pedido: albaran.pedidoNumero, resultado: datos.resultado, incidencias: incidencias.length },
+      detalle: {
+        numero,
+        albaran: albaran.numeroProveedor,
+        pedido: albaran.pedidoNumero,
+        resultado: datos.resultado,
+        incidencias: incidencias.length,
+        operario: operario?.nombre ?? null,
+      },
       ip: ctx.ip,
     });
 
