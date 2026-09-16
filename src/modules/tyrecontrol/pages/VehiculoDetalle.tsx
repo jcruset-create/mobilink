@@ -5,6 +5,8 @@ import type { Intervencion } from "../services/data";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
+import { ubicacionDeVehiculoBD } from "../services/data";
+import { ubicacionDeVehiculo, type Ubicacion } from "../services/presenciaVista";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
@@ -30,6 +32,14 @@ export default function VehiculoDetalle() {
   const { perfil } = useTyreAuth();
   const esCliente = perfil?.rol === "cliente" && !perfil?.es_superadmin;
   const [v, setV] = useState<Vehiculo | null>(null);
+  /*
+   * Dónde está el vehículo: en base, en ruta o no se sabe.
+   *
+   * Va a mejor esfuerzo. Si no se puede leer, la chapa no sale y la ficha
+   * funciona igual: es información para organizar el taller, no para
+   * identificar el vehículo.
+   */
+  const [ubicacion, setUbicacion] = useState<Ubicacion | null>(null);
   const [posiciones, setPosiciones] = useState<PosicionVehiculo[]>([]);
   const [montajes, setMontajes] = useState<MontajeActual[]>([]);
   const [medidasMap, setMedidasMap] = useState<Map<string, string>>(new Map());
@@ -92,6 +102,13 @@ export default function VehiculoDetalle() {
     setIntervenciones(await listarIntervenciones(id).catch(() => []));
     setImagenMarca(
       await imagenChasisDeMarca(veh?.config_ejes_id, (veh as any)?.marca_id, veh?.marca).catch(() => null),
+    );
+
+    // Dónde está. A mejor esfuerzo: si falla, la chapa no sale y ya está.
+    setUbicacion(
+      await ubicacionDeVehiculoBD(id)
+        .then((fuentes) => ubicacionDeVehiculo(fuentes))
+        .catch(() => null),
     );
   }
 
@@ -162,6 +179,30 @@ export default function VehiculoDetalle() {
           {Number(v.km_actual).toLocaleString("es-ES")} <span className="text-xs font-normal text-slate-400">km</span>
         </span>
         <span className="text-[11px] text-slate-500">({ORIGEN_KM_LABELS[v.origen_km]})</span>
+        {/*
+          Dónde está el vehículo ahora. Los tonos separan lo que se sabe de lo
+          que se supone: verde afirma que está ahí, gris es «esto es lo último
+          que se supo» y no debe leerse como una certeza —alguien puede bajar
+          al patio a buscarlo—.
+        */}
+        {ubicacion && (
+          <span
+            className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+              ubicacion.tono === "base"
+                ? "bg-emerald-500/15 text-emerald-300"
+                : ubicacion.tono === "ruta"
+                  ? "bg-sky-500/15 text-sky-300"
+                  : ubicacion.tono === "viejo"
+                    ? "bg-amber-500/15 text-amber-300"
+                    : "bg-slate-700/60 text-slate-400"
+            }`}
+            title={ubicacion.detalle}
+          >
+            {ubicacion.tono === "base" ? "📍 " : ubicacion.tono === "ruta" ? "🛣 " : ""}
+            {ubicacion.texto}
+            {ubicacion.detalle ? <span className="ml-1 font-normal opacity-70">· {ubicacion.detalle}</span> : null}
+          </span>
+        )}
         {!esCliente && (
           <button
             onClick={() => setEditando(true)}

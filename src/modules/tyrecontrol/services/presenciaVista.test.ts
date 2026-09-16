@@ -16,6 +16,7 @@ import {
   prioridadRevision,
   quienRevisó,
   etiquetaBase,
+  ubicacionDeVehiculo,
   sinPeriodicidad,
   sinPeriodicidadEnBase,
   revisablesEnBase,
@@ -347,5 +348,99 @@ describe("etiquetaBase()", () => {
 
   it("manda el Hub cuando los dos dicen algo", () => {
     expect(etiquetaBase(enBase, wfEnBase)).toEqual({ base: "Reus", ahora: true });
+  });
+});
+
+/**
+ * La chapa de ubicación de la ficha del vehículo.
+ *
+ * Lo que se fija aquí es que no se confunda nunca «está» con «se le vio», y
+ * que un vehículo del que no se sabe nada lo diga en vez de parecer en ruta.
+ */
+describe("ubicacionDeVehiculo()", () => {
+  const AHORA = new Date("2026-09-16T12:00:00Z").getTime();
+  const hace = (min: number) => new Date(AHORA - min * 60_000).toISOString();
+
+  it("en base dice en cuál y de cuándo es la posición", () => {
+    const u = ubicacionDeVehiculo({
+      presencia: {
+        vehiculo_id: "v",
+        estado: "IN_BASE",
+        posicion_at: hace(4),
+        delegacion: { id: "b", nombre: "Reus" },
+      },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("En base · Reus");
+    expect(u.detalle).toBe("posición de hace 4 min");
+    expect(u.tono).toBe("base");
+  });
+
+  it("fuera de las bases es «En ruta»", () => {
+    const u = ubicacionDeVehiculo({
+      presencia: { vehiculo_id: "v", estado: "OUTSIDE_BASES", posicion_at: hace(7), delegacion: null },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("En ruta");
+    expect(u.tono).toBe("ruta");
+  });
+
+  it("posición vieja dice «última vez», no que esté ahí", () => {
+    const u = ubicacionDeVehiculo({
+      presencia: {
+        vehiculo_id: "v",
+        estado: "STALE_POSITION",
+        posicion_at: hace(60 * 50),
+        delegacion: { id: "b", nombre: "Reus" },
+      },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("Última vez en Reus");
+    expect(u.detalle).toContain("hace 2 d");
+    expect(u.tono).toBe("viejo");
+  });
+
+  it("sin nada de nada no se inventa una ruta", () => {
+    const u = ubicacionDeVehiculo({ ahora: AHORA });
+    expect(u.texto).toBe("Sin posición");
+    expect(u.tono).toBe("desconocido");
+  });
+
+  it("un NO_POSITION del Hub cae al mismo «sin posición»", () => {
+    const u = ubicacionDeVehiculo({
+      presencia: { vehiculo_id: "v", estado: "NO_POSITION", delegacion: null },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("Sin posición");
+  });
+
+  it("sin dato del Hub vale el de Webfleet", () => {
+    const u = ubicacionDeVehiculo({
+      webfleet: {
+        vehiculo_id: "v",
+        empresa_id: "e",
+        estado: "en_base",
+        pos_time: hace(10),
+        delegacion: { id: "b", nombre: "Vilanova" },
+      },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("En base · Vilanova");
+    expect(u.detalle).toBe("posición de hace 10 min");
+  });
+
+  it("manda el Hub cuando los dos dicen algo", () => {
+    const u = ubicacionDeVehiculo({
+      presencia: { vehiculo_id: "v", estado: "OUTSIDE_BASES", posicion_at: hace(3), delegacion: null },
+      webfleet: {
+        vehiculo_id: "v",
+        empresa_id: "e",
+        estado: "en_base",
+        pos_time: hace(3),
+        delegacion: { id: "b", nombre: "Vilanova" },
+      },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("En ruta");
   });
 });
