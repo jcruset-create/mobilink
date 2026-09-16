@@ -185,14 +185,23 @@ class _CambioNeumaticoScreenState extends State<CambioNeumaticoScreen> {
       // Km para las operaciones: de la plataforma si el vehículo está
       // enlazado; si no, los pide el técnico (no se arrastra el km viejo de la
       // ficha, igual que en Revisión).
-      if (veh.kmAutomaticos) {
-        final kmWf = await TyreControlApi.obtenerKmWebfleet(veh.empresaId, veh.webfleetVehicleId!);
-        if (kmWf != null) {
-          _km = kmWf;
-          await TyreControlApi.actualizarKmVehiculo(veh.id, kmWf);
-        } else {
-          _km = veh.kmActual > 0 ? veh.kmActual : null;
-        }
+      /*
+       * Igual que en Revisión: se pregunta al Hub, no a Webfleet.
+       *
+       * Ya no hace falta que el vehículo tenga `webfleet_vehicle_id`: el Hub
+       * resuelve el enlace de cualquier proveedor. Si no hay dato, se deja el
+       * de la ficha si lo hubiera y el técnico lo corrige; una operación no
+       * puede quedarse sin hacer porque la telemática calle.
+       */
+      final lectura = await TyreControlApi.kilometrajeActual(veh.id);
+      final kmTel = (lectura['km'] as num?);
+      if (kmTel != null) {
+        _km = kmTel;
+        // 'telematica', no el nombre del proveedor: ver review_screen.dart.
+        await TyreControlApi.actualizarKmVehiculo(veh.id, kmTel.round(),
+            origen: 'telematica');
+      } else if (veh.kmActual > 0) {
+        _km = veh.kmActual;
       }
       final tipoId = v['tipo_vehiculo_id'] as String?;
 
