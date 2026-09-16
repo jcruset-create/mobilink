@@ -302,10 +302,12 @@ export async function devolverBloc(
     if (!entrega) {
       throw new ErrorOrManuales("SIN_ENTREGA_ABIERTA", "Este bloc no está entregado a nadie.", 409);
     }
-    if (fechaDevolucion < entrega.fechaEntrega.slice(0, 10)) {
+    // Las dos son `AAAA-MM-DD` (ver la cabecera de las proyecciones en
+    // `repository.ts`), así que compararlas como texto es comparar fechas.
+    if (fechaDevolucion < entrega.fechaEntrega) {
       throw new ErrorOrManuales(
         "FECHA_INVALIDA",
-        `No se puede devolver el ${fechaDevolucion} un bloc que se entregó el ${entrega.fechaEntrega.slice(0, 10)}.`
+        `No se puede devolver el ${fechaDevolucion} un bloc que se entregó el ${entrega.fechaEntrega}.`
       );
     }
 

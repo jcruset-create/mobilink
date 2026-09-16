@@ -169,10 +169,24 @@ export type Evento = {
 
 /* ── Proyecciones ────────────────────────────────────────────────────────── */
 
+/*
+ * Las columnas DATE se piden como TEXTO, y no es un capricho.
+ *
+ * El controlador de PostgreSQL devuelve una DATE como un objeto `Date` de
+ * JavaScript puesto a medianoche LOCAL. Eso rompía dos cosas: el tipo de aquí
+ * dice `string` y no lo era —comparar dos fechas reventaba—, y convertirla
+ * después con `toISOString()` resta las horas del huso, así que en un servidor
+ * al este de Greenwich un bloc entregado el día 1 se guardaba como del día 31.
+ *
+ * `::text` sobre una DATE da exactamente `AAAA-MM-DD`, sin husos de por medio.
+ * Las marcas de tiempo (`created_at`…) se quedan como están: viajan al panel
+ * en JSON, que ya las serializa en ISO.
+ */
 const COLUMNAS_BLOC = `
   id, numero_bloc AS "numeroBloc", or_inicial AS "orInicial", or_final AS "orFinal",
   cantidad_or AS "cantidadOr", responsable_id AS "responsableId", responsable_nombre AS "responsableNombre",
-  fecha_creacion AS "fechaCreacion", fecha_entrega AS "fechaEntrega", fecha_devolucion AS "fechaDevolucion",
+  fecha_creacion::text AS "fechaCreacion", fecha_entrega::text AS "fechaEntrega",
+  fecha_devolucion::text AS "fechaDevolucion",
   estado, observaciones, created_at AS "createdAt", updated_at AS "updatedAt", closed_at AS "closedAt"
 `;
 
@@ -180,7 +194,8 @@ const COLUMNAS_BLOC = `
 const COLUMNAS_BLOC_B = `
   b.id, b.numero_bloc AS "numeroBloc", b.or_inicial AS "orInicial", b.or_final AS "orFinal",
   b.cantidad_or AS "cantidadOr", b.responsable_id AS "responsableId", b.responsable_nombre AS "responsableNombre",
-  b.fecha_creacion AS "fechaCreacion", b.fecha_entrega AS "fechaEntrega", b.fecha_devolucion AS "fechaDevolucion",
+  b.fecha_creacion::text AS "fechaCreacion", b.fecha_entrega::text AS "fechaEntrega",
+  b.fecha_devolucion::text AS "fechaDevolucion",
   b.estado, b.observaciones, b.created_at AS "createdAt", b.updated_at AS "updatedAt", b.closed_at AS "closedAt"
 `;
 
@@ -193,6 +208,13 @@ const COLUMNAS_DOCUMENTO = `
   d.estado_procesamiento AS "estadoProcesamiento", d.error_mensaje AS "errorMensaje",
   d.sustituye_a AS "sustituyeA", d.usuario_carga AS "usuarioCarga",
   d.usuario_carga_nombre AS "usuarioCargaNombre", d.fecha_carga AS "fechaCarga"
+`;
+
+const COLUMNAS_ENTREGA = `
+  id, bloc_id AS "blocId", responsable_id AS "responsableId", responsable_nombre AS "responsableNombre",
+  fecha_entrega::text AS "fechaEntrega", fecha_devolucion::text AS "fechaDevolucion", observaciones,
+  observaciones_devolucion AS "observacionesDevolucion", usuario_registro_nombre AS "usuarioRegistroNombre",
+  created_at AS "createdAt"
 `;
 
 const COLUMNAS_PROCESO = `
@@ -666,10 +688,7 @@ export async function insertarEntrega(
     `INSERT INTO orm_entregas
        (empresa_id, bloc_id, responsable_id, responsable_nombre, fecha_entrega, observaciones, usuario_registro, usuario_registro_nombre)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-     RETURNING id, bloc_id AS "blocId", responsable_id AS "responsableId", responsable_nombre AS "responsableNombre",
-               fecha_entrega AS "fechaEntrega", fecha_devolucion AS "fechaDevolucion", observaciones,
-               observaciones_devolucion AS "observacionesDevolucion", usuario_registro_nombre AS "usuarioRegistroNombre",
-               created_at AS "createdAt"`,
+     RETURNING ${COLUMNAS_ENTREGA}`,
     [d.empresaId, d.blocId, d.responsableId, d.responsableNombre, d.fechaEntrega, d.observaciones, d.usuarioRegistro, d.usuarioRegistroNombre]
   );
   return rows[0];
@@ -677,11 +696,8 @@ export async function insertarEntrega(
 
 export async function entregaAbierta(empresaId: string, blocId: string, e?: Ejecutor): Promise<Entrega | null> {
   const { rows } = await db(e).query<Entrega>(
-    `SELECT id, bloc_id AS "blocId", responsable_id AS "responsableId", responsable_nombre AS "responsableNombre",
-            fecha_entrega AS "fechaEntrega", fecha_devolucion AS "fechaDevolucion", observaciones,
-            observaciones_devolucion AS "observacionesDevolucion", usuario_registro_nombre AS "usuarioRegistroNombre",
-            created_at AS "createdAt"
-       FROM orm_entregas WHERE empresa_id = $1 AND bloc_id = $2 AND fecha_devolucion IS NULL`,
+    `SELECT ${COLUMNAS_ENTREGA} FROM orm_entregas
+      WHERE empresa_id = $1 AND bloc_id = $2 AND fecha_devolucion IS NULL`,
     [empresaId, blocId]
   );
   return rows[0] ?? null;
@@ -703,11 +719,8 @@ export async function cerrarEntrega(
 
 export async function listarEntregas(empresaId: string, blocId: string, e?: Ejecutor): Promise<Entrega[]> {
   const { rows } = await db(e).query<Entrega>(
-    `SELECT id, bloc_id AS "blocId", responsable_id AS "responsableId", responsable_nombre AS "responsableNombre",
-            fecha_entrega AS "fechaEntrega", fecha_devolucion AS "fechaDevolucion", observaciones,
-            observaciones_devolucion AS "observacionesDevolucion", usuario_registro_nombre AS "usuarioRegistroNombre",
-            created_at AS "createdAt"
-       FROM orm_entregas WHERE empresa_id = $1 AND bloc_id = $2 ORDER BY fecha_entrega DESC, created_at DESC`,
+    `SELECT ${COLUMNAS_ENTREGA} FROM orm_entregas
+      WHERE empresa_id = $1 AND bloc_id = $2 ORDER BY fecha_entrega DESC, created_at DESC`,
     [empresaId, blocId]
   );
   return rows;

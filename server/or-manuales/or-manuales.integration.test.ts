@@ -58,6 +58,7 @@ const GESTOR_A = "00000000-0000-4000-a000-000000000d01";
 const OPERARIO_A = "00000000-0000-4000-a000-000000000d02";
 const CONSULTA_A = "00000000-0000-4000-a000-000000000d03";
 const GESTOR_B = "00000000-0000-4000-a000-000000000d04";
+const ADMIN_A = "00000000-0000-4000-a000-000000000d05";
 
 type Quien = { usuario: string; empresa: string; nombre: string };
 
@@ -65,6 +66,9 @@ const gestorA: Quien = { usuario: GESTOR_A, empresa: EMPRESA_A, nombre: "Marta L
 const operarioA: Quien = { usuario: OPERARIO_A, empresa: EMPRESA_A, nombre: "Juan Pérez" };
 const consultaA: Quien = { usuario: CONSULTA_A, empresa: EMPRESA_A, nombre: "Sólo Mira" };
 const gestorB: Quien = { usuario: GESTOR_B, empresa: EMPRESA_B, nombre: "Otra Empresa" };
+// La configuración del OCR es de administrador: un gestor no la toca, y eso lo
+// comprueba una prueba de más abajo a propósito.
+const adminA: Quien = { usuario: ADMIN_A, empresa: EMPRESA_A, nombre: "Admin Prueba" };
 
 type Respuesta = { status: number; body: any; headers: Headers };
 
@@ -177,6 +181,7 @@ describe.skipIf(!RUN)("OR Manuales · el ciclo del papel contra PostgreSQL", () 
       [OPERARIO_A, "operario"],
       [CONSULTA_A, "consulta"],
       [GESTOR_B, "gestor"],
+      [ADMIN_A, "admin"],
     ]) {
       await db.query(
         `INSERT INTO app_usuario_modulos (user_id, modulo, rol) VALUES ($1,'or-manuales',$2)
@@ -689,7 +694,7 @@ describe.skipIf(!RUN)("OR Manuales · el ciclo del papel contra PostgreSQL", () 
       const bloc = await crearBloc(inicio);
 
       // 101 es inalcanzable: nada se archiva solo y todo cae en la banda de revisión.
-      const config = await api("/config", gestorA, { method: "PUT", body: { umbralAutomatico: 100, umbralRevision: 50 } });
+      const config = await api("/config", adminA, { method: "PUT", body: { umbralAutomatico: 100, umbralRevision: 50 } });
       expect(config.status, JSON.stringify(config.body)).toBe(200);
 
       // Sin rótulo, la hoja no llega a 100.
@@ -713,7 +718,7 @@ describe.skipIf(!RUN)("OR Manuales · el ciclo del papel contra PostgreSQL", () 
     it("confirmar una revisión la deja archivada", async () => {
       const inicio = rangoLibre();
       const bloc = await crearBloc(inicio, gestorA, { cantidadOr: 1 });
-      await api("/config", gestorA, { method: "PUT", body: { umbralAutomatico: 100, umbralRevision: 50 } });
+      await api("/config", adminA, { method: "PUT", body: { umbralAutomatico: 100, umbralRevision: 50 } });
 
       const doc = await PDFDocument.create();
       const fuente = await doc.embedFont(StandardFonts.Helvetica);
@@ -731,14 +736,14 @@ describe.skipIf(!RUN)("OR Manuales · el ciclo del papel contra PostgreSQL", () 
     });
 
     it("la zona de OCR se guarda y se valida", async () => {
-      const ok = await api("/config", gestorA, {
+      const ok = await api("/config", adminA, {
         method: "PUT",
         body: { zona: { x: 0, y: 0.7, ancho: 0.5, alto: 0.3 } },
       });
       expect(ok.status).toBe(200);
       expect(ok.body.config.zona).toEqual({ x: 0, y: 0.7, ancho: 0.5, alto: 0.3 });
 
-      const mal = await api("/config", gestorA, {
+      const mal = await api("/config", adminA, {
         method: "PUT",
         body: { zona: { x: 0.8, y: 0, ancho: 0.5, alto: 0.2 } },
       });
