@@ -12,10 +12,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, ArrowLeft, Check, Minus, Plus } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, FileText, Minus, Plus } from "lucide-react";
 import * as api from "../services/api";
 import { useRecepciones } from "../contexts/RecepcionesContext";
-import { Aviso, ChipEstadoAlbaran, ErrorBox, SinMapear, inputCls } from "../components/ui";
+import { Aviso, ChipEstadoAlbaran, ErrorBox, Modal, SinMapear, inputCls } from "../components/ui";
+import VisorDocumento from "../components/VisorDocumento";
 import { fmtCantidad, fmtDiferencia, type FichaAlbaran, type TipoIncidencia } from "../types";
 
 type Edicion = { cantidad: number; tipo: TipoIncidencia | ""; observaciones: string };
@@ -36,6 +37,7 @@ export default function Recepcion() {
   const [observaciones, setObservaciones] = useState("");
   const [confirmando, setConfirmando] = useState<"OK" | "CON_INCIDENCIA" | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const [verPdf, setVerPdf] = useState(false);
   const [clave] = useState(claveIdempotencia);
 
   const cargar = useCallback(async () => {
@@ -99,6 +101,8 @@ export default function Recepcion() {
   if (!ficha) return <p className="text-sm text-slate-400">Cargando…</p>;
 
   const { albaran } = ficha;
+  // El papel que mandó el proveedor: se coteja contra lo que hay en el palé.
+  const original = ficha.documentos.find((d) => d.tipo === "ALBARAN_ORIGINAL") ?? null;
   const hayDiferencias = pendientes.some((l) => edicion[l.id]?.cantidad !== l.cantidadPendiente || edicion[l.id]?.tipo);
 
   return (
@@ -117,8 +121,23 @@ export default function Recepcion() {
           {albaran.transportista && <span className="rounded-full bg-slate-700 px-2 py-0.5">{albaran.transportista}</span>}
           {albaran.centroNombre && <span className="rounded-full bg-slate-700 px-2 py-0.5">{albaran.centroNombre}</span>}
         </div>
+        {original && (
+          <button
+            type="button"
+            onClick={() => setVerPdf(true)}
+            className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-slate-700 text-sm font-bold text-slate-100 active:bg-slate-600 sm:w-auto sm:px-4 print:hidden"
+          >
+            <FileText className="h-5 w-5" /> Ver el albarán del proveedor
+          </button>
+        )}
         {usuario && <div className="mt-2 text-[12px] text-slate-500">Recibe: {usuario.nombre} · fecha y hora las pone el sistema al cerrar.</div>}
       </div>
+
+      {verPdf && original && (
+        <Modal title={`Albarán ${albaran.numeroProveedor} · ${albaran.proveedorNombre}`} onClose={() => setVerPdf(false)} wide>
+          <VisorDocumento documentoId={original.id} nombre={original.nombreFichero} />
+        </Modal>
+      )}
 
       {error && <div className="mt-3"><ErrorBox>{error}</ErrorBox></div>}
 

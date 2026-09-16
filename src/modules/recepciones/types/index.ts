@@ -115,7 +115,25 @@ export type AlbaranLinea = {
   cantidadPedida: number | null;
 };
 
-export type FilaBandeja = Albaran & { unidadesExpedidas: number; unidadesRecibidas: number; lineas: number; incidenciasAbiertas: number };
+/** Un artículo del albarán, para verlo en la bandeja sin abrir la ficha. */
+export type ArticuloBandeja = {
+  descripcionProveedor: string;
+  productoTexto: string | null;
+  /** El nombre bonito que también enseña la ficha. */
+  articuloLeido: string;
+  cantidadExpedida: number;
+  cantidadPendiente: number;
+};
+
+export type FilaBandeja = Albaran & {
+  unidadesExpedidas: number;
+  unidadesRecibidas: number;
+  lineas: number;
+  incidenciasAbiertas: number;
+  articulos: ArticuloBandeja[];
+  /** El PDF del proveedor, si está guardado. */
+  documentoOriginalId: string | null;
+};
 
 export type Recepcion = {
   id: string;

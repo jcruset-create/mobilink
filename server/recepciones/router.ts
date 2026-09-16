@@ -35,6 +35,7 @@ import * as buzon from "./buzon.ts";
 import * as ingesta from "./ingesta.ts";
 import { CLAVES, asumirExpedicionCompleta, guardarTextoConfig, leerTextoConfig } from "./config.ts";
 import { hashDeFichero, leerDocumento } from "./storage.ts";
+import { leerDescripcion } from "./domain/articulos.ts";
 
 /** Envuelve un manejador para que un fallo no se lleve por delante el proceso. */
 function ruta(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -135,7 +136,13 @@ export function createRecepcionesRouter(): Router {
         texto: texto(req.query.q) || undefined,
       });
       const contadores = await repo.contarBandeja(ctx.empresaId, req.recepcionesCentroId ?? null);
-      res.json({ albaranes: filas, contadores });
+      // El mismo nombre que enseña la ficha: el artículo mapeado si lo hay, y
+      // si no, la descripción del proveedor puesta en bonito.
+      const albaranes = filas.map((a) => ({
+        ...a,
+        articulos: a.articulos.map((l) => ({ ...l, articuloLeido: l.productoTexto ?? leerDescripcion(l.descripcionProveedor).bonito })),
+      }));
+      res.json({ albaranes, contadores });
     })
   );
 
