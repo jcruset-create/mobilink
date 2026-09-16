@@ -64,8 +64,8 @@ export default function RequireAuth({ children }: RequireAuthProps) {
   const pantalla = pantallaDesdeRuta(location.pathname);
   if (pantalla && pantalla !== "dashboard" && pantallas && !pantallas.includes(pantalla)) {
     return (
-      <div className="p-6">
-        <div className="rounded-xl border bg-yellow-50 p-6 text-sm text-yellow-800">
+      <div className="min-h-screen bg-slate-900 p-6 text-slate-100">
+        <div className="rounded-xl border border-amber-600 bg-amber-500/10 p-6 text-sm text-amber-300">
           No tienes acceso a esta pantalla. Contacta con un administrador.
         </div>
       </div>

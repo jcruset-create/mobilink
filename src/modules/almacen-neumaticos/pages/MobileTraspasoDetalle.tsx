@@ -63,12 +63,12 @@ function estadoTexto(estado: string) {
 }
 
 function estadoClase(estado: string) {
-  if (estado === "pendiente_salida") return "bg-yellow-100 text-yellow-800";
-  if (estado === "preparado") return "bg-yellow-100 text-yellow-800";
-  if (estado === "en_camino") return "bg-blue-100 text-blue-800";
-  if (estado === "recibido_parcial") return "bg-orange-100 text-orange-800";
-  if (estado === "recibido") return "bg-green-100 text-green-800";
-  return "bg-gray-100 text-gray-800";
+  if (estado === "pendiente_salida") return "bg-amber-500/15 text-amber-300";
+  if (estado === "preparado") return "bg-amber-500/15 text-amber-300";
+  if (estado === "en_camino") return "bg-sky-500/15 text-sky-300";
+  if (estado === "recibido_parcial") return "bg-orange-500/15 text-orange-300";
+  if (estado === "recibido") return "bg-emerald-500/15 text-emerald-300";
+  return "bg-slate-900 text-slate-200";
 }
 
 function obtenerPrimero<T>(valor: T | T[] | null): T | null {
@@ -478,14 +478,14 @@ export default function MobileTraspasoDetalle() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-4">
+    <div className="min-h-screen bg-slate-900 p-4 text-slate-100">
       <div className="mx-auto max-w-md space-y-4">
-        <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <div className="rounded-2xl bg-slate-800 p-4 shadow-sm">
           <h1 className="text-2xl font-bold">
             {traspaso ? codigoTraspaso(traspaso) : "Traspaso"}
           </h1>
 
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-slate-400">
             {traspaso?.ubicacion_origen || "-"} →{" "}
             {traspaso?.ubicacion_destino || "-"}
           </p>
@@ -495,7 +495,7 @@ export default function MobileTraspasoDetalle() {
               className={`inline-block rounded-full px-3 py-1 text-xs font-semibold ${
                 traspaso
                   ? estadoClase(traspaso.estado)
-                  : "bg-gray-100 text-gray-800"
+                  : "bg-slate-900 text-slate-200"
               }`}
             >
               {traspaso ? estadoTexto(traspaso.estado) : "-"}
@@ -503,18 +503,18 @@ export default function MobileTraspasoDetalle() {
           </div>
         </div>
 
-        <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <div className="rounded-2xl bg-slate-800 p-4 shadow-sm">
           <h2 className="mb-3 text-lg font-bold">Líneas</h2>
 
           {lineas.length === 0 && (
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-slate-400">
               No hay líneas asociadas a este traspaso.
             </p>
           )}
 
           <div className="space-y-3">
             {lineas.map((linea) => (
-              <div key={linea.id} className="rounded-xl border p-3">
+              <div key={linea.id} className="rounded-xl border border-slate-600 p-3">
                 <p className="font-semibold">{linea.producto}</p>
 
                 <p className="text-sm">
@@ -534,10 +534,10 @@ export default function MobileTraspasoDetalle() {
         </div>
 
         {traspaso?.estado !== "recibido" && (
-          <div className="rounded-2xl bg-white p-4 shadow-sm">
+          <div className="rounded-2xl bg-slate-800 p-4 shadow-sm">
             <label className="text-sm font-semibold">Código personal</label>
 
-            <p className="mt-1 text-xs text-gray-500">
+            <p className="mt-1 text-xs text-slate-400">
               {(traspaso?.estado === "pendiente_salida" ||
                 traspaso?.estado === "preparado") &&
                 "Introduce el código del operario que transporta los neumáticos."}
@@ -552,7 +552,7 @@ export default function MobileTraspasoDetalle() {
               onChange={(e) => setCodigoPersonal(e.target.value)}
               disabled={guardando}
               autoComplete="off"
-              className="mt-2 w-full rounded-xl border px-4 py-3 text-lg disabled:bg-gray-100"
+              className="mt-2 w-full rounded-xl border border-slate-600 px-4 py-3 text-lg disabled:bg-slate-900"
               placeholder="Ej: 1234"
             />
 
@@ -561,7 +561,7 @@ export default function MobileTraspasoDetalle() {
               <button
                 onClick={confirmarRecogida}
                 disabled={guardando}
-                className="mt-4 w-full rounded-xl bg-black px-4 py-4 font-semibold text-white disabled:opacity-50"
+                className="mt-4 w-full rounded-xl bg-sky-600 px-4 py-4 font-semibold text-white disabled:opacity-50"
               >
                 {guardando ? "Guardando..." : "Aceptar traspaso"}
               </button>
@@ -581,13 +581,13 @@ export default function MobileTraspasoDetalle() {
         )}
 
         {traspaso?.estado === "recibido" && (
-          <div className="rounded-2xl bg-green-50 p-4 text-sm text-green-700 shadow-sm">
+          <div className="rounded-2xl bg-emerald-500/10 p-4 text-sm text-emerald-300 shadow-sm">
             Este traspaso ya ha sido recibido.
           </div>
         )}
 
         {mensaje && (
-          <div className="rounded-2xl bg-white p-4 text-sm shadow-sm">
+          <div className="rounded-2xl bg-slate-800 p-4 text-sm shadow-sm">
             {mensaje}
           </div>
         )}
@@ -595,14 +595,14 @@ export default function MobileTraspasoDetalle() {
         <button
           onClick={cargarDatos}
           disabled={guardando}
-          className="w-full rounded-2xl bg-white p-4 text-center text-sm font-semibold shadow-sm disabled:opacity-50"
+          className="w-full rounded-2xl bg-slate-800 p-4 text-center text-sm font-semibold shadow-sm disabled:opacity-50"
         >
           Actualizar
         </button>
 
         <a
           href="/almacen-neumaticos/mobile"
-          className="block rounded-2xl bg-white p-4 text-center text-sm font-semibold shadow-sm"
+          className="block rounded-2xl bg-slate-800 p-4 text-center text-sm font-semibold shadow-sm"
         >
           Volver
         </a>

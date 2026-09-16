@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import { registrarAuditoria } from "../services/auditoriaAlmacen";
@@ -1244,140 +1244,80 @@ export default function Inventarios() {
 
   if (cargandoPermisos) {
     return (
-      <div className="p-6 space-y-6">
-        <AlmacenMenu />
-
-        <div className="rounded-xl border bg-white p-6 text-sm text-gray-600">
-          Cargando permisos del usuario conectado...
+      <AlmacenLayoutOscuro>
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-6 text-sm text-slate-300">
+            Cargando permisos del usuario conectado...
+          </div>
         </div>
-      </div>
+      </AlmacenLayoutOscuro>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
+    <AlmacenLayoutOscuro>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Inventarios</h1>
+            <p className="text-sm text-slate-400">
+              Generación, conteo y revisión de inventarios por ubicación con
+              permisos del usuario conectado. Se cargan los últimos 200
+              inventarios.
+            </p>
+          </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Inventarios</h1>
-          <p className="text-sm text-gray-500">
-            Generación, conteo y revisión de inventarios por ubicación con
-            permisos del usuario conectado. Se cargan los últimos 200
-            inventarios.
-          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportarInventarioCsv}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              disabled={!inventarioSeleccionadoId || lineasVisibles.length === 0}
+            >
+              Exportar CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={exportarInventarioExcel}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={!inventarioSeleccionadoId || lineasVisibles.length === 0}
+            >
+              Exportar Excel
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarInventarioCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={!inventarioSeleccionadoId || lineasVisibles.length === 0}
-          >
-            Exportar CSV
-          </button>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Crear inventario</h2>
 
-          <button
-            type="button"
-            onClick={exportarInventarioExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={!inventarioSeleccionadoId || lineasVisibles.length === 0}
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Crear inventario</h2>
-
-        {!usuarioPuedeCrearInventario() && (
-          <p className="rounded-lg bg-yellow-50 p-3 text-sm text-yellow-800">
-            Solo un usuario admin o responsable puede crear inventarios.
-          </p>
-        )}
-
-        <select
-          value={empresaId}
-          onChange={(e) => setEmpresaId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearInventario()}
-        >
-          <option value="">Empresa...</option>
-          {empresas.map((empresa) => (
-            <option key={empresa.id} value={empresa.id}>
-              {empresa.nombre}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={ubicacion}
-          onChange={(e) => setUbicacion(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearInventario()}
-        >
-          <option value="">Ubicación...</option>
-          {ubicacionesDisponibles.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-
-        <input
-          value={creadoPor}
-          onChange={(e) => setCreadoPor(e.target.value)}
-          placeholder="Creado por / responsable"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearInventario()}
-        />
-
-        <textarea
-          value={observaciones}
-          onChange={(e) => setObservaciones(e.target.value)}
-          placeholder="Observaciones"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearInventario()}
-        />
-
-        <button
-          type="button"
-          onClick={crearInventario}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          disabled={!usuarioPuedeCrearInventario()}
-        >
-          Crear inventario
-        </button>
-
-        {mensaje && <p className="text-sm text-gray-700">{mensaje}</p>}
-      </div>
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Filtros</h2>
-
-        <div className="grid gap-3 md:grid-cols-4">
-          <input
-            type="date"
-            value={fechaDesde}
-            onChange={(e) => setFechaDesde(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
-
-          <input
-            type="date"
-            value={fechaHasta}
-            onChange={(e) => setFechaHasta(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+          {!usuarioPuedeCrearInventario() && (
+            <p className="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-300">
+              Solo un usuario admin o responsable puede crear inventarios.
+            </p>
+          )}
 
           <select
-            value={filtroUbicacion}
-            onChange={(e) => setFiltroUbicacion(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            value={empresaId}
+            onChange={(e) => setEmpresaId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearInventario()}
           >
-            <option value="">Todas las ubicaciones</option>
+            <option value="">Empresa...</option>
+            {empresas.map((empresa) => (
+              <option key={empresa.id} value={empresa.id}>
+                {empresa.nombre}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={ubicacion}
+            onChange={(e) => setUbicacion(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearInventario()}
+          >
+            <option value="">Ubicación...</option>
             {ubicacionesDisponibles.map((item) => (
               <option key={item} value={item}>
                 {item}
@@ -1385,317 +1325,377 @@ export default function Inventarios() {
             ))}
           </select>
 
-          <select
-            value={filtroEstadoInventario}
-            onChange={(e) => setFiltroEstadoInventario(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          >
-            <option value="">Todos los estados inventario</option>
-            {ESTADOS_INVENTARIO.map((estado) => (
-              <option key={estado} value={estado}>
-                {estado}
-              </option>
-            ))}
-          </select>
-
           <input
-            value={filtroCliente}
-            onChange={(e) => setFiltroCliente(e.target.value)}
-            placeholder="Filtrar cliente"
-            className="rounded-lg border px-3 py-2 text-sm"
+            value={creadoPor}
+            onChange={(e) => setCreadoPor(e.target.value)}
+            placeholder="Creado por / responsable"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearInventario()}
           />
 
-          <input
-            value={filtroProducto}
-            onChange={(e) => setFiltroProducto(e.target.value)}
-            placeholder="Producto, medida, marca o DOT"
-            className="rounded-lg border px-3 py-2 text-sm"
+          <textarea
+            value={observaciones}
+            onChange={(e) => setObservaciones(e.target.value)}
+            placeholder="Observaciones"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearInventario()}
           />
-
-          <select
-            value={filtroEstadoLinea}
-            onChange={(e) => setFiltroEstadoLinea(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          >
-            <option value="">Todos los estados línea</option>
-            {ESTADOS_LINEA.map((estado) => (
-              <option key={estado} value={estado}>
-                {estado}
-              </option>
-            ))}
-          </select>
-
-          <input
-            value={filtroTexto}
-            onChange={(e) => setFiltroTexto(e.target.value)}
-            placeholder="Buscar..."
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={limpiarFiltros}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
-          >
-            Limpiar filtros
-          </button>
 
           <button
             type="button"
-            onClick={cargarDatos}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
+            onClick={crearInventario}
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            disabled={!usuarioPuedeCrearInventario()}
           >
-            Actualizar inventarios
+            Crear inventario
           </button>
+
+          {mensaje && <p className="text-sm text-slate-300">{mensaje}</p>}
         </div>
-      </div>
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Inventarios creados</h2>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Filtros</h2>
 
-        <select
-          value={inventarioSeleccionadoId}
-          onChange={(e) => setInventarioSeleccionadoId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil}
-        >
-          <option value="">
-            {permisos.perfil
-              ? "Selecciona inventario..."
-              : "Sin perfil activo..."}
-          </option>
-          {inventariosVisibles.map((inventario) => {
-            const empresa = obtenerPrimero(inventario.empresas);
+          <div className="grid gap-3 md:grid-cols-4">
+            <input
+              type="date"
+              value={fechaDesde}
+              onChange={(e) => setFechaDesde(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-            return (
-              <option key={inventario.id} value={inventario.id}>
-                {formatearFecha(inventario.fecha_creacion)} |{" "}
-                {empresa?.nombre || "-"} | {inventario.ubicacion || "-"} |{" "}
-                {inventario.estado || "-"}
-              </option>
-            );
-          })}
-        </select>
+            <input
+              type="date"
+              value={fechaHasta}
+              onChange={(e) => setFechaHasta(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-        <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-600">
-          Mostrando <strong>{inventariosVisibles.length}</strong> inventarios de{" "}
-          <strong>{inventariosPorPermisos.length}</strong> visibles.
+            <select
+              value={filtroUbicacion}
+              onChange={(e) => setFiltroUbicacion(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todas las ubicaciones</option>
+              {ubicacionesDisponibles.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={filtroEstadoInventario}
+              onChange={(e) => setFiltroEstadoInventario(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todos los estados inventario</option>
+              {ESTADOS_INVENTARIO.map((estado) => (
+                <option key={estado} value={estado}>
+                  {estado}
+                </option>
+              ))}
+            </select>
+
+            <input
+              value={filtroCliente}
+              onChange={(e) => setFiltroCliente(e.target.value)}
+              placeholder="Filtrar cliente"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <input
+              value={filtroProducto}
+              onChange={(e) => setFiltroProducto(e.target.value)}
+              placeholder="Producto, medida, marca o DOT"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <select
+              value={filtroEstadoLinea}
+              onChange={(e) => setFiltroEstadoLinea(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todos los estados línea</option>
+              {ESTADOS_LINEA.map((estado) => (
+                <option key={estado} value={estado}>
+                  {estado}
+                </option>
+              ))}
+            </select>
+
+            <input
+              value={filtroTexto}
+              onChange={(e) => setFiltroTexto(e.target.value)}
+              placeholder="Buscar..."
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={limpiarFiltros}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+            >
+              Limpiar filtros
+            </button>
+
+            <button
+              type="button"
+              onClick={cargarDatos}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+            >
+              Actualizar inventarios
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Inventarios creados</h2>
+
+          <select
+            value={inventarioSeleccionadoId}
+            onChange={(e) => setInventarioSeleccionadoId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil}
+          >
+            <option value="">
+              {permisos.perfil
+                ? "Selecciona inventario..."
+                : "Sin perfil activo..."}
+            </option>
+            {inventariosVisibles.map((inventario) => {
+              const empresa = obtenerPrimero(inventario.empresas);
+
+              return (
+                <option key={inventario.id} value={inventario.id}>
+                  {formatearFecha(inventario.fecha_creacion)} |{" "}
+                  {empresa?.nombre || "-"} | {inventario.ubicacion || "-"} |{" "}
+                  {inventario.estado || "-"}
+                </option>
+              );
+            })}
+          </select>
+
+          <div className="rounded-lg bg-slate-900 p-3 text-sm text-slate-300">
+            Mostrando <strong>{inventariosVisibles.length}</strong> inventarios de{" "}
+            <strong>{inventariosPorPermisos.length}</strong> visibles.
+          </div>
+
+          {inventarioSeleccionado && (
+            <div className="rounded-lg bg-slate-900 p-3 text-sm text-slate-300">
+              Ubicación: <strong>{inventarioSeleccionado.ubicacion}</strong>
+              <br />
+              Estado: <strong>{inventarioSeleccionado.estado}</strong>
+              <br />
+              Creado por:{" "}
+              <strong>{inventarioSeleccionado.creado_por || "-"}</strong>
+            </div>
+          )}
         </div>
 
         {inventarioSeleccionado && (
-          <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
-            Ubicación: <strong>{inventarioSeleccionado.ubicacion}</strong>
-            <br />
-            Estado: <strong>{inventarioSeleccionado.estado}</strong>
-            <br />
-            Creado por:{" "}
-            <strong>{inventarioSeleccionado.creado_por || "-"}</strong>
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+            <h2 className="font-semibold">Conteo físico</h2>
+
+            <div className="rounded-lg bg-slate-900 p-3 text-sm text-slate-300">
+              Mostrando <strong>{lineasVisibles.length}</strong> líneas de{" "}
+              <strong>{lineasPorPermisos.length}</strong> visibles.
+            </div>
+
+            {inventarioSeleccionado.estado === "pendiente_revision" && (
+              <div className="rounded-lg border border-slate-600 bg-slate-900 p-4 space-y-3">
+                <h3 className="font-semibold">Revisión responsable</h3>
+
+                <input
+                  value={revisadoPor}
+                  onChange={(e) => setRevisadoPor(e.target.value)}
+                  placeholder="Código responsable revisión"
+                  className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+                  disabled={!permisos.esAdmin && !permisos.esResponsable}
+                />
+
+                <p className="text-sm text-slate-300">
+                  El responsable puede aprobar el ajuste, investigar la diferencia
+                  o solicitar recuento. Solo al aprobar se genera movimiento de
+                  stock.
+                </p>
+              </div>
+            )}
+
+            <div className="overflow-auto rounded-xl border border-slate-600 bg-slate-800">
+              <table className="w-full min-w-[1100px] text-sm">
+                <thead className="bg-slate-900 text-left">
+                  <tr>
+                    <th className="p-3">Cliente</th>
+                    <th className="p-3">Producto</th>
+                    <th className="p-3">Ubicación</th>
+                    <th className="p-3 text-right">Sistema</th>
+                    <th className="p-3 text-right">Físico</th>
+                    <th className="p-3 text-right">Diferencia</th>
+                    <th className="p-3">Estado</th>
+                    <th className="p-3">Revisión</th>
+                    <th className="p-3">Acción</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {lineasVisibles.map((linea) => {
+                    const cliente = obtenerPrimero(linea.clientes);
+                    const producto = obtenerPrimero(linea.productos_neumaticos);
+                    const productoTexto = textoProductoRelacionado(producto);
+
+                    const puedeContar =
+                      usuarioPuedeContarLinea(linea) &&
+                      (inventarioSeleccionado.estado === "pendiente_conteo" ||
+                        linea.estado === "pendiente_recuento");
+
+                    const puedeRevisar =
+                      inventarioSeleccionado.estado === "pendiente_revision" &&
+                      usuarioPuedeRevisarLinea(linea) &&
+                      !linea.aprobado &&
+                      linea.estado !== "pendiente_investigacion" &&
+                      linea.estado !== "pendiente_recuento";
+
+                    return (
+                      <tr key={linea.id} className="border-t border-slate-700 border-slate-700">
+                        <td className="p-3">{cliente?.nombre || "-"}</td>
+                        <td className="p-3">{productoTexto}</td>
+                        <td className="p-3">{linea.ubicacion || "-"}</td>
+                        <td className="p-3 text-right">{linea.stock_sistema}</td>
+
+                        <td className="p-3 text-right">
+                          <input
+                            defaultValue={linea.stock_fisico ?? ""}
+                            type="number"
+                            min="0"
+                            disabled={!puedeContar}
+                            onBlur={(e) =>
+                              actualizarConteoLinea(linea, e.target.value)
+                            }
+                            className="w-24 rounded-lg border border-slate-600 px-2 py-1 text-right text-sm disabled:bg-slate-900"
+                          />
+                        </td>
+
+                        <td className="p-3 text-right font-bold">
+                          {linea.diferencia ?? "-"}
+                        </td>
+
+                        <td className="p-3">{linea.estado || "-"}</td>
+
+                        <td className="p-3">
+                          {linea.aprobado ? (
+                            <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300">
+                              Aprobado
+                            </span>
+                          ) : linea.estado === "diferencia" ? (
+                            <span className="rounded-full bg-amber-500/15 px-2 py-1 text-xs font-semibold text-amber-300">
+                              Pendiente aprobar
+                            </span>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+
+                        <td className="p-3">
+                          {puedeRevisar ? (
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => aprobarAjusteLinea(linea)}
+                                className="rounded-lg border border-slate-600 px-3 py-1 text-xs"
+                              >
+                                Aprobar ajuste
+                              </button>
+
+                              {linea.diferencia !== 0 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      crearIncidenciaRevision(
+                                        linea,
+                                        "investigar"
+                                      )
+                                    }
+                                    className="rounded-lg border border-slate-600 px-3 py-1 text-xs"
+                                  >
+                                    Investigar
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      crearIncidenciaRevision(linea, "recontar")
+                                    }
+                                    className="rounded-lg border border-slate-600 px-3 py-1 text-xs"
+                                  >
+                                    Recontar
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          ) : linea.estado === "pendiente_investigacion" ? (
+                            <span className="text-xs text-amber-300">
+                              En investigación
+                            </span>
+                          ) : linea.estado === "pendiente_recuento" ? (
+                            <span className="text-xs text-sky-300">
+                              Pendiente recuento
+                            </span>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {lineasVisibles.length === 0 && (
+                    <tr>
+                      <td colSpan={9} className="p-6 text-center text-slate-400">
+                        No hay líneas de inventario visibles con los filtros
+                        actuales.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {inventarioSeleccionado.estado === "pendiente_revision" &&
+              (permisos.esAdmin || permisos.esResponsable) && (
+                <button
+                  type="button"
+                  onClick={cerrarRevisionInventario}
+                  className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white"
+                >
+                  Cerrar revisión
+                </button>
+              )}
+
+            {inventarioSeleccionado.estado === "pendiente_conteo" && (
+              <div className="space-y-3">
+                <input
+                  value={contadoPor}
+                  onChange={(e) => setContadoPor(e.target.value)}
+                  placeholder="Código operario conteo"
+                  className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+                />
+
+                <button
+                  type="button"
+                  onClick={cerrarConteo}
+                  className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white"
+                >
+                  Cerrar conteo y enviar a revisión
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
-
-      {inventarioSeleccionado && (
-        <div className="rounded-xl border bg-white p-4 space-y-4">
-          <h2 className="font-semibold">Conteo físico</h2>
-
-          <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-600">
-            Mostrando <strong>{lineasVisibles.length}</strong> líneas de{" "}
-            <strong>{lineasPorPermisos.length}</strong> visibles.
-          </div>
-
-          {inventarioSeleccionado.estado === "pendiente_revision" && (
-            <div className="rounded-lg border bg-gray-50 p-4 space-y-3">
-              <h3 className="font-semibold">Revisión responsable</h3>
-
-              <input
-                value={revisadoPor}
-                onChange={(e) => setRevisadoPor(e.target.value)}
-                placeholder="Código responsable revisión"
-                className="w-full rounded-lg border px-3 py-2 text-sm"
-                disabled={!permisos.esAdmin && !permisos.esResponsable}
-              />
-
-              <p className="text-sm text-gray-600">
-                El responsable puede aprobar el ajuste, investigar la diferencia
-                o solicitar recuento. Solo al aprobar se genera movimiento de
-                stock.
-              </p>
-            </div>
-          )}
-
-          <div className="overflow-auto rounded-xl border bg-white">
-            <table className="w-full min-w-[1100px] text-sm">
-              <thead className="bg-gray-50 text-left">
-                <tr>
-                  <th className="p-3">Cliente</th>
-                  <th className="p-3">Producto</th>
-                  <th className="p-3">Ubicación</th>
-                  <th className="p-3 text-right">Sistema</th>
-                  <th className="p-3 text-right">Físico</th>
-                  <th className="p-3 text-right">Diferencia</th>
-                  <th className="p-3">Estado</th>
-                  <th className="p-3">Revisión</th>
-                  <th className="p-3">Acción</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {lineasVisibles.map((linea) => {
-                  const cliente = obtenerPrimero(linea.clientes);
-                  const producto = obtenerPrimero(linea.productos_neumaticos);
-                  const productoTexto = textoProductoRelacionado(producto);
-
-                  const puedeContar =
-                    usuarioPuedeContarLinea(linea) &&
-                    (inventarioSeleccionado.estado === "pendiente_conteo" ||
-                      linea.estado === "pendiente_recuento");
-
-                  const puedeRevisar =
-                    inventarioSeleccionado.estado === "pendiente_revision" &&
-                    usuarioPuedeRevisarLinea(linea) &&
-                    !linea.aprobado &&
-                    linea.estado !== "pendiente_investigacion" &&
-                    linea.estado !== "pendiente_recuento";
-
-                  return (
-                    <tr key={linea.id} className="border-t">
-                      <td className="p-3">{cliente?.nombre || "-"}</td>
-                      <td className="p-3">{productoTexto}</td>
-                      <td className="p-3">{linea.ubicacion || "-"}</td>
-                      <td className="p-3 text-right">{linea.stock_sistema}</td>
-
-                      <td className="p-3 text-right">
-                        <input
-                          defaultValue={linea.stock_fisico ?? ""}
-                          type="number"
-                          min="0"
-                          disabled={!puedeContar}
-                          onBlur={(e) =>
-                            actualizarConteoLinea(linea, e.target.value)
-                          }
-                          className="w-24 rounded-lg border px-2 py-1 text-right text-sm disabled:bg-gray-100"
-                        />
-                      </td>
-
-                      <td className="p-3 text-right font-bold">
-                        {linea.diferencia ?? "-"}
-                      </td>
-
-                      <td className="p-3">{linea.estado || "-"}</td>
-
-                      <td className="p-3">
-                        {linea.aprobado ? (
-                          <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">
-                            Aprobado
-                          </span>
-                        ) : linea.estado === "diferencia" ? (
-                          <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">
-                            Pendiente aprobar
-                          </span>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-
-                      <td className="p-3">
-                        {puedeRevisar ? (
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => aprobarAjusteLinea(linea)}
-                              className="rounded-lg border px-3 py-1 text-xs"
-                            >
-                              Aprobar ajuste
-                            </button>
-
-                            {linea.diferencia !== 0 && (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    crearIncidenciaRevision(
-                                      linea,
-                                      "investigar"
-                                    )
-                                  }
-                                  className="rounded-lg border px-3 py-1 text-xs"
-                                >
-                                  Investigar
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    crearIncidenciaRevision(linea, "recontar")
-                                  }
-                                  className="rounded-lg border px-3 py-1 text-xs"
-                                >
-                                  Recontar
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        ) : linea.estado === "pendiente_investigacion" ? (
-                          <span className="text-xs text-yellow-700">
-                            En investigación
-                          </span>
-                        ) : linea.estado === "pendiente_recuento" ? (
-                          <span className="text-xs text-blue-700">
-                            Pendiente recuento
-                          </span>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-
-                {lineasVisibles.length === 0 && (
-                  <tr>
-                    <td colSpan={9} className="p-6 text-center text-gray-500">
-                      No hay líneas de inventario visibles con los filtros
-                      actuales.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {inventarioSeleccionado.estado === "pendiente_revision" &&
-            (permisos.esAdmin || permisos.esResponsable) && (
-              <button
-                type="button"
-                onClick={cerrarRevisionInventario}
-                className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
-              >
-                Cerrar revisión
-              </button>
-            )}
-
-          {inventarioSeleccionado.estado === "pendiente_conteo" && (
-            <div className="space-y-3">
-              <input
-                value={contadoPor}
-                onChange={(e) => setContadoPor(e.target.value)}
-                placeholder="Código operario conteo"
-                className="w-full rounded-lg border px-3 py-2 text-sm"
-              />
-
-              <button
-                type="button"
-                onClick={cerrarConteo}
-                className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
-              >
-                Cerrar conteo y enviar a revisión
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }

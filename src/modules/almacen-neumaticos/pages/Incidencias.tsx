@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import { registrarAuditoria } from "../services/auditoriaAlmacen";
@@ -662,228 +662,108 @@ export default function Incidencias() {
 
   if (cargandoPermisos) {
     return (
-      <div className="p-6 space-y-6">
-        <AlmacenMenu />
-
-        <div className="rounded-xl border bg-white p-6 text-sm text-gray-600">
-          Cargando permisos del usuario conectado...
+      <AlmacenLayoutOscuro>
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-6 text-sm text-slate-300">
+            Cargando permisos del usuario conectado...
+          </div>
         </div>
-      </div>
+      </AlmacenLayoutOscuro>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
-
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Incidencias</h1>
-          <p className="text-sm text-gray-500">
-            Registro y resolución de incidencias de almacén con permisos del
-            usuario conectado. Se cargan las últimas 200 incidencias según
-            filtros.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarIncidenciasCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={incidenciasVisibles.length === 0}
-          >
-            Exportar CSV
-          </button>
-
-          <button
-            type="button"
-            onClick={exportarIncidenciasExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={incidenciasVisibles.length === 0}
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Crear incidencia</h2>
-
-        {!usuarioPuedeCrearIncidencia() && (
-          <p className="rounded-lg bg-yellow-50 p-3 text-sm text-yellow-800">
-            Necesitas un perfil activo para crear incidencias.
-          </p>
-        )}
-
-        <select
-          value={empresaId}
-          onChange={(e) => setEmpresaId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearIncidencia()}
-        >
-          <option value="">Empresa...</option>
-          {empresas.map((empresa) => (
-            <option key={empresa.id} value={empresa.id}>
-              {empresa.nombre}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={clienteId}
-          onChange={(e) => setClienteId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearIncidencia()}
-        >
-          <option value="">Cliente opcional...</option>
-          {clientesVisibles.map((cliente) => (
-            <option key={cliente.id} value={cliente.id}>
-              {cliente.nombre}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={productoId}
-          onChange={(e) => setProductoId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearIncidencia()}
-        >
-          <option value="">Producto opcional...</option>
-          {productos.map((producto) => (
-            <option key={producto.id} value={producto.id}>
-              {textoProducto(producto)}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={tipo}
-          onChange={(e) => setTipo(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearIncidencia()}
-        >
-          {TIPOS_INCIDENCIA.map((item) => (
-            <option key={item.valor} value={item.valor}>
-              {item.texto}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={gravedad}
-          onChange={(e) => setGravedad(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearIncidencia()}
-        >
-          {GRAVEDADES_INCIDENCIA.map((item) => (
-            <option key={item.valor} value={item.valor}>
-              {item.texto}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={ubicacion}
-          onChange={(e) => setUbicacion(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearIncidencia()}
-        >
-          <option value="">Ubicación opcional...</option>
-          {ubicacionesVisibles.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-
-        <textarea
-          value={descripcion}
-          onChange={(e) => setDescripcion(e.target.value)}
-          placeholder="Descripción de la incidencia"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearIncidencia()}
-        />
-
-        <input
-          value={creadaPor}
-          onChange={(e) => setCreadaPor(e.target.value)}
-          placeholder="Creada por / código operario"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeCrearIncidencia()}
-        />
-
-        <button
-          type="button"
-          onClick={crearIncidencia}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          disabled={!usuarioPuedeCrearIncidencia()}
-        >
-          Crear incidencia
-        </button>
-
-        {mensaje && <p className="text-sm text-gray-700">{mensaje}</p>}
-      </div>
-
-      {incidenciaSeleccionada && (
-        <div className="rounded-xl border bg-white p-4 space-y-4">
-          <h2 className="font-semibold">Resolver incidencia</h2>
-
-          <div className="rounded-lg bg-gray-50 p-3 text-sm">
-            <strong>Incidencia:</strong>{" "}
-            {incidenciaSeleccionada.descripcion || "-"}
+    <AlmacenLayoutOscuro>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Incidencias</h1>
+            <p className="text-sm text-slate-400">
+              Registro y resolución de incidencias de almacén con permisos del
+              usuario conectado. Se cargan las últimas 200 incidencias según
+              filtros.
+            </p>
           </div>
 
-          <textarea
-            value={resolucion}
-            onChange={(e) => setResolucion(e.target.value)}
-            placeholder="Resolución aplicada"
-            className="w-full rounded-lg border px-3 py-2 text-sm"
-          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportarIncidenciasCsv}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              disabled={incidenciasVisibles.length === 0}
+            >
+              Exportar CSV
+            </button>
 
-          <input
-            value={resueltaPor}
-            onChange={(e) => setResueltaPor(e.target.value)}
-            placeholder="Resuelta por / código responsable"
-            className="w-full rounded-lg border px-3 py-2 text-sm"
-          />
-
-          <button
-            type="button"
-            onClick={resolverIncidencia}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
-          >
-            Confirmar resolución
-          </button>
+            <button
+              type="button"
+              onClick={exportarIncidenciasExcel}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={incidenciasVisibles.length === 0}
+            >
+              Exportar Excel
+            </button>
+          </div>
         </div>
-      )}
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Filtros de incidencias</h2>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Crear incidencia</h2>
 
-        <div className="grid gap-3 md:grid-cols-4">
-          <input
-            type="date"
-            value={fechaDesde}
-            onChange={(e) => setFechaDesde(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
-
-          <input
-            type="date"
-            value={fechaHasta}
-            onChange={(e) => setFechaHasta(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+          {!usuarioPuedeCrearIncidencia() && (
+            <p className="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-300">
+              Necesitas un perfil activo para crear incidencias.
+            </p>
+          )}
 
           <select
-            value={filtroEstado}
-            onChange={(e) => setFiltroEstado(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            value={empresaId}
+            onChange={(e) => setEmpresaId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearIncidencia()}
           >
-            <option value="">Todos los estados</option>
-            {ESTADOS_INCIDENCIA.map((item) => (
+            <option value="">Empresa...</option>
+            {empresas.map((empresa) => (
+              <option key={empresa.id} value={empresa.id}>
+                {empresa.nombre}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={clienteId}
+            onChange={(e) => setClienteId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearIncidencia()}
+          >
+            <option value="">Cliente opcional...</option>
+            {clientesVisibles.map((cliente) => (
+              <option key={cliente.id} value={cliente.id}>
+                {cliente.nombre}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={productoId}
+            onChange={(e) => setProductoId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearIncidencia()}
+          >
+            <option value="">Producto opcional...</option>
+            {productos.map((producto) => (
+              <option key={producto.id} value={producto.id}>
+                {textoProducto(producto)}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={tipo}
+            onChange={(e) => setTipo(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearIncidencia()}
+          >
+            {TIPOS_INCIDENCIA.map((item) => (
               <option key={item.valor} value={item.valor}>
                 {item.texto}
               </option>
@@ -891,11 +771,11 @@ export default function Incidencias() {
           </select>
 
           <select
-            value={filtroGravedad}
-            onChange={(e) => setFiltroGravedad(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            value={gravedad}
+            onChange={(e) => setGravedad(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearIncidencia()}
           >
-            <option value="">Todas las gravedades</option>
             {GRAVEDADES_INCIDENCIA.map((item) => (
               <option key={item.valor} value={item.valor}>
                 {item.texto}
@@ -904,139 +784,259 @@ export default function Incidencias() {
           </select>
 
           <select
-            value={filtroTipo}
-            onChange={(e) => setFiltroTipo(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            value={ubicacion}
+            onChange={(e) => setUbicacion(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearIncidencia()}
           >
-            <option value="">Todos los tipos</option>
-            {TIPOS_INCIDENCIA.map((item) => (
-              <option key={item.valor} value={item.valor}>
-                {item.texto}
+            <option value="">Ubicación opcional...</option>
+            {ubicacionesVisibles.map((item) => (
+              <option key={item} value={item}>
+                {item}
               </option>
             ))}
           </select>
 
-          <input
-            value={filtroProducto}
-            onChange={(e) => setFiltroProducto(e.target.value)}
-            placeholder="Filtrar por producto, medida, marca o DOT"
-            className="rounded-lg border px-3 py-2 text-sm"
+          <textarea
+            value={descripcion}
+            onChange={(e) => setDescripcion(e.target.value)}
+            placeholder="Descripción de la incidencia"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearIncidencia()}
           />
 
           <input
-            value={filtroTexto}
-            onChange={(e) => setFiltroTexto(e.target.value)}
-            placeholder="Buscar cliente, ubicación, descripción..."
-            className="rounded-lg border px-3 py-2 text-sm md:col-span-2"
+            value={creadaPor}
+            onChange={(e) => setCreadaPor(e.target.value)}
+            placeholder="Creada por / código operario"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeCrearIncidencia()}
           />
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={cargarIncidencias}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
-          >
-            {cargandoIncidencias ? "Buscando..." : "Buscar"}
-          </button>
 
           <button
             type="button"
-            onClick={limpiarFiltrosIncidencias}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
+            onClick={crearIncidencia}
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            disabled={!usuarioPuedeCrearIncidencia()}
           >
-            Limpiar filtros
+            Crear incidencia
           </button>
+
+          {mensaje && <p className="text-sm text-slate-300">{mensaje}</p>}
         </div>
-      </div>
 
-      <div className="rounded-xl border bg-white p-3 text-sm text-gray-600">
-        Mostrando <strong>{incidenciasVisibles.length}</strong> incidencias de{" "}
-        <strong>{incidenciasPorPermisos.length}</strong> visibles y{" "}
-        <strong>{incidencias.length}</strong> cargadas.
-      </div>
+        {incidenciaSeleccionada && (
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+            <h2 className="font-semibold">Resolver incidencia</h2>
 
-      <div className="overflow-auto rounded-xl border bg-white">
-        <table className="w-full min-w-[1300px] text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="p-3">Fecha</th>
-              <th className="p-3">Estado</th>
-              <th className="p-3">Tipo</th>
-              <th className="p-3">Gravedad</th>
-              <th className="p-3">Cliente</th>
-              <th className="p-3">Producto</th>
-              <th className="p-3">Ubicación</th>
-              <th className="p-3">Descripción</th>
-              <th className="p-3">Creada por</th>
-              <th className="p-3">Resolución</th>
-              <th className="p-3">Acción</th>
-            </tr>
-          </thead>
+            <div className="rounded-lg bg-slate-900 p-3 text-sm">
+              <strong>Incidencia:</strong>{" "}
+              {incidenciaSeleccionada.descripcion || "-"}
+            </div>
 
-          <tbody>
-            {incidenciasVisibles.map((incidencia) => {
-              const cliente = obtenerPrimero(incidencia.clientes);
-              const producto = obtenerPrimero(incidencia.productos_neumaticos);
-              const puedeResolver = usuarioPuedeResolverIncidencia(incidencia);
+            <textarea
+              value={resolucion}
+              onChange={(e) => setResolucion(e.target.value)}
+              placeholder="Resolución aplicada"
+              className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-              const productoTexto = textoProductoRelacionado(producto);
+            <input
+              value={resueltaPor}
+              onChange={(e) => setResueltaPor(e.target.value)}
+              placeholder="Resuelta por / código responsable"
+              className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-              return (
-                <tr key={incidencia.id} className="border-t align-top">
-                  <td className="p-3">
-                    {formatearFecha(incidencia.created_at)}
-                  </td>
-                  <td className="p-3 font-medium">
-                    {incidencia.estado || "-"}
-                  </td>
-                  <td className="p-3">{incidencia.tipo || "-"}</td>
-                  <td className="p-3">{incidencia.gravedad || "-"}</td>
-                  <td className="p-3">{cliente?.nombre || "-"}</td>
-                  <td className="p-3">{productoTexto}</td>
-                  <td className="p-3">{incidencia.ubicacion || "-"}</td>
-                  <td className="p-3">{incidencia.descripcion || "-"}</td>
-                  <td className="p-3">{incidencia.creada_por || "-"}</td>
-                  <td className="p-3">{incidencia.resolucion || "-"}</td>
-                  <td className="p-3">
-                    {incidencia.estado !== "resuelta" && puedeResolver ? (
-                      <button
-                        type="button"
-                        onClick={() => prepararResolucion(incidencia.id)}
-                        className="rounded-lg border px-3 py-1 text-xs"
-                      >
-                        Resolver
-                      </button>
-                    ) : incidencia.estado !== "resuelta" ? (
-                      <span className="text-xs text-gray-500">
-                        Sin permiso
-                      </span>
-                    ) : (
-                      "-"
-                    )}
+            <button
+              type="button"
+              onClick={resolverIncidencia}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              Confirmar resolución
+            </button>
+          </div>
+        )}
+
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Filtros de incidencias</h2>
+
+          <div className="grid gap-3 md:grid-cols-4">
+            <input
+              type="date"
+              value={fechaDesde}
+              onChange={(e) => setFechaDesde(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <input
+              type="date"
+              value={fechaHasta}
+              onChange={(e) => setFechaHasta(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <select
+              value={filtroEstado}
+              onChange={(e) => setFiltroEstado(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todos los estados</option>
+              {ESTADOS_INCIDENCIA.map((item) => (
+                <option key={item.valor} value={item.valor}>
+                  {item.texto}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={filtroGravedad}
+              onChange={(e) => setFiltroGravedad(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todas las gravedades</option>
+              {GRAVEDADES_INCIDENCIA.map((item) => (
+                <option key={item.valor} value={item.valor}>
+                  {item.texto}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={filtroTipo}
+              onChange={(e) => setFiltroTipo(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todos los tipos</option>
+              {TIPOS_INCIDENCIA.map((item) => (
+                <option key={item.valor} value={item.valor}>
+                  {item.texto}
+                </option>
+              ))}
+            </select>
+
+            <input
+              value={filtroProducto}
+              onChange={(e) => setFiltroProducto(e.target.value)}
+              placeholder="Filtrar por producto, medida, marca o DOT"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <input
+              value={filtroTexto}
+              onChange={(e) => setFiltroTexto(e.target.value)}
+              placeholder="Buscar cliente, ubicación, descripción..."
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm md:col-span-2 bg-slate-900 text-slate-100"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={cargarIncidencias}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              {cargandoIncidencias ? "Buscando..." : "Buscar"}
+            </button>
+
+            <button
+              type="button"
+              onClick={limpiarFiltrosIncidencias}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+            >
+              Limpiar filtros
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-3 text-sm text-slate-300">
+          Mostrando <strong>{incidenciasVisibles.length}</strong> incidencias de{" "}
+          <strong>{incidenciasPorPermisos.length}</strong> visibles y{" "}
+          <strong>{incidencias.length}</strong> cargadas.
+        </div>
+
+        <div className="overflow-auto rounded-xl border border-slate-600 bg-slate-800">
+          <table className="w-full min-w-[1300px] text-sm">
+            <thead className="bg-slate-900 text-left">
+              <tr>
+                <th className="p-3">Fecha</th>
+                <th className="p-3">Estado</th>
+                <th className="p-3">Tipo</th>
+                <th className="p-3">Gravedad</th>
+                <th className="p-3">Cliente</th>
+                <th className="p-3">Producto</th>
+                <th className="p-3">Ubicación</th>
+                <th className="p-3">Descripción</th>
+                <th className="p-3">Creada por</th>
+                <th className="p-3">Resolución</th>
+                <th className="p-3">Acción</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {incidenciasVisibles.map((incidencia) => {
+                const cliente = obtenerPrimero(incidencia.clientes);
+                const producto = obtenerPrimero(incidencia.productos_neumaticos);
+                const puedeResolver = usuarioPuedeResolverIncidencia(incidencia);
+
+                const productoTexto = textoProductoRelacionado(producto);
+
+                return (
+                  <tr key={incidencia.id} className="border-t border-slate-700 border-slate-700 align-top">
+                    <td className="p-3">
+                      {formatearFecha(incidencia.created_at)}
+                    </td>
+                    <td className="p-3 font-medium">
+                      {incidencia.estado || "-"}
+                    </td>
+                    <td className="p-3">{incidencia.tipo || "-"}</td>
+                    <td className="p-3">{incidencia.gravedad || "-"}</td>
+                    <td className="p-3">{cliente?.nombre || "-"}</td>
+                    <td className="p-3">{productoTexto}</td>
+                    <td className="p-3">{incidencia.ubicacion || "-"}</td>
+                    <td className="p-3">{incidencia.descripcion || "-"}</td>
+                    <td className="p-3">{incidencia.creada_por || "-"}</td>
+                    <td className="p-3">{incidencia.resolucion || "-"}</td>
+                    <td className="p-3">
+                      {incidencia.estado !== "resuelta" && puedeResolver ? (
+                        <button
+                          type="button"
+                          onClick={() => prepararResolucion(incidencia.id)}
+                          className="rounded-lg border border-slate-600 px-3 py-1 text-xs"
+                        >
+                          Resolver
+                        </button>
+                      ) : incidencia.estado !== "resuelta" ? (
+                        <span className="text-xs text-slate-400">
+                          Sin permiso
+                        </span>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {incidenciasVisibles.length === 0 && (
+                <tr>
+                  <td colSpan={11} className="p-6 text-center text-slate-400">
+                    No hay incidencias visibles con los filtros actuales.
                   </td>
                 </tr>
-              );
-            })}
+              )}
+            </tbody>
+          </table>
+        </div>
 
-            {incidenciasVisibles.length === 0 && (
-              <tr>
-                <td colSpan={11} className="p-6 text-center text-gray-500">
-                  No hay incidencias visibles con los filtros actuales.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <button
+          type="button"
+          onClick={cargarDatos}
+          className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+        >
+          Actualizar incidencias
+        </button>
       </div>
-
-      <button
-        type="button"
-        onClick={cargarDatos}
-        className="rounded-xl border px-4 py-2 text-sm font-semibold"
-      >
-        Actualizar incidencias
-      </button>
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }
