@@ -52,6 +52,7 @@ export async function setup(): Promise<void> {
   const { initTacografos } = await import("./server/tacografos/schema.ts");
   const { initTherefore } = await import("./server/therefore/schema.ts");
   const { initRecepciones } = await import("./server/recepciones/schema.ts");
+  const { initOrManuales } = await import("./server/or-manuales/schema.ts");
   const { initSatisfaction } = await import("./server/satisfaction/schema.ts");
   const { initAuditoria } = await import("./server/core/auditoriaSchema.ts");
 
@@ -69,6 +70,7 @@ export async function setup(): Promise<void> {
   await initTacografos();
   await initTherefore();
   await initRecepciones();
+  await initOrManuales();
   await initSatisfaction();
   // No está en la cadena del arranque —la auditoría la prepara su propio
   // módulo— pero varias pruebas escriben en ella y no deben depender de quién

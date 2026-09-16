@@ -4,7 +4,7 @@
 // Las rutas son las mismas que usa el hub de Inicio (rutaModulo); si allí
 // cambia una portada, hay que cambiarla aquí también.
 import type { ReactNode } from "react";
-import { Wallet, Warehouse, Users, Hammer, HardHat, Clock, CalendarClock, Coins, Network, Gauge, Inbox, Wrench, PackageCheck } from "lucide-react";
+import { Wallet, Warehouse, Users, Hammer, HardHat, Clock, CalendarClock, Coins, Network, Gauge, Inbox, Wrench, PackageCheck, FileStack } from "lucide-react";
 import iconoAssist from "../assets/hub/icono-assist.png";
 import emblemaTyre from "../assets/hub/emblema-tyrecontrol.png";
 
@@ -29,4 +29,5 @@ export const ACCESOS_MODULOS: AccesoModulo[] = [
   { key: "taller",         label: "Panel de taller", ruta: "/taller",                   icono: <Wrench className={cls} /> },
   { key: "therefore",      label: "Therefore",       ruta: "/therefore/bandeja",        icono: <Inbox className={cls} /> },
   { key: "recepciones",    label: "Recepciones",     ruta: "/recepciones/bandeja",      icono: <PackageCheck className={cls} /> },
+  { key: "or-manuales",    label: "OR Manuales",     ruta: "/or-manuales/panel",        icono: <FileStack className={cls} /> },
 ];

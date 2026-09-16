@@ -24,6 +24,7 @@ export type ModuloApp = {
     | "tacografos"
     | "therefore"
     | "recepciones"
+    | "or-manuales"
     | "assist";
   label: string;
   roles: RolApp[];
@@ -164,6 +165,26 @@ export const MODULOS_APP: ModuloApp[] = [
       { key: "incidencias", label: "Incidencias" },
       { key: "proveedores", label: "Proveedores" },
       { key: "correo", label: "Correo del proveedor" },
+    ],
+  },
+  {
+    key: "or-manuales",
+    label: "OR Manuales",
+    // Mismos roles que traduce server/or-manuales/permissions.ts.
+    roles: [
+      { value: "admin", label: "Admin" },
+      { value: "gestor", label: "Responsable de taller" },
+      { value: "operario", label: "Operario (escanea)" },
+      { value: "consulta", label: "Solo consulta" },
+    ],
+    pantallas: [
+      { key: "panel", label: "Panel" },
+      { key: "blocs", label: "Blocs" },
+      { key: "escanear", label: "Escanear documentos" },
+      { key: "pendientes", label: "Documentos pendientes" },
+      { key: "avisos", label: "Avisos" },
+      { key: "historico", label: "Histórico" },
+      { key: "configuracion", label: "Configuración" },
     ],
   },
   {
