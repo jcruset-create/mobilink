@@ -1,6 +1,6 @@
 import { apiFetch } from "../../apiFetch";
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import {
@@ -1688,539 +1688,539 @@ export default function SalidasMontajes() {
   }
 
   function claseEstado(estado: EstadoAlbaranPendiente) {
-    if (estado === "listo") return "bg-green-100 text-green-800";
-    if (estado === "duplicado") return "bg-red-100 text-red-800";
+    if (estado === "listo") return "bg-emerald-500/15 text-emerald-300";
+    if (estado === "duplicado") return "bg-red-500/15 text-red-300";
     if (
       estado === "sin_cliente" ||
       estado === "sin_stock" ||
       estado === "sin_vehiculo" ||
       estado === "varios_stock"
     ) {
-      return "bg-orange-100 text-orange-800";
+      return "bg-orange-500/15 text-orange-300";
     }
-    if (estado === "confirmado") return "bg-blue-100 text-blue-800";
-    if (estado === "descartado") return "bg-gray-100 text-gray-700";
-    if (estado === "error") return "bg-red-100 text-red-800";
-    return "bg-gray-100 text-gray-700";
+    if (estado === "confirmado") return "bg-sky-500/15 text-sky-300";
+    if (estado === "descartado") return "bg-slate-900 text-slate-300";
+    if (estado === "error") return "bg-red-500/15 text-red-300";
+    return "bg-slate-900 text-slate-300";
   }
 
   if (cargandoPermisos) {
     return (
-      <div className="p-6 space-y-6">
-        <AlmacenMenu />
-
-        <div className="rounded-xl border bg-white p-6 text-sm text-gray-600">
-          Cargando permisos del usuario conectado...
+      <AlmacenLayoutOscuro>
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-6 text-sm text-slate-300">
+            Cargando permisos del usuario conectado...
+          </div>
         </div>
-      </div>
+      </AlmacenLayoutOscuro>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
-
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Salidas / Montajes</h1>
-          <p className="text-sm text-gray-500">
-            Registra montajes seleccionando stock permitido, vehículo, documento
-            y PDF adjunto.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarStockMontableCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={lineasFiltradas.length === 0}
-          >
-            Exportar CSV
-          </button>
-
-          <button
-            type="button"
-            onClick={exportarStockMontableExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={lineasFiltradas.length === 0}
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Filtros</h2>
-
-        <div className="grid gap-3 md:grid-cols-4">
-          <input
-            value={filtroCliente}
-            onChange={(e) => setFiltroCliente(e.target.value)}
-            placeholder="Filtrar cliente"
-            className="rounded-lg border px-3 py-2 text-sm"
-            list="clientes-montaje"
-          />
-
-          <datalist id="clientes-montaje">
-            {clientesDisponibles.map((cliente) => (
-              <option key={cliente} value={cliente} />
-            ))}
-          </datalist>
-
-          <input
-            value={filtroProducto}
-            onChange={(e) => setFiltroProducto(e.target.value)}
-            placeholder="Producto, medida, marca o DOT"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
-
-          <input
-            value={filtroUbicacion}
-            onChange={(e) => setFiltroUbicacion(e.target.value)}
-            placeholder="Filtrar ubicación"
-            className="rounded-lg border px-3 py-2 text-sm"
-            list="ubicaciones-montaje"
-          />
-
-          <datalist id="ubicaciones-montaje">
-            {ubicacionesDisponibles.map((item) => (
-              <option key={item} value={item} />
-            ))}
-          </datalist>
-
-          <input
-            value={filtroVehiculo}
-            onChange={(e) => setFiltroVehiculo(e.target.value)}
-            placeholder="Vehículo, matrícula o Nº"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
-
-          <input
-            value={filtroTexto}
-            onChange={(e) => setFiltroTexto(e.target.value)}
-            placeholder="Buscar stock..."
-            className="rounded-lg border px-3 py-2 text-sm md:col-span-3"
-          />
-
-          <button
-            type="button"
-            onClick={limpiarFiltros}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
-          >
-            Limpiar filtros
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-xl border bg-white p-3 text-sm text-gray-600">
-        Mostrando <strong>{lineasFiltradas.length}</strong> líneas de stock de{" "}
-        <strong>{lineasPorPermisos.length}</strong> visibles.
-      </div>
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <div>
-          <h2 className="font-semibold">Importar albaranes escaneados</h2>
-          <p className="text-sm text-gray-500">
-            Puedes subir un PDF con uno o varios albaranes. Se leerán, se
-            marcarán duplicados y podrás validar manualmente cada salida.
-          </p>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-3">
-          <input
-            id="importar-albaran-pdf"
-            type="file"
-            accept="application/pdf"
-            onChange={(e) =>
-              seleccionarArchivoImportacion(e.target.files?.[0] || null)
-            }
-            className="rounded-lg border px-3 py-2 text-sm md:col-span-2"
-            disabled={importandoAlbaran || guardando}
-          />
-
-          <button
-            type="button"
-            onClick={importarAlbaranPdf}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={!archivoAlbaranImportar || importandoAlbaran || guardando}
-          >
-            {importandoAlbaran ? "Leyendo albaranes..." : "Importar PDF"}
-          </button>
-        </div>
-
-        {archivoAlbaranImportar && (
-          <p className="text-sm text-gray-700">
-            PDF seleccionado: <strong>{archivoAlbaranImportar.name}</strong>
-          </p>
-        )}
-
-        {albaranesPendientes.length > 0 && (
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="font-semibold">Albaranes pendientes de validar</h3>
-
-              <button
-                type="button"
-                onClick={confirmarTodosValidos}
-                className="rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                disabled={guardando || totalAlbaranesListos === 0}
-              >
-                Confirmar válidos ({totalAlbaranesListos})
-              </button>
-            </div>
-
-            <div className="overflow-x-auto rounded-xl border">
-              <table className="min-w-full text-left text-sm">
-                <thead className="bg-gray-50 text-xs uppercase text-gray-500">
-                  <tr>
-                    <th className="px-3 py-2">Estado</th>
-                    <th className="px-3 py-2">Pág.</th>
-                    <th className="px-3 py-2">Albarán</th>
-                    <th className="px-3 py-2">Cliente</th>
-                    <th className="px-3 py-2">Matrícula</th>
-                    <th className="px-3 py-2">Nº Vehículo</th>
-                    <th className="px-3 py-2">Producto</th>
-                    <th className="px-3 py-2">Cant.</th>
-                    <th className="px-3 py-2">Mensaje</th>
-                    <th className="px-3 py-2">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {albaranesPendientes.map((item) => (
-                    <tr key={item.uid} className="border-t align-top">
-                      <td className="px-3 py-2">
-                        <span
-                          className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${claseEstado(
-                            item.estado
-                          )}`}
-                        >
-                          {etiquetaEstado(item.estado)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">{item.pagina || "-"}</td>
-                      <td className="px-3 py-2 font-semibold">
-                        {item.albaran || "-"}
-                      </td>
-                      <td className="px-3 py-2">{item.cliente || "-"}</td>
-                      <td className="px-3 py-2">{item.matricula || "-"}</td>
-                      <td className="px-3 py-2">
-                        {item.numeroVehiculo || "-"}
-                      </td>
-                      <td className="px-3 py-2 min-w-64">
-                        {item.producto || "-"}
-                      </td>
-                      <td className="px-3 py-2">{item.cantidad ?? "-"}</td>
-                      <td className="px-3 py-2 min-w-56">
-                        {item.mensajeEstado}
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="flex flex-wrap gap-2">
-                          {item.estado === "varios_stock" && (
-                            <select
-                              value={item.lineaStockClave}
-                              onChange={(e) =>
-                                seleccionarLineaStockAlbaranPendiente(
-                                  item.uid,
-                                  e.target.value
-                                )
-                              }
-                              className="rounded-lg border px-2 py-1 text-xs"
-                              disabled={item.guardando || guardando}
-                            >
-                              <option value="">Seleccionar almacén...</option>
-                              {item.lineasStockCandidatas.map((linea) => (
-                                <option key={linea.clave} value={linea.clave}>
-                                  {linea.ubicacion} | Stock: {linea.cantidad}
-                                </option>
-                              ))}
-                            </select>
-                          )}
-
-                          <button
-                            type="button"
-                            onClick={() => cargarAlbaranPendienteEnFormulario(item)}
-                            className="rounded-lg border px-3 py-1 text-xs font-semibold"
-                            disabled={item.estado === "confirmado"}
-                          >
-                            Revisar
-                          </button>
-
-                          {item.estado === "sin_cliente" && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                crearClienteParaAlbaranPendiente(item.uid)
-                              }
-                              className="rounded-lg bg-blue-700 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
-                              disabled={item.guardando || guardando}
-                            >
-                              Crear cliente
-                            </button>
-                          )}
-
-                          {item.estado === "sin_vehiculo" ||
-                          (item.estado === "error" &&
-                            !item.vehiculoId &&
-                            item.lineaStockClave) ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                crearVehiculoParaAlbaranPendiente(item.uid)
-                              }
-                              className="rounded-lg bg-orange-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
-                              disabled={item.guardando || guardando}
-                            >
-                              Crear vehículo
-                            </button>
-                          ) : null}
-
-                          <button
-                            type="button"
-                            onClick={() => confirmarAlbaranPendiente(item.uid)}
-                            className="rounded-lg bg-black px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
-                            disabled={
-                              item.guardando ||
-                              guardando ||
-                              item.estado !== "listo"
-                            }
-                          >
-                            Confirmar
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => descartarAlbaranPendiente(item.uid)}
-                            className="rounded-lg border px-3 py-1 text-xs font-semibold disabled:opacity-50"
-                            disabled={
-                              item.guardando ||
-                              item.estado === "confirmado" ||
-                              item.estado === "descartado"
-                            }
-                          >
-                            Descartar
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {albaranDetectado && albaranesPendientes.length <= 1 && (
-          <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
-            <p className="font-semibold">Datos detectados</p>
-            <div className="mt-2 grid gap-2 md:grid-cols-3">
-              <div>
-                Albarán: <strong>{albaranDetectado.albaran || "-"}</strong>
-              </div>
-              <div>
-                Fecha: <strong>{albaranDetectado.fecha || "-"}</strong>
-              </div>
-              <div>
-                Matrícula:{" "}
-                <strong>{albaranDetectado.matricula || "-"}</strong>
-              </div>
-              <div>
-                Nº vehículo:{" "}
-                <strong>{albaranDetectado.numeroVehiculo || "-"}</strong>
-              </div>
-              <div>
-                Cliente: <strong>{albaranDetectado.cliente || "-"}</strong>
-              </div>
-              <div>
-                Producto:{" "}
-                <strong>{albaranDetectado.producto || "-"}</strong>
-              </div>
-              <div>
-                Cantidad:{" "}
-                <strong>{albaranDetectado.cantidad ?? "-"}</strong>
-              </div>
-            </div>
-
-            {albaranDetectado.observaciones.length > 0 && (
-              <p className="mt-2 text-xs text-gray-500">
-                {albaranDetectado.observaciones.join(" | ")}
-              </p>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <select
-          value={empresaId}
-          onChange={(e) => {
-            setEmpresaId(e.target.value);
-            setLineaStockClave("");
-            setVehiculoId("");
-            setMatriculaPendienteImportada("");
-          }}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil || guardando}
-        >
-          <option value="">Empresa...</option>
-          {empresas.map((empresa) => (
-            <option key={empresa.id} value={empresa.id}>
-              {empresa.nombre}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={lineaStockClave}
-          onChange={(e) => {
-            setLineaStockClave(e.target.value);
-            setVehiculoId("");
-          }}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil || guardando}
-        >
-          <option value="">
-            {permisos.perfil
-              ? "Selecciona stock disponible..."
-              : "Sin perfil activo..."}
-          </option>
-          {lineasFiltradas.map((linea) => (
-            <option key={linea.clave} value={linea.clave}>
-              {linea.cliente} | {linea.producto} | {linea.ubicacion} | Stock:{" "}
-              {linea.cantidad}
-            </option>
-          ))}
-        </select>
-
-        {lineaSeleccionada && (
-          <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
-            Cliente: <strong>{lineaSeleccionada.cliente}</strong>
-            <br />
-            Ubicación: <strong>{lineaSeleccionada.ubicacion}</strong>
-            <br />
-            Stock disponible: <strong>{lineaSeleccionada.cantidad}</strong>
-          </div>
-        )}
-
-        <select
-          value={vehiculoId}
-          onChange={(e) => setVehiculoId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!lineaStockClave || guardando}
-        >
-          <option value="">Vehículo...</option>
-          {vehiculosFiltrados.map((vehiculo) => (
-            <option key={vehiculo.id} value={vehiculo.id}>
-              {textoVehiculo(vehiculo)}
-            </option>
-          ))}
-        </select>
-
-        {mostrarAvisoVehiculoNoEncontrado && lineaSeleccionada && (
-          <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-900">
-            <p className="font-semibold">
-              Vehículo no encontrado: {matriculaPendienteImportada}
+    <AlmacenLayoutOscuro>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Salidas / Montajes</h1>
+            <p className="text-sm text-slate-400">
+              Registra montajes seleccionando stock permitido, vehículo, documento
+              y PDF adjunto.
             </p>
-            <p className="mt-1">
-              El albarán ha detectado esta matrícula, pero no existe ningún
-              vehículo activo con esa matrícula para el cliente{" "}
-              <strong>{lineaSeleccionada.cliente}</strong>.
-            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportarStockMontableCsv}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              disabled={lineasFiltradas.length === 0}
+            >
+              Exportar CSV
+            </button>
 
             <button
               type="button"
-              onClick={crearVehiculoDetectado}
-              className="mt-3 rounded-xl bg-orange-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              disabled={guardando || creandoVehiculoDetectado}
+              onClick={exportarStockMontableExcel}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={lineasFiltradas.length === 0}
             >
-              {creandoVehiculoDetectado
-                ? "Creando vehículo..."
-                : "Crear vehículo automáticamente"}
+              Exportar Excel
             </button>
           </div>
-        )}
+        </div>
 
-        <input
-          value={cantidad}
-          onChange={(e) => setCantidad(e.target.value)}
-          type="number"
-          min="1"
-          placeholder="Cantidad"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil || guardando}
-        />
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Filtros</h2>
 
-        <select
-          value={documentoTipo}
-          onChange={(e) => setDocumentoTipo(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil || guardando}
-        >
-          <option value="GENES">Albarán Genes</option>
-          <option value="OR_MANUAL">OR manual</option>
-        </select>
+          <div className="grid gap-3 md:grid-cols-4">
+            <input
+              value={filtroCliente}
+              onChange={(e) => setFiltroCliente(e.target.value)}
+              placeholder="Filtrar cliente"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+              list="clientes-montaje"
+            />
 
-        <input
-          value={documentoNumero}
-          onChange={(e) => setDocumentoNumero(e.target.value)}
-          placeholder="Número de documento Genes u OR manual"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil || guardando}
-        />
+            <datalist id="clientes-montaje">
+              {clientesDisponibles.map((cliente) => (
+                <option key={cliente} value={cliente} />
+              ))}
+            </datalist>
 
-        <div className="rounded-lg border bg-gray-50 p-3">
-          <label className="block text-sm font-semibold">
-            Adjuntar documento PDF
-          </label>
+            <input
+              value={filtroProducto}
+              onChange={(e) => setFiltroProducto(e.target.value)}
+              placeholder="Producto, medida, marca o DOT"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-          <input
-            id="documento-pdf-salida"
-            type="file"
-            accept="application/pdf"
-            onChange={(e) => seleccionarArchivoPdf(e.target.files?.[0] || null)}
-            className="mt-2 w-full rounded-lg border bg-white px-3 py-2 text-sm"
-            disabled={!permisos.perfil || guardando}
-          />
+            <input
+              value={filtroUbicacion}
+              onChange={(e) => setFiltroUbicacion(e.target.value)}
+              placeholder="Filtrar ubicación"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+              list="ubicaciones-montaje"
+            />
 
-          <p className="mt-1 text-xs text-gray-500">
-            Solo PDF. Tamaño máximo recomendado: 10 MB.
-          </p>
+            <datalist id="ubicaciones-montaje">
+              {ubicacionesDisponibles.map((item) => (
+                <option key={item} value={item} />
+              ))}
+            </datalist>
 
-          {archivoPdf && (
-            <p className="mt-2 text-sm text-gray-700">
-              Documento seleccionado: <strong>{archivoPdf.name}</strong>
+            <input
+              value={filtroVehiculo}
+              onChange={(e) => setFiltroVehiculo(e.target.value)}
+              placeholder="Vehículo, matrícula o Nº"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <input
+              value={filtroTexto}
+              onChange={(e) => setFiltroTexto(e.target.value)}
+              placeholder="Buscar stock..."
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm md:col-span-3 bg-slate-900 text-slate-100"
+            />
+
+            <button
+              type="button"
+              onClick={limpiarFiltros}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+            >
+              Limpiar filtros
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-3 text-sm text-slate-300">
+          Mostrando <strong>{lineasFiltradas.length}</strong> líneas de stock de{" "}
+          <strong>{lineasPorPermisos.length}</strong> visibles.
+        </div>
+
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <div>
+            <h2 className="font-semibold">Importar albaranes escaneados</h2>
+            <p className="text-sm text-slate-400">
+              Puedes subir un PDF con uno o varios albaranes. Se leerán, se
+              marcarán duplicados y podrás validar manualmente cada salida.
             </p>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <input
+              id="importar-albaran-pdf"
+              type="file"
+              accept="application/pdf"
+              onChange={(e) =>
+                seleccionarArchivoImportacion(e.target.files?.[0] || null)
+              }
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm md:col-span-2 bg-slate-900 text-slate-100"
+              disabled={importandoAlbaran || guardando}
+            />
+
+            <button
+              type="button"
+              onClick={importarAlbaranPdf}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={!archivoAlbaranImportar || importandoAlbaran || guardando}
+            >
+              {importandoAlbaran ? "Leyendo albaranes..." : "Importar PDF"}
+            </button>
+          </div>
+
+          {archivoAlbaranImportar && (
+            <p className="text-sm text-slate-300">
+              PDF seleccionado: <strong>{archivoAlbaranImportar.name}</strong>
+            </p>
+          )}
+
+          {albaranesPendientes.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-semibold">Albaranes pendientes de validar</h3>
+
+                <button
+                  type="button"
+                  onClick={confirmarTodosValidos}
+                  className="rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  disabled={guardando || totalAlbaranesListos === 0}
+                >
+                  Confirmar válidos ({totalAlbaranesListos})
+                </button>
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-slate-600">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-slate-900 text-xs uppercase text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2">Estado</th>
+                      <th className="px-3 py-2">Pág.</th>
+                      <th className="px-3 py-2">Albarán</th>
+                      <th className="px-3 py-2">Cliente</th>
+                      <th className="px-3 py-2">Matrícula</th>
+                      <th className="px-3 py-2">Nº Vehículo</th>
+                      <th className="px-3 py-2">Producto</th>
+                      <th className="px-3 py-2">Cant.</th>
+                      <th className="px-3 py-2">Mensaje</th>
+                      <th className="px-3 py-2">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {albaranesPendientes.map((item) => (
+                      <tr key={item.uid} className="border-t border-slate-700 border-slate-700 align-top">
+                        <td className="px-3 py-2">
+                          <span
+                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${claseEstado(
+                              item.estado
+                            )}`}
+                          >
+                            {etiquetaEstado(item.estado)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">{item.pagina || "-"}</td>
+                        <td className="px-3 py-2 font-semibold">
+                          {item.albaran || "-"}
+                        </td>
+                        <td className="px-3 py-2">{item.cliente || "-"}</td>
+                        <td className="px-3 py-2">{item.matricula || "-"}</td>
+                        <td className="px-3 py-2">
+                          {item.numeroVehiculo || "-"}
+                        </td>
+                        <td className="px-3 py-2 min-w-64">
+                          {item.producto || "-"}
+                        </td>
+                        <td className="px-3 py-2">{item.cantidad ?? "-"}</td>
+                        <td className="px-3 py-2 min-w-56">
+                          {item.mensajeEstado}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-wrap gap-2">
+                            {item.estado === "varios_stock" && (
+                              <select
+                                value={item.lineaStockClave}
+                                onChange={(e) =>
+                                  seleccionarLineaStockAlbaranPendiente(
+                                    item.uid,
+                                    e.target.value
+                                  )
+                                }
+                                className="rounded-lg border border-slate-600 px-2 py-1 text-xs bg-slate-900 text-slate-100"
+                                disabled={item.guardando || guardando}
+                              >
+                                <option value="">Seleccionar almacén...</option>
+                                {item.lineasStockCandidatas.map((linea) => (
+                                  <option key={linea.clave} value={linea.clave}>
+                                    {linea.ubicacion} | Stock: {linea.cantidad}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => cargarAlbaranPendienteEnFormulario(item)}
+                              className="rounded-lg border border-slate-600 px-3 py-1 text-xs font-semibold"
+                              disabled={item.estado === "confirmado"}
+                            >
+                              Revisar
+                            </button>
+
+                            {item.estado === "sin_cliente" && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  crearClienteParaAlbaranPendiente(item.uid)
+                                }
+                                className="rounded-lg bg-blue-700 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                                disabled={item.guardando || guardando}
+                              >
+                                Crear cliente
+                              </button>
+                            )}
+
+                            {item.estado === "sin_vehiculo" ||
+                            (item.estado === "error" &&
+                              !item.vehiculoId &&
+                              item.lineaStockClave) ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  crearVehiculoParaAlbaranPendiente(item.uid)
+                                }
+                                className="rounded-lg bg-orange-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                                disabled={item.guardando || guardando}
+                              >
+                                Crear vehículo
+                              </button>
+                            ) : null}
+
+                            <button
+                              type="button"
+                              onClick={() => confirmarAlbaranPendiente(item.uid)}
+                              className="rounded-lg bg-sky-600 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                              disabled={
+                                item.guardando ||
+                                guardando ||
+                                item.estado !== "listo"
+                              }
+                            >
+                              Confirmar
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => descartarAlbaranPendiente(item.uid)}
+                              className="rounded-lg border border-slate-600 px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                              disabled={
+                                item.guardando ||
+                                item.estado === "confirmado" ||
+                                item.estado === "descartado"
+                              }
+                            >
+                              Descartar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {albaranDetectado && albaranesPendientes.length <= 1 && (
+            <div className="rounded-lg bg-slate-900 p-3 text-sm text-slate-300">
+              <p className="font-semibold">Datos detectados</p>
+              <div className="mt-2 grid gap-2 md:grid-cols-3">
+                <div>
+                  Albarán: <strong>{albaranDetectado.albaran || "-"}</strong>
+                </div>
+                <div>
+                  Fecha: <strong>{albaranDetectado.fecha || "-"}</strong>
+                </div>
+                <div>
+                  Matrícula:{" "}
+                  <strong>{albaranDetectado.matricula || "-"}</strong>
+                </div>
+                <div>
+                  Nº vehículo:{" "}
+                  <strong>{albaranDetectado.numeroVehiculo || "-"}</strong>
+                </div>
+                <div>
+                  Cliente: <strong>{albaranDetectado.cliente || "-"}</strong>
+                </div>
+                <div>
+                  Producto:{" "}
+                  <strong>{albaranDetectado.producto || "-"}</strong>
+                </div>
+                <div>
+                  Cantidad:{" "}
+                  <strong>{albaranDetectado.cantidad ?? "-"}</strong>
+                </div>
+              </div>
+
+              {albaranDetectado.observaciones.length > 0 && (
+                <p className="mt-2 text-xs text-slate-400">
+                  {albaranDetectado.observaciones.join(" | ")}
+                </p>
+              )}
+            </div>
           )}
         </div>
 
-        <textarea
-          value={observaciones}
-          onChange={(e) => setObservaciones(e.target.value)}
-          placeholder="Observaciones"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil || guardando}
-        />
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <select
+            value={empresaId}
+            onChange={(e) => {
+              setEmpresaId(e.target.value);
+              setLineaStockClave("");
+              setVehiculoId("");
+              setMatriculaPendienteImportada("");
+            }}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil || guardando}
+          >
+            <option value="">Empresa...</option>
+            {empresas.map((empresa) => (
+              <option key={empresa.id} value={empresa.id}>
+                {empresa.nombre}
+              </option>
+            ))}
+          </select>
 
-        <button
-          type="button"
-          onClick={registrarSalida}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          disabled={!permisos.perfil || guardando}
-        >
-          {guardando ? "Guardando montaje..." : "Registrar montaje manual"}
-        </button>
+          <select
+            value={lineaStockClave}
+            onChange={(e) => {
+              setLineaStockClave(e.target.value);
+              setVehiculoId("");
+            }}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil || guardando}
+          >
+            <option value="">
+              {permisos.perfil
+                ? "Selecciona stock disponible..."
+                : "Sin perfil activo..."}
+            </option>
+            {lineasFiltradas.map((linea) => (
+              <option key={linea.clave} value={linea.clave}>
+                {linea.cliente} | {linea.producto} | {linea.ubicacion} | Stock:{" "}
+                {linea.cantidad}
+              </option>
+            ))}
+          </select>
 
-        <button
-          type="button"
-          onClick={cargarDatos}
-          className="ml-2 rounded-xl border px-4 py-2 text-sm font-semibold"
-          disabled={guardando}
-        >
-          Actualizar stock disponible
-        </button>
+          {lineaSeleccionada && (
+            <div className="rounded-lg bg-slate-900 p-3 text-sm text-slate-300">
+              Cliente: <strong>{lineaSeleccionada.cliente}</strong>
+              <br />
+              Ubicación: <strong>{lineaSeleccionada.ubicacion}</strong>
+              <br />
+              Stock disponible: <strong>{lineaSeleccionada.cantidad}</strong>
+            </div>
+          )}
 
-        {mensaje && <p className="text-sm text-gray-700">{mensaje}</p>}
+          <select
+            value={vehiculoId}
+            onChange={(e) => setVehiculoId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!lineaStockClave || guardando}
+          >
+            <option value="">Vehículo...</option>
+            {vehiculosFiltrados.map((vehiculo) => (
+              <option key={vehiculo.id} value={vehiculo.id}>
+                {textoVehiculo(vehiculo)}
+              </option>
+            ))}
+          </select>
+
+          {mostrarAvisoVehiculoNoEncontrado && lineaSeleccionada && (
+            <div className="rounded-xl border border-orange-700 bg-orange-500/10 p-4 text-sm text-orange-300">
+              <p className="font-semibold">
+                Vehículo no encontrado: {matriculaPendienteImportada}
+              </p>
+              <p className="mt-1">
+                El albarán ha detectado esta matrícula, pero no existe ningún
+                vehículo activo con esa matrícula para el cliente{" "}
+                <strong>{lineaSeleccionada.cliente}</strong>.
+              </p>
+
+              <button
+                type="button"
+                onClick={crearVehiculoDetectado}
+                className="mt-3 rounded-xl bg-orange-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                disabled={guardando || creandoVehiculoDetectado}
+              >
+                {creandoVehiculoDetectado
+                  ? "Creando vehículo..."
+                  : "Crear vehículo automáticamente"}
+              </button>
+            </div>
+          )}
+
+          <input
+            value={cantidad}
+            onChange={(e) => setCantidad(e.target.value)}
+            type="number"
+            min="1"
+            placeholder="Cantidad"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil || guardando}
+          />
+
+          <select
+            value={documentoTipo}
+            onChange={(e) => setDocumentoTipo(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil || guardando}
+          >
+            <option value="GENES">Albarán Genes</option>
+            <option value="OR_MANUAL">OR manual</option>
+          </select>
+
+          <input
+            value={documentoNumero}
+            onChange={(e) => setDocumentoNumero(e.target.value)}
+            placeholder="Número de documento Genes u OR manual"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil || guardando}
+          />
+
+          <div className="rounded-lg border border-slate-600 bg-slate-900 p-3">
+            <label className="block text-sm font-semibold">
+              Adjuntar documento PDF
+            </label>
+
+            <input
+              id="documento-pdf-salida"
+              type="file"
+              accept="application/pdf"
+              onChange={(e) => seleccionarArchivoPdf(e.target.files?.[0] || null)}
+              className="mt-2 w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+              disabled={!permisos.perfil || guardando}
+            />
+
+            <p className="mt-1 text-xs text-slate-400">
+              Solo PDF. Tamaño máximo recomendado: 10 MB.
+            </p>
+
+            {archivoPdf && (
+              <p className="mt-2 text-sm text-slate-300">
+                Documento seleccionado: <strong>{archivoPdf.name}</strong>
+              </p>
+            )}
+          </div>
+
+          <textarea
+            value={observaciones}
+            onChange={(e) => setObservaciones(e.target.value)}
+            placeholder="Observaciones"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil || guardando}
+          />
+
+          <button
+            type="button"
+            onClick={registrarSalida}
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            disabled={!permisos.perfil || guardando}
+          >
+            {guardando ? "Guardando montaje..." : "Registrar montaje manual"}
+          </button>
+
+          <button
+            type="button"
+            onClick={cargarDatos}
+            className="ml-2 rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+            disabled={guardando}
+          >
+            Actualizar stock disponible
+          </button>
+
+          {mensaje && <p className="text-sm text-slate-300">{mensaje}</p>}
+        </div>
       </div>
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }

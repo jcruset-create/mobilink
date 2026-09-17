@@ -1,26 +1,26 @@
 export default function NotFound() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
-      <div className="max-w-md rounded-2xl border bg-white p-8 text-center shadow-sm">
+    <div className="flex min-h-screen items-center justify-center bg-slate-900 p-6 text-slate-100">
+      <div className="max-w-md rounded-2xl border border-slate-600 bg-slate-800 p-8 text-center shadow-sm">
         <h1 className="text-4xl font-bold">404</h1>
 
         <p className="mt-2 text-lg font-semibold">Página no encontrada</p>
 
-        <p className="mt-2 text-sm text-gray-500">
+        <p className="mt-2 text-sm text-slate-400">
           La ruta que estás intentando abrir no existe o no está disponible.
         </p>
 
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <a
             href="/"
-            className="rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-gray-50"
+            className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold hover:bg-slate-700"
           >
             Ir al inicio
           </a>
 
           <a
             href="/almacen-neumaticos"
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white"
           >
             Ir a almacén
           </a>

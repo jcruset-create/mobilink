@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import {
   exportarCsv,
@@ -387,232 +387,232 @@ export default function HistorialMovimientos() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
+    <AlmacenLayoutOscuro>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Historial de movimientos</h1>
+            <p className="text-sm text-slate-400">
+              Trazabilidad completa de entradas, salidas, montajes, traspasos,
+              reposiciones y ajustes. Se cargan los últimos 200 movimientos según
+              filtros.
+            </p>
+          </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Historial de movimientos</h1>
-          <p className="text-sm text-gray-500">
-            Trazabilidad completa de entradas, salidas, montajes, traspasos,
-            reposiciones y ajustes. Se cargan los últimos 200 movimientos según
-            filtros.
-          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportarHistorialCsv}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              disabled={movimientosFiltrados.length === 0}
+            >
+              Exportar CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={exportarHistorialExcel}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={movimientosFiltrados.length === 0}
+            >
+              Exportar Excel
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarHistorialCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={movimientosFiltrados.length === 0}
-          >
-            Exportar CSV
-          </button>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Filtros</h2>
 
-          <button
-            type="button"
-            onClick={exportarHistorialExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={movimientosFiltrados.length === 0}
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
+          <div className="grid gap-3 md:grid-cols-4">
+            <input
+              type="date"
+              value={fechaDesde}
+              onChange={(e) => setFechaDesde(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Filtros</h2>
+            <input
+              type="date"
+              value={fechaHasta}
+              onChange={(e) => setFechaHasta(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-        <div className="grid gap-3 md:grid-cols-4">
-          <input
-            type="date"
-            value={fechaDesde}
-            onChange={(e) => setFechaDesde(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+            <select
+              value={filtroTipo}
+              onChange={(e) => setFiltroTipo(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todos los tipos</option>
+              <option value="ENTRADA">ENTRADA</option>
+              <option value="SALIDA">SALIDA</option>
+            </select>
 
-          <input
-            type="date"
-            value={fechaHasta}
-            onChange={(e) => setFechaHasta(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+            <select
+              value={filtroOrigen}
+              onChange={(e) => setFiltroOrigen(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todos los orígenes</option>
+              {ORIGENES.map((origen) => (
+                <option key={origen.valor} value={origen.valor}>
+                  {origen.texto}
+                </option>
+              ))}
+            </select>
 
-          <select
-            value={filtroTipo}
-            onChange={(e) => setFiltroTipo(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          >
-            <option value="">Todos los tipos</option>
-            <option value="ENTRADA">ENTRADA</option>
-            <option value="SALIDA">SALIDA</option>
-          </select>
+            <input
+              value={filtroMatricula}
+              onChange={(e) => setFiltroMatricula(e.target.value)}
+              placeholder="Filtrar por matrícula"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-          <select
-            value={filtroOrigen}
-            onChange={(e) => setFiltroOrigen(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          >
-            <option value="">Todos los orígenes</option>
-            {ORIGENES.map((origen) => (
-              <option key={origen.valor} value={origen.valor}>
-                {origen.texto}
-              </option>
-            ))}
-          </select>
+            <input
+              value={filtroNumeroVehiculo}
+              onChange={(e) => setFiltroNumeroVehiculo(e.target.value)}
+              placeholder="Filtrar por Nº vehículo"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-          <input
-            value={filtroMatricula}
-            onChange={(e) => setFiltroMatricula(e.target.value)}
-            placeholder="Filtrar por matrícula"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+            <input
+              value={filtroTexto}
+              onChange={(e) => setFiltroTexto(e.target.value)}
+              placeholder="Buscar cliente, producto, documento..."
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm md:col-span-2 bg-slate-900 text-slate-100"
+            />
+          </div>
 
-          <input
-            value={filtroNumeroVehiculo}
-            onChange={(e) => setFiltroNumeroVehiculo(e.target.value)}
-            placeholder="Filtrar por Nº vehículo"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={cargarMovimientos}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              {cargando ? "Buscando..." : "Buscar"}
+            </button>
 
-          <input
-            value={filtroTexto}
-            onChange={(e) => setFiltroTexto(e.target.value)}
-            placeholder="Buscar cliente, producto, documento..."
-            className="rounded-lg border px-3 py-2 text-sm md:col-span-2"
-          />
+            <button
+              type="button"
+              onClick={limpiarFiltros}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+            >
+              Limpiar filtros
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={cargarMovimientos}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
-          >
-            {cargando ? "Buscando..." : "Buscar"}
-          </button>
+        {mensaje && <p className="text-sm text-red-300">{mensaje}</p>}
 
-          <button
-            type="button"
-            onClick={limpiarFiltros}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
-          >
-            Limpiar filtros
-          </button>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-3 text-sm text-slate-300">
+          Mostrando <strong>{movimientosFiltrados.length}</strong> movimientos de{" "}
+          <strong>{movimientos.length}</strong> cargados.
         </div>
-      </div>
 
-      {mensaje && <p className="text-sm text-red-600">{mensaje}</p>}
-
-      <div className="rounded-xl border bg-white p-3 text-sm text-gray-600">
-        Mostrando <strong>{movimientosFiltrados.length}</strong> movimientos de{" "}
-        <strong>{movimientos.length}</strong> cargados.
-      </div>
-
-      <div className="overflow-auto rounded-xl border bg-white">
-        <table className="w-full min-w-[1400px] text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="p-3">Fecha</th>
-              <th className="p-3">Tipo</th>
-              <th className="p-3">Origen</th>
-              <th className="p-3">Cliente</th>
-              <th className="p-3">Producto</th>
-              <th className="p-3">Cantidad</th>
-              <th className="p-3">Ubicación</th>
-              <th className="p-3">Matrícula</th>
-              <th className="p-3">Nº vehículo</th>
-              <th className="p-3">Marca / modelo</th>
-              <th className="p-3">Documento</th>
-              <th className="p-3">PDF</th>
-              <th className="p-3">Observaciones</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {movimientosFiltrados.map((movimiento) => {
-              const cliente = obtenerPrimero(movimiento.clientes);
-              const producto = obtenerPrimero(movimiento.productos_neumaticos);
-              const vehiculo = obtenerPrimero(movimiento.vehiculos);
-
-              return (
-                <tr key={movimiento.id} className="border-t align-top">
-                  <td className="p-3">
-                    {formatearFecha(movimiento.created_at)}
-                  </td>
-
-                  <td className="p-3 font-medium">{movimiento.tipo}</td>
-
-                  <td className="p-3">
-                    <div className="text-sm font-medium">
-                      {formatearOrigen(movimiento.origen_movimiento)}
-                    </div>
-
-                    {movimiento.traspaso_id && (
-                      <div className="text-xs text-gray-500">
-                        Traspaso asociado
-                      </div>
-                    )}
-
-                    {movimiento.solicitud_reposicion_id && (
-                      <div className="text-xs text-blue-700">
-                        Solicitud reposición
-                      </div>
-                    )}
-                  </td>
-
-                  <td className="p-3">{cliente?.nombre || "-"}</td>
-                  <td className="p-3">{textoProducto(producto)}</td>
-                  <td className="p-3">{movimiento.cantidad}</td>
-                  <td className="p-3">{movimiento.ubicacion || "-"}</td>
-                  <td className="p-3">{textoMatricula(vehiculo)}</td>
-                  <td className="p-3">{textoNumeroVehiculo(vehiculo)}</td>
-                  <td className="p-3">
-                    {textoMarcaModeloVehiculo(vehiculo)}
-                  </td>
-                  <td className="p-3">{textoDocumento(movimiento)}</td>
-
-                  <td className="p-3">
-                    {movimiento.documento_adjunto_url ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          abrirPdfDocumento(movimiento.documento_adjunto_url as string)
-                        }
-                        className="rounded-lg border px-2 py-1 text-xs font-semibold hover:bg-gray-50"
-                        title={movimiento.documento_adjunto_nombre || "Ver PDF"}
-                      >
-                        📄 Ver PDF
-                      </button>
-                    ) : (
-                      "-"
-                    )}
-                  </td>
-
-                  <td className="p-3">{movimiento.observaciones || "-"}</td>
-                </tr>
-              );
-            })}
-
-            {movimientosFiltrados.length === 0 && (
+        <div className="overflow-auto rounded-xl border border-slate-600 bg-slate-800">
+          <table className="w-full min-w-[1400px] text-sm">
+            <thead className="bg-slate-900 text-left">
               <tr>
-                <td colSpan={13} className="p-6 text-center text-gray-500">
-                  No hay movimientos con los filtros actuales.
-                </td>
+                <th className="p-3">Fecha</th>
+                <th className="p-3">Tipo</th>
+                <th className="p-3">Origen</th>
+                <th className="p-3">Cliente</th>
+                <th className="p-3">Producto</th>
+                <th className="p-3">Cantidad</th>
+                <th className="p-3">Ubicación</th>
+                <th className="p-3">Matrícula</th>
+                <th className="p-3">Nº vehículo</th>
+                <th className="p-3">Marca / modelo</th>
+                <th className="p-3">Documento</th>
+                <th className="p-3">PDF</th>
+                <th className="p-3">Observaciones</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
 
-      <button
-        type="button"
-        onClick={cargarMovimientos}
-        className="rounded-xl border px-4 py-2 text-sm font-semibold"
-      >
-        Actualizar historial
-      </button>
-    </div>
+            <tbody>
+              {movimientosFiltrados.map((movimiento) => {
+                const cliente = obtenerPrimero(movimiento.clientes);
+                const producto = obtenerPrimero(movimiento.productos_neumaticos);
+                const vehiculo = obtenerPrimero(movimiento.vehiculos);
+
+                return (
+                  <tr key={movimiento.id} className="border-t border-slate-700 border-slate-700 align-top">
+                    <td className="p-3">
+                      {formatearFecha(movimiento.created_at)}
+                    </td>
+
+                    <td className="p-3 font-medium">{movimiento.tipo}</td>
+
+                    <td className="p-3">
+                      <div className="text-sm font-medium">
+                        {formatearOrigen(movimiento.origen_movimiento)}
+                      </div>
+
+                      {movimiento.traspaso_id && (
+                        <div className="text-xs text-slate-400">
+                          Traspaso asociado
+                        </div>
+                      )}
+
+                      {movimiento.solicitud_reposicion_id && (
+                        <div className="text-xs text-sky-300">
+                          Solicitud reposición
+                        </div>
+                      )}
+                    </td>
+
+                    <td className="p-3">{cliente?.nombre || "-"}</td>
+                    <td className="p-3">{textoProducto(producto)}</td>
+                    <td className="p-3">{movimiento.cantidad}</td>
+                    <td className="p-3">{movimiento.ubicacion || "-"}</td>
+                    <td className="p-3">{textoMatricula(vehiculo)}</td>
+                    <td className="p-3">{textoNumeroVehiculo(vehiculo)}</td>
+                    <td className="p-3">
+                      {textoMarcaModeloVehiculo(vehiculo)}
+                    </td>
+                    <td className="p-3">{textoDocumento(movimiento)}</td>
+
+                    <td className="p-3">
+                      {movimiento.documento_adjunto_url ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            abrirPdfDocumento(movimiento.documento_adjunto_url as string)
+                          }
+                          className="rounded-lg border border-slate-600 px-2 py-1 text-xs font-semibold hover:bg-slate-700"
+                          title={movimiento.documento_adjunto_nombre || "Ver PDF"}
+                        >
+                          📄 Ver PDF
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+
+                    <td className="p-3">{movimiento.observaciones || "-"}</td>
+                  </tr>
+                );
+              })}
+
+              {movimientosFiltrados.length === 0 && (
+                <tr>
+                  <td colSpan={13} className="p-6 text-center text-slate-400">
+                    No hay movimientos con los filtros actuales.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <button
+          type="button"
+          onClick={cargarMovimientos}
+          className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+        >
+          Actualizar historial
+        </button>
+      </div>
+    </AlmacenLayoutOscuro>
   );
 }

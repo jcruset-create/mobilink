@@ -1,26 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  listarVehiculos, crearVehiculo, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
-  listarConfigEjes, listarTiposLlanta, listarMedidas, listarEjesVehiculo, guardarEjesVehiculo,
+  listarVehiculos, actualizarVehiculo, listarEmpresas, listarDelegaciones, listarTiposVehiculo,
+  listarMedidas,
   listarEstadoWebfleet, listarPresenciaEnBases, sincronizarWebfleet, listarRevisionEstado,
-  listarMarcasVehiculo, aplicarFichaTecnica,
-  listarVehiculosPendientes, validarVehiculo,
+  listarVehiculosPendientes, validarVehiculo, eliminarVehiculo,
 } from "../services/data";
-import ModalNuevaMedida from "../components/ModalNuevaMedida";
-import CrearVehiculoDesdeFicha, { type PendienteFicha } from "../components/CrearVehiculoDesdeFicha";
+import EditorVehiculo from "../components/EditorVehiculo";
 import type {
-  Delegacion, Empresa, TipoVehiculo, Vehiculo, VehiculoInput, OrigenKm,
-  ConfigEjes, TipoLlanta, MedidaNeumatico, VehiculoEje, MarcaVehiculo,
+  Delegacion, Empresa, TipoVehiculo, Vehiculo,
+  MedidaNeumatico,
   EstadoWebfleet, VehiculoWebfleetEstado, PresenciaEnBase, RevisionEstado,
 } from "../types";
-import { ORIGEN_KM_LABELS, tipoLlantaLabel, ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
+import { ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { enlacesTelematica } from "../services/conciliacion";
-import { etiquetaBase } from "../services/presenciaVista";
+import { estadoUbicacion, etiquetaBase, ubicacionDeVehiculo } from "../services/presenciaVista";
 import {
   conectoresDe, etiquetaTelematica, porVehiculo, type EnlaceTelematica,
 } from "../services/telematicaVehiculo";
-import { Badge, Modal, TableWrap, tdCls, thCls, inputCls, TextField, Field } from "../components/ui";
+import { Badge, Modal, TableWrap, tdCls, thCls, inputCls } from "../components/ui";
 
 // "hace X" legible a partir de un ISO (para tiempo en base / última posición).
 function duracionDesde(iso?: string | null): string {
@@ -38,22 +36,6 @@ function fechaHoraCorta(iso?: string | null): string {
   return new Date(iso).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-const VACIO: VehiculoInput = {
-  empresa_id: "", delegacion_id: null, tipo_vehiculo_id: null, matricula: "", numero_unidad: "",
-  marca: "", modelo: "", bastidor: "", fecha_matriculacion: null, webfleet_vehicle_id: "",
-  km_actual: 0, origen_km: "manual", activo: true,
-  config_ejes_id: null, medida_id: null, tipo_llanta_id: null, medidas_por_eje: false,
-  revision_intervalo_dias: null, revision_intervalo_km: null,
-};
-
-// "2x2x2" → [2,2,2] (nº de ejes y ruedas por eje)
-function ruedasDeConfig(nombre: string | undefined): number[] {
-  if (!nombre) return [];
-  return nombre.split(/x/i).map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
-}
-
-type ModalState = { id: string | null; draft: VehiculoInput; ejes: VehiculoEje[] };
-
 export default function Vehiculos() {
   const navigate = useNavigate();
   const [items, setItems] = useState<Vehiculo[]>([]);
@@ -62,10 +44,6 @@ export default function Vehiculos() {
   const [tipos, setTipos] = useState<TipoVehiculo[]>([]);
   // Catálogo de marcas de vehículo: el desplegable de MARCA se filtra por el
   // tipo elegido (tractora → MAN/Scania…, semirremolque → Krone/Schmitz…).
-  const [marcasVeh, setMarcasVeh] = useState<MarcaVehiculo[]>([]);
-  const [marcaLibre, setMarcaLibre] = useState(false);
-  const [configEjes, setConfigEjes] = useState<ConfigEjes[]>([]);
-  const [tiposLlanta, setTiposLlanta] = useState<TipoLlanta[]>([]);
   const [medidas, setMedidas] = useState<MedidaNeumatico[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
@@ -90,6 +68,66 @@ export default function Vehiculos() {
       await cargarPendientes();
     } catch (e: any) { setMsgPend(e?.message || "No se ha podido validar"); }
     finally { setValidando(null); }
+  }
+
+  /*
+   * Borrar un vehículo que no debería existir: un alta duplicada desde la
+   * tablet, una matrícula de prueba, una importación equivocada.
+   *
+   * Se pregunta antes porque no tiene vuelta atrás, y la base solo deja
+   * borrar lo que no tiene nada detrás. Si tiene historial, el mensaje que
+   * llega ya explica qué tiene y que lo que toca es darlo de baja; se enseña
+   * tal cual en vez de traducirlo, que es donde se pierden los matices.
+   */
+  const [borrando, setBorrando] = useState<string | null>(null);
+  const [aBorrar, setABorrar] = useState<Vehiculo | null>(null);
+  /*
+   * Por qué no se ha podido borrar, DENTRO del diálogo.
+   *
+   * Antes esto salía en el aviso de arriba de la pantalla, a media página del
+   * botón que se acababa de pulsar: el diálogo se quedaba abierto y sin decir
+   * nada, y parecía que el botón no hacía nada. El motivo tiene que estar
+   * donde está mirando quien lo pulsó.
+   */
+  const [motivoNoBorrado, setMotivoNoBorrado] = useState<string | null>(null);
+
+  /**
+   * Dar de baja, desde el mismo aviso que acaba de decir que no se puede
+   * borrar. Es lo que toca hacer con un vehículo que ya tiene vida, y
+   * obligar a cerrar el diálogo e ir a buscar «Desactivar» en su fila es
+   * hacerle dar un rodeo para llegar a la única salida que le queda.
+   *
+   * Usa `actualizarVehiculo`, que es exactamente lo que hace ese botón: no se
+   * inventa una segunda vía para lo mismo.
+   */
+  async function darDeBaja(v: Vehiculo) {
+    setBorrando(v.id);
+    try {
+      await actualizarVehiculo(v.id, { activo: false });
+      setABorrar(null); setMotivoNoBorrado(null);
+      setMsgPend(`✔ ${v.matricula} dado de baja`);
+      await cargarPendientes();
+      await cargar();
+    } catch (e: any) {
+      setMotivoNoBorrado(e?.message || "No se ha podido dar de baja");
+    } finally { setBorrando(null); }
+  }
+
+  async function eliminar(v: Vehiculo) {
+    setBorrando(v.id); setMsgPend(""); setMotivoNoBorrado(null);
+    try {
+      await eliminarVehiculo(v.id);
+      setABorrar(null);
+      setMsgPend(`✔ ${v.matricula} eliminado`);
+      await cargarPendientes();
+      await cargar();
+    } catch (e: any) {
+      // El mensaje de la base ya está escrito para una persona («tiene
+      // historial (2 revisión/es, …): dalo de baja para conservarlo»), así que
+      // se enseña tal cual en vez de traducirlo.
+      setMotivoNoBorrado(e?.message || "No se ha podido eliminar");
+    }
+    finally { setBorrando(null); }
   }
 
   // filtros
@@ -134,10 +172,8 @@ export default function Vehiculos() {
     setFijado(true);
   }
 
-  const [modal, setModal] = useState<null | ModalState>(null);
-  const [saving, setSaving] = useState(false);
-  const [crearDesdeFicha, setCrearDesdeFicha] = useState(false);
-  const [pendienteFicha, setPendienteFicha] = useState<PendienteFicha | null>(null);
+  // El formulario vive en EditorVehiculo: null = cerrado, undefined = nuevo.
+  const [editando, setEditando] = useState<null | { vehiculo?: Vehiculo }>(null);
 
   // Webfleet: estado por vehículo, estado de revisión, filtros y popup.
   const [estados, setEstados] = useState<Map<string, VehiculoWebfleetEstado>>(new Map());
@@ -181,24 +217,33 @@ export default function Vehiculos() {
   const esPendiente = (id: string) => { const e = revEstados.get(id)?.estado; return e === "sin_revision" || e === "vencida" || e === "proxima"; };
   const esVencida = (id: string) => { const e = revEstados.get(id)?.estado; return e === "sin_revision" || e === "vencida"; };
   // "En base" a efectos de revisión = en su base asignada O en otra base de su empresa.
-  const enAlgunaBase = (id: string) => { const e = estados.get(id)?.estado; return e === "en_base" || e === "otra_base"; };
+  /*
+   * El estado de ubicación, venga del proveedor que venga.
+   *
+   * Antes salía solo de Webfleet, y para un cliente de Movertis eso eran cero
+   * en base, cero en ruta y toda la flota «sin dispositivo»: los contadores de
+   * arriba y sus filtros no servían para nada. `estadoUbicacion` mira primero
+   * el barrido del Hub y cae a Webfleet, así que los mismos contadores valen
+   * ahora para cualquier cliente.
+   */
+  const ubicacionDe = (id: string): EstadoWebfleet =>
+    estadoUbicacion(presencias.get(id), estados.get(id));
+  const enAlgunaBase = (id: string) => { const e = ubicacionDe(id); return e === "en_base" || e === "otra_base"; };
   const revisarEnBase = (id: string) => enAlgunaBase(id) && esPendiente(id);
 
   async function cargar() {
     setLoading(true);
     try {
-      const [v, e, d, t, c, l, m] = await Promise.all([
+      const [v, e, d, t, m] = await Promise.all([
         listarVehiculos(), listarEmpresas(), listarDelegaciones(), listarTiposVehiculo(),
-        listarConfigEjes(), listarTiposLlanta(), listarMedidas(),
+        listarMedidas(),
       ]);
-      setItems(v); setEmpresas(e); setDelegaciones(d); setTipos(t);
-      setConfigEjes(c); setTiposLlanta(l); setMedidas(m);
+      setItems(v); setEmpresas(e); setDelegaciones(d); setTipos(t); setMedidas(m);
     } catch (er: any) { setMsg(er?.message || "Error cargando"); }
     finally { setLoading(false); }
     await refrescarWebfleet();
   }
   useEffect(() => { void cargar(); }, []);
-  useEffect(() => { listarMarcasVehiculo().then(setMarcasVeh).catch(() => setMarcasVeh([])); }, []);
 
   async function sincronizar() {
     setSincronizando(true); setMsg("");
@@ -210,14 +255,14 @@ export default function Vehiculos() {
     finally { setSincronizando(false); }
   }
 
-  const estadoDe = (id: string): EstadoWebfleet => estados.get(id)?.estado ?? "sin_dispositivo";
+  const estadoDe = (id: string): EstadoWebfleet => ubicacionDe(id);
   const telematicaPorVehiculo = useMemo(() => porVehiculo(enlacesTel), [enlacesTel]);
 
   // KPIs: en base, pendientes en base, vencidas en base, en ruta, sin conexión.
   const kpis = useMemo(() => {
     let en_base = 0, pend_base = 0, venc_base = 0, en_ruta = 0, sin_conexion = 0;
     for (const v of items) {
-      const e = estados.get(v.id)?.estado ?? "sin_dispositivo";
+      const e = estadoUbicacion(presencias.get(v.id), estados.get(v.id));
       if (e === "en_ruta") en_ruta++;
       else if (e === "sin_conexion") sin_conexion++;
       else if (e === "en_base" || e === "otra_base") {
@@ -228,7 +273,7 @@ export default function Vehiculos() {
       }
     }
     return { en_base, pend_base, venc_base, en_ruta, sin_conexion };
-  }, [items, estados, revEstados]);
+  }, [items, estados, presencias, revEstados]);
 
   const filtrados = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -246,7 +291,7 @@ export default function Vehiculos() {
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, q, fEmpresa, fDele, fTipo, fEstado, fWebfleet, estados, revEstados]);
+  }, [items, q, fEmpresa, fDele, fTipo, fEstado, fWebfleet, estados, presencias, revEstados]);
 
   // ── Orden por columna ──────────────────────────────────────────────
   // Se pulsa la cabecera: primera vez ascendente, segunda descendente.
@@ -290,99 +335,6 @@ export default function Vehiculos() {
     });
   }, [filtrados, orden, medidas]);
 
-  const delegacionesForm = useMemo(
-    () => delegaciones.filter((d) => !modal?.draft.empresa_id || d.empresa_id === modal.draft.empresa_id),
-    [delegaciones, modal?.draft.empresa_id]
-  );
-
-  // Recalcula las filas de ejes a partir de la configuración elegida,
-  // conservando la medida/llanta ya seleccionada por eje.
-  function sincronizarEjes(configId: string | null | undefined, previos: VehiculoEje[]): VehiculoEje[] {
-    const conf = configEjes.find((c) => c.id === configId);
-    const ruedas = ruedasDeConfig(conf?.nombre);
-    return ruedas.map((r, i) => {
-      const prev = previos.find((e) => e.eje === i + 1);
-      return { eje: i + 1, ruedas: r, medida_id: prev?.medida_id ?? null, tipo_llanta_id: prev?.tipo_llanta_id ?? null };
-    });
-  }
-
-  async function abrirEditar(v: Vehiculo) {
-    let ejes: VehiculoEje[] = [];
-    if (v.medidas_por_eje) {
-      try {
-        const guardados = await listarEjesVehiculo(v.id);
-        ejes = sincronizarEjes(v.config_ejes_id, guardados);
-      } catch { /* sin ejes guardados */ }
-    }
-    setModal({ id: v.id, draft: { ...VACIO, ...v }, ejes });
-  }
-
-  // Cambia la configuración de ejes y re-sincroniza el desglose
-  function cambiarConfig(configId: string | null) {
-    if (!modal) return;
-    setModal({
-      ...modal,
-      draft: { ...modal.draft, config_ejes_id: configId },
-      ejes: modal.draft.medidas_por_eje ? sincronizarEjes(configId, modal.ejes) : modal.ejes,
-    });
-  }
-
-  // Activa/desactiva el desglose por eje
-  function cambiarPorEje(activo: boolean) {
-    if (!modal) return;
-    setModal({
-      ...modal,
-      draft: { ...modal.draft, medidas_por_eje: activo },
-      ejes: activo ? sincronizarEjes(modal.draft.config_ejes_id, modal.ejes) : modal.ejes,
-    });
-  }
-
-  async function guardar() {
-    if (!modal) return;
-    const d = modal.draft;
-    if (!d.empresa_id) { setMsg("Selecciona empresa"); return; }
-    if (!d.matricula.trim()) { setMsg("La matrícula es obligatoria"); return; }
-    setSaving(true);
-    try {
-      let vehiculoId = modal.id;
-      const esNuevo = !vehiculoId;
-      if (vehiculoId) await actualizarVehiculo(vehiculoId, d);
-      else vehiculoId = await crearVehiculo(d);
-      if (d.medidas_por_eje && vehiculoId) {
-        await guardarEjesVehiculo(vehiculoId, modal.ejes);
-      }
-      let avisoFicha = "";
-      if (esNuevo && vehiculoId && pendienteFicha) {
-        try {
-          await aplicarFichaTecnica(pendienteFicha.docId, {
-            ejes: pendienteFicha.ejes,
-            configuracion: pendienteFicha.configuracion,
-            atributos: pendienteFicha.atributos,
-            vehiculoId,
-          });
-        } catch (e: any) {
-          avisoFicha = ` (el vehículo se creó, pero no se pudieron guardar todos los datos de la ficha: ${e?.message || "error"})`;
-        }
-      }
-      setModal(null); setPendienteFicha(null); setMsg(`✔ Guardado${avisoFicha}`); await cargar();
-    } catch (e: any) {
-      setMsg(/duplicate|unique/i.test(e?.message || "") ? "Ya existe un vehículo con esa matrícula en la empresa." : (e?.message || "Error"));
-    } finally { setSaving(false); }
-  }
-
-  const set = (p: Partial<VehiculoInput>) => modal && setModal({ ...modal, draft: { ...modal.draft, ...p } });
-  const setEje = (eje: number, p: Partial<VehiculoEje>) =>
-    modal && setModal({ ...modal, ejes: modal.ejes.map((e) => (e.eje === eje ? { ...e, ...p } : e)) });
-
-  // Abre el modal de crear medida; al crearla la selecciona donde toque.
-  const [modalMedida, setModalMedida] = useState<null | ((id: string) => void)>(null);
-  async function medidaCreada(id: string) {
-    setMedidas(await listarMedidas());
-    modalMedida?.(id);
-    setModalMedida(null);
-  }
-
-  const filasEjes = modal?.draft.medidas_por_eje ? modal.ejes : [];
 
   return (
     <div>
@@ -393,7 +345,7 @@ export default function Vehiculos() {
           <button onClick={sincronizar} disabled={sincronizando} className="rounded-lg border border-sky-600 px-3 py-2 text-sm font-bold text-sky-300 hover:bg-sky-500/10 disabled:opacity-50">
             {sincronizando ? "Sincronizando…" : "↻ Sincronizar Webfleet"}
           </button>
-          <button onClick={() => { setPendienteFicha(null); setModal({ id: null, draft: { ...VACIO }, ejes: [] }); }} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">+ Nuevo vehículo</button>
+          <button onClick={() => setEditando({})} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">+ Nuevo vehículo</button>
         </div>
       </div>
       {msg && <div className={`mb-3 text-sm ${msg.startsWith("✔") ? "text-emerald-400" : "text-red-300"}`}>{msg}</div>}
@@ -467,6 +419,14 @@ export default function Vehiculos() {
                     className="rounded bg-emerald-600 px-2 py-1 text-[12px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
                   >
                     {validando === v.id ? "…" : "Está bien"}
+                  </button>
+                  <button
+                    onClick={() => setABorrar(v)}
+                    disabled={borrando === v.id}
+                    title="Borrarlo del todo. Solo si no tiene historial."
+                    className="rounded border border-rose-700 px-2 py-1 text-[12px] font-bold text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+                  >
+                    {borrando === v.id ? "…" : "Eliminar"}
                   </button>
                 </div>
               </div>
@@ -572,6 +532,23 @@ export default function Vehiculos() {
                   const est = estados.get(v.id);
                   const e = est?.estado ?? "sin_dispositivo";
                   const conectores = conectoresDe(v, telematicaPorVehiculo);
+                  /*
+                   * El estado de Webfleet solo se enseña si el vehículo ES de
+                   * Webfleet.
+                   *
+                   * La sincronización de Webfleet recorre TODOS los vehículos
+                   * activos de TODAS las empresas y escribe `sin_dispositivo`
+                   * al que no tiene `webfleet_vehicle_id`. Eso llenaba la
+                   * columna de «SIN WEBFLEET» en autobuses de Movertis, donde
+                   * es verdad y no significa nada: no les falta un equipo, es
+                   * que su equipo es de otro proveedor.
+                   */
+                  const esDeWebfleet = conectores.includes("webfleet");
+                  // Para los demás, dónde está según el barrido del Hub, que
+                  // sí sabe de cualquier proveedor.
+                  const ubic = esDeWebfleet
+                    ? null
+                    : ubicacionDeVehiculo({ presencia: presencias.get(v.id) });
                   const enBase = e === "en_base" || e === "otra_base";
                   const revisar = enBase && esPendiente(v.id);
                   // Nombre de la base donde está (delegación detectada por Webfleet).
@@ -602,7 +579,27 @@ export default function Vehiculos() {
                         aparte: es OTRA cosa que saber de quién es el equipo, y
                         cuando otro proveedor sepa darlo cabrá aquí igual.
                       */}
-                      {est && (
+                      {/*
+                        La ubicación de los que no son de Webfleet. No es un
+                        botón: el detalle que abre el otro es de Webfleet y no
+                        aplica aquí. Si no se sabe dónde está, no se pone nada:
+                        la chapa de arriba ya dice de quién es el equipo.
+                      */}
+                      {ubic && ubic.tono !== "desconocido" && (
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                            ubic.tono === "base"
+                              ? "bg-emerald-500/15 text-emerald-300"
+                              : ubic.tono === "ruta"
+                                ? "bg-sky-500/15 text-sky-300"
+                                : "bg-amber-500/15 text-amber-300"
+                          }`}
+                          title={ubic.detalle}
+                        >
+                          {ubic.texto.toUpperCase()}
+                        </span>
+                      )}
+                      {est && esDeWebfleet && (
                         <button
                           onClick={() => setPopup({ v, est })}
                           className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${revisar ? "bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/60" : ESTADO_WEBFLEET_BADGE[e]}`}
@@ -623,7 +620,7 @@ export default function Vehiculos() {
               <td className={tdCls}>
                 <div className="flex gap-2">
                   <button onClick={() => navigate(`/tyrecontrol/vehiculos/${v.id}`)} className="text-sky-300 hover:underline">Ficha</button>
-                  <button onClick={() => void abrirEditar(v)} className="text-slate-300 hover:underline">Editar</button>
+                  <button onClick={() => setEditando({ vehiculo: v })} className="text-slate-300 hover:underline">Editar</button>
                   <button onClick={async () => { await actualizarVehiculo(v.id, { activo: !v.activo }); await cargar(); }} className="text-amber-300 hover:underline">{v.activo ? "Desactivar" : "Activar"}</button>
                 </div>
               </td>
@@ -632,192 +629,68 @@ export default function Vehiculos() {
         </tbody>
       </TableWrap>
 
-      {modal && (
-        <Modal title={modal.id ? "Editar vehículo" : "Nuevo vehículo"} onClose={() => { setModal(null); setPendienteFicha(null); }}
+      {/*
+        Confirmar el borrado. Se dice qué vehículo es y qué va a pasar, en
+        vez de un «¿seguro?» que nadie lee: de la lista de pendientes, todas
+        las matrículas se parecen.
+      */}
+      {aBorrar && (
+        <Modal title="Eliminar vehículo" onClose={() => { setABorrar(null); setMotivoNoBorrado(null); }}
           footer={<div className="flex justify-end gap-2">
-            <button onClick={() => { setModal(null); setPendienteFicha(null); }} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
-            <button onClick={guardar} disabled={saving} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{saving ? "Guardando…" : "Guardar"}</button>
-          </div>}>
-          {!modal.id && (
-            <div className="mb-3 flex items-center gap-2 rounded-lg border border-sky-700/50 bg-sky-950/30 p-2">
-              <button type="button" onClick={() => setCrearDesdeFicha(true)} disabled={!modal.draft.empresa_id}
-                className="rounded-lg bg-sky-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">
-                📎 Crear desde ficha técnica (PDF/foto)
+            <button onClick={() => { setABorrar(null); setMotivoNoBorrado(null); }} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">
+              {motivoNoBorrado ? "Cerrar" : "Cancelar"}
+            </button>
+            {/* Si ya se sabe que no se puede borrar, se retira el botón: dejarlo
+                ahí solo invita a pulsarlo otra vez para el mismo resultado. */}
+            {!motivoNoBorrado && (
+              <button onClick={() => void eliminar(aBorrar)} disabled={borrando === aBorrar.id}
+                className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+                {borrando === aBorrar.id ? "Eliminando…" : "Eliminar de verdad"}
               </button>
-              <span className="text-[11px] text-slate-400">
-                {modal.draft.empresa_id ? (pendienteFicha ? "Datos de la ficha listos para guardar." : "Rellena el resto a mano o adjunta la ficha.") : "Elige antes la empresa."}
-              </span>
-            </div>
-          )}
-          <div className="grid gap-2 sm:grid-cols-2">
-            <Field label="Empresa *">
-              <select className={inputCls} value={modal.draft.empresa_id} onChange={(e) => set({ empresa_id: e.target.value, delegacion_id: null })}>
-                <option value="">Selecciona…</option>
-                {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
-              </select>
-            </Field>
-            <Field label="Delegación">
-              <select className={inputCls} value={modal.draft.delegacion_id ?? ""} onChange={(e) => set({ delegacion_id: e.target.value || null })}>
-                <option value="">—</option>
-                {delegacionesForm.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}
-              </select>
-            </Field>
-            <TextField label="Matrícula *" value={modal.draft.matricula ?? ""} onChange={(v) => set({ matricula: v })} />
-            <TextField label="Nº de unidad (flota)" value={modal.draft.numero_unidad ?? ""} onChange={(v) => set({ numero_unidad: v })} />
-            <Field label="Tipo de vehículo">
-              <select className={inputCls} value={modal.draft.tipo_vehiculo_id ?? ""} onChange={(e) => { setMarcaLibre(false); set({ tipo_vehiculo_id: e.target.value || null }); }}>
-                <option value="">—</option>
-                {tipos.map((t) => <option key={t.id} value={t.id}>{t.descripcion ?? t.nombre}</option>)}
-              </select>
-            </Field>
-            <Field label="Marca">
-              {(() => {
-                const tipoId = modal.draft.tipo_vehiculo_id ?? "";
-                const delTipo = tipoId ? marcasVeh.filter((m) => m.tipo_ids.includes(tipoId)) : [];
-                const actual = modal.draft.marca ?? "";
-                // Sin tipo elegido, o si la marca guardada no está en el
-                // catálogo, se escribe a mano para no bloquear el alta.
-                const enCatalogo = delTipo.some((m) => m.nombre === actual);
-                if (marcaLibre || !tipoId || (actual && !enCatalogo && delTipo.length === 0)) {
-                  return (
-                    <div className="flex gap-2">
-                      <input className={inputCls} value={actual} onChange={(e) => set({ marca: e.target.value })}
-                        placeholder={tipoId ? "Marca…" : "Elige antes el tipo de vehículo"} />
-                      {tipoId && (
-                        <button type="button" onClick={() => setMarcaLibre(false)}
-                          className="rounded border border-slate-600 px-2 text-[11px] text-slate-300">lista</button>
-                      )}
-                    </div>
-                  );
-                }
-                return (
-                  <div className="flex items-center gap-2">
-                    {(() => {
-                      const logo = delTipo.find((m) => m.nombre === actual)?.logo_url;
-                      return logo ? <img src={logo} alt={actual} className="h-7 w-10 rounded border border-slate-700 bg-slate-950 object-contain" /> : null;
-                    })()}
-                    <select className={inputCls} value={enCatalogo ? actual : ""}
-                      onChange={(e) => {
-                        if (e.target.value === "__otra__") { setMarcaLibre(true); set({ marca: "" }); return; }
-                        set({ marca: e.target.value });
-                      }}>
-                      <option value="">—</option>
-                      {actual && !enCatalogo && <option value={actual}>{actual} (fuera de catálogo)</option>}
-                      {delTipo.map((m) => <option key={m.id} value={m.nombre}>{m.nombre}</option>)}
-                      <option value="__otra__">Otra…</option>
-                    </select>
-                  </div>
-                );
-              })()}
-            </Field>
-            <TextField label="Modelo" value={modal.draft.modelo ?? ""} onChange={(v) => set({ modelo: v })} />
-            <TextField label="Bastidor" value={modal.draft.bastidor ?? ""} onChange={(v) => set({ bastidor: v })} />
-
-            {/* Configuración de neumáticos */}
-            <Field label="Configuración de ejes">
-              <select className={inputCls} value={modal.draft.config_ejes_id ?? ""} onChange={(e) => cambiarConfig(e.target.value || null)}>
-                <option value="">—</option>
-                {configEjes.map((c) => <option key={c.id} value={c.id}>{c.nombre}{c.descripcion ? ` · ${c.descripcion}` : ""}</option>)}
-              </select>
-            </Field>
-            <Field label="Medidas diferentes por eje">
-              <select className={inputCls} value={modal.draft.medidas_por_eje ? "1" : "0"} onChange={(e) => cambiarPorEje(e.target.value === "1")}>
-                <option value="0">No · misma medida en todo el vehículo</option>
-                <option value="1">Sí · indicar medida por cada eje</option>
-              </select>
-            </Field>
-
-            {!modal.draft.medidas_por_eje && (
-              <>
-                <Field label="Medida de neumático">
-                  <div className="flex gap-1">
-                    <select className={inputCls} value={modal.draft.medida_id ?? ""} onChange={(e) => set({ medida_id: e.target.value || null })}>
-                      <option value="">—</option>
-                      {medidas.map((m) => <option key={m.id} value={m.id}>{m.valor}</option>)}
-                    </select>
-                    <button type="button" onClick={() => setModalMedida(() => (id: string) => set({ medida_id: id }))}
-                      className="shrink-0 rounded-lg border border-emerald-600 px-2 text-sm font-bold text-emerald-300 hover:bg-emerald-600/10" title="Crear nueva medida">+</button>
-                  </div>
-                </Field>
-                <Field label="Tipo de llanta">
-                  <select className={inputCls} value={modal.draft.tipo_llanta_id ?? ""} onChange={(e) => set({ tipo_llanta_id: e.target.value || null })}>
-                    <option value="">—</option>
-                    {tiposLlanta.map((l) => <option key={l.id} value={l.id}>{tipoLlantaLabel(l)}</option>)}
-                  </select>
-                </Field>
-              </>
             )}
-
-            <Field label="Fecha matriculación">
-              <input type="date" className={inputCls} value={modal.draft.fecha_matriculacion ?? ""} onChange={(e) => set({ fecha_matriculacion: e.target.value || null })} />
-            </Field>
-            <Field label="Km actual">
-              <input type="number" className={inputCls} value={modal.draft.km_actual} onChange={(e) => set({ km_actual: Number(e.target.value) || 0 })} />
-            </Field>
-            <Field label="Origen km">
-              <select className={inputCls} value={modal.draft.origen_km} onChange={(e) => set({ origen_km: e.target.value as OrigenKm })}>
-                {(Object.keys(ORIGEN_KM_LABELS) as OrigenKm[]).map((o) => <option key={o} value={o}>{ORIGEN_KM_LABELS[o]}</option>)}
-              </select>
-            </Field>
-            <TextField label="Webfleet Vehicle ID" value={modal.draft.webfleet_vehicle_id ?? ""} onChange={(v) => set({ webfleet_vehicle_id: v })} />
-            <Field label="Revisión cada (días)">
-              <input type="number" className={inputCls} value={modal.draft.revision_intervalo_dias ?? ""} onChange={(e) => set({ revision_intervalo_dias: e.target.value === "" ? null : Number(e.target.value) })} placeholder="por defecto del tipo" />
-            </Field>
-            <Field label="Estado">
-              <select className={inputCls} value={modal.draft.activo ? "1" : "0"} onChange={(e) => set({ activo: e.target.value === "1" })}>
-                <option value="1">Activo</option><option value="0">Inactivo</option>
-              </select>
-            </Field>
-          </div>
-
-          {/* Desglose por eje */}
-          {modal.draft.medidas_por_eje && (
-            <div className="mt-3 rounded-lg border border-slate-700 p-3">
-              <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Medida y llanta por eje</div>
-              {filasEjes.length === 0 ? (
-                <div className="text-[12px] text-slate-500">Elige una configuración de ejes para desglosar los ejes.</div>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {filasEjes.map((f) => (
-                    <div key={f.eje} className="grid items-center gap-2 sm:grid-cols-[110px_1fr_1fr]">
-                      <span className="text-[12px] font-semibold text-slate-300">Eje {f.eje} · {f.ruedas} rueda{f.ruedas === 1 ? "" : "s"}</span>
-                      <div className="flex gap-1">
-                        <select className={inputCls} value={f.medida_id ?? ""} onChange={(e) => setEje(f.eje, { medida_id: e.target.value || null })}>
-                          <option value="">Medida…</option>
-                          {medidas.map((m) => <option key={m.id} value={m.id}>{m.valor}</option>)}
-                        </select>
-                        <button type="button" onClick={() => setModalMedida(() => (id: string) => setEje(f.eje, { medida_id: id }))}
-                          className="shrink-0 rounded-lg border border-emerald-600 px-2 text-sm font-bold text-emerald-300 hover:bg-emerald-600/10" title="Crear nueva medida">+</button>
-                      </div>
-                      <select className={inputCls} value={f.tipo_llanta_id ?? ""} onChange={(e) => setEje(f.eje, { tipo_llanta_id: e.target.value || null })}>
-                        <option value="">Llanta…</option>
-                        {tiposLlanta.map((l) => <option key={l.id} value={l.id}>{tipoLlantaLabel(l)}</option>)}
-                      </select>
-                    </div>
-                  ))}
-                </div>
-              )}
+          </div>}>
+          {motivoNoBorrado && (
+            <div className="mb-3 rounded-lg border border-amber-600/50 bg-amber-500/10 p-3">
+              <div className="text-[12px] font-bold uppercase text-amber-300">No se puede eliminar</div>
+              <div className="mt-1 text-sm text-amber-100">{motivoNoBorrado}</div>
+              <div className="mt-2 text-[12px] text-amber-200/80">
+                Darlo de baja deja de sacarlo en las listas y conserva la vida de sus neumáticos.
+              </div>
+              <button
+                onClick={() => void darDeBaja(aBorrar)}
+                disabled={borrando === aBorrar.id}
+                className="mt-3 rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-500 disabled:opacity-50"
+              >
+                {borrando === aBorrar.id ? "Dando de baja…" : `Dar de baja ${aBorrar.matricula}`}
+              </button>
             </div>
           )}
+          <div className="text-sm text-slate-200">
+            Se va a borrar <span className="font-mono font-bold">{aBorrar.matricula}</span>
+            {aBorrar.numero_unidad ? ` · unidad ${aBorrar.numero_unidad}` : ""} de{" "}
+            {aBorrar.empresa?.nombre ?? "su empresa"}.
+          </div>
+          <ul className="mt-3 list-disc space-y-1 pl-5 text-[12px] text-slate-400">
+            <li>No tiene vuelta atrás.</li>
+            <li>
+              Solo se borra si no tiene <strong>nada</strong> detrás: ni revisiones, ni neumáticos
+              montados, ni operaciones, ni intervenciones, ni incidencias. Si tiene algo, no se
+              borra y se dice qué tiene.
+            </li>
+            <li>
+              Para un vehículo que sí se ha usado, lo que toca es <strong>darlo de baja</strong>:
+              deja de salir en las listas y conserva la vida de sus neumáticos.
+            </li>
+          </ul>
         </Modal>
       )}
 
-      {modalMedida && (
-        <ModalNuevaMedida onClose={() => setModalMedida(null)} onCreated={medidaCreada} />
-      )}
-
-      {crearDesdeFicha && modal && (
-        <CrearVehiculoDesdeFicha
-          empresaId={modal.draft.empresa_id}
-          tipos={tipos}
-          configEjes={configEjes}
+      {editando && (
+        <EditorVehiculo
+          vehiculo={editando.vehiculo}
           matriculasExistentes={new Set(items.map((v) => v.matricula.toUpperCase()))}
-          onClose={() => setCrearDesdeFicha(false)}
-          onListo={(draft, pendiente) => {
-            setModal({ ...modal, draft: { ...modal.draft, ...draft } });
-            setPendienteFicha(pendiente);
-            setCrearDesdeFicha(false);
-          }}
+          onClose={() => setEditando(null)}
+          onGuardado={async () => { setMsg("✔ Guardado"); await cargar(); }}
         />
       )}
 

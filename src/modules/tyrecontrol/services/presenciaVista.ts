@@ -6,7 +6,12 @@
  * `useMemo` que nadie puede comprobar.
  */
 
-import type { PresenciaEnBase, RevisionEstado, VehiculoWebfleetEstado } from "../types";
+import type {
+  EstadoWebfleet,
+  PresenciaEnBase,
+  RevisionEstado,
+  VehiculoWebfleetEstado,
+} from "../types";
 import type { VehiculoPresencia } from "./presenciaBases";
 
 /**
@@ -228,4 +233,207 @@ export function etiquetaBase(
     return { base: nombreWf, ahora: true };
   }
   return null;
+}
+
+/** Dónde está un vehículo, para la chapa de su ficha. */
+export interface Ubicacion {
+  /** Lo que se lee de un vistazo: «En base · Reus», «En ruta»… */
+  texto: string;
+  /** La letra pequeña: de cuándo es la posición, o por qué no la hay. */
+  detalle?: string;
+  /**
+   * Cómo pintarlo. `base` es el único que afirma que el vehículo está ahí;
+   * `viejo` es «esto es lo último que se supo» y `desconocido` es no saber.
+   */
+  tono: "base" | "ruta" | "viejo" | "desconocido";
+}
+
+/**
+ * En qué base está un vehículo, o si anda por ahí, para la ficha.
+ *
+ * Es el hermano largo de `etiquetaBase`: aquella resuelve una chapa de una
+ * línea en una lista, y esta tiene sitio para decir además de cuándo es la
+ * posición y por qué falta cuando falta.
+ *
+ * Las dos fuentes y su orden son los mismos —el barrido del Hub manda sobre la
+ * sincronización Webfleet— por la razón de siempre: el Hub vale para cualquier
+ * proveedor y calcula con las geo-zonas actuales.
+ *
+ * La distinción que no se puede perder es entre «está» y «se le vio»: una
+ * posición vieja dentro de una base es un indicio bueno, no un hecho, y quien
+ * baje al patio a buscar el camión tiene derecho a saber cuál de las dos cosas
+ * le están diciendo.
+ */
+export function ubicacionDeVehiculo(params: {
+  presencia?: PresenciaEnBase;
+  webfleet?: VehiculoWebfleetEstado;
+  ahora?: number;
+}): Ubicacion {
+  const { presencia, webfleet } = params;
+  const ahora = params.ahora ?? Date.now();
+  const cuando = (iso: string | null | undefined) =>
+    iso ? `posición de hace ${desde(iso, ahora)}` : undefined;
+
+  if (presencia) {
+    const base = presencia.delegacion?.nombre;
+    if (presencia.estado === "IN_BASE") {
+      return {
+        texto: base ? `En base · ${base}` : "En base",
+        detalle: cuando(presencia.posicion_at),
+        tono: "base",
+      };
+    }
+    if (presencia.estado === "OUTSIDE_BASES") {
+      return { texto: "En ruta", detalle: cuando(presencia.posicion_at), tono: "ruta" };
+    }
+    if (presencia.estado === "STALE_POSITION") {
+      return {
+        texto: base ? `Última vez en ${base}` : "Última vez fuera de las bases",
+        detalle: cuando(presencia.posicion_at) ?? "sin fecha de posición",
+        tono: "viejo",
+      };
+    }
+    if (presencia.estado === "INVALID_POSITION") {
+      return { texto: "Posición no válida", detalle: "el equipo no tenía fijación GPS", tono: "desconocido" };
+    }
+    // NO_POSITION: puede ser que falte vincularlo o que el proveedor calle. No
+    // se sabe desde aquí, así que no se afirma ninguna de las dos.
+  }
+
+  if (webfleet) {
+    const base = webfleet.delegacion?.nombre;
+    if (webfleet.estado === "en_base" || webfleet.estado === "otra_base") {
+      return {
+        texto: base ? `En base · ${base}` : "En base",
+        detalle: cuando(webfleet.pos_time),
+        tono: "base",
+      };
+    }
+    if (webfleet.estado === "en_ruta") {
+      return { texto: "En ruta", detalle: cuando(webfleet.pos_time), tono: "ruta" };
+    }
+    if (webfleet.estado === "sin_conexion") {
+      return { texto: "Sin conexión", detalle: cuando(webfleet.pos_time), tono: "desconocido" };
+    }
+  }
+
+  return {
+    texto: "Sin posición",
+    detalle: "no está vinculado con la telemática, o su proveedor no dice nada de él",
+    tono: "desconocido",
+  };
+}
+
+/* ── Llevar el vehículo al mapa ──────────────────────────────────────────── */
+
+/** Una posición que se puede abrir en un mapa. */
+export interface PosicionMapa {
+  lat: number;
+  lng: number;
+  /** Instante de la posición según el proveedor, si lo dice. */
+  cuando?: string | null;
+  /** De dónde salió, para poder explicarlo en la ficha. */
+  fuente: "hub" | "webfleet";
+}
+
+/**
+ * ¿Es una coordenada de verdad?
+ *
+ * El 0,0 se descarta a propósito: es lo que devuelven varios equipos cuando
+ * NO tienen fijación GPS, y llevaría al vehículo al golfo de Guinea con toda
+ * la seguridad del mundo. Mejor no ofrecer el mapa que señalar un sitio falso.
+ */
+function coordenadaValida(lat: unknown, lng: unknown): boolean {
+  const la = Number(lat), lo = Number(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return false;
+  if (Math.abs(la) > 90 || Math.abs(lo) > 180) return false;
+  return !(la === 0 && lo === 0);
+}
+
+/**
+ * La posición del vehículo para enseñarla en un mapa, de las dos fuentes que
+ * hay: el barrido del Hub (vale para cualquier proveedor) y la sincronización
+ * Webfleet (solo para los suyos).
+ *
+ * Manda la MÁS RECIENTE, no una fuente fija: las dos se actualizan por su
+ * cuenta y a distinto ritmo, así que cuál va por delante cambia con la hora
+ * del día. Si ninguna dice de cuándo es su posición, manda el Hub, que es la
+ * que cubre a toda la flota.
+ */
+export function coordenadasDeVehiculo(params: {
+  presencia?: PresenciaEnBase;
+  webfleet?: VehiculoWebfleetEstado;
+}): PosicionMapa | null {
+  const candidatas: PosicionMapa[] = [];
+  const { presencia, webfleet } = params;
+
+  if (presencia && coordenadaValida(presencia.lat, presencia.lng)) {
+    candidatas.push({
+      lat: Number(presencia.lat), lng: Number(presencia.lng),
+      cuando: presencia.posicion_at ?? null, fuente: "hub",
+    });
+  }
+  if (webfleet && coordenadaValida(webfleet.lat, webfleet.lng)) {
+    candidatas.push({
+      lat: Number(webfleet.lat), lng: Number(webfleet.lng),
+      cuando: webfleet.pos_time ?? null, fuente: "webfleet",
+    });
+  }
+  if (candidatas.length === 0) return null;
+
+  const instante = (p: PosicionMapa) => {
+    const t = p.cuando ? new Date(p.cuando).getTime() : NaN;
+    return Number.isFinite(t) ? t : -Infinity;
+  };
+  // Empate (las dos sin fecha, o con la misma): se queda la primera, que es
+  // la del Hub por el orden en que se han metido.
+  return candidatas.reduce((mejor, p) => (instante(p) > instante(mejor) ? p : mejor));
+}
+
+/**
+ * El enlace al mapa. Google Maps con la coordenada y nada más: no se manda ni
+ * la matrícula ni el cliente, y no hace falta ninguna clave de API —así no hay
+ * ninguna que exponer en el panel—.
+ *
+ * Misma forma que usa ConnectPro para sus unidades y sus asistencias
+ * (`maps?q=lat,lng`): un solo modo de abrir un mapa en todo Mobilink.
+ */
+export function enlaceDeMapa(pos: PosicionMapa): string {
+  return `https://www.google.com/maps?q=${pos.lat.toFixed(6)},${pos.lng.toFixed(6)}`;
+}
+
+/**
+ * El estado de ubicación de un vehículo, sea de quien sea su telemática.
+ *
+ * Se devuelve en el vocabulario de siempre —`en_base`, `otra_base`, `en_ruta`,
+ * `sin_conexion`, `sin_dispositivo`— porque es el que hablan los contadores y
+ * los filtros de la lista de vehículos, que llevan años ahí. Lo que cambia es
+ * de dónde sale: antes solo de Webfleet, y para un cliente de Movertis eso
+ * significaba cero en base, cero en ruta y toda la flota «sin dispositivo».
+ *
+ * ── Una posición vieja DENTRO de una base sigue contando como en base ───────
+ *
+ * No es una licencia: es exactamente lo que hace la sincronización de Webfleet
+ * desde siempre —solo baja a «sin conexión» cuando la posición es vieja Y está
+ * fuera de toda base—, y tiene su razón: el equipo de un autobús aparcado se
+ * duerme, y sacarlo de la lista de «en base» por eso escondería justo a los
+ * que se pueden revisar. Quien necesite el matiz lo tiene en la chapa de la
+ * fila, que sí distingue «está» de «se le vio».
+ */
+export function estadoUbicacion(
+  presencia: PresenciaEnBase | undefined,
+  webfleet: VehiculoWebfleetEstado | undefined,
+): EstadoWebfleet {
+  if (presencia) {
+    const enSuBase = presencia.es_su_base !== false;
+    if (presencia.estado === "IN_BASE") return enSuBase ? "en_base" : "otra_base";
+    if (presencia.estado === "OUTSIDE_BASES") return "en_ruta";
+    if (presencia.estado === "STALE_POSITION") {
+      if (presencia.delegacion_id) return enSuBase ? "en_base" : "otra_base";
+      return "sin_conexion";
+    }
+    if (presencia.estado === "INVALID_POSITION") return "sin_conexion";
+    // NO_POSITION no afirma nada: se mira si Webfleet sabe algo de él.
+  }
+  return webfleet?.estado ?? "sin_dispositivo";
 }

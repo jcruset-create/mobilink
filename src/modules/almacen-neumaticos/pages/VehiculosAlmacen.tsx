@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import {
   exportarCsv,
@@ -208,157 +208,157 @@ export default function VehiculosAlmacen() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
+    <AlmacenLayoutOscuro>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Vehículos</h1>
+            <p className="text-sm text-slate-400">
+              Alta y consulta de vehículos por cliente.
+            </p>
+          </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Vehículos</h1>
-          <p className="text-sm text-gray-500">
-            Alta y consulta de vehículos por cliente.
-          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportarVehiculosCsv}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              disabled={vehiculosFiltrados.length === 0}
+            >
+              Exportar CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={exportarVehiculosExcel}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={vehiculosFiltrados.length === 0}
+            >
+              Exportar Excel
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarVehiculosCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={vehiculosFiltrados.length === 0}
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <select
+            value={clienteId}
+            onChange={(e) => setClienteId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
           >
-            Exportar CSV
-          </button>
+            <option value="">Cliente...</option>
+            {clientes.map((cliente) => (
+              <option key={cliente.id} value={cliente.id}>
+                {cliente.nombre}
+              </option>
+            ))}
+          </select>
+
+          <input
+            value={matricula}
+            onChange={(e) => setMatricula(e.target.value)}
+            placeholder="Matrícula"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+          />
+
+          <input
+            value={numeroVehiculo}
+            onChange={(e) => setNumeroVehiculo(e.target.value)}
+            placeholder={
+              clienteSeleccionado()?.requiere_numero_vehiculo
+                ? "Número de vehículo obligatorio"
+                : "Número de vehículo"
+            }
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+          />
+
+          <input
+            value={marca}
+            onChange={(e) => setMarca(e.target.value)}
+            placeholder="Marca"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+          />
+
+          <input
+            value={modelo}
+            onChange={(e) => setModelo(e.target.value)}
+            placeholder="Modelo"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+          />
 
           <button
             type="button"
-            onClick={exportarVehiculosExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={vehiculosFiltrados.length === 0}
+            onClick={crearVehiculo}
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white"
           >
-            Exportar Excel
+            Crear vehículo
           </button>
+
+          {mensaje && <p className="text-sm text-slate-300">{mensaje}</p>}
         </div>
-      </div>
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <select
-          value={clienteId}
-          onChange={(e) => setClienteId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        >
-          <option value="">Cliente...</option>
-          {clientes.map((cliente) => (
-            <option key={cliente.id} value={cliente.id}>
-              {cliente.nombre}
-            </option>
-          ))}
-        </select>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4">
+          <input
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            placeholder="Buscar por matrícula, número de vehículo, cliente, marca o modelo..."
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+          />
+        </div>
 
-        <input
-          value={matricula}
-          onChange={(e) => setMatricula(e.target.value)}
-          placeholder="Matrícula"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
+        <div className="overflow-hidden rounded-xl border border-slate-600 bg-slate-800">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-left">
+              <tr>
+                <th className="p-3">Cliente</th>
+                <th className="p-3">Matrícula</th>
+                <th className="p-3">Nº vehículo</th>
+                <th className="p-3">Marca</th>
+                <th className="p-3">Modelo</th>
+                <th className="p-3">Estado</th>
+                <th className="p-3">Acción</th>
+              </tr>
+            </thead>
 
-        <input
-          value={numeroVehiculo}
-          onChange={(e) => setNumeroVehiculo(e.target.value)}
-          placeholder={
-            clienteSeleccionado()?.requiere_numero_vehiculo
-              ? "Número de vehículo obligatorio"
-              : "Número de vehículo"
-          }
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
+            <tbody>
+              {vehiculosFiltrados.map((vehiculo) => {
+                const cliente = obtenerPrimero(vehiculo.clientes);
 
-        <input
-          value={marca}
-          onChange={(e) => setMarca(e.target.value)}
-          placeholder="Marca"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
+                return (
+                  <tr key={vehiculo.id} className="border-t border-slate-700 border-slate-700">
+                    <td className="p-3 font-medium">{cliente?.nombre || "-"}</td>
+                    <td className="p-3">{vehiculo.matricula}</td>
+                    <td className="p-3">{vehiculo.numero_vehiculo || "-"}</td>
+                    <td className="p-3">{vehiculo.marca || "-"}</td>
+                    <td className="p-3">{vehiculo.modelo || "-"}</td>
+                    <td className="p-3">
+                      {vehiculo.activo ? "Activo" : "Baja"}
+                    </td>
+                    <td className="p-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          cambiarEstadoVehiculo(vehiculo.id, vehiculo.activo)
+                        }
+                        className="rounded-lg border border-slate-600 px-3 py-1 text-xs"
+                      >
+                        {vehiculo.activo ? "Dar de baja" : "Reactivar"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
 
-        <input
-          value={modelo}
-          onChange={(e) => setModelo(e.target.value)}
-          placeholder="Modelo"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
-
-        <button
-          type="button"
-          onClick={crearVehiculo}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
-        >
-          Crear vehículo
-        </button>
-
-        {mensaje && <p className="text-sm text-gray-700">{mensaje}</p>}
-      </div>
-
-      <div className="rounded-xl border bg-white p-4">
-        <input
-          value={busqueda}
-          onChange={(e) => setBusqueda(e.target.value)}
-          placeholder="Buscar por matrícula, número de vehículo, cliente, marca o modelo..."
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-        />
-      </div>
-
-      <div className="overflow-hidden rounded-xl border bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="p-3">Cliente</th>
-              <th className="p-3">Matrícula</th>
-              <th className="p-3">Nº vehículo</th>
-              <th className="p-3">Marca</th>
-              <th className="p-3">Modelo</th>
-              <th className="p-3">Estado</th>
-              <th className="p-3">Acción</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {vehiculosFiltrados.map((vehiculo) => {
-              const cliente = obtenerPrimero(vehiculo.clientes);
-
-              return (
-                <tr key={vehiculo.id} className="border-t">
-                  <td className="p-3 font-medium">{cliente?.nombre || "-"}</td>
-                  <td className="p-3">{vehiculo.matricula}</td>
-                  <td className="p-3">{vehiculo.numero_vehiculo || "-"}</td>
-                  <td className="p-3">{vehiculo.marca || "-"}</td>
-                  <td className="p-3">{vehiculo.modelo || "-"}</td>
-                  <td className="p-3">
-                    {vehiculo.activo ? "Activo" : "Baja"}
-                  </td>
-                  <td className="p-3">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        cambiarEstadoVehiculo(vehiculo.id, vehiculo.activo)
-                      }
-                      className="rounded-lg border px-3 py-1 text-xs"
-                    >
-                      {vehiculo.activo ? "Dar de baja" : "Reactivar"}
-                    </button>
+              {vehiculosFiltrados.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="p-6 text-center text-slate-400">
+                    No hay vehículos.
                   </td>
                 </tr>
-              );
-            })}
-
-            {vehiculosFiltrados.length === 0 && (
-              <tr>
-                <td colSpan={7} className="p-6 text-center text-gray-500">
-                  No hay vehículos.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }

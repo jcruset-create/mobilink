@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import {
   exportarCsv,
@@ -205,185 +205,185 @@ export default function AuditoriaAlmacen() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
+    <AlmacenLayoutOscuro>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Auditoría</h1>
+            <p className="text-sm text-slate-400">
+              Consulta de acciones críticas realizadas en el módulo de almacén. Se
+              cargan los últimos 200 registros según filtros.
+            </p>
+          </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Auditoría</h1>
-          <p className="text-sm text-gray-500">
-            Consulta de acciones críticas realizadas en el módulo de almacén. Se
-            cargan los últimos 200 registros según filtros.
-          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportarAuditoriaCsv}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              disabled={accionesFiltradas.length === 0}
+            >
+              Exportar CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={exportarAuditoriaExcel}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={accionesFiltradas.length === 0}
+            >
+              Exportar Excel
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarAuditoriaCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={accionesFiltradas.length === 0}
-          >
-            Exportar CSV
-          </button>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Filtros</h2>
 
-          <button
-            type="button"
-            onClick={exportarAuditoriaExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={accionesFiltradas.length === 0}
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
+          <div className="grid gap-3 md:grid-cols-4">
+            <input
+              type="date"
+              value={fechaDesde}
+              onChange={(e) => setFechaDesde(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Filtros</h2>
+            <input
+              type="date"
+              value={fechaHasta}
+              onChange={(e) => setFechaHasta(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-        <div className="grid gap-3 md:grid-cols-4">
-          <input
-            type="date"
-            value={fechaDesde}
-            onChange={(e) => setFechaDesde(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+            <input
+              value={filtroModulo}
+              onChange={(e) => setFiltroModulo(e.target.value)}
+              placeholder="Filtrar por módulo"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-          <input
-            type="date"
-            value={fechaHasta}
-            onChange={(e) => setFechaHasta(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+            <input
+              value={filtroAccion}
+              onChange={(e) => setFiltroAccion(e.target.value)}
+              placeholder="Filtrar por acción"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-          <input
-            value={filtroModulo}
-            onChange={(e) => setFiltroModulo(e.target.value)}
-            placeholder="Filtrar por módulo"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+            <input
+              value={filtroEmail}
+              onChange={(e) => setFiltroEmail(e.target.value)}
+              placeholder="Filtrar por email"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-          <input
-            value={filtroAccion}
-            onChange={(e) => setFiltroAccion(e.target.value)}
-            placeholder="Filtrar por acción"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+            <select
+              value={filtroRol}
+              onChange={(e) => setFiltroRol(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todos los roles</option>
+              {ROLES.map((rol) => (
+                <option key={rol} value={rol}>
+                  {rol}
+                </option>
+              ))}
+            </select>
 
-          <input
-            value={filtroEmail}
-            onChange={(e) => setFiltroEmail(e.target.value)}
-            placeholder="Filtrar por email"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+            <input
+              value={filtroTabla}
+              onChange={(e) => setFiltroTabla(e.target.value)}
+              placeholder="Filtrar por tabla"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-          <select
-            value={filtroRol}
-            onChange={(e) => setFiltroRol(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          >
-            <option value="">Todos los roles</option>
-            {ROLES.map((rol) => (
-              <option key={rol} value={rol}>
-                {rol}
-              </option>
-            ))}
-          </select>
+            <input
+              value={filtroTexto}
+              onChange={(e) => setFiltroTexto(e.target.value)}
+              placeholder="Búsqueda libre"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+          </div>
 
-          <input
-            value={filtroTabla}
-            onChange={(e) => setFiltroTabla(e.target.value)}
-            placeholder="Filtrar por tabla"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={cargarAuditoria}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              {cargando ? "Buscando..." : "Buscar"}
+            </button>
 
-          <input
-            value={filtroTexto}
-            onChange={(e) => setFiltroTexto(e.target.value)}
-            placeholder="Búsqueda libre"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
-        </div>
+            <button
+              type="button"
+              onClick={limpiarFiltros}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+            >
+              Limpiar filtros
+            </button>
+          </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={cargarAuditoria}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
-          >
-            {cargando ? "Buscando..." : "Buscar"}
-          </button>
-
-          <button
-            type="button"
-            onClick={limpiarFiltros}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
-          >
-            Limpiar filtros
-          </button>
+          {mensaje && <p className="text-sm text-red-300">{mensaje}</p>}
         </div>
 
-        {mensaje && <p className="text-sm text-red-600">{mensaje}</p>}
-      </div>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-3 text-sm text-slate-300">
+          Mostrando <strong>{accionesFiltradas.length}</strong> registros de{" "}
+          <strong>{acciones.length}</strong> cargados.
+        </div>
 
-      <div className="rounded-xl border bg-white p-3 text-sm text-gray-600">
-        Mostrando <strong>{accionesFiltradas.length}</strong> registros de{" "}
-        <strong>{acciones.length}</strong> cargados.
-      </div>
-
-      <div className="overflow-auto rounded-xl border bg-white">
-        <table className="w-full min-w-[1200px] text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="p-3">Fecha</th>
-              <th className="p-3">Usuario</th>
-              <th className="p-3">Rol</th>
-              <th className="p-3">Módulo</th>
-              <th className="p-3">Acción</th>
-              <th className="p-3">Tabla</th>
-              <th className="p-3">Registro</th>
-              <th className="p-3">Descripción</th>
-              <th className="p-3">Datos</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {accionesFiltradas.map((accion) => (
-              <tr key={accion.id} className="border-t align-top">
-                <td className="p-3 whitespace-nowrap">
-                  {formatearFecha(accion.created_at)}
-                </td>
-                <td className="p-3">
-                  <div className="font-medium">{accion.nombre_operario || accion.email || "-"}</div>
-                  <div className="text-xs text-gray-500">
-                    {accion.codigo_operario || ""}
-                  </div>
-                </td>
-                <td className="p-3">{accion.rol || "-"}</td>
-                <td className="p-3">{accion.modulo}</td>
-                <td className="p-3 font-medium">{accion.accion}</td>
-                <td className="p-3">{accion.tabla_afectada || "-"}</td>
-                <td className="p-3 text-xs">{accion.registro_id || "-"}</td>
-                <td className="p-3">{accion.descripcion || "-"}</td>
-                <td className="p-3">
-                  <pre className="max-w-md whitespace-pre-wrap rounded-lg bg-gray-50 p-2 text-xs">
-                    {formatearDatos(accion.datos)}
-                  </pre>
-                </td>
-              </tr>
-            ))}
-
-            {accionesFiltradas.length === 0 && (
+        <div className="overflow-auto rounded-xl border border-slate-600 bg-slate-800">
+          <table className="w-full min-w-[1200px] text-sm">
+            <thead className="bg-slate-900 text-left">
               <tr>
-                <td colSpan={9} className="p-6 text-center text-gray-500">
-                  No hay acciones de auditoría visibles con los filtros
-                  actuales.
-                </td>
+                <th className="p-3">Fecha</th>
+                <th className="p-3">Usuario</th>
+                <th className="p-3">Rol</th>
+                <th className="p-3">Módulo</th>
+                <th className="p-3">Acción</th>
+                <th className="p-3">Tabla</th>
+                <th className="p-3">Registro</th>
+                <th className="p-3">Descripción</th>
+                <th className="p-3">Datos</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+
+            <tbody>
+              {accionesFiltradas.map((accion) => (
+                <tr key={accion.id} className="border-t border-slate-700 border-slate-700 align-top">
+                  <td className="p-3 whitespace-nowrap">
+                    {formatearFecha(accion.created_at)}
+                  </td>
+                  <td className="p-3">
+                    <div className="font-medium">{accion.nombre_operario || accion.email || "-"}</div>
+                    <div className="text-xs text-slate-400">
+                      {accion.codigo_operario || ""}
+                    </div>
+                  </td>
+                  <td className="p-3">{accion.rol || "-"}</td>
+                  <td className="p-3">{accion.modulo}</td>
+                  <td className="p-3 font-medium">{accion.accion}</td>
+                  <td className="p-3">{accion.tabla_afectada || "-"}</td>
+                  <td className="p-3 text-xs">{accion.registro_id || "-"}</td>
+                  <td className="p-3">{accion.descripcion || "-"}</td>
+                  <td className="p-3">
+                    <pre className="max-w-md whitespace-pre-wrap rounded-lg bg-slate-900 p-2 text-xs">
+                      {formatearDatos(accion.datos)}
+                    </pre>
+                  </td>
+                </tr>
+              ))}
+
+              {accionesFiltradas.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="p-6 text-center text-slate-400">
+                    No hay acciones de auditoría visibles con los filtros
+                    actuales.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }

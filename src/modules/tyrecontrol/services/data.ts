@@ -2244,9 +2244,39 @@ export async function listarEstadoWebfleet(): Promise<VehiculoWebfleetEstado[]> 
 export async function listarPresenciaEnBases(): Promise<PresenciaEnBase[]> {
   const { data, error } = await supabase
     .from("tc_vehiculo_presencia_base")
-    .select("vehiculo_id, estado, delegacion_id, posicion_at, entrada_base_at, delegacion:tc_delegaciones(id, nombre)");
+    .select("vehiculo_id, estado, delegacion_id, es_su_base, posicion_at, entrada_base_at, lat, lng, velocidad_kmh, delegacion:tc_delegaciones(id, nombre)");
   if (error) throw new Error(error.message);
   return (data ?? []) as unknown as PresenciaEnBase[];
+}
+
+/**
+ * Dónde está UN vehículo, según las dos fuentes que hay.
+ *
+ * Se leen las dos porque son dos: el barrido del Hub vale para cualquier
+ * proveedor y la sincronización Webfleet solo para los suyos. Van a mejor
+ * esfuerzo —la ficha no se cae porque falte una— y quien decide cuál manda es
+ * `ubicacionDeVehiculo`, no esta consulta.
+ */
+export async function ubicacionDeVehiculoBD(vehiculoId: string): Promise<{
+  presencia?: PresenciaEnBase;
+  webfleet?: VehiculoWebfleetEstado;
+}> {
+  const [pres, wf] = await Promise.all([
+    supabase
+      .from("tc_vehiculo_presencia_base")
+      .select("vehiculo_id, estado, delegacion_id, es_su_base, posicion_at, entrada_base_at, lat, lng, velocidad_kmh, delegacion:tc_delegaciones(id, nombre)")
+      .eq("vehiculo_id", vehiculoId)
+      .maybeSingle(),
+    supabase
+      .from("tc_vehiculo_webfleet_estado")
+      .select("*, delegacion:tc_delegaciones(id, nombre)")
+      .eq("vehiculo_id", vehiculoId)
+      .maybeSingle(),
+  ]);
+  return {
+    presencia: (pres.data ?? undefined) as unknown as PresenciaEnBase | undefined,
+    webfleet: (wf.data ?? undefined) as unknown as VehiculoWebfleetEstado | undefined,
+  };
 }
 
 // Lanza un ciclo de sincronización en el backend y devuelve nº actualizados.
@@ -2939,6 +2969,20 @@ export async function listarVehiculosPendientes(): Promise<Vehiculo[]> {
 /** Da por bueno un vehículo dado de alta desde la tablet. Solo administradores. */
 export async function validarVehiculo(id: string): Promise<void> {
   const { error } = await supabase.rpc("tc_validar_vehiculo", { p_vehiculo: id });
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Borra un vehículo que no llegó a usarse. Solo administradores.
+ *
+ * La función de la base se niega si el vehículo tiene historial —revisiones,
+ * montajes, operaciones, intervenciones o incidencias— y lo dice en el
+ * mensaje de error, que es el que se enseña tal cual: media docena de claves
+ * ajenas son ON DELETE SET NULL, así que un borrado con historial detrás no
+ * fallaría, dejaría huérfana la vida del neumático.
+ */
+export async function eliminarVehiculo(id: string): Promise<void> {
+  const { error } = await supabase.rpc("tc_eliminar_vehiculo", { p_vehiculo: id });
   if (error) throw new Error(error.message);
 }
 

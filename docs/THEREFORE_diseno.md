@@ -1339,6 +1339,11 @@ que es donde está impresa: se enseña aparte y no se suma.
 Los documentos reales viven en `server/therefore/fixtures/originales/`,
 ignorada por Git; las pruebas reproducen cada caso con datos inventados.
 
+**Remitentes por dominio.** `buzon.remitentes` admite dominios además de
+direcciones: «@proveedor.com» (con arroba o sin ella al escribirlo) acepta
+cualquier buzón de ese dominio y de sus subdominios. Lo que no es ni
+dirección ni dominio se sigue descartando al guardar.
+
 **Descarga de documentos para revisión.** En Configuración, «Descargar
 documentos para revisión» baja en un zip los PDF cuyo análisis vigente quedó
 en REVISAR o ERROR en los últimos N días (`GET /documentos/revision?dias=`),

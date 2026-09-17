@@ -36,6 +36,7 @@ import {
 } from "./therefore/index.ts";
 import { initCentral, mountCentral } from "./central/index.ts";
 import { initRecepciones, mountRecepciones, startRecepcionesBuzon } from "./recepciones/index.ts";
+import { initOrManuales, mountOrManuales, startOrManualesWorker } from "./or-manuales/index.ts";
 import { initLicenses, mountLicenses, startLicenseWorker } from "./licenses/index.ts";
 import { pedirIA, transcribirAudio } from "./core/openaiService.ts";
 import { extractJson, hasAi } from "./core/ai.ts";
@@ -72,6 +73,8 @@ import { createTyreControlRouter } from "./tyrecontrol/router.ts";
 import { createConciliacionRouter } from "./tyrecontrol/conciliacion/router.ts";
 import { createPresenciaRouter } from "./tyrecontrol/presencia/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
+import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
+import { createKilometrajeActualRouter } from "./tyrecontrol/kilometrajeActual/router.ts";
 import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
 import { startPresenciaBases } from "./tyrecontrol/presencia/worker.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
@@ -18972,6 +18975,7 @@ mountCentral(app);
 mountTacografos(app);
 mountTherefore(app);
 mountRecepciones(app);
+mountOrManuales(app);
 
 /* =========================================================
    MOBILINK LICENCIAS (API bajo /api/licenses)
@@ -19234,6 +19238,10 @@ app.use("/api/tyrecontrol/conciliacion", createConciliacionRouter());
 app.use("/api/tyrecontrol/presencia-bases", createPresenciaRouter());
 // Kilómetros mensuales: mismo motivo que la conciliación para ir ANTES del router general.
 app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter());
+// El alta operativa va ANTES del router general de TyreControl, igual que el
+// de kilometraje mensual: si no, la ruta genérica se lo come.
+app.use("/api/tyrecontrol/alta-operativa", createAltaOperativaRouter());
+app.use("/api/tyrecontrol/kilometraje-actual", createKilometrajeActualRouter());
 app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
 mountCorreo(app, requireSupervisorRole);
 app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
@@ -19505,6 +19513,9 @@ initDb()
   // Recepciones: control de la recepción física de mercancía de proveedores.
   // No toca el almacén ni el stock; sólo sus tablas rcp_*.
   .then(() => prepararEsquema("Recepciones", initRecepciones))
+  // OR Manuales: los blocs de órdenes de reparación en papel y sus escaneos.
+  // Sólo sus tablas orm_*; no depende de ningún otro esquema.
+  .then(() => prepararEsquema("OR Manuales", initOrManuales))
   // Satisfaction: encuestas y casos de calidad. No engancha todavía con el
   // cierre de asistencias — solo crea el esquema y siembra las plantillas.
   .then(() => prepararEsquema("Satisfaction", initSatisfaction))
@@ -19523,6 +19534,7 @@ initDb()
       startThereforeBuzon(); // el buzón de Therefore (apagado sin credenciales)
       startThereforeDiario(); // prioridad que envejece y autocierre, cada hora
       startRecepcionesBuzon(); // los correos de pedidos y albaranes de proveedores (apagado sin credenciales)
+      startOrManualesWorker(); // saca de "procesando" los lotes de escaneos que murieron con un reinicio
       startLicenseWorker(); // estados y avisos de vencimiento de licencias
       startSaasLicenseWorker(); // caducidad de app_licencias (SaaS fase 2)
       startConnectWorker(); // Connect Pro: sync core→partner y entrega de webhooks

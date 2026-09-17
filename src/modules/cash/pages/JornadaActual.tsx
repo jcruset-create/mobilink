@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { HandCoins, Banknote, ArrowLeftRight, Repeat, ClipboardCheck, Lock, PlayCircle } from "lucide-react";
+import { HandCoins, Banknote, ArrowLeftRight, Repeat, ClipboardCheck, Lock, PlayCircle, Link2 } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, { type CantidadesPorValor, lineasDesde } from "../components/DenominationGrid";
 import { Aviso, BotonAccion, Cabecera, Card, ErrorBox, Modal, btnDanger, btnSecondary, inputCls } from "../components/ui";
@@ -66,6 +66,24 @@ export default function JornadaActual() {
         {puede("cash.collection.create_manual") && (
           <BotonAccion tono="cobro" icono={<HandCoins className="h-5 w-5" />} onClick={() => navigate("/cash/cobros")}>
             Cobrar
+          </BotonAccion>
+        )}
+        {/*
+          El cobro que NO pasa por el cajón: un enlace de Stripe que se manda
+          al cliente. Vive en otro módulo, pero se pulsa desde aquí porque la
+          decisión —«esto lo cobro en efectivo o le mando un enlace»— se toma
+          en el mostrador y con el cliente delante.
+
+          Va con `?desde=caja` para que aquella pantalla sepa devolver aquí.
+          Sin eso tendría que adivinarlo, y quien entre desde Operativo se
+          encontraría un botón de vuelta a un sitio del que no venía.
+        */}
+        {puede("cash.collection.create_manual") && (
+          <BotonAccion
+            icono={<Link2 className="h-5 w-5" />}
+            onClick={() => navigate("/cobros?desde=caja")}
+          >
+            Enlace de pago
           </BotonAccion>
         )}
         {puede("cash.payment.create") && (

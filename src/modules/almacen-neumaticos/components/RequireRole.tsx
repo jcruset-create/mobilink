@@ -12,8 +12,8 @@ export default function RequireRole({ roles, children }: RequireRoleProps) {
 
   if (cargandoPermisos) {
     return (
-      <div className="p-6">
-        <div className="rounded-xl border bg-white p-6 text-sm text-gray-600">
+      <div className="min-h-screen bg-slate-900 p-6 text-slate-100">
+        <div className="rounded-xl border border-slate-700 bg-slate-800 p-6 text-sm text-slate-300">
           Comprobando permisos...
         </div>
       </div>
@@ -22,8 +22,8 @@ export default function RequireRole({ roles, children }: RequireRoleProps) {
 
   if (errorPermisos || !permisos.perfil) {
     return (
-      <div className="p-6">
-        <div className="rounded-xl border bg-red-50 p-6 text-sm text-red-700">
+      <div className="min-h-screen bg-slate-900 p-6 text-slate-100">
+        <div className="rounded-xl border border-red-700 bg-red-500/10 p-6 text-sm text-red-300">
           No hay perfil activo vinculado al usuario conectado.
         </div>
       </div>
@@ -34,8 +34,8 @@ export default function RequireRole({ roles, children }: RequireRoleProps) {
 
   if (!rolActual || !roles.includes(rolActual)) {
     return (
-      <div className="p-6">
-        <div className="rounded-xl border bg-yellow-50 p-6 text-sm text-yellow-800">
+      <div className="min-h-screen bg-slate-900 p-6 text-slate-100">
+        <div className="rounded-xl border border-amber-600 bg-amber-500/10 p-6 text-sm text-amber-300">
           No tienes permiso para acceder a esta pantalla.
         </div>
       </div>

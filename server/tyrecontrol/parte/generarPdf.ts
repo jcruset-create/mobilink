@@ -49,6 +49,15 @@ export interface PartePdf {
   flota?: string | null;
   matricula?: string | null;
   km?: string | null;
+  /**
+   * De dónde salió ese kilometraje, para los METADATOS del documento.
+   *
+   * No se imprime: el parte se dibuja sobre una plantilla con coordenadas
+   * fijas y una línea más obligaría a recolocar el resto. Va a las propiedades
+   * del PDF, donde se consulta sin tocar nada de lo impreso. Lo compone
+   * `procedenciaKm()`.
+   */
+  km_origen?: string | null;
   fecha?: string | null;
   lugar?: "taller" | "flota" | "carretera" | null;
   inicio_servicio?: string | null;
@@ -179,6 +188,18 @@ export async function generarPartePdf(d: PartePdf): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const normal = await doc.embedFont(StandardFonts.Helvetica);
   const negrita = await doc.embedFont(StandardFonts.HelveticaBold);
+
+  /*
+   * Metadatos del documento. La plantilla no se toca.
+   *
+   * El título lleva el número del parte y la matrícula para que un PDF
+   * guardado suelto se reconozca sin abrirlo, y el asunto lleva la
+   * procedencia del kilometraje, que es la trazabilidad que el papel no tiene
+   * sitio para enseñar.
+   */
+  doc.setTitle(`Parte ${d.numero ?? ""}${d.matricula ? ` · ${d.matricula}` : ""}`.trim());
+  doc.setCreator("Mobilink TyreControl");
+  if (d.km_origen) doc.setSubject(d.km_origen);
 
   const desmontados = d.desmontados ?? [];
   const montados = d.montados ?? [];

@@ -463,7 +463,7 @@ function Buzon() {
           <div className="mb-3 flex flex-wrap items-end gap-2">
             <div className="min-w-[280px] flex-1">
               <TextField
-                label="Remitentes admitidos (separados por comas; vacío = todos)"
+                label="Remitentes admitidos: direcciones o dominios (@proveedor.com), separados por comas; vacío = todos"
                 value={remitentes}
                 onChange={setRemitentes}
               />

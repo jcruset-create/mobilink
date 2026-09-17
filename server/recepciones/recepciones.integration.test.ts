@@ -412,13 +412,45 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
       if (evento) expect(evento.descripcion).toContain(nombre);
     });
 
+    /*
+     * Esta prueba buscaba el PIN "4321" dentro del JSON entero, y así fallaba
+     * sola cada dos por tres: el identificador del operario es un UUID, y uno
+     * de cada doscientos y pico lleva esos cuatro dígitos dentro
+     * (…-b718-24321c0cd9f7). No era una fuga, era el azar, y dejaba la CI en
+     * rojo sobre código que estaba bien.
+     *
+     * Ahora se recorre la respuesta y se mira lo que de verdad importa: que
+     * ningún CAMPO hable de pin y que ningún VALOR sea el PIN. Además el PIN
+     * es de ocho dígitos, la longitud máxima que admite la política, con lo
+     * que coincidir por casualidad con un trozo de UUID o de fecha deja de
+     * ser un caso realista.
+     */
     it("el PIN nunca sale por la API, ni al crearlo ni al listar", async () => {
-      const nombre = `Paco Muelle ${Date.now()}`;
-      const creado = await alta(nombre, "4321");
-      const texto = JSON.stringify(creado.body) + JSON.stringify((await api("/operarios", operarioA)).body);
-      expect(texto).not.toContain("4321");
-      expect(texto).not.toContain("pinHash");
-      expect(texto).not.toContain("pin_hash");
+      const PIN = "80417392";
+      // Sin dígitos en el nombre: lo único numérico de la respuesta sale de la
+      // base de datos, que es justo lo que se está vigilando.
+      const nombre = `Paco Muelle ${Math.random().toString(36).slice(2, 10)}`;
+      const creado = await alta(nombre, PIN);
+      expect(creado.status, JSON.stringify(creado.body)).toBe(201);
+      const listado = await api("/operarios", operarioA);
+
+      const fugas: string[] = [];
+      const revisar = (valor: unknown, ruta: string) => {
+        if (Array.isArray(valor)) { valor.forEach((v, i) => revisar(v, `${ruta}[${i}]`)); return; }
+        if (valor && typeof valor === "object") {
+          for (const [clave, v] of Object.entries(valor)) {
+            if (/pin/i.test(clave)) fugas.push(`${ruta}.${clave} (el nombre del campo ya delata el PIN)`);
+            revisar(v, `${ruta}.${clave}`);
+          }
+          return;
+        }
+        if (typeof valor === "string" && valor.includes(PIN)) fugas.push(`${ruta} = ${valor}`);
+        if (typeof valor === "number" && String(valor).includes(PIN)) fugas.push(`${ruta} = ${valor}`);
+      };
+      revisar(creado.body, "alta");
+      revisar(listado.body, "listado");
+
+      expect(fugas, fugas.join(" · ")).toEqual([]);
     });
 
     it("un PIN equivocado no cierra nada, y a los cinco fallos el operario queda bloqueado", async () => {
