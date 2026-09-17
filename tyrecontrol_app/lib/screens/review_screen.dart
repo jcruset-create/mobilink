@@ -46,7 +46,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
   final Map<String, String> _posPorEpc = {}; // rfid_epc (mayúsculas) → posicionId
   Map<String, String> _fotosModelo = {}; // claveModeloCatalogo → url foto del catálogo
   String? _imagenChasis; // foto/plano del vehículo (si está configurada)
-  num _kmRevision = 0; // km del vehículo para esta revisión (Webfleet si está enlazado)
+  num _kmRevision = 0; // km del vehículo para esta revisión
+  /// La lectura de telemetría tal como vino, para poder guardar su procedencia
+  /// —cuándo se leyó y con cuánto desfase— junto a la revisión.
+  Map<String, dynamic>? _lecturaKm;
   final Map<String, RevisionDetalleDraft> _detalles = {};
   Map<String, UltimaMedicion> _ultimasMed = {}; // última medición por posición (referencia)
   UmbralConfig? _umbralEmpresa; // umbral de profundidad de la empresa
@@ -143,6 +146,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
          * revisión en vez de perderse.
          */
         final lectura = await TyreControlApi.kilometrajeActual(widget.vehiculo.id);
+        _lecturaKm = lectura;
         final kmTel = (lectura['km'] as num?)?.round();
         if (kmTel != null) {
           _kmRevision = kmTel;
@@ -155,11 +159,28 @@ class _ReviewScreenState extends State<ReviewScreen> {
         }
       }
 
+      /*
+       * La revisión guarda DE DÓNDE salió su kilometraje, no solo el número.
+       *
+       * Las columnas `km_capturado_at` y `km_desfase_min` existen desde
+       * `tyrecontrol_km_revision_procedencia.sql` y hasta ahora solo las
+       * rellenaba la importación del CheckPoint: una revisión hecha con la
+       * tablet perdía cuándo se había leído ese odómetro.
+       *
+       * El desfase va con SIGNO y negativo: la lectura es anterior a la
+       * revisión, que es el caso bueno —no puede contener kilómetros
+       * posteriores—. Guardar el valor absoluto borraría esa distinción.
+       */
+      final capturado = _lecturaKm?['capturadoAt'] as String?;
+      final antiguedad = (_lecturaKm?['antiguedadMin'] as num?)?.round();
       _revision = widget.revisionExistente ??
           await TyreControlApi.crearRevision(
             empresaId: widget.vehiculo.empresaId,
             vehiculoId: widget.vehiculo.id,
             kmVehiculo: _kmRevision,
+            origenKm: capturado != null ? 'telematica' : null,
+            kmCapturadoAt: capturado != null ? DateTime.tryParse(capturado) : null,
+            kmDesfaseMin: antiguedad != null ? -antiguedad : null,
           );
       // Cronometraje: inicio_at lo puso la BD al crear la revisión; aquí solo
       // se gestionan las pausas de inactividad.
@@ -566,9 +587,43 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
   }
 
+  /*
+   * Antes de cerrar: ¿sigue valiendo el kilometraje que se leyó al abrir?
+   *
+   * Una revisión larga puede durar dos horas, y en ese rato el camión puede
+   * haber salido. Pero NO se vuelve a preguntar por preguntar: el cupo del
+   * proveedor es limitado y lo comparte con el barrido de presencia en bases.
+   * Solo se consulta si la lectura ya ha caducado, que es lo que decide
+   * `tocaRefrescar` en el servidor.
+   *
+   * Y si el técnico tecleó los km a mano, no se toca nada: no se le pisa en
+   * silencio un dato que él confirmó.
+   */
+  Future<void> _refrescarKmSiHaceFalta() async {
+    final capturado = _lecturaKm?['capturadoAt'] as String?;
+    if (capturado == null) return;             // manual o sin telemática
+    final leidoAt = DateTime.tryParse(capturado);
+    if (leidoAt == null) return;
+    final frescuraMin = (_lecturaKm?['frescuraMin'] as num?)?.round() ?? 120;
+    if (DateTime.now().difference(leidoAt).inMinutes <= frescuraMin) return;
+
+    final nueva = await TyreControlApi.kilometrajeActual(widget.vehiculo.id);
+    final km = (nueva['km'] as num?)?.round();
+    if (km == null || km == _kmRevision) return;
+    _lecturaKm = nueva;
+    _kmRevision = km;
+    await TyreControlApi.actualizarKmRevision(_revision!.id, km);
+    if (!mounted) return;
+    // Se le enseña el número nuevo: no se cambia en silencio un dato que va a
+    // quedar en el parte.
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Kilómetros actualizados a $km km antes de cerrar.')));
+  }
+
   Future<void> _finalizar({String estado = 'completada'}) async {
     setState(() => _finalizando = true);
     try {
+      await _refrescarKmSiHaceFalta();
       // Cronometraje automático: fin = ahora; el tipo se DEDUCE de lo medido
       // (alguna presión anotada → "profundidades + presiones"), el técnico no
       // introduce nada a mano. Una pausa sin reanudar se cierra aquí.
