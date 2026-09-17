@@ -151,3 +151,39 @@ describe("las coordenadas", () => {
     expect(C.aPdf(C.ALTO)).toBe(0);
   });
 });
+
+/*
+ * La procedencia del kilometraje va a los METADATOS, no a la hoja.
+ *
+ * Estas dos pruebas son las que impiden que alguien "mejore" el parte
+ * escribiendo el origen encima de la plantilla: si se imprimiera, habría que
+ * recolocar los rótulos y el papel dejaría de cuadrar con el preimpreso que
+ * firma el cliente.
+ */
+describe("procedencia del kilometraje en el PDF", () => {
+  it("va en las propiedades del documento", async () => {
+    const d = await PDFDocument.load(await generarPartePdf({
+      matricula: "1234ABC", numero: "OP-42", km: "482315",
+      km_origen: "Kilómetros: 482315 km. Origen: telemática — lectura del 16/09/2026 10:42.",
+    }));
+    expect(d.getSubject()).toContain("telemática");
+    expect(d.getSubject()).toContain("16/09/2026 10:42");
+    // Y el título permite reconocer un PDF suelto sin abrirlo.
+    expect(d.getTitle()).toContain("OP-42");
+    expect(d.getTitle()).toContain("1234ABC");
+  });
+
+  it("sin procedencia, el documento no inventa un asunto", async () => {
+    const d = await PDFDocument.load(await generarPartePdf({ matricula: "1234ABC" }));
+    expect(d.getSubject() ?? "").toBe("");
+  });
+
+  it("el número de páginas no cambia por llevar procedencia", async () => {
+    // La plantilla es la misma: esto NO añade ni una línea impresa.
+    const sin = await PDFDocument.load(await generarPartePdf({ matricula: "1234ABC" }));
+    const con = await PDFDocument.load(await generarPartePdf({
+      matricula: "1234ABC", km_origen: "Kilómetros: 1 km. Origen: telemática.",
+    }));
+    expect(con.getPageCount()).toBe(sin.getPageCount());
+  });
+});
