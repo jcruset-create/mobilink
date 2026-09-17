@@ -117,6 +117,8 @@ export type Albaran = {
   proveedorCodigo: string;
   proveedorNombre: string;
   pedidoNumero: string;
+  /** Cuándo se encargó. Los pedidos deducidos de un albarán no la saben. */
+  pedidoFecha: string | null;
   numeroProveedor: string;
   numeroNormalizado: string;
   fechaExpedicion: string | null;
@@ -332,6 +334,7 @@ const aAlbaran = (r: any): Albaran => ({
   proveedorCodigo: r.proveedor_codigo,
   proveedorNombre: r.proveedor_nombre,
   pedidoNumero: r.pedido_numero,
+  pedidoFecha: fecha(r.pedido_fecha),
   numeroProveedor: r.numero_proveedor,
   numeroNormalizado: r.numero_normalizado,
   fechaExpedicion: fecha(r.fecha_expedicion),
@@ -1052,7 +1055,7 @@ export async function cancelarPedido(
 
 const SELECT_ALBARAN = `
   SELECT a.*, pr.codigo AS proveedor_codigo, pr.nombre AS proveedor_nombre,
-         p.numero_proveedor AS pedido_numero, p.centro_id, p.centro_nombre
+         p.numero_proveedor AS pedido_numero, p.fecha_pedido AS pedido_fecha, p.centro_id, p.centro_nombre
     FROM rcp_albaranes a
     JOIN rcp_proveedores pr ON pr.id = a.proveedor_id
     JOIN rcp_pedidos p ON p.id = a.pedido_id`;

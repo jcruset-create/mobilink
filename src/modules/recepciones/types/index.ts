@@ -96,6 +96,8 @@ export type Albaran = {
   proveedorCodigo: string;
   proveedorNombre: string;
   pedidoNumero: string;
+  /** Cuándo se encargó. Los pedidos deducidos de un albarán no la saben. */
+  pedidoFecha: string | null;
   numeroProveedor: string;
   fechaExpedicion: string | null;
   transportista: string | null;

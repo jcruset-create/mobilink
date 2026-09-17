@@ -130,7 +130,9 @@ export default function Bandeja() {
               <Articulos articulos={a.articulos} />
             </div>
             <div className="mt-2 text-[12px] text-slate-400">
-              Albarán <b className="text-slate-200">{a.numeroProveedor}</b> · Pedido {a.pedidoNumero} · {a.centroNombre || "—"} · {a.transportista ?? "—"}
+              Albarán <b className="text-slate-200">{a.numeroProveedor}</b> · Pedido {a.pedidoNumero}
+              {/* Sólo si se sabe: los pedidos deducidos de un albarán no la tienen. */}
+              {a.pedidoFecha ? ` del ${fmtFecha(a.pedidoFecha)}` : ""} · {a.centroNombre || "—"} · {a.transportista ?? "—"}
             </div>
             <div className="mt-3 flex items-center gap-2">
               {a.documentoOriginalId && (
@@ -160,6 +162,7 @@ export default function Bandeja() {
               <th className={thCls}>Qué viene</th>
               <th className={thCls}>Albarán</th>
               <th className={thCls}>Pedido</th>
+              <th className={thCls}>Fecha pedido</th>
               <th className={thCls}>Expedición</th>
               <th className={thCls}>Centro</th>
               <th className={thCls}>Transportista</th>
@@ -170,7 +173,7 @@ export default function Bandeja() {
             </tr>
           </thead>
           <tbody>
-            {filas.length === 0 && <EmptyRow cols={10} text={cargando ? "Cargando…" : "Nada pendiente de recibir."} />}
+            {filas.length === 0 && <EmptyRow cols={11} text={cargando ? "Cargando…" : "Nada pendiente de recibir."} />}
             {filas.map((a) => (
               <tr key={a.id} className="border-t border-slate-700/60 hover:bg-slate-700/30">
                 <td className={`${tdCls} min-w-[280px]`}>
@@ -188,6 +191,7 @@ export default function Bandeja() {
                     {a.pedidoNumero}
                   </Link>
                 </td>
+                <td className={tdCls}>{a.pedidoFecha ? fmtFecha(a.pedidoFecha) : "—"}</td>
                 <td className={tdCls}>{fmtFecha(a.fechaExpedicion)}</td>
                 <td className={tdCls}>{a.centroNombre || "—"}</td>
                 <td className={tdCls}>{a.transportista ?? "—"}</td>

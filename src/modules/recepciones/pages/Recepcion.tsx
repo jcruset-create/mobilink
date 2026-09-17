@@ -26,6 +26,7 @@ import { useRecepciones } from "../contexts/RecepcionesContext";
 import { Aviso, ChipEstadoAlbaran, ErrorBox, Modal, SinMapear, inputCls } from "../components/ui";
 import VisorDocumento from "../components/VisorDocumento";
 import { fmtCantidad, fmtDiferencia, type FichaAlbaran, type Operario, type TipoIncidencia } from "../types";
+import { fmtFecha } from "../../administracion/types";
 
 type Edicion = { cantidad: number; tipo: TipoIncidencia | ""; observaciones: string };
 
@@ -148,7 +149,10 @@ export default function Recepcion() {
       <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
         <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{albaran.proveedorNombre}</div>
         <div className="mt-1 text-3xl font-black leading-tight">Albarán {albaran.numeroProveedor}</div>
-        <div className="mt-1 text-base text-slate-300">Pedido {albaran.pedidoNumero}</div>
+        <div className="mt-1 text-base text-slate-300">
+          Pedido {albaran.pedidoNumero}
+          {albaran.pedidoFecha ? <span className="text-slate-400"> · pedido el {fmtFecha(albaran.pedidoFecha)}</span> : null}
+        </div>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px] text-slate-300">
           <ChipEstadoAlbaran estado={albaran.estado} />
           {albaran.transportista && <span className="rounded-full bg-slate-700 px-2 py-0.5">{albaran.transportista}</span>}

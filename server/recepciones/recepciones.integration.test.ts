@@ -268,6 +268,19 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
   });
 
 
+  it("el albarán lleva la fecha del pedido cuando se sabe, y null cuando no", async () => {
+    const conFecha = await crearPedido(2, { fechaPedido: "2026-09-16" });
+    const { albaran } = await crearAlbaran(conFecha, 2);
+    const fila = (await api("/bandeja", operarioA)).body.albaranes.find((a: any) => a.id === albaran.id);
+    expect(fila.pedidoFecha).toContain("2026-09-16");
+
+    // Un pedido sin fecha —los deducidos del albarán no la tienen— no se inventa.
+    const sinFecha = await crearPedido(2, { fechaPedido: null });
+    const otro = await crearAlbaran(sinFecha, 2);
+    const fila2 = (await api("/bandeja", operarioA)).body.albaranes.find((a: any) => a.id === otro.albaran.id);
+    expect(fila2.pedidoFecha).toBeNull();
+  });
+
   it("la bandeja va de lo más viejo a lo más nuevo: el muelle es una cola", async () => {
     const viejo = await crearPedido(2);
     const nuevo = await crearPedido(2);
