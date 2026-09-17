@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import { registrarAuditoria } from "../services/auditoriaAlmacen";
@@ -980,491 +980,491 @@ export default function Traspasos() {
 
   if (cargandoPermisos) {
     return (
-      <div className="p-6 space-y-6">
-        <AlmacenMenu />
-
-        <div className="rounded-xl border bg-white p-6 text-sm text-gray-600">
-          Cargando permisos del usuario conectado...
+      <AlmacenLayoutOscuro>
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-6 text-sm text-slate-300">
+            Cargando permisos del usuario conectado...
+          </div>
         </div>
-      </div>
+      </AlmacenLayoutOscuro>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
+    <AlmacenLayoutOscuro>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Traspasos</h1>
+            <p className="text-sm text-slate-400">
+              Salida, tránsito y recepción de stock entre ubicaciones con permisos
+              del usuario conectado. Se cargan los últimos 200 traspasos según
+              filtros.
+            </p>
+          </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Traspasos</h1>
-          <p className="text-sm text-gray-500">
-            Salida, tránsito y recepción de stock entre ubicaciones con permisos
-            del usuario conectado. Se cargan los últimos 200 traspasos según
-            filtros.
-          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportarTraspasosCsv}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              disabled={traspasosFiltrados.length === 0}
+            >
+              Exportar CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={exportarTraspasosExcel}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={traspasosFiltrados.length === 0}
+            >
+              Exportar Excel
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarTraspasosCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={traspasosFiltrados.length === 0}
-          >
-            Exportar CSV
-          </button>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Usuario activo</h2>
 
-          <button
-            type="button"
-            onClick={exportarTraspasosExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={traspasosFiltrados.length === 0}
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
+          {errorPermisos && (
+            <p className="rounded-lg bg-red-500/10 p-3 text-sm text-red-300">
+              {errorPermisos}
+            </p>
+          )}
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Usuario activo</h2>
-
-        {errorPermisos && (
-          <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
-            {errorPermisos}
-          </p>
-        )}
-
-        {permisos.perfil ? (
-          <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
-            Usuario: <strong>{permisos.perfil.nombre || "-"}</strong>
-            <br />
-            Email: <strong>{permisos.perfil.email || "-"}</strong>
-            <br />
-            Código: <strong>{permisos.perfil.codigo_operario || "-"}</strong>
-            <br />
-            Rol: <strong>{permisos.perfil.rol || "-"}</strong>
-            <br />
-            Ubicación: <strong>{permisos.ubicacion || "-"}</strong>
-            <br />
-            Clientes permitidos:{" "}
-            <strong>
-              {permisos.esAdmin
-                ? "Todos"
-                : permisos.clientesPermitidos.length > 0
-                ? permisos.clientesPermitidos
-                    .map((cliente) => cliente.nombre)
-                    .join(", ")
-                : "Ninguno"}
-            </strong>
-          </div>
-        ) : (
-          <p className="rounded-lg bg-yellow-50 p-3 text-sm text-yellow-800">
-            No hay perfil activo vinculado al usuario conectado.
-          </p>
-        )}
-
-        <button
-          type="button"
-          onClick={recargarPermisos}
-          className="rounded-xl border px-4 py-2 text-sm font-semibold"
-        >
-          Recargar permisos
-        </button>
-      </div>
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Crear traspaso manual</h2>
-
-        <select
-          value={empresaId}
-          onChange={(e) => {
-            setEmpresaId(e.target.value);
-            limpiarFormularioTraspaso();
-          }}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil}
-        >
-          <option value="">Empresa...</option>
-          {empresas.map((empresa) => (
-            <option key={empresa.id} value={empresa.id}>
-              {empresa.nombre}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={ubicacionOrigen}
-          onChange={(e) => {
-            setUbicacionOrigen(e.target.value);
-            setClienteOrigenId("");
-            setLineaStockClave("");
-            setUbicacionDestino("");
-          }}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil}
-        >
-          <option value="">1. Ubicación origen...</option>
-          {ubicacionesOrigenDisponibles.map((ubicacion) => (
-            <option key={ubicacion} value={ubicacion}>
-              {ubicacion}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={clienteOrigenId}
-          onChange={(e) => {
-            setClienteOrigenId(e.target.value);
-            setLineaStockClave("");
-          }}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil || !ubicacionOrigen}
-        >
-          <option value="">2. Cliente con stock en origen...</option>
-          {clientesOrigenDisponibles.map((cliente) => (
-            <option key={cliente.id} value={cliente.id}>
-              {cliente.nombre}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={lineaStockClave}
-          onChange={(e) => setLineaStockClave(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil || !ubicacionOrigen || !clienteOrigenId}
-        >
-          <option value="">3. Producto disponible...</option>
-          {productosOrigenDisponibles.map((linea) => (
-            <option key={linea.clave} value={linea.clave}>
-              {linea.producto} | Stock: {linea.cantidad}
-            </option>
-          ))}
-        </select>
-
-        {lineaSeleccionada && (
-          <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
-            Origen: <strong>{lineaSeleccionada.ubicacion}</strong>
-            <br />
-            Cliente: <strong>{lineaSeleccionada.cliente}</strong>
-            <br />
-            Producto: <strong>{lineaSeleccionada.producto}</strong>
-            <br />
-            Stock disponible: <strong>{lineaSeleccionada.cantidad}</strong>
-          </div>
-        )}
-
-        <input
-          value={cantidad}
-          onChange={(e) => setCantidad(e.target.value)}
-          type="number"
-          min="1"
-          max={lineaSeleccionada?.cantidad}
-          placeholder="4. Cantidad"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil || !lineaSeleccionada}
-        />
-
-        <select
-          value={ubicacionDestino}
-          onChange={(e) => setUbicacionDestino(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil || !lineaSeleccionada}
-        >
-          <option value="">5. Ubicación destino...</option>
-          {ubicacionesDestinoDisponibles.map((ubicacion) => (
-            <option key={ubicacion} value={ubicacion}>
-              {ubicacion}
-            </option>
-          ))}
-        </select>
-
-        <textarea
-          value={observaciones}
-          onChange={(e) => setObservaciones(e.target.value)}
-          placeholder="Observaciones"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.perfil}
-        />
-
-        <button
-          type="button"
-          onClick={crearTraspaso}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          disabled={!permisos.perfil}
-        >
-          Crear traspaso
-        </button>
-
-        <button
-          type="button"
-          onClick={cargarDatos}
-          className="ml-2 rounded-xl border px-4 py-2 text-sm font-semibold"
-        >
-          Actualizar
-        </button>
-
-        {mensaje && <p className="text-sm text-gray-700">{mensaje}</p>}
-      </div>
-
-      {traspasoRecepcion && (
-        <div className="rounded-xl border bg-white p-4 space-y-4">
-          <h2 className="font-semibold">Recepción de traspaso</h2>
-
-          <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
-            Destino: <strong>{traspasoRecepcion.ubicacion_destino}</strong>
-            <br />
-            Cantidad enviada: <strong>{traspasoRecepcion.cantidad}</strong>
-            <br />
-            Código recepción: <strong>{codigoPerfil() || "-"}</strong>
-          </div>
-
-          <input
-            value={cantidadRecibida}
-            onChange={(e) => setCantidadRecibida(e.target.value)}
-            type="number"
-            min="1"
-            placeholder="Cantidad recibida"
-            className="w-full rounded-lg border px-3 py-2 text-sm"
-          />
-
-          <input
-            value={firmaRecepcion}
-            onChange={(e) => setFirmaRecepcion(e.target.value)}
-            placeholder="Firma / confirmación recepción"
-            className="w-full rounded-lg border px-3 py-2 text-sm"
-          />
+          {permisos.perfil ? (
+            <div className="rounded-lg bg-slate-900 p-3 text-sm text-slate-300">
+              Usuario: <strong>{permisos.perfil.nombre || "-"}</strong>
+              <br />
+              Email: <strong>{permisos.perfil.email || "-"}</strong>
+              <br />
+              Código: <strong>{permisos.perfil.codigo_operario || "-"}</strong>
+              <br />
+              Rol: <strong>{permisos.perfil.rol || "-"}</strong>
+              <br />
+              Ubicación: <strong>{permisos.ubicacion || "-"}</strong>
+              <br />
+              Clientes permitidos:{" "}
+              <strong>
+                {permisos.esAdmin
+                  ? "Todos"
+                  : permisos.clientesPermitidos.length > 0
+                  ? permisos.clientesPermitidos
+                      .map((cliente) => cliente.nombre)
+                      .join(", ")
+                  : "Ninguno"}
+              </strong>
+            </div>
+          ) : (
+            <p className="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-300">
+              No hay perfil activo vinculado al usuario conectado.
+            </p>
+          )}
 
           <button
             type="button"
-            onClick={recibirTraspaso}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
+            onClick={recargarPermisos}
+            className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
           >
-            Confirmar recepción
+            Recargar permisos
           </button>
         </div>
-      )}
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Filtros de traspasos</h2>
-
-        <div className="grid gap-3 md:grid-cols-4">
-          <input
-            type="date"
-            value={fechaDesde}
-            onChange={(e) => setFechaDesde(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
-
-          <input
-            type="date"
-            value={fechaHasta}
-            onChange={(e) => setFechaHasta(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Crear traspaso manual</h2>
 
           <select
-            value={filtroEstado}
-            onChange={(e) => setFiltroEstado(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            value={empresaId}
+            onChange={(e) => {
+              setEmpresaId(e.target.value);
+              limpiarFormularioTraspaso();
+            }}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil}
           >
-            <option value="">Todos los estados</option>
-            {ESTADOS_TRASPASO.map((estado) => (
-              <option key={estado.valor} value={estado.valor}>
-                {estado.texto}
+            <option value="">Empresa...</option>
+            {empresas.map((empresa) => (
+              <option key={empresa.id} value={empresa.id}>
+                {empresa.nombre}
               </option>
             ))}
           </select>
 
-          <input
-            value={filtroProducto}
-            onChange={(e) => setFiltroProducto(e.target.value)}
-            placeholder="Filtrar por producto, medida, marca o DOT"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+          <select
+            value={ubicacionOrigen}
+            onChange={(e) => {
+              setUbicacionOrigen(e.target.value);
+              setClienteOrigenId("");
+              setLineaStockClave("");
+              setUbicacionDestino("");
+            }}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil}
+          >
+            <option value="">1. Ubicación origen...</option>
+            {ubicacionesOrigenDisponibles.map((ubicacion) => (
+              <option key={ubicacion} value={ubicacion}>
+                {ubicacion}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={clienteOrigenId}
+            onChange={(e) => {
+              setClienteOrigenId(e.target.value);
+              setLineaStockClave("");
+            }}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil || !ubicacionOrigen}
+          >
+            <option value="">2. Cliente con stock en origen...</option>
+            {clientesOrigenDisponibles.map((cliente) => (
+              <option key={cliente.id} value={cliente.id}>
+                {cliente.nombre}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={lineaStockClave}
+            onChange={(e) => setLineaStockClave(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil || !ubicacionOrigen || !clienteOrigenId}
+          >
+            <option value="">3. Producto disponible...</option>
+            {productosOrigenDisponibles.map((linea) => (
+              <option key={linea.clave} value={linea.clave}>
+                {linea.producto} | Stock: {linea.cantidad}
+              </option>
+            ))}
+          </select>
+
+          {lineaSeleccionada && (
+            <div className="rounded-lg bg-slate-900 p-3 text-sm text-slate-300">
+              Origen: <strong>{lineaSeleccionada.ubicacion}</strong>
+              <br />
+              Cliente: <strong>{lineaSeleccionada.cliente}</strong>
+              <br />
+              Producto: <strong>{lineaSeleccionada.producto}</strong>
+              <br />
+              Stock disponible: <strong>{lineaSeleccionada.cantidad}</strong>
+            </div>
+          )}
 
           <input
-            value={filtroOperarioSalida}
-            onChange={(e) => setFiltroOperarioSalida(e.target.value)}
-            placeholder="Operario salida"
-            className="rounded-lg border px-3 py-2 text-sm"
+            value={cantidad}
+            onChange={(e) => setCantidad(e.target.value)}
+            type="number"
+            min="1"
+            max={lineaSeleccionada?.cantidad}
+            placeholder="4. Cantidad"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil || !lineaSeleccionada}
           />
 
-          <input
-            value={filtroOperarioRecepcion}
-            onChange={(e) => setFiltroOperarioRecepcion(e.target.value)}
-            placeholder="Operario recepción"
-            className="rounded-lg border px-3 py-2 text-sm"
+          <select
+            value={ubicacionDestino}
+            onChange={(e) => setUbicacionDestino(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil || !lineaSeleccionada}
+          >
+            <option value="">5. Ubicación destino...</option>
+            {ubicacionesDestinoDisponibles.map((ubicacion) => (
+              <option key={ubicacion} value={ubicacion}>
+                {ubicacion}
+              </option>
+            ))}
+          </select>
+
+          <textarea
+            value={observaciones}
+            onChange={(e) => setObservaciones(e.target.value)}
+            placeholder="Observaciones"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.perfil}
           />
 
-          <input
-            value={filtroTexto}
-            onChange={(e) => setFiltroTexto(e.target.value)}
-            placeholder="Buscar cliente, origen, destino, observaciones..."
-            className="rounded-lg border px-3 py-2 text-sm md:col-span-2"
-          />
-        </div>
-
-        <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={cargarTraspasos}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
+            onClick={crearTraspaso}
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            disabled={!permisos.perfil}
           >
-            {cargandoTraspasos ? "Buscando..." : "Buscar"}
+            Crear traspaso
           </button>
 
           <button
             type="button"
-            onClick={limpiarFiltrosTraspasos}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
+            onClick={cargarDatos}
+            className="ml-2 rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
           >
-            Limpiar filtros
+            Actualizar
           </button>
+
+          {mensaje && <p className="text-sm text-slate-300">{mensaje}</p>}
         </div>
-      </div>
 
-      <div className="rounded-xl border bg-white p-3 text-sm text-gray-600">
-        Mostrando <strong>{traspasosFiltrados.length}</strong> traspasos de{" "}
-        <strong>{traspasosPorPermisos.length}</strong> visibles y{" "}
-        <strong>{traspasos.length}</strong> cargados.
-      </div>
+        {traspasoRecepcion && (
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+            <h2 className="font-semibold">Recepción de traspaso</h2>
 
-      <div className="overflow-auto rounded-xl border bg-white">
-        <table className="w-full min-w-[1500px] text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="p-3">Fecha salida</th>
-              <th className="p-3">Fecha recepción</th>
-              <th className="p-3">Estado</th>
-              <th className="p-3">Cliente</th>
-              <th className="p-3">Producto</th>
-              <th className="p-3">Cantidad</th>
-              <th className="p-3">Recibida</th>
-              <th className="p-3">Pendiente</th>
-              <th className="p-3">Origen</th>
-              <th className="p-3">Destino</th>
-              <th className="p-3">Op. salida</th>
-              <th className="p-3">Op. recepción</th>
-              <th className="p-3">Reposición</th>
-              <th className="p-3">Acción</th>
-            </tr>
-          </thead>
+            <div className="rounded-lg bg-slate-900 p-3 text-sm text-slate-300">
+              Destino: <strong>{traspasoRecepcion.ubicacion_destino}</strong>
+              <br />
+              Cantidad enviada: <strong>{traspasoRecepcion.cantidad}</strong>
+              <br />
+              Código recepción: <strong>{codigoPerfil() || "-"}</strong>
+            </div>
 
-          <tbody>
-            {traspasosFiltrados.map((traspaso) => {
-              const cliente = obtenerPrimero(traspaso.clientes);
-              const producto = obtenerPrimero(traspaso.productos_neumaticos);
-              const solicitudReposicion = obtenerPrimero(
-                traspaso.solicitudes_reposicion
-              );
+            <input
+              value={cantidadRecibida}
+              onChange={(e) => setCantidadRecibida(e.target.value)}
+              type="number"
+              min="1"
+              placeholder="Cantidad recibida"
+              className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-              const productoTexto = textoProductoRelacionado(producto);
+            <input
+              value={firmaRecepcion}
+              onChange={(e) => setFirmaRecepcion(e.target.value)}
+              placeholder="Firma / confirmación recepción"
+              className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-              const cantidadRecibidaTabla = traspaso.cantidad_recibida || 0;
-              const cantidadPendiente =
-                traspaso.cantidad - cantidadRecibidaTabla;
+            <button
+              type="button"
+              onClick={recibirTraspaso}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              Confirmar recepción
+            </button>
+          </div>
+        )}
 
-              return (
-                <tr key={traspaso.id} className="border-t align-top">
-                  <td className="p-3">
-                    {formatearFecha(traspaso.fecha_salida)}
-                  </td>
-                  <td className="p-3">
-                    {formatearFecha(traspaso.fecha_recepcion)}
-                  </td>
-                  <td className="p-3 font-medium">
-                    {traspaso.estado === "pendiente_salida" ? (
-                      <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-semibold text-gray-800">
-                        Pendiente salida
-                      </span>
-                    ) : traspaso.estado === "recibido" ? (
-                      <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">
-                        Recibido
-                      </span>
-                    ) : traspaso.estado === "recibido_parcial" ? (
-                      <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">
-                        Recibido parcial
-                      </span>
-                    ) : traspaso.estado === "en_camino" ? (
-                      <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-800">
-                        En camino
-                      </span>
-                    ) : traspaso.estado === "incidencia" ? (
-                      <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">
-                        Incidencia
-                      </span>
-                    ) : (
-                      traspaso.estado || "-"
-                    )}
-                  </td>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Filtros de traspasos</h2>
 
-                  <td className="p-3">{cliente?.nombre || "-"}</td>
-                  <td className="p-3">{productoTexto}</td>
-                  <td className="p-3">{traspaso.cantidad}</td>
-                  <td className="p-3">{cantidadRecibidaTabla || "-"}</td>
-                  <td className="p-3 font-bold">
-                    {cantidadPendiente > 0 ? cantidadPendiente : "-"}
-                  </td>
-                  <td className="p-3">{traspaso.ubicacion_origen || "-"}</td>
-                  <td className="p-3">{traspaso.ubicacion_destino || "-"}</td>
-                  <td className="p-3">
-                    {traspaso.codigo_operario_salida || "-"}
-                  </td>
-                  <td className="p-3">
-                    {traspaso.codigo_operario_recepcion || "-"}
-                  </td>
-                  <td className="p-3">
-                    {solicitudReposicion ? (
-                      <div className="text-xs">
-                        <span className="rounded-full bg-blue-100 px-2 py-1 font-semibold text-blue-800">
-                          Reposición
+          <div className="grid gap-3 md:grid-cols-4">
+            <input
+              type="date"
+              value={fechaDesde}
+              onChange={(e) => setFechaDesde(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <input
+              type="date"
+              value={fechaHasta}
+              onChange={(e) => setFechaHasta(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <select
+              value={filtroEstado}
+              onChange={(e) => setFiltroEstado(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todos los estados</option>
+              {ESTADOS_TRASPASO.map((estado) => (
+                <option key={estado.valor} value={estado.valor}>
+                  {estado.texto}
+                </option>
+              ))}
+            </select>
+
+            <input
+              value={filtroProducto}
+              onChange={(e) => setFiltroProducto(e.target.value)}
+              placeholder="Filtrar por producto, medida, marca o DOT"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <input
+              value={filtroOperarioSalida}
+              onChange={(e) => setFiltroOperarioSalida(e.target.value)}
+              placeholder="Operario salida"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <input
+              value={filtroOperarioRecepcion}
+              onChange={(e) => setFiltroOperarioRecepcion(e.target.value)}
+              placeholder="Operario recepción"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <input
+              value={filtroTexto}
+              onChange={(e) => setFiltroTexto(e.target.value)}
+              placeholder="Buscar cliente, origen, destino, observaciones..."
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm md:col-span-2 bg-slate-900 text-slate-100"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={cargarTraspasos}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              {cargandoTraspasos ? "Buscando..." : "Buscar"}
+            </button>
+
+            <button
+              type="button"
+              onClick={limpiarFiltrosTraspasos}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+            >
+              Limpiar filtros
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-3 text-sm text-slate-300">
+          Mostrando <strong>{traspasosFiltrados.length}</strong> traspasos de{" "}
+          <strong>{traspasosPorPermisos.length}</strong> visibles y{" "}
+          <strong>{traspasos.length}</strong> cargados.
+        </div>
+
+        <div className="overflow-auto rounded-xl border border-slate-600 bg-slate-800">
+          <table className="w-full min-w-[1500px] text-sm">
+            <thead className="bg-slate-900 text-left">
+              <tr>
+                <th className="p-3">Fecha salida</th>
+                <th className="p-3">Fecha recepción</th>
+                <th className="p-3">Estado</th>
+                <th className="p-3">Cliente</th>
+                <th className="p-3">Producto</th>
+                <th className="p-3">Cantidad</th>
+                <th className="p-3">Recibida</th>
+                <th className="p-3">Pendiente</th>
+                <th className="p-3">Origen</th>
+                <th className="p-3">Destino</th>
+                <th className="p-3">Op. salida</th>
+                <th className="p-3">Op. recepción</th>
+                <th className="p-3">Reposición</th>
+                <th className="p-3">Acción</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {traspasosFiltrados.map((traspaso) => {
+                const cliente = obtenerPrimero(traspaso.clientes);
+                const producto = obtenerPrimero(traspaso.productos_neumaticos);
+                const solicitudReposicion = obtenerPrimero(
+                  traspaso.solicitudes_reposicion
+                );
+
+                const productoTexto = textoProductoRelacionado(producto);
+
+                const cantidadRecibidaTabla = traspaso.cantidad_recibida || 0;
+                const cantidadPendiente =
+                  traspaso.cantidad - cantidadRecibidaTabla;
+
+                return (
+                  <tr key={traspaso.id} className="border-t border-slate-700 border-slate-700 align-top">
+                    <td className="p-3">
+                      {formatearFecha(traspaso.fecha_salida)}
+                    </td>
+                    <td className="p-3">
+                      {formatearFecha(traspaso.fecha_recepcion)}
+                    </td>
+                    <td className="p-3 font-medium">
+                      {traspaso.estado === "pendiente_salida" ? (
+                        <span className="rounded-full bg-slate-900 px-2 py-1 text-xs font-semibold text-slate-200">
+                          Pendiente salida
                         </span>
-                        <div className="mt-1 text-gray-500">
-                          Estado: {solicitudReposicion.estado || "-"}
+                      ) : traspaso.estado === "recibido" ? (
+                        <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300">
+                          Recibido
+                        </span>
+                      ) : traspaso.estado === "recibido_parcial" ? (
+                        <span className="rounded-full bg-amber-500/15 px-2 py-1 text-xs font-semibold text-amber-300">
+                          Recibido parcial
+                        </span>
+                      ) : traspaso.estado === "en_camino" ? (
+                        <span className="rounded-full bg-sky-500/15 px-2 py-1 text-xs font-semibold text-sky-300">
+                          En camino
+                        </span>
+                      ) : traspaso.estado === "incidencia" ? (
+                        <span className="rounded-full bg-red-500/15 px-2 py-1 text-xs font-semibold text-red-300">
+                          Incidencia
+                        </span>
+                      ) : (
+                        traspaso.estado || "-"
+                      )}
+                    </td>
+
+                    <td className="p-3">{cliente?.nombre || "-"}</td>
+                    <td className="p-3">{productoTexto}</td>
+                    <td className="p-3">{traspaso.cantidad}</td>
+                    <td className="p-3">{cantidadRecibidaTabla || "-"}</td>
+                    <td className="p-3 font-bold">
+                      {cantidadPendiente > 0 ? cantidadPendiente : "-"}
+                    </td>
+                    <td className="p-3">{traspaso.ubicacion_origen || "-"}</td>
+                    <td className="p-3">{traspaso.ubicacion_destino || "-"}</td>
+                    <td className="p-3">
+                      {traspaso.codigo_operario_salida || "-"}
+                    </td>
+                    <td className="p-3">
+                      {traspaso.codigo_operario_recepcion || "-"}
+                    </td>
+                    <td className="p-3">
+                      {solicitudReposicion ? (
+                        <div className="text-xs">
+                          <span className="rounded-full bg-sky-500/15 px-2 py-1 font-semibold text-sky-300">
+                            Reposición
+                          </span>
+                          <div className="mt-1 text-slate-400">
+                            Estado: {solicitudReposicion.estado || "-"}
+                          </div>
+                          <div className="text-slate-400">
+                            Cantidad:{" "}
+                            {solicitudReposicion.cantidad_sugerida ?? "-"}
+                          </div>
                         </div>
-                        <div className="text-gray-500">
-                          Cantidad:{" "}
-                          {solicitudReposicion.cantidad_sugerida ?? "-"}
-                        </div>
-                      </div>
-                    ) : (
-                      "-"
-                    )}
-                  </td>
-                  <td className="p-3">
-                    {traspaso.estado === "pendiente_salida" ? (
-                      <span className="rounded-lg bg-yellow-50 px-3 py-1 text-xs font-semibold text-yellow-800">
-                        Aceptar en mobile
-                      </span>
-                    ) : (traspaso.estado === "en_camino" ||
-                        traspaso.estado === "recibido_parcial") &&
-                      usuarioPuedeRecibirTraspaso(traspaso) ? (
-                      <button
-                        type="button"
-                        onClick={() => prepararRecepcion(traspaso)}
-                        className="rounded-lg border px-3 py-1 text-xs"
-                      >
-                        Recibir
-                      </button>
-                    ) : (
-                      "-"
-                    )}
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td className="p-3">
+                      {traspaso.estado === "pendiente_salida" ? (
+                        <span className="rounded-lg bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-300">
+                          Aceptar en mobile
+                        </span>
+                      ) : (traspaso.estado === "en_camino" ||
+                          traspaso.estado === "recibido_parcial") &&
+                        usuarioPuedeRecibirTraspaso(traspaso) ? (
+                        <button
+                          type="button"
+                          onClick={() => prepararRecepcion(traspaso)}
+                          className="rounded-lg border border-slate-600 px-3 py-1 text-xs"
+                        >
+                          Recibir
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {traspasosFiltrados.length === 0 && (
+                <tr>
+                  <td colSpan={14} className="p-6 text-center text-slate-400">
+                    No hay traspasos visibles con los filtros actuales.
                   </td>
                 </tr>
-              );
-            })}
-
-            {traspasosFiltrados.length === 0 && (
-              <tr>
-                <td colSpan={14} className="p-6 text-center text-gray-500">
-                  No hay traspasos visibles con los filtros actuales.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }

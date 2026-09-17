@@ -370,10 +370,27 @@ class TyreControlApi {
   }
 
   // ── Revisiones ───────────────────────────────────────────────
+  /// Abre una revisión en borrador.
+  ///
+  /// [origenKm], [kmCapturadoAt] y [kmDesfaseMin] guardan DE DÓNDE salió el
+  /// kilometraje. Las columnas existen desde
+  /// `tyrecontrol_km_revision_procedencia.sql` y hasta ahora solo las rellenaba
+  /// la importación del CheckPoint: una revisión hecha con la tablet guardaba
+  /// el número y perdía cuándo se había leído.
+  ///
+  /// La diferencia no es teórica. Un 512.480 km leído tres minutos antes de la
+  /// revisión y el mismo 512.480 leído ocho horas antes son el mismo número y
+  /// no valen lo mismo, y sin la fecha son indistinguibles al mirar la fila.
   static Future<RevisionVehiculo> crearRevision({
     required String empresaId,
     required String vehiculoId,
     num? kmVehiculo,
+    String? origenKm,
+    DateTime? kmCapturadoAt,
+    /// Minutos entre la lectura y la revisión, CON signo: negativo si la
+    /// lectura es anterior, que es el caso bueno —no puede contener
+    /// kilómetros posteriores—. El valor absoluto borraría esa distinción.
+    int? kmDesfaseMin,
   }) async {
     final uid = _db.auth.currentUser?.id;
     final data = await _db
@@ -382,6 +399,9 @@ class TyreControlApi {
           'empresa_id': empresaId,
           'vehiculo_id': vehiculoId,
           'km_vehiculo': kmVehiculo,
+          if (origenKm != null) 'origen_km': origenKm,
+          if (kmCapturadoAt != null) 'km_capturado_at': kmCapturadoAt.toIso8601String(),
+          if (kmDesfaseMin != null) 'km_desfase_min': kmDesfaseMin,
           'tecnico_id': uid,
           'estado_revision': 'borrador',
         })
@@ -1822,6 +1842,159 @@ class TyreControlApi {
       return n;
     } catch (_) {
       return incidenciasPendientesCount.value;
+    }
+  }
+
+  // ── Alta operativa de vehículos ──────────────────────────────
+  /// Contador de vehículos pendientes de alta operativa, para el badge del
+  /// menú. Se actualiza al llamar a [vehiculosPendientesDeAlta].
+  static final ValueNotifier<int> altaPendienteCount = ValueNotifier<int>(0);
+
+  /// Los vehículos con los que todavía no se puede trabajar, y qué les falta.
+  ///
+  /// Va por el BACKEND y no por Supabase directamente por dos razones: el
+  /// recuento de profundidades obligaría a traerse el histórico de revisiones
+  /// entero a la tablet, y el criterio de «qué está pendiente» tiene que ser
+  /// uno solo. Si lo calculara la APK por su cuenta, el contador del menú y la
+  /// lista podrían decir cosas distintas.
+  ///
+  /// Sin cliente elegido no se pide nada: no se carga la flota de todos los
+  /// clientes para llenar un contador.
+  static Future<List<Map<String, dynamic>>> vehiculosPendientesDeAlta() async {
+    final empresa = empresaActivaId;
+    if (empresa == null) {
+      altaPendienteCount.value = 0;
+      return [];
+    }
+    final token = currentSessionToken;
+    if (token == null) return [];
+    final res = await http.get(
+      Uri.parse('$kBackendUrl/api/tyrecontrol/alta-operativa/pendientes?empresa=$empresa'),
+      headers: {'Authorization': 'Bearer $token'},
+    ).timeout(const Duration(seconds: 20));
+    if (res.statusCode != 200) {
+      throw Exception('No se han podido leer los vehículos pendientes');
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    altaPendienteCount.value = (body['total'] as num?)?.toInt() ?? 0;
+    return ((body['vehiculos'] as List?) ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
+  /// Solo el contador, para el menú. Si falla deja el último valor bueno: un
+  /// badge que parpadea a cero con la red mala es peor que uno un poco viejo.
+  static Future<int> contarPendientesDeAlta() async {
+    try {
+      await vehiculosPendientesDeAlta();
+    } catch (_) { /* se conserva el último valor */ }
+    return altaPendienteCount.value;
+  }
+
+  /// Pone el tipo de vehículo durante el alta operativa.
+  ///
+  /// Va por una RPC y no por un `update` porque la escritura de `tc_vehiculos`
+  /// es solo para administradores, y eso no se amplía: dársela al técnico para
+  /// que pueda poner un tipo le daría de paso la matrícula, la empresa y el
+  /// estado de baja.
+  ///
+  /// La base se niega a cambiar el tipo si el vehículo ya tiene neumáticos
+  /// montados —sus montajes quedarían en posiciones de otro plano— y repetir
+  /// la misma petición no escribe nada, así que un doble toque es inocuo.
+  static Future<Map<String, dynamic>> ponerTipoDeAlta({
+    required String vehiculoId,
+    required String tipoId,
+  }) async {
+    final data = await _db.rpc('tc_alta_operativa_tipo', params: {
+      'p_vehiculo': vehiculoId,
+      'p_tipo': tipoId,
+    });
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Apunta el neumático que YA ESTABA montado en una posición, con su
+  /// medición inicial.
+  ///
+  /// [presionBar] en null significa NO MEDIDA, y así se guarda: como ausencia.
+  /// Nunca como cero, que sería decir «rueda desinflada» en cada informe que
+  /// la mire. Por eso el parámetro es opcional y la pantalla obliga a elegir
+  /// entre «No medida» y «Presión medida» en vez de dejar el campo vacío.
+  ///
+  /// Repetir la llamada sobre la misma posición corrige la medición: no monta
+  /// una segunda goma ni abre otra revisión.
+  static Future<Map<String, dynamic>> guardarPosicionInventario({
+    required String vehiculoId,
+    required String posicionId,
+    required String referenciaId,
+    required double profundidadMm,
+    double? presionBar,
+    String? numeroSerie,
+    String? dot,
+    String? observaciones,
+    String? fotoUrl,
+  }) async {
+    final datos = <String, dynamic>{'profundidad_mm': profundidadMm.toString()};
+    if (presionBar != null) datos['presion_bar'] = presionBar.toString();
+    if (numeroSerie != null && numeroSerie.trim().isNotEmpty) datos['numero_serie'] = numeroSerie.trim();
+    if (dot != null && dot.trim().isNotEmpty) datos['dot'] = dot.trim();
+    if (observaciones != null && observaciones.trim().isNotEmpty) datos['observaciones'] = observaciones.trim();
+    if (fotoUrl != null && fotoUrl.trim().isNotEmpty) datos['foto_url'] = fotoUrl.trim();
+    final data = await _db.rpc('tc_inventario_inicial_posicion', params: {
+      'p_vehiculo': vehiculoId,
+      'p_posicion': posicionId,
+      'p_referencia': referenciaId,
+      'p_datos': datos,
+    });
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Cierra el inventario inicial y deja el vehículo operativo.
+  ///
+  /// La base comprueba que TODAS las posiciones tengan goma y profundidad, y
+  /// dice cuáles faltan si no. Un doble toque no crea dos revisiones.
+  static Future<Map<String, dynamic>> finalizarInventarioInicial({
+    required String vehiculoId,
+    num? km,
+    String origenKm = 'manual',
+  }) async {
+    final data = await _db.rpc('tc_inventario_inicial_finalizar', params: {
+      'p_vehiculo': vehiculoId,
+      'p_km': km,
+      'p_origen_km': origenKm,
+    });
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  // ── Kilómetros por telemetría ────────────────────────────────
+  /// El cuentakilómetros del vehículo AHORA, sea cual sea su telemática.
+  ///
+  /// Sustituye a `obtenerKmWebfleet`, que solo servía para los clientes de
+  /// Webfleet y dejaba a los de Movertis tecleando los km a mano aunque su
+  /// equipo los estuviera dando.
+  ///
+  /// La petición la hace el BACKEND: la credencial del proveedor vive en el
+  /// gestor de secretos del Hub y no puede salir de ahí. Una APK se descompila,
+  /// así que una clave dentro de una APK es una clave pública.
+  ///
+  /// Nunca lanza por culpa del proveedor: si la telemática falla devuelve
+  /// estado `error` con una frase en cristiano. Un parte que no se pudiera
+  /// abrir porque Movertis está caído sería peor que el problema que resuelve.
+  static Future<Map<String, dynamic>> kilometrajeActual(String vehiculoId) async {
+    final vacio = {
+      'estado': 'error', 'km': null, 'capturadoAt': null, 'antiguedadMin': null,
+      'texto': 'No se ha podido consultar la telemática.', 'aviso': null,
+    };
+    try {
+      final token = currentSessionToken;
+      if (token == null) return vacio;
+      final res = await http.get(
+        Uri.parse('$kBackendUrl/api/tyrecontrol/kilometraje-actual/vehiculo/$vehiculoId'),
+        headers: {'Authorization': 'Bearer $token'},
+      ).timeout(const Duration(seconds: 20));
+      if (res.statusCode != 200) return vacio;
+      return Map<String, dynamic>.from(jsonDecode(res.body) as Map);
+    } catch (_) {
+      return vacio;
     }
   }
 

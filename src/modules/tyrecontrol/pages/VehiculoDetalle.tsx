@@ -5,6 +5,9 @@ import type { Intervencion } from "../services/data";
 import type { MontajeActual, PosicionVehiculo, Vehiculo, TipoLlanta, VehiculoEje, RevisionVehiculo as RevisionVehiculoT, RevisionDetalle, OperacionNeumatico } from "../types";
 import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, ESTADO_OPERACION_LABELS } from "../types";
 import { resumenOperaciones } from "../services/resumenOperaciones";
+import { ubicacionDeVehiculoBD } from "../services/data";
+import { ubicacionDeVehiculo, coordenadasDeVehiculo, enlaceDeMapa, type Ubicacion, type PosicionMapa } from "../services/presenciaVista";
+import { explicarKm } from "../services/procedenciaKm";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
@@ -13,6 +16,7 @@ import FichaTecnicaItv from "../components/FichaTecnicaItv";
 import WebfleetVehiculo from "../components/WebfleetVehiculo";
 import KilometrajeMensual from "../components/KilometrajeMensual";
 import PlanMantenimientoVehiculo from "../components/PlanMantenimiento";
+import EditorVehiculo from "../components/EditorVehiculo";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 // Fecha + hora de una revisión: el día de fecha_revision y la hora del
@@ -29,6 +33,22 @@ export default function VehiculoDetalle() {
   const { perfil } = useTyreAuth();
   const esCliente = perfil?.rol === "cliente" && !perfil?.es_superadmin;
   const [v, setV] = useState<Vehiculo | null>(null);
+  /*
+   * Dónde está el vehículo: en base, en ruta o no se sabe.
+   *
+   * Va a mejor esfuerzo. Si no se puede leer, la chapa no sale y la ficha
+   * funciona igual: es información para organizar el taller, no para
+   * identificar el vehículo.
+   */
+  const [ubicacion, setUbicacion] = useState<Ubicacion | null>(null);
+  /*
+   * La coordenada, para poder abrirla en un mapa.
+   *
+   * Es la misma consulta que la chapa de arriba, así que abrir la ficha NO
+   * pregunta a la telemática: se enseña lo último que se barrió. Si no hay
+   * coordenada buena, el botón no sale y se dice por qué.
+   */
+  const [posicionMapa, setPosicionMapa] = useState<PosicionMapa | null>(null);
   const [posiciones, setPosiciones] = useState<PosicionVehiculo[]>([]);
   const [montajes, setMontajes] = useState<MontajeActual[]>([]);
   const [medidasMap, setMedidasMap] = useState<Map<string, string>>(new Map());
@@ -56,6 +76,8 @@ export default function VehiculoDetalle() {
    */
   const [cotejo, setCotejo] = useState<CotejoPlano | null>(null);
   const [arreglandoPlano, setArreglandoPlano] = useState(false);
+  // Editar la ficha aquí mismo, con el mismo formulario del listado.
+  const [editando, setEditando] = useState(false);
   const [msgPlano, setMsgPlano] = useState("");
 
   async function cargar() {
@@ -90,6 +112,11 @@ export default function VehiculoDetalle() {
     setImagenMarca(
       await imagenChasisDeMarca(veh?.config_ejes_id, (veh as any)?.marca_id, veh?.marca).catch(() => null),
     );
+
+    // Dónde está. A mejor esfuerzo: si falla, la chapa no sale y ya está.
+    const fuentes = await ubicacionDeVehiculoBD(id).catch(() => null);
+    setUbicacion(fuentes ? ubicacionDeVehiculo(fuentes) : null);
+    setPosicionMapa(fuentes ? coordenadasDeVehiculo(fuentes) : null);
   }
 
   async function abrirIntervencion(interv: Intervencion) {
@@ -158,12 +185,89 @@ export default function VehiculoDetalle() {
         <span className="ml-2 text-lg font-black text-slate-100">
           {Number(v.km_actual).toLocaleString("es-ES")} <span className="text-xs font-normal text-slate-400">km</span>
         </span>
-        <span className="text-[11px] text-slate-500">({ORIGEN_KM_LABELS[v.origen_km]})</span>
+        {/*
+          De dónde salen esos kilómetros y, si vinieron de la telemática,
+          cuándo se leyeron. La fecha sale de la última revisión que la
+          registró: abrir la ficha NO pregunta al proveedor —esa regla está
+          escrita en kilometrajeMensual/router.ts— y aquí se respeta.
+        */}
+        <span className="text-[11px] text-slate-500" title="Procedencia del kilometraje">
+          ({explicarKm({
+            origen: v.origen_km,
+            capturadoAt: revisiones.find((r) => r.km_capturado_at)?.km_capturado_at,
+          }) ?? ORIGEN_KM_LABELS[v.origen_km]})
+        </span>
+        {/*
+          Dónde está el vehículo ahora. Los tonos separan lo que se sabe de lo
+          que se supone: verde afirma que está ahí, gris es «esto es lo último
+          que se supo» y no debe leerse como una certeza —alguien puede bajar
+          al patio a buscarlo—.
+        */}
+        {ubicacion && (
+          <span
+            className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+              ubicacion.tono === "base"
+                ? "bg-emerald-500/15 text-emerald-300"
+                : ubicacion.tono === "ruta"
+                  ? "bg-sky-500/15 text-sky-300"
+                  : ubicacion.tono === "viejo"
+                    ? "bg-amber-500/15 text-amber-300"
+                    : "bg-slate-700/60 text-slate-400"
+            }`}
+            title={ubicacion.detalle}
+          >
+            {ubicacion.tono === "base" ? "📍 " : ubicacion.tono === "ruta" ? "🛣 " : ""}
+            {ubicacion.texto}
+            {ubicacion.detalle ? <span className="ml-1 font-normal opacity-70">· {ubicacion.detalle}</span> : null}
+          </span>
+        )}
+
+        {/*
+          Ver dónde está en un mapa. Es un enlace, no una llamada: se abre
+          Google Maps en otra pestaña con la coordenada que ya teníamos
+          guardada. Sin coordenada buena no hay botón, porque un mapa que
+          señala el sitio equivocado manda a alguien a buscar el vehículo
+          donde no está.
+        */}
+        {posicionMapa && (
+          <a
+            href={enlaceDeMapa(posicionMapa)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`${posicionMapa.lat.toFixed(5)}, ${posicionMapa.lng.toFixed(5)}${
+              posicionMapa.cuando ? ` · posición del ${new Date(posicionMapa.cuando).toLocaleString("es-ES")}` : ""
+            }`}
+            className="rounded-lg border border-sky-600 px-3 py-1.5 text-[12px] font-bold text-sky-300 hover:bg-sky-500/10"
+          >
+            🗺 Ver en el mapa
+          </a>
+        )}
+        {!esCliente && (
+          <button
+            onClick={() => setEditando(true)}
+            className="ml-auto rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white hover:bg-emerald-500"
+          >
+            ✎ Editar vehículo
+          </button>
+        )}
       </div>
+
+      {editando && (
+        <EditorVehiculo
+          vehiculo={v}
+          onClose={() => setEditando(false)}
+          onGuardado={async () => { await cargar(); }}
+        />
+      )}
 
       {/* Datos generales: todo lo que traiga la ficha técnica, no solo lo que tiene columna propia */}
       <div className="rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Datos generales</div>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-[11px] font-bold uppercase text-slate-400">Datos generales</div>
+          {!esCliente && (
+            <button onClick={() => setEditando(true)} className="text-[11px] font-semibold text-emerald-300 hover:underline">Editar</button>
+          )}
+        </div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {dato("Empresa", v.empresa?.nombre)}{dato("Delegación", v.delegacion?.nombre)}
           {dato("Nº de unidad", v.numero_unidad)}
@@ -196,7 +300,12 @@ export default function VehiculoDetalle() {
 
       {/* Configuración de neumáticos */}
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
-        <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Configuración de neumáticos</div>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-[11px] font-bold uppercase text-slate-400">Configuración de neumáticos</div>
+          {!esCliente && (
+            <button onClick={() => setEditando(true)} className="text-[11px] font-semibold text-emerald-300 hover:underline">Editar</button>
+          )}
+        </div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {dato("Configuración de ejes", configEjesLabel)}
           {dato("Medidas por eje", v.medidas_por_eje ? "Sí · distintas por eje" : "No · misma medida")}

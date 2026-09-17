@@ -19,9 +19,9 @@ function accionTexto(accion: string) {
 }
 
 function accionClase(accion: string) {
-  if (accion === "recogida") return "bg-blue-100 text-blue-800";
-  if (accion === "recepcion") return "bg-green-100 text-green-800";
-  return "bg-gray-100 text-gray-800";
+  if (accion === "recogida") return "bg-sky-500/15 text-sky-300";
+  if (accion === "recepcion") return "bg-emerald-500/15 text-emerald-300";
+  return "bg-slate-900 text-slate-200";
 }
 
 function limpiarCsv(valor: string | null | undefined) {
@@ -273,16 +273,16 @@ export default function MobileAuditoria() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-gray-100 p-4">
+    <div className="min-h-screen bg-slate-900 p-4 text-slate-100">
       <div className="mx-auto max-w-md space-y-4">
-        <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <div className="rounded-2xl bg-slate-800 p-4 shadow-sm">
           <h1 className="text-2xl font-bold">Auditoría móvil</h1>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-slate-400">
             Últimas recogidas y recepciones.
           </p>
         </div>
 
-        <div className="rounded-2xl bg-white p-4 shadow-sm">
+        <div className="rounded-2xl bg-slate-800 p-4 shadow-sm">
           <label className="text-sm font-semibold">
             Filtrar por código personal
           </label>
@@ -290,7 +290,7 @@ export default function MobileAuditoria() {
           <input
             value={filtroCodigo}
             onChange={(e) => setFiltroCodigo(e.target.value)}
-            className="mt-2 w-full rounded-xl border px-4 py-3"
+            className="mt-2 w-full rounded-xl border border-slate-600 px-4 py-3 bg-slate-900 text-slate-100"
             placeholder="Ej: 1234"
           />
 
@@ -301,7 +301,7 @@ export default function MobileAuditoria() {
           <input
             value={filtroTraspaso}
             onChange={(e) => setFiltroTraspaso(e.target.value)}
-            className="mt-2 w-full rounded-xl border px-4 py-3"
+            className="mt-2 w-full rounded-xl border border-slate-600 px-4 py-3 bg-slate-900 text-slate-100"
             placeholder="Ej: TR-REUS-000001"
           />
 
@@ -311,7 +311,7 @@ export default function MobileAuditoria() {
             <select
               value={filtroAccion}
               onChange={(e) => setFiltroAccion(e.target.value)}
-              className="mt-2 w-full rounded-xl border px-4 py-3"
+              className="mt-2 w-full rounded-xl border border-slate-600 px-4 py-3 bg-slate-900 text-slate-100"
             >
               <option value="">Todas las acciones</option>
               <option value="recogida">Recogidas</option>
@@ -326,7 +326,7 @@ export default function MobileAuditoria() {
                 type="date"
                 value={fechaDesde}
                 onChange={(e) => setFechaDesde(e.target.value)}
-                className="mt-2 w-full rounded-xl border px-4 py-3"
+                className="mt-2 w-full rounded-xl border border-slate-600 px-4 py-3 bg-slate-900 text-slate-100"
               />
             </div>
 
@@ -336,28 +336,28 @@ export default function MobileAuditoria() {
                 type="date"
                 value={fechaHasta}
                 onChange={(e) => setFechaHasta(e.target.value)}
-                className="mt-2 w-full rounded-xl border px-4 py-3"
+                className="mt-2 w-full rounded-xl border border-slate-600 px-4 py-3 bg-slate-900 text-slate-100"
               />
             </div>
           </div>
 
           <button
             onClick={cargarAuditoria}
-            className="mt-3 w-full rounded-xl bg-black px-4 py-3 font-semibold text-white"
+            className="mt-3 w-full rounded-xl bg-sky-600 px-4 py-3 font-semibold text-white"
           >
             Buscar
           </button>
 
           <button
             onClick={limpiarFiltros}
-            className="mt-2 w-full rounded-xl bg-gray-100 px-4 py-3 font-semibold"
+            className="mt-2 w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold"
           >
             Limpiar filtros
           </button>
 
           <button
             onClick={exportarCsv}
-            className="mt-2 w-full rounded-xl bg-gray-100 px-4 py-3 font-semibold"
+            className="mt-2 w-full rounded-xl bg-slate-900 px-4 py-3 font-semibold"
           >
             Exportar CSV
           </button>
@@ -365,21 +365,21 @@ export default function MobileAuditoria() {
           <div className="mt-3 grid grid-cols-3 gap-2">
             <button
               onClick={filtrarHoy}
-              className="rounded-xl bg-gray-100 px-3 py-3 text-xs font-semibold"
+              className="rounded-xl bg-slate-900 px-3 py-3 text-xs font-semibold"
             >
               Hoy
             </button>
 
             <button
               onClick={filtrarUltimos7Dias}
-              className="rounded-xl bg-gray-100 px-3 py-3 text-xs font-semibold"
+              className="rounded-xl bg-slate-900 px-3 py-3 text-xs font-semibold"
             >
               7 días
             </button>
 
             <button
               onClick={filtrarUltimos30Dias}
-              className="rounded-xl bg-gray-100 px-3 py-3 text-xs font-semibold"
+              className="rounded-xl bg-slate-900 px-3 py-3 text-xs font-semibold"
             >
               30 días
             </button>
@@ -387,32 +387,32 @@ export default function MobileAuditoria() {
         </div>
 
         {!loading && (
-          <div className="rounded-2xl bg-white p-4 text-sm text-gray-600 shadow-sm">
+          <div className="rounded-2xl bg-slate-800 p-4 text-sm text-slate-300 shadow-sm">
             Registros encontrados: <strong>{items.length}</strong>
           </div>
         )}
 
         {!loading && (
           <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-2xl bg-blue-50 p-4 text-center shadow-sm">
-              <div className="text-2xl font-bold text-blue-700">
+            <div className="rounded-2xl bg-sky-500/10 p-4 text-center shadow-sm">
+              <div className="text-2xl font-bold text-sky-300">
                 {totalRecogidas}
               </div>
-              <div className="text-xs text-blue-600">Recogidas</div>
+              <div className="text-xs text-sky-300">Recogidas</div>
             </div>
 
-            <div className="rounded-2xl bg-green-50 p-4 text-center shadow-sm">
-              <div className="text-2xl font-bold text-green-700">
+            <div className="rounded-2xl bg-emerald-500/10 p-4 text-center shadow-sm">
+              <div className="text-2xl font-bold text-emerald-300">
                 {totalRecepciones}
               </div>
-              <div className="text-xs text-green-600">Recepciones</div>
+              <div className="text-xs text-emerald-300">Recepciones</div>
             </div>
           </div>
         )}
 
         {!loading && ultimoMovimiento && (
-          <div className="rounded-2xl bg-white p-4 shadow-sm">
-            <h2 className="text-sm font-semibold text-gray-500">
+          <div className="rounded-2xl bg-slate-800 p-4 shadow-sm">
+            <h2 className="text-sm font-semibold text-slate-400">
               Último movimiento
             </h2>
 
@@ -429,11 +429,11 @@ export default function MobileAuditoria() {
                 {accionTexto(ultimoMovimiento.accion)}
               </span>
 
-              <p className="mt-2 text-sm text-gray-600">
+              <p className="mt-2 text-sm text-slate-300">
                 Usuario: {ultimoMovimiento.codigo_personal}
               </p>
 
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1 text-xs text-slate-400">
                 {new Date(ultimoMovimiento.created_at).toLocaleString("es-ES")}
               </p>
             </div>
@@ -441,25 +441,25 @@ export default function MobileAuditoria() {
         )}
 
         {loading && (
-          <div className="rounded-2xl bg-white p-4 text-sm text-gray-500 shadow-sm">
+          <div className="rounded-2xl bg-slate-800 p-4 text-sm text-slate-400 shadow-sm">
             Cargando auditoría...
           </div>
         )}
 
         {mensaje && (
-          <div className="rounded-2xl bg-white p-4 text-sm text-red-600 shadow-sm">
+          <div className="rounded-2xl bg-slate-800 p-4 text-sm text-red-300 shadow-sm">
             {mensaje}
           </div>
         )}
 
         {!loading && items.length === 0 && (
-          <div className="rounded-2xl bg-white p-4 text-sm text-gray-500 shadow-sm">
+          <div className="rounded-2xl bg-slate-800 p-4 text-sm text-slate-400 shadow-sm">
             No hay registros de auditoría.
           </div>
         )}
 
         {items.map((item) => (
-          <div key={item.id} className="rounded-2xl bg-white p-4 shadow-sm">
+          <div key={item.id} className="rounded-2xl bg-slate-800 p-4 shadow-sm">
             <h2 className="text-lg font-bold">
               {item.traspaso_codigo || "Traspaso sin código"}
             </h2>
@@ -472,7 +472,7 @@ export default function MobileAuditoria() {
               {accionTexto(item.accion)}
             </span>
 
-            <p className="mt-2 text-sm text-gray-500">
+            <p className="mt-2 text-sm text-slate-400">
               Usuario: {item.codigo_personal}
             </p>
 
@@ -480,7 +480,7 @@ export default function MobileAuditoria() {
               {item.estado_anterior || "-"} → {item.estado_nuevo || "-"}
             </p>
 
-            <p className="mt-2 text-xs text-gray-500">
+            <p className="mt-2 text-xs text-slate-400">
               {new Date(item.created_at).toLocaleString("es-ES")}
             </p>
           </div>
@@ -489,7 +489,7 @@ export default function MobileAuditoria() {
         {!loading && hayMas && items.length > 0 && (
           <button
             onClick={cargarMas}
-            className="w-full rounded-2xl bg-white p-4 text-center text-sm font-semibold shadow-sm"
+            className="w-full rounded-2xl bg-slate-800 p-4 text-center text-sm font-semibold shadow-sm"
           >
             Cargar más
           </button>
@@ -497,7 +497,7 @@ export default function MobileAuditoria() {
 
         <a
           href="/almacen-neumaticos/mobile"
-          className="block rounded-2xl bg-white p-4 text-center text-sm font-semibold shadow-sm"
+          className="block rounded-2xl bg-slate-800 p-4 text-center text-sm font-semibold shadow-sm"
         >
           Volver
         </a>

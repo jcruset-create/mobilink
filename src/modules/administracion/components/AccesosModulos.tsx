@@ -5,7 +5,7 @@
 // se da el acceso directamente. Duplicarlo significaría que añadir un módulo
 // al catálogo arreglaría una pantalla y dejaría la otra con la lista vieja.
 import { MODULOS_APP } from "../config/modulosApp";
-import { type AccesoEdit } from "./accesosModulos";
+import { type AccesoEdit } from "./accesosModulosHelpers";
 
 export default function AccesosModulos({ accesos, empresas, onChange }: {
   accesos: Record<string, AccesoEdit>;

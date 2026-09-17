@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import { registrarAuditoria } from "../services/auditoriaAlmacen";
@@ -1042,192 +1042,85 @@ export default function Reposiciones() {
 
   if (cargandoPermisos) {
     return (
-      <div className="p-6 space-y-6">
-        <AlmacenMenu />
-
-        <div className="rounded-xl border bg-white p-6 text-sm text-gray-600">
-          Cargando permisos del usuario conectado...
+      <AlmacenLayoutOscuro>
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-6 text-sm text-slate-300">
+            Cargando permisos del usuario conectado...
+          </div>
         </div>
-      </div>
+      </AlmacenLayoutOscuro>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
+    <AlmacenLayoutOscuro>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Reposiciones</h1>
+            <p className="text-sm text-slate-400">
+              Gestión de stock mínimo y solicitudes de reposición con permisos del
+              usuario conectado. Se cargan las últimas 200 solicitudes.
+            </p>
+          </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Reposiciones</h1>
-          <p className="text-sm text-gray-500">
-            Gestión de stock mínimo y solicitudes de reposición con permisos del
-            usuario conectado. Se cargan las últimas 200 solicitudes.
-          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportarReposicionesCsv}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              disabled={
+                stockMinimosVisibles.length === 0 &&
+                solicitudesVisibles.length === 0
+              }
+            >
+              Exportar CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={exportarReposicionesExcel}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={
+                stockMinimosVisibles.length === 0 &&
+                solicitudesVisibles.length === 0
+              }
+            >
+              Exportar Excel
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarReposicionesCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={
-              stockMinimosVisibles.length === 0 &&
-              solicitudesVisibles.length === 0
-            }
-          >
-            Exportar CSV
-          </button>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Crear stock mínimo</h2>
 
-          <button
-            type="button"
-            onClick={exportarReposicionesExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={
-              stockMinimosVisibles.length === 0 &&
-              solicitudesVisibles.length === 0
-            }
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
+          {!usuarioPuedeGestionar() && (
+            <p className="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-300">
+              Solo un usuario admin o responsable puede crear mínimos.
+            </p>
+          )}
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Crear stock mínimo</h2>
-
-        {!usuarioPuedeGestionar() && (
-          <p className="rounded-lg bg-yellow-50 p-3 text-sm text-yellow-800">
-            Solo un usuario admin o responsable puede crear mínimos.
-          </p>
-        )}
-
-        <select
-          value={empresaId}
-          onChange={(e) => setEmpresaId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeGestionar()}
-        >
-          <option value="">Empresa...</option>
-          {empresas.map((empresa) => (
-            <option key={empresa.id} value={empresa.id}>
-              {empresa.nombre}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={clienteId}
-          onChange={(e) => setClienteId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeGestionar()}
-        >
-          <option value="">Cliente...</option>
-          {clientesVisibles.map((cliente) => (
-            <option key={cliente.id} value={cliente.id}>
-              {cliente.nombre}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={productoId}
-          onChange={(e) => setProductoId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeGestionar()}
-        >
-          <option value="">Producto...</option>
-          {productos.map((producto) => (
-            <option key={producto.id} value={producto.id}>
-              {textoProducto(producto)}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={ubicacion}
-          onChange={(e) => setUbicacion(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeGestionar()}
-        >
-          <option value="">Ubicación...</option>
-          {ubicacionesVisibles.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-
-        <input
-          value={cantidadMinima}
-          onChange={(e) => setCantidadMinima(e.target.value)}
-          type="number"
-          min="0"
-          placeholder="Cantidad mínima"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeGestionar()}
-        />
-
-        <input
-          value={cantidadReposicion}
-          onChange={(e) => setCantidadReposicion(e.target.value)}
-          type="number"
-          min="1"
-          placeholder="Stock de reposición, ejemplo 12"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeGestionar()}
-        />
-
-        <textarea
-          value={observaciones}
-          onChange={(e) => setObservaciones(e.target.value)}
-          placeholder="Observaciones"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeGestionar()}
-        />
-
-        <button
-          type="button"
-          onClick={crearStockMinimo}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          disabled={!usuarioPuedeGestionar()}
-        >
-          Crear mínimo
-        </button>
-
-        {mensaje && <p className="text-sm text-gray-700">{mensaje}</p>}
-      </div>
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Generar solicitudes automáticas</h2>
-
-        <input
-          value={solicitadaPor}
-          onChange={(e) => setSolicitadaPor(e.target.value)}
-          placeholder="Solicitada por / responsable"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeGestionar()}
-        />
-
-        <button
-          type="button"
-          onClick={generarSolicitudesAutomaticas}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          disabled={!usuarioPuedeGestionar()}
-        >
-          Revisar mínimos y generar solicitudes
-        </button>
-      </div>
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Filtros de reposiciones</h2>
-
-        <div className="grid gap-3 md:grid-cols-4">
           <select
-            value={filtroCliente}
-            onChange={(e) => setFiltroCliente(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            value={empresaId}
+            onChange={(e) => setEmpresaId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeGestionar()}
           >
-            <option value="">Todos los clientes</option>
+            <option value="">Empresa...</option>
+            {empresas.map((empresa) => (
+              <option key={empresa.id} value={empresa.id}>
+                {empresa.nombre}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={clienteId}
+            onChange={(e) => setClienteId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeGestionar()}
+          >
+            <option value="">Cliente...</option>
             {clientesVisibles.map((cliente) => (
               <option key={cliente.id} value={cliente.id}>
                 {cliente.nombre}
@@ -1235,19 +1128,27 @@ export default function Reposiciones() {
             ))}
           </select>
 
-          <input
-            value={filtroProducto}
-            onChange={(e) => setFiltroProducto(e.target.value)}
-            placeholder="Producto, medida, marca o DOT"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+          <select
+            value={productoId}
+            onChange={(e) => setProductoId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeGestionar()}
+          >
+            <option value="">Producto...</option>
+            {productos.map((producto) => (
+              <option key={producto.id} value={producto.id}>
+                {textoProducto(producto)}
+              </option>
+            ))}
+          </select>
 
           <select
-            value={filtroUbicacion}
-            onChange={(e) => setFiltroUbicacion(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            value={ubicacion}
+            onChange={(e) => setUbicacion(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeGestionar()}
           >
-            <option value="">Todas las ubicaciones</option>
+            <option value="">Ubicación...</option>
             {ubicacionesVisibles.map((item) => (
               <option key={item} value={item}>
                 {item}
@@ -1255,231 +1156,330 @@ export default function Reposiciones() {
             ))}
           </select>
 
-          <select
-            value={filtroEstado}
-            onChange={(e) => setFiltroEstado(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          >
-            <option value="">Todos los estados solicitud</option>
-            <option value="pendiente">Pendiente</option>
-            <option value="aprobada">Aprobada</option>
-            <option value="en_traspaso">En traspaso</option>
-            <option value="cerrada">Cerrada</option>
-          </select>
-
           <input
-            type="date"
-            value={fechaDesde}
-            onChange={(e) => setFechaDesde(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            value={cantidadMinima}
+            onChange={(e) => setCantidadMinima(e.target.value)}
+            type="number"
+            min="0"
+            placeholder="Cantidad mínima"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeGestionar()}
           />
 
           <input
-            type="date"
-            value={fechaHasta}
-            onChange={(e) => setFechaHasta(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
+            value={cantidadReposicion}
+            onChange={(e) => setCantidadReposicion(e.target.value)}
+            type="number"
+            min="1"
+            placeholder="Stock de reposición, ejemplo 12"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeGestionar()}
           />
 
-          <input
-            value={filtroTexto}
-            onChange={(e) => setFiltroTexto(e.target.value)}
-            placeholder="Buscar..."
-            className="rounded-lg border px-3 py-2 text-sm md:col-span-2"
+          <textarea
+            value={observaciones}
+            onChange={(e) => setObservaciones(e.target.value)}
+            placeholder="Observaciones"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeGestionar()}
           />
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={limpiarFiltros}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
-          >
-            Limpiar filtros
-          </button>
 
           <button
             type="button"
-            onClick={cargarDatos}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
+            onClick={crearStockMinimo}
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            disabled={!usuarioPuedeGestionar()}
           >
-            Actualizar reposiciones
+            Crear mínimo
+          </button>
+
+          {mensaje && <p className="text-sm text-slate-300">{mensaje}</p>}
+        </div>
+
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Generar solicitudes automáticas</h2>
+
+          <input
+            value={solicitadaPor}
+            onChange={(e) => setSolicitadaPor(e.target.value)}
+            placeholder="Solicitada por / responsable"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeGestionar()}
+          />
+
+          <button
+            type="button"
+            onClick={generarSolicitudesAutomaticas}
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            disabled={!usuarioPuedeGestionar()}
+          >
+            Revisar mínimos y generar solicitudes
           </button>
         </div>
-      </div>
 
-      <div className="rounded-xl border bg-white p-3 text-sm text-gray-600">
-        Mostrando <strong>{stockMinimosVisibles.length}</strong> mínimos y{" "}
-        <strong>{solicitudesVisibles.length}</strong> solicitudes filtradas.
-      </div>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Filtros de reposiciones</h2>
 
-      <div className="overflow-auto rounded-xl border bg-white">
-        <table className="w-full min-w-[900px] text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="p-3">Cliente</th>
-              <th className="p-3">Producto</th>
-              <th className="p-3">Ubicación</th>
-              <th className="p-3 text-right">Mínimo</th>
-              <th className="p-3 text-right">Reposición</th>
-              <th className="p-3">Activo</th>
-              <th className="p-3">Observaciones</th>
-            </tr>
-          </thead>
+          <div className="grid gap-3 md:grid-cols-4">
+            <select
+              value={filtroCliente}
+              onChange={(e) => setFiltroCliente(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todos los clientes</option>
+              {clientesVisibles.map((cliente) => (
+                <option key={cliente.id} value={cliente.id}>
+                  {cliente.nombre}
+                </option>
+              ))}
+            </select>
 
-          <tbody>
-            {stockMinimosVisibles.map((minimo) => {
-              const cliente = obtenerPrimero(minimo.clientes);
-              const producto = obtenerPrimero(minimo.productos_neumaticos);
+            <input
+              value={filtroProducto}
+              onChange={(e) => setFiltroProducto(e.target.value)}
+              placeholder="Producto, medida, marca o DOT"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-              return (
-                <tr key={minimo.id} className="border-t">
-                  <td className="p-3">{cliente?.nombre || "-"}</td>
-                  <td className="p-3">{textoProductoRelacionado(producto)}</td>
-                  <td className="p-3">{minimo.ubicacion || "-"}</td>
-                  <td className="p-3 text-right">{minimo.cantidad_minima}</td>
-                  <td className="p-3 text-right">
-                    {minimo.cantidad_reposicion}
-                  </td>
-                  <td className="p-3">{minimo.activo ? "Sí" : "No"}</td>
-                  <td className="p-3">{minimo.observaciones || "-"}</td>
-                </tr>
-              );
-            })}
+            <select
+              value={filtroUbicacion}
+              onChange={(e) => setFiltroUbicacion(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todas las ubicaciones</option>
+              {ubicacionesVisibles.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
 
-            {stockMinimosVisibles.length === 0 && (
+            <select
+              value={filtroEstado}
+              onChange={(e) => setFiltroEstado(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todos los estados solicitud</option>
+              <option value="pendiente">Pendiente</option>
+              <option value="aprobada">Aprobada</option>
+              <option value="en_traspaso">En traspaso</option>
+              <option value="cerrada">Cerrada</option>
+            </select>
+
+            <input
+              type="date"
+              value={fechaDesde}
+              onChange={(e) => setFechaDesde(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <input
+              type="date"
+              value={fechaHasta}
+              onChange={(e) => setFechaHasta(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
+
+            <input
+              value={filtroTexto}
+              onChange={(e) => setFiltroTexto(e.target.value)}
+              placeholder="Buscar..."
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm md:col-span-2 bg-slate-900 text-slate-100"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={limpiarFiltros}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+            >
+              Limpiar filtros
+            </button>
+
+            <button
+              type="button"
+              onClick={cargarDatos}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+            >
+              Actualizar reposiciones
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-3 text-sm text-slate-300">
+          Mostrando <strong>{stockMinimosVisibles.length}</strong> mínimos y{" "}
+          <strong>{solicitudesVisibles.length}</strong> solicitudes filtradas.
+        </div>
+
+        <div className="overflow-auto rounded-xl border border-slate-600 bg-slate-800">
+          <table className="w-full min-w-[900px] text-sm">
+            <thead className="bg-slate-900 text-left">
               <tr>
-                <td colSpan={7} className="p-6 text-center text-gray-500">
-                  No hay mínimos visibles con los filtros actuales.
-                </td>
+                <th className="p-3">Cliente</th>
+                <th className="p-3">Producto</th>
+                <th className="p-3">Ubicación</th>
+                <th className="p-3 text-right">Mínimo</th>
+                <th className="p-3 text-right">Reposición</th>
+                <th className="p-3">Activo</th>
+                <th className="p-3">Observaciones</th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Aprobación de solicitudes</h2>
+            <tbody>
+              {stockMinimosVisibles.map((minimo) => {
+                const cliente = obtenerPrimero(minimo.clientes);
+                const producto = obtenerPrimero(minimo.productos_neumaticos);
 
-        <input
-          value={aprobadaPor}
-          onChange={(e) => setAprobadaPor(e.target.value)}
-          placeholder="Aprobada por / responsable"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioPuedeGestionar()}
-        />
-      </div>
+                return (
+                  <tr key={minimo.id} className="border-t border-slate-700 border-slate-700">
+                    <td className="p-3">{cliente?.nombre || "-"}</td>
+                    <td className="p-3">{textoProductoRelacionado(producto)}</td>
+                    <td className="p-3">{minimo.ubicacion || "-"}</td>
+                    <td className="p-3 text-right">{minimo.cantidad_minima}</td>
+                    <td className="p-3 text-right">
+                      {minimo.cantidad_reposicion}
+                    </td>
+                    <td className="p-3">{minimo.activo ? "Sí" : "No"}</td>
+                    <td className="p-3">{minimo.observaciones || "-"}</td>
+                  </tr>
+                );
+              })}
 
-      <div className="overflow-auto rounded-xl border bg-white">
-        <table className="w-full min-w-[1500px] text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="p-3">Fecha</th>
-              <th className="p-3">Estado</th>
-              <th className="p-3">Origen</th>
-              <th className="p-3">Cliente</th>
-              <th className="p-3">Producto</th>
-              <th className="p-3">Ubicación</th>
-              <th className="p-3 text-right">Actual</th>
-              <th className="p-3 text-right">Mínimo</th>
-              <th className="p-3 text-right">Reposición</th>
-              <th className="p-3 text-right">A pedir</th>
-              <th className="p-3">Solicitada por</th>
-              <th className="p-3">Aprobada por</th>
-              <th className="p-3">Acción</th>
-            </tr>
-          </thead>
+              {stockMinimosVisibles.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="p-6 text-center text-slate-400">
+                    No hay mínimos visibles con los filtros actuales.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
 
-          <tbody>
-            {solicitudesVisibles.map((solicitud) => {
-              const cliente = obtenerPrimero(solicitud.clientes);
-              const producto = obtenerPrimero(solicitud.productos_neumaticos);
-              const puedeGestionarSolicitud =
-                usuarioPuedeGestionarSolicitud(solicitud);
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Aprobación de solicitudes</h2>
 
-              return (
-                <tr key={solicitud.id} className="border-t align-top">
-                  <td className="p-3">
-                    {formatearFecha(solicitud.created_at)}
-                  </td>
-                  <td className="p-3 font-medium">
-                    {solicitud.estado || "-"}
-                  </td>
-                  <td className="p-3">{solicitud.origen || "-"}</td>
-                  <td className="p-3">{cliente?.nombre || "-"}</td>
-                  <td className="p-3">{textoProductoRelacionado(producto)}</td>
-                  <td className="p-3">{solicitud.ubicacion || "-"}</td>
-                  <td className="p-3 text-right">
-                    {solicitud.stock_actual ?? "-"}
-                  </td>
-                  <td className="p-3 text-right">
-                    {solicitud.stock_minimo ?? "-"}
-                  </td>
-                  <td className="p-3 text-right">
-                    {solicitud.stock_reposicion ?? "-"}
-                  </td>
-                  <td className="p-3 text-right font-bold">
-                    {solicitud.cantidad_sugerida ?? "-"}
-                  </td>
-                  <td className="p-3">{solicitud.solicitada_por || "-"}</td>
-                  <td className="p-3">{solicitud.aprobada_por || "-"}</td>
-                  <td className="p-3">
-                    {solicitud.estado === "pendiente" &&
-                    puedeGestionarSolicitud ? (
-                      <button
-                        type="button"
-                        onClick={() => aprobarSolicitud(solicitud)}
-                        className="rounded-lg border px-3 py-1 text-xs"
-                      >
-                        Aprobar
-                      </button>
-                    ) : solicitud.estado === "aprobada" &&
+          <input
+            value={aprobadaPor}
+            onChange={(e) => setAprobadaPor(e.target.value)}
+            placeholder="Aprobada por / responsable"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioPuedeGestionar()}
+          />
+        </div>
+
+        <div className="overflow-auto rounded-xl border border-slate-600 bg-slate-800">
+          <table className="w-full min-w-[1500px] text-sm">
+            <thead className="bg-slate-900 text-left">
+              <tr>
+                <th className="p-3">Fecha</th>
+                <th className="p-3">Estado</th>
+                <th className="p-3">Origen</th>
+                <th className="p-3">Cliente</th>
+                <th className="p-3">Producto</th>
+                <th className="p-3">Ubicación</th>
+                <th className="p-3 text-right">Actual</th>
+                <th className="p-3 text-right">Mínimo</th>
+                <th className="p-3 text-right">Reposición</th>
+                <th className="p-3 text-right">A pedir</th>
+                <th className="p-3">Solicitada por</th>
+                <th className="p-3">Aprobada por</th>
+                <th className="p-3">Acción</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {solicitudesVisibles.map((solicitud) => {
+                const cliente = obtenerPrimero(solicitud.clientes);
+                const producto = obtenerPrimero(solicitud.productos_neumaticos);
+                const puedeGestionarSolicitud =
+                  usuarioPuedeGestionarSolicitud(solicitud);
+
+                return (
+                  <tr key={solicitud.id} className="border-t border-slate-700 border-slate-700 align-top">
+                    <td className="p-3">
+                      {formatearFecha(solicitud.created_at)}
+                    </td>
+                    <td className="p-3 font-medium">
+                      {solicitud.estado || "-"}
+                    </td>
+                    <td className="p-3">{solicitud.origen || "-"}</td>
+                    <td className="p-3">{cliente?.nombre || "-"}</td>
+                    <td className="p-3">{textoProductoRelacionado(producto)}</td>
+                    <td className="p-3">{solicitud.ubicacion || "-"}</td>
+                    <td className="p-3 text-right">
+                      {solicitud.stock_actual ?? "-"}
+                    </td>
+                    <td className="p-3 text-right">
+                      {solicitud.stock_minimo ?? "-"}
+                    </td>
+                    <td className="p-3 text-right">
+                      {solicitud.stock_reposicion ?? "-"}
+                    </td>
+                    <td className="p-3 text-right font-bold">
+                      {solicitud.cantidad_sugerida ?? "-"}
+                    </td>
+                    <td className="p-3">{solicitud.solicitada_por || "-"}</td>
+                    <td className="p-3">{solicitud.aprobada_por || "-"}</td>
+                    <td className="p-3">
+                      {solicitud.estado === "pendiente" &&
                       puedeGestionarSolicitud ? (
-                      <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
-                          onClick={() =>
-                            generarTraspasoDesdeSolicitud(solicitud)
-                          }
-                          className="rounded-lg border px-3 py-1 text-xs"
+                          onClick={() => aprobarSolicitud(solicitud)}
+                          className="rounded-lg border border-slate-600 px-3 py-1 text-xs"
                         >
-                          Generar traspaso
+                          Aprobar
                         </button>
+                      ) : solicitud.estado === "aprobada" &&
+                        puedeGestionarSolicitud ? (
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              generarTraspasoDesdeSolicitud(solicitud)
+                            }
+                            className="rounded-lg border border-slate-600 px-3 py-1 text-xs"
+                          >
+                            Generar traspaso
+                          </button>
 
-                        <button
-                          type="button"
-                          onClick={() => cerrarSolicitud(solicitud)}
-                          className="rounded-lg border px-3 py-1 text-xs"
-                        >
-                          Cerrar sin acción
-                        </button>
-                      </div>
-                    ) : solicitud.traspaso_id ? (
-                      <span className="text-xs text-blue-700">
-                        Traspaso generado
-                      </span>
-                    ) : solicitud.estado === "en_traspaso" ? (
-                      <span className="text-xs text-blue-700">En traspaso</span>
-                    ) : solicitud.estado === "cerrada" ? (
-                      <span className="text-xs text-green-700">Cerrada</span>
-                    ) : (
-                      "-"
-                    )}
+                          <button
+                            type="button"
+                            onClick={() => cerrarSolicitud(solicitud)}
+                            className="rounded-lg border border-slate-600 px-3 py-1 text-xs"
+                          >
+                            Cerrar sin acción
+                          </button>
+                        </div>
+                      ) : solicitud.traspaso_id ? (
+                        <span className="text-xs text-sky-300">
+                          Traspaso generado
+                        </span>
+                      ) : solicitud.estado === "en_traspaso" ? (
+                        <span className="text-xs text-sky-300">En traspaso</span>
+                      ) : solicitud.estado === "cerrada" ? (
+                        <span className="text-xs text-emerald-300">Cerrada</span>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {solicitudesVisibles.length === 0 && (
+                <tr>
+                  <td colSpan={13} className="p-6 text-center text-slate-400">
+                    No hay solicitudes visibles con los filtros actuales.
                   </td>
                 </tr>
-              );
-            })}
-
-            {solicitudesVisibles.length === 0 && (
-              <tr>
-                <td colSpan={13} className="p-6 text-center text-gray-500">
-                  No hay solicitudes visibles con los filtros actuales.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }

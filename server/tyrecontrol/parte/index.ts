@@ -176,7 +176,7 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
 
       const { data: interv, error: e1 } = await supabase
         .from("tc_intervenciones")
-        .select(`*, vehiculo:tc_vehiculos(id, matricula, km_actual, config_ejes_id,
+        .select(`*, vehiculo:tc_vehiculos(id, matricula, km_actual, origen_km, config_ejes_id,
                    marca, marca_id, tipo:tc_tipos_vehiculo(imagen_chasis_url),
                    empresa:tc_empresas(nombre))`)
         .eq("id", id).maybeSingle();
@@ -285,6 +285,9 @@ export function mountParte(app: Express, ...guards: RequestHandler[]): void {
           matricula: interv.vehiculo?.matricula ?? null,
           flota: interv.vehiculo?.empresa?.nombre ?? null,
           km: interv.vehiculo?.km_actual ?? null,
+          // De dónde salieron esos km. No se imprime —la plantilla no tiene
+          // sitio— pero va a los metadatos del PDF.
+          origen_km: (interv.vehiculo as { origen_km?: string | null })?.origen_km ?? null,
         },
         filas,
         (servicios ?? []) as { servicio: string; cantidad: number }[],

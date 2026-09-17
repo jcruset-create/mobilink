@@ -15,7 +15,11 @@ import {
   minutosEnPalabras,
   prioridadRevision,
   quienRevisó,
+  estadoUbicacion,
   etiquetaBase,
+  ubicacionDeVehiculo,
+  coordenadasDeVehiculo,
+  enlaceDeMapa,
   sinPeriodicidad,
   sinPeriodicidadEnBase,
   revisablesEnBase,
@@ -23,7 +27,7 @@ import {
   tieneRevisionPendiente,
 } from "./presenciaVista";
 import type { VehiculoPresencia } from "./presenciaBases";
-import type { RevisionEstado } from "../types";
+import type { PresenciaEnBase, RevisionEstado } from "../types";
 
 function veh(id: string, over: Partial<VehiculoPresencia> = {}): VehiculoPresencia {
   return {
@@ -347,5 +351,218 @@ describe("etiquetaBase()", () => {
 
   it("manda el Hub cuando los dos dicen algo", () => {
     expect(etiquetaBase(enBase, wfEnBase)).toEqual({ base: "Reus", ahora: true });
+  });
+});
+
+/**
+ * La chapa de ubicación de la ficha del vehículo.
+ *
+ * Lo que se fija aquí es que no se confunda nunca «está» con «se le vio», y
+ * que un vehículo del que no se sabe nada lo diga en vez de parecer en ruta.
+ */
+describe("ubicacionDeVehiculo()", () => {
+  const AHORA = new Date("2026-09-16T12:00:00Z").getTime();
+  const hace = (min: number) => new Date(AHORA - min * 60_000).toISOString();
+
+  it("en base dice en cuál y de cuándo es la posición", () => {
+    const u = ubicacionDeVehiculo({
+      presencia: {
+        vehiculo_id: "v",
+        estado: "IN_BASE",
+        posicion_at: hace(4),
+        delegacion: { id: "b", nombre: "Reus" },
+      },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("En base · Reus");
+    expect(u.detalle).toBe("posición de hace 4 min");
+    expect(u.tono).toBe("base");
+  });
+
+  it("fuera de las bases es «En ruta»", () => {
+    const u = ubicacionDeVehiculo({
+      presencia: { vehiculo_id: "v", estado: "OUTSIDE_BASES", posicion_at: hace(7), delegacion: null },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("En ruta");
+    expect(u.tono).toBe("ruta");
+  });
+
+  it("posición vieja dice «última vez», no que esté ahí", () => {
+    const u = ubicacionDeVehiculo({
+      presencia: {
+        vehiculo_id: "v",
+        estado: "STALE_POSITION",
+        posicion_at: hace(60 * 50),
+        delegacion: { id: "b", nombre: "Reus" },
+      },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("Última vez en Reus");
+    expect(u.detalle).toContain("hace 2 d");
+    expect(u.tono).toBe("viejo");
+  });
+
+  it("sin nada de nada no se inventa una ruta", () => {
+    const u = ubicacionDeVehiculo({ ahora: AHORA });
+    expect(u.texto).toBe("Sin posición");
+    expect(u.tono).toBe("desconocido");
+  });
+
+  it("un NO_POSITION del Hub cae al mismo «sin posición»", () => {
+    const u = ubicacionDeVehiculo({
+      presencia: { vehiculo_id: "v", estado: "NO_POSITION", delegacion: null },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("Sin posición");
+  });
+
+  it("sin dato del Hub vale el de Webfleet", () => {
+    const u = ubicacionDeVehiculo({
+      webfleet: {
+        vehiculo_id: "v",
+        empresa_id: "e",
+        estado: "en_base",
+        pos_time: hace(10),
+        delegacion: { id: "b", nombre: "Vilanova" },
+      },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("En base · Vilanova");
+    expect(u.detalle).toBe("posición de hace 10 min");
+  });
+
+  it("manda el Hub cuando los dos dicen algo", () => {
+    const u = ubicacionDeVehiculo({
+      presencia: { vehiculo_id: "v", estado: "OUTSIDE_BASES", posicion_at: hace(3), delegacion: null },
+      webfleet: {
+        vehiculo_id: "v",
+        empresa_id: "e",
+        estado: "en_base",
+        pos_time: hace(3),
+        delegacion: { id: "b", nombre: "Vilanova" },
+      },
+      ahora: AHORA,
+    });
+    expect(u.texto).toBe("En ruta");
+  });
+});
+
+/*
+ * Llevar el vehículo al mapa.
+ *
+ * Lo que se fija aquí es cuándo NO se ofrece el mapa: un botón que lleva al
+ * sitio equivocado es peor que no tener botón, porque alguien se sube al
+ * coche a buscarlo.
+ */
+describe("coordenadasDeVehiculo", () => {
+  const pres = (lat: any, lng: any, posicion_at?: string) =>
+    ({ vehiculo_id: "v1", estado: "OUTSIDE_BASES", lat, lng, posicion_at } as any);
+  const wf = (lat: any, lng: any, pos_time?: string) =>
+    ({ vehiculo_id: "v1", empresa_id: "e1", estado: "en_ruta", lat, lng, pos_time } as any);
+
+  it("sin ninguna fuente no hay mapa", () => {
+    expect(coordenadasDeVehiculo({})).toBeNull();
+  });
+
+  it("una fila sin coordenadas no da mapa aunque diga dónde está", () => {
+    expect(coordenadasDeVehiculo({ presencia: pres(null, null) })).toBeNull();
+  });
+
+  it("el 0,0 se descarta: es la falta de fijación GPS, no el golfo de Guinea", () => {
+    expect(coordenadasDeVehiculo({ presencia: pres(0, 0) })).toBeNull();
+  });
+
+  it("una coordenada fuera de rango tampoco vale", () => {
+    expect(coordenadasDeVehiculo({ presencia: pres(91, 2) })).toBeNull();
+    expect(coordenadasDeVehiculo({ presencia: pres(41, 181) })).toBeNull();
+    expect(coordenadasDeVehiculo({ presencia: pres("no es un número", 2) })).toBeNull();
+  });
+
+  it("con una sola fuente, esa manda", () => {
+    expect(coordenadasDeVehiculo({ webfleet: wf(41.1, 1.25) })).toMatchObject({
+      lat: 41.1, lng: 1.25, fuente: "webfleet",
+    });
+  });
+
+  it("con las dos, manda la posición MÁS RECIENTE, no una fuente fija", () => {
+    const vieja = "2026-09-16T08:00:00.000Z";
+    const nueva = "2026-09-16T12:00:00.000Z";
+    expect(coordenadasDeVehiculo({ presencia: pres(41, 1, vieja), webfleet: wf(42, 2, nueva) }))
+      .toMatchObject({ lat: 42, fuente: "webfleet" });
+    expect(coordenadasDeVehiculo({ presencia: pres(41, 1, nueva), webfleet: wf(42, 2, vieja) }))
+      .toMatchObject({ lat: 41, fuente: "hub" });
+  });
+
+  it("la que trae fecha gana a la que no la trae", () => {
+    expect(coordenadasDeVehiculo({ presencia: pres(41, 1), webfleet: wf(42, 2, "2026-09-16T12:00:00.000Z") }))
+      .toMatchObject({ fuente: "webfleet" });
+  });
+
+  it("sin fechas en ninguna manda el Hub, que cubre a toda la flota", () => {
+    expect(coordenadasDeVehiculo({ presencia: pres(41, 1), webfleet: wf(42, 2) }))
+      .toMatchObject({ fuente: "hub" });
+  });
+
+  it("si la única fuente con coordenadas es la otra, da igual la fecha", () => {
+    expect(coordenadasDeVehiculo({ presencia: pres(null, null, "2026-09-16T12:00:00.000Z"), webfleet: wf(42, 2) }))
+      .toMatchObject({ lat: 42, fuente: "webfleet" });
+  });
+});
+
+describe("enlaceDeMapa", () => {
+  it("lleva la coordenada y nada más: ni matrícula, ni cliente, ni clave", () => {
+    const url = enlaceDeMapa({ lat: 41.118_92, lng: 1.244_74, fuente: "hub" });
+    expect(url).toBe("https://www.google.com/maps?q=41.118920,1.244740");
+    expect(url).not.toMatch(/key|token|api_key/i);
+  });
+});
+
+/**
+ * El estado de ubicación que alimenta los contadores y filtros de la lista.
+ *
+ * Antes salía solo de Webfleet: para un cliente de Movertis, cero en base,
+ * cero en ruta y toda la flota «sin dispositivo».
+ */
+describe("estadoUbicacion()", () => {
+  const pres = (over: Partial<PresenciaEnBase>): PresenciaEnBase => ({
+    vehiculo_id: "v",
+    estado: "IN_BASE",
+    delegacion_id: "b",
+    ...over,
+  });
+
+  it("en su base y en otra base se distinguen, como en Webfleet", () => {
+    expect(estadoUbicacion(pres({ es_su_base: true }), undefined)).toBe("en_base");
+    expect(estadoUbicacion(pres({ es_su_base: false }), undefined)).toBe("otra_base");
+  });
+
+  it("fuera de las bases es en ruta", () => {
+    expect(estadoUbicacion(pres({ estado: "OUTSIDE_BASES", delegacion_id: null }), undefined)).toBe("en_ruta");
+  });
+
+  it("posición vieja DENTRO de una base sigue contando como en base", () => {
+    // Es lo que hace la sincronización de Webfleet desde siempre: el equipo de
+    // un autobús aparcado se duerme, y sacarlo de «en base» escondería justo a
+    // los que se pueden revisar.
+    expect(estadoUbicacion(pres({ estado: "STALE_POSITION", es_su_base: true }), undefined)).toBe("en_base");
+  });
+
+  it("posición vieja FUERA de toda base es sin conexión", () => {
+    expect(estadoUbicacion(pres({ estado: "STALE_POSITION", delegacion_id: null }), undefined)).toBe("sin_conexion");
+  });
+
+  it("una posición inválida es sin conexión, no una ubicación", () => {
+    expect(estadoUbicacion(pres({ estado: "INVALID_POSITION", delegacion_id: null }), undefined)).toBe("sin_conexion");
+  });
+
+  it("si el Hub no sabe nada de él, manda lo que diga Webfleet", () => {
+    const wf = { vehiculo_id: "v", empresa_id: "e", estado: "en_ruta" as const };
+    expect(estadoUbicacion(pres({ estado: "NO_POSITION", delegacion_id: null }), wf)).toBe("en_ruta");
+    expect(estadoUbicacion(undefined, wf)).toBe("en_ruta");
+  });
+
+  it("sin ninguna de las dos, sin dispositivo", () => {
+    expect(estadoUbicacion(undefined, undefined)).toBe("sin_dispositivo");
   });
 });

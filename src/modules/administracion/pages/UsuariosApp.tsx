@@ -10,7 +10,7 @@ import { MODULOS_APP } from "../config/modulosApp";
 import AccesosModulos from "../components/AccesosModulos";
 import {
   accesosAPayload, estadoInicialAccesos, type AccesoEdit,
-} from "../components/accesosModulos";
+} from "../components/accesosModulosHelpers";
 import {
   Modal, TableWrap, thCls, tdCls, TextField, SelectField, CheckField,
   btnPrimary, btnSecondary, btnDanger, btnMini, inputCls, Pill, EmptyRow, ErrorBox,

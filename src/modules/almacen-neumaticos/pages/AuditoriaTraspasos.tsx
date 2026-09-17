@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import {
   exportarCsv,
@@ -164,178 +164,178 @@ export default function AuditoriaTraspasos() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
+    <AlmacenLayoutOscuro>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Auditoría de traspasos</h1>
+            <p className="text-sm text-slate-400">
+              Consulta de recogidas y recepciones confirmadas desde móvil. Se
+              cargan hasta 500 registros según filtros.
+            </p>
+          </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Auditoría de traspasos</h1>
-          <p className="text-sm text-gray-500">
-            Consulta de recogidas y recepciones confirmadas desde móvil. Se
-            cargan hasta 500 registros según filtros.
-          </p>
-        </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportarAuditoriaCsv}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              disabled={registrosFiltrados.length === 0}
+            >
+              Exportar CSV
+            </button>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarAuditoriaCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={registrosFiltrados.length === 0}
-          >
-            Exportar CSV
-          </button>
-
-          <button
-            type="button"
-            onClick={exportarAuditoriaExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={registrosFiltrados.length === 0}
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
-
-      <div className="grid gap-3 md:grid-cols-3">
-        <div className="rounded-xl border bg-white p-4">
-          <div className="text-sm text-gray-500">Registros</div>
-          <div className="text-3xl font-bold">{registrosFiltrados.length}</div>
-        </div>
-
-        <div className="rounded-xl border bg-blue-50 p-4">
-          <div className="text-sm text-blue-700">Recogidas</div>
-          <div className="text-3xl font-bold text-blue-800">
-            {totalRecogidas}
+            <button
+              type="button"
+              onClick={exportarAuditoriaExcel}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={registrosFiltrados.length === 0}
+            >
+              Exportar Excel
+            </button>
           </div>
         </div>
 
-        <div className="rounded-xl border bg-green-50 p-4">
-          <div className="text-sm text-green-700">Recepciones</div>
-          <div className="text-3xl font-bold text-green-800">
-            {totalRecepciones}
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-4">
+            <div className="text-sm text-slate-400">Registros</div>
+            <div className="text-3xl font-bold">{registrosFiltrados.length}</div>
+          </div>
+
+          <div className="rounded-xl border border-slate-600 bg-sky-500/10 p-4">
+            <div className="text-sm text-sky-300">Recogidas</div>
+            <div className="text-3xl font-bold text-sky-300">
+              {totalRecogidas}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-600 bg-emerald-500/10 p-4">
+            <div className="text-sm text-emerald-300">Recepciones</div>
+            <div className="text-3xl font-bold text-emerald-300">
+              {totalRecepciones}
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Filtros</h2>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Filtros</h2>
 
-        <div className="grid gap-3 md:grid-cols-4">
-          <input
-            type="date"
-            value={fechaDesde}
-            onChange={(e) => setFechaDesde(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+          <div className="grid gap-3 md:grid-cols-4">
+            <input
+              type="date"
+              value={fechaDesde}
+              onChange={(e) => setFechaDesde(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-          <input
-            type="date"
-            value={fechaHasta}
-            onChange={(e) => setFechaHasta(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+            <input
+              type="date"
+              value={fechaHasta}
+              onChange={(e) => setFechaHasta(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-          <input
-            value={filtroCodigoPersonal}
-            onChange={(e) => setFiltroCodigoPersonal(e.target.value)}
-            placeholder="Código personal"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+            <input
+              value={filtroCodigoPersonal}
+              onChange={(e) => setFiltroCodigoPersonal(e.target.value)}
+              placeholder="Código personal"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-          <input
-            value={filtroTraspaso}
-            onChange={(e) => setFiltroTraspaso(e.target.value)}
-            placeholder="Código traspaso"
-            className="rounded-lg border px-3 py-2 text-sm"
-          />
+            <input
+              value={filtroTraspaso}
+              onChange={(e) => setFiltroTraspaso(e.target.value)}
+              placeholder="Código traspaso"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            />
 
-          <select
-            value={filtroAccion}
-            onChange={(e) => setFiltroAccion(e.target.value)}
-            className="rounded-lg border px-3 py-2 text-sm"
-          >
-            <option value="">Todas las acciones</option>
-            <option value="recogida">Recogidas</option>
-            <option value="recepcion">Recepciones</option>
-          </select>
+            <select
+              value={filtroAccion}
+              onChange={(e) => setFiltroAccion(e.target.value)}
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            >
+              <option value="">Todas las acciones</option>
+              <option value="recogida">Recogidas</option>
+              <option value="recepcion">Recepciones</option>
+            </select>
 
-          <input
-            value={filtroTexto}
-            onChange={(e) => setFiltroTexto(e.target.value)}
-            placeholder="Búsqueda libre"
-            className="rounded-lg border px-3 py-2 text-sm md:col-span-3"
-          />
+            <input
+              value={filtroTexto}
+              onChange={(e) => setFiltroTexto(e.target.value)}
+              placeholder="Búsqueda libre"
+              className="rounded-lg border border-slate-600 px-3 py-2 text-sm md:col-span-3 bg-slate-900 text-slate-100"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={cargarAuditoria}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              {cargando ? "Buscando..." : "Buscar"}
+            </button>
+
+            <button
+              type="button"
+              onClick={limpiarFiltros}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+            >
+              Limpiar filtros
+            </button>
+          </div>
+
+          {mensaje && <p className="text-sm text-red-300">{mensaje}</p>}
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={cargarAuditoria}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white"
-          >
-            {cargando ? "Buscando..." : "Buscar"}
-          </button>
-
-          <button
-            type="button"
-            onClick={limpiarFiltros}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
-          >
-            Limpiar filtros
-          </button>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-3 text-sm text-slate-300">
+          Mostrando <strong>{registrosFiltrados.length}</strong> registros de{" "}
+          <strong>{registros.length}</strong> cargados.
         </div>
 
-        {mensaje && <p className="text-sm text-red-600">{mensaje}</p>}
-      </div>
-
-      <div className="rounded-xl border bg-white p-3 text-sm text-gray-600">
-        Mostrando <strong>{registrosFiltrados.length}</strong> registros de{" "}
-        <strong>{registros.length}</strong> cargados.
-      </div>
-
-      <div className="overflow-auto rounded-xl border bg-white">
-        <table className="w-full min-w-[1000px] text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="p-3">Fecha</th>
-              <th className="p-3">Traspaso</th>
-              <th className="p-3">Acción</th>
-              <th className="p-3">Operario</th>
-              <th className="p-3">Estado anterior</th>
-              <th className="p-3">Estado nuevo</th>
-              <th className="p-3">ID traspaso</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {registrosFiltrados.map((registro) => (
-              <tr key={registro.id} className="border-t align-top">
-                <td className="p-3 whitespace-nowrap">
-                  {formatearFecha(registro.created_at)}
-                </td>
-                <td className="p-3 font-medium">
-                  {registro.traspaso_codigo || "Sin código"}
-                </td>
-                <td className="p-3">{accionTexto(registro.accion)}</td>
-                <td className="p-3">{registro.nombre_operario || registro.codigo_personal || "-"}</td>
-                <td className="p-3">{registro.estado_anterior || "-"}</td>
-                <td className="p-3">{registro.estado_nuevo || "-"}</td>
-                <td className="p-3 text-xs">{registro.traspaso_id}</td>
-              </tr>
-            ))}
-
-            {registrosFiltrados.length === 0 && (
+        <div className="overflow-auto rounded-xl border border-slate-600 bg-slate-800">
+          <table className="w-full min-w-[1000px] text-sm">
+            <thead className="bg-slate-900 text-left">
               <tr>
-                <td colSpan={7} className="p-6 text-center text-gray-500">
-                  No hay registros de auditoría de traspasos con los filtros
-                  actuales.
-                </td>
+                <th className="p-3">Fecha</th>
+                <th className="p-3">Traspaso</th>
+                <th className="p-3">Acción</th>
+                <th className="p-3">Operario</th>
+                <th className="p-3">Estado anterior</th>
+                <th className="p-3">Estado nuevo</th>
+                <th className="p-3">ID traspaso</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+
+            <tbody>
+              {registrosFiltrados.map((registro) => (
+                <tr key={registro.id} className="border-t border-slate-700 border-slate-700 align-top">
+                  <td className="p-3 whitespace-nowrap">
+                    {formatearFecha(registro.created_at)}
+                  </td>
+                  <td className="p-3 font-medium">
+                    {registro.traspaso_codigo || "Sin código"}
+                  </td>
+                  <td className="p-3">{accionTexto(registro.accion)}</td>
+                  <td className="p-3">{registro.nombre_operario || registro.codigo_personal || "-"}</td>
+                  <td className="p-3">{registro.estado_anterior || "-"}</td>
+                  <td className="p-3">{registro.estado_nuevo || "-"}</td>
+                  <td className="p-3 text-xs">{registro.traspaso_id}</td>
+                </tr>
+              ))}
+
+              {registrosFiltrados.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="p-6 text-center text-slate-400">
+                    No hay registros de auditoría de traspasos con los filtros
+                    actuales.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }
