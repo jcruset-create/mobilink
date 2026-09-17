@@ -59,6 +59,7 @@ import {
   ROADSIDE_ASSISTANCE_STATUS_FLOW,
   ROADSIDE_ASSISTANCE_STATUS_LABELS,
 } from "../modules/roadsideAssistanceTypes";
+import { aMilisegundos, fechaHoraCorta } from "../modules/roadsideFechaHora";
 import { formatCoords } from "../modules/roadsideCoordenadas";
 import { etiquetaMatricula, matriculasDe } from "../modules/roadsideMatricula";
 import { filtrar as filtrarAsistencias, hayCriterios } from "../modules/roadsideFiltro";
@@ -279,8 +280,13 @@ function StatusStepper({ status, assistance }: { status: RoadsideAssistanceStatu
 }
 
 function formatTime(value?: number | string | null) {
-  if (!value) return "-";
-  const d = new Date(value as number);
+  // `aMilisegundos` y no `new Date(value)`: con una marca de tiempo en cadena
+  // —los BIGINT llegan asi segun por donde entre la asistencia— `new Date`
+  // aplica el parseo de TEXTO y devuelve «Invalid Date», asi que una hora
+  // buena salia como «-». Lo encontro la prueba de `roadsideFechaHora`.
+  const ms = aMilisegundos(value);
+  if (ms == null) return "-";
+  const d = new Date(ms);
   if (isNaN(d.getTime())) return "-";
 
   return d.toLocaleTimeString("es-ES", {
@@ -453,8 +459,19 @@ function ClosedAssistanceCard({
         <div className="mt-0.5 truncate text-xs text-slate-400">{assistance.customerName}</div>
       )}
       <div className="mt-1.5 flex items-center justify-between gap-2">
+        {/*
+          Fecha y hora, no solo la hora. Esta lista puede tener noventa y cinco
+          tarjetas de dias distintos y todas ponian «19:39»: dos servicios de
+          semanas diferentes se veian igual, y para saber de cuando era uno
+          habia que abrir el informe.
+
+          Es el MISMO instante que ya se mostraba —el cierre: llegada a taller,
+          o la anulacion, o el fin—, no la fecha de creacion. Mezclar la fecha
+          de un momento con la hora de otro daria una linea que parece cierta
+          y no lo es, y en los servicios que cruzan la medianoche se veria.
+        */}
         <div className="text-xs font-semibold text-slate-500">
-          {formatTime(assistance.arrivedAtWorkshopMs || assistance.cancelledAtMs || assistance.finishedAtMs)}
+          {fechaHoraCorta(assistance.arrivedAtWorkshopMs || assistance.cancelledAtMs || assistance.finishedAtMs)}
         </div>
         <div className="flex gap-1">
           <button
