@@ -356,7 +356,13 @@ export default function App() {
       <Route path="/toolcontrol/ubicaciones" element={<Protegida><Ubicaciones /></Protegida>} />
       <Route path="/toolcontrol/categorias" element={<Protegida><CategoriasTC /></Protegida>} />
 
-      <Route path="/cobros" element={<CobrosDashboard />} />
+      {/*
+        Los cinco endpoints que usa esta pantalla ya piden sesión y el módulo de
+        administración, así que sin sesión no se escapaba ningún dato: lo que
+        salía era el formulario vacío y cinco llamadas fallando por detrás.
+        Feo, y una manera rara de enterarse de que hay que entrar.
+      */}
+      <Route path="/cobros" element={<Protegida><CobrosDashboard /></Protegida>} />
       <Route path="/payment-success" element={<PaymentResult type="success" />} />
       <Route
         path="/payment-cancelled"

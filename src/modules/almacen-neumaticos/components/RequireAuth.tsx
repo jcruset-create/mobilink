@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { supabase } from "../services/supabase";
 import { esSuperadmin } from "../../superadmin";
+import { puertaDeAcceso } from "../../../puertaDeAcceso";
 
 type RequireAuthProps = { children: React.ReactNode };
 
@@ -59,7 +60,12 @@ export default function RequireAuth({ children }: RequireAuthProps) {
   }, []);
 
   if (checking) return null;
-  if (!authed) return <Navigate to="/almacen-neumaticos/login" replace />;
+  /*
+    Este guard lo comparte media aplicación —`Protegida` en `App.tsx`— así que
+    la puerta depende de la ruta y no del módulo donde vive el fichero. Ver
+    `puertaDeAcceso`.
+  */
+  if (!authed) return <Navigate to={puertaDeAcceso(location.pathname)} replace />;
 
   const pantalla = pantallaDesdeRuta(location.pathname);
   if (pantalla && pantalla !== "dashboard" && pantallas && !pantallas.includes(pantalla)) {
