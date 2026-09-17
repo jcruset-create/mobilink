@@ -130,7 +130,8 @@ export default function Bandeja() {
               <Articulos articulos={a.articulos} />
             </div>
             <div className="mt-2 text-[12px] text-slate-400">
-              Albarán <b className="text-slate-200">{a.numeroProveedor}</b> · Pedido {a.pedidoNumero}
+              Albarán <b className="text-slate-200">{a.numeroProveedor}</b>
+              {a.fechaExpedicion ? ` del ${fmtFecha(a.fechaExpedicion)}` : ""} · Pedido {a.pedidoNumero}
               {/* Sólo si se sabe: los pedidos deducidos de un albarán no la tienen. */}
               {a.pedidoFecha ? ` del ${fmtFecha(a.pedidoFecha)}` : ""} · {a.centroNombre || "—"} · {a.transportista ?? "—"}
             </div>
