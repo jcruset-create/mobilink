@@ -69,6 +69,17 @@ export type DocumentoTexto = {
   paginas: PaginaTexto[];
 };
 
+/**
+ * El texto sin sus fechas.
+ *
+ * «07.09.2026» tiene la forma de un número con decimales, y quien pregunta
+ * «¿esta fila lleva un importe?» acaba respondiendo que sí por una fecha.
+ * Se quitan antes de mirar, y sólo para mirar: el texto original no se toca.
+ */
+export function sinFechas(texto: string): string {
+  return texto.replace(/\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b/g, " ");
+}
+
 /** Rectángulo en puntos de página, para el resalte del visor. */
 export type Caja = { x: number; y: number; w: number; h: number };
 

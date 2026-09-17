@@ -19,6 +19,16 @@ export type Descuento = {
   porcentaje: number;
   /** El trozo tal y como estaba: «60%». */
   raw: string;
+  /**
+   * Lo que descuenta en dinero, cuando el documento lo imprime al lado.
+   *
+   * Siempre positivo: es lo que se resta. No se guarda en la base —ahí están
+   * el porcentaje y el importe final de la línea, que es lo que se enseña—;
+   * vive lo justo para comprobar la aritmética, que es donde vale su peso en
+   * oro: con el importe impreso no hay que adivinar si los descuentos se
+   * encadenan o se suman.
+   */
+  importeCentimos?: number | null;
 };
 
 export type DescuentosLeidos = {
@@ -48,7 +58,7 @@ const VACIO: DescuentosLeidos = { descuentos: [], raw: "", reconocido: true, sob
  * comas y leer los trozos: `7,5%` se convertiría en un 7 % y un 5 %. Se extraen
  * los porcentajes enteros con su forma completa y lo que sobra se mira después.
  */
-const PORCENTAJE = /\d{1,3}(?:[.,]\d{1,3})?\s*%/g;
+const PORCENTAJE = /\d{1,3}(?:[.,]\d{1,3})?\s*[-−]?\s*%/g;
 
 /** Una celda que es un número a secas: hay plantillas que no repiten el «%». */
 const SOLO_NUMERO = /^\d{1,3}(?:[.,]\d{1,3})?$/;
@@ -70,7 +80,9 @@ export function leerDescuentos(celda: unknown): DescuentosLeidos {
   for (const m of raw.matchAll(PORCENTAJE)) {
     descuentos.push({
       orden: descuentos.length + 1,
-      porcentaje: Number(m[0].replace(/\s|%/g, "").replace(",", ".")),
+      // El signo que algunas plantillas ponen detrás («40,00-%») dice que
+      // resta, que es lo que ya significa ser un descuento.
+      porcentaje: Number(m[0].replace(/[\s%\-−]/g, "").replace(",", ".")),
       raw: m[0].trim(),
     });
     resto = resto.replace(m[0], " ");

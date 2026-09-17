@@ -144,11 +144,23 @@ describe("leer importes", () => {
   });
 });
 
+describe("el signo detrás del número", () => {
+  it("«192,80-» es negativo: lo escriben así los ERP alemanes", () => {
+    expect(leerImporte("192,80-").centimos).toBe(-19280);
+    expect(leerImporte("1.390,30-").centimos).toBe(-139030);
+    // Y no se confunde con un guion de relleno ni cambia lo de siempre.
+    expect(leerImporte("-192,80").centimos).toBe(-19280);
+    expect(leerImporte("192,80").centimos).toBe(19280);
+  });
+});
+
 describe("leer fechas", () => {
   it("la fecha de la plantilla se pasa a ISO", () => {
     expect(leerFecha("31/08/2026")).toBe("2026-08-31");
     expect(leerFecha("1/9/2026")).toBe("2026-09-01");
     expect(leerFecha("2026-08-31")).toBe("2026-08-31");
+    // Con puntos, que es como la escriben los ERP alemanes.
+    expect(leerFecha("15.09.2026")).toBe("2026-09-15");
   });
 
   /*
