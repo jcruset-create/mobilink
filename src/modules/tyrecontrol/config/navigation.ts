@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, Upload, Archive, CalendarCheck, AlertTriangle, History, HelpCircle, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, Upload, Archive, CalendarCheck, AlertTriangle, History, HelpCircle, QrCode, type LucideIcon } from "lucide-react";
 import type { Rol } from "../types";
 
 export type NavItem = {
@@ -25,6 +25,7 @@ export const NAV: NavItem[] = [
   { key: "incidencias", path: "incidencias", label: "Incidencias", icon: AlertTriangle, roles: ["administrador"] },
   { key: "historico-revisiones", path: "historico-revisiones", label: "Histórico de revisiones", icon: History, roles: ["administrador"] },
   { key: "lotes-revision", path: "lotes-revision", label: "Lotes de revisión", icon: ClipboardList, roles: ["administrador"] },
+  { key: "etiquetas", path: "etiquetas", label: "Etiquetas de neumáticos", icon: QrCode, roles: ["administrador"] },
   { key: "plantillas-mantenimiento", path: "plantillas-mantenimiento", label: "Plantillas de mantenimiento", icon: ClipboardCheck, roles: ["administrador"] },
   { key: "neumaticos", path: "neumaticos", label: "Neumáticos", icon: CircleDot, roles: ["administrador"] },
   { key: "almacen-usados", path: "almacen-usados", label: "Almacén de usados", icon: Archive, roles: ["administrador"] },

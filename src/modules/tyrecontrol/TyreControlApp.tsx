@@ -18,6 +18,10 @@ import Incidencias from "./pages/Incidencias";
 import HistoricoRevisiones from "./pages/HistoricoRevisiones";
 import PlantillasMantenimiento from "./pages/PlantillasMantenimiento";
 import LotesRevision from "./pages/LotesRevision";
+import Etiquetas from "./pages/Etiquetas";
+import EtiquetasLote from "./pages/EtiquetasLote";
+import EtiquetasImprimir from "./pages/EtiquetasImprimir";
+import EtiquetasCalibrar from "./pages/EtiquetasCalibrar";
 import Neumaticos from "./pages/Neumaticos";
 import AlmacenUsados from "./pages/AlmacenUsados";
 import NeumaticoDetalle from "./pages/NeumaticoDetalle";
@@ -130,6 +134,13 @@ export default function TyreControlApp() {
               <Route path="historico-revisiones" element={<HistoricoRevisiones />} />
               <Route path="plantillas-mantenimiento" element={<PlantillasMantenimiento />} />
               <Route path="lotes-revision" element={<LotesRevision />} />
+              {/* Etiquetado de números de serie. Las tres pantallas cuelgan de
+                  la misma raíz para que «← Etiquetas» y el `imprimir` relativo
+                  funcionen sin repetir la ruta en cada enlace. */}
+              <Route path="etiquetas" element={<Etiquetas />} />
+              <Route path="etiquetas/calibrar" element={<EtiquetasCalibrar />} />
+              <Route path="etiquetas/:loteId" element={<EtiquetasLote />} />
+              <Route path="etiquetas/:loteId/imprimir" element={<EtiquetasImprimir />} />
               <Route path="neumaticos" element={<Neumaticos />} />
               <Route path="neumaticos/:id" element={<NeumaticoDetalle />} />
               <Route path="almacen-usados" element={<AlmacenUsados />} />
