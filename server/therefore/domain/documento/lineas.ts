@@ -33,6 +33,7 @@ import { leerImporte } from "../correo/importes.ts";
 import { normalizar } from "../correo/texto.ts";
 import {
   VOCABULARIO_CONCEPTOS,
+  cierraSeccion,
   conceptoGlobal,
   esArrastre,
   totalDocumento,
@@ -47,7 +48,7 @@ import {
   type Rejilla,
   type SinonimosColumna,
 } from "./tabla.ts";
-import { cajaEnvolvente, type Caja, type LineaTexto } from "./tipos.ts";
+import { cajaEnvolvente, sinFechas, type Caja, type LineaTexto } from "./tipos.ts";
 
 /** Redondeos de céntimo: nada más. */
 export const TOLERANCIA_CENTIMOS_POR_DEFECTO = 2;
@@ -122,14 +123,106 @@ export type OpcionesLineas = {
   techoConfianza?: number;
 };
 
+/*
+ * El signo puede ir detrás del número: «192,80-». Todos los patrones de aquí
+ * lo admiten, porque una fila que acaba así acaba en un importe igual.
+ */
 /** Un importe al final de la fila: lo que la convierte en candidata. */
-const IMPORTE_AL_FINAL = /[-−+]?\d[\d.,]*\s*(?:€|EUR)?\s*$/i;
+const IMPORTE_AL_FINAL = /[-−+]?\d[\d.,]*\s*[-−]?\s*(?:€|EUR)?\s*$/i;
 
 /** Todos los números del final de la fila: «-2,00 4,00 -8,00», «4 1,80 € 7,20 €». */
-const NUMEROS_AL_FINAL = /(?:(?:^|\s+)[-−+]?\d[\d.,]*\s*(?:%|€|EUR)?)+\s*$/i;
+const NUMEROS_AL_FINAL = /(?:(?:^|\s+)[-−+]?\d[\d.,]*\s*[-−]?\s*(?:%|€|EUR)?)+\s*$/i;
 
 /** Sólo los que llevan decimales: la cantidad de una nota («... 1,00»), no su número («CASO 4711»). */
-const DECIMALES_AL_FINAL = /(?:(?:^|\s+)[-−+]?\d+[.,]\d{1,3}\s*(?:%|€|EUR)?)+\s*$/i;
+const DECIMALES_AL_FINAL = /(?:(?:^|\s+)[-−+]?\d+[.,]\d{1,3}\s*[-−]?\s*(?:%|€|EUR)?)+\s*$/i;
+
+/** Un número suelto, con el signo delante o detrás. */
+const NUMERO_SUELTO = /[-−+]?\d[\d.,]*\s*[-−]?/g;
+
+/** Un porcentaje suelto, con el signo delante del símbolo: «40,00-%». */
+const PORCENTAJE_SUELTO = /\d{1,3}(?:[.,]\d{1,3})?\s*[-−]?\s*%/;
+
+/** Filas que desglosan la línea de arriba en vez de ser una línea nueva. */
+const DESCUENTO_DE_LINEA = /^(?:descuento|dto|dcto|desc|rappel|bonificacion)\b/;
+const NETO_DE_LINEA = /^(?:total|neto|net|subtotal|subt\d*)\b/;
+
+/**
+ * Lo que una fila de desglose le hace a la línea de arriba.
+ *
+ * Hay plantillas de ERP que no meten el descuento en una columna: escriben el
+ * artículo con su precio bruto y debajo una fila por cada descuento y otra
+ * con el neto. Leídas como líneas sueltas, el albarán suma el bruto Y los
+ * descuentos, y el total no se parece a nada.
+ */
+type ModificadorDeLinea =
+  | { tipo: "DESCUENTO"; porcentaje: number; raw: string; importeCentimos: number | null }
+  | { tipo: "NETO"; importeCentimos: number };
+
+function modificadorDeLinea(
+  fila: LineaTexto,
+  vocabulario: VocabularioConceptos
+): ModificadorDeLinea | null {
+  const texto = fila.texto.trim();
+  const etiqueta = normalizar(textoSinNumeros(texto))
+    .toLowerCase()
+    .replace(/[.:·-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Una etiqueta es corta y no lleva una referencia dentro.
+  if (!etiqueta || etiqueta.length > 30 || /\d{4,}/.test(etiqueta)) return null;
+  // El pie de la factura no modifica ninguna línea: la cierra.
+  if (cierraSeccion(etiqueta, vocabulario)) return null;
+
+  if (DESCUENTO_DE_LINEA.test(etiqueta)) {
+    const p = texto.match(PORCENTAJE_SUELTO);
+    if (!p) return null;
+    const porcentaje = Number(p[0].replace(/[\s%\-−]/g, "").replace(",", "."));
+    if (!Number.isFinite(porcentaje)) return null;
+    // Lo que quede tras quitar el porcentaje es el dinero que descuenta.
+    const resto = texto.replace(p[0], " ").match(NUMERO_SUELTO) ?? [];
+    const importe = resto.length ? leerImporte(resto[resto.length - 1]).centimos : null;
+    return {
+      tipo: "DESCUENTO",
+      porcentaje,
+      raw: p[0].trim(),
+      importeCentimos: importe === null ? null : Math.abs(importe),
+    };
+  }
+
+  if (NETO_DE_LINEA.test(etiqueta)) {
+    // Sin decimales no es un neto: «TOTAL BULTOS 3» es una nota. Y una fecha
+    // no son decimales, aunque los aparente.
+    if (!/\d[.,]\d{2}/.test(sinFechas(texto))) return null;
+    const numeros = texto.match(NUMERO_SUELTO) ?? [];
+    const centimos = numeros.length ? leerImporte(numeros[numeros.length - 1]).centimos : null;
+    return centimos === null ? null : { tipo: "NETO", importeCentimos: centimos };
+  }
+  return null;
+}
+
+/** Aplica el desglose a la línea de arriba, que es de quien es. */
+function aplicarModificador(
+  l: LineaArticulo,
+  m: ModificadorDeLinea,
+  fila: LineaTexto,
+  confianzaRejilla: number
+): void {
+  l.rawText += `\n${fila.texto}`;
+  if (m.tipo === "NETO") {
+    // El importe de la línea es el neto: es lo que se paga y lo que suma.
+    l.importeCentimos = m.importeCentimos;
+    l.confianza.importe = Math.max(l.confianza.importe, confianzaRejilla);
+    return;
+  }
+  // Se reemplaza en vez de empujar: una celda de descuento vacía devuelve
+  // siempre el MISMO array, y empujar en él se lo añade a todas las líneas.
+  l.descuentos = [
+    ...l.descuentos,
+    { orden: l.descuentos.length + 1, porcentaje: m.porcentaje, raw: m.raw, importeCentimos: m.importeCentimos },
+  ];
+  l.descuentosRaw = l.descuentos.map((d) => d.raw).join(" + ");
+  l.confianza.descuentos = confianzaRejilla;
+}
 
 /** El texto de una fila sin los números de sus columnas ni el guion de viñeta. */
 function textoSinNumeros(texto: string, patron: RegExp = NUMEROS_AL_FINAL): string {
@@ -162,12 +255,17 @@ const CONFUNDIBLES = /[OoIilSs]/;
 function leerCantidad(celda: string | undefined): { valor: number | null; confianza: number } {
   if (!celda) return { valor: null, confianza: 0 };
   const t = normalizar(celda).replace(/\s+/g, "");
-  // Una cantidad no lleva separador de millares en ningún albarán que se haya
-  // visto; la coma o el punto que traiga son decimales.
-  const m = t.match(/^[-−+]?\d+(?:[.,]\d{1,3})?$/);
-  if (!m) return { valor: null, confianza: 0 };
+  /*
+   * Una cantidad no lleva separador de millares en ningún albarán que se haya
+   * visto; la coma o el punto que traiga son decimales. Puede llevar pegada
+   * la unidad —«1 UN», «4 UDS»—, que es de la columna de al lado y no dice
+   * nada del número; «EUR» no, que ésa sería la columna del dinero metida
+   * donde no toca y hay que verlo.
+   */
+  const m = t.match(/^([-−+]?\d+(?:[.,]\d{1,3})?)(?:[A-ZÁÉÍÓÚÑ]{1,3}\.?)?$/);
+  if (!m || /EUR\.?$/.test(t)) return { valor: null, confianza: 0 };
   const negativo = t.startsWith("-") || t.startsWith("−");
-  const valor = Number(t.replace(/^[-−+]/, "").replace(",", "."));
+  const valor = Number(m[1].replace(/^[-−+]/, "").replace(",", "."));
   if (!Number.isFinite(valor)) return { valor: null, confianza: 0 };
   return { valor: negativo ? -valor : valor, confianza: 1 };
 }
@@ -271,6 +369,21 @@ export function extraerLineas(
     // «Suma y sigue»: dinero ya contado.
     if (esArrastre(texto, vocabulario)) continue;
 
+    /*
+     * El desglose de la línea de arriba —sus descuentos y su neto— antes que
+     * nada: un «Total 248,23» suelto tiene forma de concepto y de artículo, y
+     * no es ninguna de las dos cosas.
+     */
+    const ultimaLinea = lineas[lineas.length - 1];
+    if (ultimaLinea && !bloqueDeConceptos) {
+      const modificador = modificadorDeLinea(fila, vocabulario);
+      if (modificador) {
+        aplicarModificador(ultimaLinea, modificador, fila, rejilla.confianza);
+        filasDeCadaLinea[filasDeCadaLinea.length - 1].push(fila);
+        continue;
+      }
+    }
+
     const concepto = comoConcepto(fila, vocabulario);
     if (concepto) {
       conceptos.push(concepto);
@@ -278,9 +391,14 @@ export function extraerLineas(
       continue;
     }
 
+    const celdas = repartirEnColumnas(fila, rejilla);
+    // Con rejilla, lo que no cae bajo la descripción no continúa ninguna: la
+    // segunda fila de la cabecera («EUR   EUR») está debajo del dinero.
+    const bajoLaDescripcion = rejilla.modo !== "CABECERA" || Boolean(celdas.descripcion?.trim());
+
     if (!pareceArticulo(fila)) {
       const ultima = lineas[lineas.length - 1];
-      if (ultima && esContinuacion(fila)) {
+      if (ultima && bajoLaDescripcion && esContinuacion(fila)) {
         /*
          * ¿Continuación o nota? Una descripción sigue en la fila de abajo
          * porque no cabía: la de arriba llega hasta el borde de su columna.
@@ -314,8 +432,6 @@ export function extraerLineas(
       });
       continue;
     }
-
-    const celdas = repartirEnColumnas(fila, rejilla);
 
     // Con rejilla, una fila sin nada en la columna del importe no es un
     // artículo: es texto con una cantidad al lado («SE ANULA PULMÓN 1,00»).
@@ -389,8 +505,27 @@ function comprobarAritmetica(l: LineaArticulo, tolerancia: number): void {
     l.cuadraAritmetica = null;
     return;
   }
-  const esperado = Math.round(l.cantidad * l.precioUnitarioCentimos * factorRestante(l.descuentos));
-  const cuadra = Math.abs(esperado - l.importeCentimos) <= tolerancia;
+  const bruto = l.cantidad * l.precioUnitarioCentimos;
+
+  /*
+   * Dos convenciones para encadenar descuentos, y las dos están impresas por
+   * ahí: «40 % y luego 8,5 % sobre lo que queda» y «40 % + 8,5 % sobre el
+   * bruto». Con un solo descuento dan lo mismo; con dos, la diferencia son
+   * euros. Se acepta la que explique el importe impreso, y si el documento
+   * imprime además cuánto descuenta cada uno, ésa manda: no hay nada que
+   * deducir.
+   */
+  const importes = l.descuentos.map((d) => d.importeCentimos);
+  const conImportes = importes.length > 0 && importes.every((i) => typeof i === "number");
+  const candidatos = [Math.round(bruto * factorRestante(l.descuentos))];
+  if (conImportes) {
+    candidatos.push(Math.round(bruto) - (importes as number[]).reduce((t, i) => t + i, 0));
+  }
+  if (l.descuentos.length > 1) {
+    const suma = l.descuentos.reduce((t, d) => t + d.porcentaje, 0);
+    candidatos.push(Math.round(bruto * (1 - suma / 100)));
+  }
+  const cuadra = candidatos.some((e) => Math.abs(e - l.importeCentimos!) <= tolerancia);
   l.cuadraAritmetica = cuadra;
 
   for (const campo of ["referencia", "descripcion", "cantidad", "precio", "importe", "descuentos"] as const) {

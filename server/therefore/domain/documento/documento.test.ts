@@ -275,8 +275,7 @@ describe("localizar y delimitar albaranes", () => {
       },
       { numero: 2, lineas: [fila(2, 100, CABECERA_TABLA)] },
     ]);
-    const sinonimos = ["ref", "descripcion", "cant", "precio", "dto", "importe"];
-    const loc = localizarAlbaranes(doc, { sinonimosColumna: sinonimos });
+    const loc = localizarAlbaranes(doc, { columnas: SINONIMOS_COLUMNA_POR_DEFECTO });
     expect(loc.secciones[0].lineas.filter((l) => l.texto.includes("Importe"))).toHaveLength(2);
   });
 
@@ -337,10 +336,11 @@ describe("extraer líneas", () => {
   });
 
   it("una descripción que salta de línea se pega a la anterior", () => {
-    // Salta de línea porque no cabía: la de arriba llega al borde de su columna.
+    // Salta de línea porque no cabía: la de arriba llena su columna hasta el
+    // borde, que es lo que distingue una descripción partida de una nota.
     const r = extraerLineas(
       conCabecera([
-        lineaArticulo(1, 120, "111111", "PASTILLA DE FRENO DELANT.", "1,00", "10,00", "-", "10,00"),
+        lineaArticulo(1, 120, "111111", "PASTILLA DE FRENO DELANTERA CERAMICA", "1,00", "10,00", "-", "10,00"),
         fila(1, 132, [["EJE IZQUIERDO", 110]]),
       ])
     );
@@ -599,7 +599,7 @@ describe("lo que enseñaron las primeras facturas reales", () => {
         ],
       },
     ]);
-    const loc = localizarAlbaranes(doc, { sinonimosColumna: Object.values(SINONIMOS_COLUMNA_POR_DEFECTO).flat() });
+    const loc = localizarAlbaranes(doc, { columnas: SINONIMOS_COLUMNA_POR_DEFECTO });
     expect(loc.lineasRepetidasRetiradas).toBe(4);
     expect(loc.secciones).toHaveLength(1);
     expect(loc.secciones[0].finPor).toBe("TOTALES");
@@ -758,5 +758,199 @@ describe("lo que enseñaron las primeras facturas reales", () => {
     expect(a.complementarios.matricula).toBe("1234BCD");
     expect(a.complementarios.observaciones).toBe("3er EJE IZQUIERDO");
     expect(a.filasDescartadas).toBe(0);
+  });
+});
+
+/* ── La tercera plantilla: el desglose por filas ──────────────────────────── */
+
+describe("una plantilla que desglosa cada artículo en varias filas", () => {
+  /*
+   * La forma que trae un ERP alemán: columna de posición, la unidad pegada a
+   * la cantidad, el precio BRUTO en la fila del artículo y debajo una fila por
+   * cada descuento, una con el neto y otra con la ecotasa. El signo va detrás
+   * del número y las fechas llevan puntos.
+   */
+  const CABECERA_ERP: [string, number][] = [
+    ["Pos.", 68],
+    ["No.Art.", 88],
+    ["Descripción", 144],
+    ["Cant.", 335],
+    ["Unit", 360],
+    ["Precio/unit", 398],
+    ["Importe neto", 470],
+  ];
+  const articulo = (y: number, pos: string, art: string, desc: string, precio: string): LineaTexto =>
+    fila(1, y, [[pos, 55], [art, 88], [desc, 144], ["1", 350], ["UN", 360], [precio, 416], [precio, 490]]);
+  const desglose = (y: number, etiqueta: string, izquierda: string, derecha: string): LineaTexto =>
+    fila(1, y, [[etiqueta, 144], [izquierda, 416], [derecha, 483]]);
+  const PIE_EN_DOS_FILAS: LineaTexto[] = [
+    fila(1, 600, [["Importe neto", 78], ["% IVA", 185], ["IVA", 273], ["Vencimiento", 361], ["Total", 484]]),
+    fila(1, 614, [
+      ["EUR", 68], ["1.000,00", 132], ["21,00", 202],
+      ["EUR", 240], ["210,00", 308], ["23.09.2026", 361],
+      ["EUR", 448], ["1.210,00", 515],
+    ]),
+  ];
+  /** Un artículo entero: bruto, dos descuentos, el neto y su ecotasa. */
+  const bloqueDeArticulo = (y: number, pos: string): LineaTexto[] => [
+    articulo(y, pos, "572912", "235/75R17.5 EJEMPLO T 143J144F 3PSF", "100,00"),
+    desglose(y + 13, "Descuento base", "40,00-%", "40,00-"),
+    desglose(y + 26, "Descuento adicional", "10,00-%", "10,00-"),
+    desglose(y + 39, "Subt2: Net 1", "50,00", "50,00"),
+    desglose(y + 52, "Total", "50,00", "50,00"),
+    desglose(y + 65, "ECOTASA NFVU", "6,15", "6,15"),
+  ];
+
+  it("el «Total» de un artículo no cierra el albarán; el pie de la factura sí", () => {
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 200, [["Factura 5901223371", 40]]),
+          fila(1, 224, CABECERA_ERP),
+          fila(1, 264, [["Nuestro pedido: 1021294542 de fecha 07.09.2026", 144]]),
+          fila(1, 275, [["Nuestro Albarán: 4049975109 de fecha 08.09.2026", 144], ["Entregado: 09.09.2026", 330]]),
+          fila(1, 286, [["Ref.: 2721723105 de fecha 07.09.2026", 144]]),
+          ...bloqueDeArticulo(330, "0020"),
+          ...bloqueDeArticulo(408, "0030"),
+          ...PIE_EN_DOS_FILAS,
+        ],
+      },
+    ]);
+    const loc = localizarAlbaranes(doc);
+    expect(loc.secciones).toHaveLength(1);
+    expect(loc.secciones[0].numeroDocumento).toBe("4049975109");
+    // Los dos artículos enteros están dentro; el pie, fuera.
+    expect(loc.secciones[0].finPor).toBe("TOTALES");
+    expect(loc.secciones[0].lineas.filter((l) => l.texto.startsWith("Total"))).toHaveLength(2);
+    expect(loc.secciones[0].lineas.some((l) => l.texto.includes("Vencimiento"))).toBe(false);
+    // Y la fila de datos de encima de la marca es del albarán, no de nadie.
+    expect(loc.secciones[0].lineas[0].texto).toContain("Nuestro pedido");
+  });
+
+  it("cada artículo es UNA línea con su neto, sus descuentos y su tasa aparte", () => {
+    const r = extraerLineas([fila(1, 224, CABECERA_ERP), ...bloqueDeArticulo(330, "0020")]);
+
+    expect(r.lineas).toHaveLength(1);
+    const l = r.lineas[0];
+    expect(l.referencia).toBe("572912");
+    // La descripción entera: no se la come la columna de la cantidad.
+    expect(l.descripcion).toBe("235/75R17.5 EJEMPLO T 143J144F 3PSF");
+    // La unidad va pegada a la cantidad y no estorba.
+    expect(l.cantidad).toBe(1);
+    expect(l.precioUnitarioCentimos).toBe(10000);
+    // El importe de la línea es el NETO, que es lo que se paga y lo que suma.
+    expect(l.importeCentimos).toBe(5000);
+    expect(l.descuentos.map((d) => d.porcentaje)).toEqual([40, 10]);
+    expect(l.descuentosRaw).toBe("40,00-% + 10,00-%");
+    expect(l.cuadraAritmetica).toBe(true);
+    expect(sumaDeLineas(r.lineas)).toBe(5000);
+
+    // La ecotasa cuesta dinero y no es línea: se enseña aparte y no se suma.
+    expect(r.conceptos.map((c) => [c.etiqueta, c.importeCentimos])).toEqual([["ECOTASA NFVU", 615]]);
+    expect(r.notas).toEqual([]);
+  });
+
+  it("manda el descuento impreso en dinero, no la convención que se suponga", () => {
+    // 33,33 % y 5 % sobre 1.000: encadenados dan 633,37 y sumados 616,70. El
+    // papel dice 616,60 porque el proveedor redondea cada descuento por su
+    // cuenta, y lo que cuadra es lo que está impreso al lado.
+    const r = extraerLineas([
+      fila(1, 224, CABECERA_ERP),
+      fila(1, 330, [["0010", 55], ["572794", 88], ["NEUMATICO EJEMPLO", 144], ["1", 350], ["UN", 360], ["1.000,00", 416], ["1.000,00", 490]]),
+      desglose(343, "Descuento base", "33,33-%", "333,40-"),
+      desglose(356, "Descuento adicional", "5,00-%", "50,00-"),
+      desglose(369, "Total", "616,60", "616,60"),
+    ]);
+    expect(r.lineas).toHaveLength(1);
+    expect(r.lineas[0].importeCentimos).toBe(61660);
+    expect(r.lineas[0].cuadraAritmetica).toBe(true);
+  });
+
+  it("si nada explica el importe, la línea entera pierde la confianza", () => {
+    const r = extraerLineas([
+      fila(1, 224, CABECERA_ERP),
+      articulo(330, "0010", "572794", "NEUMATICO EJEMPLO", "100,00"),
+      desglose(343, "Descuento base", "40,00-%", "40,00-"),
+      desglose(356, "Total", "70,00", "70,00"),
+    ]);
+    expect(r.lineas[0].cuadraAritmetica).toBe(false);
+    expect(r.lineas[0].confianza.precio).toBeLessThanOrEqual(0.8);
+  });
+
+  it("la segunda fila de la cabecera («EUR EUR») no continúa ninguna descripción", () => {
+    const r = extraerLineas([
+      fila(1, 224, CABECERA_ERP),
+      fila(1, 235, [["EUR", 416], ["EUR", 490]]),
+      ...bloqueDeArticulo(330, "0020"),
+      fila(1, 420, [["EUR", 416], ["EUR", 490]]),
+    ]);
+    expect(r.lineas).toHaveLength(1);
+    expect(r.lineas[0].descripcion).toBe("235/75R17.5 EJEMPLO T 143J144F 3PSF");
+    expect(r.notas).toEqual([]);
+  });
+
+  it("los totales se leen del PIE, aunque cada artículo remate con su «Total»", () => {
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 200, [["Factura 5901223371", 40]]),
+          fila(1, 212, [["Fecha de doc.: 15.09.2026", 400]]),
+          fila(1, 224, CABECERA_ERP),
+          ...bloqueDeArticulo(330, "0020"),
+          ...PIE_EN_DOS_FILAS,
+        ],
+      },
+    ]);
+    const c = parserGenerico.extraerCabecera(doc);
+    expect(c.numeroDocumento).toBe("5901223371");
+    expect(c.fechaDocumento).toBe("2026-09-15");
+    // Del recuadro del pie, cada cifra bajo su título aunque no se solapen.
+    expect(c.baseCentimos).toBe(100000);
+    expect(c.ivaCentimos).toBe(21000);
+    expect(c.totalCentimos).toBe(121000);
+  });
+
+  it("una fecha con puntos no es un importe ni cuenta como decimales", () => {
+    expect(esCabeceraDeTotales("Importe neto % IVA IVA Vencimiento 23.09.2026 Total")).toBe(true);
+    const r = extraerLineas([
+      fila(1, 224, CABECERA_ERP),
+      articulo(330, "0010", "572794", "NEUMATICO EJEMPLO", "100,00"),
+      // Con fecha y sin importe: es una nota, no el neto de la línea. Y la
+      // nota se guarda entera, que la fecha es la mitad de lo que dice.
+      fila(1, 343, [["Entregado: 09.09.2026", 144]]),
+    ]);
+    expect(r.lineas[0].importeCentimos).toBe(10000);
+    expect(r.notas).toEqual(["Entregado: 09.09.2026"]);
+  });
+
+  it("la plantilla repetida se retira aunque no caiga en el mismo sitio en las dos páginas", () => {
+    const paginacion = (p: number) => `Factura 5901223371 Original Página: ${p} de 2`;
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 200, [[paginacion(1), 40]]),
+          fila(1, 224, CABECERA_ERP),
+          fila(1, 275, [["Nuestro Albarán: 4049975109 de fecha 08.09.2026", 144]]),
+          ...bloqueDeArticulo(330, "0020"),
+        ],
+      },
+      {
+        numero: 2,
+        lineas: [
+          fila(2, 260, [[paginacion(2), 40]]),
+          fila(2, 224, CABECERA_ERP),
+          fila(2, 275, [["Nuestro Albarán: 4050016039 de fecha 12.09.2026", 144]]),
+          ...bloqueDeArticulo(330, "0040").map((l) => ({ ...l, pagina: 2 })),
+        ],
+      },
+    ]);
+    const loc = localizarAlbaranes(doc);
+    expect(loc.secciones).toHaveLength(2);
+    for (const s of loc.secciones) {
+      expect(s.lineas.some((l) => l.texto.includes("Página"))).toBe(false);
+    }
   });
 });

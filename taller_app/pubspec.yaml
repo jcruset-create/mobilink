@@ -1,7 +1,7 @@
 name: taller_app
 description: "WorkPlanner Taller — tareas del técnico en la tablet del taller"
 publish_to: "none"
-version: 0.20.5+268
+version: 0.20.6+270
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
