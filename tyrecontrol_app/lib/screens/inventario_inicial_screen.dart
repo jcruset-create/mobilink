@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/fotos.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/km_telematica.dart';
@@ -37,7 +38,13 @@ class _Estado {
   final double? profundidad;
   final double? presion;
   final bool presionMedida;
-  const _Estado({this.neumaticoId, this.profundidad, this.presion, this.presionMedida = false});
+  /// Lo que se enseña en el resumen: qué goma es y cómo se identifica.
+  final String? etiqueta;      // «Michelin X Multi D · 315/80R22.5»
+  final String? numeroInterno; // NT-2026-000001
+  final String? numeroSerie;
+  final String? dot;
+  const _Estado({this.neumaticoId, this.profundidad, this.presion, this.presionMedida = false,
+                 this.etiqueta, this.numeroInterno, this.numeroSerie, this.dot});
   bool get hecha => neumaticoId != null && profundidad != null;
 }
 
@@ -81,11 +88,25 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
         final pid = (m as dynamic).posicionId as String?;
         if (pid == null) continue;
         final med = medidas[pid];
+        // La goma ya viene con el montaje (`neumatico:tc_neumaticos(*)`), así
+        // que el resumen no necesita una segunda consulta por rueda.
+        final n = (m as dynamic).neumatico;
+        final etiqueta = n == null
+            ? null
+            : [n.marca, n.modelo, n.medida]
+                .where((x) => (x as String?)?.isNotEmpty ?? false)
+                .join(' · ');
         _estado[pid] = _Estado(
           neumaticoId: (m as dynamic).neumaticoId as String?,
           profundidad: med == null ? null : (med as dynamic).profundidadMm as double?,
           presion: med == null ? null : (med as dynamic).presionBar as double?,
           presionMedida: med != null && (med as dynamic).presionBar != null,
+          etiqueta: (etiqueta?.isEmpty ?? true) ? null : etiqueta,
+          // El número interno es lo que distingue ESTA goma de otra igual,
+          // tenga o no número de serie legible.
+          numeroInterno: n?.numeroInterno as String?,
+          numeroSerie: n?.numeroSerie as String?,
+          dot: n?.dot as String?,
         );
       }
       setState(() {
@@ -140,6 +161,46 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
     // Saltar sola a la siguiente: es lo que evita los inventarios a medias.
     final siguiente = _siguientePendiente;
     if (siguiente != null) _abrir(siguiente);
+  }
+
+  /*
+   * El repaso antes de cerrar.
+   *
+   * Cerrar un alta es lo que deja al vehículo operativo, y a partir de ahí sus
+   * gomas entran en los informes de desgaste. Enseñar todo junto una vez, con
+   * cada rueda abrible para corregirla, cuesta diez segundos y evita tener que
+   * deshacer una operación después.
+   */
+  Future<void> _repasar() async {
+    final confirmado = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => _Resumen(
+        matricula: widget.matricula,
+        posiciones: _posiciones,
+        estado: _estado,
+        minimoMm: _minimoMm,
+        km: _km,
+        origenKm: _origenKm,
+        onCorregir: (p) async { await _abrirSolo(p); },
+      ),
+    ));
+    if (confirmado == true) await _finalizar();
+  }
+
+  /// Abrir UNA rueda desde el resumen: al guardar se vuelve al resumen, no se
+  /// encadena a la siguiente como en el recorrido normal.
+  Future<void> _abrirSolo(Map<String, dynamic> posicion) async {
+    final guardado = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => _FichaPosicion(
+        vehiculoId: widget.vehiculoId,
+        posicion: posicion,
+        catalogo: _catalogo,
+        minimoMm: _minimoMm,
+        referenciaSugerida: _ultimaReferencia,
+        yaInformada: (_estado[posicion['id']] ?? const _Estado()).hecha,
+        onReferenciaUsada: (ref) => _ultimaReferencia = ref,
+      ),
+    ));
+    if (guardado == true) await _cargar();
   }
 
   Future<void> _finalizar() async {
@@ -265,8 +326,8 @@ class _InventarioInicialScreenState extends State<InventarioInicialScreen> {
           width: double.infinity,
           child: completo
               ? FilledButton(
-                  onPressed: _finalizar,
-                  child: const Text('Finalizar alta y revisión inicial',
+                  onPressed: _repasar,
+                  child: const Text('Repasar y finalizar',
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)))
               : FilledButton(
                   onPressed: siguiente == null ? null : () => _abrir(siguiente),
@@ -383,6 +444,16 @@ class _FichaPosicionState extends State<_FichaPosicion> {
   bool? _presionMedida;
   bool _guardando = false;
   String? _error;
+  /// La foto del flanco, si se ha hecho. Sube al mismo bucket que el resto:
+  /// no se monta otro sistema de archivos.
+  String? _fotoUrl;
+  bool _subiendoFoto = false;
+  bool _leyendo = false;
+  /// Lo que la IA leyó regular. Se propone igual —vale más un número que
+  /// comprobar que un hueco— pero el técnico tiene que saber cuál mirar dos
+  /// veces.
+  Set<String> _dudosos = const {};
+  String? _avisoLectura;
 
   @override
   void dispose() {
@@ -408,6 +479,64 @@ class _FichaPosicionState extends State<_FichaPosicion> {
     return true;
   }
 
+  /*
+   * Foto del flanco y lectura.
+   *
+   * La foto va al bucket de siempre —`subirFotoFlanco`, el mismo que usan la
+   * revisión y el parte guiado— y la lectura la hace el lector que ya existe.
+   * No se monta un segundo sistema de fotos ni una segunda IA.
+   *
+   * La IA PROPONE: rellena los campos vacíos y el técnico confirma o corrige
+   * antes de que se guarde nada. Lo que ya estuviera escrito NO se pisa: si lo
+   * tecleó una persona, su dato manda sobre el de la máquina.
+   */
+  Future<void> _hacerFoto() async {
+    final f = await elegirFoto(context);
+    if (f == null || !mounted) return;
+    setState(() { _subiendoFoto = true; _avisoLectura = null; });
+    String? url;
+    try {
+      url = await TyreControlApi.subirFotoFlanco(f,
+          revisionId: 'inventario-${widget.vehiculoId}',
+          posicionId: widget.posicion['id'] as String);
+      if (mounted) setState(() => _fotoUrl = url);
+    } catch (e) {
+      // La foto es opcional: que falle no puede impedir apuntar la goma.
+      if (mounted) setState(() => _avisoLectura = 'No se ha podido subir la foto. Puedes seguir a mano.');
+    } finally {
+      if (mounted) setState(() => _subiendoFoto = false);
+    }
+    if (url != null) await _leerFlanco(url);
+  }
+
+  Future<void> _leerFlanco(String url) async {
+    setState(() => _leyendo = true);
+    try {
+      final l = await TyreControlApi.leerFlanco(url);
+      if (!mounted) return;
+      final serie = (l['numero_serie'] as String?)?.trim();
+      final dot = (l['dot'] as String?)?.trim();
+      final marca = (l['marca'] as String?)?.trim();
+      final medida = (l['medida'] as String?)?.trim();
+      setState(() {
+        _dudosos = ((l['dudosos'] as List?) ?? const []).map((e) => '$e').toSet();
+        _avisoLectura = l['aviso'] as String?;
+        if (_serie.text.trim().isEmpty && (serie?.isNotEmpty ?? false)) _serie.text = serie!;
+        if (_dot.text.trim().isEmpty && (dot?.isNotEmpty ?? false)) _dot.text = dot!;
+        // Con marca y medida se puede buscar en el catálogo, pero la
+        // referencia la elige el técnico: la IA nunca confirma un neumático.
+        if (_referencia == null && (marca?.isNotEmpty ?? false)) {
+          _busqueda.text = [marca, medida].where((x) => x?.isNotEmpty ?? false).join(' ');
+        }
+      });
+    } catch (_) {
+      // Sin lector se sigue a mano: la foto ya está subida y los campos ahí.
+      if (mounted) setState(() => _avisoLectura = 'No se ha podido leer el flanco. Rellena a mano lo que veas.');
+    } finally {
+      if (mounted) setState(() => _leyendo = false);
+    }
+  }
+
   Future<void> _guardar() async {
     setState(() { _guardando = true; _error = null; });
     try {
@@ -423,6 +552,7 @@ class _FichaPosicionState extends State<_FichaPosicion> {
         numeroSerie: _serie.text,
         dot: _dot.text,
         observaciones: _observaciones.text,
+        fotoUrl: _fotoUrl,
       );
       widget.onReferenciaUsada(_referencia!);
       if (mounted) Navigator.of(context).pop(true);
@@ -549,6 +679,37 @@ class _FichaPosicionState extends State<_FichaPosicion> {
             ],
 
             const SizedBox(height: 20),
+            // ── La foto del flanco ─────────────────────────────────────────
+            const Text('Foto del flanco', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary)),
+            const SizedBox(height: 4),
+            const Text('Opcional. Si la haces, se intenta leer la marca, la medida, '
+                'el DOT y el número de serie para no tener que teclearlos.',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+            const SizedBox(height: 10),
+            Row(children: [
+              OutlinedButton.icon(
+                onPressed: _subiendoFoto || _leyendo ? null : _hacerFoto,
+                icon: const Icon(Icons.photo_camera, size: 18),
+                label: Text(_subiendoFoto
+                    ? 'Subiendo…'
+                    : _leyendo
+                        ? 'Leyendo el flanco…'
+                        : _fotoUrl == null ? 'Hacer foto' : 'Repetir foto'),
+              ),
+              if (_fotoUrl != null && !_subiendoFoto && !_leyendo) ...[
+                const SizedBox(width: 10),
+                const Icon(Icons.check_circle, color: AppColors.success, size: 20),
+              ],
+            ]),
+            if (_avisoLectura != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(_avisoLectura!,
+                    style: const TextStyle(color: AppColors.warning, fontSize: 13)),
+              ),
+
+            const SizedBox(height: 20),
             // ── Lo que solo a veces se ve ──────────────────────────────────
             const Text('Si se ven', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
                 color: AppColors.textPrimary)),
@@ -558,10 +719,20 @@ class _FichaPosicionState extends State<_FichaPosicion> {
                 style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
             const SizedBox(height: 10),
             TextField(controller: _serie,
-                decoration: const InputDecoration(labelText: 'Número de serie (opcional)')),
+                decoration: InputDecoration(
+                  labelText: 'Número de serie (opcional)',
+                  helperText: _dudosos.contains('numero_serie')
+                      ? 'Leído de la foto con poca seguridad: compruébalo' : null,
+                  helperStyle: const TextStyle(color: AppColors.warning),
+                )),
             const SizedBox(height: 10),
             TextField(controller: _dot, keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'DOT (opcional)', hintText: 'p. ej. 1422')),
+                decoration: InputDecoration(
+                  labelText: 'DOT (opcional)', hintText: 'p. ej. 1422',
+                  helperText: _dudosos.contains('dot')
+                      ? 'Leído de la foto con poca seguridad: compruébalo' : null,
+                  helperStyle: const TextStyle(color: AppColors.warning),
+                )),
             const SizedBox(height: 10),
             TextField(controller: _observaciones, maxLines: 2,
                 decoration: const InputDecoration(labelText: 'Observaciones (opcional)')),
@@ -656,4 +827,178 @@ class _Nota extends StatelessWidget {
         ),
         child: Text(texto, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
       );
+}
+
+/// El repaso antes de cerrar el alta.
+///
+/// Una sola pantalla con todo lo que se va a guardar, y cada rueda abrible
+/// para corregirla sin salir de aquí. Cerrar el alta deja al vehículo
+/// operativo y mete sus gomas en los informes de desgaste: diez segundos de
+/// repaso valen más que deshacer una operación después.
+class _Resumen extends StatelessWidget {
+  final String matricula;
+  final List<Map<String, dynamic>> posiciones;
+  final Map<String, _Estado> estado;
+  final double? minimoMm;
+  final num? km;
+  final String origenKm;
+  final Future<void> Function(Map<String, dynamic>) onCorregir;
+
+  const _Resumen({
+    required this.matricula,
+    required this.posiciones,
+    required this.estado,
+    required this.minimoMm,
+    required this.km,
+    required this.origenKm,
+    required this.onCorregir,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final sinPresion = posiciones.where((p) => !(estado[p['id']] ?? const _Estado()).presionMedida).length;
+    final bajoMinimo = posiciones.where((p) {
+      final e = estado[p['id']] ?? const _Estado();
+      return e.profundidad != null && minimoMm != null && e.profundidad! <= minimoMm!;
+    }).length;
+
+    return Scaffold(
+      appBar: AppBar(title: Text('$matricula · Repasar')),
+      body: SafeArea(
+        child: Column(children: [
+          Expanded(child: ListView(padding: const EdgeInsets.all(16), children: [
+            // Los avisos, arriba y sin dramatismo: ninguno impide cerrar.
+            if (bajoMinimo > 0)
+              _Nota('$bajoMinimo rueda${bajoMinimo == 1 ? '' : 's'} por debajo del mínimo de la '
+                  'empresa. Se puede cerrar igual: queda anotado y saldrá en los informes.'),
+            if (sinPresion > 0)
+              _Nota('$sinPresion rueda${sinPresion == 1 ? '' : 's'} sin presión medida. No hace '
+                  'falta para cerrar; se guarda como "no medida", que no es lo mismo que cero.'),
+
+            Container(
+              margin: const EdgeInsets.only(bottom: 14),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.cardBorder),
+              ),
+              child: Row(children: [
+                const Icon(Icons.speed, size: 18, color: AppColors.textSecondary),
+                const SizedBox(width: 10),
+                Expanded(child: Text(
+                  km != null
+                      ? '${km!.round()} km · ${origenKm == 'telematica' ? 'telemática' : 'a mano'}'
+                      : 'Sin kilómetros',
+                  style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600),
+                )),
+              ]),
+            ),
+
+            for (final p in posiciones) _Fila(
+              posicion: p,
+              estado: estado[p['id']] ?? const _Estado(),
+              bajoMinimo: minimoMm != null &&
+                  ((estado[p['id']] ?? const _Estado()).profundidad ?? 99) <= minimoMm!,
+              onTap: () => onCorregir(p),
+            ),
+            const SizedBox(height: 12),
+          ])),
+          SafeArea(
+            top: false,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              decoration: const BoxDecoration(
+                color: AppColors.surface,
+                border: Border(top: BorderSide(color: AppColors.cardBorder)),
+              ),
+              child: Row(children: [
+                Expanded(child: SizedBox(
+                  height: 56,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Seguir corrigiendo', style: TextStyle(fontSize: 15)),
+                  ),
+                )),
+                const SizedBox(width: 12),
+                Expanded(flex: 2, child: SizedBox(
+                  height: 56,
+                  child: FilledButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: const Text('Finalizar alta y revisión inicial',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                  ),
+                )),
+              ]),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Una rueda en el repaso. Se toca y se abre para corregirla.
+class _Fila extends StatelessWidget {
+  final Map<String, dynamic> posicion;
+  final _Estado estado;
+  final bool bajoMinimo;
+  final VoidCallback onTap;
+  const _Fila({required this.posicion, required this.estado, required this.bajoMinimo, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    // La identidad individual de la goma: el número interno es lo que la
+    // distingue de otra igual, tenga o no número de serie legible.
+    final identidad = [
+      if (estado.numeroInterno != null) estado.numeroInterno,
+      if ((estado.numeroSerie ?? '').isNotEmpty) 'S/N ${estado.numeroSerie}',
+      if ((estado.dot ?? '').isNotEmpty) 'DOT ${estado.dot}',
+    ].join(' · ');
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: bajoMinimo ? AppColors.danger : AppColors.cardBorder),
+        ),
+        child: Row(children: [
+          SizedBox(
+            width: 66,
+            child: Text(posicion['codigo'] as String? ?? '',
+                style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+          ),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(estado.etiqueta ?? 'Sin neumático',
+                style: const TextStyle(color: AppColors.textPrimary)),
+            if (identidad.isNotEmpty)
+              Text(identidad, style: const TextStyle(color: AppColors.textHint, fontSize: 12)),
+          ])),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text(estado.profundidad != null ? '${estado.profundidad} mm' : '—',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: bajoMinimo ? AppColors.danger : AppColors.textPrimary,
+                )),
+            Text(
+              // «No medida» y una presión de 0 bar son cosas distintas, y aquí
+              // se ven distintas.
+              estado.presionMedida ? '${estado.presion} bar' : 'presión no medida',
+              style: TextStyle(
+                color: estado.presionMedida ? AppColors.textSecondary : AppColors.warning,
+                fontSize: 12,
+              ),
+            ),
+          ]),
+          const SizedBox(width: 6),
+          const Icon(Icons.chevron_right, color: AppColors.textHint, size: 20),
+        ]),
+      ),
+    );
+  }
 }
