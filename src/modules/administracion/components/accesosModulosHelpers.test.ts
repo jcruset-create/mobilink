@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accesosAPayload, estadoInicialAccesos } from "./accesosModulos";
+import { accesosAPayload, estadoInicialAccesos } from "./accesosModulosHelpers";
 import { MODULOS_APP } from "../config/modulosApp";
 
 const CORE = MODULOS_APP.find((m) => m.key === "sea-core")!;

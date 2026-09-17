@@ -13,7 +13,7 @@ import {
 import AccesosModulos from "../../administracion/components/AccesosModulos";
 import {
   accesosAPayload, estadoInicialAccesos, type AccesoEdit,
-} from "../../administracion/components/accesosModulos";
+} from "../../administracion/components/accesosModulosHelpers";
 import { usuarioSugerido } from "./usuarioSugerido";
 
 type Empleado = {
