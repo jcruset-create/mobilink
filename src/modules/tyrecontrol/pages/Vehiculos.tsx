@@ -81,16 +81,52 @@ export default function Vehiculos() {
    */
   const [borrando, setBorrando] = useState<string | null>(null);
   const [aBorrar, setABorrar] = useState<Vehiculo | null>(null);
+  /*
+   * Por qué no se ha podido borrar, DENTRO del diálogo.
+   *
+   * Antes esto salía en el aviso de arriba de la pantalla, a media página del
+   * botón que se acababa de pulsar: el diálogo se quedaba abierto y sin decir
+   * nada, y parecía que el botón no hacía nada. El motivo tiene que estar
+   * donde está mirando quien lo pulsó.
+   */
+  const [motivoNoBorrado, setMotivoNoBorrado] = useState<string | null>(null);
+
+  /**
+   * Dar de baja, desde el mismo aviso que acaba de decir que no se puede
+   * borrar. Es lo que toca hacer con un vehículo que ya tiene vida, y
+   * obligar a cerrar el diálogo e ir a buscar «Desactivar» en su fila es
+   * hacerle dar un rodeo para llegar a la única salida que le queda.
+   *
+   * Usa `actualizarVehiculo`, que es exactamente lo que hace ese botón: no se
+   * inventa una segunda vía para lo mismo.
+   */
+  async function darDeBaja(v: Vehiculo) {
+    setBorrando(v.id);
+    try {
+      await actualizarVehiculo(v.id, { activo: false });
+      setABorrar(null); setMotivoNoBorrado(null);
+      setMsgPend(`✔ ${v.matricula} dado de baja`);
+      await cargarPendientes();
+      await cargar();
+    } catch (e: any) {
+      setMotivoNoBorrado(e?.message || "No se ha podido dar de baja");
+    } finally { setBorrando(null); }
+  }
 
   async function eliminar(v: Vehiculo) {
-    setBorrando(v.id); setMsgPend("");
+    setBorrando(v.id); setMsgPend(""); setMotivoNoBorrado(null);
     try {
       await eliminarVehiculo(v.id);
       setABorrar(null);
       setMsgPend(`✔ ${v.matricula} eliminado`);
       await cargarPendientes();
       await cargar();
-    } catch (e: any) { setMsgPend(e?.message || "No se ha podido eliminar"); }
+    } catch (e: any) {
+      // El mensaje de la base ya está escrito para una persona («tiene
+      // historial (2 revisión/es, …): dalo de baja para conservarlo»), así que
+      // se enseña tal cual en vez de traducirlo.
+      setMotivoNoBorrado(e?.message || "No se ha podido eliminar");
+    }
     finally { setBorrando(null); }
   }
 
@@ -599,14 +635,36 @@ export default function Vehiculos() {
         las matrículas se parecen.
       */}
       {aBorrar && (
-        <Modal title="Eliminar vehículo" onClose={() => setABorrar(null)}
+        <Modal title="Eliminar vehículo" onClose={() => { setABorrar(null); setMotivoNoBorrado(null); }}
           footer={<div className="flex justify-end gap-2">
-            <button onClick={() => setABorrar(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
-            <button onClick={() => void eliminar(aBorrar)} disabled={borrando === aBorrar.id}
-              className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
-              {borrando === aBorrar.id ? "Eliminando…" : "Eliminar de verdad"}
+            <button onClick={() => { setABorrar(null); setMotivoNoBorrado(null); }} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">
+              {motivoNoBorrado ? "Cerrar" : "Cancelar"}
             </button>
+            {/* Si ya se sabe que no se puede borrar, se retira el botón: dejarlo
+                ahí solo invita a pulsarlo otra vez para el mismo resultado. */}
+            {!motivoNoBorrado && (
+              <button onClick={() => void eliminar(aBorrar)} disabled={borrando === aBorrar.id}
+                className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+                {borrando === aBorrar.id ? "Eliminando…" : "Eliminar de verdad"}
+              </button>
+            )}
           </div>}>
+          {motivoNoBorrado && (
+            <div className="mb-3 rounded-lg border border-amber-600/50 bg-amber-500/10 p-3">
+              <div className="text-[12px] font-bold uppercase text-amber-300">No se puede eliminar</div>
+              <div className="mt-1 text-sm text-amber-100">{motivoNoBorrado}</div>
+              <div className="mt-2 text-[12px] text-amber-200/80">
+                Darlo de baja deja de sacarlo en las listas y conserva la vida de sus neumáticos.
+              </div>
+              <button
+                onClick={() => void darDeBaja(aBorrar)}
+                disabled={borrando === aBorrar.id}
+                className="mt-3 rounded-lg bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-500 disabled:opacity-50"
+              >
+                {borrando === aBorrar.id ? "Dando de baja…" : `Dar de baja ${aBorrar.matricula}`}
+              </button>
+            </div>
+          )}
           <div className="text-sm text-slate-200">
             Se va a borrar <span className="font-mono font-bold">{aBorrar.matricula}</span>
             {aBorrar.numero_unidad ? ` · unidad ${aBorrar.numero_unidad}` : ""} de{" "}
