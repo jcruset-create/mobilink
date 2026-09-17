@@ -16,6 +16,7 @@
 import type { Centimos } from "../domain/money.ts";
 import { formatearEuros } from "../domain/money.ts";
 import type { PropuestaFormaCobro } from "./classifier.ts";
+import type { PropuestaSeccion } from "./seccion.ts";
 import type {
   Aviso,
   CampoPropuesto,
@@ -60,9 +61,25 @@ function campo<T>(valor: T, confianza: number, vacio: T): CampoPropuesto<T> {
  * `propuesta` entra ya calculada por el clasificador y puede salir degradada:
  * esta función nunca ASCIENDE una propuesta, solo la baja.
  */
+/**
+ * La propuesta de sección cuando no hay ninguna: NO LO SÉ.
+ *
+ * Es el valor por defecto a propósito, y no «la sección de siempre». Un escaneo
+ * rehecho de una fila anterior a que esto existiera no propuso sección, y
+ * fabricarle una ahora sería inventar una decisión que nadie tomó.
+ */
+const SIN_SECCION: PropuestaSeccion = {
+  sectionId: null,
+  confianza: 0,
+  motivo: "",
+  autoSeleccionar: false,
+  reglaId: null,
+};
+
 export function validar(
   extraccion: ExtraccionNormalizada,
   propuesta: PropuestaFormaCobro,
+  seccion: PropuestaSeccion = SIN_SECCION,
   toleranciaCentimos: Centimos = TOLERANCIA_CENTIMOS
 ): PropuestaCobro {
   const avisos: Aviso[] = [];
@@ -167,6 +184,18 @@ export function validar(
     ? { ...propuesta, autoSeleccionar: false }
     : propuesta;
 
+  /*
+   * La sección se degrada igual, y con más motivo: un aviso grave dice que hay
+   * algo raro en el papel, y cambiar solo el negocio al que va el dinero es
+   * precisamente lo que nadie miraría después.
+   *
+   * Se conserva la PROPUESTA —sigue siendo información útil— y lo que se apaga
+   * es que se marque sola. Misma degradación, mismo motivo.
+   */
+  const seccionPropuesta: PropuestaSeccion = hayGraves
+    ? { ...seccion, autoSeleccionar: false }
+    : seccion;
+
   const nombreCliente = extraccion.cliente.nombre;
 
   return {
@@ -176,6 +205,7 @@ export function validar(
     proveedor: campo(extraccion.emisor.nombre, extraccion.confianza.emisor, null),
     concepto: campo(extraccion.concepto, extraccion.confianza.concepto, null),
     formaCobro,
+    seccion: seccionPropuesta,
     importeCuadra,
     avisos,
     // Lo rellena el servicio si el histórico dice que ya se cobró: aquí no se

@@ -1689,6 +1689,49 @@ export function createCashRouter(): Router {
     })
   );
 
+  // ── Reglas de sección: qué papel es del taller y cuál de la gasolinera ────
+  //
+  // Leer es permiso de vista porque la pantalla de Cobros enseña el motivo de
+  // la propuesta. Escribir es de configuración: de esta tabla depende a qué
+  // negocio se imputa el dinero.
+
+  r.get(
+    "/section-rules",
+    exigirPermiso("cash.view"),
+    ruta(async (req, res) => {
+      res.json({ reglas: await config.listarReglasSeccion(req.authCtx!.empresaId) });
+    })
+  );
+
+  r.put(
+    "/section-rules",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        regla: await config.guardarReglaSeccion(contexto(req), {
+          campo: b.campo,
+          patron: typeof b.patron === "string" ? b.patron : "",
+          sectionId: entero(b.sectionId, "sectionId"),
+          confianza: b.confianza,
+          autoSeleccionar: typeof b.autoSeleccionar === "boolean" ? b.autoSeleccionar : undefined,
+          prioridad: b.prioridad != null ? entero(b.prioridad, "prioridad") : undefined,
+          activa: typeof b.activa === "boolean" ? b.activa : undefined,
+          notas: typeof b.notas === "string" ? b.notas : undefined,
+        }),
+      });
+    })
+  );
+
+  r.delete(
+    "/section-rules/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      await config.borrarReglaSeccion(contexto(req), enteroPositivo(req.params.id, "id"));
+      res.status(204).end();
+    })
+  );
+
   r.post(
     "/payment-rules",
     exigirPermiso("cash.configure"),

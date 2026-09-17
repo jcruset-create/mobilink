@@ -21,6 +21,7 @@ import { nombreDeCentro } from "./hierarchy.ts";
 import { entidadDeIban, ibanValido, normalizarIban } from "./domain/bankaccount.ts";
 import { BANCOS_SEMILLA, logoDeSemilla } from "./domain/banks.ts";
 import { etiquetaNormalizada } from "./domain/cotejo.ts";
+import type { CampoSeccion } from "./invoice-scan/seccion.ts";
 import type { CampoRegla } from "./invoice-scan/classifier.ts";
 import {
   CODIGO_MAX,
@@ -2332,4 +2333,188 @@ export async function borrarEquivalenciaErp(ctx: Contexto, id: number): Promise<
   if (!rowCount) {
     throw new ErrorCaja("NO_ENCONTRADA", "Esa equivalencia ya no existe.", 404);
   }
+}
+
+// ── Reglas de sección: qué papel es del taller y cuál de la gasolinera ───────
+//
+// Gemelas de las reglas de forma de cobro y con la misma forma, pero su propio
+// maestro: la sección la dice QUIÉN EMITE el papel, la forma de cobro la dice
+// el resguardo. Son dos lecturas distintas del mismo folio y conviene que se
+// puedan tocar por separado.
+
+export type ReglaSeccionConfig = {
+  id: number;
+  campo: CampoSeccion;
+  patron: string;
+  sectionId: number;
+  /** Nombre de la sección, para la pantalla. Vacío si ya no está en el catálogo. */
+  seccionNombre: string;
+  /** La sección existe Y está activa. Si no, la regla no propone nada. */
+  seccionVigente: boolean;
+  confianza: number;
+  autoSeleccionar: boolean;
+  prioridad: number;
+  activa: boolean;
+  notas: string;
+};
+
+const CAMPOS_SECCION: readonly CampoSeccion[] = [
+  "CIF_EMISOR",
+  "NOMBRE_EMISOR",
+  "SERIE",
+  "CONCEPTO",
+];
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function aReglaSeccion(r: any): ReglaSeccionConfig {
+  return {
+    id: r.id,
+    campo: r.campo,
+    patron: r.patron,
+    sectionId: r.section_id,
+    seccionNombre: r.seccion_nombre ?? "",
+    seccionVigente: Boolean(r.seccion_nombre) && Boolean(r.seccion_activa),
+    // NUMERIC llega como texto para no perder precisión.
+    confianza: Number(r.confianza),
+    autoSeleccionar: r.auto_seleccionar,
+    prioridad: r.prioridad,
+    activa: r.activa,
+    notas: r.notas ?? "",
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * Todas las reglas, con el estado real de la sección a la que apuntan.
+ *
+ * El LEFT JOIN no es un adorno, y ya nos costó una prueba mal escrita en las
+ * equivalencias del ERP: sin él, una regla que apunta a una sección BORRADA
+ * desaparecería de la pantalla y nadie entendería por qué el escáner dejó de
+ * proponer. Sale, y sale marcada.
+ */
+export async function listarReglasSeccion(empresaId: string): Promise<ReglaSeccionConfig[]> {
+  const { rows } = await pool.query(
+    `SELECT r.*, s.nombre AS seccion_nombre, s.activa AS seccion_activa
+       FROM cash_section_rules r
+       LEFT JOIN cash_sections s
+              ON s.empresa_id = r.empresa_id AND s.id = r.section_id
+      WHERE r.empresa_id = $1
+      ORDER BY r.activa DESC, r.prioridad, r.id`,
+    [empresaId]
+  );
+  return rows.map(aReglaSeccion);
+}
+
+function exigirCampoSeccion(valor: unknown): CampoSeccion {
+  if (typeof valor !== "string" || !CAMPOS_SECCION.includes(valor as CampoSeccion)) {
+    throw new ErrorCaja(
+      "ENTRADA_NO_VALIDA",
+      `El campo tiene que ser uno de: ${CAMPOS_SECCION.join(", ")}.`,
+      400
+    );
+  }
+  return valor as CampoSeccion;
+}
+
+export async function guardarReglaSeccion(
+  ctx: Contexto,
+  datos: {
+    id?: number;
+    campo: unknown;
+    patron: string;
+    sectionId: number;
+    confianza?: unknown;
+    autoSeleccionar?: boolean;
+    prioridad?: number;
+    activa?: boolean;
+    notas?: string;
+  }
+): Promise<ReglaSeccionConfig> {
+  const campo = exigirCampoSeccion(datos.campo);
+  const patron = (datos.patron ?? "").trim();
+  if (!patron) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", "Falta el texto que tiene que reconocer.", 400);
+  }
+
+  /*
+   * La sección tiene que existir AHORA y ser de esta empresa. No hay clave
+   * ajena —el catálogo es editable y no debe tumbar reglas— así que la
+   * comprobación vive aquí. Sin ella se guardaría una regla que no propone
+   * nunca y no dice por qué.
+   */
+  const { rows: secciones } = await pool.query(
+    `SELECT nombre, activa FROM cash_sections WHERE id = $1 AND empresa_id = $2`,
+    [datos.sectionId, ctx.empresaId]
+  );
+  if (secciones.length === 0) {
+    throw new ErrorCaja("SECCION_NO_ENCONTRADA", "Esa sección no existe.", 400);
+  }
+
+  const confianza = datos.confianza === undefined ? 0.95 : exigirConfianza(datos.confianza);
+  const ahora = Date.now();
+
+  /*
+   * UPSERT sobre (campo, patrón): volver a guardar el mismo par lo REAPUNTA en
+   * vez de fallar. Es lo que se espera al corregir un mapeo desde la pantalla,
+   * y sin esto habría que borrar y crear para cambiar de sección, dejando el
+   * escáner sin esa regla mientras tanto.
+   */
+  const { rows } = await pool.query(
+    `INSERT INTO cash_section_rules
+       (empresa_id, campo, patron, section_id, confianza, auto_seleccionar,
+        prioridad, activa, notas, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
+     ON CONFLICT (empresa_id, campo, patron) DO UPDATE
+        SET section_id = EXCLUDED.section_id,
+            confianza = EXCLUDED.confianza,
+            auto_seleccionar = EXCLUDED.auto_seleccionar,
+            prioridad = EXCLUDED.prioridad,
+            activa = EXCLUDED.activa,
+            notas = EXCLUDED.notas,
+            updated_at_ms = EXCLUDED.updated_at_ms
+     RETURNING id`,
+    [
+      ctx.empresaId,
+      campo,
+      patron,
+      datos.sectionId,
+      confianza,
+      datos.autoSeleccionar !== false,
+      datos.prioridad ?? 100,
+      datos.activa !== false,
+      (datos.notas ?? "").trim() || null,
+      ahora,
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.section_rule.save",
+    entidad: "cash_section_rules",
+    entidadId: String(rows[0].id),
+    detalle: { campo, patron, sectionId: datos.sectionId, confianza },
+    ip: ctx.ip,
+  });
+
+  return (await listarReglasSeccion(ctx.empresaId)).find((r) => r.id === rows[0].id)!;
+}
+
+export async function borrarReglaSeccion(ctx: Contexto, id: number): Promise<void> {
+  const { rowCount } = await pool.query(
+    `DELETE FROM cash_section_rules WHERE id = $1 AND empresa_id = $2`,
+    [id, ctx.empresaId]
+  );
+  if (!rowCount) {
+    throw new ErrorCaja("NO_ENCONTRADA", "Esa regla ya no existe.", 404);
+  }
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.section_rule.delete",
+    entidad: "cash_section_rules",
+    entidadId: String(id),
+    detalle: {},
+    ip: ctx.ip,
+  });
 }

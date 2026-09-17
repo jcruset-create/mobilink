@@ -1517,6 +1517,47 @@ export async function initCash(): Promise<void> {
   `);
 
   /*
+   * ── Reglas de SECCIÓN: qué papel es del taller y cuál de la gasolinera ────
+   *
+   * Gemela de `cash_payment_rules` y con la misma forma, pero tabla aparte a
+   * propósito. Las dos decisiones se leen de sitios distintos del papel —la
+   * sección la dice QUIÉN EMITE, la forma de cobro la dice el resguardo— y
+   * cambian por motivos distintos. Juntarlas haría que editar una moviera las
+   * dos, que es la clase de acoplamiento que se descubre tarde y mal.
+   *
+   * Sin clave ajena a `cash_sections`, mismo criterio que el resto del módulo:
+   * el catálogo es editable y una sección dada de baja no debe tumbar una
+   * regla. Que la sección siga activa se comprueba al clasificar, y si no lo
+   * está se dice en vez de callarse.
+   *
+   * Los cuatro campos son los que el extractor YA lee, y eso no es casualidad:
+   * lo que identifica al emisor se lee bien hoy, sin tocar el prompt.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cash_section_rules (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      campo TEXT NOT NULL
+        CHECK (campo IN ('CIF_EMISOR','NOMBRE_EMISOR','SERIE','CONCEPTO')),
+      patron TEXT NOT NULL,
+      section_id INTEGER NOT NULL,
+      /* 0..1. Es el techo de la propuesta: nunca sube por encima de esto. */
+      confianza NUMERIC(3,2) NOT NULL DEFAULT 0.95
+        CHECK (confianza >= 0 AND confianza <= 1),
+      /* Si además puede cambiar el chip de sección sola en la pantalla. */
+      auto_seleccionar BOOLEAN NOT NULL DEFAULT true,
+      prioridad INTEGER NOT NULL DEFAULT 100,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      notas TEXT,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, campo, patron)
+    );
+    CREATE INDEX IF NOT EXISTS cash_section_rules_empresa_idx
+      ON cash_section_rules(empresa_id, activa, prioridad);
+  `);
+
+  /*
    * El rastro de cada escaneo.
    *
    * Se guarda lo que dijo el modelo, lo que se entendió, lo que se propuso y
@@ -1576,6 +1617,21 @@ export async function initCash(): Promise<void> {
        tabla que ya existe, y sin esto el primer escaneo fallido después de
        actualizar reventaría al escribir su rastro. */
     ALTER TABLE cash_invoice_scans ADD COLUMN IF NOT EXISTS error TEXT;
+    /*
+     * Qué sección se propuso. Va aquí, detrás de la tabla y no arriba con las
+     * reglas: un ALTER sobre una tabla que todavía no existe revienta el
+     * arranque del servidor, y eso no lo caza ningún typecheck — lo cazó la
+     * primera ejecución contra PostgreSQL de verdad.
+     *
+     * Los escaneos anteriores se quedan con NULL, que es lo correcto: no se
+     * propuso nada porque esto no existía. Un cero parecería una decisión.
+     */
+    ALTER TABLE cash_invoice_scans
+      ADD COLUMN IF NOT EXISTS seccion_propuesta INTEGER,
+      ADD COLUMN IF NOT EXISTS seccion_confianza NUMERIC(3,2),
+      ADD COLUMN IF NOT EXISTS seccion_motivo TEXT,
+      ADD COLUMN IF NOT EXISTS seccion_regla_id INTEGER,
+      ADD COLUMN IF NOT EXISTS seccion_auto_seleccionada BOOLEAN;
   `);
 
   /*
