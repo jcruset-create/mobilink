@@ -101,6 +101,7 @@ import {
 } from "./cierre/finalizacion.ts";
 import { mountAsistente } from "./tyrecontrol/asistente.ts";
 import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
+import { mountEtiquetas } from "./tyrecontrol/etiquetas/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
@@ -19214,6 +19215,11 @@ mountAsistente(app, authenticate, requireModule("tyrecontrol"));
 // Identificar un neumático por la foto de su flanco durante una revisión.
 // Solo propone: guardar lo decide el técnico. Ver server/tyrecontrol/flanco/.
 mountFlanco(app, authenticate, requireModule("tyrecontrol"));
+
+// Etiquetado de números de serie: el mismo lector de flanco, pero devolviendo
+// solo el número. No crea neumáticos ni mueve stock. Ver
+// server/tyrecontrol/etiquetas/.
+mountEtiquetas(app, authenticate, requireModule("tyrecontrol"));
 
 // Parte de servicio: lectura por fotografías y el PDF del parte. Solo propone:
 // guardar lo decide el técnico, y aterriza en la intervención y los montajes

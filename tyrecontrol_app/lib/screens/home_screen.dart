@@ -6,6 +6,7 @@ import '../theme/app_theme.dart';
 import '../widgets/status_bar.dart';
 import 'alta_vehiculos_screen.dart';
 import 'analitica_screen.dart';
+import 'etiquetas_screen.dart';
 import 'identify_vehicle_screen.dart';
 import 'incidencias_screen.dart';
 import 'login_screen.dart';
@@ -36,6 +37,8 @@ class _HomeScreenState extends State<HomeScreen> {
     // El de vehículos pendientes de alta, por lo mismo: el badge del menú
     // tiene que llevar un número de verdad antes de que nadie lo mire.
     TyreControlApi.contarPendientesDeAlta();
+    // Y el de fotos de etiquetado sin revisar, igual.
+    TyreControlApi.contarEtiquetasPorRevisar();
     // Deja la sonda guardada vigilada (autoConnect): el técnico no la conecta
     // a mano, se enlaza sola al encenderla y se rearma si se apaga o se aleja.
     ProbeSession.instance.vigilar();
@@ -171,6 +174,23 @@ class _InicioTab extends StatelessWidget {
                 await Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const AltaVehiculosScreen()));
                 await TyreControlApi.contarPendientesDeAlta();
+              },
+            ),
+          ),
+          const SizedBox(height: 14),
+          // Etiquetar gomas nuevas: se fotografía el flanco y el número de
+          // serie se lee solo. NO da de alta neumáticos —eso sigue siendo del
+          // almacén—: prepara las etiquetas que se imprimen en el panel.
+          ValueListenableBuilder<int>(
+            valueListenable: TyreControlApi.etiquetasPendientesCount,
+            builder: (_, n, __) => _BigTile(
+              icon: Icons.qr_code_2_outlined,
+              label: n > 0 ? 'Etiquetar neumáticos ($n)' : 'Etiquetar neumáticos',
+              color: AppColors.tileVerdePastel,
+              onTap: () async {
+                await Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const EtiquetasScreen()));
+                await TyreControlApi.contarEtiquetasPorRevisar();
               },
             ),
           ),

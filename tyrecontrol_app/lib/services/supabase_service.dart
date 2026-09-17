@@ -1965,6 +1965,150 @@ class TyreControlApi {
     return Map<String, dynamic>.from(data as Map);
   }
 
+  // ── Etiquetado de números de serie ───────────────────────────
+  //
+  // Un operario fotografía el flanco de cada goma NUEVA, la IA lee su número
+  // de serie y en el panel se imprime la etiqueta. ESTO NO DA DE ALTA
+  // NEUMÁTICOS: no crea nada en tc_neumaticos, no monta, no mueve stock y no
+  // genera coste. Solo guarda qué se fotografió y qué se leyó.
+
+  /// Fotos del cliente activo pendientes de que alguien las revise. Para el
+  /// contador del menú.
+  static final ValueNotifier<int> etiquetasPendientesCount = ValueNotifier<int>(0);
+
+  /// Abre un lote y devuelve `{id, codigo}`.
+  ///
+  /// El código lo genera la BASE y no la tablet: dos operarios abriendo lote a
+  /// la vez se pisarían el número, y el unique de la tabla es el que lo
+  /// garantiza de verdad.
+  static Future<Map<String, dynamic>> abrirLoteEtiquetas() async {
+    final empresa = empresaActivaId;
+    if (empresa == null) throw Exception('Elige antes un cliente');
+    final data = await _db.rpc('tc_etiquetas_abrir_lote', params: {'p_empresa': empresa});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Los lotes del cliente activo, con lo que lleva cada uno.
+  static Future<List<Map<String, dynamic>>> lotesDeEtiquetas({int limite = 30}) async {
+    final empresa = empresaActivaId;
+    if (empresa == null) return [];
+    final data = await _db
+        .from('tc_etiquetas_lote')
+        .select('id, codigo, estado, created_at, cerrado_at, '
+            'tc_etiquetas_foto(id, estado)')
+        .eq('empresa_id', empresa)
+        .order('created_at', ascending: false)
+        .limit(limite);
+    return (data as List).map((e) {
+      final m = Map<String, dynamic>.from(e as Map);
+      final fotos = ((m['tc_etiquetas_foto'] as List?) ?? const [])
+          .map((f) => Map<String, dynamic>.from(f as Map))
+          .toList();
+      m['fotos'] = fotos.length;
+      m['por_revisar'] = fotos
+          .where((f) => f['estado'] == 'pendiente' || f['estado'] == 'revisar' || f['estado'] == 'no_detectada')
+          .length;
+      m['confirmadas'] = fotos.where((f) => f['estado'] == 'confirmada').length;
+      m['impresas'] = fotos.where((f) => f['estado'] == 'impresa').length;
+      return m;
+    }).toList();
+  }
+
+  /// Solo el contador, para el menú. Si falla, deja el último valor bueno.
+  static Future<int> contarEtiquetasPorRevisar() async {
+    try {
+      final empresa = empresaActivaId;
+      if (empresa == null) {
+        etiquetasPendientesCount.value = 0;
+        return 0;
+      }
+      final data = await _db
+          .from('tc_etiquetas_foto')
+          .select('id')
+          .eq('empresa_id', empresa)
+          .inFilter('estado', ['pendiente', 'revisar', 'no_detectada']);
+      etiquetasPendientesCount.value = (data as List).length;
+    } catch (_) { /* se conserva el último valor */ }
+    return etiquetasPendientesCount.value;
+  }
+
+  /// Las fotos de un lote, para la pantalla de captura.
+  static Future<List<Map<String, dynamic>>> fotosDeLote(String loteId) async {
+    final data = await _db
+        .from('tc_etiquetas_foto')
+        .select()
+        .eq('lote_id', loteId)
+        .order('created_at');
+    return (data as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  /// La foto de la goma. Mismo bucket que el resto: no se monta otro sistema
+  /// de archivos ni otro bucket por módulo.
+  static Future<String> subirFotoEtiqueta(XFile file, {required String loteId}) =>
+      _subirBytes('etiquetas/$loteId/${DateTime.now().microsecondsSinceEpoch}.${extensionDe(file)}', file);
+
+  /// Lee el número de serie de la foto. Devuelve lo que la IA PROPONE.
+  ///
+  /// Si el servicio no responde, devuelve `estado: 'pendiente'` con su aviso:
+  /// la foto se guarda igual y se lee después o se escribe a mano. Perder la
+  /// foto porque la red falló sería perder el trabajo del operario.
+  static Future<Map<String, dynamic>> leerSerieEtiqueta(String imagenUrl) async {
+    try {
+      final r = await http.post(
+        Uri.parse('$kBackendUrl/api/tyrecontrol/etiquetas/leer'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken',
+        },
+        body: jsonEncode({'imagen_url': imagenUrl}),
+      ).timeout(const Duration(seconds: 60));
+      final cuerpo = jsonDecode(r.body);
+      if (r.statusCode != 200) {
+        return {'serie': null, 'estado': 'pendiente', 'dudoso': false,
+                'aviso': (cuerpo is Map ? cuerpo['error'] : null) ?? 'No se ha podido leer el número'};
+      }
+      return Map<String, dynamic>.from(cuerpo as Map);
+    } catch (_) {
+      return {'serie': null, 'estado': 'pendiente', 'dudoso': false,
+              'aviso': 'Sin conexión con el lector: la foto queda guardada'};
+    }
+  }
+
+  /// Guarda la foto con lo que se haya leído. Nunca la confirma: confirmar es
+  /// de una persona, en el panel.
+  static Future<Map<String, dynamic>> guardarFotoEtiqueta({
+    required String loteId,
+    required String fotoUrl,
+    String? serieDetectada,
+    num? confianza,
+    bool dudoso = false,
+    String estado = 'pendiente',
+  }) async {
+    final empresa = empresaActivaId;
+    if (empresa == null) throw Exception('Elige antes un cliente');
+    final data = await _db.from('tc_etiquetas_foto').insert({
+      'lote_id': loteId,
+      'empresa_id': empresa,
+      'foto_url': fotoUrl,
+      if (serieDetectada != null && serieDetectada.trim().isNotEmpty)
+        'serie_detectada': serieDetectada.trim(),
+      if (confianza != null) 'confianza': confianza,
+      'dudoso': dudoso,
+      'estado': estado,
+    }).select().single();
+    return Map<String, dynamic>.from(data);
+  }
+
+  /// Cierra el lote: el operario ha terminado la tanda.
+  ///
+  /// No imprime ni confirma nada; solo dice que no van a llegar más fotos.
+  static Future<void> cerrarLoteEtiquetas(String loteId) async {
+    await _db.from('tc_etiquetas_lote').update({
+      'estado': 'cerrado',
+      'cerrado_at': DateTime.now().toUtc().toIso8601String(),
+    }).eq('id', loteId);
+  }
+
   // ── Kilómetros por telemetría ────────────────────────────────
   /// El cuentakilómetros del vehículo AHORA, sea cual sea su telemática.
   ///
