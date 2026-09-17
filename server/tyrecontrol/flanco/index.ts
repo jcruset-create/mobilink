@@ -13,6 +13,30 @@ import { LectorFlancoIA, type LectorFlanco } from "./lectorFlanco.ts";
  * Sigue el molde del asistente: un /estado para que el APK sepa si puede
  * ofrecer el botón, y una llamada que hace el trabajo.
  */
+/**
+ * Qué fotos se aceptan para leer.
+ *
+ * Solo la que el APK acaba de subir a Storage, o una que venga dentro de la
+ * propia petición. Aceptar cualquier URL convertiría estos endpoints en un
+ * descargador de lo que le pidan desde fuera.
+ *
+ * Está aquí y exportada porque la usan dos endpoints —el flanco y el
+ * etiquetado— y dos validadores que se separan acaban aceptando cosas
+ * distintas.
+ */
+export function motivoFotoNoValida(imagenUrl: string): { estado: number; error: string } | null {
+  if (!imagenUrl) return { estado: 400, error: "Falta la foto" };
+  const esDataUri = imagenUrl.startsWith("data:image/");
+  const esNuestra = /^https:\/\/[a-z0-9-]+\.supabase\.co\//i.test(imagenUrl);
+  if (!esDataUri && !esNuestra) {
+    return { estado: 400, error: "La foto tiene que estar subida a Mobilink" };
+  }
+  if (esDataUri && imagenUrl.length > 12_000_000) {
+    return { estado: 413, error: "La foto es demasiado grande" };
+  }
+  return null;
+}
+
 export function mountFlanco(app: Express, ...guards: RequestHandler[]): void {
   const lector: LectorFlanco = new LectorFlancoIA();
 
@@ -28,19 +52,8 @@ export function mountFlanco(app: Express, ...guards: RequestHandler[]): void {
         return res.status(503).json({ error: "Identificación por foto no disponible (falta OPENAI_API_KEY)" });
       }
       const imagenUrl = String(req.body?.imagen_url ?? "").trim();
-      if (!imagenUrl) return res.status(400).json({ error: "Falta la foto" });
-
-      // Solo la foto que el APK acaba de subir a Storage, o una que venga
-      // dentro de la propia petición. Aceptar cualquier URL convertiría este
-      // endpoint en un descargador de lo que le pidan desde fuera.
-      const esDataUri = imagenUrl.startsWith("data:image/");
-      const esNuestra = /^https:\/\/[a-z0-9-]+\.supabase\.co\//i.test(imagenUrl);
-      if (!esDataUri && !esNuestra) {
-        return res.status(400).json({ error: "La foto tiene que estar subida a Mobilink" });
-      }
-      if (esDataUri && imagenUrl.length > 12_000_000) {
-        return res.status(413).json({ error: "La foto es demasiado grande" });
-      }
+      const malaFoto = motivoFotoNoValida(imagenUrl);
+      if (malaFoto) return res.status(malaFoto.estado).json({ error: malaFoto.error });
 
       const propuesta = await lector.leer(imagenUrl);
       // 200 aunque no se haya podido leer: no es un error del servidor, es una

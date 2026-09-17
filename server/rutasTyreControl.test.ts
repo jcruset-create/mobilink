@@ -51,7 +51,9 @@ describe("orden de las rutas de /api/tyrecontrol", () => {
     expect(veces).toBe(1);
   });
 
-  for (const mount of ["mountAsistente", "mountFlanco", "mountParte"]) {
+  const MONTAJES = ["mountAsistente", "mountFlanco", "mountParte", "mountEtiquetas"];
+
+  for (const mount of MONTAJES) {
     it(`${mount} va antes del router del panel, o sus rutas dan 401`, () => {
       const donde = enCodigo(new RegExp(`^${mount}\\(app,`, "m"));
       expect(donde, `no se encuentra la llamada a ${mount}(app, …)`).toBeGreaterThan(-1);
@@ -61,7 +63,7 @@ describe("orden de las rutas de /api/tyrecontrol", () => {
   }
 
   it("cada una sigue llevando su propio guarda: adelantarlas no las abre", () => {
-    for (const mount of ["mountAsistente", "mountFlanco", "mountParte"]) {
+    for (const mount of MONTAJES) {
       const linea = fuente
         .slice(enCodigo(new RegExp(`^${mount}\\(app,`, "m")))
         .split(";")[0];
