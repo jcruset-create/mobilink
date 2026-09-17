@@ -27,6 +27,7 @@ import {
   tdCls,
   inputCls,
   btnPrimary,
+  btnSecondary,
   btnMini,
 } from "../components/ui";
 import { MEDIDA_RECOMENDADA, PROPORCION_BOTON } from "../components/PaymentMethodPicker";
@@ -85,6 +86,7 @@ export default function Configuracion() {
       <CuentasBancarias />
       <CorreoCentral />
       <Secciones />
+      <ReglasSeccion />
       <ConceptosDeGasto />
       <FormasPago />
       <EquivalenciasErp />
@@ -94,6 +96,181 @@ export default function Configuracion() {
     </div>
   );
 }
+
+// ── Reglas de sección: qué papel es del taller y cuál de la gasolinera ──────
+
+/**
+ * Cómo reconoce el escáner a qué negocio va un cobro.
+ *
+ * Solo se enseña con más de una sección activa: en un taller con un solo
+ * negocio esto no configura nada.
+ */
+function ReglasSeccion() {
+  const { puede, seccionesActivas } = useCash();
+  const [reglas, setReglas] = useState<api.ReglaSeccionConfig[]>([]);
+  const [campo, setCampo] = useState("CIF_EMISOR");
+  const [patron, setPatron] = useState("");
+  const [sectionId, setSectionId] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const editable = puede("cash.configure");
+
+  const cargar = useCallback(async () => {
+    try {
+      setReglas((await api.reglasSeccion()).reglas);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando las reglas de sección");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function accion(fn: () => Promise<unknown>) {
+    setOcupado(true);
+    setError("");
+    try {
+      await fn();
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "La acción ha fallado");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  if (seccionesActivas.length < 2) return null;
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Reglas de sección
+      </h2>
+      <p className="text-[12px] text-slate-500">
+        Cómo reconoce el escáner a qué negocio va un cobro. Al escanear un ticket del surtidor, la
+        sección cambia sola a Gasolinera aunque estuvieras en Taller.
+      </p>
+      <p className="text-[12px] text-slate-500">
+        Lo más fiable es el <b>NIF del emisor</b>: identifica al establecimiento y no cambia aunque
+        cambien el rótulo o la numeración. Lo que <b>no</b> se reconozca se propone como la sección
+        por defecto, pero sin cambiar el chip solo — no reconocer un papel no es lo mismo que saber
+        que es del taller.
+      </p>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {editable && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Mirar en
+            </span>
+            <select value={campo} onChange={(e) => setCampo(e.target.value)} className={inputCls}>
+              <option value="CIF_EMISOR">NIF del emisor</option>
+              <option value="NOMBRE_EMISOR">Nombre del emisor</option>
+              <option value="SERIE">Número de documento</option>
+              <option value="CONCEPTO">Concepto</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Que ponga
+            </span>
+            <input
+              value={patron}
+              onChange={(e) => setPatron(e.target.value)}
+              placeholder="A43044379"
+              className={inputCls}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Es de
+            </span>
+            <select
+              value={sectionId ?? ""}
+              onChange={(e) => setSectionId(e.target.value ? Number(e.target.value) : null)}
+              className={inputCls}
+            >
+              <option value="">Elegir…</option>
+              {seccionesActivas.map((sec) => (
+                <option key={sec.id} value={sec.id}>
+                  {sec.nombre}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            disabled={ocupado || !patron.trim() || sectionId == null}
+            onClick={() =>
+              void accion(async () => {
+                await api.guardarReglaSeccion({ campo, patron, sectionId: sectionId! });
+                setPatron("");
+                setSectionId(null);
+              })
+            }
+            className={btnPrimary}
+          >
+            Guardar
+          </button>
+        </div>
+      )}
+
+      <table className="w-full text-sm">
+        <thead>
+          <tr>
+            <th className={thCls}>Mirar en</th>
+            <th className={thCls}>Que ponga</th>
+            <th className={thCls}>Es de</th>
+            {editable && <th className={thCls} />}
+          </tr>
+        </thead>
+        <tbody>
+          {reglas.length === 0 && <EmptyRow cols={editable ? 4 : 3} text="Todavía no hay reglas." />}
+          {reglas.map((r) => (
+            <tr key={r.id}>
+              <td className={tdCls}>{ETIQUETA_CAMPO_SECCION[r.campo] ?? r.campo}</td>
+              <td className={`${tdCls} font-mono text-[12px]`}>{r.patron}</td>
+              <td className={tdCls}>
+                {r.seccionNombre || <span className="text-slate-500">—</span>}
+                {/*
+                  Una regla que apunta a una sección borrada o de baja SALE, y
+                  sale marcada. Esconderla sería lo cómodo y lo peor: el escáner
+                  dejaría de proponer y aquí no habría ni rastro del motivo.
+                */}
+                {!r.seccionVigente && (
+                  <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+                    sección no vigente
+                  </span>
+                )}
+              </td>
+              {editable && (
+                <td className={`${tdCls} text-right`}>
+                  <button
+                    disabled={ocupado}
+                    onClick={() => void accion(() => api.borrarReglaSeccion(r.id))}
+                    className={btnSecondary}
+                  >
+                    Borrar
+                  </button>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+const ETIQUETA_CAMPO_SECCION: Record<string, string> = {
+  CIF_EMISOR: "NIF del emisor",
+  NOMBRE_EMISOR: "Nombre del emisor",
+  SERIE: "Número de documento",
+  CONCEPTO: "Concepto",
+};
 
 // ── Equivalencias de formas de pago con el ERP ─────────────────────────────
 

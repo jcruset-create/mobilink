@@ -15,6 +15,7 @@
 
 import type { Centimos } from "../domain/money.ts";
 import { esCentimosValido } from "../domain/money.ts";
+import type { EvidenciaSeccion } from "./seccion.ts";
 import type { EvidenciaCobro } from "./classifier.ts";
 import type { ExtraccionCruda, ExtraccionNormalizada } from "./types.ts";
 
@@ -308,5 +309,26 @@ export function sinDatosDeTarjeta(cruda: ExtraccionCruda): ExtraccionCruda {
       tarjeta: cruda.recibo?.tarjeta ? `···${ultimosCuatro(cruda.recibo.tarjeta) ?? ""}` : null,
       texto: enmascararTarjetas(cruda.recibo?.texto ?? null),
     },
+  };
+}
+
+/**
+ * La evidencia que necesita el clasificador de SECCIÓN.
+ *
+ * Todo sale de lo que el extractor ya lee. No hace falta tocar el prompt del
+ * modelo para que esto funcione, y eso importa: lo que identifica al emisor
+ * —su NIF, su nombre— se lee bien hoy, mientras que leer las columnas del
+ * surtidor habría que enseñárselo y validarlo contra tickets de verdad.
+ */
+export function evidenciaDeSeccion(n: ExtraccionNormalizada): EvidenciaSeccion {
+  return {
+    cifEmisor: n.emisor.nif,
+    nombreEmisor: n.emisor.nombre,
+    numeroFactura: n.numeroFactura,
+    concepto: n.concepto,
+    baseCentimos: n.totales.baseCentimos,
+    ivaCentimos: n.totales.ivaCentimos,
+    totalCentimos: n.totales.totalCentimos,
+    confianzaEmisor: n.confianza.emisor,
   };
 }

@@ -1080,3 +1080,33 @@ export const borrarEquivalenciaErp = (id: number) =>
  */
 export const cotejarConErp = (sessionId: number, imagen: string) =>
   pedir<ResultadoCotejo>(`/sessions/${sessionId}/erp-reconcile`, json({ imagen }));
+
+// ── Reglas de sección: qué papel es del taller y cuál de la gasolinera ──────
+
+export type ReglaSeccionConfig = {
+  id: number;
+  campo: "CIF_EMISOR" | "NOMBRE_EMISOR" | "SERIE" | "CONCEPTO";
+  patron: string;
+  sectionId: number;
+  seccionNombre: string;
+  /** La sección existe Y está activa. Si no, la regla no propone nada. */
+  seccionVigente: boolean;
+  confianza: number;
+  autoSeleccionar: boolean;
+  prioridad: number;
+  activa: boolean;
+  notas: string;
+};
+
+export const reglasSeccion = () => pedir<{ reglas: ReglaSeccionConfig[] }>("/section-rules");
+
+export const guardarReglaSeccion = (datos: {
+  campo: string;
+  patron: string;
+  sectionId: number;
+  autoSeleccionar?: boolean;
+}) =>
+  pedir<{ regla: ReglaSeccionConfig }>("/section-rules", { ...json(datos), method: "PUT" });
+
+export const borrarReglaSeccion = (id: number) =>
+  pedir<void>(`/section-rules/${id}`, { method: "DELETE" });

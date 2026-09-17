@@ -352,6 +352,30 @@ export default function Cobros() {
       setModo(propuesta);
     }
 
+    /*
+     * La sección, con los mismos frenos que la forma de cobro: solo si el
+     * servidor lo marca como automático, solo si nadie la ha tocado a mano en
+     * esta pantalla, y solo si esa sección sigue activa.
+     *
+     * Esto es lo que rompe la inercia de `cash.ultima-seccion`: sin ello, el
+     * ticket del surtidor entra en Taller porque el chip se quedó ahí del
+     * cobro anterior, y el descuadre por sección aparece en el cierre sin nada
+     * que lo explique.
+     *
+     * Y el cambio SE VE: el panel entero se pone rojo con la gasolinera
+     * puesta. No hace falta leer nada para enterarse de que ha cambiado, que
+     * es la condición para que cambiar solo sea aceptable.
+     */
+    const seccionPropuesta = p.seccion?.sectionId ?? null;
+    if (
+      p.seccion?.autoSeleccionar &&
+      seccionPropuesta !== null &&
+      !tocados.has("seccion") &&
+      seccionesActivas.some((sec) => sec.id === seccionPropuesta)
+    ) {
+      setSeccionId(seccionPropuesta);
+    }
+
     setTocados(new Set());
   }
 
@@ -597,6 +621,13 @@ export default function Cobros() {
                       onClick={() => {
                         setSeccionId(sec.id);
                         localStorage.setItem(MEMORIA_SECCION, String(sec.id));
+                        /*
+                          Elegida a mano: a partir de aquí, un escaneo ya no la
+                          cambia sola. Mismo trato que los demás campos — lo que
+                          ha tecleado una persona manda sobre lo que propone el
+                          papel.
+                        */
+                        marcarTocado("seccion");
                       }}
                       disabled={guardando}
                       aria-pressed={seccionId === sec.id}

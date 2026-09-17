@@ -205,7 +205,7 @@ function Analizando() {
 
 /** El resultado, en dos líneas: qué se ha leído y qué falta por decidir. */
 function Resultado({ propuesta }: { propuesta: PropuestaEscaneo }) {
-  const { formasPago } = useCash();
+  const { formasPago, seccionesActivas } = useCash();
   const graves = propuesta.avisos.filter((a) => a.grave);
   const leves = propuesta.avisos.filter((a) => !a.grave);
   const recibo = propuesta.extra.recibo;
@@ -219,11 +219,34 @@ function Resultado({ propuesta }: { propuesta: PropuestaEscaneo }) {
     formasPago.find((f) => f.codigo === propuesta.formaCobro.formaPago)?.nombre ??
     propuesta.formaCobro.formaPago;
 
+  const nombreSeccion =
+    seccionesActivas.find((sec) => sec.id === propuesta.seccion?.sectionId)?.nombre ?? "";
+
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-2 text-[12px] font-medium text-emerald-300">
         <ScanText className="h-3.5 w-3.5" /> Factura analizada
       </div>
+
+      {/*
+        La sección propuesta, y solo cuando hay más de un negocio: en un taller
+        con una sola sección esto no es información, es ruido.
+
+        Se enseña SIEMPRE que haya propuesta, tanto si el chip ha cambiado solo
+        como si no, porque las dos cosas hay que poder verlas: que ha cambiado,
+        y por qué no ha cambiado.
+      */}
+      {seccionesActivas.length > 1 && propuesta.seccion?.sectionId != null && (
+        <div className="rounded-lg bg-slate-800/60 px-2.5 py-1.5 text-[11px] text-slate-300">
+          <div className="font-bold text-slate-200">
+            Sección: <strong>{nombreSeccion}</strong>
+            {propuesta.seccion.autoSeleccionar ? " — cambiada sola" : " — compruébala"}
+          </div>
+          {propuesta.seccion.motivo && (
+            <div className="mt-0.5 text-slate-400">{propuesta.seccion.motivo}</div>
+          )}
+        </div>
+      )}
 
       {recibo.detectado && (
         <div className="rounded-lg bg-slate-800/60 px-2.5 py-1.5 text-[11px] text-slate-300">

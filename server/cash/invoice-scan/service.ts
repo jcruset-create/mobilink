@@ -19,8 +19,9 @@ import pool from "../../db.ts";
 import { ErrorCaja } from "../errors.ts";
 import { formasPagoActivas } from "../config.ts";
 import { clasificar, type ReglaFormaCobro } from "./classifier.ts";
+import { clasificarSeccion, type ReglaSeccion } from "./seccion.ts";
 import { extractorIA, type DocumentoAdjunto, type ExtractorFacturas } from "./extractor.ts";
-import { evidenciaDeCobro, normalizar, sinDatosDeTarjeta } from "./normalize.ts";
+import { evidenciaDeCobro, evidenciaDeSeccion, normalizar, sinDatosDeTarjeta } from "./normalize.ts";
 import type { Aviso, ExtraccionNormalizada, PropuestaCobro } from "./types.ts";
 import { validar } from "./validate.ts";
 
@@ -102,6 +103,45 @@ export async function reglasDeEmpresa(empresaId: string): Promise<ReglaFormaCobr
   /* eslint-enable @typescript-eslint/no-explicit-any */
 }
 
+
+/** Las reglas de sección activas de la empresa, en el orden en que mandan. */
+export async function reglasSeccionDeEmpresa(empresaId: string): Promise<ReglaSeccion[]> {
+  const { rows } = await pool.query(
+    `SELECT id, campo, patron, section_id, confianza, auto_seleccionar, prioridad
+       FROM cash_section_rules
+      WHERE empresa_id = $1 AND activa
+      ORDER BY prioridad, id`,
+    [empresaId]
+  );
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  return rows.map((r: any) => ({
+    id: r.id,
+    campo: r.campo,
+    patron: r.patron,
+    sectionId: r.section_id,
+    // NUMERIC llega como texto para no perder precisión.
+    confianza: Number(r.confianza),
+    autoSeleccionar: r.auto_seleccionar,
+    prioridad: r.prioridad,
+  }));
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+}
+
+/** Las secciones activas y cuál es la de por defecto. */
+export async function seccionesDeEmpresa(
+  empresaId: string
+): Promise<{ activas: Set<number>; porDefecto: number | null }> {
+  const { rows } = await pool.query(
+    `SELECT id, por_defecto FROM cash_sections WHERE empresa_id = $1 AND activa`,
+    [empresaId]
+  );
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  return {
+    activas: new Set(rows.map((r: any) => r.id as number)),
+    porDefecto: (rows.find((r: any) => r.por_defecto)?.id as number) ?? null,
+  };
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+}
 
 export type EntradaEscaneo = {
   empresaId: string;
@@ -265,14 +305,27 @@ export async function escanearFactura(
 
   // El catálogo y las reglas, de la empresa y de ahora: una forma dada de baja
   // ayer no puede proponerse hoy.
-  const [formas, reglas] = await Promise.all([
+  const [formas, reglas, reglasSeccion, secciones] = await Promise.all([
     formasPagoActivas(entrada.empresaId),
     reglasDeEmpresa(entrada.empresaId),
+    reglasSeccionDeEmpresa(entrada.empresaId),
+    seccionesDeEmpresa(entrada.empresaId),
   ]);
   const catalogo = new Set(formas.filter((f) => f.enCobros).map((f) => f.codigo));
 
   const propuestaForma = clasificar(evidenciaDeCobro(normalizada), reglas, catalogo);
-  const propuesta = validar(normalizada, propuestaForma);
+  /*
+   * La sección se decide con la MISMA lectura y aparte de la forma de cobro.
+   * Son dos preguntas distintas sobre el mismo papel —de quién es el cobro y
+   * cómo se pagó— y ninguna de las dos debe poder mover a la otra.
+   */
+  const propuestaSeccion = clasificarSeccion(
+    evidenciaDeSeccion(normalizada),
+    reglasSeccion,
+    secciones.activas,
+    secciones.porDefecto
+  );
+  const propuesta = validar(normalizada, propuestaForma, propuestaSeccion);
 
   /*
    * El duplicado NO toca ya la preselección de la forma de cobro.
@@ -321,8 +374,11 @@ export async function escanearFactura(
     `INSERT INTO cash_invoice_scans
        (empresa_id, session_id, nombre, mime, tamano_bytes, sha256, motor, duracion_ms,
         extraccion_cruda, extraccion_normalizada, forma_pago_propuesta, forma_pago_confianza,
-        forma_pago_motivo, regla_id, auto_seleccionada, avisos, creado_por, creado_at_ms)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        forma_pago_motivo, regla_id, auto_seleccionada, avisos, creado_por, creado_at_ms,
+        seccion_propuesta, seccion_confianza, seccion_motivo, seccion_regla_id,
+        seccion_auto_seleccionada)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+             $19,$20,$21,$22,$23)
      RETURNING id`,
     [
       entrada.empresaId,
@@ -344,6 +400,11 @@ export async function escanearFactura(
       JSON.stringify(propuesta.avisos),
       entrada.userId,
       Date.now(),
+      propuesta.seccion.sectionId,
+      propuesta.seccion.confianza,
+      propuesta.seccion.motivo,
+      propuesta.seccion.reglaId,
+      propuesta.seccion.autoSeleccionar,
     ]
   );
 
