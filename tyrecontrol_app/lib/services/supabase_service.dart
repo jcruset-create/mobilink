@@ -370,10 +370,27 @@ class TyreControlApi {
   }
 
   // ── Revisiones ───────────────────────────────────────────────
+  /// Abre una revisión en borrador.
+  ///
+  /// [origenKm], [kmCapturadoAt] y [kmDesfaseMin] guardan DE DÓNDE salió el
+  /// kilometraje. Las columnas existen desde
+  /// `tyrecontrol_km_revision_procedencia.sql` y hasta ahora solo las rellenaba
+  /// la importación del CheckPoint: una revisión hecha con la tablet guardaba
+  /// el número y perdía cuándo se había leído.
+  ///
+  /// La diferencia no es teórica. Un 512.480 km leído tres minutos antes de la
+  /// revisión y el mismo 512.480 leído ocho horas antes son el mismo número y
+  /// no valen lo mismo, y sin la fecha son indistinguibles al mirar la fila.
   static Future<RevisionVehiculo> crearRevision({
     required String empresaId,
     required String vehiculoId,
     num? kmVehiculo,
+    String? origenKm,
+    DateTime? kmCapturadoAt,
+    /// Minutos entre la lectura y la revisión, CON signo: negativo si la
+    /// lectura es anterior, que es el caso bueno —no puede contener
+    /// kilómetros posteriores—. El valor absoluto borraría esa distinción.
+    int? kmDesfaseMin,
   }) async {
     final uid = _db.auth.currentUser?.id;
     final data = await _db
@@ -382,6 +399,9 @@ class TyreControlApi {
           'empresa_id': empresaId,
           'vehiculo_id': vehiculoId,
           'km_vehiculo': kmVehiculo,
+          if (origenKm != null) 'origen_km': origenKm,
+          if (kmCapturadoAt != null) 'km_capturado_at': kmCapturadoAt.toIso8601String(),
+          if (kmDesfaseMin != null) 'km_desfase_min': kmDesfaseMin,
           'tecnico_id': uid,
           'estado_revision': 'borrador',
         })
