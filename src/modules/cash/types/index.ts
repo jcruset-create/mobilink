@@ -802,6 +802,19 @@ export type PropuestaEscaneo = {
     autoSeleccionar: boolean;
     reglaId: number | null;
   };
+  /**
+   * Taller o gasolinera. Misma forma que `formaCobro` porque es el mismo tipo
+   * de decisión: el papel sugiere, la persona confirma.
+   *
+   * `sectionId` a null es NO LO SÉ, nunca «la de siempre».
+   */
+  seccion: {
+    sectionId: number | null;
+    confianza: number;
+    motivo: string;
+    autoSeleccionar: boolean;
+    reglaId: number | null;
+  };
   /** null = no hay justificante con el que comparar. */
   importeCuadra: boolean | null;
   avisos: AvisoEscaneo[];

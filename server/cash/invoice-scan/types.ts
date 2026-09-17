@@ -14,6 +14,7 @@
 
 import type { Centimos } from "../domain/money.ts";
 import type { PlantillaRecibo, PropuestaFormaCobro } from "./classifier.ts";
+import type { PropuestaSeccion } from "./seccion.ts";
 import type { CobroPrevio } from "../duplicates.ts";
 
 /** Lo que devuelve el modelo. Todo texto, todo opcional, nada calculado. */
@@ -174,6 +175,14 @@ export type PropuestaCobro = {
   proveedor: CampoPropuesto<string | null>;
   concepto: CampoPropuesto<string | null>;
   formaCobro: PropuestaFormaCobro;
+  /**
+   * Taller o gasolinera, para quien lleva dos negocios en un solo cajón.
+   *
+   * Hermana de `formaCobro` y con la misma forma, porque es el mismo tipo de
+   * decisión: el papel sugiere, la persona confirma. `sectionId` a null es NO
+   * LO SÉ, nunca «la de siempre».
+   */
+  seccion: PropuestaSeccion;
   /** null = no hay recibo con el que comparar. */
   importeCuadra: boolean | null;
   avisos: Aviso[];

@@ -1,7 +1,7 @@
 # Proponer la sección a partir del ticket: gasolinera o taller
 
-Prompt de trabajo. **No hay nada programado de esto todavía**: esto es lo que
-habría que hacer y, sobre todo, lo que NO.
+Prompt de trabajo. **Ya está programada la primera mitad**; al final hay un
+apartado con lo que entró y lo que no.
 
 ## 1. Lo que se pide
 
@@ -214,3 +214,47 @@ rojo:
 
 Y una de integración: guardar una regla por CIF, escanear el ticket entrando
 por Taller, y comprobar que la propuesta sale GASOLINERA con `autoSeleccionar`.
+
+
+---
+
+## 11. Lo que se ha construido (17/09/2026)
+
+Entró lo que funciona con lo que el extractor YA lee, que resultó ser bastante
+más de lo que parecía: `emisor.nif`, `emisor.nombre`, `numeroFactura`,
+`concepto` y los tres totales de IVA salen hoy de la lectura, sin tocar el
+prompt del modelo.
+
+| Pieza | Dónde |
+|---|---|
+| El clasificador, puro | `server/cash/invoice-scan/seccion.ts` |
+| Las reglas de la empresa | `cash_section_rules` + Configuración → Reglas de sección |
+| La propuesta al escanear | `PropuestaCobro.seccion`, hermana de `formaCobro` |
+| El chip que cambia solo | `Cobros.tsx`, con los mismos frenos que la forma de cobro |
+
+Cuatro campos de regla: NIF del emisor, nombre del emisor, número de documento
+y concepto. El NIF se compara **entero y sin puntuación**; los demás por
+trozos, igual que hace `classifier.ts` con comercio frente a adquirente.
+
+**La comprobación exacta sí entró**: `base + IVA = total`, al céntimo. Si no
+cuadra no se propone sección, porque con una cifra mal leída lo que se haya
+entendido del emisor tampoco es de fiar. Y no poder comprobarlo —un ticket
+recortado sin base— **no** es lo mismo que no cuadrar.
+
+### Lo que NO entró, y por qué
+
+Las dos señales estructurales: la columna `S/M` con su `NN/N` y el precio de
+tres decimales. **El extractor no lee las líneas de detalle**, así que primero
+hay que enseñárselo y validar la lectura contra tickets de verdad — y eso no se
+puede hacer a ojo desde aquí. Van aparte, y cuando entren no cambian nada de lo
+de arriba: son dos señales más, no otro diseño.
+
+Tampoco entró la comprobación `litros × precio`, por lo mismo: sin líneas de
+detalle no hay litros.
+
+### Un fallo que salió al probarlo
+
+El `ALTER TABLE` de las columnas nuevas estaba puesto **antes** de que
+`cash_invoice_scans` se creara, unas líneas más abajo en el mismo fichero. El
+typecheck no dice nada de eso; lo cazó la primera ejecución contra PostgreSQL
+de verdad, y habría reventado el arranque del servidor en una base nueva.
