@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import {
@@ -133,7 +133,7 @@ function BadgeGravedad({
 }) {
   if (gravedad === "ok") {
     return (
-      <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">
+      <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300">
         OK
       </span>
     );
@@ -141,14 +141,14 @@ function BadgeGravedad({
 
   if (gravedad === "critico") {
     return (
-      <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">
+      <span className="rounded-full bg-red-500/15 px-2 py-1 text-xs font-semibold text-red-300">
         Crítico
       </span>
     );
   }
 
   return (
-    <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">
+    <span className="rounded-full bg-amber-500/15 px-2 py-1 text-xs font-semibold text-amber-300">
       Aviso
     </span>
   );
@@ -768,266 +768,266 @@ export default function SistemaAlmacen() {
 
   if (cargandoPermisos) {
     return (
-      <div className="p-6 space-y-6">
-        <AlmacenMenu />
-
-        <div className="rounded-xl border bg-white p-6 text-sm text-gray-600">
-          Cargando permisos del usuario conectado...
+      <AlmacenLayoutOscuro>
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-6 text-sm text-slate-300">
+            Cargando permisos del usuario conectado...
+          </div>
         </div>
-      </div>
+      </AlmacenLayoutOscuro>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Salud del sistema</h1>
-          <p className="text-sm text-gray-500">
-            Comprobaciones de configuración, datos operativos, snapshots y reset
-            controlado del módulo.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={cargarSistema}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold"
-          >
-            {cargando ? "Comprobando..." : "Actualizar comprobaciones"}
-          </button>
-
-          <button
-            type="button"
-            onClick={exportarSistemaCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={comprobaciones.length === 0}
-          >
-            Exportar CSV
-          </button>
-
-          <button
-            type="button"
-            onClick={exportarSistemaExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={comprobaciones.length === 0}
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
-
-      {mensaje && <p className="text-sm text-red-600">{mensaje}</p>}
-
-      <div className="grid gap-4 md:grid-cols-3">
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-gray-500">Comprobaciones</p>
-          <p className="text-3xl font-bold">{comprobaciones.length}</p>
-        </div>
-
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-gray-500">Críticos</p>
-          <p className="text-3xl font-bold text-red-700">{totalCriticos}</p>
-        </div>
-
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-gray-500">Avisos</p>
-          <p className="text-3xl font-bold text-yellow-700">{totalAvisos}</p>
-        </div>
-      </div>
-
-      {permisos.esAdmin && (
-        <div className="rounded-xl border bg-white p-6 space-y-5">
+    <AlmacenLayoutOscuro>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-bold">Snapshots internos</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Crea copias completas del módulo dentro de la tabla
-              backups_sistema. No toca Supabase Auth.
+            <h1 className="text-2xl font-bold">Salud del sistema</h1>
+            <p className="text-sm text-slate-400">
+              Comprobaciones de configuración, datos operativos, snapshots y reset
+              controlado del módulo.
             </p>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-3">
-            <input
-              value={nombreSnapshot}
-              onChange={(e) => setNombreSnapshot(e.target.value)}
-              placeholder="Nombre del snapshot"
-              className="rounded-lg border px-3 py-2 text-sm md:col-span-2"
-            />
-
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={crearSnapshot}
-              disabled={creandoSnapshot}
-              className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              onClick={cargarSistema}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
             >
-              {creandoSnapshot ? "Creando..." : "Crear snapshot"}
+              {cargando ? "Comprobando..." : "Actualizar comprobaciones"}
             </button>
-          </div>
-
-          <div className="rounded-xl border p-4 space-y-3">
-            <h3 className="font-semibold">Restaurar snapshot</h3>
-
-            <select
-              value={backupRestaurarId}
-              onChange={(e) => setBackupRestaurarId(e.target.value)}
-              className="w-full rounded-lg border px-3 py-2 text-sm"
-            >
-              <option value="">Selecciona snapshot...</option>
-              {backups.map((backup) => (
-                <option key={backup.id} value={backup.id}>
-                  {formatearFecha(backup.fecha)} · {backup.nombre}
-                </option>
-              ))}
-            </select>
-
-            <input
-              value={confirmacionRestore}
-              onChange={(e) => setConfirmacionRestore(e.target.value)}
-              placeholder="Escribe RESTAURAR"
-              className="w-full rounded-lg border px-3 py-2 text-sm"
-            />
 
             <button
               type="button"
-              onClick={restaurarSnapshot}
-              disabled={restaurando}
-              className="rounded-xl bg-yellow-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              onClick={exportarSistemaCsv}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              disabled={comprobaciones.length === 0}
             >
-              {restaurando ? "Restaurando..." : "Restaurar snapshot"}
+              Exportar CSV
             </button>
-          </div>
-
-          <div className="overflow-auto rounded-xl border">
-            <table className="w-full min-w-[800px] text-sm">
-              <thead className="bg-gray-50 text-left">
-                <tr>
-                  <th className="p-3">Fecha</th>
-                  <th className="p-3">Nombre</th>
-                  <th className="p-3">Usuario</th>
-                  <th className="p-3">Resumen</th>
-                  <th className="p-3">Acción</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {backups.map((backup) => (
-                  <tr key={backup.id} className="border-t">
-                    <td className="p-3">{formatearFecha(backup.fecha)}</td>
-                    <td className="p-3 font-semibold">{backup.nombre}</td>
-                    <td className="p-3">{backup.usuario || "-"}</td>
-                    <td className="p-3 text-xs text-gray-600">
-                      Clientes: {backup.json_backup.clientes?.length || 0} ·
-                      Productos:{" "}
-                      {backup.json_backup.productos_neumaticos?.length || 0} ·
-                      Movimientos:{" "}
-                      {backup.json_backup.movimientos_stock?.length || 0}
-                    </td>
-                    <td className="p-3">
-                      <button
-                        type="button"
-                        onClick={() => eliminarSnapshot(backup.id)}
-                        disabled={eliminandoBackup}
-                        className="rounded-lg border px-3 py-1 text-xs font-semibold"
-                      >
-                        Eliminar
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-
-                {backups.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="p-6 text-center text-gray-500">
-                      No hay snapshots guardados.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {permisos.esAdmin && (
-        <div className="rounded-xl border border-red-300 bg-red-50 p-6">
-          <h2 className="text-lg font-bold text-red-700">Reset demo</h2>
-
-          <p className="mt-2 text-sm text-red-700">
-            Elimina los datos del módulo de almacén. No elimina usuarios de
-            Supabase Auth. Crea un snapshot antes de usarlo.
-          </p>
-
-          <p className="mt-2 text-sm font-semibold text-red-700">
-            Para confirmar, escribe exactamente: RESET DEMO
-          </p>
-
-          <div className="mt-4 flex flex-col gap-3 md:flex-row">
-            <input
-              value={confirmacionReset}
-              onChange={(e) => setConfirmacionReset(e.target.value)}
-              placeholder="RESET DEMO"
-              className="rounded-lg border px-3 py-2 text-sm md:w-80"
-            />
 
             <button
               type="button"
-              onClick={resetDemo}
-              disabled={reseteando}
-              className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              onClick={exportarSistemaExcel}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={comprobaciones.length === 0}
             >
-              {reseteando ? "Reseteando..." : "Ejecutar reset demo"}
+              Exportar Excel
             </button>
           </div>
         </div>
-      )}
 
-      <div className="grid gap-4">
-        {comprobaciones.map((comprobacion) => (
-          <div key={comprobacion.id} className="rounded-xl border bg-white p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="font-semibold">{comprobacion.titulo}</h2>
-                  <BadgeGravedad gravedad={comprobacion.gravedad} />
-                </div>
+        {mensaje && <p className="text-sm text-red-300">{mensaje}</p>}
 
-                <p className="mt-1 text-sm text-gray-500">
-                  {comprobacion.descripcion}
-                </p>
-              </div>
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-4">
+            <p className="text-sm text-slate-400">Comprobaciones</p>
+            <p className="text-3xl font-bold">{comprobaciones.length}</p>
+          </div>
 
-              <div className="text-right">
-                <p className="text-3xl font-bold">{comprobacion.total}</p>
-                <p className="text-xs text-gray-500">registros</p>
-              </div>
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-4">
+            <p className="text-sm text-slate-400">Críticos</p>
+            <p className="text-3xl font-bold text-red-300">{totalCriticos}</p>
+          </div>
+
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-4">
+            <p className="text-sm text-slate-400">Avisos</p>
+            <p className="text-3xl font-bold text-amber-300">{totalAvisos}</p>
+          </div>
+        </div>
+
+        {permisos.esAdmin && (
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-6 space-y-5">
+            <div>
+              <h2 className="text-lg font-bold">Snapshots internos</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Crea copias completas del módulo dentro de la tabla
+                backups_sistema. No toca Supabase Auth.
+              </p>
             </div>
 
-            {comprobacion.detalle.length > 0 && (
-              <div className="mt-4 rounded-lg bg-gray-50 p-3">
-                <p className="mb-2 text-xs font-semibold text-gray-500">
-                  Detalle
-                </p>
+            <div className="grid gap-3 md:grid-cols-3">
+              <input
+                value={nombreSnapshot}
+                onChange={(e) => setNombreSnapshot(e.target.value)}
+                placeholder="Nombre del snapshot"
+                className="rounded-lg border border-slate-600 px-3 py-2 text-sm md:col-span-2 bg-slate-900 text-slate-100"
+              />
 
-                <ul className="space-y-1 text-sm text-gray-700">
-                  {comprobacion.detalle.map((item, index) => (
-                    <li key={`${comprobacion.id}-${index}`}>• {item}</li>
+              <button
+                type="button"
+                onClick={crearSnapshot}
+                disabled={creandoSnapshot}
+                className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {creandoSnapshot ? "Creando..." : "Crear snapshot"}
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-slate-600 p-4 space-y-3">
+              <h3 className="font-semibold">Restaurar snapshot</h3>
+
+              <select
+                value={backupRestaurarId}
+                onChange={(e) => setBackupRestaurarId(e.target.value)}
+                className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+              >
+                <option value="">Selecciona snapshot...</option>
+                {backups.map((backup) => (
+                  <option key={backup.id} value={backup.id}>
+                    {formatearFecha(backup.fecha)} · {backup.nombre}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                value={confirmacionRestore}
+                onChange={(e) => setConfirmacionRestore(e.target.value)}
+                placeholder="Escribe RESTAURAR"
+                className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+              />
+
+              <button
+                type="button"
+                onClick={restaurarSnapshot}
+                disabled={restaurando}
+                className="rounded-xl bg-yellow-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {restaurando ? "Restaurando..." : "Restaurar snapshot"}
+              </button>
+            </div>
+
+            <div className="overflow-auto rounded-xl border border-slate-600">
+              <table className="w-full min-w-[800px] text-sm">
+                <thead className="bg-slate-900 text-left">
+                  <tr>
+                    <th className="p-3">Fecha</th>
+                    <th className="p-3">Nombre</th>
+                    <th className="p-3">Usuario</th>
+                    <th className="p-3">Resumen</th>
+                    <th className="p-3">Acción</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {backups.map((backup) => (
+                    <tr key={backup.id} className="border-t border-slate-700 border-slate-700">
+                      <td className="p-3">{formatearFecha(backup.fecha)}</td>
+                      <td className="p-3 font-semibold">{backup.nombre}</td>
+                      <td className="p-3">{backup.usuario || "-"}</td>
+                      <td className="p-3 text-xs text-slate-300">
+                        Clientes: {backup.json_backup.clientes?.length || 0} ·
+                        Productos:{" "}
+                        {backup.json_backup.productos_neumaticos?.length || 0} ·
+                        Movimientos:{" "}
+                        {backup.json_backup.movimientos_stock?.length || 0}
+                      </td>
+                      <td className="p-3">
+                        <button
+                          type="button"
+                          onClick={() => eliminarSnapshot(backup.id)}
+                          disabled={eliminandoBackup}
+                          className="rounded-lg border border-slate-600 px-3 py-1 text-xs font-semibold"
+                        >
+                          Eliminar
+                        </button>
+                      </td>
+                    </tr>
                   ))}
-                </ul>
 
-                {comprobacion.total > comprobacion.detalle.length && (
-                  <p className="mt-2 text-xs text-gray-500">
-                    Mostrando solo los primeros {comprobacion.detalle.length} de{" "}
-                    {comprobacion.total}.
-                  </p>
-                )}
-              </div>
-            )}
+                  {backups.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="p-6 text-center text-slate-400">
+                        No hay snapshots guardados.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        ))}
+        )}
+
+        {permisos.esAdmin && (
+          <div className="rounded-xl border border-red-700 bg-red-500/10 p-6">
+            <h2 className="text-lg font-bold text-red-300">Reset demo</h2>
+
+            <p className="mt-2 text-sm text-red-300">
+              Elimina los datos del módulo de almacén. No elimina usuarios de
+              Supabase Auth. Crea un snapshot antes de usarlo.
+            </p>
+
+            <p className="mt-2 text-sm font-semibold text-red-300">
+              Para confirmar, escribe exactamente: RESET DEMO
+            </p>
+
+            <div className="mt-4 flex flex-col gap-3 md:flex-row">
+              <input
+                value={confirmacionReset}
+                onChange={(e) => setConfirmacionReset(e.target.value)}
+                placeholder="RESET DEMO"
+                className="rounded-lg border border-slate-600 px-3 py-2 text-sm md:w-80 bg-slate-900 text-slate-100"
+              />
+
+              <button
+                type="button"
+                onClick={resetDemo}
+                disabled={reseteando}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {reseteando ? "Reseteando..." : "Ejecutar reset demo"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="grid gap-4">
+          {comprobaciones.map((comprobacion) => (
+            <div key={comprobacion.id} className="rounded-xl border border-slate-600 bg-slate-800 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="font-semibold">{comprobacion.titulo}</h2>
+                    <BadgeGravedad gravedad={comprobacion.gravedad} />
+                  </div>
+
+                  <p className="mt-1 text-sm text-slate-400">
+                    {comprobacion.descripcion}
+                  </p>
+                </div>
+
+                <div className="text-right">
+                  <p className="text-3xl font-bold">{comprobacion.total}</p>
+                  <p className="text-xs text-slate-400">registros</p>
+                </div>
+              </div>
+
+              {comprobacion.detalle.length > 0 && (
+                <div className="mt-4 rounded-lg bg-slate-900 p-3">
+                  <p className="mb-2 text-xs font-semibold text-slate-400">
+                    Detalle
+                  </p>
+
+                  <ul className="space-y-1 text-sm text-slate-300">
+                    {comprobacion.detalle.map((item, index) => (
+                      <li key={`${comprobacion.id}-${index}`}>• {item}</li>
+                    ))}
+                  </ul>
+
+                  {comprobacion.total > comprobacion.detalle.length && (
+                    <p className="mt-2 text-xs text-slate-400">
+                      Mostrando solo los primeros {comprobacion.detalle.length} de{" "}
+                      {comprobacion.total}.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }

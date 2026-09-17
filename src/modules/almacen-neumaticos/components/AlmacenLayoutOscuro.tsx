@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Package, ArrowDownToLine, ArrowUpFromLine, Repeat, ClipboardList,
   PackageSearch, AlertTriangle, History, CircleDot, Users, Truck, Building2,
-  UserCog, ShieldCheck, Settings, Menu, LogOut, Home,
+  UserCog, ShieldCheck, Settings, Menu, LogOut, Home, Smartphone,
 } from "lucide-react";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import { cerrarSesion } from "../services/authAlmacen";
+import { supabase } from "../services/supabase";
 
 // Mismo estilo visual que Mobilink TyreControl (fondo slate-900, activo sky-600),
 // aplicado al módulo de Almacén — sin tocar rutas ni lógica existente.
@@ -15,11 +16,76 @@ interface NavItem {
   label: string;
   icon: typeof LayoutDashboard;
   visible: boolean;
+  alerta?: number;
+}
+
+type AlertasMenu = {
+  traspasos: number;
+  reposiciones: number;
+  inventarios: number;
+  incidencias: number;
+};
+
+const alertasIniciales: AlertasMenu = {
+  traspasos: 0,
+  reposiciones: 0,
+  inventarios: 0,
+  incidencias: 0,
+};
+
+function Badge({ valor, activo }: { valor?: number; activo: boolean }) {
+  if (!valor || valor <= 0) return null;
+
+  return (
+    <span
+      className={`ml-auto rounded-full px-2 py-0.5 text-[11px] font-bold ${
+        activo ? "bg-white/20 text-white" : "bg-red-500/20 text-red-300"
+      }`}
+    >
+      {valor}
+    </span>
+  );
 }
 
 export default function AlmacenLayoutOscuro({ children }: { children: ReactNode }) {
   const { permisos, cargandoPermisos } = usePermisosAlmacen();
   const [open, setOpen] = useState(false);
+  const [alertas, setAlertas] = useState<AlertasMenu>(alertasIniciales);
+
+  useEffect(() => {
+    if (permisos.perfil) {
+      cargarAlertas();
+    }
+  }, [permisos.perfil?.id]);
+
+  async function cargarAlertas() {
+    const { data: traspasosData } = await supabase
+      .from("traspasos")
+      .select("id,estado")
+      .in("estado", ["pendiente_salida", "en_camino", "recibido_parcial"]);
+
+    const { data: reposicionesData } = await supabase
+      .from("solicitudes_reposicion")
+      .select("id,estado")
+      .in("estado", ["pendiente", "aprobada", "en_traspaso"]);
+
+    const { data: inventariosData } = await supabase
+      .from("inventarios")
+      .select("id,estado")
+      .in("estado", ["pendiente_conteo", "pendiente_revision"]);
+
+    const { data: incidenciasData } = await supabase
+      .from("incidencias")
+      .select("id,estado")
+      .neq("estado", "resuelta");
+
+    setAlertas({
+      traspasos: traspasosData?.length || 0,
+      reposiciones: reposicionesData?.length || 0,
+      inventarios: inventariosData?.length || 0,
+      incidencias: incidenciasData?.length || 0,
+    });
+  }
 
   const esAdmin = permisos.esAdmin;
   const esResponsable = permisos.esResponsable;
@@ -33,12 +99,13 @@ export default function AlmacenLayoutOscuro({ children }: { children: ReactNode 
   const items: NavItem[] = [
     { href: "/almacen-neumaticos", label: "Dashboard", icon: LayoutDashboard, visible: true },
     { href: "/almacen-neumaticos/stock", label: "Stock", icon: Package, visible: puedeVerOperativo },
+    { href: "/almacen-neumaticos/mobile", label: "Mobile", icon: Smartphone, visible: puedeVerOperativo },
     { href: "/almacen-neumaticos/entradas", label: "Entradas", icon: ArrowDownToLine, visible: puedeVerEntradas },
     { href: "/almacen-neumaticos/salidas", label: "Salidas / Montajes", icon: ArrowUpFromLine, visible: puedeVerOperativo },
-    { href: "/almacen-neumaticos/traspasos", label: "Traspasos", icon: Repeat, visible: puedeVerOperativo },
-    { href: "/almacen-neumaticos/reposiciones", label: "Reposiciones", icon: ClipboardList, visible: puedeVerReposiciones },
-    { href: "/almacen-neumaticos/inventarios", label: "Inventarios", icon: PackageSearch, visible: puedeVerOperativo },
-    { href: "/almacen-neumaticos/incidencias", label: "Incidencias", icon: AlertTriangle, visible: puedeVerOperativo },
+    { href: "/almacen-neumaticos/traspasos", label: "Traspasos", icon: Repeat, visible: puedeVerOperativo, alerta: alertas.traspasos },
+    { href: "/almacen-neumaticos/reposiciones", label: "Reposiciones", icon: ClipboardList, visible: puedeVerReposiciones, alerta: alertas.reposiciones },
+    { href: "/almacen-neumaticos/inventarios", label: "Inventarios", icon: PackageSearch, visible: puedeVerOperativo, alerta: alertas.inventarios },
+    { href: "/almacen-neumaticos/incidencias", label: "Incidencias", icon: AlertTriangle, visible: puedeVerOperativo, alerta: alertas.incidencias },
     { href: "/almacen-neumaticos/historial", label: "Historial", icon: History, visible: puedeVerOperativo },
     { href: "/almacen-neumaticos/productos", label: "Productos", icon: CircleDot, visible: puedeVerMaestros },
     { href: "/almacen-neumaticos/clientes", label: "Clientes", icon: Users, visible: puedeVerMaestros },
@@ -46,6 +113,7 @@ export default function AlmacenLayoutOscuro({ children }: { children: ReactNode 
     { href: "/almacen-neumaticos/centros", label: "Centros", icon: Building2, visible: puedeVerMaestros },
     { href: "/almacen-neumaticos/usuarios", label: "Usuarios", icon: UserCog, visible: puedeVerAdmin },
     { href: "/almacen-neumaticos/auditoria", label: "Auditoría", icon: ShieldCheck, visible: puedeVerAdmin },
+    { href: "/almacen-neumaticos/auditoria-traspasos", label: "Auditoría traspasos", icon: ShieldCheck, visible: puedeVerAdmin },
     { href: "/almacen-neumaticos/sistema", label: "Sistema", icon: Settings, visible: puedeVerAdmin },
   ];
 
@@ -96,7 +164,9 @@ export default function AlmacenLayoutOscuro({ children }: { children: ReactNode 
                     isActive ? "bg-sky-600 text-white" : "text-slate-300 hover:bg-slate-800"
                   }`}
                 >
-                  <Icon className="h-4 w-4" /> {item.label}
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="min-w-0 truncate">{item.label}</span>
+                  <Badge valor={item.alerta} activo={isActive} />
                 </a>
               );
             })}

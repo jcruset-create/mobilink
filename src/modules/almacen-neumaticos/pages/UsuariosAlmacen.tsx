@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import AlmacenMenu from "../components/AlmacenMenu";
+import AlmacenLayoutOscuro from "../components/AlmacenLayoutOscuro";
 import { supabase } from "../services/supabase";
 import { usePermisosAlmacen } from "../hooks/usePermisosAlmacen";
 import { registrarAuditoria } from "../services/auditoriaAlmacen";
@@ -953,469 +953,469 @@ export default function UsuariosAlmacen() {
 
   if (cargandoPermisos) {
     return (
-      <div className="p-6 space-y-6">
-        <AlmacenMenu />
-
-        <div className="rounded-xl border bg-white p-6 text-sm text-gray-600">
-          Cargando permisos del usuario conectado...
+      <AlmacenLayoutOscuro>
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-600 bg-slate-800 p-6 text-sm text-slate-300">
+            Cargando permisos del usuario conectado...
+          </div>
         </div>
-      </div>
+      </AlmacenLayoutOscuro>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <AlmacenMenu />
-
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Usuarios almacén</h1>
-          <p className="text-sm text-gray-500">
-            Gestión de usuarios Auth, perfiles, roles, ubicación asignada,
-            código de operario y clientes permitidos.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportarUsuariosCsv}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            disabled={usuarios.length === 0 && usuarioClientes.length === 0}
-          >
-            Exportar CSV
-          </button>
-
-          <button
-            type="button"
-            onClick={exportarUsuariosExcel}
-            className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-            disabled={usuarios.length === 0 && usuarioClientes.length === 0}
-          >
-            Exportar Excel
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Usuario activo</h2>
-
-        {errorPermisos && (
-          <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
-            {errorPermisos}
-          </p>
-        )}
-
-        {permisos.perfil ? (
-          <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
-            Usuario: <strong>{permisos.perfil.nombre || "-"}</strong>
-            <br />
-            Email: <strong>{permisos.perfil.email || "-"}</strong>
-            <br />
-            Código: <strong>{permisos.perfil.codigo_operario || "-"}</strong>
-            <br />
-            Rol: <strong>{permisos.perfil.rol || "-"}</strong>
-            <br />
-            Ubicación: <strong>{permisos.ubicacion || "-"}</strong>
+    <AlmacenLayoutOscuro>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Usuarios almacén</h1>
+            <p className="text-sm text-slate-400">
+              Gestión de usuarios Auth, perfiles, roles, ubicación asignada,
+              código de operario y clientes permitidos.
+            </p>
           </div>
-        ) : (
-          <p className="rounded-lg bg-yellow-50 p-3 text-sm text-yellow-800">
-            No hay perfil activo vinculado al usuario conectado.
-          </p>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportarUsuariosCsv}
+              className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              disabled={usuarios.length === 0 && usuarioClientes.length === 0}
+            >
+              Exportar CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={exportarUsuariosExcel}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              disabled={usuarios.length === 0 && usuarioClientes.length === 0}
+            >
+              Exportar Excel
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Usuario activo</h2>
+
+          {errorPermisos && (
+            <p className="rounded-lg bg-red-500/10 p-3 text-sm text-red-300">
+              {errorPermisos}
+            </p>
+          )}
+
+          {permisos.perfil ? (
+            <div className="rounded-lg bg-slate-900 p-3 text-sm text-slate-300">
+              Usuario: <strong>{permisos.perfil.nombre || "-"}</strong>
+              <br />
+              Email: <strong>{permisos.perfil.email || "-"}</strong>
+              <br />
+              Código: <strong>{permisos.perfil.codigo_operario || "-"}</strong>
+              <br />
+              Rol: <strong>{permisos.perfil.rol || "-"}</strong>
+              <br />
+              Ubicación: <strong>{permisos.ubicacion || "-"}</strong>
+            </div>
+          ) : (
+            <p className="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-300">
+              No hay perfil activo vinculado al usuario conectado.
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={recargarPermisos}
+            className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
+          >
+            Recargar permisos
+          </button>
+        </div>
+
+        {!permisos.esAdmin && (
+          <div className="rounded-xl border border-slate-600 bg-amber-500/10 p-4 text-sm text-amber-300">
+            Esta pantalla solo puede ser gestionada por un usuario admin.
+          </div>
         )}
 
-        <button
-          type="button"
-          onClick={recargarPermisos}
-          className="rounded-xl border px-4 py-2 text-sm font-semibold"
-        >
-          Recargar permisos
-        </button>
-      </div>
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Crear usuario Auth + perfil almacén</h2>
 
-      {!permisos.esAdmin && (
-        <div className="rounded-xl border bg-yellow-50 p-4 text-sm text-yellow-800">
-          Esta pantalla solo puede ser gestionada por un usuario admin.
+          <input
+            value={nombre}
+            onChange={(e) => setNombre(e.target.value)}
+            placeholder="Nombre"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.esAdmin || creandoUsuario}
+          />
+
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email de login"
+            type="email"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.esAdmin || creandoUsuario}
+          />
+
+          <input
+            value={passwordTemporal}
+            onChange={(e) => setPasswordTemporal(e.target.value)}
+            placeholder="Contraseña temporal"
+            type="password"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.esAdmin || creandoUsuario}
+          />
+
+          <input
+            value={codigoOperario}
+            onChange={(e) => setCodigoOperario(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            placeholder="Código operario, 4 dígitos"
+            maxLength={4}
+            inputMode="numeric"
+            pattern="[0-9]{4}"
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.esAdmin || creandoUsuario}
+          />
+
+          <select
+            value={rol}
+            onChange={(e) => setRol(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.esAdmin || creandoUsuario}
+          >
+            {ROLES.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={ubicacion}
+            onChange={(e) => setUbicacion(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.esAdmin || creandoUsuario}
+          >
+            <option value="">Ubicación...</option>
+            {UBICACIONES.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+
+          <div className="rounded-xl border border-slate-600 p-3 space-y-2">
+            <p className="text-sm font-semibold">Clientes permitidos iniciales</p>
+
+            {clientes.map((cliente) => (
+              <label
+                key={cliente.id}
+                className="flex items-center gap-2 text-sm text-slate-300"
+              >
+                <input
+                  type="checkbox"
+                  checked={clientesNuevoUsuarioIds.includes(cliente.id)}
+                  onChange={() => alternarClienteNuevoUsuario(cliente.id)}
+                  disabled={!permisos.esAdmin || creandoUsuario}
+                />
+                {cliente.nombre}
+              </label>
+            ))}
+
+            {clientes.length === 0 && (
+              <p className="text-sm text-slate-400">No hay clientes activos.</p>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={crearUsuario}
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            disabled={!permisos.esAdmin || creandoUsuario}
+          >
+            {creandoUsuario ? "Creando usuario..." : "Crear usuario"}
+          </button>
+
+          {mensaje && <p className="text-sm text-slate-300">{mensaje}</p>}
         </div>
-      )}
 
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Crear usuario Auth + perfil almacén</h2>
+        <div className="overflow-auto rounded-xl border border-slate-600 bg-slate-800">
+          <table className="w-full min-w-[1200px] text-sm">
+            <thead className="bg-slate-900 text-left">
+              <tr>
+                <th className="p-3">Nombre</th>
+                <th className="p-3">Email</th>
+                <th className="p-3">Auth</th>
+                <th className="p-3">Código operario</th>
+                <th className="p-3">Rol</th>
+                <th className="p-3">Ubicación</th>
+                <th className="p-3">Activo</th>
+                <th className="p-3">Nueva contraseña</th>
+                <th className="p-3">Acción</th>
+              </tr>
+            </thead>
 
-        <input
-          value={nombre}
-          onChange={(e) => setNombre(e.target.value)}
-          placeholder="Nombre"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.esAdmin || creandoUsuario}
-        />
+            <tbody>
+              {usuarios.map((usuario) => (
+                <tr key={usuario.id} className="border-t border-slate-700 border-slate-700">
+                  <td className="p-3">
+                    <input
+                      defaultValue={usuario.nombre || ""}
+                      onBlur={(e) => actualizarNombre(usuario, e.target.value)}
+                      className="w-40 rounded-lg border border-slate-600 px-2 py-1 text-sm bg-slate-900 text-slate-100"
+                      disabled={!permisos.esAdmin}
+                    />
+                  </td>
 
-        <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Email de login"
-          type="email"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.esAdmin || creandoUsuario}
-        />
+                  <td className="p-3">
+                    <input
+                      defaultValue={usuario.email || ""}
+                      onBlur={(e) => actualizarEmail(usuario, e.target.value)}
+                      className="w-56 rounded-lg border border-slate-600 px-2 py-1 text-sm bg-slate-900 text-slate-100"
+                      disabled={!permisos.esAdmin}
+                    />
+                  </td>
 
-        <input
-          value={passwordTemporal}
-          onChange={(e) => setPasswordTemporal(e.target.value)}
-          placeholder="Contraseña temporal"
-          type="password"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.esAdmin || creandoUsuario}
-        />
+                  <td className="p-3">
+                    {usuario.user_id ? (
+                      <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300">
+                        Vinculado
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-amber-500/15 px-2 py-1 text-xs font-semibold text-amber-300">
+                        Sin Auth
+                      </span>
+                    )}
+                  </td>
 
-        <input
-          value={codigoOperario}
-          onChange={(e) => setCodigoOperario(e.target.value.replace(/\D/g, "").slice(0, 4))}
-          placeholder="Código operario, 4 dígitos"
-          maxLength={4}
-          inputMode="numeric"
-          pattern="[0-9]{4}"
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.esAdmin || creandoUsuario}
-        />
+                  <td className="p-3">
+                    <input
+                      defaultValue={usuario.codigo_operario || ""}
+                      onChange={(e) => {
+                        e.target.value = e.target.value.replace(/\D/g, "").slice(0, 4);
+                      }}
+                      onBlur={(e) =>
+                        actualizarCodigoOperario(usuario, e.target.value)
+                      }
+                      maxLength={4}
+                      inputMode="numeric"
+                      pattern="[0-9]{4}"
+                      className="w-32 rounded-lg border border-slate-600 px-2 py-1 text-sm bg-slate-900 text-slate-100"
+                      disabled={!permisos.esAdmin}
+                    />
+                  </td>
 
-        <select
-          value={rol}
-          onChange={(e) => setRol(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.esAdmin || creandoUsuario}
-        >
-          {ROLES.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
+                  <td className="p-3">
+                    <select
+                      value={usuario.rol || "operario"}
+                      onChange={(e) => actualizarRol(usuario, e.target.value)}
+                      className="rounded-lg border border-slate-600 px-2 py-1 text-sm bg-slate-900 text-slate-100"
+                      disabled={!permisos.esAdmin}
+                    >
+                      {ROLES.map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
 
-        <select
-          value={ubicacion}
-          onChange={(e) => setUbicacion(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.esAdmin || creandoUsuario}
-        >
-          <option value="">Ubicación...</option>
-          {UBICACIONES.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
+                  <td className="p-3">
+                    <select
+                      value={usuario.ubicacion || ""}
+                      onChange={(e) =>
+                        actualizarUbicacion(usuario, e.target.value)
+                      }
+                      className="rounded-lg border border-slate-600 px-2 py-1 text-sm bg-slate-900 text-slate-100"
+                      disabled={!permisos.esAdmin}
+                    >
+                      <option value="">-</option>
+                      {UBICACIONES.map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
 
-        <div className="rounded-xl border p-3 space-y-2">
-          <p className="text-sm font-semibold">Clientes permitidos iniciales</p>
+                  <td className="p-3">{usuario.activo ? "Sí" : "No"}</td>
 
-          {clientes.map((cliente) => (
-            <label
-              key={cliente.id}
-              className="flex items-center gap-2 text-sm text-gray-700"
-            >
-              <input
-                type="checkbox"
-                checked={clientesNuevoUsuarioIds.includes(cliente.id)}
-                onChange={() => alternarClienteNuevoUsuario(cliente.id)}
-                disabled={!permisos.esAdmin || creandoUsuario}
-              />
-              {cliente.nombre}
-            </label>
-          ))}
+                  <td className="p-3">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="password"
+                        value={passwordsPorUsuario[usuario.id] || ""}
+                        onChange={(e) =>
+                          cambiarPasswordTemporalUsuario(
+                            usuario.id,
+                            e.target.value
+                          )
+                        }
+                        placeholder="Nueva contraseña"
+                        className="w-40 rounded-lg border border-slate-600 px-2 py-1 text-sm bg-slate-900 text-slate-100"
+                        disabled={!permisos.esAdmin || !usuario.user_id}
+                      />
 
-          {clientes.length === 0 && (
-            <p className="text-sm text-gray-500">No hay clientes activos.</p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          cambiarPassword(
+                            usuario.id,
+                            passwordsPorUsuario[usuario.id] || ""
+                          )
+                        }
+                        className="rounded-lg border border-slate-600 px-3 py-1 text-xs disabled:opacity-50"
+                        disabled={!permisos.esAdmin || !usuario.user_id}
+                      >
+                        Cambiar
+                      </button>
+                    </div>
+                  </td>
+
+                  <td className="p-3">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => cambiarActivo(usuario)}
+                        className="rounded-lg border border-slate-600 px-3 py-1 text-xs disabled:opacity-50"
+                        disabled={!permisos.esAdmin}
+                      >
+                        {usuario.activo ? "Desactivar" : "Activar"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => eliminarUsuario(usuario)}
+                        className="rounded-lg border border-red-700 px-3 py-1 text-xs text-red-300 disabled:opacity-50"
+                        disabled={!permisos.esAdmin || !usuario.activo}
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+
+              {usuarios.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="p-6 text-center text-slate-400">
+                    No hay usuarios creados.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="rounded-xl border border-slate-600 bg-slate-800 p-4 space-y-4">
+          <h2 className="font-semibold">Clientes permitidos por usuario</h2>
+
+          <select
+            value={usuarioSeleccionadoId}
+            onChange={(e) => {
+              setUsuarioSeleccionadoId(e.target.value);
+              setClienteSeleccionadoId("");
+            }}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!permisos.esAdmin}
+          >
+            <option value="">Usuario...</option>
+            {usuarios.map((usuario) => (
+              <option key={usuario.id} value={usuario.id}>
+                {usuario.nombre || "-"} | {usuario.codigo_operario || "-"} |{" "}
+                {usuario.rol || "-"} | {usuario.ubicacion || "-"}
+              </option>
+            ))}
+          </select>
+
+          {usuarioSeleccionado && (
+            <div className="rounded-lg bg-slate-900 p-3 text-sm text-slate-300">
+              Usuario: <strong>{usuarioSeleccionado.nombre || "-"}</strong>
+              <br />
+              Email: <strong>{usuarioSeleccionado.email || "-"}</strong>
+              <br />
+              Rol: <strong>{usuarioSeleccionado.rol || "-"}</strong>
+              <br />
+              Ubicación: <strong>{usuarioSeleccionado.ubicacion || "-"}</strong>
+            </div>
+          )}
+
+          <select
+            value={clienteSeleccionadoId}
+            onChange={(e) => setClienteSeleccionadoId(e.target.value)}
+            className="w-full rounded-lg border border-slate-600 px-3 py-2 text-sm bg-slate-900 text-slate-100"
+            disabled={!usuarioSeleccionadoId || !permisos.esAdmin}
+          >
+            <option value="">Cliente...</option>
+            {clientes.map((cliente) => (
+              <option key={cliente.id} value={cliente.id}>
+                {cliente.nombre}
+              </option>
+            ))}
+          </select>
+
+          <button
+            type="button"
+            onClick={asignarClienteUsuario}
+            className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            disabled={!usuarioSeleccionadoId || !permisos.esAdmin}
+          >
+            Asignar cliente
+          </button>
+
+          {usuarioSeleccionadoId && (
+            <div className="overflow-hidden rounded-xl border border-slate-600">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-900 text-left">
+                  <tr>
+                    <th className="p-3">Cliente asignado</th>
+                    <th className="p-3">Acción</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {clientesAsignadosUsuario.map((asignacion) => {
+                    const cliente = obtenerPrimero(asignacion.clientes);
+
+                    return (
+                      <tr key={asignacion.id} className="border-t border-slate-700 border-slate-700">
+                        <td className="p-3">{cliente?.nombre || "-"}</td>
+                        <td className="p-3">
+                          <button
+                            type="button"
+                            onClick={() => quitarClienteUsuario(asignacion)}
+                            className="rounded-lg border border-slate-600 px-3 py-1 text-xs disabled:opacity-50"
+                            disabled={!permisos.esAdmin}
+                          >
+                            Quitar
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {clientesAsignadosUsuario.length === 0 && (
+                    <tr>
+                      <td colSpan={2} className="p-6 text-center text-slate-400">
+                        Este usuario no tiene clientes asignados.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
         <button
           type="button"
-          onClick={crearUsuario}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          disabled={!permisos.esAdmin || creandoUsuario}
+          onClick={cargarDatos}
+          className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold"
         >
-          {creandoUsuario ? "Creando usuario..." : "Crear usuario"}
+          Actualizar usuarios
         </button>
-
-        {mensaje && <p className="text-sm text-gray-700">{mensaje}</p>}
       </div>
-
-      <div className="overflow-auto rounded-xl border bg-white">
-        <table className="w-full min-w-[1200px] text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="p-3">Nombre</th>
-              <th className="p-3">Email</th>
-              <th className="p-3">Auth</th>
-              <th className="p-3">Código operario</th>
-              <th className="p-3">Rol</th>
-              <th className="p-3">Ubicación</th>
-              <th className="p-3">Activo</th>
-              <th className="p-3">Nueva contraseña</th>
-              <th className="p-3">Acción</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {usuarios.map((usuario) => (
-              <tr key={usuario.id} className="border-t">
-                <td className="p-3">
-                  <input
-                    defaultValue={usuario.nombre || ""}
-                    onBlur={(e) => actualizarNombre(usuario, e.target.value)}
-                    className="w-40 rounded-lg border px-2 py-1 text-sm"
-                    disabled={!permisos.esAdmin}
-                  />
-                </td>
-
-                <td className="p-3">
-                  <input
-                    defaultValue={usuario.email || ""}
-                    onBlur={(e) => actualizarEmail(usuario, e.target.value)}
-                    className="w-56 rounded-lg border px-2 py-1 text-sm"
-                    disabled={!permisos.esAdmin}
-                  />
-                </td>
-
-                <td className="p-3">
-                  {usuario.user_id ? (
-                    <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-800">
-                      Vinculado
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">
-                      Sin Auth
-                    </span>
-                  )}
-                </td>
-
-                <td className="p-3">
-                  <input
-                    defaultValue={usuario.codigo_operario || ""}
-                    onChange={(e) => {
-                      e.target.value = e.target.value.replace(/\D/g, "").slice(0, 4);
-                    }}
-                    onBlur={(e) =>
-                      actualizarCodigoOperario(usuario, e.target.value)
-                    }
-                    maxLength={4}
-                    inputMode="numeric"
-                    pattern="[0-9]{4}"
-                    className="w-32 rounded-lg border px-2 py-1 text-sm"
-                    disabled={!permisos.esAdmin}
-                  />
-                </td>
-
-                <td className="p-3">
-                  <select
-                    value={usuario.rol || "operario"}
-                    onChange={(e) => actualizarRol(usuario, e.target.value)}
-                    className="rounded-lg border px-2 py-1 text-sm"
-                    disabled={!permisos.esAdmin}
-                  >
-                    {ROLES.map((item) => (
-                      <option key={item} value={item}>
-                        {item}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-
-                <td className="p-3">
-                  <select
-                    value={usuario.ubicacion || ""}
-                    onChange={(e) =>
-                      actualizarUbicacion(usuario, e.target.value)
-                    }
-                    className="rounded-lg border px-2 py-1 text-sm"
-                    disabled={!permisos.esAdmin}
-                  >
-                    <option value="">-</option>
-                    {UBICACIONES.map((item) => (
-                      <option key={item} value={item}>
-                        {item}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-
-                <td className="p-3">{usuario.activo ? "Sí" : "No"}</td>
-
-                <td className="p-3">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="password"
-                      value={passwordsPorUsuario[usuario.id] || ""}
-                      onChange={(e) =>
-                        cambiarPasswordTemporalUsuario(
-                          usuario.id,
-                          e.target.value
-                        )
-                      }
-                      placeholder="Nueva contraseña"
-                      className="w-40 rounded-lg border px-2 py-1 text-sm"
-                      disabled={!permisos.esAdmin || !usuario.user_id}
-                    />
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        cambiarPassword(
-                          usuario.id,
-                          passwordsPorUsuario[usuario.id] || ""
-                        )
-                      }
-                      className="rounded-lg border px-3 py-1 text-xs disabled:opacity-50"
-                      disabled={!permisos.esAdmin || !usuario.user_id}
-                    >
-                      Cambiar
-                    </button>
-                  </div>
-                </td>
-
-                <td className="p-3">
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => cambiarActivo(usuario)}
-                      className="rounded-lg border px-3 py-1 text-xs disabled:opacity-50"
-                      disabled={!permisos.esAdmin}
-                    >
-                      {usuario.activo ? "Desactivar" : "Activar"}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => eliminarUsuario(usuario)}
-                      className="rounded-lg border border-red-300 px-3 py-1 text-xs text-red-700 disabled:opacity-50"
-                      disabled={!permisos.esAdmin || !usuario.activo}
-                    >
-                      Eliminar
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-
-            {usuarios.length === 0 && (
-              <tr>
-                <td colSpan={9} className="p-6 text-center text-gray-500">
-                  No hay usuarios creados.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="rounded-xl border bg-white p-4 space-y-4">
-        <h2 className="font-semibold">Clientes permitidos por usuario</h2>
-
-        <select
-          value={usuarioSeleccionadoId}
-          onChange={(e) => {
-            setUsuarioSeleccionadoId(e.target.value);
-            setClienteSeleccionadoId("");
-          }}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!permisos.esAdmin}
-        >
-          <option value="">Usuario...</option>
-          {usuarios.map((usuario) => (
-            <option key={usuario.id} value={usuario.id}>
-              {usuario.nombre || "-"} | {usuario.codigo_operario || "-"} |{" "}
-              {usuario.rol || "-"} | {usuario.ubicacion || "-"}
-            </option>
-          ))}
-        </select>
-
-        {usuarioSeleccionado && (
-          <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
-            Usuario: <strong>{usuarioSeleccionado.nombre || "-"}</strong>
-            <br />
-            Email: <strong>{usuarioSeleccionado.email || "-"}</strong>
-            <br />
-            Rol: <strong>{usuarioSeleccionado.rol || "-"}</strong>
-            <br />
-            Ubicación: <strong>{usuarioSeleccionado.ubicacion || "-"}</strong>
-          </div>
-        )}
-
-        <select
-          value={clienteSeleccionadoId}
-          onChange={(e) => setClienteSeleccionadoId(e.target.value)}
-          className="w-full rounded-lg border px-3 py-2 text-sm"
-          disabled={!usuarioSeleccionadoId || !permisos.esAdmin}
-        >
-          <option value="">Cliente...</option>
-          {clientes.map((cliente) => (
-            <option key={cliente.id} value={cliente.id}>
-              {cliente.nombre}
-            </option>
-          ))}
-        </select>
-
-        <button
-          type="button"
-          onClick={asignarClienteUsuario}
-          className="rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          disabled={!usuarioSeleccionadoId || !permisos.esAdmin}
-        >
-          Asignar cliente
-        </button>
-
-        {usuarioSeleccionadoId && (
-          <div className="overflow-hidden rounded-xl border">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-left">
-                <tr>
-                  <th className="p-3">Cliente asignado</th>
-                  <th className="p-3">Acción</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {clientesAsignadosUsuario.map((asignacion) => {
-                  const cliente = obtenerPrimero(asignacion.clientes);
-
-                  return (
-                    <tr key={asignacion.id} className="border-t">
-                      <td className="p-3">{cliente?.nombre || "-"}</td>
-                      <td className="p-3">
-                        <button
-                          type="button"
-                          onClick={() => quitarClienteUsuario(asignacion)}
-                          className="rounded-lg border px-3 py-1 text-xs disabled:opacity-50"
-                          disabled={!permisos.esAdmin}
-                        >
-                          Quitar
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-
-                {clientesAsignadosUsuario.length === 0 && (
-                  <tr>
-                    <td colSpan={2} className="p-6 text-center text-gray-500">
-                      Este usuario no tiene clientes asignados.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <button
-        type="button"
-        onClick={cargarDatos}
-        className="rounded-xl border px-4 py-2 text-sm font-semibold"
-      >
-        Actualizar usuarios
-      </button>
-    </div>
+    </AlmacenLayoutOscuro>
   );
 }
