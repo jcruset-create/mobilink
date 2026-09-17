@@ -88,10 +88,11 @@ describe("qué se hace con lo que se lee", () => {
   });
 
   it("de todo el flanco se queda SOLO con el número: aquí no se busca catálogo", () => {
-    const r: Record<string, unknown> = clasificarLectura(conSerie(c("1234567890123")));
-    for (const campo of ["marca", "modelo", "medida", "dot", "codigo_velocidad"]) {
-      expect(r[campo]).toBeUndefined();
-    }
+    const r = clasificarLectura(conSerie(c("1234567890123")));
+    // Los campos que sí lleva, y ninguno más: ni marca, ni medida, ni DOT.
+    expect(Object.keys(r).sort()).toEqual(
+      ["aviso", "confianza", "dudoso", "estado", "serie"],
+    );
   });
 });
 
