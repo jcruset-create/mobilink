@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { sessionHeaders } from "../../sessionHeaders";
 import {
   PLANTILLAS,
@@ -38,6 +38,15 @@ type PaymentStatus = {
 
 export default function CobrosDashboard() {
   const navigate = useNavigate();
+  /*
+    De dónde se ha entrado. Mobilink Cash manda `?desde=caja` para que el botón
+    de volver lleve a la jornada y no a Operativo. Se mira el parámetro en vez
+    de adivinarlo por el historial: con `history.back()`, quien llega aquí
+    desde un enlace o recargando la página se queda sin salida.
+  */
+  const [params] = useSearchParams();
+  const desdeCaja = params.get("desde") === "caja";
+
 
   // Form
   /** Asistencia a la que se imputa la señal. Opcional: la mayoría de cobros no la tienen. */
@@ -243,12 +252,21 @@ export default function CobrosDashboard() {
             >
               🏠 Inicio
             </button>
-            <button
-              onClick={() => navigate("/taller")}
-              className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700"
-            >
-              ← Volver a Operativo
-            </button>
+            {desdeCaja ? (
+              <button
+                onClick={() => navigate("/cash/jornada")}
+                className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700"
+              >
+                ← Volver a la caja
+              </button>
+            ) : (
+              <button
+                onClick={() => navigate("/taller")}
+                className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-bold text-slate-300 hover:bg-slate-700"
+              >
+                ← Volver a Operativo
+              </button>
+            )}
           </div>
         </div>
 
