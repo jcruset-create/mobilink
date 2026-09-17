@@ -1,4 +1,5 @@
 import type { PartePdf, NeumaticoPdf, NuevoPdf } from "./generarPdf.ts";
+import { procedenciaKm } from "./procedenciaKm.ts";
 
 /**
  * De lo que Mobilink ya guarda al papel del parte.
@@ -169,6 +170,15 @@ export function armarParte(
     flota: i.flota ?? null,
     matricula: i.matricula ?? null,
     km: i.km != null ? String(i.km) : null,
+    // La procedencia va a los metadatos del PDF, no a la hoja: ver
+    // procedenciaKm.ts para por qué.
+    km_origen: procedenciaKm({
+      km: i.km as number | null | undefined,
+      origen: (i as { origen_km?: string | null }).origen_km,
+      capturadoAt: (i as { km_capturado_at?: string | null }).km_capturado_at
+        ? new Date((i as { km_capturado_at?: string | null }).km_capturado_at!)
+        : null,
+    }),
     fecha: fechaCorta(i.fecha),
     lugar: (i.lugar_servicio as PartePdf["lugar"]) ?? null,
     inicio_servicio: hora(i.inicio_at),

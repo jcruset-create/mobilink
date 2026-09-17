@@ -7,6 +7,7 @@ import { ORIGEN_KM_LABELS, tipoLlantaLabel, presionTxt, TIPO_OPERACION_LABELS, M
 import { resumenOperaciones } from "../services/resumenOperaciones";
 import { ubicacionDeVehiculoBD } from "../services/data";
 import { ubicacionDeVehiculo, coordenadasDeVehiculo, enlaceDeMapa, type Ubicacion, type PosicionMapa } from "../services/presenciaVista";
+import { explicarKm } from "../services/procedenciaKm";
 import { Badge, Modal, TableWrap, tdCls, thCls } from "../components/ui";
 import VehicleLayoutImage from "../components/VehicleLayoutImage";
 import PlanoSnapshot from "../components/PlanoSnapshot";
@@ -184,7 +185,18 @@ export default function VehiculoDetalle() {
         <span className="ml-2 text-lg font-black text-slate-100">
           {Number(v.km_actual).toLocaleString("es-ES")} <span className="text-xs font-normal text-slate-400">km</span>
         </span>
-        <span className="text-[11px] text-slate-500">({ORIGEN_KM_LABELS[v.origen_km]})</span>
+        {/*
+          De dónde salen esos kilómetros y, si vinieron de la telemática,
+          cuándo se leyeron. La fecha sale de la última revisión que la
+          registró: abrir la ficha NO pregunta al proveedor —esa regla está
+          escrita en kilometrajeMensual/router.ts— y aquí se respeta.
+        */}
+        <span className="text-[11px] text-slate-500" title="Procedencia del kilometraje">
+          ({explicarKm({
+            origen: v.origen_km,
+            capturadoAt: revisiones.find((r) => r.km_capturado_at)?.km_capturado_at,
+          }) ?? ORIGEN_KM_LABELS[v.origen_km]})
+        </span>
         {/*
           Dónde está el vehículo ahora. Los tonos separan lo que se sabe de lo
           que se supone: verde afirma que está ahí, gris es «esto es lo último

@@ -847,6 +847,16 @@ export interface RevisionVehiculo {
   vehiculo_id: string;
   km_vehiculo?: number | null;
   origen_km?: string | null;
+  /**
+   * Cuándo leyó el proveedor ese odómetro. Null: no se sabe —kilometraje a
+   * mano, o revisiones anteriores a que esto se registrara—.
+   *
+   * Es lo que distingue un 512.480 km leído tres minutos antes de la revisión
+   * del mismo 512.480 leído ocho horas antes: el mismo número, distinto valor.
+   */
+  km_capturado_at?: string | null;
+  /** Minutos entre la lectura y la revisión, CON signo (negativo = anterior). */
+  km_desfase_min?: number | null;
   fecha_revision: string;
   created_at?: string | null;
   tecnico_id?: string | null;
