@@ -19,6 +19,7 @@ import { leerImporte } from "../correo/importes.ts";
 import { leerFecha } from "../correo/importes.ts";
 import { normalizar } from "../correo/texto.ts";
 import { extraerComplementarios, type Complementarios } from "./complementarios.ts";
+import { VOCABULARIO_CONCEPTOS, esCabeceraDeTotales, type VocabularioConceptos } from "./conceptos.ts";
 import { extraerLineas, type ExtraccionLineas, type OpcionesLineas } from "./lineas.ts";
 import {
   localizarAlbaranes,
@@ -55,7 +56,8 @@ export type ParserDocumento = {
   extraerComplementarios(seccion: SeccionAlbaran, bandaPrevia?: Localizacion["cabeceraDocumento"]): Complementarios;
 };
 
-const NIF = /\b(?:[A-Z]\d{8}|\d{8}[A-Z]|[A-Z]\d{7}[A-Z0-9])\b/;
+/** Con el prefijo del IVA intracomunitario opcional: «ESA80641897». */
+const NIF = /\b(?:ES)?(?:[A-Z]\d{8}|\d{8}[A-Z]|[A-Z]\d{7}[A-Z0-9])\b/;
 
 /*
  * Las etiquetas se buscan por PALABRAS, no por subcadenas: «factura» dentro
@@ -78,7 +80,7 @@ const ETIQUETAS_NUMERO = [
 const ETIQUETAS_ABONO = ["abono", "nota de credito", "factura rectificativa", "rectificativa"];
 
 /** Los totales. Las etiquetas más específicas van antes que las genéricas. */
-const ETIQUETAS_BASE = ["base imponible", "base imp", "total sin iva", "subtotal"];
+const ETIQUETAS_BASE = ["base imponible", "base imp", "total sin iva", "importe neto", "subtotal"];
 const ETIQUETAS_IVA = ["importe iva", "cuota iva", "iva"];
 const ETIQUETAS_TOTAL = [
   "total factura",
@@ -126,11 +128,21 @@ function ocurrencias(tokens: Token[], etiqueta: string): { desde: number; hasta:
   return salida;
 }
 
-/** Un importe con o sin el símbolo pegado. */
-const PARECE_IMPORTE = /^[-−+]?\d[\d.,]*(?:€|EUR)?$/i;
+/**
+ * Un importe con o sin el símbolo pegado.
+ *
+ * Tiene que acabar en cifra: «Tomo 11513,» del pie legal de una factura no es
+ * un importe, y leído como tal son once mil euros de IVA.
+ */
+const PARECE_IMPORTE = /^[-−+]?\d[\d.,]*(?<![.,])\s*(?:€|EUR)?$/i;
 /** «N0000123456», «F-ABC26-0001234», «2026/000123»: letras y al menos tres dígitos. */
 const PARECE_NUMERO_DOC = /^[A-Z0-9][A-Z0-9/.-]{2,}$/i;
 const PARECE_FECHA = /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}$/;
+
+/** Un importe de verdad: «23.09.2026» tiene su forma y es una fecha. */
+function pareceImporte(v: string): boolean {
+  return PARECE_IMPORTE.test(v) && !PARECE_FECHA.test(v);
+}
 /** Lo que puede haber entre una etiqueta y su valor sin significar nada. */
 const RELLENO = /^[:.\-–—nº°]*$/i;
 
@@ -151,15 +163,32 @@ function valorBajo(
   indice: number,
   x0: number,
   x1: number,
-  acepta: (raw: string) => boolean
+  acepta: (raw: string) => boolean,
+  titulos: Token[]
 ): string | null {
   const etiqueta = filas[indice];
   const tope = etiqueta.y + Math.max(etiqueta.h, 8) * 3 + 8;
+  const centro = (t: Token) => (t.x0 + t.x1) / 2;
+  /*
+   * El valor no tiene por qué caer justo debajo de su título: en una tabla con
+   * recuadros el título va centrado y el número pegado a la derecha, y los dos
+   * pueden no solaparse ni por un punto. Vale también el número cuyo título
+   * MÁS CERCANO es éste, que es lo que ve quien la lee.
+   */
+  const suyo = (t: Token): boolean => {
+    if (t.x0 < x1 && t.x1 > x0) return true;
+    let cerca: Token | null = null;
+    for (const titulo of titulos) {
+      if (!cerca || Math.abs(centro(titulo) - centro(t)) < Math.abs(centro(cerca) - centro(t))) cerca = titulo;
+    }
+    return cerca !== null && centro(cerca) >= x0 && centro(cerca) <= x1;
+  };
+
   for (let i = indice + 1; i < filas.length; i++) {
     const f = filas[i];
     if (f.pagina !== etiqueta.pagina || f.y > tope) break;
     for (const t of tokensDe(f)) {
-      if (t.x0 < x1 && t.x1 > x0 && acepta(t.raw)) return t.raw;
+      if (acepta(t.raw) && suyo(t)) return t.raw;
     }
   }
   return null;
@@ -174,11 +203,20 @@ function valorDetras(tokens: Token[], hasta: number, acepta: (raw: string) => bo
   return null;
 }
 
-/** El primer importe detrás de la etiqueta, saltando un «21 %» si lo hay. */
+/** Cuántas palabras puede haber entre una etiqueta y su importe. */
+const PALABRAS_HASTA_EL_IMPORTE = 4;
+
+/**
+ * El primer importe detrás de la etiqueta, saltando un «21 %» si lo hay.
+ *
+ * Tiene que venir pegado: entre «Total» y su cifra caben dos puntos y unos
+ * puntos de relleno, no media frase. Sin ese límite, un «IVA:» del pie legal
+ * se lleva el primer número que aparezca quince palabras más allá.
+ */
 function importeDetras(tokens: Token[], hasta: number): string | null {
-  for (let i = hasta; i < tokens.length; i++) {
+  for (let i = hasta; i < Math.min(tokens.length, hasta + PALABRAS_HASTA_EL_IMPORTE); i++) {
     const t = tokens[i];
-    if (!PARECE_IMPORTE.test(t.raw)) continue;
+    if (!pareceImporte(t.raw)) continue;
     const siguiente = tokens[i + 1]?.raw ?? "";
     if (siguiente.startsWith("%") || t.raw.endsWith("%")) continue;
     return t.raw;
@@ -200,16 +238,38 @@ function envuelta(tokens: Token[], o: { desde: number; hasta: number }): boolean
   return ["%", "sin", "con", "s"].includes(antes) || ["incluido", "incl", "inc"].includes(despues);
 }
 
-/** El importe de una etiqueta de total: detrás de ella o debajo de ella. */
+/**
+ * El importe de una etiqueta de total: detrás de ella o debajo de ella.
+ *
+ * Se busca DE ABAJO ARRIBA. El pie va al final del documento, y por encima
+ * puede haber cien filas que digan «Total»: hay plantillas que rematan cada
+ * artículo con el suyo, y la primera coincidencia sería el total de un
+ * neumático en vez del de la factura.
+ */
+/**
+ * Dónde empieza el pie del documento: la última fila de títulos de totales.
+ *
+ * Es la que separa «el total de la factura» de «el total de este artículo»,
+ * que hay plantillas que rematan cada línea con el suyo. Si el documento no
+ * tiene una fila así, se busca desde el principio, como se ha hecho siempre.
+ */
+function indiceDelPie(filas: LineaTexto[], conceptos: VocabularioConceptos): number {
+  for (let i = filas.length - 1; i >= 0; i--) {
+    if (esCabeceraDeTotales(filas[i].texto, conceptos)) return i;
+  }
+  return 0;
+}
+
 function importeDe(filas: LineaTexto[], etiquetas: string[]): number | null {
-  for (let i = 0; i < filas.length; i++) {
+  for (let i = indiceDelPie(filas, VOCABULARIO_CONCEPTOS); i < filas.length; i++) {
     const tokens = tokensDe(filas[i]);
     for (const e of etiquetas) {
       for (const o of ocurrencias(tokens, e)) {
         if (envuelta(tokens, o)) continue;
         const detras = importeDetras(tokens, o.hasta);
         const raw =
-          detras ?? valorBajo(filas, i, tokens[o.desde].x0, tokens[o.hasta - 1].x1, (v) => PARECE_IMPORTE.test(v));
+          detras ??
+          valorBajo(filas, i, tokens[o.desde].x0, tokens[o.hasta - 1].x1, pareceImporte, tokens);
         if (!raw) continue;
         const leido = leerImporte(raw.replace(/€|EUR/i, "").trim());
         if (leido.centimos !== null) return leido.centimos;
@@ -233,7 +293,7 @@ function numeroDe(
         // «Nº» a secas sólo vale con el valor al lado: debajo de un «Nº» puede
         // haber cualquier cosa.
         if (e.length <= 2 || e === "numero") continue;
-        const bajo = valorBajo(filas, i, tokens[o.desde].x0, tokens[o.hasta - 1].x1, esNumeroDoc);
+        const bajo = valorBajo(filas, i, tokens[o.desde].x0, tokens[o.hasta - 1].x1, esNumeroDoc, tokens);
         if (bajo) return { numero: bajo, etiqueta: e };
       }
     }
@@ -322,7 +382,7 @@ export const parserGenerico: ParserDocumento = {
 
   localizarAlbaranes(doc, opciones) {
     return localizarAlbaranes(doc, {
-      sinonimosColumna: Object.values(SINONIMOS_COLUMNA_POR_DEFECTO).flat(),
+      columnas: SINONIMOS_COLUMNA_POR_DEFECTO,
       ...opciones,
     });
   },

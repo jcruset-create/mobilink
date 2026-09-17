@@ -54,6 +54,15 @@ function desnudar(raw: string): { cuerpo: string; negativo: boolean } {
   v = v.replace(/(?<=\d)[eE]$/, "");
 
   let negativo = false;
+  /*
+   * El signo puede ir DETRÁS: «192,80-». Lo escriben así los ERP alemanes y
+   * es lo que imprime más de un proveedor. Leerlo como positivo convierte un
+   * descuento en un cargo, así que se mira por los dos lados.
+   */
+  if (v.endsWith("-") || v.endsWith("−")) {
+    negativo = true;
+    v = v.slice(0, -1);
+  }
   if (v.startsWith("-") || v.startsWith("−")) {
     negativo = true;
     v = v.slice(1);
@@ -178,7 +187,9 @@ export function leerFecha(raw: unknown): string | null {
   const v = raw.trim();
 
   const iso = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const es = v.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  // El punto también separa: «15.09.2026». Van los dos, así que «1.234» —un
+  // solo separador— no se confunde nunca con una fecha.
+  const es = v.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
 
   let anio: number, mes: number, dia: number;
   if (iso) {

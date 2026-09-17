@@ -27,6 +27,7 @@ import { normalizar } from "../correo/texto.ts";
 import type { LineaTexto, Palabra } from "./tipos.ts";
 
 export type TipoColumna =
+  | "posicion"
   | "referencia"
   | "descripcion"
   | "cantidad"
@@ -35,6 +36,7 @@ export type TipoColumna =
   | "importe";
 
 export const TIPOS_COLUMNA: readonly TipoColumna[] = [
+  "posicion",
   "referencia",
   "descripcion",
   "cantidad",
@@ -46,10 +48,23 @@ export const TIPOS_COLUMNA: readonly TipoColumna[] = [
 export type SinonimosColumna = Record<TipoColumna, readonly string[]>;
 
 export const SINONIMOS_COLUMNA_POR_DEFECTO: SinonimosColumna = {
-  referencia: ["ref", "ref.", "referencia", "artículo", "articulo", "código", "codigo", "cod."],
+  /*
+   * El número de orden de la fila. No se usa para nada, y por eso está: sin
+   * columna propia, el «0020» de la izquierda se pega a la referencia.
+   */
+  posicion: ["pos", "pos.", "posición", "posicion", "línea", "linea", "lin.", "nº línea"],
+  referencia: [
+    "ref", "ref.", "referencia", "artículo", "articulo", "código", "codigo", "cod.",
+    "art", "art.", "no.art", "no.art.", "no. art.", "nº art.", "n.art.",
+  ],
   descripcion: ["descripción", "descripcion", "concepto", "denominación", "denominacion", "detalle"],
-  cantidad: ["cant", "cant.", "cantidad", "uds", "uds.", "unid", "unidades"],
-  precio: ["precio", "p.unit", "p. unit", "p.v.p", "pvp", "precio unitario"],
+  // «Unit» es la columna de la unidad de medida: va pegada a la cantidad y su
+  // contenido («UN», «UDS») lo descarta quien lee la celda.
+  cantidad: ["cant", "cant.", "cantidad", "uds", "uds.", "unid", "unidades", "unit", "unidad", "u.m.", "um"],
+  precio: [
+    "precio", "p.unit", "p. unit", "p.v.p", "pvp", "precio unitario",
+    "precio/unit", "precio/ud", "precio unit", "p/unit",
+  ],
   descuento: ["dto", "dto.", "desc", "desc.", "descuento", "dto%", "%dto"],
   importe: ["importe", "total", "neto", "importe neto"],
 };
@@ -83,6 +98,9 @@ export const REJILLA_POSICIONAL: Rejilla = {
 
 /** Mínimo de títulos reconocidos para dar una fila por cabecera de tabla. */
 const MIN_TITULOS = 3;
+
+/** Columnas de texto: su contenido crece hacia la derecha. */
+const ALINEADAS_A_LA_IZQUIERDA: readonly TipoColumna[] = ["posicion", "referencia", "descripcion"];
 
 function limpia(v: string): string {
   return normalizar(v).toLowerCase().replace(/[:|]/g, "").trim();
@@ -167,11 +185,26 @@ export function detectarRejilla(
     anclas.push({ tipo, etiqueta: p.texto, x0: p.x, x1: p.x + p.w });
   }
 
+  /*
+   * El hueco entre una columna de TEXTO y la siguiente es de la de texto.
+   *
+   * Una descripción se alinea a la izquierda y crece hacia la derecha hasta
+   * donde haga falta; un número se alinea a la derecha y nunca llega tan a la
+   * izquierda. Partir ese hueco por la mitad —que es lo natural entre dos
+   * columnas de números— se lleva el final de las descripciones largas a la
+   * columna de la cantidad, y entonces no hay ni descripción ni cantidad.
+   */
+  const frontera = (i: number): number => {
+    const a = anclas[i];
+    const b = anclas[i + 1];
+    return ALINEADAS_A_LA_IZQUIERDA.includes(a.tipo) ? b.x0 - 1 : (a.x1 + b.x0) / 2;
+  };
+
   const columnas: Columna[] = anclas.map((a, i) => ({
     tipo: a.tipo,
     etiqueta: a.etiqueta,
-    x0: i === 0 ? -Infinity : (anclas[i - 1].x1 + a.x0) / 2,
-    x1: i === anclas.length - 1 ? Infinity : (a.x1 + anclas[i + 1].x0) / 2,
+    x0: i === 0 ? -Infinity : frontera(i - 1),
+    x1: i === anclas.length - 1 ? Infinity : frontera(i),
   }));
 
   return { modo: "CABECERA", columnas, filaCabecera: cabecera, confianza: 1 };

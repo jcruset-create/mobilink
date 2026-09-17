@@ -32,6 +32,7 @@
  */
 
 import { normalizar } from "../correo/texto.ts";
+import { sinFechas } from "./tipos.ts";
 
 /** Cuestan dinero, no son línea, y no cierran nada. */
 export const CONCEPTOS_GLOBALES_POR_DEFECTO = [
@@ -87,17 +88,32 @@ export const ARRASTRES_POR_DEFECTO = [
  */
 export const TOTALES_DOCUMENTO_POR_DEFECTO = [
   "importe bruto",
+  "importe neto",
+  "importe total",
   "base imponible",
   "base imp",
   "total sin iva",
+  "total con iva",
+  "total iva incluido",
   "total factura",
   "total documento",
+  "total abono",
+  "total a pagar",
   "iva",
   "i.v.a",
-  "subtotal",
-  "suma",
-  "total",
 ] as const;
+
+/**
+ * Totales de UNA LÍNEA, no del documento: «Total», «Neto», «Subt2: Net 1».
+ *
+ * Hay plantillas de ERP que desglosan cada artículo en varias filas —bruto,
+ * descuentos, neto— y rematan el bloque con un «Total» a secas. Ese «Total»
+ * no es el pie de la factura y NO cierra el albarán: cerrarlo ahí dejaba
+ * fuera todo lo que venía detrás, que es el resto de la factura.
+ *
+ * Siguen sin ser línea: no se suman ni se cuentan como artículo.
+ */
+export const TOTALES_LINEA_POR_DEFECTO = ["total", "neto", "subtotal", "subt", "suma"] as const;
 
 export type VocabularioConceptos = {
   globales: readonly string[];
@@ -105,6 +121,8 @@ export type VocabularioConceptos = {
   /** Se buscan contenidas, como palabra entera. Opcional por compatibilidad. */
   ambientales?: readonly string[];
   arrastres?: readonly string[];
+  /** Totales de una línea. No son artículo, pero tampoco cierran la sección. */
+  totalesLinea?: readonly string[];
 };
 
 export const VOCABULARIO_CONCEPTOS: VocabularioConceptos = {
@@ -112,6 +130,7 @@ export const VOCABULARIO_CONCEPTOS: VocabularioConceptos = {
   totales: TOTALES_DOCUMENTO_POR_DEFECTO,
   ambientales: CONCEPTOS_AMBIENTALES_POR_DEFECTO,
   arrastres: ARRASTRES_POR_DEFECTO,
+  totalesLinea: TOTALES_LINEA_POR_DEFECTO,
 };
 
 /** Minúsculas, sin acentos, con la puntuación de relleno convertida en espacio. */
@@ -190,7 +209,7 @@ export function esCabeceraDeTotales(
   texto: string,
   vocabulario: VocabularioConceptos = VOCABULARIO_CONCEPTOS
 ): boolean {
-  if (/\d[.,]\d{2}/.test(texto)) return false;
+  if (/\d[.,]\d{2}/.test(sinFechas(texto))) return false;
   let t = ` ${llano(texto)} `;
   let n = 0;
   // De la más larga a la más corta, retirando lo reconocido para no contar
@@ -207,8 +226,24 @@ export function esCabeceraDeTotales(
   return n >= 2;
 }
 
-/** La etiqueta del total de documento, o `null` si no lo es. */
+/**
+ * La etiqueta de un total —del documento o de una línea—, o `null`.
+ *
+ * Los dos comparten que no son un artículo. Lo que los separa es si cierran
+ * la sección, y eso lo pregunta `cierraSeccion`.
+ */
 export function totalDocumento(
+  texto: string,
+  vocabulario: VocabularioConceptos = VOCABULARIO_CONCEPTOS
+): string | null {
+  return (
+    empiezaPorAlguna(texto, vocabulario.totales) ??
+    empiezaPorAlguna(texto, vocabulario.totalesLinea ?? [])
+  );
+}
+
+/** ¿Este total es el pie de la factura, y por tanto cierra el albarán? */
+export function cierraSeccion(
   texto: string,
   vocabulario: VocabularioConceptos = VOCABULARIO_CONCEPTOS
 ): string | null {

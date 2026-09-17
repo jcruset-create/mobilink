@@ -1344,6 +1344,41 @@ direcciones: «@proveedor.com» (con arroba o sin ella al escribirlo) acepta
 cualquier buzón de ese dominio y de sus subdominios. Lo que no es ni
 dirección ni dominio se sigue descartando al guardar.
 
+**Ajuste con documentos reales (N.3), segunda tanda: la plantilla de ERP.**
+Un tercer proveedor factura con una plantilla que no se parece a las dos
+anteriores, y que rompía el parser de cinco maneras a la vez:
+
+- **El artículo va desglosado en varias filas.** Precio bruto en la fila del
+  artículo y debajo una por cada descuento, una con el neto y otra con la
+  ecotasa. Leídas como líneas sueltas, el albarán sumaba el bruto Y los
+  descuentos. Ahora esas filas MODIFICAN la línea de arriba: los descuentos
+  se le añaden y el neto pasa a ser su importe, que es lo que se paga y lo
+  que suma.
+- **«Total» a secas remata cada artículo.** Antes cerraba la sección, así
+  que el albarán se acababa en su primera línea y el resto de la factura
+  quedaba huérfano. Se separan los totales del DOCUMENTO —que cierran— de
+  los de una línea —que no—, y los totales de cabecera se leen desde el pie
+  del documento hacia abajo, no desde el principio.
+- **El signo va detrás: «192,80-».** Lo leía en positivo, que convierte un
+  descuento en un cargo. Y las fechas llevan puntos («15.09.2026»), que
+  tienen la forma de un número con decimales: se quitan antes de preguntar
+  si una fila lleva importes.
+- **Descuentos que se suman en vez de encadenarse.** 40 % y 8,5 % sobre el
+  bruto, no el segundo sobre lo que deja el primero. Se acepta la
+  convención que explique el importe impreso y, cuando el papel imprime
+  cuánto descuenta cada uno, mandan esos importes: no hay nada que deducir.
+- **Geometría.** El hueco entre una columna de texto y la de al lado es de
+  la de texto —una descripción crece hacia la derecha y un número no llega
+  tan a la izquierda—, porque si no el final de las descripciones largas se
+  iba a la columna de la cantidad y no había ni una cosa ni la otra. Hay
+  columna de «Posición» y la unidad («1 UN») viaja pegada a la cantidad. En
+  el recuadro de totales, cada cifra es del título más cercano aunque no se
+  solapen ni por un punto.
+
+Con eso, las tres plantillas de las cinco primeras facturas y las de este
+proveedor dan MATCH en todos los albaranes probados, con la aritmética de
+todas las líneas cuadrando y los totales de cabecera leídos.
+
 **Descarga de documentos para revisión.** En Configuración, «Descargar
 documentos para revisión» baja en un zip los PDF cuyo análisis vigente quedó
 en REVISAR o ERROR en los últimos N días (`GET /documentos/revision?dias=`),
