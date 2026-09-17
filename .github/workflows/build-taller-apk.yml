@@ -15,6 +15,17 @@ name: Build Taller APK
 on:
   workflow_dispatch:
   push:
+    # Solo desde main, y esto NO es un detalle de estilo.
+    #
+    # Sin la restricción, el filtro `paths` compara la punta ANTERIOR de la rama
+    # con la nueva: una rama que se pone al día con `main` "toca" estos ficheros
+    # sin que nadie los haya editado, y el workflow publica una release desde una
+    # rama sin mergear. Pasó el 17/09: integrar main en una rama de PR dejó tres
+    # releases en borrador de versiones que no existían en main.
+    #
+    # Mismo arreglo que build-autoscan-agent.yml (#203), donde costó seis
+    # releases falsas averiguarlo.
+    branches: [main]
     paths:
       - "taller_app/**"
       - ".github/workflows/build-taller-apk.yml"
