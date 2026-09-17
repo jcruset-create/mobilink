@@ -108,6 +108,8 @@ export default function AlbaranDetalle() {
         </div>
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Dato rotulo="Pedido" valor={albaran.pedidoNumero} />
+          {/* Sólo si se sabe: un pedido deducido de su albarán no tiene fecha. */}
+          {albaran.pedidoFecha && <Dato rotulo="Fecha del pedido" valor={fmtFecha(albaran.pedidoFecha)} />}
           <Dato rotulo="Expedición" valor={fmtFecha(albaran.fechaExpedicion)} />
           <Dato rotulo="Transportista" valor={albaran.transportista} />
           <Dato rotulo="Centro destino" valor={albaran.centroNombre} />
