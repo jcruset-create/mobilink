@@ -607,6 +607,14 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS roadside_assistance_events_assistance_idx
       ON roadside_assistance_events("assistanceId");
 
+    -- Los ficheros SIEMPRE se piden por asistencia, y nunca hubo índice: cada
+    -- consulta era un recorrido de la tabla entera. Se notaba poco mientras
+    -- solo se miraban de una en una al abrir la galería; con el listado de
+    -- activas trayendo las fotos de cada tarjeta serían doscientos recorridos
+    -- por refresco, y la lista se refresca sola.
+    CREATE INDEX IF NOT EXISTS roadside_assistance_files_assistance_idx
+      ON roadside_assistance_files("assistanceId");
+
     CREATE TABLE IF NOT EXISTS roadside_vehicles (
       id SERIAL PRIMARY KEY,
       "workshopId" TEXT,

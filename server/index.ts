@@ -844,6 +844,15 @@ function normalizeRoadsideAssistanceRow(row: any) {
     operatorLng: normalizeNullableNumber(row.operatorLng),
     operatorLocationAtMs: row.operatorLocationAtMs != null ? Number(row.operatorLocationAtMs) : null,
     plateMismatch: row.plateMismatch === true || row.plateMismatch === "true",
+    /*
+     * Fotos para la tira de la tarjeta. Solo las trae el LISTADO, que es quien
+     * las pide en su consulta; el resto de sitios que normalizan una fila no
+     * las seleccionan y aquí quedan a cero y vacío. Es a propósito: el que
+     * pinta la tira mira `fotosMiniaturas`, y una lista vacía es «no hay que
+     * enseñar nada», no «no se han cargado».
+     */
+    fotosTotal: row.fotosTotal != null ? Number(row.fotosTotal) : 0,
+    fotosMiniaturas: Array.isArray(row.fotosMiniaturas) ? row.fotosMiniaturas : [],
     plateRemolque: row.plateRemolque ?? null,
     esRemolque: row.esRemolque === true || row.esRemolque === "true",
     origen: row.origen === "central" ? "central" : "taller",
@@ -5158,8 +5167,46 @@ app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    /*
+     * Las fotos viajan CON la lista, no en una petición por tarjeta.
+     *
+     * La tarjeta enseña una tira de miniaturas, y lo fácil habría sido pedir
+     * `/files` por cada asistencia al pintarla. Esta lista se refresca sola:
+     * serían doscientas peticiones cada vez, para unas miniaturas.
+     *
+     * De cada asistencia salen el TOTAL y las cinco primeras. El total, porque
+     * el «+N» de la tarjeta tiene que contar todas y no las que se mandaron.
+     * Cinco y no cuatro, para que con exactamente cinco la tarjeta pueda decir
+     * «+1» sin volver a preguntar.
+     *
+     * Queda fuera lo que no es una foto que hiciera el operario: la firma del
+     * cliente —que es suya y no ilustra el servicio— y los adjuntos que no son
+     * imagen, como el albarán en PDF, que como miniatura sería un cuadro gris.
+     */
     const result = await db.query(
-      `SELECT * FROM roadside_assistances ${where} ORDER BY "createdAtMs" DESC LIMIT 200`,
+      `SELECT a.*,
+              COALESCE(fot.total, 0) AS "fotosTotal",
+              fot.miniaturas        AS "fotosMiniaturas"
+         FROM roadside_assistances a
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::int AS total,
+                  json_agg(
+                    json_build_object('id', t.id, 'url', t.url, 'kind', t.kind)
+                    ORDER BY t."createdAtMs"
+                  ) FILTER (WHERE t.orden <= 5) AS miniaturas
+             FROM (
+               SELECT id, url, kind, "createdAtMs",
+                      row_number() OVER (ORDER BY "createdAtMs") AS orden
+                 FROM roadside_assistance_files
+                WHERE "assistanceId" = a.id
+                  AND kind <> 'firma'
+                  AND url ~* '\\.(jpe?g|png|webp|heic|heif|gif)($|\\?)'
+             ) t
+         ) fot ON true
+         ${where ? where.replace(/\b(status|"tallerId")\b/g, "a.$1") : ""}
+        ORDER BY a."createdAtMs" DESC
+        LIMIT 200`,
       params
     );
 

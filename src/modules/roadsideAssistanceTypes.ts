@@ -92,6 +92,16 @@ export type RoadsideAssistance = {
   expedienteCentral?: string | null;
   descripcionAveria?: string | null;
   trabajosARealizar?: string | null;
+  /**
+   * Fotos para la tira de la tarjeta, sin la firma ni los adjuntos que no son
+   * imagen. Las manda el LISTADO con cada asistencia; el resto de respuestas
+   * no las traen y aquí llegan vacías, que se pinta igual que «no hay fotos».
+   *
+   * `fotosTotal` cuenta TODAS y `fotosMiniaturas` solo las primeras: el «+N»
+   * de la tarjeta se calcula con el total, no con lo recibido.
+   */
+  fotosTotal?: number;
+  fotosMiniaturas?: { id: number; url: string; kind: string }[];
   redirectionLat?: number | null;
   redirectionLng?: number | null;
   redirectedAtMs?: number | null;

@@ -61,6 +61,7 @@ import {
 } from "../modules/roadsideAssistanceTypes";
 import { aMilisegundos, fechaHoraCorta } from "../modules/roadsideFechaHora";
 import { formatCoords } from "../modules/roadsideCoordenadas";
+import { nombreDeFoto, tiraDeFotos } from "../modules/roadsideFotosTarjeta";
 import { etiquetaMatricula, matriculasDe } from "../modules/roadsideMatricula";
 import { filtrar as filtrarAsistencias, hayCriterios } from "../modules/roadsideFiltro";
 import SubcontratacionExterna from "./SubcontratacionExterna";
@@ -2336,6 +2337,95 @@ export default function RoadsideAssistanceView({
                           <span className="ml-2">{renderWaStatus(assistance.waStatus, assistance.waStatusAtMs)}</span>
                         )}
                       </div>
+
+                      {/*
+                        Avería, trabajos y fotos: lo que hasta ahora solo se
+                        veía abriendo «Editar».
+
+                        Quien mira esta tarjeta está decidiendo a quién manda y
+                        con qué material, y para eso necesita saber qué ha
+                        pasado. Tenerlo detrás de un modal obliga a abrir,
+                        leer, cerrar, y en una lista de varias asistencias eso
+                        no se hace: se llama por teléfono.
+
+                        Cada bloque aparece solo si tiene algo. Una caja con un
+                        guion ocupa el mismo sitio que una con contenido y no
+                        dice nada.
+                      */}
+                      {(assistance.descripcionAveria || assistance.trabajosARealizar) && (
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {assistance.descripcionAveria && (
+                            <div className="rounded-lg bg-slate-950 px-3 py-2">
+                              <div className="text-[11px] font-bold uppercase text-slate-500">
+                                Avería
+                              </div>
+                              {/* Texto entero y `whitespace-pre-line`: una avería
+                                  copiada de un correo trae saltos de línea, y
+                                  aplastarlos junta frases que no van juntas. */}
+                              <div className="whitespace-pre-line text-sm font-medium text-slate-200">
+                                {assistance.descripcionAveria}
+                              </div>
+                            </div>
+                          )}
+                          {assistance.trabajosARealizar && (
+                            <div className="rounded-lg bg-slate-950 px-3 py-2">
+                              <div className="text-[11px] font-bold uppercase text-slate-500">
+                                Trabajos a realizar
+                              </div>
+                              {/* En monoespaciada porque casi siempre son medidas y
+                                  referencias —385/65R22.5—, y ahí un 5 y un 6 se
+                                  confunden leyendo rápido desde el móvil. */}
+                              <div className="whitespace-pre-line font-mono text-[13px] font-semibold text-amber-200/90">
+                                {assistance.trabajosARealizar}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {(() => {
+                        const tira = tiraDeFotos(
+                          assistance.fotosMiniaturas,
+                          assistance.fotosTotal,
+                        );
+                        if (tira.miniaturas.length === 0) return null;
+                        return (
+                          <div className="rounded-lg bg-slate-950 px-3 py-2">
+                            <div className="text-[11px] font-bold uppercase text-slate-500">
+                              Fotos · {assistance.fotosTotal}
+                            </div>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                              {tira.miniaturas.map((f) => (
+                                <button
+                                  key={f.id}
+                                  type="button"
+                                  onClick={() => setPhotosAssistance(assistance)}
+                                  title={nombreDeFoto(f.kind)}
+                                  className="h-14 w-14 shrink-0 overflow-hidden rounded-md border border-slate-700 hover:border-slate-500"
+                                >
+                                  <img
+                                    src={f.url}
+                                    alt={nombreDeFoto(f.kind)}
+                                    loading="lazy"
+                                    className="h-full w-full object-cover"
+                                  />
+                                </button>
+                              ))}
+                              {/* El «+N» abre la misma galería que las miniaturas:
+                                  es el resto de esas fotos, no otra cosa. */}
+                              {tira.resto > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPhotosAssistance(assistance)}
+                                  className="h-14 w-14 shrink-0 rounded-md border border-dashed border-slate-600 text-xs font-bold text-slate-400 hover:border-slate-500 hover:text-slate-200"
+                                >
+                                  +{tira.resto}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {assistance.status === "en_camino" && (
