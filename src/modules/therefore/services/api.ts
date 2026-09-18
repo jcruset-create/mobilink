@@ -245,7 +245,7 @@ export type PreparacionAlbaranes = {
   encontrados: string[];
   preparados: string[];
   yaEstaban: string[];
-  genericas: string[];
+  retiradas: number;
 };
 
 /** Pone a gestionar todos los albaranes que trae el documento del expediente. */

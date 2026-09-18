@@ -1430,9 +1430,10 @@ Tres decisiones:
   albarán inventado es peor que ninguna.
 - **No duplica.** Un albarán que ya estaba pedido se cuenta como «ya estaba»,
   y el índice único de la actuación lo remata.
-- **La actuación genérica no se toca.** Se devuelve señalada para que la
-  pantalla lo diga; retirarla es una decisión de quien mira, no un efecto
-  colateral de haber pulsado un botón.
+- **La actuación genérica se retira.** Al terminar —y no antes, para que un
+  fallo a medias deje la tarea original intacta— se descarta con su motivo:
+  «desglosada en N albaranes del documento». Ya no hay nada que hacer en
+  ella, y un expediente no se da por resuelto con actuaciones vivas dentro.
 
 **El PDF con el albarán subrayado.** «Ver resaltado», al lado de «Ver el
 PDF», devuelve la factura ENTERA del proveedor con el bloque de ese albarán

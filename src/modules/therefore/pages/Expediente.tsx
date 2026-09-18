@@ -302,9 +302,7 @@ function Albaranes({
       const r = await api.prepararAlbaranes(expedienteId);
       const partes = [`${r.preparados.length} albarán(es) preparado(s) de ${r.encontrados.length}`];
       if (r.yaEstaban.length) partes.push(`${r.yaEstaban.length} ya estaban`);
-      if (r.genericas.length) {
-        partes.push("la actuación sin número sigue pendiente: descártala si ya no hace falta");
-      }
+      if (r.retiradas) partes.push(`${r.retiradas} actuación(es) sin número retirada(s)`);
       setAviso(`${partes.join(" · ")}.`);
       await cargar();
       onCambio();
