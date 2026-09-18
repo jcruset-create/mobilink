@@ -71,6 +71,23 @@ export const CONCEPTOS_AMBIENTALES_POR_DEFECTO = [
  * Repiten dinero que ya está contado y NO cierran nada: el albarán sigue en
  * la página siguiente. Ni línea, ni concepto, ni pie. Se ignoran.
  */
+/**
+ * Bloques que van DETRÁS de las líneas y cierran el albarán aunque no lleven
+ * un importe: la forma de pago y el vencimiento.
+ *
+ * Hacen falta cuando el recuadro de totales no se puede leer —una factura
+ * escaneada cuyo OCR lo devuelve en jeroglífico—: sin ellos, el último
+ * albarán se come el resto de la página.
+ */
+export const CIERRES_POR_DEFECTO = [
+  "forma de pago",
+  "forma de pagament",
+  "vencimiento",
+  "vencimientos",
+  "venciment",
+  "rebut",
+] as const;
+
 export const ARRASTRES_POR_DEFECTO = [
   "suma y sigue",
   "suma anterior",
@@ -123,6 +140,8 @@ export type VocabularioConceptos = {
   arrastres?: readonly string[];
   /** Totales de una línea. No son artículo, pero tampoco cierran la sección. */
   totalesLinea?: readonly string[];
+  /** Bloques de pie que cierran la sección sin llevar importe. */
+  cierres?: readonly string[];
 };
 
 export const VOCABULARIO_CONCEPTOS: VocabularioConceptos = {
@@ -131,6 +150,7 @@ export const VOCABULARIO_CONCEPTOS: VocabularioConceptos = {
   ambientales: CONCEPTOS_AMBIENTALES_POR_DEFECTO,
   arrastres: ARRASTRES_POR_DEFECTO,
   totalesLinea: TOTALES_LINEA_POR_DEFECTO,
+  cierres: CIERRES_POR_DEFECTO,
 };
 
 /** Minúsculas, sin acentos, con la puntuación de relleno convertida en espacio. */
@@ -248,6 +268,14 @@ export function cierraSeccion(
   vocabulario: VocabularioConceptos = VOCABULARIO_CONCEPTOS
 ): string | null {
   return empiezaPorAlguna(texto, vocabulario.totales);
+}
+
+/** ¿Empieza aquí el bloque de pie —pago, vencimiento— que va tras las líneas? */
+export function abrePieDeDocumento(
+  texto: string,
+  vocabulario: VocabularioConceptos = VOCABULARIO_CONCEPTOS
+): string | null {
+  return empiezaPorAlguna(texto, vocabulario.cierres ?? []);
 }
 
 /** Cualquiera de las dos familias. */

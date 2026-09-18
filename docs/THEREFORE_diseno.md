@@ -1379,6 +1379,41 @@ Con eso, las tres plantillas de las cinco primeras facturas y las de este
 proveedor dan MATCH en todos los albaranes probados, con la aritmética de
 todas las líneas cuadrando y los totales de cabecera leídos.
 
+**Ajuste con documentos reales (N.3), tercera tanda: catalán, margen impreso
+y un OCR a medias.** Un cuarto proveedor factura en catalán, con el listado de
+sus delegaciones impreso en el margen izquierdo —a la misma altura que las
+líneas— y un recuadro de totales que el OCR devuelve en jeroglífico:
+
+- **Vocabulario catalán**: «Albarà» como cabecera de albarán, y
+  QUANTITAT / PREU / DTE / DESCRIPCIÓ como títulos de columna. Las cabeceras
+  se comparan contra el texto ya normalizado, así que van sin acentos: las
+  que estaban acentuadas no podían casar nunca.
+- **«ALB.ABON» no es una marca.** Una cabecera que acaba en signo —«alb.»,
+  «alb:»— no vale si le sigue una letra: ALB.ABON es el albarán que se abona,
+  no el de esta línea, y tomarlo por marca parte la factura por donde no es.
+- **Identificadores con letras y barras**: `0300AL00/831317`.
+- **El margen de la página no es tabla.** Un bloque de palabras al principio
+  de la fila que acaba antes de donde empieza la tabla Y está separado por un
+  hueco ancho se descarta. Las dos condiciones a la vez: una descripción larga
+  puede empezar a la izquierda de su propio título —pasa en otra de las
+  plantillas— y entre la descripción y la cantidad siempre hay hueco.
+- **El pie sin importes legibles.** «Forma de pago», «Vencimiento», «Rebut»
+  cierran la sección aunque no lleven cifra: sin eso, el último albarán se
+  comía el resto de la página cuando el recuadro de totales no se puede leer.
+- **El número y la fecha del documento, por etiqueta y no por posición.** Se
+  buscan de la etiqueta más específica a la más genérica y por todo el papel:
+  hay plantillas que ponen el recuadro del cliente abajo, y «Nº Fra» tiene que
+  ganarle a «Factura rectificativa», que está justo encima del CIF. La fecha
+  es la que lleva su etiqueta al lado del número, no la primera que aparezca:
+  junto al número también está el vencimiento.
+- **Lo que no llega a texto no se anota**: una fila con menos de un 60 % de
+  letras y cifras es OCR fallido, no una observación del albarán.
+
+De esta factura no se pueden leer los totales —su recuadro viene ilegible del
+OCR—, así que el contraste disponible es la suma de las líneas contra el
+importe que dijo el correo. Las líneas, los descuentos y la aritmética sí
+salen.
+
 **El PDF con el albarán subrayado.** «Ver resaltado», al lado de «Ver el
 PDF», devuelve la factura ENTERA del proveedor con el bloque de ese albarán
 en amarillo translúcido: su cabecera —número, fecha, dirección de entrega—,

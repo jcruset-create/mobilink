@@ -1065,3 +1065,123 @@ describe("por dónde pasa el subrayador", () => {
     expect(paginasResaltadas(cajasDelAlbaran(a.seccion))).toEqual([1]);
   });
 });
+
+/* ── La cuarta plantilla: catalán, margen impreso y un OCR a medias ───────── */
+
+describe("una factura en catalán con el listado de delegaciones en el margen", () => {
+  /** REF · DESCRIPCIÓ · QUANTITAT · PREU · DTE · TOTAL, como la imprime. */
+  const CABECERA_CAT: [string, number][] = [
+    ["REF", 114],
+    ["DESCRIPCIÓ", 189],
+    ["QUANTITAT", 367],
+    ["PREU", 445],
+    ["DTE", 489],
+    ["TOTAL", 529],
+  ];
+  /** Cada fila lleva pegado, a la izquierda del todo, el margen de la página. */
+  const conMargen = (y: number, margen: string, celdas: [string, number][]): LineaTexto =>
+    fila(1, y, [[margen, 13], ...celdas]);
+
+  const documentoFreco = () =>
+    documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 134, CABECERA_CAT),
+          conMargen(154, "País Basc, 11", [["Albarà 0300AL00/831317 Data 04/09/2026", 116]]),
+          conMargen(169, "Tel. Recanvis", [
+            ["6PK1033", 116],
+            ["6pk1033 mv", 191],
+            ["-1,00", 391],
+            ["28,00 €", 442],
+            ["50%", 489],
+            ["-14,00 €", 526],
+          ]),
+          conMargen(179, "977 3612 40", [["ALB.ABON: 0300AL00/814240-16/07/2026", 191]]),
+          conMargen(192, "Jacin Verdaguer, 17", [["Albarà 0300AL00/831751 Data 07/09/2026", 116]]),
+          conMargen(205, "Tel. Recanvis", [
+            ["033.575014068", 116],
+            ["575.14 adplus 75ah", 191],
+            ["-1,00", 391],
+            ["131,12€", 438],
+            ["50%", 489],
+            ["-65,56 €", 526],
+          ]),
+          // El recuadro de totales de esta factura llega ilegible del OCR.
+          fila(1, 599, [["MLsamoeemnosa]e]imT", 114]]),
+          fila(1, 635, [["ri•ll,,il·d@!i,,W,i= Mlli,UJ,i~", 114]]),
+          fila(1, 653, [["Rebut 20/11/2026", 114]]),
+          fila(1, 693, [["Client", 189], ["Factura rectificativa", 380]]),
+          fila(1, 706, [["Codi client: 2210.5", 189], ["CIF: A43044379", 380]]),
+          fila(1, 714, [["Nº Fra: FAB26007432", 380]]),
+          fila(1, 735, [["Data: 15/09/2026", 380]]),
+        ],
+      },
+    ]);
+
+  it("«Albarà» abre albarán y «ALB.ABON» no: es el que se abona, no éste", () => {
+    const loc = localizarAlbaranes(documentoFreco());
+    expect(loc.secciones.map((s) => s.numeroDocumento)).toEqual([
+      "0300AL00/831317",
+      "0300AL00/831751",
+    ]);
+    // Y el pie de pago cierra el último, aunque los totales no se puedan leer.
+    expect(loc.secciones[1].finPor).toBe("TOTALES");
+    expect(loc.secciones[1].lineas.some((l) => l.texto.includes("Client"))).toBe(false);
+  });
+
+  it("el margen impreso de la página no entra en las celdas", () => {
+    const a = analizarAlbaran(documentoFreco(), "0300AL00/831317");
+    expect(a.resultadoMatch).toBe("MATCH");
+    expect(a.lineas).toHaveLength(1);
+    const l = a.lineas[0];
+    // Sin el corte, la referencia sería «Tel. Recanvis 6PK1033».
+    expect(l.referencia).toBe("6PK1033");
+    expect(l.descripcion).toBe("6pk1033 mv");
+    expect(l.cantidad).toBe(-1);
+    expect(l.precioUnitarioCentimos).toBe(2800);
+    expect(l.importeCentimos).toBe(-1400);
+    expect(l.descuentos.map((d) => d.porcentaje)).toEqual([50]);
+    expect(l.cuadraAritmetica).toBe(true);
+    // Y la observación tampoco se lleva el teléfono de la delegación.
+    expect(a.complementarios.observaciones).toBe("ALB.ABON: 0300AL00/814240-16/07/2026");
+  });
+
+  it("una descripción que empieza a la izquierda de su título NO se corta", () => {
+    // La otra cara del corte anterior: aquí no hay hueco, hay una descripción
+    // larga bajo un título centrado. Es la plantilla de otro proveedor.
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 155, [["REFERENCIA", 146], ["CANTIDAD", 351], ["PRECIO", 433], ["TOTAL", 513]]),
+          fila(1, 200, [["Albaran: 0501234", 40]]),
+          fila(1, 228, [
+            ["255/65 R17 114H TL CF1100 A/T, COMFORSER", 28],
+            ["4", 376],
+            ["93,47 €", 441],
+            ["373,88 €", 515],
+          ]),
+        ],
+      },
+    ]);
+    const a = analizarAlbaran(doc, "0501234");
+    expect(a.lineas[0].descripcion).toBe("255/65 R17 114H TL CF1100 A/T, COMFORSER");
+    expect(a.lineas[0].cantidad).toBe(4);
+  });
+
+  it("el número de la factura se busca por su etiqueta, no por dónde cae", () => {
+    const c = parserGenerico.extraerCabecera(documentoFreco());
+    // «Nº Fra» gana a «Factura rectificativa», que está encima del CIF.
+    expect(c.numeroDocumento).toBe("FAB26007432");
+    expect(c.tipoDocumento).toBe("ABONO");
+    // Y la fecha es la de su etiqueta, no el vencimiento que hay al lado.
+    expect(c.fechaDocumento).toBe("2026-09-15");
+  });
+
+  it("lo que el OCR no supo leer no se guarda como observación", () => {
+    const a = analizarAlbaran(documentoFreco(), "0300AL00/831751");
+    expect(a.lineas).toHaveLength(1);
+    expect(a.complementarios.observaciones ?? "").not.toContain("ri•ll");
+  });
+});
