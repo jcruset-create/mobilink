@@ -295,6 +295,7 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
 
       const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
       expect(ficha.body.albaran.observaciones).toBe("JORGE PLANA");
+      expect(ficha.body.albaran.telefonoContacto).toBeNull();
 
       // Y se ve en la bandeja sin abrir nada, que es donde hace falta.
       const fila = (await api("/bandeja", operarioA)).body.albaranes.find((a: any) => a.id === albaran.id);
@@ -305,11 +306,27 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
       expect(eventos[0].descripcion).toContain("JORGE PLANA");
     });
 
-    it("un nombre con teléfono entra igual", async () => {
+    it("el móvil sale a su propia columna, listo para avisar a quien espera", async () => {
       const pedido = await crearPedido(2);
       const { albaran } = await crearAlbaran(pedido, 2);
       await subirOriginal(albaran.id, await pdfAlbaranSoledad("PEDRO+610473077"));
-      expect((await api(`/albaranes/${albaran.id}`, operarioA)).body.albaran.observaciones).toBe("PEDRO 610473077");
+
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      expect(ficha.body.albaran.observaciones).toBe("PEDRO");
+      expect(ficha.body.albaran.telefonoContacto).toBe("610473077");
+
+      const fila = (await api("/bandeja", operarioA)).body.albaranes.find((a: any) => a.id === albaran.id);
+      expect(fila.observaciones).toBe("PEDRO");
+      expect(fila.telefonoContacto).toBe("610473077");
+    });
+
+    it("una observación sin móvil deja el teléfono vacío: no se inventa un número", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfAlbaranSoledad("TALLER"));
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      expect(ficha.body.albaran.observaciones).toBe("TALLER");
+      expect(ficha.body.albaran.telefonoContacto).toBeNull();
     });
 
     it("un PDF que no es un albarán de Soledad no inventa observaciones, y el original se guarda igual", async () => {

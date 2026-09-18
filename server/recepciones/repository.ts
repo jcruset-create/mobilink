@@ -119,6 +119,8 @@ export type Albaran = {
   pedidoNumero: string;
   /** Cuándo se encargó. Los pedidos deducidos de un albarán no la saben. */
   pedidoFecha: string | null;
+  /** El móvil que venía en las observaciones del albarán, si lo traía. */
+  telefonoContacto: string | null;
   numeroProveedor: string;
   numeroNormalizado: string;
   fechaExpedicion: string | null;
@@ -335,6 +337,7 @@ const aAlbaran = (r: any): Albaran => ({
   proveedorNombre: r.proveedor_nombre,
   pedidoNumero: r.pedido_numero,
   pedidoFecha: fecha(r.pedido_fecha),
+  telefonoContacto: r.telefono_contacto ?? null,
   numeroProveedor: r.numero_proveedor,
   numeroNormalizado: r.numero_normalizado,
   fechaExpedicion: fecha(r.fecha_expedicion),
@@ -1319,11 +1322,19 @@ export async function recalcularLineasAlbaran(empresaId: string, albaranId: stri
  * Anota las observaciones que traía el PDF del proveedor. Sólo rellena el
  * hueco: si alguien escribió algo a mano en el albarán, no se le pisa.
  */
-export async function anotarObservacionesAlbaran(empresaId: string, albaranId: string, texto: string, ejecutor?: Ejecutor): Promise<void> {
+export async function anotarObservacionesAlbaran(
+  empresaId: string,
+  albaranId: string,
+  datos: { texto: string | null; telefono: string | null },
+  ejecutor?: Ejecutor
+): Promise<void> {
   await db(ejecutor).query(
-    `UPDATE rcp_albaranes SET observaciones = $3, updated_at = now()
-      WHERE empresa_id = $1 AND id = $2 AND (observaciones IS NULL OR observaciones = '')`,
-    [empresaId, albaranId, texto]
+    `UPDATE rcp_albaranes SET
+       observaciones     = CASE WHEN observaciones IS NULL OR observaciones = '' THEN $3 ELSE observaciones END,
+       telefono_contacto = COALESCE(telefono_contacto, $4),
+       updated_at = now()
+      WHERE empresa_id = $1 AND id = $2`,
+    [empresaId, albaranId, datos.texto, datos.telefono]
   );
 }
 

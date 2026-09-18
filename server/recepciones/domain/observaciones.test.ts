@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { limpiarObservacion, observacionDeFila, observacionesDelAlbaran, type FilaPdf } from "./observaciones.ts";
+import { limpiarObservacion, observacionDeFila, observacionesDelAlbaran, partirObservacion, type FilaPdf } from "./observaciones.ts";
 
 const fila = (...palabras: string[]): FilaPdf => ({ palabras });
 /** La fila que abre la tabla de productos en el albarán de Soledad. */
@@ -44,6 +44,21 @@ describe("observacionesDelAlbaran", () => {
     // llevan sus números a cero. Ninguna de las tres sale.
     expect(observacionesDelAlbaran(ALBARAN_JORGE)).not.toContain(".");
     expect(observacionesDelAlbaran(ALBARAN_JORGE)).toHaveLength(1);
+  });
+
+  it("un nombre de tres partes, con sus dos «+», sale entero", () => {
+    // Albarán 2028458827: el artículo es «385/65X22.5 SAILUN STR1+», con su
+    // «+» al final, y la observación va debajo. Ni se mezclan ni se tocan.
+    const filas = [
+      CABECERA,
+      fila("0119090530003", "385/65X22.5", "SAILUN", "STR1+", "2", "261,346", "522,69"),
+      fila(".", "0", "0", "0,00"),
+      fila("4102999990094", "S.I.Gestión", "de", "NFU", "Cat.D2T", "2", "12,18", "24,36"),
+      fila("OSCAR+SALVADOR+SANJULIAN", "0", "0", "0,00"),
+      fila("0", "0", "0,00"),
+      fila("Importe", "Bruto:", "547,05"),
+    ];
+    expect(observacionesDelAlbaran(filas)).toEqual(["OSCAR SALVADOR SANJULIAN"]);
   });
 
   it("un artículo cuya descripción lleva «+» no se toca: sólo se limpian las observaciones", () => {
@@ -112,5 +127,30 @@ describe("limpiarObservacion", () => {
     expect(limpiarObservacion("JORGE+PLANA")).toBe("JORGE PLANA");
     expect(limpiarObservacion("  A++B  ")).toBe("A B");
     expect(limpiarObservacion("TALLER")).toBe("TALLER");
+  });
+});
+
+describe("partirObservacion", () => {
+  it("saca el móvil a su propio campo y deja el resto como texto", () => {
+    expect(partirObservacion("PEDRO 610473077")).toEqual({ texto: "PEDRO", telefono: "610473077" });
+    expect(partirObservacion("610473077 PEDRO")).toEqual({ texto: "PEDRO", telefono: "610473077" });
+    expect(partirObservacion("610473077")).toEqual({ texto: "", telefono: "610473077" });
+  });
+
+  it("admite el móvil escrito como lo escribe la gente", () => {
+    expect(partirObservacion("PEDRO 610 473 077")).toEqual({ texto: "PEDRO", telefono: "610473077" });
+    expect(partirObservacion("PEDRO 610.473.077")).toEqual({ texto: "PEDRO", telefono: "610473077" });
+    expect(partirObservacion("PEDRO +34 610473077")).toEqual({ texto: "PEDRO", telefono: "610473077" });
+    expect(partirObservacion("PEDRO 710473077")).toEqual({ texto: "PEDRO", telefono: "710473077" });
+  });
+
+  it("lo que no es un móvil español se queda donde está", () => {
+    // Un fijo no sirve para WhatsApp.
+    expect(partirObservacion("TALLER 977123456")).toEqual({ texto: "TALLER 977123456", telefono: null });
+    // Ni un número de pedido: avisar a un desconocido es peor que no avisar.
+    expect(partirObservacion("PEDIDO 5693921")).toEqual({ texto: "PEDIDO 5693921", telefono: null });
+    expect(partirObservacion("PEDIDO 6104730771")).toEqual({ texto: "PEDIDO 6104730771", telefono: null });
+    expect(partirObservacion("TALLER")).toEqual({ texto: "TALLER", telefono: null });
+    expect(partirObservacion("JORGE PLANA")).toEqual({ texto: "JORGE PLANA", telefono: null });
   });
 });
