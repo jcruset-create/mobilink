@@ -41,6 +41,7 @@ import { estaBloqueado, minutosRestantes, pinValido, trasFallo, PIN_MAX, PIN_MIN
 import { ErrorRecepciones } from "./errors.ts";
 import * as repo from "./repository.ts";
 import { generarDocumentoRecepcion, limpio } from "./documentos/generar.ts";
+import { observacionesDelPdf } from "./documentos/observaciones.ts";
 import { guardarDocumento, hashDeFichero, rutaDocumento } from "./storage.ts";
 
 /** `userId` es `null` cuando actúa el sistema (el correo del proveedor). */
@@ -1281,6 +1282,15 @@ export async function adjuntarOriginal(
     subidoPor: ctx.userId,
     subidoNombre: ctx.userNombre,
   });
+  // El PDF dice, después de la línea de gestión de NFU, PARA QUIÉN viene la
+  // mercancía («TALLER», «JORGE PLANA», «PEDRO 610473077»). Es el dato que
+  // decide dónde se deja el palé, y sólo viaja en el papel: el correo no lo
+  // trae. Nunca lanza: un PDF ilegible no puede impedir guardar el albarán.
+  const observaciones = observacionesDelPdf(contenido);
+  if (observaciones.length > 0) {
+    await repo.anotarObservacionesAlbaran(ctx.empresaId, albaran.id, observaciones.join(" · "));
+  }
+
   await repo.anotarEvento(ctx.empresaId, {
     pedidoId: albaran.pedidoId,
     albaranId: albaran.id,
@@ -1288,8 +1298,10 @@ export async function adjuntarOriginal(
     actorTipo: ctx.userId ? "usuario" : "sistema",
     usuarioId: ctx.userId,
     usuarioNombre: ctx.userNombre,
-    datos: { documentoId: documento.id, hash, origen },
-    descripcion: `PDF original del albarán ${albaran.numeroProveedor} guardado (${documento.nombreFichero}, ${origen === "SUBIDA_MANUAL" ? "subido a mano" : origen === "CORREO" ? "adjunto del correo" : "descargado del enlace del proveedor"}).`,
+    datos: { documentoId: documento.id, hash, origen, observaciones },
+    descripcion:
+      `PDF original del albarán ${albaran.numeroProveedor} guardado (${documento.nombreFichero}, ${origen === "SUBIDA_MANUAL" ? "subido a mano" : origen === "CORREO" ? "adjunto del correo" : "descargado del enlace del proveedor"}).` +
+      (observaciones.length > 0 ? ` Observaciones del albarán: ${observaciones.join(" · ")}.` : ""),
   });
   return documento;
 }

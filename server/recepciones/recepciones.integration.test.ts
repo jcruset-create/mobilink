@@ -101,6 +101,39 @@ function pdfDePrueba(texto: string): Promise<Buffer> {
   return listo;
 }
 
+/**
+ * Un albarán de Soledad como los de verdad: la tabla de productos con su
+ * cabecera, un neumático, la gestión de NFU y, debajo, la fila de observación
+ * con las tres columnas a cero. Las columnas van a la misma X que en el PDF
+ * real para que el lector las agrupe igual.
+ */
+function pdfAlbaranSoledad(observacion: string): Promise<Buffer> {
+  const doc = new PDFDocument({ size: "A4" });
+  const trozos: Buffer[] = [];
+  doc.on("data", (c: Buffer) => trozos.push(c));
+  const listo = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(trozos))));
+  doc.fontSize(9);
+  const filaPdf = (y: number, ref: string, desc: string, cant: string, precio: string, importe: string) => {
+    doc.text(ref, 30, y, { lineBreak: false });
+    doc.text(desc, 98, y, { lineBreak: false });
+    doc.text(cant, 343, y, { lineBreak: false });
+    doc.text(precio, 395, y, { lineBreak: false });
+    doc.text(importe, 500, y, { lineBreak: false });
+  };
+  doc.text("Observaciones:", 30, 400, { lineBreak: false });
+  doc.text("Productos", 30, 420, { lineBreak: false });
+  filaPdf(440, "Artículo", "Descripción", "Cantidad", "Precio", "Importe");
+  filaPdf(460, "0107091840005", "245/70X17.5 HANKOOK AH35 136M", "2", "248,45", "496,90");
+  filaPdf(480, ".", "", "0", "0", "0,00");
+  filaPdf(500, "4102999990093", "S.I.Gestión de NFU Cat.D1T", "2", "6,05", "12,10");
+  filaPdf(520, "", observacion, "0", "0", "0,00");
+  filaPdf(540, "", "", "0", "0", "0,00");
+  doc.text("Importe Bruto:", 385, 560, { lineBreak: false });
+  doc.text("509,00", 500, 560, { lineBreak: false });
+  doc.end();
+  return listo;
+}
+
 async function subirOriginal(albaranId: string, contenido: Buffer, quien: Quien = gestorA): Promise<Respuesta> {
   const form = new FormData();
   form.append("documento", new Blob([new Uint8Array(contenido)], { type: "application/pdf" }), "albaran.pdf");
@@ -247,6 +280,45 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
     const r = await api("/pedidos", operarioA, { method: "POST", body: { proveedorId, numeroProveedor: "1", lineas: [] } });
     expect(r.status).toBe(403);
     expect(r.body.code).toBe("PERMISO_DENEGADO");
+  });
+
+  /* ── Las observaciones del albarán ───────────────────────────────────── */
+
+  describe("para quién viene la mercancía", () => {
+    it("del PDF sale la observación de después del NFU, con los «+» ya como espacios", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      expect(albaran.observaciones).toBeNull();
+
+      const subida = await subirOriginal(albaran.id, await pdfAlbaranSoledad("JORGE+PLANA"));
+      expect(subida.status, JSON.stringify(subida.body)).toBe(201);
+
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      expect(ficha.body.albaran.observaciones).toBe("JORGE PLANA");
+
+      // Y se ve en la bandeja sin abrir nada, que es donde hace falta.
+      const fila = (await api("/bandeja", operarioA)).body.albaranes.find((a: any) => a.id === albaran.id);
+      expect(fila.observaciones).toBe("JORGE PLANA");
+
+      // Queda en el histórico: el papel dijo esto y consta.
+      const eventos = ficha.body.eventos.filter((e: any) => e.tipo === "ORIGINAL_ADJUNTADO");
+      expect(eventos[0].descripcion).toContain("JORGE PLANA");
+    });
+
+    it("un nombre con teléfono entra igual", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfAlbaranSoledad("PEDRO+610473077"));
+      expect((await api(`/albaranes/${albaran.id}`, operarioA)).body.albaran.observaciones).toBe("PEDRO 610473077");
+    });
+
+    it("un PDF que no es un albarán de Soledad no inventa observaciones, y el original se guarda igual", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      const subida = await subirOriginal(albaran.id, await pdfDePrueba("UN PDF CUALQUIERA"));
+      expect(subida.status).toBe(201);
+      expect((await api(`/albaranes/${albaran.id}`, operarioA)).body.albaran.observaciones).toBeNull();
+    });
   });
 
   /* ── El orden de la bandeja ──────────────────────────────────────────── */
