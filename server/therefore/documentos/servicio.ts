@@ -15,7 +15,7 @@ import { ErrorTherefore } from "../errors.ts";
 import * as repo from "../repository.ts";
 import { guardarDocumento, hashDeFichero, leerDocumento, rutaDocumento, urlFirmada } from "../storage.ts";
 import { componerZip, type EntradaZip } from "../zip.ts";
-import type { Contexto } from "../service.ts";
+import { moverActuacion, type Contexto } from "../service.ts";
 import { pintarResaltado } from "./resaltado.ts";
 import { leerDocumento as leerTexto } from "./texto.ts";
 
@@ -116,8 +116,8 @@ export type PreparacionAlbaranes = {
   preparados: string[];
   /** Los que ya estaban pedidos: no se duplican. */
   yaEstaban: string[];
-  /** Actuaciones genéricas —«grabar», sin número— que quedan por retirar. */
-  genericas: string[];
+  /** Actuaciones genéricas —«grabar», sin número— retiradas al desglosarlas. */
+  retiradas: number;
 };
 
 /**
@@ -132,6 +132,12 @@ export type PreparacionAlbaranes = {
  * Lo que NO hace es adivinar el número de ninguno: sólo prepara los que el
  * documento escribe. Si el parser no localiza ni uno, se dice y no se crea
  * nada, porque una actuación con un albarán inventado es peor que ninguna.
+ *
+ * La actuación genérica de la que se sale —«grabar», sin número— se descarta
+ * al terminar, con su motivo: ya no hay nada que hacer en ella, lo suyo son
+ * ahora las que se acaban de crear. Dejarla pendiente obligaría a resolver a
+ * mano una tarea que ya está desglosada, y un expediente no se da por
+ * resuelto con actuaciones vivas dentro.
  */
 export async function prepararAlbaranes(
   ctx: Contexto,
@@ -241,14 +247,21 @@ export async function prepararAlbaranes(
     else yaEstaban.push(alb.numero);
   }
 
-  return {
-    encontrados: delDocumento.map((a) => a.numero),
-    preparados,
-    yaEstaban,
-    // Las genéricas se enseñan para que quien mira decida: retirarlas es una
-    // decisión suya, no un efecto colateral de haber pulsado un botón.
-    genericas: vivas.filter((a) => !a.albaranSolicitado).map((a) => a.id),
-  };
+  /*
+   * Y se retiran las genéricas, al final y no al principio: si algo falla a
+   * mitad, lo que queda es la tarea original intacta y no un expediente sin
+   * nada que hacer.
+   */
+  const genericas = vivas.filter((a) => !a.albaranSolicitado && a.tipoAccion === tipoAccion);
+  let retiradas = 0;
+  for (const generica of genericas) {
+    await moverActuacion(ctx, generica.id, "DESCARTADA", {
+      motivo: `Desglosada en ${delDocumento.length} albarán(es) del documento.`,
+    });
+    retiradas++;
+  }
+
+  return { encontrados: delDocumento.map((a) => a.numero), preparados, yaEstaban, retiradas };
 }
 
 export type AlbaranConDetalle = repo.AlbaranAnalizado & {

@@ -464,8 +464,14 @@ describe.runIf(RUN)("El análisis de albaranes de Therefore", () => {
     expect(r.status, JSON.stringify(r.body)).toBe(201);
     expect(r.body.encontrados).toEqual(["0501234", "0509999"]);
     expect(r.body.preparados).toEqual(["0501234", "0509999"]);
-    // La genérica se señala para que quien mira decida, no se toca sola.
-    expect(r.body.genericas).toHaveLength(1);
+    // La genérica se retira: ya no hay nada que hacer en ella, y dejarla viva
+    // impediría dar el expediente por resuelto.
+    expect(r.body.retiradas).toBe(1);
+    const tras = (await api(`/expedientes/${expedienteId}`, adminA)).body.actuaciones;
+    const generica = tras.find((a: any) => !a.albaranSolicitado);
+    expect(generica.estado).toBe("DESCARTADA");
+    expect(generica.observaciones).toContain("Desglosada en 2");
+    expect(tras.filter((a: any) => a.estado !== "DESCARTADA")).toHaveLength(2);
 
     // Cada una entra en la cola: al vaciarla están las dos analizadas.
     await procesarPendientes(10);
