@@ -641,6 +641,55 @@ describe.runIf(RUN)("Therefore por HTTP contra PostgreSQL", () => {
       expect(r.body.expediente.numero).toBe("EXP-000001");
     });
 
+    it("eliminar de la bandeja lo descarta: sale de la lista y del contador, y se puede rescatar", async () => {
+      const antes = (await api("/expedientes", gestorA)).body;
+      const e = await crearExpediente(gestorA, { tipo: "OTRO" });
+      expect((await api("/expedientes", gestorA)).body.total).toBe(antes.total + 1);
+
+      const r = await api(`/expedientes/${e.id}/estado`, gestorA, {
+        method: "POST",
+        body: { estado: "DESCARTADO", motivo: "era una prueba" },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.expediente.estado).toBe("DESCARTADO");
+
+      // Ni en la bandeja ni en los contadores: eso es lo que se pedía.
+      const bandeja = (await api("/expedientes", gestorA)).body;
+      expect(bandeja.total).toBe(antes.total);
+      expect(bandeja.expedientes.some((x: any) => x.id === e.id)).toBe(false);
+      const conta = (await api("/bootstrap", gestorA)).body.contadores;
+      expect(conta.todos).toBe(antes.total);
+
+      // Pero sigue existiendo, con su histórico: por eso «eliminar» no borra.
+      const ficha = await api(`/expedientes/${e.id}`, gestorA);
+      expect(ficha.status).toBe(200);
+      expect(ficha.body.eventos.some((v: any) => v.tipo === "ESTADO_MODIFICADO")).toBe(true);
+      expect((await api("/expedientes?estado=DESCARTADO", gestorA)).body.total).toBe(1);
+
+      // Y se rescata volviéndolo a la cola, que pide decir por qué.
+      const sinMotivo = await api(`/expedientes/${e.id}/estado`, gestorA, {
+        method: "POST",
+        body: { estado: "PENDIENTE" },
+      });
+      expect(sinMotivo.status).toBe(400);
+      const rescate = await api(`/expedientes/${e.id}/estado`, gestorA, {
+        method: "POST",
+        body: { estado: "PENDIENTE", motivo: "sí era" },
+      });
+      expect(rescate.status).toBe(200);
+      expect((await api("/expedientes", gestorA)).body.total).toBe(antes.total + 1);
+    });
+
+    it("quien sólo consulta no puede eliminar", async () => {
+      const e = await crearExpediente(gestorA, { tipo: "OTRO" });
+      const r = await api(`/expedientes/${e.id}/estado`, consultaA, {
+        method: "POST",
+        body: { estado: "DESCARTADO" },
+      });
+      expect(r.status).toBe(403);
+      expect(r.body.permiso).toBe("therefore.expediente.edit");
+    });
+
     it("bloquear exige motivo", async () => {
       const e = await crearExpediente(gestorA);
       const sin = await api(`/expedientes/${e.id}/estado`, gestorA, {

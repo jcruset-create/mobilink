@@ -489,6 +489,16 @@ export type FiltroExpedientes = {
   desplazamiento?: number;
 };
 
+/**
+ * Lo descartado no está en ninguna pestaña, «todos» incluida.
+ *
+ * «Todos» quiere decir todo el trabajo, no todo lo que hay en la tabla. Un
+ * expediente descartado se encuentra pidiéndolo por estado o por su número,
+ * que es justo el trabajo que hay que tomarse para sacar de la papelera algo
+ * que alguien decidió que no era una tarea.
+ */
+const SIN_DESCARTADOS = `estado <> 'DESCARTADO'`;
+
 /** Las condiciones de una pestaña, que son un filtro y no un estado. */
 function condicionPestana(p: Pestana | undefined): string | null {
   switch (p) {
@@ -501,7 +511,7 @@ function condicionPestana(p: Pestana | undefined): string | null {
     case "reclamados":
       return `numero_reclamaciones > 0 AND estado IN ('NUEVO','PENDIENTE','EN_PROCESO','BLOQUEADO')`;
     case "revisar":
-      return `requiere_revision AND estado <> 'CERRADO'`;
+      return `requiere_revision AND estado NOT IN ('CERRADO','DESCARTADO')`;
     case "resueltos":
       return `estado IN ('RESUELTO','CERRADO')`;
     default:
@@ -521,6 +531,7 @@ function construirWhere(
   if (pestana) cond.push(pestana);
 
   if (f.estado) cond.push(`estado = ${nuevo(f.estado)}`);
+  else cond.push(SIN_DESCARTADOS);
   if (f.prioridad) cond.push(`prioridad = ${nuevo(f.prioridad)}`);
   if (f.empresaCodigo) cond.push(`empresa_codigo = ${nuevo(f.empresaCodigo)}`);
   if (f.proveedor) {
@@ -607,10 +618,11 @@ export async function contarPestanas(empresaId: string): Promise<Record<string, 
        COUNT(*) FILTER (WHERE urgente AND estado IN ('NUEVO','PENDIENTE','EN_PROCESO','BLOQUEADO')) AS urgentes,
        COUNT(*) FILTER (WHERE numero_reclamaciones > 0
                           AND estado IN ('NUEVO','PENDIENTE','EN_PROCESO','BLOQUEADO')) AS reclamados,
-       COUNT(*) FILTER (WHERE requiere_revision AND estado <> 'CERRADO') AS revisar,
+       COUNT(*) FILTER (WHERE requiere_revision
+                          AND estado NOT IN ('CERRADO','DESCARTADO')) AS revisar,
        COUNT(*) FILTER (WHERE estado IN ('RESUELTO','CERRADO')) AS resueltos,
        COUNT(*) AS todos
-     FROM thf_expedientes WHERE empresa_id = $1`,
+     FROM thf_expedientes WHERE empresa_id = $1 AND estado <> 'DESCARTADO'`,
     [empresaId]
   );
   const f = rows[0] ?? {};

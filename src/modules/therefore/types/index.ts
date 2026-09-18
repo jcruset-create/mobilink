@@ -16,7 +16,8 @@ export type EstadoExpediente =
   | "EN_PROCESO"
   | "BLOQUEADO"
   | "RESUELTO"
-  | "CERRADO";
+  | "CERRADO"
+  | "DESCARTADO";
 export type Prioridad = "BAJA" | "NORMAL" | "ALTA" | "CRITICA";
 export type EstadoActuacion =
   | "PENDIENTE"
@@ -400,6 +401,7 @@ export const ETIQUETA_ESTADO: Record<string, string> = {
   BLOQUEADO: "Bloqueado",
   RESUELTO: "Resuelto",
   CERRADO: "Cerrado",
+  DESCARTADO: "Descartado",
 };
 
 export const ETIQUETA_ESTADO_ACTUACION: Record<string, string> = {
@@ -430,6 +432,7 @@ export const COLOR_ESTADO: Record<string, string> = {
   BLOQUEADO: "bg-rose-500/20 text-rose-300",
   RESUELTO: "bg-emerald-500/20 text-emerald-300",
   CERRADO: "bg-slate-700 text-slate-400",
+  DESCARTADO: "bg-slate-700 text-slate-500 line-through",
 };
 
 export const COLOR_ESTADO_ACTUACION: Record<string, string> = {

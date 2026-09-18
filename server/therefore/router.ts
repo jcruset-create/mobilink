@@ -481,13 +481,25 @@ export function createThereforeRouter(): Router {
         throw new ErrorTherefore("EXPEDIENTE_NO_ENCONTRADO", "Expediente no encontrado.", 404);
       }
       const reabre =
-        (actual.estado === "RESUELTO" || actual.estado === "CERRADO") && estado === "PENDIENTE";
-      const permiso = reabre ? "therefore.expediente.reopen" : "therefore.actuacion.manage";
+        (actual.estado === "RESUELTO" || actual.estado === "CERRADO" || actual.estado === "DESCARTADO") &&
+        estado === "PENDIENTE";
+      /*
+       * Descartar es sacar un expediente de la bandeja para siempre, así que
+       * pide el permiso de editar expedientes y no el de gestionar una
+       * actuación: no es un paso de la gestión, es decir que no la hay.
+       */
+      const permiso = reabre
+        ? "therefore.expediente.reopen"
+        : estado === "DESCARTADO"
+          ? "therefore.expediente.edit"
+          : "therefore.actuacion.manage";
       if (!req.thereforePermisos?.includes(permiso)) {
         return res.status(403).json({
           error: reabre
             ? "No tienes permiso para reabrir expedientes."
-            : "No tienes permiso para cambiar el estado de un expediente.",
+            : estado === "DESCARTADO"
+              ? "No tienes permiso para descartar expedientes."
+              : "No tienes permiso para cambiar el estado de un expediente.",
           code: "PERMISO_DENEGADO",
           permiso,
         });
@@ -821,6 +833,23 @@ export function createThereforeRouter(): Router {
     exigirPermiso("therefore.view"),
     ruta(async (req, res) => {
       res.json({ url: await documentos.enlaceDelDocumento(contextoDe(req), String(req.params.id)) });
+    })
+  );
+
+  /**
+   * El PDF del proveedor con el albarán de esta actuación subrayado.
+   *
+   * Va por el servidor y no por un enlace firmado del almacén porque el
+   * fichero no existe hasta que se pide: se compone al vuelo y no se guarda.
+   */
+  r.get(
+    "/albaranes/:id/documento/resaltado",
+    exigirPermiso("therefore.view"),
+    ruta(async (req, res) => {
+      const salida = await documentos.pdfResaltado(contextoDe(req), String(req.params.id));
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${salida.nombre}"`);
+      res.send(salida.pdf);
     })
   );
 

@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Download, Plus, RefreshCw, Upload } from "lucide-react";
+import { Download, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import * as api from "../services/api";
 import {
   avisosDeFila,
@@ -24,8 +24,10 @@ import {
   ChipEstado,
   EmptyRow,
   ErrorBox,
+  Modal,
   PuntoPrioridad,
   TableWrap,
+  btnMini,
   btnPrimary,
   btnSecondary,
   inputCls,
@@ -57,6 +59,7 @@ export default function Bandeja() {
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creando, setCreando] = useState(false);
+  const [eliminando, setEliminando] = useState<FilaBandeja | null>(null);
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -257,19 +260,27 @@ export default function Bandeja() {
             <th className={thCls}>Recl.</th>
             <th className={thCls}>Antigüedad</th>
             <th className={thCls}>Estado</th>
+            <th className={thCls} aria-label="Eliminar" />
           </tr>
         </thead>
         <tbody>
           {cargando && filas.length === 0 ? (
-            <EmptyRow cols={11} text="Cargando…" />
+            <EmptyRow cols={12} text="Cargando…" />
           ) : filas.length === 0 ? (
             /*
              * Una bandeja vacía es una buena noticia: se dice con palabras, no
              * con una tabla en blanco. Mismo criterio que la bandeja de Assist.
              */
-            <EmptyRow cols={11} text="Nada pendiente por aquí. Buena señal." />
+            <EmptyRow cols={12} text="Nada pendiente por aquí. Buena señal." />
           ) : (
-            filas.map((f) => <Fila key={f.id} fila={f} />)
+            filas.map((f) => (
+              <Fila
+                key={f.id}
+                fila={f}
+                puedeEliminar={puede("therefore.expediente.edit")}
+                onEliminar={() => setEliminando(f)}
+              />
+            ))
           )}
         </tbody>
       </TableWrap>
@@ -278,6 +289,18 @@ export default function Bandeja() {
         <p className="mt-2 text-[12px] text-slate-500">
           Se enseñan {filas.length} de {total}. Afina el filtro para ver el resto.
         </p>
+      )}
+
+      {eliminando && (
+        <ConfirmarEliminar
+          fila={eliminando}
+          onCerrar={() => setEliminando(null)}
+          onEliminado={() => {
+            setEliminando(null);
+            void cargar();
+          }}
+          onError={setError}
+        />
       )}
 
       {creando && (
@@ -293,7 +316,15 @@ export default function Bandeja() {
   );
 }
 
-function Fila({ fila }: { fila: FilaBandeja }) {
+function Fila({
+  fila,
+  puedeEliminar,
+  onEliminar,
+}: {
+  fila: FilaBandeja;
+  puedeEliminar: boolean;
+  onEliminar: () => void;
+}) {
   const { visibles, restantes } = resumenActuaciones(fila.actuaciones);
   const avisos = avisosDeFila(fila);
 
@@ -345,6 +376,85 @@ function Fila({ fila }: { fila: FilaBandeja }) {
       <td className={tdCls}>
         <ChipEstado estado={fila.estado} />
       </td>
+      <td className={`${tdCls} w-8 text-right`}>
+        {puedeEliminar && (
+          <button
+            onClick={onEliminar}
+            className={`${btnMini} text-slate-400 hover:text-rose-300`}
+            title="Eliminar de la bandeja"
+            aria-label={`Eliminar ${fila.numero}`}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </td>
     </tr>
+  );
+}
+
+/**
+ * Eliminar es sacarlo de la bandeja, no borrarlo de la base.
+ *
+ * Se dice con estas palabras porque es lo que pasa: el correo que lo abrió,
+ * sus adjuntos y su histórico se quedan donde están. Lo que desaparece es la
+ * fila, que es lo que estorba. Y se pregunta antes: deshacerlo obliga a ir a
+ * buscar el expediente por su número.
+ */
+function ConfirmarEliminar({
+  fila,
+  onCerrar,
+  onEliminado,
+  onError,
+}: {
+  fila: FilaBandeja;
+  onCerrar: () => void;
+  onEliminado: () => void;
+  onError: (mensaje: string) => void;
+}) {
+  const [motivo, setMotivo] = useState("");
+  const [borrando, setBorrando] = useState(false);
+
+  async function eliminar() {
+    setBorrando(true);
+    try {
+      await api.cambiarEstado(fila.id, "DESCARTADO", motivo);
+      onEliminado();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "No se ha podido eliminar");
+      onCerrar();
+    } finally {
+      setBorrando(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`Eliminar ${fila.numero}`}
+      onClose={onCerrar}
+      footer={
+        <div className="flex justify-end gap-2">
+          <button onClick={onCerrar} className={btnSecondary}>
+            Cancelar
+          </button>
+          <button onClick={() => void eliminar()} className={btnPrimary} disabled={borrando}>
+            {borrando ? "Eliminando…" : "Eliminar"}
+          </button>
+        </div>
+      }
+    >
+      <p className="mb-3 text-[13px] text-slate-300">
+        Sale de la bandeja y deja de contar. El correo que lo abrió, sus documentos y su histórico
+        se conservan: se puede volver a poner en la cola buscándolo por su número.
+      </p>
+      <label className="block text-[12px] text-slate-400">
+        Por qué (opcional)
+        <input
+          value={motivo}
+          onChange={(e) => setMotivo(e.target.value)}
+          className={`${inputCls} mt-1`}
+          placeholder="Duplicado, prueba, no era para nosotros…"
+        />
+      </label>
+    </Modal>
   );
 }

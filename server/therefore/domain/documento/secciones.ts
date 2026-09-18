@@ -77,8 +77,17 @@ const ETIQUETA_CORTA = /^[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ .º/]{1,24}:\s*\S+/i;
 /** Cuántas filas de «etiqueta: valor» por encima de la marca son suyas. */
 const MAX_ETIQUETAS_ANTES = 2;
 
-/** Longitud a partir de la cual un texto idéntico en dos páginas es plantilla. */
-const LARGO_PLANTILLA = 30;
+/**
+ * Longitud a partir de la cual un texto idéntico en dos páginas es plantilla.
+ *
+ * Alta a propósito. Una FILA DE DATOS puede repetirse palabra por palabra en
+ * varias páginas —«Nuestro pedido: 1021294542 de fecha 07.09.2026» encabeza
+ * los cuatro albaranes de la misma factura— y borrarla se lleva por delante
+ * información del albarán. Un párrafo legal de cien caracteres no es una fila
+ * de datos de nadie. Dejar un pie de página sin retirar cuesta una nota de
+ * más; retirar una fila de datos cuesta un dato que ya no está.
+ */
+const LARGO_PLANTILLA = 100;
 
 /** Tolerancia al comparar posiciones entre páginas, en puntos. */
 const TOLERANCIA_PT = 2;

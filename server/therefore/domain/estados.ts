@@ -65,6 +65,16 @@ export function esTipoAccion(v: unknown): v is TipoAccion {
 
 /* ── Estados del expediente ──────────────────────────────────────────────── */
 
+/**
+ * `DESCARTADO` es «esto no era una tarea».
+ *
+ * Un correo que no iba a ninguna parte, una prueba, un expediente abierto por
+ * error. No es CERRADO —que significa gestionado y terminado, y cuenta en las
+ * estadísticas de trabajo hecho— ni se borra de la base: el correo que lo
+ * abrió, sus adjuntos y su histórico siguen ahí, porque la pregunta «¿y esto
+ * qué fue?» se hace meses después. Lo que hace es desaparecer de la bandeja,
+ * que es lo que a nadie le sirve tener delante.
+ */
 export const ESTADOS_EXPEDIENTE = [
   "NUEVO",
   "PENDIENTE",
@@ -72,6 +82,7 @@ export const ESTADOS_EXPEDIENTE = [
   "BLOQUEADO",
   "RESUELTO",
   "CERRADO",
+  "DESCARTADO",
 ] as const;
 export type EstadoExpediente = (typeof ESTADOS_EXPEDIENTE)[number];
 
@@ -105,12 +116,14 @@ export function estaAbierto(e: EstadoExpediente): boolean {
  *   Therefore vuelve a reclamar, tiene que poder volver a la cola.
  */
 const TRANSICIONES_EXPEDIENTE: Record<EstadoExpediente, readonly EstadoExpediente[]> = {
-  NUEVO: ["PENDIENTE", "EN_PROCESO", "BLOQUEADO", "RESUELTO", "CERRADO"],
-  PENDIENTE: ["EN_PROCESO", "BLOQUEADO", "RESUELTO", "CERRADO"],
-  EN_PROCESO: ["PENDIENTE", "BLOQUEADO", "RESUELTO", "CERRADO"],
-  BLOQUEADO: ["PENDIENTE", "EN_PROCESO", "RESUELTO", "CERRADO"],
-  RESUELTO: ["PENDIENTE", "CERRADO"],
-  CERRADO: ["PENDIENTE"],
+  NUEVO: ["PENDIENTE", "EN_PROCESO", "BLOQUEADO", "RESUELTO", "CERRADO", "DESCARTADO"],
+  PENDIENTE: ["EN_PROCESO", "BLOQUEADO", "RESUELTO", "CERRADO", "DESCARTADO"],
+  EN_PROCESO: ["PENDIENTE", "BLOQUEADO", "RESUELTO", "CERRADO", "DESCARTADO"],
+  BLOQUEADO: ["PENDIENTE", "EN_PROCESO", "RESUELTO", "CERRADO", "DESCARTADO"],
+  RESUELTO: ["PENDIENTE", "CERRADO", "DESCARTADO"],
+  CERRADO: ["PENDIENTE", "DESCARTADO"],
+  // Descartar se deshace: se vuelve a la cola y se explica por qué.
+  DESCARTADO: ["PENDIENTE"],
 };
 
 export function transicionesDesde(estado: EstadoExpediente): readonly EstadoExpediente[] {
@@ -131,8 +144,13 @@ export function puedeTransicionar(de: EstadoExpediente, a: EstadoExpediente): bo
  */
 export function exigeMotivo(de: EstadoExpediente, a: EstadoExpediente): boolean {
   if (a === "BLOQUEADO") return true;
-  if ((de === "RESUELTO" || de === "CERRADO") && a === "PENDIENTE") return true;
+  if ((de === "RESUELTO" || de === "CERRADO" || de === "DESCARTADO") && a === "PENDIENTE") return true;
   return false;
+}
+
+/** Descartado no es un estado de trabajo: no sale en la bandeja ni se cuenta. */
+export function estaDescartado(e: EstadoExpediente): boolean {
+  return e === "DESCARTADO";
 }
 
 /* ── Estados de la actuación ─────────────────────────────────────────────── */

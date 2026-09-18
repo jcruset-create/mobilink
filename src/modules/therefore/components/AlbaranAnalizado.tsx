@@ -22,7 +22,7 @@
  */
 
 import { useState } from "react";
-import { FileText, RefreshCw } from "lucide-react";
+import { FileText, Highlighter, RefreshCw } from "lucide-react";
 import * as api from "../services/api";
 import { abrirEnPestana } from "../services/documentos";
 import { celdasFlojas, sumaDeLineas, tituloAnalisis } from "../services/analisis";
@@ -58,11 +58,35 @@ export default function AlbaranAnalizado({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [trabajando, setTrabajando] = useState(false);
+  const [resaltando, setResaltando] = useState(false);
 
   const suma = sumaDeLineas(albaran.lineas);
   const flojas = celdasFlojas(albaran.lineas, umbralCampo);
   const conceptos = albaran.metadata?.conceptosAdicionales ?? [];
   const otros = Object.entries(albaran.metadata?.otros ?? {});
+
+  /**
+   * El PDF del proveedor con ESTE albarán en amarillo.
+   *
+   * Se compone en el servidor y llega como fichero, no como enlace: se crea al
+   * pedirlo y no se guarda en ninguna parte. El objeto que lo representa en el
+   * navegador se suelta cuando la pestaña ya lo ha cargado.
+   */
+  async function abrirResaltado() {
+    setError(null);
+    setResaltando(true);
+    try {
+      await abrirEnPestana(async () => {
+        const url = URL.createObjectURL(await api.pdfResaltado(albaran.id));
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        return url;
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido resaltar el documento");
+    } finally {
+      setResaltando(false);
+    }
+  }
 
   async function abrirPdf() {
     setError(null);
@@ -103,6 +127,17 @@ export default function AlbaranAnalizado({
             <button onClick={() => void abrirPdf()} className={btnMini}>
               <FileText className="mr-1 inline h-3 w-3" />
               Ver el PDF
+            </button>
+          )}
+          {albaran.adjuntoId && (
+            <button
+              onClick={() => void abrirResaltado()}
+              className={btnMini}
+              disabled={resaltando}
+              title="El PDF entero con este albarán subrayado en amarillo"
+            >
+              <Highlighter className="mr-1 inline h-3 w-3" />
+              {resaltando ? "Preparando…" : "Ver resaltado"}
             </button>
           )}
           {puedeReanalizar && actuacion && (

@@ -406,6 +406,48 @@ describe.runIf(RUN)("El análisis de albaranes de Therefore", () => {
     expect(otra.status).toBe(404);
   });
 
+  it("16c · el PDF se devuelve con el albarán subrayado, y sin albarán no se devuelve", async () => {
+    const pdf = await pdfDeFactura({
+      albaranes: [uno("0501234", [LINEA_UNO, LINEA_DOS]), uno("0509999", [LINEA_UNO])],
+      totales: { base: "241,80", total: "292,58" },
+    });
+    const { analisis } = await analizar([{ accion: "GRABAR", albaran: "0501234" }], pdf);
+    const a = analisis.albaranes[0];
+    expect(a.resultadoMatch).toBe("MATCH");
+
+    const cabeceras = (q: Quien) => ({ "x-test-user": q.usuario, "x-test-empresa": q.empresa });
+    const r = await fetch(`${base}/api/therefore/albaranes/${a.id}/documento/resaltado`, {
+      headers: cabeceras(adminA),
+    });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("application/pdf");
+    const bytes = Buffer.from(await r.arrayBuffer());
+    expect(bytes.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    // Es el documento del proveedor con algo encima, no un documento nuevo.
+    const { PDFDocument } = await import("pdf-lib");
+    const salida = await PDFDocument.load(bytes);
+    const original = await PDFDocument.load(pdf);
+    expect(salida.getPageCount()).toBe(original.getPageCount());
+    expect(bytes.length).toBeGreaterThan(pdf.length);
+
+  });
+
+  it("16d · un albarán que no está en el papel no se puede subrayar, y se dice", async () => {
+    const pdf = await pdfDeFactura({
+      albaranes: [uno("0509999", [LINEA_DOS])],
+      totales: { base: "186,00", total: "225,06" },
+    });
+    const { analisis } = await analizar([{ accion: "GRABAR", albaran: "0501234" }], pdf);
+    const a = analisis.albaranes[0];
+    expect(a.estadoAnalisis).toBe("ERROR");
+
+    const r = await fetch(`${base}/api/therefore/albaranes/${a.id}/documento/resaltado`, {
+      headers: { "x-test-user": adminA.usuario, "x-test-empresa": adminA.empresa },
+    });
+    expect(r.status).toBe(409);
+    expect(((await r.json()) as { code?: string }).code).toBe("SIN_RESALTADO");
+  });
+
   /* ── Casos 17 y 18 ─────────────────────────────────────────────────────── */
 
   it("17 · una referencia ilegible se deja en null y NO se corrige", async () => {

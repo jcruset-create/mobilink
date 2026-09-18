@@ -241,6 +241,17 @@ export function enlaceAdjunto(adjuntoId: string): Promise<{ url: string }> {
   return pedir(`/adjuntos/${adjuntoId}/documento`);
 }
 
+/** El PDF del proveedor con este albarán subrayado en amarillo. */
+export async function pdfResaltado(albaranAnalizadoId: string): Promise<Blob> {
+  const cabeceras = await sessionHeaders();
+  const r = await fetch(`${BASE}/albaranes/${albaranAnalizadoId}/documento/resaltado`, { headers: cabeceras });
+  if (!r.ok) {
+    const json = await r.json().catch(() => ({}));
+    throw new ApiError(json?.error ?? "No se ha podido resaltar", json?.code ?? "ERROR", r.status, json?.detalle);
+  }
+  return r.blob();
+}
+
 /** Los PDF en revisión de los últimos días, en un zip. */
 export async function descargarRevision(dias: number): Promise<Blob> {
   const cabeceras = await sessionHeaders();

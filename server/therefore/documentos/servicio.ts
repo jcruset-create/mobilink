@@ -7,11 +7,16 @@
  * el router necesita para no tener lógica dentro.
  */
 
+import { leerConfig } from "../config.ts";
+import { analizarAlbaran } from "../domain/documento/index.ts";
+import { cajasDelAlbaran, paginasResaltadas } from "../domain/documento/resaltado.ts";
 import { ErrorTherefore } from "../errors.ts";
 import * as repo from "../repository.ts";
 import { guardarDocumento, hashDeFichero, leerDocumento, rutaDocumento, urlFirmada } from "../storage.ts";
 import { componerZip, type EntradaZip } from "../zip.ts";
 import type { Contexto } from "../service.ts";
+import { pintarResaltado } from "./resaltado.ts";
+import { leerDocumento as leerTexto } from "./texto.ts";
 
 export type FicheroSubido = {
   nombre: string;
@@ -234,6 +239,68 @@ export async function loteParaRevision(
 
   entradas.push({ nombre: "indice.csv", contenido: Buffer.from(indice.join("\n") + "\n", "utf8") });
   return { zip: componerZip(entradas), documentos: entradas.length - 1, omitidos };
+}
+
+/**
+ * El PDF del proveedor con ESTE albarán subrayado en amarillo.
+ *
+ * El documento se vuelve a leer aquí en vez de tirar de lo guardado, y es a
+ * propósito: la base guarda el recuadro de cada línea, pero no el del bloque
+ * entero, y sobre todo, un análisis de hace un mes lleva la geometría que
+ * entendía el parser de hace un mes. Releer cuesta un segundo y garantiza que
+ * el amarillo señala lo que el módulo entiende HOY. Eso también lo hace útil
+ * para revisar: si el subrayado cae donde no debe, el parser lo leyó mal.
+ */
+export async function pdfResaltado(
+  ctx: Contexto,
+  albaranAnalizadoId: string
+): Promise<{ pdf: Buffer; nombre: string; paginas: number[]; paginasGiradas: number[] }> {
+  const fila = await repo.albaranAnalizadoPorId(ctx.empresaId, albaranAnalizadoId);
+  if (!fila) throw new ErrorTherefore("NO_ENCONTRADO", "Ese análisis no existe.", 404);
+  if (!fila.adjuntoId) {
+    throw new ErrorTherefore("SIN_DOCUMENTO", "Ese análisis no tiene documento asociado.", 404);
+  }
+
+  const adjunto = await repo.adjuntoPorId(ctx.empresaId, fila.adjuntoId);
+  if (!adjunto?.storagePath) {
+    throw new ErrorTherefore("SIN_DOCUMENTO", "El documento ya no está disponible.", 404);
+  }
+  const original = await leerDocumento(adjunto.storagePath);
+  if (!original) {
+    throw new ErrorTherefore("SIN_DOCUMENTO", "El documento ya no está en el almacenamiento.", 404);
+  }
+
+  const cfg = await leerConfig(ctx.empresaId);
+  const texto = leerTexto(original, { maxPaginas: cfg.albaran.maxPaginas });
+  const analisis = analizarAlbaran(texto, fila.numeroSolicitado, {
+    umbrales: cfg.albaran.umbrales,
+    lineas: { toleranciaCentimos: cfg.albaran.toleranciaCentimos },
+  });
+
+  const cajas = cajasDelAlbaran(analisis.seccion);
+  if (cajas.length === 0) {
+    /*
+     * Sin sección localizada no hay nada que subrayar, y devolver el PDF tal
+     * cual sería peor que no devolverlo: parecería que el albarán no está en
+     * ninguna parte del papel cuando lo que pasa es que no se ha sabido ver.
+     */
+    throw new ErrorTherefore(
+      "SIN_RESALTADO",
+      "No se ha localizado ese albarán dentro del documento, así que no hay nada que resaltar.",
+      409
+    );
+  }
+
+  const pintado = await pintarResaltado(original, cajas, texto);
+  const expediente = await repo.obtenerExpediente(ctx.empresaId, fila.expedienteId);
+  const nombre = `${nombreSeguro(expediente?.numero ?? "expediente")}_${nombreSeguro(fila.numeroSolicitado)}_resaltado.pdf`;
+
+  return {
+    pdf: pintado.pdf,
+    nombre,
+    paginas: paginasResaltadas(cajas),
+    paginasGiradas: pintado.paginasGiradas,
+  };
 }
 
 /**
