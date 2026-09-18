@@ -166,6 +166,19 @@ Importar .eml (panel)        ──┤──► procesarFuente() ─► simplePa
 - **Líneas del albarán**: las que detalle el correo (casadas por descripción
   normalizada), o una «cantidad expedida» total si el pedido tiene una línea,
   o todo lo pendiente si la configuración lo asume. Nunca más de lo pendiente.
+- **La tabla de contenido llega partida a veces**: basta con que el proveedor
+  escriba una nota debajo del artículo, dentro de la misma celda, para que el
+  texto plano parta la fila en dos —arriba cantidad y descripción sin importe,
+  debajo la nota y el importe sin cantidad— y el pedido entre entero menos lo
+  único que hay que contar. `recomponerFilas` las vuelve a juntar: una línea
+  que empieza por un número y no acaba en importe se prueba con la siguiente y
+  con las dos siguientes (que es como llega cuando cada celda va en su línea),
+  y sólo se sustituye si sale una fila de verdad. Nunca salta una línea en
+  blanco, y sólo actúa DENTRO de la tabla —antes está la dirección de entrega,
+  que empieza por el código postal—. La nota se queda dentro de la
+  descripción: es lo que el proveedor ha escrito del artículo. Y cuando aun
+  así no hay líneas, el motivo de la revisión enseña lo que había donde va la
+  tabla (`muestraDelContenido`), para no tener que abrir el correo.
 - **Centro destino**: la localidad del bloque «Destino» (`43006 TARRAGONA` →
   `TARRAGONA`) casada con `app_centros` por nombre; si no casa, se guarda como
   texto y el correo lo dice en su motivo.

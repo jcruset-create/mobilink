@@ -47,7 +47,7 @@ import { createHash } from "node:crypto";
 import { asumirExpedicionCompleta } from "./config.ts";
 import { descripcionNormalizada } from "./domain/articulos.ts";
 import { pendienteDeExpedir } from "./domain/cantidades.ts";
-import { normalizar, parsearCorreo, remitenteReenviado, type CorreoParseado } from "./domain/correo/index.ts";
+import { muestraDelContenido, normalizar, parsearCorreo, remitenteReenviado, type CorreoParseado } from "./domain/correo/index.ts";
 import { normalizarNumero } from "./domain/numero.ts";
 import { ErrorRecepciones } from "./errors.ts";
 import * as repo from "./repository.ts";
@@ -82,6 +82,12 @@ export type ResultadoIngesta = {
 
 /** El usuario «sistema» con el que se firman los altas que vienen del correo. */
 const NOMBRE_SISTEMA = "Correo del proveedor";
+
+/** «Lo que había donde va la tabla: …», cuando hay algo que enseñar. */
+function colaDelMotivo(texto: string): string {
+  const muestra = muestraDelContenido(texto);
+  return muestra ? ` Lo que había donde va la tabla: «${muestra}».` : "";
+}
 
 function hashDeContenido(asunto: string, texto: string): string {
   return createHash("sha256").update(`${normalizar(asunto)}\n${normalizar(texto)}`).digest("hex");
@@ -203,7 +209,13 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
       const lineas = p.lineas.filter((l) => l.descripcion && l.cantidad && l.cantidad > 0);
       if (!numeroNormalizado || lineas.length === 0) {
         return terminar(
-          { resultado: "PENDIENTE_REVISION", motivo: !numeroNormalizado ? "El correo no trae número de pedido." : "El correo no trae líneas de producto legibles.", avisos: leido.avisos },
+          {
+            resultado: "PENDIENTE_REVISION",
+            motivo: !numeroNormalizado
+              ? "El correo no trae número de pedido."
+              : `El correo no trae líneas de producto legibles.${colaDelMotivo(correo.texto)}`,
+            avisos: leido.avisos,
+          },
           base
         );
       }
