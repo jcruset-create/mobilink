@@ -129,6 +129,14 @@ export default function Bandeja() {
             <div className="mt-2 rounded-xl bg-slate-900/60 p-3">
               <Articulos articulos={a.articulos} />
             </div>
+            {/* Para quién viene, según el albarán del proveedor: decide dónde
+                se deja el palé, así que va al lado de la mercancía. */}
+            {a.observaciones && (
+              <div className="mt-2 rounded-lg bg-sky-500/10 px-3 py-2 text-sm">
+                <span className="text-[10px] font-bold uppercase tracking-wide text-sky-300/70">Para</span>{" "}
+                <b className="text-sky-200">{a.observaciones}</b>
+              </div>
+            )}
             <div className="mt-2 text-[12px] text-slate-400">
               Albarán <b className="text-slate-200">{a.numeroProveedor}</b>
               {a.fechaExpedicion ? ` del ${fmtFecha(a.fechaExpedicion)}` : ""} · Pedido {a.pedidoNumero}
@@ -161,6 +169,7 @@ export default function Bandeja() {
           <thead>
             <tr>
               <th className={thCls}>Qué viene</th>
+              <th className={thCls}>Para</th>
               <th className={thCls}>Albarán</th>
               <th className={thCls}>Pedido</th>
               <th className={thCls}>Fecha pedido</th>
@@ -174,13 +183,14 @@ export default function Bandeja() {
             </tr>
           </thead>
           <tbody>
-            {filas.length === 0 && <EmptyRow cols={11} text={cargando ? "Cargando…" : "Nada pendiente de recibir."} />}
+            {filas.length === 0 && <EmptyRow cols={12} text={cargando ? "Cargando…" : "Nada pendiente de recibir."} />}
             {filas.map((a) => (
               <tr key={a.id} className="border-t border-slate-700/60 hover:bg-slate-700/30">
                 <td className={`${tdCls} min-w-[280px]`}>
                   <Articulos articulos={a.articulos} compacto />
                   <div className="mt-1 text-[11px] uppercase text-slate-500">{a.proveedorNombre}</div>
                 </td>
+                <td className={`${tdCls} font-semibold text-sky-200`}>{a.observaciones ?? "—"}</td>
                 <td className={`${tdCls} font-bold`}>
                   <Link to={`/recepciones/albaranes/${a.id}`} className="hover:underline">
                     {a.numeroProveedor}

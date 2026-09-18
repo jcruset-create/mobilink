@@ -1315,6 +1315,18 @@ export async function recalcularLineasAlbaran(empresaId: string, albaranId: stri
   );
 }
 
+/**
+ * Anota las observaciones que traía el PDF del proveedor. Sólo rellena el
+ * hueco: si alguien escribió algo a mano en el albarán, no se le pisa.
+ */
+export async function anotarObservacionesAlbaran(empresaId: string, albaranId: string, texto: string, ejecutor?: Ejecutor): Promise<void> {
+  await db(ejecutor).query(
+    `UPDATE rcp_albaranes SET observaciones = $3, updated_at = now()
+      WHERE empresa_id = $1 AND id = $2 AND (observaciones IS NULL OR observaciones = '')`,
+    [empresaId, albaranId, texto]
+  );
+}
+
 export async function fijarEstadoAlbaran(
   empresaId: string,
   albaranId: string,
