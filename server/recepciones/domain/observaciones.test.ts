@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { limpiarObservacion, observacionDeFila, observacionesDelAlbaran, partirObservacion, type FilaPdf } from "./observaciones.ts";
+import { filasConContinuaciones, limpiarObservacion, observacionDeFila, observacionesDelAlbaran, partirObservacion, type FilaPdf } from "./observaciones.ts";
 
 const fila = (...palabras: string[]): FilaPdf => ({ palabras });
 /** La fila que abre la tabla de productos en el albarán de Soledad. */
@@ -46,19 +46,36 @@ describe("observacionesDelAlbaran", () => {
     expect(observacionesDelAlbaran(ALBARAN_JORGE)).toHaveLength(1);
   });
 
-  it("un nombre de tres partes, con sus dos «+», sale entero", () => {
-    // Albarán 2028458827: el artículo es «385/65X22.5 SAILUN STR1+», con su
-    // «+» al final, y la observación va debajo. Ni se mezclan ni se tocan.
-    const filas = [
-      CABECERA,
-      fila("0119090530003", "385/65X22.5", "SAILUN", "STR1+", "2", "261,346", "522,69"),
-      fila(".", "0", "0", "0,00"),
-      fila("4102999990094", "S.I.Gestión", "de", "NFU", "Cat.D2T", "2", "12,18", "24,36"),
-      fila("OSCAR+SALVADOR+SANJULIAN", "0", "0", "0,00"),
-      fila("0", "0", "0,00"),
-      fila("Importe", "Bruto:", "547,05"),
-    ];
-    expect(observacionesDelAlbaran(filas)).toEqual(["OSCAR SALVADOR SANJULIAN"]);
+  /**
+   * Albarán 2028458827, tal cual sale del PDF. Aquí pasan LAS DOS cosas: el
+   * artículo se parte en dos líneas («…SAILUN STR1+» / «164K») y la
+   * observación también («OSCAR+SALVADOR+SANJULIAN» / «+629862105»). La
+   * segunda línea no lleva columnas numéricas, y ahí es donde está el
+   * teléfono: perderla era perder justo el dato que sirve para avisar.
+   */
+  const ALBARAN_PARTIDO: FilaPdf[] = [
+    CABECERA,
+    fila("0119090530003", "385/65X22.5", "SAILUN", "STR1+", "2", "261,346", "522,69"),
+    fila("164K"),
+    fila(".", "0", "0", "0,00"),
+    fila("4102999990094", "S.I.Gestión", "de", "NFU", "Cat.D2T", "2", "12,18", "24,36"),
+    fila("OSCAR+SALVADOR+SANJULIAN", "0", "0", "0,00"),
+    fila("+629862105"),
+    fila("0", "0", "0,00"),
+    fila("Importe", "Bruto:", "547,05"),
+  ];
+
+  it("la observación que sigue en la línea de abajo se lee entera, teléfono incluido", () => {
+    expect(observacionesDelAlbaran(ALBARAN_PARTIDO)).toEqual(["OSCAR SALVADOR SANJULIAN 629862105"]);
+    expect(partirObservacion(observacionesDelAlbaran(ALBARAN_PARTIDO)[0])).toEqual({
+      texto: "OSCAR SALVADOR SANJULIAN",
+      telefono: "629862105",
+    });
+  });
+
+  it("la continuación de un artículo se queda en el artículo, no se cuela de observación", () => {
+    // «164K» es la segunda línea del neumático, no un dato suelto.
+    expect(observacionesDelAlbaran(ALBARAN_PARTIDO)).toHaveLength(1);
   });
 
   it("un artículo cuya descripción lleva «+» no se toca: sólo se limpian las observaciones", () => {
@@ -127,6 +144,19 @@ describe("limpiarObservacion", () => {
     expect(limpiarObservacion("JORGE+PLANA")).toBe("JORGE PLANA");
     expect(limpiarObservacion("  A++B  ")).toBe("A B");
     expect(limpiarObservacion("TALLER")).toBe("TALLER");
+  });
+});
+
+describe("filasConContinuaciones", () => {
+  it("pega la línea de abajo a la DESCRIPCIÓN, no detrás de los números", () => {
+    const filas = [fila("OSCAR+SALVADOR+SANJULIAN", "0", "0", "0,00"), fila("+629862105")];
+    expect(filasConContinuaciones(filas)).toEqual([
+      { descripcion: ["OSCAR+SALVADOR+SANJULIAN", "+629862105"], numeros: [0, 0, 0] },
+    ]);
+  });
+
+  it("una continuación sin fila anterior no revienta ni se inventa una", () => {
+    expect(filasConContinuaciones([fila("164K")])).toEqual([]);
   });
 });
 

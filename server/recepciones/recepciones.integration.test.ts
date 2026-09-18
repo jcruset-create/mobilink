@@ -107,7 +107,7 @@ function pdfDePrueba(texto: string): Promise<Buffer> {
  * con las tres columnas a cero. Las columnas van a la misma X que en el PDF
  * real para que el lector las agrupe igual.
  */
-function pdfAlbaranSoledad(observacion: string): Promise<Buffer> {
+function pdfAlbaranSoledad(observacion: string, segundaLinea?: string): Promise<Buffer> {
   const doc = new PDFDocument({ size: "A4" });
   const trozos: Buffer[] = [];
   doc.on("data", (c: Buffer) => trozos.push(c));
@@ -127,7 +127,10 @@ function pdfAlbaranSoledad(observacion: string): Promise<Buffer> {
   filaPdf(480, ".", "", "0", "0", "0,00");
   filaPdf(500, "4102999990093", "S.I.Gestión de NFU Cat.D1T", "2", "6,05", "12,10");
   filaPdf(520, "", observacion, "0", "0", "0,00");
-  filaPdf(540, "", "", "0", "0", "0,00");
+  // El PDF de verdad parte el texto largo: la segunda línea va debajo, en la
+  // misma columna y SIN columnas numéricas.
+  if (segundaLinea) doc.text(segundaLinea, 98, 530, { lineBreak: false });
+  filaPdf(545, "", "", "0", "0", "0,00");
   doc.text("Importe Bruto:", 385, 560, { lineBreak: false });
   doc.text("509,00", 500, 560, { lineBreak: false });
   doc.end();
@@ -304,6 +307,17 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
       // Queda en el histórico: el papel dijo esto y consta.
       const eventos = ficha.body.eventos.filter((e: any) => e.tipo === "ORIGINAL_ADJUNTADO");
       expect(eventos[0].descripcion).toContain("JORGE PLANA");
+    });
+
+    it("la observación que sigue en la línea de abajo se lee entera: ahí va el teléfono", async () => {
+      // Albarán 2028458827: «OSCAR+SALVADOR+SANJULIAN» y debajo «+629862105».
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfAlbaranSoledad("OSCAR+SALVADOR+SANJULIAN", "+629862105"));
+
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      expect(ficha.body.albaran.observaciones).toBe("OSCAR SALVADOR SANJULIAN");
+      expect(ficha.body.albaran.telefonoContacto).toBe("629862105");
     });
 
     it("el móvil sale a su propia columna, listo para avisar a quien espera", async () => {
