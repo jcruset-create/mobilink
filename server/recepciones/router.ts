@@ -206,6 +206,31 @@ export function createRecepcionesRouter(): Router {
     })
   );
 
+  /**
+   * Relee los PDF ya guardados para rellenar la observación y el teléfono
+   * donde falten. Es para los albaranes que entraron antes de que el módulo
+   * supiera leer esa parte del papel: volver a adjuntar el PDF no vale porque
+   * el original no se sobrescribe.
+   */
+  r.post(
+    "/albaranes/observaciones/releer",
+    exigirPermiso("recepciones.albaran.create"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const resultado = await servicio.releerObservaciones(ctx, Number(b.limite) || 200);
+      void registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "recepciones.albaranes.releer_observaciones",
+        entidad: "rcp_albaranes",
+        detalle: { revisados: resultado.revisados, completados: resultado.completados, errores: resultado.errores },
+        ip: req.ip,
+      });
+      res.json(resultado);
+    })
+  );
+
   /* ── Proveedores y mapeo ───────────────────────────────────────────────── */
 
   r.get(

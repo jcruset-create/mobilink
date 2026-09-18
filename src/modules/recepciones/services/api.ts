@@ -112,6 +112,10 @@ export const crearAlbaran = (
 
 export const fichaAlbaran = (id: string) => pedir<FichaAlbaran>(`/albaranes/${id}`);
 
+/** Relee los PDF ya guardados para rellenar observación y teléfono donde falten. */
+export const releerObservaciones = () =>
+  pedir<{ revisados: number; completados: number; sinObservaciones: number; errores: number }>("/albaranes/observaciones/releer", json({}));
+
 export const listarOperarios = (centroId?: string, soloActivos?: boolean) =>
   pedir<{ operarios: Operario[] }>(`/operarios${query({ centroId, soloActivos: soloActivos ? "1" : undefined })}`);
 

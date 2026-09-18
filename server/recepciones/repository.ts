@@ -1338,6 +1338,31 @@ export async function anotarObservacionesAlbaran(
   );
 }
 
+/**
+ * Los albaranes que tienen su PDF original guardado pero les falta la
+ * observación o el teléfono. Es a lo que le hace falta una relectura: los que
+ * entraron antes de que el módulo supiera leer esa parte del papel.
+ */
+export async function albaranesSinObservaciones(
+  empresaId: string,
+  limite = 200,
+  ejecutor?: Ejecutor
+): Promise<{ id: string; numeroProveedor: string; storagePath: string }[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT a.id, a.numero_proveedor, d.storage_path
+       FROM rcp_albaranes a
+       JOIN rcp_documentos d
+         ON d.albaran_id = a.id AND d.tipo = 'ALBARAN_ORIGINAL' AND d.empresa_id = a.empresa_id
+      WHERE a.empresa_id = $1
+        AND ((a.observaciones IS NULL OR a.observaciones = '') OR a.telefono_contacto IS NULL)
+      ORDER BY a.created_at DESC
+      LIMIT $2`,
+    [empresaId, Math.min(Math.max(limite, 1), 500)]
+  );
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  return rows.map((r: any) => ({ id: r.id, numeroProveedor: r.numero_proveedor, storagePath: r.storage_path }));
+}
+
 export async function fijarEstadoAlbaran(
   empresaId: string,
   albaranId: string,
