@@ -36,6 +36,7 @@ import {
   btnSecondary,
 } from "../components/ui";
 import AlbaranAnalizadoCard from "../components/AlbaranAnalizado";
+import PedirDatos, { VERBOS } from "../components/PedirDatos";
 import ValidacionesLista from "../components/Validaciones";
 import { esHistorico, estadoParaPantalla } from "../services/analisis";
 import { COLOR_NOTIFICACION, ETIQUETA_NOTIFICACION, ETIQUETA_TIPO } from "../types";
@@ -391,7 +392,11 @@ function Albaranes({
             actuacion={actuaciones.find((x) => x.id === a.actuacionId)}
             umbralCampo={UMBRAL_CAMPO}
             puedeReanalizar={puedeReanalizar}
-            onReanalizado={() => void cargar()}
+            onReanalizado={() => {
+              // El análisis y la ficha: resolver un albarán cambia su actuación.
+              void cargar();
+              onCambio();
+            }}
           />
         </div>
       ))}
@@ -754,17 +759,6 @@ function Actuaciones({
   );
 }
 
-const VERBOS: Record<string, { etiqueta: string; desde: string[]; pideMotivo?: boolean }> = {
-  iniciar: { etiqueta: "Iniciar", desde: ["PENDIENTE", "BLOQUEADA"] },
-  resolver: { etiqueta: "Resolver", desde: ["PENDIENTE", "EN_PROCESO", "BLOQUEADA"] },
-  bloquear: { etiqueta: "Bloquear", desde: ["PENDIENTE", "EN_PROCESO"], pideMotivo: true },
-  descartar: {
-    etiqueta: "Descartar",
-    desde: ["PENDIENTE", "EN_PROCESO", "BLOQUEADA"],
-    pideMotivo: true,
-  },
-  reabrir: { etiqueta: "Reabrir", desde: ["RESUELTA"] },
-};
 
 function TarjetaActuacion({
   actuacion: a,
@@ -899,67 +893,6 @@ function TarjetaActuacion({
         />
       )}
     </div>
-  );
-}
-
-/** Pide lo que hace falta antes de mover: el motivo, o el resultado y la referencia. */
-function PedirDatos({
-  verbo,
-  onCerrar,
-  onConfirmar,
-  ocupado,
-}: {
-  verbo: string;
-  onCerrar: () => void;
-  onConfirmar: (datos: { motivo?: string; resultado?: string; erpReferencia?: string }) => void;
-  ocupado: boolean;
-}) {
-  const [motivo, setMotivo] = useState("");
-  const [resultado, setResultado] = useState("");
-  const [erpReferencia, setErpReferencia] = useState("");
-  const resolviendo = verbo === "resolver";
-
-  return (
-    <Modal
-      title={VERBOS[verbo]?.etiqueta ?? verbo}
-      onClose={onCerrar}
-      footer={
-        <div className="flex justify-end gap-2">
-          <button onClick={onCerrar} className={btnSecondary}>
-            Cancelar
-          </button>
-          <button
-            className={btnPrimary}
-            disabled={ocupado || (!resolviendo && !motivo.trim())}
-            onClick={() =>
-              onConfirmar(resolviendo ? { resultado, erpReferencia } : { motivo })
-            }
-          >
-            Confirmar
-          </button>
-        </div>
-      }
-    >
-      {resolviendo ? (
-        <div className="space-y-3">
-          <TextField label="Qué se ha hecho" value={resultado} onChange={setResultado} />
-          <TextField
-            label="Referencia en el ERP"
-            value={erpReferencia}
-            onChange={setErpReferencia}
-            placeholder="Nº de albarán o de asiento"
-          />
-        </div>
-      ) : (
-        <TextAreaField
-          label="Motivo"
-          value={motivo}
-          onChange={setMotivo}
-          rows={3}
-          placeholder="Quien se encuentre esto mañana necesita saber por qué."
-        />
-      )}
-    </Modal>
   );
 }
 

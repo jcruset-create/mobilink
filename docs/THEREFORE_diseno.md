@@ -675,12 +675,29 @@ delega a la IA: es determinista o es `REVISAR`.
    de la misma banda `y`) de un identificador `[A-Z]{0,4}[-\s]?\d{3,}([-\s]\d+)*`
    es una marca. La lista de sinónimos es configurable; el patrón del
    identificador es genérico (§48).
+2bis. **Marcas que no abren nada**: dentro del bloque de un albarán hay
+   líneas que nombran OTRO documento —una fila «ALB: … fecha» debajo de un
+   artículo es el albarán del cliente, «ALB.ABON …» el que se abona— y llevan la
+   misma palabra que la marca buena. Se descartan por lo que NO traen: una
+   marca a la que no sigue ninguna línea con importe antes de la marca
+   siguiente no abre un albarán, porque una factura no cobra un albarán sin
+   una sola línea con precio. Sólo se aplica con dos marcas o más —con una
+   sola, descartarla dejaría el documento sin número— y nunca se aplica si
+   se las llevaría todas. Sin esta regla la sección del albarán bueno se
+   corta ahí y sus notas finales salen como si fueran de otro.
 3. **Secciones**: cada marca abre una sección que termina cuando: empieza la
    siguiente marca; empieza una sección inequívoca de totales de factura
    (`conceptos.ts`: «Base imponible», «Total factura», «IVA» **a nivel de
    documento**, que se distinguen de una línea de artículo por no tener
    referencia ni cantidad); o termina el documento. Las líneas anteriores a
    la primera marca no pertenecen a ningún albarán (cabecera de factura).
+3bis. **Las etiquetas de encima de la marca** («REF: …», «Nuestro pedido:
+   …») son las primeras líneas del albarán: hasta dos, en la misma página,
+   sin importes y **pegadas a la marca**, es decir más cerca de ella que de
+   la fila que llevan encima. El albarán anterior también acaba en filas con
+   esa forma —«CLIENTE: …», «POS: DELANTERA IZQ»—, y ésas van pegadas a las
+   suyas; sin la comparación de distancias salían como primeras líneas del
+   albarán siguiente.
 4. Cada sección guarda `pagina_inicio`, `pagina_fin`, `numero_documento`
    (raw), su `bbox` de inicio y las **secciones vecinas** (anterior y
    siguiente) para la validación de separación (I).
@@ -847,6 +864,14 @@ observaciones; datos adicionales de `metadata_json`; conceptos globales
 aparte con la nota «no incluidos en la suma». Cada línea tiene un enlace
 «ver en PDF» que abre el visor en la página y resalta el `bbox` (el PDF va
 por enlace firmado; el resalte se pinta encima con la `bbox` guardada).
+
+En la cabecera de la tarjeta, además de «Ver el PDF» y «Ver resaltado», el
+estado de la actuación y un botón **«Resuelto»** que la da por hecha sin
+salir de la pestaña: abre el mismo formulario que la pestaña Actuaciones
+—qué se ha hecho y la referencia del ERP— y mueve ESA actuación, porque un
+albarán no tiene estado; lo tiene el trabajo que se pidió sobre él. Cuando
+ya está resuelta, en su lugar sale «Reabrir». El formulario es un único
+componente (`components/PedirDatos.tsx`) compartido por las dos pantallas.
 
 ### J.5 Validaciones (`components/Validaciones.tsx`)
 

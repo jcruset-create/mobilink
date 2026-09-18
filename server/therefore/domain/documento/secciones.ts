@@ -348,6 +348,42 @@ function esPieDeFactura(
 }
 
 /**
+ * Descarta las marcas que no abren ningún albarán.
+ *
+ * Dentro del bloque de un albarán hay líneas que NOMBRAN otro documento:
+ * una fila «ALB: … fecha» debajo de un artículo es el albarán del cliente al
+ * que se refiere el trabajo, «ALB.ABON …» el que se abona. Llevan la misma
+ * palabra que la marca de verdad y engañan a `numeroDeLaMarca`, y lo que
+ * cuestan es caro: la sección del albarán bueno se corta ahí, y todo lo que
+ * venía detrás —las notas del montaje, el cliente, la posición de la rueda—
+ * sale como si fuera de otro albarán. Es justo lo que se ve al subrayar: el
+ * bloque amarillo se queda a medias.
+ *
+ * Lo que las delata es que detrás no traen NINGÚN IMPORTE. Una factura no
+ * cobra un albarán sin una sola línea con precio, así que una marca a la que
+ * no sigue ni un número con decimales antes de la marca siguiente no abre
+ * nada: es una referencia escrita dentro del albarán que la contiene, y sus
+ * líneas son suyas.
+ *
+ * Sólo se aplica **con dos marcas o más**. Con una sola no hay nada que
+ * repartir mal, y descartarla dejaría el documento sin número —perder el
+ * número de un albarán que sí está impreso es peor que leerle una nota de
+ * más—. Y si la regla se llevara todas por delante, no se aplica: un
+ * documento sin marcas se lee entero, y eso no es lo que pasa aquí.
+ */
+function marcasConImporte(marcas: MarcaAlbaran[], lineas: LineaTexto[]): MarcaAlbaran[] {
+  if (marcas.length < 2) return marcas;
+  const conImporte = marcas.filter((marca, m) => {
+    const tope = m + 1 < marcas.length ? marcas[m + 1].indice : lineas.length;
+    for (let i = marca.indice; i < tope; i++) {
+      if (CON_DECIMALES.test(sinFechas(lineas[i].texto))) return true;
+    }
+    return false;
+  });
+  return conImporte.length > 0 ? conImporte : marcas;
+}
+
+/**
  * Localiza y delimita todos los albaranes del documento.
  *
  * `columnas` sólo se usa para reconocer las cabeceras de tabla —para no
@@ -392,7 +428,9 @@ export function localizarAlbaranes(
     marcas.push({ indice: i, numeroRaw: numero, pagina: l.pagina, caja: cajaDe(l) });
   }
 
-  if (marcas.length === 0) {
+  const reales = marcasConImporte(marcas, lineas);
+
+  if (reales.length === 0) {
     // Sin ninguna marca: una sección de documento entero. No podrá dar MATCH.
     const usadas = lineas;
     return {
@@ -426,31 +464,41 @@ export function localizarAlbaranes(
    * filas de datos y ponen el número del albarán en la segunda. Se admiten
    * hasta dos, en la misma página, sin importes y con forma de «etiqueta:
    * valor» —una fila de artículo nunca lo tiene—.
+   *
+   * Y tienen que estar PEGADAS A LA MARCA: más cerca de ella que de la fila
+   * que llevan encima. El albarán anterior también acaba en filas con esa
+   * forma —«CLIENTE: …», «POS: DELANTERA IZQ» son notas del montaje—, y ésas
+   * van pegadas a las suyas, con el blanco que separa los dos bloques por
+   * debajo. Sin esta comprobación las últimas notas de cada albarán salían
+   * como primeras líneas del siguiente.
    */
-  const inicio = marcas.map((marca, m) => {
+  const inicio = reales.map((marca, m) => {
     let i = marca.indice;
     for (let n = 0; n < MAX_ETIQUETAS_ANTES; n++) {
       const j = i - 1;
       if (j < 0) break;
       const previa = lineas[j];
       if (previa.pagina !== marca.pagina) break;
-      if (m > 0 && marcas[m - 1].indice >= j) break;
+      if (m > 0 && reales[m - 1].indice >= j) break;
       const t = normalizar(previa.texto).trim();
       if (CON_DECIMALES.test(sinFechas(t)) || !ETIQUETA_CORTA.test(t)) break;
       if (numeroDeLaMarca(previa, [], cabeceras)) break;
+      // Sin nada encima —o con la página cortada— no hay con qué compararla.
+      const encima = j > 0 && lineas[j - 1].pagina === previa.pagina ? lineas[j - 1] : null;
+      if (encima && previa.y - encima.y < Math.abs(lineas[i].y - previa.y)) break;
       i = j;
     }
     return i;
   });
 
   const secciones: SeccionAlbaran[] = [];
-  for (let m = 0; m < marcas.length; m++) {
+  for (let m = 0; m < reales.length; m++) {
     const desde = inicio[m];
-    const tope = m + 1 < marcas.length ? inicio[m + 1] : lineas.length;
+    const tope = m + 1 < reales.length ? inicio[m + 1] : lineas.length;
 
     let hasta = tope;
-    let finPor: FinDeSeccion = m + 1 < marcas.length ? "SIGUIENTE_MARCA" : "FIN_DOCUMENTO";
-    for (let i = marcas[m].indice + 1; i < tope; i++) {
+    let finPor: FinDeSeccion = m + 1 < reales.length ? "SIGUIENTE_MARCA" : "FIN_DOCUMENTO";
+    for (let i = reales[m].indice + 1; i < tope; i++) {
       if (esPieDeFactura(lineas[i], conceptos, esCabeceraDeTabla)) {
         hasta = i;
         finPor = "TOTALES";
@@ -461,15 +509,15 @@ export function localizarAlbaranes(
     const suyas = lineas.slice(desde, hasta);
     secciones.push({
       indice: m,
-      numeroDocumento: marcas[m].numeroRaw,
+      numeroDocumento: reales[m].numeroRaw,
       lineas: suyas,
       paginaInicio: suyas[0].pagina,
       paginaFin: suyas[suyas.length - 1].pagina,
-      cajaInicio: marcas[m].caja,
+      cajaInicio: reales[m].caja,
       finPor,
       documentoEntero: false,
-      vecinaAnterior: m > 0 ? marcas[m - 1].numeroRaw : null,
-      vecinaSiguiente: m + 1 < marcas.length ? marcas[m + 1].numeroRaw : null,
+      vecinaAnterior: m > 0 ? reales[m - 1].numeroRaw : null,
+      vecinaSiguiente: m + 1 < reales.length ? reales[m + 1].numeroRaw : null,
       /*
        * Lo que quedó entre el corte por totales y la MARCA SIGUIENTE.
        *
@@ -479,7 +527,7 @@ export function localizarAlbaranes(
        * documentos bien formados, que es la manera más rápida de que nadie
        * mire las revisiones.
        */
-      huerfanas: m + 1 < marcas.length ? tope - hasta : 0,
+      huerfanas: m + 1 < reales.length ? tope - hasta : 0,
     });
   }
 
