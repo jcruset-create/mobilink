@@ -1379,6 +1379,92 @@ Con eso, las tres plantillas de las cinco primeras facturas y las de este
 proveedor dan MATCH en todos los albaranes probados, con la aritmética de
 todas las líneas cuadrando y los totales de cabecera leídos.
 
+**Ajuste con documentos reales (N.3), tercera tanda: catalán, margen impreso
+y un OCR a medias.** Un cuarto proveedor factura en catalán, con el listado de
+sus delegaciones impreso en el margen izquierdo —a la misma altura que las
+líneas— y un recuadro de totales que el OCR devuelve en jeroglífico:
+
+- **Vocabulario catalán**: «Albarà» como cabecera de albarán, y
+  QUANTITAT / PREU / DTE / DESCRIPCIÓ como títulos de columna. Las cabeceras
+  se comparan contra el texto ya normalizado, así que van sin acentos: las
+  que estaban acentuadas no podían casar nunca.
+- **«ALB.ABON» no es una marca.** Una cabecera que acaba en signo —«alb.»,
+  «alb:»— no vale si le sigue una letra: ALB.ABON es el albarán que se abona,
+  no el de esta línea, y tomarlo por marca parte la factura por donde no es.
+- **Identificadores con letras y barras**: `0300AL00/831317`.
+- **El margen de la página no es tabla.** Un bloque de palabras al principio
+  de la fila que acaba antes de donde empieza la tabla Y está separado por un
+  hueco ancho se descarta. Las dos condiciones a la vez: una descripción larga
+  puede empezar a la izquierda de su propio título —pasa en otra de las
+  plantillas— y entre la descripción y la cantidad siempre hay hueco.
+- **El pie sin importes legibles.** «Forma de pago», «Vencimiento», «Rebut»
+  cierran la sección aunque no lleven cifra: sin eso, el último albarán se
+  comía el resto de la página cuando el recuadro de totales no se puede leer.
+- **El número y la fecha del documento, por etiqueta y no por posición.** Se
+  buscan de la etiqueta más específica a la más genérica y por todo el papel:
+  hay plantillas que ponen el recuadro del cliente abajo, y «Nº Fra» tiene que
+  ganarle a «Factura rectificativa», que está justo encima del CIF. La fecha
+  es la que lleva su etiqueta al lado del número, no la primera que aparezca:
+  junto al número también está el vencimiento.
+- **Lo que no llega a texto no se anota**: una fila con menos de un 60 % de
+  letras y cifras es OCR fallido, no una observación del albarán.
+
+De esta factura no se pueden leer los totales —su recuadro viene ilegible del
+OCR—, así que el contraste disponible es la suma de las líneas contra el
+importe que dijo el correo. Las líneas, los descuentos y la aritmética sí
+salen.
+
+**«Preparar todos los albaranes».** Hay correos que no listan los albaranes:
+piden la factura entera. La actuación nace sin número, no hay nada que
+analizar y la pestaña se queda en blanco con un documento delante que sí los
+trae. El botón de la pestaña Albaranes
+(`POST /expedientes/:id/albaranes/preparar`) lee el PDF adjunto, saca cada
+albarán con `albaranesDelDocumento` y crea una actuación por cada uno, ya
+encolada para analizar, en la misma transacción —si se cayera entre una cosa
+y la otra quedaría un albarán pedido que nadie analiza—.
+
+Tres decisiones:
+
+- **No se inventa ningún número.** Si el parser no localiza ni uno, se
+  responde 409 `SIN_ALBARANES` y no se crea nada: una actuación con un
+  albarán inventado es peor que ninguna.
+- **No duplica.** Un albarán que ya estaba pedido se cuenta como «ya estaba»,
+  y el índice único de la actuación lo remata.
+- **La actuación genérica se retira.** Al terminar —y no antes, para que un
+  fallo a medias deje la tarea original intacta— se descarta con su motivo:
+  «desglosada en N albaranes del documento». Ya no hay nada que hacer en
+  ella, y un expediente no se da por resuelto con actuaciones vivas dentro.
+
+**El PDF con el albarán subrayado.** «Ver resaltado», al lado de «Ver el
+PDF», devuelve la factura ENTERA del proveedor con el bloque de ese albarán
+en amarillo translúcido: su cabecera —número, fecha, dirección de entrega—,
+sus líneas, sus descuentos y sus tasas, con el número más marcado. Sirve para
+reenviárselo al proveedor y para revisar de un vistazo: si el amarillo cae
+donde no debe, el parser lo leyó mal.
+
+`GET /albaranes/:id/documento/resaltado` compone el fichero al vuelo y no lo
+guarda; el original no se toca nunca. El documento se vuelve a leer en vez de
+tirar de la geometría guardada, porque un análisis de hace un mes lleva lo
+que entendía el parser de hace un mes. Sin albarán localizado no se devuelve
+nada (409 `SIN_RESALTADO`): pintar sería afirmar lo que no se sabe. Las
+cajas las decide `domain/documento/resaltado.ts`, que es puro; pintarlas,
+`documentos/resaltado.ts` con pdf-lib. Dos cortes: no se pinta la cabecera de
+columnas, y no se pinta una página donde el albarán no tiene ni una cifra
+—una sección llega hasta donde empieza la siguiente y arrastra lo que haya
+por medio—. Las páginas giradas se devuelven intactas: no se ha visto
+ninguna, y pintar a ciegas caería sobre otro albarán.
+
+**Eliminar de la bandeja: `DESCARTADO`.** Un correo que no iba a ninguna
+parte, una prueba, un expediente abierto por error. El botón de la papelera
+de cada fila lo saca de la bandeja y de los contadores —«todos» incluido—
+pero NO lo borra: el correo que lo abrió, sus documentos y su histórico se
+quedan, porque «¿y esto qué fue?» se pregunta meses después. Es un estado
+nuevo y terminal, distinto de CERRADO —que significa gestionado y cuenta
+como trabajo hecho—, se pide con `therefore.expediente.edit` y se deshace
+volviéndolo a PENDIENTE, que exige decir por qué. Se encuentra filtrando por
+estado o por su número, que es justo el trabajo que cuesta sacar algo de la
+papelera.
+
 **Descarga de documentos para revisión.** En Configuración, «Descargar
 documentos para revisión» baja en un zip los PDF cuyo análisis vigente quedó
 en REVISAR o ERROR en los últimos N días (`GET /documentos/revision?dias=`),

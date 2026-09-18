@@ -28,6 +28,7 @@ import {
   titulosEnLaFila,
 } from "./tabla.ts";
 import { analizarAlbaran, seleccionarParser } from "./index.ts";
+import { cajasDelAlbaran, paginasResaltadas } from "./resaltado.ts";
 import { aplanar, type DocumentoTexto, type LineaTexto } from "./tipos.ts";
 
 /* ── Ayudantes para escribir páginas a mano ───────────────────────────────── */
@@ -573,13 +574,18 @@ describe("lo que enseñaron las primeras facturas reales", () => {
   });
 
   it("«Suma y sigue» no cierra el albarán, y la plantilla repetida se retira esté donde esté", () => {
-    const legal = "Le informamos de que tratamos sus datos con el fin de prestarle el servicio solicitado";
+    const legal =
+      "Le informamos de que tratamos sus datos con el fin de prestarle el servicio solicitado y de " +
+      "realizar la facturacion del mismo, y de que se conservaran mientras dure la relacion comercial.";
+    // Una FILA DE DATOS puede repetirse palabra por palabra en las dos páginas.
+    const pedido = "Nuestro pedido: 1021294542 de fecha 07.09.2026";
     const doc = documento([
       {
         numero: 1,
         lineas: [
           fila(1, 80, [["Albaran: 0501234", 40]]),
           fila(1, 100, CABECERA_TABLA),
+          fila(1, 110, [[pedido, 40]]),
           lineaArticulo(1, 120, "111111", "UNO", "1,00", "10,00", "-", "10,00"),
           fila(1, 140, [["SUMA Y SIGUE: 10,00", 350]]),
           fila(1, 160, [[legal, 40]]),
@@ -591,6 +597,8 @@ describe("lo que enseñaron las primeras facturas reales", () => {
         lineas: [
           fila(2, 60, [["Fecha expedicion: 01/09/2026 Suma anterior: 10,00", 40]]),
           fila(2, 100, CABECERA_TABLA),
+          // A distinta altura que en la página 1: los bloques no caen igual.
+          fila(2, 113, [[pedido, 40]]),
           lineaArticulo(2, 120, "222222", "DOS", "1,00", "20,00", "-", "20,00"),
           fila(2, 160, [["Base imponible", 350], ["30,00", 500]]),
           fila(2, 175, [["Total factura", 350], ["36,30", 500]]),
@@ -604,11 +612,16 @@ describe("lo que enseñaron las primeras facturas reales", () => {
     expect(loc.secciones).toHaveLength(1);
     expect(loc.secciones[0].finPor).toBe("TOTALES");
     expect(loc.secciones[0].paginaFin).toBe(2);
+    // El pedido se repite igual en las dos páginas y se queda: es un dato del
+    // albarán, no plantilla. Borrarlo sería perderlo.
+    expect(loc.secciones[0].lineas.filter((l) => l.texto === pedido)).toHaveLength(2);
 
     const r = extraerLineas(loc.secciones[0].lineas);
     expect(r.lineas.map((l) => l.descripcion)).toEqual(["UNO", "DOS"]);
     expect(r.conceptos).toEqual([]);
-    expect(r.notas).toEqual([]);
+    // El pedido que vuelve a salir en mitad del albarán no es línea ni
+    // concepto: es una observación, y ahí se queda.
+    expect(r.notas).toEqual([pedido]);
   });
 
   it("sin columna de referencia, la referencia no está «sin leer»: no existe", () => {
@@ -952,5 +965,223 @@ describe("una plantilla que desglosa cada artículo en varias filas", () => {
     for (const s of loc.secciones) {
       expect(s.lineas.some((l) => l.texto.includes("Página"))).toBe(false);
     }
+  });
+});
+
+/* ── El subrayador ────────────────────────────────────────────────────────── */
+
+describe("por dónde pasa el subrayador", () => {
+  const CABECERA_ERP: [string, number][] = [
+    ["Referencia", 40],
+    ["Descripcion", 110],
+    ["Cant", 300],
+    ["Precio", 350],
+    ["Importe", 500],
+  ];
+  const conDosAlbaranes = () =>
+    documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 60, [["FACTURA F-2026-0001", 40]]),
+          fila(1, 100, CABECERA_ERP),
+          fila(1, 120, [["Albaran: 0501234", 40]]),
+          fila(1, 132, [["NEUMATICO UNO", 110], ["1", 300], ["10,00", 350], ["10,00", 500]]),
+          fila(1, 150, [["Albaran: 0509999", 40]]),
+          fila(1, 162, [["NEUMATICO DOS", 110], ["1", 300], ["20,00", 350], ["20,00", 500]]),
+          fila(1, 200, [["Base imponible", 350], ["30,00", 500]]),
+        ],
+      },
+    ]);
+
+  it("cubre las filas del albarán pedido y ninguna del de al lado", () => {
+    const a = analizarAlbaran(conDosAlbaranes(), "0501234");
+    const cajas = cajasDelAlbaran(a.seccion);
+
+    expect(a.resultadoMatch).toBe("MATCH");
+    // Sus dos filas —la marca y el artículo— y el trazo del número encima.
+    expect(cajas.filter((c) => c.tipo === "BLOQUE")).toHaveLength(2);
+    expect(cajas.filter((c) => c.tipo === "NUMERO")).toHaveLength(1);
+    expect(paginasResaltadas(cajas)).toEqual([1]);
+
+    // Ni una caja llega a la altura del segundo albarán.
+    for (const c of cajas) expect(c.y + c.h).toBeLessThan(150);
+  });
+
+  it("la caja lleva aire alrededor: es un rotulador, no un subrayado", () => {
+    const a = analizarAlbaran(conDosAlbaranes(), "0501234");
+    const [primera] = cajasDelAlbaran(a.seccion, 2);
+    const linea = a.seccion!.lineas[0];
+    expect(primera.x).toBe(linea.x - 2);
+    expect(primera.y).toBe(linea.y - 2);
+    expect(primera.w).toBe(linea.w + 4);
+    expect(primera.h).toBe(linea.h + 4);
+  });
+
+  it("sin albarán localizado no se pinta nada: no se afirma lo que no se sabe", () => {
+    const a = analizarAlbaran(conDosAlbaranes(), "0507777");
+    expect(a.seccion).toBeNull();
+    expect(cajasDelAlbaran(a.seccion)).toEqual([]);
+
+    // Y un documento sin ninguna marca tampoco: la «sección» es el papel entero.
+    const suelto = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 100, CABECERA_ERP),
+          fila(1, 132, [["NEUMATICO UNO", 110], ["1", 300], ["10,00", 350], ["10,00", 500]]),
+        ],
+      },
+    ]);
+    const b = analizarAlbaran(suelto, "0501234");
+    expect(b.seccion?.documentoEntero).toBe(true);
+    expect(cajasDelAlbaran(b.seccion)).toEqual([]);
+  });
+
+  it("no se pinta la cabecera de columnas ni una página donde el albarán no tiene cifras", () => {
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 100, CABECERA_ERP),
+          fila(1, 120, [["Albaran: 0501234", 40]]),
+          fila(1, 132, [["NEUMATICO UNO", 110], ["1", 300], ["10,00", 350], ["10,00", 500]]),
+        ],
+      },
+      {
+        // La página siguiente abre otro albarán: lo que queda por medio es
+        // suyo por reparto, pero no tiene ni una cifra del primero.
+        numero: 2,
+        lineas: [
+          fila(2, 100, CABECERA_ERP),
+          fila(2, 110, [["DZ", 28]]),
+          fila(2, 120, [["Albaran: 0509999", 40]]),
+          fila(2, 132, [["NEUMATICO DOS", 110], ["1", 300], ["20,00", 350], ["20,00", 500]]),
+        ],
+      },
+    ]);
+    const a = analizarAlbaran(doc, "0501234");
+    expect(a.seccion?.paginaFin).toBe(2);
+    expect(paginasResaltadas(cajasDelAlbaran(a.seccion))).toEqual([1]);
+  });
+});
+
+/* ── La cuarta plantilla: catalán, margen impreso y un OCR a medias ───────── */
+
+describe("una factura en catalán con el listado de delegaciones en el margen", () => {
+  /** REF · DESCRIPCIÓ · QUANTITAT · PREU · DTE · TOTAL, como la imprime. */
+  const CABECERA_CAT: [string, number][] = [
+    ["REF", 114],
+    ["DESCRIPCIÓ", 189],
+    ["QUANTITAT", 367],
+    ["PREU", 445],
+    ["DTE", 489],
+    ["TOTAL", 529],
+  ];
+  /** Cada fila lleva pegado, a la izquierda del todo, el margen de la página. */
+  const conMargen = (y: number, margen: string, celdas: [string, number][]): LineaTexto =>
+    fila(1, y, [[margen, 13], ...celdas]);
+
+  const documentoFreco = () =>
+    documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 134, CABECERA_CAT),
+          conMargen(154, "País Basc, 11", [["Albarà 0300AL00/831317 Data 04/09/2026", 116]]),
+          conMargen(169, "Tel. Recanvis", [
+            ["6PK1033", 116],
+            ["6pk1033 mv", 191],
+            ["-1,00", 391],
+            ["28,00 €", 442],
+            ["50%", 489],
+            ["-14,00 €", 526],
+          ]),
+          conMargen(179, "977 3612 40", [["ALB.ABON: 0300AL00/814240-16/07/2026", 191]]),
+          conMargen(192, "Jacin Verdaguer, 17", [["Albarà 0300AL00/831751 Data 07/09/2026", 116]]),
+          conMargen(205, "Tel. Recanvis", [
+            ["033.575014068", 116],
+            ["575.14 adplus 75ah", 191],
+            ["-1,00", 391],
+            ["131,12€", 438],
+            ["50%", 489],
+            ["-65,56 €", 526],
+          ]),
+          // El recuadro de totales de esta factura llega ilegible del OCR.
+          fila(1, 599, [["MLsamoeemnosa]e]imT", 114]]),
+          fila(1, 635, [["ri•ll,,il·d@!i,,W,i= Mlli,UJ,i~", 114]]),
+          fila(1, 653, [["Rebut 20/11/2026", 114]]),
+          fila(1, 693, [["Client", 189], ["Factura rectificativa", 380]]),
+          fila(1, 706, [["Codi client: 2210.5", 189], ["CIF: A43044379", 380]]),
+          fila(1, 714, [["Nº Fra: FAB26007432", 380]]),
+          fila(1, 735, [["Data: 15/09/2026", 380]]),
+        ],
+      },
+    ]);
+
+  it("«Albarà» abre albarán y «ALB.ABON» no: es el que se abona, no éste", () => {
+    const loc = localizarAlbaranes(documentoFreco());
+    expect(loc.secciones.map((s) => s.numeroDocumento)).toEqual([
+      "0300AL00/831317",
+      "0300AL00/831751",
+    ]);
+    // Y el pie de pago cierra el último, aunque los totales no se puedan leer.
+    expect(loc.secciones[1].finPor).toBe("TOTALES");
+    expect(loc.secciones[1].lineas.some((l) => l.texto.includes("Client"))).toBe(false);
+  });
+
+  it("el margen impreso de la página no entra en las celdas", () => {
+    const a = analizarAlbaran(documentoFreco(), "0300AL00/831317");
+    expect(a.resultadoMatch).toBe("MATCH");
+    expect(a.lineas).toHaveLength(1);
+    const l = a.lineas[0];
+    // Sin el corte, la referencia sería «Tel. Recanvis 6PK1033».
+    expect(l.referencia).toBe("6PK1033");
+    expect(l.descripcion).toBe("6pk1033 mv");
+    expect(l.cantidad).toBe(-1);
+    expect(l.precioUnitarioCentimos).toBe(2800);
+    expect(l.importeCentimos).toBe(-1400);
+    expect(l.descuentos.map((d) => d.porcentaje)).toEqual([50]);
+    expect(l.cuadraAritmetica).toBe(true);
+    // Y la observación tampoco se lleva el teléfono de la delegación.
+    expect(a.complementarios.observaciones).toBe("ALB.ABON: 0300AL00/814240-16/07/2026");
+  });
+
+  it("una descripción que empieza a la izquierda de su título NO se corta", () => {
+    // La otra cara del corte anterior: aquí no hay hueco, hay una descripción
+    // larga bajo un título centrado. Es la plantilla de otro proveedor.
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 155, [["REFERENCIA", 146], ["CANTIDAD", 351], ["PRECIO", 433], ["TOTAL", 513]]),
+          fila(1, 200, [["Albaran: 0501234", 40]]),
+          fila(1, 228, [
+            ["255/65 R17 114H TL CF1100 A/T, COMFORSER", 28],
+            ["4", 376],
+            ["93,47 €", 441],
+            ["373,88 €", 515],
+          ]),
+        ],
+      },
+    ]);
+    const a = analizarAlbaran(doc, "0501234");
+    expect(a.lineas[0].descripcion).toBe("255/65 R17 114H TL CF1100 A/T, COMFORSER");
+    expect(a.lineas[0].cantidad).toBe(4);
+  });
+
+  it("el número de la factura se busca por su etiqueta, no por dónde cae", () => {
+    const c = parserGenerico.extraerCabecera(documentoFreco());
+    // «Nº Fra» gana a «Factura rectificativa», que está encima del CIF.
+    expect(c.numeroDocumento).toBe("FAB26007432");
+    expect(c.tipoDocumento).toBe("ABONO");
+    // Y la fecha es la de su etiqueta, no el vencimiento que hay al lado.
+    expect(c.fechaDocumento).toBe("2026-09-15");
+  });
+
+  it("lo que el OCR no supo leer no se guarda como observación", () => {
+    const a = analizarAlbaran(documentoFreco(), "0300AL00/831751");
+    expect(a.lineas).toHaveLength(1);
+    expect(a.complementarios.observaciones ?? "").not.toContain("ri•ll");
   });
 });

@@ -57,15 +57,21 @@ export const SINONIMOS_COLUMNA_POR_DEFECTO: SinonimosColumna = {
     "ref", "ref.", "referencia", "artículo", "articulo", "código", "codigo", "cod.",
     "art", "art.", "no.art", "no.art.", "no. art.", "nº art.", "n.art.",
   ],
-  descripcion: ["descripción", "descripcion", "concepto", "denominación", "denominacion", "detalle"],
+  descripcion: [
+    "descripción", "descripcion", "descripció", "descripcio",
+    "concepto", "denominación", "denominacion", "detalle",
+  ],
   // «Unit» es la columna de la unidad de medida: va pegada a la cantidad y su
   // contenido («UN», «UDS») lo descarta quien lee la celda.
-  cantidad: ["cant", "cant.", "cantidad", "uds", "uds.", "unid", "unidades", "unit", "unidad", "u.m.", "um"],
+  cantidad: [
+    "cant", "cant.", "cantidad", "quantitat", "uds", "uds.", "unid", "unidades",
+    "unit", "unidad", "u.m.", "um",
+  ],
   precio: [
-    "precio", "p.unit", "p. unit", "p.v.p", "pvp", "precio unitario",
+    "precio", "preu", "p.unit", "p. unit", "p.v.p", "pvp", "precio unitario",
     "precio/unit", "precio/ud", "precio unit", "p/unit",
   ],
-  descuento: ["dto", "dto.", "desc", "desc.", "descuento", "dto%", "%dto"],
+  descuento: ["dto", "dto.", "dte", "dte.", "desc", "desc.", "descuento", "descompte", "dto%", "%dto"],
   importe: ["importe", "total", "neto", "importe neto"],
 };
 
@@ -87,6 +93,8 @@ export type Rejilla = {
   filaCabecera: LineaTexto | null;
   /** Techo de confianza de lo que se lea con esta rejilla. */
   confianza: number;
+  /** Dónde empieza el título de la primera columna: el borde de la tabla. */
+  inicioTabla: number;
 };
 
 export const REJILLA_POSICIONAL: Rejilla = {
@@ -94,6 +102,7 @@ export const REJILLA_POSICIONAL: Rejilla = {
   columnas: [],
   filaCabecera: null,
   confianza: CONFIANZA_POSICIONAL,
+  inicioTabla: -Infinity,
 };
 
 /** Mínimo de títulos reconocidos para dar una fila por cabecera de tabla. */
@@ -101,6 +110,18 @@ const MIN_TITULOS = 3;
 
 /** Columnas de texto: su contenido crece hacia la derecha. */
 const ALINEADAS_A_LA_IZQUIERDA: readonly TipoColumna[] = ["posicion", "referencia", "descripcion"];
+
+/**
+ * El hueco que separa el margen de la página de la tabla.
+ *
+ * Hay facturas con el listado de delegaciones impreso en el margen izquierdo,
+ * a la misma altura que las líneas: sin separarlo, el teléfono de la
+ * delegación entra en la celda de la referencia y el artículo queda con un
+ * código que no es suyo. Lo que lo delata no es estar a la izquierda —una
+ * descripción puede empezar antes que su propio título— sino estar a la
+ * izquierda Y separado por un hueco que ninguna tabla deja entre sus celdas.
+ */
+const HUECO_FUERA_DE_TABLA = 20;
 
 function limpia(v: string): string {
   return normalizar(v).toLowerCase().replace(/[:|]/g, "").trim();
@@ -207,7 +228,7 @@ export function detectarRejilla(
     x1: i === anclas.length - 1 ? Infinity : frontera(i),
   }));
 
-  return { modo: "CABECERA", columnas, filaCabecera: cabecera, confianza: 1 };
+  return { modo: "CABECERA", columnas, filaCabecera: cabecera, confianza: 1, inicioTabla: anclas[0].x0 };
 }
 
 export type Celdas = Partial<Record<TipoColumna, string>>;
@@ -233,10 +254,33 @@ const NUMERO_CON_DECIMALES = /^[-−+]?\d{1,3}(?:[.,]\d{3})*[.,]\d{2}$|^[-−+]?
 const PARECE_REFERENCIA = /^(?:\d{6,}|[A-Z0-9][A-Z0-9./-]{4,})$/i;
 const PORCENTAJE = /\d+(?:[.,]\d+)?\s*%/;
 
+/**
+ * Cuántas palabras del principio de la fila están FUERA de la tabla.
+ *
+ * El margen impreso de la página: un bloque de palabras que acaba antes de
+ * donde empieza la tabla y que está separado del resto por un hueco ancho.
+ * Las dos condiciones a la vez, porque cada una por su lado se lleva algo
+ * que no debe: una descripción larga puede empezar a la izquierda de su
+ * título, y entre la descripción y la cantidad hay siempre un hueco enorme.
+ */
+function palabrasFueraDeLaTabla(palabras: Palabra[], inicioTabla: number): number {
+  let corte = 0;
+  for (let i = 0; i < palabras.length - 1; i++) {
+    const fin = palabras[i].x + palabras[i].w;
+    if (fin >= inicioTabla) break;
+    const hueco = palabras[i + 1].x - fin;
+    if (hueco >= HUECO_FUERA_DE_TABLA && palabras[i + 1].x + palabras[i + 1].w > inicioTabla) {
+      corte = i + 1;
+    }
+  }
+  return corte;
+}
+
 /** Reparte la fila en celdas usando la rejilla de títulos. */
-function porColumnas(fila: LineaTexto, columnas: Columna[]): Celdas {
+function porColumnas(fila: LineaTexto, columnas: Columna[], inicioTabla: number): Celdas {
   const trozos = new Map<TipoColumna, string[]>();
-  for (const p of [...fila.palabras].sort((a, b) => a.x - b.x)) {
+  const ordenadas = [...fila.palabras].sort((a, b) => a.x - b.x);
+  for (const p of ordenadas.slice(palabrasFueraDeLaTabla(ordenadas, inicioTabla))) {
     const c = columnaDeLaPalabra(p, columnas);
     if (!c) continue;
     const lista = trozos.get(c.tipo);
@@ -301,5 +345,7 @@ function porForma(fila: LineaTexto): Celdas {
 }
 
 export function repartirEnColumnas(fila: LineaTexto, rejilla: Rejilla): Celdas {
-  return rejilla.modo === "CABECERA" ? porColumnas(fila, rejilla.columnas) : porForma(fila);
+  return rejilla.modo === "CABECERA"
+    ? porColumnas(fila, rejilla.columnas, rejilla.inicioTabla)
+    : porForma(fila);
 }

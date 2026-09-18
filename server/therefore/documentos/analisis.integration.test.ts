@@ -33,7 +33,7 @@ import type { Server } from "node:http";
 
 import express from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { pdfDeFactura, type AlbaranFixture, type LineaFixture } from "../fixtures/albaranPdf.ts";
+import { pdfDeFactura, pdfEscaneado, type AlbaranFixture, type LineaFixture } from "../fixtures/albaranPdf.ts";
 
 const RUN = process.env.RUN_DB_TESTS === "1" && !!process.env.DATABASE_URL;
 
@@ -404,6 +404,97 @@ describe.runIf(RUN)("El análisis de albaranes de Therefore", () => {
     // Otra empresa no ve nada suyo.
     const otra = await fetch(`${base}/api/therefore/documentos/revision`, { headers: cabeceras(adminB) });
     expect(otra.status).toBe(404);
+  });
+
+  it("16c · el PDF se devuelve con el albarán subrayado, y sin albarán no se devuelve", async () => {
+    const pdf = await pdfDeFactura({
+      albaranes: [uno("0501234", [LINEA_UNO, LINEA_DOS]), uno("0509999", [LINEA_UNO])],
+      totales: { base: "241,80", total: "292,58" },
+    });
+    const { analisis } = await analizar([{ accion: "GRABAR", albaran: "0501234" }], pdf);
+    const a = analisis.albaranes[0];
+    expect(a.resultadoMatch).toBe("MATCH");
+
+    const cabeceras = (q: Quien) => ({ "x-test-user": q.usuario, "x-test-empresa": q.empresa });
+    const r = await fetch(`${base}/api/therefore/albaranes/${a.id}/documento/resaltado`, {
+      headers: cabeceras(adminA),
+    });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("application/pdf");
+    const bytes = Buffer.from(await r.arrayBuffer());
+    expect(bytes.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    // Es el documento del proveedor con algo encima, no un documento nuevo.
+    const { PDFDocument } = await import("pdf-lib");
+    const salida = await PDFDocument.load(bytes);
+    const original = await PDFDocument.load(pdf);
+    expect(salida.getPageCount()).toBe(original.getPageCount());
+    expect(bytes.length).toBeGreaterThan(pdf.length);
+
+  });
+
+  it("16d · un albarán que no está en el papel no se puede subrayar, y se dice", async () => {
+    const pdf = await pdfDeFactura({
+      albaranes: [uno("0509999", [LINEA_DOS])],
+      totales: { base: "186,00", total: "225,06" },
+    });
+    const { analisis } = await analizar([{ accion: "GRABAR", albaran: "0501234" }], pdf);
+    const a = analisis.albaranes[0];
+    expect(a.estadoAnalisis).toBe("ERROR");
+
+    const r = await fetch(`${base}/api/therefore/albaranes/${a.id}/documento/resaltado`, {
+      headers: { "x-test-user": adminA.usuario, "x-test-empresa": adminA.empresa },
+    });
+    expect(r.status).toBe(409);
+    expect(((await r.json()) as { code?: string }).code).toBe("SIN_RESALTADO");
+  });
+
+  it("16e · «prepara todos los albaranes»: uno por cada uno del documento, y sin repetir", async () => {
+    const pdf = await pdfDeFactura({
+      albaranes: [uno("0501234", [LINEA_UNO]), uno("0509999", [LINEA_DOS])],
+      totales: { base: "213,90", total: "258,82" },
+    });
+    // El correo pide la factura entera: una actuación GRABAR sin número.
+    const expedienteId = await importar([{ accion: "GRABAR" }]);
+    const sinPdf = await api(`/expedientes/${expedienteId}/albaranes/preparar`, adminA, { method: "POST" });
+    expect(sinPdf.status).toBe(409);
+    expect(sinPdf.body.code).toBe("SIN_DOCUMENTO");
+
+    expect((await subirPdf(expedienteId, pdf)).status).toBe(201);
+    const r = await api(`/expedientes/${expedienteId}/albaranes/preparar`, adminA, { method: "POST" });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.encontrados).toEqual(["0501234", "0509999"]);
+    expect(r.body.preparados).toEqual(["0501234", "0509999"]);
+    // La genérica se retira: ya no hay nada que hacer en ella, y dejarla viva
+    // impediría dar el expediente por resuelto.
+    expect(r.body.retiradas).toBe(1);
+    const tras = (await api(`/expedientes/${expedienteId}`, adminA)).body.actuaciones;
+    const generica = tras.find((a: any) => !a.albaranSolicitado);
+    expect(generica.estado).toBe("DESCARTADA");
+    expect(generica.observaciones).toContain("Desglosada en 2");
+    expect(tras.filter((a: any) => a.estado !== "DESCARTADA")).toHaveLength(2);
+
+    // Cada una entra en la cola: al vaciarla están las dos analizadas.
+    await procesarPendientes(10);
+    const analisis = (await api(`/expedientes/${expedienteId}/analisis`, adminA)).body;
+    expect(analisis.albaranes.map((a: any) => a.numeroDocumento).sort()).toEqual(["0501234", "0509999"]);
+    for (const a of analisis.albaranes) expect(a.resultadoMatch).toBe("MATCH");
+
+    // Pedirlo otra vez no duplica nada.
+    const otra = await api(`/expedientes/${expedienteId}/albaranes/preparar`, adminA, { method: "POST" });
+    expect(otra.body.preparados).toEqual([]);
+    expect(otra.body.yaEstaban).toEqual(["0501234", "0509999"]);
+  });
+
+  it("16f · si el documento no trae ningún número de albarán, no se inventa ninguno", async () => {
+    const pdf = await pdfEscaneado();
+    const expedienteId = await importar([{ accion: "GRABAR" }]);
+    expect((await subirPdf(expedienteId, pdf)).status).toBe(201);
+
+    const r = await api(`/expedientes/${expedienteId}/albaranes/preparar`, adminA, { method: "POST" });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe("SIN_ALBARANES");
+    const ficha = await api(`/expedientes/${expedienteId}`, adminA);
+    expect(ficha.body.actuaciones).toHaveLength(1);
   });
 
   /* ── Casos 17 y 18 ─────────────────────────────────────────────────────── */

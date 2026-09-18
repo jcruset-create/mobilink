@@ -7,11 +7,17 @@
  * el router necesita para no tener lógica dentro.
  */
 
+import { leerConfig } from "../config.ts";
+import { albaranesDelDocumento, analizarAlbaran } from "../domain/documento/index.ts";
+import { esTipoAccion, type TipoAccion } from "../domain/estados.ts";
+import { cajasDelAlbaran, paginasResaltadas } from "../domain/documento/resaltado.ts";
 import { ErrorTherefore } from "../errors.ts";
 import * as repo from "../repository.ts";
 import { guardarDocumento, hashDeFichero, leerDocumento, rutaDocumento, urlFirmada } from "../storage.ts";
 import { componerZip, type EntradaZip } from "../zip.ts";
-import type { Contexto } from "../service.ts";
+import { moverActuacion, type Contexto } from "../service.ts";
+import { pintarResaltado } from "./resaltado.ts";
+import { leerDocumento as leerTexto } from "./texto.ts";
 
 export type FicheroSubido = {
   nombre: string;
@@ -101,6 +107,161 @@ export async function adjuntarDocumento(
 
   const reencolados = await repo.reencolarDeExpediente(ctx.empresaId, expedienteId);
   return { adjuntoId: existente.id, hash, reencolados };
+}
+
+export type PreparacionAlbaranes = {
+  /** Cuántos albaranes distintos trae el documento. */
+  encontrados: string[];
+  /** Los que se han puesto a gestionar ahora. */
+  preparados: string[];
+  /** Los que ya estaban pedidos: no se duplican. */
+  yaEstaban: string[];
+  /** Actuaciones genéricas —«grabar», sin número— retiradas al desglosarlas. */
+  retiradas: number;
+};
+
+/**
+ * Pone a gestionar TODOS los albaranes que trae el documento.
+ *
+ * Hay correos que no listan los albaranes: dicen «grabad la factura entera».
+ * Entonces la actuación nace sin número, no hay nada que analizar y la
+ * pantalla se queda en blanco con un documento delante que sí los tiene. Esto
+ * es el puente: se lee el PDF, se saca cada albarán y se crea una actuación
+ * por cada uno, ya encolada para analizar.
+ *
+ * Lo que NO hace es adivinar el número de ninguno: sólo prepara los que el
+ * documento escribe. Si el parser no localiza ni uno, se dice y no se crea
+ * nada, porque una actuación con un albarán inventado es peor que ninguna.
+ *
+ * La actuación genérica de la que se sale —«grabar», sin número— se descarta
+ * al terminar, con su motivo: ya no hay nada que hacer en ella, lo suyo son
+ * ahora las que se acaban de crear. Dejarla pendiente obligaría a resolver a
+ * mano una tarea que ya está desglosada, y un expediente no se da por
+ * resuelto con actuaciones vivas dentro.
+ */
+export async function prepararAlbaranes(
+  ctx: Contexto,
+  expedienteId: string,
+  tipoAccionPedido?: string
+): Promise<PreparacionAlbaranes> {
+  const expediente = await repo.obtenerExpediente(ctx.empresaId, expedienteId);
+  if (!expediente) throw new ErrorTherefore("NO_ENCONTRADO", "El expediente no existe.", 404);
+  if (expediente.estado === "RESUELTO" || expediente.estado === "CERRADO") {
+    throw new ErrorTherefore(
+      "EXPEDIENTE_TERMINADO",
+      `El expediente ${expediente.numero} está ${expediente.estado.toLowerCase()}. Reábrelo antes de prepararle albaranes.`,
+      409
+    );
+  }
+
+  const adjuntos = (await repo.adjuntosDeExpediente(ctx.empresaId, expedienteId)).filter(
+    (a) => a.storagePath && (a.mimeType.includes("pdf") || a.nombreArchivo.toLowerCase().endsWith(".pdf"))
+  );
+  const adjunto = adjuntos[adjuntos.length - 1];
+  if (!adjunto?.storagePath) {
+    throw new ErrorTherefore(
+      "SIN_DOCUMENTO",
+      "Este expediente todavía no tiene ningún PDF. Adjúntalo y vuelve a pedirlo.",
+      409
+    );
+  }
+  const bytes = await leerDocumento(adjunto.storagePath);
+  if (!bytes) {
+    throw new ErrorTherefore("SIN_DOCUMENTO", "El documento ya no está en el almacenamiento.", 404);
+  }
+
+  const cfg = await leerConfig(ctx.empresaId);
+  const texto = leerTexto(bytes, { maxPaginas: cfg.albaran.maxPaginas });
+
+  // Uno por número, en el orden en que salen en el papel.
+  const vistos = new Set<string>();
+  const delDocumento: { numero: string; normalizado: string }[] = [];
+  for (const a of albaranesDelDocumento(texto)) {
+    if (!a.numeroDocumento || !a.normalizado || vistos.has(a.normalizado)) continue;
+    vistos.add(a.normalizado);
+    delDocumento.push({ numero: a.numeroDocumento, normalizado: a.normalizado });
+  }
+  if (delDocumento.length === 0) {
+    throw new ErrorTherefore(
+      "SIN_ALBARANES",
+      "En el documento no se ha localizado ningún número de albarán, así que no hay nada que preparar.",
+      409
+    );
+  }
+
+  const actuaciones = await repo.listarActuaciones(ctx.empresaId, expedienteId);
+  const vivas = actuaciones.filter((a) => a.estado !== "DESCARTADA");
+  const tipoAccion: TipoAccion = esTipoAccion(tipoAccionPedido)
+    ? tipoAccionPedido
+    : ((vivas.find((a) => !a.albaranSolicitado)?.tipoAccion ??
+        vivas[0]?.tipoAccion ??
+        "GRABAR") as TipoAccion);
+
+  const yaEstaban: string[] = [];
+  const preparados: string[] = [];
+
+  for (const alb of delDocumento) {
+    if (vivas.some((a) => a.albaranNormalizado === alb.normalizado && a.tipoAccion === tipoAccion)) {
+      yaEstaban.push(alb.numero);
+      continue;
+    }
+    /*
+     * La actuación y su sitio en la cola, en la misma transacción: si se cae
+     * entre una cosa y la otra queda un albarán pedido que nadie analiza.
+     */
+    const creada = await repo.enTransaccion(async (c) => {
+      const nueva = await repo.crearActuacion(
+        ctx.empresaId,
+        expedienteId,
+        {
+          tipoAccion,
+          albaranSolicitado: alb.numero,
+          importeCentimos: null,
+          indicadorAdicional: null,
+          obligatoria: true,
+          observaciones: "Preparada desde el documento.",
+        },
+        c
+      );
+      if (!nueva) return null;
+
+      await repo.encolarAnalisis(ctx.empresaId, expedienteId, nueva.id, alb.numero, null, c);
+      await repo.anotarEvento(
+        ctx.empresaId,
+        {
+          expedienteId,
+          actuacionId: nueva.id,
+          tipo: "ACTUACION_ANADIDA",
+          actorTipo: "usuario",
+          usuarioId: ctx.userId,
+          usuarioNombre: ctx.userNombre ?? null,
+          datosNuevos: { tipoAccion, albaran: alb.numero, origen: "documento" },
+          descripcion: `Actuación ${tipoAccion} ${alb.numero}, preparada desde el documento.`,
+        },
+        c
+      );
+      return nueva;
+    });
+
+    if (creada) preparados.push(alb.numero);
+    else yaEstaban.push(alb.numero);
+  }
+
+  /*
+   * Y se retiran las genéricas, al final y no al principio: si algo falla a
+   * mitad, lo que queda es la tarea original intacta y no un expediente sin
+   * nada que hacer.
+   */
+  const genericas = vivas.filter((a) => !a.albaranSolicitado && a.tipoAccion === tipoAccion);
+  let retiradas = 0;
+  for (const generica of genericas) {
+    await moverActuacion(ctx, generica.id, "DESCARTADA", {
+      motivo: `Desglosada en ${delDocumento.length} albarán(es) del documento.`,
+    });
+    retiradas++;
+  }
+
+  return { encontrados: delDocumento.map((a) => a.numero), preparados, yaEstaban, retiradas };
 }
 
 export type AlbaranConDetalle = repo.AlbaranAnalizado & {
@@ -234,6 +395,68 @@ export async function loteParaRevision(
 
   entradas.push({ nombre: "indice.csv", contenido: Buffer.from(indice.join("\n") + "\n", "utf8") });
   return { zip: componerZip(entradas), documentos: entradas.length - 1, omitidos };
+}
+
+/**
+ * El PDF del proveedor con ESTE albarán subrayado en amarillo.
+ *
+ * El documento se vuelve a leer aquí en vez de tirar de lo guardado, y es a
+ * propósito: la base guarda el recuadro de cada línea, pero no el del bloque
+ * entero, y sobre todo, un análisis de hace un mes lleva la geometría que
+ * entendía el parser de hace un mes. Releer cuesta un segundo y garantiza que
+ * el amarillo señala lo que el módulo entiende HOY. Eso también lo hace útil
+ * para revisar: si el subrayado cae donde no debe, el parser lo leyó mal.
+ */
+export async function pdfResaltado(
+  ctx: Contexto,
+  albaranAnalizadoId: string
+): Promise<{ pdf: Buffer; nombre: string; paginas: number[]; paginasGiradas: number[] }> {
+  const fila = await repo.albaranAnalizadoPorId(ctx.empresaId, albaranAnalizadoId);
+  if (!fila) throw new ErrorTherefore("NO_ENCONTRADO", "Ese análisis no existe.", 404);
+  if (!fila.adjuntoId) {
+    throw new ErrorTherefore("SIN_DOCUMENTO", "Ese análisis no tiene documento asociado.", 404);
+  }
+
+  const adjunto = await repo.adjuntoPorId(ctx.empresaId, fila.adjuntoId);
+  if (!adjunto?.storagePath) {
+    throw new ErrorTherefore("SIN_DOCUMENTO", "El documento ya no está disponible.", 404);
+  }
+  const original = await leerDocumento(adjunto.storagePath);
+  if (!original) {
+    throw new ErrorTherefore("SIN_DOCUMENTO", "El documento ya no está en el almacenamiento.", 404);
+  }
+
+  const cfg = await leerConfig(ctx.empresaId);
+  const texto = leerTexto(original, { maxPaginas: cfg.albaran.maxPaginas });
+  const analisis = analizarAlbaran(texto, fila.numeroSolicitado, {
+    umbrales: cfg.albaran.umbrales,
+    lineas: { toleranciaCentimos: cfg.albaran.toleranciaCentimos },
+  });
+
+  const cajas = cajasDelAlbaran(analisis.seccion);
+  if (cajas.length === 0) {
+    /*
+     * Sin sección localizada no hay nada que subrayar, y devolver el PDF tal
+     * cual sería peor que no devolverlo: parecería que el albarán no está en
+     * ninguna parte del papel cuando lo que pasa es que no se ha sabido ver.
+     */
+    throw new ErrorTherefore(
+      "SIN_RESALTADO",
+      "No se ha localizado ese albarán dentro del documento, así que no hay nada que resaltar.",
+      409
+    );
+  }
+
+  const pintado = await pintarResaltado(original, cajas, texto);
+  const expediente = await repo.obtenerExpediente(ctx.empresaId, fila.expedienteId);
+  const nombre = `${nombreSeguro(expediente?.numero ?? "expediente")}_${nombreSeguro(fila.numeroSolicitado)}_resaltado.pdf`;
+
+  return {
+    pdf: pintado.pdf,
+    nombre,
+    paginas: paginasResaltadas(cajas),
+    paginasGiradas: pintado.paginasGiradas,
+  };
 }
 
 /**
