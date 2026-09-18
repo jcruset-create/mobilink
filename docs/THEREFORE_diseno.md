@@ -1414,6 +1414,26 @@ OCR—, así que el contraste disponible es la suma de las líneas contra el
 importe que dijo el correo. Las líneas, los descuentos y la aritmética sí
 salen.
 
+**«Preparar todos los albaranes».** Hay correos que no listan los albaranes:
+piden la factura entera. La actuación nace sin número, no hay nada que
+analizar y la pestaña se queda en blanco con un documento delante que sí los
+trae. El botón de la pestaña Albaranes
+(`POST /expedientes/:id/albaranes/preparar`) lee el PDF adjunto, saca cada
+albarán con `albaranesDelDocumento` y crea una actuación por cada uno, ya
+encolada para analizar, en la misma transacción —si se cayera entre una cosa
+y la otra quedaría un albarán pedido que nadie analiza—.
+
+Tres decisiones:
+
+- **No se inventa ningún número.** Si el parser no localiza ni uno, se
+  responde 409 `SIN_ALBARANES` y no se crea nada: una actuación con un
+  albarán inventado es peor que ninguna.
+- **No duplica.** Un albarán que ya estaba pedido se cuenta como «ya estaba»,
+  y el índice único de la actuación lo remata.
+- **La actuación genérica no se toca.** Se devuelve señalada para que la
+  pantalla lo diga; retirarla es una decisión de quien mira, no un efecto
+  colateral de haber pulsado un botón.
+
 **El PDF con el albarán subrayado.** «Ver resaltado», al lado de «Ver el
 PDF», devuelve la factura ENTERA del proveedor con el bloque de ese albarán
 en amarillo translúcido: su cabecera —número, fecha, dirección de entrega—,

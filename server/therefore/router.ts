@@ -837,6 +837,35 @@ export function createThereforeRouter(): Router {
   );
 
   /**
+   * Poner a gestionar todos los albaranes que trae el documento.
+   *
+   * Para los correos que piden la factura entera sin listar sus albaranes.
+   */
+  r.post(
+    "/expedientes/:id/albaranes/preparar",
+    exigirPermiso("therefore.actuacion.manage"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const salida = await documentos.prepararAlbaranes(
+        ctx,
+        String(req.params.id),
+        texto(body.tipoAccion) || undefined
+      );
+      await registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "therefore.albaranes.preparar",
+        entidad: "thf_expedientes",
+        entidadId: String(req.params.id),
+        detalle: { preparados: salida.preparados.length, yaEstaban: salida.yaEstaban.length },
+        ip: req.ip,
+      });
+      res.status(201).json(salida);
+    })
+  );
+
+  /**
    * El PDF del proveedor con el albarán de esta actuación subrayado.
    *
    * Va por el servidor y no por un enlace firmado del almacén porque el
