@@ -445,7 +445,7 @@ describe.runIf(RUN)("El análisis de albaranes de Therefore", () => {
       headers: { "x-test-user": adminA.usuario, "x-test-empresa": adminA.empresa },
     });
     expect(r.status).toBe(409);
-    expect((await r.json()).code).toBe("SIN_RESALTADO");
+    expect(((await r.json()) as { code?: string }).code).toBe("SIN_RESALTADO");
   });
 
   /* ── Casos 17 y 18 ─────────────────────────────────────────────────────── */
