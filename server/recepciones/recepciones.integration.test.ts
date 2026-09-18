@@ -137,6 +137,38 @@ function pdfAlbaranSoledad(observacion: string, segundaLinea?: string): Promise<
   return listo;
 }
 
+/**
+ * La otra plantilla del grupo: el albarán de entrega de INSA TURBO. Aquí las
+ * observaciones son texto suelto debajo de su artículo, y el cuerpo se cierra
+ * con una fila de asteriscos. No hace falta cuadrar columnas: este formato se
+ * lee por líneas.
+ */
+function pdfEntregaInsa(): Promise<Buffer> {
+  const doc = new PDFDocument({ size: "A4" });
+  const trozos: Buffer[] = [];
+  doc.on("data", (c: Buffer) => trozos.push(c));
+  const listo = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(trozos))));
+  doc.fontSize(8);
+  const lineas = [
+    "Entrega Nº Fecha S/Referencia Volumen Neto(Kg) Bruto(Kg)",
+    "D26 26031188 18/09/2026 333778 0,00",
+    "Referencias Descripción Cantidad Precio % Dto Total",
+    "PEDIDO Nº 26001072 FECHA 12/08/2026",
+    "021300001012 295/80X22.5 INSA TURBO K25 BASE 1ª 10,000UD 190,000 EUR 0,00 1.900,000",
+    "CASCOS HANKOOK o CONTINENTAL, PED. ALBERTO 610473077",
+    "TALLER RIU CLAR",
+    "*",
+    "AGENCIA TRANSAHER A RIU CLAR. PED. JORDI",
+    "*".repeat(76),
+    "CAMION (TRUCK) 26,000",
+    "IMPORTE BRUTO DESCUENTO BASE IMPONIBLE % IVA IMPORTE IVA LÍQUIDO",
+    "1.900,000 0,000 1.900,000 21,000 399,000 2.299,000 EUR",
+  ];
+  lineas.forEach((l, i) => doc.text(l, 30, 100 + i * 16, { lineBreak: false }));
+  doc.end();
+  return listo;
+}
+
 async function subirOriginal(albaranId: string, contenido: Buffer, quien: Quien = gestorA): Promise<Respuesta> {
   const form = new FormData();
   form.append("documento", new Blob([new Uint8Array(contenido)], { type: "application/pdf" }), "albaran.pdf");
@@ -343,6 +375,24 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
       const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
       expect(ficha.body.albaran.observaciones).toBe("TALLER");
       expect(ficha.body.albaran.telefonoContacto).toBeNull();
+    });
+
+    it("el albarán de entrega de INSA TURBO también se lee, con su otra plantilla", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      const subida = await subirOriginal(albaran.id, await pdfEntregaInsa());
+      expect(subida.status, JSON.stringify(subida.body)).toBe(201);
+
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      // Las observaciones son las líneas de texto de debajo de cada artículo.
+      expect(ficha.body.albaran.observaciones).toContain("PED. ALBERTO");
+      expect(ficha.body.albaran.observaciones).toContain("TALLER RIU CLAR");
+      expect(ficha.body.albaran.observaciones).toContain("PED. JORDI");
+      // El artículo NO se cuela de observación, ni lo de después del cierre.
+      expect(ficha.body.albaran.observaciones).not.toContain("INSA TURBO K25");
+      expect(ficha.body.albaran.observaciones).not.toContain("CAMION");
+      // Y el móvil sale a su columna igual que en los de Soledad.
+      expect(ficha.body.albaran.telefonoContacto).toBe("610473077");
     });
 
     it("la relectura completa los albaranes que entraron antes de que esto existiera", async () => {
