@@ -45,6 +45,7 @@ import {
   detectarRejilla,
   repartirEnColumnas,
   titulosEnLaFila,
+  type Celdas,
   type Rejilla,
   type SinonimosColumna,
 } from "./tabla.ts";
@@ -308,6 +309,21 @@ function pareceArticulo(fila: LineaTexto): boolean {
   return /\d+[.,]\d{2}(?:\s*(?:€|EUR))?\s*$/i.test(t);
 }
 
+/**
+ * Lo que no llega a ser texto.
+ *
+ * Un PDF escaneado cuyo OCR se atraganta devuelve cosas como `ri•ll,,il·d@!i`.
+ * No es una observación del albarán: es que ahí no se pudo leer. Se mide por
+ * la proporción de letras y cifras, que es lo único que distingue un texto
+ * corto y raro de un jeroglífico.
+ */
+function esRuido(texto: string): boolean {
+  const sinEspacios = texto.replace(/\s/g, "");
+  if (sinEspacios.length < 4) return false;
+  const utiles = (sinEspacios.match(/[A-Za-z0-9ÁÉÍÓÚÑáéíóúñ]/g) ?? []).length;
+  return utiles / sinEspacios.length < 0.6;
+}
+
 /** Una continuación: descripción que salta de línea, sin ningún número. */
 function esContinuacion(fila: LineaTexto): boolean {
   const t = normalizar(fila.texto).trim();
@@ -355,9 +371,19 @@ export function extraerLineas(
    */
   let bloqueDeConceptos = false;
 
-  const anotar = (texto: string) => {
-    const limpio = textoSinNumeros(texto, DECIMALES_AL_FINAL);
-    if (/[A-Za-z0-9]/.test(limpio)) notas.push(limpio);
+  /*
+   * La nota se guarda con lo que hay DENTRO de la tabla, no con la fila
+   * entera: si el margen de la página lleva impreso el teléfono de una
+   * delegación, ese teléfono no es una observación del albarán.
+   */
+  const anotar = (texto: string, celdas?: Celdas) => {
+    // En orden de lectura: las columnas de texto van de izquierda a derecha.
+    const dentro = celdas ? [celdas.referencia, celdas.descripcion].filter(Boolean).join(" ").trim() : "";
+    // Con rejilla y sin una palabra dentro de la tabla, la fila no es del
+    // albarán: es el margen de la página, y el margen no se anota.
+    if (celdas && rejilla.modo === "CABECERA" && !dentro) return;
+    const limpio = textoSinNumeros(dentro || texto, DECIMALES_AL_FINAL);
+    if (/[A-Za-z0-9]/.test(limpio) && !esRuido(limpio)) notas.push(limpio);
   };
 
   for (const fila of seccion) {
@@ -412,14 +438,14 @@ export function extraerLineas(
           ultima.rawText += `\n${fila.texto}`;
           filasDeCadaLinea[filasDeCadaLinea.length - 1].push(fila);
         } else {
-          anotar(texto);
+          anotar(texto, celdas);
         }
         continue;
       }
       // Una fila sin importe antes de la primera línea es cabecera de la
       // sección (fecha, matrícula, destinatario): la lee `complementarios`.
       // Después de la primera, es una nota del albarán («CASO 4711»).
-      if (lineas.length > 0 && /\d/.test(texto)) anotar(texto);
+      if (lineas.length > 0 && /\d/.test(texto)) anotar(texto, celdas);
       continue;
     }
 
@@ -436,7 +462,7 @@ export function extraerLineas(
     // Con rejilla, una fila sin nada en la columna del importe no es un
     // artículo: es texto con una cantidad al lado («SE ANULA PULMÓN 1,00»).
     if (rejilla.modo === "CABECERA" && !celdas.importe?.trim()) {
-      anotar(texto);
+      anotar(texto, celdas);
       continue;
     }
 

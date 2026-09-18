@@ -34,6 +34,7 @@
 import { normalizar } from "../correo/texto.ts";
 import {
   VOCABULARIO_CONCEPTOS,
+  abrePieDeDocumento,
   cierraSeccion,
   esArrastre,
   esCabeceraDeTotales,
@@ -46,14 +47,19 @@ import {
 } from "./tabla.ts";
 import { cajaDe, sinFechas, type Caja, type DocumentoTexto, type LineaTexto } from "./tipos.ts";
 
-/** Sinónimos de «albarán». Configurable: `albaran.cabeceras`. */
+/**
+ * Sinónimos de «albarán». Configurable: `albaran.cabeceras`.
+ *
+ * Se comparan contra el texto YA NORMALIZADO —sin acentos—, así que van sin
+ * ellos. «albara» es el catalán «albarà», que es como factura media Tarragona.
+ */
 export const CABECERAS_ALBARAN_POR_DEFECTO = [
-  "albarán",
   "albaran",
+  "albara",
   "alb.",
   "alb:",
-  "nº albarán",
-  "n. albarán",
+  "no albaran",
+  "n. albaran",
   "delivery note",
   "entrega",
   "ENT-",
@@ -66,7 +72,8 @@ export const CABECERAS_ALBARAN_POR_DEFECTO = [
  * opcional, y al menos tres dígitos, con más grupos detrás. Cubre `0501234`,
  * `ENT-770199-0501234` y `ALB 2024 001` sin conocer a ningún proveedor.
  */
-const IDENTIFICADOR = /[A-Z]{0,4}[-\s]?\d{2,}(?:[-\s.]\d+)+|[A-Z]{0,4}[-\s]?\d{3,}/;
+const IDENTIFICADOR =
+  /[A-Z0-9]{0,8}[-/]?\d{2,}(?:[-/.\s]\d+)+|[A-Z0-9]{0,8}[-/]?\d{3,}/;
 
 /** Un número con dos decimales: lo que distingue una fila de tabla. */
 const CON_DECIMALES = /\d[.,]\d{2}/;
@@ -243,11 +250,20 @@ function retirarRepetidas(
  * sí es un albarán.
  */
 function posicionEntera(texto: string, cabecera: string): number {
+  /*
+   * Por la derecha sólo se mira cuando la cabecera acaba en signo. «albaran»
+   * puede seguir («albaranes») y sigue siendo lo mismo; «alb.» seguido de
+   * letra es otra palabra —«ALB.ABON» es el albarán que se abona, no el de
+   * esta línea—, y tomarla por una marca parte la factura por donde no es.
+   */
+  const cierra = !/[a-z0-9]/i.test(cabecera[cabecera.length - 1]);
   let desde = 0;
   for (;;) {
     const pos = texto.indexOf(cabecera, desde);
     if (pos < 0) return -1;
-    if (pos === 0 || !/[a-z0-9]/i.test(texto[pos - 1])) return pos;
+    const izquierda = pos === 0 || !/[a-z0-9]/i.test(texto[pos - 1]);
+    const derecha = !cierra || !/[a-z]/i.test(texto[pos + cabecera.length] ?? "");
+    if (izquierda && derecha) return pos;
     desde = pos + 1;
   }
 }
@@ -318,6 +334,8 @@ function esPieDeFactura(
   // La fila de títulos del pie («Base imponible  IVA  Total»), con los
   // importes debajo. Una cabecera de tabla no lo es aunque lleve «Total».
   if (esCabeceraDeTotales(t, conceptos) && !esCabeceraDeTabla(linea)) return true;
+  // Y el bloque de pago, que va detrás de las líneas de todas todas.
+  if (abrePieDeDocumento(t, conceptos)) return true;
   const sinImporte = t.replace(/[-−+]?[\d.,]+\s*[-−]?\s*(?:€|EUR)?\s*$/i, "").trim();
   /*
    * Sólo un total DEL DOCUMENTO cierra. El «Total» que remata el bloque de un

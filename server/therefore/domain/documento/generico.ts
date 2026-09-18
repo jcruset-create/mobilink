@@ -64,20 +64,36 @@ const NIF = /\b(?:ES)?(?:[A-Z]\d{8}|\d{8}[A-Z]|[A-Z]\d{7}[A-Z0-9])\b/;
  * de «facturacion@proveedor.es» no es una etiqueta, y en la primera factura
  * real que entró era justo eso lo que salía como número de documento.
  */
+/*
+ * De la más específica a la más genérica, y se buscan EN ESE ORDEN por todo
+ * el documento: «Nº Fra» gana a «Factura» aunque esté más abajo. Al revés, el
+ * título «Factura rectificativa» de un recuadro se lleva el primer número que
+ * encuentre debajo, que suele ser el CIF del cliente.
+ */
 const ETIQUETAS_NUMERO = [
   "nº factura",
   "n factura",
   "num factura",
   "numero factura",
+  "nº fra",
+  "n fra",
+  "num fra",
   "factura nº",
   "factura n",
+  "fra",
   "factura",
+  "abono",
+  "nota de credito",
+  "rectificativa",
   "invoice",
   "nº",
   "numero",
   "n",
 ];
+/** Lo que delata que el documento es un abono, esté donde esté. */
 const ETIQUETAS_ABONO = ["abono", "nota de credito", "factura rectificativa", "rectificativa"];
+/** Las que anuncian la fecha del documento. */
+const ETIQUETAS_FECHA = ["fecha de doc", "fecha doc", "fecha factura", "fecha de factura", "fecha", "data"];
 
 /** Los totales. Las etiquetas más específicas van antes que las genéricas. */
 const ETIQUETAS_BASE = ["base imponible", "base imp", "total sin iva", "importe neto", "subtotal"];
@@ -203,6 +219,26 @@ function valorDetras(tokens: Token[], hasta: number, acepta: (raw: string) => bo
   return null;
 }
 
+/** La fecha que sigue a una etiqueta de fecha, detrás o debajo de ella. */
+function etiquetadaEn(filas: LineaTexto[]): string | null {
+  for (const e of ETIQUETAS_FECHA) {
+    for (let i = 0; i < filas.length; i++) {
+      const tokens = tokensDe(filas[i]);
+      for (const o of ocurrencias(tokens, e)) {
+        const crudo =
+          valorDetras(tokens, o.hasta, (v) => PARECE_FECHA.test(v)) ??
+          valorBajo(filas, i, tokens[o.desde].x0, tokens[o.hasta - 1].x1, (v) => PARECE_FECHA.test(v), tokens);
+        const leida = crudo ? leerFecha(crudo) : null;
+        if (leida) return leida;
+      }
+    }
+  }
+  return null;
+}
+
+/** Cuántas filas alrededor del número se miran buscando la fecha. */
+const FILAS_ALREDEDOR = 5;
+
 /** Cuántas palabras puede haber entre una etiqueta y su importe. */
 const PALABRAS_HASTA_EL_IMPORTE = 4;
 
@@ -279,22 +315,22 @@ function importeDe(filas: LineaTexto[], etiquetas: string[]): number | null {
   return null;
 }
 
-/** El número de documento tras (o bajo) una de las etiquetas, y cuál. */
+/** El número de documento tras (o bajo) una de las etiquetas, y dónde estaba. */
 function numeroDe(
   filas: LineaTexto[],
   etiquetas: string[]
-): { numero: string; etiqueta: string } | null {
-  for (let i = 0; i < filas.length; i++) {
-    const tokens = tokensDe(filas[i]);
-    for (const e of etiquetas) {
+): { numero: string; etiqueta: string; indice: number } | null {
+  for (const e of etiquetas) {
+    for (let i = 0; i < filas.length; i++) {
+      const tokens = tokensDe(filas[i]);
       for (const o of ocurrencias(tokens, e)) {
         const detras = valorDetras(tokens, o.hasta, esNumeroDoc);
-        if (detras) return { numero: detras, etiqueta: e };
+        if (detras) return { numero: detras, etiqueta: e, indice: i };
         // «Nº» a secas sólo vale con el valor al lado: debajo de un «Nº» puede
         // haber cualquier cosa.
         if (e.length <= 2 || e === "numero") continue;
         const bajo = valorBajo(filas, i, tokens[o.desde].x0, tokens[o.hasta - 1].x1, esNumeroDoc, tokens);
-        if (bajo) return { numero: bajo, etiqueta: e };
+        if (bajo) return { numero: bajo, etiqueta: e, indice: i };
       }
     }
   }
@@ -320,28 +356,48 @@ export const parserGenerico: ParserDocumento = {
     const filas = aplanar(doc);
     const arriba = filas.slice(0, Math.min(filas.length, 40));
 
-    let numero: string | null = null;
-    let tipo: CabeceraDocumento["tipoDocumento"] = "FACTURA";
-    const abono = numeroDe(arriba, ETIQUETAS_ABONO);
-    if (abono) {
-      numero = abono.numero;
-      tipo = "ABONO";
-    } else {
-      const factura = numeroDe(arriba, ETIQUETAS_NUMERO);
-      if (factura) numero = factura.numero;
-      // Un abono puede llevar su número bajo «Factura» y decir «abono» en
-      // otra parte de la cabecera.
-      if (arriba.some((f) => ocurrencias(tokensDe(f), "abono").length > 0)) tipo = "ABONO";
-    }
+    /*
+     * El número se busca ARRIBA, que es donde va, y si no aparece se busca en
+     * todo el documento: hay plantillas que ponen el recuadro del cliente y su
+     * número de factura ABAJO, debajo de las líneas. Primero arriba y después
+     * en todo, y no al revés, para que una mención de paso en el pie legal no
+     * le gane al número de verdad.
+     */
+    const hallado = numeroDe(arriba, ETIQUETAS_NUMERO) ?? numeroDe(filas, ETIQUETAS_NUMERO);
+    const numero = hallado?.numero ?? null;
+    /*
+     * Que sea abono no lo dice la etiqueta del número sino el documento: hay
+     * rectificativas que numeran bajo «Factura» y lo dicen en el recuadro de
+     * al lado. Se mira en todo el papel, que es donde puede estar.
+     */
+    const esAbono = filas.some((f) =>
+      ETIQUETAS_ABONO.some((e) => ocurrencias(tokensDe(f), e).length > 0)
+    );
+    const tipo: CabeceraDocumento["tipoDocumento"] = esAbono ? "ABONO" : "FACTURA";
 
-    let fecha: string | null = null;
-    for (const f of arriba) {
-      const m = normalizar(f.texto).match(/\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b/);
-      if (m) {
-        fecha = leerFecha(m[0]);
-        if (fecha) break;
+    /*
+     * La fecha del documento es la que está JUNTO A SU NÚMERO. Buscar la
+     * primera del papel funciona hasta que una factura empieza por la fecha
+     * de su primer albarán, y entonces el documento queda fechado el día que
+     * salió la mercancía.
+     */
+    const sueltaEn = (donde: LineaTexto[]): string | null => {
+      for (const f of donde) {
+        const m = normalizar(f.texto).match(/\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b/);
+        const leida = m ? leerFecha(m[0]) : null;
+        if (leida) return leida;
       }
-    }
+      return null;
+    };
+    const cerca = hallado
+      ? filas.slice(
+          Math.max(0, hallado.indice - FILAS_ALREDEDOR),
+          hallado.indice + FILAS_ALREDEDOR + 1
+        )
+      : [];
+    // Primero la que lleva su etiqueta al lado, y sólo si no la hay, la
+    // primera que aparezca: junto al número también está el vencimiento.
+    const fecha = etiquetadaEn(cerca) ?? sueltaEn(cerca) ?? etiquetadaEn(arriba) ?? sueltaEn(arriba);
 
     let nif: string | null = null;
     for (const f of arriba) {
