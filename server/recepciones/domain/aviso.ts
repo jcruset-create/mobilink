@@ -130,9 +130,43 @@ export function textoMaterial(datos: DatosAviso): string {
   return faltan > 0 ? `${cabe.join(" · ")} y ${faltan} más` : cabe.join(" · ");
 }
 
+/**
+ * «PED. ALBERTO», «PED JORDI»: así marca INSA TURBO en su albarán de entrega
+ * quién pidió el material, y ése es justo a quien hay que avisar. No pega con
+ * «PEDRO» —detrás de PED tiene que venir un espacio— ni con «PEDIDO 12345»,
+ * porque lo que se captura empieza por letra.
+ */
+const QUIEN_PIDIO = /\bPED(?:IDO)?\.?\s+(\p{Lu}[\p{Lu}.\s]{1,30})/u;
+
+/** Hasta dónde un texto puede ser el nombre de una persona. */
+const NOMBRE_LARGO = 40;
+const NOMBRE_PALABRAS = 5;
+
+/**
+ * A quién se saluda, o `null` si no se sabe.
+ *
+ * La observación del albarán es a veces un nombre («JORGE PLANA»), a veces un
+ * sitio («TALLER») y a veces, en el albarán de INSA, nueve líneas de recados
+ * de oficina seguidas. Un «Hola CASCOS HANKOOK o CONTINENTAL, PED. ALBERTO ·
+ * PRECIO AUTORIZADO…» no se le manda a nadie: si en ese montón está marcado
+ * quién pidió, se saluda a esa persona, y si no se saluda sin nombre.
+ */
+export function aQuienSeAvisa(destinatario: string | null): string | null {
+  const texto = limpiarParaPlantilla(destinatario ?? "");
+  if (!texto) return null;
+  const pidio = texto.match(QUIEN_PIDIO)?.[1]?.replace(/[.\s]+$/, "").trim();
+  if (pidio) return pidio;
+  if (texto.length > NOMBRE_LARGO || texto.split(" ").length > NOMBRE_PALABRAS) return null;
+  // «PEDIDO 12345» es corto y no es nadie: en el nombre de una persona no hay
+  // una ristra de cuatro cifras, y «Hola PEDIDO 12345» es de las cosas que
+  // hacen que quien lo recibe piense que esto está roto.
+  if (/\d{4,}/.test(texto)) return null;
+  return texto;
+}
+
 /** A quién se le habla. Sin nombre, se le trata de usted sin inventarse uno. */
 export function saludo(destinatario: string | null): string {
-  const nombre = limpiarParaPlantilla(destinatario ?? "");
+  const nombre = aQuienSeAvisa(destinatario);
   return nombre ? `Hola ${nombre}` : "Hola";
 }
 

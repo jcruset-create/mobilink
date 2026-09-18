@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LARGO_MATERIAL, cuerpoPlantilla, motivoParaNoAvisar, saludo, textoAviso, textoMaterial, variablesPlantilla, type Ajustes, type DatosAviso } from "./aviso.ts";
+import { LARGO_MATERIAL, aQuienSeAvisa, cuerpoPlantilla, motivoParaNoAvisar, saludo, textoAviso, textoMaterial, variablesPlantilla, type Ajustes, type DatosAviso } from "./aviso.ts";
 
 const datos = (extra: Partial<DatosAviso> = {}): DatosAviso => ({
   destinatario: "JORGE PLANA",
@@ -46,6 +46,39 @@ describe("motivoParaNoAvisar", () => {
 
   it("y un albarán sin móvil se dice tal cual, no como un problema de configuración", () => {
     expect(motivoParaNoAvisar(datos({ telefono: null }), ajustes({ hayCredenciales: false }))).toMatch(/móvil/);
+  });
+});
+
+describe("a quién se saluda", () => {
+  it("el nombre de la observación, tal cual", () => {
+    expect(aQuienSeAvisa("JORGE PLANA")).toBe("JORGE PLANA");
+    expect(aQuienSeAvisa("TALLER")).toBe("TALLER");
+  });
+
+  it("nada que saludar cuando no hay observación", () => {
+    expect(aQuienSeAvisa(null)).toBeNull();
+    expect(aQuienSeAvisa("   ")).toBeNull();
+  });
+
+  it("«PEDRO» no es un «PED.»: detrás de PED tiene que venir un espacio", () => {
+    expect(aQuienSeAvisa("PEDRO")).toBe("PEDRO");
+  });
+
+  it("en el albarán de INSA se saluda a quien pidió, no al montón de recados", () => {
+    const observacion =
+      "CASCOS HANKOOK o CONTINENTAL, PED. ALBERTO · PRECIO AUTORIZADO PACO MACIÁ · TALLER RIU CLAR · CUBIERTAS PARA TMA, PRECIO ESPECIAL";
+    expect(aQuienSeAvisa(observacion)).toBe("ALBERTO");
+    expect(saludo(observacion)).toBe("Hola ALBERTO");
+  });
+
+  it("«PED JORDI» sin punto también cuenta, y «PEDIDO 12345» no", () => {
+    expect(aQuienSeAvisa("AGENCIA TRANSAHER A RIU CLAR. PED JORDI")).toBe("JORDI");
+    expect(aQuienSeAvisa("PEDIDO 12345")).toBeNull();
+  });
+
+  it("un párrafo entero no se saluda: no es el nombre de nadie", () => {
+    expect(aQuienSeAvisa("FACTURAR SÓLO EL NOMINATIVO, CASCOS EN COMPENSACIÓN, BOLSA CATALUÑA, AUTORIZA QUIEN SEA")).toBeNull();
+    expect(saludo("FACTURAR SÓLO EL NOMINATIVO, CASCOS EN COMPENSACIÓN, BOLSA CATALUÑA, AUTORIZA QUIEN SEA")).toBe("Hola");
   });
 });
 
