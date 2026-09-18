@@ -84,10 +84,25 @@ export type FilaPdf = { palabras: string[]; pagina?: number };
 /** Cuántas columnas numéricas cierran una fila de la tabla: cantidad, precio, importe. */
 const COLUMNAS_NUMERICAS = 3;
 
-/** Abre la tabla de productos; lo que va antes es membrete. */
+/** Abre la tabla de productos de Soledad; lo que va antes es membrete. */
 const CABECERA = /ARTICULO.*DESCRIPCION.*CANTIDAD/;
-/** La cierra: empiezan los totales. */
+/** La cierra: empiezan los totales. Vale para las dos plantillas. */
 const TOTALES = /IMPORTE BRUTO/;
+
+/* ── La otra plantilla del grupo: INSA TURBO ──────────────────────────────── */
+
+/** «Referencias Descripción Cantidad Precio % Dto Total» abre su tabla. */
+const CABECERA_INSA = /REFERENCIAS.*DESCRIPCION.*CANTIDAD/;
+/** La fila de asteriscos con la que INSA cierra el cuerpo del albarán. */
+const FIN_INSA = /^\*{10,}$/;
+/** «PEDIDO Nº 26001072 FECHA 12/08/2026»: agrupa líneas, no es observación. */
+const GRUPO_INSA = /^PEDIDO\s+N[º°O]?\s/;
+/** La referencia de artículo de INSA: «021300001012». */
+const REFERENCIA_INSA = /^\d{9,}$/;
+/** Su cantidad va pegada a la unidad: «10,000UD». */
+const CANTIDAD_INSA = /\d+(?:[.,]\d+)?\s*UD\b/;
+/** Filas de adorno: «*», «-----», «=====». */
+const ADORNO = /^[*\-=._]+$/;
 
 /** «1.039,00», «-4», «6,05», «0». Lo que ocupa una celda de número. */
 function comoNumero(palabra: string): number | null {
@@ -133,10 +148,16 @@ export function partirObservacion(observacion: string): { texto: string; telefon
   if (!m) return { texto: observacion.trim(), telefono: null };
   const telefono = soloDigitos(m[1]);
   if (telefono.length !== 9) return { texto: observacion.trim(), telefono: null };
-  // Lo que queda al quitarlo, sin los separadores que lo rodeaban.
-  const texto = (observacion.slice(0, m.index) + observacion.slice((m.index ?? 0) + m[0].length))
-    .replace(/[\s.,;:/-]+/g, " ")
-    .trim();
+  /*
+   * Lo que queda al quitarlo. Se limpian SÓLO los separadores que rodeaban al
+   * número, no la puntuación de toda la frase: en el albarán de INSA la
+   * observación es una frase de verdad («CASCOS HANKOOK o CONTINENTAL, PED.
+   * ALBERTO 610473077») y arrasar con las comas y los puntos la dejaba
+   * irreconocible.
+   */
+  const antes = observacion.slice(0, m.index).replace(/[\s.,;:/-]+$/, "");
+  const despues = observacion.slice((m.index ?? 0) + m[0].length).replace(/^[\s.,;:/-]+/, "");
+  const texto = [antes, despues].filter((t) => t.trim()).join(" ").replace(/\s+/g, " ").trim();
   return { texto, telefono };
 }
 
@@ -222,7 +243,76 @@ export function filasDeLaTabla(filas: readonly FilaPdf[]): FilaPdf[] {
   return dentro;
 }
 
+/**
+ * Qué plantilla es este albarán, por su cabecera de columnas. `null` si no se
+ * reconoce ninguna: entonces no se saca nada, que es mejor que adivinar.
+ */
+export function formatoDelAlbaran(filas: readonly FilaPdf[]): "SOLEDAD" | "INSA" | null {
+  for (const fila of filas) {
+    const n = normalizar(fila.palabras.join(" "));
+    if (CABECERA.test(n)) return "SOLEDAD";
+    if (CABECERA_INSA.test(n)) return "INSA";
+  }
+  return null;
+}
+
+/**
+ * Las observaciones del albarán de entrega de INSA TURBO.
+ *
+ * Otra casa del grupo (Industrias del Neumático SAU) y otra plantilla, que no
+ * se parece en nada a la de Soledad: aquí las observaciones NO son filas con
+ * las columnas a cero al final de la tabla, sino líneas de texto suelto DEBAJO
+ * de su artículo, dentro del cuerpo del albarán:
+ *
+ *     PEDIDO Nº 26001072 FECHA 12/08/2026
+ *     021300001012 295/80X22.5 INSA TURBO K25 BASE 1ª  10,000UD  190,000 EUR 0,00 1.900,000
+ *     CASCOS HANKOOK o CONTINENTAL, PED. ALBERTO
+ *     TALLER RIU CLAR
+ *     *
+ *
+ * Así que aquí una observación se reconoce por lo que NO es: ni un artículo
+ * (referencia de nueve cifras o más y cantidad «10,000UD»), ni la cabecera de
+ * un pedido, ni una fila de adorno, ni un renglón sin una sola letra.
+ *
+ * El cuerpo acaba en su fila de asteriscos larga, y eso importa: justo debajo
+ * viene «CAMION (TRUCK) 26,000», que tiene letras y pasaría por observación.
+ *
+ * Un albarán de INSA trae VARIOS pedidos, cada uno con sus líneas. Eso no se
+ * modela aquí: esto sólo lee texto.
+ */
+export function observacionesInsa(todas: readonly FilaPdf[]): string[] {
+  const salida: string[] = [];
+  let dentro = false;
+  for (const fila of todas) {
+    const palabras = fila.palabras.filter((p) => p.trim());
+    if (palabras.length === 0) continue;
+    const crudo = palabras.join(" ");
+    const n = normalizar(crudo);
+
+    if (!dentro) {
+      if (CABECERA_INSA.test(n)) dentro = true;
+      continue;
+    }
+    if (TOTALES.test(n) || FIN_INSA.test(palabras.join(""))) break;
+
+    if (GRUPO_INSA.test(n)) continue;
+    if (palabras.every((p) => ADORNO.test(p))) continue;
+    // Un artículo: su referencia delante y su cantidad en unidades.
+    if (REFERENCIA_INSA.test(palabras[0]) && CANTIDAD_INSA.test(n)) continue;
+
+    const texto = limpiarObservacion(crudo);
+    if (!/\p{L}/u.test(texto)) continue;
+    if (!salida.includes(texto)) salida.push(texto);
+  }
+  return salida;
+}
+
 export function observacionesDelAlbaran(todas: readonly FilaPdf[]): string[] {
+  // Cada proveedor del grupo tiene su plantilla y su forma de escribir esto:
+  // se mira cuál es ANTES de leer, en vez de hacer que una regla sirva para
+  // las dos, que es como se acaba sacando un artículo por observación.
+  if (formatoDelAlbaran(todas) === "INSA") return observacionesInsa(todas);
+
   const filas = filasConContinuaciones(filasDeLaTabla(todas));
   let ultimoArticulo = -1;
   for (const [i, fila] of filas.entries()) {

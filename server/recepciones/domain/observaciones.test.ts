@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { filasConContinuaciones, limpiarObservacion, observacionDeFila, observacionesDelAlbaran, partirObservacion, type FilaPdf } from "./observaciones.ts";
+import {
+  filasConContinuaciones,
+  formatoDelAlbaran,
+  limpiarObservacion,
+  observacionDeFila,
+  observacionesDelAlbaran,
+  observacionesInsa,
+  partirObservacion,
+  type FilaPdf,
+} from "./observaciones.ts";
 
 const fila = (...palabras: string[]): FilaPdf => ({ palabras });
 /** La fila que abre la tabla de productos en el albarán de Soledad. */
@@ -32,6 +41,98 @@ const ALBARAN_TALLER: FilaPdf[] = [
   fila("0", "0", "0,00"),
   TOTALES,
 ];
+
+/**
+ * El albarán de entrega de INSA TURBO (Industrias del Neumático SAU, del mismo
+ * grupo que Soledad), copiado del lector de PDF: entrega D26-26031188 del
+ * 18/09/2026. Otra plantilla entera, con VARIOS pedidos en un solo albarán y
+ * las observaciones como texto suelto debajo de su artículo.
+ */
+const ENTREGA_INSA: FilaPdf[] = [
+  fila("Entrega", "Nº", "Fecha", "S/Referencia", "Volumen", "Neto(Kg)", "Bruto(Kg)"),
+  fila("D26", "26031188", "18/09/2026", "333778", "0,00"),
+  fila("Condiciones", "pago", "Moneda", "Destino", "Origen/Final", "Transporte"),
+  fila("TRANSFERENCIA", "60", "DIAS", "EUR"),
+  fila("Referencias", "Descripción", "Cantidad", "Precio", "%", "Dto", "Total"),
+  fila("PEDIDO", "Nº", "26001072", "FECHA", "12/08/2026"),
+  fila("021300001012", "295/80X22.5", "INSA", "TURBO", "K25", "BASE", "1ª", "10,000UD", "190,000", "EUR", "0,00", "1.900,000"),
+  fila("CASCOS", "HANKOOK", "o", "CONTINENTAL,", "PED.", "ALBERTO"),
+  fila("PRECIO", "AUTORIZADO", "PACO", "MACIÁ"),
+  fila("TALLER", "RIU", "CLAR"),
+  fila("PEDIDO", "Nº", "26001215", "FECHA", "18/09/2026"),
+  fila("021000000259", "315/80X22.5", "INSA", "TURBO", "TDO-3", "SM", "1ªOT", "4,000UD", "140,000", "EUR", "0,00", "560,000"),
+  fila("CUBIERTAS", "PARA", "TMA,", "PRECIO", "ESPECIAL"),
+  fila("*"),
+  fila("021000000198", "13X22.5", "INSA", "TURBO", "TDO-3", "1ª", "OT.", "4,000UD", "170,000", "EUR", "0,00", "680,000"),
+  fila("CUBIERTAS", "PARA", "TMA,", "PRECIO", "ESPECIAL"),
+  fila("CASCOS", "EN", "COMPENSACIÓN,BOLSA", "CATALUÑA"),
+  fila("AUTORIZA", "PACO", "MACIÁ."),
+  fila("*"),
+  fila("021300000867", "315/70X22.5", "INSA", "TURBO", "K700", "TECH", "1ª", "4,000UD", "216,300", "EUR", "15,57", "730,490"),
+  fila("021300000865", "315/80X22.5", "INSA", "TURBO", "K700", "TECH", "1ª", "4,000UD", "216,300", "EUR", "0,00", "865,200"),
+  fila("FACTURAR", "SÓLO", "EL", "NOMINATIVO,", "CASCOS"),
+  fila("EN", "COMPENSACIÓN,BOLSA", "CATALUÑA"),
+  fila("AUTORIZA", "PACO", "MACIÁ."),
+  fila("*"),
+  fila("AGENCIA", "TRANSAHER", "A", "RIU", "CLAR.", "PED.", "JORDI"),
+  fila("*".repeat(76)),
+  fila("CAMION", "(TRUCK)", "26,000"),
+  fila("IMPORTE", "BRUTO", "DESCUENTO", "BASE", "IMPONIBLE", "%", "IVA", "IMPORTE", "IVA", "LÍQUIDO"),
+  fila("4.735,690", "0,000", "4.735,690", "21,000", "994,490", "5.730,180", "EUR"),
+  fila("BBAN", "3058", "2527", "2527", "2000", "4946"),
+];
+
+describe("la entrega de INSA TURBO", () => {
+  it("se reconoce por su cabecera, que no es la de Soledad", () => {
+    expect(formatoDelAlbaran(ENTREGA_INSA)).toBe("INSA");
+    expect(formatoDelAlbaran(ALBARAN_JORGE)).toBe("SOLEDAD");
+    expect(formatoDelAlbaran([fila("un", "papel", "cualquiera")])).toBeNull();
+  });
+
+  it("lee las observaciones de debajo de cada artículo, sin repetir las repetidas", () => {
+    expect(observacionesDelAlbaran(ENTREGA_INSA)).toEqual([
+      "CASCOS HANKOOK o CONTINENTAL, PED. ALBERTO",
+      "PRECIO AUTORIZADO PACO MACIÁ",
+      "TALLER RIU CLAR",
+      "CUBIERTAS PARA TMA, PRECIO ESPECIAL",
+      "CASCOS EN COMPENSACIÓN,BOLSA CATALUÑA",
+      "AUTORIZA PACO MACIÁ.",
+      "FACTURAR SÓLO EL NOMINATIVO, CASCOS",
+      "EN COMPENSACIÓN,BOLSA CATALUÑA",
+      "AGENCIA TRANSAHER A RIU CLAR. PED. JORDI",
+    ]);
+  });
+
+  it("ningún artículo pasa por observación, ni al revés", () => {
+    const obs = observacionesInsa(ENTREGA_INSA);
+    for (const o of obs) {
+      expect(o).not.toMatch(/INSA TURBO/);
+      expect(o).not.toMatch(/UD\b/);
+    }
+    expect(obs).toHaveLength(9);
+  });
+
+  it("lo de antes de la cabecera y lo de después de los asteriscos se queda fuera", () => {
+    const obs = observacionesInsa(ENTREGA_INSA);
+    // El membrete y las condiciones de pago van ANTES de la tabla.
+    expect(obs.join(" ")).not.toMatch(/TRANSFERENCIA|Condiciones/);
+    // Y «CAMION (TRUCK) 26,000» va DESPUÉS de la fila de asteriscos: tiene
+    // letras y pasaría por observación si no se cerrara el cuerpo ahí.
+    expect(obs.join(" ")).not.toMatch(/CAMION/);
+    // Ni los totales ni el banco.
+    expect(obs.join(" ")).not.toMatch(/IMPORTE BRUTO|BBAN/);
+  });
+
+  it("la cabecera de cada pedido agrupa, no es una observación", () => {
+    expect(observacionesInsa(ENTREGA_INSA).join(" ")).not.toMatch(/26001072|26001215/);
+  });
+
+  it("de aquí sale a quién avisar: quien pidió, no el recado de precios", () => {
+    const partidas = observacionesInsa(ENTREGA_INSA).map(partirObservacion);
+    // Esta entrega no trae ningún móvil, así que no se avisaría a nadie.
+    expect(partidas.find((o) => o.telefono)).toBeUndefined();
+  });
+});
 
 describe("observacionesDelAlbaran", () => {
   it("lee la observación que va tras la línea de NFU, con los «+» ya como espacios", () => {
@@ -172,6 +273,18 @@ describe("partirObservacion", () => {
     expect(partirObservacion("PEDRO 610.473.077")).toEqual({ texto: "PEDRO", telefono: "610473077" });
     expect(partirObservacion("PEDRO +34 610473077")).toEqual({ texto: "PEDRO", telefono: "610473077" });
     expect(partirObservacion("PEDRO 710473077")).toEqual({ texto: "PEDRO", telefono: "710473077" });
+  });
+
+  it("al sacar el móvil no se arrasa con la puntuación de la frase", () => {
+    // La observación de INSA es una frase de verdad, no una etiqueta.
+    expect(partirObservacion("CASCOS HANKOOK o CONTINENTAL, PED. ALBERTO 610473077")).toEqual({
+      texto: "CASCOS HANKOOK o CONTINENTAL, PED. ALBERTO",
+      telefono: "610473077",
+    });
+    expect(partirObservacion("610473077 AGENCIA TRANSAHER A RIU CLAR. PED. JORDI")).toEqual({
+      texto: "AGENCIA TRANSAHER A RIU CLAR. PED. JORDI",
+      telefono: "610473077",
+    });
   });
 
   it("lo que no es un móvil español se queda donde está", () => {
