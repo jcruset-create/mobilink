@@ -42,6 +42,8 @@ import { ErrorRecepciones } from "./errors.ts";
 import * as repo from "./repository.ts";
 import { generarDocumentoRecepcion, limpio } from "./documentos/generar.ts";
 import { observacionesDelPdf } from "./documentos/observaciones.ts";
+import { avisarRecepcion } from "./avisos.ts";
+import { avisoWhatsAppActivado } from "./config.ts";
 import { partirObservacion } from "./domain/observaciones.ts";
 import { guardarDocumento, hashDeFichero, leerDocumento as leerDelAlmacen, rutaDocumento } from "./storage.ts";
 
@@ -1043,8 +1045,43 @@ export async function cerrarRecepcion(ctx: Contexto, albaranId: string, datos: C
   if (!resultado.repetida) {
     await generarDocumentoSinLanzar(ctx, resultado.recepcion.id);
     resultado.recepcion = (await repo.recepcionPorId(ctx.empresaId, resultado.recepcion.id)) ?? resultado.recepcion;
+    // 9. Y el aviso a quien esperaba la mercancía, también después del COMMIT
+    //    y por el mismo motivo: la recepción ya está hecha y firmada, y que
+    //    WhatsApp falle no puede deshacerla ni dar error en el muelle.
+    await avisarDeLaRecepcion(ctx, resultado);
   }
   return resultado;
+}
+
+/**
+ * Avisa por WhatsApp a quien figura en las observaciones del albarán. Nunca
+ * lanza: el resultado —mandado, omitido o fallido, y por qué— queda en
+ * `rcp_avisos`, que es lo que se mira cuando alguien dice «a mí no me llegó».
+ */
+async function avisarDeLaRecepcion(ctx: Contexto, resultado: ResultadoCierre): Promise<void> {
+  try {
+    const albaran = resultado.albaran;
+    // Firma NUESTRA empresa, la que recibe: el mensaje lo manda quien ha
+    // descargado el palé, no el proveedor que lo trajo.
+    const [activado, empresaNombre] = await Promise.all([
+      avisoWhatsAppActivado(ctx.empresaId),
+      repo.nombreEmpresa(ctx.empresaId),
+    ]);
+    await avisarRecepcion(
+      { empresaId: ctx.empresaId, userId: ctx.userId, userNombre: ctx.userNombre },
+      { recepcionId: resultado.recepcion.id, albaranId: albaran.id },
+      {
+        destinatario: albaran.observaciones,
+        telefono: albaran.telefonoContacto,
+        centroNombre: resultado.recepcion.centroNombre || albaran.centroNombre,
+        resultado: resultado.recepcion.resultado,
+        empresaNombre: empresaNombre ?? "Recepciones",
+      },
+      activado
+    );
+  } catch (e) {
+    console.error("[Recepciones] el aviso de la recepción ha fallado:", e);
+  }
 }
 
 async function generarDocumentoSinLanzar(ctx: Contexto, recepcionId: string): Promise<void> {

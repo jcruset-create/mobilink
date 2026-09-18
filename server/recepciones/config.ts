@@ -22,6 +22,13 @@ export const CLAVES = {
    */
   asumirExpedicionCompleta: "correo.asumir_expedicion_completa",
   /**
+   * ¿Se avisa por WhatsApp a quien espera la mercancía al cerrar una recepción
+   * OK? Por defecto NO: mandar un mensaje a un teléfono de verdad no es algo
+   * que deba empezar a pasar por desplegar. Se enciende a mano, cuando la
+   * plantilla esté aprobada en Twilio y se haya visto que el móvil se lee bien.
+   */
+  avisoWhatsApp: "avisos.whatsapp_activado",
+  /**
    * Hasta qué UID se ha mirado ya en cada carpeta, con su UIDVALIDITY. Es la
    * marca de progreso del buzón, y sustituye a marcar los correos como
    * leídos: ver la cabecera de `buzon.ts`.
@@ -49,6 +56,12 @@ export async function guardarTextoConfig(empresaId: string, clave: string, valor
 export async function asumirExpedicionCompleta(empresaId: string): Promise<boolean> {
   const v = await leerTextoConfig(empresaId, CLAVES.asumirExpedicionCompleta);
   return v === null || v === "" ? true : v !== "0" && v.toLowerCase() !== "false";
+}
+
+/** Apagado mientras nadie lo encienda: el silencio es el valor seguro. */
+export async function avisoWhatsAppActivado(empresaId: string): Promise<boolean> {
+  const v = await leerTextoConfig(empresaId, CLAVES.avisoWhatsApp);
+  return v === "1" || v?.toLowerCase() === "true";
 }
 
 export type ProgresoBuzon = { uidValidity: number | null; ultimoUid: number };
