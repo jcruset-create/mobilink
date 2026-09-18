@@ -101,6 +101,42 @@ function pdfDePrueba(texto: string): Promise<Buffer> {
   return listo;
 }
 
+/**
+ * Un albarán de Soledad como los de verdad: la tabla de productos con su
+ * cabecera, un neumático, la gestión de NFU y, debajo, la fila de observación
+ * con las tres columnas a cero. Las columnas van a la misma X que en el PDF
+ * real para que el lector las agrupe igual.
+ */
+function pdfAlbaranSoledad(observacion: string, segundaLinea?: string): Promise<Buffer> {
+  const doc = new PDFDocument({ size: "A4" });
+  const trozos: Buffer[] = [];
+  doc.on("data", (c: Buffer) => trozos.push(c));
+  const listo = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(trozos))));
+  doc.fontSize(9);
+  const filaPdf = (y: number, ref: string, desc: string, cant: string, precio: string, importe: string) => {
+    doc.text(ref, 30, y, { lineBreak: false });
+    doc.text(desc, 98, y, { lineBreak: false });
+    doc.text(cant, 343, y, { lineBreak: false });
+    doc.text(precio, 395, y, { lineBreak: false });
+    doc.text(importe, 500, y, { lineBreak: false });
+  };
+  doc.text("Observaciones:", 30, 400, { lineBreak: false });
+  doc.text("Productos", 30, 420, { lineBreak: false });
+  filaPdf(440, "Artículo", "Descripción", "Cantidad", "Precio", "Importe");
+  filaPdf(460, "0107091840005", "245/70X17.5 HANKOOK AH35 136M", "2", "248,45", "496,90");
+  filaPdf(480, ".", "", "0", "0", "0,00");
+  filaPdf(500, "4102999990093", "S.I.Gestión de NFU Cat.D1T", "2", "6,05", "12,10");
+  filaPdf(520, "", observacion, "0", "0", "0,00");
+  // El PDF de verdad parte el texto largo: la segunda línea va debajo, en la
+  // misma columna y SIN columnas numéricas.
+  if (segundaLinea) doc.text(segundaLinea, 98, 530, { lineBreak: false });
+  filaPdf(545, "", "", "0", "0", "0,00");
+  doc.text("Importe Bruto:", 385, 560, { lineBreak: false });
+  doc.text("509,00", 500, 560, { lineBreak: false });
+  doc.end();
+  return listo;
+}
+
 async function subirOriginal(albaranId: string, contenido: Buffer, quien: Quien = gestorA): Promise<Respuesta> {
   const form = new FormData();
   form.append("documento", new Blob([new Uint8Array(contenido)], { type: "application/pdf" }), "albaran.pdf");
@@ -203,6 +239,7 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
     await db.query(`ALTER TABLE rcp_eventos ENABLE TRIGGER rcp_eventos_inmutable_trg`);
     for (const t of [
       "rcp_rectificacion_lineas",
+      "rcp_avisos",
       "rcp_rectificaciones",
       "rcp_incidencias",
       "rcp_documentos",
@@ -215,6 +252,7 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
       "rcp_proveedor_articulos",
       "rcp_proveedores",
       "rcp_operarios",
+      "rcp_config",
       "rcp_contadores",
     ]) {
       if (t === "rcp_rectificacion_lineas") {
@@ -247,6 +285,107 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
     const r = await api("/pedidos", operarioA, { method: "POST", body: { proveedorId, numeroProveedor: "1", lineas: [] } });
     expect(r.status).toBe(403);
     expect(r.body.code).toBe("PERMISO_DENEGADO");
+  });
+
+  /* ── Las observaciones del albarán ───────────────────────────────────── */
+
+  describe("para quién viene la mercancía", () => {
+    it("del PDF sale la observación de después del NFU, con los «+» ya como espacios", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      expect(albaran.observaciones).toBeNull();
+
+      const subida = await subirOriginal(albaran.id, await pdfAlbaranSoledad("JORGE+PLANA"));
+      expect(subida.status, JSON.stringify(subida.body)).toBe(201);
+
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      expect(ficha.body.albaran.observaciones).toBe("JORGE PLANA");
+      expect(ficha.body.albaran.telefonoContacto).toBeNull();
+
+      // Y se ve en la bandeja sin abrir nada, que es donde hace falta.
+      const fila = (await api("/bandeja", operarioA)).body.albaranes.find((a: any) => a.id === albaran.id);
+      expect(fila.observaciones).toBe("JORGE PLANA");
+
+      // Queda en el histórico: el papel dijo esto y consta.
+      const eventos = ficha.body.eventos.filter((e: any) => e.tipo === "ORIGINAL_ADJUNTADO");
+      expect(eventos[0].descripcion).toContain("JORGE PLANA");
+    });
+
+    it("la observación que sigue en la línea de abajo se lee entera: ahí va el teléfono", async () => {
+      // Albarán 2028458827: «OSCAR+SALVADOR+SANJULIAN» y debajo «+629862105».
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfAlbaranSoledad("OSCAR+SALVADOR+SANJULIAN", "+629862105"));
+
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      expect(ficha.body.albaran.observaciones).toBe("OSCAR SALVADOR SANJULIAN");
+      expect(ficha.body.albaran.telefonoContacto).toBe("629862105");
+    });
+
+    it("el móvil sale a su propia columna, listo para avisar a quien espera", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfAlbaranSoledad("PEDRO+610473077"));
+
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      expect(ficha.body.albaran.observaciones).toBe("PEDRO");
+      expect(ficha.body.albaran.telefonoContacto).toBe("610473077");
+
+      const fila = (await api("/bandeja", operarioA)).body.albaranes.find((a: any) => a.id === albaran.id);
+      expect(fila.observaciones).toBe("PEDRO");
+      expect(fila.telefonoContacto).toBe("610473077");
+    });
+
+    it("una observación sin móvil deja el teléfono vacío: no se inventa un número", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfAlbaranSoledad("TALLER"));
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      expect(ficha.body.albaran.observaciones).toBe("TALLER");
+      expect(ficha.body.albaran.telefonoContacto).toBeNull();
+    });
+
+    it("la relectura completa los albaranes que entraron antes de que esto existiera", async () => {
+      // Se simula el estado de entonces: el PDF guardado y las columnas vacías.
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfAlbaranSoledad("OSCAR+SALVADOR+SANJULIAN", "+629862105"));
+      await db.query(`UPDATE rcp_albaranes SET observaciones = NULL, telefono_contacto = NULL WHERE id = $1`, [albaran.id]);
+      expect((await api(`/albaranes/${albaran.id}`, operarioA)).body.albaran.observaciones).toBeNull();
+
+      const r = await api("/albaranes/observaciones/releer", gestorA, { method: "POST", body: {} });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.completados).toBeGreaterThanOrEqual(1);
+
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      expect(ficha.body.albaran.observaciones).toBe("OSCAR SALVADOR SANJULIAN");
+      expect(ficha.body.albaran.telefonoContacto).toBe("629862105");
+    });
+
+    it("repetir la relectura es inofensivo y nunca pisa lo escrito a mano", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfAlbaranSoledad("TALLER"));
+      // Alguien corrige la observación a mano; el teléfono sigue vacío.
+      await db.query(`UPDATE rcp_albaranes SET observaciones = 'LO PUSO UNA PERSONA' WHERE id = $1`, [albaran.id]);
+
+      expect((await api("/albaranes/observaciones/releer", gestorA, { method: "POST", body: {} })).status).toBe(200);
+      expect((await api("/albaranes/observaciones/releer", gestorA, { method: "POST", body: {} })).status).toBe(200);
+
+      expect((await api(`/albaranes/${albaran.id}`, operarioA)).body.albaran.observaciones).toBe("LO PUSO UNA PERSONA");
+    });
+
+    it("el operario del muelle no lanza la relectura: es cosa del gestor", async () => {
+      expect((await api("/albaranes/observaciones/releer", operarioA, { method: "POST", body: {} })).status).toBe(403);
+    });
+
+    it("un PDF que no es un albarán de Soledad no inventa observaciones, y el original se guarda igual", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      const subida = await subirOriginal(albaran.id, await pdfDePrueba("UN PDF CUALQUIERA"));
+      expect(subida.status).toBe(201);
+      expect((await api(`/albaranes/${albaran.id}`, operarioA)).body.albaran.observaciones).toBeNull();
+    });
   });
 
   /* ── El orden de la bandeja ──────────────────────────────────────────── */
@@ -853,6 +992,92 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
       expect(alb.body.albaran.estado).toBe("PARCIALMENTE_RECIBIDO");
       expect(alb.body.lineas[0].cantidadPendiente).toBe(1);
       expect(alb.body.eventos.map((e: any) => e.tipo)).toContain("RECTIFICACION");
+    });
+  });
+
+  /* ── El aviso a quien espera la mercancía ────────────────────────────── */
+
+  describe("aviso por WhatsApp al recibir", () => {
+    /** Cierra una recepción OK sobre un albarán con la observación que se le pase. */
+    async function recepcionarCon(observacion: string, segundaLinea?: string) {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      const subida = await subirOriginal(albaran.id, await pdfAlbaranSoledad(observacion, segundaLinea));
+      expect(subida.status, JSON.stringify(subida.body)).toBe(201);
+      const r = await api(`/albaranes/${albaran.id}/recepcion`, operarioA, { method: "POST", body: { resultado: "OK" } });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+      return r.body.recepcion;
+    }
+
+    it("de fábrica está apagado: la recepción se cierra igual y consta por qué no se mandó", async () => {
+      const recepcion = await recepcionarCon("PEDRO+610473077");
+
+      const r = await api("/avisos", gestorA);
+      expect(r.status).toBe(200);
+      expect(r.body.activado).toBe(false);
+      expect(r.body.avisos).toHaveLength(1);
+      expect(r.body.avisos[0].estado).toBe("OMITIDO");
+      expect(r.body.avisos[0].motivo).toMatch(/apagado/i);
+      // Y con a quién se le habría escrito: es lo que se mira al encenderlo.
+      expect(r.body.avisos[0].destinatario).toBe("PEDRO");
+      expect(r.body.avisos[0].telefono).toBe("610473077");
+      expect(r.body.avisos[0].recepcionNumero).toBe(recepcion.numero);
+    });
+
+    it("encendido y sin credenciales de Twilio, no se manda nada y el motivo lo dice", async () => {
+      const cfg = await api("/avisos/config", gestorA, { method: "PUT", body: { activado: true } });
+      expect(cfg.status, JSON.stringify(cfg.body)).toBe(200);
+      expect(cfg.body.activado).toBe(true);
+
+      await recepcionarCon("PEDRO+610473077");
+      const r = await api("/avisos", gestorA);
+      expect(r.body.activado).toBe(true);
+      expect(r.body.avisos[0].estado).toBe("OMITIDO");
+      expect(r.body.avisos[0].motivo).toMatch(/credenciales/i);
+      expect(r.body.avisos[0].referenciaExterna).toBeNull();
+    });
+
+    it("sin móvil en el albarán no hay a quién avisar, y así queda escrito", async () => {
+      await api("/avisos/config", gestorA, { method: "PUT", body: { activado: true } });
+      await recepcionarCon("TALLER");
+      const r = await api("/avisos", gestorA);
+      expect(r.body.avisos[0].telefono).toBeNull();
+      expect(r.body.avisos[0].estado).toBe("OMITIDO");
+    });
+
+    it("una recepción con incidencia no se avisa: eso se cuenta a mano", async () => {
+      await api("/avisos/config", gestorA, { method: "PUT", body: { activado: true } });
+      const pedido = await crearPedido(2);
+      const { albaran, linea } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfAlbaranSoledad("PEDRO+610473077"));
+      const r = await api(`/albaranes/${albaran.id}/recepcion`, operarioA, {
+        method: "POST",
+        body: { resultado: "CON_INCIDENCIA", lineas: [{ albaranLineaId: linea.id, cantidadRecibida: 1, incidencia: { tipo: "FALTA_MERCANCIA" } }] },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+      expect(r.body.incidencias.length).toBeGreaterThan(0);
+
+      const avisos = await api("/avisos", gestorA);
+      expect(avisos.body.avisos[0].estado).toBe("OMITIDO");
+      expect(avisos.body.avisos[0].motivo).toMatch(/incidencia/i);
+    });
+
+    it("el operario del muelle no enciende el aviso: eso es del gestor", async () => {
+      const r = await api("/avisos/config", operarioA, { method: "PUT", body: { activado: true } });
+      expect(r.status).toBe(403);
+      // Y verlo sí puede: es la pantalla donde se comprueba si llegó.
+      expect((await api("/avisos", operarioA)).status).toBe(200);
+    });
+
+    it("el interruptor sólo acepta sí o no", async () => {
+      const r = await api("/avisos/config", gestorA, { method: "PUT", body: { activado: "quizá" } });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe("ACTIVADO_INVALIDO");
+    });
+
+    it("el aviso es de la empresa que lo enciende: la otra sigue apagada", async () => {
+      await api("/avisos/config", gestorA, { method: "PUT", body: { activado: true } });
+      expect((await api("/avisos", gestorB)).body.activado).toBe(false);
     });
   });
 

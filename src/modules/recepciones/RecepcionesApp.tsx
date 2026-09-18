@@ -19,6 +19,7 @@ import Incidencias from "./pages/Incidencias";
 import Operarios from "./pages/Operarios";
 import Proveedores from "./pages/Proveedores";
 import Correo from "./pages/Correo";
+import Avisos from "./pages/Avisos";
 
 function Contenido() {
   const { cargando, error, permisos } = useRecepciones();
@@ -52,6 +53,7 @@ function Contenido() {
         <Route path="proveedores" element={<Proveedores />} />
         <Route path="operarios" element={<Operarios />} />
         <Route path="correo" element={<Correo />} />
+        <Route path="avisos" element={<Avisos />} />
         <Route path="*" element={<Navigate to="/recepciones/bandeja" replace />} />
       </Route>
     </Routes>

@@ -119,6 +119,8 @@ export type Albaran = {
   pedidoNumero: string;
   /** Cuándo se encargó. Los pedidos deducidos de un albarán no la saben. */
   pedidoFecha: string | null;
+  /** El móvil que venía en las observaciones del albarán, si lo traía. */
+  telefonoContacto: string | null;
   numeroProveedor: string;
   numeroNormalizado: string;
   fechaExpedicion: string | null;
@@ -335,6 +337,7 @@ const aAlbaran = (r: any): Albaran => ({
   proveedorNombre: r.proveedor_nombre,
   pedidoNumero: r.pedido_numero,
   pedidoFecha: fecha(r.pedido_fecha),
+  telefonoContacto: r.telefono_contacto ?? null,
   numeroProveedor: r.numero_proveedor,
   numeroNormalizado: r.numero_normalizado,
   fechaExpedicion: fecha(r.fecha_expedicion),
@@ -536,6 +539,89 @@ export async function actualizarProveedor(
     [empresaId, id, datos.nombre ?? null, datos.nif === undefined ? null : datos.nif ?? "", datos.remitentesCorreo ?? null, datos.activo ?? null, datos.codigo ?? null]
   );
   return rows[0] ? aProveedor(rows[0]) : null;
+}
+
+/* ── Avisos a quien espera la mercancía ──────────────────────────────────── */
+
+export type Aviso = {
+  id: string;
+  recepcionId: string;
+  albaranId: string;
+  recepcionNumero: string;
+  albaranNumero: string;
+  canal: string;
+  destinatario: string | null;
+  telefono: string | null;
+  estado: "ENVIADO" | "OMITIDO" | "ERROR";
+  motivo: string | null;
+  referenciaExterna: string | null;
+  creadoNombre: string | null;
+  createdAt: string;
+};
+
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+const aAviso = (r: any): Aviso => ({
+  id: r.id,
+  recepcionId: r.recepcion_id,
+  albaranId: r.albaran_id,
+  recepcionNumero: r.recepcion_numero ?? "",
+  albaranNumero: r.albaran_numero ?? "",
+  canal: r.canal,
+  destinatario: r.destinatario ?? null,
+  telefono: r.telefono ?? null,
+  estado: r.estado,
+  motivo: r.motivo ?? null,
+  referenciaExterna: r.referencia_externa ?? null,
+  creadoNombre: r.creado_nombre ?? null,
+  createdAt: iso(r.created_at)!,
+});
+
+export async function anotarAviso(
+  empresaId: string,
+  datos: {
+    recepcionId: string;
+    albaranId: string;
+    destinatario: string | null;
+    telefono: string | null;
+    estado: "ENVIADO" | "OMITIDO" | "ERROR";
+    motivo: string | null;
+    referenciaExterna: string | null;
+    creadoPor: string | null;
+    creadoNombre: string | null;
+  },
+  ejecutor?: Ejecutor
+): Promise<void> {
+  await db(ejecutor).query(
+    `INSERT INTO rcp_avisos
+       (empresa_id, recepcion_id, albaran_id, destinatario, telefono, estado, motivo, referencia_externa, creado_por, creado_nombre)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [
+      empresaId,
+      datos.recepcionId,
+      datos.albaranId,
+      datos.destinatario,
+      datos.telefono,
+      datos.estado,
+      datos.motivo,
+      datos.referenciaExterna,
+      datos.creadoPor,
+      datos.creadoNombre,
+    ]
+  );
+}
+
+export async function listarAvisos(empresaId: string, limite = 50, ejecutor?: Ejecutor): Promise<Aviso[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT v.*, r.numero AS recepcion_numero, a.numero_proveedor AS albaran_numero
+       FROM rcp_avisos v
+       JOIN rcp_recepciones r ON r.id = v.recepcion_id
+       JOIN rcp_albaranes a ON a.id = v.albaran_id
+      WHERE v.empresa_id = $1
+      ORDER BY v.created_at DESC
+      LIMIT $2`,
+    [empresaId, Math.min(Math.max(limite, 1), 200)]
+  );
+  return rows.map(aAviso);
 }
 
 /* ── Mapeo de artículos ──────────────────────────────────────────────────── */
@@ -1315,6 +1401,51 @@ export async function recalcularLineasAlbaran(empresaId: string, albaranId: stri
   );
 }
 
+/**
+ * Anota las observaciones que traía el PDF del proveedor. Sólo rellena el
+ * hueco: si alguien escribió algo a mano en el albarán, no se le pisa.
+ */
+export async function anotarObservacionesAlbaran(
+  empresaId: string,
+  albaranId: string,
+  datos: { texto: string | null; telefono: string | null },
+  ejecutor?: Ejecutor
+): Promise<void> {
+  await db(ejecutor).query(
+    `UPDATE rcp_albaranes SET
+       observaciones     = CASE WHEN observaciones IS NULL OR observaciones = '' THEN $3 ELSE observaciones END,
+       telefono_contacto = COALESCE(telefono_contacto, $4),
+       updated_at = now()
+      WHERE empresa_id = $1 AND id = $2`,
+    [empresaId, albaranId, datos.texto, datos.telefono]
+  );
+}
+
+/**
+ * Los albaranes que tienen su PDF original guardado pero les falta la
+ * observación o el teléfono. Es a lo que le hace falta una relectura: los que
+ * entraron antes de que el módulo supiera leer esa parte del papel.
+ */
+export async function albaranesSinObservaciones(
+  empresaId: string,
+  limite = 200,
+  ejecutor?: Ejecutor
+): Promise<{ id: string; numeroProveedor: string; storagePath: string }[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT a.id, a.numero_proveedor, d.storage_path
+       FROM rcp_albaranes a
+       JOIN rcp_documentos d
+         ON d.albaran_id = a.id AND d.tipo = 'ALBARAN_ORIGINAL' AND d.empresa_id = a.empresa_id
+      WHERE a.empresa_id = $1
+        AND ((a.observaciones IS NULL OR a.observaciones = '') OR a.telefono_contacto IS NULL)
+      ORDER BY a.created_at DESC
+      LIMIT $2`,
+    [empresaId, Math.min(Math.max(limite, 1), 500)]
+  );
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  return rows.map((r: any) => ({ id: r.id, numeroProveedor: r.numero_proveedor, storagePath: r.storage_path }));
+}
+
 export async function fijarEstadoAlbaran(
   empresaId: string,
   albaranId: string,
@@ -1830,6 +1961,23 @@ export async function listarCentros(empresaId: string): Promise<Centro[]> {
   );
   /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
   return rows.map((r: any) => ({ id: r.id, nombre: r.nombre, activo: Boolean(r.activo) }));
+}
+
+/**
+ * El nombre de nuestra empresa, el que firma los avisos. Nunca lanza y puede
+ * devolver `null`: la base de una instalación suelta no tiene `app_empresas`,
+ * y quedarse sin firma no es motivo para no avisar.
+ */
+export async function nombreEmpresa(empresaId: string): Promise<string | null> {
+  try {
+    const { rows: hay } = await pool.query(`SELECT to_regclass('public.app_empresas') IS NOT NULL AS hay`);
+    if (!hay[0]?.hay) return null;
+    const { rows } = await pool.query<{ nombre: string | null }>(`SELECT nombre FROM app_empresas WHERE id = $1`, [empresaId]);
+    const nombre = (rows[0]?.nombre ?? "").trim();
+    return nombre || null;
+  } catch {
+    return null;
+  }
 }
 
 /* ══ Fase 2: correos del proveedor ═════════════════════════════════════════ */

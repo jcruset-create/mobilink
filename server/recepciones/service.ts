@@ -41,7 +41,11 @@ import { estaBloqueado, minutosRestantes, pinValido, trasFallo, PIN_MAX, PIN_MIN
 import { ErrorRecepciones } from "./errors.ts";
 import * as repo from "./repository.ts";
 import { generarDocumentoRecepcion, limpio } from "./documentos/generar.ts";
-import { guardarDocumento, hashDeFichero, rutaDocumento } from "./storage.ts";
+import { observacionesDelPdf } from "./documentos/observaciones.ts";
+import { avisarRecepcion } from "./avisos.ts";
+import { avisoWhatsAppActivado } from "./config.ts";
+import { partirObservacion } from "./domain/observaciones.ts";
+import { guardarDocumento, hashDeFichero, leerDocumento as leerDelAlmacen, rutaDocumento } from "./storage.ts";
 
 /** `userId` es `null` cuando actúa el sistema (el correo del proveedor). */
 export type Contexto = { empresaId: string; userId: string | null; userNombre: string; ip?: string };
@@ -1041,8 +1045,43 @@ export async function cerrarRecepcion(ctx: Contexto, albaranId: string, datos: C
   if (!resultado.repetida) {
     await generarDocumentoSinLanzar(ctx, resultado.recepcion.id);
     resultado.recepcion = (await repo.recepcionPorId(ctx.empresaId, resultado.recepcion.id)) ?? resultado.recepcion;
+    // 9. Y el aviso a quien esperaba la mercancía, también después del COMMIT
+    //    y por el mismo motivo: la recepción ya está hecha y firmada, y que
+    //    WhatsApp falle no puede deshacerla ni dar error en el muelle.
+    await avisarDeLaRecepcion(ctx, resultado);
   }
   return resultado;
+}
+
+/**
+ * Avisa por WhatsApp a quien figura en las observaciones del albarán. Nunca
+ * lanza: el resultado —mandado, omitido o fallido, y por qué— queda en
+ * `rcp_avisos`, que es lo que se mira cuando alguien dice «a mí no me llegó».
+ */
+async function avisarDeLaRecepcion(ctx: Contexto, resultado: ResultadoCierre): Promise<void> {
+  try {
+    const albaran = resultado.albaran;
+    // Firma NUESTRA empresa, la que recibe: el mensaje lo manda quien ha
+    // descargado el palé, no el proveedor que lo trajo.
+    const [activado, empresaNombre] = await Promise.all([
+      avisoWhatsAppActivado(ctx.empresaId),
+      repo.nombreEmpresa(ctx.empresaId),
+    ]);
+    await avisarRecepcion(
+      { empresaId: ctx.empresaId, userId: ctx.userId, userNombre: ctx.userNombre },
+      { recepcionId: resultado.recepcion.id, albaranId: albaran.id },
+      {
+        destinatario: albaran.observaciones,
+        telefono: albaran.telefonoContacto,
+        centroNombre: resultado.recepcion.centroNombre || albaran.centroNombre,
+        resultado: resultado.recepcion.resultado,
+        empresaNombre: empresaNombre ?? "Recepciones",
+      },
+      activado
+    );
+  } catch (e) {
+    console.error("[Recepciones] el aviso de la recepción ha fallado:", e);
+  }
 }
 
 async function generarDocumentoSinLanzar(ctx: Contexto, recepcionId: string): Promise<void> {
@@ -1281,6 +1320,20 @@ export async function adjuntarOriginal(
     subidoPor: ctx.userId,
     subidoNombre: ctx.userNombre,
   });
+  // El PDF dice, después de la línea de gestión de NFU, PARA QUIÉN viene la
+  // mercancía («TALLER», «JORGE PLANA», «PEDRO 610473077»). Es el dato que
+  // decide dónde se deja el palé, y sólo viaja en el papel: el correo no lo
+  // trae. Nunca lanza: un PDF ilegible no puede impedir guardar el albarán.
+  const observaciones = observacionesDelPdf(contenido);
+  // El móvil sale a su propia columna: dentro de la frase no sirve para avisar
+  // a nadie, y aparte es con lo que se podrá mandar el WhatsApp al recibir.
+  const partidas = observaciones.map(partirObservacion);
+  const texto = partidas.map((o) => o.texto).filter(Boolean).join(" · ") || null;
+  const telefono = partidas.find((o) => o.telefono)?.telefono ?? null;
+  if (texto || telefono) {
+    await repo.anotarObservacionesAlbaran(ctx.empresaId, albaran.id, { texto, telefono });
+  }
+
   await repo.anotarEvento(ctx.empresaId, {
     pedidoId: albaran.pedidoId,
     albaranId: albaran.id,
@@ -1288,10 +1341,66 @@ export async function adjuntarOriginal(
     actorTipo: ctx.userId ? "usuario" : "sistema",
     usuarioId: ctx.userId,
     usuarioNombre: ctx.userNombre,
-    datos: { documentoId: documento.id, hash, origen },
-    descripcion: `PDF original del albarán ${albaran.numeroProveedor} guardado (${documento.nombreFichero}, ${origen === "SUBIDA_MANUAL" ? "subido a mano" : origen === "CORREO" ? "adjunto del correo" : "descargado del enlace del proveedor"}).`,
+    datos: { documentoId: documento.id, hash, origen, observaciones, telefono },
+    descripcion:
+      `PDF original del albarán ${albaran.numeroProveedor} guardado (${documento.nombreFichero}, ${origen === "SUBIDA_MANUAL" ? "subido a mano" : origen === "CORREO" ? "adjunto del correo" : "descargado del enlace del proveedor"}).` +
+      (observaciones.length > 0 ? ` Observaciones del albarán: ${observaciones.join(" · ")}.` : ""),
   });
   return documento;
+}
+
+export type ResultadoRelectura = {
+  revisados: number;
+  completados: number;
+  sinObservaciones: number;
+  errores: number;
+  detalle: { albaran: string; observaciones: string | null; telefono: string | null; error?: string }[];
+};
+
+/**
+ * Relee los PDF ya guardados y rellena la observación y el teléfono donde
+ * falten.
+ *
+ * Hace falta porque la lectura del papel ocurre al GUARDARLO, y los albaranes
+ * que entraron antes de que el módulo supiera leer esa parte se quedaron sin
+ * ella. Volver a adjuntar el PDF no vale: el original no se sobrescribe, y con
+ * razón.
+ *
+ * Sólo RELLENA huecos —lo escrito a mano no se pisa, y lo que ya tiene valor
+ * se queda—, así que repetirla es inofensivo. Un PDF que falle no para al
+ * resto: se cuenta y se sigue.
+ */
+export async function releerObservaciones(ctx: Contexto, limite = 200): Promise<ResultadoRelectura> {
+  const pendientes = await repo.albaranesSinObservaciones(ctx.empresaId, limite);
+  const r: ResultadoRelectura = { revisados: 0, completados: 0, sinObservaciones: 0, errores: 0, detalle: [] };
+
+  for (const a of pendientes) {
+    r.revisados += 1;
+    try {
+      const pdf = await leerDelAlmacen(a.storagePath);
+      if (!pdf) {
+        r.errores += 1;
+        r.detalle.push({ albaran: a.numeroProveedor, observaciones: null, telefono: null, error: "El PDF no está en el almacén." });
+        continue;
+      }
+      const partidas = observacionesDelPdf(pdf).map(partirObservacion);
+      const texto = partidas.map((o) => o.texto).filter(Boolean).join(" · ") || null;
+      const telefono = partidas.find((o) => o.telefono)?.telefono ?? null;
+      if (!texto && !telefono) {
+        r.sinObservaciones += 1;
+        continue;
+      }
+      await repo.anotarObservacionesAlbaran(ctx.empresaId, a.id, { texto, telefono });
+      r.completados += 1;
+      r.detalle.push({ albaran: a.numeroProveedor, observaciones: texto, telefono });
+    } catch (e) {
+      r.errores += 1;
+      r.detalle.push({ albaran: a.numeroProveedor, observaciones: null, telefono: null, error: (e as Error).message });
+    }
+  }
+
+  // La auditoría la deja la ruta, como el resto de acciones sin transacción.
+  return r;
 }
 
 const DESCARGA_TIMEOUT_MS = 20_000;

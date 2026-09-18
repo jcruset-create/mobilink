@@ -98,6 +98,8 @@ export type Albaran = {
   pedidoNumero: string;
   /** Cuándo se encargó. Los pedidos deducidos de un albarán no la saben. */
   pedidoFecha: string | null;
+  /** El móvil que venía en las observaciones del albarán, si lo traía. */
+  telefonoContacto: string | null;
   numeroProveedor: string;
   fechaExpedicion: string | null;
   transportista: string | null;
@@ -438,5 +440,44 @@ export const ETIQUETA_RESULTADO_CORREO: Record<string, string> = {
   DUPLICADO: "Duplicado",
   IGNORADO: "Ignorado",
   PENDIENTE_REVISION: "Pendiente de revisión",
+  ERROR: "Error",
+};
+
+/* ── Avisos por WhatsApp ─────────────────────────────────────────────────── */
+
+export type AvisoWhatsApp = {
+  id: string;
+  recepcionId: string;
+  albaranId: string;
+  recepcionNumero: string;
+  albaranNumero: string;
+  canal: string;
+  destinatario: string | null;
+  telefono: string | null;
+  estado: "ENVIADO" | "OMITIDO" | "ERROR";
+  motivo: string | null;
+  referenciaExterna: string | null;
+  creadoNombre: string | null;
+  createdAt: string;
+};
+
+export type EstadoAvisos = {
+  activado: boolean;
+  /** Hay credenciales de Twilio en el servidor. */
+  credenciales: boolean;
+  /** Hay plantilla aprobada (Content SID). Sin ella sólo sale texto plano. */
+  plantilla: boolean;
+  avisos: AvisoWhatsApp[];
+};
+
+export const COLOR_ESTADO_AVISO: Record<string, string> = {
+  ENVIADO: "bg-emerald-500/15 text-emerald-300",
+  OMITIDO: "bg-slate-600/40 text-slate-300",
+  ERROR: "bg-rose-500/15 text-rose-300",
+};
+
+export const ETIQUETA_ESTADO_AVISO: Record<string, string> = {
+  ENVIADO: "Enviado",
+  OMITIDO: "No se mandó",
   ERROR: "Error",
 };

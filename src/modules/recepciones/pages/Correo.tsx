@@ -151,6 +151,28 @@ export default function Correo() {
         </div>
       </div>
 
+      {/* Los albaranes que entraron antes de que el módulo supiera leer las
+          observaciones del PDF se quedaron sin ellas. Volver a adjuntar el
+          papel no vale —el original no se sobrescribe—, así que se releen. */}
+      {puede("recepciones.albaran.create") && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-slate-700 p-3 text-[12px] text-slate-400">
+          <span>Albaranes ya guardados a los que les falta la observación o el teléfono del PDF:</span>
+          <button
+            className={btnMini}
+            disabled={ocupado}
+            onClick={() =>
+              void ejecutar(async () => {
+                const r = await api.releerObservaciones();
+                return `${r.revisados} albarán(es) releído(s): ${r.completados} completado(s), ${r.sinObservaciones} sin observaciones, ${r.errores} error(es).`;
+              })
+            }
+          >
+            Releer sus PDF
+          </button>
+          <span className="text-slate-500">Sólo rellena lo que falta; lo que ya tiene valor no se toca.</span>
+        </div>
+      )}
+
       {puedeOperar && estado?.configurado && (
         <div className="mb-4 flex flex-wrap items-end gap-2 rounded-lg border border-dashed border-slate-700 p-3 text-[12px] text-slate-400">
           <span>Cargar el histórico anterior a la activación (a propósito, con fecha):</span>

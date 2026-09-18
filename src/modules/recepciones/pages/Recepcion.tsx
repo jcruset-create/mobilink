@@ -160,6 +160,19 @@ export default function Recepcion() {
           {albaran.transportista && <span className="rounded-full bg-slate-700 px-2 py-0.5">{albaran.transportista}</span>}
           {albaran.centroNombre && <span className="rounded-full bg-slate-700 px-2 py-0.5">{albaran.centroNombre}</span>}
         </div>
+        {/* Para quién viene. Lo dice el albarán del proveedor, y es lo que
+            decide dónde va el palé una vez contado. */}
+        {(albaran.observaciones || albaran.telefonoContacto) && (
+          <div className="mt-3 rounded-xl bg-sky-500/10 px-4 py-3">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-sky-300/70">Para</div>
+            {albaran.observaciones && <div className="text-xl font-black leading-tight text-sky-200">{albaran.observaciones}</div>}
+            {albaran.telefonoContacto && (
+              <a href={`tel:${albaran.telefonoContacto}`} className="text-lg font-bold tabular-nums text-sky-200 underline">
+                {albaran.telefonoContacto}
+              </a>
+            )}
+          </div>
+        )}
         {original && (
           <button
             type="button"

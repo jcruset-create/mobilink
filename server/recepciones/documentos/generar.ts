@@ -42,6 +42,11 @@ export type DatosSello = {
   pedidoNumero: string;
   albaranNumero: string;
   transportista: string | null;
+  /** Para quién viene, según el albarán del proveedor. Distinto de las
+   *  `observaciones`, que son las que escribe quien recepciona. */
+  paraQuien: string | null;
+  /** Su móvil, si el albarán lo traía. */
+  telefono: string | null;
   centroNombre: string;
   /** Quien contó la mercancía: el operario que puso su PIN, si lo hubo. */
   recibidoNombre: string;
@@ -126,6 +131,9 @@ export function dibujarSello(d: DatosSello): Promise<Buffer> {
   fila("Pedido", d.pedidoNumero);
   fila("Albarán", d.albaranNumero, true);
   if (d.transportista) fila("Transportista", d.transportista);
+  // Para quién viene: quien reciba este papel con el palé tiene que saberlo.
+  if (d.paraQuien) fila("Para", d.paraQuien, true);
+  if (d.telefono) fila("Teléfono", d.telefono);
   fila("Recibido por", d.recibidoNombre, true);
   // Quién lo contó y desde qué sesión se registró son dos cosas distintas, y
   // el papel tiene que poder responder a las dos.
@@ -337,6 +345,8 @@ export async function generarDocumentoRecepcion(
     pedidoNumero: albaran.pedidoNumero,
     albaranNumero: albaran.numeroProveedor,
     transportista: albaran.transportista,
+    paraQuien: albaran.observaciones,
+    telefono: albaran.telefonoContacto,
     centroNombre: recepcion.centroNombre,
     // Firma el operario que puso su PIN; sin padrón todavía, la sesión.
     recibidoNombre: recepcion.operarioNombre || recepcion.recibidoNombre,

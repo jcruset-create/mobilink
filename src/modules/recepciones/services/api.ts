@@ -14,6 +14,7 @@ import type {
   Bootstrap,
   Contadores,
   Correo,
+  EstadoAvisos,
   EstadoBuzon,
   ResultadoEml,
   ResultadoPasada,
@@ -112,6 +113,10 @@ export const crearAlbaran = (
 
 export const fichaAlbaran = (id: string) => pedir<FichaAlbaran>(`/albaranes/${id}`);
 
+/** Relee los PDF ya guardados para rellenar observación y teléfono donde falten. */
+export const releerObservaciones = () =>
+  pedir<{ revisados: number; completados: number; sinObservaciones: number; errores: number }>("/albaranes/observaciones/releer", json({}));
+
 export const listarOperarios = (centroId?: string, soloActivos?: boolean) =>
   pedir<{ operarios: Operario[] }>(`/operarios${query({ centroId, soloActivos: soloActivos ? "1" : undefined })}`);
 
@@ -177,6 +182,11 @@ export const actualizarProveedor = (id: string, datos: Partial<{ codigo: string;
 export const listarMapeos = (proveedorId?: string) => pedir<{ mapeos: MapeoArticulo[] }>(`/mapeo${query({ proveedorId })}`);
 export const confirmarMapeo = (datos: { proveedorId: string; descripcionProveedor: string; productoTexto?: string; productoId?: string; ean?: string; referenciaProveedor?: string }) =>
   pedir<{ mapeo: MapeoArticulo }>("/mapeo", json(datos));
+
+/* ── Avisos por WhatsApp ─────────────────────────────────────────────────── */
+
+export const estadoAvisos = () => pedir<EstadoAvisos>("/avisos");
+export const guardarConfigAvisos = (activado: boolean) => pedir<{ activado: boolean }>("/avisos/config", json({ activado }, "PUT"));
 
 /* ── Fase 2: correo del proveedor ────────────────────────────────────────── */
 

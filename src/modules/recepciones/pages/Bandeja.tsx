@@ -129,6 +129,19 @@ export default function Bandeja() {
             <div className="mt-2 rounded-xl bg-slate-900/60 p-3">
               <Articulos articulos={a.articulos} />
             </div>
+            {/* Para quién viene, según el albarán del proveedor: decide dónde
+                se deja el palé, así que va al lado de la mercancía. */}
+            {(a.observaciones || a.telefonoContacto) && (
+              <div className="mt-2 flex flex-wrap items-baseline gap-x-3 rounded-lg bg-sky-500/10 px-3 py-2 text-sm">
+                <span className="text-[10px] font-bold uppercase tracking-wide text-sky-300/70">Para</span>
+                {a.observaciones && <b className="text-sky-200">{a.observaciones}</b>}
+                {a.telefonoContacto && (
+                  <a href={`tel:${a.telefonoContacto}`} className="font-semibold tabular-nums text-sky-200 underline">
+                    {a.telefonoContacto}
+                  </a>
+                )}
+              </div>
+            )}
             <div className="mt-2 text-[12px] text-slate-400">
               Albarán <b className="text-slate-200">{a.numeroProveedor}</b>
               {a.fechaExpedicion ? ` del ${fmtFecha(a.fechaExpedicion)}` : ""} · Pedido {a.pedidoNumero}
@@ -165,6 +178,8 @@ export default function Bandeja() {
               <th className={thCls}>Pedido</th>
               <th className={thCls}>Fecha pedido</th>
               <th className={thCls}>Expedición</th>
+              <th className={thCls}>Observaciones</th>
+              <th className={thCls}>Teléfono</th>
               <th className={thCls}>Centro</th>
               <th className={thCls}>Transportista</th>
               <th className={`${thCls} text-right`}>Expedidas</th>
@@ -174,13 +189,14 @@ export default function Bandeja() {
             </tr>
           </thead>
           <tbody>
-            {filas.length === 0 && <EmptyRow cols={11} text={cargando ? "Cargando…" : "Nada pendiente de recibir."} />}
+            {filas.length === 0 && <EmptyRow cols={13} text={cargando ? "Cargando…" : "Nada pendiente de recibir."} />}
             {filas.map((a) => (
               <tr key={a.id} className="border-t border-slate-700/60 hover:bg-slate-700/30">
                 <td className={`${tdCls} min-w-[280px]`}>
                   <Articulos articulos={a.articulos} compacto />
                   <div className="mt-1 text-[11px] uppercase text-slate-500">{a.proveedorNombre}</div>
                 </td>
+
                 <td className={`${tdCls} font-bold`}>
                   <Link to={`/recepciones/albaranes/${a.id}`} className="hover:underline">
                     {a.numeroProveedor}
@@ -194,6 +210,18 @@ export default function Bandeja() {
                 </td>
                 <td className={tdCls}>{a.pedidoFecha ? fmtFecha(a.pedidoFecha) : "—"}</td>
                 <td className={tdCls}>{fmtFecha(a.fechaExpedicion)}</td>
+                <td className={`${tdCls} font-semibold text-sky-200`}>{a.observaciones ?? "—"}</td>
+                {/* En su propia columna: un teléfono dentro de la frase no
+                    sirve para llamar, y aquí además se puede pulsar. */}
+                <td className={tdCls}>
+                  {a.telefonoContacto ? (
+                    <a href={`tel:${a.telefonoContacto}`} className="font-semibold tabular-nums text-sky-200 hover:underline">
+                      {a.telefonoContacto}
+                    </a>
+                  ) : (
+                    "—"
+                  )}
+                </td>
                 <td className={tdCls}>{a.centroNombre || "—"}</td>
                 <td className={tdCls}>{a.transportista ?? "—"}</td>
                 <td className={`${tdCls} text-right tabular-nums`}>{fmtCantidad(a.unidadesExpedidas)}</td>

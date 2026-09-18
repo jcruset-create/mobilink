@@ -3,7 +3,7 @@
  * los permisos del bootstrap, como en Cash y Therefore.
  */
 
-import { AlertTriangle, ClipboardList, Inbox, Mail, Truck, UserCheck, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ClipboardList, Inbox, Mail, MessageCircle, Truck, UserCheck, type LucideIcon } from "lucide-react";
 
 export type NavItem = { key: string; path: string; label: string; icon: LucideIcon; permiso: string };
 
@@ -14,6 +14,7 @@ export const NAV: NavItem[] = [
   { key: "proveedores", path: "proveedores", label: "Proveedores", icon: Truck, permiso: "recepciones.view" },
   { key: "operarios", path: "operarios", label: "Operarios del muelle", icon: UserCheck, permiso: "recepciones.view" },
   { key: "correo", path: "correo", label: "Correo del proveedor", icon: Mail, permiso: "recepciones.view" },
+  { key: "avisos", path: "avisos", label: "Avisos por WhatsApp", icon: MessageCircle, permiso: "recepciones.view" },
 ];
 
 export function navVisible(item: NavItem, permisos: readonly string[]): boolean {

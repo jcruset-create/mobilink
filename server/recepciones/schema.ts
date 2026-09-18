@@ -586,6 +586,41 @@ export async function initRecepciones(): Promise<void> {
   await pool.query(`ALTER TABLE rcp_recepciones ADD COLUMN IF NOT EXISTS operario_id UUID;`);
   await pool.query(`ALTER TABLE rcp_recepciones ADD COLUMN IF NOT EXISTS operario_nombre TEXT;`);
 
+  // El móvil que venía escrito en las observaciones del albarán del proveedor
+  // («PEDRO 610473077»). Se guarda aparte porque un teléfono dentro de una
+  // frase no sirve para avisar a nadie, y en su columna sí.
+  await pool.query(`ALTER TABLE rcp_albaranes ADD COLUMN IF NOT EXISTS telefono_contacto TEXT;`);
+
+  // ── Avisos al que espera la mercancía ─────────────────────────────────────
+  //
+  // Al cerrar una recepción OK se le manda un WhatsApp a quien figura en las
+  // observaciones del albarán, si dejó su móvil. Cada intento deja fila: a
+  // quién, cuándo, con qué resultado y por qué no, si no salió.
+  //
+  // Tabla y no una columna en la recepción porque un aviso se reintenta, y
+  // porque «no se mandó» tiene motivos que hay que poder leer («sin teléfono»,
+  // «apagado», «Twilio dijo…»). Una recepción puede tener varios intentos.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS rcp_avisos (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      empresa_id UUID NOT NULL,
+      recepcion_id UUID NOT NULL REFERENCES rcp_recepciones(id) ON DELETE CASCADE,
+      albaran_id UUID NOT NULL REFERENCES rcp_albaranes(id),
+      canal TEXT NOT NULL DEFAULT 'WHATSAPP' CHECK (canal IN ('WHATSAPP')),
+      destinatario TEXT,
+      telefono TEXT,
+      estado TEXT NOT NULL CHECK (estado IN ('ENVIADO','OMITIDO','ERROR')),
+      motivo TEXT,
+      -- El identificador que devuelve Twilio, para cruzarlo con su panel.
+      referencia_externa TEXT,
+      creado_por UUID,
+      creado_nombre TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS rcp_avisos_recepcion_idx ON rcp_avisos(recepcion_id);
+    CREATE INDEX IF NOT EXISTS rcp_avisos_fecha_idx ON rcp_avisos(empresa_id, created_at DESC);
+  `);
+
   await registrarModuloRecepciones();
 }
 

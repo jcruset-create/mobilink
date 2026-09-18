@@ -33,7 +33,9 @@ import * as repo from "./repository.ts";
 import * as servicio from "./service.ts";
 import * as buzon from "./buzon.ts";
 import * as ingesta from "./ingesta.ts";
-import { CLAVES, asumirExpedicionCompleta, guardarTextoConfig, leerTextoConfig } from "./config.ts";
+import { CLAVES, asumirExpedicionCompleta, avisoWhatsAppActivado, guardarTextoConfig, leerTextoConfig } from "./config.ts";
+import { contentSidAviso } from "./avisos.ts";
+import { hayCredencialesTwilio } from "../core/twilio.ts";
 import { hashDeFichero, leerDocumento } from "./storage.ts";
 import { leerDescripcion } from "./domain/articulos.ts";
 
@@ -203,6 +205,31 @@ export function createRecepcionesRouter(): Router {
         ip: req.ip,
       });
       res.json({ operario });
+    })
+  );
+
+  /**
+   * Relee los PDF ya guardados para rellenar la observación y el teléfono
+   * donde falten. Es para los albaranes que entraron antes de que el módulo
+   * supiera leer esa parte del papel: volver a adjuntar el PDF no vale porque
+   * el original no se sobrescribe.
+   */
+  r.post(
+    "/albaranes/observaciones/releer",
+    exigirPermiso("recepciones.albaran.create"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const resultado = await servicio.releerObservaciones(ctx, Number(b.limite) || 200);
+      void registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "recepciones.albaranes.releer_observaciones",
+        entidad: "rcp_albaranes",
+        detalle: { revisados: resultado.revisados, completados: resultado.completados, errores: resultado.errores },
+        ip: req.ip,
+      });
+      res.json(resultado);
     })
   );
 
@@ -671,6 +698,42 @@ export function createRecepcionesRouter(): Router {
         resolucion: texto(b.resolucion) || null,
       });
       res.json({ incidencia });
+    })
+  );
+
+  /* ── Avisos por WhatsApp ───────────────────────────────────────────────── */
+
+  /**
+   * El estado del aviso y los últimos que se han intentado. Los omitidos y los
+   * fallidos se enseñan igual que los enviados: «a mí no me llegó» se contesta
+   * aquí, y la mitad de las veces la respuesta es que el albarán no traía móvil.
+   */
+  r.get(
+    "/avisos",
+    exigirPermiso("recepciones.view"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      res.json({
+        activado: await avisoWhatsAppActivado(ctx.empresaId),
+        // Ni el SID ni las credenciales salen de aquí: sólo si están puestos.
+        credenciales: hayCredencialesTwilio(),
+        plantilla: contentSidAviso() !== "",
+        avisos: await repo.listarAvisos(ctx.empresaId),
+      });
+    })
+  );
+
+  /** El interruptor. Queda en auditoría: esto empieza a escribir a gente. */
+  r.put(
+    "/avisos/config",
+    exigirPermiso("recepciones.avisos.manage"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof b.activado !== "boolean") throw new ErrorRecepciones("ACTIVADO_INVALIDO", "Indica si el aviso queda encendido o apagado.");
+      await guardarTextoConfig(ctx.empresaId, CLAVES.avisoWhatsApp, b.activado ? "1" : "0");
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.avisos.config", entidad: "rcp_config", detalle: { activado: b.activado }, ip: req.ip });
+      res.json({ activado: await avisoWhatsAppActivado(ctx.empresaId) });
     })
   );
 

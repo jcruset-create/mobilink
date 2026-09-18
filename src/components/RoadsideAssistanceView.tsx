@@ -59,7 +59,9 @@ import {
   ROADSIDE_ASSISTANCE_STATUS_FLOW,
   ROADSIDE_ASSISTANCE_STATUS_LABELS,
 } from "../modules/roadsideAssistanceTypes";
+import { aMilisegundos, fechaHoraCorta } from "../modules/roadsideFechaHora";
 import { formatCoords } from "../modules/roadsideCoordenadas";
+import { nombreDeFoto, tiraDeFotos } from "../modules/roadsideFotosTarjeta";
 import { etiquetaMatricula, matriculasDe } from "../modules/roadsideMatricula";
 import { filtrar as filtrarAsistencias, hayCriterios } from "../modules/roadsideFiltro";
 import SubcontratacionExterna from "./SubcontratacionExterna";
@@ -279,8 +281,13 @@ function StatusStepper({ status, assistance }: { status: RoadsideAssistanceStatu
 }
 
 function formatTime(value?: number | string | null) {
-  if (!value) return "-";
-  const d = new Date(value as number);
+  // `aMilisegundos` y no `new Date(value)`: con una marca de tiempo en cadena
+  // —los BIGINT llegan asi segun por donde entre la asistencia— `new Date`
+  // aplica el parseo de TEXTO y devuelve «Invalid Date», asi que una hora
+  // buena salia como «-». Lo encontro la prueba de `roadsideFechaHora`.
+  const ms = aMilisegundos(value);
+  if (ms == null) return "-";
+  const d = new Date(ms);
   if (isNaN(d.getTime())) return "-";
 
   return d.toLocaleTimeString("es-ES", {
@@ -453,8 +460,19 @@ function ClosedAssistanceCard({
         <div className="mt-0.5 truncate text-xs text-slate-400">{assistance.customerName}</div>
       )}
       <div className="mt-1.5 flex items-center justify-between gap-2">
+        {/*
+          Fecha y hora, no solo la hora. Esta lista puede tener noventa y cinco
+          tarjetas de dias distintos y todas ponian «19:39»: dos servicios de
+          semanas diferentes se veian igual, y para saber de cuando era uno
+          habia que abrir el informe.
+
+          Es el MISMO instante que ya se mostraba —el cierre: llegada a taller,
+          o la anulacion, o el fin—, no la fecha de creacion. Mezclar la fecha
+          de un momento con la hora de otro daria una linea que parece cierta
+          y no lo es, y en los servicios que cruzan la medianoche se veria.
+        */}
         <div className="text-xs font-semibold text-slate-500">
-          {formatTime(assistance.arrivedAtWorkshopMs || assistance.cancelledAtMs || assistance.finishedAtMs)}
+          {fechaHoraCorta(assistance.arrivedAtWorkshopMs || assistance.cancelledAtMs || assistance.finishedAtMs)}
         </div>
         <div className="flex gap-1">
           <button
@@ -2319,6 +2337,95 @@ export default function RoadsideAssistanceView({
                           <span className="ml-2">{renderWaStatus(assistance.waStatus, assistance.waStatusAtMs)}</span>
                         )}
                       </div>
+
+                      {/*
+                        Avería, trabajos y fotos: lo que hasta ahora solo se
+                        veía abriendo «Editar».
+
+                        Quien mira esta tarjeta está decidiendo a quién manda y
+                        con qué material, y para eso necesita saber qué ha
+                        pasado. Tenerlo detrás de un modal obliga a abrir,
+                        leer, cerrar, y en una lista de varias asistencias eso
+                        no se hace: se llama por teléfono.
+
+                        Cada bloque aparece solo si tiene algo. Una caja con un
+                        guion ocupa el mismo sitio que una con contenido y no
+                        dice nada.
+                      */}
+                      {(assistance.descripcionAveria || assistance.trabajosARealizar) && (
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {assistance.descripcionAveria && (
+                            <div className="rounded-lg bg-slate-950 px-3 py-2">
+                              <div className="text-[11px] font-bold uppercase text-slate-500">
+                                Avería
+                              </div>
+                              {/* Texto entero y `whitespace-pre-line`: una avería
+                                  copiada de un correo trae saltos de línea, y
+                                  aplastarlos junta frases que no van juntas. */}
+                              <div className="whitespace-pre-line text-sm font-medium text-slate-200">
+                                {assistance.descripcionAveria}
+                              </div>
+                            </div>
+                          )}
+                          {assistance.trabajosARealizar && (
+                            <div className="rounded-lg bg-slate-950 px-3 py-2">
+                              <div className="text-[11px] font-bold uppercase text-slate-500">
+                                Trabajos a realizar
+                              </div>
+                              {/* En monoespaciada porque casi siempre son medidas y
+                                  referencias —385/65R22.5—, y ahí un 5 y un 6 se
+                                  confunden leyendo rápido desde el móvil. */}
+                              <div className="whitespace-pre-line font-mono text-[13px] font-semibold text-amber-200/90">
+                                {assistance.trabajosARealizar}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {(() => {
+                        const tira = tiraDeFotos(
+                          assistance.fotosMiniaturas,
+                          assistance.fotosTotal,
+                        );
+                        if (tira.miniaturas.length === 0) return null;
+                        return (
+                          <div className="rounded-lg bg-slate-950 px-3 py-2">
+                            <div className="text-[11px] font-bold uppercase text-slate-500">
+                              Fotos · {assistance.fotosTotal}
+                            </div>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                              {tira.miniaturas.map((f) => (
+                                <button
+                                  key={f.id}
+                                  type="button"
+                                  onClick={() => setPhotosAssistance(assistance)}
+                                  title={nombreDeFoto(f.kind)}
+                                  className="h-14 w-14 shrink-0 overflow-hidden rounded-md border border-slate-700 hover:border-slate-500"
+                                >
+                                  <img
+                                    src={f.url}
+                                    alt={nombreDeFoto(f.kind)}
+                                    loading="lazy"
+                                    className="h-full w-full object-cover"
+                                  />
+                                </button>
+                              ))}
+                              {/* El «+N» abre la misma galería que las miniaturas:
+                                  es el resto de esas fotos, no otra cosa. */}
+                              {tira.resto > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPhotosAssistance(assistance)}
+                                  className="h-14 w-14 shrink-0 rounded-md border border-dashed border-slate-600 text-xs font-bold text-slate-400 hover:border-slate-500 hover:text-slate-200"
+                                >
+                                  +{tira.resto}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {assistance.status === "en_camino" && (
