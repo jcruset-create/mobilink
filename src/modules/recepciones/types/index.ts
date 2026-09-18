@@ -467,6 +467,8 @@ export type EstadoAvisos = {
   credenciales: boolean;
   /** Hay plantilla aprobada (Content SID). Sin ella sólo sale texto plano. */
   plantilla: boolean;
+  /** El cuerpo exacto que hay que dar de alta en Twilio, para copiarlo. */
+  cuerpoPlantilla: string;
   avisos: AvisoWhatsApp[];
 };
 

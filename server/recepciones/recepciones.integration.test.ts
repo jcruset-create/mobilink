@@ -1075,6 +1075,14 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
       expect(r.body.code).toBe("ACTIVADO_INVALIDO");
     });
 
+    it("la pantalla sirve el cuerpo de la plantilla con sus tres variables, para copiarlo en Twilio", async () => {
+      const r = await api("/avisos", gestorA);
+      expect(r.body.cuerpoPlantilla).toContain("{{1}}");
+      expect(r.body.cuerpoPlantilla).toContain("{{2}}");
+      expect(r.body.cuerpoPlantilla).toContain("{{3}}");
+      expect(r.body.cuerpoPlantilla).toContain("ha llegado tu material");
+    });
+
     it("el aviso es de la empresa que lo enciende: la otra sigue apagada", async () => {
       await api("/avisos/config", gestorA, { method: "PUT", body: { activado: true } });
       expect((await api("/avisos", gestorB)).body.activado).toBe(false);

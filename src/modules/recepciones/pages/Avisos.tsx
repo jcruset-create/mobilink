@@ -12,11 +12,11 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { MessageCircle } from "lucide-react";
+import { Copy, MessageCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 import * as api from "../services/api";
 import { useRecepciones } from "../contexts/RecepcionesContext";
-import { Aviso, EmptyRow, ErrorBox, Pill, TableWrap, tdCls, thCls } from "../components/ui";
+import { Aviso, EmptyRow, ErrorBox, Pill, TableWrap, btnMini, tdCls, thCls } from "../components/ui";
 import { COLOR_ESTADO_AVISO, ETIQUETA_ESTADO_AVISO, type EstadoAvisos } from "../types";
 import { fmtFechaHora } from "../../administracion/types";
 
@@ -25,6 +25,7 @@ export default function Avisos() {
   const [estado, setEstado] = useState<EstadoAvisos | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
+  const [copiado, setCopiado] = useState(false);
   const puedeGestionar = puede("recepciones.avisos.manage");
 
   const cargar = useCallback(async () => {
@@ -97,6 +98,34 @@ export default function Avisos() {
           </p>
         </div>
       </div>
+
+      {/* El cuerpo de la plantilla, para copiarlo tal cual en Twilio. Se sirve
+          desde el servidor a propósito: es el mismo texto con el que se manda,
+          y transcribirlo a mano es la forma de que Twilio diga otra cosa. */}
+      {estado && (
+        <div className="mb-3 rounded-xl border border-slate-700 bg-slate-800 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[10px] font-bold uppercase text-slate-400">El texto que hay que dar de alta en Twilio</div>
+            <button
+              className={`${btnMini} flex items-center gap-1`}
+              onClick={() => {
+                void navigator.clipboard?.writeText(estado.cuerpoPlantilla).then(
+                  () => setCopiado(true),
+                  () => setCopiado(false)
+                );
+              }}
+            >
+              <Copy className="h-3.5 w-3.5" /> {copiado ? "Copiado" : "Copiar"}
+            </button>
+          </div>
+          <pre className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-900 p-2 font-mono text-[12px] text-slate-200">{estado.cuerpoPlantilla}</pre>
+          <p className="mt-1 text-[11px] text-slate-500">
+            Categoría <b>Utility</b>, idioma español. <b>{"{{1}}"}</b> es el saludo («Hola JORGE PLANA»), <b>{"{{2}}"}</b> el centro y <b>{"{{3}}"}</b> el
+            material con sus unidades («245/70 R17.5 HANKOOK AH35 136M (2 uds.)»). Cuando la aprueben, su Content SID va en
+            RECEPCIONES_WHATSAPP_CONTENT_SID.
+          </p>
+        </div>
+      )}
 
       {estado && !estado.activado && (
         <div className="mb-3">
