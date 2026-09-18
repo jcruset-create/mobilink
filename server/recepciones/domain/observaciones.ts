@@ -46,6 +46,20 @@
  * las columnas, pero «tres ceros al final y algo escrito delante» seguirá
  * siendo cierto.
  *
+ * ── El texto largo se parte en dos líneas ───────────────────────────────────
+ *
+ * Cuando la observación no cabe, el PDF la sigue en la línea de abajo, en la
+ * misma columna y SIN números:
+ *
+ *     OSCAR+SALVADOR+SANJULIAN   0   0   0,00
+ *     +629862105
+ *
+ * Esa segunda línea es parte de la primera, y es donde suele acabar el
+ * teléfono. Se reconoce por lo que le falta: dentro de la tabla, TODA fila de
+ * verdad termina en sus tres columnas numéricas, así que una línea que no las
+ * trae es la continuación de la anterior. Lo mismo le pasa a los artículos
+ * («…SAILUN STR1+» y debajo «164K»).
+ *
  * ── Sólo dentro de la tabla ─────────────────────────────────────────────────
  *
  * La búsqueda se acota a las filas que van entre la cabecera de columnas
@@ -126,23 +140,53 @@ export function partirObservacion(observacion: string): { texto: string; telefon
   return { texto, telefono };
 }
 
-/** ¿Esta fila es una observación? Devuelve su texto, o null si no lo es. */
-export function observacionDeFila(fila: FilaPdf): string | null {
-  const palabras = fila.palabras.filter((p) => p.trim());
-  if (palabras.length <= COLUMNAS_NUMERICAS) return null;
+/** Una fila ya partida en sus dos mitades: lo que dice y lo que cuesta. */
+export type FilaTabla = { descripcion: string[]; numeros: number[] };
 
-  // Las columnas de números son las últimas; el resto es la descripción.
+/**
+ * Parte una fila en descripción y columnas numéricas. Las columnas son las
+ * ÚLTIMAS palabras que son números; si no hay tres, no es una fila completa
+ * —será la continuación de la de arriba— y se devuelve `null`.
+ */
+export function partirFila(palabras: readonly string[]): FilaTabla | null {
+  const limpias = palabras.filter((p) => p.trim());
   const numeros: number[] = [];
-  let i = palabras.length - 1;
+  let i = limpias.length - 1;
   while (i >= 0 && numeros.length < COLUMNAS_NUMERICAS) {
-    const n = comoNumero(palabras[i]);
+    const n = comoNumero(limpias[i]);
     if (n === null) break;
     numeros.unshift(n);
     i -= 1;
   }
-  if (numeros.length < COLUMNAS_NUMERICAS || numeros.some((n) => n !== 0)) return null;
+  if (numeros.length < COLUMNAS_NUMERICAS) return null;
+  return { descripcion: limpias.slice(0, i + 1), numeros };
+}
 
-  const texto = limpiarObservacion(palabras.slice(0, i + 1).join(" "));
+/**
+ * Las filas de la tabla con sus continuaciones ya pegadas. Una línea sin
+ * columnas numéricas es la segunda línea de la anterior, y su texto va a la
+ * DESCRIPCIÓN, no detrás de los números.
+ */
+export function filasConContinuaciones(filas: readonly FilaPdf[]): FilaTabla[] {
+  const salida: FilaTabla[] = [];
+  for (const fila of filas) {
+    const partida = partirFila(fila.palabras);
+    if (partida) {
+      salida.push(partida);
+      continue;
+    }
+    const anterior = salida[salida.length - 1];
+    if (anterior) anterior.descripcion.push(...fila.palabras.filter((p) => p.trim()));
+  }
+  return salida;
+}
+
+/** ¿Esta fila es una observación? Devuelve su texto, o null si no lo es. */
+export function observacionDeFila(fila: FilaPdf | FilaTabla): string | null {
+  const f = "palabras" in fila ? partirFila(fila.palabras) : fila;
+  if (!f || f.descripcion.length === 0 || f.numeros.some((n) => n !== 0)) return null;
+
+  const texto = limpiarObservacion(f.descripcion.join(" "));
   // Una letra, o un número largo (un teléfono). Un «.» o un dígito suelto, no.
   return /\p{L}/u.test(texto) || /\d{4,}/.test(texto) ? texto : null;
 }
@@ -179,15 +223,12 @@ export function filasDeLaTabla(filas: readonly FilaPdf[]): FilaPdf[] {
 }
 
 export function observacionesDelAlbaran(todas: readonly FilaPdf[]): string[] {
-  const filas = filasDeLaTabla(todas);
+  const filas = filasConContinuaciones(filasDeLaTabla(todas));
   let ultimoArticulo = -1;
   for (const [i, fila] of filas.entries()) {
-    const palabras = fila.palabras.filter((p) => p.trim());
-    const numeros = palabras.slice(-COLUMNAS_NUMERICAS).map(comoNumero);
-    const esArticulo = numeros.length === COLUMNAS_NUMERICAS && numeros.every((n) => n !== null) && numeros.some((n) => n !== 0);
-    if (esArticulo) ultimoArticulo = i;
+    if (fila.numeros.some((n) => n !== 0)) ultimoArticulo = i;
     // El NFU manda aunque llevara ceros: es el final de la mercancía.
-    if (normalizar(palabras.join(" ")).includes("GESTION DE NFU")) ultimoArticulo = i;
+    if (normalizar(fila.descripcion.join(" ")).includes("GESTION DE NFU")) ultimoArticulo = i;
   }
   if (ultimoArticulo < 0) return [];
 
