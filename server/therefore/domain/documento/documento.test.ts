@@ -293,6 +293,35 @@ describe("localizar y delimitar albaranes", () => {
     expect(loc.secciones[0].numeroDocumento).toBeNull();
   });
 
+  it("una nota que nombra otro albarán no corta el bloque", () => {
+    /*
+     * El caso que se vio al subrayar: debajo de los artículos, el albarán del
+     * cliente y dos notas del montaje. Llevan la palabra «ALB:» y abrían una
+     * sección que se comía el resto del bloque.
+     */
+    const doc = documento([
+      {
+        numero: 1,
+        lineas: [
+          fila(1, 80, [["ALB:0501234 FECHA: 02/09/2026", 40]]),
+          fila(1, 100, CABECERA_TABLA),
+          lineaArticulo(1, 120, "111111", "UNO", "1,00", "10,00", "-", "10,00"),
+          fila(1, 140, [["ALB: 774411 02/09/2026", 40]]),
+          fila(1, 155, [["CLIENTE: UN NOMBRE", 40]]),
+          fila(1, 170, [["POS: DELANTERA IZQ", 40]]),
+          fila(1, 200, [["ALB:0501299 FECHA: 03/09/2026", 40]]),
+          lineaArticulo(1, 220, "222222", "DOS", "1,00", "20,00", "-", "20,00"),
+        ],
+      },
+    ]);
+    const loc = localizarAlbaranes(doc);
+    expect(loc.secciones.map((s) => s.numeroDocumento)).toEqual(["0501234", "0501299"]);
+    const textos = loc.secciones[0].lineas.map((l) => l.texto);
+    expect(textos).toContain("ALB: 774411 02/09/2026");
+    expect(textos).toContain("CLIENTE: UN NOMBRE");
+    expect(textos).toContain("POS: DELANTERA IZQ");
+  });
+
   it("el número puede estar en la celda de al lado, no en la misma cadena", () => {
     const doc = documento([
       { numero: 1, lineas: [fila(1, 80, [["Nº albarán", 40], ["ENT-770199-0501234", 200]])] },

@@ -22,11 +22,23 @@
  */
 
 import { useState } from "react";
-import { FileText, Highlighter, RefreshCw } from "lucide-react";
+import { Check, FileText, Highlighter, RefreshCw, Undo2 } from "lucide-react";
 import * as api from "../services/api";
 import { abrirEnPestana } from "../services/documentos";
 import { celdasFlojas, sumaDeLineas, tituloAnalisis } from "../services/analisis";
-import { Aviso, Celda, ChipAnalisis, Dato, ErrorBox, Pill, btnMini, thCls, tdCls } from "./ui";
+import PedirDatos, { VERBOS, type DatosDelMovimiento } from "./PedirDatos";
+import {
+  Aviso,
+  Celda,
+  ChipAnalisis,
+  ChipEstadoActuacion,
+  Dato,
+  ErrorBox,
+  Pill,
+  btnMini,
+  thCls,
+  tdCls,
+} from "./ui";
 import type { AlbaranAnalizado as Albaran, Actuacion } from "../types";
 import { eurosConSigno } from "../../cash/utils/money";
 import { fmtFecha } from "../../administracion/types";
@@ -59,6 +71,40 @@ export default function AlbaranAnalizado({
   const [error, setError] = useState<string | null>(null);
   const [trabajando, setTrabajando] = useState(false);
   const [resaltando, setResaltando] = useState(false);
+  const [pidiendo, setPidiendo] = useState<string | null>(null);
+
+  /**
+   * Dar por hecho ESTE albarán, desde donde se está mirando.
+   *
+   * Quien graba trabaja albarán por albarán con el PDF delante: acaba uno y
+   * pasa al siguiente. Obligarle a cambiar de pestaña, buscar la actuación
+   * entre ocho y acordarse de cuál era hace que nadie las marque, y una
+   * bandeja con todo pendiente no dice nada.
+   *
+   * Es la misma actuación y el mismo formulario que en la pestaña Actuaciones
+   * —qué se ha hecho y la referencia del ERP—, no un estado aparte del
+   * albarán: un albarán no tiene estado, lo tiene el trabajo que se pidió
+   * sobre él.
+   */
+  async function mover(verbo: string, datos: DatosDelMovimiento) {
+    if (!actuacion) return;
+    setTrabajando(true);
+    setError(null);
+    try {
+      await api.moverActuacion(actuacion.id, verbo, datos);
+      setPidiendo(null);
+      onReanalizado();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido mover la actuación");
+    } finally {
+      setTrabajando(false);
+    }
+  }
+
+  const puedeResolver =
+    puedeReanalizar && actuacion !== undefined && VERBOS.resolver.desde.includes(actuacion.estado);
+  const puedeReabrir =
+    puedeReanalizar && actuacion !== undefined && VERBOS.reabrir.desde.includes(actuacion.estado);
 
   const suma = sumaDeLineas(albaran.lineas);
   const flojas = celdasFlojas(albaran.lineas, umbralCampo);
@@ -122,7 +168,30 @@ export default function AlbaranAnalizado({
         {albaran.origen === "PDF_IA" && (
           <Pill className="bg-amber-500/15 text-amber-300">Leído con ayuda de IA</Pill>
         )}
+        {actuacion && <ChipEstadoActuacion estado={actuacion.estado} />}
         <span className="ml-auto flex gap-2">
+          {puedeResolver && (
+            <button
+              onClick={() => setPidiendo("resolver")}
+              className={btnMini}
+              disabled={trabajando}
+              title="Dar por hecho este albarán"
+            >
+              <Check className="mr-1 inline h-3 w-3" />
+              Resuelto
+            </button>
+          )}
+          {puedeReabrir && (
+            <button
+              onClick={() => void mover("reabrir", {})}
+              className={btnMini}
+              disabled={trabajando}
+              title="Volver a dejarlo pendiente"
+            >
+              <Undo2 className="mr-1 inline h-3 w-3" />
+              Reabrir
+            </button>
+          )}
           {albaran.adjuntoId && (
             <button onClick={() => void abrirPdf()} className={btnMini}>
               <FileText className="mr-1 inline h-3 w-3" />
@@ -150,6 +219,15 @@ export default function AlbaranAnalizado({
       </header>
 
       {error && <ErrorBox>{error}</ErrorBox>}
+
+      {pidiendo && (
+        <PedirDatos
+          verbo={pidiendo}
+          onCerrar={() => setPidiendo(null)}
+          onConfirmar={(datos) => void mover(pidiendo, datos)}
+          ocupado={trabajando}
+        />
+      )}
 
       <div className="mb-3 grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-3">
         <Dato rotulo="Albarán pedido" valor={albaran.numeroSolicitado} />
