@@ -43,7 +43,7 @@ import * as repo from "./repository.ts";
 import { generarDocumentoRecepcion, limpio } from "./documentos/generar.ts";
 import { observacionesDelPdf } from "./documentos/observaciones.ts";
 import { partirObservacion } from "./domain/observaciones.ts";
-import { guardarDocumento, hashDeFichero, rutaDocumento } from "./storage.ts";
+import { guardarDocumento, hashDeFichero, leerDocumento as leerDelAlmacen, rutaDocumento } from "./storage.ts";
 
 /** `userId` es `null` cuando actúa el sistema (el correo del proveedor). */
 export type Contexto = { empresaId: string; userId: string | null; userNombre: string; ip?: string };
@@ -1310,6 +1310,60 @@ export async function adjuntarOriginal(
       (observaciones.length > 0 ? ` Observaciones del albarán: ${observaciones.join(" · ")}.` : ""),
   });
   return documento;
+}
+
+export type ResultadoRelectura = {
+  revisados: number;
+  completados: number;
+  sinObservaciones: number;
+  errores: number;
+  detalle: { albaran: string; observaciones: string | null; telefono: string | null; error?: string }[];
+};
+
+/**
+ * Relee los PDF ya guardados y rellena la observación y el teléfono donde
+ * falten.
+ *
+ * Hace falta porque la lectura del papel ocurre al GUARDARLO, y los albaranes
+ * que entraron antes de que el módulo supiera leer esa parte se quedaron sin
+ * ella. Volver a adjuntar el PDF no vale: el original no se sobrescribe, y con
+ * razón.
+ *
+ * Sólo RELLENA huecos —lo escrito a mano no se pisa, y lo que ya tiene valor
+ * se queda—, así que repetirla es inofensivo. Un PDF que falle no para al
+ * resto: se cuenta y se sigue.
+ */
+export async function releerObservaciones(ctx: Contexto, limite = 200): Promise<ResultadoRelectura> {
+  const pendientes = await repo.albaranesSinObservaciones(ctx.empresaId, limite);
+  const r: ResultadoRelectura = { revisados: 0, completados: 0, sinObservaciones: 0, errores: 0, detalle: [] };
+
+  for (const a of pendientes) {
+    r.revisados += 1;
+    try {
+      const pdf = await leerDelAlmacen(a.storagePath);
+      if (!pdf) {
+        r.errores += 1;
+        r.detalle.push({ albaran: a.numeroProveedor, observaciones: null, telefono: null, error: "El PDF no está en el almacén." });
+        continue;
+      }
+      const partidas = observacionesDelPdf(pdf).map(partirObservacion);
+      const texto = partidas.map((o) => o.texto).filter(Boolean).join(" · ") || null;
+      const telefono = partidas.find((o) => o.telefono)?.telefono ?? null;
+      if (!texto && !telefono) {
+        r.sinObservaciones += 1;
+        continue;
+      }
+      await repo.anotarObservacionesAlbaran(ctx.empresaId, a.id, { texto, telefono });
+      r.completados += 1;
+      r.detalle.push({ albaran: a.numeroProveedor, observaciones: texto, telefono });
+    } catch (e) {
+      r.errores += 1;
+      r.detalle.push({ albaran: a.numeroProveedor, observaciones: null, telefono: null, error: (e as Error).message });
+    }
+  }
+
+  // La auditoría la deja la ruta, como el resto de acciones sin transacción.
+  return r;
 }
 
 const DESCARGA_TIMEOUT_MS = 20_000;

@@ -343,6 +343,40 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
       expect(ficha.body.albaran.telefonoContacto).toBeNull();
     });
 
+    it("la relectura completa los albaranes que entraron antes de que esto existiera", async () => {
+      // Se simula el estado de entonces: el PDF guardado y las columnas vacías.
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfAlbaranSoledad("OSCAR+SALVADOR+SANJULIAN", "+629862105"));
+      await db.query(`UPDATE rcp_albaranes SET observaciones = NULL, telefono_contacto = NULL WHERE id = $1`, [albaran.id]);
+      expect((await api(`/albaranes/${albaran.id}`, operarioA)).body.albaran.observaciones).toBeNull();
+
+      const r = await api("/albaranes/observaciones/releer", gestorA, { method: "POST", body: {} });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.completados).toBeGreaterThanOrEqual(1);
+
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      expect(ficha.body.albaran.observaciones).toBe("OSCAR SALVADOR SANJULIAN");
+      expect(ficha.body.albaran.telefonoContacto).toBe("629862105");
+    });
+
+    it("repetir la relectura es inofensivo y nunca pisa lo escrito a mano", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfAlbaranSoledad("TALLER"));
+      // Alguien corrige la observación a mano; el teléfono sigue vacío.
+      await db.query(`UPDATE rcp_albaranes SET observaciones = 'LO PUSO UNA PERSONA' WHERE id = $1`, [albaran.id]);
+
+      expect((await api("/albaranes/observaciones/releer", gestorA, { method: "POST", body: {} })).status).toBe(200);
+      expect((await api("/albaranes/observaciones/releer", gestorA, { method: "POST", body: {} })).status).toBe(200);
+
+      expect((await api(`/albaranes/${albaran.id}`, operarioA)).body.albaran.observaciones).toBe("LO PUSO UNA PERSONA");
+    });
+
+    it("el operario del muelle no lanza la relectura: es cosa del gestor", async () => {
+      expect((await api("/albaranes/observaciones/releer", operarioA, { method: "POST", body: {} })).status).toBe(403);
+    });
+
     it("un PDF que no es un albarán de Soledad no inventa observaciones, y el original se guarda igual", async () => {
       const pedido = await crearPedido(2);
       const { albaran } = await crearAlbaran(pedido, 2);
