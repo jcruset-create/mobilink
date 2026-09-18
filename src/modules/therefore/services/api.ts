@@ -241,6 +241,21 @@ export function enlaceAdjunto(adjuntoId: string): Promise<{ url: string }> {
   return pedir(`/adjuntos/${adjuntoId}/documento`);
 }
 
+export type PreparacionAlbaranes = {
+  encontrados: string[];
+  preparados: string[];
+  yaEstaban: string[];
+  genericas: string[];
+};
+
+/** Pone a gestionar todos los albaranes que trae el documento del expediente. */
+export function prepararAlbaranes(expedienteId: string, tipoAccion?: string): Promise<PreparacionAlbaranes> {
+  return pedir(`/expedientes/${expedienteId}/albaranes/preparar`, {
+    method: "POST",
+    body: JSON.stringify(tipoAccion ? { tipoAccion } : {}),
+  });
+}
+
 /** El PDF del proveedor con este albarán subrayado en amarillo. */
 export async function pdfResaltado(albaranAnalizadoId: string): Promise<Blob> {
   const cabeceras = await sessionHeaders();

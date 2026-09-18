@@ -8,7 +8,8 @@
  */
 
 import { leerConfig } from "../config.ts";
-import { analizarAlbaran } from "../domain/documento/index.ts";
+import { albaranesDelDocumento, analizarAlbaran } from "../domain/documento/index.ts";
+import { esTipoAccion, type TipoAccion } from "../domain/estados.ts";
 import { cajasDelAlbaran, paginasResaltadas } from "../domain/documento/resaltado.ts";
 import { ErrorTherefore } from "../errors.ts";
 import * as repo from "../repository.ts";
@@ -106,6 +107,148 @@ export async function adjuntarDocumento(
 
   const reencolados = await repo.reencolarDeExpediente(ctx.empresaId, expedienteId);
   return { adjuntoId: existente.id, hash, reencolados };
+}
+
+export type PreparacionAlbaranes = {
+  /** Cuántos albaranes distintos trae el documento. */
+  encontrados: string[];
+  /** Los que se han puesto a gestionar ahora. */
+  preparados: string[];
+  /** Los que ya estaban pedidos: no se duplican. */
+  yaEstaban: string[];
+  /** Actuaciones genéricas —«grabar», sin número— que quedan por retirar. */
+  genericas: string[];
+};
+
+/**
+ * Pone a gestionar TODOS los albaranes que trae el documento.
+ *
+ * Hay correos que no listan los albaranes: dicen «grabad la factura entera».
+ * Entonces la actuación nace sin número, no hay nada que analizar y la
+ * pantalla se queda en blanco con un documento delante que sí los tiene. Esto
+ * es el puente: se lee el PDF, se saca cada albarán y se crea una actuación
+ * por cada uno, ya encolada para analizar.
+ *
+ * Lo que NO hace es adivinar el número de ninguno: sólo prepara los que el
+ * documento escribe. Si el parser no localiza ni uno, se dice y no se crea
+ * nada, porque una actuación con un albarán inventado es peor que ninguna.
+ */
+export async function prepararAlbaranes(
+  ctx: Contexto,
+  expedienteId: string,
+  tipoAccionPedido?: string
+): Promise<PreparacionAlbaranes> {
+  const expediente = await repo.obtenerExpediente(ctx.empresaId, expedienteId);
+  if (!expediente) throw new ErrorTherefore("NO_ENCONTRADO", "El expediente no existe.", 404);
+  if (expediente.estado === "RESUELTO" || expediente.estado === "CERRADO") {
+    throw new ErrorTherefore(
+      "EXPEDIENTE_TERMINADO",
+      `El expediente ${expediente.numero} está ${expediente.estado.toLowerCase()}. Reábrelo antes de prepararle albaranes.`,
+      409
+    );
+  }
+
+  const adjuntos = (await repo.adjuntosDeExpediente(ctx.empresaId, expedienteId)).filter(
+    (a) => a.storagePath && (a.mimeType.includes("pdf") || a.nombreArchivo.toLowerCase().endsWith(".pdf"))
+  );
+  const adjunto = adjuntos[adjuntos.length - 1];
+  if (!adjunto?.storagePath) {
+    throw new ErrorTherefore(
+      "SIN_DOCUMENTO",
+      "Este expediente todavía no tiene ningún PDF. Adjúntalo y vuelve a pedirlo.",
+      409
+    );
+  }
+  const bytes = await leerDocumento(adjunto.storagePath);
+  if (!bytes) {
+    throw new ErrorTherefore("SIN_DOCUMENTO", "El documento ya no está en el almacenamiento.", 404);
+  }
+
+  const cfg = await leerConfig(ctx.empresaId);
+  const texto = leerTexto(bytes, { maxPaginas: cfg.albaran.maxPaginas });
+
+  // Uno por número, en el orden en que salen en el papel.
+  const vistos = new Set<string>();
+  const delDocumento: { numero: string; normalizado: string }[] = [];
+  for (const a of albaranesDelDocumento(texto)) {
+    if (!a.numeroDocumento || !a.normalizado || vistos.has(a.normalizado)) continue;
+    vistos.add(a.normalizado);
+    delDocumento.push({ numero: a.numeroDocumento, normalizado: a.normalizado });
+  }
+  if (delDocumento.length === 0) {
+    throw new ErrorTherefore(
+      "SIN_ALBARANES",
+      "En el documento no se ha localizado ningún número de albarán, así que no hay nada que preparar.",
+      409
+    );
+  }
+
+  const actuaciones = await repo.listarActuaciones(ctx.empresaId, expedienteId);
+  const vivas = actuaciones.filter((a) => a.estado !== "DESCARTADA");
+  const tipoAccion: TipoAccion = esTipoAccion(tipoAccionPedido)
+    ? tipoAccionPedido
+    : ((vivas.find((a) => !a.albaranSolicitado)?.tipoAccion ??
+        vivas[0]?.tipoAccion ??
+        "GRABAR") as TipoAccion);
+
+  const yaEstaban: string[] = [];
+  const preparados: string[] = [];
+
+  for (const alb of delDocumento) {
+    if (vivas.some((a) => a.albaranNormalizado === alb.normalizado && a.tipoAccion === tipoAccion)) {
+      yaEstaban.push(alb.numero);
+      continue;
+    }
+    /*
+     * La actuación y su sitio en la cola, en la misma transacción: si se cae
+     * entre una cosa y la otra queda un albarán pedido que nadie analiza.
+     */
+    const creada = await repo.enTransaccion(async (c) => {
+      const nueva = await repo.crearActuacion(
+        ctx.empresaId,
+        expedienteId,
+        {
+          tipoAccion,
+          albaranSolicitado: alb.numero,
+          importeCentimos: null,
+          indicadorAdicional: null,
+          obligatoria: true,
+          observaciones: "Preparada desde el documento.",
+        },
+        c
+      );
+      if (!nueva) return null;
+
+      await repo.encolarAnalisis(ctx.empresaId, expedienteId, nueva.id, alb.numero, null, c);
+      await repo.anotarEvento(
+        ctx.empresaId,
+        {
+          expedienteId,
+          actuacionId: nueva.id,
+          tipo: "ACTUACION_ANADIDA",
+          actorTipo: "usuario",
+          usuarioId: ctx.userId,
+          usuarioNombre: ctx.userNombre ?? null,
+          datosNuevos: { tipoAccion, albaran: alb.numero, origen: "documento" },
+          descripcion: `Actuación ${tipoAccion} ${alb.numero}, preparada desde el documento.`,
+        },
+        c
+      );
+      return nueva;
+    });
+
+    if (creada) preparados.push(alb.numero);
+    else yaEstaban.push(alb.numero);
+  }
+
+  return {
+    encontrados: delDocumento.map((a) => a.numero),
+    preparados,
+    yaEstaban,
+    // Las genéricas se enseñan para que quien mira decida: retirarlas es una
+    // decisión suya, no un efecto colateral de haber pulsado un botón.
+    genericas: vivas.filter((a) => !a.albaranSolicitado).map((a) => a.id),
+  };
 }
 
 export type AlbaranConDetalle = repo.AlbaranAnalizado & {

@@ -33,7 +33,7 @@ import type { Server } from "node:http";
 
 import express from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { pdfDeFactura, type AlbaranFixture, type LineaFixture } from "../fixtures/albaranPdf.ts";
+import { pdfDeFactura, pdfEscaneado, type AlbaranFixture, type LineaFixture } from "../fixtures/albaranPdf.ts";
 
 const RUN = process.env.RUN_DB_TESTS === "1" && !!process.env.DATABASE_URL;
 
@@ -446,6 +446,49 @@ describe.runIf(RUN)("El análisis de albaranes de Therefore", () => {
     });
     expect(r.status).toBe(409);
     expect(((await r.json()) as { code?: string }).code).toBe("SIN_RESALTADO");
+  });
+
+  it("16e · «prepara todos los albaranes»: uno por cada uno del documento, y sin repetir", async () => {
+    const pdf = await pdfDeFactura({
+      albaranes: [uno("0501234", [LINEA_UNO]), uno("0509999", [LINEA_DOS])],
+      totales: { base: "213,90", total: "258,82" },
+    });
+    // El correo pide la factura entera: una actuación GRABAR sin número.
+    const expedienteId = await importar([{ accion: "GRABAR" }]);
+    const sinPdf = await api(`/expedientes/${expedienteId}/albaranes/preparar`, adminA, { method: "POST" });
+    expect(sinPdf.status).toBe(409);
+    expect(sinPdf.body.code).toBe("SIN_DOCUMENTO");
+
+    expect((await subirPdf(expedienteId, pdf)).status).toBe(201);
+    const r = await api(`/expedientes/${expedienteId}/albaranes/preparar`, adminA, { method: "POST" });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.encontrados).toEqual(["0501234", "0509999"]);
+    expect(r.body.preparados).toEqual(["0501234", "0509999"]);
+    // La genérica se señala para que quien mira decida, no se toca sola.
+    expect(r.body.genericas).toHaveLength(1);
+
+    // Cada una entra en la cola: al vaciarla están las dos analizadas.
+    await procesarPendientes(10);
+    const analisis = (await api(`/expedientes/${expedienteId}/analisis`, adminA)).body;
+    expect(analisis.albaranes.map((a: any) => a.numeroDocumento).sort()).toEqual(["0501234", "0509999"]);
+    for (const a of analisis.albaranes) expect(a.resultadoMatch).toBe("MATCH");
+
+    // Pedirlo otra vez no duplica nada.
+    const otra = await api(`/expedientes/${expedienteId}/albaranes/preparar`, adminA, { method: "POST" });
+    expect(otra.body.preparados).toEqual([]);
+    expect(otra.body.yaEstaban).toEqual(["0501234", "0509999"]);
+  });
+
+  it("16f · si el documento no trae ningún número de albarán, no se inventa ninguno", async () => {
+    const pdf = await pdfEscaneado();
+    const expedienteId = await importar([{ accion: "GRABAR" }]);
+    expect((await subirPdf(expedienteId, pdf)).status).toBe(201);
+
+    const r = await api(`/expedientes/${expedienteId}/albaranes/preparar`, adminA, { method: "POST" });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe("SIN_ALBARANES");
+    const ficha = await api(`/expedientes/${expedienteId}`, adminA);
+    expect(ficha.body.actuaciones).toHaveLength(1);
   });
 
   /* ── Casos 17 y 18 ─────────────────────────────────────────────────────── */

@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, ExternalLink, FileText, Plus, Upload } from "lucide-react";
+import { ArrowLeft, ExternalLink, FileText, ListPlus, Plus, Upload } from "lucide-react";
 import * as api from "../services/api";
 import { textoActuacion } from "../services/bandeja";
 import { abrirEnPestana, esVisible, nombreAdjunto, tamanoLegible } from "../services/documentos";
@@ -193,7 +193,12 @@ export default function Expediente() {
         />
       )}
       {pestana === "Albaranes" && (
-        <Albaranes expedienteId={e.id} actuaciones={ficha.actuaciones} puedeReanalizar={puede("therefore.actuacion.manage")} />
+        <Albaranes
+          expedienteId={e.id}
+          actuaciones={ficha.actuaciones}
+          puedeReanalizar={puede("therefore.actuacion.manage")}
+          onCambio={() => void cargar()}
+        />
       )}
       {pestana === "Documentos" && <Documentos expedienteId={e.id} />}
       {pestana === "Validaciones" && <ValidacionesDelExpediente expedienteId={e.id} />}
@@ -270,14 +275,45 @@ function Albaranes({
   expedienteId,
   actuaciones,
   puedeReanalizar,
+  onCambio,
 }: {
   expedienteId: string;
   actuaciones: Actuacion[];
   puedeReanalizar: boolean;
+  onCambio: () => void;
 }) {
   const { datos, error, cargar } = useAnalisis(expedienteId);
   const [subiendo, setSubiendo] = useState(false);
   const [errorSubida, setErrorSubida] = useState<string | null>(null);
+  const [preparando, setPreparando] = useState(false);
+  const [aviso, setAviso] = useState<string | null>(null);
+
+  /**
+   * Todos los albaranes del documento, de una vez.
+   *
+   * Para los correos que piden la factura entera sin listar sus albaranes: se
+   * lee el PDF, se crea una actuación por cada uno y se encolan sus análisis.
+   */
+  async function preparar() {
+    setPreparando(true);
+    setAviso(null);
+    setErrorSubida(null);
+    try {
+      const r = await api.prepararAlbaranes(expedienteId);
+      const partes = [`${r.preparados.length} albarán(es) preparado(s) de ${r.encontrados.length}`];
+      if (r.yaEstaban.length) partes.push(`${r.yaEstaban.length} ya estaban`);
+      if (r.genericas.length) {
+        partes.push("la actuación sin número sigue pendiente: descártala si ya no hace falta");
+      }
+      setAviso(`${partes.join(" · ")}.`);
+      await cargar();
+      onCambio();
+    } catch (e) {
+      setErrorSubida(e instanceof Error ? e.message : "No se han podido preparar los albaranes");
+    } finally {
+      setPreparando(false);
+    }
+  }
 
   async function subir(archivo: File | undefined) {
     if (!archivo) return;
@@ -318,6 +354,17 @@ function Albaranes({
             onChange={(ev) => void subir(ev.target.files?.[0])}
           />
         </label>
+        {puedeReanalizar && (
+          <button
+            onClick={() => void preparar()}
+            className={btnSecondary}
+            disabled={preparando}
+            title="Lee el PDF y crea una actuación por cada albarán que trae"
+          >
+            <ListPlus className="mr-1 inline h-3 w-3" />
+            {preparando ? "Preparando…" : "Preparar todos los albaranes"}
+          </button>
+        )}
         <button onClick={() => void cargar()} className={btnMini}>
           Actualizar
         </button>
@@ -329,10 +376,13 @@ function Albaranes({
       </div>
 
       {errorSubida && <ErrorBox>{errorSubida}</ErrorBox>}
+      {aviso && <Aviso tono="info">{aviso}</Aviso>}
 
       {vigentes.length === 0 && (
         <Aviso tono="info">
-          Ninguna actuación de este expediente pide un albarán, o todavía no ha llegado ninguna.
+          Ninguna actuación de este expediente pide un albarán todavía. Si el correo pedía la
+          factura entera, adjunta el PDF y pulsa «Preparar todos los albaranes»: se crea una
+          actuación por cada uno de los que trae el documento.
         </Aviso>
       )}
 
