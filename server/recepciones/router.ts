@@ -35,6 +35,7 @@ import * as buzon from "./buzon.ts";
 import * as ingesta from "./ingesta.ts";
 import { CLAVES, asumirExpedicionCompleta, avisoWhatsAppActivado, guardarTextoConfig, leerTextoConfig } from "./config.ts";
 import { contentSidAviso } from "./avisos.ts";
+import { cuerpoPlantilla } from "./domain/aviso.ts";
 import { hayCredencialesTwilio } from "../core/twilio.ts";
 import { hashDeFichero, leerDocumento } from "./storage.ts";
 import { leerDescripcion } from "./domain/articulos.ts";
@@ -713,12 +714,20 @@ export function createRecepcionesRouter(): Router {
     exigirPermiso("recepciones.view"),
     ruta(async (req, res) => {
       const ctx = contextoDe(req);
+      const [activado, empresaNombre, avisos] = await Promise.all([
+        avisoWhatsAppActivado(ctx.empresaId),
+        repo.nombreEmpresa(ctx.empresaId),
+        repo.listarAvisos(ctx.empresaId),
+      ]);
       res.json({
-        activado: await avisoWhatsAppActivado(ctx.empresaId),
+        activado,
         // Ni el SID ni las credenciales salen de aquí: sólo si están puestos.
         credenciales: hayCredencialesTwilio(),
         plantilla: contentSidAviso() !== "",
-        avisos: await repo.listarAvisos(ctx.empresaId),
+        // El cuerpo que hay que dar de alta en Twilio, para copiarlo de aquí:
+        // transcribirlo a mano es la forma de que el mensaje real diga otra cosa.
+        cuerpoPlantilla: cuerpoPlantilla(empresaNombre ?? "Recepciones"),
+        avisos,
       });
     })
   );
