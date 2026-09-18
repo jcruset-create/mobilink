@@ -586,6 +586,11 @@ export async function initRecepciones(): Promise<void> {
   await pool.query(`ALTER TABLE rcp_recepciones ADD COLUMN IF NOT EXISTS operario_id UUID;`);
   await pool.query(`ALTER TABLE rcp_recepciones ADD COLUMN IF NOT EXISTS operario_nombre TEXT;`);
 
+  // El móvil que venía escrito en las observaciones del albarán del proveedor
+  // («PEDRO 610473077»). Se guarda aparte porque un teléfono dentro de una
+  // frase no sirve para avisar a nadie, y en su columna sí.
+  await pool.query(`ALTER TABLE rcp_albaranes ADD COLUMN IF NOT EXISTS telefono_contacto TEXT;`);
+
   await registrarModuloRecepciones();
 }
 

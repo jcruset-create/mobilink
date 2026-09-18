@@ -20,6 +20,16 @@
  * Soledad manda los espacios como «+» (viene así de un formulario web), así
  * que «JORGE+PLANA» se guarda como «JORGE PLANA».
  *
+ * ── El teléfono, aparte ─────────────────────────────────────────────────────
+ *
+ * Lo que se teclea al pedir a veces lleva un móvil: «PEDRO+610473077». Ese
+ * número se saca a su propio campo, porque un teléfono en medio de una frase
+ * no sirve para llamar ni para avisar por WhatsApp, y en una columna sí.
+ *
+ * Sólo MÓVILES españoles (empiezan por 6 o 7, nueve cifras). Un fijo no vale
+ * para WhatsApp, y confundir un número de pedido con un teléfono sería peor
+ * que no encontrarlo: se avisaría a un desconocido.
+ *
  * ── Cómo se reconoce una fila de observación ────────────────────────────────
  *
  * Por su forma, no por su sitio: las columnas numéricas de la derecha están
@@ -83,6 +93,37 @@ function normalizar(v: string): string {
  */
 export function limpiarObservacion(texto: string): string {
   return texto.replace(/\+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Un móvil español dentro del texto: nueve cifras que empiezan por 6 o 7, con
+ * el prefijo +34 opcional y admitiendo espacios, puntos o guiones por medio,
+ * que es como los escribe la gente.
+ */
+const MOVIL = /(?:\+?34[\s.-]?)?([67](?:[\s.-]?\d){8})(?!\d)/;
+
+/** Las nueve cifras, sin adornos. */
+function soloDigitos(v: string): string {
+  return v.replace(/\D/g, "");
+}
+
+/**
+ * Parte una observación en lo que dice y a quién se llama.
+ *
+ *     «PEDRO 610473077» → { texto: "PEDRO", telefono: "610473077" }
+ *     «TALLER»          → { texto: "TALLER", telefono: null }
+ *     «610473077»       → { texto: "",       telefono: "610473077" }
+ */
+export function partirObservacion(observacion: string): { texto: string; telefono: string | null } {
+  const m = observacion.match(MOVIL);
+  if (!m) return { texto: observacion.trim(), telefono: null };
+  const telefono = soloDigitos(m[1]);
+  if (telefono.length !== 9) return { texto: observacion.trim(), telefono: null };
+  // Lo que queda al quitarlo, sin los separadores que lo rodeaban.
+  const texto = (observacion.slice(0, m.index) + observacion.slice((m.index ?? 0) + m[0].length))
+    .replace(/[\s.,;:/-]+/g, " ")
+    .trim();
+  return { texto, telefono };
 }
 
 /** ¿Esta fila es una observación? Devuelve su texto, o null si no lo es. */

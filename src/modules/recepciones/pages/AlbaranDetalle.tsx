@@ -113,6 +113,16 @@ export default function AlbaranDetalle() {
           <Dato rotulo="Expedición" valor={fmtFecha(albaran.fechaExpedicion)} />
           {/* Lo que el proveedor anotó al pie de su tabla: para quién viene. */}
           {albaran.observaciones && <Dato rotulo="Para" valor={<b className="text-sky-200">{albaran.observaciones}</b>} />}
+          {albaran.telefonoContacto && (
+            <Dato
+              rotulo="Teléfono"
+              valor={
+                <a href={`tel:${albaran.telefonoContacto}`} className="font-bold tabular-nums text-sky-200 underline">
+                  {albaran.telefonoContacto}
+                </a>
+              }
+            />
+          )}
           <Dato rotulo="Transportista" valor={albaran.transportista} />
           <Dato rotulo="Centro destino" valor={albaran.centroNombre} />
           <Dato rotulo="Origen del dato" valor={albaran.origen === "CORREO" ? "Correo del proveedor" : "Manual"} />

@@ -98,6 +98,8 @@ export type Albaran = {
   pedidoNumero: string;
   /** Cuándo se encargó. Los pedidos deducidos de un albarán no la saben. */
   pedidoFecha: string | null;
+  /** El móvil que venía en las observaciones del albarán, si lo traía. */
+  telefonoContacto: string | null;
   numeroProveedor: string;
   fechaExpedicion: string | null;
   transportista: string | null;
