@@ -1379,6 +1379,36 @@ Con eso, las tres plantillas de las cinco primeras facturas y las de este
 proveedor dan MATCH en todos los albaranes probados, con la aritmética de
 todas las líneas cuadrando y los totales de cabecera leídos.
 
+**El PDF con el albarán subrayado.** «Ver resaltado», al lado de «Ver el
+PDF», devuelve la factura ENTERA del proveedor con el bloque de ese albarán
+en amarillo translúcido: su cabecera —número, fecha, dirección de entrega—,
+sus líneas, sus descuentos y sus tasas, con el número más marcado. Sirve para
+reenviárselo al proveedor y para revisar de un vistazo: si el amarillo cae
+donde no debe, el parser lo leyó mal.
+
+`GET /albaranes/:id/documento/resaltado` compone el fichero al vuelo y no lo
+guarda; el original no se toca nunca. El documento se vuelve a leer en vez de
+tirar de la geometría guardada, porque un análisis de hace un mes lleva lo
+que entendía el parser de hace un mes. Sin albarán localizado no se devuelve
+nada (409 `SIN_RESALTADO`): pintar sería afirmar lo que no se sabe. Las
+cajas las decide `domain/documento/resaltado.ts`, que es puro; pintarlas,
+`documentos/resaltado.ts` con pdf-lib. Dos cortes: no se pinta la cabecera de
+columnas, y no se pinta una página donde el albarán no tiene ni una cifra
+—una sección llega hasta donde empieza la siguiente y arrastra lo que haya
+por medio—. Las páginas giradas se devuelven intactas: no se ha visto
+ninguna, y pintar a ciegas caería sobre otro albarán.
+
+**Eliminar de la bandeja: `DESCARTADO`.** Un correo que no iba a ninguna
+parte, una prueba, un expediente abierto por error. El botón de la papelera
+de cada fila lo saca de la bandeja y de los contadores —«todos» incluido—
+pero NO lo borra: el correo que lo abrió, sus documentos y su histórico se
+quedan, porque «¿y esto qué fue?» se pregunta meses después. Es un estado
+nuevo y terminal, distinto de CERRADO —que significa gestionado y cuenta
+como trabajo hecho—, se pide con `therefore.expediente.edit` y se deshace
+volviéndolo a PENDIENTE, que exige decir por qué. Se encuentra filtrando por
+estado o por su número, que es justo el trabajo que cuesta sacar algo de la
+papelera.
+
 **Descarga de documentos para revisión.** En Configuración, «Descargar
 documentos para revisión» baja en un zip los PDF cuyo análisis vigente quedó
 en REVISAR o ERROR en los últimos N días (`GET /documentos/revision?dias=`),

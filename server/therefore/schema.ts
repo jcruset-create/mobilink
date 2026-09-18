@@ -890,6 +890,17 @@ export async function initTherefore(): Promise<void> {
     ALTER TABLE thf_expedientes ADD COLUMN IF NOT EXISTS recalculado_el DATE;
   `);
 
+  // ── Descartar un expediente ───────────────────────────────────────────────
+  //
+  // «Esto no era una tarea»: sale de la bandeja y se queda en la base. Va por
+  // ALTER porque la tabla ya existe en producción y PostgreSQL no amplía un
+  // CHECK en sitio.
+  await pool.query(`
+    ALTER TABLE thf_expedientes DROP CONSTRAINT IF EXISTS thf_expedientes_estado_check;
+    ALTER TABLE thf_expedientes ADD CONSTRAINT thf_expedientes_estado_check
+      CHECK (estado IN ('NUEVO','PENDIENTE','EN_PROCESO','BLOQUEADO','RESUELTO','CERRADO','DESCARTADO'));
+  `);
+
   // ── De dónde salió cada pasada del buzón ──────────────────────────────────
   //
   // La fase 4a sólo distinguía temporizador y botón; la carga del histórico y
