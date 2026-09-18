@@ -1076,6 +1076,13 @@ async function avisarDeLaRecepcion(ctx: Contexto, resultado: ResultadoCierre): P
         centroNombre: resultado.recepcion.centroNombre || albaran.centroNombre,
         resultado: resultado.recepcion.resultado,
         empresaNombre: empresaNombre ?? "Recepciones",
+        // Qué ha llegado, con la misma descripción que sale en el papel: la
+        // del artículo mapeado si lo hay, y si no la del proveedor leída.
+        lineas: resultado.lineas.map((l) => ({
+          descripcion: l.productoTexto ?? leerDescripcion(l.descripcionProveedor).bonito,
+          cantidad: l.cantidadRecibida,
+        })),
+        albaranNumero: albaran.numeroProveedor,
       },
       activado
     );
