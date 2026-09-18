@@ -230,6 +230,101 @@ export function filaDeTabla(linea: string): LineaLeida | null {
 }
 
 /**
+ * Vuelve a juntar las filas que llegan partidas en varias líneas.
+ *
+ * La tabla del correo es HTML, y el texto plano que la acompaña no siempre
+ * pone cada fila en una línea. Basta con que una celda lleve un salto dentro
+ * —una nota debajo del producto, «pedido custodia»— para que la fila llegue
+ * así:
+ *
+ *     2.00	245/35X20 …
+ *     pedido custodia	168.20
+ *
+ * Ninguna de las dos es una fila: a la primera le falta el importe y la
+ * segunda no empieza por la cantidad. El pedido entraba entero salvo por lo
+ * único que importa, la mercancía, y se quedaba esperando a una persona.
+ *
+ * Se juntan por el RESULTADO, no por la forma: una línea que empieza por un
+ * número y no acaba en importe se prueba con la siguiente, y con las dos
+ * siguientes —que es como llega cuando cada celda va en su línea—, y sólo se
+ * sustituye si lo que sale es una fila de verdad. Si no sale, se deja tal
+ * cual: la regla no puede inventar mercancía donde no la hay.
+ *
+ * Sólo se aplica DENTRO de la tabla, desde «El contenido del pedido es:» o
+ * desde su cabecera de columnas. Antes está la dirección de entrega, que
+ * empieza por el código postal y acabaría pegada a lo que venga detrás.
+ *
+ * La nota que venía en la celda se queda dentro de la descripción. Es lo que
+ * el proveedor ha escrito del artículo y quien recibe la mercancía tiene que
+ * verlo; tirarla para dejar la descripción limpia sería perder justo el dato
+ * que no está en ningún otro sitio.
+ */
+const ABRE_LA_TABLA = ["EL CONTENIDO DEL PEDIDO", "CANTIDAD", "DESCRIPCION", "PRODUCTO", "ARTICULO"];
+
+/** Empieza por un número: la celda de la cantidad, sola o con lo que la sigue. */
+const EMPIEZA_POR_CANTIDAD = /^-?\d+(?:[.,]\d+)?(?:\s|$)/;
+
+/** Cuántas líneas de detrás se prueban: la descripción y el importe. */
+const MAX_LINEAS_A_JUNTAR = 2;
+
+export function recomponerFilas(lineas: string[]): string[] {
+  const desde = lineas.findIndex((l) => {
+    const n = normalizar(l);
+    return ABRE_LA_TABLA.some((a) => n === a || n.startsWith(`${a} `) || n.startsWith(`${a}:`));
+  });
+  if (desde < 0) return lineas;
+
+  const salida = lineas.slice(0, desde);
+  let i = desde;
+  while (i < lineas.length) {
+    const l = lineas[i];
+    if (!filaDeTabla(l) && EMPIEZA_POR_CANTIDAD.test(l)) {
+      let juntadas = 0;
+      for (let n = 1; n <= MAX_LINEAS_A_JUNTAR && i + n < lineas.length; n += 1) {
+        // Un hueco separa bloques, y una etiqueta abre otro campo: la fila no
+        // salta por encima de ninguno de los dos.
+        if (!lineas[i + n] || etiquetaDe(lineas[i + n])) break;
+        const candidato = lineas.slice(i, i + n + 1).join(" ").replace(/\s+/g, " ").trim();
+        if (filaDeTabla(candidato)) {
+          salida.push(candidato);
+          juntadas = n;
+          break;
+        }
+      }
+      if (juntadas > 0) {
+        i += juntadas + 1;
+        continue;
+      }
+    }
+    salida.push(l);
+    i += 1;
+  }
+  return salida;
+}
+
+/**
+ * Lo que venía donde tenía que estar la tabla, para el motivo de la revisión.
+ *
+ * Cuando un pedido se queda sin líneas legibles, «no trae líneas de producto
+ * legibles» no dice nada: hay que abrir el correo para ver qué llegó. Con las
+ * primeras líneas del bloque de contenido delante se sabe de un vistazo si es
+ * que el proveedor cambió la plantilla, si la fila llegó partida o si
+ * sencillamente el correo venía vacío.
+ */
+export function muestraDelContenido(texto: string, maxLineas = 3, maxLargo = 200): string | null {
+  const ls = recomponerFilas(lineas(texto));
+  const desde = ls.findIndex((l) => normalizar(l).startsWith("EL CONTENIDO DEL PEDIDO"));
+  // Los títulos de columna no dicen nada: lo que hace falta ver son las filas.
+  const titulos = new Set(["CANTIDAD", "DESCRIPCION", "IMPORTE", "PRODUCTO", "ARTICULO", "PRECIO", "REFERENCIA"]);
+  const utiles = (desde < 0 ? ls : ls.slice(desde + 1))
+    .filter((l) => l && !titulos.has(normalizar(l)))
+    .slice(0, maxLineas);
+  if (utiles.length === 0) return null;
+  const muestra = utiles.join(" / ");
+  return muestra.length > maxLargo ? `${muestra.slice(0, maxLargo)}…` : muestra;
+}
+
+/**
  * Lo que la tabla cobra pero no llega al muelle: el descuento por unidad y la
  * gestión de neumáticos fuera de uso. Se leen y se guardan aparte para que se
  * vean, pero no se convierten en líneas a contar.
@@ -271,7 +366,7 @@ function tokenizar(texto: string): Token[] {
     if (actual) tokens.push({ campo: actual.campo, valor: actual.valores.join("\n").trim() });
     actual = null;
   };
-  for (const l of lineas(texto)) {
+  for (const l of recomponerFilas(lineas(texto))) {
     const fila = filaDeTabla(l);
     if (fila) {
       cerrar();

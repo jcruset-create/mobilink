@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { almacenEnProsa, asuntoLimpio, detectarTipo, esConcepto, filaDeTabla, localidadDe, parsearCorreo, pedidosEnProsa, remitenteReenviado, usuarioEnProsa } from "./index.ts";
+import { almacenEnProsa, asuntoLimpio, detectarTipo, esConcepto, filaDeTabla, localidadDe, muestraDelContenido, parsearCorreo, pedidosEnProsa, recomponerFilas, remitenteReenviado, usuarioEnProsa } from "./index.ts";
 
 /** El correo de pedido tal y como lo describe el encargo (valor en la línea siguiente). */
 const PEDIDO_SOLEDAD = `
@@ -478,5 +478,129 @@ describe("las frases del pedido, sueltas", () => {
     expect(almacenEnProsa("expedida por nuestro centro logístico 227 - MANRESA")).toBe("227 - MANRESA");
     // Con la etiqueta y el valor debajo no hay nada en la misma línea: manda la etiqueta.
     expect(almacenEnProsa("Centro logístico:\n227 - ALMACEN MANRESA")).toBeNull();
+  });
+});
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * El pedido que se quedó pendiente de revisión: «El correo no trae líneas de
+ * producto legibles».
+ *
+ * Un pedido normal, con una sola línea, salvo por una nota que el proveedor
+ * escribe DEBAJO del artículo, dentro de la misma celda. El salto de línea de
+ * esa celda parte la fila en dos: arriba la cantidad y la descripción, sin
+ * importe; debajo la nota y el importe, sin cantidad. Ninguna de las dos es
+ * una fila, y el pedido entraba entero menos lo único que hay que contar en
+ * el muelle.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+const ASUNTO_PEDIDO_PARTIDO = "Aviso de nuevo Pedido número: B -2026-5700253 con fecha 18/09/2026.";
+
+const PEDIDO_PARTIDO = ` Notificación Pedido Recibido
+
+Estimado COMERCIAL SEA, S.A.,
+acabamos de registrar con éxito un pedido en nuestro sistema.
+
+Tu número de pedido es B -2026-5700253
+Realizado por comercialseatarragona
+
+El pedido será entregado a:
+COMERCIAL SEA, S.A.
+PIRIU CLAR C/COURE 27
+43006 TARRAGONA
+TARRAGONA ESPAÑA
+
+El contenido del pedido es:
+
+Cantidad
+Descripción
+Importe
+2.00	245/35X20 PIREL.PZ4 95Y+KS s-i
+pedido custodia	168.20
+La mercancía será expedida por nuestro centro logísitico  1 - ALMACEN CENTRAL-ASPE ALICANTE
+La entrega se realizará a través de TRANSAHER
+
+Cuando la mercancía sea emitida por nuestro centro logístico, recibirás otro
+correo con la copia del albarán de salida y más información sobre la entrega.
+
+Un saludo,
+
+Grupo Soledad
+`;
+
+describe("parsearCorreo · una fila partida por una nota dentro de la celda", () => {
+  const r = parsearCorreo(ASUNTO_PEDIDO_PARTIDO, PEDIDO_PARTIDO);
+
+  it("junta las dos mitades y lee la línea entera", () => {
+    expect(r.tipo).toBe("PEDIDO");
+    expect(r.pedido!.lineas).toEqual([
+      {
+        cantidad: 2,
+        // La nota del proveedor se queda dentro de la descripción: es lo que
+        // ha escrito del artículo y quien recibe la mercancía tiene que verlo.
+        descripcion: "245/35X20 PIREL.PZ4 95Y+KS s-i pedido custodia",
+        precioCentimos: 16820,
+        referencia: null,
+      },
+    ]);
+    expect(r.avisos).toEqual([]);
+  });
+
+  it("lo demás del correo se lee como siempre", () => {
+    expect(r.pedido!.numeroPedido).toBe("B-2026-5700253");
+    expect(r.pedido!.fecha).toBe("2026-09-18");
+    expect(r.pedido!.destinoLocalidad).toBe("TARRAGONA");
+    expect(r.pedido!.almacenOrigen).toBe("1 - ALMACEN CENTRAL-ASPE ALICANTE");
+    expect(r.pedido!.transportista).toBe("TRANSAHER");
+  });
+});
+
+describe("recomponerFilas", () => {
+  const tabla = (...filas: string[]) => ["El contenido del pedido es:", "Cantidad", "Descripción", "Importe", ...filas];
+
+  it("junta la fila que llega con una celda por línea", () => {
+    expect(recomponerFilas(tabla("2.00", "245/70X17.5 HANKOOK AH35 136M", "248.45"))).toContain(
+      "2.00 245/70X17.5 HANKOOK AH35 136M 248.45"
+    );
+  });
+
+  it("deja en paz la fila que ya viene entera", () => {
+    const filas = tabla("2.00 245/70X17.5 HANKOOK AH35 136M 248.45", "Pulsar enlace para ver albarán adjunto.");
+    expect(recomponerFilas(filas)).toEqual(filas);
+  });
+
+  it("no junta por encima de una línea en blanco ni inventa filas donde no las hay", () => {
+    expect(recomponerFilas(tabla("2.00 245/70X17.5 HANKOOK AH35 136M", "", "248.45"))).toEqual(
+      tabla("2.00 245/70X17.5 HANKOOK AH35 136M", "", "248.45")
+    );
+    expect(recomponerFilas(tabla("9:00 -20:00 horas, nuestro", "e-mail b2b@gruposoledad.com"))).toEqual(
+      tabla("9:00 -20:00 horas, nuestro", "e-mail b2b@gruposoledad.com")
+    );
+  });
+
+  it("antes de la tabla no toca nada: la dirección de entrega empieza por el código postal", () => {
+    const direccion = ["El pedido será entregado a:", "COMERCIAL SEA, S.A.", "43006 TARRAGONA", "TARRAGONA ESPAÑA"];
+    expect(recomponerFilas(direccion)).toEqual(direccion);
+  });
+});
+
+describe("muestraDelContenido", () => {
+  it("enseña lo que había donde va la tabla", () => {
+    // Ya recompuesta: el motivo enseña la fila entera, no las dos mitades.
+    expect(muestraDelContenido(PEDIDO_PARTIDO)).toContain("245/35X20 PIREL.PZ4 95Y+KS s-i pedido custodia 168.20");
+  });
+
+  it("sin bloque de contenido, las primeras líneas del correo", () => {
+    expect(muestraDelContenido("Hola\n\nesto no es un pedido")).toBe("Hola / esto no es un pedido");
+  });
+
+  it("un correo vacío no tiene nada que enseñar", () => {
+    expect(muestraDelContenido("   \n\n  ")).toBeNull();
+  });
+});
+
+describe("recomponerFilas · lo que no debe juntar", () => {
+  it("no salta por encima de una etiqueta: la plantilla con «Cantidad:» y el valor debajo", () => {
+    const con = ["Cantidad:", "2", "Producto:", "245/70X17.5 HANKOOK AH35 136M", "Precio unitario:", "248,45 €"];
+    expect(recomponerFilas(con)).toEqual(con);
   });
 });
