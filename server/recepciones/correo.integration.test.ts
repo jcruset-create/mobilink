@@ -166,6 +166,49 @@ function pdfDePrueba(texto: string): Promise<Buffer> {
   return listo;
 }
 
+/**
+ * La entrega de INSA TURBO en PDF, como la de verdad (D26-26031188): sus datos
+ * de cabecera con la raya de guiones por medio, dos pedidos del proveedor con
+ * sus líneas, las observaciones debajo de cada artículo y el cierre de
+ * asteriscos. Este formato se lee por líneas, así que no hace falta cuadrar
+ * columnas.
+ */
+function pdfEntregaInsa(numero = "26031188"): Promise<Buffer> {
+  const doc = new PDFDocument({ size: "A4" });
+  const trozos: Buffer[] = [];
+  doc.on("data", (c: Buffer) => trozos.push(c));
+  const listo = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(trozos))));
+  doc.fontSize(7);
+  const lineas = [
+    "Datos de cliente",
+    "COMERCIAL SEA, S.A.",
+    "Ctra. Aspe - Novelda, 38 PG.IND. RIU CLAR C/ COURE, 7",
+    "03680, Aspe 43006 TARRAGONA",
+    "-".repeat(120),
+    "Entrega Nº Fecha S/Referencia Volumen Neto(Kg) Bruto(Kg)",
+    "-".repeat(120),
+    `D26 ${numero} 18/09/2026 333778 0,00`,
+    "-".repeat(120),
+    "Referencias Descripción Cantidad Precio % Dto Total",
+    "PEDIDO Nº 26001072 FECHA 12/08/2026",
+    "021300001012 295/80X22.5 INSA TURBO K25 BASE 1ª 10,000UD 190,000 EUR 0,00 1.900,000",
+    "CASCOS HANKOOK o CONTINENTAL, PED. ALBERTO",
+    "TALLER RIU CLAR",
+    "PEDIDO Nº 26001215 FECHA 18/09/2026",
+    "021000000259 315/80X22.5 INSA TURBO TDO-3 SM 1ªOT 4,000UD 140,000 EUR 0,00 560,000",
+    "CUBIERTAS PARA TMA, PRECIO ESPECIAL",
+    "*",
+    "AGENCIA TRANSAHER A RIU CLAR. PED. JORDI",
+    "*".repeat(76),
+    "CAMION (TRUCK) 26,000",
+    "IMPORTE BRUTO DESCUENTO BASE IMPONIBLE % IVA IMPORTE IVA LÍQUIDO",
+    "2.460,000 0,000 2.460,000 21,000 516,600 2.976,600 EUR",
+  ];
+  lineas.forEach((l, i) => doc.text(l, 25, 60 + i * 15, { lineBreak: false }));
+  doc.end();
+  return listo;
+}
+
 type Mensaje = { uid: number; source: Buffer; seen: boolean; date: Date };
 let siguienteUid = 1;
 
@@ -629,6 +672,67 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
     expect(re.status).toBe(200);
     expect(["IGNORADO", "DUPLICADO"]).toContain(re.body.resultado);
     expect((await api("/pedidos")).body.pedidos).toHaveLength(0);
+  });
+
+  describe("la entrega de INSA TURBO viene en el PDF adjunto, no en el correo", () => {
+    it("el correo sin datos entra igual: la entrega se lee del adjunto y aparece en pendientes", async () => {
+      const numero = unico("260311");
+      const m = await mensaje({
+        asunto: `Entrega D26-${numero}`,
+        // El cuerpo no dice nada: todo está en el PDF.
+        texto: "Adjuntamos el albarán de entrega.",
+        pdf: await pdfEntregaInsa(numero),
+      });
+      const r = await importarEml(m.source);
+      expect(r.body.resultado, JSON.stringify(r.body)).toBe("procesado");
+      expect(r.body.albaranNumero).toBe(`D26-${numero}`);
+
+      // En la bandeja, listo para recepcionar, con su material y su centro.
+      const bandeja = await api("/bandeja");
+      const fila = bandeja.body.albaranes.find((a: any) => a.numeroProveedor === `D26-${numero}`);
+      expect(fila, JSON.stringify(bandeja.body.albaranes)).toBeTruthy();
+      expect(fila.centroNombre).toMatch(/TARRAGONA/i);
+      expect(fila.articulos.map((x: any) => x.cantidadExpedida)).toEqual([10, 4]);
+      expect(fila.articulos.map((x: any) => x.descripcionProveedor).join(" · ")).toMatch(/295\/80X22\.5 INSA TURBO K25 BASE/);
+
+      // El .eml devuelve números, no identificadores: se tira del de la bandeja.
+      const ficha = await api(`/albaranes/${fila.id}`);
+      expect(ficha.body.albaran.fechaExpedicion).toBe("2026-09-18");
+      // El PDF adjunto queda como ORIGINAL, y de él salen las observaciones.
+      expect(ficha.body.documentos.some((d: any) => d.tipo === "ALBARAN_ORIGINAL")).toBe(true);
+      expect(ficha.body.albaran.observaciones).toContain("TALLER RIU CLAR");
+      expect(ficha.body.albaran.telefonoContacto).toBeNull();
+
+      // Trae DOS pedidos del proveedor: el pedido se deduce de la entrega y
+      // los suyos quedan escritos, en vez de colgarlo de uno al azar.
+      const pedido = await api(`/pedidos/${ficha.body.albaran.pedidoId}`);
+      expect(pedido.body.pedido.numeroProveedor).toBe(`D26-${numero}`);
+      expect(pedido.body.pedido.derivadoDeAlbaran).toBe(true);
+      expect(pedido.body.pedido.observaciones).toMatch(/26001072, 26001215/);
+      expect(pedido.body.lineas).toHaveLength(2);
+
+      // Y queda dicho de dónde salieron los datos.
+      const correos = await api("/correo");
+      const correoGuardado = correos.body.correos.find((c: any) => c.albaranId === fila.id);
+      expect(correoGuardado.tipo).toBe("ALBARAN");
+      expect((correoGuardado.avisos ?? []).join(" ")).toMatch(/PDF adjunto/);
+    });
+
+    it("el mismo correo dos veces no duplica nada", async () => {
+      const numero = unico("260312");
+      const m = await mensaje({ asunto: `Entrega D26-${numero}`, texto: "Adjuntamos el albarán.", pdf: await pdfEntregaInsa(numero) });
+      expect((await importarEml(m.source)).body.resultado).toBe("procesado");
+      const otra = await importarEml(m.source);
+      expect(otra.body.resultado).toBe("duplicado");
+      expect((await api("/bandeja")).body.albaranes.filter((a: any) => a.numeroProveedor === `D26-${numero}`)).toHaveLength(1);
+    });
+
+    it("un PDF que no es una entrega reconocible deja el correo como antes: no se inventa un albarán", async () => {
+      const m = await mensaje({ asunto: "Entrega", texto: "Adjuntamos el albarán.", pdf: await pdfDePrueba("Esto no es una entrega de nadie") });
+      const r = await importarEml(m.source);
+      expect(r.body.resultado).toBe("ignorado");
+      expect((await api("/bandeja")).body.albaranes).toHaveLength(0);
+    });
   });
 
   it("un pedido sin líneas legibles queda en revisión, no se crea a medias", async () => {

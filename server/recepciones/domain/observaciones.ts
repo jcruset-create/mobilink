@@ -87,22 +87,22 @@ const COLUMNAS_NUMERICAS = 3;
 /** Abre la tabla de productos de Soledad; lo que va antes es membrete. */
 const CABECERA = /ARTICULO.*DESCRIPCION.*CANTIDAD/;
 /** La cierra: empiezan los totales. Vale para las dos plantillas. */
-const TOTALES = /IMPORTE BRUTO/;
+export const TOTALES = /IMPORTE BRUTO/;
 
 /* ── La otra plantilla del grupo: INSA TURBO ──────────────────────────────── */
 
 /** «Referencias Descripción Cantidad Precio % Dto Total» abre su tabla. */
-const CABECERA_INSA = /REFERENCIAS.*DESCRIPCION.*CANTIDAD/;
+export const CABECERA_INSA = /REFERENCIAS.*DESCRIPCION.*CANTIDAD/;
 /** La fila de asteriscos con la que INSA cierra el cuerpo del albarán. */
-const FIN_INSA = /^\*{10,}$/;
+export const FIN_INSA = /^\*{10,}$/;
 /** «PEDIDO Nº 26001072 FECHA 12/08/2026»: agrupa líneas, no es observación. */
-const GRUPO_INSA = /^PEDIDO\s+N[º°O]?\s/;
+export const GRUPO_INSA = /^PEDIDO\s+N[º°O]?\s/;
 /** La referencia de artículo de INSA: «021300001012». */
-const REFERENCIA_INSA = /^\d{9,}$/;
+export const REFERENCIA_INSA = /^\d{9,}$/;
 /** Su cantidad va pegada a la unidad: «10,000UD». */
-const CANTIDAD_INSA = /\d+(?:[.,]\d+)?\s*UD\b/;
+export const CANTIDAD_INSA = /\d+(?:[.,]\d+)?\s*UD\b/;
 /** Filas de adorno: «*», «-----», «=====». */
-const ADORNO = /^[*\-=._]+$/;
+export const ADORNO = /^[*\-=._]+$/;
 
 /** «1.039,00», «-4», «6,05», «0». Lo que ocupa una celda de número. */
 function comoNumero(palabra: string): number | null {
@@ -112,7 +112,7 @@ function comoNumero(palabra: string): number | null {
 }
 
 /** Sin acentos y en mayúsculas, para comparar. */
-function normalizar(v: string): string {
+export function normalizar(v: string): string {
   return v.normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase();
 }
 

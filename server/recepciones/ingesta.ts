@@ -12,6 +12,13 @@
  * funciones que el alta manual (`service.crearPedido`, `service.crearAlbaran`):
  * el correo no tiene una lógica de negocio propia, sólo lee y llama.
  *
+ * ── El cuerpo, y si no el PDF adjunto ───────────────────────────────────────
+ *
+ * Soledad cuenta todo en el cuerpo del correo y deja el PDF en un enlace. INSA
+ * TURBO, del mismo grupo, manda el cuerpo casi vacío y la entrega ADJUNTA en
+ * PDF. Así que cuando del cuerpo no sale un albarán se lee el adjunto, y lo
+ * leído se le da la MISMA forma: de ahí para abajo nada sabe por dónde entró.
+ *
  * ── La idempotencia ─────────────────────────────────────────────────────────
  *
  * El mismo correo dos veces tiene que dar exactamente lo mismo que una. La
@@ -47,7 +54,9 @@ import { createHash } from "node:crypto";
 import { asumirExpedicionCompleta } from "./config.ts";
 import { descripcionNormalizada } from "./domain/articulos.ts";
 import { pendienteDeExpedir } from "./domain/cantidades.ts";
-import { muestraDelContenido, normalizar, parsearCorreo, remitenteReenviado, type CorreoParseado } from "./domain/correo/index.ts";
+import { muestraDelContenido, normalizar, parsearCorreo, remitenteReenviado, type AlbaranLeido, type CorreoParseado } from "./domain/correo/index.ts";
+import { entregaInsaDelPdf } from "./documentos/entregaInsa.ts";
+import type { EntregaInsa } from "./domain/insa.ts";
 import { normalizarNumero } from "./domain/numero.ts";
 import { ErrorRecepciones } from "./errors.ts";
 import * as repo from "./repository.ts";
@@ -111,6 +120,72 @@ async function proveedorDe(empresaId: string, remitente: string): Promise<repo.P
   const sinLista = proveedores.filter((p) => p.remitentesCorreo.length === 0);
   if (proveedores.length === 1 && sinLista.length === 1) return sinLista[0];
   return null;
+}
+
+/* ── Cuando los datos vienen en el PDF adjunto, no en el correo ──────────── */
+
+/**
+ * ¿Del cuerpo del correo ha salido un albarán con el que se pueda trabajar?
+ *
+ * Soledad lo cuenta todo en el cuerpo. INSA TURBO manda el cuerpo casi vacío y
+ * la entrega ADJUNTA en PDF: si no se mira el adjunto, de su correo no sale
+ * nada que meter en la bandeja.
+ */
+function sirveComoAlbaran(leido: CorreoParseado): boolean {
+  return leido.tipo === "ALBARAN" && Boolean(leido.albaran?.numeroAlbaran);
+}
+
+/** La primera entrega de INSA que se reconozca entre los PDF adjuntos. */
+function entregaDeLosAdjuntos(adjuntos: AdjuntoPdf[]): EntregaInsa | null {
+  for (const a of adjuntos) {
+    if (a.contenido.subarray(0, 5).toString() !== "%PDF-") continue;
+    const entrega = entregaInsaDelPdf(a.contenido);
+    if (entrega?.numeroAlbaran && entrega.lineas.length > 0) return entrega;
+  }
+  return null;
+}
+
+/**
+ * La entrega leída del PDF, con la misma forma que si hubiera salido del
+ * cuerpo del correo: así el resto de la ingesta no se entera de por dónde
+ * entró y no hay dos caminos que mantener.
+ *
+ * Una entrega de INSA trae VARIOS pedidos del proveedor. Cuando es uno, se usa
+ * su número y todo sigue como siempre —si su correo llega después, lo
+ * confirma—. Cuando son varios no se puede colgar el albarán de uno solo ni
+ * repartirlo por nuestra cuenta: el pedido se deduce de la ENTREGA, con su
+ * número, y los del proveedor quedan escritos en las observaciones del pedido.
+ */
+function comoAlbaranLeido(entrega: EntregaInsa): AlbaranLeido {
+  const numeros = entrega.pedidos.map((p) => p.numero);
+  return {
+    numeroAlbaran: entrega.numeroAlbaran,
+    numeroPedido: numeros.length === 1 ? numeros[0] : entrega.numeroAlbaran,
+    numerosPedido: numeros,
+    fecha: entrega.fecha,
+    // Su columna de transporte viene vacía, y lo que dice la observación
+    // («AGENCIA TRANSAHER A RIU CLAR») es una frase, no un campo.
+    transportista: null,
+    destino: entrega.destinoLocalidad,
+    destinoLocalidad: entrega.destinoLocalidad,
+    cliente: null,
+    cantidadExpedida: null,
+    lineas: entrega.lineas.map((l) => ({
+      cantidad: l.cantidad,
+      descripcion: l.descripcion,
+      precioCentimos: l.precioCentimos,
+      referencia: l.referencia,
+    })),
+    conceptos: [],
+    enlacesPdf: [],
+  };
+}
+
+/** Lo que se le escribe al pedido deducido de una entrega con varios pedidos. */
+function notaDePedidosDelProveedor(entrega: EntregaInsa): string | null {
+  const numeros = entrega.pedidos.map((p) => p.numero);
+  if (numeros.length < 2) return null;
+  return `Deducido de la entrega ${entrega.numeroAlbaran}, que trae ${numeros.length} pedidos del proveedor: ${numeros.join(", ")}.`;
 }
 
 /* ── El caso de uso ──────────────────────────────────────────────────────── */
@@ -194,8 +269,19 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
       return terminar({ resultado: "IGNORADO", motivo: `El remitente ${quien} no es de ningún proveedor conocido.` });
     }
 
-    const leido = parsearCorreo(correo.asunto, correo.texto);
-    const base = { proveedorId: proveedor.id, tipo: leido.tipo, datosExtraidos: leido };
+    let leido = parsearCorreo(correo.asunto, correo.texto);
+    // Si del cuerpo no sale un albarán, se mira el PDF adjunto: hay
+    // proveedores que no cuentan nada en el correo y lo mandan todo ahí.
+    const entrega = sirveComoAlbaran(leido) ? null : entregaDeLosAdjuntos(adjuntosPdf);
+    if (entrega) {
+      leido = {
+        tipo: "ALBARAN",
+        pedido: null,
+        albaran: comoAlbaranLeido(entrega),
+        avisos: [...leido.avisos, "El albarán se ha leído del PDF adjunto: el correo no traía los datos."],
+      };
+    }
+    const base = { proveedorId: proveedor.id, tipo: leido.tipo, datosExtraidos: entrega ? { ...leido, entrega } : leido };
     if (leido.tipo === "DESCONOCIDO") {
       return terminar({ resultado: "IGNORADO", motivo: "No se reconoce como pedido ni como albarán.", avisos: leido.avisos }, base);
     }
@@ -316,7 +402,9 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
       // varios, un albarán no puede ir contra uno solo y repartirlo no lo
       // decide el sistema.
       const distintos = Array.from(new Set(a.numerosPedido.map((n) => normalizarNumero(n)).filter(Boolean)));
-      if (distintos.length > 1) {
+      // En la entrega leída del PDF sí se sabe qué línea es de qué pedido, y el
+      // pedido que se deduce es la entrega entera: no hay nada que repartir.
+      if (distintos.length > 1 && !entrega) {
         return terminar(
           {
             resultado: "PENDIENTE_REVISION",
@@ -353,6 +441,7 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
           transportista: a.transportista,
           destinoTexto: a.destino,
           clienteProveedor: a.cliente,
+          observaciones: entrega ? notaDePedidosDelProveedor(entrega) : null,
           lineas: mercancia.map((l) => ({
             descripcionProveedor: l.descripcion!,
             referenciaProveedor: l.referencia,
