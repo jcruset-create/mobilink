@@ -541,6 +541,89 @@ export async function actualizarProveedor(
   return rows[0] ? aProveedor(rows[0]) : null;
 }
 
+/* ── Avisos a quien espera la mercancía ──────────────────────────────────── */
+
+export type Aviso = {
+  id: string;
+  recepcionId: string;
+  albaranId: string;
+  recepcionNumero: string;
+  albaranNumero: string;
+  canal: string;
+  destinatario: string | null;
+  telefono: string | null;
+  estado: "ENVIADO" | "OMITIDO" | "ERROR";
+  motivo: string | null;
+  referenciaExterna: string | null;
+  creadoNombre: string | null;
+  createdAt: string;
+};
+
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+const aAviso = (r: any): Aviso => ({
+  id: r.id,
+  recepcionId: r.recepcion_id,
+  albaranId: r.albaran_id,
+  recepcionNumero: r.recepcion_numero ?? "",
+  albaranNumero: r.albaran_numero ?? "",
+  canal: r.canal,
+  destinatario: r.destinatario ?? null,
+  telefono: r.telefono ?? null,
+  estado: r.estado,
+  motivo: r.motivo ?? null,
+  referenciaExterna: r.referencia_externa ?? null,
+  creadoNombre: r.creado_nombre ?? null,
+  createdAt: iso(r.created_at)!,
+});
+
+export async function anotarAviso(
+  empresaId: string,
+  datos: {
+    recepcionId: string;
+    albaranId: string;
+    destinatario: string | null;
+    telefono: string | null;
+    estado: "ENVIADO" | "OMITIDO" | "ERROR";
+    motivo: string | null;
+    referenciaExterna: string | null;
+    creadoPor: string | null;
+    creadoNombre: string | null;
+  },
+  ejecutor?: Ejecutor
+): Promise<void> {
+  await db(ejecutor).query(
+    `INSERT INTO rcp_avisos
+       (empresa_id, recepcion_id, albaran_id, destinatario, telefono, estado, motivo, referencia_externa, creado_por, creado_nombre)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [
+      empresaId,
+      datos.recepcionId,
+      datos.albaranId,
+      datos.destinatario,
+      datos.telefono,
+      datos.estado,
+      datos.motivo,
+      datos.referenciaExterna,
+      datos.creadoPor,
+      datos.creadoNombre,
+    ]
+  );
+}
+
+export async function listarAvisos(empresaId: string, limite = 50, ejecutor?: Ejecutor): Promise<Aviso[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT v.*, r.numero AS recepcion_numero, a.numero_proveedor AS albaran_numero
+       FROM rcp_avisos v
+       JOIN rcp_recepciones r ON r.id = v.recepcion_id
+       JOIN rcp_albaranes a ON a.id = v.albaran_id
+      WHERE v.empresa_id = $1
+      ORDER BY v.created_at DESC
+      LIMIT $2`,
+    [empresaId, Math.min(Math.max(limite, 1), 200)]
+  );
+  return rows.map(aAviso);
+}
+
 /* ── Mapeo de artículos ──────────────────────────────────────────────────── */
 
 export async function mapeoConfirmado(
@@ -1878,6 +1961,23 @@ export async function listarCentros(empresaId: string): Promise<Centro[]> {
   );
   /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
   return rows.map((r: any) => ({ id: r.id, nombre: r.nombre, activo: Boolean(r.activo) }));
+}
+
+/**
+ * El nombre de nuestra empresa, el que firma los avisos. Nunca lanza y puede
+ * devolver `null`: la base de una instalación suelta no tiene `app_empresas`,
+ * y quedarse sin firma no es motivo para no avisar.
+ */
+export async function nombreEmpresa(empresaId: string): Promise<string | null> {
+  try {
+    const { rows: hay } = await pool.query(`SELECT to_regclass('public.app_empresas') IS NOT NULL AS hay`);
+    if (!hay[0]?.hay) return null;
+    const { rows } = await pool.query<{ nombre: string | null }>(`SELECT nombre FROM app_empresas WHERE id = $1`, [empresaId]);
+    const nombre = (rows[0]?.nombre ?? "").trim();
+    return nombre || null;
+  } catch {
+    return null;
+  }
 }
 
 /* ══ Fase 2: correos del proveedor ═════════════════════════════════════════ */

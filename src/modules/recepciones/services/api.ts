@@ -14,6 +14,7 @@ import type {
   Bootstrap,
   Contadores,
   Correo,
+  EstadoAvisos,
   EstadoBuzon,
   ResultadoEml,
   ResultadoPasada,
@@ -181,6 +182,11 @@ export const actualizarProveedor = (id: string, datos: Partial<{ codigo: string;
 export const listarMapeos = (proveedorId?: string) => pedir<{ mapeos: MapeoArticulo[] }>(`/mapeo${query({ proveedorId })}`);
 export const confirmarMapeo = (datos: { proveedorId: string; descripcionProveedor: string; productoTexto?: string; productoId?: string; ean?: string; referenciaProveedor?: string }) =>
   pedir<{ mapeo: MapeoArticulo }>("/mapeo", json(datos));
+
+/* ── Avisos por WhatsApp ─────────────────────────────────────────────────── */
+
+export const estadoAvisos = () => pedir<EstadoAvisos>("/avisos");
+export const guardarConfigAvisos = (activado: boolean) => pedir<{ activado: boolean }>("/avisos/config", json({ activado }, "PUT"));
 
 /* ── Fase 2: correo del proveedor ────────────────────────────────────────── */
 

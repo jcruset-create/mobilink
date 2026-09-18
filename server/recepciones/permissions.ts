@@ -35,6 +35,8 @@ export const PERMISOS = [
   "recepciones.proveedores.manage",
   /** El padrón de operarios del muelle y sus PIN. */
   "recepciones.operarios.manage",
+  /** Encender o apagar el aviso por WhatsApp al recibir la mercancía. */
+  "recepciones.avisos.manage",
   /**
    * El correo del proveedor: importar un .eml a mano, forzar una pasada del
    * buzón, reprocesar un correo que quedó en revisión.
@@ -65,6 +67,7 @@ const POR_ROL: Record<RolRecepciones, readonly Permiso[]> = {
     "recepciones.rectificar",
     "recepciones.proveedores.manage",
     "recepciones.operarios.manage",
+    "recepciones.avisos.manage",
     "recepciones.correo.importar",
   ],
   admin: PERMISOS,
