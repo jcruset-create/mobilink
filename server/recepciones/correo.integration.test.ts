@@ -184,6 +184,8 @@ function pdfEntregaInsa(numero = "26031188"): Promise<Buffer> {
     "COMERCIAL SEA, S.A.",
     "Ctra. Aspe - Novelda, 38 PG.IND. RIU CLAR C/ COURE, 7",
     "03680, Aspe 43006 TARRAGONA",
+    "VAT: ES A03297959 ESPAÑA",
+    "Phone: (0034) 96 549 56 76 N.I.F.: ESA43044379",
     "-".repeat(120),
     "Entrega Nº Fecha S/Referencia Volumen Neto(Kg) Bruto(Kg)",
     "-".repeat(120),
@@ -750,6 +752,26 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
       const fila = (await api("/bandeja")).body.albaranes.find((a: any) => a.numeroProveedor === `D26-${numero}`);
       expect(fila).toBeTruthy();
       expect(fila.documentoOriginalId).toBeTruthy();
+    });
+
+    it("reenviada desde la cuenta de OTRO proveedor, se archiva bajo el del NIF del papel", async () => {
+      // El caso de verdad: una persona reenvía la entrega de INSA desde su
+      // cuenta de Soledad. El remitente dice Soledad; el papel dice INSA.
+      const insa = await api("/proveedores", { method: "POST", body: { codigo: "INSA", nombre: "INDUSTRIAS DEL NEUMATICO SAU", nif: "A03297959" } });
+      expect(insa.status, JSON.stringify(insa.body)).toBe(201);
+
+      const numero = unico("260314");
+      const m = await mensaje({ asunto: "Fwd: albaran Riu Clar agencia transaher", texto: "Te lo reenvío.", pdf: await pdfEntregaInsa(numero) });
+      const r = await importarEml(m.source);
+      expect(r.body.resultado, JSON.stringify(r.body)).toBe("procesado");
+
+      const fila = (await api("/bandeja")).body.albaranes.find((a: any) => a.numeroProveedor === `D26-${numero}`);
+      expect(fila.proveedorNombre).toBe("INDUSTRIAS DEL NEUMATICO SAU");
+
+      // Y queda dicho por qué, que si no parece un error.
+      const correos = await api("/correo");
+      const guardado = correos.body.correos.find((c: any) => c.albaranId === fila.id);
+      expect((guardado.avisos ?? []).join(" ")).toMatch(/NIF del PDF/);
     });
 
     it("un PDF que no es una entrega reconocible deja el correo como antes: no se inventa un albarán", async () => {
