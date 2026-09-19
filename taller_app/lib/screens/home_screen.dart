@@ -11,6 +11,7 @@ import '../workshops.dart';
 import 'login_screen.dart';
 import 'task_detail_screen.dart';
 import 'create_task_screen.dart';
+import 'recepcion_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final ApiService api;
@@ -79,6 +80,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final tabs = <Tab>[
       const Tab(text: 'Mis tareas'),
+      // Recepción la ve cualquier operario, no sólo el supervisor: el que
+      // recibe el coche en el patio normalmente no lo es.
+      const Tab(text: 'Recepción'),
       if (widget.esSupervisor) const Tab(text: 'Gestión'),
     ];
 
@@ -137,6 +141,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     'que el trabajo está asignado a tu nombre.',
                     anchoTablet,
                   ),
+                  _panelRecepcion(),
                   if (widget.esSupervisor) _buildGestion(anchoTablet),
                 ],
               ),
@@ -144,6 +149,43 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
+      ),
+    );
+  }
+
+  /// Pestaña de recepción: una sola puerta a la pantalla de alta.
+  ///
+  /// La recepción no es una lista que consultar, es un gesto que se hace con
+  /// el coche delante. Por eso aquí sólo hay el botón.
+  Widget _panelRecepcion() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.directions_car, size: 48, color: AppColors.textMuted),
+            const SizedBox(height: 12),
+            const Text(
+              'Recibe un vehículo en el patio.\n'
+              'Se manda a oficina y allí deciden el trabajo.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textMuted),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              icon: const Icon(Icons.add),
+              label: const Text('Recibir vehículo'),
+              onPressed: () async {
+                await Navigator.of(context).push<bool>(
+                  MaterialPageRoute(
+                    builder: (_) => RecepcionScreen(api: widget.api),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
