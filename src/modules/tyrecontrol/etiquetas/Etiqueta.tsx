@@ -40,9 +40,13 @@ function Bloque({ b, serie }: { b: BloqueEtiqueta; serie: string }) {
           position: "absolute",
           left: `${b.numero.x}mm`, top: `${b.numero.y}mm`,
           width: `${b.numero.ancho}mm`, height: `${b.numero.alto}mm`,
-          // Monoespaciada: los dígitos ocupan lo mismo, que es de donde sale
-          // el cálculo del tamaño en medidas.ts.
-          fontFamily: "'Roboto Mono', 'DejaVu Sans Mono', monospace",
+          // Courier New a propósito, y no `monospace` a secas: el genérico lo
+          // resuelve cada sistema con una fuente distinta —Consolas en
+          // Windows, DejaVu en Linux— y cada una tiene su ancho de dígito, así
+          // que el cálculo de `medidas.ts` valía en un sitio y no en otro. En
+          // el PDF se usa Courier negrita, que es la misma métrica: lo que se
+          // ve en pantalla y lo que se imprime coinciden.
+          fontFamily: "'Courier New', Courier, monospace",
           fontWeight: 700,
           fontSize: `${b.numero.tamano}mm`,
           lineHeight: `${b.numero.alto}mm`,
