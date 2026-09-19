@@ -9,6 +9,16 @@ import { ETIQUETA, bloquesDeEtiqueta, type BloqueEtiqueta } from "./medidas";
  * posiciones no se escriben aquí: salen de `medidas.ts`, que es el único sitio
  * donde están los números. Si la etiqueta física cambia, se cambian allí.
  *
+ * ── Qué se imprime ──────────────────────────────────────────────────────────
+ *
+ * El número y su QR, y nada más. Ni «Nº SERIE», ni marcos, ni logotipos: la
+ * etiqueta ya viene impresa y quien la mira sabe lo que es. Esas letras solo
+ * le quitaban sitio al dato.
+ *
+ * Arriba —la parte que se queda en la rueda— el número va grande y el QR
+ * debajo, también grande: es la que se lee agachado y de lejos. En las dos
+ * subetiquetas troqueladas, que son bajas y anchas, van en fila.
+ *
  * ── Qué lleva el QR ─────────────────────────────────────────────────────────
  *
  * SOLO EL NÚMERO DE SERIE, en crudo. No una URL. Lo pidió así el encargo, y la
@@ -25,21 +35,6 @@ export const cargaQr = (serie: string): string => serie.trim();
 function Bloque({ b, serie }: { b: BloqueEtiqueta; serie: string }) {
   return (
     <>
-      {b.rotulo.alto > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            left: `${b.rotulo.x}mm`, top: `${b.rotulo.y}mm`,
-            width: `${b.rotulo.ancho}mm`, height: `${b.rotulo.alto}mm`,
-            fontSize: `${b.rotulo.tamano * 0.8}mm`,
-            lineHeight: `${b.rotulo.alto}mm`,
-            letterSpacing: "0.3mm",
-            color: "#000",
-          }}
-        >
-          Nº SERIE
-        </div>
-      )}
       <div
         style={{
           position: "absolute",
@@ -51,6 +46,7 @@ function Bloque({ b, serie }: { b: BloqueEtiqueta; serie: string }) {
           fontWeight: 700,
           fontSize: `${b.numero.tamano}mm`,
           lineHeight: `${b.numero.alto}mm`,
+          textAlign: b.numero.centrado ? "center" : "left",
           whiteSpace: "nowrap",
           color: "#000",
         }}
@@ -69,7 +65,7 @@ function Bloque({ b, serie }: { b: BloqueEtiqueta; serie: string }) {
           value={cargaQr(serie)}
           style={{ width: "100%", height: "100%" }}
           // M: aguanta suciedad y roce sin necesitar más módulos de los que
-          // caben en 20 mm.
+          // caben en el hueco.
           level="M"
           bgColor="transparent"
           fgColor="#000000"
@@ -82,9 +78,10 @@ function Bloque({ b, serie }: { b: BloqueEtiqueta; serie: string }) {
 /**
  * La etiqueta completa: los tres bloques con el mismo número.
  *
- * Son tres porque la etiqueta física los tiene: uno arriba, que se queda en la
- * goma, y dos troquelados que se arrancan para pegarlos en el parte y en la
- * ficha. El mismo número en los tres es justo el punto.
+ * Son tres porque la etiqueta física los tiene: la zona de arriba, que se
+ * queda en la goma, y dos subetiquetas troqueladas que se arrancan para
+ * pegarlas en el parte y en la ficha. El mismo número en los tres es justo el
+ * punto.
  */
 export function Etiqueta({ serie, marco = false }: { serie: string; marco?: boolean }) {
   const bloques = bloquesDeEtiqueta(Math.max(serie.trim().length, 1));
