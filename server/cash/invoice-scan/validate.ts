@@ -17,6 +17,7 @@ import type { Centimos } from "../domain/money.ts";
 import { formatearEuros } from "../domain/money.ts";
 import type { PropuestaFormaCobro } from "./classifier.ts";
 import type { PropuestaSeccion } from "./seccion.ts";
+import type { TipoDocumento } from "./types.ts";
 import type {
   Aviso,
   CampoPropuesto,
@@ -76,6 +77,20 @@ const SIN_SECCION: PropuestaSeccion = {
   reglaId: null,
 };
 
+/**
+ * Cómo se llama cada tipo en castellano, para el aviso.
+ *
+ * FACTURA no está, y por eso el aviso no salta con una factura: la tabla ES la
+ * condición. Un `if (tipo !== "FACTURA")` habría que mantenerlo en dos sitios.
+ */
+const NOMBRE_TIPO: Partial<Record<TipoDocumento, string>> = {
+  FACTURA_SIMPLIFICADA: "una factura simplificada",
+  ALBARAN: "un albarán",
+  TICKET: "un ticket",
+  PARTE: "un parte de trabajo",
+  OTRO: "otro tipo de documento",
+};
+
 export function validar(
   extraccion: ExtraccionNormalizada,
   propuesta: PropuestaFormaCobro,
@@ -87,9 +102,38 @@ export function validar(
   if (!extraccion.esFactura) {
     avisos.push({
       codigo: "NO_ES_FACTURA",
+      /*
+       * «Justificante» y no «factura»: un albarán, un parte de trabajo o un
+       * ticket valen igual para cobrar, y en un taller se cobra contra el
+       * albarán a menudo. El mensaje decía «no parece una factura» delante de
+       * un albarán perfectamente bueno, y un aviso que salta cuando no toca es
+       * un aviso que la gente aprende a saltarse.
+       */
       mensaje:
-        "Este documento no parece una factura. Revísalo antes de usar nada de lo que se ha rellenado.",
+        "Este documento no parece un justificante de cobro. Revísalo antes de usar nada de lo " +
+        "que se ha rellenado.",
       grave: true,
+    });
+  }
+
+  /*
+   * Qué es el papel, cuando NO es una factura.
+   *
+   * Aviso leve y no grave: un albarán vale igual para cobrar —en un taller se
+   * cobra contra el albarán a menudo y la factura se emite después— así que no
+   * apaga ninguna preselección. Pero se dice, porque cobrar contra un albarán
+   * no es lo mismo que cobrar contra una factura y quien lo registra tiene
+   * derecho a saber qué está firmando.
+   *
+   * `DESCONOCIDO` no avisa: es «no se ha podido saber», que incluye los
+   * análisis anteriores a que existiera este campo. Avisar ahí sería poner un
+   * cartel sobre algo que nadie ha mirado.
+   */
+  if (extraccion.esFactura && NOMBRE_TIPO[extraccion.tipoDocumento]) {
+    avisos.push({
+      codigo: "TIPO_DE_DOCUMENTO",
+      mensaje: `Esto no es una factura: es ${NOMBRE_TIPO[extraccion.tipoDocumento]}. Vale igual para cobrar, pero la factura se emitirá después.`,
+      grave: false,
     });
   }
 
@@ -175,6 +219,68 @@ export function validar(
   }
 
   /*
+   * ── El total CORROBORADO manda sobre lo que el modelo opine de sí mismo ───
+   *
+   * La confianza que devuelve el modelo es una sola fuente, y es la suya. Pero
+   * en este papel hay hasta dos comprobaciones independientes del total:
+   *
+   *   · El resguardo de la tarjeta dice el mismo importe.
+   *   · La base más el IVA lo suman.
+   *
+   * Dos lecturas que coinciden valen más que una que se declara segura. Sin
+   * esto pasaba lo que tenía que pasar: un albarán donde el total se leyó bien
+   * Y cuadraba con el ticket al céntimo dejaba la casilla del importe VACÍA
+   * —porque el modelo se había puesto un 0,6— y el botón decía «Confirmar
+   * cobro de 0,00 €». La pantalla tenía la prueba delante y la tiraba.
+   *
+   * Solo SUBE la confianza hasta el umbral de rellenar, nunca la baja: lo que
+   * ya venía por debajo por otros motivos sigue su camino.
+   */
+  const cuadraConElRecibo =
+    extraccion.recibo.detectado &&
+    importeRecibo != null &&
+    totalCentimos != null &&
+    Math.abs(importeRecibo - totalCentimos) <= toleranciaCentimos;
+
+  const cuadraElIva =
+    baseCentimos != null &&
+    ivaCentimos != null &&
+    totalCentimos != null &&
+    Math.abs(baseCentimos + ivaCentimos - totalCentimos) <= 1;
+
+  const totalCorroborado = cuadraConElRecibo || cuadraElIva;
+  const confianzaDelTotal = totalCorroborado
+    ? Math.max(extraccion.confianza.total, UMBRALES.rellenar)
+    : extraccion.confianza.total;
+
+  /*
+   * Y lo que se lee pero NO se rellena, se dice.
+   *
+   * Un campo que el modelo leyó y que se descarta por poca seguridad dejaba la
+   * casilla vacía y ningún aviso: quien mira ve un hueco y no sabe si es que
+   * no había nada en el papel o que no nos fiamos. Son dos cosas distintas y
+   * la segunda se arregla mirando el papel un segundo.
+   *
+   * No se rellena igualmente —un número inventado en un campo que luego
+   * controla duplicados es peor que un hueco— pero se enseña lo que se leyó
+   * para que se pueda copiar si es bueno.
+   */
+  if (extraccion.numeroFactura && extraccion.confianza.numeroFactura < UMBRALES.revisar) {
+    avisos.push({
+      codigo: "LEIDO_SIN_SEGURIDAD",
+      mensaje: `El número del documento se ha leído como «${extraccion.numeroFactura}», pero con poca seguridad, así que no se ha rellenado. Compruébalo y escríbelo.`,
+      grave: false,
+    });
+  }
+  if (totalCentimos != null && !totalCorroborado && extraccion.confianza.total < UMBRALES.revisar) {
+    avisos.push({
+      codigo: "LEIDO_SIN_SEGURIDAD",
+      mensaje: `El total se ha leído como ${formatearEuros(totalCentimos)} €, pero con poca seguridad y sin nada con qué contrastarlo, así que no se ha rellenado. Compruébalo y escríbelo.`,
+      grave: false,
+    });
+  }
+
+  /*
    * La degradación. Cualquier aviso grave quita la preselección: la pantalla
    * puede seguir proponiendo la forma —es información útil— pero no la marca
    * sola, porque marcarla es justo lo que hace que nadie la mire.
@@ -200,7 +306,7 @@ export function validar(
 
   return {
     referencia: campo(extraccion.numeroFactura, extraccion.confianza.numeroFactura, null),
-    importeCentimos: campo(totalCentimos, extraccion.confianza.total, null),
+    importeCentimos: campo(totalCentimos, confianzaDelTotal, null),
     cliente: campo(nombreCliente, extraccion.confianza.cliente, null),
     proveedor: campo(extraccion.emisor.nombre, extraccion.confianza.emisor, null),
     concepto: campo(extraccion.concepto, extraccion.confianza.concepto, null),

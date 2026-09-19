@@ -17,7 +17,7 @@ import type { Centimos } from "../domain/money.ts";
 import { esCentimosValido } from "../domain/money.ts";
 import type { EvidenciaSeccion } from "./seccion.ts";
 import type { EvidenciaCobro } from "./classifier.ts";
-import type { ExtraccionCruda, ExtraccionNormalizada } from "./types.ts";
+import type { ExtraccionCruda, ExtraccionNormalizada, TipoDocumento } from "./types.ts";
 
 /**
  * Un importe TAL Y COMO SE IMPRIME en una factura española.
@@ -203,6 +203,7 @@ export function normalizar(cruda: ExtraccionCruda): ExtraccionNormalizada {
   const r = cruda.recibo;
   return {
     esFactura: cruda.es_factura === true,
+    tipoDocumento: tipoDeDocumento(cruda.tipo_documento),
     facturasDetectadas: Math.max(1, Math.round(Number(cruda.facturas_detectadas) || 1)),
     numeroFactura: textoOpcional(cruda.factura?.numero),
     fecha: fechaImpresa(cruda.factura?.fecha),
@@ -320,6 +321,27 @@ export function sinDatosDeTarjeta(cruda: ExtraccionCruda): ExtraccionCruda {
  * —su NIF, su nombre— se lee bien hoy, mientras que leer las columnas del
  * surtidor habría que enseñárselo y validarlo contra tickets de verdad.
  */
+/**
+ * Qué dice ser el papel, en una de las palabras que la caja entiende.
+ *
+ * Lo que no encaje cae en `DESCONOCIDO` y NO en `OTRO`: no es lo mismo «el
+ * papel dice que es otra cosa» que «no se ha podido saber». El primero merece
+ * un aviso; el segundo, silencio — y en silencio se quedan también los
+ * análisis anteriores a que este campo existiera, que llegan sin él.
+ */
+export function tipoDeDocumento(valor: string | null | undefined): TipoDocumento {
+  const limpio = (valor ?? "").trim().toUpperCase().replace(/[\s-]+/g, "_");
+  const conocidos: TipoDocumento[] = [
+    "FACTURA",
+    "FACTURA_SIMPLIFICADA",
+    "ALBARAN",
+    "TICKET",
+    "PARTE",
+    "OTRO",
+  ];
+  return conocidos.includes(limpio as TipoDocumento) ? (limpio as TipoDocumento) : "DESCONOCIDO";
+}
+
 export function evidenciaDeSeccion(n: ExtraccionNormalizada): EvidenciaSeccion {
   return {
     cifEmisor: n.emisor.nif,

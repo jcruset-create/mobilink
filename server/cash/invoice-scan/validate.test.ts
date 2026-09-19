@@ -296,6 +296,221 @@ describe("confianza baja", () => {
   });
 });
 
+
+/**
+ * B2_0004524 — el ALBARÁN del 19/09/2026, escaneado con su ticket pegado.
+ *
+ * Es el caso que destapó el fallo: el esquema decía que el número «NO es el de
+ * albarán» y que `es_factura` valía «solo si es una factura o un ticket de
+ * venta», así que el modelo —obedeciendo— devolvía `es_factura: false` y el
+ * número a null. La pantalla soltaba «este documento no parece una factura»
+ * delante de un albarán perfectamente bueno, y de rebote apagaba la
+ * preselección de la forma de cobro.
+ *
+ * En un taller se cobra contra el albarán a menudo y la factura se emite
+ * después. Sus cifras reales: 158,77 + 33,34 = 192,11.
+ */
+const ALBARAN: ExtraccionCruda = {
+  ...CRUDA,
+  es_factura: true,
+  tipo_documento: "ALBARAN",
+  factura: { numero: "B2_0004524", fecha: "19/09/2026" },
+  emisor: { nombre: "COMERCIAL SEA, S.A.", nif: "A43044379" },
+  cliente: { codigo: "C34212", nombre: "BORIS E MIRO SLU", nif: "B75639120" },
+  vehiculo: { marca: null, modelo: null, matricula: "5738JTC" },
+  concepto: "5738JTC · REVIS.TACOGRAFO DIG.STONRIDGE",
+  totales: {
+    base_imponible: "158,77 €",
+    iva_importe: "33,34 €",
+    iva_porcentaje: "21,00%",
+    total: "192,11 €",
+    moneda: "EUR",
+  },
+  recibo: {
+    detectado: true,
+    recibos_detectados: 1,
+    plantilla: "TICKET_BANCO",
+    importe: "192,11 EUR",
+    tipo_operacion: "VENDA",
+    tarjeta: "************5335",
+    num_operacion: "52370",
+    cod_autorizacion: "636391",
+    comercio: "266179530",
+    terminal: "01038447",
+    red: null,
+    adquirente: "Comercia Global Payments",
+    cuenta: null,
+    fecha_hora: "19/09/2026 11:27",
+    texto: "MASTERCARD CONTACTLESS REUS - 19/09/2026 11:27 COMERCIAL SEA 192,11 EUR",
+  },
+  confianza: { numero_factura: 0.97, cliente: 0.98, emisor: 0.98, total: 0.99, concepto: 0.9, recibo: 0.95 },
+};
+
+describe("Caso D · B2_0004524 · un ALBARÁN, que vale igual que una factura", () => {
+  it("se rellena entero, con el número del albarán como referencia", () => {
+    const p = propuesta(ALBARAN);
+    expect(p.referencia.valor).toBe("B2_0004524");
+    expect(p.importeCentimos.valor).toBe(19211);
+    expect(p.cliente.valor).toBe("BORIS E MIRO SLU");
+    expect(p.concepto.valor).toContain("5738JTC");
+  });
+
+  it("NO salta el aviso de «no parece un justificante»", () => {
+    /*
+     * Es lo que se veía en pantalla, y el daño no era el texto: un aviso grave
+     * apaga la preselección de la forma de cobro y de la sección. Un aviso que
+     * salta cuando no toca es un aviso que la gente aprende a saltarse.
+     */
+    const p = propuesta(ALBARAN);
+    expect(p.avisos.map((a) => a.codigo)).not.toContain("NO_ES_FACTURA");
+    expect(p.formaCobro.autoSeleccionar).toBe(true);
+  });
+
+  it("la pantalla dice QUÉ es: un albarán, no una factura", () => {
+    /*
+     * Lo pidió quien lo usa, y tiene razón: cobrar contra un albarán no es lo
+     * mismo que cobrar contra una factura, y quien lo registra tiene derecho a
+     * saber qué está firmando.
+     *
+     * Leve y no grave: vale para cobrar, así que no apaga ninguna
+     * preselección. Informa, no estorba.
+     */
+    const aviso = propuesta(ALBARAN).avisos.find((a) => a.codigo === "TIPO_DE_DOCUMENTO");
+    expect(aviso).toBeDefined();
+    expect(aviso!.mensaje).toContain("un albarán");
+    expect(aviso!.grave).toBe(false);
+  });
+
+  it("con una factura de verdad no dice nada", () => {
+    const p = propuesta({ ...ALBARAN, tipo_documento: "FACTURA" });
+    expect(p.avisos.map((a) => a.codigo)).not.toContain("TIPO_DE_DOCUMENTO");
+  });
+
+  it("un análisis viejo, sin el campo, tampoco dice nada", () => {
+    /*
+     * «No se ha podido saber» no es «es otra cosa». Los escaneos guardados
+     * antes de que este campo existiera llegan sin él, y ponerles un cartel
+     * sería afirmar algo que nadie ha mirado.
+     */
+    const { tipo_documento: _, ...sinCampo } = ALBARAN;
+    const p = propuesta(sinCampo as typeof ALBARAN);
+    expect(p.avisos.map((a) => a.codigo)).not.toContain("TIPO_DE_DOCUMENTO");
+  });
+
+  it("el importe del ticket cuadra con el del albarán", () => {
+    expect(propuesta(ALBARAN).importeCuadra).toBe(true);
+  });
+
+  it("y lo que de verdad NO es un justificante sigue avisando", () => {
+    /*
+     * La red no se quita, se afina. Si `es_factura` viene a false —un
+     * presupuesto, una ficha técnica, una foto de otra cosa— el aviso salta y
+     * se lleva por delante la preselección, como siempre.
+     */
+    const p = propuesta({ ...ALBARAN, es_factura: false });
+    expect(p.avisos.map((a) => a.codigo)).toContain("NO_ES_FACTURA");
+    expect(p.formaCobro.autoSeleccionar).toBe(false);
+  });
+});
+
+describe("lo que se lee pero el modelo no se cree", () => {
+  /*
+   * EL CASO DE LA PANTALLA DEL 19/09: la casilla del importe vacía y el botón
+   * diciendo «Confirmar cobro de 0,00 €», sin un solo aviso que lo explicara.
+   *
+   * No era que no se leyera el total: se leyó, y además CUADRABA con el ticket
+   * de la tarjeta al céntimo —la propia pantalla lo decía—. Lo que pasaba es
+   * que el modelo se había puesto poca nota a sí mismo y `campo()` tiraba el
+   * valor. La prueba estaba delante y se descartaba.
+   */
+  const flojo = (extra: Partial<ExtraccionCruda["confianza"]>): ExtraccionCruda => ({
+    ...ALBARAN,
+    confianza: { ...ALBARAN.confianza, ...extra },
+  });
+
+  it("si el total cuadra con el ticket, se rellena aunque el modelo dude", () => {
+    const p = propuesta(flojo({ total: 0.6 }));
+    expect(p.importeCentimos.valor).toBe(19211);
+    expect(p.importeCentimos.estado).toBe("RELLENAR");
+  });
+
+  it("y también si la base más el IVA lo suman, sin ticket ninguno", () => {
+    /*
+     * Dos comprobaciones independientes y basta con una. Aquí no hay resguardo
+     * con el que contrastar, pero 158,77 + 33,34 = 192,11 lo dice igual.
+     */
+    const sinRecibo: ExtraccionCruda = {
+      ...flojo({ total: 0.5 }),
+      recibo: { ...ALBARAN.recibo, detectado: false, importe: null },
+    };
+    expect(propuesta(sinRecibo).importeCentimos.valor).toBe(19211);
+  });
+
+  it("el ticket solo, SIN base ni IVA, ya corrobora", () => {
+    /*
+     * Hacía falta este caso aparte: en el albarán entero cuadran las DOS cosas
+     * a la vez, así que una prueba con él no distingue si el ticket cuenta o
+     * si todo el trabajo lo hacía el IVA. Quitando la base y la cuota, el
+     * resguardo se queda solo — y tiene que bastar.
+     */
+    const soloTicket: ExtraccionCruda = {
+      ...flojo({ total: 0.5 }),
+      totales: { ...ALBARAN.totales, base_imponible: null, iva_importe: null },
+    };
+    expect(propuesta(soloTicket).importeCentimos.valor).toBe(19211);
+  });
+
+  it("corroborar no rebaja una confianza que ya era alta", () => {
+    /*
+     * Solo sube. Un 0,99 que se quedara en 0,90 al corroborarlo sería una
+     * mentira pequeña en el rastro que luego se audita, y de las que no se
+     * notan hasta que alguien se apoya en ese número.
+     */
+    expect(propuesta(ALBARAN).importeCentimos.confianza).toBe(0.99);
+  });
+
+  it("sin nada que lo corrobore NO se rellena, pero se DICE lo que se leyó", () => {
+    /*
+     * No se rellena: un importe adivinado que alguien confirma sin mirar es
+     * peor que un hueco. Pero el hueco mudo era el fallo — quien mira no sabía
+     * si es que el papel no lo ponía o si es que no nos fiábamos.
+     */
+    const aOscuras: ExtraccionCruda = {
+      ...flojo({ total: 0.5 }),
+      recibo: { ...ALBARAN.recibo, detectado: false, importe: null },
+      totales: { ...ALBARAN.totales, base_imponible: null, iva_importe: null },
+    };
+    const p = propuesta(aOscuras);
+    expect(p.importeCentimos.valor).toBeNull();
+
+    const aviso = p.avisos.find((a) => a.codigo === "LEIDO_SIN_SEGURIDAD");
+    expect(aviso).toBeDefined();
+    expect(aviso!.mensaje).toContain("192,11");
+    expect(aviso!.grave).toBe(false);
+  });
+
+  it("el número leído con poca seguridad también se enseña", () => {
+    const p = propuesta(flojo({ numero_factura: 0.5 }));
+    expect(p.referencia.valor).toBeNull();
+
+    const aviso = p.avisos.find((a) => a.codigo === "LEIDO_SIN_SEGURIDAD");
+    expect(aviso!.mensaje).toContain("B2_0004524");
+  });
+
+  it("la corroboración solo SUBE: no rescata un total que no cuadra", () => {
+    /*
+     * Si el ticket dice otro importe, eso ya tiene su aviso grave y el total
+     * no queda corroborado por ahí. Que no se cuele de rebote.
+     */
+    const descuadrado: ExtraccionCruda = {
+      ...flojo({ total: 0.5 }),
+      recibo: { ...ALBARAN.recibo, importe: "200,00" },
+      totales: { ...ALBARAN.totales, base_imponible: null, iva_importe: null },
+    };
+    expect(propuesta(descuadrado).importeCentimos.valor).toBeNull();
+  });
+});
+
 describe("documentos que no son lo que parecen", () => {
   it("si no es una factura, se avisa y no se preselecciona nada", () => {
     const p = propuesta({ ...A, es_factura: false });
