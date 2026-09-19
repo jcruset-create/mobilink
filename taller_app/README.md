@@ -36,7 +36,7 @@ son los definitivos y los dos primeros son **inmutables** una vez subida la app.
 |---|---|
 | Bundle id | `com.mobilink.workplanner` |
 | Nombre visible | WorkPlanner Taller |
-| Mínimo | iOS 13.0, que es lo que pide el motor de Flutter 3.35.4; los plugins de esta app se conforman con menos |
+| Mínimo | iOS 15.0, que es lo que exigirá Apple desde la primavera de 2027 (aviso 90068). El motor de Flutter 3.35.4 se conforma con 13.0 y los plugins con menos |
 | Flutter | 3.35.4, fijo también en Codemagic |
 
 **El bundle id de iOS NO es el `applicationId` de Android.** Aquí es
@@ -50,10 +50,13 @@ coinciden (`com.example.sea_tarragona_operario` en Android,
 Cambiar uno **no** es cambiar el otro, y no son intercambiables: tocar el de
 Android obligaría a desinstalar la app de todas las tablets.
 
-El mínimo de iOS y la versión de Flutter van atados: Flutter 3.47 sube el mínimo
-del motor a iOS 15 y entonces `pod install` falla con «required a higher minimum
-deployment target». Se cambian los dos a la vez —proyecto y `Podfile`— o no se
-cambia ninguno.
+El mínimo de iOS **solo puede subir**. Poner 15 con Flutter 3.35.4 es válido,
+porque el motor pide 13 o más; al revés no: subir a Flutter 3.47 dejando el
+proyecto en 13 hace que `pod install` falle con «required a higher minimum
+deployment target», que es lo que tumbó un build de Mobilink Assist. Si se
+cambia, se cambian a la vez el proyecto y el `Podfile`.
+
+Subir a 15 deja fuera a los iPad con iOS 13 y 14.
 
 El `Podfile` va **commiteado**. Flutter solo lo genera al compilar en un Mac, y
 el workflow hace `cd ios && pod install` en su segundo paso: sin el fichero, ese

@@ -1,6 +1,19 @@
 # Mobilink TyreControl — iOS 13 es el mínimo que admite Flutter 3.35 y los
 # plugins que usa la app (url_launcher, shared_preferences).
-platform :ios, '13.0'
+# Mobilink TyreControl — iOS 15.0.
+#
+# Lo marca Apple, no las dependencias:
+#
+#   90068: MinimumOSVersion too low. Starting in Spring 2027, all iOS apps
+#   must have a MinimumOSVersion of 15.0 or later in order to be uploaded to
+#   App Store Connect or submitted for distribution.
+#
+# Poner 15 con Flutter 3.35.4 es válido: el motor pide 13 o más. Al revés no:
+# subir a Flutter 3.47 con el proyecto en 13 hace que `pod install` falle con
+# «required a higher minimum deployment target». Este número solo puede subir.
+#
+# A cambio, un dispositivo con iOS 13 o 14 ya no puede instalarla.
+platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'

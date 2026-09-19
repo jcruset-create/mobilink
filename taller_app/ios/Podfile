@@ -1,20 +1,29 @@
-# WorkPlanner Taller — iOS 13.0.
+# WorkPlanner Taller — iOS 15.0.
 #
-# Aquí no hay Firebase, así que el mínimo lo marca el propio motor de Flutter:
-# 3.35.4 pide iOS 13.0. Los plugins de esta app piden menos (image_picker y
-# shared_preferences 12.0, flutter_image_compress 9.0; hive y http son Dart
-# puro y no traen pod), así que 13.0 los cubre a todos y coincide con
-# IPHONEOS_DEPLOYMENT_TARGET del proyecto Xcode.
+# El mínimo NO lo marca aquí ninguna dependencia: el motor de Flutter 3.35.4
+# se conforma con 13.0 y los plugins de esta app piden menos todavía
+# (image_picker y shared_preferences 12.0, flutter_image_compress 9.0; hive y
+# http son Dart puro y no traen pod). Lo marca Apple:
 #
-# Este número va atado a la versión de Flutter del workflow de Codemagic. Subir
-# Flutter sube el mínimo del motor —3.47 ya pide iOS 15— y entonces `pod
-# install` falla con «required a higher minimum deployment target»: los dos
-# valores se cambian juntos o no se cambia ninguno.
+#   90068: MinimumOSVersion too low. Starting in Spring 2027, all iOS apps
+#   must have a MinimumOSVersion of 15.0 or later in order to be uploaded to
+#   App Store Connect or submitted for distribution.
+#
+# Ese aviso salía en cada subida. Se adelanta el cambio en vez de esperar a
+# que sea un error, y de paso las cuatro apps de la casa quedan en el mismo
+# número.
+#
+# Poner 15 con Flutter 3.35.4 es válido: el motor pide 13 o más. Al revés no:
+# subir a Flutter 3.47 con el proyecto en 13 hace que `pod install` falle con
+# «required a higher minimum deployment target», que es lo que tumbó el build
+# de Mobilink Assist. Este número solo puede subir.
+#
+# A cambio, un iPad con iOS 13 o 14 ya no puede instalarla.
 #
 # El fichero va COMMITEADO a propósito. Flutter solo lo genera al compilar en
 # un Mac, y aquí no hay ninguno: el workflow hace `cd ios && pod install` en el
 # primer paso, y sin Podfile ese paso muere antes de empezar.
-platform :ios, '13.0'
+platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -58,7 +67,7 @@ post_install do |installer|
     target.build_configurations.each do |config|
       # Los pods heredan el mínimo del proyecto: sin esto, alguno se queda con
       # el suyo (9.0 en flutter_image_compress) y Xcode avisa en cada build.
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
     end
   end
 end
