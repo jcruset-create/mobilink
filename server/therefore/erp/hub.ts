@@ -23,7 +23,6 @@
  * consta». Un `existe: false` sólo sale cuando el ERP contestó de verdad.
  */
 
-import { resolveErpConnector } from "../../integration-hub/connectors/ConnectorRegistry.ts";
 import type { PurchaseReceipt } from "../../integration-hub/domain/connectors.ts";
 import { leerTextoConfig } from "../config.ts";
 import type { ConsultaAlbaranesErp, ContextoErp, EstadoAlbaranErp, LineaAlbaranErp } from "./puerto.ts";
@@ -94,8 +93,21 @@ export type ResolverConector = (tenantId: string) => Promise<{
   };
 } | null>;
 
+/**
+ * El resolvedor de verdad, contra el registro de conectores del Hub.
+ *
+ * El registro se carga aquí dentro, no arriba con el resto de imports, y no es
+ * por pereza: arrastra `db.ts`, que **lanza al cargarse** si falta
+ * `DATABASE_URL`. Importándolo arriba, cualquier prueba de este fichero fallaba
+ * en CI antes de ejecutar nada, aunque —como la de al lado— traiga su propio
+ * resolvedor y no llegue a pisar esta función. En producción no cambia nada:
+ * se carga en la primera consulta y queda cacheado por el runtime.
+ */
 async function resolverPorDefecto(tenantId: string): ReturnType<ResolverConector> {
   try {
+    const { resolveErpConnector } = await import(
+      "../../integration-hub/connectors/ConnectorRegistry.ts"
+    );
     const r = await resolveErpConnector(tenantId);
     return { key: r.key, connector: r.connector };
   } catch {
