@@ -90,6 +90,20 @@ cuanto se pide.
 | `NSCameraUsageDescription` | `image_picker` — la foto de la matrícula al recibir un vehículo y las fotos del trabajo |
 | `NSPhotoLibraryUsageDescription` | `image_picker` — adjuntar imágenes ya hechas |
 
+### Cumplimiento de exportación
+
+`ITSAppUsesNonExemptEncryption` va en el `Info.plist` y **no es opcional**.
+Sin esa clave, cada subida se queda en App Store Connect marcada como
+«Missing Compliance» y no llega a los probadores hasta que alguien entra a
+mano a contestar la pregunta del cifrado.
+
+Lo que lo hace difícil de ver es que **no falla nada**: el build sale verde,
+el `.ipa` se sube, el correo dice SUCCEEDED, y en TestFlight no aparece la
+versión nueva. Costó siete builds correctos seguidos averiguarlo.
+
+La app no lleva criptografía propia —solo HTTPS del sistema contra la API—,
+así que la respuesta es `false`, igual que en las otras tres apps.
+
 ### Subir a TestFlight
 
 Lo hace el workflow `ios-taller-testflight` de `codemagic.yaml`, independiente de

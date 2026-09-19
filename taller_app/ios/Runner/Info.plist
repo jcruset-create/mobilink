@@ -54,6 +54,22 @@
 	<string>WorkPlanner Taller usa la cámara para fotografiar la matrícula al recibir un vehículo y el estado del trabajo.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>WorkPlanner Taller accede a tus fotos para adjuntar imágenes ya hechas al parte de trabajo.</string>
+	<!-- ── Cumplimiento de exportación ───────────────────────────────────
+
+	     Sin esta clave, CADA subida se queda en App Store Connect marcada como
+	     «Missing Compliance» y NO llega a los probadores hasta que alguien
+	     entra a mano a contestar la pregunta del cifrado. El build sale en
+	     verde, el .ipa se sube, y en TestFlight no aparece nada: no hay ningún
+	     error que mirar, que es lo que lo hace difícil de encontrar.
+
+	     Pasó exactamente eso: siete builds correctos seguidos y el teléfono
+	     seguía con la primera versión.
+
+	     La app no lleva criptografía propia —solo HTTPS del sistema contra la
+	     API—, así que la respuesta es «no». Las otras tres apps de la casa la
+	     llevan igual. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
