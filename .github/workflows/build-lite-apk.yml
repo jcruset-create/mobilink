@@ -174,11 +174,11 @@ jobs:
       # tener release: el artifact del run sigue disponible para depurar.
       - name: Publicar release con la APK
         if: ${{ env.KS_B64 != '' }}
-        uses: softprops/action-gh-release@v2
+        uses: ./.github/actions/publicar-release
         with:
-          tag_name: assist-lite-v${{ steps.ver.outputs.version }}
-          name: Mobilink Assist Lite ${{ steps.ver.outputs.version }}
-          body: |
+          tag: assist-lite-v${{ steps.ver.outputs.version }}
+          nombre: Mobilink Assist Lite ${{ steps.ver.outputs.version }}
+          cuerpo: |
             APK de Mobilink Assist Lite generada por CI desde ${{ github.sha }}.
 
             Para talleres colaboradores que reciben asistencias de Mobilink
@@ -190,7 +190,8 @@ jobs:
             la app cerrada. Si no, la bandeja se actualiza sola cada 25 segundos
             mientras la aplicación esté abierta. La pantalla de Perfil dice cuál
             de los dos casos es.
-          files: lite_app/build/app/outputs/flutter-apk/mobilink-assist-lite-*.apk
+          ficheros: lite_app/build/app/outputs/flutter-apk/mobilink-assist-lite-*.apk
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # ── Guardar la versión nueva en el repositorio ─────────────────────────
       #

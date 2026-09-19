@@ -152,12 +152,13 @@ jobs:
       # tener release: el artifact del run sigue disponible para depurar.
       - name: Publicar release con la APK
         if: ${{ env.KS_B64 != '' }}
-        uses: softprops/action-gh-release@v2
+        uses: ./.github/actions/publicar-release
         with:
-          tag_name: tyrecontrol-v${{ steps.ver.outputs.version }}
-          name: Mobilink TyreControl ${{ steps.ver.outputs.version }}
-          body: APK de Mobilink TyreControl generada por CI desde ${{ github.sha }}.
-          files: tyrecontrol_app/build/app/outputs/flutter-apk/tyrecontrol-*.apk
+          tag: tyrecontrol-v${{ steps.ver.outputs.version }}
+          nombre: Mobilink TyreControl ${{ steps.ver.outputs.version }}
+          cuerpo: APK de Mobilink TyreControl generada por CI desde ${{ github.sha }}.
+          ficheros: tyrecontrol_app/build/app/outputs/flutter-apk/tyrecontrol-*.apk
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # El centro de descargas no necesita nada más: /apps/tyrecontrol redirige
       # al asset de esta release (ver APK_APPS en server/index.ts). Así el
