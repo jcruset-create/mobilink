@@ -59,6 +59,26 @@ El `Podfile` va **commiteado**. Flutter solo lo genera al compilar en un Mac, y
 el workflow hace `cd ios && pod install` en su segundo paso: sin el fichero, ese
 paso muere antes de empezar.
 
+### Icono
+
+Las dos plataformas salen de la MISMA imagen de 1254x1254, escalada con
+Lanczos a los tamaños de cada una: quince ficheros en
+`ios/Runner/Assets.xcassets/AppIcon.appiconset/` y cinco `mipmap-*` más cinco
+`drawable-*/ic_launcher_foreground.png` en Android.
+
+Dos detalles que no son opcionales:
+
+- **Sin canal alfa.** Apple rechaza la subida si el icono de 1024x1024 lo
+  lleva. Por eso se convierte a RGB antes de escalar.
+- **El icono adaptativo de Android va a sangre**, sin el `inset="16%"` que
+  traía. Ese margen es lo correcto para un logo suelto sobre un fondo de
+  color; con un diseño que ocupa el cuadro entero solo dejaba un marco vacío
+  alrededor.
+
+Cada sistema recorta por su cuenta —iOS redondea las esquinas, Android puede
+llegar a un círculo— y lo que quede fuera no se ve. Con esta ilustración eso
+se lleva parte del rótulo de abajo.
+
 ### Permisos
 
 Solo los que el código pide de verdad. Un texto de uso sobrante es motivo de
@@ -141,10 +161,11 @@ test/
 
 ## Pendiente
 
-- **Icono de iOS**: hoy lleva el de Flutter por defecto. El de Android es de
-  192x192 y estirarlo a los 1024x1024 que pide Apple queda borroso, así que hace
-  falta el original en vectorial o en alta resolución. Para TestFlight interno no
-  bloquea; para la App Store pública sí es motivo de rechazo.
+- **Legibilidad del icono**: el diseño actual es una ilustración completa
+  —operario, tablet, rótulo «Mobilink WorkPlanner»—, y a 60 px el texto no se
+  lee. Funciona como imagen de portada, no tanto como icono. Si alguna vez se
+  quiere que se distinga de un vistazo en la pantalla de inicio, lo que hay que
+  hacer es recortar la marca (la «N») y dejarla sola sobre el fondo azul.
 - Adaptación a tablet: dos columnas en horizontal y sesión de puesto compartido.
 - Unificar el login con el PIN de taller (`techs.workshopPin`), hoy usa el código de
   operario.

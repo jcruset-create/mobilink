@@ -1,9 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Icono adaptativo (Android 8 en adelante).
+
+  El lienzo es de 108dp y el lanzador recorta hasta 72dp con la forma que
+  decida el fabricante: círculo, cuadrado redondeado, gota. Lo que quede fuera
+  de esos 72dp centrales NO se ve.
+
+  Antes el primer plano llevaba `inset="16%"`, que es lo correcto para un logo
+  suelto sobre un fondo de color: lo encoge para que quepa entero dentro del
+  recorte. Este diseño va a sangre —ocupa el cuadro completo—, así que el
+  margen solo dejaría un marco del color de fondo alrededor. Se quita, y el
+  recorte se come los bordes como en cualquier icono a sangre.
+
+  El fondo se queda declarado aunque el primer plano sea opaco y no llegue a
+  verse: un icono adaptativo sin capa de fondo no lo aceptan todos los
+  lanzadores.
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
   <background android:drawable="@color/ic_launcher_background"/>
-  <foreground>
-      <inset
-          android:drawable="@drawable/ic_launcher_foreground"
-          android:inset="16%" />
-  </foreground>
+  <foreground android:drawable="@drawable/ic_launcher_foreground"/>
 </adaptive-icon>

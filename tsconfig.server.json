@@ -48,6 +48,12 @@
     "server/tacografos/**/*.ts",
     "server/therefore/**/*.ts",
     "server/recepciones/**/*.ts",
+    // Recepción de vehículos desde el patio. Se añade el día que se descubre
+    // que faltaba, no diez fases después: al renombrar la carpeta de
+    // `recepciones` a `recepcionVehiculos` —porque aquel nombre ya era de la
+    // recepción de mercancía— el módulo se salió de este `include` sin que
+    // nada lo dijera, y estuvo tres entregas sin comprobarse.
+    "server/recepcionVehiculos/**/*.ts",
     "server/satisfaction/**/*.ts",
     "server/cierre/**/*.ts",
     "server/core/auditoria.ts",

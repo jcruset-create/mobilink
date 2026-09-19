@@ -15,6 +15,7 @@ import {
   matriculaComparable,
   matriculaPropuestaPorOcr,
   plantillaParaOperario,
+  plantillasParaElPatio,
   posibleDuplicado,
   type RecepcionVehiculo,
 } from "./recepcionVehiculo";
@@ -257,6 +258,69 @@ describe("jobDesdeRecepcion", () => {
     expect(job.area).toBe("camion");
     expect(job.quickEntryLabel).toBe("Revisar fuga");
     expect(job.unitMinutes).toBeNull();
+  });
+});
+
+describe("plantillasParaElPatio", () => {
+  /*
+   * El desplegable de operaciones salió vacío en el patio DOS veces, y las dos
+   * por lo mismo: la consulta nombraba una columna que el esquema no tiene
+   * —`usesQuantity` primero, `workshopId` después— y Postgres tumba la
+   * consulta entera, no devuelve null. Por eso esto recibe filas crudas y
+   * decide aquí: sin nombrar columnas no hay nada que se pueda caer.
+   */
+  it("funciona con filas que NO traen workshopId, que es el caso real", () => {
+    const filas = [
+      { key: "aceite", label: "Cambio de aceite", area: "mecanica" },
+      { key: "ruedas", label: "Montaje de ruedas", area: "camion" },
+    ];
+    expect(plantillasParaElPatio(filas, "sea-tarragona")).toEqual([
+      { key: "aceite", label: "Cambio de aceite", area: "mecanica" },
+      { key: "ruedas", label: "Montaje de ruedas", area: "camion" },
+    ]);
+  });
+
+  it("una plantilla sin taller es de todos los talleres", () => {
+    const filas = [{ key: "a", label: "A", area: "camion", workshopId: null }];
+    expect(plantillasParaElPatio(filas, "sea-reus")).toHaveLength(1);
+  });
+
+  it("si la fila trae taller, se respeta", () => {
+    const filas = [
+      { key: "a", label: "A", area: "camion", workshopId: "sea-tarragona" },
+      { key: "b", label: "B", area: "camion", workshopId: "sea-reus" },
+    ];
+    expect(plantillasParaElPatio(filas, "sea-reus").map((p) => p.key)).toEqual(["b"]);
+  });
+
+  it("sin taller pedido se ofrecen todas", () => {
+    const filas = [
+      { key: "a", label: "A", area: "camion", workshopId: "sea-tarragona" },
+      { key: "b", label: "B", area: "camion", workshopId: "sea-reus" },
+    ];
+    expect(plantillasParaElPatio(filas, null)).toHaveLength(2);
+  });
+
+  it("descarta filas inservibles en vez de ofrecer huecos", () => {
+    const filas = [
+      { key: "", label: "Sin clave", area: "camion" },
+      { key: "b", label: "", area: "camion" },
+      { key: "c", label: "C", area: "camion" },
+    ];
+    expect(plantillasParaElPatio(filas).map((p) => p.key)).toEqual(["c"]);
+  });
+
+  /*
+   * `SELECT *` trae también unitPrice cuando esa columna existe. Que no se
+   * cuele hasta la pantalla del técnico.
+   */
+  it("no deja pasar el precio aunque venga en la fila", () => {
+    const filas = [
+      { key: "a", label: "A", area: "camion", unitPrice: 62.5, unitMinutes: 45 },
+    ];
+    const salida = plantillasParaElPatio(filas);
+    expect(Object.keys(salida[0]).sort()).toEqual(["area", "key", "label"]);
+    expect(JSON.stringify(salida)).not.toContain("62.5");
   });
 });
 

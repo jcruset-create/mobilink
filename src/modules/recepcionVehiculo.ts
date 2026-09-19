@@ -253,6 +253,47 @@ export function jobDesdeRecepcion(
 }
 
 /**
+ * De las filas crudas de `quick_templates` a lo que ve el operario.
+ *
+ * ── Por qué recibe filas crudas y no una consulta a medida ──────────────────
+ *
+ * Porque el esquema de esa tabla NO es el que parece. `db.ts` la crea con
+ * ocho columnas, y el resto del código escribe y lee otras tres
+ * —`usesQuantity`, `unitMinutes`, `unitPrice`— que ninguna migración añade,
+ * más un `workshopId` que tampoco existe en el CREATE. En Postgres, nombrar
+ * una columna que no está no devuelve null: tumba la consulta ENTERA con
+ * «column does not exist».
+ *
+ * Eso dejó el desplegable de operaciones vacío en el patio dos veces
+ * seguidas: la primera por `usesQuantity`, y la segunda por `workshopId`, que
+ * seguía en el mismo WHERE después de quitar la primera.
+ *
+ * El endpoint de plantillas que lleva años funcionando hace `SELECT *` y da
+ * forma en JavaScript, y por eso nunca se rompió. Aquí se hace lo mismo: la
+ * consulta no nombra ni una columna, y la decisión de qué sale vive aquí,
+ * donde se puede probar sin base de datos.
+ */
+export function plantillasParaElPatio(
+  filas: Record<string, unknown>[],
+  workshopId?: string | null
+): PlantillaParaOperario[] {
+  return filas
+    .filter((f) => {
+      // Si la columna no existe, `undefined`; si existe y está vacía, la
+      // plantilla es de todos los talleres. En los dos casos, se ofrece.
+      const suyo = (f.workshopId ?? (f as any).workshopid ?? null) as string | null;
+      if (!workshopId || !suyo) return true;
+      return String(suyo) === String(workshopId);
+    })
+    .map((f) => ({
+      key: String(f.key ?? ""),
+      label: String(f.label ?? ""),
+      area: String(f.area ?? "") as AreaKey,
+    }))
+    .filter((p) => p.key !== "" && p.label !== "");
+}
+
+/**
  * Lo que se le manda a la APK del técnico.
  *
  * `QuickTemplate` trae `unitPrice`. En la pantalla del técnico no se enseñan
