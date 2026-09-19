@@ -135,6 +135,10 @@ export async function saveTechToBackend(tech: Tech) {
           statusTotals: tech.statusTotals ?? {},
           roadsideCapable: Boolean(tech.roadsideCapable),
           phone: tech.phone ?? null,
+          // Taller al que pertenece. Si no viene, el servidor conserva el que
+          // había en vez de borrarlo: este endpoint es un upsert con las
+          // columnas escritas a mano y una ausencia se guardaría como NULL.
+          workshopId: tech.workshopId ?? null,
         }),
       }
     );

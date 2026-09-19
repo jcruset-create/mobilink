@@ -36,7 +36,7 @@ const ESTADOS = new Set(["pendiente", "convertida", "descartada"]);
 /** Columnas de la recepción, en el orden en que se leen siempre. */
 const COLUMNAS = `
   id, "workshopId", matricula, "matriculaNormal", "matriculaOcr", "confianzaOcr",
-  "clienteNombre", kilometros, "kilometrosOcr", "confianzaKilometrosOcr",
+  "clienteNombre", "clienteTelefono", kilometros, "kilometrosOcr", "confianzaKilometrosOcr",
   "scheduledJobId", "vehiculoId", "vehiculoOrigen", area, "plantillaKey",
   "operacionLabel", notas, urgente, fotos, estado, "operarioNombre",
   "creadaAtMs", "resueltaAtMs", "resueltaPor", "motivoDescarte", "jobId"
@@ -70,6 +70,24 @@ function decimal(valor: unknown): number | null {
   if (valor == null || valor === "") return null;
   const n = Number(valor);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * El taller del operario que hace la petición.
+ *
+ * `requireTallerOperator` deja en la petición el nombre; el taller se consulta
+ * aquí. Null significa «el de por defecto», que es como se ha comportado todo
+ * hasta que la columna existió.
+ */
+async function tallerDelOperario(req: any): Promise<string | null> {
+  const nombre = String(req?.roadsideOperator?.techName ?? "").trim();
+  if (!nombre) return null;
+  const r = await db.query(
+    `SELECT "workshopId" FROM techs WHERE name = $1 LIMIT 1`,
+    [nombre]
+  );
+  const w = r.rows[0]?.workshopId;
+  return w == null || w === "" ? null : String(w);
 }
 
 export type DependenciasRecepcionVehiculos = {
@@ -110,7 +128,14 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
    */
   r.get("/taller-operator/recepcion-vehiculos/catalogo", requireTallerOperator, async (req, res) => {
     try {
-      const workshopId = textoONull((req.query as any)?.workshopId);
+      /*
+       * El taller sale del OPERARIO, no de lo que mande la APK.
+       *
+       * Antes venía por query y la app lo preguntaba con un desplegable, que
+       * es preguntar dos veces lo mismo: el técnico ya pertenece a un taller.
+       * Y un taller que se puede mandar es un taller que se puede equivocar.
+       */
+      const workshopId = await tallerDelOperario(req);
       /*
        * `SELECT *`, sin nombrar ni una columna, y la forma se decide en
        * JavaScript. No es pereza: es lo único que aguanta el esquema real de
@@ -196,7 +221,9 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) {
         return res.status(400).json({ error: "Falta el día (AAAA-MM-DD)" });
       }
-      const workshopId = textoONull((req.query as any)?.workshopId);
+      // Del operario, igual que el catálogo: el técnico ya pertenece a un
+      // taller y preguntárselo sería preguntar dos veces lo mismo.
+      const workshopId = await tallerDelOperario(req);
 
       // Igual que el endpoint del panel: el JSONB se devuelve tal cual y la
       // forma se decide en JavaScript. Esta tabla no tiene columnas que
@@ -240,6 +267,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           plate: c.plate ?? "",
           startTime: c.startTime ?? "",
           customerName: c.customerName ?? "",
+          customerPhone: (c as any).customerPhone ?? "",
           templateLabel: c.templateLabel ?? "",
           templateKey: c.templateKey ?? "",
           area: c.area ?? "",
@@ -266,26 +294,30 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
 
       const ahora = Date.now();
       const confianza = Number(body.confianzaOcr);
+      // El taller del operario manda sobre lo que venga en el cuerpo: es dato
+      // de quién lo envía, no del formulario.
+      const tallerOperario = await tallerDelOperario(req);
 
       const fila = await db.query(
         `INSERT INTO recepciones_vehiculo (
            id, "workshopId", matricula, "matriculaNormal", "matriculaOcr",
-           "confianzaOcr", "clienteNombre", kilometros, "kilometrosOcr",
+           "confianzaOcr", "clienteNombre", "clienteTelefono", kilometros, "kilometrosOcr",
            "confianzaKilometrosOcr", "scheduledJobId", "vehiculoId",
            "vehiculoOrigen", area, "plantillaKey", "operacionLabel", notas,
            urgente, fotos, estado, "operarioNombre", "creadaAtMs"
          ) VALUES (
-           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'[]'::jsonb,
-           'pendiente',$19,$20
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'[]'::jsonb,
+           'pendiente',$20,$21
          ) RETURNING ${COLUMNAS}`,
         [
           ahora,
-          textoONull(body.workshopId),
+          tallerOperario ?? textoONull(body.workshopId),
           matricula,
           normalizarMatricula(matricula),
           textoONull(body.matriculaOcr),
           Number.isFinite(confianza) ? confianza : null,
           textoONull(body.clienteNombre),
+          textoONull(body.clienteTelefono),
           entero(body.kilometros),
           entero(body.kilometrosOcr),
           decimal(body.confianzaKilometrosOcr),
@@ -526,6 +558,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
            matricula = COALESCE($2, matricula),
            "matriculaNormal" = COALESCE($3, "matriculaNormal"),
            "clienteNombre" = COALESCE($4, "clienteNombre"),
+           "clienteTelefono" = COALESCE($11, "clienteTelefono"),
            area = COALESCE($5, area),
            "plantillaKey" = COALESCE($6, "plantillaKey"),
            "operacionLabel" = COALESCE($7, "operacionLabel"),
@@ -545,6 +578,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           body.notas === undefined ? null : textoONull(body.notas),
           body.urgente === undefined ? null : body.urgente === true || body.urgente === "true",
           body.kilometros === undefined ? null : entero(body.kilometros),
+          body.clienteTelefono === undefined ? null : textoONull(body.clienteTelefono),
         ]
       );
       if (filas.rowCount === 0) {
@@ -618,7 +652,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           JSON.stringify(Array.isArray(job.assignedNames) ? job.assignedNames : []),
           texto(job.reason),
           texto(job.customerName),
-          texto(job.customerPhone),
+          texto(job.customerPhone) || texto(recepcion.clienteTelefono),
           Number(job.createdAtMs) || ahora,
           textoONull(job.workshopId ?? recepcion.workshopId),
           textoONull(job.quickEntryLabel),

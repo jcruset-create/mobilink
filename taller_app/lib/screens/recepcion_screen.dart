@@ -6,7 +6,6 @@ import 'package:image_picker/image_picker.dart';
 
 import '../services/api_service.dart';
 import '../theme.dart';
-import '../workshops.dart';
 
 const _areas = ['camion', 'movil', 'tacografo', 'turismo', 'mecanica'];
 
@@ -26,15 +25,7 @@ class RecepcionScreen extends StatefulWidget {
   /// convertir, la cita queda cerrada para que no salgan dos trabajos.
   final Map<String, dynamic>? cita;
 
-  /// Taller elegido en la pantalla anterior, para no volver a preguntarlo.
-  final String? workshopId;
-
-  const RecepcionScreen({
-    super.key,
-    required this.api,
-    this.cita,
-    this.workshopId,
-  });
+  const RecepcionScreen({super.key, required this.api, this.cita});
 
   @override
   State<RecepcionScreen> createState() => _RecepcionScreenState();
@@ -44,9 +35,9 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
   final _matriculaCtrl = TextEditingController();
   final _kmCtrl = TextEditingController();
   final _clienteCtrl = TextEditingController();
+  final _telefonoCtrl = TextEditingController();
   final _notasCtrl = TextEditingController();
 
-  String _workshopId = kWorkshops.first['id']!;
   String? _area;
   String? _plantillaKey;
   bool _urgente = false;
@@ -78,12 +69,12 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
     if (cita != null) {
       _matriculaCtrl.text = (cita['plate'] ?? '').toString().toUpperCase();
       _clienteCtrl.text = (cita['customerName'] ?? '').toString();
+      _telefonoCtrl.text = (cita['customerPhone'] ?? '').toString();
       final area = (cita['area'] ?? '').toString();
       if (_areas.contains(area)) _area = area;
       final key = (cita['templateKey'] ?? '').toString();
       if (key.isNotEmpty) _plantillaKey = key;
     }
-    if (widget.workshopId != null) _workshopId = widget.workshopId!;
     _cargarCatalogo();
   }
 
@@ -92,6 +83,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
     _matriculaCtrl.dispose();
     _kmCtrl.dispose();
     _clienteCtrl.dispose();
+    _telefonoCtrl.dispose();
     _notasCtrl.dispose();
     super.dispose();
   }
@@ -272,8 +264,8 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
     try {
       final recepcionId = await widget.api.crearRecepcion({
         'matricula': matricula,
-        'workshopId': _workshopId,
         'clienteNombre': _clienteCtrl.text.trim(),
+        'clienteTelefono': _telefonoCtrl.text.trim(),
         'kilometros': _kmSensatos(_kmCtrl.text),
         'kilometrosOcr': _kilometrosOcr,
         'confianzaKilometrosOcr': _confianzaKmOcr,
@@ -406,18 +398,16 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
           ),
           const SizedBox(height: 12),
 
-          DropdownButtonFormField<String>(
-            initialValue: _workshopId,
-            decoration: const InputDecoration(labelText: 'Taller'),
-            items: kWorkshops
-                .map((w) => DropdownMenuItem(
-                      value: w['id'],
-                      child: Text(w['name'] ?? w['id']!),
-                    ))
-                .toList(),
-            onChanged: (v) => setState(() => _workshopId = v ?? _workshopId),
+          // El teléfono lo apunta quien tiene al cliente delante. Llega al
+          // trabajo al convertir la recepción, que es donde hace falta para
+          // avisar de que el vehículo está listo.
+          TextField(
+            controller: _telefonoCtrl,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(labelText: 'Teléfono móvil'),
           ),
           const SizedBox(height: 12),
+
 
           DropdownButtonFormField<String>(
             initialValue: _area,

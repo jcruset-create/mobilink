@@ -727,6 +727,9 @@ function normalizeTechRow(t: any) {
     // Persona de Core con la que está vinculado (paso 2 de la unificación).
     // null = todavía sin vincular; el histórico sigue yendo por nombre.
     employeeId: t.employee_id ?? null,
+    // Taller al que pertenece. null = el de por defecto, que es como se ha
+    // comportado siempre mientras la columna no existía.
+    workshopId: t.workshopId ?? null,
   };
 }
 
@@ -2316,6 +2319,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
       statusTotals,
       roadsideCapable,
       phone,
+      workshopId,
     } = req.body ?? {};
 
     const normalizedStatus = status ?? "disponible";
@@ -2332,9 +2336,21 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
       protectedStatuses.has(normalizedStatus) || Boolean(blocked);
 
     const existingResult = await db.query(
-      `SELECT "roadsideCapable" FROM techs WHERE name = $1`,
+      `SELECT "roadsideCapable", "workshopId" FROM techs WHERE name = $1`,
       [name]
     );
+
+    /*
+     * Si el cuerpo no trae taller, se conserva el que había.
+     *
+     * Este endpoint es un upsert con la lista de columnas escrita a mano, así
+     * que una columna ausente del cuerpo se escribiría como NULL y borraría la
+     * asignación. Lo mismo que ya se hace con `roadsideCapable`.
+     */
+    const normalizedWorkshopId =
+      workshopId === undefined
+        ? existingResult.rows[0]?.workshopId ?? null
+        : String(workshopId ?? "").trim() || null;
     const normalizedRoadsideCapable =
       roadsideCapable === undefined
         ? existingResult.rows[0]?.roadsideCapable === true
@@ -2353,9 +2369,10 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           "statusChangedAtMs",
           "statusTotals",
           "roadsideCapable",
-          phone
+          phone,
+          "workshopId"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (name)
         DO UPDATE SET
           status = EXCLUDED.status,
@@ -2367,7 +2384,8 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           "statusChangedAtMs" = EXCLUDED."statusChangedAtMs",
           "statusTotals" = EXCLUDED."statusTotals",
           "roadsideCapable" = EXCLUDED."roadsideCapable",
-          phone = EXCLUDED.phone
+          phone = EXCLUDED.phone,
+          "workshopId" = EXCLUDED."workshopId"
       `,
       [
         name,
@@ -2381,6 +2399,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
         JSON.stringify(statusTotals ?? {}),
         normalizedRoadsideCapable,
         phone != null ? String(phone).trim() || null : null,
+        normalizedWorkshopId,
       ]
     );
 
@@ -2399,7 +2418,8 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           "roadsideCapable",
           "currentRoadsideAssistanceId",
           phone,
-          employee_id
+          employee_id,
+          "workshopId"
         FROM techs
         WHERE name = $1
       `,
@@ -3177,13 +3197,13 @@ async function guardarIdempotencia(req: express.Request, respuesta: unknown) {
 
 async function getTallerOperator(techName: string) {
   let r = await db.query(
-    `SELECT name, "es_supervisor" FROM techs WHERE name = $1 LIMIT 1`,
+    `SELECT name, "es_supervisor", "workshopId" FROM techs WHERE name = $1 LIMIT 1`,
     [techName]
   );
 
   // Repliegue tolerante: mismo nombre con otra caja o sin acentos.
   if (r.rows.length === 0) {
-    const todos = await db.query(`SELECT name, "es_supervisor" FROM techs`);
+    const todos = await db.query(`SELECT name, "es_supervisor", "workshopId" FROM techs`);
     const encontrado = todos.rows.find((t: any) => mismoNombreTecnico(t.name, techName));
     if (!encontrado) return null;
     r = { rows: [encontrado] } as any;
@@ -3192,6 +3212,8 @@ async function getTallerOperator(techName: string) {
   return {
     name: String(r.rows[0].name),
     esSupervisor: r.rows[0].es_supervisor === true,
+    // null = el taller por defecto, que es como se ha comportado siempre.
+    workshopId: r.rows[0].workshopId ?? null,
   };
 }
 
@@ -3265,7 +3287,7 @@ app.get("/api/taller-operator/me", requireTallerOperator, async (req, res) => {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
     if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
-    res.json({ name: op.name, esSupervisor: op.esSupervisor });
+    res.json({ name: op.name, esSupervisor: op.esSupervisor, workshopId: op.workshopId });
   } catch (error) {
     console.error("GET /api/taller-operator/me error:", error);
     res.status(500).json({ error: "Error obteniendo operario" });

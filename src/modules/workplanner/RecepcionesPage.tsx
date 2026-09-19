@@ -327,6 +327,14 @@ export default function RecepcionesPage() {
                         />
                       </label>
                       <label className="text-xs text-slate-400">
+                        Teléfono
+                        <input
+                          defaultValue={actual.clienteTelefono ?? ""}
+                          onBlur={(e) => void editar("clienteTelefono", e.target.value.trim())}
+                          className="mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-100"
+                        />
+                      </label>
+                      <label className="text-xs text-slate-400">
                         Kilómetros
                         <input
                           type="number"

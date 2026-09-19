@@ -238,6 +238,16 @@ describe("jobDesdeRecepcion", () => {
     expect(job.reason).toBe("Recepción en patio (Andrés). Pierde aceite.");
   });
 
+  it("el teléfono del cliente llega al trabajo", () => {
+    const job = jobDesdeRecepcion(
+      recepcion({ clienteTelefono: "600 11 22 33" }),
+      1,
+      plantilla,
+      1
+    );
+    expect(job.customerPhone).toBe("600 11 22 33");
+  });
+
   it("el kilometraje viaja con el trabajo, no solo en la ficha", () => {
     const job = jobDesdeRecepcion(
       recepcion({ kilometros: 123456, notas: "Pierde aceite." }),
