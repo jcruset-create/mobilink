@@ -7,23 +7,19 @@
  * físico: depende del DPI, del zoom del navegador y del driver. Un milímetro
  * sí, y es lo único que se puede comprobar con una regla.
  *
- * Y vive en UN sitio porque los tres bloques de la etiqueta salen del MISMO
- * cálculo. Diseñarlos a mano por separado es como se acaba con el bloque de
- * abajo saliéndose de su troquelado: los tres parecían iguales en pantalla.
+ * Y vive en UN sitio porque los tres bloques salen del MISMO cálculo.
+ * Diseñarlos a mano por separado es como se acaba con el de abajo saliéndose
+ * de su troquelado: los tres parecían iguales en pantalla.
  *
  * ── De dónde salen estos números ────────────────────────────────────────────
  *
- * Medidos sobre el escaneo de la etiqueta real (`20260917_001.pdf`, página de
- * 93,0 × 147,7 mm): la etiqueta amarilla ocupa 90,0 × 143,9 mm y los dos
- * troquelados inferiores son 64,3 × 23,5 mm, a 13 mm del borde izquierdo.
+ * Del PDF de fabricación de la etiqueta (`etiqueta_144x90_groga.pdf`), leídos
+ * de sus vectores, no de una foto ni de un escaneo: página de 90 × 144 mm y
+ * dos troquelados de 65 × 25 mm exactos, a 12,5 mm del borde izquierdo y a
+ * 66,98 y 94,98 mm del borde superior.
  *
- * Que los dos huecos midieran lo mismo hasta la décima es lo que da confianza
- * en la medición: si fuera ruido del escaneo, no habrían coincidido.
- *
- * PENDIENTE DE CALIBRAR con una regla sobre la etiqueta física. Un escáner
- * puede haber aplicado un ajuste y desde el fichero no hay forma de saberlo.
- * Si la medida real difiere, se cambian estos números y NADA MÁS: el resto se
- * recalcula. Para eso está este módulo.
+ * Si algún día cambia la etiqueta, se cambian ESTOS números y nada más: todo
+ * lo demás se recalcula. Para eso está este módulo.
  */
 
 /** Una caja en milímetros, con el origen en la esquina superior izquierda. */
@@ -35,27 +31,30 @@ export interface Caja {
 }
 
 export const ETIQUETA = {
-  /** La etiqueta amarilla entera. */
+  /** La etiqueta entera. */
   ancho: 90.0,
-  alto: 143.9,
+  alto: 144.0,
 
   /**
-   * Los dos troquelados inferiores, tal como están en la etiqueta física.
+   * Las dos SUBETIQUETAS troqueladas de abajo.
    *
-   * Son los límites REALES de los bloques 2 y 3: no se aproximan ni se
-   * redondean a algo cómodo, porque lo que se sale de un troquelado se pierde
+   * Son los límites reales, sacados del PDF de fabricación: no se aproximan ni
+   * se redondean a algo cómodo, porque lo que se sale del troquelado se pierde
    * al arrancar la pegatina.
    */
   huecos: [
-    { x: 13.0, y: 68.5, ancho: 64.3, alto: 23.5 },
-    { x: 12.8, y: 96.3, ancho: 64.4, alto: 23.5 },
+    { x: 12.5, y: 66.98, ancho: 65.0, alto: 25.0 },
+    { x: 12.5, y: 94.98, ancho: 65.0, alto: 25.0 },
   ] as Caja[],
 
   /**
-   * El bloque 1, en la zona central-superior. Aquí no hay troquelado que
-   * respetar, así que va más holgado: es el que se lee de lejos.
+   * La zona de arriba, la que se queda pegada a la rueda.
+   *
+   * Aquí no hay troquelado que respetar, así que se aprovecha: es la que se
+   * lee de lejos y en mala postura, agachado junto a una rueda. Llega hasta
+   * 3 mm por encima del primer troquelado.
    */
-  bloque1: { x: 13.0, y: 30.0, ancho: 64.0, alto: 30.0 } as Caja,
+  zonaSuperior: { x: 7.5, y: 8.0, ancho: 75.0, alto: 56.0 } as Caja,
 
   /**
    * Margen que se deja al borde de cada caja.
@@ -75,106 +74,139 @@ export const ETIQUETA = {
    * versión 2 con corrección M son 25 módulos, y a 12 mm cada módulo mide
    * 0,48 mm, que es el suelo práctico de una cámara de tablet a 20 cm.
    *
-   * No es un consejo: si el cálculo no llega, `componerBloque` FALLA. Más
-   * vale no imprimir que imprimir 200 etiquetas que no se pueden escanear.
+   * No es un consejo: si el cálculo no llega, el compositor FALLA. Más vale no
+   * imprimir que imprimir 200 etiquetas que no se pueden escanear.
    */
   qrMinimo: 12.0,
-
-  /** Altura del rótulo «Nº SERIE» sobre el número. */
-  rotulo: 2.4,
 } as const;
 
-/** Lo que hay que dibujar dentro de una caja, ya resuelto en mm. */
+/**
+ * Lo que hay que dibujar dentro de una caja, ya resuelto en mm.
+ *
+ * No hay rótulo: en la etiqueta no se imprime «Nº SERIE» ni nada parecido.
+ * Quien la mira ya sabe lo que es, y esas letras le quitaban sitio al dato.
+ */
 export interface BloqueEtiqueta {
   /** La caja de la que se partió, para poder situarla en la etiqueta. */
   caja: Caja;
-  /** Dónde va el rótulo «Nº SERIE». */
-  rotulo: Caja & { tamano: number };
   /** Dónde va el número, y con qué tamaño de letra. */
-  numero: Caja & { tamano: number };
-  /** El QR, siempre cuadrado y SIEMPRE a la derecha del número. */
+  numero: Caja & { tamano: number; centrado: boolean };
+  /** El QR, siempre cuadrado. */
   qr: Caja;
 }
 
 /**
- * Cuánto ancho ocupa un dígito respecto al tamaño de letra, en una
- * monoespaciada condensada. Medido sobre la que se va a usar; si se cambia la
- * fuente hay que revisar este número o el cálculo miente.
+ * Cuánto ancho ocupa un dígito respecto al tamaño de letra, en la
+ * monoespaciada que se usa. Si se cambia la fuente hay que revisar este número
+ * o el cálculo miente.
  */
 const ANCHO_DIGITO = 0.62;
 
-/**
- * Coloca el número y el QR dentro de una caja.
- *
- * El QR va a la DERECHA del número, nunca encima ni debajo: es el encargo, y
- * además es lo que deja al número el ancho largo de la caja, que es donde
- * trece dígitos se leen grandes.
- *
- * Lanza si el QR no llega al mínimo escaneable. Es deliberado: un QR que no
- * se lee convierte toda la etiqueta en papel de adorno, y es mejor enterarse
- * al generar que con el rollo ya impreso.
- */
-export function componerBloque(caja: Caja, digitos = 13): BloqueEtiqueta {
+function interior(caja: Caja): { ancho: number; alto: number } {
   const m = ETIQUETA.seguridad;
-  const interiorAncho = caja.ancho - 2 * m;
-  const interiorAlto = caja.alto - 2 * m;
-  if (interiorAncho <= 0 || interiorAlto <= 0) {
+  const ancho = caja.ancho - 2 * m;
+  const alto = caja.alto - 2 * m;
+  if (ancho <= 0 || alto <= 0) {
     throw new Error(`Caja demasiado pequeña para la etiqueta: ${caja.ancho}×${caja.alto} mm`);
   }
+  return { ancho, alto };
+}
 
-  // El QR es cuadrado y su lado lo manda el ALTO disponible: es la dimensión
-  // escasa en un troquelado de 23,5 mm. Se limita también a un tercio del
-  // ancho para no comerse el sitio del número.
-  const qrLado = Math.min(interiorAlto, interiorAncho / 3);
-  if (qrLado < ETIQUETA.qrMinimo) {
+function comprobarQr(lado: number, caja: Caja): void {
+  if (lado < ETIQUETA.qrMinimo) {
     throw new Error(
-      `El QR saldría de ${qrLado.toFixed(1)} mm y el mínimo escaneable es ` +
+      `El QR saldría de ${lado.toFixed(1)} mm y el mínimo escaneable es ` +
       `${ETIQUETA.qrMinimo} mm. Caja de ${caja.ancho}×${caja.alto} mm.`,
     );
   }
+}
 
-  const anchoTexto = interiorAncho - qrLado - ETIQUETA.separacion;
+/**
+ * Número a la izquierda y QR a la DERECHA, para las subetiquetas.
+ *
+ * En una caja de 65 × 25 mm el alto es lo escaso: puestos uno encima de otro,
+ * ni el número ni el QR tendrían tamaño. En fila, el número dispone del largo
+ * de la caja, que es donde trece dígitos se leen grandes.
+ */
+export function componerFila(caja: Caja, digitos = 13): BloqueEtiqueta {
+  const m = ETIQUETA.seguridad;
+  const { ancho, alto } = interior(caja);
+
+  // El QR es cuadrado y su lado lo manda el ALTO. Se limita también a un
+  // tercio del ancho para no comerse el sitio del número.
+  const lado = Math.min(alto, ancho / 3);
+  comprobarQr(lado, caja);
+
+  const anchoTexto = ancho - lado - ETIQUETA.separacion;
   if (anchoTexto <= 0) throw new Error("No queda sitio para el número junto al QR");
-
-  // El rótulo solo se pone si sobra alto: entre rótulo y número, manda el
-  // número, que es el dato.
-  const cabeRotulo = interiorAlto - ETIQUETA.rotulo >= 4;
-  const altoNumero = cabeRotulo ? interiorAlto - ETIQUETA.rotulo : interiorAlto;
-
-  // El tamaño de letra lo limita lo que primero se agote: el alto de la
-  // franja o el ancho para N dígitos.
-  const tamano = Math.min(altoNumero * 0.8, anchoTexto / (digitos * ANCHO_DIGITO));
 
   return {
     caja,
-    rotulo: {
-      x: caja.x + m, y: caja.y + m,
-      ancho: anchoTexto, alto: cabeRotulo ? ETIQUETA.rotulo : 0,
-      tamano: cabeRotulo ? ETIQUETA.rotulo : 0,
-    },
     numero: {
-      x: caja.x + m,
-      y: caja.y + m + (cabeRotulo ? ETIQUETA.rotulo : 0),
-      ancho: anchoTexto, alto: altoNumero, tamano,
+      x: caja.x + m, y: caja.y + m,
+      ancho: anchoTexto, alto,
+      // Manda lo que primero se agote: el alto de la franja o el ancho para N
+      // dígitos.
+      tamano: Math.min(alto * 0.8, anchoTexto / (digitos * ANCHO_DIGITO)),
+      centrado: false,
     },
     qr: {
-      // Pegado al borde derecho interior, y centrado en vertical.
-      x: caja.x + caja.ancho - m - qrLado,
-      y: caja.y + (caja.alto - qrLado) / 2,
-      ancho: qrLado, alto: qrLado,
+      // Pegado al borde derecho interior y centrado en vertical.
+      x: caja.x + caja.ancho - m - lado,
+      y: caja.y + (caja.alto - lado) / 2,
+      ancho: lado, alto: lado,
     },
   };
 }
 
 /**
- * Los TRES bloques de la etiqueta, del mismo cálculo.
+ * Número ARRIBA y QR DEBAJO, los dos lo más grandes que quepan.
  *
- * El 1 arriba y los 2 y 3 dentro de sus troquelados. Salen de la misma
- * función a propósito: así no puede pasar que uno se diseñe «a ojo» y acabe
- * saliéndose de su hueco.
+ * Es la zona que se queda en la rueda, y no tiene troquelado que la estreche,
+ * así que aquí el reparto es al revés que en las subetiquetas: en columna, el
+ * número ocupa los 75 mm de ancho y al QR le queda todo el alto restante.
+ *
+ * El número se queda con la franja que necesita para llenar el ancho —no más—
+ * y TODO lo que sobra es para el QR: entre un número aún más grande y un QR
+ * que se lee a la primera con el móvil sucio, manda el QR.
+ */
+export function componerColumna(caja: Caja, digitos = 13): BloqueEtiqueta {
+  const m = ETIQUETA.seguridad;
+  const { ancho, alto } = interior(caja);
+
+  // El número, tan grande como permita el ancho para N dígitos.
+  const tamano = ancho / (digitos * ANCHO_DIGITO);
+  const franja = tamano * 1.25; // algo de aire por encima y por debajo
+
+  const lado = Math.min(ancho, alto - franja - ETIQUETA.separacion);
+  comprobarQr(lado, caja);
+
+  return {
+    caja,
+    numero: {
+      x: caja.x + m, y: caja.y + m,
+      ancho, alto: franja, tamano, centrado: true,
+    },
+    qr: {
+      // Centrado en horizontal, justo debajo del número.
+      x: caja.x + (caja.ancho - lado) / 2,
+      y: caja.y + m + franja + ETIQUETA.separacion,
+      ancho: lado, alto: lado,
+    },
+  };
+}
+
+/**
+ * Los TRES bloques de la etiqueta: la zona de arriba y las dos subetiquetas.
+ *
+ * Salen del mismo módulo a propósito, así no puede pasar que uno se diseñe «a
+ * ojo» y acabe saliéndose de su hueco.
  */
 export function bloquesDeEtiqueta(digitos = 13): BloqueEtiqueta[] {
-  return [ETIQUETA.bloque1, ...ETIQUETA.huecos].map((c) => componerBloque(c, digitos));
+  return [
+    componerColumna(ETIQUETA.zonaSuperior, digitos),
+    ...ETIQUETA.huecos.map((c) => componerFila(c, digitos)),
+  ];
 }
 
 /** ¿Está esta caja entera dentro de aquella? Con la tolerancia de la décima. */

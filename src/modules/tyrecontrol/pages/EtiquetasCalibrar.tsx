@@ -34,8 +34,9 @@ export default function EtiquetasCalibrar() {
         </p>
         <p className="mt-1 max-w-2xl text-sm text-slate-400">
           El recuadro discontinuo es el borde de la etiqueta ({ETIQUETA.ancho} ×{" "}
-          {ETIQUETA.alto} mm) y los punteados rojos son los tres bloques: el de
-          arriba y los dos troquelados. Deben caer dentro de sus huecos.
+          {ETIQUETA.alto} mm) y los punteados rojos son los tres bloques: la
+          zona de arriba y las dos subetiquetas. Los dos de abajo tienen que
+          caer dentro de sus troquelados.
         </p>
         <button
           onClick={() => window.print()}
@@ -48,7 +49,7 @@ export default function EtiquetasCalibrar() {
       <div className="calibracion inline-block bg-white">
         <div style={{ position: "relative", width: `${ETIQUETA.ancho}mm`, height: `${ETIQUETA.alto}mm` }}>
           {/* Con los marcos puestos: esta hoja existe para ver los límites. */}
-          <Etiqueta serie="1234567890123" marco />
+          <Etiqueta serie="6162121986" marco />
           {/*
             La regla: 100 mm, EN VERTICAL. En horizontal no cabe —la etiqueta
             mide 90 mm de ancho— y una regla recortada no sirve para medir.
