@@ -401,13 +401,35 @@ Ningún test se "arregla" borrándolo ni relajándolo.
 
 ## 13. Orden de trabajo
 
+Todas las fases están implementadas.
+
 1. ~~Investigación y este documento~~
-2. Modelo: tablas en `db.ts` + migración + tipos + lógica pura + tests
-3. API: router `server/recepciones/`, montado desde `index.ts`
-4. Conversión a job (transaccional, condicional)
-5. Web: bandeja + detalle en `workplanner`
-6. APK: pestaña de recepción
-7. Offline: tipo `recepcion` en el outbox + los dos arreglos de `flushOutbox`
-8. OCR de matrícula
-9. Integración con vehículo/cliente conocidos
-10. QA: `npx tsc -b`, tests, `flutter analyze`, `check-versions.sh`, PR
+2. ~~Modelo~~ — `recepciones_vehiculo` en `server/db.ts`, migración en
+   `supabase/migrations/workplanner_recepciones_vehiculo.sql`, lógica pura en
+   `src/modules/recepcionVehiculo.ts` (23 tests)
+3. ~~API~~ — `server/recepciones/router.ts`, montado desde `index.ts`
+4. ~~Conversión a job~~ — transaccional y condicional sobre `estado='pendiente'`
+5. ~~Web~~ — `src/modules/workplanner/RecepcionesPage.tsx` + sección del menú
+6. ~~APK~~ — `taller_app/lib/screens/recepcion_screen.dart` + pestaña
+7. ~~Offline~~ — tipo `recepcion` en el outbox y los dos arreglos de
+   `flushOutbox`, con la política en `outbox_politica.dart` (8 tests)
+8. ~~OCR~~ — `POST /taller-operator/recepciones/ocr-matricula`, que no guarda
+9. ~~Vehículo/cliente conocidos~~ — `GET /taller-operator/recepciones/vehiculo`
+10. ~~QA~~ — `npx tsc -b`, 3.581 tests en verde, `flutter analyze` y
+    `flutter test` sobre `taller_app`, `check-versions.sh`
+
+### Lo que quedó fuera, dicho en voz alta
+
+- **Fotos de una recepción encolada sin cobertura.** Sin id del servidor no
+  hay a qué colgarlas. La recepción se guarda y se envía sola al recuperar la
+  red, pero sin las fotos, y la APK lo dice en pantalla en lugar de dejar
+  creer que se enviaron. Resolverlo bien pide encolar también los ficheros y
+  enlazarlos por la clave de idempotencia; es una fase aparte.
+- **`resueltaPor` sale de la cabecera `x-user-name`**, o de la etiqueta
+  genérica `panel` si no viene. El guarda del panel valida rol, no identidad
+  de usuario, y no se ha tocado para esto.
+- **La búsqueda de vehículo sólo mira `roadside_vehicles`.** `tc_vehiculos`
+  vive en Supabase, por otra vía, y meterlo aquí habría mezclado dos
+  conectores en un endpoint que se llama desde el patio con mala cobertura.
+  El tipo `OrigenVehiculo` y el desempate a favor de la flota propia ya están
+  puestos para cuando se añada.
