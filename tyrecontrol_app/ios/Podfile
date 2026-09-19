@@ -1,6 +1,22 @@
-# Mobilink TyreControl — iOS 13 es el mínimo que admite Flutter 3.35 y los
-# plugins que usa la app (url_launcher, shared_preferences).
-platform :ios, '13.0'
+# Mobilink TyreControl.
+#
+# ── 15.5, y de dónde sale ese número ────────────────────────────────────────
+#
+# Lo exige el escáner de QR de la etiqueta. `mobile_scanner` depende de
+# `GoogleMLKit/BarcodeScanning ~> 6.0.0`, y aunque el pod paraguas GoogleMLKit
+# declara iOS 12.0 —lo que despista—, el que hace el trabajo,
+# MLKitBarcodeScanning 6.0.0, declara **15.5**. Con el Podfile por debajo,
+# `pod install` se niega y el build de iOS no llega ni a compilar.
+#
+# Antes estaba en 13.0, que era el mínimo de Flutter 3.35 y del resto de
+# plugins. Subir a 15.5 deja fuera los iPhone y iPad que no hayan pasado de
+# iOS 15.4; todo aparato que admita iOS 15 puede actualizarse al 15.8, así que
+# es cuestión de actualizar, no de cambiar de equipo.
+#
+# La alternativa sería bajar `mobile_scanner` a la serie 4, que usa MLKit 5
+# (iOS 12): dos versiones distintas del mismo plugin que mantener, y la vieja
+# sin arreglos. Si algún día el parque de iPads obliga, es por ahí.
+platform :ios, '15.5'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -41,11 +57,15 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
 
-    # permission_handler: solo se compila el código de los permisos que la app
-    # pide de verdad en iOS (cámara, fototeca y Bluetooth para la sonda). Así
-    # el binario no lleva llamadas a ubicación, contactos, etc., y la revisión
-    # de Apple no reclama textos de permisos que no se usan.
     target.build_configurations.each do |config|
+      # Se le impone el mínimo a TODOS los pods, no solo al Runner: varios
+      # traen el suyo por debajo y Xcode los rechaza o llena el log de avisos.
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
+
+      # permission_handler: solo se compila el código de los permisos que la
+      # app pide de verdad en iOS (cámara, fototeca y Bluetooth para la sonda).
+      # Así el binario no lleva llamadas a ubicación, contactos, etc., y la
+      # revisión de Apple no reclama textos de permisos que no se usan.
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
         '$(inherited)',
         'PERMISSION_CAMERA=1',
