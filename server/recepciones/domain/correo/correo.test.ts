@@ -527,6 +527,132 @@ Un saludo,
 Grupo Soledad
 `;
 
+/**
+ * El MISMO pedido, tal y como llega al buzón de verdad: aquí la fila viene en
+ * una sola línea y la nota de la celda va DETRÁS del importe. Unos lectores de
+ * correo aplanan la tabla de una manera y otros de otra; el pedido es el mismo
+ * y tiene que entrar igual.
+ */
+const PEDIDO_APLANADO = ` https://content.gruposoledad.com/b2b/mail/cabecera.png]
+
+ Notificación Pedido Recibido
+
+Estimado COMERCIAL SEA, S.A.,
+acabamos de registrar con éxito un pedido en nuestro sistema.
+
+
+Tu número de pedido es B -2026-5700253
+Realizado por comercialseatarragona
+
+El pedido será entregado a:
+COMERCIAL SEA, S.A.
+PIRIU CLAR C/COURE 27
+43006 TARRAGONA
+TARRAGONA ESPAÑA
+
+El contenido del pedido es:
+
+
+
+Cantidad
+Descripción
+Importe
+2.00 245/35X20 PIREL.PZ4 95Y+KS s-i 168.20 pedido custodia
+
+
+La mercancía será expedida por nuestro centro logísitico  1 - ALMACEN
+CENTRAL-ASPE ALICANTE
+La entrega se realizará a través de TRANSAHER
+
+Cuando la mercancía sea emitida por nuestro centro logístico, recibirás otro
+correo
+con la copia del albarán de salida y más información sobre la entrega.
+
+
+Si tienes alguna duda, por favor NO respondas a esta dirección de e-mail.
+Puedes contactar con nosotros a través de nuestro chat entre las 9:00 -20:00
+horas, escribirnos a
+b2b@gruposoledad.com o llamarnos al teléfono 91 191 09 10.
+
+
+Un saludo,
+
+Grupo Soledad
+`;
+
+describe("parsearCorreo · la nota de la celda detrás del importe", () => {
+  const r = parsearCorreo(ASUNTO_PEDIDO_PARTIDO, PEDIDO_APLANADO);
+
+  it("lee la línea entera, con la nota dentro de la descripción", () => {
+    expect(r.tipo).toBe("PEDIDO");
+    expect(r.pedido!.lineas).toEqual([
+      {
+        cantidad: 2,
+        descripcion: "245/35X20 PIREL.PZ4 95Y+KS s-i pedido custodia",
+        precioCentimos: 16820,
+        referencia: null,
+      },
+    ]);
+    expect(r.avisos).toEqual([]);
+  });
+
+  it("y lo demás del correo sigue en su sitio", () => {
+    expect(r.pedido!.numeroPedido).toBe("B-2026-5700253");
+    expect(r.pedido!.fecha).toBe("2026-09-18");
+    expect(r.pedido!.destinoLocalidad).toBe("TARRAGONA");
+    expect(r.pedido!.usuario).toBe("comercialseatarragona");
+    expect(r.pedido!.transportista).toBe("TRANSAHER");
+  });
+
+  it("ni el teléfono ni el horario de la firma pasan por mercancía", () => {
+    const texto = r.pedido!.lineas.map((l) => l.descripcion).join(" ");
+    expect(texto).not.toMatch(/gruposoledad|910 9|20:00/);
+    expect(r.pedido!.lineas).toHaveLength(1);
+  });
+});
+
+describe("filaDeTabla · la cola de detrás del importe", () => {
+  it("una nota de texto se pega a la descripción", () => {
+    expect(filaDeTabla("2.00 245/35X20 PIREL.PZ4 95Y+KS s-i 168.20 pedido custodia")).toEqual({
+      cantidad: 2,
+      descripcion: "245/35X20 PIREL.PZ4 95Y+KS s-i pedido custodia",
+      precioCentimos: 16820,
+      referencia: null,
+    });
+  });
+
+  it("si en la cola hay otro importe no se adivina cuál es el precio: no es una fila", () => {
+    expect(filaDeTabla("2.00 CUBIERTA 168.20 336.40 pedido custodia")).toBeNull();
+    expect(filaDeTabla("4 CUBIERTA 263,70 1.054,80 nota")).toBeNull();
+  });
+
+  it("y una fila que acaba en importe se lee como siempre, por el último", () => {
+    // Sin cola no entra la regla nueva: manda la de siempre, y el importe es
+    // el número del final, que es el de la columna.
+    expect(filaDeTabla("2.00 CUBIERTA 168.20 336.40")).toEqual({
+      cantidad: 2,
+      descripcion: "CUBIERTA 168.20",
+      precioCentimos: 33640,
+      referencia: null,
+    });
+  });
+
+  it("y una cola sin letras tampoco vale", () => {
+    expect(filaDeTabla("2.00 CUBIERTA 168.20 -")).toBeNull();
+  });
+
+  it("lo que ya funcionaba sigue igual", () => {
+    expect(filaDeTabla("2.00 245/70X17.5 HANKOOK AH35 136M 248.45")).toEqual({
+      cantidad: 2,
+      descripcion: "245/70X17.5 HANKOOK AH35 136M",
+      precioCentimos: 24845,
+      referencia: null,
+    });
+    expect(filaDeTabla("43006 TARRAGONA")).toBeNull();
+    expect(filaDeTabla("Puedes llamarnos al teléfono 91 191 09 10.")).toBeNull();
+  });
+});
+
 describe("parsearCorreo · una fila partida por una nota dentro de la celda", () => {
   const r = parsearCorreo(ASUNTO_PEDIDO_PARTIDO, PEDIDO_PARTIDO);
 

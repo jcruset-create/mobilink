@@ -1824,6 +1824,8 @@ export async function crearDocumento(
     tipo: "ALBARAN_ORIGINAL" | "ALBARAN_RECEPCION" | "OTRO";
     albaranId: string | null;
     recepcionId: string | null;
+    /** El correo del que salió, cuando todavía no hay albarán al que colgarlo. */
+    correoId?: string | null;
     nombreFichero: string;
     storagePath: string;
     hashSha256: string;
@@ -1839,8 +1841,8 @@ export async function crearDocumento(
   const { rows } = await db(ejecutor).query(
     `INSERT INTO rcp_documentos
        (empresa_id, tipo, albaran_id, recepcion_id, nombre_fichero, storage_path, hash_sha256, tamano_bytes,
-        mime, origen, generado_desde_hash, subido_por, subido_nombre)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        mime, origen, generado_desde_hash, subido_por, subido_nombre, correo_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      RETURNING *`,
     [
       empresaId,
@@ -1856,9 +1858,22 @@ export async function crearDocumento(
       datos.generadoDesdeHash,
       datos.subidoPor,
       datos.subidoNombre,
+      datos.correoId ?? null,
     ]
   );
   return aDocumento(rows[0]);
+}
+
+/**
+ * Los PDF que llegaron adjuntos a un correo y todavía no cuelgan de ningún
+ * albarán. Es lo que hace que «Reprocesar» pueda volver a leerlos.
+ */
+export async function adjuntosDeCorreo(empresaId: string, correoId: string, ejecutor?: Ejecutor): Promise<Documento[]> {
+  const { rows } = await db(ejecutor).query(
+    `SELECT * FROM rcp_documentos WHERE empresa_id = $1 AND correo_id = $2 ORDER BY created_at`,
+    [empresaId, correoId]
+  );
+  return rows.map(aDocumento);
 }
 
 export async function documentoPorId(empresaId: string, id: string, ejecutor?: Ejecutor): Promise<Documento | null> {

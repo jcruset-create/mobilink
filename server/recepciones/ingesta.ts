@@ -61,6 +61,7 @@ import { normalizarNumero } from "./domain/numero.ts";
 import { ErrorRecepciones } from "./errors.ts";
 import * as repo from "./repository.ts";
 import * as servicio from "./service.ts";
+import { guardarDocumento, hashDeFichero, leerDocumento as leerDelAlmacen, rutaDocumento } from "./storage.ts";
 
 export type AdjuntoPdf = { nombre: string; contenido: Buffer };
 
@@ -133,6 +134,60 @@ async function proveedorDe(empresaId: string, remitente: string): Promise<repo.P
  */
 function sirveComoAlbaran(leido: CorreoParseado): boolean {
   return leido.tipo === "ALBARAN" && Boolean(leido.albaran?.numeroAlbaran);
+}
+
+/**
+ * Guarda el PDF adjunto colgado del CORREO, no de un albarán.
+ *
+ * Hace falta porque el adjunto sólo viaja en la petición que lo trae: si el
+ * correo queda en revisión, el botón «Reprocesar» vuelve a mirar el cuerpo —y
+ * en estos correos el cuerpo no dice nada—. Guardándolo, reprocesar lee otra
+ * vez el mismo papel que llegó.
+ *
+ * Nunca lanza: no poder guardar el adjunto no puede cambiar en qué queda el
+ * correo.
+ */
+async function guardarAdjuntosDelCorreo(empresaId: string, correoId: string, adjuntos: AdjuntoPdf[]): Promise<void> {
+  try {
+    if (adjuntos.length === 0 || (await repo.adjuntosDeCorreo(empresaId, correoId)).length > 0) return;
+    for (const a of adjuntos) {
+      if (a.contenido.subarray(0, 5).toString() !== "%PDF-") continue;
+      const hash = hashDeFichero(a.contenido);
+      const ruta = rutaDocumento(empresaId, hash);
+      await guardarDocumento(ruta, a.contenido);
+      await repo.crearDocumento(empresaId, {
+        tipo: "OTRO",
+        albaranId: null,
+        recepcionId: null,
+        correoId,
+        nombreFichero: a.nombre || "adjunto.pdf",
+        storagePath: ruta,
+        hashSha256: hash,
+        tamanoBytes: a.contenido.length,
+        mime: "application/pdf",
+        origen: "CORREO",
+        generadoDesdeHash: null,
+        subidoPor: null,
+        subidoNombre: NOMBRE_SISTEMA,
+      });
+    }
+  } catch (e) {
+    console.warn("[Recepciones] no se ha podido guardar el adjunto del correo:", (e as Error).message);
+  }
+}
+
+/** Los adjuntos que se guardaron la primera vez, para volver a leerlos. */
+async function adjuntosGuardados(empresaId: string, correoId: string): Promise<AdjuntoPdf[]> {
+  const salida: AdjuntoPdf[] = [];
+  try {
+    for (const d of await repo.adjuntosDeCorreo(empresaId, correoId)) {
+      const contenido = await leerDelAlmacen(d.storagePath);
+      if (contenido) salida.push({ nombre: d.nombreFichero, contenido });
+    }
+  } catch (e) {
+    console.warn("[Recepciones] no se han podido releer los adjuntos del correo:", (e as Error).message);
+  }
+  return salida;
 }
 
 /** La primera entrega de INSA que se reconozca entre los PDF adjuntos. */
@@ -229,6 +284,12 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
   const correo = await repo.correoPorId(ctx.empresaId, correoId);
   if (!correo) throw new ErrorRecepciones("CORREO_NO_ENCONTRADO", "Correo no encontrado.", 404);
 
+  // El adjunto sólo viaja en la petición que lo trae. Se guarda la primera vez
+  // y se relee en las siguientes: así «Reprocesar» mira el mismo papel que
+  // llegó, y no un correo con el cuerpo vacío.
+  await guardarAdjuntosDelCorreo(ctx.empresaId, correoId, adjuntosPdf);
+  const adjuntos = adjuntosPdf.length > 0 ? adjuntosPdf : await adjuntosGuardados(ctx.empresaId, correoId);
+
   const terminar = async (
     datos: Omit<Partial<ResultadoIngesta>, "correoId"> & { resultado: repo.ResultadoCorreo; motivo: string | null },
     extra: { proveedorId?: string | null; tipo?: CorreoParseado["tipo"]; datosExtraidos?: unknown } = {}
@@ -272,7 +333,7 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
     let leido = parsearCorreo(correo.asunto, correo.texto);
     // Si del cuerpo no sale un albarán, se mira el PDF adjunto: hay
     // proveedores que no cuentan nada en el correo y lo mandan todo ahí.
-    const entrega = sirveComoAlbaran(leido) ? null : entregaDeLosAdjuntos(adjuntosPdf);
+    const entrega = sirveComoAlbaran(leido) ? null : entregaDeLosAdjuntos(adjuntos);
     if (entrega) {
       leido = {
         tipo: "ALBARAN",
@@ -461,7 +522,7 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
       const albaranes = await repo.albaranesDePedido(ctx.empresaId, pedido.id);
       const yaExiste = albaranes.find((x) => x.numeroNormalizado === albaranNormalizado);
       if (yaExiste) {
-        await adjuntarOriginalSiFalta(ctxSistema, yaExiste.id, adjuntosPdf, a.enlacesPdf);
+        await adjuntarOriginalSiFalta(ctxSistema, yaExiste.id, adjuntos, a.enlacesPdf);
         return terminar(
           { resultado: "DUPLICADO", motivo: `El albarán ${yaExiste.numeroProveedor} ya existía.`, pedidoId: pedido.id, pedidoNumero: pedido.numeroProveedor, albaranId: yaExiste.id, albaranNumero: yaExiste.numeroProveedor, avisos: leido.avisos },
           baseA
@@ -508,7 +569,7 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
         enlacePdfProveedor: a.enlacesPdf[0] ?? null,
       });
       const albaran = ficha.albaranes.find((x) => x.numeroNormalizado === albaranNormalizado)!;
-      const avisoPdf = await adjuntarOriginalSiFalta(ctxSistema, albaran.id, adjuntosPdf, a.enlacesPdf);
+      const avisoPdf = await adjuntarOriginalSiFalta(ctxSistema, albaran.id, adjuntos, a.enlacesPdf);
       const nota = deducido ? `El pedido ${pedido.numeroProveedor} no existía: se ha deducido de este albarán y las cantidades pedidas son provisionales.` : null;
       return terminar(
         {
