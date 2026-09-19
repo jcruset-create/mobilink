@@ -169,11 +169,11 @@ jobs:
       # tener release: el artifact del run sigue disponible para depurar.
       - name: Publicar release con la APK
         if: ${{ env.KS_B64 != '' }}
-        uses: softprops/action-gh-release@v2
+        uses: ./.github/actions/publicar-release
         with:
-          tag_name: assist-v${{ steps.ver.outputs.version }}
-          name: Mobilink Assist ${{ steps.ver.outputs.version }}
-          body: |
+          tag: assist-v${{ steps.ver.outputs.version }}
+          nombre: Mobilink Assist ${{ steps.ver.outputs.version }}
+          cuerpo: |
             APK de Mobilink Assist generada por CI desde ${{ github.sha }}.
 
             AVISO: primera versión firmada con la clave de Mobilink. Las
@@ -181,7 +181,8 @@ jobs:
             Android NO deja instalar ésta encima. Hay que desinstalar la
             anterior, y al hacerlo se pierde la cola de cambios pendientes de
             enviar: sincronizar antes de desinstalar.
-          files: flutter_app/build/app/outputs/flutter-apk/mobilink-assist-*.apk
+          ficheros: flutter_app/build/app/outputs/flutter-apk/mobilink-assist-*.apk
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # ── Guardar la versión nueva en el repositorio ─────────────────────────
       #

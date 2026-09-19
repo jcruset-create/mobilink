@@ -148,16 +148,17 @@ jobs:
       # tener release: el artifact del run sigue disponible para depurar.
       - name: Publicar release con la APK
         if: ${{ env.KS_B64 != '' }}
-        uses: softprops/action-gh-release@v2
+        uses: ./.github/actions/publicar-release
         with:
-          tag_name: taller-v${{ steps.ver.outputs.version }}
-          name: WorkPlanner Taller ${{ steps.ver.outputs.version }}
-          body: |
+          tag: taller-v${{ steps.ver.outputs.version }}
+          nombre: WorkPlanner Taller ${{ steps.ver.outputs.version }}
+          cuerpo: |
             APK de WorkPlanner Taller generada por CI desde ${{ github.sha }}.
 
             App para las tablets de los técnicos: ver las tareas asignadas,
             empezarlas, pausarlas y cerrarlas, con fotos y cola offline.
-          files: taller_app/build/app/outputs/flutter-apk/mobilink-taller-*.apk
+          ficheros: taller_app/build/app/outputs/flutter-apk/mobilink-taller-*.apk
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # ── Guardar la versión nueva en el repositorio ─────────────────────────
       #
