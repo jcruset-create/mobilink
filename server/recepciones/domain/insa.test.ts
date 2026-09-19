@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { esEntregaInsa, leerEntregaInsa } from "./insa.ts";
+import { esEntregaInsa, leerEntregaInsa, nifsDelPapel, normalizarNif } from "./insa.ts";
 import type { FilaPdf } from "./observaciones.ts";
 
 const fila = (...palabras: string[]): FilaPdf => ({ palabras });
@@ -19,6 +19,7 @@ const ENTREGA: FilaPdf[] = [
   fila("03680,", "Aspe", "43006", "TARRAGONA"),
   fila("ALICANTE", "Tarragona"),
   fila("VAT:", "ES", "A03297959", "ESPAÑA"),
+  fila("Phone:", "(0034)", "96", "549", "56", "76", "/", "(0034)", "96", "549", "34", "78", "N.I.F.:", "ESA43044379"),
   fila("-".repeat(184)),
   fila("Entrega", "Nº", "Fecha", "S/Referencia", "Volumen", "Neto(Kg)", "Bruto(Kg)"),
   fila("-".repeat(185)),
@@ -101,5 +102,29 @@ describe("leerEntregaInsa", () => {
     expect(e.pedidos).toEqual([{ numero: "26001072", fecha: "2026-08-12" }]);
     expect(e.lineas).toHaveLength(1);
     expect(e.lineas[0].pedidoProveedor).toBe("26001072");
+  });
+});
+
+describe("el NIF del papel", () => {
+  it("se lee con y sin prefijo de país, y con o sin guiones", () => {
+    expect(normalizarNif("A03297959")).toBe("A03297959");
+    expect(normalizarNif("ESA43044379")).toBe("A43044379");
+    expect(normalizarNif("A-03297959")).toBe("A03297959");
+    expect(normalizarNif("12345678Z")).toBe("12345678Z");
+  });
+
+  it("lo que no tiene forma de NIF no lo es: ni el pedido, ni la referencia, ni el registro", () => {
+    expect(normalizarNif("26001072")).toBe("");
+    expect(normalizarNif("021300001012")).toBe("");
+    expect(normalizarNif("NEU/2021/000000347")).toBe("");
+    expect(normalizarNif("TARRAGONA")).toBe("");
+    expect(normalizarNif("")).toBe("");
+  });
+
+  it("del papel salen los dos: el del proveedor y el nuestro", () => {
+    // Quién es quién no se decide aquí: se miran los dos contra los
+    // proveedores dados de alta, y nosotros no somos proveedor de nadie.
+    expect(nifsDelPapel(ENTREGA)).toEqual(["A03297959", "A43044379"]);
+    expect(leerEntregaInsa(ENTREGA)!.nifs).toEqual(["A03297959", "A43044379"]);
   });
 });

@@ -1,7 +1,7 @@
 {
   "name": "mobilink",
   "private": true,
-  "version": "1.66.3",
+  "version": "1.66.5",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -99,11 +99,55 @@ export function configBuzon(): ConfigBuzon | null {
 export type ClienteBuzon = {
   connect(): Promise<unknown>;
   getMailboxLock(carpeta: string): Promise<{ release(): void }>;
-  search(query: { seen?: boolean; since?: Date; uid?: string }, opciones: { uid: true }): Promise<number[] | false>;
+  search(query: { seen?: boolean; since?: Date; uid?: string; header?: Record<string, string> }, opciones: { uid: true }): Promise<number[] | false>;
   fetchOne(uid: string, campos: { source: true }, opciones: { uid: true }): Promise<{ source?: Buffer } | false>;
   logout(): Promise<unknown>;
   readonly mailbox?: { uidValidity?: number | bigint } | false;
 };
+
+/**
+ * Va al buzón a por el correo original y devuelve sus PDF adjuntos.
+ *
+ * Es lo que hace que «Reprocesar» sirva para algo en un correo cuyos datos
+ * están en el adjunto. El adjunto se guarda desde que existe la columna
+ * `rcp_documentos.correo_id`, pero los correos que entraron ANTES no lo
+ * tienen, y sin esto no hay forma de arreglarlos desde la pantalla: había que
+ * recargar el histórico entero o reenviar el correo a mano.
+ *
+ * Se busca por Message-ID, que es lo que identifica al correo, y NO se toca
+ * nada del buzón: ni banderas, ni leídos. Nunca lanza: si el buzón no está,
+ * no contesta o el correo ya no está en la carpeta, se devuelve una lista
+ * vacía y reprocesar sigue con lo que tenga.
+ */
+export async function adjuntosDelOriginal(
+  empresaId: string,
+  messageId: string,
+  opciones: { cliente?: ClienteBuzon; config?: ConfigBuzon } = {}
+): Promise<AdjuntoPdf[]> {
+  const cfg = opciones.config ?? configBuzon();
+  if (!cfg || cfg.empresaId !== empresaId || !messageId) return [];
+  const cliente = opciones.cliente ?? clienteReal(cfg);
+  try {
+    await cliente.connect();
+    const cerrojo = await cliente.getMailboxLock(cfg.carpeta);
+    try {
+      const uids = (await cliente.search({ header: { "message-id": messageId } }, { uid: true })) || [];
+      for (const uid of uids.slice(-1)) {
+        const msg = await cliente.fetchOne(String(uid), { source: true }, { uid: true });
+        if (!msg || !msg.source) continue;
+        return adjuntosPdf(await simpleParser(msg.source));
+      }
+      return [];
+    } finally {
+      cerrojo.release();
+    }
+  } catch (e) {
+    console.warn("[Recepciones] no se ha podido recuperar el correo original del buzón:", (e as Error).message);
+    return [];
+  } finally {
+    await cliente.logout().catch(() => {});
+  }
+}
 
 export type ResultadoCorreo = "procesado" | "duplicado" | "ignorado" | "revision" | "error";
 

@@ -56,7 +56,7 @@ import { descripcionNormalizada } from "./domain/articulos.ts";
 import { pendienteDeExpedir } from "./domain/cantidades.ts";
 import { muestraDelContenido, normalizar, parsearCorreo, remitenteReenviado, type AlbaranLeido, type CorreoParseado } from "./domain/correo/index.ts";
 import { entregaInsaDelPdf } from "./documentos/entregaInsa.ts";
-import type { EntregaInsa } from "./domain/insa.ts";
+import { normalizarNif, type EntregaInsa } from "./domain/insa.ts";
 import { normalizarNumero } from "./domain/numero.ts";
 import { ErrorRecepciones } from "./errors.ts";
 import * as repo from "./repository.ts";
@@ -188,6 +188,27 @@ async function adjuntosGuardados(empresaId: string, correoId: string): Promise<A
     console.warn("[Recepciones] no se han podido releer los adjuntos del correo:", (e as Error).message);
   }
   return salida;
+}
+
+/**
+ * El proveedor que dice el PAPEL, por su NIF.
+ *
+ * Hace falta porque el remitente miente a menudo sin querer: los albaranes
+ * llegan reenviados a mano desde la cuenta de una persona, y esa cuenta puede
+ * ser la de OTRO proveedor del grupo. Sin esto, una entrega de INSA reenviada
+ * desde una dirección de Soledad se archiva bajo Soledad.
+ *
+ * Sólo CORRIGE a quién se le atribuye, nunca abre la puerta: quién puede meter
+ * correo lo sigue decidiendo el remitente, que ya ha pasado antes de llegar
+ * aquí. Y si el papel no nombra a un único proveedor dado de alta —porque no
+ * hay ninguno, o porque encajan dos— no se elige por nosotros: manda el
+ * remitente, como siempre.
+ */
+async function proveedorPorNif(empresaId: string, nifs: string[], actual: repo.Proveedor): Promise<repo.Proveedor | null> {
+  if (nifs.length === 0) return null;
+  const candidatos = (await repo.listarProveedores(empresaId)).filter((p) => p.activo && p.nif && nifs.includes(normalizarNif(p.nif)));
+  if (candidatos.length !== 1 || candidatos[0].id === actual.id) return null;
+  return candidatos[0];
 }
 
 /** La primera entrega de INSA que se reconozca entre los PDF adjuntos. */
@@ -323,9 +344,9 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
     // Sólo para saber DE QUIÉN es; quién puede meter correo lo sigue
     // decidiendo el remitente del sobre, antes de llegar hasta aquí.
     const reenviadoPor = remitenteReenviado(correo.texto);
-    const proveedor =
+    const delRemitente =
       (await proveedorDe(ctx.empresaId, correo.remitente ?? "")) ?? (reenviadoPor ? await proveedorDe(ctx.empresaId, reenviadoPor) : null);
-    if (!proveedor) {
+    if (!delRemitente) {
       const quien = reenviadoPor ? `${correo.remitente ?? "(vacío)"} (reenvía un correo de ${reenviadoPor})` : (correo.remitente ?? "(vacío)");
       return terminar({ resultado: "IGNORADO", motivo: `El remitente ${quien} no es de ningún proveedor conocido.` });
     }
@@ -341,6 +362,16 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
         albaran: comoAlbaranLeido(entrega),
         avisos: [...leido.avisos, "El albarán se ha leído del PDF adjunto: el correo no traía los datos."],
       };
+    }
+
+    // De quién es el albarán lo dice el PAPEL, por su NIF, no quien lo reenvía.
+    // Un albarán de INSA que reenvía una persona desde su cuenta de Soledad
+    // llegaba con el remitente de Soledad y se archivaba bajo Soledad: sus
+    // números y sus albaranes acababan mezclados con los de otro proveedor.
+    const porNif = entrega ? await proveedorPorNif(ctx.empresaId, entrega.nifs, delRemitente) : null;
+    const proveedor = porNif ?? delRemitente;
+    if (porNif) {
+      leido = { ...leido, avisos: [...leido.avisos, `El albarán es de ${porNif.nombre} por el NIF del PDF, no de ${delRemitente.nombre}, que es quien manda el correo.`] };
     }
     const base = { proveedorId: proveedor.id, tipo: leido.tipo, datosExtraidos: entrega ? { ...leido, entrega } : leido };
     if (leido.tipo === "DESCONOCIDO") {

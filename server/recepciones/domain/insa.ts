@@ -76,6 +76,14 @@ export type EntregaInsa = {
   observaciones: string[];
   /** La localidad del destinatario, de la cabecera. */
   destinoLocalidad: string | null;
+  /**
+   * Los NIF que aparecen en el papel, ya normalizados. Salen los DOS: el del
+   * proveedor que lo emite («VAT: ES A03297959») y el nuestro («N.I.F.:
+   * ESA43044379»). No se distingue cuál es cuál por su etiqueta, que cambia de
+   * plantilla en plantilla; se devuelven los dos y quien llame mira cuál de
+   * ellos es un proveedor suyo: nosotros no lo somos.
+   */
+  nifs: string[];
 };
 
 /** «Entrega Nº Fecha S/Referencia …»: la cabecera de los datos de la entrega. */
@@ -88,6 +96,34 @@ const NUMERO = /^\d{4,}$/;
 const FECHA = /^\d{1,2}\/\d{1,2}\/\d{2,4}$/;
 /** «43006 TARRAGONA»: código postal y localidad, al final de la fila. */
 const CP_LOCALIDAD = /\b\d{5},?\s+([\p{Lu}][\p{Lu}\s.'-]{2,40})\s*$/u;
+
+/**
+ * Un NIF español, sin adornos y sin el prefijo de país: «ES A03297959»,
+ * «ESA43044379» y «A-03297959» son «A03297959» y «A43044379».
+ *
+ * Devuelve cadena vacía si lo que se le pasa no tiene forma de NIF, que es lo
+ * que hace de filtro: por el papel andan sueltos números de pedido, de
+ * referencia y de registro mercantil, y ninguno debe pasar por un NIF.
+ */
+export function normalizarNif(valor: string): string {
+  const limpio = valor.toUpperCase().replace(/[^0-9A-Z]/g, "");
+  const esNif = (v: string) => /^[A-Z]\d{8}$/.test(v) || /^\d{8}[A-Z]$/.test(v);
+  if (esNif(limpio)) return limpio;
+  const sinPais = limpio.startsWith("ES") ? limpio.slice(2) : "";
+  return esNif(sinPais) ? sinPais : "";
+}
+
+/** Todos los NIF que aparecen en el papel, sin repetir. */
+export function nifsDelPapel(filas: readonly FilaPdf[]): string[] {
+  const salida: string[] = [];
+  for (const fila of filas) {
+    for (const palabra of fila.palabras) {
+      const nif = normalizarNif(palabra);
+      if (nif && !salida.includes(nif)) salida.push(nif);
+    }
+  }
+  return salida;
+}
 
 /** ¿Es una entrega de INSA? Se reconoce por su cabecera de columnas. */
 export function esEntregaInsa(filas: readonly FilaPdf[]): boolean {
@@ -214,5 +250,6 @@ export function leerEntregaInsa(filas: readonly FilaPdf[]): EntregaInsa | null {
     lineas,
     observaciones: observacionesInsa(filas),
     destinoLocalidad: destinoDeLaCabecera(filas),
+    nifs: nifsDelPapel(filas),
   };
 }
