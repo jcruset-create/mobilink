@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useSearchParams } from "react-router-dom";
 import { listarFotosLote, marcarImpresas, type FotoEtiqueta } from "../etiquetas/datos";
 import { imprimible } from "../etiquetas/revision";
@@ -116,13 +117,34 @@ export default function EtiquetasImprimir() {
       <style>{`
         @page { size: ${ETIQUETA.ancho}mm ${ETIQUETA.alto}mm; margin: 0; }
         @media print {
-          /* Solo las etiquetas: ni menú, ni cabecera, ni botones. */
-          body * { visibility: hidden !important; }
-          .tirada, .tirada * { visibility: visible !important; }
+          /*
+           * Al imprimir, la aplicación entera DESAPARECE del documento, y no
+           * solo de la vista.
+           *
+           * Antes esto era \`visibility: hidden\`, y ahí estaba el fallo: lo
+           * invisible SIGUE OCUPANDO SITIO. El panel —menú lateral incluido—
+           * mide bastante más que los 90 mm del papel, así que la página
+           * resultaba más ancha que la hoja y Chrome lo encogía TODO para que
+           * cupiera, etiqueta incluida. Salía a dos tercios de su tamaño y
+           * pegada arriba a la izquierda, con el papel y el driver bien
+           * configurados.
+           *
+           * Con \`display: none\` no queda nada que medir, y la tirada —que se
+           * pinta fuera de #root, en el body— se queda sola en una página que
+           * mide exactamente lo que dice \`@page\`.
+           */
+          #root { display: none !important; }
+          html, body {
+            width: ${ETIQUETA.ancho}mm !important;
+            margin: 0 !important; padding: 0 !important;
+            background: #fff !important;
+          }
           .tirada { position: absolute; left: 0; top: 0; }
           .etiqueta { break-after: page; page-break-after: always; }
           .etiqueta:last-child { break-after: auto; page-break-after: auto; }
         }
+        /* Fuera de la impresión, la tirada se enseña dentro de la pantalla. */
+        @media screen { .tirada { position: static; } }
       `}</style>
 
       <div className="mb-3 no-print">
@@ -178,16 +200,21 @@ export default function EtiquetasImprimir() {
           revisado por una persona no se imprime.
         </div>
       ) : (
-        // Fondo blanco en pantalla: así se ve lo que va a salir por la
+        // Se pinta FUERA de #root, directamente en el body: es lo que permite
+        // esconder la aplicación entera al imprimir sin esconder la tirada.
+        // Fondo blanco: así se ve en pantalla lo que va a salir por la
         // impresora, que es tinta negra sobre papel amarillo.
-        <div className="tirada inline-block bg-white">
-          {fotos.map((f) => (
-            // El id lo usa «Descargar PDF» para coger el QR ya dibujado.
-            <div key={f.id} id={`etiqueta-${f.id}`}>
-              <Etiqueta serie={f.serie_confirmada!} />
-            </div>
-          ))}
-        </div>
+        createPortal(
+          <div className="tirada inline-block bg-white">
+            {fotos.map((f) => (
+              // El id lo usa «Descargar PDF» para coger el QR ya dibujado.
+              <div key={f.id} id={`etiqueta-${f.id}`}>
+                <Etiqueta serie={f.serie_confirmada!} />
+              </div>
+            ))}
+          </div>,
+          document.body,
+        )
       )}
     </div>
   );

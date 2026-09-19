@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { Etiqueta } from "../etiquetas/Etiqueta";
 import { ETIQUETA } from "../etiquetas/medidas";
 
@@ -18,10 +19,21 @@ export default function EtiquetasCalibrar() {
       <style>{`
         @page { size: ${ETIQUETA.ancho}mm ${ETIQUETA.alto}mm; margin: 0; }
         @media print {
-          body * { visibility: hidden !important; }
-          .calibracion, .calibracion * { visibility: visible !important; }
+          /*
+           * La aplicación desaparece del documento, no solo de la vista: con
+           * \`visibility: hidden\` seguía ocupando sitio, la página medía más
+           * que el papel y Chrome encogía la hoja entera para que cupiera.
+           * Justo lo que esta hoja existe para detectar.
+           */
+          #root { display: none !important; }
+          html, body {
+            width: ${ETIQUETA.ancho}mm !important;
+            margin: 0 !important; padding: 0 !important;
+            background: #fff !important;
+          }
           .calibracion { position: absolute; left: 0; top: 0; }
         }
+        @media screen { .calibracion { position: static; } }
       `}</style>
 
       <div className="mb-3 no-print">
@@ -46,46 +58,51 @@ export default function EtiquetasCalibrar() {
         </button>
       </div>
 
-      <div className="calibracion inline-block bg-white">
-        <div style={{ position: "relative", width: `${ETIQUETA.ancho}mm`, height: `${ETIQUETA.alto}mm` }}>
-          {/* Con los marcos puestos: esta hoja existe para ver los límites. */}
-          <Etiqueta serie="6162121986" marco />
-          {/*
-            La regla: 100 mm, EN VERTICAL. En horizontal no cabe —la etiqueta
-            mide 90 mm de ancho— y una regla recortada no sirve para medir.
-          */}
-          <div
-            style={{
-              position: "absolute", left: `${ETIQUETA.ancho - 8}mm`, top: "20mm",
-              width: "6mm", height: "100mm",
-              borderTop: "0.3mm solid #000", borderBottom: "0.3mm solid #000",
-              borderRight: "0.3mm solid #000",
-            }}
-          >
-            {Array.from({ length: 11 }, (_, i) => (
-              <div
-                key={i}
-                style={{
-                  position: "absolute", right: 0, top: `${i * 10}mm`,
-                  height: "0.3mm", width: i % 5 === 0 ? "5mm" : "3mm",
-                  background: "#000",
-                }}
-              />
-            ))}
-            <div style={{ position: "absolute", left: 0, top: "0.5mm", fontSize: "2.2mm", color: "#000" }}>
-              0
-            </div>
+      {createPortal(
+        // Fuera de #root: así al imprimir se puede esconder la
+        // aplicación entera sin esconder también la hoja.
+        <div className="calibracion inline-block bg-white">
+          <div style={{ position: "relative", width: `${ETIQUETA.ancho}mm`, height: `${ETIQUETA.alto}mm` }}>
+            {/* Con los marcos puestos: esta hoja existe para ver los límites. */}
+            <Etiqueta serie="6162121986" marco />
+            {/*
+              La regla: 100 mm, EN VERTICAL. En horizontal no cabe —la etiqueta
+              mide 90 mm de ancho— y una regla recortada no sirve para medir.
+            */}
             <div
               style={{
-                position: "absolute", left: "-11mm", top: "96mm",
-                fontSize: "2.2mm", color: "#000", whiteSpace: "nowrap",
+                position: "absolute", left: `${ETIQUETA.ancho - 8}mm`, top: "20mm",
+                width: "6mm", height: "100mm",
+                borderTop: "0.3mm solid #000", borderBottom: "0.3mm solid #000",
+                borderRight: "0.3mm solid #000",
               }}
             >
-              100 mm
+              {Array.from({ length: 11 }, (_, i) => (
+                <div
+                  key={i}
+                  style={{
+                    position: "absolute", right: 0, top: `${i * 10}mm`,
+                    height: "0.3mm", width: i % 5 === 0 ? "5mm" : "3mm",
+                    background: "#000",
+                  }}
+                />
+              ))}
+              <div style={{ position: "absolute", left: 0, top: "0.5mm", fontSize: "2.2mm", color: "#000" }}>
+                0
+              </div>
+              <div
+                style={{
+                  position: "absolute", left: "-11mm", top: "96mm",
+                  fontSize: "2.2mm", color: "#000", whiteSpace: "nowrap",
+                }}
+              >
+                100 mm
+              </div>
             </div>
           </div>
-        </div>
-      </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
