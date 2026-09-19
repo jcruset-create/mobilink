@@ -763,6 +763,8 @@ export type CampoPropuesto<T> = {
 
 export type CodigoAvisoEscaneo =
   | "NO_ES_FACTURA"
+  /** Es un justificante válido, pero NO una factura: albarán, ticket, parte… */
+  | "TIPO_DE_DOCUMENTO"
   | "VARIAS_FACTURAS"
   | "VARIOS_RECIBOS"
   | "SIN_NUMERO_FACTURA"

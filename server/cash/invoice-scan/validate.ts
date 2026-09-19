@@ -17,6 +17,7 @@ import type { Centimos } from "../domain/money.ts";
 import { formatearEuros } from "../domain/money.ts";
 import type { PropuestaFormaCobro } from "./classifier.ts";
 import type { PropuestaSeccion } from "./seccion.ts";
+import type { TipoDocumento } from "./types.ts";
 import type {
   Aviso,
   CampoPropuesto,
@@ -76,6 +77,20 @@ const SIN_SECCION: PropuestaSeccion = {
   reglaId: null,
 };
 
+/**
+ * Cómo se llama cada tipo en castellano, para el aviso.
+ *
+ * FACTURA no está, y por eso el aviso no salta con una factura: la tabla ES la
+ * condición. Un `if (tipo !== "FACTURA")` habría que mantenerlo en dos sitios.
+ */
+const NOMBRE_TIPO: Partial<Record<TipoDocumento, string>> = {
+  FACTURA_SIMPLIFICADA: "una factura simplificada",
+  ALBARAN: "un albarán",
+  TICKET: "un ticket",
+  PARTE: "un parte de trabajo",
+  OTRO: "otro tipo de documento",
+};
+
 export function validar(
   extraccion: ExtraccionNormalizada,
   propuesta: PropuestaFormaCobro,
@@ -87,9 +102,38 @@ export function validar(
   if (!extraccion.esFactura) {
     avisos.push({
       codigo: "NO_ES_FACTURA",
+      /*
+       * «Justificante» y no «factura»: un albarán, un parte de trabajo o un
+       * ticket valen igual para cobrar, y en un taller se cobra contra el
+       * albarán a menudo. El mensaje decía «no parece una factura» delante de
+       * un albarán perfectamente bueno, y un aviso que salta cuando no toca es
+       * un aviso que la gente aprende a saltarse.
+       */
       mensaje:
-        "Este documento no parece una factura. Revísalo antes de usar nada de lo que se ha rellenado.",
+        "Este documento no parece un justificante de cobro. Revísalo antes de usar nada de lo " +
+        "que se ha rellenado.",
       grave: true,
+    });
+  }
+
+  /*
+   * Qué es el papel, cuando NO es una factura.
+   *
+   * Aviso leve y no grave: un albarán vale igual para cobrar —en un taller se
+   * cobra contra el albarán a menudo y la factura se emite después— así que no
+   * apaga ninguna preselección. Pero se dice, porque cobrar contra un albarán
+   * no es lo mismo que cobrar contra una factura y quien lo registra tiene
+   * derecho a saber qué está firmando.
+   *
+   * `DESCONOCIDO` no avisa: es «no se ha podido saber», que incluye los
+   * análisis anteriores a que existiera este campo. Avisar ahí sería poner un
+   * cartel sobre algo que nadie ha mirado.
+   */
+  if (extraccion.esFactura && NOMBRE_TIPO[extraccion.tipoDocumento]) {
+    avisos.push({
+      codigo: "TIPO_DE_DOCUMENTO",
+      mensaje: `Esto no es una factura: es ${NOMBRE_TIPO[extraccion.tipoDocumento]}. Vale igual para cobrar, pero la factura se emitirá después.`,
+      grave: false,
     });
   }
 
