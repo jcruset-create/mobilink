@@ -1207,6 +1207,59 @@ export async function initDb() {
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "ptEntradaMs" BIGINT DEFAULT NULL;
   `);
 
+  // ── Recepción rápida de vehículos ──────────────────────────────────────────
+  //
+  // Lo que el operario ve en el patio: una matrícula, quizá un cliente, quizá
+  // una foto. NO es un trabajo todavía. Se guarda aparte a propósito: meterlo
+  // en `jobs` con un estado inventado contaminaría todas las consultas,
+  // contadores y pantallas que ya existen.
+  //
+  // La captura automática propone; una persona la convierte en trabajo.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS recepciones_vehiculo (
+      id BIGINT PRIMARY KEY,
+      "workshopId" TEXT,
+      -- Como la confirmó la persona, con guiones si los escribió así.
+      matricula TEXT NOT NULL,
+      -- Normalizada (mayúsculas y alfanuméricos), que es por lo que se busca.
+      "matriculaNormal" TEXT NOT NULL,
+      -- Lo que leyó la IA, sin tocar, y con cuánta confianza. Se guardan para
+      -- poder medir después si el OCR merece la pena; nunca se usan como dato
+      -- bueno sin que alguien los haya confirmado.
+      "matriculaOcr" TEXT,
+      "confianzaOcr" DOUBLE PRECISION,
+      "clienteNombre" TEXT,
+      "vehiculoId" TEXT,
+      "vehiculoOrigen" TEXT,
+      area TEXT,
+      "plantillaKey" TEXT,
+      "operacionLabel" TEXT,
+      notas TEXT,
+      urgente BOOLEAN NOT NULL DEFAULT FALSE,
+      fotos JSONB NOT NULL DEFAULT '[]'::jsonb,
+      -- pendiente | convertida | descartada
+      estado TEXT NOT NULL DEFAULT 'pendiente',
+      "operarioNombre" TEXT NOT NULL,
+      "creadaAtMs" BIGINT NOT NULL,
+      "resueltaAtMs" BIGINT,
+      "resueltaPor" TEXT,
+      "motivoDescarte" TEXT,
+      "jobId" BIGINT,
+      -- Borrado lógico, como en jobs.
+      "deletedAtMs" BIGINT
+    );
+
+    CREATE INDEX IF NOT EXISTS recepciones_vehiculo_estado_idx
+      ON recepciones_vehiculo(estado, "creadaAtMs" DESC);
+    CREATE INDEX IF NOT EXISTS recepciones_vehiculo_matricula_idx
+      ON recepciones_vehiculo("matriculaNormal");
+    CREATE INDEX IF NOT EXISTS recepciones_vehiculo_workshop_idx
+      ON recepciones_vehiculo("workshopId");
+
+    -- El camino de vuelta: desde el trabajo, a la recepción y sus fotos.
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "recepcionId" BIGINT DEFAULT NULL;
+  `);
+
   // Cupo anual de vacaciones y modo de cómputo. Una fila por taller y año con
   // "techName" = '' es el valor por defecto; las filas con nombre son el cupo
   // propio de ese técnico (antigüedad, jornada parcial, incorporación a mitad

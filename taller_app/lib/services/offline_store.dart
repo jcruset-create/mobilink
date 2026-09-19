@@ -102,6 +102,23 @@ class OfflineStore {
     pendingCount.value = _outbox.length;
   }
 
+  // ── Cola de recepciones de patio ──
+  //
+  // A diferencia de las otras dos, esta NO lleva `jobId`: una recepción no es
+  // un trabajo todavía. Por eso `flushOutbox` lee el `jobId` dentro de cada
+  // rama y no antes de mirar el tipo.
+  static Future<String> enqueueRecepcion(Map<String, dynamic> datos) async {
+    final clave = nuevaClave('rc');
+    await _outbox.add({
+      'actionId': clave,
+      'type': 'recepcion',
+      'datos': datos,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    });
+    pendingCount.value = _outbox.length;
+    return clave;
+  }
+
   static List<MapEntry<dynamic, Map<String, dynamic>>> pending() {
     return _outbox
         .toMap()

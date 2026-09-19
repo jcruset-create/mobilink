@@ -51,6 +51,7 @@ import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { cotejarPlano, generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
+import { createRecepcionVehiculosRouter } from "./recepcionVehiculos/router.ts";
 import { initEventLog } from "./eventlog/schema.ts";
 import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./eventlog/servicio.ts";
 import { initDocumentos } from "./documentos/schema.ts";
@@ -19231,6 +19232,41 @@ mountConnect(app, requireLicensesAdmin);
  * módulo que se llama a sí mismo.
  */
 app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
+
+/*
+ * Recepción rápida de vehículos desde el patio.
+ *
+ * Se monta en `/api` porque sirve dos puertas —la de la APK, bajo
+ * `/api/taller-operator/recepcion-vehiculos`, y la del panel, bajo
+ * `/api/recepcion-vehiculos`— y cada una lleva su propio guarda dentro del
+ * router. Sólo responde a esas rutas; el resto de `/api` sigue su camino.
+ *
+ * Nada que ver con `/api/recepciones`, que es la recepción física de
+ * mercancía de proveedores y se monta más arriba.
+ */
+app.use(
+  "/api",
+  createRecepcionVehiculosRouter({
+    requireTallerOperator,
+    requireSupervisorRole,
+    respuestaIdempotente,
+    guardarIdempotencia,
+    upload,
+    subirFoto: async (ruta, buffer, contentType) => {
+      const { error } = await supabase.storage
+        .from(SUPABASE_ROADSIDE_BUCKET)
+        .upload(ruta, buffer, { contentType, upsert: false });
+      if (error) throw new Error(error.message);
+      return supabase.storage.from(SUPABASE_ROADSIDE_BUCKET).getPublicUrl(ruta)
+        .data.publicUrl;
+    },
+    // Para dejar constancia de quién resolvió la recepción. El panel no trae
+    // nombre de usuario en todos los modos de sesión, así que se acepta la
+    // cabecera y se cae a una etiqueta genérica antes que guardar vacío.
+    nombreDelPanel: (req) =>
+      String(req.headers["x-user-name"] ?? "").trim() || "panel",
+  })
+);
 app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRole));
 /*
  * ⚠ EL ORDEN DE ESTOS TRES BLOQUES IMPORTA, Y NO ES UN DETALLE DE ESTILO.

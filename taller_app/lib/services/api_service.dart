@@ -7,6 +7,7 @@ import 'package:http_parser/http_parser.dart';
 import '../config.dart';
 import '../models/job.dart';
 import 'offline_store.dart';
+import 'outbox_politica.dart';
 
 bool _isNetworkError(Object e) =>
     e is SocketException || e is TimeoutException || e is http.ClientException;
@@ -430,6 +431,138 @@ class ApiService {
     return porDefecto;
   }
 
+  // ── Recepción de vehículos en el patio ───────────────────────
+
+  /// Operaciones que puede elegir el operario. Vienen de las plantillas que
+  /// el taller ya mantiene; el servidor las manda SIN precio.
+  Future<List<Map<String, dynamic>>> getCatalogoRecepcion() async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse('$kBackendUrl/api/taller-operator/recepcion-vehiculos/catalogo'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return [];
+      return (jsonDecode(res.body) as List<dynamic>)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    } catch (_) {
+      // Sin cobertura se recibe igual: la operación se deja sin elegir y la
+      // decide quien valide en la oficina.
+      return [];
+    }
+  }
+
+  /// ¿Conocemos este vehículo? Devuelve null si no, o si no hay red.
+  Future<Map<String, dynamic>?> buscarVehiculo(String matricula) async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse(
+                '$kBackendUrl/api/taller-operator/recepcion-vehiculos/vehiculo?matricula=${Uri.encodeQueryComponent(matricula)}'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return null;
+      final data = jsonDecode(res.body);
+      final v = data is Map ? data['vehiculo'] : null;
+      return v is Map ? Map<String, dynamic>.from(v) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Lee la matrícula de una foto. Lo que devuelve se le ENSEÑA al operario en
+  /// un campo editable; nunca se manda sin que lo haya visto.
+  Future<Map<String, dynamic>?> leerMatricula(String dataUri) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse(
+                '$kBackendUrl/api/taller-operator/recepcion-vehiculos/ocr-matricula'),
+            headers: _headers,
+            body: jsonEncode({'imagen': dataUri}),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (res.statusCode != 200) return null;
+      final data = jsonDecode(res.body);
+      return data is Map ? Map<String, dynamic>.from(data) : null;
+    } catch (_) {
+      // Que falle la IA no puede bloquear una recepción: se teclea.
+      return null;
+    }
+  }
+
+  /// Envía la recepción. Si no hay red se encola y se manda al recuperarla.
+  ///
+  /// Devuelve el id de la recepción creada, o null si quedó en la cola. Las
+  /// dos cosas son un final correcto; lo que no vale es perderla.
+  ///
+  /// Ojo con el null: sin id no se pueden colgar las fotos de la recepción,
+  /// porque el servidor todavía no sabe a cuál. Quien llama tiene que decirlo
+  /// en pantalla, no callárselo.
+  Future<int?> crearRecepcion(Map<String, dynamic> datos) async {
+    final clave = OfflineStore.nuevaClave('rc');
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$kBackendUrl/api/taller-operator/recepcion-vehiculos'),
+            headers: _headersCon(clave),
+            body: jsonEncode(datos),
+          )
+          .timeout(const Duration(seconds: 20));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        return data is Map ? (data['id'] as num?)?.toInt() : null;
+      }
+      if (res.statusCode >= 400 && res.statusCode < 500) {
+        throw Exception(_errorDe(res.body, 'No se pudo enviar la recepción'));
+      }
+      // 5xx: el servidor está mal, no la petición. A la cola.
+      await OfflineStore.enqueueRecepcion(datos);
+      return null;
+    } catch (e) {
+      if (!_isNetworkError(e)) rethrow;
+      await OfflineStore.enqueueRecepcion(datos);
+      return null;
+    }
+  }
+
+  /// Sube una foto del estado del vehículo a una recepción ya creada.
+  ///
+  /// No se encola si falla: sin recepción en el servidor no hay dónde
+  /// colgarla, y una foto perdida es mucho menos grave que una recepción
+  /// perdida. Devuelve false y quien llama lo dice en pantalla.
+  Future<bool> subirFotoRecepcion(int recepcionId, String path) async {
+    try {
+      final comprimida = await FlutterImageCompress.compressWithFile(
+        path,
+        quality: 70,
+        minWidth: 1280,
+        minHeight: 1280,
+      );
+      final bytes = comprimida ?? await File(path).readAsBytes();
+      final req = http.MultipartRequest(
+        'POST',
+        Uri.parse(
+            '$kBackendUrl/api/taller-operator/recepcion-vehiculos/$recepcionId/fotos'),
+      );
+      req.headers.addAll(_operatorHeaders);
+      req.headers['x-idempotency-key'] = OfflineStore.nuevaClave('rf');
+      req.files.add(http.MultipartFile.fromBytes(
+        'file',
+        bytes,
+        filename: 'recepcion_$recepcionId.jpg',
+        contentType: MediaType('image', 'jpeg'),
+      ));
+      final streamed = await req.send().timeout(const Duration(seconds: 30));
+      return streamed.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // ── Cola offline ─────────────────────────────────────────────
   bool _flushing = false;
 
@@ -440,9 +573,13 @@ class ApiService {
       for (final entry in OfflineStore.pending()) {
         final item = entry.value;
         final type = item['type'] as String;
-        final jobId = item['jobId'] as int;
+        // El `jobId` se lee DENTRO de cada rama, no aquí arriba. Cuando se
+        // leía antes de mirar el tipo, un item sin trabajo asociado —una
+        // recepción de patio— rompía el cast y tumbaba la cola entera: se
+        // quedaban sin enviar también los cambios de estado y las fotos.
         try {
           if (type == 'status') {
+            final jobId = item['jobId'] as int;
             final res = await http
                 .put(
                   Uri.parse('$kBackendUrl/api/taller-operator/jobs/$jobId/status'),
@@ -450,21 +587,44 @@ class ApiService {
                   body: jsonEncode({'status': item['status']}),
                 )
                 .timeout(const Duration(seconds: 15));
-            if (res.statusCode == 200) {
-              await OfflineStore.removePending(entry.key);
-            } else {
-              // Error real del servidor → descartamos para no bloquear la cola
+            // Para un cambio de estado la política de siempre: se quite o
+            // falle, fuera de la cola, que si no bloquea lo que viene detrás.
+            if (accionPorRespuesta(tipo: type, codigo: res.statusCode) ==
+                AccionCola.quitar) {
               await OfflineStore.removePending(entry.key);
             }
           } else if (type == 'upload_file') {
+            final jobId = item['jobId'] as int;
             await _uploadFromPath(jobId, item['localPath'] as String,
                 clave: item['actionId'] as String?,
                 tipo: (item['tipo'] as String?) ?? 'foto');
             await OfflineStore.removePending(entry.key);
+          } else if (type == 'recepcion') {
+            final res = await http
+                .post(
+                  Uri.parse('$kBackendUrl/api/taller-operator/recepcion-vehiculos'),
+                  headers: _headersCon(item['actionId'] as String?),
+                  body: jsonEncode(item['datos']),
+                )
+                .timeout(const Duration(seconds: 20));
+            // Un 4xx se descarta (reintentarlo no lo arregla); un 5xx se
+            // conserva: una recepción que el operario cree haber enviado no
+            // se tira en silencio delante del cliente.
+            if (accionPorRespuesta(tipo: type, codigo: res.statusCode) ==
+                AccionCola.quitar) {
+              await OfflineStore.removePending(entry.key);
+            }
+          } else {
+            // Tipo desconocido (versión anterior de la app): fuera, o se queda
+            // atascado para siempre bloqueando lo que viene detrás.
+            await OfflineStore.removePending(entry.key);
           }
         } catch (e) {
-          if (_isNetworkError(e)) break; // sin red: reintentamos más tarde
-          await OfflineStore.removePending(entry.key); // error real: descartar
+          final accion =
+              accionPorExcepcion(tipo: type, esDeRed: _isNetworkError(e));
+          if (accion == AccionCola.parar) break; // sin red: más tarde
+          if (accion == AccionCola.conservar) continue; // no se pierde
+          await OfflineStore.removePending(entry.key);
         }
       }
     } finally {
