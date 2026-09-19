@@ -16,6 +16,9 @@ import {
   matriculaPropuestaPorOcr,
   plantillaParaOperario,
   plantillasParaElPatio,
+  diaDeRecepcion,
+  horaDeRecepcion,
+  recepcionesDelDia,
   posibleDuplicado,
   type RecepcionVehiculo,
 } from "./recepcionVehiculo";
@@ -258,6 +261,34 @@ describe("jobDesdeRecepcion", () => {
     expect(job.area).toBe("camion");
     expect(job.quickEntryLabel).toBe("Revisar fuga");
     expect(job.unitMinutes).toBeNull();
+  });
+});
+
+describe("colocación en la agenda", () => {
+  // 19/09/2026 a las 23:57 hora local: la recepción real con la que se probó.
+  const tarde = new Date(2026, 8, 19, 23, 57).getTime();
+  const manana = new Date(2026, 8, 20, 8, 5).getTime();
+
+  it("saca la hora local, que es la que mira quien está en el taller", () => {
+    expect(horaDeRecepcion(tarde)).toBe("23:57");
+    expect(horaDeRecepcion(manana)).toBe("08:05");
+  });
+
+  /*
+   * Una recepción de las 23:57 pertenece a ESE día aunque en UTC ya sea el
+   * siguiente. Comparando milisegundos contra un corte en UTC, la del patio de
+   * las once y media de la noche aparecería en la agenda de mañana.
+   */
+  it("el día es el local, no el de UTC", () => {
+    expect(diaDeRecepcion(tarde)).toBe("2026-09-19");
+    expect(diaDeRecepcion(manana)).toBe("2026-09-20");
+  });
+
+  it("solo devuelve las del día que la agenda está pintando", () => {
+    const lista = [{ creadaAtMs: tarde }, { creadaAtMs: manana }];
+    expect(recepcionesDelDia(lista, "2026-09-19")).toEqual([{ creadaAtMs: tarde }]);
+    expect(recepcionesDelDia(lista, "2026-09-20")).toEqual([{ creadaAtMs: manana }]);
+    expect(recepcionesDelDia(lista, "2026-09-21")).toEqual([]);
   });
 });
 

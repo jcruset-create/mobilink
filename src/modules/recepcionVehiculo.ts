@@ -252,6 +252,34 @@ export function jobDesdeRecepcion(
   };
 }
 
+/** `1700000000000` → `"09:30"`, en la hora local del taller. */
+export function horaDeRecepcion(creadaAtMs: number): string {
+  const d = new Date(creadaAtMs);
+  const dos = (n: number) => String(n).padStart(2, "0");
+  return `${dos(d.getHours())}:${dos(d.getMinutes())}`;
+}
+
+/** `1700000000000` → `"2026-09-19"`, para casar con el día de la agenda. */
+export function diaDeRecepcion(creadaAtMs: number): string {
+  const d = new Date(creadaAtMs);
+  const dos = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${dos(d.getMonth() + 1)}-${dos(d.getDate())}`;
+}
+
+/**
+ * Las recepciones que caen en el día que la agenda está pintando.
+ *
+ * La comparación va por la fecha local y no por el milisegundo: una recepción
+ * de las 23:57 pertenece a ese día aunque en UTC ya sea el siguiente, que es
+ * exactamente el caso con el que se probó esto.
+ */
+export function recepcionesDelDia<T extends { creadaAtMs: number }>(
+  recepciones: T[],
+  diaKey: string
+): T[] {
+  return recepciones.filter((r) => diaDeRecepcion(r.creadaAtMs) === diaKey);
+}
+
 /**
  * De las filas crudas de `quick_templates` a lo que ve el operario.
  *

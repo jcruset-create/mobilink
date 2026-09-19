@@ -10,6 +10,8 @@ import { canAssignTechManuallyToJob, canSelectTechManuallyForJob } from "../modu
 import { isHardBlockedTechStatus } from "../modules/techStatus";
 import { isManualUnavailableStatus } from "../modules/techSync";
 import { tecnicosNoDisponibles } from "../modules/tecnicosNoDisponibles";
+import { useRecepcionesPendientes } from "../modules/useRecepcionesPendientes";
+import { horaDeRecepcion } from "../modules/recepcionVehiculo";
 import { getTodayDateValue } from "../modules/techStatusScheduleHelpers";
 import type { ScheduledTechStatus } from "../modules/techStatusScheduleHelpers";
 import type { CustomExtraTask } from "../modules/quickTaskSelector";
@@ -180,6 +182,9 @@ export default function Operativo2View({
   embebido,
 }: Operativo2ViewProps) {
   const [op2CitaOpen, setOp2CitaOpen] = useState(false);
+  // Se piden aquí y no por props: llegar hasta esta pantalla desde arriba
+  // significaría atravesar SeaTarragonaV1, que ya pasa medio centenar.
+  const { recepciones: recepcionesPendientes } = useRecepcionesPendientes(selectedWorkshopId);
   const isTestTech = (name: string) => /prova|prueba|\btest\b/i.test(name);
   const disponibles = availableTechsSummary.filter((t) => !isTestTech(t.name));
   const responsables = new Set<string>();
@@ -592,6 +597,51 @@ export default function Operativo2View({
 
         {/* Derecha */}
         <div className="space-y-2">
+          {/* ── Recibidos en el patio, sin validar ──────────────────────────
+              Va ARRIBA del todo y no dentro de «Llegadas» a propósito: una
+              llegada agendada es una cita que se esperaba; esto es un vehículo
+              que ya está en el patio y del que todavía no hay trabajo. Mientras
+              nadie lo valide, no existe en ninguna otra parte de la pantalla. */}
+          <div className="rounded-lg bg-slate-800 p-2">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[10px] font-bold text-slate-400">
+                PENDIENTES DE RECEPCIÓN ({recepcionesPendientes.length})
+              </span>
+              {recepcionesPendientes.length > 0 && (
+                <a
+                  href="/workplanner/recepciones"
+                  className="rounded bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-slate-900"
+                >
+                  Validar
+                </a>
+              )}
+            </div>
+            <div className="space-y-1">
+              {recepcionesPendientes.map((r) => (
+                <div
+                  key={r.id}
+                  className="flex items-center justify-between gap-2 rounded bg-slate-900 px-2 py-1 text-[11px]"
+                >
+                  <span className="min-w-0 truncate">
+                    <span className="text-amber-300">{horaDeRecepcion(r.creadaAtMs)}</span>
+                    {" · "}
+                    <span className="font-bold">{r.matricula}</span>
+                    {r.clienteNombre ? <span className="text-slate-400"> · {r.clienteNombre}</span> : null}
+                    {r.kilometros ? (
+                      <span className="text-slate-400"> · {r.kilometros.toLocaleString("es-ES")} km</span>
+                    ) : null}
+                    <span className="text-slate-500"> · {r.operacionLabel || "sin operación"}</span>
+                  </span>
+                  <span className="shrink-0 text-[10px] text-slate-500">{r.operarioNombre}</span>
+                </div>
+              ))}
+              {recepcionesPendientes.length === 0 && (
+                <div className="rounded border border-dashed border-slate-600 px-2 py-1.5 text-center text-[10px] text-slate-500">
+                  🚗 Los vehículos recibidos con la APK aparecen aquí
+                </div>
+              )}
+            </div>
+          </div>
           <div className="rounded-lg bg-slate-800 p-2">
             <div className="mb-1 flex items-center justify-between">
               <span className="text-[10px] font-bold text-slate-400">LLEGADAS / AGENDADOS ({agendados.length})</span>
