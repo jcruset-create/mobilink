@@ -4437,12 +4437,15 @@ if (view === "tecnicos" && canView("tecnicos")) {
             });
           });
       }}
-      onSaveTech={({ name, phone, isNew, competencies, priorities, roadsideCapable }) => {
+      onSaveTech={({ name, phone, workshopId, isNew, competencies, priorities, roadsideCapable }) => {
         if (isNew) {
           if (!name || techs.some((t) => t.name.toLowerCase() === name.toLowerCase())) return;
           const newTech = {
             ...createTech(name),
-            workshopId: selectedWorkshopId,
+            // El del formulario, no el taller que se esté mirando: dan lo
+            // mismo casi siempre, pero un alta hecha desde Tarragona para
+            // alguien de Reus no tiene por qué heredar Tarragona.
+            workshopId,
             phone: phone || null,
             competencies,
             priorities,
@@ -4457,13 +4460,13 @@ if (view === "tecnicos" && canView("tecnicos")) {
           setTechs((prev) =>
             prev.map((t) =>
               t.name === name
-                ? { ...t, phone: phone || null, competencies, priorities, roadsideCapable }
+                ? { ...t, phone: phone || null, workshopId, competencies, priorities, roadsideCapable }
                 : t
             )
           );
           const base = techs.find((t) => t.name === name);
           if (base) {
-            saveTechToBackend({ ...base, phone: phone || null, competencies, priorities, roadsideCapable })
+            saveTechToBackend({ ...base, phone: phone || null, workshopId, competencies, priorities, roadsideCapable })
               .then(() => reloadTechsFromBackend())
               .catch((e) => console.error("Error guardando técnico:", e));
           }

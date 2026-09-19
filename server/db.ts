@@ -806,6 +806,18 @@ export async function initDb() {
       "jobId" INT DEFAULT NULL
     );
 
+    -- Taller al que pertenece el técnico.
+    --
+    -- Hasta ahora no existía, y el panel filtraba con belongsToWorkshop
+    -- leyendo un tech.workshopId que nunca venía: normalizeWorkshopId
+    -- convierte el nulo en el taller por defecto, así que TODOS los técnicos
+    -- eran de Tarragona por omisión, no por decisión de nadie.
+    --
+    -- Se deja en NULL a propósito para las filas que ya existen: el valor
+    -- nulo se sigue leyendo como el taller por defecto, así que nada cambia
+    -- hasta que alguien asigne un taller desde la pantalla de Personal.
+    ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopId" TEXT DEFAULT NULL;
+
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPin" TEXT DEFAULT NULL;
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT NULL;
 

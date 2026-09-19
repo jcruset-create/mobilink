@@ -1,4 +1,5 @@
 import { type ChangeEvent, useState } from "react";
+import { WORKSHOPS, DEFAULT_WORKSHOP_ID } from "../modules/workshops";
 import { Pencil, Phone, Plus, X } from "lucide-react";
 import type {
   AreaKey,
@@ -26,6 +27,7 @@ type Props = {
   onSaveTech: (data: {
     name: string;
     phone: string;
+    workshopId: string;
     isNew: boolean;
     competencies: Record<CompetencyKey, RoleCapability>;
     priorities: Record<AreaKey, RolePriority>;
@@ -58,6 +60,7 @@ type ModalState =
       mode: "new";
       name: string;
       phone: string;
+      workshopId: string;
       roadsideCapable: boolean;
       competencies: Record<CompetencyKey, RoleCapability>;
       priorities: Record<AreaKey, RolePriority>;
@@ -66,6 +69,7 @@ type ModalState =
       mode: "edit";
       tech: Tech;
       phone: string;
+      workshopId: string;
       roadsideCapable: boolean;
       competencies: Record<CompetencyKey, RoleCapability>;
       priorities: Record<AreaKey, RolePriority>;
@@ -88,6 +92,7 @@ export default function TecnicosView({
       mode: "new",
       name: "",
       phone: "",
+      workshopId: DEFAULT_WORKSHOP_ID,
       roadsideCapable: false,
       competencies: defaultCompetencies(placeholder),
       priorities: defaultPriorities(placeholder),
@@ -98,6 +103,9 @@ export default function TecnicosView({
     setModal({
       mode: "edit",
       tech,
+      // Vacío = el de por defecto, que es como se comportaba antes de que la
+      // columna existiera.
+      workshopId: (tech.workshopId as string) || DEFAULT_WORKSHOP_ID,
       phone: tech.phone ?? "",
       roadsideCapable: Boolean(tech.roadsideCapable),
       competencies: { ...tech.competencies } as Record<CompetencyKey, RoleCapability>,
@@ -117,6 +125,7 @@ export default function TecnicosView({
       onSaveTech({
         name,
         phone: modal.phone.trim(),
+        workshopId: modal.workshopId,
         isNew: true,
         competencies: modal.competencies,
         priorities: modal.priorities,
@@ -126,6 +135,7 @@ export default function TecnicosView({
       onSaveTech({
         name: modal.tech.name,
         phone: modal.phone.trim(),
+        workshopId: modal.workshopId,
         isNew: false,
         competencies: modal.competencies,
         priorities: modal.priorities,
@@ -379,6 +389,32 @@ export default function TecnicosView({
                     className="w-full text-sm outline-none"
                   />
                 </div>
+              </label>
+
+              {/* ── Taller ────────────────────────────────────────────────
+                  Hasta ahora esta columna no existía y todos los técnicos se
+                  leían como del taller por defecto. De aquí sale el taller que
+                  la APK usa al recibir un vehículo, así que ponerlo mal manda
+                  las recepciones al sitio equivocado sin dar ningún error. */}
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-slate-600">
+                  Taller
+                </span>
+                <select
+                  value={modal.workshopId}
+                  onChange={(e) =>
+                    setModal((prev) =>
+                      prev ? { ...prev, workshopId: e.target.value } : prev
+                    )
+                  }
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none"
+                >
+                  {WORKSHOPS.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                    </option>
+                  ))}
+                </select>
               </label>
 
               {/* Apto carretera */}

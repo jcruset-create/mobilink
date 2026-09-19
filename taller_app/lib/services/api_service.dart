@@ -107,6 +107,28 @@ class ApiService {
     return data['esSupervisor'] == true;
   }
 
+  /// Taller al que pertenece este operario.
+  ///
+  /// Se pregunta al servidor en vez de elegirlo en un desplegable: el técnico
+  /// ya está asignado a un taller, y un taller que se puede elegir es un
+  /// taller que se puede equivocar. Null = el de por defecto.
+  Future<String?> getMiTaller() async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse('$kBackendUrl/api/taller-operator/me'),
+            headers: await _authHeaders(),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) return null;
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final w = data['workshopId'];
+      return w == null || w.toString().isEmpty ? null : w.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ── Trabajos (offline-first) ─────────────────────────────────
   Future<List<Job>> getJobs() async {
     await flushOutbox();
@@ -471,16 +493,12 @@ class ApiService {
   ///
   /// Sin cobertura devuelve vacío, y entonces se recibe sin cita: la recepción
   /// sale igual y la oficina la empareja al validar.
-  Future<List<Map<String, dynamic>>> getCitasDelDia(String dia, {String? workshopId}) async {
+  Future<List<Map<String, dynamic>>> getCitasDelDia(String dia) async {
     try {
-      final q = {'dia': dia, if (workshopId != null) 'workshopId': workshopId}
-          .entries
-          .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
-          .join('&');
       final res = await http
           .get(
-            Uri.parse(
-                '$kBackendUrl/api/taller-operator/recepcion-vehiculos/citas?$q'),
+            Uri.parse('$kBackendUrl/api/taller-operator/recepcion-vehiculos/citas'
+                '?dia=${Uri.encodeQueryComponent(dia)}'),
             headers: _headers,
           )
           .timeout(const Duration(seconds: 15));

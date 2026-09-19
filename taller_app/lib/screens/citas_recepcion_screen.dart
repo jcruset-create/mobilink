@@ -26,7 +26,10 @@ class _CitasRecepcionScreenState extends State<CitasRecepcionScreen> {
   List<Map<String, dynamic>> _citas = [];
   bool _cargando = true;
   String? _error;
-  String _workshopId = kWorkshops.first['id']!;
+
+  /// Taller del operario, tal y como lo tiene el servidor. Null mientras se
+  /// consulta o si el técnico no lo tiene asignado.
+  String? _miTaller;
 
   /// Fecha LOCAL del dispositivo. El servidor puede estar en otra zona
   /// horaria, y a las once de la noche eso son dos días distintos.
@@ -39,7 +42,14 @@ class _CitasRecepcionScreenState extends State<CitasRecepcionScreen> {
   @override
   void initState() {
     super.initState();
+    _cargarTaller();
     _cargar();
+  }
+
+  Future<void> _cargarTaller() async {
+    final t = await widget.api.getMiTaller();
+    if (!mounted) return;
+    setState(() => _miTaller = t);
   }
 
   Future<void> _cargar() async {
@@ -48,7 +58,7 @@ class _CitasRecepcionScreenState extends State<CitasRecepcionScreen> {
       _error = null;
     });
     try {
-      final c = await widget.api.getCitasDelDia(_hoy, workshopId: _workshopId);
+      final c = await widget.api.getCitasDelDia(_hoy);
       if (!mounted) return;
       setState(() {
         _citas = c;
@@ -67,11 +77,7 @@ class _CitasRecepcionScreenState extends State<CitasRecepcionScreen> {
   Future<void> _abrirFormulario({Map<String, dynamic>? cita}) async {
     final hecho = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => RecepcionScreen(
-          api: widget.api,
-          cita: cita,
-          workshopId: _workshopId,
-        ),
+        builder: (_) => RecepcionScreen(api: widget.api, cita: cita),
       ),
     );
     if (hecho == true && mounted) {
@@ -84,31 +90,19 @@ class _CitasRecepcionScreenState extends State<CitasRecepcionScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Citas de hoy'),
+        // El taller va en la cabecera, no en un desplegable: es dato del
+        // operario, no una elección del formulario.
+        title: Text(
+          _miTaller == null
+              ? 'Citas de hoy'
+              : 'Citas de hoy · ${workshopLabel(_miTaller)}',
+        ),
         actions: [
           IconButton(icon: const Icon(Icons.refresh), onPressed: _cargar),
         ],
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: DropdownButtonFormField<String>(
-              initialValue: _workshopId,
-              decoration: const InputDecoration(labelText: 'Taller'),
-              items: kWorkshops
-                  .map((w) => DropdownMenuItem(
-                        value: w['id'],
-                        child: Text(w['name'] ?? w['id']!),
-                      ))
-                  .toList(),
-              onChanged: (v) {
-                if (v == null) return;
-                setState(() => _workshopId = v);
-                _cargar();
-              },
-            ),
-          ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.all(16),

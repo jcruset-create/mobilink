@@ -72,6 +72,24 @@ function decimal(valor: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * El taller del operario que hace la petición.
+ *
+ * `requireTallerOperator` deja en la petición el nombre; el taller se consulta
+ * aquí. Null significa «el de por defecto», que es como se ha comportado todo
+ * hasta que la columna existió.
+ */
+async function tallerDelOperario(req: any): Promise<string | null> {
+  const nombre = String(req?.roadsideOperator?.techName ?? "").trim();
+  if (!nombre) return null;
+  const r = await db.query(
+    `SELECT "workshopId" FROM techs WHERE name = $1 LIMIT 1`,
+    [nombre]
+  );
+  const w = r.rows[0]?.workshopId;
+  return w == null || w === "" ? null : String(w);
+}
+
 export type DependenciasRecepcionVehiculos = {
   requireTallerOperator: RequestHandler;
   requireSupervisorRole: RequestHandler;
@@ -110,7 +128,14 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
    */
   r.get("/taller-operator/recepcion-vehiculos/catalogo", requireTallerOperator, async (req, res) => {
     try {
-      const workshopId = textoONull((req.query as any)?.workshopId);
+      /*
+       * El taller sale del OPERARIO, no de lo que mande la APK.
+       *
+       * Antes venía por query y la app lo preguntaba con un desplegable, que
+       * es preguntar dos veces lo mismo: el técnico ya pertenece a un taller.
+       * Y un taller que se puede mandar es un taller que se puede equivocar.
+       */
+      const workshopId = await tallerDelOperario(req);
       /*
        * `SELECT *`, sin nombrar ni una columna, y la forma se decide en
        * JavaScript. No es pereza: es lo único que aguanta el esquema real de
@@ -196,7 +221,9 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) {
         return res.status(400).json({ error: "Falta el día (AAAA-MM-DD)" });
       }
-      const workshopId = textoONull((req.query as any)?.workshopId);
+      // Del operario, igual que el catálogo: el técnico ya pertenece a un
+      // taller y preguntárselo sería preguntar dos veces lo mismo.
+      const workshopId = await tallerDelOperario(req);
 
       // Igual que el endpoint del panel: el JSONB se devuelve tal cual y la
       // forma se decide en JavaScript. Esta tabla no tiene columnas que
@@ -267,6 +294,9 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
 
       const ahora = Date.now();
       const confianza = Number(body.confianzaOcr);
+      // El taller del operario manda sobre lo que venga en el cuerpo: es dato
+      // de quién lo envía, no del formulario.
+      const tallerOperario = await tallerDelOperario(req);
 
       const fila = await db.query(
         `INSERT INTO recepciones_vehiculo (
@@ -281,7 +311,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
          ) RETURNING ${COLUMNAS}`,
         [
           ahora,
-          textoONull(body.workshopId),
+          tallerOperario ?? textoONull(body.workshopId),
           matricula,
           normalizarMatricula(matricula),
           textoONull(body.matriculaOcr),
