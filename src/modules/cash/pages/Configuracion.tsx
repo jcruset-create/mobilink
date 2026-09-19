@@ -31,7 +31,7 @@ import {
   btnMini,
 } from "../components/ui";
 import { MEDIDA_RECOMENDADA, PROPORCION_BOTON } from "../components/PaymentMethodPicker";
-import { euros, aCentimos } from "../utils/money";
+import { euros, aCentimos, aTextoEditable } from "../utils/money";
 import type {
   Centro,
   BancoConfig,
@@ -1451,7 +1451,7 @@ function FondoFijo({
     <input
       type="text"
       inputMode="decimal"
-      defaultValue={centimos > 0 ? euros(centimos).replace(" €", "") : ""}
+      defaultValue={centimos > 0 ? aTextoEditable(centimos) : ""}
       placeholder="sin fondo"
       disabled={deshabilitado}
       onBlur={(e) => {

@@ -34,7 +34,7 @@ import {
   EmptyRow,
   inputCls,
 } from "../components/ui";
-import { euros, aCentimos, totalLineas } from "../utils/money";
+import { euros, aCentimos, aTextoEditable, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
 import PaymentMethodPicker, { MIXTO } from "../components/PaymentMethodPicker";
 import Justificantes from "../components/Justificantes";
@@ -333,7 +333,7 @@ export default function Cobros() {
       setReferencia(p.referencia.valor);
     }
     if (p.importeCentimos.estado !== "VACIO" && p.importeCentimos.valor != null && !tocados.has("importe")) {
-      setImporteTexto(euros(p.importeCentimos.valor));
+      setImporteTexto(aTextoEditable(p.importeCentimos.valor));
     }
     if (p.cliente.estado !== "VACIO" && p.cliente.valor && !tocados.has("cliente")) {
       setCliente(p.cliente.valor);
