@@ -9,6 +9,7 @@ import '../models/models.dart';
 import '../services/offline_store.dart';
 import '../services/ocr_service.dart';
 import '../services/supabase_service.dart';
+import 'escanear_serie_screen.dart';
 import '../theme/app_theme.dart';
 import '../widgets/firma_pad.dart';
 import '../widgets/vehicle_layout_image.dart';
@@ -937,6 +938,23 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     if (i > 0) setState(() => _paso = _Paso.values[i - 1]);
   }
 
+  /// Botón de escanear el QR de la etiqueta, para un campo de número de serie.
+  ///
+  /// Lo leído se escribe en el campo, a la vista: el QR lleva solo el número y
+  /// no se distingue del de un palé, así que lo comprueba quien monta la rueda.
+  /// Es el mismo trato que se le da a lo que lee la IA de una foto.
+  Widget _botonQr(void Function(String serie) alLeer) {
+    return IconButton(
+      tooltip: 'Escanear el QR de la etiqueta',
+      icon: const Icon(Icons.qr_code_scanner),
+      onPressed: () async {
+        final serie = await escanearSerie(context);
+        if (serie == null || !mounted) return;
+        setState(() => alLeer(serie));
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final total = _Paso.values.length - 1; // 'hecho' no es un paso que se rellene
@@ -1515,6 +1533,7 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
                   onChanged: (v) { r.numeroSerie = v; r.serieDudosa = false; },
                 ),
               ),
+              _botonQr((serie) { r.numeroSerie = serie; r.serieDudosa = false; }),
               const SizedBox(width: 10),
               Expanded(
                 child: TextFormField(
@@ -1651,6 +1670,7 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
               onChanged: (v) { m.numeroSerie = v; m.serieDudosa = false; },
             ),
           ),
+          _botonQr((serie) { m.numeroSerie = serie; m.serieDudosa = false; }),
           const SizedBox(width: 10),
           Expanded(
             child: TextFormField(

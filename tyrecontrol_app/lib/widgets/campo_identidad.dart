@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../screens/escanear_serie_screen.dart';
 import '../services/probe_session.dart';
 import '../services/tlgx_probe_service.dart';
 import '../theme/app_theme.dart';
@@ -10,8 +11,13 @@ import '../theme/app_theme.dart';
 /// rueda que ya está puesta (`tire_detail_screen`), así que la lectura vive
 /// aquí y no se repite en cada diálogo.
 ///
-/// El botón de leer solo aparece con la sonda enganchada; si no la hay, queda
-/// el número de serie a mano y se dice por qué.
+/// El botón de leer RFID solo aparece con la sonda enganchada; si no la hay,
+/// queda el número de serie a mano y se dice por qué.
+///
+/// El número de serie se puede escanear del QR de la etiqueta, si la goma la
+/// lleva pegada. Lo leído se escribe EN EL CAMPO, a la vista: el QR lleva solo
+/// el número y no se distingue del de un palé, así que quien monta la rueda lo
+/// compara con lo que tiene delante antes de guardar.
 class CampoIdentidad extends StatefulWidget {
   final TextEditingController rfid;
   final TextEditingController serie;
@@ -54,6 +60,17 @@ class _CampoIdentidadState extends State<CampoIdentidad> {
     }
   }
 
+  /// Lee el QR de la etiqueta y lo pone en el campo. No guarda nada: lo
+  /// confirma quien está montando la rueda, comparándolo con el flanco.
+  Future<void> _escanear() async {
+    final serie = await escanearSerie(context);
+    if (serie == null || !mounted) return;
+    setState(() {
+      widget.serie.text = serie;
+      _aviso = 'Número leído del QR: compruébalo con la rueda';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final sonda = ProbeSession.instance;
@@ -75,10 +92,21 @@ class _CampoIdentidadState extends State<CampoIdentidad> {
           ),
       ]),
       const SizedBox(height: 8),
-      TextField(
-        controller: widget.serie,
-        decoration: const InputDecoration(labelText: 'Número de serie', hintText: 'si no hay etiqueta'),
-      ),
+      Row(children: [
+        Expanded(
+          child: TextField(
+            controller: widget.serie,
+            decoration: const InputDecoration(
+                labelText: 'Número de serie', hintText: 'tecléalo o escanea el QR'),
+          ),
+        ),
+        const SizedBox(width: 8),
+        FilledButton.icon(
+          onPressed: _escanear,
+          icon: const Icon(Icons.qr_code_scanner, size: 18),
+          label: const Text('QR'),
+        ),
+      ]),
       if (!sonda.puedeLeerRfid)
         const Padding(
           padding: EdgeInsets.only(top: 6),

@@ -21,6 +21,9 @@ dependencies:
   url_launcher: ^6.3.0
 
   image_picker: ^1.1.2
+  # Escanear el QR de la etiqueta del neumático al montar. Misma versión que
+  # en toolcontrol_app, que ya lo usa: una sola versión que mantener.
+  mobile_scanner: ^5.2.3
   flutter_image_compress: ^2.3.0
   path_provider: ^2.1.0
 
