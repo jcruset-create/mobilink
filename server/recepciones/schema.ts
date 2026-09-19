@@ -591,6 +591,15 @@ export async function initRecepciones(): Promise<void> {
   // frase no sirve para avisar a nadie, y en su columna sí.
   await pool.query(`ALTER TABLE rcp_albaranes ADD COLUMN IF NOT EXISTS telefono_contacto TEXT;`);
 
+  // El PDF adjunto de un correo que TODAVÍA no ha dado un albarán. Hay
+  // proveedores que no cuentan nada en el cuerpo y lo mandan todo en el
+  // adjunto (ver `domain/insa.ts`); si ese correo queda en revisión, el
+  // adjunto tiene que sobrevivir, o «Reprocesar» vuelve a mirar un correo
+  // vacío y falla igual. Cuando el albarán se crea, su original se guarda
+  // aparte con `albaran_id`: esta columna es la del correo, no la de nadie más.
+  await pool.query(`ALTER TABLE rcp_documentos ADD COLUMN IF NOT EXISTS correo_id UUID;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS rcp_documentos_correo_idx ON rcp_documentos(correo_id);`);
+
   // ── Avisos al que espera la mercancía ─────────────────────────────────────
   //
   // Al cerrar una recepción OK se le manda un WhatsApp a quien figura en las

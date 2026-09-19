@@ -727,6 +727,31 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
       expect((await api("/bandeja")).body.albaranes.filter((a: any) => a.numeroProveedor === `D26-${numero}`)).toHaveLength(1);
     });
 
+    it("el adjunto se guarda con el correo: «Reprocesar» vuelve a leerlo sin tener que reenviar nada", async () => {
+      // Un correo que llega ANTES de que el proveedor esté reconocido queda
+      // ignorado; el adjunto se guarda igual. Es justo el caso de la pantalla:
+      // el albarán reenviado a mano que se quedó sin número.
+      const numero = unico("260313");
+      const m = await mensaje({ de: "desconocido@insaturbo.example", asunto: `Fwd: albaran Riu Clar agencia transaher`, texto: "Te lo reenvío.", pdf: await pdfEntregaInsa(numero) });
+      const r = await importarEml(m.source);
+      expect(r.body.resultado).toBe("ignorado");
+
+      // Se da de alta el remitente en la ficha del proveedor…
+      await api(`/proveedores/${proveedorId}`, { method: "PATCH", body: { remitentesCorreo: [REMITENTE, "insaturbo.example"] } });
+
+      // …y con «Reprocesar», sin el correo delante, la entrega entra entera.
+      const correos = await api("/correo");
+      const guardado = correos.body.correos.find((c: any) => c.asunto.includes("Riu Clar"));
+      const re = await api(`/correo/${guardado.id}/reprocesar`, { method: "POST" });
+      expect(re.status, JSON.stringify(re.body)).toBe(200);
+      expect(re.body.resultado).toBe("PROCESADO");
+      expect(re.body.albaranNumero).toBe(`D26-${numero}`);
+
+      const fila = (await api("/bandeja")).body.albaranes.find((a: any) => a.numeroProveedor === `D26-${numero}`);
+      expect(fila).toBeTruthy();
+      expect(fila.documentoOriginalId).toBeTruthy();
+    });
+
     it("un PDF que no es una entrega reconocible deja el correo como antes: no se inventa un albarán", async () => {
       const m = await mensaje({ asunto: "Entrega", texto: "Adjuntamos el albarán.", pdf: await pdfDePrueba("Esto no es una entrega de nadie") });
       const r = await importarEml(m.source);

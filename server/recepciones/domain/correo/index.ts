@@ -220,13 +220,44 @@ type Token = { campo: Campo; valor: string } | { fila: LineaLeida } | { texto: s
  */
 const FILA = /^(-?\d+(?:[.,]\d+)?)\s+(\S.*?)\s+(-?\d{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*(?:€|EUR)?\.?$/;
 
+/**
+ * La misma fila, pero con la nota de la celda DETRÁS del importe:
+ *
+ *     2.00 245/35X20 PIREL.PZ4 95Y+KS s-i 168.20 pedido custodia
+ *
+ * Es el mismo pedido que llega partido en dos líneas («pedido custodia» en la
+ * de abajo), sólo que aplanado por otro lector de correo: unos ponen la nota
+ * antes del importe y otros después. Sin esto, la fila no acaba en importe y
+ * el pedido se quedaba sin su única línea de mercancía.
+ *
+ * La cola tiene que ser TEXTO: si lleva otro importe no es una nota, es otra
+ * columna, y entonces no se sabe cuál de los dos números es el precio. En ese
+ * caso se prefiere no leer la fila a leerla mal.
+ */
+const FILA_CON_COLA = /^(-?\d+(?:[.,]\d+)?)\s+(\S.*?)\s+(-?\d{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*(?:€|EUR)?\.?\s+(\S.*)$/;
+
+/** Un importe suelto dentro de un texto: «168.20», «1.054,80». */
+const LLEVA_IMPORTE = /(?:^|\s)-?\d{1,3}(?:[.,]\d{3})*[.,]\d{2}(?:\s|$)/;
+
 export function filaDeTabla(linea: string): LineaLeida | null {
-  const m = linea.trim().match(FILA);
-  if (!m) return null;
-  const cantidad = Number(m[1].replace(",", "."));
-  const descripcion = m[2].trim();
+  const texto = linea.trim();
+  const m = texto.match(FILA);
+  if (m) return desdeLaFila(m[1], m[2], m[3]);
+
+  const conCola = texto.match(FILA_CON_COLA);
+  if (!conCola) return null;
+  const cola = conCola[4].trim();
+  if (LLEVA_IMPORTE.test(cola) || !/\p{L}/u.test(cola)) return null;
+  // La nota se queda DENTRO de la descripción: es lo que el proveedor ha
+  // escrito del artículo, y quien recibe la mercancía tiene que verlo.
+  return desdeLaFila(conCola[1], `${conCola[2]} ${cola}`, conCola[3]);
+}
+
+function desdeLaFila(cantidadCruda: string, descripcionCruda: string, importe: string): LineaLeida | null {
+  const cantidad = Number(cantidadCruda.replace(",", "."));
+  const descripcion = descripcionCruda.replace(/\s+/g, " ").trim();
   if (!Number.isFinite(cantidad) || descripcion.length < 3) return null;
-  return { cantidad, descripcion, precioCentimos: leerImporte(m[3]).centimos, referencia: null };
+  return { cantidad, descripcion, precioCentimos: leerImporte(importe).centimos, referencia: null };
 }
 
 /**
