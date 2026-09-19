@@ -14,7 +14,7 @@ publish_to: 'none'
 # tienda —la APK se instala a mano— así que subir de 0.46 a 1.1 no le afecta:
 # lo único que Android exige es que el número de build crezca, y ese lo pone el
 # contador de la CI.
-version: 1.1.0+261
+version: 1.1.1+262
 
 environment:
   sdk: ^3.8.1
