@@ -88,10 +88,23 @@ class _InicioTab extends StatelessWidget {
             child: Image.asset('assets/logo_cabecera.png', width: 460, fit: BoxFit.contain),
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            children: [
+        // Con scroll, y no es un detalle de estilo: el menú se escribió
+        // mirando una tablet, donde los diez botones caben de sobra. En un
+        // iPhone no caben —se cortaba en «Alta de vehículos»— y una Column
+        // pelada no se puede arrastrar: lo de abajo sencillamente no existía.
+        //
+        // AlwaysScrollableScrollPhysics para que también se pueda arrastrar
+        // cuando SÍ cabe todo: en la tablet el gesto no hace nada visible,
+        // pero quien viene del móvil lo intenta igual y un menú que no
+        // responde parece colgado.
+        SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Padding(
+            // Abajo, algo más de aire: la barra de pestañas se come el borde
+            // inferior y el último botón quedaba pegado a ella.
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+            child: Column(
+              children: [
               _BigTile(
             icon: Icons.add_circle,
             label: 'Nueva revisión',
@@ -265,7 +278,8 @@ class _InicioTab extends StatelessWidget {
           ),
           // "Cerrar sesión" vive ahora en la cabecera (a la derecha del estado
           // de conexión), que es donde se busca; aquí solo queda el menú.
-            ],
+              ],
+            ),
           ),
         ),
       ],
