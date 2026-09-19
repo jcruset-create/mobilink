@@ -2,7 +2,7 @@ name: tyrecontrol_app
 description: "Mobilink TyreControl — revision de neumaticos en campo"
 publish_to: 'none'
 
-version: 0.46.4+260
+version: 0.46.5+261
 
 environment:
   sdk: ^3.8.1
@@ -21,6 +21,9 @@ dependencies:
   url_launcher: ^6.3.0
 
   image_picker: ^1.1.2
+  # Escanear el QR de la etiqueta del neumático al montar. Misma versión que
+  # en toolcontrol_app, que ya lo usa: una sola versión que mantener.
+  mobile_scanner: ^5.2.3
   flutter_image_compress: ^2.3.0
   path_provider: ^2.1.0
 
