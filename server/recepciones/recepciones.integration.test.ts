@@ -440,7 +440,7 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
 
   /* ── El orden de la bandeja ──────────────────────────────────────────── */
 
-  it("la lista de pedidos dice QUÉ se pidió, y va también de lo más viejo a lo más nuevo", async () => {
+  it("la lista de pedidos dice QUÉ se pidió, y va de lo más NUEVO a lo más viejo", async () => {
     const viejo = await crearPedido(2, { fechaPedido: "2026-09-10" });
     const nuevo = await crearPedido(4, { fechaPedido: "2026-09-16" });
 
@@ -452,8 +452,17 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
     expect(fila.articulos[0]).toMatchObject({ descripcionProveedor: "245/70X17.5 HANKOOK AH35 136M", cantidadExpedida: 4 });
     expect(fila.articulos[0].articuloLeido).toBe("HANKOOK AH35 245/70 R17.5 136M");
 
+    // Al revés que la bandeja: aquí se mira lo último que se ha pedido.
     const ids = r.body.pedidos.map((p: any) => p.id);
-    expect(ids.indexOf(viejo.pedido.id)).toBeLessThan(ids.indexOf(nuevo.pedido.id));
+    expect(ids.indexOf(nuevo.pedido.id)).toBeLessThan(ids.indexOf(viejo.pedido.id));
+  });
+
+  it("un pedido sin fecha se ordena por cuándo entró, no se va al final", async () => {
+    const conFecha = await crearPedido(2, { fechaPedido: "2026-09-10" });
+    const sinFecha = await crearPedido(2, { fechaPedido: null });
+    const ids = (await api("/pedidos", operarioA)).body.pedidos.map((p: any) => p.id);
+    // El de hoy sin fecha es más nuevo que uno del día 10 con fecha.
+    expect(ids.indexOf(sinFecha.pedido.id)).toBeLessThan(ids.indexOf(conFecha.pedido.id));
   });
 
 

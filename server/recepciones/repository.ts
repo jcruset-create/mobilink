@@ -906,9 +906,11 @@ export async function listarPedidos(empresaId: string, f: FiltroPedidos, ejecuto
             FROM rcp_pedido_lineas l WHERE l.pedido_id = p.id) AS articulos`
     )}
       WHERE ${cond.join(" AND ")}
-      -- Como la bandeja: lo más viejo primero, que es el orden en que se
-      -- espera la mercancía.
-      ORDER BY COALESCE(p.fecha_pedido, p.created_at::date) ASC, p.created_at ASC
+      -- Lo más NUEVO primero, al revés que la bandeja, y a propósito: la
+      -- bandeja es una cola de trabajo —se recepciona por orden de llegada— y
+      -- esto es la lista de lo que se ha pedido, donde lo que se mira es lo
+      -- último. Sin fecha de pedido manda cuándo entró en Mobilink.
+      ORDER BY COALESCE(p.fecha_pedido, p.created_at::date) DESC, p.created_at DESC
       LIMIT $${params.length}`,
     params
   );
