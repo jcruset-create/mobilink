@@ -435,6 +435,14 @@ class ApiService {
 
   /// Operaciones que puede elegir el operario. Vienen de las plantillas que
   /// el taller ya mantiene; el servidor las manda SIN precio.
+  ///
+  /// Lanza si el servidor responde mal. Antes devolvía una lista vacía ante
+  /// CUALQUIER fallo, y eso dejaba el desplegable de operaciones vacío y
+  /// apagado sin decir por qué: desde el patio no hay forma de distinguir
+  /// «este taller no tiene operaciones dadas de alta» de «el servidor está
+  /// devolviendo un error». Sin cobertura sí se devuelve vacío, que es un
+  /// caso distinto y previsto: la recepción se envía igual y la operación la
+  /// decide quien valide en la oficina.
   Future<List<Map<String, dynamic>>> getCatalogoRecepcion() async {
     try {
       final res = await http
@@ -443,14 +451,15 @@ class ApiService {
             headers: _headers,
           )
           .timeout(const Duration(seconds: 15));
-      if (res.statusCode != 200) return [];
+      if (res.statusCode != 200) {
+        throw Exception(_errorDe(res.body, 'No se ha podido cargar el catálogo'));
+      }
       return (jsonDecode(res.body) as List<dynamic>)
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
-    } catch (_) {
-      // Sin cobertura se recibe igual: la operación se deja sin elegir y la
-      // decide quien valide en la oficina.
-      return [];
+    } catch (e) {
+      if (_isNetworkError(e)) return [];
+      rethrow;
     }
   }
 
@@ -490,6 +499,26 @@ class ApiService {
       return data is Map ? Map<String, dynamic>.from(data) : null;
     } catch (_) {
       // Que falle la IA no puede bloquear una recepción: se teclea.
+      return null;
+    }
+  }
+
+  /// Lee el cuentakilómetros de una foto del cuadro. Igual que la matrícula:
+  /// lo que devuelve se ENSEÑA al operario, nunca se manda sin que lo vea.
+  Future<Map<String, dynamic>?> leerKilometros(String dataUri) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse(
+                '$kBackendUrl/api/taller-operator/recepcion-vehiculos/ocr-kilometros'),
+            headers: _headers,
+            body: jsonEncode({'imagen': dataUri}),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (res.statusCode != 200) return null;
+      final data = jsonDecode(res.body);
+      return data is Map ? Map<String, dynamic>.from(data) : null;
+    } catch (_) {
       return null;
     }
   }

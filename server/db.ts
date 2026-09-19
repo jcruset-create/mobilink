@@ -1260,6 +1260,23 @@ export async function initDb() {
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "recepcionId" BIGINT DEFAULT NULL;
   `);
 
+  // Cuentakilómetros al entrar. Va en su propio bloque y con ADD COLUMN IF NOT
+  // EXISTS porque la tabla ya existe en producción desde la primera entrega:
+  // meterlo en el CREATE de arriba no lo habría añadido a las bases que ya
+  // estaban creadas, que es justo el fallo que este patrón evita.
+  await pool.query(`
+    ALTER TABLE recepciones_vehiculo
+      ADD COLUMN IF NOT EXISTS kilometros INTEGER DEFAULT NULL;
+
+    -- Lo que leyó la IA del cuadro y con cuánta confianza, aparte de lo que
+    -- confirmó la persona. Sirve para medir después si el OCR merece la pena;
+    -- nunca se usan como dato bueno sin que alguien los haya visto.
+    ALTER TABLE recepciones_vehiculo
+      ADD COLUMN IF NOT EXISTS "kilometrosOcr" INTEGER DEFAULT NULL;
+    ALTER TABLE recepciones_vehiculo
+      ADD COLUMN IF NOT EXISTS "confianzaKilometrosOcr" DOUBLE PRECISION DEFAULT NULL;
+  `);
+
   // Cupo anual de vacaciones y modo de cómputo. Una fila por taller y año con
   // "techName" = '' es el valor por defecto; las filas con nombre son el cupo
   // propio de ese técnico (antigüedad, jornada parcial, incorporación a mitad

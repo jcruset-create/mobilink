@@ -28,6 +28,7 @@ class RecepcionScreen extends StatefulWidget {
 
 class _RecepcionScreenState extends State<RecepcionScreen> {
   final _matriculaCtrl = TextEditingController();
+  final _kmCtrl = TextEditingController();
   final _clienteCtrl = TextEditingController();
   final _notasCtrl = TextEditingController();
 
@@ -39,10 +40,13 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
   /// Lo que leyó la IA, para guardarlo junto a lo que confirmó la persona.
   String? _matriculaOcr;
   double? _confianzaOcr;
+  int? _kilometrosOcr;
+  double? _confianzaKmOcr;
 
   List<Map<String, dynamic>> _catalogo = [];
   final List<XFile> _fotos = [];
   bool _leyendo = false;
+  bool _leyendoKm = false;
   bool _enviando = false;
   String? _error;
   String? _vehiculoId;
@@ -58,15 +62,25 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
   @override
   void dispose() {
     _matriculaCtrl.dispose();
+    _kmCtrl.dispose();
     _clienteCtrl.dispose();
     _notasCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _cargarCatalogo() async {
-    final c = await widget.api.getCatalogoRecepcion();
-    if (!mounted) return;
-    setState(() => _catalogo = c);
+    try {
+      final c = await widget.api.getCatalogoRecepcion();
+      if (!mounted) return;
+      setState(() => _catalogo = c);
+    } catch (e) {
+      if (!mounted) return;
+      // Un desplegable vacío y apagado no dice nada. Si el catálogo ha fallado
+      // se dice, y la recepción se puede enviar igual sin operación.
+      setState(() => _error =
+          'No se ha podido cargar el catálogo de operaciones. Puedes enviar '
+          'la recepción sin elegirla.');
+    }
   }
 
   List<Map<String, dynamic>> get _operaciones => _area == null
@@ -116,6 +130,65 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
       setState(() {
         _leyendo = false;
         _error = 'No se ha podido leer la matrícula. Escríbela a mano.';
+      });
+    }
+  }
+
+  /// Tope de sensatez, el mismo que aplica el servidor al convertir.
+  ///
+  /// Un camión pasa del millón sin despeinarse, así que no puede ser bajo;
+  /// pero un OCR de un cuadro con reflejos se come un dígito o se inventa
+  /// otro, y un kilometraje absurdo contamina el histórico del vehículo.
+  static const int _kmMaximos = 3000000;
+
+  int? _kmSensatos(Object? valor) {
+    final crudo = valor?.toString().replaceAll(RegExp(r'[^0-9]'), '') ?? '';
+    if (crudo.isEmpty) return null;
+    final km = int.tryParse(crudo);
+    // El cero se descarta: un cuentakilómetros a cero es casi siempre una
+    // lectura fallida, no un vehículo recién matriculado entrando al taller.
+    if (km == null || km <= 0 || km > _kmMaximos) return null;
+    return km;
+  }
+
+  /// Foto del cuadro → OCR → campo editable, igual que la matrícula.
+  Future<void> _fotoDeKilometros() async {
+    final shot = await ImagePicker().pickImage(
+      source: ImageSource.camera,
+      imageQuality: 85,
+      maxWidth: 1600,
+    );
+    if (shot == null) return;
+
+    setState(() {
+      _leyendoKm = true;
+      _error = null;
+    });
+    try {
+      final bytes = await File(shot.path).readAsBytes();
+      final leido = await widget.api
+          .leerKilometros('data:image/jpeg;base64,${base64Encode(bytes)}');
+      if (!mounted) return;
+
+      final confianza = (leido?['confianza'] as num?)?.toDouble() ?? 0;
+      final km = confianza >= 0.7 ? _kmSensatos(leido?['kilometros']) : null;
+
+      setState(() {
+        _fotos.add(shot);
+        _leyendoKm = false;
+        if (km != null) {
+          _kmCtrl.text = km.toString();
+          _kilometrosOcr = km;
+          _confianzaKmOcr = confianza;
+        } else {
+          _error = 'No se han podido leer los kilómetros. Escríbelos a mano.';
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _leyendoKm = false;
+        _error = 'No se han podido leer los kilómetros. Escríbelos a mano.';
       });
     }
   }
@@ -173,6 +246,9 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
         'matricula': matricula,
         'workshopId': _workshopId,
         'clienteNombre': _clienteCtrl.text.trim(),
+        'kilometros': _kmSensatos(_kmCtrl.text),
+        'kilometrosOcr': _kilometrosOcr,
+        'confianzaKilometrosOcr': _confianzaKmOcr,
         'area': _area,
         'plantillaKey': _plantillaKey,
         'operacionLabel': operacion['label'],
@@ -258,6 +334,32 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
               child: Text(_avisoVehiculo!,
                   style: const TextStyle(color: AppColors.textMuted, fontSize: 12)),
             ),
+          const SizedBox(height: 12),
+
+          // ── Kilómetros ─────────────────────────────────────────────────
+          //
+          // Mismo par que la matrícula —foto y campo editable— y por el mismo
+          // motivo: un cuadro con reflejos se lee mal, así que la IA propone y
+          // el operario, que está delante, confirma.
+          FilledButton.tonalIcon(
+            onPressed: _leyendoKm ? null : _fotoDeKilometros,
+            icon: _leyendoKm
+                ? const SizedBox(
+                    width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.speed),
+            label: Text(_leyendoKm ? 'Leyendo…' : 'Foto del cuentakilómetros'),
+          ),
+          const SizedBox(height: 12),
+
+          TextField(
+            controller: _kmCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Kilómetros',
+              suffixText: 'km',
+              helperText: 'Compruébalos antes de enviar.',
+            ),
+          ),
           const SizedBox(height: 12),
 
           TextField(

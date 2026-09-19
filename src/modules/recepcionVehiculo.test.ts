@@ -6,6 +6,9 @@ import {
 import type { QuickTemplate } from "./workshopTypes";
 import {
   CONFIANZA_OCR_MINIMA,
+  KILOMETROS_MAXIMOS,
+  kilometrosEscritos,
+  kilometrosPropuestosPorOcr,
   eligeVehiculo,
   jobDesdeRecepcion,
   loQueFaltaParaConvertir,
@@ -82,6 +85,54 @@ describe("matriculaPropuestaPorOcr", () => {
     expect(matriculaPropuestaPorOcr(null)).toBeNull();
     expect(matriculaPropuestaPorOcr({})).toBeNull();
     expect(matriculaPropuestaPorOcr({ matricula: null, confianza: "alta" })).toBeNull();
+  });
+});
+
+describe("kilometrosPropuestosPorOcr", () => {
+  it("lee el cuadro con los separadores que trae", () => {
+    expect(kilometrosPropuestosPorOcr({ kilometros: "123.456", confianza: 0.9 })).toBe(123456);
+    expect(kilometrosPropuestosPorOcr({ kilometros: "123 456", confianza: 0.9 })).toBe(123456);
+    expect(kilometrosPropuestosPorOcr({ kilometros: 98765, confianza: 0.8 })).toBe(98765);
+  });
+
+  it("un camión puede pasar del millón", () => {
+    expect(kilometrosPropuestosPorOcr({ kilometros: "1250000", confianza: 0.9 })).toBe(1250000);
+  });
+
+  /*
+   * El OCR se come un dígito o se inventa otro con toda naturalidad, y un
+   * kilometraje absurdo metido sin mirar contamina el histórico del vehículo.
+   */
+  it("descarta lo que ningún vehículo ha recorrido", () => {
+    expect(kilometrosPropuestosPorOcr({ kilometros: "99999999", confianza: 1 })).toBeNull();
+    expect(kilometrosPropuestosPorOcr({ kilometros: KILOMETROS_MAXIMOS + 1, confianza: 1 })).toBeNull();
+    expect(kilometrosPropuestosPorOcr({ kilometros: KILOMETROS_MAXIMOS, confianza: 1 })).toBe(KILOMETROS_MAXIMOS);
+  });
+
+  it("el cero es una lectura fallida, no un vehículo nuevo", () => {
+    expect(kilometrosPropuestosPorOcr({ kilometros: "0", confianza: 1 })).toBeNull();
+  });
+
+  it("rechaza la lectura dudosa: que lo escriba la persona", () => {
+    expect(kilometrosPropuestosPorOcr({ kilometros: "123456", confianza: 0.5 })).toBeNull();
+    expect(
+      kilometrosPropuestosPorOcr({ kilometros: "123456", confianza: CONFIANZA_OCR_MINIMA })
+    ).toBe(123456);
+  });
+
+  it("rechaza lo que no es una lectura", () => {
+    expect(kilometrosPropuestosPorOcr(null)).toBeNull();
+    expect(kilometrosPropuestosPorOcr({})).toBeNull();
+    expect(kilometrosPropuestosPorOcr({ kilometros: "no se ve", confianza: 1 })).toBeNull();
+  });
+});
+
+describe("kilometrosEscritos", () => {
+  it("lo que teclea la persona pasa por el mismo filtro", () => {
+    expect(kilometrosEscritos("123.456")).toBe(123456);
+    expect(kilometrosEscritos("")).toBeNull();
+    expect(kilometrosEscritos("0")).toBeNull();
+    expect(kilometrosEscritos(KILOMETROS_MAXIMOS + 1)).toBeNull();
   });
 });
 
@@ -181,6 +232,21 @@ describe("jobDesdeRecepcion", () => {
     expect(job.reason).toBe("Recepción en patio (Andrés). Pierde aceite.");
   });
 
+  it("el kilometraje viaja con el trabajo, no solo en la ficha", () => {
+    const job = jobDesdeRecepcion(
+      recepcion({ kilometros: 123456, notas: "Pierde aceite." }),
+      1,
+      plantilla,
+      1
+    );
+    expect(job.reason).toContain("123.456 km.");
+  });
+
+  it("sin kilometraje el motivo no deja un hueco raro", () => {
+    const job = jobDesdeRecepcion(recepcion({ kilometros: null }), 1, plantilla, 1);
+    expect(job.reason).toBe("Recepción en patio (Andrés).");
+  });
+
   it("sin plantilla sigue saliendo un trabajo usable", () => {
     const job = jobDesdeRecepcion(
       recepcion({ plantillaKey: null, operacionLabel: "Revisar fuga", area: "camion" }),
@@ -213,7 +279,7 @@ describe("plantillaParaOperario", () => {
       unitPrice: 62.5,
     };
     const salida = plantillaParaOperario(plantilla);
-    expect(Object.keys(salida).sort()).toEqual(["area", "key", "label", "usesQuantity"]);
+    expect(Object.keys(salida).sort()).toEqual(["area", "key", "label"]);
     expect(JSON.stringify(salida)).not.toContain("62.5");
   });
 });
