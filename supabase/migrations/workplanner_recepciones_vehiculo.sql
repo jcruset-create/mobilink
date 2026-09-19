@@ -44,3 +44,11 @@ CREATE TABLE IF NOT EXISTS recepciones_vehiculo (
 
     -- El camino de vuelta: desde el trabajo, a la recepción y sus fotos.
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "recepcionId" BIGINT DEFAULT NULL;
+
+-- Cuentakilómetros al entrar, añadido después de la primera entrega.
+ALTER TABLE recepciones_vehiculo
+  ADD COLUMN IF NOT EXISTS kilometros INTEGER DEFAULT NULL;
+ALTER TABLE recepciones_vehiculo
+  ADD COLUMN IF NOT EXISTS "kilometrosOcr" INTEGER DEFAULT NULL;
+ALTER TABLE recepciones_vehiculo
+  ADD COLUMN IF NOT EXISTS "confianzaKilometrosOcr" DOUBLE PRECISION DEFAULT NULL;

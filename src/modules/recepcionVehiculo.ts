@@ -31,6 +31,11 @@ export type RecepcionVehiculo = {
   matriculaOcr?: string | null;
   confianzaOcr?: number | null;
   clienteNombre?: string | null;
+  /** Cuentakilómetros al entrar. Lo que marca el vehículo, no una estimación. */
+  kilometros?: number | null;
+  /** Lo que leyó la IA del cuadro, sin tocar, y con cuánta confianza. */
+  kilometrosOcr?: number | null;
+  confianzaKilometrosOcr?: number | null;
   vehiculoId?: string | null;
   vehiculoOrigen?: OrigenVehiculo | null;
   area?: AreaKey | null;
@@ -85,6 +90,58 @@ export function matriculaPropuestaPorOcr(lectura: LecturaOcr | null | undefined)
   const limpia = matriculaComparable(lectura.matricula);
   if (limpia.length < LARGO_MINIMO_MATRICULA) return null;
   return limpia;
+}
+
+/**
+ * Kilómetro máximo que se acepta de una lectura automática.
+ *
+ * Un camión pasa del millón sin despeinarse, así que el tope no puede ser
+ * bajo. Pero una lectura de OCR se come un dígito o se inventa otro con toda
+ * naturalidad, y un kilometraje absurdo metido sin mirar contamina el
+ * histórico del vehículo. Tres millones deja pasar cualquier flota real y
+ * corta las lecturas de siete y ocho cifras que no lo son.
+ */
+export const KILOMETROS_MAXIMOS = 3_000_000;
+
+export type LecturaKilometros = {
+  kilometros?: unknown;
+  confianza?: unknown;
+};
+
+/**
+ * ¿Sirve esta lectura del cuadro para proponerla en el formulario?
+ *
+ * Mismo trato que la matrícula: devuelve el número o `null`, y `null` no es un
+ * error, es «que lo escriba la persona». Lo que devuelve se le ENSEÑA al
+ * operario en un campo editable; nunca se guarda sin que lo haya visto.
+ *
+ * Se aceptan los separadores de miles que trae cualquier cuadro («123.456»,
+ * "123 456") porque la IA los devuelve tal cual los ve.
+ */
+export function kilometrosPropuestosPorOcr(
+  lectura: LecturaKilometros | null | undefined
+): number | null {
+  if (!lectura) return null;
+  const confianza = Number(lectura.confianza);
+  if (!Number.isFinite(confianza) || confianza < CONFIANZA_OCR_MINIMA) return null;
+
+  const crudo = String(lectura.kilometros ?? "").replace(/[^0-9]/g, "");
+  if (crudo === "") return null;
+
+  const km = Number(crudo);
+  // El cero se descarta: un cuentakilómetros a cero es casi siempre una
+  // lectura fallida, no un vehículo recién matriculado entrando al taller.
+  if (!Number.isFinite(km) || km <= 0 || km > KILOMETROS_MAXIMOS) return null;
+  return km;
+}
+
+/** Lo que el operario teclea, validado igual que lo que lee la IA. */
+export function kilometrosEscritos(valor: unknown): number | null {
+  const crudo = String(valor ?? "").replace(/[^0-9]/g, "");
+  if (crudo === "") return null;
+  const km = Number(crudo);
+  if (!Number.isFinite(km) || km <= 0 || km > KILOMETROS_MAXIMOS) return null;
+  return km;
 }
 
 /**
@@ -162,6 +219,10 @@ export function jobDesdeRecepcion(
 
   const motivo = [
     `Recepción en patio (${recepcion.operarioNombre}).`,
+    // El kilometraje va en el motivo porque es el dato que el técnico mira
+    // antes de tocar nada, y así viaja con el trabajo sin depender de que
+    // alguien abra la ficha de la recepción.
+    recepcion.kilometros ? `${recepcion.kilometros.toLocaleString("es-ES")} km.` : "",
     recepcion.notas?.trim() || "",
   ]
     .filter(Boolean)
@@ -203,7 +264,6 @@ export type PlantillaParaOperario = {
   key: string;
   label: string;
   area: AreaKey;
-  usesQuantity: boolean;
 };
 
 export function plantillaParaOperario(plantilla: QuickTemplate): PlantillaParaOperario {
@@ -211,6 +271,5 @@ export function plantillaParaOperario(plantilla: QuickTemplate): PlantillaParaOp
     key: plantilla.key,
     label: plantilla.label,
     area: plantilla.area,
-    usesQuantity: !!plantilla.usesQuantity,
   };
 }

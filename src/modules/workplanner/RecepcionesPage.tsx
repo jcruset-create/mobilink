@@ -272,13 +272,24 @@ export default function RecepcionesPage() {
                       leída por IA
                     </span>
                   )}
+                  {r.kilometrosOcr != null && r.kilometrosOcr === r.kilometros && (
+                    <span
+                      className="rounded bg-amber-900/50 px-1.5 py-0.5 text-[10px] font-bold text-amber-200"
+                      title="Los kilómetros los leyó la IA de una foto del cuadro. Compruébalos."
+                    >
+                      km por IA
+                    </span>
+                  )}
                   {duplicada && (
                     <span className="rounded bg-amber-900/50 px-1.5 py-0.5 text-[10px] font-bold text-amber-200">
                       ya recibido hoy
                     </span>
                   )}
                   <span className="flex-1 truncate text-sm text-slate-400">
-                    {r.clienteNombre || "Sin cliente"} · {r.operacionLabel || "Sin operación"}
+                    {r.clienteNombre || "Sin cliente"}
+                    {r.kilometros ? ` · ${r.kilometros.toLocaleString("es-ES")} km` : ""}
+                    {" · "}
+                    {r.operacionLabel || "Sin operación"}
                   </span>
                   <span className="text-xs text-slate-500">
                     {hora(r.creadaAtMs)} · {r.operarioNombre}
@@ -304,6 +315,19 @@ export default function RecepcionesPage() {
                         <input
                           defaultValue={actual.clienteNombre ?? ""}
                           onBlur={(e) => void editar("clienteNombre", e.target.value.trim())}
+                          className="mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-100"
+                        />
+                      </label>
+                      <label className="text-xs text-slate-400">
+                        Kilómetros
+                        <input
+                          type="number"
+                          defaultValue={actual.kilometros ?? ""}
+                          onBlur={(e) => {
+                            const v = Number(e.target.value.replace(/[^0-9]/g, ""));
+                            const km = Number.isFinite(v) && v > 0 ? v : null;
+                            if (km !== (actual.kilometros ?? null)) void editar("kilometros", km);
+                          }}
                           className="mt-1 w-full rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-100"
                         />
                       </label>

@@ -31,7 +31,8 @@ const ESTADOS = new Set(["pendiente", "convertida", "descartada"]);
 /** Columnas de la recepción, en el orden en que se leen siempre. */
 const COLUMNAS = `
   id, "workshopId", matricula, "matriculaNormal", "matriculaOcr", "confianzaOcr",
-  "clienteNombre", "vehiculoId", "vehiculoOrigen", area, "plantillaKey",
+  "clienteNombre", kilometros, "kilometrosOcr", "confianzaKilometrosOcr",
+  "vehiculoId", "vehiculoOrigen", area, "plantillaKey",
   "operacionLabel", notas, urgente, fotos, estado, "operarioNombre",
   "creadaAtMs", "resueltaAtMs", "resueltaPor", "motivoDescarte", "jobId"
 `;
@@ -48,6 +49,22 @@ function texto(valor: unknown): string {
 function textoONull(valor: unknown): string | null {
   const t = texto(valor);
   return t === "" ? null : t;
+}
+
+/**
+ * Entero o null. Nunca 0 por un campo vacío: un cuentakilómetros a cero es una
+ * lectura fallida, y guardarlo como dato bueno ensucia el histórico.
+ */
+function entero(valor: unknown): number | null {
+  if (valor == null || valor === "") return null;
+  const n = Number(String(valor).replace(/[^0-9]/g, ""));
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
+function decimal(valor: unknown): number | null {
+  if (valor == null || valor === "") return null;
+  const n = Number(valor);
+  return Number.isFinite(n) ? n : null;
 }
 
 export type DependenciasRecepcionVehiculos = {
@@ -89,8 +106,26 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
   r.get("/taller-operator/recepcion-vehiculos/catalogo", requireTallerOperator, async (req, res) => {
     try {
       const workshopId = textoONull((req.query as any)?.workshopId);
+      /*
+       * Solo las cuatro columnas que la pantalla del patio usa de verdad.
+       *
+       * Antes pedía también «usesQuantity», y eso dejó el desplegable de
+       * operaciones vacío en la APK: esa columna NO la crea `db.ts` ni ninguna
+       * migración —solo aparece en los INSERT de `index.ts`—, así que si no
+       * está, Postgres tumba la consulta ENTERA con «column does not exist» y
+       * aquí se devolvía un 500 que la app convertía en una lista vacía.
+       *
+       * El resto del código la lee con `SELECT *` y
+       * `t.usesQuantity ?? t.usesquantity ?? null`, que es precisamente lo que
+       * se escribe cuando una columna puede no estar. Pedirla por nombre era
+       * apostar a que sí.
+       *
+       * Y no hace falta: la recepción solo necesita saber qué operación es,
+       * no cómo se cobra. Menos columnas, además, es menos superficie por la
+       * que un precio pueda acabar en la pantalla del técnico.
+       */
       const filas = await db.query(
-        `SELECT key, label, area, mode, "usesQuantity"
+        `SELECT key, label, area, mode
            FROM quick_templates
           WHERE ($1::text IS NULL OR "workshopId" = $1 OR "workshopId" IS NULL)
           ORDER BY area, label`,
@@ -101,7 +136,6 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           key: String(t.key),
           label: String(t.label ?? ""),
           area: String(t.area ?? ""),
-          usesQuantity: t.usesQuantity === true || t.usesQuantity === "true",
         }))
       );
     } catch (e) {
@@ -167,12 +201,13 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       const fila = await db.query(
         `INSERT INTO recepciones_vehiculo (
            id, "workshopId", matricula, "matriculaNormal", "matriculaOcr",
-           "confianzaOcr", "clienteNombre", "vehiculoId", "vehiculoOrigen",
+           "confianzaOcr", "clienteNombre", kilometros, "kilometrosOcr",
+           "confianzaKilometrosOcr", "vehiculoId", "vehiculoOrigen",
            area, "plantillaKey", "operacionLabel", notas, urgente, fotos,
            estado, "operarioNombre", "creadaAtMs"
          ) VALUES (
-           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'[]'::jsonb,
-           'pendiente',$15,$16
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'[]'::jsonb,
+           'pendiente',$18,$19
          ) RETURNING ${COLUMNAS}`,
         [
           ahora,
@@ -182,6 +217,9 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           textoONull(body.matriculaOcr),
           Number.isFinite(confianza) ? confianza : null,
           textoONull(body.clienteNombre),
+          entero(body.kilometros),
+          entero(body.kilometrosOcr),
+          decimal(body.confianzaKilometrosOcr),
           textoONull(body.vehiculoId),
           textoONull(body.vehiculoOrigen),
           textoONull(body.area),
@@ -308,6 +346,53 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
     }
   });
 
+  /**
+   * Leer el cuentakilómetros de una foto del cuadro.
+   *
+   * Mismo trato que la matrícula: **no guarda nada**. Devuelve lo leído para
+   * que la APK se lo enseñe al operario en un campo editable, porque un OCR de
+   * un cuadro con reflejos se come un dígito sin despeinarse y un kilometraje
+   * mal metido contamina el histórico del vehículo.
+   */
+  r.post(
+    "/taller-operator/recepcion-vehiculos/ocr-kilometros",
+    requireTallerOperator,
+    async (req, res) => {
+      try {
+        const imagen = texto((req.body as any)?.imagen);
+        if (!imagen) return res.status(400).json({ error: "Falta la imagen" });
+        if (!hasAi()) return res.json({ kilometros: null, confianza: 0 });
+
+        const leido = await extractJson({
+          system:
+            "Eres un lector de cuentakilómetros de vehículos en un taller. " +
+            "Devuelve SOLO un JSON {\"kilometros\": number|null, \"confianza\": number} " +
+            "donde confianza va de 0 a 1. Lee el ODÓMETRO TOTAL, no el parcial " +
+            "(trip), no la temperatura y no la velocidad. Si el cuadro marca " +
+            "km y decimas, devuelve solo los kilómetros enteros. Si no lo ves " +
+            "con claridad, devuelve kilometros null y confianza 0. No inventes.",
+          images: [imagen],
+          maxTokens: 200,
+        });
+
+        const confianza = Number((leido as any)?.confianza);
+        const crudo = String((leido as any)?.kilometros ?? "").replace(/[^0-9]/g, "");
+        const km = crudo === "" ? null : Number(crudo);
+
+        res.json({
+          // El filtro de sensatez (cero, topes) lo aplica la APK con la misma
+          // regla que usa para lo que se teclea. Aquí solo se lee.
+          kilometros: km != null && Number.isFinite(km) ? km : null,
+          confianza: Number.isFinite(confianza) ? confianza : 0,
+        });
+      } catch (e) {
+        // Que falle la IA no puede bloquear una recepción: se teclea y ya está.
+        console.error("[Recepciones] ocr-kilometros:", (e as any)?.message ?? e);
+        res.json({ kilometros: null, confianza: 0 });
+      }
+    }
+  );
+
   /* ── Panel ────────────────────────────────────────────────────────────── */
 
   /** La bandeja. */
@@ -375,7 +460,8 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
            "plantillaKey" = COALESCE($6, "plantillaKey"),
            "operacionLabel" = COALESCE($7, "operacionLabel"),
            notas = COALESCE($8, notas),
-           urgente = COALESCE($9, urgente)
+           urgente = COALESCE($9, urgente),
+           kilometros = COALESCE($10, kilometros)
          WHERE id = $1 AND "deletedAtMs" IS NULL AND estado = 'pendiente'
          RETURNING ${COLUMNAS}`,
         [
@@ -388,6 +474,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           body.operacionLabel === undefined ? null : textoONull(body.operacionLabel),
           body.notas === undefined ? null : textoONull(body.notas),
           body.urgente === undefined ? null : body.urgente === true || body.urgente === "true",
+          body.kilometros === undefined ? null : entero(body.kilometros),
         ]
       );
       if (filas.rowCount === 0) {
