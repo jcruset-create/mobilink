@@ -286,9 +286,9 @@ workflows:
         bundle_identifier: com.seatarragona.tyrecontrolApp
       vars:
         BUNDLE_ID: com.seatarragona.tyrecontrolApp
-        # Versión de tienda. El pubspec lleva la versión de Android y NO se toca:
-        # se pasa por flag.
-        TC_BUILD_NAME: "1.0"
+        # La versión NO se escribe aquí: sale del pubspec, la misma que la APK.
+        # Ver el paso «Versión, la misma que la APK».
+        #
         # APP_STORE_APPLE_ID (el ID numérico de la app en App Store Connect) se
         # puede definir en la UI de Codemagic; si no está, el paso de versión lo
         # resuelve por el bundle id.
@@ -305,12 +305,29 @@ workflows:
           # Codemagic ha obtenido con la integración; genera
           # /Users/builder/export_options.plist para el paso siguiente.
           xcode-project use-profiles
-      - name: Número de build desde App Store Connect
+      - name: Versión, la misma que la APK
         script: |
-          # Patrón de Codemagic: se pregunta a App Store Connect el último build
-          # subido a TestFlight de esta app y se suma uno. Así nunca se repite
-          # un número, que TestFlight rechazaría.
+          # ── Una sola numeración ───────────────────────────────────────────
+          #
+          # El nombre de versión y el número de build salen del pubspec, que es
+          # el mismo que lleva la APK de Android. Antes el nombre se escribía a
+          # mano aquí («1.0») y el build lo ponía App Store Connect, así que la
+          # misma entrega se llamaba 0.46.5+261 en la tablet y 1.0.0+158 en el
+          # iPhone, y al dar soporte no había forma de saber cuál era más nueva.
+          #
+          # ── Pero el build sigue pasando por App Store Connect ─────────────
+          #
+          # Porque TestFlight RECHAZA un número repetido, y del pubspec se puede
+          # sacar uno repetido de dos maneras: lanzando dos veces el build sobre
+          # el mismo commit, o subiendo a iOS un commit anterior. Así que se
+          # coge el MAYOR de los dos: el del pubspec cuando va por delante —que
+          # es lo normal, y es lo que unifica— y el siguiente de TestFlight
+          # cuando no. Nunca baja.
           set -e
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          TC_BUILD_NAME=${VERSION%%+*}
+          DEL_PUBSPEC=${VERSION##*+}
+
           APPLE_ID="${APP_STORE_APPLE_ID:-}"
           if [ -z "$APPLE_ID" ]; then
             APPLE_ID=$(app-store-connect apps list --bundle-id "$BUNDLE_ID" --json | jq -r '.[0].id // empty')
@@ -320,11 +337,19 @@ workflows:
             exit 1
           fi
           ULTIMO=$(app-store-connect get-latest-testflight-build-number "$APPLE_ID" 2>/dev/null || true)
-          # Primer build: aún no hay nada en TestFlight. Se arranca en el 153, que
-          # es el previsto para la primera subida.
-          ULTIMO=${ULTIMO:-152}
-          echo "TC_BUILD_NUMBER=$((ULTIMO + 1))" >> "$CM_ENV"
-          echo "Último build en TestFlight: $ULTIMO → este será el $((ULTIMO + 1))"
+          ULTIMO=${ULTIMO:-0}
+          SIGUIENTE=$((ULTIMO + 1))
+
+          if [ "$DEL_PUBSPEC" -ge "$SIGUIENTE" ]; then
+            TC_BUILD_NUMBER=$DEL_PUBSPEC
+          else
+            TC_BUILD_NUMBER=$SIGUIENTE
+          fi
+
+          echo "TC_BUILD_NAME=$TC_BUILD_NAME" >> "$CM_ENV"
+          echo "TC_BUILD_NUMBER=$TC_BUILD_NUMBER" >> "$CM_ENV"
+          echo "pubspec: $VERSION · último en TestFlight: $ULTIMO"
+          echo "se publica $TC_BUILD_NAME+$TC_BUILD_NUMBER"
       - name: Build IPA
         script: |
           flutter build ipa --release \
