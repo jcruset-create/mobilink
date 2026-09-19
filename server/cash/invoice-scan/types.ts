@@ -18,8 +18,24 @@ import type { PropuestaSeccion } from "./seccion.ts";
 import type { CobroPrevio } from "../duplicates.ts";
 
 /** Lo que devuelve el modelo. Todo texto, todo opcional, nada calculado. */
+/** Qué es el papel, según lo que él mismo dice llamarse. */
+export type TipoDocumento =
+  | "FACTURA"
+  | "FACTURA_SIMPLIFICADA"
+  | "ALBARAN"
+  | "TICKET"
+  | "PARTE"
+  | "OTRO"
+  | "DESCONOCIDO";
+
 export type ExtraccionCruda = {
   es_factura: boolean;
+  /*
+   * Opcional a propósito, igual que `emisor`: los análisis guardados ANTES de
+   * que existiera este campo no lo traen, y la propuesta se rehace leyendo esa
+   * extracción vieja. Exigirlo rompería cada documento anterior de la bandeja.
+   */
+  tipo_documento?: string | null;
   facturas_detectadas: number;
   factura: {
     numero: string | null;
@@ -84,6 +100,8 @@ export type ExtraccionCruda = {
 /** Lo mismo, ya en los tipos de la caja. */
 export type ExtraccionNormalizada = {
   esFactura: boolean;
+  /** Qué dice ser el papel. `DESCONOCIDO` = no se distinguió o es un análisis viejo. */
+  tipoDocumento: TipoDocumento;
   facturasDetectadas: number;
   numeroFactura: string | null;
   fecha: string | null;
@@ -141,6 +159,10 @@ export type CampoPropuesto<T> = {
 
 export type CodigoAviso =
   | "NO_ES_FACTURA"
+  /** Se leyó, pero con tan poca seguridad que no se ha rellenado. */
+  | "LEIDO_SIN_SEGURIDAD"
+  /** Es un justificante válido, pero NO una factura: albarán, ticket, parte… */
+  | "TIPO_DE_DOCUMENTO"
   | "VARIAS_FACTURAS"
   | "VARIOS_RECIBOS"
   | "SIN_NUMERO_FACTURA"

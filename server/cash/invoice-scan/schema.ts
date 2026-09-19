@@ -32,7 +32,20 @@ function objeto<T extends Record<string, unknown>>(propiedades: T) {
 export const ESQUEMA_FACTURA = objeto({
   es_factura: {
     type: "boolean",
-    description: "true solo si el documento es una factura o un ticket de venta.",
+    description:
+      "true si el documento justifica una operación de dinero: factura, factura " +
+      "simplificada, ticket de venta, ALBARÁN o parte de trabajo con importes. " +
+      "El nombre que lleve impreso da igual; lo que cuenta es que haya un " +
+      "importe que alguien cobra o paga. false para lo que no lo sea: un " +
+      "presupuesto sin aceptar, una ficha técnica, una foto de otra cosa.",
+  },
+  tipo_documento: {
+    ...texto,
+    description:
+      "Qué es el documento, con una de estas palabras exactas: FACTURA, " +
+      "FACTURA_SIMPLIFICADA, ALBARAN, TICKET, PARTE, OTRO. Es lo que pone el " +
+      "propio papel: si el encabezado dice «Albarán: B2_0004524», es ALBARAN " +
+      "aunque lleve importes e IVA como una factura. null si no se distingue.",
   },
   facturas_detectadas: {
     type: "integer",
@@ -42,9 +55,12 @@ export const ESQUEMA_FACTURA = objeto({
     numero: {
       ...texto,
       description:
-        "Número de factura, tal y como está impreso. Es el que va junto a «Factura», " +
-        "«Nº factura» o equivalente fiscal. NO es el número de pedido, ni el de albarán, " +
-        "ni el de operación o ticket del TPV, ni el código del cliente.",
+        "El número DEL DOCUMENTO, tal y como está impreso, se llame como se " +
+        "llame: «Factura», «Nº factura», «Albarán», «Ticket», «Parte». En un " +
+        "albarán del taller pone «Albarán: B2_0004524» y el número es " +
+        "«B2_0004524». " +
+        "Lo que NO es: el número de operación o de comercio del ticket del TPV " +
+        "—ese va en el recibo, no aquí—, el código del cliente, ni la matrícula.",
     },
     fecha: { ...texto, description: "Fecha de la factura, tal cual: «27/08/2026»." },
   }),
@@ -186,6 +202,9 @@ Reglas:
 4. El total es el importe final con impuestos, el que se paga.
 5. El justificante de pago solo existe si lo ves: un recibo de TPV o un ticket de datáfono, dentro del mismo documento. Que la factura esté pagada no es un justificante.
 6. No decidas de qué banco o de qué proveedor es el TPV. Copia el número de comercio, el terminal, la red y el nombre del adquirente si aparecen, y ya está: la clasificación no es tuya.
-7. Las confianzas son tuyas de verdad: 0,99 cuando el dato está impreso y claro; por debajo de 0,7 cuando estás adivinando.
+7. «tipo_documento» es lo que pone el papel, no lo que parece: un albarán con importes e IVA sigue siendo un ALBARAN.
+8. Las confianzas son tuyas de verdad: 0,99 cuando el dato está impreso y claro; por debajo de 0,7 cuando estás adivinando.
 
-El documento puede ser una factura de venta del taller o un ticket de compra a un proveedor, y puede ser un PDF digital, un PDF escaneado o una foto, con el ticket del datáfono pegado encima, torcido o mal enfocado. Un ticket de compra muchas veces no tiene número de factura ni NIF del comprador: eso no es un fallo, es null.`;
+El documento puede ser una factura de venta del taller, un ALBARÁN o parte de trabajo, o un ticket de compra a un proveedor, y puede ser un PDF digital, un PDF escaneado o una foto, con el ticket del datáfono pegado encima, torcido o mal enfocado. Un ticket de compra muchas veces no tiene número de factura ni NIF del comprador: eso no es un fallo, es null.
+
+Un albarán con sus importes vale IGUAL que una factura: en un taller el dinero se cobra a menudo contra el albarán y la factura se emite después. «Trabajos Realizados» encabezando las líneas es lo normal en uno.`;

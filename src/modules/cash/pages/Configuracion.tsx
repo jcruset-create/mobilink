@@ -153,10 +153,15 @@ function ReglasSeccion() {
         sección cambia sola a Gasolinera aunque estuvieras en Taller.
       </p>
       <p className="text-[12px] text-slate-500">
-        Lo más fiable es el <b>NIF del emisor</b>: identifica al establecimiento y no cambia aunque
-        cambien el rótulo o la numeración. Lo que <b>no</b> se reconozca se propone como la sección
-        por defecto, pero sin cambiar el chip solo — no reconocer un papel no es lo mismo que saber
-        que es del taller.
+        <b>Ojo con el NIF:</b> solo distingue si cada negocio factura con una sociedad distinta. Si
+        los dos son la misma empresa —que es lo habitual cuando comparten contabilidad— el NIF sale
+        igual en los dos papeles y una regla por NIF se lo llevaría <b>todo</b> a un solo negocio.
+        Ahí lo que distingue es el <b>nombre comercial</b> o la <b>serie del documento</b>: un
+        albarán del taller empieza por <code>B2_</code> y un ticket del surtidor por <code>T5-</code>.
+      </p>
+      <p className="text-[12px] text-slate-500">
+        Lo que <b>no</b> se reconozca se propone como la sección por defecto, pero sin cambiar el
+        chip solo — no reconocer un papel no es lo mismo que saber que es del taller.
       </p>
 
       {error && <ErrorBox>{error}</ErrorBox>}
@@ -181,7 +186,7 @@ function ReglasSeccion() {
             <input
               value={patron}
               onChange={(e) => setPatron(e.target.value)}
-              placeholder="A43044379"
+              placeholder={EJEMPLO_CAMPO_SECCION[campo] ?? ""}
               className={inputCls}
             />
           </label>
@@ -264,6 +269,20 @@ function ReglasSeccion() {
     </section>
   );
 }
+
+/**
+ * Un ejemplo por campo, que enseña el formato mejor que una explicación.
+ *
+ * El del NIF es de mentira A PROPÓSITO: aquí el taller y la gasolinera son la
+ * misma sociedad y comparten NIF, así que poner el suyo de ejemplo invitaría a
+ * crear la regla que lo manda TODO a un solo negocio.
+ */
+const EJEMPLO_CAMPO_SECCION: Record<string, string> = {
+  CIF_EMISOR: "B12345678",
+  NOMBRE_EMISOR: "E.S CONFORTAUTO",
+  SERIE: "T5-",
+  CONCEPTO: "gas-oil",
+};
 
 const ETIQUETA_CAMPO_SECCION: Record<string, string> = {
   CIF_EMISOR: "NIF del emisor",
