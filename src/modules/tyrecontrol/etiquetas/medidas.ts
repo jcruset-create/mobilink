@@ -96,9 +96,16 @@ export interface BloqueEtiqueta {
 }
 
 /**
- * Cuánto ancho ocupa un dígito respecto al tamaño de letra, en la
- * monoespaciada que se usa. Si se cambia la fuente hay que revisar este número
- * o el cálculo miente.
+ * Cuánto ancho ocupa un dígito respecto al tamaño de letra.
+ *
+ * En Courier —la que se usa en pantalla y en el PDF— el avance de cada
+ * carácter es exactamente 0,6 em. Se deja 0,62 de colchón: redondeos del
+ * navegador y del driver, y que nadie quiere descubrir que falta medio
+ * milímetro con el rollo ya impreso.
+ *
+ * Si se cambia la fuente hay que revisar este número o el cálculo miente: fue
+ * lo que pasó con `monospace` a secas, que en Windows es Consolas (0,55 em) y
+ * en Linux DejaVu (0,60 em).
  */
 const ANCHO_DIGITO = 0.62;
 
