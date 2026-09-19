@@ -25,6 +25,7 @@ import db from "../db.ts";
 import { extractJson, hasAi } from "../core/ai.ts";
 import { normalizarMatricula, patronBusquedaMatricula } from "../tyrecontrol/matricula.ts";
 import { normalizeRecepcionRow } from "./normaliza.ts";
+import { plantillasParaElPatio } from "../../src/modules/recepcionVehiculo.ts";
 
 const ESTADOS = new Set(["pendiente", "convertida", "descartada"]);
 
@@ -107,37 +108,30 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
     try {
       const workshopId = textoONull((req.query as any)?.workshopId);
       /*
-       * Solo las cuatro columnas que la pantalla del patio usa de verdad.
+       * `SELECT *`, sin nombrar ni una columna, y la forma se decide en
+       * JavaScript. No es pereza: es lo único que aguanta el esquema real de
+       * esta tabla.
        *
-       * Antes pedía también «usesQuantity», y eso dejó el desplegable de
-       * operaciones vacío en la APK: esa columna NO la crea `db.ts` ni ninguna
-       * migración —solo aparece en los INSERT de `index.ts`—, así que si no
-       * está, Postgres tumba la consulta ENTERA con «column does not exist» y
-       * aquí se devolvía un 500 que la app convertía en una lista vacía.
+       * `db.ts` crea `quick_templates` con ocho columnas. El resto del código
+       * escribe y lee otras tres —usesQuantity, unitMinutes, unitPrice— que
+       * ninguna migración añade, y el navegador filtra por un `workshopId`
+       * que tampoco está en el CREATE. En Postgres, nombrar una columna que
+       * no existe no devuelve null: tumba la consulta ENTERA.
        *
-       * El resto del código la lee con `SELECT *` y
-       * `t.usesQuantity ?? t.usesquantity ?? null`, que es precisamente lo que
-       * se escribe cuando una columna puede no estar. Pedirla por nombre era
-       * apostar a que sí.
+       * Este endpoint dejó el desplegable del patio vacío DOS veces por eso:
+       * primero por `usesQuantity`, y después por `workshopId`, que seguía en
+       * el WHERE cuando se quitó la primera. El endpoint de plantillas que
+       * lleva años funcionando hace exactamente esto, y por eso nunca se ha
+       * roto.
        *
-       * Y no hace falta: la recepción solo necesita saber qué operación es,
-       * no cómo se cobra. Menos columnas, además, es menos superficie por la
-       * que un precio pueda acabar en la pantalla del técnico.
+       * `plantillasParaElPatio` hace el filtro por taller y deja fuera los
+       * precios; vive en src/modules porque así se puede probar sin base de
+       * datos.
        */
       const filas = await db.query(
-        `SELECT key, label, area, mode
-           FROM quick_templates
-          WHERE ($1::text IS NULL OR "workshopId" = $1 OR "workshopId" IS NULL)
-          ORDER BY area, label`,
-        [workshopId]
+        `SELECT * FROM quick_templates ORDER BY id ASC`
       );
-      res.json(
-        filas.rows.map((t: any) => ({
-          key: String(t.key),
-          label: String(t.label ?? ""),
-          area: String(t.area ?? ""),
-        }))
-      );
+      res.json(plantillasParaElPatio(filas.rows, workshopId));
     } catch (e) {
       fallo(res, "catalogo", e);
     }
