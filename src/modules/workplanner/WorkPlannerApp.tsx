@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
-import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks, CalendarX, Users, FileScan } from "lucide-react";
+import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks, CalendarX, Users, FileScan, CarFront } from "lucide-react";
 import logoMobilink from "../../assets/logo-mobilink.png";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
 import PedidosErpPage from "./PedidosErpPage";
 import PlantillasChecklistPage from "./PlantillasChecklistPage";
 import AusenciasTecnicosPage from "./AusenciasTecnicosPage";
 import PartesTrabajoPage from "./PartesTrabajoPage";
+import RecepcionesPage from "./RecepcionesPage";
 import { supabase } from "../administracion/services/supabase";
 import { APP_VERSION } from "../../version";
 
@@ -22,6 +23,9 @@ const SECCIONES = [
   // Fichas del personal: avatar, PIN del portal y alta/baja en la empresa.
   // Solo administradores, como Ausencias.
   { key: "personal", label: "Personal", icon: Users, proximamente: false, soloAdmin: true },
+  // Vehículos recibidos en el patio desde la APK, a la espera de que alguien
+  // los convierta en trabajo. La captura propone; una persona valida.
+  { key: "recepciones", label: "Recepción vehículos", icon: CarFront, proximamente: false },
   { key: "partes", label: "Partes de trabajo", icon: FileScan, proximamente: false },
   { key: "pedidos", label: "Pedidos ERP", icon: FileInput, proximamente: false },
   { key: "plantillas", label: "Plantillas", icon: ListChecks, proximamente: false },
@@ -354,6 +358,7 @@ export default function WorkPlannerApp() {
               )
             }
           />
+          <Route path="recepciones" element={<RecepcionesPage />} />
           <Route path="partes" element={<PartesTrabajoPage />} />
           <Route path="plantillas" element={<PlantillasChecklistPage />} />
           <Route
