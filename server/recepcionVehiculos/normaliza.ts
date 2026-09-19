@@ -37,6 +37,7 @@ export function normalizeRecepcionRow(fila: FilaRecepcion) {
     matriculaOcr: fila.matriculaOcr ?? null,
     confianzaOcr: aNumero(fila.confianzaOcr),
     clienteNombre: fila.clienteNombre ?? null,
+    clienteTelefono: fila.clienteTelefono ?? null,
     kilometros: aNumero(fila.kilometros),
     kilometrosOcr: aNumero(fila.kilometrosOcr),
     confianzaKilometrosOcr: aNumero(fila.confianzaKilometrosOcr),

@@ -36,7 +36,7 @@ const ESTADOS = new Set(["pendiente", "convertida", "descartada"]);
 /** Columnas de la recepción, en el orden en que se leen siempre. */
 const COLUMNAS = `
   id, "workshopId", matricula, "matriculaNormal", "matriculaOcr", "confianzaOcr",
-  "clienteNombre", kilometros, "kilometrosOcr", "confianzaKilometrosOcr",
+  "clienteNombre", "clienteTelefono", kilometros, "kilometrosOcr", "confianzaKilometrosOcr",
   "scheduledJobId", "vehiculoId", "vehiculoOrigen", area, "plantillaKey",
   "operacionLabel", notas, urgente, fotos, estado, "operarioNombre",
   "creadaAtMs", "resueltaAtMs", "resueltaPor", "motivoDescarte", "jobId"
@@ -240,6 +240,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           plate: c.plate ?? "",
           startTime: c.startTime ?? "",
           customerName: c.customerName ?? "",
+          customerPhone: (c as any).customerPhone ?? "",
           templateLabel: c.templateLabel ?? "",
           templateKey: c.templateKey ?? "",
           area: c.area ?? "",
@@ -270,13 +271,13 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       const fila = await db.query(
         `INSERT INTO recepciones_vehiculo (
            id, "workshopId", matricula, "matriculaNormal", "matriculaOcr",
-           "confianzaOcr", "clienteNombre", kilometros, "kilometrosOcr",
+           "confianzaOcr", "clienteNombre", "clienteTelefono", kilometros, "kilometrosOcr",
            "confianzaKilometrosOcr", "scheduledJobId", "vehiculoId",
            "vehiculoOrigen", area, "plantillaKey", "operacionLabel", notas,
            urgente, fotos, estado, "operarioNombre", "creadaAtMs"
          ) VALUES (
-           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'[]'::jsonb,
-           'pendiente',$19,$20
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'[]'::jsonb,
+           'pendiente',$20,$21
          ) RETURNING ${COLUMNAS}`,
         [
           ahora,
@@ -286,6 +287,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           textoONull(body.matriculaOcr),
           Number.isFinite(confianza) ? confianza : null,
           textoONull(body.clienteNombre),
+          textoONull(body.clienteTelefono),
           entero(body.kilometros),
           entero(body.kilometrosOcr),
           decimal(body.confianzaKilometrosOcr),
@@ -526,6 +528,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
            matricula = COALESCE($2, matricula),
            "matriculaNormal" = COALESCE($3, "matriculaNormal"),
            "clienteNombre" = COALESCE($4, "clienteNombre"),
+           "clienteTelefono" = COALESCE($11, "clienteTelefono"),
            area = COALESCE($5, area),
            "plantillaKey" = COALESCE($6, "plantillaKey"),
            "operacionLabel" = COALESCE($7, "operacionLabel"),
@@ -545,6 +548,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           body.notas === undefined ? null : textoONull(body.notas),
           body.urgente === undefined ? null : body.urgente === true || body.urgente === "true",
           body.kilometros === undefined ? null : entero(body.kilometros),
+          body.clienteTelefono === undefined ? null : textoONull(body.clienteTelefono),
         ]
       );
       if (filas.rowCount === 0) {
@@ -618,7 +622,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           JSON.stringify(Array.isArray(job.assignedNames) ? job.assignedNames : []),
           texto(job.reason),
           texto(job.customerName),
-          texto(job.customerPhone),
+          texto(job.customerPhone) || texto(recepcion.clienteTelefono),
           Number(job.createdAtMs) || ahora,
           textoONull(job.workshopId ?? recepcion.workshopId),
           textoONull(job.quickEntryLabel),

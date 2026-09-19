@@ -1282,6 +1282,11 @@ export async function initDb() {
     -- segundo trabajo del mismo vehículo.
     ALTER TABLE recepciones_vehiculo
       ADD COLUMN IF NOT EXISTS "scheduledJobId" BIGINT DEFAULT NULL;
+
+    -- Teléfono del cliente. Va con la recepción y no solo con el trabajo
+    -- porque quien lo apunta es el del patio, que tiene al cliente delante.
+    ALTER TABLE recepciones_vehiculo
+      ADD COLUMN IF NOT EXISTS "clienteTelefono" TEXT DEFAULT NULL;
   `);
 
   // Cupo anual de vacaciones y modo de cómputo. Una fila por taller y año con

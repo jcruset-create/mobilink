@@ -44,6 +44,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
   final _matriculaCtrl = TextEditingController();
   final _kmCtrl = TextEditingController();
   final _clienteCtrl = TextEditingController();
+  final _telefonoCtrl = TextEditingController();
   final _notasCtrl = TextEditingController();
 
   String _workshopId = kWorkshops.first['id']!;
@@ -78,6 +79,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
     if (cita != null) {
       _matriculaCtrl.text = (cita['plate'] ?? '').toString().toUpperCase();
       _clienteCtrl.text = (cita['customerName'] ?? '').toString();
+      _telefonoCtrl.text = (cita['customerPhone'] ?? '').toString();
       final area = (cita['area'] ?? '').toString();
       if (_areas.contains(area)) _area = area;
       final key = (cita['templateKey'] ?? '').toString();
@@ -92,6 +94,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
     _matriculaCtrl.dispose();
     _kmCtrl.dispose();
     _clienteCtrl.dispose();
+    _telefonoCtrl.dispose();
     _notasCtrl.dispose();
     super.dispose();
   }
@@ -274,6 +277,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
         'matricula': matricula,
         'workshopId': _workshopId,
         'clienteNombre': _clienteCtrl.text.trim(),
+        'clienteTelefono': _telefonoCtrl.text.trim(),
         'kilometros': _kmSensatos(_kmCtrl.text),
         'kilometrosOcr': _kilometrosOcr,
         'confianzaKilometrosOcr': _confianzaKmOcr,
@@ -403,6 +407,16 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
           TextField(
             controller: _clienteCtrl,
             decoration: const InputDecoration(labelText: 'Cliente'),
+          ),
+          const SizedBox(height: 12),
+
+          // El teléfono lo apunta quien tiene al cliente delante. Llega al
+          // trabajo al convertir la recepción, que es donde hace falta para
+          // avisar de que el vehículo está listo.
+          TextField(
+            controller: _telefonoCtrl,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(labelText: 'Teléfono móvil'),
           ),
           const SizedBox(height: 12),
 

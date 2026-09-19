@@ -31,6 +31,7 @@ export type RecepcionVehiculo = {
   matriculaOcr?: string | null;
   confianzaOcr?: number | null;
   clienteNombre?: string | null;
+  clienteTelefono?: string | null;
   /** Cuentakilómetros al entrar. Lo que marca el vehículo, no una estimación. */
   kilometros?: number | null;
   /** Lo que leyó la IA del cuadro, sin tocar, y con cuánta confianza. */
@@ -240,7 +241,7 @@ export function jobDesdeRecepcion(
     assignedNames: [],
     reason: motivo,
     customerName: recepcion.clienteNombre?.trim() || "",
-    customerPhone: "",
+    customerPhone: recepcion.clienteTelefono?.trim() || "",
     createdAtMs: ahoraMs,
     startedAtMs: null,
     template: null,
