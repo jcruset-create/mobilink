@@ -51,7 +51,7 @@ import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { cotejarPlano, generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
-import { createRecepcionesRouter } from "./recepciones/router.ts";
+import { createRecepcionVehiculosRouter } from "./recepcionVehiculos/router.ts";
 import { initEventLog } from "./eventlog/schema.ts";
 import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./eventlog/servicio.ts";
 import { initDocumentos } from "./documentos/schema.ts";
@@ -19237,13 +19237,16 @@ app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
  * Recepción rápida de vehículos desde el patio.
  *
  * Se monta en `/api` porque sirve dos puertas —la de la APK, bajo
- * `/api/taller-operator/recepciones`, y la del panel, bajo `/api/recepciones`—
- * y cada una lleva su propio guarda dentro del router. Sólo responde a esas
- * rutas; el resto de `/api` sigue su camino.
+ * `/api/taller-operator/recepcion-vehiculos`, y la del panel, bajo
+ * `/api/recepcion-vehiculos`— y cada una lleva su propio guarda dentro del
+ * router. Sólo responde a esas rutas; el resto de `/api` sigue su camino.
+ *
+ * Nada que ver con `/api/recepciones`, que es la recepción física de
+ * mercancía de proveedores y se monta más arriba.
  */
 app.use(
   "/api",
-  createRecepcionesRouter({
+  createRecepcionVehiculosRouter({
     requireTallerOperator,
     requireSupervisorRole,
     respuestaIdempotente,

@@ -1,0 +1,543 @@
+/**
+ * Recepción rápida de vehículos: la API.
+ *
+ * Dos puertas con guardas distintos, a propósito:
+ *
+ *  · `/api/taller-operator/recepcion-vehiculos/*` la usa la APK del patio, con
+ *    las credenciales de operario que ya existen (`x-operator-name` /
+ *    `x-operator-pin`). No se inventa un quinto modelo de autenticación.
+ *  · `/api/recepcion-vehiculos/*` la usa WorkPlanner en el navegador, con el
+ *    guarda de supervisor del panel.
+ *
+ * El nombre largo no es capricho: `server/recepciones/` ya existe y es otra
+ * cosa —la recepción física de mercancía de proveedores, montada en
+ * `/api/recepciones`—. Dos módulos con el mismo nombre acaban con uno
+ * pisando al otro.
+ *
+ * Quien crea una recepción NO necesita ser supervisor: el que recibe el coche
+ * en el patio normalmente no lo es. Quien la convierte en trabajo, sí.
+ */
+
+import { Router, json, type RequestHandler, type Response } from "express";
+import type multer from "multer";
+
+import db from "../db.ts";
+import { extractJson, hasAi } from "../core/ai.ts";
+import { normalizarMatricula, patronBusquedaMatricula } from "../tyrecontrol/matricula.ts";
+import { normalizeRecepcionRow } from "./normaliza.ts";
+
+const ESTADOS = new Set(["pendiente", "convertida", "descartada"]);
+
+/** Columnas de la recepción, en el orden en que se leen siempre. */
+const COLUMNAS = `
+  id, "workshopId", matricula, "matriculaNormal", "matriculaOcr", "confianzaOcr",
+  "clienteNombre", "vehiculoId", "vehiculoOrigen", area, "plantillaKey",
+  "operacionLabel", notas, urgente, fotos, estado, "operarioNombre",
+  "creadaAtMs", "resueltaAtMs", "resueltaPor", "motivoDescarte", "jobId"
+`;
+
+function fallo(res: Response, contexto: string, e: unknown) {
+  console.error(`[Recepciones] ${contexto}:`, (e as any)?.message ?? e);
+  return res.status(500).json({ error: "Error en la recepción de vehículos" });
+}
+
+function texto(valor: unknown): string {
+  return String(valor ?? "").trim();
+}
+
+function textoONull(valor: unknown): string | null {
+  const t = texto(valor);
+  return t === "" ? null : t;
+}
+
+export type DependenciasRecepcionVehiculos = {
+  requireTallerOperator: RequestHandler;
+  requireSupervisorRole: RequestHandler;
+  /** Reintento de la cola offline: devuelve lo ya guardado, si lo hay. */
+  respuestaIdempotente: (req: any) => Promise<any>;
+  guardarIdempotencia: (req: any, respuesta: unknown) => Promise<void>;
+  upload: multer.Multer;
+  /** Sube el buffer al almacenamiento y devuelve la URL pública. */
+  subirFoto: (ruta: string, buffer: Buffer, contentType: string) => Promise<string>;
+  /** Nombre del usuario del panel, para dejar constancia de quién resolvió. */
+  nombreDelPanel: (req: any) => string;
+};
+
+export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehiculos): Router {
+  const r = Router();
+  r.use(json({ limit: "15mb" }));
+
+  const {
+    requireTallerOperator,
+    requireSupervisorRole,
+    respuestaIdempotente,
+    guardarIdempotencia,
+    upload,
+    subirFoto,
+    nombreDelPanel,
+  } = dep;
+
+  /* ── APK ──────────────────────────────────────────────────────────────── */
+
+  /**
+   * El catálogo de operaciones que ve el operario.
+   *
+   * Sale de `quick_templates`, que es lo que el taller ya mantiene: no hay un
+   * catálogo paralelo escrito a mano en la APK. Y sale **sin `unitPrice`**: en
+   * la pantalla del técnico no se enseñan precios, tarifas ni importes.
+   */
+  r.get("/taller-operator/recepcion-vehiculos/catalogo", requireTallerOperator, async (req, res) => {
+    try {
+      const workshopId = textoONull((req.query as any)?.workshopId);
+      const filas = await db.query(
+        `SELECT key, label, area, mode, "usesQuantity"
+           FROM quick_templates
+          WHERE ($1::text IS NULL OR "workshopId" = $1 OR "workshopId" IS NULL)
+          ORDER BY area, label`,
+        [workshopId]
+      );
+      res.json(
+        filas.rows.map((t: any) => ({
+          key: String(t.key),
+          label: String(t.label ?? ""),
+          area: String(t.area ?? ""),
+          usesQuantity: t.usesQuantity === true || t.usesQuantity === "true",
+        }))
+      );
+    } catch (e) {
+      fallo(res, "catalogo", e);
+    }
+  });
+
+  /**
+   * ¿Conocemos este vehículo?
+   *
+   * `roadside_vehicles` no guarda la matrícula normalizada, así que no se puede
+   * comparar por igualdad. Se usa el patrón con comodines que ya existe para
+   * TyreControl (filtra en el servidor en vez de traerse la flota entera) y la
+   * coincidencia exacta se confirma después.
+   */
+  r.get("/taller-operator/recepcion-vehiculos/vehiculo", requireTallerOperator, async (req, res) => {
+    try {
+      const buscada = texto((req.query as any)?.matricula);
+      const patron = patronBusquedaMatricula(buscada);
+      // Menos de 4 caracteres traería media tabla y no diría nada útil.
+      if (!patron) return res.json({ vehiculo: null });
+
+      const filas = await db.query(
+        `SELECT id, plate, name FROM roadside_vehicles
+          WHERE active AND plate ILIKE $1 LIMIT 20`,
+        [patron]
+      );
+      const objetivo = normalizarMatricula(buscada);
+      const fila = filas.rows.find((v: any) => normalizarMatricula(v.plate) === objetivo);
+
+      res.json({
+        vehiculo: fila
+          ? {
+              id: String(fila.id),
+              matricula: String(fila.plate ?? ""),
+              clienteNombre: textoONull(fila.name),
+              origen: "roadside",
+            }
+          : null,
+      });
+    } catch (e) {
+      fallo(res, "vehiculo", e);
+    }
+  });
+
+  /** Crear la recepción. Idempotente: un reintento de la cola no crea otra. */
+  r.post("/taller-operator/recepcion-vehiculos", requireTallerOperator, async (req, res) => {
+    try {
+      const yaCreada = await respuestaIdempotente(req);
+      if (yaCreada) return res.json(yaCreada);
+
+      const { techName } = (req as any).roadsideOperator as { techName: string };
+      const body = (req.body ?? {}) as Record<string, unknown>;
+
+      const matricula = texto(body.matricula).toUpperCase();
+      if (!matricula) {
+        return res.status(400).json({ error: "La matrícula es obligatoria" });
+      }
+
+      const ahora = Date.now();
+      const confianza = Number(body.confianzaOcr);
+
+      const fila = await db.query(
+        `INSERT INTO recepciones_vehiculo (
+           id, "workshopId", matricula, "matriculaNormal", "matriculaOcr",
+           "confianzaOcr", "clienteNombre", "vehiculoId", "vehiculoOrigen",
+           area, "plantillaKey", "operacionLabel", notas, urgente, fotos,
+           estado, "operarioNombre", "creadaAtMs"
+         ) VALUES (
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'[]'::jsonb,
+           'pendiente',$15,$16
+         ) RETURNING ${COLUMNAS}`,
+        [
+          ahora,
+          textoONull(body.workshopId),
+          matricula,
+          normalizarMatricula(matricula),
+          textoONull(body.matriculaOcr),
+          Number.isFinite(confianza) ? confianza : null,
+          textoONull(body.clienteNombre),
+          textoONull(body.vehiculoId),
+          textoONull(body.vehiculoOrigen),
+          textoONull(body.area),
+          textoONull(body.plantillaKey),
+          textoONull(body.operacionLabel),
+          textoONull(body.notas),
+          body.urgente === true || body.urgente === "true",
+          texto(techName),
+          ahora,
+        ]
+      );
+
+      const creada = normalizeRecepcionRow(fila.rows[0]);
+      await guardarIdempotencia(req, creada);
+      res.json(creada);
+    } catch (e) {
+      fallo(res, "crear", e);
+    }
+  });
+
+  /** Las recepciones de este operario, para que vea que llegaron. */
+  r.get("/taller-operator/recepcion-vehiculos/mias", requireTallerOperator, async (req, res) => {
+    try {
+      const { techName } = (req as any).roadsideOperator as { techName: string };
+      const filas = await db.query(
+        `SELECT ${COLUMNAS} FROM recepciones_vehiculo
+          WHERE "operarioNombre" = $1 AND "deletedAtMs" IS NULL
+          ORDER BY "creadaAtMs" DESC LIMIT 50`,
+        [texto(techName)]
+      );
+      res.json(filas.rows.map(normalizeRecepcionRow));
+    } catch (e) {
+      fallo(res, "mias", e);
+    }
+  });
+
+  /** Fotos del estado del vehículo. Mismo camino que las de un trabajo. */
+  r.post(
+    "/taller-operator/recepcion-vehiculos/:id/fotos",
+    requireTallerOperator,
+    upload.single("file"),
+    async (req, res) => {
+      try {
+        const yaHecho = await respuestaIdempotente(req);
+        if (yaHecho) return res.json(yaHecho);
+
+        const id = Number(req.params.id);
+        if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+        if (!req.file) return res.status(400).json({ error: "No se recibió archivo" });
+
+        const extPorTipo: Record<string, string> = {
+          "image/jpeg": "jpg",
+          "image/png": "png",
+          "image/webp": "webp",
+        };
+        const ext = extPorTipo[req.file.mimetype] ?? "jpg";
+        const url = await subirFoto(
+          `recepciones/${id}/foto_${Date.now()}.${ext}`,
+          req.file.buffer,
+          req.file.mimetype
+        );
+
+        const foto = {
+          url,
+          nombre: req.file.originalname ?? null,
+          creadaAtMs: Date.now(),
+        };
+
+        // Se añade a la lista; no se sustituye la colección entera, que es
+        // como se pierden las fotos que subió otro a la vez.
+        const fila = await db.query(
+          `UPDATE recepciones_vehiculo
+              SET fotos = COALESCE(fotos, '[]'::jsonb) || $2::jsonb
+            WHERE id = $1 AND "deletedAtMs" IS NULL
+            RETURNING ${COLUMNAS}`,
+          [id, JSON.stringify([foto])]
+        );
+        if (fila.rowCount === 0) {
+          return res.status(404).json({ error: "Recepción no encontrada" });
+        }
+
+        await guardarIdempotencia(req, foto);
+        res.json(foto);
+      } catch (e) {
+        fallo(res, "fotos", e);
+      }
+    }
+  );
+
+  /**
+   * Leer la matrícula de una foto.
+   *
+   * **No guarda nada.** Devuelve lo que ha leído para que la APK se lo enseñe
+   * al operario en un campo editable. Nunca se envía una matrícula de OCR sin
+   * que una persona la haya visto.
+   */
+  r.post("/taller-operator/recepcion-vehiculos/ocr-matricula", requireTallerOperator, async (req, res) => {
+    try {
+      const imagen = texto((req.body as any)?.imagen);
+      if (!imagen) return res.status(400).json({ error: "Falta la imagen" });
+      // Sin clave de IA el flujo sigue: la matrícula se teclea. El OCR es una
+      // comodidad, no una dependencia.
+      if (!hasAi()) return res.json({ matricula: null, confianza: 0 });
+
+      const leido = await extractJson({
+        system:
+          "Eres un lector de matrículas de vehículos en un taller español. " +
+          "Devuelve SOLO un JSON {\"matricula\": string|null, \"confianza\": number} " +
+          "donde confianza va de 0 a 1. Si no ves una matrícula con claridad, " +
+          "devuelve matricula null y confianza 0. No inventes.",
+        images: [imagen],
+        maxTokens: 200,
+      });
+
+      const confianza = Number((leido as any)?.confianza);
+      res.json({
+        matricula: normalizarMatricula((leido as any)?.matricula) || null,
+        confianza: Number.isFinite(confianza) ? confianza : 0,
+      });
+    } catch (e) {
+      // Que falle la IA no puede bloquear una recepción: se teclea y ya está.
+      console.error("[Recepciones] ocr:", (e as any)?.message ?? e);
+      res.json({ matricula: null, confianza: 0 });
+    }
+  });
+
+  /* ── Panel ────────────────────────────────────────────────────────────── */
+
+  /** La bandeja. */
+  r.get("/recepcion-vehiculos", requireSupervisorRole, async (req, res) => {
+    try {
+      const estado = texto((req.query as any)?.estado) || "pendiente";
+      if (!ESTADOS.has(estado) && estado !== "todas") {
+        return res.status(400).json({ error: "Estado no válido" });
+      }
+      const workshopId = textoONull((req.query as any)?.workshopId);
+
+      const filas = await db.query(
+        `SELECT ${COLUMNAS} FROM recepciones_vehiculo
+          WHERE "deletedAtMs" IS NULL
+            AND ($1::text = 'todas' OR estado = $1)
+            AND ($2::text IS NULL OR "workshopId" = $2)
+          ORDER BY "creadaAtMs" DESC LIMIT 300`,
+        [estado, workshopId]
+      );
+      res.json(filas.rows.map(normalizeRecepcionRow));
+    } catch (e) {
+      fallo(res, "bandeja", e);
+    }
+  });
+
+  r.get("/recepcion-vehiculos/:id", requireSupervisorRole, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+      const filas = await db.query(
+        `SELECT ${COLUMNAS} FROM recepciones_vehiculo
+          WHERE id = $1 AND "deletedAtMs" IS NULL`,
+        [id]
+      );
+      if (filas.rowCount === 0) return res.status(404).json({ error: "No encontrada" });
+      res.json(normalizeRecepcionRow(filas.rows[0]));
+    } catch (e) {
+      fallo(res, "detalle", e);
+    }
+  });
+
+  /**
+   * Corregir lo que el operario no pudo saber desde el patio.
+   *
+   * `COALESCE` en todos los campos: lo que no venga en el cuerpo se queda como
+   * estaba. Sin eso, guardar sólo el área borraría el cliente.
+   */
+  r.put("/recepcion-vehiculos/:id", requireSupervisorRole, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+      const body = (req.body ?? {}) as Record<string, unknown>;
+
+      const matricula = body.matricula === undefined ? null : texto(body.matricula).toUpperCase();
+      if (matricula !== null && matricula === "") {
+        return res.status(400).json({ error: "La matrícula no puede quedar vacía" });
+      }
+
+      const filas = await db.query(
+        `UPDATE recepciones_vehiculo SET
+           matricula = COALESCE($2, matricula),
+           "matriculaNormal" = COALESCE($3, "matriculaNormal"),
+           "clienteNombre" = COALESCE($4, "clienteNombre"),
+           area = COALESCE($5, area),
+           "plantillaKey" = COALESCE($6, "plantillaKey"),
+           "operacionLabel" = COALESCE($7, "operacionLabel"),
+           notas = COALESCE($8, notas),
+           urgente = COALESCE($9, urgente)
+         WHERE id = $1 AND "deletedAtMs" IS NULL AND estado = 'pendiente'
+         RETURNING ${COLUMNAS}`,
+        [
+          id,
+          matricula,
+          matricula === null ? null : normalizarMatricula(matricula),
+          body.clienteNombre === undefined ? null : textoONull(body.clienteNombre),
+          body.area === undefined ? null : textoONull(body.area),
+          body.plantillaKey === undefined ? null : textoONull(body.plantillaKey),
+          body.operacionLabel === undefined ? null : textoONull(body.operacionLabel),
+          body.notas === undefined ? null : textoONull(body.notas),
+          body.urgente === undefined ? null : body.urgente === true || body.urgente === "true",
+        ]
+      );
+      if (filas.rowCount === 0) {
+        return res.status(409).json({ error: "La recepción ya está resuelta" });
+      }
+      res.json(normalizeRecepcionRow(filas.rows[0]));
+    } catch (e) {
+      fallo(res, "editar", e);
+    }
+  });
+
+  /**
+   * Convertir la recepción en trabajo.
+   *
+   * El trabajo llega ya montado desde el navegador, que es donde vive el motor
+   * de asignación y donde se le ha puesto la propuesta de técnico explicada,
+   * igual que hace la pantalla de partes de trabajo. Aquí sólo se escribe, y
+   * se escribe **en una sola transacción**: si se insertara el trabajo y luego
+   * fallara el marcado de la recepción, quedaría convertible otra vez y
+   * saldrían dos técnicos para el mismo camión.
+   *
+   * El `UPDATE` es condicional (`estado = 'pendiente'`). Si dos personas
+   * pulsan "convertir" a la vez, una gana y la otra recibe 409.
+   */
+  r.post("/recepcion-vehiculos/:id/convertir", requireSupervisorRole, async (req, res) => {
+    const cliente = await db.connect();
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+      const job = (req.body ?? {}) as Record<string, any>;
+      const jobId = Number(job.id);
+      if (!Number.isFinite(jobId)) {
+        return res.status(400).json({ error: "Falta el trabajo a crear" });
+      }
+      // El trabajo nace en validacion: es una propuesta, y una propuesta la
+      // autoriza una persona en la pantalla de siempre.
+      if (String(job.status) !== "validacion") {
+        return res.status(400).json({ error: "El trabajo debe nacer en validación" });
+      }
+
+      await cliente.query("BEGIN");
+
+      const actual = await cliente.query(
+        `SELECT ${COLUMNAS} FROM recepciones_vehiculo
+          WHERE id = $1 AND "deletedAtMs" IS NULL AND estado = 'pendiente'
+          FOR UPDATE`,
+        [id]
+      );
+      if (actual.rowCount === 0) {
+        await cliente.query("ROLLBACK");
+        return res.status(409).json({ error: "La recepción ya está convertida o descartada" });
+      }
+      const recepcion = normalizeRecepcionRow(actual.rows[0]);
+      const ahora = Date.now();
+
+      await cliente.query(
+        `INSERT INTO jobs (
+           id, area, plate, urgent, status, "assignedNames", reason,
+           "customerName", "customerPhone", "createdAtMs",
+           "workedAccumulatedMinutes", "pausedAccumulatedMinutes",
+           "workshopId", "quickEntryLabel", "quickEntryMode",
+           quantity, "unitMinutes", "standardMinutes", "ptEntradaMs",
+           "recepcionId"
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11,$12,$13,$14,$15,$16,$17,$18)`,
+        [
+          jobId,
+          texto(job.area) || "mecanica",
+          texto(job.plate).toUpperCase(),
+          job.urgent === true,
+          "validacion",
+          JSON.stringify(Array.isArray(job.assignedNames) ? job.assignedNames : []),
+          texto(job.reason),
+          texto(job.customerName),
+          texto(job.customerPhone),
+          Number(job.createdAtMs) || ahora,
+          textoONull(job.workshopId ?? recepcion.workshopId),
+          textoONull(job.quickEntryLabel),
+          texto(job.quickEntryMode) || "team",
+          Number.isFinite(Number(job.quantity)) ? Number(job.quantity) : 1,
+          Number.isFinite(Number(job.unitMinutes)) ? Number(job.unitMinutes) : null,
+          Number.isFinite(Number(job.standardMinutes)) ? Number(job.standardMinutes) : null,
+          recepcion.creadaAtMs,
+          id,
+        ]
+      );
+
+      // Las fotos del patio se enganchan al trabajo por referencia: ya están
+      // subidas, volver a subirlas sólo duplicaría ficheros.
+      for (const foto of recepcion.fotos) {
+        const url = texto((foto as any)?.url);
+        if (!url) continue;
+        await cliente.query(
+          `INSERT INTO job_files ("jobId", url, "fileName", "techName", "createdAtMs", tipo)
+           VALUES ($1,$2,$3,$4,$5,'foto')`,
+          [jobId, url, textoONull((foto as any)?.nombre), recepcion.operarioNombre, ahora]
+        );
+      }
+
+      const marcada = await cliente.query(
+        `UPDATE recepciones_vehiculo
+            SET estado = 'convertida', "jobId" = $2,
+                "resueltaAtMs" = $3, "resueltaPor" = $4
+          WHERE id = $1 AND estado = 'pendiente'
+          RETURNING ${COLUMNAS}`,
+        [id, jobId, ahora, nombreDelPanel(req)]
+      );
+      if (marcada.rowCount === 0) {
+        // Alguien la resolvió entre el SELECT y esto. No se deja a medias.
+        await cliente.query("ROLLBACK");
+        return res.status(409).json({ error: "La recepción ya está convertida o descartada" });
+      }
+
+      await cliente.query("COMMIT");
+      res.json({ recepcion: normalizeRecepcionRow(marcada.rows[0]), jobId });
+    } catch (e) {
+      try {
+        await cliente.query("ROLLBACK");
+      } catch {
+        /* la conexión ya estaba perdida */
+      }
+      fallo(res, "convertir", e);
+    } finally {
+      cliente.release();
+    }
+  });
+
+  /** Descartar, con motivo: un vehículo que se fue, un aviso repetido. */
+  r.post("/recepcion-vehiculos/:id/descartar", requireSupervisorRole, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
+      const motivo = texto((req.body as any)?.motivo);
+      if (!motivo) return res.status(400).json({ error: "Hace falta un motivo" });
+
+      const filas = await db.query(
+        `UPDATE recepciones_vehiculo
+            SET estado = 'descartada', "motivoDescarte" = $2,
+                "resueltaAtMs" = $3, "resueltaPor" = $4
+          WHERE id = $1 AND "deletedAtMs" IS NULL AND estado = 'pendiente'
+          RETURNING ${COLUMNAS}`,
+        [id, motivo, Date.now(), nombreDelPanel(req)]
+      );
+      if (filas.rowCount === 0) {
+        return res.status(409).json({ error: "La recepción ya está resuelta" });
+      }
+      res.json(normalizeRecepcionRow(filas.rows[0]));
+    } catch (e) {
+      fallo(res, "descartar", e);
+    }
+  });
+
+  return r;
+}

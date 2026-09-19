@@ -65,7 +65,7 @@ export default function RecepcionesPage() {
     setError("");
     try {
       const [lista, jobsBackend, techsBackend, plantillasBackend] = await Promise.all([
-        api<RecepcionVehiculo[]>("/api/recepciones?estado=pendiente"),
+        api<RecepcionVehiculo[]>("/api/recepcion-vehiculos?estado=pendiente"),
         loadJobsFromBackend(),
         loadTechsFromBackend(),
         loadQuickTemplatesFromBackend(),
@@ -103,7 +103,7 @@ export default function RecepcionesPage() {
       lista.map((r) => (r.id === antes.id ? { ...r, [campo]: valor } as RecepcionVehiculo : r))
     );
     try {
-      const guardada = await api<RecepcionVehiculo>(`/api/recepciones/${antes.id}`, {
+      const guardada = await api<RecepcionVehiculo>(`/api/recepcion-vehiculos/${antes.id}`, {
         method: "PUT",
         body: JSON.stringify({ [campo]: valor }),
       });
@@ -160,7 +160,7 @@ export default function RecepcionesPage() {
         status: "validacion",
         reason: [propuesta.job.reason, propuesta.porQue].filter(Boolean).join(" "),
       };
-      await api(`/api/recepciones/${actual.id}/convertir`, {
+      await api(`/api/recepcion-vehiculos/${actual.id}/convertir`, {
         method: "POST",
         body: JSON.stringify(job),
       });
@@ -187,7 +187,7 @@ export default function RecepcionesPage() {
     setGuardando(true);
     setError("");
     try {
-      await api(`/api/recepciones/${actual.id}/descartar`, {
+      await api(`/api/recepcion-vehiculos/${actual.id}/descartar`, {
         method: "POST",
         body: JSON.stringify({ motivo }),
       });

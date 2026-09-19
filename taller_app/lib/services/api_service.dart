@@ -439,7 +439,7 @@ class ApiService {
     try {
       final res = await http
           .get(
-            Uri.parse('$kBackendUrl/api/taller-operator/recepciones/catalogo'),
+            Uri.parse('$kBackendUrl/api/taller-operator/recepcion-vehiculos/catalogo'),
             headers: _headers,
           )
           .timeout(const Duration(seconds: 15));
@@ -460,7 +460,7 @@ class ApiService {
       final res = await http
           .get(
             Uri.parse(
-                '$kBackendUrl/api/taller-operator/recepciones/vehiculo?matricula=${Uri.encodeQueryComponent(matricula)}'),
+                '$kBackendUrl/api/taller-operator/recepcion-vehiculos/vehiculo?matricula=${Uri.encodeQueryComponent(matricula)}'),
             headers: _headers,
           )
           .timeout(const Duration(seconds: 10));
@@ -480,7 +480,7 @@ class ApiService {
       final res = await http
           .post(
             Uri.parse(
-                '$kBackendUrl/api/taller-operator/recepciones/ocr-matricula'),
+                '$kBackendUrl/api/taller-operator/recepcion-vehiculos/ocr-matricula'),
             headers: _headers,
             body: jsonEncode({'imagen': dataUri}),
           )
@@ -507,7 +507,7 @@ class ApiService {
     try {
       final res = await http
           .post(
-            Uri.parse('$kBackendUrl/api/taller-operator/recepciones'),
+            Uri.parse('$kBackendUrl/api/taller-operator/recepcion-vehiculos'),
             headers: _headersCon(clave),
             body: jsonEncode(datos),
           )
@@ -546,7 +546,7 @@ class ApiService {
       final req = http.MultipartRequest(
         'POST',
         Uri.parse(
-            '$kBackendUrl/api/taller-operator/recepciones/$recepcionId/fotos'),
+            '$kBackendUrl/api/taller-operator/recepcion-vehiculos/$recepcionId/fotos'),
       );
       req.headers.addAll(_operatorHeaders);
       req.headers['x-idempotency-key'] = OfflineStore.nuevaClave('rf');
@@ -602,7 +602,7 @@ class ApiService {
           } else if (type == 'recepcion') {
             final res = await http
                 .post(
-                  Uri.parse('$kBackendUrl/api/taller-operator/recepciones'),
+                  Uri.parse('$kBackendUrl/api/taller-operator/recepcion-vehiculos'),
                   headers: _headersCon(item['actionId'] as String?),
                   body: jsonEncode(item['datos']),
                 )
