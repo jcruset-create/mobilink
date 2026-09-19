@@ -211,32 +211,41 @@ ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "recepcionId" BIGINT;
 
 ## 5. Endpoints
 
-Router nuevo `server/recepciones/router.ts`, montado en `index.ts` con una
+> **El nombre largo no es capricho.** `server/recepciones/` y `/api/recepciones`
+> ya estaban ocupados: son la recepción física de mercancía de proveedores,
+> otra cosa entera. Este módulo vive en `server/recepcionVehiculos/` y cuelga
+> de `/api/recepcion-vehiculos`. Se descubrió tarde, con el módulo ya escrito
+> encima del suyo, y sólo lo cazó la CI: `npx tsc -b` no mira `server/`, eso lo
+> hace `npx tsc -p tsconfig.server.json`, que es el segundo paso del workflow.
+> Las dos comprobaciones hacen falta.
+
+
+Router nuevo `server/recepcionVehiculos/router.ts`, montado en `index.ts` con una
 línea. Nada de esto se escribe dentro de `index.ts`.
 
 ### 5.1 Para la APK (auth de operario)
 
 | Método | Ruta | Qué hace |
 |---|---|---|
-| `GET` | `/api/taller-operator/recepciones/catalogo` | `quick_templates` **sin `unitPrice`** + áreas + talleres |
-| `GET` | `/api/taller-operator/recepciones/vehiculo?matricula=` | Busca en `roadside_vehicles` y `tc_vehiculos` con `patronBusquedaMatricula`; confirma con `coincideMatricula` |
-| `POST` | `/api/taller-operator/recepciones` | Crea la recepción. **Idempotente** (`x-idempotency-key`) |
-| `POST` | `/api/taller-operator/recepciones/:id/fotos` | Multipart, mismo camino que `job_files` |
-| `POST` | `/api/taller-operator/recepciones/ocr-matricula` | Imagen → `extractJson` → `{ matricula, confianza }`. **Propone, no guarda** |
-| `GET` | `/api/taller-operator/recepciones/mias` | Las que ha creado este operario, para que vea que llegaron |
+| `GET` | `/api/taller-operator/recepcion-vehiculos/catalogo` | `quick_templates` **sin `unitPrice`** + áreas + talleres |
+| `GET` | `/api/taller-operator/recepcion-vehiculos/vehiculo?matricula=` | Busca en `roadside_vehicles` y `tc_vehiculos` con `patronBusquedaMatricula`; confirma con `coincideMatricula` |
+| `POST` | `/api/taller-operator/recepcion-vehiculos` | Crea la recepción. **Idempotente** (`x-idempotency-key`) |
+| `POST` | `/api/taller-operator/recepcion-vehiculos/:id/fotos` | Multipart, mismo camino que `job_files` |
+| `POST` | `/api/taller-operator/recepcion-vehiculos/ocr-matricula` | Imagen → `extractJson` → `{ matricula, confianza }`. **Propone, no guarda** |
+| `GET` | `/api/taller-operator/recepcion-vehiculos/mias` | Las que ha creado este operario, para que vea que llegaron |
 
 ### 5.2 Para WorkPlanner (auth de panel)
 
 | Método | Ruta | Qué hace |
 |---|---|---|
-| `GET` | `/api/recepciones?estado=&workshopId=` | Bandeja, paginada |
-| `GET` | `/api/recepciones/:id` | Detalle con fotos y propuesta |
-| `PUT` | `/api/recepciones/:id` | Corregir matrícula, cliente, área, plantilla, notas |
-| `POST` | `/api/recepciones/:id/convertir` | Crea el job en `validacion` y marca la recepción. Transaccional y condicional |
-| `POST` | `/api/recepciones/:id/descartar` | `estado = 'descartada'` + `motivoDescarte` |
+| `GET` | `/api/recepcion-vehiculos?estado=&workshopId=` | Bandeja, paginada |
+| `GET` | `/api/recepcion-vehiculos/:id` | Detalle con fotos y propuesta |
+| `PUT` | `/api/recepcion-vehiculos/:id` | Corregir matrícula, cliente, área, plantilla, notas |
+| `POST` | `/api/recepcion-vehiculos/:id/convertir` | Crea el job en `validacion` y marca la recepción. Transaccional y condicional |
+| `POST` | `/api/recepcion-vehiculos/:id/descartar` | `estado = 'descartada'` + `motivoDescarte` |
 
 **Nunca** se expone un endpoint que sustituya la colección completa. No existe
-`PUT /api/recepciones`. Cada recepción se toca por su id.
+`PUT /api/recepcion-vehiculos`. Cada recepción se toca por su id.
 
 ---
 
@@ -290,7 +299,7 @@ Si la matrícula vino de OCR y nadie la ha tocado, la ficha lo dice con un aviso
 ## 8. Conversión a WorkPlanner
 
 ```
-POST /api/recepciones/:id/convertir
+POST /api/recepcion-vehiculos/:id/convertir
   BEGIN
     SELECT ... FROM recepciones_vehiculo WHERE id=$1 AND estado='pendiente' FOR UPDATE
       → si no hay fila: 409 "ya convertida o descartada"
@@ -407,7 +416,7 @@ Todas las fases están implementadas.
 2. ~~Modelo~~ — `recepciones_vehiculo` en `server/db.ts`, migración en
    `supabase/migrations/workplanner_recepciones_vehiculo.sql`, lógica pura en
    `src/modules/recepcionVehiculo.ts` (23 tests)
-3. ~~API~~ — `server/recepciones/router.ts`, montado desde `index.ts`
+3. ~~API~~ — `server/recepcionVehiculos/router.ts`, montado desde `index.ts`
 4. ~~Conversión a job~~ — transaccional y condicional sobre `estado='pendiente'`
 5. ~~Web~~ — `src/modules/workplanner/RecepcionesPage.tsx` + sección del menú
 6. ~~APK~~ — `taller_app/lib/screens/recepcion_screen.dart` + pestaña
