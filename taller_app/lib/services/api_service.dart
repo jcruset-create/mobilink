@@ -463,6 +463,39 @@ class ApiService {
     }
   }
 
+  /// Citas de la agenda que se pueden recibir hoy en el patio.
+  ///
+  /// El día lo manda la APK con su fecha LOCAL: el taller y el servidor no
+  /// tienen por qué estar en la misma zona horaria, y a las once de la noche
+  /// eso son dos días distintos.
+  ///
+  /// Sin cobertura devuelve vacío, y entonces se recibe sin cita: la recepción
+  /// sale igual y la oficina la empareja al validar.
+  Future<List<Map<String, dynamic>>> getCitasDelDia(String dia, {String? workshopId}) async {
+    try {
+      final q = {'dia': dia, if (workshopId != null) 'workshopId': workshopId}
+          .entries
+          .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
+          .join('&');
+      final res = await http
+          .get(
+            Uri.parse(
+                '$kBackendUrl/api/taller-operator/recepcion-vehiculos/citas?$q'),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode != 200) {
+        throw Exception(_errorDe(res.body, 'No se han podido cargar las citas'));
+      }
+      return (jsonDecode(res.body) as List<dynamic>)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    } catch (e) {
+      if (_isNetworkError(e)) return [];
+      rethrow;
+    }
+  }
+
   /// ¿Conocemos este vehículo? Devuelve null si no, o si no hay red.
   Future<Map<String, dynamic>?> buscarVehiculo(String matricula) async {
     try {

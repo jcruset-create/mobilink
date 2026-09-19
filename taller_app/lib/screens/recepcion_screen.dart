@@ -20,7 +20,21 @@ const _areas = ['camion', 'movil', 'tacografo', 'turismo', 'mecanica'];
 /// ya sin ellos.
 class RecepcionScreen extends StatefulWidget {
   final ApiService api;
-  const RecepcionScreen({super.key, required this.api});
+
+  /// Cita de la agenda de la que sale esta recepción, si el operario la eligió
+  /// en la pantalla anterior. Con ella se prellena el formulario y, al
+  /// convertir, la cita queda cerrada para que no salgan dos trabajos.
+  final Map<String, dynamic>? cita;
+
+  /// Taller elegido en la pantalla anterior, para no volver a preguntarlo.
+  final String? workshopId;
+
+  const RecepcionScreen({
+    super.key,
+    required this.api,
+    this.cita,
+    this.workshopId,
+  });
 
   @override
   State<RecepcionScreen> createState() => _RecepcionScreenState();
@@ -56,6 +70,20 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
   @override
   void initState() {
     super.initState();
+    // Lo que trae la cita se ESCRIBE en los campos, no se guarda aparte: el
+    // operario tiene el vehículo delante y es quien confirma que la matrícula
+    // de la agenda es la que está viendo. Una cita con la matrícula mal puesta
+    // se corrige aquí, no en la oficina.
+    final cita = widget.cita;
+    if (cita != null) {
+      _matriculaCtrl.text = (cita['plate'] ?? '').toString().toUpperCase();
+      _clienteCtrl.text = (cita['customerName'] ?? '').toString();
+      final area = (cita['area'] ?? '').toString();
+      if (_areas.contains(area)) _area = area;
+      final key = (cita['templateKey'] ?? '').toString();
+      if (key.isNotEmpty) _plantillaKey = key;
+    }
+    if (widget.workshopId != null) _workshopId = widget.workshopId!;
     _cargarCatalogo();
   }
 
@@ -254,6 +282,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
         'operacionLabel': operacion['label'],
         'notas': _notasCtrl.text.trim(),
         'urgente': _urgente,
+        'scheduledJobId': widget.cita?['id'],
         'vehiculoId': _vehiculoId,
         'vehiculoOrigen': _vehiculoOrigen,
         'matriculaOcr': _matriculaOcr,
@@ -302,6 +331,15 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (widget.cita != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                'Cita de las ${widget.cita!['startTime'] ?? ''}. '
+                'Comprueba que la matrícula es la del vehículo que tienes delante.',
+                style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+              ),
+            ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),

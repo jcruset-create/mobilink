@@ -11,7 +11,7 @@ import { isHardBlockedTechStatus } from "../modules/techStatus";
 import { isManualUnavailableStatus } from "../modules/techSync";
 import { tecnicosNoDisponibles } from "../modules/tecnicosNoDisponibles";
 import { useRecepcionesPendientes } from "../modules/useRecepcionesPendientes";
-import { horaDeRecepcion } from "../modules/recepcionVehiculo";
+import { horaDeRecepcion, idsDeCitasYaRecibidas } from "../modules/recepcionVehiculo";
 import { getTodayDateValue } from "../modules/techStatusScheduleHelpers";
 import type { ScheduledTechStatus } from "../modules/techStatusScheduleHelpers";
 import type { CustomExtraTask } from "../modules/quickTaskSelector";
@@ -218,7 +218,19 @@ export default function Operativo2View({
   ])).filter((n) => !isTestTech(n));
   const trabajando = trabajandoNames.map((name) => ({ name }));
   const techColor = (n: string) => (responsables.has(n) ? "text-rose-400" : soportes.has(n) ? "text-orange-400" : maintTechNames.has(n) ? "text-yellow-300" : "text-slate-200");
-  const agendados = agenda.dueScheduledJobs ?? [];
+  /*
+   * Las citas cuyo vehículo YA está en el patio salen de «Llegadas» y pasan a
+   * verse arriba, en «Pendientes de recepción».
+   *
+   * No es solo orden: mientras siguiera aquí conservaba su botón «Llegó», y
+   * ese botón crea el trabajo por su cuenta. Al validar después la recepción
+   * saldría un segundo trabajo del mismo vehículo. La cita no se cierra hasta
+   * esa validación, así que esta ventana puede durar horas.
+   */
+  const citasYaRecibidas = idsDeCitasYaRecibidas(recepcionesPendientes);
+  const agendados = (agenda.dueScheduledJobs ?? []).filter(
+    (s) => !citasYaRecibidas.has(Number(s.id))
+  );
   const refuerzos = visibleTechs.filter((t) => !isTestTech(t.name) && t.status === "refuerzo");
 
   // Quién NO puede coger trabajo y por qué. Sin esto, alguien de vacaciones o
@@ -631,6 +643,14 @@ export default function Operativo2View({
                       <span className="text-slate-400"> · {r.kilometros.toLocaleString("es-ES")} km</span>
                     ) : null}
                     <span className="text-slate-500"> · {r.operacionLabel || "sin operación"}</span>
+                    {r.scheduledJobId != null ? (
+                      <span
+                        className="ml-1 rounded bg-sky-900/60 px-1 py-0.5 text-[9px] font-bold text-sky-200"
+                        title="Venía de una cita de la agenda. Por eso ya no sale arriba en Llegadas."
+                      >
+                        con cita
+                      </span>
+                    ) : null}
                   </span>
                   <span className="shrink-0 text-[10px] text-slate-500">{r.operarioNombre}</span>
                 </div>

@@ -38,6 +38,8 @@ export type RecepcionVehiculo = {
   confianzaKilometrosOcr?: number | null;
   vehiculoId?: string | null;
   vehiculoOrigen?: OrigenVehiculo | null;
+  /** Cita de la agenda de la que salió, si el operario la eligió en el patio. */
+  scheduledJobId?: number | null;
   area?: AreaKey | null;
   plantillaKey?: string | null;
   operacionLabel?: string | null;
@@ -250,6 +252,84 @@ export function jobDesdeRecepcion(
     // La hora en que el vehículo entró en el patio, no la de convertirlo.
     ptEntradaMs: recepcion.creadaAtMs,
   };
+}
+
+/**
+ * Una cita de la agenda, vista desde el patio.
+ *
+ * Es un subconjunto de lo que guarda `scheduled_jobs`, que es un JSONB sin
+ * esquema. Solo lo que el operario necesita para reconocer el vehículo que
+ * tiene delante.
+ */
+export type CitaParaRecibir = {
+  id: number;
+  plate?: string | null;
+  startTime?: string | null;
+  date?: string | null;
+  customerName?: string | null;
+  templateLabel?: string | null;
+  templateKey?: string | null;
+  area?: string | null;
+  workshopId?: string | null;
+  status?: string | null;
+  jobId?: number | null;
+};
+
+/**
+ * Las citas que un operario puede recibir hoy en el patio.
+ *
+ * Se dejan fuera:
+ *  · las que no están «programado» —canceladas, realizadas—;
+ *  · las que YA tienen trabajo creado (`jobId`), porque entonces el vehículo
+ *    ya entró por la otra puerta y recibirlo otra vez duplicaría el trabajo;
+ *  · las de otro taller y las de otro día.
+ *
+ * Se ordenan por hora, que es como están en la agenda y como las busca quien
+ * tiene el vehículo delante.
+ */
+export function idsDeCitasYaRecibidas(
+  recepciones: { estado: string; scheduledJobId?: number | null }[]
+): Set<number> {
+  const ids = new Set<number>();
+  for (const r of recepciones) {
+    if (r.estado !== "pendiente") continue;
+    if (r.scheduledJobId == null) continue;
+    ids.add(Number(r.scheduledJobId));
+  }
+  return ids;
+}
+
+export function citasParaRecibir(
+  citas: CitaParaRecibir[],
+  diaKey: string,
+  workshopId?: string | null,
+  yaRecibidas?: Set<number>
+): CitaParaRecibir[] {
+  return citas
+    .filter((c) => {
+      if (String(c.status ?? "") !== "programado") return false;
+      if (c.jobId != null) return false;
+      /*
+       * Recibida pero todavía sin validar.
+       *
+       * La cita no se cierra hasta que la oficina convierte la recepción, y
+       * entre el patio y la oficina pueden pasar horas. En esa ventana la
+       * cita seguía saliendo en la APK —otro operario podía recibirla otra
+       * vez— y conservaba su botón «Llegó» en Operativo 2, que habría creado
+       * un trabajo en paralelo al que saldrá de la recepción.
+       *
+       * Mientras hay una recepción pendiente, la cita ya no está «por
+       * recibir»: está recibida y esperando validación, que es donde se la
+       * ve ahora.
+       */
+      if (yaRecibidas?.has(Number(c.id))) return false;
+      if (String(c.date ?? "") !== diaKey) return false;
+      if (workshopId && c.workshopId && String(c.workshopId) !== String(workshopId)) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => String(a.startTime ?? "").localeCompare(String(b.startTime ?? "")));
 }
 
 /** `1700000000000` → `"09:30"`, en la hora local del taller. */

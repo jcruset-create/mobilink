@@ -25,7 +25,11 @@ import db from "../db.ts";
 import { extractJson, hasAi } from "../core/ai.ts";
 import { normalizarMatricula, patronBusquedaMatricula } from "../tyrecontrol/matricula.ts";
 import { normalizeRecepcionRow } from "./normaliza.ts";
-import { plantillasParaElPatio } from "../../src/modules/recepcionVehiculo.ts";
+import {
+  citasParaRecibir,
+  idsDeCitasYaRecibidas,
+  plantillasParaElPatio,
+} from "../../src/modules/recepcionVehiculo.ts";
 
 const ESTADOS = new Set(["pendiente", "convertida", "descartada"]);
 
@@ -33,7 +37,7 @@ const ESTADOS = new Set(["pendiente", "convertida", "descartada"]);
 const COLUMNAS = `
   id, "workshopId", matricula, "matriculaNormal", "matriculaOcr", "confianzaOcr",
   "clienteNombre", kilometros, "kilometrosOcr", "confianzaKilometrosOcr",
-  "vehiculoId", "vehiculoOrigen", area, "plantillaKey",
+  "scheduledJobId", "vehiculoId", "vehiculoOrigen", area, "plantillaKey",
   "operacionLabel", notas, urgente, fotos, estado, "operarioNombre",
   "creadaAtMs", "resueltaAtMs", "resueltaPor", "motivoDescarte", "jobId"
 `;
@@ -175,6 +179,77 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
     }
   });
 
+  /**
+   * Las citas de hoy que el operario puede recibir en el patio.
+   *
+   * Se sirven las del día que pida la APK —su fecha local, no la del
+   * servidor: el taller y el servidor no tienen por qué estar en la misma
+   * zona horaria, y a las once de la noche eso son dos días distintos—.
+   *
+   * El filtro de qué es recibible vive en `citasParaRecibir`, en src/modules,
+   * porque es la regla que impide el trabajo duplicado y conviene poder
+   * probarla sin base de datos.
+   */
+  r.get("/taller-operator/recepcion-vehiculos/citas", requireTallerOperator, async (req, res) => {
+    try {
+      const dia = texto((req.query as any)?.dia);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) {
+        return res.status(400).json({ error: "Falta el día (AAAA-MM-DD)" });
+      }
+      const workshopId = textoONull((req.query as any)?.workshopId);
+
+      // Igual que el endpoint del panel: el JSONB se devuelve tal cual y la
+      // forma se decide en JavaScript. Esta tabla no tiene columnas que
+      // nombrar, todo vive dentro de `data`.
+      const filas = await db.query(
+        `SELECT data FROM scheduled_jobs
+          WHERE COALESCE(data::jsonb->>'status', '') <> 'eliminado'
+            AND data::jsonb->>'deletedAtMs' IS NULL`
+      );
+
+      /*
+       * Las que ya están recibidas y esperando validación salen de la lista.
+       * La cita no se cierra hasta que la oficina convierte la recepción, y
+       * entre el patio y la oficina pueden pasar horas: sin esto, otro
+       * operario podría recibir el mismo vehículo por segunda vez.
+       */
+      const recibidas = await db.query(
+        `SELECT estado, "scheduledJobId" FROM recepciones_vehiculo
+          WHERE estado = 'pendiente'
+            AND "scheduledJobId" IS NOT NULL
+            AND "deletedAtMs" IS NULL`
+      );
+
+      const citas = citasParaRecibir(
+        filas.rows.map((f: any) => f.data),
+        dia,
+        workshopId,
+        idsDeCitasYaRecibidas(
+          recibidas.rows.map((r: any) => ({
+            estado: String(r.estado),
+            scheduledJobId: Number(r.scheduledJobId),
+          }))
+        )
+      );
+
+      // Solo lo que el operario necesita para reconocer el vehículo. Nada de
+      // precios ni de datos del trabajo.
+      res.json(
+        citas.map((c) => ({
+          id: Number(c.id),
+          plate: c.plate ?? "",
+          startTime: c.startTime ?? "",
+          customerName: c.customerName ?? "",
+          templateLabel: c.templateLabel ?? "",
+          templateKey: c.templateKey ?? "",
+          area: c.area ?? "",
+        }))
+      );
+    } catch (e) {
+      fallo(res, "citas", e);
+    }
+  });
+
   /** Crear la recepción. Idempotente: un reintento de la cola no crea otra. */
   r.post("/taller-operator/recepcion-vehiculos", requireTallerOperator, async (req, res) => {
     try {
@@ -196,12 +271,12 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
         `INSERT INTO recepciones_vehiculo (
            id, "workshopId", matricula, "matriculaNormal", "matriculaOcr",
            "confianzaOcr", "clienteNombre", kilometros, "kilometrosOcr",
-           "confianzaKilometrosOcr", "vehiculoId", "vehiculoOrigen",
-           area, "plantillaKey", "operacionLabel", notas, urgente, fotos,
-           estado, "operarioNombre", "creadaAtMs"
+           "confianzaKilometrosOcr", "scheduledJobId", "vehiculoId",
+           "vehiculoOrigen", area, "plantillaKey", "operacionLabel", notas,
+           urgente, fotos, estado, "operarioNombre", "creadaAtMs"
          ) VALUES (
-           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'[]'::jsonb,
-           'pendiente',$18,$19
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'[]'::jsonb,
+           'pendiente',$19,$20
          ) RETURNING ${COLUMNAS}`,
         [
           ahora,
@@ -214,6 +289,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           entero(body.kilometros),
           entero(body.kilometrosOcr),
           decimal(body.confianzaKilometrosOcr),
+          entero(body.scheduledJobId),
           textoONull(body.vehiculoId),
           textoONull(body.vehiculoOrigen),
           textoONull(body.area),
@@ -565,6 +641,44 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
            VALUES ($1,$2,$3,$4,$5,'foto')`,
           [jobId, url, textoONull((foto as any)?.nombre), recepcion.operarioNombre, ahora]
         );
+      }
+
+      /*
+       * ── Cerrar la cita, si la recepción salió de una ─────────────────────
+       *
+       * Sin esto, la cita sigue en «Llegadas» con su botón «Llegó», y ese
+       * botón crea un trabajo por su cuenta: dos trabajos para el mismo
+       * vehículo, uno por cada puerta. `confirmScheduledArrival` se retira en
+       * cuanto la cita tiene `jobId`, así que escribirlo aquí es lo que cierra
+       * esa puerta.
+       *
+       * Va DENTRO de la transacción a propósito: si se hiciera después y
+       * fallara, quedaría el trabajo creado y la cita abierta, que es
+       * justamente el estado que esto evita.
+       *
+       * `scheduled_jobs` no tiene columnas: es un JSONB, así que se escribe
+       * con `jsonb_set`. Y se exige que la cita siga sin trabajo —el
+       * `->>'jobId' IS NULL`—: si alguien pulsó «Llegó» mientras el vehículo
+       * estaba en el patio, gana lo que ya se hizo y aquí no se pisa nada.
+       */
+      if (recepcion.scheduledJobId != null) {
+        const cita = await cliente.query(
+          `UPDATE scheduled_jobs
+              SET data = jsonb_set(data::jsonb, '{jobId}', to_jsonb($2::bigint)),
+                  "updatedAtMs" = $3
+            WHERE id = $1
+              AND data::jsonb->>'jobId' IS NULL
+            RETURNING id`,
+          [recepcion.scheduledJobId, jobId, ahora]
+        );
+        if (cita.rowCount === 0) {
+          // No es un error: la cita pudo confirmarse por el otro camino
+          // mientras el vehículo esperaba. Se deja constancia y se sigue.
+          console.warn(
+            `[Recepciones] la cita ${recepcion.scheduledJobId} ya tenía trabajo; ` +
+              `la recepción ${id} se convierte igual en el trabajo ${jobId}.`
+          );
+        }
       }
 
       const marcada = await cliente.query(

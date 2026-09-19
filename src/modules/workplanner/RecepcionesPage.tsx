@@ -263,6 +263,14 @@ export default function RecepcionesPage() {
                   className="flex w-full flex-wrap items-center gap-3 text-left"
                 >
                   <span className="text-base font-black tracking-wide">{r.matricula}</span>
+                  {r.scheduledJobId != null && (
+                    <span
+                      className="rounded bg-sky-900/60 px-1.5 py-0.5 text-[10px] font-bold text-sky-200"
+                      title="Salió de una cita de la agenda. Al convertirla, la cita queda cerrada y su botón «Llegó» ya no puede crear otro trabajo."
+                    >
+                      con cita
+                    </span>
+                  )}
                   {r.matriculaOcr && (
                     <span
                       className="rounded bg-amber-900/50 px-1.5 py-0.5 text-[10px] font-bold text-amber-200"
