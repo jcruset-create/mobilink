@@ -1275,6 +1275,13 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS "kilometrosOcr" INTEGER DEFAULT NULL;
     ALTER TABLE recepciones_vehiculo
       ADD COLUMN IF NOT EXISTS "confianzaKilometrosOcr" DOUBLE PRECISION DEFAULT NULL;
+
+    -- Cita de la agenda de la que salió la recepción, si el operario la eligió
+    -- en el patio en vez de dar de alta un vehículo sin cita. Es lo que permite
+    -- cerrar la cita al convertir, y así el botón «Llegó» no puede crear un
+    -- segundo trabajo del mismo vehículo.
+    ALTER TABLE recepciones_vehiculo
+      ADD COLUMN IF NOT EXISTS "scheduledJobId" BIGINT DEFAULT NULL;
   `);
 
   // Cupo anual de vacaciones y modo de cómputo. Una fila por taller y año con

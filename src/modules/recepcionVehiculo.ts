@@ -38,6 +38,8 @@ export type RecepcionVehiculo = {
   confianzaKilometrosOcr?: number | null;
   vehiculoId?: string | null;
   vehiculoOrigen?: OrigenVehiculo | null;
+  /** Cita de la agenda de la que salió, si el operario la eligió en el patio. */
+  scheduledJobId?: number | null;
   area?: AreaKey | null;
   plantillaKey?: string | null;
   operacionLabel?: string | null;
@@ -250,6 +252,57 @@ export function jobDesdeRecepcion(
     // La hora en que el vehículo entró en el patio, no la de convertirlo.
     ptEntradaMs: recepcion.creadaAtMs,
   };
+}
+
+/**
+ * Una cita de la agenda, vista desde el patio.
+ *
+ * Es un subconjunto de lo que guarda `scheduled_jobs`, que es un JSONB sin
+ * esquema. Solo lo que el operario necesita para reconocer el vehículo que
+ * tiene delante.
+ */
+export type CitaParaRecibir = {
+  id: number;
+  plate?: string | null;
+  startTime?: string | null;
+  date?: string | null;
+  customerName?: string | null;
+  templateLabel?: string | null;
+  templateKey?: string | null;
+  area?: string | null;
+  workshopId?: string | null;
+  status?: string | null;
+  jobId?: number | null;
+};
+
+/**
+ * Las citas que un operario puede recibir hoy en el patio.
+ *
+ * Se dejan fuera:
+ *  · las que no están «programado» —canceladas, realizadas—;
+ *  · las que YA tienen trabajo creado (`jobId`), porque entonces el vehículo
+ *    ya entró por la otra puerta y recibirlo otra vez duplicaría el trabajo;
+ *  · las de otro taller y las de otro día.
+ *
+ * Se ordenan por hora, que es como están en la agenda y como las busca quien
+ * tiene el vehículo delante.
+ */
+export function citasParaRecibir(
+  citas: CitaParaRecibir[],
+  diaKey: string,
+  workshopId?: string | null
+): CitaParaRecibir[] {
+  return citas
+    .filter((c) => {
+      if (String(c.status ?? "") !== "programado") return false;
+      if (c.jobId != null) return false;
+      if (String(c.date ?? "") !== diaKey) return false;
+      if (workshopId && c.workshopId && String(c.workshopId) !== String(workshopId)) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => String(a.startTime ?? "").localeCompare(String(b.startTime ?? "")));
 }
 
 /** `1700000000000` → `"09:30"`, en la hora local del taller. */

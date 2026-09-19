@@ -40,6 +40,7 @@ export function normalizeRecepcionRow(fila: FilaRecepcion) {
     kilometros: aNumero(fila.kilometros),
     kilometrosOcr: aNumero(fila.kilometrosOcr),
     confianzaKilometrosOcr: aNumero(fila.confianzaKilometrosOcr),
+    scheduledJobId: aNumero(fila.scheduledJobId),
     vehiculoId: fila.vehiculoId ?? null,
     vehiculoOrigen: fila.vehiculoOrigen ?? null,
     area: fila.area ?? null,

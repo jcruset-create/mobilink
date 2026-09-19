@@ -19,6 +19,7 @@ import {
   diaDeRecepcion,
   horaDeRecepcion,
   recepcionesDelDia,
+  citasParaRecibir,
   posibleDuplicado,
   type RecepcionVehiculo,
 } from "./recepcionVehiculo";
@@ -261,6 +262,60 @@ describe("jobDesdeRecepcion", () => {
     expect(job.area).toBe("camion");
     expect(job.quickEntryLabel).toBe("Revisar fuga");
     expect(job.unitMinutes).toBeNull();
+  });
+});
+
+describe("citasParaRecibir", () => {
+  const base = {
+    status: "programado",
+    date: "2026-09-19",
+    workshopId: "sea-tarragona",
+    jobId: null as number | null,
+  };
+
+  it("ordena por hora, que es como las busca quien tiene el coche delante", () => {
+    const citas = [
+      { id: 3, startTime: "11:30", ...base },
+      { id: 1, startTime: "09:00", ...base },
+      { id: 2, startTime: "09:30", ...base },
+    ];
+    expect(citasParaRecibir(citas, "2026-09-19", "sea-tarragona").map((c) => c.id)).toEqual([1, 2, 3]);
+  });
+
+  /*
+   * La de la izquierda es la razón de ser de este filtro: si la cita ya tiene
+   * trabajo, el vehículo entró por la otra puerta —el botón «Llegó»— y
+   * recibirlo otra vez crearía un segundo trabajo del mismo camión.
+   */
+  it("deja fuera las que ya tienen trabajo creado", () => {
+    const citas = [
+      { id: 1, startTime: "09:00", ...base, jobId: 4321 },
+      { id: 2, startTime: "09:30", ...base },
+    ];
+    expect(citasParaRecibir(citas, "2026-09-19").map((c) => c.id)).toEqual([2]);
+  });
+
+  it("deja fuera las canceladas y las realizadas", () => {
+    const citas = [
+      { id: 1, startTime: "09:00", ...base, status: "cancelado" },
+      { id: 2, startTime: "09:30", ...base, status: "realizado" },
+      { id: 3, startTime: "10:00", ...base },
+    ];
+    expect(citasParaRecibir(citas, "2026-09-19").map((c) => c.id)).toEqual([3]);
+  });
+
+  it("deja fuera las de otro día y las de otro taller", () => {
+    const citas = [
+      { id: 1, startTime: "09:00", ...base, date: "2026-09-20" },
+      { id: 2, startTime: "09:30", ...base, workshopId: "sea-reus" },
+      { id: 3, startTime: "10:00", ...base },
+    ];
+    expect(citasParaRecibir(citas, "2026-09-19", "sea-tarragona").map((c) => c.id)).toEqual([3]);
+  });
+
+  it("una cita sin taller vale para cualquiera", () => {
+    const citas = [{ id: 1, startTime: "09:00", ...base, workshopId: null }];
+    expect(citasParaRecibir(citas, "2026-09-19", "sea-reus")).toHaveLength(1);
   });
 });
 

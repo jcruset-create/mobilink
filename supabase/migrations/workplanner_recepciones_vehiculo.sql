@@ -52,3 +52,7 @@ ALTER TABLE recepciones_vehiculo
   ADD COLUMN IF NOT EXISTS "kilometrosOcr" INTEGER DEFAULT NULL;
 ALTER TABLE recepciones_vehiculo
   ADD COLUMN IF NOT EXISTS "confianzaKilometrosOcr" DOUBLE PRECISION DEFAULT NULL;
+
+-- Enlace con la cita de la agenda de la que salió la recepción.
+ALTER TABLE recepciones_vehiculo
+  ADD COLUMN IF NOT EXISTS "scheduledJobId" BIGINT DEFAULT NULL;

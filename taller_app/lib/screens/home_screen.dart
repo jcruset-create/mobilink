@@ -11,7 +11,7 @@ import '../workshops.dart';
 import 'login_screen.dart';
 import 'task_detail_screen.dart';
 import 'create_task_screen.dart';
-import 'recepcion_screen.dart';
+import 'citas_recepcion_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final ApiService api;
@@ -176,8 +176,8 @@ class _HomeScreenState extends State<HomeScreen> {
             const Icon(Icons.directions_car, size: 48, color: AppColors.textMuted),
             const SizedBox(height: 12),
             const Text(
-              'Recibe un vehículo en el patio.\n'
-              'Se manda a oficina y allí deciden el trabajo.',
+              'Elige la cita del vehículo que acaba de entrar,\n'
+              'o recíbelo sin cita si ha venido de improviso.',
               textAlign: TextAlign.center,
               style: TextStyle(color: AppColors.textMuted),
             ),
@@ -188,7 +188,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () async {
                 await Navigator.of(context).push<bool>(
                   MaterialPageRoute(
-                    builder: (_) => RecepcionScreen(api: widget.api),
+                    builder: (_) => CitasRecepcionScreen(api: widget.api),
                   ),
                 );
               },
