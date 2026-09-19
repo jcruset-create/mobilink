@@ -25,7 +25,11 @@ import db from "../db.ts";
 import { extractJson, hasAi } from "../core/ai.ts";
 import { normalizarMatricula, patronBusquedaMatricula } from "../tyrecontrol/matricula.ts";
 import { normalizeRecepcionRow } from "./normaliza.ts";
-import { citasParaRecibir, plantillasParaElPatio } from "../../src/modules/recepcionVehiculo.ts";
+import {
+  citasParaRecibir,
+  idsDeCitasYaRecibidas,
+  plantillasParaElPatio,
+} from "../../src/modules/recepcionVehiculo.ts";
 
 const ESTADOS = new Set(["pendiente", "convertida", "descartada"]);
 
@@ -203,10 +207,29 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
             AND data::jsonb->>'deletedAtMs' IS NULL`
       );
 
+      /*
+       * Las que ya están recibidas y esperando validación salen de la lista.
+       * La cita no se cierra hasta que la oficina convierte la recepción, y
+       * entre el patio y la oficina pueden pasar horas: sin esto, otro
+       * operario podría recibir el mismo vehículo por segunda vez.
+       */
+      const recibidas = await db.query(
+        `SELECT estado, "scheduledJobId" FROM recepciones_vehiculo
+          WHERE estado = 'pendiente'
+            AND "scheduledJobId" IS NOT NULL
+            AND "deletedAtMs" IS NULL`
+      );
+
       const citas = citasParaRecibir(
         filas.rows.map((f: any) => f.data),
         dia,
-        workshopId
+        workshopId,
+        idsDeCitasYaRecibidas(
+          recibidas.rows.map((r: any) => ({
+            estado: String(r.estado),
+            scheduledJobId: Number(r.scheduledJobId),
+          }))
+        )
       );
 
       // Solo lo que el operario necesita para reconocer el vehículo. Nada de

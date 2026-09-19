@@ -20,6 +20,7 @@ import {
   horaDeRecepcion,
   recepcionesDelDia,
   citasParaRecibir,
+  idsDeCitasYaRecibidas,
   posibleDuplicado,
   type RecepcionVehiculo,
 } from "./recepcionVehiculo";
@@ -311,6 +312,37 @@ describe("citasParaRecibir", () => {
       { id: 3, startTime: "10:00", ...base },
     ];
     expect(citasParaRecibir(citas, "2026-09-19", "sea-tarragona").map((c) => c.id)).toEqual([3]);
+  });
+
+  /*
+   * La ventana entre el patio y la oficina: la cita no se cierra hasta que se
+   * valida, y mientras tanto no puede seguir ofreciéndose como «por recibir».
+   */
+  it("deja fuera las que ya tienen una recepción esperando validación", () => {
+    const citas = [
+      { id: 1, startTime: "09:00", ...base },
+      { id: 2, startTime: "09:30", ...base },
+    ];
+    const recibidas = idsDeCitasYaRecibidas([
+      { estado: "pendiente", scheduledJobId: 1 },
+    ]);
+    expect(citasParaRecibir(citas, "2026-09-19", null, recibidas).map((c) => c.id)).toEqual([2]);
+  });
+
+  it("una recepción ya resuelta no bloquea la cita", () => {
+    const recibidas = idsDeCitasYaRecibidas([
+      { estado: "convertida", scheduledJobId: 1 },
+      { estado: "descartada", scheduledJobId: 2 },
+    ]);
+    expect(recibidas.size).toBe(0);
+  });
+
+  it("una recepción sin cita no bloquea nada", () => {
+    const recibidas = idsDeCitasYaRecibidas([
+      { estado: "pendiente", scheduledJobId: null },
+      { estado: "pendiente" },
+    ]);
+    expect(recibidas.size).toBe(0);
   });
 
   it("una cita sin taller vale para cualquiera", () => {

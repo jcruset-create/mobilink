@@ -287,15 +287,42 @@ export type CitaParaRecibir = {
  * Se ordenan por hora, que es como están en la agenda y como las busca quien
  * tiene el vehículo delante.
  */
+export function idsDeCitasYaRecibidas(
+  recepciones: { estado: string; scheduledJobId?: number | null }[]
+): Set<number> {
+  const ids = new Set<number>();
+  for (const r of recepciones) {
+    if (r.estado !== "pendiente") continue;
+    if (r.scheduledJobId == null) continue;
+    ids.add(Number(r.scheduledJobId));
+  }
+  return ids;
+}
+
 export function citasParaRecibir(
   citas: CitaParaRecibir[],
   diaKey: string,
-  workshopId?: string | null
+  workshopId?: string | null,
+  yaRecibidas?: Set<number>
 ): CitaParaRecibir[] {
   return citas
     .filter((c) => {
       if (String(c.status ?? "") !== "programado") return false;
       if (c.jobId != null) return false;
+      /*
+       * Recibida pero todavía sin validar.
+       *
+       * La cita no se cierra hasta que la oficina convierte la recepción, y
+       * entre el patio y la oficina pueden pasar horas. En esa ventana la
+       * cita seguía saliendo en la APK —otro operario podía recibirla otra
+       * vez— y conservaba su botón «Llegó» en Operativo 2, que habría creado
+       * un trabajo en paralelo al que saldrá de la recepción.
+       *
+       * Mientras hay una recepción pendiente, la cita ya no está «por
+       * recibir»: está recibida y esperando validación, que es donde se la
+       * ve ahora.
+       */
+      if (yaRecibidas?.has(Number(c.id))) return false;
       if (String(c.date ?? "") !== diaKey) return false;
       if (workshopId && c.workshopId && String(c.workshopId) !== String(workshopId)) {
         return false;
