@@ -1,4 +1,6 @@
 import { apiFetch } from "../modules/apiFetch";
+import { useRecepcionesPendientes } from "../modules/useRecepcionesPendientes";
+import { horaDeRecepcion, recepcionesDelDia } from "../modules/recepcionVehiculo";
 import { useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
@@ -615,6 +617,13 @@ export default function AgendaView({
   onClose,
   dark = false,
 }: Props) {
+  /*
+   * Vehículos recibidos en el patio y sin validar. Se piden aquí, igual que en
+   * Operativo 2, en vez de bajarlos por props desde SeaTarragonaV1.
+   */
+  const { recepciones: recepcionesPendientes } = useRecepcionesPendientes(
+    selectedWorkshopId as string
+  );
   const safeSelectedWorkshopId = normalizeWorkshopId(selectedWorkshopId);
   const selectedWorkshop = getWorkshopById(safeSelectedWorkshopId);
 
@@ -2235,7 +2244,38 @@ appendLog(
                   }))
                 : [];
 
-              const laidOutJobs = layoutOverlappingJobs([...dayJobs, ...virtualQueueJobs] as any[]);
+              /*
+               * Recepciones del patio, pintadas a la HORA EN QUE LLEGARON.
+               *
+               * A diferencia de la cola —que no tiene hora y por eso se pinta
+               * en la línea de ahora— una recepción sí la tiene: es cuando el
+               * operario la mandó desde el patio. Ponerla en su hora es lo que
+               * la hace útil al lado de las citas.
+               */
+              const virtualRecepciones = recepcionesDelDia(
+                recepcionesPendientes,
+                day.date
+              ).map((r) => {
+                const hora = horaDeRecepcion(r.creadaAtMs);
+                // Si llegó antes de que empiece el día pintado, se ancla al
+                // principio en vez de quedarse fuera de la rejilla.
+                const inicio = Math.max(timeToMinutes(hora), dayStart);
+                return {
+                  id: -Math.abs(r.id) - 1_000_000, // fuera del rango de la cola
+                  workshopId: r.workshopId ?? null,
+                  area: r.area ?? "mecanica",
+                  plate: r.matricula,
+                  _recepcionRef: r,
+                  startTime: minutesToTime(inicio),
+                  endTime: minutesToTime(Math.min(inicio + 30, getDayEnd(day.index))),
+                };
+              });
+
+              const laidOutJobs = layoutOverlappingJobs([
+                ...dayJobs,
+                ...virtualQueueJobs,
+                ...virtualRecepciones,
+              ] as any[]);
 
               const now = new Date();
               const nowMinutes = now.getHours() * 60 + now.getMinutes();
@@ -2332,6 +2372,50 @@ appendLog(
                   )}
 
                   {laidOutJobs.map(({ job, column, columns }) => {
+                    // ── Recepción del patio, sin validar ──────────────────
+                    if ((job as any)._recepcionRef) {
+                      const r = (job as any)._recepcionRef;
+                      const hora = horaDeRecepcion(r.creadaAtMs);
+                      const inicio = Math.max(timeToMinutes(hora), dayStart);
+                      const top = ((inicio - dayStart) / SLOT_MINUTES) * SLOT_HEIGHT;
+                      const width = 100 / columns;
+                      const left = column * width;
+
+                      return (
+                        <div
+                          key={`recepcion-${r.id}`}
+                          title={`🚗 Recibido en el patio · ${r.matricula}${
+                            r.clienteNombre ? ` · ${r.clienteNombre}` : ""
+                          }\nRecibido por ${r.operarioNombre} a las ${hora}\nPendiente de validar`}
+                          className="absolute z-40 cursor-default overflow-hidden rounded-xl border-2 border-dashed border-amber-400 bg-amber-500/20 p-2 text-sm font-semibold text-amber-100 shadow-md"
+                          style={{
+                            top,
+                            height: Math.max(50, SLOT_HEIGHT - 6),
+                            left: `calc(${left}% + 4px)`,
+                            width: `calc(${width}% - 8px)`,
+                          }}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="truncate uppercase">
+                              {r.operacionLabel || "Sin operación"}
+                            </div>
+                            <span className="shrink-0 rounded-full bg-amber-300 px-2 py-0.5 text-[9px] font-black uppercase text-slate-900">
+                              Recepción
+                            </span>
+                          </div>
+                          <div className="truncate">{r.matricula}</div>
+                          <div className="text-xs font-normal opacity-90">
+                            🚗 {hora} · {r.operarioNombre}
+                          </div>
+                          {r.kilometros ? (
+                            <div className="truncate text-xs font-normal opacity-90">
+                              {r.kilometros.toLocaleString("es-ES")} km
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    }
+
                     // ── Trabajo en cola virtual ───────────────────────────
                     if ((job as any)._queueJobRef) {
                       const qj: QueueJob = (job as any)._queueJobRef;
