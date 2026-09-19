@@ -1,17 +1,21 @@
-# Mobilink Assist Lite — iOS 13.0.
+# Mobilink Assist Lite — iOS 15.0.
 #
-# El mínimo lo marca Firebase, no Flutter: firebase_core 3.15.2 y
-# firebase_messaging 15.2.10 declaran `s.ios.deployment_target = '13.0'` en su
-# podspec. El resto de plugins de la app piden menos (geolocator 11.0;
-# connectivity_plus, image_picker, path_provider, permission_handler,
-# shared_preferences y url_launcher 12.0), así que 13.0 los cubre a todos y
-# coincide con IPHONEOS_DEPLOYMENT_TARGET del proyecto Xcode.
+# Las dependencias se conforman con menos: Firebase pide 13.0 (firebase_core
+# 3.15.2 y firebase_messaging 15.2.10 lo declaran en su podspec) y el resto de
+# plugins aún menos (geolocator 11.0; connectivity_plus, image_picker,
+# path_provider, permission_handler, shared_preferences y url_launcher 12.0).
+# El 15 lo marca Apple:
 #
-# Este número va atado a la versión de Flutter del workflow (3.35.4). Subir
-# Flutter sube el mínimo del motor —3.47 ya pide iOS 15— y entonces `pod
-# install` falla con «required a higher minimum deployment target»: los dos
-# valores se cambian juntos o no se cambia ninguno.
-platform :ios, '13.0'
+#   90068: MinimumOSVersion too low. Starting in Spring 2027, all iOS apps
+#   must have a MinimumOSVersion of 15.0 or later in order to be uploaded to
+#   App Store Connect or submitted for distribution.
+#
+# Poner 15 con Flutter 3.35.4 es válido: el motor pide 13 o más. Al revés no:
+# subir a Flutter 3.47 con el proyecto en 13 hace que `pod install` falle con
+# «required a higher minimum deployment target». Este número solo puede subir.
+#
+# A cambio, un teléfono con iOS 13 o 14 ya no puede instalarla.
+platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -55,7 +59,7 @@ post_install do |installer|
     target.build_configurations.each do |config|
       # Los pods heredan el mínimo del proyecto: sin esto, alguno se queda con
       # el suyo (9.0 en flutter_image_compress) y Xcode avisa en cada build.
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
 
       # permission_handler compila el código de TODOS los permisos salvo que se
       # diga lo contrario, y Apple rechaza un binario con llamadas a permisos
