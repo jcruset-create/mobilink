@@ -588,7 +588,16 @@ export function createRecepcionesRouter(): Router {
     exigirPermiso("recepciones.correo.importar"),
     ruta(async (req, res) => {
       const ctx = contextoDe(req);
-      const r = await ingesta.reprocesar({ empresaId: ctx.empresaId }, String(req.params.id));
+      const correoId = String(req.params.id);
+      // Si el correo no tiene su adjunto guardado —los que entraron antes de
+      // que se guardaran no lo tienen—, se va a buscar el original al buzón.
+      // Sin esto, «Reprocesar» vuelve a mirar un cuerpo vacío en los correos
+      // que traen los datos en el PDF, y no hay forma de arreglarlos desde
+      // aquí. No lanza: si el buzón no está, se reprocesa con lo que haya.
+      const correo = await repo.correoPorId(ctx.empresaId, correoId);
+      const guardados = correo ? await repo.adjuntosDeCorreo(ctx.empresaId, correoId) : [];
+      const delBuzon = correo && guardados.length === 0 ? await buzon.adjuntosDelOriginal(ctx.empresaId, correo.messageId) : [];
+      const r = await ingesta.reprocesar({ empresaId: ctx.empresaId }, correoId, delBuzon);
       void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.correo.reprocesar", entidad: "rcp_correos", entidadId: r.correoId, detalle: r, ip: req.ip });
       res.json(r);
     })

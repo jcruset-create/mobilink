@@ -211,7 +211,7 @@ function pdfEntregaInsa(numero = "26031188"): Promise<Buffer> {
   return listo;
 }
 
-type Mensaje = { uid: number; source: Buffer; seen: boolean; date: Date };
+type Mensaje = { uid: number; source: Buffer; seen: boolean; date: Date; messageId: string };
 let siguienteUid = 1;
 
 async function mensaje(sobre: { de?: string; asunto: string; texto: string; fecha?: Date; pdf?: Buffer; messageId?: string }): Promise<Mensaje> {
@@ -226,7 +226,7 @@ async function mensaje(sobre: { de?: string; asunto: string; texto: string; fech
     messageId: sobre.messageId ?? `<rcp-${uid}-${Date.now()}@ejemplo.invalid>`,
     attachments: sobre.pdf ? [{ filename: "albaran.pdf", content: sobre.pdf, contentType: "application/pdf" }] : [],
   });
-  return { uid, source: await composer.compile().build(), seen: false, date: fecha };
+  return { uid, source: await composer.compile().build(), seen: false, date: fecha, messageId: composer.mail.messageId as string };
 }
 
 function buzonFalso(
@@ -247,6 +247,9 @@ function buzonFalso(
     },
     async search(q) {
       this.busquedas.push({ ...q });
+      // Buscar por Message-ID: es como se recupera un correo concreto.
+      const porCabecera = q.header?.["message-id"];
+      if (porCabecera) return mensajes.filter((m) => m.messageId === porCabecera).map((m) => m.uid);
       const diaDesde = q.since ? new Date(new Date(q.since).toDateString()) : null;
       // `N:*` como en IMAP: el rango, y además el último mensaje de la carpeta.
       let porUid: (m: Mensaje) => boolean = () => true;
@@ -772,6 +775,35 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
       const correos = await api("/correo");
       const guardado = correos.body.correos.find((c: any) => c.albaranId === fila.id);
       expect((guardado.avisos ?? []).join(" ")).toMatch(/NIF del PDF/);
+    });
+
+    it("si el adjunto no se guardó, se va a buscar el correo original al buzón por su Message-ID", async () => {
+      // El caso de los correos que entraron ANTES de que el adjunto se
+      // guardara: en la base no hay nada que releer, y sin ir al buzón
+      // «Reprocesar» no puede arreglarlos.
+      const numero = unico("260315");
+      const m = await mensaje({ asunto: "Fwd: albaran Riu Clar", texto: "Te lo reenvío.", pdf: await pdfEntregaInsa(numero) });
+
+      const cliente = buzonFalso([m]);
+      const adjuntos = await buzon.adjuntosDelOriginal(EMPRESA, m.messageId, { cliente, config: CFG });
+      expect(adjuntos).toHaveLength(1);
+      expect(adjuntos[0].contenido.subarray(0, 5).toString()).toBe("%PDF-");
+
+      // Y con eso, reprocesar el correo lo mete entero.
+      const registrado = await importarEml(m.source);
+      expect(registrado.body.resultado).toBe("procesado");
+
+      // No se ha tocado nada del buzón: ni banderas, ni leídos.
+      expect(cliente.flagsAplicadas).toEqual([]);
+      expect(cliente.mensajes[0].seen).toBe(false);
+    });
+
+    it("buscar el original de un correo que ya no está en el buzón no revienta: devuelve vacío", async () => {
+      const otro = await mensaje({ asunto: "Otro", texto: "nada" });
+      const adjuntos = await buzon.adjuntosDelOriginal(EMPRESA, "<no-existe@ejemplo.invalid>", { cliente: buzonFalso([otro]), config: CFG });
+      expect(adjuntos).toEqual([]);
+      // Y con el buzón de otra empresa, ni se mira.
+      expect(await buzon.adjuntosDelOriginal("00000000-0000-4000-a000-0000000000ff", otro.messageId, { cliente: buzonFalso([otro]), config: CFG })).toEqual([]);
     });
 
     it("un PDF que no es una entrega reconocible deja el correo como antes: no se inventa un albarán", async () => {
