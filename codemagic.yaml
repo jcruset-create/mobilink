@@ -599,8 +599,8 @@ workflows:
 
     # Se reutiliza la clave de «Mobilink Assist», igual que hace Assist Lite:
     # una clave de API de App Store Connect es del EQUIPO de Apple, no de una
-    # app, así que sirve para firmar y publicar com.mobilink.taller mientras
-    # las apps vivan en el mismo equipo. Lo único que hay que asegurar es que
+    # app, así que sirve para firmar y publicar com.mobilink.workplanner
+    # mientras las apps vivan en el mismo equipo. Lo único que hay que asegurar es que
     # la clave tenga acceso a la app nueva (rol App Manager o superior).
     #
     # A cambio, el día que esa clave caduque se paran las tres entregas a la
@@ -639,18 +639,29 @@ workflows:
         # taller_app/ios/Runner.xcodeproj/project.pbxproj (Debug, Release y
         # Profile). Si no coinciden, la firma no encuentra el perfil.
         #
-        # Ojo: NO es el applicationId de Android, que es com.mobilink.taller
-        # también, pero por casualidad. Son dos identificadores distintos en
-        # dos tiendas distintas, y los dos son inmutables una vez publicados.
+        # Ojo: NO es el applicationId de Android, que es «com.mobilink.taller».
+        # Son dos identificadores de dos tiendas distintas, cada uno inmutable
+        # por su cuenta, y aquí manda el de la ficha que ya existe en App Store
+        # Connect. Cambiar uno NO es cambiar el otro: tocar el de Android
+        # obligaría a desinstalar la app de todas las tablets.
         distribution_type: app_store
-        bundle_identifier: com.mobilink.taller
+        bundle_identifier: com.mobilink.workplanner
       vars:
-        BUNDLE_ID: com.mobilink.taller
+        # De aquí salen las otras dos cosas que necesitan el identificador: la
+        # consulta del último build a App Store Connect y el mensaje de error
+        # si la ficha no existe. La subida no lo lee de ninguna variable: va al
+        # bundle id que lleva dentro el .ipa, que sale del proyecto de Xcode.
+        # Por eso los tres valores tienen que decir lo mismo.
+        BUNDLE_ID: com.mobilink.workplanner
         # Versión de tienda de iOS. El pubspec lleva la numeración de la APK
-        # —0.20.8+272 a día de hoy, con 272 entregas a las tablets— y NO se
+        # —0.20.9+273 a día de hoy, con 273 entregas a las tablets— y NO se
         # toca: bajarla para estrenar en iOS convertiría la siguiente APK en
         # una actualización «hacia atrás» que Android no instalaría encima.
         # Se pasa por flag.
+        #
+        # (TyreControl sí saca ya la versión del pubspec desde #335. Aquí se
+        # mantiene el 1.0 a propósito: es la primera subida y así estrena con
+        # un número de tienda limpio.)
         TALLER_BUILD_NAME: "1.0"
 
     working_directory: taller_app
