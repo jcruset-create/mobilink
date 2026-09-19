@@ -339,25 +339,11 @@ export async function guardarTextoConfig(empresaId: string, clave: string, valor
   );
 }
 
-/** Con forma de dominio: «proveedor.com», sin arroba ni espacios. */
-const DOMINIO = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
-
-/**
- * Direcciones o dominios, en minúsculas y sin espacios. Una lista vacía
- * significa «todas».
- *
- * Un dominio se guarda como «@proveedor.com», se escriba con arroba o sin
- * ella, y admite cualquier buzón de ese dominio (y de sus subdominios). Lo
- * que no es ni dirección ni dominio se descarta: un filtro mal escrito que se
- * colara dejaría el buzón sordo sin que nadie lo viera.
- */
-export function partirRemitentes(valor: string | null | undefined): string[] {
-  return (valor ?? "")
-    .split(/[,;\s]+/)
-    .map((v) => v.trim().toLowerCase())
-    .map((v) => (DOMINIO.test(v) ? `@${v}` : v))
-    .filter((v) => v.includes("@") && (v.startsWith("@") ? DOMINIO.test(v.slice(1)) : true));
-}
+// La regla pura vive en domain/, que no importa db.ts —este fichero sí— y por
+// tanto se puede probar sin PostgreSQL. Se reexporta para no romper a quien la
+// importe de aquí.
+export { partirRemitentes } from "./domain/correo/remitentes.ts";
+import { partirRemitentes } from "./domain/correo/remitentes.ts";
 
 export async function leerRemitentes(empresaId: string): Promise<string[]> {
   return partirRemitentes(await leerTextoConfig(empresaId, CLAVES_BUZON.remitentes));

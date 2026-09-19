@@ -49,6 +49,7 @@ import { simpleParser, type ParsedMail } from "mailparser";
 import pool from "../db.ts";
 import { fechaDeActivacion, leerRemitentes } from "./config.ts";
 import { parsearCorreo } from "./domain/correo/index.ts";
+import { cuerpoEnTexto, remitenteAceptado } from "./domain/correo/remitentes.ts";
 import { aCorreoEntrante, procesarCorreo, type AdjuntoEntrante } from "./ingesta.ts";
 import { guardarDocumento, hashDeFichero, rutaDocumento } from "./storage.ts";
 
@@ -147,42 +148,10 @@ function direccion(v: ParsedMail["from"]): string {
   return (v?.value?.[0]?.address ?? "").trim().toLowerCase();
 }
 
-/**
- * El cuerpo en texto plano.
- *
- * Therefore manda texto; si algún día llegara sólo HTML, se le quitan las
- * etiquetas y ya. No se intenta interpretar el HTML: el parser del correo lee
- * líneas, y una tabla HTML aplanada sigue teniendo sus líneas.
- */
-export function cuerpoEnTexto(correo: Pick<ParsedMail, "text" | "html">): string {
-  if (correo.text?.trim()) return correo.text;
-  if (typeof correo.html === "string" && correo.html.trim()) {
-    return correo.html
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/(p|div|tr|li|h\d)>/gi, "\n")
-      .replace(/<[^>]+>/g, "")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">");
-  }
-  return "";
-}
-
-/**
- * ¿Se acepta este remitente? Lista vacía = todos.
- *
- * Una entrada «@proveedor.com» acepta cualquier dirección de ese dominio y de
- * sus subdominios; el resto se compara exacta.
- */
-export function remitenteAceptado(de: string, remitentes: readonly string[]): boolean {
-  if (remitentes.length === 0) return true;
-  const direccion = de.toLowerCase().trim();
-  const dominio = direccion.slice(direccion.lastIndexOf("@") + 1);
-  return remitentes.some((r) =>
-    r.startsWith("@") ? dominio === r.slice(1) || dominio.endsWith(`.${r.slice(1)}`) : r === direccion
-  );
-}
+// Las reglas puras —quién puede escribir y cómo se lee el cuerpo— viven en
+// domain/, que no importa db.ts y por tanto se puede probar sin PostgreSQL.
+// Se reexportan para que quien las importe de aquí no note el cambio.
+export { cuerpoEnTexto, remitenteAceptado } from "./domain/correo/remitentes.ts";
 
 async function guardarAdjuntos(empresaId: string, correo: ParsedMail): Promise<AdjuntoEntrante[]> {
   const salida: AdjuntoEntrante[] = [];

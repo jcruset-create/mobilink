@@ -7,8 +7,14 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { cuerpoEnTexto, remitenteAceptado } from "./buzon.ts";
-import { partirRemitentes } from "./config.ts";
+// Se importa del dominio, no de buzon.ts ni de config.ts: esos dos importan
+// db.ts, que lanza al cargarse sin DATABASE_URL, y esta prueba fallaba siempre
+// en CI por eso, no por lo que comprueba.
+import {
+  cuerpoEnTexto,
+  partirRemitentes,
+  remitenteAceptado,
+} from "./domain/correo/remitentes.ts";
 
 describe("la lista de remitentes", () => {
   it("se parte por comas, puntos y coma o espacios, y se normaliza", () => {
