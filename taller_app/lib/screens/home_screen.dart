@@ -97,7 +97,16 @@ class _HomeScreenState extends State<HomeScreen> {
       length: tabs.length,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('WorkPlanner Taller'),
+          // El logotipo en la cabecera, no el rótulo. Va limitado en alto:
+          // la barra mide 56 y el dibujo es dos veces y media más ancho que
+          // alto, así que a 30 deja sitio de sobra para los tres botones de
+          // la derecha incluso en un móvil estrecho.
+          title: Image.asset(
+            'assets/logo-workplanner.png',
+            height: 30,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => const Text('WorkPlanner Taller'),
+          ),
           actions: [
             BotonPausa(api: widget.api),
             IconButton(icon: const Icon(Icons.refresh), onPressed: _load),

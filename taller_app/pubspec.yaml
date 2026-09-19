@@ -25,3 +25,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    # Logotipo de la cabecera. Va con transparencia y el texto en blanco: está
+    # hecho para el fondo oscuro de la app, no sirve sobre claro.
+    - assets/logo-workplanner.png
