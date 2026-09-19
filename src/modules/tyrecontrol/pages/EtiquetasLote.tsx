@@ -6,11 +6,19 @@ import {
 } from "../etiquetas/datos";
 import {
   clavesRepetidas, esRepetida, imprimible, normalizarSerie, porRevisar,
-  resumirLote, serieEditable,
+  resumirLote, serieEditable, sinLeer,
 } from "../etiquetas/revision";
+import { analizarPendientes, guardarLectura, leerSerieDeFoto } from "../etiquetas/analisis";
 
 /**
- * Revisar los números de un lote y mandar a imprimir.
+ * Analizar las fotos de un lote, revisar los números y mandar a imprimir.
+ *
+ * ── Quién lee los números ───────────────────────────────────────────────────
+ *
+ * La tablet SOLO hace fotos: el operario está delante de un palé y lo único
+ * que tiene que hacer es disparar. Al abrir el lote aquí, las fotos que nadie
+ * ha leído todavía se analizan solas, de una en una, y cada número aparece en
+ * cuanto llega.
  *
  * ── La regla de esta pantalla ───────────────────────────────────────────────
  *
@@ -33,10 +41,11 @@ export default function EtiquetasLote() {
   const [borrador, setBorrador] = useState<Record<string, string>>({});
   const [ampliada, setAmpliada] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
+  const [analizando, setAnalizando] = useState<{ hechas: number; total: number } | null>(null);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
 
-  async function cargar() {
+  async function cargar(): Promise<FotoEtiqueta[]> {
     setCargando(true);
     try {
       const [ls, fs] = await Promise.all([listarLotesEtiquetas(), listarFotosLote(loteId)]);
@@ -45,13 +54,34 @@ export default function EtiquetasLote() {
       // El borrador se rehace con lo que hay guardado: lo que ya confirmó
       // alguien manda sobre lo que leyó la IA.
       setBorrador(Object.fromEntries(fs.map((f) => [f.id, serieEditable(f)])));
+      return fs;
     } catch (e: any) {
       setError(e?.message || "No se ha podido leer el lote");
+      return [];
     } finally {
       setCargando(false);
     }
   }
-  useEffect(() => { void cargar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [loteId]);
+
+  /**
+   * Al abrir el lote se analiza lo que esté sin leer.
+   *
+   * Sin botón de por medio: el operario ya ha hecho su parte y lo que queda es
+   * trabajo de máquina. Se refresca al terminar para traer los números
+   * guardados; si una foto falla, se queda sin leer y se puede reintentar
+   * desde su propio botón.
+   */
+  async function cargarYAnalizar() {
+    const fotos = await cargar();
+    const cola = sinLeer(fotos);
+    if (cola.length === 0) return;
+    setAnalizando({ hechas: 0, total: cola.length });
+    await analizarPendientes(fotos, (hechas, total) => setAnalizando({ hechas, total }));
+    setAnalizando(null);
+    await cargar();
+  }
+
+  useEffect(() => { void cargarYAnalizar(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [loteId]);
 
   const repetidas = useMemo(() => clavesRepetidas(fotos), [fotos]);
   const resumen = useMemo(() => resumirLote(fotos), [fotos]);
@@ -65,6 +95,21 @@ export default function EtiquetasLote() {
       await cargar();
     } catch (e: any) {
       setError(e?.message || "No se ha podido guardar");
+    }
+  }
+
+  /** Volver a intentarlo con UNA foto: la que falló o la que no dio número. */
+  async function reintentarLectura(f: FotoEtiqueta) {
+    setMsg("");
+    try {
+      const lectura = await leerSerieDeFoto(f.foto_url);
+      if (!lectura) { setError("El lector no ha respondido"); return; }
+      // Lo ha pedido una persona sobre una foto que ya tiene estado, así que
+      // se escribe aunque no esté «pendiente».
+      await guardarLectura(f.id, lectura, false);
+      await cargar();
+    } catch (e: any) {
+      setError(e?.message || "No se ha podido leer la foto");
     }
   }
 
@@ -117,6 +162,11 @@ export default function EtiquetasLote() {
         )}
       </div>
 
+      {analizando && (
+        <div className="mb-3 rounded-lg border border-sky-700 bg-sky-900/30 px-3 py-2 text-sm text-sky-200">
+          Leyendo los números de las fotos… {analizando.hechas} de {analizando.total}
+        </div>
+      )}
       {error && <div className="mb-3 text-sm text-rose-400">{error}</div>}
       {msg && <div className="mb-3 text-sm text-emerald-400">{msg}</div>}
 
@@ -169,8 +219,21 @@ export default function EtiquetasLote() {
                 {porRevisar(f) && f.dudoso && (
                   <span className="text-amber-300">Número poco claro: compruébalo</span>
                 )}
-                {porRevisar(f) && !f.serie_detectada && (
-                  <span className="text-amber-300">Sin número leído: escríbelo a mano</span>
+                {f.estado === "pendiente" && (
+                  <span className="text-slate-400">Sin analizar todavía</span>
+                )}
+                {f.estado === "no_detectada" && (
+                  <span className="text-amber-300">
+                    No se ve el número: escríbelo a mano o vuelve a intentarlo
+                  </span>
+                )}
+                {porRevisar(f) && !f.serie_confirmada && (
+                  <button
+                    onClick={() => reintentarLectura(f)}
+                    className="text-sky-300 underline hover:text-sky-200"
+                  >
+                    Volver a leer
+                  </button>
                 )}
                 {repetida && (
                   <span className="font-bold text-rose-300">

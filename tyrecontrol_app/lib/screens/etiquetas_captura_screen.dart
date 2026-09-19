@@ -19,8 +19,14 @@ import '../services/supabase_service.dart';
 /// guarda igual y queda «por revisar» para que en el panel se escriba el
 /// número a mano. Perder la foto sería perder el trabajo hecho.
 ///
-/// Y no se confirma nada aquí: lo que la IA lee es una PROPUESTA. Confirmar e
-/// imprimir es de una persona, en el panel.
+/// ── Aquí NO se lee ningún número ────────────────────────────────────────────
+///
+/// La tablet solo hace fotos. Leer el número de serie y proponer la etiqueta
+/// es cosa del panel, que analiza solo las fotos que llegan. Es lo que le
+/// conviene a cada uno: el operario está de pie delante de un palé y necesita
+/// disparar y pasar a la siguiente, no esperar a un modelo de visión con la
+/// cobertura del patio; y la persona que revisa está sentada delante de una
+/// pantalla grande, donde la foto se ve y el número se comprueba.
 class EtiquetasCapturaScreen extends StatefulWidget {
   const EtiquetasCapturaScreen({super.key, required this.loteId, required this.codigo});
   final String loteId;
@@ -30,14 +36,11 @@ class EtiquetasCapturaScreen extends StatefulWidget {
   State<EtiquetasCapturaScreen> createState() => _EtiquetasCapturaScreenState();
 }
 
-/// Una foto en la cola. `serie` y `aviso` se rellenan cuando vuelve la lectura.
+/// Una foto en la cola.
 class _EnCola {
   _EnCola(this.file);
   final XFile file;
-  String estado = 'esperando'; // esperando · subiendo · leyendo · hecha · error
-  String? serie;
-  String? aviso;
-  bool dudoso = false;
+  String estado = 'esperando'; // esperando · subiendo · hecha · error
   String? error;
 }
 
@@ -87,28 +90,11 @@ class _EtiquetasCapturaScreenState extends State<EtiquetasCapturaScreen> {
       mostrar(() => e.estado = 'subiendo');
       final url = await TyreControlApi.subirFotoEtiqueta(e.file, loteId: widget.loteId);
 
-      mostrar(() => e.estado = 'leyendo');
-      final leido = await TyreControlApi.leerSerieEtiqueta(url);
+      // Queda «pendiente»: subida y sin leer. El panel la analiza al abrir el
+      // lote. Si se marcara de otra forma, el panel no sabría que le falta.
+      await TyreControlApi.guardarFotoEtiqueta(loteId: widget.loteId, fotoUrl: url);
 
-      final serie = leido['serie'] as String?;
-      final estado = (leido['estado'] as String?) ?? 'pendiente';
-      final dudoso = leido['dudoso'] == true;
-
-      await TyreControlApi.guardarFotoEtiqueta(
-        loteId: widget.loteId,
-        fotoUrl: url,
-        serieDetectada: serie,
-        confianza: leido['confianza'] as num?,
-        dudoso: dudoso,
-        estado: estado,
-      );
-
-      mostrar(() {
-        e.estado = 'hecha';
-        e.serie = serie;
-        e.dudoso = dudoso || estado == 'revisar';
-        e.aviso = leido['aviso'] as String?;
-      });
+      mostrar(() => e.estado = 'hecha');
     } catch (err) {
       // La foto no ha llegado a guardarse: se deja en la lista con su error y
       // un botón para reintentar. No se borra, porque la rueda ya está
@@ -186,7 +172,7 @@ class _EtiquetasCapturaScreenState extends State<EtiquetasCapturaScreen> {
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: Text(
-                'Los números se revisan y se imprimen desde el panel. '
+                'Los números se leen y se imprimen desde el panel. '
                 'Esto no da de alta los neumáticos.',
                 style: TextStyle(fontSize: 13, color: Colors.black54),
               ),
@@ -253,10 +239,9 @@ class _FilaFoto extends StatelessWidget {
     switch (item.estado) {
       case 'esperando':
       case 'subiendo':
-      case 'leyendo':
         icono = const SizedBox(
             width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5));
-        texto = item.estado == 'leyendo' ? 'Leyendo el número…' : 'Subiendo la foto…';
+        texto = 'Subiendo la foto…';
         break;
       case 'error':
         icono = const Icon(Icons.error_outline, color: Colors.redAccent);
@@ -264,18 +249,8 @@ class _FilaFoto extends StatelessWidget {
         color = Colors.redAccent;
         break;
       default:
-        if (item.serie == null) {
-          icono = const Icon(Icons.help_outline, color: Colors.orange);
-          texto = item.aviso ?? 'Sin número: se escribirá en el panel';
-          color = Colors.orange.shade800;
-        } else if (item.dudoso) {
-          icono = const Icon(Icons.warning_amber_outlined, color: Colors.orange);
-          texto = '${item.serie}  · por comprobar';
-          color = Colors.orange.shade800;
-        } else {
-          icono = const Icon(Icons.check_circle_outline, color: Colors.green);
-          texto = item.serie!;
-        }
+        icono = const Icon(Icons.check_circle_outline, color: Colors.green);
+        texto = 'Foto guardada';
     }
 
     return ListTile(
