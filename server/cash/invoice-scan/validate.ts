@@ -219,6 +219,68 @@ export function validar(
   }
 
   /*
+   * ── El total CORROBORADO manda sobre lo que el modelo opine de sí mismo ───
+   *
+   * La confianza que devuelve el modelo es una sola fuente, y es la suya. Pero
+   * en este papel hay hasta dos comprobaciones independientes del total:
+   *
+   *   · El resguardo de la tarjeta dice el mismo importe.
+   *   · La base más el IVA lo suman.
+   *
+   * Dos lecturas que coinciden valen más que una que se declara segura. Sin
+   * esto pasaba lo que tenía que pasar: un albarán donde el total se leyó bien
+   * Y cuadraba con el ticket al céntimo dejaba la casilla del importe VACÍA
+   * —porque el modelo se había puesto un 0,6— y el botón decía «Confirmar
+   * cobro de 0,00 €». La pantalla tenía la prueba delante y la tiraba.
+   *
+   * Solo SUBE la confianza hasta el umbral de rellenar, nunca la baja: lo que
+   * ya venía por debajo por otros motivos sigue su camino.
+   */
+  const cuadraConElRecibo =
+    extraccion.recibo.detectado &&
+    importeRecibo != null &&
+    totalCentimos != null &&
+    Math.abs(importeRecibo - totalCentimos) <= toleranciaCentimos;
+
+  const cuadraElIva =
+    baseCentimos != null &&
+    ivaCentimos != null &&
+    totalCentimos != null &&
+    Math.abs(baseCentimos + ivaCentimos - totalCentimos) <= 1;
+
+  const totalCorroborado = cuadraConElRecibo || cuadraElIva;
+  const confianzaDelTotal = totalCorroborado
+    ? Math.max(extraccion.confianza.total, UMBRALES.rellenar)
+    : extraccion.confianza.total;
+
+  /*
+   * Y lo que se lee pero NO se rellena, se dice.
+   *
+   * Un campo que el modelo leyó y que se descarta por poca seguridad dejaba la
+   * casilla vacía y ningún aviso: quien mira ve un hueco y no sabe si es que
+   * no había nada en el papel o que no nos fiamos. Son dos cosas distintas y
+   * la segunda se arregla mirando el papel un segundo.
+   *
+   * No se rellena igualmente —un número inventado en un campo que luego
+   * controla duplicados es peor que un hueco— pero se enseña lo que se leyó
+   * para que se pueda copiar si es bueno.
+   */
+  if (extraccion.numeroFactura && extraccion.confianza.numeroFactura < UMBRALES.revisar) {
+    avisos.push({
+      codigo: "LEIDO_SIN_SEGURIDAD",
+      mensaje: `El número del documento se ha leído como «${extraccion.numeroFactura}», pero con poca seguridad, así que no se ha rellenado. Compruébalo y escríbelo.`,
+      grave: false,
+    });
+  }
+  if (totalCentimos != null && !totalCorroborado && extraccion.confianza.total < UMBRALES.revisar) {
+    avisos.push({
+      codigo: "LEIDO_SIN_SEGURIDAD",
+      mensaje: `El total se ha leído como ${formatearEuros(totalCentimos)} €, pero con poca seguridad y sin nada con qué contrastarlo, así que no se ha rellenado. Compruébalo y escríbelo.`,
+      grave: false,
+    });
+  }
+
+  /*
    * La degradación. Cualquier aviso grave quita la preselección: la pantalla
    * puede seguir proponiendo la forma —es información útil— pero no la marca
    * sola, porque marcarla es justo lo que hace que nadie la mire.
@@ -244,7 +306,7 @@ export function validar(
 
   return {
     referencia: campo(extraccion.numeroFactura, extraccion.confianza.numeroFactura, null),
-    importeCentimos: campo(totalCentimos, extraccion.confianza.total, null),
+    importeCentimos: campo(totalCentimos, confianzaDelTotal, null),
     cliente: campo(nombreCliente, extraccion.confianza.cliente, null),
     proveedor: campo(extraccion.emisor.nombre, extraccion.confianza.emisor, null),
     concepto: campo(extraccion.concepto, extraccion.confianza.concepto, null),

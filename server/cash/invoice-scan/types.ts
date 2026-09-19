@@ -159,6 +159,8 @@ export type CampoPropuesto<T> = {
 
 export type CodigoAviso =
   | "NO_ES_FACTURA"
+  /** Se leyó, pero con tan poca seguridad que no se ha rellenado. */
+  | "LEIDO_SIN_SEGURIDAD"
   /** Es un justificante válido, pero NO una factura: albarán, ticket, parte… */
   | "TIPO_DE_DOCUMENTO"
   | "VARIAS_FACTURAS"

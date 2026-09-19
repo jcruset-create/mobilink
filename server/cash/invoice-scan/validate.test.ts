@@ -413,6 +413,104 @@ describe("Caso D · B2_0004524 · un ALBARÁN, que vale igual que una factura", 
   });
 });
 
+describe("lo que se lee pero el modelo no se cree", () => {
+  /*
+   * EL CASO DE LA PANTALLA DEL 19/09: la casilla del importe vacía y el botón
+   * diciendo «Confirmar cobro de 0,00 €», sin un solo aviso que lo explicara.
+   *
+   * No era que no se leyera el total: se leyó, y además CUADRABA con el ticket
+   * de la tarjeta al céntimo —la propia pantalla lo decía—. Lo que pasaba es
+   * que el modelo se había puesto poca nota a sí mismo y `campo()` tiraba el
+   * valor. La prueba estaba delante y se descartaba.
+   */
+  const flojo = (extra: Partial<ExtraccionCruda["confianza"]>): ExtraccionCruda => ({
+    ...ALBARAN,
+    confianza: { ...ALBARAN.confianza, ...extra },
+  });
+
+  it("si el total cuadra con el ticket, se rellena aunque el modelo dude", () => {
+    const p = propuesta(flojo({ total: 0.6 }));
+    expect(p.importeCentimos.valor).toBe(19211);
+    expect(p.importeCentimos.estado).toBe("RELLENAR");
+  });
+
+  it("y también si la base más el IVA lo suman, sin ticket ninguno", () => {
+    /*
+     * Dos comprobaciones independientes y basta con una. Aquí no hay resguardo
+     * con el que contrastar, pero 158,77 + 33,34 = 192,11 lo dice igual.
+     */
+    const sinRecibo: ExtraccionCruda = {
+      ...flojo({ total: 0.5 }),
+      recibo: { ...ALBARAN.recibo, detectado: false, importe: null },
+    };
+    expect(propuesta(sinRecibo).importeCentimos.valor).toBe(19211);
+  });
+
+  it("el ticket solo, SIN base ni IVA, ya corrobora", () => {
+    /*
+     * Hacía falta este caso aparte: en el albarán entero cuadran las DOS cosas
+     * a la vez, así que una prueba con él no distingue si el ticket cuenta o
+     * si todo el trabajo lo hacía el IVA. Quitando la base y la cuota, el
+     * resguardo se queda solo — y tiene que bastar.
+     */
+    const soloTicket: ExtraccionCruda = {
+      ...flojo({ total: 0.5 }),
+      totales: { ...ALBARAN.totales, base_imponible: null, iva_importe: null },
+    };
+    expect(propuesta(soloTicket).importeCentimos.valor).toBe(19211);
+  });
+
+  it("corroborar no rebaja una confianza que ya era alta", () => {
+    /*
+     * Solo sube. Un 0,99 que se quedara en 0,90 al corroborarlo sería una
+     * mentira pequeña en el rastro que luego se audita, y de las que no se
+     * notan hasta que alguien se apoya en ese número.
+     */
+    expect(propuesta(ALBARAN).importeCentimos.confianza).toBe(0.99);
+  });
+
+  it("sin nada que lo corrobore NO se rellena, pero se DICE lo que se leyó", () => {
+    /*
+     * No se rellena: un importe adivinado que alguien confirma sin mirar es
+     * peor que un hueco. Pero el hueco mudo era el fallo — quien mira no sabía
+     * si es que el papel no lo ponía o si es que no nos fiábamos.
+     */
+    const aOscuras: ExtraccionCruda = {
+      ...flojo({ total: 0.5 }),
+      recibo: { ...ALBARAN.recibo, detectado: false, importe: null },
+      totales: { ...ALBARAN.totales, base_imponible: null, iva_importe: null },
+    };
+    const p = propuesta(aOscuras);
+    expect(p.importeCentimos.valor).toBeNull();
+
+    const aviso = p.avisos.find((a) => a.codigo === "LEIDO_SIN_SEGURIDAD");
+    expect(aviso).toBeDefined();
+    expect(aviso!.mensaje).toContain("192,11");
+    expect(aviso!.grave).toBe(false);
+  });
+
+  it("el número leído con poca seguridad también se enseña", () => {
+    const p = propuesta(flojo({ numero_factura: 0.5 }));
+    expect(p.referencia.valor).toBeNull();
+
+    const aviso = p.avisos.find((a) => a.codigo === "LEIDO_SIN_SEGURIDAD");
+    expect(aviso!.mensaje).toContain("B2_0004524");
+  });
+
+  it("la corroboración solo SUBE: no rescata un total que no cuadra", () => {
+    /*
+     * Si el ticket dice otro importe, eso ya tiene su aviso grave y el total
+     * no queda corroborado por ahí. Que no se cuele de rebote.
+     */
+    const descuadrado: ExtraccionCruda = {
+      ...flojo({ total: 0.5 }),
+      recibo: { ...ALBARAN.recibo, importe: "200,00" },
+      totales: { ...ALBARAN.totales, base_imponible: null, iva_importe: null },
+    };
+    expect(propuesta(descuadrado).importeCentimos.valor).toBeNull();
+  });
+});
+
 describe("documentos que no son lo que parecen", () => {
   it("si no es una factura, se avisa y no se preselecciona nada", () => {
     const p = propuesta({ ...A, es_factura: false });
