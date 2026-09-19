@@ -34,16 +34,21 @@ son los definitivos y los dos primeros son **inmutables** una vez subida la app.
 
 | | |
 |---|---|
-| Bundle id | `com.mobilink.taller` |
+| Bundle id | `com.mobilink.workplanner` |
 | Nombre visible | WorkPlanner Taller |
 | Mínimo | iOS 13.0, que es lo que pide el motor de Flutter 3.35.4; los plugins de esta app se conforman con menos |
 | Flutter | 3.35.4, fijo también en Codemagic |
 
-El bundle id coincide con el `applicationId` de Android, pero **por decisión, no
-porque sea el mismo dato**: son dos identificadores de dos tiendas distintas y
-cada uno es inmutable por su cuenta. En las otras apps de la casa ni siquiera
-coinciden (`flutter_app` es `com.example.sea_tarragona_operario` en Android y
+**El bundle id de iOS NO es el `applicationId` de Android.** Aquí es
+`com.mobilink.workplanner`; en Android, `com.mobilink.taller`. Son dos
+identificadores de dos tiendas distintas, cada uno inmutable por su cuenta, y
+manda el de la ficha que ya existe en App Store Connect («Mobilink
+WorkPlanner»). No es una excepción de esta app: en `flutter_app` tampoco
+coinciden (`com.example.sea_tarragona_operario` en Android,
 `com.mobilink.assist` en iOS).
+
+Cambiar uno **no** es cambiar el otro, y no son intercambiables: tocar el de
+Android obligaría a desinstalar la app de todas las tablets.
 
 El mínimo de iOS y la versión de Flutter van atados: Flutter 3.47 sube el mínimo
 del motor a iOS 15 y entonces `pod install` falla con «required a higher minimum
@@ -86,7 +91,7 @@ git tag taller-ios-1 && git push origin taller-ios-1
 
 Antes del primer build hacen falta tres cosas **fuera del repositorio**:
 
-1. el App ID `com.mobilink.taller` dado de alta en Apple Developer,
+1. el App ID `com.mobilink.workplanner` dado de alta en Apple Developer,
 2. la ficha de la app en App Store Connect con ese mismo bundle id,
 3. que la clave de App Store Connect llamada **Mobilink Assist** en Codemagic
    tenga acceso a esa app (rol App Manager o superior). Se reutiliza esa clave,
