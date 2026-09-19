@@ -1,0 +1,64 @@
+# WorkPlanner Taller — iOS 13.0.
+#
+# Aquí no hay Firebase, así que el mínimo lo marca el propio motor de Flutter:
+# 3.35.4 pide iOS 13.0. Los plugins de esta app piden menos (image_picker y
+# shared_preferences 12.0, flutter_image_compress 9.0; hive y http son Dart
+# puro y no traen pod), así que 13.0 los cubre a todos y coincide con
+# IPHONEOS_DEPLOYMENT_TARGET del proyecto Xcode.
+#
+# Este número va atado a la versión de Flutter del workflow de Codemagic. Subir
+# Flutter sube el mínimo del motor —3.47 ya pide iOS 15— y entonces `pod
+# install` falla con «required a higher minimum deployment target»: los dos
+# valores se cambian juntos o no se cambia ninguno.
+#
+# El fichero va COMMITEADO a propósito. Flutter solo lo genera al compilar en
+# un Mac, y aquí no hay ninguno: el workflow hace `cd ios && pod install` en el
+# primer paso, y sin Podfile ese paso muere antes de empezar.
+platform :ios, '13.0'
+
+# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first"
+  end
+
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
+end
+
+require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+flutter_ios_podfile_setup
+
+target 'Runner' do
+  use_frameworks!
+
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_ios_build_settings(target)
+
+    target.build_configurations.each do |config|
+      # Los pods heredan el mínimo del proyecto: sin esto, alguno se queda con
+      # el suyo (9.0 en flutter_image_compress) y Xcode avisa en cada build.
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+    end
+  end
+end
