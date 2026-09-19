@@ -289,7 +289,11 @@ export async function loadLogsFromBackend() {
 }
 
 export async function loadQuickTemplatesFromBackend() {
-  const response = await fetchWithTimeout(`${API_BASE}/api/quick-templates`);
+  // Con credenciales: este endpoint dejó de ser público. Sin la cabecera
+  // devuelve 401 y la pantalla se queda sin operaciones.
+  const response = await fetchWithTimeout(`${API_BASE}/api/quick-templates`, {
+    headers: getAdminHeaders(),
+  });
 
   if (!response.ok) {
     throw new Error(

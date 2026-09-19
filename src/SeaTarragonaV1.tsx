@@ -828,7 +828,10 @@ useEffect(() => {
 useEffect(() => {
   async function loadQuickTemplates() {
     try {
-      const response = await fetchWithTimeout(`${API_BASE}/api/quick-templates`);
+      // Con credenciales: este endpoint dejó de ser público.
+      const response = await fetchWithTimeout(`${API_BASE}/api/quick-templates`, {
+        headers: getAdminHeaders(),
+      });
       const data = await response.json();
 
       setQuickTemplates(

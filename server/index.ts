@@ -11683,7 +11683,24 @@ app.get("/api/rules", protectWhenStrict(requirePanelRole), async (_req, res) => 
    QUICK TEMPLATES
 ========================================================= */
 
-app.get("/api/quick-templates", protectWhenStrict(requirePanelRole), async (_req, res) => {
+/*
+ * El catálogo de operaciones del taller, con guarda de verdad.
+ *
+ * Iba con `protectWhenStrict`, que no hace NADA mientras `AUTH_MODE` no sea
+ * «strict» —y no lo es—. En la práctica era público: cualquiera con la URL
+ * leía las plantillas con su `unitPrice` dentro, o sea la tarifa del taller
+ * (la alineación de camión, 143,50 €) abierta en internet.
+ *
+ * Se le pone `requirePanelRole` directo, que admite los cuatro roles del
+ * panel, TVs incluidas. Las dos llamadas del navegador pasan a mandar
+ * `x-admin-token` —`loadQuickTemplatesFromBackend` y la carga inicial de
+ * SeaTarragonaV1—, que es de donde el servidor saca el rol: `sea-role` vive
+ * solo en el navegador y nunca viaja.
+ *
+ * Los otros tres métodos ya tenían guarda real (supervisor para crear,
+ * administrador para modificar y borrar); el agujero era solo la lectura.
+ */
+app.get("/api/quick-templates", requirePanelRole, async (_req, res) => {
   try {
     const defaults = [
       {
