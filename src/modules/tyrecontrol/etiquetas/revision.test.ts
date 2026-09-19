@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { FotoEtiqueta } from "./datos";
 import {
   claveSerie, normalizarSerie, serieEditable, imprimible, porRevisar,
-  clavesRepetidas, esRepetida, resumirLote,
+  clavesRepetidas, esRepetida, resumirLote, sinLeer,
 } from "./revision";
 
 const foto = (over: Partial<FotoEtiqueta> = {}): FotoEtiqueta => ({
@@ -121,5 +121,27 @@ describe("los recuentos de la cabecera", () => {
     const v = resumirLote([]);
     expect(v.total).toBe(0);
     expect(v.repetidas).toBe(0);
+  });
+});
+
+describe("qué fotos hay que analizar", () => {
+  it("las que la tablet acaba de subir y nadie ha leído", () => {
+    expect(sinLeer([foto({ id: "1" }), foto({ id: "2" })]).length).toBe(2);
+  });
+
+  it("una ya leída NO se vuelve a analizar: costaría otra llamada para el mismo número", () => {
+    expect(sinLeer([foto({ estado: "detectada", serie_detectada: "A1" })])).toEqual([]);
+    expect(sinLeer([foto({ estado: "revisar", serie_detectada: "A1" })])).toEqual([]);
+    expect(sinLeer([foto({ estado: "no_detectada" })])).toEqual([]);
+  });
+
+  it("y mucho menos una que una persona ya confirmó, imprimió o descartó", () => {
+    for (const estado of ["confirmada", "impresa", "descartada"] as const) {
+      expect(sinLeer([foto({ estado })])).toEqual([]);
+    }
+  });
+
+  it("un lote vacío no da trabajo", () => {
+    expect(sinLeer([])).toEqual([]);
   });
 });
