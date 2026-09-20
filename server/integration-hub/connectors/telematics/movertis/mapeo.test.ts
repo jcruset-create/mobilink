@@ -487,6 +487,26 @@ describe("resumenesDe()", () => {
     expect(resumenesDe(RESUMEN, ["26053725", "30089320"])).toEqual([]);
   });
 
+  it("un mes parado: distancia 0 es un dato, odómetro 0 es «sin lectura»", () => {
+    // Caso real: unidad 26219006 (7724 KBM), ventana del 15/3/2026. Ese domingo
+    // no hizo ningún viaje y Movertis devolvió los tres campos a cero, mientras
+    // el autobús marcaba 1.245.311 km. El cero de la distancia es verdad; el
+    // del odómetro habría dejado a un vehículo de 1,2 millones de km a cero.
+    const r = resumenesDe([{ unit: 26219006, initial_mileage: 0, final_mileage: 0, total_mileage: 0, trips: [] }], ["26219006"]);
+    expect(r[0].total).toBe(0);
+    expect(r[0].inicial).toBeUndefined();
+    expect(r[0].final).toBeUndefined();
+  });
+
+  it("el centinela del dispositivo tampoco pasa por odómetro", () => {
+    const r = resumenesDe(
+      [{ unit: 1, initial_mileage: -348201.3876, final_mileage: 520322, total_mileage: 7842 }],
+      ["1"],
+    );
+    expect(r[0].inicial).toBeUndefined();
+    expect(r[0].final).toBe(520322);
+  });
+
   it("una entrada sin ningún kilometraje no es un resumen", () => {
     expect(resumenesDe([{ unit: 1, max_speed: 90 }], ["1"])).toEqual([]);
   });
