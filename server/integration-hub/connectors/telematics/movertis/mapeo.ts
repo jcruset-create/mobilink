@@ -610,12 +610,29 @@ function unidadDe(fila: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+/**
+ * Los odómetros del resumen pasan por `valorMovertis`; la distancia NO.
+ *
+ * Son dos ceros distintos y confundirlos ensucia el histórico:
+ *
+ *   · `total_mileage: 0` es un CERO LEGÍTIMO. El autobús no se movió en esa
+ *     ventana —un domingo, un mes en taller— y eso es un dato.
+ *   · `initial_mileage: 0` / `final_mileage: 0` NO son un cuentakilómetros a
+ *     cero: son la forma que tiene Movertis de decir que no hay lectura, la
+ *     misma que ya se respeta en `counters.odometer` (ver `SIN_DATO`).
+ *
+ * Y salen juntos todo el rato: pedido el 15/3/2026 con ventana de ese día, un
+ * autobús que marcaba 1.245.311 km devolvió `{total: 0, initial: 0, final: 0}`
+ * porque no hizo ningún viaje ese domingo. Guardar ese 0 como odómetro deja a
+ * un vehículo con 1,2 millones de kilómetros escrito a cero, y con él la vida
+ * de todos sus neumáticos.
+ */
 function aResumen(fila: Record<string, unknown>, unit: string): ResumenViajeCrudo {
   return {
     unit,
     total: numero(fila.total_mileage),
-    inicial: numero(fila.initial_mileage),
-    final: numero(fila.final_mileage),
+    inicial: valorMovertis(fila.initial_mileage),
+    final: valorMovertis(fila.final_mileage),
     viajes: Array.isArray(fila.trips) ? fila.trips.length : numero(fila.trips),
     raw: fila,
   };
