@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Gauge, Hourglass } from "lucide-react";
+import { Gauge, History, Hourglass } from "lucide-react";
 import {
-  estadoKilometraje, estadoRelleno, pararRelleno, rellenarKilometraje, sincronizarKilometraje,
-  type EstadoCuenta, type ResumenCuentaMensual, type TareaRelleno,
+  estadoKilometraje, estadoRelleno, estadoRevisiones, pararRelleno, pararRevisiones,
+  rellenarKilometraje, rellenarRevisiones, sincronizarKilometraje,
+  type EstadoCuenta, type ResumenCuentaMensual, type TareaRelleno, type TareaRevisiones,
 } from "../services/kilometrajeMensual";
 import type { CuentaTelematica } from "../services/conciliacion";
 
@@ -37,6 +38,8 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
   };
   const [desdeRelleno, setDesdeRelleno] = useState(mesAnteriorClave);
   const [hastaRelleno, setHastaRelleno] = useState(mesAnteriorClave);
+  // El otro relleno: el odómetro que marcaba cada autobús en cada revisión.
+  const [revs, setRevs] = useState<TareaRevisiones | null>(null);
 
   async function cargarEstado() {
     if (!cuenta) return;
@@ -54,10 +57,47 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
     } catch { /* que no se pierda el panel por no poder mirar el progreso */ }
   }
 
+  async function cargarRevs() {
+    try {
+      setRevs((await estadoRevisiones(empresaId)).tarea);
+    } catch { /* que no se pierda el panel por no poder mirar el progreso */ }
+  }
+
   useEffect(() => {
-    void cargarEstado(); void cargarTarea();
+    void cargarEstado(); void cargarTarea(); void cargarRevs();
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [empresaId, cuenta?.connectorKey, cuenta?.accountKey]);
+
+  useEffect(() => {
+    if (revs?.estado !== "en_curso") return;
+    const t = setInterval(() => void cargarRevs(), 10_000);
+    return () => clearInterval(t);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [revs?.estado, empresaId]);
+
+  async function lanzarRevisiones() {
+    if (!confirm(
+      "Se buscará en la telemática el odómetro que marcaba cada autobús en el momento de cada " +
+      "revisión que no tenga kilometraje, de UNA EN UNA y a una revisión cada 20 segundos.\n\n" +
+      "Un número solo se escribe si dos consultas distintas coinciden y encaja con las revisiones " +
+      "vecinas y con el mes ya sincronizado. Nunca pisa un kilometraje puesto a mano.\n\n" +
+      "Son horas, sigue en el servidor y puedes pararlo. ¿Seguir?",
+    )) return;
+    setError("");
+    try {
+      setRevs((await rellenarRevisiones({ empresaId })).tarea);
+    } catch (e: any) {
+      setError(e?.message ?? "No se pudo arrancar el relleno de revisiones");
+    }
+  }
+
+  async function detenerRevisiones() {
+    try {
+      setRevs((await pararRevisiones({ empresaId })).tarea);
+    } catch (e: any) {
+      setError(e?.message ?? "No se pudo parar");
+    }
+  }
 
   // Mientras hay relleno, se refresca solo: son horas, y nadie va a estar
   // pulsando F5. Cada diez segundos es a nuestra base, no al proveedor.
@@ -215,6 +255,52 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
           {tarea.nota && <span className="text-slate-400 sm:col-span-3 lg:col-span-4">{tarea.nota}</span>}
           {!!tarea.muestraErrores?.length && (
             <span className="text-amber-300 sm:col-span-3 lg:col-span-4">Primer error: {tarea.muestraErrores[0]}</span>
+          )}
+        </div>
+      )}
+
+      {/* El odómetro de cada revisión del histórico. */}
+      <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-700 pt-3">
+        <div className="flex items-center gap-1 font-bold text-slate-200">
+          <History className="h-4 w-4" /> Kilómetros del histórico de revisiones
+        </div>
+        <span className="text-slate-400">una revisión cada 20 s</span>
+        {revs?.estado === "en_curso" ? (
+          <button
+            onClick={() => void detenerRevisiones()}
+            className="ml-auto rounded-lg border border-amber-600 px-3 py-1.5 font-bold text-amber-300 hover:bg-amber-500/10"
+          >
+            Parar
+          </button>
+        ) : (
+          <button
+            onClick={() => void lanzarRevisiones()}
+            className="ml-auto rounded-lg border border-sky-600 px-3 py-1.5 font-bold text-sky-300 hover:bg-sky-500/10"
+          >
+            Rellenar revisiones
+          </button>
+        )}
+      </div>
+
+      {revs && (
+        <div className="mt-2 grid gap-x-4 gap-y-1 text-slate-300 sm:grid-cols-3 lg:grid-cols-4">
+          <span>Estado: <b>{revs.estado.replace("_", " ")}</b></span>
+          <span>Escritas: <b>{revs.escritas}</b> de {revs.totalAlEmpezar}</span>
+          <span>
+            Sin lectura: <b>{revs.sinLectura}</b>
+            {" · "}rechazadas: <b className={revs.rechazadas ? "text-amber-300" : ""}>{revs.rechazadas}</b>
+          </span>
+          <span>Queda: <b>{revs.restanteEnPalabras}</b></span>
+          {revs.ultima && (
+            <span className="sm:col-span-3 lg:col-span-4">
+              Última: <b>{revs.ultima.fecha}</b> → {revs.ultima.resultado}
+            </span>
+          )}
+          {revs.nota && <span className="text-slate-400 sm:col-span-3 lg:col-span-4">{revs.nota}</span>}
+          {!!revs.muestraMotivos?.length && (
+            <span className="text-amber-300 sm:col-span-3 lg:col-span-4">
+              Primer descarte: {revs.muestraMotivos[0]}
+            </span>
           )}
         </div>
       )}

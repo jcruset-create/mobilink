@@ -35,6 +35,9 @@ import { compararMeses, mesDe, mesesEntre, ZONA_HORARIA_POR_DEFECTO, type Mes } 
 import { resumirKilometraje } from "./resumen.ts";
 import { iniciarRelleno, pararRelleno, tareasDeEmpresa } from "./rellenoWorker.ts";
 import { intervaloValido } from "./relleno.ts";
+import {
+  estadoRellenoRevisiones, iniciarRellenoRevisiones, pararRellenoRevisiones,
+} from "../kilometrajeRevisiones/worker.ts";
 
 /** Cuántos meses se pueden pedir de golpe a mano. Más es un job, no un botón. */
 const MAX_MESES_MANUAL = 12;
@@ -256,6 +259,52 @@ export function createKilometrajeMensualRouter(): Router {
       const accountKey = String(req.body?.accountKey ?? "").trim();
       const tarea = pararRelleno(empresaId, connectorKey, accountKey);
       if (!tarea) return res.status(404).json({ error: "No hay relleno en marcha para esa cuenta" });
+      res.json({ tarea });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Relleno del kilometraje del HISTÓRICO de revisiones.
+   *
+   * Hermano del de arriba y con el mismo ritmo, pero otro dato: aquel llena
+   * los kilómetros por mes de la flota; este pone el odómetro que marcaba cada
+   * autobús en el momento de cada revisión. El método y sus trampas están en
+   * `HistoricOdometerService.ts`; las cotas, en `kilometrajeRevisiones/`.
+   *
+   * Cuerpo: { empresaId?, intervaloSegundos? }
+   */
+  router.post("/revisiones", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const tarea = await iniciarRellenoRevisiones({
+        empresaId,
+        intervaloSegundos: req.body?.intervaloSegundos,
+      });
+      res.json({ tarea });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.get("/revisiones", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      res.json({ empresaId, tarea: estadoRellenoRevisiones(empresaId) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.post("/revisiones/parar", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const tarea = pararRellenoRevisiones(empresaId);
+      if (!tarea) return res.status(404).json({ error: "No hay relleno de revisiones en marcha" });
       res.json({ tarea });
     } catch (e) {
       fallo(res, e);
