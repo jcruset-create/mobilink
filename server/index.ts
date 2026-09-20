@@ -79,6 +79,7 @@ import { createKilometrajeActualRouter } from "./tyrecontrol/kilometrajeActual/r
 import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
 import { startPresenciaBases } from "./tyrecontrol/presencia/worker.ts";
 import { startRellenoKilometraje } from "./tyrecontrol/kilometrajeMensual/rellenoWorker.ts";
+import { startRellenoRevisiones } from "./tyrecontrol/kilometrajeRevisiones/worker.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
 import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
@@ -19685,6 +19686,7 @@ initDb()
       // Rellenos de km mensuales que un despliegue dejó a medias. Son horas de
       // peticiones a gotas: sin esto, cada reinicio los pararía en silencio.
       startRellenoKilometraje();
+      startRellenoRevisiones(); // kilometraje del histórico de revisiones
     });
   })
   .catch((error) => {

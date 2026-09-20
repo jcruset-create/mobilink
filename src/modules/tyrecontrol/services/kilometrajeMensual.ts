@@ -125,6 +125,34 @@ export const estadoRelleno = (empresaId?: string) =>
 export const pararRelleno = (b: { empresaId?: string; connectorKey: string; accountKey: string }) =>
   pedir<{ tarea: TareaRelleno }>("/relleno/parar", { method: "POST", body: JSON.stringify(b) });
 
+/** El relleno del kilometraje del histórico de revisiones. */
+export interface TareaRevisiones {
+  empresaId: string;
+  intervaloSegundos: number;
+  estado: "en_curso" | "terminada" | "parada" | "abandonada";
+  iniciadaMs: number;
+  ultimoTickMs: number | null;
+  totalAlEmpezar: number;
+  pendientes: number;
+  escritas: number;
+  sinLectura: number;
+  rechazadas: number;
+  minutosRestantes: number;
+  restanteEnPalabras: string;
+  ultima: { fecha: string; resultado: string } | null;
+  muestraMotivos: string[];
+  nota?: string;
+}
+
+export const rellenarRevisiones = (b: { empresaId?: string; intervaloSegundos?: number }) =>
+  pedir<{ tarea: TareaRevisiones }>("/revisiones", { method: "POST", body: JSON.stringify(b) });
+
+export const estadoRevisiones = (empresaId?: string) =>
+  pedir<{ empresaId: string; tarea: TareaRevisiones | null }>(`/revisiones${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
+
+export const pararRevisiones = (b: { empresaId?: string }) =>
+  pedir<{ tarea: TareaRevisiones }>("/revisiones/parar", { method: "POST", body: JSON.stringify(b) });
+
 /** «sep 2026». */
 export function nombreDeMes(year: number, month: number): string {
   return new Date(Date.UTC(year, month - 1, 15)).toLocaleDateString("es-ES", { month: "short", year: "numeric", timeZone: "UTC" });
