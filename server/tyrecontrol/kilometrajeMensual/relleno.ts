@@ -151,6 +151,22 @@ export function enPalabras(minutos: number): string {
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 
+/**
+ * «2026-01» → `{ year: 2026, month: 1 }`.
+ *
+ * El inverso de `claveDeMes`. Hace falta porque la tarea se guarda con los
+ * meses en texto y al reanudarla tras un reinicio hay que volver a tenerlos:
+ * un mes que no se pueda leer se descarta en vez de adivinarse.
+ */
+export function mesDesdeClave(clave: string): Mes | null {
+  const m = /^(\d{4})-(\d{1,2})$/.exec(String(clave ?? "").trim());
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return null;
+  return { year, month };
+}
+
 export function intervaloValido(v: unknown): number {
   const n = Number(v);
   if (!Number.isFinite(n) || n < INTERVALO_SEGUNDOS_MINIMO) return INTERVALO_SEGUNDOS_POR_DEFECTO;

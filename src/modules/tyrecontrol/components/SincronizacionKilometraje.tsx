@@ -16,9 +16,10 @@ import type { CuentaTelematica } from "../services/conciliacion";
  * minutos; si el navegador se cansa antes, el servidor sigue y el resultado
  * queda en «Última pasada».
  *
- * Debajo, la otra herramienta: rellenar un mes viejo de la flota entera a
- * gotas, una unidad cada veinte segundos. Son horas, así que la lleva el
- * servidor y aquí solo se arranca, se mira el progreso y se para.
+ * Debajo, la otra herramienta: rellenar meses viejos de la flota entera a
+ * gotas, una unidad cada veinte segundos. Son horas —o días, con varios
+ * meses—, así que la lleva el servidor y aquí solo se arranca, se mira el
+ * progreso y se para.
  */
 export default function SincronizacionKilometraje({ empresaId, cuenta }: { empresaId: string; cuenta: CuentaTelematica | null }) {
   const [estado, setEstado] = useState<EstadoCuenta | null>(null);
@@ -28,12 +29,14 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
   const [error, setError] = useState("");
   // Relleno lento: un mes viejo de la flota entera, a gotas.
   const [tarea, setTarea] = useState<TareaRelleno | null>(null);
-  const [mesRelleno, setMesRelleno] = useState(() => {
+  const mesAnteriorClave = () => {
     const a = new Date();
     const m = a.getMonth() === 0 ? 12 : a.getMonth();
     const y = a.getMonth() === 0 ? a.getFullYear() - 1 : a.getFullYear();
     return `${y}-${String(m).padStart(2, "0")}`;
-  });
+  };
+  const [desdeRelleno, setDesdeRelleno] = useState(mesAnteriorClave);
+  const [hastaRelleno, setHastaRelleno] = useState(mesAnteriorClave);
 
   async function cargarEstado() {
     if (!cuenta) return;
@@ -65,21 +68,29 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [tarea?.estado, empresaId, cuenta?.connectorKey, cuenta?.accountKey]);
 
+  const aMes = (clave: string) => {
+    const [y, m] = clave.split("-").map(Number);
+    return y && m ? { year: y, month: m } : null;
+  };
+
   async function lanzarRelleno() {
     if (!cuenta) return;
-    const [y, m] = mesRelleno.split("-").map(Number);
-    if (!y || !m) { setError("Mes inválido"); return; }
-    const mes = { year: y, month: m };
+    const desde = aMes(desdeRelleno);
+    const hasta = aMes(hastaRelleno);
+    if (!desde || !hasta) { setError("Mes inválido"); return; }
+    const cuantos = (hasta.year - desde.year) * 12 + (hasta.month - desde.month) + 1;
+    if (cuantos < 1) { setError("«Desde» es posterior a «hasta»"); return; }
+    const rango = desdeRelleno === hastaRelleno ? desdeRelleno : `${desdeRelleno} a ${hastaRelleno}`;
     if (!confirm(
-      `Se pedirán a ${cuenta.connectorKey} los kilómetros de ${mesRelleno} de TODOS los vehículos enlazados ` +
-      `que aún no lo tengan, de UNO EN UNO y a un vehículo cada 20 segundos.\n\n` +
-      `Tarda horas y sigue en el servidor aunque cierres la pantalla. ¿Seguir?`,
+      `Se pedirán a ${cuenta.connectorKey} los kilómetros de ${rango} (${cuantos} ${cuantos === 1 ? "mes" : "meses"}) ` +
+      `de TODOS los vehículos enlazados que aún no los tengan, de UNO EN UNO y a un vehículo cada 20 segundos.\n\n` +
+      `Con una flota grande y varios meses esto son DÍAS, no horas. Sigue en el servidor aunque cierres la ` +
+      `pantalla y aunque se despliegue, y puedes pararlo cuando quieras. ¿Seguir?`,
     )) return;
     setError("");
     try {
       const r = await rellenarKilometraje({
-        empresaId, connectorKey: cuenta.connectorKey, accountKey: cuenta.accountKey,
-        desde: mes, hasta: mes,
+        empresaId, connectorKey: cuenta.connectorKey, accountKey: cuenta.accountKey, desde, hasta,
       });
       setTarea(r.tarea);
     } catch (e: any) {
@@ -152,12 +163,20 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
       {/* Relleno lento de un mes viejo: lo contrario del botón de arriba. */}
       <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-700 pt-3">
         <div className="flex items-center gap-1 font-bold text-slate-200">
-          <Hourglass className="h-4 w-4" /> Rellenar un mes, a gotas
+          <Hourglass className="h-4 w-4" /> Rellenar meses, a gotas
         </div>
         <input
           type="month"
-          value={mesRelleno}
-          onChange={(e) => setMesRelleno(e.target.value)}
+          value={desdeRelleno}
+          onChange={(e) => setDesdeRelleno(e.target.value)}
+          disabled={tarea?.estado === "en_curso"}
+          className="rounded-lg border border-slate-600 bg-slate-900 px-2 py-1 text-slate-200 disabled:opacity-40"
+        />
+        <span className="text-slate-400">a</span>
+        <input
+          type="month"
+          value={hastaRelleno}
+          onChange={(e) => setHastaRelleno(e.target.value)}
           disabled={tarea?.estado === "en_curso"}
           className="rounded-lg border border-slate-600 bg-slate-900 px-2 py-1 text-slate-200 disabled:opacity-40"
         />
@@ -174,7 +193,7 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
             onClick={() => void lanzarRelleno()}
             className="ml-auto rounded-lg border border-sky-600 px-3 py-1.5 font-bold text-sky-300 hover:bg-sky-500/10"
           >
-            Rellenar mes
+            Rellenar
           </button>
         )}
       </div>
