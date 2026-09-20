@@ -17,9 +17,10 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  clavePaso, desenlaceDe, enPalabras, intervaloValido, minutosRestantes, pasosPendientes,
+  clavePaso, desenlaceDe, enPalabras, intervaloValido, mesDesdeClave, minutosRestantes, pasosPendientes,
   INTERVALO_SEGUNDOS_POR_DEFECTO,
 } from "./relleno.ts";
+import { claveDeMes } from "../../integration-hub/domain/meses.ts";
 
 const ENERO = { year: 2026, month: 1 };
 const FEBRERO = { year: 2026, month: 2 };
@@ -119,6 +120,20 @@ describe("cuánto queda", () => {
 
   it("sin pendientes no queda nada", () => {
     expect(enPalabras(minutosRestantes(0, 20))).toBe("nada");
+  });
+});
+
+describe("mesDesdeClave", () => {
+  it("da la vuelta a `claveDeMes` sin perder nada", () => {
+    for (const mes of [{ year: 2026, month: 1 }, { year: 2026, month: 7 }, { year: 2025, month: 12 }]) {
+      expect(mesDesdeClave(claveDeMes(mes))).toEqual(mes);
+    }
+  });
+
+  it("lo que no se pueda leer se descarta, no se adivina", () => {
+    for (const malo of ["", "enero", "2026-00", "2026-13", "26-01", "2026/01", null as any]) {
+      expect(mesDesdeClave(malo)).toBeNull();
+    }
   });
 });
 

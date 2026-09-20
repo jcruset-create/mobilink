@@ -78,6 +78,7 @@ import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts
 import { createKilometrajeActualRouter } from "./tyrecontrol/kilometrajeActual/router.ts";
 import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
 import { startPresenciaBases } from "./tyrecontrol/presencia/worker.ts";
+import { startRellenoKilometraje } from "./tyrecontrol/kilometrajeMensual/rellenoWorker.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
 import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
@@ -19681,6 +19682,9 @@ initDb()
       // cadencia sale de la marca guardada, no de este arranque.
       startConciliacionQuincenal();
       startPresenciaBases(); // barrido de "vehículos en bases" desde telemática
+      // Rellenos de km mensuales que un despliegue dejó a medias. Son horas de
+      // peticiones a gotas: sin esto, cada reinicio los pararía en silencio.
+      startRellenoKilometraje();
     });
   })
   .catch((error) => {

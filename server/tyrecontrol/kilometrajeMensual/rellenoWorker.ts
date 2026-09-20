@@ -11,6 +11,18 @@
  * pasa seguro: un despliegue. Cada tick es independiente y recalcula lo que
  * falta, así que un reinicio cuesta un tick, no la tarea.
  *
+ * ── Y la tarea también sobrevive al reinicio ────────────────────────────────
+ *
+ * Que el PENDIENTE salga de la base no basta: el temporizador vive en memoria,
+ * así que un despliegue lo borra y el relleno se para sin que nadie se entere.
+ * A cuatro horas ya era apurado; con siete meses de una flota de 751 son casi
+ * treinta, y un reinicio por medio es seguro, no probable.
+ *
+ * Por eso la tarea se GUARDA en `integration_sync_state` a cada tick, y al
+ * arrancar el servidor se vuelven a armar las que quedaron `en_curso`. Parar
+ * a mano las deja `parada`, y entonces no se reaniman: parar significa parar,
+ * también después de un despliegue.
+ *
  * ── Una tarea por cuenta ────────────────────────────────────────────────────
  *
  * Dos rellenos a la vez sobre la misma cuenta duplican el ritmo pactado sin
@@ -24,7 +36,7 @@
 
 import { claveDeMes, type Mes } from "../../integration-hub/domain/meses.ts";
 import {
-  clavePaso, desenlaceDe, enPalabras, intervaloValido, minutosRestantes,
+  clavePaso, desenlaceDe, enPalabras, intervaloValido, mesDesdeClave, minutosRestantes,
   pasosPendientes, MAX_INTENTOS_POR_DEFECTO,
   type Paso,
 } from "./relleno.ts";
@@ -74,6 +86,95 @@ interface TareaViva extends Tarea {
 
 const tareas = new Map<string, TareaViva>();
 
+/** La entrada en `integration_sync_state` donde vive una tarea. */
+export const entidadRellenoDe = (connectorKey: string, accountKey: string) =>
+  `km_relleno:${connectorKey}:${accountKey}`;
+
+/**
+ * Deja la tarea escrita. Se llama a cada tick: es un upsert pequeño cada
+ * veinte segundos, y es lo que permite reanudar tras un despliegue.
+ *
+ * Si falla, la tarea SIGUE: no poder apuntar el progreso no es motivo para
+ * dejar de rellenar.
+ */
+async function guardarTarea(t: TareaViva): Promise<void> {
+  try {
+    const { upsertSyncState } = await import(
+      "../../integration-hub/infrastructure/repositories.ts"
+    );
+    await upsertSyncState({
+      tenantId: t.empresaId,
+      entity: entidadRellenoDe(t.connectorKey, t.accountKey),
+      lastSyncMs: t.ultimoTickMs ?? t.iniciadaMs,
+      status: t.estado,
+      detail: JSON.stringify({
+        meses: t.meses, intervaloSegundos: t.intervaloSegundos, maxIntentos: t.maxIntentos,
+        forzar: t.forzar, iniciadaMs: t.iniciadaMs, ultimoTickMs: t.ultimoTickMs,
+        total: t.total, hechos: t.hechos, sinDatos: t.sinDatos, fallidos: t.fallidos,
+        pendientes: t.pendientes, ultimo: t.ultimo, muestraErrores: t.muestraErrores,
+        nota: t.nota ?? null,
+      }),
+    });
+  } catch (e: any) {
+    console.warn("[km-relleno] no se pudo guardar el progreso:", e?.message ?? e);
+  }
+}
+
+/**
+ * Vuelve a armar los rellenos que un reinicio dejó a medias.
+ *
+ * Se llama al arrancar el servidor. Solo revive lo que quedó `en_curso`: una
+ * tarea `parada`, `terminada` o `abandonada` se queda como está.
+ */
+export async function reanudarRellenos(): Promise<number> {
+  const { listTenantsWithConnectors, getSyncState } = await import(
+    "../../integration-hub/infrastructure/repositories.ts"
+  );
+  const { resolveTelematicsConnectors, knownTelematicsConnectorKeys } = await import(
+    "../../integration-hub/connectors/ConnectorRegistry.ts"
+  );
+
+  let revividas = 0;
+  for (const empresaId of await listTenantsWithConnectors(knownTelematicsConnectorKeys())) {
+    try {
+      for (const cuenta of await resolveTelematicsConnectors(empresaId)) {
+        const fila = await getSyncState(empresaId, entidadRellenoDe(cuenta.key, cuenta.accountKey));
+        if (!fila || fila.status !== "en_curso") continue;
+        let d: any = null;
+        try { d = fila.detail ? JSON.parse(String(fila.detail)) : null; } catch { d = null; }
+        const meses = (d?.meses ?? []).map(mesDesdeClave).filter((m: Mes | null): m is Mes => m !== null);
+        if (meses.length === 0) continue;
+        await iniciarRelleno({
+          empresaId, connectorKey: cuenta.key, accountKey: cuenta.accountKey, meses,
+          intervaloSegundos: d?.intervaloSegundos, maxIntentos: d?.maxIntentos, forzar: d?.forzar === true,
+        });
+        // Lo hecho antes del reinicio ya está en la base; los contadores de
+        // esta vuelta empiezan de cero y eso se dice, en vez de fingir una
+        // continuidad que no hay.
+        const viva = tareas.get(claveTarea(empresaId, cuenta.key, cuenta.accountKey));
+        if (viva) {
+          viva.nota = `Reanudada tras un reinicio; antes llevaba ${d?.hechos ?? 0} con km y ${d?.sinDatos ?? 0} sin datos`;
+          await guardarTarea(viva);
+        }
+        revividas += 1;
+        console.log(`[km-relleno] reanudado ${empresaId}/${cuenta.key}/${cuenta.accountKey}: ${d?.meses?.join(", ")}`);
+      }
+    } catch (e: any) {
+      console.warn("[km-relleno] no se pudo reanudar", empresaId, e?.message ?? e);
+    }
+  }
+  return revividas;
+}
+
+/** Al arrancar: a los dos minutos, cuando el servidor ya está en pie. */
+export function startRellenoKilometraje(): void {
+  setTimeout(() => {
+    void reanudarRellenos()
+      .then((n) => { if (n > 0) console.log(`[km-relleno] ${n} tarea(s) reanudadas`); })
+      .catch((e) => console.error("[km-relleno]", (e as any)?.message ?? e));
+  }, 2 * 60 * 1000);
+}
+
 const claveTarea = (empresaId: string, connectorKey: string, accountKey: string) =>
   `${empresaId}/${connectorKey}/${accountKey}`;
 
@@ -110,6 +211,8 @@ function detener(t: TareaViva, estado: EstadoTarea, nota?: string): void {
   t.temporizador = null;
   t.estado = estado;
   if (nota) t.nota = nota;
+  // Sin esto, un reinicio reviviría una tarea que alguien acaba de parar.
+  void guardarTarea(t);
 }
 
 /**
@@ -153,6 +256,7 @@ export async function iniciarRelleno(op: OpcionesRelleno): Promise<Tarea> {
     detener(t, "terminada", "No faltaba ningún vehículo: el mes ya estaba completo");
     return aTarea(t);
   }
+  await guardarTarea(t);
 
   const vuelta = () => {
     void tick(clave, op.meses).catch((e) =>
@@ -265,6 +369,7 @@ async function tick(clave: string, meses: Mes[]): Promise<void> {
       if (t.muestraErrores.length < 5) t.muestraErrores.push(`${paso.etiqueta} ${mes}: ${d.mensaje}`);
       t.ultimo = { vehiculo: paso.etiqueta, mes, resultado: `error (intento ${intentos})` };
     }
+    await guardarTarea(t);
   } finally {
     t.ocupado = false;
   }
