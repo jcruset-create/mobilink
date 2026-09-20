@@ -258,6 +258,23 @@ describe("getTripSummary()", () => {
     expect(r[0].distanceKm).toBe(7842);
   });
 
+  it("la distancia va en metros y los odómetros en km, cada uno con su unidad", async () => {
+    // Los números son los medidos en la cuenta real de Plana en enero de 2026
+    // (unidad 26410943): 12.668.080 de `total_mileage` contra 12.667,92 de
+    // diferencia entre odómetros. Si ambos usaran la misma unidad, uno de los
+    // dos saldría mil veces mayor o menor sin que nada chirriara.
+    fingirFetch([{ status: 201, body: [
+      { unit: 1, total_mileage: 12668080, initial_mileage: 919471.04, final_mileage: 932138.96 },
+    ] }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km", distanciaEn: "m" });
+    const r = await conToken(() => c.getTripSummary(CTX, ["1"], VENTANA));
+    expect(r[0].distanceKm).toBe(12668.08);
+    expect(r[0].initialOdometerKm).toBe(919471.04);
+    expect(r[0].finalOdometerKm).toBe(932138.96);
+    // Y lo que importa: el recorrido cuadra con lo que avanzó el odómetro.
+    expect(r[0].finalOdometerKm! - r[0].initialOdometerKm!).toBeCloseTo(r[0].distanceKm, 0);
+  });
+
   it("sin unidad de medida NO llama: metros guardados como km es peor que nada", async () => {
     const llamadas = fingirFetch([{ status: 201, body: [] }]);
     const c = new MovertisConnector({ baseUrl: "https://devapi.invalid" });
