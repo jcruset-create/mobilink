@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Gauge } from "lucide-react";
+import { Gauge, Hourglass } from "lucide-react";
 import {
-  estadoKilometraje, sincronizarKilometraje,
-  type EstadoCuenta, type ResumenCuentaMensual,
+  estadoKilometraje, estadoRelleno, pararRelleno, rellenarKilometraje, sincronizarKilometraje,
+  type EstadoCuenta, type ResumenCuentaMensual, type TareaRelleno,
 } from "../services/kilometrajeMensual";
 import type { CuentaTelematica } from "../services/conciliacion";
 
@@ -15,6 +15,10 @@ import type { CuentaTelematica } from "../services/conciliacion";
  * ritmo del limitador, así que una flota grande con varios meses puede tardar
  * minutos; si el navegador se cansa antes, el servidor sigue y el resultado
  * queda en «Última pasada».
+ *
+ * Debajo, la otra herramienta: rellenar un mes viejo de la flota entera a
+ * gotas, una unidad cada veinte segundos. Son horas, así que la lleva el
+ * servidor y aquí solo se arranca, se mira el progreso y se para.
  */
 export default function SincronizacionKilometraje({ empresaId, cuenta }: { empresaId: string; cuenta: CuentaTelematica | null }) {
   const [estado, setEstado] = useState<EstadoCuenta | null>(null);
@@ -22,6 +26,14 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
   const [mesAnterior, setMesAnterior] = useState(false);
   const [ocupado, setOcupado] = useState(false);
   const [error, setError] = useState("");
+  // Relleno lento: un mes viejo de la flota entera, a gotas.
+  const [tarea, setTarea] = useState<TareaRelleno | null>(null);
+  const [mesRelleno, setMesRelleno] = useState(() => {
+    const a = new Date();
+    const m = a.getMonth() === 0 ? 12 : a.getMonth();
+    const y = a.getMonth() === 0 ? a.getFullYear() - 1 : a.getFullYear();
+    return `${y}-${String(m).padStart(2, "0")}`;
+  });
 
   async function cargarEstado() {
     if (!cuenta) return;
@@ -31,7 +43,59 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
     } catch { setEstado(null); }
   }
 
-  useEffect(() => { void cargarEstado(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [empresaId, cuenta?.connectorKey, cuenta?.accountKey]);
+  async function cargarTarea() {
+    if (!cuenta) return;
+    try {
+      const { tareas } = await estadoRelleno(empresaId);
+      setTarea(tareas.find((t) => t.connectorKey === cuenta.connectorKey && t.accountKey === cuenta.accountKey) ?? null);
+    } catch { /* que no se pierda el panel por no poder mirar el progreso */ }
+  }
+
+  useEffect(() => {
+    void cargarEstado(); void cargarTarea();
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [empresaId, cuenta?.connectorKey, cuenta?.accountKey]);
+
+  // Mientras hay relleno, se refresca solo: son horas, y nadie va a estar
+  // pulsando F5. Cada diez segundos es a nuestra base, no al proveedor.
+  useEffect(() => {
+    if (tarea?.estado !== "en_curso") return;
+    const t = setInterval(() => void cargarTarea(), 10_000);
+    return () => clearInterval(t);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [tarea?.estado, empresaId, cuenta?.connectorKey, cuenta?.accountKey]);
+
+  async function lanzarRelleno() {
+    if (!cuenta) return;
+    const [y, m] = mesRelleno.split("-").map(Number);
+    if (!y || !m) { setError("Mes inválido"); return; }
+    const mes = { year: y, month: m };
+    if (!confirm(
+      `Se pedirán a ${cuenta.connectorKey} los kilómetros de ${mesRelleno} de TODOS los vehículos enlazados ` +
+      `que aún no lo tengan, de UNO EN UNO y a un vehículo cada 20 segundos.\n\n` +
+      `Tarda horas y sigue en el servidor aunque cierres la pantalla. ¿Seguir?`,
+    )) return;
+    setError("");
+    try {
+      const r = await rellenarKilometraje({
+        empresaId, connectorKey: cuenta.connectorKey, accountKey: cuenta.accountKey,
+        desde: mes, hasta: mes,
+      });
+      setTarea(r.tarea);
+    } catch (e: any) {
+      setError(e?.message ?? "No se pudo arrancar el relleno");
+    }
+  }
+
+  async function detenerRelleno() {
+    if (!cuenta) return;
+    try {
+      const r = await pararRelleno({ empresaId, connectorKey: cuenta.connectorKey, accountKey: cuenta.accountKey });
+      setTarea(r.tarea);
+    } catch (e: any) {
+      setError(e?.message ?? "No se pudo parar el relleno");
+    }
+  }
 
   async function lanzar() {
     if (!cuenta) return;
@@ -84,6 +148,57 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
       </div>
 
       {error && <div className="mt-2 text-amber-300">{error}</div>}
+
+      {/* Relleno lento de un mes viejo: lo contrario del botón de arriba. */}
+      <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-700 pt-3">
+        <div className="flex items-center gap-1 font-bold text-slate-200">
+          <Hourglass className="h-4 w-4" /> Rellenar un mes, a gotas
+        </div>
+        <input
+          type="month"
+          value={mesRelleno}
+          onChange={(e) => setMesRelleno(e.target.value)}
+          disabled={tarea?.estado === "en_curso"}
+          className="rounded-lg border border-slate-600 bg-slate-900 px-2 py-1 text-slate-200 disabled:opacity-40"
+        />
+        <span className="text-slate-400">un vehículo cada 20 s</span>
+        {tarea?.estado === "en_curso" ? (
+          <button
+            onClick={() => void detenerRelleno()}
+            className="ml-auto rounded-lg border border-amber-600 px-3 py-1.5 font-bold text-amber-300 hover:bg-amber-500/10"
+          >
+            Parar
+          </button>
+        ) : (
+          <button
+            onClick={() => void lanzarRelleno()}
+            className="ml-auto rounded-lg border border-sky-600 px-3 py-1.5 font-bold text-sky-300 hover:bg-sky-500/10"
+          >
+            Rellenar mes
+          </button>
+        )}
+      </div>
+
+      {tarea && (
+        <div className="mt-2 grid gap-x-4 gap-y-1 text-slate-300 sm:grid-cols-3 lg:grid-cols-4">
+          <span>
+            Estado: <b className={tarea.estado === "abandonada" ? "text-amber-300" : ""}>{tarea.estado.replace("_", " ")}</b>
+          </span>
+          <span>Con km: <b>{tarea.hechos}</b> · sin datos: <b>{tarea.sinDatos}</b></span>
+          <span>Pendientes: <b>{tarea.pendientes}</b> de {tarea.total}</span>
+          <span>Queda: <b>{tarea.restanteEnPalabras}</b></span>
+          {tarea.ultimo && (
+            <span className="sm:col-span-3 lg:col-span-4">
+              Último: <b>{tarea.ultimo.vehiculo}</b> ({tarea.ultimo.mes}) → {tarea.ultimo.resultado}
+            </span>
+          )}
+          {!!tarea.fallidos && <span className="text-amber-300">Fallidos: <b>{tarea.fallidos}</b></span>}
+          {tarea.nota && <span className="text-slate-400 sm:col-span-3 lg:col-span-4">{tarea.nota}</span>}
+          {!!tarea.muestraErrores?.length && (
+            <span className="text-amber-300 sm:col-span-3 lg:col-span-4">Primer error: {tarea.muestraErrores[0]}</span>
+          )}
+        </div>
+      )}
 
       {d && (
         <div className="mt-2 grid gap-x-4 gap-y-1 text-slate-300 sm:grid-cols-3 lg:grid-cols-5">

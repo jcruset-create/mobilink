@@ -86,6 +86,45 @@ export const sincronizarKilometraje = (b: {
   vehiculoIds?: string[]; forzar?: boolean;
 }) => pedir<{ correlationId: string; cuentas: ResumenCuentaMensual[] }>("/sincronizar", { method: "POST", body: JSON.stringify(b) });
 
+/**
+ * Una tarea de relleno lento: una unidad cada veinte segundos hasta terminar.
+ * El servidor la lleva; aquí solo se arranca, se mira y se para.
+ */
+export interface TareaRelleno {
+  empresaId: string;
+  connectorKey: string;
+  accountKey: string;
+  meses: string[];
+  intervaloSegundos: number;
+  maxIntentos: number;
+  forzar: boolean;
+  estado: "en_curso" | "terminada" | "parada" | "abandonada";
+  iniciadaMs: number;
+  ultimoTickMs: number | null;
+  total: number;
+  hechos: number;
+  sinDatos: number;
+  fallidos: number;
+  pendientes: number;
+  minutosRestantes: number;
+  restanteEnPalabras: string;
+  ultimo: { vehiculo: string; mes: string; resultado: string } | null;
+  muestraErrores: string[];
+  nota?: string;
+}
+
+export const rellenarKilometraje = (b: {
+  empresaId?: string; connectorKey: string; accountKey: string;
+  desde: { year: number; month: number }; hasta: { year: number; month: number };
+  intervaloSegundos?: number; forzar?: boolean;
+}) => pedir<{ tarea: TareaRelleno }>("/relleno", { method: "POST", body: JSON.stringify(b) });
+
+export const estadoRelleno = (empresaId?: string) =>
+  pedir<{ empresaId: string; tareas: TareaRelleno[] }>(`/relleno${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
+
+export const pararRelleno = (b: { empresaId?: string; connectorKey: string; accountKey: string }) =>
+  pedir<{ tarea: TareaRelleno }>("/relleno/parar", { method: "POST", body: JSON.stringify(b) });
+
 /** «sep 2026». */
 export function nombreDeMes(year: number, month: number): string {
   return new Date(Date.UTC(year, month - 1, 15)).toLocaleDateString("es-ES", { month: "short", year: "numeric", timeZone: "UTC" });

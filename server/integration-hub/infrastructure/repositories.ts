@@ -1417,6 +1417,36 @@ export async function listMonthlyMileage(params: {
  * Es lo que permite no volver a preguntar por agosto cada noche: la
  * sincronización pide el mes a todos los enlazados MENOS a estos.
  */
+/**
+ * Qué vehículos de una cuenta YA tienen fila de ese mes, y en qué estado.
+ *
+ * Es lo que permite reanudar un relleno tras un reinicio sin guardar nada en
+ * memoria: el pendiente son los que no salen aquí. A diferencia de
+ * `listVehiclesWithClosedMonth`, no mira `closed`, porque un «sin datos»
+ * pedido de uno en uno nunca se cierra (ver `kilometrajeMensual/relleno.ts`) y
+ * mirarlo dejaría esos vehículos pendientes para siempre.
+ */
+export async function listMonthlyMileageStatus(params: {
+  tenantId: string;
+  system: string;
+  accountKey: string;
+  year: number;
+  month: number;
+}): Promise<Map<string, { syncStatus: string; closed: boolean }>> {
+  const { rows } = await pool.query(
+    `SELECT mobilink_id, sync_status, closed FROM integration_vehicle_monthly_mileage
+      WHERE tenant_id = $1 AND system = $2 AND account_key = $3
+        AND year = $4 AND month = $5`,
+    [params.tenantId, params.system, params.accountKey, params.year, params.month]
+  );
+  return new Map(
+    rows.map((r: any) => [
+      String(r.mobilink_id),
+      { syncStatus: String(r.sync_status), closed: r.closed === true },
+    ])
+  );
+}
+
 export async function listVehiclesWithClosedMonth(params: {
   tenantId: string;
   system: string;

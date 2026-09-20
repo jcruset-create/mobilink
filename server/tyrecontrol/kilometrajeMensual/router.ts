@@ -13,6 +13,12 @@
  *     hacer la prueba controlada —dos vehículos, un mes— y de rehacer un mes
  *     concreto. La credencial la resuelve el Hub; aquí no entra ni sale.
  *
+ * Y una tercera, que es la misma cosa a otro ritmo: RELLENAR un mes viejo de
+ * la flota entera pidiendo una unidad cada veinte segundos (`/relleno`). No
+ * cabe en `/sincronizar` porque son horas y una petición HTTP no dura horas:
+ * arranca una tarea en el servidor y se consulta el progreso aparte. El porqué
+ * del ritmo está en `relleno.ts`.
+ *
  * La empresa se deriva de la sesión, igual que en la conciliación. Ver la
  * cabecera de `conciliacion/router.ts` para por qué no se usa `tenantOf`.
  */
@@ -27,6 +33,8 @@ import { syncMonthlyMileage } from "../../integration-hub/application/services/M
 import { entidadSyncDe } from "../../integration-hub/application/services/MonthlyMileageSyncService.ts";
 import { compararMeses, mesDe, mesesEntre, ZONA_HORARIA_POR_DEFECTO, type Mes } from "../../integration-hub/domain/meses.ts";
 import { resumirKilometraje } from "./resumen.ts";
+import { iniciarRelleno, pararRelleno, tareasDeEmpresa } from "./rellenoWorker.ts";
+import { intervaloValido } from "./relleno.ts";
 
 /** Cuántos meses se pueden pedir de golpe a mano. Más es un job, no un botón. */
 const MAX_MESES_MANUAL = 12;
@@ -180,6 +188,75 @@ export function createKilometrajeMensualRouter(): Router {
         esperaMaximaMs: ESPERA_MAXIMA_MS,
       });
       res.json(r);
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Relleno lento: una unidad cada `intervaloSegundos` (20 por defecto) hasta
+   * terminar el mes o los meses pedidos.
+   *
+   * Es lo contrario de `/sincronizar`: aquel contesta con el trabajo hecho y
+   * por eso no puede durar horas; este contesta con la tarea arrancada y el
+   * trabajo sigue en el servidor. Para rellenar un mes viejo de una flota
+   * entera sin quitarle cupo a nadie, es este.
+   *
+   * Cuerpo: { empresaId?, connectorKey, accountKey, desde?, hasta?,
+   *           intervaloSegundos?, forzar? }
+   */
+  router.post("/relleno", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const connectorKey = String(req.body?.connectorKey ?? "").trim();
+      const accountKey = String(req.body?.accountKey ?? "").trim();
+      if (!connectorKey || !accountKey) return res.status(400).json({ error: "Falta el proveedor o la cuenta" });
+
+      const desde = mesDeCuerpo(req.body?.desde ?? req.body?.hasta);
+      const hasta = mesDeCuerpo(req.body?.hasta ?? req.body?.desde);
+      if (!desde || !hasta) return res.status(400).json({ error: "Mes inválido: se espera {year, month}" });
+      if (compararMeses(desde, hasta) > 0) return res.status(400).json({ error: "«desde» es posterior a «hasta»" });
+      const meses = mesesEntre(desde, hasta);
+      if (meses.length > MAX_MESES_MANUAL) {
+        return res.status(400).json({ error: `Como mucho ${MAX_MESES_MANUAL} meses de una vez; has pedido ${meses.length}` });
+      }
+      if (compararMeses(hasta, mesDe(new Date())) > 0) {
+        return res.status(400).json({ error: "No se puede pedir un mes futuro" });
+      }
+
+      const tarea = await iniciarRelleno({
+        empresaId, connectorKey, accountKey, meses,
+        intervaloSegundos: intervaloValido(req.body?.intervaloSegundos),
+        forzar: req.body?.forzar === true,
+      });
+      res.json({ tarea });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /** Por dónde va el relleno. Se mira desde la base, no se pide al proveedor. */
+  router.get("/relleno", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      res.json({ empresaId, tareas: tareasDeEmpresa(empresaId) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /** Parar un relleno en marcha. Lo hecho se queda hecho; reanudar sigue ahí. */
+  router.post("/relleno/parar", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const connectorKey = String(req.body?.connectorKey ?? "").trim();
+      const accountKey = String(req.body?.accountKey ?? "").trim();
+      const tarea = pararRelleno(empresaId, connectorKey, accountKey);
+      if (!tarea) return res.status(404).json({ error: "No hay relleno en marcha para esa cuenta" });
+      res.json({ tarea });
     } catch (e) {
       fallo(res, e);
     }
