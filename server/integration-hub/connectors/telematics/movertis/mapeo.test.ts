@@ -28,6 +28,8 @@ import {
   odometroDeCounters,
   puntosDeUnidad,
   resumenesDe,
+  distanciaCreible,
+  VECES_ODOMETRO_MAXIMO,
   valorMovertis,
   type OpcionesMapeo,
 } from "./mapeo.ts";
@@ -457,6 +459,57 @@ describe("puntosDeUnidad()", () => {
  * sonda. Se fijan las tres formas que puede tener y, sobre todo, lo que no se
  * hace: colgarle a la primera unidad un objeto suelto cuando se pidieron dos.
  */
+/**
+ * La distancia imposible.
+ *
+ * `summarytrips` devuelve a veces un `total_mileage` disparatado para un
+ * (vehículo, mes) concreto. No es transitorio: pedido tres veces seguidas
+ * contesta el mismo disparate, y el mismo autobús tiene meses buenos y meses
+ * malos. Bastó una de esas filas para que el ranking de la flota pusiera
+ * primero a un autobús con 315 millones de kilómetros al año.
+ *
+ * La vara de medir es el odómetro de la MISMA respuesta: viene al lado, es
+ * coherente mes a mes cuando la distancia no lo es, y mide lo mismo.
+ */
+describe("distanciaCreible()", () => {
+  it("los casos buenos medidos pasan: la razón real ronda 1", () => {
+    // Unidad 26410936 en mayo de 2026: 2.604 km con el odómetro +2.607.
+    expect(distanciaCreible(2604.16, 891163.52, 893770.88)).toBe(true);
+    // Unidad 26138107: 2.380 km con el odómetro +3.471. Los viajes pueden
+    // perder tramos, y eso es normal; lo que no pueden es inventarlos.
+    expect(distanciaCreible(2380.2, 0, 3471)).toBe(true);
+  });
+
+  it("los tres disparates medidos NO pasan", () => {
+    // 5819 GXJ en mayo: 80.731.230 km con el odómetro avanzando 4.019.
+    expect(distanciaCreible(80_731_230.06, 1_294_654.64, 1_298_674)).toBe(false);
+    // 8886 HHL: razón 427. 1445 HWZ: razón 375.
+    expect(distanciaCreible(1_386_682.4, 0, 3_247.8)).toBe(false);
+    expect(distanciaCreible(3_783_439.3, 0, 10_098.8)).toBe(false);
+  });
+
+  it("el margen es de dos veces, y es generosísimo a propósito", () => {
+    expect(VECES_ODOMETRO_MAXIMO).toBe(2);
+    expect(distanciaCreible(2000, 0, 1000)).toBe(true);
+    expect(distanciaCreible(2001, 0, 1000)).toBe(false);
+  });
+
+  it("sin odómetro no hay vara: se acepta lo que venga", () => {
+    // Es el caso de los vehículos sin CAN, y no juzgarlos es lo único honesto.
+    expect(distanciaCreible(999_999, undefined, undefined)).toBe(true);
+    expect(distanciaCreible(999_999, 1000, undefined)).toBe(true);
+  });
+
+  it("odómetro quieto o hacia atrás tampoco sirve de vara", () => {
+    expect(distanciaCreible(500, 1000, 1000)).toBe(true);
+    expect(distanciaCreible(500, 1000, 900)).toBe(true);
+  });
+
+  it("sin distancia no hay nada que juzgar", () => {
+    expect(distanciaCreible(undefined, 1000, 2000)).toBe(true);
+  });
+});
+
 describe("resumenesDe()", () => {
   const RESUMEN = { initial_mileage: 512480, final_mileage: 520322, total_mileage: 7842, max_speed: 96, trips: 41 };
 

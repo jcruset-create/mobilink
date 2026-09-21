@@ -164,6 +164,63 @@ export function aKilometros(
   return valor;
 }
 
+/**
+ * Cuántas veces puede la distancia de `summarytrips` superar lo que avanzó el
+ * odómetro en la misma ventana antes de considerarla imposible.
+ *
+ * Dos, que es generosísimo: medido en la cuenta real sobre trece vehículos en
+ * mayo de 2026, la razón entre la suma de viajes y el avance del odómetro sale
+ * 1,00 en nueve de ellos y 0,69 en el peor de los sanos —los viajes pueden
+ * perder tramos, nunca inventarlos—. Lo que se quiere cazar no está cerca del
+ * límite: está en 375, en 427 y en 20.000.
+ */
+export const VECES_ODOMETRO_MAXIMO = 2;
+
+/**
+ * ¿Es creíble esta distancia, a la luz del odómetro de la MISMA respuesta?
+ *
+ * ── El problema que resuelve ────────────────────────────────────────────────
+ *
+ * `summarytrips` devuelve a veces un `total_mileage` disparatado para un
+ * (vehículo, mes) concreto. No es un fallo transitorio: pedido tres veces
+ * seguidas contesta el mismo disparate, y el mismo autobús tiene meses buenos
+ * y meses malos. Medido en la unidad 26080246 (5819 GXJ):
+ *
+ *   enero    3.757 km   odómetro +3.649    razón 1,0
+ *   febrero  40.377.692 km   odómetro +3.791    razón 10.650
+ *   abril    4.844 km   odómetro +4.757    razón 1,0
+ *   junio    82.046.587 km   odómetro +3.472    razón 23.630
+ *   julio    82.039.119 km   odómetro +4.664    razón 17.590
+ *
+ * Un autobús no hace 82 millones de kilómetros en un mes, y menos con el
+ * cuentakilómetros avanzando 3.472. Sin esta comprobación esas filas entraban
+ * como buenas y bastaba una para que el ranking de la flota pusiera primero a
+ * un vehículo con 315 millones de km al año.
+ *
+ * ── Por qué el odómetro es la vara de medir ────────────────────────────────
+ *
+ * Porque viene en la MISMA respuesta, es coherente mes a mes cuando la
+ * distancia no lo es, y mide lo mismo: cuánto se movió el vehículo. No se usa
+ * para SUSTITUIR la distancia —serían dos medidas distintas mezcladas en la
+ * misma columna sin que nadie lo supiera—, solo para saber que la que ha
+ * llegado no puede ser.
+ *
+ * Sin odómetros, o con el odómetro quieto, no hay vara y se acepta lo que
+ * venga: es lo único honesto, y es el caso de los vehículos sin CAN.
+ */
+export function distanciaCreible(
+  distanciaKm: number | undefined,
+  inicialKm: number | undefined,
+  finalKm: number | undefined,
+): boolean {
+  if (distanciaKm === undefined) return true;
+  if (inicialKm === undefined || finalKm === undefined) return true;
+  const avance = finalKm - inicialKm;
+  // Odómetro quieto o hacia atrás: no sirve de vara, no se juzga con él.
+  if (!(avance > 0)) return true;
+  return distanciaKm <= avance * VECES_ODOMETRO_MAXIMO;
+}
+
 /** Booleano tolerante: acepta true/false, 1/0 y "true"/"si"/"activo". */
 function booleano(v: unknown): boolean | undefined {
   if (v === undefined || v === null || v === "") return undefined;

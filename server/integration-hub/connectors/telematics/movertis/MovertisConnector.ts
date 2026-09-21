@@ -99,6 +99,7 @@ import {
   puntosDeUnidad,
   resumenesDe,
   aKilometros,
+  distanciaCreible,
   type UnidadOdometro,
 } from "./mapeo.ts";
 
@@ -570,14 +571,37 @@ export class MovertisConnector
         // Sin total no hay resumen; los odómetros solos no dicen cuánto se movió
         // (podría faltar un tramo) y no se reconstruye restando.
         if (distanceKm === undefined) return null;
+
+        const inicial = aKilometros(r.inicial, unidadOdometro);
+        const final = aKilometros(r.final, unidadOdometro);
+        // Una distancia imposible a la luz del odómetro de la MISMA respuesta
+        // no se devuelve. Ver `distanciaCreible`: pasa de verdad, es estable
+        // entre consultas y basta una fila para poner a un autobús el primero
+        // del ranking con 315 millones de kilómetros al año.
+        if (!distanciaCreible(distanceKm, inicial, final)) {
+          // Se DESCARTA esta unidad, no se lanza. Un `throw` aquí tumbaría el
+          // lote entero —hasta 25 vehículos en el job de la noche— por culpa
+          // de uno, y `pedirLote` los anotaría a todos como error. Quien llama
+          // ve exactamente lo mismo que si el proveedor no hubiera dicho nada
+          // de este vehículo, que es la verdad: de este mes no ha dado ninguna
+          // distancia utilizable.
+          console.warn(
+            `[movertis] distancia imposible descartada: unidad ${r.unit} ` +
+              `${Math.round(distanceKm).toLocaleString("es-ES")} km con el odómetro avanzando ` +
+              `${Math.round((final ?? 0) - (inicial ?? 0)).toLocaleString("es-ES")} km ` +
+              `(${window.from.toISOString().slice(0, 10)} → ${window.to.toISOString().slice(0, 10)})`,
+          );
+          return null;
+        }
+
         return {
           provider: this.info.key,
           accountKey: this.config.accountKey ?? "default",
           providerVehicleId: r.unit,
           window,
           distanceKm,
-          initialOdometerKm: aKilometros(r.inicial, unidadOdometro),
-          finalOdometerKm: aKilometros(r.final, unidadOdometro),
+          initialOdometerKm: inicial,
+          finalOdometerKm: final,
           trips: r.viajes,
           raw: r.raw,
         };
