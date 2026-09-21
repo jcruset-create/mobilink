@@ -179,6 +179,25 @@ export interface Ranking {
 export const rankingKilometraje = (empresaId?: string) =>
   pedir<Ranking>(`/ranking${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
 
+/** Lo que contesta la revisión de coherencia del histórico. */
+export interface RevisionCoherencia {
+  empresaId: string;
+  aplicado: boolean;
+  filas: number;
+  vehiculos: number;
+  muestra: Array<{
+    mobilinkId: string;
+    externalCode: string;
+    year: number;
+    month: number;
+    km: number;
+    avance: number;
+  }>;
+}
+
+export const revisarCoherencia = (b: { empresaId?: string; aplicar?: boolean }) =>
+  pedir<RevisionCoherencia>("/coherencia", { method: "POST", body: JSON.stringify(b) });
+
 /** «sep 2026». */
 export function nombreDeMes(year: number, month: number): string {
   return new Date(Date.UTC(year, month - 1, 15)).toLocaleDateString("es-ES", { month: "short", year: "numeric", timeZone: "UTC" });
