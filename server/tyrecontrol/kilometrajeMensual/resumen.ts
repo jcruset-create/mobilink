@@ -36,7 +36,14 @@ export interface ResumenKilometraje {
   /** El mes en curso, si hay fila. */
   mesActual: MesKilometraje | null;
   anioActual: { year: number; km: number; mesesConDato: number };
-  mediaMensual: { km: number | null; meses: number };
+  /**
+   * `km` va redondeado, que es como se enseña. `kmExacto` es el mismo número
+   * sin redondear, y existe por el ranking de flota: allí la media se
+   * multiplica por doce, y redondear ANTES multiplica también el error. No es
+   * un número distinto ni otro criterio —eso seguiría siendo un solo sitio—,
+   * es el mismo con la precisión intacta.
+   */
+  mediaMensual: { km: number | null; kmExacto: number | null; meses: number };
 }
 
 const MESES_PARA_MEDIA = 12;
@@ -62,8 +69,12 @@ export function resumirKilometraje(filas: MonthlyMileageRow[], actual: Mes): Res
   const completos = meses
     .filter((m) => compararMeses(m, actual) < 0 && conDato(m))
     .slice(0, MESES_PARA_MEDIA);
+  const exacta = completos.length
+    ? completos.reduce((s, m) => s + (m.km ?? 0), 0) / completos.length
+    : null;
   const mediaMensual = {
-    km: completos.length ? redondear(completos.reduce((s, m) => s + (m.km ?? 0), 0) / completos.length) : null,
+    km: exacta == null ? null : redondear(exacta),
+    kmExacto: exacta,
     meses: completos.length,
   };
 

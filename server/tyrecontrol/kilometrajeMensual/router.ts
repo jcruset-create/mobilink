@@ -28,11 +28,12 @@ import { Router, json, type Request, type Response } from "express";
 import { supabase } from "../../supabase.ts";
 import { puedeVerEmpresa } from "../empresaAcceso.ts";
 import { empresaDe, resolverSolicitante, type Solicitante } from "../conciliacion/router.ts";
-import { listMonthlyMileage, getSyncState, listConnectorConfigs } from "../../integration-hub/infrastructure/repositories.ts";
+import { listMonthlyMileage, listMonthlyMileageByTenant, getSyncState, listConnectorConfigs } from "../../integration-hub/infrastructure/repositories.ts";
 import { syncMonthlyMileage } from "../../integration-hub/application/services/MonthlyMileageSyncService.ts";
 import { entidadSyncDe } from "../../integration-hub/application/services/MonthlyMileageSyncService.ts";
 import { compararMeses, mesDe, mesesEntre, ZONA_HORARIA_POR_DEFECTO, type Mes } from "../../integration-hub/domain/meses.ts";
 import { resumirKilometraje } from "./resumen.ts";
+import { rankingDeKilometraje, type VehiculoDeFlota } from "./ranking.ts";
 import { iniciarRelleno, pararRelleno, tareasDeEmpresa } from "./rellenoWorker.ts";
 import { intervaloValido } from "./relleno.ts";
 import {
@@ -47,6 +48,8 @@ const MAX_MESES_MANUAL = 12;
  * terminará el resto: mejor que una pantalla colgada y un timeout del proxy.
  */
 const ESPERA_MAXIMA_MS = 45_000;
+/** Cuántos vehículos se traen por página al montar el ranking. */
+const PAGINA_FLOTA = 500;
 
 type Peticion = Request & { solicitante?: Solicitante };
 
@@ -306,6 +309,63 @@ export function createKilometrajeMensualRouter(): Router {
       const tarea = pararRellenoRevisiones(empresaId);
       if (!tarea) return res.status(404).json({ error: "No hay relleno de revisiones en marcha" });
       res.json({ tarea });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * El ranking de kilómetros de la flota, de más a menos.
+   *
+   * El criterio de quién va delante está en `ranking.ts`, y la media de la que
+   * sale es la MISMA que enseña la ficha de cada vehículo. Es a propósito: dos
+   * pantallas que digan números distintos del mismo autobús no sirven ninguna
+   * de las dos.
+   *
+   * Cruza las dos bases —los kilómetros están en el Hub y las matrículas en
+   * Supabase— y el cruce se hace aquí, en código: el Hub no conoce
+   * `tc_vehiculos` y no debe empezar a conocerlos.
+   */
+  router.get("/ranking", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+
+      // La flota activa, paginada. Nada de traerla de golpe ni de meter 751
+      // identificadores en un filtro: eso viaja en la URL y ya rompió una vez
+      // el barrido de presencia en producción.
+      const flota: VehiculoDeFlota[] = [];
+      for (let desde = 0; ; desde += PAGINA_FLOTA) {
+        const { data, error } = await supabase
+          .from("tc_vehiculos")
+          .select("id, matricula, numero_unidad")
+          .eq("empresa_id", empresaId)
+          .eq("activo", true)
+          .order("matricula")
+          .range(desde, desde + PAGINA_FLOTA - 1);
+        if (error) throw new Error(`No se pudo leer la flota: ${error.message}`);
+        const pagina = data ?? [];
+        for (const v of pagina) {
+          flota.push({
+            id: String((v as any).id),
+            matricula: (v as any).matricula ?? null,
+            numeroUnidad: (v as any).numero_unidad ?? null,
+          });
+        }
+        if (pagina.length < PAGINA_FLOTA) break;
+      }
+
+      // Un año hacia atrás basta: la media solo mira los doce últimos meses
+      // completos, así que traer más sería cargar filas para descartarlas.
+      const ahora = new Date();
+      const filas = await listMonthlyMileageByTenant({
+        tenantId: empresaId,
+        desdeYear: ahora.getFullYear() - 1,
+      });
+
+      const configs = await listConnectorConfigs(empresaId);
+      const zona = String((configs.find((c: any) => c.enabled)?.config as any)?.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+      res.json({ empresaId, ...rankingDeKilometraje(filas, flota, mesDe(ahora, zona)) });
     } catch (e) {
       fallo(res, e);
     }
