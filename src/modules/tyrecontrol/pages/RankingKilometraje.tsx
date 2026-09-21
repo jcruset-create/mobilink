@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, Gauge, Search, TriangleAlert } from "lucide-react";
 import { rankingKilometraje, type Ranking, type VehiculoDelRanking } from "../services/kilometrajeMensual";
+import { listarEmpresas } from "../services/data";
+import type { Empresa } from "../types";
 
 /**
  * Qué autobuses ruedan más, de más a menos.
@@ -20,6 +22,17 @@ import { rankingKilometraje, type Ranking, type VehiculoDelRanking } from "../se
  * con un 0 escondería trabajo de conciliación pendiente, así que va abajo y
  * con su nombre.
  *
+ * ── El selector de empresa no es un adorno ─────────────────────────────────
+ *
+ * Sin él, la pantalla se quedaba clavada en la empresa DEL PERFIL. Un
+ * super-admin que gestiona varios clientes la abría, veía los dieciséis
+ * vehículos de prueba de su propia empresa y concluía que no había datos.
+ * Pasó en la primera prueba, y es el peor tipo de fallo: la pantalla no da
+ * ningún error, simplemente contesta a otra pregunta.
+ *
+ * Un administrador normal solo verá la suya —`listarEmpresas` ya aplica ese
+ * criterio— y para él el selector es una etiqueta con un solo valor.
+ *
  * Los números salen del backend ya calculados, y de la misma función que la
  * ficha de cada vehículo. Aquí no se suma nada.
  */
@@ -28,21 +41,35 @@ export default function RankingKilometraje() {
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(true);
   const [busqueda, setBusqueda] = useState("");
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [empresaId, setEmpresaId] = useState("");
 
   useEffect(() => {
+    listarEmpresas()
+      .then((e) => {
+        setEmpresas(e);
+        if (e.length) setEmpresaId((actual) => actual || e[0].id);
+        else setCargando(false);
+      })
+      .catch((e) => { setError(e.message); setCargando(false); });
+  }, []);
+
+  useEffect(() => {
+    if (!empresaId) return;
     let vivo = true;
+    setCargando(true);
     (async () => {
       try {
-        const r = await rankingKilometraje();
+        const r = await rankingKilometraje(empresaId);
         if (vivo) { setDatos(r); setError(""); }
       } catch (e: any) {
-        if (vivo) setError(e?.message ?? "No se pudo cargar el ranking");
+        if (vivo) { setError(e?.message ?? "No se pudo cargar el ranking"); setDatos(null); }
       } finally {
         if (vivo) setCargando(false);
       }
     })();
     return () => { vivo = false; };
-  }, []);
+  }, [empresaId]);
 
   const filtrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
@@ -55,6 +82,8 @@ export default function RankingKilometraje() {
     );
   }, [datos, busqueda]);
 
+  const nombreEmpresa = empresas.find((e) => e.id === empresaId)?.nombre ?? "";
+
   function exportar() {
     if (!datos) return;
     const cab = "puesto;matricula;unidad;km_anual;meses;km_anio_actual;meses_del_anio;meses_sin_dato;meses_con_error";
@@ -66,7 +95,10 @@ export default function RankingKilometraje() {
     const url = URL.createObjectURL(new Blob([`﻿${csv}`], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = `kilometros-por-vehiculo-${new Date().toISOString().slice(0, 10)}.csv`;
+    // La empresa va en el nombre del fichero: dos CSV de dos clientes en la
+    // carpeta de descargas son indistinguibles sin ella.
+    const suf = nombreEmpresa ? `-${nombreEmpresa.toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : "";
+    a.download = `kilometros-por-vehiculo${suf}-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -80,7 +112,18 @@ export default function RankingKilometraje() {
         <h1 className="flex items-center gap-2 text-lg font-bold">
           <Gauge className="h-5 w-5" /> Kilómetros por vehículo
         </h1>
-        {datos && (
+        <select
+          className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-1.5 text-xs text-slate-200"
+          value={empresaId}
+          onChange={(e) => setEmpresaId(e.target.value)}
+          aria-label="Empresa"
+        >
+          {empresas.length === 0 && <option value="">Cargando empresas…</option>}
+          {empresas.map((e) => (
+            <option key={e.id} value={e.id}>{e.nombre}</option>
+          ))}
+        </select>
+        {datos && !cargando && (
           <span className="text-xs text-slate-400">
             {datos.totales.vehiculosConDato} vehículos con dato
             {datos.totales.kmAnualMedio != null && <> · media {num(datos.totales.kmAnualMedio)} km/año</>}
@@ -135,7 +178,9 @@ export default function RankingKilometraje() {
                 ))}
                 {filtrados.length === 0 && (
                   <tr><td colSpan={8} className="px-3 py-6 text-center text-slate-500">
-                    {busqueda ? "Ningún vehículo con esa matrícula o unidad." : "Todavía no hay kilómetros sincronizados."}
+                    {busqueda
+                      ? "Ningún vehículo con esa matrícula o unidad."
+                      : `Todavía no hay kilómetros sincronizados${nombreEmpresa ? ` en ${nombreEmpresa}` : ""}.`}
                   </td></tr>
                 )}
               </tbody>
