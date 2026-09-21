@@ -1397,6 +1397,31 @@ export async function upsertMonthlyMileage(r: MonthlyMileageUpsert): Promise<voi
   );
 }
 
+/**
+ * Todos los meses guardados de TODA la flota de un cliente.
+ *
+ * Es lo que necesita el ranking de kilómetros: una sola consulta en vez de una
+ * por vehículo. Para Autocares Plana, con 751 vehículos y un año de histórico,
+ * son unas 9.000 filas — nada para Postgres y muchísimo menos que 751 viajes.
+ *
+ * Se devuelve TODO, incluidos los meses en error o sin datos: quién entra en
+ * la media lo decide `resumirKilometraje`, que es el único sitio donde vive
+ * ese criterio. Filtrar aquí sería tener la regla en dos lados.
+ */
+export async function listMonthlyMileageByTenant(params: {
+  tenantId: string;
+  /** Acota a los meses desde este año inclusive. Sin él, todo lo guardado. */
+  desdeYear?: number;
+}): Promise<MonthlyMileageRow[]> {
+  const { rows } = await pool.query(
+    `SELECT * FROM integration_vehicle_monthly_mileage
+      WHERE tenant_id = $1 AND ($2::int IS NULL OR year >= $2::int)
+      ORDER BY mobilink_id, year DESC, month DESC`,
+    [params.tenantId, params.desdeYear ?? null]
+  );
+  return rows.map(aFilaMensual);
+}
+
 /** Todos los meses guardados de un vehículo, del más reciente al más antiguo. */
 export async function listMonthlyMileage(params: {
   tenantId: string;

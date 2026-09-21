@@ -153,6 +153,32 @@ export const estadoRevisiones = (empresaId?: string) =>
 export const pararRevisiones = (b: { empresaId?: string }) =>
   pedir<{ tarea: TareaRevisiones }>("/revisiones/parar", { method: "POST", body: JSON.stringify(b) });
 
+/** Una fila del ranking de kilómetros de la flota. */
+export interface VehiculoDelRanking {
+  vehiculoId: string;
+  matricula: string | null;
+  numeroUnidad: string | null;
+  kmAnual: number | null;
+  /** Sobre cuántos meses completos está hecha la cifra. Va SIEMPRE al lado. */
+  meses: number;
+  kmAnioActual: number;
+  mesesDelAnio: number;
+  kmMesActual: number | null;
+  mesesSinDato: number;
+  mesesConError: number;
+}
+
+export interface Ranking {
+  empresaId: string;
+  vehiculos: VehiculoDelRanking[];
+  /** Activos sin ningún mes con dato: casi siempre conciliación pendiente. */
+  sinDatos: Array<{ vehiculoId: string; matricula: string | null; numeroUnidad: string | null }>;
+  totales: { vehiculosConDato: number; kmAnualTotal: number; kmAnualMedio: number | null };
+}
+
+export const rankingKilometraje = (empresaId?: string) =>
+  pedir<Ranking>(`/ranking${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
+
 /** «sep 2026». */
 export function nombreDeMes(year: number, month: number): string {
   return new Date(Date.UTC(year, month - 1, 15)).toLocaleDateString("es-ES", { month: "short", year: "numeric", timeZone: "UTC" });
