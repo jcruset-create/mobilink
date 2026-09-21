@@ -29,16 +29,12 @@
 import { barrerBases } from "./barrido.ts";
 
 /**
- * Cada cuánto se barre, en minutos.
- *
- * Configurable por entorno para poder aflojarlo si un proveedor aprieta el
- * cupo, con suelo de 2 minutos: por debajo se estaría preguntando más deprisa
- * de lo que los equipos emiten.
+ * Cada cuánto se barre, en minutos. Definida en `cadencia.ts` y re-exportada
+ * aquí, que es donde se busca: el histórico también la necesita y tenerla en
+ * este fichero cerraba un ciclo de imports (ver la cabecera de `cadencia.ts`).
  */
-export const INTERVALO_MIN = Math.max(
-  2,
-  Number(process.env.PRESENCIA_BASES_MIN) || 10,
-);
+import { INTERVALO_MIN } from "./cadencia.ts";
+export { INTERVALO_MIN };
 
 /** Una vuelta: barre todas las empresas con telemática configurada. */
 export async function tickPresenciaBases(): Promise<{
