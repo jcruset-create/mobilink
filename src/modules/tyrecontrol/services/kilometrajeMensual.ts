@@ -129,6 +129,9 @@ export const pararRelleno = (b: { empresaId?: string; connectorKey: string; acco
 export interface TareaRevisiones {
   empresaId: string;
   intervaloSegundos: number;
+  /** Suelo del histórico del proveedor: no se pregunta por nada anterior. */
+  desde: string | null;
+  notaHorizonte: string | null;
   estado: "en_curso" | "terminada" | "parada" | "abandonada";
   iniciadaMs: number;
   ultimoTickMs: number | null;
@@ -144,7 +147,7 @@ export interface TareaRevisiones {
   nota?: string;
 }
 
-export const rellenarRevisiones = (b: { empresaId?: string; intervaloSegundos?: number }) =>
+export const rellenarRevisiones = (b: { empresaId?: string; intervaloSegundos?: number; desde?: string }) =>
   pedir<{ tarea: TareaRevisiones }>("/revisiones", { method: "POST", body: JSON.stringify(b) });
 
 export const estadoRevisiones = (empresaId?: string) =>

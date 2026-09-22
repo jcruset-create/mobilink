@@ -38,12 +38,16 @@ export interface RevisionPendiente {
 export async function revisionesSinKm(
   empresaId: string,
   desplazamiento = 0,
+  /** Suelo: nada anterior a esta fecha (`YYYY-MM-DD`). Ver `cuantasSinKm`. */
+  desde?: string | null,
 ): Promise<RevisionPendiente[]> {
-  const { data, error } = await supabase
+  let q = supabase
     .from("revisiones_vehiculo")
     .select("id, vehiculo_id, fecha_revision, medido_at")
     .eq("empresa_id", empresaId)
-    .is("km_vehiculo", null)
+    .is("km_vehiculo", null);
+  if (desde) q = q.gte("fecha_revision", desde);
+  const { data, error } = await q
     .order("fecha_revision", { ascending: true })
     .order("id", { ascending: true })
     .range(desplazamiento, desplazamiento + PAGINA_PENDIENTES - 1);
@@ -53,13 +57,23 @@ export async function revisionesSinKm(
 
 export const TAMANO_PAGINA = PAGINA_PENDIENTES;
 
-/** Cuántas quedan en total. Solo para poder decir «faltan N». */
-export async function cuantasSinKm(empresaId: string): Promise<number> {
-  const { count, error } = await supabase
+/**
+ * Cuántas quedan en total. Solo para poder decir «faltan N».
+ *
+ * `desde` es el suelo del histórico del proveedor. Sin él, la primera versión
+ * contó 5.404 revisiones de Autocares Plana y anunció 30 horas de trabajo,
+ * cuando las más antiguas son de 2021 y Movertis no guarda nada anterior a
+ * agosto de 2025. Preguntar por esos años no es lento: es imposible, y encima
+ * caro —una revisión irrellenable gasta tres peticiones en vez de dos—.
+ */
+export async function cuantasSinKm(empresaId: string, desde?: string | null): Promise<number> {
+  let q = supabase
     .from("revisiones_vehiculo")
     .select("id", { count: "exact", head: true })
     .eq("empresa_id", empresaId)
     .is("km_vehiculo", null);
+  if (desde) q = q.gte("fecha_revision", desde);
+  const { count, error } = await q;
   if (error) throw new Error(`No se pudieron contar las revisiones: ${error.message}`);
   return count ?? 0;
 }

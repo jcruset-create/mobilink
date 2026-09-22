@@ -79,6 +79,8 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
     if (!confirm(
       "Se buscará en la telemática el odómetro que marcaba cada autobús en el momento de cada " +
       "revisión que no tenga kilometraje, de UNA EN UNA y a una revisión cada 20 segundos.\n\n" +
+      "Primero se le pregunta al proveedor hasta dónde llega su histórico, y no se pide nada " +
+      "anterior: preguntar por años que no guarda no es lento, es imposible.\n\n" +
       "Un número solo se escribe si dos consultas distintas coinciden y encaja con las revisiones " +
       "vecinas y con el mes ya sincronizado. Nunca pisa un kilometraje puesto a mano.\n\n" +
       "Son horas, sigue en el servidor y puedes pararlo. ¿Seguir?",
@@ -294,6 +296,11 @@ export default function SincronizacionKilometraje({ empresaId, cuenta }: { empre
           {revs.ultima && (
             <span className="sm:col-span-3 lg:col-span-4">
               Última: <b>{revs.ultima.fecha}</b> → {revs.ultima.resultado}
+            </span>
+          )}
+          {revs.notaHorizonte && (
+            <span className="text-slate-400 sm:col-span-3 lg:col-span-4">
+              Desde <b>{revs.desde ?? "el principio"}</b> · {revs.notaHorizonte}
             </span>
           )}
           {revs.nota && <span className="text-slate-400 sm:col-span-3 lg:col-span-4">{revs.nota}</span>}
