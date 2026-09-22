@@ -28,7 +28,11 @@ import { Router, json, type Request, type Response } from "express";
 import { supabase } from "../../supabase.ts";
 import { puedeVerEmpresa } from "../empresaAcceso.ts";
 import { empresaDe, resolverSolicitante, type Solicitante } from "../conciliacion/router.ts";
-import { listMonthlyMileage, listMonthlyMileageByTenant, getSyncState, listConnectorConfigs } from "../../integration-hub/infrastructure/repositories.ts";
+import {
+  listMonthlyMileage, listMonthlyMileageByTenant, getSyncState, listConnectorConfigs,
+  revisarCoherenciaMensual,
+} from "../../integration-hub/infrastructure/repositories.ts";
+import { VECES_ODOMETRO_MAXIMO } from "../../integration-hub/connectors/telematics/movertis/mapeo.ts";
 import { syncMonthlyMileage } from "../../integration-hub/application/services/MonthlyMileageSyncService.ts";
 import { entidadSyncDe } from "../../integration-hub/application/services/MonthlyMileageSyncService.ts";
 import { compararMeses, mesDe, mesesEntre, ZONA_HORARIA_POR_DEFECTO, type Mes } from "../../integration-hub/domain/meses.ts";
@@ -366,6 +370,35 @@ export function createKilometrajeMensualRouter(): Router {
       const configs = await listConnectorConfigs(empresaId);
       const zona = String((configs.find((c: any) => c.enabled)?.config as any)?.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
       res.json({ empresaId, ...rankingDeKilometraje(filas, flota, mesDe(ahora, zona)) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Revisa la coherencia de lo ya guardado y descarta lo imposible.
+   *
+   * La misma regla que aplica el conector al recibir la respuesta —una
+   * distancia no puede superar el doble de lo que avanzó el odómetro—, pero
+   * contra el histórico. Hace falta porque las filas malas entraron antes de
+   * que la regla existiera, y basta una para que el ranking ponga primero a un
+   * autobús con 37 millones de kilómetros al año.
+   *
+   * Con `aplicar: false` solo cuenta. Es lo que se pide primero desde la
+   * pantalla, para poder enseñar el número antes de que nadie confirme nada.
+   */
+  router.post("/coherencia", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const r = await revisarCoherenciaMensual({
+        tenantId: empresaId,
+        // El factor viene del conector, donde está medido y documentado: la
+        // regla vive en un solo sitio y no se duplica un 2 suelto aquí.
+        vecesOdometroMaximo: VECES_ODOMETRO_MAXIMO,
+        aplicar: req.body?.aplicar === true,
+      });
+      res.json({ empresaId, aplicado: req.body?.aplicar === true, ...r });
     } catch (e) {
       fallo(res, e);
     }

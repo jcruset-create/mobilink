@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, Gauge, Search, TriangleAlert } from "lucide-react";
-import { rankingKilometraje, type Ranking, type VehiculoDelRanking } from "../services/kilometrajeMensual";
+import { Download, Gauge, Search, ShieldCheck, TriangleAlert } from "lucide-react";
+import {
+  rankingKilometraje, revisarCoherencia,
+  type Ranking, type VehiculoDelRanking,
+} from "../services/kilometrajeMensual";
 import { listarEmpresas } from "../services/data";
 import type { Empresa } from "../types";
 
@@ -43,6 +46,8 @@ export default function RankingKilometraje() {
   const [busqueda, setBusqueda] = useState("");
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [empresaId, setEmpresaId] = useState("");
+  const [revisando, setRevisando] = useState(false);
+  const [avisoRevision, setAvisoRevision] = useState("");
 
   useEffect(() => {
     listarEmpresas()
@@ -83,6 +88,44 @@ export default function RankingKilometraje() {
   }, [datos, busqueda]);
 
   const nombreEmpresa = empresas.find((e) => e.id === empresaId)?.nombre ?? "";
+
+  /**
+   * Revisar coherencia: primero se cuenta, se enseña el número y solo entonces
+   * se confirma. Descartar filas del histórico no es algo que deba pasar por
+   * pulsar un botón sin saber cuántas son.
+   */
+  async function revisar() {
+    setRevisando(true);
+    setAvisoRevision("");
+    setError("");
+    try {
+      const previa = await revisarCoherencia({ empresaId, aplicar: false });
+      if (previa.filas === 0) {
+        setAvisoRevision("Ningún mes guardado contradice a su odómetro. No hay nada que descartar.");
+        return;
+      }
+      const peor = previa.muestra[0];
+      const detalle = peor
+        ? `\n\nLa peor: unidad ${peor.externalCode}, ${peor.year}-${String(peor.month).padStart(2, "0")}, ` +
+          `${Math.round(peor.km).toLocaleString("es-ES")} km con el odómetro avanzando ` +
+          `${Math.round(peor.avance).toLocaleString("es-ES")}.`
+        : "";
+      if (!confirm(
+        `${previa.filas} meses de ${previa.vehiculos} vehículos dicen una distancia imposible: más del doble ` +
+        `de lo que avanzó su odómetro en ese mismo mes.${detalle}\n\n` +
+        "Se descartarán esas distancias. Los odómetros y el resto de meses no se tocan, y esos meses " +
+        "quedarán marcados para volver a pedirse.\n\n¿Seguir?",
+      )) return;
+
+      const r = await revisarCoherencia({ empresaId, aplicar: true });
+      setAvisoRevision(`Descartados ${r.filas} meses de ${r.vehiculos} vehículos.`);
+      setDatos(await rankingKilometraje(empresaId));
+    } catch (e: any) {
+      setError(e?.message ?? "No se pudo revisar la coherencia");
+    } finally {
+      setRevisando(false);
+    }
+  }
 
   function exportar() {
     if (!datos) return;
@@ -140,6 +183,14 @@ export default function RankingKilometraje() {
             />
           </div>
           <button
+            onClick={() => void revisar()}
+            disabled={revisando || !empresaId}
+            title="Descarta los meses cuya distancia contradice a su propio odómetro"
+            className="flex items-center gap-1 rounded-lg border border-slate-600 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-700/40 disabled:opacity-40"
+          >
+            <ShieldCheck className="h-3.5 w-3.5" /> {revisando ? "Revisando…" : "Revisar coherencia"}
+          </button>
+          <button
             onClick={exportar}
             disabled={!datos?.vehiculos.length}
             className="flex items-center gap-1 rounded-lg border border-sky-600 px-3 py-1.5 text-xs font-bold text-sky-300 hover:bg-sky-500/10 disabled:opacity-40"
@@ -150,6 +201,7 @@ export default function RankingKilometraje() {
       </div>
 
       {error && <div className="mb-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
+      {avisoRevision && <div className="mb-3 rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-300">{avisoRevision}</div>}
       {cargando && <div className="text-sm text-slate-400">Cargando…</div>}
 
       {datos && !cargando && (

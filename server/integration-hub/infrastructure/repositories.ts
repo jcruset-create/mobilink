@@ -1422,6 +1422,84 @@ export async function listMonthlyMileageByTenant(params: {
   return rows.map(aFilaMensual);
 }
 
+/**
+ * Descarta los meses cuya distancia es imposible a la luz de su odómetro.
+ *
+ * Misma regla que aplica el conector al RECIBIR la respuesta
+ * (`distanciaCreible` en el mapeo de Movertis), aquí contra lo ya guardado:
+ * hace falta porque las filas malas entraron antes de que existiera la regla,
+ * y una sola basta para poner a un autobús el primero del ranking con 37
+ * millones de kilómetros al año.
+ *
+ * El factor lo pasa quien llama para que la regla siga viviendo en un solo
+ * sitio; no se repite aquí un 2 suelto que mañana se desincronice del otro.
+ *
+ * `aplicar: false` solo cuenta, sin tocar nada: quien pulsa el botón ve
+ * cuántas filas se va a llevar por delante antes de confirmar.
+ */
+export async function revisarCoherenciaMensual(params: {
+  tenantId: string;
+  vecesOdometroMaximo: number;
+  aplicar: boolean;
+}): Promise<{
+  filas: number;
+  vehiculos: number;
+  muestra: Array<{ mobilinkId: string; externalCode: string; year: number; month: number; km: number; avance: number }>;
+}> {
+  // El odómetro solo sirve de vara cuando está y cuando avanza. Sin él no se
+  // juzga: es el caso de los vehículos sin CAN, y ahí no hay con qué comparar.
+  const condicion = `
+      tenant_id = $1
+      AND sync_status = 'ok'
+      AND distance_km IS NOT NULL
+      AND initial_odometer_km IS NOT NULL
+      AND final_odometer_km IS NOT NULL
+      AND final_odometer_km > initial_odometer_km
+      AND distance_km > (final_odometer_km - initial_odometer_km) * $2`;
+
+  const { rows: previa } = await pool.query(
+    `SELECT mobilink_id, external_code, year, month, distance_km,
+            (final_odometer_km - initial_odometer_km) AS avance
+       FROM integration_vehicle_monthly_mileage
+      WHERE ${condicion}
+      ORDER BY distance_km DESC
+      LIMIT 10`,
+    [params.tenantId, params.vecesOdometroMaximo]
+  );
+  const { rows: cuenta } = await pool.query(
+    `SELECT COUNT(*)::int AS filas, COUNT(DISTINCT mobilink_id)::int AS vehiculos
+       FROM integration_vehicle_monthly_mileage
+      WHERE ${condicion}`,
+    [params.tenantId, params.vecesOdometroMaximo]
+  );
+
+  if (params.aplicar && cuenta[0].filas > 0) {
+    await pool.query(
+      `UPDATE integration_vehicle_monthly_mileage
+          SET sync_status = 'error',
+              distance_km = NULL,
+              closed = false,
+              last_error = 'Distancia incoherente con el odómetro; descartada',
+              updated_at_ms = $3
+        WHERE ${condicion}`,
+      [params.tenantId, params.vecesOdometroMaximo, now()]
+    );
+  }
+
+  return {
+    filas: cuenta[0].filas,
+    vehiculos: cuenta[0].vehiculos,
+    muestra: previa.map((r: any) => ({
+      mobilinkId: String(r.mobilink_id),
+      externalCode: String(r.external_code),
+      year: Number(r.year),
+      month: Number(r.month),
+      km: Number(r.distance_km),
+      avance: Number(r.avance),
+    })),
+  };
+}
+
 /** Todos los meses guardados de un vehículo, del más reciente al más antiguo. */
 export async function listMonthlyMileage(params: {
   tenantId: string;
