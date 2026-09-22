@@ -69,30 +69,58 @@ export function matriculaComparable(valor: unknown): string {
   return String(valor ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
-/** Confianza mínima para fiarse del OCR sin que el operario reescriba. */
-export const CONFIANZA_OCR_MINIMA = 0.7;
-
 /** Por debajo de 4 caracteres no se busca vehículo: traería media tabla. */
 export const LARGO_MINIMO_MATRICULA = 4;
 
-export type LecturaOcr = {
-  matricula?: unknown;
-  confianza?: unknown;
-};
-
 /**
- * ¿Sirve esta lectura para proponerla en el formulario?
+ * La matrícula que ha dicho la IA, cuando responde EN TEXTO PLANO.
  *
- * Devuelve la matrícula normalizada o `null`. `null` no es un error: significa
- * "que la escriba la persona". El OCR propone; nunca decide.
+ * Es la vía por la que lee Mobilink Assist (`detectPlateFromImage`), y lleva
+ * años leyendo matrículas en el arcén. La recepción pedía un JSON
+ * —`{"matricula": ..., "confianza": ...}`— y eso añade un modo de fallo que
+ * Assist no tiene: si el modelo contesta bien pero envuelve el JSON en una
+ * frase, o se queda sin tokens antes de cerrar la llave, la respuesta entera
+ * se cae y al operario le sale «en esa foto no se ve ninguna matrícula»
+ * cuando la matrícula se veía perfectamente.
+ *
+ * Aquí no hay nada que cerrar: lo que vuelve es la matrícula o la palabra
+ * NONE. Se acepta que el modelo la adorne («La matrícula es 4610 CCV.»)
+ * porque normalizar se lo come, y se exige un largo mínimo para no dar por
+ * buena una sílaba suelta.
  */
-export function matriculaPropuestaPorOcr(lectura: LecturaOcr | null | undefined): string | null {
-  if (!lectura) return null;
-  const confianza = Number(lectura.confianza);
-  if (!Number.isFinite(confianza) || confianza < CONFIANZA_OCR_MINIMA) return null;
-  const limpia = matriculaComparable(lectura.matricula);
-  if (limpia.length < LARGO_MINIMO_MATRICULA) return null;
-  return limpia;
+export function matriculaDeTextoIA(respuesta: unknown): string | null {
+  const crudo = String(respuesta ?? "").toUpperCase();
+  if (crudo.trim() === "") return null;
+  // «NONE», y también «No se lee ninguna matrícula»: si ha dicho que no, se
+  // respeta aunque lo haya dicho con prosa.
+  if (/^\s*NO(NE|\b)/.test(crudo)) return null;
+
+  /*
+   * Se busca la matrícula DENTRO del texto en vez de aplastarlo entero.
+   *
+   * Aplastarlo era lo primero que hice y el test lo cazó: «La matrícula es
+   * 4610 CCV» se convertía en LAMATRICULAES4610CCV y eso acababa escrito en
+   * el campo del operario. Una lectura falsa es peor que ninguna, porque la
+   * ninguna se teclea y la falsa se envía.
+   */
+  const texto = crudo.replace(/[^A-Z0-9]+/g, " ").trim();
+  const patrones = [
+    /\b(\d{4}) ?([A-Z]{3})\b/,            // moderna: 4610 CCV
+    /\b([A-Z]{1,2}) ?(\d{4}) ?([A-Z]{1,2})\b/, // antigua: T 1234 AB
+  ];
+  for (const patron of patrones) {
+    const encontrado = texto.match(patron);
+    if (encontrado) return encontrado.slice(1).join("");
+  }
+
+  /*
+   * Sin patrón reconocible solo se acepta la respuesta si el modelo contestó
+   * lo que se le pidió: la matrícula y nada más. Es lo que deja pasar las
+   * placas extranjeras, que no tienen por qué seguir ningún formato nuestro.
+   */
+  if (texto.includes(" ")) return null;
+  const limpia = matriculaComparable(texto);
+  return limpia.length >= LARGO_MINIMO_MATRICULA ? limpia : null;
 }
 
 /**
@@ -106,36 +134,24 @@ export function matriculaPropuestaPorOcr(lectura: LecturaOcr | null | undefined)
  */
 export const KILOMETROS_MAXIMOS = 3_000_000;
 
-export type LecturaKilometros = {
-  kilometros?: unknown;
-  confianza?: unknown;
-};
-
 /**
- * ¿Sirve esta lectura del cuadro para proponerla en el formulario?
+ * Los kilómetros que ha dicho la IA, cuando responde EN TEXTO PLANO.
  *
- * Mismo trato que la matrícula: devuelve el número o `null`, y `null` no es un
- * error, es «que lo escriba la persona». Lo que devuelve se le ENSEÑA al
- * operario en un campo editable; nunca se guarda sin que lo haya visto.
- *
- * Se aceptan los separadores de miles que trae cualquier cuadro («123.456»,
- * "123 456") porque la IA los devuelve tal cual los ve.
+ * Mismo cambio y mismo motivo que `matriculaDeTextoIA`. Se queda con el
+ * número MÁS LARGO de la respuesta: si el modelo escribe «123456 km (el
+ * parcial marca 321)», el odómetro es el de seis cifras, no el de tres.
  */
-export function kilometrosPropuestosPorOcr(
-  lectura: LecturaKilometros | null | undefined
-): number | null {
-  if (!lectura) return null;
-  const confianza = Number(lectura.confianza);
-  if (!Number.isFinite(confianza) || confianza < CONFIANZA_OCR_MINIMA) return null;
+export function kilometrosDeTextoIA(respuesta: unknown): number | null {
+  const texto = String(respuesta ?? "");
+  if (/^\s*NONE/i.test(texto.trim())) return null;
 
-  const crudo = String(lectura.kilometros ?? "").replace(/[^0-9]/g, "");
-  if (crudo === "") return null;
+  // Los separadores de miles se quitan ANTES de buscar números, o «123.456»
+  // se leería como dos cifras sueltas y ganaría la equivocada.
+  const numeros = texto.replace(/[.,\s](?=\d{3}\b)/g, "").match(/\d+/g);
+  if (!numeros) return null;
 
-  const km = Number(crudo);
-  // El cero se descarta: un cuentakilómetros a cero es casi siempre una
-  // lectura fallida, no un vehículo recién matriculado entrando al taller.
-  if (!Number.isFinite(km) || km <= 0 || km > KILOMETROS_MAXIMOS) return null;
-  return km;
+  const mayor = numeros.reduce((a, b) => (b.length >= a.length ? b : a));
+  return kilometrosEscritos(mayor);
 }
 
 /** Lo que el operario teclea, validado igual que lo que lee la IA. */

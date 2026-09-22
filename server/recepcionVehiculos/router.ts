@@ -22,12 +22,15 @@ import { Router, json, type RequestHandler, type Response } from "express";
 import type multer from "multer";
 
 import db from "../db.ts";
-import { extractJson, hasAi } from "../core/ai.ts";
+import { hasAi } from "../core/ai.ts";
+import { pedirIA } from "../core/openaiService.ts";
 import { normalizarMatricula, patronBusquedaMatricula } from "../tyrecontrol/matricula.ts";
 import { normalizeRecepcionRow } from "./normaliza.ts";
 import {
   citasParaRecibir,
   idsDeCitasYaRecibidas,
+  kilometrosDeTextoIA,
+  matriculaDeTextoIA,
   plantillasParaElPatio,
 } from "../../src/modules/recepcionVehiculo.ts";
 
@@ -440,37 +443,53 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       if (!hasAi()) return res.json({ matricula: null, confianza: 0 });
 
       /*
-       * La «confianza» que devuelve el modelo NO sirve para filtrar.
+       * Se lee EXACTAMENTE como lo hace Mobilink Assist en el arcén
+       * (`detectPlateFromImage`, server/index.ts): respuesta en texto plano,
+       * NONE cuando no hay nada, y tokens de sobra.
        *
-       * Comprobado contra producción: con una foto angulada y borrosa leyó
-       * 4810CCV donde ponía 4610CCV, y la devolvió con confianza 0.99. Es un
-       * número que el modelo se inventa, no una medida de nada. El umbral que
-       * había no filtraba los errores; solo dejaba al operario sin lectura las
-       * veces que el modelo decidía dudar.
+       * Antes se pedía un JSON con una «confianza» y un tope de 200 tokens, y
+       * las dos cosas quitaban lecturas buenas. La confianza es un número que
+       * el modelo se inventa —leyó 4810CCV donde ponía 4610CCV y lo dio con
+       * 0.99—, así que no filtraba ni un error. Y 200 tokens es un cepo con un
+       * modelo razonador: lo que piensa antes de contestar también cuenta, se
+       * queda sin presupuesto a mitad del JSON, la respuesta no parsea y al
+       * operario le sale que en la foto no se ve ninguna matrícula. Se veía.
        *
-       * Se sigue pidiendo y guardando —para poder mirarlo algún día— pero
-       * quien decide si la matrícula es la buena es la persona que tiene el
-       * vehículo delante. Por eso el campo es editable y pone «compruébala».
+       * La regla del camión y el remolque tampoco es adorno: aquí entran
+       * tractoras con placa roja detrás, y sin decirle cuál queremos devuelve
+       * la que le apetece.
        */
-      const leido = await extractJson({
-        system:
-          "Eres un lector de matrículas de vehículos en un taller español. " +
-          "Devuelve SOLO un JSON {\"matricula\": string|null, \"confianza\": number}. " +
-          "Formatos habituales: cuatro cifras y tres letras (1234BCD) y las " +
-          "antiguas con letras de provincia (T-1234-AB); también puede ser un " +
-          "camión o un remolque con placa de otro país. Da tu mejor lectura " +
-          "aunque la foto no sea perfecta: quien la ha hecho va a comprobarla. " +
-          "Devuelve matricula null SOLO si en la imagen no hay ninguna " +
-          "matrícula. No te inventes una que no esté.",
-        images: [imagen],
-        maxTokens: 200,
+      const r = await pedirIA({
+        operacion: "recepcion.ocrMatricula",
+        proposito: "documento",
+        prompt:
+          "Esta es la foto de la matrícula de un vehículo que entra en un " +
+          "taller. En España la matrícula BLANCA es la del CAMIÓN o del coche " +
+          "y la ROJA es la del REMOLQUE: si se ven las dos, devuelve SOLO la " +
+          "BLANCA. Puede ser una matrícula moderna (1234BCD), una antigua con " +
+          "letras de provincia (T-1234-AB) o una placa extranjera. " +
+          "Responde EXCLUSIVAMENTE con el texto de la matrícula, sin espacios " +
+          "ni guiones, o con la palabra NONE si en la imagen no hay ninguna " +
+          "matrícula legible. Da tu mejor lectura aunque la foto no sea " +
+          "perfecta: quien la ha hecho tiene el vehículo delante y la va a " +
+          "comprobar. No te inventes una matrícula que no esté.",
+        imagenes: [{ url: imagen }],
+        maxTokens: 2000,
       });
 
-      const confianza = Number((leido as any)?.confianza);
-      res.json({
-        matricula: normalizarMatricula((leido as any)?.matricula) || null,
-        confianza: Number.isFinite(confianza) ? confianza : 0,
-      });
+      /*
+       * `confianza` se sigue devolviendo porque la APK y la columna de la
+       * tabla la esperan, pero ya no significa nada: en texto plano el modelo
+       * no la da, y cuando la daba no valía para decidir. Quien decide si la
+       * matrícula es la buena es la persona del patio, y por eso el campo es
+       * editable y pone «compruébala».
+       */
+      // Un fallo del proveedor y una foto sin matrícula acaban los dos en
+      // `matricula: null`, y al operario se le enseña lo mismo. En el log no:
+      // ahí sí queda el motivo, que es lo que faltaba para poder mirarlo.
+      if (!r.ok) console.error("[Recepciones] ocr-matricula:", r.error);
+
+      res.json({ matricula: matriculaDeTextoIA(r.texto), confianza: null });
     } catch (e) {
       // Que falle la IA no puede bloquear una recepción: se teclea y ya está.
       console.error("[Recepciones] ocr:", (e as any)?.message ?? e);
@@ -495,28 +514,26 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
         if (!imagen) return res.status(400).json({ error: "Falta la imagen" });
         if (!hasAi()) return res.json({ kilometros: null, confianza: 0 });
 
-        const leido = await extractJson({
-          system:
-            "Eres un lector de cuentakilómetros de vehículos en un taller. " +
-            "Devuelve SOLO un JSON {\"kilometros\": number|null, \"confianza\": number} " +
-            "donde confianza va de 0 a 1. Lee el ODÓMETRO TOTAL, no el parcial " +
-            "(trip), no la temperatura y no la velocidad. Si el cuadro marca " +
-            "km y decimas, devuelve solo los kilómetros enteros. Si no lo ves " +
-            "con claridad, devuelve kilometros null y confianza 0. No inventes.",
-          images: [imagen],
-          maxTokens: 200,
+        // Texto plano y tokens de sobra, por lo mismo que la matrícula.
+        const r = await pedirIA({
+          operacion: "recepcion.ocrKilometros",
+          proposito: "documento",
+          prompt:
+            "Esta es la foto del cuadro de un vehículo que entra en un taller. " +
+            "Lee el ODÓMETRO TOTAL: no el parcial (trip), no la temperatura, " +
+            "no la velocidad y no la hora. Si marca kilómetros y décimas, " +
+            "quédate solo con los kilómetros enteros. Responde " +
+            "EXCLUSIVAMENTE con el número, sin puntos ni comas ni la palabra " +
+            "km, o con NONE si no se lee el cuentakilómetros.",
+          imagenes: [{ url: imagen }],
+          maxTokens: 2000,
         });
 
-        const confianza = Number((leido as any)?.confianza);
-        const crudo = String((leido as any)?.kilometros ?? "").replace(/[^0-9]/g, "");
-        const km = crudo === "" ? null : Number(crudo);
+        // El filtro de sensatez (cero, topes) es el mismo que aplica la APK a
+        // lo que se teclea, y vive en el módulo de lógica pura.
+        if (!r.ok) console.error("[Recepciones] ocr-kilometros:", r.error);
 
-        res.json({
-          // El filtro de sensatez (cero, topes) lo aplica la APK con la misma
-          // regla que usa para lo que se teclea. Aquí solo se lee.
-          kilometros: km != null && Number.isFinite(km) ? km : null,
-          confianza: Number.isFinite(confianza) ? confianza : 0,
-        });
+        res.json({ kilometros: kilometrosDeTextoIA(r.texto), confianza: null });
       } catch (e) {
         // Que falle la IA no puede bloquear una recepción: se teclea y ya está.
         console.error("[Recepciones] ocr-kilometros:", (e as any)?.message ?? e);
