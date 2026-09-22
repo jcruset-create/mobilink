@@ -9,8 +9,7 @@ import AusenciasTecnicosPage from "./AusenciasTecnicosPage";
 import PartesTrabajoPage from "./PartesTrabajoPage";
 import RecepcionesPage from "./RecepcionesPage";
 import { supabase } from "../administracion/services/supabase";
-import { APP_VERSION } from "../../version";
-import { API_BASE } from "../workshopApi";
+import VersionDesplegada from "../../components/VersionDesplegada";
 
 /** Clave del módulo en app_licencias / app_usuario_modulos. */
 export const MODULO_WORKPLANNER = "workplanner";
@@ -221,22 +220,6 @@ export default function WorkPlannerApp() {
    * es lo que permite responder «¿está desplegado el arreglo?» sin depender
    * de que alguien haya subido el número de versión a mano.
    */
-  const [commitDesplegado, setCommitDesplegado] = useState<string | null>(null);
-  useEffect(() => {
-    let vivo = true;
-    fetch(`${API_BASE}/api/health`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (vivo && d?.commit) setCommitDesplegado(String(d.commit));
-      })
-      .catch(() => {
-        /* sin commit se enseña solo la versión, como hasta ahora */
-      });
-    return () => {
-      vivo = false;
-    };
-  }, []);
-
   // El body de la app es claro (#f8fafc) porque el panel de taller lo es. En
   // WorkPlanner todo va en oscuro, así que se tiñe el fondo del documento con
   // el mismo slate-900 del resto de módulos para que no asome ninguna zona de
@@ -274,24 +257,7 @@ export default function WorkPlannerApp() {
             />
             <CalendarClock className="h-4 w-4 text-sky-400" />
             <span className="text-[13px] font-black">WorkPlanner</span>
-            {/* El número de versión se sube a mano y se queda atrás; el
-                commit lo pone Render y no se olvida. Por eso el que decide si
-                un arreglo está desplegado es el segundo. */}
-            <span
-              className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-400"
-              title={
-                commitDesplegado
-                  ? `Servidor desplegado: ${commitDesplegado}`
-                  : "Versión del panel"
-              }
-            >
-              {APP_VERSION}
-              {commitDesplegado && (
-                <span className="ml-1 font-mono text-[9px] text-slate-500">
-                  {commitDesplegado}
-                </span>
-              )}
-            </span>
+            <VersionDesplegada />
           </div>
           <ReclamoWorkPlanner />
           {permitido && (
