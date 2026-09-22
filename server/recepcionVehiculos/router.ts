@@ -540,7 +540,18 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
         `SELECT ${COLUMNAS} FROM recepciones_vehiculo
           WHERE "deletedAtMs" IS NULL
             AND ($1::text = 'todas' OR estado = $1)
-            AND ($2::text IS NULL OR "workshopId" = $2)
+            -- Una recepción SIN taller se ve desde cualquiera.
+            --
+            -- Si no, desaparece: el operario que la manda puede no tener
+            -- taller asignado —la columna es nueva y está en NULL para todos
+            -- hasta que alguien la rellene—, y entonces la recepción se
+            -- guarda sin taller. Filtrando por igualdad, los nulos quedan
+            -- fuera y Operativo 2 enseñaba «Pendientes de recepción (0)»
+            -- mientras la bandeja, que no filtra, la enseñaba perfectamente.
+            --
+            -- Es el mismo criterio que con las plantillas: sin taller = de
+            -- todos. Más vale verla de más que no verla.
+            AND ($2::text IS NULL OR "workshopId" = $2 OR "workshopId" IS NULL)
           ORDER BY "creadaAtMs" DESC LIMIT 300`,
         [estado, workshopId]
       );
@@ -639,10 +650,20 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
       const job = (req.body ?? {}) as Record<string, any>;
-      const jobId = Number(job.id);
-      if (!Number.isFinite(jobId)) {
-        return res.status(400).json({ error: "Falta el trabajo a crear" });
-      }
+      /*
+       * El id lo pone el SERVIDOR, no el navegador.
+       *
+       * El navegador lo calculaba como «el mayor de los trabajos que veo, más
+       * uno». Con la lista vacía —o filtrada por taller, o con todo cerrado—
+       * eso da 1, y el 1 ya existe en la tabla: clave duplicada, 500, y en
+       * pantalla un error que no decía nada.
+       *
+       * `Date.now()` es lo que usa el alta de trabajos desde la APK desde
+       * siempre. No es bonito, pero es monótono y no depende de lo que el
+       * cliente alcance a ver. El id que manda el navegador solo le sirve a
+       * él para casar la propuesta del motor de asignación.
+       */
+      const jobId = Date.now();
       // El trabajo nace en validacion: es una propuesta, y una propuesta la
       // autoriza una persona en la pantalla de siempre.
       if (String(job.status) !== "validacion") {
@@ -670,9 +691,8 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
            "customerName", "customerPhone", "createdAtMs",
            "workedAccumulatedMinutes", "pausedAccumulatedMinutes",
            "workshopId", "quickEntryLabel", "quickEntryMode",
-           quantity, "unitMinutes", "standardMinutes", "ptEntradaMs",
-           "recepcionId"
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11,$12,$13,$14,$15,$16,$17,$18)`,
+           quantity, "unitMinutes", "ptEntradaMs", "recepcionId"
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11,$12,$13,$14,$15,$16,$17)`,
         [
           jobId,
           texto(job.area) || "mecanica",
@@ -688,8 +708,11 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           textoONull(job.quickEntryLabel),
           texto(job.quickEntryMode) || "team",
           Number.isFinite(Number(job.quantity)) ? Number(job.quantity) : 1,
+          // `standardMinutes` NO es columna de `jobs`: es de `quick_templates`.
+          // Nombrarla aquí tumbaba la consulta entera y la conversión fallaba
+          // SIEMPRE, con cita o sin ella. El tiempo total del trabajo sale de
+          // quantity x unitMinutes, que es como lo calcula el resto del panel.
           Number.isFinite(Number(job.unitMinutes)) ? Number(job.unitMinutes) : null,
-          Number.isFinite(Number(job.standardMinutes)) ? Number(job.standardMinutes) : null,
           recepcion.creadaAtMs,
           id,
         ]
