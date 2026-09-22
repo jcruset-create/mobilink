@@ -289,6 +289,9 @@ export function createKilometrajeMensualRouter(): Router {
       const tarea = await iniciarRellenoRevisiones({
         empresaId,
         intervaloSegundos: req.body?.intervaloSegundos,
+        // Sin `desde`, la tarea le pregunta al proveedor hasta dónde llega su
+        // histórico. Se acepta a mano para poder acotarla más aún.
+        desde: typeof req.body?.desde === "string" ? req.body.desde : null,
       });
       res.json({ tarea });
     } catch (e) {

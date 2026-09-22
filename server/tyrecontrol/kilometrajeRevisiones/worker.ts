@@ -41,6 +41,7 @@ import {
   cotasDelMes, cuantasSinKm, guardarKm, revisionesSinKm, vecinasConKm, TAMANO_PAGINA,
   type RevisionPendiente,
 } from "./datos.ts";
+import { claveDeMes } from "../../integration-hub/domain/meses.ts";
 
 export const INTERVALO_SEGUNDOS_POR_DEFECTO = 20;
 export const INTERVALO_SEGUNDOS_MINIMO = 5;
@@ -54,6 +55,10 @@ export type EstadoTarea = "en_curso" | "terminada" | "parada" | "abandonada";
 export interface Tarea {
   empresaId: string;
   intervaloSegundos: number;
+  /** Suelo del histórico: no se pregunta por nada anterior. `YYYY-MM-DD`. */
+  desde: string | null;
+  /** De dónde salió ese suelo, para que el número no aparezca por magia. */
+  notaHorizonte: string | null;
   estado: EstadoTarea;
   iniciadaMs: number;
   ultimoTickMs: number | null;
@@ -124,15 +129,61 @@ function refrescarRestante(t: TareaViva, pendientes: number): void {
   t.restanteEnPalabras = enPalabras(t.minutosRestantes);
 }
 
+/**
+ * Averigua el suelo: o lo dice quien llama, o se le pregunta al proveedor.
+ *
+ * Si el sondeo falla no se inventa nada y se procesa todo, como antes: un
+ * suelo equivocado dejaría revisiones sin rellenar en silencio, que es peor
+ * que gastar peticiones de más.
+ */
+async function suelo(op: { empresaId: string; desde?: string | null }): Promise<{
+  desde: string | null;
+  notaHorizonte: string | null;
+}> {
+  if (op.desde) return { desde: op.desde, notaHorizonte: "Suelo puesto a mano" };
+  try {
+    const { horizonteDelProveedor } = await import(
+      "../../integration-hub/application/services/HistoricOdometerService.ts"
+    );
+    const r = await horizonteDelProveedor(
+      { tenantId: op.empresaId, correlationId: `km-rev-horizonte` },
+      { zonaHoraria: ZONA_HORARIA_POR_DEFECTO },
+    );
+    if (r.estado === "encontrado") {
+      return {
+        desde: `${claveDeMes(r.mes)}-01`,
+        notaHorizonte:
+          `El proveedor no guarda nada anterior a ${claveDeMes(r.mes)}; ` +
+          `averiguado con ${r.peticiones} consultas al arrancar.`,
+      };
+    }
+    if (r.estado === "sin_historico") {
+      return { desde: null, notaHorizonte: "El proveedor no contestó a ningún mes: se procesa todo." };
+    }
+    return { desde: null, notaHorizonte: `No se pudo sondear el histórico (${r.motivo}): se procesa todo.` };
+  } catch (e: any) {
+    return { desde: null, notaHorizonte: `No se pudo sondear el histórico (${e?.message ?? e}): se procesa todo.` };
+  }
+}
+
 export async function iniciarRellenoRevisiones(op: {
   empresaId: string;
   intervaloSegundos?: number;
+  /** Suelo a mano. Sin él, se le pregunta al proveedor. */
+  desde?: string | null;
 }): Promise<Tarea> {
   const previa = tareas.get(op.empresaId);
   if (previa && previa.estado === "en_curso") return publica(previa);
 
+  // El suelo: hasta dónde llega el histórico del proveedor. Sin esto la tarea
+  // empieza por 2021 —la revisión más antigua de Plana— y se pasa horas
+  // preguntando por años que nadie puede contestar. Ver `horizonteDelProveedor`.
+  const { desde, notaHorizonte } = await suelo(op);
+
   const t: TareaViva = {
     empresaId: op.empresaId,
+    desde,
+    notaHorizonte,
     intervaloSegundos: intervaloValido(op.intervaloSegundos),
     estado: "en_curso",
     iniciadaMs: Date.now(),
@@ -147,7 +198,7 @@ export async function iniciarRellenoRevisiones(op: {
 
   // Un recuento antes de contestar: quien pulsa el botón ve cuántas faltan y
   // cuánto va a tardar, en vez de un «vale» a ciegas.
-  const quedan = await cuantasSinKm(op.empresaId);
+  const quedan = await cuantasSinKm(op.empresaId, desde);
   t.totalAlEmpezar = quedan;
   refrescarRestante(t, quedan);
   if (quedan === 0) {
@@ -214,7 +265,7 @@ async function siguientePendiente(t: TareaViva): Promise<RevisionPendiente | nul
   // Tope: con 1.247 revisiones son 25 páginas. 200 deja margen de sobra y evita
   // que un fallo raro convierta esto en una consulta infinita.
   for (let pagina = 0; pagina < 200; pagina++) {
-    const filas = await revisionesSinKm(t.empresaId, pagina * TAMANO_PAGINA);
+    const filas = await revisionesSinKm(t.empresaId, pagina * TAMANO_PAGINA, t.desde);
     if (filas.length === 0) return null;
     const candidata = filas.find((r) => !agotada(r));
     if (candidata) return candidata;
@@ -337,7 +388,9 @@ export async function reanudarRellenoRevisiones(): Promise<number> {
       if (!fila || fila.status !== "en_curso") continue;
       let d: any = null;
       try { d = fila.detail ? JSON.parse(String(fila.detail)) : null; } catch { d = null; }
-      await iniciarRellenoRevisiones({ empresaId, intervaloSegundos: d?.intervaloSegundos });
+      await iniciarRellenoRevisiones({
+        empresaId, intervaloSegundos: d?.intervaloSegundos, desde: d?.desde ?? null,
+      });
       const viva = tareas.get(empresaId);
       if (viva) {
         viva.nota = `Reanudada tras un reinicio; antes llevaba ${d?.escritas ?? 0} escritas`;
