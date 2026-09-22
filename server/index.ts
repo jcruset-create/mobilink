@@ -1828,8 +1828,20 @@ const VERSION_APP: string | null = (() => {
   }
 })();
 
+/**
+ * El commit que está corriendo ahora mismo.
+ *
+ * Render lo deja en `RENDER_GIT_COMMIT`. Es el único dato de versión que no
+ * depende de que alguien se acuerde de subir un número a mano: si hay dudas
+ * de si lo desplegado lleva un arreglo, se compara este sha con el del
+ * repositorio y se acabó la conversación.
+ */
+const COMMIT_DESPLEGADO: string | null =
+  (process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || "").slice(0, 8) ||
+  null;
+
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, version: VERSION_APP });
+  res.json({ ok: true, version: VERSION_APP, commit: COMMIT_DESPLEGADO });
 });
 
 // ── TyreControl: cerrar una intervención de cambio de neumático ──
