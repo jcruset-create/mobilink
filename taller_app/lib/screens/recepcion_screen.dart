@@ -55,6 +55,10 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
   bool _leyendoKm = false;
   bool _enviando = false;
   String? _error;
+
+  /// Aviso en ámbar: algo que conviene mirar, pero que no impide enviar. El
+  /// rojo se reserva para lo que hay que arreglar antes de seguir.
+  String? _aviso;
   String? _vehiculoId;
   String? _vehiculoOrigen;
   String? _avisoVehiculo;
@@ -123,6 +127,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
     setState(() {
       _leyendo = true;
       _error = null;
+      _aviso = null;
     });
     try {
       final bytes = await _bytesParaLeer(shot.path);
@@ -130,27 +135,42 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
           .leerMatricula('data:image/jpeg;base64,${base64Encode(bytes)}');
       if (!mounted) return;
 
-      final matricula = leido?['matricula']?.toString() ?? '';
-      final confianza = (leido?['confianza'] as num?)?.toDouble() ?? 0;
+      final matricula = leido['matricula']?.toString() ?? '';
+      final confianza = (leido['confianza'] as num?)?.toDouble() ?? 0;
 
       setState(() {
         _fotos.add(shot);
         _leyendo = false;
-        if (matricula.isNotEmpty && confianza >= 0.7) {
+        if (matricula.isNotEmpty) {
+          /*
+           * Se escribe SIEMPRE que haya lectura, sin mirar la confianza.
+           *
+           * Ese número no sirve: se comprobó que con una foto mala el modelo
+           * leyó 4810CCV donde ponía 4610CCV y lo dio con 0.99. Filtrar por
+           * él no quitaba ni un error, solo dejaba al operario sin lectura de
+           * vez en cuando y obligándole a teclear.
+           *
+           * Así que la lectura se enseña y quien tiene el vehículo delante la
+           * confirma, que es para lo que el campo es editable.
+           */
           _matriculaCtrl.text = matricula;
           _matriculaOcr = matricula;
           _confianzaOcr = confianza;
+          _aviso = 'Matrícula leída de la foto. Compruébala: se equivoca.';
         } else {
-          // Lectura dudosa: mejor que la escriba quien está delante del coche.
-          _error = 'No se ha podido leer la matrícula. Escríbela a mano.';
+          _error = 'En esa foto no se ve ninguna matrícula. '
+              'Repite la foto o escríbela a mano.';
         }
       });
       if (_matriculaCtrl.text.isNotEmpty) await _buscarVehiculo();
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _leyendo = false;
-        _error = 'No se ha podido leer la matrícula. Escríbela a mano.';
+        // No es lo mismo que la foto no valga: aquí no se ha podido ni
+        // preguntar. Decirlo evita repetir la foto diez veces sin cobertura.
+        _error = 'No se ha podido conectar para leer la matrícula. '
+            'Escríbela a mano y envía igual.';
       });
     }
   }
@@ -215,8 +235,11 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
           .leerKilometros('data:image/jpeg;base64,${base64Encode(bytes)}');
       if (!mounted) return;
 
-      final confianza = (leido?['confianza'] as num?)?.toDouble() ?? 0;
-      final km = confianza >= 0.7 ? _kmSensatos(leido?['kilometros']) : null;
+      final confianza = (leido['confianza'] as num?)?.toDouble() ?? 0;
+      // Sin mirar la confianza, por lo mismo que la matrícula. Lo que sí se
+      // mira es que el número sea posible: un cuentakilómetros no marca cero
+      // ni tres millones.
+      final km = _kmSensatos(leido['kilometros']);
 
       setState(() {
         _fotos.add(shot);
@@ -225,15 +248,18 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
           _kmCtrl.text = km.toString();
           _kilometrosOcr = km;
           _confianzaKmOcr = confianza;
+          _aviso = 'Kilómetros leídos de la foto. Compruébalos.';
         } else {
-          _error = 'No se han podido leer los kilómetros. Escríbelos a mano.';
+          _error = 'En esa foto no se ve el cuentakilómetros. '
+              'Repite la foto o escríbelos a mano.';
         }
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _leyendoKm = false;
-        _error = 'No se han podido leer los kilómetros. Escríbelos a mano.';
+        _error = 'No se ha podido conectar para leer los kilómetros. '
+            'Escríbelos a mano y envía igual.';
       });
     }
   }
@@ -361,6 +387,12 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+            ),
+          if (_aviso != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(_aviso!,
+                  style: const TextStyle(color: Colors.amberAccent, fontSize: 13)),
             ),
 
           FilledButton.icon(
