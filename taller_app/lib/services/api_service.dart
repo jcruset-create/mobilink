@@ -535,43 +535,47 @@ class ApiService {
 
   /// Lee la matrícula de una foto. Lo que devuelve se le ENSEÑA al operario en
   /// un campo editable; nunca se manda sin que lo haya visto.
-  Future<Map<String, dynamic>?> leerMatricula(String dataUri) async {
-    try {
-      final res = await http
-          .post(
-            Uri.parse(
-                '$kBackendUrl/api/taller-operator/recepcion-vehiculos/ocr-matricula'),
-            headers: _headers,
-            body: jsonEncode({'imagen': dataUri}),
-          )
-          .timeout(const Duration(seconds: 30));
-      if (res.statusCode != 200) return null;
-      final data = jsonDecode(res.body);
-      return data is Map ? Map<String, dynamic>.from(data) : null;
-    } catch (_) {
-      // Que falle la IA no puede bloquear una recepción: se teclea.
-      return null;
+  /// Lee la matrícula de una foto. LANZA si no se ha podido preguntar.
+  ///
+  /// Distinguir «no he podido llamar» de «en la foto no hay matrícula» importa:
+  /// el mismo mensaje para las dos cosas deja al operario sin saber si tiene
+  /// que repetir la foto o si es que no hay cobertura.
+  ///
+  /// Un minuto de espera, no treinta segundos: el servidor se duerme cuando
+  /// lleva un rato sin tráfico y la primera lectura del día lo despierta.
+  Future<Map<String, dynamic>> leerMatricula(String dataUri) async {
+    final res = await http
+        .post(
+          Uri.parse(
+              '$kBackendUrl/api/taller-operator/recepcion-vehiculos/ocr-matricula'),
+          headers: _headers,
+          body: jsonEncode({'imagen': dataUri}),
+        )
+        .timeout(const Duration(seconds: 60));
+    if (res.statusCode != 200) {
+      throw Exception(_errorDe(res.body, 'No se ha podido leer la matrícula'));
     }
+    final data = jsonDecode(res.body);
+    return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
   }
 
   /// Lee el cuentakilómetros de una foto del cuadro. Igual que la matrícula:
   /// lo que devuelve se ENSEÑA al operario, nunca se manda sin que lo vea.
-  Future<Map<String, dynamic>?> leerKilometros(String dataUri) async {
-    try {
-      final res = await http
-          .post(
-            Uri.parse(
-                '$kBackendUrl/api/taller-operator/recepcion-vehiculos/ocr-kilometros'),
-            headers: _headers,
-            body: jsonEncode({'imagen': dataUri}),
-          )
-          .timeout(const Duration(seconds: 30));
-      if (res.statusCode != 200) return null;
-      final data = jsonDecode(res.body);
-      return data is Map ? Map<String, dynamic>.from(data) : null;
-    } catch (_) {
-      return null;
+  /// Lee el cuentakilómetros de una foto. LANZA si no se ha podido preguntar.
+  Future<Map<String, dynamic>> leerKilometros(String dataUri) async {
+    final res = await http
+        .post(
+          Uri.parse(
+              '$kBackendUrl/api/taller-operator/recepcion-vehiculos/ocr-kilometros'),
+          headers: _headers,
+          body: jsonEncode({'imagen': dataUri}),
+        )
+        .timeout(const Duration(seconds: 60));
+    if (res.statusCode != 200) {
+      throw Exception(_errorDe(res.body, 'No se han podido leer los kilómetros'));
     }
+    final data = jsonDecode(res.body);
+    return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
   }
 
   /// Envía la recepción. Si no hay red se encola y se manda al recuperarla.

@@ -439,12 +439,29 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       // comodidad, no una dependencia.
       if (!hasAi()) return res.json({ matricula: null, confianza: 0 });
 
+      /*
+       * La «confianza» que devuelve el modelo NO sirve para filtrar.
+       *
+       * Comprobado contra producción: con una foto angulada y borrosa leyó
+       * 4810CCV donde ponía 4610CCV, y la devolvió con confianza 0.99. Es un
+       * número que el modelo se inventa, no una medida de nada. El umbral que
+       * había no filtraba los errores; solo dejaba al operario sin lectura las
+       * veces que el modelo decidía dudar.
+       *
+       * Se sigue pidiendo y guardando —para poder mirarlo algún día— pero
+       * quien decide si la matrícula es la buena es la persona que tiene el
+       * vehículo delante. Por eso el campo es editable y pone «compruébala».
+       */
       const leido = await extractJson({
         system:
           "Eres un lector de matrículas de vehículos en un taller español. " +
-          "Devuelve SOLO un JSON {\"matricula\": string|null, \"confianza\": number} " +
-          "donde confianza va de 0 a 1. Si no ves una matrícula con claridad, " +
-          "devuelve matricula null y confianza 0. No inventes.",
+          "Devuelve SOLO un JSON {\"matricula\": string|null, \"confianza\": number}. " +
+          "Formatos habituales: cuatro cifras y tres letras (1234BCD) y las " +
+          "antiguas con letras de provincia (T-1234-AB); también puede ser un " +
+          "camión o un remolque con placa de otro país. Da tu mejor lectura " +
+          "aunque la foto no sea perfecta: quien la ha hecho va a comprobarla. " +
+          "Devuelve matricula null SOLO si en la imagen no hay ninguna " +
+          "matrícula. No te inventes una que no esté.",
         images: [imagen],
         maxTokens: 200,
       });
