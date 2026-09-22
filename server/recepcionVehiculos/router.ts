@@ -42,9 +42,22 @@ const COLUMNAS = `
   "creadaAtMs", "resueltaAtMs", "resueltaPor", "motivoDescarte", "jobId"
 `;
 
+/**
+ * Un 500 con el paso que ha fallado dentro del mensaje.
+ *
+ * Antes todos los endpoints de este módulo devolvían exactamente «Error en la
+ * recepción de vehículos», y con eso en pantalla no hay forma de saber si ha
+ * fallado la lista, una edición o la conversión. Costó una tarde averiguar
+ * que lo que reventaba era el enlace con la cita.
+ *
+ * Va el paso, no el error de la base: el mensaje lo lee quien está en el
+ * taller, y el detalle sigue yendo al registro del servidor.
+ */
 function fallo(res: Response, contexto: string, e: unknown) {
   console.error(`[Recepciones] ${contexto}:`, (e as any)?.message ?? e);
-  return res.status(500).json({ error: "Error en la recepción de vehículos" });
+  return res
+    .status(500)
+    .json({ error: `Error en la recepción de vehículos (${contexto})` });
 }
 
 function texto(valor: unknown): string {
@@ -696,15 +709,48 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
        * estaba en el patio, gana lo que ya se hizo y aquí no se pisa nada.
        */
       if (recepcion.scheduledJobId != null) {
-        const cita = await cliente.query(
-          `UPDATE scheduled_jobs
-              SET data = jsonb_set(data::jsonb, '{jobId}', to_jsonb($2::bigint)),
-                  "updatedAtMs" = $3
-            WHERE id = $1
-              AND data::jsonb->>'jobId' IS NULL
-            RETURNING id`,
-          [recepcion.scheduledJobId, jobId, ahora]
+        /*
+         * La cita se modifica en JavaScript, no con `jsonb_set`.
+         *
+         * `scheduled_jobs.data` guarda el JSON como TEXTO, no como JSONB: por
+         * eso todo el resto del código lo lee con `data::jsonb->>'…'` —el
+         * cast sobra en una columna jsonb— y lo escribe con `JSON.stringify`.
+         * Asignarle el resultado de `jsonb_set` reventaba con «column data is
+         * of type text but expression is of type jsonb», y como el fallo
+         * ocurría DENTRO de la transacción, la conversión entera se caía: la
+         * recepción se quedaba pendiente y en pantalla solo salía un error
+         * genérico.
+         *
+         * Se lee la fila bloqueada, se toca el JSON aquí y se vuelve a
+         * escribir como texto, que es lo que hace el endpoint de la agenda
+         * desde siempre. Así da igual el tipo de la columna.
+         */
+        const filaCita = await cliente.query(
+          `SELECT data FROM scheduled_jobs WHERE id = $1 FOR UPDATE`,
+          [recepcion.scheduledJobId]
         );
+
+        let yaTenia = true;
+        if (filaCita.rowCount && filaCita.rowCount > 0) {
+          const cruda = filaCita.rows[0].data;
+          const datos =
+            typeof cruda === "string" ? JSON.parse(cruda) : { ...(cruda ?? {}) };
+
+          // Si la cita ya tiene trabajo, alguien pulsó «Llegó» mientras el
+          // vehículo estaba en el patio. Gana lo que ya se hizo.
+          if (datos.jobId == null) {
+            datos.jobId = jobId;
+            await cliente.query(
+              `UPDATE scheduled_jobs
+                  SET data = $2, "updatedAtMs" = $3
+                WHERE id = $1`,
+              [recepcion.scheduledJobId, JSON.stringify(datos), ahora]
+            );
+            yaTenia = false;
+          }
+        }
+
+        const cita = { rowCount: yaTenia ? 0 : 1 };
         if (cita.rowCount === 0) {
           // No es un error: la cita pudo confirmarse por el otro camino
           // mientras el vehículo esperaba. Se deja constancia y se sigue.

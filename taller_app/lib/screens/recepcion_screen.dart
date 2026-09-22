@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../services/api_service.dart';
@@ -124,7 +125,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
       _error = null;
     });
     try {
-      final bytes = await File(shot.path).readAsBytes();
+      final bytes = await _bytesParaLeer(shot.path);
       final leido = await widget.api
           .leerMatricula('data:image/jpeg;base64,${base64Encode(bytes)}');
       if (!mounted) return;
@@ -152,6 +153,30 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
         _error = 'No se ha podido leer la matrícula. Escríbela a mano.';
       });
     }
+  }
+
+  /// La foto que se manda a leer, comprimida.
+  ///
+  /// Se enviaba el fichero tal cual salía de la cámara y codificado en base64,
+  /// que engorda otro tercio: casi un mega por lectura, desde el patio y con
+  /// la cobertura que haya. Comprimir es lo que ya hacía la subida de fotos;
+  /// aquí faltaba.
+  ///
+  /// Si la compresión falla se manda el original: más vale una lectura lenta
+  /// que ninguna.
+  Future<List<int>> _bytesParaLeer(String ruta) async {
+    try {
+      final comprimida = await FlutterImageCompress.compressWithFile(
+        ruta,
+        quality: 70,
+        minWidth: 1280,
+        minHeight: 1280,
+      );
+      if (comprimida != null) return comprimida;
+    } catch (_) {
+      /* se sigue con el original */
+    }
+    return File(ruta).readAsBytes();
   }
 
   /// Tope de sensatez, el mismo que aplica el servidor al convertir.
@@ -185,7 +210,7 @@ class _RecepcionScreenState extends State<RecepcionScreen> {
       _error = null;
     });
     try {
-      final bytes = await File(shot.path).readAsBytes();
+      final bytes = await _bytesParaLeer(shot.path);
       final leido = await widget.api
           .leerKilometros('data:image/jpeg;base64,${base64Encode(bytes)}');
       if (!mounted) return;
