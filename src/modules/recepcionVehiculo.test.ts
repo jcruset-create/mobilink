@@ -5,15 +5,14 @@ import {
 } from "../../server/tyrecontrol/matricula.ts";
 import type { QuickTemplate } from "./workshopTypes";
 import {
-  CONFIANZA_OCR_MINIMA,
   KILOMETROS_MAXIMOS,
+  kilometrosDeTextoIA,
   kilometrosEscritos,
-  kilometrosPropuestosPorOcr,
   eligeVehiculo,
   jobDesdeRecepcion,
   loQueFaltaParaConvertir,
   matriculaComparable,
-  matriculaPropuestaPorOcr,
+  matriculaDeTextoIA,
   plantillaParaOperario,
   plantillasParaElPatio,
   diaDeRecepcion,
@@ -67,71 +66,7 @@ describe("matriculaComparable", () => {
   });
 });
 
-describe("matriculaPropuestaPorOcr", () => {
-  it("acepta una lectura clara", () => {
-    expect(matriculaPropuestaPorOcr({ matricula: "1234-abc", confianza: 0.9 })).toBe("1234ABC");
-  });
 
-  it("rechaza la lectura dudosa: que la escriba la persona", () => {
-    expect(matriculaPropuestaPorOcr({ matricula: "1234ABC", confianza: 0.5 })).toBeNull();
-  });
-
-  it("el umbral es el documentado, no uno cualquiera", () => {
-    expect(matriculaPropuestaPorOcr({ matricula: "1234ABC", confianza: CONFIANZA_OCR_MINIMA })).toBe("1234ABC");
-    expect(
-      matriculaPropuestaPorOcr({ matricula: "1234ABC", confianza: CONFIANZA_OCR_MINIMA - 0.01 })
-    ).toBeNull();
-  });
-
-  it("rechaza lo demasiado corto aunque la IA esté segurísima", () => {
-    expect(matriculaPropuestaPorOcr({ matricula: "AB1", confianza: 1 })).toBeNull();
-  });
-
-  it("rechaza lo que no es una lectura", () => {
-    expect(matriculaPropuestaPorOcr(null)).toBeNull();
-    expect(matriculaPropuestaPorOcr({})).toBeNull();
-    expect(matriculaPropuestaPorOcr({ matricula: null, confianza: "alta" })).toBeNull();
-  });
-});
-
-describe("kilometrosPropuestosPorOcr", () => {
-  it("lee el cuadro con los separadores que trae", () => {
-    expect(kilometrosPropuestosPorOcr({ kilometros: "123.456", confianza: 0.9 })).toBe(123456);
-    expect(kilometrosPropuestosPorOcr({ kilometros: "123 456", confianza: 0.9 })).toBe(123456);
-    expect(kilometrosPropuestosPorOcr({ kilometros: 98765, confianza: 0.8 })).toBe(98765);
-  });
-
-  it("un camión puede pasar del millón", () => {
-    expect(kilometrosPropuestosPorOcr({ kilometros: "1250000", confianza: 0.9 })).toBe(1250000);
-  });
-
-  /*
-   * El OCR se come un dígito o se inventa otro con toda naturalidad, y un
-   * kilometraje absurdo metido sin mirar contamina el histórico del vehículo.
-   */
-  it("descarta lo que ningún vehículo ha recorrido", () => {
-    expect(kilometrosPropuestosPorOcr({ kilometros: "99999999", confianza: 1 })).toBeNull();
-    expect(kilometrosPropuestosPorOcr({ kilometros: KILOMETROS_MAXIMOS + 1, confianza: 1 })).toBeNull();
-    expect(kilometrosPropuestosPorOcr({ kilometros: KILOMETROS_MAXIMOS, confianza: 1 })).toBe(KILOMETROS_MAXIMOS);
-  });
-
-  it("el cero es una lectura fallida, no un vehículo nuevo", () => {
-    expect(kilometrosPropuestosPorOcr({ kilometros: "0", confianza: 1 })).toBeNull();
-  });
-
-  it("rechaza la lectura dudosa: que lo escriba la persona", () => {
-    expect(kilometrosPropuestosPorOcr({ kilometros: "123456", confianza: 0.5 })).toBeNull();
-    expect(
-      kilometrosPropuestosPorOcr({ kilometros: "123456", confianza: CONFIANZA_OCR_MINIMA })
-    ).toBe(123456);
-  });
-
-  it("rechaza lo que no es una lectura", () => {
-    expect(kilometrosPropuestosPorOcr(null)).toBeNull();
-    expect(kilometrosPropuestosPorOcr({})).toBeNull();
-    expect(kilometrosPropuestosPorOcr({ kilometros: "no se ve", confianza: 1 })).toBeNull();
-  });
-});
 
 describe("kilometrosEscritos", () => {
   it("lo que teclea la persona pasa por el mismo filtro", () => {
@@ -473,5 +408,80 @@ describe("plantillaParaOperario", () => {
     const salida = plantillaParaOperario(plantilla);
     expect(Object.keys(salida).sort()).toEqual(["area", "key", "label"]);
     expect(JSON.stringify(salida)).not.toContain("62.5");
+  });
+});
+
+/*
+ * Lectura en texto plano, la vía por la que lee Assist.
+ *
+ * Los casos no son inventados: son las formas en que el modelo contesta
+ * cuando no se le obliga a un JSON —a veces la matrícula pelada, a veces
+ * envuelta en una frase— y el motivo de cambiar es justo ese, que antes
+ * cualquier adorno tiraba la lectura entera.
+ */
+describe("matriculaDeTextoIA", () => {
+  it("acepta la matrícula pelada", () => {
+    expect(matriculaDeTextoIA("4610CCV")).toBe("4610CCV");
+  });
+
+  it("se come los espacios, los guiones y el salto de línea", () => {
+    expect(matriculaDeTextoIA(" 4610 CCV\n")).toBe("4610CCV");
+    expect(matriculaDeTextoIA("T-1234-AB")).toBe("T1234AB");
+  });
+
+  it("rescata la matrícula aunque el modelo la envuelva en prosa", () => {
+    expect(matriculaDeTextoIA("La matrícula es 4610 CCV.")).toBe("4610CCV");
+    expect(matriculaDeTextoIA("Se lee T-1234-AB en la placa.")).toBe("T1234AB");
+  });
+
+  it("prefiere no leer nada a escribir un churro en el campo", () => {
+    // Aplastar el texto entero daba LAMATRICULAESILEGIBLE, y eso se enviaba.
+    expect(matriculaDeTextoIA("La matrícula es ilegible")).toBeNull();
+  });
+
+  it("acepta una placa extranjera si contesta solo eso", () => {
+    expect(matriculaDeTextoIA("AB123CD")).toBe("AB123CD");
+  });
+
+  it("devuelve null cuando el modelo dice NONE", () => {
+    expect(matriculaDeTextoIA("NONE")).toBeNull();
+    expect(matriculaDeTextoIA("  none  ")).toBeNull();
+    expect(matriculaDeTextoIA("No se lee ninguna matrícula")).toBeNull();
+  });
+
+  it("devuelve null sin respuesta, que es lo que vuelve si la IA falla", () => {
+    expect(matriculaDeTextoIA("")).toBeNull();
+    expect(matriculaDeTextoIA(null)).toBeNull();
+    expect(matriculaDeTextoIA(undefined)).toBeNull();
+  });
+
+  it("no da por buena una sílaba suelta", () => {
+    expect(matriculaDeTextoIA("AB")).toBeNull();
+  });
+});
+
+describe("kilometrosDeTextoIA", () => {
+  it("acepta el número pelado", () => {
+    expect(kilometrosDeTextoIA("123456")).toBe(123456);
+  });
+
+  it("entiende los separadores de miles del cuadro", () => {
+    expect(kilometrosDeTextoIA("123.456")).toBe(123456);
+    expect(kilometrosDeTextoIA("123 456 km")).toBe(123456);
+  });
+
+  it("se queda con el odómetro, no con el parcial", () => {
+    expect(kilometrosDeTextoIA("123456 km (el parcial marca 321)")).toBe(123456);
+  });
+
+  it("devuelve null con NONE, con cero y con un absurdo", () => {
+    expect(kilometrosDeTextoIA("NONE")).toBeNull();
+    expect(kilometrosDeTextoIA("0")).toBeNull();
+    expect(kilometrosDeTextoIA("99999999")).toBeNull();
+  });
+
+  it("devuelve null sin respuesta", () => {
+    expect(kilometrosDeTextoIA("")).toBeNull();
+    expect(kilometrosDeTextoIA(null)).toBeNull();
   });
 });
