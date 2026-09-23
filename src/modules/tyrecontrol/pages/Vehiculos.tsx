@@ -5,15 +5,18 @@ import {
   listarMedidas,
   listarEstadoWebfleet, listarPresenciaEnBases, sincronizarWebfleet, listarRevisionEstado,
   listarVehiculosPendientes, validarVehiculo, eliminarVehiculo,
+  listarMarcasVehiculo,
 } from "../services/data";
 import EditorVehiculo from "../components/EditorVehiculo";
 import type {
   Delegacion, Empresa, TipoVehiculo, Vehiculo,
-  MedidaNeumatico,
+  MarcaVehiculo, MedidaNeumatico,
   EstadoWebfleet, VehiculoWebfleetEstado, PresenciaEnBase, RevisionEstado,
 } from "../types";
 import { ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { enlacesTelematica } from "../services/conciliacion";
+import { marcaDelCatalogo } from "../catalogo/logoMarca";
+import { logoSinFondo } from "../catalogo/fondoLogo";
 import { estadoUbicacion, etiquetaBase, ubicacionDeVehiculo } from "../services/presenciaVista";
 import {
   conectoresDe, etiquetaTelematica, porVehiculo, type EnlaceTelematica,
@@ -36,6 +39,49 @@ function fechaHoraCorta(iso?: string | null): string {
   return new Date(iso).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+/**
+ * La marca del vehículo con su logo. Se ve de un vistazo en una lista de 726
+ * vehículos, que es de lo que se trata; el nombre se queda debajo porque el
+ * logo no dice si pone "MERCEDES" o "MERCEDES-BENZ", y eso importa cuando hay
+ * que cuadrar la ficha.
+ *
+ * Si no hay logo —marca que no está en el catálogo, o que aún no tiene imagen
+ * subida— se enseña solo el nombre, como hasta ahora.
+ */
+function CeldaMarca({ vehiculo, catalogo }: { vehiculo: Vehiculo; catalogo: MarcaVehiculo[] }) {
+  const [falla, setFalla] = useState(false);
+  const marca = marcaDelCatalogo(vehiculo, catalogo);
+  const nombre = vehiculo.marca ?? marca?.nombre ?? null;
+  const original = marca?.logo_url ?? null;
+
+  // Los logos que se subieron con su recuadro blanco pegado dentro quedan como
+  // un sello sobre el panel oscuro. Se les quita el fondo al vuelo; el
+  // resultado se guarda por url, así que cada marca se limpia una sola vez
+  // aunque salga en 300 filas.
+  const [limpio, setLimpio] = useState<string | null>(null);
+  useEffect(() => {
+    if (!original) { setLimpio(null); return; }
+    let vivo = true;
+    void logoSinFondo(original).then((u) => { if (vivo) setLimpio(u); });
+    return () => { vivo = false; };
+  }, [original]);
+
+  if (!original || falla) return <>{nombre ?? "—"}</>;
+  return (
+    <div className="flex items-center gap-2">
+      <img
+        src={limpio ?? original}
+        alt={marca?.nombre ?? nombre ?? ""}
+        title={marca?.nombre ?? undefined}
+        loading="lazy"
+        onError={() => setFalla(true)}
+        className="h-10 w-20 shrink-0 object-contain"
+      />
+      <span className="text-[11px] text-slate-500">{nombre}</span>
+    </div>
+  );
+}
+
 export default function Vehiculos() {
   const navigate = useNavigate();
   const [items, setItems] = useState<Vehiculo[]>([]);
@@ -45,6 +91,10 @@ export default function Vehiculos() {
   // Catálogo de marcas de vehículo: el desplegable de MARCA se filtra por el
   // tipo elegido (tractora → MAN/Scania…, semirremolque → Krone/Schmitz…).
   const [medidas, setMedidas] = useState<MedidaNeumatico[]>([]);
+  // El catálogo de marcas de vehículo, con sus logos. La marca del vehículo
+  // es texto libre ("MERCEDES", "MERCEDES-BENZ"), así que el logo se busca
+  // emparejando contra este catálogo.
+  const [marcasVeh, setMarcasVeh] = useState<MarcaVehiculo[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
 
@@ -234,11 +284,13 @@ export default function Vehiculos() {
   async function cargar() {
     setLoading(true);
     try {
-      const [v, e, d, t, m] = await Promise.all([
+      const [v, e, d, t, m, mv] = await Promise.all([
         listarVehiculos(), listarEmpresas(), listarDelegaciones(), listarTiposVehiculo(),
         listarMedidas(),
+        // Sin logos el listado sigue siendo útil: se enseña el nombre.
+        listarMarcasVehiculo().catch(() => [] as MarcaVehiculo[]),
       ]);
-      setItems(v); setEmpresas(e); setDelegaciones(d); setTipos(t); setMedidas(m);
+      setItems(v); setEmpresas(e); setDelegaciones(d); setTipos(t); setMedidas(m); setMarcasVeh(mv);
     } catch (er: any) { setMsg(er?.message || "Error cargando"); }
     finally { setLoading(false); }
     await refrescarWebfleet();
@@ -523,7 +575,7 @@ export default function Vehiculos() {
               <td className={tdCls + " font-bold"}>{v.matricula}</td>
               <td className={tdCls + " text-slate-400"}>{v.numero_unidad ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.delegacion?.nombre ?? "—"}</td>
-              <td className={tdCls + " text-slate-400"}>{v.marca ?? "—"}</td>
+              <td className={tdCls + " text-slate-400"}><CeldaMarca vehiculo={v} catalogo={marcasVeh} /></td>
               <td className={tdCls + " text-slate-400"}>{v.config_ejes?.nombre ?? "—"}</td>
               <td className={tdCls + " text-slate-400"}>{v.medidas_por_eje ? "por eje" : (medidas.find((m) => m.id === v.medida_id)?.valor ?? "—")}</td>
               <td className={tdCls + " text-slate-400"}>{Number(v.km_actual).toLocaleString("es-ES")}</td>

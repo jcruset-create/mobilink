@@ -39,6 +39,7 @@
     "server/acuerdos/**/*.ts",
     "server/enrutado/**/*.ts",
     "server/tyrecontrol/**/*.ts",
+    "server/integration-hub/**/*.ts",
     "server/eventlog/**/*.ts",
     "server/documentos/**/*.ts",
     "server/correo/**/*.ts",
