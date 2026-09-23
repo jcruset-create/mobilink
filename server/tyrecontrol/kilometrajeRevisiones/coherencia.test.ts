@@ -7,7 +7,9 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { esCoherente, instanteDeRevision, TOLERANCIA_KM } from "./coherencia.ts";
+import {
+  esCoherente, hayCotaIndependiente, instanteDeRevision, TOLERANCIA_KM,
+} from "./coherencia.ts";
 
 const ANTERIOR = { km: 1_200_000, fecha: "2026-02-10" };
 const SIGUIENTE = { km: 1_260_000, fecha: "2026-04-12" };
@@ -75,5 +77,54 @@ describe("instanteDeRevision()", () => {
   it("una fecha ilegible no se adivina", () => {
     expect(instanteDeRevision({ fecha_revision: "" })).toBeNull();
     expect(instanteDeRevision({ fecha_revision: "ayer" })).toBeNull();
+  });
+});
+
+describe("el techo del odómetro de hoy", () => {
+  const HOY = { km: 1_266_263 };
+
+  it("por debajo de lo que marca hoy, pasa", () => {
+    expect(esCoherente(1_245_311, { hoy: HOY })).toEqual({ estado: "ok" });
+  });
+
+  it("por encima de lo que marca hoy, no: el pasado no va por delante", () => {
+    const v = esCoherente(1_300_000, { hoy: HOY });
+    expect(v.estado).toBe("rechazado");
+    if (v.estado !== "rechazado") return;
+    expect(v.motivo).toContain("marca hoy");
+  });
+
+  it("el caso que motivó la cota: 37 millones de km no los tiene nadie", () => {
+    // El mismo disparate que puso a un autobús el primero del ranking.
+    expect(esCoherente(37_000_000, { hoy: HOY }).estado).toBe("rechazado");
+  });
+
+  it("justo en el techo pasa, y un pelo por encima de la tolerancia no", () => {
+    expect(esCoherente(HOY.km, { hoy: HOY })).toEqual({ estado: "ok" });
+    expect(esCoherente(HOY.km + TOLERANCIA_KM, { hoy: HOY })).toEqual({ estado: "ok" });
+    expect(esCoherente(HOY.km + TOLERANCIA_KM + 0.5, { hoy: HOY }).estado).toBe("rechazado");
+  });
+
+  it("sin techo no se juzga por el techo", () => {
+    expect(esCoherente(37_000_000, {})).toEqual({ estado: "ok" });
+    expect(esCoherente(37_000_000, { hoy: null })).toEqual({ estado: "ok" });
+  });
+});
+
+describe("hayCotaIndependiente()", () => {
+  it("sin ninguna cota, no hay con qué comprobar nada", () => {
+    expect(hayCotaIndependiente()).toBe(false);
+    expect(hayCotaIndependiente({ anterior: null, siguiente: null, mes: null, hoy: null })).toBe(false);
+  });
+
+  it("cualquiera de las cuatro basta", () => {
+    expect(hayCotaIndependiente({ anterior: ANTERIOR })).toBe(true);
+    expect(hayCotaIndependiente({ siguiente: SIGUIENTE })).toBe(true);
+    expect(hayCotaIndependiente({ mes: { inicial: 1_240_000, final: 1_250_000 } })).toBe(true);
+    expect(hayCotaIndependiente({ hoy: { km: 1_266_263 } })).toBe(true);
+  });
+
+  it("un mes a medias no es una cota: no se puede encerrar nada entre un solo número", () => {
+    expect(hayCotaIndependiente({ mes: { inicial: 1_240_000, final: NaN } })).toBe(false);
   });
 });
