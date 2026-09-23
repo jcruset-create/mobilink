@@ -4,7 +4,7 @@ import {
   listarModelos, crearModelo, actualizarModelo, eliminarModelo,
   listarMedidas, crearMedida,
   listarIndicesCarga, crearIndiceCarga, listarIndicesVelocidad, crearIndiceVelocidad,
-  listarTiposVehiculo, actualizarConfiguracionEjes, actualizarIntervaloRevisionTipo,
+  listarTiposVehiculo,
   subirImagenChasisCambio, actualizarImagenChasisCambio,
   listarTiposDeMedida, fijarTiposDeMedida, actualizarMedidaCategoria,
   listarFabricantes, crearFabricante, actualizarFabricante, eliminarFabricante,
@@ -16,6 +16,7 @@ import {
   listarPresionesObjetivo, guardarPresionObjetivo, eliminarPresionObjetivo, type PresionObjetivo,
   listarMarcasVehiculo, crearMarcaVehiculo, actualizarMarcaVehiculo, eliminarMarcaVehiculo,
   alternarTipoMarcaVehiculo, subirLogoMarcaVehiculo,
+  crearTipoVehiculo, actualizarTipoVehiculo, generarPosicionesDeTipo,
 } from "../services/data";
 import type { MarcaVehiculo, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
 import { tipoLlantaLabel, CATEGORIAS_NEUMATICO, CATEGORIA_NEUMATICO_LABELS } from "../types";
@@ -24,6 +25,7 @@ import { inputCls, TableWrap, tdCls, thCls } from "../components/ui";
 import ConfigWebfleet from "../components/ConfigWebfleet";
 import AdminCamposItv from "../components/AdminCamposItv";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
+import { prepararTipo, claveDeTipo, cuentasDeConfiguracion, type BorradorTipo } from "../catalogo/tipoVehiculo";
 
 // Fila de configuración de ejes con su imagen de chasis asociada: la imagen
 // se sube una vez aquí y la heredan todos los vehículos con esa configuración.
@@ -533,10 +535,136 @@ function FilaMedidaCompatibilidad({ medida, tipos, puedeEditar }: { medida: Medi
   );
 }
 
-function FilaTipoVehiculo({ tipo, puedeEditar, onGuardado }: { tipo: TipoVehiculo; puedeEditar: boolean; onGuardado: () => void }) {
-  const [valor, setValor] = useState(tipo.configuracion_ejes ?? "");
-  const [dias, setDias] = useState(tipo.revision_intervalo_dias != null ? String(tipo.revision_intervalo_dias) : "");
-  const [saving, setSaving] = useState(false);
+/**
+ * Alta y edición de un tipo de vehículo. El mismo formulario para los dos:
+ * lo que se puede escribir al crearlo se puede corregir después, que es justo
+ * lo que faltaba — hasta ahora un tipo mal dado de alta solo se arreglaba por
+ * SQL.
+ */
+function FormularioTipo({ tipo, onCerrar, onGuardado }: {
+  tipo: TipoVehiculo | null; onCerrar: () => void; onGuardado: () => void;
+}) {
+  const [b, setB] = useState<BorradorTipo>({
+    nombre: tipo?.nombre ?? "",
+    descripcion: tipo?.descripcion ?? "",
+    configuracionEjes: tipo?.configuracion_ejes ?? "",
+    numeroEjes: tipo ? String(tipo.numero_ejes) : "2",
+    numeroRuedas: tipo ? String(tipo.numero_ruedas) : "4",
+    revisionDias: tipo?.revision_intervalo_dias != null ? String(tipo.revision_intervalo_dias) : "",
+    revisionKm: tipo?.revision_intervalo_km != null ? String(tipo.revision_intervalo_km) : "",
+  });
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [aviso, setAviso] = useState<string | null>(null);
+
+  // Si hay configuración de ejes, ella decide cuántos ejes y cuántas ruedas:
+  // es de donde sale el plano, así que teclearlos aparte solo permitiría que
+  // el tipo dijera una cosa y su plano otra.
+  const cuentas = cuentasDeConfiguracion(b.configuracionEjes);
+  const claveAuto = !tipo && !b.nombre.trim() ? claveDeTipo(b.descripcion) : null;
+
+  async function guardar() {
+    setError(null);
+    const r = prepararTipo(b);
+    if ("error" in r) { setError(r.error); return; }
+    setGuardando(true);
+    try {
+      const id = tipo ? (await actualizarTipoVehiculo(tipo.id, r.tipo), tipo.id)
+                      : (await crearTipoVehiculo(r.tipo)).id;
+      // El plano de ruedas se genera solo desde la configuración, así que el
+      // tipo nace listo para revisar. Va por el servidor (escribir posiciones
+      // exige super-admin) y es idempotente: no borra nada de lo que ya hay.
+      let queDecir: string | null = null;
+      if (r.tipo.configuracion_ejes) {
+        try {
+          const g = await generarPosicionesDeTipo(id);
+          if (g.creadas > 0) queDecir = `Guardado. Creadas ${g.creadas} posiciones de rueda.`;
+        } catch (e) {
+          queDecir = "El tipo se ha guardado, pero no se han podido generar sus posiciones: " + (e as Error).message;
+        }
+      }
+      onGuardado();
+      // Si hay algo que contar (las posiciones que se han creado, o que no se
+      // han podido crear), el formulario se queda abierto para que se lea.
+      if (queDecir) setAviso(queDecir); else onCerrar();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally { setGuardando(false); }
+  }
+
+  const campo = (etiqueta: string, hijo: React.ReactNode, pista?: string) => (
+    <label className="block">
+      <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">{etiqueta}</span>
+      {hijo}
+      {pista && <span className="mt-1 block text-[11px] text-slate-500">{pista}</span>}
+    </label>
+  );
+
+  return (
+    <div className="mb-3 rounded-lg border border-slate-600 bg-slate-900 p-3">
+      <div className="mb-2 text-[11px] font-bold uppercase text-slate-300">
+        {tipo ? `Editar ${tipo.descripcion ?? tipo.nombre}` : "Nuevo tipo de vehículo"}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {campo("Descripción", (
+          <input className={inputCls} placeholder="Ej. Cabeza tractora 2 ejes" value={b.descripcion}
+                 onChange={(e) => setB({ ...b, descripcion: e.target.value })} />
+        ), "Es lo que se ve en los desplegables de alta de vehículos.")}
+
+        {campo("Clave interna", (
+          <input className={inputCls} placeholder={claveAuto || "camion_3_ejes"} value={b.nombre}
+                 onChange={(e) => setB({ ...b, nombre: e.target.value })} />
+        ), claveAuto ? `Si se deja en blanco: ${claveAuto || "—"}` : "Minúsculas, números y guion bajo.")}
+
+        {campo("Configuración de ejes", (
+          <input className={inputCls} placeholder="Ej. 2x4x2" value={b.configuracionEjes}
+                 onChange={(e) => setB({ ...b, configuracionEjes: e.target.value })} />
+        ), cuentas
+             ? `${cuentas.ejes} ejes y ${cuentas.ruedas} ruedas. De aquí sale el plano.`
+             : "Las ruedas de cada eje: 2 simple, 4 gemela. Si se deja en blanco, hay que decir ejes y ruedas a mano.")}
+
+        {campo("Nº de ejes", (
+          <input type="number" className={inputCls} value={cuentas ? String(cuentas.ejes) : b.numeroEjes}
+                 disabled={!!cuentas} onChange={(e) => setB({ ...b, numeroEjes: e.target.value })} />
+        ), cuentas ? "Lo dice la configuración." : undefined)}
+
+        {campo("Nº de ruedas", (
+          <input type="number" className={inputCls} value={cuentas ? String(cuentas.ruedas) : b.numeroRuedas}
+                 disabled={!!cuentas} onChange={(e) => setB({ ...b, numeroRuedas: e.target.value })} />
+        ), cuentas ? "Lo dice la configuración." : undefined)}
+
+        {campo("Revisión (días)", (
+          <input type="number" className={inputCls} placeholder="opcional" value={b.revisionDias}
+                 onChange={(e) => setB({ ...b, revisionDias: e.target.value })} />
+        ))}
+
+        {campo("Revisión (km)", (
+          <input type="number" className={inputCls} placeholder="opcional" value={b.revisionKm}
+                 onChange={(e) => setB({ ...b, revisionKm: e.target.value })} />
+        ))}
+      </div>
+
+      {error && <div className="mt-2 rounded bg-rose-900/40 px-2 py-1 text-[12px] text-rose-200">{error}</div>}
+      {aviso && <div className="mt-2 rounded bg-emerald-900/40 px-2 py-1 text-[12px] text-emerald-200">{aviso}</div>}
+
+      <div className="mt-3 flex justify-end gap-2">
+        <button onClick={onCerrar} className="rounded border border-slate-600 px-3 py-1.5 text-[12px] text-slate-200">
+          {aviso ? "Cerrar" : "Cancelar"}
+        </button>
+        <button onClick={guardar} disabled={guardando}
+                className="rounded bg-emerald-600 px-3 py-1.5 text-[12px] font-bold text-white disabled:opacity-50">
+          {guardando ? "Guardando…" : tipo ? "Guardar cambios" : "Crear tipo"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function FilaTipoVehiculo({ tipo, puedeEditar, editando, onEditar, onCerrar, onGuardado }: {
+  tipo: TipoVehiculo; puedeEditar: boolean; editando: boolean;
+  onEditar: () => void; onCerrar: () => void; onGuardado: () => void;
+}) {
   const [subiendoCambio, setSubiendoCambio] = useState(false);
 
   async function subirCambio(file: File | null) {
@@ -555,21 +683,23 @@ function FilaTipoVehiculo({ tipo, puedeEditar, onGuardado }: { tipo: TipoVehicul
     try { await actualizarImagenChasisCambio(tipo.id, null); onGuardado(); }
     finally { setSubiendoCambio(false); }
   }
-  const cambiado = valor !== (tipo.configuracion_ejes ?? "") || dias !== (tipo.revision_intervalo_dias != null ? String(tipo.revision_intervalo_dias) : "");
-  async function guardar() {
-    setSaving(true);
-    try {
-      if (valor !== (tipo.configuracion_ejes ?? "")) await actualizarConfiguracionEjes(tipo.id, valor.trim() || null);
-      const nd = dias.trim() === "" ? null : Number(dias);
-      if (nd !== (tipo.revision_intervalo_dias ?? null)) await actualizarIntervaloRevisionTipo(tipo.id, nd);
-      onGuardado();
-    } finally { setSaving(false); }
+
+  if (editando) {
+    return (
+      <tr className="border-t border-slate-700/60">
+        <td className={tdCls} colSpan={7}>
+          <FormularioTipo tipo={tipo} onCerrar={onCerrar} onGuardado={onGuardado} />
+        </td>
+      </tr>
+    );
   }
+
   return (
     <tr className="border-t border-slate-700/60">
       <td className={tdCls + " font-semibold"}>{tipo.nombre}</td>
       <td className={tdCls + " text-slate-400"}>{tipo.descripcion ?? "—"}</td>
       <td className={tdCls + " text-slate-400"}>{tipo.numero_ejes}</td>
+      <td className={tdCls + " text-slate-400"}>{tipo.numero_ruedas}</td>
       <td className={tdCls + " text-[11px]"}>
         <div>{tipo.imagen_chasis_url ? <span className="text-emerald-400">Con imagen</span> : <span className="text-slate-500">Sin imagen</span>}</div>
         {puedeEditar && (
@@ -589,14 +719,18 @@ function FilaTipoVehiculo({ tipo, puedeEditar, onGuardado }: { tipo: TipoVehicul
           </div>
         )}
       </td>
+      <td className={tdCls + " text-slate-300"}>
+        {tipo.configuracion_ejes ?? <span className="text-slate-600">—</span>}
+        {tipo.revision_intervalo_dias != null && (
+          <div className="text-[11px] text-slate-500">revisión: {tipo.revision_intervalo_dias} días</div>
+        )}
+      </td>
       <td className={tdCls}>
-        {puedeEditar ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <input className={`${inputCls} max-w-[120px] text-[12px]`} placeholder="Ej. 2x2x2" value={valor} onChange={(e) => setValor(e.target.value)} />
-            <input type="number" className={`${inputCls} max-w-[110px] text-[12px]`} placeholder="revisión (días)" value={dias} onChange={(e) => setDias(e.target.value)} title="Periodicidad de revisión en días" />
-            <button onClick={guardar} disabled={saving || !cambiado} className="rounded bg-emerald-600 px-2 py-1 text-[11px] font-bold text-white disabled:opacity-50">Guardar</button>
-          </div>
-        ) : (tipo.configuracion_ejes ?? "—")}
+        {puedeEditar && (
+          <button onClick={onEditar} className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700">
+            Editar
+          </button>
+        )}
       </td>
     </tr>
   );
@@ -637,6 +771,10 @@ export default function Configuracion() {
   const [indicesCarga, setIndicesCarga] = useState<IndiceCarga[]>([]);
   const [indicesVelocidad, setIndicesVelocidad] = useState<IndiceVelocidad[]>([]);
   const [tipos, setTipos] = useState<TipoVehiculo[]>([]);
+  // Qué tipo se está editando y si está abierto el alta: uno u otro, nunca
+  // los dos, para no tener dos formularios iguales a la vez en pantalla.
+  const [tipoEditando, setTipoEditando] = useState<string | null>(null);
+  const [tipoNuevo, setTipoNuevo] = useState(false);
   const [fabricantes, setFabricantes] = useState<Fabricante[]>([]);
   const [contadores, setContadores] = useState<MarcaContadores[]>([]);
   const [motivosFueraAlmacen, setMotivosFueraAlmacen] = useState<MotivoFueraAlmacen[]>([]);
@@ -1000,19 +1138,42 @@ export default function Configuracion() {
       </div>
 
       <div className="mt-4 rounded-lg bg-slate-800 p-3">
-        <div className="mb-1 text-[11px] font-bold uppercase text-slate-400">Configuración de vehículos</div>
-        <div className="mb-3 text-[11px] text-slate-500">
-          Etiqueta de configuración de ejes (ej. 2x2x2, 4x2, 6x4) por tipo de vehículo — identifica qué imagen de chasis (motor gráfico) corresponde a cada tipo.
-          {!puedeEditar && " Solo un administrador Mobilink puede editarla."}
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <div className="text-[11px] font-bold uppercase text-slate-400">Configuración de vehículos</div>
+          {puedeEditar && !tipoNuevo && (
+            <button onClick={() => { setTipoEditando(null); setTipoNuevo(true); }}
+                    className="rounded bg-emerald-600 px-3 py-1 text-[11px] font-bold text-white">
+              + Nuevo tipo
+            </button>
+          )}
         </div>
+        <div className="mb-3 text-[11px] text-slate-500">
+          Los tipos de vehículo y su etiqueta de configuración de ejes (ej. 2x2x2, 2x4x2, 2x4x4). El tipo es quien da el
+          plano de ruedas: sin él un vehículo no se puede revisar. De la configuración salen los ejes, las ruedas y las
+          posiciones, y también qué imagen de chasis le toca.
+          {!puedeEditar && " Solo un administrador Mobilink puede tocarlos."}
+        </div>
+        {tipoNuevo && (
+          <FormularioTipo tipo={null} onCerrar={() => setTipoNuevo(false)} onGuardado={cargar} />
+        )}
         <TableWrap>
           <thead className="bg-slate-900"><tr>
-            <th className={thCls}>Tipo</th><th className={thCls}>Descripción</th><th className={thCls}>Nº ejes</th>
+            <th className={thCls}>Clave</th><th className={thCls}>Descripción</th><th className={thCls}>Nº ejes</th>
+            <th className={thCls}>Nº ruedas</th>
             <th className={thCls}>Imagen chasis</th><th className={thCls}>Configuración de ejes</th>
+            <th className={thCls}></th>
           </tr></thead>
           <tbody>
-            {tipos.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={5}>Sin tipos de vehículo.</td></tr>
-            : tipos.map((t) => <FilaTipoVehiculo key={t.id} tipo={t} puedeEditar={puedeEditar} onGuardado={cargar} />)}
+            {tipos.length === 0 ? <tr><td className={tdCls + " text-slate-500"} colSpan={7}>Sin tipos de vehículo.</td></tr>
+            : tipos.map((t) => (
+                <FilaTipoVehiculo
+                  key={t.id} tipo={t} puedeEditar={puedeEditar}
+                  editando={tipoEditando === t.id}
+                  onEditar={() => { setTipoNuevo(false); setTipoEditando(t.id); }}
+                  onCerrar={() => setTipoEditando(null)}
+                  onGuardado={cargar}
+                />
+              ))}
           </tbody>
         </TableWrap>
       </div>
