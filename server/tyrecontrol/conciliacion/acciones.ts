@@ -421,6 +421,10 @@ export async function crearPendiente(
       // el tipo no es validar el vehículo, es ahorrarse teclearlo 53 veces.
       ...(datos.tipoVehiculoId ? { tipo_vehiculo_id: datos.tipoVehiculoId } : {}),
       ...(datos.configEjesId ? { config_ejes_id: datos.configEjesId } : {}),
+      // Si se van a escribir medidas por eje, hay que DECIRLO: la ficha del
+      // vehículo solo lee `tc_vehiculo_ejes` cuando esta bandera está puesta,
+      // así que sin ella las medidas se guardarían y no las vería nadie.
+      ...(datos.medidaId && ejes && ejes.length > 0 ? { medidas_por_eje: true } : {}),
     })
     .select("id, matricula")
     .single();
