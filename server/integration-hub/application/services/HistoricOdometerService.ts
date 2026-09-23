@@ -44,8 +44,10 @@
 
 import type { OperationContext } from "../../domain/identifiers.ts";
 import { sabeResumirViajes, type TripSummary } from "../../domain/telematics.ts";
-import { medianocheDelDiaDe, ZONA_HORARIA_POR_DEFECTO } from "../../domain/meses.ts";
-import { findExternalCode } from "../../infrastructure/repositories.ts";
+import {
+  limitesDelMes, medianocheDelDiaDe, mesDe, ZONA_HORARIA_POR_DEFECTO, type Mes,
+} from "../../domain/meses.ts";
+import { findExternalCode, listVehicleMappings } from "../../infrastructure/repositories.ts";
 import { resolveTelematicsConnectors } from "../../connectors/ConnectorRegistry.ts";
 
 /**
@@ -225,4 +227,137 @@ export async function odometroEnInstante(
   if (fallos.length > 0) return { estado: "no_disponible", motivo: fallos.join("; ") };
   if (consultadas.length === 0) return { estado: "sin_telematica" };
   return { estado: "sin_lectura", cuentasConsultadas: consultadas };
+}
+
+// ── Hasta dónde llega el histórico del proveedor ─────────────────────────────
+
+/**
+ * Cuántos meses hacia atrás se busca como mucho. Tres años: más allá, ningún
+ * proveedor de esta casa guarda resúmenes de viajes.
+ */
+export const MESES_ATRAS_MAXIMO = 36;
+
+/**
+ * Cuántos vehículos se prueban en cada mes candidato antes de darlo por vacío.
+ *
+ * Más de uno porque un vehículo solo no sirve de testigo: su equipo pudo
+ * instalarse el año pasado, o pudo pasarse un mes entero en el taller. Basta
+ * con que UNO se haya movido para saber que ese mes existe.
+ */
+export const VEHICULOS_DE_SONDEO = 3;
+
+/**
+ * El mes más antiguo del que el proveedor sabe algo, buscado a tientas.
+ *
+ * ── Por qué hace falta ──────────────────────────────────────────────────────
+ *
+ * El relleno de kilometraje de revisiones va de la más antigua a la más
+ * moderna, y en Autocares Plana la más antigua es de 2021. Medido contra la
+ * cuenta real, Movertis no tiene NADA anterior a agosto de 2025: julio de 2025
+ * devuelve ceros y cero viajes; agosto, 1.467 km y 66 viajes.
+ *
+ * Sin este suelo, la tarea se pasaba horas preguntando por años que el
+ * proveedor no puede contestar. Y lo hacía de la forma más cara posible: una
+ * revisión irrellenable ensancha la ventana tres veces antes de rendirse, así
+ * que gasta TRES peticiones, frente a las dos de una que sí funciona.
+ *
+ * ── Búsqueda binaria, no barrido ────────────────────────────────────────────
+ *
+ * Treinta y seis meses a ciegas son treinta y seis rondas; en binaria son
+ * seis. El supuesto que la permite es que el histórico no tiene agujeros por
+ * delante: si un mes tiene datos, los siguientes también. Es cierto por
+ * construcción —el proveedor empieza a guardar cuando se instala el equipo— y
+ * el sondeo con varios vehículos cubre el caso de uno instalado tarde.
+ *
+ * Esto cuesta como mucho 18 peticiones, UNA vez al arrancar la tarea. Frente a
+ * las 16.000 que se ahorra, no hay discusión.
+ */
+export async function buscarHorizonte(
+  hayDatos: (mesesAtras: number) => Promise<boolean>,
+  maxMesesAtras = MESES_ATRAS_MAXIMO,
+): Promise<number | null> {
+  // Sin datos ni en el mes pasado, no hay histórico que acotar.
+  if (!(await hayDatos(1))) return null;
+
+  // Invariante: `conDatos` los tiene, `vacio` no. Se estrecha hasta tocarse.
+  let conDatos = 1;
+  let vacio = maxMesesAtras + 1;
+  if (await hayDatos(maxMesesAtras)) return maxMesesAtras;
+
+  while (vacio - conDatos > 1) {
+    const medio = Math.floor((conDatos + vacio) / 2);
+    if (await hayDatos(medio)) conDatos = medio;
+    else vacio = medio;
+  }
+  return conDatos;
+}
+
+export type ResultadoHorizonte =
+  | { estado: "encontrado"; mes: Mes; mesesAtras: number; peticiones: number }
+  /** Ni el mes pasado tiene datos: o no hay enlaces, o el proveedor está mudo. */
+  | { estado: "sin_historico"; peticiones: number }
+  | { estado: "no_disponible"; motivo: string };
+
+/**
+ * El horizonte de una cuenta, preguntándole al proveedor de verdad.
+ *
+ * Se prueban hasta `VEHICULOS_DE_SONDEO` vehículos enlazados por mes
+ * candidato, y se para en el primero que se haya movido: con eso ya se sabe
+ * que ese mes existe.
+ */
+export async function horizonteDelProveedor(
+  ctx: OperationContext,
+  opciones: { ahora?: Date; zonaHoraria?: string; maxMesesAtras?: number } = {},
+): Promise<ResultadoHorizonte> {
+  const ahora = opciones.ahora ?? new Date();
+  const zona = opciones.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO;
+  let peticiones = 0;
+
+  try {
+    const cuentas = await resolveTelematicsConnectors(ctx.tenantId);
+    for (const cuenta of cuentas) {
+      const conector = cuenta.connector;
+      if (!sabeResumirViajes(conector)) continue;
+
+      const enlaces = await listVehicleMappings({
+        tenantId: ctx.tenantId, system: cuenta.key, accountKey: cuenta.accountKey,
+      });
+      const testigos = enlaces
+        .filter((e) => e.active !== false)
+        .slice(0, VEHICULOS_DE_SONDEO)
+        .map((e) => String(e.external_code));
+      if (testigos.length === 0) continue;
+
+      const hayDatos = async (mesesAtras: number): Promise<boolean> => {
+        const mes = restarMeses(mesDe(ahora, zona), mesesAtras);
+        const { desde, hasta } = limitesDelMes(mes, zona);
+        for (const unidad of testigos) {
+          peticiones += 1;
+          const [r] = await conector.getTripSummary(ctx, [unidad], { from: desde, to: hasta });
+          // Un mes «existe» si alguien se movió. Cero kilómetros y cero viajes
+          // es indistinguible de no tener histórico, y con varios testigos la
+          // probabilidad de que TODOS estuvieran parados es despreciable.
+          if (r && (r.distanceKm > 0 || (r.trips ?? 0) > 0)) return true;
+        }
+        return false;
+      };
+
+      const mesesAtras = await buscarHorizonte(hayDatos, opciones.maxMesesAtras);
+      if (mesesAtras === null) return { estado: "sin_historico", peticiones };
+      return {
+        estado: "encontrado",
+        mes: restarMeses(mesDe(ahora, zona), mesesAtras),
+        mesesAtras,
+        peticiones,
+      };
+    }
+    return { estado: "sin_historico", peticiones };
+  } catch (e) {
+    return { estado: "no_disponible", motivo: (e as Error)?.message ?? String(e) };
+  }
+}
+
+function restarMeses(m: Mes, n: number): Mes {
+  const total = m.year * 12 + (m.month - 1) - n;
+  return { year: Math.floor(total / 12), month: (total % 12) + 1 };
 }

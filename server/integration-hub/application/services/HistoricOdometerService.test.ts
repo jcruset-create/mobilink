@@ -27,8 +27,8 @@ vi.mock("../../infrastructure/repositories.ts", () => ({
 const { resolveTelematicsConnectors } = await import("../../connectors/ConnectorRegistry.ts");
 const { findExternalCode } = await import("../../infrastructure/repositories.ts");
 const {
-  odometroEnInstante, ventanasParaInstante, diaCerrado, deAcuerdo,
-  TOLERANCIA_ACUERDO_KM, ANCHURAS_DIAS,
+  odometroEnInstante, ventanasParaInstante, diaCerrado, deAcuerdo, buscarHorizonte,
+  TOLERANCIA_ACUERDO_KM, ANCHURAS_DIAS, MESES_ATRAS_MAXIMO,
 } = await import("./HistoricOdometerService.ts");
 
 const CTX = { tenantId: "empresa-plana", correlationId: "COR-1" };
@@ -191,5 +191,60 @@ describe("odometroEnInstante()", () => {
     expect(r.estado).toBe("no_disponible");
     if (r.estado !== "no_disponible") return;
     expect(r.motivo).toContain("Core Error: 4");
+  });
+});
+
+
+/**
+ * El suelo del relleno de revisiones.
+ *
+ * En Autocares Plana la revisión más antigua es de 2021 y Movertis no tiene
+ * nada anterior a AGOSTO DE 2025: julio devuelve ceros y cero viajes; agosto,
+ * 1.467 km y 66 viajes. Sin este suelo la tarea se pasaba horas preguntando
+ * por años que el proveedor no puede contestar, y encima de la forma más cara:
+ * una revisión irrellenable ensancha la ventana tres veces antes de rendirse.
+ */
+describe("buscarHorizonte()", () => {
+  /** Un proveedor que tiene datos desde hace `desde` meses hacia acá. */
+  const proveedorCon = (desde: number) => {
+    const vistos: number[] = [];
+    const fn = async (mesesAtras: number) => {
+      vistos.push(mesesAtras);
+      return mesesAtras <= desde;
+    };
+    return { fn, vistos };
+  };
+
+  it("encuentra el mes más antiguo con datos", async () => {
+    for (const horizonte of [1, 2, 5, 13, 24, 35]) {
+      const { fn } = proveedorCon(horizonte);
+      expect(await buscarHorizonte(fn)).toBe(horizonte);
+    }
+  });
+
+  it("el caso real: trece meses de histórico", async () => {
+    const { fn } = proveedorCon(13);
+    expect(await buscarHorizonte(fn)).toBe(13);
+  });
+
+  it("sin datos ni el mes pasado, no hay horizonte que acotar", async () => {
+    expect(await buscarHorizonte(async () => false)).toBeNull();
+  });
+
+  it("un proveedor con TODO el histórico devuelve el tope", async () => {
+    expect(await buscarHorizonte(async () => true)).toBe(MESES_ATRAS_MAXIMO);
+  });
+
+  it("es binaria: seis rondas, no treinta y seis", async () => {
+    const { fn, vistos } = proveedorCon(13);
+    await buscarHorizonte(fn);
+    // 36 meses a ciegas serían 36 rondas. Cada ronda cuesta peticiones reales.
+    expect(vistos.length).toBeLessThanOrEqual(8);
+  });
+
+  it("nunca pregunta más allá del tope", async () => {
+    const { fn, vistos } = proveedorCon(13);
+    await buscarHorizonte(fn, 12);
+    expect(Math.max(...vistos)).toBeLessThanOrEqual(12);
   });
 });
