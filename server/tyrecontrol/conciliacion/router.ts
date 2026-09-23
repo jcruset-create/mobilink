@@ -425,6 +425,12 @@ export function createConciliacionRouter(): Router {
       const ambito = ambitoDe(empresaId, req.body);
       res.json(await crearPendientesLote(ambito, {
         externalVehicleIds: req.body?.externalVehicleIds,
+        // Lo que se elige una vez para toda la tanda. Se pasan como vienen y
+        // la base los comprueba: son claves ajenas, así que un id inventado
+        // hace fallar el alta en vez de guardar una referencia rota.
+        tipoVehiculoId: req.body?.tipoVehiculoId ?? null,
+        configEjesId: req.body?.configEjesId ?? null,
+        medidaId: req.body?.medidaId ?? null,
       }));
     } catch (e) {
       fallo(res, e);
@@ -457,6 +463,9 @@ export function createConciliacionRouter(): Router {
         bastidor: req.body?.bastidor ?? null,
         numeroUnidad: req.body?.numeroUnidad ?? null,
         externalName: req.body?.externalName ?? null,
+        tipoVehiculoId: req.body?.tipoVehiculoId ?? null,
+        configEjesId: req.body?.configEjesId ?? null,
+        medidaId: req.body?.medidaId ?? null,
       });
       res.json({ ok: true, ...r });
     } catch (e) {
