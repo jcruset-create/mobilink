@@ -235,6 +235,13 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
   /// de frescura y de proveedores es el backend.
   String _textoKm = '';
   bool _consultandoKm = false;
+  /// El técnico declara que no puede leer el cuentakilómetros.
+  ///
+  /// Sin esto, un parte sin kilómetros no avanzaba del paso 2, y con Movertis
+  /// —cuyo histórico no trae odómetro— eso pasa a menudo: la única salida era
+  /// inventarse un número, que es peor que no tenerlo, porque entra en el
+  /// histórico del neumático y descuadra lo que ha durado.
+  bool _sinCuentakilometros = false;
   final _ordenFlota = TextEditingController();
   String? _lugar;
 
@@ -424,6 +431,7 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
       'vehiculo_id': _vehiculo!.id,
       'matricula': _vehiculo!.matricula,
       'km': _km.text,
+      'sin_km': _sinCuentakilometros,
       'orden_flota': _ordenFlota.text,
       'lugar': _lugar,
       'ruedas': _ruedas.map((k, v) => MapEntry(k, v.aJson())),
@@ -458,6 +466,7 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     }
     _clave = (j['clave'] as String?) ?? _clave;
     _km.text = (j['km'] as String?) ?? '';
+    _sinCuentakilometros = (j['sin_km'] as bool?) ?? false;
     _ordenFlota.text = (j['orden_flota'] as String?) ?? '';
     _lugar = j['lugar'] as String?;
     _nombreCliente.text = (j['nombre_cliente'] as String?) ?? '';
@@ -548,6 +557,7 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
         if (km != null && (estado == 'actualizado' || estado == 'lectura_anterior')) {
           _km.text = km.round().toString();
           _origenKm = 'telematica';
+          _sinCuentakilometros = false;
           _textoKm = (l['texto'] as String?) ?? '';
         } else {
           // Sin lectura: se conserva lo que hubiera y se dice por qué no hay
@@ -900,7 +910,8 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
       final r = await TyreControlApi.guardarParteGuiado({
         'clave': _clave,
         'vehiculo_id': _vehiculo!.id,
-        'km': num.tryParse(_km.text.trim()),
+        'km': _sinCuentakilometros ? null : num.tryParse(_km.text.trim()),
+        'sin_cuentakilometros': _sinCuentakilometros,
         'lugar_servicio': _lugar,
         'orden_flota': _ordenFlota.text.trim().isEmpty ? null : _ordenFlota.text.trim(),
         'mediciones': _mediciones(),
@@ -961,7 +972,8 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
   bool get _puedeContinuar {
     switch (_paso) {
       case _Paso.vehiculo:  return _vehiculo != null && !_faltaDeclarar;
-      case _Paso.cabecera:  return num.tryParse(_km.text.trim()) != null;
+      case _Paso.cabecera:
+        return num.tryParse(_km.text.trim()) != null || _sinCuentakilometros;
       // Un parte sin tocar ruedas es válido; uno con una rueda a medias no.
       case _Paso.ruedas:    return _faltaEnRuedas == null;
       case _Paso.servicios: return true;
@@ -1329,6 +1341,7 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
     _rotulo('Kilómetros'),
     TextField(
       controller: _km,
+      enabled: !_sinCuentakilometros,
       keyboardType: const TextInputType.numberWithOptions(decimal: false),
       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
       style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700),
@@ -1367,6 +1380,40 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
               ),
             ),
     ),
+    // ── Cuando no hay forma de saberlos ─────────────────────────────────
+    //
+    // Mejor un parte sin kilómetros y que se sepa, que un número inventado
+    // para poder pasar de pantalla: ese número acaba en el histórico del
+    // neumático y descuadra lo que ha durado. Solo se ofrece cuando no los da
+    // la telemática; si los da, no hay nada que declarar.
+    if (_origenKm != 'telematica')
+      Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: InkWell(
+          onTap: () => setState(() {
+            _sinCuentakilometros = !_sinCuentakilometros;
+            if (_sinCuentakilometros) {
+              _km.clear();
+              _origenKm = 'manual';
+            }
+          }),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(children: [
+              Icon(
+                _sinCuentakilometros ? Icons.check_box : Icons.check_box_outline_blank,
+                size: 22,
+                color: _sinCuentakilometros ? AppColors.warning : AppColors.textSecondary,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text('Sin acceso al cuentakilómetros',
+                    style: TextStyle(fontSize: 14)),
+              ),
+            ]),
+          ),
+        ),
+      ),
     const SizedBox(height: 24),
     _rotulo('¿Dónde se hace?'),
     // Botones grandes en vez de un desplegable: son tres opciones y el dedo
@@ -1985,7 +2032,8 @@ class _RealizarOperacionScreenState extends State<RealizarOperacionScreen> {
         _dato('Cliente', _vehiculo?.empresa?.nombre),
       ]),
       bloque('Servicio', _Paso.cabecera, [
-        _dato('Kilómetros', _km.text),
+        _dato('Kilómetros',
+            _sinCuentakilometros ? 'Sin acceso al cuentakilómetros' : _km.text),
         _dato('Lugar', _lugar),
         _dato('Orden', _ordenFlota.text),
       ]),
