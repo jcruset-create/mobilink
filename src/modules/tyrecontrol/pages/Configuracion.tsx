@@ -16,7 +16,7 @@ import {
   listarPresionesObjetivo, guardarPresionObjetivo, eliminarPresionObjetivo, type PresionObjetivo,
   listarMarcasVehiculo, crearMarcaVehiculo, actualizarMarcaVehiculo, eliminarMarcaVehiculo,
   alternarTipoMarcaVehiculo, subirLogoMarcaVehiculo,
-  crearTipoVehiculo, actualizarTipoVehiculo, generarPosicionesDeTipo,
+  crearTipoVehiculo, actualizarTipoVehiculo, generarPosicionesDeTipo, contarVehiculosDeTipo,
 } from "../services/data";
 import type { MarcaVehiculo, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad, TipoVehiculo, Fabricante, MarcaContadores, SegmentoMarca, MotivoFueraAlmacen, ConfigEjes, TipoLlanta } from "../types";
 import { tipoLlantaLabel, CATEGORIAS_NEUMATICO, CATEGORIA_NEUMATICO_LABELS } from "../types";
@@ -666,6 +666,32 @@ function FilaTipoVehiculo({ tipo, puedeEditar, editando, onEditar, onCerrar, onG
   onEditar: () => void; onCerrar: () => void; onGuardado: () => void;
 }) {
   const [subiendoCambio, setSubiendoCambio] = useState(false);
+  const [cambiandoActivo, setCambiandoActivo] = useState(false);
+
+  /**
+   * Desactivar, nunca borrar. Un tipo con vehículos detrás se lleva por
+   * delante sus posiciones si se borra, y con ellas los montajes que cuelgan
+   * de cada posición. Desactivado, los vehículos que ya son de ese tipo
+   * siguen exactamente igual —su plano, sus revisiones, su histórico—; lo
+   * único que cambia es que el tipo deja de salir para dar de alta vehículos
+   * nuevos. Y se puede volver a activar.
+   */
+  async function alternarActivo() {
+    setCambiandoActivo(true);
+    try {
+      if (tipo.activo) {
+        const cuantos = await contarVehiculosDeTipo(tipo.id);
+        const cuerpo = cuantos > 0
+          ? `Hay ${cuantos} ${cuantos === 1 ? "vehículo" : "vehículos"} de este tipo. No les pasa nada: siguen con su plano y su histórico. Lo que cambia es que «${tipo.descripcion ?? tipo.nombre}» deja de salir al dar de alta vehículos nuevos.`
+          : `«${tipo.descripcion ?? tipo.nombre}» dejará de salir al dar de alta vehículos.`;
+        if (!window.confirm(`${cuerpo}\n\nSe puede volver a activar cuando quieras. ¿Desactivarlo?`)) return;
+      }
+      await actualizarTipoVehiculo(tipo.id, { activo: !tipo.activo });
+      onGuardado();
+    } catch (e) {
+      alert("No se ha podido cambiar: " + (e as Error).message);
+    } finally { setCambiandoActivo(false); }
+  }
 
   async function subirCambio(file: File | null) {
     if (!file) return;
@@ -695,8 +721,15 @@ function FilaTipoVehiculo({ tipo, puedeEditar, editando, onEditar, onCerrar, onG
   }
 
   return (
-    <tr className="border-t border-slate-700/60">
-      <td className={tdCls + " font-semibold"}>{tipo.nombre}</td>
+    <tr className={"border-t border-slate-700/60" + (tipo.activo ? "" : " opacity-60")}>
+      <td className={tdCls + " font-semibold"}>
+        {tipo.nombre}
+        {!tipo.activo && (
+          <span className="ml-2 rounded bg-slate-700 px-1.5 py-0.5 text-[10px] font-normal uppercase text-slate-300">
+            inactivo
+          </span>
+        )}
+      </td>
       <td className={tdCls + " text-slate-400"}>{tipo.descripcion ?? "—"}</td>
       <td className={tdCls + " text-slate-400"}>{tipo.numero_ejes}</td>
       <td className={tdCls + " text-slate-400"}>{tipo.numero_ruedas}</td>
@@ -727,9 +760,17 @@ function FilaTipoVehiculo({ tipo, puedeEditar, editando, onEditar, onCerrar, onG
       </td>
       <td className={tdCls}>
         {puedeEditar && (
-          <button onClick={onEditar} className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700">
-            Editar
-          </button>
+          <div className="flex gap-2">
+            <button onClick={onEditar} className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700">
+              Editar
+            </button>
+            <button onClick={alternarActivo} disabled={cambiandoActivo}
+                    className={"rounded border px-2 py-1 text-[11px] disabled:opacity-50 " + (tipo.activo
+                      ? "border-rose-700 text-rose-300 hover:bg-rose-900/40"
+                      : "border-emerald-700 text-emerald-300 hover:bg-emerald-900/40")}>
+              {cambiandoActivo ? "…" : tipo.activo ? "Desactivar" : "Activar"}
+            </button>
+          </div>
         )}
       </td>
     </tr>
@@ -770,6 +811,10 @@ export default function Configuracion() {
   const [medidas, setMedidas] = useState<MedidaNeumatico[]>([]);
   const [indicesCarga, setIndicesCarga] = useState<IndiceCarga[]>([]);
   const [indicesVelocidad, setIndicesVelocidad] = useState<IndiceVelocidad[]>([]);
+  // `tipos` trae también los inactivos, porque su tabla es la única desde la
+  // que se pueden volver a activar. Todo lo demás de esta pantalla (marcas,
+  // medidas, presiones) solo debe ver los activos, que es lo que hay en
+  // `tiposActivos`.
   const [tipos, setTipos] = useState<TipoVehiculo[]>([]);
   // Qué tipo se está editando y si está abierto el alta: uno u otro, nunca
   // los dos, para no tener dos formularios iguales a la vez en pantalla.
@@ -801,11 +846,12 @@ export default function Configuracion() {
   const [marcasVeh, setMarcasVeh] = useState<MarcaVehiculo[]>([]);
   const [nuevaMarcaVeh, setNuevaMarcaVeh] = useState("");
   const [msg, setMsg] = useState("");
+  const tiposActivos = tipos.filter((t) => t.activo);
 
   async function cargar() {
     const [m, med, ic, iv, t, f, c, mf, ce, tl, po, mv] = await Promise.all([
       listarMarcas(), listarMedidas(), listarIndicesCarga(), listarIndicesVelocidad(),
-      listarTiposVehiculo(), listarFabricantes(), listarContadoresMarcas(), listarMotivosFueraAlmacen(),
+      listarTiposVehiculo({ incluirInactivos: true }), listarFabricantes(), listarContadoresMarcas(), listarMotivosFueraAlmacen(),
       listarConfigEjes(), listarTiposLlanta(), listarPresionesObjetivo().catch(() => []),
       listarMarcasVehiculo().catch(() => []),
     ]);
@@ -933,7 +979,7 @@ export default function Configuracion() {
           se dibuja como uno de Volvo); si la marca no tiene la suya, se usa la genérica de la configuración.
         </div>
         <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
-          {configEjes.map((c) => <FilaConfigEjes key={c.id} config={c} puedeEditar={puedeEditar} onCambio={cargar} tipos={tipos} marcas={marcasVeh} />)}
+          {configEjes.map((c) => <FilaConfigEjes key={c.id} config={c} puedeEditar={puedeEditar} onCambio={cargar} tipos={tiposActivos} marcas={marcasVeh} />)}
         </div>
       </div>
 
@@ -946,7 +992,7 @@ export default function Configuracion() {
             <label className="flex flex-col text-[10px] text-slate-500">Tipo de vehículo
               <select className={`${inputCls} max-w-[200px]`} value={presTipo} onChange={(e) => setPresTipo(e.target.value)}>
                 <option value="">— Selecciona —</option>
-                {tipos.map((t) => <option key={t.id} value={t.id}>{t.descripcion ?? t.nombre}</option>)}
+                {tiposActivos.map((t) => <option key={t.id} value={t.id}>{t.descripcion ?? t.nombre}</option>)}
               </select>
             </label>
             <label className="flex flex-col text-[10px] text-slate-500">Eje (vacío = todos)
@@ -1051,7 +1097,7 @@ export default function Configuracion() {
         ) : (
           <div className="max-h-96 space-y-1 overflow-y-auto">
             {marcasVeh.map((m) => (
-              <FilaMarcaVehiculo key={m.id} marca={m} tipos={tipos} puedeEditar={puedeEditar} onCambio={cargar} />
+              <FilaMarcaVehiculo key={m.id} marca={m} tipos={tiposActivos} puedeEditar={puedeEditar} onCambio={cargar} />
             ))}
           </div>
         )}
@@ -1110,7 +1156,7 @@ export default function Configuracion() {
             )}
             <div className="mb-1 text-[10px] text-slate-500">Click en "tipos de vehículo" para marcar con qué tipos es compatible (filtra el desplegable al montar).</div>
             <div className="max-h-64 space-y-1 overflow-y-auto">
-              {medidas.map((m) => <FilaMedidaCompatibilidad key={m.id} medida={m} tipos={tipos} puedeEditar={puedeEditar} />)}
+              {medidas.map((m) => <FilaMedidaCompatibilidad key={m.id} medida={m} tipos={tiposActivos} puedeEditar={puedeEditar} />)}
             </div>
           </div>
         </div>
@@ -1150,7 +1196,8 @@ export default function Configuracion() {
         <div className="mb-3 text-[11px] text-slate-500">
           Los tipos de vehículo y su etiqueta de configuración de ejes (ej. 2x2x2, 2x4x2, 2x4x4). El tipo es quien da el
           plano de ruedas: sin él un vehículo no se puede revisar. De la configuración salen los ejes, las ruedas y las
-          posiciones, y también qué imagen de chasis le toca.
+          posiciones, y también qué imagen de chasis le toca. Los tipos no se borran: se desactivan, y así dejan de
+          salir al dar de alta vehículos sin tocar los que ya lo son.
           {!puedeEditar && " Solo un administrador Mobilink puede tocarlos."}
         </div>
         {tipoNuevo && (

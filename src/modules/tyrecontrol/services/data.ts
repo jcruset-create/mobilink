@@ -147,10 +147,32 @@ export async function crearUsuario(input: NuevoUsuario): Promise<void> {
 }
 
 // ── Catálogo: tipos y posiciones ─────────────────────────────
-export async function listarTiposVehiculo(): Promise<TipoVehiculo[]> {
-  const { data, error } = await supabase.from("tc_tipos_vehiculo").select("*").eq("activo", true).order("nombre");
+/**
+ * Los tipos de vehículo. Por defecto solo los activos, que es lo que quieren
+ * los desplegables de alta; la pantalla de Configuración pide también los
+ * inactivos, porque si no, un tipo desactivado no se podría volver a activar
+ * desde ningún sitio.
+ */
+export async function listarTiposVehiculo(
+  opciones: { incluirInactivos?: boolean } = {},
+): Promise<TipoVehiculo[]> {
+  let q = supabase.from("tc_tipos_vehiculo").select("*");
+  if (!opciones.incluirInactivos) q = q.eq("activo", true);
+  const { data, error } = await q.order("nombre");
   if (error) throw new Error(error.message);
   return (data ?? []) as TipoVehiculo[];
+}
+
+/**
+ * Cuántos vehículos son de este tipo. Solo para avisar antes de desactivarlo:
+ * desactivar no los toca —siguen con su plano y sus montajes— pero conviene
+ * decir a cuántos afecta antes de que el tipo desaparezca de los desplegables.
+ */
+export async function contarVehiculosDeTipo(tipoId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from("tc_vehiculos").select("id", { count: "exact", head: true }).eq("tipo_vehiculo_id", tipoId);
+  if (error) throw new Error(error.message);
+  return count ?? 0;
 }
 
 /**
