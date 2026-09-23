@@ -18,6 +18,11 @@ import { supabase } from "../../supabase.ts";
 import { coincideMatricula, patronBusquedaMatricula } from "../matricula.ts";
 import { METODOS_VINCULO, type MetodoVinculo } from "../../integration-hub/domain/reconciliation.ts";
 import {
+  cambiosDeNumeroFlota,
+  numeroDeFlotaDeNombre,
+  type CambioNumeroFlota,
+} from "../../integration-hub/domain/numeroFlota.ts";
+import {
   ignoreExternal,
   listVehicleMappings,
   setVehicleMappingActive,
@@ -360,7 +365,19 @@ export async function crearPendiente(
       empresa_id: ambito.empresaId,
       matricula,
       bastidor: datos.bastidor ?? null,
-      numero_unidad: datos.numeroUnidad ?? null,
+      /*
+       * El número de flota sale del nombre del proveedor cuando nadie lo pasa.
+       *
+       * La cabecera de esta función lleva desde el primer día diciendo que se
+       * copia «matrícula, bastidor y número de unidad», y el número de unidad
+       * no llegaba nunca: la pantalla manda `externalName` y no `numeroUnidad`,
+       * así que cada bus creado desde Movertis nacía sin él y había que
+       * escribirlo a mano uno por uno. Derivarlo AQUÍ y no en el navegador es
+       * lo que hace que todos los caminos —el botón, el lote y el que se
+       * escriba mañana— lo hereden sin tener que acordarse.
+       */
+      numero_unidad:
+        datos.numeroUnidad ?? numeroDeFlotaDeNombre(datos.externalName, matricula),
       km_actual: 0,
       origen_km: "manual",
       activo: true,
@@ -845,3 +862,103 @@ export async function ignorarLote(
   return { hechos, fallidos, omitidos: [] };
 }
 
+
+// ── Número de flota desde el nombre del proveedor ───────────────────────────
+
+/**
+ * Qué vehículos ya enlazados cambiarían de número de flota.
+ *
+ * Se parte de una conciliación EN VIVO, no de lo que hubiera guardado: el
+ * nombre de un vehículo en Movertis se edita desde Movertis, y proponer sobre
+ * un nombre viejo sería escribir en TyreControl algo que allí ya no dice
+ * nadie.
+ *
+ * Solo se miran los ENLAZADOS. Las discrepancias quedan fuera a propósito: si
+ * la matrícula del proveedor y la de TyreControl no coinciden, lo que hay que
+ * resolver es esa discrepancia, no rellenarle el número de flota a un enlace
+ * del que todavía no sabemos si es el vehículo que creemos.
+ */
+export async function proponerNumerosDeFlota(
+  ambito: Ambito,
+): Promise<CambioNumeroFlota[]> {
+  const { conciliarFlota } = await import(
+    "../../integration-hub/application/services/VehicleReconciliationService.ts"
+  );
+  const { nextCorrelationId } = await import("../../integration-hub/infrastructure/repositories.ts");
+  const { normalizarMatricula } = await import("../matricula.ts");
+  const { leerFlotaInterna } = await import("./flota.ts");
+
+  const { enlazados } = await conciliarFlota(
+    { tenantId: ambito.empresaId, correlationId: await nextCorrelationId() },
+    {
+      connectorKey: ambito.connectorKey,
+      accountKey: ambito.accountKey,
+      leerFlotaInterna,
+      normalizarMatricula,
+    },
+  );
+
+  return cambiosDeNumeroFlota(
+    enlazados.map((f) => ({
+      vehiculoId: f.interno.id,
+      matricula: f.interno.matricula,
+      nombreProveedor: f.externo.name ?? null,
+      numeroActual: f.interno.numeroUnidad ?? null,
+    })),
+  );
+}
+
+export interface ResultadoNumerosFlota {
+  aplicados: CambioNumeroFlota[];
+  fallidos: { vehiculoId: string; error: string }[];
+  /** Pedidos que ya no están en la propuesta recalculada. */
+  omitidos: string[];
+}
+
+/**
+ * Escribe el número de flota en los vehículos marcados.
+ *
+ * La propuesta se RECALCULA aquí y solo se aplica lo que vuelve a salir en
+ * ella. Lo que manda el navegador es únicamente la lista de vehículos: los
+ * números salen del proveedor en este mismo instante. Entre lo que la pantalla
+ * pintó y lo que se envía cabe una pestaña de hace una hora y un cuerpo
+ * editado a mano, y de las dos formas se acabaría escribiendo en la ficha de
+ * un bus un número que el proveedor no ha dicho nunca.
+ */
+export async function aplicarNumerosDeFlota(
+  ambito: Ambito,
+  datos: { vehiculoIds: string[] },
+): Promise<ResultadoNumerosFlota> {
+  const pedidos = [...new Set((datos.vehiculoIds ?? []).map((v) => String(v ?? "").trim()))]
+    .filter(Boolean);
+  if (pedidos.length === 0) {
+    throw new ErrorConciliacion("SIN_VEHICULOS", "No se ha marcado ningún vehículo.");
+  }
+
+  const propuesta = new Map(
+    (await proponerNumerosDeFlota(ambito)).map((c) => [c.vehiculoId, c]),
+  );
+
+  const aplicados: CambioNumeroFlota[] = [];
+  const fallidos: ResultadoNumerosFlota["fallidos"] = [];
+  const omitidos: string[] = [];
+
+  for (const id of pedidos) {
+    const cambio = propuesta.get(id);
+    if (!cambio) {
+      omitidos.push(id);
+      continue;
+    }
+    // El `empresa_id` no es decorativo: es lo que impide escribir en la ficha
+    // de un vehículo de otra empresa mandando su identificador.
+    const { error } = await supabase
+      .from("tc_vehiculos")
+      .update({ numero_unidad: cambio.numeroPropuesto })
+      .eq("id", id)
+      .eq("empresa_id", ambito.empresaId);
+    if (error) fallidos.push({ vehiculoId: id, error: error.message });
+    else aplicados.push(cambio);
+  }
+
+  return { aplicados, fallidos, omitidos };
+}
