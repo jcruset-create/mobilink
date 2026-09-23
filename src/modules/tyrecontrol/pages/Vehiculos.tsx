@@ -16,6 +16,7 @@ import type {
 import { ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { enlacesTelematica } from "../services/conciliacion";
 import { marcaDelCatalogo } from "../catalogo/logoMarca";
+import { logoSinFondo } from "../catalogo/fondoLogo";
 import { estadoUbicacion, etiquetaBase, ubicacionDeVehiculo } from "../services/presenciaVista";
 import {
   conectoresDe, etiquetaTelematica, porVehiculo, type EnlaceTelematica,
@@ -51,17 +52,30 @@ function CeldaMarca({ vehiculo, catalogo }: { vehiculo: Vehiculo; catalogo: Marc
   const [falla, setFalla] = useState(false);
   const marca = marcaDelCatalogo(vehiculo, catalogo);
   const nombre = vehiculo.marca ?? marca?.nombre ?? null;
+  const original = marca?.logo_url ?? null;
 
-  if (!marca?.logo_url || falla) return <>{nombre ?? "—"}</>;
+  // Los logos que se subieron con su recuadro blanco pegado dentro quedan como
+  // un sello sobre el panel oscuro. Se les quita el fondo al vuelo; el
+  // resultado se guarda por url, así que cada marca se limpia una sola vez
+  // aunque salga en 300 filas.
+  const [limpio, setLimpio] = useState<string | null>(null);
+  useEffect(() => {
+    if (!original) { setLimpio(null); return; }
+    let vivo = true;
+    void logoSinFondo(original).then((u) => { if (vivo) setLimpio(u); });
+    return () => { vivo = false; };
+  }, [original]);
+
+  if (!original || falla) return <>{nombre ?? "—"}</>;
   return (
     <div className="flex items-center gap-2">
       <img
-        src={marca.logo_url}
-        alt={marca.nombre}
-        title={marca.nombre}
+        src={limpio ?? original}
+        alt={marca?.nombre ?? nombre ?? ""}
+        title={marca?.nombre ?? undefined}
         loading="lazy"
         onError={() => setFalla(true)}
-        className="h-7 w-16 shrink-0 object-contain"
+        className="h-10 w-20 shrink-0 object-contain"
       />
       <span className="text-[11px] text-slate-500">{nombre}</span>
     </div>
