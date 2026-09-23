@@ -3294,3 +3294,34 @@ export async function crearUsoCatalogo(
   if (error) throw new Error(error.message);
   return codigo;
 }
+
+// ── Lo que ha durado un neumático ────────────────────────────
+//
+// Los kilómetros se anotan al montar y al desmontar para poder responder a la
+// única pregunta que importa de una goma: cuánto ha durado. La cuenta la hace
+// la base (`tc_neumatico_recorrido`), tramo a tramo, porque los datos están
+// repartidos entre el histórico y el montaje vigente.
+export interface TramoRecorrido {
+  desde: string | null;
+  hasta: string | null;
+  km_montaje: number | null;
+  km_desmontaje: number | null;
+  /** Los km del tramo. null cuando falta alguno de los dos extremos. */
+  km: number | null;
+  vigente: boolean;
+}
+
+export interface RecorridoNeumatico {
+  km_total: number;
+  tramos: number;
+  /** Tramos sin kilometraje: el total está incompleto y hay que decirlo. */
+  tramos_sin_km: number;
+  montado_ahora: boolean;
+  detalle: TramoRecorrido[];
+}
+
+export async function recorridoNeumatico(neumaticoId: string): Promise<RecorridoNeumatico> {
+  const { data, error } = await supabase.rpc("tc_neumatico_recorrido", { p_neumatico: neumaticoId });
+  if (error) throw new Error(error.message);
+  return data as unknown as RecorridoNeumatico;
+}
