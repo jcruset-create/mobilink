@@ -23,6 +23,7 @@ const { findExternalCode } = await import("../../infrastructure/repositories.ts"
 const {
   elegirKilometraje,
   kilometrajeEnOperacion,
+  kilometrajeAhora,
   kilometrajeSiSigueParado,
   ESCALERA_TOLERANCIA,
 } = await import("./VehicleOdometerService.ts");
@@ -458,5 +459,116 @@ describe("kilometrajeSiSigueParado()", () => {
     expect(
       (await kilometrajeSiSigueParado(ctx, "veh-1", PASO, { ahora: AHORA, radioM: 100 })).estado,
     ).toBe("se_movio");
+  });
+});
+
+// ── El odómetro de ahora mismo ───────────────────────────────────────────────
+//
+// Esto nació de una flota entera sin kilómetros en el parte: el histórico de
+// Movertis (`showtrips`) no trae odómetro, así que preguntar por una ventana
+// de ±60 min no encontraba nada aunque el vehículo estuviera dando su
+// `counters.odometer` tan tranquilo.
+describe("kilometrajeAhora()", () => {
+  const ctx = { tenantId: "empresa-1", correlationId: "COR-20260715-000002" };
+  const cuenta = (key: string, accountKey: string, connector: unknown) => ({
+    key, accountKey, connector, usingDefault: false, config: {},
+  });
+
+  beforeEach(() => {
+    vi.mocked(resolveTelematicsConnectors).mockReset();
+    vi.mocked(findExternalCode).mockReset();
+  });
+
+  it("pregunta el ESTADO ACTUAL, no el histórico", async () => {
+    // El caso Movertis: su getCurrentTelemetry sí trae odómetro, su histórico
+    // no. Si esto llamara al histórico, la pantalla del parte se quedaría sin
+    // kilómetros con el dato delante.
+    const getCurrentTelemetry = vi.fn().mockResolvedValue(
+      lectura("2026-07-15T09:20:00Z", 512480, { provider: "movertis", accountKey: "plana" }));
+    const getTelemetryHistory = vi.fn().mockResolvedValue([]);
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "plana", { getCurrentTelemetry, getTelemetryHistory }),
+    ] as never);
+    vi.mocked(findExternalCode).mockResolvedValue("UNI-9");
+
+    const r = await kilometrajeAhora(ctx, "veh-1", T);
+    expect(r.estado).toBe("encontrado");
+    if (r.estado === "encontrado") {
+      expect(r.kilometraje.odometerKm).toBe(512480);
+      expect(r.kilometraje.providerVehicleId).toBe("UNI-9");
+      // 20 minutos ANTES de ahora: negativo, como en toda la casa.
+      expect(r.kilometraje.deltaMinutos).toBe(-20);
+    }
+    expect(getTelemetryHistory).not.toHaveBeenCalled();
+  });
+
+  it("una lectura actual SIN odómetro no es un kilometraje: se cae al histórico", async () => {
+    const getCurrentTelemetry = vi.fn().mockResolvedValue(lectura("2026-07-15T09:39:00Z"));
+    const getTelemetryHistory = vi.fn().mockResolvedValue([lectura("2026-07-15T09:38:00Z", 140)]);
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("webfleet", "autobuses", { getCurrentTelemetry, getTelemetryHistory }),
+    ] as never);
+    vi.mocked(findExternalCode).mockResolvedValue("001");
+
+    const r = await kilometrajeAhora(ctx, "veh-1", T);
+    expect(r.estado).toBe("encontrado");
+    if (r.estado === "encontrado") expect(r.kilometraje.odometerKm).toBe(140);
+  });
+
+  it("entre dos cuentas gana la lectura MÁS RECIENTE", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("webfleet", "autobuses", {
+        getCurrentTelemetry: vi.fn().mockResolvedValue(lectura("2026-07-15T08:00:00Z", 100)),
+        getTelemetryHistory: vi.fn().mockResolvedValue([]),
+      }),
+      cuenta("movertis", "plana", {
+        getCurrentTelemetry: vi.fn().mockResolvedValue(
+          lectura("2026-07-15T09:30:00Z", 200, { provider: "movertis" })),
+        getTelemetryHistory: vi.fn().mockResolvedValue([]),
+      }),
+    ] as never);
+    vi.mocked(findExternalCode).mockResolvedValue("001");
+
+    const r = await kilometrajeAhora(ctx, "veh-1", T);
+    if (r.estado === "encontrado") expect(r.kilometraje.odometerKm).toBe(200);
+  });
+
+  it("sin cuentas es 'sin_telematica', no un fallo", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([]);
+    expect((await kilometrajeAhora(ctx, "veh-1", T)).estado).toBe("sin_telematica");
+  });
+
+  it("vehículo sin enlazar en ninguna cuenta → 'sin_telematica'", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "plana", { getCurrentTelemetry: vi.fn(), getTelemetryHistory: vi.fn() }),
+    ] as never);
+    vi.mocked(findExternalCode).mockResolvedValue(null);
+    expect((await kilometrajeAhora(ctx, "veh-1", T)).estado).toBe("sin_telematica");
+  });
+
+  it("se preguntó y nadie dio odómetro → 'sin_lectura'", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "plana", {
+        getCurrentTelemetry: vi.fn().mockResolvedValue(null),
+        getTelemetryHistory: vi.fn().mockResolvedValue([]),
+      }),
+    ] as never);
+    vi.mocked(findExternalCode).mockResolvedValue("UNI-9");
+
+    const r = await kilometrajeAhora(ctx, "veh-1", T);
+    expect(r.estado).toBe("sin_lectura");
+  });
+
+  it("si el proveedor se cae en los dos caminos → 'no_disponible', que sí merece reintento", async () => {
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      cuenta("movertis", "plana", {
+        getCurrentTelemetry: vi.fn().mockRejectedValue(new Error("HTTP 503")),
+        getTelemetryHistory: vi.fn().mockRejectedValue(new Error("HTTP 503")),
+      }),
+    ] as never);
+    vi.mocked(findExternalCode).mockResolvedValue("UNI-9");
+
+    const r = await kilometrajeAhora(ctx, "veh-1", T);
+    expect(r.estado).toBe("no_disponible");
   });
 });

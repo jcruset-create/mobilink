@@ -408,3 +408,98 @@ export async function kilometrajeSiSigueParado(
   if (consultadas.length === 0) return { estado: "no_disponible", motivo: fallos.join(" · ") };
   return { estado: "sin_lectura", cuentasConsultadas: consultadas };
 }
+
+// ── El odómetro de AHORA ─────────────────────────────────────────────────────
+//
+// `kilometrajeEnOperacion` busca en una ventana de ±60 min del histórico. Para
+// un instante pasado es lo correcto, pero para «¿cuántos kilómetros lleva este
+// camión ahora mismo?» deja fuera a Movertis, y no por un fallo de mapeo: su
+// histórico (`showtrips`) devuelve posiciones y punto. El odómetro de Movertis
+// está en `counters.odometer`, que es lo que sirve su endpoint de flota, y a
+// eso se llega por `getCurrentTelemetry`.
+//
+// Por eso el parte guiado enseñaba «su equipo no está dando el cuentakilómetros
+// ahora mismo» en una flota que sí lo está dando.
+//
+// Se pregunta primero el estado actual y solo si nadie contesta se cae al
+// histórico, que es el camino que ya funcionaba con Webfleet.
+
+/** Peldaño de la escalera en que cae un desfase. El más ancho si se pasa. */
+function peldañoDe(minutos: number): number {
+  const d = Math.abs(minutos);
+  return ESCALERA_TOLERANCIA.find((p) => d <= p) ?? TOLERANCIA_MAXIMA;
+}
+
+/**
+ * El kilometraje de ahora mismo, preguntando el estado actual del vehículo.
+ *
+ * Mismos cuatro estados y mismas reglas de reparto entre cuentas que
+ * `kilometrajeEnOperacion`: gana la lectura MÁS RECIENTE, que aquí es la buena
+ * —no la más próxima a un instante—, y que una cuenta falle no cancela a las
+ * demás.
+ *
+ * La antigüedad no se juzga aquí: de eso ya se ocupa `clasificarLectura` con
+ * el umbral de frescura de la cuenta, que para un odómetro es ancho a
+ * propósito (lo que no se ha movido no suma kilómetros).
+ */
+export async function kilometrajeAhora(
+  ctx: OperationContext,
+  vehiculoMobilinkId: string,
+  ahora: Date = new Date(),
+): Promise<ResultadoKilometraje> {
+  const cuentas = await resolveTelematicsConnectors(ctx.tenantId);
+  if (cuentas.length === 0) return { estado: "sin_telematica" };
+
+  const consultadas: string[] = [];
+  const fallos: string[] = [];
+  let mejor: KilometrajeTrazable | null = null;
+
+  for (const cuenta of cuentas) {
+    const providerVehicleId = await findExternalCode({
+      tenantId: ctx.tenantId,
+      entityType: "vehicle",
+      system: cuenta.key,
+      mobilinkId: vehiculoMobilinkId,
+      accountKey: cuenta.accountKey,
+    });
+    if (!providerVehicleId) continue;
+
+    const etiqueta = `${cuenta.key}/${cuenta.accountKey}`;
+    try {
+      const lectura = await cuenta.connector.getCurrentTelemetry(ctx, providerVehicleId);
+      consultadas.push(etiqueta);
+      if (!lectura || lectura.odometerKm === undefined) continue;
+
+      const deltaMs = lectura.capturedAt.getTime() - ahora.getTime();
+      const minutos = Math.round(deltaMs / 60_000);
+      const candidato: KilometrajeTrazable = {
+        odometerKm: lectura.odometerKm,
+        provider: lectura.provider,
+        accountKey: lectura.accountKey,
+        providerVehicleId,
+        capturedAt: lectura.capturedAt,
+        deltaMinutos: minutos === 0 ? 0 : minutos,
+        toleranciaMin: peldañoDe(minutos),
+        odometerSource: lectura.odometerSource,
+      };
+      if (!mejor || candidato.capturedAt.getTime() > mejor.capturedAt.getTime()) {
+        mejor = candidato;
+      }
+    } catch (e) {
+      fallos.push(`${etiqueta}: ${(e as Error)?.message ?? e}`);
+    }
+  }
+
+  if (mejor) return { estado: "encontrado", kilometraje: mejor };
+
+  // Nadie enlazado: el vehículo no está en la telemática de este cliente.
+  if (consultadas.length === 0 && fallos.length === 0) return { estado: "sin_telematica" };
+
+  // El estado actual no lo ha dado nadie. Queda el histórico, que es de donde
+  // sale con Webfleet.
+  const porVentana = await kilometrajeEnOperacion(ctx, vehiculoMobilinkId, ahora);
+  if (porVentana.estado === "encontrado") return porVentana;
+
+  if (consultadas.length === 0) return { estado: "no_disponible", motivo: fallos.join(" · ") };
+  return { estado: "sin_lectura", cuentasConsultadas: consultadas };
+}
