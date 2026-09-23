@@ -6,7 +6,7 @@
  * ventanas salen de la MISMA API: si Movertis tiene un mal rato coherente, las
  * dos mienten igual. Lo que hay aquí son cotas de fuera de la API.
  *
- * ── Las tres cotas, de más fuerte a más débil ───────────────────────────────
+ * ── Las cuatro cotas, de más fuerte a más débil ────────────────────────────
  *
  * **Un odómetro no retrocede.** Es la única ley física del asunto y no admite
  * excepciones salvo cambio de cuadro, que en esta flota no ha pasado. Si la
@@ -22,6 +22,13 @@
  * odómetro al principio y al final de cada mes, y sale de otra consulta, otro
  * día y otra ventana. Una revisión del 15 de marzo tiene que caer entre el
  * odómetro del 1 de marzo y el del 31. Es la cota independiente de verdad.
+ *
+ * **El odómetro de hoy.** Se puede consultar en cualquier momento, y un
+ * odómetro no retrocede: lo que marcaba el autobús en marzo no puede ser más
+ * de lo que marca hoy. Es la cota más débil de las cuatro —deja pasar
+ * cualquier número por debajo del actual— pero es la única que está SIEMPRE
+ * disponible, y por eso es la que permite aceptar una lectura respaldada por
+ * una sola ventana del proveedor en vez de tirarla.
  *
  * **Cero no es un odómetro.** Redundante con el mapeo del conector desde que
  * trata el 0 como «sin lectura», y se queda igualmente: es la clase de cosa
@@ -48,6 +55,13 @@ export interface Cotas {
   siguiente?: Vecina | null;
   /** Odómetro al principio y al final del mes, del kilometraje mensual. */
   mes?: { inicial: number; final: number } | null;
+  /**
+   * El odómetro que marca el vehículo HOY. Techo absoluto de cualquier lectura
+   * del pasado, y la única cota que está disponible siempre: las otras dos
+   * dependen de que exista una revisión vecina con kilómetros o de que el mes
+   * ya esté sincronizado, y para un vehículo recién enlazado no existe ninguna.
+   */
+  hoy?: { km: number } | null;
 }
 
 /**
@@ -62,7 +76,7 @@ export function esCoherente(km: number, cotas: Cotas = {}): Veredicto {
     return { estado: "rechazado", motivo: `Odómetro ${km}: un cuentakilómetros a cero o negativo no es una lectura.` };
   }
 
-  const { anterior, siguiente, mes } = cotas;
+  const { anterior, siguiente, mes, hoy } = cotas;
 
   if (anterior && km < anterior.km - TOLERANCIA_KM) {
     return {
@@ -93,7 +107,34 @@ export function esCoherente(km: number, cotas: Cotas = {}): Veredicto {
     }
   }
 
+  if (hoy && Number.isFinite(hoy.km) && km > hoy.km + TOLERANCIA_KM) {
+    return {
+      estado: "rechazado",
+      motivo:
+        `Odómetro ${redondo(km)} km, por encima de los ${redondo(hoy.km)} km que marca ` +
+        "hoy el vehículo. Un odómetro no retrocede, así que el pasado no puede ir por delante.",
+    };
+  }
+
   return { estado: "ok" };
+}
+
+/**
+ * ¿Hay alguna cota que de verdad ate este número?
+ *
+ * `esCoherente` con las cotas vacías devuelve «ok», y tiene que ser así: no es
+ * lo mismo un número desmentido que uno que nadie ha podido contrastar. Pero
+ * quien acepta una lectura respaldada por UNA sola ventana del proveedor sí
+ * necesita distinguirlo, porque ahí el «ok» no significa que el número esté
+ * bien, sino que no había con qué comprobarlo.
+ */
+export function hayCotaIndependiente(cotas: Cotas = {}): boolean {
+  const { anterior, siguiente, mes, hoy } = cotas;
+  if (anterior && Number.isFinite(anterior.km)) return true;
+  if (siguiente && Number.isFinite(siguiente.km)) return true;
+  if (mes && Number.isFinite(mes.inicial) && Number.isFinite(mes.final)) return true;
+  if (hoy && Number.isFinite(hoy.km)) return true;
+  return false;
 }
 
 /**

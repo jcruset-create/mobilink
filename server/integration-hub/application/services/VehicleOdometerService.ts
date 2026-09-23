@@ -423,6 +423,11 @@ export async function kilometrajeSiSigueParado(
 //
 // Se pregunta primero el estado actual y solo si nadie contesta se cae al
 // histórico, que es el camino que ya funcionaba con Webfleet.
+//
+// No confundir con `odometroDeHoy`, aquí debajo: aquél trae un número suelto
+// para usarlo como TECHO de otra cuenta, y aquí se devuelve un kilometraje
+// trazable —con su proveedor, su instante y su desfase— porque va a la
+// pantalla del técnico y tiene que poder decir de dónde sale.
 
 /** Peldaño de la escalera en que cae un desfase. El más ancho si se pasa. */
 function peldañoDe(minutos: number): number {
@@ -502,4 +507,60 @@ export async function kilometrajeAhora(
 
   if (consultadas.length === 0) return { estado: "no_disponible", motivo: fallos.join(" · ") };
   return { estado: "sin_lectura", cuentasConsultadas: consultadas };
+}
+
+/**
+ * El odómetro que marca el vehículo AHORA MISMO.
+ *
+ * Es el primo tonto de `kilometrajeSiSigueParado`: no demuestra nada, no pide
+ * posiciones y no le importa si el vehículo está en marcha. Solo trae el
+ * número de ahora, en UNA llamada por cuenta.
+ *
+ * Existe porque el histórico lo necesita como TECHO. Un odómetro no retrocede,
+ * así que lo que marcaba el autobús en una revisión de marzo no puede ser más
+ * de lo que marca hoy, y esa cota está disponible siempre —basta con
+ * preguntar—, mientras que las otras dependen de que haya una revisión vecina
+ * con kilómetros o el mes ya sincronizado.
+ *
+ * Como techo vale aunque la lectura se quede vieja: el odómetro solo sube, así
+ * que un valor cacheado al arrancar es una cota MÁS ESTRICTA que la de ahora,
+ * nunca más laxa. Por eso quien llame puede guardársela sin refrescarla.
+ *
+ * No sirve para atribuirle kilómetros a nada. Solo para descartar imposibles.
+ */
+export async function odometroDeHoy(
+  ctx: OperationContext,
+  vehiculoMobilinkId: string,
+): Promise<{ km: number; provider: string; capturedAt: Date } | null> {
+  const cuentas = await resolveTelematicsConnectors(ctx.tenantId);
+  let mejor: { km: number; provider: string; capturedAt: Date } | null = null;
+
+  for (const cuenta of cuentas) {
+    const providerVehicleId = await findExternalCode({
+      tenantId: ctx.tenantId,
+      entityType: "vehicle",
+      system: cuenta.key,
+      mobilinkId: vehiculoMobilinkId,
+      accountKey: cuenta.accountKey,
+    });
+    if (!providerVehicleId) continue;
+
+    try {
+      const actual = await cuenta.connector.getCurrentTelemetry(ctx, providerVehicleId);
+      if (!actual || actual.odometerKm === undefined) continue;
+      // Con varias cuentas gana la lectura MÁS ALTA: como techo, la más alta es
+      // la que no rechaza por error un número que en realidad era bueno.
+      if (!mejor || actual.odometerKm > mejor.km) {
+        mejor = {
+          km: actual.odometerKm,
+          provider: actual.provider,
+          capturedAt: actual.capturedAt,
+        };
+      }
+    } catch {
+      // Un techo que no se puede consultar no es un fallo: es una cota menos.
+    }
+  }
+
+  return mejor;
 }
