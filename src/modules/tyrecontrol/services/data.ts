@@ -153,9 +153,43 @@ export async function listarTiposVehiculo(): Promise<TipoVehiculo[]> {
   return (data ?? []) as TipoVehiculo[];
 }
 
-export async function actualizarConfiguracionEjes(tipoId: string, configuracionEjes: string | null): Promise<void> {
-  const { error } = await supabase.from("tc_tipos_vehiculo").update({ configuracion_ejes: configuracionEjes }).eq("id", tipoId);
-  if (error) throw new Error(error.message);
+/**
+ * Da de alta un tipo de vehículo. Hasta ahora esto solo se podía hacer por
+ * migración SQL, así que un tipo nuevo (una tractora de 2 ejes, un autocar
+ * con el tercer eje gemelo) tenía que esperar a que alguien escribiera el
+ * `insert`. Escribe en el catálogo, así que la RLS solo lo deja a un
+ * administrador Mobilink: es la misma regla que ya tenía la edición.
+ */
+export async function crearTipoVehiculo(tipo: {
+  nombre: string; descripcion: string; numero_ejes: number; numero_ruedas: number;
+  configuracion_ejes: string | null;
+  revision_intervalo_dias: number | null; revision_intervalo_km: number | null;
+}): Promise<TipoVehiculo> {
+  const { data, error } = await supabase
+    .from("tc_tipos_vehiculo").insert({ ...tipo, activo: true }).select("*").single();
+  if (error) {
+    // `nombre` es único: lo más probable es que ya exista, y decirlo así
+    // ahorra ir a buscarlo entre los inactivos.
+    if ((error as { code?: string }).code === "23505") {
+      throw new Error(`Ya hay un tipo con la clave «${tipo.nombre}».`);
+    }
+    throw new Error(error.message);
+  }
+  return data as TipoVehiculo;
+}
+
+/** Cambia cualquier campo del tipo, incluidos nombre, ejes y ruedas. */
+export async function actualizarTipoVehiculo(
+  tipoId: string,
+  cambios: Partial<Pick<TipoVehiculo,
+    "nombre" | "descripcion" | "numero_ejes" | "numero_ruedas" | "configuracion_ejes" |
+    "revision_intervalo_dias" | "revision_intervalo_km" | "activo">>,
+): Promise<void> {
+  const { error } = await supabase.from("tc_tipos_vehiculo").update(cambios).eq("id", tipoId);
+  if (error) {
+    if ((error as { code?: string }).code === "23505") throw new Error("Ya hay un tipo con esa clave.");
+    throw new Error(error.message);
+  }
 }
 
 export async function listarPosiciones(tipoId: string): Promise<PosicionVehiculo[]> {
@@ -2327,11 +2361,6 @@ export async function listarRevisionEstado(): Promise<RevisionEstado[]> {
   const { data, error } = await supabase.rpc("tc_revision_estado");
   if (error) throw new Error(error.message);
   return (data ?? []) as RevisionEstado[];
-}
-
-export async function actualizarIntervaloRevisionTipo(tipoId: string, dias: number | null): Promise<void> {
-  const { error } = await supabase.from("tc_tipos_vehiculo").update({ revision_intervalo_dias: dias }).eq("id", tipoId);
-  if (error) throw new Error(error.message);
 }
 
 export async function listarRevisionFlags(): Promise<RevisionFlag[]> {
