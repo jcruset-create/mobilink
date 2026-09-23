@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { codigoDeUso } from "../catalogo/usos";
 import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import { medidaCanonica } from "./medidas";
 import { recorrerPaginas } from "./paginacion";
@@ -3061,12 +3062,29 @@ async function upsertMarca(nombre: string): Promise<string> {
   return (c as any).id;
 }
 
-async function upsertModelo(marcaId: string, nombre: string): Promise<string> {
+/**
+ * El modelo, creándolo si no está.
+ *
+ * `usos` SOLO se aplica cuando el modelo se CREA. Si ya existe, se deja como
+ * está aunque venga con otro eje o con otro tipo de uso: esos dos datos son
+ * del modelo entero y cambiarlos aquí afectaría a todas sus medidas sin que
+ * nadie se entere. Corregirlos es cosa de la ficha del modelo, a propósito.
+ */
+async function upsertModelo(
+  marcaId: string,
+  nombre: string,
+  usos?: { eje?: string | null; aplicacion?: string | null },
+): Promise<string> {
   const n = nombre.trim();
   if (!n) throw new Error("El modelo es obligatorio");
   const { data } = await supabase.from("tc_cat_modelos_neumatico").select("id").eq("marca_id", marcaId).ilike("nombre", n).limit(1).maybeSingle();
   if (data) return (data as any).id;
-  const { data: c, error } = await supabase.from("tc_cat_modelos_neumatico").insert({ marca_id: marcaId, nombre: n }).select("id").single();
+  const { data: c, error } = await supabase.from("tc_cat_modelos_neumatico").insert({
+    marca_id: marcaId,
+    nombre: n,
+    ...(usos?.eje ? { eje_recomendado: usos.eje } : {}),
+    ...(usos?.aplicacion ? { aplicacion: usos.aplicacion } : {}),
+  }).select("id").single();
   if (error) throw new Error(error.message);
   return (c as any).id;
 }
@@ -3140,6 +3158,8 @@ export async function proponerIndicesMedida(medida: string): Promise<IndicesProp
 export async function crearReferenciaNeumatico(input: {
   marca: string; modelo: string; medida: string;
   indiceCargaSimple: string; indiceCargaDoble?: string | null; codigoVelocidad: string;
+  /** Eje y tipo de uso. Solo se guardan si el modelo se crea ahora. */
+  eje?: string | null; aplicacion?: string | null;
 }): Promise<string> {
   const icSimple = input.indiceCargaSimple.trim();
   const velocidad = input.codigoVelocidad.trim().toUpperCase();
@@ -3147,7 +3167,9 @@ export async function crearReferenciaNeumatico(input: {
   // El código de velocidad es opcional (la columna admite null): permite
   // catalogar aunque la propuesta por medida no lo aporte.
   const marcaId = await upsertMarca(input.marca);
-  const modeloId = await upsertModelo(marcaId, input.modelo);
+  const modeloId = await upsertModelo(marcaId, input.modelo, {
+    eje: input.eje ?? null, aplicacion: input.aplicacion ?? null,
+  });
   const tyreSizeId = await upsertTyreSize(input.medida, icSimple, input.indiceCargaDoble?.trim() || null, velocidad);
 
   const { data: exist } = await supabase.from("tc_referencias_neumatico")
@@ -3207,4 +3229,68 @@ export async function listarNeumaticosSinCatalogar(empresaId?: string): Promise<
     }
   }
   return Array.from(mapa.values()).sort((a, b) => b.cantidad - a.cantidad);
+}
+
+// ── Ejes y tipos de uso del catálogo ─────────────────────────
+//
+// Dos listas editables que viven en la base (`tyrecontrol_usos_neumatico.sql`)
+// en vez de estar escritas en el código: así se puede añadir un uso nuevo sin
+// tocar la aplicación ni esperar a un despliegue.
+//
+// Van en el MODELO, no en la referencia: el eje y el tipo de uso son del
+// dibujo, no de la medida. «Conti HS5» es de dirección tanto en 315/80R22.5
+// como en 385/65R22.5. Por eso la pantalla avisa de que al cambiarlos se
+// cambian todas las medidas de ese modelo.
+export interface UsoCatalogo {
+  codigo: string;
+  nombre: string;
+  orden: number;
+  activo: boolean;
+}
+
+export async function listarEjesNeumatico(): Promise<UsoCatalogo[]> {
+  const { data, error } = await supabase.from("tc_cat_ejes_neumatico")
+    .select("*").eq("activo", true).order("orden");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as UsoCatalogo[];
+}
+
+export async function listarAplicacionesNeumatico(): Promise<UsoCatalogo[]> {
+  const { data, error } = await supabase.from("tc_cat_aplicaciones_neumatico")
+    .select("*").eq("activo", true).order("orden");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as UsoCatalogo[];
+}
+
+/**
+ * Añade un uso a una de las dos listas.
+ *
+ * El código se deriva del nombre y no se pide aparte: es lo que se guarda en
+ * cada modelo, y dejarlo escribir a mano es pedir que aparezca «Regional» y
+ * «regional_2» para lo mismo. Se avisa si ya existe en vez de dejar que
+ * reviente con el error de clave duplicada de Postgres.
+ */
+export async function crearUsoCatalogo(
+  lista: "ejes" | "aplicaciones",
+  nombre: string,
+): Promise<string> {
+  const limpio = nombre.trim().replace(/\s+/g, " ");
+  if (!limpio) throw new Error("El nombre es obligatorio");
+  const codigo = codigoDeUso(limpio);
+  if (!codigo) throw new Error("Ese nombre no da un código válido");
+
+  const tabla = lista === "ejes" ? "tc_cat_ejes_neumatico" : "tc_cat_aplicaciones_neumatico";
+  const { data: ya } = await supabase.from(tabla)
+    .select("codigo, nombre").eq("codigo", codigo).limit(1).maybeSingle();
+  if (ya) throw new Error(`Ya está en la lista como «${(ya as { nombre: string }).nombre}».`);
+
+  // Al final de la lista: el orden lo colocan luego a mano si hace falta, y
+  // meterlo en medio adivinando sería peor.
+  const { data: ultimo } = await supabase.from(tabla)
+    .select("orden").order("orden", { ascending: false }).limit(1).maybeSingle();
+  const orden = ((ultimo as { orden: number } | null)?.orden ?? 0) + 10;
+
+  const { error } = await supabase.from(tabla).insert({ codigo, nombre: limpio, orden });
+  if (error) throw new Error(error.message);
+  return codigo;
 }
