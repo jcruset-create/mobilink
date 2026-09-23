@@ -15,6 +15,7 @@
  */
 
 import { supabase } from "../../supabase.ts";
+import { ejesDeConfiguracion, type EjeDeVehiculo } from "./ejes.ts";
 import { coincideMatricula, patronBusquedaMatricula } from "../matricula.ts";
 import { METODOS_VINCULO, type MetodoVinculo } from "../../integration-hub/domain/reconciliation.ts";
 import {
@@ -300,6 +301,18 @@ export interface DatosAlta {
   bastidor?: string | null;
   numeroUnidad?: string | null;
   externalName?: string | null;
+  /**
+   * Lo que se elige UNA VEZ y se aplica a toda la tanda.
+   *
+   * El proveedor da matrícula, bastidor y nombre, y nada más: ni tipo, ni
+   * ejes, ni medidas. Eso obligaba a entrar en los 53 vehículos recién creados
+   * a poner lo mismo 53 veces, y un vehículo sin tipo no tiene plano, así que
+   * no se puede ni revisar. Ahora se elige al crearlos.
+   */
+  tipoVehiculoId?: string | null;
+  configEjesId?: string | null;
+  /** Medida de TODOS los ejes. Solo se usa si se sabe cuántos ejes hay. */
+  medidaId?: string | null;
 }
 
 /**
@@ -318,6 +331,21 @@ export interface DatosAlta {
  * existe y un administrador le completa la ficha antes de que se pueda operar
  * con él. Es el mismo camino que un alta desde la tablet.
  */
+/**
+ * Los ejes de un tipo de vehículo, leídos de su configuración.
+ *
+ * Devuelve null si el tipo no la tiene o no se entiende, y entonces no se crea
+ * ningún eje: un plano inventado es peor que uno vacío.
+ */
+async function ejesDelTipo(tipoId: string): Promise<EjeDeVehiculo[] | null> {
+  const { data } = await supabase
+    .from("tc_tipos_vehiculo")
+    .select("configuracion_ejes")
+    .eq("id", tipoId)
+    .maybeSingle();
+  return ejesDeConfiguracion((data as { configuracion_ejes?: string | null } | null)?.configuracion_ejes);
+}
+
 export async function crearPendiente(
   ambito: Ambito,
   datos: DatosAlta,
@@ -359,6 +387,12 @@ export async function crearPendiente(
     );
   }
 
+  // Los ejes salen de la configuración del TIPO, no de lo que diga el
+  // navegador: el tipo es quien manda sobre el plano.
+  const ejes = datos.medidaId && datos.tipoVehiculoId
+    ? await ejesDelTipo(datos.tipoVehiculoId)
+    : null;
+
   const { data, error } = await supabase
     .from("tc_vehiculos")
     .insert({
@@ -383,6 +417,10 @@ export async function crearPendiente(
       activo: true,
       pendiente_validar: true,
       creado_desde: "telematica",
+      // Lo elegido para la tanda. Sigue naciendo PENDIENTE DE VALIDAR: poner
+      // el tipo no es validar el vehículo, es ahorrarse teclearlo 53 veces.
+      ...(datos.tipoVehiculoId ? { tipo_vehiculo_id: datos.tipoVehiculoId } : {}),
+      ...(datos.configEjesId ? { config_ejes_id: datos.configEjesId } : {}),
     })
     .select("id, matricula")
     .single();
@@ -395,6 +433,21 @@ export async function crearPendiente(
   }
 
   const vehiculo = { id: String((data as any).id), matricula: String((data as any).matricula) };
+
+  // Los ejes con su medida, si se ha elegido una. Es lo último y va aparte a
+  // propósito: si fallara, el vehículo ya está creado y enlazado, y las
+  // medidas se ponen después desde su ficha. Perder el alta entera por una
+  // medida sería mucho peor.
+  if (datos.medidaId && ejes && ejes.length > 0) {
+    await supabase.from("tc_vehiculo_ejes").insert(
+      ejes.map((e) => ({
+        vehiculo_id: vehiculo.id,
+        eje: e.eje,
+        ruedas: e.ruedas,
+        medida_id: datos.medidaId,
+      })),
+    );
+  }
   const enlace = await vincular(
     ambito,
     {
@@ -781,7 +834,13 @@ async function sinEnlazarAhora(ambito: Ambito) {
  */
 export async function crearPendientesLote(
   ambito: Ambito,
-  datos: { externalVehicleIds: string[] },
+  datos: {
+    externalVehicleIds: string[];
+    /** Lo mismo para toda la tanda: se elige una vez y se aplica a todos. */
+    tipoVehiculoId?: string | null;
+    configEjesId?: string | null;
+    medidaId?: string | null;
+  },
 ): Promise<ResultadoLoteExternos> {
   const pedidos = externosPedidos(datos);
   const disponibles = await sinEnlazarAhora(ambito);
@@ -811,6 +870,9 @@ export async function crearPendientesLote(
           matricula: externo.plate ?? "",
           bastidor: externo.vin ?? null,
           externalName: externo.name ?? null,
+          tipoVehiculoId: datos.tipoVehiculoId ?? null,
+          configEjesId: datos.configEjesId ?? null,
+          medidaId: datos.medidaId ?? null,
         },
         preparada,
       );
