@@ -696,11 +696,27 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       // La regla vive en `server/core/idDeTrabajo.ts`, con el porqué. Aquí
       // solo se usa, que es lo que evita que vuelva a divergir entre los dos
       // sitios que dan de alta trabajos.
-      // El trabajo nace en validacion: es una propuesta, y una propuesta la
-      // autoriza una persona en la pantalla de siempre.
-      if (String(job.status) !== "validacion") {
-        return res.status(400).json({ error: "El trabajo debe nacer en validación" });
+      /*
+       * Dos finales posibles para una recepción, y solo dos.
+       *
+       *  · `validacion` — el camino normal. Es una propuesta, y la autoriza
+       *    una persona en la pantalla de siempre.
+       *  · `cerrado` — lo que ya se ha hecho en el momento. Un cambio de
+       *    bombilla o una lectura de tacógrafo que se resuelve mientras el
+       *    coche está en el patio no tiene sentido que entre en la cola para
+       *    salir de ella acto seguido.
+       *
+       * Cualquier otro estado se rechaza. Que una recepción pueda crear un
+       * trabajo `activo` significaría que se le pone a un técnico en las manos
+       * sin que nadie lo haya decidido.
+       */
+      const estado = String(job.status);
+      if (estado !== "validacion" && estado !== "cerrado") {
+        return res
+          .status(400)
+          .json({ error: "El trabajo debe nacer en validación o cerrado" });
       }
+      const yaHecho = estado === "cerrado";
 
       await cliente.query("BEGIN");
 
@@ -740,8 +756,9 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
                "customerName", "customerPhone", "createdAtMs",
                "workedAccumulatedMinutes", "pausedAccumulatedMinutes",
                "workshopId", "quickEntryLabel", "quickEntryMode",
-               quantity, "unitMinutes", "ptEntradaMs", "recepcionId"
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11,$12,$13,$14,$15,$16,$17)`,
+               quantity, "unitMinutes", "ptEntradaMs", "recepcionId",
+               "startedAtMs", "closedAtMs"
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
             [
               jobId,
               texto(job.area) || "mecanica",
@@ -764,6 +781,18 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
               Number.isFinite(Number(job.unitMinutes)) ? Number(job.unitMinutes) : null,
               recepcion.creadaAtMs,
               id,
+              /*
+               * Un trabajo ya hecho se cierra aquí mismo.
+               *
+               * `actualMinutes` se queda a NULL A PROPÓSITO, y no es un
+               * descuido: nadie ha cronometrado esto. Rellenarlo con el tiempo
+               * estimado metería un número inventado en la comparación de
+               * previsto contra real, que es justo la que sirve para saber si
+               * los tiempos del taller son realistas. Un hueco se ve; un
+               * número falso se usa.
+               */
+              yaHecho ? ahora : null,
+              yaHecho ? ahora : null,
             ]
           );
           await cliente.query(`RELEASE SAVEPOINT alta_trabajo`);
