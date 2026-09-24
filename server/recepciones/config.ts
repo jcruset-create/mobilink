@@ -29,6 +29,13 @@ export const CLAVES = {
    */
   avisoWhatsApp: "avisos.whatsapp_activado",
   /**
+   * El móvil de recepción: a quién se le dice que un albarán ha entrado sin su
+   * PDF, para que lo suba a mano. Tenerlo puesto ES el interruptor de ese
+   * aviso: sin número no se manda nada, y es un aviso interno de trabajo, no
+   * un mensaje a un cliente, así que no depende del interruptor de arriba.
+   */
+  telefonoRecepcion: "avisos.telefono_recepcion",
+  /**
    * Hasta qué UID se ha mirado ya en cada carpeta, con su UIDVALIDITY. Es la
    * marca de progreso del buzón, y sustituye a marcar los correos como
    * leídos: ver la cabecera de `buzon.ts`.
@@ -62,6 +69,13 @@ export async function asumirExpedicionCompleta(empresaId: string): Promise<boole
 export async function avisoWhatsAppActivado(empresaId: string): Promise<boolean> {
   const v = await leerTextoConfig(empresaId, CLAVES.avisoWhatsApp);
   return v === "1" || v?.toLowerCase() === "true";
+}
+
+/** El móvil de recepción, si está puesto. Nunca lanza. */
+export async function telefonoRecepcion(empresaId: string): Promise<string | null> {
+  const v = await leerTextoConfig(empresaId, CLAVES.telefonoRecepcion);
+  const limpio = (v ?? "").replace(/\D/g, "");
+  return limpio.length === 9 ? limpio : null;
 }
 
 export type ProgresoBuzon = { uidValidity: number | null; ultimoUid: number };

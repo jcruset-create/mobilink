@@ -43,8 +43,8 @@ import * as repo from "./repository.ts";
 import { generarDocumentoRecepcion, limpio } from "./documentos/generar.ts";
 import { observacionesDelPdf } from "./documentos/observaciones.ts";
 import { lineasDelPdf } from "./documentos/lineas.ts";
-import { avisarRecepcion } from "./avisos.ts";
-import { avisoWhatsAppActivado } from "./config.ts";
+import { avisarFaltaAlbaran, avisarRecepcion } from "./avisos.ts";
+import { avisoWhatsAppActivado, telefonoRecepcion } from "./config.ts";
 import { partirObservacion } from "./domain/observaciones.ts";
 import { guardarDocumento, hashDeFichero, leerDocumento as leerDelAlmacen, rutaDocumento } from "./storage.ts";
 
@@ -1424,6 +1424,26 @@ async function releerLineasSinLanzar(ctx: Contexto, albaranId: string): Promise<
   } catch (e) {
     if (e instanceof ErrorRecepciones) return; // ya recibido, sin líneas legibles…: no es un fallo
     console.error("[Recepciones] no se han podido releer las líneas del albarán:", e);
+  }
+}
+
+/**
+ * Avisa a recepción de que este albarán ha entrado sin su PDF. Nunca lanza:
+ * que el aviso falle no puede impedir que el albarán entre, que es lo urgente.
+ */
+export async function avisarDeAlbaranSinPdf(ctx: Contexto, albaranId: string): Promise<void> {
+  try {
+    const albaran = await repo.albaranPorId(ctx.empresaId, albaranId);
+    if (!albaran) return;
+    const [telefono, empresaNombre] = await Promise.all([telefonoRecepcion(ctx.empresaId), repo.nombreEmpresa(ctx.empresaId)]);
+    await avisarFaltaAlbaran(
+      { empresaId: ctx.empresaId, userId: ctx.userId, userNombre: ctx.userNombre },
+      albaranId,
+      telefono,
+      { albaranNumero: albaran.numeroProveedor, proveedorNombre: albaran.proveedorNombre, empresaNombre: empresaNombre ?? "Recepciones" }
+    );
+  } catch (e) {
+    console.error("[Recepciones] el aviso de albarán sin PDF ha fallado:", e);
   }
 }
 

@@ -200,3 +200,47 @@ export function variablesPlantilla(datos: DatosAviso): Record<string, string> {
 export function cuerpoPlantilla(empresaNombre: string): string {
   return `{{1}}: ha llegado tu material a {{2}}.\n{{3}}\n— ${empresaNombre}`;
 }
+
+/* ── El otro aviso: a recepción, cuando falta el PDF del albarán ─────────── */
+
+export type DatosFaltaAlbaran = {
+  albaranNumero: string;
+  proveedorNombre: string;
+  /** La empresa que firma el mensaje. */
+  empresaNombre: string;
+};
+
+/**
+ * Por qué NO se avisa a recepción, o `null` si toca.
+ *
+ * Aquí el interruptor es el propio teléfono: sin número de recepción puesto no
+ * hay a quién escribir, y ponerlo es decir «avísame». No depende del
+ * interruptor del aviso al cliente porque no es lo mismo: éste es un recado de
+ * trabajo interno —«sube el papel»— y aquél un mensaje a una persona de fuera.
+ */
+export function motivoParaNoAvisarFalta(telefono: string | null, hayCredenciales: boolean): string | null {
+  if (!telefono) return "Sin teléfono de recepción configurado: no hay a quién avisar.";
+  if (!hayCredenciales) return "Sin credenciales de Twilio: no hay con qué mandarlo.";
+  return null;
+}
+
+/**
+ * El texto del aviso a recepción. Dice qué falta y qué hay que hacer: un aviso
+ * que no dice qué hacer obliga a preguntar, y entonces no ha servido de nada.
+ */
+export function textoFaltaAlbaran(datos: DatosFaltaAlbaran): string {
+  return `Albarán ${limpiarParaPlantilla(datos.albaranNumero)} de ${limpiarParaPlantilla(datos.proveedorNombre)}: ha entrado SIN el PDF. Súbelo a mano en Mobilink para poder recepcionarlo. — ${datos.empresaNombre}`;
+}
+
+/** Las variables de su plantilla de Twilio, en su orden. */
+export function variablesFaltaAlbaran(datos: DatosFaltaAlbaran): Record<string, string> {
+  return {
+    "1": limpiarParaPlantilla(datos.albaranNumero) || "sin número",
+    "2": limpiarParaPlantilla(datos.proveedorNombre) || "el proveedor",
+  };
+}
+
+/** El cuerpo EXACTO que hay que dar de alta en Twilio para este aviso. */
+export function cuerpoPlantillaFaltaAlbaran(empresaNombre: string): string {
+  return `Albarán {{1}} de {{2}}: ha entrado SIN el PDF. Súbelo a mano en Mobilink para poder recepcionarlo. — ${empresaNombre}`;
+}

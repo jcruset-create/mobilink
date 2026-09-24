@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LARGO_MATERIAL, aQuienSeAvisa, cuerpoPlantilla, motivoParaNoAvisar, saludo, textoAviso, textoMaterial, variablesPlantilla, type Ajustes, type DatosAviso } from "./aviso.ts";
+import { LARGO_MATERIAL, aQuienSeAvisa, cuerpoPlantilla, cuerpoPlantillaFaltaAlbaran, motivoParaNoAvisarFalta, textoFaltaAlbaran, variablesFaltaAlbaran, motivoParaNoAvisar, saludo, textoAviso, textoMaterial, variablesPlantilla, type Ajustes, type DatosAviso } from "./aviso.ts";
 
 const datos = (extra: Partial<DatosAviso> = {}): DatosAviso => ({
   destinatario: "JORGE PLANA",
@@ -196,5 +196,41 @@ describe("textoAviso", () => {
     const t = textoAviso(datos({ lineas: [{ descripcion: "245/70 R17.5 HANKOOK AH35 136M", cantidad: 2 }] }));
     expect(t).not.toMatch(/€/);
     expect(t).not.toMatch(/\d+,\d{2}\b/);
+  });
+});
+
+describe("el aviso a recepción cuando falta el PDF del albarán", () => {
+  const datos = { albaranNumero: "B/2028490953", proveedorNombre: "NEUMÁTICOS SOLEDAD", empresaNombre: "COMERCIAL SEA, S.A." };
+
+  it("el teléfono de recepción es el interruptor: sin él no se avisa a nadie", () => {
+    expect(motivoParaNoAvisarFalta(null, true)).toMatch(/teléfono/);
+    expect(motivoParaNoAvisarFalta("", true)).toMatch(/teléfono/);
+    expect(motivoParaNoAvisarFalta("610473077", true)).toBeNull();
+  });
+
+  it("con teléfono pero sin credenciales se dice eso", () => {
+    expect(motivoParaNoAvisarFalta("610473077", false)).toMatch(/Twilio/);
+  });
+
+  it("el mensaje dice qué falta y qué hay que hacer", () => {
+    expect(textoFaltaAlbaran(datos)).toBe(
+      "Albarán B/2028490953 de NEUMÁTICOS SOLEDAD: ha entrado SIN el PDF. Súbelo a mano en Mobilink para poder recepcionarlo. — COMERCIAL SEA, S.A."
+    );
+  });
+
+  it("sus variables no llevan nada de lo que Meta rechaza, ni van vacías", () => {
+    const prohibido = (v: string) => /[\n\r\t]/.test(v) || /\s{4,}/.test(v) || v.trim() === "";
+    for (const d of [datos, { ...datos, albaranNumero: "", proveedorNombre: "  " }, { ...datos, proveedorNombre: "SOLEDAD\nDISTRIBUCIÓN" }]) {
+      for (const [clave, valor] of Object.entries(variablesFaltaAlbaran(d))) {
+        expect(prohibido(valor), `variable {{${clave}}}: ${JSON.stringify(valor)}`).toBe(false);
+      }
+    }
+  });
+
+  it("el cuerpo de la plantilla con las variables puestas es el texto plano", () => {
+    const puesto = cuerpoPlantillaFaltaAlbaran(datos.empresaNombre)
+      .replace("{{1}}", variablesFaltaAlbaran(datos)["1"])
+      .replace("{{2}}", variablesFaltaAlbaran(datos)["2"]);
+    expect(puesto).toBe(textoFaltaAlbaran(datos));
   });
 });

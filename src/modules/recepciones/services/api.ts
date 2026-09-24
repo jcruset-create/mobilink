@@ -186,7 +186,8 @@ export const confirmarMapeo = (datos: { proveedorId: string; descripcionProveedo
 /* ── Avisos por WhatsApp ─────────────────────────────────────────────────── */
 
 export const estadoAvisos = () => pedir<EstadoAvisos>("/avisos");
-export const guardarConfigAvisos = (activado: boolean) => pedir<{ activado: boolean }>("/avisos/config", json({ activado }, "PUT"));
+export const guardarConfigAvisos = (datos: { activado?: boolean; telefonoRecepcion?: string }) =>
+  pedir<{ activado: boolean; telefonoRecepcion: string | null }>("/avisos/config", json(datos, "PUT"));
 
 /* ── Fase 2: correo del proveedor ────────────────────────────────────────── */
 
