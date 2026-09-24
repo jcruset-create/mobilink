@@ -1,5 +1,6 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import RecuperarDespliegue from "./components/RecuperarDespliegue";
+import PestanaDelModulo from "./components/PestanaDelModulo";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 
 import SeaTarragonaV1 from "./SeaTarragonaV1";
@@ -147,6 +148,8 @@ export default function App() {
     // Recoge el fallo de descarga de un trozo cuando se despliega con la
     // pestaña abierta: antes eso dejaba la pantalla en blanco.
     <RecuperarDespliegue>
+    {/* Titulo y favicon del modulo en el que se este. No pinta nada. */}
+    <PestanaDelModulo />
     <Suspense fallback={<Cargando />}>
     <Routes>
       {/* La puerta de entrada es el hub, no el panel operativo. Quien no
