@@ -298,6 +298,54 @@ const EMPIEZA_POR_CANTIDAD = /^-?\d+(?:[.,]\d+)?(?:\s|$)/;
 /** Cuántas líneas de detrás se prueban: la descripción y el importe. */
 const MAX_LINEAS_A_JUNTAR = 2;
 
+/**
+ * Una fila suelta dentro de un texto: cantidad, descripción e importe. Es la
+ * misma forma que `FILA`, pero sin anclar a los extremos, para poder buscarla
+ * una y otra vez dentro de un párrafo.
+ */
+const FILA_SUELTA = /(-?\d+(?:[.,]\d+)?)\s+(\S.*?)\s+(-?\d{1,3}(?:[.,]\d{3})*[.,]\d{2})(?=\s|$)/g;
+
+/**
+ * Parte en filas un bloque que trae la tabla entera seguida.
+ *
+ * Es el caso que dejaba los pedidos inservibles. El correo de Soledad manda la
+ * tabla en HTML y su versión en texto plano la escribe corrida, con saltos de
+ * línea donde toca por ancho y no donde acaba cada fila:
+ *
+ *     2.00 385/65X22.5 HANKOOK AH51 160K 459.83 4.00 385/65X22.5 TORQUE
+ *     TQTS1 164K 210.62 4.00 385/65X22.5 TORQUE TQ022 164K 211.28 2.00 …
+ *
+ * Leído renglón a renglón, de ahí salía UNA línea con el importe de una fila
+ * por cantidad y media tabla dentro de la descripción: «210,62 × 4.00
+ * 385/65R22.5 TORQUE TQ022 164K 211.28 2.00 …». Siete artículos convertidos en
+ * uno, y con un número que no era una cantidad.
+ *
+ * Juntando el bloque y buscando la forma de fila una y otra vez, cada artículo
+ * vuelve a su sitio. Sólo se acepta si entre una fila y la siguiente NO queda
+ * texto sin usar: si lo hay, no era una tabla corrida y no se toca —el que
+ * manda entonces es el lector de siempre, y si él tampoco puede, el albarán en
+ * PDF lo dirá—. Lo que quede DESPUÉS de la última fila se devuelve aparte: ahí
+ * empieza la prosa de después de la tabla.
+ */
+export function partirFilasSeguidas(bloque: string): { filas: string[]; resto: string } {
+  const texto = bloque.replace(/\s+/g, " ").trim();
+  const filas: string[] = [];
+  let fin = 0;
+  FILA_SUELTA.lastIndex = 0;
+  for (let m = FILA_SUELTA.exec(texto); m; m = FILA_SUELTA.exec(texto)) {
+    // Entre la fila anterior y ésta no puede haber quedado nada suelto.
+    if (texto.slice(fin, m.index).trim()) break;
+    // Y lo que hace de descripción tiene que serlo: con letras, no números.
+    if (!/\p{L}/u.test(m[2])) break;
+    filas.push(`${m[1]} ${m[2]} ${m[3]}`);
+    fin = m.index + m[0].length;
+  }
+  return { filas, resto: texto.slice(fin).trim() };
+}
+
+/** Cuántas filas seguidas hacen falta para dar el bloque por una tabla corrida. */
+const FILAS_PARA_PARTIR = 2;
+
 export function recomponerFilas(lineas: string[]): string[] {
   const desde = lineas.findIndex((l) => {
     const n = normalizar(l);
@@ -309,6 +357,21 @@ export function recomponerFilas(lineas: string[]): string[] {
   let i = desde;
   while (i < lineas.length) {
     const l = lineas[i];
+    if (EMPIEZA_POR_CANTIDAD.test(l)) {
+      // ¿La tabla viene corrida, con varias filas en el mismo párrafo? Se
+      // mira el bloque entero: hasta el primer hueco o la primera etiqueta.
+      let hasta = i;
+      while (hasta + 1 < lineas.length && lineas[hasta + 1] && !etiquetaDe(lineas[hasta + 1])) hasta += 1;
+      if (hasta > i || !filaDeTabla(l)) {
+        const { filas, resto } = partirFilasSeguidas(lineas.slice(i, hasta + 1).join(" "));
+        if (filas.length >= FILAS_PARA_PARTIR) {
+          salida.push(...filas);
+          if (resto) salida.push(resto);
+          i = hasta + 1;
+          continue;
+        }
+      }
+    }
     if (!filaDeTabla(l) && EMPIEZA_POR_CANTIDAD.test(l)) {
       let juntadas = 0;
       for (let n = 1; n <= MAX_LINEAS_A_JUNTAR && i + n < lineas.length; n += 1) {
