@@ -203,6 +203,16 @@ export const importarEml = (archivo: File) => {
 };
 export const listarCorreos = (f: { resultado?: string; tipo?: string }) => pedir<{ correos: Correo[] }>(`/correo${query(f)}`);
 export const fichaCorreo = (id: string) => pedir<{ correo: Correo }>(`/correo/${id}`);
+/** El PDF del albarán de un correo que se quedó sin líneas: se sube y se reprocesa. */
+export const subirAlbaranDelCorreo = (id: string, archivo: File) => {
+  const form = new FormData();
+  form.append("documento", archivo, archivo.name);
+  return pedir<{ correoId: string; resultado: string; motivo: string | null; pedidoNumero: string | null; albaranNumero: string | null }>(
+    `/correo/${id}/albaran-pdf`,
+    { method: "POST", body: form }
+  );
+};
+
 export const reprocesarCorreo = (id: string) =>
   pedir<{ correoId: string; resultado: string; motivo: string | null; pedidoId: string | null; albaranId: string | null }>(`/correo/${id}/reprocesar`, json({}));
 export const descargarOriginal = (albaranId: string, enlace?: string) =>
