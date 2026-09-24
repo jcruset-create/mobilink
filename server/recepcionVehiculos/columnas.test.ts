@@ -114,3 +114,58 @@ describe("el router solo nombra columnas que existen", () => {
     expect(jobs.has("standardMinutes")).toBe(false); // ésa es de quick_templates
   });
 });
+
+/**
+ * El id del trabajo tiene que CABER en la columna.
+ *
+ * Cuarta avería de la misma familia, y ésta la metí yo arreglando la tercera:
+ * el id del trabajo pasó a ser `Date.now()` para que el navegador no lo
+ * calculara mal. Pero `jobs.id` es SERIAL —INTEGER de cuatro bytes, máximo
+ * 2.147.483.647— y un `Date.now()` anda por 1.758.000.000.000. Postgres lo
+ * rechaza con «integer out of range» y la conversión no funcionó NUNCA desde
+ * entonces.
+ *
+ * Es el mismo tipo de fallo que las tres anteriores —SQL que el compilador no
+ * mira— pero por el TAMAÑO del valor y no por el nombre de la columna, así
+ * que el guarda de arriba no lo veía. Éste sí.
+ */
+describe("el id del trabajo cabe en jobs.id", () => {
+  const router = readFileSync(RUTA_ROUTER, "utf8");
+  const db = readFileSync(RUTA_DB, "utf8");
+  const regla = readFileSync(
+    new URL("../core/idDeTrabajo.ts", import.meta.url).pathname,
+    "utf8"
+  );
+  const index = readFileSync(new URL("../index.ts", import.meta.url).pathname, "utf8");
+
+  it("jobs.id sigue siendo de cuatro bytes, que es de donde viene el límite", () => {
+    const creacion = db.slice(db.indexOf("CREATE TABLE IF NOT EXISTS jobs"));
+    const tipoDelId = creacion.slice(0, creacion.indexOf(",")).toUpperCase();
+    // Si algún día pasa a BIGINT este test falla, y está bien que falle:
+    // querrá decir que hay que volver aquí y releer el porqué antes de dar por
+    // buena cualquier otra forma de numerar.
+    expect(tipoDelId).toContain("SERIAL");
+  });
+
+  it("la regla de numerar le pregunta a la base", () => {
+    expect(regla).toContain("COALESCE(MAX(id), 0) + 1");
+  });
+
+  it("ningún alta de trabajo numera con el reloj", () => {
+    // Los DOS sitios que dan de alta trabajos, porque el fallo estaba en los
+    // dos: la conversión de una recepción y el alta desde la APK.
+    const conversion = router.slice(
+      router.indexOf('"/recepcion-vehiculos/:id/convertir"'),
+      router.indexOf('"/recepcion-vehiculos/:id/descartar"')
+    );
+    // `Date.now()` para las marcas de tiempo está bien y se usa; lo que no
+    // puede volver es que de ahí salga el ID.
+    expect(conversion).not.toContain("jobId = Date.now()");
+
+    const altaApk = index.slice(
+      index.indexOf('app.post("/api/taller-operator/jobs"'),
+      index.indexOf('app.put("/api/taller-operator/jobs/:id/assign"')
+    );
+    expect(altaApk).not.toContain("const id = Date.now()");
+  });
+});

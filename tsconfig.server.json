@@ -58,6 +58,7 @@
     "server/satisfaction/**/*.ts",
     "server/cierre/**/*.ts",
     "server/core/auditoria.ts",
+    "server/core/idDeTrabajo.ts",
     "server/core/auditoriaSchema.ts",
     "server/dbBackup.ts",
     // La herramienta del lote de calibración de Therefore. Va aquí porque es
