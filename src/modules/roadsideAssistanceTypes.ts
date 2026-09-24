@@ -132,6 +132,19 @@ export type RoadsideAssistance = {
   // Quién solicita la asistencia (puede ser distinto del cliente servido)
   solicitanteEmpresa?: string | null;
   solicitanteNombre?: string | null;
+  /**
+   * El ENLACE con la ficha del cliente que solicita, no una copia de su
+   * nombre. Es lo que ata la asistencia al maestro y al ERP; el texto de
+   * `solicitanteEmpresa` se conserva al lado porque es lo que se escribió ese
+   * día, y si mañana el cliente cambia de nombre la asistencia antigua tiene
+   * que seguir contando lo que pasó.
+   *
+   * No confundir con `clienteFacturacionId`: quien pide el servicio y a quien
+   * se le factura no siempre son el mismo.
+   */
+  solicitanteClienteId?: number | null;
+  /** Qué persona de esa ficha llamó (contacto con ownerType='client'). */
+  solicitanteContactoId?: number | null;
   solicitanteTelefono?: string | null;
   // Nº de autorización o de cita que da quien solicita: es lo que luego pide
   // la aseguradora o el gestor de flota para pagar el servicio.
@@ -158,6 +171,8 @@ export type RoadsideAssistance = {
 
 export type RoadsideAssistanceDraft = {
   solicitanteEmpresa: string;
+  solicitanteClienteId: number | null;
+  solicitanteContactoId: number | null;
   solicitanteNombre: string;
   solicitanteTelefono: string;
   solicitanteAutorizacion: string;

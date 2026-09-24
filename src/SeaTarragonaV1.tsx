@@ -4867,6 +4867,10 @@ if (view === "whatsapp_inbox" && canView("whatsapp_inbox")) {
       onCreateAssistance={(extracted, fromPhone) => {
         const draft: import("./modules/roadsideAssistanceTypes").RoadsideAssistanceDraft = {
           solicitanteEmpresa: extracted.empresaSolicitante ?? "",
+          // Lo que llega de un WhatsApp es texto, no una ficha: sin enlace.
+          // Quien lo revise puede elegir el cliente en el formulario.
+          solicitanteClienteId: null,
+          solicitanteContactoId: null,
           solicitanteNombre: "",
           solicitanteTelefono: "",
           solicitanteAutorizacion: "",
