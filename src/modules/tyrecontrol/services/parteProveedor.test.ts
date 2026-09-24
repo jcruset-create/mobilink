@@ -1,9 +1,21 @@
 import { describe, it, expect } from "vitest";
 import {
-  posicionesPorNumero, esCambio, profundidadDeFila, medidaDeTexto,
+  numeracionDelProveedor, esCambio, profundidadDeFila, medidaDeTexto,
   neumaticoDelParte, servicioDeProducto, interpretarParte, claveDeParte, estadoDeDestino,
   type LecturaParteProveedor, type PosicionDelPlano,
 } from "./parteProveedor";
+
+/** El autocar del parte real: 2x4x2, ocho ruedas, tercer eje SIMPLE. */
+const PLANO_2x4x2: PosicionDelPlano[] = [
+  { id: "q1", codigo_posicion: "E1_IZQ",     eje: 1, orden_visual: 1 },
+  { id: "q2", codigo_posicion: "E1_DER",     eje: 1, orden_visual: 2 },
+  { id: "q3", codigo_posicion: "E2_IZQ_EXT", eje: 2, orden_visual: 3 },
+  { id: "q4", codigo_posicion: "E2_IZQ_INT", eje: 2, orden_visual: 4 },
+  { id: "q5", codigo_posicion: "E2_DER_INT", eje: 2, orden_visual: 5 },
+  { id: "q6", codigo_posicion: "E2_DER_EXT", eje: 2, orden_visual: 6 },
+  { id: "q7", codigo_posicion: "E3_IZQ",     eje: 3, orden_visual: 7 },
+  { id: "q8", codigo_posicion: "E3_DER",     eje: 3, orden_visual: 8 },
+];
 
 /** El plano de un autocar 2x4x4, con el orden que genera generarPosiciones(). */
 const PLANO_2x4x4: PosicionDelPlano[] = [
@@ -55,18 +67,45 @@ const PARTE_REAL: LecturaParteProveedor = {
   ],
 };
 
-describe("posicionesPorNumero", () => {
-  it("numera como el croquis del proveedor: por ejes y de fuera a dentro", () => {
-    const m = posicionesPorNumero(PLANO_2x4x4);
+describe("numeracionDelProveedor", () => {
+  it("con todos los ejes gemelos, los números van seguidos", () => {
+    const m = numeracionDelProveedor(PLANO_2x4x4)!;
     expect(m.get(1)?.codigo_posicion).toBe("E1_IZQ");
     expect(m.get(4)?.codigo_posicion).toBe("E2_IZQ_INT");
     expect(m.get(10)?.codigo_posicion).toBe("E3_DER_EXT");
     expect(m.size).toBe(10);
   });
 
+  it("un eje SIMPLE ocupa los dos huecos de fuera de su bloque: 7 y 10", () => {
+    // Es el caso del parte real. El tercer eje del autocar no lleva gemelos,
+    // así que en el croquis los recuadros 8 y 9 salen en blanco y la última
+    // rueda es la 10 aunque el vehículo solo tenga ocho.
+    const m = numeracionDelProveedor(PLANO_2x4x2)!;
+    expect(m.size).toBe(8);
+    expect(m.get(7)?.codigo_posicion).toBe("E3_IZQ");
+    expect(m.get(10)?.codigo_posicion).toBe("E3_DER");
+    expect(m.get(8)).toBeUndefined();
+    expect(m.get(9)).toBeUndefined();
+  });
+
   it("no le importa en qué orden vengan las filas de la base de datos", () => {
-    const desordenado = [...PLANO_2x4x4].reverse();
-    expect(posicionesPorNumero(desordenado).get(1)?.codigo_posicion).toBe("E1_IZQ");
+    const desordenado = [...PLANO_2x4x2].reverse();
+    expect(numeracionDelProveedor(desordenado)!.get(10)?.codigo_posicion).toBe("E3_DER");
+  });
+
+  it("un plano que no encaja en la cuadrícula se dice, no se aproxima", () => {
+    expect(numeracionDelProveedor([])).toBeNull();
+    // Sin número de eje no hay bloques que repartir.
+    expect(numeracionDelProveedor(
+      PLANO_2x4x2.map((p) => ({ ...p, eje: null })))).toBeNull();
+    // Un eje de tres ruedas no existe en este impreso.
+    expect(numeracionDelProveedor([
+      { id: "a", codigo_posicion: "E1_IZQ", eje: 1, orden_visual: 1 },
+      { id: "b", codigo_posicion: "E1_DER", eje: 1, orden_visual: 2 },
+      { id: "c", codigo_posicion: "E2_A", eje: 2, orden_visual: 3 },
+      { id: "d", codigo_posicion: "E2_B", eje: 2, orden_visual: 4 },
+      { id: "e", codigo_posicion: "E2_C", eje: 2, orden_visual: 5 },
+    ])).toBeNull();
   });
 });
 
@@ -144,7 +183,7 @@ describe("neumaticoDelParte", () => {
 });
 
 describe("interpretarParte — el parte real", () => {
-  const p = interpretarParte(PARTE_REAL, { posiciones: PLANO_2x4x4, kmActual: 1000000 });
+  const p = interpretarParte(PARTE_REAL, { posiciones: PLANO_2x4x2, kmActual: 1000000 });
 
   it("guarda las 5 mediciones de las ruedas que NO se tocaron", () => {
     expect(p.mediciones.map((m) => m.numero)).toEqual([3, 4, 5, 6, 7]);
@@ -163,7 +202,8 @@ describe("interpretarParte — el parte real", () => {
   });
 
   it("y los tres cambios, en las ruedas que marca el croquis", () => {
-    expect(p.cambios.map((c) => c.codigo)).toEqual(["E1_IZQ", "E1_DER", "E3_DER_EXT"]);
+    // La 10 del papel es la trasera derecha de un vehículo de OCHO ruedas.
+    expect(p.cambios.map((c) => c.codigo)).toEqual(["E1_IZQ", "E1_DER", "E3_DER"]);
   });
 
   it("propone la goma facturada", () => {
@@ -188,13 +228,22 @@ describe("interpretarParte — el parte real", () => {
 });
 
 describe("interpretarParte — lo que no cuadra", () => {
-  it("si el croquis trae más ruedas que el plano, se PARA", () => {
-    // El caso que de verdad pasa: un autocar dado de alta como 2x4x2 (8
-    // ruedas) cuyo parte mide la 10. Repartir «lo que quepa» pondría la
+  it("si el parte trae una rueda que el vehículo no tiene, se PARA", () => {
+    // Un camión de dos ejes al que le llega el parte de un autocar: las
+    // ruedas 5, 6, 7 y 10 no existen. Repartir «lo que quepa» pondría la
     // medida de una rueda en otra.
-    const plano8 = PLANO_2x4x4.slice(0, 8);
-    const p = interpretarParte(PARTE_REAL, { posiciones: plano8 });
-    expect(p.errores.join(" ")).toContain("solo tiene 8 posiciones");
+    const plano2ejes = PLANO_2x4x2.slice(0, 4);
+    const p = interpretarParte(PARTE_REAL, { posiciones: plano2ejes });
+    expect(p.errores.join(" ")).toContain("no corresponden a ninguna rueda");
+  });
+
+  it("y también si la fila cae en un hueco vacío del croquis", () => {
+    // La 8 y la 9 son los gemelos que este autocar no lleva: si vienen con
+    // datos, o el papel se ha rellenado mal o el vehículo no es este.
+    const filas = [...PARTE_REAL.filas.slice(0, 7),
+      { posicion: 8, presion_bar: 8, mm_int: 5, mm_ext: 5, operacion: null, montadas: null, quitadas: null }];
+    const p = interpretarParte({ ...PARTE_REAL, filas }, { posiciones: PLANO_2x4x2 });
+    expect(p.errores.join(" ")).toContain("La rueda 8");
   });
 
   it("sin plano no se puede hacer nada", () => {
@@ -203,35 +252,35 @@ describe("interpretarParte — lo que no cuadra", () => {
   });
 
   it("sin número de PT no se guarda: es lo que evita duplicarlo", () => {
-    const p = interpretarParte({ ...PARTE_REAL, pt_numero: null }, { posiciones: PLANO_2x4x4 });
+    const p = interpretarParte({ ...PARTE_REAL, pt_numero: null }, { posiciones: PLANO_2x4x2 });
     expect(p.errores.join(" ")).toContain("número de PT");
   });
 
   it("sin matrícula tampoco", () => {
-    const p = interpretarParte({ ...PARTE_REAL, matricula: null }, { posiciones: PLANO_2x4x4 });
+    const p = interpretarParte({ ...PARTE_REAL, matricula: null }, { posiciones: PLANO_2x4x2 });
     expect(p.errores.join(" ")).toContain("matrícula");
   });
 
   it("avisa si las cubiertas facturadas no son las ruedas cambiadas", () => {
     const productos = PARTE_REAL.productos.map((x) =>
       x.descripcion.startsWith("295/80X") ? { ...x, unidades: 2 } : x);
-    const p = interpretarParte({ ...PARTE_REAL, productos }, { posiciones: PLANO_2x4x4 });
+    const p = interpretarParte({ ...PARTE_REAL, productos }, { posiciones: PLANO_2x4x2 });
     expect(p.avisos.join(" ")).toContain("Se facturan 2 cubiertas");
   });
 
   it("avisa si los kilómetros del papel van hacia atrás", () => {
-    const p = interpretarParte(PARTE_REAL, { posiciones: PLANO_2x4x4, kmActual: 1100000 });
+    const p = interpretarParte(PARTE_REAL, { posiciones: PLANO_2x4x2, kmActual: 1100000 });
     expect(p.avisos.join(" ")).toContain("menores que los que tenemos");
   });
 
   it("avisa si la cubierta no es de la medida del vehículo", () => {
-    const p = interpretarParte(PARTE_REAL, { posiciones: PLANO_2x4x4, medidaVehiculo: "315/80R22.5" });
+    const p = interpretarParte(PARTE_REAL, { posiciones: PLANO_2x4x2, medidaVehiculo: "315/80R22.5" });
     expect(p.avisos.join(" ")).toContain("no es la medida que tiene el vehículo");
   });
 
   it("una rueda repetida no se cuenta dos veces", () => {
     const filas = [...PARTE_REAL.filas, { ...PARTE_REAL.filas[0], mm_int: 3, mm_ext: 3 }];
-    const p = interpretarParte({ ...PARTE_REAL, filas }, { posiciones: PLANO_2x4x4 });
+    const p = interpretarParte({ ...PARTE_REAL, filas }, { posiciones: PLANO_2x4x2 });
     expect(p.medicionesDeGomaNueva.filter((m) => m.numero === 1)).toHaveLength(1);
     expect(p.medicionesDeGomaNueva.find((m) => m.numero === 1)?.profundidadMm).toBe(14.9);
     expect(p.avisos.join(" ")).toContain("sale más de una vez");

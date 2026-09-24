@@ -143,18 +143,66 @@ export interface PropuestaParte {
 /**
  * Las ruedas del papel, numeradas como las numera el papel.
  *
- * El croquis del proveedor cuenta por ejes, de delante a atrás, y dentro de
- * cada eje de izquierda a derecha y de fuera a dentro: en un 2x4x4 son 1,2 el
- * eje directriz; 3,4,5,6 el segundo; 7,8,9,10 el tercero.
+ * ── Y no es contar de uno en uno ────────────────────────────────────────────
  *
- * Que es EXACTAMENTE el `orden_visual` de nuestro plano, porque sale del mismo
- * sitio: `generarPosiciones()` lo numera así. Por eso no hay aquí ninguna
- * tabla de equivalencias escrita a mano, que sería lo primero que se quedaría
- * viejo el día que aparezca un tipo nuevo.
+ * El croquis del impreso tiene CUADRÍCULA: cada eje se lleva su bloque de
+ * huecos, los ocupe o no. El eje directriz son dos (1 y 2, que no lleva
+ * gemelos), y cada eje de atrás son cuatro: exterior izquierda, interior
+ * izquierda, interior derecha, exterior derecha.
+ *
+ * Por eso en el parte real de un autocar 2x4x2 —ocho ruedas— la última rueda
+ * es la número 10 y no la 8: su tercer eje es simple, así que ocupa los dos
+ * huecos de FUERA de su bloque (7 y 10) y deja vacíos los dos de dentro (8 y
+ * 9), que en el dibujo salen como dos recuadros en blanco.
+ *
+ * Contar de uno en uno daba 8 y habría rechazado el parte entero por «trae la
+ * rueda 10 y el vehículo tiene 8 posiciones». Peor aún: en un vehículo con
+ * dos ejes traseros simples habría casado la 7 con la rueda equivocada sin
+ * decir nada.
+ *
+ * Con todos los ejes gemelos las dos cuentas coinciden, que es por lo que el
+ * error no se veía con el autocar de 10 ruedas.
+ *
+ * Devuelve null cuando el plano no encaja en esta cuadrícula (un eje de tres
+ * ruedas, o sin número de eje): entonces no se sabe numerar, y no saberlo se
+ * dice, no se aproxima.
  */
-export function posicionesPorNumero(posiciones: PosicionDelPlano[]): Map<number, PosicionDelPlano> {
-  const orden = [...posiciones].sort((a, b) => a.orden_visual - b.orden_visual);
-  return new Map(orden.map((p, i) => [i + 1, p]));
+export function numeracionDelProveedor(
+  posiciones: PosicionDelPlano[],
+): Map<number, PosicionDelPlano> | null {
+  if (posiciones.length === 0) return null;
+  if (posiciones.some((p) => p.eje == null)) return null;
+
+  const ejes = new Map<number, PosicionDelPlano[]>();
+  for (const p of posiciones) {
+    const e = p.eje as number;
+    ejes.set(e, [...(ejes.get(e) ?? []), p]);
+  }
+
+  const mapa = new Map<number, PosicionDelPlano>();
+  let hueco = 0;
+  const numerosDeEje = [...ejes.keys()].sort((a, b) => a - b);
+
+  numerosDeEje.forEach((numeroEje, i) => {
+    const ruedas = (ejes.get(numeroEje) as PosicionDelPlano[])
+      .sort((a, b) => a.orden_visual - b.orden_visual);
+    // El directriz son dos huecos; los de atrás, cuatro. Salvo que el
+    // directriz venga gemelo, que entonces también son cuatro.
+    const ancho = i === 0 && ruedas.length <= 2 ? 2 : 4;
+
+    if (ruedas.length === ancho) {
+      ruedas.forEach((r, j) => mapa.set(hueco + j + 1, r));
+    } else if (ruedas.length === 2 && ancho === 4) {
+      // Eje simple en un bloque de cuatro: los dos de FUERA.
+      mapa.set(hueco + 1, ruedas[0]);
+      mapa.set(hueco + 4, ruedas[1]);
+    } else {
+      hueco = -1; // marca de que no se sabe
+    }
+    if (hueco >= 0) hueco += ancho;
+  });
+
+  return hueco < 0 ? null : mapa;
 }
 
 /** ¿Esta fila dice que se cambió la rueda, o solo que se midió? */
@@ -265,9 +313,14 @@ export function interpretarParte(
   const avisos: string[] = [];
   const errores: string[] = [];
 
-  const porNumero = posicionesPorNumero(ctx.posiciones);
-  if (porNumero.size === 0) {
+  const numerado = numeracionDelProveedor(ctx.posiciones);
+  const porNumero = numerado ?? new Map<number, PosicionDelPlano>();
+  if (ctx.posiciones.length === 0) {
     errores.push("Este vehículo no tiene plano de ruedas: sin él no se sabe a qué rueda va cada fila.");
+  } else if (!numerado) {
+    errores.push(
+      "El plano de este vehículo no encaja con la cuadrícula del parte (ejes sin numerar, o un eje " +
+      "con un número de ruedas que el impreso no contempla). Hay que meterlo a mano.");
   }
 
   const filas = (lectura.filas ?? []).filter((f) => {
@@ -310,11 +363,11 @@ export function interpretarParte(
 
   // El croquis no encaja con el plano. No se reparte «lo que quepa»: una
   // medición en la rueda equivocada es peor que ninguna medición.
-  if (fuera.length) {
+  if (fuera.length && numerado) {
     errores.push(
-      `El parte trae ${fuera.length > 1 ? "las ruedas" : "la rueda"} ${fuera.join(", ")} y este ` +
-      `vehículo solo tiene ${porNumero.size} posiciones. O el tipo del vehículo está mal puesto, ` +
-      `o este parte no es suyo.`);
+      `${fuera.length > 1 ? "Las ruedas" : "La rueda"} ${fuera.join(", ")} del parte no ` +
+      `${fuera.length > 1 ? "corresponden" : "corresponde"} a ninguna rueda de este vehículo, que tiene ` +
+      `${ctx.posiciones.length}. O el tipo está mal puesto, o este parte no es suyo.`);
   }
   if (repetidas.length) {
     avisos.push(`La rueda ${repetidas.join(", ")} sale más de una vez; se ha tomado la primera.`);
