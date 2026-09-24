@@ -508,41 +508,6 @@ export function createConciliacionRouter(): Router {
     }
   });
 
-  /**
-   * Qué buses cambiarían de número de flota, según el nombre del proveedor.
-   *
-   * Solo lee. Los conflictos —los que ya tienen otro número— vienen marcados
-   * para que la pantalla pueda enseñarlos aparte: pisar un número escrito a
-   * mano se pidió a propósito, pero no puede pasar sin que se vea.
-   */
-  router.get("/numeros-flota", async (req, res) => {
-    try {
-      const { solicitante } = req as PeticionConciliacion;
-      const empresaId = empresaDe(solicitante, req.query.empresa);
-      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
-      const cambios = await proponerNumerosDeFlota(
-        ambitoDe(empresaId, { connectorKey: req.query.connector, accountKey: req.query.cuenta }),
-      );
-      res.json({ cambios });
-    } catch (e) {
-      fallo(res, e);
-    }
-  });
-
-  router.post("/numeros-flota/aplicar", async (req, res) => {
-    try {
-      const { solicitante } = req as PeticionConciliacion;
-      const empresaId = empresaDe(solicitante, req.body?.empresaId);
-      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
-      const r = await aplicarNumerosDeFlota(ambitoDe(empresaId, req.body), {
-        vehiculoIds: Array.isArray(req.body?.vehiculoIds) ? req.body.vehiculoIds : [],
-      });
-      res.json({ ok: true, ...r });
-    } catch (e) {
-      fallo(res, e);
-    }
-  });
-
   router.post("/dar-de-baja", async (req, res) => {
     try {
       const { solicitante } = req as PeticionConciliacion;
