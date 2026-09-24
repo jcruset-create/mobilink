@@ -3,6 +3,7 @@ import { codigoDeUso } from "../catalogo/usos";
 import { hasRealValue, normalizarValor, type TipoDatoItv } from "./itvValores";
 import { medidaCanonica } from "./medidas";
 import { recorrerPaginas } from "./paginacion";
+import type { LecturaParteProveedor } from "./parteProveedor";
 import type {
   Delegacion, DelegacionInput, Empresa, EmpresaInput, Perfil, Rol,
   TipoVehiculo, PosicionVehiculo, Vehiculo, VehiculoInput,
@@ -1396,6 +1397,43 @@ export async function listarOperacionesTodas(
     (pagina, tamano) => listarOperacionesPagina(filtros, pagina, tamano),
     maximo,
   );
+}
+
+// ── Partes de trabajo del taller ────────────────────────────────
+/**
+ * Manda el parte escaneado al servidor y devuelve lo que pone.
+ *
+ * Solo lee: la clave de OpenAI vive en el servidor y no sale de ahí, y nada
+ * se guarda hasta que una persona confirma la propuesta.
+ */
+export async function leerParteProveedor(
+  fichero: { dataUri: string; nombre?: string },
+): Promise<LecturaParteProveedor> {
+  const r = await fetch(`${WF_API_BASE}/api/tyrecontrol/parte-proveedor/leer`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await tokenSesion()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ fichero: fichero.dataUri, nombre: fichero.nombre }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as { error?: string })?.error || "No se ha podido leer el parte");
+  return (j as { lectura: LecturaParteProveedor }).lectura;
+}
+
+/**
+ * Guarda un parte entero: revisión con mediciones, montajes y servicios, en
+ * una transacción. Es la MISMA RPC que usa la tablet; aquí no se reimplementa
+ * ninguna operación.
+ *
+ * La `clave` hace el trabajo importante: mandar dos veces el mismo parte
+ * devuelve el que ya existe en vez de montar las gomas otra vez.
+ */
+export async function guardarParteGuiado(parte: Record<string, unknown>): Promise<{
+  intervencion_id: string; revision_id: string | null; numero: string | null;
+  ya_guardado: boolean; operaciones?: number; mediciones?: number; avisos?: string[];
+}> {
+  const { data, error } = await supabase.rpc("tc_guardar_parte_guiado", { p_parte: parte });
+  if (error) throw new Error(error.message);
+  return data as never;
 }
 
 // ── Módulo Operaciones: catálogos configurables ────────────────

@@ -45,6 +45,7 @@ import Perfil from "./pages/Perfil";
 import Configuracion from "./pages/Configuracion";
 import TiposIncidencia from "./pages/TiposIncidencia";
 import Importar from "./pages/Importar";
+import ParteProveedor from "./pages/ParteProveedor";
 import InformesLayout from "./pages/informes/InformesLayout";
 import InformeEjecutivo from "./pages/informes/InformeEjecutivo";
 import InformeAlertas from "./pages/informes/InformeAlertas";
@@ -153,6 +154,7 @@ export default function TyreControlApp() {
               <Route path="sonda" element={<SondaTLGX />} />
               <Route path="configuracion" element={<Configuracion />} />
               <Route path="importar" element={<Importar />} />
+              <Route path="parte-proveedor" element={<ParteProveedor />} />
             </Route>
           </Route>
         </Route>

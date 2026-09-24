@@ -76,6 +76,7 @@ import { createPresenciaRouter } from "./tyrecontrol/presencia/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
 import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
 import { createKilometrajeActualRouter } from "./tyrecontrol/kilometrajeActual/router.ts";
+import { createParteProveedorRouter } from "./tyrecontrol/parteProveedor/router.ts";
 import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
 import { startPresenciaBases } from "./tyrecontrol/presencia/worker.ts";
 import { startRellenoKilometraje } from "./tyrecontrol/kilometrajeMensual/rellenoWorker.ts";
@@ -19427,6 +19428,7 @@ app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter()
 // de kilometraje mensual: si no, la ruta genérica se lo come.
 app.use("/api/tyrecontrol/alta-operativa", createAltaOperativaRouter());
 app.use("/api/tyrecontrol/kilometraje-actual", createKilometrajeActualRouter());
+app.use("/api/tyrecontrol/parte-proveedor", createParteProveedorRouter());
 app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
 mountCorreo(app, requireSupervisorRole);
 app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
