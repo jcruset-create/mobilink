@@ -115,6 +115,7 @@ import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
+import { jsonAjeno } from "./core/jsonAjeno.ts";
 import {
   esClaveDuplicada,
   INTENTOS_DE_ID,
@@ -1245,7 +1246,7 @@ async function calcularETA(
     throw new Error(`Error Google Routes API: ${response.status} ${text}`);
   }
 
-  const data = await response.json();
+  const data = await jsonAjeno(response);
   const ruta = data.routes?.[0];
   if (!ruta) throw new Error("No se encontró ruta entre los puntos indicados");
 
@@ -1296,7 +1297,7 @@ app.post("/api/geocode", protectWhenStrict(requirePanelRole), async (req, res) =
       throw new Error(`Error Google Geocoding API: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = await jsonAjeno(response);
     if (data.status !== "OK" || !data.results?.[0]) {
       return res.status(404).json({ error: `No se encontraron coordenadas para "${address}"` });
     }
@@ -1366,7 +1367,7 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
 
   if (!response.ok) throw new Error(`Webfleet error HTTP ${response.status}`);
 
-  const data = await response.json();
+  const data = await jsonAjeno(response);
   if (data?.errorCode) throw new Error(`Webfleet error ${data.errorCode}: ${data.errorMsg}`);
 
   const vehicles = Array.isArray(data) ? data : data?.data ?? [];
@@ -1418,7 +1419,7 @@ async function getWebfleetTrips(objectno: string, fromMs: number, toMs: number):
   const { url, headers } = buildWebfleetRequest("showTripReportExtern", { objectno, ...webfleetRange(fromMs, toMs) });
   const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
   if (!r.ok) throw new Error(`Webfleet trips HTTP ${r.status}`);
-  const data = await r.json();
+  const data = await jsonAjeno(r);
   if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
   const trips = (Array.isArray(data) ? data : []) as WebfleetTrip[];
   return trips.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
@@ -1428,7 +1429,7 @@ async function getWebfleetTracks(objectno: string, fromMs: number, toMs: number)
   const { url, headers } = buildWebfleetRequest("showTracks", { objectno, ...webfleetRange(fromMs, toMs) });
   const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
   if (!r.ok) throw new Error(`Webfleet tracks HTTP ${r.status}`);
-  const data = await r.json();
+  const data = await jsonAjeno(r);
   if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
   const pts = (Array.isArray(data) ? data : []) as any[];
   return pts
@@ -6092,7 +6093,7 @@ app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_r
     const response = await fetch(url, { headers });
     if (!response.ok) return res.status(502).json({ error: `Webfleet error HTTP ${response.status}` });
 
-    const data = await response.json();
+    const data = await jsonAjeno(response);
     if (data?.errorCode) return res.status(502).json({ error: `Webfleet error ${data.errorCode}: ${data.errorMsg}` });
 
     // Cruzar con nuestra BD: matrícula, taller y estado operativo.
@@ -6214,7 +6215,7 @@ app.get("/api/tyrecontrol/webfleet/objects", authenticate, requireModule("tyreco
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
     const r = await fetch(url, { headers });
     if (!r.ok) return res.status(502).json({ error: `Webfleet HTTP ${r.status}` });
-    const data = await r.json();
+    const data = await jsonAjeno(r);
     if (data?.errorCode) return res.status(502).json({ error: `Webfleet ${data.errorCode}: ${data.errorMsg}` });
     const objs = Array.isArray(data) ? data : data?.data ?? [];
     res.json(objs.map((v: any) => ({
@@ -6238,7 +6239,7 @@ app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrec
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", { objectno }, creds);
     const r = await fetch(url, { headers });
     if (!r.ok) return res.status(502).json({ error: `Webfleet HTTP ${r.status}` });
-    const data = await r.json();
+    const data = await jsonAjeno(r);
     if (data?.errorCode) return res.status(502).json({ error: `Webfleet ${data.errorCode}: ${data.errorMsg}` });
     const objs = Array.isArray(data) ? data : data?.data ?? [];
     const o = objs.find((v: any) => String(v.objectno) === String(objectno)) ?? objs[0];
@@ -6296,7 +6297,7 @@ app.get("/api/tyrecontrol/webfleet/estado", authenticate, requireModule("tyrecon
     if (!r.ok) {
       return res.json({ ...base, probado: true, ok: false, mensaje: `Webfleet respondió HTTP ${r.status}` });
     }
-    const data = await r.json();
+    const data = await jsonAjeno(r);
     if (data?.errorCode) {
       return res.json({ ...base, probado: true, ok: false, mensaje: `Webfleet ${data.errorCode}: ${data.errorMsg}` });
     }
@@ -6333,7 +6334,7 @@ app.get("/api/tyrecontrol/webfleet/conduccion", authenticate, requireModule("tyr
       const { url, headers } = buildWebfleetRequest(action, rango, creds);
       const r = await fetch(url, { headers, signal: AbortSignal.timeout(25000) });
       if (!r.ok) throw new Error(`Webfleet ${action} HTTP ${r.status}`);
-      const data = await r.json();
+      const data = await jsonAjeno(r);
       if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
       return (Array.isArray(data) ? data : data?.data ?? []) as any[];
     };
@@ -6639,7 +6640,11 @@ app.post("/api/roadside-operator/login", async (req, res) => {
       const email = `apk-${slug}@mobilink-assist.app`;
 
       const { data: lista } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
-      const existente = lista?.users?.find((u) => u.email === email);
+      // `listUsers` devuelve una unión: en la rama de error `users` es `[]`, y
+      // de ahí TypeScript deduce `never` y no deja ni leer el email. Se dice
+      // aquí lo único que se usa de cada usuario.
+      const usuarios = (lista?.users ?? []) as Array<{ id: string; email?: string | null }>;
+      const existente = usuarios.find((u) => u.email === email);
       if (existente) {
         await supabase.auth.admin.updateUserById(existente.id, { password: code });
       } else {
@@ -8419,7 +8424,11 @@ app.post(
       const veredicto = activar
         ? puedeMarcarSinSeguimiento(a)
         : puedeQuitarSinSeguimiento(a);
-      if (!veredicto.ok) {
+      // `=== false` y no `!veredicto.ok`: este tsconfig va con `strict: false`,
+      // y sin strictNullChecks la comparación por verdad no estrecha la unión
+      // —el compilador seguía viendo `Veredicto` entero y negaba `motivo`—.
+      // Comparar contra el literal sí la estrecha.
+      if (veredicto.ok === false) {
         return res.status(409).json({ error: veredicto.motivo });
       }
 
@@ -8952,7 +8961,7 @@ async function fetchRoutePolyline(
       signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) return null;
-    const data: any = await response.json();
+    const data: any = await jsonAjeno(response);
     const encoded = data.routes?.[0]?.polyline?.encodedPolyline;
     if (!encoded) return null;
     const points = decodeGooglePolyline(encoded);
@@ -13596,7 +13605,10 @@ app.post("/api/almacen/login-operario", async (req, res) => {
 
     // Supabase Auth: crear o sincronizar el usuario sintético de la APK.
     const { data: lista } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
-    const existente = lista?.users?.find((u) => u.email === email);
+    // Misma unión de `listUsers` que en el alta de operarios de taller: en la
+    // rama de error `users` es `[]` y TypeScript deduce `never`.
+    const usuarios = (lista?.users ?? []) as Array<{ id: string; email?: string | null }>;
+    const existente = usuarios.find((u) => u.email === email);
     if (existente) {
       await supabase.auth.admin.updateUserById(existente.id, { password: pin });
     } else {
@@ -19593,7 +19605,7 @@ async function vigilarSalidaDelTaller() {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
     const response = await fetch(url, { headers });
     if (!response.ok) return;
-    const data = await response.json();
+    const data = await jsonAjeno(response);
     if (data?.errorCode) return;
     const vehicles = Array.isArray(data) ? data : data?.data ?? [];
     const posByObj = new Map<string, { lat: number; lng: number }>();
