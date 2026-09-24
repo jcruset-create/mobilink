@@ -1376,6 +1376,38 @@ export async function crearAlbaranLinea(
   return aAlbaranLinea(rows[0]);
 }
 
+/**
+ * Borra las líneas de un albarán. Sólo se puede cuando no cuelga nada de
+ * ellas: una recepción o una incidencia las referencian, y la base lo
+ * impediría —que es lo que se quiere—. El servicio comprueba antes que el
+ * albarán no tenga recepciones.
+ */
+export async function borrarLineasDeAlbaran(empresaId: string, albaranId: string, cliente: Ejecutor): Promise<number> {
+  const { rowCount } = await cliente.query(`DELETE FROM rcp_albaran_lineas WHERE empresa_id = $1 AND albaran_id = $2`, [empresaId, albaranId]);
+  return rowCount ?? 0;
+}
+
+/**
+ * Quita las líneas de un pedido DEDUCIDO que se han quedado sin nada detrás:
+ * ni expedido, ni recibido, ni un solo renglón de albarán apuntando a ellas.
+ *
+ * Es la limpieza de releer un albarán del PDF: la línea que el correo dedujo
+ * mal deja de tener quien la sostenga, y en un pedido deducido esa línea no
+ * era más que el reflejo del albarán. En un pedido de verdad NO se toca nada:
+ * sus líneas las dijo su propio correo.
+ */
+export async function limpiarLineasHuerfanas(empresaId: string, pedidoId: string, cliente: Ejecutor): Promise<number> {
+  const { rowCount } = await cliente.query(
+    `DELETE FROM rcp_pedido_lineas l
+      WHERE l.empresa_id = $1 AND l.pedido_id = $2
+        AND l.cantidad_expedida = 0 AND l.cantidad_recibida = 0
+        AND NOT EXISTS (SELECT 1 FROM rcp_albaran_lineas al WHERE al.pedido_linea_id = l.id)
+        AND EXISTS (SELECT 1 FROM rcp_pedidos p WHERE p.id = l.pedido_id AND p.derivado_de_albaran)`,
+    [empresaId, pedidoId]
+  );
+  return rowCount ?? 0;
+}
+
 export async function lineasDeAlbaran(
   empresaId: string,
   albaranId: string,

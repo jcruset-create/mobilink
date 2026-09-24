@@ -206,3 +206,10 @@ export const reprocesarCorreo = (id: string) =>
   pedir<{ correoId: string; resultado: string; motivo: string | null; pedidoId: string | null; albaranId: string | null }>(`/correo/${id}/reprocesar`, json({}));
 export const descargarOriginal = (albaranId: string, enlace?: string) =>
   pedir<{ documento: FichaAlbaran["documentos"][number] }>(`/albaranes/${albaranId}/original/descargar`, json({ enlace }));
+
+/** Reescribe las líneas del albarán con las que dice su PDF. */
+export const releerLineasDelOriginal = (albaranId: string) =>
+  pedir<{ albaranId: string; numeroProveedor: string; lineasAntes: number; lineasAhora: number; sinPedido: number; avisos: string[] }>(
+    `/albaranes/${albaranId}/lineas/releer`,
+    json({})
+  );

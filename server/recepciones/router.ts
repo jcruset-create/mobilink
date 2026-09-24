@@ -463,6 +463,21 @@ export function createRecepcionesRouter(): Router {
     })
   );
 
+  /**
+   * Vuelve a escribir las líneas del albarán con las que dice su PDF. Es lo
+   * que arregla un albarán que entró por un correo con la tabla aplanada.
+   */
+  r.post(
+    "/albaranes/:id/lineas/releer",
+    exigirPermiso("recepciones.albaran.create"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const r = await servicio.releerLineasDelOriginal(ctx, String(req.params.id));
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.albaran.lineas_releidas", entidad: "rcp_albaranes", entidadId: r.albaranId, detalle: r, ip: req.ip });
+      res.json(r);
+    })
+  );
+
   /** Descarga (o reintenta) el PDF original desde el enlace del correo del proveedor. */
   r.post(
     "/albaranes/:id/original/descargar",
