@@ -6,10 +6,11 @@ import {
   type ResultadoLoteExternos,
   type Conciliacion, type CuentaTelematica, type VehiculoInterno,
 } from "../services/conciliacion";
-import { listarEmpresas } from "../services/data";
+import { listarEmpresas, listarTiposVehiculo, listarConfigEjes, listarMedidas } from "../services/data";
 import NumerosDeFlota from "../components/NumerosDeFlota";
 import SincronizacionKilometraje from "../components/SincronizacionKilometraje";
-import type { Empresa } from "../types";
+import type { Empresa, TipoVehiculo, ConfigEjes, MedidaNeumatico } from "../types";
+import { Modal } from "../components/ui";
 
 /**
  * Conciliación telemática: qué vehículos del proveedor son cuáles de aquí.
@@ -98,6 +99,36 @@ export default function ConciliacionTelematica() {
    * donde tiene que estar.
    */
   const [marcados, setMarcados] = useState<Set<string>>(new Set());
+  /**
+   * El alta en lote, con lo que se elige UNA vez para toda la tanda.
+   *
+   * Antes esto era un `confirm()` que avisaba de que no se rellenaban tipo,
+   * ejes ni medidas. Con 53 vehículos, eso significaba entrar en los 53 a
+   * poner lo mismo, y un vehículo sin tipo no tiene plano: no se puede ni
+   * revisar hasta que alguien se lo pone.
+   */
+  const [altaLote, setAltaLote] = useState<
+    { tipoVehiculoId: string; configEjesId: string; medidaId: string } | null
+  >(null);
+  const [catalogos, setCatalogos] = useState<{
+    tipos: TipoVehiculo[]; configs: ConfigEjes[]; medidas: MedidaNeumatico[];
+  } | null>(null);
+
+  /** Abre el alta en lote y trae las listas la primera vez. */
+  async function abrirAltaLote() {
+    setAltaLote({ tipoVehiculoId: "", configEjesId: "", medidaId: "" });
+    if (catalogos) return;
+    try {
+      const [tipos, configs, medidas] = await Promise.all([
+        listarTiposVehiculo(), listarConfigEjes(), listarMedidas(),
+      ]);
+      setCatalogos({ tipos, configs, medidas });
+    } catch {
+      // Sin listas se puede crear igual, sin rellenar nada: es exactamente lo
+      // que se hacía antes de este diálogo.
+      setCatalogos({ tipos: [], configs: [], medidas: [] });
+    }
+  }
 
   // Las empresas que la sesión puede ver: un administrador solo la suya, un
   // super-admin todas. Sin este selector la pantalla se quedaba clavada en la
@@ -476,23 +507,7 @@ export default function ConciliacionTelematica() {
                         ? `${seleccion.length - creables} de los marcados no traen matrícula y no se pueden crear`
                         : ""
                     }
-                    onClick={() =>
-                      confirm(
-                        `Se crearán ${creables} vehículos en TyreControl PENDIENTES DE VALIDAR.\n\n` +
-                          `No se rellenan tipo, ejes ni medidas: hay que completarlos después.\n\n` +
-                          `¿Seguir?`,
-                      ) &&
-                      void accionLote(
-                        () =>
-                          crearVehiculosLote({
-                            ...base,
-                            externalVehicleIds: seleccion
-                              .filter((f) => f.externo.plate)
-                              .map((f) => f.externo.providerVehicleId),
-                          }),
-                        "creados pendientes de validar",
-                      )
-                    }
+                    onClick={() => void abrirAltaLote()}
                   >
                     <Plus className="mr-1 inline h-3.5 w-3.5" />
                     Crear {creables} en TyreControl
@@ -791,6 +806,112 @@ export default function ConciliacionTelematica() {
             </div>
           )}
         </>
+      )}
+
+      {/* ── Alta en lote: se elige una vez y vale para todos ──────────────
+          El proveedor da matrícula, bastidor y nombre, y nada más. Un
+          vehículo sin tipo no tiene plano de ruedas, así que no se puede ni
+          revisar hasta que alguien se lo pone: con 53 de golpe, eso son 53
+          fichas que abrir para escribir lo mismo. */}
+      {altaLote && (
+        <Modal
+          title={`Crear ${creables} vehículos en TyreControl`}
+          onClose={() => setAltaLote(null)}
+          footer={
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setAltaLote(null)}
+                className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  const elegido = altaLote;
+                  setAltaLote(null);
+                  void accionLote(
+                    () =>
+                      crearVehiculosLote({
+                        ...base,
+                        externalVehicleIds: seleccion
+                          .filter((f) => f.externo.plate)
+                          .map((f) => f.externo.providerVehicleId),
+                        tipoVehiculoId: elegido.tipoVehiculoId || null,
+                        configEjesId: elegido.configEjesId || null,
+                        medidaId: elegido.medidaId || null,
+                      }),
+                    "creados pendientes de validar",
+                  );
+                }}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white"
+              >
+                Crear {creables}
+              </button>
+            </div>
+          }
+        >
+          <p className="mb-3 text-xs text-slate-400">
+            Nacen <b>pendientes de validar</b>, como hasta ahora: poner el tipo no es validar el
+            vehículo, es ahorrarse teclearlo {creables} veces. Todo lo de abajo es
+            opcional y se puede cambiar después en cada ficha.
+          </p>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                Tipo de vehículo
+              </span>
+              <select
+                value={altaLote.tipoVehiculoId}
+                onChange={(e) => {
+                  const tipoVehiculoId = e.target.value;
+                  // La configuración de ejes no se pregunta: es del tipo. Se
+                  // copia al vehículo en silencio porque la ficha la necesita
+                  // para desglosar las medidas por eje, pero elegirla aparte
+                  // solo invitaba a que dijeran cosas distintas.
+                  const tipo = (catalogos?.tipos ?? []).find((t) => t.id === tipoVehiculoId);
+                  const cfg = (catalogos?.configs ?? []).find(
+                    (c) => c.nombre?.toLowerCase() === (tipo?.configuracion_ejes ?? "").toLowerCase(),
+                  );
+                  setAltaLote({ ...altaLote, tipoVehiculoId, configEjesId: cfg?.id ?? "" });
+                }}
+                className="w-full rounded-lg border border-slate-600 bg-slate-900 px-2 py-2 text-sm text-slate-100"
+              >
+                <option value="">Sin tipo (completar después)</option>
+                {(catalogos?.tipos ?? []).map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.nombre}{t.configuracion_ejes ? ` · ${t.configuracion_ejes}` : ""}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1 block text-[11px] text-slate-500">
+                Es lo que da el plano de ruedas. Sin él no se puede revisar.
+              </span>
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                Medida de los neumáticos
+              </span>
+              <select
+                value={altaLote.medidaId}
+                disabled={!altaLote.tipoVehiculoId}
+                onChange={(e) => setAltaLote({ ...altaLote, medidaId: e.target.value })}
+                className="w-full rounded-lg border border-slate-600 bg-slate-900 px-2 py-2 text-sm text-slate-100 disabled:opacity-50"
+              >
+                <option value="">Sin medida</option>
+                {(catalogos?.medidas ?? []).map((m) => (
+                  <option key={m.id} value={m.id}>{m.valor}</option>
+                ))}
+              </select>
+              <span className="mt-1 block text-[11px] text-slate-500">
+                {altaLote.tipoVehiculoId
+                  ? "Se pone en todos los ejes del tipo elegido."
+                  : "Hace falta el tipo: de él salen los ejes."}
+              </span>
+            </label>
+          </div>
+        </Modal>
       )}
     </div>
   );

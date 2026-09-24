@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { obtenerNeumatico, montajeActualDeNeumatico, descartarNeumaticoStd, actualizarNeumatico, listarFotosCatalogoPorModelo, claveModeloCatalogo, listarOperaciones, medicionesNeumatico, listarCatOperaciones, registrarReparacion, subirAdjuntoOperacion } from "../services/data";
-import type { MedicionNeumatico } from "../services/data";
+import { obtenerNeumatico, montajeActualDeNeumatico, descartarNeumaticoStd, actualizarNeumatico, listarFotosCatalogoPorModelo, claveModeloCatalogo, listarOperaciones, medicionesNeumatico, listarCatOperaciones, registrarReparacion, subirAdjuntoOperacion, recorridoNeumatico } from "../services/data";
+import type { MedicionNeumatico, RecorridoNeumatico } from "../services/data";
 import type { MontajeActual, Neumatico, OperacionNeumatico, CatTipoReparacion, CatResultadoReparacion } from "../types";
 import { ESTADO_NEUMATICO_LABELS, TIPO_OPERACION_LABELS, MOTIVO_OPERACION_LABELS, presionTxt } from "../types";
 import { Modal, Field, inputCls } from "../components/ui";
@@ -66,9 +66,13 @@ export default function NeumaticoDetalle() {
   }
 
   const [fotoModelo, setFotoModelo] = useState<string | null>(null);
+  const [recorrido, setRecorrido] = useState<RecorridoNeumatico | null>(null);
 
   async function cargar() {
     const neu = await obtenerNeumatico(id);
+    // Lo que ha durado. Si la función aún no está en la base, la ficha sigue
+    // sirviendo: se queda sin el recuadro, no en blanco.
+    recorridoNeumatico(id).then(setRecorrido).catch(() => setRecorrido(null));
     setN(neu);
     setMontaje(await montajeActualDeNeumatico(id));
     const [ops, meds] = await Promise.all([
@@ -236,6 +240,53 @@ export default function NeumaticoDetalle() {
           <div className="mt-2 text-[11px] text-slate-500">El stock físico y los movimientos se gestionan en el módulo de Almacén.</div>
         </div>
       </div>
+
+      {/* ── Lo que ha durado ───────────────────────────────────────────────
+          Es la pregunta que justifica anotar los kilómetros en cada montaje y
+          cada desmontaje: cuánto ha aguantado esta goma. */}
+      {recorrido && (
+        <div className="mt-3 rounded-lg bg-slate-800 p-3">
+          <div className="mb-2 text-[11px] font-bold uppercase text-slate-400">Kilómetros recorridos</div>
+          <div className="flex flex-wrap items-baseline gap-3">
+            <span className="text-2xl font-black text-slate-100">
+              {Number(recorrido.km_total).toLocaleString("es-ES")} km
+            </span>
+            <span className="text-xs text-slate-400">
+              en {recorrido.tramos} {recorrido.tramos === 1 ? "montaje" : "montajes"}
+              {recorrido.montado_ahora ? " · sigue montado, sigue sumando" : ""}
+            </span>
+          </div>
+
+          {/* Un total al que le faltan tramos se lee como la vida entera de la
+              goma, y no lo es. Se dice, en ámbar. */}
+          {recorrido.tramos_sin_km > 0 && (
+            <div className="mt-2 text-xs text-amber-300">
+              ⚠ {recorrido.tramos_sin_km} {recorrido.tramos_sin_km === 1 ? "montaje" : "montajes"} sin
+              kilometraje anotado: el total es lo que se puede contar, no todo lo que ha rodado.
+            </div>
+          )}
+
+          {recorrido.detalle.length > 0 && (
+            <div className="mt-3 flex flex-col gap-1">
+              {recorrido.detalle.map((t, i) => (
+                <div key={i} className="flex flex-wrap items-baseline gap-2 text-xs text-slate-400">
+                  <span className="text-slate-300">
+                    {t.desde ?? "—"} → {t.vigente ? "hoy" : (t.hasta ?? "—")}
+                  </span>
+                  <span>
+                    {t.km_montaje != null ? `${Number(t.km_montaje).toLocaleString("es-ES")} km` : "sin km"}
+                    {" → "}
+                    {t.km_desmontaje != null ? `${Number(t.km_desmontaje).toLocaleString("es-ES")} km` : "sin km"}
+                  </span>
+                  <span className={t.km != null ? "font-bold text-slate-200" : "text-amber-300"}>
+                    {t.km != null ? `${Number(t.km).toLocaleString("es-ES")} km` : "no se puede contar"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mt-3 rounded-lg bg-slate-800 p-3">
         <div className="mb-3 text-[11px] font-bold uppercase text-slate-400">Historial del neumático ({eventos.length})</div>

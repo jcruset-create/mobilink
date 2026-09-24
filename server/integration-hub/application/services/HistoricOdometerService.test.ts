@@ -129,6 +129,23 @@ describe("odometroEnInstante()", () => {
     expect(r.odometro.odometerKm).toBe(1245311.31);
     expect(r.odometro.kmEnVentana).toBe(42);
     expect(r.odometro.ventanas).toEqual(["día", "7 días"]);
+    expect(r.odometro.corroboracion).toBe("dos_ventanas");
+  });
+
+  it("una sola ventana con odómetro se devuelve MARCADA, no se tira", async () => {
+    // El caso del autobús que se mueve poco: día y 7 días salen vacías y solo
+    // la de 28 acumula viajes. Antes esto caía en «sin lectura» y dejaba sin
+    // kilometraje justo a los vehículos con menos revisiones.
+    vi.mocked(resolveTelematicsConnectors).mockResolvedValue([
+      conectorQueDice([resumen(undefined, 0), resumen(undefined, 0), resumen(1123855.18, 310)]),
+    ] as any);
+    const r = await odometroEnInstante(CTX, "veh-1", INSTANTE, { ahora: AHORA });
+    expect(r.estado).toBe("encontrado");
+    if (r.estado !== "encontrado") return;
+    expect(r.odometro.odometerKm).toBe(1123855.18);
+    expect(r.odometro.ventanas).toEqual(["28 días"]);
+    // Lo que obliga a quien llama a contrastarlo contra algo de fuera.
+    expect(r.odometro.corroboracion).toBe("una_ventana");
   });
 
   it("una ventana sin viajes no cuenta: se ensancha y se usan las siguientes", async () => {

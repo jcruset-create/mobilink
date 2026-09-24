@@ -30,8 +30,16 @@
  * odómetro del 19/9/2026, una respuesta dio 1.200.870,91 km: 65.000 km por
  * debajo del día anterior, o sea imposible, pero perfectamente plausible a
  * simple vista. No es un error que se pueda detectar mirando un número.
- * Por eso **hacen falta DOS ventanas distintas que coincidan**. Una sola
+ * Por eso lo bueno es que **DOS ventanas distintas coincidan**. Una sola
  * consulta a esta API no es un dato, es una apuesta.
+ *
+ * Pero tirar el número cuando solo responde una ventana tampoco valía: los
+ * vehículos que se mueven poco solo acumulan viajes en la ventana ancha, y se
+ * quedaban sistemáticamente sin kilometraje. Así que una sola ventana se
+ * devuelve marcada como `una_ventana` y es **quien llama** el que decide,
+ * contrastándola contra algo de FUERA de esta API. El relleno de revisiones lo
+ * hace con sus cotas (`kilometrajeRevisiones/coherencia.ts`), de las que la
+ * más útil aquí es la que siempre está disponible: el odómetro de hoy.
  *
  * **3. El día en curso baila.** El mismo instante de hoy contestó dos valores
  * distintos con diez minutos de diferencia, según incluyera o no los viajes de
@@ -88,8 +96,18 @@ export interface OdometroHistorico {
   instante: Date;
   /** Kilómetros que hizo el vehículo dentro de la ventana aceptada. */
   kmEnVentana: number;
-  /** Las dos ventanas que coincidieron, para poder reconstruir la consulta. */
+  /** Las ventanas que dieron odómetro, para poder reconstruir la consulta. */
   ventanas: string[];
+  /**
+   * Cuánto respalda al número, y quien lo reciba TIENE que mirarlo.
+   *
+   * `dos_ventanas` es el caso bueno: dos consultas distintas dijeron lo mismo.
+   * `una_ventana` es un número sin contrastar dentro de esta API, y solo vale
+   * si quien llama lo contrasta contra algo de fuera —el odómetro de hoy, el
+   * mes ya sincronizado, la revisión vecina—. Escribirlo a pelo sería creerse
+   * una apuesta.
+   */
+  corroboracion: "dos_ventanas" | "una_ventana";
 }
 
 export type ResultadoOdometroHistorico =
@@ -190,7 +208,29 @@ export async function odometroEnInstante(
         if (aceptadas.length === 2) break;
       }
 
-      if (aceptadas.length < 2) continue;
+      if (aceptadas.length === 0) continue;
+
+      // Una sola ventana con odómetro no es un descarte: es un número sin
+      // contrastar. Pasa con los vehículos que se mueven poco —la ventana del
+      // día y la de siete salen vacías y solo la de 28 acumula viajes—, y
+      // tirarlo dejaba sin kilometraje justo a los que menos revisiones
+      // tienen. Se devuelve marcado, y quien llama lo ata contra sus cotas.
+      if (aceptadas.length === 1) {
+        const [u] = aceptadas;
+        return {
+          estado: "encontrado",
+          odometro: {
+            odometerKm: u.resumen.finalOdometerKm!,
+            provider: u.resumen.provider,
+            accountKey: u.resumen.accountKey,
+            providerVehicleId,
+            instante,
+            kmEnVentana: u.resumen.distanceKm,
+            ventanas: [u.v],
+            corroboracion: "una_ventana",
+          },
+        };
+      }
 
       const [a, b] = aceptadas;
       const kmA = a.resumen.finalOdometerKm!;
@@ -217,6 +257,7 @@ export async function odometroEnInstante(
           instante,
           kmEnVentana: a.resumen.distanceKm,
           ventanas: [a.v, b.v],
+          corroboracion: "dos_ventanas",
         },
       };
     } catch (e) {

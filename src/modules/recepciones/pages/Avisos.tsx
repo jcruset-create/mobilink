@@ -16,8 +16,8 @@ import { Copy, MessageCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 import * as api from "../services/api";
 import { useRecepciones } from "../contexts/RecepcionesContext";
-import { Aviso, EmptyRow, ErrorBox, Pill, TableWrap, btnMini, tdCls, thCls } from "../components/ui";
-import { COLOR_ESTADO_AVISO, ETIQUETA_ESTADO_AVISO, type EstadoAvisos } from "../types";
+import { Aviso, EmptyRow, ErrorBox, Pill, TableWrap, btnMini, inputCls, tdCls, thCls } from "../components/ui";
+import { COLOR_ESTADO_AVISO, ETIQUETA_ESTADO_AVISO, ETIQUETA_TIPO_AVISO, type EstadoAvisos } from "../types";
 import { fmtFechaHora } from "../../administracion/types";
 
 export default function Avisos() {
@@ -25,7 +25,8 @@ export default function Avisos() {
   const [estado, setEstado] = useState<EstadoAvisos | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
-  const [copiado, setCopiado] = useState(false);
+  const [copiado, setCopiado] = useState<string | null>(null);
+  const [telefono, setTelefono] = useState("");
   const puedeGestionar = puede("recepciones.avisos.manage");
 
   const cargar = useCallback(async () => {
@@ -41,10 +42,28 @@ export default function Avisos() {
     void cargar();
   }, [cargar]);
 
+  useEffect(() => {
+    setTelefono(estado?.telefonoRecepcion ?? "");
+  }, [estado?.telefonoRecepcion]);
+
+  /** El móvil de recepción: tenerlo puesto ES el interruptor de ese aviso. */
+  async function guardarTelefono() {
+    setGuardando(true);
+    try {
+      await api.guardarConfigAvisos({ telefonoRecepcion: telefono.replace(/\D/g, "") });
+      await cargar();
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido guardar el teléfono");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
   async function alternar(activado: boolean) {
     setGuardando(true);
     try {
-      await api.guardarConfigAvisos(activado);
+      await api.guardarConfigAvisos({ activado });
       await cargar();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se ha podido cambiar el aviso");
@@ -110,12 +129,12 @@ export default function Avisos() {
               className={`${btnMini} flex items-center gap-1`}
               onClick={() => {
                 void navigator.clipboard?.writeText(estado.cuerpoPlantilla).then(
-                  () => setCopiado(true),
-                  () => setCopiado(false)
+                  () => setCopiado("aviso"),
+                  () => setCopiado(null)
                 );
               }}
             >
-              <Copy className="h-3.5 w-3.5" /> {copiado ? "Copiado" : "Copiar"}
+              <Copy className="h-3.5 w-3.5" /> {copiado === "aviso" ? "Copiado" : "Copiar"}
             </button>
           </div>
           <pre className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-900 p-2 font-mono text-[12px] text-slate-200">{estado.cuerpoPlantilla}</pre>
@@ -136,10 +155,59 @@ export default function Avisos() {
         </div>
       )}
 
+      {/* El aviso interno: que ha entrado un albarán sin su PDF. */}
+      {estado && (
+        <div className="mb-3 rounded-xl border border-slate-700 bg-slate-800 p-3">
+          <div className="text-[10px] font-bold uppercase text-slate-400">Avisar a recepción si un albarán entra sin su PDF</div>
+          <p className="mt-1 text-[12px] text-slate-400">
+            Sin el papel no se sabe para quién viene la mercancía ni se puede sellar al recibirla, y hay que subirlo a mano. Con un móvil puesto aquí se avisa
+            en cuanto pasa; sin él no se manda nada.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              className={`${inputCls} max-w-[200px]`}
+              inputMode="numeric"
+              placeholder="Móvil de recepción"
+              value={telefono}
+              onChange={(e) => setTelefono(e.target.value)}
+              disabled={!puedeGestionar || guardando}
+            />
+            {puedeGestionar && (
+              <button className={btnMini} onClick={() => void guardarTelefono()} disabled={guardando}>
+                Guardar
+              </button>
+            )}
+            <span className="text-[11px] text-slate-500">
+              {estado.telefonoRecepcion ? "Avisando a este número." : "Nadie recibe este aviso."}
+              {estado.telefonoRecepcion && !estado.plantillaFaltaAlbaran ? " Sin plantilla aprobada: sólo texto plano." : ""}
+            </span>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[10px] font-bold uppercase text-slate-400">Su texto en Twilio</div>
+            <button
+              className={`${btnMini} flex items-center gap-1`}
+              onClick={() => {
+                void navigator.clipboard?.writeText(estado.cuerpoPlantillaFaltaAlbaran).then(
+                  () => setCopiado("falta"),
+                  () => setCopiado(null)
+                );
+              }}
+            >
+              <Copy className="h-3.5 w-3.5" /> {copiado === "falta" ? "Copiado" : "Copiar"}
+            </button>
+          </div>
+          <pre className="mt-1 whitespace-pre-wrap rounded-lg bg-slate-900 p-2 font-mono text-[12px] text-slate-200">{estado.cuerpoPlantillaFaltaAlbaran}</pre>
+          <p className="mt-1 text-[11px] text-slate-500">
+            <b>{"{{1}}"}</b> es el albarán y <b>{"{{2}}"}</b> el proveedor. Su Content SID va en RECEPCIONES_WHATSAPP_SID_FALTA_ALBARAN.
+          </p>
+        </div>
+      )}
+
       <TableWrap>
         <thead>
           <tr>
             <th className={thCls}>Cuándo</th>
+            <th className={thCls}>Aviso</th>
             <th className={thCls}>Recepción</th>
             <th className={thCls}>Albarán</th>
             <th className={thCls}>Para</th>
@@ -148,14 +216,19 @@ export default function Avisos() {
           </tr>
         </thead>
         <tbody>
-          {(estado?.avisos.length ?? 0) === 0 && <EmptyRow cols={6} text="Todavía no se ha intentado ningún aviso." />}
+          {(estado?.avisos.length ?? 0) === 0 && <EmptyRow cols={7} text="Todavía no se ha intentado ningún aviso." />}
           {estado?.avisos.map((a) => (
             <tr key={a.id} className="border-t border-slate-700/60">
               <td className={`${tdCls} whitespace-nowrap text-[12px] text-slate-400`}>{fmtFechaHora(a.createdAt)}</td>
+              <td className={`${tdCls} text-[12px]`}>{ETIQUETA_TIPO_AVISO[a.tipo] ?? a.tipo}</td>
               <td className={tdCls}>
-                <Link className="font-bold text-sky-300 hover:underline" to={`/recepciones/recepciones/${a.recepcionId}`}>
-                  {a.recepcionNumero || "—"}
-                </Link>
+                {a.recepcionId ? (
+                  <Link className="font-bold text-sky-300 hover:underline" to={`/recepciones/recepciones/${a.recepcionId}`}>
+                    {a.recepcionNumero || "—"}
+                  </Link>
+                ) : (
+                  <span className="text-slate-500">—</span>
+                )}
               </td>
               <td className={`${tdCls} text-[12px]`}>{a.albaranNumero || "—"}</td>
               <td className={tdCls}>

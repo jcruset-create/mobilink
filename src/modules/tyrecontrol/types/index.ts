@@ -146,7 +146,10 @@ export interface PosicionVehiculo {
  * proveedor este catálogo acabaría contando dos cosas distintas y habría que
  * ampliarlo cada vez que se enchufa uno nuevo.
  */
-export type OrigenKm = "manual" | "webfleet" | "importacion_excel" | "telematica";
+// `sin_acceso`: el técnico declaró en el parte que no podía leer el
+// cuentakilómetros. La revisión se guarda sin kilómetros, que es la verdad;
+// distinto de un 'manual' vacío, que sería «se le olvidó».
+export type OrigenKm = "manual" | "webfleet" | "importacion_excel" | "telematica" | "sin_acceso";
 
 // ── Webfleet: vehículos en base ─────────────────────────────────
 export type EstadoWebfleet = "en_base" | "otra_base" | "en_ruta" | "sin_conexion" | "sin_dispositivo";
@@ -582,6 +585,7 @@ export const ORIGEN_KM_LABELS: Record<OrigenKm, string> = {
   webfleet: "Webfleet",
   importacion_excel: "Importación Excel",
   telematica: "Telemática",
+  sin_acceso: "Sin acceso al cuentakilómetros",
 };
 
 export type EstadoNeumatico = "almacen" | "reservado" | "montado" | "reparacion" | "descartado" | "pendiente_reciclaje";

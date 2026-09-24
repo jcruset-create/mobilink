@@ -100,8 +100,12 @@ export function createKilometrajeActualRouter(): Router {
 
       let resultado: any;
       try {
-        const { kilometrajeEnOperacion } = await servicioDelHub();
-        resultado = await kilometrajeEnOperacion(
+        // `kilometrajeAhora` y no `kilometrajeEnOperacion`: esto es «¿cuántos
+        // km lleva AHORA?», y para eso se pregunta el estado actual del
+        // vehículo. El histórico de Movertis no trae odómetro, así que por el
+        // otro camino esta pantalla salía siempre sin kilómetros en su flota.
+        const { kilometrajeAhora } = await servicioDelHub();
+        resultado = await kilometrajeAhora(
           { tenantId: empresaId, correlationId: `km-actual:${vehiculoId}:${consultadoAt.getTime()}` },
           vehiculoId,
           consultadoAt,

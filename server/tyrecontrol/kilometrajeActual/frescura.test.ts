@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   avisoDeSalto, clasificarLectura, frescuraDeConfig, haceCuanto, tocaRefrescar,
   FRESCURA_ODOMETRO_MIN,
+  nombreProveedor,
 } from "./frescura.ts";
 
 const AHORA = new Date("2026-09-16T10:42:00.000Z");
@@ -32,7 +33,7 @@ describe("clasificarLectura", () => {
     expect(l.estado).toBe("actualizado");
     expect(l.km).toBe(482315);
     expect(l.antiguedadMin).toBe(2);
-    expect(l.texto).toBe("Lectura de hace 2 minutos.");
+    expect(l.texto).toBe("Anotados por Movertis. Lectura de hace 2 minutos.");
   });
 
   it("una lectura vieja se usa igual, pero avisando de que pudo rodar", () => {
@@ -170,5 +171,34 @@ describe("haceCuanto", () => {
     expect(haceCuanto(200)).toBe("hace 3 horas");
     expect(haceCuanto(1500)).toBe("hace 1 día");
     expect(haceCuanto(5000)).toBe("hace 3 días");
+  });
+});
+
+describe("quién anotó los kilómetros", () => {
+  it("se nombra al proveedor, no «telemática» a secas", () => {
+    // En el patio se sabe qué vehículos llevan cada equipo: ver el nombre es
+    // lo que permite decir «ese lleva dos días sin reportar».
+    expect(nombreProveedor("movertis")).toBe("Movertis");
+    expect(nombreProveedor("webfleet")).toBe("Webfleet");
+  });
+
+  it("da igual cómo venga escrito del proveedor", () => {
+    expect(nombreProveedor("WEBFLEET")).toBe("Webfleet");
+    expect(nombreProveedor(" Movertis ")).toBe("Movertis");
+  });
+
+  it("una plataforma que aún no existe sale con su nombre, no en blanco", () => {
+    // El día que se enlace otra, aparece sola: sin tocar esto y sin «unknown».
+    expect(nombreProveedor("fleetboard")).toBe("Fleetboard");
+  });
+
+  it("sin proveedor no se firma nada", () => {
+    expect(nombreProveedor(null)).toBeNull();
+    expect(nombreProveedor("   ")).toBeNull();
+  });
+
+  it("y el texto de la lectura lo lleva delante", () => {
+    const l = encontrado(2);
+    expect(l.texto.startsWith("Anotados por ")).toBe(true);
   });
 });

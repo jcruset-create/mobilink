@@ -36,7 +36,7 @@
  */
 
 import { ZONA_HORARIA_POR_DEFECTO } from "../../integration-hub/domain/meses.ts";
-import { esCoherente, instanteDeRevision } from "./coherencia.ts";
+import { esCoherente, hayCotaIndependiente, instanteDeRevision } from "./coherencia.ts";
 import {
   cotasDelMes, cuantasSinKm, guardarKm, revisionesSinKm, vecinasConKm, TAMANO_PAGINA,
   type RevisionPendiente,
@@ -77,6 +77,14 @@ export interface Tarea {
 
 interface TareaViva extends Tarea {
   intentos: Map<string, number>;
+  /**
+   * El odómetro de hoy por vehículo, consultado una vez y guardado.
+   *
+   * Como TECHO vale aunque envejezca: el odómetro solo sube, así que el valor
+   * de cuando se pidió es una cota más estricta que la de ahora, nunca más
+   * laxa. Guardarlo evita una llamada por revisión y deja una por vehículo.
+   */
+  techos: Map<string, { km: number } | null>;
   temporizador: ReturnType<typeof setInterval> | null;
   ocupado: boolean;
 }
@@ -84,7 +92,7 @@ interface TareaViva extends Tarea {
 const tareas = new Map<string, TareaViva>();
 
 function publica(t: TareaViva): Tarea {
-  const { intentos, temporizador, ocupado, ...resto } = t;
+  const { intentos, techos, temporizador, ocupado, ...resto } = t;
   return { ...resto };
 }
 
@@ -192,7 +200,7 @@ export async function iniciarRellenoRevisiones(op: {
     pendientes: 0, escritas: 0, sinLectura: 0, rechazadas: 0,
     minutosRestantes: 0, restanteEnPalabras: "nada",
     ultima: null, muestraMotivos: [],
-    intentos: new Map(), temporizador: null, ocupado: false,
+    intentos: new Map(), techos: new Map(), temporizador: null, ocupado: false,
   };
   tareas.set(op.empresaId, t);
 
@@ -273,6 +281,33 @@ async function siguientePendiente(t: TareaViva): Promise<RevisionPendiente | nul
   return null;
 }
 
+/**
+ * El odómetro de hoy de un vehículo, preguntado una vez por tarea.
+ *
+ * Se guarda incluso cuando sale `null`: un vehículo sin techo hoy no lo va a
+ * tener dentro de diez minutos, y reintentarlo por cada revisión suya sería
+ * gastar cupo para el mismo «no».
+ */
+async function techoDe(t: TareaViva, vehiculoId: string): Promise<{ km: number } | null> {
+  if (t.techos.has(vehiculoId)) return t.techos.get(vehiculoId)!;
+  let techo: { km: number } | null = null;
+  try {
+    const { odometroDeHoy } = await import(
+      "../../integration-hub/application/services/VehicleOdometerService.ts"
+    );
+    const hoy = await odometroDeHoy(
+      { tenantId: t.empresaId, correlationId: `km-rev-techo-${vehiculoId}` },
+      vehiculoId,
+    );
+    if (hoy) techo = { km: hoy.km };
+  } catch (e: any) {
+    // Sin techo se sigue: es una cota menos, no un fallo del relleno.
+    console.warn("[km-revisiones] no se pudo leer el odómetro de hoy:", e?.message ?? e);
+  }
+  t.techos.set(vehiculoId, techo);
+  return techo;
+}
+
 async function procesar(t: TareaViva, r: RevisionPendiente): Promise<void> {
   const fecha = String(r.fecha_revision).slice(0, 10);
   const anotar = (motivo: string) => {
@@ -289,7 +324,7 @@ async function procesar(t: TareaViva, r: RevisionPendiente): Promise<void> {
     return;
   }
 
-  const { odometroEnInstante } = await import(
+  const { odometroEnInstante, ANCHURAS_DIAS } = await import(
     "../../integration-hub/application/services/HistoricOdometerService.ts"
   );
   const res = await odometroEnInstante(
@@ -314,7 +349,7 @@ async function procesar(t: TareaViva, r: RevisionPendiente): Promise<void> {
       res.estado === "discrepancia" ? res.motivo
       : res.estado === "dia_abierto" ? res.motivo
       : res.estado === "sin_telematica" ? "el vehículo no está enlazado con ninguna cuenta de telemática"
-      : "no hay ninguna ventana con odómetro que atribuir a ese momento";
+      : `el proveedor no dio odómetro en ninguna de las ventanas (${ANCHURAS_DIAS.map((d) => (d === 0 ? "día" : `${d} días`)).join(", ")}) que terminan en ese momento`;
     t.ultima = { fecha, resultado: res.estado.replace("_", " ") };
     anotar(motivo);
     return;
@@ -330,7 +365,25 @@ async function procesar(t: TareaViva, r: RevisionPendiente): Promise<void> {
       cuando.instante.getUTCFullYear(), cuando.instante.getUTCMonth() + 1,
     ),
   ]);
-  const veredicto = esCoherente(km, { ...vecinas, mes });
+  const hoy = await techoDe(t, r.vehiculo_id);
+  const cotas = { ...vecinas, mes, hoy };
+
+  // Un número respaldado por UNA sola ventana no se escribe a ciegas: hace
+  // falta que alguna cota de fuera de la API lo ate. Sin ninguna, «coherente»
+  // solo querría decir que no había con qué desmentirlo.
+  if (res.odometro.corroboracion === "una_ventana" && !hayCotaIndependiente(cotas)) {
+    t.sinLectura += 1;
+    t.intentos.set(r.id, MAX_INTENTOS);
+    t.ultima = { fecha, resultado: "sin corroborar" };
+    anotar(
+      `Odómetro ${Math.round(km).toLocaleString("es-ES")} km de una sola ventana ` +
+      `(${res.odometro.ventanas.join(", ")}) y sin ninguna cota con la que comprobarlo: ` +
+      "ni revisión vecina con kilómetros, ni mes sincronizado, ni odómetro de hoy.",
+    );
+    return;
+  }
+
+  const veredicto = esCoherente(km, cotas);
   if (veredicto.estado === "rechazado") {
     t.rechazadas += 1;
     t.intentos.set(r.id, MAX_INTENTOS);
