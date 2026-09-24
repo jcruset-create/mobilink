@@ -364,17 +364,49 @@ export function diaDeRecepcion(creadaAtMs: number): string {
 }
 
 /**
- * Las recepciones que caen en el día que la agenda está pintando.
+ * Las recepciones que a día de hoy siguen esperando, para pintarlas en la
+ * agenda.
  *
- * La comparación va por la fecha local y no por el milisegundo: una recepción
- * de las 23:57 pertenece a ese día aunque en UTC ya sea el siguiente, que es
- * exactamente el caso con el que se probó esto.
+ * ── Por qué no se pintan a la hora en que llegaron ──────────────────────────
+ *
+ * Porque una recepción pendiente NO es un apunte de lo que pasó: es trabajo
+ * por hacer. Anclada a su hora se quedaba quieta mientras el día avanzaba, y a
+ * media tarde había coches esperando en el patio dibujados a las nueve de la
+ * mañana, entre citas ya terminadas, donde nadie los miraba.
+ *
+ * Así que van donde va el trabajo pendiente: en la línea de AHORA, igual que
+ * la cola, y avanzando con el reloj hasta que alguien las valida. La hora de
+ * llegada no se pierde —se enseña en la tarjeta, con el rato que llevan
+ * esperando—, pero deja de decidir dónde se dibujan.
+ *
+ * Y por eso una recepción de ayer que nadie ha validado sale HOY, no en la
+ * columna de ayer: sigue sin hacerse. Las columnas de otros días no llevan
+ * ninguna.
  */
-export function recepcionesDelDia<T extends { creadaAtMs: number }>(
+export function recepcionesQueSiguenEsperando<T extends { creadaAtMs: number }>(
   recepciones: T[],
-  diaKey: string
+  diaKey: string,
+  hoyKey: string
 ): T[] {
-  return recepciones.filter((r) => diaDeRecepcion(r.creadaAtMs) === diaKey);
+  if (diaKey !== hoyKey) return [];
+  // Las de mañana —reloj del navegador mal puesto, o una creada con fecha
+  // futura— no se arrastran a hoy: no han llegado todavía.
+  return recepciones.filter((r) => diaDeRecepcion(r.creadaAtMs) <= hoyKey);
+}
+
+/** Cuánto lleva esperando, en minutos. Nunca negativo. */
+export function minutosEsperando(creadaAtMs: number, ahoraMs: number): number {
+  return Math.max(0, Math.floor((ahoraMs - creadaAtMs) / 60_000));
+}
+
+/**
+ * Ese mismo rato, dicho como lo diría una persona: «45 min», «2 h 10 min».
+ */
+export function esperaLegible(minutos: number): string {
+  if (minutos < 60) return `${minutos} min`;
+  const horas = Math.floor(minutos / 60);
+  const resto = minutos % 60;
+  return resto === 0 ? `${horas} h` : `${horas} h ${resto} min`;
 }
 
 /**

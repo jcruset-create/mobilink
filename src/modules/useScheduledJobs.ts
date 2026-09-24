@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState, type SetStateAction } from "react";
+import React, { useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import type { ScheduledJob } from "../components/AgendaView";
 import type {
   AllocationResult,
@@ -59,6 +59,15 @@ export interface UseScheduledJobsParams {
   setNextJobId: React.Dispatch<React.SetStateAction<number>>;
   reloadJobsFromBackend: () => Promise<void>;
 }
+
+/**
+ * Cada cuánto se vuelve a pedir la agenda al servidor.
+ *
+ * Un minuto es el mismo ritmo que ya llevan las recepciones pendientes. Una
+ * agenda de taller no cambia cada segundo, y bajarlo multiplicaría las
+ * peticiones de todas las pantallas encendidas sin que nadie notara nada.
+ */
+const REFRESCO_AGENDA_MS = 60_000;
 
 export function useScheduledJobs({
   selectedWorkshopId,
@@ -182,6 +191,46 @@ export function useScheduledJobs({
       console.error("Error recargando agenda:", error);
     }
   }
+
+  /*
+   * La agenda se refresca sola, en todos los que la tengan abierta.
+   *
+   * El problema: la agenda se cargaba UNA vez al entrar. Quien la dejaba
+   * puesta en la pantalla del taller —que es lo normal— veía la foto del
+   * momento en que se abrió: las citas que daba de alta otro, las recepciones
+   * que llegaban del patio y las cancelaciones no aparecían hasta que alguien
+   * recargaba a mano. Con varias personas a la vez, eso es dos pantallas
+   * contando cosas distintas.
+   *
+   * Tres cautelas, y las tres importan:
+   *
+   *  1. `reloadScheduledJobsFromBackend` NO pisa cambios locales sin guardar:
+   *     mira `scheduledJobsDirtyRef` y se aparta. Sin eso, el refresco le
+   *     borraría a alguien una cita a medio editar.
+   *  2. Con la pestaña oculta no se pide nada. Veinte pestañas olvidadas en
+   *     segundo plano son veinte peticiones por minuto que no mira nadie.
+   *  3. Al volver a la pestaña se refresca EN EL ACTO, sin esperar al turno.
+   *     Es el momento en que la gente mira, y es lo que hace que parezca que
+   *     está al día en vez de tardar medio minuto en ponerse.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const alDia = () => {
+      if (document.visibilityState !== "visible") return;
+      void reloadScheduledJobsFromBackend();
+    };
+
+    const timer = window.setInterval(alDia, REFRESCO_AGENDA_MS);
+    document.addEventListener("visibilitychange", alDia);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", alDia);
+    };
+    // Se monta una vez: `reloadScheduledJobsFromBackend` se redefine en cada
+    // render y ponerla en las dependencias reiniciaría el intervalo sin parar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /** Devuelve true si la agenda quedó guardada en el servidor. */
   async function saveScheduledJobsToBackend(
