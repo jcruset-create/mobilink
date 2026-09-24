@@ -43,6 +43,7 @@ import * as repo from "./repository.ts";
 import { generarDocumentoRecepcion, limpio } from "./documentos/generar.ts";
 import { observacionesDelPdf } from "./documentos/observaciones.ts";
 import { lineasDelPdf } from "./documentos/lineas.ts";
+import { esAmasijo } from "./domain/lineasAlbaran.ts";
 import { avisarFaltaAlbaran, avisarRecepcion } from "./avisos.ts";
 import { avisoWhatsAppActivado, telefonoRecepcion } from "./config.ts";
 import { partirObservacion } from "./domain/observaciones.ts";
@@ -1453,6 +1454,9 @@ export type ResultadoRelecturaLineas = {
   lineasAntes: number;
   lineasAhora: number;
   sinPedido: number;
+  /** Líneas del pedido creadas y tiradas al arreglarlo con el papel. */
+  pedidoNuevas: number;
+  pedidoQuitadas: number;
   avisos: string[];
 };
 
@@ -1512,6 +1516,8 @@ export async function releerLineasDelOriginal(ctx: Contexto, albaranId: string):
     lineasAntes: 0,
     lineasAhora: 0,
     sinPedido: 0,
+    pedidoNuevas: 0,
+    pedidoQuitadas: 0,
     avisos: [],
   };
 
@@ -1528,19 +1534,64 @@ export async function releerLineasDelOriginal(ctx: Contexto, albaranId: string):
     await repo.recalcularLineasPedido(ctx.empresaId, albaran.pedidoId, c);
 
     const lineasPedido = await repo.lineasDePedido(ctx.empresaId, albaran.pedidoId, c, true);
+
+    /*
+     * El pedido arrastra el mismo amasijo, porque vino del mismo correo
+     * aplanado: una línea sola con media tabla dentro. Esa línea no describe
+     * nada que se pueda contar, así que se cambia por las del papel.
+     *
+     * Con dos condiciones, y las dos importan:
+     *
+     * - Que no se haya recibido NADA del pedido. Lo que alguien ya contó manda
+     *   sobre cualquier papel.
+     * - Que el pedido esté deducido o tenga alguna línea que sea un amasijo.
+     *   Un pedido de verdad y legible NO se toca: sus líneas las dijo su
+     *   correo, y que este albarán traiga sólo una parte es lo normal —una
+     *   expedición parcial—, no un error que arreglar.
+     */
+    const amasijos = lineasPedido.filter((p) => esAmasijo(p.descripcionProveedor));
+    const recibidoAlgo = (await repo.recepcionesDePedido(ctx.empresaId, albaran.pedidoId, c)).length > 0;
+    const arreglarPedido = !recibidoAlgo && (pedido.derivadoDeAlbaran || amasijos.length > 0);
+    // Las líneas legibles del pedido son las únicas a las que engancharse: a un
+    // amasijo no se engancha nada, que es lo que había que arreglar.
+    const legibles = arreglarPedido ? lineasPedido.filter((p) => !amasijos.some((a) => a.id === p.id)) : lineasPedido;
+
     const usadas = new Set<string>();
     const encaja = (l: { referencia: string | null; descripcion: string }) => {
       const porReferencia = l.referencia
-        ? lineasPedido.find((p) => !usadas.has(p.id) && p.referenciaProveedor && p.referenciaProveedor.trim() === l.referencia)
+        ? legibles.find((p) => !usadas.has(p.id) && p.referenciaProveedor && p.referenciaProveedor.trim() === l.referencia)
         : undefined;
       if (porReferencia) return porReferencia;
       const d = descripcionNormalizada(l.descripcion);
-      return lineasPedido.find((p) => !usadas.has(p.id) && descripcionNormalizada(p.descripcionProveedor) === d);
+      return legibles.find((p) => !usadas.has(p.id) && descripcionNormalizada(p.descripcionProveedor) === d);
     };
 
+    let siguienteLinea = lineasPedido.reduce((max, p) => Math.max(max, p.numeroLinea), 0);
     let n = 0;
     for (const l of lineas) {
-      const lineaPedido = encaja(l);
+      let lineaPedido = encaja(l);
+      if (!lineaPedido && arreglarPedido) {
+        // Lo que se sabe de lo pedido es lo que el papel dice que se ha
+        // expedido: es lo mismo que hace el módulo con un pedido deducido.
+        siguienteLinea += 1;
+        lineaPedido = await repo.crearPedidoLinea(
+          ctx.empresaId,
+          {
+            pedidoId: albaran.pedidoId,
+            numeroLinea: siguienteLinea,
+            referenciaProveedor: l.referencia,
+            descripcionProveedor: l.descripcion,
+            productoId: null,
+            productoTexto: null,
+            mapeoId: null,
+            cantidadPedida: l.cantidad,
+            precioUnitarioCentimos: l.precioCentimos,
+          },
+          c
+        );
+        legibles.push(lineaPedido);
+        resultado.pedidoNuevas += 1;
+      }
       if (lineaPedido) usadas.add(lineaPedido.id);
       else resultado.sinPedido += 1;
       n += 1;
@@ -1561,8 +1612,22 @@ export async function releerLineasDelOriginal(ctx: Contexto, albaranId: string):
     }
     resultado.lineasAhora = n;
 
+    // Y se tiran los amasijos, que ya no sostienen nada: ni expedido, ni
+    // recibido, ni un renglón de albarán apuntando a ellos.
+    if (arreglarPedido) {
+      for (const a of amasijos) {
+        if (usadas.has(a.id)) continue;
+        await repo.borrarLineaPedido(ctx.empresaId, a.id, c);
+        resultado.pedidoQuitadas += 1;
+      }
+    }
     const huerfanas = await repo.limpiarLineasHuerfanas(ctx.empresaId, albaran.pedidoId, c);
-    if (huerfanas > 0) resultado.avisos.push(`Se han quitado ${huerfanas} línea(s) del pedido deducido que ya no sostenía nada.`);
+    resultado.pedidoQuitadas += huerfanas;
+    if (resultado.pedidoNuevas > 0 || resultado.pedidoQuitadas > 0) {
+      resultado.avisos.push(
+        `El pedido ${pedido.numeroProveedor} también se ha arreglado con el papel: ${resultado.pedidoQuitadas} línea(s) fuera y ${resultado.pedidoNuevas} puesta(s). Lo pedido se da por lo expedido mientras no llegue otra cosa.`
+      );
+    }
     if (resultado.sinPedido > 0) {
       resultado.avisos.push(
         `${resultado.sinPedido} línea(s) del papel no encajan con ninguna del pedido ${pedido.numeroProveedor}: entran en el albarán igual, sin pedido detrás.`
@@ -1579,7 +1644,7 @@ export async function releerLineasDelOriginal(ctx: Contexto, albaranId: string):
         tipo: "LINEAS_RELEIDAS",
         usuarioId: ctx.userId,
         usuarioNombre: ctx.userNombre,
-        datos: { antes: resultado.lineasAntes, ahora: n, sinPedido: resultado.sinPedido, lineas },
+        datos: { antes: resultado.lineasAntes, ahora: n, sinPedido: resultado.sinPedido, pedidoNuevas: resultado.pedidoNuevas, pedidoQuitadas: resultado.pedidoQuitadas, lineas },
         descripcion:
           `Líneas del albarán ${albaran.numeroProveedor} releídas de su PDF: ${resultado.lineasAntes} → ${n}. ` +
           lineas.map((l) => `${l.cantidad}× ${l.descripcion}`).join(" · ") +

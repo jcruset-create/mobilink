@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lineasDeMercancia } from "./lineasAlbaran.ts";
+import { esAmasijo, lineasDeMercancia } from "./lineasAlbaran.ts";
 import type { FilaPdf } from "./observaciones.ts";
 
 const fila = (...palabras: string[]): FilaPdf => ({ palabras });
@@ -66,5 +66,28 @@ describe("lineasDeMercancia · la entrega de INSA", () => {
     expect(lineasDeMercancia(ENTREGA_INSA)).toEqual([
       { referencia: "021300001012", descripcion: "295/80X22.5 INSA TURBO K25 BASE 1ª", cantidad: 10, precioCentimos: 19000 },
     ]);
+  });
+});
+
+describe("esAmasijo · reconocer una tabla aplanada en una descripción", () => {
+  it("la línea que salió del correo aplanado lo es", () => {
+    expect(
+      esAmasijo(
+        "4.00 385/65R22.5 TORQUE TQ022 164K 211.28 2.00 385/65R22.5 HANKOOK TM11 160K 424.17 1.00 315/70R22.5 HANKOOK DL51 154L 439.37"
+      )
+    ).toBe(true);
+  });
+
+  it("un artículo de verdad no lo es, aunque su medida lleve un decimal", () => {
+    expect(esAmasijo("245/70X17.5 HANKOOK AH35 136M")).toBe(false);
+    expect(esAmasijo("315/80 R22.5 SAILUN SDR1 156L")).toBe(false);
+    expect(esAmasijo("13X22.5 INSA TURBO TDO-3 1ª OT.")).toBe(false);
+    expect(esAmasijo("")).toBe(false);
+  });
+
+  it("con UN importe dentro tampoco: hace falta que se haya tragado varias filas", () => {
+    // Una descripción con un precio pegado es rara, pero no es media tabla.
+    expect(esAmasijo("245/70X17.5 HANKOOK AH35 136M 248.45")).toBe(false);
+    expect(esAmasijo("245/70X17.5 HANKOOK AH35 136M 248.45 2.00 315/80X22.5 SAILUN 234.99")).toBe(true);
   });
 });

@@ -613,9 +613,48 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
       ]);
       // Ni el descuento ni la gestión de NFU son mercancía que contar.
       expect(JSON.stringify(ficha.body.lineas)).not.toMatch(/DTO|NFU/);
+
+      // Y el PEDIDO se arregla con el mismo papel: el amasijo fuera, y sus
+      // líneas de verdad dentro, con lo expedido por pedido mientras no se
+      // sepa otra cosa.
+      const fichaPedido = await api(`/pedidos/${pedido.pedido.id}`, gestorA);
+      expect(fichaPedido.body.lineas.map((l: any) => [l.descripcionProveedor, l.cantidadPedida, l.cantidadExpedida])).toEqual([
+        ["245/70X17.5 HANKOOK AH35 136M", 4, 4],
+        ["315/80X22.5 SAILUN SDR1 156L", 2, 2],
+      ]);
+      expect(JSON.stringify(fichaPedido.body.lineas)).not.toMatch(/211\.28|210,62|248\.45/);
+      // Las líneas del albarán quedan enganchadas a las del pedido.
+      expect(ficha.body.lineas.every((l: any) => l.cantidadPedida !== null)).toBe(true);
       // Y queda dicho en el histórico qué se ha hecho.
       expect(ficha.body.eventos.map((e: any) => e.tipo)).toContain("LINEAS_RELEIDAS");
       expect(ficha.body.eventos.find((e: any) => e.tipo === "LINEAS_RELEIDAS").descripcion).toMatch(/1 → 2/);
+    });
+
+    it("un pedido legible NO se toca: que el albarán traiga sólo una parte es lo normal", async () => {
+      const pedido = await crearPedido(4, {
+        lineas: [
+          { descripcionProveedor: "245/70X17.5 HANKOOK AH35 136M", cantidadPedida: 4, precioUnitarioCentimos: 24845 },
+          { descripcionProveedor: "OTRO NEUMATICO QUE NO VIENE EN ESTE ALBARAN", cantidadPedida: 6, precioUnitarioCentimos: 20000 },
+        ],
+      });
+      const r = await api(`/pedidos/${pedido.pedido.id}/albaranes`, gestorA, {
+        method: "POST",
+        body: { numeroProveedor: numeroUnico("20285"), fechaExpedicion: "2026-09-24", lineas: [{ pedidoLineaId: pedido.lineas[0].id, cantidadExpedida: 4 }] },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+      const albaran = r.body.albaranes[r.body.albaranes.length - 1];
+
+      await subirOriginal(albaran.id, await pdfConDosArticulos());
+
+      const fichaPedido = await api(`/pedidos/${pedido.pedido.id}`, gestorA);
+      // Las dos líneas del pedido siguen ahí: la que no viene en el albarán
+      // está pendiente de expedir, no sobra.
+      expect(fichaPedido.body.lineas).toHaveLength(2);
+      expect(fichaPedido.body.lineas.map((l: any) => l.descripcionProveedor)).toContain("OTRO NEUMATICO QUE NO VIENE EN ESTE ALBARAN");
+      // Y del albarán, la línea que el papel trae de más entra sin pedido.
+      const ficha = await api(`/albaranes/${albaran.id}`, gestorA);
+      expect(ficha.body.lineas).toHaveLength(2);
+      expect(ficha.body.lineas.filter((l: any) => l.cantidadPedida === null)).toHaveLength(1);
     });
 
     it("lo ya recibido no se reescribe nunca: para eso está la rectificación", async () => {
