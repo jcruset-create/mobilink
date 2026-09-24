@@ -1402,6 +1402,11 @@ export async function borrarLineasDeAlbaran(empresaId: string, albaranId: string
  * era más que el reflejo del albarán. En un pedido de verdad NO se toca nada:
  * sus líneas las dijo su propio correo.
  */
+/** Borra una línea de pedido concreta. La usa la relectura del papel. */
+export async function borrarLineaPedido(empresaId: string, lineaId: string, cliente: Ejecutor): Promise<void> {
+  await cliente.query(`DELETE FROM rcp_pedido_lineas WHERE empresa_id = $1 AND id = $2`, [empresaId, lineaId]);
+}
+
 export async function limpiarLineasHuerfanas(empresaId: string, pedidoId: string, cliente: Ejecutor): Promise<number> {
   const { rowCount } = await cliente.query(
     `DELETE FROM rcp_pedido_lineas l
