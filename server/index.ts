@@ -816,6 +816,20 @@ function normalizeNullableNumber(value: unknown) {
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 
+/**
+ * Un id opcional que llega del cliente: número, null o basura.
+ *
+ * Devuelve null salvo que sea un entero positivo de verdad. Hace falta porque
+ * el formulario manda cadena vacía al soltar el enlace, y `Number("")` es 0:
+ * un 0 en una columna con clave ajena no es «sin cliente», es «el cliente 0»,
+ * y revienta al insertar.
+ */
+function idOpcional(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 function normalizeRoadsideAssistanceRow(row: any) {
   return {
     id: Number(row.id),
@@ -871,6 +885,8 @@ function normalizeRoadsideAssistanceRow(row: any) {
     origen: row.origen === "central" ? "central" : "taller",
     expedienteCentral: row.expedienteCentral ?? null,
     solicitanteEmpresa: row.solicitanteEmpresa ?? null,
+    solicitanteClienteId: row.solicitanteClienteId != null ? Number(row.solicitanteClienteId) : null,
+    solicitanteContactoId: row.solicitanteContactoId != null ? Number(row.solicitanteContactoId) : null,
     solicitanteNombre: row.solicitanteNombre ?? null,
     solicitanteTelefono: row.solicitanteTelefono ?? null,
     solicitanteAutorizacion: row.solicitanteAutorizacion ?? null,
@@ -7888,12 +7904,17 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           "finishedAtMs",
           "arrivedAtWorkshopMs",
           "cancelledAtMs",
-          "updatedAtMs"
+          "updatedAtMs",
+          -- El enlace con la ficha del cliente. Va al final para no renumerar
+          -- treinta y tres parámetros por añadir dos.
+          "solicitanteClienteId",
+          "solicitanteContactoId"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
+          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33,
+          $34, $35
         )
         RETURNING *
       `,
@@ -7931,6 +7952,8 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         timestampField === "arrivedAtWorkshopMs" ? now : null,
         timestampField === "cancelledAtMs" ? now : null,
         now,
+        idOpcional(body.solicitanteClienteId),
+        idOpcional(body.solicitanteContactoId),
       ]
     );
 
@@ -8080,6 +8103,12 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
           "solicitanteNombre" = COALESCE($23, "solicitanteNombre"),
           "solicitanteTelefono" = COALESCE($24, "solicitanteTelefono"),
           "solicitanteAutorizacion" = COALESCE($25, "solicitanteAutorizacion"),
+          -- Sin COALESCE y con su propio testigo: aquí «no enviado» y «quítalo»
+          -- tienen que poder distinguirse. Soltar el enlace es una acción del
+          -- operador —el botón ✕ de la ficha—, y con COALESCE sería imposible:
+          -- un null se leería siempre como «no me lo mandes en cuenta».
+          "solicitanteClienteId" = CASE WHEN $26 THEN $27 ELSE "solicitanteClienteId" END,
+          "solicitanteContactoId" = CASE WHEN $26 THEN $28 ELSE "solicitanteContactoId" END,
           "updatedAtMs" = $17
           ${
             timestampField
@@ -8117,6 +8146,10 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         body.solicitanteNombre != null ? String(body.solicitanteNombre).trim() : null,
         body.solicitanteTelefono != null ? String(body.solicitanteTelefono).trim() : null,
         body.solicitanteAutorizacion != null ? String(body.solicitanteAutorizacion).trim() : null,
+        // ¿Viene el enlace en esta petición? Si no viene, no se toca.
+        Object.prototype.hasOwnProperty.call(body, "solicitanteClienteId"),
+        idOpcional(body.solicitanteClienteId),
+        idOpcional(body.solicitanteContactoId),
       ]
     );
 
@@ -10589,6 +10622,70 @@ async function guardarSnapshotSubcontrata(assistanceId: number) {
     console.error("snapshot de subcontratación:", e?.message);
   }
 }
+
+/* ── Clientes frecuentes: el buscador del alta de asistencia ── */
+
+/**
+ * Busca clientes para el autocompletado del formulario de nueva asistencia.
+ *
+ * ¿Por qué no vale `/api/clientes-facturacion`? Porque devuelve la ficha
+ * fiscal entera —condiciones de pago, series, centro de coste— ordenada por
+ * nombre, y aquí hacen falta tres cosas que no tiene: los CONTACTOS de cada
+ * uno, el número de VECES que ha pedido servicio, y poco peso, porque esto se
+ * dispara mientras alguien teclea.
+ *
+ * Todo en una consulta. Con una llamada por cliente para traer sus contactos,
+ * escribir «Enca» dispararía media docena de peticiones más.
+ *
+ * El orden es lo que lo convierte en «frecuentes»: primero quien más veces ha
+ * llamado. Aviso honesto: ese contador sale de las asistencias ya ENLAZADAS,
+ * así que al principio es cero para todos y la lista sale por nombre; se
+ * ordena sola a medida que se usa.
+ */
+app.get("/api/clientes-frecuentes", requireSupervisorRole, async (req, res) => {
+  try {
+    const q = String(req.query.q ?? "").trim();
+    const r = await db.query(
+      `SELECT c.id, c.name, c."taxId", c.city, c."contactPhone",
+              COALESCE(uso.veces, 0) AS veces,
+              m.external_code AS "erpCode",
+              COALESCE(cont.lista, '[]'::json) AS contactos
+         FROM connect_clients c
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::int AS veces
+             FROM roadside_assistances ra
+            WHERE ra."solicitanteClienteId" = c.id
+         ) uso ON true
+         LEFT JOIN LATERAL (
+           SELECT * FROM integration_mappings im
+            WHERE im.entity_type = 'customer' AND im.mobilink_id = c.id::text
+            ORDER BY im.updated_at_ms DESC LIMIT 1
+         ) m ON true
+         LEFT JOIN LATERAL (
+           SELECT json_agg(
+                    json_build_object(
+                      'id', k.id, 'name', k.name, 'surname', k.surname,
+                      'phone', k.phone, 'mobile', k.mobile, 'isPrimary', k."isPrimary"
+                    ) ORDER BY k."isPrimary" DESC, k.name
+                  ) AS lista
+             FROM connect_workshop_contacts k
+            WHERE k."ownerType" = 'client' AND k."ownerId" = c.id AND k.active
+         ) cont ON true
+        WHERE c.active
+          AND ($1 = '' OR c.name ILIKE '%' || $1 || '%'
+                       OR c."legalName" ILIKE '%' || $1 || '%'
+                       OR c."commercialName" ILIKE '%' || $1 || '%'
+                       OR c."taxId" ILIKE '%' || $1 || '%')
+        ORDER BY veces DESC, c.name
+        LIMIT 8`,
+      [q],
+    );
+    res.json({ data: r.rows });
+  } catch (e: any) {
+    console.error("GET /api/clientes-frecuentes error:", e?.message);
+    res.status(500).json({ error: "Error buscando clientes" });
+  }
+});
 
 /* ── Contactos: cuelgan de un taller, un proveedor o un cliente ── */
 
