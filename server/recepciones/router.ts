@@ -618,6 +618,38 @@ export function createRecepcionesRouter(): Router {
     })
   );
 
+  /**
+   * Subir a mano el PDF del albarán de un correo que se quedó a medias.
+   *
+   * Es la salida de la incidencia «el pedido no existe y el albarán no trae
+   * líneas legibles con las que deducirlo»: el correo no dice qué trae, el
+   * pedido todavía no ha llegado, y sin una de las dos cosas no hay albarán.
+   * Con el papel delante sí: de él salen las líneas, y con ellas se deduce el
+   * pedido y entra el albarán.
+   *
+   * El PDF se guarda colgado del correo, así que si hace falta reprocesar otra
+   * vez ya está en casa.
+   */
+  r.post(
+    "/correo/:id/albaran-pdf",
+    exigirPermiso("recepciones.correo.importar"),
+    (req, res, next) =>
+      subidaPdf.single("documento")(req, res, (e) => {
+        if (e) return res.status(400).json({ error: "No se ha podido leer el fichero (máx. 15 MB).", code: "FICHERO_INVALIDO" });
+        next();
+      }),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const correoId = String(req.params.id);
+      const f = req.file;
+      if (!f?.buffer?.length) throw new ErrorRecepciones("SIN_FICHERO", "Falta el PDF del albarán (campo «documento»).");
+      if (f.buffer.subarray(0, 5).toString() !== "%PDF-") throw new ErrorRecepciones("NO_ES_PDF", "El albarán tiene que ser un PDF.");
+      const r = await ingesta.reprocesar({ empresaId: ctx.empresaId }, correoId, [{ nombre: f.originalname || "albaran.pdf", contenido: f.buffer }]);
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.correo.albaran_pdf", entidad: "rcp_correos", entidadId: r.correoId, detalle: r, ip: req.ip });
+      res.json(r);
+    })
+  );
+
   /* ── Recepciones ───────────────────────────────────────────────────────── */
 
   r.get(
