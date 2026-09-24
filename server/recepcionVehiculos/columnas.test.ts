@@ -132,23 +132,40 @@ describe("el router solo nombra columnas que existen", () => {
 describe("el id del trabajo cabe en jobs.id", () => {
   const router = readFileSync(RUTA_ROUTER, "utf8");
   const db = readFileSync(RUTA_DB, "utf8");
+  const regla = readFileSync(
+    new URL("../core/idDeTrabajo.ts", import.meta.url).pathname,
+    "utf8"
+  );
+  const index = readFileSync(new URL("../index.ts", import.meta.url).pathname, "utf8");
 
   it("jobs.id sigue siendo de cuatro bytes, que es de donde viene el límite", () => {
     const creacion = db.slice(db.indexOf("CREATE TABLE IF NOT EXISTS jobs"));
     const tipoDelId = creacion.slice(0, creacion.indexOf(",")).toUpperCase();
     // Si algún día pasa a BIGINT este test falla, y está bien que falle:
-    // querrá decir que hay que volver aquí y releer el comentario del router
-    // antes de dar por buena cualquier otra forma de numerar.
+    // querrá decir que hay que volver aquí y releer el porqué antes de dar por
+    // buena cualquier otra forma de numerar.
     expect(tipoDelId).toContain("SERIAL");
   });
 
-  it("la conversión no numera el trabajo con el reloj", () => {
+  it("la regla de numerar le pregunta a la base", () => {
+    expect(regla).toContain("COALESCE(MAX(id), 0) + 1");
+  });
+
+  it("ningún alta de trabajo numera con el reloj", () => {
+    // Los DOS sitios que dan de alta trabajos, porque el fallo estaba en los
+    // dos: la conversión de una recepción y el alta desde la APK.
     const conversion = router.slice(
       router.indexOf('"/recepcion-vehiculos/:id/convertir"'),
       router.indexOf('"/recepcion-vehiculos/:id/descartar"')
     );
+    // `Date.now()` para las marcas de tiempo está bien y se usa; lo que no
+    // puede volver es que de ahí salga el ID.
     expect(conversion).not.toContain("jobId = Date.now()");
-    // Se numera preguntándole a la base, no al navegador ni al reloj.
-    expect(conversion).toContain("COALESCE(MAX(id), 0) + 1");
+
+    const altaApk = index.slice(
+      index.indexOf('app.post("/api/taller-operator/jobs"'),
+      index.indexOf('app.put("/api/taller-operator/jobs/:id/assign"')
+    );
+    expect(altaApk).not.toContain("const id = Date.now()");
   });
 });

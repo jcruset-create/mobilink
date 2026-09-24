@@ -115,6 +115,11 @@ import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
+import {
+  esClaveDuplicada,
+  INTENTOS_DE_ID,
+  siguienteIdDeTrabajo,
+} from "./core/idDeTrabajo.ts";
 
 /*
  * El cliente vive ahora en `core/twilio.ts`, para que lo pueda usar también el
@@ -3384,29 +3389,55 @@ app.post("/api/taller-operator/jobs", requireTallerOperator, async (req, res) =>
       ? body.assignedNames.map((n: unknown) => String(n || "").trim()).filter(Boolean)
       : [];
 
-    const id = Date.now();
+    /*
+     * El id NO es el reloj, aunque aquí se usara para las dos cosas.
+     *
+     * `id` valía también como `createdAtMs`, que es de donde venía la
+     * tentación. Pero `jobs.id` es SERIAL —INTEGER de cuatro bytes— y un
+     * `Date.now()` no cabe: Postgres lo rechaza con «integer out of range» y
+     * el alta desde la APK se cae con un 500 genérico.
+     *
+     * Son dos datos distintos y ahora se calculan por separado: el id se lo
+     * pregunta a la tabla (`server/core/idDeTrabajo.ts`, con el porqué) y la
+     * hora de creación sigue siendo el reloj, que es lo que es.
+     */
+    const creadoAtMs = Date.now();
     const workshopId = String(body.workshopId ?? "").trim() || null;
-    const result = await db.query(
-      `INSERT INTO jobs (
-         id, area, plate, urgent, status, "assignedNames", reason,
-         "customerName", "customerPhone", "createdAtMs",
-         "workedAccumulatedMinutes", "pausedAccumulatedMinutes", "workshopId"
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11)
-       RETURNING *`,
-      [
-        id,
-        String(body.area ?? "mecanica"),
-        plate,
-        !!body.urgent,
-        "espera",
-        JSON.stringify(assignedNames),
-        String(body.reason ?? "").trim(),
-        String(body.customerName ?? "").trim(),
-        String(body.customerPhone ?? "").trim(),
-        id,
-        workshopId,
-      ]
-    );
+
+    let result: any = null;
+    for (let intento = 1; ; intento++) {
+      const id = await siguienteIdDeTrabajo(db);
+      try {
+        result = await db.query(
+          `INSERT INTO jobs (
+             id, area, plate, urgent, status, "assignedNames", reason,
+             "customerName", "customerPhone", "createdAtMs",
+             "workedAccumulatedMinutes", "pausedAccumulatedMinutes", "workshopId"
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11)
+           RETURNING *`,
+          [
+            id,
+            String(body.area ?? "mecanica"),
+            plate,
+            !!body.urgent,
+            "espera",
+            JSON.stringify(assignedNames),
+            String(body.reason ?? "").trim(),
+            String(body.customerName ?? "").trim(),
+            String(body.customerPhone ?? "").trim(),
+            creadoAtMs,
+            workshopId,
+          ]
+        );
+        break;
+      } catch (e) {
+        // Dos tablets dando de alta a la vez leen el mismo máximo. Se repite
+        // con el siguiente número, y SOLO ante clave duplicada: repetir un
+        // error de tipo o de columna no lo arregla.
+        if (!esClaveDuplicada(e) || intento >= INTENTOS_DE_ID) throw e;
+      }
+    }
+
     const creado = normalizeJobRow(result.rows[0]);
     await guardarIdempotencia(req, creado);
     res.json(creado);

@@ -27,6 +27,11 @@ import { pedirIA } from "../core/openaiService.ts";
 import { normalizarMatricula, patronBusquedaMatricula } from "../tyrecontrol/matricula.ts";
 import { normalizeRecepcionRow } from "./normaliza.ts";
 import {
+  esClaveDuplicada,
+  INTENTOS_DE_ID,
+  siguienteIdDeTrabajo,
+} from "../core/idDeTrabajo.ts";
+import {
   citasParaRecibir,
   idsDeCitasYaRecibidas,
   kilometrosDeTextoIA,
@@ -688,10 +693,9 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
        * a ver, que es lo que fallaba al principio. Y vale igual si algún día
        * la columna pasa a BIGINT.
        */
-      const siguienteId = async (): Promise<number> => {
-        const r = await cliente.query(`SELECT COALESCE(MAX(id), 0) + 1 AS id FROM jobs`);
-        return Number(r.rows[0]?.id ?? 1);
-      };
+      // La regla vive en `server/core/idDeTrabajo.ts`, con el porqué. Aquí
+      // solo se usa, que es lo que evita que vuelva a divergir entre los dos
+      // sitios que dan de alta trabajos.
       // El trabajo nace en validacion: es una propuesta, y una propuesta la
       // autoriza una persona en la pantalla de siempre.
       if (String(job.status) !== "validacion") {
@@ -725,10 +729,9 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
        * fallo sube tal cual: repetir un error de columna o de tipo no lo
        * arregla, solo lo esconde tres veces.
        */
-      const INTENTOS = 3;
       let jobId = 0;
       for (let intento = 1; ; intento++) {
-        jobId = await siguienteId();
+        jobId = await siguienteIdDeTrabajo(cliente);
         try {
           await cliente.query(`SAVEPOINT alta_trabajo`);
           await cliente.query(
@@ -770,7 +773,7 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           // ni el reintento: en Postgres, un error dentro de una transacción
           // la invalida entera hasta el ROLLBACK.
           await cliente.query(`ROLLBACK TO SAVEPOINT alta_trabajo`);
-          if ((e as any)?.code !== "23505" || intento >= INTENTOS) throw e;
+          if (!esClaveDuplicada(e) || intento >= INTENTOS_DE_ID) throw e;
         }
       }
 
