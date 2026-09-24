@@ -39,6 +39,31 @@ export type LineaPdf = {
   precioCentimos: number | null;
 };
 
+/**
+ * Un importe suelto: «211.28», «1.054,80». Una medida de neumático no lo es
+ * —«315/80X22.5» lleva UN decimal, no dos—, y por eso sirve para distinguir.
+ */
+const IMPORTE = /\d+[.,]\d{2}(?!\d)/g;
+
+/** Cuántos importes hacen de una descripción un amasijo y no un artículo. */
+const IMPORTES_DE_UN_AMASIJO = 2;
+
+/**
+ * ¿Esta descripción es en realidad una tabla entera aplanada?
+ *
+ *     «4.00 385/65R22.5 TORQUE TQ022 164K 211.28 2.00 385/65R22.5 HANKOOK
+ *      TM11 160K 424.17 1.00 315/70R22.5 HANKOOK DL51 154L 439.37 …»
+ *
+ * Se reconoce por los importes: un artículo no lleva ninguno dentro de su
+ * nombre, y este lleva uno por cada fila que se ha tragado. Con dos basta.
+ *
+ * Hace falta para saber si la línea de un pedido se puede tirar sin perder
+ * nada: una línea así no describe nada que se pueda contar en el muelle.
+ */
+export function esAmasijo(descripcion: string): boolean {
+  return (descripcion.match(IMPORTE) ?? []).length >= IMPORTES_DE_UN_AMASIJO;
+}
+
 /** «0107091840003»: la referencia del artículo, delante de la descripción. */
 const REFERENCIA = /^\d{9,}$/;
 
