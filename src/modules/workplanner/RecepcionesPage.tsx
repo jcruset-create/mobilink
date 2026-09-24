@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CarFront, Check, Loader2, RefreshCw, ScanLine, X } from "lucide-react";
+import { CarFront, Check, CheckCheck, Loader2, RefreshCw, ScanLine, X } from "lucide-react";
 
 import { allocateJobPure } from "../assignment";
 import { buildTechLoadStats, buildTechStats } from "../workshopReports";
@@ -144,11 +144,28 @@ export default function RecepcionesPage() {
     };
   }, [actual, jobs, techs, plantillasDelTaller]);
 
-  async function convertir() {
+  /**
+   * Convierte la recepción en trabajo.
+   *
+   * `yaHecho` es para lo que se resuelve en el patio mientras el coche está
+   * delante —una lectura de tacógrafo, un cambio de bombilla—: el trabajo nace
+   * cerrado en vez de entrar en la cola para salir de ella acto seguido. Queda
+   * registrado igual, que es de lo que se trata.
+   */
+  async function convertir(yaHecho = false) {
     if (!actual || !propuesta) return;
     const falta = loQueFaltaParaConvertir(actual);
     if (falta.length > 0) {
       setError(`Antes de convertir hay que decidir ${falta.join(", ")}.`);
+      return;
+    }
+    if (
+      yaHecho &&
+      !window.confirm(
+        `${actual.matricula}: se va a dar por REALIZADO y no pasará por la cola. ` +
+          `Esto no se deshace desde aquí. ¿Seguir?`
+      )
+    ) {
       return;
     }
 
@@ -157,19 +174,36 @@ export default function RecepcionesPage() {
     try {
       const job: Job = {
         ...propuesta.job,
-        status: "validacion",
-        reason: [propuesta.job.reason, propuesta.porQue].filter(Boolean).join(" "),
+        status: yaHecho ? "cerrado" : "validacion",
+        /*
+         * Un trabajo ya hecho NO lleva el técnico que propone el motor.
+         *
+         * El motor propone a alguien porque está libre —«se propone a José
+         * porque no tiene ningún trabajo abierto»—, que es una respuesta a
+         * «quién debería hacerlo». En algo que ya está hecho la pregunta es
+         * otra, «quién lo hizo», y eso el motor no lo sabe. Apuntárselo al que
+         * estaba libre le sumaría en el ranking un trabajo que no ha tocado.
+         *
+         * Se deja sin técnico, que es la verdad, y quien quiera ponerle nombre
+         * lo edita en el trabajo.
+         */
+        assignedNames: yaHecho ? [] : propuesta.job.assignedNames,
+        reason: [propuesta.job.reason, yaHecho ? "" : propuesta.porQue]
+          .filter(Boolean)
+          .join(" "),
       };
       await api(`/api/recepcion-vehiculos/${actual.id}/convertir`, {
         method: "POST",
         body: JSON.stringify(job),
       });
       setAviso(
-        `${job.plate} · ${job.quickEntryLabel} → ` +
-          (job.assignedNames?.length
-            ? job.assignedNames.join(" + ")
-            : "sin técnico libre") +
-          ". Pendiente de validar."
+        yaHecho
+          ? `${job.plate} · ${job.quickEntryLabel} → realizado y cerrado.`
+          : `${job.plate} · ${job.quickEntryLabel} → ` +
+            (job.assignedNames?.length
+              ? job.assignedNames.join(" + ")
+              : "sin técnico libre") +
+            ". Pendiente de validar."
       );
       setSeleccionada(null);
       await cargar();
@@ -423,6 +457,21 @@ export default function RecepcionesPage() {
                           <Check className="h-4 w-4" />
                         )}
                         Convertir en trabajo
+                      </button>
+                      {/*
+                        Realizado: lo que ya se ha hecho en el patio. No pasa
+                        por la cola porque no hay nada que encolar — se
+                        registra y se cierra.
+                      */}
+                      <button
+                        type="button"
+                        onClick={() => void convertir(true)}
+                        disabled={guardando}
+                        title="El trabajo se registra ya cerrado, sin pasar por la cola"
+                        className="flex items-center gap-2 rounded-lg border border-emerald-700 bg-emerald-950/40 px-4 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-50"
+                      >
+                        <CheckCheck className="h-4 w-4" />
+                        Realizado
                       </button>
                       <button
                         type="button"
