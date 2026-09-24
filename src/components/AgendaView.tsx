@@ -1,6 +1,11 @@
 import { apiFetch } from "../modules/apiFetch";
 import { useRecepcionesPendientes } from "../modules/useRecepcionesPendientes";
-import { horaDeRecepcion, recepcionesDelDia } from "../modules/recepcionVehiculo";
+import {
+  esperaLegible,
+  horaDeRecepcion,
+  minutosEsperando,
+  recepcionesQueSiguenEsperando,
+} from "../modules/recepcionVehiculo";
 import { useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
@@ -2245,21 +2250,26 @@ appendLog(
                 : [];
 
               /*
-               * Recepciones del patio, pintadas a la HORA EN QUE LLEGARON.
+               * Recepciones del patio, pintadas en la LÍNEA DE AHORA.
                *
-               * A diferencia de la cola —que no tiene hora y por eso se pinta
-               * en la línea de ahora— una recepción sí la tiene: es cuando el
-               * operario la mandó desde el patio. Ponerla en su hora es lo que
-               * la hace útil al lado de las citas.
+               * No en la hora en que llegaron, que es como estaban: una
+               * recepción pendiente no es un apunte de lo que pasó, es trabajo
+               * por hacer. Anclada a su hora se quedaba quieta mientras el día
+               * avanzaba, y a media tarde había coches esperando en el patio
+               * dibujados a las nueve de la mañana, entre citas ya terminadas,
+               * donde no los miraba nadie.
+               *
+               * Así que van donde va el trabajo pendiente —con la cola, en la
+               * hora actual— y avanzan con el reloj hasta que alguien las
+               * valida. `currentClock` late cada segundo, así que se mueven
+               * solas sin pedirle nada al servidor.
                */
-              const virtualRecepciones = recepcionesDelDia(
+              const virtualRecepciones = recepcionesQueSiguenEsperando(
                 recepcionesPendientes,
-                day.date
+                day.date,
+                todayKey
               ).map((r) => {
-                const hora = horaDeRecepcion(r.creadaAtMs);
-                // Si llegó antes de que empiece el día pintado, se ancla al
-                // principio en vez de quedarse fuera de la rejilla.
-                const inicio = Math.max(timeToMinutes(hora), dayStart);
+                const inicio = Math.max(timeToMinutes(nowTimeStr), dayStart);
                 return {
                   id: -Math.abs(r.id) - 1_000_000, // fuera del rango de la cola
                   workshopId: r.workshopId ?? null,
@@ -2267,7 +2277,10 @@ appendLog(
                   plate: r.matricula,
                   _recepcionRef: r,
                   startTime: minutesToTime(inicio),
-                  endTime: minutesToTime(Math.min(inicio + 30, getDayEnd(day.index))),
+                  // Hasta el final del día, igual que la cola: así el reparto
+                  // en columnas las agrupa con las citas que se ven a la vez
+                  // en lugar de dejarlas encima.
+                  endTime: endOfDayStr,
                 };
               });
 
@@ -2376,7 +2389,13 @@ appendLog(
                     if ((job as any)._recepcionRef) {
                       const r = (job as any)._recepcionRef;
                       const hora = horaDeRecepcion(r.creadaAtMs);
-                      const inicio = Math.max(timeToMinutes(hora), dayStart);
+                      // Lo que lleva esperando en el patio. Es el dato que
+                      // decide si hay que correr, y el que se perdía al
+                      // quedarse la tarjeta clavada en su hora de llegada.
+                      const espera = esperaLegible(
+                        minutosEsperando(r.creadaAtMs, currentClock.getTime())
+                      );
+                      const inicio = Math.max(timeToMinutes(job.startTime), dayStart);
                       const top = ((inicio - dayStart) / SLOT_MINUTES) * SLOT_HEIGHT;
                       const width = 100 / columns;
                       const left = column * width;
@@ -2386,7 +2405,7 @@ appendLog(
                           key={`recepcion-${r.id}`}
                           title={`🚗 Recibido en el patio · ${r.matricula}${
                             r.clienteNombre ? ` · ${r.clienteNombre}` : ""
-                          }\nRecibido por ${r.operarioNombre} a las ${hora}\nPendiente de validar`}
+                          }\nRecibido por ${r.operarioNombre} a las ${hora}\nEsperando desde hace ${espera}\nPendiente de validar`}
                           className="absolute z-40 cursor-default overflow-hidden rounded-xl border-2 border-dashed border-amber-400 bg-amber-500/20 p-2 text-sm font-semibold text-amber-100 shadow-md"
                           style={{
                             top,
@@ -2405,7 +2424,7 @@ appendLog(
                           </div>
                           <div className="truncate">{r.matricula}</div>
                           <div className="text-xs font-normal opacity-90">
-                            🚗 {hora} · {r.operarioNombre}
+                            🚗 {hora} · esperando {espera}
                           </div>
                           {r.kilometros ? (
                             <div className="truncate text-xs font-normal opacity-90">
