@@ -33,9 +33,9 @@ import * as repo from "./repository.ts";
 import * as servicio from "./service.ts";
 import * as buzon from "./buzon.ts";
 import * as ingesta from "./ingesta.ts";
-import { CLAVES, asumirExpedicionCompleta, avisoWhatsAppActivado, guardarTextoConfig, leerTextoConfig } from "./config.ts";
-import { contentSidAviso } from "./avisos.ts";
-import { cuerpoPlantilla } from "./domain/aviso.ts";
+import { CLAVES, asumirExpedicionCompleta, avisoWhatsAppActivado, guardarTextoConfig, leerTextoConfig, telefonoRecepcion } from "./config.ts";
+import { contentSidAviso, contentSidFaltaAlbaran } from "./avisos.ts";
+import { cuerpoPlantilla, cuerpoPlantillaFaltaAlbaran } from "./domain/aviso.ts";
 import { hayCredencialesTwilio } from "../core/twilio.ts";
 import { hashDeFichero, leerDocumento } from "./storage.ts";
 import { leerDescripcion } from "./domain/articulos.ts";
@@ -463,6 +463,21 @@ export function createRecepcionesRouter(): Router {
     })
   );
 
+  /**
+   * Vuelve a escribir las líneas del albarán con las que dice su PDF. Es lo
+   * que arregla un albarán que entró por un correo con la tabla aplanada.
+   */
+  r.post(
+    "/albaranes/:id/lineas/releer",
+    exigirPermiso("recepciones.albaran.create"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const r = await servicio.releerLineasDelOriginal(ctx, String(req.params.id));
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.albaran.lineas_releidas", entidad: "rcp_albaranes", entidadId: r.albaranId, detalle: r, ip: req.ip });
+      res.json(r);
+    })
+  );
+
   /** Descarga (o reintenta) el PDF original desde el enlace del correo del proveedor. */
   r.post(
     "/albaranes/:id/original/descargar",
@@ -723,13 +738,19 @@ export function createRecepcionesRouter(): Router {
     exigirPermiso("recepciones.view"),
     ruta(async (req, res) => {
       const ctx = contextoDe(req);
-      const [activado, empresaNombre, avisos] = await Promise.all([
+      const [activado, empresaNombre, avisos, telefono] = await Promise.all([
         avisoWhatsAppActivado(ctx.empresaId),
         repo.nombreEmpresa(ctx.empresaId),
         repo.listarAvisos(ctx.empresaId),
+        telefonoRecepcion(ctx.empresaId),
       ]);
       res.json({
         activado,
+        // El móvil de recepción: tenerlo puesto ES el interruptor del aviso de
+        // que ha entrado un albarán sin su PDF.
+        telefonoRecepcion: telefono,
+        plantillaFaltaAlbaran: contentSidFaltaAlbaran() !== "",
+        cuerpoPlantillaFaltaAlbaran: cuerpoPlantillaFaltaAlbaran(empresaNombre ?? "Recepciones"),
         // Ni el SID ni las credenciales salen de aquí: sólo si están puestos.
         credenciales: hayCredencialesTwilio(),
         plantilla: contentSidAviso() !== "",
@@ -748,10 +769,19 @@ export function createRecepcionesRouter(): Router {
     ruta(async (req, res) => {
       const ctx = contextoDe(req);
       const b = (req.body ?? {}) as Record<string, unknown>;
-      if (typeof b.activado !== "boolean") throw new ErrorRecepciones("ACTIVADO_INVALIDO", "Indica si el aviso queda encendido o apagado.");
-      await guardarTextoConfig(ctx.empresaId, CLAVES.avisoWhatsApp, b.activado ? "1" : "0");
-      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.avisos.config", entidad: "rcp_config", detalle: { activado: b.activado }, ip: req.ip });
-      res.json({ activado: await avisoWhatsAppActivado(ctx.empresaId) });
+      if (b.activado !== undefined) {
+        if (typeof b.activado !== "boolean") throw new ErrorRecepciones("ACTIVADO_INVALIDO", "Indica si el aviso queda encendido o apagado.");
+        await guardarTextoConfig(ctx.empresaId, CLAVES.avisoWhatsApp, b.activado ? "1" : "0");
+      }
+      if (b.telefonoRecepcion !== undefined) {
+        const crudo = texto(b.telefonoRecepcion).replace(/\D/g, "");
+        if (crudo && !/^[67]\d{8}$/.test(crudo)) {
+          throw new ErrorRecepciones("TELEFONO_INVALIDO", "El teléfono de recepción tiene que ser un móvil español de nueve cifras (6… o 7…).");
+        }
+        await guardarTextoConfig(ctx.empresaId, CLAVES.telefonoRecepcion, crudo);
+      }
+      void registrarAuditoria({ empresaId: ctx.empresaId, userId: ctx.userId, accion: "recepciones.avisos.config", entidad: "rcp_config", detalle: b, ip: req.ip });
+      res.json({ activado: await avisoWhatsAppActivado(ctx.empresaId), telefonoRecepcion: await telefonoRecepcion(ctx.empresaId) });
     })
   );
 

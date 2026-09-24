@@ -601,6 +601,10 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
       });
       const albaran = ficha.albaranes.find((x) => x.numeroNormalizado === albaranNormalizado)!;
       const avisoPdf = await adjuntarOriginalSiFalta(ctxSistema, albaran.id, adjuntos, a.enlacesPdf);
+      // Sin el papel, el albarán entra pero se queda a medias: no se sabe para
+      // quién viene ni se puede sellar al recibir. Se avisa a recepción para
+      // que lo suba a mano, en vez de esperar a que alguien mire la bandeja.
+      if (avisoPdf) await servicio.avisarDeAlbaranSinPdf(ctxSistema, albaran.id);
       const nota = deducido ? `El pedido ${pedido.numeroProveedor} no existía: se ha deducido de este albarán y las cantidades pedidas son provisionales.` : null;
       return terminar(
         {

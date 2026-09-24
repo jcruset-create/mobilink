@@ -545,7 +545,10 @@ export async function actualizarProveedor(
 
 export type Aviso = {
   id: string;
-  recepcionId: string;
+  /** «MATERIAL_RECIBIDO» o «FALTA_ALBARAN». */
+  tipo: string;
+  /** Nulo en el aviso de que falta el PDF: ahí todavía no hay recepción. */
+  recepcionId: string | null;
   albaranId: string;
   recepcionNumero: string;
   albaranNumero: string;
@@ -562,7 +565,8 @@ export type Aviso = {
 /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
 const aAviso = (r: any): Aviso => ({
   id: r.id,
-  recepcionId: r.recepcion_id,
+  tipo: r.tipo ?? "MATERIAL_RECIBIDO",
+  recepcionId: r.recepcion_id ?? null,
   albaranId: r.albaran_id,
   recepcionNumero: r.recepcion_numero ?? "",
   albaranNumero: r.albaran_numero ?? "",
@@ -579,7 +583,8 @@ const aAviso = (r: any): Aviso => ({
 export async function anotarAviso(
   empresaId: string,
   datos: {
-    recepcionId: string;
+    tipo?: "MATERIAL_RECIBIDO" | "FALTA_ALBARAN";
+    recepcionId: string | null;
     albaranId: string;
     destinatario: string | null;
     telefono: string | null;
@@ -593,8 +598,8 @@ export async function anotarAviso(
 ): Promise<void> {
   await db(ejecutor).query(
     `INSERT INTO rcp_avisos
-       (empresa_id, recepcion_id, albaran_id, destinatario, telefono, estado, motivo, referencia_externa, creado_por, creado_nombre)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+       (empresa_id, recepcion_id, albaran_id, destinatario, telefono, estado, motivo, referencia_externa, creado_por, creado_nombre, tipo)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [
       empresaId,
       datos.recepcionId,
@@ -606,6 +611,7 @@ export async function anotarAviso(
       datos.referenciaExterna,
       datos.creadoPor,
       datos.creadoNombre,
+      datos.tipo ?? "MATERIAL_RECIBIDO",
     ]
   );
 }
@@ -614,7 +620,7 @@ export async function listarAvisos(empresaId: string, limite = 50, ejecutor?: Ej
   const { rows } = await db(ejecutor).query(
     `SELECT v.*, r.numero AS recepcion_numero, a.numero_proveedor AS albaran_numero
        FROM rcp_avisos v
-       JOIN rcp_recepciones r ON r.id = v.recepcion_id
+       LEFT JOIN rcp_recepciones r ON r.id = v.recepcion_id
        JOIN rcp_albaranes a ON a.id = v.albaran_id
       WHERE v.empresa_id = $1
       ORDER BY v.created_at DESC
@@ -1374,6 +1380,38 @@ export async function crearAlbaranLinea(
     ]
   );
   return aAlbaranLinea(rows[0]);
+}
+
+/**
+ * Borra las líneas de un albarán. Sólo se puede cuando no cuelga nada de
+ * ellas: una recepción o una incidencia las referencian, y la base lo
+ * impediría —que es lo que se quiere—. El servicio comprueba antes que el
+ * albarán no tenga recepciones.
+ */
+export async function borrarLineasDeAlbaran(empresaId: string, albaranId: string, cliente: Ejecutor): Promise<number> {
+  const { rowCount } = await cliente.query(`DELETE FROM rcp_albaran_lineas WHERE empresa_id = $1 AND albaran_id = $2`, [empresaId, albaranId]);
+  return rowCount ?? 0;
+}
+
+/**
+ * Quita las líneas de un pedido DEDUCIDO que se han quedado sin nada detrás:
+ * ni expedido, ni recibido, ni un solo renglón de albarán apuntando a ellas.
+ *
+ * Es la limpieza de releer un albarán del PDF: la línea que el correo dedujo
+ * mal deja de tener quien la sostenga, y en un pedido deducido esa línea no
+ * era más que el reflejo del albarán. En un pedido de verdad NO se toca nada:
+ * sus líneas las dijo su propio correo.
+ */
+export async function limpiarLineasHuerfanas(empresaId: string, pedidoId: string, cliente: Ejecutor): Promise<number> {
+  const { rowCount } = await cliente.query(
+    `DELETE FROM rcp_pedido_lineas l
+      WHERE l.empresa_id = $1 AND l.pedido_id = $2
+        AND l.cantidad_expedida = 0 AND l.cantidad_recibida = 0
+        AND NOT EXISTS (SELECT 1 FROM rcp_albaran_lineas al WHERE al.pedido_linea_id = l.id)
+        AND EXISTS (SELECT 1 FROM rcp_pedidos p WHERE p.id = l.pedido_id AND p.derivado_de_albaran)`,
+    [empresaId, pedidoId]
+  );
+  return rowCount ?? 0;
 }
 
 export async function lineasDeAlbaran(

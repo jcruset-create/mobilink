@@ -30,7 +30,16 @@
  */
 
 import { aWhatsApp, clienteTwilio, enmascararTelefono, hayCredencialesTwilio, numeroWhatsAppEmisor } from "../core/twilio.ts";
-import { motivoParaNoAvisar, textoAviso, variablesPlantilla, type DatosAviso } from "./domain/aviso.ts";
+import {
+  motivoParaNoAvisar,
+  motivoParaNoAvisarFalta,
+  textoAviso,
+  textoFaltaAlbaran,
+  variablesFaltaAlbaran,
+  variablesPlantilla,
+  type DatosAviso,
+  type DatosFaltaAlbaran,
+} from "./domain/aviso.ts";
 import * as repo from "./repository.ts";
 
 export type ResultadoAviso = { estado: "ENVIADO" | "OMITIDO" | "ERROR"; motivo: string | null; referencia: string | null };
@@ -38,6 +47,11 @@ export type ResultadoAviso = { estado: "ENVIADO" | "OMITIDO" | "ERROR"; motivo: 
 /** El Content SID de la plantilla aprobada, si está configurada. */
 export function contentSidAviso(): string {
   return String(process.env.RECEPCIONES_WHATSAPP_CONTENT_SID || "").trim();
+}
+
+/** El de la plantilla del aviso a recepción cuando falta el PDF del albarán. */
+export function contentSidFaltaAlbaran(): string {
+  return String(process.env.RECEPCIONES_WHATSAPP_SID_FALTA_ALBARAN || "").trim();
 }
 
 /**
@@ -89,6 +103,64 @@ export async function avisarRecepcion(
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     console.error(`[Recepciones] el aviso a ${enmascararTelefono(datos.telefono)} ha fallado:`, error);
+    return anotar({ estado: "ERROR", motivo: error, referencia: null });
+  }
+}
+
+/**
+ * Avisa a recepción de que un albarán ha entrado SIN su PDF.
+ *
+ * El papel es lo que dice qué viene y para quién, y lo que se sella al
+ * recibir: sin él, el albarán se queda a medias y alguien tiene que subirlo a
+ * mano. Antes eso sólo se veía si a alguien se le ocurría mirar la bandeja de
+ * correos; ahora se dice.
+ *
+ * Como el otro, nunca lanza y deja fila en `rcp_avisos`, con su tipo, para que
+ * se pueda mirar qué se avisó y qué no.
+ */
+export async function avisarFaltaAlbaran(
+  ctx: { empresaId: string; userId: string | null; userNombre: string },
+  albaranId: string,
+  telefono: string | null,
+  datos: DatosFaltaAlbaran
+): Promise<ResultadoAviso> {
+  const anotar = async (r: ResultadoAviso): Promise<ResultadoAviso> => {
+    try {
+      await repo.anotarAviso(ctx.empresaId, {
+        tipo: "FALTA_ALBARAN",
+        recepcionId: null,
+        albaranId,
+        destinatario: "Recepción",
+        telefono,
+        estado: r.estado,
+        motivo: r.motivo,
+        referenciaExterna: r.referencia,
+        creadoPor: ctx.userId,
+        creadoNombre: ctx.userNombre,
+      });
+    } catch (e) {
+      console.error("[Recepciones] no se ha podido anotar el aviso de falta de albarán:", (e as Error).message);
+    }
+    return r;
+  };
+
+  const motivo = motivoParaNoAvisarFalta(telefono, hayCredencialesTwilio());
+  if (motivo) return anotar({ estado: "OMITIDO", motivo, referencia: null });
+
+  const contentSid = contentSidFaltaAlbaran();
+  try {
+    const mensaje = await clienteTwilio().messages.create({
+      from: numeroWhatsAppEmisor(),
+      to: aWhatsApp(telefono!),
+      ...(contentSid
+        ? { contentSid, contentVariables: JSON.stringify(variablesFaltaAlbaran(datos)) }
+        : { body: textoFaltaAlbaran(datos) }),
+    });
+    console.log(`[Recepciones] aviso de falta de albarán a ${enmascararTelefono(telefono)} (${mensaje.sid})`);
+    return anotar({ estado: "ENVIADO", motivo: contentSid ? null : "Sin plantilla aprobada: se ha mandado texto plano.", referencia: mensaje.sid ?? null });
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    console.error(`[Recepciones] el aviso de falta de albarán a ${enmascararTelefono(telefono)} ha fallado:`, error);
     return anotar({ estado: "ERROR", motivo: error, referencia: null });
   }
 }
