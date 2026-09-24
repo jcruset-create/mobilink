@@ -668,19 +668,30 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
       const job = (req.body ?? {}) as Record<string, any>;
       /*
-       * El id lo pone el SERVIDOR, no el navegador.
+       * El id lo pone el SERVIDOR, no el navegador, pero NO con `Date.now()`.
        *
-       * El navegador lo calculaba como «el mayor de los trabajos que veo, más
-       * uno». Con la lista vacía —o filtrada por taller, o con todo cerrado—
-       * eso da 1, y el 1 ya existe en la tabla: clave duplicada, 500, y en
-       * pantalla un error que no decía nada.
+       * Las dos cosas que se han probado aquí eran malas por motivos
+       * distintos:
        *
-       * `Date.now()` es lo que usa el alta de trabajos desde la APK desde
-       * siempre. No es bonito, pero es monótono y no depende de lo que el
-       * cliente alcance a ver. El id que manda el navegador solo le sirve a
-       * él para casar la propuesta del motor de asignación.
+       *  · El navegador lo calculaba como «el mayor de los trabajos que veo,
+       *    más uno». Con la lista vacía —o filtrada por taller, o con todo
+       *    cerrado— eso da 1, y el 1 ya existe: clave duplicada.
+       *  · Lo cambié a `Date.now()` y fue peor: `jobs.id` es SERIAL, o sea
+       *    INTEGER de cuatro bytes, y el máximo que admite es 2.147.483.647.
+       *    Un `Date.now()` anda por 1.758.000.000.000, mil veces más. Postgres
+       *    lo rechaza con «integer out of range», la transacción entera se cae
+       *    y en pantalla sale «Error en la recepción de vehículos (convertir)».
+       *    La conversión no ha funcionado NUNCA desde ese cambio.
+       *
+       * Se numera como numera el resto del panel —el máximo de la tabla más
+       * uno— pero preguntándoselo a la BASE, no a lo que el navegador alcance
+       * a ver, que es lo que fallaba al principio. Y vale igual si algún día
+       * la columna pasa a BIGINT.
        */
-      const jobId = Date.now();
+      const siguienteId = async (): Promise<number> => {
+        const r = await cliente.query(`SELECT COALESCE(MAX(id), 0) + 1 AS id FROM jobs`);
+        return Number(r.rows[0]?.id ?? 1);
+      };
       // El trabajo nace en validacion: es una propuesta, y una propuesta la
       // autoriza una persona en la pantalla de siempre.
       if (String(job.status) !== "validacion") {
@@ -702,38 +713,66 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       const recepcion = normalizeRecepcionRow(actual.rows[0]);
       const ahora = Date.now();
 
-      await cliente.query(
-        `INSERT INTO jobs (
-           id, area, plate, urgent, status, "assignedNames", reason,
-           "customerName", "customerPhone", "createdAtMs",
-           "workedAccumulatedMinutes", "pausedAccumulatedMinutes",
-           "workshopId", "quickEntryLabel", "quickEntryMode",
-           quantity, "unitMinutes", "ptEntradaMs", "recepcionId"
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11,$12,$13,$14,$15,$16,$17)`,
-        [
-          jobId,
-          texto(job.area) || "mecanica",
-          texto(job.plate).toUpperCase(),
-          job.urgent === true,
-          "validacion",
-          JSON.stringify(Array.isArray(job.assignedNames) ? job.assignedNames : []),
-          texto(job.reason),
-          texto(job.customerName),
-          texto(job.customerPhone) || texto(recepcion.clienteTelefono),
-          Number(job.createdAtMs) || ahora,
-          textoONull(job.workshopId ?? recepcion.workshopId),
-          textoONull(job.quickEntryLabel),
-          texto(job.quickEntryMode) || "team",
-          Number.isFinite(Number(job.quantity)) ? Number(job.quantity) : 1,
-          // `standardMinutes` NO es columna de `jobs`: es de `quick_templates`.
-          // Nombrarla aquí tumbaba la consulta entera y la conversión fallaba
-          // SIEMPRE, con cita o sin ella. El tiempo total del trabajo sale de
-          // quantity x unitMinutes, que es como lo calcula el resto del panel.
-          Number.isFinite(Number(job.unitMinutes)) ? Number(job.unitMinutes) : null,
-          recepcion.creadaAtMs,
-          id,
-        ]
-      );
+      /*
+       * Se reintenta si otro se lleva el número entre el SELECT y el INSERT.
+       *
+       * Dos personas convirtiendo a la vez leen el mismo máximo y la segunda
+       * choca contra la clave primaria. Es raro —convertir lo hace una
+       * persona mirando la pantalla— pero el coste de cubrirlo es un bucle y
+       * el de no cubrirlo es un error que no se entiende.
+       *
+       * Solo se repite ante clave duplicada (SQLSTATE 23505). Cualquier otro
+       * fallo sube tal cual: repetir un error de columna o de tipo no lo
+       * arregla, solo lo esconde tres veces.
+       */
+      const INTENTOS = 3;
+      let jobId = 0;
+      for (let intento = 1; ; intento++) {
+        jobId = await siguienteId();
+        try {
+          await cliente.query(`SAVEPOINT alta_trabajo`);
+          await cliente.query(
+            `INSERT INTO jobs (
+               id, area, plate, urgent, status, "assignedNames", reason,
+               "customerName", "customerPhone", "createdAtMs",
+               "workedAccumulatedMinutes", "pausedAccumulatedMinutes",
+               "workshopId", "quickEntryLabel", "quickEntryMode",
+               quantity, "unitMinutes", "ptEntradaMs", "recepcionId"
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11,$12,$13,$14,$15,$16,$17)`,
+            [
+              jobId,
+              texto(job.area) || "mecanica",
+              texto(job.plate).toUpperCase(),
+              job.urgent === true,
+              "validacion",
+              JSON.stringify(Array.isArray(job.assignedNames) ? job.assignedNames : []),
+              texto(job.reason),
+              texto(job.customerName),
+              texto(job.customerPhone) || texto(recepcion.clienteTelefono),
+              Number(job.createdAtMs) || ahora,
+              textoONull(job.workshopId ?? recepcion.workshopId),
+              textoONull(job.quickEntryLabel),
+              texto(job.quickEntryMode) || "team",
+              Number.isFinite(Number(job.quantity)) ? Number(job.quantity) : 1,
+              // `standardMinutes` NO es columna de `jobs`: es de
+              // `quick_templates`. Nombrarla aquí tumbaba la consulta entera.
+              // El tiempo total sale de quantity x unitMinutes, que es como lo
+              // calcula el resto del panel.
+              Number.isFinite(Number(job.unitMinutes)) ? Number(job.unitMinutes) : null,
+              recepcion.creadaAtMs,
+              id,
+            ]
+          );
+          await cliente.query(`RELEASE SAVEPOINT alta_trabajo`);
+          break;
+        } catch (e) {
+          // Sin el savepoint la transacción se queda abortada y ya no admite
+          // ni el reintento: en Postgres, un error dentro de una transacción
+          // la invalida entera hasta el ROLLBACK.
+          await cliente.query(`ROLLBACK TO SAVEPOINT alta_trabajo`);
+          if ((e as any)?.code !== "23505" || intento >= INTENTOS) throw e;
+        }
+      }
 
       // Las fotos del patio se enganchan al trabajo por referencia: ya están
       // subidas, volver a subirlas sólo duplicaría ficheros.
