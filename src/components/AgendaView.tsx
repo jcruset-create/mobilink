@@ -2277,10 +2277,18 @@ appendLog(
                   plate: r.matricula,
                   _recepcionRef: r,
                   startTime: minutesToTime(inicio),
-                  // Hasta el final del día, igual que la cola: así el reparto
-                  // en columnas las agrupa con las citas que se ven a la vez
-                  // en lugar de dejarlas encima.
-                  endTime: endOfDayStr,
+                  /*
+                   * Dura lo que una cita cualquiera sin hora de fin.
+                   *
+                   * Una recepción no tiene duración —nadie sabe aún qué hay
+                   * que hacerle—, y con el final del día, que es lo que usa la
+                   * cola, salía una pastilla estrecha y aplastada que no se
+                   * leía. Se pidió que se vean igual que las citas, así que
+                   * ocupan lo mismo que la cita por defecto.
+                   */
+                  endTime: minutesToTime(
+                    Math.min(inicio + DEFAULT_ESTIMATED_MINUTES, getDayEnd(day.index))
+                  ),
                 };
               });
 
@@ -2396,7 +2404,14 @@ appendLog(
                         minutosEsperando(r.creadaAtMs, currentClock.getTime())
                       );
                       const inicio = Math.max(timeToMinutes(job.startTime), dayStart);
+                      const fin = Math.min(timeToMinutes(job.endTime), getDayEnd(day.index));
                       const top = ((inicio - dayStart) / SLOT_MINUTES) * SLOT_HEIGHT;
+                      // El mismo alto que una cita: se pidió que no se
+                      // distingan por la forma, solo por el rótulo.
+                      const height = Math.max(
+                        50,
+                        ((fin - inicio) / SLOT_MINUTES) * SLOT_HEIGHT - 6
+                      );
                       const width = 100 / columns;
                       const left = column * width;
 
@@ -2406,10 +2421,18 @@ appendLog(
                           title={`🚗 Recibido en el patio · ${r.matricula}${
                             r.clienteNombre ? ` · ${r.clienteNombre}` : ""
                           }\nRecibido por ${r.operarioNombre} a las ${hora}\nEsperando desde hace ${espera}\nPendiente de validar`}
-                          className="absolute z-40 cursor-default overflow-hidden rounded-xl border-2 border-dashed border-amber-400 bg-amber-500/20 p-2 text-sm font-semibold text-amber-100 shadow-md"
+                          /*
+                           * Pintada como una cita normal, con el color de su
+                           * área. Antes iba en ámbar y con el borde de puntos,
+                           * y quien mira la agenda no necesita que se lo
+                           * digan dos veces: para eso está el rótulo.
+                           */
+                          className={`absolute z-40 cursor-default overflow-hidden rounded-xl border-2 p-2 text-sm font-semibold shadow-md ${getSolidAreaClass(
+                            (r.area ?? "mecanica") as AreaKey
+                          )}`}
                           style={{
                             top,
-                            height: Math.max(50, SLOT_HEIGHT - 6),
+                            height,
                             left: `calc(${left}% + 4px)`,
                             width: `calc(${width}% - 8px)`,
                           }}
@@ -2418,7 +2441,7 @@ appendLog(
                             <div className="truncate uppercase">
                               {r.operacionLabel || "Sin operación"}
                             </div>
-                            <span className="shrink-0 rounded-full bg-amber-300 px-2 py-0.5 text-[9px] font-black uppercase text-slate-900">
+                            <span className="shrink-0 rounded-full bg-white/90 px-2 py-0.5 text-[9px] font-black uppercase text-slate-800">
                               Recepción
                             </span>
                           </div>
