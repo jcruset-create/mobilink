@@ -34,6 +34,7 @@ import {
   detectarNumeroOr,
   type Candidato,
   type Deteccion,
+  type LineaPagina,
   type PaginaAnalizable,
   type ZonaOcr,
 } from "./domain/deteccion.ts";
@@ -245,7 +246,10 @@ function textoDePdf(contenido: Buffer): PaginaAnalizable | null {
     if (doc.countPages() === 0) return null;
     const page = doc.loadPage(0);
     const [x0, y0, x1, y1] = page.getBounds();
-    const lineas: PaginaAnalizable["lineas"] = [];
+    // Mutable AQUÍ y readonly fuera: `PaginaAnalizable["lineas"]` es
+    // `readonly` a propósito —el dominio no debe tocar lo que le pasan— así
+    // que se arma en un array normal y se devuelve, que sí es asignable.
+    const lineas: LineaPagina[] = [];
 
     /*
      * Aquí basta con las líneas que mupdf agrupa por su cuenta: no hay que
