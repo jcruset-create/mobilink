@@ -8,8 +8,6 @@
  */
 
 import { Routes, Route, Navigate } from "react-router-dom";
-import { useIdentidadPestana } from "../identidadPestana";
-import { PESTANA_CASH } from "./config/pestana";
 import { CashProvider, useCash } from "./contexts/CashContext";
 import CashLayout from "./layouts/CashLayout";
 import JornadaActual from "./pages/JornadaActual";
@@ -85,12 +83,8 @@ function Contenido() {
 }
 
 export default function CashApp() {
-  // Titulo y favicon propios mientras se esta dentro del modulo. Va aqui, en el
-  // componente que sostiene todas las rutas de /cash, y no en cada pantalla:
-  // navegar entre ellas no desmonta esto, asi que la pestana no parpadea ni
-  // vuelve a decir "Mobilink". Al salir del modulo se restaura sola.
-  useIdentidadPestana(PESTANA_CASH);
-
+  // El titulo y el favicon de la pestana los pone PestanaDelModulo, que los
+  // resuelve por ruta para todos los modulos a la vez.
   return (
     <CashProvider>
       <Contenido />
