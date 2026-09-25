@@ -18,6 +18,7 @@ import DarCambio from "./pages/DarCambio";
 import StockCaja from "./pages/StockCaja";
 import CambioBanco from "./pages/CambioBanco";
 import Entregas from "./pages/Entregas";
+import GastosTrabajadores from "./pages/GastosTrabajadores";
 import IngresosBancarios from "./pages/IngresosBancarios";
 import Arqueo from "./pages/Arqueo";
 import Cierre from "./pages/Cierre";
@@ -67,6 +68,7 @@ function Contenido() {
         <Route path="stock" element={<StockCaja />} />
         <Route path="cambio" element={<CambioBanco />} />
         <Route path="entregas" element={<Entregas />} />
+        <Route path="gastos-trabajadores" element={<GastosTrabajadores />} />
         <Route path="ingresos" element={<IngresosBancarios />} />
         <Route path="arqueo" element={<Arqueo />} />
         <Route path="cierre" element={<Cierre />} />

@@ -147,3 +147,22 @@ export function rutaDocumento(
 ): string {
   return `${empresaId}/${sessionId}/${operationId ?? "jornada"}_${ahora}${extension}`;
 }
+
+/**
+ * Dónde va el ticket de una liquidación de gastos.
+ *
+ * Aparte de las jornadas porque cuando se sube no hay jornada: la liquidación
+ * se prepara y se aprueba antes de que el dinero salga de ninguna caja. Mismo
+ * bucket privado y mismos enlaces que caducan: son tickets con el nombre de un
+ * trabajador y de dónde comió.
+ */
+export function rutaDeTicket(
+  empresaId: string,
+  claimId: number,
+  /** Posición en la subida: varios tickets en el mismo milisegundo no se pisan. */
+  indice: number,
+  extension: string,
+  ahora: number
+): string {
+  return `${empresaId}/gastos/${claimId}/${ahora}_${indice}${extension}`;
+}

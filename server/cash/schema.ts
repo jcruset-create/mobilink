@@ -1954,6 +1954,195 @@ export async function initCash(): Promise<void> {
       ON cash_operations(empresa_id, expense_concept_id, created_at_ms);
   `);
 
+  /*
+   * ── Liquidaciones de gastos de trabajadores ─────────────────────────────
+   *
+   * Un trabajador trae sus tickets —dietas, peajes, parking— y se le devuelve
+   * lo que adelantó. La liquidación vive en Cash pero NO es un movimiento de
+   * caja: se prepara, se revisa y se aprueba sin tocar el cajón, a veces
+   * durante días. Solo al PAGARLA aparece un `cash_operations.PAYMENT`, y por
+   * el camino de siempre, `registrarOperacion`. Es el simétrico de
+   * `cash_advances`: allí se da dinero y vuelven tickets; aquí vienen tickets y
+   * sale dinero.
+   *
+   * El diseño completo, con el porqué de cada columna, está en
+   * `docs/PROMPT_gastos_trabajadores.md` (B.2).
+   *
+   * ## Quién cobra: `employee_id` sin clave foránea
+   *
+   * La identidad del trabajador es `sea_employees.id`. Esa tabla la crean las
+   * migraciones de Supabase, no este arranque, así que en una base recién
+   * creada —la de la CI— no existe y una clave foránea impediría arrancar. Es
+   * el mismo caso, y la misma solución, que `techs.employee_id`
+   * (`supabase/migrations/010_techs_employee_id.sql`).
+   *
+   * Tampoco sirve para aislar empresas: `sea_employees` no tiene `empresa_id`.
+   * Eso lo da el destino PERSONA (`cash_expense_targets`, que sí lo tiene),
+   * que pasa a ser la proyección del empleado dentro de Cash: UNA por empleado
+   * y empresa, con índice único. Así no hay dos identidades para la misma
+   * persona: el empleado es quien es, y el destino es cómo lo ve la caja.
+   */
+  await pool.query(`
+    ALTER TABLE cash_expense_targets ADD COLUMN IF NOT EXISTS employee_id UUID;
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_expense_targets_employee_idx
+      ON cash_expense_targets(empresa_id, employee_id) WHERE employee_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS cash_expense_claims (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      /* Ámbito al crearla. NULL = sin limitar, como las cajas sin taller. */
+      centro_id UUID,
+      /* LG-26-001: por empresa, sin caja. Ver siguienteNumeroDeEmpresa. */
+      numero TEXT NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'BORRADOR'
+        CHECK (estado IN ('BORRADOR','PRESENTADA','APROBADA','RECHAZADA','PAGADA','ANULADA')),
+      /* La identidad (sin FK, ver arriba) y su proyección en Cash. */
+      employee_id UUID,
+      expense_target_id INTEGER NOT NULL REFERENCES cash_expense_targets(id) ON DELETE RESTRICT,
+      /* La foto del nombre, para el histórico: como party_nombre en las operaciones. */
+      empleado_nombre TEXT NOT NULL,
+      /* Quién la creó. Es lo que usará el autoservicio del trabajador, cuando exista. */
+      solicitante_user_id UUID,
+      periodo_desde DATE,
+      periodo_hasta DATE,
+      /* Suma de las líneas INCLUIDAS. La calcula siempre el servidor. */
+      total_centimos BIGINT NOT NULL DEFAULT 0,
+      notas TEXT,
+      presentada_por UUID, presentada_at_ms BIGINT,
+      aprobada_por UUID, aprobada_at_ms BIGINT,
+      rechazo_motivo TEXT, rechazada_por UUID, rechazada_at_ms BIGINT,
+      /* El pago: la ÚNICA unión con el movimiento de caja. */
+      operation_pago_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
+      session_id_pago INTEGER REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+      centro_id_pago UUID,
+      /* Reintentar el pago con la misma clave devuelve el mismo pago. */
+      pago_idempotency_key TEXT,
+      pagada_por UUID, pagada_at_ms BIGINT,
+      anulada_por UUID, anulada_at_ms BIGINT, anulada_motivo TEXT,
+      /* Sube con cada transición, como cash_sessions.version. */
+      version BIGINT NOT NULL DEFAULT 0,
+      creado_por UUID,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, numero)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS cash_expense_claims_pago_idx
+      ON cash_expense_claims(operation_pago_id) WHERE operation_pago_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS cash_expense_claims_estado_idx
+      ON cash_expense_claims(empresa_id, estado, updated_at_ms DESC);
+
+    /*
+     * Una línea = un ticket. Dos estados que NO se mezclan:
+     *
+     * · «analisis» — qué ha pasado con la lectura automática. Lo mueve la
+     *   máquina. OMITIDO es «no se ha intentado» (sin IA, o antes de que la
+     *   lectura exista) y no bloquea nada.
+     * · «situacion» — si se paga o no. Lo mueve una persona.
+     *
+     * Una línea excluida puede seguir analizándose, y una cuya lectura falló
+     * se paga igual si alguien la ha revisado a mano: la IA ayuda, nunca es
+     * requisito.
+     */
+    CREATE TABLE IF NOT EXISTS cash_expense_claim_lines (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      claim_id INTEGER NOT NULL REFERENCES cash_expense_claims(id) ON DELETE RESTRICT,
+      orden INTEGER NOT NULL DEFAULT 0,
+      nombre TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      tamano_bytes INTEGER NOT NULL,
+      ruta TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      analisis TEXT NOT NULL DEFAULT 'OMITIDO'
+        CHECK (analisis IN ('PENDIENTE','ANALIZANDO','LISTO','FALLIDO','OMITIDO')),
+      situacion TEXT NOT NULL DEFAULT 'INCLUIDA'
+        CHECK (situacion IN ('INCLUIDA','EXCLUIDA')),
+      excluida_motivo TEXT, excluida_por UUID, excluida_at_ms BIGINT,
+      revisada BOOLEAN NOT NULL DEFAULT false,
+      revisada_por UUID, revisada_at_ms BIGINT,
+      scan_id INTEGER REFERENCES cash_invoice_scans(id) ON DELETE SET NULL,
+      analisis_error TEXT,
+      analisis_intentos INTEGER NOT NULL DEFAULT 0,
+      /* Lo LEÍDO no se toca después; lo de abajo es lo REVISADO, que es lo que vale. */
+      leido JSONB,
+      fecha DATE,
+      emisor_nombre TEXT NOT NULL DEFAULT '',
+      emisor_nif TEXT,
+      numero_documento TEXT,
+      concepto TEXT NOT NULL DEFAULT '',
+      base_centimos BIGINT,
+      iva_centimos BIGINT,
+      importe_centimos BIGINT NOT NULL DEFAULT 0 CHECK (importe_centimos >= 0),
+      moneda TEXT NOT NULL DEFAULT 'EUR',
+      /*
+       * La CATEGORÍA del gasto, cualquier concepto activo. A quién se
+       * reembolsa es de la cabecera; el destino de la línea solo se guarda
+       * cuando el concepto pide CENTRO_COSTE.
+       */
+      expense_concept_id INTEGER REFERENCES cash_expense_concepts(id) ON DELETE SET NULL,
+      expense_target_id INTEGER REFERENCES cash_expense_targets(id) ON DELETE SET NULL,
+      concepto_propuesto_id INTEGER,
+      concepto_confianza NUMERIC(3,2),
+      concepto_regla_id INTEGER,
+      campos_corregidos JSONB,
+      subido_por UUID,
+      subido_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS cash_expense_claim_lines_claim_idx
+      ON cash_expense_claim_lines(claim_id, orden, id);
+    CREATE INDEX IF NOT EXISTS cash_expense_claim_lines_sha_idx
+      ON cash_expense_claim_lines(empresa_id, sha256);
+    CREATE INDEX IF NOT EXISTS cash_expense_claim_lines_clave_idx
+      ON cash_expense_claim_lines(empresa_id, emisor_nif, fecha, importe_centimos);
+
+    /*
+     * Cada coincidencia de duplicado es UNA FILA, con su resolución.
+     *
+     * Un ticket puede parecerse a varias cosas a la vez —el mismo fichero en
+     * otra liquidación y la misma factura ya pagada— y cada una se resuelve
+     * por separado y queda escrito quién decidió qué. Una columna de texto se
+     * habría quedado con la última y habría borrado las demás.
+     */
+    CREATE TABLE IF NOT EXISTS cash_expense_claim_duplicates (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      line_id INTEGER NOT NULL REFERENCES cash_expense_claim_lines(id) ON DELETE RESTRICT,
+      tipo TEXT NOT NULL CHECK (tipo IN ('MISMO_FICHERO','MISMA_CLAVE','MISMO_NUMERO')),
+      referencia_tipo TEXT NOT NULL CHECK (referencia_tipo IN ('LINEA','DOCUMENTO','OPERACION')),
+      referencia_id INTEGER NOT NULL,
+      /* LG-26-003 o P-26-041: para enseñarlo sin ir a buscarlo. */
+      referencia_numero TEXT,
+      detectado_en TEXT NOT NULL CHECK (detectado_en IN ('SUBIDA','ANALISIS','PRESENTAR','PAGAR')),
+      detectado_at_ms BIGINT NOT NULL,
+      resolucion TEXT NOT NULL DEFAULT 'PENDIENTE'
+        CHECK (resolucion IN ('PENDIENTE','ACEPTADA','EXCLUIDA','DESCARTADA')),
+      resuelto_por UUID,
+      resuelto_at_ms BIGINT,
+      motivo TEXT,
+      UNIQUE (line_id, tipo, referencia_tipo, referencia_id)
+    );
+
+    /* Reglas de concepto: el mismo molde que cash_section_rules. */
+    CREATE TABLE IF NOT EXISTS cash_expense_rules (
+      id SERIAL PRIMARY KEY,
+      empresa_id UUID NOT NULL,
+      campo TEXT NOT NULL
+        CHECK (campo IN ('TIPO_ESTABLECIMIENTO','NOMBRE_EMISOR','NIF_EMISOR','CONCEPTO')),
+      patron TEXT NOT NULL,
+      /* Sin FK, como cash_section_rules → cash_sections: el catálogo es editable. */
+      expense_concept_id INTEGER NOT NULL,
+      confianza NUMERIC(3,2) NOT NULL DEFAULT 0.9,
+      auto_seleccionar BOOLEAN NOT NULL DEFAULT true,
+      prioridad INTEGER NOT NULL DEFAULT 100,
+      activa BOOLEAN NOT NULL DEFAULT true,
+      creado_por UUID,
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL,
+      UNIQUE (empresa_id, campo, patron)
+    );
+  `);
+
   await asignarCodigosDeCaja();
   await renumerarDocumentos();
 

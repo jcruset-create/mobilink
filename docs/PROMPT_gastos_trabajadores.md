@@ -1026,3 +1026,43 @@ router).
   entró en PRn» con desvíos respecto a este prompt.
 - Versión, PR, CI verde sobre el commit de código, diff contra `main` solo
   con tus ficheros, merge, y aviso con la versión desplegada.
+
+---
+
+## Lo que entró en PR1
+
+Liquidación manual: esquema completo de B.2, crear (por destino PERSONA o por
+empleado), subir tickets, corregir, incluir/excluir, revisar, duplicados por
+mismo fichero con resolución, presentar, aprobar (SoD y reautenticación),
+rechazar, reabrir, anular, PDF en cualquier estado, permisos, pantalla
+«Gastos de trabajadores». Sin pago ni lectura automática.
+
+Desvíos respecto al prompt, todos pequeños:
+
+- `puedePresentar` es `bloqueosParaPresentar` y devuelve **todos** los
+  bloqueos, no el primero: la pantalla los enseña de una vez. El servicio lanza
+  el primero con la lista entera en `detalle`. Se añade `TOTAL_CERO`.
+- `analisis` tiene `OMITIDO` como valor por defecto en la base (el prompt decía
+  PENDIENTE). El servicio lo fija explícitamente, así que da igual; OMITIDO es
+  el valor honrado mientras no exista la lectura.
+- `rutaDeTicket` lleva un índice: varios tickets subidos en el mismo
+  milisegundo no se pisan.
+- No hay endpoint `…/lines/:lineId/file`: el detalle ya trae el enlace firmado
+  de cada ticket, como `documentosDeOperacion`.
+- `exigirOtraPersona` (`sod.ts`) admite un tercer caso, «aprobar esta
+  liquidación», con su propio texto.
+- `codigoDesde` (`config.ts`) y `montar`, `paginaDeAviso`, `logoMobilink`, `M`,
+  `GRIS`, `TINTA`, `M_LOGO` (`report.ts`) pasan a exportarse. Sin cambio de
+  comportamiento.
+- `LineaTicket` y `Totales` se exportan de la página para poder renderizarlas
+  con el CSS real (no hay pruebas de componentes).
+- La numeración de hojas del PDF cuenta solo la portada, igual que el informe
+  de cierre: los tickets anexados no llevan cabecera.
+- Una liquidación creada sin ámbito de taller la ve todo el mundo, igual que
+  una caja sin taller; una con ámbito, solo su taller.
+
+Pruebas: 22 unitarias del dominio, 24 de integración contra PostgreSQL
+(idempotentes: corridas dos veces sobre la misma base), 3 de permisos, 5 de la
+pantalla. 21 mutaciones, todas en rojo. Una sobrevivió la primera pasada —el
+PDF con los excluidos detrás— porque la prueba solo comparaba páginas entre
+estados; ahora comprueba que incluir un ticket añade exactamente su página.
