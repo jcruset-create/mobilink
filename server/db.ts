@@ -457,6 +457,24 @@ export async function initDb() {
       ON roadside_assistances ("solicitanteClienteId")
       WHERE "solicitanteClienteId" IS NOT NULL;
 
+    -- La cola de un operario: detrás de QUÉ asistencia espera ésta su turno.
+    --
+    -- Lo que se guarda es el enlace, no un «en espera» de sí o no. Estar en
+    -- espera se DEDUCE —src/modules/colaEspera.ts—: esta asistencia espera si
+    -- aquella por la que espera sigue abierta. Así, en cuanto la de delante se
+    -- cierra la siguiente se suelta sola, sin depender de que nada la apague.
+    --
+    -- Sin REFERENCES a la propia tabla a propósito: si alguien borra la
+    -- asistencia de delante, preferimos una cola suelta a un borrado que falla
+    -- o que arrastra la de detrás.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "esperaTrasId" INTEGER;
+
+    -- Se consulta al cerrar una asistencia, para soltar a las que la esperaban.
+    CREATE INDEX IF NOT EXISTS idx_roadside_espera_tras
+      ON roadside_assistances ("esperaTrasId")
+      WHERE "esperaTrasId" IS NOT NULL;
+
     -- Subcontratación: a quién se le encarga el servicio y a quién se factura.
     -- OJO con los nombres: "workshopId" ya existe en esta tabla y es el taller
     -- PROPIO (el del inquilino, TEXT). El taller subcontratado es otra cosa y

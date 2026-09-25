@@ -118,6 +118,8 @@ import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCa
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
 import { jsonAjeno } from "./core/jsonAjeno.ts";
 import { numeroDeCita } from "./whatsapp/cita.ts";
+import { asistenciasDelOperarioParaCola, soltarCola, trasQueEspera } from "./cola/cola.ts";
+import { enEspera } from "../src/modules/colaEspera.ts";
 import {
   esClaveDuplicada,
   INTENTOS_DE_ID,
@@ -891,6 +893,15 @@ function normalizeRoadsideAssistanceRow(row: any) {
     solicitanteNombre: row.solicitanteNombre ?? null,
     solicitanteTelefono: row.solicitanteTelefono ?? null,
     solicitanteAutorizacion: row.solicitanteAutorizacion ?? null,
+    /*
+     * La cola del operario: detrás de qué asistencia espera ésta su turno.
+     *
+     * Aquí va el enlace tal cual está guardado. Si está en espera DE VERDAD lo
+     * decide `src/modules/colaEspera.ts` mirando el estado de la de delante, porque
+     * una asistencia con este campo puesto y la de delante ya cerrada NO está
+     * en espera: es la siguiente y le toca.
+     */
+    esperaTrasId: row.esperaTrasId != null ? Number(row.esperaTrasId) : null,
     // Subcontratación: quién ejecuta y a quién se factura
     proveedorId: row.proveedorId != null ? Number(row.proveedorId) : null,
     proveedorTallerId: row.proveedorTallerId != null ? Number(row.proveedorTallerId) : null,
@@ -7007,6 +7018,28 @@ app.get(
 
       const rows = result.rows.map(normalizeRoadsideAssistanceRow) as any[];
 
+      /*
+       * Marcar las que están en espera, aquí y no en la APK.
+       *
+       * La regla necesita ver TAMBIÉN las cerradas de este operario para saber
+       * que una que espera detrás de una cerrada ya no espera, y este listado
+       * las esconde por defecto. Hacerlo en el móvil obligaría a mandárselas
+       * todas y a que cada versión de la APK calculara lo mismo; así la APK solo
+       * lee un sí o un no.
+       */
+      const paraCola = await asistenciasDelOperarioParaCola(operator.techName);
+      for (const r of rows) {
+        r.enEspera = enEspera(
+          {
+            id: r.id,
+            assignedTechName: r.assignedTechName ?? null,
+            status: r.status,
+            esperaTrasId: r.esperaTrasId ?? null,
+          },
+          paraCola
+        );
+      }
+
       // Adjuntar fotos (archivos subidos + imágenes recibidas por WhatsApp) a cada asistencia
       const ids = rows.map((r) => r.id);
       if (ids.length > 0) {
@@ -7846,6 +7879,85 @@ app.post("/api/roadside-assistances/:id/redirect", requireSupervisorRole, async 
   }
 });
 
+/**
+ * Tocar la cola de un operario a mano: adelantar una asistencia o sacarla.
+ *
+ * Las dos cosas las decide una persona mirando el panel, y por eso son un
+ * endpoint y no una regla: si la que espera resulta más urgente que la que se
+ * está haciendo, o si el operario se alarga y hay que dársela a otro, eso no lo
+ * puede deducir nadie desde aquí.
+ */
+app.post("/api/roadside-assistances/:id/cola", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Id no válido" });
+    const accion = String((req.body ?? {}).accion ?? "");
+    if (accion !== "adelantar" && accion !== "quitar") {
+      return res.status(400).json({ error: "Acción no válida" });
+    }
+
+    const actual = await db.query(
+      `SELECT id, "assignedTechName", status, "esperaTrasId"
+         FROM roadside_assistances WHERE id = $1`,
+      [id]
+    );
+    if (!actual.rows.length) return res.status(404).json({ error: "Asistencia no encontrada" });
+    const fila = actual.rows[0];
+    const trasId = fila.esperaTrasId != null ? Number(fila.esperaTrasId) : null;
+    if (trasId == null) return res.status(409).json({ error: "Esta asistencia no está en espera" });
+
+    const now = Date.now();
+
+    if (accion === "adelantar") {
+      /*
+       * Se INTERCAMBIAN los puestos: ésta pasa a estar en curso y la que estaba
+       * en curso pasa a esperar detrás de ella.
+       *
+       * Lo obvio habría sido solo quitarle la espera, pero entonces el operario
+       * tendría dos en curso a la vez, que es justo lo que la cola viene a
+       * evitar: en su móvil le saldrían las dos abiertas y no sabría cuál hacer.
+       *
+       * Sin riesgo de ciclo: la de delante pasa a esperar a ésta, y ésta ya no
+       * espera a nadie.
+       */
+      await db.query(
+        `UPDATE roadside_assistances SET "esperaTrasId" = $2, "updatedAtMs" = $3 WHERE id = $1`,
+        [trasId, id, now]
+      );
+      await db.query(
+        `UPDATE roadside_assistances SET "esperaTrasId" = NULL, "updatedAtMs" = $2 WHERE id = $1`,
+        [id, now]
+      );
+    } else {
+      /*
+       * Sacarla de la cola la devuelve a «sin asignar» y a pendiente, que es
+       * para lo que sirve: dársela a otro. Dejarla asignada y sin espera la
+       * pondría en curso, o sea lo contrario de lo que se ha pedido.
+       */
+      await db.query(
+        `UPDATE roadside_assistances
+            SET "esperaTrasId" = NULL,
+                "assignedTechName" = NULL,
+                "assignedVehicleName" = NULL,
+                status = 'pendiente',
+                "assignedAtMs" = NULL,
+                "updatedAtMs" = $2
+          WHERE id = $1`,
+        [id, now]
+      );
+    }
+
+    const actualizada = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [id]);
+    return res.json({
+      ok: true,
+      assistance: normalizeRoadsideAssistanceRow(actualizada.rows[0]),
+    });
+  } catch (error: any) {
+    console.error("POST /api/roadside-assistances/:id/cola error:", error);
+    return res.status(500).json({ error: error?.message || "Error cambiando la cola" });
+  }
+});
+
 app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) => {
   try {
     const body = req.body ?? {};
@@ -7863,6 +7975,17 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         ? "asignada"
         : "pendiente";
     const timestampField = getRoadsideStatusTimestampField(incomingStatus);
+
+    /*
+     * Si el operario ya lleva una, ésta entra en su cola.
+     *
+     * Antes el panel simplemente no dejaba elegir a un operario ocupado, y
+     * había que esperar a que acabara para poder asignarle la siguiente. Ahora
+     * se le asigna igual y queda detrás: él ve la que lleva y la que le espera,
+     * y en cuanto cierra la primera la segunda le entra sin que nadie toque
+     * nada.
+     */
+    const esperaTrasId = await trasQueEspera(null, assignedTechName);
 
     if (!customerName && !customerPhone) {
       return res.status(400).json({
@@ -7909,13 +8032,16 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           -- El enlace con la ficha del cliente. Va al final para no renumerar
           -- treinta y tres parámetros por añadir dos.
           "solicitanteClienteId",
-          "solicitanteContactoId"
+          "solicitanteContactoId",
+          -- La cola: detrás de qué asistencia espera turno ésta. Lo decide el
+          -- servidor mirando qué lleva el operario, no quien llama.
+          "esperaTrasId"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
           $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33,
-          $34, $35
+          $34, $35, $36
         )
         RETURNING *
       `,
@@ -7955,6 +8081,7 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         now,
         idOpcional(body.solicitanteClienteId),
         idOpcional(body.solicitanteContactoId),
+        esperaTrasId,
       ]
     );
 
@@ -8077,6 +8204,19 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
     );
     const previousTechName: string | null = existingResult.rows[0].assignedTechName ?? null;
 
+    /*
+     * Dónde queda en la cola del operario que tenga ahora.
+     *
+     * Se recalcula siempre, no solo al cambiar de operario: si la de delante ya
+     * se cerró esto la saca de la cola, y si se la pasan a un operario ocupado
+     * entra detrás de la que él lleva. Se pasa su propio id para que reasignar
+     * la que ya estaba en curso no la ponga a esperarse a sí misma.
+     */
+    const esperaTrasId = await trasQueEspera(
+      id,
+      body.assignedTechName ? String(body.assignedTechName).trim() : null
+    );
+
     const result = await db.query(
       `
         UPDATE roadside_assistances
@@ -8110,6 +8250,9 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
           -- un null se leería siempre como «no me lo mandes en cuenta».
           "solicitanteClienteId" = CASE WHEN $26 THEN $27 ELSE "solicitanteClienteId" END,
           "solicitanteContactoId" = CASE WHEN $26 THEN $28 ELSE "solicitanteContactoId" END,
+          -- La cola se recalcula en cada edición: cambiar de operario cambia
+          -- detrás de quién espera, y quitarle el operario la saca de la cola.
+          "esperaTrasId" = $29,
           "updatedAtMs" = $17
           ${
             timestampField
@@ -8151,6 +8294,7 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         Object.prototype.hasOwnProperty.call(body, "solicitanteClienteId"),
         idOpcional(body.solicitanteClienteId),
         idOpcional(body.solicitanteContactoId),
+        esperaTrasId,
       ]
     );
 
