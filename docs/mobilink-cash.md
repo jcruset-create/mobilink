@@ -951,6 +951,31 @@ intenta.
   (proceso muerto) vuelve a la cola a los 10 minutos, y tras 3 intentos queda
   FALLIDA.
 
+### Duplicados
+
+Tres detecciones, todas como evidencias con su resolución:
+
+- **Mismo fichero** (sha256), al subir.
+- **Mismo ticket con otro fichero**: mismo emisor —el NIF sin puntuación si lo
+  hay, si no el nombre sin tildes—, mismo día y mismo importe. Al leerlo, al
+  corregirlo, al presentar y al pagar.
+- **Mismo número ya pagado** en la caja (Pagos, o una entrega liquidada),
+  con la misma consulta que usa Pagos. Mismos momentos.
+
+Solo se marca el ticket **posterior**: el original no se bloquea por culpa de
+la copia. Lo que deja de aplicar —la otra línea se excluyó, su liquidación se
+anuló, el pago se anuló, o al corregir el ticket ya no coincide— pasa solo a
+DESCARTADA. Al presentar y al pagar se vuelve a mirar **en una transacción
+aparte**, para que lo encontrado quede guardado aunque presentar o pagar se
+niegue por ello. Una liquidación aprobada con un duplicado aparecido después
+se rechaza (APROBADA → RECHAZADA, con motivo), se reabre y se decide.
+
+De paso, otro fallo anterior: **una factura cobrada y anulada no se podía
+volver a cobrar sin autorización**. `cobroPrevioDeFactura` encontraba la
+operación inversa de la anulación —mismo tipo, CONFIRMED, misma referencia— y
+la daba por el cobro previo. Igual con los pagos. Ahora las inversas no
+cuentan (`anulaciones.integration.test.ts`).
+
 Por fases (plan completo en el prompt): PR1 preparar, revisar, aprobar y PDF;
 PR2 el pago; PR3 la lectura automática; PR4 los otros dos duplicados (mismo
 ticket con otro escaneo, mismo número ya pagado); PR5 el vínculo de empleados

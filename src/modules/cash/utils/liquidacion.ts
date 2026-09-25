@@ -38,6 +38,8 @@ export function accionesDisponibles(
     a.add("APROBAR");
     a.add("RECHAZAR");
   }
+  // Aprobada y sin pagar todavía se puede rechazar, si aparece un problema.
+  if (estado === "APROBADA" && aprueba) a.add("RECHAZAR");
   if (estado === "RECHAZADA" && crea) a.add("REABRIR");
   /*
    * Una pagada no se anula desde aquí: el dinero ya salió, y lo que se deshace

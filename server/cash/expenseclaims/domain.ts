@@ -49,7 +49,13 @@ export type AccionLiquidacion =
 const TRANSICIONES: Record<EstadoLiquidacion, Partial<Record<AccionLiquidacion, EstadoLiquidacion>>> = {
   BORRADOR: { PRESENTAR: "PRESENTADA", ANULAR: "ANULADA" },
   PRESENTADA: { APROBAR: "APROBADA", RECHAZAR: "RECHAZADA", ANULAR: "ANULADA" },
-  APROBADA: { PAGAR: "PAGADA", ANULAR: "ANULADA" },
+  /*
+   * Una aprobada todavía se puede RECHAZAR mientras no esté pagada: entre la
+   * aprobación y el pago puede aparecer un problema —el mismo ticket pagado
+   * por otro lado— y la vuelta atrás tiene que dejar escrito por qué, como
+   * cualquier rechazo. Anularla sería tirarla entera por un ticket.
+   */
+  APROBADA: { PAGAR: "PAGADA", RECHAZAR: "RECHAZADA", ANULAR: "ANULADA" },
   RECHAZADA: { REABRIR: "BORRADOR", ANULAR: "ANULADA" },
   PAGADA: { DESHACER_PAGO: "APROBADA" },
   ANULADA: {},

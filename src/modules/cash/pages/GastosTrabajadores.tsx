@@ -888,6 +888,7 @@ export function LineaTicket({
               </span>
               {e.resolucion === "ACEPTADA" && <span>· Se paga igualmente: {e.motivo}</span>}
               {e.resolucion === "EXCLUIDA" && <span>· Resuelto al excluir el ticket</span>}
+              {e.resolucion === "DESCARTADA" && <span>· Ya no aplica: {e.motivo}</span>}
               {e.resolucion === "PENDIENTE" && editableAqui && (
                 <span className="ml-auto flex gap-1">
                   <button

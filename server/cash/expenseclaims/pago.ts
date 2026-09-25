@@ -27,6 +27,7 @@
  */
 
 import type { PoolClient } from "pg";
+import pool from "../../db.ts";
 import { registrarAuditoriaEnTransaccion } from "../../core/auditoria.ts";
 import { formatearEuros } from "../domain/money.ts";
 import type { LineaDenominacion } from "../domain/inventory.ts";
@@ -36,6 +37,7 @@ import { centroDeCaja } from "../events/emitter.ts";
 import { enTransaccion } from "../repository.ts";
 import { type Contexto, registrarOperacion } from "../service.ts";
 import { destinoDerivado, totalesPorConcepto, transicion } from "./domain.ts";
+import { revisarLiquidacion } from "./duplicates.ts";
 import { type Liquidacion, cargarLiquidacion, lineasDe, paraReglas } from "./repository.ts";
 
 export type EntradaPago = {
@@ -63,6 +65,17 @@ export async function pagarLiquidacion(ctx: Contexto, id: number, e: EntradaPago
       "Falta la clave de la petición de pago. Vuelve a abrir la ventana de pago.",
       400
     );
+  }
+
+  /*
+   * Entre la aprobación y el pago han podido pasar días: alguien ha podido
+   * pagar ese número por Pagos, o presentar el mismo ticket en otra
+   * liquidación. Se vuelve a mirar ANTES y aparte, para que lo encontrado
+   * quede guardado aunque el pago se niegue por ello.
+   */
+  const previa = await cargarLiquidacion(pool, ctx, id);
+  if (previa.estado === "APROBADA") {
+    await enTransaccion((client) => revisarLiquidacion(client, ctx.empresaId, id, "PAGAR"));
   }
 
   return enTransaccion(async (client) => {
@@ -101,6 +114,17 @@ export async function pagarLiquidacion(ctx: Contexto, id: number, e: EntradaPago
 
     const lineas = await lineasDe(client, id);
     const incluidas = lineas.filter((x) => x.situacion === "INCLUIDA");
+
+    const repetida = incluidas.find((x) => x.duplicados.some((d) => d.resolucion === "PENDIENTE"));
+    if (repetida) {
+      const d = repetida.duplicados.find((x) => x.resolucion === "PENDIENTE")!;
+      throw new ErrorCaja(
+        "DUPLICADO_SIN_RESOLVER",
+        `Desde que se aprobó, un ticket de ${l.numero} coincide con ${d.referenciaNumero ?? "otro documento"}. ` +
+          "No se paga hasta revisarlo: recházala, reábrela y decide si está repetido.",
+        409
+      );
+    }
     const totales = totalesPorConcepto(lineas.map(paraReglas));
     if (totales.totalCentimos !== l.totalCentimos) {
       throw new ErrorCaja(
