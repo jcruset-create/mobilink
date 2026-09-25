@@ -54,6 +54,8 @@ import type {
   LineaLiquidacion,
   DetalleLiquidacion,
   ReglaGastoConfig,
+  Empleado,
+  PropuestaVinculo,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -1249,3 +1251,16 @@ export const guardarReglaGasto = (datos: { campo: string; patron: string; concep
 
 export const borrarReglaGasto = (id: number) =>
   pedir<{ ok: true }>(`/expense-rules/${id}`, { method: "DELETE" });
+
+/** Las fichas de empleado activas. `disponible` = false si la instalación no las tiene. */
+export const empleados = () => pedir<{ disponible: boolean; empleados: Empleado[] }>("/employees");
+
+export const propuestasVinculo = () =>
+  pedir<{ disponible: boolean; propuestas: PropuestaVinculo[] }>("/expense-targets/employee-links");
+
+/** Ata una persona de Cash a su ficha de empleado; `null` la desata. */
+export const vincularPersona = (destinoId: number, employeeId: string | null) =>
+  pedir<{ destinoId: number; employeeId: string | null; liquidacionesActualizadas: number }>(
+    `/expense-targets/${destinoId}/employee`,
+    { ...json({ employeeId }), method: "PUT" }
+  );

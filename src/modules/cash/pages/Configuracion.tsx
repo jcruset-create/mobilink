@@ -44,6 +44,8 @@ import type {
   DispositivoAutoScan,
   ConceptoGasto,
   ReglaGastoConfig,
+  Empleado,
+  PropuestaVinculo,
   DestinoGasto,
   TipoDestinoGasto,
   EquivalenciaErp,
@@ -90,6 +92,7 @@ export default function Configuracion() {
       <ReglasSeccion />
       <ConceptosDeGasto />
       <ReglasConcepto />
+      <PersonasYEmpleados />
       <FormasPago />
       <EquivalenciasErp />
       <ReglasEscaner />
@@ -297,6 +300,133 @@ const TIPOS_ESTABLECIMIENTO = [
   "TALLER",
   "OTRO",
 ];
+
+/**
+ * Cada persona de Cash, atada a su ficha de empleado.
+ *
+ * Una liquidación de gastos es de un TRABAJADOR, y el trabajador es su ficha
+ * de empleado. En Cash lo representa una persona —la misma a la que se imputan
+ * las dietas—, y aquí se dice cuál es cuál. Lo que se parece por el nombre se
+ * PROPONE; lo aplica quien esté delante, porque «José» puede ser dos Josés.
+ */
+function PersonasYEmpleados() {
+  const { puede } = useCash();
+  const [disponible, setDisponible] = useState(true);
+  const [empleados, setEmpleados] = useState<Empleado[]>([]);
+  const [personas, setPersonas] = useState<DestinoGasto[]>([]);
+  const [propuestas, setPropuestas] = useState<Map<number, PropuestaVinculo>>(new Map());
+  const [error, setError] = useState("");
+  const [aviso, setAviso] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const editable = puede("cash.configure");
+
+  const cargar = useCallback(async () => {
+    try {
+      const [e, c] = await Promise.all([api.empleados(), api.conceptosDeGasto()]);
+      setDisponible(e.disponible);
+      setEmpleados(e.empleados);
+      setPersonas(c.destinos.filter((d) => d.tipo === "PERSONA" && d.activo));
+      if (e.disponible && editable) {
+        const p = await api.propuestasVinculo();
+        setPropuestas(new Map(p.propuestas.map((x) => [x.destinoId, x])));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error cargando los empleados");
+    }
+  }, [editable]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function vincular(destinoId: number, employeeId: string | null) {
+    setOcupado(true);
+    setError("");
+    setAviso("");
+    try {
+      const r = await api.vincularPersona(destinoId, employeeId);
+      if (r.liquidacionesActualizadas > 0) {
+        setAviso(`Hecho. ${r.liquidacionesActualizadas} liquidación(es) anteriores ya saben de qué empleado son.`);
+      }
+      await cargar();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se ha podido vincular");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  if (!disponible) return null;
+
+  const nombreDe = (e: Empleado) => [e.nombre, e.apellidos].filter(Boolean).join(" ");
+  const vinculadoA = new Map(empleados.filter((e) => e.destinoId != null).map((e) => [e.destinoId!, e]));
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Personas y fichas de empleado</h2>
+      <p className="text-[12px] text-slate-500">
+        Las liquidaciones de gastos son de un trabajador, y el trabajador es su <b>ficha de empleado</b>. Aquí se
+        dice qué persona de Cash es cada empleado. Lo que se parece por el nombre se propone; tú decides.
+      </p>
+      {error && <ErrorBox>{error}</ErrorBox>}
+      {aviso && <p className="text-[12px] text-emerald-300">{aviso}</p>}
+      <table className="w-full text-sm">
+        <thead>
+          <tr>
+            <th className={thCls}>Persona en Cash</th>
+            <th className={thCls}>Ficha de empleado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {personas.length === 0 && <EmptyRow cols={2} text="Todavía no hay personas en Cash." />}
+          {personas.map((d) => {
+            const actual = vinculadoA.get(d.id) ?? null;
+            const p = propuestas.get(d.id);
+            const libres = empleados.filter((e) => e.destinoId == null || e.destinoId === d.id);
+            return (
+              <tr key={d.id}>
+                <td className={tdCls}>{d.nombre}</td>
+                <td className={tdCls}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={actual?.id ?? ""}
+                      disabled={!editable || ocupado}
+                      onChange={(e) => void vincular(d.id, e.target.value || null)}
+                      className={`${inputCls} w-64`}
+                    >
+                      <option value="">Sin vincular</option>
+                      {libres.map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {nombreDe(e)}
+                          {e.codigo ? ` (${e.codigo})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {!actual && p && p.employeeId && (p.certeza === "exacta" || p.certeza === "unica") && (
+                      <button
+                        disabled={ocupado}
+                        className={btnSecondary}
+                        onClick={() => void vincular(d.id, p.employeeId)}
+                        title={p.certeza === "unica" ? "Solo coincide el nombre de pila: compruébalo." : undefined}
+                      >
+                        ¿Es {p.employeeNombre}? Vincular
+                      </button>
+                    )}
+                    {!actual && p?.certeza === "ambigua" && (
+                      <span className="text-[11px] text-amber-300">
+                        Se parece a varios: {p.candidatos.map((c) => c.nombre).join(", ")}. Elige tú.
+                      </span>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+  );
+}
 
 function ReglasConcepto() {
   const { puede } = useCash();

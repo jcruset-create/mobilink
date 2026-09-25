@@ -35,6 +35,7 @@ let informe: typeof import("./expenseclaims/report.ts");
 let pago: typeof import("./expenseclaims/pago.ts");
 let stats: typeof import("./expensestats.ts");
 let analisis: typeof import("./expenseclaims/analisis.ts");
+let empleados: typeof import("./expenseclaims/empleados.ts");
 
 const EMPRESA = "00000000-0000-4000-a000-0000000000f7";
 const PRESENTA = "00000000-0000-4000-a000-0000000000f8";
@@ -101,6 +102,7 @@ beforeAll(async () => {
   pago = await import("./expenseclaims/pago.ts");
   stats = await import("./expensestats.ts");
   analisis = await import("./expenseclaims/analisis.ts");
+  empleados = await import("./expenseclaims/empleados.ts");
 
   /*
    * `sea_employees` la crean las migraciones de Supabase, no el arranque, así
@@ -114,6 +116,8 @@ beforeAll(async () => {
       apellidos TEXT,
       activo BOOLEAN NOT NULL DEFAULT true
     )`);
+  // Las columnas que lee Cash, también en una base con el stub de una pasada anterior.
+  await db.query(`ALTER TABLE sea_employees ADD COLUMN IF NOT EXISTS codigo_operario TEXT`);
 
   dietas = (await config.crearConcepto(ctx, { nombre: `Dietas ${sufijo}`, tipoDestino: "PERSONA" })).id;
   peajes = (await config.crearConcepto(ctx, { nombre: `Peajes ${sufijo}`, tipoDestino: "NINGUNO" })).id;
@@ -1290,5 +1294,125 @@ describe.runIf(RUN)("Liquidaciones · duplicados por contenido", () => {
       if (antes === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = antes;
     }
+  });
+});
+
+describe.runIf(RUN)("Liquidaciones · personas y fichas de empleado", () => {
+  const alta = async (nombre: string, apellidos: string | null, activo = true) => {
+    const id = randomUUID();
+    await db.query(`INSERT INTO sea_employees (id, nombre, apellidos, activo) VALUES ($1,$2,$3,$4)`, [
+      id,
+      nombre,
+      apellidos,
+      activo,
+    ]);
+    return id;
+  };
+
+  it("lista los empleados activos, con su persona de Cash si la tienen", async () => {
+    const libre = await alta("Nuria", `Pons ${sufijo}`);
+    const baja = await alta("Oriol", `Baja ${sufijo}`, false);
+    const conPersona = await alta("Quim", `Roca ${sufijo}`);
+    const l = await liquidaciones.crearLiquidacion(ctx, { employeeId: conPersona });
+
+    const r = await empleados.listarEmpleados(EMPRESA);
+    expect(r.disponible).toBe(true);
+    const ids = r.empleados.map((e) => e.id);
+    expect(ids).toContain(libre);
+    expect(ids).not.toContain(baja);
+    expect(r.empleados.find((e) => e.id === libre)?.destinoId).toBeNull();
+    expect(r.empleados.find((e) => e.id === conPersona)?.destinoId).toBe(l.expenseTargetId);
+  });
+
+  it("propone por nombre, en los dos órdenes, y no se inventa nada cuando duda", async () => {
+    const anna = await alta("Anna", `Soler ${sufijo}`);
+    // Dada de alta a mano como «Apellidos, Nombre».
+    const soler = await config.crearDestino(ctx, { nombre: `Soler ${sufijo}, Anna`, tipo: "PERSONA" });
+    // Dos «Pau» sin apellido que desempate: ambiguo.
+    await alta(`Pau${sufijo}`, "Uno");
+    await alta(`Pau${sufijo}`, "Dos");
+    const pau = await config.crearDestino(ctx, { nombre: `Pau${sufijo}`, tipo: "PERSONA" });
+
+    const { propuestas } = await empleados.proponerVinculosDePersonas(EMPRESA);
+    expect(propuestas.find((p) => p.destinoId === soler.id)).toMatchObject({ certeza: "exacta", employeeId: anna });
+    const ambigua = propuestas.find((p) => p.destinoId === pau.id);
+    expect(ambigua).toMatchObject({ certeza: "ambigua", employeeId: null });
+    expect(ambigua?.candidatos).toHaveLength(2);
+  });
+
+  it("vincular hace que sus liquidaciones sepan de quién son; desvincular no las toca", async () => {
+    const empleado = await alta("Marc", `Vila ${sufijo}`);
+    const persona = await config.crearDestino(ctx, { nombre: `Marc Vila ${sufijo}`, tipo: "PERSONA" });
+    const antes = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: persona.id });
+    expect(antes.employeeId).toBeNull();
+
+    // Por empleado todavía no se puede: hay una persona suelta que se le parece.
+    await expect(liquidaciones.crearLiquidacion(ctx, { employeeId: empleado })).rejects.toMatchObject({
+      codigo: "DESTINO_SIN_VINCULAR",
+    });
+
+    const r = await empleados.vincularPersona(ctx, persona.id, empleado);
+    expect(r.liquidacionesActualizadas).toBe(1);
+    expect((await liquidaciones.detalleLiquidacion(ctx, antes.id)).liquidacion.employeeId).toBe(empleado);
+
+    // Ya vinculado, por empleado va a SU persona, sin crear otra.
+    const despues = await liquidaciones.crearLiquidacion(ctx, { employeeId: empleado });
+    expect(despues.expenseTargetId).toBe(persona.id);
+
+    // Una persona vinculada deja de proponerse.
+    const { propuestas } = await empleados.proponerVinculosDePersonas(EMPRESA);
+    expect(propuestas.some((p) => p.destinoId === persona.id)).toBe(false);
+
+    await empleados.vincularPersona(ctx, persona.id, null);
+    expect((await liquidaciones.detalleLiquidacion(ctx, antes.id)).liquidacion.employeeId).toBe(empleado);
+  });
+
+  it("un empleado ya vinculado no se propone para otra persona", async () => {
+    const empleado = await alta("Joan", `Mas ${sufijo}`);
+    const suya = await config.crearDestino(ctx, { nombre: `J. Mas ${sufijo}`, tipo: "PERSONA" });
+    await empleados.vincularPersona(ctx, suya.id, empleado);
+    // Otra persona suelta que se llama exactamente como él.
+    const tocaya = await config.crearDestino(ctx, { nombre: `Joan Mas ${sufijo}`, tipo: "PERSONA" });
+    const { propuestas } = await empleados.proponerVinculosDePersonas(EMPRESA);
+    expect(propuestas.find((p) => p.destinoId === tocaya.id)).toMatchObject({ certeza: "sin_candidato", employeeId: null });
+  });
+
+  it("re-vincular a otro empleado no reescribe las liquidaciones que ya tenían identidad", async () => {
+    const primero = await alta("Toni", `Gil ${sufijo}`);
+    const segundo = await alta("Toni", `Gil Bis ${sufijo}`);
+    const persona = await config.crearDestino(ctx, { nombre: `Toni G ${sufijo}`, tipo: "PERSONA" });
+    await empleados.vincularPersona(ctx, persona.id, primero);
+    const suya = await liquidaciones.crearLiquidacion(ctx, { employeeId: primero });
+    expect(suya.employeeId).toBe(primero);
+
+    // Se vinculó al Toni equivocado: se corrige.
+    await empleados.vincularPersona(ctx, persona.id, null);
+    const r = await empleados.vincularPersona(ctx, persona.id, segundo);
+    expect(r.liquidacionesActualizadas).toBe(0);
+    expect((await liquidaciones.detalleLiquidacion(ctx, suya.id)).liquidacion.employeeId).toBe(primero);
+  });
+
+  it("un empleado, una persona: no se vincula a dos", async () => {
+    const empleado = await alta("Laia", `Font ${sufijo}`);
+    const una = await config.crearDestino(ctx, { nombre: `Laia F ${sufijo}`, tipo: "PERSONA" });
+    const otra = await config.crearDestino(ctx, { nombre: `L. Font ${sufijo}`, tipo: "PERSONA" });
+    await empleados.vincularPersona(ctx, una.id, empleado);
+    await expect(empleados.vincularPersona(ctx, otra.id, empleado)).rejects.toMatchObject({
+      codigo: "EMPLEADO_YA_VINCULADO",
+      detalle: { destinoId: una.id },
+    });
+  });
+
+  it("ni a un centro de coste, ni a un empleado de baja o inexistente", async () => {
+    await expect(empleados.vincularPersona(ctx, taller, await alta("X", sufijo))).rejects.toMatchObject({
+      codigo: "DESTINO_NO_ES_PERSONA",
+    });
+    const persona = await config.crearDestino(ctx, { nombre: `Suelta ${sufijo}`, tipo: "PERSONA" });
+    await expect(empleados.vincularPersona(ctx, persona.id, await alta("Y", sufijo, false))).rejects.toMatchObject({
+      codigo: "EMPLEADO_NO_ENCONTRADO",
+    });
+    await expect(empleados.vincularPersona(ctx, persona.id, randomUUID())).rejects.toMatchObject({
+      codigo: "EMPLEADO_NO_ENCONTRADO",
+    });
   });
 });
