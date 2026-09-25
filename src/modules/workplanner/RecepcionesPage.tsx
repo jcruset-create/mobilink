@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CarFront, Check, CheckCheck, Loader2, RefreshCw, ScanLine, X } from "lucide-react";
+import {
+  CarFront,
+  Check,
+  CheckCheck,
+  Loader2,
+  Printer,
+  RefreshCw,
+  ScanLine,
+  X,
+} from "lucide-react";
 
 import { allocateJobPure } from "../assignment";
 import { buildTechLoadStats, buildTechStats } from "../workshopReports";
@@ -10,7 +19,8 @@ import {
   loadTechsFromBackend,
 } from "../workshopApi";
 import { getAdminHeaders } from "../adminHeaders";
-import { DEFAULT_WORKSHOP_ID, normalizeWorkshopId } from "../workshops";
+import { DEFAULT_WORKSHOP_ID, getWorkshopById, normalizeWorkshopId } from "../workshops";
+import { htmlDelResguardo } from "./resguardoRecepcion";
 import {
   jobDesdeRecepcion,
   loQueFaltaParaConvertir,
@@ -212,6 +222,37 @@ export default function RecepcionesPage() {
     } finally {
       setGuardando(false);
     }
+  }
+
+  /**
+   * Manda el resguardo a la impresora.
+   *
+   * Se abre una ventana aparte y se escribe la hoja entera, que es lo que ya
+   * hacen las etiquetas de herramientas y de máquinas. Una hoja que se arma
+   * sola no pelea con el tema oscuro del panel, y lo que sale por la
+   * impresora es exactamente lo que dice `resguardoRecepcion.ts`.
+   *
+   * La ventana se imprime sola al terminar de cargar: sin esperar al `load`,
+   * las fotos salen en blanco.
+   */
+  function imprimir(r: RecepcionVehiculo) {
+    const ventana = window.open("", "_blank");
+    if (!ventana) {
+      // El navegador la ha bloqueado. Decirlo, que si no parece que el botón
+      // no hace nada.
+      setError(
+        "El navegador ha bloqueado la ventana de impresión. Permite las ventanas emergentes de esta página y vuelve a pulsar."
+      );
+      return;
+    }
+    ventana.document.write(
+      htmlDelResguardo(r, {
+        taller: getWorkshopById(r.workshopId ?? workshopId).shortName,
+        ahoraMs: Date.now(),
+        areaLabel: r.area ?? null,
+      })
+    );
+    ventana.document.close();
   }
 
   async function descartar() {
@@ -481,6 +522,19 @@ export default function RecepcionesPage() {
                       >
                         <X className="h-4 w-4" />
                         Descartar
+                      </button>
+                      {/*
+                        Imprimir va al otro lado del hueco: los tres de la
+                        izquierda deciden el destino de la recepción y no se
+                        deshacen; éste solo saca un papel y se puede repetir.
+                      */}
+                      <button
+                        type="button"
+                        onClick={() => imprimir(actual)}
+                        className="ml-auto flex items-center gap-2 rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-700"
+                      >
+                        <Printer className="h-4 w-4" />
+                        Imprimir
                       </button>
                     </div>
                   </div>
