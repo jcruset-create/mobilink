@@ -890,10 +890,43 @@ Decisiones que conviene no reabrir:
   incluidos detrás (`montar` de `report.ts`, ahora exportado). Antes de pagar es
   el papel que se firma.
 
-Por fases (plan completo en el prompt): **PR1**, esto —preparar, revisar,
-aprobar, PDF—; PR2 el pago; PR3 la lectura automática; PR4 los otros dos
-duplicados (mismo ticket con otro escaneo, mismo número ya pagado); PR5 el
-vínculo de empleados en Configuración.
+### El pago
+
+**Solo al pagar una aprobada sale dinero**, y por `registrarOperacion`:
+`pagarLiquidacion` (`expenseclaims/pago.ts`) no repite ninguna regla de la
+caja —piezas, forma de pago, jornada, taller— porque las comprueba el motor.
+
+- **Un `PAYMENT` por el total**, con la liquidación como `referencia` y sin
+  concepto: una operación solo admite uno. El cajón ve una salida de 82,28 €
+  con una composición de piezas; el desglose sigue en las líneas.
+- **Se paga lo aprobado.** El importe lo manda la pantalla y se compara con el
+  aprobado y con la suma de las líneas incluidas; si no coincide, no sale
+  dinero (`IMPORTE_NO_COINCIDE`). Los conceptos se revalidan con el catálogo de
+  ahora: uno desactivado tras aprobar para el pago.
+- **Dos llaves contra el pago doble**: la fila bloqueada, y una clave de
+  idempotencia obligatoria que el navegador genera al abrir la ventana y repite
+  al reintentar. Misma clave → el mismo pago, sin sacar nada; otra clave sobre
+  una pagada → `LIQUIDACION_YA_PAGADA`.
+- **Los tickets pasan a ser justificantes del pago sin copiar el fichero**
+  (misma ruta, como AutoScan), así que salen en el informe de cierre del día.
+  Los excluidos no.
+- **Anular el pago** en el Histórico devuelve la liquidación a APROBADA en la
+  MISMA transacción (gancho en `anularOperacion`): los justificantes del pago se
+  anulan, y las coincidencias de duplicado que apuntaban a ellos pasan a
+  DESCARTADA. Se puede volver a pagar con una clave nueva.
+- **La estadística de gasto cuenta los tickets, no la operación**: el pago de
+  una liquidación aporta una fila por ticket incluido con su concepto y su
+  destino derivado. El total no cambia y las operaciones se cuentan distintas.
+
+De paso se arregló un fallo anterior: **un pago anulado seguía sumando como
+gasto «sin clasificar»**. La anulación crea una operación inversa del mismo
+tipo, confirmada y en positivo, y la estadística la contaba. Ahora las
+inversas (`reversa_de_id`) no entran.
+
+Por fases (plan completo en el prompt): PR1 preparar, revisar, aprobar y PDF;
+PR2 el pago; PR3 la lectura automática; PR4 los otros dos duplicados (mismo
+ticket con otro escaneo, mismo número ya pagado); PR5 el vínculo de empleados
+en Configuración.
 
 ## 8. Estado de la entrega
 

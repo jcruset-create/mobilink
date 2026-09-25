@@ -1211,3 +1211,27 @@ export const reabrirLiquidacion = (id: number) =>
 
 export const anularLiquidacion = (id: number, motivo: string) =>
   pedir<{ liquidacion: Liquidacion }>(`/expense-claims/${id}/void`, json({ motivo }));
+
+/**
+ * Paga una liquidación aprobada. La clave de idempotencia la genera quien
+ * abre la ventana de pago y se REPITE si hay que reintentar: si la respuesta
+ * se perdió por el camino, el servidor devuelve el pago que ya existe en vez
+ * de sacar el dinero otra vez.
+ */
+export const pagarLiquidacion = (
+  id: number,
+  datos: {
+    sessionId: number;
+    importeCentimos: number;
+    formasPago: { forma: string; importe: number; referencia?: string | null }[];
+    efectivoEntregado: LineaDenominacion[];
+    efectivoRecibido: LineaDenominacion[];
+  },
+  idempotencyKey: string
+) =>
+  pedir<{ liquidacion: Liquidacion; pago: { operacionId: number; numero: string }; repetido: boolean }>(
+    `/expense-claims/${id}/pay`,
+    // En el cuerpo, como el resto del módulo: `pedir` pone sus propias
+    // cabeceras de sesión. El servidor acepta la clave por los dos sitios.
+    json({ ...datos, idempotencyKey })
+  );

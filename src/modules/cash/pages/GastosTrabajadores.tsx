@@ -12,7 +12,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, CheckCircle2, FileText, Plus, Upload } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import { ArrowLeft, Banknote, CheckCircle2, FileText, Plus, RefreshCw, Upload } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import {
   Aviso,
@@ -32,10 +33,19 @@ import {
   thCls,
 } from "../components/ui";
 import { MAXIMO_JUSTIFICANTE } from "../components/JustificantePrevio";
-import { aCentimos, aTextoEditable, euros, fechaJornada } from "../utils/money";
+import PaymentMethodPicker from "../components/PaymentMethodPicker";
+import DenominationGrid, {
+  type CantidadesPorValor,
+  cantidadesDesde,
+  lineasDesde,
+} from "../components/DenominationGrid";
+import { AvisoCartuchos } from "../components/ui";
+import { aCentimos, aTextoEditable, euros, fechaJornada, totalLineas } from "../utils/money";
+import { esFallo } from "../utils/result";
 import { TONO_ESTADO, accionesDisponibles } from "../utils/liquidacion";
 import {
   ETIQUETA_ESTADO_LIQUIDACION,
+  type AperturaCartucho,
   type ConceptoGasto,
   type DestinoGasto,
   type DetalleLiquidacion,
@@ -61,13 +71,26 @@ export default function GastosTrabajadores() {
   const [destinos, setDestinos] = useState<DestinoGasto[]>([]);
   const [error, setError] = useState("");
 
+  /*
+   * `?numero=LG-26-001` abre esa directamente: es el enlace del Histórico,
+   * donde el pago lleva el número de la liquidación como referencia.
+   */
+  const [params, setParams] = useSearchParams();
+  const numeroPedido = params.get("numero");
+
   const cargar = useCallback(async () => {
     try {
-      setLista((await api.liquidaciones({ estado: filtro || undefined })).liquidaciones);
+      const r = (await api.liquidaciones({ estado: filtro || undefined })).liquidaciones;
+      setLista(r);
+      if (numeroPedido) {
+        const encontrada = r.find((x) => x.numero === numeroPedido);
+        if (encontrada) setAbierta(encontrada.id);
+        setParams({}, { replace: true });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se han podido cargar las liquidaciones");
     }
-  }, [filtro]);
+  }, [filtro, numeroPedido, setParams]);
 
   useEffect(() => {
     void cargar();
@@ -247,8 +270,9 @@ function DetalleDeLiquidacion({
   destinos: DestinoGasto[];
   onVolver: () => void;
 }) {
-  const { permisos } = useCash();
+  const { permisos, puede, refrescar } = useCash();
   const [d, setD] = useState<DetalleLiquidacion | null>(null);
+  const [pagando, setPagando] = useState(false);
   const [error, setError] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [pidiendoMotivo, setPidiendoMotivo] = useState<"RECHAZAR" | "ANULAR" | null>(null);
@@ -344,6 +368,11 @@ function DetalleDeLiquidacion({
               Rechazar
             </button>
           )}
+          {l.estado === "APROBADA" && puede("cash.expense_claim.pay") && (
+            <button disabled={ocupado} onClick={() => setPagando(true)} className={btnPrimary}>
+              <Banknote className="mr-1 inline h-4 w-4" /> Pagar {euros(l.totalCentimos)}
+            </button>
+          )}
           {acciones.has("REABRIR") && (
             <button disabled={ocupado} onClick={() => void accion(() => api.reabrirLiquidacion(l.id))} className={btnSecondary}>
               Reabrir para corregir
@@ -372,8 +401,16 @@ function DetalleDeLiquidacion({
       {l.estado === "ANULADA" && <Aviso tono="mal">Anulada: {l.anuladaMotivo}</Aviso>}
       {l.estado === "APROBADA" && (
         <Aviso tono="info">
-          Aprobada y pendiente de pago. El pago desde la caja llega en la próxima fase; mientras, el PDF sirve para
-          firmar.
+          Aprobada y pendiente de pago.{" "}
+          {puede("cash.expense_claim.pay")
+            ? "Al pagarla sale el dinero de la caja abierta y los tickets quedan como justificantes del pago."
+            : "La paga un responsable."}
+        </Aviso>
+      )}
+      {l.estado === "PAGADA" && (
+        <Aviso tono="bien">
+          Pagada en <strong>{l.pagoNumero}</strong>. Los tickets están colgados de ese pago y salen en el informe de
+          cierre del día. Si el pago fue un error, se anula desde el Histórico y la liquidación vuelve a Aprobada.
         </Aviso>
       )}
       {l.notas && <p className="text-[12px] text-slate-400">Notas: {l.notas}</p>}
@@ -431,6 +468,18 @@ function DetalleDeLiquidacion({
         ))}
       </div>
 
+      {pagando && (
+        <PagarLiquidacion
+          liquidacion={l}
+          onCerrar={() => setPagando(false)}
+          onPagada={async () => {
+            setPagando(false);
+            await cargar();
+            await refrescar();
+          }}
+        />
+      )}
+
       {pidiendoMotivo && (
         <PedirMotivo
           titulo={pidiendoMotivo === "RECHAZAR" ? `Rechazar ${l.numero}` : `Anular ${l.numero}`}
@@ -450,6 +499,181 @@ function DetalleDeLiquidacion({
         />
       )}
     </div>
+  );
+}
+
+// ── Pagar ──────────────────────────────────────────────────────────────────
+
+/**
+ * La ventana de pago: aquí, y solo aquí, sale dinero.
+ *
+ * Es la misma mecánica que Pagos —forma de pago, piezas que salen y vuelta—
+ * con el importe FIJO: se paga lo aprobado, no lo que alguien teclee. La
+ * clave de idempotencia nace al abrir la ventana y se repite si se reintenta,
+ * así que un doble clic o una respuesta perdida no pagan dos veces.
+ */
+export function PagarLiquidacion({
+  liquidacion,
+  onCerrar,
+  onPagada,
+}: {
+  liquidacion: Liquidacion;
+  onCerrar: () => void;
+  onPagada: () => Promise<void>;
+}) {
+  const { jornada, denominaciones, disponible, formasParaPagos } = useCash();
+  const importe = liquidacion.totalCentimos;
+  const [clave] = useState(() =>
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+  const efectivo = formasParaPagos.find((f) => f.afectaEfectivo) ?? null;
+  const [forma, setForma] = useState(efectivo?.codigo ?? formasParaPagos[0]?.codigo ?? "");
+  const [referencia, setReferencia] = useState("");
+  const [entregado, setEntregado] = useState<CantidadesPorValor>({});
+  const [vuelta, setVuelta] = useState<CantidadesPorValor>({});
+  const [aperturas, setAperturas] = useState<AperturaCartucho[]>([]);
+  const [aviso, setAviso] = useState("");
+  const [error, setError] = useState("");
+  const [pagando, setPagando] = useState(false);
+
+  const formaElegida = formasParaPagos.find((f) => f.codigo === forma) ?? null;
+  const esEfectivo = Boolean(formaElegida?.afectaEfectivo);
+  const neto = totalLineas(lineasDesde(entregado)) - totalLineas(lineasDesde(vuelta));
+  const faltaReferencia = Boolean(formaElegida?.pideReferencia) && !referencia.trim();
+
+  const proponer = useCallback(async () => {
+    if (!jornada || !esEfectivo) return;
+    try {
+      const r = await api.proponerCambio(jornada.sesion.id, importe);
+      if (esFallo(r)) {
+        setEntregado({});
+        setAperturas([]);
+        setAviso(r.mensaje);
+      } else {
+        setEntregado(cantidadesDesde(r.lineas));
+        setVuelta({});
+        setAperturas(r.aperturas ?? []);
+        setAviso("");
+      }
+    } catch (e) {
+      setAviso(e instanceof Error ? e.message : "No se ha podido proponer qué billetes sacar");
+    }
+  }, [jornada, esEfectivo, importe]);
+
+  useEffect(() => {
+    void proponer();
+  }, [proponer]);
+
+  async function pagar() {
+    if (!jornada) return;
+    setPagando(true);
+    setError("");
+    try {
+      await api.pagarLiquidacion(
+        liquidacion.id,
+        {
+          sessionId: jornada.sesion.id,
+          importeCentimos: importe,
+          formasPago: [{ forma, importe, referencia: referencia.trim() || null }],
+          efectivoEntregado: esEfectivo ? lineasDesde(entregado) : [],
+          efectivoRecibido: esEfectivo ? lineasDesde(vuelta) : [],
+        },
+        clave
+      );
+      await onPagada();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se ha podido pagar");
+    } finally {
+      setPagando(false);
+    }
+  }
+
+  const puedePagar =
+    Boolean(jornada) && Boolean(forma) && !faltaReferencia && (!esEfectivo || neto === importe) && !pagando;
+
+  return (
+    <Modal
+      title={`Pagar ${liquidacion.numero} a ${liquidacion.empleadoNombre}`}
+      onClose={onCerrar}
+      wide
+      footer={
+        <div className="flex items-center justify-end gap-2">
+          <button className={btnSecondary} onClick={onCerrar} disabled={pagando}>
+            Cancelar
+          </button>
+          <button className={btnPrimary} onClick={() => void pagar()} disabled={!puedePagar}>
+            {pagando ? "Pagando…" : `Confirmar pago de ${euros(importe)}`}
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        {!jornada && <Aviso tono="aviso">No hay ninguna jornada abierta. Ábrela desde «Jornada actual» para pagar.</Aviso>}
+        {error && <ErrorBox>{error}</ErrorBox>}
+        <div className="flex items-baseline justify-between rounded-lg bg-slate-900/60 px-3 py-2">
+          <span className="text-sm text-slate-400">Importe aprobado</span>
+          <span className="text-2xl font-black tabular-nums text-slate-100">{euros(importe)}</span>
+        </div>
+        <div>
+          <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Forma de pago</span>
+          <PaymentMethodPicker
+            formas={formasParaPagos}
+            valor={forma}
+            onChange={(v) => {
+              setForma(v);
+              setEntregado({});
+              setVuelta({});
+            }}
+            permitirMixto={false}
+            deshabilitado={pagando}
+          />
+        </div>
+        {formaElegida?.pideReferencia && (
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+              Referencia (obligatoria)
+            </span>
+            <input value={referencia} onChange={(e) => setReferencia(e.target.value)} className={inputCls} />
+          </label>
+        )}
+        {esEfectivo && jornada && (
+          <>
+            {aviso && <Aviso tono="mal">{aviso}</Aviso>}
+            <AvisoCartuchos aperturas={aperturas} />
+            <DenominationGrid
+              titulo="Efectivo que sale de la caja"
+              denominaciones={denominaciones}
+              cantidades={entregado}
+              onChange={setEntregado}
+              disponible={disponible}
+              mostrarDisponible
+              objetivoCentimos={importe}
+              deshabilitado={pagando}
+            />
+            <button onClick={() => void proponer()} className={btnSecondary}>
+              <RefreshCw className="mr-1 inline h-3.5 w-3.5" /> Proponer composición
+            </button>
+            <DenominationGrid
+              titulo="Vuelta que devuelve el trabajador"
+              denominaciones={denominaciones}
+              cantidades={vuelta}
+              onChange={setVuelta}
+              deshabilitado={pagando}
+            />
+            <div
+              className={`flex items-baseline justify-between rounded-lg px-3 py-2 text-sm ${
+                neto === importe ? "bg-emerald-500/10 text-emerald-200" : "bg-amber-500/10 text-amber-200"
+              }`}
+            >
+              <span>Sale de la caja, descontada la vuelta</span>
+              <span className="font-bold tabular-nums">{euros(neto)}</span>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }
 

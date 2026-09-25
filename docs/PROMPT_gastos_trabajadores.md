@@ -1066,3 +1066,33 @@ Pruebas: 22 unitarias del dominio, 24 de integración contra PostgreSQL
 pantalla. 21 mutaciones, todas en rojo. Una sobrevivió la primera pasada —el
 PDF con los excluidos detrás— porque la prueba solo comparaba páginas entre
 estados; ahora comprueba que incluir un ticket añade exactamente su página.
+
+## Lo que entró en PR2
+
+El pago: `pagarLiquidacion` (`server/cash/expenseclaims/pago.ts`), endpoint
+`POST /expense-claims/:id/pay`, gancho en `anularOperacion`, estadística por
+tickets y la ventana de pago en la pantalla, con enlace desde el Histórico.
+
+Desvíos respecto al prompt:
+
+- **La clave de idempotencia viaja en el cuerpo** desde la pantalla. El
+  servidor la acepta también en la cabecera `Idempotency-Key`, pero `pedir()`
+  de `services/api.ts` sustituye las cabeceras por las de sesión, y tocarlo
+  para esto afectaba a todas las llamadas del módulo.
+- **El pago comprueba además el importe**: la pantalla manda el que enseña y
+  tiene que coincidir con el aprobado y con la suma de las líneas.
+- **La re-detección de duplicados al pagar sigue en PR4**, como decía el plan;
+  aquí solo se revalidan los conceptos.
+- **Lo que no estaba en el plan: un fallo anterior de la estadística.** Un
+  pago anulado seguía sumando como gasto «sin clasificar», porque la operación
+  inversa es del mismo tipo, confirmada y en positivo. Salió al probar que
+  anular el pago de una liquidación la quita de la estadística; se comprobó
+  sobre `main` sin estos cambios (20 € pagados y anulados = 20 € de gasto) y se
+  arregla excluyendo las inversas, con su prueba en `gastos.integration.test.ts`.
+- El enlace del Histórico abre la liquidación por número
+  (`/cash/gastos-trabajadores?numero=LG-26-001`).
+
+Pruebas: 9 de integración nuevas del pago (una más en gastos). 17 mutaciones,
+todas en rojo; dos sobrevivieron la primera pasada —promover los excluidos y
+contarlos en la estadística— porque ninguna liquidación pagada tenía un ticket
+excluido. Ahora hay una.
