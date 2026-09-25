@@ -2,7 +2,19 @@ name: tyrecontrol_app
 description: "Mobilink TyreControl — revision de neumaticos en campo"
 publish_to: 'none'
 
-version: 0.46.3+259
+# UNA sola numeración para Android y para iOS: la de aquí.
+#
+# Antes iOS iba por su cuenta —«1.0» escrito a mano en codemagic.yaml— y la APK
+# por el pubspec (0.46.x). Con dos numeraciones no se puede saber, al dar
+# soporte, cuál de las dos apps es más nueva: la tablet decía 0.46.5+261 y el
+# iPhone 1.0.0+158 con el mismo código dentro.
+#
+# Se arranca en 1.1.0 y no en 0.46.6 porque en TestFlight ya hay una 1.0, y
+# Apple no admite que el nombre de versión vaya hacia atrás. Android no tiene
+# tienda —la APK se instala a mano— así que subir de 0.46 a 1.1 no le afecta:
+# lo único que Android exige es que el número de build crezca, y ese lo pone el
+# contador de la CI.
+version: 1.1.4+265
 
 environment:
   sdk: ^3.8.1
@@ -21,6 +33,9 @@ dependencies:
   url_launcher: ^6.3.0
 
   image_picker: ^1.1.2
+  # Escanear el QR de la etiqueta del neumático al montar. Misma versión que
+  # en toolcontrol_app, que ya lo usa: una sola versión que mantener.
+  mobile_scanner: ^5.2.3
   flutter_image_compress: ^2.3.0
   path_provider: ^2.1.0
 

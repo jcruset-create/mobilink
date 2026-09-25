@@ -91,14 +91,30 @@ class _LoginScreenState extends State<LoginScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Icon(Icons.build_circle, size: 64, color: AppColors.primary),
-                const SizedBox(height: 12),
-                const Text(
-                  'WorkPlanner Taller',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                // El logotipo sustituye al icono y al rótulo que había: el
+                // dibujo ya lleva el nombre dentro, así que repetirlo debajo
+                // sería decir dos veces lo mismo.
+                //
+                // Se limita el ancho en vez de estirarlo a la columna: en una
+                // tablet en horizontal ocuparía media pantalla.
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 320),
+                    child: Image.asset(
+                      'assets/logo-workplanner.png',
+                      fit: BoxFit.contain,
+                      // Si el asset faltara, la pantalla de entrada se queda
+                      // en rojo y no se puede ni escribir el PIN. Mejor el
+                      // rótulo de siempre que una app que no deja entrar.
+                      errorBuilder: (_, __, ___) => const Text(
+                        'WorkPlanner Taller',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 28),
                 if (_loadingTechs)
                   const Padding(
                     padding: EdgeInsets.all(16),

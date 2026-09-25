@@ -49,6 +49,8 @@ import { simpleParser, type ParsedMail } from "mailparser";
 import pool from "../db.ts";
 import { fechaDeActivacion, leerRemitentes } from "./config.ts";
 import { parsearCorreo } from "./domain/correo/index.ts";
+import { cuerpoEnTexto, remitenteAceptado } from "./domain/correo/remitentes.ts";
+import { motivoDelFallo } from "./domain/imap.ts";
 import { aCorreoEntrante, procesarCorreo, type AdjuntoEntrante } from "./ingesta.ts";
 import { guardarDocumento, hashDeFichero, rutaDocumento } from "./storage.ts";
 
@@ -113,6 +115,12 @@ export type ClienteBuzon = {
   ): Promise<{ source?: Buffer } | false>;
   messageFlagsAdd(rango: { uid: string }, flags: string[], opciones: { uid: true }): Promise<unknown>;
   logout(): Promise<unknown>;
+  /**
+   * Cierra el socket a las bravas. Opcional: el buzón de las pruebas no lo
+   * necesita, pero ImapFlow sí lo tiene y hace falta cuando `logout()` no
+   * puede hacerse porque la sesión nunca llegó a abrirse.
+   */
+  close?(): void;
 };
 
 export type ResultadoCorreo = "procesado" | "duplicado" | "ignorado" | "error";
@@ -147,42 +155,10 @@ function direccion(v: ParsedMail["from"]): string {
   return (v?.value?.[0]?.address ?? "").trim().toLowerCase();
 }
 
-/**
- * El cuerpo en texto plano.
- *
- * Therefore manda texto; si algún día llegara sólo HTML, se le quitan las
- * etiquetas y ya. No se intenta interpretar el HTML: el parser del correo lee
- * líneas, y una tabla HTML aplanada sigue teniendo sus líneas.
- */
-export function cuerpoEnTexto(correo: Pick<ParsedMail, "text" | "html">): string {
-  if (correo.text?.trim()) return correo.text;
-  if (typeof correo.html === "string" && correo.html.trim()) {
-    return correo.html
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/(p|div|tr|li|h\d)>/gi, "\n")
-      .replace(/<[^>]+>/g, "")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">");
-  }
-  return "";
-}
-
-/**
- * ¿Se acepta este remitente? Lista vacía = todos.
- *
- * Una entrada «@proveedor.com» acepta cualquier dirección de ese dominio y de
- * sus subdominios; el resto se compara exacta.
- */
-export function remitenteAceptado(de: string, remitentes: readonly string[]): boolean {
-  if (remitentes.length === 0) return true;
-  const direccion = de.toLowerCase().trim();
-  const dominio = direccion.slice(direccion.lastIndexOf("@") + 1);
-  return remitentes.some((r) =>
-    r.startsWith("@") ? dominio === r.slice(1) || dominio.endsWith(`.${r.slice(1)}`) : r === direccion
-  );
-}
+// Las reglas puras —quién puede escribir y cómo se lee el cuerpo— viven en
+// domain/, que no importa db.ts y por tanto se puede probar sin PostgreSQL.
+// Se reexportan para que quien las importe de aquí no note el cambio.
+export { cuerpoEnTexto, remitenteAceptado } from "./domain/correo/remitentes.ts";
 
 async function guardarAdjuntos(empresaId: string, correo: ParsedMail): Promise<AdjuntoEntrante[]> {
   const salida: AdjuntoEntrante[] = [];
@@ -318,6 +294,22 @@ export type OpcionesPasada = {
 const LOTE_HISTORICO = 200;
 
 /**
+ * Ejecuta un paso del buzón contando QUÉ paso era si falla.
+ *
+ * Los tres primeros —conectar, abrir la carpeta, buscar— fallan igual de
+ * pronto y con el mismo «Command failed» de ImapFlow, y sin saber cuál era
+ * no se puede ni empezar a mirar: una contraseña mal y una carpeta que no
+ * existe se arreglan en sitios distintos.
+ */
+async function conPaso<T>(paso: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    throw new Error(motivoDelFallo(e, paso));
+  }
+}
+
+/**
  * Una pasada: mira el buzón, procesa lo nuevo y deja constancia.
  *
  * Nunca lanza. Un buzón que no se puede abrir devuelve `{ error }` y también
@@ -364,12 +356,14 @@ export async function revisarBuzon(opciones: OpcionesPasada = {}): Promise<Pasad
     // En el histórico no hay suelo: se está pidiendo justamente lo anterior.
     const desde = historico ? null : activacion;
 
-    await cliente.connect();
-    const lock = await cliente.getMailboxLock(cfg.carpeta);
+    await conPaso("conectar con el servidor de correo", () => cliente.connect());
+    const lock = await conPaso(`abrir la carpeta ${cfg.carpeta}`, () => cliente.getMailboxLock(cfg.carpeta));
     try {
-      const uids = historico
-        ? await cliente.search({ since: historico.desde }, { uid: true })
-        : await cliente.search({ seen: false, since: activacion }, { uid: true });
+      const uids = await conPaso("buscar los correos nuevos", () =>
+        historico
+          ? cliente.search({ since: historico.desde }, { uid: true })
+          : cliente.search({ seen: false, since: activacion }, { uid: true })
+      );
       for (const uid of (uids || []).slice(0, historico ? LOTE_HISTORICO : LOTE)) {
         pasada.correos++;
         const d = await procesarUno(cliente, uid, cfg, remitentes, desde);
@@ -386,15 +380,29 @@ export async function revisarBuzon(opciones: OpcionesPasada = {}): Promise<Pasad
       lock.release();
     }
   } catch (e) {
-    const motivo = (e as Error)?.message || "No se ha podido leer el buzón";
+    const motivo = (e as Error)?.message || motivoDelFallo(e, "leer el buzón");
     console.error("[Therefore] buzón:", motivo);
     await cerrar(motivo);
     return { error: motivo };
   } finally {
+    /*
+     * Cerrar SIEMPRE, y por las bravas si hace falta.
+     *
+     * `logout()` manda el comando LOGOUT, y eso sólo se puede cuando la
+     * sesión llegó a abrirse: si falló el LOGIN, o el servidor cortó, lanza
+     * y —sin el `close()`— el socket se quedaba abierto. Una pasada cada
+     * cinco minutos que deja un socket colgado acaba dando «Maximum number
+     * of connections from user+IP exceeded», que es un buzón que deja de
+     * leerse sin que nadie haya tocado nada.
+     */
     try {
       await cliente.logout();
     } catch {
-      /* el buzón ya se cerró */
+      try {
+        cliente.close?.();
+      } catch {
+        /* ya estaba cerrado */
+      }
     }
   }
 

@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
-import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks, CalendarX, Users, FileScan } from "lucide-react";
+import { Home, LogOut, CalendarClock, ClipboardList, CalendarDays, BarChart3, Settings, ShieldAlert, CalendarCheck, Network, TrendingUp, UserCheck, FileInput, MonitorSmartphone, ListChecks, CalendarX, Users, FileScan, CarFront } from "lucide-react";
 import logoMobilink from "../../assets/logo-mobilink.png";
 import SeaTarragonaV1 from "../../SeaTarragonaV1";
 import PedidosErpPage from "./PedidosErpPage";
 import PlantillasChecklistPage from "./PlantillasChecklistPage";
 import AusenciasTecnicosPage from "./AusenciasTecnicosPage";
 import PartesTrabajoPage from "./PartesTrabajoPage";
+import RecepcionesPage from "./RecepcionesPage";
 import { supabase } from "../administracion/services/supabase";
-import { APP_VERSION } from "../../version";
+import VersionDesplegada from "../../components/VersionDesplegada";
 
 /** Clave del módulo en app_licencias / app_usuario_modulos. */
 export const MODULO_WORKPLANNER = "workplanner";
@@ -22,6 +23,9 @@ const SECCIONES = [
   // Fichas del personal: avatar, PIN del portal y alta/baja en la empresa.
   // Solo administradores, como Ausencias.
   { key: "personal", label: "Personal", icon: Users, proximamente: false, soloAdmin: true },
+  // Vehículos recibidos en el patio desde la APK, a la espera de que alguien
+  // los convierta en trabajo. La captura propone; una persona valida.
+  { key: "recepciones", label: "Recepción vehículos", icon: CarFront, proximamente: false },
   { key: "partes", label: "Partes de trabajo", icon: FileScan, proximamente: false },
   { key: "pedidos", label: "Pedidos ERP", icon: FileInput, proximamente: false },
   { key: "plantillas", label: "Plantillas", icon: ListChecks, proximamente: false },
@@ -211,7 +215,11 @@ export default function WorkPlannerApp() {
   const navigate = useNavigate();
   const permitido = useAccesoWorkplanner();
   const esAdmin = useEsAdmin();
-
+  /*
+   * Commit que está corriendo en el servidor. Se pregunta una vez al abrir:
+   * es lo que permite responder «¿está desplegado el arreglo?» sin depender
+   * de que alguien haya subido el número de versión a mano.
+   */
   // El body de la app es claro (#f8fafc) porque el panel de taller lo es. En
   // WorkPlanner todo va en oscuro, así que se tiñe el fondo del documento con
   // el mismo slate-900 del resto de módulos para que no asome ninguna zona de
@@ -249,12 +257,7 @@ export default function WorkPlannerApp() {
             />
             <CalendarClock className="h-4 w-4 text-sky-400" />
             <span className="text-[13px] font-black">WorkPlanner</span>
-            <span
-              className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-400"
-              title="Versión desplegada"
-            >
-              {APP_VERSION}
-            </span>
+            <VersionDesplegada />
           </div>
           <ReclamoWorkPlanner />
           {permitido && (
@@ -354,6 +357,7 @@ export default function WorkPlannerApp() {
               )
             }
           />
+          <Route path="recepciones" element={<RecepcionesPage />} />
           <Route path="partes" element={<PartesTrabajoPage />} />
           <Route path="plantillas" element={<PlantillasChecklistPage />} />
           <Route

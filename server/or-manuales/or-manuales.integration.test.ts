@@ -102,14 +102,36 @@ function cabeceras(quien: Quien, extra: Record<string, string> = {}): Record<str
 async function pdfDeOrs(numeros: (number | null)[]): Promise<Buffer> {
   const doc = await PDFDocument.create();
   const fuente = await doc.embedFont(StandardFonts.Helvetica);
+  const marca = marcaUnica();
   for (const n of numeros) {
     const pagina = doc.addPage([595, 842]);
     // y=790 en coordenadas de PDF (desde abajo) es la franja superior.
     if (n !== null) pagina.drawText(`OR Nº ${n}`, { x: 400, y: 790, size: 16, font: fuente });
     pagina.drawText("ORDEN DE REPARACION MANUAL", { x: 60, y: 750, size: 12, font: fuente });
     pagina.drawText("Trabajos realizados: sustitucion de neumatico", { x: 60, y: 600, size: 11, font: fuente });
+    pagina.drawText(`ref ${marca}`, { x: 60, y: 60, size: 8, font: fuente });
   }
   return Buffer.from(await doc.save());
+}
+
+/**
+ * Una marca distinta en cada PDF generado, SIN dígitos.
+ *
+ * Dos escaneos del mismo número tienen que ser dos ficheros distintos, y por
+ * defecto no lo eran: `pdf-lib` fecha el documento con resolución de SEGUNDO,
+ * así que dos generaciones seguidas salían byte a byte iguales y el módulo —que
+ * reconoce una hoja repetida por el hash de su contenido, no por su nombre— las
+ * tomaba por la misma hoja ya archivada. Una prueba que dependa de lo rápido
+ * que vaya el runner no es una prueba.
+ *
+ * Sin dígitos a propósito: un número de tres cifras en la hoja competiría como
+ * candidato a número de OR y bajaría la confianza de la lectura buena, que es
+ * justo lo que miden otros casos. La prueba de «subir dos veces el mismo
+ * escaneo» sigue valiendo porque reutiliza el MISMO buffer, no lo regenera.
+ */
+function marcaUnica(): string {
+  const letras = "abcdefghijklmnopqrstuvwxyz";
+  return Array.from({ length: 10 }, () => letras[Math.floor(Math.random() * letras.length)]).join("");
 }
 
 async function subir(nombre: string, contenido: Buffer, quien: Quien = operarioA): Promise<Respuesta> {
@@ -429,6 +451,125 @@ describe.skipIf(!RUN)("OR Manuales · el ciclo del papel contra PostgreSQL", () 
     });
   });
 
+  describe("Borrar y renumerar", () => {
+    it("borra un bloc vacío y deja libre su número", async () => {
+      const inicio = rangoLibre();
+      const bloc = await crearBloc(inicio);
+
+      const r = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "DELETE", body: {} });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.numeroBloc).toBe(`B${inicio}`);
+      expect(r.body.documentosRetirados).toBe(0);
+
+      // Ya no existe, ni él ni sus OR.
+      expect((await api(`/blocs/${bloc.bloc.id}`, gestorA)).status).toBe(404);
+      const { rows } = await db.query(`SELECT COUNT(*)::int AS n FROM orm_or WHERE bloc_id = $1`, [bloc.bloc.id]);
+      expect(rows[0].n).toBe(0);
+
+      // Y el número se puede volver a usar.
+      const otro = await api("/blocs", gestorA, { method: "POST", body: { numeroBloc: `B${inicio}`, orInicial: inicio } });
+      expect(otro.status, JSON.stringify(otro.body)).toBe(201);
+    });
+
+    it("un bloc con hojas dentro no se borra sin confirmarlo", async () => {
+      const inicio = rangoLibre();
+      const bloc = await crearBloc(inicio);
+      await subirYEsperar("una.pdf", [inicio]);
+
+      const sinConfirmar = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "DELETE", body: {} });
+      expect(sinConfirmar.status).toBe(409);
+      expect(sinConfirmar.body.code).toBe("BLOC_CON_DOCUMENTOS");
+      expect(sinConfirmar.body.detalle.archivadas).toBe(1);
+
+      // Sigue ahí: un 409 no se lleva nada por delante.
+      expect((await api(`/blocs/${bloc.bloc.id}`, gestorA)).status).toBe(200);
+
+      const confirmado = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "DELETE", body: { confirmar: true, motivo: "alta de prueba" } });
+      expect(confirmado.status, JSON.stringify(confirmado.body)).toBe(200);
+      expect(confirmado.body.documentosRetirados).toBe(1);
+
+      // La hoja se retira, pero su fila y su fichero siguen existiendo.
+      const { rows } = await db.query(
+        `SELECT estado_procesamiento, storage_key FROM orm_documentos WHERE empresa_id = $1 AND bloc_id IS NULL AND nombre_archivo = $2`,
+        [EMPRESA_A, `OR_${inicio}.pdf`]
+      );
+      expect(rows[0]?.estado_procesamiento).toBe("ELIMINADO");
+      expect(rows[0]?.storage_key).toBeTruthy();
+      // Y no reaparece en la bandeja de pendientes como trabajo por hacer.
+      expect((await api("/documentos/pendientes", gestorA)).body.documentos).toHaveLength(0);
+    });
+
+    it("el histórico sobrevive al bloc borrado", async () => {
+      const inicio = rangoLibre();
+      const bloc = await crearBloc(inicio);
+      await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "DELETE", body: { motivo: "taco de prueba" } });
+
+      const { rows } = await db.query(
+        `SELECT accion, detalle FROM orm_eventos WHERE bloc_id = $1 ORDER BY id`,
+        [bloc.bloc.id]
+      );
+      const acciones = rows.map((r) => r.accion);
+      expect(acciones).toContain("BLOC_CREADO");
+      expect(acciones).toContain("BLOC_BORRADO");
+      const borrado = rows.find((r) => r.accion === "BLOC_BORRADO");
+      expect(borrado.detalle.numeroBloc).toBe(`B${inicio}`);
+      expect(borrado.detalle.motivo).toBe("taco de prueba");
+    });
+
+    it("un bloc cerrado no se borra ni confirmándolo", async () => {
+      const inicio = rangoLibre();
+      const bloc = await crearBloc(inicio, gestorA, { cantidadOr: 1 });
+      await subirYEsperar("una.pdf", [inicio]);
+      expect((await api(`/blocs/${bloc.bloc.id}/cerrar`, gestorA, { method: "POST", body: {} })).status).toBe(200);
+
+      const r = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "DELETE", body: { confirmar: true } });
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe("BLOC_CERRADO");
+      expect((await api(`/blocs/${bloc.bloc.id}`, gestorA)).status).toBe(200);
+    });
+
+    it("renumerar un bloc no toca su rango de OR", async () => {
+      const inicio = rangoLibre();
+      const bloc = await crearBloc(inicio);
+
+      const r = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "PATCH", body: { numeroBloc: "001" } });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.bloc.numeroBloc).toBe("001");
+      expect(r.body.bloc.orInicial).toBe(inicio);
+      expect(r.body.bloc.orFinal).toBe(inicio + 24);
+      expect(r.body.ors).toHaveLength(25);
+    });
+
+    it("no se renumera pisando el número de otro bloc", async () => {
+      const uno = await crearBloc(rangoLibre());
+      const dos = await crearBloc(rangoLibre());
+      const r = await api(`/blocs/${dos.bloc.id}`, gestorA, { method: "PATCH", body: { numeroBloc: uno.bloc.numeroBloc } });
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe("BLOC_DUPLICADO");
+    });
+
+    it("el número no se deja en blanco", async () => {
+      const bloc = await crearBloc(rangoLibre());
+      const r = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "PATCH", body: { numeroBloc: "  " } });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe("NUMERO_BLOC_VACIO");
+    });
+
+    it("quien sólo escanea no borra blocs", async () => {
+      const bloc = await crearBloc(rangoLibre());
+      const r = await api(`/blocs/${bloc.bloc.id}`, operarioA, { method: "DELETE", body: { confirmar: true } });
+      expect(r.status).toBe(403);
+      expect(r.body.permiso).toBe("or-manuales.bloc.eliminar");
+    });
+
+    it("el bloc de otra empresa no se puede borrar", async () => {
+      const bloc = await crearBloc(rangoLibre(), gestorA);
+      const r = await api(`/blocs/${bloc.bloc.id}`, gestorB, { method: "DELETE", body: { confirmar: true } });
+      expect(r.status).toBe(404);
+      expect((await api(`/blocs/${bloc.bloc.id}`, gestorA)).status).toBe(200);
+    });
+  });
+
   describe("Cerrar", () => {
     it("no se cierra un bloc al que le faltan hojas, y se dice cuáles", async () => {
       const inicio = rangoLibre();
@@ -526,6 +667,94 @@ describe.skipIf(!RUN)("OR Manuales · el ciclo del papel contra PostgreSQL", () 
       expect(proceso.documentosCorrectos).toBe(3);
       expect(proceso.noIdentificados).toBe(2);
       expect(proceso.estado).toBe("COMPLETADO");
+    });
+
+    /*
+     * El caso real del mostrador: se vacía el escáner con lo que hay encima de
+     * la mesa, sin separar por blocs ni ponerlo en orden. El archivado va por
+     * PÁGINA —cada hoja busca su bloc por su número—, así que el lote no tiene
+     * por qué ser de un solo bloc. Esto lo deja escrito.
+     */
+    it("un solo escaneo con hojas de tres blocs las reparte por su bloc", async () => {
+      const a = rangoLibre();
+      const b = rangoLibre();
+      const c = rangoLibre();
+      const blocA = await crearBloc(a);
+      const blocB = await crearBloc(b);
+      const blocC = await crearBloc(c);
+
+      // Mezcladas y desordenadas, como salen del escáner.
+      const proceso = await subirYEsperar("cajon-de-sastre.pdf", [b + 3, a, c + 10, a + 1, b, c]);
+
+      expect(proceso.paginas).toBe(6);
+      expect(proceso.documentosCorrectos).toBe(6);
+      expect(proceso.noIdentificados).toBe(0);
+      expect(proceso.duplicados).toBe(0);
+
+      const archivadasDe = async (bloc: any, numeros: number[]) => {
+        const ficha = await api(`/blocs/${bloc.bloc.id}`, gestorA);
+        expect(ficha.body.progreso.archivadas, `bloc ${ficha.body.bloc.numeroBloc}`).toBe(numeros.length);
+        const escaneadas = ficha.body.ors.filter((o: any) => o.estado === "ESCANEADA").map((o: any) => o.numeroOr);
+        expect(escaneadas.sort((x: number, y: number) => x - y)).toEqual([...numeros].sort((x, y) => x - y));
+        return ficha.body;
+      };
+
+      await archivadasDe(blocA, [a, a + 1]);
+      await archivadasDe(blocB, [b, b + 3]);
+      await archivadasDe(blocC, [c, c + 10]);
+
+      // Cada bloc lleva su propia cuenta y su propio aviso: no hay uno del lote.
+      const avisos = await api("/avisos", gestorA);
+      expect(avisos.body.avisos).toHaveLength(3);
+      expect(avisos.body.avisos.every((v: any) => v.tipo === "BLOC_INCOMPLETO")).toBe(true);
+
+      // Y ningún documento acabó colgando de un bloc que no era el suyo.
+      const { rows } = await db.query(
+        `SELECT b.numero_bloc, o.numero_or
+           FROM orm_documentos d
+           JOIN orm_or o ON o.id = d.or_id
+           JOIN orm_blocs b ON b.id = d.bloc_id
+          WHERE d.empresa_id = $1 AND d.estado_procesamiento = 'ARCHIVADO'`,
+        [EMPRESA_A]
+      );
+      for (const fila of rows) {
+        const suyo = [blocA, blocB, blocC].find((x) => x.bloc.numeroBloc === fila.numero_bloc);
+        expect(fila.numero_or, `la OR ${fila.numero_or} está en el bloc ${fila.numero_bloc}`).toBeGreaterThanOrEqual(
+          suyo.bloc.orInicial
+        );
+        expect(fila.numero_or).toBeLessThanOrEqual(suyo.bloc.orFinal);
+      }
+    });
+
+    it("en un lote mezclado, la hoja de un bloc CERRADO no se cuela y el resto entra igual", async () => {
+      const cerrado = rangoLibre();
+      const abierto = rangoLibre();
+
+      // Un bloc de una sola OR, escaneado y cerrado.
+      const blocCerrado = await crearBloc(cerrado, gestorA, { cantidadOr: 1 });
+      await subirYEsperar("la-suya.pdf", [cerrado]);
+      expect((await api(`/blocs/${blocCerrado.bloc.id}/cerrar`, gestorA, { method: "POST", body: {} })).status).toBe(200);
+
+      const blocAbierto = await crearBloc(abierto);
+
+      // El lote trae otra hoja de ese mismo número, una que no es de nadie y dos buenas.
+      const proceso = await subirYEsperar("mezcla.pdf", [cerrado, abierto, abierto + 9000, abierto + 1]);
+
+      expect(proceso.documentosCorrectos).toBe(2);
+      expect(proceso.noIdentificados).toBe(2);
+
+      // El bloc cerrado se queda como estaba.
+      const ficha = await api(`/blocs/${blocCerrado.bloc.id}`, gestorA);
+      expect(ficha.body.bloc.estado).toBe("CERRADO");
+      expect(ficha.body.progreso.archivadas).toBe(1);
+
+      // Y el abierto se lleva sus dos hojas.
+      expect((await api(`/blocs/${blocAbierto.bloc.id}`, gestorA)).body.progreso.archivadas).toBe(2);
+
+      // La del cerrado queda en la bandeja CON su número leído, para que una
+      // persona decida: no se archiva a la fuerza ni se pierde.
+      const pendientes = await api("/documentos/pendientes", gestorA);
+      expect(pendientes.body.documentos.some((d: any) => d.ocrNumeroDetectado === cerrado)).toBe(true);
     });
 
     it("subir dos veces el mismo escaneo no duplica nada", async () => {

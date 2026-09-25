@@ -258,6 +258,48 @@ describe("getTripSummary()", () => {
     expect(r[0].distanceKm).toBe(7842);
   });
 
+  it("la distancia va en metros y los odómetros en km, cada uno con su unidad", async () => {
+    // Los números son los medidos en la cuenta real de Plana en enero de 2026
+    // (unidad 26410943): 12.668.080 de `total_mileage` contra 12.667,92 de
+    // diferencia entre odómetros. Si ambos usaran la misma unidad, uno de los
+    // dos saldría mil veces mayor o menor sin que nada chirriara.
+    fingirFetch([{ status: 201, body: [
+      { unit: 1, total_mileage: 12668080, initial_mileage: 919471.04, final_mileage: 932138.96 },
+    ] }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km", distanciaEn: "m" });
+    const r = await conToken(() => c.getTripSummary(CTX, ["1"], VENTANA));
+    expect(r[0].distanceKm).toBe(12668.08);
+    expect(r[0].initialOdometerKm).toBe(919471.04);
+    expect(r[0].finalOdometerKm).toBe(932138.96);
+    // Y lo que importa: el recorrido cuadra con lo que avanzó el odómetro.
+    expect(r[0].finalOdometerKm! - r[0].initialOdometerKm!).toBeCloseTo(r[0].distanceKm, 0);
+  });
+
+  it("una distancia imposible se descarta SIN llevarse el lote por delante", async () => {
+    // Los números son los medidos: la unidad 1 dice 80.731.230 km con el
+    // odómetro avanzando 4.019; la 2 es normal. Si esto lanzara, `pedirLote`
+    // anotaría las 25 del lote como error por culpa de una.
+    fingirFetch([{ status: 201, body: [
+      { unit: 1, total_mileage: 80731230060, initial_mileage: 1294654.64, final_mileage: 1298674 },
+      { unit: 2, total_mileage: 2604160, initial_mileage: 891163.52, final_mileage: 893770.88 },
+    ] }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km", distanciaEn: "m" });
+
+    const r = await conToken(() => c.getTripSummary(CTX, ["1", "2"], VENTANA));
+
+    // La buena llega entera; la imposible, como si el proveedor no hubiera
+    // dicho nada de ella, que es la verdad.
+    expect(r.map((s) => s.providerVehicleId)).toEqual(["2"]);
+    expect(r[0].distanceKm).toBe(2604.16);
+  });
+
+  it("sin odómetro no se juzga la distancia: los vehículos sin CAN pasan", async () => {
+    fingirFetch([{ status: 201, body: [{ unit: 1, total_mileage: 80731230060 }] }]);
+    const c = new MovertisConnector({ baseUrl: "https://devapi.invalid", odometroEn: "km", distanciaEn: "m" });
+    const r = await conToken(() => c.getTripSummary(CTX, ["1"], VENTANA));
+    expect(r).toHaveLength(1);
+  });
+
   it("sin unidad de medida NO llama: metros guardados como km es peor que nada", async () => {
     const llamadas = fingirFetch([{ status: 201, body: [] }]);
     const c = new MovertisConnector({ baseUrl: "https://devapi.invalid" });

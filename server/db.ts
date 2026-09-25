@@ -425,6 +425,56 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "solicitanteAutorizacion" TEXT;
 
+    -- El ENLACE con la ficha del cliente, no una copia de su nombre.
+    --
+    -- Los tres campos de arriba son texto libre y por eso se duplicaban: la
+    -- misma empresa escrita de cinco maneras no es la misma empresa para
+    -- nadie —ni para el ERP, ni para un listado por cliente—. Al elegir del
+    -- maestro se guarda su id, y el texto se conserva al lado a propósito:
+    -- es lo que se escribió ESE día, y si mañana el cliente cambia de nombre
+    -- o de teléfono la asistencia antigua tiene que seguir contando lo que
+    -- pasó. Mismo criterio que "subcontrataSnapshot".
+    --
+    -- Nullable y sin tocar nada existente: una asistencia escrita a mano
+    -- sigue siendo válida, solo que sin enlace.
+    -- Sin REFERENCES, igual que "clienteFacturacionId" y "proveedorTallerId",
+    -- y no por descuido: las tablas «connect_*» las crea otro módulo que corre
+    -- DESPUÉS de éste. Con la clave ajena, una base de datos nueva reventaba
+    -- aquí con «relation "connect_clients" does not exist» y no llegaba ni a
+    -- arrancar. Lo encontró la suite completa sobre una base recreada.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteClienteId" INTEGER;
+
+    -- Qué persona de esa ficha llamó. Los contactos viven en
+    -- connect_workshop_contacts con ownerType='client', que es la tabla de
+    -- contactos generalizada; no hay una tabla propia de contactos de cliente
+    -- y no hacía falta crearla.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteContactoId" INTEGER;
+
+    -- Se consulta por cliente para ordenar los frecuentes por uso.
+    CREATE INDEX IF NOT EXISTS idx_roadside_solicitante_cliente
+      ON roadside_assistances ("solicitanteClienteId")
+      WHERE "solicitanteClienteId" IS NOT NULL;
+
+    -- La cola de un operario: detrás de QUÉ asistencia espera ésta su turno.
+    --
+    -- Lo que se guarda es el enlace, no un «en espera» de sí o no. Estar en
+    -- espera se DEDUCE —src/modules/colaEspera.ts—: esta asistencia espera si
+    -- aquella por la que espera sigue abierta. Así, en cuanto la de delante se
+    -- cierra la siguiente se suelta sola, sin depender de que nada la apague.
+    --
+    -- Sin REFERENCES a la propia tabla a propósito: si alguien borra la
+    -- asistencia de delante, preferimos una cola suelta a un borrado que falla
+    -- o que arrastra la de detrás.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "esperaTrasId" INTEGER;
+
+    -- Se consulta al cerrar una asistencia, para soltar a las que la esperaban.
+    CREATE INDEX IF NOT EXISTS idx_roadside_espera_tras
+      ON roadside_assistances ("esperaTrasId")
+      WHERE "esperaTrasId" IS NOT NULL;
+
     -- Subcontratación: a quién se le encarga el servicio y a quién se factura.
     -- OJO con los nombres: "workshopId" ya existe en esta tabla y es el taller
     -- PROPIO (el del inquilino, TEXT). El taller subcontratado es otra cosa y
@@ -805,6 +855,18 @@ export async function initDb() {
       "endedAtMs" BIGINT DEFAULT NULL,
       "jobId" INT DEFAULT NULL
     );
+
+    -- Taller al que pertenece el técnico.
+    --
+    -- Hasta ahora no existía, y el panel filtraba con belongsToWorkshop
+    -- leyendo un tech.workshopId que nunca venía: normalizeWorkshopId
+    -- convierte el nulo en el taller por defecto, así que TODOS los técnicos
+    -- eran de Tarragona por omisión, no por decisión de nadie.
+    --
+    -- Se deja en NULL a propósito para las filas que ya existen: el valor
+    -- nulo se sigue leyendo como el taller por defecto, así que nada cambia
+    -- hasta que alguien asigne un taller desde la pantalla de Personal.
+    ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopId" TEXT DEFAULT NULL;
 
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS "workshopPin" TEXT DEFAULT NULL;
     ALTER TABLE techs ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT NULL;
@@ -1205,6 +1267,88 @@ export async function initDb() {
     -- Fecha y hora de ENTRADA que trae el parte, no la de volcarlo a la
     -- aplicación. Se calculaba y se tiraba.
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "ptEntradaMs" BIGINT DEFAULT NULL;
+  `);
+
+  // ── Recepción rápida de vehículos ──────────────────────────────────────────
+  //
+  // Lo que el operario ve en el patio: una matrícula, quizá un cliente, quizá
+  // una foto. NO es un trabajo todavía. Se guarda aparte a propósito: meterlo
+  // en `jobs` con un estado inventado contaminaría todas las consultas,
+  // contadores y pantallas que ya existen.
+  //
+  // La captura automática propone; una persona la convierte en trabajo.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS recepciones_vehiculo (
+      id BIGINT PRIMARY KEY,
+      "workshopId" TEXT,
+      -- Como la confirmó la persona, con guiones si los escribió así.
+      matricula TEXT NOT NULL,
+      -- Normalizada (mayúsculas y alfanuméricos), que es por lo que se busca.
+      "matriculaNormal" TEXT NOT NULL,
+      -- Lo que leyó la IA, sin tocar, y con cuánta confianza. Se guardan para
+      -- poder medir después si el OCR merece la pena; nunca se usan como dato
+      -- bueno sin que alguien los haya confirmado.
+      "matriculaOcr" TEXT,
+      "confianzaOcr" DOUBLE PRECISION,
+      "clienteNombre" TEXT,
+      "vehiculoId" TEXT,
+      "vehiculoOrigen" TEXT,
+      area TEXT,
+      "plantillaKey" TEXT,
+      "operacionLabel" TEXT,
+      notas TEXT,
+      urgente BOOLEAN NOT NULL DEFAULT FALSE,
+      fotos JSONB NOT NULL DEFAULT '[]'::jsonb,
+      -- pendiente | convertida | descartada
+      estado TEXT NOT NULL DEFAULT 'pendiente',
+      "operarioNombre" TEXT NOT NULL,
+      "creadaAtMs" BIGINT NOT NULL,
+      "resueltaAtMs" BIGINT,
+      "resueltaPor" TEXT,
+      "motivoDescarte" TEXT,
+      "jobId" BIGINT,
+      -- Borrado lógico, como en jobs.
+      "deletedAtMs" BIGINT
+    );
+
+    CREATE INDEX IF NOT EXISTS recepciones_vehiculo_estado_idx
+      ON recepciones_vehiculo(estado, "creadaAtMs" DESC);
+    CREATE INDEX IF NOT EXISTS recepciones_vehiculo_matricula_idx
+      ON recepciones_vehiculo("matriculaNormal");
+    CREATE INDEX IF NOT EXISTS recepciones_vehiculo_workshop_idx
+      ON recepciones_vehiculo("workshopId");
+
+    -- El camino de vuelta: desde el trabajo, a la recepción y sus fotos.
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS "recepcionId" BIGINT DEFAULT NULL;
+  `);
+
+  // Cuentakilómetros al entrar. Va en su propio bloque y con ADD COLUMN IF NOT
+  // EXISTS porque la tabla ya existe en producción desde la primera entrega:
+  // meterlo en el CREATE de arriba no lo habría añadido a las bases que ya
+  // estaban creadas, que es justo el fallo que este patrón evita.
+  await pool.query(`
+    ALTER TABLE recepciones_vehiculo
+      ADD COLUMN IF NOT EXISTS kilometros INTEGER DEFAULT NULL;
+
+    -- Lo que leyó la IA del cuadro y con cuánta confianza, aparte de lo que
+    -- confirmó la persona. Sirve para medir después si el OCR merece la pena;
+    -- nunca se usan como dato bueno sin que alguien los haya visto.
+    ALTER TABLE recepciones_vehiculo
+      ADD COLUMN IF NOT EXISTS "kilometrosOcr" INTEGER DEFAULT NULL;
+    ALTER TABLE recepciones_vehiculo
+      ADD COLUMN IF NOT EXISTS "confianzaKilometrosOcr" DOUBLE PRECISION DEFAULT NULL;
+
+    -- Cita de la agenda de la que salió la recepción, si el operario la eligió
+    -- en el patio en vez de dar de alta un vehículo sin cita. Es lo que permite
+    -- cerrar la cita al convertir, y así el botón «Llegó» no puede crear un
+    -- segundo trabajo del mismo vehículo.
+    ALTER TABLE recepciones_vehiculo
+      ADD COLUMN IF NOT EXISTS "scheduledJobId" BIGINT DEFAULT NULL;
+
+    -- Teléfono del cliente. Va con la recepción y no solo con el trabajo
+    -- porque quien lo apunta es el del patio, que tiene al cliente delante.
+    ALTER TABLE recepciones_vehiculo
+      ADD COLUMN IF NOT EXISTS "clienteTelefono" TEXT DEFAULT NULL;
   `);
 
   // Cupo anual de vacaciones y modo de cómputo. Una fila por taller y año con

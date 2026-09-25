@@ -16,6 +16,7 @@ import {
   type WebfleetCreds,
 } from "./tyrecontrol/webfleetCredenciales.ts";
 import { agruparPorCuenta } from "./tyrecontrol/webfleetCuentas.ts";
+import { jsonAjeno } from "./core/jsonAjeno.ts";
 
 type WfObject = Record<string, any>;
 // La base es una DELEGACIÓN con geo-zona definida (base_lat/lng + radio).
@@ -45,7 +46,7 @@ async function fetchObjetos(creds: WebfleetCreds): Promise<WfObject[]> {
   const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
   const r = await fetch(url, { headers });
   if (!r.ok) throw new Error(`Webfleet HTTP ${r.status}`);
-  const data = await r.json();
+  const data = await jsonAjeno(r);
   if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
   return Array.isArray(data) ? data : data?.data ?? [];
 }

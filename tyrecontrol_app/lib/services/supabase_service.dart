@@ -2047,42 +2047,13 @@ class TyreControlApi {
   static Future<String> subirFotoEtiqueta(XFile file, {required String loteId}) =>
       _subirBytes('etiquetas/$loteId/${DateTime.now().microsecondsSinceEpoch}.${extensionDe(file)}', file);
 
-  /// Lee el número de serie de la foto. Devuelve lo que la IA PROPONE.
+  /// Guarda la foto recién subida, SIN número.
   ///
-  /// Si el servicio no responde, devuelve `estado: 'pendiente'` con su aviso:
-  /// la foto se guarda igual y se lee después o se escribe a mano. Perder la
-  /// foto porque la red falló sería perder el trabajo del operario.
-  static Future<Map<String, dynamic>> leerSerieEtiqueta(String imagenUrl) async {
-    try {
-      final r = await http.post(
-        Uri.parse('$kBackendUrl/api/tyrecontrol/etiquetas/leer'),
-        headers: {
-          'Content-Type': 'application/json',
-          if (currentSessionToken != null) 'Authorization': 'Bearer $currentSessionToken',
-        },
-        body: jsonEncode({'imagen_url': imagenUrl}),
-      ).timeout(const Duration(seconds: 60));
-      final cuerpo = jsonDecode(r.body);
-      if (r.statusCode != 200) {
-        return {'serie': null, 'estado': 'pendiente', 'dudoso': false,
-                'aviso': (cuerpo is Map ? cuerpo['error'] : null) ?? 'No se ha podido leer el número'};
-      }
-      return Map<String, dynamic>.from(cuerpo as Map);
-    } catch (_) {
-      return {'serie': null, 'estado': 'pendiente', 'dudoso': false,
-              'aviso': 'Sin conexión con el lector: la foto queda guardada'};
-    }
-  }
-
-  /// Guarda la foto con lo que se haya leído. Nunca la confirma: confirmar es
-  /// de una persona, en el panel.
+  /// La tablet no lee nada: deja la foto en «pendiente» y el panel la analiza
+  /// al abrir el lote. Confirmar el número es de una persona, también allí.
   static Future<Map<String, dynamic>> guardarFotoEtiqueta({
     required String loteId,
     required String fotoUrl,
-    String? serieDetectada,
-    num? confianza,
-    bool dudoso = false,
-    String estado = 'pendiente',
   }) async {
     final empresa = empresaActivaId;
     if (empresa == null) throw Exception('Elige antes un cliente');
@@ -2090,11 +2061,7 @@ class TyreControlApi {
       'lote_id': loteId,
       'empresa_id': empresa,
       'foto_url': fotoUrl,
-      if (serieDetectada != null && serieDetectada.trim().isNotEmpty)
-        'serie_detectada': serieDetectada.trim(),
-      if (confianza != null) 'confianza': confianza,
-      'dudoso': dudoso,
-      'estado': estado,
+      'estado': 'pendiente',
     }).select().single();
     return Map<String, dynamic>.from(data);
   }

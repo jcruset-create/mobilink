@@ -83,6 +83,8 @@ function Contenido() {
 }
 
 export default function CashApp() {
+  // El titulo y el favicon de la pestana los pone PestanaDelModulo, que los
+  // resuelve por ruta para todos los modulos a la vez.
   return (
     <CashProvider>
       <Contenido />

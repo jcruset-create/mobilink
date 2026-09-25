@@ -231,8 +231,17 @@ describe.skipIf(!RUN)("Bandeja de excepciones y costes", () => {
     const fila = await db.query(
       `SELECT * FROM roadside_assistances WHERE id = $1`, [conDespacho]);
     const ajenos = [120, 35];
+    /*
+     * Y tampoco se miran los identificadores, por lo mismo que las marcas de
+     * tiempo: `id` es un contador, no un dato. Vale lo que valga según cuántas
+     * filas hayan insertado antes las demás pruebas —comparten base—, y el día
+     * que cae en 35 la CI se pone roja sin que se haya colado nada. Una fuga
+     * del coste del proveedor acabaría en una columna de importes, nunca en la
+     * que numera las filas.
+     */
+    const esIdentificador = (columna: string) => columna === "id" || /(^|_)id$|Id$/.test(columna);
     const coladas = Object.entries(fila.rows[0]).filter(
-      ([, v]) => v != null && typeof v !== "object" && ajenos.includes(Number(v)),
+      ([columna, v]) => !esIdentificador(columna) && v != null && typeof v !== "object" && ajenos.includes(Number(v)),
     );
     expect(coladas, `columnas con datos del otro lado: ${JSON.stringify(coladas)}`).toEqual([]);
     expect(Number(fila.rows[0].importeDestino)).toBe(155);

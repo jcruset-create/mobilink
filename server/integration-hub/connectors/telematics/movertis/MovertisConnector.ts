@@ -99,6 +99,7 @@ import {
   puntosDeUnidad,
   resumenesDe,
   aKilometros,
+  distanciaCreible,
   type UnidadOdometro,
 } from "./mapeo.ts";
 
@@ -155,6 +156,25 @@ export interface MovertisConfig {
    * Unidad de `total_mileage` en `summarytrips`. Si no se declara, se usa la
    * del odómetro (`odometroEn`); si tampoco, el resumen sale SIN kilómetros,
    * por la misma trampa de las unidades que se explica en `mapeo.ts`.
+   *
+   * ── En la cuenta real de Autocares Plana NO es la misma que la del odómetro ──
+   *
+   * `summarytrips` devuelve tres números y **no todos en la misma unidad**:
+   *
+   *   · `total_mileage` (y el `mileage` de cada viaje) en METROS.
+   *   · `initial_mileage` / `final_mileage` en KILÓMETROS.
+   *
+   * Medido en enero de 2026 sobre cuatro unidades: 12.668.080 de
+   * `total_mileage` contra 12.667,92 de diferencia entre los dos odómetros;
+   * 4.350.760 contra 4.356,86; 10.763.600 contra 10.778,60; 467.890 contra
+   * 472,93. La razón sale entre 989 y 1000 en los cuatro, y la suma de los
+   * viajes cuadra con `total_mileage` al metro.
+   *
+   * Por eso la distancia usa `distanciaEn` y los odómetros usan `odometroEn`,
+   * cada uno el suyo. Antes ambos usaban el mismo y uno de los dos salía mil
+   * veces mayor o menor según cuál se hubiera declarado, sin que nada
+   * chirriara: 12.668.080 km de un autobús en un mes pasan por «cifra grande»
+   * mientras nadie los divida.
    */
   distanciaEn?: UnidadOdometro;
   /** Unidades por petición a `summarytrips`. Ver `UNIDADES_POR_PETICION`. */
@@ -540,6 +560,10 @@ export class MovertisConnector
       );
     }
 
+    // Los odómetros del resumen NO vienen en la unidad de la distancia: ver la
+    // medición en la cabecera de `distanciaEn`. Cada número, con la suya.
+    const unidadOdometro = this.config.odometroEn ?? unidad;
+
     const datos = await this.postear(ctx, this.rutas.summary, this.cuerpoResumen(providerVehicleIds, window));
     return resumenesDe(datos, providerVehicleIds)
       .map((r): TripSummary | null => {
@@ -547,14 +571,37 @@ export class MovertisConnector
         // Sin total no hay resumen; los odómetros solos no dicen cuánto se movió
         // (podría faltar un tramo) y no se reconstruye restando.
         if (distanceKm === undefined) return null;
+
+        const inicial = aKilometros(r.inicial, unidadOdometro);
+        const final = aKilometros(r.final, unidadOdometro);
+        // Una distancia imposible a la luz del odómetro de la MISMA respuesta
+        // no se devuelve. Ver `distanciaCreible`: pasa de verdad, es estable
+        // entre consultas y basta una fila para poner a un autobús el primero
+        // del ranking con 315 millones de kilómetros al año.
+        if (!distanciaCreible(distanceKm, inicial, final)) {
+          // Se DESCARTA esta unidad, no se lanza. Un `throw` aquí tumbaría el
+          // lote entero —hasta 25 vehículos en el job de la noche— por culpa
+          // de uno, y `pedirLote` los anotaría a todos como error. Quien llama
+          // ve exactamente lo mismo que si el proveedor no hubiera dicho nada
+          // de este vehículo, que es la verdad: de este mes no ha dado ninguna
+          // distancia utilizable.
+          console.warn(
+            `[movertis] distancia imposible descartada: unidad ${r.unit} ` +
+              `${Math.round(distanceKm).toLocaleString("es-ES")} km con el odómetro avanzando ` +
+              `${Math.round((final ?? 0) - (inicial ?? 0)).toLocaleString("es-ES")} km ` +
+              `(${window.from.toISOString().slice(0, 10)} → ${window.to.toISOString().slice(0, 10)})`,
+          );
+          return null;
+        }
+
         return {
           provider: this.info.key,
           accountKey: this.config.accountKey ?? "default",
           providerVehicleId: r.unit,
           window,
           distanceKm,
-          initialOdometerKm: aKilometros(r.inicial, unidad),
-          finalOdometerKm: aKilometros(r.final, unidad),
+          initialOdometerKm: inicial,
+          finalOdometerKm: final,
           trips: r.viajes,
           raw: r.raw,
         };

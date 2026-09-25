@@ -7,6 +7,7 @@ import { ROL_LABELS } from "../types";
 import AlertasWebfleet from "../components/AlertasWebfleet";
 import AsistenteChat from "../components/AsistenteChat";
 import AccesosCabecera from "../../../components/AccesosCabecera";
+import VersionDesplegada from "../../../components/VersionDesplegada";
 import { pendientes } from "../services/conciliacion";
 
 export default function TyreLayout() {
@@ -68,6 +69,9 @@ export default function TyreLayout() {
             <span className="text-green-400">Tyre</span>
             <span className="text-slate-100">Control</span>
           </span>
+          {/* Versión del panel y commit desplegado. El segundo es el que dice
+              de verdad si un arreglo ha llegado a producción. */}
+          <VersionDesplegada className="hidden sm:inline" />
           <img
             src="/tyrecontrol-features.png"
             alt="Flotas, neumáticos, mantenimiento, informes"

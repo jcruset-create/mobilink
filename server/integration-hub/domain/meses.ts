@@ -82,6 +82,17 @@ export function medianocheEn(year: number, month: number, day: number, zona: str
   return new Date(t);
 }
 
+/**
+ * La medianoche del día en que cae un instante, visto desde una zona.
+ *
+ * La usa el relleno de kilometraje de las revisiones: la ventana más estrecha
+ * que se le pide al proveedor empieza al principio de ese día.
+ */
+export function medianocheDelDiaDe(instante: Date, zona = ZONA_HORARIA_POR_DEFECTO): Date {
+  const c = componentesLocales(instante.getTime(), zona);
+  return medianocheEn(c.year, c.month, c.day, zona);
+}
+
 /** Los límites de un mes natural en una zona. */
 export function limitesDelMes(mes: Mes, zona = ZONA_HORARIA_POR_DEFECTO): LimitesDeMes {
   validarMes(mes);

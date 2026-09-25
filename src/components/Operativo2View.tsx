@@ -10,6 +10,8 @@ import { canAssignTechManuallyToJob, canSelectTechManuallyForJob } from "../modu
 import { isHardBlockedTechStatus } from "../modules/techStatus";
 import { isManualUnavailableStatus } from "../modules/techSync";
 import { tecnicosNoDisponibles } from "../modules/tecnicosNoDisponibles";
+import { useRecepcionesPendientes } from "../modules/useRecepcionesPendientes";
+import { horaDeRecepcion, idsDeCitasYaRecibidas } from "../modules/recepcionVehiculo";
 import { getTodayDateValue } from "../modules/techStatusScheduleHelpers";
 import type { ScheduledTechStatus } from "../modules/techStatusScheduleHelpers";
 import type { CustomExtraTask } from "../modules/quickTaskSelector";
@@ -180,6 +182,9 @@ export default function Operativo2View({
   embebido,
 }: Operativo2ViewProps) {
   const [op2CitaOpen, setOp2CitaOpen] = useState(false);
+  // Se piden aquí y no por props: llegar hasta esta pantalla desde arriba
+  // significaría atravesar SeaTarragonaV1, que ya pasa medio centenar.
+  const { recepciones: recepcionesPendientes } = useRecepcionesPendientes(selectedWorkshopId);
   const isTestTech = (name: string) => /prova|prueba|\btest\b/i.test(name);
   const disponibles = availableTechsSummary.filter((t) => !isTestTech(t.name));
   const responsables = new Set<string>();
@@ -213,7 +218,19 @@ export default function Operativo2View({
   ])).filter((n) => !isTestTech(n));
   const trabajando = trabajandoNames.map((name) => ({ name }));
   const techColor = (n: string) => (responsables.has(n) ? "text-rose-400" : soportes.has(n) ? "text-orange-400" : maintTechNames.has(n) ? "text-yellow-300" : "text-slate-200");
-  const agendados = agenda.dueScheduledJobs ?? [];
+  /*
+   * Las citas cuyo vehículo YA está en el patio salen de «Llegadas» y pasan a
+   * verse arriba, en «Pendientes de recepción».
+   *
+   * No es solo orden: mientras siguiera aquí conservaba su botón «Llegó», y
+   * ese botón crea el trabajo por su cuenta. Al validar después la recepción
+   * saldría un segundo trabajo del mismo vehículo. La cita no se cierra hasta
+   * esa validación, así que esta ventana puede durar horas.
+   */
+  const citasYaRecibidas = idsDeCitasYaRecibidas(recepcionesPendientes);
+  const agendados = (agenda.dueScheduledJobs ?? []).filter(
+    (s) => !citasYaRecibidas.has(Number(s.id))
+  );
   const refuerzos = visibleTechs.filter((t) => !isTestTech(t.name) && t.status === "refuerzo");
 
   // Quién NO puede coger trabajo y por qué. Sin esto, alguien de vacaciones o
@@ -592,6 +609,59 @@ export default function Operativo2View({
 
         {/* Derecha */}
         <div className="space-y-2">
+          {/* ── Recibidos en el patio, sin validar ──────────────────────────
+              Va ARRIBA del todo y no dentro de «Llegadas» a propósito: una
+              llegada agendada es una cita que se esperaba; esto es un vehículo
+              que ya está en el patio y del que todavía no hay trabajo. Mientras
+              nadie lo valide, no existe en ninguna otra parte de la pantalla. */}
+          <div className="rounded-lg bg-slate-800 p-2">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[10px] font-bold text-slate-400">
+                PENDIENTES DE RECEPCIÓN ({recepcionesPendientes.length})
+              </span>
+              {recepcionesPendientes.length > 0 && (
+                <a
+                  href="/workplanner/recepciones"
+                  className="rounded bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-slate-900"
+                >
+                  Validar
+                </a>
+              )}
+            </div>
+            <div className="space-y-1">
+              {recepcionesPendientes.map((r) => (
+                <div
+                  key={r.id}
+                  className="flex items-center justify-between gap-2 rounded bg-slate-900 px-2 py-1 text-[11px]"
+                >
+                  <span className="min-w-0 truncate">
+                    <span className="text-amber-300">{horaDeRecepcion(r.creadaAtMs)}</span>
+                    {" · "}
+                    <span className="font-bold">{r.matricula}</span>
+                    {r.clienteNombre ? <span className="text-slate-400"> · {r.clienteNombre}</span> : null}
+                    {r.kilometros ? (
+                      <span className="text-slate-400"> · {r.kilometros.toLocaleString("es-ES")} km</span>
+                    ) : null}
+                    <span className="text-slate-500"> · {r.operacionLabel || "sin operación"}</span>
+                    {r.scheduledJobId != null ? (
+                      <span
+                        className="ml-1 rounded bg-sky-900/60 px-1 py-0.5 text-[9px] font-bold text-sky-200"
+                        title="Venía de una cita de la agenda. Por eso ya no sale arriba en Llegadas."
+                      >
+                        con cita
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-slate-500">{r.operarioNombre}</span>
+                </div>
+              ))}
+              {recepcionesPendientes.length === 0 && (
+                <div className="rounded border border-dashed border-slate-600 px-2 py-1.5 text-center text-[10px] text-slate-500">
+                  🚗 Los vehículos recibidos con la APK aparecen aquí
+                </div>
+              )}
+            </div>
+          </div>
           <div className="rounded-lg bg-slate-800 p-2">
             <div className="mb-1 flex items-center justify-between">
               <span className="text-[10px] font-bold text-slate-400">LLEGADAS / AGENDADOS ({agendados.length})</span>

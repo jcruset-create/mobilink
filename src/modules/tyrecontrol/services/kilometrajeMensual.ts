@@ -86,6 +86,121 @@ export const sincronizarKilometraje = (b: {
   vehiculoIds?: string[]; forzar?: boolean;
 }) => pedir<{ correlationId: string; cuentas: ResumenCuentaMensual[] }>("/sincronizar", { method: "POST", body: JSON.stringify(b) });
 
+/**
+ * Una tarea de relleno lento: una unidad cada veinte segundos hasta terminar.
+ * El servidor la lleva; aquí solo se arranca, se mira y se para.
+ */
+export interface TareaRelleno {
+  empresaId: string;
+  connectorKey: string;
+  accountKey: string;
+  meses: string[];
+  intervaloSegundos: number;
+  maxIntentos: number;
+  forzar: boolean;
+  estado: "en_curso" | "terminada" | "parada" | "abandonada";
+  iniciadaMs: number;
+  ultimoTickMs: number | null;
+  total: number;
+  hechos: number;
+  sinDatos: number;
+  fallidos: number;
+  pendientes: number;
+  minutosRestantes: number;
+  restanteEnPalabras: string;
+  ultimo: { vehiculo: string; mes: string; resultado: string } | null;
+  muestraErrores: string[];
+  nota?: string;
+}
+
+export const rellenarKilometraje = (b: {
+  empresaId?: string; connectorKey: string; accountKey: string;
+  desde: { year: number; month: number }; hasta: { year: number; month: number };
+  intervaloSegundos?: number; forzar?: boolean;
+}) => pedir<{ tarea: TareaRelleno }>("/relleno", { method: "POST", body: JSON.stringify(b) });
+
+export const estadoRelleno = (empresaId?: string) =>
+  pedir<{ empresaId: string; tareas: TareaRelleno[] }>(`/relleno${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
+
+export const pararRelleno = (b: { empresaId?: string; connectorKey: string; accountKey: string }) =>
+  pedir<{ tarea: TareaRelleno }>("/relleno/parar", { method: "POST", body: JSON.stringify(b) });
+
+/** El relleno del kilometraje del histórico de revisiones. */
+export interface TareaRevisiones {
+  empresaId: string;
+  intervaloSegundos: number;
+  /** Suelo del histórico del proveedor: no se pregunta por nada anterior. */
+  desde: string | null;
+  notaHorizonte: string | null;
+  estado: "en_curso" | "terminada" | "parada" | "abandonada";
+  iniciadaMs: number;
+  ultimoTickMs: number | null;
+  totalAlEmpezar: number;
+  pendientes: number;
+  escritas: number;
+  sinLectura: number;
+  rechazadas: number;
+  minutosRestantes: number;
+  restanteEnPalabras: string;
+  ultima: { fecha: string; resultado: string } | null;
+  muestraMotivos: string[];
+  nota?: string;
+}
+
+export const rellenarRevisiones = (b: { empresaId?: string; intervaloSegundos?: number; desde?: string }) =>
+  pedir<{ tarea: TareaRevisiones }>("/revisiones", { method: "POST", body: JSON.stringify(b) });
+
+export const estadoRevisiones = (empresaId?: string) =>
+  pedir<{ empresaId: string; tarea: TareaRevisiones | null }>(`/revisiones${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
+
+export const pararRevisiones = (b: { empresaId?: string }) =>
+  pedir<{ tarea: TareaRevisiones }>("/revisiones/parar", { method: "POST", body: JSON.stringify(b) });
+
+/** Una fila del ranking de kilómetros de la flota. */
+export interface VehiculoDelRanking {
+  vehiculoId: string;
+  matricula: string | null;
+  numeroUnidad: string | null;
+  kmAnual: number | null;
+  /** Sobre cuántos meses completos está hecha la cifra. Va SIEMPRE al lado. */
+  meses: number;
+  kmAnioActual: number;
+  mesesDelAnio: number;
+  kmMesActual: number | null;
+  mesesSinDato: number;
+  mesesConError: number;
+}
+
+export interface Ranking {
+  empresaId: string;
+  vehiculos: VehiculoDelRanking[];
+  /** Activos sin ningún mes con dato: casi siempre conciliación pendiente. */
+  sinDatos: Array<{ vehiculoId: string; matricula: string | null; numeroUnidad: string | null }>;
+  totales: { vehiculosConDato: number; kmAnualTotal: number; kmAnualMedio: number | null };
+}
+
+export const rankingKilometraje = (empresaId?: string) =>
+  pedir<Ranking>(`/ranking${empresaId ? `?empresa=${encodeURIComponent(empresaId)}` : ""}`);
+
+/** Lo que contesta la revisión de coherencia del histórico. */
+export interface RevisionCoherencia {
+  empresaId: string;
+  aplicado: boolean;
+  filas: number;
+  vehiculos: number;
+  muestra: Array<{
+    mobilinkId: string;
+    externalCode: string;
+    year: number;
+    month: number;
+    km: number;
+    avance: number;
+  }>;
+}
+
+export const revisarCoherencia = (b: { empresaId?: string; aplicar?: boolean }) =>
+  pedir<RevisionCoherencia>("/coherencia", { method: "POST", body: JSON.stringify(b) });
+
 /** «sep 2026». */
 export function nombreDeMes(year: number, month: number): string {
   return new Date(Date.UTC(year, month - 1, 15)).toLocaleDateString("es-ES", { month: "short", year: "numeric", timeZone: "UTC" });

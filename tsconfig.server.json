@@ -39,6 +39,7 @@
     "server/acuerdos/**/*.ts",
     "server/enrutado/**/*.ts",
     "server/tyrecontrol/**/*.ts",
+    "server/integration-hub/**/*.ts",
     "server/eventlog/**/*.ts",
     "server/documentos/**/*.ts",
     "server/correo/**/*.ts",
@@ -48,11 +49,24 @@
     "server/tacografos/**/*.ts",
     "server/therefore/**/*.ts",
     "server/recepciones/**/*.ts",
+    // Recepción de vehículos desde el patio. Se añade el día que se descubre
+    // que faltaba, no diez fases después: al renombrar la carpeta de
+    // `recepciones` a `recepcionVehiculos` —porque aquel nombre ya era de la
+    // recepción de mercancía— el módulo se salió de este `include` sin que
+    // nada lo dijera, y estuvo tres entregas sin comprobarse.
+    "server/recepcionVehiculos/**/*.ts",
     "server/satisfaction/**/*.ts",
     "server/cierre/**/*.ts",
     "server/core/auditoria.ts",
+    "server/core/idDeTrabajo.ts",
+    "server/core/jsonAjeno.ts",
     "server/core/auditoriaSchema.ts",
     "server/dbBackup.ts",
+    // El grueso del backend. Llevaba sin comprobarse: no estaba aquí y
+    // `tsc -b` tampoco lo mira, así que 19.600 líneas pasaban de largo. Es el
+    // mismo agujero que dejó `recepcionVehiculos` tres entregas sin mirar y el
+    // integration-hub entero sin mirar nunca.
+    "server/index.ts",
     // La herramienta del lote de calibración de Therefore. Va aquí porque es
     // lo único de scripts/ que importa código de server/ y conviene que un
     // error de tipos salga en la CI y no al ejecutarla con el buzón delante.

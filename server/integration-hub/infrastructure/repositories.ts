@@ -1397,6 +1397,109 @@ export async function upsertMonthlyMileage(r: MonthlyMileageUpsert): Promise<voi
   );
 }
 
+/**
+ * Todos los meses guardados de TODA la flota de un cliente.
+ *
+ * Es lo que necesita el ranking de kilómetros: una sola consulta en vez de una
+ * por vehículo. Para Autocares Plana, con 751 vehículos y un año de histórico,
+ * son unas 9.000 filas — nada para Postgres y muchísimo menos que 751 viajes.
+ *
+ * Se devuelve TODO, incluidos los meses en error o sin datos: quién entra en
+ * la media lo decide `resumirKilometraje`, que es el único sitio donde vive
+ * ese criterio. Filtrar aquí sería tener la regla en dos lados.
+ */
+export async function listMonthlyMileageByTenant(params: {
+  tenantId: string;
+  /** Acota a los meses desde este año inclusive. Sin él, todo lo guardado. */
+  desdeYear?: number;
+}): Promise<MonthlyMileageRow[]> {
+  const { rows } = await pool.query(
+    `SELECT * FROM integration_vehicle_monthly_mileage
+      WHERE tenant_id = $1 AND ($2::int IS NULL OR year >= $2::int)
+      ORDER BY mobilink_id, year DESC, month DESC`,
+    [params.tenantId, params.desdeYear ?? null]
+  );
+  return rows.map(aFilaMensual);
+}
+
+/**
+ * Descarta los meses cuya distancia es imposible a la luz de su odómetro.
+ *
+ * Misma regla que aplica el conector al RECIBIR la respuesta
+ * (`distanciaCreible` en el mapeo de Movertis), aquí contra lo ya guardado:
+ * hace falta porque las filas malas entraron antes de que existiera la regla,
+ * y una sola basta para poner a un autobús el primero del ranking con 37
+ * millones de kilómetros al año.
+ *
+ * El factor lo pasa quien llama para que la regla siga viviendo en un solo
+ * sitio; no se repite aquí un 2 suelto que mañana se desincronice del otro.
+ *
+ * `aplicar: false` solo cuenta, sin tocar nada: quien pulsa el botón ve
+ * cuántas filas se va a llevar por delante antes de confirmar.
+ */
+export async function revisarCoherenciaMensual(params: {
+  tenantId: string;
+  vecesOdometroMaximo: number;
+  aplicar: boolean;
+}): Promise<{
+  filas: number;
+  vehiculos: number;
+  muestra: Array<{ mobilinkId: string; externalCode: string; year: number; month: number; km: number; avance: number }>;
+}> {
+  // El odómetro solo sirve de vara cuando está y cuando avanza. Sin él no se
+  // juzga: es el caso de los vehículos sin CAN, y ahí no hay con qué comparar.
+  const condicion = `
+      tenant_id = $1
+      AND sync_status = 'ok'
+      AND distance_km IS NOT NULL
+      AND initial_odometer_km IS NOT NULL
+      AND final_odometer_km IS NOT NULL
+      AND final_odometer_km > initial_odometer_km
+      AND distance_km > (final_odometer_km - initial_odometer_km) * $2`;
+
+  const { rows: previa } = await pool.query(
+    `SELECT mobilink_id, external_code, year, month, distance_km,
+            (final_odometer_km - initial_odometer_km) AS avance
+       FROM integration_vehicle_monthly_mileage
+      WHERE ${condicion}
+      ORDER BY distance_km DESC
+      LIMIT 10`,
+    [params.tenantId, params.vecesOdometroMaximo]
+  );
+  const { rows: cuenta } = await pool.query(
+    `SELECT COUNT(*)::int AS filas, COUNT(DISTINCT mobilink_id)::int AS vehiculos
+       FROM integration_vehicle_monthly_mileage
+      WHERE ${condicion}`,
+    [params.tenantId, params.vecesOdometroMaximo]
+  );
+
+  if (params.aplicar && cuenta[0].filas > 0) {
+    await pool.query(
+      `UPDATE integration_vehicle_monthly_mileage
+          SET sync_status = 'error',
+              distance_km = NULL,
+              closed = false,
+              last_error = 'Distancia incoherente con el odómetro; descartada',
+              updated_at_ms = $3
+        WHERE ${condicion}`,
+      [params.tenantId, params.vecesOdometroMaximo, now()]
+    );
+  }
+
+  return {
+    filas: cuenta[0].filas,
+    vehiculos: cuenta[0].vehiculos,
+    muestra: previa.map((r: any) => ({
+      mobilinkId: String(r.mobilink_id),
+      externalCode: String(r.external_code),
+      year: Number(r.year),
+      month: Number(r.month),
+      km: Number(r.distance_km),
+      avance: Number(r.avance),
+    })),
+  };
+}
+
 /** Todos los meses guardados de un vehículo, del más reciente al más antiguo. */
 export async function listMonthlyMileage(params: {
   tenantId: string;
@@ -1417,6 +1520,36 @@ export async function listMonthlyMileage(params: {
  * Es lo que permite no volver a preguntar por agosto cada noche: la
  * sincronización pide el mes a todos los enlazados MENOS a estos.
  */
+/**
+ * Qué vehículos de una cuenta YA tienen fila de ese mes, y en qué estado.
+ *
+ * Es lo que permite reanudar un relleno tras un reinicio sin guardar nada en
+ * memoria: el pendiente son los que no salen aquí. A diferencia de
+ * `listVehiclesWithClosedMonth`, no mira `closed`, porque un «sin datos»
+ * pedido de uno en uno nunca se cierra (ver `kilometrajeMensual/relleno.ts`) y
+ * mirarlo dejaría esos vehículos pendientes para siempre.
+ */
+export async function listMonthlyMileageStatus(params: {
+  tenantId: string;
+  system: string;
+  accountKey: string;
+  year: number;
+  month: number;
+}): Promise<Map<string, { syncStatus: string; closed: boolean }>> {
+  const { rows } = await pool.query(
+    `SELECT mobilink_id, sync_status, closed FROM integration_vehicle_monthly_mileage
+      WHERE tenant_id = $1 AND system = $2 AND account_key = $3
+        AND year = $4 AND month = $5`,
+    [params.tenantId, params.system, params.accountKey, params.year, params.month]
+  );
+  return new Map(
+    rows.map((r: any) => [
+      String(r.mobilink_id),
+      { syncStatus: String(r.sync_status), closed: r.closed === true },
+    ])
+  );
+}
+
 export async function listVehiclesWithClosedMonth(params: {
   tenantId: string;
   system: string;

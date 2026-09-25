@@ -51,6 +51,7 @@ import { rasterizarPdf } from "./tyrecontrol/ficha-tecnica/pdfRasterizer.ts";
 import { cotejarPlano, generarPosiciones } from "./tyrecontrol/posicionesDesdeConfig.ts";
 import { initConnect, mountConnect, startConnectWorker } from "./connect/index.ts";
 import { createDispatchRouter, initDispatch, startDispatchWorker } from "./dispatch/index.ts";
+import { createRecepcionVehiculosRouter } from "./recepcionVehiculos/router.ts";
 import { initEventLog } from "./eventlog/schema.ts";
 import { registrarEvento as registrarEventoAsistencia, timelineDe } from "./eventlog/servicio.ts";
 import { initDocumentos } from "./documentos/schema.ts";
@@ -75,8 +76,11 @@ import { createPresenciaRouter } from "./tyrecontrol/presencia/router.ts";
 import { createKilometrajeMensualRouter } from "./tyrecontrol/kilometrajeMensual/router.ts";
 import { createAltaOperativaRouter } from "./tyrecontrol/altaOperativa/router.ts";
 import { createKilometrajeActualRouter } from "./tyrecontrol/kilometrajeActual/router.ts";
+import { createParteProveedorRouter } from "./tyrecontrol/parteProveedor/router.ts";
 import { startConciliacionQuincenal } from "./tyrecontrol/conciliacion/worker.ts";
 import { startPresenciaBases } from "./tyrecontrol/presencia/worker.ts";
+import { startRellenoKilometraje } from "./tyrecontrol/kilometrajeMensual/rellenoWorker.ts";
+import { startRellenoRevisiones } from "./tyrecontrol/kilometrajeRevisiones/worker.ts";
 import { initMapeoEmpresas } from "./tyrecontrol/empresas.ts";
 import { initTyreControlAssist } from "./tyrecontrol/schema.ts";
 import { cicloReparaciones } from "./tyrecontrol/outbox.ts";
@@ -112,6 +116,15 @@ import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
+import { jsonAjeno } from "./core/jsonAjeno.ts";
+import { numeroDeCita } from "./whatsapp/cita.ts";
+import { asistenciasDelOperarioParaCola, soltarCola, trasQueEspera } from "./cola/cola.ts";
+import { enEspera } from "../src/modules/colaEspera.ts";
+import {
+  esClaveDuplicada,
+  INTENTOS_DE_ID,
+  siguienteIdDeTrabajo,
+} from "./core/idDeTrabajo.ts";
 
 /*
  * El cliente vive ahora en `core/twilio.ts`, para que lo pueda usar también el
@@ -726,6 +739,9 @@ function normalizeTechRow(t: any) {
     // Persona de Core con la que está vinculado (paso 2 de la unificación).
     // null = todavía sin vincular; el histórico sigue yendo por nombre.
     employeeId: t.employee_id ?? null,
+    // Taller al que pertenece. null = el de por defecto, que es como se ha
+    // comportado siempre mientras la columna no existía.
+    workshopId: t.workshopId ?? null,
   };
 }
 
@@ -803,6 +819,20 @@ function normalizeNullableNumber(value: unknown) {
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 
+/**
+ * Un id opcional que llega del cliente: número, null o basura.
+ *
+ * Devuelve null salvo que sea un entero positivo de verdad. Hace falta porque
+ * el formulario manda cadena vacía al soltar el enlace, y `Number("")` es 0:
+ * un 0 en una columna con clave ajena no es «sin cliente», es «el cliente 0»,
+ * y revienta al insertar.
+ */
+function idOpcional(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 function normalizeRoadsideAssistanceRow(row: any) {
   return {
     id: Number(row.id),
@@ -858,9 +888,20 @@ function normalizeRoadsideAssistanceRow(row: any) {
     origen: row.origen === "central" ? "central" : "taller",
     expedienteCentral: row.expedienteCentral ?? null,
     solicitanteEmpresa: row.solicitanteEmpresa ?? null,
+    solicitanteClienteId: row.solicitanteClienteId != null ? Number(row.solicitanteClienteId) : null,
+    solicitanteContactoId: row.solicitanteContactoId != null ? Number(row.solicitanteContactoId) : null,
     solicitanteNombre: row.solicitanteNombre ?? null,
     solicitanteTelefono: row.solicitanteTelefono ?? null,
     solicitanteAutorizacion: row.solicitanteAutorizacion ?? null,
+    /*
+     * La cola del operario: detrás de qué asistencia espera ésta su turno.
+     *
+     * Aquí va el enlace tal cual está guardado. Si está en espera DE VERDAD lo
+     * decide `src/modules/colaEspera.ts` mirando el estado de la de delante, porque
+     * una asistencia con este campo puesto y la de delante ya cerrada NO está
+     * en espera: es la siguiente y le toca.
+     */
+    esperaTrasId: row.esperaTrasId != null ? Number(row.esperaTrasId) : null,
     // Subcontratación: quién ejecuta y a quién se factura
     proveedorId: row.proveedorId != null ? Number(row.proveedorId) : null,
     proveedorTallerId: row.proveedorTallerId != null ? Number(row.proveedorTallerId) : null,
@@ -1234,7 +1275,7 @@ async function calcularETA(
     throw new Error(`Error Google Routes API: ${response.status} ${text}`);
   }
 
-  const data = await response.json();
+  const data = await jsonAjeno(response);
   const ruta = data.routes?.[0];
   if (!ruta) throw new Error("No se encontró ruta entre los puntos indicados");
 
@@ -1285,7 +1326,7 @@ app.post("/api/geocode", protectWhenStrict(requirePanelRole), async (req, res) =
       throw new Error(`Error Google Geocoding API: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = await jsonAjeno(response);
     if (data.status !== "OK" || !data.results?.[0]) {
       return res.status(404).json({ error: `No se encontraron coordenadas para "${address}"` });
     }
@@ -1355,7 +1396,7 @@ async function getWebfleetVehiclePosition(vehicleId: string): Promise<{
 
   if (!response.ok) throw new Error(`Webfleet error HTTP ${response.status}`);
 
-  const data = await response.json();
+  const data = await jsonAjeno(response);
   if (data?.errorCode) throw new Error(`Webfleet error ${data.errorCode}: ${data.errorMsg}`);
 
   const vehicles = Array.isArray(data) ? data : data?.data ?? [];
@@ -1407,7 +1448,7 @@ async function getWebfleetTrips(objectno: string, fromMs: number, toMs: number):
   const { url, headers } = buildWebfleetRequest("showTripReportExtern", { objectno, ...webfleetRange(fromMs, toMs) });
   const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
   if (!r.ok) throw new Error(`Webfleet trips HTTP ${r.status}`);
-  const data = await r.json();
+  const data = await jsonAjeno(r);
   if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
   const trips = (Array.isArray(data) ? data : []) as WebfleetTrip[];
   return trips.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
@@ -1417,7 +1458,7 @@ async function getWebfleetTracks(objectno: string, fromMs: number, toMs: number)
   const { url, headers } = buildWebfleetRequest("showTracks", { objectno, ...webfleetRange(fromMs, toMs) });
   const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
   if (!r.ok) throw new Error(`Webfleet tracks HTTP ${r.status}`);
-  const data = await r.json();
+  const data = await jsonAjeno(r);
   if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
   const pts = (Array.isArray(data) ? data : []) as any[];
   return pts
@@ -1822,8 +1863,20 @@ const VERSION_APP: string | null = (() => {
   }
 })();
 
+/**
+ * El commit que está corriendo ahora mismo.
+ *
+ * Render lo deja en `RENDER_GIT_COMMIT`. Es el único dato de versión que no
+ * depende de que alguien se acuerde de subir un número a mano: si hay dudas
+ * de si lo desplegado lleva un arreglo, se compara este sha con el del
+ * repositorio y se acabó la conversación.
+ */
+const COMMIT_DESPLEGADO: string | null =
+  (process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || "").slice(0, 8) ||
+  null;
+
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, version: VERSION_APP });
+  res.json({ ok: true, version: VERSION_APP, commit: COMMIT_DESPLEGADO });
 });
 
 // ── TyreControl: cerrar una intervención de cambio de neumático ──
@@ -2315,6 +2368,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
       statusTotals,
       roadsideCapable,
       phone,
+      workshopId,
     } = req.body ?? {};
 
     const normalizedStatus = status ?? "disponible";
@@ -2331,9 +2385,21 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
       protectedStatuses.has(normalizedStatus) || Boolean(blocked);
 
     const existingResult = await db.query(
-      `SELECT "roadsideCapable" FROM techs WHERE name = $1`,
+      `SELECT "roadsideCapable", "workshopId" FROM techs WHERE name = $1`,
       [name]
     );
+
+    /*
+     * Si el cuerpo no trae taller, se conserva el que había.
+     *
+     * Este endpoint es un upsert con la lista de columnas escrita a mano, así
+     * que una columna ausente del cuerpo se escribiría como NULL y borraría la
+     * asignación. Lo mismo que ya se hace con `roadsideCapable`.
+     */
+    const normalizedWorkshopId =
+      workshopId === undefined
+        ? existingResult.rows[0]?.workshopId ?? null
+        : String(workshopId ?? "").trim() || null;
     const normalizedRoadsideCapable =
       roadsideCapable === undefined
         ? existingResult.rows[0]?.roadsideCapable === true
@@ -2352,9 +2418,10 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           "statusChangedAtMs",
           "statusTotals",
           "roadsideCapable",
-          phone
+          phone,
+          "workshopId"
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (name)
         DO UPDATE SET
           status = EXCLUDED.status,
@@ -2366,7 +2433,8 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           "statusChangedAtMs" = EXCLUDED."statusChangedAtMs",
           "statusTotals" = EXCLUDED."statusTotals",
           "roadsideCapable" = EXCLUDED."roadsideCapable",
-          phone = EXCLUDED.phone
+          phone = EXCLUDED.phone,
+          "workshopId" = EXCLUDED."workshopId"
       `,
       [
         name,
@@ -2380,6 +2448,7 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
         JSON.stringify(statusTotals ?? {}),
         normalizedRoadsideCapable,
         phone != null ? String(phone).trim() || null : null,
+        normalizedWorkshopId,
       ]
     );
 
@@ -2398,7 +2467,8 @@ app.put("/api/techs/:name", requireAdminRole, async (req, res) => {
           "roadsideCapable",
           "currentRoadsideAssistanceId",
           phone,
-          employee_id
+          employee_id,
+          "workshopId"
         FROM techs
         WHERE name = $1
       `,
@@ -3176,13 +3246,13 @@ async function guardarIdempotencia(req: express.Request, respuesta: unknown) {
 
 async function getTallerOperator(techName: string) {
   let r = await db.query(
-    `SELECT name, "es_supervisor" FROM techs WHERE name = $1 LIMIT 1`,
+    `SELECT name, "es_supervisor", "workshopId" FROM techs WHERE name = $1 LIMIT 1`,
     [techName]
   );
 
   // Repliegue tolerante: mismo nombre con otra caja o sin acentos.
   if (r.rows.length === 0) {
-    const todos = await db.query(`SELECT name, "es_supervisor" FROM techs`);
+    const todos = await db.query(`SELECT name, "es_supervisor", "workshopId" FROM techs`);
     const encontrado = todos.rows.find((t: any) => mismoNombreTecnico(t.name, techName));
     if (!encontrado) return null;
     r = { rows: [encontrado] } as any;
@@ -3191,6 +3261,8 @@ async function getTallerOperator(techName: string) {
   return {
     name: String(r.rows[0].name),
     esSupervisor: r.rows[0].es_supervisor === true,
+    // null = el taller por defecto, que es como se ha comportado siempre.
+    workshopId: r.rows[0].workshopId ?? null,
   };
 }
 
@@ -3264,7 +3336,7 @@ app.get("/api/taller-operator/me", requireTallerOperator, async (req, res) => {
     const { techName } = (req as any).roadsideOperator as { techName: string };
     const op = await getTallerOperator(techName);
     if (!op) return res.status(404).json({ error: "Técnico no encontrado" });
-    res.json({ name: op.name, esSupervisor: op.esSupervisor });
+    res.json({ name: op.name, esSupervisor: op.esSupervisor, workshopId: op.workshopId });
   } catch (error) {
     console.error("GET /api/taller-operator/me error:", error);
     res.status(500).json({ error: "Error obteniendo operario" });
@@ -3347,29 +3419,55 @@ app.post("/api/taller-operator/jobs", requireTallerOperator, async (req, res) =>
       ? body.assignedNames.map((n: unknown) => String(n || "").trim()).filter(Boolean)
       : [];
 
-    const id = Date.now();
+    /*
+     * El id NO es el reloj, aunque aquí se usara para las dos cosas.
+     *
+     * `id` valía también como `createdAtMs`, que es de donde venía la
+     * tentación. Pero `jobs.id` es SERIAL —INTEGER de cuatro bytes— y un
+     * `Date.now()` no cabe: Postgres lo rechaza con «integer out of range» y
+     * el alta desde la APK se cae con un 500 genérico.
+     *
+     * Son dos datos distintos y ahora se calculan por separado: el id se lo
+     * pregunta a la tabla (`server/core/idDeTrabajo.ts`, con el porqué) y la
+     * hora de creación sigue siendo el reloj, que es lo que es.
+     */
+    const creadoAtMs = Date.now();
     const workshopId = String(body.workshopId ?? "").trim() || null;
-    const result = await db.query(
-      `INSERT INTO jobs (
-         id, area, plate, urgent, status, "assignedNames", reason,
-         "customerName", "customerPhone", "createdAtMs",
-         "workedAccumulatedMinutes", "pausedAccumulatedMinutes", "workshopId"
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11)
-       RETURNING *`,
-      [
-        id,
-        String(body.area ?? "mecanica"),
-        plate,
-        !!body.urgent,
-        "espera",
-        JSON.stringify(assignedNames),
-        String(body.reason ?? "").trim(),
-        String(body.customerName ?? "").trim(),
-        String(body.customerPhone ?? "").trim(),
-        id,
-        workshopId,
-      ]
-    );
+
+    let result: any = null;
+    for (let intento = 1; ; intento++) {
+      const id = await siguienteIdDeTrabajo(db);
+      try {
+        result = await db.query(
+          `INSERT INTO jobs (
+             id, area, plate, urgent, status, "assignedNames", reason,
+             "customerName", "customerPhone", "createdAtMs",
+             "workedAccumulatedMinutes", "pausedAccumulatedMinutes", "workshopId"
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11)
+           RETURNING *`,
+          [
+            id,
+            String(body.area ?? "mecanica"),
+            plate,
+            !!body.urgent,
+            "espera",
+            JSON.stringify(assignedNames),
+            String(body.reason ?? "").trim(),
+            String(body.customerName ?? "").trim(),
+            String(body.customerPhone ?? "").trim(),
+            creadoAtMs,
+            workshopId,
+          ]
+        );
+        break;
+      } catch (e) {
+        // Dos tablets dando de alta a la vez leen el mismo máximo. Se repite
+        // con el siguiente número, y SOLO ante clave duplicada: repetir un
+        // error de tipo o de columna no lo arregla.
+        if (!esClaveDuplicada(e) || intento >= INTENTOS_DE_ID) throw e;
+      }
+    }
+
     const creado = normalizeJobRow(result.rows[0]);
     await guardarIdempotencia(req, creado);
     res.json(creado);
@@ -6024,7 +6122,7 @@ app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_r
     const response = await fetch(url, { headers });
     if (!response.ok) return res.status(502).json({ error: `Webfleet error HTTP ${response.status}` });
 
-    const data = await response.json();
+    const data = await jsonAjeno(response);
     if (data?.errorCode) return res.status(502).json({ error: `Webfleet error ${data.errorCode}: ${data.errorMsg}` });
 
     // Cruzar con nuestra BD: matrícula, taller y estado operativo.
@@ -6146,7 +6244,7 @@ app.get("/api/tyrecontrol/webfleet/objects", authenticate, requireModule("tyreco
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", {}, creds);
     const r = await fetch(url, { headers });
     if (!r.ok) return res.status(502).json({ error: `Webfleet HTTP ${r.status}` });
-    const data = await r.json();
+    const data = await jsonAjeno(r);
     if (data?.errorCode) return res.status(502).json({ error: `Webfleet ${data.errorCode}: ${data.errorMsg}` });
     const objs = Array.isArray(data) ? data : data?.data ?? [];
     res.json(objs.map((v: any) => ({
@@ -6170,7 +6268,7 @@ app.get("/api/tyrecontrol/webfleet/odometer", authenticate, requireModule("tyrec
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern", { objectno }, creds);
     const r = await fetch(url, { headers });
     if (!r.ok) return res.status(502).json({ error: `Webfleet HTTP ${r.status}` });
-    const data = await r.json();
+    const data = await jsonAjeno(r);
     if (data?.errorCode) return res.status(502).json({ error: `Webfleet ${data.errorCode}: ${data.errorMsg}` });
     const objs = Array.isArray(data) ? data : data?.data ?? [];
     const o = objs.find((v: any) => String(v.objectno) === String(objectno)) ?? objs[0];
@@ -6228,7 +6326,7 @@ app.get("/api/tyrecontrol/webfleet/estado", authenticate, requireModule("tyrecon
     if (!r.ok) {
       return res.json({ ...base, probado: true, ok: false, mensaje: `Webfleet respondió HTTP ${r.status}` });
     }
-    const data = await r.json();
+    const data = await jsonAjeno(r);
     if (data?.errorCode) {
       return res.json({ ...base, probado: true, ok: false, mensaje: `Webfleet ${data.errorCode}: ${data.errorMsg}` });
     }
@@ -6265,7 +6363,7 @@ app.get("/api/tyrecontrol/webfleet/conduccion", authenticate, requireModule("tyr
       const { url, headers } = buildWebfleetRequest(action, rango, creds);
       const r = await fetch(url, { headers, signal: AbortSignal.timeout(25000) });
       if (!r.ok) throw new Error(`Webfleet ${action} HTTP ${r.status}`);
-      const data = await r.json();
+      const data = await jsonAjeno(r);
       if (data?.errorCode) throw new Error(`Webfleet ${data.errorCode}: ${data.errorMsg}`);
       return (Array.isArray(data) ? data : data?.data ?? []) as any[];
     };
@@ -6571,7 +6669,11 @@ app.post("/api/roadside-operator/login", async (req, res) => {
       const email = `apk-${slug}@mobilink-assist.app`;
 
       const { data: lista } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
-      const existente = lista?.users?.find((u) => u.email === email);
+      // `listUsers` devuelve una unión: en la rama de error `users` es `[]`, y
+      // de ahí TypeScript deduce `never` y no deja ni leer el email. Se dice
+      // aquí lo único que se usa de cada usuario.
+      const usuarios = (lista?.users ?? []) as Array<{ id: string; email?: string | null }>;
+      const existente = usuarios.find((u) => u.email === email);
       if (existente) {
         await supabase.auth.admin.updateUserById(existente.id, { password: code });
       } else {
@@ -6915,6 +7017,28 @@ app.get(
       );
 
       const rows = result.rows.map(normalizeRoadsideAssistanceRow) as any[];
+
+      /*
+       * Marcar las que están en espera, aquí y no en la APK.
+       *
+       * La regla necesita ver TAMBIÉN las cerradas de este operario para saber
+       * que una que espera detrás de una cerrada ya no espera, y este listado
+       * las esconde por defecto. Hacerlo en el móvil obligaría a mandárselas
+       * todas y a que cada versión de la APK calculara lo mismo; así la APK solo
+       * lee un sí o un no.
+       */
+      const paraCola = await asistenciasDelOperarioParaCola(operator.techName);
+      for (const r of rows) {
+        r.enEspera = enEspera(
+          {
+            id: r.id,
+            assignedTechName: r.assignedTechName ?? null,
+            status: r.status,
+            esperaTrasId: r.esperaTrasId ?? null,
+          },
+          paraCola
+        );
+      }
 
       // Adjuntar fotos (archivos subidos + imágenes recibidas por WhatsApp) a cada asistencia
       const ids = rows.map((r) => r.id);
@@ -7755,6 +7879,85 @@ app.post("/api/roadside-assistances/:id/redirect", requireSupervisorRole, async 
   }
 });
 
+/**
+ * Tocar la cola de un operario a mano: adelantar una asistencia o sacarla.
+ *
+ * Las dos cosas las decide una persona mirando el panel, y por eso son un
+ * endpoint y no una regla: si la que espera resulta más urgente que la que se
+ * está haciendo, o si el operario se alarga y hay que dársela a otro, eso no lo
+ * puede deducir nadie desde aquí.
+ */
+app.post("/api/roadside-assistances/:id/cola", requireSupervisorRole, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Id no válido" });
+    const accion = String((req.body ?? {}).accion ?? "");
+    if (accion !== "adelantar" && accion !== "quitar") {
+      return res.status(400).json({ error: "Acción no válida" });
+    }
+
+    const actual = await db.query(
+      `SELECT id, "assignedTechName", status, "esperaTrasId"
+         FROM roadside_assistances WHERE id = $1`,
+      [id]
+    );
+    if (!actual.rows.length) return res.status(404).json({ error: "Asistencia no encontrada" });
+    const fila = actual.rows[0];
+    const trasId = fila.esperaTrasId != null ? Number(fila.esperaTrasId) : null;
+    if (trasId == null) return res.status(409).json({ error: "Esta asistencia no está en espera" });
+
+    const now = Date.now();
+
+    if (accion === "adelantar") {
+      /*
+       * Se INTERCAMBIAN los puestos: ésta pasa a estar en curso y la que estaba
+       * en curso pasa a esperar detrás de ella.
+       *
+       * Lo obvio habría sido solo quitarle la espera, pero entonces el operario
+       * tendría dos en curso a la vez, que es justo lo que la cola viene a
+       * evitar: en su móvil le saldrían las dos abiertas y no sabría cuál hacer.
+       *
+       * Sin riesgo de ciclo: la de delante pasa a esperar a ésta, y ésta ya no
+       * espera a nadie.
+       */
+      await db.query(
+        `UPDATE roadside_assistances SET "esperaTrasId" = $2, "updatedAtMs" = $3 WHERE id = $1`,
+        [trasId, id, now]
+      );
+      await db.query(
+        `UPDATE roadside_assistances SET "esperaTrasId" = NULL, "updatedAtMs" = $2 WHERE id = $1`,
+        [id, now]
+      );
+    } else {
+      /*
+       * Sacarla de la cola la devuelve a «sin asignar» y a pendiente, que es
+       * para lo que sirve: dársela a otro. Dejarla asignada y sin espera la
+       * pondría en curso, o sea lo contrario de lo que se ha pedido.
+       */
+      await db.query(
+        `UPDATE roadside_assistances
+            SET "esperaTrasId" = NULL,
+                "assignedTechName" = NULL,
+                "assignedVehicleName" = NULL,
+                status = 'pendiente',
+                "assignedAtMs" = NULL,
+                "updatedAtMs" = $2
+          WHERE id = $1`,
+        [id, now]
+      );
+    }
+
+    const actualizada = await db.query(`SELECT * FROM roadside_assistances WHERE id = $1`, [id]);
+    return res.json({
+      ok: true,
+      assistance: normalizeRoadsideAssistanceRow(actualizada.rows[0]),
+    });
+  } catch (error: any) {
+    console.error("POST /api/roadside-assistances/:id/cola error:", error);
+    return res.status(500).json({ error: error?.message || "Error cambiando la cola" });
+  }
+});
+
 app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) => {
   try {
     const body = req.body ?? {};
@@ -7772,6 +7975,17 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         ? "asignada"
         : "pendiente";
     const timestampField = getRoadsideStatusTimestampField(incomingStatus);
+
+    /*
+     * Si el operario ya lleva una, ésta entra en su cola.
+     *
+     * Antes el panel simplemente no dejaba elegir a un operario ocupado, y
+     * había que esperar a que acabara para poder asignarle la siguiente. Ahora
+     * se le asigna igual y queda detrás: él ve la que lleva y la que le espera,
+     * y en cuanto cierra la primera la segunda le entra sin que nadie toque
+     * nada.
+     */
+    const esperaTrasId = await trasQueEspera(null, assignedTechName);
 
     if (!customerName && !customerPhone) {
       return res.status(400).json({
@@ -7814,12 +8028,20 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
           "finishedAtMs",
           "arrivedAtWorkshopMs",
           "cancelledAtMs",
-          "updatedAtMs"
+          "updatedAtMs",
+          -- El enlace con la ficha del cliente. Va al final para no renumerar
+          -- treinta y tres parámetros por añadir dos.
+          "solicitanteClienteId",
+          "solicitanteContactoId",
+          -- La cola: detrás de qué asistencia espera turno ésta. Lo decide el
+          -- servidor mirando qué lleva el operario, no quien llama.
+          "esperaTrasId"
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
+          $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33,
+          $34, $35, $36
         )
         RETURNING *
       `,
@@ -7857,6 +8079,9 @@ app.post("/api/roadside-assistances", requireSupervisorRole, async (req, res) =>
         timestampField === "arrivedAtWorkshopMs" ? now : null,
         timestampField === "cancelledAtMs" ? now : null,
         now,
+        idOpcional(body.solicitanteClienteId),
+        idOpcional(body.solicitanteContactoId),
+        esperaTrasId,
       ]
     );
 
@@ -7979,6 +8204,19 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
     );
     const previousTechName: string | null = existingResult.rows[0].assignedTechName ?? null;
 
+    /*
+     * Dónde queda en la cola del operario que tenga ahora.
+     *
+     * Se recalcula siempre, no solo al cambiar de operario: si la de delante ya
+     * se cerró esto la saca de la cola, y si se la pasan a un operario ocupado
+     * entra detrás de la que él lleva. Se pasa su propio id para que reasignar
+     * la que ya estaba en curso no la ponga a esperarse a sí misma.
+     */
+    const esperaTrasId = await trasQueEspera(
+      id,
+      body.assignedTechName ? String(body.assignedTechName).trim() : null
+    );
+
     const result = await db.query(
       `
         UPDATE roadside_assistances
@@ -8006,6 +8244,15 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
           "solicitanteNombre" = COALESCE($23, "solicitanteNombre"),
           "solicitanteTelefono" = COALESCE($24, "solicitanteTelefono"),
           "solicitanteAutorizacion" = COALESCE($25, "solicitanteAutorizacion"),
+          -- Sin COALESCE y con su propio testigo: aquí «no enviado» y «quítalo»
+          -- tienen que poder distinguirse. Soltar el enlace es una acción del
+          -- operador —el botón ✕ de la ficha—, y con COALESCE sería imposible:
+          -- un null se leería siempre como «no me lo mandes en cuenta».
+          "solicitanteClienteId" = CASE WHEN $26 THEN $27 ELSE "solicitanteClienteId" END,
+          "solicitanteContactoId" = CASE WHEN $26 THEN $28 ELSE "solicitanteContactoId" END,
+          -- La cola se recalcula en cada edición: cambiar de operario cambia
+          -- detrás de quién espera, y quitarle el operario la saca de la cola.
+          "esperaTrasId" = $29,
           "updatedAtMs" = $17
           ${
             timestampField
@@ -8043,6 +8290,11 @@ app.put("/api/roadside-assistances/:id", requireSupervisorRole, async (req, res)
         body.solicitanteNombre != null ? String(body.solicitanteNombre).trim() : null,
         body.solicitanteTelefono != null ? String(body.solicitanteTelefono).trim() : null,
         body.solicitanteAutorizacion != null ? String(body.solicitanteAutorizacion).trim() : null,
+        // ¿Viene el enlace en esta petición? Si no viene, no se toca.
+        Object.prototype.hasOwnProperty.call(body, "solicitanteClienteId"),
+        idOpcional(body.solicitanteClienteId),
+        idOpcional(body.solicitanteContactoId),
+        esperaTrasId,
       ]
     );
 
@@ -8351,7 +8603,11 @@ app.post(
       const veredicto = activar
         ? puedeMarcarSinSeguimiento(a)
         : puedeQuitarSinSeguimiento(a);
-      if (!veredicto.ok) {
+      // `=== false` y no `!veredicto.ok`: este tsconfig va con `strict: false`,
+      // y sin strictNullChecks la comparación por verdad no estrecha la unión
+      // —el compilador seguía viendo `Veredicto` entero y negaba `motivo`—.
+      // Comparar contra el literal sí la estrecha.
+      if (veredicto.ok === false) {
         return res.status(409).json({ error: veredicto.motivo });
       }
 
@@ -8884,7 +9140,7 @@ async function fetchRoutePolyline(
       signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) return null;
-    const data: any = await response.json();
+    const data: any = await jsonAjeno(response);
     const encoded = data.routes?.[0]?.polyline?.encodedPolyline;
     if (!encoded) return null;
     const points = decodeGooglePolyline(encoded);
@@ -10512,6 +10768,70 @@ async function guardarSnapshotSubcontrata(assistanceId: number) {
   }
 }
 
+/* ── Clientes frecuentes: el buscador del alta de asistencia ── */
+
+/**
+ * Busca clientes para el autocompletado del formulario de nueva asistencia.
+ *
+ * ¿Por qué no vale `/api/clientes-facturacion`? Porque devuelve la ficha
+ * fiscal entera —condiciones de pago, series, centro de coste— ordenada por
+ * nombre, y aquí hacen falta tres cosas que no tiene: los CONTACTOS de cada
+ * uno, el número de VECES que ha pedido servicio, y poco peso, porque esto se
+ * dispara mientras alguien teclea.
+ *
+ * Todo en una consulta. Con una llamada por cliente para traer sus contactos,
+ * escribir «Enca» dispararía media docena de peticiones más.
+ *
+ * El orden es lo que lo convierte en «frecuentes»: primero quien más veces ha
+ * llamado. Aviso honesto: ese contador sale de las asistencias ya ENLAZADAS,
+ * así que al principio es cero para todos y la lista sale por nombre; se
+ * ordena sola a medida que se usa.
+ */
+app.get("/api/clientes-frecuentes", requireSupervisorRole, async (req, res) => {
+  try {
+    const q = String(req.query.q ?? "").trim();
+    const r = await db.query(
+      `SELECT c.id, c.name, c."taxId", c.city, c."contactPhone",
+              COALESCE(uso.veces, 0) AS veces,
+              m.external_code AS "erpCode",
+              COALESCE(cont.lista, '[]'::json) AS contactos
+         FROM connect_clients c
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::int AS veces
+             FROM roadside_assistances ra
+            WHERE ra."solicitanteClienteId" = c.id
+         ) uso ON true
+         LEFT JOIN LATERAL (
+           SELECT * FROM integration_mappings im
+            WHERE im.entity_type = 'customer' AND im.mobilink_id = c.id::text
+            ORDER BY im.updated_at_ms DESC LIMIT 1
+         ) m ON true
+         LEFT JOIN LATERAL (
+           SELECT json_agg(
+                    json_build_object(
+                      'id', k.id, 'name', k.name, 'surname', k.surname,
+                      'phone', k.phone, 'mobile', k.mobile, 'isPrimary', k."isPrimary"
+                    ) ORDER BY k."isPrimary" DESC, k.name
+                  ) AS lista
+             FROM connect_workshop_contacts k
+            WHERE k."ownerType" = 'client' AND k."ownerId" = c.id AND k.active
+         ) cont ON true
+        WHERE c.active
+          AND ($1 = '' OR c.name ILIKE '%' || $1 || '%'
+                       OR c."legalName" ILIKE '%' || $1 || '%'
+                       OR c."commercialName" ILIKE '%' || $1 || '%'
+                       OR c."taxId" ILIKE '%' || $1 || '%')
+        ORDER BY veces DESC, c.name
+        LIMIT 8`,
+      [q],
+    );
+    res.json({ data: r.rows });
+  } catch (e: any) {
+    console.error("GET /api/clientes-frecuentes error:", e?.message);
+    res.status(500).json({ error: "Error buscando clientes" });
+  }
+});
+
 /* ── Contactos: cuelgan de un taller, un proveedor o un cliente ── */
 
 const OWNERS_CONTACTO = ["workshop", "provider", "client"];
@@ -11682,7 +12002,24 @@ app.get("/api/rules", protectWhenStrict(requirePanelRole), async (_req, res) => 
    QUICK TEMPLATES
 ========================================================= */
 
-app.get("/api/quick-templates", protectWhenStrict(requirePanelRole), async (_req, res) => {
+/*
+ * El catálogo de operaciones del taller, con guarda de verdad.
+ *
+ * Iba con `protectWhenStrict`, que no hace NADA mientras `AUTH_MODE` no sea
+ * «strict» —y no lo es—. En la práctica era público: cualquiera con la URL
+ * leía las plantillas con su `unitPrice` dentro, o sea la tarifa del taller
+ * (la alineación de camión, 143,50 €) abierta en internet.
+ *
+ * Se le pone `requirePanelRole` directo, que admite los cuatro roles del
+ * panel, TVs incluidas. Las dos llamadas del navegador pasan a mandar
+ * `x-admin-token` —`loadQuickTemplatesFromBackend` y la carga inicial de
+ * SeaTarragonaV1—, que es de donde el servidor saca el rol: `sea-role` vive
+ * solo en el navegador y nunca viaja.
+ *
+ * Los otros tres métodos ya tenían guarda real (supervisor para crear,
+ * administrador para modificar y borrar); el agujero era solo la lectura.
+ */
+app.get("/api/quick-templates", requirePanelRole, async (_req, res) => {
   try {
     const defaults = [
       {
@@ -13511,7 +13848,10 @@ app.post("/api/almacen/login-operario", async (req, res) => {
 
     // Supabase Auth: crear o sincronizar el usuario sintético de la APK.
     const { data: lista } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
-    const existente = lista?.users?.find((u) => u.email === email);
+    // Misma unión de `listUsers` que en el alta de operarios de taller: en la
+    // rama de error `users` es `[]` y TypeScript deduce `never`.
+    const usuarios = (lista?.users ?? []) as Array<{ id: string; email?: string | null }>;
+    const existente = usuarios.find((u) => u.email === email);
     if (existente) {
       await supabase.auth.admin.updateUserById(existente.id, { password: pin });
     } else {
@@ -15166,6 +15506,9 @@ Reglas estrictas:
 - Normaliza el teléfono al formato español (+34XXXXXXXXX o 6XXXXXXXX).
 - Normaliza la matrícula al formato español (4 dígitos + 3 letras, o antiguo formato).
 - Si hay un enlace de Google Maps, extráelo en googleMapsUrl.
+- Si el mensaje da un número de cita o de autorización ("Cita 694163",
+  "Nº de autorización A-4521"), ponlo en citaOAutorizacion. Solo el número: si
+  dice "cita previa" sin número, devuelve null.
 - Si el texto tiene muy poca información útil, marca confidence como "low".
 - Si tiene información suficiente para crear una asistencia, marca confidence "high".
 - En caso intermedio, "medium".
@@ -15185,6 +15528,7 @@ Devuelve SOLO el JSON sin texto adicional:
   "estadoVehiculo": null,
   "empresaSolicitante": null,
   "numeroExpedienteExterno": null,
+  "citaOAutorizacion": null,
   "conductor": null,
   "telefonoConductor": null,
   "observaciones": null,
@@ -15508,6 +15852,19 @@ app.post(
         Body ?? "",
         mediaUrls
       );
+
+      /*
+       * El número de cita, también con una regla determinista.
+       *
+       * Es el número que después pide la aseguradora o el gestor de flota para
+       * pagar el servicio, así que conviene que el mismo texto dé siempre la
+       * misma respuesta. La IA sigue mirando —caza maneras de escribirlo que la
+       * regla no tiene— pero si ella no lo ve y la regla sí, manda la regla.
+       */
+      if (!extracted.citaOAutorizacion) {
+        const cita = numeroDeCita(Body ?? "");
+        if (cita) extracted.citaOAutorizacion = cita;
+      }
 
       // Save draft
       const draftResult = await db.query(
@@ -16075,6 +16432,10 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       longitude: "longitude",
       vehicleDescription: '"vehicleDescription"',
       descripcionAveria: '"descripcionAveria"',
+      // El nº de cita que da quien solicita. Va al mismo campo que se rellena a
+      // mano en el formulario, no a observaciones: es el que después pide la
+      // aseguradora para pagar, y enterrado en un texto largo no se encuentra.
+      solicitanteAutorizacion: '"solicitanteAutorizacion"',
       notes: "notes",
     };
 
@@ -19231,6 +19592,41 @@ mountConnect(app, requireLicensesAdmin);
  * módulo que se llama a sí mismo.
  */
 app.use("/api/dispatch", createDispatchRouter(requireSupervisorRole));
+
+/*
+ * Recepción rápida de vehículos desde el patio.
+ *
+ * Se monta en `/api` porque sirve dos puertas —la de la APK, bajo
+ * `/api/taller-operator/recepcion-vehiculos`, y la del panel, bajo
+ * `/api/recepcion-vehiculos`— y cada una lleva su propio guarda dentro del
+ * router. Sólo responde a esas rutas; el resto de `/api` sigue su camino.
+ *
+ * Nada que ver con `/api/recepciones`, que es la recepción física de
+ * mercancía de proveedores y se monta más arriba.
+ */
+app.use(
+  "/api",
+  createRecepcionVehiculosRouter({
+    requireTallerOperator,
+    requireSupervisorRole,
+    respuestaIdempotente,
+    guardarIdempotencia,
+    upload,
+    subirFoto: async (ruta, buffer, contentType) => {
+      const { error } = await supabase.storage
+        .from(SUPABASE_ROADSIDE_BUCKET)
+        .upload(ruta, buffer, { contentType, upsert: false });
+      if (error) throw new Error(error.message);
+      return supabase.storage.from(SUPABASE_ROADSIDE_BUCKET).getPublicUrl(ruta)
+        .data.publicUrl;
+    },
+    // Para dejar constancia de quién resolvió la recepción. El panel no trae
+    // nombre de usuario en todos los modos de sesión, así que se acepta la
+    // cabecera y se cae a una etiqueta genérica antes que guardar vacío.
+    nombreDelPanel: (req) =>
+      String(req.headers["x-user-name"] ?? "").trim() || "panel",
+  })
+);
 app.use("/api/documentos", createDocumentosRouter("assist", requireSupervisorRole));
 /*
  * ⚠ EL ORDEN DE ESTOS TRES BLOQUES IMPORTA, Y NO ES UN DETALLE DE ESTILO.
@@ -19295,6 +19691,7 @@ app.use("/api/tyrecontrol/kilometraje-mensual", createKilometrajeMensualRouter()
 // de kilometraje mensual: si no, la ruta genérica se lo come.
 app.use("/api/tyrecontrol/alta-operativa", createAltaOperativaRouter());
 app.use("/api/tyrecontrol/kilometraje-actual", createKilometrajeActualRouter());
+app.use("/api/tyrecontrol/parte-proveedor", createParteProveedorRouter());
 app.use("/api/tyrecontrol", createTyreControlRouter(requireSupervisorRole));
 mountCorreo(app, requireSupervisorRole);
 app.use("/api/excepciones", createExcepcionesRouter(requireSupervisorRole));
@@ -19473,7 +19870,7 @@ async function vigilarSalidaDelTaller() {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
     const response = await fetch(url, { headers });
     if (!response.ok) return;
-    const data = await response.json();
+    const data = await jsonAjeno(response);
     if (data?.errorCode) return;
     const vehicles = Array.isArray(data) ? data : data?.data ?? [];
     const posByObj = new Map<string, { lat: number; lng: number }>();
@@ -19606,6 +20003,10 @@ initDb()
       // cadencia sale de la marca guardada, no de este arranque.
       startConciliacionQuincenal();
       startPresenciaBases(); // barrido de "vehículos en bases" desde telemática
+      // Rellenos de km mensuales que un despliegue dejó a medias. Son horas de
+      // peticiones a gotas: sin esto, cada reinicio los pararía en silencio.
+      startRellenoKilometraje();
+      startRellenoRevisiones(); // kilometraje del histórico de revisiones
     });
   })
   .catch((error) => {

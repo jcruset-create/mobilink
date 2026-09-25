@@ -99,6 +99,28 @@ export function frescuraDeConfig(config: unknown): number {
 }
 
 /**
+ * El nombre del proveedor tal como se le enseña al técnico.
+ *
+ * Se escribe QUIÉN lo anotó, no «telemática» a secas: en el patio se sabe qué
+ * vehículos llevan Webfleet y cuáles Movertis, y ver el nombre es lo que
+ * permite decir «ese equipo lleva dos días sin reportar» en vez de desconfiar
+ * del número sin saber de quién viene.
+ *
+ * Lo que no esté en la lista se capitaliza y ya: el día que se enlace una
+ * plataforma nueva aparecerá con su nombre sin tocar esto, y peor sería que
+ * saliera vacío o «unknown».
+ */
+export function nombreProveedor(codigo: string | null | undefined): string | null {
+  const c = (codigo ?? "").trim();
+  if (!c) return null;
+  const conocidos: Record<string, string> = {
+    webfleet: "Webfleet",
+    movertis: "Movertis",
+  };
+  return conocidos[c.toLowerCase()] ?? c.charAt(0).toUpperCase() + c.slice(1);
+}
+
+/**
  * Convierte lo que averiguó el Hub en lo que ve el técnico.
  *
  * Los cuatro estados del servicio NO se colapsan: «no hay lectura» y «no se
@@ -151,9 +173,15 @@ export function clasificarLectura(params: {
         proveedor: resultado.proveedor,
         externo: resultado.externo,
         origenOdometro: resultado.origenOdometro,
-        texto: reciente
-          ? `Lectura de ${haceCuanto(antiguedadMin)}.${porGps}`
-          : `Última lectura ${haceCuanto(antiguedadMin)}: puede haber rodado desde entonces.${porGps}`,
+        // Quién lo anotó va DELANTE, que es lo que se pidió y lo que primero
+        // mira quien lee la pantalla: «anotados por Movertis».
+        texto: (() => {
+          const quien = nombreProveedor(resultado.proveedor);
+          const firma = quien ? `Anotados por ${quien}. ` : "";
+          return reciente
+            ? `${firma}Lectura de ${haceCuanto(antiguedadMin)}.${porGps}`
+            : `${firma}Última lectura ${haceCuanto(antiguedadMin)}: puede haber rodado desde entonces.${porGps}`;
+        })(),
       };
     }
   }

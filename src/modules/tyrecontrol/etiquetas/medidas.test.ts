@@ -1,140 +1,162 @@
-/**
- * Lo que se fija aquí es lo que el encargo pidió que NO se aproximara: que los
- * bloques 2 y 3 quepan ENTEROS dentro de los dos troquelados de la etiqueta
- * física, y que el QR nunca baje del tamaño en que un móvil lo lee.
- *
- * Un bloque que se sale del troquelado no se ve en pantalla: se descubre al
- * arrancar la pegatina, con el rollo ya impreso.
- */
+import { describe, it, expect } from "vitest";
+import {
+  ETIQUETA, bloquesDeEtiqueta, cabeDentro, componerColumna, componerFila,
+  type BloqueEtiqueta, type Caja,
+} from "./medidas";
 
-import { describe, expect, it } from "vitest";
+const SERIE = 13; // dígitos típicos de un número de serie
 
-import { bloquesDeEtiqueta, cabeDentro, componerBloque, ETIQUETA, type Caja } from "./medidas";
+/** ¿Se solapan dos cajas? */
+const chocan = (a: Caja, b: Caja) =>
+  a.x < b.x + b.ancho && b.x < a.x + a.ancho &&
+  a.y < b.y + b.alto && b.y < a.y + a.alto;
 
-describe("componerBloque", () => {
+describe("las subetiquetas: número a la izquierda y QR a la derecha", () => {
+  const b = componerFila(ETIQUETA.huecos[0], SERIE);
+
   it("el QR va a la DERECHA del número, no encima ni debajo", () => {
-    const b = componerBloque(ETIQUETA.huecos[0]);
-    // A la derecha: empieza donde el número ya ha terminado.
+    // En 25 mm de alto, uno encima de otro no cabrían los dos legibles.
     expect(b.qr.x).toBeGreaterThanOrEqual(b.numero.x + b.numero.ancho);
-    // Y a la misma altura: se solapan en vertical, no van apilados.
-    const solapanEnVertical =
-      b.qr.y < b.numero.y + b.numero.alto && b.numero.y < b.qr.y + b.qr.alto;
-    expect(solapanEnVertical).toBe(true);
   });
 
   it("el QR es cuadrado", () => {
-    const b = componerBloque(ETIQUETA.huecos[0]);
     expect(b.qr.ancho).toBeCloseTo(b.qr.alto, 5);
   });
 
   it("el número y el QR no se pisan", () => {
-    const b = componerBloque(ETIQUETA.huecos[0]);
-    expect(b.numero.x + b.numero.ancho).toBeLessThanOrEqual(b.qr.x + 0.001);
+    expect(chocan(b.numero, b.qr)).toBe(false);
   });
 
   it("todo queda dentro de la caja, con su margen de seguridad", () => {
-    for (const caja of [ETIQUETA.bloque1, ...ETIQUETA.huecos]) {
-      const b = componerBloque(caja);
-      expect(cabeDentro(b.numero, caja)).toBe(true);
-      expect(cabeDentro(b.qr, caja)).toBe(true);
-      // Y respetando el margen: nada toca el borde del troquelado.
-      expect(b.numero.x - caja.x).toBeGreaterThanOrEqual(ETIQUETA.seguridad - 0.001);
-      expect(caja.x + caja.ancho - (b.qr.x + b.qr.ancho)).toBeGreaterThanOrEqual(
-        ETIQUETA.seguridad - 0.001);
-    }
-  });
-
-  it("falla en vez de dar un QR que no se puede escanear", () => {
-    // Mejor enterarse al generar que con doscientas etiquetas impresas.
-    const minuscula: Caja = { x: 0, y: 0, ancho: 30, alto: 8 };
-    expect(() => componerBloque(minuscula)).toThrow(/mínimo escaneable/);
-  });
-
-  it("una caja imposible se rechaza y se dice cuál", () => {
-    expect(() => componerBloque({ x: 0, y: 0, ancho: 2, alto: 2 })).toThrow(/demasiado pequeña/);
+    const seguro: Caja = {
+      x: b.caja.x + ETIQUETA.seguridad, y: b.caja.y + ETIQUETA.seguridad,
+      ancho: b.caja.ancho - 2 * ETIQUETA.seguridad,
+      alto: b.caja.alto - 2 * ETIQUETA.seguridad,
+    };
+    expect(cabeDentro(b.numero, seguro)).toBe(true);
+    expect(cabeDentro(b.qr, seguro)).toBe(true);
   });
 
   it("con más dígitos el número se hace más pequeño, no se sale", () => {
-    const corto = componerBloque(ETIQUETA.huecos[0], 8);
-    const largo = componerBloque(ETIQUETA.huecos[0], 20);
+    const corto = componerFila(ETIQUETA.huecos[0], 8);
+    const largo = componerFila(ETIQUETA.huecos[0], 20);
     expect(largo.numero.tamano).toBeLessThan(corto.numero.tamano);
-    expect(cabeDentro(largo.numero, ETIQUETA.huecos[0])).toBe(true);
+    expect(cabeDentro(largo.numero, largo.caja)).toBe(true);
   });
 
   it("el QR no encoge por meter más dígitos: su mínimo es su mínimo", () => {
-    const a = componerBloque(ETIQUETA.huecos[0], 8);
-    const b = componerBloque(ETIQUETA.huecos[0], 20);
-    expect(a.qr.ancho).toBeCloseTo(b.qr.ancho, 5);
-    expect(b.qr.ancho).toBeGreaterThanOrEqual(ETIQUETA.qrMinimo);
+    expect(componerFila(ETIQUETA.huecos[0], 20).qr.ancho)
+      .toBeCloseTo(componerFila(ETIQUETA.huecos[0], 8).qr.ancho, 5);
+  });
+});
+
+describe("la zona de arriba: número grande y QR grande debajo", () => {
+  const b = componerColumna(ETIQUETA.zonaSuperior, SERIE);
+
+  it("el QR va DEBAJO del número, que es lo que pidió el encargo", () => {
+    expect(b.qr.y).toBeGreaterThanOrEqual(b.numero.y + b.numero.alto);
+  });
+
+  it("aprovecha que no hay troquelado: el número es casi el doble de grande que en una subetiqueta", () => {
+    const enSubetiqueta = componerFila(ETIQUETA.huecos[0], SERIE);
+    expect(b.numero.tamano).toBeGreaterThan(enSubetiqueta.numero.tamano * 1.5);
+  });
+
+  it("y el QR también: por encima de 30 mm se lee de lejos y sucio", () => {
+    expect(b.qr.ancho).toBeGreaterThan(30);
+  });
+
+  it("el número va centrado; en las subetiquetas, no", () => {
+    expect(b.numero.centrado).toBe(true);
+    expect(componerFila(ETIQUETA.huecos[0], SERIE).numero.centrado).toBe(false);
+  });
+
+  it("no se pisan y todo cae dentro de la caja", () => {
+    expect(chocan(b.numero, b.qr)).toBe(false);
+    expect(cabeDentro(b.numero, b.caja)).toBe(true);
+    expect(cabeDentro(b.qr, b.caja)).toBe(true);
+  });
+});
+
+describe("no se imprime ningún rótulo", () => {
+  it("el bloque solo tiene número y QR: «Nº SERIE» no existe", () => {
+    for (const b of bloquesDeEtiqueta(SERIE)) {
+      expect(Object.keys(b).sort()).toEqual(["caja", "numero", "qr"]);
+    }
   });
 });
 
 describe("bloquesDeEtiqueta", () => {
+  const bloques = bloquesDeEtiqueta(SERIE);
+
   it("son TRES y salen del mismo cálculo", () => {
-    const bs = bloquesDeEtiqueta();
-    expect(bs).toHaveLength(3);
-    // Los dos troquelados miden lo mismo, así que sus bloques son idénticos
-    // salvo en la posición: eso demuestra que no se ha diseñado ninguno «a ojo».
-    expect(bs[1].qr.ancho).toBeCloseTo(bs[2].qr.ancho, 1);
-    expect(bs[1].numero.tamano).toBeCloseTo(bs[2].numero.tamano, 1);
+    expect(bloques.length).toBe(3);
   });
 
-  it("LA PRUEBA DEL ENCARGO: los bloques 2 y 3 caben en sus troquelados", () => {
-    const bs = bloquesDeEtiqueta();
-    for (const [i, hueco] of ETIQUETA.huecos.entries()) {
-      const b = bs[i + 1];
-      expect(cabeDentro(b.numero, hueco), `bloque ${i + 2}: el número se sale`).toBe(true);
-      expect(cabeDentro(b.qr, hueco), `bloque ${i + 2}: el QR se sale`).toBe(true);
+  it("LA PRUEBA DEL ENCARGO: los dos de abajo caben en sus troquelados", () => {
+    // Lo que se sale del troquelado se pierde al arrancar la pegatina.
+    for (let i = 0; i < ETIQUETA.huecos.length; i++) {
+      const b = bloques[i + 1];
+      expect(cabeDentro(b.numero, ETIQUETA.huecos[i])).toBe(true);
+      expect(cabeDentro(b.qr, ETIQUETA.huecos[i])).toBe(true);
     }
   });
 
   it("los tres caben dentro de la etiqueta entera", () => {
     const etiqueta: Caja = { x: 0, y: 0, ancho: ETIQUETA.ancho, alto: ETIQUETA.alto };
-    for (const b of bloquesDeEtiqueta()) {
+    for (const b of bloques) {
       expect(cabeDentro(b.numero, etiqueta)).toBe(true);
       expect(cabeDentro(b.qr, etiqueta)).toBe(true);
     }
   });
 
+  it("la zona de arriba no invade el primer troquelado", () => {
+    const arriba = bloques[0];
+    expect(arriba.caja.y + arriba.caja.alto).toBeLessThanOrEqual(ETIQUETA.huecos[0].y);
+  });
+
   it("los bloques no se solapan entre sí", () => {
-    const bs = bloquesDeEtiqueta();
-    const cajas = bs.map((b) => b.caja);
-    for (let i = 0; i < cajas.length; i++) {
-      for (let j = i + 1; j < cajas.length; j++) {
-        const a = cajas[i], c = cajas[j];
-        const seSolapan =
-          a.x < c.x + c.ancho && c.x < a.x + a.ancho &&
-          a.y < c.y + c.alto && c.y < a.y + a.alto;
-        expect(seSolapan, `los bloques ${i + 1} y ${j + 1} se pisan`).toBe(false);
+    const piezas: Caja[] = bloques.flatMap((b: BloqueEtiqueta) => [b.numero, b.qr]);
+    for (let i = 0; i < piezas.length; i++) {
+      for (let j = i + 1; j < piezas.length; j++) {
+        expect(chocan(piezas[i], piezas[j])).toBe(false);
       }
     }
   });
 
   it("el número se lee: no baja de 3 mm en ningún bloque", () => {
-    // 3 mm de altura de carácter es lo que se lee a un brazo de distancia en
-    // un almacén. Por debajo habría que acercarse a la goma.
-    for (const b of bloquesDeEtiqueta()) {
-      expect(b.numero.tamano).toBeGreaterThanOrEqual(3);
-    }
+    for (const b of bloques) expect(b.numero.tamano).toBeGreaterThan(3);
+  });
+
+  it("ningún QR baja del mínimo escaneable", () => {
+    for (const b of bloques) expect(b.qr.ancho).toBeGreaterThanOrEqual(ETIQUETA.qrMinimo);
   });
 });
 
 describe("recalibrar", () => {
-  /*
-   * Estas dos pruebas son el seguro de la parametrización: si mañana la regla
-   * dice que la etiqueta mide otra cosa, se cambian los números de ETIQUETA y
-   * el diseño se recoloca solo. Lo que NO puede pasar es que se recoloque
-   * saliéndose del hueco o con un QR ilegible.
-   */
-  it("un troquelado más estrecho sigue dando un bloque que cabe", () => {
-    const estrecho: Caja = { x: 10, y: 60, ancho: 55, alto: 20 };
-    const b = componerBloque(estrecho);
-    expect(cabeDentro(b.numero, estrecho)).toBe(true);
-    expect(cabeDentro(b.qr, estrecho)).toBe(true);
-    expect(b.qr.ancho).toBeGreaterThanOrEqual(ETIQUETA.qrMinimo);
+  it("falla en vez de dar un QR que no se puede escanear", () => {
+    // Si la etiqueta cambiara a un troquelado de 10 mm de alto, más vale
+    // enterarse aquí que con el rollo impreso.
+    expect(() => componerFila({ x: 0, y: 0, ancho: 65, alto: 10 }, SERIE))
+      .toThrow(/mínimo escaneable/);
   });
 
-  it("un troquelado demasiado bajo se niega en vez de encoger el QR", () => {
-    expect(() => componerBloque({ x: 10, y: 60, ancho: 64, alto: 13 })).toThrow(/mínimo escaneable/);
+  it("una caja imposible se rechaza y se dice cuál", () => {
+    expect(() => componerFila({ x: 0, y: 0, ancho: 2, alto: 2 }, SERIE))
+      .toThrow(/demasiado pequeña/);
+  });
+
+  it("un troquelado más estrecho sigue dando un bloque que cabe", () => {
+    const estrecho: Caja = { x: 12.5, y: 66.98, ancho: 55, alto: 25 };
+    const b = componerFila(estrecho, SERIE);
+    expect(cabeDentro(b.numero, estrecho)).toBe(true);
+    expect(cabeDentro(b.qr, estrecho)).toBe(true);
+  });
+
+  it("una zona de arriba más baja encoge el QR, no lo saca de la caja", () => {
+    const baja: Caja = { x: 7.5, y: 8, ancho: 75, alto: 40 };
+    const b = componerColumna(baja, SERIE);
+    expect(cabeDentro(b.qr, baja)).toBe(true);
+    expect(b.qr.ancho).toBeLessThan(componerColumna(ETIQUETA.zonaSuperior, SERIE).qr.ancho);
   });
 });

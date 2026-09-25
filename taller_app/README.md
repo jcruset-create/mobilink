@@ -1,4 +1,4 @@
-# WorkPlanner Taller (APK)
+# WorkPlanner Taller (Android e iOS)
 
 App para las **tablets de los técnicos**: ver las tareas asignadas, empezarlas,
 pausarlas y cerrarlas, con fotos del trabajo y cola offline. Se conecta al backend
@@ -25,6 +25,126 @@ No se compila a mano: lo hace `.github/workflows/build-taller-apk.yml`.
 La clave de firma llega de los secretos `MOBILINK_KEYSTORE_BASE64` y
 `MOBILINK_KEYSTORE_PASSWORD`. **Nunca** se guarda en el repositorio: `key.properties`
 y los `.keystore` están en `.gitignore`.
+
+## iOS
+
+La app existió solo para Android durante 272 entregas. El proyecto `ios/` se
+añadió después, así que aquí no hay historia que respetar: los valores de abajo
+son los definitivos y los dos primeros son **inmutables** una vez subida la app.
+
+| | |
+|---|---|
+| Bundle id | `com.mobilink.workplanner` |
+| Nombre visible | WorkPlanner Taller |
+| Mínimo | iOS 15.0, que es lo que exigirá Apple desde la primavera de 2027 (aviso 90068). El motor de Flutter 3.35.4 se conforma con 13.0 y los plugins con menos |
+| Flutter | 3.35.4, fijo también en Codemagic |
+
+**El bundle id de iOS NO es el `applicationId` de Android.** Aquí es
+`com.mobilink.workplanner`; en Android, `com.mobilink.taller`. Son dos
+identificadores de dos tiendas distintas, cada uno inmutable por su cuenta, y
+manda el de la ficha que ya existe en App Store Connect («Mobilink
+WorkPlanner»). No es una excepción de esta app: en `flutter_app` tampoco
+coinciden (`com.example.sea_tarragona_operario` en Android,
+`com.mobilink.assist` en iOS).
+
+Cambiar uno **no** es cambiar el otro, y no son intercambiables: tocar el de
+Android obligaría a desinstalar la app de todas las tablets.
+
+El mínimo de iOS **solo puede subir**. Poner 15 con Flutter 3.35.4 es válido,
+porque el motor pide 13 o más; al revés no: subir a Flutter 3.47 dejando el
+proyecto en 13 hace que `pod install` falle con «required a higher minimum
+deployment target», que es lo que tumbó un build de Mobilink Assist. Si se
+cambia, se cambian a la vez el proyecto y el `Podfile`.
+
+Subir a 15 deja fuera a los iPad con iOS 13 y 14.
+
+El `Podfile` va **commiteado**. Flutter solo lo genera al compilar en un Mac, y
+el workflow hace `cd ios && pod install` en su segundo paso: sin el fichero, ese
+paso muere antes de empezar.
+
+### Icono
+
+Las dos plataformas salen de la MISMA imagen de 1254x1254, escalada con
+Lanczos a los tamaños de cada una: quince ficheros en
+`ios/Runner/Assets.xcassets/AppIcon.appiconset/` y cinco `mipmap-*` más cinco
+`drawable-*/ic_launcher_foreground.png` en Android.
+
+Dos detalles que no son opcionales:
+
+- **Sin canal alfa.** Apple rechaza la subida si el icono de 1024x1024 lo
+  lleva. Por eso se convierte a RGB antes de escalar.
+- **El icono adaptativo de Android va a sangre**, sin el `inset="16%"` que
+  traía. Ese margen es lo correcto para un logo suelto sobre un fondo de
+  color; con un diseño que ocupa el cuadro entero solo dejaba un marco vacío
+  alrededor.
+
+Cada sistema recorta por su cuenta —iOS redondea las esquinas, Android puede
+llegar a un círculo— y lo que quede fuera no se ve. Con esta ilustración eso
+se lleva parte del rótulo de abajo.
+
+### Permisos
+
+Solo los que el código pide de verdad. Un texto de uso sobrante es motivo de
+rechazo, y un permiso sin texto no es que se rechace: iOS **cierra la app** en
+cuanto se pide.
+
+| Clave | Quién lo usa |
+|---|---|
+| `NSCameraUsageDescription` | `image_picker` — la foto de la matrícula al recibir un vehículo y las fotos del trabajo |
+| `NSPhotoLibraryUsageDescription` | `image_picker` — adjuntar imágenes ya hechas |
+
+### Cumplimiento de exportación
+
+`ITSAppUsesNonExemptEncryption` va en el `Info.plist` y **no es opcional**.
+Sin esa clave, cada subida se queda en App Store Connect marcada como
+«Missing Compliance» y no llega a los probadores hasta que alguien entra a
+mano a contestar la pregunta del cifrado.
+
+Lo que lo hace difícil de ver es que **no falla nada**: el build sale verde,
+el `.ipa` se sube, el correo dice SUCCEEDED, y en TestFlight no aparece la
+versión nueva. Costó siete builds correctos seguidos averiguarlo.
+
+La app no lleva criptografía propia —solo HTTPS del sistema contra la API—,
+así que la respuesta es `false`, igual que en las otras tres apps.
+
+### Subir a TestFlight
+
+Lo hace el workflow `ios-taller-testflight` de `codemagic.yaml`, independiente de
+los de Mobilink Assist, Assist Lite y TyreControl. Pide el número de build a App
+Store Connect (último de TestFlight + 1), pasa la versión de tienda por flag
+—el `version:` del pubspec es la numeración de la APK y **no se toca**, bajarla
+convertiría la siguiente APK en una actualización «hacia atrás» que Android no
+instalaría—, comprueba que `export_options.plist` existe antes de compilar y que
+el `.ipa` existe después, y lo copia a `$HOME/ipa_output` para que `artifacts:`
+lo encuentre con `working_directory` puesto.
+
+No se dispara con cada empujón a `main`, a diferencia de la APK: los minutos de
+Mac se pagan y una subida a TestFlight es una decisión. Se pide con una etiqueta
+sobre el commit que se quiera subir, o desde el botón de la UI de Codemagic:
+
+```bash
+git tag taller-ios-1 && git push origin taller-ios-1
+```
+
+Antes del primer build hacen falta tres cosas **fuera del repositorio**:
+
+1. el App ID `com.mobilink.workplanner` dado de alta en Apple Developer,
+2. la ficha de la app en App Store Connect con ese mismo bundle id,
+3. que la clave de App Store Connect llamada **Mobilink Assist** en Codemagic
+   tenga acceso a esa app (rol App Manager o superior). Se reutiliza esa clave,
+   como ya hace Assist Lite: una clave de API es del equipo de Apple, no de una
+   app. A cambio, el día que caduque se paran las cuatro entregas a la vez.
+
+Si falta cualquiera de las tres, el build para en el paso del número de build con
+el motivo escrito, en vez de morir cuarenta minutos después al firmar.
+
+En local, en un Mac:
+
+```bash
+flutter pub get
+cd ios && pod install && cd ..
+flutter build ipa --release --build-name=1.0 --build-number=1
+```
 
 ## Desarrollo en local
 
@@ -58,6 +178,11 @@ test/
 
 ## Pendiente
 
+- **Legibilidad del icono**: el diseño actual es una ilustración completa
+  —operario, tablet, rótulo «Mobilink WorkPlanner»—, y a 60 px el texto no se
+  lee. Funciona como imagen de portada, no tanto como icono. Si alguna vez se
+  quiere que se distinga de un vistazo en la pantalla de inicio, lo que hay que
+  hacer es recortar la marca (la «N») y dejarla sola sobre el fondo azul.
 - Adaptación a tablet: dos columnas en horizontal y sesión de puesto compartido.
 - Unificar el login con el PIN de taller (`techs.workshopPin`), hoy usa el código de
   operario.
