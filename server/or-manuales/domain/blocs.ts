@@ -212,6 +212,57 @@ export function comprobarCierre(estado: EstadoBloc, progreso: Progreso): void {
   }
 }
 
+/**
+ * ¿Se puede borrar el bloc entero?
+ *
+ * Borrar existe porque dar de alta un bloc equivocado es fácil —un rango mal
+ * tecleado, un taco de prueba— y hasta ahora el único arreglo era entrar en la
+ * base a mano. Pero es la única operación del módulo que hace desaparecer
+ * papel del archivo, así que va con dos frenos:
+ *
+ *   · **Un bloc CERRADO no se borra nunca.** Cerrar es la decisión de dar por
+ *     bueno el archivo de esas 25 hojas; si se pudiera borrar después, esa
+ *     decisión no valdría nada. Para eso está el histórico.
+ *   · **Si tiene hojas archivadas, hay que confirmarlo a propósito.** No se
+ *     bloquea —un bloc de prueba puede tener un escaneo de prueba dentro— pero
+ *     quien borra tiene que ver primero cuántas hojas se lleva por delante.
+ *
+ * El histórico del bloc NO se borra con él: `orm_eventos` no tiene clave ajena
+ * justamente para esto, así que queda constancia de que existió y de quién lo
+ * quitó.
+ */
+export function comprobarBorrado(estado: EstadoBloc, progreso: Progreso, confirmado: boolean): void {
+  if (estado === "CERRADO") {
+    throw new ErrorOrManuales(
+      "BLOC_CERRADO",
+      "Un bloc cerrado no se borra: es el archivo de esas hojas.",
+      409
+    );
+  }
+  if (progreso.archivadas > 0 && !confirmado) {
+    throw new ErrorOrManuales(
+      "BLOC_CON_DOCUMENTOS",
+      `Este bloc tiene ${progreso.archivadas} hoja(s) archivadas. Si lo borras se retiran con él.`,
+      409,
+      { archivadas: progreso.archivadas }
+    );
+  }
+}
+
+/**
+ * El número de bloc que llega del formulario.
+ *
+ * Se puede cambiar —un bloc mal numerado se renumera— y lo único que se exige
+ * es que diga algo y no sea kilométrico. Que no choque con otro lo garantiza el
+ * UNIQUE de la base, no esta función.
+ */
+export function validarNumeroBloc(valor: unknown): string {
+  const n = typeof valor === "string" ? valor.trim() : "";
+  if (!n) throw new ErrorOrManuales("NUMERO_BLOC_VACIO", "El número de bloc no puede quedarse en blanco.");
+  if (n.length > 40) throw new ErrorOrManuales("NUMERO_BLOC_LARGO", "El número de bloc no puede pasar de 40 caracteres.");
+  return n;
+}
+
 /* ── Utilidades ───────────────────────────────────────────────────────────── */
 
 function entero(valor: unknown, que: string): number {

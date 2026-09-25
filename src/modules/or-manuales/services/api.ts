@@ -111,8 +111,16 @@ export const crearBloc = (datos: {
 
 export const bloc = (id: string) => pedir<FichaBloc>(`/blocs/${id}`);
 
-export const editarBloc = (id: string, datos: { responsableNombre?: string; observaciones?: string }) =>
+export const editarBloc = (id: string, datos: { numeroBloc?: string; responsableNombre?: string; observaciones?: string }) =>
   pedir<FichaBloc>(`/blocs/${id}`, json(datos, "PATCH"));
+
+/**
+ * Borra el bloc. Sin `confirmar`, el servidor se planta si tiene hojas
+ * archivadas y contesta cuántas son: la pantalla lo vuelve a pedir con el
+ * número delante.
+ */
+export const eliminarBloc = (id: string, datos: { confirmar?: boolean; motivo?: string } = {}) =>
+  pedir<{ ok: true; numeroBloc: string; documentosRetirados: number }>(`/blocs/${id}`, json(datos, "DELETE"));
 
 export const entregarBloc = (
   id: string,

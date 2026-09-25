@@ -10,6 +10,7 @@ import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { FileStack, Menu } from "lucide-react";
 import AccesosCabecera from "../../../components/AccesosCabecera";
+import VersionDesplegada from "../../../components/VersionDesplegada";
 import { NAV, navVisible } from "../config/navigation";
 import { useOrManuales } from "../contexts/OrManualesContext";
 
@@ -40,6 +41,14 @@ export default function OrManualesLayout() {
         </div>
         <div className="flex items-center gap-3">
           {rol && <span className="hidden text-[11px] text-slate-400 sm:block">{rol}</span>}
+          {/*
+            El número del panel y el commit desplegado. El mismo componente que
+            usan Therefore y TyreControl: aquí hace falta por lo mismo que allí
+            —«¿ya está subido el arreglo?»— y además avisa cuando el navegador
+            arrastra un bundle viejo de la caché, que es de donde salió el
+            primer «no funciona, se queda en blanco» de este módulo.
+          */}
+          <VersionDesplegada className="hidden sm:inline" />
           <AccesosCabecera actual="or-manuales" />
         </div>
       </header>
