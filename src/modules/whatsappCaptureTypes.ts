@@ -68,6 +68,12 @@ export type WhatsAppAiSuggestions = {
   // Avería
   tipoAveria?: string | null;
   descripcionAveria?: string | null;
+  /**
+   * El número de cita o autorización que da quien manda el servicio. Va al
+   * campo «Autorización o cita» de la asistencia: es el que pide después la
+   * aseguradora o el gestor de flota para pagar.
+   */
+  citaOAutorizacion?: string | null;
   // Teléfono del conductor (a menudo solo aparece en una foto)
   conductorTelefono?: string | null;
   /**

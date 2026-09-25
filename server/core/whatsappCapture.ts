@@ -13,6 +13,7 @@
 
 import db from "../db.ts";
 import { extractJson, AI_IMAGE_RULES } from "./ai.ts";
+import { numeroDeCita } from "../whatsapp/cita.ts";
 
 /** Para qué se abrió la captura: decide con qué prompt la lee la IA. */
 export type CapturePurpose = "assistance" | "workshop";
@@ -124,6 +125,11 @@ UBICACIONES MÚLTIPLES:
 - Excepción: si un mensaje de texto o audio posterior dice lo contrario (p. ej. "la buena es la primera"), obedece al texto.
 - Si difieren mucho y no hay texto que lo aclare, usa la última, baja "confidence" a "medium" y dilo en "resumen".
 
+CITA O AUTORIZACIÓN:
+- Si alguien da un número de cita o de autorización ("Cita 694163", "Nº de
+  autorización A-4521"), ponlo en "citaOAutorizacion". Solo el número.
+- "cita previa" o "cita para el martes" NO son números de cita: devuelve null.
+
 CAMPOS DE MATRÍCULA:
 - La BLANCA va en "plate" y la ROJA del remolque en "plateRemolque", sin espacios ni guiones.
 
@@ -136,6 +142,7 @@ Responde SOLO con JSON válido, sin markdown. Campos (null si no consta):
   "latitude": number, "longitude": number, "address": string,
   "municipio": string, "provincia": string,
   "tipoAveria": string, "descripcionAveria": string,
+  "citaOAutorizacion": string,
   "datosDetectados": [{ "campo": string, "valor": string, "origen": "imagen"|"texto"|"audio" }],
   "resumen": string, "confidence": "high"|"medium"|"low"
 }
@@ -144,7 +151,7 @@ Responde SOLO con JSON válido, sin markdown. Campos (null si no consta):
 aseguradora, albarán, DNI, empresa de transporte, expediente del cliente,
 kilómetros, medida de neumático, contacto alternativo…). Si no hay nada, lista vacía.`;
 
-  return extractJson({
+  const out = await extractJson({
     system,
     text: `Mensajes de la sesión:\n${lines.join("\n")}`,
     images: imageUrls,
@@ -154,6 +161,20 @@ kilómetros, medida de neumático, contacto alternativo…). Si no hay nada, lis
     // El motivo del fallo acaba en ai_error, visible en el backoffice.
     strict: true,
   });
+
+  /*
+   * Red de seguridad para el número de cita: si la IA no lo ha visto, se busca
+   * con la regla determinista sobre el texto de los mensajes (los audios
+   * transcritos incluidos, que también van en `lines`). Este número es el que
+   * pide después la aseguradora para pagar, así que no conviene dejarlo a un
+   * solo criterio. Solo rellena si falta; lo que diga la IA manda.
+   */
+  if (out && !out.citaOAutorizacion) {
+    const cita = numeroDeCita(lines.join("\n"));
+    if (cita) out.citaOAutorizacion = cita;
+  }
+
+  return out;
 }
 
 /**
