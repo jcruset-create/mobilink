@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { listarReferenciasPendientes, validarReferencia, listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico, listarNeumaticosSinCatalogar, crearReferenciaNeumatico, actualizarModeloTecnico, proponerIndicesMedida } from "../services/data";
+import { listarReferenciasPendientes, validarReferencia, listarReferenciasNeumatico, subirFotoModelo, eliminarFotoModelo, actualizarReferenciaNeumatico, eliminarReferenciaNeumatico, listarNeumaticosSinCatalogar, crearReferenciaNeumatico, actualizarModeloTecnico, proponerIndicesMedida,
+  listarMarcas, crearMarca, listarModelos, crearModelo, listarMedidas, crearMedida,
+  listarIndicesCarga, crearIndiceCarga, listarIndicesVelocidad, crearIndiceVelocidad,
+  listarEjesNeumatico, listarAplicacionesNeumatico, crearUsoCatalogo, type UsoCatalogo } from "../services/data";
 import type { ComboSinCatalogar } from "../services/data";
-import type { ReferenciaNeumatico, EjeRecomendado } from "../types";
+import type { ReferenciaNeumatico, EjeRecomendado, MarcaNeumatico, ModeloNeumatico, MedidaNeumatico, IndiceCarga, IndiceVelocidad } from "../types";
 import { presionTxt } from "../types";
 import { Modal, inputCls, TableWrap, tdCls, thCls } from "../components/ui";
+import { SelectorConAlta } from "../components/SelectorConAlta";
+import { opcionesConElegido } from "../catalogo/usos";
 import { useTyreAuth } from "../contexts/TyreAuthContext";
 
 type CamposTecnicos = "profundidad_dibujo_mm" | "llanta_recomendada" | "diametro_exterior_mm" | "revoluciones_km" | "carga_maxima_kg" | "presion_maxima_bar" | "peso_kg"
@@ -62,20 +67,62 @@ export default function CatalogoNeumaticos() {
   }
 
   // Alta de referencias (Nueva referencia + Sin catalogar)
-  type FormRef = { marca: string; modelo: string; medida: string; indiceCargaSimple: string; indiceCargaDoble: string; codigoVelocidad: string };
-  const vacioRef: FormRef = { marca: "", modelo: "", medida: "", indiceCargaSimple: "", indiceCargaDoble: "", codigoVelocidad: "" };
+  type FormRef = { marca: string; modelo: string; medida: string; indiceCargaSimple: string; indiceCargaDoble: string; codigoVelocidad: string; eje: string; aplicacion: string };
+  const vacioRef: FormRef = { marca: "", modelo: "", medida: "", indiceCargaSimple: "", indiceCargaDoble: "", codigoVelocidad: "", eje: "", aplicacion: "" };
   const [nuevaRef, setNuevaRef] = useState<FormRef | null>(null);
   const [creandoRef, setCreandoRef] = useState(false);
   const [msgRef, setMsgRef] = useState("");
+  // Los catálogos que llenan los desplegables del alta. Se cargan una vez al
+  // abrir el formulario, no al abrir la página: quien solo viene a consultar el
+  // catálogo no tiene por qué pagar seis consultas más.
+  const [cats, setCats] = useState<{
+    marcas: MarcaNeumatico[]; medidas: MedidaNeumatico[];
+    cargas: IndiceCarga[]; velocidades: IndiceVelocidad[];
+    ejes: UsoCatalogo[]; aplicaciones: UsoCatalogo[];
+  } | null>(null);
+  const [modelosMarca, setModelosMarca] = useState<ModeloNeumatico[]>([]);
   const [sinCatalogar, setSinCatalogar] = useState<ComboSinCatalogar[] | null>(null);
   const [cargandoSC, setCargandoSC] = useState(false);
   const [creandoClave, setCreandoClave] = useState<string | null>(null);
   const [msgOkSC, setMsgOkSC] = useState("");
 
-  function abrirNuevaRef(prefill?: Partial<FormRef>) {
+  async function abrirNuevaRef(prefill?: Partial<FormRef>) {
     setMsgRef("");
     setNuevaRef({ ...vacioRef, ...prefill });
+    try {
+      const [marcas, medidas, cargas, velocidades, ejes, aplicaciones] = await Promise.all([
+        listarMarcas(), listarMedidas(), listarIndicesCarga(), listarIndicesVelocidad(),
+        listarEjesNeumatico(), listarAplicacionesNeumatico(),
+      ]);
+      setCats({ marcas, medidas, cargas, velocidades, ejes, aplicaciones });
+      if (prefill?.marca) await cargarModelos(prefill.marca, marcas);
+    } catch (e: any) {
+      // Sin catálogos el formulario sigue sirviendo: los desplegables saldrán
+      // vacíos y todo se puede crear con el botón de al lado. Peor sería no
+      // dejar dar de alta nada porque una consulta ha fallado.
+      setMsgRef(e?.message || "No se han podido cargar las listas; puedes crear los valores a mano");
+    }
   }
+
+  /** Los modelos de una marca, para el segundo desplegable. */
+  async function cargarModelos(marca: string, marcas?: MarcaNeumatico[]) {
+    const lista = marcas ?? cats?.marcas ?? [];
+    const m = lista.find((x) => x.nombre.toLowerCase() === marca.trim().toLowerCase());
+    setModelosMarca(m ? await listarModelos(m.id) : []);
+  }
+
+  /**
+   * El modelo elegido, si ya existe en el catálogo.
+   *
+   * De él salen el eje y el tipo de uso que se enseñan: son datos del modelo
+   * entero, así que al elegir uno que ya está no se le cambian desde aquí.
+   */
+  const modeloExistente = nuevaRef
+    ? modelosMarca.find((m) => m.nombre.toLowerCase() === nuevaRef.modelo.trim().toLowerCase()) ?? null
+    : null;
+
+  /** Las opciones de cada desplegable. Ver `catalogo/usos.ts`. */
+  const opciones = opcionesConElegido;
 
   async function guardarNuevaRef() {
     if (!nuevaRef) return;
@@ -85,6 +132,9 @@ export default function CatalogoNeumaticos() {
         marca: nuevaRef.marca, modelo: nuevaRef.modelo, medida: nuevaRef.medida,
         indiceCargaSimple: nuevaRef.indiceCargaSimple, indiceCargaDoble: nuevaRef.indiceCargaDoble || null,
         codigoVelocidad: nuevaRef.codigoVelocidad,
+        // Solo se aplican si el modelo se crea ahora; si ya existe, la base lo
+        // deja como está y la pantalla lo ha avisado.
+        eje: nuevaRef.eje || null, aplicacion: nuevaRef.aplicacion || null,
       });
       // Si el formulario se abrió desde una combinación sin catalogar, quítala
       // de la lista y avisa (el modal sin-catalogar puede seguir abierto detrás).
@@ -500,14 +550,157 @@ export default function CatalogoNeumaticos() {
             <button onClick={() => setNuevaRef(null)} className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-200">Cancelar</button>
             <button onClick={guardarNuevaRef} disabled={creandoRef || !nuevaRef.marca.trim() || !nuevaRef.modelo.trim() || !nuevaRef.medida.trim()} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{creandoRef ? "Creando…" : "Crear referencia"}</button>
           </div>}>
-          <p className="mb-3 text-xs text-slate-400">Se reutilizan marca, modelo y medida si ya existen; si no, se crean. La medida se parsea (ancho/perfil/llanta) automáticamente.</p>
+          <p className="mb-3 text-xs text-slate-400">
+            Se elige de la lista; lo que no esté se añade con el botón <b>＋</b> de al lado y queda elegido.
+            La medida se parsea (ancho/perfil/llanta) automáticamente.
+          </p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <Campo label="Marca" value={nuevaRef.marca} onChange={(v) => setNuevaRef({ ...nuevaRef, marca: v })} tipo="text" />
-            <Campo label="Modelo" value={nuevaRef.modelo} onChange={(v) => setNuevaRef({ ...nuevaRef, modelo: v })} tipo="text" />
-            <Campo label="Medida (ej. 315/80R22.5)" value={nuevaRef.medida} onChange={(v) => setNuevaRef({ ...nuevaRef, medida: v })} tipo="text" />
-            <Campo label="Índice carga simple" value={nuevaRef.indiceCargaSimple} onChange={(v) => setNuevaRef({ ...nuevaRef, indiceCargaSimple: v })} tipo="text" />
-            <Campo label="Índice carga doble (opc.)" value={nuevaRef.indiceCargaDoble} onChange={(v) => setNuevaRef({ ...nuevaRef, indiceCargaDoble: v })} tipo="text" />
-            <Campo label="Código velocidad (ej. L)" value={nuevaRef.codigoVelocidad} onChange={(v) => setNuevaRef({ ...nuevaRef, codigoVelocidad: v })} tipo="text" />
+            <SelectorConAlta
+              label="Marca"
+              opciones={opciones((cats?.marcas ?? []).map((m) => m.nombre), nuevaRef.marca)}
+              valor={nuevaRef.marca}
+              onChange={async (v) => {
+                // Al cambiar de marca se vacía el modelo: un modelo es de UNA
+                // marca, y dejar el anterior puesto crearía «Michelin HS5».
+                setNuevaRef({ ...nuevaRef, marca: v, modelo: "" });
+                await cargarModelos(v);
+              }}
+              onCrear={async (nombre) => {
+                await crearMarca(nombre);
+                const marcas = await listarMarcas();
+                setCats((c) => (c ? { ...c, marcas } : c));
+                setModelosMarca([]);
+                return nombre.trim();
+              }}
+              placeholder="Michelin"
+            />
+
+            <SelectorConAlta
+              label="Modelo"
+              opciones={opciones(modelosMarca.map((m) => m.nombre), nuevaRef.modelo)}
+              valor={nuevaRef.modelo}
+              onChange={(v) => setNuevaRef({ ...nuevaRef, modelo: v })}
+              deshabilitado={!nuevaRef.marca}
+              ayuda={!nuevaRef.marca ? "Elige antes la marca" : undefined}
+              onCrear={async (nombre) => {
+                const marca = (cats?.marcas ?? []).find(
+                  (x) => x.nombre.toLowerCase() === nuevaRef.marca.trim().toLowerCase());
+                await crearModelo(marca?.id ?? null, nombre);
+                await cargarModelos(nuevaRef.marca);
+                return nombre.trim();
+              }}
+              placeholder="X Multi D"
+            />
+
+            <SelectorConAlta
+              label="Medida"
+              opciones={opciones((cats?.medidas ?? []).map((m) => m.valor), nuevaRef.medida)}
+              valor={nuevaRef.medida}
+              onChange={(v) => setNuevaRef({ ...nuevaRef, medida: v })}
+              onCrear={async (valor) => {
+                await crearMedida(valor);
+                const medidas = await listarMedidas();
+                setCats((c) => (c ? { ...c, medidas } : c));
+                return valor.trim();
+              }}
+              placeholder="315/80R22.5"
+            />
+
+            <SelectorConAlta
+              label="Índice carga simple"
+              opciones={opciones((cats?.cargas ?? []).map((i) => i.valor), nuevaRef.indiceCargaSimple)}
+              valor={nuevaRef.indiceCargaSimple}
+              onChange={(v) => setNuevaRef({ ...nuevaRef, indiceCargaSimple: v })}
+              onCrear={async (valor) => {
+                await crearIndiceCarga(valor);
+                const cargas = await listarIndicesCarga();
+                setCats((c) => (c ? { ...c, cargas } : c));
+                return valor.trim();
+              }}
+              placeholder="156"
+            />
+
+            <SelectorConAlta
+              label="Índice carga doble (opc.)"
+              opciones={opciones((cats?.cargas ?? []).map((i) => i.valor), nuevaRef.indiceCargaDoble)}
+              valor={nuevaRef.indiceCargaDoble}
+              onChange={(v) => setNuevaRef({ ...nuevaRef, indiceCargaDoble: v })}
+              onCrear={async (valor) => {
+                await crearIndiceCarga(valor);
+                const cargas = await listarIndicesCarga();
+                setCats((c) => (c ? { ...c, cargas } : c));
+                return valor.trim();
+              }}
+              placeholder="150"
+            />
+
+            <SelectorConAlta
+              label="Código velocidad"
+              opciones={opciones((cats?.velocidades ?? []).map((i) => i.valor), nuevaRef.codigoVelocidad)}
+              valor={nuevaRef.codigoVelocidad}
+              onChange={(v) => setNuevaRef({ ...nuevaRef, codigoVelocidad: v })}
+              onCrear={async (valor) => {
+                await crearIndiceVelocidad(valor);
+                const velocidades = await listarIndicesVelocidad();
+                setCats((c) => (c ? { ...c, velocidades } : c));
+                return valor.trim().toUpperCase();
+              }}
+              placeholder="L"
+            />
+          </div>
+
+          {/* ── El uso: del MODELO, no de esta medida ────────────────────── */}
+          <div className="mt-4 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+            <p className="mb-2 text-[11px] text-slate-400">
+              El <b>uso</b> y el <b>tipo de uso</b> son del modelo, no de esta medida: valen para
+              todas las medidas de {nuevaRef.modelo || "ese dibujo"}.
+            </p>
+
+            {modeloExistente ? (
+              // Decisión tomada: al elegir un modelo que ya existe NO se le
+              // cambian estos dos datos desde aquí. Crear una referencia no
+              // puede modificar en silencio algo que comparten otras medidas.
+              <div className="text-xs text-slate-300">
+                <span className="text-slate-400">Este modelo ya está en el catálogo con: </span>
+                <b>{modeloExistente.eje_recomendado
+                    ? (cats?.ejes ?? []).find((e) => e.codigo === modeloExistente.eje_recomendado)?.nombre
+                      ?? modeloExistente.eje_recomendado
+                    : "sin uso"}</b>
+                {" · "}
+                <b>{modeloExistente.aplicacion
+                    ? (cats?.aplicaciones ?? []).find((a) => a.codigo === modeloExistente.aplicacion)?.nombre
+                      ?? modeloExistente.aplicacion
+                    : "sin tipo de uso"}</b>
+                <span className="text-slate-500">. Para cambiarlo, edítalo en la ficha del modelo.</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <SelectorConAlta
+                  label="Uso (eje)"
+                  opciones={(cats?.ejes ?? []).map((e) => ({ valor: e.codigo, etiqueta: e.nombre }))}
+                  valor={nuevaRef.eje}
+                  onChange={(v) => setNuevaRef({ ...nuevaRef, eje: v })}
+                  onCrear={async (nombre) => {
+                    const codigo = await crearUsoCatalogo("ejes", nombre);
+                    setCats((c) => (c ? { ...c, ejes: [...c.ejes, { codigo, nombre, orden: 999, activo: true }] } : c));
+                    return codigo;
+                  }}
+                  placeholder="Dirección"
+                />
+                <SelectorConAlta
+                  label="Tipo de uso"
+                  opciones={(cats?.aplicaciones ?? []).map((a) => ({ valor: a.codigo, etiqueta: a.nombre }))}
+                  valor={nuevaRef.aplicacion}
+                  onChange={(v) => setNuevaRef({ ...nuevaRef, aplicacion: v })}
+                  onCrear={async (nombre) => {
+                    const codigo = await crearUsoCatalogo("aplicaciones", nombre);
+                    setCats((c) => (c ? { ...c, aplicaciones: [...c.aplicaciones, { codigo, nombre, orden: 999, activo: true }] } : c));
+                    return codigo;
+                  }}
+                  placeholder="Regional"
+                />
+              </div>
+            )}
           </div>
           {msgRef && <div className="mt-2 text-xs text-red-300">{msgRef}</div>}
         </Modal>

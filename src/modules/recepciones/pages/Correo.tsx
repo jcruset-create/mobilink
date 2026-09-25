@@ -34,6 +34,9 @@ export default function Correo() {
   const [detalle, setDetalle] = useState<TCorreo | null>(null);
   const [historicoDesde, setHistoricoDesde] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  /** El correo al que se le va a subir el PDF de su albarán, si hay alguno. */
+  const [subirA, setSubirA] = useState<string | null>(null);
+  const inputAlbaran = useRef<HTMLInputElement>(null);
   const puedeOperar = puede("recepciones.correo.importar");
 
   const cargar = useCallback(async () => {
@@ -50,6 +53,10 @@ export default function Correo() {
   useEffect(() => {
     void cargar();
   }, [cargar]);
+
+  useEffect(() => {
+    if (subirA) inputAlbaran.current?.click();
+  }, [subirA]);
 
   async function ejecutar(accion: () => Promise<string>) {
     setOcupado(true);
@@ -194,6 +201,25 @@ export default function Correo() {
           <option value="IGNORADO">Ignorados</option>
         </select>
       </div>
+      {/* Oculto: lo abre el botón «Albarán PDF» de la fila que toque. */}
+      <input
+        ref={inputAlbaran}
+        type="file"
+        accept="application/pdf,.pdf"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          const id = subirA;
+          e.target.value = "";
+          setSubirA(null);
+          if (!f || !id) return;
+          void ejecutar(async () => {
+            const r = await api.subirAlbaranDelCorreo(id, f);
+            return `${ETIQUETA_RESULTADO_CORREO[r.resultado] ?? r.resultado}${r.albaranNumero ? ` · albarán ${r.albaranNumero}` : ""}${r.motivo ? ` · ${r.motivo}` : ""}`;
+          });
+        }}
+      />
+
       <TableWrap>
         <thead>
           <tr>
@@ -226,9 +252,16 @@ export default function Correo() {
               </td>
               <td className={`${tdCls} whitespace-nowrap text-right`}>
                 {puedeOperar && (c.resultado === "PENDIENTE_REVISION" || c.resultado === "ERROR" || c.resultado === "RECIBIDO") && (
-                  <button className={btnMini} disabled={ocupado} onClick={() => void ejecutar(async () => { const r = await api.reprocesarCorreo(c.id); return `${c.asunto}: ${ETIQUETA_RESULTADO_CORREO[r.resultado] ?? r.resultado}${r.motivo ? ` · ${r.motivo}` : ""}`; })}>
-                    Reprocesar
-                  </button>
+                  <div className="flex justify-end gap-1">
+                    <button className={btnMini} disabled={ocupado} onClick={() => void ejecutar(async () => { const r = await api.reprocesarCorreo(c.id); return `${c.asunto}: ${ETIQUETA_RESULTADO_CORREO[r.resultado] ?? r.resultado}${r.motivo ? ` · ${r.motivo}` : ""}`; })}>
+                      Reprocesar
+                    </button>
+                    {/* La salida de «el pedido no existe y el albarán no trae
+                        líneas»: con el papel delante sí se sabe qué trae. */}
+                    <button className={`${btnMini} flex items-center gap-1`} disabled={ocupado} onClick={() => setSubirA(c.id)} title="Subir el PDF del albarán y volver a procesarlo">
+                      <Upload className="h-3.5 w-3.5" /> Albarán PDF
+                    </button>
+                  </div>
                 )}
               </td>
             </tr>

@@ -447,7 +447,9 @@ export const ETIQUETA_RESULTADO_CORREO: Record<string, string> = {
 
 export type AvisoWhatsApp = {
   id: string;
-  recepcionId: string;
+  /** «MATERIAL_RECIBIDO» (a quien lo espera) o «FALTA_ALBARAN» (a recepción). */
+  tipo: string;
+  recepcionId: string | null;
   albaranId: string;
   recepcionNumero: string;
   albaranNumero: string;
@@ -469,6 +471,10 @@ export type EstadoAvisos = {
   plantilla: boolean;
   /** El cuerpo exacto que hay que dar de alta en Twilio, para copiarlo. */
   cuerpoPlantilla: string;
+  /** El móvil de recepción: con él puesto se avisa si falta el PDF. */
+  telefonoRecepcion: string | null;
+  plantillaFaltaAlbaran: boolean;
+  cuerpoPlantillaFaltaAlbaran: string;
   avisos: AvisoWhatsApp[];
 };
 
@@ -476,6 +482,11 @@ export const COLOR_ESTADO_AVISO: Record<string, string> = {
   ENVIADO: "bg-emerald-500/15 text-emerald-300",
   OMITIDO: "bg-slate-600/40 text-slate-300",
   ERROR: "bg-rose-500/15 text-rose-300",
+};
+
+export const ETIQUETA_TIPO_AVISO: Record<string, string> = {
+  MATERIAL_RECIBIDO: "Ha llegado tu material",
+  FALTA_ALBARAN: "Falta el PDF del albarán",
 };
 
 export const ETIQUETA_ESTADO_AVISO: Record<string, string> = {

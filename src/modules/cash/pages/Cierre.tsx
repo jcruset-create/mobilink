@@ -28,7 +28,7 @@ import {
   btnSecondary,
   inputCls,
 } from "../components/ui";
-import { euros, aCentimos, totalLineas } from "../utils/money";
+import { euros, aCentimos, aTextoEditable, totalLineas } from "../utils/money";
 import type { LineaDenominacion } from "../types";
 import { AvisoPendientes } from "./CambioBanco";
 import { AvisoAutoScanPendiente } from "../components/BandejaAutoScan";
@@ -47,7 +47,7 @@ export default function Cierre() {
   const fondoFijo = cajas.find((c) => c.id === jornada?.sesion.registerId)?.fondoObjetivoCentimos ?? 0;
 
   const [objetivoTexto, setObjetivoTexto] = useState(
-    fondoFijo > 0 ? euros(fondoFijo).replace(" €", "") : "300,00"
+    fondoFijo > 0 ? aTextoEditable(fondoFijo) : "300,00"
   );
   /*
    * Lo que se teclea es lo que SE RETIRA para el banco, y el cambio que se
@@ -240,7 +240,7 @@ export default function Cierre() {
     setRetirado({});
     setRetiradoTubos([]);
     setRetiradoBolsas([]);
-    setObjetivoTexto(euros(contadoTotal).replace(" €", ""));
+    setObjetivoTexto(aTextoEditable(contadoTotal));
   }
 
   async function cerrar(permitirCajaVacia = false) {

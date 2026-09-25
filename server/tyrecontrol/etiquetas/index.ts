@@ -1,18 +1,19 @@
 import type { Express, RequestHandler } from "express";
 import { hayIA } from "../../core/openaiService.ts";
-import { LectorFlancoIA, type LectorFlanco } from "../flanco/lectorFlanco.ts";
 import { motivoFotoNoValida } from "../flanco/index.ts";
+import { LectorSerieIA, type LectorSerie } from "./lectorEtiqueta.ts";
 import { clasificarLectura } from "./serie.ts";
 
 /**
  * Leer el número de serie de una goma nueva para etiquetarla.
  *
- * Es el MISMO lector del flanco: no hay un segundo sistema de fotografías ni
- * un segundo lector de IA. La diferencia es lo que se devuelve. Durante una
- * revisión interesa todo el flanco —marca, medida, índices, DOT— para buscar
- * en el catálogo. Aquí interesa un solo dato, el número de serie, porque lo
- * que hay al final del proceso es una etiqueta con ese número pegada a la
- * rueda. Devolver lo demás solo daría a la tablet cosas que no va a usar.
+ * Mismo servicio de IA y mismo bucket de fotos que el resto: lo que cambia es
+ * la PREGUNTA. Durante una revisión se lee el flanco entero —marca, medida,
+ * índices, DOT— para buscar en el catálogo. Aquí se pide un solo dato, y se le
+ * dice al modelo que en una goma nueva ese número suele venir impreso en una
+ * pegatina con código de barras, no estampado en el caucho. Ver
+ * `lectorEtiqueta.ts`: con la instrucción del flanco, esas etiquetas se
+ * quedaban sin leer.
  *
  * ESTO NO CREA NEUMÁTICOS. Ni los da de alta, ni mueve stock, ni genera coste:
  * propone un número para que una persona lo confirme. Los lotes y las fotos
@@ -23,7 +24,7 @@ import { clasificarLectura } from "./serie.ts";
  * Tampoco se registra la foto, ni el número, ni la matrícula en los logs.
  */
 export function mountEtiquetas(app: Express, ...guards: RequestHandler[]): void {
-  const lector: LectorFlanco = new LectorFlancoIA();
+  const lector: LectorSerie = new LectorSerieIA();
 
   // La tablet lo consulta al abrir el menú: sin IA configurada, el etiquetado
   // se hace escribiendo el número a mano, y no se ofrece un botón que falla.
@@ -40,8 +41,8 @@ export function mountEtiquetas(app: Express, ...guards: RequestHandler[]): void 
       const malaFoto = motivoFotoNoValida(imagenUrl);
       if (malaFoto) return res.status(malaFoto.estado).json({ error: malaFoto.error });
 
-      const propuesta = await lector.leer(imagenUrl);
-      const lectura = clasificarLectura(propuesta);
+      const leido = await lector.leer(imagenUrl);
+      const lectura = clasificarLectura(leido, leido.confianza);
 
       // 200 aunque no se haya leído nada: una foto que no da no es un error
       // del servidor. La tablet enseña el aviso y deja escribirlo a mano.

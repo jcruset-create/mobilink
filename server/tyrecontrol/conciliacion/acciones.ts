@@ -15,8 +15,14 @@
  */
 
 import { supabase } from "../../supabase.ts";
+import { ejesDeConfiguracion, type EjeDeVehiculo } from "./ejes.ts";
 import { coincideMatricula, patronBusquedaMatricula } from "../matricula.ts";
 import { METODOS_VINCULO, type MetodoVinculo } from "../../integration-hub/domain/reconciliation.ts";
+import {
+  cambiosDeNumeroFlota,
+  numeroDeFlotaDeNombre,
+  type CambioNumeroFlota,
+} from "../../integration-hub/domain/numeroFlota.ts";
 import {
   ignoreExternal,
   listVehicleMappings,
@@ -295,6 +301,18 @@ export interface DatosAlta {
   bastidor?: string | null;
   numeroUnidad?: string | null;
   externalName?: string | null;
+  /**
+   * Lo que se elige UNA VEZ y se aplica a toda la tanda.
+   *
+   * El proveedor da matrícula, bastidor y nombre, y nada más: ni tipo, ni
+   * ejes, ni medidas. Eso obligaba a entrar en los 53 vehículos recién creados
+   * a poner lo mismo 53 veces, y un vehículo sin tipo no tiene plano, así que
+   * no se puede ni revisar. Ahora se elige al crearlos.
+   */
+  tipoVehiculoId?: string | null;
+  configEjesId?: string | null;
+  /** Medida de TODOS los ejes. Solo se usa si se sabe cuántos ejes hay. */
+  medidaId?: string | null;
 }
 
 /**
@@ -313,6 +331,21 @@ export interface DatosAlta {
  * existe y un administrador le completa la ficha antes de que se pueda operar
  * con él. Es el mismo camino que un alta desde la tablet.
  */
+/**
+ * Los ejes de un tipo de vehículo, leídos de su configuración.
+ *
+ * Devuelve null si el tipo no la tiene o no se entiende, y entonces no se crea
+ * ningún eje: un plano inventado es peor que uno vacío.
+ */
+async function ejesDelTipo(tipoId: string): Promise<EjeDeVehiculo[] | null> {
+  const { data } = await supabase
+    .from("tc_tipos_vehiculo")
+    .select("configuracion_ejes")
+    .eq("id", tipoId)
+    .maybeSingle();
+  return ejesDeConfiguracion((data as { configuracion_ejes?: string | null } | null)?.configuracion_ejes);
+}
+
 export async function crearPendiente(
   ambito: Ambito,
   datos: DatosAlta,
@@ -354,18 +387,44 @@ export async function crearPendiente(
     );
   }
 
+  // Los ejes salen de la configuración del TIPO, no de lo que diga el
+  // navegador: el tipo es quien manda sobre el plano.
+  const ejes = datos.medidaId && datos.tipoVehiculoId
+    ? await ejesDelTipo(datos.tipoVehiculoId)
+    : null;
+
   const { data, error } = await supabase
     .from("tc_vehiculos")
     .insert({
       empresa_id: ambito.empresaId,
       matricula,
       bastidor: datos.bastidor ?? null,
-      numero_unidad: datos.numeroUnidad ?? null,
+      /*
+       * El número de flota sale del nombre del proveedor cuando nadie lo pasa.
+       *
+       * La cabecera de esta función lleva desde el primer día diciendo que se
+       * copia «matrícula, bastidor y número de unidad», y el número de unidad
+       * no llegaba nunca: la pantalla manda `externalName` y no `numeroUnidad`,
+       * así que cada bus creado desde Movertis nacía sin él y había que
+       * escribirlo a mano uno por uno. Derivarlo AQUÍ y no en el navegador es
+       * lo que hace que todos los caminos —el botón, el lote y el que se
+       * escriba mañana— lo hereden sin tener que acordarse.
+       */
+      numero_unidad:
+        datos.numeroUnidad ?? numeroDeFlotaDeNombre(datos.externalName, matricula),
       km_actual: 0,
       origen_km: "manual",
       activo: true,
       pendiente_validar: true,
       creado_desde: "telematica",
+      // Lo elegido para la tanda. Sigue naciendo PENDIENTE DE VALIDAR: poner
+      // el tipo no es validar el vehículo, es ahorrarse teclearlo 53 veces.
+      ...(datos.tipoVehiculoId ? { tipo_vehiculo_id: datos.tipoVehiculoId } : {}),
+      ...(datos.configEjesId ? { config_ejes_id: datos.configEjesId } : {}),
+      // Si se van a escribir medidas por eje, hay que DECIRLO: la ficha del
+      // vehículo solo lee `tc_vehiculo_ejes` cuando esta bandera está puesta,
+      // así que sin ella las medidas se guardarían y no las vería nadie.
+      ...(datos.medidaId && ejes && ejes.length > 0 ? { medidas_por_eje: true } : {}),
     })
     .select("id, matricula")
     .single();
@@ -378,6 +437,21 @@ export async function crearPendiente(
   }
 
   const vehiculo = { id: String((data as any).id), matricula: String((data as any).matricula) };
+
+  // Los ejes con su medida, si se ha elegido una. Es lo último y va aparte a
+  // propósito: si fallara, el vehículo ya está creado y enlazado, y las
+  // medidas se ponen después desde su ficha. Perder el alta entera por una
+  // medida sería mucho peor.
+  if (datos.medidaId && ejes && ejes.length > 0) {
+    await supabase.from("tc_vehiculo_ejes").insert(
+      ejes.map((e) => ({
+        vehiculo_id: vehiculo.id,
+        eje: e.eje,
+        ruedas: e.ruedas,
+        medida_id: datos.medidaId,
+      })),
+    );
+  }
   const enlace = await vincular(
     ambito,
     {
@@ -764,7 +838,13 @@ async function sinEnlazarAhora(ambito: Ambito) {
  */
 export async function crearPendientesLote(
   ambito: Ambito,
-  datos: { externalVehicleIds: string[] },
+  datos: {
+    externalVehicleIds: string[];
+    /** Lo mismo para toda la tanda: se elige una vez y se aplica a todos. */
+    tipoVehiculoId?: string | null;
+    configEjesId?: string | null;
+    medidaId?: string | null;
+  },
 ): Promise<ResultadoLoteExternos> {
   const pedidos = externosPedidos(datos);
   const disponibles = await sinEnlazarAhora(ambito);
@@ -794,6 +874,9 @@ export async function crearPendientesLote(
           matricula: externo.plate ?? "",
           bastidor: externo.vin ?? null,
           externalName: externo.name ?? null,
+          tipoVehiculoId: datos.tipoVehiculoId ?? null,
+          configEjesId: datos.configEjesId ?? null,
+          medidaId: datos.medidaId ?? null,
         },
         preparada,
       );
@@ -845,3 +928,103 @@ export async function ignorarLote(
   return { hechos, fallidos, omitidos: [] };
 }
 
+
+// ── Número de flota desde el nombre del proveedor ───────────────────────────
+
+/**
+ * Qué vehículos ya enlazados cambiarían de número de flota.
+ *
+ * Se parte de una conciliación EN VIVO, no de lo que hubiera guardado: el
+ * nombre de un vehículo en Movertis se edita desde Movertis, y proponer sobre
+ * un nombre viejo sería escribir en TyreControl algo que allí ya no dice
+ * nadie.
+ *
+ * Solo se miran los ENLAZADOS. Las discrepancias quedan fuera a propósito: si
+ * la matrícula del proveedor y la de TyreControl no coinciden, lo que hay que
+ * resolver es esa discrepancia, no rellenarle el número de flota a un enlace
+ * del que todavía no sabemos si es el vehículo que creemos.
+ */
+export async function proponerNumerosDeFlota(
+  ambito: Ambito,
+): Promise<CambioNumeroFlota[]> {
+  const { conciliarFlota } = await import(
+    "../../integration-hub/application/services/VehicleReconciliationService.ts"
+  );
+  const { nextCorrelationId } = await import("../../integration-hub/infrastructure/repositories.ts");
+  const { normalizarMatricula } = await import("../matricula.ts");
+  const { leerFlotaInterna } = await import("./flota.ts");
+
+  const { enlazados } = await conciliarFlota(
+    { tenantId: ambito.empresaId, correlationId: await nextCorrelationId() },
+    {
+      connectorKey: ambito.connectorKey,
+      accountKey: ambito.accountKey,
+      leerFlotaInterna,
+      normalizarMatricula,
+    },
+  );
+
+  return cambiosDeNumeroFlota(
+    enlazados.map((f) => ({
+      vehiculoId: f.interno.id,
+      matricula: f.interno.matricula,
+      nombreProveedor: f.externo.name ?? null,
+      numeroActual: f.interno.numeroUnidad ?? null,
+    })),
+  );
+}
+
+export interface ResultadoNumerosFlota {
+  aplicados: CambioNumeroFlota[];
+  fallidos: { vehiculoId: string; error: string }[];
+  /** Pedidos que ya no están en la propuesta recalculada. */
+  omitidos: string[];
+}
+
+/**
+ * Escribe el número de flota en los vehículos marcados.
+ *
+ * La propuesta se RECALCULA aquí y solo se aplica lo que vuelve a salir en
+ * ella. Lo que manda el navegador es únicamente la lista de vehículos: los
+ * números salen del proveedor en este mismo instante. Entre lo que la pantalla
+ * pintó y lo que se envía cabe una pestaña de hace una hora y un cuerpo
+ * editado a mano, y de las dos formas se acabaría escribiendo en la ficha de
+ * un bus un número que el proveedor no ha dicho nunca.
+ */
+export async function aplicarNumerosDeFlota(
+  ambito: Ambito,
+  datos: { vehiculoIds: string[] },
+): Promise<ResultadoNumerosFlota> {
+  const pedidos = [...new Set((datos.vehiculoIds ?? []).map((v) => String(v ?? "").trim()))]
+    .filter(Boolean);
+  if (pedidos.length === 0) {
+    throw new ErrorConciliacion("SIN_VEHICULOS", "No se ha marcado ningún vehículo.");
+  }
+
+  const propuesta = new Map(
+    (await proponerNumerosDeFlota(ambito)).map((c) => [c.vehiculoId, c]),
+  );
+
+  const aplicados: CambioNumeroFlota[] = [];
+  const fallidos: ResultadoNumerosFlota["fallidos"] = [];
+  const omitidos: string[] = [];
+
+  for (const id of pedidos) {
+    const cambio = propuesta.get(id);
+    if (!cambio) {
+      omitidos.push(id);
+      continue;
+    }
+    // El `empresa_id` no es decorativo: es lo que impide escribir en la ficha
+    // de un vehículo de otra empresa mandando su identificador.
+    const { error } = await supabase
+      .from("tc_vehiculos")
+      .update({ numero_unidad: cambio.numeroPropuesto })
+      .eq("id", id)
+      .eq("empresa_id", ambito.empresaId);
+    if (error) fallidos.push({ vehiculoId: id, error: error.message });
+    else aplicados.push(cambio);
+  }
+
+  return { aplicados, fallidos, omitidos };
+}

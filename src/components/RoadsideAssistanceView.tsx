@@ -1,4 +1,5 @@
 import { apiFetch } from "../modules/apiFetch";
+import { getAdminHeaders } from "../modules/adminHeaders";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -61,6 +62,8 @@ import {
 } from "../modules/roadsideAssistanceTypes";
 import { aMilisegundos, fechaHoraCorta } from "../modules/roadsideFechaHora";
 import { formatCoords } from "../modules/roadsideCoordenadas";
+import BuscadorCliente from "./BuscadorCliente";
+import { nombreDe, telefonoDe, type ClienteFrecuente, type ContactoCliente } from "../modules/clientesFrecuentes";
 import { nombreDeFoto, tiraDeFotos } from "../modules/roadsideFotosTarjeta";
 import { etiquetaMatricula, matriculasDe } from "../modules/roadsideMatricula";
 import { filtrar as filtrarAsistencias, hayCriterios } from "../modules/roadsideFiltro";
@@ -79,6 +82,8 @@ import SelectorSubcontrata, {
 
 const INITIAL_DRAFT: RoadsideAssistanceDraft = {
   solicitanteEmpresa: "",
+  solicitanteClienteId: null,
+  solicitanteContactoId: null,
   solicitanteNombre: "",
   solicitanteTelefono: "",
   solicitanteAutorizacion: "",
@@ -374,6 +379,8 @@ function buildEditDraft(
 ): RoadsideAssistanceEditDraft {
   return {
     solicitanteEmpresa: assistance.solicitanteEmpresa || "",
+    solicitanteClienteId: assistance.solicitanteClienteId ?? null,
+    solicitanteContactoId: assistance.solicitanteContactoId ?? null,
     solicitanteNombre: assistance.solicitanteNombre || "",
     solicitanteTelefono: assistance.solicitanteTelefono || "",
     solicitanteAutorizacion: assistance.solicitanteAutorizacion || "",
@@ -518,6 +525,80 @@ export default function RoadsideAssistanceView({
 }: Props) {
   const navigate = useNavigate();
   const [draft, setDraft] = useState<RoadsideAssistanceDraft>(INITIAL_DRAFT);
+
+  /*
+   * Los contactos del cliente elegido y su código de ERP.
+   *
+   * No van en el draft porque no se guardan con la asistencia: son ayuda para
+   * rellenar. Lo que se guarda es el id del contacto elegido, que sí está en
+   * el draft.
+   */
+  const [contactosCliente, setContactosCliente] = useState<ContactoCliente[]>([]);
+  const [erpClienteSolicitante, setErpClienteSolicitante] = useState<string | null>(null);
+
+  /** Al elegir del maestro: enlaza y rellena lo que la ficha ya sabe. */
+  function aplicarCliente(cliente: ClienteFrecuente, contacto: ContactoCliente | null) {
+    setContactosCliente(Array.isArray(cliente.contactos) ? cliente.contactos : []);
+    setErpClienteSolicitante(cliente.erpCode ?? null);
+    setDraft((prev) => ({
+      ...prev,
+      solicitanteEmpresa: cliente.name,
+      solicitanteClienteId: cliente.id,
+      solicitanteContactoId: contacto?.id ?? null,
+      // Lo ya escrito manda: si alguien tecleó el nombre de quien llama antes
+      // de elegir la empresa, no se le borra por rellenar desde la ficha.
+      solicitanteNombre: prev.solicitanteNombre || nombreDe(contacto),
+      solicitanteTelefono:
+        prev.solicitanteTelefono || telefonoDe(contacto) || String(cliente.contactPhone ?? ""),
+    }));
+  }
+
+  /**
+   * Alta rápida desde el formulario, con lo que ya está escrito.
+   *
+   * Dos llamadas a endpoints que YA existían: el cliente y, si hay persona,
+   * su contacto como principal. No se inventa ninguna ruta nueva ni se toca
+   * quién puede crear clientes: si el usuario no tiene permiso, se enseña lo
+   * que conteste el servidor en vez de fallar en silencio.
+   */
+  async function darDeAltaCliente(nombre: string) {
+    try {
+      const r = await apiFetch(`${API_BASE}/api/clientes-facturacion`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getAdminHeaders() },
+        body: JSON.stringify({ name: nombre, contactPhone: draft.solicitanteTelefono || null }),
+      });
+      const cliente = await r.json();
+      if (!r.ok) {
+        window.alert(cliente?.error || "No se ha podido dar de alta el cliente");
+        return;
+      }
+
+      let contacto: ContactoCliente | null = null;
+      if (draft.solicitanteNombre.trim()) {
+        const rc = await apiFetch(`${API_BASE}/api/contactos`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...getAdminHeaders() },
+          body: JSON.stringify({
+            ownerType: "client",
+            ownerId: cliente.id,
+            name: draft.solicitanteNombre.trim(),
+            mobile: draft.solicitanteTelefono || null,
+            isPrimary: true,
+            forAssistance: true,
+          }),
+        });
+        if (rc.ok) contacto = await rc.json();
+      }
+
+      aplicarCliente(
+        { id: cliente.id, name: cliente.name, contactos: contacto ? [contacto] : [] },
+        contacto,
+      );
+    } catch {
+      window.alert("No se ha podido dar de alta el cliente");
+    }
+  }
   // La subcontratación va por su cuenta: no cabe en el alta sin tocar el
   // INSERT posicional de la asistencia, y no queremos tocarlo.
   const [subcontrata, setSubcontrata] = useState<Subcontrata>(SUBCONTRATA_VACIA);
@@ -1559,30 +1640,74 @@ export default function RoadsideAssistanceView({
                 Solicitante de la asistencia
               </div>
               <div className="grid gap-3 md:grid-cols-2">
-                <label className="block">
-                  <span className="mb-1 block text-xs font-semibold text-slate-400">
-                    Empresa que solicita
-                  </span>
-                  <input
-                    value={draft.solicitanteEmpresa}
-                    onChange={(event) =>
-                      setDraft((prev) => ({ ...prev, solicitanteEmpresa: event.target.value }))
+                <div className="block">
+                  <BuscadorCliente
+                    valor={draft.solicitanteEmpresa}
+                    clienteId={draft.solicitanteClienteId}
+                    erpCode={erpClienteSolicitante}
+                    onTexto={(texto) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        solicitanteEmpresa: texto,
+                        // Escribir a mano suelta el enlace: si no, el texto
+                        // diría una empresa y el id apuntaría a otra, que es
+                        // peor que no tener enlace.
+                        solicitanteClienteId: null,
+                        solicitanteContactoId: null,
+                      }))
                     }
-                    placeholder="P. ej. aseguradora, gestor de flota…"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                    onElegir={aplicarCliente}
+                    onAlta={darDeAltaCliente}
+                    onSoltar={() => {
+                      setContactosCliente([]);
+                      setErpClienteSolicitante(null);
+                      setDraft((prev) => ({
+                        ...prev,
+                        solicitanteClienteId: null,
+                        solicitanteContactoId: null,
+                      }));
+                    }}
                   />
-                </label>
+                </div>
                 <label className="block">
                   <span className="mb-1 block text-xs font-semibold text-slate-400">
                     Persona que solicita
                   </span>
-                  <input
-                    value={draft.solicitanteNombre}
-                    onChange={(event) =>
-                      setDraft((prev) => ({ ...prev, solicitanteNombre: event.target.value }))
-                    }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
-                  />
+                  {/* Con varios contactos en la ficha, un desplegable: Encatrans
+                      tiene a Ricart y a quien llame el sábado. Con uno o
+                      ninguno, el campo de siempre — un desplegable de un solo
+                      elemento no es una elección, es un estorbo. */}
+                  {contactosCliente.length > 1 ? (
+                    <select
+                      value={draft.solicitanteContactoId ?? ""}
+                      onChange={(event) => {
+                        const id = Number(event.target.value);
+                        const c = contactosCliente.find((k) => k.id === id) ?? null;
+                        setDraft((prev) => ({
+                          ...prev,
+                          solicitanteContactoId: c ? c.id : null,
+                          solicitanteNombre: c ? nombreDe(c) : prev.solicitanteNombre,
+                          solicitanteTelefono: c ? telefonoDe(c) || prev.solicitanteTelefono : prev.solicitanteTelefono,
+                        }));
+                      }}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                    >
+                      {contactosCliente.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {nombreDe(c)}
+                          {c.isPrimary ? " · principal" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={draft.solicitanteNombre}
+                      onChange={(event) =>
+                        setDraft((prev) => ({ ...prev, solicitanteNombre: event.target.value }))
+                      }
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/40"
+                    />
+                  )}
                 </label>
               </div>
               <div className="grid gap-3 md:grid-cols-2">

@@ -166,7 +166,83 @@ function pdfDePrueba(texto: string): Promise<Buffer> {
   return listo;
 }
 
-type Mensaje = { uid: number; source: Buffer; seen: boolean; date: Date };
+/**
+ * La entrega de INSA TURBO en PDF, como la de verdad (D26-26031188): sus datos
+ * de cabecera con la raya de guiones por medio, dos pedidos del proveedor con
+ * sus líneas, las observaciones debajo de cada artículo y el cierre de
+ * asteriscos. Este formato se lee por líneas, así que no hace falta cuadrar
+ * columnas.
+ */
+function pdfEntregaInsa(numero = "26031188"): Promise<Buffer> {
+  const doc = new PDFDocument({ size: "A4" });
+  const trozos: Buffer[] = [];
+  doc.on("data", (c: Buffer) => trozos.push(c));
+  const listo = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(trozos))));
+  doc.fontSize(7);
+  const lineas = [
+    "Datos de cliente",
+    "COMERCIAL SEA, S.A.",
+    "Ctra. Aspe - Novelda, 38 PG.IND. RIU CLAR C/ COURE, 7",
+    "03680, Aspe 43006 TARRAGONA",
+    "VAT: ES A03297959 ESPAÑA",
+    "Phone: (0034) 96 549 56 76 N.I.F.: ESA43044379",
+    "-".repeat(120),
+    "Entrega Nº Fecha S/Referencia Volumen Neto(Kg) Bruto(Kg)",
+    "-".repeat(120),
+    `D26 ${numero} 18/09/2026 333778 0,00`,
+    "-".repeat(120),
+    "Referencias Descripción Cantidad Precio % Dto Total",
+    "PEDIDO Nº 26001072 FECHA 12/08/2026",
+    "021300001012 295/80X22.5 INSA TURBO K25 BASE 1ª 10,000UD 190,000 EUR 0,00 1.900,000",
+    "CASCOS HANKOOK o CONTINENTAL, PED. ALBERTO",
+    "TALLER RIU CLAR",
+    "PEDIDO Nº 26001215 FECHA 18/09/2026",
+    "021000000259 315/80X22.5 INSA TURBO TDO-3 SM 1ªOT 4,000UD 140,000 EUR 0,00 560,000",
+    "CUBIERTAS PARA TMA, PRECIO ESPECIAL",
+    "*",
+    "AGENCIA TRANSAHER A RIU CLAR. PED. JORDI",
+    "*".repeat(76),
+    "CAMION (TRUCK) 26,000",
+    "IMPORTE BRUTO DESCUENTO BASE IMPONIBLE % IVA IMPORTE IVA LÍQUIDO",
+    "2.460,000 0,000 2.460,000 21,000 516,600 2.976,600 EUR",
+  ];
+  lineas.forEach((l, i) => doc.text(l, 25, 60 + i * 15, { lineBreak: false }));
+  doc.end();
+  return listo;
+}
+
+/**
+ * El albarán 2028472911 de Soledad, como el de verdad: un artículo con su
+ * descripción partida en dos líneas, la observación con el móvil JUSTO DEBAJO
+ * —antes del NFU, que es donde nadie la buscaba— y la gestión de NFU al final.
+ */
+function pdfAlbaranConMovil(): Promise<Buffer> {
+  const doc = new PDFDocument({ size: "A4" });
+  const trozos: Buffer[] = [];
+  doc.on("data", (c: Buffer) => trozos.push(c));
+  const listo = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(trozos))));
+  doc.fontSize(9);
+  const fila = (y: number, ref: string, desc: string, cant: string, precio: string, importe: string) => {
+    doc.text(ref, 30, y, { lineBreak: false });
+    doc.text(desc, 98, y, { lineBreak: false });
+    doc.text(cant, 343, y, { lineBreak: false });
+    doc.text(precio, 395, y, { lineBreak: false });
+    doc.text(importe, 500, y, { lineBreak: false });
+  };
+  doc.text("Productos", 30, 420, { lineBreak: false });
+  fila(440, "Artículo", "Descripción", "Cantidad", "Precio", "Importe");
+  fila(460, "0106052880097", "245/45X18 CONT.ECOCONTC6", "2", "109,575", "219,15");
+  doc.text("96W", 98, 475, { lineBreak: false });
+  fila(495, "", "JUAN+LECHUGA+603472809", "0", "0", "0,00");
+  fila(515, ".", "", "0", "0", "0,00");
+  fila(535, "4102999990070", "S.I.Gestión de NFU Cat.N2", "2", "1,8", "3,60");
+  doc.text("Importe Bruto:", 385, 560, { lineBreak: false });
+  doc.text("222,75", 500, 560, { lineBreak: false });
+  doc.end();
+  return listo;
+}
+
+type Mensaje = { uid: number; source: Buffer; seen: boolean; date: Date; messageId: string };
 let siguienteUid = 1;
 
 async function mensaje(sobre: { de?: string; asunto: string; texto: string; fecha?: Date; pdf?: Buffer; messageId?: string }): Promise<Mensaje> {
@@ -181,7 +257,7 @@ async function mensaje(sobre: { de?: string; asunto: string; texto: string; fech
     messageId: sobre.messageId ?? `<rcp-${uid}-${Date.now()}@ejemplo.invalid>`,
     attachments: sobre.pdf ? [{ filename: "albaran.pdf", content: sobre.pdf, contentType: "application/pdf" }] : [],
   });
-  return { uid, source: await composer.compile().build(), seen: false, date: fecha };
+  return { uid, source: await composer.compile().build(), seen: false, date: fecha, messageId: composer.mail.messageId as string };
 }
 
 function buzonFalso(
@@ -202,6 +278,9 @@ function buzonFalso(
     },
     async search(q) {
       this.busquedas.push({ ...q });
+      // Buscar por Message-ID: es como se recupera un correo concreto.
+      const porCabecera = q.header?.["message-id"];
+      if (porCabecera) return mensajes.filter((m) => m.messageId === porCabecera).map((m) => m.uid);
       const diaDesde = q.since ? new Date(new Date(q.since).toDateString()) : null;
       // `N:*` como en IMAP: el rango, y además el último mensaje de la carpeta.
       let porUid: (m: Mensaje) => boolean = () => true;
@@ -336,7 +415,7 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
     await db.query(`ALTER TABLE rcp_eventos DISABLE TRIGGER rcp_eventos_inmutable_trg`);
     await db.query(`DELETE FROM rcp_eventos WHERE empresa_id = ANY($1)`, [e]);
     await db.query(`ALTER TABLE rcp_eventos ENABLE TRIGGER rcp_eventos_inmutable_trg`);
-    for (const t of ["rcp_correos", "rcp_buzon_pasadas", "rcp_config", "rcp_incidencias", "rcp_documentos", "rcp_recepcion_lineas", "rcp_recepciones", "rcp_albaran_lineas", "rcp_albaranes", "rcp_pedido_lineas", "rcp_pedidos", "rcp_proveedor_articulos", "rcp_proveedores", "rcp_contadores"]) {
+    for (const t of ["rcp_correos", "rcp_buzon_pasadas", "rcp_config", "rcp_avisos", "rcp_incidencias", "rcp_documentos", "rcp_recepcion_lineas", "rcp_recepciones", "rcp_albaran_lineas", "rcp_albaranes", "rcp_pedido_lineas", "rcp_pedidos", "rcp_proveedor_articulos", "rcp_proveedores", "rcp_contadores"]) {
       await db.query(`DELETE FROM ${t} WHERE empresa_id = ANY($1)`, [e]);
     }
     const r = await api("/proveedores", { method: "POST", body: { codigo: "SOLEDAD", nombre: "NEUMÁTICOS SOLEDAD", remitentesCorreo: [REMITENTE] } });
@@ -629,6 +708,278 @@ describe.skipIf(!RUN)("Recepciones · correos de Soledad contra PostgreSQL", () 
     expect(re.status).toBe(200);
     expect(["IGNORADO", "DUPLICADO"]).toContain(re.body.resultado);
     expect((await api("/pedidos")).body.pedidos).toHaveLength(0);
+  });
+
+  describe("el albarán cuyo pedido no existe y no trae líneas: se arregla con su PDF", () => {
+    it("subiendo el albarán a mano, sus líneas salen del papel y el pedido se deduce", async () => {
+      // El caso de la pantalla: llega el albarán, su pedido no ha llegado, y
+      // el correo no detalla nada. Queda en revisión.
+      const pedidoN = unico("57024");
+      const albaranN = unico("20284");
+      const m = await mensaje({ asunto: asuntoAlbaran(albaranN), texto: correoAlbaran(pedidoN, albaranN) });
+      const r = await importarEml(m.source);
+      expect(r.body.resultado).toBe("revision");
+      expect(r.body.error).toMatch(/no existe y el albarán no trae líneas legibles/);
+
+      // Se sube el PDF del albarán a mano y entra entero.
+      const correos = await api("/correo");
+      const guardado = correos.body.correos.find((c: any) => c.asunto.includes(albaranN));
+      const form = new FormData();
+      const pdf = await pdfAlbaranConMovil();
+      form.append("documento", new Blob([new Uint8Array(pdf)], { type: "application/pdf" }), "albaran.pdf");
+      const subida = await fetch(`${base}/api/recepciones/correo/${guardado.id}/albaran-pdf`, {
+        method: "POST",
+        headers: { "x-test-user": gestor.usuario, "x-test-empresa": gestor.empresa, "x-test-nombre": gestor.nombre },
+        body: form,
+      });
+      const cuerpo = (await subida.json()) as any;
+      expect(subida.status, JSON.stringify(cuerpo)).toBe(200);
+      expect(cuerpo.resultado).toBe("PROCESADO");
+
+      // El albarán está en la bandeja con lo que dice el papel…
+      const fila = (await api("/bandeja")).body.albaranes.find((a: any) => a.numeroProveedor.includes(albaranN));
+      expect(fila, "el albarán no ha entrado").toBeTruthy();
+      expect(fila.articulos.map((x: any) => [x.descripcionProveedor, x.cantidadExpedida])).toEqual([
+        ["245/45X18 CONT.ECOCONTC6 96W", 2],
+      ]);
+      // …y con el móvil de quien lo espera, que iba antes del NFU.
+      expect(fila.observaciones).toBe("JUAN LECHUGA");
+      expect(fila.telefonoContacto).toBe("603472809");
+
+      // El pedido se ha deducido del albarán, con sus cantidades provisionales.
+      const ficha = await api(`/albaranes/${fila.id}`);
+      const pedido = await api(`/pedidos/${ficha.body.albaran.pedidoId}`);
+      expect(pedido.body.pedido.derivadoDeAlbaran).toBe(true);
+      expect(pedido.body.lineas).toHaveLength(1);
+
+      // Y el PDF queda guardado como original del albarán.
+      expect(ficha.body.documentos.some((d: any) => d.tipo === "ALBARAN_ORIGINAL")).toBe(true);
+    });
+
+    it("un PDF que no es un albarán no arregla nada ni rompe el correo", async () => {
+      const pedidoN = unico("57025");
+      const albaranN = unico("20285");
+      const m = await mensaje({ asunto: asuntoAlbaran(albaranN), texto: correoAlbaran(pedidoN, albaranN) });
+      expect((await importarEml(m.source)).body.resultado).toBe("revision");
+
+      const correos = await api("/correo");
+      const guardado = correos.body.correos.find((c: any) => c.asunto.includes(albaranN));
+      const form = new FormData();
+      const pdf = await pdfDePrueba("Esto no es un albarán de nadie");
+      form.append("documento", new Blob([new Uint8Array(pdf)], { type: "application/pdf" }), "cualquiera.pdf");
+      const subida = await fetch(`${base}/api/recepciones/correo/${guardado.id}/albaran-pdf`, {
+        method: "POST",
+        headers: { "x-test-user": gestor.usuario, "x-test-empresa": gestor.empresa, "x-test-nombre": gestor.nombre },
+        body: form,
+      });
+      const cuerpo = (await subida.json()) as any;
+      expect(subida.status).toBe(200);
+      expect(cuerpo.resultado).toBe("PENDIENTE_REVISION");
+      expect((await api("/bandeja")).body.albaranes).toHaveLength(0);
+    });
+
+    it("lo que se sube tiene que ser un PDF", async () => {
+      const correos = await api("/correo");
+      const cualquiera = correos.body.correos[0];
+      const form = new FormData();
+      form.append("documento", new Blob([new Uint8Array(Buffer.from("hola"))], { type: "application/pdf" }), "x.pdf");
+      const subida = await fetch(`${base}/api/recepciones/correo/${cualquiera?.id ?? "00000000-0000-4000-a000-000000000001"}/albaran-pdf`, {
+        method: "POST",
+        headers: { "x-test-user": gestor.usuario, "x-test-empresa": gestor.empresa, "x-test-nombre": gestor.nombre },
+        body: form,
+      });
+      expect(subida.status).toBe(400);
+    });
+  });
+
+  describe("cuando el albarán entra sin su PDF se avisa a recepción", () => {
+    it("queda el aviso, y dice que no hay a quién mandarlo mientras no haya móvil", async () => {
+      const numero = unico("5695");
+      expect((await importarEml((await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) })).source)).body.resultado).toBe("procesado");
+
+      // Un albarán sin adjunto y sin enlace: entra, pero sin papel.
+      const albaranN = unico("2032");
+      const m = await mensaje({ asunto: asuntoAlbaran(albaranN), texto: correoAlbaran(numero, albaranN) });
+      const r = await importarEml(m.source);
+      expect(r.body.resultado, JSON.stringify(r.body)).toBe("procesado");
+
+      const avisos = await api("/avisos");
+      const aviso = avisos.body.avisos.find((a: any) => a.tipo === "FALTA_ALBARAN");
+      expect(aviso, JSON.stringify(avisos.body.avisos)).toBeTruthy();
+      expect(aviso.estado).toBe("OMITIDO");
+      expect(aviso.motivo).toMatch(/teléfono de recepción/i);
+      expect(aviso.destinatario).toBe("Recepción");
+      // No hay recepción detrás: el material todavía no ha llegado.
+      expect(aviso.recepcionId).toBeNull();
+      expect(aviso.albaranNumero).toContain(albaranN);
+    });
+
+    it("con el móvil puesto se intenta, y sin credenciales de Twilio queda dicho", async () => {
+      const cfg = await api("/avisos/config", { method: "PUT", body: { telefonoRecepcion: "610 473 077" } });
+      expect(cfg.status, JSON.stringify(cfg.body)).toBe(200);
+      expect(cfg.body.telefonoRecepcion).toBe("610473077");
+
+      const numero = unico("5696");
+      expect((await importarEml((await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) })).source)).body.resultado).toBe("procesado");
+      const albaranN = unico("2033");
+      await importarEml((await mensaje({ asunto: asuntoAlbaran(albaranN), texto: correoAlbaran(numero, albaranN) })).source);
+
+      const aviso = (await api("/avisos")).body.avisos.find((a: any) => a.tipo === "FALTA_ALBARAN");
+      expect(aviso.telefono).toBe("610473077");
+      expect(aviso.motivo).toMatch(/credenciales/i);
+    });
+
+    it("un móvil que no lo es se rechaza en vez de guardarse a medias", async () => {
+      const r = await api("/avisos/config", { method: "PUT", body: { telefonoRecepcion: "977 21 00 00" } });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe("TELEFONO_INVALIDO");
+    });
+
+    it("con el PDF adjunto no se avisa de nada: el papel está", async () => {
+      const numero = unico("5697");
+      expect((await importarEml((await mensaje({ asunto: asuntoPedido(numero), texto: correoPedido(numero) })).source)).body.resultado).toBe("procesado");
+      const albaranN = unico("2034");
+      const m = await mensaje({ asunto: asuntoAlbaran(albaranN), texto: correoAlbaran(numero, albaranN), pdf: await pdfDePrueba("ALBARAN") });
+      await importarEml(m.source);
+
+      const avisos = (await api("/avisos")).body.avisos.filter((a: any) => a.tipo === "FALTA_ALBARAN" && a.albaranNumero.includes(albaranN));
+      expect(avisos).toHaveLength(0);
+    });
+  });
+
+  describe("la entrega de INSA TURBO viene en el PDF adjunto, no en el correo", () => {
+    it("el correo sin datos entra igual: la entrega se lee del adjunto y aparece en pendientes", async () => {
+      const numero = unico("260311");
+      const m = await mensaje({
+        asunto: `Entrega D26-${numero}`,
+        // El cuerpo no dice nada: todo está en el PDF.
+        texto: "Adjuntamos el albarán de entrega.",
+        pdf: await pdfEntregaInsa(numero),
+      });
+      const r = await importarEml(m.source);
+      expect(r.body.resultado, JSON.stringify(r.body)).toBe("procesado");
+      expect(r.body.albaranNumero).toBe(`D26-${numero}`);
+
+      // En la bandeja, listo para recepcionar, con su material y su centro.
+      const bandeja = await api("/bandeja");
+      const fila = bandeja.body.albaranes.find((a: any) => a.numeroProveedor === `D26-${numero}`);
+      expect(fila, JSON.stringify(bandeja.body.albaranes)).toBeTruthy();
+      expect(fila.centroNombre).toMatch(/TARRAGONA/i);
+      expect(fila.articulos.map((x: any) => x.cantidadExpedida)).toEqual([10, 4]);
+      expect(fila.articulos.map((x: any) => x.descripcionProveedor).join(" · ")).toMatch(/295\/80X22\.5 INSA TURBO K25 BASE/);
+
+      // El .eml devuelve números, no identificadores: se tira del de la bandeja.
+      const ficha = await api(`/albaranes/${fila.id}`);
+      expect(ficha.body.albaran.fechaExpedicion).toBe("2026-09-18");
+      // El PDF adjunto queda como ORIGINAL, y de él salen las observaciones.
+      expect(ficha.body.documentos.some((d: any) => d.tipo === "ALBARAN_ORIGINAL")).toBe(true);
+      expect(ficha.body.albaran.observaciones).toContain("TALLER RIU CLAR");
+      expect(ficha.body.albaran.telefonoContacto).toBeNull();
+
+      // Trae DOS pedidos del proveedor: el pedido se deduce de la entrega y
+      // los suyos quedan escritos, en vez de colgarlo de uno al azar.
+      const pedido = await api(`/pedidos/${ficha.body.albaran.pedidoId}`);
+      expect(pedido.body.pedido.numeroProveedor).toBe(`D26-${numero}`);
+      expect(pedido.body.pedido.derivadoDeAlbaran).toBe(true);
+      expect(pedido.body.pedido.observaciones).toMatch(/26001072, 26001215/);
+      expect(pedido.body.lineas).toHaveLength(2);
+
+      // Y queda dicho de dónde salieron los datos.
+      const correos = await api("/correo");
+      const correoGuardado = correos.body.correos.find((c: any) => c.albaranId === fila.id);
+      expect(correoGuardado.tipo).toBe("ALBARAN");
+      expect((correoGuardado.avisos ?? []).join(" ")).toMatch(/PDF adjunto/);
+    });
+
+    it("el mismo correo dos veces no duplica nada", async () => {
+      const numero = unico("260312");
+      const m = await mensaje({ asunto: `Entrega D26-${numero}`, texto: "Adjuntamos el albarán.", pdf: await pdfEntregaInsa(numero) });
+      expect((await importarEml(m.source)).body.resultado).toBe("procesado");
+      const otra = await importarEml(m.source);
+      expect(otra.body.resultado).toBe("duplicado");
+      expect((await api("/bandeja")).body.albaranes.filter((a: any) => a.numeroProveedor === `D26-${numero}`)).toHaveLength(1);
+    });
+
+    it("el adjunto se guarda con el correo: «Reprocesar» vuelve a leerlo sin tener que reenviar nada", async () => {
+      // Un correo que llega ANTES de que el proveedor esté reconocido queda
+      // ignorado; el adjunto se guarda igual. Es justo el caso de la pantalla:
+      // el albarán reenviado a mano que se quedó sin número.
+      const numero = unico("260313");
+      const m = await mensaje({ de: "desconocido@insaturbo.example", asunto: `Fwd: albaran Riu Clar agencia transaher`, texto: "Te lo reenvío.", pdf: await pdfEntregaInsa(numero) });
+      const r = await importarEml(m.source);
+      expect(r.body.resultado).toBe("ignorado");
+
+      // Se da de alta el remitente en la ficha del proveedor…
+      await api(`/proveedores/${proveedorId}`, { method: "PATCH", body: { remitentesCorreo: [REMITENTE, "insaturbo.example"] } });
+
+      // …y con «Reprocesar», sin el correo delante, la entrega entra entera.
+      const correos = await api("/correo");
+      const guardado = correos.body.correos.find((c: any) => c.asunto.includes("Riu Clar"));
+      const re = await api(`/correo/${guardado.id}/reprocesar`, { method: "POST" });
+      expect(re.status, JSON.stringify(re.body)).toBe(200);
+      expect(re.body.resultado).toBe("PROCESADO");
+      expect(re.body.albaranNumero).toBe(`D26-${numero}`);
+
+      const fila = (await api("/bandeja")).body.albaranes.find((a: any) => a.numeroProveedor === `D26-${numero}`);
+      expect(fila).toBeTruthy();
+      expect(fila.documentoOriginalId).toBeTruthy();
+    });
+
+    it("reenviada desde la cuenta de OTRO proveedor, se archiva bajo el del NIF del papel", async () => {
+      // El caso de verdad: una persona reenvía la entrega de INSA desde su
+      // cuenta de Soledad. El remitente dice Soledad; el papel dice INSA.
+      const insa = await api("/proveedores", { method: "POST", body: { codigo: "INSA", nombre: "INDUSTRIAS DEL NEUMATICO SAU", nif: "A03297959" } });
+      expect(insa.status, JSON.stringify(insa.body)).toBe(201);
+
+      const numero = unico("260314");
+      const m = await mensaje({ asunto: "Fwd: albaran Riu Clar agencia transaher", texto: "Te lo reenvío.", pdf: await pdfEntregaInsa(numero) });
+      const r = await importarEml(m.source);
+      expect(r.body.resultado, JSON.stringify(r.body)).toBe("procesado");
+
+      const fila = (await api("/bandeja")).body.albaranes.find((a: any) => a.numeroProveedor === `D26-${numero}`);
+      expect(fila.proveedorNombre).toBe("INDUSTRIAS DEL NEUMATICO SAU");
+
+      // Y queda dicho por qué, que si no parece un error.
+      const correos = await api("/correo");
+      const guardado = correos.body.correos.find((c: any) => c.albaranId === fila.id);
+      expect((guardado.avisos ?? []).join(" ")).toMatch(/NIF del PDF/);
+    });
+
+    it("si el adjunto no se guardó, se va a buscar el correo original al buzón por su Message-ID", async () => {
+      // El caso de los correos que entraron ANTES de que el adjunto se
+      // guardara: en la base no hay nada que releer, y sin ir al buzón
+      // «Reprocesar» no puede arreglarlos.
+      const numero = unico("260315");
+      const m = await mensaje({ asunto: "Fwd: albaran Riu Clar", texto: "Te lo reenvío.", pdf: await pdfEntregaInsa(numero) });
+
+      const cliente = buzonFalso([m]);
+      const adjuntos = await buzon.adjuntosDelOriginal(EMPRESA, m.messageId, { cliente, config: CFG });
+      expect(adjuntos).toHaveLength(1);
+      expect(adjuntos[0].contenido.subarray(0, 5).toString()).toBe("%PDF-");
+
+      // Y con eso, reprocesar el correo lo mete entero.
+      const registrado = await importarEml(m.source);
+      expect(registrado.body.resultado).toBe("procesado");
+
+      // No se ha tocado nada del buzón: ni banderas, ni leídos.
+      expect(cliente.flagsAplicadas).toEqual([]);
+      expect(cliente.mensajes[0].seen).toBe(false);
+    });
+
+    it("buscar el original de un correo que ya no está en el buzón no revienta: devuelve vacío", async () => {
+      const otro = await mensaje({ asunto: "Otro", texto: "nada" });
+      const adjuntos = await buzon.adjuntosDelOriginal(EMPRESA, "<no-existe@ejemplo.invalid>", { cliente: buzonFalso([otro]), config: CFG });
+      expect(adjuntos).toEqual([]);
+      // Y con el buzón de otra empresa, ni se mira.
+      expect(await buzon.adjuntosDelOriginal("00000000-0000-4000-a000-0000000000ff", otro.messageId, { cliente: buzonFalso([otro]), config: CFG })).toEqual([]);
+    });
+
+    it("un PDF que no es una entrega reconocible deja el correo como antes: no se inventa un albarán", async () => {
+      const m = await mensaje({ asunto: "Entrega", texto: "Adjuntamos el albarán.", pdf: await pdfDePrueba("Esto no es una entrega de nadie") });
+      const r = await importarEml(m.source);
+      expect(r.body.resultado).toBe("ignorado");
+      expect((await api("/bandeja")).body.albaranes).toHaveLength(0);
+    });
   });
 
   it("un pedido sin líneas legibles queda en revisión, no se crea a medias", async () => {

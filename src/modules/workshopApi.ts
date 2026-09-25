@@ -135,6 +135,10 @@ export async function saveTechToBackend(tech: Tech) {
           statusTotals: tech.statusTotals ?? {},
           roadsideCapable: Boolean(tech.roadsideCapable),
           phone: tech.phone ?? null,
+          // Taller al que pertenece. Si no viene, el servidor conserva el que
+          // había en vez de borrarlo: este endpoint es un upsert con las
+          // columnas escritas a mano y una ausencia se guardaría como NULL.
+          workshopId: tech.workshopId ?? null,
         }),
       }
     );
@@ -289,7 +293,11 @@ export async function loadLogsFromBackend() {
 }
 
 export async function loadQuickTemplatesFromBackend() {
-  const response = await fetchWithTimeout(`${API_BASE}/api/quick-templates`);
+  // Con credenciales: este endpoint dejó de ser público. Sin la cabecera
+  // devuelve 401 y la pantalla se queda sin operaciones.
+  const response = await fetchWithTimeout(`${API_BASE}/api/quick-templates`, {
+    headers: getAdminHeaders(),
+  });
 
   if (!response.ok) {
     throw new Error(

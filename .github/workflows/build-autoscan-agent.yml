@@ -118,11 +118,11 @@ jobs:
           path: empaquetado/mobilink-autoscan-*.zip
 
       - name: Publicar release
-        uses: softprops/action-gh-release@v2
+        uses: ./.github/actions/publicar-release
         with:
-          tag_name: autoscan-v${{ steps.ver.outputs.version }}
-          name: Mobilink AutoScan ${{ steps.ver.outputs.version }}
-          body: |
+          tag: autoscan-v${{ steps.ver.outputs.version }}
+          nombre: Mobilink AutoScan ${{ steps.ver.outputs.version }}
+          cuerpo: |
             Agente de Windows de Mobilink Cash AutoScan, generado por CI desde ${{ github.sha }}.
 
             Los agentes ya instalados ven este aviso en su bandeja dentro del
@@ -132,7 +132,8 @@ jobs:
 
             Para una instalación desde cero, descomprimir y ejecutar
             `instalador\instalar.ps1` como administrador.
-          files: empaquetado/mobilink-autoscan-*.zip
+          ficheros: empaquetado/mobilink-autoscan-*.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # ── La versión, al repositorio, DESPUÉS de publicar ────────────────────
       #

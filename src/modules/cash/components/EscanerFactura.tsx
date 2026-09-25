@@ -279,11 +279,16 @@ function Resultado({ propuesta }: { propuesta: PropuestaEscaneo }) {
       ))}
       {leves.map((a) =>
         /*
-         * «No hay justificante» va en su propio recuadro, aunque no sea grave.
-         * Es la frase que más fácil se lee al revés —de «no hay ticket» a «será
-         * efectivo»— y leída de pasada, en gris pequeño, no la lee nadie.
+         * Dos avisos leves van en su propio recuadro, aunque no sean graves:
+         *
+         * · «No hay justificante» es la frase que más fácil se lee al revés
+         *   —de «no hay ticket» a «será efectivo»— y en gris pequeño no la lee
+         *   nadie.
+         * · «Esto es un albarán» dice QUÉ se está cobrando. No estorba, pero
+         *   tampoco es un pie de página: cobrar contra un albarán no es lo
+         *   mismo que cobrar contra una factura.
          */
-        a.codigo === "SIN_EVIDENCIA_DE_PAGO" ? (
+        a.codigo === "SIN_EVIDENCIA_DE_PAGO" || a.codigo === "TIPO_DE_DOCUMENTO" ? (
           <p
             key={a.codigo}
             className="rounded-lg bg-slate-800/60 px-2.5 py-1.5 text-[11px] text-slate-300"

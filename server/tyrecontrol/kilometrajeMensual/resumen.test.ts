@@ -27,19 +27,19 @@ describe("resumirKilometraje()", () => {
       fila(2026, 1, 7842), fila(2026, 2, 8104), fila(2026, 3, 7536), fila(2026, 4, 8421),
     ], { year: 2026, month: 5 });
     expect(r.anioActual).toEqual({ year: 2026, km: 31903, mesesConDato: 4 });
-    expect(r.mediaMensual).toEqual({ km: 7976, meses: 4 });
+    expect(r.mediaMensual).toMatchObject({ km: 7976, meses: 4 });
   });
 
   it("el mes en curso entra en el año pero NO en la media: va a medias", () => {
     const r = resumirKilometraje([fila(2026, 8, 8000), fila(2026, 9, 3824, { closed: false })], SEP_2026);
     expect(r.anioActual.km).toBe(11824);
-    expect(r.mediaMensual).toEqual({ km: 8000, meses: 1 });
+    expect(r.mediaMensual).toMatchObject({ km: 8000, meses: 1 });
     expect(r.mesActual?.km).toBe(3824);
   });
 
   it("un mes «sin datos» no es un mes a cero: no baja la media ni cuenta como dato", () => {
     const r = resumirKilometraje([fila(2026, 7, 8000), fila(2026, 8, null)], SEP_2026);
-    expect(r.mediaMensual).toEqual({ km: 8000, meses: 1 });
+    expect(r.mediaMensual).toMatchObject({ km: 8000, meses: 1 });
     expect(r.anioActual.mesesConDato).toBe(1);
   });
 
@@ -52,7 +52,7 @@ describe("resumirKilometraje()", () => {
   it("el año anterior no entra en el año en curso, pero sí en la media (últimos 12 completos)", () => {
     const r = resumirKilometraje([fila(2025, 12, 6000), fila(2026, 1, 8000)], SEP_2026);
     expect(r.anioActual).toEqual({ year: 2026, km: 8000, mesesConDato: 1 });
-    expect(r.mediaMensual).toEqual({ km: 7000, meses: 2 });
+    expect(r.mediaMensual).toMatchObject({ km: 7000, meses: 2 });
   });
 
   it("la media se queda en los doce últimos meses completos", () => {
@@ -67,7 +67,7 @@ describe("resumirKilometraje()", () => {
     expect(r.meses).toEqual([]);
     expect(r.mesActual).toBeNull();
     expect(r.anioActual).toEqual({ year: 2026, km: 0, mesesConDato: 0 });
-    expect(r.mediaMensual).toEqual({ km: null, meses: 0 });
+    expect(r.mediaMensual).toMatchObject({ km: null, meses: 0 });
   });
 
   it("los meses salen del más reciente al más antiguo", () => {

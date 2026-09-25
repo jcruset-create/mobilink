@@ -25,20 +25,78 @@ export function eurosConSigno(centimos: number): string {
 /**
  * Lee un importe escrito por una persona y lo pasa a céntimos.
  *
- * Acepta coma y punto porque el teclado del mostrador escribe "12,50". Devuelve
- * null si no es un importe: null es DESCONOCIDO, no cero, y la pantalla tiene
- * que poder distinguir "no ha escrito nada" de "ha escrito 0".
+ * Acepta coma y punto porque el teclado del mostrador escribe "12,50", y
+ * **acepta el punto de los miles**, que es por donde se rompía: «1.797,00» daba
+ * null, y con null el botón de confirmar decía «0,00 €» y no dejaba registrar
+ * el cobro. Todo lo que llegaba a mil euros era incobrable desde la pantalla.
+ *
+ * Devuelve null si no es un importe: null es DESCONOCIDO, no cero, y la
+ * pantalla tiene que poder distinguir «no ha escrito nada» de «ha escrito 0».
+ *
+ * ── Cómo se deshace la ambigüedad ────────────────────────────────────────────
+ *
+ * Es la misma pregunta que en la lectura del ERP —¿el punto separa decimales o
+ * miles?— y aquí se responde con reglas, no adivinando:
+ *
+ * · **Si hay coma, la coma manda**: es el decimal y los puntos son miles.
+ *   «1.797,00» → 1797,00. Sin excepciones.
+ * · **Sin coma, decide cuántas cifras van tras el último punto.** Tres es
+ *   siempre separador de miles, porque un importe no tiene tres decimales:
+ *   «1.797» → 1797,00. Una o dos son decimales: «12.5» → 12,50.
+ * · **Lo mezclado se rechaza.** «1,797.00» —formato inglés— no se interpreta:
+ *   devolver null y que alguien lo escriba otra vez es barato; equivocarse por
+ *   un factor de mil, no.
  */
 export function aCentimos(texto: string): number | null {
   const limpio = texto.trim().replace(/\s|€/g, "");
   if (!limpio) return null;
 
-  const m = /^(-?)(\d*)(?:[.,](\d{0,2}))?$/.exec(limpio);
-  if (!m || (m[2] === "" && (m[3] ?? "") === "")) return null;
+  const signo = limpio.startsWith("-") ? -1 : 1;
+  const cuerpo = limpio.replace(/^-/, "");
+  if (!cuerpo) return null;
 
-  const signo = m[1] === "-" ? -1 : 1;
-  const e = m[2] === "" ? 0 : Number(m[2]);
-  const c = Number((m[3] ?? "").padEnd(2, "0"));
+  let enteros: string;
+  let decimales: string;
+
+  if (cuerpo.includes(",")) {
+    const partes = cuerpo.split(",");
+    // Dos comas no es un importe, es un error de tecleo.
+    if (partes.length !== 2) return null;
+    enteros = partes[0]!;
+    decimales = partes[1]!;
+  } else {
+    const trozos = cuerpo.split(".");
+    const ultimo = trozos[trozos.length - 1]!;
+    if (trozos.length > 1 && ultimo.length === 3) {
+      // Tres cifras tras el punto: son miles. Un importe no tiene 3 decimales.
+      enteros = cuerpo;
+      decimales = "";
+    } else if (trozos.length > 1) {
+      enteros = trozos.slice(0, -1).join(".");
+      decimales = ultimo;
+    } else {
+      enteros = cuerpo;
+      decimales = "";
+    }
+  }
+
+  /*
+   * Los puntos que queden en la parte entera son separadores de miles, y se
+   * exige que estén DONDE TOCA: «1.797» sí, «17.97» no. Sin esta comprobación,
+   * «17.97,5» se colaría como 1797,50 — un factor de cien sobre lo que alguien
+   * quiso escribir.
+   */
+  if (enteros.includes(".")) {
+    if (!/^\d{1,3}(\.\d{3})+$/.test(enteros)) return null;
+    enteros = enteros.replace(/\./g, "");
+  }
+
+  if (enteros !== "" && !/^\d+$/.test(enteros)) return null;
+  if (decimales !== "" && !/^\d{1,2}$/.test(decimales)) return null;
+  if (enteros === "" && decimales === "") return null;
+
+  const e = enteros === "" ? 0 : Number(enteros);
+  const c = decimales === "" ? 0 : Number(decimales.padEnd(2, "0"));
   const total = signo * (e * 100 + c);
   return Number.isSafeInteger(total) ? total : null;
 }

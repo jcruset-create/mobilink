@@ -1,0 +1,120 @@
+# Publica una release con sus ficheros, reintentando la subida.
+#
+# ── Por qué existe esto y no se usa `softprops/action-gh-release` a secas ───
+#
+# Porque subir un fichero grande a una release falla de vez en cuando, y esa
+# acción no lo reintenta: responde «Error saving asset» y tumba el job. Con la
+# APK de TyreControl (60 MB) pasó tres veces en dos días, en tres ramas
+# distintas. Y el modo en que falla es el peor posible:
+#
+#   · la APK está compilada, firmada y verificada —todo lo caro ya ha ido bien—;
+#   · la release se queda en BORRADOR, invisible para el centro de descargas;
+#   · el número de build ya se ha gastado;
+#   · y como el build number sale del contador del workflow, que comparten
+#     todas las ramas, la siguiente APK que se publique lleva un número MÁS
+#     ALTO sin llevar el código que se acaba de compilar.
+#
+# Eso último es lo que hace daño de verdad: se instala la versión con el número
+# más alto dando por hecho que trae lo último, y no lo trae. Pasó: una tablet
+# con la 0.46.2+257 esperando un módulo que estaba en la +258.
+#
+# ── Qué hace ────────────────────────────────────────────────────────────────
+#
+# Lo mismo que hacía la acción, en tres pasos y con reintentos en el que falla:
+#
+#   1. crea la release en BORRADOR (si no existe ya);
+#   2. sube los ficheros, reintentando con espera creciente;
+#   3. y solo entonces la publica.
+#
+# El orden importa: una release sin su APK nunca llega a ser visible, así que
+# el centro de descargas no puede ofrecer una versión que no se puede bajar.
+# Y si el paso 2 agota los reintentos, el borrador se queda ahí y el siguiente
+# intento con el mismo tag lo reutiliza en vez de duplicarlo.
+name: Publicar release
+description: Crea la release, sube sus ficheros reintentando y la publica.
+
+inputs:
+  tag:
+    description: Tag de la release (p. ej. tyrecontrol-v0.46.2+258).
+    required: true
+  nombre:
+    description: Título de la release.
+    required: true
+  cuerpo:
+    description: Texto de la release.
+    required: true
+  ficheros:
+    description: Patrón de los ficheros a subir.
+    required: true
+  intentos:
+    description: Cuántas veces se intenta cada llamada a GitHub.
+    required: false
+    default: "4"
+  token:
+    description: Token con permiso de contents:write.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TAG: ${{ inputs.tag }}
+        NOMBRE: ${{ inputs.nombre }}
+        CUERPO: ${{ inputs.cuerpo }}
+        PATRON: ${{ inputs.ficheros }}
+        INTENTOS: ${{ inputs.intentos }}
+        SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+
+        # Espera creciente: 5s, 15s, 45s. Un fallo de subida suele ser un pico
+        # momentáneo del almacenamiento de GitHub, y reintentar al instante
+        # cae en el mismo pico.
+        reintentar() {
+          local etiqueta="$1"; shift
+          local espera=5
+          for intento in $(seq 1 "$INTENTOS"); do
+            if "$@"; then return 0; fi
+            if [ "$intento" -lt "$INTENTOS" ]; then
+              echo "::warning::$etiqueta ha fallado (intento $intento de $INTENTOS)." \
+                   "Se reintenta en ${espera}s."
+              sleep "$espera"
+              espera=$((espera * 3))
+            fi
+          done
+          echo "::error::$etiqueta ha fallado $INTENTOS veces."
+          return 1
+        }
+
+        shopt -s nullglob
+        FICHEROS=( $PATRON )
+        if [ ${#FICHEROS[@]} -eq 0 ]; then
+          echo "::error::No hay ningún fichero que coincida con «$PATRON»."
+          exit 1
+        fi
+        echo "A subir: ${FICHEROS[*]}"
+
+        # En BORRADOR: hasta que no estén los ficheros, esta release no la ve
+        # nadie. Si ya existe —de un intento anterior que se quedó a medias—
+        # se reutiliza, que es justo para lo que sirve el borrador.
+        if gh release view "$TAG" >/dev/null 2>&1; then
+          echo "La release $TAG ya existe; se reutiliza."
+        else
+          reintentar "Crear la release $TAG" \
+            gh release create "$TAG" --draft --target "$SHA" \
+              --title "$NOMBRE" --notes "$CUERPO"
+        fi
+
+        # --clobber: si un intento anterior dejó el fichero a medias, se
+        # sustituye en vez de fallar por nombre repetido.
+        reintentar "Subir los ficheros a $TAG" \
+          gh release upload "$TAG" "${FICHEROS[@]}" --clobber
+
+        # Y ahora sí, visible. Este es el paso que convierte la release en
+        # «descargable», y llega cuando la APK ya está arriba.
+        reintentar "Publicar la release $TAG" \
+          gh release edit "$TAG" --draft=false
+
+        echo "Publicada: $TAG"

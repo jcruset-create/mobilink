@@ -11,6 +11,7 @@ import '../workshops.dart';
 import 'login_screen.dart';
 import 'task_detail_screen.dart';
 import 'create_task_screen.dart';
+import 'citas_recepcion_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final ApiService api;
@@ -79,6 +80,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final tabs = <Tab>[
       const Tab(text: 'Mis tareas'),
+      // Recepción la ve cualquier operario, no sólo el supervisor: el que
+      // recibe el coche en el patio normalmente no lo es.
+      const Tab(text: 'Recepción'),
       if (widget.esSupervisor) const Tab(text: 'Gestión'),
     ];
 
@@ -93,7 +97,16 @@ class _HomeScreenState extends State<HomeScreen> {
       length: tabs.length,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('WorkPlanner Taller'),
+          // El logotipo en la cabecera, no el rótulo. Va limitado en alto:
+          // la barra mide 56 y el dibujo es dos veces y media más ancho que
+          // alto, así que a 30 deja sitio de sobra para los tres botones de
+          // la derecha incluso en un móvil estrecho.
+          title: Image.asset(
+            'assets/logo-workplanner.png',
+            height: 30,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => const Text('WorkPlanner Taller'),
+          ),
           actions: [
             BotonPausa(api: widget.api),
             IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
@@ -137,6 +150,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     'que el trabajo está asignado a tu nombre.',
                     anchoTablet,
                   ),
+                  _panelRecepcion(),
                   if (widget.esSupervisor) _buildGestion(anchoTablet),
                 ],
               ),
@@ -144,6 +158,43 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
+      ),
+    );
+  }
+
+  /// Pestaña de recepción: una sola puerta a la pantalla de alta.
+  ///
+  /// La recepción no es una lista que consultar, es un gesto que se hace con
+  /// el coche delante. Por eso aquí sólo hay el botón.
+  Widget _panelRecepcion() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.directions_car, size: 48, color: AppColors.textMuted),
+            const SizedBox(height: 12),
+            const Text(
+              'Elige la cita del vehículo que acaba de entrar,\n'
+              'o recíbelo sin cita si ha venido de improviso.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textMuted),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              icon: const Icon(Icons.add),
+              label: const Text('Recibir vehículo'),
+              onPressed: () async {
+                await Navigator.of(context).push<bool>(
+                  MaterialPageRoute(
+                    builder: (_) => CitasRecepcionScreen(api: widget.api),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -13,6 +13,12 @@
  *     hacer la prueba controlada —dos vehículos, un mes— y de rehacer un mes
  *     concreto. La credencial la resuelve el Hub; aquí no entra ni sale.
  *
+ * Y una tercera, que es la misma cosa a otro ritmo: RELLENAR un mes viejo de
+ * la flota entera pidiendo una unidad cada veinte segundos (`/relleno`). No
+ * cabe en `/sincronizar` porque son horas y una petición HTTP no dura horas:
+ * arranca una tarea en el servidor y se consulta el progreso aparte. El porqué
+ * del ritmo está en `relleno.ts`.
+ *
  * La empresa se deriva de la sesión, igual que en la conciliación. Ver la
  * cabecera de `conciliacion/router.ts` para por qué no se usa `tenantOf`.
  */
@@ -22,11 +28,21 @@ import { Router, json, type Request, type Response } from "express";
 import { supabase } from "../../supabase.ts";
 import { puedeVerEmpresa } from "../empresaAcceso.ts";
 import { empresaDe, resolverSolicitante, type Solicitante } from "../conciliacion/router.ts";
-import { listMonthlyMileage, getSyncState, listConnectorConfigs } from "../../integration-hub/infrastructure/repositories.ts";
+import {
+  listMonthlyMileage, listMonthlyMileageByTenant, getSyncState, listConnectorConfigs,
+  revisarCoherenciaMensual,
+} from "../../integration-hub/infrastructure/repositories.ts";
+import { VECES_ODOMETRO_MAXIMO } from "../../integration-hub/connectors/telematics/movertis/mapeo.ts";
 import { syncMonthlyMileage } from "../../integration-hub/application/services/MonthlyMileageSyncService.ts";
 import { entidadSyncDe } from "../../integration-hub/application/services/MonthlyMileageSyncService.ts";
 import { compararMeses, mesDe, mesesEntre, ZONA_HORARIA_POR_DEFECTO, type Mes } from "../../integration-hub/domain/meses.ts";
 import { resumirKilometraje } from "./resumen.ts";
+import { rankingDeKilometraje, type VehiculoDeFlota } from "./ranking.ts";
+import { iniciarRelleno, pararRelleno, tareasDeEmpresa } from "./rellenoWorker.ts";
+import { intervaloValido } from "./relleno.ts";
+import {
+  estadoRellenoRevisiones, iniciarRellenoRevisiones, pararRellenoRevisiones,
+} from "../kilometrajeRevisiones/worker.ts";
 
 /** Cuántos meses se pueden pedir de golpe a mano. Más es un job, no un botón. */
 const MAX_MESES_MANUAL = 12;
@@ -36,6 +52,8 @@ const MAX_MESES_MANUAL = 12;
  * terminará el resto: mejor que una pantalla colgada y un timeout del proxy.
  */
 const ESPERA_MAXIMA_MS = 45_000;
+/** Cuántos vehículos se traen por página al montar el ranking. */
+const PAGINA_FLOTA = 500;
 
 type Peticion = Request & { solicitante?: Solicitante };
 
@@ -180,6 +198,210 @@ export function createKilometrajeMensualRouter(): Router {
         esperaMaximaMs: ESPERA_MAXIMA_MS,
       });
       res.json(r);
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Relleno lento: una unidad cada `intervaloSegundos` (20 por defecto) hasta
+   * terminar el mes o los meses pedidos.
+   *
+   * Es lo contrario de `/sincronizar`: aquel contesta con el trabajo hecho y
+   * por eso no puede durar horas; este contesta con la tarea arrancada y el
+   * trabajo sigue en el servidor. Para rellenar un mes viejo de una flota
+   * entera sin quitarle cupo a nadie, es este.
+   *
+   * Cuerpo: { empresaId?, connectorKey, accountKey, desde?, hasta?,
+   *           intervaloSegundos?, forzar? }
+   */
+  router.post("/relleno", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const connectorKey = String(req.body?.connectorKey ?? "").trim();
+      const accountKey = String(req.body?.accountKey ?? "").trim();
+      if (!connectorKey || !accountKey) return res.status(400).json({ error: "Falta el proveedor o la cuenta" });
+
+      const desde = mesDeCuerpo(req.body?.desde ?? req.body?.hasta);
+      const hasta = mesDeCuerpo(req.body?.hasta ?? req.body?.desde);
+      if (!desde || !hasta) return res.status(400).json({ error: "Mes inválido: se espera {year, month}" });
+      if (compararMeses(desde, hasta) > 0) return res.status(400).json({ error: "«desde» es posterior a «hasta»" });
+      const meses = mesesEntre(desde, hasta);
+      if (meses.length > MAX_MESES_MANUAL) {
+        return res.status(400).json({ error: `Como mucho ${MAX_MESES_MANUAL} meses de una vez; has pedido ${meses.length}` });
+      }
+      if (compararMeses(hasta, mesDe(new Date())) > 0) {
+        return res.status(400).json({ error: "No se puede pedir un mes futuro" });
+      }
+
+      const tarea = await iniciarRelleno({
+        empresaId, connectorKey, accountKey, meses,
+        intervaloSegundos: intervaloValido(req.body?.intervaloSegundos),
+        forzar: req.body?.forzar === true,
+      });
+      res.json({ tarea });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /** Por dónde va el relleno. Se mira desde la base, no se pide al proveedor. */
+  router.get("/relleno", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      res.json({ empresaId, tareas: tareasDeEmpresa(empresaId) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /** Parar un relleno en marcha. Lo hecho se queda hecho; reanudar sigue ahí. */
+  router.post("/relleno/parar", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const connectorKey = String(req.body?.connectorKey ?? "").trim();
+      const accountKey = String(req.body?.accountKey ?? "").trim();
+      const tarea = pararRelleno(empresaId, connectorKey, accountKey);
+      if (!tarea) return res.status(404).json({ error: "No hay relleno en marcha para esa cuenta" });
+      res.json({ tarea });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Relleno del kilometraje del HISTÓRICO de revisiones.
+   *
+   * Hermano del de arriba y con el mismo ritmo, pero otro dato: aquel llena
+   * los kilómetros por mes de la flota; este pone el odómetro que marcaba cada
+   * autobús en el momento de cada revisión. El método y sus trampas están en
+   * `HistoricOdometerService.ts`; las cotas, en `kilometrajeRevisiones/`.
+   *
+   * Cuerpo: { empresaId?, intervaloSegundos? }
+   */
+  router.post("/revisiones", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const tarea = await iniciarRellenoRevisiones({
+        empresaId,
+        intervaloSegundos: req.body?.intervaloSegundos,
+        // Sin `desde`, la tarea le pregunta al proveedor hasta dónde llega su
+        // histórico. Se acepta a mano para poder acotarla más aún.
+        desde: typeof req.body?.desde === "string" ? req.body.desde : null,
+      });
+      res.json({ tarea });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.get("/revisiones", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      res.json({ empresaId, tarea: estadoRellenoRevisiones(empresaId) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  router.post("/revisiones/parar", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const tarea = pararRellenoRevisiones(empresaId);
+      if (!tarea) return res.status(404).json({ error: "No hay relleno de revisiones en marcha" });
+      res.json({ tarea });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * El ranking de kilómetros de la flota, de más a menos.
+   *
+   * El criterio de quién va delante está en `ranking.ts`, y la media de la que
+   * sale es la MISMA que enseña la ficha de cada vehículo. Es a propósito: dos
+   * pantallas que digan números distintos del mismo autobús no sirven ninguna
+   * de las dos.
+   *
+   * Cruza las dos bases —los kilómetros están en el Hub y las matrículas en
+   * Supabase— y el cruce se hace aquí, en código: el Hub no conoce
+   * `tc_vehiculos` y no debe empezar a conocerlos.
+   */
+  router.get("/ranking", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.query.empresa);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+
+      // La flota activa, paginada. Nada de traerla de golpe ni de meter 751
+      // identificadores en un filtro: eso viaja en la URL y ya rompió una vez
+      // el barrido de presencia en producción.
+      const flota: VehiculoDeFlota[] = [];
+      for (let desde = 0; ; desde += PAGINA_FLOTA) {
+        const { data, error } = await supabase
+          .from("tc_vehiculos")
+          .select("id, matricula, numero_unidad")
+          .eq("empresa_id", empresaId)
+          .eq("activo", true)
+          .order("matricula")
+          .range(desde, desde + PAGINA_FLOTA - 1);
+        if (error) throw new Error(`No se pudo leer la flota: ${error.message}`);
+        const pagina = data ?? [];
+        for (const v of pagina) {
+          flota.push({
+            id: String((v as any).id),
+            matricula: (v as any).matricula ?? null,
+            numeroUnidad: (v as any).numero_unidad ?? null,
+          });
+        }
+        if (pagina.length < PAGINA_FLOTA) break;
+      }
+
+      // Un año hacia atrás basta: la media solo mira los doce últimos meses
+      // completos, así que traer más sería cargar filas para descartarlas.
+      const ahora = new Date();
+      const filas = await listMonthlyMileageByTenant({
+        tenantId: empresaId,
+        desdeYear: ahora.getFullYear() - 1,
+      });
+
+      const configs = await listConnectorConfigs(empresaId);
+      const zona = String((configs.find((c: any) => c.enabled)?.config as any)?.zonaHoraria ?? ZONA_HORARIA_POR_DEFECTO);
+      res.json({ empresaId, ...rankingDeKilometraje(filas, flota, mesDe(ahora, zona)) });
+    } catch (e) {
+      fallo(res, e);
+    }
+  });
+
+  /**
+   * Revisa la coherencia de lo ya guardado y descarta lo imposible.
+   *
+   * La misma regla que aplica el conector al recibir la respuesta —una
+   * distancia no puede superar el doble de lo que avanzó el odómetro—, pero
+   * contra el histórico. Hace falta porque las filas malas entraron antes de
+   * que la regla existiera, y basta una para que el ranking ponga primero a un
+   * autobús con 37 millones de kilómetros al año.
+   *
+   * Con `aplicar: false` solo cuenta. Es lo que se pide primero desde la
+   * pantalla, para poder enseñar el número antes de que nadie confirme nada.
+   */
+  router.post("/coherencia", async (req, res) => {
+    try {
+      const empresaId = empresaDe((req as Peticion).solicitante!, req.body?.empresaId);
+      if (!empresaId) return res.status(400).json({ error: "Sin empresa" });
+      const r = await revisarCoherenciaMensual({
+        tenantId: empresaId,
+        // El factor viene del conector, donde está medido y documentado: la
+        // regla vive en un solo sitio y no se duplica un 2 suelto aquí.
+        vecesOdometroMaximo: VECES_ODOMETRO_MAXIMO,
+        aplicar: req.body?.aplicar === true,
+      });
+      res.json({ empresaId, aplicado: req.body?.aplicar === true, ...r });
     } catch (e) {
       fallo(res, e);
     }

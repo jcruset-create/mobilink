@@ -440,7 +440,7 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
 
   /* ── El orden de la bandeja ──────────────────────────────────────────── */
 
-  it("la lista de pedidos dice QUÉ se pidió, y va también de lo más viejo a lo más nuevo", async () => {
+  it("la lista de pedidos dice QUÉ se pidió, y va de lo más NUEVO a lo más viejo", async () => {
     const viejo = await crearPedido(2, { fechaPedido: "2026-09-10" });
     const nuevo = await crearPedido(4, { fechaPedido: "2026-09-16" });
 
@@ -452,8 +452,17 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
     expect(fila.articulos[0]).toMatchObject({ descripcionProveedor: "245/70X17.5 HANKOOK AH35 136M", cantidadExpedida: 4 });
     expect(fila.articulos[0].articuloLeido).toBe("HANKOOK AH35 245/70 R17.5 136M");
 
+    // Al revés que la bandeja: aquí se mira lo último que se ha pedido.
     const ids = r.body.pedidos.map((p: any) => p.id);
-    expect(ids.indexOf(viejo.pedido.id)).toBeLessThan(ids.indexOf(nuevo.pedido.id));
+    expect(ids.indexOf(nuevo.pedido.id)).toBeLessThan(ids.indexOf(viejo.pedido.id));
+  });
+
+  it("un pedido sin fecha se ordena por cuándo entró, no se va al final", async () => {
+    const conFecha = await crearPedido(2, { fechaPedido: "2026-09-10" });
+    const sinFecha = await crearPedido(2, { fechaPedido: null });
+    const ids = (await api("/pedidos", operarioA)).body.pedidos.map((p: any) => p.id);
+    // El de hoy sin fecha es más nuevo que uno del día 10 con fecha.
+    expect(ids.indexOf(sinFecha.pedido.id)).toBeLessThan(ids.indexOf(conFecha.pedido.id));
   });
 
 
@@ -554,6 +563,142 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
   });
 
   /* ── El operario que firma ───────────────────────────────────────────── */
+
+  /* ── Releer las líneas del papel ─────────────────────────────────────── */
+
+  describe("cuando el correo llega con la tabla aplanada, manda el PDF", () => {
+    /** Un albarán de Soledad con dos artículos, su descuento y su NFU. */
+    function pdfConDosArticulos(): Promise<Buffer> {
+      const doc = new PDFDocument({ size: "A4" });
+      const trozos: Buffer[] = [];
+      doc.on("data", (c: Buffer) => trozos.push(c));
+      const listo = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(trozos))));
+      doc.fontSize(9);
+      const filaPdf = (y: number, ref: string, desc: string, cant: string, precio: string, importe: string) => {
+        doc.text(ref, 30, y, { lineBreak: false });
+        doc.text(desc, 98, y, { lineBreak: false });
+        doc.text(cant, 343, y, { lineBreak: false });
+        doc.text(precio, 395, y, { lineBreak: false });
+        doc.text(importe, 500, y, { lineBreak: false });
+      };
+      filaPdf(440, "Artículo", "Descripción", "Cantidad", "Precio", "Importe");
+      filaPdf(460, "0107091840005", "245/70X17.5 HANKOOK AH35 136M", "4", "248,45", "993,80");
+      filaPdf(480, "0119090430001", "315/80X22.5 SAILUN SDR1 156L", "2", "234,99", "469,98");
+      filaPdf(500, "0107099000009", "10 EUR DTO UD HANKOOK", "-4", "10", "-40,00");
+      filaPdf(520, "4102999990093", "S.I.Gestión de NFU Cat.D1T", "6", "6,05", "36,30");
+      filaPdf(540, "", "TALLER ALBERT", "0", "0", "0,00");
+      doc.text("Importe Bruto:", 385, 560, { lineBreak: false });
+      doc.text("1.423,78", 500, 560, { lineBreak: false });
+      doc.end();
+      return listo;
+    }
+
+    it("al subir el original, las líneas se reescriben con las del papel", async () => {
+      // Como llega de un correo aplanado: una línea sola, con un importe por
+      // cantidad y los artículos amontonados en la descripción.
+      const pedido = await crearPedido(4, {
+        lineas: [{ descripcionProveedor: "4.00 245/70X17.5 HANKOOK AH35 136M 248.45 2.00 315/80X22.5 SAILUN SDR1 156L 234.99", cantidadPedida: 210.62 }],
+      });
+      const { albaran } = await crearAlbaran(pedido, 210.62);
+      expect(albaran.lineas).toHaveLength(1);
+
+      const subida = await subirOriginal(albaran.id, await pdfConDosArticulos());
+      expect(subida.status, JSON.stringify(subida.body)).toBe(201);
+
+      const ficha = await api(`/albaranes/${albaran.id}`, operarioA);
+      expect(ficha.body.lineas).toHaveLength(2);
+      expect(ficha.body.lineas.map((l: any) => [l.descripcionProveedor, l.cantidadExpedida])).toEqual([
+        ["245/70X17.5 HANKOOK AH35 136M", 4],
+        ["315/80X22.5 SAILUN SDR1 156L", 2],
+      ]);
+      // Ni el descuento ni la gestión de NFU son mercancía que contar.
+      expect(JSON.stringify(ficha.body.lineas)).not.toMatch(/DTO|NFU/);
+
+      // Y el PEDIDO se arregla con el mismo papel: el amasijo fuera, y sus
+      // líneas de verdad dentro, con lo expedido por pedido mientras no se
+      // sepa otra cosa.
+      const fichaPedido = await api(`/pedidos/${pedido.pedido.id}`, gestorA);
+      expect(fichaPedido.body.lineas.map((l: any) => [l.descripcionProveedor, l.cantidadPedida, l.cantidadExpedida])).toEqual([
+        ["245/70X17.5 HANKOOK AH35 136M", 4, 4],
+        ["315/80X22.5 SAILUN SDR1 156L", 2, 2],
+      ]);
+      expect(JSON.stringify(fichaPedido.body.lineas)).not.toMatch(/211\.28|210,62|248\.45/);
+      // Las líneas del albarán quedan enganchadas a las del pedido.
+      expect(ficha.body.lineas.every((l: any) => l.cantidadPedida !== null)).toBe(true);
+      // Y queda dicho en el histórico qué se ha hecho.
+      expect(ficha.body.eventos.map((e: any) => e.tipo)).toContain("LINEAS_RELEIDAS");
+      expect(ficha.body.eventos.find((e: any) => e.tipo === "LINEAS_RELEIDAS").descripcion).toMatch(/1 → 2/);
+    });
+
+    it("un pedido legible NO se toca: que el albarán traiga sólo una parte es lo normal", async () => {
+      const pedido = await crearPedido(4, {
+        lineas: [
+          { descripcionProveedor: "245/70X17.5 HANKOOK AH35 136M", cantidadPedida: 4, precioUnitarioCentimos: 24845 },
+          { descripcionProveedor: "OTRO NEUMATICO QUE NO VIENE EN ESTE ALBARAN", cantidadPedida: 6, precioUnitarioCentimos: 20000 },
+        ],
+      });
+      const r = await api(`/pedidos/${pedido.pedido.id}/albaranes`, gestorA, {
+        method: "POST",
+        body: { numeroProveedor: numeroUnico("20285"), fechaExpedicion: "2026-09-24", lineas: [{ pedidoLineaId: pedido.lineas[0].id, cantidadExpedida: 4 }] },
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(201);
+      const albaran = r.body.albaranes[r.body.albaranes.length - 1];
+
+      await subirOriginal(albaran.id, await pdfConDosArticulos());
+
+      const fichaPedido = await api(`/pedidos/${pedido.pedido.id}`, gestorA);
+      // Las dos líneas del pedido siguen ahí: la que no viene en el albarán
+      // está pendiente de expedir, no sobra.
+      expect(fichaPedido.body.lineas).toHaveLength(2);
+      expect(fichaPedido.body.lineas.map((l: any) => l.descripcionProveedor)).toContain("OTRO NEUMATICO QUE NO VIENE EN ESTE ALBARAN");
+      // Y del albarán, la línea que el papel trae de más entra sin pedido.
+      const ficha = await api(`/albaranes/${albaran.id}`, gestorA);
+      expect(ficha.body.lineas).toHaveLength(2);
+      expect(ficha.body.lineas.filter((l: any) => l.cantidadPedida === null)).toHaveLength(1);
+    });
+
+    it("lo ya recibido no se reescribe nunca: para eso está la rectificación", async () => {
+      const pedido = await crearPedido(4);
+      const { albaran } = await crearAlbaran(pedido, 4);
+      const r = await api(`/albaranes/${albaran.id}/recepcion`, operarioA, { method: "POST", body: { resultado: "OK" } });
+      expect(r.status).toBe(201);
+
+      const subida = await subirOriginal(albaran.id, await pdfConDosArticulos());
+      expect(subida.status).toBe(201); // el original se guarda igual
+
+      const releer = await api(`/albaranes/${albaran.id}/lineas/releer`, gestorA, { method: "POST" });
+      expect(releer.status).toBe(409);
+      expect(releer.body.code).toBe("ALBARAN_YA_RECIBIDO");
+      // Y las líneas siguen como estaban.
+      expect((await api(`/albaranes/${albaran.id}`, operarioA)).body.lineas).toHaveLength(1);
+    });
+
+    it("un PDF del que no sale mercancía no toca lo que hay", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      await subirOriginal(albaran.id, await pdfDePrueba("Esto no es un albarán de nadie"));
+
+      const releer = await api(`/albaranes/${albaran.id}/lineas/releer`, gestorA, { method: "POST" });
+      expect(releer.status).toBe(422);
+      expect(releer.body.code).toBe("PDF_SIN_LINEAS");
+      expect((await api(`/albaranes/${albaran.id}`, operarioA)).body.lineas).toHaveLength(1);
+    });
+
+    it("sin PDF guardado no hay nada que releer", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      const releer = await api(`/albaranes/${albaran.id}/lineas/releer`, gestorA, { method: "POST" });
+      expect(releer.status).toBe(409);
+      expect(releer.body.code).toBe("SIN_ORIGINAL");
+    });
+
+    it("el operario del muelle no reescribe líneas: eso es del gestor", async () => {
+      const pedido = await crearPedido(2);
+      const { albaran } = await crearAlbaran(pedido, 2);
+      const r = await api(`/albaranes/${albaran.id}/lineas/releer`, operarioA, { method: "POST" });
+      expect(r.status).toBe(403);
+    });
+  });
 
   describe("quién recibe la mercancía", () => {
     const alta = (nombre: string, pin: string, centroId: string | null = null) =>
@@ -1098,11 +1243,14 @@ describe.skipIf(!RUN)("Recepciones · circuito manual contra PostgreSQL", () => 
     it("una recepción con incidencia no se avisa: eso se cuenta a mano", async () => {
       await api("/avisos/config", gestorA, { method: "PUT", body: { activado: true } });
       const pedido = await crearPedido(2);
-      const { albaran, linea } = await crearAlbaran(pedido, 2);
+      const { albaran } = await crearAlbaran(pedido, 2);
       await subirOriginal(albaran.id, await pdfAlbaranSoledad("PEDRO+610473077"));
+      // Subir el original reescribe las líneas con las del papel: se vuelven a
+      // pedir, que las de antes ya no existen.
+      const lineas = (await api(`/albaranes/${albaran.id}`, operarioA)).body.lineas;
       const r = await api(`/albaranes/${albaran.id}/recepcion`, operarioA, {
         method: "POST",
-        body: { resultado: "CON_INCIDENCIA", lineas: [{ albaranLineaId: linea.id, cantidadRecibida: 1, incidencia: { tipo: "FALTA_MERCANCIA" } }] },
+        body: { resultado: "CON_INCIDENCIA", lineas: [{ albaranLineaId: lineas[0].id, cantidadRecibida: 1, incidencia: { tipo: "FALTA_MERCANCIA" } }] },
       });
       expect(r.status, JSON.stringify(r.body)).toBe(201);
       expect(r.body.incidencias.length).toBeGreaterThan(0);

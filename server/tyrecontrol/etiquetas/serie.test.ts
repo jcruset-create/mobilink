@@ -96,6 +96,35 @@ describe("qué se hace con lo que se lee", () => {
   });
 });
 
+describe("lo que da el lector de etiquetas, que no trae el flanco entero", () => {
+  // El lector de etiquetas devuelve el número y su confianza, sin `dudosos`.
+  // La clasificación tiene que funcionar igual: es la forma mínima.
+  it("un número claro de una pegatina queda detectado", () => {
+    const r = clasificarLectura({ numero_serie: "6162121986", aviso: null }, 0.93);
+    expect(r.serie).toBe("6162121986");
+    expect(r.estado).toBe("detectada");
+    expect(r.confianza).toBe(0.93);
+  });
+
+  it("si el modelo duda de una cifra, va a revisar pero NO se pierde", () => {
+    const r = clasificarLectura({ numero_serie: "6162121986", aviso: null }, 0.4);
+    expect(r.serie).toBe("6162121986");
+    expect(r.estado).toBe("revisar");
+    expect(r.dudoso).toBe(true);
+  });
+
+  it("sin confianza declarada se acepta: no todos los lectores la dan", () => {
+    const r = clasificarLectura({ numero_serie: "6162121986", aviso: null });
+    expect(r.estado).toBe("detectada");
+  });
+
+  it("la pegatina tapada es un dato, con su motivo", () => {
+    const r = clasificarLectura({ numero_serie: null, aviso: "La etiqueta está arrugada" }, null);
+    expect(r.estado).toBe("no_detectada");
+    expect(r.aviso).toBe("La etiqueta está arrugada");
+  });
+});
+
 describe("la misma rueda fotografiada dos veces", () => {
   it("se detecta el número repetido", () => {
     const rep = seriesRepetidas(["AAA111", "BBB222", "AAA111"]);

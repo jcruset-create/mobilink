@@ -1,4 +1,4 @@
-import { CONFIANZA_MINIMA, type PropuestaFlanco } from "../flanco/flanco.ts";
+import { CONFIANZA_MINIMA } from "../flanco/flanco.ts";
 
 /**
  * Qué hacer con el número de serie que se lee de la foto de una goma nueva.
@@ -73,14 +73,24 @@ export interface LecturaSerie {
 }
 
 /**
- * Traduce la propuesta del lector de flanco a lo que se guarda de la foto.
+ * Lo mínimo que necesita este módulo de un lector, sea cual sea.
  *
- * Del flanco solo interesa el número de serie: este módulo no busca en el
- * catálogo, no propone marca ni medida y no mira el DOT. Etiquetar es pegar un
- * número en una rueda, nada más.
+ * Lo cumplen tanto la propuesta del lector de flanco —que trae el flanco
+ * entero— como la lectura del lector de etiquetas, que trae solo el número.
+ * Aquí solo interesa el número: no se busca en el catálogo, no se propone
+ * marca ni medida y no se mira el DOT. Etiquetar es pegar un número en una
+ * rueda, nada más.
  */
+export interface LecturaDeUnLector {
+  numero_serie: string | null;
+  /** Campos que el lector leyó con poca seguridad, si los marca. */
+  dudosos?: string[];
+  aviso?: string | null;
+}
+
+/** Traduce lo que devuelve un lector a lo que se guarda de la foto. */
 export function clasificarLectura(
-  p: PropuestaFlanco | null | undefined,
+  p: LecturaDeUnLector | null | undefined,
   /**
    * La confianza del lector, si se conoce. La propuesta del flanco no la
    * arrastra —la aplica y la tira—, así que hoy llega vacía y la columna

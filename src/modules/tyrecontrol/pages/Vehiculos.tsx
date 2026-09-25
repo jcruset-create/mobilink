@@ -14,7 +14,9 @@ import type {
 } from "../types";
 import { ESTADO_WEBFLEET_LABELS, ESTADO_WEBFLEET_BADGE, ESTADO_WEBFLEET_PUNTO } from "../types";
 import { enlacesTelematica } from "../services/conciliacion";
-import { estadoUbicacion, etiquetaBase, ubicacionDeVehiculo } from "../services/presenciaVista";
+import {
+  coordenadasDeVehiculo, enlaceDeMapa, estadoUbicacion, etiquetaBase, ubicacionDeVehiculo,
+} from "../services/presenciaVista";
 import {
   conectoresDe, etiquetaTelematica, porVehiculo, type EnlaceTelematica,
 } from "../services/telematicaVehiculo";
@@ -407,6 +409,38 @@ export default function Vehiculos() {
                   {" pendiente"}
                 </span>
                 <div className="ml-auto flex gap-2">
+                  {/*
+                    Dónde está, en el mapa. Aquí es donde más falta hace: a
+                    estos vehículos les falta la marca y el modelo, y para
+                    ponérselos hay que IR A VERLOS. La chapa de al lado dice en
+                    qué base, esto dice en qué punto exacto del patio.
+
+                    Sin coordenada no hay botón, por lo mismo que en la ficha:
+                    un mapa que señala el sitio equivocado manda a alguien a
+                    buscar el camión donde no está.
+                  */}
+                  {(() => {
+                    const pos = coordenadasDeVehiculo({
+                      presencia: presencias.get(v.id),
+                      webfleet: estados.get(v.id),
+                    });
+                    if (!pos) return null;
+                    return (
+                      <a
+                        href={enlaceDeMapa(pos)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={`${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}${
+                          pos.cuando
+                            ? ` · posición del ${new Date(pos.cuando).toLocaleString("es-ES")}`
+                            : ""
+                        }`}
+                        className="rounded border border-sky-600 px-2 py-1 text-[12px] font-bold text-sky-300 hover:bg-sky-500/10"
+                      >
+                        🗺 Mapa
+                      </a>
+                    );
+                  })()}
                   <button
                     onClick={() => navigate(`/tyrecontrol/vehiculos/${v.id}`)}
                     className="rounded border border-slate-600 px-2 py-1 text-[12px] text-slate-200 hover:bg-slate-700"
@@ -620,6 +654,30 @@ export default function Vehiculos() {
               <td className={tdCls}>
                 <div className="flex gap-2">
                   <button onClick={() => navigate(`/tyrecontrol/vehiculos/${v.id}`)} className="text-sky-300 hover:underline">Ficha</button>
+                  {/* El mismo mapa que en la ficha y en el aviso de arriba: si
+                      se sabe dónde está, se puede ir a verlo sin abrir nada. */}
+                  {(() => {
+                    const pos = coordenadasDeVehiculo({
+                      presencia: presencias.get(v.id),
+                      webfleet: estados.get(v.id),
+                    });
+                    if (!pos) return null;
+                    return (
+                      <a
+                        href={enlaceDeMapa(pos)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={`${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}${
+                          pos.cuando
+                            ? ` · posición del ${new Date(pos.cuando).toLocaleString("es-ES")}`
+                            : ""
+                        }`}
+                        className="text-sky-300 hover:underline"
+                      >
+                        Mapa
+                      </a>
+                    );
+                  })()}
                   <button onClick={() => setEditando({ vehiculo: v })} className="text-slate-300 hover:underline">Editar</button>
                   <button onClick={async () => { await actualizarVehiculo(v.id, { activo: !v.activo }); await cargar(); }} className="text-amber-300 hover:underline">{v.activo ? "Desactivar" : "Activar"}</button>
                 </div>

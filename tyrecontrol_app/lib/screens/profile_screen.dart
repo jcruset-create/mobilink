@@ -35,8 +35,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final empresa = _perfil?['empresa'] is Map ? (_perfil!['empresa'] as Map)['nombre'] : null;
-    final body = Padding(
-      padding: const EdgeInsets.all(16),
+    // Con scroll: la pantalla se escribió mirando una tablet, donde todo cabe.
+    // En un móvil no cabe, y una Column pelada no se puede arrastrar: lo de
+    // abajo simplemente no se ve.
+    final body = SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

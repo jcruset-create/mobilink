@@ -1,5 +1,13 @@
 import { apiFetch } from "../modules/apiFetch";
-import { useEffect, useRef, useState } from "react";
+import { useRecepcionesPendientes } from "../modules/useRecepcionesPendientes";
+import {
+  esperaLegible,
+  horaDeRecepcion,
+  idsDeTrabajosConCita,
+  minutosEsperando,
+  recepcionesQueSiguenEsperando,
+} from "../modules/recepcionVehiculo";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import {
@@ -615,6 +623,13 @@ export default function AgendaView({
   onClose,
   dark = false,
 }: Props) {
+  /*
+   * Vehículos recibidos en el patio y sin validar. Se piden aquí, igual que en
+   * Operativo 2, en vez de bajarlos por props desde SeaTarragonaV1.
+   */
+  const { recepciones: recepcionesPendientes } = useRecepcionesPendientes(
+    selectedWorkshopId as string
+  );
   const safeSelectedWorkshopId = normalizeWorkshopId(selectedWorkshopId);
   const selectedWorkshop = getWorkshopById(safeSelectedWorkshopId);
 
@@ -668,6 +683,18 @@ export default function AgendaView({
 
   const scheduledJobsForSelectedWorkshop = scheduledJobs.filter(
     belongsToSelectedWorkshop
+  );
+
+  /*
+   * Los trabajos que ya tiene pintados su cita.
+   *
+   * Se mira sobre TODAS las citas del taller y no solo las del día pintado: una
+   * cita que llegó se dibuja en su hora de llegada, que puede no ser el día
+   * para el que se pidió.
+   */
+  const trabajosConCita = useMemo(
+    () => idsDeTrabajosConCita(scheduledJobsForSelectedWorkshop),
+    [scheduledJobsForSelectedWorkshop]
   );
 
   const [weekOffset, setWeekOffset] = useState(0);
@@ -2226,16 +2253,68 @@ appendLog(
               // grupo (y por tanto ancho) con cualquier cita que se vea a la vez.
               const endOfDayStr = minutesToTime(getDayEnd(day.index, day.date));
               const virtualQueueJobs = day.date === todayKey
-                ? queueJobs.map((qj) => ({
-                    ...qj,
-                    id: -Math.abs(qj.id) - 1,
-                    _queueJobRef: qj,
-                    startTime: nowTimeStr,
-                    endTime: endOfDayStr,
-                  }))
+                ? queueJobs
+                    // Los que ya pinta su cita no se pintan otra vez. Ver
+                    // `idsDeTrabajosConCita`: el mismo vehículo salía dos
+                    // veces, como cita llegada y como tarjeta de cola.
+                    .filter((qj) => !trabajosConCita.has(qj.id))
+                    .map((qj) => ({
+                      ...qj,
+                      id: -Math.abs(qj.id) - 1,
+                      _queueJobRef: qj,
+                      startTime: nowTimeStr,
+                      endTime: endOfDayStr,
+                    }))
                 : [];
 
-              const laidOutJobs = layoutOverlappingJobs([...dayJobs, ...virtualQueueJobs] as any[]);
+              /*
+               * Recepciones del patio, pintadas en la LÍNEA DE AHORA.
+               *
+               * No en la hora en que llegaron, que es como estaban: una
+               * recepción pendiente no es un apunte de lo que pasó, es trabajo
+               * por hacer. Anclada a su hora se quedaba quieta mientras el día
+               * avanzaba, y a media tarde había coches esperando en el patio
+               * dibujados a las nueve de la mañana, entre citas ya terminadas,
+               * donde no los miraba nadie.
+               *
+               * Así que van donde va el trabajo pendiente —con la cola, en la
+               * hora actual— y avanzan con el reloj hasta que alguien las
+               * valida. `currentClock` late cada segundo, así que se mueven
+               * solas sin pedirle nada al servidor.
+               */
+              const virtualRecepciones = recepcionesQueSiguenEsperando(
+                recepcionesPendientes,
+                day.date,
+                todayKey
+              ).map((r) => {
+                const inicio = Math.max(timeToMinutes(nowTimeStr), dayStart);
+                return {
+                  id: -Math.abs(r.id) - 1_000_000, // fuera del rango de la cola
+                  workshopId: r.workshopId ?? null,
+                  area: r.area ?? "mecanica",
+                  plate: r.matricula,
+                  _recepcionRef: r,
+                  startTime: minutesToTime(inicio),
+                  /*
+                   * Dura lo que una cita cualquiera sin hora de fin.
+                   *
+                   * Una recepción no tiene duración —nadie sabe aún qué hay
+                   * que hacerle—, y con el final del día, que es lo que usa la
+                   * cola, salía una pastilla estrecha y aplastada que no se
+                   * leía. Se pidió que se vean igual que las citas, así que
+                   * ocupan lo mismo que la cita por defecto.
+                   */
+                  endTime: minutesToTime(
+                    Math.min(inicio + DEFAULT_ESTIMATED_MINUTES, getDayEnd(day.index))
+                  ),
+                };
+              });
+
+              const laidOutJobs = layoutOverlappingJobs([
+                ...dayJobs,
+                ...virtualQueueJobs,
+                ...virtualRecepciones,
+              ] as any[]);
 
               const now = new Date();
               const nowMinutes = now.getHours() * 60 + now.getMinutes();
@@ -2332,6 +2411,71 @@ appendLog(
                   )}
 
                   {laidOutJobs.map(({ job, column, columns }) => {
+                    // ── Recepción del patio, sin validar ──────────────────
+                    if ((job as any)._recepcionRef) {
+                      const r = (job as any)._recepcionRef;
+                      const hora = horaDeRecepcion(r.creadaAtMs);
+                      // Lo que lleva esperando en el patio. Es el dato que
+                      // decide si hay que correr, y el que se perdía al
+                      // quedarse la tarjeta clavada en su hora de llegada.
+                      const espera = esperaLegible(
+                        minutosEsperando(r.creadaAtMs, currentClock.getTime())
+                      );
+                      const inicio = Math.max(timeToMinutes(job.startTime), dayStart);
+                      const fin = Math.min(timeToMinutes(job.endTime), getDayEnd(day.index));
+                      const top = ((inicio - dayStart) / SLOT_MINUTES) * SLOT_HEIGHT;
+                      // El mismo alto que una cita: se pidió que no se
+                      // distingan por la forma, solo por el rótulo.
+                      const height = Math.max(
+                        50,
+                        ((fin - inicio) / SLOT_MINUTES) * SLOT_HEIGHT - 6
+                      );
+                      const width = 100 / columns;
+                      const left = column * width;
+
+                      return (
+                        <div
+                          key={`recepcion-${r.id}`}
+                          title={`🚗 Recibido en el patio · ${r.matricula}${
+                            r.clienteNombre ? ` · ${r.clienteNombre}` : ""
+                          }\nRecibido por ${r.operarioNombre} a las ${hora}\nEsperando desde hace ${espera}\nPendiente de validar`}
+                          /*
+                           * Pintada como una cita normal, con el color de su
+                           * área. Antes iba en ámbar y con el borde de puntos,
+                           * y quien mira la agenda no necesita que se lo
+                           * digan dos veces: para eso está el rótulo.
+                           */
+                          className={`absolute z-40 cursor-default overflow-hidden rounded-xl border-2 p-2 text-sm font-semibold shadow-md ${getSolidAreaClass(
+                            (r.area ?? "mecanica") as AreaKey
+                          )}`}
+                          style={{
+                            top,
+                            height,
+                            left: `calc(${left}% + 4px)`,
+                            width: `calc(${width}% - 8px)`,
+                          }}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="truncate uppercase">
+                              {r.operacionLabel || "Sin operación"}
+                            </div>
+                            <span className="shrink-0 rounded-full bg-white/90 px-2 py-0.5 text-[9px] font-black uppercase text-slate-800">
+                              Recepción
+                            </span>
+                          </div>
+                          <div className="truncate">{r.matricula}</div>
+                          <div className="text-xs font-normal opacity-90">
+                            🚗 {hora} · esperando {espera}
+                          </div>
+                          {r.kilometros ? (
+                            <div className="truncate text-xs font-normal opacity-90">
+                              {r.kilometros.toLocaleString("es-ES")} km
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    }
+
                     // ── Trabajo en cola virtual ───────────────────────────
                     if ((job as any)._queueJobRef) {
                       const qj: QueueJob = (job as any)._queueJobRef;

@@ -1,7 +1,7 @@
 name: taller_app
 description: "WorkPlanner Taller — tareas del técnico en la tablet del taller"
 publish_to: "none"
-version: 0.20.6+270
+version: 0.22.3+287
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -25,3 +25,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    # Logotipo de la cabecera. Va con transparencia y el texto en blanco: está
+    # hecho para el fondo oscuro de la app, no sirve sobre claro.
+    - assets/logo-workplanner.png

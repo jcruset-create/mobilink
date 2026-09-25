@@ -37,6 +37,15 @@ export const serieEditable = (f: Pick<FotoEtiqueta, "serie_confirmada" | "serie_
 export const imprimible = (f: Pick<FotoEtiqueta, "estado" | "serie_confirmada">): boolean =>
   (f.estado === "confirmada" || f.estado === "impresa") && !!f.serie_confirmada?.trim();
 
+/**
+ * Las fotos que todavía no ha leído nadie: la tablet las sube y las deja así.
+ *
+ * Vive aquí, y no junto al analizador, porque es una decisión pura y hay que
+ * poder probarla sin levantar el cliente de Supabase.
+ */
+export const sinLeer = <T extends Pick<FotoEtiqueta, "estado">>(fotos: T[]): T[] =>
+  fotos.filter((f) => f.estado === "pendiente");
+
 const POR_REVISAR: EstadoFotoEtiqueta[] = ["pendiente", "detectada", "revisar", "no_detectada"];
 export const porRevisar = (f: Pick<FotoEtiqueta, "estado">): boolean =>
   POR_REVISAR.includes(f.estado);

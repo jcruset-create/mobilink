@@ -185,3 +185,32 @@ export const crearVehiculo = (b: Record<string, unknown>) =>
   post<{ ok: true; vehiculo: { id: string; matricula: string } }>("/crear-vehiculo", b);
 export const darDeBaja = (b: Record<string, unknown>) =>
   post<{ ok: true; matricula: string; neumaticosMontados: number; aviso: string | null }>("/dar-de-baja", b);
+
+/** Un número de flota que el proveedor dice y TyreControl no tiene, o tiene distinto. */
+export interface CambioNumeroFlota {
+  vehiculoId: string;
+  matricula: string;
+  nombreProveedor: string;
+  numeroActual: string | null;
+  numeroPropuesto: string;
+  /** `conflicto` = ya tenía otro número y se le va a pisar. */
+  tipo: "rellena" | "conflicto";
+}
+
+export function numerosDeFlota(params: {
+  empresaId?: string;
+  connectorKey: string;
+  accountKey: string;
+}) {
+  const q = new URLSearchParams({ connector: params.connectorKey, cuenta: params.accountKey });
+  if (params.empresaId) q.set("empresa", params.empresaId);
+  return pedir<{ cambios: CambioNumeroFlota[] }>(`/numeros-flota?${q.toString()}`);
+}
+
+export const aplicarNumerosDeFlota = (b: Record<string, unknown>) =>
+  post<{
+    ok: true;
+    aplicados: CambioNumeroFlota[];
+    fallidos: Array<{ vehiculoId: string; error: string }>;
+    omitidos: string[];
+  }>("/numeros-flota/aplicar", b);

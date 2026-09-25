@@ -258,3 +258,57 @@ El `ALTER TABLE` de las columnas nuevas estaba puesto **antes** de que
 `cash_invoice_scans` se creara, unas líneas más abajo en el mismo fichero. El
 typecheck no dice nada de eso; lo cazó la primera ejecución contra PostgreSQL
 de verdad, y habría reventado el arranque del servidor en una base nueva.
+
+
+---
+
+## 12. Corrección importante (19/09/2026): el NIF NO distingue
+
+Al estudiar un albarán del taller salió algo que invalida la primera
+recomendación de este documento:
+
+| Papel | Nombre impreso | NIF |
+|---|---|---|
+| Ticket del surtidor | `E.S CONFORTAUTO` | **A43044379** |
+| Albarán del taller | `COMERCIAL SEA, S.A.` | **A43044379** |
+
+**Son la misma sociedad.** La señal que este documento daba por más fuerte —el
+CIF del emisor— es exactamente la que **no** sirve aquí: una regla
+`CIF_EMISOR = A43044379 → Gasolinera` se habría llevado TODOS los albaranes del
+taller a la gasolinera, y el descuadre por sección habría aparecido en el cierre
+sin nada que lo explicara.
+
+Lo que sí distingue en este taller:
+
+- **La serie del documento.** Albarán del taller `B2_0004524`, ticket del
+  surtidor `T5-155`. Limpio y sin solape. **Es la regla recomendada.**
+- **El nombre comercial**, `E.S CONFORTAUTO`, que no aparece en el albarán.
+
+La lección general, que es la que vale para el siguiente taller: **el NIF
+identifica a la SOCIEDAD, no al negocio.** Solo distingue cuando cada negocio
+factura con una sociedad distinta, y compartir sociedad entre dos secciones de
+la misma casa es lo normal, no la excepción.
+
+La pantalla de Configuración lo avisa ahora, y el ejemplo del campo NIF es uno
+inventado a propósito: poner el suyo invitaba a crear justo la regla mala.
+
+## 13. El albarán también es un justificante
+
+El mismo documento destapó otra cosa. El esquema del extractor decía:
+
+- `es_factura`: «true **solo** si el documento es una factura o un ticket de venta»
+- `factura.numero`: «**NO** es el número de pedido, **ni el de albarán**»
+
+Así que el modelo hizo lo correcto: devolvió `es_factura: false` y el número a
+null. **El fallo era de la regla, no del modelo** — y conviene decirlo así,
+porque la reacción fácil habría sido «el modelo no lee bien» y tocar el sitio
+equivocado.
+
+En un taller **se cobra contra el albarán a menudo** y la factura se emite
+después. Ahora `es_factura` pregunta lo que de verdad importa —¿esto justifica
+una operación de dinero?— y el número es el del documento, se llame como se
+llame.
+
+Y el daño no era el texto del aviso: `NO_ES_FACTURA` es **grave**, y un aviso
+grave apaga la preselección de la forma de cobro y de la sección. Un aviso que
+salta cuando no toca es un aviso que la gente aprende a saltarse.

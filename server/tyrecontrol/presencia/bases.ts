@@ -22,6 +22,8 @@ import type {
 } from "../../integration-hub/application/services/BasePresenceService.ts";
 import type { GeoZonaBase } from "../../integration-hub/domain/presencia.ts";
 import { filaDePresencia, type Anterior } from "./filas.ts";
+import { decidirEstancia, filaNueva, type EstanciaAbierta } from "./historico.ts";
+import { INTERVALO_MIN } from "./cadencia.ts";
 
 /**
  * Las bases de la empresa: delegaciones CON geo-zona definida.
@@ -142,5 +144,93 @@ export async function guardarPresencia(filas: FilaPresencia[]): Promise<void> {
       .from("tc_vehiculo_presencia_base")
       .upsert(upsert.slice(i, i + LOTE), { onConflict: "vehiculo_id" });
     if (error) throw new Error(`No se pudo guardar la presencia: ${error.message}`);
+  }
+
+  // Y el histórico. Aparte y detrás, para que un fallo aquí no se lleve por
+  // delante la pantalla del ahora, que es la que alguien está mirando.
+  try {
+    await guardarHistorico(empresaId, filas, ahora);
+  } catch (e: any) {
+    console.warn("[presencia-bases] no se pudo guardar el histórico:", e?.message ?? e);
+  }
+}
+
+/**
+ * Anota el barrido en el histórico de estancias.
+ *
+ * Una fila por ESTANCIA, no por barrido: mientras el vehículo siga en el mismo
+ * sitio y en el mismo estado se alarga la abierta. El porqué de cada regla
+ * está en `historico.ts` y en la migración.
+ *
+ * Las lecturas van por empresa y paginadas, igual que la presencia: un `.in()`
+ * con 751 identificadores viaja en la URL y la pasarela lo rechaza. Esa lección
+ * ya costó un barrido entero en producción.
+ */
+export async function guardarHistorico(
+  empresaId: string,
+  filas: FilaPresencia[],
+  ahora: string,
+): Promise<void> {
+  if (filas.length === 0) return;
+
+  const abiertas = new Map<string, EstanciaAbierta>();
+  for (let desde = 0; ; desde += LOTE) {
+    const { data, error } = await supabase
+      .from("tc_vehiculo_presencia_historico")
+      .select("id, vehiculo_id, estado, delegacion_id, visto_at")
+      .eq("empresa_id", empresaId)
+      .is("hasta", null)
+      .range(desde, desde + LOTE - 1);
+    if (error) throw new Error(`No se pudo leer el histórico: ${error.message}`);
+    const pagina = data ?? [];
+    for (const p of pagina) abiertas.set(String((p as any).vehiculo_id), p as any);
+    if (pagina.length < LOTE) break;
+  }
+
+  const extender: string[] = [];
+  const cerrar: string[] = [];
+  const abrir: Array<ReturnType<typeof filaNueva>> = [];
+
+  for (const f of filas) {
+    const visto = {
+      vehiculoId: f.vehiculoId,
+      empresaId,
+      estado: f.estado,
+      delegacionId: f.baseId ?? null,
+    };
+    const d = decidirEstancia(visto, abiertas.get(f.vehiculoId), ahora, INTERVALO_MIN);
+    if (d.accion === "extender") extender.push(d.id);
+    else if (d.accion === "abrir") abrir.push(filaNueva(visto, ahora));
+    else {
+      cerrar.push(d.cerrar);
+      abrir.push(filaNueva(visto, ahora));
+    }
+  }
+
+  // En un barrido normal casi todos siguen donde estaban, así que `extender`
+  // trae ~700 identificadores. Van en UNA llamada, no en 700: los arrays de
+  // una RPC viajan en el cuerpo, no en la URL, y eso aquí ya importa.
+  for (let i = 0; i < cerrar.length; i += LOTE) {
+    const { error } = await supabase.rpc("tc_presencia_hist_cerrar", {
+      p_ids: cerrar.slice(i, i + LOTE), p_ahora: ahora,
+    });
+    if (error) throw new Error(`No se pudo cerrar una estancia: ${error.message}`);
+  }
+
+  // Cerrar ANTES de abrir: el índice único deja una sola estancia abierta por
+  // vehículo, así que abrir primero fallaría. Que la base lo impida es
+  // deliberado; ver la migración.
+  for (let i = 0; i < abrir.length; i += LOTE) {
+    const { error } = await supabase
+      .from("tc_vehiculo_presencia_historico")
+      .insert(abrir.slice(i, i + LOTE));
+    if (error) throw new Error(`No se pudo abrir una estancia: ${error.message}`);
+  }
+
+  for (let i = 0; i < extender.length; i += LOTE) {
+    const { error } = await supabase.rpc("tc_presencia_hist_extender", {
+      p_ids: extender.slice(i, i + LOTE), p_visto_at: ahora,
+    });
+    if (error) throw new Error(`No se pudo alargar una estancia: ${error.message}`);
   }
 }

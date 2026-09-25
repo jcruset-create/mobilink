@@ -15,8 +15,10 @@
       display: flex; flex-direction: column; align-items: center;
       padding: 24px 16px 48px;
     }
-    header { text-align: center; margin: 12px 0 28px; }
-    header img { height: 54px; }
+    header { text-align: center; margin: 12px 0 28px; width: 100%; max-width: 560px; }
+    /* El logo lleva el nombre y el reclamo dentro, asi que manda el ancho y no
+       una altura fija: con altura fija se salia de la pantalla en un movil. */
+    header img { width: 100%; max-width: 420px; height: auto; display: block; margin: 0 auto; }
     header .sub { color: #94a3b8; font-size: 14px; margin-top: 8px; }
     .grid { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 16px; }
     .card {
@@ -27,7 +29,12 @@
       width: 54px; height: 54px; border-radius: 14px; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
       font-size: 26px; font-weight: 800;
+      overflow: hidden;
     }
+    /* El icono real de la APK. Si el fichero faltara, en su sitio se queda
+       la inicial de siempre: una tarjeta con el hueco roto confunde mas que
+       una letra. */
+    .icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .icon.assist { background: #1e3a8a22; color: #60a5fa; }
     .icon.lite { background: #8b5cf622; color: #a78bfa; }
     .fallo { margin: 4px 0 0; font-size: 12px; color: #fbbf24; }
@@ -61,7 +68,7 @@
 </head>
 <body>
   <header>
-    <img src="/logo_horizontal.png" alt="Mobilink" />
+    <img src="/logo_descargas.png" alt="Mobilink Descargas — apps, APK y actualizaciones" />
     <div class="sub">Descarga de aplicaciones · Android</div>
   </header>
 
@@ -79,14 +86,29 @@
       });
     }
 
+    // "ico" es el icono de lanzador de la propia APK, copiado de
+    // <app>/android/.../mipmap-xxxhdpi/ic_launcher.png. La inicial se queda
+    // como reserva por si el fichero no llegara a estar.
     var META = {
-      assist: { cls: "assist", ini: "A", desc: "Asistencias en carretera para operarios." },
-      "assist-lite": { cls: "lite", ini: "L", desc: "Asistencias de la central para talleres colaboradores." },
-      tyrecontrol: { cls: "tyre", ini: "T", desc: "Revisión de neumáticos en campo." },
-      stockflow: { cls: "stock", ini: "S", desc: "Gestión de traspasos de almacén." },
-      safety: { cls: "safety", ini: "S", desc: "EPIs, documentos y formación para técnicos." },
-      taller: { cls: "taller", ini: "W", desc: "Tareas del técnico en la tablet del taller." }
+      assist: { cls: "assist", ini: "A", ico: "assist", desc: "Asistencias en carretera para operarios." },
+      "assist-lite": { cls: "lite", ini: "L", ico: "assist-lite", desc: "Asistencias de la central para talleres colaboradores." },
+      tyrecontrol: { cls: "tyre", ini: "T", ico: "tyrecontrol", desc: "Revisión de neumáticos en campo." },
+      stockflow: { cls: "stock", ini: "S", ico: "stockflow", desc: "Gestión de traspasos de almacén." },
+      safety: { cls: "safety", ini: "S", ico: "safety", desc: "EPIs, documentos y formación para técnicos." },
+      taller: { cls: "taller", ini: "W", ico: "taller", desc: "Tareas del técnico en la tablet del taller." }
     };
+
+    // Se pinta primero la inicial y solo se sustituye por la imagen cuando
+    // esta ha cargado de verdad: asi un icono que falte no deja un hueco con
+    // el simbolo de imagen rota.
+    function pintarIcono(destino, m, etiqueta) {
+      destino.textContent = m.ini;
+      if (!m.ico) return;
+      var img = new Image();
+      img.alt = etiqueta;
+      img.onload = function () { destino.textContent = ""; destino.appendChild(img); };
+      img.src = "/iconos-apk/" + m.ico + ".png";
+    }
     fetch("/api/apps/list")
       .then(function (r) { return r.json(); })
       .then(function (apps) {
@@ -106,12 +128,13 @@
             ? '<p class="fallo">⚠ ' + esc(a.error) + '</p>'
             : "";
           card.innerHTML =
-            '<div class="icon ' + m.cls + '">' + m.ini + '</div>' +
+            '<div class="icon ' + m.cls + '"></div>' +
             '<div class="info"><h2>' + esc(a.label) + '</h2>' +
             '<p class="desc">' + m.desc + '</p>' +
             '<p class="ver">' + (a.version ? "Versión " + esc(a.version) : "") + '</p>' +
             aviso + '</div>' +
             btn;
+          pintarIcono(card.querySelector(".icon"), m, a.label);
           grid.appendChild(card);
         });
       })

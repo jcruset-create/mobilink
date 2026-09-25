@@ -186,7 +186,8 @@ export const confirmarMapeo = (datos: { proveedorId: string; descripcionProveedo
 /* ── Avisos por WhatsApp ─────────────────────────────────────────────────── */
 
 export const estadoAvisos = () => pedir<EstadoAvisos>("/avisos");
-export const guardarConfigAvisos = (activado: boolean) => pedir<{ activado: boolean }>("/avisos/config", json({ activado }, "PUT"));
+export const guardarConfigAvisos = (datos: { activado?: boolean; telefonoRecepcion?: string }) =>
+  pedir<{ activado: boolean; telefonoRecepcion: string | null }>("/avisos/config", json(datos, "PUT"));
 
 /* ── Fase 2: correo del proveedor ────────────────────────────────────────── */
 
@@ -202,7 +203,24 @@ export const importarEml = (archivo: File) => {
 };
 export const listarCorreos = (f: { resultado?: string; tipo?: string }) => pedir<{ correos: Correo[] }>(`/correo${query(f)}`);
 export const fichaCorreo = (id: string) => pedir<{ correo: Correo }>(`/correo/${id}`);
+/** El PDF del albarán de un correo que se quedó sin líneas: se sube y se reprocesa. */
+export const subirAlbaranDelCorreo = (id: string, archivo: File) => {
+  const form = new FormData();
+  form.append("documento", archivo, archivo.name);
+  return pedir<{ correoId: string; resultado: string; motivo: string | null; pedidoNumero: string | null; albaranNumero: string | null }>(
+    `/correo/${id}/albaran-pdf`,
+    { method: "POST", body: form }
+  );
+};
+
 export const reprocesarCorreo = (id: string) =>
   pedir<{ correoId: string; resultado: string; motivo: string | null; pedidoId: string | null; albaranId: string | null }>(`/correo/${id}/reprocesar`, json({}));
 export const descargarOriginal = (albaranId: string, enlace?: string) =>
   pedir<{ documento: FichaAlbaran["documentos"][number] }>(`/albaranes/${albaranId}/original/descargar`, json({ enlace }));
+
+/** Reescribe las líneas del albarán con las que dice su PDF. */
+export const releerLineasDelOriginal = (albaranId: string) =>
+  pedir<{ albaranId: string; numeroProveedor: string; lineasAntes: number; lineasAhora: number; sinPedido: number; avisos: string[] }>(
+    `/albaranes/${albaranId}/lineas/releer`,
+    json({})
+  );

@@ -25,7 +25,7 @@ import {
   inputCls,
 } from "../components/ui";
 import { BuscadorDocumentos } from "./Cobros";
-import { euros, aCentimos, totalLineas } from "../utils/money";
+import { euros, aCentimos, aTextoEditable, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
 import PaymentMethodPicker from "../components/PaymentMethodPicker";
 import Justificantes from "../components/Justificantes";
@@ -215,7 +215,7 @@ export default function Pagos() {
       p.importeCentimos.valor != null &&
       !tocados.has("importe")
     ) {
-      setImporteTexto(euros(p.importeCentimos.valor).replace(" €", ""));
+      setImporteTexto(aTextoEditable(p.importeCentimos.valor));
     }
     if (p.proveedor.estado !== "VACIO" && p.proveedor.valor && !tocados.has("proveedor")) {
       setProveedor(p.proveedor.valor);

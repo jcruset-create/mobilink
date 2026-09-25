@@ -19,6 +19,7 @@ import logoCabecera from "../assets/hub/logo-central-assist-connect-cabecera.png
 import emblemaTyreControl from "../assets/hub/emblema-tyrecontrol.png";
 import { supabase } from "../modules/administracion/services/supabase";
 import { MODULOS_APP, type ModuloApp } from "../modules/administracion/config/modulosApp";
+import { BASES } from "../modules/rutasModulos";
 import { esSuperadmin as resolverSuperadmin, olvidarSuperadmin } from "../modules/superadmin";
 
 // Tarjetas fijas con login interno propio (no dependen de app_usuario_modulos).
@@ -91,23 +92,6 @@ const COLORES: Record<string, { bg: string; text: string }> = {
   therefore: { bg: "bg-sky-500/15", text: "text-sky-400" },
   recepciones: { bg: "bg-emerald-500/15", text: "text-emerald-400" },
   "or-manuales": { bg: "bg-teal-500/15", text: "text-teal-400" },
-};
-
-const BASES: Record<string, string> = {
-  administracion: "/administracion",
-  almacen: "/almacen-neumaticos",
-  tyrecontrol: "/tyrecontrol",
-  "sea-core": "/core",
-  toolcontrol: "/toolcontrol",
-  safety: "/safety",
-  presencia: "/presencia",
-  workplanner: "/workplanner",
-  cash: "/cash",
-  central: "/central",
-  tacografos: "/tacografos",
-  therefore: "/therefore",
-  recepciones: "/recepciones",
-  "or-manuales": "/or-manuales",
 };
 
 function rutaModulo(modulo: string): string {
