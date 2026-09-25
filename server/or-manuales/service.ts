@@ -23,11 +23,13 @@
 import { ErrorOrManuales } from "./errors.ts";
 import * as repo from "./repository.ts";
 import {
+  comprobarBorrado,
   comprobarCierre,
   estadoCalculado,
   progresoDeBloc,
   rangosSolapan,
   siguienteNumeroBloc,
+  validarNumeroBloc,
   validarRango,
   type Progreso,
 } from "./domain/blocs.ts";
@@ -186,10 +188,19 @@ export async function fichaBloc(ctx: Contexto, blocId: string): Promise<FichaBlo
   return { bloc, ors, progreso: progresoDeBloc(ors), entregas, eventos };
 }
 
+/**
+ * Editar el bloc: su responsable, sus observaciones y su NÚMERO.
+ *
+ * El número se puede cambiar porque los blocs se renumeran: se da de alta uno
+ * de prueba, se borra, y el siguiente tiene que poder llamarse «001». Lo que
+ * NO se toca nunca es el rango de OR: cambiarlo dejaría huérfanas las hojas ya
+ * archivadas y rompería la regla de que una OR pertenece a un solo bloc. Un
+ * rango mal puesto se arregla borrando el bloc y creándolo bien.
+ */
 export async function editarBloc(
   ctx: Contexto,
   blocId: string,
-  datos: { responsableId?: unknown; responsableNombre?: unknown; observaciones?: unknown }
+  datos: { numeroBloc?: unknown; responsableId?: unknown; responsableNombre?: unknown; observaciones?: unknown }
 ): Promise<FichaBloc> {
   const bloc = await repo.blocPorId(ctx.empresaId, blocId);
   if (!bloc) throw new ErrorOrManuales("BLOC_NO_ENCONTRADO", "Bloc no encontrado.", 404);
@@ -198,11 +209,19 @@ export async function editarBloc(
   }
 
   const cambios: Parameters<typeof repo.actualizarBloc>[2] = {};
+  if (datos.numeroBloc !== undefined) cambios.numeroBloc = validarNumeroBloc(datos.numeroBloc);
   if (datos.responsableId !== undefined) cambios.responsableId = texto(datos.responsableId) || null;
   if (datos.responsableNombre !== undefined) cambios.responsableNombre = texto(datos.responsableNombre) || null;
   if (datos.observaciones !== undefined) cambios.observaciones = texto(datos.observaciones) || null;
 
-  await repo.actualizarBloc(ctx.empresaId, blocId, cambios);
+  try {
+    await repo.actualizarBloc(ctx.empresaId, blocId, cambios);
+  } catch (e) {
+    if (esUnico(e, "orm_blocs_empresa_id_numero_bloc_key")) {
+      throw new ErrorOrManuales("BLOC_DUPLICADO", `Ya existe un bloc con el número ${cambios.numeroBloc}.`, 409);
+    }
+    throw e;
+  }
   await repo.registrarEvento({
     empresaId: ctx.empresaId,
     blocId,
@@ -374,6 +393,55 @@ export async function cerrarBloc(ctx: Contexto, blocId: string, datos: { observa
   // Un bloc cerrado no tiene nada pendiente que avisar.
   await repo.resolverAvisosDeBloc(ctx.empresaId, blocId, "BLOC_INCOMPLETO");
   return fichaBloc(ctx, blocId);
+}
+
+/**
+ * Borra el bloc entero: sus OR y, con ellas, su sitio en la numeración.
+ *
+ * Existe porque un alta equivocada —un rango mal tecleado, un taco de prueba—
+ * no tenía arreglo desde el panel y había que entrar en la base a mano. Las
+ * condiciones están en `comprobarBorrado`: un bloc cerrado no se borra nunca, y
+ * si tiene hojas archivadas hay que confirmarlo sabiendo cuántas se retiran.
+ *
+ * Se anota en el histórico ANTES de borrar: el evento no tiene clave ajena, así
+ * que sobrevive al bloc y queda constancia de qué se quitó y quién lo hizo.
+ */
+export async function eliminarBloc(
+  ctx: Contexto,
+  blocId: string,
+  opciones: { confirmar?: boolean; motivo?: string } = {}
+): Promise<{ numeroBloc: string; documentosRetirados: number }> {
+  return repo.enTransaccion(async (cliente) => {
+    const bloc = await repo.blocParaActualizar(ctx.empresaId, blocId, cliente);
+    if (!bloc) throw new ErrorOrManuales("BLOC_NO_ENCONTRADO", "Bloc no encontrado.", 404);
+
+    const ors = await repo.listarOrsDeBloc(ctx.empresaId, blocId, cliente);
+    const progreso = progresoDeBloc(ors);
+    comprobarBorrado(bloc.estado, progreso, Boolean(opciones.confirmar));
+
+    const motivo = texto(opciones.motivo) || "bloc borrado desde el panel";
+
+    await repo.registrarEvento(
+      {
+        empresaId: ctx.empresaId,
+        blocId,
+        accion: "BLOC_BORRADO",
+        detalle: {
+          numeroBloc: bloc.numeroBloc,
+          orInicial: bloc.orInicial,
+          orFinal: bloc.orFinal,
+          archivadas: progreso.archivadas,
+          motivo,
+        },
+        usuarioId: ctx.userId,
+        usuarioNombre: ctx.userNombre,
+      },
+      cliente
+    );
+
+    const documentosRetirados = await repo.borrarBloc(ctx.empresaId, blocId, motivo, cliente);
+    return { numeroBloc: bloc.numeroBloc, documentosRetirados };
+  });
 }
 
 /* ── El recuento ─────────────────────────────────────────────────────────── */

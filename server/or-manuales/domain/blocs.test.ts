@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  comprobarBorrado,
   comprobarCierre,
   estadoCalculado,
   numerosDelRango,
@@ -17,6 +18,7 @@ import {
   rangoDesde,
   rangosSolapan,
   siguienteNumeroBloc,
+  validarNumeroBloc,
   validarRango,
   type ResumenOr,
 } from "./blocs.ts";
@@ -195,5 +197,50 @@ describe("Cerrar el bloc", () => {
 
   it("no se cierra dos veces", () => {
     expect(() => comprobarCierre("CERRADO", progresoDeBloc(ors(1, 25)))).toThrow(/ya está cerrado/);
+  });
+});
+
+describe("Borrar el bloc", () => {
+  const vacio = progresoDeBloc(ors(1, 25, Object.fromEntries([...Array(25)].map((_, i) => [i + 1, "PENDIENTE"]))));
+  const conHojas = progresoDeBloc(ors(1, 25, { 2: "PENDIENTE" }));
+
+  it("un bloc sin nada archivado se borra sin más", () => {
+    expect(() => comprobarBorrado("DISPONIBLE", vacio, false)).not.toThrow();
+  });
+
+  it("uno con hojas dentro exige confirmarlo, y dice cuántas son", () => {
+    try {
+      comprobarBorrado("INCOMPLETO", conHojas, false);
+      expect.unreachable("tenía que haber lanzado");
+    } catch (e) {
+      const err = e as ErrorOrManuales;
+      expect(err.codigo).toBe("BLOC_CON_DOCUMENTOS");
+      expect(err.message).toContain("24");
+      expect(err.estado).toBe(409);
+    }
+  });
+
+  it("confirmado, sí se borra aunque tenga hojas", () => {
+    expect(() => comprobarBorrado("INCOMPLETO", conHojas, true)).not.toThrow();
+  });
+
+  it("un bloc CERRADO no se borra NUNCA: es el archivo", () => {
+    expect(() => comprobarBorrado("CERRADO", vacio, true)).toThrow(/archivo/i);
+  });
+});
+
+describe("El número del bloc al renumerar", () => {
+  it("se queda con lo escrito, sin espacios de sobra", () => {
+    expect(validarNumeroBloc("  001 ")).toBe("001");
+    expect(validarNumeroBloc("TAR-007")).toBe("TAR-007");
+  });
+
+  it("no se deja en blanco", () => {
+    expect(() => validarNumeroBloc("   ")).toThrow(/en blanco/);
+    expect(() => validarNumeroBloc(null)).toThrow(/en blanco/);
+  });
+
+  it("no admite un nombre kilométrico", () => {
+    expect(() => validarNumeroBloc("x".repeat(41))).toThrow(/40/);
   });
 });
