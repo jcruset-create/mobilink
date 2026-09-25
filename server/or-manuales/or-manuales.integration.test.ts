@@ -102,14 +102,36 @@ function cabeceras(quien: Quien, extra: Record<string, string> = {}): Record<str
 async function pdfDeOrs(numeros: (number | null)[]): Promise<Buffer> {
   const doc = await PDFDocument.create();
   const fuente = await doc.embedFont(StandardFonts.Helvetica);
+  const marca = marcaUnica();
   for (const n of numeros) {
     const pagina = doc.addPage([595, 842]);
     // y=790 en coordenadas de PDF (desde abajo) es la franja superior.
     if (n !== null) pagina.drawText(`OR Nº ${n}`, { x: 400, y: 790, size: 16, font: fuente });
     pagina.drawText("ORDEN DE REPARACION MANUAL", { x: 60, y: 750, size: 12, font: fuente });
     pagina.drawText("Trabajos realizados: sustitucion de neumatico", { x: 60, y: 600, size: 11, font: fuente });
+    pagina.drawText(`ref ${marca}`, { x: 60, y: 60, size: 8, font: fuente });
   }
   return Buffer.from(await doc.save());
+}
+
+/**
+ * Una marca distinta en cada PDF generado, SIN dígitos.
+ *
+ * Dos escaneos del mismo número tienen que ser dos ficheros distintos, y por
+ * defecto no lo eran: `pdf-lib` fecha el documento con resolución de SEGUNDO,
+ * así que dos generaciones seguidas salían byte a byte iguales y el módulo —que
+ * reconoce una hoja repetida por el hash de su contenido, no por su nombre— las
+ * tomaba por la misma hoja ya archivada. Una prueba que dependa de lo rápido
+ * que vaya el runner no es una prueba.
+ *
+ * Sin dígitos a propósito: un número de tres cifras en la hoja competiría como
+ * candidato a número de OR y bajaría la confianza de la lectura buena, que es
+ * justo lo que miden otros casos. La prueba de «subir dos veces el mismo
+ * escaneo» sigue valiendo porque reutiliza el MISMO buffer, no lo regenera.
+ */
+function marcaUnica(): string {
+  const letras = "abcdefghijklmnopqrstuvwxyz";
+  return Array.from({ length: 10 }, () => letras[Math.floor(Math.random() * letras.length)]).join("");
 }
 
 async function subir(nombre: string, contenido: Buffer, quien: Quien = operarioA): Promise<Respuesta> {
