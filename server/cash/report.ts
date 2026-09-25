@@ -45,6 +45,7 @@ const TINTA = "#0f172a";
 
 const ETIQUETA_TIPO: Record<string, string> = {
   COLLECTION: "Cobro",
+  REFUND: "Abono",
   PAYMENT: "Pago",
   MANUAL_IN: "Entrada",
   MANUAL_OUT: "Salida",
@@ -336,6 +337,10 @@ async function construirPortada(d: {
   titulo("Resumen de la jornada");
   fila("Fondo inicial", eur(s.fondoInicialCentimos));
   fila("Cobros", eur(detalle.cobros.totalCentimos));
+  // Solo cuando los hay: una línea de «Abonos 0,00 €» en cada cierre es ruido.
+  if (detalle.abonos.totalCentimos > 0) {
+    fila("Abonos (cobros devueltos)", `−${eur(detalle.abonos.totalCentimos)}`);
+  }
   fila("Pagos", eur(detalle.pagos.totalCentimos));
   fila("Salidas y entregas", eur(detalle.salidasCentimos + detalle.entregasCentimos));
   /*

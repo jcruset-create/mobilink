@@ -25,6 +25,8 @@ export type TipoDocumento =
   | "ALBARAN"
   | "TICKET"
   | "PARTE"
+  /** Factura rectificativa o abono: devuelve dinero al cliente. */
+  | "ABONO"
   | "OTRO"
   | "DESCONOCIDO";
 
@@ -161,6 +163,8 @@ export type CodigoAviso =
   | "NO_ES_FACTURA"
   /** Se leyó, pero con tan poca seguridad que no se ha rellenado. */
   | "LEIDO_SIN_SEGURIDAD"
+  /** Es un abono: el dinero SALE. No se cobra, se devuelve. */
+  | "ES_ABONO"
   /** Es un justificante válido, pero NO una factura: albarán, ticket, parte… */
   | "TIPO_DE_DOCUMENTO"
   | "VARIAS_FACTURAS"
@@ -205,6 +209,16 @@ export type PropuestaCobro = {
    * LO SÉ, nunca «la de siempre».
    */
   seccion: PropuestaSeccion;
+  /**
+   * El papel es un abono: dinero que se DEVUELVE al cliente.
+   *
+   * Sale de dos señales independientes —el total impreso en negativo, o el
+   * documento diciendo ser una rectificativa— y con cualquiera de las dos el
+   * importe se entrega en POSITIVO: el signo lo lleva este campo, no la cifra.
+   * Un −59,90 metido en la casilla de importe es exactamente lo que el motor
+   * rechaza, y con razón.
+   */
+  esAbono: boolean;
   /** null = no hay recibo con el que comparar. */
   importeCuadra: boolean | null;
   avisos: Aviso[];

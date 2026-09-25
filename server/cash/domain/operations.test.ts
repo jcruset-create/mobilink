@@ -418,3 +418,80 @@ describe("cambio de moneda en mostrador", () => {
     expect(r).toMatchObject({ ok: false, codigo: "FORMAS_PAGO_NO_CUADRAN" });
   });
 });
+
+describe("abono a un cliente", () => {
+  it("en efectivo SALEN piezas, con su propio motivo", () => {
+    /*
+     * Un abono es un cobro devuelto: sale dinero como en un pago, pero se
+     * asienta con motivo propio para que el libro mayor distinga «se le pagó a
+     * un proveedor» de «se le devolvió a un cliente».
+     */
+    const op: OperacionNormalizada = {
+      tipo: "REFUND",
+      origen: "MANUAL",
+      importe: 5990,
+      formasPago: [{ forma: "CASH", importe: 5990 }],
+      efectivoRecibido: [],
+      efectivoEntregado: [
+        { valor: 5000, cantidad: 1 },
+        { valor: 500, cantidad: 1 },
+        { valor: 200, cantidad: 2 },
+        { valor: 50, cantidad: 1 },
+        { valor: 20, cantidad: 2 },
+      ],
+    };
+    const r = validarOperacion(op, stock);
+    expect(esExito(r)).toBe(true);
+    if (!esExito(r)) return;
+    expect(r.efectivoNeto).toBe(-5990);
+    expect(r.movimientos).toHaveLength(1);
+    expect(r.movimientos[0]!.direccion).toBe("OUT");
+    expect(r.movimientos[0]!.motivo).toBe("CUSTOMER_REFUND");
+  });
+
+  it("en efectivo hay que decir QUÉ piezas salen", () => {
+    const op: OperacionNormalizada = {
+      tipo: "REFUND",
+      origen: "MANUAL",
+      importe: 5990,
+      formasPago: [{ forma: "CASH", importe: 5990 }],
+      efectivoRecibido: [],
+      efectivoEntregado: [],
+    };
+    const r = validarOperacion(op, stock);
+    expect(esFallo(r)).toBe(true);
+    if (esFallo(r)) expect(r.codigo).toBe("FALTA_DETALLE_DENOMINACIONES");
+  });
+
+  it("por tarjeta no toca el cajón", () => {
+    const op: OperacionNormalizada = {
+      tipo: "REFUND",
+      origen: "MANUAL",
+      importe: 5990,
+      formasPago: [{ forma: "BBVA_CARD", importe: 5990 }],
+      efectivoRecibido: [],
+      efectivoEntregado: [],
+    };
+    const r = validarOperacion(op, stock);
+    expect(esExito(r)).toBe(true);
+    if (esExito(r)) {
+      expect(r.movimientos).toHaveLength(0);
+      expect(r.efectivoNeto).toBe(0);
+    }
+  });
+
+  it("un importe negativo se rechaza, también en un abono", () => {
+    /* El signo lo pone el tipo. Una cifra negativa es un error de quien la mandó. */
+    const op: OperacionNormalizada = {
+      tipo: "REFUND",
+      origen: "MANUAL",
+      importe: -5990,
+      formasPago: [{ forma: "CASH", importe: -5990 }],
+      efectivoRecibido: [],
+      efectivoEntregado: [],
+    };
+    const r = validarOperacion(op, stock);
+    expect(esFallo(r)).toBe(true);
+    if (esFallo(r)) expect(r.codigo).toBe("IMPORTE_NO_VALIDO");
+  });
+});

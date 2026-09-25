@@ -33,7 +33,9 @@ import {
   tdCls,
   EmptyRow,
   inputCls,
+  btnPrimary,
 } from "../components/ui";
+import { useNavigate } from "react-router-dom";
 import { euros, aCentimos, aTextoEditable, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
 import PaymentMethodPicker, { MIXTO } from "../components/PaymentMethodPicker";
@@ -173,6 +175,14 @@ export default function Cobros() {
   const [autorizadoPara, setAutorizadoPara] = useState("");
 
   const importe = aCentimos(importeTexto) ?? 0;
+  const navigate = useNavigate();
+  /*
+   * El escáner ha visto un ABONO. No se cobra: se devuelve, y eso se registra
+   * en la pantalla de Pagos en modo abono, que es la que sabe sacar dinero del
+   * cajón. Aquí se corta el paso al botón y se enseña el camino, llevándose la
+   * lectura ya hecha para no repetirla.
+   */
+  const esAbono = Boolean(escaneo?.esAbono);
 
   const formaEfectivo = useMemo(
     () => formasParaCobros.find((f) => f.afectaEfectivo) ?? null,
@@ -429,6 +439,7 @@ export default function Cobros() {
 
   const puedeConfirmar =
     importe > 0 &&
+    !esAbono &&
     Boolean(modo) &&
     totalRepartido === importe &&
     referenciasQueFaltan.length === 0 &&
@@ -960,6 +971,24 @@ export default function Cobros() {
                 <p className="text-[12px] font-bold text-amber-300">
                   Cobro duplicado autorizado. Queda registrado quién lo autorizó.
                 </p>
+              )}
+              {esAbono && (
+                <div className="rounded-xl border border-rose-500/50 bg-rose-950/40 p-3 text-sm text-rose-100">
+                  <p className="font-bold">Esto es un abono, no un cobro.</p>
+                  <p className="mt-1 text-[12px] text-rose-200/90">
+                    El dinero se le devuelve al cliente. Se registra como abono, con la forma por la
+                    que se devuelve, y resta de los cobros de su sección.
+                  </p>
+                  <button
+                    type="button"
+                    className={`${btnPrimary} mt-2`}
+                    onClick={() =>
+                      navigate("/cash/pagos?modo=abono", { state: { abono: true, prefill: escaneo } })
+                    }
+                  >
+                    Registrar como abono
+                  </button>
+                </div>
               )}
               <BotonAccion tono="cobro" onClick={() => void confirmar()} disabled={!puedeConfirmar}>
                 {guardando ? "Registrando…" : `Confirmar cobro de ${euros(importe)}`}

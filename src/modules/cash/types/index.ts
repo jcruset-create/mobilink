@@ -77,6 +77,8 @@ export type Sesion = {
 
 export type TipoOperacion =
   | "COLLECTION"
+  /** Abono a un cliente: un cobro devuelto. Sale dinero, resta de los cobros. */
+  | "REFUND"
   | "PAYMENT"
   | "MANUAL_IN"
   | "MANUAL_OUT"
@@ -166,6 +168,8 @@ export type ResumenJornada = {
   piezas: number;
   porFormaPago: { forma: string; importeCentimos: number }[];
   cobros: { erpCentimos: number; manualCentimos: number; totalCentimos: number };
+  /** Cobros devueltos. Aparte, para poder enseñar «cobros X · abonos −Y». */
+  abonos: { erpCentimos: number; manualCentimos: number; totalCentimos: number };
   pagos: { erpCentimos: number; manualCentimos: number; totalCentimos: number };
   salidasCentimos: number;
   entregasCentimos: number;
@@ -646,6 +650,7 @@ export const ETIQUETA_FORMA_PAGO: Record<string, string> = {
 
 export const ETIQUETA_TIPO_OPERACION: Record<TipoOperacion, string> = {
   COLLECTION: "Cobro",
+  REFUND: "Abono",
   PAYMENT: "Pago",
   MANUAL_IN: "Ingreso manual",
   MANUAL_OUT: "Salida manual",
@@ -660,6 +665,7 @@ export const ETIQUETA_MOTIVO: Record<string, string> = {
   OPENING_FLOAT: "Fondo inicial",
   CUSTOMER_PAYMENT: "Entrega del cliente",
   CHANGE_GIVEN: "Cambio devuelto",
+  CUSTOMER_REFUND: "Devolución al cliente",
   SUPPLIER_PAYMENT: "Pago a proveedor",
   MANUAL_IN: "Ingreso manual",
   MANUAL_OUT: "Salida manual",
@@ -819,6 +825,11 @@ export type PropuestaEscaneo = {
     autoSeleccionar: boolean;
     reglaId: number | null;
   };
+  /**
+   * El papel es un abono: el dinero se DEVUELVE. El importe llega en positivo;
+   * el signo lo lleva esto. Se registra como abono, no como cobro.
+   */
+  esAbono: boolean;
   /** null = no hay justificante con el que comparar. */
   importeCuadra: boolean | null;
   avisos: AvisoEscaneo[];

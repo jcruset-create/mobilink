@@ -634,6 +634,31 @@ export const registrarCobro = (datos: {
   autorizacionDuplicado?: string | null;
 }) => pedir<RespuestaOperacion>("/collections", json(datos));
 
+/**
+ * Un abono: un cobro devuelto al cliente.
+ *
+ * Misma forma que un pago en lo que toca al dinero —sale, con sus piezas si
+ * es en efectivo— y que un cobro en todo lo demás: sección, forma de COBRO y
+ * cliente. El importe va SIEMPRE en positivo; el signo lo pone el tipo.
+ */
+export const registrarAbono = (datos: {
+  sessionId: number;
+  importeCentimos: number;
+  formasPago: { forma: string; importe: number; referencia?: string | null }[];
+  efectivoEntregado?: LineaDenominacion[];
+  /** Vuelta del cliente al redondear: se le devuelven 60 € y pone 0,10 €. */
+  efectivoRecibido?: LineaDenominacion[];
+  partyNombre?: string;
+  concepto?: string;
+  referencia?: string | null;
+  documentoId?: number | null;
+  externalSystem?: string | null;
+  externalDocumentId?: string | null;
+  externalDocumentReference?: string | null;
+  sectionId?: number | null;
+  autorizacionDuplicado?: string | null;
+}) => pedir<RespuestaOperacion>("/refunds", json(datos));
+
 export const registrarPago = (datos: {
   sessionId: number;
   importeCentimos: number;
