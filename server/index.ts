@@ -117,6 +117,7 @@ import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
 import { jsonAjeno } from "./core/jsonAjeno.ts";
+import { numeroDeCita } from "./whatsapp/cita.ts";
 import {
   esClaveDuplicada,
   INTENTOS_DE_ID,
@@ -15361,6 +15362,9 @@ Reglas estrictas:
 - Normaliza el teléfono al formato español (+34XXXXXXXXX o 6XXXXXXXX).
 - Normaliza la matrícula al formato español (4 dígitos + 3 letras, o antiguo formato).
 - Si hay un enlace de Google Maps, extráelo en googleMapsUrl.
+- Si el mensaje da un número de cita o de autorización ("Cita 694163",
+  "Nº de autorización A-4521"), ponlo en citaOAutorizacion. Solo el número: si
+  dice "cita previa" sin número, devuelve null.
 - Si el texto tiene muy poca información útil, marca confidence como "low".
 - Si tiene información suficiente para crear una asistencia, marca confidence "high".
 - En caso intermedio, "medium".
@@ -15380,6 +15384,7 @@ Devuelve SOLO el JSON sin texto adicional:
   "estadoVehiculo": null,
   "empresaSolicitante": null,
   "numeroExpedienteExterno": null,
+  "citaOAutorizacion": null,
   "conductor": null,
   "telefonoConductor": null,
   "observaciones": null,
@@ -15703,6 +15708,19 @@ app.post(
         Body ?? "",
         mediaUrls
       );
+
+      /*
+       * El número de cita, también con una regla determinista.
+       *
+       * Es el número que después pide la aseguradora o el gestor de flota para
+       * pagar el servicio, así que conviene que el mismo texto dé siempre la
+       * misma respuesta. La IA sigue mirando —caza maneras de escribirlo que la
+       * regla no tiene— pero si ella no lo ve y la regla sí, manda la regla.
+       */
+      if (!extracted.citaOAutorizacion) {
+        const cita = numeroDeCita(Body ?? "");
+        if (cita) extracted.citaOAutorizacion = cita;
+      }
 
       // Save draft
       const draftResult = await db.query(
@@ -16270,6 +16288,10 @@ app.post("/api/whatsapp-capture/sessions/:id/apply", requireAdminRole, async (re
       longitude: "longitude",
       vehicleDescription: '"vehicleDescription"',
       descripcionAveria: '"descripcionAveria"',
+      // El nº de cita que da quien solicita. Va al mismo campo que se rellena a
+      // mano en el formulario, no a observaciones: es el que después pide la
+      // aseguradora para pagar, y enterrado en un texto largo no se encuentra.
+      solicitanteAutorizacion: '"solicitanteAutorizacion"',
       notes: "notes",
     };
 
