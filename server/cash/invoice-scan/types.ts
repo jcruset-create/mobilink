@@ -38,6 +38,8 @@ export type ExtraccionCruda = {
    * extracción vieja. Exigirlo rompería cada documento anterior de la bandeja.
    */
   tipo_documento?: string | null;
+  /** Opcional por lo mismo: los análisis anteriores a este campo no lo traen. */
+  tipo_establecimiento?: string | null;
   facturas_detectadas: number;
   factura: {
     numero: string | null;
@@ -99,11 +101,30 @@ export type ExtraccionCruda = {
   };
 };
 
+/**
+ * Qué clase de negocio emite el papel. Lo LEE el modelo; a qué concepto de
+ * gasto corresponde lo deciden las reglas de la empresa, nunca él.
+ */
+export type TipoEstablecimiento =
+  | "RESTAURANTE"
+  | "PEAJE"
+  | "GASOLINERA"
+  | "PARKING"
+  | "HOTEL"
+  | "TRANSPORTE"
+  | "TAXI"
+  | "SUPERMERCADO"
+  | "TALLER"
+  | "OTRO"
+  | "DESCONOCIDO";
+
 /** Lo mismo, ya en los tipos de la caja. */
 export type ExtraccionNormalizada = {
   esFactura: boolean;
   /** Qué dice ser el papel. `DESCONOCIDO` = no se distinguió o es un análisis viejo. */
   tipoDocumento: TipoDocumento;
+  /** `DESCONOCIDO` = no se distinguió, o es un análisis anterior al campo. */
+  tipoEstablecimiento: TipoEstablecimiento;
   facturasDetectadas: number;
   numeroFactura: string | null;
   fecha: string | null;

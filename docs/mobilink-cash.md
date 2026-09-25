@@ -923,6 +923,34 @@ gasto «sin clasificar»**. La anulación crea una operación inversa del mismo
 tipo, confirmada y en positivo, y la estadística la contaba. Ahora las
 inversas (`reversa_de_id`) no entran.
 
+### La lectura automática
+
+Con clave de IA en el servidor, cada ticket nace PENDIENTE y un worker
+(`expenseclaims/analisis.ts`, misma forma que el de AutoScan: lote de 3 cada
+15 s, `FOR UPDATE SKIP LOCKED`) lo lee con **el mismo escáner** de Cobros y
+Pagos (`escanearFactura`, sentido PAGO). Sin clave, nace OMITIDO y no se
+intenta.
+
+- **Solo rellena huecos.** Lo escrito por una persona no se pisa; una línea ya
+  REVISADA no se toca; en una liquidación que ya no está en borrador, tampoco.
+  Lo leído se guarda aparte (`leido`) y no cambia; lo que corrige la persona
+  queda en `campos_corregidos`, que es la medida del acierto.
+- **Leer no es revisar**: una línea leída sigue necesitando que alguien la dé
+  por buena antes de presentar.
+- **El concepto lo deciden las reglas de la empresa** (`cash_expense_rules`,
+  Configuración → «Reglas de concepto»). El modelo solo dice qué clase de
+  negocio emite el ticket (`tipo_establecimiento`: RESTAURANTE, PEAJE,
+  GASOLINERA, PARKING…). Sin regla que lo reconozca no se propone nada: no hay
+  concepto por defecto. Una regla rellena sola si es segura (≥ 0,8, contando la
+  seguridad con la que se leyó el emisor) y las cifras del ticket cuadran; si
+  no, solo propone y la pantalla ofrece «Usar».
+- **Un abono no rellena el importe**, y **un ticket en otra moneda se marca**
+  y no se presenta hasta pasarlo a euros.
+- **Si falla**, la línea queda FALLIDA con el fichero; se rellena a mano y se
+  paga igual. «Volver a leer» la pone otra vez en cola. Una lectura colgada
+  (proceso muerto) vuelve a la cola a los 10 minutos, y tras 3 intentos queda
+  FALLIDA.
+
 Por fases (plan completo en el prompt): PR1 preparar, revisar, aprobar y PDF;
 PR2 el pago; PR3 la lectura automática; PR4 los otros dos duplicados (mismo
 ticket con otro escaneo, mismo número ya pagado); PR5 el vínculo de empleados

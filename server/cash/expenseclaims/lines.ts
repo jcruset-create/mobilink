@@ -6,11 +6,11 @@
  *
  * ## La IA no es requisito
  *
- * En esta fase las líneas nacen con el análisis OMITIDO: nadie las lee
- * automáticamente y los datos los pone una persona. Cuando llegue la lectura,
- * rellenará los huecos y nada más; si falla, la línea se sigue rellenando a
- * mano y se paga igual. Lo que habilita el pago es que alguien la haya
- * REVISADO, no que una máquina la haya leído.
+ * Con lectura automática configurada, cada ticket nace PENDIENTE y
+ * `analisis.ts` rellena los huecos; sin ella, nace OMITIDO y se rellena a
+ * mano. Si la lectura falla, la línea se sigue rellenando a mano y se paga
+ * igual. Lo que habilita el pago es que alguien la haya REVISADO, no que una
+ * máquina la haya leído.
  */
 
 import { createHash } from "node:crypto";
@@ -24,6 +24,7 @@ import { enTransaccion } from "../repository.ts";
 import type { Contexto } from "../service.ts";
 import { guardarDocumento, rutaDeTicket, urlFirmada } from "../storage.ts";
 import { lineasEditables } from "./domain.ts";
+import { lecturaDisponible } from "./analisis.ts";
 import {
   cargarEvidencia,
   detectarMismoFichero,
@@ -137,9 +138,21 @@ export async function subirTickets(
             analisis, situacion, subido_por, subido_at_ms, updated_at_ms)
          VALUES ($1,$2,
                  (SELECT COALESCE(MAX(orden), 0) + 1 FROM cash_expense_claim_lines WHERE claim_id = $2),
-                 $3,$4,$5,$6,$7,'OMITIDO','INCLUIDA',$8,$9,$9)
+                 $3,$4,$5,$6,$7,$10,'INCLUIDA',$8,$9,$9)
          RETURNING id`,
-        [ctx.empresaId, claimId, f.nombre, f.mime, f.buffer.length, ruta, f.sha256, ctx.userId, Date.now()]
+        [
+          ctx.empresaId,
+          claimId,
+          f.nombre,
+          f.mime,
+          f.buffer.length,
+          ruta,
+          f.sha256,
+          ctx.userId,
+          Date.now(),
+          // Sin clave de IA ni se intenta: se rellena a mano desde el principio.
+          lecturaDisponible() ? "PENDIENTE" : "OMITIDO",
+        ]
       );
       await detectarMismoFichero(
         client,
@@ -307,6 +320,41 @@ export async function editarLinea(
     }
 
     if (sets.length === 0) return antes;
+
+    /*
+     * Qué se ha corregido respecto a lo LEÍDO. Es la medida de cuánto acierta
+     * la lectura: sin esto se sabría qué propuso la máquina, pero nunca si
+     * acertó. Se acumula; un campo corregido una vez queda corregido.
+     */
+    const { rows: previa } = await client.query(
+      `SELECT leido, campos_corregidos FROM cash_expense_claim_lines WHERE id = $1`,
+      [lineId]
+    );
+    const leido = previa[0]?.leido as Record<string, unknown> | null;
+    if (leido) {
+      const corregidos = new Set<string>(previa[0].campos_corregidos ?? []);
+      const comparables: [keyof CambiosLinea, string][] = [
+        ["fecha", "fecha"],
+        ["emisorNombre", "emisorNombre"],
+        ["emisorNif", "emisorNif"],
+        ["numeroDocumento", "numeroDocumento"],
+        ["concepto", "concepto"],
+        ["baseCentimos", "baseCentimos"],
+        ["ivaCentimos", "ivaCentimos"],
+        ["importeCentimos", "importeCentimos"],
+      ];
+      for (const [campo, clave] of comparables) {
+        if (!(campo in cambios)) continue;
+        const nuevo = cambios[campo] ?? null;
+        const viejo = leido[clave] ?? null;
+        if (String(nuevo ?? "").trim() !== String(viejo ?? "").trim()) corregidos.add(campo);
+      }
+      if ("expenseConceptId" in cambios) {
+        const propuesto = (leido.conceptoPropuesto as { conceptoId?: number | null } | undefined)?.conceptoId ?? null;
+        if ((cambios.expenseConceptId ?? null) !== propuesto) corregidos.add("expenseConceptId");
+      }
+      poner("campos_corregidos", JSON.stringify([...corregidos].sort()));
+    }
 
     poner("updated_at_ms", Date.now());
     await client.query(
