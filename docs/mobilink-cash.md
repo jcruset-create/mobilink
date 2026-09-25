@@ -976,10 +976,37 @@ operación inversa de la anulación —mismo tipo, CONFIRMED, misma referencia�
 la daba por el cobro previo. Igual con los pagos. Ahora las inversas no
 cuentan (`anulaciones.integration.test.ts`).
 
+### Personas y fichas de empleado
+
+En **Configuración → Personas y fichas de empleado** se ata cada persona de
+Cash (destino PERSONA) a su ficha de `sea_employees`, o se desata. El
+emparejado por nombre es `proponerVinculos` de `core/vinculoTecnicos.ts`, el
+mismo de los técnicos del taller: **se propone con su grado de certeza y lo
+aplica una persona**, porque atribuir los gastos de un José a otro es peor que
+preguntar. «García, José» se prueba también como «José García».
+
+- Un empleado solo puede estar atado a una persona de Cash (índice único;
+  el choque se traduce a `EMPLEADO_YA_VINCULADO`).
+- Al atar, las liquidaciones de esa persona que aún no tenían empleado lo
+  reciben. Al desatar o re-atar **no se reescribe ninguna**: lo tramitado con
+  una identidad se queda con ella.
+- Al crear una liquidación se elige el trabajador de la lista de empleados
+  (con las personas de Cash sin ficha aparte). Si el empleado no tiene persona
+  de Cash, se crea; si hay una suelta con el mismo nombre, se pregunta antes de
+  atarla (`DESTINO_SIN_VINCULAR`).
+- Sin `sea_employees` (una base sin las migraciones de Supabase) la pantalla lo
+  dice y todo sigue funcionando con personas de Cash. `sea_employees` no tiene
+  empresa: se enseñan los empleados que no estén ligados a un usuario de otra
+  empresa (`app_usuarios.employee_id`).
+
+Endpoints: `GET /employees` (ver liquidaciones), `GET
+/expense-targets/employee-links` y `PUT /expense-targets/:id/employee`
+(configurar).
+
 Por fases (plan completo en el prompt): PR1 preparar, revisar, aprobar y PDF;
 PR2 el pago; PR3 la lectura automática; PR4 los otros dos duplicados (mismo
 ticket con otro escaneo, mismo número ya pagado); PR5 el vínculo de empleados
-en Configuración.
+en Configuración. Las cinco están entregadas.
 
 ## 8. Estado de la entrega
 

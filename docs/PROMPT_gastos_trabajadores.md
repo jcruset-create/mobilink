@@ -1166,3 +1166,40 @@ Pruebas: 7 de integración nuevas y 2 de las anulaciones, corridas tres veces
 sobre la misma base —la segunda pasada destapó que los datos de prueba se
 cruzaban entre ejecuciones, y ahora son únicos—. 13 mutaciones, todas en rojo
 a la primera.
+
+## Lo que entró en PR5
+
+El vínculo de empleados: **Configuración → Personas y fichas de empleado**
+(`PersonasYEmpleados`), la creación de liquidaciones eligiendo al empleado y
+la pregunta de `DESTINO_SIN_VINCULAR` con su «Sí: vincularla y crear». Con
+esto el plan de cinco fases queda entregado; el autoservicio (C.12) sigue
+fuera, y nada de lo hecho lo impide.
+
+Desvíos respecto al prompt:
+
+- **El código vive en `expenseclaims/empleados.ts`, no en `config.ts`.** Lee
+  `sea_employees` y `app_usuarios`, que no son de configuración de Cash, y
+  toca las liquidaciones al vincular.
+- **Se reutiliza `proponerVinculos` entero**, no solo `normalizarNombre`: da la
+  certeza (exacta, probable, ambigua, sin candidato) y los candidatos, que es
+  lo que la pantalla necesita para no enlazar a ciegas. Se prueba además el
+  nombre en orden «Apellidos, Nombre», que es como se escriben muchas personas
+  de Cash a mano.
+- **Separación por empresa.** `sea_employees` no tiene `empresa_id` (B.5). Se
+  enseñan los empleados que no estén ligados a un usuario de OTRA empresa por
+  `app_usuarios.employee_id`; es la única atadura que existe. Sin
+  `app_usuarios` se enseñan todos; sin `sea_employees`, ninguno, y la pantalla
+  lo dice.
+- **Al vincular, las liquidaciones sin empleado lo reciben; al desvincular o
+  re-vincular no se reescribe ninguna.** Lo tramitado con una identidad se
+  queda con ella. Lo cazó una mutación que reescribía también las ya
+  asignadas.
+- **Dos permisos distintos**: la lista de empleados para crear una liquidación
+  pide `cash.expense_claim.view`; ver propuestas y vincular pide
+  `cash.configure`, como el resto de destinos.
+
+Pruebas: 7 de integración nuevas (lista, propuesta en los dos órdenes,
+vincular y desvincular, empleado ya vinculado no se propone, re-vincular sin
+reescribir, un empleado para una sola persona, centro de coste o empleado de
+baja rechazados), corridas dos veces sobre la misma base; 11 mutaciones, todas
+en rojo.

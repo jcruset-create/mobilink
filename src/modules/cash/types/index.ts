@@ -1143,3 +1143,22 @@ export type DetalleLiquidacion = {
   };
   bloqueos: BloqueoLiquidacion[];
 };
+
+/** Una ficha de empleado, con la persona de Cash que la representa si la hay. */
+export type Empleado = {
+  id: string;
+  nombre: string;
+  apellidos: string | null;
+  codigo: string | null;
+  destinoId: number | null;
+  destinoNombre: string | null;
+};
+
+export type PropuestaVinculo = {
+  destinoId: number;
+  destinoNombre: string;
+  certeza: "exacta" | "unica" | "ambigua" | "sin_candidato";
+  employeeId: string | null;
+  employeeNombre: string | null;
+  candidatos: { id: string; nombre: string }[];
+};
