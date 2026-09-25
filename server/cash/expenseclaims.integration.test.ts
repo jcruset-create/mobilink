@@ -196,11 +196,11 @@ describe.runIf(RUN)("Liquidaciones · el flujo del encargo", () => {
     expect(await contar("cash_operations")).toBe(operacionesAntes);
     expect(aprobada.operationPagoId).toBeNull();
 
-    // Una aprobada no se vuelve a presentar ni se rechaza.
+    // Una aprobada no se vuelve a presentar ni a aprobar.
     await expect(liquidaciones.presentarLiquidacion(ctx, l.id)).rejects.toMatchObject({
       codigo: "TRANSICION_NO_VALIDA",
     });
-    await expect(liquidaciones.rechazarLiquidacion(ctxJefe, l.id, "tarde")).rejects.toMatchObject({
+    await expect(liquidaciones.aprobarLiquidacion(ctxJefe, l.id)).rejects.toMatchObject({
       codigo: "TRANSICION_NO_VALIDA",
     });
   });
@@ -873,6 +873,12 @@ describe.runIf(RUN)("Liquidaciones · el pago", () => {
   });
 });
 
+/*
+ * El NIF del peaje, distinto en cada ejecución: la base se reutiliza entre
+ * pasadas y el mismo ticket de la pasada anterior contaría como duplicado.
+ */
+const NIF_AUMAR = `A${sufijo.slice(0, 8)}`;
+
 describe.runIf(RUN)("Liquidaciones · la lectura automática", () => {
   /*
    * Sin clave de IA las líneas nacen OMITIDAS y la lectura no se intenta. Para
@@ -897,7 +903,7 @@ describe.runIf(RUN)("Liquidaciones · la lectura automática", () => {
     facturas_detectadas: 1,
     factura: { numero: `AP2-${randomUUID().slice(0, 8)}`, fecha: "22/09/2026" },
     cliente: { codigo: null, nombre: null, nif: null },
-    emisor: { nombre: "AUTOPISTAS AUMAR", nif: "A-28029130" },
+    emisor: { nombre: "AUTOPISTAS AUMAR", nif: NIF_AUMAR },
     vehiculo: { marca: null, modelo: null, matricula: null },
     concepto: "Tránsito Lleida - Tarragona",
     totales: { base_imponible: null, iva_importe: null, iva_porcentaje: null, total: "10,24 €", moneda: "EUR" },
@@ -944,7 +950,7 @@ describe.runIf(RUN)("Liquidaciones · la lectura automática", () => {
     expect(y).toMatchObject({
       fecha: "2026-09-22",
       emisorNombre: "AUTOPISTAS AUMAR",
-      emisorNif: "A-28029130",
+      emisorNif: NIF_AUMAR,
       importeCentimos: 1024,
       moneda: "EUR",
       expenseConceptId: peajes,
@@ -1093,5 +1099,196 @@ describe.runIf(RUN)("Liquidaciones · la lectura automática", () => {
     await db.query(`DELETE FROM cash_expense_concepts WHERE id = $1`, [temporal]);
     const listada = (await config.listarReglasGasto(EMPRESA)).find((r) => r.id === r3.id);
     expect(listada?.conceptoVigente).toBe(false);
+  });
+});
+
+describe.runIf(RUN)("Liquidaciones · duplicados por contenido", () => {
+  let sesion = 0;
+  beforeAll(async () => {
+    const { rows } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, activa, created_at_ms, updated_at_ms)
+       VALUES ($1,'Centro',$2,true,$3,$3) RETURNING id`,
+      [EMPRESA, `Duplicados ${sufijo}`, Date.now()]
+    );
+    sesion = (
+      await servicio.abrirJornada(ctx, {
+        registerId: rows[0].id,
+        fondoManual: [5000, 2000, 1000, 500, 200, 100, 50, 20, 10, 5, 2, 1].map((valor) => ({ valor, cantidad: 12 })),
+      })
+    ).sesion.id;
+  });
+
+  /** Un importe distinto por prueba, para que no se crucen entre ellas. */
+  let importe = 1500;
+  const nuevoImporte = () => (importe += 7);
+
+  async function conTicket(datos: Parameters<typeof tickets.editarLinea>[3]) {
+    const l = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan });
+    const [x] = await tickets.subirTickets(ctx, l.id, [fichero(await pdf(`dc ${randomUUID()}`))]);
+    const y = await tickets.editarLinea(ctx, l.id, x.id, { expenseConceptId: dietas, revisada: true, ...datos });
+    return { l, x: y };
+  }
+
+  const pagoDeProveedor = (referencia: string) =>
+    servicio.registrarOperacion(ctx, {
+      sessionId: sesion,
+      tipo: "PAYMENT",
+      importeCentimos: 1000,
+      formasPago: [{ forma: "CASH", importe: 1000 }],
+      efectivoEntregado: [{ valor: 1000, cantidad: 1 }],
+      referencia,
+      concepto: "pagado por Pagos",
+    });
+
+  it("el mismo ticket con OTRO fichero: se marca el posterior, no el original", async () => {
+    const imp = nuevoImporte();
+    const a = await conTicket({ fecha: "2026-09-20", emisorNombre: "Bar", emisorNif: `B-${sufijo.slice(0, 2)}.${sufijo.slice(2, 5)}.${sufijo.slice(5, 8)}`, importeCentimos: imp });
+    // Mismo NIF escrito de otra manera, mismo día, mismo importe: es el mismo ticket.
+    const b = await conTicket({ fecha: "2026-09-20", emisorNombre: "BAR CENTRAL", emisorNif: `b${sufijo.slice(0, 8)}`, importeCentimos: imp });
+
+    expect(b.x.duplicados).toHaveLength(1);
+    expect(b.x.duplicados[0]).toMatchObject({
+      tipo: "MISMA_CLAVE",
+      referenciaTipo: "LINEA",
+      referenciaId: a.x.id,
+      referenciaNumero: a.l.numero,
+      detectadoEn: "EDICION",
+      resolucion: "PENDIENTE",
+    });
+    // El original no queda bloqueado por culpa de la copia.
+    const original = (await liquidaciones.detalleLiquidacion(ctx, a.l.id)).lineas[0];
+    expect(original.duplicados).toEqual([]);
+    expect((await liquidaciones.presentarLiquidacion(ctx, a.l.id)).estado).toBe("PRESENTADA");
+  });
+
+  it("si al corregirlo deja de coincidir, la sospecha se descarta sola", async () => {
+    const imp = nuevoImporte();
+    await conTicket({ fecha: "2026-09-21", emisorNombre: `Hostal Sol ${sufijo}`, importeCentimos: imp });
+    const b = await conTicket({ fecha: "2026-09-21", emisorNombre: `HOSTAL SOL ${sufijo}`, importeCentimos: imp });
+    expect(b.x.duplicados[0]?.resolucion).toBe("PENDIENTE");
+
+    // Era el del día siguiente: se corrige la fecha.
+    const c = await tickets.editarLinea(ctx, b.l.id, b.x.id, { fecha: "2026-09-22" });
+    expect(c.duplicados[0]).toMatchObject({ resolucion: "DESCARTADA" });
+    expect(c.duplicados[0].motivo).toContain("ya no coincide");
+    expect((await liquidaciones.detalleLiquidacion(ctx, b.l.id)).bloqueos).toEqual([]);
+  });
+
+  it("el número del ticket ya pagado en la caja se marca contra ese pago", async () => {
+    const numero = `T-${randomUUID().slice(0, 6)}`;
+    const pago = await pagoDeProveedor(numero);
+    const b = await conTicket({ fecha: "2026-09-19", emisorNombre: `Ferreteria ${sufijo}`, importeCentimos: nuevoImporte(), numeroDocumento: numero });
+    expect(b.x.duplicados[0]).toMatchObject({
+      tipo: "MISMO_NUMERO",
+      referenciaTipo: "OPERACION",
+      referenciaId: pago.operacionId,
+      referenciaNumero: pago.numero,
+    });
+    await expect(liquidaciones.presentarLiquidacion(ctx, b.l.id)).rejects.toMatchObject({
+      codigo: "DUPLICADO_SIN_RESOLVER",
+    });
+
+    // Si ese pago se anula, la sospecha deja de tener sentido y ya se presenta.
+    await servicio.anularOperacion(ctx, pago.operacionId, "no era de este proveedor");
+    expect((await liquidaciones.presentarLiquidacion(ctx, b.l.id)).estado).toBe("PRESENTADA");
+    const d = (await liquidaciones.detalleLiquidacion(ctx, b.l.id)).lineas[0].duplicados[0];
+    expect(d.resolucion).toBe("DESCARTADA");
+  });
+
+  it("al presentar se vuelve a mirar, y lo encontrado queda guardado aunque no se presente", async () => {
+    const numero = `T-${randomUUID().slice(0, 6)}`;
+    const b = await conTicket({ fecha: "2026-09-18", emisorNombre: `Taller Ruta ${sufijo}`, importeCentimos: nuevoImporte(), numeroDocumento: numero });
+    expect(b.x.duplicados).toEqual([]);
+    // Después de subirlo, alguien paga ese mismo ticket por Pagos.
+    await pagoDeProveedor(numero);
+
+    await expect(liquidaciones.presentarLiquidacion(ctx, b.l.id)).rejects.toMatchObject({
+      codigo: "DUPLICADO_SIN_RESOLVER",
+    });
+    const d = (await liquidaciones.detalleLiquidacion(ctx, b.l.id)).lineas[0].duplicados;
+    expect(d).toHaveLength(1);
+    expect(d[0]).toMatchObject({ tipo: "MISMO_NUMERO", detectadoEn: "PRESENTAR", resolucion: "PENDIENTE" });
+  });
+
+  it("al pagar se vuelve a mirar: lo aparecido tras aprobar para el pago", async () => {
+    const numero = `T-${randomUUID().slice(0, 6)}`;
+    const imp = nuevoImporte();
+    const b = await conTicket({ fecha: "2026-09-17", emisorNombre: `Parking Centro ${sufijo}`, importeCentimos: imp, numeroDocumento: numero });
+    await liquidaciones.presentarLiquidacion(ctx, b.l.id);
+    await liquidaciones.aprobarLiquidacion(ctxJefe, b.l.id);
+    await pagoDeProveedor(numero);
+
+    const operaciones = await contar("cash_operations");
+    await expect(
+      pago.pagarLiquidacion(ctxJefe, b.l.id, {
+        sessionId: sesion,
+        importeCentimos: imp,
+        formasPago: [{ forma: "BANK_TRANSFER", importe: imp, referencia: "TRF" }],
+        idempotencyKey: `dup-${randomUUID()}`,
+      })
+    ).rejects.toMatchObject({ codigo: "DUPLICADO_SIN_RESOLVER" });
+    expect(await contar("cash_operations")).toBe(operaciones);
+    const d = (await liquidaciones.detalleLiquidacion(ctx, b.l.id)).lineas[0].duplicados;
+    expect(d[0]).toMatchObject({ detectadoEn: "PAGAR", resolucion: "PENDIENTE" });
+
+    // El camino para resolverlo: rechazar, reabrir y decidir.
+    await liquidaciones.rechazarLiquidacion(ctxJefe, b.l.id, "Revisar el ticket del parking");
+    await liquidaciones.reabrirLiquidacion(ctx, b.l.id);
+    const r = await tickets.resolverDuplicado(ctxJefe, b.l.id, d[0].id, {
+      resolucion: "ACEPTADA",
+      motivo: "El de Pagos era otro parking con el mismo número",
+    });
+    expect(r.duplicados[0].resolucion).toBe("ACEPTADA");
+    expect((await liquidaciones.presentarLiquidacion(ctx, b.l.id)).estado).toBe("PRESENTADA");
+  });
+
+  it("si la otra línea se excluye, la coincidencia con ella se descarta al presentar", async () => {
+    const imp = nuevoImporte();
+    const a = await conTicket({ fecha: "2026-09-16", emisorNombre: `Cafe Nou ${sufijo}`, importeCentimos: imp });
+    const b = await conTicket({ fecha: "2026-09-16", emisorNombre: `CAFE NOU ${sufijo}`, importeCentimos: imp });
+    expect(b.x.duplicados[0]?.resolucion).toBe("PENDIENTE");
+
+    await tickets.excluirLinea(ctx, a.l.id, a.x.id, "Era el duplicado este");
+    expect((await liquidaciones.presentarLiquidacion(ctx, b.l.id)).estado).toBe("PRESENTADA");
+    const d = (await liquidaciones.detalleLiquidacion(ctx, b.l.id)).lineas[0].duplicados[0];
+    expect(d.resolucion).toBe("DESCARTADA");
+  });
+
+  it("también al leer el ticket: la segunda lectura del mismo ticket se marca", async () => {
+    const antes = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "clave-ficticia-de-pruebas";
+    try {
+      const cruda = {
+        es_factura: true,
+        tipo_documento: "TICKET",
+        tipo_establecimiento: "RESTAURANTE",
+        facturas_detectadas: 1,
+        factura: { numero: null, fecha: "15/09/2026" },
+        cliente: { codigo: null, nombre: null, nif: null },
+        emisor: { nombre: `Restaurant ${sufijo}`, nif: null },
+        vehiculo: { marca: null, modelo: null, matricula: null },
+        concepto: null,
+        totales: { base_imponible: null, iva_importe: null, iva_porcentaje: null, total: "31,90 €", moneda: "EUR" },
+        recibo: {
+          detectado: false, recibos_detectados: 0, plantilla: "DESCONOCIDA", importe: null, tipo_operacion: null,
+          tarjeta: null, num_operacion: null, cod_autorizacion: null, comercio: null, terminal: null, red: null,
+          adquirente: null, cuenta: null, fecha_hora: null, texto: null,
+        },
+        confianza: { numero_factura: 0, cliente: 0, emisor: 0.95, total: 0.99, concepto: 0, recibo: 0 },
+      } as import("./invoice-scan/types.ts").ExtraccionCruda;
+      const uno = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan });
+      const [x1] = await tickets.subirTickets(ctx, uno.id, [fichero(await pdf(`foto ${randomUUID()}`))]);
+      const dos = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan });
+      const [x2] = await tickets.subirTickets(ctx, dos.id, [fichero(await pdf(`escaneo ${randomUUID()}`))]);
+      await analisis.procesarPendientes(50, async () => cruda);
+
+      const l1 = (await liquidaciones.detalleLiquidacion(ctx, uno.id)).lineas.find((y) => y.id === x1.id)!;
+      const l2 = (await liquidaciones.detalleLiquidacion(ctx, dos.id)).lineas.find((y) => y.id === x2.id)!;
+      expect(l1.duplicados).toEqual([]);
+      expect(l2.duplicados[0]).toMatchObject({ tipo: "MISMA_CLAVE", referenciaId: x1.id, detectadoEn: "ANALISIS" });
+    } finally {
+      if (antes === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = antes;
+    }
   });
 });

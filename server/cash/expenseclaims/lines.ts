@@ -28,6 +28,7 @@ import { lecturaDisponible } from "./analisis.ts";
 import {
   cargarEvidencia,
   detectarMismoFichero,
+  detectarPorContenido,
   reabrirPorInclusion,
   resolverPorExclusion,
 } from "./duplicates.ts";
@@ -361,6 +362,14 @@ export async function editarLinea(
       `UPDATE cash_expense_claim_lines SET ${sets.join(", ")} WHERE id = $1 AND claim_id = $2`,
       [lineId, claimId, ...valores]
     );
+    /*
+     * Si ha cambiado algo de lo que identifica al ticket —quién, qué día,
+     * cuánto, qué número—, se vuelve a mirar si está repetido. Y lo que ya no
+     * coincida con los datos corregidos, deja de estar pendiente.
+     */
+    if (["fecha", "emisorNombre", "emisorNif", "importeCentimos", "numeroDocumento"].some((k) => k in cambios)) {
+      await detectarPorContenido(client, ctx.empresaId, lineId, "EDICION");
+    }
     await client.query(`UPDATE cash_expense_claims SET updated_at_ms = $2 WHERE id = $1`, [
       claimId,
       Date.now(),

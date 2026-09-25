@@ -26,6 +26,7 @@ import { enTransaccion, siguienteNumeroDeEmpresa } from "../repository.ts";
 import { exigirReautenticacion } from "../reauth.ts";
 import type { Contexto } from "../service.ts";
 import { exigirOtraPersona } from "../sod.ts";
+import { revisarLiquidacion } from "./duplicates.ts";
 import { urlFirmada } from "../storage.ts";
 import {
   type AccionLiquidacion,
@@ -307,6 +308,17 @@ export async function detalleLiquidacion(ctx: Contexto, id: number): Promise<Det
  * ha podido excluir un ticket entre medias.
  */
 export async function presentarLiquidacion(ctx: Contexto, id: number): Promise<Liquidacion> {
+  /*
+   * Antes, y en su PROPIA transacción, se vuelve a mirar si algún ticket está
+   * repetido: si aparece algo nuevo, tiene que quedar guardado aunque
+   * presentar se niegue justo por eso. Dentro de la misma transacción, el
+   * rechazo se llevaría la evidencia que lo explica.
+   */
+  const previa = await cargarLiquidacion(pool, ctx, id);
+  if (previa.estado === "BORRADOR") {
+    await enTransaccion((client) => revisarLiquidacion(client, ctx.empresaId, id, "PRESENTAR"));
+  }
+
   const hecha = await enTransaccion(async (client) => {
     const l = await cargarLiquidacion(client, ctx, id, true);
     exigirTransicion(l, "PRESENTAR");
