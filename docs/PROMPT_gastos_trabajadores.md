@@ -1,15 +1,20 @@
 # Gastos de trabajadores (tickets, dietas, peajes): análisis y prompt maestro
 
-Documento de la **fase 1: solo análisis**. No hay código, ni migraciones, ni
-componentes detrás de esto. Consta de tres partes:
+Documento de la **fase 1: solo análisis**, en su **segunda revisión**. No hay
+código, ni migraciones, ni componentes detrás de esto. Consta de:
 
 - **A.** Auditoría de lo que Mobilink Cash es hoy, con los ficheros reales.
-- **B.** Propuesta de integración: qué se reutiliza, qué falta, qué decisiones
-  hay que tomar antes de programar.
+- **A bis.** Restricciones comprobadas en la segunda revisión (las que han
+  cambiado el diseño).
+- **B.** Decisiones definitivas, modelo de datos, flujo, plan de PRs y riesgos.
 - **C.** El prompt maestro para la fase 2, escrito contra el código real.
 
 Todo nombre de fichero, tabla, función o endpoint que aparece aquí **existe en
 el repositorio** salvo que vaya marcado como `(NUEVO)`.
+
+Idea que no cambia: **la liquidación vive dentro del módulo Cash pero es una
+entidad independiente del movimiento de caja. Solo al pagar una liquidación
+aprobada se crea un `cash_operations.PAYMENT`.**
 
 ---
 
@@ -256,169 +261,332 @@ mismo blob, sin copiar**.
 
 ---
 
-## B. Propuesta de integración
 
-### B.1 La decisión: dentro de Cash, como un documento más
+## A bis. Restricciones comprobadas en la segunda revisión
 
-Se integra **dentro de Cash**, con router, servicio y pantalla propios en el
-mismo módulo, por tres razones que salen del código y no del nombre:
+Cada una se ha buscado en el repositorio antes de decidir; las que
+contradicen una petición de la revisión se dicen aquí y se resuelven en B.
 
-1. **El pago al trabajador tiene que salir del cajón con sus piezas.** Solo
-   `registrarOperacion` sabe hacerlo, y hacerlo desde fuera obligaría a
-   duplicar el motor o a llamarlo de espaldas al resto del módulo.
-2. **Lo que la funcionalidad necesita ya es de Cash**: conceptos y destinos de
-   gasto (`Dietas` → persona), justificantes con bucket privado y hash,
-   lectura IA de tickets con sentido `PAGO`, informe PDF con incrustación,
-   auditoría, permisos por rol y ámbito de centro, SoD y reautenticación.
-3. **El único hueco es el ciclo de vida previo al pago**, y ese hueco tiene
-   precedente dentro de Cash: `cash_advances` es un documento que se abre un
-   día, se liquida otro y acaba en operaciones. La liquidación de gastos es su
-   simétrico: **la entrega de dinero es «te doy dinero y me traes tickets»; la
-   liquidación es «me traes tickets y te doy dinero»**.
+| # | Lo pedido | Lo que hay en el repositorio | Consecuencia |
+|---|---|---|---|
+| R1 | Identificar al trabajador por `sea_employees.id` | `sea_employees` la crea `supabase/migrations/001_sea_core.sql`, **no** `initDb`/`initCash`: en la base de la CI no existe. Es exactamente el caso de `techs.employee_id` (`supabase/migrations/010_techs_employee_id.sql`: «la clave foránea no puede ir en initDb porque en una base recién creada todavía no existe»). El servidor sí la lee en producción por `pool` (`server/index.ts:2562`) | `employee_id` **sin clave foránea**, con la misma justificación escrita; las pruebas de integración crean un `sea_employees` mínimo como hacen las de Therefore con `app_usuario_modulos` |
+| R2 | Ídem | `sea_employees` **no tiene `empresa_id`**: solo `company_id → sea_companies` (tabla anterior al SaaS) y `work_center_id → sea_work_centers`. Ninguna migración posterior la ata a `app_empresas`. La única unión empleado↔empresa que existe es `app_usuarios.employee_id` + `app_usuarios.empresa_id` | El servicio solo puede comprobar `activo`; **el aislamiento por empresa lo da `cash_expense_targets`** (que sí lleva `empresa_id`). Riesgo abierto B.6 |
+| R3 | Numeración `LG-26-001` | `siguienteNumeroDe(client, codigo, prefijo, anio)` (`repository.ts:513`) produce SIEMPRE `${codigo}-${prefijo}-${aa}-${seq}`; lo usan `EN`, `CB`, `IB`, `TR`, todos con el código de una caja. `app_centros` **no tiene `codigo`** | Función nueva sobre la misma tabla `cash_document_counters`, clave por empresa; numeración por empresa (por centro no hay código con el que numerar) |
+| R4 | Categoría sin exigir `PERSONA` | `validarClasificacionGasto(empresaId, conceptoId, destinoId)` (`config.ts:2148`): con `NINGUNO` el destino debe ser nulo; con `PERSONA`/`CENTRO_COSTE` el destino es **opcional** y, si va, debe ser de ese tipo | Se llama **por línea** con el destino derivado (B.2). No hay que tocarla |
+| R5 | Estadística | `expensestats.ts` construye tres consultas sobre `DESDE`/`FILTRO` con `o.expense_concept_id` y `o.expense_target_id` de la operación | Se amplía con una vista/subconsulta de «líneas de gasto» (B.2, PR2). No cambia la semántica de lo existente |
+| R6 | Idempotencia del pago | Precedentes: `x-idempotency-key` + `taller_idempotencia` (`server/index.ts:3218`), `idempotency_key` UNIQUE en `cash_autoscan_inbox` y en la cola ERP; el router de Cash ya lee `req.headers["idempotency-key"]` (`router.ts:3007`) | Misma cabecera; la clave se guarda **en la propia liquidación** (B.2) |
+| R7 | PDF antes del pago | `informeCierre` y `montar` (`report.ts`) solo dependen de rutas y MIME; nada exige operación | `montar`/`paginaDeAviso` se exportan con el tipo generalizado |
+| R8 | Autoservicio futuro sin migración grande | `app_usuarios.employee_id` **ya existe** (`administracion_fase11_usuarios_unificados.sql`) | La propiedad «esta liquidación es mía» será `app_usuarios.employee_id = claim.employee_id`. **No hace falta `cash_expense_targets.user_id`**: se retira del diseño |
+| R9 | Varios ficheros en una petición | `subidaDocumento` es `multer.memoryStorage()` con `.single(...)`; `subida()` solo traduce `LIMIT_FILE_SIZE` | `.array("documentos", 20)` con el mismo envoltorio; `LIMIT_UNEXPECTED_FILE` se traduce también |
 
-Lo que **no** se hace: ni un segundo sistema de pagos, ni de estados de
-operación, ni de documentos. El pago es un `PAYMENT` normal; los tickets acaban
-siendo `cash_operation_documents` de ese pago y salen en el informe de cierre
-como cualquier otro justificante.
+## B. Decisiones definitivas
 
-### B.2 Qué se reutiliza tal cual
+### B.1 Decisiones modificadas respecto a la primera versión
 
-| Necesidad | Lo que ya hay |
-|---|---|
-| Subir varios PDF/imágenes | `subidaDocumento` (multer en memoria, 15 MB), `exigirDocumentoValido` + `tipoReal`, `guardarDocumento`, bucle de subida de `Informes.tsx` |
-| Lectura automática | `escanearFactura(entrada, extractor)` con `sentido: "PAGO"` y `sessionId: null`: devuelve fecha, emisor (nombre/NIF), número, concepto, base/IVA/total, tipo de documento, moneda, avisos; deja rastro en `cash_invoice_scans` |
-| Lectura en segundo plano de un lote | Patrón de `autoscan/worker.ts` (`cogerUno` con `FOR UPDATE SKIP LOCKED`, lote de 3, cada 15 s) |
-| Revisión/corrección humana | `CampoPropuesto<T>` (`estado: RELLENAR/REVISAR/VACIO`), `avisos` graves/leves, `anotarConfirmacion` con `campos_corregidos` |
-| Categoría | `cash_expense_concepts` (`Dietas`, `Peajes`…, `tipo_destino = PERSONA`) y `cash_expense_targets` (el trabajador) |
-| Duplicados | `sha256` (mismo fichero), `cobroPrevioDeFactura(..., "PAGO")` (mismo número de factura ya pagado), `normalizarReferencia` |
-| Pago | `registrarOperacion` tipo `PAYMENT`, `PaymentMethodPicker` + `DenominationGrid` de `Pagos.tsx`, formas con `enPagos` |
-| Conservar justificantes | `cash_operation_documents` + patrón `promover` (misma ruta, sin copiar) |
-| PDF resumen + anexos | `report.ts`: pdfkit para la portada, `montar` (pdf-lib) para incrustar PDF/JPG/PNG, `paginaDeAviso` |
-| Aprobación por otra persona | `sodActivo` + `exigirOtraPersona` (`sod.ts`); `exigirReautenticacion` (`reauth.ts`) |
-| Permisos | `PERMISOS`/`POR_ROL`/`exigirPermiso`; `modulosApp.ts` para que Administración los asigne |
-| Auditoría | `registrarAuditoriaEnTransaccion` / `registrarAuditoria` |
-| Numeración | `siguienteNumeroDe(client, codigo, prefijo, anio)` (como `EN`, `CB`, `IB`) |
-| Estadística | `informeDeGasto` (`expensestats.ts`) y pantalla `GastoPorConcepto.tsx` |
+| Punto | Antes | Ahora | Por qué |
+|---|---|---|---|
+| 1. Identidad del trabajador | Destino PERSONA + `cash_expense_targets.user_id` | **`employee_id` (sea_employees) en la liquidación**, sin FK; el destino PERSONA es la *proyección* del empleado dentro de Cash, enlazada por `cash_expense_targets.employee_id` `(NUEVO)`, **una por empleado** (índice único parcial). Nada de `user_id` | Usuario ≠ trabajador; el vínculo usuario→empleado ya existe en `app_usuarios.employee_id`. R1, R2, R8 |
+| 2. Numeración | `siguienteNumeroDe` con código de caja (`LG-LG-26-001`) | `siguienteNumeroDeEmpresa` `(NUEVO)` → **`LG-26-001`** por empresa, sobre `cash_document_counters` | R3 |
+| 3. Estado de línea | Un solo `estado` mezclando OCR y función | **Dos campos**: `analisis` (PENDIENTE·ANALIZANDO·LISTO·FALLIDO·OMITIDO) y `situacion` (INCLUIDA·EXCLUIDA), más `revisada` | Una línea excluida puede seguir analizándose; una fallida puede incluirse a mano |
+| 4. IA obligatoria | Implícito: `LINEA_SIN_ANALIZAR` bloqueaba presentar | **La IA nunca bloquea**: presentar exige datos obligatorios, no análisis. Sin `OPENAI_API_KEY` (`hayIA()` en `core/openaiService.ts`) las líneas nacen `OMITIDO` | Punto 4 |
+| 5. Duplicados | `duplicado_de TEXT` | **Tabla de evidencias** `cash_expense_claim_duplicates` `(NUEVO)`: una fila por coincidencia, con tipo, referencia, resolución y quién | Una línea puede coincidir con varias cosas; la resolución es un hecho auditado |
+| 6. Categoría vs persona | Solo conceptos `tipo_destino = PERSONA` | **Cualquier concepto activo**. La persona reembolsada es de la cabecera; el destino de cada línea se **deriva**: `PERSONA` → el destino del empleado, `CENTRO_COSTE` → opcional en la línea, `NINGUNO` → nulo | R4: `validarClasificacionGasto` ya lo permite tal cual |
+| 7. Idempotencia del pago | Solo `FOR UPDATE` | `FOR UPDATE` **+ `Idempotency-Key`** guardada en `pago_idempotency_key`; misma clave → misma respuesta; otra clave sobre PAGADA → 409 | R6 |
+| 8. PDF | Solo tras pagar | **En cualquier estado**: portada con el estado y, cuando existe, el pago y su jornada | R7 |
+| 9. Autoservicio | Bloque opcional con rol nuevo y `user_id` | Fuera del alcance; el modelo ya lo soporta con `solicitante_user_id` + `app_usuarios.employee_id`. Sin columnas nuevas | R8 |
+| 10. Entrega | Un PR | **Cinco PRs desplegables** (B.4) | Punto 10 |
+| Ámbito de centro | `centro_id` en la liquidación al crear | Se mantiene, **nullable**, tomado de `ctx.centroId` al crear y del `register_id` al pagar (`centro_id_pago`) | Coherente con `cashCentroId` y `exigirJornadaPropia` |
 
-### B.3 Qué falta (y es nuevo de verdad)
+Lo que **no** cambia: un solo `PAYMENT` por el total (B.5 de la primera
+versión); tickets promovidos al pago sin copiar el fichero (`promote.ts`);
+pagar es de `responsable` como cualquier pago manual; el pago exige jornada
+abierta; sin conceptos sembrados.
 
-1. **La liquidación** como entidad: cabecera (trabajador, estado, totales,
-   quién presentó/aprobó/pagó, pago asociado) y líneas (un ticket = una línea:
-   fichero, lectura, campos revisados, concepto, importe).
-2. **El flujo de estados con aprobación.** No existe ninguno en el repositorio.
-3. **La categoría del ticket.** El escáner hoy propone forma de cobro y sección,
-   no concepto de gasto. Hace falta un tercer clasificador, con el mismo molde
-   de reglas (`seccion.ts` / `cash_section_rules`) y, opcionalmente, una pista
-   de lectura nueva («qué tipo de establecimiento es») que el modelo puede dar
-   sin que en `schema.ts` viva ninguna regla financiera.
-4. **Un pago con varios conceptos.** `cash_operations` admite **un** concepto
-   por operación. Una liquidación de 82,28 € es Dietas 66,40 + Peajes 15,88.
-   Ver B.5.
-5. **Quién es el trabajador para el sistema.** Ver B.4: es la decisión que más
-   condiciona el alcance.
-6. **La pantalla** (`GastosTrabajadores.tsx`) y su entrada en `NAV`.
+### B.2 Modelo de datos definitivo
 
-### B.4 Decisiones que hay que tomar antes de programar
+Todo en `server/cash/schema.ts` (`initCash`), después de
+`cash_expense_concepts`, `cash_expense_targets`, `cash_operations` y
+`cash_invoice_scans`. Sin ficheros de migración de Supabase: ninguna tabla
+nueva referencia nada que no cree `initDb`/`initCash`.
 
-**D1. ¿Quién sube los tickets: el trabajador con su usuario, o el mostrador
-por él?**
+```sql
+-- El empleado dentro de Cash: el destino PERSONA que lo representa.
+-- Sin clave foránea a sea_employees (R1). Único por empresa y empleado:
+-- una persona, una proyección. Los destinos antiguos siguen con NULL.
+ALTER TABLE cash_expense_targets ADD COLUMN IF NOT EXISTS employee_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS cash_expense_targets_employee_idx
+  ON cash_expense_targets(empresa_id, employee_id) WHERE employee_id IS NOT NULL;
 
-Hoy un trabajador que no es cajero **no tiene forma de entrar en `/cash`**:
-sin rol en `app_usuario_modulos` no pasa `cargarPermisosCaja`, y sin
-`cash.view` no carga `/bootstrap`. Darle `cash.view` le enseñaría las cajas,
-la jornada y el histórico de todos.
+CREATE TABLE IF NOT EXISTS cash_expense_claims (
+  id SERIAL PRIMARY KEY,
+  empresa_id UUID NOT NULL,
+  centro_id UUID,                              -- ámbito al crear; NULL = sin limitar
+  numero TEXT NOT NULL,                        -- LG-26-001 (por empresa)
+  estado TEXT NOT NULL DEFAULT 'BORRADOR'
+    CHECK (estado IN ('BORRADOR','PRESENTADA','APROBADA','RECHAZADA','PAGADA','ANULADA')),
+  -- Quién cobra. employee_id es la identidad (sea_employees.id, sin FK);
+  -- expense_target_id es su proyección en Cash (tenant, estadísticas);
+  -- empleado_nombre es la foto para el histórico, como party_nombre.
+  employee_id UUID,
+  expense_target_id INTEGER NOT NULL REFERENCES cash_expense_targets(id) ON DELETE RESTRICT,
+  empleado_nombre TEXT NOT NULL,
+  solicitante_user_id UUID,                    -- quien la creó; base del autoservicio futuro
+  periodo_desde DATE, periodo_hasta DATE,      -- de las líneas incluidas, al presentar
+  total_centimos BIGINT NOT NULL DEFAULT 0,    -- suma de INCLUIDAS; siempre recalculado en servidor
+  notas TEXT,
+  presentada_por UUID, presentada_at_ms BIGINT,
+  aprobada_por UUID,   aprobada_at_ms BIGINT,
+  rechazo_motivo TEXT, rechazada_por UUID, rechazada_at_ms BIGINT,
+  -- El pago: la única unión con el movimiento de caja.
+  operation_pago_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
+  session_id_pago INTEGER REFERENCES cash_sessions(id) ON DELETE RESTRICT,
+  centro_id_pago UUID,
+  pago_idempotency_key TEXT,                   -- ver B.3 (7)
+  pagada_por UUID,     pagada_at_ms BIGINT,
+  anulada_por UUID,    anulada_at_ms BIGINT, anulada_motivo TEXT,
+  version BIGINT NOT NULL DEFAULT 0,           -- como cash_sessions.version: cada transición la sube
+  creado_por UUID, created_at_ms BIGINT NOT NULL, updated_at_ms BIGINT NOT NULL,
+  UNIQUE (empresa_id, numero)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cash_expense_claims_pago_idx
+  ON cash_expense_claims(operation_pago_id) WHERE operation_pago_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS cash_expense_claims_estado_idx
+  ON cash_expense_claims(empresa_id, estado, updated_at_ms DESC);
 
-- **Opción A — mostrador**: cajero/responsable crea la liquidación a nombre de
-  un destino PERSONA y sube los tickets que el trabajador le entrega. Cero
-  cambios en usuarios. Cubre el 100 % del flujo pedido salvo el «sube él».
-- **Opción B — autoservicio**: rol nuevo `empleado` con un único permiso
-  `cash.expense_claim.own`; `/bootstrap` acepta también ese permiso y devuelve
-  un payload reducido; el sidebar solo enseña «Mis gastos»; el trabajador se
-  vincula a su destino PERSONA por una columna nueva
-  `cash_expense_targets.user_id`.
+CREATE TABLE IF NOT EXISTS cash_expense_claim_lines (
+  id SERIAL PRIMARY KEY,
+  empresa_id UUID NOT NULL,
+  claim_id INTEGER NOT NULL REFERENCES cash_expense_claims(id) ON DELETE RESTRICT,
+  orden INTEGER NOT NULL DEFAULT 0,
+  -- El justificante, como en cash_autoscan_inbox: vive aquí hasta que el pago existe.
+  nombre TEXT NOT NULL, mime TEXT NOT NULL, tamano_bytes INTEGER NOT NULL,
+  ruta TEXT NOT NULL, sha256 TEXT NOT NULL,
+  -- (3) Dos estados independientes.
+  analisis TEXT NOT NULL DEFAULT 'PENDIENTE'
+    CHECK (analisis IN ('PENDIENTE','ANALIZANDO','LISTO','FALLIDO','OMITIDO')),
+  situacion TEXT NOT NULL DEFAULT 'INCLUIDA'
+    CHECK (situacion IN ('INCLUIDA','EXCLUIDA')),
+  excluida_motivo TEXT, excluida_por UUID, excluida_at_ms BIGINT,
+  -- Una persona ha confirmado los datos obligatorios (a mano o dando por buena la lectura).
+  revisada BOOLEAN NOT NULL DEFAULT false, revisada_por UUID, revisada_at_ms BIGINT,
+  scan_id INTEGER REFERENCES cash_invoice_scans(id) ON DELETE SET NULL,
+  analisis_error TEXT, analisis_intentos INTEGER NOT NULL DEFAULT 0,
+  -- Lo LEÍDO no se toca después; lo REVISADO es lo que vale.
+  leido JSONB,
+  fecha DATE,
+  emisor_nombre TEXT NOT NULL DEFAULT '', emisor_nif TEXT,
+  numero_documento TEXT,
+  concepto TEXT NOT NULL DEFAULT '',
+  base_centimos BIGINT, iva_centimos BIGINT,
+  importe_centimos BIGINT NOT NULL DEFAULT 0 CHECK (importe_centimos >= 0),
+  moneda TEXT NOT NULL DEFAULT 'EUR',
+  -- (6) Categoría del gasto; cualquier concepto activo. El destino solo se
+  -- guarda cuando el concepto pide CENTRO_COSTE; el de PERSONA se deriva de la cabecera.
+  expense_concept_id INTEGER REFERENCES cash_expense_concepts(id) ON DELETE SET NULL,
+  expense_target_id  INTEGER REFERENCES cash_expense_targets(id)  ON DELETE SET NULL,
+  concepto_propuesto_id INTEGER, concepto_confianza NUMERIC(3,2), concepto_regla_id INTEGER,
+  campos_corregidos JSONB,
+  subido_por UUID, subido_at_ms BIGINT NOT NULL, updated_at_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cash_expense_claim_lines_claim_idx ON cash_expense_claim_lines(claim_id, orden);
+CREATE INDEX IF NOT EXISTS cash_expense_claim_lines_sha_idx   ON cash_expense_claim_lines(empresa_id, sha256);
+CREATE INDEX IF NOT EXISTS cash_expense_claim_lines_clave_idx
+  ON cash_expense_claim_lines(empresa_id, emisor_nif, fecha, importe_centimos);
 
-**Recomendación:** construir **A completa en la fase 2** con el modelo ya
-preparado para B (`solicitante_user_id` en la cabecera y `user_id` en el
-destino), y dejar B como bloque final opcional del prompt. B toca bootstrap,
-layout y Administración, que es lo que más se puede llevar por delante otra
-cosa.
+-- (5) Cada coincidencia es una fila, con su resolución. Nada se borra.
+CREATE TABLE IF NOT EXISTS cash_expense_claim_duplicates (
+  id SERIAL PRIMARY KEY,
+  empresa_id UUID NOT NULL,
+  line_id INTEGER NOT NULL REFERENCES cash_expense_claim_lines(id) ON DELETE RESTRICT,
+  tipo TEXT NOT NULL CHECK (tipo IN ('MISMO_FICHERO','MISMA_CLAVE','MISMO_NUMERO')),
+  -- Con qué coincide: otra línea, un justificante ya colgado de un pago, o una operación.
+  referencia_tipo TEXT NOT NULL CHECK (referencia_tipo IN ('LINEA','DOCUMENTO','OPERACION')),
+  referencia_id INTEGER NOT NULL,
+  referencia_numero TEXT,                      -- LG-26-003 / P-26-041, para enseñarlo sin JOIN
+  detectado_en TEXT NOT NULL CHECK (detectado_en IN ('SUBIDA','ANALISIS','PRESENTAR','PAGAR')),
+  detectado_at_ms BIGINT NOT NULL,
+  resolucion TEXT NOT NULL DEFAULT 'PENDIENTE'
+    CHECK (resolucion IN ('PENDIENTE','ACEPTADA','EXCLUIDA','DESCARTADA')),
+  -- ACEPTADA: no es duplicado, se mantiene (motivo obligatorio).
+  -- EXCLUIDA: se excluyó la línea por esto. DESCARTADA: la referencia dejó de existir (p. ej. pago anulado).
+  resuelto_por UUID, resuelto_at_ms BIGINT, motivo TEXT,
+  UNIQUE (line_id, tipo, referencia_tipo, referencia_id)
+);
 
-**D2. ¿Un pago o un pago por concepto?** Ver B.5. Recomendación: **uno**.
+-- Reglas de concepto: mismo molde que cash_section_rules.
+CREATE TABLE IF NOT EXISTS cash_expense_rules (
+  id SERIAL PRIMARY KEY,
+  empresa_id UUID NOT NULL,
+  campo TEXT NOT NULL CHECK (campo IN ('TIPO_ESTABLECIMIENTO','NOMBRE_EMISOR','NIF_EMISOR','CONCEPTO')),
+  patron TEXT NOT NULL,
+  expense_concept_id INTEGER NOT NULL,         -- sin FK, como cash_section_rules → cash_sections
+  confianza NUMERIC(3,2) NOT NULL DEFAULT 0.9,
+  auto_seleccionar BOOLEAN NOT NULL DEFAULT true,
+  prioridad INTEGER NOT NULL DEFAULT 100,
+  activa BOOLEAN NOT NULL DEFAULT true,
+  creado_por UUID, created_at_ms BIGINT NOT NULL, updated_at_ms BIGINT NOT NULL,
+  UNIQUE (empresa_id, campo, patron)
+);
+```
 
-**D3. ¿Puede pagarse por transferencia?** Sí sin tocar nada: activar
-`enPagos` en la forma `BANK_TRANSFER` desde Configuración. Un pago sin
-efectivo no pide piezas. Sigue exigiendo jornada abierta, porque todo
-`PAYMENT` cuelga de una `cash_sessions`; es el mismo precio que paga hoy una
-liquidación de entrega.
+Relación con lo existente, sin duplicar identidad:
 
-**D4. ¿La categoría la decide el modelo?** No del todo. Regla de la casa
-(`invoice-scan/schema.ts`): «aquí no vive ninguna regla financiera; el modelo
-LEE». Propuesta: el modelo puede decir **qué tipo de establecimiento** ve
-(`tipo_establecimiento`: RESTAURANTE, PEAJE, GASOLINERA, PARKING, HOTEL,
-TRANSPORTE, TAXI, OTRO), que es leer el papel; y qué concepto de la empresa
-corresponde a cada tipo lo dicen **reglas configurables**, como ya pasa con
-la forma de cobro y la sección.
+```
+sea_employees.id ──(sin FK)──> cash_expense_claims.employee_id
+       │                              │
+       └──(sin FK)──> cash_expense_targets.employee_id  <── cash_expense_claims.expense_target_id
+app_usuarios.employee_id  (ya existe)  → propiedad «mía» del autoservicio futuro
+cash_expense_claims.operation_pago_id  → cash_operations (PAYMENT)  → cash_operation_documents (promovidos)
+```
 
-### B.5 Un pago, varios conceptos: cómo cuadrarlo con la estadística
+### B.3 Flujo definitivo
 
-El cajón ve **una** salida de 82,28 € con **una** composición de piezas y
-**un** número (`P-26-041`). Partirla en dos `PAYMENT` obligaría a componer dos
-juegos de piezas (66,40 y 15,88) para un solo billete de 100, y
-`validarOperacion` exige que las piezas cuadren con cada operación: no es
-viable en el mostrador.
+```
+crear(empleado) ─► BORRADOR ─ subir tickets ─► líneas (analisis: PENDIENTE→…; situacion: INCLUIDA)
+                       │                              │ worker: LISTO | FALLIDO   (o OMITIDO sin IA)
+                       │                              │ persona: corrige, marca revisada, incluye/excluye
+                       │◄─── REABRIR ──── RECHAZADA   │ duplicados: evidencias → ACEPTADA | EXCLUIDA
+                       ▼                              │
+                  PRESENTAR (recalcula total y periodo; congela líneas)
+                       ▼
+                  PRESENTADA ─ APROBAR (permiso; SoD; reauth si activa) ─► APROBADA
+                       │                                                       │
+                       └─ RECHAZAR (motivo) ─► RECHAZADA                       ▼
+                                                        PAGAR (jornada abierta; Idempotency-Key)
+                                                          = 1 PAYMENT por el total + promoción de tickets
+                                                                               ▼
+                                                                            PAGADA
+                                                        anularOperacion(pago) ─► APROBADA (gancho, misma transacción)
+  ANULAR (motivo) desde BORRADOR | PRESENTADA | APROBADA | RECHAZADA ─► ANULADA   (nunca desde PAGADA)
+```
 
-Propuesta: **un `PAYMENT` por el total**, con `expense_concept_id` y
-`expense_target_id` a NULL (la coherencia la exige
-`validarClasificacionGasto`: sin concepto no puede haber destino), y el
-desglose por concepto vive en las **líneas de la liquidación**.
-`expensestats.ts` se amplía para que, cuando una operación es el pago de una
-liquidación, sume **sus líneas** (cada una con su concepto y el trabajador
-como destino) y no cuente la operación como «sin clasificar». Es un `LEFT
-JOIN` más en las tres consultas que ya filtran por `o.expense_concept_id`, y
-una prueba de integración que lo fije.
+Reglas del flujo, una por punto de la revisión:
 
-### B.6 Conflictos y duplicidades a vigilar
+1. **Identidad.** `crearLiquidacion(ctx, { employeeId | expenseTargetId, notas })`:
+   si llega `employeeId`, comprueba en `sea_employees` que existe y está
+   activo (solo eso: R2), busca el destino PERSONA con ese `employee_id` y,
+   si no existe, lo **crea** (nombre `apellidos, nombre`, código derivado con
+   `codigoDesde` de `config.ts`) o lo **propone** si hay uno sin vincular con
+   nombre igual (`normalizarNombre` de `core/vinculoTecnicos.ts`; se pide
+   confirmación, nunca se enlaza solo). Si llega `expenseTargetId` (destino
+   PERSONA sin empleado vinculado, caso de transición), se admite y se marca
+   «sin empleado vinculado» en la lista. `empleado_nombre` se fotografía al
+   crear.
+2. **Numeración.** `siguienteNumeroDeEmpresa(client, empresaId, "LG", anio)`
+   `(NUEVO)` en `repository.ts`: clave `${empresaId}:LG:${anio}` en
+   `cash_document_counters`, formato `LG-${aa}-${seq3}`. Año = el de creación.
+3. **Estados de línea.** `analisis` lo mueve solo el worker (y `reintentar`);
+   `situacion` y `revisada` los mueve solo una persona. Excluir no cancela un
+   análisis en curso; un `FALLIDO` incluido es válido si está `revisada`.
+4. **La IA no es requisito.** `puedePresentar` exige, por línea INCLUIDA:
+   `fecha`, `importe_centimos > 0`, `expense_concept_id`, `moneda = 'EUR'`,
+   `revisada = true`, y ninguna evidencia de duplicado `PENDIENTE`. No mira
+   `analisis`. Con `hayIA() === false` las líneas nacen `OMITIDO` y la
+   pantalla pide los datos a mano desde el principio.
+5. **Duplicados.** Tres detecciones, cada una escribe evidencias:
+   `MISMO_FICHERO` (sha256, en SUBIDA: contra líneas de la empresa no
+   excluidas de liquidaciones no anuladas, y contra `cash_operation_documents`
+   no anulados vía `duplicadosDe`), `MISMA_CLAVE` (emisor_nif|nombre
+   normalizado + fecha + importe, en ANALISIS y al editar), `MISMO_NUMERO`
+   (`cobroPrevioDeFactura(..., "PAGO")`, en ANALISIS, al editar y **otra vez
+   en PRESENTAR y PAGAR**, porque el mundo cambia: es lo que hace
+   `propuestaDeEscaneo`). Resolver: `ACEPTADA` con motivo (auditado) o
+   `EXCLUIDA` (excluye la línea). Si al anular un pago desaparece la
+   referencia, la evidencia pasa a `DESCARTADA`.
+6. **Categoría y persona.** Al pagar, por cada línea INCLUIDA se llama
+   `validarClasificacionGasto(empresaId, conceptId, destinoDerivado)` con
+   `destinoDerivado` = `claim.expense_target_id` si el concepto es `PERSONA`,
+   `line.expense_target_id` si es `CENTRO_COSTE`, `null` si es `NINGUNO`. Un
+   concepto desactivado entre la aprobación y el pago falla con
+   `CONCEPTO_INACTIVO` dentro de la transacción. `expensestats.ts` suma esas
+   líneas con ese destino derivado (C.8).
+7. **Idempotencia del pago.** `POST /expense-claims/:id/pay` exige
+   `Idempotency-Key` (cabecera, o `idempotencyKey` en el cuerpo, como
+   `router.ts:3007`). Dentro de la transacción y con la fila bloqueada:
+   `APROBADA` → paga y guarda la clave; `PAGADA` con la **misma** clave →
+   200 con el mismo resultado (número de pago, operación), sin tocar nada;
+   `PAGADA` con **otra** clave → 409 `LIQUIDACION_YA_PAGADA`. El navegador
+   genera la clave con `crypto.randomUUID()` al abrir el modal y la reutiliza
+   en el reintento. Sin clave → 400.
+8. **PDF.** `informeLiquidacion` en cualquier estado: portada con el estado
+   grande; pie con presentada/aprobada/pagada rellenos o «pendiente»; cuando
+   está pagada, número del pago, jornada y formas; anexos = líneas INCLUIDAS.
+   En BORRADOR lleva la marca «Borrador».
+9. **Autoservicio.** Fuera del alcance. Lo que ya queda preparado:
+   `solicitante_user_id`, `employee_id`, y la comprobación futura
+   `app_usuarios.employee_id = claim.employee_id`. Sin columnas nuevas.
+10. **Entrega por fases.** B.4.
 
-- **Entregas de dinero vs liquidaciones.** Un trabajador puede haber recibido
-  50 € por `Entregas` y traer después el mismo ticket a una liquidación. La
-  detección por `sha256` y por (emisor, fecha, total) tiene que mirar también
-  los justificantes colgados de `cash_operations` (los de la liquidación de la
-  entrega), no solo las otras liquidaciones.
-- **`cash_expense_targets` no es `sea_employees`.** No se intenta unificar
-  ahora (precedente: `vinculoTecnicos.ts` tardó una fase entera en emparejar
-  `techs` con Core y se hace a mano). Se deja la puerta: `user_id` opcional.
-- **Anular el pago** (`anularOperacion`) tiene que devolver la liquidación a
-  `APROBADA` en la misma transacción, o quedaría «pagada» con el dinero de
-  vuelta en el cajón.
-- **El informe de cierre** incrusta `documentosDeJornada(sessionId)`, que lee
-  por `session_id`. Los tickets tienen que promoverse a
-  `cash_operation_documents` del pago (misma ruta) para salir ahí; si se
-  dejaran solo en la liquidación, el papeleo del día quedaría incompleto.
-- **ERP**: el pago es `origen = MANUAL` → `erp_sync_status = NOT_APPLICABLE`.
-  No se exporta (limitación general documentada en `docs/mobilink-cash.md` §9).
-- **Fiscalidad**: una factura simplificada sin el NIF de la empresa no es
-  deducible. Se guarda lo que el papel dice (base/IVA cuando existen) y se
-  avisa cuando falta el NIF del receptor; no se decide nada fiscal aquí.
+### B.4 Plan de PRs (cada uno desplegable y con CI verde)
+
+| PR | Contenido | Sirve ya para | Toca código existente |
+|---|---|---|---|
+| **PR1 · Liquidación manual** | Esquema completo (B.2), `siguienteNumeroDeEmpresa`, `expenseclaims/domain.ts` + `service.ts` + `lines.ts` (subida multi-fichero con `MISMO_FICHERO`, edición manual, incluir/excluir, revisada), presentar/aprobar/rechazar/reabrir/anular con SoD y reauth, permisos, endpoints, pantalla básica, PDF (`informeLiquidacion`). Líneas nacen `OMITIDO` (sin worker) | Preparar, revisar y aprobar liquidaciones con datos tecleados; PDF para firmar | `schema.ts`, `repository.ts`, `permissions.ts`, `router.ts`, `report.ts` (exportar `montar`/`paginaDeAviso`), `navigation.ts`, `CashApp.tsx`, `api.ts`, `types/index.ts` |
+| **PR2 · Pago** | `pagar` con `registrarOperacion`, promoción de tickets, idempotencia, gancho en `anularOperacion`, `expensestats.ts` con líneas, modal de pago, enlace desde `Historico.tsx` | Cerrar el ciclo: el dinero sale del cajón y los tickets van al informe de cierre | `service.ts` (`anularOperacion`), `expensestats.ts`, `Historico.tsx` |
+| **PR3 · Lectura automática** | `tipo_establecimiento` en el esquema/normalización del escáner, worker de análisis, `leido`, propuesta por línea, `cash_expense_rules` + `clasificarConcepto` + bloque en `Configuracion.tsx`, `campos_corregidos` | Que el 80 % de las líneas lleguen rellenas | `invoice-scan/schema.ts`, `types.ts`, `normalize.ts`, `config.ts`, `index.ts` (worker) |
+| **PR4 · Duplicados completos** | `MISMA_CLAVE` y `MISMO_NUMERO`, re-detección en presentar/pagar, `DESCARTADA` al anular pago, panel de evidencias con resolución | Que no se pague dos veces el mismo ticket | `anularOperacion` (segunda vez, pequeña) |
+| **PR5 · Empleados** | `cash_expense_targets.employee_id` en Configuración (selector de `sea_employees` activos, propuesta por nombre con `normalizarNombre`, confirmación manual), creación de liquidación **por empleado**, filtro por empleado | Identidad limpia y lista para el autoservicio | `Configuracion.tsx`, `config.ts` |
+
+PR1 ya lleva la columna `employee_id` y admite `employeeId` en la creación
+(para no migrar después); lo que PR5 añade es la pantalla para vincular.
+Orden alternativo si se quiere valor antes: PR1 → PR2 → PR5 → PR3 → PR4.
+
+### B.5 Riesgos que siguen abiertos
+
+1. **`sea_employees` no está atada a la empresa (R2).** Con varias empresas
+   en la misma instalación, el selector de empleados enseñaría a todos. Hoy
+   hay un tenant (`DEFAULT_EMPRESA_ID`). La atadura real es
+   `cash_expense_targets.empresa_id`; si algún día hace falta, se filtra por
+   `app_usuarios.empresa_id` de los empleados con usuario, o se añade
+   `empresa_id` a `sea_employees` por migración de Supabase.
+2. **Pruebas de integración con `sea_employees`.** No existe en la CI: la
+   suite crea un stub mínimo (`id, nombre, apellidos, activo`) como hacen las
+   de Therefore con `app_usuario_modulos`. Cualquier columna más que se use en
+   producción hay que añadirla al stub a mano.
+3. **Un blob, varias filas.** Al promover, el objeto del bucket queda
+   referenciado por la línea y por `cash_operation_documents`. Ya pasa con
+   AutoScan; una política de retención tendrá que mirar ambas.
+4. **Coste y tiempo de la IA.** Cinco tickets = cinco llamadas. El worker
+   acota (lote 3 / 15 s) pero no hay presupuesto por empresa.
+5. **Fiscalidad.** Una factura simplificada sin NIF del receptor no es
+   deducible. Se guarda lo leído y se avisa; no se decide nada.
+6. **Sin ticket no hay línea.** Un gasto sin justificante (peaje sin recibo)
+   no cabe en este modelo. Si hace falta, sería una línea sin fichero con
+   permiso de responsable y motivo; queda fuera hasta que alguien lo pida.
+7. **Gancho en `anularOperacion`.** Es la única modificación de una función
+   central del módulo; se protege con prueba de integración y mutación.
+8. **Catálogo de conceptos vacío.** Sin «Dietas» no hay a qué clasificar. La
+   pantalla lo dice; no se siembra.
+9. **El pago exige jornada abierta.** Una liquidación aprobada un domingo se
+   paga el lunes. Es el mismo precio que ya pagan las entregas de dinero.
 
 ---
 
-## C. PROMPT MAESTRO (fase 2: implementación)
+## C. PROMPT MAESTRO (fase 2: implementación, versión corregida)
 
-> Copiar desde aquí hasta el final en una conversación nueva.
+> Copiar desde aquí hasta el final en una conversación nueva. Indica en el
+> primer mensaje **qué PR del plan (C.2) se implementa**; cada PR se entrega,
+> se mergea y se despliega por separado.
 
 ### C.0 Contexto y reglas de la casa
 
 Vas a implementar **liquidaciones de gastos de trabajadores** en Mobilink
 Cash (repositorio `jcruset-create/mobilink`). Antes de tocar nada lee
-`CLAUDE.md`, `docs/mobilink-cash.md` (especialmente §7 ter, §7 quater,
-§7 novies, §7 undecies) y `docs/PROMPT_gastos_trabajadores.md` (partes A y
-B: la auditoría y las decisiones ya tomadas). Trabaja en la rama que se te
-indique; `git fetch origin main` y `git merge origin/main` antes de empezar;
-`bash scripts/check-versions.sh` antes de cada commit; sube la versión de
+`CLAUDE.md`, `docs/mobilink-cash.md` (§7 ter, §7 quater, §7 novies,
+§7 undecies) y `docs/PROMPT_gastos_trabajadores.md` entero: la parte A es la
+auditoría, A bis las restricciones comprobadas y B las decisiones **ya
+tomadas**; no las reabras. Trabaja en la rama que se te indique; `git fetch
+origin main` y `git merge origin/main` antes de empezar; `bash
+scripts/check-versions.sh` antes de cada commit; sube la versión de
 `package.json`; al acabar, PR y merge cuando la CI esté verde, comprobando que
 el diff contra `main` solo trae tus ficheros.
 
-Convenciones que se respetan sin excepción:
+Principio que gobierna todo: **la liquidación vive dentro de Cash pero es una
+entidad independiente del movimiento de caja; solo al pagar una liquidación
+aprobada se crea un `cash_operations.PAYMENT`, a través de
+`registrarOperacion` y de nadie más.**
+
+Convenciones sin excepción:
 
 - Dinero en **céntimos enteros y positivos** (`Centimos`, `domain/money.ts`).
 - Comentarios y nombres en castellano, con el porqué de cada decisión, como
@@ -432,18 +600,22 @@ Convenciones que se respetan sin excepción:
   va en `src/modules/cash/utils/*.ts`.
 - `tsconfig.server.json` tiene `strict: false`: no cuentes con narrowing de
   uniones por booleanos; usa discriminantes de texto.
-- Ficheros nuevos en su sitio: servidor en `server/cash/expenseclaims/`
-  `(NUEVO)`, pantalla en `src/modules/cash/pages/`, tipos en
-  `src/modules/cash/types/index.ts`, API en `src/modules/cash/services/api.ts`.
+- Servidor en `server/cash/expenseclaims/` `(NUEVO)`: `domain.ts` (puro),
+  `service.ts` (ciclo de vida), `lines.ts` (líneas y ficheros),
+  `duplicates.ts` (evidencias), `conceptos.ts` (clasificador), `report.ts`
+  (PDF), `worker.ts` (análisis). Pantalla en `src/modules/cash/pages/`,
+  tipos en `src/modules/cash/types/index.ts`, API en
+  `src/modules/cash/services/api.ts`.
 
 ### C.1 Alcance
 
-Flujo: **trabajador entrega tickets → se suben varios PDF/imágenes → lectura
-automática → revisión y corrección → total por concepto → presentar → aprobar
-→ pagar (sale del cajón o por transferencia) → los tickets quedan como
-justificantes del pago → PDF con resumen y anexos.**
+Flujo: **el mostrador crea la liquidación a nombre de un empleado → sube
+varios PDF/imágenes → lectura automática si hay IA (nunca obligatoria) →
+revisión y corrección → total por concepto → presentar → aprobar → pagar (del
+cajón o por transferencia) → los tickets quedan como justificantes del pago →
+PDF con resumen y anexos en cualquier estado.**
 
-Ejemplo de referencia (úsalo en pruebas y en la pantalla renderizada):
+Ejemplo de referencia (pruebas y pantalla renderizada):
 
 ```
 Dietas: 66,40 €
@@ -451,453 +623,406 @@ Peajes: 15,88 €
 TOTAL: 82,28 €
 ```
 
-Se construye la **opción A** (el mostrador sube por el trabajador) con el
-modelo preparado para la **opción B** (autoservicio), que va como bloque
-opcional en C.12. No construyas B sin que el usuario lo confirme.
+Fuera del alcance: autoservicio del trabajador (el modelo ya lo soporta:
+`solicitante_user_id` + `app_usuarios.employee_id`); líneas sin
+justificante; envío del pago al ERP.
 
-### C.2 Modelo de datos `(NUEVO)`, en `server/cash/schema.ts`
+### C.2 Plan de PRs
 
-Se añade a `initCash`, con `CREATE TABLE IF NOT EXISTS` y `ALTER … ADD COLUMN
-IF NOT EXISTS`, **después** de las tablas a las que referencia
-(`cash_expense_concepts`, `cash_expense_targets`, `cash_operations`,
-`cash_invoice_scans`), y con un comentario de bloque explicando por qué existe
-cada tabla, como hace el resto del fichero.
+Implementa **solo el PR que se te pida**, en este orden salvo indicación:
 
-```sql
-CREATE TABLE IF NOT EXISTS cash_expense_claims (
-  id SERIAL PRIMARY KEY,
-  empresa_id UUID NOT NULL,
-  centro_id UUID,                          -- ámbito; NULL = sin limitar
-  numero TEXT NOT NULL,                    -- LG-26-001, ver C.4
-  estado TEXT NOT NULL DEFAULT 'BORRADOR'
-    CHECK (estado IN ('BORRADOR','PRESENTADA','APROBADA','RECHAZADA','PAGADA','ANULADA')),
-  expense_target_id INTEGER NOT NULL REFERENCES cash_expense_targets(id) ON DELETE RESTRICT,
-  solicitante_user_id UUID,                -- quien la creó (opción B: el propio trabajador)
-  periodo_desde DATE, periodo_hasta DATE,  -- calculados de las líneas al presentar
-  total_centimos BIGINT NOT NULL DEFAULT 0,-- suma de líneas INCLUIDAS; se recalcula en servidor
-  notas TEXT,
-  presentada_por UUID, presentada_at_ms BIGINT,
-  aprobada_por UUID,   aprobada_at_ms BIGINT,
-  rechazo_motivo TEXT, rechazada_por UUID, rechazada_at_ms BIGINT,
-  operation_pago_id INTEGER REFERENCES cash_operations(id) ON DELETE RESTRICT,
-  session_id_pago INTEGER REFERENCES cash_sessions(id) ON DELETE RESTRICT,
-  pagada_por UUID,     pagada_at_ms BIGINT,
-  anulada_por UUID,    anulada_at_ms BIGINT, anulada_motivo TEXT,
-  creado_por UUID, created_at_ms BIGINT NOT NULL, updated_at_ms BIGINT NOT NULL,
-  UNIQUE (empresa_id, numero)
-);
+1. **PR1 · Liquidación manual** — C.3, C.4 (sin `pagar`), C.5 (solo
+   `MISMO_FICHERO`), C.7, C.9, C.10 (sin modal de pago), C.11, C.13, C.14.
+   Las líneas nacen con `analisis = 'OMITIDO'`.
+2. **PR2 · Pago** — `pagar` (C.4), promoción de tickets (C.3), gancho en
+   `anularOperacion`, idempotencia, `expensestats.ts` (C.8), modal de pago,
+   enlace desde `Historico.tsx`.
+3. **PR3 · Lectura automática** — C.6 entero, worker, `leido`, reglas de
+   concepto y su bloque en `Configuracion.tsx`.
+4. **PR4 · Duplicados completos** — `MISMA_CLAVE`, `MISMO_NUMERO`,
+   re-detección en presentar/pagar, `DESCARTADA` al anular pago, panel de
+   evidencias.
+5. **PR5 · Empleados** — vínculo `cash_expense_targets.employee_id` en
+   Configuración, propuesta por nombre, creación por empleado en la pantalla.
 
-CREATE TABLE IF NOT EXISTS cash_expense_claim_lines (
-  id SERIAL PRIMARY KEY,
-  empresa_id UUID NOT NULL,
-  claim_id INTEGER NOT NULL REFERENCES cash_expense_claims(id) ON DELETE RESTRICT,
-  orden INTEGER NOT NULL DEFAULT 0,
-  -- El fichero, como en cash_autoscan_inbox: aquí vive hasta que el pago existe.
-  nombre TEXT NOT NULL, mime TEXT NOT NULL, tamano_bytes INTEGER NOT NULL,
-  ruta TEXT NOT NULL, sha256 TEXT NOT NULL,
-  estado TEXT NOT NULL DEFAULT 'PENDIENTE'
-    CHECK (estado IN ('PENDIENTE','ANALIZANDO','LISTA','FALLIDA','REVISADA','EXCLUIDA')),
-  scan_id INTEGER REFERENCES cash_invoice_scans(id) ON DELETE SET NULL,
-  error TEXT,
-  -- Lo LEÍDO (no se toca después) y lo REVISADO (lo que vale). Dos juegos a propósito.
-  leido JSONB,                             -- {fecha, emisorNombre, emisorNif, numero, concepto, base, iva, total, moneda, tipoEstablecimiento, confianza}
-  fecha DATE, emisor_nombre TEXT NOT NULL DEFAULT '', emisor_nif TEXT,
-  numero_documento TEXT, concepto TEXT NOT NULL DEFAULT '',
-  base_centimos BIGINT, iva_centimos BIGINT,
-  importe_centimos BIGINT NOT NULL DEFAULT 0,
-  expense_concept_id INTEGER REFERENCES cash_expense_concepts(id) ON DELETE SET NULL,
-  concepto_propuesto_id INTEGER, concepto_confianza NUMERIC(3,2), concepto_regla_id INTEGER,
-  campos_corregidos JSONB,                 -- mismo criterio que cash_invoice_scans
-  duplicado_de TEXT,                       -- 'LINEA:123' | 'DOCUMENTO:456' | 'OPERACION:P-26-003' cuando se detectó
-  duplicado_aceptado_motivo TEXT,          -- si alguien decidió mantenerla igualmente
-  excluida_motivo TEXT, excluida_por UUID,
-  subido_por UUID, subido_at_ms BIGINT NOT NULL, updated_at_ms BIGINT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS cash_expense_claim_lines_claim_idx ON cash_expense_claim_lines(claim_id, orden);
-CREATE INDEX IF NOT EXISTS cash_expense_claim_lines_sha_idx   ON cash_expense_claim_lines(empresa_id, sha256);
-CREATE INDEX IF NOT EXISTS cash_expense_claims_estado_idx     ON cash_expense_claims(empresa_id, estado, updated_at_ms DESC);
+Cada PR: tests nuevos en verde, mutaciones en rojo, tres typechecks, `npm run
+build`, render de lo visible, sección de `docs/mobilink-cash.md` actualizada.
 
--- Reglas de concepto: mismo molde que cash_section_rules.
-CREATE TABLE IF NOT EXISTS cash_expense_rules (
-  id SERIAL PRIMARY KEY,
-  empresa_id UUID NOT NULL,
-  campo TEXT NOT NULL CHECK (campo IN ('TIPO_ESTABLECIMIENTO','NOMBRE_EMISOR','NIF_EMISOR','CONCEPTO')),
-  patron TEXT NOT NULL,
-  expense_concept_id INTEGER NOT NULL,     -- sin FK, como cash_section_rules → cash_sections
-  confianza NUMERIC(3,2) NOT NULL DEFAULT 0.9,
-  auto_seleccionar BOOLEAN NOT NULL DEFAULT true,
-  prioridad INTEGER NOT NULL DEFAULT 100,
-  activa BOOLEAN NOT NULL DEFAULT true,
-  creado_por UUID, created_at_ms BIGINT NOT NULL, updated_at_ms BIGINT NOT NULL,
-  UNIQUE (empresa_id, campo, patron)
-);
+### C.3 Esquema y almacenamiento
 
-ALTER TABLE cash_expense_targets ADD COLUMN IF NOT EXISTS user_id UUID;  -- opción B
-CREATE UNIQUE INDEX IF NOT EXISTS cash_expense_targets_user_idx
-  ON cash_expense_targets(empresa_id, user_id) WHERE user_id IS NOT NULL;
-```
-
-No se crean migraciones de Supabase: las tablas `cash_*` nacen en `initCash`.
-Prueba el arranque contra PostgreSQL real (las restricciones `CHECK` y el
-orden de los `ALTER` solo fallan ahí).
-
-### C.3 Almacenamiento de los tickets
-
-- `server/cash/storage.ts`: añadir `rutaDeTicket(empresaId, claimId, ext,
-  ahora)` `(NUEVO)` → `${empresaId}/gastos/${claimId}/${ahora}${ext}`, al lado
-  de `rutaDocumento`. Mismo bucket privado, mismos `guardarDocumento`,
-  `leerDocumento`, `urlFirmada`.
-- Validación del fichero con `exigirDocumentoValido` de
-  `invoice-scan/service.ts` (MIME real, 15 MB) y `subidaDocumento` del router.
-- **Un blob, varias filas**: al pagar, cada línea incluida genera una fila en
+- Añade a `initCash` (`server/cash/schema.ts`) **exactamente** el DDL de
+  B.2, después de `cash_expense_concepts`, `cash_expense_targets`,
+  `cash_operations` y `cash_invoice_scans`, con un comentario de bloque por
+  tabla en el estilo del fichero. Sin FK a `sea_employees` (A bis R1) y
+  dilo en el comentario citando `010_techs_employee_id.sql`.
+- Prueba el arranque contra PostgreSQL real dos veces seguidas (idempotencia
+  del DDL).
+- `server/cash/storage.ts`: `rutaDeTicket(empresaId, claimId, ext, ahora)`
+  `(NUEVO)` → `${empresaId}/gastos/${claimId}/${ahora}${ext}`, junto a
+  `rutaDocumento`. Mismo bucket, mismos `guardarDocumento`, `leerDocumento`,
+  `urlFirmada`.
+- Validación del fichero con `exigirDocumentoValido` (`invoice-scan/service.ts`).
+- **Promoción al pagar** (PR2): por cada línea INCLUIDA, una fila en
   `cash_operation_documents` (`operation_id` = el pago, `session_id` = su
-  jornada, `ruta`/`sha256`/`mime`/`nombre` copiados) **sin copiar el fichero**,
-  exactamente como `autoscan/promote.ts`. Así el informe de cierre los lleva y
-  `Justificantes` los enseña en el histórico. Deja el mismo comentario que
-  `promote.ts` sobre retención: el objeto ya no es de una sola fila.
+  jornada, `ruta`/`sha256`/`mime`/`nombre` copiados), **sin copiar el
+  fichero**, como `autoscan/promote.ts`, y con su mismo comentario sobre
+  retención.
 
-### C.4 Servicio `server/cash/expenseclaims/` `(NUEVO)`
+### C.4 Servicio (`server/cash/expenseclaims/`)
 
-Ficheros: `service.ts` (ciclo de vida), `lines.ts` (subida, análisis,
-edición), `domain.ts` (puro: transiciones, totales, clave de duplicado),
-`conceptos.ts` (clasificador por reglas), `report.ts` (PDF),
-`worker.ts` (análisis en segundo plano). Todos importan `ErrorCaja` de
-`../errors.ts`, `enTransaccion` de `../repository.ts`, `Contexto` de
-`../service.ts`.
-
-**Numeración**: `siguienteNumeroDe(client, codigoEmpresaOCentro, "LG", anio)`.
-Como una liquidación no tiene caja al nacer, usa como `codigo` el `codigo` de
-la caja por defecto del centro si `centro_id` está fijado, y si no `"LG"`
-(queda `LG-LG-26-001`; documenta por qué y ofrece cambiarlo si el usuario
-prefiere `codigoDeCaja` en el momento del pago).
-
-**`domain.ts`** (sin BD, con pruebas unitarias):
+**`domain.ts`** (puro, con pruebas unitarias):
 
 ```ts
 export type EstadoLiquidacion = "BORRADOR"|"PRESENTADA"|"APROBADA"|"RECHAZADA"|"PAGADA"|"ANULADA";
-export function transicion(desde: EstadoLiquidacion, accion: "PRESENTAR"|"APROBAR"|"RECHAZAR"|"REABRIR"|"PAGAR"|"ANULAR"|"DESHACER_PAGO"): EstadoLiquidacion | null;
-export function totalesPorConcepto(lineas: LineaParaTotal[]): { porConcepto: {conceptoId: number|null; nombre: string; importeCentimos: number}[]; totalCentimos: number; sinConcepto: number };
+export type Accion = "PRESENTAR"|"APROBAR"|"RECHAZAR"|"REABRIR"|"PAGAR"|"ANULAR"|"DESHACER_PAGO";
+export function transicion(desde: EstadoLiquidacion, accion: Accion): EstadoLiquidacion | null;
+export function totalesPorConcepto(lineas): { porConcepto: {conceptoId: number|null; nombre: string; importeCentimos: number}[]; totalCentimos: number; lineas: number };
+export function periodoDe(lineas): { desde: string|null; hasta: string|null };
 export function claveDeDuplicado(l: {emisorNif: string|null; emisorNombre: string; fecha: string|null; importeCentimos: number}): string | null;
-export function puedePresentar(lineas): { ok: true } | { ok: false; codigo: "SIN_LINEAS"|"LINEA_SIN_IMPORTE"|"LINEA_SIN_CONCEPTO"|"DUPLICADO_SIN_RESOLVER"|"LINEA_SIN_ANALIZAR" };
+export function puedePresentar(lineas, evidenciasPendientes): { ok: true } | { ok: false; codigo: CodigoBloqueo; lineaId?: number };
+export function destinoDerivado(concepto: {tipoDestino}, claimTargetId: number, lineTargetId: number|null): number | null;
 ```
 
-Transiciones: `BORRADOR → PRESENTADA` (PRESENTAR), `PRESENTADA → APROBADA`
-(APROBAR), `PRESENTADA → RECHAZADA` (RECHAZAR, motivo obligatorio),
-`RECHAZADA → BORRADOR` (REABRIR), `APROBADA → PAGADA` (PAGAR),
-`PAGADA → APROBADA` (DESHACER_PAGO, solo desde `anularOperacion`),
-`BORRADOR|PRESENTADA|APROBADA|RECHAZADA → ANULADA` (ANULAR, motivo). Nunca
-desde `PAGADA` a `ANULADA` sin anular antes el pago. Cualquier otra combinación
-devuelve `null` y el servicio lanza `ErrorCaja("TRANSICION_NO_VALIDA", …, 409)`.
+Transiciones: `BORRADOR→PRESENTADA`, `PRESENTADA→APROBADA|RECHAZADA`,
+`RECHAZADA→BORRADOR` (REABRIR), `APROBADA→PAGADA`, `PAGADA→APROBADA`
+(DESHACER_PAGO, solo desde el gancho de `anularOperacion`),
+`{BORRADOR,PRESENTADA,APROBADA,RECHAZADA}→ANULADA`. Lo demás `null` →
+`ErrorCaja("TRANSICION_NO_VALIDA", …, 409)`.
+
+`puedePresentar` mira **solo** líneas `INCLUIDA`: `fecha`, `importe > 0`,
+`expense_concept_id`, `moneda === "EUR"`, `revisada`, y ninguna evidencia
+`PENDIENTE`. **No mira `analisis`.** Códigos: `SIN_LINEAS`,
+`LINEA_SIN_FECHA`, `LINEA_SIN_IMPORTE`, `LINEA_SIN_CONCEPTO`,
+`LINEA_EN_OTRA_MONEDA`, `LINEA_SIN_REVISAR`, `DUPLICADO_SIN_RESOLVER`.
 
 **`service.ts`**:
 
-- `crearLiquidacion(ctx, { expenseTargetId, notas })` → exige destino de tipo
-  `PERSONA` y activo (reusa la consulta de `validarClasificacionGasto`), fija
-  `centro_id = ctx.centroId`, numera, audita `cash.expense_claim.create`.
-- `listar(ctx, filtros)` → filtra por `empresa_id`, por `centro_id` cuando
-  `ctx.centroId` no es null (mismo criterio que `/bootstrap` con las cajas),
-  por estado, trabajador y fechas.
-- `detalle(ctx, id)` → cabecera + líneas con `url` firmada por línea +
-  `totalesPorConcepto`.
-- `presentar(ctx, id)` → `puedePresentar`; recalcula `total_centimos`,
-  `periodo_desde/hasta`; congela: a partir de aquí las líneas no se editan.
-- `aprobar(ctx, id)` → permiso `cash.expense_claim.approve`; si
-  `sodActivo(empresaId)`, `presentada_por` ≠ `ctx.userId` (reutiliza el
-  mensaje y el código de `exigirOtraPersona`); si `reauthActivo`,
-  `exigirReautenticacion(ctx.userId)`; audita.
-- `rechazar(ctx, id, motivo)` y `reabrir(ctx, id)`.
-- `pagar(ctx, id, { sessionId, formasPago, efectivoEntregado, efectivoRecibido })`
-  → permiso `cash.expense_claim.pay`; estado `APROBADA`; **en una sola
-  transacción**: bloquea la liquidación (`FOR UPDATE`), llama a
-  `registrarOperacion(ctx, {...}, client)` con `tipo: "PAYMENT"`,
-  `importeCentimos: total_centimos`, `partyNombre: nombre del destino`,
-  `concepto: "Liquidación de gastos LG-26-001 (Dietas 66,40 · Peajes 15,88)"`,
-  `referencia: numero`, `expenseConceptId: null`, `expenseTargetId: null`;
-  promueve las líneas incluidas a `cash_operation_documents`; pasa a `PAGADA`
-  con `operation_pago_id`, `session_id_pago`; audita
-  `cash.expense_claim.pay` con el número del pago. Si `formasPago` no lleva
-  efectivo, no se mandan piezas (transferencia): el motor ya lo admite.
-- `anular(ctx, id, motivo)`.
-- **Gancho en `anularOperacion`** (`server/cash/service.ts`): si la operación
-  anulada tiene una liquidación con `operation_pago_id = id`, en la misma
-  transacción la liquidación vuelve a `APROBADA`, se anulan (no se borran) las
-  filas promovidas de `cash_operation_documents` con motivo «pago anulado», y
-  queda auditado. Sin este gancho una liquidación podría constar pagada con el
-  dinero de vuelta en el cajón.
+- `crearLiquidacion(ctx, { employeeId?, expenseTargetId?, notas? })` — uno de
+  los dos. Con `employeeId`: `SELECT id, nombre, apellidos, activo FROM
+  sea_employees WHERE id = $1` (solo existencia y `activo`: A bis R2); busca
+  el destino PERSONA de la empresa con ese `employee_id`; si no hay, lo crea
+  con `crearDestino` de `config.ts` (nombre «Apellidos, Nombre») y
+  `employee_id`; si hay uno **sin vincular** con el mismo nombre normalizado
+  (`normalizarNombre` de `core/vinculoTecnicos.ts`), devuelve
+  `ErrorCaja("DESTINO_SIN_VINCULAR", …, 409)` con el candidato para que la
+  pantalla ofrezca vincularlo (PR5) —nunca se enlaza solo—. Con
+  `expenseTargetId`: destino PERSONA activo de la empresa. `centro_id =
+  ctx.centroId`, `empleado_nombre` fotografiado, `numero` con
+  `siguienteNumeroDeEmpresa(client, ctx.empresaId, "LG", añoActual)`
+  `(NUEVO en repository.ts)`: clave `${empresaId}:LG:${anio}` en
+  `cash_document_counters`, formato `LG-${aa}-${seq.padStart(3,"0")}`.
+  Audita `cash.expense_claim.create`.
+- `listar(ctx, { estado?, expenseTargetId?, employeeId?, desde?, hasta? })` —
+  por `empresa_id`; si `ctx.centroId` no es null, `centro_id = ctx.centroId
+  OR centro_id IS NULL` (documenta el OR: una liquidación creada sin ámbito
+  la ve todo el mundo, como las cajas sin `centro_id`).
+- `detalle(ctx, id)` — cabecera, líneas con `url` firmada, evidencias por
+  línea, `totalesPorConcepto`, `puedePresentar` ya evaluado (para que la
+  pantalla enseñe qué falta sin duplicar la regla).
+- `presentar(ctx, id)` — `FOR UPDATE`; `puedePresentar`; re-detecta
+  `MISMO_NUMERO` (PR4); recalcula `total_centimos`, `periodo_*`; congela.
+- `aprobar(ctx, id)` — permiso `cash.expense_claim.approve`; con
+  `sodActivo(empresaId)`, `presentada_por !== ctx.userId` (mismo código y
+  mensaje que `exigirOtraPersona` de `sod.ts`); con `reauthActivo`,
+  `exigirReautenticacion(ctx.userId)`.
+- `rechazar(ctx, id, motivo)`, `reabrir(ctx, id)`, `anular(ctx, id, motivo)`.
+- `pagar(ctx, id, { sessionId, formasPago, efectivoEntregado?, efectivoRecibido?, idempotencyKey })`
+  (PR2) — permiso `cash.expense_claim.pay`. **Una transacción**:
+  1. `SELECT … FOR UPDATE` de la liquidación.
+  2. Si `estado = 'PAGADA'`: misma `pago_idempotency_key` → devuelve el
+     resultado guardado (número, `operation_pago_id`) sin escribir nada;
+     distinta → `ErrorCaja("LIQUIDACION_YA_PAGADA", …, 409)`.
+  3. `transicion(estado, "PAGAR")`; `bloquearSesionOperable` +
+     `exigirJornadaPropia` (lo hace `registrarOperacion`).
+  4. Por cada línea INCLUIDA: `validarClasificacionGasto(empresaId,
+     conceptId, destinoDerivado(...))` — un concepto desactivado entre
+     medias falla aquí con `CONCEPTO_INACTIVO`.
+  5. Re-detección `MISMO_NUMERO` (PR4); si hay evidencia nueva sin resolver,
+     `DUPLICADO_SIN_RESOLVER`.
+  6. `registrarOperacion(ctx, { sessionId, tipo: "PAYMENT", importeCentimos:
+     total, formasPago, efectivoEntregado, efectivoRecibido, partyNombre:
+     empleado_nombre, concepto: "Liquidación LG-26-001 (Dietas 66,40 · Peajes
+     15,88)", referencia: numero, expenseConceptId: null, expenseTargetId:
+     null }, client)`. Si `formasPago` no lleva efectivo, no se mandan piezas.
+  7. Promoción de tickets (C.3).
+  8. `UPDATE` a `PAGADA` con `operation_pago_id`, `session_id_pago`,
+     `centro_id_pago`, `pago_idempotency_key`, `pagada_*`, `version + 1`.
+  9. `registrarAuditoriaEnTransaccion` `cash.expense_claim.pay` con el número
+     del pago, el total y el desglose por concepto.
+- **Gancho en `anularOperacion`** (`server/cash/service.ts`, PR2): si la
+  operación tiene una liquidación con `operation_pago_id = id`, en la misma
+  transacción: `DESHACER_PAGO` (→ `APROBADA`, limpia `operation_pago_id`,
+  `session_id_pago`, `pago_idempotency_key`, `pagada_*`), anula (no borra)
+  las filas promovidas de `cash_operation_documents` con motivo «pago
+  anulado», marca `DESCARTADA` las evidencias que apuntaban a ese pago (PR4),
+  audita `cash.expense_claim.payment_reversed`. Con prueba de integración y
+  mutación (quitar el gancho debe poner en rojo).
 
 **`lines.ts`**:
 
-- `subirTickets(ctx, claimId, ficheros[])` → uno a uno (un fallo no tumba a los
-  anteriores); por cada uno: `exigirDocumentoValido`, `sha256`, **duplicado
-  por contenido** contra `cash_expense_claim_lines` (misma empresa, no
-  `EXCLUIDA`, liquidación no `ANULADA`) y contra `cash_operation_documents`
-  (`duplicadosDe` de `documents.ts`): si existe, se crea la línea igual pero
-  con `duplicado_de` relleno y aviso; guarda con `rutaDeTicket`; inserta en
-  estado `PENDIENTE`. Devuelve las líneas creadas. Solo en `BORRADOR`.
-- `analizarLinea(claimLineId)` (la llama el worker): `leerDocumento`,
-  `escanearFactura({ empresaId, userId: null, sessionId: null, fichero,
-  sentido: "PAGO" })`; guarda `scan_id`, `leido`, rellena los campos revisables
-  a partir de `propuesta` (`fecha`, `emisor`, `referencia`, `concepto`,
-  `totales`), aplica `clasificarConcepto` (C.5), calcula `claveDeDuplicado` y
-  busca líneas de la empresa con la misma clave (segunda detección: mismo
-  ticket escaneado dos veces con dos ficheros distintos) y, si hay número de
-  documento, `cobroPrevioDeFactura(empresaId, numero, pool, null, "PAGO")`
-  (tercera: ya pagado como factura de proveedor, incluida una entrega
-  liquidada por `Entregas`). Estado → `LISTA`, o `FALLIDA` con `error`
-  recortado a 300 caracteres. **El fichero se queda aunque falle**, como en
-  `EscanerFactura.tsx`.
-- `editarLinea(ctx, lineId, cambios)` → solo `BORRADOR`; acepta `fecha`,
+- `subirTickets(ctx, claimId, ficheros[])` — solo `BORRADOR`; de uno en uno;
+  por fichero: `exigirDocumentoValido`, `sha256`, evidencia `MISMO_FICHERO`
+  contra líneas de la empresa (`situacion = 'INCLUIDA'`, liquidación no
+  `ANULADA`) y contra `cash_operation_documents` (`duplicadosDe`,
+  `anulado = false`); guarda con `rutaDeTicket`; inserta con `analisis =
+  hayIA() ? 'PENDIENTE' : 'OMITIDO'` (PR1: siempre `OMITIDO`), `situacion =
+  'INCLUIDA'`, `revisada = false`. Devuelve las líneas creadas, con sus
+  evidencias.
+- `editarLinea(ctx, lineId, cambios)` — solo `BORRADOR`; campos: `fecha`,
   `emisorNombre`, `emisorNif`, `numeroDocumento`, `concepto`,
-  `baseCentimos`, `ivaCentimos`, `importeCentimos` (> 0), `expenseConceptId`
-  (concepto activo y `tipo_destino = PERSONA`, vía
-  `validarClasificacionGasto(empresaId, conceptoId, claim.expense_target_id)`),
-  `duplicadoAceptadoMotivo`; anota en `campos_corregidos` qué campos difieren
-  de `leido` (es la métrica que ya usa `anotarConfirmacion`); estado →
-  `REVISADA`.
-- `excluirLinea(ctx, lineId, motivo)` / `incluirLinea(ctx, lineId)`.
-- `reintentarLinea(ctx, lineId)` → `FALLIDA → PENDIENTE`.
+  `baseCentimos`, `ivaCentimos`, `importeCentimos` (≥ 0), `moneda`,
+  `expenseConceptId` (activo, cualquier `tipo_destino`),
+  `expenseTargetId` (solo si el concepto es `CENTRO_COSTE`; si no, 400),
+  `revisada`. Anota en `campos_corregidos` los que difieren de `leido`
+  (PR3). Re-detecta `MISMA_CLAVE` y `MISMO_NUMERO` (PR4).
+- `excluirLinea(ctx, lineId, motivo)` / `incluirLinea(ctx, lineId)` — mueven
+  `situacion`; no tocan `analisis`; al excluir, sus evidencias `PENDIENTE`
+  pasan a `EXCLUIDA`.
+- `reintentarAnalisis(ctx, lineId)` — `FALLIDO|OMITIDO → PENDIENTE` (PR3).
+- `marcarRevisada(ctx, lineId, valor)`.
 
-**`worker.ts`**: copia la forma de `autoscan/worker.ts` (`cogerUno` con
-`UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED LIMIT 1)`, lote 3, cada
-15 s, `arrancarWorkerGastos`/`pararWorkerGastos` exportados desde
-`server/cash/index.ts` y arrancados en `mountCash`). Alternativa más simple si
-el usuario lo prefiere: analizar en la propia petición de subida, de uno en
-uno, como hace `EscanerFactura`. Elige el worker: cinco tickets son cinco
-llamadas a la IA y la pantalla no debe quedarse colgada; deja la decisión
-escrita en el comentario de cabecera.
+**`worker.ts`** (PR3): copia la forma de `autoscan/worker.ts` (`cogerUno`
+con `FOR UPDATE SKIP LOCKED`, lote 3, cada 15 s;
+`arrancarWorkerGastos`/`pararWorkerGastos` exportados desde
+`server/cash/index.ts` y arrancados en `mountCash`). `analizarLinea`:
+`leerDocumento`, `escanearFactura({ empresaId, userId: null, sessionId:
+null, fichero, sentido: "PAGO" })`, guarda `scan_id`, `leido` y los campos
+revisables **solo si están vacíos** (si una persona ya escribió, no se pisa),
+aplica `clasificarConcepto`, evidencias `MISMA_CLAVE`/`MISMO_NUMERO`
+(PR4). `LISTO`, o `FALLIDO` con `analisis_error` recortado a 300 caracteres.
+**El fichero se queda aunque falle** y la línea sigue siendo editable.
 
-### C.5 Extracción y categoría (`invoice-scan/` y `expenseclaims/conceptos.ts`)
+### C.5 Duplicados (`expenseclaims/duplicates.ts`)
 
-1. `invoice-scan/schema.ts`: añadir al `ESQUEMA_FACTURA` el campo opcional
-   `tipo_establecimiento` (`["string","null"]`) con descripción: «Qué clase de
-   negocio emite el ticket, con una de estas palabras exactas: RESTAURANTE,
-   PEAJE, GASOLINERA, PARKING, HOTEL, TRANSPORTE, TAXI, SUPERMERCADO, OTRO.
-   Es lo que el propio papel dice ser (una autopista, un menú, un surtidor);
-   null si no se distingue.» Una línea en `INSTRUCCIONES`. Sin backticks
-   dentro del template literal (usa «»).
+- `detectar(client, linea, momento)` escribe evidencias en
+  `cash_expense_claim_duplicates` con `ON CONFLICT (line_id, tipo,
+  referencia_tipo, referencia_id) DO NOTHING`; nunca borra. PR1 solo
+  `MISMO_FICHERO`; PR4 añade `MISMA_CLAVE` (índice `…_clave_idx`, nombre
+  normalizado con `normalizarReferencia`-like sin tildes cuando no hay NIF) y
+  `MISMO_NUMERO` (`cobroPrevioDeFactura(empresaId, numero, client, null,
+  "PAGO")` → `referencia_tipo = 'OPERACION'`).
+- `resolver(ctx, evidenciaId, { resolucion: "ACEPTADA"|"EXCLUIDA", motivo })`
+  — `ACEPTADA` exige motivo y audita `cash.expense_claim.duplicate_accepted`
+  con la referencia; `EXCLUIDA` llama a `excluirLinea`.
+- `descartarPorPagoAnulado(client, operationId)` — desde el gancho.
+
+### C.6 Extracción y categoría (PR3)
+
+1. `invoice-scan/schema.ts`: campo opcional `tipo_establecimiento`
+   (`["string","null"]`) en `ESQUEMA_FACTURA`: «Qué clase de negocio emite
+   el ticket, con una de estas palabras exactas: RESTAURANTE, PEAJE,
+   GASOLINERA, PARKING, HOTEL, TRANSPORTE, TAXI, SUPERMERCADO, OTRO. Es lo que
+   el propio papel dice ser; null si no se distingue.» Una línea en
+   `INSTRUCCIONES`, sin backticks (usa «»). Aquí no vive ninguna regla
+   financiera: el modelo lee, la empresa decide.
 2. `invoice-scan/types.ts`: `tipo_establecimiento?: string | null` en
-   `ExtraccionCruda` (opcional, como `tipo_documento`, para no romper los
-   análisis guardados) y `tipoEstablecimiento: TipoEstablecimiento` en
-   `ExtraccionNormalizada`. `normalize.ts`: `tipoDeEstablecimiento()` con
-   `DESCONOCIDO` para lo que no esté en la lista, como `tipoDeDocumento()`.
-   `evidenciaDeConcepto(normalizada)` `(NUEVO)` junto a `evidenciaDeSeccion`.
+   `ExtraccionCruda`; `tipoEstablecimiento: TipoEstablecimiento` en la
+   normalizada. `normalize.ts`: `tipoDeEstablecimiento()` con `DESCONOCIDO`
+   por defecto y `evidenciaDeConcepto(normalizada)`.
 3. `expenseclaims/conceptos.ts`: `clasificarConcepto(evidencia, reglas,
-   catalogoDeConceptosPersona)` con la misma forma que `clasificarSeccion`
-   (prefijo y contención sobre `claveDeCotejo`-like normalizado, prioridad,
-   primera regla que casa manda, `confianza`, `autoSeleccionar`; solo puede
-   proponer conceptos activos con `tipo_destino = PERSONA`). Reglas de
-   `cash_expense_rules` vía `config.ts`: `listarReglasGasto`,
+   conceptosActivos)` con la misma forma que `clasificarSeccion`
+   (`seccion.ts`): prioridad, primera regla que casa, `confianza`,
+   `autoSeleccionar`; propone solo conceptos activos, de cualquier
+   `tipo_destino`. Reglas en `config.ts`: `listarReglasGasto`,
    `guardarReglaGasto` (upsert por `(campo, patron)`, valida que el concepto
-   exista), `borrarReglaGasto`, calcados de las de sección. Endpoints
-   `GET/PUT/DELETE /expense-rules` con `cash.configure`.
-4. **No siembres conceptos.** Si la empresa no tiene «Dietas», el clasificador
-   no propone nada y la pantalla lo dice («Crea el concepto en Configuración»).
-5. `validar` no se toca: la propuesta de ticket de gasto se construye en
-   `lines.ts` a partir de `PropuestaCobro` (`fecha`, `emisor`, `referencia`,
-   `concepto`, `totales`, `avisos`, `esFactura`, `tipoDocumento`).
+   exista), `borrarReglaGasto`; endpoints `GET/PUT/DELETE /expense-rules`
+   (`cash.configure`); bloque en `Configuracion.tsx` calcado de
+   `ReglasSeccion`.
+4. **No siembres conceptos.** Sin «Dietas», la pantalla lo dice.
+5. `validar` de `invoice-scan/validate.ts` no se toca.
 
-### C.6 Router: `server/cash/router.ts`
+### C.7 Router y permisos
 
-Añadir, con `exigirPermiso` y `ruta(...)`, siguiendo el bloque de
-`/expense-concepts`:
+`server/cash/router.ts`, con `exigirPermiso` y `ruta(...)`, junto al bloque
+de `/expense-concepts`:
 
 ```
-GET    /expense-claims                       cash.expense_claim.view
-POST   /expense-claims                       cash.expense_claim.create
-GET    /expense-claims/:id                   cash.expense_claim.view
-POST   /expense-claims/:id/lines             cash.expense_claim.create   (multipart, subidaDocumento.array("documentos", 20), envuelto en subida(...))
-PATCH  /expense-claims/:id/lines/:lineId     cash.expense_claim.create
-POST   /expense-claims/:id/lines/:lineId/exclude | /include | /retry
-POST   /expense-claims/:id/present           cash.expense_claim.create
-POST   /expense-claims/:id/approve           cash.expense_claim.approve
-POST   /expense-claims/:id/reject            cash.expense_claim.approve
-POST   /expense-claims/:id/reopen            cash.expense_claim.create
-POST   /expense-claims/:id/pay               cash.expense_claim.pay
-POST   /expense-claims/:id/void              cash.expense_claim.approve
-GET    /expense-claims/:id/report.pdf        cash.expense_claim.view
-GET    /expense-claims/:id/lines/:lineId/file cash.expense_claim.view   (redirige a urlFirmada)
-GET/PUT/DELETE /expense-rules                cash.configure
+GET    /expense-claims                                cash.expense_claim.view
+POST   /expense-claims                                cash.expense_claim.create
+GET    /expense-claims/:id                            cash.expense_claim.view
+GET    /expense-claims/:id/report.pdf                 cash.expense_claim.view   (cualquier estado)
+POST   /expense-claims/:id/lines                      cash.expense_claim.create (subida(subidaDocumento.array("documentos", 20), 15))
+PATCH  /expense-claims/:id/lines/:lineId              cash.expense_claim.create
+POST   /expense-claims/:id/lines/:lineId/exclude|include|review|retry
+GET    /expense-claims/:id/lines/:lineId/file         cash.expense_claim.view   (302 a urlFirmada)
+POST   /expense-claims/:id/duplicates/:dupId/resolve  cash.expense_claim.create (ACEPTADA exige approve)
+POST   /expense-claims/:id/present                    cash.expense_claim.create
+POST   /expense-claims/:id/approve | reject           cash.expense_claim.approve
+POST   /expense-claims/:id/reopen                     cash.expense_claim.create
+POST   /expense-claims/:id/pay                        cash.expense_claim.pay    (Idempotency-Key obligatoria)
+POST   /expense-claims/:id/void                       cash.expense_claim.approve
+GET/PUT/DELETE /expense-rules                         cash.configure
 ```
 
-Cuerpos con los mismos ayudantes (`enteroPositivo`, `formasPago`, `lineas`).
-`multer` con `.array()` necesita el mismo tratamiento de errores que
-`subida()`.
+`subida()` debe traducir también `LIMIT_UNEXPECTED_FILE` y
+`LIMIT_FILE_COUNT` (A bis R9). Cuerpos con `enteroPositivo`, `formasPago`,
+`lineas`.
 
-### C.7 Permisos (`server/cash/permissions.ts`, `modulosApp.ts`, `navigation.ts`)
+`server/cash/permissions.ts`: `cash.expense_claim.view`, `.create`,
+`.approve`, `.pay`, cada uno con su comentario. `POR_ROL`: `consulta` →
+`view`; `cajero` → `view`, `create`; `responsable` → los cuatro; `admin` →
+todos. **Pagar es de responsable a propósito**: hoy el cajero tampoco tiene
+`cash.payment.create_manual`. `modulosApp.ts` no cambia.
+`navigation.ts`: `{ key: "gastosTrabajadores", path: "gastos-trabajadores",
+label: "Gastos de trabajadores", icon: ReceiptText, permiso:
+"cash.expense_claim.view" }` debajo de `entregas`.
 
-Nuevos en `PERMISOS`, con su comentario de porqué:
+### C.8 Estadística (`server/cash/expensestats.ts`, PR2)
 
-- `cash.expense_claim.view` — ver liquidaciones del ámbito.
-- `cash.expense_claim.create` — crear, subir tickets, corregir, presentar.
-- `cash.expense_claim.approve` — aprobar, rechazar, anular.
-- `cash.expense_claim.pay` — registrar el pago.
+Define una subconsulta `LINEAS_DE_GASTO` que produce, para el periodo y el
+centro, filas `(importe_centimos, expense_concept_id, expense_target_id,
+fecha_jornada, centro_id)` como **UNION ALL** de:
 
-`POR_ROL`: `cajero` → `view`, `create`; `responsable` → los cuatro; `admin`
-→ todos (ya lo es por `PERMISOS`); `consulta` → `view`. **Pagar es de
-responsable a propósito**: hoy el cajero tampoco puede registrar un pago
-manual (`cash.payment.create_manual`), y una liquidación es un pago manual.
-Déjalo escrito en el comentario. `modulosApp.ts` no cambia salvo que se haga
-C.12. `navigation.ts`: `{ key: "gastosTrabajadores", path:
-"gastos-trabajadores", label: "Gastos de trabajadores", icon: ReceiptText,
-permiso: "cash.expense_claim.view" }` debajo de `entregas`.
+1. operaciones de `FILTRO` **sin** liquidación (`NOT EXISTS (SELECT 1 FROM
+   cash_expense_claims cl WHERE cl.operation_pago_id = o.id)`), con sus
+   columnas de siempre;
+2. líneas `INCLUIDA` de liquidaciones `PAGADA` cuyo pago cumple `FILTRO`,
+   con `expense_target_id` **derivado** (`CASE c.tipo_destino WHEN 'PERSONA'
+   THEN cl.expense_target_id WHEN 'CENTRO_COSTE' THEN l.expense_target_id
+   ELSE NULL END`).
 
-### C.8 Estadística (`server/cash/expensestats.ts`)
+Las tres consultas de `informeDeGasto` y `totalDe` leen de ahí. El pago de
+una liquidación **no** aparece como «Sin clasificar» y el total del periodo
+no cambia. Prueba de integración con el ejemplo (dos conceptos, 82,28).
 
-En las consultas que leen `cash_operations` con `o.tipo IN ('PAYMENT',
-'MANUAL_OUT')`: `LEFT JOIN cash_expense_claims cl ON cl.operation_pago_id =
-o.id AND cl.estado = 'PAGADA'`; para las operaciones con `cl.id IS NOT NULL`
-sumar desde `cash_expense_claim_lines` (estado ≠ `EXCLUIDA`) con su
-`expense_concept_id` y `expense_target_id = cl.expense_target_id`; para el
-resto, como hasta ahora. Que el pago de una liquidación **no** caiga en «sin
-clasificar». Prueba de integración: una liquidación Dietas 66,40 + Peajes
-15,88 pagada aparece como dos líneas de concepto y el total del periodo no
-cambia respecto al pago de 82,28.
+### C.9 PDF (`expenseclaims/report.ts`)
 
-### C.9 PDF (`server/cash/expenseclaims/report.ts`, reutilizando `server/cash/report.ts`)
-
-- Exportar de `report.ts` dos funciones hoy privadas: `montar(portada,
-  documentos)` generalizando el tipo del segundo parámetro a `{ ruta; mime;
-  nombre; operacionNumero }[]`, y `paginaDeAviso`. No cambies su comportamiento.
-- `informeLiquidacion(empresaId, claimId)`: portada con pdfkit (misma cabecera
-  y `M`, `GRIS`, `TINTA` que `construirPortada`): número, trabajador, periodo,
-  estado, tabla de líneas (fecha, establecimiento, concepto, base, IVA,
-  importe), **totales por concepto y TOTAL**, y el pie con presentada /
-  aprobada / pagada (usuario y fecha; nombre vía `app_usuarios.nombre` si
-  existe, si no el id) y el número del pago con su jornada. Detrás, cada
-  ticket incluido con `montar`; los excluidos no van, pero la portada dice
-  cuántos se excluyeron y por qué.
-- Endpoint `GET /expense-claims/:id/report.pdf`; en la pantalla, `BotonInforme`
-  (ya baja PDFs con `descargarPdf`).
+- Exporta de `server/cash/report.ts` `montar(portada, documentos)` con el
+  segundo parámetro tipado como `{ ruta; mime; nombre; operacionNumero }[]`,
+  y `paginaDeAviso`. Sin cambiar comportamiento.
+- `informeLiquidacion(empresaId, claimId)`: portada pdfkit (misma cabecera y
+  constantes `M`, `GRIS`, `TINTA` que `construirPortada`): número, estado
+  **en grande**, empleado, periodo, tabla de líneas incluidas (fecha,
+  establecimiento, concepto, base, IVA, importe), **totales por concepto y
+  TOTAL**, excluidas contadas con motivo, pie con presentada/aprobada/pagada
+  (usuario por `app_usuarios.nombre` si existe, si no el id; «pendiente» si
+  no) y, si está pagada, número del pago, jornada y formas. En `BORRADOR`,
+  marca «Borrador». Anexos: líneas INCLUIDAS con `montar`.
+- Endpoint `GET /expense-claims/:id/report.pdf`; `BotonInforme` en la pantalla.
 
 ### C.10 Frontend
 
-- `src/modules/cash/pages/GastosTrabajadores.tsx` `(NUEVO)`: lista (filtros
-  estado/trabajador/fechas, con `TableWrap`, `Pill` por estado) y detalle en la
-  misma pantalla (como `Entregas.tsx`). Detalle: selector de trabajador
-  (destinos PERSONA de `api.conceptosDeGasto()`), zona de subida múltiple
-  (`<input type="file" multiple>`, bucle de uno en uno como `Informes.tsx`),
-  líneas con estado (`ANALIZANDO` con `Loader2`, `FALLIDA` con reintento),
-  edición en línea de los campos revisables, concepto propuesto con
-  `CampoPropuesto` y chip de confianza (misma semántica que
-  `EscanerFactura`: `RELLENAR` se rellena, `REVISAR` se resalta), aviso de
-  duplicado con botón «Mantener igualmente» que pide motivo, botón excluir con
-  motivo; **totales por concepto y TOTAL** siempre visibles; acciones según
-  estado y `puede(...)`.
-- Pago: reutiliza `PaymentMethodPicker` y `DenominationGrid` de `Pagos.tsx` en
-  un `Modal` («Pagar 82,28 € a …»): formas de `formasParaPagos`, piezas
-  entregadas/recibidas, `disponible` del contexto; tras pagar, `refrescar()`.
-  Si no hay jornada abierta, `Aviso` y botón deshabilitado, como en `Pagos`.
+- `src/modules/cash/pages/GastosTrabajadores.tsx` `(NUEVO)`: lista con
+  filtros (estado, empleado, fechas; `TableWrap`, `Pill` por estado) y detalle
+  en la misma pantalla, como `Entregas.tsx`. Detalle: selector de empleado
+  (PR1: destinos PERSONA de `api.conceptosDeGasto()`; PR5: empleados de
+  `sea_employees` con vínculo), subida múltiple (bucle de uno en uno como
+  `Informes.tsx`, con `MAXIMO_JUSTIFICANTE`), líneas con los **dos** estados
+  visibles (chip de análisis y toggle incluir/excluir), edición en línea de
+  los campos obligatorios, casilla «Revisada», concepto (PR3: propuesto con
+  `CampoPropuesto`), evidencias de duplicado con «No es duplicado» (motivo)
+  y «Excluir»; **totales por concepto y TOTAL** siempre visibles; lista de
+  lo que impide presentar (viene de `detalle`); acciones por estado y
+  `puede(...)`.
+- Modal de pago (PR2): `PaymentMethodPicker` + `DenominationGrid` de
+  `Pagos.tsx`, `formasParaPagos`, `disponible`; genera `idempotencyKey =
+  crypto.randomUUID()` al abrir y lo reutiliza si se reintenta; sin jornada
+  abierta, `Aviso` y botón deshabilitado.
 - `services/api.ts`: `liquidaciones`, `crearLiquidacion`, `liquidacion`,
-  `subirTickets(id, ficheros)`, `editarLinea`, `excluirLinea`, `incluirLinea`,
-  `reintentarLinea`, `presentarLiquidacion`, `aprobarLiquidacion`,
-  `rechazarLiquidacion`, `reabrirLiquidacion`, `pagarLiquidacion`,
-  `anularLiquidacion`, `reglasGasto`/`guardarReglaGasto`/`borrarReglaGasto`.
-- `types/index.ts`: `Liquidacion`, `LineaLiquidacion`,
+  `subirTickets`, `editarLinea`, `excluirLinea`, `incluirLinea`,
+  `marcarLineaRevisada`, `reintentarLinea`, `resolverDuplicado`,
+  `presentarLiquidacion`, `aprobarLiquidacion`, `rechazarLiquidacion`,
+  `reabrirLiquidacion`, `pagarLiquidacion(id, datos, idempotencyKey)` (manda
+  la cabecera `Idempotency-Key`), `anularLiquidacion`, `reglasGasto`…
+- `types/index.ts`: `Liquidacion`, `LineaLiquidacion`
+  (`analisis`, `situacion`, `revisada`), `EvidenciaDuplicado`,
   `EstadoLiquidacion`, `ETIQUETA_ESTADO_LIQUIDACION`, `ReglaGastoConfig`.
-- `utils/liquidacion.ts` `(NUEVO)` con prueba: `totalesPorConcepto` (espejo del
-  de dominio, para pintar sin esperar al servidor) y `accionesDisponibles(estado,
-  permisos)`.
-- `Configuracion.tsx`: bloque «Reglas de concepto de gasto» calcado de
-  `ReglasSeccion` (campo, patrón, concepto), con texto de ayuda que explique
-  el campo `TIPO_ESTABLECIMIENTO`.
-- `CashApp.tsx`: ruta `gastos-trabajadores`.
-- `Historico.tsx`: en la fila de un pago que es liquidación, enlace al detalle
-  (`referencia` = número de liquidación).
+- `utils/liquidacion.ts` `(NUEVO)` con prueba: `totalesPorConcepto` (espejo)
+  y `accionesDisponibles(estado, permisos)`.
+- `CashApp.tsx`: ruta `gastos-trabajadores`. `Historico.tsx` (PR2): en un
+  pago cuya `referencia` empieza por `LG-`, enlace al detalle.
 
 ### C.11 Auditoría, eventos, errores
 
-- Acciones de auditoría: `cash.expense_claim.create | line.upload | line.edit
-  | line.exclude | line.include | present | approve | reject | reopen | pay |
-  void | payment_reversed`. Las de dinero (`pay`, `payment_reversed`) dentro de
-  la transacción.
-- Eventos: no añadas `TipoEvento` nuevos; `OPERATION_REGISTERED` ya sale del
-  pago. Si el usuario quiere que MC Central vea liquidaciones pendientes, es
-  fase aparte.
-- Códigos `ErrorCaja` nuevos: `LIQUIDACION_NO_ENCONTRADA` (404),
-  `TRANSICION_NO_VALIDA` (409), `LIQUIDACION_SIN_LINEAS`,
-  `LINEA_SIN_IMPORTE`, `LINEA_SIN_CONCEPTO`, `DUPLICADO_SIN_RESOLVER`,
-  `LINEA_SIN_ANALIZAR` (400), `DESTINO_NO_ES_PERSONA` (400),
-  `LIQUIDACION_DE_OTRO_CENTRO` (403), `IMPORTE_NO_COINCIDE` (400, si el
-  cliente manda un total distinto del recalculado). Reutiliza los existentes:
-  `FORMATO_NO_ADMITIDO`, `DOCUMENTO_DEMASIADO_GRANDE`, `JORNADA_NO_OPERABLE`,
-  `FORMA_PAGO_NO_EN_PAGOS`, `CONCEPTO_INACTIVO`, `PERMISO_DENEGADO`.
+- Acciones: `cash.expense_claim.create | line.upload | line.edit |
+  line.exclude | line.include | line.review | duplicate_accepted | present |
+  approve | reject | reopen | pay | void | payment_reversed`.
+- Eventos: ninguno nuevo; `OPERATION_REGISTERED` ya sale del pago.
+- `ErrorCaja` nuevos: `LIQUIDACION_NO_ENCONTRADA` (404),
+  `TRANSICION_NO_VALIDA` (409), `LIQUIDACION_YA_PAGADA` (409),
+  `IDEMPOTENCY_KEY_REQUERIDA` (400), `DESTINO_NO_ES_PERSONA` (400),
+  `DESTINO_SIN_VINCULAR` (409), `EMPLEADO_NO_ENCONTRADO` (404),
+  `EMPLEADO_INACTIVO` (409), `LINEA_NO_EDITABLE` (409), los de
+  `puedePresentar` (400), `LIQUIDACION_DE_OTRO_CENTRO` (403). Reutiliza
+  `FORMATO_NO_ADMITIDO`, `DOCUMENTO_DEMASIADO_GRANDE`,
+  `JORNADA_NO_OPERABLE`, `FORMA_PAGO_NO_EN_PAGOS`, `CONCEPTO_INACTIVO`,
+  `DESTINO_NO_VALIDO`, `PERMISO_DENEGADO`.
 
-### C.12 Bloque opcional: autoservicio del trabajador (opción B)
+### C.12 Autoservicio (fuera del alcance; no lo construyas)
 
-Solo si el usuario lo confirma. Rol `empleado` en `POR_ROL` con únicamente
-`cash.expense_claim.own`; `modulosApp.ts` añade `{ value: "empleado", label:
-"Empleado (solo sus gastos)" }`; `GET /bootstrap` acepta `cash.view` **o**
-`cash.expense_claim.own` y, en el segundo caso, devuelve `cajas: []`,
-`permisos` y `rol`; `CashLayout` esconde selector de caja e indicador de
-jornada cuando no hay `cash.view`; `NAV` añade «Mis gastos» con permiso
-`own`; `cash_expense_targets.user_id` se asigna desde Configuración (selector
-de usuario de la empresa, `app_usuarios`); las rutas `GET/POST
-/expense-claims*` con `own` filtran por `solicitante_user_id = ctx.userId` y
-solo permiten `create`, `lines`, `present`, `reopen` sobre las propias. Nada de
-`approve`/`pay`.
+Queda documentado para no romperlo: la propiedad será
+`app_usuarios.employee_id = cash_expense_claims.employee_id`; el permiso
+`cash.expense_claim.own` y un rol `empleado` con solo ese permiso; `GET
+/bootstrap` tendría que aceptar ese permiso y devolver un payload reducido.
+Ninguna decisión de PR1–PR5 debe impedirlo (no metas `cash.view` como
+requisito en el servicio de liquidaciones: el permiso se comprueba en el
+router).
 
-### C.13 Casos límite que hay que cubrir (y probar)
+### C.13 Casos límite (y prueba para cada uno)
 
-- Fichero repetido (mismo sha256) en la misma liquidación, en otra
-  liquidación, o ya colgado de un pago (p. ej. liquidado antes por
-  `Entregas`).
-- Mismo ticket con dos escaneos distintos (clave emisor+fecha+total).
-- Ticket con número de factura ya pagado (`cobroPrevioDeFactura` sentido PAGO).
-- Lectura fallida: la línea queda `FALLIDA`, el fichero se conserva, se
-  rellena a mano y se puede reintentar.
-- PDF con varios tickets (`facturasDetectadas > 1`): aviso, importe a mano.
-- Moneda distinta de EUR: aviso grave, importe a mano.
-- Total negativo / `tipoDocumento = ABONO`: la línea no puede incluirse (una
-  liquidación no devuelve dinero al cajón).
-- Ticket sin importe legible: no se puede presentar hasta corregirlo.
-- Concepto inactivado entre la revisión y el pago: `pagar` lo comprueba
-  dentro de la transacción y falla con `CONCEPTO_INACTIVO`.
-- Presentar con 0 líneas incluidas, o con total 0.
-- Aprobar quien presentó con SoD activa: 403 con el código de `sod.ts`.
-- Pagar sin jornada abierta, en una caja de otro centro, o dos veces (segunda
-  petición ve `PAGADA` por el `FOR UPDATE`).
-- Pagar por transferencia (sin piezas) y pagar mixto.
-- Anular el pago desde Histórico: la liquidación vuelve a `APROBADA`, los
-  documentos promovidos quedan anulados con motivo, la estadística deja de
-  contarla.
-- Anular una liquidación ya pagada: rechazado hasta anular el pago.
-- Usuario con ámbito de centro que intenta ver/pagar una liquidación de otro.
+- Mismo fichero en la misma liquidación, en otra, o ya colgado de un pago
+  (p. ej. liquidado antes por `Entregas`).
+- Mismo ticket con dos escaneos distintos (`MISMA_CLAVE`).
+- Número de factura ya pagado (`MISMO_NUMERO`); aparece **después** de
+  aprobar y antes de pagar → el pago lo detecta.
+- Una línea con dos evidencias: una aceptada y otra pendiente → no se presenta.
+- Lectura fallida u omitida: se rellena a mano, `revisada`, se presenta.
+- Línea excluida con análisis en curso: el análisis termina y no cambia
+  `situacion`.
+- Reintento de análisis no pisa lo que una persona ya escribió.
+- PDF con varios tickets (`facturasDetectadas > 1`), moneda ≠ EUR, total
+  negativo/ABONO: avisos; no se puede incluir hasta corregir.
+- Concepto `CENTRO_COSTE` con destino de tipo PERSONA en la línea →
+  `DESTINO_NO_VALIDO`; concepto `NINGUNO` con destino → 400.
+- Concepto desactivado entre aprobación y pago → `CONCEPTO_INACTIVO`.
+- Presentar con 0 líneas incluidas o total 0.
+- Aprobar quien presentó con SoD activa → 403.
+- Pagar: sin jornada abierta; en caja de otro centro; sin `Idempotency-Key`;
+  dos veces con la misma clave (misma respuesta, un solo `PAYMENT`); dos
+  veces con claves distintas (409); por transferencia (sin piezas); mixto.
+- Anular el pago desde Histórico: vuelve a `APROBADA`, documentos promovidos
+  anulados, evidencias `DESCARTADA`, estadística sin la liquidación.
+- Anular una liquidación `PAGADA` → 409 hasta anular el pago.
+- Empleado inactivo o inexistente al crear; destino PERSONA sin vínculo con
+  nombre igual → `DESTINO_SIN_VINCULAR`.
+- Ámbito de centro: ver/pagar una de otro centro → 403; una sin `centro_id`
+  la ve todo el mundo.
+- Numeración: dos creaciones simultáneas no repiten `LG-26-001`.
 
 ### C.14 Pruebas
 
-- **Unitarias** (`expenseclaims/domain.test.ts`, `conceptos.test.ts`,
-  `src/modules/cash/utils/liquidacion.test.ts`): tabla de transiciones
-  completa (cada par estado×acción), totales del ejemplo (66,40 + 15,88 =
-  82,28), clave de duplicado (NIF con y sin puntuación, nombre con tildes),
-  clasificador (regla por `TIPO_ESTABLECIMIENTO`, por nombre, prioridad,
-  concepto inactivo o de tipo `CENTRO_COSTE` nunca propuesto).
-- **Integración** (`server/cash/expenseclaims.integration.test.ts`, con
-  `RUN_DB_TESTS=1`, `CASH_STORAGE_LOCAL=1`, `sufijo` para ser idempotente y
-  un extractor falso inyectado como en `scan.integration.test.ts`): crear →
-  subir tres ficheros (uno repetido) → analizar → corregir → presentar →
-  aprobar (con y sin SoD) → pagar en jornada abierta con piezas → comprobar
-  `cash_operations` (tipo, importe, `party_nombre`, `referencia`),
-  movimientos de piezas, `cash_operation_documents` promovidos (misma
-  `ruta`), `app_auditoria`, `informeDeGasto` con dos conceptos, PDF de la
-  liquidación y de cierre con los tickets incrustados, segundo pago rechazado,
-  anulación del pago que devuelve a `APROBADA`, ámbito de centro.
-- **Mutaciones** (disciplina de la casa): rompe cada regla y confirma el rojo
-  —sumar líneas excluidas, permitir `APROBADA → BORRADOR`, no bloquear la
-  liquidación al pagar, contar el pago como «sin clasificar», aceptar un
-  destino `CENTRO_COSTE`, aceptar total negativo, saltarse SoD, promover los
-  excluidos—. Una mutación que «no aplica» da un verde sin valor.
-- Los tres typechecks (`npx tsc -p tsconfig.server.json --noEmit`, `npx tsc
-  -b`, `npx tsc -p autoscan_agent/tsconfig.json --noEmit`), `npm run build`, y
-  render de la pantalla nueva con el CSS del bundle (procedimiento de las
-  entregas anteriores).
+- **Unitarias**: `expenseclaims/domain.test.ts` (tabla completa
+  estado×acción, `puedePresentar` caso a caso, totales del ejemplo, periodo,
+  `claveDeDuplicado` con NIF con/sin puntuación y nombre con tildes,
+  `destinoDerivado` para los tres `tipo_destino`), `conceptos.test.ts` (PR3),
+  `src/modules/cash/utils/liquidacion.test.ts`.
+- **Integración** (`server/cash/expenseclaims.integration.test.ts`;
+  `RUN_DB_TESTS=1`, `CASH_STORAGE_LOCAL=1`; `sufijo` idempotente; extractor
+  falso inyectado como en `scan.integration.test.ts`; **crea un stub de
+  `sea_employees` (`id UUID PK, nombre, apellidos, activo`) en `beforeAll` si
+  no existe**, como hacen las de Therefore con `app_usuario_modulos`): el
+  flujo entero del ejemplo; cada caso de C.13; `informeDeGasto`; PDF de
+  liquidación en PRESENTADA y en PAGADA; informe de cierre con los tickets;
+  `anularOperacion` con el gancho.
+- **Mutaciones** (obligatorias, todas en rojo): sumar excluidas; permitir
+  `APROBADA→BORRADOR`; no bloquear al pagar; pagar dos veces con la misma
+  clave creando dos operaciones; contar el pago como «sin clasificar»;
+  derivar siempre el destino de la cabecera aunque el concepto sea
+  `CENTRO_COSTE`; saltarse SoD; promover excluidas; presentar sin `revisada`;
+  presentar con evidencia pendiente; quitar el gancho de `anularOperacion`.
+  Una mutación que «no aplica» da un verde sin valor.
+- Tres typechecks (`npx tsc -p tsconfig.server.json --noEmit`, `npx tsc -b`,
+  `npx tsc -p autoscan_agent/tsconfig.json --noEmit`), `npm run build`,
+  render de la pantalla con el CSS del bundle.
 
 ### C.15 Documentación y entrega
 
-- `docs/mobilink-cash.md`: sección «7 quaterdecies. Liquidaciones de gastos de
-  trabajadores» con las decisiones (un pago por el total; líneas como desglose;
-  tickets promovidos sin copiar; aprobación como primera bandeja del módulo y
-  por qué aquí sí; opción B pendiente). Actualiza §7 (permisos) y §9.
-- `docs/PROMPT_gastos_trabajadores.md`: añade al final «Lo que entró en la
-  fase 2» con desvíos respecto a este prompt.
-- Versión, PR, CI verde sobre el commit de código, diff contra `main` solo con
-  tus ficheros, merge, y aviso con la versión desplegada.
+- `docs/mobilink-cash.md`: «7 quaterdecies. Liquidaciones de gastos de
+  trabajadores» con las decisiones de B (identidad sin FK y por qué; un pago
+  por el total; dos estados por línea; IA no obligatoria; evidencias de
+  duplicado; idempotencia; PDF en cualquier estado; autoservicio pendiente).
+  Actualiza §7 (permisos) y §9.
+- `docs/PROMPT_gastos_trabajadores.md`: al cerrar cada PR, apartado «Lo que
+  entró en PRn» con desvíos respecto a este prompt.
+- Versión, PR, CI verde sobre el commit de código, diff contra `main` solo
+  con tus ficheros, merge, y aviso con la versión desplegada.
