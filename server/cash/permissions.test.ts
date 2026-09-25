@@ -86,3 +86,30 @@ describe("el mapa no se rompe", () => {
     expect(permisosDeRol("admin")).toHaveLength(PERMISOS.length);
   });
 });
+
+describe("liquidaciones de gastos de trabajadores", () => {
+  it("el cajero las prepara, pero no las aprueba ni las paga", () => {
+    /*
+     * Pagar una liquidación es un pago manual —no viene de ninguna factura del
+     * ERP— y el cajero no tiene `cash.payment.create_manual`. Si pudiera
+     * pagarla por aquí, esto sería una puerta de atrás a lo que Pagos le niega.
+     */
+    const cajero = permisosDeRol("cajero");
+    expect(cajero).toContain("cash.expense_claim.view");
+    expect(cajero).toContain("cash.expense_claim.create");
+    expect(cajero).not.toContain("cash.expense_claim.approve");
+    expect(cajero).not.toContain("cash.expense_claim.pay");
+    expect(cajero).not.toContain("cash.payment.create_manual");
+  });
+
+  it("el responsable hace el ciclo entero", () => {
+    for (const p of ["view", "create", "approve", "pay"]) {
+      expect(permisosDeRol("responsable")).toContain(`cash.expense_claim.${p}`);
+    }
+  });
+
+  it("la consulta solo mira", () => {
+    const consulta = permisosDeRol("consulta").filter((p) => p.startsWith("cash.expense_claim."));
+    expect(consulta).toEqual(["cash.expense_claim.view"]);
+  });
+});

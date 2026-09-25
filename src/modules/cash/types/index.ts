@@ -996,3 +996,114 @@ export type ResultadoCotejo = {
   };
   informe: InformeCotejo | null;
 };
+
+// ── Liquidaciones de gastos de trabajadores ────────────────────────────────
+//
+// Espejo de `server/cash/expenseclaims/repository.ts`. Una liquidación NO es
+// un movimiento de caja: solo al pagarla aparece una operación.
+
+export type EstadoLiquidacion =
+  | "BORRADOR"
+  | "PRESENTADA"
+  | "APROBADA"
+  | "RECHAZADA"
+  | "PAGADA"
+  | "ANULADA";
+
+export const ETIQUETA_ESTADO_LIQUIDACION: Record<EstadoLiquidacion, string> = {
+  BORRADOR: "Borrador",
+  PRESENTADA: "Presentada",
+  APROBADA: "Aprobada",
+  RECHAZADA: "Rechazada",
+  PAGADA: "Pagada",
+  ANULADA: "Anulada",
+};
+
+export type Liquidacion = {
+  id: number;
+  numero: string;
+  estado: EstadoLiquidacion;
+  centroId: string | null;
+  employeeId: string | null;
+  expenseTargetId: number;
+  empleadoNombre: string;
+  periodoDesde: string | null;
+  periodoHasta: string | null;
+  totalCentimos: number;
+  notas: string | null;
+  presentadaPor: string | null;
+  presentadaAtMs: number | null;
+  aprobadaPor: string | null;
+  aprobadaAtMs: number | null;
+  rechazoMotivo: string | null;
+  rechazadaAtMs: number | null;
+  operationPagoId: number | null;
+  pagoNumero: string | null;
+  pagadaAtMs: number | null;
+  anuladaMotivo: string | null;
+  anuladaAtMs: number | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+  /** Solo en el listado: cuántos tickets cuentan. */
+  lineas?: number;
+};
+
+export type EvidenciaDuplicado = {
+  id: number;
+  lineId: number;
+  tipo: "MISMO_FICHERO" | "MISMA_CLAVE" | "MISMO_NUMERO";
+  referenciaTipo: "LINEA" | "DOCUMENTO" | "OPERACION";
+  referenciaId: number;
+  referenciaNumero: string | null;
+  detectadoEn: "SUBIDA" | "ANALISIS" | "PRESENTAR" | "PAGAR";
+  detectadoAtMs: number;
+  resolucion: "PENDIENTE" | "ACEPTADA" | "EXCLUIDA" | "DESCARTADA";
+  resueltoPor: string | null;
+  resueltoAtMs: number | null;
+  motivo: string | null;
+};
+
+export type LineaLiquidacion = {
+  id: number;
+  claimId: number;
+  orden: number;
+  nombre: string;
+  mime: string;
+  tamanoBytes: number;
+  /** Qué ha pasado con la lectura automática. OMITIDO = nadie la ha intentado. */
+  analisis: "PENDIENTE" | "ANALIZANDO" | "LISTO" | "FALLIDO" | "OMITIDO";
+  analisisError: string | null;
+  /** Si se paga o no. Lo decide una persona, independiente de la lectura. */
+  situacion: "INCLUIDA" | "EXCLUIDA";
+  excluidaMotivo: string | null;
+  revisada: boolean;
+  fecha: string | null;
+  emisorNombre: string;
+  emisorNif: string | null;
+  numeroDocumento: string | null;
+  concepto: string;
+  baseCentimos: number | null;
+  ivaCentimos: number | null;
+  importeCentimos: number;
+  moneda: string;
+  expenseConceptId: number | null;
+  conceptoNombre: string | null;
+  conceptoTipoDestino: TipoDestinoGasto | null;
+  expenseTargetId: number | null;
+  destinoNombre: string | null;
+  url: string | null;
+  duplicados: EvidenciaDuplicado[];
+};
+
+export type BloqueoLiquidacion = { codigo: string; lineaId: number | null; mensaje: string };
+
+export type DetalleLiquidacion = {
+  liquidacion: Liquidacion;
+  lineas: LineaLiquidacion[];
+  totales: {
+    porConcepto: { conceptoId: number | null; nombre: string; importeCentimos: number; lineas: number }[];
+    totalCentimos: number;
+    lineas: number;
+  };
+  bloqueos: BloqueoLiquidacion[];
+};

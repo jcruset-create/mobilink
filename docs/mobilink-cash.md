@@ -184,6 +184,12 @@ paralelo que mantener.
 | `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP, dar de alta cajas, pedir cambio al banco y entregar dinero |
 | `admin` | además configurar la integración y el catálogo de denominaciones |
 
+Las liquidaciones de gastos de trabajadores (§7 quaterdecies) tienen sus cuatro
+permisos: `cash.expense_claim.view` (consulta en adelante),
+`.create` (cajero: prepararlas y presentarlas), `.approve` y `.pay`
+(responsable). Pagar es de responsable porque es un pago manual, y el cajero
+tampoco tiene `cash.payment.create_manual`.
+
 `cash.configure` (cajas) y `cash.denominations.configure` (catálogo) van
 separados **porque su alcance es distinto**: las cajas son de la empresa, pero
 `cash_denominations` no tiene columna de empresa — es el catálogo de toda la
@@ -830,6 +836,64 @@ que coincidan en cifra.
 
 Lo que queda fuera: sincronizar abonos con la ERP por el outbox. Hoy solo
 COLLECTION y PAYMENT generan evento; el abono se registra en modo autónomo.
+
+## 7 quaterdecies. Liquidaciones de gastos de trabajadores
+
+Un trabajador trae sus tickets —dietas, peajes, parking— y se le devuelve lo
+que adelantó. Es el simétrico de las entregas de dinero (§7 ter): allí se da
+dinero y vuelven tickets; aquí vienen tickets y sale dinero. Diseño completo,
+con cada decisión razonada, en `docs/PROMPT_gastos_trabajadores.md`.
+
+**La liquidación vive en Cash pero NO es un movimiento de caja.** Se prepara,
+se revisa y se aprueba sin tocar el cajón, a veces durante días. Solo al pagar
+una aprobada aparecerá un `PAYMENT`, por `registrarOperacion` como todo lo
+demás. Tablas: `cash_expense_claims` (cabecera), `cash_expense_claim_lines`
+(un ticket por línea), `cash_expense_claim_duplicates` (evidencias) y
+`cash_expense_rules` (reglas de concepto, para la lectura automática).
+
+```
+BORRADOR ─► PRESENTADA ─► APROBADA ─► PAGADA
+                │
+                └─► RECHAZADA ─► (reabrir) BORRADOR
+ANULADA desde cualquiera menos PAGADA (para esa, se anula el pago en la caja)
+```
+
+Decisiones que conviene no reabrir:
+
+- **Quién cobra es `sea_employees.id`, sin clave foránea.** Esa tabla la crean
+  las migraciones de Supabase y no existe en una base recién creada, como ya
+  pasó con `techs.employee_id`. Y no tiene `empresa_id`, así que el
+  aislamiento lo da el destino PERSONA de `cash_expense_targets`, que pasa a
+  ser la **proyección única** del empleado en Cash (`employee_id`, índice
+  único por empresa). Una persona suelta con el mismo nombre no se enlaza sola:
+  se pregunta (`DESTINO_SIN_VINCULAR`).
+- **Numeración por empresa: `LG-26-001`**, con `siguienteNumeroDeEmpresa`. Una
+  liquidación no tiene caja hasta que se paga, y el taller no tiene código.
+- **Dos estados por ticket**: `analisis` (lo mueve la máquina) y `situacion`
+  (INCLUIDA/EXCLUIDA, lo mueve una persona). **La IA nunca es requisito**:
+  presentar exige fecha, importe, concepto, euros y que alguien lo haya
+  **revisado**; no mira si se leyó solo. Hoy todo se pone a mano (`OMITIDO`).
+- **Categoría y persona son dos cosas.** Vale cualquier concepto activo. El
+  reembolso es siempre al trabajador; la imputación la dice el concepto
+  (PERSONA → el trabajador, CENTRO_COSTE → el de la línea, NINGUNO → nadie).
+- **Cada coincidencia de duplicado es una fila**, con su resolución: ACEPTADA
+  (con motivo, solo un responsable), EXCLUIDA o, en el futuro, DESCARTADA. El
+  mismo fichero se busca en otras liquidaciones no anuladas y en los
+  justificantes de la caja —incluido lo ya liquidado por Entregas—. Detectar no
+  impide subir; impide presentar sin decidir.
+- **Presentar congela** las líneas y fija total y periodo en el servidor.
+- **Aprobar lo hace otra persona** si la separación de funciones está
+  encendida (`exigirOtraPersona`, caso nuevo «aprobar esta liquidación»). Es la
+  primera bandeja de aprobación del módulo: `sod.ts` explica por qué no había
+  ninguna, y esta es una acción que sí puede esperar.
+- **El PDF sale en cualquier estado**, con el estado en grande y los tickets
+  incluidos detrás (`montar` de `report.ts`, ahora exportado). Antes de pagar es
+  el papel que se firma.
+
+Por fases (plan completo en el prompt): **PR1**, esto —preparar, revisar,
+aprobar, PDF—; PR2 el pago; PR3 la lectura automática; PR4 los otros dos
+duplicados (mismo ticket con otro escaneo, mismo número ya pagado); PR5 el
+vínculo de empleados en Configuración.
 
 ## 8. Estado de la entrega
 

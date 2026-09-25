@@ -59,14 +59,25 @@ export async function exigirOtraPersona(
   empresaId: string,
   ctx: { userId: string | null },
   autorId: string | null,
-  que: "anular esta operación" | "reabrir esta jornada"
+  que: "anular esta operación" | "reabrir esta jornada" | "aprobar esta liquidación"
 ): Promise<void> {
   if (!(await sodActivo(empresaId))) return;
+
+  /*
+   * Quién hizo lo que se quiere deshacer o validar, dicho en cada caso. Aprobar
+   * una liquidación no es deshacer nada, pero es la misma salvaguarda: quien
+   * presenta unos gastos no puede ser quien los da por buenos.
+   */
+  const autoria = {
+    "anular esta operación": { quien: "registró la operación", tu: "la registraste tú" },
+    "reabrir esta jornada": { quien: "cerró la jornada", tu: "la registraste tú" },
+    "aprobar esta liquidación": { quien: "presentó la liquidación", tu: "la presentaste tú" },
+  }[que];
 
   if (!ctx.userId || !autorId) {
     throw new ErrorCaja(
       "SOD_REQUIERE_OTRA_PERSONA",
-      `Con la separación de funciones activada hace falta saber quién ${que === "anular esta operación" ? "registró la operación" : "cerró la jornada"}, y aquí no consta.`,
+      `Con la separación de funciones activada hace falta saber quién ${autoria.quien}, y aquí no consta.`,
       403
     );
   }
@@ -74,7 +85,7 @@ export async function exigirOtraPersona(
   if (ctx.userId === autorId) {
     throw new ErrorCaja(
       "SOD_REQUIERE_OTRA_PERSONA",
-      `No puedes ${que}: la registraste tú. Con la separación de funciones activada tiene que hacerlo otra persona con permiso.`,
+      `No puedes ${que}: ${autoria.tu}. Con la separación de funciones activada tiene que hacerlo otra persona con permiso.`,
       403
     );
   }
