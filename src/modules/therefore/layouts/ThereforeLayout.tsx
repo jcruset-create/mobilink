@@ -13,6 +13,7 @@ import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { HelpCircle, Inbox, Menu, Settings } from "lucide-react";
 import AccesosCabecera from "../../../components/AccesosCabecera";
+import VersionDesplegada from "../../../components/VersionDesplegada";
 import { useTherefore } from "../contexts/ThereforeContext";
 
 const NAV = [
@@ -50,6 +51,12 @@ export default function ThereforeLayout() {
         </div>
         <div className="flex items-center gap-3">
           {rol && <span className="hidden text-[11px] text-slate-400 sm:block">{rol}</span>}
+          {/*
+            El número y el commit desplegado. En un módulo que se calibra
+            contra documentos reales, «¿ya está subido el arreglo?» se pregunta
+            cada día, y sin esto la única respuesta era volver a probarlo.
+          */}
+          <VersionDesplegada className="hidden sm:inline" />
           <AccesosCabecera actual="therefore" />
         </div>
       </header>
