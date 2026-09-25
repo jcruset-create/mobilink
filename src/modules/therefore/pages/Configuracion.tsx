@@ -437,6 +437,10 @@ function Buzon() {
   const fecha = (iso: string | null) =>
     iso ? new Date(iso).toLocaleString("es-ES", { dateStyle: "short", timeStyle: "short" }) : "—";
 
+  // La pasada más reciente es la primera: el motivo que se enseña es el suyo,
+  // no el de cualquier fallo viejo que ya esté resuelto.
+  const ultimoFallo = estado?.pasadas[0]?.error ?? null;
+
   return (
     <section className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
       <h2 className="mb-1 text-sm font-bold">Buzón de Therefore</h2>
@@ -497,6 +501,20 @@ function Buzon() {
             </button>
           </div>
           {aviso && <p className="mb-3 text-[12px] text-emerald-300">{aviso}</p>}
+
+          {/*
+            El fallo de la última pasada, arriba y entero.
+            Cuando el buzón deja de ir, TODAS las pasadas fallan por lo mismo:
+            en la tabla son once renglones iguales al final de una columna
+            estrecha, y hubo días de «Command failed» sin que nadie leyera el
+            motivo. Aquí se lee, y dice qué paso falló y qué contestó el
+            servidor.
+          */}
+          {ultimoFallo && (
+            <p className="mb-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-200">
+              <b>El buzón no se está leyendo.</b> {ultimoFallo}
+            </p>
+          )}
 
           {estado.pasadas.length > 0 && (
             <table className="w-full text-[12px]">
