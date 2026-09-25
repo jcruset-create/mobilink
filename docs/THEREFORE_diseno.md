@@ -873,6 +873,13 @@ aparte con la nota «no incluidos en la suma». Cada línea tiene un enlace
 «ver en PDF» que abre el visor en la página y resalta el `bbox` (el PDF va
 por enlace firmado; el resalte se pinta encima con la `bbox` guardada).
 
+**La tarjeta entera se pone verde cuando su actuación está RESUELTA.** En un
+expediente de ocho albaranes todas son iguales y la chapita del estado es lo
+más pequeño de la pantalla: para saber cuáles quedaban había que leerlas una
+a una. Sólo el borde y el fondo, y sin subir de tono, porque encima va una
+tabla de números con celdas marcadas en ámbar y en rosa por dudosas y un
+verde fuerte se comería justo lo que hace que alguien vuelva a mirar el PDF.
+
 En la cabecera de la tarjeta, además de «Ver el PDF» y «Ver resaltado», el
 estado de la actuación y un botón **«Resuelto»** que la da por hecha sin
 salir de la pestaña: abre el mismo formulario que la pestaña Actuaciones
