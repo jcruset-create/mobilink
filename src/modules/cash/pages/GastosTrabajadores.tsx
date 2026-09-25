@@ -50,6 +50,7 @@ import {
   type ConceptoGasto,
   type DestinoGasto,
   type DetalleLiquidacion,
+  type Empleado,
   type EstadoLiquidacion,
   type LineaLiquidacion,
   type Liquidacion,
@@ -71,6 +72,8 @@ export default function GastosTrabajadores() {
   const [conceptos, setConceptos] = useState<ConceptoGasto[]>([]);
   const [destinos, setDestinos] = useState<DestinoGasto[]>([]);
   const [lectura, setLectura] = useState(false);
+  const [empleados, setEmpleados] = useState<Empleado[] | null>(null);
+  const [filtroPersona, setFiltroPersona] = useState<number | "">("");
   const [error, setError] = useState("");
 
   /*
@@ -82,7 +85,12 @@ export default function GastosTrabajadores() {
 
   const cargar = useCallback(async () => {
     try {
-      const r = (await api.liquidaciones({ estado: filtro || undefined })).liquidaciones;
+      const r = (
+        await api.liquidaciones({
+          estado: filtro || undefined,
+          expenseTargetId: filtroPersona === "" ? undefined : filtroPersona,
+        })
+      ).liquidaciones;
       setLista(r);
       if (numeroPedido) {
         const encontrada = r.find((x) => x.numero === numeroPedido);
@@ -92,7 +100,7 @@ export default function GastosTrabajadores() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se han podido cargar las liquidaciones");
     }
-  }, [filtro, numeroPedido, setParams]);
+  }, [filtro, filtroPersona, numeroPedido, setParams]);
 
   useEffect(() => {
     void cargar();
@@ -112,6 +120,10 @@ export default function GastosTrabajadores() {
       .reglasGasto()
       .then((r) => setLectura(r.lecturaDisponible))
       .catch(() => setLectura(false));
+    api
+      .empleados()
+      .then((r) => setEmpleados(r.disponible ? r.empleados : null))
+      .catch(() => setEmpleados(null));
   }, []);
 
   if (abierta != null) {
@@ -138,7 +150,7 @@ export default function GastosTrabajadores() {
       {error && <ErrorBox>{error}</ErrorBox>}
 
       {puede("cash.expense_claim.create") && (
-        <NuevaLiquidacion destinos={destinos} onCreada={(id) => setAbierta(id)} />
+        <NuevaLiquidacion destinos={destinos} empleados={empleados} onCreada={(id) => setAbierta(id)} />
       )}
 
       <div className="flex items-center gap-2">
@@ -154,6 +166,21 @@ export default function GastosTrabajadores() {
               {v}
             </option>
           ))}
+        </select>
+        <label className="ml-2 text-[11px] uppercase text-slate-400">Trabajador</label>
+        <select
+          value={filtroPersona}
+          onChange={(e) => setFiltroPersona(e.target.value ? Number(e.target.value) : "")}
+          className={`${inputCls} w-56`}
+        >
+          <option value="">Todos</option>
+          {destinos
+            .filter((d) => d.tipo === "PERSONA")
+            .map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.nombre}
+              </option>
+            ))}
         </select>
       </div>
 
@@ -197,26 +224,60 @@ export default function GastosTrabajadores() {
 
 // ── Crear ──────────────────────────────────────────────────────────────────
 
-function NuevaLiquidacion({ destinos, onCreada }: { destinos: DestinoGasto[]; onCreada: (id: number) => void }) {
-  const personas = destinos.filter((d) => d.tipo === "PERSONA" && d.activo);
-  const [persona, setPersona] = useState<number | "">("");
+export function NuevaLiquidacion({
+  destinos,
+  empleados,
+  onCreada,
+}: {
+  destinos: DestinoGasto[];
+  /** `null` = la instalación no tiene fichas de empleado: se elige la persona de Cash. */
+  empleados: Empleado[] | null;
+  onCreada: (id: number) => void;
+}) {
+  /*
+   * Se elige al TRABAJADOR. Con fichas de empleado, por su ficha: es su
+   * identidad, y Cash le busca —o le crea— su persona. Las personas de Cash
+   * que todavía no tienen ficha siguen saliendo aparte, para no dejar a nadie
+   * sin poder cobrar mientras se vinculan en Configuración.
+   */
+  const conFicha = new Set((empleados ?? []).map((e) => e.destinoId).filter((x): x is number => x != null));
+  const sueltas = destinos.filter((d) => d.tipo === "PERSONA" && d.activo && !conFicha.has(d.id));
+  const [eleccion, setEleccion] = useState("");
   const [notas, setNotas] = useState("");
   const [error, setError] = useState("");
   const [creando, setCreando] = useState(false);
+  /** La persona suelta que se parece al empleado elegido: se pregunta antes de vincularla. */
+  const [parecida, setParecida] = useState<{ id: number; nombre: string } | null>(null);
 
-  async function crear() {
-    if (persona === "") return;
+  const nombreDe = (e: Empleado) => [e.nombre, e.apellidos].filter(Boolean).join(" ");
+
+  async function crear(vincularAntes?: number) {
+    if (!eleccion) return;
     setCreando(true);
     setError("");
     try {
-      const r = await api.crearLiquidacion({ expenseTargetId: persona, notas: notas.trim() || undefined });
+      const [tipo, valor] = [eleccion.slice(0, 1), eleccion.slice(2)];
+      if (vincularAntes != null) await api.vincularPersona(vincularAntes, valor);
+      const r = await api.crearLiquidacion(
+        tipo === "e"
+          ? { employeeId: valor, notas: notas.trim() || undefined }
+          : { expenseTargetId: Number(valor), notas: notas.trim() || undefined }
+      );
+      setParecida(null);
       onCreada(r.liquidacion.id);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se ha podido crear");
+      const detalle = (e as { codigo?: string; detalle?: { candidato?: { id: number; nombre: string } } }) ?? {};
+      if (detalle.codigo === "DESTINO_SIN_VINCULAR" && detalle.detalle?.candidato) {
+        setParecida(detalle.detalle.candidato);
+      } else {
+        setError(e instanceof Error ? e.message : "No se ha podido crear");
+      }
     } finally {
       setCreando(false);
     }
   }
+
+  const hayAlguien = (empleados?.length ?? 0) > 0 || sueltas.length > 0;
 
   return (
     <section className="rounded-xl border border-slate-700 bg-slate-800/60 p-3">
@@ -224,26 +285,43 @@ function NuevaLiquidacion({ destinos, onCreada }: { destinos: DestinoGasto[]; on
         <Plus className="h-4 w-4" /> Nueva liquidación
       </h2>
       {error && <ErrorBox>{error}</ErrorBox>}
-      {personas.length === 0 ? (
+      {!hayAlguien ? (
         <Aviso tono="aviso">
-          No hay ninguna persona dada de alta en Cash. Créala en Configuración → Conceptos de gasto → «A un
-          operario».
+          No hay ningún trabajador disponible. Da de alta a la persona en Configuración → Conceptos de gasto → «A
+          un operario».
         </Aviso>
       ) : (
         <div className="flex flex-wrap items-end gap-2">
           <label className="flex flex-col gap-1">
             <span className="text-[10px] font-semibold uppercase text-slate-400">Trabajador</span>
             <select
-              value={persona}
-              onChange={(e) => setPersona(e.target.value ? Number(e.target.value) : "")}
-              className={`${inputCls} w-64`}
+              value={eleccion}
+              onChange={(e) => {
+                setEleccion(e.target.value);
+                setParecida(null);
+              }}
+              className={`${inputCls} w-72`}
             >
               <option value="">Elige…</option>
-              {personas.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.nombre}
-                </option>
-              ))}
+              {empleados && empleados.length > 0 && (
+                <optgroup label="Empleados">
+                  {empleados.map((e) => (
+                    <option key={e.id} value={`e:${e.id}`}>
+                      {nombreDe(e)}
+                      {e.codigo ? ` (${e.codigo})` : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {sueltas.length > 0 && (
+                <optgroup label={empleados ? "Personas de Cash sin ficha de empleado" : "Personas"}>
+                  {sueltas.map((d) => (
+                    <option key={d.id} value={`d:${d.id}`}>
+                      {d.nombre}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </label>
           <label className="flex flex-1 flex-col gap-1">
@@ -255,9 +333,28 @@ function NuevaLiquidacion({ destinos, onCreada }: { destinos: DestinoGasto[]; on
               className={inputCls}
             />
           </label>
-          <button onClick={() => void crear()} disabled={persona === "" || creando} className={btnPrimary}>
+          <button onClick={() => void crear()} disabled={!eleccion || creando} className={btnPrimary}>
             {creando ? "Creando…" : "Crear"}
           </button>
+        </div>
+      )}
+      {parecida && (
+        <div className="mt-2">
+          <Aviso tono="aviso">
+            En Cash ya hay una persona llamada <strong>{parecida.nombre}</strong> sin ficha de empleado. ¿Es la
+            misma persona?
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button className={btnPrimary} disabled={creando} onClick={() => void crear(parecida.id)}>
+                Sí: vincularla y crear
+              </button>
+              <button className={btnSecondary} disabled={creando} onClick={() => setParecida(null)}>
+                No, cancelar
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] text-slate-400">
+              Si no es la misma, cámbiale el nombre en Configuración para distinguirlas.
+            </p>
+          </Aviso>
         </div>
       )}
     </section>

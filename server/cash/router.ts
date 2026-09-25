@@ -41,6 +41,7 @@ import { MAXIMO_TICKETS_POR_SUBIDA } from "./expenseclaims/lines.ts";
 import { informeLiquidacion } from "./expenseclaims/report.ts";
 import { pagarLiquidacion } from "./expenseclaims/pago.ts";
 import { lecturaDisponible, reintentarAnalisis } from "./expenseclaims/analisis.ts";
+import * as empleados from "./expenseclaims/empleados.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 
@@ -2496,6 +2497,40 @@ export function createCashRouter(): Router {
         enteroPositivo(req.params.lineId, "lineId")
       );
       res.json({ ok: true });
+    })
+  );
+
+  // ── Empleados y personas de Cash ─────────────────────────────────────────
+
+  /** Las fichas de empleado activas, para elegir de quién es una liquidación. */
+  r.get(
+    "/employees",
+    exigirPermiso("cash.expense_claim.view"),
+    ruta(async (req, res) => {
+      res.json(await empleados.listarEmpleados(req.authCtx!.empresaId));
+    })
+  );
+
+  /** Qué persona de Cash sin vincular se parece a qué empleado. Solo propone. */
+  r.get(
+    "/expense-targets/employee-links",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      res.json(await empleados.proponerVinculosDePersonas(req.authCtx!.empresaId));
+    })
+  );
+
+  /** Ata (o desata, con `null`) una persona de Cash a su ficha de empleado. */
+  r.put(
+    "/expense-targets/:id/employee",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const employeeId = b.employeeId == null || b.employeeId === "" ? null : String(b.employeeId);
+      if (employeeId && !UUID.test(employeeId)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "employeeId no es un identificador válido.", 400);
+      }
+      res.json(await empleados.vincularPersona(contexto(req), enteroPositivo(req.params.id, "id"), employeeId));
     })
   );
 
