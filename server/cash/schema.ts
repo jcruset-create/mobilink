@@ -244,7 +244,7 @@ export async function initCash(): Promise<void> {
       numero TEXT NOT NULL UNIQUE,
 
       tipo TEXT NOT NULL CHECK (tipo IN (
-        'COLLECTION','PAYMENT','MANUAL_IN','MANUAL_OUT','CASH_DELIVERY',
+        'COLLECTION','REFUND','PAYMENT','MANUAL_IN','MANUAL_OUT','CASH_DELIVERY',
         'BANK_DEPOSIT','ADJUSTMENT','OPENING_FLOAT','CLOSING_FLOAT','EXCHANGE')),
       origen TEXT NOT NULL DEFAULT 'MANUAL'
         CHECK (origen IN ('MANUAL','ERP','API','IMPORT','POS','OTHER')),
@@ -330,7 +330,7 @@ export async function initCash(): Promise<void> {
       valor_unitario_centimos INTEGER NOT NULL,
       importe_centimos BIGINT NOT NULL,
       motivo TEXT NOT NULL CHECK (motivo IN (
-        'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
+        'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT','CUSTOMER_REFUND',
         'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
         'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED',
         'CARTRIDGE_FORMED','BAG_FORMED')),
@@ -911,7 +911,7 @@ export async function initCash(): Promise<void> {
       DROP CONSTRAINT IF EXISTS cash_denomination_movements_motivo_check;
     ALTER TABLE cash_denomination_movements
       ADD CONSTRAINT cash_denomination_movements_motivo_check CHECK (motivo IN (
-        'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT',
+        'OPENING_FLOAT','CUSTOMER_PAYMENT','CHANGE_GIVEN','SUPPLIER_PAYMENT','CUSTOMER_REFUND',
         'MANUAL_IN','MANUAL_OUT','CASH_DELIVERY','BANK_DEPOSIT','ADJUSTMENT',
         'CLOSING_FLOAT','CARTRIDGE_OPENED','BAG_OPENED','EXCHANGE',
         'CARTRIDGE_FORMED','BAG_FORMED'));
@@ -920,7 +920,7 @@ export async function initCash(): Promise<void> {
       DROP CONSTRAINT IF EXISTS cash_operations_tipo_check;
     ALTER TABLE cash_operations
       ADD CONSTRAINT cash_operations_tipo_check CHECK (tipo IN (
-        'COLLECTION','PAYMENT','MANUAL_IN','MANUAL_OUT','CASH_DELIVERY',
+        'COLLECTION','REFUND','PAYMENT','MANUAL_IN','MANUAL_OUT','CASH_DELIVERY',
         'BANK_DEPOSIT','ADJUSTMENT','OPENING_FLOAT','CLOSING_FLOAT','EXCHANGE'));
   `);
 

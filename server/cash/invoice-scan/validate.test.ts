@@ -511,6 +511,56 @@ describe("lo que se lee pero el modelo no se cree", () => {
   });
 });
 
+/**
+ * El abono P0020000021 del 25/09/2026: −59,90 € a GRUPO CASTELLI BOLD S.L.
+ * El escáner lo leyó bien —importe, cliente, concepto— y la pantalla intentaba
+ * cobrarlo: «Confirmar cobro de −59,90 €», que el motor rechaza con razón.
+ */
+describe("Caso E · P0020000021 · un ABONO", () => {
+  const ABONO: ExtraccionCruda = {
+    ...ALBARAN,
+    tipo_documento: "FACTURA",
+    factura: { numero: "P0020000021", fecha: "25/09/2026" },
+    cliente: { codigo: null, nombre: "GRUPO CASTELLI BOLD S.L.", nif: null },
+    concepto: "MERCEDES ACTROS 1845 · 8071JJN",
+    totales: { base_imponible: "-49,50 €", iva_importe: "-10,40 €", iva_porcentaje: "21,00%", total: "-59,90 €", moneda: "EUR" },
+    recibo: { ...ALBARAN.recibo, detectado: false, importe: null },
+  };
+
+  it("el total en negativo lo delata, y el importe sale en POSITIVO", () => {
+    /*
+     * El signo lo lleva `esAbono`, no la cifra. Un −59,90 en la casilla es
+     * justo lo que el motor rechaza: en la caja el dinero es un importe
+     * positivo más una dirección.
+     */
+    const p = propuesta(ABONO);
+    expect(p.esAbono).toBe(true);
+    expect(p.importeCentimos.valor).toBe(5990);
+  });
+
+  it("la aritmética se comprueba en valor absoluto, así que el total se rellena", () => {
+    /* −49,50 + −10,40 = −59,90: cuadra igual, y corrobora igual. */
+    expect(propuesta({ ...ABONO, confianza: { ...ABONO.confianza, total: 0.5 } }).importeCentimos.valor).toBe(5990);
+  });
+
+  it("se dice en pantalla, sin apagar nada", () => {
+    const p = propuesta(ABONO);
+    const aviso = p.avisos.find((a) => a.codigo === "ES_ABONO");
+    expect(aviso).toBeDefined();
+    expect(aviso!.grave).toBe(false);
+  });
+
+  it("también lo delata el papel diciendo que es un abono, aunque el total venga en positivo", () => {
+    const p = propuesta({ ...ABONO, tipo_documento: "ABONO", totales: { ...ABONO.totales, base_imponible: "49,50 €", iva_importe: "10,40 €", total: "59,90 €" } });
+    expect(p.esAbono).toBe(true);
+  });
+
+  it("una factura normal no es un abono", () => {
+    expect(propuesta(ALBARAN).esAbono).toBe(false);
+    expect(propuesta(ALBARAN).avisos.map((a) => a.codigo)).not.toContain("ES_ABONO");
+  });
+});
+
 describe("documentos que no son lo que parecen", () => {
   it("si no es una factura, se avisa y no se preselecciona nada", () => {
     const p = propuesta({ ...A, es_factura: false });

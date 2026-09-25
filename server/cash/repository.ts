@@ -452,6 +452,9 @@ export async function movimientosDeSesion(
 
 const PREFIJO_POR_TIPO: Partial<Record<TipoOperacion, string>> = {
   COLLECTION: "C",
+  // «AB» y no «A», que ya es el ajuste. Un abono con la letra del ajuste se
+  // leería en el histórico como una corrección de arqueo.
+  REFUND: "AB",
   PAYMENT: "P",
   MANUAL_IN: "E",
   MANUAL_OUT: "S",

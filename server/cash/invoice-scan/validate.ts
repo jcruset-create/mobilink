@@ -169,7 +169,32 @@ export function validar(
    * lo más probable es que se haya leído mal alguno de los tres, y entonces el
    * total tampoco es de fiar.
    */
-  const { baseCentimos, ivaCentimos, totalCentimos } = extraccion.totales;
+  /*
+   * ── El abono ─────────────────────────────────────────────────────────────
+   *
+   * Dos señales independientes y basta con una: el total impreso en negativo,
+   * o el papel diciendo ser un abono. A partir de aquí se trabaja con el valor
+   * ABSOLUTO —la aritmética, el cuadre con el recibo, la casilla— y el signo
+   * lo lleva `esAbono`. Un −59,90 en la casilla del importe es justo lo que el
+   * motor rechaza: en la caja el dinero es un importe positivo más una
+   * dirección, y la dirección aquí es «sale».
+   */
+  const totalCrudo = extraccion.totales.totalCentimos;
+  const esAbono = (totalCrudo != null && totalCrudo < 0) || extraccion.tipoDocumento === "ABONO";
+  const abs = (c: Centimos | null): Centimos | null => (c == null ? null : Math.abs(c));
+  const baseCentimos = abs(extraccion.totales.baseCentimos);
+  const ivaCentimos = abs(extraccion.totales.ivaCentimos);
+  const totalCentimos = abs(totalCrudo);
+
+  if (esAbono && extraccion.esFactura) {
+    avisos.push({
+      codigo: "ES_ABONO",
+      mensaje:
+        "Esto es un ABONO: el dinero se devuelve al cliente, no se cobra. Se registra como abono, " +
+        "con la forma de pago por la que se devuelve.",
+      grave: false,
+    });
+  }
   if (baseCentimos != null && ivaCentimos != null && totalCentimos != null) {
     const desvio = Math.abs(baseCentimos + ivaCentimos - totalCentimos);
     if (desvio > 1) {
@@ -197,7 +222,7 @@ export function validar(
    * y «no hay» es solo la ausencia de una comprobación.
    */
   let importeCuadra: boolean | null = null;
-  const importeRecibo = extraccion.recibo.importeCentimos;
+  const importeRecibo = abs(extraccion.recibo.importeCentimos);
   if (extraccion.recibo.detectado && importeRecibo != null && totalCentimos != null) {
     importeCuadra = Math.abs(importeRecibo - totalCentimos) <= toleranciaCentimos;
     if (!importeCuadra) {
@@ -312,6 +337,7 @@ export function validar(
     concepto: campo(extraccion.concepto, extraccion.confianza.concepto, null),
     formaCobro,
     seccion: seccionPropuesta,
+    esAbono,
     importeCuadra,
     avisos,
     // Lo rellena el servicio si el histórico dice que ya se cobró: aquí no se

@@ -71,7 +71,9 @@ Reglas, y son estrictas:
   decimal. No los conviertas, no los redondees, no les quites el separador de
   miles si lo tienen. "1.234,56" se copia "1.234,56".
 - "tipo" es COBRO si el importe está en la columna de cobros y PAGO si está en
-  la de pagos. Nunca lo deduzcas del concepto.
+  la de pagos. Nunca lo deduzcas del concepto. Un abono aparece en la columna
+  de cobros con el importe en NEGATIVO: cópialo con su signo, "-59,90", y
+  déjalo como COBRO; el signo ya dice lo que es.
 - "referencia" es el número de factura o documento si lo hay (por ejemplo
   "B2_26/611"). Si la línea no lo enseña, pon null. NO lo inventes ni lo
   saques del concepto.
@@ -195,8 +197,8 @@ export function interpretarLecturaErp(textoDelModelo: string): LecturaErp {
   crudo.lineas.forEach((l: any, i: number) => {
     const nº = i + 1;
 
-    const tipo = String(l?.tipo ?? "").trim().toUpperCase();
-    if (tipo !== "COBRO" && tipo !== "PAGO") {
+    let tipo = String(l?.tipo ?? "").trim().toUpperCase();
+    if (tipo !== "COBRO" && tipo !== "PAGO" && tipo !== "ABONO") {
       problema(`Línea ${nº}: no se sabe si es un cobro o un pago.`);
       return;
     }
@@ -221,17 +223,26 @@ export function interpretarLecturaErp(textoDelModelo: string): LecturaErp {
       );
       return;
     }
+    /*
+     * Un cobro en negativo es un ABONO: así lo imprime Genes, en la columna de
+     * cobros y restando. Se le da la vuelta al signo y su tipo propio. Un pago
+     * negativo, en cambio, no significa nada y se queda como problema.
+     */
     if (importe < 0) {
-      problema(`Línea ${nº}: importe negativo (${String(l.importe)}).`);
-      return;
+      if (tipo === "PAGO") {
+        problema(`Línea ${nº}: importe negativo (${String(l.importe)}).`);
+        return;
+      }
+      tipo = "ABONO";
     }
+    const importeAbs = Math.abs(importe);
 
     lineas.push({
       justificante: typeof l?.justificante === "string" ? l.justificante.trim() || null : null,
       referencia: typeof l?.referencia === "string" ? l.referencia.trim() || null : null,
       formaErp: forma,
-      importeCentimos: importe,
-      tipo,
+      importeCentimos: importeAbs,
+      tipo: tipo as "COBRO" | "PAGO" | "ABONO",
       concepto: typeof l?.concepto === "string" ? l.concepto.trim() || null : null,
     });
   });
@@ -248,6 +259,8 @@ export function interpretarLecturaErp(textoDelModelo: string): LecturaErp {
   // ── La comprobación que decide si esto vale ───────────────────────────────
   const suma = (t: string) =>
     lineas.filter((l) => l.tipo === t).reduce((a, l) => a + l.importeCentimos, 0);
+  /* El «Sum» de cobros de Genes ya lleva los abonos restados. Aquí también. */
+  const sumaCobrosNeta = suma("COBRO") - suma("ABONO");
 
   /*
    * Con coma, que es como se escribe aquí el dinero.
@@ -278,7 +291,7 @@ export function interpretarLecturaErp(textoDelModelo: string): LecturaErp {
       );
     }
   };
-  comprobar(totalCobrosDeclarado, suma("COBRO"), "cobros");
+  comprobar(totalCobrosDeclarado, sumaCobrosNeta, "cobros");
   comprobar(totalPagosDeclarado, suma("PAGO"), "pagos");
 
   /*

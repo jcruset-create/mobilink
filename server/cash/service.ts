@@ -644,7 +644,12 @@ export async function registrarOperacion(
        * comprueba aquí y no solo al pintar los botones, por lo de siempre: la
        * pantalla puede llevar minutos abierta.
        */
-      if (e.tipo === "COLLECTION" && !forma.enCobros) {
+      /*
+       * Un abono se devuelve por donde se cobró: por una forma de COBRO. Que
+       * BBVA valga para cobrar y no para pagar proveedores no dice nada de si
+       * vale para devolver una venta hecha por BBVA.
+       */
+      if ((e.tipo === "COLLECTION" || e.tipo === "REFUND") && !forma.enCobros) {
         throw new ErrorCaja(
           "FORMA_PAGO_NO_EN_COBROS",
           `"${forma.nombre}" no está habilitada para cobros. Actívala en Configuración.`,
@@ -776,13 +781,19 @@ export async function registrarOperacion(
      * convierte el doble clic en un solo cobro—.
      */
     let autorizadoPor: string | null = null;
-    if (e.tipo === "COLLECTION" && e.referencia) {
+    if ((e.tipo === "COLLECTION" || e.tipo === "REFUND") && e.referencia) {
       const { cobroPrevioDeFactura, consumirAutorizacion } = await import("./duplicates.ts");
+      /*
+       * El abono busca abonos, no cobros: que la factura B0020000021 esté
+       * cobrada no es motivo para no abonar el P0020000021. Lo que no puede
+       * pasar es devolver DOS veces el mismo abono.
+       */
       const previo = await cobroPrevioDeFactura(
         ctx.empresaId,
         e.referencia,
         client,
-        operacionId
+        operacionId,
+        e.tipo === "REFUND" ? "ABONO" : "COBRO"
       );
       if (previo) {
         if (!e.autorizacionDuplicado) {
@@ -2627,6 +2638,8 @@ export type ResumenJornada = {
   piezas: number;
   porFormaPago: { forma: string; importeCentimos: Centimos }[];
   cobros: { erpCentimos: Centimos; manualCentimos: Centimos; totalCentimos: Centimos };
+  /** Cobros devueltos. Aparte, para poder enseñar «cobros X · abonos −Y». */
+  abonos: { erpCentimos: Centimos; manualCentimos: Centimos; totalCentimos: Centimos };
   pagos: { erpCentimos: Centimos; manualCentimos: Centimos; totalCentimos: Centimos };
   salidasCentimos: Centimos;
   entregasCentimos: Centimos;
@@ -2685,11 +2698,12 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
   // su reversión se compensan solas porque la reversión no se cuenta y la
   // original deja de estar CONFIRMED.
   const { rows: formas } = await pool.query(
-    `SELECT p.forma_pago, SUM(p.importe_centimos) AS importe
+    `SELECT p.forma_pago,
+            SUM(CASE WHEN o.tipo = 'REFUND' THEN -p.importe_centimos ELSE p.importe_centimos END) AS importe
        FROM cash_operation_payments p
        JOIN cash_operations o ON o.id = p.operation_id
       WHERE o.session_id = $1 AND o.estado = 'CONFIRMED'
-        AND o.tipo IN ('COLLECTION','PAYMENT')
+        AND o.tipo IN ('COLLECTION','REFUND','PAYMENT')
       GROUP BY p.forma_pago`,
     [sessionId]
   );
@@ -2716,14 +2730,18 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
     `SELECT o.section_id,
             COALESCE(sec.nombre, 'Sin sección') AS nombre,
             COALESCE(sec.arquea_aparte, false) AS arquea_aparte,
-            SUM(CASE WHEN o.tipo = 'COLLECTION' THEN o.importe_centimos ELSE 0 END) AS cobros,
+            /* Un abono RESTA de los cobros de su sección: es una venta deshecha,
+               no un gasto. */
+            SUM(CASE WHEN o.tipo = 'COLLECTION' THEN o.importe_centimos
+                     WHEN o.tipo = 'REFUND' THEN -o.importe_centimos
+                     ELSE 0 END) AS cobros,
             SUM(CASE WHEN o.tipo IN ('PAYMENT','MANUAL_OUT') THEN o.importe_centimos ELSE 0 END) AS pagos,
             SUM(o.efectivo_neto_centimos) AS efectivo,
             COUNT(*) AS n
        FROM cash_operations o
        LEFT JOIN cash_sections sec ON sec.id = o.section_id
       WHERE o.session_id = $1 AND o.estado = 'CONFIRMED'
-        AND o.tipo IN ('COLLECTION','PAYMENT','MANUAL_OUT')
+        AND o.tipo IN ('COLLECTION','REFUND','PAYMENT','MANUAL_OUT')
       GROUP BY o.section_id, sec.nombre, sec.orden, sec.arquea_aparte
       ORDER BY sec.orden NULLS LAST, sec.nombre`,
     [sessionId]
@@ -2792,6 +2810,17 @@ export async function resumenJornada(sessionId: number): Promise<ResumenJornada>
       erpCentimos: suma("COLLECTION", "ERP"),
       manualCentimos: suma("COLLECTION", "MANUAL"),
       totalCentimos: suma("COLLECTION"),
+    },
+    /*
+     * Aparte de los cobros y no restado dentro: la pantalla y el informe
+     * tienen que poder enseñar «cobros 887,40 · abonos −59,90», que es lo que
+     * cuadra con el arqueo de Genes, donde el abono sale en la columna de
+     * cobros con signo negativo.
+     */
+    abonos: {
+      erpCentimos: suma("REFUND", "ERP"),
+      manualCentimos: suma("REFUND", "MANUAL"),
+      totalCentimos: suma("REFUND"),
     },
     pagos: {
       erpCentimos: suma("PAYMENT", "ERP"),

@@ -337,6 +337,7 @@ export function tipoDeDocumento(valor: string | null | undefined): TipoDocumento
     "ALBARAN",
     "TICKET",
     "PARTE",
+    "ABONO",
     "OTRO",
   ];
   return conocidos.includes(limpio as TipoDocumento) ? (limpio as TipoDocumento) : "DESCONOCIDO";

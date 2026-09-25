@@ -2090,6 +2090,48 @@ export function createCashRouter(): Router {
     })
   );
 
+  // ── Abonos: un cobro devuelto ────────────────────────────────────────────
+  //
+  // Sale dinero como en un pago, pero es la vuelta atrás de una venta: lleva
+  // sección, se registra con una forma de COBRO y resta de los cobros del día.
+  // El permiso es el de cobrar a mano —quien puede cobrar puede devolver un
+  // cobro— y no el de pagar proveedores, que es otro trabajo.
+  r.post(
+    "/refunds",
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const esManual = !b.externalDocumentId;
+      const permiso = esManual ? "cash.collection.create_manual" : "cash.collection.create";
+      if (!req.cashPermisos?.includes(permiso)) {
+        return res.status(403).json({ error: "No tienes permiso para registrar abonos.", code: "PERMISO_DENEGADO", permiso });
+      }
+
+      const salida = await servicio.registrarOperacion(contexto(req), {
+        sessionId: enteroPositivo(b.sessionId, "sessionId"),
+        tipo: "REFUND",
+        origen: esManual ? "MANUAL" : "ERP",
+        // Siempre en positivo: el signo lo pone el tipo, no la cifra.
+        importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
+        formasPago: formasPago(b.formasPago),
+        efectivoEntregado: lineas(b.efectivoEntregado, "efectivoEntregado"),
+        // La vuelta del cliente al redondear: se le devuelven 60 € y pone 0,10.
+        efectivoRecibido: lineas(b.efectivoRecibido, "efectivoRecibido"),
+        partyNombre: typeof b.partyNombre === "string" ? b.partyNombre : "",
+        concepto: typeof b.concepto === "string" ? b.concepto : "",
+        referencia: typeof b.referencia === "string" ? b.referencia : null,
+        autorizacionDuplicado:
+          typeof b.autorizacionDuplicado === "string" ? b.autorizacionDuplicado : null,
+        documentoId: b.documentoId ? enteroPositivo(b.documentoId, "documentoId") : null,
+        externalSystem: typeof b.externalSystem === "string" ? b.externalSystem : null,
+        externalDocumentId: typeof b.externalDocumentId === "string" ? b.externalDocumentId : null,
+        externalDocumentReference:
+          typeof b.externalDocumentReference === "string" ? b.externalDocumentReference : null,
+        sectionId: b.sectionId ? enteroPositivo(b.sectionId, "sectionId") : null,
+      });
+      res.status(201).json(salida);
+    })
+  );
+
   // ── Pagos ────────────────────────────────────────────────────────────────
   r.post(
     "/payments",

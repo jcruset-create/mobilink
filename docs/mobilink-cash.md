@@ -791,6 +791,46 @@ De cada cotejo se guardan **solo cifras** (`cash_erp_reconciliations`): cuántas
 líneas, cuántas cuadraron, por cuánto. Ni la captura, ni las líneas, ni un
 nombre de cliente.
 
+## 7 terdecies. Abonos: un cobro devuelto
+
+Llegó como una factura rectificativa escaneada —`P0020000021`, −59,90 €— y la
+pantalla intentaba **cobrarla** con el importe en negativo. El motor la
+rechazaba, y con razón.
+
+**No hay importes negativos en la caja, y no es una limitación: es el diseño.**
+El dinero es siempre un importe positivo más una dirección. Un −59,90 rompería
+las sumas por forma de cobro, el inventario de piezas (no existen −2 billetes
+de 20) y el arqueo. Un cobro negativo no es un cobro: es dinero que sale.
+
+Por eso el abono es un **tipo de operación propio**, `REFUND`:
+
+- **Sale dinero como un pago**, con sus piezas si es en efectivo (motivo
+  `CUSTOMER_REFUND`, distinto de `SUPPLIER_PAYMENT` para que el libro mayor no
+  confunda devolver a un cliente con pagar a un proveedor).
+- **Pero es un cobro en todo lo demás**: lleva sección, se devuelve por una
+  forma de **cobro** (BBVA vale para devolver una venta hecha por BBVA aunque no
+  valga para pagar proveedores), no admite concepto de gasto, y en los totales
+  **resta de los cobros** de su sección en vez de sumar a los pagos.
+- Numera con `AB` (`TAR1-AB-26-001`): la `A` a secas ya era el ajuste.
+- El control de duplicados busca **abonos**, no cobros: que la factura esté
+  cobrada no impide abonarla; lo que no se puede es devolver dos veces el
+  mismo abono.
+
+**Se registra desde Pagos en modo abono** (`/cash/pagos?modo=abono`), que es la
+pantalla que ya sabe sacar dinero del cajón y aceptar la vuelta. El escáner lo
+detecta en Cobros —total en negativo, o el papel diciendo ser un abono— y en
+vez de dejar cobrar enseña el camino, llevándose la lectura ya hecha.
+
+**El cotejo con Genes** lo entiende porque Genes lo imprime así: en la columna
+de cobros, **con signo negativo**, y el «Sum» ya restado. Un cobro en negativo
+en la lectura se convierte en tipo `ABONO` con el importe en positivo; los
+totales de cobros van netos a los dos lados; y un abono **solo empareja con
+abonos** — 59,90 devueltos y 59,90 cobrados no son la misma operación por mucho
+que coincidan en cifra.
+
+Lo que queda fuera: sincronizar abonos con la ERP por el outbox. Hoy solo
+COLLECTION y PAYMENT generan evento; el abono se registra en modo autónomo.
+
 ## 8. Estado de la entrega
 
 El módulo está **en producción y en uso diario**. Implementado y probado:

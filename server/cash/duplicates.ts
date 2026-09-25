@@ -126,12 +126,13 @@ export async function cobroPrevioDeFactura(
    * proveedor, y avisar de lo uno mirando lo otro sería un aviso falso — de los
    * que enseñan a ignorar los avisos.
    */
-  sentido: "COBRO" | "PAGO" = "COBRO"
+  sentido: "COBRO" | "PAGO" | "ABONO" = "COBRO"
 ): Promise<CobroPrevio | null> {
   const ref = referencia == null ? "" : normalizarReferencia(referencia);
   if (!ref) return null;
 
-  const tipos = sentido === "PAGO" ? ["PAYMENT", "MANUAL_OUT"] : ["COLLECTION"];
+  const tipos =
+    sentido === "PAGO" ? ["PAYMENT", "MANUAL_OUT"] : sentido === "ABONO" ? ["REFUND"] : ["COLLECTION"];
 
   const { rows } = await client.query(
     `SELECT id, numero, importe_centimos, party_nombre, created_at_ms

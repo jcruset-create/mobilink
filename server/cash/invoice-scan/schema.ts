@@ -43,9 +43,11 @@ export const ESQUEMA_FACTURA = objeto({
     ...texto,
     description:
       "Qué es el documento, con una de estas palabras exactas: FACTURA, " +
-      "FACTURA_SIMPLIFICADA, ALBARAN, TICKET, PARTE, OTRO. Es lo que pone el " +
-      "propio papel: si el encabezado dice «Albarán: B2_0004524», es ALBARAN " +
-      "aunque lleve importes e IVA como una factura. null si no se distingue.",
+      "FACTURA_SIMPLIFICADA, ALBARAN, TICKET, PARTE, ABONO, OTRO. Es lo que pone " +
+      "el propio papel: si el encabezado dice «Albarán: B2_0004524», es ALBARAN " +
+      "aunque lleve importes e IVA como una factura. ABONO si pone «Abono», " +
+      "«Factura rectificativa» o «Nota de crédito», o si el total está en " +
+      "NEGATIVO. null si no se distingue.",
   },
   facturas_detectadas: {
     type: "integer",
@@ -199,7 +201,7 @@ Reglas:
 1. Copia lo que ves, TAL Y COMO ESTÁ IMPRESO. No conviertas importes ni fechas, no quites símbolos, no calcules nada. Si en el papel pone «195,10 EUR», devuelve «195,10 EUR».
 2. Ante la duda, null. Un campo vacío es mejor que uno inventado.
 3. Hay dos partes y las dos se copian: el EMISOR es quien cobra —el que firma el documento— y el CLIENTE es a quien va dirigido. En una factura del taller el emisor es el taller; en un ticket de compra el emisor es la tienda. No decidas cuál importa: copia las dos.
-4. El total es el importe final con impuestos, el que se paga.
+4. El total es el importe final con impuestos, el que se paga. Si está en negativo —un abono—, cópialo CON su signo: «-59,90 €».
 5. El justificante de pago solo existe si lo ves: un recibo de TPV o un ticket de datáfono, dentro del mismo documento. Que la factura esté pagada no es un justificante.
 6. No decidas de qué banco o de qué proveedor es el TPV. Copia el número de comercio, el terminal, la red y el nombre del adquirente si aparecen, y ya está: la clasificación no es tuya.
 7. «tipo_documento» es lo que pone el papel, no lo que parece: un albarán con importes e IVA sigue siendo un ALBARAN.
