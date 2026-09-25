@@ -102,14 +102,36 @@ function cabeceras(quien: Quien, extra: Record<string, string> = {}): Record<str
 async function pdfDeOrs(numeros: (number | null)[]): Promise<Buffer> {
   const doc = await PDFDocument.create();
   const fuente = await doc.embedFont(StandardFonts.Helvetica);
+  const marca = marcaUnica();
   for (const n of numeros) {
     const pagina = doc.addPage([595, 842]);
     // y=790 en coordenadas de PDF (desde abajo) es la franja superior.
     if (n !== null) pagina.drawText(`OR Nº ${n}`, { x: 400, y: 790, size: 16, font: fuente });
     pagina.drawText("ORDEN DE REPARACION MANUAL", { x: 60, y: 750, size: 12, font: fuente });
     pagina.drawText("Trabajos realizados: sustitucion de neumatico", { x: 60, y: 600, size: 11, font: fuente });
+    pagina.drawText(`ref ${marca}`, { x: 60, y: 60, size: 8, font: fuente });
   }
   return Buffer.from(await doc.save());
+}
+
+/**
+ * Una marca distinta en cada PDF generado, SIN dígitos.
+ *
+ * Dos escaneos del mismo número tienen que ser dos ficheros distintos, y por
+ * defecto no lo eran: `pdf-lib` fecha el documento con resolución de SEGUNDO,
+ * así que dos generaciones seguidas salían byte a byte iguales y el módulo —que
+ * reconoce una hoja repetida por el hash de su contenido, no por su nombre— las
+ * tomaba por la misma hoja ya archivada. Una prueba que dependa de lo rápido
+ * que vaya el runner no es una prueba.
+ *
+ * Sin dígitos a propósito: un número de tres cifras en la hoja competiría como
+ * candidato a número de OR y bajaría la confianza de la lectura buena, que es
+ * justo lo que miden otros casos. La prueba de «subir dos veces el mismo
+ * escaneo» sigue valiendo porque reutiliza el MISMO buffer, no lo regenera.
+ */
+function marcaUnica(): string {
+  const letras = "abcdefghijklmnopqrstuvwxyz";
+  return Array.from({ length: 10 }, () => letras[Math.floor(Math.random() * letras.length)]).join("");
 }
 
 async function subir(nombre: string, contenido: Buffer, quien: Quien = operarioA): Promise<Respuesta> {
@@ -645,6 +667,94 @@ describe.skipIf(!RUN)("OR Manuales · el ciclo del papel contra PostgreSQL", () 
       expect(proceso.documentosCorrectos).toBe(3);
       expect(proceso.noIdentificados).toBe(2);
       expect(proceso.estado).toBe("COMPLETADO");
+    });
+
+    /*
+     * El caso real del mostrador: se vacía el escáner con lo que hay encima de
+     * la mesa, sin separar por blocs ni ponerlo en orden. El archivado va por
+     * PÁGINA —cada hoja busca su bloc por su número—, así que el lote no tiene
+     * por qué ser de un solo bloc. Esto lo deja escrito.
+     */
+    it("un solo escaneo con hojas de tres blocs las reparte por su bloc", async () => {
+      const a = rangoLibre();
+      const b = rangoLibre();
+      const c = rangoLibre();
+      const blocA = await crearBloc(a);
+      const blocB = await crearBloc(b);
+      const blocC = await crearBloc(c);
+
+      // Mezcladas y desordenadas, como salen del escáner.
+      const proceso = await subirYEsperar("cajon-de-sastre.pdf", [b + 3, a, c + 10, a + 1, b, c]);
+
+      expect(proceso.paginas).toBe(6);
+      expect(proceso.documentosCorrectos).toBe(6);
+      expect(proceso.noIdentificados).toBe(0);
+      expect(proceso.duplicados).toBe(0);
+
+      const archivadasDe = async (bloc: any, numeros: number[]) => {
+        const ficha = await api(`/blocs/${bloc.bloc.id}`, gestorA);
+        expect(ficha.body.progreso.archivadas, `bloc ${ficha.body.bloc.numeroBloc}`).toBe(numeros.length);
+        const escaneadas = ficha.body.ors.filter((o: any) => o.estado === "ESCANEADA").map((o: any) => o.numeroOr);
+        expect(escaneadas.sort((x: number, y: number) => x - y)).toEqual([...numeros].sort((x, y) => x - y));
+        return ficha.body;
+      };
+
+      await archivadasDe(blocA, [a, a + 1]);
+      await archivadasDe(blocB, [b, b + 3]);
+      await archivadasDe(blocC, [c, c + 10]);
+
+      // Cada bloc lleva su propia cuenta y su propio aviso: no hay uno del lote.
+      const avisos = await api("/avisos", gestorA);
+      expect(avisos.body.avisos).toHaveLength(3);
+      expect(avisos.body.avisos.every((v: any) => v.tipo === "BLOC_INCOMPLETO")).toBe(true);
+
+      // Y ningún documento acabó colgando de un bloc que no era el suyo.
+      const { rows } = await db.query(
+        `SELECT b.numero_bloc, o.numero_or
+           FROM orm_documentos d
+           JOIN orm_or o ON o.id = d.or_id
+           JOIN orm_blocs b ON b.id = d.bloc_id
+          WHERE d.empresa_id = $1 AND d.estado_procesamiento = 'ARCHIVADO'`,
+        [EMPRESA_A]
+      );
+      for (const fila of rows) {
+        const suyo = [blocA, blocB, blocC].find((x) => x.bloc.numeroBloc === fila.numero_bloc);
+        expect(fila.numero_or, `la OR ${fila.numero_or} está en el bloc ${fila.numero_bloc}`).toBeGreaterThanOrEqual(
+          suyo.bloc.orInicial
+        );
+        expect(fila.numero_or).toBeLessThanOrEqual(suyo.bloc.orFinal);
+      }
+    });
+
+    it("en un lote mezclado, la hoja de un bloc CERRADO no se cuela y el resto entra igual", async () => {
+      const cerrado = rangoLibre();
+      const abierto = rangoLibre();
+
+      // Un bloc de una sola OR, escaneado y cerrado.
+      const blocCerrado = await crearBloc(cerrado, gestorA, { cantidadOr: 1 });
+      await subirYEsperar("la-suya.pdf", [cerrado]);
+      expect((await api(`/blocs/${blocCerrado.bloc.id}/cerrar`, gestorA, { method: "POST", body: {} })).status).toBe(200);
+
+      const blocAbierto = await crearBloc(abierto);
+
+      // El lote trae otra hoja de ese mismo número, una que no es de nadie y dos buenas.
+      const proceso = await subirYEsperar("mezcla.pdf", [cerrado, abierto, abierto + 9000, abierto + 1]);
+
+      expect(proceso.documentosCorrectos).toBe(2);
+      expect(proceso.noIdentificados).toBe(2);
+
+      // El bloc cerrado se queda como estaba.
+      const ficha = await api(`/blocs/${blocCerrado.bloc.id}`, gestorA);
+      expect(ficha.body.bloc.estado).toBe("CERRADO");
+      expect(ficha.body.progreso.archivadas).toBe(1);
+
+      // Y el abierto se lleva sus dos hojas.
+      expect((await api(`/blocs/${blocAbierto.bloc.id}`, gestorA)).body.progreso.archivadas).toBe(2);
+
+      // La del cerrado queda en la bandeja CON su número leído, para que una
+      // persona decida: no se archiva a la fuerza ni se pierde.
+      const pendientes = await api("/documentos/pendientes", gestorA);
+      expect(pendientes.body.documentos.some((d: any) => d.ocrNumeroDetectado === cerrado)).toBe(true);
     });
 
     it("subir dos veces el mismo escaneo no duplica nada", async () => {
