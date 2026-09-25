@@ -589,6 +589,154 @@ describe.runIf(RUN)("Ingesta en MC Central", () => {
   });
 
   /*
+   * La reposición del fondo, que es lo que hacía descuadrar la pantalla contra
+   * la caja.
+   *
+   * Cuando una caja se queda corta de cambio se repone el fondo con billetes
+   * del montón que iba a ir al banco. Ese dinero VUELVE al cajón, y el
+   * `MANUAL_IN` que lo asienta ya se lo cuenta a Central. Pero el cierre que lo
+   * apartó sigue sin conciliar, así que Central lo contaba TAMBIÉN como
+   * esperando al banco: los mismos billetes, en dos sitios.
+   *
+   * El caso real: Tarragona decía 105,76 € pendientes y Central 136,43 €. Los
+   * 30,67 € de diferencia eran dos reposiciones.
+   *
+   * Lo que prueba esto: reponer mueve la posición, no la aumenta. Sin el
+   * arreglo, `totalCentimos` sube en los 100 € repuestos y esta prueba falla.
+   */
+  it("reponer el fondo mueve la posición de la red, no la aumenta", async () => {
+    transporteCaja.registrarTransporte(new TransporteLocal());
+    try {
+      const { rows: creada } = await db.query(
+        `INSERT INTO cash_registers (empresa_id, centro, nombre, created_at_ms, updated_at_ms)
+         VALUES ($1,'reposicion',$2,$3,$3) RETURNING id`,
+        [EMPRESA, `rep-${String(process.hrtime.bigint()).slice(-9)}`, Date.now()]
+      );
+      const caja = creada[0].id;
+      await db.query(
+        `UPDATE cash_registers SET codigo = 'RP' || id, fondo_objetivo_centimos = 35000
+          WHERE id = $1`,
+        [caja]
+      );
+
+      // 350,00 € exactos, como el fondo fijo de Tarragona.
+      const fondo = [
+        { valor: 5000, cantidad: 3 },
+        { valor: 2000, cantidad: 5 },
+        { valor: 1000, cantidad: 5 },
+        { valor: 500, cantidad: 4 },
+        { valor: 200, cantidad: 5 },
+        { valor: 100, cantidad: 10 },
+        { valor: 50, cantidad: 10 },
+        { valor: 20, cantidad: 20 },
+        { valor: 10, cantidad: 10 },
+      ];
+      // El cambio que se deja: el fondo menos dos billetes de 50 €.
+      const cambio250 = fondo.map((l) => (l.valor === 5000 ? { valor: 5000, cantidad: 1 } : l));
+
+      const { sesion } = await servicio.abrirJornada(ctx, {
+        registerId: caja,
+        fondoManual: fondo,
+      });
+      await servicio.guardarArqueo(ctx, { sessionId: sesion.id, contado: fondo });
+      await servicio.cerrarJornada(ctx, { sessionId: sesion.id, cambioFinal: cambio250 });
+      // Al día siguiente se abre heredando esos 250 €: le faltan 100 de fondo.
+      const { sesion: hoy } = await servicio.abrirJornada(ctx, { registerId: caja });
+      await vaciar();
+
+      const antes = await queries.posicionGlobal(EMPRESA);
+
+      const propuesta = await ingresosCaja.proponerReposicion(EMPRESA, caja, [sesion.id]);
+      expect(propuesta.reposicion!.netoCentimos).toBe(10000);
+      await ingresosCaja.registrarReposicion(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id],
+        sacar: propuesta.reposicion!.sacar,
+        devolver: propuesta.reposicion!.devolver,
+      });
+      await vaciar();
+
+      const despues = await queries.posicionGlobal(EMPRESA);
+
+      // El cajón tiene 100 € más…
+      expect(despues.enCajonesCentimos).toBe(antes.enCajonesCentimos + 10000);
+      // …que han dejado de esperar al banco…
+      expect(despues.repuestoCentimos).toBe(antes.repuestoCentimos + 10000);
+      expect(despues.pendienteBancoCentimos).toBe(antes.pendienteBancoCentimos - 10000);
+      // …y el TOTAL de la red no se ha movido ni un céntimo.
+      expect(despues.totalCentimos).toBe(antes.totalCentimos);
+
+      // Y Central dice exactamente lo mismo que la caja, que es la prueba que
+      // reproduce la queja: la pantalla de ingresos ya restaba, la de Central no.
+      const panel = await ingresosCaja.panelIngresos(EMPRESA, caja);
+      expect(panel.totalPendienteCentimos).toBe(0);
+
+      /*
+       * Segunda mitad: un ingreso se lleva el montón y la reposición deja de
+       * restar. Si siguiera restando, la posición bajaría por debajo del
+       * dinero que hay de verdad, que es el error simétrico del anterior.
+       */
+      await servicio.registrarCobro(ctx, {
+        sessionId: hoy.id,
+        importeCentimos: 5000,
+        formasPago: [{ forma: "CASH", importe: 5000 }],
+        efectivoRecibido: [{ valor: 5000, cantidad: 1 }],
+      });
+      const contado = fondo.map((l) => (l.valor === 5000 ? { valor: 5000, cantidad: 4 } : l));
+      await servicio.guardarArqueo(ctx, { sessionId: hoy.id, contado });
+      await servicio.cerrarJornada(ctx, { sessionId: hoy.id, cambioFinal: fondo });
+      await vaciar();
+
+      // Cierres brutos 150 €, menos 100 € repuestos: quedan 50 € que llevar.
+      const conDosCierres = await queries.posicionGlobal(EMPRESA);
+      expect(conDosCierres.pendienteBancoCentimos).toBe(antes.pendienteBancoCentimos - 5000);
+
+      const ingreso = await ingresosCaja.crearIngreso(ctx, {
+        registerId: caja,
+        sessionIds: [sesion.id, hoy.id],
+        importeCentimos: 5000,
+        fechaIngreso: "2026-09-05",
+      });
+      await vaciar();
+
+      const ingresado = await queries.posicionGlobal(EMPRESA);
+      // Ni un céntimo esperando, y la reposición ya no resta: cero, no −100 €.
+      expect(ingresado.pendienteBancoCentimos).toBe(antes.pendienteBancoCentimos - 10000);
+      expect(ingresado.repuestoCentimos).toBe(antes.repuestoCentimos);
+
+      // Anular lo devuelve todo a su sitio, reposición incluida.
+      await ingresosCaja.anularIngreso(ctx, ingreso.id, "Prueba");
+      await vaciar();
+
+      const anulado = await queries.posicionGlobal(EMPRESA);
+      expect(anulado.pendienteBancoCentimos).toBe(conDosCierres.pendienteBancoCentimos);
+      expect(anulado.repuestoCentimos).toBe(antes.repuestoCentimos + 10000);
+
+      /*
+       * Y el camino por el que se repara lo que ya estaba mal en producción:
+       * las reposiciones hechas ANTES de que existiera el evento no están en
+       * Central, y desplegar no las trae. Se simula borrando la proyección
+       * —que es exactamente el estado en el que está Tarragona— y se comprueba
+       * que el botón «Resincronizar con la caja» la devuelve.
+       */
+      await db.query(`DELETE FROM central_float_topups WHERE register_id = $1`, [caja]);
+      const rota = await queries.posicionGlobal(EMPRESA);
+      expect(rota.repuestoCentimos).toBe(antes.repuestoCentimos);
+
+      const r = await ingresosCaja.reemitirIngresos(ctx, { registerId: caja });
+      expect(r.reposiciones).toBe(1);
+      await vaciar();
+
+      const reparada = await queries.posicionGlobal(EMPRESA);
+      expect(reparada.repuestoCentimos).toBe(antes.repuestoCentimos + 10000);
+      expect(reparada.pendienteBancoCentimos).toBe(anulado.pendienteBancoCentimos);
+      expect(reparada.totalCentimos).toBe(anulado.totalCentimos);
+    } finally {
+      transporteCaja.registrarTransporte(null);
+    }
+  });
+
+  /*
    * Fase 5: el ciclo completo de un ingreso bancario, de punta a punta.
    *
    * Lo que se demuestra es la ASIGNACIÓN DE ORIGEN: que el ingreso no llega a

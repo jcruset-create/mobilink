@@ -237,9 +237,22 @@ export type PosicionGlobal = {
   enTransitoBancoCentimos: number;
   enTransitoPersonasCentimos: number;
   transitosAbiertos: number;
-  /** Apartado en cierres que todavía no ha recogido ningún ingreso bancario. */
+  /**
+   * Apartado en cierres que todavía no ha recogido ningún ingreso bancario,
+   * MENOS lo que se devolvió al cajón reponiendo el fondo. Es el neto, el
+   * mismo número que enseña la caja: el bruto ofrecería un dinero que ya no
+   * está en la bolsa.
+   */
   pendienteBancoCentimos: number;
-  /** La suma de los tres. Es TODO el efectivo de la red y no repite ni un euro. */
+  /** Lo repuesto al cajón y todavía sin ingresar. Ya está restado arriba. */
+  repuestoCentimos: number;
+  /**
+   * Monedas que el banco no admitió y se quedaron en la tienda. No están en el
+   * cajón, ni de camino, ni esperando al banco: es un cuarto sitio, y sin él
+   * el total de la red se deja euros por el camino.
+   */
+  remanenteCentimos: number;
+  /** La suma de los cuatro. Es TODO el efectivo de la red y no repite ni un euro. */
   totalCentimos: number;
 };
 
@@ -267,6 +280,12 @@ export type TransitoAbierto = {
  * · Los 50 € que lleva alguien YA salieron del cajón. Están en `transitos`.
  * · Lo que un cierre aparta para el banco YA salió del cajón. Está en
  *   `pendiente`, hasta que un ingreso bancario lo recoge y lo concilia.
+ * · Lo que se sacó de ese montón para reponer el fondo VOLVIÓ al cajón, y el
+ *   `MANUAL_IN` que lo asienta ya lo ha sumado ahí. Se RESTA del pendiente:
+ *   dejarlo era contar los mismos billetes en los dos sitios, que es
+ *   exactamente lo que hacía descuadrar la pantalla contra la caja.
+ * · Las monedas que el banco no admite se quedan en la tienda como remanente.
+ *   No están en ninguno de los tres sitios anteriores, así que van aparte.
  *
  * Sumarlos al cajón sería contarlos dos veces; no sumarlos sería perderlos, y
  * es lo que hace que un arqueo descuadre 200 € sin que nadie recuerde por qué.
@@ -304,14 +323,30 @@ export async function posicionGlobal(empresaId: string): Promise<PosicionGlobal>
        (SELECT COUNT(*)::int FROM central_transits
          WHERE empresa_id = $1 AND estado = 'ABIERTO') AS abiertos,
        (SELECT COALESCE(SUM(ingreso_bancario_centimos),0) FROM central_sessions
-         WHERE empresa_id = $1 AND estado = 'CLOSED' AND NOT conciliada) AS pendiente`,
+         WHERE empresa_id = $1 AND estado = 'CLOSED' AND NOT conciliada) AS pendiente,
+       (SELECT COALESCE(SUM(importe_centimos),0) FROM central_float_topups
+         WHERE empresa_id = $1 AND deposit_id IS NULL) AS repuesto,
+       /*
+        * El remanente vigente de cada caja: el que dejó su último ingreso
+        * confirmado. Es una cadena —cada ingreso arranca del remanente del
+        * anterior—, así que sumar todos los ingresos contaría las mismas
+        * monedas una vez por ingreso. Solo cuenta el último de cada caja.
+        */
+       (SELECT COALESCE(SUM(remanente_nuevo_centimos),0) FROM (
+          SELECT DISTINCT ON (register_id) remanente_nuevo_centimos
+            FROM central_bank_deposits
+           WHERE empresa_id = $1 AND estado = 'CONFIRMADO'
+           ORDER BY register_id, deposit_id DESC
+        ) ultimo) AS remanente`,
     [empresaId]
   );
 
   const r = rows[0];
   const enCajones = Number(r.cajon);
   const enTransito = Number(r.transito);
-  const pendiente = Number(r.pendiente);
+  const repuesto = Number(r.repuesto);
+  const pendiente = Number(r.pendiente) - repuesto;
+  const remanente = Number(r.remanente);
 
   return {
     enCajonesCentimos: enCajones,
@@ -320,7 +355,9 @@ export async function posicionGlobal(empresaId: string): Promise<PosicionGlobal>
     enTransitoPersonasCentimos: Number(r.transito_personas),
     transitosAbiertos: r.abiertos,
     pendienteBancoCentimos: pendiente,
-    totalCentimos: enCajones + enTransito + pendiente,
+    repuestoCentimos: repuesto,
+    remanenteCentimos: remanente,
+    totalCentimos: enCajones + enTransito + pendiente + remanente,
   };
 }
 
