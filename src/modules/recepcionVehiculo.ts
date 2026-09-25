@@ -471,3 +471,37 @@ export function plantillaParaOperario(plantilla: QuickTemplate): PlantillaParaOp
     area: plantilla.area,
   };
 }
+
+/**
+ * Los trabajos que YA tiene pintados la agenda a través de su cita.
+ *
+ * ── El duplicado ────────────────────────────────────────────────────────────
+ *
+ * Una cita que ha llegado —da igual si por el botón «Llegó» o por una
+ * recepción del patio— guarda el `jobId` del trabajo que ha creado. Y en la
+ * agenda se pintaban los dos: la cita, en la hora de llegada, y el trabajo
+ * otra vez como tarjeta de cola. El mismo vehículo, dos veces, uno al lado del
+ * otro.
+ *
+ * Estaban enlazados por dentro desde el primer día; lo que faltaba era que la
+ * agenda mirase ese enlace antes de pintar.
+ *
+ * Gana la CITA y se calla la tarjeta de cola, no al revés: la cita lleva el
+ * cliente, la hora a la que se esperaba y la operación pactada, y una vez
+ * llegada se pinta igualmente en la hora real con su rótulo de pendiente de
+ * validar. La tarjeta de cola no aporta nada que no esté ya ahí.
+ */
+export function idsDeTrabajosConCita(
+  citas: { jobId?: number | null; secondJobId?: number | null }[]
+): Set<number> {
+  const ids = new Set<number>();
+  for (const c of citas ?? []) {
+    // `secondJobId` es la segunda mitad de un trabajo combinado, y duplica
+    // exactamente igual que el primero.
+    for (const id of [c?.jobId, c?.secondJobId]) {
+      const n = Number(id);
+      if (Number.isFinite(n) && n > 0) ids.add(n);
+    }
+  }
+  return ids;
+}

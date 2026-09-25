@@ -3,10 +3,11 @@ import { useRecepcionesPendientes } from "../modules/useRecepcionesPendientes";
 import {
   esperaLegible,
   horaDeRecepcion,
+  idsDeTrabajosConCita,
   minutosEsperando,
   recepcionesQueSiguenEsperando,
 } from "../modules/recepcionVehiculo";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import {
@@ -682,6 +683,18 @@ export default function AgendaView({
 
   const scheduledJobsForSelectedWorkshop = scheduledJobs.filter(
     belongsToSelectedWorkshop
+  );
+
+  /*
+   * Los trabajos que ya tiene pintados su cita.
+   *
+   * Se mira sobre TODAS las citas del taller y no solo las del día pintado: una
+   * cita que llegó se dibuja en su hora de llegada, que puede no ser el día
+   * para el que se pidió.
+   */
+  const trabajosConCita = useMemo(
+    () => idsDeTrabajosConCita(scheduledJobsForSelectedWorkshop),
+    [scheduledJobsForSelectedWorkshop]
   );
 
   const [weekOffset, setWeekOffset] = useState(0);
@@ -2240,13 +2253,18 @@ appendLog(
               // grupo (y por tanto ancho) con cualquier cita que se vea a la vez.
               const endOfDayStr = minutesToTime(getDayEnd(day.index, day.date));
               const virtualQueueJobs = day.date === todayKey
-                ? queueJobs.map((qj) => ({
-                    ...qj,
-                    id: -Math.abs(qj.id) - 1,
-                    _queueJobRef: qj,
-                    startTime: nowTimeStr,
-                    endTime: endOfDayStr,
-                  }))
+                ? queueJobs
+                    // Los que ya pinta su cita no se pintan otra vez. Ver
+                    // `idsDeTrabajosConCita`: el mismo vehículo salía dos
+                    // veces, como cita llegada y como tarjeta de cola.
+                    .filter((qj) => !trabajosConCita.has(qj.id))
+                    .map((qj) => ({
+                      ...qj,
+                      id: -Math.abs(qj.id) - 1,
+                      _queueJobRef: qj,
+                      startTime: nowTimeStr,
+                      endTime: endOfDayStr,
+                    }))
                 : [];
 
               /*

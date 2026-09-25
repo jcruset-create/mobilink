@@ -22,6 +22,7 @@ import {
   recepcionesQueSiguenEsperando,
   citasParaRecibir,
   idsDeCitasYaRecibidas,
+  idsDeTrabajosConCita,
   posibleDuplicado,
   type RecepcionVehiculo,
 } from "./recepcionVehiculo";
@@ -526,5 +527,36 @@ describe("kilometrosDeTextoIA", () => {
   it("devuelve null sin respuesta", () => {
     expect(kilometrosDeTextoIA("")).toBeNull();
     expect(kilometrosDeTextoIA(null)).toBeNull();
+  });
+});
+
+describe("idsDeTrabajosConCita", () => {
+  it("recoge el trabajo de una cita que ya ha llegado", () => {
+    expect(idsDeTrabajosConCita([{ jobId: 1141 }])).toEqual(new Set([1141]));
+  });
+
+  it("recoge también la segunda mitad de un trabajo combinado", () => {
+    expect(idsDeTrabajosConCita([{ jobId: 7, secondJobId: 8 }])).toEqual(
+      new Set([7, 8])
+    );
+  });
+
+  it("ignora las citas que aún no han llegado", () => {
+    expect(idsDeTrabajosConCita([{ jobId: null }, {}])).toEqual(new Set());
+  });
+
+  it("aguanta lo que venga: ids a cero, negativos o no numéricos", () => {
+    expect(
+      idsDeTrabajosConCita([
+        { jobId: 0 },
+        { jobId: -3 },
+        { jobId: "no" as unknown as number },
+      ])
+    ).toEqual(new Set());
+  });
+
+  it("no se cae con una lista vacía ni con nada", () => {
+    expect(idsDeTrabajosConCita([])).toEqual(new Set());
+    expect(idsDeTrabajosConCita(undefined as any)).toEqual(new Set());
   });
 });

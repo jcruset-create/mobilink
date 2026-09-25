@@ -867,7 +867,25 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           // Si la cita ya tiene trabajo, alguien pulsó «Llegó» mientras el
           // vehículo estaba en el patio. Gana lo que ya se hizo.
           if (datos.jobId == null) {
+            /*
+             * Se escriben los TRES campos, no solo el `jobId`.
+             *
+             * Escribir solo el enlace dejaba la cita en `programado`, y en la
+             * agenda salían DOS tarjetas del mismo vehículo: la cita, que
+             * seguía pareciendo pendiente, y el trabajo recién creado. Estaban
+             * enlazadas por dentro y nadie lo notaba por fuera.
+             *
+             * Es exactamente lo que hace el botón «Llegó»
+             * (`confirmScheduledArrival`, src/modules/useScheduledJobs.ts):
+             * estado, hora de llegada y trabajo. Dos puertas al mismo sitio
+             * tienen que dejar la cita igual, o la agenda cuenta cosas
+             * distintas según por dónde entró el coche.
+             */
             datos.jobId = jobId;
+            datos.arrivedAtMs = recepcion.creadaAtMs;
+            // Si el trabajo nace cerrado, la cita nace realizada: no hay nada
+            // que esperar en ninguna cola.
+            datos.status = yaHecho ? "realizado" : "en_cola";
             await cliente.query(
               `UPDATE scheduled_jobs
                   SET data = $2, "updatedAtMs" = $3
