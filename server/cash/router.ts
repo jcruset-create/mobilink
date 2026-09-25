@@ -39,6 +39,7 @@ import * as liquidaciones from "./expenseclaims/service.ts";
 import * as tickets from "./expenseclaims/lines.ts";
 import { MAXIMO_TICKETS_POR_SUBIDA } from "./expenseclaims/lines.ts";
 import { informeLiquidacion } from "./expenseclaims/report.ts";
+import { pagarLiquidacion } from "./expenseclaims/pago.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 
@@ -2567,6 +2568,33 @@ export function createCashRouter(): Router {
     exigirPermiso("cash.expense_claim.create"),
     ruta(async (req, res) => {
       res.json({ liquidacion: await liquidaciones.reabrirLiquidacion(contexto(req), enteroPositivo(req.params.id, "id")) });
+    })
+  );
+
+  /**
+   * Pagar una liquidación aprobada: aquí, y solo aquí, sale dinero.
+   *
+   * La clave de idempotencia es OBLIGATORIA. La manda el navegador en la
+   * cabecera `Idempotency-Key` —o en el cuerpo, como el resto del módulo—, la
+   * genera al abrir el pago y la repite si reintenta. Sin ella, una respuesta
+   * perdida por el camino se convertiría en un segundo intento que el usuario
+   * no sabría si pagó.
+   */
+  r.post(
+    "/expense-claims/:id/pay",
+    exigirPermiso("cash.expense_claim.pay"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const r_ = await pagarLiquidacion(contexto(req), enteroPositivo(req.params.id, "id"), {
+        sessionId: enteroPositivo(b.sessionId, "sessionId"),
+        importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
+        formasPago: formasPago(b.formasPago),
+        efectivoEntregado: lineas(b.efectivoEntregado, "efectivoEntregado"),
+        efectivoRecibido: lineas(b.efectivoRecibido, "efectivoRecibido"),
+        idempotencyKey: String(req.headers["idempotency-key"] ?? b.idempotencyKey ?? ""),
+      });
+      // 200 y no 201 cuando era un reintento: no se ha creado nada nuevo.
+      res.status(r_.repetido ? 200 : 201).json(r_);
     })
   );
 

@@ -464,6 +464,30 @@ describe.runIf(RUN)("estadísticas de gasto", () => {
     ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
   });
 
+  it("un pago anulado deja de ser gasto: ni el original ni su inversa suman", async () => {
+    /*
+     * Anular deja el original en REVERSED y crea una inversa del MISMO tipo,
+     * confirmada, con el importe en positivo y sin concepto. La estadística
+     * contaba esa inversa como gasto «sin clasificar», así que pagar 20 € de
+     * dietas y anularlos daba 20 € de gasto igualmente, solo que movidos de
+     * sitio.
+     */
+    const informe = () =>
+      stats.informeDeGasto(
+        { empresaId: EMPRESA, desde: HOY, hasta: HOY, granularidad: "dia", centroId: null, conceptoId: null },
+        false
+      );
+    const antes = await informe();
+    const op = await pagarEn(sesionHoy, 2000, { expenseConceptId: dietas, expenseTargetId: juan });
+    expect((await informe()).totalCentimos - antes.totalCentimos).toBe(2000);
+
+    await servicio.anularOperacion(ctx, op.operacionId, "se pagó dos veces");
+    const despues = await informe();
+    expect(despues.totalCentimos).toBe(antes.totalCentimos);
+    expect(despues.sinClasificarCentimos).toBe(antes.sinClasificarCentimos);
+    expect(despues.operaciones).toBe(antes.operaciones);
+  });
+
   it("el gasto de otra empresa no se suma nunca", async () => {
     const r = await stats.informeDeGasto(
       {

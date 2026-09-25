@@ -32,6 +32,8 @@ let documentos: typeof import("./documents.ts");
 let liquidaciones: typeof import("./expenseclaims/service.ts");
 let tickets: typeof import("./expenseclaims/lines.ts");
 let informe: typeof import("./expenseclaims/report.ts");
+let pago: typeof import("./expenseclaims/pago.ts");
+let stats: typeof import("./expensestats.ts");
 
 const EMPRESA = "00000000-0000-4000-a000-0000000000f7";
 const PRESENTA = "00000000-0000-4000-a000-0000000000f8";
@@ -95,6 +97,8 @@ beforeAll(async () => {
   liquidaciones = await import("./expenseclaims/service.ts");
   tickets = await import("./expenseclaims/lines.ts");
   informe = await import("./expenseclaims/report.ts");
+  pago = await import("./expenseclaims/pago.ts");
+  stats = await import("./expensestats.ts");
 
   /*
    * `sea_employees` la crean las migraciones de Supabase, no el arranque, así
@@ -536,5 +540,333 @@ describe.runIf(RUN)("Liquidaciones · el PDF", () => {
     expect(await paginas()).toBe(enBorrador);
     await liquidaciones.aprobarLiquidacion(ctxJefe, l.id);
     expect(await paginas()).toBe(enBorrador);
+  });
+});
+
+describe.runIf(RUN)("Liquidaciones · el pago", () => {
+  /*
+   * Un cajón con las piezas justas para pagar 82,28 € sin vuelta:
+   * 50 + 20 + 10 + 2 + 0,20 + 0,05 + 0,02 + 0,01.
+   */
+  // Para una docena de pagos: cada prueba saca las mismas piezas.
+  const FONDO = [5000, 2000, 1000, 500, 200, 100, 50, 20, 10, 5, 2, 1].map((valor) => ({
+    valor,
+    cantidad: 12,
+  }));
+  const PIEZAS_82_28 = [
+    { valor: 5000, cantidad: 1 },
+    { valor: 2000, cantidad: 1 },
+    { valor: 1000, cantidad: 1 },
+    { valor: 200, cantidad: 1 },
+    { valor: 20, cantidad: 1 },
+    { valor: 5, cantidad: 1 },
+    { valor: 2, cantidad: 1 },
+    { valor: 1, cantidad: 1 },
+  ];
+
+  let sesion = 0;
+  let fecha = "";
+
+  beforeAll(async () => {
+    const { rows } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, activa, created_at_ms, updated_at_ms)
+       VALUES ($1,'Centro',$2,true,$3,$3) RETURNING id`,
+      [EMPRESA, `Pago liquidaciones ${sufijo}`, Date.now()]
+    );
+    sesion = (await servicio.abrirJornada(ctx, { registerId: rows[0].id, fondoManual: FONDO })).sesion.id;
+    fecha = (await db.query(`SELECT fecha::text AS f FROM cash_sessions WHERE id = $1`, [sesion])).rows[0].f;
+  });
+
+  /** El ejemplo del encargo, aprobado y listo para pagar. */
+  async function aprobada82() {
+    const l = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan });
+    const ls = await tickets.subirTickets(ctx, l.id, [
+      fichero(await pdf(`p1 ${randomUUID()}`)),
+      fichero(await pdf(`p2 ${randomUUID()}`)),
+      fichero(await pdf(`p3 ${randomUUID()}`)),
+      fichero(await pdf(`p4 ${randomUUID()}`)),
+    ]);
+    await aMano(l.id, ls[0].id, 2440, dietas);
+    await aMano(l.id, ls[1].id, 4200, dietas);
+    await aMano(l.id, ls[2].id, 1024, peajes);
+    await aMano(l.id, ls[3].id, 564, peajes);
+    await liquidaciones.presentarLiquidacion(ctx, l.id);
+    return liquidaciones.aprobarLiquidacion(ctxJefe, l.id);
+  }
+
+  const enEfectivo = (clave: string, importe = 8228) => ({
+    sessionId: sesion,
+    importeCentimos: importe,
+    formasPago: [{ forma: "CASH", importe }],
+    efectivoEntregado: PIEZAS_82_28,
+    idempotencyKey: clave,
+  });
+
+  const gastoDelDia = () =>
+    stats.informeDeGasto(
+      { empresaId: EMPRESA, desde: fecha, hasta: fecha, granularidad: "dia", centroId: null, conceptoId: null },
+      false
+    );
+
+  it("sale UN pago por el total, del cajón, y los tickets quedan como sus justificantes", async () => {
+    const l = await aprobada82();
+    const operacionesAntes = await contar("cash_operations");
+    const antes = await gastoDelDia();
+
+    const r = await pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`clave-${randomUUID()}`));
+    expect(r.repetido).toBe(false);
+    expect(r.liquidacion.estado).toBe("PAGADA");
+    expect(r.liquidacion.operationPagoId).toBe(r.pago.operacionId);
+    expect(r.liquidacion.pagoNumero).toBe(r.pago.numero);
+    expect(await contar("cash_operations")).toBe(operacionesAntes + 1);
+
+    // Es un pago normal de la caja, con la liquidación como referencia.
+    const { rows: ops } = await db.query(
+      `SELECT tipo, importe_centimos, party_nombre, referencia, expense_concept_id, created_by
+         FROM cash_operations WHERE id = $1`,
+      [r.pago.operacionId]
+    );
+    expect(ops[0]).toMatchObject({
+      tipo: "PAYMENT",
+      party_nombre: `Juan ${sufijo}`,
+      referencia: l.numero,
+      expense_concept_id: null,
+      created_by: APRUEBA,
+    });
+    expect(Number(ops[0].importe_centimos)).toBe(8228);
+
+    // Las piezas salieron de verdad: 82,28 € menos en el cajón.
+    const { rows: mov } = await db.query(
+      `SELECT COALESCE(SUM(CASE WHEN direccion = 'OUT' THEN valor_unitario_centimos * cantidad ELSE -valor_unitario_centimos * cantidad END), 0)::bigint AS sale
+         FROM cash_denomination_movements WHERE operation_id = $1`,
+      [r.pago.operacionId]
+    );
+    expect(Number(mov[0].sale)).toBe(8228);
+
+    // Los cuatro tickets, colgados del pago con la MISMA ruta: sin copiar el fichero.
+    const { rows: docs } = await db.query(
+      `SELECT d.ruta FROM cash_operation_documents d WHERE d.operation_id = $1 AND NOT d.anulado ORDER BY d.id`,
+      [r.pago.operacionId]
+    );
+    const { rows: rutas } = await db.query(
+      `SELECT ruta FROM cash_expense_claim_lines WHERE claim_id = $1 ORDER BY orden`,
+      [l.id]
+    );
+    expect(docs.map((d: { ruta: string }) => d.ruta)).toEqual(rutas.map((x: { ruta: string }) => x.ruta));
+    // Y por eso salen en el informe de cierre del día.
+    const delDia = await documentos.documentosDeJornada(sesion);
+    expect(delDia.filter((d) => d.operacionNumero === r.pago.numero)).toHaveLength(4);
+
+    // La auditoría del pago, escrita con él.
+    const { rows: aud } = await db.query(
+      `SELECT detalle FROM app_auditoria WHERE accion = 'cash.expense_claim.pay' AND entidad_id = $1`,
+      [String(l.id)]
+    );
+    expect(aud).toHaveLength(1);
+    expect(aud[0].detalle.pago).toBe(r.pago.numero);
+
+    /*
+     * La estadística reparte el pago por concepto en vez de dejarlo en «sin
+     * clasificar», y el total y las operaciones suben exactamente lo pagado:
+     * 82,28 € y UNA operación, aunque sean dos conceptos.
+     */
+    const despues = await gastoDelDia();
+    expect(despues.totalCentimos - antes.totalCentimos).toBe(8228);
+    expect(despues.operaciones - antes.operaciones).toBe(1);
+    expect(despues.sinClasificarCentimos).toBe(antes.sinClasificarCentimos);
+    const de = (inf: Awaited<ReturnType<typeof gastoDelDia>>, id: number) =>
+      inf.conceptos.find((c) => c.conceptoId === id)?.importeCentimos ?? 0;
+    expect(de(despues, dietas) - de(antes, dietas)).toBe(6640);
+    expect(de(despues, peajes) - de(antes, peajes)).toBe(1588);
+
+    // Las dietas se imputan al trabajador; los peajes (NINGUNO), a nadie.
+    const porPersona = await stats.informeDeGasto(
+      { empresaId: EMPRESA, desde: fecha, hasta: fecha, granularidad: "dia", centroId: null, conceptoId: dietas },
+      false
+    );
+    expect(porPersona.destinos.find((d) => d.destinoId === juan)?.importeCentimos).toBeGreaterThanOrEqual(6640);
+  });
+
+  it("un ticket excluido ni se paga, ni se cuelga del pago, ni cuenta como gasto", async () => {
+    /*
+     * La liquidación aprobada de 82,28 € con un quinto ticket excluido de
+     * 18,00 €. Si se colara en alguna parte, el pago dejaría de cuadrar con lo
+     * que se ve: cinco justificantes para cuatro gastos, o 100,28 € de gasto
+     * para 82,28 € pagados.
+     */
+    const l = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan });
+    const ls = await tickets.subirTickets(ctx, l.id, [
+      fichero(await pdf(`e1 ${randomUUID()}`)),
+      fichero(await pdf(`e2 ${randomUUID()}`)),
+      fichero(await pdf(`e3 ${randomUUID()}`)),
+      fichero(await pdf(`e4 ${randomUUID()}`)),
+      fichero(await pdf(`copas ${randomUUID()}`)),
+    ]);
+    await aMano(l.id, ls[0].id, 2440, dietas);
+    await aMano(l.id, ls[1].id, 4200, dietas);
+    await aMano(l.id, ls[2].id, 1024, peajes);
+    await aMano(l.id, ls[3].id, 564, peajes);
+    await aMano(l.id, ls[4].id, 1800, dietas);
+    await tickets.excluirLinea(ctx, l.id, ls[4].id, "Las copas no se reembolsan");
+    await liquidaciones.presentarLiquidacion(ctx, l.id);
+    await liquidaciones.aprobarLiquidacion(ctxJefe, l.id);
+
+    const antes = await gastoDelDia();
+    const r = await pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`ex-${randomUUID()}`));
+    const { rows: docs } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_operation_documents WHERE operation_id = $1`,
+      [r.pago.operacionId]
+    );
+    expect(docs[0].n).toBe(4);
+    const despues = await gastoDelDia();
+    expect(despues.totalCentimos - antes.totalCentimos).toBe(8228);
+  });
+
+  it("reintentar con la MISMA clave devuelve el mismo pago; con otra, es un error", async () => {
+    const l = await aprobada82();
+    const clave = `clave-${randomUUID()}`;
+    const primero = await pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(clave));
+    const operaciones = await contar("cash_operations");
+
+    const otra = await pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(clave));
+    expect(otra.repetido).toBe(true);
+    expect(otra.pago).toEqual(primero.pago);
+    expect(await contar("cash_operations")).toBe(operaciones);
+
+    await expect(pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`otra-${randomUUID()}`))).rejects.toMatchObject({
+      codigo: "LIQUIDACION_YA_PAGADA",
+    });
+  });
+
+  it("dos pagos a la vez con claves distintas: sale uno solo", async () => {
+    const l = await aprobada82();
+    const operaciones = await contar("cash_operations");
+    const intentos = await Promise.allSettled([
+      pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`a-${randomUUID()}`)),
+      pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`b-${randomUUID()}`)),
+    ]);
+    expect(intentos.filter((x) => x.status === "fulfilled")).toHaveLength(1);
+    expect(await contar("cash_operations")).toBe(operaciones + 1);
+  });
+
+  it("sin clave, con otro importe o sin aprobar, no sale dinero", async () => {
+    const l = await aprobada82();
+    const operaciones = await contar("cash_operations");
+    await expect(pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(""))).rejects.toMatchObject({
+      codigo: "IDEMPOTENCY_KEY_REQUERIDA",
+    });
+    await expect(
+      pago.pagarLiquidacion(ctxJefe, l.id, { ...enEfectivo(`x-${randomUUID()}`), importeCentimos: 8200 })
+    ).rejects.toMatchObject({ codigo: "IMPORTE_NO_COINCIDE" });
+
+    const presentada = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan });
+    const [x] = await tickets.subirTickets(ctx, presentada.id, [fichero(await pdf(`np ${randomUUID()}`))]);
+    await aMano(presentada.id, x.id, 8228, dietas);
+    await liquidaciones.presentarLiquidacion(ctx, presentada.id);
+    await expect(
+      pago.pagarLiquidacion(ctxJefe, presentada.id, enEfectivo(`y-${randomUUID()}`))
+    ).rejects.toMatchObject({ codigo: "TRANSICION_NO_VALIDA" });
+
+    expect(await contar("cash_operations")).toBe(operaciones);
+  });
+
+  it("un concepto desactivado entre la aprobación y el pago lo para, y no deja nada a medias", async () => {
+    const efimero = (await config.crearConcepto(ctx, { nombre: `Efimero ${sufijo}`, tipoDestino: "NINGUNO" })).id;
+    const l = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan });
+    const [x] = await tickets.subirTickets(ctx, l.id, [fichero(await pdf(`ef ${randomUUID()}`))]);
+    await aMano(l.id, x.id, 8228, efimero);
+    await liquidaciones.presentarLiquidacion(ctx, l.id);
+    await liquidaciones.aprobarLiquidacion(ctxJefe, l.id);
+    await config.actualizarConcepto(ctx, efimero, { activo: false });
+
+    const operaciones = await contar("cash_operations");
+    await expect(pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`z-${randomUUID()}`))).rejects.toMatchObject({
+      codigo: "CONCEPTO_INACTIVO",
+    });
+    expect(await contar("cash_operations")).toBe(operaciones);
+    expect((await liquidaciones.detalleLiquidacion(ctx, l.id)).liquidacion.estado).toBe("APROBADA");
+  });
+
+  it("por transferencia: sin piezas, el cajón no se toca", async () => {
+    // El catálogo de la empresa se siembra la primera vez que se lista.
+    const transferencia = (await config.listarFormasPago(EMPRESA)).find((f) => f.codigo === "BANK_TRANSFER");
+    await config.actualizarFormaPago(ctx, transferencia!.id, { enPagos: true });
+    const l = await aprobada82();
+    const r = await pago.pagarLiquidacion(ctxJefe, l.id, {
+      sessionId: sesion,
+      importeCentimos: 8228,
+      formasPago: [{ forma: "BANK_TRANSFER", importe: 8228, referencia: "TRF-2026-0925" }],
+      idempotencyKey: `t-${randomUUID()}`,
+    });
+    const { rows: mov } = await db.query(
+      `SELECT COUNT(*)::int AS n FROM cash_denomination_movements WHERE operation_id = $1`,
+      [r.pago.operacionId]
+    );
+    expect(mov[0].n).toBe(0);
+  });
+
+  it("anular el pago en la caja devuelve la liquidación a APROBADA, y se puede volver a pagar", async () => {
+    const l = await aprobada82();
+    const r = await pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`an-${randomUUID()}`));
+
+    // Otra liquidación con el mismo ticket: coincide con el justificante del pago.
+    const { rows: lineas } = await db.query(
+      `SELECT ruta FROM cash_expense_claim_lines WHERE claim_id = $1 ORDER BY orden LIMIT 1`,
+      [l.id]
+    );
+    const papel = await (await import("./storage.ts")).leerDocumento(lineas[0].ruta);
+    const otra = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan });
+    const [copia] = await tickets.subirTickets(ctx, otra.id, [fichero(papel!)]);
+    const contraElPago = copia.duplicados.find((d) => d.referenciaTipo === "DOCUMENTO");
+    expect(contraElPago?.referenciaNumero).toBe(r.pago.numero);
+
+    const antes = await gastoDelDia();
+    await servicio.anularOperacion(ctxJefe, r.pago.operacionId, "Se pagó a quien no era");
+
+    const tras = (await liquidaciones.detalleLiquidacion(ctx, l.id)).liquidacion;
+    expect(tras.estado).toBe("APROBADA");
+    expect(tras.operationPagoId).toBeNull();
+    expect(tras.pagoNumero).toBeNull();
+
+    // Los justificantes del pago anulado se anulan, no se borran.
+    const { rows: docs } = await db.query(
+      `SELECT anulado, anulado_motivo FROM cash_operation_documents WHERE operation_id = $1`,
+      [r.pago.operacionId]
+    );
+    expect(docs).toHaveLength(4);
+    expect(docs.every((d: { anulado: boolean }) => d.anulado)).toBe(true);
+
+    // La coincidencia con ese justificante ya no tiene sentido.
+    const { rows: ev } = await db.query(`SELECT resolucion FROM cash_expense_claim_duplicates WHERE id = $1`, [
+      contraElPago!.id,
+    ]);
+    expect(ev[0].resolucion).toBe("DESCARTADA");
+
+    // La estadística deja de contarla.
+    const despues = await gastoDelDia();
+    expect(antes.totalCentimos - despues.totalCentimos).toBe(8228);
+
+    // Y se puede pagar otra vez, con una clave nueva: es otro pago.
+    const segundo = await pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`an2-${randomUUID()}`));
+    expect(segundo.pago.operacionId).not.toBe(r.pago.operacionId);
+    expect(segundo.liquidacion.estado).toBe("PAGADA");
+
+    // El PDF de la pagada sale igual que antes: portada + sus cuatro tickets.
+    const { PDFDocument: P } = await import("pdf-lib");
+    const paginas = (await P.load(await informe.informeLiquidacion(ctx, l.id))).getPageCount();
+    expect(paginas).toBeGreaterThanOrEqual(5);
+  });
+
+  it("anular una operación que no es de ninguna liquidación sigue igual", async () => {
+    const op = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion,
+      tipo: "PAYMENT",
+      importeCentimos: 1000,
+      formasPago: [{ forma: "CASH", importe: 1000 }],
+      efectivoEntregado: [{ valor: 1000, cantidad: 1 }],
+      concepto: "suelto",
+    });
+    const r = await servicio.anularOperacion(ctx, op.operacionId, "prueba");
+    expect(r.numero).toBeTruthy();
   });
 });

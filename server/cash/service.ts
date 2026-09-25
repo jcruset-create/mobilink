@@ -2565,7 +2565,18 @@ export async function anularOperacion(
       "anular esta operación"
     );
 
-    return asentarReversion(client, ctx, sesion, operationId, original, motivo);
+    const reversion = await asentarReversion(client, ctx, sesion, operationId, original, motivo);
+
+    /*
+     * Si era el pago de una liquidación de gastos, la liquidación vuelve a
+     * APROBADA en ESTA misma transacción. Por separado podría quedar
+     * «pagada» con el dinero de vuelta en el cajón, y nadie la volvería a
+     * pagar. Import tardío: `pago.ts` usa `registrarOperacion` de aquí.
+     */
+    const { deshacerPagoDeLiquidacion } = await import("./expenseclaims/pago.ts");
+    await deshacerPagoDeLiquidacion(client, ctx, operationId, motivo);
+
+    return reversion;
   });
 
   await registrarAuditoria({
