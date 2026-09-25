@@ -429,6 +429,125 @@ describe.skipIf(!RUN)("OR Manuales · el ciclo del papel contra PostgreSQL", () 
     });
   });
 
+  describe("Borrar y renumerar", () => {
+    it("borra un bloc vacío y deja libre su número", async () => {
+      const inicio = rangoLibre();
+      const bloc = await crearBloc(inicio);
+
+      const r = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "DELETE", body: {} });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.numeroBloc).toBe(`B${inicio}`);
+      expect(r.body.documentosRetirados).toBe(0);
+
+      // Ya no existe, ni él ni sus OR.
+      expect((await api(`/blocs/${bloc.bloc.id}`, gestorA)).status).toBe(404);
+      const { rows } = await db.query(`SELECT COUNT(*)::int AS n FROM orm_or WHERE bloc_id = $1`, [bloc.bloc.id]);
+      expect(rows[0].n).toBe(0);
+
+      // Y el número se puede volver a usar.
+      const otro = await api("/blocs", gestorA, { method: "POST", body: { numeroBloc: `B${inicio}`, orInicial: inicio } });
+      expect(otro.status, JSON.stringify(otro.body)).toBe(201);
+    });
+
+    it("un bloc con hojas dentro no se borra sin confirmarlo", async () => {
+      const inicio = rangoLibre();
+      const bloc = await crearBloc(inicio);
+      await subirYEsperar("una.pdf", [inicio]);
+
+      const sinConfirmar = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "DELETE", body: {} });
+      expect(sinConfirmar.status).toBe(409);
+      expect(sinConfirmar.body.code).toBe("BLOC_CON_DOCUMENTOS");
+      expect(sinConfirmar.body.detalle.archivadas).toBe(1);
+
+      // Sigue ahí: un 409 no se lleva nada por delante.
+      expect((await api(`/blocs/${bloc.bloc.id}`, gestorA)).status).toBe(200);
+
+      const confirmado = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "DELETE", body: { confirmar: true, motivo: "alta de prueba" } });
+      expect(confirmado.status, JSON.stringify(confirmado.body)).toBe(200);
+      expect(confirmado.body.documentosRetirados).toBe(1);
+
+      // La hoja se retira, pero su fila y su fichero siguen existiendo.
+      const { rows } = await db.query(
+        `SELECT estado_procesamiento, storage_key FROM orm_documentos WHERE empresa_id = $1 AND bloc_id IS NULL AND nombre_archivo = $2`,
+        [EMPRESA_A, `OR_${inicio}.pdf`]
+      );
+      expect(rows[0]?.estado_procesamiento).toBe("ELIMINADO");
+      expect(rows[0]?.storage_key).toBeTruthy();
+      // Y no reaparece en la bandeja de pendientes como trabajo por hacer.
+      expect((await api("/documentos/pendientes", gestorA)).body.documentos).toHaveLength(0);
+    });
+
+    it("el histórico sobrevive al bloc borrado", async () => {
+      const inicio = rangoLibre();
+      const bloc = await crearBloc(inicio);
+      await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "DELETE", body: { motivo: "taco de prueba" } });
+
+      const { rows } = await db.query(
+        `SELECT accion, detalle FROM orm_eventos WHERE bloc_id = $1 ORDER BY id`,
+        [bloc.bloc.id]
+      );
+      const acciones = rows.map((r) => r.accion);
+      expect(acciones).toContain("BLOC_CREADO");
+      expect(acciones).toContain("BLOC_BORRADO");
+      const borrado = rows.find((r) => r.accion === "BLOC_BORRADO");
+      expect(borrado.detalle.numeroBloc).toBe(`B${inicio}`);
+      expect(borrado.detalle.motivo).toBe("taco de prueba");
+    });
+
+    it("un bloc cerrado no se borra ni confirmándolo", async () => {
+      const inicio = rangoLibre();
+      const bloc = await crearBloc(inicio, gestorA, { cantidadOr: 1 });
+      await subirYEsperar("una.pdf", [inicio]);
+      expect((await api(`/blocs/${bloc.bloc.id}/cerrar`, gestorA, { method: "POST", body: {} })).status).toBe(200);
+
+      const r = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "DELETE", body: { confirmar: true } });
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe("BLOC_CERRADO");
+      expect((await api(`/blocs/${bloc.bloc.id}`, gestorA)).status).toBe(200);
+    });
+
+    it("renumerar un bloc no toca su rango de OR", async () => {
+      const inicio = rangoLibre();
+      const bloc = await crearBloc(inicio);
+
+      const r = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "PATCH", body: { numeroBloc: "001" } });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect(r.body.bloc.numeroBloc).toBe("001");
+      expect(r.body.bloc.orInicial).toBe(inicio);
+      expect(r.body.bloc.orFinal).toBe(inicio + 24);
+      expect(r.body.ors).toHaveLength(25);
+    });
+
+    it("no se renumera pisando el número de otro bloc", async () => {
+      const uno = await crearBloc(rangoLibre());
+      const dos = await crearBloc(rangoLibre());
+      const r = await api(`/blocs/${dos.bloc.id}`, gestorA, { method: "PATCH", body: { numeroBloc: uno.bloc.numeroBloc } });
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe("BLOC_DUPLICADO");
+    });
+
+    it("el número no se deja en blanco", async () => {
+      const bloc = await crearBloc(rangoLibre());
+      const r = await api(`/blocs/${bloc.bloc.id}`, gestorA, { method: "PATCH", body: { numeroBloc: "  " } });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe("NUMERO_BLOC_VACIO");
+    });
+
+    it("quien sólo escanea no borra blocs", async () => {
+      const bloc = await crearBloc(rangoLibre());
+      const r = await api(`/blocs/${bloc.bloc.id}`, operarioA, { method: "DELETE", body: { confirmar: true } });
+      expect(r.status).toBe(403);
+      expect(r.body.permiso).toBe("or-manuales.bloc.eliminar");
+    });
+
+    it("el bloc de otra empresa no se puede borrar", async () => {
+      const bloc = await crearBloc(rangoLibre(), gestorA);
+      const r = await api(`/blocs/${bloc.bloc.id}`, gestorB, { method: "DELETE", body: { confirmar: true } });
+      expect(r.status).toBe(404);
+      expect((await api(`/blocs/${bloc.bloc.id}`, gestorA)).status).toBe(200);
+    });
+  });
+
   describe("Cerrar", () => {
     it("no se cierra un bloc al que le faltan hojas, y se dice cuáles", async () => {
       const inicio = rangoLibre();

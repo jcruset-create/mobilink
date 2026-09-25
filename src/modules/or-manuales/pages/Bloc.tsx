@@ -8,13 +8,14 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, CheckCircle2, LogIn, LogOut, RefreshCw } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, CheckCircle2, LogIn, LogOut, Pencil, RefreshCw, Trash2 } from "lucide-react";
 import * as api from "../services/api";
 import { useOrManuales } from "../contexts/OrManualesContext";
 import {
   Aviso,
   Cabecera,
+  CheckField,
   ChipEstadoBloc,
   Dato,
   ErrorBox,
@@ -24,6 +25,7 @@ import {
   RejillaOrs,
   TextAreaField,
   TextField,
+  btnDanger,
   btnPrimary,
   btnSecondary,
   inputCls,
@@ -35,7 +37,7 @@ import { fmtFecha, fmtFechaHora } from "../../administracion/types";
 
 const hoy = () => new Date().toISOString().slice(0, 10);
 
-type Dialogo = "entregar" | "devolver" | "cerrar" | null;
+type Dialogo = "entregar" | "devolver" | "cerrar" | "editar" | "borrar" | null;
 
 export default function Bloc() {
   const { id = "" } = useParams();
@@ -46,6 +48,7 @@ export default function Bloc() {
   const [error, setError] = useState<string | null>(null);
   const [dialogo, setDialogo] = useState<Dialogo>(null);
   const [verDocumento, setVerDocumento] = useState<{ id: string; numeroOr: number } | null>(null);
+  const navegar = useNavigate();
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -103,6 +106,16 @@ export default function Bloc() {
         {puede("or-manuales.bloc.cerrar") && !cerrado && (
           <button className={`${btnSecondary} flex items-center gap-2`} onClick={() => setDialogo("cerrar")}>
             <CheckCircle2 className="h-4 w-4" /> Cerrar bloc
+          </button>
+        )}
+        {puede("or-manuales.bloc.create") && !cerrado && (
+          <button className={`${btnSecondary} flex items-center gap-2`} onClick={() => setDialogo("editar")}>
+            <Pencil className="h-4 w-4" /> Editar
+          </button>
+        )}
+        {puede("or-manuales.bloc.eliminar") && !cerrado && (
+          <button className={`${btnDanger} flex items-center gap-2`} onClick={() => setDialogo("borrar")}>
+            <Trash2 className="h-4 w-4" /> Borrar
           </button>
         )}
       </Cabecera>
@@ -220,6 +233,27 @@ export default function Bloc() {
 
       {dialogo === "entregar" && <DialogoEntregar onCerrar={() => setDialogo(null)} onGuardar={(d) => tras(() => api.entregarBloc(id, d))} />}
       {dialogo === "devolver" && <DialogoDevolver onCerrar={() => setDialogo(null)} onGuardar={(d) => tras(() => api.devolverBloc(id, d))} />}
+      {dialogo === "editar" && (
+        <DialogoEditar bloc={bloc} onCerrar={() => setDialogo(null)} onGuardar={(d) => tras(() => api.editarBloc(id, d))} />
+      )}
+      {dialogo === "borrar" && (
+        <DialogoBorrar
+          bloc={bloc}
+          progreso={progreso}
+          onCerrar={() => setDialogo(null)}
+          onBorrar={async (motivo) => {
+            setError(null);
+            try {
+              await api.eliminarBloc(id, { confirmar: true, motivo });
+              await refrescarIndicadores();
+              navegar("/or-manuales/blocs");
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "No se ha podido borrar el bloc");
+              setDialogo(null);
+            }
+          }}
+        />
+      )}
       {dialogo === "cerrar" && (
         <DialogoCerrar
           progreso={progreso}
@@ -360,6 +394,126 @@ function DialogoCerrar({
         <TextAreaField label="Observaciones del cierre" value={observaciones} onChange={setObservaciones} rows={2} />
         <p className="text-[12px] text-slate-400">
           Un bloc cerrado deja de recalcularse y no admite documentos nuevos. Sus hojas siguen consultándose en el histórico.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Editar el bloc.
+ *
+ * El NÚMERO sí se puede cambiar —los blocs se renumeran cuando se borra uno de
+ * prueba—; el RANGO de OR no aparece porque no se toca: cambiarlo dejaría
+ * huérfanas las hojas ya archivadas. Un rango mal puesto se arregla borrando el
+ * bloc y creándolo bien, y por eso el botón de borrar está al lado.
+ */
+function DialogoEditar({
+  bloc,
+  onCerrar,
+  onGuardar,
+}: {
+  bloc: FichaBloc["bloc"];
+  onCerrar: () => void;
+  onGuardar: (d: { numeroBloc: string; responsableNombre: string; observaciones: string }) => void;
+}) {
+  const [numero, setNumero] = useState(bloc.numeroBloc);
+  const [responsable, setResponsable] = useState(bloc.responsableNombre ?? "");
+  const [observaciones, setObservaciones] = useState(bloc.observaciones ?? "");
+
+  return (
+    <Modal
+      title={`Editar el bloc ${bloc.numeroBloc}`}
+      onClose={onCerrar}
+      footer={
+        <div className="flex justify-end gap-2">
+          <button className={btnSecondary} onClick={onCerrar}>
+            Cancelar
+          </button>
+          <button
+            className={btnPrimary}
+            disabled={!numero.trim()}
+            onClick={() =>
+              onGuardar({ numeroBloc: numero.trim(), responsableNombre: responsable.trim(), observaciones: observaciones.trim() })
+            }
+          >
+            Guardar
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        <TextField label="Número de bloc" value={numero} onChange={setNumero} placeholder="001" />
+        <TextField label="Responsable" value={responsable} onChange={setResponsable} placeholder="Quién lo tiene" />
+        <TextAreaField label="Observaciones" value={observaciones} onChange={setObservaciones} rows={3} />
+        <Aviso tono="info">
+          El rango de OR ({bloc.orInicial} – {bloc.orFinal}) no se puede cambiar: las hojas ya archivadas se quedarían sin
+          su sitio. Si el rango está mal, borra el bloc y vuelve a crearlo.
+        </Aviso>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Borrar el bloc.
+ *
+ * Se enseña ANTES de borrar lo que se va a perder —las OR y las hojas que
+ * tuviera archivadas— porque es la única operación del módulo que quita papel
+ * del archivo. Lo único que sobrevive es el histórico.
+ */
+function DialogoBorrar({
+  bloc,
+  progreso,
+  onCerrar,
+  onBorrar,
+}: {
+  bloc: FichaBloc["bloc"];
+  progreso: FichaBloc["progreso"];
+  onCerrar: () => void;
+  onBorrar: (motivo: string) => void;
+}) {
+  const [motivo, setMotivo] = useState("");
+  const [confirmado, setConfirmado] = useState(false);
+  const [borrando, setBorrando] = useState(false);
+
+  return (
+    <Modal
+      title={`Borrar el bloc ${bloc.numeroBloc}`}
+      onClose={onCerrar}
+      footer={
+        <div className="flex justify-end gap-2">
+          <button className={btnSecondary} onClick={onCerrar}>
+            Cancelar
+          </button>
+          <button
+            className={btnDanger}
+            disabled={!confirmado || borrando}
+            onClick={() => {
+              setBorrando(true);
+              onBorrar(motivo.trim());
+            }}
+          >
+            {borrando ? "Borrando…" : "Borrar el bloc"}
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        <Aviso tono="mal">
+          Se borran el bloc <b>{bloc.numeroBloc}</b> y sus {progreso.total} OR ({bloc.orInicial} – {bloc.orFinal}).
+          {progreso.archivadas > 0 && (
+            <>
+              {" "}
+              Las <b>{progreso.archivadas} hoja(s) ya archivadas</b> se retiran con él.
+            </>
+          )}{" "}
+          El número queda libre para otro bloc.
+        </Aviso>
+        <TextField label="Motivo (queda en el histórico)" value={motivo} onChange={setMotivo} placeholder="alta de prueba" />
+        <CheckField label={`Sí, borrar el bloc ${bloc.numeroBloc}`} checked={confirmado} onChange={setConfirmado} />
+        <p className="text-[12px] text-slate-400">
+          El histórico conserva que este bloc existió, quién lo borró y cuándo. Los ficheros escaneados no se destruyen.
         </p>
       </div>
     </Modal>

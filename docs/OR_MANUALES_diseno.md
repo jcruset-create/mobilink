@@ -85,14 +85,39 @@ en circulación vivirían en rojo y el color dejaría de significar nada.
 Cerrar es una decisión de una persona, con su traza. Que un documento tardío lo
 reabriera solo borraría esa decisión sin que nadie se enterara.
 
-### 3.5 El histórico es inmutable
+### 3.5 Borrar un bloc se puede; borrar uno cerrado, no
+
+Dar de alta un bloc equivocado es fácil —un rango mal tecleado, un taco de
+prueba— y al principio el único arreglo era entrar en la base a mano. Ahora se
+borra desde la ficha, con dos frenos:
+
+- **Un bloc CERRADO no se borra nunca.** Cerrar es la decisión de dar por bueno
+  el archivo de esas 25 hojas; si se pudiera borrar después, esa decisión no
+  valdría nada.
+- **Si tiene hojas archivadas hay que confirmarlo**, y el servidor dice cuántas
+  antes de dejar seguir. No se bloquea, porque un bloc de prueba puede tener un
+  escaneo de prueba dentro, pero quien borra ve qué se lleva por delante.
+
+Lo que se borra son el bloc y sus OR. Los documentos **no**: sus ficheros siguen
+en el almacenamiento y sus filas pasan a `ELIMINADO`, igual que al quitar una
+hoja a mano. Y el histórico sobrevive al bloc —`orm_eventos` no tiene clave
+ajena justamente para esto—, así que queda constancia de que existió, de quién
+lo quitó y por qué.
+
+El **número** sí se puede cambiar: los blocs se renumeran cuando se borra uno de
+prueba y el siguiente tiene que poder llamarse «001». El **rango de OR** no,
+nunca: cambiarlo dejaría huérfanas las hojas ya archivadas y rompería la regla
+de que una OR pertenece a un solo bloc. Un rango mal puesto se arregla borrando
+el bloc y creándolo bien.
+
+### 3.6 El histórico es inmutable
 
 `orm_eventos` tiene un trigger que rechaza `UPDATE` y `DELETE`, como
 `rcp_eventos`, `thf_eventos` y `app_auditoria`. Y eliminar un documento es
 **lógico**: la relación se suelta, el fichero se queda. «Qué había aquí antes»
 es justo lo que se pregunta cuando algo no cuadra.
 
-### 3.6 La ruta del fichero es su hash, no su sitio en el archivo
+### 3.7 La ruta del fichero es su hash, no su sitio en el archivo
 
 El encargo describe una estructura `OR_MANUALES/BLOC_002_1026_1050/OR_1026.pdf`.
 Esa jerarquía es **lógica** y vive en la base (bloc → OR → documento). En el
@@ -226,7 +251,7 @@ segundo sistema de roles.**
 |---|---|
 | `consulta` | Ver, buscar y abrir documentos |
 | `operario` | Además, subir escaneos y gestionar la bandeja de pendientes |
-| `gestor` | Además, crear blocs, entregar, devolver, cerrar y avisar |
+| `gestor` | Además, crear blocs, entregar, devolver, cerrar, **borrar** y avisar |
 | `admin` | Todo, incluida la configuración de OCR |
 
 `operario` no estaba en el encargo y se añadió porque el taller lo necesita:
