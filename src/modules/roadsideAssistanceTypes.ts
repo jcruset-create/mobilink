@@ -149,6 +149,14 @@ export type RoadsideAssistance = {
   // Nº de autorización o de cita que da quien solicita: es lo que luego pide
   // la aseguradora o el gestor de flota para pagar el servicio.
   solicitanteAutorizacion?: string | null;
+  /**
+   * La cola del operario: detrás de QUÉ asistencia espera ésta su turno.
+   *
+   * Que esté en espera de verdad no lo dice este campo por sí solo, lo dice
+   * `modules/colaEspera.ts` mirando si la de delante sigue abierta. Una con
+   * esto puesto y la de delante ya cerrada NO está en espera: le toca.
+   */
+  esperaTrasId?: number | null;
   // Subcontratación: a quién se le ha mandado el trabajo. Los ids apuntan a las
   // mismas tablas que usa Connect Pro; el snapshot congela nombres y teléfonos
   // tal y como estaban el día del servicio.
