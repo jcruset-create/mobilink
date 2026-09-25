@@ -50,6 +50,9 @@ import type {
   InformeGasto,
   EquivalenciaErp,
   ResultadoCotejo,
+  Liquidacion,
+  LineaLiquidacion,
+  DetalleLiquidacion,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -1135,3 +1138,100 @@ export const guardarReglaSeccion = (datos: {
 
 export const borrarReglaSeccion = (id: number) =>
   pedir<void>(`/section-rules/${id}`, { method: "DELETE" });
+
+// ── Liquidaciones de gastos de trabajadores ────────────────────────────────
+
+export const liquidaciones = (filtros: { estado?: string; expenseTargetId?: number } = {}) => {
+  const q = new URLSearchParams();
+  if (filtros.estado) q.set("estado", filtros.estado);
+  if (filtros.expenseTargetId) q.set("expenseTargetId", String(filtros.expenseTargetId));
+  const qs = q.toString();
+  return pedir<{ liquidaciones: Liquidacion[] }>(`/expense-claims${qs ? `?${qs}` : ""}`);
+};
+
+export const crearLiquidacion = (datos: { expenseTargetId?: number; employeeId?: string; notas?: string }) =>
+  pedir<{ liquidacion: Liquidacion }>("/expense-claims", json(datos));
+
+export const liquidacion = (id: number) => pedir<DetalleLiquidacion>(`/expense-claims/${id}`);
+
+/**
+ * Sube los tickets de UNO en uno, como el taco de Informes: si el tercero
+ * falla, los dos primeros ya están y no hay que volver a escanearlos.
+ */
+export const subirTicket = (id: number, fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("documentos", fichero);
+  return pedir<{ lineas: LineaLiquidacion[] }>(`/expense-claims/${id}/lines`, { method: "POST", body: cuerpo });
+};
+
+export type CambiosLineaLiquidacion = Partial<{
+  fecha: string | null;
+  emisorNombre: string;
+  emisorNif: string | null;
+  numeroDocumento: string | null;
+  concepto: string;
+  baseCentimos: number | null;
+  ivaCentimos: number | null;
+  importeCentimos: number;
+  moneda: string;
+  expenseConceptId: number | null;
+  expenseTargetId: number | null;
+  revisada: boolean;
+}>;
+
+export const editarLineaLiquidacion = (id: number, lineId: number, cambios: CambiosLineaLiquidacion) =>
+  pedir<{ linea: LineaLiquidacion }>(`/expense-claims/${id}/lines/${lineId}`, {
+    method: "PATCH",
+    body: JSON.stringify(cambios),
+  });
+
+export const excluirLineaLiquidacion = (id: number, lineId: number, motivo: string) =>
+  pedir<{ linea: LineaLiquidacion }>(`/expense-claims/${id}/lines/${lineId}/exclude`, json({ motivo }));
+
+export const incluirLineaLiquidacion = (id: number, lineId: number) =>
+  pedir<{ linea: LineaLiquidacion }>(`/expense-claims/${id}/lines/${lineId}/include`, json({}));
+
+export const resolverDuplicadoLiquidacion = (
+  id: number,
+  dupId: number,
+  datos: { resolucion: "ACEPTADA" | "EXCLUIDA"; motivo: string }
+) => pedir<{ linea: LineaLiquidacion }>(`/expense-claims/${id}/duplicates/${dupId}/resolve`, json(datos));
+
+export const presentarLiquidacion = (id: number) =>
+  pedir<{ liquidacion: Liquidacion }>(`/expense-claims/${id}/present`, json({}));
+
+export const aprobarLiquidacion = (id: number) =>
+  pedir<{ liquidacion: Liquidacion }>(`/expense-claims/${id}/approve`, json({}));
+
+export const rechazarLiquidacion = (id: number, motivo: string) =>
+  pedir<{ liquidacion: Liquidacion }>(`/expense-claims/${id}/reject`, json({ motivo }));
+
+export const reabrirLiquidacion = (id: number) =>
+  pedir<{ liquidacion: Liquidacion }>(`/expense-claims/${id}/reopen`, json({}));
+
+export const anularLiquidacion = (id: number, motivo: string) =>
+  pedir<{ liquidacion: Liquidacion }>(`/expense-claims/${id}/void`, json({ motivo }));
+
+/**
+ * Paga una liquidación aprobada. La clave de idempotencia la genera quien
+ * abre la ventana de pago y se REPITE si hay que reintentar: si la respuesta
+ * se perdió por el camino, el servidor devuelve el pago que ya existe en vez
+ * de sacar el dinero otra vez.
+ */
+export const pagarLiquidacion = (
+  id: number,
+  datos: {
+    sessionId: number;
+    importeCentimos: number;
+    formasPago: { forma: string; importe: number; referencia?: string | null }[];
+    efectivoEntregado: LineaDenominacion[];
+    efectivoRecibido: LineaDenominacion[];
+  },
+  idempotencyKey: string
+) =>
+  pedir<{ liquidacion: Liquidacion; pago: { operacionId: number; numero: string }; repetido: boolean }>(
+    `/expense-claims/${id}/pay`,
+    // En el cuerpo, como el resto del módulo: `pedir` pone sus propias
+    // cabeceras de sesión. El servidor acepta la clave por los dos sitios.
+    json({ ...datos, idempotencyKey })
+  );

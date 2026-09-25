@@ -35,6 +35,11 @@ import * as documentos from "./documents.ts";
 import * as ingresos from "./bankdeposits.ts";
 import { informeCierre, informeIngreso } from "./report.ts";
 import { anotarConfirmacion, escanearFactura } from "./invoice-scan/service.ts";
+import * as liquidaciones from "./expenseclaims/service.ts";
+import * as tickets from "./expenseclaims/lines.ts";
+import { MAXIMO_TICKETS_POR_SUBIDA } from "./expenseclaims/lines.ts";
+import { informeLiquidacion } from "./expenseclaims/report.ts";
+import { pagarLiquidacion } from "./expenseclaims/pago.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 
@@ -59,6 +64,16 @@ const subidaImagen = multer({
 const subidaDocumento = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024, files: 1 },
+});
+
+/**
+ * Los tickets de una liquidación: varios a la vez, cada uno con el mismo tope
+ * que un justificante. Veinte cubre una semana de viaje; más de eso en una
+ * sola petición son 300 MB en memoria de golpe.
+ */
+const subidaTickets = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024, files: MAXIMO_TICKETS_POR_SUBIDA },
 });
 
 /**
@@ -116,6 +131,16 @@ function subida(mw: RequestHandler, limiteMb: number): RequestHandler {
         return res.status(400).json({
           error: `El fichero pasa de ${limiteMb} MB. Redúcelo o escanéalo con menos resolución.`,
           code: "FICHERO_DEMASIADO_GRANDE",
+        });
+      }
+      /*
+       * Demasiados ficheros de una vez. multer lo llama de dos maneras según
+       * dónde lo corte, y las dos son el mismo problema para quien sube.
+       */
+      if (codigo === "LIMIT_FILE_COUNT" || codigo === "LIMIT_UNEXPECTED_FILE") {
+        return res.status(400).json({
+          error: "Son demasiados ficheros de una vez, o no van en el campo esperado. Súbelos en tandas más pequeñas.",
+          code: "DEMASIADOS_FICHEROS",
         });
       }
       console.error("[Mobilink Cash] error de subida:", err);
@@ -2315,6 +2340,274 @@ export function createCashRouter(): Router {
           activo: typeof b.activo === "boolean" ? b.activo : undefined,
           orden: b.orden != null ? entero(b.orden, "orden") : undefined,
         }),
+      });
+    })
+  );
+
+  // ── Liquidaciones de gastos de trabajadores ─────────────────────────────
+  //
+  // La liquidación NO es un movimiento de caja: nada de esto toca el cajón.
+  // El diseño está en docs/PROMPT_gastos_trabajadores.md.
+
+  /** Texto opcional del cuerpo o de la query, recortado. */
+  const textoOpcional = (v: unknown, max = 500): string | null =>
+    typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null;
+
+  const FECHA_ISO = /^\d{4}-\d{2}-\d{2}$/;
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  r.get(
+    "/expense-claims",
+    exigirPermiso("cash.expense_claim.view"),
+    ruta(async (req, res) => {
+      const q = req.query;
+      const estado = textoOpcional(q.estado, 20);
+      const fecha = (v: unknown) => {
+        const t = textoOpcional(v, 10);
+        return t && FECHA_ISO.test(t) ? t : null;
+      };
+      const employeeId = textoOpcional(q.employeeId, 36);
+      res.json({
+        liquidaciones: await liquidaciones.listarLiquidaciones(contexto(req), {
+          estado,
+          expenseTargetId: q.expenseTargetId ? enteroPositivo(q.expenseTargetId, "expenseTargetId") : null,
+          employeeId: employeeId && UUID.test(employeeId) ? employeeId : null,
+          desde: fecha(q.desde),
+          hasta: fecha(q.hasta),
+        }),
+      });
+    })
+  );
+
+  r.post(
+    "/expense-claims",
+    exigirPermiso("cash.expense_claim.create"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const employeeId = textoOpcional(b.employeeId, 36);
+      if (employeeId && !UUID.test(employeeId)) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "employeeId no es un identificador válido.", 400);
+      }
+      res.status(201).json({
+        liquidacion: await liquidaciones.crearLiquidacion(contexto(req), {
+          employeeId,
+          expenseTargetId: b.expenseTargetId ? enteroPositivo(b.expenseTargetId, "expenseTargetId") : null,
+          notas: textoOpcional(b.notas, 1000),
+        }),
+      });
+    })
+  );
+
+  r.get(
+    "/expense-claims/:id",
+    exigirPermiso("cash.expense_claim.view"),
+    ruta(async (req, res) => {
+      res.json(await liquidaciones.detalleLiquidacion(contexto(req), enteroPositivo(req.params.id, "id")));
+    })
+  );
+
+  /** En cualquier estado: antes del pago es el papel que se firma. */
+  r.get(
+    "/expense-claims/:id/report.pdf",
+    exigirPermiso("cash.expense_claim.view"),
+    ruta(async (req, res) => {
+      const id = enteroPositivo(req.params.id, "id");
+      const pdf = await informeLiquidacion(contexto(req), id);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="liquidacion-${id}.pdf"`);
+      res.send(pdf);
+    })
+  );
+
+  r.post(
+    "/expense-claims/:id/lines",
+    exigirPermiso("cash.expense_claim.create"),
+    subida(subidaTickets.array("documentos", MAXIMO_TICKETS_POR_SUBIDA), 15),
+    ruta(async (req, res) => {
+      const ficheros = (req.files as Express.Multer.File[] | undefined) ?? [];
+      res.status(201).json({
+        lineas: await tickets.subirTickets(contexto(req), enteroPositivo(req.params.id, "id"), ficheros),
+      });
+    })
+  );
+
+  /**
+   * Corregir un ticket. Solo lo que llega cambia; un `null` explícito vacía.
+   * Los tipos se comprueban aquí y las reglas de negocio en el servicio.
+   */
+  r.patch(
+    "/expense-claims/:id/lines/:lineId",
+    exigirPermiso("cash.expense_claim.create"),
+    ruta(async (req, res) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const cambios: tickets.CambiosLinea = {};
+      const centimos = (v: unknown, campo: string) => (v == null ? null : entero(v, campo));
+      if ("fecha" in b) cambios.fecha = textoOpcional(b.fecha, 10);
+      if ("emisorNombre" in b) cambios.emisorNombre = typeof b.emisorNombre === "string" ? b.emisorNombre : "";
+      if ("emisorNif" in b) cambios.emisorNif = textoOpcional(b.emisorNif, 30);
+      if ("numeroDocumento" in b) cambios.numeroDocumento = textoOpcional(b.numeroDocumento, 60);
+      if ("concepto" in b) cambios.concepto = typeof b.concepto === "string" ? b.concepto : "";
+      if ("baseCentimos" in b) cambios.baseCentimos = centimos(b.baseCentimos, "baseCentimos");
+      if ("ivaCentimos" in b) cambios.ivaCentimos = centimos(b.ivaCentimos, "ivaCentimos");
+      if ("importeCentimos" in b) cambios.importeCentimos = entero(b.importeCentimos ?? 0, "importeCentimos");
+      if ("moneda" in b) cambios.moneda = typeof b.moneda === "string" ? b.moneda : "";
+      if ("expenseConceptId" in b) {
+        cambios.expenseConceptId = b.expenseConceptId == null ? null : enteroPositivo(b.expenseConceptId, "expenseConceptId");
+      }
+      if ("expenseTargetId" in b) {
+        cambios.expenseTargetId = b.expenseTargetId == null ? null : enteroPositivo(b.expenseTargetId, "expenseTargetId");
+      }
+      if ("revisada" in b) cambios.revisada = b.revisada === true;
+      res.json({
+        linea: await tickets.editarLinea(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          enteroPositivo(req.params.lineId, "lineId"),
+          cambios
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/expense-claims/:id/lines/:lineId/exclude",
+    exigirPermiso("cash.expense_claim.create"),
+    ruta(async (req, res) => {
+      res.json({
+        linea: await tickets.excluirLinea(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          enteroPositivo(req.params.lineId, "lineId"),
+          typeof req.body?.motivo === "string" ? req.body.motivo : ""
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/expense-claims/:id/lines/:lineId/include",
+    exigirPermiso("cash.expense_claim.create"),
+    ruta(async (req, res) => {
+      res.json({
+        linea: await tickets.incluirLinea(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          enteroPositivo(req.params.lineId, "lineId")
+        ),
+      });
+    })
+  );
+
+  /**
+   * Decidir sobre un posible duplicado.
+   *
+   * «Es duplicado» (EXCLUIDA) lo puede decir quien prepara la liquidación.
+   * «No lo es, se paga» (ACEPTADA) exige permiso de aprobar: es la misma
+   * frontera que cobrar dos veces una factura, que autoriza un responsable y
+   * no el cajero con la prisa delante.
+   */
+  r.post(
+    "/expense-claims/:id/duplicates/:dupId/resolve",
+    exigirPermiso("cash.expense_claim.create"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const resolucion = b.resolucion === "ACEPTADA" ? "ACEPTADA" : b.resolucion === "EXCLUIDA" ? "EXCLUIDA" : null;
+      if (!resolucion) {
+        throw new ErrorCaja("ENTRADA_NO_VALIDA", "La decisión tiene que ser ACEPTADA o EXCLUIDA.", 400);
+      }
+      if (resolucion === "ACEPTADA" && !req.cashPermisos?.includes("cash.expense_claim.approve")) {
+        return res.status(403).json({
+          error: "Dar por bueno un posible duplicado lo tiene que decidir un responsable.",
+          code: "PERMISO_DENEGADO",
+          permiso: "cash.expense_claim.approve",
+        });
+      }
+      res.json({
+        linea: await tickets.resolverDuplicado(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          enteroPositivo(req.params.dupId, "dupId"),
+          { resolucion, motivo: typeof b.motivo === "string" ? b.motivo : "" }
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/expense-claims/:id/present",
+    exigirPermiso("cash.expense_claim.create"),
+    ruta(async (req, res) => {
+      res.json({ liquidacion: await liquidaciones.presentarLiquidacion(contexto(req), enteroPositivo(req.params.id, "id")) });
+    })
+  );
+
+  r.post(
+    "/expense-claims/:id/approve",
+    exigirPermiso("cash.expense_claim.approve"),
+    ruta(async (req, res) => {
+      res.json({ liquidacion: await liquidaciones.aprobarLiquidacion(contexto(req), enteroPositivo(req.params.id, "id")) });
+    })
+  );
+
+  r.post(
+    "/expense-claims/:id/reject",
+    exigirPermiso("cash.expense_claim.approve"),
+    ruta(async (req, res) => {
+      res.json({
+        liquidacion: await liquidaciones.rechazarLiquidacion(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          typeof req.body?.motivo === "string" ? req.body.motivo : ""
+        ),
+      });
+    })
+  );
+
+  r.post(
+    "/expense-claims/:id/reopen",
+    exigirPermiso("cash.expense_claim.create"),
+    ruta(async (req, res) => {
+      res.json({ liquidacion: await liquidaciones.reabrirLiquidacion(contexto(req), enteroPositivo(req.params.id, "id")) });
+    })
+  );
+
+  /**
+   * Pagar una liquidación aprobada: aquí, y solo aquí, sale dinero.
+   *
+   * La clave de idempotencia es OBLIGATORIA. La manda el navegador en la
+   * cabecera `Idempotency-Key` —o en el cuerpo, como el resto del módulo—, la
+   * genera al abrir el pago y la repite si reintenta. Sin ella, una respuesta
+   * perdida por el camino se convertiría en un segundo intento que el usuario
+   * no sabría si pagó.
+   */
+  r.post(
+    "/expense-claims/:id/pay",
+    exigirPermiso("cash.expense_claim.pay"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      const r_ = await pagarLiquidacion(contexto(req), enteroPositivo(req.params.id, "id"), {
+        sessionId: enteroPositivo(b.sessionId, "sessionId"),
+        importeCentimos: enteroPositivo(b.importeCentimos, "importeCentimos"),
+        formasPago: formasPago(b.formasPago),
+        efectivoEntregado: lineas(b.efectivoEntregado, "efectivoEntregado"),
+        efectivoRecibido: lineas(b.efectivoRecibido, "efectivoRecibido"),
+        idempotencyKey: String(req.headers["idempotency-key"] ?? b.idempotencyKey ?? ""),
+      });
+      // 200 y no 201 cuando era un reintento: no se ha creado nada nuevo.
+      res.status(r_.repetido ? 200 : 201).json(r_);
+    })
+  );
+
+  r.post(
+    "/expense-claims/:id/void",
+    exigirPermiso("cash.expense_claim.approve"),
+    ruta(async (req, res) => {
+      res.json({
+        liquidacion: await liquidaciones.anularLiquidacion(
+          contexto(req),
+          enteroPositivo(req.params.id, "id"),
+          typeof req.body?.motivo === "string" ? req.body.motivo : ""
+        ),
       });
     })
   );

@@ -1922,7 +1922,7 @@ const aDestino = (r: any): DestinoGasto => ({
  * estadísticas de años anteriores siguen cuadrando. Mismo criterio que en
  * secciones y formas de cobro.
  */
-function codigoDesde(nombre: string): string {
+export function codigoDesde(nombre: string): string {
   return nombre
     .toUpperCase()
     .normalize("NFD")
