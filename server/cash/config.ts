@@ -2518,3 +2518,153 @@ export async function borrarReglaSeccion(ctx: Contexto, id: number): Promise<voi
     ip: ctx.ip,
   });
 }
+
+// ── Reglas de concepto de gasto (liquidaciones de trabajadores) ────────────
+//
+// El mismo molde que las de sección. El modelo lee qué clase de negocio emite
+// el ticket («PEAJE»); estas reglas dicen qué concepto de la empresa le toca
+// («Peajes»). Ver `expenseclaims/conceptos.ts`.
+
+export type CampoReglaGasto = "TIPO_ESTABLECIMIENTO" | "NOMBRE_EMISOR" | "NIF_EMISOR" | "CONCEPTO";
+
+const CAMPOS_GASTO: readonly CampoReglaGasto[] = [
+  "TIPO_ESTABLECIMIENTO",
+  "NOMBRE_EMISOR",
+  "NIF_EMISOR",
+  "CONCEPTO",
+];
+
+export type ReglaGastoConfig = {
+  id: number;
+  campo: CampoReglaGasto;
+  patron: string;
+  conceptoId: number;
+  /** Vacío si el concepto ya no existe. */
+  conceptoNombre: string;
+  /** El concepto existe Y está activo. Si no, la regla no propone nada. */
+  conceptoVigente: boolean;
+  confianza: number;
+  autoSeleccionar: boolean;
+  prioridad: number;
+  activa: boolean;
+};
+
+/**
+ * Con LEFT JOIN por lo mismo que las de sección: una regla que apunta a un
+ * concepto borrado tiene que seguir saliendo, y salir marcada.
+ */
+export async function listarReglasGasto(empresaId: string): Promise<ReglaGastoConfig[]> {
+  const { rows } = await pool.query(
+    `SELECT r.*, c.nombre AS concepto_nombre, c.activo AS concepto_activo
+       FROM cash_expense_rules r
+       LEFT JOIN cash_expense_concepts c
+              ON c.empresa_id = r.empresa_id AND c.id = r.expense_concept_id
+      WHERE r.empresa_id = $1
+      ORDER BY r.activa DESC, r.prioridad, r.id`,
+    [empresaId]
+  );
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  return rows.map((r: any) => ({
+    id: r.id,
+    campo: r.campo,
+    patron: r.patron,
+    conceptoId: r.expense_concept_id,
+    conceptoNombre: r.concepto_nombre ?? "",
+    conceptoVigente: Boolean(r.concepto_nombre) && Boolean(r.concepto_activo),
+    confianza: Number(r.confianza),
+    autoSeleccionar: r.auto_seleccionar,
+    prioridad: r.prioridad,
+    activa: r.activa,
+  }));
+}
+
+export async function guardarReglaGasto(
+  ctx: Contexto,
+  datos: {
+    campo: unknown;
+    patron: string;
+    conceptoId: number;
+    confianza?: unknown;
+    autoSeleccionar?: boolean;
+    prioridad?: number;
+    activa?: boolean;
+  }
+): Promise<ReglaGastoConfig> {
+  if (typeof datos.campo !== "string" || !CAMPOS_GASTO.includes(datos.campo as CampoReglaGasto)) {
+    throw new ErrorCaja("ENTRADA_NO_VALIDA", `El campo tiene que ser uno de: ${CAMPOS_GASTO.join(", ")}.`, 400);
+  }
+  const campo = datos.campo as CampoReglaGasto;
+  /*
+   * El tipo de establecimiento es una palabra de una lista cerrada: se guarda
+   * en mayúsculas para que la pantalla lo enseñe igual que lo lee el modelo.
+   */
+  const patron =
+    campo === "TIPO_ESTABLECIMIENTO" ? (datos.patron ?? "").trim().toUpperCase() : (datos.patron ?? "").trim();
+  if (!patron) throw new ErrorCaja("ENTRADA_NO_VALIDA", "Falta el texto que tiene que reconocer.", 400);
+
+  const { rows: conceptos } = await pool.query(
+    `SELECT id FROM cash_expense_concepts WHERE id = $1 AND empresa_id = $2`,
+    [datos.conceptoId, ctx.empresaId]
+  );
+  if (conceptos.length === 0) {
+    throw new ErrorCaja("CONCEPTO_NO_ENCONTRADO", "Ese concepto de gasto no existe.", 400);
+  }
+
+  const confianza = datos.confianza === undefined ? 0.95 : exigirConfianza(datos.confianza);
+  const ahora = Date.now();
+  // Guardar el mismo par (campo, patrón) lo REAPUNTA, como en sección.
+  const { rows } = await pool.query(
+    `INSERT INTO cash_expense_rules
+       (empresa_id, campo, patron, expense_concept_id, confianza, auto_seleccionar,
+        prioridad, activa, creado_por, created_at_ms, updated_at_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
+     ON CONFLICT (empresa_id, campo, patron) DO UPDATE
+        SET expense_concept_id = EXCLUDED.expense_concept_id,
+            confianza = EXCLUDED.confianza,
+            auto_seleccionar = EXCLUDED.auto_seleccionar,
+            prioridad = EXCLUDED.prioridad,
+            activa = EXCLUDED.activa,
+            updated_at_ms = EXCLUDED.updated_at_ms
+     RETURNING id`,
+    [
+      ctx.empresaId,
+      campo,
+      patron,
+      datos.conceptoId,
+      confianza,
+      datos.autoSeleccionar !== false,
+      datos.prioridad ?? 100,
+      datos.activa !== false,
+      ctx.userId,
+      ahora,
+    ]
+  );
+
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.expense_rule.save",
+    entidad: "cash_expense_rules",
+    entidadId: String(rows[0].id),
+    detalle: { campo, patron, conceptoId: datos.conceptoId, confianza },
+    ip: ctx.ip,
+  });
+  return (await listarReglasGasto(ctx.empresaId)).find((r) => r.id === rows[0].id)!;
+}
+
+export async function borrarReglaGasto(ctx: Contexto, id: number): Promise<void> {
+  const { rowCount } = await pool.query(`DELETE FROM cash_expense_rules WHERE id = $1 AND empresa_id = $2`, [
+    id,
+    ctx.empresaId,
+  ]);
+  if (!rowCount) throw new ErrorCaja("NO_ENCONTRADA", "Esa regla ya no existe.", 404);
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.expense_rule.delete",
+    entidad: "cash_expense_rules",
+    entidadId: String(id),
+    detalle: {},
+    ip: ctx.ip,
+  });
+}

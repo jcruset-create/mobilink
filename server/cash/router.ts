@@ -40,6 +40,7 @@ import * as tickets from "./expenseclaims/lines.ts";
 import { MAXIMO_TICKETS_POR_SUBIDA } from "./expenseclaims/lines.ts";
 import { informeLiquidacion } from "./expenseclaims/report.ts";
 import { pagarLiquidacion } from "./expenseclaims/pago.ts";
+import { lecturaDisponible, reintentarAnalisis } from "./expenseclaims/analisis.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
 
@@ -2481,6 +2482,64 @@ export function createCashRouter(): Router {
           typeof req.body?.motivo === "string" ? req.body.motivo : ""
         ),
       });
+    })
+  );
+
+  /** Volver a leer un ticket cuya lectura falló, o que no se llegó a leer. */
+  r.post(
+    "/expense-claims/:id/lines/:lineId/retry",
+    exigirPermiso("cash.expense_claim.create"),
+    ruta(async (req, res) => {
+      await reintentarAnalisis(
+        contexto(req),
+        enteroPositivo(req.params.id, "id"),
+        enteroPositivo(req.params.lineId, "lineId")
+      );
+      res.json({ ok: true });
+    })
+  );
+
+  // ── Reglas de concepto de gasto ──────────────────────────────────────────
+  //
+  // Qué concepto le toca a cada clase de ticket. Es configuración: responsable.
+
+  r.get(
+    "/expense-rules",
+    exigirPermiso("cash.expense_claim.view"),
+    ruta(async (req, res) => {
+      res.json({
+        reglas: await config.listarReglasGasto(req.authCtx!.empresaId),
+        // Para que la pantalla diga si la lectura automática está disponible.
+        lecturaDisponible: lecturaDisponible(),
+      });
+    })
+  );
+
+  r.put(
+    "/expense-rules",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      const b = req.body ?? {};
+      res.json({
+        regla: await config.guardarReglaGasto(contexto(req), {
+          campo: b.campo,
+          patron: typeof b.patron === "string" ? b.patron : "",
+          conceptoId: enteroPositivo(b.conceptoId, "conceptoId"),
+          confianza: b.confianza,
+          autoSeleccionar: typeof b.autoSeleccionar === "boolean" ? b.autoSeleccionar : undefined,
+          prioridad: b.prioridad != null ? entero(b.prioridad, "prioridad") : undefined,
+          activa: typeof b.activa === "boolean" ? b.activa : undefined,
+        }),
+      });
+    })
+  );
+
+  r.delete(
+    "/expense-rules/:id",
+    exigirPermiso("cash.configure"),
+    ruta(async (req, res) => {
+      await config.borrarReglaGasto(contexto(req), enteroPositivo(req.params.id, "id"));
+      res.json({ ok: true });
     })
   );
 

@@ -99,6 +99,10 @@ export type LineaLiquidacion = {
   expenseTargetId: number | null;
   destinoNombre: string | null;
   subidoAtMs: number;
+  /** Lo que leyó la máquina, sin tocar. `null` = no se ha leído. */
+  leido: import("./analisis.ts").Leido | null;
+  /** Qué campos corrigió una persona respecto a lo leído. */
+  camposCorregidos: string[];
   /** Enlace temporal. Caduca: no sirve para guardarlo en ningún sitio. */
   url: string | null;
   duplicados: EvidenciaDuplicado[];
@@ -202,6 +206,8 @@ function aLinea(r: any, duplicados: EvidenciaDuplicado[], url: string | null): L
     expenseTargetId: r.expense_target_id ?? null,
     destinoNombre: r.destino_nombre ?? null,
     subidoAtMs: Number(r.subido_at_ms),
+    leido: r.leido ?? null,
+    camposCorregidos: Array.isArray(r.campos_corregidos) ? r.campos_corregidos : [],
     url,
     duplicados,
   };

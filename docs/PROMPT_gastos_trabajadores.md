@@ -1096,3 +1096,36 @@ Pruebas: 9 de integración nuevas del pago (una más en gastos). 17 mutaciones,
 todas en rojo; dos sobrevivieron la primera pasada —promover los excluidos y
 contarlos en la estadística— porque ninguna liquidación pagada tenía un ticket
 excluido. Ahora hay una.
+
+## Lo que entró en PR3
+
+La lectura automática: `tipo_establecimiento` en el esquema y la
+normalización del escáner, `expenseclaims/conceptos.ts` (clasificador por
+reglas), `expenseclaims/analisis.ts` (lectura de una línea, worker, rescate de
+colgadas, reintentar), reglas de concepto en `config.ts` con sus endpoints y su
+bloque en Configuración, y en la pantalla el estado de lectura con refresco
+automático, los avisos de la lectura, la propuesta de concepto con «Usar» y
+«Volver a leer».
+
+Desvíos respecto al prompt:
+
+- **`TALLER` entra en la lista de tipos de establecimiento.** Un trabajador
+  que paga una reparación en ruta trae el ticket de un taller, y sin ese valor
+  saldría como OTRO.
+- **Una línea ya REVISADA no se rellena nunca**, aunque tenga huecos. El
+  prompt decía «solo si están vacíos»; revisada quiere decir que una persona ya
+  la dio por buena tal cual.
+- **La moneda solo se cambia si el papel dice otra que no sea euros**: el caro
+  es pagar libras como si fueran euros; uno en euros ya lo está.
+- **Un abono no rellena el importe** (la lectura lo marca y se ve el aviso).
+- **Lecturas colgadas**: si el proceso muere a mitad, la línea vuelve a la cola
+  a los 10 minutos y tras 3 intentos queda FALLIDA. No estaba en el prompt; sin
+  ello quedaría «leyendo…» para siempre.
+- `GET /expense-rules` devuelve también `lecturaDisponible`, para que la
+  pantalla ofrezca o no «Volver a leer».
+
+Pruebas: 14 unitarias del clasificador y la lectura del tipo, 10 de
+integración con un extractor falso, corridas dos veces sobre la misma base. 22
+mutaciones, todas en rojo; una sobrevivió la primera pasada —rellenar el
+concepto aunque la regla solo sugiriera— porque ninguna prueba leía un emisor
+con poca seguridad. Ahora hay una.
