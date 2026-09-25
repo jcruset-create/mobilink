@@ -6,9 +6,10 @@
  * pantalla toca el cajón: una liquidación NO es un movimiento de caja, y el
  * dinero solo sale cuando se paga una aprobada.
  *
- * En esta fase los datos de cada ticket se ponen a mano. La lectura
- * automática llegará después y solo rellenará huecos: lo que habilita el pago
- * es que alguien haya REVISADO la línea, no que una máquina la haya leído.
+ * Cada ticket se lee solo si la lectura automática está configurada, y la
+ * lectura únicamente rellena huecos. Lo que habilita el pago es que alguien
+ * haya REVISADO la línea, no que una máquina la haya leído: si la lectura
+ * falla o no existe, se pone a mano y se sigue.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -69,6 +70,7 @@ export default function GastosTrabajadores() {
   const [abierta, setAbierta] = useState<number | null>(null);
   const [conceptos, setConceptos] = useState<ConceptoGasto[]>([]);
   const [destinos, setDestinos] = useState<DestinoGasto[]>([]);
+  const [lectura, setLectura] = useState(false);
   const [error, setError] = useState("");
 
   /*
@@ -106,6 +108,10 @@ export default function GastosTrabajadores() {
       .catch(() => {
         /* sin catálogo se puede mirar igual; el error saldrá al usarlo */
       });
+    api
+      .reglasGasto()
+      .then((r) => setLectura(r.lecturaDisponible))
+      .catch(() => setLectura(false));
   }, []);
 
   if (abierta != null) {
@@ -114,6 +120,7 @@ export default function GastosTrabajadores() {
         id={abierta}
         conceptos={conceptos}
         destinos={destinos}
+        lectura={lectura}
         onVolver={() => {
           setAbierta(null);
           void cargar();
@@ -263,11 +270,13 @@ function DetalleDeLiquidacion({
   id,
   conceptos,
   destinos,
+  lectura,
   onVolver,
 }: {
   id: number;
   conceptos: ConceptoGasto[];
   destinos: DestinoGasto[];
+  lectura: boolean;
   onVolver: () => void;
 }) {
   const { permisos, puede, refrescar } = useCash();
@@ -289,6 +298,19 @@ function DetalleDeLiquidacion({
   useEffect(() => {
     void cargar();
   }, [cargar]);
+
+  /*
+   * Mientras quede algún ticket leyéndose, se vuelve a pedir cada pocos
+   * segundos: la lectura la hace el servidor por detrás y así los campos
+   * aparecen solos sin que nadie tenga que recargar. En cuanto no queda
+   * ninguno, se para.
+   */
+  const leyendo = Boolean(d?.lineas.some((x) => x.analisis === "PENDIENTE" || x.analisis === "ANALIZANDO"));
+  useEffect(() => {
+    if (!leyendo) return;
+    const t = setInterval(() => void cargar(), 4000);
+    return () => clearInterval(t);
+  }, [leyendo, cargar]);
 
   async function accion(fn: () => Promise<unknown>) {
     setOcupado(true);
@@ -441,7 +463,10 @@ function DetalleDeLiquidacion({
           <button disabled={ocupado} onClick={() => entrada.current?.click()} className={btnPrimary}>
             <Upload className="mr-1 inline h-4 w-4" /> {ocupado ? "Subiendo…" : "Subir tickets"}
           </button>
-          <span className="text-[11px] text-slate-500">PDF, JPG o PNG. Varios a la vez.</span>
+          <span className="text-[11px] text-slate-500">
+            PDF, JPG o PNG. Varios a la vez.{" "}
+            {lectura ? "Se leen solos: revisa lo que rellenen." : "Los datos se ponen a mano."}
+          </span>
         </div>
       )}
 
@@ -454,7 +479,7 @@ function DetalleDeLiquidacion({
       <div className="space-y-2">
         {[...incluidas, ...excluidas].map((x, i) => (
           <LineaTicket
-            key={`${x.id}-${x.revisada}-${x.situacion}-${x.duplicados.map((e) => e.resolucion).join()}`}
+            key={`${x.id}-${x.analisis}-${x.revisada}-${x.situacion}-${x.duplicados.map((e) => e.resolucion).join()}`}
             claimId={l.id}
             linea={x}
             posicion={x.situacion === "INCLUIDA" ? i + 1 : null}
@@ -462,6 +487,7 @@ function DetalleDeLiquidacion({
             destinos={destinos}
             editable={editable}
             aceptaDuplicados={acciones.has("ACEPTAR_DUPLICADO")}
+            lectura={lectura}
             ocupado={ocupado}
             onAccion={accion}
           />
@@ -722,6 +748,7 @@ export function LineaTicket({
   destinos,
   editable,
   aceptaDuplicados,
+  lectura = false,
   ocupado,
   onAccion,
 }: {
@@ -732,6 +759,8 @@ export function LineaTicket({
   destinos: DestinoGasto[];
   editable: boolean;
   aceptaDuplicados: boolean;
+  /** Hay lectura automática configurada: se ofrece volver a leer. */
+  lectura?: boolean;
   ocupado: boolean;
   onAccion: (fn: () => Promise<unknown>) => Promise<void>;
 }) {
@@ -752,6 +781,14 @@ export function LineaTicket({
   const concepto = conceptos.find((c) => c.id === conceptoId) ?? null;
   const centros = destinos.filter((d) => d.tipo === "CENTRO_COSTE" && d.activo);
   const pendientes = linea.duplicados.filter((e) => e.resolucion === "PENDIENTE");
+  /*
+   * La propuesta de concepto de la lectura, cuando no se ha aplicado sola —la
+   * regla solo sugería, o la confianza no llegaba— y el concepto elegido es
+   * otro o ninguno. Se enseña con su porqué y un botón; no se aplica sola.
+   */
+  const idPropuesto = linea.leido?.conceptoPropuesto.conceptoId ?? null;
+  const propuesto =
+    idPropuesto != null && idPropuesto !== conceptoId ? (conceptos.find((c) => c.id === idPropuesto && c.activo) ?? null) : null;
 
   const importeCent = importe.trim() ? aCentimos(importe) : 0;
   const importeMal = importe.trim() !== "" && (importeCent == null || importeCent < 0);
@@ -802,6 +839,39 @@ export function LineaTicket({
           {linea.moneda !== "EUR" && <span className="ml-1 text-[11px] text-amber-300">{linea.moneda}</span>}
         </span>
       </header>
+
+      {linea.analisis === "FALLIDO" && (
+        <p className="mb-2 rounded-lg bg-rose-500/10 px-2 py-1 text-[12px] text-rose-200">
+          No se ha podido leer{linea.analisisError ? `: ${linea.analisisError.replace(/\.+$/, "")}.` : "."} Pon los
+          datos a mano; el ticket sirve igual.
+        </p>
+      )}
+      {(linea.analisis === "PENDIENTE" || linea.analisis === "ANALIZANDO") && (
+        <p className="mb-2 text-[12px] text-sky-300">Leyendo el ticket… los campos vacíos se rellenarán solos.</p>
+      )}
+      {/* Lo que ha dicho la lectura y conviene mirar: un abono, varios tickets en uno… */}
+      {linea.leido && linea.leido.avisos.length > 0 && !excluida && (
+        <ul className="mb-2 space-y-0.5">
+          {linea.leido.avisos
+            .filter((a) => a.codigo !== "SIN_EVIDENCIA_DE_PAGO" && a.codigo !== "TIPO_DE_DOCUMENTO")
+            .map((a, i) => (
+              <li key={i} className={`text-[11px] ${a.grave ? "text-amber-300" : "text-slate-400"}`}>
+                {a.mensaje}
+              </li>
+            ))}
+        </ul>
+      )}
+      {propuesto && editableAqui && (
+        <p className="mb-2 flex flex-wrap items-center gap-2 text-[12px] text-sky-200">
+          <span>
+            Concepto propuesto: <strong>{propuesto.nombre}</strong>{" "}
+            <span className="text-slate-400">({linea.leido!.conceptoPropuesto.motivo})</span>
+          </span>
+          <button className={btnMini} onClick={() => setConceptoId(propuesto.id)}>
+            Usar
+          </button>
+        </p>
+      )}
 
       {linea.duplicados.length > 0 && (
         <ul className="mb-2 space-y-1">
@@ -935,6 +1005,15 @@ export function LineaTicket({
               >
                 Guardar
               </button>
+              {lectura && (linea.analisis === "FALLIDO" || linea.analisis === "OMITIDO") && (
+                <button
+                  disabled={ocupado}
+                  className={btnSecondary}
+                  onClick={() => void onAccion(() => api.reintentarLecturaTicket(claimId, linea.id))}
+                >
+                  <RefreshCw className="mr-1 inline h-3.5 w-3.5" /> Volver a leer
+                </button>
+              )}
               <button disabled={ocupado} className={`${btnSecondary} ml-auto`} onClick={() => setPidiendo("EXCLUIR")}>
                 No se paga…
               </button>

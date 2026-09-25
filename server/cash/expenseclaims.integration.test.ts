@@ -34,6 +34,7 @@ let tickets: typeof import("./expenseclaims/lines.ts");
 let informe: typeof import("./expenseclaims/report.ts");
 let pago: typeof import("./expenseclaims/pago.ts");
 let stats: typeof import("./expensestats.ts");
+let analisis: typeof import("./expenseclaims/analisis.ts");
 
 const EMPRESA = "00000000-0000-4000-a000-0000000000f7";
 const PRESENTA = "00000000-0000-4000-a000-0000000000f8";
@@ -99,6 +100,7 @@ beforeAll(async () => {
   informe = await import("./expenseclaims/report.ts");
   pago = await import("./expenseclaims/pago.ts");
   stats = await import("./expensestats.ts");
+  analisis = await import("./expenseclaims/analisis.ts");
 
   /*
    * `sea_employees` la crean las migraciones de Supabase, no el arranque, así
@@ -868,5 +870,228 @@ describe.runIf(RUN)("Liquidaciones · el pago", () => {
     });
     const r = await servicio.anularOperacion(ctx, op.operacionId, "prueba");
     expect(r.numero).toBeTruthy();
+  });
+});
+
+describe.runIf(RUN)("Liquidaciones · la lectura automática", () => {
+  /*
+   * Sin clave de IA las líneas nacen OMITIDAS y la lectura no se intenta. Para
+   * probar el camino con lectura se finge que la hay; el extractor, que es lo
+   * único que llamaría al proveedor, es falso y devuelve un ticket conocido.
+   */
+  const claveAntes = process.env.OPENAI_API_KEY;
+  const conIA = () => {
+    process.env.OPENAI_API_KEY = "clave-ficticia-de-pruebas";
+  };
+  const sinIA = () => {
+    if (claveAntes === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = claveAntes;
+  };
+  afterAll(sinIA);
+
+  /** El ticket de la AP-2, tal y como lo devolvería el modelo. */
+  const peaje = (extra: Record<string, unknown> = {}): import("./invoice-scan/types.ts").ExtraccionCruda => ({
+    es_factura: true,
+    tipo_documento: "TICKET",
+    tipo_establecimiento: "PEAJE",
+    facturas_detectadas: 1,
+    factura: { numero: `AP2-${randomUUID().slice(0, 8)}`, fecha: "22/09/2026" },
+    cliente: { codigo: null, nombre: null, nif: null },
+    emisor: { nombre: "AUTOPISTAS AUMAR", nif: "A-28029130" },
+    vehiculo: { marca: null, modelo: null, matricula: null },
+    concepto: "Tránsito Lleida - Tarragona",
+    totales: { base_imponible: null, iva_importe: null, iva_porcentaje: null, total: "10,24 €", moneda: "EUR" },
+    recibo: {
+      detectado: false, recibos_detectados: 0, plantilla: "DESCONOCIDA", importe: null, tipo_operacion: null,
+      tarjeta: null, num_operacion: null, cod_autorizacion: null, comercio: null, terminal: null, red: null,
+      adquirente: null, cuenta: null, fecha_hora: null, texto: null,
+    },
+    confianza: { numero_factura: 0.95, cliente: 0, emisor: 0.97, total: 0.99, concepto: 0.9, recibo: 0 },
+    ...extra,
+  });
+  const extractor = (cruda = peaje()) => async () => cruda;
+
+  let reglaPeaje = 0;
+  beforeAll(async () => {
+    reglaPeaje = (await config.guardarReglaGasto(ctx, { campo: "TIPO_ESTABLECIMIENTO", patron: "peaje", conceptoId: peajes })).id;
+  });
+
+  async function liquidacionConTicket() {
+    const l = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan });
+    const [x] = await tickets.subirTickets(ctx, l.id, [fichero(await pdf(`lect ${randomUUID()}`))]);
+    return { l, x };
+  }
+  const linea = async (claimId: number, lineId: number) =>
+    (await liquidaciones.detalleLiquidacion(ctx, claimId)).lineas.find((y) => y.id === lineId)!;
+
+  it("sin IA, el ticket nace OMITIDO y no se puede pedir leerlo", async () => {
+    sinIA();
+    const { l, x } = await liquidacionConTicket();
+    expect(x.analisis).toBe("OMITIDO");
+    await expect(analisis.reintentarAnalisis(ctx, l.id, x.id)).rejects.toMatchObject({
+      codigo: "LECTURA_NO_DISPONIBLE",
+    });
+  });
+
+  it("con IA, se lee y RELLENA los huecos, y el concepto sale de la regla de la empresa", async () => {
+    conIA();
+    const { l, x } = await liquidacionConTicket();
+    expect(x.analisis).toBe("PENDIENTE");
+    await analisis.procesarPendientes(50, extractor());
+
+    const y = await linea(l.id, x.id);
+    expect(y.analisis).toBe("LISTO");
+    expect(y).toMatchObject({
+      fecha: "2026-09-22",
+      emisorNombre: "AUTOPISTAS AUMAR",
+      emisorNif: "A-28029130",
+      importeCentimos: 1024,
+      moneda: "EUR",
+      expenseConceptId: peajes,
+    });
+    // Lo leído, guardado aparte y con el porqué del concepto.
+    expect(y.leido?.tipoEstablecimiento).toBe("PEAJE");
+    expect(y.leido?.conceptoPropuesto.reglaId).toBe(reglaPeaje);
+    // Leer NO es revisar: sigue haciendo falta que una persona lo dé por bueno.
+    expect(y.revisada).toBe(false);
+    const { rows } = await db.query(`SELECT scan_id FROM cash_expense_claim_lines WHERE id = $1`, [x.id]);
+    expect(rows[0].scan_id).toBeTruthy();
+
+    // Y lo que la persona corrige queda apuntado: es la medida del acierto.
+    const c = await tickets.editarLinea(ctx, l.id, x.id, { importeCentimos: 1000, revisada: true });
+    expect(c.camposCorregidos).toEqual(["importeCentimos"]);
+  });
+
+  it("si la lectura del emisor es dudosa, el concepto se PROPONE pero no se pone solo", async () => {
+    conIA();
+    const { l, x } = await liquidacionConTicket();
+    const dudosa = peaje({ confianza: { numero_factura: 0.9, cliente: 0, emisor: 0.5, total: 0.99, concepto: 0.9, recibo: 0 } });
+    await analisis.procesarPendientes(50, extractor(dudosa));
+    const y = await linea(l.id, x.id);
+    expect(y.expenseConceptId).toBeNull();
+    expect(y.leido?.conceptoPropuesto).toMatchObject({ conceptoId: peajes, autoSeleccionar: false });
+    const { rows } = await db.query(`SELECT concepto_propuesto_id FROM cash_expense_claim_lines WHERE id = $1`, [x.id]);
+    expect(rows[0].concepto_propuesto_id).toBe(peajes);
+    // Lo demás sí se rellena: la duda es sobre el emisor, no sobre el importe.
+    expect(y.importeCentimos).toBe(1024);
+  });
+
+  it("no pisa lo que una persona ya había escrito", async () => {
+    conIA();
+    const { l, x } = await liquidacionConTicket();
+    await tickets.editarLinea(ctx, l.id, x.id, { emisorNombre: "Lo que puso Marta", importeCentimos: 999 });
+    await analisis.procesarPendientes(50, extractor());
+    const y = await linea(l.id, x.id);
+    expect(y.emisorNombre).toBe("Lo que puso Marta");
+    expect(y.importeCentimos).toBe(999);
+    // Lo que estaba vacío, sí.
+    expect(y.fecha).toBe("2026-09-22");
+  });
+
+  it("una línea ya revisada no se toca, y una liquidación ya presentada tampoco", async () => {
+    conIA();
+    const a = await liquidacionConTicket();
+    await tickets.editarLinea(ctx, a.l.id, a.x.id, { revisada: true });
+    const b = await liquidacionConTicket();
+    await db.query(`UPDATE cash_expense_claims SET estado = 'PRESENTADA' WHERE id = $1`, [b.l.id]);
+
+    await analisis.procesarPendientes(50, extractor());
+    for (const { l, x } of [a, b]) {
+      const y = await linea(l.id, x.id);
+      expect(y.analisis).toBe("LISTO");
+      expect(y.leido?.importeCentimos).toBe(1024);
+      expect(y.importeCentimos).toBe(0);
+      expect(y.fecha).toBeNull();
+      expect(y.expenseConceptId).toBeNull();
+    }
+  });
+
+  it("si la lectura falla, la línea queda FALLIDA con el fichero, y se puede reintentar", async () => {
+    conIA();
+    const { l, x } = await liquidacionConTicket();
+    await analisis.procesarPendientes(50, async () => {
+      throw new Error("El proveedor no responde");
+    });
+    let y = await linea(l.id, x.id);
+    expect(y.analisis).toBe("FALLIDO");
+    expect(y.analisisError).toContain("no responde");
+    expect(y.url).toBeTruthy();
+
+    // Fallida no bloquea: se rellena a mano y se presenta igual.
+    await aMano(l.id, x.id, 1024, peajes);
+    expect((await liquidaciones.detalleLiquidacion(ctx, l.id)).bloqueos).toEqual([]);
+
+    await analisis.reintentarAnalisis(ctx, l.id, x.id);
+    await analisis.procesarPendientes(50, extractor());
+    y = await linea(l.id, x.id);
+    expect(y.analisis).toBe("LISTO");
+    // Ya estaba revisada a mano: lo leído se guarda y no cambia nada.
+    expect(y.importeCentimos).toBe(1024);
+  });
+
+  it("un abono no rellena el importe: un ticket de gasto no devuelve dinero", async () => {
+    conIA();
+    const { l, x } = await liquidacionConTicket();
+    await analisis.procesarPendientes(50, extractor(peaje({ tipo_documento: "ABONO", totales: { base_imponible: null, iva_importe: null, iva_porcentaje: null, total: "-10,24 €", moneda: "EUR" } })));
+    const y = await linea(l.id, x.id);
+    expect(y.leido?.esAbono).toBe(true);
+    expect(y.importeCentimos).toBe(0);
+  });
+
+  it("un ticket en otra moneda se marca, y no se presenta hasta pasarlo a euros", async () => {
+    conIA();
+    const { l, x } = await liquidacionConTicket();
+    await analisis.procesarPendientes(50, extractor(peaje({ totales: { base_imponible: null, iva_importe: null, iva_porcentaje: null, total: "12,00 GBP", moneda: "GBP" } })));
+    expect((await linea(l.id, x.id)).moneda).toBe("GBP");
+    await tickets.editarLinea(ctx, l.id, x.id, { revisada: true, importeCentimos: 1200, expenseConceptId: peajes, fecha: "2026-09-22" });
+    // Con todo lo demás relleno, lo único que queda es la moneda.
+    const d = await liquidaciones.detalleLiquidacion(ctx, l.id);
+    expect(d.bloqueos.map((b) => b.codigo)).toEqual(["LINEA_EN_OTRA_MONEDA"]);
+    await expect(liquidaciones.presentarLiquidacion(ctx, l.id)).rejects.toMatchObject({
+      codigo: "LINEA_EN_OTRA_MONEDA",
+    });
+  });
+
+  it("una lectura colgada vuelve a la cola; tras tres intentos, FALLIDA", async () => {
+    conIA();
+    const { l, x } = await liquidacionConTicket();
+    const hace = Date.now() - analisis.ANALISIS_COLGADO_MS - 1000;
+    await db.query(
+      `UPDATE cash_expense_claim_lines SET analisis = 'ANALIZANDO', analisis_intentos = 1, updated_at_ms = $2 WHERE id = $1`,
+      [x.id, hace]
+    );
+    await analisis.procesarPendientes(50, extractor());
+    expect((await linea(l.id, x.id)).analisis).toBe("LISTO");
+
+    const otro = await liquidacionConTicket();
+    await db.query(
+      `UPDATE cash_expense_claim_lines SET analisis = 'ANALIZANDO', analisis_intentos = $2, updated_at_ms = $3 WHERE id = $1`,
+      [otro.x.id, analisis.MAXIMO_INTENTOS, hace]
+    );
+    await analisis.procesarPendientes(50, extractor());
+    expect((await linea(otro.l.id, otro.x.id)).analisis).toBe("FALLIDO");
+  });
+
+  it("las reglas: guardar el mismo par lo reapunta, y una sin concepto vigente sale marcada", async () => {
+    const r1 = await config.guardarReglaGasto(ctx, { campo: "NOMBRE_EMISOR", patron: `Cal Pere ${sufijo}`, conceptoId: dietas });
+    const r2 = await config.guardarReglaGasto(ctx, { campo: "NOMBRE_EMISOR", patron: `Cal Pere ${sufijo}`, conceptoId: peajes });
+    expect(r2.id).toBe(r1.id);
+    expect(r2.conceptoId).toBe(peajes);
+
+    await expect(
+      config.guardarReglaGasto(ctx, { campo: "NOMBRE_EMISOR", patron: "x", conceptoId: 999_999 })
+    ).rejects.toMatchObject({ codigo: "CONCEPTO_NO_ENCONTRADO" });
+    await expect(
+      config.guardarReglaGasto(ctx, { campo: "MATRICULA", patron: "x", conceptoId: dietas })
+    ).rejects.toMatchObject({ codigo: "ENTRADA_NO_VALIDA" });
+
+    // El tipo se guarda como lo lee el modelo: en mayúsculas.
+    expect((await config.guardarReglaGasto(ctx, { campo: "TIPO_ESTABLECIMIENTO", patron: "parking", conceptoId: dietas })).patron).toBe("PARKING");
+
+    const temporal = (await config.crearConcepto(ctx, { nombre: `Temporal ${sufijo}` })).id;
+    const r3 = await config.guardarReglaGasto(ctx, { campo: "CONCEPTO", patron: `temp ${sufijo}`, conceptoId: temporal });
+    await db.query(`DELETE FROM cash_expense_concepts WHERE id = $1`, [temporal]);
+    const listada = (await config.listarReglasGasto(EMPRESA)).find((r) => r.id === r3.id);
+    expect(listada?.conceptoVigente).toBe(false);
   });
 });

@@ -53,6 +53,7 @@ import type {
   Liquidacion,
   LineaLiquidacion,
   DetalleLiquidacion,
+  ReglaGastoConfig,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -1235,3 +1236,16 @@ export const pagarLiquidacion = (
     // cabeceras de sesión. El servidor acepta la clave por los dos sitios.
     json({ ...datos, idempotencyKey })
   );
+
+export const reintentarLecturaTicket = (id: number, lineId: number) =>
+  pedir<{ ok: true }>(`/expense-claims/${id}/lines/${lineId}/retry`, json({}));
+
+/** Las reglas de concepto, y si la lectura automática está disponible. */
+export const reglasGasto = () =>
+  pedir<{ reglas: ReglaGastoConfig[]; lecturaDisponible: boolean }>("/expense-rules");
+
+export const guardarReglaGasto = (datos: { campo: string; patron: string; conceptoId: number }) =>
+  pedir<{ regla: ReglaGastoConfig }>("/expense-rules", { ...json(datos), method: "PUT" });
+
+export const borrarReglaGasto = (id: number) =>
+  pedir<{ ok: true }>(`/expense-rules/${id}`, { method: "DELETE" });

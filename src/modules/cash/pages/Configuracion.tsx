@@ -43,6 +43,7 @@ import type {
   SeccionConfig,
   DispositivoAutoScan,
   ConceptoGasto,
+  ReglaGastoConfig,
   DestinoGasto,
   TipoDestinoGasto,
   EquivalenciaErp,
@@ -88,6 +89,7 @@ export default function Configuracion() {
       <Secciones />
       <ReglasSeccion />
       <ConceptosDeGasto />
+      <ReglasConcepto />
       <FormasPago />
       <EquivalenciasErp />
       <ReglasEscaner />
@@ -258,6 +260,197 @@ function ReglasSeccion() {
                     onClick={() => void accion(() => api.borrarReglaSeccion(r.id))}
                     className={btnSecondary}
                   >
+                    Borrar
+                  </button>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+/**
+ * Qué concepto de gasto le toca a cada clase de ticket de una liquidación.
+ *
+ * La lectura dice qué es el papel —«un peaje»—; aquí se dice qué concepto de
+ * esta empresa le corresponde —«Peajes»—. Nada de eso lo decide la máquina.
+ */
+const ETIQUETA_CAMPO_GASTO: Record<string, string> = {
+  TIPO_ESTABLECIMIENTO: "Tipo de establecimiento",
+  NOMBRE_EMISOR: "Nombre del establecimiento",
+  NIF_EMISOR: "NIF del establecimiento",
+  CONCEPTO: "Concepto del ticket",
+};
+
+const TIPOS_ESTABLECIMIENTO = [
+  "RESTAURANTE",
+  "PEAJE",
+  "GASOLINERA",
+  "PARKING",
+  "HOTEL",
+  "TRANSPORTE",
+  "TAXI",
+  "SUPERMERCADO",
+  "TALLER",
+  "OTRO",
+];
+
+function ReglasConcepto() {
+  const { puede } = useCash();
+  const [reglas, setReglas] = useState<ReglaGastoConfig[]>([]);
+  const [lectura, setLectura] = useState(false);
+  const [conceptos, setConceptos] = useState<ConceptoGasto[]>([]);
+  const [campo, setCampo] = useState("TIPO_ESTABLECIMIENTO");
+  const [patron, setPatron] = useState("RESTAURANTE");
+  const [conceptoId, setConceptoId] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const editable = puede("cash.configure");
+
+  const cargar = useCallback(async () => {
+    try {
+      const [r, c] = await Promise.all([api.reglasGasto(), api.conceptosDeGasto()]);
+      setReglas(r.reglas);
+      setLectura(r.lecturaDisponible);
+      setConceptos(c.conceptos.filter((x) => x.activo));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando las reglas de concepto");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function accion(fn: () => Promise<unknown>) {
+    setOcupado(true);
+    setError("");
+    try {
+      await fn();
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "La acción ha fallado");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Reglas de concepto (gastos de trabajadores)
+      </h2>
+      <p className="text-[12px] text-slate-500">
+        Al leer un ticket de una liquidación, la máquina dice <b>qué clase de negocio</b> lo emite —un
+        restaurante, un peaje, un parking—. Aquí decides <b>qué concepto de gasto</b> le toca. Lo que no
+        reconozca ninguna regla se queda sin concepto y se elige a mano: no hay un concepto «por
+        defecto», porque un gasto clasificado a ojo parece un dato.
+      </p>
+      {!lectura && (
+        <p className="text-[12px] text-amber-300">
+          La lectura automática no está configurada en este servidor: los tickets se rellenan a mano y
+          estas reglas no se aplican hasta que lo esté.
+        </p>
+      )}
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {editable && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Mirar en</span>
+            <select
+              value={campo}
+              onChange={(e) => {
+                setCampo(e.target.value);
+                setPatron(e.target.value === "TIPO_ESTABLECIMIENTO" ? "RESTAURANTE" : "");
+              }}
+              className={inputCls}
+            >
+              {Object.entries(ETIQUETA_CAMPO_GASTO).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Que sea / ponga</span>
+            {campo === "TIPO_ESTABLECIMIENTO" ? (
+              <select value={patron} onChange={(e) => setPatron(e.target.value)} className={inputCls}>
+                {TIPOS_ESTABLECIMIENTO.map((t) => (
+                  <option key={t} value={t}>
+                    {t.charAt(0) + t.slice(1).toLowerCase()}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={patron}
+                onChange={(e) => setPatron(e.target.value)}
+                placeholder={campo === "NIF_EMISOR" ? "B12345678" : "aumar"}
+                className={inputCls}
+              />
+            )}
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Concepto</span>
+            <select
+              value={conceptoId ?? ""}
+              onChange={(e) => setConceptoId(e.target.value ? Number(e.target.value) : null)}
+              className={inputCls}
+            >
+              <option value="">Elegir…</option>
+              {conceptos.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nombre}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            disabled={ocupado || !patron.trim() || conceptoId == null}
+            onClick={() =>
+              void accion(async () => {
+                await api.guardarReglaGasto({ campo, patron, conceptoId: conceptoId! });
+                setConceptoId(null);
+              })
+            }
+            className={btnPrimary}
+          >
+            Guardar
+          </button>
+        </div>
+      )}
+
+      <table className="w-full text-sm">
+        <thead>
+          <tr>
+            <th className={thCls}>Mirar en</th>
+            <th className={thCls}>Que sea / ponga</th>
+            <th className={thCls}>Concepto</th>
+            {editable && <th className={thCls} />}
+          </tr>
+        </thead>
+        <tbody>
+          {reglas.length === 0 && <EmptyRow cols={editable ? 4 : 3} text="Todavía no hay reglas." />}
+          {reglas.map((r) => (
+            <tr key={r.id}>
+              <td className={tdCls}>{ETIQUETA_CAMPO_GASTO[r.campo] ?? r.campo}</td>
+              <td className={`${tdCls} font-mono text-[12px]`}>{r.patron}</td>
+              <td className={tdCls}>
+                {r.conceptoNombre || <span className="text-slate-500">—</span>}
+                {!r.conceptoVigente && (
+                  <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+                    concepto no vigente
+                  </span>
+                )}
+              </td>
+              {editable && (
+                <td className={`${tdCls} text-right`}>
+                  <button disabled={ocupado} onClick={() => void accion(() => api.borrarReglaGasto(r.id))} className={btnSecondary}>
                     Borrar
                   </button>
                 </td>

@@ -1091,8 +1091,44 @@ export type LineaLiquidacion = {
   conceptoTipoDestino: TipoDestinoGasto | null;
   expenseTargetId: number | null;
   destinoNombre: string | null;
+  /** Lo que leyó la máquina, sin tocar. `null` = no se ha leído. */
+  leido: LecturaTicket | null;
+  camposCorregidos: string[];
   url: string | null;
   duplicados: EvidenciaDuplicado[];
+};
+
+/** Lo leído de un ticket. Espejo de `Leido` en `expenseclaims/analisis.ts`. */
+export type LecturaTicket = {
+  fecha: string | null;
+  emisorNombre: string | null;
+  importeCentimos: number | null;
+  moneda: string | null;
+  tipoEstablecimiento: string;
+  tipoDocumento: string;
+  esAbono: boolean;
+  facturasDetectadas: number;
+  avisos: { codigo: string; mensaje: string; grave: boolean }[];
+  conceptoPropuesto: {
+    conceptoId: number | null;
+    confianza: number;
+    motivo: string;
+    autoSeleccionar: boolean;
+    reglaId: number | null;
+  };
+};
+
+export type ReglaGastoConfig = {
+  id: number;
+  campo: "TIPO_ESTABLECIMIENTO" | "NOMBRE_EMISOR" | "NIF_EMISOR" | "CONCEPTO";
+  patron: string;
+  conceptoId: number;
+  conceptoNombre: string;
+  conceptoVigente: boolean;
+  confianza: number;
+  autoSeleccionar: boolean;
+  prioridad: number;
+  activa: boolean;
 };
 
 export type BloqueoLiquidacion = { codigo: string; lineaId: number | null; mensaje: string };
