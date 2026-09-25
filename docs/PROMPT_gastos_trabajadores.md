@@ -1129,3 +1129,40 @@ integración con un extractor falso, corridas dos veces sobre la misma base. 22
 mutaciones, todas en rojo; una sobrevivió la primera pasada —rellenar el
 concepto aunque la regla solo sugiriera— porque ninguna prueba leía un emisor
 con poca seguridad. Ahora hay una.
+
+## Lo que entró en PR4
+
+Duplicados completos: `MISMA_CLAVE` y `MISMO_NUMERO` en
+`expenseclaims/duplicates.ts` (`detectarPorContenido`), al leer, al corregir y
+otra vez al presentar y al pagar (`revisarLiquidacion`); descarte automático
+de lo que deja de aplicar; en la pantalla, lo descartado con su motivo.
+
+Desvíos respecto al prompt:
+
+- **Solo se marca el ticket posterior.** El prompt no decía quién es el
+  duplicado de quién; marcar los dos bloquearía el original por culpa de la
+  copia. Una línea de una liquidación ya presentada, aprobada o pagada cuenta
+  siempre como anterior.
+- **La re-detección al presentar y al pagar va en su propia transacción.** Si
+  fuera dentro de la de presentar o pagar, el rechazo por duplicado se llevaría
+  por delante la evidencia que lo explica. Lo cazó una mutación que
+  precisamente la metía dentro.
+- **APROBADA → RECHAZADA.** El grafo de la fase 1 solo dejaba rechazar una
+  presentada, y un duplicado aparecido entre la aprobación y el pago dejaba la
+  liquidación sin salida salvo anularla entera. Lo destapó la prueba de «al
+  pagar se vuelve a mirar».
+- **Momento EDICION** en `detectado_en`: corregir un ticket a mano también
+  destapa duplicados. La restricción se rehace en `initCash`.
+- **Descarte automático** cuando la otra línea se excluye, su liquidación se
+  anula, el justificante se retira, el pago se anula, o al corregir los datos
+  ya no coincide. Lo decidido (ACEPTADA, EXCLUIDA) no se toca.
+- **Un fallo anterior en `cobroPrevioDeFactura`**: contaba la inversa de una
+  anulación como cobro previo, así que una factura cobrada y anulada no se
+  podía volver a cobrar sin autorización (y lo mismo con los pagos, y con
+  `MISMO_NUMERO`). Reproducido sobre el código de `main` y arreglado con su
+  prueba en `server/cash/anulaciones.integration.test.ts`.
+
+Pruebas: 7 de integración nuevas y 2 de las anulaciones, corridas tres veces
+sobre la misma base —la segunda pasada destapó que los datos de prueba se
+cruzaban entre ejecuciones, y ahora son únicos—. 13 mutaciones, todas en rojo
+a la primera.

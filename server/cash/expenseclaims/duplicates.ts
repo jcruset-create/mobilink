@@ -10,15 +10,30 @@
  * Detectar NO bloquea la subida: un falso positivo no puede impedir subir un
  * ticket. Lo que bloquea es PRESENTAR con alguna coincidencia sin decidir.
  *
- * Esta fase detecta el mismo fichero (sha256). Las otras dos —el mismo ticket
- * con dos escaneos distintos, y el mismo número ya pagado— usan esta misma
- * tabla y llegan después.
+ * Tres detecciones, cada una con su momento:
+ *
+ * · MISMO_FICHERO — el sha256, al subir.
+ * · MISMA_CLAVE — mismo emisor, mismo día y mismo importe: el mismo ticket
+ *   escaneado dos veces, o escaneado y fotografiado, que son dos ficheros. Al
+ *   leerlo, al corregirlo, y otra vez al presentar y al pagar.
+ * · MISMO_NUMERO — el número del ticket ya consta PAGADO en la caja (un pago
+ *   de proveedor, o una entrega ya liquidada). Mismos momentos.
+ *
+ * ## Quién es el duplicado de quién
+ *
+ * Solo se marca la línea POSTERIOR. Si el ticket A se subió antes que el B, se
+ * le pone la evidencia a B, no a A: A es el original, y bloquearlo por culpa
+ * de la copia obligaría a justificar el ticket bueno. Una línea de una
+ * liquidación ya presentada, aprobada o pagada cuenta siempre como anterior:
+ * esa ya está tramitándose.
  */
 
 import type { PoolClient } from "pg";
+import { cobroPrevioDeFactura } from "../duplicates.ts";
 import { ErrorCaja } from "../errors.ts";
+import { claveDeDuplicado } from "./domain.ts";
 
-type Momento = "SUBIDA" | "ANALISIS" | "PRESENTAR" | "PAGAR";
+type Momento = "SUBIDA" | "ANALISIS" | "EDICION" | "PRESENTAR" | "PAGAR";
 
 async function apuntar(
   client: PoolClient,
@@ -168,4 +183,162 @@ export async function cargarEvidencia(
     referenciaNumero: rows[0].referencia_numero,
     tipo: rows[0].tipo,
   };
+}
+
+
+/**
+ * Las dos detecciones por CONTENIDO de una línea: mismo ticket con otro
+ * fichero, y mismo número ya pagado. No hace nada si la línea no está
+ * incluida: lo que no se paga no puede estar pagado dos veces.
+ */
+export async function detectarPorContenido(
+  client: PoolClient,
+  empresaId: string,
+  lineId: number,
+  momento: Momento
+): Promise<void> {
+  const { rows } = await client.query(
+    `SELECT l.id, l.claim_id, l.situacion, l.emisor_nif, l.emisor_nombre, l.fecha::text AS fecha,
+            l.importe_centimos, l.numero_documento
+       FROM cash_expense_claim_lines l WHERE l.id = $1 AND l.empresa_id = $2`,
+    [lineId, empresaId]
+  );
+  const l = rows[0];
+  if (!l || l.situacion !== "INCLUIDA") return;
+  /** Con qué coincide AHORA, por tipo. Lo pendiente que ya no esté, se descarta. */
+  const coinciden = { MISMA_CLAVE: [] as number[], MISMO_NUMERO: [] as number[] };
+
+  const clave = claveDeDuplicado({
+    emisorNif: l.emisor_nif,
+    emisorNombre: l.emisor_nombre ?? "",
+    fecha: l.fecha,
+    importeCentimos: Number(l.importe_centimos),
+  });
+  if (clave) {
+    /*
+     * Candidatas por fecha e importe, que es lo que usa el índice; la clave
+     * entera —NIF normalizado, o nombre sin tildes— se compara aquí, con la
+     * MISMA función que la calcula. Solo las anteriores (ver cabecera).
+     */
+    const { rows: candidatas } = await client.query(
+      `SELECT o.id, o.emisor_nif, o.emisor_nombre, o.fecha::text AS fecha, o.importe_centimos, c.numero
+         FROM cash_expense_claim_lines o
+         JOIN cash_expense_claims c ON c.id = o.claim_id
+        WHERE o.empresa_id = $1 AND o.id <> $2
+          AND o.fecha = $3::date AND o.importe_centimos = $4
+          AND o.situacion = 'INCLUIDA' AND c.estado <> 'ANULADA'
+          AND (o.id < $2 OR (c.estado IN ('PRESENTADA','APROBADA','PAGADA') AND o.claim_id <> $5))
+        ORDER BY o.id`,
+      [empresaId, lineId, l.fecha, Number(l.importe_centimos), l.claim_id]
+    );
+    for (const o of candidatas) {
+      const suya = claveDeDuplicado({
+        emisorNif: o.emisor_nif,
+        emisorNombre: o.emisor_nombre ?? "",
+        fecha: o.fecha,
+        importeCentimos: Number(o.importe_centimos),
+      });
+      if (suya !== clave) continue;
+      coinciden.MISMA_CLAVE.push(o.id);
+      await apuntar(client, {
+        empresaId,
+        lineId,
+        tipo: "MISMA_CLAVE",
+        referenciaTipo: "LINEA",
+        referenciaId: o.id,
+        referenciaNumero: o.numero,
+        momento,
+      });
+    }
+  }
+
+  /*
+   * El número ya pagado en la caja. Con la misma consulta que usa Pagos, así
+   * que un ticket pagado por «Entregas de dinero» o como factura de proveedor
+   * sale aquí igual. Las inversas de una anulación no cuentan (ver
+   * `cobroPrevioDeFactura`).
+   */
+  if (l.numero_documento) {
+    const previo = await cobroPrevioDeFactura(empresaId, l.numero_documento, client, null, "PAGO");
+    if (previo) {
+      coinciden.MISMO_NUMERO.push(previo.operacionId);
+      await apuntar(client, {
+        empresaId,
+        lineId,
+        tipo: "MISMO_NUMERO",
+        referenciaTipo: "OPERACION",
+        referenciaId: previo.operacionId,
+        referenciaNumero: previo.numero,
+        momento,
+      });
+    }
+  }
+
+  /*
+   * Si al corregir el ticket —otra fecha, otro importe, otro número— deja de
+   * coincidir con lo que coincidía, esa sospecha ya no aplica. Solo lo
+   * PENDIENTE: lo que alguien decidió se queda como lo decidió.
+   */
+  for (const tipo of ["MISMA_CLAVE", "MISMO_NUMERO"] as const) {
+    await client.query(
+      `UPDATE cash_expense_claim_duplicates
+          SET resolucion = 'DESCARTADA', resuelto_at_ms = $4,
+              motivo = 'Con los datos corregidos del ticket, ya no coincide.'
+        WHERE line_id = $1 AND tipo = $2 AND resolucion = 'PENDIENTE'
+          AND NOT (referencia_id = ANY($3::int[]))`,
+      [lineId, tipo, coinciden[tipo], Date.now()]
+    );
+  }
+}
+
+/**
+ * Lo pendiente que ya no tiene sentido pasa a DESCARTADA, con el porqué.
+ *
+ * La coincidencia se detectó con algo que ha dejado de contar: la otra línea
+ * se excluyó, su liquidación se anuló, el justificante se retiró o el pago se
+ * anuló. Mantenerla pendiente bloquearía por algo que ya no existe. Lo que
+ * alguien ya decidió (ACEPTADA, EXCLUIDA) no se toca.
+ */
+export async function descartarLasQueYaNoAplican(client: PoolClient, lineIds: readonly number[]): Promise<void> {
+  if (lineIds.length === 0) return;
+  const ahora = Date.now();
+  await client.query(
+    `UPDATE cash_expense_claim_duplicates d
+        SET resolucion = 'DESCARTADA', resuelto_at_ms = $2,
+            motivo = 'Aquello con lo que coincidía ya no cuenta: se excluyó, se anuló o se retiró.'
+      WHERE d.line_id = ANY($1::int[]) AND d.resolucion = 'PENDIENTE'
+        AND (
+          (d.referencia_tipo = 'LINEA' AND NOT EXISTS (
+             SELECT 1 FROM cash_expense_claim_lines o
+               JOIN cash_expense_claims c ON c.id = o.claim_id
+              WHERE o.id = d.referencia_id AND o.situacion = 'INCLUIDA' AND c.estado <> 'ANULADA'))
+          OR (d.referencia_tipo = 'DOCUMENTO' AND NOT EXISTS (
+             SELECT 1 FROM cash_operation_documents x WHERE x.id = d.referencia_id AND NOT x.anulado))
+          OR (d.referencia_tipo = 'OPERACION' AND NOT EXISTS (
+             SELECT 1 FROM cash_operations x WHERE x.id = d.referencia_id AND x.estado = 'CONFIRMED'))
+        )`,
+    [lineIds, ahora]
+  );
+}
+
+/**
+ * Vuelve a mirar TODAS las líneas incluidas de una liquidación.
+ *
+ * Se llama antes de presentar y antes de pagar, en su PROPIA transacción: si
+ * encuentra algo nuevo, tiene que quedar guardado aunque lo siguiente —que
+ * sea presentar o pagar— se niegue por eso mismo. Dentro de la misma
+ * transacción, el rechazo se llevaría por delante la evidencia que lo explica.
+ *
+ * El mundo cambia entre que se sube un ticket y se paga: alguien ha podido
+ * pagar ese número por Pagos, o subir el mismo ticket en otra liquidación que
+ * ya se presentó.
+ */
+export async function revisarLiquidacion(client: PoolClient, empresaId: string, claimId: number, momento: Momento): Promise<void> {
+  const { rows } = await client.query(
+    `SELECT id FROM cash_expense_claim_lines WHERE claim_id = $1 AND situacion = 'INCLUIDA' ORDER BY id`,
+    [claimId]
+  );
+  const ids = rows.map((r: { id: number }) => r.id);
+  for (const id of ids) await detectarPorContenido(client, empresaId, id, momento);
+  await descartarLasQueYaNoAplican(client, ids);
 }

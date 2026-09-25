@@ -23,6 +23,11 @@ describe("qué botones salen", () => {
     expect(lista("BORRADOR", RESPONSABLE, 0)).toEqual(["ACEPTAR_DUPLICADO", "ANULAR", "EDITAR", "PRESENTAR"]);
   });
 
+  it("una aprobada y sin pagar todavía se puede rechazar", () => {
+    expect(lista("APROBADA", RESPONSABLE, 0)).toEqual(["ANULAR", "RECHAZAR"]);
+    expect(lista("APROBADA", CAJERO, 0)).toEqual([]);
+  });
+
   it("una pagada no se anula desde aquí, y una anulada ya no tiene nada", () => {
     expect(lista("PAGADA", RESPONSABLE, 0)).toEqual([]);
     expect(lista("ANULADA", RESPONSABLE, 0)).toEqual([]);

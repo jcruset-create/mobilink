@@ -138,6 +138,14 @@ export async function cobroPrevioDeFactura(
     `SELECT id, numero, importe_centimos, party_nombre, created_at_ms
        FROM cash_operations
       WHERE empresa_id = $1 AND tipo = ANY($4::text[]) AND estado = 'CONFIRMED'
+        /*
+         * Las inversas de una anulación, fuera. Anular un cobro deja el
+         * original en REVERSED y crea una inversa del mismo tipo, CONFIRMED y
+         * con la MISMA referencia. Sin esta línea, una factura cobrada y
+         * anulada ya no se podía volver a cobrar sin autorización: el «cobro
+         * previo» que se citaba era la propia anulación.
+         */
+        AND reversa_de_id IS NULL
         AND upper(trim(referencia)) = $2
         AND ($3::int IS NULL OR id <> $3::int)
       ORDER BY id DESC LIMIT 1`,

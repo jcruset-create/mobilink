@@ -31,6 +31,7 @@ import type { Contexto } from "../service.ts";
 import { leerDocumento } from "../storage.ts";
 import { type ReglaConcepto, clasificarConcepto } from "./conceptos.ts";
 import { lineasEditables } from "./domain.ts";
+import { detectarPorContenido } from "./duplicates.ts";
 import { cargarLiquidacion } from "./repository.ts";
 
 /** Hay con qué leer. Sin clave, las líneas nacen OMITIDAS y no se intenta. */
@@ -251,6 +252,8 @@ export async function analizarLinea(
       `UPDATE cash_expense_claim_lines SET ${sets.join(", ")} WHERE id = $1 AND analisis = 'ANALIZANDO'`,
       valores
     );
+    // Con los datos ya puestos, se puede saber si es un ticket repetido.
+    await detectarPorContenido(client, l.empresa_id, lineId, "ANALISIS");
   });
   return "LISTO";
 }

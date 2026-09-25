@@ -2122,6 +2122,16 @@ export async function initCash(): Promise<void> {
       motivo TEXT,
       UNIQUE (line_id, tipo, referencia_tipo, referencia_id)
     );
+    /*
+     * EDICION se añadió después: corregir un ticket a mano también puede
+     * destapar un duplicado. La restricción se rehace, como la de los tipos
+     * de operación, porque un CREATE TABLE IF NOT EXISTS no la cambia.
+     */
+    ALTER TABLE cash_expense_claim_duplicates
+      DROP CONSTRAINT IF EXISTS cash_expense_claim_duplicates_detectado_en_check;
+    ALTER TABLE cash_expense_claim_duplicates
+      ADD CONSTRAINT cash_expense_claim_duplicates_detectado_en_check
+      CHECK (detectado_en IN ('SUBIDA','ANALISIS','EDICION','PRESENTAR','PAGAR'));
 
     /* Reglas de concepto: el mismo molde que cash_section_rules. */
     CREATE TABLE IF NOT EXISTS cash_expense_rules (
