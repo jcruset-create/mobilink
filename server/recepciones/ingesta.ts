@@ -54,8 +54,9 @@ import { createHash } from "node:crypto";
 import { asumirExpedicionCompleta } from "./config.ts";
 import { descripcionNormalizada } from "./domain/articulos.ts";
 import { pendienteDeExpedir } from "./domain/cantidades.ts";
-import { muestraDelContenido, normalizar, parsearCorreo, remitenteReenviado, type AlbaranLeido, type CorreoParseado } from "./domain/correo/index.ts";
+import { muestraDelContenido, normalizar, parsearCorreo, remitenteReenviado, type AlbaranLeido, type CorreoParseado, type LineaLeida } from "./domain/correo/index.ts";
 import { entregaInsaDelPdf } from "./documentos/entregaInsa.ts";
+import { lineasDelPdf } from "./documentos/lineas.ts";
 import { normalizarNif, type EntregaInsa } from "./domain/insa.ts";
 import { normalizarNumero } from "./domain/numero.ts";
 import { ErrorRecepciones } from "./errors.ts";
@@ -209,6 +210,27 @@ async function proveedorPorNif(empresaId: string, nifs: string[], actual: repo.P
   const candidatos = (await repo.listarProveedores(empresaId)).filter((p) => p.activo && p.nif && nifs.includes(normalizarNif(p.nif)));
   if (candidatos.length !== 1 || candidatos[0].id === actual.id) return null;
   return candidatos[0];
+}
+
+/**
+ * Las líneas de mercancía del primer PDF adjunto que se deje leer.
+ *
+ * El correo de albarán de Soledad no siempre detalla lo que trae: dice el
+ * número del albarán y el del pedido, y poco más. Si además el pedido no ha
+ * llegado todavía, no hay con qué deducirlo y el albarán se queda esperando a
+ * una persona —«El pedido 5702452 no existe y el albarán no trae líneas
+ * legibles con las que deducirlo»—. El PDF sí las trae, que es el papel que
+ * luego se firma en el muelle.
+ */
+function lineasDeLosAdjuntos(adjuntos: AdjuntoPdf[]): LineaLeida[] {
+  for (const a of adjuntos) {
+    if (a.contenido.subarray(0, 5).toString() !== "%PDF-") continue;
+    const lineas = lineasDelPdf(a.contenido);
+    if (lineas.length > 0) {
+      return lineas.map((l) => ({ cantidad: l.cantidad, descripcion: l.descripcion, precioCentimos: l.precioCentimos, referencia: l.referencia }));
+    }
+  }
+  return [];
 }
 
 /** La primera entrega de INSA que se reconozca entre los PDF adjuntos. */
@@ -482,6 +504,16 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
     /* ── Albarán ─────────────────────────────────────────────────────────── */
     if (leido.tipo === "ALBARAN" && leido.albaran) {
       const a = leido.albaran;
+      // Si el correo no dice QUÉ trae, se mira el PDF antes de rendirse: con
+      // sus líneas se puede deducir el pedido que falta, y son las mismas que
+      // se contarán en el muelle.
+      if (a.lineas.filter((l) => l.descripcion && l.cantidad && l.cantidad > 0).length === 0) {
+        const delPdf = lineasDeLosAdjuntos(adjuntos);
+        if (delPdf.length > 0) {
+          a.lineas = delPdf;
+          leido.avisos = [...leido.avisos, "Las líneas se han leído del PDF del albarán: el correo no las detallaba."];
+        }
+      }
       const pedidoNormalizado = normalizarNumero(a.numeroPedido);
       const albaranNormalizado = normalizarNumero(a.numeroAlbaran);
       const datos = { ...leido, pedidoNormalizado, albaranNormalizado };
@@ -601,6 +633,10 @@ export async function reprocesar(ctx: { empresaId: string }, correoId: string, a
       });
       const albaran = ficha.albaranes.find((x) => x.numeroNormalizado === albaranNormalizado)!;
       const avisoPdf = await adjuntarOriginalSiFalta(ctxSistema, albaran.id, adjuntos, a.enlacesPdf);
+      // Sin el papel, el albarán entra pero se queda a medias: no se sabe para
+      // quién viene ni se puede sellar al recibir. Se avisa a recepción para
+      // que lo suba a mano, en vez de esperar a que alguien mire la bandeja.
+      if (avisoPdf) await servicio.avisarDeAlbaranSinPdf(ctxSistema, albaran.id);
       const nota = deducido ? `El pedido ${pedido.numeroProveedor} no existía: se ha deducido de este albarán y las cantidades pedidas son provisionales.` : null;
       return terminar(
         {

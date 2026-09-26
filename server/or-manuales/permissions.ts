@@ -34,6 +34,11 @@ export const PERMISOS = [
   "or-manuales.bloc.entregar",
   /** Cerrar un bloc completo. */
   "or-manuales.bloc.cerrar",
+  /**
+   * Borrar un bloc entero: el alta equivocada, el taco de prueba. Va aparte de
+   * `bloc.create` porque es la única operación que quita papel del archivo.
+   */
+  "or-manuales.bloc.eliminar",
   /** Subir escaneos y lanzar el procesamiento. */
   "or-manuales.documento.subir",
   /** Asignar a mano una OR, confirmar una revisión, sustituir o eliminar. */
@@ -56,6 +61,7 @@ const POR_ROL: Record<RolOrManuales, readonly Permiso[]> = {
     "or-manuales.bloc.create",
     "or-manuales.bloc.entregar",
     "or-manuales.bloc.cerrar",
+    "or-manuales.bloc.eliminar",
     "or-manuales.documento.subir",
     "or-manuales.documento.gestionar",
     "or-manuales.aviso.gestionar",

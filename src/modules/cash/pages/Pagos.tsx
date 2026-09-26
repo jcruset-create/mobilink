@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import { useCash } from "../contexts/CashContext";
 import DenominationGrid, {
@@ -42,7 +43,26 @@ import {
 import * as api from "../services/api";
 
 export default function Pagos() {
-  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasParaPagos } = useCash();
+  const { jornada, denominaciones, disponible, refrescar, erp, puede, formasParaPagos,
+    formasParaCobros, seccionesActivas } = useCash();
+
+  /*
+   * ── Modo abono ───────────────────────────────────────────────────────────
+   *
+   * Un abono es un cobro devuelto al cliente. Sale dinero, y por eso vive en
+   * ESTA pantalla, que ya sabe sacar piezas del cajón y aceptar la vuelta; pero
+   * en todo lo demás es un cobro al revés: lleva sección, se devuelve por una
+   * forma de COBRO, la parte es el cliente y no hay gasto que clasificar.
+   *
+   * Se entra desde Cobros cuando el escáner ve un abono, con la lectura ya
+   * hecha en `state.prefill`, o directamente con `?modo=abono`.
+   */
+  const location = useLocation();
+  const [params] = useSearchParams();
+  const estadoRuta = (location.state ?? {}) as { abono?: boolean; prefill?: PropuestaEscaneo };
+  const modoAbono = params.get("modo") === "abono" || Boolean(estadoRuta.abono);
+  const formas = modoAbono ? formasParaCobros : formasParaPagos;
+  const [seccionId, setSeccionId] = useState<number | null>(null);
 
   const [documento, setDocumento] = useState<DocumentoExterno | null>(null);
   const [importeTexto, setImporteTexto] = useState("");
@@ -86,17 +106,23 @@ export default function Pagos() {
   const importe = aCentimos(importeTexto) ?? 0;
 
   const formaEfectivo = useMemo(
-    () => formasParaPagos.find((f) => f.afectaEfectivo) ?? null,
-    [formasParaPagos]
+    () => formas.find((f) => f.afectaEfectivo) ?? null,
+    [formas]
   );
 
   // Los pagos a proveedor de este mostrador son en efectivo, así que se
   // preselecciona. Las demás formas siguen disponibles: un pago por
   // transferencia se registra igual, solo que sin tocar el cajón.
   useEffect(() => {
-    if (forma || formasParaPagos.length === 0) return;
-    setForma(formaEfectivo?.codigo ?? formasParaPagos[0].codigo);
-  }, [forma, formaEfectivo, formasParaPagos]);
+    if (forma || formas.length === 0) return;
+    setForma(formaEfectivo?.codigo ?? formas[0].codigo);
+  }, [forma, formaEfectivo, formas]);
+
+  // La sección por defecto, solo en modo abono y solo hasta que alguien elija.
+  useEffect(() => {
+    if (!modoAbono || seccionId != null || seccionesActivas.length === 0) return;
+    setSeccionId(seccionesActivas.find((sec) => sec.porDefecto)?.id ?? seccionesActivas[0].id);
+  }, [modoAbono, seccionId, seccionesActivas]);
 
   /*
    * El catálogo se pide UNA vez al entrar. Los desplegables tienen que estar
@@ -129,8 +155,8 @@ export default function Pagos() {
   }, [conceptoElegido, destinos]);
 
   const formaElegida = useMemo(
-    () => formasParaPagos.find((f) => f.codigo === forma) ?? null,
-    [formasParaPagos, forma]
+    () => formas.find((f) => f.codigo === forma) ?? null,
+    [formas, forma]
   );
   const esEfectivo = Boolean(formaElegida?.afectaEfectivo);
   const faltaReferencia = Boolean(formaElegida?.pideReferencia) && !referencia.trim();
@@ -170,6 +196,16 @@ export default function Pagos() {
   useEffect(() => {
     if (!tocadoAMano) void proponer();
   }, [proponer, tocadoAMano]);
+
+  /*
+   * Lo que Cobros ya leyó del papel. Una sola vez: es el MISMO análisis, no
+   * hay que volver a llamar al modelo, y el motivo de venir aquí es que no se
+   * pierda por el camino.
+   */
+  useEffect(() => {
+    if (estadoRuta.prefill) aplicarEscaneo(estadoRuta.prefill);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!jornada) {
     return <Aviso tono="aviso">No hay ninguna jornada abierta. Ábrela desde «Jornada actual».</Aviso>;
@@ -217,8 +253,11 @@ export default function Pagos() {
     ) {
       setImporteTexto(aTextoEditable(p.importeCentimos.valor));
     }
-    if (p.proveedor.estado !== "VACIO" && p.proveedor.valor && !tocados.has("proveedor")) {
-      setProveedor(p.proveedor.valor);
+    // En un abono la parte es el CLIENTE —a quien se le devuelve—, no quien
+    // emite el papel, que somos nosotros.
+    const parte = modoAbono ? p.cliente : p.proveedor;
+    if (parte.estado !== "VACIO" && parte.valor && !tocados.has("proveedor")) {
+      setProveedor(parte.valor);
     }
     if (p.concepto.estado !== "VACIO" && p.concepto.valor && !tocados.has("concepto")) {
       setConcepto(p.concepto.valor);
@@ -265,7 +304,7 @@ export default function Pagos() {
     setGuardando(true);
     setError("");
     try {
-      const r = await api.registrarPago({
+      const comun = {
         sessionId: jornada!.sesion.id,
         importeCentimos: importe,
         formasPago: [{ forma, importe, referencia: referencia.trim() || null }],
@@ -277,9 +316,14 @@ export default function Pagos() {
         documentoId: documento?.id ?? null,
         externalSystem: documento?.external_system ?? null,
         externalDocumentId: documento?.external_id ?? null,
-        expenseConceptId: conceptoId === "" ? null : conceptoId,
-        expenseTargetId: destinoId === "" ? null : destinoId,
-      });
+      };
+      const r = modoAbono
+        ? await api.registrarAbono({ ...comun, sectionId: seccionId })
+        : await api.registrarPago({
+            ...comun,
+            expenseConceptId: conceptoId === "" ? null : conceptoId,
+            expenseTargetId: destinoId === "" ? null : destinoId,
+          });
       setUltimo({ operacionId: r.operacionId, numero: r.numero });
 
       // Después y aparte: si el almacenamiento falla, el pago ya está hecho y
@@ -322,7 +366,14 @@ export default function Pagos() {
 
   return (
     <div className="space-y-3">
-      <Cabecera titulo="Pagos" descripcion="Facturas de proveedor de la ERP y pagos manuales." />
+      {modoAbono ? (
+        <Cabecera
+          titulo="Abono a cliente"
+          descripcion="Un cobro devuelto: sale dinero por la forma por la que se cobró, y resta de los cobros de su sección."
+        />
+      ) : (
+        <Cabecera titulo="Pagos" descripcion="Facturas de proveedor de la ERP y pagos manuales." />
+      )}
 
       {ultimo && (
         <>
@@ -381,10 +432,35 @@ export default function Pagos() {
                   className={`${inputCls} text-lg font-bold tabular-nums`}
                 />
               </label>
+              {modoAbono && seccionesActivas.length > 1 && (
+                <div className="sm:col-span-2">
+                  <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Sección</span>
+                  <div className="flex flex-wrap gap-2">
+                    {seccionesActivas.map((sec) => (
+                      <button
+                        key={sec.id}
+                        type="button"
+                        onClick={() => setSeccionId(sec.id)}
+                        disabled={guardando}
+                        aria-pressed={seccionId === sec.id}
+                        className={`rounded-lg border px-3 py-1.5 text-sm font-bold ${
+                          seccionId === sec.id
+                            ? "border-sky-400 bg-sky-600 text-white"
+                            : "border-slate-600 bg-slate-800 text-slate-300"
+                        }`}
+                      >
+                        {sec.nombre}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="sm:col-span-2">
-                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Forma de pago</span>
+                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                  {modoAbono ? "Se devuelve por" : "Forma de pago"}
+                </span>
                 <PaymentMethodPicker
-                  formas={formasParaPagos}
+                  formas={formas}
                   valor={forma}
                   onChange={(v) => {
                     setForma(v);
@@ -397,8 +473,15 @@ export default function Pagos() {
                 />
               </div>
               <label className="block">
-                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Proveedor</span>
-                <input value={proveedor} onChange={(e) => setProveedor(e.target.value)} className={inputCls} placeholder="Proveedor XYZ" />
+                <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                  {modoAbono ? "Cliente" : "Proveedor"}
+                </span>
+                <input
+                  value={proveedor}
+                  onChange={(e) => setProveedor(e.target.value)}
+                  className={inputCls}
+                  placeholder={modoAbono ? "Nombre del cliente" : "Proveedor XYZ"}
+                />
               </label>
               <label className="block">
                 <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Referencia</span>
@@ -426,7 +509,7 @@ export default function Pagos() {
                 mostrador el día que falte una entrada, y lo que se rellenaría
                 entonces sería lo primero que hubiera a mano.
               */}
-              {conceptos.length > 0 && (
+              {!modoAbono && conceptos.length > 0 && (
                 <label className="block">
                   <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
                     Concepto de gasto{" "}
@@ -608,8 +691,8 @@ export default function Pagos() {
             </>
           ) : (
             <Aviso tono="info">
-              Un pago por {formaElegida?.nombre ?? forma} se registra económicamente pero no mueve
-              el efectivo de la caja.
+              {modoAbono ? "Un abono" : "Un pago"} por {formaElegida?.nombre ?? forma} se registra
+              económicamente pero no mueve el efectivo de la caja.
             </Aviso>
           )}
 
@@ -621,10 +704,17 @@ export default function Pagos() {
           )}
 
           <BotonAccion tono="pago" onClick={() => void confirmar()} disabled={!puedeConfirmar}>
-            {guardando ? "Registrando…" : `Confirmar pago de ${euros(importe)}`}
+            {guardando
+              ? "Registrando…"
+              : modoAbono
+                ? `Confirmar abono de ${euros(importe)}`
+                : `Confirmar pago de ${euros(importe)}`}
           </BotonAccion>
 
-          {!puede("cash.payment.create_manual") && !documento && (
+          {modoAbono && !puede("cash.collection.create_manual") && !documento && (
+            <Aviso tono="aviso">No tienes permiso para registrar abonos a mano.</Aviso>
+          )}
+          {!modoAbono && !puede("cash.payment.create_manual") && !documento && (
             <Aviso tono="aviso">No tienes permiso para crear pagos manuales, solo para pagar documentos de la ERP.</Aviso>
           )}
         </div>

@@ -630,6 +630,13 @@ export async function initRecepciones(): Promise<void> {
     CREATE INDEX IF NOT EXISTS rcp_avisos_fecha_idx ON rcp_avisos(empresa_id, created_at DESC);
   `);
 
+  // El aviso no siempre es «ha llegado tu material»: también se avisa a
+  // recepción de que un albarán ha entrado SIN su PDF, para que lo suban a
+  // mano. Ése no tiene recepción detrás, de ahí que la columna deje de ser
+  // obligatoria.
+  await pool.query(`ALTER TABLE rcp_avisos ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'MATERIAL_RECIBIDO';`);
+  await pool.query(`ALTER TABLE rcp_avisos ALTER COLUMN recepcion_id DROP NOT NULL;`);
+
   await registrarModuloRecepciones();
 }
 

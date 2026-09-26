@@ -45,7 +45,13 @@ export type LineaErp = {
   formaErp: string;
   /** Positivo siempre. El sentido lo da `tipo`. */
   importeCentimos: Centimos;
-  tipo: "COBRO" | "PAGO";
+  /**
+   * ABONO es un cobro devuelto. En el arqueo de Genes sale en la columna de
+   * cobros con signo negativo; aquí llega con el importe en positivo y su tipo
+   * propio, y solo empareja con abonos: un abono de 59,90 y un cobro de 59,90
+   * no son la misma operación por mucho que coincidan en cifra.
+   */
+  tipo: "COBRO" | "PAGO" | "ABONO";
   /** Lo que ponga el concepto, para poder enseñarlo al humano. */
   concepto?: string | null;
 };
@@ -58,7 +64,7 @@ export type LineaMobilink = {
   /** Código del catálogo de formas de cobro. */
   formaCodigo: string;
   importeCentimos: Centimos;
-  tipo: "COBRO" | "PAGO";
+  tipo: "COBRO" | "PAGO" | "ABONO";
   concepto?: string | null;
 };
 
@@ -441,9 +447,14 @@ export function cotejar(
   const suma = (ls: readonly { importeCentimos: Centimos; tipo: string }[], t: string) =>
     ls.filter((l) => l.tipo === t).reduce((a, l) => a + l.importeCentimos, 0);
 
-  const erpCobros = suma(erp, "COBRO");
+  /*
+   * Los abonos RESTAN de los cobros, en los dos lados. Es como lo imprime
+   * Genes —«Sum = 887,40» ya lleva el −59,90 dentro— y es lo que hace que el
+   * total del ERP y el de Mobilink signifiquen lo mismo.
+   */
+  const erpCobros = suma(erp, "COBRO") - suma(erp, "ABONO");
   const erpPagos = suma(erp, "PAGO");
-  const mobilinkCobros = suma(mobilink, "COBRO");
+  const mobilinkCobros = suma(mobilink, "COBRO") - suma(mobilink, "ABONO");
   const mobilinkPagos = suma(mobilink, "PAGO");
 
   const totales = {

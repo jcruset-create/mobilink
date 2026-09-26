@@ -184,6 +184,12 @@ paralelo que mantener.
 | `responsable` | además abrir/cerrar/reabrir, ajustar, anular, reintentar ERP, dar de alta cajas, pedir cambio al banco y entregar dinero |
 | `admin` | además configurar la integración y el catálogo de denominaciones |
 
+Las liquidaciones de gastos de trabajadores (§7 quaterdecies) tienen sus cuatro
+permisos: `cash.expense_claim.view` (consulta en adelante),
+`.create` (cajero: prepararlas y presentarlas), `.approve` y `.pay`
+(responsable). Pagar es de responsable porque es un pago manual, y el cajero
+tampoco tiene `cash.payment.create_manual`.
+
 `cash.configure` (cajas) y `cash.denominations.configure` (catálogo) van
 separados **porque su alcance es distinto**: las cajas son de la empresa, pero
 `cash_denominations` no tiene columna de empresa — es el catálogo de toda la
@@ -790,6 +796,217 @@ mueve la suma por fuerza.
 De cada cotejo se guardan **solo cifras** (`cash_erp_reconciliations`): cuántas
 líneas, cuántas cuadraron, por cuánto. Ni la captura, ni las líneas, ni un
 nombre de cliente.
+
+## 7 terdecies. Abonos: un cobro devuelto
+
+Llegó como una factura rectificativa escaneada —`P0020000021`, −59,90 €— y la
+pantalla intentaba **cobrarla** con el importe en negativo. El motor la
+rechazaba, y con razón.
+
+**No hay importes negativos en la caja, y no es una limitación: es el diseño.**
+El dinero es siempre un importe positivo más una dirección. Un −59,90 rompería
+las sumas por forma de cobro, el inventario de piezas (no existen −2 billetes
+de 20) y el arqueo. Un cobro negativo no es un cobro: es dinero que sale.
+
+Por eso el abono es un **tipo de operación propio**, `REFUND`:
+
+- **Sale dinero como un pago**, con sus piezas si es en efectivo (motivo
+  `CUSTOMER_REFUND`, distinto de `SUPPLIER_PAYMENT` para que el libro mayor no
+  confunda devolver a un cliente con pagar a un proveedor).
+- **Pero es un cobro en todo lo demás**: lleva sección, se devuelve por una
+  forma de **cobro** (BBVA vale para devolver una venta hecha por BBVA aunque no
+  valga para pagar proveedores), no admite concepto de gasto, y en los totales
+  **resta de los cobros** de su sección en vez de sumar a los pagos.
+- Numera con `AB` (`TAR1-AB-26-001`): la `A` a secas ya era el ajuste.
+- El control de duplicados busca **abonos**, no cobros: que la factura esté
+  cobrada no impide abonarla; lo que no se puede es devolver dos veces el
+  mismo abono.
+
+**Se registra desde Pagos en modo abono** (`/cash/pagos?modo=abono`), que es la
+pantalla que ya sabe sacar dinero del cajón y aceptar la vuelta. El escáner lo
+detecta en Cobros —total en negativo, o el papel diciendo ser un abono— y en
+vez de dejar cobrar enseña el camino, llevándose la lectura ya hecha.
+
+**El cotejo con Genes** lo entiende porque Genes lo imprime así: en la columna
+de cobros, **con signo negativo**, y el «Sum» ya restado. Un cobro en negativo
+en la lectura se convierte en tipo `ABONO` con el importe en positivo; los
+totales de cobros van netos a los dos lados; y un abono **solo empareja con
+abonos** — 59,90 devueltos y 59,90 cobrados no son la misma operación por mucho
+que coincidan en cifra.
+
+Lo que queda fuera: sincronizar abonos con la ERP por el outbox. Hoy solo
+COLLECTION y PAYMENT generan evento; el abono se registra en modo autónomo.
+
+## 7 quaterdecies. Liquidaciones de gastos de trabajadores
+
+Un trabajador trae sus tickets —dietas, peajes, parking— y se le devuelve lo
+que adelantó. Es el simétrico de las entregas de dinero (§7 ter): allí se da
+dinero y vuelven tickets; aquí vienen tickets y sale dinero. Diseño completo,
+con cada decisión razonada, en `docs/PROMPT_gastos_trabajadores.md`.
+
+**La liquidación vive en Cash pero NO es un movimiento de caja.** Se prepara,
+se revisa y se aprueba sin tocar el cajón, a veces durante días. Solo al pagar
+una aprobada aparecerá un `PAYMENT`, por `registrarOperacion` como todo lo
+demás. Tablas: `cash_expense_claims` (cabecera), `cash_expense_claim_lines`
+(un ticket por línea), `cash_expense_claim_duplicates` (evidencias) y
+`cash_expense_rules` (reglas de concepto, para la lectura automática).
+
+```
+BORRADOR ─► PRESENTADA ─► APROBADA ─► PAGADA
+                │
+                └─► RECHAZADA ─► (reabrir) BORRADOR
+ANULADA desde cualquiera menos PAGADA (para esa, se anula el pago en la caja)
+```
+
+Decisiones que conviene no reabrir:
+
+- **Quién cobra es `sea_employees.id`, sin clave foránea.** Esa tabla la crean
+  las migraciones de Supabase y no existe en una base recién creada, como ya
+  pasó con `techs.employee_id`. Y no tiene `empresa_id`, así que el
+  aislamiento lo da el destino PERSONA de `cash_expense_targets`, que pasa a
+  ser la **proyección única** del empleado en Cash (`employee_id`, índice
+  único por empresa). Una persona suelta con el mismo nombre no se enlaza sola:
+  se pregunta (`DESTINO_SIN_VINCULAR`).
+- **Numeración por empresa: `LG-26-001`**, con `siguienteNumeroDeEmpresa`. Una
+  liquidación no tiene caja hasta que se paga, y el taller no tiene código.
+- **Dos estados por ticket**: `analisis` (lo mueve la máquina) y `situacion`
+  (INCLUIDA/EXCLUIDA, lo mueve una persona). **La IA nunca es requisito**:
+  presentar exige fecha, importe, concepto, euros y que alguien lo haya
+  **revisado**; no mira si se leyó solo. Hoy todo se pone a mano (`OMITIDO`).
+- **Categoría y persona son dos cosas.** Vale cualquier concepto activo. El
+  reembolso es siempre al trabajador; la imputación la dice el concepto
+  (PERSONA → el trabajador, CENTRO_COSTE → el de la línea, NINGUNO → nadie).
+- **Cada coincidencia de duplicado es una fila**, con su resolución: ACEPTADA
+  (con motivo, solo un responsable), EXCLUIDA o, en el futuro, DESCARTADA. El
+  mismo fichero se busca en otras liquidaciones no anuladas y en los
+  justificantes de la caja —incluido lo ya liquidado por Entregas—. Detectar no
+  impide subir; impide presentar sin decidir.
+- **Presentar congela** las líneas y fija total y periodo en el servidor.
+- **Aprobar lo hace otra persona** si la separación de funciones está
+  encendida (`exigirOtraPersona`, caso nuevo «aprobar esta liquidación»). Es la
+  primera bandeja de aprobación del módulo: `sod.ts` explica por qué no había
+  ninguna, y esta es una acción que sí puede esperar.
+- **El PDF sale en cualquier estado**, con el estado en grande y los tickets
+  incluidos detrás (`montar` de `report.ts`, ahora exportado). Antes de pagar es
+  el papel que se firma.
+
+### El pago
+
+**Solo al pagar una aprobada sale dinero**, y por `registrarOperacion`:
+`pagarLiquidacion` (`expenseclaims/pago.ts`) no repite ninguna regla de la
+caja —piezas, forma de pago, jornada, taller— porque las comprueba el motor.
+
+- **Un `PAYMENT` por el total**, con la liquidación como `referencia` y sin
+  concepto: una operación solo admite uno. El cajón ve una salida de 82,28 €
+  con una composición de piezas; el desglose sigue en las líneas.
+- **Se paga lo aprobado.** El importe lo manda la pantalla y se compara con el
+  aprobado y con la suma de las líneas incluidas; si no coincide, no sale
+  dinero (`IMPORTE_NO_COINCIDE`). Los conceptos se revalidan con el catálogo de
+  ahora: uno desactivado tras aprobar para el pago.
+- **Dos llaves contra el pago doble**: la fila bloqueada, y una clave de
+  idempotencia obligatoria que el navegador genera al abrir la ventana y repite
+  al reintentar. Misma clave → el mismo pago, sin sacar nada; otra clave sobre
+  una pagada → `LIQUIDACION_YA_PAGADA`.
+- **Los tickets pasan a ser justificantes del pago sin copiar el fichero**
+  (misma ruta, como AutoScan), así que salen en el informe de cierre del día.
+  Los excluidos no.
+- **Anular el pago** en el Histórico devuelve la liquidación a APROBADA en la
+  MISMA transacción (gancho en `anularOperacion`): los justificantes del pago se
+  anulan, y las coincidencias de duplicado que apuntaban a ellos pasan a
+  DESCARTADA. Se puede volver a pagar con una clave nueva.
+- **La estadística de gasto cuenta los tickets, no la operación**: el pago de
+  una liquidación aporta una fila por ticket incluido con su concepto y su
+  destino derivado. El total no cambia y las operaciones se cuentan distintas.
+
+De paso se arregló un fallo anterior: **un pago anulado seguía sumando como
+gasto «sin clasificar»**. La anulación crea una operación inversa del mismo
+tipo, confirmada y en positivo, y la estadística la contaba. Ahora las
+inversas (`reversa_de_id`) no entran.
+
+### La lectura automática
+
+Con clave de IA en el servidor, cada ticket nace PENDIENTE y un worker
+(`expenseclaims/analisis.ts`, misma forma que el de AutoScan: lote de 3 cada
+15 s, `FOR UPDATE SKIP LOCKED`) lo lee con **el mismo escáner** de Cobros y
+Pagos (`escanearFactura`, sentido PAGO). Sin clave, nace OMITIDO y no se
+intenta.
+
+- **Solo rellena huecos.** Lo escrito por una persona no se pisa; una línea ya
+  REVISADA no se toca; en una liquidación que ya no está en borrador, tampoco.
+  Lo leído se guarda aparte (`leido`) y no cambia; lo que corrige la persona
+  queda en `campos_corregidos`, que es la medida del acierto.
+- **Leer no es revisar**: una línea leída sigue necesitando que alguien la dé
+  por buena antes de presentar.
+- **El concepto lo deciden las reglas de la empresa** (`cash_expense_rules`,
+  Configuración → «Reglas de concepto»). El modelo solo dice qué clase de
+  negocio emite el ticket (`tipo_establecimiento`: RESTAURANTE, PEAJE,
+  GASOLINERA, PARKING…). Sin regla que lo reconozca no se propone nada: no hay
+  concepto por defecto. Una regla rellena sola si es segura (≥ 0,8, contando la
+  seguridad con la que se leyó el emisor) y las cifras del ticket cuadran; si
+  no, solo propone y la pantalla ofrece «Usar».
+- **Un abono no rellena el importe**, y **un ticket en otra moneda se marca**
+  y no se presenta hasta pasarlo a euros.
+- **Si falla**, la línea queda FALLIDA con el fichero; se rellena a mano y se
+  paga igual. «Volver a leer» la pone otra vez en cola. Una lectura colgada
+  (proceso muerto) vuelve a la cola a los 10 minutos, y tras 3 intentos queda
+  FALLIDA.
+
+### Duplicados
+
+Tres detecciones, todas como evidencias con su resolución:
+
+- **Mismo fichero** (sha256), al subir.
+- **Mismo ticket con otro fichero**: mismo emisor —el NIF sin puntuación si lo
+  hay, si no el nombre sin tildes—, mismo día y mismo importe. Al leerlo, al
+  corregirlo, al presentar y al pagar.
+- **Mismo número ya pagado** en la caja (Pagos, o una entrega liquidada),
+  con la misma consulta que usa Pagos. Mismos momentos.
+
+Solo se marca el ticket **posterior**: el original no se bloquea por culpa de
+la copia. Lo que deja de aplicar —la otra línea se excluyó, su liquidación se
+anuló, el pago se anuló, o al corregir el ticket ya no coincide— pasa solo a
+DESCARTADA. Al presentar y al pagar se vuelve a mirar **en una transacción
+aparte**, para que lo encontrado quede guardado aunque presentar o pagar se
+niegue por ello. Una liquidación aprobada con un duplicado aparecido después
+se rechaza (APROBADA → RECHAZADA, con motivo), se reabre y se decide.
+
+De paso, otro fallo anterior: **una factura cobrada y anulada no se podía
+volver a cobrar sin autorización**. `cobroPrevioDeFactura` encontraba la
+operación inversa de la anulación —mismo tipo, CONFIRMED, misma referencia— y
+la daba por el cobro previo. Igual con los pagos. Ahora las inversas no
+cuentan (`anulaciones.integration.test.ts`).
+
+### Personas y fichas de empleado
+
+En **Configuración → Personas y fichas de empleado** se ata cada persona de
+Cash (destino PERSONA) a su ficha de `sea_employees`, o se desata. El
+emparejado por nombre es `proponerVinculos` de `core/vinculoTecnicos.ts`, el
+mismo de los técnicos del taller: **se propone con su grado de certeza y lo
+aplica una persona**, porque atribuir los gastos de un José a otro es peor que
+preguntar. «García, José» se prueba también como «José García».
+
+- Un empleado solo puede estar atado a una persona de Cash (índice único;
+  el choque se traduce a `EMPLEADO_YA_VINCULADO`).
+- Al atar, las liquidaciones de esa persona que aún no tenían empleado lo
+  reciben. Al desatar o re-atar **no se reescribe ninguna**: lo tramitado con
+  una identidad se queda con ella.
+- Al crear una liquidación se elige el trabajador de la lista de empleados
+  (con las personas de Cash sin ficha aparte). Si el empleado no tiene persona
+  de Cash, se crea; si hay una suelta con el mismo nombre, se pregunta antes de
+  atarla (`DESTINO_SIN_VINCULAR`).
+- Sin `sea_employees` (una base sin las migraciones de Supabase) la pantalla lo
+  dice y todo sigue funcionando con personas de Cash. `sea_employees` no tiene
+  empresa: se enseñan los empleados que no estén ligados a un usuario de otra
+  empresa (`app_usuarios.employee_id`).
+
+Endpoints: `GET /employees` (ver liquidaciones), `GET
+/expense-targets/employee-links` y `PUT /expense-targets/:id/employee`
+(configurar).
+
+Por fases (plan completo en el prompt): PR1 preparar, revisar, aprobar y PDF;
+PR2 el pago; PR3 la lectura automática; PR4 los otros dos duplicados (mismo
+ticket con otro escaneo, mismo número ya pagado); PR5 el vínculo de empleados
+en Configuración. Las cinco están entregadas.
 
 ## 8. Estado de la entrega
 

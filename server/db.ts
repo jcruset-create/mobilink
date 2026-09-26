@@ -425,6 +425,56 @@ export async function initDb() {
     ALTER TABLE roadside_assistances
     ADD COLUMN IF NOT EXISTS "solicitanteAutorizacion" TEXT;
 
+    -- El ENLACE con la ficha del cliente, no una copia de su nombre.
+    --
+    -- Los tres campos de arriba son texto libre y por eso se duplicaban: la
+    -- misma empresa escrita de cinco maneras no es la misma empresa para
+    -- nadie —ni para el ERP, ni para un listado por cliente—. Al elegir del
+    -- maestro se guarda su id, y el texto se conserva al lado a propósito:
+    -- es lo que se escribió ESE día, y si mañana el cliente cambia de nombre
+    -- o de teléfono la asistencia antigua tiene que seguir contando lo que
+    -- pasó. Mismo criterio que "subcontrataSnapshot".
+    --
+    -- Nullable y sin tocar nada existente: una asistencia escrita a mano
+    -- sigue siendo válida, solo que sin enlace.
+    -- Sin REFERENCES, igual que "clienteFacturacionId" y "proveedorTallerId",
+    -- y no por descuido: las tablas «connect_*» las crea otro módulo que corre
+    -- DESPUÉS de éste. Con la clave ajena, una base de datos nueva reventaba
+    -- aquí con «relation "connect_clients" does not exist» y no llegaba ni a
+    -- arrancar. Lo encontró la suite completa sobre una base recreada.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteClienteId" INTEGER;
+
+    -- Qué persona de esa ficha llamó. Los contactos viven en
+    -- connect_workshop_contacts con ownerType='client', que es la tabla de
+    -- contactos generalizada; no hay una tabla propia de contactos de cliente
+    -- y no hacía falta crearla.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "solicitanteContactoId" INTEGER;
+
+    -- Se consulta por cliente para ordenar los frecuentes por uso.
+    CREATE INDEX IF NOT EXISTS idx_roadside_solicitante_cliente
+      ON roadside_assistances ("solicitanteClienteId")
+      WHERE "solicitanteClienteId" IS NOT NULL;
+
+    -- La cola de un operario: detrás de QUÉ asistencia espera ésta su turno.
+    --
+    -- Lo que se guarda es el enlace, no un «en espera» de sí o no. Estar en
+    -- espera se DEDUCE —src/modules/colaEspera.ts—: esta asistencia espera si
+    -- aquella por la que espera sigue abierta. Así, en cuanto la de delante se
+    -- cierra la siguiente se suelta sola, sin depender de que nada la apague.
+    --
+    -- Sin REFERENCES a la propia tabla a propósito: si alguien borra la
+    -- asistencia de delante, preferimos una cola suelta a un borrado que falla
+    -- o que arrastra la de detrás.
+    ALTER TABLE roadside_assistances
+    ADD COLUMN IF NOT EXISTS "esperaTrasId" INTEGER;
+
+    -- Se consulta al cerrar una asistencia, para soltar a las que la esperaban.
+    CREATE INDEX IF NOT EXISTS idx_roadside_espera_tras
+      ON roadside_assistances ("esperaTrasId")
+      WHERE "esperaTrasId" IS NOT NULL;
+
     -- Subcontratación: a quién se le encarga el servicio y a quién se factura.
     -- OJO con los nombres: "workshopId" ya existe en esta tabla y es el taller
     -- PROPIO (el del inquilino, TEXT). El taller subcontratado es otra cosa y

@@ -14,6 +14,7 @@ import { startCashErpWorker, stopCashErpWorker } from "./erp/worker.ts";
 import { startCashEventWorker } from "./events/worker.ts";
 import { arrancarWorkerAutoScan, pararWorkerAutoScan } from "./autoscan/worker.ts";
 import { registrarComprobadorDeLicencia } from "./autoscan/devices.ts";
+import { arrancarWorkerGastos, pararWorkerGastos } from "./expenseclaims/analisis.ts";
 import { licenciaActiva } from "../core/auth.ts";
 
 export {
@@ -23,6 +24,7 @@ export {
   startCashEventWorker,
   arrancarWorkerAutoScan,
   pararWorkerAutoScan,
+  pararWorkerGastos,
 };
 
 export function mountCash(app: Express): void {
@@ -52,5 +54,10 @@ export function mountCash(app: Express): void {
    * arranque del servidor porque sin la API montada no hay quien deje nada.
    */
   arrancarWorkerAutoScan();
+  /*
+   * El que lee los tickets de las liquidaciones de gastos. Mismo criterio:
+   * sin API no hay quien suba tickets. Sin clave de IA no arranca.
+   */
+  arrancarWorkerGastos();
   console.log("Mobilink Cash: API montada en /api/cash");
 }

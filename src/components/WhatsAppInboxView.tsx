@@ -31,6 +31,8 @@ type ExtractedData = {
   estadoVehiculo?: string | null;
   empresaSolicitante?: string | null;
   numeroExpedienteExterno?: string | null;
+  /** Nº de cita o autorización leído del mensaje: va al campo «Autorización o cita». */
+  citaOAutorizacion?: string | null;
   conductor?: string | null;
   telefonoConductor?: string | null;
   observaciones?: string | null;
@@ -98,6 +100,7 @@ const FIELD_LABELS: Record<keyof ExtractedData, string> = {
   estadoVehiculo: "Estado vehículo",
   empresaSolicitante: "Empresa solicitante",
   numeroExpedienteExterno: "Expediente externo",
+  citaOAutorizacion: "Cita / autorización",
   conductor: "Conductor",
   telefonoConductor: "Tel. conductor",
   observaciones: "Observaciones",
@@ -108,7 +111,8 @@ const FIELD_LABELS: Record<keyof ExtractedData, string> = {
 const DISPLAY_FIELDS: (keyof ExtractedData)[] = [
   "cliente", "telefonoWhatsapp", "matricula", "vehiculo", "direccion",
   "tipoAsistencia", "tipoVehiculo", "estadoVehiculo", "empresaSolicitante",
-  "numeroExpedienteExterno", "conductor", "telefonoConductor", "observaciones",
+  "numeroExpedienteExterno", "citaOAutorizacion", "conductor", "telefonoConductor",
+  "observaciones",
 ];
 
 /* ── Preview modal ──────────────────────────────────────── */

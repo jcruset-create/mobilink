@@ -235,7 +235,43 @@ async function ejecutarPosteriores(ctx: ContextoCambio): Promise<void> {
       }))
       .catch((e) => console.error("[Satisfaction] tras la finalización:", e?.message));
   }
+
+  /*
+   * 6 · La cola del operario: soltar a las que esperaban detrás de ésta.
+   *
+   * Aquí es limpieza y nada más, y eso es lo que le permite vivir en este
+   * fichero. Quien mira si una asistencia está en espera ya deduce que una que
+   * espera detrás de otra cerrada NO espera —`src/modules/colaEspera.ts`—, así que si este
+   * enganche falla, el operario ve igualmente que le toca la siguiente. Lo
+   * único que se pierde es dejar la columna limpia.
+   *
+   * La alternativa era guardar un «en espera» de sí o no y apagarlo aquí. Con
+   * un enganche que traga sus errores por diseño, un fallo habría dejado a un
+   * operario esperando para siempre sin que nadie se entere.
+   */
+  if (CIERRES_QUE_SUELTAN_COLA.has(estado)) {
+    await import("../cola/cola.ts")
+      .then(async (m) => {
+        const soltadas = await m.soltarCola(assistanceId);
+        if (soltadas.length) {
+          console.log(`[Cola] la ${assistanceId} se cierra; entran: ${soltadas.join(", ")}`);
+        }
+      })
+      .catch((e) => console.error("[Cola] no se pudo soltar la cola:", e?.message));
+  }
 }
+
+/**
+ * Estados en los que la asistencia deja libre al operario.
+ *
+ * Los mismos que `CERRADOS` en `src/modules/colaEspera.ts`. «finalizada» NO está: el
+ * operario sigue con ella hasta que llega al taller, y es exactamente lo que
+ * dice la regla que deduce la espera. Aquí se repiten en vez de importarlos
+ * porque este enganche solo decide CUÁNDO limpiar; quien decide quién está en
+ * espera es la regla, y si un día divergieran lo peor que pasa es que la
+ * columna se quede sin limpiar.
+ */
+const CIERRES_QUE_SUELTAN_COLA = new Set(["llegada_taller", "cancelada", "redirigida"]);
 
 /**
  * La línea del diario, con una clave de deduplicación que aguanta reintentos.

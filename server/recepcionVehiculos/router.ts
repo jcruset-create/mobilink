@@ -27,6 +27,11 @@ import { pedirIA } from "../core/openaiService.ts";
 import { normalizarMatricula, patronBusquedaMatricula } from "../tyrecontrol/matricula.ts";
 import { normalizeRecepcionRow } from "./normaliza.ts";
 import {
+  esClaveDuplicada,
+  INTENTOS_DE_ID,
+  siguienteIdDeTrabajo,
+} from "../core/idDeTrabajo.ts";
+import {
   citasParaRecibir,
   idsDeCitasYaRecibidas,
   kilometrosDeTextoIA,
@@ -668,24 +673,50 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
       const job = (req.body ?? {}) as Record<string, any>;
       /*
-       * El id lo pone el SERVIDOR, no el navegador.
+       * El id lo pone el SERVIDOR, no el navegador, pero NO con `Date.now()`.
        *
-       * El navegador lo calculaba como «el mayor de los trabajos que veo, más
-       * uno». Con la lista vacía —o filtrada por taller, o con todo cerrado—
-       * eso da 1, y el 1 ya existe en la tabla: clave duplicada, 500, y en
-       * pantalla un error que no decía nada.
+       * Las dos cosas que se han probado aquí eran malas por motivos
+       * distintos:
        *
-       * `Date.now()` es lo que usa el alta de trabajos desde la APK desde
-       * siempre. No es bonito, pero es monótono y no depende de lo que el
-       * cliente alcance a ver. El id que manda el navegador solo le sirve a
-       * él para casar la propuesta del motor de asignación.
+       *  · El navegador lo calculaba como «el mayor de los trabajos que veo,
+       *    más uno». Con la lista vacía —o filtrada por taller, o con todo
+       *    cerrado— eso da 1, y el 1 ya existe: clave duplicada.
+       *  · Lo cambié a `Date.now()` y fue peor: `jobs.id` es SERIAL, o sea
+       *    INTEGER de cuatro bytes, y el máximo que admite es 2.147.483.647.
+       *    Un `Date.now()` anda por 1.758.000.000.000, mil veces más. Postgres
+       *    lo rechaza con «integer out of range», la transacción entera se cae
+       *    y en pantalla sale «Error en la recepción de vehículos (convertir)».
+       *    La conversión no ha funcionado NUNCA desde ese cambio.
+       *
+       * Se numera como numera el resto del panel —el máximo de la tabla más
+       * uno— pero preguntándoselo a la BASE, no a lo que el navegador alcance
+       * a ver, que es lo que fallaba al principio. Y vale igual si algún día
+       * la columna pasa a BIGINT.
        */
-      const jobId = Date.now();
-      // El trabajo nace en validacion: es una propuesta, y una propuesta la
-      // autoriza una persona en la pantalla de siempre.
-      if (String(job.status) !== "validacion") {
-        return res.status(400).json({ error: "El trabajo debe nacer en validación" });
+      // La regla vive en `server/core/idDeTrabajo.ts`, con el porqué. Aquí
+      // solo se usa, que es lo que evita que vuelva a divergir entre los dos
+      // sitios que dan de alta trabajos.
+      /*
+       * Dos finales posibles para una recepción, y solo dos.
+       *
+       *  · `validacion` — el camino normal. Es una propuesta, y la autoriza
+       *    una persona en la pantalla de siempre.
+       *  · `cerrado` — lo que ya se ha hecho en el momento. Un cambio de
+       *    bombilla o una lectura de tacógrafo que se resuelve mientras el
+       *    coche está en el patio no tiene sentido que entre en la cola para
+       *    salir de ella acto seguido.
+       *
+       * Cualquier otro estado se rechaza. Que una recepción pueda crear un
+       * trabajo `activo` significaría que se le pone a un técnico en las manos
+       * sin que nadie lo haya decidido.
+       */
+      const estado = String(job.status);
+      if (estado !== "validacion" && estado !== "cerrado") {
+        return res
+          .status(400)
+          .json({ error: "El trabajo debe nacer en validación o cerrado" });
       }
+      const yaHecho = estado === "cerrado";
 
       await cliente.query("BEGIN");
 
@@ -702,38 +733,78 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
       const recepcion = normalizeRecepcionRow(actual.rows[0]);
       const ahora = Date.now();
 
-      await cliente.query(
-        `INSERT INTO jobs (
-           id, area, plate, urgent, status, "assignedNames", reason,
-           "customerName", "customerPhone", "createdAtMs",
-           "workedAccumulatedMinutes", "pausedAccumulatedMinutes",
-           "workshopId", "quickEntryLabel", "quickEntryMode",
-           quantity, "unitMinutes", "ptEntradaMs", "recepcionId"
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11,$12,$13,$14,$15,$16,$17)`,
-        [
-          jobId,
-          texto(job.area) || "mecanica",
-          texto(job.plate).toUpperCase(),
-          job.urgent === true,
-          "validacion",
-          JSON.stringify(Array.isArray(job.assignedNames) ? job.assignedNames : []),
-          texto(job.reason),
-          texto(job.customerName),
-          texto(job.customerPhone) || texto(recepcion.clienteTelefono),
-          Number(job.createdAtMs) || ahora,
-          textoONull(job.workshopId ?? recepcion.workshopId),
-          textoONull(job.quickEntryLabel),
-          texto(job.quickEntryMode) || "team",
-          Number.isFinite(Number(job.quantity)) ? Number(job.quantity) : 1,
-          // `standardMinutes` NO es columna de `jobs`: es de `quick_templates`.
-          // Nombrarla aquí tumbaba la consulta entera y la conversión fallaba
-          // SIEMPRE, con cita o sin ella. El tiempo total del trabajo sale de
-          // quantity x unitMinutes, que es como lo calcula el resto del panel.
-          Number.isFinite(Number(job.unitMinutes)) ? Number(job.unitMinutes) : null,
-          recepcion.creadaAtMs,
-          id,
-        ]
-      );
+      /*
+       * Se reintenta si otro se lleva el número entre el SELECT y el INSERT.
+       *
+       * Dos personas convirtiendo a la vez leen el mismo máximo y la segunda
+       * choca contra la clave primaria. Es raro —convertir lo hace una
+       * persona mirando la pantalla— pero el coste de cubrirlo es un bucle y
+       * el de no cubrirlo es un error que no se entiende.
+       *
+       * Solo se repite ante clave duplicada (SQLSTATE 23505). Cualquier otro
+       * fallo sube tal cual: repetir un error de columna o de tipo no lo
+       * arregla, solo lo esconde tres veces.
+       */
+      let jobId = 0;
+      for (let intento = 1; ; intento++) {
+        jobId = await siguienteIdDeTrabajo(cliente);
+        try {
+          await cliente.query(`SAVEPOINT alta_trabajo`);
+          await cliente.query(
+            `INSERT INTO jobs (
+               id, area, plate, urgent, status, "assignedNames", reason,
+               "customerName", "customerPhone", "createdAtMs",
+               "workedAccumulatedMinutes", "pausedAccumulatedMinutes",
+               "workshopId", "quickEntryLabel", "quickEntryMode",
+               quantity, "unitMinutes", "ptEntradaMs", "recepcionId",
+               "startedAtMs", "closedAtMs"
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,0,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+            [
+              jobId,
+              texto(job.area) || "mecanica",
+              texto(job.plate).toUpperCase(),
+              job.urgent === true,
+              "validacion",
+              JSON.stringify(Array.isArray(job.assignedNames) ? job.assignedNames : []),
+              texto(job.reason),
+              texto(job.customerName),
+              texto(job.customerPhone) || texto(recepcion.clienteTelefono),
+              Number(job.createdAtMs) || ahora,
+              textoONull(job.workshopId ?? recepcion.workshopId),
+              textoONull(job.quickEntryLabel),
+              texto(job.quickEntryMode) || "team",
+              Number.isFinite(Number(job.quantity)) ? Number(job.quantity) : 1,
+              // `standardMinutes` NO es columna de `jobs`: es de
+              // `quick_templates`. Nombrarla aquí tumbaba la consulta entera.
+              // El tiempo total sale de quantity x unitMinutes, que es como lo
+              // calcula el resto del panel.
+              Number.isFinite(Number(job.unitMinutes)) ? Number(job.unitMinutes) : null,
+              recepcion.creadaAtMs,
+              id,
+              /*
+               * Un trabajo ya hecho se cierra aquí mismo.
+               *
+               * `actualMinutes` se queda a NULL A PROPÓSITO, y no es un
+               * descuido: nadie ha cronometrado esto. Rellenarlo con el tiempo
+               * estimado metería un número inventado en la comparación de
+               * previsto contra real, que es justo la que sirve para saber si
+               * los tiempos del taller son realistas. Un hueco se ve; un
+               * número falso se usa.
+               */
+              yaHecho ? ahora : null,
+              yaHecho ? ahora : null,
+            ]
+          );
+          await cliente.query(`RELEASE SAVEPOINT alta_trabajo`);
+          break;
+        } catch (e) {
+          // Sin el savepoint la transacción se queda abortada y ya no admite
+          // ni el reintento: en Postgres, un error dentro de una transacción
+          // la invalida entera hasta el ROLLBACK.
+          await cliente.query(`ROLLBACK TO SAVEPOINT alta_trabajo`);
+          if (!esClaveDuplicada(e) || intento >= INTENTOS_DE_ID) throw e;
+        }
+      }
 
       // Las fotos del patio se enganchan al trabajo por referencia: ya están
       // subidas, volver a subirlas sólo duplicaría ficheros.
@@ -796,7 +867,25 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
           // Si la cita ya tiene trabajo, alguien pulsó «Llegó» mientras el
           // vehículo estaba en el patio. Gana lo que ya se hizo.
           if (datos.jobId == null) {
+            /*
+             * Se escriben los TRES campos, no solo el `jobId`.
+             *
+             * Escribir solo el enlace dejaba la cita en `programado`, y en la
+             * agenda salían DOS tarjetas del mismo vehículo: la cita, que
+             * seguía pareciendo pendiente, y el trabajo recién creado. Estaban
+             * enlazadas por dentro y nadie lo notaba por fuera.
+             *
+             * Es exactamente lo que hace el botón «Llegó»
+             * (`confirmScheduledArrival`, src/modules/useScheduledJobs.ts):
+             * estado, hora de llegada y trabajo. Dos puertas al mismo sitio
+             * tienen que dejar la cita igual, o la agenda cuenta cosas
+             * distintas según por dónde entró el coche.
+             */
             datos.jobId = jobId;
+            datos.arrivedAtMs = recepcion.creadaAtMs;
+            // Si el trabajo nace cerrado, la cita nace realizada: no hay nada
+            // que esperar en ninguna cola.
+            datos.status = yaHecho ? "realizado" : "en_cola";
             await cliente.query(
               `UPDATE scheduled_jobs
                   SET data = $2, "updatedAtMs" = $3

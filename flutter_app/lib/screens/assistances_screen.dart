@@ -548,18 +548,42 @@ class _ActiveAssistancesTab extends StatelessWidget {
       );
     }
 
+    /*
+     * Las que esperan turno, al final.
+     *
+     * El listado viene de la más nueva a la más antigua, y la que espera es
+     * siempre la más nueva: sin esto saldría ARRIBA de la que se está haciendo,
+     * que es justo lo contrario del orden en que hay que hacerlas.
+     */
+    final ordenadas = [
+      ...assistances.where((a) => a['enEspera'] != true),
+      ...assistances.where((a) => a['enEspera'] == true),
+    ];
+
     return RefreshIndicator(
       color: AppColors.primary,
       backgroundColor: AppColors.surface,
       onRefresh: onRefresh,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        itemCount: assistances.length,
+        itemCount: ordenadas.length,
         itemBuilder: (_, i) {
-          final a = assistances[i];
+          final a = ordenadas[i];
           final status = a['status'] as String? ?? '';
-          final color = statusColor(status);
-          final label = statusLabel(status);
+          /*
+           * En espera: la ve, pero no la abre.
+           *
+           * Que la vea sirve —puede ir pensando el material que le hará falta—
+           * y que no la abra también: si pudiera, podría ponerse en camino de
+           * la segunda dejando la primera a medias, y nadie en el panel se
+           * enteraría hasta que el cliente llamara.
+           *
+           * Lo dice el servidor con un sí o un no; la regla de la cola vive
+           * allí y no repartida por cada versión de la APK que haya instalada.
+           */
+          final enEspera = a['enEspera'] == true;
+          final color = enEspera ? AppColors.textHint : statusColor(status);
+          final label = enEspera ? 'SIGUIENTE · al cerrar la actual' : statusLabel(status);
           final plate = (a['plate'] as String? ?? '').toUpperCase();
           final customer = a['customerName'] as String? ?? '';
           final address = a['address'] as String? ?? '';
@@ -567,10 +591,21 @@ class _ActiveAssistancesTab extends StatelessWidget {
           final trabajos = (a['trabajosARealizar'] as String? ?? '').trim();
           final photoUrls = (a['photoUrls'] as List<dynamic>?)?.cast<String>() ?? const <String>[];
 
-          return Card(
+          return Opacity(
+            // En gris, para que se distinga de un vistazo de la que toca.
+            opacity: enEspera ? 0.55 : 1,
+            child: Card(
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
               onTap: () async {
+                if (enEspera) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Esta entra al cerrar la que llevas ahora.'),
+                    ),
+                  );
+                  return;
+                }
                 await Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => AssistanceDetailScreen(api: api, assistance: a)),
                 );
@@ -669,11 +704,14 @@ class _ActiveAssistancesTab extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 12),
-                    Icon(Icons.chevron_right, color: color, size: 28),
+                    // Sin flecha en la que espera: la flecha promete que se
+                    // abre, y no se abre.
+                    if (!enEspera) Icon(Icons.chevron_right, color: color, size: 28),
                   ],
                 ),
                 ),
               ),
+            ),
             ),
           );
         },

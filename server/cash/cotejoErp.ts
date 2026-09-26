@@ -61,7 +61,7 @@ export async function operacionesDeJornada(
       WHERE o.session_id = $1
         AND s.empresa_id = $2
         AND o.estado = 'CONFIRMED'
-        AND o.tipo IN ('COLLECTION','PAYMENT')
+        AND o.tipo IN ('COLLECTION','REFUND','PAYMENT')
       ORDER BY o.id, p.id`,
     [sessionId, empresaId]
   );
@@ -73,7 +73,12 @@ export async function operacionesDeJornada(
     referencia: r.referencia ?? null,
     formaCodigo: r.forma_pago,
     importeCentimos: Number(r.importe_centimos),
-    tipo: r.tipo === "COLLECTION" ? ("COBRO" as const) : ("PAGO" as const),
+    tipo:
+      r.tipo === "COLLECTION"
+        ? ("COBRO" as const)
+        : r.tipo === "REFUND"
+          ? ("ABONO" as const)
+          : ("PAGO" as const),
     concepto: r.concepto || null,
   }));
   /* eslint-enable @typescript-eslint/no-explicit-any */

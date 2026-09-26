@@ -313,17 +313,27 @@ export function observacionesDelAlbaran(todas: readonly FilaPdf[]): string[] {
   // las dos, que es como se acaba sacando un artículo por observación.
   if (formatoDelAlbaran(todas) === "INSA") return observacionesInsa(todas);
 
-  const filas = filasConContinuaciones(filasDeLaTabla(todas));
-  let ultimoArticulo = -1;
-  for (const [i, fila] of filas.entries()) {
-    if (fila.numeros.some((n) => n !== 0)) ultimoArticulo = i;
-    // El NFU manda aunque llevara ceros: es el final de la mercancía.
-    if (normalizar(fila.descripcion.join(" ")).includes("GESTION DE NFU")) ultimoArticulo = i;
-  }
-  if (ultimoArticulo < 0) return [];
-
+  /*
+   * Se miran TODAS las filas de la tabla, no sólo las de después del último
+   * artículo.
+   *
+   * Antes se buscaba detrás de la línea de gestión de NFU, porque ahí es donde
+   * salía en los albaranes que se vieron primero. Pero el albarán 2028472911
+   * la pone justo DEBAJO de su artículo y antes del NFU:
+   *
+   *     0106052880097 245/45X18 CONT.ECOCONTC6  2  109,575  219,15
+   *                   96W
+   *     JUAN+LECHUGA+603472809                  0  0        0,00
+   *     .                                       0  0        0,00
+   *     4102999990070 S.I.Gestión de NFU Cat.N2 2  1,8      3,60
+   *
+   * Con la regla vieja, «JUAN LECHUGA» y su móvil se perdían: nadie sabía para
+   * quién era la mercancía ni a quién avisar. Y la posición no es lo que
+   * distingue una observación —eso lo hace su FORMA: las tres columnas a cero
+   * y algo escrito delante—, así que se mira por la forma y en toda la tabla.
+   */
   const salida: string[] = [];
-  for (const fila of filas.slice(ultimoArticulo + 1)) {
+  for (const fila of filasConContinuaciones(filasDeLaTabla(todas))) {
     const obs = observacionDeFila(fila);
     if (obs && !salida.includes(obs)) salida.push(obs);
   }

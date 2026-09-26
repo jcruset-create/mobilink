@@ -50,6 +50,12 @@ import type {
   InformeGasto,
   EquivalenciaErp,
   ResultadoCotejo,
+  Liquidacion,
+  LineaLiquidacion,
+  DetalleLiquidacion,
+  ReglaGastoConfig,
+  Empleado,
+  PropuestaVinculo,
 } from "../types";
 
 const BASE = "/api/cash";
@@ -634,6 +640,31 @@ export const registrarCobro = (datos: {
   autorizacionDuplicado?: string | null;
 }) => pedir<RespuestaOperacion>("/collections", json(datos));
 
+/**
+ * Un abono: un cobro devuelto al cliente.
+ *
+ * Misma forma que un pago en lo que toca al dinero —sale, con sus piezas si
+ * es en efectivo— y que un cobro en todo lo demás: sección, forma de COBRO y
+ * cliente. El importe va SIEMPRE en positivo; el signo lo pone el tipo.
+ */
+export const registrarAbono = (datos: {
+  sessionId: number;
+  importeCentimos: number;
+  formasPago: { forma: string; importe: number; referencia?: string | null }[];
+  efectivoEntregado?: LineaDenominacion[];
+  /** Vuelta del cliente al redondear: se le devuelven 60 € y pone 0,10 €. */
+  efectivoRecibido?: LineaDenominacion[];
+  partyNombre?: string;
+  concepto?: string;
+  referencia?: string | null;
+  documentoId?: number | null;
+  externalSystem?: string | null;
+  externalDocumentId?: string | null;
+  externalDocumentReference?: string | null;
+  sectionId?: number | null;
+  autorizacionDuplicado?: string | null;
+}) => pedir<RespuestaOperacion>("/refunds", json(datos));
+
 export const registrarPago = (datos: {
   sessionId: number;
   importeCentimos: number;
@@ -1110,3 +1141,126 @@ export const guardarReglaSeccion = (datos: {
 
 export const borrarReglaSeccion = (id: number) =>
   pedir<void>(`/section-rules/${id}`, { method: "DELETE" });
+
+// ── Liquidaciones de gastos de trabajadores ────────────────────────────────
+
+export const liquidaciones = (filtros: { estado?: string; expenseTargetId?: number } = {}) => {
+  const q = new URLSearchParams();
+  if (filtros.estado) q.set("estado", filtros.estado);
+  if (filtros.expenseTargetId) q.set("expenseTargetId", String(filtros.expenseTargetId));
+  const qs = q.toString();
+  return pedir<{ liquidaciones: Liquidacion[] }>(`/expense-claims${qs ? `?${qs}` : ""}`);
+};
+
+export const crearLiquidacion = (datos: { expenseTargetId?: number; employeeId?: string; notas?: string }) =>
+  pedir<{ liquidacion: Liquidacion }>("/expense-claims", json(datos));
+
+export const liquidacion = (id: number) => pedir<DetalleLiquidacion>(`/expense-claims/${id}`);
+
+/**
+ * Sube los tickets de UNO en uno, como el taco de Informes: si el tercero
+ * falla, los dos primeros ya están y no hay que volver a escanearlos.
+ */
+export const subirTicket = (id: number, fichero: File) => {
+  const cuerpo = new FormData();
+  cuerpo.append("documentos", fichero);
+  return pedir<{ lineas: LineaLiquidacion[] }>(`/expense-claims/${id}/lines`, { method: "POST", body: cuerpo });
+};
+
+export type CambiosLineaLiquidacion = Partial<{
+  fecha: string | null;
+  emisorNombre: string;
+  emisorNif: string | null;
+  numeroDocumento: string | null;
+  concepto: string;
+  baseCentimos: number | null;
+  ivaCentimos: number | null;
+  importeCentimos: number;
+  moneda: string;
+  expenseConceptId: number | null;
+  expenseTargetId: number | null;
+  revisada: boolean;
+}>;
+
+export const editarLineaLiquidacion = (id: number, lineId: number, cambios: CambiosLineaLiquidacion) =>
+  pedir<{ linea: LineaLiquidacion }>(`/expense-claims/${id}/lines/${lineId}`, {
+    method: "PATCH",
+    body: JSON.stringify(cambios),
+  });
+
+export const excluirLineaLiquidacion = (id: number, lineId: number, motivo: string) =>
+  pedir<{ linea: LineaLiquidacion }>(`/expense-claims/${id}/lines/${lineId}/exclude`, json({ motivo }));
+
+export const incluirLineaLiquidacion = (id: number, lineId: number) =>
+  pedir<{ linea: LineaLiquidacion }>(`/expense-claims/${id}/lines/${lineId}/include`, json({}));
+
+export const resolverDuplicadoLiquidacion = (
+  id: number,
+  dupId: number,
+  datos: { resolucion: "ACEPTADA" | "EXCLUIDA"; motivo: string }
+) => pedir<{ linea: LineaLiquidacion }>(`/expense-claims/${id}/duplicates/${dupId}/resolve`, json(datos));
+
+export const presentarLiquidacion = (id: number) =>
+  pedir<{ liquidacion: Liquidacion }>(`/expense-claims/${id}/present`, json({}));
+
+export const aprobarLiquidacion = (id: number) =>
+  pedir<{ liquidacion: Liquidacion }>(`/expense-claims/${id}/approve`, json({}));
+
+export const rechazarLiquidacion = (id: number, motivo: string) =>
+  pedir<{ liquidacion: Liquidacion }>(`/expense-claims/${id}/reject`, json({ motivo }));
+
+export const reabrirLiquidacion = (id: number) =>
+  pedir<{ liquidacion: Liquidacion }>(`/expense-claims/${id}/reopen`, json({}));
+
+export const anularLiquidacion = (id: number, motivo: string) =>
+  pedir<{ liquidacion: Liquidacion }>(`/expense-claims/${id}/void`, json({ motivo }));
+
+/**
+ * Paga una liquidación aprobada. La clave de idempotencia la genera quien
+ * abre la ventana de pago y se REPITE si hay que reintentar: si la respuesta
+ * se perdió por el camino, el servidor devuelve el pago que ya existe en vez
+ * de sacar el dinero otra vez.
+ */
+export const pagarLiquidacion = (
+  id: number,
+  datos: {
+    sessionId: number;
+    importeCentimos: number;
+    formasPago: { forma: string; importe: number; referencia?: string | null }[];
+    efectivoEntregado: LineaDenominacion[];
+    efectivoRecibido: LineaDenominacion[];
+  },
+  idempotencyKey: string
+) =>
+  pedir<{ liquidacion: Liquidacion; pago: { operacionId: number; numero: string }; repetido: boolean }>(
+    `/expense-claims/${id}/pay`,
+    // En el cuerpo, como el resto del módulo: `pedir` pone sus propias
+    // cabeceras de sesión. El servidor acepta la clave por los dos sitios.
+    json({ ...datos, idempotencyKey })
+  );
+
+export const reintentarLecturaTicket = (id: number, lineId: number) =>
+  pedir<{ ok: true }>(`/expense-claims/${id}/lines/${lineId}/retry`, json({}));
+
+/** Las reglas de concepto, y si la lectura automática está disponible. */
+export const reglasGasto = () =>
+  pedir<{ reglas: ReglaGastoConfig[]; lecturaDisponible: boolean }>("/expense-rules");
+
+export const guardarReglaGasto = (datos: { campo: string; patron: string; conceptoId: number }) =>
+  pedir<{ regla: ReglaGastoConfig }>("/expense-rules", { ...json(datos), method: "PUT" });
+
+export const borrarReglaGasto = (id: number) =>
+  pedir<{ ok: true }>(`/expense-rules/${id}`, { method: "DELETE" });
+
+/** Las fichas de empleado activas. `disponible` = false si la instalación no las tiene. */
+export const empleados = () => pedir<{ disponible: boolean; empleados: Empleado[] }>("/employees");
+
+export const propuestasVinculo = () =>
+  pedir<{ disponible: boolean; propuestas: PropuestaVinculo[] }>("/expense-targets/employee-links");
+
+/** Ata una persona de Cash a su ficha de empleado; `null` la desata. */
+export const vincularPersona = (destinoId: number, employeeId: string | null) =>
+  pedir<{ destinoId: number; employeeId: string | null; liquidacionesActualizadas: number }>(
+    `/expense-targets/${destinoId}/employee`,
+    { ...json({ employeeId }), method: "PUT" }
+  );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { almacenEnProsa, asuntoLimpio, detectarTipo, esConcepto, filaDeTabla, localidadDe, muestraDelContenido, parsearCorreo, pedidosEnProsa, recomponerFilas, remitenteReenviado, usuarioEnProsa } from "./index.ts";
+import { partirFilasSeguidas, almacenEnProsa, asuntoLimpio, detectarTipo, esConcepto, filaDeTabla, localidadDe, muestraDelContenido, parsearCorreo, pedidosEnProsa, recomponerFilas, remitenteReenviado, usuarioEnProsa } from "./index.ts";
 
 /** El correo de pedido tal y como lo describe el encargo (valor en la línea siguiente). */
 const PEDIDO_SOLEDAD = `
@@ -728,5 +728,94 @@ describe("recomponerFilas · lo que no debe juntar", () => {
   it("no salta por encima de una etiqueta: la plantilla con «Cantidad:» y el valor debajo", () => {
     const con = ["Cantidad:", "2", "Producto:", "245/70X17.5 HANKOOK AH35 136M", "Precio unitario:", "248,45 €"];
     expect(recomponerFilas(con)).toEqual(con);
+  });
+});
+
+/**
+ * El pedido B-2026-5711568 de verdad: siete artículos que en la tabla HTML van
+ * en siete filas y en el texto plano llegan corridos, con los saltos de línea
+ * donde toca por ancho. De aquí salía UNA línea con «210,62» de cantidad.
+ */
+const ASUNTO_CORRIDO = "Aviso de nuevo Pedido número: B -2026-5711568 con fecha 22/09/2026.";
+
+const PEDIDO_CORRIDO = `Notificación Pedido Recibido
+
+Estimado COMERCIAL SEA, S.A.,
+acabamos de registrar con éxito un pedido en nuestro sistema.
+
+Tu número de pedido es B -2026-5711568
+Realizado por comercialseatarragona
+
+El pedido será entregado a:
+COMERCIAL SEA, S.A.
+PIRIU CLAR C/COURE 27
+43006 TARRAGONA
+TARRAGONA ESPAÑA
+
+El contenido del pedido es:
+
+Cantidad
+Descripción
+Importe
+2.00 385/65X22.5 HANKOOK AH51 160K 459.83 4.00 385/65X22.5 TORQUE TQTS1 164K
+210.62 4.00 385/65X22.5 TORQUE TQ022 164K 211.28 2.00 385/65X22.5 HANKOOK TM11
+160K 424.17 1.00 315/70X22.5 HANKOOK DL51 154L 439.37 4.00 315/70X22.5 SAILUN
+SFR1 156L 243.80 6.00 385/65X22.5 SAILUN STR1+ 164K 261.35
+
+La mercancía será expedida por nuestro centro logísitico  227 - ALMACEN MANRESA (CATALUÑA)
+La entrega se realizará a través de TRANSAHER
+
+Un saludo,
+
+Grupo Soledad
+`;
+
+describe("parsearCorreo · la tabla que llega corrida", () => {
+  const r = parsearCorreo(ASUNTO_CORRIDO, PEDIDO_CORRIDO);
+
+  it("los siete artículos vuelven a su sitio, cada uno con su cantidad", () => {
+    expect(r.tipo).toBe("PEDIDO");
+    expect(r.pedido!.lineas.map((l) => [l.cantidad, l.descripcion, l.precioCentimos])).toEqual([
+      [2, "385/65X22.5 HANKOOK AH51 160K", 45983],
+      [4, "385/65X22.5 TORQUE TQTS1 164K", 21062],
+      [4, "385/65X22.5 TORQUE TQ022 164K", 21128],
+      [2, "385/65X22.5 HANKOOK TM11 160K", 42417],
+      [1, "315/70X22.5 HANKOOK DL51 154L", 43937],
+      [4, "315/70X22.5 SAILUN SFR1 156L", 24380],
+      [6, "385/65X22.5 SAILUN STR1+ 164K", 26135],
+    ]);
+  });
+
+  it("ninguna cantidad es un importe disfrazado", () => {
+    // 210,62 era el importe de la segunda fila y acabó de cantidad.
+    expect(r.pedido!.lineas.map((l) => l.cantidad)).not.toContain(210.62);
+    expect(r.pedido!.lineas.every((l) => l.cantidad! <= 100)).toBe(true);
+  });
+
+  it("y lo de después de la tabla se sigue leyendo", () => {
+    expect(r.pedido!.numeroPedido).toBe("B-2026-5711568");
+    expect(r.pedido!.transportista).toBe("TRANSAHER");
+    expect(r.pedido!.almacenOrigen).toContain("227 - ALMACEN MANRESA");
+    expect(r.pedido!.destinoLocalidad).toBe("TARRAGONA");
+  });
+});
+
+describe("partirFilasSeguidas", () => {
+  it("parte una tabla corrida en sus filas y devuelve aparte lo que viene detrás", () => {
+    const { filas, resto } = partirFilasSeguidas(
+      "2.00 385/65X22.5 HANKOOK AH51 160K 459.83 4.00 385/65X22.5 TORQUE TQTS1 164K 210.62 La mercancía será expedida"
+    );
+    expect(filas).toEqual(["2.00 385/65X22.5 HANKOOK AH51 160K 459.83", "4.00 385/65X22.5 TORQUE TQTS1 164K 210.62"]);
+    expect(resto).toBe("La mercancía será expedida");
+  });
+
+  it("si entre una fila y la siguiente queda texto suelto, no era una tabla corrida", () => {
+    const { filas } = partirFilasSeguidas("2.00 CUBIERTA 459.83 y esto no es una fila 4.00 OTRA 210.62");
+    expect(filas).toEqual(["2.00 CUBIERTA 459.83"]);
+  });
+
+  it("una prosa con números no se convierte en filas", () => {
+    expect(partirFilasSeguidas("las 9:00 -20:00 horas, o al teléfono 91 191 09 10.").filas).toEqual([]);
+    expect(partirFilasSeguidas("").filas).toEqual([]);
   });
 });

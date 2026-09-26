@@ -26,6 +26,17 @@ import {
 /** Qué se está haciendo. Decide el signo del efectivo y quién puede hacerlo. */
 export type TipoOperacion =
   | "COLLECTION" // cobro a un cliente
+  /**
+   * Abono a un cliente: un cobro devuelto. Sale dinero, como en un pago, pero
+   * es la vuelta atrás de una venta y no un gasto: lleva sección, se registra
+   * con una forma de COBRO, y en los totales del día resta de los cobros.
+   *
+   * Existe como tipo propio y no como «cobro negativo» porque en toda la caja
+   * el dinero es un importe positivo más una dirección. Un −59,90 rompería las
+   * sumas por forma, el inventario de piezas (no hay −2 billetes de 20) y el
+   * arqueo.
+   */
+  | "REFUND"
   | "PAYMENT" // pago a un proveedor
   | "MANUAL_IN" // ingreso manual de efectivo
   | "MANUAL_OUT" // salida manual de efectivo
@@ -103,6 +114,8 @@ export type MotivoMovimiento =
   | "CUSTOMER_PAYMENT"
   | "CHANGE_GIVEN"
   | "SUPPLIER_PAYMENT"
+  /** Dinero devuelto a un cliente por un abono. */
+  | "CUSTOMER_REFUND"
   | "MANUAL_IN"
   | "MANUAL_OUT"
   | "CASH_DELIVERY"
@@ -223,6 +236,7 @@ const ENTRAN: ReadonlySet<TipoOperacion> = new Set<TipoOperacion>([
 /** Tipos cuyo efectivo sale de la caja. */
 const SALEN: ReadonlySet<TipoOperacion> = new Set<TipoOperacion>([
   "PAYMENT",
+  "REFUND",
   "MANUAL_OUT",
   "CASH_DELIVERY",
   "BANK_DEPOSIT",
@@ -232,6 +246,9 @@ const SALEN: ReadonlySet<TipoOperacion> = new Set<TipoOperacion>([
 const MOTIVO_ENTRADA: Record<string, MotivoMovimiento> = {
   EXCHANGE: "EXCHANGE",
   COLLECTION: "CUSTOMER_PAYMENT",
+  // La vuelta que da el cliente al redondear un abono en efectivo: se le
+  // devuelven 60 € y él pone 0,10 €. Entra bajo el mismo motivo que sale.
+  REFUND: "CUSTOMER_REFUND",
   MANUAL_IN: "MANUAL_IN",
   OPENING_FLOAT: "OPENING_FLOAT",
   ADJUSTMENT: "ADJUSTMENT",
@@ -240,6 +257,7 @@ const MOTIVO_ENTRADA: Record<string, MotivoMovimiento> = {
 const MOTIVO_SALIDA: Record<string, MotivoMovimiento> = {
   EXCHANGE: "EXCHANGE",
   COLLECTION: "CHANGE_GIVEN",
+  REFUND: "CUSTOMER_REFUND",
   PAYMENT: "SUPPLIER_PAYMENT",
   MANUAL_OUT: "MANUAL_OUT",
   CASH_DELIVERY: "CASH_DELIVERY",

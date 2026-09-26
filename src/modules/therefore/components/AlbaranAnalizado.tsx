@@ -106,6 +106,21 @@ export default function AlbaranAnalizado({
   const puedeReabrir =
     puedeReanalizar && actuacion !== undefined && VERBOS.reabrir.desde.includes(actuacion.estado);
 
+  /*
+   * La tarjeta entera en verde cuando el albarán ya está hecho.
+   *
+   * En un expediente de ocho albaranes, todas las tarjetas son iguales y la
+   * chapita del estado es lo más pequeño que hay en pantalla: para saber
+   * cuáles quedan había que leerlas una a una. El color se ve desde el otro
+   * lado de la mesa, que es como se mira una lista de tareas.
+   *
+   * Sólo el borde y el fondo, y flojos: encima va una tabla de números que
+   * tiene que seguir leyéndose, y hay celdas que se marcan en ámbar y en rosa
+   * por dudosas. Un verde fuerte se comería justo la información que hace que
+   * alguien vuelva a mirar el PDF.
+   */
+  const resuelta = actuacion?.estado === "RESUELTA";
+
   const suma = sumaDeLineas(albaran.lineas);
   const flojas = celdasFlojas(albaran.lineas, umbralCampo);
   const conceptos = albaran.metadata?.conceptosAdicionales ?? [];
@@ -158,7 +173,11 @@ export default function AlbaranAnalizado({
   }
 
   return (
-    <article className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
+    <article
+      className={`rounded-2xl border p-4 ${
+        resuelta ? "border-emerald-500/60 bg-emerald-900/60" : "border-slate-700 bg-slate-800"
+      }`}
+    >
       <header className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-sm font-bold">{tituloAnalisis(actuacion?.tipoAccion ?? "")}</span>
         <ChipAnalisis estado={albaran.estadoAnalisis ?? albaran.estadoProceso} />

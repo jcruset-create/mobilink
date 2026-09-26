@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, Upload, Archive, CalendarCheck, AlertTriangle, History, HelpCircle, QrCode, Gauge, type LucideIcon } from "lucide-react";
+import { LayoutDashboard, Users, Building2, MapPin, Truck, CircleDot, Wrench, Settings, User, ClipboardList, ClipboardCheck, ShieldCheck, Link2, Ruler, BookOpen, Bluetooth, BarChart3, Upload, Archive, CalendarCheck, AlertTriangle, History, HelpCircle, QrCode, Gauge, FileScan, type LucideIcon } from "lucide-react";
 import type { Rol } from "../types";
 
 export type NavItem = {
@@ -40,6 +40,7 @@ export const NAV: NavItem[] = [
   { key: "catalogo-neumaticos", path: "catalogo-neumaticos", label: "Catálogo de neumáticos", icon: BookOpen, roles: ["administrador"] },
   { key: "sonda", path: "sonda", label: "Sonda TLGX", icon: Bluetooth, roles: ["administrador"] },
   { key: "importar", path: "importar", label: "Importar", icon: Upload, roles: ["administrador"] },
+  { key: "parte-proveedor", path: "parte-proveedor", label: "Parte del taller", icon: FileScan, roles: ["administrador"] },
   { key: "tipos-incidencia", path: "tipos-incidencia", label: "Tipos y motivos de incidencia", icon: AlertTriangle, roles: ["administrador"] },
   { key: "configuracion", path: "configuracion", label: "Configuración", icon: Settings, roles: ["administrador"] },
   // Cliente

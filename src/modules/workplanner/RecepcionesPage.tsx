@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CarFront, Check, Loader2, RefreshCw, ScanLine, X } from "lucide-react";
+import {
+  CarFront,
+  Check,
+  CheckCheck,
+  Loader2,
+  Printer,
+  RefreshCw,
+  ScanLine,
+  X,
+} from "lucide-react";
 
 import { allocateJobPure } from "../assignment";
 import { buildTechLoadStats, buildTechStats } from "../workshopReports";
@@ -10,7 +19,8 @@ import {
   loadTechsFromBackend,
 } from "../workshopApi";
 import { getAdminHeaders } from "../adminHeaders";
-import { DEFAULT_WORKSHOP_ID, normalizeWorkshopId } from "../workshops";
+import { DEFAULT_WORKSHOP_ID, getWorkshopById, normalizeWorkshopId } from "../workshops";
+import { htmlDelResguardo } from "./resguardoRecepcion";
 import {
   jobDesdeRecepcion,
   loQueFaltaParaConvertir,
@@ -144,11 +154,28 @@ export default function RecepcionesPage() {
     };
   }, [actual, jobs, techs, plantillasDelTaller]);
 
-  async function convertir() {
+  /**
+   * Convierte la recepción en trabajo.
+   *
+   * `yaHecho` es para lo que se resuelve en el patio mientras el coche está
+   * delante —una lectura de tacógrafo, un cambio de bombilla—: el trabajo nace
+   * cerrado en vez de entrar en la cola para salir de ella acto seguido. Queda
+   * registrado igual, que es de lo que se trata.
+   */
+  async function convertir(yaHecho = false) {
     if (!actual || !propuesta) return;
     const falta = loQueFaltaParaConvertir(actual);
     if (falta.length > 0) {
       setError(`Antes de convertir hay que decidir ${falta.join(", ")}.`);
+      return;
+    }
+    if (
+      yaHecho &&
+      !window.confirm(
+        `${actual.matricula}: se va a dar por REALIZADO y no pasará por la cola. ` +
+          `Esto no se deshace desde aquí. ¿Seguir?`
+      )
+    ) {
       return;
     }
 
@@ -157,19 +184,36 @@ export default function RecepcionesPage() {
     try {
       const job: Job = {
         ...propuesta.job,
-        status: "validacion",
-        reason: [propuesta.job.reason, propuesta.porQue].filter(Boolean).join(" "),
+        status: yaHecho ? "cerrado" : "validacion",
+        /*
+         * Un trabajo ya hecho NO lleva el técnico que propone el motor.
+         *
+         * El motor propone a alguien porque está libre —«se propone a José
+         * porque no tiene ningún trabajo abierto»—, que es una respuesta a
+         * «quién debería hacerlo». En algo que ya está hecho la pregunta es
+         * otra, «quién lo hizo», y eso el motor no lo sabe. Apuntárselo al que
+         * estaba libre le sumaría en el ranking un trabajo que no ha tocado.
+         *
+         * Se deja sin técnico, que es la verdad, y quien quiera ponerle nombre
+         * lo edita en el trabajo.
+         */
+        assignedNames: yaHecho ? [] : propuesta.job.assignedNames,
+        reason: [propuesta.job.reason, yaHecho ? "" : propuesta.porQue]
+          .filter(Boolean)
+          .join(" "),
       };
       await api(`/api/recepcion-vehiculos/${actual.id}/convertir`, {
         method: "POST",
         body: JSON.stringify(job),
       });
       setAviso(
-        `${job.plate} · ${job.quickEntryLabel} → ` +
-          (job.assignedNames?.length
-            ? job.assignedNames.join(" + ")
-            : "sin técnico libre") +
-          ". Pendiente de validar."
+        yaHecho
+          ? `${job.plate} · ${job.quickEntryLabel} → realizado y cerrado.`
+          : `${job.plate} · ${job.quickEntryLabel} → ` +
+            (job.assignedNames?.length
+              ? job.assignedNames.join(" + ")
+              : "sin técnico libre") +
+            ". Pendiente de validar."
       );
       setSeleccionada(null);
       await cargar();
@@ -178,6 +222,37 @@ export default function RecepcionesPage() {
     } finally {
       setGuardando(false);
     }
+  }
+
+  /**
+   * Manda el resguardo a la impresora.
+   *
+   * Se abre una ventana aparte y se escribe la hoja entera, que es lo que ya
+   * hacen las etiquetas de herramientas y de máquinas. Una hoja que se arma
+   * sola no pelea con el tema oscuro del panel, y lo que sale por la
+   * impresora es exactamente lo que dice `resguardoRecepcion.ts`.
+   *
+   * La ventana se imprime sola al terminar de cargar: sin esperar al `load`,
+   * las fotos salen en blanco.
+   */
+  function imprimir(r: RecepcionVehiculo) {
+    const ventana = window.open("", "_blank");
+    if (!ventana) {
+      // El navegador la ha bloqueado. Decirlo, que si no parece que el botón
+      // no hace nada.
+      setError(
+        "El navegador ha bloqueado la ventana de impresión. Permite las ventanas emergentes de esta página y vuelve a pulsar."
+      );
+      return;
+    }
+    ventana.document.write(
+      htmlDelResguardo(r, {
+        taller: getWorkshopById(r.workshopId ?? workshopId).shortName,
+        ahoraMs: Date.now(),
+        areaLabel: r.area ?? null,
+      })
+    );
+    ventana.document.close();
   }
 
   async function descartar() {
@@ -424,6 +499,21 @@ export default function RecepcionesPage() {
                         )}
                         Convertir en trabajo
                       </button>
+                      {/*
+                        Realizado: lo que ya se ha hecho en el patio. No pasa
+                        por la cola porque no hay nada que encolar — se
+                        registra y se cierra.
+                      */}
+                      <button
+                        type="button"
+                        onClick={() => void convertir(true)}
+                        disabled={guardando}
+                        title="El trabajo se registra ya cerrado, sin pasar por la cola"
+                        className="flex items-center gap-2 rounded-lg border border-emerald-700 bg-emerald-950/40 px-4 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-900/40 disabled:opacity-50"
+                      >
+                        <CheckCheck className="h-4 w-4" />
+                        Realizado
+                      </button>
                       <button
                         type="button"
                         onClick={() => void descartar()}
@@ -432,6 +522,19 @@ export default function RecepcionesPage() {
                       >
                         <X className="h-4 w-4" />
                         Descartar
+                      </button>
+                      {/*
+                        Imprimir va al otro lado del hueco: los tres de la
+                        izquierda deciden el destino de la recepción y no se
+                        deshacen; éste solo saca un papel y se puede repetir.
+                      */}
+                      <button
+                        type="button"
+                        onClick={() => imprimir(actual)}
+                        className="ml-auto flex items-center gap-2 rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-700"
+                      >
+                        <Printer className="h-4 w-4" />
+                        Imprimir
                       </button>
                     </div>
                   </div>

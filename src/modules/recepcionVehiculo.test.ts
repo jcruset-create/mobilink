@@ -17,9 +17,12 @@ import {
   plantillasParaElPatio,
   diaDeRecepcion,
   horaDeRecepcion,
-  recepcionesDelDia,
+  esperaLegible,
+  minutosEsperando,
+  recepcionesQueSiguenEsperando,
   citasParaRecibir,
   idsDeCitasYaRecibidas,
+  idsDeTrabajosConCita,
   posibleDuplicado,
   type RecepcionVehiculo,
 } from "./recepcionVehiculo";
@@ -316,11 +319,52 @@ describe("colocación en la agenda", () => {
     expect(diaDeRecepcion(manana)).toBe("2026-09-20");
   });
 
-  it("solo devuelve las del día que la agenda está pintando", () => {
-    const lista = [{ creadaAtMs: tarde }, { creadaAtMs: manana }];
-    expect(recepcionesDelDia(lista, "2026-09-19")).toEqual([{ creadaAtMs: tarde }]);
-    expect(recepcionesDelDia(lista, "2026-09-20")).toEqual([{ creadaAtMs: manana }]);
-    expect(recepcionesDelDia(lista, "2026-09-21")).toEqual([]);
+});
+
+describe("recepcionesQueSiguenEsperando", () => {
+  const HOY = "2026-09-24";
+  const aLas = (dia: string, hora: string) => new Date(`${dia}T${hora}:00`).getTime();
+
+  it("saca en HOY las de hoy", () => {
+    const rs = [{ creadaAtMs: aLas(HOY, "09:15") }];
+    expect(recepcionesQueSiguenEsperando(rs, HOY, HOY)).toHaveLength(1);
+  });
+
+  it("arrastra a HOY las de ayer que nadie ha validado", () => {
+    // El caso que justifica la función: sigue sin hacerse, así que sigue
+    // estorbando HOY, no en la columna de ayer donde ya no la mira nadie.
+    const rs = [{ creadaAtMs: aLas("2026-09-23", "17:40") }];
+    expect(recepcionesQueSiguenEsperando(rs, HOY, HOY)).toHaveLength(1);
+  });
+
+  it("no pinta ninguna en las columnas que no son hoy", () => {
+    const rs = [{ creadaAtMs: aLas("2026-09-23", "17:40") }];
+    expect(recepcionesQueSiguenEsperando(rs, "2026-09-23", HOY)).toEqual([]);
+    expect(recepcionesQueSiguenEsperando(rs, "2026-09-25", HOY)).toEqual([]);
+  });
+
+  it("no adelanta a hoy una con fecha de mañana", () => {
+    const rs = [{ creadaAtMs: aLas("2026-09-25", "08:00") }];
+    expect(recepcionesQueSiguenEsperando(rs, HOY, HOY)).toEqual([]);
+  });
+});
+
+describe("minutosEsperando y esperaLegible", () => {
+  it("cuenta los minutos desde que llegó", () => {
+    const t = new Date("2026-09-24T09:00:00").getTime();
+    expect(minutosEsperando(t, t + 45 * 60_000)).toBe(45);
+  });
+
+  it("nunca da negativo aunque el reloj del navegador vaya atrasado", () => {
+    const t = new Date("2026-09-24T09:00:00").getTime();
+    expect(minutosEsperando(t, t - 60_000)).toBe(0);
+  });
+
+  it("lo dice como lo diría una persona", () => {
+    expect(esperaLegible(0)).toBe("0 min");
+    expect(esperaLegible(45)).toBe("45 min");
+    expect(esperaLegible(60)).toBe("1 h");
+    expect(esperaLegible(130)).toBe("2 h 10 min");
   });
 });
 
@@ -483,5 +527,36 @@ describe("kilometrosDeTextoIA", () => {
   it("devuelve null sin respuesta", () => {
     expect(kilometrosDeTextoIA("")).toBeNull();
     expect(kilometrosDeTextoIA(null)).toBeNull();
+  });
+});
+
+describe("idsDeTrabajosConCita", () => {
+  it("recoge el trabajo de una cita que ya ha llegado", () => {
+    expect(idsDeTrabajosConCita([{ jobId: 1141 }])).toEqual(new Set([1141]));
+  });
+
+  it("recoge también la segunda mitad de un trabajo combinado", () => {
+    expect(idsDeTrabajosConCita([{ jobId: 7, secondJobId: 8 }])).toEqual(
+      new Set([7, 8])
+    );
+  });
+
+  it("ignora las citas que aún no han llegado", () => {
+    expect(idsDeTrabajosConCita([{ jobId: null }, {}])).toEqual(new Set());
+  });
+
+  it("aguanta lo que venga: ids a cero, negativos o no numéricos", () => {
+    expect(
+      idsDeTrabajosConCita([
+        { jobId: 0 },
+        { jobId: -3 },
+        { jobId: "no" as unknown as number },
+      ])
+    ).toEqual(new Set());
+  });
+
+  it("no se cae con una lista vacía ni con nada", () => {
+    expect(idsDeTrabajosConCita([])).toEqual(new Set());
+    expect(idsDeTrabajosConCita(undefined as any)).toEqual(new Set());
   });
 });

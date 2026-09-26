@@ -4867,9 +4867,16 @@ if (view === "whatsapp_inbox" && canView("whatsapp_inbox")) {
       onCreateAssistance={(extracted, fromPhone) => {
         const draft: import("./modules/roadsideAssistanceTypes").RoadsideAssistanceDraft = {
           solicitanteEmpresa: extracted.empresaSolicitante ?? "",
+          // Lo que llega de un WhatsApp es texto, no una ficha: sin enlace.
+          // Quien lo revise puede elegir el cliente en el formulario.
+          solicitanteClienteId: null,
+          solicitanteContactoId: null,
           solicitanteNombre: "",
           solicitanteTelefono: "",
-          solicitanteAutorizacion: "",
+          // El nº de cita que venía en el mensaje. Es el que después pide la
+          // aseguradora o el gestor de flota para pagar el servicio, y hasta
+          // ahora se quedaba enterrado en las observaciones.
+          solicitanteAutorizacion: (extracted as any).citaOAutorizacion ?? "",
           customerName: extracted.cliente ?? "",
           customerPhone: extracted.telefonoWhatsapp ?? fromPhone.replace("whatsapp:", "") ?? "",
           conductorNombre: "",

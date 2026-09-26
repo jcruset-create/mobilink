@@ -58,8 +58,15 @@
     "server/satisfaction/**/*.ts",
     "server/cierre/**/*.ts",
     "server/core/auditoria.ts",
+    "server/core/idDeTrabajo.ts",
+    "server/core/jsonAjeno.ts",
     "server/core/auditoriaSchema.ts",
     "server/dbBackup.ts",
+    // El grueso del backend. Llevaba sin comprobarse: no estaba aquí y
+    // `tsc -b` tampoco lo mira, así que 19.600 líneas pasaban de largo. Es el
+    // mismo agujero que dejó `recepcionVehiculos` tres entregas sin mirar y el
+    // integration-hub entero sin mirar nunca.
+    "server/index.ts",
     // La herramienta del lote de calibración de Therefore. Va aquí porque es
     // lo único de scripts/ que importa código de server/ y conviene que un
     // error de tipos salga en la CI y no al ejecutarla con el buzón delante.

@@ -24,6 +24,8 @@ export default function AlbaranDetalle() {
   const [subiendo, setSubiendo] = useState(false);
   const [cerrando, setCerrando] = useState(false);
   const [motivo, setMotivo] = useState("");
+  /** Lo que ha pasado al releer las líneas: se dice y se quita al recargar. */
+  const [nota, setNota] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
   const cargar = useCallback(async () => {
@@ -69,6 +71,25 @@ export default function AlbaranDetalle() {
     }
   }
 
+  /**
+   * El papel manda: si el correo trajo la tabla aplanada, las líneas se
+   * reescriben con las del PDF. Sólo se ofrece mientras no se haya recibido
+   * nada; lo que alguien ya contó se rectifica, no se reescribe.
+   */
+  async function releerLineas() {
+    setSubiendo(true);
+    try {
+      const r = await api.releerLineasDelOriginal(albaran.id);
+      setNota(`Líneas releídas del PDF: ${r.lineasAntes} → ${r.lineasAhora}.${r.avisos.length > 0 ? ` ${r.avisos.join(" ")}` : ""}`);
+      setError(null);
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se han podido releer las líneas");
+    } finally {
+      setSubiendo(false);
+    }
+  }
+
   async function cerrarConDiferencia() {
     try {
       await api.cerrarAlbaranConDiferencia(albaran.id, motivo);
@@ -90,6 +111,11 @@ export default function AlbaranDetalle() {
         </Link>
       </div>
       {error && <ErrorBox>{error}</ErrorBox>}
+      {nota && (
+        <div className="mb-3">
+          <Aviso tono="info">{nota}</Aviso>
+        </div>
+      )}
 
       <div className="rounded-2xl border border-slate-700 bg-slate-800 p-4">
         <div className="flex flex-wrap items-start justify-between gap-2">
@@ -175,9 +201,16 @@ export default function AlbaranDetalle() {
               </div>
             </div>
           </div>
-          <button className={btnSecondary} onClick={() => setVerDoc(verDoc === original.id ? null : original.id)}>
-            {verDoc === original.id ? "Ocultar" : "Ver"}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {puede("recepciones.albaran.create") && ficha.recepciones.length === 0 && (
+              <button className={btnSecondary} onClick={() => void releerLineas()} disabled={subiendo} title="Vuelve a escribir las líneas con las que dice el PDF">
+                Releer las líneas del PDF
+              </button>
+            )}
+            <button className={btnSecondary} onClick={() => setVerDoc(verDoc === original.id ? null : original.id)}>
+              {verDoc === original.id ? "Ocultar" : "Ver"}
+            </button>
+          </div>
         </div>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-slate-600 bg-slate-800/50 p-3">

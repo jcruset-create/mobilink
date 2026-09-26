@@ -1,7 +1,13 @@
 import { apiFetch } from "../modules/apiFetch";
 import { useRecepcionesPendientes } from "../modules/useRecepcionesPendientes";
-import { horaDeRecepcion, recepcionesDelDia } from "../modules/recepcionVehiculo";
-import { useEffect, useRef, useState } from "react";
+import {
+  esperaLegible,
+  horaDeRecepcion,
+  idsDeTrabajosConCita,
+  minutosEsperando,
+  recepcionesQueSiguenEsperando,
+} from "../modules/recepcionVehiculo";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import {
@@ -677,6 +683,18 @@ export default function AgendaView({
 
   const scheduledJobsForSelectedWorkshop = scheduledJobs.filter(
     belongsToSelectedWorkshop
+  );
+
+  /*
+   * Los trabajos que ya tiene pintados su cita.
+   *
+   * Se mira sobre TODAS las citas del taller y no solo las del día pintado: una
+   * cita que llegó se dibuja en su hora de llegada, que puede no ser el día
+   * para el que se pidió.
+   */
+  const trabajosConCita = useMemo(
+    () => idsDeTrabajosConCita(scheduledJobsForSelectedWorkshop),
+    [scheduledJobsForSelectedWorkshop]
   );
 
   const [weekOffset, setWeekOffset] = useState(0);
@@ -2235,31 +2253,41 @@ appendLog(
               // grupo (y por tanto ancho) con cualquier cita que se vea a la vez.
               const endOfDayStr = minutesToTime(getDayEnd(day.index, day.date));
               const virtualQueueJobs = day.date === todayKey
-                ? queueJobs.map((qj) => ({
-                    ...qj,
-                    id: -Math.abs(qj.id) - 1,
-                    _queueJobRef: qj,
-                    startTime: nowTimeStr,
-                    endTime: endOfDayStr,
-                  }))
+                ? queueJobs
+                    // Los que ya pinta su cita no se pintan otra vez. Ver
+                    // `idsDeTrabajosConCita`: el mismo vehículo salía dos
+                    // veces, como cita llegada y como tarjeta de cola.
+                    .filter((qj) => !trabajosConCita.has(qj.id))
+                    .map((qj) => ({
+                      ...qj,
+                      id: -Math.abs(qj.id) - 1,
+                      _queueJobRef: qj,
+                      startTime: nowTimeStr,
+                      endTime: endOfDayStr,
+                    }))
                 : [];
 
               /*
-               * Recepciones del patio, pintadas a la HORA EN QUE LLEGARON.
+               * Recepciones del patio, pintadas en la LÍNEA DE AHORA.
                *
-               * A diferencia de la cola —que no tiene hora y por eso se pinta
-               * en la línea de ahora— una recepción sí la tiene: es cuando el
-               * operario la mandó desde el patio. Ponerla en su hora es lo que
-               * la hace útil al lado de las citas.
+               * No en la hora en que llegaron, que es como estaban: una
+               * recepción pendiente no es un apunte de lo que pasó, es trabajo
+               * por hacer. Anclada a su hora se quedaba quieta mientras el día
+               * avanzaba, y a media tarde había coches esperando en el patio
+               * dibujados a las nueve de la mañana, entre citas ya terminadas,
+               * donde no los miraba nadie.
+               *
+               * Así que van donde va el trabajo pendiente —con la cola, en la
+               * hora actual— y avanzan con el reloj hasta que alguien las
+               * valida. `currentClock` late cada segundo, así que se mueven
+               * solas sin pedirle nada al servidor.
                */
-              const virtualRecepciones = recepcionesDelDia(
+              const virtualRecepciones = recepcionesQueSiguenEsperando(
                 recepcionesPendientes,
-                day.date
+                day.date,
+                todayKey
               ).map((r) => {
-                const hora = horaDeRecepcion(r.creadaAtMs);
-                // Si llegó antes de que empiece el día pintado, se ancla al
-                // principio en vez de quedarse fuera de la rejilla.
-                const inicio = Math.max(timeToMinutes(hora), dayStart);
+                const inicio = Math.max(timeToMinutes(nowTimeStr), dayStart);
                 return {
                   id: -Math.abs(r.id) - 1_000_000, // fuera del rango de la cola
                   workshopId: r.workshopId ?? null,
@@ -2267,7 +2295,18 @@ appendLog(
                   plate: r.matricula,
                   _recepcionRef: r,
                   startTime: minutesToTime(inicio),
-                  endTime: minutesToTime(Math.min(inicio + 30, getDayEnd(day.index))),
+                  /*
+                   * Dura lo que una cita cualquiera sin hora de fin.
+                   *
+                   * Una recepción no tiene duración —nadie sabe aún qué hay
+                   * que hacerle—, y con el final del día, que es lo que usa la
+                   * cola, salía una pastilla estrecha y aplastada que no se
+                   * leía. Se pidió que se vean igual que las citas, así que
+                   * ocupan lo mismo que la cita por defecto.
+                   */
+                  endTime: minutesToTime(
+                    Math.min(inicio + DEFAULT_ESTIMATED_MINUTES, getDayEnd(day.index))
+                  ),
                 };
               });
 
@@ -2376,8 +2415,21 @@ appendLog(
                     if ((job as any)._recepcionRef) {
                       const r = (job as any)._recepcionRef;
                       const hora = horaDeRecepcion(r.creadaAtMs);
-                      const inicio = Math.max(timeToMinutes(hora), dayStart);
+                      // Lo que lleva esperando en el patio. Es el dato que
+                      // decide si hay que correr, y el que se perdía al
+                      // quedarse la tarjeta clavada en su hora de llegada.
+                      const espera = esperaLegible(
+                        minutosEsperando(r.creadaAtMs, currentClock.getTime())
+                      );
+                      const inicio = Math.max(timeToMinutes(job.startTime), dayStart);
+                      const fin = Math.min(timeToMinutes(job.endTime), getDayEnd(day.index));
                       const top = ((inicio - dayStart) / SLOT_MINUTES) * SLOT_HEIGHT;
+                      // El mismo alto que una cita: se pidió que no se
+                      // distingan por la forma, solo por el rótulo.
+                      const height = Math.max(
+                        50,
+                        ((fin - inicio) / SLOT_MINUTES) * SLOT_HEIGHT - 6
+                      );
                       const width = 100 / columns;
                       const left = column * width;
 
@@ -2386,11 +2438,19 @@ appendLog(
                           key={`recepcion-${r.id}`}
                           title={`🚗 Recibido en el patio · ${r.matricula}${
                             r.clienteNombre ? ` · ${r.clienteNombre}` : ""
-                          }\nRecibido por ${r.operarioNombre} a las ${hora}\nPendiente de validar`}
-                          className="absolute z-40 cursor-default overflow-hidden rounded-xl border-2 border-dashed border-amber-400 bg-amber-500/20 p-2 text-sm font-semibold text-amber-100 shadow-md"
+                          }\nRecibido por ${r.operarioNombre} a las ${hora}\nEsperando desde hace ${espera}\nPendiente de validar`}
+                          /*
+                           * Pintada como una cita normal, con el color de su
+                           * área. Antes iba en ámbar y con el borde de puntos,
+                           * y quien mira la agenda no necesita que se lo
+                           * digan dos veces: para eso está el rótulo.
+                           */
+                          className={`absolute z-40 cursor-default overflow-hidden rounded-xl border-2 p-2 text-sm font-semibold shadow-md ${getSolidAreaClass(
+                            (r.area ?? "mecanica") as AreaKey
+                          )}`}
                           style={{
                             top,
-                            height: Math.max(50, SLOT_HEIGHT - 6),
+                            height,
                             left: `calc(${left}% + 4px)`,
                             width: `calc(${width}% - 8px)`,
                           }}
@@ -2399,13 +2459,13 @@ appendLog(
                             <div className="truncate uppercase">
                               {r.operacionLabel || "Sin operación"}
                             </div>
-                            <span className="shrink-0 rounded-full bg-amber-300 px-2 py-0.5 text-[9px] font-black uppercase text-slate-900">
+                            <span className="shrink-0 rounded-full bg-white/90 px-2 py-0.5 text-[9px] font-black uppercase text-slate-800">
                               Recepción
                             </span>
                           </div>
                           <div className="truncate">{r.matricula}</div>
                           <div className="text-xs font-normal opacity-90">
-                            🚗 {hora} · {r.operarioNombre}
+                            🚗 {hora} · esperando {espera}
                           </div>
                           {r.kilometros ? (
                             <div className="truncate text-xs font-normal opacity-90">
@@ -2509,24 +2569,74 @@ appendLog(
                           width: `calc(${width}% - 8px)`,
                         }}
                       >
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-start justify-between gap-2">
                           <div className="truncate uppercase">
                             {job.linkedTemplateLabel ||
                               template?.label ||
                               "Operación"}
                           </div>
 
-                          <span
-                            className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-black uppercase no-underline ${
-                              job.status === "cancelado"
-                                ? "bg-red-100 text-red-800"
-                                : "bg-white/90 text-slate-800"
-                            }`}
-                          >
-                            {job.status === "cancelado"
-                              ? "Cancelada"
-                              : getScheduledJobStatusLabel(job.status)}
-                          </span>
+                          {/*
+                            El estado y, debajo, las tres acciones en vertical.
+                            Estaban en una fila pegada al borde inferior de la
+                            tarjeta, ocupando todo el ancho; ahí tapaban el
+                            cliente y la duración en las citas cortas.
+
+                            La columna no lleva ancho fijo: lo marca la
+                            etiqueta de estado, y los botones se estiran a ese
+                            ancho con `w-full`. Así los tres salen alineados
+                            con ella sin medir nada a ojo.
+                          */}
+                          <div className="flex shrink-0 flex-col items-end gap-0.5">
+                            <span
+                              className={`w-full rounded-full px-2 py-0.5 text-center text-[9px] font-black uppercase no-underline ${
+                                job.status === "cancelado"
+                                  ? "bg-red-100 text-red-800"
+                                  : "bg-white/90 text-slate-800"
+                              }`}
+                            >
+                              {job.status === "cancelado"
+                                ? "Cancelada"
+                                : getScheduledJobStatusLabel(job.status)}
+                            </span>
+
+                            {job.status !== "cancelado" && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  sendAgendaWhatsApp(job);
+                                }}
+                                className="w-full rounded bg-green-500 px-1 py-[1px] text-[8px] font-semibold leading-[1.35] text-white shadow-sm"
+                              >
+                                WhatsApp
+                              </button>
+                            )}
+
+                            {job.status === "programado" && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  cancelScheduledJob(job.id);
+                                }}
+                                className="w-full rounded bg-white/95 px-1 py-[1px] text-[8px] font-semibold leading-[1.35] text-red-600 shadow-sm"
+                              >
+                                Cancelar
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteScheduledJob(job.id);
+                              }}
+                              className="w-full rounded bg-white/95 px-1 py-[1px] text-[8px] font-semibold leading-[1.35] text-slate-700 shadow-sm"
+                            >
+                              Eliminar
+                            </button>
+                          </div>
                         </div>
 
                         {job.includedTasks && job.includedTasks.length > 0 && (
@@ -2624,44 +2734,6 @@ appendLog(
                           </div>
                         )}
 
-                        <div className="absolute bottom-1 left-1 right-1 flex gap-1">
-  {job.status !== "cancelado" && (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        sendAgendaWhatsApp(job);
-      }}
-      className="flex-1 rounded-md bg-green-500 px-1 py-0.5 text-[9px] font-semibold text-white shadow-sm"
-    >
-      WhatsApp
-    </button>
-  )}
-
-  {job.status === "programado" && (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        cancelScheduledJob(job.id);
-      }}
-      className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-red-600 shadow-sm"
-    >
-      Cancelar
-    </button>
-  )}
-
-  <button
-    type="button"
-    onClick={(e) => {
-      e.stopPropagation();
-      deleteScheduledJob(job.id);
-    }}
-    className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-slate-700 shadow-sm"
-  >
-    Eliminar
-  </button>
-</div>
                       </div>
                     );
                   })}

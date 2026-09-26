@@ -42,8 +42,10 @@ import { ErrorRecepciones } from "./errors.ts";
 import * as repo from "./repository.ts";
 import { generarDocumentoRecepcion, limpio } from "./documentos/generar.ts";
 import { observacionesDelPdf } from "./documentos/observaciones.ts";
-import { avisarRecepcion } from "./avisos.ts";
-import { avisoWhatsAppActivado } from "./config.ts";
+import { lineasDelPdf } from "./documentos/lineas.ts";
+import { esAmasijo } from "./domain/lineasAlbaran.ts";
+import { avisarFaltaAlbaran, avisarRecepcion } from "./avisos.ts";
+import { avisoWhatsAppActivado, telefonoRecepcion } from "./config.ts";
 import { partirObservacion } from "./domain/observaciones.ts";
 import { guardarDocumento, hashDeFichero, leerDocumento as leerDelAlmacen, rutaDocumento } from "./storage.ts";
 
@@ -1341,6 +1343,12 @@ export async function adjuntarOriginal(
     await repo.anotarObservacionesAlbaran(ctx.empresaId, albaran.id, { texto, telefono });
   }
 
+  // El papel manda sobre lo que trae el albarán: mientras no se haya recibido
+  // nada, sus líneas se reescriben con las del PDF. Es lo que arregla los
+  // correos que llegan con la tabla aplanada. Nunca lanza: guardar el original
+  // no puede fallar porque esto no salga.
+  await releerLineasSinLanzar(ctx, albaran.id);
+
   await repo.anotarEvento(ctx.empresaId, {
     pedidoId: albaran.pedidoId,
     albaranId: albaran.id,
@@ -1408,6 +1416,245 @@ export async function releerObservaciones(ctx: Contexto, limite = 200): Promise<
 
   // La auditoría la deja la ruta, como el resto de acciones sin transacción.
   return r;
+}
+
+/** Releer las líneas al guardar el original: si no se puede, se sigue igual. */
+async function releerLineasSinLanzar(ctx: Contexto, albaranId: string): Promise<void> {
+  try {
+    await releerLineasDelOriginal(ctx, albaranId);
+  } catch (e) {
+    if (e instanceof ErrorRecepciones) return; // ya recibido, sin líneas legibles…: no es un fallo
+    console.error("[Recepciones] no se han podido releer las líneas del albarán:", e);
+  }
+}
+
+/**
+ * Avisa a recepción de que este albarán ha entrado sin su PDF. Nunca lanza:
+ * que el aviso falle no puede impedir que el albarán entre, que es lo urgente.
+ */
+export async function avisarDeAlbaranSinPdf(ctx: Contexto, albaranId: string): Promise<void> {
+  try {
+    const albaran = await repo.albaranPorId(ctx.empresaId, albaranId);
+    if (!albaran) return;
+    const [telefono, empresaNombre] = await Promise.all([telefonoRecepcion(ctx.empresaId), repo.nombreEmpresa(ctx.empresaId)]);
+    await avisarFaltaAlbaran(
+      { empresaId: ctx.empresaId, userId: ctx.userId, userNombre: ctx.userNombre },
+      albaranId,
+      telefono,
+      { albaranNumero: albaran.numeroProveedor, proveedorNombre: albaran.proveedorNombre, empresaNombre: empresaNombre ?? "Recepciones" }
+    );
+  } catch (e) {
+    console.error("[Recepciones] el aviso de albarán sin PDF ha fallado:", e);
+  }
+}
+
+export type ResultadoRelecturaLineas = {
+  albaranId: string;
+  numeroProveedor: string;
+  lineasAntes: number;
+  lineasAhora: number;
+  sinPedido: number;
+  /** Líneas del pedido creadas y tiradas al arreglarlo con el papel. */
+  pedidoNuevas: number;
+  pedidoQuitadas: number;
+  avisos: string[];
+};
+
+/**
+ * Vuelve a escribir las líneas del albarán con las que dice SU PDF.
+ *
+ * El correo de Soledad a veces llega con la tabla aplanada —cinco artículos en
+ * un renglón— y de ahí sale una línea sola con una cantidad que en realidad
+ * era un importe. Del texto no se puede reconstruir: cantidad e importe se
+ * escriben igual. Del PDF sí, y es el mismo papel que se firma en el muelle.
+ *
+ * Reglas, y son estrictas a propósito:
+ *
+ * - Sólo si NO se ha recibido nada. Lo que alguien ya ha contado no se toca
+ *   NUNCA por releer un papel: para eso está la rectificación, que deja rastro
+ *   de quién cambió qué.
+ * - Sólo si del PDF salen líneas. Sin nada legible se deja lo que hay, que es
+ *   mejor que sustituirlo por algo peor.
+ * - Las líneas nuevas se enganchan a las del pedido por referencia o por
+ *   descripción. Lo que no encaje entra igual, sin pedido: el albarán manda
+ *   sobre lo que llega al muelle, y una línea sin enganchar se ve y se cuenta,
+ *   mientras que una línea perdida no.
+ * - En un pedido DEDUCIDO se limpian las líneas que se quedan sin nada detrás:
+ *   eran el reflejo del albarán mal leído. En un pedido de verdad no se toca
+ *   nada, que sus líneas las dijo su propio correo.
+ */
+export async function releerLineasDelOriginal(ctx: Contexto, albaranId: string): Promise<ResultadoRelecturaLineas> {
+  const albaran = await repo.albaranPorId(ctx.empresaId, albaranId);
+  if (!albaran) throw new ErrorRecepciones("ALBARAN_NO_ENCONTRADO", "Albarán no encontrado.", 404);
+
+  const recepciones = await repo.recepcionesDeAlbaran(ctx.empresaId, albaranId);
+  if (recepciones.length > 0) {
+    throw new ErrorRecepciones(
+      "ALBARAN_YA_RECIBIDO",
+      `Del albarán ${albaran.numeroProveedor} ya se ha recibido mercancía: sus líneas no se reescriben. Si lo contado no cuadra, se rectifica la recepción.`,
+      409
+    );
+  }
+
+  const original = await repo.originalDeAlbaran(ctx.empresaId, albaranId);
+  if (!original) throw new ErrorRecepciones("SIN_ORIGINAL", "Este albarán no tiene guardado el PDF del proveedor.", 409);
+  const pdf = await leerDelAlmacen(original.storagePath);
+  if (!pdf) throw new ErrorRecepciones("ORIGINAL_ILEGIBLE", "El PDF del albarán no está disponible en el almacenamiento.", 409);
+
+  const lineas = lineasDelPdf(pdf);
+  if (lineas.length === 0) {
+    throw new ErrorRecepciones(
+      "PDF_SIN_LINEAS",
+      "Del PDF no sale ninguna línea de mercancía, así que no se toca lo que ya hay. ¿Es el albarán del proveedor?",
+      422
+    );
+  }
+
+  const resultado: ResultadoRelecturaLineas = {
+    albaranId,
+    numeroProveedor: albaran.numeroProveedor,
+    lineasAntes: 0,
+    lineasAhora: 0,
+    sinPedido: 0,
+    pedidoNuevas: 0,
+    pedidoQuitadas: 0,
+    avisos: [],
+  };
+
+  await repo.enTransaccion(async (c) => {
+    const pedido = await repo.bloquearPedido(ctx.empresaId, albaran.pedidoId, c);
+    if (!pedido) throw new ErrorRecepciones("PEDIDO_NO_ENCONTRADO", "Pedido no encontrado.", 404);
+
+    const antes = await repo.lineasDeAlbaran(ctx.empresaId, albaranId, c, true);
+    resultado.lineasAntes = antes.length;
+    await repo.borrarLineasDeAlbaran(ctx.empresaId, albaranId, c);
+    // Los acumulados del pedido son una columna guardada: si no se recalculan
+    // ahora, las líneas que vienen se compararían contra lo que expedía el
+    // albarán que se acaba de borrar.
+    await repo.recalcularLineasPedido(ctx.empresaId, albaran.pedidoId, c);
+
+    const lineasPedido = await repo.lineasDePedido(ctx.empresaId, albaran.pedidoId, c, true);
+
+    /*
+     * El pedido arrastra el mismo amasijo, porque vino del mismo correo
+     * aplanado: una línea sola con media tabla dentro. Esa línea no describe
+     * nada que se pueda contar, así que se cambia por las del papel.
+     *
+     * Con dos condiciones, y las dos importan:
+     *
+     * - Que no se haya recibido NADA del pedido. Lo que alguien ya contó manda
+     *   sobre cualquier papel.
+     * - Que el pedido esté deducido o tenga alguna línea que sea un amasijo.
+     *   Un pedido de verdad y legible NO se toca: sus líneas las dijo su
+     *   correo, y que este albarán traiga sólo una parte es lo normal —una
+     *   expedición parcial—, no un error que arreglar.
+     */
+    const amasijos = lineasPedido.filter((p) => esAmasijo(p.descripcionProveedor));
+    const recibidoAlgo = (await repo.recepcionesDePedido(ctx.empresaId, albaran.pedidoId, c)).length > 0;
+    const arreglarPedido = !recibidoAlgo && (pedido.derivadoDeAlbaran || amasijos.length > 0);
+    // Las líneas legibles del pedido son las únicas a las que engancharse: a un
+    // amasijo no se engancha nada, que es lo que había que arreglar.
+    const legibles = arreglarPedido ? lineasPedido.filter((p) => !amasijos.some((a) => a.id === p.id)) : lineasPedido;
+
+    const usadas = new Set<string>();
+    const encaja = (l: { referencia: string | null; descripcion: string }) => {
+      const porReferencia = l.referencia
+        ? legibles.find((p) => !usadas.has(p.id) && p.referenciaProveedor && p.referenciaProveedor.trim() === l.referencia)
+        : undefined;
+      if (porReferencia) return porReferencia;
+      const d = descripcionNormalizada(l.descripcion);
+      return legibles.find((p) => !usadas.has(p.id) && descripcionNormalizada(p.descripcionProveedor) === d);
+    };
+
+    let siguienteLinea = lineasPedido.reduce((max, p) => Math.max(max, p.numeroLinea), 0);
+    let n = 0;
+    for (const l of lineas) {
+      let lineaPedido = encaja(l);
+      if (!lineaPedido && arreglarPedido) {
+        // Lo que se sabe de lo pedido es lo que el papel dice que se ha
+        // expedido: es lo mismo que hace el módulo con un pedido deducido.
+        siguienteLinea += 1;
+        lineaPedido = await repo.crearPedidoLinea(
+          ctx.empresaId,
+          {
+            pedidoId: albaran.pedidoId,
+            numeroLinea: siguienteLinea,
+            referenciaProveedor: l.referencia,
+            descripcionProveedor: l.descripcion,
+            productoId: null,
+            productoTexto: null,
+            mapeoId: null,
+            cantidadPedida: l.cantidad,
+            precioUnitarioCentimos: l.precioCentimos,
+          },
+          c
+        );
+        legibles.push(lineaPedido);
+        resultado.pedidoNuevas += 1;
+      }
+      if (lineaPedido) usadas.add(lineaPedido.id);
+      else resultado.sinPedido += 1;
+      n += 1;
+      await repo.crearAlbaranLinea(
+        ctx.empresaId,
+        {
+          albaranId,
+          pedidoLineaId: lineaPedido?.id ?? null,
+          numeroLinea: n,
+          referenciaProveedor: l.referencia ?? lineaPedido?.referenciaProveedor ?? null,
+          descripcionProveedor: l.descripcion,
+          productoId: lineaPedido?.productoId ?? null,
+          productoTexto: lineaPedido?.productoTexto ?? null,
+          cantidadExpedida: l.cantidad,
+        },
+        c
+      );
+    }
+    resultado.lineasAhora = n;
+
+    // Y se tiran los amasijos, que ya no sostienen nada: ni expedido, ni
+    // recibido, ni un renglón de albarán apuntando a ellos.
+    if (arreglarPedido) {
+      for (const a of amasijos) {
+        if (usadas.has(a.id)) continue;
+        await repo.borrarLineaPedido(ctx.empresaId, a.id, c);
+        resultado.pedidoQuitadas += 1;
+      }
+    }
+    const huerfanas = await repo.limpiarLineasHuerfanas(ctx.empresaId, albaran.pedidoId, c);
+    resultado.pedidoQuitadas += huerfanas;
+    if (resultado.pedidoNuevas > 0 || resultado.pedidoQuitadas > 0) {
+      resultado.avisos.push(
+        `El pedido ${pedido.numeroProveedor} también se ha arreglado con el papel: ${resultado.pedidoQuitadas} línea(s) fuera y ${resultado.pedidoNuevas} puesta(s). Lo pedido se da por lo expedido mientras no llegue otra cosa.`
+      );
+    }
+    if (resultado.sinPedido > 0) {
+      resultado.avisos.push(
+        `${resultado.sinPedido} línea(s) del papel no encajan con ninguna del pedido ${pedido.numeroProveedor}: entran en el albarán igual, sin pedido detrás.`
+      );
+    }
+
+    await recalcularEstadoPedido(ctx.empresaId, albaran.pedidoId, c);
+
+    await repo.anotarEvento(
+      ctx.empresaId,
+      {
+        pedidoId: albaran.pedidoId,
+        albaranId,
+        tipo: "LINEAS_RELEIDAS",
+        usuarioId: ctx.userId,
+        usuarioNombre: ctx.userNombre,
+        datos: { antes: resultado.lineasAntes, ahora: n, sinPedido: resultado.sinPedido, pedidoNuevas: resultado.pedidoNuevas, pedidoQuitadas: resultado.pedidoQuitadas, lineas },
+        descripcion:
+          `Líneas del albarán ${albaran.numeroProveedor} releídas de su PDF: ${resultado.lineasAntes} → ${n}. ` +
+          lineas.map((l) => `${l.cantidad}× ${l.descripcion}`).join(" · ") +
+          (resultado.avisos.length > 0 ? ` ${resultado.avisos.join(" ")}` : ""),
+      },
+      c
+    );
+  });
+
+  return resultado;
 }
 
 const DESCARGA_TIMEOUT_MS = 20_000;
