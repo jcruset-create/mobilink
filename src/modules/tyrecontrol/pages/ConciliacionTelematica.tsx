@@ -11,6 +11,7 @@ import NumerosDeFlota from "../components/NumerosDeFlota";
 import SincronizacionKilometraje from "../components/SincronizacionKilometraje";
 import type { Empresa, TipoVehiculo, ConfigEjes, MedidaNeumatico } from "../types";
 import { Modal } from "../components/ui";
+import { avisoDeConfig, configDelTipo } from "../services/altaLoteConfig";
 
 /**
  * Conciliación telemática: qué vehículos del proveedor son cuáles de aquí.
@@ -198,6 +199,14 @@ export default function ConciliacionTelematica() {
   const seleccion = filasProveedor.filter((f) => marcados.has(f.externo.providerVehicleId));
   // Crear exige matrícula: sin ella no hay con qué dar de alta el vehículo.
   const creables = seleccion.filter((f) => f.externo.plate).length;
+
+  // El cruce tipo ↔ configuración y su aviso viven aparte, probados: no hay
+  // clave ajena que los ate, se casan por NOMBRE, y un cruce por nombre falla.
+  const configDeTipo = (tipoId: string) =>
+    configDelTipo(tipoId, catalogos?.tipos ?? [], catalogos?.configs ?? []);
+  const avisoConfig = altaLote
+    ? avisoDeConfig(altaLote, catalogos?.tipos ?? [], catalogos?.configs ?? [])
+    : null;
 
   function alternar(id: string) {
     setMarcados((antes) => {
@@ -865,15 +874,14 @@ export default function ConciliacionTelematica() {
                 value={altaLote.tipoVehiculoId}
                 onChange={(e) => {
                   const tipoVehiculoId = e.target.value;
-                  // La configuración de ejes no se pregunta: es del tipo. Se
-                  // copia al vehículo en silencio porque la ficha la necesita
-                  // para desglosar las medidas por eje, pero elegirla aparte
-                  // solo invitaba a que dijeran cosas distintas.
-                  const tipo = (catalogos?.tipos ?? []).find((t) => t.id === tipoVehiculoId);
-                  const cfg = (catalogos?.configs ?? []).find(
-                    (c) => c.nombre?.toLowerCase() === (tipo?.configuracion_ejes ?? "").toLowerCase(),
-                  );
-                  setAltaLote({ ...altaLote, tipoVehiculoId, configEjesId: cfg?.id ?? "" });
+                  // Elegir tipo REESCRIBE la configuración con la suya. Es lo
+                  // que se espera —el tipo es quien manda— y deja el cambio a
+                  // mano para después, que es justo el orden en que se usa.
+                  setAltaLote({
+                    ...altaLote,
+                    tipoVehiculoId,
+                    configEjesId: configDeTipo(tipoVehiculoId)?.id ?? "",
+                  });
                 }}
                 className="w-full rounded-lg border border-slate-600 bg-slate-900 px-2 py-2 text-sm text-slate-100"
               >
@@ -886,6 +894,25 @@ export default function ConciliacionTelematica() {
               </select>
               <span className="mt-1 block text-[11px] text-slate-500">
                 Es lo que da el plano de ruedas. Sin él no se puede revisar.
+              </span>
+            </label>
+
+            <label className="block">
+              <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">
+                Configuración de ejes
+              </span>
+              <select
+                value={altaLote.configEjesId}
+                onChange={(e) => setAltaLote({ ...altaLote, configEjesId: e.target.value })}
+                className="w-full rounded-lg border border-slate-600 bg-slate-900 px-2 py-2 text-sm text-slate-100"
+              >
+                <option value="">Sin configuración</option>
+                {(catalogos?.configs ?? []).map((c) => (
+                  <option key={c.id} value={c.id}>{c.nombre}</option>
+                ))}
+              </select>
+              <span className="mt-1 block text-[11px] text-slate-500">
+                {avisoConfig ?? "La pone el tipo. Se puede cambiar si este vehículo no la sigue."}
               </span>
             </label>
 
