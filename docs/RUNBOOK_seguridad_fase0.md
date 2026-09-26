@@ -189,11 +189,14 @@ un servidor hablando con la base. Se encontraron dos rondando. Ahora se lanza co
 
 Las tres mediciones, porque el diagnóstico costó dos intentos:
 
-| Ejecución | Arnés | Huérfanos | Resultado |
-|---|---|---|---|
-| 1 | dentro de la suite | sí | no terminaba en siete minutos |
-| 2 | fuera | sí | **222 s**, igual que la línea base |
-| 3 | fuera | no | 222 s |
+| Ejecución | Arnés | Huérfanos | Duración | Resultado |
+|---|---|---|---|---|
+| 1 | dentro de la suite | sí | no terminaba en 7 min | 1 fallo real (el guarda de `eliminar-auth`) |
+| 2 | fuera | sí | **222,41 s** | 334 ficheros, 5.755 pruebas, 0 fallos |
+| 3 | fuera | no | **218,55 s** | 334 ficheros, 5.755 pruebas, 0 fallos |
+
+La línea base sobre `origin/main`, para comparar: 329 ficheros, 5.654 pruebas,
+222 s. O sea que la Fase 0 añade 101 pruebas y no cuesta tiempo medible.
 
 O sea: lo que ralentizaba la suite era el arnés corriendo dentro, no los
 huérfanos. La fuga era un fallo real por sí mismo, pero no era la causa de la
