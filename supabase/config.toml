@@ -1,6 +1,9 @@
 
 [functions.admin-create-user]
 enabled = true
+# verify_jwt sigue en false porque la propia función valida la sesión y
+# comprueba el rol con service role. Pasarlo a true es de la Fase 3; anotado
+# para que no se lea como un olvido.
 verify_jwt = false
 import_map = "./functions/admin-create-user/deno.json"
 # Uncomment to specify a custom file path to the entrypoint.
@@ -18,6 +21,9 @@ entrypoint = "./functions/admin-update-user/index.ts"
 
 [functions.alertas-email]
 enabled = true
+# No lleva sesión de usuario: la dispara un trabajo programado y se autentica
+# con el secreto `ALERTAS_CRON_SECRET` que comprueba la propia función. Sin ese
+# secreto configurado, la función responde 503 y no hace nada.
 verify_jwt = false
 import_map = "./functions/deno.json"
 entrypoint = "./functions/alertas-email/index.ts"

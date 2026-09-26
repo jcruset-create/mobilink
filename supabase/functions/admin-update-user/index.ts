@@ -84,10 +84,29 @@ serve(async (req: Request) => {
     return jsonResponse({ error: "Sesión no válida." }, 401);
   }
 
-  const { data: perfilAdmin, error: perfilAdminError } = await supabaseUser
+  /*
+   * ── Dos cambios de seguridad en esta comprobación ──────────────────────────
+   *
+   * 1. Se lee con el cliente de SERVICE ROLE y no con la sesión de quien llama.
+   *    Antes se usaba `supabaseUser`, o sea la lectura pasaba por las políticas
+   *    del usuario; y la política de `perfiles_usuario` es
+   *    `FOR ALL TO authenticated USING (true) WITH CHECK (true)`, así que
+   *    cualquier usuario autenticado podía ESCRIBIR su propia fila y ponerse
+   *    `rol = 'admin'` antes de llamar aquí. Preguntarle al interesado si es
+   *    admin no es una comprobación. (La política se corrige además en la
+   *    migración preparada; esto no depende de ella.)
+   *
+   * 2. Se empareja solo por `user_id`, no por `user_id` O `email`. Con el `or`,
+   *    quien consiguiera registrarse con el correo de una ficha de admin que
+   *    todavía no tenía `user_id` heredaba ese admin.
+   */
+  const { data: perfilAdmin, error: perfilAdminError } = await createClient(
+    supabaseUrl,
+    serviceRoleKey
+  )
     .from("perfiles_usuario")
-    .select("id, rol, activo")
-    .or(`user_id.eq.${user.id},email.eq.${user.email}`)
+    .select("id, rol, activo, ubicacion")
+    .eq("user_id", user.id)
     .eq("activo", true)
     .maybeSingle();
 
@@ -133,6 +152,32 @@ serve(async (req: Request) => {
       },
       404
     );
+  }
+
+  /*
+   * Un admin solo edita usuarios de SU ubicación.
+   *
+   * Antes aceptaba cualquier `perfil_id` y podía cambiarle a cualquiera el
+   * correo, el rol y la CONTRASEÑA. Sumado a que el rol de admin se podía
+   * autoconceder (ver arriba), esto era la toma de cualquier cuenta de Almacén
+   * en dos llamadas. Se contesta 404 y no 403 por lo mismo que en el resto de
+   * la casa: un 403 confirmaría que la ficha existe.
+   *
+   * Un admin sin ubicación asignada se considera de plataforma y no se limita:
+   * es como estaba, y acotarlo sin saber quién lo usa dejaría a alguien fuera.
+   */
+  if (perfilAdmin.ubicacion && perfilActual.ubicacion !== perfilAdmin.ubicacion) {
+    return jsonResponse({ error: "No se encontró el perfil de usuario." }, 404);
+  }
+
+  // Y nadie se cambia su propio rol desde aquí: para eso está otro admin.
+  if (
+    perfilActual.user_id === user.id &&
+    typeof body.rol === "string" &&
+    body.rol.trim() &&
+    body.rol.trim() !== perfilActual.rol
+  ) {
+    return jsonResponse({ error: "No puedes cambiar tu propio rol." }, 403);
   }
 
   const nuevoNombre =

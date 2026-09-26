@@ -14,8 +14,51 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+/**
+ * Escapa texto que va dentro del HTML del correo.
+ *
+ * Los nombres de herramientas, incidencias y certificaciones los escriben los
+ * usuarios y se interpolaban tal cual en el cuerpo del mensaje. Un nombre con
+ * `<a href=...>` o con una etiqueta de imagen convertía el aviso interno en un
+ * correo con enlaces ajenos, firmado por nuestro dominio.
+ */
+function escaparHtml(valor: unknown): string {
+  return String(valor ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+
+  /*
+   * ── Esta función no tenía autenticación ninguna ────────────────────────────
+   *
+   * `supabase/config.toml` la declara con `verify_jwt = false`, y el cuerpo no
+   * comprobaba nada: usaba directamente el service role. Cualquiera con la URL
+   * podía invocarla en bucle y llenar el buzón del destinatario con cargo a
+   * nuestra cuenta de Resend, y la respuesta además decía cuántas alertas hay.
+   *
+   * Es un trabajo programado, no algo que pulse una persona, así que la
+   * credencial adecuada es un secreto compartido con quien la dispara. Sin
+   * `ALERTAS_CRON_SECRET` configurado NO se abre la puerta: se responde 503, que
+   * es lo que hay que hacer cuando falta la configuración de seguridad. Un
+   * «si no hay secreto, pasa» sería el mismo agujero con más pasos.
+   */
+  const CRON_SECRET = Deno.env.get("ALERTAS_CRON_SECRET");
+  if (!CRON_SECRET) {
+    return jsonResponse(
+      { error: "ALERTAS_CRON_SECRET no está configurado: la función está cerrada." },
+      503
+    );
+  }
+  const enviado = req.headers.get("x-alertas-cron-secret") ?? "";
+  if (enviado.length !== CRON_SECRET.length || enviado !== CRON_SECRET) {
+    return jsonResponse({ error: "No autorizado." }, 401);
+  }
 
   const SUPABASE_URL     = Deno.env.get("SUPABASE_URL")!;
   const SUPABASE_SERVICE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -120,7 +163,7 @@ serve(async (req) => {
   const avisos   = filas.filter((f) => f.nivel === "🟠").length;
 
   const listaHtml = filas
-    .map((f) => `<li style="margin-bottom:6px">${f.nivel} ${f.texto}</li>`)
+    .map((f) => `<li style="margin-bottom:6px">${f.nivel} ${escaparHtml(f.texto)}</li>`)
     .join("");
 
   const html = `
