@@ -14,11 +14,12 @@
  * y entonces la respuesta correcta es devolver el permiso de ESA tabla (sección
  * 1b) y no abrir las otras 87.
  *
- * Nada de esto borra datos. Las funciones vuelven a su versión anterior, que
- * está en `supabase/migrations/administracion_fase11_usuarios_unificados.sql` y
- * `administracion_fase12_licencia_en_alta_usuario.sql`: para restaurarlas se
- * vuelven a ejecutar esos dos ficheros, que son idempotentes
- * (`create or replace`).
+ * Nada de esto borra datos.
+ *
+ * Y una cosa que SÍ se puede revertir sin miedo y de una línea: los
+ * disparadores. La migración no reescribe ninguna función —ver el razonamiento
+ * en su sección 4—, así que no hay ningún cuerpo que restaurar: basta con
+ * quitar los disparadores y las funciones vuelven a comportarse como antes.
  */
 
 begin;
@@ -86,6 +87,42 @@ begin;
 -- drop policy if exists perfiles_alta_admin on perfiles_usuario;
 -- create policy almacen_solo_autenticados on perfiles_usuario
 --   for all to authenticated using (true) with check (true);
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- 3b) Los disparadores de app_usuarios (la vuelta atrás más probable)
+-- ───────────────────────────────────────────────────────────────────────────
+--
+-- Si algo del alta o la edición de usuarios deja de funcionar, esto es lo
+-- primero que hay que quitar, y es inmediato. Deja las funciones exactamente
+-- como estaban, porque la migración no las tocó.
+--
+-- Lo que se pierde al quitarlos: que un admin de módulo de una empresa cliente
+-- no pueda concederse el superadministrador ni borrar a uno. O sea, SEC-004 y
+-- SEC-005 vuelven a estar abiertos.
+
+-- drop trigger if exists trg_app_usuarios_guardia_escritura on app_usuarios;
+-- drop trigger if exists trg_app_usuarios_guardia_borrado on app_usuarios;
+-- drop function if exists app_usuarios_guardia();
+
+-- El apunte de bajas se puede dejar puesto sin problema: solo escribe una fila
+-- al borrar un usuario. Si se quita, hay que quitarlo ANTES que la tabla.
+-- drop trigger if exists trg_app_usuarios_apunta_baja on app_usuarios;
+-- drop function if exists app_apunta_baja_auth();
+-- drop table if exists app_bajas_auth;
+--
+-- OJO: si se borra `app_bajas_auth`, el endpoint `eliminar-auth` pasa a exigir
+-- ser superadministrador de plataforma (así está escrito a propósito, para no
+-- abrirse cuando la tabla no existe). No es un fallo: es el modo degradado.
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- 3c) El `search_path` endurecido
+-- ───────────────────────────────────────────────────────────────────────────
+--
+-- Volver a `public` a secas reabre la suplantación por esquema temporal. No hay
+-- ninguna razón para hacerlo: `alter function ... set search_path` no cambia el
+-- cuerpo ni el comportamiento de nada que funcione hoy.
+--
+-- alter function app_es_admin() set search_path = public;
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- 4) `app_login_email` ejecutable otra vez por la clave pública

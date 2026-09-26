@@ -87,3 +87,49 @@ select lower(
  group by 1
 having count(*) > 1
  order by 2 desc;
+
+\echo '=== 8) Recuento de tablas de public, y cuántas sin RLS ==='
+select count(*) as tablas_public,
+       count(*) filter (where relrowsecurity) as con_rls,
+       count(*) filter (where not relrowsecurity) as sin_rls
+  from pg_class c join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public' and c.relkind = 'r';
+
+\echo '=== 9) Privilegios heredados vía PUBLIC (el caso que se colaba) ==='
+-- `revoke ... from anon` no quita nada de lo concedido a PUBLIC, porque anon
+-- hereda de PUBLIC. Estas filas son las que hay que mirar dos veces.
+select table_name, privilege_type
+  from information_schema.role_table_grants
+ where table_schema = 'public' and grantee = 'PUBLIC'
+ order by 1, 2;
+
+\echo '=== 10) Funciones ejecutables por anon / authenticated / PUBLIC ==='
+select
+  count(*) filter (where has_function_privilege('anon', p.oid, 'execute'))          as puede_anon,
+  count(*) filter (where has_function_privilege('authenticated', p.oid, 'execute')) as puede_authenticated,
+  count(*) filter (where p.prosecdef)                                               as security_definer,
+  count(*) filter (where p.prosecdef and not coalesce(array_to_string(p.proconfig, ','), '') like '%pg_temp%')
+                                                                                    as secdef_sin_pg_temp,
+  count(*)                                                                          as funciones_totales
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public';
+
+\echo '=== 11) Las SECURITY DEFINER sin pg_temp en su search_path ==='
+-- Suplantables con una tabla temporal por quien tenga conexión directa a la
+-- base. `app_es_admin` es la que abre `app_guardar_usuario`.
+select p.oid::regprocedure as firma, coalesce(array_to_string(p.proconfig, ', '), '(sin search_path)') as config
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.prosecdef
+   and not coalesce(array_to_string(p.proconfig, ','), '') like '%pg_temp%'
+ order by 1
+ limit 50;
+
+\echo '=== 12) Buckets de Storage y su visibilidad ==='
+-- Solo lectura. Si esta consulta falla, el rol no ve el esquema `storage` y hay
+-- que mirarlo en el panel de Storage del dashboard.
+select id, name, public, created_at from storage.buckets order by public desc, name;
+
+\echo '=== 13) ¿Puede authenticated crear tablas temporales? ==='
+-- Es la precondición del ataque por search_path. Si sale falso, el riesgo baja.
+select has_database_privilege('authenticated', current_database(), 'TEMP') as authenticated_temp,
+       has_database_privilege('anon', current_database(), 'TEMP') as anon_temp;

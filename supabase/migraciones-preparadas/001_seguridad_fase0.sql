@@ -19,13 +19,20 @@
  *            entrada o marcar un documento como firmado por otro.
  *   SEC-004  `app_guardar_usuario` escribía `es_superadmin` sin comprobar que
  *            quien llama lo sea: un admin de módulo de una empresa cliente se
- *            hacía superadministrador de plataforma.
- *   SEC-005  `app_eliminar_usuario` tenía el mismo patrón: `app_es_admin()` a
- *            secas, sin empresa y sin proteger a los superadministradores.
+ *            hacía superadministrador de plataforma. Se cierra con un
+ *            DISPARADOR sobre `app_usuarios`, no reescribiendo la función: ver
+ *            la sección 4, que explica por qué reescribirla era imposible y
+ *            además peligroso.
+ *   SEC-005  `app_eliminar_usuario` es la misma causa raíz por otra superficie:
+ *            `app_es_admin()` a secas, sin empresa y sin proteger a los
+ *            superadministradores. El mismo disparador lo cubre, y la sección 5
+ *            cierra además el borrado de la cuenta de Auth.
  *   SEC-003  La política de `perfiles_usuario` (`USING (true)` para cualquier
  *            autenticado) permitía escribirse `rol = 'admin'`.
  *
- * Y crea la tabla que hace que los bloqueos de login sobrevivan a un reinicio.
+ * Y además: endurece el `search_path` de las funciones de las que depende la
+ * autorización (hallazgo nuevo de la revisión, sección 7) y crea las dos tablas
+ * que hacen falta: la de bajas de Auth y la de bloqueos de login.
  *
  * ── ANTES DE APLICARLA ─────────────────────────────────────────────────────
  *
@@ -166,6 +173,15 @@ begin
       continue;
     end if;
     execute format('alter table public.%I enable row level security', t);
+    /*
+     * PUBLIC va PRIMERO y no es adorno. Si a una tabla se le concedió algo a
+     * PUBLIC alguna vez, `revoke ... from anon` no quita nada: `anon` hereda de
+     * PUBLIC y sigue entrando. Comprobado contra PostgreSQL 16:
+     * `grant select on t to public` + `revoke all on t from anon` deja
+     * `has_table_privilege('anon','t','select')` en cierto. Es el mismo patrón
+     * que apareció con app_login_email, y aquí aplica igual.
+     */
+    execute format('revoke all on public.%I from public', t);
     execute format('revoke all on public.%I from anon', t);
     execute format('revoke all on public.%I from authenticated', t);
   end loop;
@@ -227,6 +243,12 @@ begin
   end if;
 
   execute 'drop policy if exists almacen_solo_autenticados on perfiles_usuario';
+  -- Idempotente: sin estos tres `drop`, una segunda pasada moría con
+  -- «policy "perfiles_lectura" already exists». Comprobado ejecutándola dos
+  -- veces seguidas.
+  execute 'drop policy if exists perfiles_lectura on perfiles_usuario';
+  execute 'drop policy if exists perfiles_escritura_admin on perfiles_usuario';
+  execute 'drop policy if exists perfiles_alta_admin on perfiles_usuario';
 
   execute $pol$
     create policy perfiles_lectura on perfiles_usuario
@@ -264,177 +286,196 @@ begin
 end $$;
 
 -- ───────────────────────────────────────────────────────────────────────────
--- 4) SEC-004 · `app_guardar_usuario` no concede lo que no se tiene
+-- 4) SEC-004 y SEC-005 · nadie concede ni borra lo que no le corresponde
 -- ───────────────────────────────────────────────────────────────────────────
 --
--- La función calculaba `v_soy_super` y solo lo usaba para el chequeo de «otra
--- empresa». El `es_superadmin` lo escribía tal como llegara en el parámetro, y
--- la protegía `app_es_admin()`, que es cierto para cualquier
--- `adm_usuarios.rol = 'admin'` de cualquier empresa. Es decir: el administrador
--- del módulo de administración de una empresa cliente se llamaba a sí mismo con
--- `p_es_superadmin := true` y salía siendo superadministrador de plataforma, con
--- acceso a `/api/admin/*`, a todas las empresas y a todas las licencias.
+-- ── Qué se arregla ─────────────────────────────────────────────────────────
 --
--- Se añaden dos reglas y no se toca nada más de la función. El `create or
--- replace` completo va aquí porque no se puede parchear media función: el
--- cuerpo es el mismo que el de `administracion_fase12_licencia_en_alta_usuario.sql`
--- con las dos comprobaciones nuevas marcadas.
+-- `app_guardar_usuario` escribía `es_superadmin` tal como llegara en el
+-- parámetro, y solo la protegía `app_es_admin()`, que es cierto para cualquier
+-- `adm_usuarios.rol = 'admin'` de CUALQUIER empresa. Un administrador del módulo
+-- de administración de una empresa cliente se llamaba a sí mismo con
+-- `p_es_superadmin := true` y salía siendo superadministrador de plataforma.
+-- `app_eliminar_usuario` tenía el mismo patrón para desactivar y borrar.
+--
+-- ── Por qué un DISPARADOR y no reescribir las funciones ────────────────────
+--
+-- La primera versión de esta migración hacía `create or replace` de las dos
+-- funciones con las comprobaciones añadidas. Estaba mal por dos razones que
+-- solo salieron al probarla, y las dos merecen quedar escritas:
+--
+-- 1. **No se puede.** El último parámetro real se llama `p_accesos`, y
+--    PostgreSQL rechaza `create or replace` si cambia el nombre de un parámetro:
+--    «cannot change name of input parameter». La migración habría abortado
+--    entera.
+--
+-- 2. **Y aunque se pudiera, era peligroso.** Reescribir la función obliga a
+--    copiar sus cien líneas de lógica de negocio: la unicidad del nombre de
+--    usuario, el «un empleado no puede tener dos cuentas», la comprobación de
+--    licencia de cada módulo que se AÑADE, el borrado de accesos que ya no
+--    están, el aforo de usuarios por licencia y la fila de auditoría cuando el
+--    superadmin se pasa del tope. Una copia hecha a mano habría borrado en
+--    silencio la mitad de eso. Un arreglo de seguridad que se lleva por delante
+--    el control de licencias no es un arreglo.
+--
+-- Un disparador sobre `app_usuarios` no toca ninguna función, y además cubre
+-- MÁS: cualquier camino de escritura —esa RPC, otra futura, el editor SQL del
+-- dashboard, PostgREST directo— pasa por él. La regla vive junto al dato.
+--
+-- ── El escape para el servidor, dicho en voz alta ──────────────────────────
+--
+-- `auth.uid()` es null cuando escribe el backend (conexión directa con
+-- DATABASE_URL, o service_role por PostgREST) y cuando corre una migración. En
+-- ese caso el disparador deja pasar: el backend es de confianza y tiene sus
+-- propias comprobaciones desde la Fase 0. Quien pudiera llegar con `auth.uid()`
+-- nulo siendo un atacante necesitaría ya la contraseña de la base o la clave de
+-- servicio, y entonces esto es lo de menos.
 
-create or replace function app_guardar_usuario(
-  p_id uuid,
-  p_username text,
-  p_nombre text,
-  p_email_recuperacion text,
-  p_telefono text,
-  p_activo boolean,
-  p_es_superadmin boolean,
-  p_employee_id uuid,
-  p_modulos jsonb
-) returns uuid language plpgsql security definer set search_path = public as $$
+-- ── Sobre el propietario y el SECURITY DEFINER de este disparador ──────────
+--
+-- La función es `security definer` a propósito, y tiene que quedar dicho porque
+-- es la clase de decisión que se copia sin pensar:
+--
+--   · necesita leer `es_superadmin` del que llama en CUALQUIER contexto. La RLS
+--     de `app_usuarios` permite leer la propia fila (`id = auth.uid() or
+--     app_es_admin()`), así que hoy funcionaría también como `security invoker`;
+--     pero basta que mañana se acote esa política para que el disparador deje de
+--     ver la fila y decida con información incompleta;
+--   · no ejecuta SQL dinámico, así que no hay dónde inyectar nada;
+--   · lleva `search_path = public, pg_temp` con `pg_temp` nombrado al final, que
+--     es lo que impide suplantar `app_usuarios` con una tabla temporal (ver la
+--     sección 7).
+--
+-- El PROPIETARIO importa: una función `security definer` corre con los
+-- privilegios de su dueño. Al aplicar esta migración desde el editor SQL del
+-- dashboard, el dueño será el rol que la ejecute —normalmente `postgres`—, que es
+-- lo que hace falta para leer la tabla sin depender de la RLS. Si se aplica con
+-- otro rol, conviene comprobar que ese rol puede leer `app_usuarios`.
+--
+-- Y una aclaración de reparto de papeles: la política `app_usuarios_write` ya
+-- exige `app_es_admin()` para escribir, o sea «hay que ser algún tipo de
+-- administrador». Lo que añade el disparador es la granularidad que faltaba
+-- ENTRE administradores: cuál de ellos puede hacer qué, y sobre quién.
+
+create or replace function app_usuarios_guardia()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
 declare
-  v_id uuid;
+  v_actor uuid := auth.uid();
   v_soy_super boolean;
-  v_empresa uuid;
-  v_empresa_previa uuid;
-  v_objetivo_super boolean;
+  v_empresa_actor uuid;
 begin
-  if not app_es_admin() then
-    raise exception 'Solo un administrador puede gestionar usuarios';
+  -- Sin usuario final detrás: backend o migración. Ver el comentario de arriba.
+  if v_actor is null then
+    if tg_op = 'DELETE' then return old; else return new; end if;
   end if;
 
   select coalesce(es_superadmin, false) into v_soy_super
-  from app_usuarios where id = auth.uid();
+    from app_usuarios where id = v_actor;
   v_soy_super := coalesce(v_soy_super, false);
 
-  -- NUEVO (SEC-004): nadie concede un nivel que no tiene.
-  if coalesce(p_es_superadmin, false) and not v_soy_super then
-    raise exception 'Solo un superadministrador puede conceder el superadministrador';
+  if v_soy_super then
+    if tg_op = 'DELETE' then return old; else return new; end if;
   end if;
 
-  -- NUEVO (SEC-004): y a un superadministrador existente no lo edita quien no
-  -- lo es; si no, se le podría desactivar o cambiarle el nombre de usuario.
-  select coalesce(es_superadmin, false) into v_objetivo_super
-  from app_usuarios where id = p_id;
-  if coalesce(v_objetivo_super, false) and not v_soy_super then
-    raise exception 'Solo un superadministrador puede editar esa cuenta';
+  v_empresa_actor := app_empresa_actual();
+
+  -- 1) Nadie concede un nivel que no tiene.
+  if tg_op in ('INSERT', 'UPDATE') and coalesce(new.es_superadmin, false) then
+    raise exception 'Solo un superadministrador puede conceder el superadministrador'
+      using errcode = '42501';
   end if;
 
-  select empresa_id into v_empresa_previa from app_usuarios where id = p_id;
-
-  select coalesce(
-           v_empresa_previa,
-           app_empresa_actual(),
-           '00000000-0000-4000-a000-000000000001'::uuid)
-    into v_empresa;
-
-  -- Cada administrador, con los suyos.
-  if not v_soy_super
-     and v_empresa_previa is not null
-     and v_empresa_previa is distinct from app_empresa_actual() then
-    raise exception 'Ese usuario es de otra empresa';
+  -- 2) Y a un superadministrador no lo toca quien no lo es: ni para editarlo,
+  --    ni para desactivarlo, ni para borrarlo.
+  if tg_op in ('UPDATE', 'DELETE') and coalesce(old.es_superadmin, false) then
+    raise exception 'Solo un superadministrador puede gestionar esa cuenta'
+      using errcode = '42501';
   end if;
 
-  insert into app_usuarios (id, username, nombre, email_recuperacion, telefono,
-                            activo, es_superadmin, employee_id, empresa_id)
-  values (p_id, p_username, p_nombre, p_email_recuperacion, p_telefono,
-          coalesce(p_activo, true), coalesce(p_es_superadmin, false),
-          p_employee_id, v_empresa)
-  on conflict (id) do update set
-    username           = excluded.username,
-    nombre             = excluded.nombre,
-    email_recuperacion = excluded.email_recuperacion,
-    telefono           = excluded.telefono,
-    activo             = excluded.activo,
-    es_superadmin      = excluded.es_superadmin,
-    employee_id        = excluded.employee_id,
-    updated_at         = now()
-  returning id into v_id;
-
-  if p_modulos is not null then
-    delete from app_usuario_modulos where user_id = v_id;
-    insert into app_usuario_modulos (user_id, modulo, rol, pantallas, empresa_id)
-    select v_id,
-           m->>'modulo',
-           m->>'rol',
-           case when m ? 'pantallas' and jsonb_typeof(m->'pantallas') = 'array'
-                then array(select jsonb_array_elements_text(m->'pantallas'))
-                else null end,
-           nullif(m->>'empresa_id', '')::uuid
-    from jsonb_array_elements(p_modulos) as m;
+  -- 3) Cada administrador, con los de su empresa. El id de un usuario no es un
+  --    secreto: sale en listados y en enlaces, así que saberlo no puede ser la
+  --    autorización para editarlo o borrarlo.
+  if tg_op in ('UPDATE', 'DELETE')
+     and old.empresa_id is not null
+     and v_empresa_actor is not null
+     and old.empresa_id is distinct from v_empresa_actor then
+    raise exception 'Ese usuario es de otra empresa' using errcode = '42501';
+  end if;
+  if tg_op in ('INSERT', 'UPDATE')
+     and new.empresa_id is not null
+     and v_empresa_actor is not null
+     and new.empresa_id is distinct from v_empresa_actor then
+    raise exception 'No puedes asignar un usuario a otra empresa' using errcode = '42501';
   end if;
 
-  return v_id;
+  if tg_op = 'DELETE' then return old; else return new; end if;
 end $$;
 
-revoke execute on function app_guardar_usuario(uuid, text, text, text, text, boolean, boolean, uuid, jsonb) from public;
-revoke execute on function app_guardar_usuario(uuid, text, text, text, text, boolean, boolean, uuid, jsonb) from anon;
-grant execute on function app_guardar_usuario(uuid, text, text, text, text, boolean, boolean, uuid, jsonb) to authenticated;
+drop trigger if exists trg_app_usuarios_guardia_escritura on app_usuarios;
+create trigger trg_app_usuarios_guardia_escritura
+  before insert or update on app_usuarios
+  for each row execute function app_usuarios_guardia();
+
+drop trigger if exists trg_app_usuarios_guardia_borrado on app_usuarios;
+create trigger trg_app_usuarios_guardia_borrado
+  before delete on app_usuarios
+  for each row execute function app_usuarios_guardia();
 
 -- ───────────────────────────────────────────────────────────────────────────
--- 5) SEC-005 · `app_eliminar_usuario`: ni de otra empresa, ni superadmins
+-- 5) El id de Auth se autoriza ANTES de perder la empresa a la que pertenece
 -- ───────────────────────────────────────────────────────────────────────────
 --
--- Tenía el mismo patrón: `app_es_admin()` a secas. Un admin de módulo de una
--- empresa cliente desactivaba o borraba a cualquiera, superadministradores
--- incluidos. Y el endpoint `/api/administracion/usuarios/eliminar-auth` se apoya
--- en esta función para autorizar, porque cuando le llega el turno la ficha ya no
--- existe y no puede comprobar la empresa.
+-- Flujo del borrado de un usuario, tal como está hoy:
+--
+--   1. la pantalla llama a la RPC `app_eliminar_usuario(p_id)`, que borra —o
+--      desactiva, si tiene historial— la fila de `app_usuarios`;
+--   2. después llama a `POST /api/administracion/usuarios/eliminar-auth`, que
+--      comprueba que la ficha YA NO EXISTE y borra la cuenta de `auth.users`.
+--
+-- El problema es el paso 2: cuando le llega el turno, la relación
+-- usuario → empresa ya no existe, así que no puede autorizar nada. Acepta
+-- cualquier `userId` cuya ficha no esté, y hay cuentas de `auth.users` que nunca
+-- tuvieron ficha en `app_usuarios`: operarios con email sintético, usuarios que
+-- solo viven en `tc_usuarios`. Un administrador de la empresa A podía borrar la
+-- cuenta de acceso de alguien de la empresa B.
+--
+-- La propiedad que hace falta es: **ningún identificador de `auth.users` llega a
+-- una operación destructiva sin haber sido autorizado contra su empresa antes de
+-- perder esa información.** Se consigue dejando constancia en el momento en que
+-- todavía se sabe: la RPC apunta la baja, con la empresa y quién la pidió, y el
+-- endpoint solo borra lo que esté apuntado.
 
-create or replace function app_eliminar_usuario(p_id uuid)
-returns text language plpgsql security definer set search_path = public as $$
-declare
-  v_tiene_historial boolean;
-  v_soy_super boolean;
-  v_objetivo_super boolean;
-  v_empresa_objetivo uuid;
+create table if not exists app_bajas_auth (
+  user_id        uuid primary key,
+  empresa_id     uuid,
+  solicitado_por uuid,
+  creado_en      timestamptz not null default now()
+);
+
+alter table app_bajas_auth enable row level security;
+revoke all on app_bajas_auth from public;
+revoke all on app_bajas_auth from anon;
+revoke all on app_bajas_auth from authenticated;
+
+-- Lo apunta el propio disparador de borrado: así queda constancia tanto si la
+-- baja viene de la RPC como de cualquier otro camino, y no hay que copiar el
+-- cuerpo de la función (ver el razonamiento del punto 4).
+create or replace function app_apunta_baja_auth()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
 begin
-  if not app_es_admin() then
-    raise exception 'Solo un administrador puede eliminar usuarios';
-  end if;
-  if p_id = auth.uid() then
-    raise exception 'No puedes eliminar tu propio usuario';
-  end if;
-
-  select coalesce(es_superadmin, false) into v_soy_super
-  from app_usuarios where id = auth.uid();
-  v_soy_super := coalesce(v_soy_super, false);
-
-  select coalesce(es_superadmin, false), empresa_id
-    into v_objetivo_super, v_empresa_objetivo
-  from app_usuarios where id = p_id;
-
-  -- NUEVO (SEC-005): a un superadministrador no lo borra quien no lo es.
-  if coalesce(v_objetivo_super, false) and not v_soy_super then
-    raise exception 'Solo un superadministrador puede eliminar esa cuenta';
-  end if;
-
-  -- NUEVO (SEC-005): y cada administrador, con los de su empresa.
-  if not v_soy_super
-     and v_empresa_objetivo is not null
-     and v_empresa_objetivo is distinct from app_empresa_actual() then
-    raise exception 'Ese usuario es de otra empresa';
-  end if;
-
-  v_tiene_historial :=
-       exists (select 1 from adm_payments where registered_by = p_id)
-    or exists (select 1 from adm_recovery_actions where user_id = p_id)
-    or exists (select 1 from adm_payment_tracking_actions where user_id = p_id)
-    or exists (select 1 from adm_payment_tracking where responsible_user = p_id)
-    or exists (select 1 from adm_recovery_cases where responsible_user = p_id)
-    or exists (select 1 from adm_notificaciones where created_by = p_id);
-
-  if v_tiene_historial then
-    update app_usuarios set activo = false where id = p_id;
-    return 'desactivado';
-  end if;
-
-  delete from app_usuarios where id = p_id;
-  return 'eliminado';
+  insert into app_bajas_auth (user_id, empresa_id, solicitado_por)
+  values (old.id, old.empresa_id, auth.uid())
+  on conflict (user_id) do update
+    set empresa_id     = excluded.empresa_id,
+        solicitado_por = excluded.solicitado_por,
+        creado_en      = now();
+  return old;
 end $$;
 
-revoke execute on function app_eliminar_usuario(uuid) from public;
-revoke execute on function app_eliminar_usuario(uuid) from anon;
-grant execute on function app_eliminar_usuario(uuid) to authenticated;
+drop trigger if exists trg_app_usuarios_apunta_baja on app_usuarios;
+create trigger trg_app_usuarios_apunta_baja
+  after delete on app_usuarios
+  for each row execute function app_apunta_baja_auth();
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- 6) SEC-065 · `app_login_email` deja de contestar a cualquiera
@@ -458,7 +499,59 @@ revoke execute on function app_login_email(text) from anon;
 revoke execute on function app_login_email(text) from authenticated;
 
 -- ───────────────────────────────────────────────────────────────────────────
--- 7) Tabla de bloqueos de login
+-- 7) HALLAZGO NUEVO · el `search_path` de las funciones `security definer`
+-- ───────────────────────────────────────────────────────────────────────────
+--
+-- Salió al revisar esta migración, y no estaba en el informe. Todas las
+-- funciones `security definer` del proyecto —unas 170— se declaran con
+-- `set search_path = public`. Eso NO basta: PostgreSQL busca el esquema temporal
+-- ANTES que los nombrados, salvo que `pg_temp` se nombre explícitamente. Así que
+-- quien pueda crear una tabla temporal suplanta las tablas que la función lee.
+--
+-- Comprobado contra PostgreSQL 16, con `app_es_admin()` reproducida:
+--
+--   set search_path = public            → crear pg_temp.app_usuarios con
+--                                         es_superadmin = true hace que
+--                                         app_es_admin() devuelva CIERTO
+--   set search_path = public, pg_temp   → devuelve falso, el ataque no entra
+--
+-- Y `app_es_admin()` es la puerta de `app_guardar_usuario` y
+-- `app_eliminar_usuario`: con ella en cierto, se abre lo demás.
+--
+-- ── Alcance real, dicho sin inflarlo ───────────────────────────────────────
+--
+-- Crear una tabla temporal exige una conexión directa a PostgreSQL. Por
+-- PostgREST no se puede: solo admite llamar funciones y consultar, no DDL. Así
+-- que esto NO es explotable con la clave publicable de las APKs; hace falta la
+-- contraseña de la base o algo equivalente. Es endurecimiento en profundidad,
+-- no una escalada remota: por eso va aquí y no en la lista de críticos.
+--
+-- Aquí se arreglan solo las funciones que esta migración toca o de las que
+-- depende. El barrido de las 170 va con SEC-043, en la Fase 3: `alter function`
+-- no cambia el cuerpo, así que es mecánico, pero son 170 firmas y conviene
+-- generarlas leyendo el catálogo y no a mano.
+
+do $$
+declare
+  f record;
+begin
+  for f in
+    select p.oid::regprocedure as firma
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and p.prosecdef                                -- security definer
+       and p.proname in ('app_es_admin', 'app_empresa_actual',
+                         'app_guardar_usuario', 'app_eliminar_usuario',
+                         'app_login_email', 'app_licencia_activa')
+  loop
+    execute format('alter function %s set search_path = public, pg_temp', f.firma);
+    raise notice 'search_path endurecido en %', f.firma;
+  end loop;
+end $$;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- 8) Tabla de bloqueos de login
 -- ───────────────────────────────────────────────────────────────────────────
 --
 -- El freno de intentos ya funciona sin esto, en memoria del proceso. Con la
