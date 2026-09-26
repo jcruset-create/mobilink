@@ -40,7 +40,7 @@ import * as tickets from "./expenseclaims/lines.ts";
 import { MAXIMO_TICKETS_POR_SUBIDA } from "./expenseclaims/lines.ts";
 import { informeLiquidacion } from "./expenseclaims/report.ts";
 import { pagarLiquidacion } from "./expenseclaims/pago.ts";
-import { lecturaDisponible, reintentarAnalisis } from "./expenseclaims/analisis.ts";
+import { aplicarReglasDeConcepto, lecturaDisponible, reintentarAnalisis } from "./expenseclaims/analisis.ts";
 import * as empleados from "./expenseclaims/empleados.ts";
 import { conectorPara, configuracionErp, conectoresDisponibles, estadoIntegracion } from "./erp/registry.ts";
 import { procesarOutbox, reintentarErrores } from "./erp/worker.ts";
@@ -2497,6 +2497,18 @@ export function createCashRouter(): Router {
         enteroPositivo(req.params.lineId, "lineId")
       );
       res.json({ ok: true });
+    })
+  );
+
+  /**
+   * Volver a pasar las reglas de concepto por los tickets ya leídos, sin leer
+   * otra vez: lo que sigue a «Recordar» en la pantalla.
+   */
+  r.post(
+    "/expense-claims/:id/apply-rules",
+    exigirPermiso("cash.expense_claim.create"),
+    ruta(async (req, res) => {
+      res.json(await aplicarReglasDeConcepto(contexto(req), enteroPositivo(req.params.id, "id")));
     })
   );
 

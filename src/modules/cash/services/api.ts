@@ -1249,6 +1249,10 @@ export const reglasGasto = () =>
 export const guardarReglaGasto = (datos: { campo: string; patron: string; conceptoId: number }) =>
   pedir<{ regla: ReglaGastoConfig }>("/expense-rules", { ...json(datos), method: "PUT" });
 
+/** Vuelve a pasar las reglas de concepto por los tickets ya leídos de una liquidación. */
+export const aplicarReglasDeConcepto = (claimId: number) =>
+  pedir<{ propuestas: number; rellenadas: number }>(`/expense-claims/${claimId}/apply-rules`, { method: "POST" });
+
 export const borrarReglaGasto = (id: number) =>
   pedir<{ ok: true }>(`/expense-rules/${id}`, { method: "DELETE" });
 

@@ -37,7 +37,9 @@ export const ESQUEMA_FACTURA = objeto({
       "simplificada, ticket de venta, ALBARÁN o parte de trabajo con importes. " +
       "El nombre que lleve impreso da igual; lo que cuenta es que haya un " +
       "importe que alguien cobra o paga. false para lo que no lo sea: un " +
-      "presupuesto sin aceptar, una ficha técnica, una foto de otra cosa.",
+      "presupuesto sin aceptar, una ficha técnica, una foto de otra cosa. " +
+      "El ticket de un bar o restaurante que la caja imprime como «FACTURA " +
+      "PROFORMA» al cobrar la mesa, con su total, es un ticket: true.",
   },
   tipo_documento: {
     ...texto,
@@ -70,7 +72,12 @@ export const ESQUEMA_FACTURA = objeto({
         "albarán del taller pone «Albarán: B2_0004524» y el número es " +
         "«B2_0004524». " +
         "Lo que NO es: el número de operación o de comercio del ticket del TPV " +
-        "—ese va en el recibo, no aquí—, el código del cliente, ni la matrícula.",
+        "—ese va en el recibo, no aquí—, el código del cliente, ni la matrícula. " +
+        "Un ticket sin «Factura» ni «Ticket» impreso tiene igualmente su número: el " +
+        "que imprime el PROPIO establecimiento para ese papel, como el «ID " +
+        "029718386265000690» al pie de un ticket de autopista o el «Nº Op.: 218406» " +
+        "de la caja de un bar. Los datos del datáfono (AUT, AID, ARC, la tarjeta) " +
+        "nunca son el número del documento.",
     },
     fecha: { ...texto, description: "Fecha de la factura, tal cual: «27/08/2026»." },
   }),
@@ -214,7 +221,8 @@ Reglas:
 6. No decidas de qué banco o de qué proveedor es el TPV. Copia el número de comercio, el terminal, la red y el nombre del adquirente si aparecen, y ya está: la clasificación no es tuya.
 7. «tipo_documento» es lo que pone el papel, no lo que parece: un albarán con importes e IVA sigue siendo un ALBARAN.
 8. «tipo_establecimiento» es la clase de negocio que emite el papel, no en qué se gastó: un ticket de autopista es PEAJE aunque no ponga la palabra. No decidas a qué concepto de gasto va: eso no es tuyo.
-9. Las confianzas son tuyas de verdad: 0,99 cuando el dato está impreso y claro; por debajo de 0,7 cuando estás adivinando.
+9. El papel puede estar en catalán: «Import» es el importe, «Comprovant de pas» es el ticket de un peaje, «Venda» es una venta, «Targeta» es la tarjeta.
+10. Las confianzas son tuyas de verdad: 0,99 cuando el dato está impreso y claro; por debajo de 0,7 cuando estás adivinando.
 
 El documento puede ser una factura de venta del taller, un ALBARÁN o parte de trabajo, o un ticket de compra a un proveedor, y puede ser un PDF digital, un PDF escaneado o una foto, con el ticket del datáfono pegado encima, torcido o mal enfocado. Un ticket de compra muchas veces no tiene número de factura ni NIF del comprador: eso no es un fallo, es null.
 

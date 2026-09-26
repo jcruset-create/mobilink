@@ -25,6 +25,15 @@ describe("importes tal y como se imprimen", () => {
     expect(importeImpreso("22,93 EUR")).toBe(2293);
   });
 
+  it("el EUR con punto de los tickets de autopista", () => {
+    // Autopistes de Catalunya: «Import:      5,03 EUR.»
+    expect(importeImpreso("5,03 EUR.")).toBe(503);
+    expect(importeImpreso("0,79 EUR.")).toBe(79);
+    expect(importeImpreso("5.03 EUR.")).toBe(503);
+    // El punto solo se come pegado a la moneda: un importe con un punto suelto no.
+    expect(importeImpreso("5,03.")).toBeNull();
+  });
+
   it("aguanta el punto de los miles y el símbolo pegado", () => {
     expect(importeImpreso("1.234,56")).toBe(123456);
     expect(importeImpreso("1.234,56€")).toBe(123456);
@@ -181,6 +190,16 @@ describe("la cruda se guarda sin números de tarjeta", () => {
     );
     expect(r.recibo.texto).toBe("VENTA ···1234 IMPORTE 22,93 EUR");
     expect(r.recibo.texto).not.toContain("4548");
+  });
+
+  it("la que viene enmascarada con los seis primeros a la vista, también", () => {
+    // Así la imprimen los peajes de Autopistes de Catalunya.
+    const r = sinDatosDeTarjeta(
+      conTarjeta("494000XXXXXX1743", "TARGETA VISA AUT 610401 494000XXXXXX1743 Import: 5,03 EUR.")
+    );
+    expect(r.recibo.tarjeta).toBe("···1743");
+    expect(r.recibo.texto).toBe("TARGETA VISA AUT 610401 ···1743 Import: 5,03 EUR.");
+    expect(sinDatosDeTarjeta(conTarjeta(null, "4940 00** **** 1743")).recibo.texto).not.toContain("4940");
   });
 
   it("lo que no es una tarjeta no se toca", () => {

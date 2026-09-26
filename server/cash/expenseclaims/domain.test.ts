@@ -8,6 +8,7 @@ import {
   destinoDerivado,
   lineasEditables,
   nifNormalizado,
+  numerosDistintos,
   periodoDe,
   totalesPorConcepto,
   transicion,
@@ -202,5 +203,23 @@ describe("clave de duplicado", () => {
     expect(claveDeDuplicado({ ...base, emisorNif: "B43044379", fecha: null })).toBeNull();
     expect(claveDeDuplicado({ ...base, emisorNif: "B43044379", importeCentimos: 0 })).toBeNull();
     expect(claveDeDuplicado({ ...base, emisorNombre: "  " })).toBeNull();
+  });
+});
+
+describe("números distintos: dos papeles aunque todo lo demás coincida", () => {
+  it("la ida y la vuelta por el mismo peaje son dos tickets", () => {
+    expect(numerosDistintos("ID 029705186265000559", "ID 029718386265000690")).toBe(true);
+  });
+
+  it("el mismo número leído de dos maneras es el mismo", () => {
+    expect(numerosDistintos("0297 1838-6265", "029718386265")).toBe(false);
+    expect(numerosDistintos("op 218406", "OP218406")).toBe(false);
+  });
+
+  it("si a cualquiera de los dos le falta, no se afirma nada", () => {
+    expect(numerosDistintos(null, "218406")).toBe(false);
+    expect(numerosDistintos("218406", "")).toBe(false);
+    expect(numerosDistintos(" - ", "218406")).toBe(false);
+    expect(numerosDistintos(undefined, undefined)).toBe(false);
   });
 });

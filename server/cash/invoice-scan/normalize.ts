@@ -44,10 +44,11 @@ import type { ExtraccionCruda, ExtraccionNormalizada, TipoDocumento, TipoEstable
 export function importeImpreso(texto: string | null | undefined): Centimos | null {
   if (texto == null) return null;
 
-  // Se quitan el símbolo y el código de moneda, y los espacios de los extremos
-  // —el OCR mete espacios finos y no separables donde le parece—.
+  // Se quitan el símbolo y el código de moneda —con su punto si lo lleva:
+  // Autopistes de Catalunya imprime «5,03 EUR.»—, y los espacios de los
+  // extremos —el OCR mete espacios finos y no separables donde le parece—.
   const limpio = texto
-    .replace(/€|EUR(OS)?/gi, "")
+    .replace(/€|EUR(OS)?\.?/gi, "")
     .replace(/^[\s\p{Zs}]+|[\s\p{Zs}]+$/gu, "");
   if (limpio === "") return null;
 
@@ -163,7 +164,18 @@ export function ultimosCuatro(texto: string | null | undefined): string | null {
  */
 export function enmascararTarjetas(texto: string | null): string | null {
   if (!texto) return texto;
-  return texto.replace(/(?:\d[ -]?){11,}\d/g, (trozo) => `···${trozo.replace(/\D/g, "").slice(-4)}`);
+  return (
+    texto
+      /*
+       * Primero la que el datáfono ya imprime enmascarada pero con los seis
+       * primeros a la vista: «494000XXXXXX1743», como la de los peajes de
+       * Autopistes. De una tarjeta se guardan los cuatro últimos y nada más.
+       * Va antes que la de abajo para que la autorización de al lado no se
+       * tome por el principio de una tarjeta.
+       */
+      .replace(/\b\d{4}[ -]?\d{0,2}[X*·•][X*·• -]{2,}\d{4}/gi, (trozo) => `···${trozo.slice(-4)}`)
+      .replace(/(?:\d[ -]?){11,}\d/g, (trozo) => `···${trozo.replace(/\D/g, "").slice(-4)}`)
+  );
 }
 
 /**

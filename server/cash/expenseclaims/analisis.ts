@@ -369,3 +369,95 @@ export async function reintentarAnalisis(ctx: Contexto, claimId: number, lineId:
     ip: ctx.ip,
   });
 }
+
+// ── Aprender sin volver a leer ─────────────────────────────────────────────
+
+/**
+ * Vuelve a pasar las reglas de concepto por los tickets YA LEÍDOS de una
+ * liquidación en borrador.
+ *
+ * Es lo que hace útil el «Recordar» de la pantalla: el trabajador trae cuatro
+ * menús del mismo bar, alguien elige Dietas en el primero y guarda la regla, y
+ * los otros tres lo reciben al momento. Sin volver a llamar a la IA —lo leído
+ * está guardado y leer cuesta dinero—: se clasifica otra vez con lo que ya se
+ * sabía del papel, con la misma función y con la seguridad que el modelo dio
+ * al emisor aquella vez.
+ *
+ * Las mismas reglas del juego que la lectura: solo se rellena el concepto
+ * VACÍO de un ticket que nadie ha dado por revisado; lo demás queda como
+ * propuesta con su porqué.
+ */
+export async function aplicarReglasDeConcepto(
+  ctx: Contexto,
+  claimId: number
+): Promise<{ propuestas: number; rellenadas: number }> {
+  const reglas = await reglasGastoDeEmpresa(ctx.empresaId);
+  const activos = await conceptosActivos(ctx.empresaId);
+  const hecho = await enTransaccion(async (client) => {
+    const l = await cargarLiquidacion(client, ctx, claimId, true);
+    if (!lineasEditables(l.estado)) {
+      throw new ErrorCaja("LINEA_NO_EDITABLE", `${l.numero} ya no está en borrador.`, 409);
+    }
+    const { rows } = await client.query(
+      `SELECT x.id, x.leido, x.revisada, x.expense_concept_id,
+              (s.extraccion_normalizada->'confianza'->>'emisor')::float AS confianza_emisor
+         FROM cash_expense_claim_lines x
+         LEFT JOIN cash_invoice_scans s ON s.id = x.scan_id
+        WHERE x.claim_id = $1 AND x.analisis = 'LISTO' AND x.leido IS NOT NULL AND x.situacion = 'INCLUIDA'
+        ORDER BY x.id
+        FOR UPDATE OF x`,
+      [claimId]
+    );
+    let propuestas = 0;
+    let rellenadas = 0;
+    for (const x of rows) {
+      const leido = x.leido as Leido;
+      const propuesta = clasificarConcepto(
+        {
+          tipoEstablecimiento: leido.tipoEstablecimiento,
+          nombreEmisor: leido.emisorNombre,
+          nifEmisor: leido.emisorNif,
+          concepto: leido.concepto,
+          baseCentimos: leido.baseCentimos,
+          ivaCentimos: leido.ivaCentimos,
+          totalCentimos: leido.importeCentimos,
+          // Sin el escaneo no se sabe cuánto se fiaba el modelo: no se rellena solo.
+          confianzaEmisor: x.confianza_emisor == null ? 0 : Number(x.confianza_emisor),
+        },
+        reglas,
+        activos
+      );
+      if (propuesta.conceptoId != null) propuestas++;
+      const rellenar = propuesta.autoSeleccionar && !x.revisada && x.expense_concept_id == null;
+      if (rellenar) rellenadas++;
+      await client.query(
+        `UPDATE cash_expense_claim_lines
+            SET leido = jsonb_set(leido, '{conceptoPropuesto}', $2::jsonb),
+                concepto_propuesto_id = $3, concepto_confianza = $4, concepto_regla_id = $5,
+                expense_concept_id = CASE WHEN $6 THEN $3 ELSE expense_concept_id END,
+                updated_at_ms = $7
+          WHERE id = $1`,
+        [
+          x.id,
+          JSON.stringify(propuesta),
+          propuesta.conceptoId,
+          propuesta.confianza,
+          propuesta.reglaId,
+          rellenar,
+          Date.now(),
+        ]
+      );
+    }
+    return { propuestas, rellenadas };
+  });
+  await registrarAuditoria({
+    empresaId: ctx.empresaId,
+    userId: ctx.userId,
+    accion: "cash.expense_claim.rules_applied",
+    entidad: "cash_expense_claims",
+    entidadId: String(claimId),
+    detalle: hecho,
+    ip: ctx.ip,
+  });
+  return hecho;
+}
