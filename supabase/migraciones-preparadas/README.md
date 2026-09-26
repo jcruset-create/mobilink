@@ -174,3 +174,96 @@ justo para eso.
    de ESA tabla (sección 1b), no de las 88.
 5. **Reabrir todo** → sección 1, comentada a propósito. Restaura la
    vulnerabilidad; solo con una decisión explícita detrás.
+
+---
+
+## Ficha técnica de la migración
+
+Lo que hay que poder consultar sin abrir el SQL.
+
+### Precondiciones de ejecución
+
+| Requisito | Por qué |
+|---|---|
+| Ejecutarla con un rol que pueda `alter table`, `create trigger` y `create function` en `public` | Normalmente `postgres` desde el editor SQL del dashboard |
+| Ese mismo rol debe poder **leer** `app_usuarios` | Será el propietario de las funciones `security definer`, y con sus privilegios se leerá la tabla |
+| El código de la Fase 0 ya desplegado | La migración quita a `anon` el permiso de `app_login_email`, y hoy el navegador la llama directamente. Al revés se rompe el login del hub |
+| Haber ejecutado `verificacion-previa.sql` y leído la consulta 1 | La lista de tablas del fichero solo cubre las creadas en migraciones |
+| Ventana en la que se pueda mirar el resultado | No es una migración de despliegue automático |
+
+No hace falta parar el servicio. Todo son `alter`, `revoke`, `drop policy`,
+`create policy`, `create trigger`, `create function` y `create table`: ninguna
+operación reescribe datos ni toma bloqueos largos.
+
+### Objetos que crea, con su propietario y su `search_path`
+
+| Objeto | Tipo | `security definer` | Propietario esperado | `search_path` |
+|---|---|---|---|---|
+| `app_usuarios_guardia()` | función de disparador | **Sí** | el rol que aplica la migración (normalmente `postgres`) | `public, pg_temp` |
+| `app_apunta_baja_auth()` | función de disparador | **Sí** | el rol que aplica la migración | `public, pg_temp` |
+| `trg_app_usuarios_guardia_escritura` | disparador `before insert or update` | — | — | — |
+| `trg_app_usuarios_guardia_borrado` | disparador `before delete` | — | — | — |
+| `trg_app_usuarios_apunta_baja` | disparador `after delete` | — | — | — |
+| `app_bajas_auth` | tabla | — | el rol que aplica la migración | — |
+| `app_auth_intentos` | tabla | — | el rol que aplica la migración | — |
+
+Las dos funciones son `security definer` porque tienen que leer `es_superadmin`
+del que llama en cualquier contexto, incluido uno en el que la RLS de
+`app_usuarios` no le dejara ver su propia fila. Ninguna ejecuta SQL dinámico, y
+las dos llevan `pg_temp` nombrado al final, que es lo que impide suplantar
+`app_usuarios` con una tabla temporal.
+
+**Comprobar el propietario después de aplicarla:**
+
+```sql
+select p.oid::regprocedure as objeto, pg_get_userbyid(p.proowner) as propietario,
+       p.prosecdef as security_definer, array_to_string(p.proconfig, ', ') as config
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.proname in ('app_usuarios_guardia','app_apunta_baja_auth');
+```
+
+### Funciones cuyo `search_path` se endurece (y las que NO)
+
+Solo tres, y a propósito: `app_es_admin`, `app_empresa_actual` y
+`app_login_email`. Son las que deciden la autorización de esta fase. Las dos RPC
+de usuarios (`app_guardar_usuario`, `app_eliminar_usuario`) **no** están, porque
+quien decide ahora es el disparador, que ya lleva `pg_temp`: suplantar lo que
+ellas leen no salta ninguna regla de seguridad. El barrido del resto va en la
+migración propia de SEC-067, con inventario y pruebas.
+
+La lista no filtra por `security definer`, y conviene saber por qué: el esquema
+temporal se resuelve **por sesión**, no por privilegios, así que una función
+`invoker` llamada desde el disparador también se podría suplantar.
+
+### Grants: antes y después
+
+| Objeto | Antes | Después |
+|---|---|---|
+| Las 88 tablas sin RLS | RLS desactivada; `anon` y `authenticated` con los privilegios por defecto de Supabase (todo); alguna con grant a `PUBLIC` | RLS activada sin políticas; `revoke all` de `PUBLIC`, `anon` y `authenticated` |
+| Privilegios por defecto del esquema `public` (tablas) | conceden todo a `anon` y `authenticated` en cada tabla nueva | revocados: una tabla nueva ya no nace abierta |
+| `pres_records` | políticas `pres_anon_select/insert/update` para `anon`; grant `select, insert, update` a `anon` | sin políticas de `anon`; `revoke all` de `anon` |
+| `sm_document_acknowledgements` | políticas de `anon` | sin políticas de `anon`; `revoke all` |
+| `perfiles_usuario` | `almacen_solo_autenticados`: `for all to authenticated using (true) with check (true)` | `perfiles_lectura` (select, abierto a autenticados) + `perfiles_escritura_admin` (update, solo admins) + `perfiles_alta_admin` (insert, solo admins). **Sin política de delete**: los borrados pasan por el servidor |
+| `app_login_email(text)` | `execute` a `anon` y `authenticated`, más el implícito de `PUBLIC` | `revoke` de `PUBLIC`, `anon` y `authenticated`. Solo el servidor |
+| `app_bajas_auth`, `app_auth_intentos` | no existían | RLS activada; `revoke all` de `PUBLIC`, `anon` y `authenticated` |
+
+**El orden importa:** `PUBLIC` se revoca primero. `revoke ... from anon` no
+quita nada de lo concedido a `PUBLIC`, porque `anon` hereda de `PUBLIC`.
+Comprobado en PostgreSQL 16 y con prueba automatizada.
+
+### Operación de vuelta atrás
+
+Está en `001_seguridad_fase0_rollback.sql`, casi todo comentado a propósito, y
+ordenada de menor a mayor daño. Lo que conviene saber de memoria:
+
+| Si pasa esto | Se hace esto | Coste |
+|---|---|---|
+| Un alta o edición de usuario falla | `drop trigger` de los dos disparadores de `app_usuarios` | Inmediato. **No hay que restaurar ningún cuerpo de función**, porque la migración no reescribió ninguna. SEC-004 y SEC-005 vuelven a quedar abiertos |
+| Una pantalla de almacén no puede escribir | Restaurar la política única de `perfiles_usuario` | Reabre que cualquiera se ponga `rol = 'admin'` |
+| Una lectura concreta de un cliente dejó de funcionar | Devolver el permiso de **esa** tabla, no de las 88 | Acotado |
+| El login del hub falla | `grant execute on function app_login_email(text) to anon` | Señal de que se aplicó la migración antes del código |
+| Hay que reabrirlo todo | Sección 1, comentada | Restaura la vulnerabilidad completa |
+
+`app_bajas_auth` se puede dejar puesta sin coste. Si se borra, `eliminar-auth`
+pasa a exigir superadministrador de plataforma: es el modo degradado, escrito a
+propósito para no abrirse cuando la tabla falta.

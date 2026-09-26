@@ -446,11 +446,30 @@ create trigger trg_app_usuarios_guardia_borrado
 -- endpoint solo borra lo que esté apuntado.
 
 create table if not exists app_bajas_auth (
-  user_id        uuid primary key,
-  empresa_id     uuid,
-  solicitado_por uuid,
-  creado_en      timestamptz not null default now()
+  -- Identificador propio del apunte, aparte del objetivo: así se puede auditar
+  -- «esta baja concreta» aunque un mismo usuario tenga varias a lo largo del
+  -- tiempo, y el endpoint consume una y no «la del usuario X».
+  id                      uuid primary key default gen_random_uuid(),
+  user_id                 uuid not null,
+  -- Instantánea del objetivo en el momento de autorizar. Es el dato que después
+  -- ya no existe, y el motivo de esta tabla.
+  empresa_id              uuid,
+  objetivo_es_superadmin  boolean not null default false,
+  -- Quién lo pidió, y con qué. El nivel se guarda porque el de una persona puede
+  -- cambiar entre que pide la baja y se consume.
+  solicitado_por          uuid,
+  solicitante_empresa_id  uuid,
+  solicitante_nivel       text,
+  origen                  text,
+  creado_en               timestamptz not null default now(),
+  caduca_en               timestamptz not null default now() + interval '24 hours',
+  consumido_en            timestamptz,
+  consumido_por           uuid
 );
+
+-- Un solo apunte vivo por usuario: si se pide la baja dos veces, se refresca.
+create unique index if not exists idx_app_bajas_auth_usuario_vivo
+  on app_bajas_auth (user_id) where consumido_en is null;
 
 alter table app_bajas_auth enable row level security;
 revoke all on app_bajas_auth from public;
@@ -462,13 +481,40 @@ revoke all on app_bajas_auth from authenticated;
 -- cuerpo de la función (ver el razonamiento del punto 4).
 create or replace function app_apunta_baja_auth()
 returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+declare
+  v_actor uuid := auth.uid();
+  v_nivel text;
+  v_empresa_actor uuid;
 begin
-  insert into app_bajas_auth (user_id, empresa_id, solicitado_por)
-  values (old.id, old.empresa_id, auth.uid())
-  on conflict (user_id) do update
-    set empresa_id     = excluded.empresa_id,
-        solicitado_por = excluded.solicitado_por,
-        creado_en      = now();
+  if v_actor is not null then
+    select case
+             when coalesce(u.es_superadmin, false) then 'superadmin'
+             when exists (select 1 from adm_usuarios a
+                           where a.id = v_actor and a.activo and a.rol = 'admin')
+               then 'admin_modulo'
+             else 'usuario'
+           end,
+           u.empresa_id
+      into v_nivel, v_empresa_actor
+      from app_usuarios u where u.id = v_actor;
+  else
+    -- Sin usuario final: el backend o una migración.
+    v_nivel := 'sistema';
+  end if;
+
+  -- Se cierra el apunte anterior que quedara vivo, en vez de pisarlo: así no se
+  -- pierde el rastro de quién pidió qué.
+  update app_bajas_auth
+     set consumido_en = now(), consumido_por = v_actor
+   where user_id = old.id and consumido_en is null;
+
+  insert into app_bajas_auth (
+    user_id, empresa_id, objetivo_es_superadmin,
+    solicitado_por, solicitante_empresa_id, solicitante_nivel, origen
+  ) values (
+    old.id, old.empresa_id, coalesce(old.es_superadmin, false),
+    v_actor, v_empresa_actor, v_nivel, 'app_usuarios:delete'
+  );
   return old;
 end $$;
 
@@ -540,10 +586,32 @@ begin
       from pg_proc p
       join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'public'
-       and p.prosecdef                                -- security definer
-       and p.proname in ('app_es_admin', 'app_empresa_actual',
-                         'app_guardar_usuario', 'app_eliminar_usuario',
-                         'app_login_email', 'app_licencia_activa')
+       /*
+        * No se filtra por `prosecdef`. Suena razonable —«solo las security
+        * definer son vulnerables»— y es incompleto: el esquema temporal se
+        * resuelve por SESIÓN, no por privilegios, así que una función `invoker`
+        * llamada DESDE el disparador también se puede suplantar. Hoy las tres
+        * son `security definer`, pero la lista no tiene por qué depender de eso.
+        */
+       /*
+        * SOLO las funciones de las que depende una corrección de esta fase. El
+        * barrido de las ~170 va en su propia migración, con inventario y
+        * pruebas, para no ampliar aquí el radio de cambio:
+        *
+        *   · app_es_admin      → es la puerta de las dos RPC de usuarios, y lo
+        *                         que decide si el disparador exige algo o no;
+        *   · app_empresa_actual→ de ella sale la empresa con la que el
+        *                         disparador compara. Si se pudiera suplantar,
+        *                         la comprobación de empresa no valdría nada;
+        *   · app_login_email   → es la que esta migración cierra a la clave
+        *                         pública (SEC-065); hacerlo a medias no.
+        *
+        * Las dos RPC (`app_guardar_usuario`, `app_eliminar_usuario`) NO están a
+        * propósito: quien decide ahora es el disparador, que ya lleva `pg_temp`,
+        * así que suplantar lo que ellas leen no salta ninguna regla de
+        * seguridad. Van con SEC-067.
+        */
+       and p.proname in ('app_es_admin', 'app_empresa_actual', 'app_login_email')
   loop
     execute format('alter function %s set search_path = public, pg_temp', f.firma);
     raise notice 'search_path endurecido en %', f.firma;

@@ -20249,6 +20249,7 @@ app.post("/api/administracion/usuarios/eliminar-auth", async (req, res) => {
      * estrecho que hoy —hoy vale cualquier admin de módulo de cualquier
      * empresa— y no deja al dueño de la plataforma sin poder operar.
      */
+    let bajaId: string | null = null;
     const tieneTabla = await db
       .query(`SELECT to_regclass('public.app_bajas_auth') AS t`)
       .then((r) => Boolean(r.rows[0]?.t))
@@ -20266,33 +20267,65 @@ app.post("/api/administracion/usuarios/eliminar-auth", async (req, res) => {
         });
       }
     } else {
+      /*
+       * El apunte tiene que estar vivo: no consumido y sin caducar. Un solo uso,
+       * y el `id` del apunte es lo que se consume, no «la baja del usuario X»:
+       * así queda el rastro de cada una aunque haya varias en el tiempo.
+       */
       const baja = await db.query(
-        `SELECT empresa_id, solicitado_por, creado_en
+        `SELECT id, empresa_id, objetivo_es_superadmin, solicitado_por,
+                solicitante_empresa_id, solicitante_nivel, creado_en
            FROM app_bajas_auth
           WHERE user_id = $1
-            AND creado_en > now() - interval '24 hours'`,
+            AND consumido_en IS NULL
+            AND caduca_en > now()
+          ORDER BY creado_en DESC
+          LIMIT 1`,
         [userId]
       );
       const fila = baja.rows[0];
       if (!fila) {
-        // Nunca se autorizó una baja para este id, o ha caducado.
+        // Nunca se autorizó una baja para este id, ya se consumió, o ha caducado.
         return res.status(404).json({ success: false, message: "Ese usuario no existe" });
       }
+
+      /*
+       * Un apunte de la empresa A no sirve para borrar una identidad de la B.
+       * Se compara contra la empresa que tenía el OBJETIVO cuando se autorizó,
+       * que es la instantánea que esta tabla existe para guardar.
+       */
       if (!admin.esSuperadmin) {
         if (!admin.empresaId || fila.empresa_id !== admin.empresaId) {
           return res.status(404).json({ success: false, message: "Ese usuario no existe" });
         }
+        // Y a un superadministrador solo lo da de baja otro superadministrador,
+        // aunque el apunte exista: el flujo es específico y no se hereda.
+        if (fila.objetivo_es_superadmin) {
+          return res.status(403).json({
+            success: false,
+            message: "Solo un administrador de Mobilink puede dar de baja esa cuenta",
+          });
+        }
       }
+      bajaId = String(fila.id);
     }
 
     const { error } = await supabase.auth.admin.deleteUser(userId);
     if (error) return res.status(400).json({ success: false, message: error.message });
 
-    // El apunte se consume: una baja autoriza un borrado, no varios.
-    if (tieneTabla) {
+    /*
+     * El apunte se marca como consumido, no se borra: una baja autoriza un
+     * borrado y solo uno, y la fila queda como evidencia de quién autorizó qué
+     * y cuándo. Borrarla dejaría la auditoría sin la mitad de la historia.
+     */
+    if (bajaId) {
       await db
-        .query(`DELETE FROM app_bajas_auth WHERE user_id = $1`, [userId])
-        .catch((e) => console.warn("[eliminar-auth] no se pudo consumir la baja:", e));
+        .query(
+          `UPDATE app_bajas_auth SET consumido_en = now(), consumido_por = $2
+            WHERE id = $1 AND consumido_en IS NULL`,
+          [bajaId, admin.userId]
+        )
+        .catch((e) => console.warn("[eliminar-auth] no se pudo marcar la baja:", e));
     }
 
     if (admin.empresaId) {
@@ -20300,7 +20333,7 @@ app.post("/api/administracion/usuarios/eliminar-auth", async (req, res) => {
         empresaId: admin.empresaId,
         userId: admin.userId,
         accion: "auth.eliminar-usuario",
-        detalle: { objetivo: userId },
+        detalle: { objetivo: userId, baja: bajaId },
         ip: req.ip,
       });
     }

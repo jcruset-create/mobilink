@@ -96,8 +96,11 @@ security definer set search_path = public as $fn$
   select coalesce((select es_superadmin from app_usuarios where id = auth.uid() and activo), false)
       or coalesce((select rol = 'admin' from adm_usuarios where id = auth.uid() and activo), false)
 $fn$;
-create or replace function app_empresa_actual() returns uuid language sql stable as $fn$
-  select empresa_id from app_usuarios where id = auth.uid()
+-- Como la real (saas_fase1_empresas_licencias.sql): security definer y con
+-- search_path = public, que es justo lo que la migración tiene que endurecer.
+create or replace function app_empresa_actual() returns uuid language sql stable
+security definer set search_path = public as $fn$
+  select empresa_id from app_usuarios where id = auth.uid() and activo
 $fn$;
 create or replace function app_licencia_activa(p_empresa uuid, p_modulo text)
   returns boolean language sql stable as $fn$ select true $fn$;
@@ -251,6 +254,91 @@ describeSiHayBase("Migración de seguridad de la Fase 0", () => {
     });
   });
 
+  describe("el registro de baja guarda todo lo que hay que poder comprobar después", () => {
+    it("lleva instantánea del objetivo y del solicitante, caducidad e id propio", async () => {
+      const r = await db.query(
+        `select id, user_id, empresa_id, objetivo_es_superadmin,
+                solicitado_por, solicitante_empresa_id, solicitante_nivel,
+                origen, creado_en, caduca_en, consumido_en, consumido_por
+           from app_bajas_auth where user_id = $1`,
+        [DE_A]
+      );
+      const fila = r.rows[0];
+      expect(fila).toBeDefined();
+      expect(fila.id).toBeTruthy();
+      // La empresa del OBJETIVO en el momento de autorizar: es el dato que
+      // después ya no existe, y el motivo de que esta tabla exista.
+      expect(fila.empresa_id).toBe(EMPRESA_A);
+      expect(fila.objetivo_es_superadmin).toBe(false);
+      // Quién lo pidió, con qué empresa y con qué nivel.
+      expect(fila.solicitado_por).toBe(ADMIN_A);
+      expect(fila.solicitante_empresa_id).toBe(EMPRESA_A);
+      expect(fila.solicitante_nivel).toBe("admin_modulo");
+      expect(fila.origen).toBe("app_usuarios:delete");
+      // Caducidad y estado de consumo.
+      expect(new Date(fila.caduca_en).getTime()).toBeGreaterThan(Date.now());
+      expect(fila.consumido_en).toBeNull();
+      expect(fila.consumido_por).toBeNull();
+    });
+
+    it("marca el nivel del solicitante como superadmin cuando lo es", async () => {
+      const objetivo = "00000000-0000-4000-a000-0000000000dd";
+      await db.query(`set test.uid = ''`);
+      await db.query(
+        `insert into app_usuarios (id,username,nombre,activo,es_superadmin,empresa_id)
+           values ($1,'paraBorrar','Para Borrar',true,false,$2) on conflict (id) do nothing`,
+        [objetivo, EMPRESA_A]
+      );
+      await como(SUPER, `select app_eliminar_usuario($1::uuid)`, [objetivo]);
+      const r = await db.query(
+        `select solicitante_nivel from app_bajas_auth where user_id = $1`,
+        [objetivo]
+      );
+      expect(r.rows[0].solicitante_nivel).toBe("superadmin");
+    });
+
+    it("solo hay un apunte vivo por usuario: pedir la baja otra vez cierra el anterior", async () => {
+      const objetivo = "00000000-0000-4000-a000-0000000000ee";
+      await db.query(`set test.uid = ''`);
+      await db.query(
+        `insert into app_usuarios (id,username,nombre,activo,es_superadmin,empresa_id)
+           values ($1,'dosVeces','Dos Veces',true,false,$2) on conflict (id) do nothing`,
+        [objetivo, EMPRESA_A]
+      );
+      await como(ADMIN_A, `select app_eliminar_usuario($1::uuid)`, [objetivo]);
+      // Se vuelve a crear y a borrar: el índice único parcial obliga a cerrar el
+      // apunte anterior en vez de dejar dos vivos.
+      await db.query(`set test.uid = ''`);
+      await db.query(
+        `insert into app_usuarios (id,username,nombre,activo,es_superadmin,empresa_id)
+           values ($1,'dosVeces','Dos Veces',true,false,$2)`,
+        [objetivo, EMPRESA_A]
+      );
+      await como(ADMIN_A, `select app_eliminar_usuario($1::uuid)`, [objetivo]);
+
+      const vivos = await db.query(
+        `select count(*)::int as n from app_bajas_auth
+          where user_id = $1 and consumido_en is null`,
+        [objetivo]
+      );
+      expect(vivos.rows[0].n).toBe(1);
+      const todos = await db.query(
+        `select count(*)::int as n from app_bajas_auth where user_id = $1`,
+        [objetivo]
+      );
+      expect(todos.rows[0].n).toBe(2); // el rastro de las dos se conserva
+    });
+
+    it("la tabla no la puede leer ni anon ni authenticated", async () => {
+      const r = await db.query(
+        `select has_table_privilege('anon','app_bajas_auth','select') as a,
+                has_table_privilege('authenticated','app_bajas_auth','select') as b`
+      );
+      expect(r.rows[0].a).toBe(false);
+      expect(r.rows[0].b).toBe(false);
+    });
+  });
+
   describe("SEC-002 · la clave pública deja de alcanzar las tablas", () => {
     it("activa RLS en las tablas que no la tenían", async () => {
       const r = await db.query(
@@ -328,12 +416,12 @@ describeSiHayBase("Migración de seguridad de la Fase 0", () => {
       await db.query(`drop table if exists secreto_demo`); // la temporal
     });
 
-    it("la migración endurece las funciones de las que depende la autorización", async () => {
+    it("la migración endurece SOLO las funciones de las que depende la autorización", async () => {
       const r = await db.query(
         `select p.proname, p.proconfig
            from pg_proc p join pg_namespace n on n.oid = p.pronamespace
           where n.nspname = 'public'
-            and p.proname in ('app_es_admin','app_guardar_usuario','app_eliminar_usuario','app_login_email')
+            and p.proname in ('app_es_admin','app_empresa_actual','app_login_email')
           order by 1`
       );
       expect(r.rows.length).toBeGreaterThan(0);
