@@ -48,23 +48,38 @@ pegarlas en la conversación.
 
 | # | Comprobación | Esperado | Real | GO/NO-GO | Acción necesaria |
 |---|---|---|---|---|---|
-| 1 | Estado real de RLS por tabla | La lista real de `public` sin RLS, para compararla con las 88 del repositorio | **NO VERIFICADO** | NO-GO | Ejecutar la consulta 1 y 8 de `verificacion-previa.sql` |
-| 2 | Grants efectivos de `anon`, `authenticated` y `PUBLIC` | Saber qué puede hacer hoy la clave pública, incluido lo heredado de `PUBLIC` | **NO VERIFICADO** | NO-GO | Consultas 2 y 9 |
-| 3 | Funciones ejecutables por esos roles | Recuento antes, para comparar después | **NO VERIFICADO** | NO-GO | Consulta 10 |
-| 4 | Inventario de `SECURITY DEFINER` | Cuántas hay y cuántas sin `pg_temp` | **NO VERIFICADO** | NO-GO | Consultas 10 y 11 |
-| 5 | `search_path` de las funciones sensibles | `app_es_admin`, `app_empresa_actual`, `app_login_email` con su configuración actual | **NO VERIFICADO** | NO-GO | Consulta 11 |
-| 6 | Políticas permisivas (`USING (true)`) | El tamaño real del trabajo de la Fase 3 | **NO VERIFICADO** | NO-GO | Consultas 3 y 4 |
-| 7 | Diferencias esquema real ↔ migraciones | Qué tablas existen en producción y no en el repositorio | **PARCIAL**: el lado del repositorio sí está medido (ver §3) | NO-GO | Comando de comparación de `COMPROBACIONES-ENTORNO.md` §1 |
-| 8 | Configuración de Supabase Auth | TTL, firma, JWKS, MFA | **NO VERIFICADO** | NO-GO | Dashboard → Authentication |
-| 9 | Signup público | Saber si está activo: cambia la prioridad de SEC-008 | **NO VERIFICADO** | NO-GO | Dashboard → Authentication → Providers |
-| 10 | Política de contraseñas y rate limits | Mínimo actual y límites de Auth | **NO VERIFICADO** | NO-GO | Dashboard → Authentication → Policies / Rate limits |
-| 11 | TTL y configuración JWT/JWKS | Decide el diseño de la Fase 1A | **NO VERIFICADO** | NO-GO (no bloquea la Fase 0) | Dashboard, y decodificar un token propio |
-| 12 | Visibilidad de buckets | Qué buckets son públicos | **NO VERIFICADO** | NO-GO (no bloquea la Fase 0) | Consulta 12, o el panel de Storage |
+| 1 | Estado real de RLS por tabla | La lista real de `public` sin RLS, para compararla con las 88 del repositorio | **NO VERIFICADO** | **NO-GO de la migración SQL** | Ejecutar la consulta 1 y 8 de `verificacion-previa.sql` |
+| 2 | Grants efectivos de `anon`, `authenticated` y `PUBLIC` | Saber qué puede hacer hoy la clave pública, incluido lo heredado de `PUBLIC` | **NO VERIFICADO** | **NO-GO de la migración SQL** | Consultas 2 y 9 |
+| 3 | Funciones ejecutables por esos roles | Recuento antes, para comparar después | **NO VERIFICADO** | **NO-GO de la migración SQL** | Consulta 10 |
+| 4 | Inventario de `SECURITY DEFINER` | Cuántas hay y cuántas sin `pg_temp` | **NO VERIFICADO** | **NO-GO de la migración SQL** | Consultas 10 y 11 |
+| 5 | `search_path` de las funciones sensibles | `app_es_admin`, `app_empresa_actual`, `app_login_email` con su configuración actual | **NO VERIFICADO** | **NO-GO de la migración SQL** | Consulta 11 |
+| 6 | Políticas permisivas (`USING (true)`) | El tamaño real del trabajo de la Fase 3 | **NO VERIFICADO** | **NO-GO de la migración SQL** | Consultas 3 y 4 |
+| 7 | Diferencias esquema real ↔ migraciones | Qué tablas existen en producción y no en el repositorio | **PARCIAL**: el lado del repositorio sí está medido (ver §3) | **NO-GO de la migración SQL** | Comando de comparación de `COMPROBACIONES-ENTORNO.md` §1 |
+| 8 | Configuración de Supabase Auth | TTL, firma, JWKS, MFA | **NO VERIFICADO** | **NO-GO de Fase 1A/1C** (no bloquea la Fase 0) | Dashboard → Authentication |
+| 9 | Signup público | Saber si está activo: cambia la prioridad de SEC-008 | **NO VERIFICADO** | **NO-GO de Fase 1A/1C** (no bloquea la Fase 0) | Dashboard → Authentication → Providers |
+| 10 | Política de contraseñas y rate limits | Mínimo actual y límites de Auth | **NO VERIFICADO** | **NO-GO de Fase 1A/1C** (no bloquea la Fase 0) | Dashboard → Authentication → Policies / Rate limits |
+| 11 | TTL y configuración JWT/JWKS | Decide el diseño de la Fase 1A | **NO VERIFICADO** | **NO-GO de Fase 1A/1C** (no bloquea la Fase 0) | Dashboard, y decodificar un token propio |
+| 12 | Visibilidad de buckets | Qué buckets son públicos | **NO VERIFICADO** | **NO-GO de Fase 1A/1C** (no bloquea la Fase 0) | Consulta 12, o el panel de Storage |
 | 13 | Configuración del webhook de Twilio | URL exacta configurada | **NO VERIFICADO** | **NO-GO, bloqueante de SEC-007** | Consola de Twilio → Messaging → Senders |
 | 14 | Comparación literal de la URL de Twilio | Los seis campos, uno a uno | **PARCIAL**: el lado del servidor está determinado exactamente (ver §4); el de Twilio, no | **NO-GO, bloqueante de SEC-007** | Rellenar la columna «configurado» de §4 |
 
 Ninguna comprobación se ha intentado por vías no autorizadas. No se ha hecho
 ninguna petición artificial al webhook de producción.
+
+### 2.1 Las tres categorías de bloqueante, separadas
+
+El NO-GO global lo es **por falta de evidencia del entorno, no por un fallo del
+código de Fase 0**. Los bloqueantes no son intercambiables y no se mezclan:
+
+| Categoría | Filas | Qué bloquea exactamente | Qué lo desbloquea |
+|---|---|---|---|
+| **Bloqueante de SEC-007** | 13, 14 | El despliegue de los commits `a8a9a03` y `f823973` (firma del webhook de WhatsApp). No bloquea el resto del código de Fase 0 por sí mismo, pero no se cherry-pickea un subconjunto: sin este dato no se despliega Fase 0. | URL y método configurados hoy en la consola de Twilio, comparados campo a campo en §4 con resultado COMPATIBLE. |
+| **Bloqueante de la migración SQL** | 1 a 7 | Únicamente la aplicación de `001_seguridad_fase0.sql` (Fase D del runbook). No bloquea el despliegue del código. | La fotografía real de Supabase: salida de `verificacion-previa.sql` (tablas, RLS, grants efectivos incluido `PUBLIC`, funciones, `SECURITY DEFINER`, `search_path`, políticas y objetos fuera de las migraciones). |
+| **No bloqueante de Fase 0** | 8 a 12 | La autorización de la **Fase 1A/1C** (TTL de JWT, JWKS, claims de MFA, política de contraseñas, signup, buckets). Estos datos **no entran en el GO/NO-GO de los cambios de código de Fase 0**. | Datos del dashboard, cuando se aborde la Fase 1A. |
+
+Consecuencia práctica: el GO/NO-GO del código de Fase 0 depende solo de la
+primera categoría; el de la migración, solo de la segunda; la tercera no
+participa en ninguno de los dos.
 
 ---
 

@@ -121,11 +121,59 @@ están en producción y no en ninguna migración. Son las que nadie ha revisado.
 
 ## A.6 Criterio GO global
 
-**GO** para desplegar el código si: A.1 es GO, A.2 no destapa tablas fuera de la
-lista que vayan a quedar sin decidir, y la salida de A.2 está guardada.
+Hay **tres bloqueantes distintos** y no se mezclan. Cada uno gobierna una fase
+diferente, así que un NO-GO en uno no es un NO-GO en los otros.
 
-**El resto de A no bloquea el despliegue del código**, solo la aplicación de la
-migración (Fase D) y la autorización de la Fase 1A.
+### Bloqueante 1 · SEC-007 (Twilio) → gobierna la FASE B
+
+Depende de A.1: la URL y el método configurados hoy en la consola de Twilio,
+comparados campo a campo (https, host, puerto, path, query, método) con la URL
+que el backend reconstruye, con resultado **COMPATIBLE**.
+
+Afecta directamente a los commits `a8a9a03` y `f823973` (validación de firma del
+webhook de WhatsApp): si la URL configurada no coincide con la reconstruida, la
+firma no valida y el webhook empieza a devolver 403 en producción.
+
+**No se cherry-pickea un subconjunto de Fase 0 para esquivar este dato.** Los 26
+commits se despliegan juntos o no se despliegan: mientras A.1 no sea GO, la Fase
+B entera está en NO-GO.
+
+### Bloqueante 2 · Fotografía de Supabase → gobierna la FASE D
+
+Depende de A.2 y A.4: la salida real de `verificacion-previa.sql` con tablas de
+`public`, estado de RLS, grants efectivos de `anon`/`authenticated`/`PUBLIC`,
+inventario de funciones, `SECURITY DEFINER`, `search_path`, políticas y objetos
+que están en producción pero en ninguna migración.
+
+**No se aplica ninguna migración sin esa evidencia**, ni adaptada ni parcial. RLS
+y GRANT/REVOKE se evalúan como dos controles independientes: una tabla con RLS
+activo puede seguir siendo legible por un grant a `PUBLIC`, y una tabla sin
+grants puede quedar abierta por una política permisiva.
+
+Este bloqueante **no afecta a la Fase B**: el código de Fase 0 está diseñado para
+funcionar antes de la migración (el limitador degrada a memoria si
+`app_auth_intentos` no existe).
+
+### Bloqueante 3 · Configuración de Auth → gobierna la FASE 1A/1C, no la Fase 0
+
+TTL de los JWT, JWKS y rotación de firma, claims de MFA, política de contraseñas,
+signup público y visibilidad de buckets.
+
+**Estos datos no entran en el GO/NO-GO de la Fase 0**, ni del código ni de la
+migración. Se recogen para diseñar la Fase 1A (login por usuario) y la Fase 1C
+(MFA) y su ausencia no debe contabilizarse como un impedimento de Fase 0.
+
+### Resumen
+
+| Fase | Bloqueante que la gobierna | Estado hoy |
+|---|---|---|
+| B · Despliegue del código | 1 (Twilio, A.1) | NO-GO: A.1 NO VERIFICADO |
+| D · Migración SQL | 2 (Supabase, A.2/A.4) | NO-GO: A.2 y A.4 NO VERIFICADOS |
+| 1A / 1C | 3 (Auth) | No aplica a Fase 0 |
+
+El NO-GO global de hoy lo es **por falta de evidencia del entorno, no por un
+fallo del código de Fase 0**, que está cerrado en laboratorio (334 ficheros de
+test, 5755 tests, 0 fallos).
 
 ---
 
