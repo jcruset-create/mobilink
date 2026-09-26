@@ -1874,6 +1874,42 @@ function exigirCredencial(...handlers: express.RequestHandler[]): express.Reques
   };
 }
 
+/* =========================================================
+   FRENO DE LOGIN
+========================================================= */
+
+type AmbitosLogin = { tipo: string; identidad: string; ip: string };
+
+/**
+ * Comprueba el freno antes de un intento de login. Devuelve los ámbitos para
+ * apuntar después el resultado, o `null` si ya se ha contestado con un 429.
+ *
+ * Los ocho endpoints de login del servidor no tenían ningún límite. Con PINs de
+ * cuatro dígitos y las listas de nombres de empleado abiertas, recorrer las diez
+ * mil combinaciones de una persona era cuestión de minutos.
+ */
+async function frenoLogin(
+  req: express.Request,
+  res: express.Response,
+  tipo: string,
+  identidad: string
+): Promise<AmbitosLogin | null> {
+  const ambitos: AmbitosLogin = {
+    tipo,
+    identidad: String(identidad || "(sin-identidad)").toLowerCase(),
+    ip: String(req.ip || ""),
+  };
+  const veredicto = await comprobarIntento(ambitos);
+  if (!veredicto.permitido) {
+    console.warn(`[login] bloqueado ${tipo} identidad=${ambitos.identidad} ip=${ambitos.ip}`);
+    res
+      .status(429)
+      .json({ error: `Demasiados intentos. Vuelve a probar en ${veredicto.reintentarEnS} s.` });
+    return null;
+  }
+  return ambitos;
+}
+
 function normalizeRoadsideOperatorCodeRow(row: any, includeCode = true) {
   const code = String(row.roadsideOperatorCode || "").trim();
 
@@ -3548,6 +3584,9 @@ app.post("/api/taller-operator/login", async (req, res) => {
       return res.status(400).json({ error: "Faltan datos" });
     }
 
+    const freno = await frenoLogin(req, res, "login-taller", techName);
+    if (!freno) return;
+
     // El PIN de taller se guarda hasheado (ver verifyWorkshopPin): no se puede
     // comparar en claro contra "workshopPin", que queda a NULL en cuanto el PIN
     // heredado se migra en el primer login correcto.
@@ -3557,8 +3596,10 @@ app.post("/api/taller-operator/login", async (req, res) => {
     const porCodigo = Boolean(esperado) && code === esperado;
 
     if (!porPin && !porCodigo) {
+      registrarFalloIntento(freno);
       return res.status(401).json({ error: "PIN incorrecto" });
     }
+    registrarExitoIntento(freno);
 
     // El código de operario da además sesión unificada (Bearer) porque es la
     // que ya montaba /api/roadside-operator/login; con PIN de taller se entra
@@ -4283,9 +4324,13 @@ app.post("/api/presencia-operator/login", async (req, res) => {
   try {
     const employeeId = String(req.body?.employeeId || "").trim();
     const pin = String(req.body?.pin || "").trim();
+    const freno = await frenoLogin(req, res, "login-presencia", employeeId);
+    if (!freno) return;
     if (!(await verificarPinPresencia(employeeId, pin))) {
+      registrarFalloIntento(freno);
       return res.status(401).json({ error: "Empleado o PIN incorrecto" });
     }
+    registrarExitoIntento(freno);
     const { data } = await supabase
       .from("sea_employees")
       .select("id, nombre, apellidos, cargo")
@@ -6857,13 +6902,18 @@ app.post("/api/roadside-operator/login", async (req, res) => {
   try {
     const techName = String(req.body?.techName || "").trim();
     const code = String(req.body?.code || "").trim();
+    const freno = await frenoLogin(req, res, "login-roadside", techName);
+    if (!freno) return;
+
     const expectedCode = await getExpectedRoadsideOperatorCode(techName);
 
     if (!techName || !code || !expectedCode || !safeEquals(code, expectedCode)) {
+      registrarFalloIntento(freno);
       return res.status(401).json({
         error: "Operario o codigo incorrecto",
       });
     }
+    registrarExitoIntento(freno);
 
     const techResult = await db.query(
       `
@@ -9143,13 +9193,45 @@ app.post(
 
       if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
       if (!mediaUrl) return res.status(400).json({ error: "URL requerida" });
+      // `kind` va dentro de la ruta del objeto en el bucket: sin acotarlo, un
+      // `kind` con "../" escribía en la carpeta de otra asistencia.
+      if (!/^[a-z0-9_-]{1,32}$/i.test(kind)) {
+        return res.status(400).json({ error: "Tipo de archivo no válido" });
+      }
 
-      // Descargar el archivo desde la URL
-      const fetchRes = await fetch(mediaUrl);
-      if (!fetchRes.ok) throw new Error(`No se pudo descargar el archivo: ${fetchRes.status}`);
-
-      const contentType = fetchRes.headers.get("content-type") ?? "application/octet-stream";
-      const buffer = Buffer.from(await fetchRes.arrayBuffer());
+      /*
+       * `fetch(mediaUrl)` a pelo era una lectura de la red interna con el
+       * resultado publicado: la URL la ponía quien llamaba, se seguían las
+       * redirecciones y la respuesta acababa en un bucket PÚBLICO, o sea
+       * legible por cualquiera que tuviera el enlace. Servía para leer
+       * `http://localhost:PORT/api/...` —y aquí hay rutas internas sin
+       * autenticación— o los metadatos del proveedor de cloud.
+       *
+       * Solo se descarga de donde viene lo que este endpoint existe para
+       * guardar: los medios de Twilio y nuestro propio almacenamiento.
+       */
+      let contentType = "application/octet-stream";
+      let buffer: Buffer;
+      try {
+        const descarga = await fetchSeguro(mediaUrl, {
+          hostsPermitidos: [...HOSTS_TWILIO, ...hostsSupabase()],
+          maxBytes: 25 * 1024 * 1024,
+          timeoutMs: 20_000,
+        });
+        if (!descarga.ok) {
+          return res
+            .status(400)
+            .json({ error: `No se pudo descargar el archivo: ${descarga.status}` });
+        }
+        contentType = descarga.contentType;
+        buffer = descarga.cuerpo;
+      } catch (e) {
+        if (e instanceof ErrorRedSegura) {
+          console.warn(`[files-from-url] URL rechazada (${e.motivo}): ${mediaUrl}`);
+          return res.status(400).json({ error: "Esa URL no se puede descargar" });
+        }
+        throw e;
+      }
 
       const extMap: Record<string, string> = {
         "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
@@ -14035,6 +14117,9 @@ app.post("/api/login", async (req, res) => {
 
     const { password, name } = req.body ?? {};
 
+    const freno = await frenoLogin(req, res, "login-panel", String(name || ""));
+    if (!freno) return;
+
     // 1) Usuarios creados en BD (con pantallas personalizadas)
     try {
       let dbUser: DbAppUser | null = null;
@@ -14048,6 +14133,7 @@ app.post("/api/login", async (req, res) => {
         dbUser = await findDbUserByPassword(password);
       }
       if (dbUser) {
+        registrarExitoIntento(freno);
         return res.json({
           ok: true,
           role: dbUser.role,
@@ -14063,11 +14149,20 @@ app.post("/api/login", async (req, res) => {
     const user = findUserByPassword(password);
 
     if (!user) {
+      /*
+       * Este login admite entrar SIN nombre: `findDbUserByPassword` busca por
+       * contraseña y cualquier usuario cuya contraseña coincida vale. Así que
+       * cada intento se prueba contra todas las cuentas a la vez, y el ámbito
+       * que de verdad frena aquí es el de la IP. Exigir el nombre es cosa de la
+       * fase de identidad; contar los fallos, de ahora.
+       */
+      registrarFalloIntento(freno);
       return res.status(401).json({
         error: "Contraseña incorrecta",
       });
     }
 
+    registrarExitoIntento(freno);
     res.json({
       ok: true,
       role: user.role,
@@ -14090,6 +14185,9 @@ app.post("/api/almacen/login-operario", async (req, res) => {
       return res.status(400).json({ error: "Faltan nombre o PIN" });
     }
 
+    const freno = await frenoLogin(req, res, "login-almacen", nombre);
+    if (!freno) return;
+
     const { data: perfil } = await supabase
       .from("perfiles_usuario")
       .select("id, nombre, rol, ubicacion, activo, codigo_operario")
@@ -14099,8 +14197,10 @@ app.post("/api/almacen/login-operario", async (req, res) => {
 
     const nombreDb = String(perfil?.nombre ?? "").toLowerCase().trim();
     if (!perfil || nombreDb !== nombre.toLowerCase()) {
+      registrarFalloIntento(freno);
       return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
     }
+    registrarExitoIntento(freno);
 
     const slug = nombre
       .toLowerCase()
@@ -15783,9 +15883,13 @@ app.post("/api/workshop-operator/login", async (req, res) => {
     if (!name || !pin) {
       return res.status(400).json({ error: "Faltan datos" });
     }
+    const freno = await frenoLogin(req, res, "login-taller-pin", name);
+    if (!freno) return;
     if (!(await verifyWorkshopPin(name, pin))) {
+      registrarFalloIntento(freno);
       return res.status(401).json({ error: "PIN incorrecto" });
     }
+    registrarExitoIntento(freno);
     res.json({ ok: true, techName: name });
   } catch (error) {
     console.error("POST /api/workshop-operator/login error:", error);
