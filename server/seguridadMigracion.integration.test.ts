@@ -121,11 +121,51 @@ drop policy if exists "pres_anon_update" on pres_records;
 create policy "pres_anon_update" on pres_records for update to anon using (true) with check (true);
 grant select, insert, update on pres_records to anon;
 
+-- perfiles_usuario, tal como esta HOY en produccion (fotografia del 2026-09-26).
+-- La politica almacen_solo_autenticados que suponia la revision 1 ya no existe:
+-- SEC-003 esta corregido, con cuatro politicas acotadas mas una de anon.
+create or replace function usuario_actual_es_admin() returns boolean
+  language sql security definer set search_path = public as $$
+  select exists (select 1 from perfiles_usuario where user_id = auth.uid()
+                  and activo and rol = 'admin') $$;
 alter table perfiles_usuario enable row level security;
-drop policy if exists almacen_solo_autenticados on perfiles_usuario;
-create policy almacen_solo_autenticados on perfiles_usuario for all to authenticated
-  using (true) with check (true);
+drop policy if exists perfiles_usuario_select_propio_o_admin on perfiles_usuario;
+create policy perfiles_usuario_select_propio_o_admin on perfiles_usuario
+  for select to authenticated using (usuario_actual_es_admin() or user_id = auth.uid());
+drop policy if exists perfiles_usuario_insert_admin on perfiles_usuario;
+create policy perfiles_usuario_insert_admin on perfiles_usuario
+  for insert to authenticated with check (usuario_actual_es_admin());
+drop policy if exists perfiles_usuario_update_admin on perfiles_usuario;
+create policy perfiles_usuario_update_admin on perfiles_usuario
+  for update to authenticated using (usuario_actual_es_admin()) with check (usuario_actual_es_admin());
+drop policy if exists perfiles_usuario_delete_admin on perfiles_usuario;
+create policy perfiles_usuario_delete_admin on perfiles_usuario
+  for delete to authenticated using (usuario_actual_es_admin());
+drop policy if exists anon_read_activos on perfiles_usuario;
+create policy anon_read_activos on perfiles_usuario for select to anon using (activo = true);
 grant select, insert, update, delete on perfiles_usuario to authenticated;
+grant select on perfiles_usuario to anon;
+
+-- La politica transversal que la revision 1 no veia: cualquier autenticado.
+drop policy if exists pres_auth_all on pres_records;
+create policy pres_auth_all on pres_records for all to authenticated using (true) with check (true);
+
+-- Los acuses, con el nombre REAL de sus politicas. La revision 1 hacia drop de
+-- sm_ack_anon_*, que no existe: los drop no fallaban, simplemente no hacian
+-- nada. Si este stub llevara el nombre inventado, la prueba no lo habria visto.
+create table if not exists sm_document_acknowledgements (
+  id uuid primary key default gen_random_uuid(), employee_id uuid, document_id uuid,
+  leido boolean default false, firmado boolean default false);
+alter table sm_document_acknowledgements enable row level security;
+drop policy if exists portal_anon_acks_select on sm_document_acknowledgements;
+create policy portal_anon_acks_select on sm_document_acknowledgements for select to anon using (true);
+drop policy if exists portal_anon_acks_insert on sm_document_acknowledgements;
+create policy portal_anon_acks_insert on sm_document_acknowledgements for insert to anon with check (true);
+drop policy if exists portal_anon_acks_update on sm_document_acknowledgements;
+create policy portal_anon_acks_update on sm_document_acknowledgements for update to anon using (true) with check (true);
+drop policy if exists sm_auth_all on sm_document_acknowledgements;
+create policy sm_auth_all on sm_document_acknowledgements for all to authenticated using (true) with check (true);
+grant select, insert, update on sm_document_acknowledgements to anon, authenticated;
 
 -- Y una tabla concedida a PUBLIC, que es el caso que se nos colaba.
 grant select on central_api_tokens to public;
@@ -358,22 +398,75 @@ describeSiHayBase("Migración de seguridad de la Fase 0", () => {
     });
   });
 
-  describe("SEC-010 · los fichajes dejan de estar abiertos a anon", () => {
-    it("no queda ninguna política de anon sobre pres_records", async () => {
+  // SEC-010 salio de la Fase 0 al contrastar la migracion con produccion: el
+  // `revoke` sobre `pres_records` habria dejado sin servicio `/portal/mi-ficha`,
+  // que entra con la clave `anon` y no por el servidor. Estas pruebas fijan que
+  // la Fase 0 ya NO lo toca, para que nadie lo vuelva a meter sin el cambio de
+  // codigo que hace falta antes. El SQL corregido esta preparado y sin aplicar
+  // en `003_sec010_presencia_acuses.sql`.
+  describe("SEC-010 · la Fase 0 ya no toca los fichajes, y queda declarado", () => {
+    it("las politicas de anon sobre pres_records siguen vivas", async () => {
       const r = await db.query(
         `select count(*)::int as n from pg_policies
           where tablename = 'pres_records' and 'anon' = any(roles)`
       );
-      expect(r.rows[0].n).toBe(0);
+      expect(r.rows[0].n).toBe(3);
     });
 
-    it("ni permiso de tabla", async () => {
+    it("y el permiso de tabla tambien, que es lo que usa el portal del empleado", async () => {
       const r = await db.query(
         `select has_table_privilege('anon','pres_records','select') as lee,
                 has_table_privilege('anon','pres_records','update') as escribe`
       );
-      expect(r.rows[0].lee).toBe(false);
-      expect(r.rows[0].escribe).toBe(false);
+      expect(r.rows[0].lee).toBe(true);
+      expect(r.rows[0].escribe).toBe(true);
+    });
+
+    it("la transversal de authenticated sigue ahi: retirar solo anon no cerraba nada", async () => {
+      const r = await db.query(
+        `select count(*)::int as n from pg_policies
+          where tablename = 'pres_records' and policyname = 'pres_auth_all'`
+      );
+      expect(r.rows[0].n).toBe(1);
+    });
+
+    it("los acuses conservan el nombre REAL de sus politicas, no el que suponia la revision 1", async () => {
+      const r = await db.query(
+        `select count(*) filter (where policyname like 'portal_anon_acks_%')::int as reales,
+                count(*) filter (where policyname like 'sm_ack_anon_%')::int as inventadas
+           from pg_policies where tablename = 'sm_document_acknowledgements'`
+      );
+      expect(r.rows[0].reales).toBe(3);
+      expect(r.rows[0].inventadas).toBe(0);
+    });
+  });
+
+  // SEC-003 tambien salio: ya esta corregido en produccion con politicas
+  // acotadas, y la que la revision 1 creaba las habria anulado, porque las
+  // politicas permisivas se combinan con OR.
+  describe("SEC-003 · la Fase 0 no degrada las politicas reales de perfiles_usuario", () => {
+    it("no crea perfiles_lectura, que por OR abriria la lectura a cualquier autenticado", async () => {
+      const r = await db.query(
+        `select count(*)::int as n from pg_policies
+          where tablename = 'perfiles_usuario' and policyname = 'perfiles_lectura'`
+      );
+      expect(r.rows[0].n).toBe(0);
+    });
+
+    it("y deja intactas las cuatro acotadas que ya existian", async () => {
+      const r = await db.query(
+        `select count(*)::int as n from pg_policies
+          where tablename = 'perfiles_usuario' and policyname like 'perfiles_usuario_%'`
+      );
+      expect(r.rows[0].n).toBe(4);
+    });
+
+    it("anon_read_activos sigue viva: se decide aparte, no se retira a ciegas", async () => {
+      const r = await db.query(
+        `select count(*)::int as n from pg_policies
+          where tablename = 'perfiles_usuario' and policyname = 'anon_read_activos'`
+      );
+      expect(r.rows[0].n).toBe(1);
     });
   });
 

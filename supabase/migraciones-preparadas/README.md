@@ -1,5 +1,20 @@
 # Migraciones preparadas, sin aplicar
 
+> **Cifras de referencia, actualizadas el 2026-09-26.** Las operativas son las
+> de producción; las del repositorio se conservan solo como histórico de la
+> auditoría.
+>
+> | Magnitud | Auditoría (repositorio) | **Producción** |
+> |---|---|---|
+> | Tablas en `public` | no medido | **437** (249 con RLS, **188 sin**) |
+> | Funciones `SECURITY DEFINER` | «~170» | **132**, las 132 sin `pg_temp` |
+> | Funciones ejecutables vía `PUBLIC` | no medido | **180 de 187** |
+> | Grants a `PUBLIC` sobre tablas | supuesto «los hay» | **0** |
+>
+> Esta migración es la **revisión 2**: se le han retirado las secciones de
+> SEC-003 y SEC-010, que estaban equivocadas. Ver `docs/FASE0_correcciones.md`.
+
+
 Lo que hay aquí **no se ejecuta solo**. Esta carpeta no es
 `supabase/migrations/` a propósito: ningún despliegue la recoge.
 
@@ -13,14 +28,14 @@ revisarlos antes de tocar nada, con su verificación previa y su vuelta atrás.
    este repositorio solo conoce las tablas creadas en migraciones, y hay tablas
    creadas a mano en el dashboard cuyo estado no se puede saber leyendo el
    código. La lista de la migración es un suelo, no un techo.
-2. **`001_seguridad_fase0.sql`** — los cambios. Cierra SEC-002 (88 tablas sin
+2. **`001_seguridad_fase0.sql`** — los cambios. Cierra SEC-002 PARCIALMENTE (42 de las 188 tablas sin
    RLS alcanzables con la clave pública), SEC-010 (fichajes y acuses abiertos a
    `anon`), SEC-003 (`perfiles_usuario` escribible por cualquiera), SEC-004 y
    SEC-005 (las dos funciones que dejaban a un admin de empresa hacerse
    superadministrador o borrar uno), SEC-065 (`app_login_email` respondiendo a
    cualquiera), y crea la tabla de bloqueos de login.
 3. **`001_seguridad_fase0_rollback.sql`** — la vuelta atrás, casi toda
-   comentada a propósito. Léelo antes de usarlo: reabrir las 88 tablas es
+   comentada a propósito. Léelo antes de usarlo: reabrir esas tablas es
    restaurar la vulnerabilidad, y lo que suele hacer falta es devolver el
    permiso de UNA tabla concreta.
 
@@ -56,7 +71,7 @@ protege del esquema temporal. Reproducido con `app_es_admin()`: creando
 Con `set search_path = public, pg_temp` ya no. Requiere conexión directa a la
 base (por PostgREST no se puede hacer DDL), así que es endurecimiento en
 profundidad y no una escalada con la clave pública. La migración lo arregla en
-las funciones de las que depende la autorización; el barrido de las ~170 va con
+las funciones de las que depende la autorización; el barrido de las 132 va con
 SEC-043, en la Fase 3.
 
 ## Comprobado
@@ -90,7 +105,7 @@ comportamiento. Se ejecutan con `RUN_DB_TESTS=1`.
 Esa última tardó dos intentos y merece quedar escrita: `revoke ... from anon` no
 bastaba, porque PostgreSQL concede `EXECUTE` a `PUBLIC` en cada función que se
 crea y `anon` hereda de `PUBLIC`. Hay que revocar de `PUBLIC` también. Es el
-mismo patrón que el informe señaló en las 170 funciones `security definer` del
+mismo patrón que la fotografía de producción midió en las 132 funciones `security definer` del
 proyecto, y el motivo de comprobar las migraciones ejecutándolas en vez de
 leerlas.
 
@@ -239,7 +254,7 @@ temporal se resuelve **por sesión**, no por privilegios, así que una función
 
 | Objeto | Antes | Después |
 |---|---|---|
-| Las 88 tablas sin RLS | RLS desactivada; `anon` y `authenticated` con los privilegios por defecto de Supabase (todo); alguna con grant a `PUBLIC` | RLS activada sin políticas; `revoke all` de `PUBLIC`, `anon` y `authenticated` |
+| Las 42 de la lista que están sin RLS (de 88; las otras 46 ya la tenían) | RLS desactivada; `anon` y `authenticated` con los privilegios por defecto de Supabase (todo); alguna con grant a `PUBLIC` | RLS activada sin políticas; `revoke all` de `PUBLIC`, `anon` y `authenticated` |
 | Privilegios por defecto del esquema `public` (tablas) | conceden todo a `anon` y `authenticated` en cada tabla nueva | revocados: una tabla nueva ya no nace abierta |
 | `pres_records` | políticas `pres_anon_select/insert/update` para `anon`; grant `select, insert, update` a `anon` | sin políticas de `anon`; `revoke all` de `anon` |
 | `sm_document_acknowledgements` | políticas de `anon` | sin políticas de `anon`; `revoke all` |

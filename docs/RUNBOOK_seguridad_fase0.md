@@ -522,7 +522,7 @@ este runbook; hoy está vacía a propósito.
 | SEC | Estado antes | Corrección aplicada | Evidencia en laboratorio | Evidencia en producción | Estado final |
 |---|---|---|---|---|---|
 | **001** | ~50 rutas respondían sin credencial (`protectWhenStrict` era un `next()`) | `exigirCredencial`: acepta las tres familias que los clientes ya envían, rechaza la ausencia | 7 rutas → 401 y las 3 familias → entran (`seguridadHttp`, 24 pruebas); 4 guardas de fuente | B.3 smoke 1 + C.1 sin clientes propios | Cerrado en código/laboratorio |
-| **002** | 88 tablas sin RLS alcanzables con la clave pública | RLS + `revoke` de PUBLIC/anon/authenticated + privilegios por defecto | RLS activa y `anon` sin permisos, incluido el heredado de PUBLIC (`seguridadMigracion`) | D.3 consultas 1 y 2 | **Preparado** |
+| **002** | Exposición de tablas de backend: 188 sin RLS de 437, y CRUD global a `anon`/`authenticated` en las 437 | RLS + `revoke` de PUBLIC/anon/authenticated + privilegios por defecto | RLS activa y `anon` sin permisos, incluido el heredado de PUBLIC (`seguridadMigracion`) | D.3 consultas 1 y 2 | **Preparado, PARCIAL** (42 de 188) |
 | **003** | `perfiles_usuario` escribible por cualquier autenticado; las Edge Functions preguntaban el rol al interesado | Código: rol leído con service role y solo por `user_id`. SQL: políticas separadas | Un no-admin no se autopromociona ni inserta fila admin (probado en PostgreSQL) | E.4 + D.3 | Código **cerrado en laboratorio**; SQL **preparado** |
 | **004** | `app_guardar_usuario` escribía `es_superadmin` sin comprobar quién llama. **Superficie adicional: `app_eliminar_usuario`**, con el mismo patrón para desactivar y borrar | Disparador sobre `app_usuarios` (no se reescribe ninguna función): cubre las dos RPC y cualquier otro camino de escritura | 4 pruebas: ni por la RPC real, ni escribiendo la tabla, ni dando de alta a otro; y un superadmin sí puede | D.3 prueba funcional | **Preparado** |
 | **005** | Dos endpoints reseteaban la contraseña de cualquier cuenta de Auth. **Superficies adicionales: `app_eliminar_usuario`** (desactivaba o borraba a cualquiera, superadministradores incluidos) **y `eliminar-auth`** (aceptaba cualquier id porque la ficha ya no existía) | Código: empresa y nivel comprobados, superadmin protegido, `eliminar-auth` consume una baja autorizada y de un solo uso. SQL: el mismo disparador | 3 pruebas de superadmin protegido + 3 de aislamiento entre empresas + 4 del registro de baja | B.3 smoke + D.3 | Código **cerrado en laboratorio**; SQL **preparado** |
@@ -544,13 +544,13 @@ este runbook; hoy está vacía a propósito.
 | **049** | Auditoría de licencias con `x-user-name` del cliente | Id del superadministrador que pasó el guard | Guarda de fuente | — | Cerrado en código/laboratorio |
 | **053** | `mi-contexto` devolvía los talleres sin credencial | `requirePanelRole` | Prueba HTTP: 401 | B.3 smoke 1 | Cerrado en código/laboratorio |
 | **065** | `app_login_email` respondía a la clave pública | `revoke` de PUBLIC, anon y authenticated | `anon` no puede ejecutarla | D.3 consulta 4 | **Preparado** |
-| **067** (nuevo) | Funciones `security definer` con `search_path` incompleto, suplantables por `pg_temp` | Endurecidas las 3 de las que depende esta fase | Suplantación reproducida y bloqueada | D.3 consulta 5 | **Preparado** (el barrido de las ~170 va en su propia migración) |
+| **067** (nuevo) | Funciones `security definer` con `search_path` incompleto, suplantables por `pg_temp` | Endurecidas las 3 de las que depende esta fase (de 132 reales, todas sin `pg_temp`) | Suplantación reproducida y bloqueada | D.3 consulta 5 | **Preparado** (el barrido de las 132 va en su propia migración) |
 | **064** | Contraseña del hub = PIN corto + sufijo público | — | — | — | **Abierto**. Contención en A.3/A.4, solución en 1A |
 
 ## F.1 Qué queda después de este runbook
 
 - **SEC-064** abierto, con la contención identificada y la solución en la Fase 1A.
-- **SEC-067** con las tres funciones críticas endurecidas; el barrido de las ~170
+- **SEC-067** con las tres funciones críticas endurecidas; el barrido de las 132
   necesita su propia migración con inventario y pruebas.
 - Todo lo de las fases 1 a 6 del plan de remediación, sin empezar.
 - Rotación de secretos: va **después** de la Fase 1A, no ahora. Rotar mientras la
