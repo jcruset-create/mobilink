@@ -2586,7 +2586,7 @@ appendLog(
                           width: `calc(${width}% - 8px)`,
                         }}
                       >
-                        <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center justify-between gap-2">
                           <div className="truncate uppercase">
                             {job.linkedTemplateLabel ||
                               template?.label ||
@@ -2594,66 +2594,26 @@ appendLog(
                           </div>
 
                           {/*
-                            El estado y, debajo, las tres acciones en vertical.
-                            Estaban en una fila pegada al borde inferior de la
-                            tarjeta, ocupando todo el ancho; ahí tapaban el
-                            cliente y la duración en las citas cortas.
-
-                            La columna no lleva ancho fijo: lo marca la
-                            etiqueta de estado, y los botones se estiran a ese
-                            ancho con `w-full`. Así los tres salen alineados
-                            con ella sin medir nada a ojo.
+                            Solo el estado. WhatsApp, Cancelar y Eliminar
+                            estuvieron aquí y no caben: en una cita de media
+                            hora la tarjeta mide 50 px, y por pequeños que se
+                            hicieran se comían la matrícula y la hora. Ahora
+                            viven dentro de la ficha, donde se llega mida lo
+                            que mida la cita, y la tarjeta vuelve a servir para
+                            lo único que tiene que hacer a ese tamaño: decir
+                            qué es y cómo está.
                           */}
-                          <div className="flex shrink-0 flex-col items-end gap-[1px]">
-                            <span
-                              className={`w-full rounded-full px-1.5 py-0 text-center text-[8px] font-black uppercase leading-[1.5] no-underline ${
-                                job.status === "cancelado"
-                                  ? "bg-red-100 text-red-800"
-                                  : "bg-white/90 text-slate-800"
-                              }`}
-                            >
-                              {job.status === "cancelado"
-                                ? "Cancelada"
-                                : getScheduledJobStatusLabel(job.status)}
-                            </span>
-
-                            {job.status !== "cancelado" && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  sendAgendaWhatsApp(job);
-                                }}
-                                className="w-full rounded bg-green-500 px-1 py-0 text-[7px] font-semibold leading-[1.5] text-white shadow-sm"
-                              >
-                                WhatsApp
-                              </button>
-                            )}
-
-                            {job.status === "programado" && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  cancelScheduledJob(job.id);
-                                }}
-                                className="w-full rounded bg-white/95 px-1 py-0 text-[7px] font-semibold leading-[1.5] text-red-600 shadow-sm"
-                              >
-                                Cancelar
-                              </button>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteScheduledJob(job.id);
-                              }}
-                              className="w-full rounded bg-white/95 px-1 py-0 text-[7px] font-semibold leading-[1.5] text-slate-700 shadow-sm"
-                            >
-                              Eliminar
-                            </button>
-                          </div>
+                          <span
+                            className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-black uppercase no-underline ${
+                              job.status === "cancelado"
+                                ? "bg-red-100 text-red-800"
+                                : "bg-white/90 text-slate-800"
+                            }`}
+                          >
+                            {job.status === "cancelado"
+                              ? "Cancelada"
+                              : getScheduledJobStatusLabel(job.status)}
+                          </span>
                         </div>
 
                         {job.includedTasks && job.includedTasks.length > 0 && (
@@ -3619,16 +3579,18 @@ setDraft((prev) => ({
                   el último centímetro y el botón Guardar quedaba pisado. */}
               <div className="shrink-0 border-t border-slate-200 bg-white px-6 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
                 {/*
-                  Cancelar la cita y eliminarla, también desde aquí.
-                  
-                  En la tarjeta de la agenda esos dos botones caben o no según
-                  lo que dure la cita: en una de media hora la tarjeta mide 50
-                  px y lo que no entra se recorta. Desde dentro de la ficha se
-                  llega siempre, mida lo que mida la cita.
+                  Las tres acciones de la cita: cancelarla, eliminarla y
+                  avisar por WhatsApp.
 
-                  Van arriba y en su propia fila, separados de Guardar: son
-                  destructivos, y ponerlos al lado del botón que se pulsa
-                  siempre es cómo se cancela una cita sin querer.
+                  Aquí y en ningún otro sitio. Estuvieron en la tarjeta de la
+                  agenda y no caben: en una cita de media hora la tarjeta mide
+                  50 px, y por pequeños que se hicieran los botones se comían
+                  la matrícula y la hora. Dentro de la ficha se llega a las
+                  tres, mida lo que mida la cita.
+
+                  Van arriba y en su propia fila, separadas de Guardar: dos de
+                  las tres son destructivas, y ponerlas al lado del botón que
+                  se pulsa siempre es cómo se cancela una cita sin querer.
                 */}
                 {editingJobId != null && (
                   <div className="mb-3 flex gap-3">
@@ -3673,6 +3635,20 @@ setDraft((prev) => ({
                           >
                             Eliminar cita
                           </button>
+                          {/*
+                            WhatsApp al final, y la ficha NO se cierra: mandar
+                            el aviso no decide nada sobre la cita, y después de
+                            mandarlo se suele seguir editando.
+                          */}
+                          {cita && cita.status !== "cancelado" && (
+                            <button
+                              type="button"
+                              onClick={() => sendAgendaWhatsApp(cita)}
+                              className="flex-1 rounded-2xl border border-green-300 bg-green-50 px-4 py-3 text-sm font-medium text-green-800 hover:bg-green-100"
+                            >
+                              WhatsApp
+                            </button>
+                          )}
                         </>
                       );
                     })()}
