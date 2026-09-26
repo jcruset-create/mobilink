@@ -19891,17 +19891,38 @@ mountOrManuales(app);
    MOBILINK LICENCIAS (API bajo /api/licenses)
 ========================================================= */
 
-// Las licencias se gestionan desde el hub (login Supabase), no desde el panel
-// clásico: se valida la sesión Supabase de un superadmin/admin, igual que el
-// resto de módulos del hub. Acepta también el token de admin clásico como respaldo.
+/*
+ * Las licencias son de plataforma: SOLO superadministrador.
+ *
+ * Antes esto aceptaba dos cosas más, y las dos sobraban:
+ *
+ *   · `verificarAdminApp` a secas, que dice «sí» al administrador del módulo de
+ *     administración de cualquier empresa cliente. Con eso, el administrador de
+ *     un cliente veía la cartera completa de licencias de todos los demás
+ *     clientes y podía renovarse la suya, ampliarse módulos o subirse el tope de
+ *     usuarios. Es exactamente el negocio de la casa, en manos del cliente.
+ *   · El token de admin clásico como respaldo, que es una contraseña compartida
+ *     que el login SSO además entregaba al navegador de cada administrador.
+ *
+ * Quien administre licencias tiene que ser superadministrador de Mobilink. No
+ * hay respaldo: un respaldo que se salta el nivel no es un respaldo, es la
+ * puerta de servicio por la que entra todo el mundo.
+ */
 const requireLicensesAdmin: express.RequestHandler = (req, res, next) => {
   void (async () => {
     const admin = await verificarAdminApp(req);
-    if (admin.ok) return next();
-    // Respaldo: token de admin clásico (x-admin-token / ?token=)
-    const role = await getRoleFromRequestAsync(req);
-    if (role === "admin") return next();
-    return res.status(403).json({ error: admin.error || "Permisos insuficientes" });
+    if (!admin.ok) {
+      return res.status(403).json({ error: admin.error || "Permisos insuficientes" });
+    }
+    if (!admin.esSuperadmin) {
+      return res
+        .status(403)
+        .json({ error: "Solo un administrador de Mobilink puede gestionar licencias" });
+    }
+    // Se deja el id en la petición para que la auditoría del módulo no tenga
+    // que fiarse de la cabecera `x-user-name`, que la pone el cliente.
+    (req as any).licensesAdminUserId = admin.userId;
+    return next();
   })().catch((error) => {
     console.error("requireLicensesAdmin error:", error);
     res.status(500).json({ error: "Error de autorización" });
