@@ -5,12 +5,19 @@
 // se da el acceso directamente. Duplicarlo significaría que añadir un módulo
 // al catálogo arreglaría una pantalla y dejaría la otra con la lista vieja.
 import { MODULOS_APP } from "../config/modulosApp";
-import { type AccesoEdit } from "./accesosModulosHelpers";
+import { estadoDeLicencia, type AccesoEdit, type LicenciaModulo } from "./accesosModulosHelpers";
 
-export default function AccesosModulos({ accesos, empresas, onChange }: {
+export default function AccesosModulos({ accesos, empresas, onChange, licencias = null, yaGuardados }: {
   accesos: Record<string, AccesoEdit>;
   empresas: { id: string; nombre: string }[];
   onChange: (accesos: Record<string, AccesoEdit>) => void;
+  /**
+   * Licencias de la empresa del usuario (RPC app_licencias_usuario).
+   * `null` = no se han podido leer, y entonces no se bloquea nada.
+   */
+  licencias?: LicenciaModulo[] | null;
+  /** Módulos que el usuario YA tenía: esos no se bloquean nunca. */
+  yaGuardados?: Set<string>;
 }) {
   function setAcceso(modulo: string, patch: Partial<AccesoEdit>) {
     onChange({ ...accesos, [modulo]: { ...accesos[modulo], ...patch } });
@@ -24,23 +31,39 @@ export default function AccesosModulos({ accesos, empresas, onChange }: {
 
   return (
     <div className="flex flex-col gap-2">
+      {licencias === null && (
+        <p className="rounded-lg border border-amber-600/40 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200">
+          No se han podido comprobar las licencias de la empresa. Se puede marcar
+          cualquier módulo, pero al guardar se rechazará el que no esté contratado.
+        </p>
+      )}
       {MODULOS_APP.map((m) => {
         const a = accesos[m.key];
         if (!a) return null;
+        // Un módulo sin licencia se VE, apagado y con el motivo: al
+        // administrador le sirve para saber qué puede pedir. Esconderlo deja
+        // la pregunta "¿y por qué no sale Cash?" sin respuesta.
+        const lic = estadoDeLicencia(m.key, licencias, yaGuardados?.has(m.key) ?? false);
+        const apagado = lic.bloqueado && !a.activo;
         return (
           <div
             key={m.key}
-            className={`rounded-xl border p-3 ${a.activo ? "border-sky-500/60 bg-sky-500/5" : "border-slate-700"}`}
+            className={`rounded-xl border p-3 ${
+              a.activo ? "border-sky-500/60 bg-sky-500/5" : apagado ? "border-slate-800 bg-slate-900/40" : "border-slate-700"
+            }`}
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <label className="flex cursor-pointer items-center gap-2">
+              <label className={`flex items-center gap-2 ${apagado ? "cursor-not-allowed" : "cursor-pointer"}`}>
                 <input
                   type="checkbox"
                   checked={a.activo}
+                  disabled={apagado}
                   onChange={(e) => setAcceso(m.key, { activo: e.target.checked })}
-                  className="h-4 w-4 accent-sky-500"
+                  className="h-4 w-4 accent-sky-500 disabled:opacity-40"
                 />
-                <span className={`text-sm font-bold ${a.activo ? "text-slate-100" : "text-slate-500"}`}>{m.label}</span>
+                <span className={`text-sm font-bold ${
+                  a.activo ? "text-slate-100" : apagado ? "text-slate-600" : "text-slate-500"
+                }`}>{m.label}</span>
               </label>
               {a.activo && (
                 <div className="flex items-center gap-2">
@@ -66,6 +89,12 @@ export default function AccesosModulos({ accesos, empresas, onChange }: {
                 </div>
               )}
             </div>
+
+            {lic.motivo && (
+              <p className={`mt-1 text-[11px] ${lic.tono === "aviso" ? "text-amber-300/80" : "text-slate-500"}`}>
+                {lic.motivo}
+              </p>
+            )}
 
             {a.activo && m.pantallas.length > 0 && (
               <div className="mt-2 grid gap-1 sm:grid-cols-3">

@@ -13,41 +13,19 @@
  */
 
 import pool from "../db.ts";
+import { MODULOS_SAAS } from "../../src/modules/modulosSaas.ts";
 
-/**
- * Los módulos que admiten `app_licencias` y `app_usuario_modulos`.
+/*
+ * Los módulos que admiten `app_licencias` y `app_usuario_modulos` salen de
+ * `src/modules/modulosSaas.ts`, que es la única lista del proyecto. Aquí
+ * estaban repetidos, y la copia del panel de licencias se había quedado cuatro
+ * módulos corta sin que nadie se enterara.
  *
- * La lista vive en UN solo sitio y se recrea entera. Es la regla que este
- * proyecto ya aprendió por las malas: cuando dos bloques recrean el mismo
- * CHECK, el de arriba se queda con la lista vieja y el servidor deja de
- * arrancar en cuanto existe la primera fila con el valor nuevo.
- *
- * **Al crear un módulo nuevo del SaaS, añádelo aquí en el mismo commit.** No
- * basta con la migración de Supabase: esto se ejecuta en CADA arranque y
- * reconstruye el CHECK con esta lista, así que un módulo que falte aquí hace
- * que el `ADD CONSTRAINT` falle en cuanto exista su primera licencia... y el
- * `DROP CONSTRAINT` de la línea anterior ya ha pasado. El resultado es una
- * base SIN restricción y un error en el log del despliegue. Lo destapó la
- * prueba de integración de Therefore, que es donde apareció la primera fila.
+ * Lo que sí sigue siendo de aquí es la advertencia: esta lista se interpola
+ * para reconstruir el CHECK en cada arranque, así que tiene que venir de esa
+ * constante y NUNCA de datos de fuera.
  */
-const MODULOS = [
-  "administracion",
-  "tyrecontrol",
-  "almacen",
-  "sea-core",
-  "toolcontrol",
-  "safety",
-  "presencia",
-  "taller",
-  "workplanner",
-  "cash",
-  "central",
-  "tacografos",
-  "assist",
-  "therefore",
-  "recepciones",
-  "or-manuales",
-] as const;
+const MODULOS = MODULOS_SAAS;
 
 async function existe(tabla: string): Promise<boolean> {
   const { rows } = await pool.query(`SELECT to_regclass($1) IS NOT NULL AS hay`, [`public.${tabla}`]);

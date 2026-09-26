@@ -1,4 +1,5 @@
 import { initReferencias } from "./cobros/referencias.ts";
+import { MODULOS_SAAS } from "../src/modules/modulosSaas.ts";
 import pg from "pg";
 import dotenv from "dotenv";
 
@@ -1402,12 +1403,11 @@ export async function initDb() {
   // Equivale a supabase/migrations/saas_fase1c_modulo_workplanner.sql. Se
   // aplica en el arranque para no depender de ejecutarlo a mano en el SQL
   // Editor. Es idempotente y sólo actúa si las tablas SaaS existen.
-  // Misma lista que server/central/schema.ts y que la migración
-  // saas_modulo_assist.sql: el último que arranca reescribe el CHECK, y si a
-  // alguno le falta un módulo con filas ya guardadas, el ALTER falla y el
-  // servidor no levanta.
-  const MODULOS_LICENCIABLES =
-    "'administracion','tyrecontrol','almacen','sea-core','toolcontrol','safety','presencia','taller','workplanner','cash','central','tacografos','assist','therefore','recepciones','or-manuales'";
+  // La lista sale de src/modules/modulosSaas.ts, que es la única del proyecto.
+  // Aquí estaba copiada a mano, igual que en server/central/schema.ts: el
+  // último que arranca reescribe el CHECK, y si a alguno le falta un módulo
+  // con filas ya guardadas, el ALTER falla y el servidor no levanta.
+  const MODULOS_LICENCIABLES = MODULOS_SAAS.map((m) => `'${m}'`).join(",");
   const EMPRESA_SEMILLA = "00000000-0000-4000-a000-000000000001";
 
   await pool

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Building2, Plus, ShieldCheck } from "lucide-react";
 import { apiFetch } from "../modules/apiFetch";
+import { MODULOS_SAAS, nombreModulo } from "../modules/modulosSaas";
 
 /**
  * SaaS fase 2 — panel SuperAdmin de empresas y licencias.
@@ -29,20 +30,10 @@ type Licencia = {
   max_dispositivos: number | null;
 };
 
-const MODULOS = [
-  "assist",
-  "taller",
-  "workplanner",
-  "administracion",
-  "tyrecontrol",
-  "almacen",
-  "sea-core",
-  "toolcontrol",
-  "safety",
-  "presencia",
-  "cash",
-  "tacografos",
-];
+// Los módulos licenciables salen de la lista única. Esta copia se había
+// quedado en doce mientras la base admitía dieciséis: Central, Therefore,
+// Recepciones y OR Manuales no se podían licenciar desde aquí.
+const MODULOS = MODULOS_SAAS;
 
 const ESTADO_COLOR: Record<string, string> = {
   activa: "bg-emerald-500/15 text-emerald-300",
@@ -263,7 +254,7 @@ export default function AdminEmpresasPage() {
                       <tbody>
                         {licencias.map((l) => (
                           <tr key={l.id} className="border-t border-slate-700/60">
-                            <td className="py-2 font-medium">{l.modulo}</td>
+                            <td className="py-2 font-medium">{nombreModulo(l.modulo)}</td>
                             <td>{l.fecha_inicio?.slice(0, 10)}</td>
                             <td>{l.fecha_fin ? l.fecha_fin.slice(0, 10) : "—"}</td>
                             <td>
@@ -304,7 +295,7 @@ export default function AdminEmpresasPage() {
                           onChange={(ev) => setNuevaLic((v) => ({ ...v, modulo: ev.target.value }))}
                           className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm"
                         >
-                          {MODULOS.map((m) => <option key={m} value={m}>{m}</option>)}
+                          {MODULOS.map((m) => <option key={m} value={m}>{nombreModulo(m)}</option>)}
                         </select>
                       </div>
                       <div>
