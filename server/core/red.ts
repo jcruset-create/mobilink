@@ -226,7 +226,7 @@ export async function fetchSeguro(
     const respuesta = await fetch(u.toString(), {
       method: opciones.metodo ?? "GET",
       headers: opciones.cabeceras,
-      body: opciones.cuerpo as BodyInit | undefined,
+      body: opciones.cuerpo as unknown as RequestInit["body"],
       redirect: "manual",
       signal: AbortSignal.timeout(opciones.timeoutMs ?? TIMEOUT_POR_DEFECTO_MS),
     });

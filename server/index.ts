@@ -20,6 +20,22 @@ import {
 import { startWebfleetSync, syncWebfleetOnce, startMantenimientoAvisos } from "./webfleetSync.ts";
 import { getMailTransport } from "./mail.ts";
 import { startCheckpointMail, revisarBuzonCheckpoint } from "./checkpointMail.ts";
+import {
+  fetchSeguro,
+  ErrorRedSegura,
+  HOSTS_TWILIO,
+  HOSTS_MAPAS,
+  hostsSupabase,
+} from "./core/red.ts";
+import {
+  POLITICA_SEGUNDO_FACTOR,
+  clave as claveLimite,
+  comprobarIntento,
+  registrarExitoIntento,
+  registrarFallo,
+  registrarFalloIntento,
+} from "./core/rateLimit.ts";
+import { conectarPersistenciaLimites } from "./core/rateLimitStore.ts";
 import { toFile } from "openai";
 import { findUserByPassword } from "./modules/users";
 import twilio from "twilio";
@@ -160,6 +176,18 @@ import {
 const twilioClient = clienteTwilio();
 
 const app = express();
+
+/*
+ * Detrás del proxy de Render, `req.ip` era la dirección del proxy para TODAS
+ * las peticiones. Con eso, cualquier límite «por IP» era en realidad un límite
+ * global: el primero que agotara el cupo dejaba fuera a todo el mundo, y quien
+ * quisiera probar contraseñas tenía un único contador que compartir con los
+ * usuarios legítimos. Con `trust proxy` en 1 se lee la última entrada de
+ * `X-Forwarded-For`, que es la que pone el proxy y no puede falsificar el
+ * cliente, porque a este servicio no se llega sin pasar por él.
+ */
+app.set("trust proxy", 1);
+
 app.post(
   "/api/stripe/webhook",
   express.raw({ type: "application/json" }),
@@ -20238,6 +20266,7 @@ initDb()
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Servidor backend en puerto ${PORT}`);
+      void conectarPersistenciaLimites(); // bloqueos de login que sobreviven a un reinicio
       startAgendaWhatsAppReminderChecker();
       startWorkshopAutoStandbyChecker();
       startRecobrosNotifierChecker();
