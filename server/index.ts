@@ -17948,7 +17948,7 @@ app.post("/api/tyrecontrol/usuarios/:id/password", async (req, res) => {
     if (userErr || !userData?.user) return res.status(401).json({ error: "No autenticado" });
     const { data: perfil } = await supabase
       .from("tc_usuarios")
-      .select("rol, es_superadmin, activo")
+      .select("rol, es_superadmin, activo, empresa_id")
       .eq("id", userData.user.id)
       .maybeSingle();
     if (!perfil || !perfil.activo) return res.status(403).json({ error: "Perfil no válido" });
@@ -17956,10 +17956,54 @@ app.post("/api/tyrecontrol/usuarios/:id/password", async (req, res) => {
       return res.status(403).json({ error: "Permisos insuficientes" });
     }
 
+    /*
+     * Este endpoint llama a `auth.admin.updateUserById`, que actúa sobre
+     * `auth.users`: la tabla que comparten TODOS los productos de la
+     * plataforma. Antes aceptaba el id de la ruta sin comprobar nada más, así
+     * que el administrador de una empresa cliente de TyreControl podía cambiar
+     * la contraseña del superadministrador de Mobilink —o de un usuario de otra
+     * empresa— con solo saberse su UUID, que no es un secreto. Era la cadena de
+     * ataque más corta del informe de seguridad.
+     *
+     * El criterio es el mismo que ya usaba `enlace-acceso` unas líneas más
+     * abajo: el objetivo tiene que ser un usuario de TyreControl de TU empresa,
+     * salvo que quien llama sea superadministrador. Y a un superadministrador no
+     * lo toca nadie que no lo sea, mire donde mire.
+     */
+    const objetivoId = String(req.params.id);
+
+    const { data: objetivo } = await supabase
+      .from("tc_usuarios")
+      .select("id, empresa_id, es_superadmin")
+      .eq("id", objetivoId)
+      .maybeSingle();
+    if (!objetivo) return res.status(404).json({ error: "Usuario no encontrado" });
+
+    if (!perfil.es_superadmin) {
+      if (objetivo.es_superadmin === true) {
+        return res.status(403).json({ error: "Permisos insuficientes" });
+      }
+      if (!perfil.empresa_id || objetivo.empresa_id !== perfil.empresa_id) {
+        return res.status(404).json({ error: "Usuario no encontrado" });
+      }
+      // La cuenta puede ser además superadministradora de la plataforma aunque
+      // en TyreControl no lo sea: se comprueba en la tabla maestra.
+      const maestro = await db.query(
+        `SELECT coalesce(es_superadmin, false) AS es_superadmin FROM app_usuarios WHERE id = $1`,
+        [objetivoId]
+      );
+      if (maestro.rows[0]?.es_superadmin) {
+        return res.status(403).json({ error: "Permisos insuficientes" });
+      }
+    }
+
     const nueva = String(req.body?.password ?? "");
     if (nueva.length < 4) return res.status(400).json({ error: "La contraseña debe tener al menos 4 caracteres" });
-    const { error } = await supabase.auth.admin.updateUserById(String(req.params.id), { password: nueva });
+    const { error } = await supabase.auth.admin.updateUserById(objetivoId, { password: nueva });
     if (error) return res.status(400).json({ error: error.message });
+    console.log(
+      `[tyrecontrol] contraseña restablecida por ${userData.user.id} sobre ${objetivoId}`
+    );
     res.json({ ok: true });
   } catch (error: any) {
     console.error("POST /api/tyrecontrol/usuarios/:id/password error:", error);
@@ -19596,7 +19640,31 @@ app.post("/api/administracion/recobro-whatsapp", authenticate, requireModule("ad
 
 // Verifica que quien llama es admin (superadmin de app_usuarios
 // o rol admin de adm_usuarios) a partir de su token de sesión.
-async function verificarAdminApp(req: express.Request): Promise<{ ok: boolean; userId?: string; error?: string }> {
+type AdminApp = {
+  ok: boolean;
+  userId?: string;
+  /** Superadministrador de plataforma: atraviesa empresas. */
+  esSuperadmin?: boolean;
+  /** Empresa del llamante. null si solo existe en adm_usuarios. */
+  empresaId?: string | null;
+  error?: string;
+};
+
+/**
+ * Comprueba que quien llama es administrador, y DE QUÉ.
+ *
+ * Antes devolvía un sí o un no. El problema es que ese «sí» valía tanto para un
+ * superadministrador de plataforma como para el administrador del módulo de
+ * administración de cualquier empresa cliente, y los endpoints que la usaban
+ * aceptaban después un `userId` cualquiera. Con eso, el administrador de una
+ * empresa cliente podía cambiar la contraseña del superadministrador y quedarse
+ * con la plataforma entera: era la cadena de ataque más corta del informe.
+ *
+ * Ahora devuelve también el nivel y la empresa, y quien la usa tiene que decidir
+ * qué puede tocar. Es el primer paso de separar los tres niveles
+ * (superadmin / admin de empresa / admin de módulo).
+ */
+async function verificarAdminApp(req: express.Request): Promise<AdminApp> {
   const auth = String(req.headers.authorization || "");
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   if (!token) return { ok: false, error: "Falta el token de sesión" };
@@ -19604,12 +19672,63 @@ async function verificarAdminApp(req: express.Request): Promise<{ ok: boolean; u
   if (error || !data.user) return { ok: false, error: "Sesión no válida" };
   const r = await db.query(
     `SELECT
-       coalesce((SELECT es_superadmin FROM app_usuarios WHERE id = $1 AND activo), false)
-       OR coalesce((SELECT rol = 'admin' FROM adm_usuarios WHERE id = $1 AND activo), false) AS es_admin`,
+       coalesce((SELECT es_superadmin FROM app_usuarios WHERE id = $1 AND activo), false) AS es_superadmin,
+       coalesce((SELECT rol = 'admin' FROM adm_usuarios WHERE id = $1 AND activo), false) AS adm_admin,
+       (SELECT empresa_id FROM app_usuarios WHERE id = $1 AND activo) AS empresa_id`,
     [data.user.id]
   );
-  if (!r.rows[0]?.es_admin) return { ok: false, error: "Solo un administrador puede gestionar usuarios" };
-  return { ok: true, userId: data.user.id };
+  const fila = r.rows[0];
+  const esSuperadmin = Boolean(fila?.es_superadmin);
+  if (!esSuperadmin && !fila?.adm_admin) {
+    return { ok: false, error: "Solo un administrador puede gestionar usuarios" };
+  }
+  return {
+    ok: true,
+    userId: data.user.id,
+    esSuperadmin,
+    empresaId: fila?.empresa_id ?? null,
+  };
+}
+
+/**
+ * Si `admin` puede actuar sobre la cuenta `objetivoId`.
+ *
+ * Las dos reglas que faltaban:
+ *
+ *   · **nadie que no sea superadministrador toca a un superadministrador**. Sin
+ *     esto, cualquier administrador de empresa se apropiaba de la plataforma;
+ *   · **quien no es superadministrador solo actúa dentro de su empresa**. El id
+ *     de un usuario no es un secreto: sale en listados y en enlaces, así que
+ *     saberlo no puede ser la autorización para cambiarle la contraseña.
+ *
+ * Se contesta 404 y no 403 cuando el usuario es de otra empresa, por la misma
+ * razón que en el resto de la casa (ARCHITECTURE.md §3, regla 3): un 403
+ * confirmaría que la cuenta existe.
+ */
+async function puedeGestionarUsuario(
+  admin: AdminApp,
+  objetivoId: string
+): Promise<{ status: number; message: string } | null> {
+  const r = await db.query(
+    `SELECT id, empresa_id, es_superadmin FROM app_usuarios WHERE id = $1`,
+    [objetivoId]
+  );
+  const objetivo = r.rows[0];
+  if (!objetivo) {
+    return { status: 404, message: "Ese usuario no existe" };
+  }
+  if (objetivo.es_superadmin && !admin.esSuperadmin) {
+    return {
+      status: 403,
+      message: "Solo un administrador de Mobilink puede gestionar esa cuenta",
+    };
+  }
+  if (!admin.esSuperadmin) {
+    if (!admin.empresaId || objetivo.empresa_id !== admin.empresaId) {
+      return { status: 404, message: "Ese usuario no existe" };
+    }
+  }
+  return null;
 }
 
 function emailSintetico(username: string): string {
@@ -19657,8 +19776,25 @@ app.post("/api/administracion/usuarios/reset-password", async (req, res) => {
     if (!userId) return res.status(400).json({ success: false, message: "Falta el usuario" });
     if (password.length < 6) return res.status(400).json({ success: false, message: "Contraseña interna demasiado corta" });
 
+    // Sin esto, el administrador de una empresa cliente cambiaba la contraseña
+    // de CUALQUIER cuenta de Auth, superadministradores incluidos.
+    const problema = await puedeGestionarUsuario(admin, userId);
+    if (problema) {
+      return res.status(problema.status).json({ success: false, message: problema.message });
+    }
+
     const { error } = await supabase.auth.admin.updateUserById(userId, { password });
     if (error) return res.status(400).json({ success: false, message: error.message });
+
+    if (admin.empresaId) {
+      void registrarAuditoria({
+        empresaId: admin.empresaId,
+        userId: admin.userId,
+        accion: "auth.reset-password",
+        detalle: { objetivo: userId },
+        ip: req.ip,
+      });
+    }
     return res.json({ success: true });
   } catch (e: any) {
     console.error("reset-password error:", e);
@@ -19680,8 +19816,28 @@ app.post("/api/administracion/usuarios/eliminar-auth", async (req, res) => {
     const r = await db.query(`SELECT 1 FROM app_usuarios WHERE id = $1`, [userId]);
     if (r.rows.length) return res.status(400).json({ success: false, message: "El usuario aún existe en la aplicación" });
 
+    /*
+     * Aquí no se puede comprobar la empresa del objetivo: para llegar a este
+     * punto su ficha ya no existe. La autorización real la hace la RPC
+     * `app_eliminar_usuario`, que es la que borra la ficha antes. Esa RPC tenía
+     * el mismo agujero que este endpoint (solo `app_es_admin()`, sin empresa y
+     * sin proteger a los superadministradores) y se corrige en la migración
+     * preparada `supabase/migraciones-preparadas/`. Mientras la migración no se
+     * aplique, esto queda apoyado en una comprobación insuficiente: está
+     * anotado como residual de la Fase 0.
+     */
     const { error } = await supabase.auth.admin.deleteUser(userId);
     if (error) return res.status(400).json({ success: false, message: error.message });
+
+    if (admin.empresaId) {
+      void registrarAuditoria({
+        empresaId: admin.empresaId,
+        userId: admin.userId,
+        accion: "auth.eliminar-usuario",
+        detalle: { objetivo: userId },
+        ip: req.ip,
+      });
+    }
     return res.json({ success: true });
   } catch (e: any) {
     console.error("eliminar-auth error:", e);
