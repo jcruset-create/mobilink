@@ -394,6 +394,49 @@ async function proyectarCaja(
       ? (d.origen as { sessionId: number; fecha: string | null; importeCentimos: number }[])
       : cierres.map((id) => ({ sessionId: id, fecha: null, importeCentimos: 0 }));
 
+  /*
+   * Las reposiciones del fondo que este ingreso se lleva (o devuelve, si es
+   * una anulacion). Lista vacia en los eventos emitidos antes de esta fase:
+   * un evento es un hecho del pasado y no se reescribe, asi que se lee lo que
+   * haya y lo que falte no hace nada.
+   */
+  const topups = Array.isArray(d.topups) ? (d.topups as number[]).map(Number) : [];
+
+  if (e.tipo === "FLOAT_TOPUP_REGISTERED") {
+    /*
+     * `deposit_id` viaja en el evento y no se da por NULL: al reemitir para
+     * reparar lo que Central no vio, la reposicion puede llevar meses absorbida
+     * por un ingreso, y darla por pendiente restaria un dinero que ya no resta.
+     *
+     * COALESCE en el conflicto: un evento que no trae ingreso no borra el que
+     * ya se hubiera proyectado. Liberarla es cosa de `BANK_DEPOSIT_VOIDED`,
+     * que pone NULL a proposito.
+     */
+    await client.query(
+      `INSERT INTO central_float_topups
+         (topup_id, empresa_id, centro_id, register_id, importe_centimos,
+          fecha, deposit_id, creado_en_ms, actualizado_en_ms)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (topup_id) DO UPDATE
+         SET importe_centimos = EXCLUDED.importe_centimos,
+             fecha = COALESCE(EXCLUDED.fecha, central_float_topups.fecha),
+             deposit_id = COALESCE(EXCLUDED.deposit_id, central_float_topups.deposit_id),
+             actualizado_en_ms = EXCLUDED.actualizado_en_ms`,
+      [
+        Number(d.topupId ?? 0),
+        e.empresaId,
+        e.centroId,
+        e.registerId,
+        importe,
+        d.fecha ?? null,
+        d.depositId == null ? null : Number(d.depositId),
+        e.ocurridoEnMs,
+        ahora,
+      ]
+    );
+    return "APLICADO";
+  }
+
   if (e.tipo === "BANK_DEPOSIT_CREATED") {
     await client.query(
       `UPDATE central_registers
@@ -457,6 +500,20 @@ async function proyectarCaja(
       ]
     );
 
+    /*
+     * Y las reposiciones dejan de restar: el ingreso ya se llevo lo que
+     * quedaba del monton, con el descuento hecho. Seguir restandolas ademas
+     * bajaria la posicion de la red por debajo del dinero que hay.
+     */
+    if (topups.length > 0) {
+      await client.query(
+        `UPDATE central_float_topups
+            SET deposit_id = $2, actualizado_en_ms = $3
+          WHERE topup_id = ANY($1::int[])`,
+        [topups, Number(d.depositId ?? 0), ahora]
+      );
+    }
+
     for (const o of origen) {
       await client.query(
         `INSERT INTO central_deposit_sources
@@ -503,6 +560,18 @@ async function proyectarCaja(
         `UPDATE central_sessions SET conciliada = false, actualizado_en_ms = $2
           WHERE session_id = ANY($1::int[])`,
         [cierres, ahora]
+      );
+    }
+
+    // Y las reposiciones vuelven a restar, por lo mismo que los cierres
+    // vuelven a estar pendientes: el monton que reaparece es el que habia,
+    // con su dinero ya devuelto al cajon.
+    if (topups.length > 0) {
+      await client.query(
+        `UPDATE central_float_topups
+            SET deposit_id = NULL, actualizado_en_ms = $2
+          WHERE topup_id = ANY($1::int[])`,
+        [topups, ahora]
       );
     }
 

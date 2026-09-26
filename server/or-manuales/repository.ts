@@ -400,6 +400,7 @@ export async function actualizarBloc(
   empresaId: string,
   id: string,
   cambios: Partial<{
+    numeroBloc: string;
     estado: EstadoBloc;
     responsableId: string | null;
     responsableNombre: string | null;
@@ -412,6 +413,7 @@ export async function actualizarBloc(
   e?: Ejecutor
 ): Promise<Bloc | null> {
   const mapa: Record<string, string> = {
+    numeroBloc: "numero_bloc",
     estado: "estado",
     responsableId: "responsable_id",
     responsableNombre: "responsable_nombre",
@@ -433,6 +435,33 @@ export async function actualizarBloc(
     valores
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Borra el bloc y, con él, sus OR (las tiene en CASCADE).
+ *
+ * Los documentos NO se borran: sus ficheros siguen en el almacenamiento y sus
+ * filas pasan a ELIMINADO, sueltas. Es lo mismo que hace eliminar un documento
+ * a mano, y por el mismo motivo: «qué había aquí» tiene que poder responderse
+ * después. Se marcan ANTES de borrar el bloc porque la clave ajena los dejaría
+ * apuntando a nada y entonces ya no habría por dónde encontrarlos.
+ *
+ * El histórico (`orm_eventos`) se queda intacto: no tiene clave ajena a
+ * propósito, así que sigue contando que ese bloc existió y quién lo quitó.
+ */
+export async function borrarBloc(empresaId: string, blocId: string, motivo: string, e: Ejecutor): Promise<number> {
+  const { rowCount } = await e.query(
+    `UPDATE orm_documentos
+        SET estado_procesamiento = 'ELIMINADO',
+            error_mensaje = COALESCE(error_mensaje, $3),
+            or_id = NULL,
+            updated_at = now()
+      WHERE empresa_id = $1 AND bloc_id = $2 AND estado_procesamiento <> 'ELIMINADO'`,
+    [empresaId, blocId, motivo]
+  );
+  await e.query(`DELETE FROM orm_avisos WHERE empresa_id = $1 AND bloc_id = $2`, [empresaId, blocId]);
+  await e.query(`DELETE FROM orm_blocs WHERE empresa_id = $1 AND id = $2`, [empresaId, blocId]);
+  return rowCount ?? 0;
 }
 
 /* ── Las OR ──────────────────────────────────────────────────────────────── */

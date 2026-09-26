@@ -79,6 +79,7 @@ async function main(): Promise<void> {
   // Una empresa por vuelta: el servicio filtra por la del contexto.
   const empresas = [...new Set(rows.map((d) => String(d.empresa_id)))];
   let total = 0;
+  let repuestos = 0;
   for (const empresaId of empresas) {
     const registerId = CAJA ? Number(rows[0].register_id) : null;
     const r = await reemitirIngresos(
@@ -86,8 +87,11 @@ async function main(): Promise<void> {
       { registerId }
     );
     total += r.reenviados;
+    repuestos += r.reposiciones;
   }
-  console.log(`      ${total} reenviado(s). Central avisada.`);
+  console.log(
+    `      ${total} ingreso(s) y ${repuestos} reposicion(es) del fondo reenviados. Central avisada.`
+  );
   /* eslint-enable @typescript-eslint/no-explicit-any */
 }
 

@@ -54,12 +54,19 @@ type Mensaje = { uid: number; source: Buffer; seen: boolean; date: Date };
  *
  * Aplica `seen` y `since` como lo haría el servidor (since por día), marca
  * las banderas y puede fallar al abrir, que es lo que hay que poder probar.
+ * El fallo se puede dar como ImapFlow lo lanza de verdad —«Command failed»
+ * con el texto del servidor colgado aparte—, que es el caso que importa.
  */
-function buzonFalso(mensajes: Mensaje[], opciones: { falloAlAbrir?: string } = {}): ClienteBuzon & { mensajes: Mensaje[] } {
+function buzonFalso(
+  mensajes: Mensaje[],
+  opciones: { falloAlAbrir?: string | Error; falloAlSalir?: boolean } = {}
+): ClienteBuzon & { mensajes: Mensaje[]; cerrado: boolean } {
   return {
     mensajes,
+    cerrado: false,
     async connect() {
-      if (opciones.falloAlAbrir) throw new Error(opciones.falloAlAbrir);
+      const fallo = opciones.falloAlAbrir;
+      if (fallo) throw typeof fallo === "string" ? new Error(fallo) : fallo;
     },
     async getMailboxLock() {
       return { release() {} };
@@ -78,7 +85,12 @@ function buzonFalso(mensajes: Mensaje[], opciones: { falloAlAbrir?: string } = {
       const m = mensajes.find((x) => String(x.uid) === rango.uid);
       if (m && flags.includes("\\Seen")) m.seen = true;
     },
-    async logout() {},
+    async logout() {
+      if (opciones.falloAlSalir) throw new Error("no se puede cerrar la sesión");
+    },
+    close() {
+      this.cerrado = true;
+    },
   };
 }
 
@@ -264,15 +276,43 @@ describe.runIf(RUN)("El buzón de Therefore", () => {
     expect(buzon.mensajes[0].seen).toBe(true);
   });
 
-  it("cada pasada deja su fila, y un buzón que no abre también", async () => {
-    const r = await revisarBuzon({ cliente: buzonFalso([], { falloAlAbrir: "AUTHENTICATIONFAILED" }), config: CFG });
-    expect(r).toEqual({ error: "AUTHENTICATIONFAILED" });
-    const { rows } = await db.query(
+  it("cada pasada deja su fila, y un buzón que no abre también, diciendo por qué", async () => {
+    /*
+     * Tal y como lo lanza ImapFlow cuando el servidor rechaza el LOGIN: el
+     * mensaje es «Command failed» —el mismo para cualquier NO— y lo que dice
+     * qué pasa va colgado aparte. Eso es lo que tiene que acabar en la fila.
+     */
+    const comoImapFlow = Object.assign(new Error("Command failed"), {
+      responseStatus: "NO",
+      authenticationFailed: true,
+      serverResponseCode: "AUTHENTICATIONFAILED",
+      response: "[AUTHENTICATIONFAILED] Authentication failed.",
+    });
+    const r = await revisarBuzon({ cliente: buzonFalso([], { falloAlAbrir: comoImapFlow }), config: CFG });
+    if (!("error" in r)) throw new Error("tenía que fallar");
+    expect(r.error).toContain("conectar con el servidor de correo");
+    expect(r.error).toContain("THEREFORE_IMAP_PASS");
+    expect(r.error).toContain("Authentication failed");
+    const { rows } = await db.query<{ error: string; cerrada: boolean }>(
       `SELECT error, terminada_at IS NOT NULL AS cerrada FROM thf_buzon_pasadas WHERE empresa_id = $1`,
       [EMPRESA]
     );
-    expect(rows).toEqual([{ error: "AUTHENTICATIONFAILED", cerrada: true }]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cerrada).toBe(true);
+    expect(rows[0].error).toBe(r.error);
   });
+  it("si no se puede cerrar la sesión, el socket se cierra a las bravas", async () => {
+    /*
+     * Una pasada cada cinco minutos que deja el socket abierto acaba dando
+     * «Maximum number of connections» y el buzón deja de leerse sin que nadie
+     * haya tocado nada. Por eso el cierre no depende de que LOGOUT funcione.
+     */
+    const buzon = buzonFalso([], { falloAlSalir: true });
+    const r = await revisarBuzon({ cliente: buzon, config: CFG });
+    if ("error" in r) throw new Error(r.error);
+    expect(buzon.cerrado).toBe(true);
+  });
+
   it("la carga del histórico procesa lo anterior a la activación, leído o no, y sólo cuando se pide", async () => {
     const activacion = new Date("2026-09-10T10:00:00Z");
     const viejo = await mensaje({ texto: CUERPO, fecha: new Date("2026-08-20T08:00:00Z") });

@@ -86,6 +86,27 @@ export const PERMISOS = [
   "cash.erp.view",
   "cash.erp.sync",
   "cash.erp.configure",
+  /**
+   * Liquidaciones de gastos de trabajadores: ver las del ámbito.
+   */
+  "cash.expense_claim.view",
+  /**
+   * Prepararlas: crear, subir tickets, corregirlos y presentar. Es del
+   * mostrador, que es quien recibe los tickets del trabajador.
+   */
+  "cash.expense_claim.create",
+  /**
+   * Aprobar, rechazar y anular, y dar por bueno un posible duplicado. Es de
+   * responsable: decide que un gasto se paga, que es la mitad de pagarlo.
+   */
+  "cash.expense_claim.approve",
+  /**
+   * Pagar una liquidación aprobada. Es de responsable A PROPÓSITO: el pago de
+   * una liquidación es un pago manual —no viene de ninguna factura del ERP— y
+   * el cajero tampoco tiene hoy `cash.payment.create_manual`. Darle por aquí
+   * lo que no tiene por Pagos sería abrir una puerta de atrás.
+   */
+  "cash.expense_claim.pay",
 ] as const;
 
 export type Permiso = (typeof PERMISOS)[number];
@@ -101,7 +122,7 @@ export type RolCaja = "admin" | "responsable" | "cajero" | "consulta";
  * · admin       — todo, incluida la configuración de la integración.
  */
 const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
-  consulta: ["cash.view", "cash.erp.view"],
+  consulta: ["cash.view", "cash.erp.view", "cash.expense_claim.view"],
   cajero: [
     "cash.view",
     "cash.erp.view",
@@ -111,6 +132,8 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     "cash.movement.create",
     "cash.count.create",
     "cash.document.attach",
+    "cash.expense_claim.view",
+    "cash.expense_claim.create",
   ],
   responsable: [
     "cash.view",
@@ -144,6 +167,10 @@ const POR_ROL: Record<RolCaja, readonly Permiso[]> = {
     "cash.treasury.manage",
     "cash.document.attach",
     "cash.document.void",
+    "cash.expense_claim.view",
+    "cash.expense_claim.create",
+    "cash.expense_claim.approve",
+    "cash.expense_claim.pay",
   ],
   admin: PERMISOS,
 };

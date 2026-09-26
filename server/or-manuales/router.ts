@@ -221,6 +221,34 @@ export function createOrManualesRouter(): Router {
     })
   );
 
+  /**
+   * Borra el bloc. Con `confirmar: true` se lleva también las hojas que
+   * tuviera archivadas; sin él, un bloc con hojas contesta 409 diciendo
+   * cuántas son, para que quien lo borra sepa qué se lleva por delante.
+   */
+  r.delete(
+    "/blocs/:id",
+    exigirPermiso("or-manuales.bloc.eliminar"),
+    ruta(async (req, res) => {
+      const ctx = contextoDe(req);
+      const id = String(req.params.id);
+      const r2 = await servicio.eliminarBloc(ctx, id, {
+        confirmar: req.body?.confirmar === true,
+        motivo: texto(req.body?.motivo),
+      });
+      await registrarAuditoria({
+        empresaId: ctx.empresaId,
+        userId: ctx.userId,
+        accion: "or_manuales.bloc.eliminar",
+        entidad: "orm_blocs",
+        entidadId: id,
+        detalle: { numeroBloc: r2.numeroBloc, documentosRetirados: r2.documentosRetirados, motivo: texto(req.body?.motivo) || null },
+        ip: ctx.ip,
+      });
+      res.json({ ok: true, ...r2 });
+    })
+  );
+
   r.post(
     "/blocs/:id/entregar",
     exigirPermiso("or-manuales.bloc.entregar"),

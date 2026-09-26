@@ -52,6 +52,7 @@ export default function JornadaActual() {
   const vacia =
     jornada.operaciones <= 1 &&
     jornada.cobros.totalCentimos === 0 &&
+    (jornada.abonos?.totalCentimos ?? 0) === 0 &&
     jornada.pagos.totalCentimos === 0;
 
   return (
@@ -138,7 +139,20 @@ export default function JornadaActual() {
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <Card title="Efectivo teórico" value={euros(jornada.totalStockCentimos)} hint={`${jornada.piezas} piezas`} accent="text-emerald-400" />
         <Card title="Fondo inicial" value={euros(s.fondoInicialCentimos)} hint={s.fondoInicialHeredado ? "Heredado del cierre anterior" : "Introducido a mano"} />
-        <Card title="Cobros" value={euros(jornada.cobros.totalCentimos)} hint={`ERP ${euros(jornada.cobros.erpCentimos)} · manual ${euros(jornada.cobros.manualCentimos)}`} />
+        {/*
+          Con abonos, la cifra grande es la NETA —lo que de verdad ha entrado
+          por ventas— y la pista dice de qué se compone. Es lo que cuadra con
+          el arqueo de Genes, donde el abono resta en la columna de cobros.
+        */}
+        <Card
+          title="Cobros"
+          value={euros(jornada.cobros.totalCentimos - (jornada.abonos?.totalCentimos ?? 0))}
+          hint={
+            (jornada.abonos?.totalCentimos ?? 0) > 0
+              ? `cobros ${euros(jornada.cobros.totalCentimos)} · abonos −${euros(jornada.abonos.totalCentimos)}`
+              : `ERP ${euros(jornada.cobros.erpCentimos)} · manual ${euros(jornada.cobros.manualCentimos)}`
+          }
+        />
         <Card title="Pagos" value={euros(jornada.pagos.totalCentimos)} hint={`ERP ${euros(jornada.pagos.erpCentimos)} · manual ${euros(jornada.pagos.manualCentimos)}`} accent="text-amber-300" />
       </div>
 
@@ -265,7 +279,9 @@ function DetalleDelDia({ sessionId }: { sessionId: number }) {
    * como pasó, de la mañana a la tarde.
    */
   const enOrden = [...operaciones].filter((o) => o.estado !== "CANCELLED").sort((a, b) => a.id - b.id);
-  const cobros = enOrden.filter((o) => o.tipo === "COLLECTION");
+  // Los abonos van con los cobros, que es de donde restan: un cobro devuelto
+  // se repasa al lado del cobro, no entre los pagos a proveedores.
+  const cobros = enOrden.filter((o) => o.tipo === "COLLECTION" || o.tipo === "REFUND");
   const pagos = enOrden.filter((o) => o.tipo === "PAYMENT" || o.tipo === "MANUAL_OUT");
 
   /**

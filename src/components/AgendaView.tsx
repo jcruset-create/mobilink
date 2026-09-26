@@ -2569,24 +2569,74 @@ appendLog(
                           width: `calc(${width}% - 8px)`,
                         }}
                       >
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-start justify-between gap-2">
                           <div className="truncate uppercase">
                             {job.linkedTemplateLabel ||
                               template?.label ||
                               "Operación"}
                           </div>
 
-                          <span
-                            className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-black uppercase no-underline ${
-                              job.status === "cancelado"
-                                ? "bg-red-100 text-red-800"
-                                : "bg-white/90 text-slate-800"
-                            }`}
-                          >
-                            {job.status === "cancelado"
-                              ? "Cancelada"
-                              : getScheduledJobStatusLabel(job.status)}
-                          </span>
+                          {/*
+                            El estado y, debajo, las tres acciones en vertical.
+                            Estaban en una fila pegada al borde inferior de la
+                            tarjeta, ocupando todo el ancho; ahí tapaban el
+                            cliente y la duración en las citas cortas.
+
+                            La columna no lleva ancho fijo: lo marca la
+                            etiqueta de estado, y los botones se estiran a ese
+                            ancho con `w-full`. Así los tres salen alineados
+                            con ella sin medir nada a ojo.
+                          */}
+                          <div className="flex shrink-0 flex-col items-end gap-0.5">
+                            <span
+                              className={`w-full rounded-full px-2 py-0.5 text-center text-[9px] font-black uppercase no-underline ${
+                                job.status === "cancelado"
+                                  ? "bg-red-100 text-red-800"
+                                  : "bg-white/90 text-slate-800"
+                              }`}
+                            >
+                              {job.status === "cancelado"
+                                ? "Cancelada"
+                                : getScheduledJobStatusLabel(job.status)}
+                            </span>
+
+                            {job.status !== "cancelado" && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  sendAgendaWhatsApp(job);
+                                }}
+                                className="w-full rounded bg-green-500 px-1 py-[1px] text-[8px] font-semibold leading-[1.35] text-white shadow-sm"
+                              >
+                                WhatsApp
+                              </button>
+                            )}
+
+                            {job.status === "programado" && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  cancelScheduledJob(job.id);
+                                }}
+                                className="w-full rounded bg-white/95 px-1 py-[1px] text-[8px] font-semibold leading-[1.35] text-red-600 shadow-sm"
+                              >
+                                Cancelar
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteScheduledJob(job.id);
+                              }}
+                              className="w-full rounded bg-white/95 px-1 py-[1px] text-[8px] font-semibold leading-[1.35] text-slate-700 shadow-sm"
+                            >
+                              Eliminar
+                            </button>
+                          </div>
                         </div>
 
                         {job.includedTasks && job.includedTasks.length > 0 && (
@@ -2684,44 +2734,6 @@ appendLog(
                           </div>
                         )}
 
-                        <div className="absolute bottom-1 left-1 right-1 flex gap-1">
-  {job.status !== "cancelado" && (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        sendAgendaWhatsApp(job);
-      }}
-      className="flex-1 rounded-md bg-green-500 px-1 py-0.5 text-[9px] font-semibold text-white shadow-sm"
-    >
-      WhatsApp
-    </button>
-  )}
-
-  {job.status === "programado" && (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        cancelScheduledJob(job.id);
-      }}
-      className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-red-600 shadow-sm"
-    >
-      Cancelar
-    </button>
-  )}
-
-  <button
-    type="button"
-    onClick={(e) => {
-      e.stopPropagation();
-      deleteScheduledJob(job.id);
-    }}
-    className="flex-1 rounded-md bg-white/95 px-1 py-0.5 text-[9px] font-semibold text-slate-700 shadow-sm"
-  >
-    Eliminar
-  </button>
-</div>
                       </div>
                     );
                   })}
