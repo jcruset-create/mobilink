@@ -9,6 +9,7 @@ import {
 } from "./techStatus";
 
 import { nowMs } from "./time";
+import { tokenSesionActual } from "./sesionToken";
 export async function fetchWithTimeout(
   url: string,
   options?: RequestInit,
@@ -32,11 +33,19 @@ export async function fetchWithTimeout(
 export function getAdminHeaders(extra?: HeadersInit): HeadersInit {
   const token = localStorage.getItem("sea-admin-token") ?? "";
 
-  return {
-    ...(extra ?? {}),
+  const cabeceras: Record<string, string> = {
+    ...((extra ?? {}) as Record<string, string>),
     // Codificado: las contraseñas con acentos/símbolos no caben crudas en cabeceras HTTP
     "x-admin-token": encodeURIComponent(token),
   };
+
+  // Y la sesión unificada si la hay: así el panel no necesita que el login SSO
+  // le entregue una contraseña. Ver el comentario largo en adminHeaders.ts.
+  const sesion = tokenSesionActual();
+  if (sesion && !cabeceras.Authorization) {
+    cabeceras.Authorization = `Bearer ${sesion}`;
+  }
+  return cabeceras;
 }
 
 export { API_BASE };

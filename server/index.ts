@@ -14172,6 +14172,34 @@ app.post("/api/login-sso", async (req, res) => {
       });
     }
 
+    /*
+     * ── Este endpoint ya NO devuelve ninguna contraseña ─────────────────────
+     *
+     * Devolvía `adminToken`, y ahí estaban las dos peores fugas del panel:
+     *
+     *   · para un usuario con ficha en `app_users`, la contraseña EN CLARO de
+     *     ese usuario (`panelUser.password`);
+     *   · para un superadministrador o un admin de administración,
+     *     `process.env.ADMIN_PASSWORD`: la contraseña maestra compartida del
+     *     panel entero.
+     *
+     * El navegador la guardaba en `localStorage` («sea-admin-token»), la mandaba
+     * en cada petición y la incrustaba en las URLs de los PDF. Con eso, un XSS,
+     * un puesto compartido o una copia de seguridad de Android bastaban para
+     * llevarse una credencial que no caduca, no se puede revocar y es la misma
+     * para todos. Y no hacía falta ninguna de las dos cosas: el panel ya tiene
+     * la sesión de Supabase con la que ha llegado aquí.
+     *
+     * Las cabeceras del panel (`adminHeaders.ts` y `workshopApi.ts`) mandan
+     * ahora también ese Bearer, y `getRoleFromRequestAsync` lo mira ANTES del
+     * token clásico. Así que la respuesta solo necesita decir quién eres y qué
+     * ves. Quien entra por el login clásico tecleando la contraseña compartida
+     * sigue funcionando igual: eso se retira en la fase de identidad, con su
+     * aviso de deprecación.
+     *
+     * Regla que queda: ninguna respuesta de la API devuelve una contraseña.
+     */
+
     // 1) Usuario del panel con el mismo nombre (username o nombre completo)
     try {
       const users = await listDbAppUsers();
@@ -14183,7 +14211,6 @@ app.post("/api/login-sso", async (req, res) => {
           role: panelUser.role,
           name: panelUser.name,
           allowedViews: panelUser.allowedViews,
-          adminToken: panelUser.password ?? "",
         });
       }
     } catch (e) {
@@ -14191,13 +14218,12 @@ app.post("/api/login-sso", async (req, res) => {
     }
 
     // 2) Superadmin / admin de administración → admin del panel
-    if ((u.es_superadmin || u.adm_admin) && process.env.ADMIN_PASSWORD) {
+    if (u.es_superadmin || u.adm_admin) {
       return res.json({
         ok: true,
         role: "admin",
         name: u.nombre,
         allowedViews: null,
-        adminToken: process.env.ADMIN_PASSWORD,
       });
     }
 
