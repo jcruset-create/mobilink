@@ -55,6 +55,7 @@
     // recepción de mercancía— el módulo se salió de este `include` sin que
     // nada lo dijera, y estuvo tres entregas sin comprobarse.
     "server/recepcionVehiculos/**/*.ts",
+    "server/citasWhatsapp/**/*.ts",
     "server/satisfaction/**/*.ts",
     "server/cierre/**/*.ts",
     "server/core/auditoria.ts",
