@@ -18,7 +18,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, degrees, rgb } from "pdf-lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const RUN = process.env.RUN_DB_TESTS === "1" && !!process.env.DATABASE_URL;
@@ -899,10 +899,14 @@ describe.runIf(RUN)("Liquidaciones · el pago", () => {
     expect(segundo.pago.operacionId).not.toBe(r.pago.operacionId);
     expect(segundo.liquidacion.estado).toBe("PAGADA");
 
-    // El PDF de la pagada sale igual que antes: portada + sus cuatro tickets.
-    const { PDFDocument: P } = await import("pdf-lib");
-    const paginas = (await P.load(await informe.informeLiquidacion(ctx, l.id))).getPageCount();
-    expect(paginas).toBeGreaterThanOrEqual(5);
+    // El PDF de la pagada sale igual que antes: portada y sus cuatro tickets
+    // detrás. (Estos de prueba son una línea de texto en 106×71 mm: no pasan
+    // por ticket y van cada uno en su hoja; el mosaico se prueba aparte.)
+    const pdfPagada = await informe.informeLiquidacion(ctx, l.id);
+    const mupdf = await import("mupdf");
+    const doc = mupdf.Document.openDocument(pdfPagada, "application/pdf");
+    const todo = [...Array(doc.countPages()).keys()].map((i) => doc.loadPage(i).toStructuredText().asText()).join("\n");
+    for (const n of [1, 2, 3, 4]) expect(todo).toMatch(new RegExp(`\\bp${n} `));
   });
 
   it("anular una operación que no es de ninguna liquidación sigue igual", async () => {
@@ -1517,6 +1521,191 @@ describe.runIf(RUN)("Liquidaciones · duplicados por contenido", () => {
       if (antes === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = antes;
     }
+  });
+});
+
+describe.runIf(RUN)("Liquidaciones · los tickets juntos en A4", () => {
+  const MM = 72 / 25.4;
+  /**
+   * Un escaneo de `ancho`×`alto` mm con la tinta en un bloque de
+   * `tintaAncho`×`tintaAlto` mm centrado: como el del escáner, con su blanco.
+   */
+  async function escaneo(ancho: number, alto: number, tintaAncho: number, tintaAlto: number, rotacion = 0) {
+    const d = await PDFDocument.create();
+    const p = d.addPage([ancho * MM, alto * MM]);
+    p.drawRectangle({
+      x: ((ancho - tintaAncho) / 2) * MM,
+      y: ((alto - tintaAlto) / 2) * MM,
+      width: tintaAncho * MM,
+      height: tintaAlto * MM,
+      color: rgb(0, 0, 0),
+    });
+    if (rotacion) p.setRotation(degrees(rotacion));
+    d.setTitle(randomUUID());
+    return Buffer.from(await d.save());
+  }
+  const bar = () => escaneo(79, 136, 64, 115);
+  const peaje = () => escaneo(59, 144, 45, 124);
+
+  async function conTickets(ficheros: { buffer: Buffer; concepto: number; importe: number }[]) {
+    const l = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan });
+    const ls = await tickets.subirTickets(
+      ctx,
+      l.id,
+      ficheros.map((f, i) => fichero(f.buffer, `t${i}.pdf`))
+    );
+    for (const [i, x] of ls.entries()) {
+      await tickets.editarLinea(ctx, l.id, x.id, {
+        fecha: "2026-09-22",
+        // Uno distinto cada vez: si no, el control de duplicados los daría por el mismo ticket.
+        emisorNombre: `Prueba ${randomUUID().slice(0, 8)}`,
+        importeCentimos: ficheros[i]!.importe,
+        expenseConceptId: ficheros[i]!.concepto,
+      });
+    }
+    return l;
+  }
+
+  /** Las hojas del PDF: tamaño y texto de cada una. */
+  async function hojas(pdf: Buffer) {
+    const mupdf = await import("mupdf");
+    const doc = mupdf.Document.openDocument(pdf, "application/pdf");
+    return [...Array(doc.countPages()).keys()].map((i) => {
+      const p = doc.loadPage(i);
+      const [x0, y0, x1, y1] = p.getBounds();
+      return { ancho: Math.round(x1 - x0), alto: Math.round(y1 - y0), texto: p.toStructuredText().asText() };
+    });
+  }
+  const deTickets = <T extends { texto: string }>(hs: T[]) => hs.filter((h) => /tickets \d+ de \d+/.test(h.texto));
+
+  it("la semana de Ivan: 4 dietas en una hoja y 4 peajes en otra, al 100 %", async () => {
+    const l = await conTickets([
+      { buffer: await bar(), concepto: dietas, importe: 1660 },
+      { buffer: await peaje(), concepto: peajes, importe: 503 },
+      { buffer: await bar(), concepto: dietas, importe: 1660 },
+      { buffer: await peaje(), concepto: peajes, importe: 79 },
+      { buffer: await peaje(), concepto: peajes, importe: 503 },
+      { buffer: await peaje(), concepto: peajes, importe: 503 },
+      { buffer: await bar(), concepto: dietas, importe: 1660 },
+      { buffer: await bar(), concepto: dietas, importe: 1660 },
+    ]);
+    const hs = deTickets(await hojas(await informe.informeLiquidacion(ctx, l.id)));
+    expect(hs).toHaveLength(2);
+    expect(hs[0]!.texto).toContain(`Dietas ${sufijo}: 4 tickets · 66,40 €`);
+    expect(hs[1]!.texto).toContain(`Peajes ${sufijo}: 4 tickets · 15,88 €`);
+    // Al 100 %: la cabecera solo dice la escala cuando reduce.
+    expect(hs.some((h) => h.texto.includes(" %"))).toBe(false);
+    // En orden, y cada uno con su rótulo.
+    expect(hs[0]!.texto.indexOf("Ticket 1 ·")).toBeLessThan(hs[0]!.texto.indexOf("Ticket 3 ·"));
+    expect(hs[1]!.texto).toContain("Ticket 4 · 22/09 · 0,79 €");
+    for (const h of hs) expect([h.ancho, h.alto]).toEqual([595, 842]);
+  });
+
+  it("en el informe de cierre: por concepto o por tipo, y cada importe una vez", async () => {
+    const { rows } = await db.query(
+      `INSERT INTO cash_registers (empresa_id, centro, nombre, activa, created_at_ms, updated_at_ms)
+       VALUES ($1,'Centro',$2,true,$3,$3) RETURNING id`,
+      [EMPRESA, `Mosaico ${sufijo}`, Date.now()]
+    );
+    const sesion = (
+      await servicio.abrirJornada(ctx, { registerId: rows[0].id, fondoManual: [{ valor: 2000, cantidad: 10 }] })
+    ).sesion.id;
+
+    // Un cobro con DOS justificantes (el albarán y el del datáfono): 20 €, no 40.
+    const cobro = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion,
+      tipo: "COLLECTION",
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoRecibido: [{ valor: 2000, cantidad: 1 }],
+      concepto: "venta",
+    });
+    await documentos.adjuntarDocumento(ctx, cobro.operacionId, fichero(await bar()));
+    await documentos.adjuntarDocumento(ctx, cobro.operacionId, fichero(await peaje()));
+
+    // Un pago con concepto de gasto: va con los de su concepto.
+    const pagoPeaje = await servicio.registrarOperacion(ctx, {
+      sessionId: sesion,
+      tipo: "PAYMENT",
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoEntregado: [{ valor: 2000, cantidad: 1 }],
+      concepto: "peaje suelto",
+      expenseConceptId: peajes,
+    });
+    await documentos.adjuntarDocumento(ctx, pagoPeaje.operacionId, fichero(await peaje()));
+
+    // Y una liquidación pagada: cada ticket con SU concepto y SU importe, no los del pago entero.
+    const l = await conTickets([
+      { buffer: await bar(), concepto: dietas, importe: 1000 },
+      { buffer: await peaje(), concepto: peajes, importe: 1000 },
+    ]);
+    const ls = (await liquidaciones.detalleLiquidacion(ctx, l.id)).lineas;
+    for (const x of ls) await tickets.editarLinea(ctx, l.id, x.id, { revisada: true });
+    await liquidaciones.presentarLiquidacion(ctx, l.id);
+    await liquidaciones.aprobarLiquidacion(ctxJefe, l.id);
+    const pagada = await pago.pagarLiquidacion(ctxJefe, l.id, {
+      sessionId: sesion,
+      importeCentimos: 2000,
+      formasPago: [{ forma: "CASH", importe: 2000 }],
+      efectivoEntregado: [{ valor: 2000, cantidad: 1 }],
+      idempotencyKey: `mosaico-${randomUUID()}`,
+    });
+
+    const { informeCierre } = await import("./report.ts");
+    const hs = deTickets(await hojas(await informeCierre(EMPRESA, sesion)));
+    const texto = hs.map((h) => h.texto).join("\n");
+    expect(texto).toContain("Cobros: 2 tickets · 20,00 €");
+    expect(texto).toContain(`Peajes ${sufijo}: 2 tickets · 30,00 €`);
+    expect(texto).toContain(`Dietas ${sufijo}: 1 ticket · 10,00 €`);
+    expect(texto).toContain(`${pagada.pago.numero} · 10,00 €`);
+    expect(texto).not.toContain(`${pagada.pago.numero} · 20,00 €`);
+  });
+
+  it("reduce hasta el 80 % solo si con eso ahorra una hoja", async () => {
+    // Ocho peajes: al 100 % caben 6; reduciendo, los 8 en una.
+    const l = await conTickets(await Promise.all([...Array(8)].map(async () => ({ buffer: await peaje(), concepto: peajes, importe: 100 }))));
+    const hs = deTickets(await hojas(await informe.informeLiquidacion(ctx, l.id)));
+    expect(hs).toHaveLength(1);
+    const escala = Number(/al (\d+) %/.exec(hs[0]!.texto)?.[1]);
+    expect(escala).toBeGreaterThanOrEqual(80);
+    expect(escala).toBeLessThan(100);
+  });
+
+  it("una factura A4 va entera y antes de los tickets; lo que no es ticket, como siempre", async () => {
+    const a4 = await escaneo(210, 297, 190, 270);
+    const supermercado = await escaneo(80, 600, 70, 580);
+    const girado = await escaneo(79, 136, 64, 115, 90);
+    // Boca abajo: mide lo mismo que uno normal, pero incrustado saldría del revés.
+    const giradoDelReves = await escaneo(79, 136, 64, 115, 180);
+    const enA4 = await escaneo(210, 297, 64, 115);
+    const l = await conTickets([
+      { buffer: await bar(), concepto: dietas, importe: 1000 },
+      { buffer: a4, concepto: dietas, importe: 2000 },
+      { buffer: supermercado, concepto: dietas, importe: 3000 },
+      { buffer: girado, concepto: dietas, importe: 4000 },
+      { buffer: giradoDelReves, concepto: dietas, importe: 4500 },
+      { buffer: enA4, concepto: dietas, importe: 5000 },
+    ]);
+    const hs = await hojas(await informe.informeLiquidacion(ctx, l.id));
+    const primera = hs.findIndex((h) => /tickets \d+ de \d+/.test(h.texto));
+    // Delante de las de tickets: la factura A4, el ticket largo y los girados, cada uno entero y a su tamaño.
+    const enteras = hs.slice(primera - 4, primera).map((h) => [h.ancho, h.alto]);
+    expect(enteras).toEqual([
+      [595, 842],
+      [227, 1701],
+      [386, 224],
+      [224, 386],
+    ]);
+    // Detrás, una sola hoja con el del bar y el del escáner que no recortó.
+    const ts = deTickets(hs);
+    expect(ts).toHaveLength(1);
+    expect(ts[0]!.texto).toContain("Ticket 1 ·");
+    expect(ts[0]!.texto).toContain("Ticket 6 ·");
+    expect(ts[0]!.texto).not.toContain("Ticket 2 ·");
+    expect(ts[0]!.texto).not.toContain("Ticket 5 ·");
+    // El total del grupo solo cuenta los que van en la hoja.
+    expect(ts[0]!.texto).toContain(`Dietas ${sufijo}: 2 tickets · 60,00 €`);
   });
 });
 
