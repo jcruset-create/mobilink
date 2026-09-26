@@ -125,7 +125,7 @@ import { mountFlanco } from "./tyrecontrol/flanco/index.ts";
 import { mountEtiquetas } from "./tyrecontrol/etiquetas/index.ts";
 import { mountParte } from "./tyrecontrol/parte/index.ts";
 import { masNuevaPrimero } from "./apkVersion.ts";
-import { authenticate, buildMePayload, getAuthMode, licenciaActiva, protectWhenStrict, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
+import { authenticate, buildMePayload, getAuthMode, licenciaActiva, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
 import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
@@ -675,7 +675,7 @@ const requireOperarioRole = requireRole(["admin", "supervisor", "pantallas"]);
 // pasar a AUTH_MODE=strict; el permiso fino llegará con el RBAC completo.
 const requirePanelRole = requireRole(["admin", "supervisor", "pantallas", "tv75"]);
 
-app.post("/api/whatsapp/send-agenda-reminder", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/whatsapp/send-agenda-reminder", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const {
       customerName,
@@ -1384,7 +1384,7 @@ function extractLatLngFromGoogleMapsUrl(url: string): { lat: number; lng: number
   return null;
 }
 
-app.post("/api/geocode", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/geocode", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const address = String(req.body?.address || "").trim();
     if (!address) {
@@ -1750,6 +1750,125 @@ if (
   return null;
 }
 
+/* =========================================================
+   CREDENCIAL MÍNIMA — sustituye a protectWhenStrict
+========================================================= */
+
+type FamiliaCredencial = "sesion" | "operario" | "panel-legacy" | "ninguna";
+
+/**
+ * Qué credencial VÁLIDA trae la petición, si trae alguna.
+ *
+ * No decide permisos: solo si quien llama se ha identificado de alguna de las
+ * formas que los clientes usan hoy. Se prueban en orden de coste creciente y se
+ * para en la primera que cuadra.
+ */
+async function familiaCredencial(req: express.Request): Promise<FamiliaCredencial> {
+  const auth = String(req.headers.authorization || "");
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (bearer) {
+    try {
+      if (await resolveAuthContext(bearer)) return "sesion";
+    } catch (e) {
+      console.error("familiaCredencial (bearer):", e);
+    }
+  }
+
+  if (
+    req.headers["x-roadside-operator-code"] ||
+    req.headers["x-operator-pin"] ||
+    req.headers["x-presencia-pin"]
+  ) {
+    try {
+      if (await getTallerOperatorFromRequest(req)) return "operario";
+    } catch (e) {
+      console.error("familiaCredencial (operario):", e);
+    }
+    const empleado = String(req.headers["x-presencia-employee"] || "").trim();
+    const pinPresencia = String(req.headers["x-presencia-pin"] || "").trim();
+    if (empleado && pinPresencia) {
+      try {
+        if (await verificarPinPresencia(empleado, pinPresencia)) return "operario";
+      } catch (e) {
+        console.error("familiaCredencial (presencia):", e);
+      }
+    }
+  }
+
+  if (req.headers["x-admin-token"] || (req.query && (req.query as any).token)) {
+    try {
+      if (await getRoleFromRequestAsync(req)) return "panel-legacy";
+    } catch (e) {
+      console.error("familiaCredencial (panel):", e);
+    }
+  }
+
+  return "ninguna";
+}
+
+/**
+ * Exige que la petición traiga ALGUNA credencial válida.
+ *
+ * ── Qué sustituye y por qué así ─────────────────────────────────────────────
+ *
+ * Estas rutas iban envueltas en `exigirCredencial(...)`, que solo aplica sus
+ * guards cuando `AUTH_MODE=strict`. `AUTH_MODE` no está definido en ningún
+ * sitio —ni en render.yaml, ni en .env.example— así que valía `dual` y la
+ * función era un `next()` pelado: cincuenta rutas contestaban a cualquiera sin
+ * credencial. Entre ellas, el listado completo de asistencias con nombre,
+ * teléfono, matrícula y ubicación de los clientes, el borrado de trabajos, la
+ * agenda, el envío de WhatsApp y las llamadas a la IA.
+ *
+ * Lo evidente sería poner `AUTH_MODE=strict` y ya. No se hace, y conviene que
+ * quede escrito: `strict` cambia de golpe el comportamiento de las cincuenta y,
+ * sobre todo, ROMPE las subidas multipart de las APKs, que mandan solo las
+ * cabeceras de operario y no el Bearer (flutter_app/lib/services/api_service.dart
+ * y taller_app, en las rutas de `scan-plate` y de ficheros). Eso obliga a
+ * publicar cinco APKs antes de poder cerrar el agujero.
+ *
+ * Así que esto exige lo que los clientes YA envían: sesión unificada, cabeceras
+ * de operario o token de panel clásico. Quien no manda nada se queda fuera; quien
+ * manda algo válido sigue trabajando exactamente igual. No es el destino final
+ * —el permiso fino llega con el RBAC—, es cerrar la puerta que estaba abierta
+ * sin depender de una release de las apps.
+ *
+ * En `AUTH_MODE=strict` se comporta como antes y aplica los guards de verdad.
+ */
+function exigirCredencial(...handlers: express.RequestHandler[]): express.RequestHandler {
+  return (req, res, next) => {
+    if (getAuthMode() === "strict") {
+      let i = 0;
+      const run = (err?: unknown) => {
+        if (err) return next(err as any);
+        const h = handlers[i++];
+        if (!h) return next();
+        h(req, res, run);
+      };
+      return run();
+    }
+
+    void (async () => {
+      const familia = await familiaCredencial(req);
+      if (familia === "ninguna") {
+        /*
+         * MODO OBSERVACIÓN. Todavía no se rechaza: primero hay que ver en los
+         * logs si algún cliente que no conocemos llama sin credencial. El
+         * commit siguiente cambia esto por un 401, y se puede revertir solo él
+         * sin perder el resto del arreglo.
+         */
+        console.warn(
+          `[credencial] SIN CREDENCIAL VÁLIDA: ${req.method} ${req.path}` +
+            ` (ua=${String(req.headers["user-agent"] || "?").slice(0, 60)})`
+        );
+      }
+      next();
+    })().catch((error) => {
+      console.error("exigirCredencial error:", error);
+      res.status(500).json({ error: "Error de autorización" });
+    });
+  };
+}
+
 function normalizeRoadsideOperatorCodeRow(row: any, includeCode = true) {
   const code = String(row.roadsideOperatorCode || "").trim();
 
@@ -1973,7 +2092,7 @@ app.get("/api/health", (_req, res) => {
 //     cayendo las reparaciones en sitio de resolver incidencias.
 //   · Sin él (APKs viejas): como siempre, se CREA la intervención agrupando
 //     las huérfanas del vehículo desde `desde`.
-app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate, requireModule("tyrecontrol")), async (req, res) => {
+app.post("/api/tyrecontrol/intervencion/cerrar", exigirCredencial(authenticate, requireModule("tyrecontrol")), async (req, res) => {
   try {
     const { vehiculoId, desde, intervencionId, montajeAntes, incidencias, imagenChasis,
       inicioAt, finAt, pausaSeg, nPausas } = req.body ?? {};
@@ -2264,7 +2383,7 @@ app.post("/api/tyrecontrol/intervencion/cerrar", protectWhenStrict(authenticate,
   }
 });
 
-app.get("/api/ai-test", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/ai-test", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const r = await pedirIA({
       operacion: "diagnostico.ai-test",
@@ -2324,7 +2443,7 @@ const techs = techsResult.rows;
     res.status(500).json({ error: "Error reiniciando el sistema" });
   }
 });
-app.post("/api/ai/taller", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/ai/taller", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const { jobs, techs, operationReport, techOperationStats } = req.body;
     const safeJobs = Array.isArray(jobs) ? jobs : [];
@@ -2419,7 +2538,7 @@ Si no hay técnico válido, responsable debe ser null.
    TECHS
 ========================================================= */
 
-app.get("/api/techs", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/techs", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`
       SELECT name, status, blocked, "currentJobId", competencies, priorities, avatar,
@@ -2825,7 +2944,7 @@ app.post(
    JOBS
 ========================================================= */
 
-app.get("/api/jobs", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/jobs", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     // scope=live (por defecto para el operativo y su auto-sync): solo trabajos
     // no cerrados + cerrados de los últimos 3 días (cubre las estadísticas del
@@ -3177,7 +3296,7 @@ app.put("/api/jobs/:id", requireSupervisorRole, async (req, res) => {
   }
 });
 
-app.post("/api/jobs/:id/finish", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/jobs/:id/finish", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -3248,7 +3367,7 @@ app.post("/api/jobs/:id/finish", protectWhenStrict(requirePanelRole), async (req
   }
 });
 
-app.delete("/api/jobs/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.delete("/api/jobs/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -4328,7 +4447,7 @@ async function ensureSafetyDocsBucket() {
 
 app.post(
   "/api/safety/documents/upload",
-  protectWhenStrict(requirePanelRole),
+  exigirCredencial(requirePanelRole),
   upload.single("file"),
   async (req, res) => {
     try {
@@ -4617,7 +4736,7 @@ app.post("/api/workshop-config", requireAdminRole, async (req, res) => {
 
 const AGENDA_CONFIG_KEY = "agenda_config";
 
-app.get("/api/agenda-config", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/agenda-config", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(
       `SELECT value FROM workshop_config WHERE key = $1 LIMIT 1`,
@@ -4794,7 +4913,7 @@ app.post("/api/agenda-config/festivos-ia", requireSupervisorRole, async (req, re
    ROADSIDE ASSISTANCES
 ========================================================= */
 
-app.get("/api/roadside-vehicles", protectWhenStrict(authenticate), async (req, res) => {
+app.get("/api/roadside-vehicles", exigirCredencial(authenticate), async (req, res) => {
   try {
     const includeInactive = String(req.query.includeInactive || "") === "true";
 
@@ -5317,7 +5436,7 @@ app.patch("/api/assist-panel-users/:userId", requireSupervisorRole, async (req, 
   }
 });
 
-app.get("/api/roadside-assistances", protectWhenStrict(authenticate), async (req, res) => {
+app.get("/api/roadside-assistances", exigirCredencial(authenticate), async (req, res) => {
   try {
     const includeClosed = String(req.query.includeClosed || "") === "true";
 
@@ -5932,7 +6051,7 @@ app.delete(
 );
 
 /* ── ETA ─────────────────────────────────────────────────────────────── */
-app.post("/api/maps/eta", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/maps/eta", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const { origen, destino } = req.body;
     const eta = await calcularETA(origen, destino);
@@ -5943,7 +6062,7 @@ app.post("/api/maps/eta", protectWhenStrict(requirePanelRole), async (req, res) 
   }
 });
 
-app.post("/api/roadside-eta", protectWhenStrict(authenticate), async (req, res) => {
+app.post("/api/roadside-eta", exigirCredencial(authenticate), async (req, res) => {
   try {
     const { origen, destino } = req.body as {
       origen?: { lat: number; lng: number };
@@ -5966,7 +6085,7 @@ app.post("/api/roadside-eta", protectWhenStrict(authenticate), async (req, res) 
   }
 });
 
-app.get("/api/webfleet/debug", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/webfleet/debug", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
     const response = await fetch(url, { headers });
@@ -5987,7 +6106,7 @@ app.get("/api/webfleet/debug", protectWhenStrict(requirePanelRole), async (_req,
 // Este endpoint lanza las tres consultas y devuelve la respuesta CRUDA de
 // cada una + las claves detectadas, para saber de qué datos disponemos.
 //   /api/webfleet/debug-fuel?objectno=001&dias=7
-app.get("/api/webfleet/debug-fuel", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/webfleet/debug-fuel", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const objectno = String(req.query.objectno || "").trim();
     if (!objectno) return res.status(400).json({ error: "Falta objectno (p. ej. ?objectno=001)" });
@@ -6052,7 +6171,7 @@ app.get("/api/webfleet/debug-fuel", protectWhenStrict(requirePanelRole), async (
 // después de T (interpolando el viaje que contenga T).
 //
 //   /api/webfleet/debug-odometer?objectno=001&dias=30&at=2026-07-15T09:40:00Z
-app.get("/api/webfleet/debug-odometer", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/webfleet/debug-odometer", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const objectno = String(req.query.objectno || "").trim();
     if (!objectno) return res.status(400).json({ error: "Falta objectno (p. ej. ?objectno=001)" });
@@ -6212,7 +6331,7 @@ app.get("/api/webfleet/debug-odometer", protectWhenStrict(requirePanelRole), asy
   }
 });
 
-app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/webfleet/vehicles", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const { url, headers } = buildWebfleetRequest("showObjectReportExtern");
     const response = await fetch(url, { headers });
@@ -6285,7 +6404,7 @@ app.get("/api/webfleet/vehicles", protectWhenStrict(requirePanelRole), async (_r
   }
 });
 
-app.get("/api/webfleet/vehicle/:vehicleId/position", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/webfleet/vehicle/:vehicleId/position", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const position = await getWebfleetVehiclePosition(String(req.params.vehicleId));
     res.json(position);
@@ -6587,7 +6706,7 @@ app.get("/api/tyrecontrol/webfleet/conduccion", authenticate, requireModule("tyr
   }
 });
 
-app.post("/api/asistencias/:id/en-camino", protectWhenStrict(authenticate), async (req, res) => {
+app.post("/api/asistencias/:id/en-camino", exigirCredencial(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
@@ -7798,7 +7917,7 @@ app.post(
   }
 );
 
-app.get("/api/roadside-assistances/:id", protectWhenStrict(authenticate), async (req, res) => {
+app.get("/api/roadside-assistances/:id", exigirCredencial(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -7852,7 +7971,7 @@ app.get("/api/roadside-assistances/:id", protectWhenStrict(authenticate), async 
 
 // Posición en vivo (Webfleet) + velocidad + ETA al destino correcto.
 // Para en_camino → ETA al punto de avería; en_camino_base → ETA al taller.
-app.get("/api/roadside-assistances/:id/live-position", protectWhenStrict(authenticate), async (req, res) => {
+app.get("/api/roadside-assistances/:id/live-position", exigirCredencial(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: "ID no válido" });
@@ -9042,7 +9161,7 @@ app.post(
  * desaparecería de la pantalla sin que nadie se entere, y una foto que no se
  * ve es una foto perdida. Así, como mucho, sale sin etiqueta.
  */
-app.get("/api/roadside-assistances/:id/files", protectWhenStrict(authenticate), async (req, res) => {
+app.get("/api/roadside-assistances/:id/files", exigirCredencial(authenticate), async (req, res) => {
   try {
     const id = Number(req.params.id);
     const result = await db.query(
@@ -11557,7 +11676,7 @@ async function seedDefaultMaintenanceTasksIfEmpty() {
   }
 }
 
-app.get("/api/maintenance-tasks", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/maintenance-tasks", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     await seedDefaultMaintenanceTasksIfEmpty();
 
@@ -11578,7 +11697,7 @@ app.get("/api/maintenance-tasks", protectWhenStrict(requirePanelRole), async (_r
   }
 });
 
-app.post("/api/maintenance-tasks", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/maintenance-tasks", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11615,7 +11734,7 @@ app.post("/api/maintenance-tasks", protectWhenStrict(requirePanelRole), async (r
   }
 });
 
-app.put("/api/maintenance-tasks/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11673,7 +11792,7 @@ app.put("/api/maintenance-tasks/:id", protectWhenStrict(requirePanelRole), async
   }
 });
 
-app.delete("/api/maintenance-tasks/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.delete("/api/maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11692,7 +11811,7 @@ app.delete("/api/maintenance-tasks/:id", protectWhenStrict(requirePanelRole), as
   }
 });
 
-app.get("/api/assigned-maintenance-tasks", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/assigned-maintenance-tasks", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11715,7 +11834,7 @@ app.get("/api/assigned-maintenance-tasks", protectWhenStrict(requirePanelRole), 
   }
 });
 
-app.get("/api/maintenance-availability", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/maintenance-availability", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11771,7 +11890,7 @@ const interruptedTasks = activeMaintenanceTasks.filter(
   }
 });
 
-app.post("/api/assigned-maintenance-tasks", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/assigned-maintenance-tasks", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -11883,7 +12002,7 @@ async function updateAssignedMaintenanceTaskStatus(
   return nextTask;
 }
 
-app.put("/api/assigned-maintenance-tasks/:id/finish", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/assigned-maintenance-tasks/:id/finish", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
 
@@ -11900,7 +12019,7 @@ app.put("/api/assigned-maintenance-tasks/:id/finish", protectWhenStrict(requireP
   }
 });
 
-app.put("/api/assigned-maintenance-tasks/:id/interrupt", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/assigned-maintenance-tasks/:id/interrupt", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
 
@@ -11920,7 +12039,7 @@ app.put("/api/assigned-maintenance-tasks/:id/interrupt", protectWhenStrict(requi
   }
 });
 
-app.put("/api/assigned-maintenance-tasks/:id/resume", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/assigned-maintenance-tasks/:id/resume", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
 
@@ -11939,7 +12058,7 @@ app.put("/api/assigned-maintenance-tasks/:id/resume", protectWhenStrict(requireP
   }
 });
 
-app.delete("/api/assigned-maintenance-tasks/history", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.delete("/api/assigned-maintenance-tasks/history", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -12031,7 +12150,7 @@ app.delete(
   }
 );
 
-app.delete("/api/assigned-maintenance-tasks/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.delete("/api/assigned-maintenance-tasks/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     await ensureMaintenanceTables();
 
@@ -12055,7 +12174,7 @@ app.delete("/api/assigned-maintenance-tasks/:id", protectWhenStrict(requirePanel
    LOGS
 ========================================================= */
 
-app.get("/api/logs", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/logs", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`SELECT * FROM logs ORDER BY id DESC LIMIT 50`);
 
@@ -12066,7 +12185,7 @@ app.get("/api/logs", protectWhenStrict(requirePanelRole), async (_req, res) => {
   }
 });
 
-app.post("/api/logs", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/logs", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const log = req.body ?? {};
 
@@ -12092,7 +12211,7 @@ app.post("/api/logs", protectWhenStrict(requirePanelRole), async (req, res) => {
    RULES
 ========================================================= */
 
-app.get("/api/rules", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/rules", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`SELECT * FROM rules ORDER BY id ASC`);
     res.json(result.rows);
@@ -12361,7 +12480,7 @@ app.delete("/api/quick-templates/:key", requireAdminRole, async (req, res) => {
   }
 });
 
-app.get("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/scheduled-jobs", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(`
       SELECT data
@@ -12380,7 +12499,7 @@ app.get("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (_req,
     res.status(500).json({ error: "Error obteniendo citas programadas" });
   }
 });
-app.get("/api/scheduled-tech-statuses", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/scheduled-tech-statuses", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(
       `
@@ -12413,7 +12532,7 @@ app.get("/api/scheduled-tech-statuses", protectWhenStrict(requirePanelRole), asy
 ========================================================= */
 
 /** Correspondencias artículo → entrada rápida de un taller. */
-app.get("/api/partes-trabajo/articulos", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/partes-trabajo/articulos", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const workshopId = String(req.query.workshopId || "");
 
@@ -12517,7 +12636,7 @@ app.delete("/api/partes-trabajo/articulos", requireSupervisorRole, async (req, r
  * escaneado se equivoca y una matrícula mal leída manda el trabajo al vehículo
  * equivocado.
  */
-app.post("/api/partes-trabajo/leer", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.post("/api/partes-trabajo/leer", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     if (!hasAi()) {
       return res.status(503).json({
@@ -12625,7 +12744,7 @@ app.post("/api/partes-trabajo/leer", protectWhenStrict(requirePanelRole), async 
  * Devuelve la configuración de un año: modo, días por defecto y los cupos
  * propios por técnico. La fila con "techName" = '' es el valor por defecto.
  */
-app.get("/api/vacaciones-config", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/vacaciones-config", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const anio = Number(req.query.anio) || new Date().getFullYear();
     const workshopId = String(req.query.workshopId || "");
@@ -12752,7 +12871,7 @@ app.put("/api/vacaciones-config", requireSupervisorRole, async (req, res) => {
   }
 });
 
-app.get("/api/agenda-date-reminders", protectWhenStrict(requirePanelRole), async (_req, res) => {
+app.get("/api/agenda-date-reminders", exigirCredencial(requirePanelRole), async (_req, res) => {
   try {
     const result = await db.query(
       `
@@ -12983,7 +13102,7 @@ app.delete("/api/scheduled-tech-statuses/:id", requireSupervisorRole, async (req
 });
 
 
-app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/scheduled-jobs", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const items = Array.isArray(req.body) ? req.body : [];
     const now = Date.now();
@@ -13085,7 +13204,7 @@ app.put("/api/scheduled-jobs", protectWhenStrict(requirePanelRole), async (req, 
  * frágil. Aquí solo se toca la fila afectada y el cliente recibe un error claro
  * si algo falla, en vez de que el cambio se pierda en silencio.
  */
-app.put("/api/scheduled-jobs/:id/status", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/scheduled-jobs/:id/status", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -13159,7 +13278,7 @@ app.put("/api/scheduled-jobs/:id/status", protectWhenStrict(requirePanelRole), a
  * histórico de que ese hueco estaba reservado y se anuló. El borrado real
  * sigue siendo el DELETE de más abajo.
  */
-app.put("/api/scheduled-jobs/:id/cancelar", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.put("/api/scheduled-jobs/:id/cancelar", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -13633,7 +13752,7 @@ function startCaducidadRecordatoriosChecker() {
   }, 60_000);
 }
 
-app.get("/api/recordatorios-caducidad", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/recordatorios-caducidad", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const clauses: string[] = [];
     const params: any[] = [];
@@ -13664,7 +13783,7 @@ app.get("/api/recordatorios-caducidad", protectWhenStrict(requirePanelRole), asy
   }
 });
 
-app.get("/api/recordatorios-caducidad/:id", protectWhenStrict(requirePanelRole), async (req, res) => {
+app.get("/api/recordatorios-caducidad/:id", exigirCredencial(requirePanelRole), async (req, res) => {
   try {
     const rec = await getCaducidadById(Number(req.params.id));
     if (!rec) return res.status(404).json({ error: "Recordatorio no encontrado" });
