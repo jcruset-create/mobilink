@@ -1705,15 +1705,30 @@ body: JSON.stringify({
     setSelectedSlot(null);
   }
 
-  async function deleteScheduledJob(id: number) {
+  /**
+   * Elimina la cita. Devuelve si el borrado llegó a hacerse.
+   *
+   * Lo devuelve porque quien la llama desde DENTRO de la ficha necesita saber
+   * si cerrar el modal: si la persona dice que no en la confirmación, cerrarlo
+   * igual le tiraría lo que estuviera editando.
+   */
+  /** Cierra la ficha de la cita y deja el borrador limpio. */
+  function cerrarFicha() {
+    setModalOpen(false);
+    setEditingJobId(null);
+    setSelectedSlot(null);
+    resetDraft();
+  }
+
+  async function deleteScheduledJob(id: number): Promise<boolean> {
   const job = scheduledJobs.find((item) => item.id === id);
-  if (!job) return;
+  if (!job) return false;
 
   const ok = window.confirm(
     `¿Eliminar definitivamente la cita ${job.plate} del ${job.date} a las ${job.startTime}?`
   );
 
-  if (!ok) return;
+  if (!ok) return false;
 
   setScheduledJobs((prev) => prev.filter((item) => item.id !== id));
 
@@ -1737,6 +1752,8 @@ body: JSON.stringify({
       "No se pudo eliminar la cita del servidor. Se ha restaurado en la agenda."
     );
   }
+
+  return true;
 }
 
   function cleanExpiredScheduledJobs() {
@@ -2587,9 +2604,9 @@ appendLog(
                             ancho con `w-full`. Así los tres salen alineados
                             con ella sin medir nada a ojo.
                           */}
-                          <div className="flex shrink-0 flex-col items-end gap-0.5">
+                          <div className="flex shrink-0 flex-col items-end gap-[1px]">
                             <span
-                              className={`w-full rounded-full px-2 py-0.5 text-center text-[9px] font-black uppercase no-underline ${
+                              className={`w-full rounded-full px-1.5 py-0 text-center text-[8px] font-black uppercase leading-[1.5] no-underline ${
                                 job.status === "cancelado"
                                   ? "bg-red-100 text-red-800"
                                   : "bg-white/90 text-slate-800"
@@ -2607,7 +2624,7 @@ appendLog(
                                   e.stopPropagation();
                                   sendAgendaWhatsApp(job);
                                 }}
-                                className="w-full rounded bg-green-500 px-1 py-[1px] text-[8px] font-semibold leading-[1.35] text-white shadow-sm"
+                                className="w-full rounded bg-green-500 px-1 py-0 text-[7px] font-semibold leading-[1.5] text-white shadow-sm"
                               >
                                 WhatsApp
                               </button>
@@ -2620,7 +2637,7 @@ appendLog(
                                   e.stopPropagation();
                                   cancelScheduledJob(job.id);
                                 }}
-                                className="w-full rounded bg-white/95 px-1 py-[1px] text-[8px] font-semibold leading-[1.35] text-red-600 shadow-sm"
+                                className="w-full rounded bg-white/95 px-1 py-0 text-[7px] font-semibold leading-[1.5] text-red-600 shadow-sm"
                               >
                                 Cancelar
                               </button>
@@ -2632,7 +2649,7 @@ appendLog(
                                 e.stopPropagation();
                                 deleteScheduledJob(job.id);
                               }}
-                              className="w-full rounded bg-white/95 px-1 py-[1px] text-[8px] font-semibold leading-[1.35] text-slate-700 shadow-sm"
+                              className="w-full rounded bg-white/95 px-1 py-0 text-[7px] font-semibold leading-[1.5] text-slate-700 shadow-sm"
                             >
                               Eliminar
                             </button>
@@ -3601,15 +3618,70 @@ setDraft((prev) => ({
               {/* pb con safe-area: en iPhone la barra inferior de Safari se come
                   el último centímetro y el botón Guardar quedaba pisado. */}
               <div className="shrink-0 border-t border-slate-200 bg-white px-6 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+                {/*
+                  Cancelar la cita y eliminarla, también desde aquí.
+                  
+                  En la tarjeta de la agenda esos dos botones caben o no según
+                  lo que dure la cita: en una de media hora la tarjeta mide 50
+                  px y lo que no entra se recorta. Desde dentro de la ficha se
+                  llega siempre, mida lo que mida la cita.
+
+                  Van arriba y en su propia fila, separados de Guardar: son
+                  destructivos, y ponerlos al lado del botón que se pulsa
+                  siempre es cómo se cancela una cita sin querer.
+                */}
+                {editingJobId != null && (
+                  <div className="mb-3 flex gap-3">
+                    {(() => {
+                      const cita = scheduledJobs.find((j) => j.id === editingJobId);
+                      return (
+                        <>
+                          {cita?.status === "programado" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                // `cancelScheduledJob` no pregunta nada —desde
+                                // la tarjeta el botón es diminuto y deliberado—
+                                // pero aquí cae al lado de «Guardar cambios».
+                                if (
+                                  !window.confirm(
+                                    `¿Cancelar la cita ${cita.plate} del ${cita.date} a las ${cita.startTime}?`
+                                  )
+                                ) {
+                                  return;
+                                }
+                                cancelScheduledJob(editingJobId);
+                                cerrarFicha();
+                              }}
+                              className="flex-1 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-100"
+                            >
+                              Cancelar cita
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void deleteScheduledJob(editingJobId).then(
+                                (borrada) => {
+                                  // Solo se cierra si de verdad se borró: si
+                                  // dijo que no, se queda donde estaba.
+                                  if (borrada) cerrarFicha();
+                                }
+                              );
+                            }}
+                            className="flex-1 rounded-2xl border border-slate-300 px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                          >
+                            Eliminar cita
+                          </button>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
                 <div className="flex gap-3">
                   <button
                     type="button"
-                    onClick={() => {
-                      setModalOpen(false);
-                      setEditingJobId(null);
-                      setSelectedSlot(null);
-                      resetDraft();
-                    }}
+                    onClick={cerrarFicha}
                     className="flex-1 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium"
                   >
                     Cancelar
