@@ -27,6 +27,7 @@ import {
   HOSTS_MAPAS,
   hostsSupabase,
 } from "./core/red.ts";
+import { extraerEnlaceMapa } from "./core/enlaceMapa.ts";
 import {
   POLITICA_SEGUNDO_FACTOR,
   clave as claveLimite,
@@ -15743,6 +15744,30 @@ Devuelve SOLO el JSON sin texto adicional:
   }
 }
 
+/**
+ * Descarga un medio de WhatsApp con las credenciales de la cuenta de Twilio.
+ *
+ * La URL viene del cuerpo del webhook, así que la elige quien manda el
+ * mensaje. Por eso pasa por `fetchSeguro` con la lista de hosts de Twilio: sin
+ * eso, poner `MediaUrl0=https://atacante.tld/x` hacía que el servidor enviara
+ * la cabecera `Authorization: Basic <SID>:<AUTH_TOKEN>` al atacante. Estaba
+ * repetido en tres sitios; ahora la credencial se construye en uno.
+ */
+async function descargarMedioTwilio(url: string) {
+  return fetchSeguro(url, {
+    hostsPermitidos: HOSTS_TWILIO,
+    cabeceras: {
+      Authorization:
+        "Basic " +
+        Buffer.from(
+          `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
+        ).toString("base64"),
+    },
+    maxBytes: 25 * 1024 * 1024,
+    timeoutMs: 20_000,
+  });
+}
+
 // Twilio sends form-encoded bodies for webhooks
 app.post(
   "/api/whatsapp/inbound",
@@ -15781,14 +15806,35 @@ app.post(
        * vacío y el cliente sin avisar. Es el mismo razonamiento que ya llevó a
        * exigir firma en `server/satisfaction/routerCallback.ts`.
        */
-      let firmaValida = false;
-      if (authToken && twilioSig) {
-        firmaValida = urls.some((u) =>
-          twilio.validateRequest(authToken, twilioSig, u, req.body)
+      const firmaValida =
+        Boolean(authToken) &&
+        Boolean(twilioSig) &&
+        urls.some((u) => twilio.validateRequest(authToken, twilioSig!, u, req.body));
+
+      if (!firmaValida) {
+        /*
+         * Antes se seguía procesando, y eso era la vía de entrada más grave de
+         * todo el servidor. Un mensaje sin firma llegaba a un `fetch` de
+         * `MediaUrl0` que añadía las credenciales de Twilio en la cabecera: el
+         * atacante ponía su propio dominio y se quedaba con el AUTH_TOKEN de la
+         * cuenta. Con él se firman webhooks válidos y se manda WhatsApp desde el
+         * número de la empresa. Además disparaba llamadas a la IA y escribía
+         * notas en expedientes de recobro.
+         *
+         * Twilio firma siempre, así que una firma inválida es una de dos cosas:
+         * alguien que no es Twilio, o la URL del webhook en la consola de Twilio
+         * no coincide con ninguno de los nombres que este servicio se conoce. Lo
+         * segundo se arregla mirando este log, que dice exactamente qué URLs se
+         * han probado; lo primero no se atiende. El mismo criterio que ya se
+         * aplicaba en server/satisfaction/routerCallback.ts.
+         */
+        console.warn(
+          "[whatsapp] firma de Twilio ausente o inválida: petición rechazada.",
+          authToken ? "" : "Falta TWILIO_AUTH_TOKEN.",
+          twilioSig ? "" : "Falta la cabecera x-twilio-signature.",
+          `URLs probadas: ${urls.join(" , ")}`
         );
-        if (!firmaValida) {
-          console.warn("Invalid Twilio signature on /api/whatsapp/inbound — procesando igualmente (las citas NO se tocan)");
-        }
+        return res.status(403).send("Forbidden");
       }
 
       const {
@@ -15856,8 +15902,13 @@ app.post(
 
         if (intencion) {
           if (!firmaValida) {
-            // Se guarda el mensaje (ya está guardado arriba) pero la cita no
-            // se toca. Queda el aviso para poder mirarlo.
+            /*
+             * Inalcanzable desde que el webhook rechaza con 403 la firma
+             * inválida, y se deja a propósito: es la acción más delicada de
+             * este webhook —dar por confirmada una cita con un cliente— y si
+             * algún día alguien vuelve a abrir la puerta de arriba, esta
+             * segunda barrera sigue en pie.
+             */
             console.error(
               `[Citas] respuesta «${intencion}» DESCARTADA por firma inválida ` +
                 `(sid=${MessageSid}, de=${From}). Ninguna cita modificada.`
@@ -15953,15 +16004,9 @@ app.post(
         let vcardContactPhone: string | null = null;
         if (msgType === "contact" && mediaUrl0) {
           try {
-            const vcardResp = await fetch(mediaUrl0, {
-              headers: {
-                Authorization: "Basic " + Buffer.from(
-                  `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-                ).toString("base64"),
-              },
-            });
+            const vcardResp = await descargarMedioTwilio(mediaUrl0);
             if (vcardResp.ok) {
-              const vcardText = await vcardResp.text();
+              const vcardText = vcardResp.cuerpo.toString("utf8");
               const parsed = parseVCard(vcardText);
               vcardContactName = parsed.name;
               vcardContactPhone = parsed.phone;
@@ -15975,17 +16020,11 @@ app.post(
         let storedUrl: string | null = null;
         if (mediaUrl0 && ["image","audio","video","document"].includes(msgType)) {
           try {
-            const mediaResp = await fetch(mediaUrl0, {
-              headers: {
-                Authorization: "Basic " + Buffer.from(
-                  `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-                ).toString("base64"),
-              },
-            });
+            const mediaResp = await descargarMedioTwilio(mediaUrl0);
             if (mediaResp.ok) {
-              const contentType = mediaResp.headers.get("content-type") ?? "application/octet-stream";
+              const contentType = mediaResp.contentType;
               const ext = contentType.split("/")[1]?.split(";")[0] ?? "bin";
-              const buffer = Buffer.from(await mediaResp.arrayBuffer());
+              const buffer = mediaResp.cuerpo;
               const storagePath = `roadside/${jobId}/whatsapp_${Date.now()}.${ext}`;
               const { error: upErr } = await supabase.storage
                 .from(process.env.SUPABASE_ROADSIDE_BUCKET || "roadside")
@@ -16021,12 +16060,32 @@ app.post(
             lng = dms[8].toUpperCase() === "W" ? -lngAbs : lngAbs;
             effectiveMsgType = "location";
           }
-          const mapsUrlMatch = Body.match(/https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|maps\.google\.com|www\.google\.com\/maps)[^\s]*/i);
-          if (mapsUrlMatch && lat == null) {
+          /*
+           * El enlace de mapa lo pone quien manda el mensaje, y antes se abría
+           * tal cual siguiendo redirecciones. El patrón anterior no cerraba el
+           * host —`(maps\.app\.goo\.gl|…)[^\s]*`— así que
+           * `https://maps.app.goo.gl.atacante.tld/x` lo cumplía y el servidor
+           * acababa pidiendo la URL del atacante y siguiéndole las
+           * redirecciones a donde quisiera, incluida la red interna.
+           *
+           * Ahora el patrón exige que el host termine ahí (`/`, `?`, `#` o fin)
+           * y, además, `fetchSeguro` vuelve a comprobar el host en cada salto:
+           * el patrón puede quedarse corto algún día, la lista blanca no.
+           *
+           * Las redirecciones sí se siguen, porque son el motivo de la llamada:
+           * un enlace corto solo suelta las coordenadas al expandirse. Se
+           * limitan a cinco y cada una se revalida.
+           */
+          const enlaceMapa = extraerEnlaceMapa(Body);
+          if (enlaceMapa && lat == null) {
             try {
-              // Follow redirects to get the final URL with coordinates
-              const mapsResp = await fetch(mapsUrlMatch[0], { redirect: "follow", signal: AbortSignal.timeout(5000) });
-              const finalUrl = decodeURIComponent(mapsResp.url);
+              const mapsResp = await fetchSeguro(enlaceMapa, {
+                hostsPermitidos: HOSTS_MAPAS,
+                maxRedirecciones: 5,
+                maxBytes: 2 * 1024 * 1024,
+                timeoutMs: 5000,
+              });
+              const finalUrl = decodeURIComponent(mapsResp.urlFinal);
               // Extract lat/lng from URL patterns like @41.123,1.456, ?q=41.123,1.456, ll=..., !3d..!4d..,
               // or DMS in the place name of the final URL
               const coordMatch = finalUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) ||
@@ -16327,21 +16386,13 @@ async function transcribeCaptureAudio(captureMessageId: number, twilioMediaUrl: 
       [captureMessageId]
     );
 
-    const resp = await fetch(twilioMediaUrl, {
-      headers: {
-        Authorization:
-          "Basic " +
-          Buffer.from(
-            `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
-          ).toString("base64"),
-      },
-      signal: AbortSignal.timeout(20000),
-    });
+    // La URL la manda quien envía el mensaje: solo se descarga si es de Twilio.
+    const resp = await descargarMedioTwilio(twilioMediaUrl);
     if (!resp.ok) throw new Error(`Audio download HTTP ${resp.status}`);
 
-    const contentType = resp.headers.get("content-type") ?? "audio/ogg";
+    const contentType = resp.contentType || "audio/ogg";
     const ext = (contentType.split("/")[1] || "ogg").split(";")[0];
-    const buffer = Buffer.from(await resp.arrayBuffer());
+    const buffer = resp.cuerpo;
 
     const file = await toFile(buffer, `audio.${ext}`, { type: contentType });
     const transcript = await transcribirAudio(file, {
