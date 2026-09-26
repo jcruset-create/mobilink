@@ -93,9 +93,12 @@ type Entrada = {
 const entradas = new Map<string, Entrada>();
 const MAX_ENTRADAS = 50_000;
 
-export type Veredicto =
-  | { permitido: true }
-  | { permitido: false; reintentarEnS: number; clave: string };
+/*
+ * Una sola forma, no una unión discriminada: el typecheck del servidor va con
+ * `strict: false`, y ahí TypeScript no estrecha una unión por un booleano, así
+ * que `if (!v.permitido) v.reintentarEnS` no compilaría.
+ */
+export type Veredicto = { permitido: boolean; reintentarEnS: number; clave: string | null };
 
 type Persistencia = {
   cargar(clave: string): Promise<{ bloqueadoHastaMs: number; bloqueos: number } | null>;
@@ -134,7 +137,9 @@ export function clave(tipo: string, ambito: "id" | "ip", valor: string): string 
 /** Si la clave está bloqueada ahora mismo. No cuenta como intento. */
 export function comprobar(clave: string, ahoraMs = Date.now()): Veredicto {
   const e = entradas.get(clave);
-  if (!e || e.bloqueadoHastaMs <= ahoraMs) return { permitido: true };
+  if (!e || e.bloqueadoHastaMs <= ahoraMs) {
+    return { permitido: true, reintentarEnS: 0, clave: null };
+  }
   return {
     permitido: false,
     reintentarEnS: Math.max(1, Math.ceil((e.bloqueadoHastaMs - ahoraMs) / 1000)),
@@ -237,7 +242,7 @@ export async function comprobarIntento(a: Ambitos, ahoraMs = Date.now()): Promis
     const v = comprobar(c, ahoraMs);
     if (!v.permitido) return v;
   }
-  return { permitido: true };
+  return { permitido: true, reintentarEnS: 0, clave: null };
 }
 
 /** Apunta el fallo en los dos ámbitos, cada uno con su política. */

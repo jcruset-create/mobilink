@@ -3,6 +3,9 @@ import { Link } from "react-router-dom";
 import { Mail, MessageCircle, Phone, StickyNote, Euro, Handshake, CheckCircle2, Plus, ScanLine, Pencil, CalendarClock, X, UserPlus } from "lucide-react";
 import { useAdminAuth } from "../contexts/AdminAuthContext";
 import { sessionHeaders } from "../../sessionHeaders";
+// El análisis de impagado va por `apiFetch` para que lleve la sesión: el
+// endpoint dejó de ser anónimo.
+import { apiFetch } from "../../apiFetch";
 import {
   listRecoveryCases, listRecoveryActions, listPaymentMethods, listCustomers, listInvoices,
   addRecoveryAction, cambiarEstadoRecovery, cambiarPrioridadRecovery, updateRecovery,
@@ -210,7 +213,7 @@ function ModalNuevoRecobro({ userId, onClose, onSaved }: {
     try {
       const fd = new FormData();
       fd.append("imagen", file);
-      const res = await fetch("/api/administracion/analizar-impagado", { method: "POST", body: fd });
+      const res = await apiFetch("/api/administracion/analizar-impagado", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message ?? "No se pudo analizar la imagen.");
       const d = data.datos as {

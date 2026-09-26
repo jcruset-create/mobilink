@@ -5492,7 +5492,14 @@ app.post("/api/roadside-assistances/:id/recorrido/aplicar", requireSupervisorRol
   }
 });
 
-app.get("/api/roadside-assistances/mi-contexto", async (req, res) => {
+/*
+ * Llamaba a `getAssistPanelUser` pero no rechazaba nunca: sin credencial
+ * devolvía `sinContexto: true` y, con él, la lista completa de talleres
+ * activos. Ahora hace falta una credencial de panel —vale la clásica o la
+ * sesión unificada—, y la transición de `sinContexto` se conserva para quien
+ * entra con el token antiguo, que era su motivo.
+ */
+app.get("/api/roadside-assistances/mi-contexto", requirePanelRole, async (req, res) => {
   try {
     const panelUser = await getAssistPanelUser(req);
     const talleres = await db.query(
@@ -11948,8 +11955,16 @@ app.delete("/api/assigned-maintenance-tasks/history", protectWhenStrict(requireP
   }
 });
 
+/*
+ * Borraba filas de `assigned_maintenance_tasks` sin pedir credencial alguna:
+ * un DELETE anónimo contra el historial de mantenimiento. Lo llama el panel con
+ * la cabecera de admin clásica, así que `requireSupervisorRole` la acepta y
+ * además deja fuera a los roles de pantalla y de televisor, que no tienen por
+ * qué borrar nada.
+ */
 app.delete(
   "/api/assigned-maintenance-tasks/old-interrupted",
+  requireSupervisorRole,
   async (req, res) => {
     try {
       await ensureMaintenanceTables();
@@ -15058,8 +15073,18 @@ async function guardarHistorialOcrAlbaran(
   }
 }
 
+/*
+ * Sin middleware, este endpoint era un OCR gratis para cualquiera: sube un PDF
+ * y el servidor lo manda al modelo con cargo a nuestra cuenta.
+ *
+ * Se exige sesión, pero NO `requireModule("almacen")`: ninguna ruta del módulo
+ * de almacén comprueba hoy esa licencia, así que añadirla aquí podría empezar a
+ * devolver 403 en producción a gente que trabaja. Cerrar el acceso anónimo es
+ * lo urgente; el control de licencia del módulo va con el resto de almacén.
+ */
 app.post(
   "/api/almacen/leer-albaran-pdf",
+  authenticate,
   upload.single("albaran"),
   async (req, res) => {
     try {
@@ -15210,6 +15235,7 @@ Reglas obligatorias:
 
 app.post(
   "/api/almacen/leer-entrada-pdf",
+  authenticate,
   upload.single("albaran"),
   async (req, res) => {
     try {
@@ -17899,11 +17925,34 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       return res.status(400).json({ error: "Introduce tu nombre y PIN" });
     }
 
-    // Login SOLO contra usuarios de TyreControl con acceso a la APK. Los
-    // operarios de Assist (tabla techs) YA NO pueden entrar en TyreControl.
-    // El PIN es la propia contraseña del usuario en Supabase Auth (se fija al
-    // crear el usuario y se cambia desde Usuarios); aquí solo resolvemos su
-    // email y la APK hace signInWithPassword(email, PIN) → Supabase valida.
+    /*
+     * Este endpoint NO comprobaba el PIN.
+     *
+     * Recibía nombre y `code`, verificaba que los dos venían rellenos y
+     * devolvía el email interno de Auth del usuario buscándolo solo por el
+     * nombre. Quien fuera, sin credencial ninguna, obtenía así el email de
+     * cualquier operario —que es la mitad de lo que hace falta para probar
+     * PINs contra Supabase— y, peor, el `upsert` de más abajo le concedía al
+     * operario acceso a TODAS las empresas activas. Un anónimo con una lista
+     * de nombres reasignaba permisos.
+     *
+     * El PIN es la contraseña del usuario en Supabase Auth, así que se puede
+     * comprobar aquí mismo antes de contestar. La APK sigue recibiendo lo que
+     * espera y vuelve a iniciar sesión por su cuenta; son dos autenticaciones
+     * en vez de una, y es temporal: en la fase de identidad el servidor
+     * devolverá la sesión ya iniciada y la APK dejará de manejar el PIN.
+     *
+     * El mensaje de error es el mismo para «no existe» y «PIN incorrecto»: si
+     * se distinguieran, esto seguiría siendo un enumerador de usuarios.
+     */
+    const limite = { tipo: "tc-login", identidad: techName.toLowerCase(), ip: req.ip };
+    const veredicto = await comprobarIntento(limite);
+    if (!veredicto.permitido) {
+      return res
+        .status(429)
+        .json({ error: `Demasiados intentos. Prueba en ${veredicto.reintentarEnS} s.` });
+    }
+
     const { data: usuarios } = await supabase
       .from("tc_usuarios")
       .select("id, email, nombre, activo, acceso_apk, empresas_manual")
@@ -17913,8 +17962,19 @@ app.post("/api/tyrecontrol/login-operario", async (req, res) => {
       .limit(1);
     const user = (usuarios || [])[0];
     if (!user || !user.email) {
+      registrarFalloIntento(limite);
       return res.status(401).json({ error: "Usuario o PIN incorrectos" });
     }
+
+    const comprobacion = await supabaseAnonAuth.auth.signInWithPassword({
+      email: user.email,
+      password: code,
+    });
+    if (comprobacion.error || !comprobacion.data?.user) {
+      registrarFalloIntento(limite);
+      return res.status(401).json({ error: "Usuario o PIN incorrectos" });
+    }
+    registrarExitoIntento(limite);
 
     // Empresas: si no tiene asignación manual, ve todas las activas (default);
     // si es "manual", las gestiona el administrador desde Usuarios.
@@ -19139,8 +19199,18 @@ app.get("/api/vehiculo-historial", requireAdminRole, async (req, res) => {
    SEA ADMINISTRACIÓN — analizar imagen de impagado (devolución
    de recibo bancario) y extraer datos para crear el recobro
 ========================================================= */
+/*
+ * Estos dos análisis de imagen no tenían NINGÚN middleware: cualquiera desde
+ * internet subía ocho imágenes de diez megas y el servidor las mandaba al
+ * modelo de visión con cargo a nuestra cuenta de OpenAI. Además procesaban
+ * datos personales (NIF, teléfonos, correos de clientes) sin que nadie se
+ * hubiera identificado. Se protegen con la sesión unificada y la licencia del
+ * módulo, igual que `/api/payments/create-deposit`, que es de la misma casa.
+ */
 app.post(
   "/api/administracion/analizar-impagado",
+  authenticate,
+  requireModule("administracion"),
   upload.single("imagen"),
   async (req, res) => {
     try {
@@ -19236,6 +19306,8 @@ Reglas:
 ========================================================= */
 app.post(
   "/api/administracion/analizar-cliente",
+  authenticate,
+  requireModule("administracion"),
   upload.array("imagenes", 8),
   async (req, res) => {
     try {

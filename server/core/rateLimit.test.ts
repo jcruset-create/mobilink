@@ -33,7 +33,7 @@ describe("bloqueo por fallos repetidos", () => {
     }
     const v = registrarFallo(c, POLITICA_LOGIN_IDENTIDAD, T0);
     expect(v.permitido).toBe(false);
-    if (!v.permitido) expect(v.reintentarEnS).toBeGreaterThan(0);
+    expect(v.reintentarEnS).toBeGreaterThan(0);
   });
 
   it("al expirar el bloqueo vuelve a dejar pasar", () => {
@@ -55,7 +55,7 @@ describe("bloqueo por fallos repetidos", () => {
       }
       const v = comprobar(c, ahora);
       expect(v.permitido).toBe(false);
-      if (!v.permitido) duraciones.push(v.reintentarEnS);
+      duraciones.push(v.reintentarEnS);
       ahora += POLITICA_LOGIN_IDENTIDAD.bloqueoMaxMs + 1;
     }
     expect(duraciones[1]).toBeGreaterThan(duraciones[0]);
