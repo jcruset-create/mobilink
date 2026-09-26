@@ -117,16 +117,26 @@ import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
 import { jsonAjeno } from "./core/jsonAjeno.ts";
-import { enviarConfirmacion } from "./citasWhatsapp/envio.ts";
+import {
+  avisarSiLosCallbacksVanADudoso,
+  enviarConfirmacion,
+  urlBaseParaCallbacks,
+} from "./citasWhatsapp/envio.ts";
 import {
   aplicarEstadoDeEnvio,
   cambiarCita,
   citasCandidatas,
+  devolverIntento,
   marcarConfirmacionEnviada,
+  marcarCreacionEnviada,
+  marcarIntentoFallido,
+  marcarNoSolicitada,
+  reservarIntento,
 } from "./citasWhatsapp/estado.ts";
 import {
   cambiosPorRespuesta,
-  debePedirConfirmacion,
+  INTENTOS_MAXIMOS,
+  planDeConfirmacion,
   eligeCitaParaRespuesta,
   estadoEnvioDeTwilio,
   intencionDeRespuesta,
@@ -646,12 +656,14 @@ app.post("/api/whatsapp/send-agenda-reminder", protectWhenStrict(requirePanelRol
       time,
     } = req.body;
 
+    const contentSid =
+      process.env.TWILIO_CONTENT_SID || "HXdf941b56b6cf5464b5d2b2374171c926";
+    const destino = `whatsapp:${normalizeSpanishPhone(customerPhone)}`;
+
     const message = await twilioClient.messages.create({
   from: process.env.TWILIO_WHATSAPP_FROM || "whatsapp:+34610473079",
-  to: `whatsapp:${normalizeSpanishPhone(customerPhone)}`,
-  contentSid:
-    process.env.TWILIO_CONTENT_SID ||
-    "HXdf941b56b6cf5464b5d2b2374171c926",
+  to: destino,
+  contentSid,
   contentVariables: JSON.stringify({
     "1": customerName || "cliente",
     "2": jobDescription || "servicio programado",
@@ -659,7 +671,34 @@ app.post("/api/whatsapp/send-agenda-reminder", protectWhenStrict(requirePanelRol
     "4": date,
     "5": time,
   }),
+  // Los estados de este mensaje también se quieren. Van a su propio bloque
+  // (`creacionWhatsapp*`) y no se mezclan nunca con los de la confirmación.
+  statusCallback: `${urlBaseParaCallbacks()}/api/whatsapp/status`,
 });
+
+    /*
+     * Trazabilidad del WhatsApp de «cita creada».
+     *
+     * `citaId` es opcional a propósito: este endpoint lo llaman también el
+     * reenvío manual desde la ficha y caminos que no traen la cita. Sin él se
+     * manda igual y no se apunta nada, que es como estaba antes.
+     *
+     * Si falla el apunte NO se tumba la respuesta: el WhatsApp ya ha salido, y
+     * decirle al usuario que no salió le haría mandarlo otra vez.
+     */
+    const citaId = Number(req.body?.citaId);
+    if (Number.isFinite(citaId) && citaId > 0) {
+      try {
+        await marcarCreacionEnviada(citaId, {
+          sid: message.sid,
+          telefono: destino.replace(/^whatsapp:/, ""),
+          contentSid,
+          ahoraMs: Date.now(),
+        });
+      } catch (e) {
+        console.error("[Citas] WhatsApp de creación enviado pero no anotado:", e);
+      }
+    }
 
     res.json({
       success: true,
@@ -14375,52 +14414,79 @@ async function checkAgendaWhatsAppReminders() {
        * intentar nunca. Al reintentarse cada minuto, en cuanto la plantilla
        * esté configurada las citas en ventana salen solas.
        */
-      const confirmacion = reminders.find(
-        (r) => r.sentField === "whatsappReminder24hSentAtMs"
-      );
-      if (
-        confirmacion &&
-        debePedirConfirmacion(job, {
-          dentroDeLaVentana: shouldSendReminder(
-            confirmacion.triggerAtMs,
-            appointmentAtMs,
-            nowMs
-          ),
-        })
-      ) {
-        try {
-          const resultado = await enviarConfirmacion(job, {
-            motivo: getScheduledJobLabel(job),
-          });
+      const plan = planDeConfirmacion(job, { ahoraMs: nowMs, citaAtMs: appointmentAtMs });
 
-          if (resultado.estado === "enviado") {
-            await marcarConfirmacionEnviada(job.id, {
-              sid: resultado.sid,
-              telefono: resultado.telefono,
-              contentSid: resultado.contentSid,
-              ahoraMs: nowMs,
+      if (plan.accion === "no-procede") {
+        // Se deja escrito para que la agenda no diga «pendiente» de algo que
+        // no se ha preguntado. Se escribe una vez: `marcarNoSolicitada` no
+        // toca una cita que ya tenga estado.
+        try {
+          await marcarNoSolicitada(job.id);
+          job.confirmationStatus = "not_requested";
+        } catch (e) {
+          console.error("[Citas] no se pudo marcar como no solicitada:", e);
+        }
+      } else if (plan.accion === "enviar") {
+        // El intento se reserva ANTES de llamar a Twilio: si el mensaje sale y
+        // la escritura posterior falla, ese envío ya cuenta. Cambia un
+        // reintento ilimitado por uno acotado a tres.
+        let intentos = 0;
+        try {
+          intentos = await reservarIntento(job.id, nowMs);
+        } catch (e) {
+          console.error("[Citas] no se pudo reservar el intento:", e);
+          intentos = 0;
+        }
+
+        if (intentos > 0) {
+          try {
+            const resultado = await enviarConfirmacion(job, {
+              motivo: getScheduledJobLabel(job),
             });
-            job.whatsappReminder24hSentAtMs = nowMs;
-            job.confirmationStatus = "awaiting_confirmation";
-            console.log(
-              `[Citas] confirmación pedida: cita=${job.id} sid=${resultado.sid}`
-            );
-          } else if (resultado.estado === "sin-plantilla") {
-            console.warn(
-              `[Citas] confirmación NO enviada (cita ${job.id}): falta ` +
-                `TWILIO_CONTENT_SID_CONFIRMACION_CITA. Se reintentará.`
-            );
-          } else {
-            console.warn(
-              `[Citas] confirmación NO enviada (cita ${job.id}): ${resultado.estado}.`
-            );
+
+            if (resultado.estado === "enviado") {
+              await marcarConfirmacionEnviada(job.id, {
+                sid: resultado.sid,
+                telefono: resultado.telefono,
+                contentSid: resultado.contentSid,
+                ahoraMs: nowMs,
+              });
+              job.whatsappReminder24hSentAtMs = nowMs;
+              job.confirmationStatus = "awaiting_confirmation";
+              console.log(
+                `[Citas] confirmación pedida: cita=${job.id} sid=${resultado.sid}`
+              );
+            } else {
+              /*
+               * No ha salido por configuración, no por un fallo. El intento
+               * reservado se devuelve: si no, tres despliegues sin la
+               * plantilla dejarían la cita agotada sin haber mandado nada.
+               */
+              await devolverIntento(job.id);
+              if (resultado.estado === "sin-plantilla") {
+                console.warn(
+                  `[Citas] confirmación NO enviada (cita ${job.id}): falta ` +
+                    `TWILIO_CONTENT_SID_CONFIRMACION_CITA. Se reintentará.`
+                );
+              } else {
+                console.warn(
+                  `[Citas] confirmación NO enviada (cita ${job.id}): ${resultado.estado}.`
+                );
+              }
+            }
+          } catch (error: any) {
+            await marcarIntentoFallido(job.id, {
+              intentos,
+              error,
+              maximo: INTENTOS_MAXIMOS,
+            }).catch(() => undefined);
+            console.error("[Citas] error pidiendo confirmación:", {
+              cita: job.id,
+              intento: `${intentos}/${INTENTOS_MAXIMOS}`,
+              code: error?.code,
+              message: String(error?.message ?? "").slice(0, 200),
+            });
           }
-        } catch (error: any) {
-          console.error("[Citas] error pidiendo confirmación:", {
-            cita: job.id,
-            message: error?.message,
-            code: error?.code,
-          });
         }
       }
 
@@ -14474,6 +14540,7 @@ async function checkAgendaWhatsAppReminders() {
 
 function startAgendaWhatsAppReminderChecker() {
   console.log("Recordatorios WhatsApp agenda activos.");
+  avisarSiLosCallbacksVanADudoso();
 
   void checkAgendaWhatsAppReminders();
 

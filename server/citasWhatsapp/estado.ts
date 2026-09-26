@@ -115,6 +115,88 @@ export async function marcarConfirmacionEnviada(
   }));
 }
 
+/**
+ * Reserva un intento ANTES de llamar a Twilio.
+ *
+ * ── Qué problema resuelve, y cuál no ────────────────────────────────────────
+ *
+ * El caso malo es: Twilio acepta el mensaje, el cliente lo recibe, y la
+ * escritura posterior en la base falla. Si el contador se incrementara
+ * después, ese fallo dejaría la cita como si nunca se hubiera intentado y el
+ * bucle la mandaría otra vez al minuto. Y otra. Sin final.
+ *
+ * Reservando antes, un mensaje que salió cuenta aunque no lleguemos a
+ * enterarnos. La garantía que se consigue es **como mucho tres mensajes**, no
+ * «exactamente uno»: la API de mensajes de Twilio no admite clave de
+ * idempotencia, así que un duplicado sigue siendo posible.
+ *
+ * Lo que se cambia es un fallo ilimitado por uno acotado, y eso sí se puede
+ * explicar a un cliente que reciba dos.
+ */
+export async function reservarIntento(
+  id: number,
+  ahoraMs: number
+): Promise<number> {
+  let intentos = 0;
+  await cambiarCita(id, (cita) => {
+    const previos = Number(cita.confirmationWhatsappAttemptCount ?? 0);
+    intentos = (Number.isFinite(previos) ? previos : 0) + 1;
+    return {
+      confirmationWhatsappAttemptCount: intentos,
+      confirmationWhatsappLastAttemptAtMs: ahoraMs,
+    };
+  });
+  return intentos;
+}
+
+/**
+ * Devuelve un intento reservado que no llegó a gastarse.
+ *
+ * Se usa cuando no se manda por CONFIGURACIÓN —falta la plantilla, faltan
+ * credenciales— y no por un fallo del envío. Sin esto, tres vueltas del bucle
+ * sin la plantilla configurada dejarían la cita con los intentos agotados sin
+ * haber mandado nunca nada, y ya no saldría cuando se configurase.
+ */
+export async function devolverIntento(id: number): Promise<void> {
+  await cambiarCita(id, (cita) => {
+    const previos = Number(cita.confirmationWhatsappAttemptCount ?? 0);
+    if (!Number.isFinite(previos) || previos <= 0) return null;
+    return { confirmationWhatsappAttemptCount: previos - 1 };
+  });
+}
+
+/**
+ * Apunta que el intento falló.
+ *
+ * Del error se guarda SOLO el mensaje y el código, recortados. Un error de
+ * Twilio puede traer la petición entera, y ahí dentro va el número de
+ * teléfono del cliente y, según el caso, cabeceras de autenticación.
+ */
+export async function marcarIntentoFallido(
+  id: number,
+  datos: { intentos: number; error: unknown; maximo: number }
+): Promise<void> {
+  const e = datos.error as any;
+  const motivo = [e?.code ? `[${e.code}]` : "", String(e?.message ?? e ?? "")]
+    .join(" ")
+    .trim()
+    .slice(0, 200);
+
+  await cambiarCita(id, () => ({
+    confirmationWhatsappLastError: motivo,
+    ...(datos.intentos >= datos.maximo
+      ? { confirmationWhatsappStatus: "failed", confirmationWhatsappFailedAtMs: Date.now() }
+      : {}),
+  }));
+}
+
+/** Deja constancia de que a esta cita no se le va a pedir confirmación. */
+export async function marcarNoSolicitada(id: number): Promise<void> {
+  await cambiarCita(id, (cita) =>
+    cita.confirmationStatus ? null : { confirmationStatus: "not_requested" }
+  );
+}
+
 /** Apunta el WhatsApp de «cita creada». Bloque aparte, sin mezclar. */
 export async function marcarCreacionEnviada(
   id: number,
@@ -143,19 +225,37 @@ export async function aplicarEstadoDeEnvio(
   estado: EstadoEnvioWhatsapp,
   ahoraMs: number
 ): Promise<CitaGuardada | null> {
+  /*
+   * Se busca el SID en los DOS bloques, y el que encaje decide cuál se mueve.
+   * Son dos mensajes distintos —el de creación y el de confirmación— y sus
+   * estados no se mezclan nunca: el mismo callback podría ser de cualquiera
+   * de los dos.
+   */
   const fila = await db.query(
-    `SELECT id FROM scheduled_jobs WHERE data->>'confirmationWhatsappSid' = $1 LIMIT 1`,
+    `SELECT id,
+            (data->>'confirmationWhatsappSid' = $1) AS es_confirmacion
+       FROM scheduled_jobs
+      WHERE data->>'confirmationWhatsappSid' = $1
+         OR data->>'creacionWhatsappSid' = $1
+      LIMIT 1`,
     [messageSid]
   );
   if (fila.rowCount === 0) return null;
   const id = Number(fila.rows[0].id);
+  const esConfirmacion = fila.rows[0].es_confirmacion === true;
+
+  const campoEstado = esConfirmacion
+    ? "confirmationWhatsappStatus"
+    : "creacionWhatsappStatus";
 
   return cambiarCita(id, (cita) => {
-    if (!estadoEnvioAdelanta(cita.confirmationWhatsappStatus, estado)) return null;
+    if (!estadoEnvioAdelanta(cita[campoEstado], estado)) return null;
 
-    const campoFecha = campoDeFechaDeEstado(estado);
+    // El bloque de creación solo lleva estado; las horas por estado son de la
+    // confirmación, que es la que recepción necesita al detalle.
+    const campoFecha = esConfirmacion ? campoDeFechaDeEstado(estado) : null;
     return {
-      confirmationWhatsappStatus: estado,
+      [campoEstado]: estado,
       ...(campoFecha ? { [campoFecha]: ahoraMs } : {}),
     };
   });

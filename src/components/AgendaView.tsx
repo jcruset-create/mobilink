@@ -157,6 +157,9 @@ export type ScheduledJob = {
   confirmationWhatsappContentSid?: string | null;
 
   confirmationStatus?: EstadoConfirmacion | null;
+  confirmationWhatsappAttemptCount?: number | null;
+  confirmationWhatsappLastAttemptAtMs?: number | null;
+  confirmationWhatsappLastError?: string | null;
   confirmedAtMs?: number | null;
   rescheduleRequestedAtMs?: number | null;
   confirmationResponse?: string | null;
@@ -1720,6 +1723,9 @@ area: template.area,
               "Content-Type": "application/json",
             },
 body: JSON.stringify({
+  // Para poder apuntar el SID en la cita: sin esto el mensaje de creación
+  // sale sin dejar rastro, que es como estaba antes.
+  citaId: scheduled.id,
   customerName: scheduled.customerName,
   customerPhone: scheduled.customerPhone,
   jobDescription: getAgendaWhatsappV2Description({
@@ -1851,6 +1857,7 @@ async function sendAgendaWhatsApp(job: ScheduledJob) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+  citaId: job.id,
   customerName: job.customerName || "cliente",
   customerPhone: job.customerPhone,
   jobDescription: getAgendaWhatsappV2Description({
@@ -2690,7 +2697,13 @@ appendLog(
                         */}
                         {(() => {
                           const envio = rotuloEnvio(job.confirmationWhatsappStatus);
-                          if (!envio && !job.confirmationWhatsappSentAtMs) return null;
+                          const noSolicitada =
+                            estadoConfirmacion(job) === "not_requested";
+                          // Sin mensaje y sin decisión no se pinta nada: la
+                          // inmensa mayoría de las citas están así.
+                          if (!envio && !job.confirmationWhatsappSentAtMs && !noSolicitada) {
+                            return null;
+                          }
                           const conf = rotuloConfirmacion(estadoConfirmacion(job));
                           return (
                             <div className="mt-1 flex flex-wrap items-center gap-1 text-[9px] font-black">
@@ -2713,7 +2726,7 @@ appendLog(
                                     ? "bg-emerald-100 text-emerald-900"
                                     : estadoConfirmacion(job) === "reschedule"
                                       ? "bg-amber-100 text-amber-900"
-                                      : "bg-white/90 text-slate-800"
+                                      : "bg-white/70 text-slate-600"
                                 }`}
                               >
                                 {conf.icono}
@@ -3687,7 +3700,9 @@ setDraft((prev) => ({
                 {(() => {
                   if (editingJobId == null) return null;
                   const cita = scheduledJobs.find((j) => j.id === editingJobId);
-                  if (!cita || !cita.confirmationWhatsappSentAtMs) return null;
+                  if (!cita) return null;
+                  const noSolicitada = estadoConfirmacion(cita) === "not_requested";
+                  if (!cita.confirmationWhatsappSentAtMs && !noSolicitada) return null;
 
                   const envio = rotuloEnvio(cita.confirmationWhatsappStatus);
                   const conf = rotuloConfirmacion(estadoConfirmacion(cita));
@@ -3708,6 +3723,14 @@ setDraft((prev) => ({
                           {cuandoEnvio ? ` · ${fechaHoraCorta(cuandoEnvio)}` : ""}
                         </span>
                       </div>
+                      {cita.confirmationWhatsappStatus === "failed" &&
+                        cita.confirmationWhatsappLastError && (
+                          <div className="mt-1 text-xs text-red-700">
+                            No se pudo enviar tras{" "}
+                            {cita.confirmationWhatsappAttemptCount ?? 0} intentos:{" "}
+                            {cita.confirmationWhatsappLastError}
+                          </div>
+                        )}
                       <div className="mt-1 flex items-center justify-between gap-3">
                         <span className="text-slate-500">Confirmación</span>
                         <span className="font-semibold text-slate-900">

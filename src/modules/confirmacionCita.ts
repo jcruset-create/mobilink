@@ -32,7 +32,14 @@ export type EstadoConfirmacion =
   /** Ha pulsado «Confirmar». */
   | "confirmed"
   /** Ha pulsado «Cambiar cita». */
-  | "reschedule";
+  | "reschedule"
+  /**
+   * No se le va a preguntar: la cita se creó con menos de dos horas de
+   * margen. NO es `pending`, y la diferencia importa: `pending` dice
+   * «esperamos respuesta» y en recepción se lee como que el cliente no ha
+   * contestado. Aquí nunca se le preguntó nada.
+   */
+  | "not_requested";
 
 /** Los identificadores de los botones de la plantilla. */
 export const RESPUESTA_CONFIRMAR = "CONFIRMAR_CITA";
@@ -128,53 +135,131 @@ export function estadoConfirmacion(cita: {
   confirmationStatus?: unknown;
 }): EstadoConfirmacion {
   const v = String(cita?.confirmationStatus ?? "").trim();
-  if (v === "awaiting_confirmation" || v === "confirmed" || v === "reschedule") {
+  if (
+    v === "awaiting_confirmation" ||
+    v === "confirmed" ||
+    v === "reschedule" ||
+    v === "not_requested"
+  ) {
     return v;
   }
   return "pending";
 }
 
+/* ── Cuándo se pide la confirmación ───────────────────────────────────────── */
+
+/** Con más margen que esto, la confirmación va a T−24 h, como siempre. */
+export const ANTELACION_NORMAL_MS = 24 * 60 * 60 * 1000;
+
+/** Con menos margen que esto no se pide confirmación: no daría tiempo. */
+export const ANTELACION_MINIMA_MS = 2 * 60 * 60 * 1000;
+
 /**
- * ¿Hay que pedirle confirmación a esta cita?
+ * Lo que se espera desde que se crea la cita antes de pedirle confirmación.
  *
- * Lo que decide NO es solo la hora: es también que no se haya pedido ya. Y el
- * guardia de «ya se pidió» es `whatsappReminder24hSentAtMs`, el campo de
- * siempre, a propósito.
- *
- * ── Por qué el campo viejo y no uno nuevo ───────────────────────────────────
- *
- * Porque en producción hay doscientas y pico citas con ese campo ya escrito.
- * Si el guardia pasara a ser un campo nuevo, todas las citas de mañana lo
- * tendrían vacío y recibirían la confirmación de golpe en cuanto se desplegara
- * esto. Un reenvío masivo a clientes reales no se deshace pidiendo perdón.
+ * Existe para que el cliente no reciba «tu cita está registrada» y, treinta
+ * segundos después, «confirma tu cita». Dos mensajes seguidos del mismo taller
+ * diciendo cosas distintas parecen un error del sistema, y el segundo se
+ * ignora.
  */
-export function debePedirConfirmacion(
+export const ESPERA_TRAS_CREAR_MS = 60 * 60 * 1000;
+
+/** Cuánto se tolera llegar tarde: un servidor apagado no debe perder el aviso. */
+export const GRACIA_MS = 12 * 60 * 60 * 1000;
+
+export type PlanConfirmacion =
+  /** No hay nada que hacer, y por qué. */
+  | { accion: "nada"; motivo: string }
+  /** No se le va a preguntar nunca: se creó con menos de dos horas. */
+  | { accion: "no-procede" }
+  /** Todavía no toca. `desdeMs` es cuándo tocará. */
+  | { accion: "esperar"; desdeMs: number }
+  /** Ahora. */
+  | { accion: "enviar" };
+
+/** Máximo de intentos antes de dar el envío por fallido. */
+export const INTENTOS_MAXIMOS = 3;
+
+/**
+ * Qué hacer con esta cita, ahora mismo.
+ *
+ * ── La regla, según el margen con que se creó la cita ───────────────────────
+ *
+ *  · más de 24 h  → a T−24 h. El flujo normal.
+ *  · entre 2 y 24 h → una hora después de crearla. No a T−24 h, porque eso ya
+ *    ha pasado y saldría a los segundos, pegado al mensaje de creación.
+ *  · menos de 2 h → no se pide. No da tiempo a que conteste y a que sirva de
+ *    algo, y preguntar por preguntar deja la agenda llena de pendientes que
+ *    nadie va a resolver.
+ *
+ * Una cita SIN `createdAtMs` —las que ya existían— se trata con la regla
+ * clásica de T−24 h. Cambiarles el criterio a posteriori movería el momento de
+ * envío de citas que ya están en marcha.
+ */
+export function planDeConfirmacion(
   cita: {
     status?: unknown;
     customerPhone?: unknown;
     sendReminder24h?: unknown;
     whatsappReminder24hSentAtMs?: unknown;
     confirmationStatus?: unknown;
+    confirmationWhatsappAttemptCount?: unknown;
+    createdAtMs?: unknown;
   },
-  opciones: { dentroDeLaVentana: boolean }
-): boolean {
-  if (!opciones.dentroDeLaVentana) return false;
-
-  // Una cita que ya no está viva no se confirma.
+  momento: { ahoraMs: number; citaAtMs: number | null; graciaMs?: number }
+): PlanConfirmacion {
   const estado = String(cita?.status ?? "");
-  if (estado === "cancelado" || estado === "eliminado" || estado === "cerrado") {
-    return false;
+  if (["cancelado", "eliminado", "cerrado", "realizado"].includes(estado)) {
+    return { accion: "nada", motivo: `cita ${estado}` };
+  }
+  if (cita?.sendReminder24h === false) {
+    return { accion: "nada", motivo: "recordatorio apagado" };
+  }
+  if (!String(cita?.customerPhone ?? "").trim()) {
+    return { accion: "nada", motivo: "sin teléfono" };
+  }
+  // El guardia de siempre, el que llevan las citas de producción.
+  if (cita?.whatsappReminder24hSentAtMs) {
+    return { accion: "nada", motivo: "ya enviada" };
+  }
+  const confirmacion = estadoConfirmacion(cita);
+  if (confirmacion !== "pending") {
+    return { accion: "nada", motivo: `ya ${confirmacion}` };
+  }
+  const intentos = Number(cita?.confirmationWhatsappAttemptCount ?? 0);
+  if (Number.isFinite(intentos) && intentos >= INTENTOS_MAXIMOS) {
+    return { accion: "nada", motivo: "agotados los intentos" };
   }
 
-  if (cita?.sendReminder24h === false) return false;
-  if (!String(cita?.customerPhone ?? "").trim()) return false;
+  const citaAtMs = momento.citaAtMs;
+  if (citaAtMs == null || !Number.isFinite(citaAtMs)) {
+    return { accion: "nada", motivo: "sin fecha utilizable" };
+  }
+  if (citaAtMs <= momento.ahoraMs) {
+    return { accion: "nada", motivo: "la cita ya ha pasado" };
+  }
 
-  // Ya se pidió: ni se repite ni se vuelve a preguntar a quien ya contestó.
-  if (cita?.whatsappReminder24hSentAtMs) return false;
-  const confirmacion = estadoConfirmacion(cita);
-  if (confirmacion !== "pending") return false;
+  const creada = Number(cita?.createdAtMs);
+  const tieneCreacion = Number.isFinite(creada) && creada > 0;
+  const antelacion = tieneCreacion ? citaAtMs - creada : null;
 
-  return true;
+  if (antelacion != null && antelacion < ANTELACION_MINIMA_MS) {
+    return { accion: "no-procede" };
+  }
+
+  const cuando =
+    antelacion == null || antelacion > ANTELACION_NORMAL_MS
+      ? citaAtMs - ANTELACION_NORMAL_MS
+      : creada + ESPERA_TRAS_CREAR_MS;
+
+  if (momento.ahoraMs < cuando) return { accion: "esperar", desdeMs: cuando };
+
+  const gracia = momento.graciaMs ?? GRACIA_MS;
+  if (momento.ahoraMs - cuando > gracia) {
+    return { accion: "nada", motivo: "fuera de plazo" };
+  }
+
+  return { accion: "enviar" };
 }
 
 /* ── De la respuesta a la cita ────────────────────────────────────────────── */
@@ -308,6 +393,9 @@ export function rotuloConfirmacion(estado: EstadoConfirmacion): {
     case "confirmed": return { icono: "✅", texto: "Confirmada" };
     case "reschedule": return { icono: "🔄", texto: "Reprogramar" };
     case "awaiting_confirmation": return { icono: "⏳", texto: "Pendiente" };
+    // Ni ⏳ ni «pendiente»: a esta cita no se le ha preguntado nada, y decir
+    // «pendiente» haría creer a recepción que el cliente no contesta.
+    case "not_requested": return { icono: "—", texto: "No solicitada · cita inmediata" };
     default: return { icono: "⏳", texto: "Pendiente" };
   }
 }

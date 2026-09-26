@@ -94,6 +94,37 @@ export function urlBaseParaCallbacks(): string {
   return "https://sea-tarragona.onrender.com";
 }
 
+/**
+ * Avisa al arrancar si los callbacks van a ir a un sitio dudoso.
+ *
+ * No bloquea: el servidor tiene que levantar igual. Pero un `statusCallback`
+ * que apunte a donde no debe es el fallo más difícil de diagnosticar de todo
+ * esto —los estados no llegan nunca y la ficha se queda en «Enviado» para
+ * siempre, sin que nada falle de forma visible—, así que al menos queda dicho
+ * en el arranque.
+ */
+export function avisarSiLosCallbacksVanADudoso(): void {
+  const configurada = String(process.env.PUBLIC_APP_URL ?? "").trim();
+  const url = `${urlBaseParaCallbacks()}/api/whatsapp/status`;
+
+  if (!configurada) {
+    console.warn(
+      `[Citas] PUBLIC_APP_URL no está configurada. Los estados de WhatsApp ` +
+        `se pedirán a ${url} — comprueba que ese dominio es el que sirve esta ` +
+        `aplicación y que Twilio puede alcanzarlo.`
+    );
+    return;
+  }
+  if (!/^https:\/\//i.test(configurada)) {
+    console.warn(
+      `[Citas] PUBLIC_APP_URL no es una URL https válida ("${configurada}"). ` +
+        `Los estados de WhatsApp se pedirán a ${url}.`
+    );
+    return;
+  }
+  console.log(`[Citas] estados de WhatsApp: ${url}`);
+}
+
 /** El Content SID de la confirmación, o vacío si no está configurado. */
 export function contentSidDeConfirmacion(): string {
   return String(process.env.TWILIO_CONTENT_SID_CONFIRMACION_CITA ?? "").trim();

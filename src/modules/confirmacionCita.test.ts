@@ -3,12 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   cambiosPorRespuesta,
   campoDeFechaDeEstado,
-  debePedirConfirmacion,
   eligeCitaParaRespuesta,
   estadoConfirmacion,
   estadoEnvioAdelanta,
   estadoEnvioDeTwilio,
   intencionDeRespuesta,
+  planDeConfirmacion,
   respuestaYaAplicada,
   rotuloConfirmacion,
   rotuloEnvio,
@@ -17,17 +17,6 @@ import {
 
 const AHORA = new Date("2026-09-26T10:45:00").getTime();
 
-function cita(extra: Partial<CitaCandidata> & Record<string, unknown> = {}) {
-  return {
-    id: 1,
-    date: "2026-09-27",
-    startTime: "09:00",
-    customerPhone: "610473077",
-    status: "programado",
-    sendReminder24h: true,
-    ...extra,
-  };
-}
 
 describe("intencionDeRespuesta", () => {
   it("lee el identificador del botón, que es lo inequívoco", () => {
@@ -123,52 +112,6 @@ describe("estadoConfirmacion", () => {
   });
 });
 
-describe("debePedirConfirmacion", () => {
-  const dentro = { dentroDeLaVentana: true };
-
-  it("sí a una cita viva, con teléfono y sin pedir", () => {
-    expect(debePedirConfirmacion(cita(), dentro)).toBe(true);
-  });
-
-  it("no fuera de la ventana", () => {
-    expect(debePedirConfirmacion(cita(), { dentroDeLaVentana: false })).toBe(false);
-  });
-
-  it("no a una cita cancelada, eliminada o cerrada", () => {
-    for (const status of ["cancelado", "eliminado", "cerrado"]) {
-      expect(debePedirConfirmacion(cita({ status }), dentro)).toBe(false);
-    }
-  });
-
-  it("no sin teléfono", () => {
-    expect(debePedirConfirmacion(cita({ customerPhone: "" }), dentro)).toBe(false);
-    expect(debePedirConfirmacion(cita({ customerPhone: "   " }), dentro)).toBe(false);
-  });
-
-  it("no si el recordatorio está apagado", () => {
-    expect(debePedirConfirmacion(cita({ sendReminder24h: false }), dentro)).toBe(false);
-  });
-
-  /*
-   * EL TEST QUE IMPIDE EL DESASTRE.
-   *
-   * En producción hay doscientas y pico citas con `whatsappReminder24hSentAtMs`
-   * ya escrito. Si ese campo dejara de ser el guardia, todas las citas de
-   * mañana recibirían la confirmación de golpe al desplegar. Un reenvío masivo
-   * a clientes reales no se arregla pidiendo perdón.
-   */
-  it("NO reenvía a una cita que ya tenía el recordatorio marcado", () => {
-    expect(
-      debePedirConfirmacion(cita({ whatsappReminder24hSentAtMs: 1759000000000 }), dentro)
-    ).toBe(false);
-  });
-
-  it("no vuelve a preguntar a quien ya contestó", () => {
-    for (const confirmationStatus of ["confirmed", "reschedule", "awaiting_confirmation"]) {
-      expect(debePedirConfirmacion(cita({ confirmationStatus }), dentro)).toBe(false);
-    }
-  });
-});
 
 describe("eligeCitaParaRespuesta", () => {
   const esperando = (extra: Partial<CitaCandidata> = {}): CitaCandidata => ({
@@ -271,5 +214,141 @@ describe("rótulos", () => {
     expect(rotuloConfirmacion("confirmed").texto).toBe("Confirmada");
     expect(rotuloConfirmacion("reschedule").texto).toBe("Reprogramar");
     expect(rotuloConfirmacion("pending").texto).toBe("Pendiente");
+  });
+});
+
+/* ── La regla temporal ─────────────────────────────────────────────────────
+ *
+ * Cada caso está escrito con la hora a la que se crea la cita y la hora de la
+ * cita, no con milisegundos, porque lo que hay que poder revisar de un vistazo
+ * es la regla de negocio: a qué hora le llega el WhatsApp al cliente.
+ */
+describe("planDeConfirmacion", () => {
+  const H = 60 * 60 * 1000;
+  const CREADA = new Date("2026-09-26T15:00:00").getTime();
+
+  /** Una cita creada a las 15:00 para dentro de `horas`. */
+  function citaCon(horas: number, extra: Record<string, unknown> = {}) {
+    return {
+      status: "programado",
+      customerPhone: "610473077",
+      sendReminder24h: true,
+      createdAtMs: CREADA,
+      ...extra,
+      _citaAtMs: CREADA + horas * H,
+    };
+  }
+
+  const plan = (c: any, ahoraMs: number) =>
+    planDeConfirmacion(c, { ahoraMs, citaAtMs: c._citaAtMs });
+
+  it("1 · más de 24 h: se pide a T−24 h, ni antes ni al crearla", () => {
+    const c = citaCon(48);
+    expect(plan(c, CREADA)).toMatchObject({ accion: "esperar" });
+    // Justo antes de T−24h todavía espera.
+    expect(plan(c, c._citaAtMs - 24 * H - 1)).toMatchObject({ accion: "esperar" });
+    expect(plan(c, c._citaAtMs - 24 * H)).toMatchObject({ accion: "enviar" });
+  });
+
+  it("2 · a 20 h: NADA al crearla, y se pide una hora después", () => {
+    const c = citaCon(20);
+    expect(plan(c, CREADA)).toMatchObject({ accion: "esperar", desdeMs: CREADA + H });
+    expect(plan(c, CREADA + 59 * 60 * 1000)).toMatchObject({ accion: "esperar" });
+    expect(plan(c, CREADA + H)).toMatchObject({ accion: "enviar" });
+  });
+
+  it("3 · a 12 h: igual, una hora después de crearla", () => {
+    const c = citaCon(12);
+    expect(plan(c, CREADA)).toMatchObject({ accion: "esperar", desdeMs: CREADA + H });
+    expect(plan(c, CREADA + H)).toMatchObject({ accion: "enviar" });
+  });
+
+  it("4 · a 3 h: igual, una hora después", () => {
+    const c = citaCon(3);
+    expect(plan(c, CREADA)).toMatchObject({ accion: "esperar", desdeMs: CREADA + H });
+    expect(plan(c, CREADA + H)).toMatchObject({ accion: "enviar" });
+  });
+
+  it("5 · a 1 h 30: no se pide nunca", () => {
+    const c = citaCon(1.5);
+    expect(plan(c, CREADA)).toMatchObject({ accion: "no-procede" });
+    expect(plan(c, CREADA + H)).toMatchObject({ accion: "no-procede" });
+  });
+
+  it("6 · a 30 minutos: tampoco", () => {
+    expect(plan(citaCon(0.5), CREADA)).toMatchObject({ accion: "no-procede" });
+  });
+
+  /*
+   * EL TEST QUE JUSTIFICA TODO ESTO.
+   *
+   * Antes, una cita para dentro de 20 h mandaba la confirmación en menos de
+   * 60 s: el cliente recibía «tu cita está registrada» y acto seguido
+   * «confirma tu cita». Dos mensajes seguidos del mismo taller diciendo cosas
+   * distintas parecen un error, y el segundo se ignora.
+   */
+  it("7 · NUNCA los dos mensajes seguidos, con cualquier antelación", () => {
+    for (const horas of [2, 3, 6, 12, 18, 20, 23, 23.9, 24, 25, 48, 72]) {
+      const r = plan(citaCon(horas), CREADA);
+      expect(r.accion, `antelación de ${horas} h`).not.toBe("enviar");
+    }
+  });
+
+  it("8 · con los intentos agotados no se vuelve a intentar", () => {
+    const c = citaCon(48, { confirmationWhatsappAttemptCount: 3 });
+    expect(plan(c, c._citaAtMs - 24 * H)).toMatchObject({
+      accion: "nada",
+      motivo: "agotados los intentos",
+    });
+  });
+
+  it("9 · con dos intentos todavía se intenta el tercero", () => {
+    const c = citaCon(48, { confirmationWhatsappAttemptCount: 2 });
+    expect(plan(c, c._citaAtMs - 24 * H)).toMatchObject({ accion: "enviar" });
+  });
+
+  it("10 · cancelada durante la hora de espera: no se envía", () => {
+    for (const status of ["cancelado", "eliminado", "cerrado", "realizado"]) {
+      const c = citaCon(20, { status });
+      expect(plan(c, CREADA + H)).toMatchObject({ accion: "nada" });
+    }
+  });
+
+  it("11 · confirmada por otro medio antes de la hora: no se envía", () => {
+    const c = citaCon(20, { confirmationStatus: "confirmed" });
+    expect(plan(c, CREADA + H)).toMatchObject({ accion: "nada", motivo: "ya confirmed" });
+  });
+
+  it("12 · la que ya salió no vuelve a salir tras un reinicio", () => {
+    // El guardia está en la base, así que da igual cuántas veces se levante
+    // el servidor y vuelva a pasar por la cita.
+    const c = citaCon(48, { whatsappReminder24hSentAtMs: CREADA });
+    expect(plan(c, c._citaAtMs - 24 * H)).toMatchObject({ accion: "nada", motivo: "ya enviada" });
+  });
+
+  it("13 · una cita vieja, sin createdAtMs, sigue con la regla de siempre", () => {
+    const c: any = citaCon(48);
+    delete c.createdAtMs;
+    expect(plan(c, c._citaAtMs - 24 * H)).toMatchObject({ accion: "enviar" });
+    expect(plan(c, CREADA)).toMatchObject({ accion: "esperar" });
+  });
+
+  it("14 · una cita que ya pasó no recibe nada", () => {
+    const c = citaCon(48);
+    expect(plan(c, c._citaAtMs + 1)).toMatchObject({ accion: "nada" });
+  });
+
+  it("15 · tras una caída muy larga no se manda con la cita encima", () => {
+    const c = citaCon(48);
+    // 13 h tarde: fuera del plazo de gracia.
+    expect(plan(c, c._citaAtMs - 24 * H + 13 * H)).toMatchObject({
+      accion: "nada",
+      motivo: "fuera de plazo",
+    });
+  });
+
+  it("no-procede no es lo mismo que pendiente", () => {
+    expect(rotuloConfirmacion("not_requested").texto).toBe("No solicitada · cita inmediata");
+    expect(rotuloConfirmacion("not_requested").icono).not.toBe("⏳");
   });
 });

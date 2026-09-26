@@ -64,7 +64,21 @@ describe("el envío de 24 h lo atiende un solo sitio", () => {
   });
 
   it("la decisión de mandar sale del módulo, no de una condición suelta", () => {
-    expect(INDEX).toContain("debePedirConfirmacion(job, {");
+    expect(INDEX).toContain("planDeConfirmacion(job, {");
+  });
+
+  it("el intento se reserva ANTES de llamar a Twilio", () => {
+    // Si se contara después, un envío que sale y no se llega a guardar
+    // dejaría la cita como si nunca se hubiera intentado: se mandaría otra
+    // vez, y otra, sin final.
+    const i = INDEX.indexOf("await reservarIntento(");
+    const j = INDEX.indexOf("await enviarConfirmacion(");
+    expect(i).toBeGreaterThan(0);
+    expect(i).toBeLessThan(j);
+  });
+
+  it("una cita a menos de dos horas se marca como no solicitada", () => {
+    expect(INDEX).toContain("marcarNoSolicitada(job.id)");
   });
 
   it("solo se marca como enviada si el mensaje salió de verdad", () => {
