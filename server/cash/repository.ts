@@ -452,6 +452,9 @@ export async function movimientosDeSesion(
 
 const PREFIJO_POR_TIPO: Partial<Record<TipoOperacion, string>> = {
   COLLECTION: "C",
+  // «AB» y no «A», que ya es el ajuste. Un abono con la letra del ajuste se
+  // leería en el histórico como una corrección de arqueo.
+  REFUND: "AB",
   PAYMENT: "P",
   MANUAL_IN: "E",
   MANUAL_OUT: "S",
@@ -523,6 +526,37 @@ export async function siguienteNumeroDe(
   );
   const aa = String(anio % 100).padStart(2, "0");
   return `${codigo}-${prefijo}-${aa}-${String(rows[0].last_seq).padStart(3, "0")}`;
+}
+
+/**
+ * Numeración de los documentos que NO son de una caja: `LG-26-001`.
+ *
+ * `siguienteNumeroDe` escribe siempre el código de una caja delante, y una
+ * liquidación de gastos no tiene caja hasta que se paga —puede no pagarse
+ * nunca, o pagarse desde otra—. Ponerle uno al nacer sería inventarlo; y el
+ * taller (`app_centros`) no tiene código con el que numerar. Así que se numera
+ * por EMPRESA, con el mismo contador (`cash_document_counters`) y la misma
+ * forma de número que todo lo demás, sin el prefijo de caja.
+ *
+ * La clave lleva el id de la empresa porque, a diferencia de los códigos de
+ * caja, el prefijo solo no es único entre empresas.
+ */
+export async function siguienteNumeroDeEmpresa(
+  client: PoolClient,
+  empresaId: string,
+  prefijo: string,
+  anio: number
+): Promise<string> {
+  const clave = `${empresaId}:${prefijo}:${anio}`;
+  const { rows } = await client.query<{ last_seq: number }>(
+    `INSERT INTO cash_document_counters (clave, last_seq)
+     VALUES ($1, 1)
+     ON CONFLICT (clave) DO UPDATE SET last_seq = cash_document_counters.last_seq + 1
+     RETURNING last_seq`,
+    [clave]
+  );
+  const aa = String(anio % 100).padStart(2, "0");
+  return `${prefijo}-${aa}-${String(rows[0].last_seq).padStart(3, "0")}`;
 }
 
 /**

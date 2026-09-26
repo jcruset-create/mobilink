@@ -43,6 +43,9 @@ import type {
   SeccionConfig,
   DispositivoAutoScan,
   ConceptoGasto,
+  ReglaGastoConfig,
+  Empleado,
+  PropuestaVinculo,
   DestinoGasto,
   TipoDestinoGasto,
   EquivalenciaErp,
@@ -88,6 +91,8 @@ export default function Configuracion() {
       <Secciones />
       <ReglasSeccion />
       <ConceptosDeGasto />
+      <ReglasConcepto />
+      <PersonasYEmpleados />
       <FormasPago />
       <EquivalenciasErp />
       <ReglasEscaner />
@@ -258,6 +263,324 @@ function ReglasSeccion() {
                     onClick={() => void accion(() => api.borrarReglaSeccion(r.id))}
                     className={btnSecondary}
                   >
+                    Borrar
+                  </button>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+/**
+ * Qué concepto de gasto le toca a cada clase de ticket de una liquidación.
+ *
+ * La lectura dice qué es el papel —«un peaje»—; aquí se dice qué concepto de
+ * esta empresa le corresponde —«Peajes»—. Nada de eso lo decide la máquina.
+ */
+const ETIQUETA_CAMPO_GASTO: Record<string, string> = {
+  TIPO_ESTABLECIMIENTO: "Tipo de establecimiento",
+  NOMBRE_EMISOR: "Nombre del establecimiento",
+  NIF_EMISOR: "NIF del establecimiento",
+  CONCEPTO: "Concepto del ticket",
+};
+
+const TIPOS_ESTABLECIMIENTO = [
+  "RESTAURANTE",
+  "PEAJE",
+  "GASOLINERA",
+  "PARKING",
+  "HOTEL",
+  "TRANSPORTE",
+  "TAXI",
+  "SUPERMERCADO",
+  "TALLER",
+  "OTRO",
+];
+
+/**
+ * Cada persona de Cash, atada a su ficha de empleado.
+ *
+ * Una liquidación de gastos es de un TRABAJADOR, y el trabajador es su ficha
+ * de empleado. En Cash lo representa una persona —la misma a la que se imputan
+ * las dietas—, y aquí se dice cuál es cuál. Lo que se parece por el nombre se
+ * PROPONE; lo aplica quien esté delante, porque «José» puede ser dos Josés.
+ */
+function PersonasYEmpleados() {
+  const { puede } = useCash();
+  const [disponible, setDisponible] = useState(true);
+  const [empleados, setEmpleados] = useState<Empleado[]>([]);
+  const [personas, setPersonas] = useState<DestinoGasto[]>([]);
+  const [propuestas, setPropuestas] = useState<Map<number, PropuestaVinculo>>(new Map());
+  const [error, setError] = useState("");
+  const [aviso, setAviso] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const editable = puede("cash.configure");
+
+  const cargar = useCallback(async () => {
+    try {
+      const [e, c] = await Promise.all([api.empleados(), api.conceptosDeGasto()]);
+      setDisponible(e.disponible);
+      setEmpleados(e.empleados);
+      setPersonas(c.destinos.filter((d) => d.tipo === "PERSONA" && d.activo));
+      if (e.disponible && editable) {
+        const p = await api.propuestasVinculo();
+        setPropuestas(new Map(p.propuestas.map((x) => [x.destinoId, x])));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error cargando los empleados");
+    }
+  }, [editable]);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function vincular(destinoId: number, employeeId: string | null) {
+    setOcupado(true);
+    setError("");
+    setAviso("");
+    try {
+      const r = await api.vincularPersona(destinoId, employeeId);
+      if (r.liquidacionesActualizadas > 0) {
+        setAviso(`Hecho. ${r.liquidacionesActualizadas} liquidación(es) anteriores ya saben de qué empleado son.`);
+      }
+      await cargar();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se ha podido vincular");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  if (!disponible) return null;
+
+  const nombreDe = (e: Empleado) => [e.nombre, e.apellidos].filter(Boolean).join(" ");
+  const vinculadoA = new Map(empleados.filter((e) => e.destinoId != null).map((e) => [e.destinoId!, e]));
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Personas y fichas de empleado</h2>
+      <p className="text-[12px] text-slate-500">
+        Las liquidaciones de gastos son de un trabajador, y el trabajador es su <b>ficha de empleado</b>. Aquí se
+        dice qué persona de Cash es cada empleado. Lo que se parece por el nombre se propone; tú decides.
+      </p>
+      {error && <ErrorBox>{error}</ErrorBox>}
+      {aviso && <p className="text-[12px] text-emerald-300">{aviso}</p>}
+      <table className="w-full text-sm">
+        <thead>
+          <tr>
+            <th className={thCls}>Persona en Cash</th>
+            <th className={thCls}>Ficha de empleado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {personas.length === 0 && <EmptyRow cols={2} text="Todavía no hay personas en Cash." />}
+          {personas.map((d) => {
+            const actual = vinculadoA.get(d.id) ?? null;
+            const p = propuestas.get(d.id);
+            const libres = empleados.filter((e) => e.destinoId == null || e.destinoId === d.id);
+            return (
+              <tr key={d.id}>
+                <td className={tdCls}>{d.nombre}</td>
+                <td className={tdCls}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={actual?.id ?? ""}
+                      disabled={!editable || ocupado}
+                      onChange={(e) => void vincular(d.id, e.target.value || null)}
+                      className={`${inputCls} w-64`}
+                    >
+                      <option value="">Sin vincular</option>
+                      {libres.map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {nombreDe(e)}
+                          {e.codigo ? ` (${e.codigo})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {!actual && p && p.employeeId && (p.certeza === "exacta" || p.certeza === "unica") && (
+                      <button
+                        disabled={ocupado}
+                        className={btnSecondary}
+                        onClick={() => void vincular(d.id, p.employeeId)}
+                        title={p.certeza === "unica" ? "Solo coincide el nombre de pila: compruébalo." : undefined}
+                      >
+                        ¿Es {p.employeeNombre}? Vincular
+                      </button>
+                    )}
+                    {!actual && p?.certeza === "ambigua" && (
+                      <span className="text-[11px] text-amber-300">
+                        Se parece a varios: {p.candidatos.map((c) => c.nombre).join(", ")}. Elige tú.
+                      </span>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function ReglasConcepto() {
+  const { puede } = useCash();
+  const [reglas, setReglas] = useState<ReglaGastoConfig[]>([]);
+  const [lectura, setLectura] = useState(false);
+  const [conceptos, setConceptos] = useState<ConceptoGasto[]>([]);
+  const [campo, setCampo] = useState("TIPO_ESTABLECIMIENTO");
+  const [patron, setPatron] = useState("RESTAURANTE");
+  const [conceptoId, setConceptoId] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const editable = puede("cash.configure");
+
+  const cargar = useCallback(async () => {
+    try {
+      const [r, c] = await Promise.all([api.reglasGasto(), api.conceptosDeGasto()]);
+      setReglas(r.reglas);
+      setLectura(r.lecturaDisponible);
+      setConceptos(c.conceptos.filter((x) => x.activo));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando las reglas de concepto");
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  async function accion(fn: () => Promise<unknown>) {
+    setOcupado(true);
+    setError("");
+    try {
+      await fn();
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "La acción ha fallado");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Reglas de concepto (gastos de trabajadores)
+      </h2>
+      <p className="text-[12px] text-slate-500">
+        Al leer un ticket de una liquidación, la máquina dice <b>qué clase de negocio</b> lo emite —un
+        restaurante, un peaje, un parking—. Aquí decides <b>qué concepto de gasto</b> le toca. Lo que no
+        reconozca ninguna regla se queda sin concepto y se elige a mano: no hay un concepto «por
+        defecto», porque un gasto clasificado a ojo parece un dato.
+      </p>
+      {!lectura && (
+        <p className="text-[12px] text-amber-300">
+          La lectura automática no está configurada en este servidor: los tickets se rellenan a mano y
+          estas reglas no se aplican hasta que lo esté.
+        </p>
+      )}
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {editable && (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-700 bg-slate-800 p-3">
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Mirar en</span>
+            <select
+              value={campo}
+              onChange={(e) => {
+                setCampo(e.target.value);
+                setPatron(e.target.value === "TIPO_ESTABLECIMIENTO" ? "RESTAURANTE" : "");
+              }}
+              className={inputCls}
+            >
+              {Object.entries(ETIQUETA_CAMPO_GASTO).map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Que sea / ponga</span>
+            {campo === "TIPO_ESTABLECIMIENTO" ? (
+              <select value={patron} onChange={(e) => setPatron(e.target.value)} className={inputCls}>
+                {TIPOS_ESTABLECIMIENTO.map((t) => (
+                  <option key={t} value={t}>
+                    {t.charAt(0) + t.slice(1).toLowerCase()}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={patron}
+                onChange={(e) => setPatron(e.target.value)}
+                placeholder={campo === "NIF_EMISOR" ? "B12345678" : "aumar"}
+                className={inputCls}
+              />
+            )}
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-semibold uppercase text-slate-400">Concepto</span>
+            <select
+              value={conceptoId ?? ""}
+              onChange={(e) => setConceptoId(e.target.value ? Number(e.target.value) : null)}
+              className={inputCls}
+            >
+              <option value="">Elegir…</option>
+              {conceptos.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nombre}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            disabled={ocupado || !patron.trim() || conceptoId == null}
+            onClick={() =>
+              void accion(async () => {
+                await api.guardarReglaGasto({ campo, patron, conceptoId: conceptoId! });
+                setConceptoId(null);
+              })
+            }
+            className={btnPrimary}
+          >
+            Guardar
+          </button>
+        </div>
+      )}
+
+      <table className="w-full text-sm">
+        <thead>
+          <tr>
+            <th className={thCls}>Mirar en</th>
+            <th className={thCls}>Que sea / ponga</th>
+            <th className={thCls}>Concepto</th>
+            {editable && <th className={thCls} />}
+          </tr>
+        </thead>
+        <tbody>
+          {reglas.length === 0 && <EmptyRow cols={editable ? 4 : 3} text="Todavía no hay reglas." />}
+          {reglas.map((r) => (
+            <tr key={r.id}>
+              <td className={tdCls}>{ETIQUETA_CAMPO_GASTO[r.campo] ?? r.campo}</td>
+              <td className={`${tdCls} font-mono text-[12px]`}>{r.patron}</td>
+              <td className={tdCls}>
+                {r.conceptoNombre || <span className="text-slate-500">—</span>}
+                {!r.conceptoVigente && (
+                  <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+                    concepto no vigente
+                  </span>
+                )}
+              </td>
+              {editable && (
+                <td className={`${tdCls} text-right`}>
+                  <button disabled={ocupado} onClick={() => void accion(() => api.borrarReglaGasto(r.id))} className={btnSecondary}>
                     Borrar
                   </button>
                 </td>

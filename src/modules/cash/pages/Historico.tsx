@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useCash } from "../contexts/CashContext";
 import {
   BotonInforme,
@@ -479,6 +480,15 @@ function DetalleJornada({
                     <td className={tdCls}>
                       {o.concepto}
                       {o.partyNombre && <div className="text-[11px] text-slate-500">{o.partyNombre}</div>}
+                      {/* El pago de una liquidación de gastos lleva su número de referencia. */}
+                      {o.tipo === "PAYMENT" && o.referencia?.startsWith("LG-") && (
+                        <Link
+                          to={`/cash/gastos-trabajadores?numero=${encodeURIComponent(o.referencia)}`}
+                          className="text-[11px] text-sky-400 hover:underline"
+                        >
+                          Ver liquidación {o.referencia}
+                        </Link>
+                      )}
                     </td>
                     {/* Adjuntar más tarde: la factura del proveedor muchas
                         veces aparece después del pago. */}

@@ -408,7 +408,15 @@ Es lo que explica **por qué** algo está en REVISAR.
 - `thf_decisiones`: lo que espera a una persona: `tipo IN ('POSIBLE_DUPLICADO','CAMBIO_INSTRUCCION','RECLAMACION_SOBRE_RESUELTO','REQUIERE_REVISION','ERROR_PARSER')`, `notificacion_id`, `expediente_id`, `candidatos JSONB` (con puntuación y motivos), `detalle JSONB`, `estado ('PENDIENTE'|'DECIDIDA')`, `decision`, `decidida_por_usuario_id`, `decidida_at`.
 - `thf_config (empresa_id, clave, valor, updated_at)` PK compuesta.
 - `thf_contadores (empresa_id, serie, last_seq)`.
-- `thf_buzon_pasadas`: una fila por pasada del listener (como `tc_checkpoint_ejecuciones`).
+- `thf_buzon_pasadas`: una fila por pasada del listener (como
+  `tc_checkpoint_ejecuciones`). Su columna `error` guarda el motivo YA
+  traducido (`domain/imap.ts`): ImapFlow lanza `Error("Command failed")` para
+  cualquier respuesta NO o BAD del servidor —contraseña mal, carpeta que no
+  existe, búsqueda rechazada— y deja lo que de verdad dijo el servidor en
+  `responseText`/`serverResponseCode`. `motivoDelFallo` junta eso con el PASO
+  en el que se estaba (conectar, abrir la carpeta, buscar), que es lo que
+  distingue un fallo que se arregla en el proveedor de correo de uno que se
+  arregla aquí.
 
 ### D.10 Claves de `thf_config` (defectos en `config.ts`; la tabla solo guarda cambios)
 
@@ -865,6 +873,13 @@ aparte con la nota «no incluidos en la suma». Cada línea tiene un enlace
 «ver en PDF» que abre el visor en la página y resalta el `bbox` (el PDF va
 por enlace firmado; el resalte se pinta encima con la `bbox` guardada).
 
+**La tarjeta entera se pone verde cuando su actuación está RESUELTA.** En un
+expediente de ocho albaranes todas son iguales y la chapita del estado es lo
+más pequeño de la pantalla: para saber cuáles quedaban había que leerlas una
+a una. Sólo el borde y el fondo, y sin subir de tono, porque encima va una
+tabla de números con celdas marcadas en ámbar y en rosa por dudosas y un
+verde fuerte se comería justo lo que hace que alguien vuelva a mirar el PDF.
+
 En la cabecera de la tarjeta, además de «Ver el PDF» y «Ver resaltado», el
 estado de la actuación y un botón **«Resuelto»** que la da por hecha sin
 salir de la pestaña: abre el mismo formulario que la pestaña Actuaciones
@@ -890,7 +905,17 @@ el texto original íntegro. Histórico: `thf_eventos` con actor y
 anterior → nuevo. `pages/Revision.tsx`: decisiones pendientes agrupadas por
 tipo, con candidatos, puntuación y motivos. `pages/Configuracion.tsx`
 (admin): pesos, umbrales, sinónimos, remitentes, sociedades, estado del
-buzón y últimas pasadas.
+buzón y últimas pasadas. Si la última pasada falló, su motivo sale ARRIBA y
+entero, no sólo en la columna: cuando el buzón deja de ir fallan todas por lo
+mismo y el motivo quedaba enterrado en once renglones iguales.
+
+La cabecera lleva `VersionDesplegada`: el número del `package.json` que el
+navegador tiene cargado y el commit que Render está sirviendo. En un módulo
+que se calibra contra documentos reales, «¿ya está subido el arreglo?» se
+pregunta a diario, y el commit es el único dato que lo contesta sin depender
+de que nadie suba un número a mano. Si la versión del bundle y la que
+devuelve `/api/health` no coinciden, se enseñan las dos en ámbar: eso es una
+caché vieja en el navegador, no un despliegue que falta.
 
 ### J.7 Componentes y datos
 

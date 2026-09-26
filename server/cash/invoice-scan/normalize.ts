@@ -17,7 +17,7 @@ import type { Centimos } from "../domain/money.ts";
 import { esCentimosValido } from "../domain/money.ts";
 import type { EvidenciaSeccion } from "./seccion.ts";
 import type { EvidenciaCobro } from "./classifier.ts";
-import type { ExtraccionCruda, ExtraccionNormalizada, TipoDocumento } from "./types.ts";
+import type { ExtraccionCruda, ExtraccionNormalizada, TipoDocumento, TipoEstablecimiento } from "./types.ts";
 
 /**
  * Un importe TAL Y COMO SE IMPRIME en una factura española.
@@ -204,6 +204,7 @@ export function normalizar(cruda: ExtraccionCruda): ExtraccionNormalizada {
   return {
     esFactura: cruda.es_factura === true,
     tipoDocumento: tipoDeDocumento(cruda.tipo_documento),
+    tipoEstablecimiento: tipoDeEstablecimiento(cruda.tipo_establecimiento),
     facturasDetectadas: Math.max(1, Math.round(Number(cruda.facturas_detectadas) || 1)),
     numeroFactura: textoOpcional(cruda.factura?.numero),
     fecha: fechaImpresa(cruda.factura?.fecha),
@@ -337,9 +338,33 @@ export function tipoDeDocumento(valor: string | null | undefined): TipoDocumento
     "ALBARAN",
     "TICKET",
     "PARTE",
+    "ABONO",
     "OTRO",
   ];
   return conocidos.includes(limpio as TipoDocumento) ? (limpio as TipoDocumento) : "DESCONOCIDO";
+}
+
+/**
+ * La clase de negocio, de la lista cerrada. Lo que no esté en ella —o no se
+ * haya leído— es DESCONOCIDO, que no es OTRO: OTRO es «lo he visto y no es
+ * ninguno de estos»; DESCONOCIDO es «no lo sé». Una regla sobre OTRO no puede
+ * casar con un análisis viejo que no trae el campo.
+ */
+export function tipoDeEstablecimiento(valor: string | null | undefined): TipoEstablecimiento {
+  const limpio = (valor ?? "").trim().toUpperCase().replace(/[\s-]+/g, "_");
+  const conocidos: TipoEstablecimiento[] = [
+    "RESTAURANTE",
+    "PEAJE",
+    "GASOLINERA",
+    "PARKING",
+    "HOTEL",
+    "TRANSPORTE",
+    "TAXI",
+    "SUPERMERCADO",
+    "TALLER",
+    "OTRO",
+  ];
+  return conocidos.includes(limpio as TipoEstablecimiento) ? (limpio as TipoEstablecimiento) : "DESCONOCIDO";
 }
 
 export function evidenciaDeSeccion(n: ExtraccionNormalizada): EvidenciaSeccion {

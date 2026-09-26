@@ -80,7 +80,12 @@ export type PosicionGlobal = {
   enTransitoBancoCentimos: number;
   enTransitoPersonasCentimos: number;
   transitosAbiertos: number;
+  /** Cierres sin conciliar MENOS lo repuesto al cajón: el neto que dice la caja. */
   pendienteBancoCentimos: number;
+  /** Lo repuesto y sin ingresar. Ya viene restado de `pendienteBancoCentimos`. */
+  repuestoCentimos: number;
+  /** Monedas que el banco no admitió y se quedaron en la tienda. */
+  remanenteCentimos: number;
   totalCentimos: number;
 };
 
@@ -375,7 +380,7 @@ export const asignarZona = (centroId: string, zonaId: string | null) =>
  * caja: repara lo que Central no llegó a ver.
  */
 export const reemitirIngresos = (f: { centroId?: string | null; registerId?: number | null }) =>
-  pedir<{ reenviados: number }>("/deposits/resync", json({
+  pedir<{ reenviados: number; reposiciones: number }>("/deposits/resync", json({
     centroId: f.centroId ?? null,
     registerId: f.registerId ?? null,
   }));

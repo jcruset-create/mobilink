@@ -1,6 +1,6 @@
 import { apiFetch } from "../modules/apiFetch";
 import { getAdminHeaders } from "../modules/adminHeaders";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   CheckCircle2,
@@ -62,6 +62,14 @@ import {
 } from "../modules/roadsideAssistanceTypes";
 import { aMilisegundos, fechaHoraCorta } from "../modules/roadsideFechaHora";
 import { formatCoords } from "../modules/roadsideCoordenadas";
+import {
+  colaDe,
+  comoEntraria,
+  enCursoDe,
+  enEspera,
+  estadoCerrado,
+  type AsistenciaEnCola,
+} from "../modules/colaEspera";
 import BuscadorCliente from "./BuscadorCliente";
 import { nombreDe, telefonoDe, type ClienteFrecuente, type ContactoCliente } from "../modules/clientesFrecuentes";
 import { nombreDeFoto, tiraDeFotos } from "../modules/roadsideFotosTarjeta";
@@ -346,8 +354,14 @@ function getActionIcon(status: RoadsideAssistanceStatus) {
   return Send;
 }
 
+/*
+ * Los estados en que una asistencia ya no ocupa a su operario. La lista está en
+ * `colaEspera.ts` y no aquí porque la cola la usa para lo mismo: si las dos
+ * tuvieran su copia, el panel podría pintar una tarjeta como cerrada mientras
+ * la cola sigue considerando ocupado al operario.
+ */
 function isClosed(status: RoadsideAssistanceStatus) {
-  return status === "llegada_taller" || status === "cancelada" || status === "redirigida";
+  return estadoCerrado(status);
 }
 
 function getTrackingUrl(assistance: RoadsideAssistance) {
@@ -610,6 +624,14 @@ export default function RoadsideAssistanceView({
   const [saving, setSaving] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [localError, setLocalError] = useState("");
+  /**
+   * «Se ha cerrado la #145 · entra la #152», cuando una espera deja de esperar.
+   *
+   * Quien está en el panel no se queda mirando las tarjetas: se enteraría de
+   * que un operario ha quedado libre cuando volviera a mirar, y para entonces
+   * puede haber cambiado el plan. Se cierra a mano, como los errores.
+   */
+  const [avisoCola, setAvisoCola] = useState("");
   const [editError, setEditError] = useState("");
   const [changingId, setChangingId] = useState<number | null>(null);
   const [redirectingId, setRedirectingId] = useState<number | null>(null);
@@ -830,31 +852,119 @@ export default function RoadsideAssistanceView({
   }
 
   /**
-   * Técnicos ofrecibles para una asistencia: además de ser aptos para
-   * carretera, no pueden estar ocupados en un trabajo de taller ni llevar ya
-   * otra asistencia en curso.
+   * Qué esperaba y detrás de qué en el refresco anterior, para notar el cambio.
+   *
+   * No se compara con el servidor porque no hay nada que preguntar: la propia
+   * lista dice quién espera, y el aviso es solo la diferencia entre dos listas.
+   */
+  // Un objeto y no un Map: `Map` aquí es el icono de lucide-react, que tapa al
+  // de JavaScript. Las claves son ids de asistencia.
+  const esperasPrevias = useRef<Record<number, number> | null>(null);
+
+  /**
+   * Las asistencias en el formato que entiende la regla de la cola. Se calcula
+   * una vez porque lo usan el desplegable, el aviso y cada tarjeta.
+   */
+  const paraCola = useMemo<AsistenciaEnCola[]>(
+    () =>
+      assistances.map((item) => ({
+        id: item.id,
+        assignedTechName: item.assignedTechName ?? null,
+        status: item.status,
+        esperaTrasId: item.esperaTrasId ?? null,
+      })),
+    [assistances]
+  );
+
+  /**
+   * Técnicos ofrecibles: aptos para carretera y no ocupados en el taller.
+   *
+   * Los que YA llevan una asistencia salen también, con lo que llevan al lado.
+   * Antes se escondían, y esconderlos no quitaba la necesidad de darles la
+   * siguiente: obligaba a esperar a que cerrasen para poder asignarla, o a
+   * recordarlo de memoria. Ahora se asigna y queda en espera.
    */
   const roadsideCapableTechs = useMemo(() => {
-    const enAsistencia = new Set(
-      assistances
-        .filter((item) => !isClosed(item.status) && item.assignedTechName)
-        .map((item) => String(item.assignedTechName))
-    );
-    return techs.filter(
-      (tech) =>
-        tech.roadsideCapable &&
-        !tecnicosOcupadosEnTaller?.has(tech.name) &&
-        !enAsistencia.has(tech.name)
-    );
-  }, [techs, assistances, tecnicosOcupadosEnTaller]);
+    return techs
+      .filter(
+        (tech) => tech.roadsideCapable && !tecnicosOcupadosEnTaller?.has(tech.name)
+      )
+      .map((tech) => {
+        const actual = enCursoDe(tech.name, paraCola);
+        const cola = colaDe(tech.name, paraCola);
+        return {
+          ...tech,
+          /** En qué está ahora, para decirlo en la propia opción. */
+          enCursoId: actual?.id ?? null,
+          /** Cuántas le esperan ya, si le esperan. */
+          enColaTotal: cola.length,
+        };
+      });
+  }, [techs, paraCola, tecnicosOcupadosEnTaller]);
+
+  /*
+   * Avisar cuando una que esperaba deja de esperar.
+   *
+   * La primera vuelta solo toma la foto: al abrir el panel, todo lo que no está
+   * en espera «acaba de dejar de estarlo» y saldrían avisos de cosas que
+   * pasaron ayer.
+   */
+  useEffect(() => {
+    const ahora: Record<number, number> = {};
+    for (const a of paraCola) {
+      if (enEspera(a, paraCola) && a.esperaTrasId != null) ahora[a.id] = a.esperaTrasId;
+    }
+    const antes = esperasPrevias.current;
+    esperasPrevias.current = ahora;
+    if (!antes) return;
+
+    const entradas: string[] = [];
+    for (const [clave, tras] of Object.entries(antes)) {
+      const id = Number(clave);
+      if (ahora[id] != null) continue;
+      // Si ya no está en la lista, se ha borrado o filtrado: no hay nada que
+      // contar. Y si la de delante sigue abierta, la han adelantado o sacado a
+      // mano desde este mismo panel, que ya se ve al pulsar el botón.
+      const sigue = paraCola.find((a) => a.id === id);
+      const bloqueaba = paraCola.find((a) => a.id === tras);
+      if (!sigue || !bloqueaba || !estadoCerrado(bloqueaba.status)) continue;
+      if (sigue.assignedTechName !== bloqueaba.assignedTechName) continue;
+      entradas.push(`se ha cerrado la #${tras} · entra la #${id}`);
+    }
+    if (entradas.length) setAvisoCola(entradas.join(" · "));
+  }, [paraCola]);
+
+  /** Lo que pone cada opción del desplegable: «Anthoni · en la #145». */
+  function etiquetaTecnico(tech: { name: string; enCursoId: number | null; enColaTotal: number }) {
+    if (tech.enCursoId == null) return tech.name;
+    const cola = tech.enColaTotal ? ` y ${tech.enColaTotal} en espera` : "";
+    return `${tech.name} · en la #${tech.enCursoId}${cola}`;
+  }
+
+  /**
+   * El aviso de que lo que se está guardando va a quedar en espera.
+   *
+   * Sale antes de guardar y no después: quien asigna tiene que poder cambiar de
+   * operario ahí mismo si lo que quería era que saliese ya.
+   */
+  function avisoDeCola(tecnico: string, asistenciaId: number | null): string | null {
+    if (!tecnico) return null;
+    const entrada = comoEntraria(asistenciaId, tecnico, paraCola);
+    if (entrada.directa !== false) return null;
+    return `${tecnico} está en la #${entrada.trasId}. Esta asistencia quedará en espera y entrará sola cuando la cierre.`;
+  }
 
   const editAssignableTechs = useMemo(() => {
     if (
       editDraft.assignedTechName &&
       !roadsideCapableTechs.some((tech) => tech.name === editDraft.assignedTechName)
     ) {
+      // El operario que tiene asignado puede no ser apto para carretera o estar
+      // en un trabajo de taller; se ofrece igual para no perderlo al editar.
       const current = techs.find((tech) => tech.name === editDraft.assignedTechName);
-      return current ? [current, ...roadsideCapableTechs] : roadsideCapableTechs;
+      return current
+        ? [{ ...current, enCursoId: null, enColaTotal: 0 }, ...roadsideCapableTechs]
+        : roadsideCapableTechs;
     }
     return roadsideCapableTechs;
   }, [roadsideCapableTechs, techs, editDraft.assignedTechName]);
@@ -1107,6 +1217,8 @@ export default function RoadsideAssistanceView({
   /// WhatsApp, que es donde acaban de verdad: la central se las dicta o se las
   /// pega al operario cuando la direccion no basta para encontrar el camion.
   const [marcandoId, setMarcandoId] = useState<number | null>(null);
+  /** Qué asistencia se está moviendo de cola, para no dejar pulsar dos veces. */
+  const [movimientoColaId, setMovimientoColaId] = useState<number | null>(null);
   const [copiedAutorizacionId, setCopiedAutorizacionId] = useState<number | null>(null);
 
   /**
@@ -1160,6 +1272,40 @@ export default function RoadsideAssistanceView({
       setLocalError(e instanceof Error ? e.message : "No se pudo cambiar el seguimiento.");
     } finally {
       setMarcandoId(null);
+    }
+  }
+
+  /**
+   * Adelantar la que espera, o sacarla de la cola.
+   *
+   * Las dos las decide quien está mirando el panel: si la que espera resulta
+   * más urgente, o si el operario se alarga y hay que dársela a otro.
+   */
+  async function cambiarCola(
+    assistance: RoadsideAssistance,
+    accion: "adelantar" | "quitar"
+  ) {
+    setMovimientoColaId(assistance.id);
+    setLocalError("");
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/roadside-assistances/${assistance.id}/cola`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("sea-admin-token") ?? ""}`,
+          },
+          body: JSON.stringify({ accion }),
+        }
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || "No se pudo cambiar la cola.");
+      onRefresh();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : "No se pudo cambiar la cola.");
+    } finally {
+      setMovimientoColaId(null);
     }
   }
 
@@ -1587,6 +1733,19 @@ export default function RoadsideAssistanceView({
                 className="shrink-0 rounded-lg border border-slate-600 px-2.5 py-1 text-xs font-bold text-slate-200 hover:bg-slate-700"
               >
                 Ver todas
+              </button>
+            </div>
+          )}
+
+          {avisoCola && panelTab !== "nueva" && (
+            <div className="flex items-start justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-sm font-semibold text-amber-200">
+              <span>{avisoCola}</span>
+              <button
+                type="button"
+                onClick={() => setAvisoCola("")}
+                className="shrink-0 rounded p-0.5 text-amber-200 hover:bg-amber-500/20"
+              >
+                <X className="h-4 w-4" />
               </button>
             </div>
           )}
@@ -2023,10 +2182,15 @@ export default function RoadsideAssistanceView({
                     <option value="">Sin asignar</option>
                     {roadsideCapableTechs.map((tech) => (
                       <option key={tech.name} value={tech.name}>
-                        {tech.name}
+                        {etiquetaTecnico(tech)}
                       </option>
                     ))}
                   </select>
+                  {avisoDeCola(draft.assignedTechName, null) && (
+                    <span className="mt-1 block rounded-lg bg-amber-500/10 px-2 py-1.5 text-xs text-amber-300">
+                      {avisoDeCola(draft.assignedTechName, null)}
+                    </span>
+                  )}
                 </label>
 
                 <label className="block">
@@ -2338,7 +2502,50 @@ export default function RoadsideAssistanceView({
                          * lugar se dice lo que de verdad pasa —está en manos del
                          * taller— y se enseña la autorización, que es el dato
                          * que hace falta para casar su factura con esto. */}
-                      {assistance.sinSeguimiento && !isClosed(assistance.status) ? (
+                      {/*
+                        En espera no lleva los ocho pasos: no ha empezado, y
+                        pintar el primer paso hecho diría que el operario ya va
+                        de camino. En su lugar se dice detrás de cuál entra y se
+                        dan las dos salidas manuales.
+                      */}
+                      {enEspera(
+                        {
+                          id: assistance.id,
+                          assignedTechName: assistance.assignedTechName ?? null,
+                          status: assistance.status,
+                          esperaTrasId: assistance.esperaTrasId ?? null,
+                        },
+                        paraCola
+                      ) ? (
+                        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-black uppercase tracking-wide text-amber-300">
+                              ⏳ En espera
+                            </span>
+                            <span className="text-[11px] text-amber-200/70">
+                              entra al cerrar la #{assistance.esperaTrasId}
+                            </span>
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => cambiarCola(assistance, "adelantar")}
+                              disabled={movimientoColaId === assistance.id}
+                              className="rounded-lg bg-amber-500 px-2.5 py-1 text-[11px] font-black text-slate-950 disabled:opacity-50"
+                            >
+                              Adelantar ahora
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => cambiarCola(assistance, "quitar")}
+                              disabled={movimientoColaId === assistance.id}
+                              className="rounded-lg border border-slate-600 px-2.5 py-1 text-[11px] font-bold text-slate-300 disabled:opacity-50"
+                            >
+                              Quitar de la cola
+                            </button>
+                          </div>
+                        </div>
+                      ) : assistance.sinSeguimiento && !isClosed(assistance.status) ? (
                         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-xs font-black uppercase tracking-wide text-amber-300">
@@ -3356,10 +3563,15 @@ export default function RoadsideAssistanceView({
                     <option value="">Sin asignar</option>
                     {editAssignableTechs.map((tech) => (
                       <option key={tech.name} value={tech.name}>
-                        {tech.name}
+                        {etiquetaTecnico(tech)}
                       </option>
                     ))}
                   </select>
+                  {avisoDeCola(editDraft.assignedTechName, editingAssistance?.id ?? null) && (
+                    <span className="mt-1 block rounded-lg bg-amber-500/10 px-2 py-1.5 text-xs text-amber-300">
+                      {avisoDeCola(editDraft.assignedTechName, editingAssistance?.id ?? null)}
+                    </span>
+                  )}
                 </label>
 
                 <label className="block">

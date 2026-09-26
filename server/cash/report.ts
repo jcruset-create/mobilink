@@ -39,12 +39,13 @@ import { composicionDeIngreso } from "./bankdeposits.ts";
 import { formatearIban } from "./domain/bankaccount.ts";
 import { leerDocumento } from "./storage.ts";
 
-const M = 40;
-const GRIS = "#64748b";
-const TINTA = "#0f172a";
+export const M = 40;
+export const GRIS = "#64748b";
+export const TINTA = "#0f172a";
 
 const ETIQUETA_TIPO: Record<string, string> = {
   COLLECTION: "Cobro",
+  REFUND: "Abono",
   PAYMENT: "Pago",
   MANUAL_IN: "Entrada",
   MANUAL_OUT: "Salida",
@@ -142,7 +143,7 @@ async function imagenesDelCatalogo(
  * deja a los dos logotipos apretados contra el centro. Con este, cada uno se
  * va a su esquina y el título respira en medio.
  */
-const M_LOGO = 24;
+export const M_LOGO = 24;
 
 /**
  * El logotipo de Mobilink Cash para la cabecera de los informes.
@@ -155,7 +156,7 @@ const M_LOGO = 24;
  * Si faltara, se usa el de siempre: un recuadro se aguanta, quedarse sin
  * cabecera no.
  */
-function logoMobilink(): string | null {
+export function logoMobilink(): string | null {
   for (const nombre of ["logo-cash-fondo-oscuro.png", "logo-cash.png"]) {
     const fichero = path.join(process.cwd(), "public", nombre);
     if (fs.existsSync(fichero)) return fichero;
@@ -336,6 +337,10 @@ async function construirPortada(d: {
   titulo("Resumen de la jornada");
   fila("Fondo inicial", eur(s.fondoInicialCentimos));
   fila("Cobros", eur(detalle.cobros.totalCentimos));
+  // Solo cuando los hay: una línea de «Abonos 0,00 €» en cada cierre es ruido.
+  if (detalle.abonos.totalCentimos > 0) {
+    fila("Abonos (cobros devueltos)", `−${eur(detalle.abonos.totalCentimos)}`);
+  }
   fila("Pagos", eur(detalle.pagos.totalCentimos));
   fila("Salidas y entregas", eur(detalle.salidasCentimos + detalle.entregasCentimos));
   /*
@@ -910,10 +915,13 @@ async function construirPortada(d: {
 
 // ── Montaje con los justificantes ──────────────────────────────────────────
 
-async function montar(
-  portada: Buffer,
-  documentos: Awaited<ReturnType<typeof documentosDeJornada>>
-): Promise<Buffer> {
+/**
+ * Lo mínimo que hace falta para incrustar un justificante detrás de una
+ * portada. Lo cumplen los de la jornada y los tickets de una liquidación.
+ */
+export type Anexo = { ruta: string; mime: string; nombre: string; operacionNumero: string };
+
+export async function montar(portada: Buffer, documentos: readonly Anexo[]): Promise<Buffer> {
   const final = await PDFLib.load(portada);
 
   for (const d of documentos) {
@@ -953,7 +961,7 @@ async function montar(
   return Buffer.from(await final.save());
 }
 
-async function paginaDeAviso(
+export async function paginaDeAviso(
   pdf: PDFLib,
   d: { operacionNumero: string; nombre: string },
   mensaje: string

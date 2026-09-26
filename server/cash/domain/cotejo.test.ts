@@ -544,3 +544,42 @@ describe("el día vacío", () => {
     expect(r.totales.erpCobros).toBe(0);
   });
 });
+
+/**
+ * El 25/09/2026: un cobro de 249,78 y un abono de 59,90, los dos por TPV CAIXA
+ * y del mismo cliente. En Mobilink el abono es una operación REFUND que llega
+ * al cotejo como tipo ABONO, con el importe en positivo.
+ */
+describe("los abonos en el cotejo", () => {
+  const erp: LineaErp[] = [
+    { justificante: "20865", referencia: null, formaErp: "TPV CAIXA", importeCentimos: 24978, tipo: "COBRO" },
+    { justificante: "20864", referencia: "P2_26/21", formaErp: "TPV CAIXA", importeCentimos: 5990, tipo: "ABONO" },
+  ];
+  const mob: LineaMobilink[] = [
+    { id: 1, numero: "TAR1-C-26-101", referencia: null, formaCodigo: "TARJETA", importeCentimos: 24978, tipo: "COBRO" },
+    { id: 2, numero: "TAR1-AB-26-001", referencia: "P2_26/21", formaCodigo: "TARJETA", importeCentimos: 5990, tipo: "ABONO" },
+  ];
+
+  it("cuadra, y los totales de cobros van NETOS", () => {
+    const r = cotejar(erp, mob, EQUIV);
+    expect(r.cuadra).toBe(true);
+    expect(r.totales.erpCobros).toBe(24978 - 5990);
+    expect(r.totales.mobilinkCobros).toBe(24978 - 5990);
+  });
+
+  it("un abono NO empareja con un cobro del mismo importe", () => {
+    /*
+     * 59,90 devueltos y 59,90 cobrados no son la misma operación por mucho que
+     * coincidan en cifra: son dos movimientos de signo contrario. Emparejarlos
+     * daría «todo cuadra» habiendo un cobro sin abono y un abono sin cobro.
+     */
+    const mobSinAbono: LineaMobilink[] = [
+      mob[0]!,
+      { id: 3, numero: "TAR1-C-26-102", referencia: null, formaCodigo: "TARJETA", importeCentimos: 5990, tipo: "COBRO" },
+    ];
+    const r = cotejar(erp, mobSinAbono, EQUIV);
+    expect(r.cuadra).toBe(false);
+    expect(r.soloEnErp.map((l) => l.tipo)).toContain("ABONO");
+    expect(r.soloEnMobilink.map((l) => l.tipo)).toContain("COBRO");
+  });
+});
