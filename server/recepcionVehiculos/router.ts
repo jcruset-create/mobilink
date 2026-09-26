@@ -840,18 +840,16 @@ export function createRecepcionVehiculosRouter(dep: DependenciasRecepcionVehicul
         /*
          * La cita se modifica en JavaScript, no con `jsonb_set`.
          *
-         * `scheduled_jobs.data` guarda el JSON como TEXTO, no como JSONB: por
-         * eso todo el resto del código lo lee con `data::jsonb->>'…'` —el
-         * cast sobra en una columna jsonb— y lo escribe con `JSON.stringify`.
-         * Asignarle el resultado de `jsonb_set` reventaba con «column data is
-         * of type text but expression is of type jsonb», y como el fallo
-         * ocurría DENTRO de la transacción, la conversión entera se caía: la
-         * recepción se quedaba pendiente y en pantalla solo salía un error
-         * genérico.
+         * CORRECCIÓN: aquí ponía que `scheduled_jobs.data` era TEXT. Es falso
+         * —es JSONB, comprobado contra producción: el endpoint devuelve
+         * `row.data` sin tocar y llegan objetos, y `node-postgres` solo hace
+         * eso con json/jsonb—. El diagnóstico estaba mal escrito y se queda
+         * aquí el desmentido para que nadie vuelva a creérselo.
          *
-         * Se lee la fila bloqueada, se toca el JSON aquí y se vuelve a
-         * escribir como texto, que es lo que hace el endpoint de la agenda
-         * desde siempre. Así da igual el tipo de la columna.
+         * El método sí es el bueno, por otro motivo: una conversión cambia
+         * varias claves a la vez y leer-tocar-escribir bajo `FOR UPDATE` las
+         * deja todas o ninguna. Pasar `JSON.stringify` a un parámetro vale
+         * para una columna jsonb, que es lo que hace el resto del código.
          */
         const filaCita = await cliente.query(
           `SELECT data FROM scheduled_jobs WHERE id = $1 FOR UPDATE`,

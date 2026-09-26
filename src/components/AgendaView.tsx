@@ -1,6 +1,13 @@
 import { apiFetch } from "../modules/apiFetch";
 import { useRecepcionesPendientes } from "../modules/useRecepcionesPendientes";
 import {
+  estadoConfirmacion,
+  rotuloConfirmacion,
+  rotuloEnvio,
+  type EstadoConfirmacion,
+  type EstadoEnvioWhatsapp,
+} from "../modules/confirmacionCita";
+import {
   esperaLegible,
   horaDeRecepcion,
   idsDeTrabajosConCita,
@@ -129,6 +136,34 @@ export type ScheduledJob = {
   sendReminder24h?: boolean;
   sendReminder1h?: boolean;
   whatsappReminder24hSentAtMs?: number | null;
+  /* ── Confirmación por WhatsApp ──────────────────────────────────────────
+   * Tres bloques que NO se mezclan: el WhatsApp de «cita creada», el de la
+   * solicitud de confirmación, y lo que ha contestado el cliente. Que el
+   * cliente haya LEÍDO el mensaje no dice si va a venir.
+   */
+  creacionWhatsappSid?: string | null;
+  creacionWhatsappSentAtMs?: number | null;
+  creacionWhatsappStatus?: EstadoEnvioWhatsapp | null;
+  creacionWhatsappTo?: string | null;
+  creacionWhatsappContentSid?: string | null;
+
+  confirmationWhatsappSid?: string | null;
+  confirmationWhatsappSentAtMs?: number | null;
+  confirmationWhatsappDeliveredAtMs?: number | null;
+  confirmationWhatsappReadAtMs?: number | null;
+  confirmationWhatsappFailedAtMs?: number | null;
+  confirmationWhatsappStatus?: EstadoEnvioWhatsapp | null;
+  confirmationWhatsappTo?: string | null;
+  confirmationWhatsappContentSid?: string | null;
+
+  confirmationStatus?: EstadoConfirmacion | null;
+  confirmationWhatsappAttemptCount?: number | null;
+  confirmationWhatsappLastAttemptAtMs?: number | null;
+  confirmationWhatsappLastError?: string | null;
+  confirmedAtMs?: number | null;
+  rescheduleRequestedAtMs?: number | null;
+  confirmationResponse?: string | null;
+  confirmationResponseMessageSid?: string | null;
   whatsappReminder1hSentAtMs?: number | null;
   manualReminderSentAtMs?: number | null;
   notes?: string;
@@ -460,6 +495,14 @@ function getScheduledEndTime(job: any): string {
   }
 
   return addMinutesToTime(getScheduledStartTime(job), DEFAULT_ESTIMATED_MINUTES);
+}
+
+/** «26/09 10:42», que es lo que cabe al lado de un rótulo en la ficha. */
+function fechaHoraCorta(ms?: number | null): string {
+  if (!ms) return "";
+  const d = new Date(ms);
+  const dos = (n: number) => String(n).padStart(2, "0");
+  return `${dos(d.getDate())}/${dos(d.getMonth() + 1)} ${dos(d.getHours())}:${dos(d.getMinutes())}`;
 }
 
 function getSolidAreaClass(area: AreaKey) {
@@ -1680,6 +1723,9 @@ area: template.area,
               "Content-Type": "application/json",
             },
 body: JSON.stringify({
+  // Para poder apuntar el SID en la cita: sin esto el mensaje de creación
+  // sale sin dejar rastro, que es como estaba antes.
+  citaId: scheduled.id,
   customerName: scheduled.customerName,
   customerPhone: scheduled.customerPhone,
   jobDescription: getAgendaWhatsappV2Description({
@@ -1811,6 +1857,7 @@ async function sendAgendaWhatsApp(job: ScheduledJob) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+  citaId: job.id,
   customerName: job.customerName || "cliente",
   customerPhone: job.customerPhone,
   jobDescription: getAgendaWhatsappV2Description({
@@ -2637,6 +2684,57 @@ appendLog(
                             {job.customerName}
                           </div>
                         )}
+                        {/*
+                          Dos indicadores, nunca uno.
+
+                          Uno dice qué pasó con el MENSAJE y otro qué dijo el
+                          CLIENTE. Juntarlos en un solo distintivo sería decir
+                          que una cita leída está confirmada, que es justo la
+                          confusión que hace que el taller cuente con un coche
+                          que no va a venir.
+
+                          Solo iconos en la tarjeta; las horas, en la ficha.
+                        */}
+                        {(() => {
+                          const envio = rotuloEnvio(job.confirmationWhatsappStatus);
+                          const noSolicitada =
+                            estadoConfirmacion(job) === "not_requested";
+                          // Sin mensaje y sin decisión no se pinta nada: la
+                          // inmensa mayoría de las citas están así.
+                          if (!envio && !job.confirmationWhatsappSentAtMs && !noSolicitada) {
+                            return null;
+                          }
+                          const conf = rotuloConfirmacion(estadoConfirmacion(job));
+                          return (
+                            <div className="mt-1 flex flex-wrap items-center gap-1 text-[9px] font-black">
+                              {envio && (
+                                <span
+                                  title={`WhatsApp de confirmación: ${envio.texto}`}
+                                  className={`rounded-full px-1.5 py-0.5 ${
+                                    job.confirmationWhatsappStatus === "failed"
+                                      ? "bg-red-100 text-red-800"
+                                      : "bg-white/90 text-slate-800"
+                                  }`}
+                                >
+                                  {envio.icono}
+                                </span>
+                              )}
+                              <span
+                                title={`Confirmación del cliente: ${conf.texto}`}
+                                className={`rounded-full px-1.5 py-0.5 ${
+                                  estadoConfirmacion(job) === "confirmed"
+                                    ? "bg-emerald-100 text-emerald-900"
+                                    : estadoConfirmacion(job) === "reschedule"
+                                      ? "bg-amber-100 text-amber-900"
+                                      : "bg-white/70 text-slate-600"
+                                }`}
+                              >
+                                {conf.icono}
+                              </span>
+                            </div>
+                          );
+                        })()}
+
                         <div className="mt-1 flex flex-wrap gap-1 text-[9px] font-black">
   {job.sendWhatsAppOnSave && (
     <span className="rounded-full bg-white/90 px-1.5 py-0.5 text-green-700">
@@ -3592,6 +3690,58 @@ setDraft((prev) => ({
                   las tres son destructivas, y ponerlas al lado del botón que
                   se pulsa siempre es cómo se cancela una cita sin querer.
                 */}
+                {/*
+                  El detalle, aquí: en la tarjeta solo caben iconos, y una
+                  hora sin contexto no dice nada. Las dos líneas van separadas
+                  porque son dos cosas distintas y se leen a la vez: «leído a
+                  las 10:42 · sin confirmar» es una situación concreta que el
+                  taller tiene que poder ver de un vistazo.
+                */}
+                {(() => {
+                  if (editingJobId == null) return null;
+                  const cita = scheduledJobs.find((j) => j.id === editingJobId);
+                  if (!cita) return null;
+                  const noSolicitada = estadoConfirmacion(cita) === "not_requested";
+                  if (!cita.confirmationWhatsappSentAtMs && !noSolicitada) return null;
+
+                  const envio = rotuloEnvio(cita.confirmationWhatsappStatus);
+                  const conf = rotuloConfirmacion(estadoConfirmacion(cita));
+                  const cuandoEnvio =
+                    cita.confirmationWhatsappFailedAtMs ??
+                    cita.confirmationWhatsappReadAtMs ??
+                    cita.confirmationWhatsappDeliveredAtMs ??
+                    cita.confirmationWhatsappSentAtMs;
+                  const cuandoConf =
+                    cita.confirmedAtMs ?? cita.rescheduleRequestedAtMs ?? null;
+
+                  return (
+                    <div className="mb-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-500">WhatsApp</span>
+                        <span className="font-semibold text-slate-900">
+                          {envio ? `${envio.icono} ${envio.texto}` : "—"}
+                          {cuandoEnvio ? ` · ${fechaHoraCorta(cuandoEnvio)}` : ""}
+                        </span>
+                      </div>
+                      {cita.confirmationWhatsappStatus === "failed" &&
+                        cita.confirmationWhatsappLastError && (
+                          <div className="mt-1 text-xs text-red-700">
+                            No se pudo enviar tras{" "}
+                            {cita.confirmationWhatsappAttemptCount ?? 0} intentos:{" "}
+                            {cita.confirmationWhatsappLastError}
+                          </div>
+                        )}
+                      <div className="mt-1 flex items-center justify-between gap-3">
+                        <span className="text-slate-500">Confirmación</span>
+                        <span className="font-semibold text-slate-900">
+                          {conf.icono} {conf.texto}
+                          {cuandoConf ? ` · ${fechaHoraCorta(cuandoConf)}` : ""}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {editingJobId != null && (
                   <div className="mb-3 flex gap-3">
                     {(() => {
