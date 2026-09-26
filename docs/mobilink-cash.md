@@ -340,6 +340,29 @@ página diciéndolo, con su número de operación. Un cierre sin informe por una
 factura corrupta sería peor que un informe con un hueco señalado.
 
 
+**Los tickets van juntos en A4, al final.** Las facturas y todo lo que no es un
+ticket siguen como siempre, enteros y en su orden. Los tickets van detrás, en
+hojas A4 agrupadas:
+- En la liquidación, por concepto (dietas, peajes…).
+- En el cierre, por concepto de gasto o por tipo de operación (cobros, pagos,
+  abonos).
+- En el ingreso, los comprobantes del banco.
+
+Van a tamaño real, reduciendo hasta el 80 % solo si con eso sobra una hoja, en
+orden de lectura y con un rótulo encima (número, día e importe) que no tapa el
+escaneo. Cada hoja lleva cabecera con el grupo, cuántos tickets son y su suma.
+Para que quepan se recorta el blanco que deja el escáner (`recorteTicket.ts`,
+con `mupdf`); el reparto es dominio puro (`domain/mosaico.ts`). Con los tickets
+reales de una semana caben 4 dietas o 6 peajes por hoja.
+
+Hay tres salvaguardas:
+- Una página girada, una que no se deja leer o una foto van como antes.
+- Un recorte que se come más del 40 % de un ticket no se aplica. Pasó con un
+  peaje desvaído, que se quedaba en el código de barras.
+- El fichero guardado no se toca.
+
+Diseño en `docs/PROMPT_tickets_en_a4.md`.
+
 **Al cerrar, la hoja del cierre se imprime sola.** Sin los justificantes, que
 ya están en papel en el cajón (`/sessions/:id/report.pdf?justificantes=0`); el
 informe completo sigue en su botón. Se carga en un iframe invisible y sale el

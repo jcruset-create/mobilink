@@ -1,15 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Search, Pencil, Trash2, KeyRound, ShieldCheck } from "lucide-react";
 import { useAdminAuth } from "../contexts/AdminAuthContext";
 import {
   listAppUsuarios, crearUsuarioAuth, guardarAppUsuario, resetPasswordUsuario,
-  eliminarAppUsuario, listSeaEmployees, listTcEmpresas,
+  eliminarAppUsuario, listSeaEmployees, listTcEmpresas, licenciasDeUsuario,
   type AppUsuario,
 } from "../services/data";
 import { MODULOS_APP } from "../config/modulosApp";
 import AccesosModulos from "../components/AccesosModulos";
 import {
-  accesosAPayload, estadoInicialAccesos, type AccesoEdit,
+  accesosAPayload, estadoInicialAccesos, modulosGuardados,
+  type AccesoEdit, type LicenciaModulo,
 } from "../components/accesosModulosHelpers";
 import {
   Modal, TableWrap, thCls, tdCls, TextField, SelectField, CheckField,
@@ -181,13 +182,21 @@ function ModalUsuarioApp({ usuario, onClose, onSaved }: {
   const [accesos, setAccesos] = useState<Record<string, AccesoEdit>>(
     () => estadoInicialAccesos(usuario?.accesos),
   );
+  const [licencias, setLicencias] = useState<LicenciaModulo[] | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
+
+  // Lo que el usuario YA tiene guardado. Se calcula una vez, al abrir: si se
+  // recalculara con el estado del editor, desmarcar un módulo lo convertiría
+  // al instante en "nuevo" y no se podría volver a marcar cuando la licencia
+  // está vencida.
+  const yaGuardados = useMemo(() => modulosGuardados(usuario?.accesos), [usuario]);
 
   useEffect(() => {
     void listSeaEmployees().then(setEmpleados);
     void listTcEmpresas().then(setEmpresas);
-  }, []);
+    void licenciasDeUsuario(usuario?.id).then(setLicencias);
+  }, [usuario]);
 
   async function guardar() {
     if (username.trim().length < 2) { setError("El usuario debe tener al menos 2 caracteres."); return; }
@@ -254,7 +263,8 @@ function ModalUsuarioApp({ usuario, onClose, onSaved }: {
       </div>
 
       <div className="mb-2 mt-4 text-[10px] font-bold uppercase tracking-wide text-slate-400">Accesos por módulo</div>
-      <AccesosModulos accesos={accesos} empresas={empresas} onChange={setAccesos} />
+      <AccesosModulos accesos={accesos} empresas={empresas} onChange={setAccesos}
+        licencias={licencias} yaGuardados={yaGuardados} />
       <p className="mt-2 text-[12px] text-slate-500">
         Las pantallas desmarcadas no aparecen en el menú del usuario. En esta fase el filtrado por pantalla se aplica en Administración; en Almacén y TyreControl se guarda para fases futuras.
       </p>

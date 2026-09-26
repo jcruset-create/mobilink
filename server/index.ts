@@ -4165,7 +4165,13 @@ app.put("/api/sea-core/employees/:id/pin", async (req, res) => {
     res.json({ ok: true, tienePin: Boolean(pin) });
   } catch (error) {
     console.error("PUT /api/sea-core/employees/:id/pin error:", error);
-    res.status(500).json({ error: "Error guardando el PIN" });
+    // Se devuelve el motivo, no un "Error guardando el PIN" a secas. Con el
+    // mensaje mudo hubo que ir a buscar a mano por que fallaba, y la causa
+    // -pgcrypto vive en el esquema `extensions` y la funcion solo miraba
+    // `public`- la decia el error de Postgres desde el primer intento. Quien
+    // llega aqui ya ha pasado por verificarAdminApp.
+    const motivo = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: `Error guardando el PIN: ${motivo}` });
   }
 });
 

@@ -25,7 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 import PDFDocument from "pdfkit";
-import { PDFDocument as PDFLib } from "pdf-lib";
+import { PDFDocument as PDFLib, type PDFPage, StandardFonts, rgb } from "pdf-lib";
 import pool from "../db.ts";
 import { formatearEuros } from "./domain/money.ts";
 import { logoDeSemilla } from "./domain/banks.ts";
@@ -38,6 +38,8 @@ import { repartirArqueo } from "./domain/erpsplit.ts";
 import { composicionDeIngreso } from "./bankdeposits.ts";
 import { formatearIban } from "./domain/bankaccount.ts";
 import { leerDocumento } from "./storage.ts";
+import { PT_POR_MM, repartir, type Zona } from "./domain/mosaico.ts";
+import { paginasDeTicket, type PaginaDeTicket } from "./recorteTicket.ts";
 
 export const M = 40;
 export const GRIS = "#64748b";
@@ -220,7 +222,25 @@ export async function informeCierre(
     piezasBolsaDe,
   });
 
-  return montar(portada, conJustificantes ? documentos : []);
+  /*
+   * Los tickets del día van al final, juntos en A4 y agrupados por concepto o
+   * por tipo de operación, cada uno con su número de operación e importe.
+   */
+  const cajaFila = caja.rows[0] as { centro?: string; nombre?: string } | undefined;
+  const fecha = String(detalle.sesion.fecha ?? "").slice(0, 10);
+  return montar(
+    portada,
+    conJustificantes
+      ? documentos.map((d) => ({
+          ...d,
+          rotulo: d.importeCentimos != null ? `${d.operacionNumero} · ${eur(d.importeCentimos)}` : d.operacionNumero,
+          claveImporte: d.importeTicket ? `documento-${d.id}` : `operacion-${d.operacionNumero}`,
+        }))
+      : [],
+    {
+      titulo: `Cierre ${[cajaFila?.centro, cajaFila?.nombre].filter(Boolean).join(" · ")} · ${fecha.split("-").reverse().join("/")}`,
+    }
+  );
 }
 
 // ── Portada y listados ─────────────────────────────────────────────────────
@@ -936,12 +956,70 @@ async function construirPortada(d: {
  * Lo mínimo que hace falta para incrustar un justificante detrás de una
  * portada. Lo cumplen los de la jornada y los tickets de una liquidación.
  */
-export type Anexo = { ruta: string; mime: string; nombre: string; operacionNumero: string };
+export type Anexo = {
+  ruta: string;
+  mime: string;
+  nombre: string;
+  operacionNumero: string;
+  /** Con qué otros tickets va en la hoja: «Dietas», «Peajes», «Cobros»… */
+  grupo?: string;
+  /** Lo que se escribe encima del ticket. Por defecto, el número de operación. */
+  rotulo?: string;
+  /** Lo que suma en la cabecera de su grupo. */
+  importeCentimos?: number | null;
+  /**
+   * Qué importe es. Dos justificantes de la misma operación (el albarán y el
+   * ticket del datáfono) llevan el mismo importe y suman una vez, no dos.
+   */
+  claveImporte?: string;
+};
 
-export async function montar(portada: Buffer, documentos: readonly Anexo[]): Promise<Buffer> {
+/** A4, en puntos. */
+const A4 = { ancho: 595.28, alto: 841.89 };
+/** Márgenes de las hojas de tickets: 8 mm a los lados y abajo; la cabecera arriba. */
+const MARGEN_TICKETS = 8 * PT_POR_MM;
+const CABECERA_TICKETS = 14 * PT_POR_MM;
+const ZONA_TICKETS: Zona = {
+  ancho: A4.ancho - 2 * MARGEN_TICKETS,
+  alto: A4.alto - CABECERA_TICKETS - MARGEN_TICKETS,
+  separacion: 8,
+  rotulo: 11,
+};
+
+/**
+ * La Helvetica de los PDF solo sabe escribir Latin-1 (y el €): un nombre con
+ * otra letra haría fallar el informe entero por un rótulo.
+ */
+const escribible = (t: string) => t.replace(/[^\x20-\x7E\u00A0-\u00FF€·–—…‘’“”]/g, "?");
+
+type TicketSuelto = {
+  anexo: Anexo;
+  /** El orden del anexo, para sumar su importe una sola vez aunque tenga varias páginas. */
+  anexoIndice: number;
+  pagina: PDFPage;
+  caja: PaginaDeTicket["caja"];
+  tamano: PaginaDeTicket["tamano"];
+};
+
+/**
+ * La portada y, detrás, los justificantes.
+ *
+ * Las facturas y todo lo que no es un ticket van primero, en su orden y
+ * enteras, como siempre. Los tickets van **al final, juntos en hojas A4**,
+ * agrupados (por concepto, por tipo de operación…) y en el orden en que
+ * llegan: al 100 %, reduciendo hasta el 80 % si con eso sobra una hoja. Cada
+ * uno con un rótulo encima, fuera del escaneo, y cada hoja con cabecera.
+ * Diseño en `docs/PROMPT_tickets_en_a4.md`.
+ */
+export async function montar(
+  portada: Buffer,
+  documentos: readonly Anexo[],
+  { titulo = "Justificantes" }: { titulo?: string } = {}
+): Promise<Buffer> {
   const final = await PDFLib.load(portada);
+  const tickets: TicketSuelto[] = [];
 
-  for (const d of documentos) {
+  for (const [anexoIndice, d] of documentos.entries()) {
     const contenido = await leerDocumento(d.ruta);
     if (!contenido) {
       await paginaDeAviso(final, d, "No se ha podido recuperar este justificante.");
@@ -951,8 +1029,12 @@ export async function montar(portada: Buffer, documentos: readonly Anexo[]): Pro
     try {
       if (d.mime === "application/pdf") {
         const adjunto = await PDFLib.load(contenido, { ignoreEncryption: true });
-        const paginas = await final.copyPages(adjunto, adjunto.getPageIndices());
-        for (const p of paginas) final.addPage(p);
+        const deTicket = new Map(paginasDeTicket(contenido, adjunto, ZONA_TICKETS).map((t) => [t.indice, t]));
+        const enteras = adjunto.getPageIndices().filter((i) => !deTicket.has(i));
+        for (const p of await final.copyPages(adjunto, enteras)) final.addPage(p);
+        for (const t of deTicket.values()) {
+          tickets.push({ anexo: d, anexoIndice, pagina: adjunto.getPage(t.indice), caja: t.caja, tamano: t.tamano });
+        }
       } else {
         const imagen =
           d.mime === "image/png"
@@ -975,7 +1057,69 @@ export async function montar(portada: Buffer, documentos: readonly Anexo[]): Pro
     }
   }
 
+  if (tickets.length > 0) await hojasDeTickets(final, tickets, titulo);
   return Buffer.from(await final.save());
+}
+
+/** Los tickets, agrupados, en hojas A4. */
+async function hojasDeTickets(final: PDFLib, tickets: readonly TicketSuelto[], titulo: string): Promise<void> {
+  const grupos = new Map<string, TicketSuelto[]>();
+  for (const t of tickets) {
+    const g = t.anexo.grupo?.trim() || "Tickets";
+    grupos.set(g, [...(grupos.get(g) ?? []), t]);
+  }
+  const normal = await final.embedFont(StandardFonts.Helvetica);
+  const negrita = await final.embedFont(StandardFonts.HelveticaBold);
+
+  const planes = [...grupos].map(([grupo, suyos]) => ({
+    grupo,
+    suyos,
+    reparto: repartir(suyos.map((t) => t.tamano), ZONA_TICKETS),
+  }));
+  const totalHojas = planes.reduce((a, p) => a + (p.reparto?.hojas.length ?? 0), 0);
+  let hojaNumero = 0;
+
+  for (const { grupo, suyos, reparto } of planes) {
+    if (!reparto) continue; // No pasa: `paginasDeTicket` ya dejó fuera lo que no cabe ni al 80 %.
+
+    // El total del grupo, si todos sus justificantes dicen su importe. Un PDF de varias páginas cuenta una vez.
+    const importes = new Map(suyos.map((t) => [t.anexo.claveImporte ?? `anexo-${t.anexoIndice}`, t.anexo.importeCentimos]));
+    const justificantes = new Set(suyos.map((t) => t.anexoIndice)).size;
+    const conImporte = [...importes.values()].every((v) => typeof v === "number");
+    const total = conImporte ? [...importes.values()].reduce<number>((a, v) => a + (v as number), 0) : null;
+    const resumen =
+      `${grupo}: ${justificantes} ${justificantes === 1 ? "ticket" : "tickets"}` +
+      (total != null ? ` · ${eur(total)}` : "") +
+      (reparto.escala < 1 ? ` · al ${Math.round(reparto.escala * 100)} %` : "");
+
+    for (const hoja of reparto.hojas) {
+      hojaNumero++;
+      const pagina = final.addPage([A4.ancho, A4.alto]);
+      pagina.drawRectangle({ x: 0, y: A4.alto - 34, width: A4.ancho, height: 34, color: rgb(0.063, 0.102, 0.2) });
+      pagina.drawText("Mobilink Cash", { x: MARGEN_TICKETS, y: A4.alto - 22, size: 11, font: negrita, color: rgb(1, 1, 1) });
+      const derecha = `tickets ${hojaNumero} de ${totalHojas}`;
+      const anchoDerecha = normal.widthOfTextAtSize(derecha, 8);
+      let cabecera = escribible(`${titulo} · ${resumen}`);
+      const sitio = A4.ancho - 2 * MARGEN_TICKETS - 90 - anchoDerecha - 12;
+      while (normal.widthOfTextAtSize(cabecera, 9) > sitio && cabecera.length > 4) cabecera = cabecera.slice(0, -2) + "…";
+      pagina.drawText(cabecera, { x: MARGEN_TICKETS + 90, y: A4.alto - 22, size: 9, font: normal, color: rgb(0.85, 0.88, 0.92) });
+      pagina.drawText(derecha, { x: A4.ancho - MARGEN_TICKETS - anchoDerecha, y: A4.alto - 22, size: 8, font: normal, color: rgb(0.85, 0.88, 0.92) });
+
+      for (const c of hoja) {
+        const t = suyos[c.indice]!;
+        const x = MARGEN_TICKETS + c.x;
+        const arriba = A4.alto - CABECERA_TICKETS - c.y;
+        let rotulo = escribible(t.anexo.rotulo ?? t.anexo.operacionNumero);
+        while (negrita.widthOfTextAtSize(rotulo, 7) > c.ancho && rotulo.length > 4) rotulo = rotulo.slice(0, -2) + "…";
+        pagina.drawText(rotulo, { x, y: arriba - 8, size: 7, font: negrita, color: rgb(0.25, 0.28, 0.33) });
+
+        const incrustada = await final.embedPage(t.pagina, t.caja);
+        const abajo = arriba - ZONA_TICKETS.rotulo - c.alto;
+        pagina.drawPage(incrustada, { x, y: abajo, width: c.ancho, height: c.alto });
+        pagina.drawRectangle({ x, y: abajo, width: c.ancho, height: c.alto, borderColor: rgb(0.78, 0.8, 0.83), borderWidth: 0.6 });
+      }
+    }
+  }
 }
 
 export async function paginaDeAviso(
@@ -1474,6 +1618,10 @@ export async function informeIngreso(empresaId: string, depositId: number): Prom
       anuladoMotivo: null,
       subidoAtMs: 0,
       url: null,
-    }))
+      // Si el banco da un ticket pequeño, va en hoja de tickets con los demás.
+      grupo: "Comprobantes del banco",
+      rotulo: `Ingreso ${ingreso.numero}`,
+    })),
+    { titulo: `Ingreso ${ingreso.numero}` }
   );
 }

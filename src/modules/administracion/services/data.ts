@@ -347,6 +347,7 @@ export async function cancelarNotificacion(id: string): Promise<void> {
 
 // ── Usuarios unificados de la aplicación ─────────────────────
 import { claveInterna } from "./authClave";
+import type { LicenciaModulo } from "../components/accesosModulosHelpers";
 
 export type AccesoModulo = {
   modulo: string;
@@ -366,6 +367,40 @@ export type AppUsuario = {
   employee_id: string | null;
   accesos: AccesoModulo[];
 };
+
+/**
+ * Licencias de la empresa del usuario que se está editando, para que la
+ * pantalla pueda decir qué se puede dar y qué no.
+ *
+ * Sin `userId` (alta nueva) responde por la empresa del administrador.
+ *
+ * Devuelve `null` -y no lista vacía- cuando la consulta falla. La diferencia
+ * no es cosmética: lista vacía significa "esta empresa no tiene NADA
+ * contratado" y apagaría todos los módulos del editor. Mientras la migración
+ * de la fase 12 no esté pegada en Supabase, este RPC no existe, y con lista
+ * vacía nadie podría dar un acceso. `null` quiere decir "no se sabe", y
+ * entonces el editor se comporta como antes: la comprobación de verdad está
+ * en `app_guardar_usuario`, que sí rechaza lo que no toca.
+ */
+export async function licenciasDeUsuario(userId?: string | null): Promise<LicenciaModulo[] | null> {
+  // El try/catch no sobra: supabase-js devuelve `error` cuando responde la
+  // base, pero LANZA cuando ni siquiera llega -sin red, el movil que pierde
+  // cobertura, un CORS-. En Safari eso es un "Load failed" que subia hasta la
+  // ficha del empleado y le pintaba un error rojo a toda la pestaña. Saber las
+  // licencias es un extra para explicarse mejor; que no se sepan nunca puede
+  // tumbar la pantalla.
+  try {
+    const { data, error } = await supabase.rpc("app_licencias_usuario", { p_user_id: userId ?? null });
+    if (error) {
+      console.warn("No se han podido leer las licencias:", error.message);
+      return null;
+    }
+    return (data ?? []) as LicenciaModulo[];
+  } catch (e) {
+    console.warn("No se ha podido consultar las licencias:", e);
+    return null;
+  }
+}
 
 async function tokenSesion(): Promise<string> {
   const { data } = await supabase.auth.getSession();
