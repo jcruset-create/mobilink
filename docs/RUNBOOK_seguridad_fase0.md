@@ -1,6 +1,6 @@
 # Runbook de despliegue — Fase 0 de seguridad
 
-Rama `claude/mobilink-security-5ge9b1`, 19 commits sobre `origin/main` (`593ebd3`).
+Rama `claude/mobilink-security-5ge9b1`, 21 commits sobre `origin/main` (`593ebd3`).
 Versión `package.json`: 1.84.0.
 
 **Nada de este documento se ha ejecutado.** Es el procedimiento, en orden, con
@@ -133,7 +133,7 @@ migración (Fase D) y la autorización de la Fase 1A.
 
 ## B.1 Qué entra
 
-19 commits, en este orden (el orden importa: los dos primeros son módulos de los
+21 commits, en este orden (el orden importa: los dos primeros son módulos de los
 que dependen los demás).
 
 | # | Commit | Qué |
@@ -157,6 +157,8 @@ que dependen los demás).
 | 17 | `26985c7` | Revisión de la migración: cuatro defectos y SEC-067 |
 | 18 | `240b1cd` | `eliminar-auth` autoriza contra la empresa apuntada |
 | 19 | `e0e7a02` | Arnés de pruebas por HTTP |
+| 20 | `d5f383c` | El registro de baja completo; `search_path` estrechado a tres funciones |
+| 21 | `2e1327a` | Este runbook |
 
 Merge a `main` → Render despliega solo (`autoDeploy: true`, rama `main`).
 
