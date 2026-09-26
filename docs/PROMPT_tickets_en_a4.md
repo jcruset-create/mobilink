@@ -51,7 +51,37 @@ La primera maqueta enseñó dos cosas, ya resueltas en la segunda:
   derecha, cada fila centrada) caben los mismos 8 al 77 % en vez del 70 %, y se
   lee en el orden natural. La propuesta es por filas.
 
+### B bis. Agrupados por tipo y a tamaño real (100 %)
+
+Pedido después: agrupar por concepto (dietas, autopista) y ver cuántos caben
+sin reducir. Con el blanco recortado, márgenes de hoja de 8 mm y cabecera de
+14 mm (zona útil de unos 194×275 mm):
+
+| Tipo | Tamaño recortado | Caben por hoja al 100 % |
+|---|---|---|
+| Dietas (bar) | 68×119 mm | **4** (2 filas de 2) |
+| Peajes (Autopistes) | 49×128 mm | **6** (2 filas de 3) |
+| Peaje casi borrado | 48×134 mm | con otro de 128 mm debajo sí cabe; seis así, no |
+
+Sin recortar el blanco serían 2 del bar o 3 peajes por hoja.
+
+La semana de Ivan agrupada y al 100 % son **2 hojas**:
+- Dietas: 4 tickets, 66,40 €.
+- Peajes: 4 tickets, 15,88 €.
+
+Cada hoja lleva en la cabecera el grupo, cuántos tickets son y su suma.
+
 ## C. Decisiones: lo que propongo y lo que necesito que decidas
+
+0. **Agrupados por concepto de gasto**, cada grupo en sus hojas, con el total
+   del grupo en la cabecera. Dentro del grupo, por fecha. Es lo que ya hace el
+   PDF de la liquidación con los totales por concepto. En el cierre, el grupo
+   es el tipo de operación (cobros, pagos, abonos) o el concepto del pago.
+0 bis. ❓ **Escala: 100 % fijo o reducir para ahorrar hojas.** Al 100 %,
+   2 hojas para esa semana. Reduciendo (mínimo 70 %), 1 hoja al 77 %
+   mezclando grupos. Propuesta: **100 % por defecto**; solo se reduce si un
+   ticket no cabe entero en la hoja (el del supermercado), y nunca por debajo
+   del 70 %.
 
 Las marcadas con ❓ son tuyas. Las demás son la propuesta por defecto.
 
@@ -66,10 +96,10 @@ Las marcadas con ❓ son tuyas. Las demás son la propuesta por defecto.
      tras recortar se queda en menos de un cuarto de A4. Se prueba con
      facturas reales de Genes antes de darlo por bueno.
 2. **Nunca se amplía y nunca se baja del 70 %.** El texto de un ticket
-   térmico mide unos 2,5 mm; al 70 % queda en 1,75 mm, que se lee impreso. En
-   cada hoja todos los tickets van a **la misma escala**, la mayor que permita
-   meter el máximo. Un ticket más largo de lo que cabe al 70 % (el de un
-   supermercado de 60 cm) sigue como hoy, en su hoja.
+   térmico mide unos 2,5 mm; al 70 % queda en 1,75 mm, que se lee impreso.
+   Según C.0 bis, la escala es el 100 % salvo que un ticket no quepa. Un ticket
+   más largo de lo que cabe al 70 % (el de un supermercado de 60 cm) sigue
+   como hoy, en su hoja.
 3. **El recorte no pinta nada encima del escaneo.** Solo se quita blanco de los
    bordes, con 2 mm de aire. Si el recorte sale raro (menos del 30 % de la
    página o la página entera sin tinta), no se recorta.
@@ -111,9 +141,9 @@ Las marcadas con ❓ son tuyas. Las demás son la propuesta por defecto.
 > 1. **Dominio puro** `server/cash/domain/mosaico.ts`: entra una lista de
 >    tamaños (ancho y alto en puntos, ya recortados) y los márgenes de A4;
 >    salen hojas con, para cada ticket, posición, escala y hueco del rótulo.
->    Sin E/S. Reglas: reparto por filas, cada fila centrada; nunca ampliar;
->    escala mínima 0,70; misma escala en toda la hoja; la mayor escala que
->    meta el máximo de tickets; el orden de entrada se respeta en orden de
+>    Sin E/S. Reglas: por grupos (C.0), cada grupo empieza hoja; reparto por
+>    filas, cada fila centrada; escala según C.0 bis (100 % por defecto,
+>    nunca ampliar, mínimo 0,70); el orden de entrada se respeta en orden de
 >    lectura; nada se solapa ni se sale de los
 >    márgenes; lo que no cabe ni al 70 % se devuelve como «hoja propia».
 > 2. **Recorte** `server/cash/recorteTicket.ts`: con `mupdf`, rasteriza la
@@ -138,7 +168,8 @@ Las marcadas con ❓ son tuyas. Las demás son la propuesta por defecto.
 
 ## E. Criterio de aceptación
 
-- La semana de Ivan (8 tickets) sale en **1 hoja** en el PDF de la liquidación.
+- La semana de Ivan sale en el PDF de la liquidación en **2 hojas al 100 %**
+  (dietas y peajes), o en 1 al 77 % si se elige reducir.
 - Todos los importes, fechas y números de ticket se leen en la hoja impresa.
 - Una factura A4 de Genes sale igual que hoy.
 - El informe de cierre de un día normal usa claramente menos hojas que hoy.
