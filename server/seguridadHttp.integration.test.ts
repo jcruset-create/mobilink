@@ -28,11 +28,14 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /*
- * Detrás de su propia variable, y no solo de `RUN_DB_TESTS`, por una razón
- * medida: arrancar el servidor DENTRO de la suite completa le hace compartir la
- * base con los demás ficheros, y el `initDb` del arranque toma bloqueos sobre
- * tablas que otra prueba está usando. Medido: la suite completa pasó de 220 s a
- * varios minutos sin terminar; este fichero aislado tarda nueve segundos.
+ * Detrás de su propia variable, y no solo de `RUN_DB_TESTS`, por dos razones:
+ *
+ *   · arranca un servidor entero, con sus catorce trabajos en segundo plano,
+ *     contra la misma base que usan los demás ficheros de la suite. Que un
+ *     fichero de pruebas monte un proceso que escribe en la base compartida es
+ *     algo que hay que pedir a propósito, no heredar de `RUN_DB_TESTS`;
+ *   · y tarda lo que tarda arrancar el servidor, que en la CI es tiempo que se
+ *     paga en cada ejecución.
  *
  * Se ejecuta a propósito, y conviene darle una base propia:
  *
@@ -74,7 +77,19 @@ describeSiHayBase("Fase 0 por HTTP, contra el servidor real", () => {
     // La salida va a un fichero, no a /dev/null: si el servidor no arranca, sin
     // esto la prueba solo puede decir «no ha arrancado» y no por qué.
     const log = openSync(RUTA_LOG, "w");
+    /*
+     * `detached: true` y después se mata el GRUPO, no el proceso.
+     *
+     * Con `spawn("npx", …)` el árbol es sh → npx → node, y `servidor.kill()`
+     * mataba solo al primero: el node seguía vivo con sus catorce trabajos en
+     * segundo plano, y cada ejecución de este fichero dejaba un servidor
+     * huérfano hablando con la base. Se vio al encontrar dos de ellos rondando
+     * después de dos ejecuciones. Eso —y no la contención de bloqueos que se
+     * supuso primero— es lo que estaba ralentizando la suite completa: varios
+     * servidores olvidados trabajando a la vez sobre el mismo PostgreSQL.
+     */
     servidor = spawn("npx", ["tsx", "server/index.ts"], {
+      detached: true,
       cwd: RAIZ,
       env: {
         ...process.env,
@@ -117,7 +132,14 @@ describeSiHayBase("Fase 0 por HTTP, contra el servidor real", () => {
   }, 180_000);
 
   afterAll(() => {
-    servidor?.kill("SIGKILL");
+    // El grupo entero: matar solo al `npx` deja vivo al node que hace el trabajo.
+    if (servidor?.pid) {
+      try {
+        process.kill(-servidor.pid, "SIGKILL");
+      } catch {
+        servidor.kill("SIGKILL");
+      }
+    }
   });
 
   function exigeArranque() {

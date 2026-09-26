@@ -174,12 +174,20 @@ endpoint contesta 410 y no la mira).
 | Migración contra PostgreSQL real | `RUN_DB_TESTS=1 DATABASE_URL=… npx vitest run server/seguridadMigracion` | Carga las funciones REALES del repositorio, aplica la migración y comprueba comportamiento. 25 comprobaciones |
 | Negativas por HTTP contra el servidor arrancado | `RUN_DB_TESTS=1 RUN_HTTP_TESTS=1 DATABASE_URL=… npx vitest run server/seguridadHttp` | **Fuera de la suite normal a propósito** |
 
-El arnés HTTP lleva su propia variable porque arrancar el servidor dentro de la
-suite completa le hace compartir la base con los demás ficheros, y el `initDb`
-del arranque toma bloqueos sobre tablas que otra prueba está usando: medido, la
-suite pasó de 220 s a varios minutos sin terminar. Aislado tarda seis segundos, y
-conviene darle una base propia. Su salida queda en un fichero del temporal, para
-poder ver por qué no arrancó si algún día no arranca.
+El arnés HTTP lleva su propia variable porque arranca un servidor entero, con sus
+catorce trabajos en segundo plano, contra la misma base que usan los demás
+ficheros: que un fichero de pruebas monte un proceso que escribe en la base
+compartida es algo que se pide a propósito, no algo que se herede de
+`RUN_DB_TESTS`. Conviene darle una base propia. Su salida queda en un fichero del
+temporal, para poder ver por qué no arrancó si algún día no arranca.
+
+Un detalle de por qué esto importa: la primera versión del arnés **filtraba el
+proceso del servidor**. Con `spawn("npx", …)` el árbol es sh → npx → node, y
+matar al primero deja vivo al que hace el trabajo, así que cada ejecución
+olvidaba un servidor hablando con la base. Se encontraron dos rondando, y era eso
+—no la contención de bloqueos que se supuso al principio— lo que estaba
+ralentizando la suite completa. Ahora se lanza con `detached` y se mata el grupo,
+y se comprueba que no queda ninguno.
 
 ## B.2 Health check
 
