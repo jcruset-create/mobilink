@@ -1833,6 +1833,8 @@ async function familiaCredencial(req: express.Request): Promise<FamiliaCredencia
  * sin depender de una release de las apps.
  *
  * En `AUTH_MODE=strict` se comporta como antes y aplica los guards de verdad.
+ *
+ * Estado: RECHAZA. El commit que introdujo la función solo avisaba en el log.
  */
 function exigirCredencial(...handlers: express.RequestHandler[]): express.RequestHandler {
   return (req, res, next) => {
@@ -1851,15 +1853,19 @@ function exigirCredencial(...handlers: express.RequestHandler[]): express.Reques
       const familia = await familiaCredencial(req);
       if (familia === "ninguna") {
         /*
-         * MODO OBSERVACIÓN. Todavía no se rechaza: primero hay que ver en los
-         * logs si algún cliente que no conocemos llama sin credencial. El
-         * commit siguiente cambia esto por un 401, y se puede revertir solo él
-         * sin perder el resto del arreglo.
+         * Se rechaza. El log queda igual de explícito que en observación,
+         * porque es lo único que va a decir qué cliente se ha quedado fuera si
+         * alguien no estaba inventariado.
+         *
+         * Este rechazo es un commit aparte del que introdujo la función: si
+         * apareciera un consumidor legítimo que no manda credencial, se
+         * revierte solo este y se vuelve a observación sin perder el resto.
          */
         console.warn(
-          `[credencial] SIN CREDENCIAL VÁLIDA: ${req.method} ${req.path}` +
+          `[credencial] RECHAZADA sin credencial válida: ${req.method} ${req.path}` +
             ` (ua=${String(req.headers["user-agent"] || "?").slice(0, 60)})`
         );
+        return res.status(401).json({ error: "No autorizado" });
       }
       next();
     })().catch((error) => {
