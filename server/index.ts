@@ -128,7 +128,7 @@ import { masNuevaPrimero } from "./apkVersion.ts";
 import { authenticate, buildMePayload, getAuthMode, licenciaActiva, registrarAuditoria, requireModule, resolveAuthContext } from "./core/auth.ts";
 import { createAdminRouter, startSaasLicenseWorker } from "./core/admin.ts";
 import { AI_IMAGE_RULES, AI_BACKOFFICE_PROMPT } from "./core/ai.ts";
-import { makeSecret, verifySecretWithLegacy } from "./core/credentials.ts";
+import { makeSecret, safeEquals, verifySecretWithLegacy } from "./core/credentials.ts";
 import { proponerVinculos, type EmpleadoCore } from "./core/vinculoTecnicos.ts";
 import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
@@ -752,7 +752,6 @@ app.post("/api/whatsapp/send-agenda-reminder", exigirCredencial(requirePanelRole
 });
 const PORT = process.env.PORT || 4000;
 
-const RESET_PASSWORD = "sea123";
 // El cliente de OpenAI vive en core/openaiService.ts: aquí no se crea ninguno.
 // Toda la IA de la plataforma pasa por pedirIA() / transcribirAudio().
 console.log("KEY:", process.env.OPENAI_API_KEY ? "OK" : "NO CARGADA");
@@ -1708,7 +1707,7 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
     });
   }
 
-  if (token !== expectedToken) {
+  if (!token || !safeEquals(token, expectedToken)) {
     return res.status(401).json({
       error: "No autorizado",
     });
@@ -1724,29 +1723,29 @@ function getRoleFromRequest(req: express.Request): UserRole | null {
   let token = rawToken;
   try { token = decodeURIComponent(rawToken); } catch { token = rawToken; }
 
-  if (process.env.ADMIN_PASSWORD && token === process.env.ADMIN_PASSWORD) {
-    return "admin";
+  /*
+   * Comparación en tiempo constante.
+   *
+   * `===` sobre cadenas corta en el primer carácter distinto, así que el tiempo
+   * de respuesta filtra cuánto prefijo se ha acertado. Sobre una red es ruidoso
+   * y hacen falta muchas medidas, pero estas cuatro contraseñas son compartidas,
+   * no caducan y dan acceso al panel entero: no es el sitio donde ahorrar cuatro
+   * líneas. `safeEquals` ya existía en core/credentials.ts para esto.
+   */
+  if (token) {
+    if (process.env.ADMIN_PASSWORD && safeEquals(token, process.env.ADMIN_PASSWORD)) {
+      return "admin";
+    }
+    if (process.env.SUPERVISOR_PASSWORD && safeEquals(token, process.env.SUPERVISOR_PASSWORD)) {
+      return "supervisor";
+    }
+    if (process.env.SCREENS_PASSWORD && safeEquals(token, process.env.SCREENS_PASSWORD)) {
+      return "pantallas";
+    }
+    if (process.env.TV75_PASSWORD && safeEquals(token, process.env.TV75_PASSWORD)) {
+      return "tv75";
+    }
   }
-
-  if (
-    process.env.SUPERVISOR_PASSWORD &&
-    token === process.env.SUPERVISOR_PASSWORD
-  ) {
-    return "supervisor";
-  }
-
-if (
-  process.env.SCREENS_PASSWORD &&
-  token === process.env.SCREENS_PASSWORD
-) {
-  return "pantallas";
-}
-if (
-  process.env.TV75_PASSWORD &&
-  token === process.env.TV75_PASSWORD
-) {
-  return "tv75";
-}
   return null;
 }
 
@@ -1911,7 +1910,7 @@ async function getRoadsideOperatorFromRequest(req: express.Request) {
   const code = String(req.headers["x-roadside-operator-code"] ?? "").trim();
   const expectedCode = await getExpectedRoadsideOperatorCode(techName);
 
-  if (!techName || !code || !expectedCode || code !== expectedCode) {
+  if (!techName || !code || !expectedCode || !safeEquals(code, expectedCode)) {
     return null;
   }
 
@@ -2026,7 +2025,14 @@ function requireRoadsideOperator(
 }
 
 app.use((req, _res, next) => {
-  console.log(`[REQ] ${req.method} ${req.url}`);
+  /*
+   * `req.path`, no `req.url`: la URL lleva la cadena de consulta, y ahí
+   * viajaban el token de admin (`?token=`) y la contraseña de backup
+   * (`?password=`). Cada petición del panel escribía una contraseña en los logs
+   * de Render, que se quedan guardados y los lee cualquiera con acceso al
+   * panel de control.
+   */
+  console.log(`[REQ] ${req.method} ${req.path}`);
   next();
 });
 
@@ -2412,7 +2418,36 @@ app.post("/api/reset", requireAdminRole, async (req, res) => {
   try {
     const { password } = req.body ?? {};
 
-    if (password !== RESET_PASSWORD) {
+    /*
+     * ── Por qué este endpoint ya no funciona en producción ──────────────────
+     *
+     * Borra `jobs`, `logs` y `assigned_maintenance_tasks` enteras. El único
+     * freno, además del rol de admin, era una contraseña escrita en el código:
+     * `const RESET_PASSWORD = "sea123"`. Estaba en el repositorio y en todo su
+     * historial, así que no era un segundo factor: era un trámite. Y el rol de
+     * admin, mientras siga viva la autenticación clásica, lo tiene cualquiera
+     * que consiga una contraseña compartida —que el login SSO además entregaba
+     * al navegador.
+     *
+     * Un borrado masivo de datos de trabajo no es una operación que deba
+     * existir detrás de un botón del panel. Fuera de producción se conserva,
+     * porque vaciar el tablero en un entorno de pruebas es útil, y allí la
+     * contraseña se pone por entorno en vez de en el código.
+     */
+    if (process.env.NODE_ENV === "production") {
+      return res.status(410).json({
+        error:
+          "El reinicio total ya no se hace desde el panel. Si de verdad hay que vaciar el tablero, se hace con un script y una copia de seguridad delante.",
+      });
+    }
+
+    const esperada = process.env.RESET_PASSWORD;
+    if (!esperada) {
+      return res.status(503).json({
+        error: "RESET_PASSWORD no está configurada en este entorno",
+      });
+    }
+    if (!password || !safeEquals(String(password), esperada)) {
       return res.status(401).json({ error: "Contraseña incorrecta" });
     }
 
@@ -6824,7 +6859,7 @@ app.post("/api/roadside-operator/login", async (req, res) => {
     const code = String(req.body?.code || "").trim();
     const expectedCode = await getExpectedRoadsideOperatorCode(techName);
 
-    if (!techName || !code || !expectedCode || code !== expectedCode) {
+    if (!techName || !code || !expectedCode || !safeEquals(code, expectedCode)) {
       return res.status(401).json({
         error: "Operario o codigo incorrecto",
       });
@@ -14302,9 +14337,58 @@ app.delete("/api/users/:id", requireAdminRole, async (req, res) => {
    BACKUP
 ========================================================= */
 
+/**
+ * Columnas que no salen en la copia, en ninguna tabla.
+ *
+ * `SELECT *` sobre `techs` se llevaba el `roadsideOperatorCode` en claro —que es
+ * la credencial con la que entran los operarios en las APKs—, el `workshopPin`
+ * heredado y los hashes. O sea: el fichero que se bajaba «para tener una copia»
+ * era la lista de credenciales de todo el taller, y acababa en la carpeta de
+ * descargas de quien lo pidiera.
+ *
+ * Se filtra por nombre de columna y no por lista de columnas a incluir, para que
+ * una columna nueva no se cuele sola el día que alguien añada otro secreto.
+ */
+const COLUMNAS_QUE_NO_SE_COPIAN = new Set([
+  "roadsideOperatorCode",
+  "workshopPin",
+  "workshopPinHash",
+  "workshopPinSalt",
+  "password",
+  "pin",
+  "pin_hash",
+  "token",
+]);
+
+function sinColumnasSecretas(filas: any[]): any[] {
+  return filas.map((fila) => {
+    const limpia: Record<string, unknown> = {};
+    for (const [clave, valor] of Object.entries(fila ?? {})) {
+      if (!COLUMNAS_QUE_NO_SE_COPIAN.has(clave)) limpia[clave] = valor;
+    }
+    return limpia;
+  });
+}
+
 app.get("/api/backup", requireAdminRole, async (req, res) => {
   try {
-        const password = String(req.query.password ?? "");
+    /*
+     * La contraseña va en cabecera, no en la URL.
+     *
+     * Con `?password=`, el logger de peticiones escribía la línea completa
+     * —incluida la contraseña de backup y el token de admin— en los logs de
+     * Render, donde se quedan; y además iba al historial del navegador y a la
+     * cabecera `Referer`. Se acepta la cabecera nueva y, de momento, también la
+     * consulta, para que un panel sin actualizar no se quede sin copia: el
+     * logger ya no la escribe.
+     */
+    const bruta = String(req.headers["x-backup-password"] ?? req.query.password ?? "");
+    let password = bruta;
+    try {
+      password = decodeURIComponent(bruta);
+    } catch {
+      /* contraseña sin codificar (panel antiguo) */
+    }
     const expectedPassword = process.env.BACKUP_PASSWORD;
 
     if (!expectedPassword) {
@@ -14313,7 +14397,7 @@ app.get("/api/backup", requireAdminRole, async (req, res) => {
       });
     }
 
-    if (password !== expectedPassword) {
+    if (!password || !safeEquals(password, expectedPassword)) {
       return res.status(401).json({
         error: "Contraseña de backup incorrecta",
       });
@@ -14331,7 +14415,7 @@ app.get("/api/backup", requireAdminRole, async (req, res) => {
 
     for (const table of tables) {
       const result = await db.query(`SELECT * FROM ${table} ORDER BY id ASC`);
-      data[table] = result.rows;
+      data[table] = sinColumnasSecretas(result.rows);
     }
 
     const backup = {
