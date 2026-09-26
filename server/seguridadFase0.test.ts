@@ -234,7 +234,7 @@ describe("SEC-015 · los logins tienen freno", () => {
 
 describe("SEC-005 · el borrado de la cuenta de Auth se autoriza con lo apuntado", () => {
   it("eliminar-auth exige un apunte de baja de tu empresa", () => {
-    const trozo = sinComentarios(ruta('"/api/administracion/usuarios/eliminar-auth"', 4000));
+    const trozo = sinComentarios(ruta('"/api/administracion/usuarios/eliminar-auth"', 9000));
     // La empresa ya no se puede leer de la ficha: para cuando llega aquí, la
     // ficha se ha borrado. Se comprueba contra lo que apuntó el disparador.
     expect(trozo).toContain("app_bajas_auth");
@@ -242,14 +242,28 @@ describe("SEC-005 · el borrado de la cuenta de Auth se autoriza con lo apuntado
   });
 
   it("y si la tabla no existe todavía, solo entra un superadministrador", () => {
-    const trozo = sinComentarios(ruta('"/api/administracion/usuarios/eliminar-auth"', 4000));
+    const trozo = sinComentarios(ruta('"/api/administracion/usuarios/eliminar-auth"', 9000));
     expect(trozo).toContain("tieneTabla");
     expect(trozo).toContain("admin.esSuperadmin");
   });
 
-  it("el apunte se consume: una baja autoriza un borrado, no varios", () => {
-    const trozo = sinComentarios(ruta('"/api/administracion/usuarios/eliminar-auth"', 4500));
-    expect(trozo).toContain("DELETE FROM app_bajas_auth");
+  it("el apunte se consume marcándolo, no borrándolo", () => {
+    const trozo = sinComentarios(ruta('"/api/administracion/usuarios/eliminar-auth"', 9000));
+    // Marcar y no borrar es lo que deja la evidencia de quién autorizó qué y
+    // cuándo: borrar la fila dejaría la auditoría sin la mitad de la historia.
+    expect(trozo).toContain("UPDATE app_bajas_auth SET consumido_en");
+    expect(trozo).not.toContain("DELETE FROM app_bajas_auth");
+  });
+
+  it("solo consume apuntes vivos y sin caducar", () => {
+    const trozo = sinComentarios(ruta('"/api/administracion/usuarios/eliminar-auth"', 9000));
+    expect(trozo).toContain("consumido_en IS NULL");
+    expect(trozo).toContain("caduca_en > now()");
+  });
+
+  it("y a un superadministrador solo lo da de baja otro superadministrador", () => {
+    const trozo = sinComentarios(ruta('"/api/administracion/usuarios/eliminar-auth"', 9000));
+    expect(trozo).toContain("objetivo_es_superadmin");
   });
 });
 

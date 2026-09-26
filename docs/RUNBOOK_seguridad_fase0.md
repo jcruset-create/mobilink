@@ -166,6 +166,21 @@ Merge a `main` → Render despliega solo (`autoDeploy: true`, rama `main`).
 como está. Opcional: `RESET_PASSWORD` fuera de producción (en producción el
 endpoint contesta 410 y no la mira).
 
+## B.1b Cómo se ejecutan las pruebas de esta fase
+
+| Qué | Comando | Dónde corre |
+|---|---|---|
+| Unitarias y de integración (lo que ejecuta la CI) | `npm test` | Con `RUN_DB_TESTS=1` y `DATABASE_URL` para las de integración |
+| Migración contra PostgreSQL real | `RUN_DB_TESTS=1 DATABASE_URL=… npx vitest run server/seguridadMigracion` | Carga las funciones REALES del repositorio, aplica la migración y comprueba comportamiento. 25 comprobaciones |
+| Negativas por HTTP contra el servidor arrancado | `RUN_DB_TESTS=1 RUN_HTTP_TESTS=1 DATABASE_URL=… npx vitest run server/seguridadHttp` | **Fuera de la suite normal a propósito** |
+
+El arnés HTTP lleva su propia variable porque arrancar el servidor dentro de la
+suite completa le hace compartir la base con los demás ficheros, y el `initDb`
+del arranque toma bloqueos sobre tablas que otra prueba está usando: medido, la
+suite pasó de 220 s a varios minutos sin terminar. Aislado tarda seis segundos, y
+conviene darle una base propia. Su salida queda en un fichero del temporal, para
+poder ver por qué no arrancó si algún día no arranca.
+
 ## B.2 Health check
 
 ```bash
@@ -417,8 +432,8 @@ este runbook; hoy está vacía a propósito.
 | **001** | ~50 rutas respondían sin credencial (`protectWhenStrict` era un `next()`) | `exigirCredencial`: acepta las tres familias que los clientes ya envían, rechaza la ausencia | 7 rutas → 401 y las 3 familias → entran (`seguridadHttp`, 24 pruebas); 4 guardas de fuente | B.3 smoke 1 + C.1 sin clientes propios | Cerrado en código/laboratorio |
 | **002** | 88 tablas sin RLS alcanzables con la clave pública | RLS + `revoke` de PUBLIC/anon/authenticated + privilegios por defecto | RLS activa y `anon` sin permisos, incluido el heredado de PUBLIC (`seguridadMigracion`) | D.3 consultas 1 y 2 | **Preparado** |
 | **003** | `perfiles_usuario` escribible por cualquier autenticado; las Edge Functions preguntaban el rol al interesado | Código: rol leído con service role y solo por `user_id`. SQL: políticas separadas | Un no-admin no se autopromociona ni inserta fila admin (probado en PostgreSQL) | E.4 + D.3 | Código **cerrado en laboratorio**; SQL **preparado** |
-| **004** | `app_guardar_usuario` escribía `es_superadmin` sin comprobar quién llama | Disparador sobre `app_usuarios` (no se reescribe la función) | 4 pruebas: ni por la RPC real, ni escribiendo la tabla, ni dando de alta a otro; y un superadmin sí puede | D.3 prueba funcional | **Preparado** |
-| **005** | Dos endpoints reseteaban la contraseña de cualquier cuenta de Auth; `app_eliminar_usuario` y `eliminar-auth` con el mismo patrón | Código: empresa y nivel comprobados, superadmin protegido, `eliminar-auth` consume una baja autorizada. SQL: el mismo disparador | 3 pruebas de superadmin protegido + 3 de aislamiento entre empresas + 4 del registro de baja | B.3 smoke + D.3 | Código **cerrado en laboratorio**; SQL **preparado** |
+| **004** | `app_guardar_usuario` escribía `es_superadmin` sin comprobar quién llama. **Superficie adicional: `app_eliminar_usuario`**, con el mismo patrón para desactivar y borrar | Disparador sobre `app_usuarios` (no se reescribe ninguna función): cubre las dos RPC y cualquier otro camino de escritura | 4 pruebas: ni por la RPC real, ni escribiendo la tabla, ni dando de alta a otro; y un superadmin sí puede | D.3 prueba funcional | **Preparado** |
+| **005** | Dos endpoints reseteaban la contraseña de cualquier cuenta de Auth. **Superficies adicionales: `app_eliminar_usuario`** (desactivaba o borraba a cualquiera, superadministradores incluidos) **y `eliminar-auth`** (aceptaba cualquier id porque la ficha ya no existía) | Código: empresa y nivel comprobados, superadmin protegido, `eliminar-auth` consume una baja autorizada y de un solo uso. SQL: el mismo disparador | 3 pruebas de superadmin protegido + 3 de aislamiento entre empresas + 4 del registro de baja | B.3 smoke + D.3 | Código **cerrado en laboratorio**; SQL **preparado** |
 | **006** | `login-sso` devolvía `ADMIN_PASSWORD` al navegador | Deja de devolver cualquier contraseña; el panel usa el Bearer que ya tiene | Barrido de respuestas sin la contraseña compartida; 2 guardas de fuente | B.3 pruebas 1-3 con credencial | **Mitigado** (cerrado en laboratorio; el login clásico se retira en 1B) |
 | **007** | Firma de Twilio calculada y no exigida; `MediaUrl0` descargada con las credenciales de Twilio | 403 sin firma; medios solo de `api.twilio.com`; patrón de enlace cerrado | Webhook sin firma → 403; 19 pruebas de `fetchSeguro`; 5 del patrón de mapa | **A.1 primero**, y C.1 sin errores en Twilio | Cerrado en código/laboratorio, **con A.1 pendiente** |
 | **009** | Un cc_admin de Connect se hacía superadministrador | Rol validado contra la lista del alta, filtro por central, no se cambia el rol propio | Guarda de fuente + typecheck | Prueba manual en el back office | Cerrado en código/laboratorio |

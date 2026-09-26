@@ -22,9 +22,26 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { openSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const CORRE = process.env.RUN_DB_TESTS === "1" && Boolean(process.env.DATABASE_URL);
+/*
+ * Detrás de su propia variable, y no solo de `RUN_DB_TESTS`, por una razón
+ * medida: arrancar el servidor DENTRO de la suite completa le hace compartir la
+ * base con los demás ficheros, y el `initDb` del arranque toma bloqueos sobre
+ * tablas que otra prueba está usando. Medido: la suite completa pasó de 220 s a
+ * varios minutos sin terminar; este fichero aislado tarda nueve segundos.
+ *
+ * Se ejecuta a propósito, y conviene darle una base propia:
+ *
+ *   RUN_DB_TESTS=1 RUN_HTTP_TESTS=1 DATABASE_URL=... npx vitest run server/seguridadHttp
+ */
+const CORRE =
+  process.env.RUN_DB_TESTS === "1" &&
+  process.env.RUN_HTTP_TESTS === "1" &&
+  Boolean(process.env.DATABASE_URL);
 const describeSiHayBase = CORRE ? describe : describe.skip;
 
 const PUERTO = 4700 + Math.floor(Math.random() * 200);
@@ -51,8 +68,12 @@ async function esperaPuerto(intentos = 120): Promise<boolean> {
 describeSiHayBase("Fase 0 por HTTP, contra el servidor real", () => {
   let servidor: ChildProcess | null = null;
   let arrancado = false;
+  const RUTA_LOG = join(tmpdir(), `mobilink-servidor-pruebas-${PUERTO}.log`);
 
   beforeAll(async () => {
+    // La salida va a un fichero, no a /dev/null: si el servidor no arranca, sin
+    // esto la prueba solo puede decir «no ha arrancado» y no por qué.
+    const log = openSync(RUTA_LOG, "w");
     servidor = spawn("npx", ["tsx", "server/index.ts"], {
       cwd: RAIZ,
       env: {
@@ -67,9 +88,12 @@ describeSiHayBase("Fase 0 por HTTP, contra el servidor real", () => {
         STRIPE_SECRET_KEY: "sk_test_ficticia",
         OPENAI_API_KEY: "ficticia",
       },
-      stdio: "ignore",
+      stdio: ["ignore", log, log],
     });
     arrancado = await esperaPuerto();
+    if (!arrancado) {
+      console.error(`El servidor de pruebas no arrancó. Su salida está en ${RUTA_LOG}`);
+    }
 
     if (arrancado) {
       // Un operario con código, para poder probar la familia «cabeceras de
