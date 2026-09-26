@@ -383,12 +383,23 @@ export type AppUsuario = {
  * en `app_guardar_usuario`, que sí rechaza lo que no toca.
  */
 export async function licenciasDeUsuario(userId?: string | null): Promise<LicenciaModulo[] | null> {
-  const { data, error } = await supabase.rpc("app_licencias_usuario", { p_user_id: userId ?? null });
-  if (error) {
-    console.warn("No se han podido leer las licencias:", error.message);
+  // El try/catch no sobra: supabase-js devuelve `error` cuando responde la
+  // base, pero LANZA cuando ni siquiera llega -sin red, el movil que pierde
+  // cobertura, un CORS-. En Safari eso es un "Load failed" que subia hasta la
+  // ficha del empleado y le pintaba un error rojo a toda la pestaña. Saber las
+  // licencias es un extra para explicarse mejor; que no se sepan nunca puede
+  // tumbar la pantalla.
+  try {
+    const { data, error } = await supabase.rpc("app_licencias_usuario", { p_user_id: userId ?? null });
+    if (error) {
+      console.warn("No se han podido leer las licencias:", error.message);
+      return null;
+    }
+    return (data ?? []) as LicenciaModulo[];
+  } catch (e) {
+    console.warn("No se ha podido consultar las licencias:", e);
     return null;
   }
-  return (data ?? []) as LicenciaModulo[];
 }
 
 async function tokenSesion(): Promise<string> {
