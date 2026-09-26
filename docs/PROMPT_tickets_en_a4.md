@@ -35,19 +35,21 @@ peaje repetido), para tener números de verdad:
 |---|---|---|
 | Hoy | **8** | un ticket por hoja |
 | Juntos, sin recortar | **2** | 6 al 85 % + 2 al 100 % |
-| Juntos, recortando el blanco del escaneo | **1** | los 8 al 70 %, y se leen |
+| Juntos, recortando, por columnas | **1** | los 8 al 70 % |
+| Juntos, recortando, **por filas** | **1** | **los 8 al 77 %**, en orden de lectura y con rótulo corto |
 
 El recorte importa: el escaneo del bar trae unos 15 mm de blanco arriba, y
 quitarlo (dejando 2 mm de aire) deja el ticket en 68×119 mm y el peaje en
 49×128 mm.
 
-La maqueta enseñó dos cosas que hay que resolver:
+La primera maqueta enseñó dos cosas, ya resueltas en la segunda:
 
-- Los **rótulos largos se pisan** entre columnas (el nombre del fichero no
-  cabe en 47 mm). Tienen que ser cortos y cortarse al ancho del ticket.
-- Con el 70 % queda un tercio de hoja vacío abajo. Un reparto mejor, por
-  filas ordenadas por alto, puede meter los mismos 8 a más escala. Se decide
-  al implementar y se mide.
+- Los **rótulos largos se pisaban** entre columnas: el nombre del fichero no
+  cabe en 47 mm. Van cortos («Ticket 3 · 22/09 · 16,60 €») y cortados al ancho
+  del ticket.
+- **Por columnas** quedaba un tercio de hoja vacío. **Por filas** (izquierda a
+  derecha, cada fila centrada) caben los mismos 8 al 77 % en vez del 70 %, y se
+  lee en el orden natural. La propuesta es por filas.
 
 ## C. Decisiones: lo que propongo y lo que necesito que decidas
 
@@ -109,9 +111,10 @@ Las marcadas con ❓ son tuyas. Las demás son la propuesta por defecto.
 > 1. **Dominio puro** `server/cash/domain/mosaico.ts`: entra una lista de
 >    tamaños (ancho y alto en puntos, ya recortados) y los márgenes de A4;
 >    salen hojas con, para cada ticket, posición, escala y hueco del rótulo.
->    Sin E/S. Reglas: nunca ampliar; escala mínima 0,70; misma escala en toda
->    la hoja; la mayor escala que meta el máximo de tickets; el orden de
->    entrada se respeta en orden de lectura; nada se solapa ni se sale de los
+>    Sin E/S. Reglas: reparto por filas, cada fila centrada; nunca ampliar;
+>    escala mínima 0,70; misma escala en toda la hoja; la mayor escala que
+>    meta el máximo de tickets; el orden de entrada se respeta en orden de
+>    lectura; nada se solapa ni se sale de los
 >    márgenes; lo que no cabe ni al 70 % se devuelve como «hoja propia».
 > 2. **Recorte** `server/cash/recorteTicket.ts`: con `mupdf`, rasteriza la
 >    página a baja resolución y devuelve la caja con tinta (umbral de gris,
