@@ -66,6 +66,13 @@ pegarlas en la conversación.
 Ninguna comprobación se ha intentado por vías no autorizadas. No se ha hecho
 ninguna petición artificial al webhook de producción.
 
+> **Actualización 2026-09-26.** Las filas 1 a 7 ya están verificadas: el
+> usuario ejecutó la consulta de solo lectura y entregó la salida. El análisis
+> está en `docs/PRECHECK_fase0_supabase.md`. El bloqueante de la migración sigue
+> en NO-GO, pero **por contenido, no por falta de evidencia**: la fotografía
+> destapó una regresión y dos defectos en la propia migración. Las filas 8 a 12
+> (Auth) y 13-14 (Twilio) siguen sin verificar.
+
 ### 2.1 Las tres categorías de bloqueante, separadas
 
 El NO-GO global lo es **por falta de evidencia del entorno, no por un fallo del

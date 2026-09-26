@@ -168,8 +168,30 @@ migración. Se recogen para diseñar la Fase 1A (login por usuario) y la Fase 1C
 | Fase | Bloqueante que la gobierna | Estado hoy |
 |---|---|---|
 | B · Despliegue del código | 1 (Twilio, A.1) | NO-GO: A.1 NO VERIFICADO |
-| D · Migración SQL | 2 (Supabase, A.2/A.4) | NO-GO: A.2 y A.4 NO VERIFICADOS |
-| 1A / 1C | 3 (Auth) | No aplica a Fase 0 |
+| D · Migración SQL | 2 (Supabase, A.2/A.4) | **NO-GO por contenido**: la evidencia ya está (2026-09-26), y ha destapado defectos. Ver `docs/PRECHECK_fase0_supabase.md` §4 |
+| 1A / 1C | 3 (Auth) | No aplica a Fase 0. Dos supuestos resueltos a favor: 2 superadmins con email de recuperación, 0 colisiones de username |
+
+**Sobre el bloqueante 2, actualización del 2026-09-26.** Dejó de ser falta de
+evidencia: la fotografía de Supabase está tomada. Lo que bloquea ahora es lo
+que esa fotografía dice, y son tres cosas concretas:
+
+1. La sección 3 de la migración **introduce una regresión** en
+   `perfiles_usuario`: SEC-003 ya está corregido en producción con políticas
+   acotadas, y la política `perfiles_lectura` que la migración crearía se
+   combina con ellas por OR y devuelve la lectura de todos los perfiles a
+   cualquier autenticado.
+2. Los `drop policy` de `sm_document_acknowledgements` usan nombres que no
+   existen (`sm_ack_anon_*` frente a los reales `portal_anon_acks_*`): no
+   fallan, se quedan en nada.
+3. SEC-010 quedaría cerrado a medias: las políticas `pres_auth_all` y
+   `sm_auth_all` (`ALL to authenticated using (true)`) siguen abiertas.
+
+Y el tamaño real del problema es otro: **188 tablas sin RLS**, no 88. La
+migración cubre 42. Las 146 restantes incluyen `connect_api_keys`, `licenses`,
+`payments` y `cobros`, todas con `anon` en CRUD completo.
+
+Precondición nueva de la Fase D: producción va en **PostgreSQL 17.6** y la
+migración se probó contra 16.13. Repetir las pruebas antes de aplicar.
 
 El NO-GO global de hoy lo es **por falta de evidencia del entorno, no por un
 fallo del código de Fase 0**, que está cerrado en laboratorio (334 ficheros de
