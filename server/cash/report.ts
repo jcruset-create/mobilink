@@ -164,7 +164,19 @@ export function logoMobilink(): string | null {
   return null;
 }
 
-export async function informeCierre(empresaId: string, sessionId: number): Promise<Buffer> {
+/**
+ * El informe de cierre: la hoja del cierre y, detrás, los justificantes del día.
+ *
+ * `conJustificantes: false` da solo la hoja. Es la que se imprime sola al
+ * cerrar: los justificantes de un día pueden ser treinta páginas de tickets
+ * que ya están en papel en el cajón, y mandarlos a la impresora cada noche
+ * sería gastar un paquete de folios por semana para nada.
+ */
+export async function informeCierre(
+  empresaId: string,
+  sessionId: number,
+  { conJustificantes = true }: { conJustificantes?: boolean } = {}
+): Promise<Buffer> {
   const detalle = await detalleJornada(sessionId);
   if (detalle.sesion.empresaId !== empresaId) {
     throw new ErrorCaja("JORNADA_DE_OTRA_EMPRESA", "La jornada no pertenece a tu empresa.", 403);
@@ -200,6 +212,7 @@ export async function informeCierre(empresaId: string, sessionId: number): Promi
     ingreso,
     conteos,
     documentos: documentos.length,
+    documentosDetras: conJustificantes,
     denominaciones,
     imagenes,
     etiquetaDe,
@@ -207,7 +220,7 @@ export async function informeCierre(empresaId: string, sessionId: number): Promi
     piezasBolsaDe,
   });
 
-  return montar(portada, documentos);
+  return montar(portada, conJustificantes ? documentos : []);
 }
 
 // ── Portada y listados ─────────────────────────────────────────────────────
@@ -221,6 +234,8 @@ async function construirPortada(d: {
   ingreso: Composicion;
   conteos: Map<number, number>;
   documentos: number;
+  /** Si los justificantes van detrás en este mismo PDF. */
+  documentosDetras: boolean;
   denominaciones: import("./domain/denominations.ts").Denominacion[];
   imagenes: Map<number, Buffer>;
   etiquetaDe: (valor: number) => string;
@@ -351,7 +366,9 @@ async function construirPortada(d: {
   fila("Operaciones registradas", String(detalle.operaciones.length));
   // Sin justificantes no se dice nada: un «0» en el informe solo hace pensar
   // que falta algo que buscar.
-  if (d.documentos > 0) fila("Justificantes adjuntos", String(d.documentos));
+  if (d.documentos > 0) {
+    fila(d.documentosDetras ? "Justificantes adjuntos" : "Justificantes (en el informe completo)", String(d.documentos));
+  }
 
   if (detalle.porFormaPago.length > 0) {
     titulo("Por forma de pago");

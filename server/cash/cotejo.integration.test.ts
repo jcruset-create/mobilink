@@ -281,7 +281,7 @@ describe.runIf(RUN)("El recorrido entero: captura → lectura → cotejo", () =>
    * libro mayor apunta monedas, no importes. Se usan billetes de 5 € y por eso
    * los importes de estas pruebas son múltiplos de 500.
    */
-  const cobrar = (formas: { forma: string; importe: number }[], referencia?: string) => {
+  const cobrar = (formas: { forma: string; importe: number }[], referencia?: string, sectionId?: number) => {
     const efectivo = formas.filter((f) => f.forma === "CASH").reduce((a, f) => a + f.importe, 0);
     return servicio.registrarOperacion(ctx, {
       sessionId: sesion,
@@ -291,6 +291,7 @@ describe.runIf(RUN)("El recorrido entero: captura → lectura → cotejo", () =>
       ...(efectivo > 0 ? { efectivoRecibido: [{ valor: 500, cantidad: efectivo / 500 }] } : {}),
       concepto: referencia ?? "prueba",
       referencia,
+      ...(sectionId ? { sectionId } : {}),
     });
   };
 
@@ -343,6 +344,40 @@ describe.runIf(RUN)("El recorrido entero: captura → lectura → cotejo", () =>
     const suyas = lineas.filter((l) => l.referencia === `MIX-${sufijo}`);
     expect(suyas).toHaveLength(2);
     expect(suyas.map((l) => l.importeCentimos).sort()).toEqual([2000, 3000]);
+  });
+
+  it("lo de una sección que se arquea aparte (la gasolinera) no se coteja, y se dice cuánto es", async () => {
+    const gasolinera = await config.crearSeccion(ctx, { nombre: `Gasolinera ${sufijo}` });
+    await config.actualizarSeccion(ctx, gasolinera.id, { arqueaAparte: true });
+    // Mixto a propósito: dos líneas en el cotejo, pero UNA operación.
+    await cobrar(
+      [
+        { forma: "CASH", importe: 1500 },
+        { forma: FORMA, importe: 5000 },
+      ],
+      `T5-${sufijo}`,
+      gasolinera.id
+    );
+    await cobrar([{ forma: FORMA, importe: 2500 }], `TALLER-${sufijo}`);
+
+    const j = await cotejoErp.leerJornada(EMPRESA, sesion);
+    expect(j.lineas.some((l) => l.referencia === `T5-${sufijo}`)).toBe(false);
+    expect(j.lineas.some((l) => l.referencia === `TALLER-${sufijo}`)).toBe(true);
+    expect(j.apartadas).toEqual([
+      { seccion: `Gasolinera ${sufijo}`, operaciones: 1, cobrosCentimos: 6500, pagosCentimos: 0 },
+    ]);
+
+    // Y llega hasta la pantalla con el cotejo.
+    respuestaDelModelo.texto = capturaCon([{ forma: "CONTADO", importe: "10,00", tipo: "COBRO" }], "10,00");
+    const r = await cotejoErp.cotejarCapturaErp(EMPRESA, { sessionId: sesion, imagen: CAPTURA });
+    expect(r.apartadas.map((a) => a.seccion)).toEqual([`Gasolinera ${sufijo}`]);
+    expect(r.informe!.soloEnMobilink.some((l) => l.referencia === `T5-${sufijo}`)).toBe(false);
+
+    // Sin la marca, vuelve a cotejarse.
+    await config.actualizarSeccion(ctx, gasolinera.id, { arqueaAparte: false });
+    const sinMarca = await cotejoErp.leerJornada(EMPRESA, sesion);
+    expect(sinMarca.lineas.some((l) => l.referencia === `T5-${sufijo}`)).toBe(true);
+    expect(sinMarca.apartadas).toEqual([]);
   });
 
   it("cotejo completo: lo que cuadra, lo que falta y lo que sobra", async () => {

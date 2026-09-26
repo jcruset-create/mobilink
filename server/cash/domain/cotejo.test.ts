@@ -583,3 +583,100 @@ describe("los abonos en el cotejo", () => {
     expect(r.soloEnMobilink.map((l) => l.tipo)).toContain("COBRO");
   });
 });
+
+/**
+ * El 26/09/2026: la liquidación LG-26-001 de Ivan se pagó en Mobilink como UN
+ * pago de 82,28 en efectivo, y en Genes se apuntó por concepto: «DIETAS IVAN
+ * 66,40» y «AUTOPISTAS IVAN 15,88», las dos CONTADO. Más los dos pagos de
+ * Antony, que sí van uno a uno.
+ */
+describe("el pago de una liquidación, apuntado por concepto en el ERP", () => {
+  const liquidacion: LineaMobilink = {
+    id: 17,
+    numero: "TAR1-P-26-017",
+    referencia: "LG-26-001",
+    formaCodigo: "EFECTIVO",
+    importeCentimos: 8228,
+    tipo: "PAGO",
+    desglose: [
+      { concepto: "Dietas", importeCentimos: 6640 },
+      { concepto: "Peajes", importeCentimos: 1588 },
+    ],
+  };
+  const genes: LineaErp[] = [
+    { formaErp: "CONTADO", importeCentimos: 6640, tipo: "PAGO", concepto: "DIETAS IVAN" },
+    { formaErp: "CONTADO", importeCentimos: 1588, tipo: "PAGO", concepto: "AUTOPISTAS IVAN" },
+    { formaErp: "CONTADO", importeCentimos: 1842, tipo: "PAGO", concepto: "DIETA ANTONY" },
+    { formaErp: "CONTADO", importeCentimos: 1850, tipo: "PAGO", concepto: "DIETA ANTONY" },
+  ];
+  const antony: LineaMobilink[] = [
+    { id: 15, numero: "TAR1-P-26-015", formaCodigo: "EFECTIVO", importeCentimos: 1850, tipo: "PAGO" },
+    { id: 16, numero: "TAR1-P-26-016", formaCodigo: "EFECTIVO", importeCentimos: 1842, tipo: "PAGO" },
+  ];
+
+  it("las dos líneas del ERP casan con el mismo pago, y el día cuadra", () => {
+    const r = cotejar(genes, [...antony, liquidacion], EQUIV);
+    expect(r.cuadra).toBe(true);
+    const suyas = r.emparejadas.filter((e) => e.mobilink.id === 17);
+    expect(suyas.map((e) => [e.erp.concepto, e.parte, e.por])).toEqual([
+      ["DIETAS IVAN", "Dietas", "desglose"],
+      ["AUTOPISTAS IVAN", "Peajes", "desglose"],
+    ]);
+    expect(r.totales.diferenciaPagos).toBe(0);
+  });
+
+  it("un cobro del ERP del mismo importe no es parte de un pago", () => {
+    const cobros = genes.slice(0, 2).map((e) => ({ ...e, tipo: "COBRO" as const }));
+    const r = cotejar(cobros, [liquidacion], EQUIV);
+    expect(r.emparejadas).toEqual([]);
+  });
+
+  it("si el ERP la apuntó en una sola línea, casa entera", () => {
+    const r = cotejar([{ formaErp: "CONTADO", importeCentimos: 8228, tipo: "PAGO" }], [liquidacion], EQUIV);
+    expect(r.cuadra).toBe(true);
+    expect(r.emparejadas[0]!.por).toBe("importe");
+  });
+
+  it("si falta una parte, no se casa ninguna: medio pago no cuadra nada", () => {
+    const r = cotejar([genes[0]!], [liquidacion], EQUIV);
+    expect(r.emparejadas).toEqual([]);
+    expect(r.soloEnErp).toHaveLength(1);
+    expect(r.soloEnMobilink.map((m) => m.id)).toEqual([17]);
+  });
+
+  it("con otra forma de pago tampoco: las partes van por la forma del pago", () => {
+    const porTarjeta = genes.slice(0, 2).map((e) => ({ ...e, formaErp: "TPV CAIXA" }));
+    const r = cotejar(porTarjeta, [liquidacion], EQUIV);
+    expect(r.emparejadas.filter((e) => e.por === "desglose")).toEqual([]);
+  });
+
+  it("con dos líneas del ERP que encajan en la misma parte, no se elige", () => {
+    const dobles = [...genes.slice(0, 2), { ...genes[1]!, concepto: "OTRA" }];
+    const r = cotejar(dobles, [liquidacion], EQUIV);
+    expect(r.emparejadas.filter((e) => e.por === "desglose")).toEqual([]);
+    expect(r.soloEnMobilink.map((m) => m.id)).toEqual([17]);
+  });
+
+  it("dos partes del mismo importe necesitan dos líneas distintas del ERP", () => {
+    const mitad: LineaMobilink = {
+      ...liquidacion,
+      importeCentimos: 2000,
+      desglose: [
+        { concepto: "Dietas", importeCentimos: 1000 },
+        { concepto: "Parking", importeCentimos: 1000 },
+      ],
+    };
+    const una = cotejar([{ formaErp: "CONTADO", importeCentimos: 1000, tipo: "PAGO" }], [mitad], EQUIV);
+    expect(una.emparejadas).toEqual([]);
+    const dos = cotejar(
+      [
+        { formaErp: "CONTADO", importeCentimos: 1000, tipo: "PAGO", concepto: "A" },
+        { formaErp: "CONTADO", importeCentimos: 1000, tipo: "PAGO", concepto: "B" },
+      ],
+      [mitad],
+      EQUIV
+    );
+    expect(dos.emparejadas.map((e) => e.erp.concepto)).toEqual(["A", "B"]);
+    expect(dos.cuadra).toBe(true);
+  });
+});
