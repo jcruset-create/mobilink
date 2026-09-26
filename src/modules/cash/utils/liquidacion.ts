@@ -58,3 +58,54 @@ export const TONO_ESTADO: Record<EstadoLiquidacion, string> = {
   PAGADA: "bg-emerald-500/20 text-emerald-200",
   ANULADA: "bg-slate-700/60 text-slate-400 line-through",
 };
+
+/** Nombre en castellano de cada tipo de establecimiento, para el botón. */
+const NOMBRE_ESTABLECIMIENTO: Record<string, string> = {
+  RESTAURANTE: "bar o restaurante",
+  PEAJE: "peaje",
+  GASOLINERA: "gasolinera",
+  PARKING: "parking",
+  HOTEL: "hotel",
+  TRANSPORTE: "transporte",
+  TAXI: "taxi",
+  SUPERMERCADO: "supermercado",
+  TALLER: "taller",
+};
+
+export type ReglaParaRecordar = {
+  campo: "TIPO_ESTABLECIMIENTO" | "NIF_EMISOR";
+  patron: string;
+  /** «los tickets de peaje», «los tickets de BAR LA SERRANITA». */
+  que: string;
+};
+
+/**
+ * Aprender de lo que una persona decide: si la lectura no supo qué concepto
+ * era y alguien lo ha elegido a mano, se ofrece guardarlo como regla para que
+ * el próximo ticket igual salga solo.
+ *
+ * Se ofrece por TIPO de establecimiento cuando la lectura lo sabe —«todos los
+ * peajes son Peajes» sirve para cualquier autopista—, y si no, por el NIF del
+ * emisor, que es lo único que identifica sin ambigüedad a un establecimiento.
+ * Por nombre no: «Bar» casaría con cualquier bar.
+ *
+ * Nunca cuando una regla ya reconoció el ticket: si propuso otro concepto,
+ * cambiar esa regla es cosa de Configuración, donde se ve a qué más afecta.
+ */
+export function reglaParaRecordar(
+  lectura: { tipoEstablecimiento: string; conceptoPropuesto: { conceptoId: number | null } } | null,
+  conceptoElegido: number | null,
+  emisor: { nombre: string; nif: string | null }
+): ReglaParaRecordar | null {
+  if (!lectura || conceptoElegido == null) return null;
+  if (lectura.conceptoPropuesto.conceptoId != null) return null;
+  const tipo = lectura.tipoEstablecimiento;
+  if (NOMBRE_ESTABLECIMIENTO[tipo]) {
+    return { campo: "TIPO_ESTABLECIMIENTO", patron: tipo, que: `los tickets de ${NOMBRE_ESTABLECIMIENTO[tipo]}` };
+  }
+  const nif = (emisor.nif ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (nif.length >= 5) {
+    return { campo: "NIF_EMISOR", patron: nif, que: `los tickets de ${emisor.nombre.trim() || nif}` };
+  }
+  return null;
+}

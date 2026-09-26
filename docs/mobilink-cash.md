@@ -944,12 +944,30 @@ intenta.
   concepto por defecto. Una regla rellena sola si es segura (≥ 0,8, contando la
   seguridad con la que se leyó el emisor) y las cifras del ticket cuadran; si
   no, solo propone y la pantalla ofrece «Usar».
+- **Aprende de lo que se elige a mano.** Si ninguna regla reconoció el ticket
+  y alguien elige el concepto, quien puede configurar ve «¿Siempre así? …
+  Recordar». Guarda la regla por tipo de establecimiento (o por NIF si el tipo
+  no dice nada; por nombre nunca, «Bar» casaría con cualquiera) y la vuelve a
+  pasar por los tickets ya leídos de esa liquidación sin llamar otra vez a la
+  IA (`aplicarReglasDeConcepto`, `POST /expense-claims/:id/apply-rules`), con
+  las mismas reglas: solo conceptos vacíos de tickets sin revisar.
 - **Un abono no rellena el importe**, y **un ticket en otra moneda se marca**
   y no se presenta hasta pasarlo a euros.
 - **Si falla**, la línea queda FALLIDA con el fichero; se rellena a mano y se
   paga igual. «Volver a leer» la pone otra vez en cola. Una lectura colgada
   (proceso muerto) vuelve a la cola a los 10 minutos, y tras 3 intentos queda
   FALLIDA.
+
+Probado con una semana real de un trabajador (cuatro menús de un bar y
+cuatro peajes de Autopistes de Catalunya, escaneados en PDF sin texto). De
+ahí salieron tres arreglos: el «5,03 EUR.» con punto no se entendía como
+importe; la tarjeta que el peaje imprime con los seis primeros dígitos
+(«494000XXXXXX1743») se guardaba así en el texto del recibo, y ahora queda en
+los cuatro últimos; y las instrucciones del modelo aclaran que el «ID» del
+peaje o el «Nº Op.» de la caja del bar son el número del ticket, que un «FACTURA
+PROFORMA» de bar es un ticket y que el papel puede venir en catalán. Esos
+ajustes del modelo no se han podido contrastar aquí contra la IA de verdad:
+se comprueban subiendo los tickets.
 
 ### Duplicados
 
@@ -961,6 +979,11 @@ Tres detecciones, todas como evidencias con su resolución:
   corregirlo, al presentar y al pagar.
 - **Mismo número ya pagado** en la caja (Pagos, o una entrega liquidada),
   con la misma consulta que usa Pagos. Mismos momentos.
+
+**Mismo emisor, día e importe con distinto número no es un duplicado**: la ida
+y la vuelta por el mismo peaje cuestan lo mismo. Si los dos traen número y no
+coincide (sin espacios ni signos), son dos gastos; si falta en cualquiera de
+los dos, se pregunta como siempre.
 
 Solo se marca el ticket **posterior**: el original no se bloquea por culpa de
 la copia. Lo que deja de aplicar —la otra línea se excluyó, su liquidación se

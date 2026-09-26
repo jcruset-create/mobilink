@@ -43,7 +43,7 @@ import DenominationGrid, {
 import { AvisoCartuchos } from "../components/ui";
 import { aCentimos, aTextoEditable, euros, fechaJornada, totalLineas } from "../utils/money";
 import { esFallo } from "../utils/result";
-import { TONO_ESTADO, accionesDisponibles } from "../utils/liquidacion";
+import { TONO_ESTADO, accionesDisponibles, reglaParaRecordar } from "../utils/liquidacion";
 import {
   ETIQUETA_ESTADO_LIQUIDACION,
   type AperturaCartucho,
@@ -584,6 +584,7 @@ function DetalleDeLiquidacion({
             destinos={destinos}
             editable={editable}
             aceptaDuplicados={acciones.has("ACEPTAR_DUPLICADO")}
+            configura={puede("cash.configure")}
             lectura={lectura}
             ocupado={ocupado}
             onAccion={accion}
@@ -845,6 +846,7 @@ export function LineaTicket({
   destinos,
   editable,
   aceptaDuplicados,
+  configura = false,
   lectura = false,
   ocupado,
   onAccion,
@@ -856,6 +858,8 @@ export function LineaTicket({
   destinos: DestinoGasto[];
   editable: boolean;
   aceptaDuplicados: boolean;
+  /** Puede crear reglas de concepto: se le ofrece recordar lo que elige a mano. */
+  configura?: boolean;
   /** Hay lectura automática configurada: se ofrece volver a leer. */
   lectura?: boolean;
   ocupado: boolean;
@@ -872,6 +876,7 @@ export function LineaTicket({
   const [destinoId, setDestinoId] = useState<number | "">(linea.expenseTargetId ?? "");
   const [motivo, setMotivo] = useState("");
   const [pidiendo, setPidiendo] = useState<null | "EXCLUIR" | { aceptar: number }>(null);
+  const [recordada, setRecordada] = useState(false);
 
   const excluida = linea.situacion === "EXCLUIDA";
   const editableAqui = editable && !excluida;
@@ -886,6 +891,12 @@ export function LineaTicket({
   const idPropuesto = linea.leido?.conceptoPropuesto.conceptoId ?? null;
   const propuesto =
     idPropuesto != null && idPropuesto !== conceptoId ? (conceptos.find((c) => c.id === idPropuesto && c.activo) ?? null) : null;
+
+  // Aprender de lo elegido a mano: el próximo ticket igual saldrá solo.
+  const recordar =
+    configura && !excluida && !recordada && concepto?.activo
+      ? reglaParaRecordar(linea.leido, concepto.id, { nombre: linea.emisorNombre, nif: linea.emisorNif })
+      : null;
 
   const importeCent = importe.trim() ? aCentimos(importe) : 0;
   const importeMal = importe.trim() !== "" && (importeCent == null || importeCent < 0);
@@ -970,6 +981,28 @@ export function LineaTicket({
         </p>
       )}
 
+      {recordar && concepto && (
+        <p className="mb-2 flex flex-wrap items-center gap-2 text-[12px] text-slate-300">
+          <span>
+            ¿Siempre así? Guardar que {recordar.que} van a <strong>{concepto.nombre}</strong>, para que los demás
+            salgan solos.
+          </span>
+          <button
+            className={btnMini}
+            disabled={ocupado}
+            onClick={() =>
+              void onAccion(async () => {
+                await api.guardarReglaGasto({ campo: recordar.campo, patron: recordar.patron, conceptoId: concepto.id });
+                setRecordada(true);
+                // Y los demás tickets ya leídos de esta liquidación, al momento.
+                if (editable) await api.aplicarReglasDeConcepto(claimId);
+              })
+            }
+          >
+            Recordar
+          </button>
+        </p>
+      )}
       {linea.duplicados.length > 0 && (
         <ul className="mb-2 space-y-1">
           {linea.duplicados.map((e) => (

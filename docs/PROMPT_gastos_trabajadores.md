@@ -1203,3 +1203,31 @@ vincular y desvincular, empleado ya vinculado no se propone, re-vincular sin
 reescribir, un empleado para una sola persona, centro de coste o empleado de
 baja rechazados), corridas dos veces sobre la misma base; 11 mutaciones, todas
 en rojo.
+
+## Después de PR5: una semana de tickets de verdad
+
+Nueve PDF escaneados de un trabajador (cuatro menús de bar, cuatro peajes de
+Autopistes de Catalunya y uno de ellos subido dos veces) pasados por el camino
+entero con un extractor que devuelve lo que el modelo leería. Encontraron:
+
+- **La ida y la vuelta salían como duplicado.** `MISMA_CLAVE` solo miraba
+  emisor, día e importe. Ahora, si los dos tickets traen número y es distinto
+  (`numerosDistintos` en `domain.ts`), no se marca.
+- **«5,03 EUR.»** —con el punto que imprime Autopistes— no era un importe para
+  `importeImpreso`. Ningún peaje de esa concesionaria se habría rellenado.
+- **«494000XXXXXX1743»** pasaba entero al texto del recibo guardado:
+  `enmascararTarjetas` solo cortaba números sin enmascarar. Ahora deja
+  «···1743».
+- **El número del ticket**: el esquema decía que el número de operación no es
+  el del documento, y el «Nº Op.» de la caja del bar y el «ID» del peaje se
+  habrían quedado vacíos. Se aclara en `schema.ts`, con el «FACTURA PROFORMA»
+  de bar (es un ticket) y el catalán. Sin clave de IA aquí no se ha podido
+  medir contra el modelo real.
+- **Aprender**: «Recordar» en la línea del ticket guarda la regla y la aplica
+  a los demás tickets leídos de la liquidación sin volver a leer
+  (`aplicarReglasDeConcepto`).
+
+La prueba de integración usa un bar con otro nombre y otro NIF (es una
+persona física) y NIF que cambian en cada pasada. 12 mutaciones, todas en
+rojo; una sobrevivió la primera vez —aplicar las reglas también a los tickets
+apartados— y la prueba ahora la caza.

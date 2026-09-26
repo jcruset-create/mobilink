@@ -15,7 +15,9 @@
  * · MISMO_FICHERO — el sha256, al subir.
  * · MISMA_CLAVE — mismo emisor, mismo día y mismo importe: el mismo ticket
  *   escaneado dos veces, o escaneado y fotografiado, que son dos ficheros. Al
- *   leerlo, al corregirlo, y otra vez al presentar y al pagar.
+ *   leerlo, al corregirlo, y otra vez al presentar y al pagar. Salvo que los
+ *   dos traigan número y sea distinto: la ida y la vuelta por el mismo peaje
+ *   el mismo día cuestan lo mismo y son dos gastos.
  * · MISMO_NUMERO — el número del ticket ya consta PAGADO en la caja (un pago
  *   de proveedor, o una entrega ya liquidada). Mismos momentos.
  *
@@ -31,7 +33,7 @@
 import type { PoolClient } from "pg";
 import { cobroPrevioDeFactura } from "../duplicates.ts";
 import { ErrorCaja } from "../errors.ts";
-import { claveDeDuplicado } from "./domain.ts";
+import { claveDeDuplicado, numerosDistintos } from "./domain.ts";
 
 type Momento = "SUBIDA" | "ANALISIS" | "EDICION" | "PRESENTAR" | "PAGAR";
 
@@ -221,7 +223,8 @@ export async function detectarPorContenido(
      * MISMA función que la calcula. Solo las anteriores (ver cabecera).
      */
     const { rows: candidatas } = await client.query(
-      `SELECT o.id, o.emisor_nif, o.emisor_nombre, o.fecha::text AS fecha, o.importe_centimos, c.numero
+      `SELECT o.id, o.emisor_nif, o.emisor_nombre, o.fecha::text AS fecha, o.importe_centimos,
+              o.numero_documento, c.numero
          FROM cash_expense_claim_lines o
          JOIN cash_expense_claims c ON c.id = o.claim_id
         WHERE o.empresa_id = $1 AND o.id <> $2
@@ -239,6 +242,8 @@ export async function detectarPorContenido(
         importeCentimos: Number(o.importe_centimos),
       });
       if (suya !== clave) continue;
+      // La ida y la vuelta por el mismo peaje: mismo todo, distinto número.
+      if (numerosDistintos(l.numero_documento, o.numero_documento)) continue;
       coinciden.MISMA_CLAVE.push(o.id);
       await apuntar(client, {
         empresaId,
