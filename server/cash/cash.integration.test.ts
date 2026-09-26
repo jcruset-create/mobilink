@@ -1750,6 +1750,9 @@ describe.runIf(RUN)("justificantes e informe de cierre", () => {
     const conDocumento = await informe.informeCierre(EMPRESA, sesion.id);
     const { PDFDocument } = await import("pdf-lib");
     const paginasAntes = (await PDFDocument.load(conDocumento)).getPageCount();
+    // La que se imprime sola al cerrar: la hoja del cierre, sin el justificante detrás.
+    const soloCierre = await informe.informeCierre(EMPRESA, sesion.id, { conJustificantes: false });
+    expect((await PDFDocument.load(soloCierre)).getPageCount()).toBe(paginasAntes - 1);
 
     await documentos.anularDocumento(ctx, doc.id, "Escaneo movido, se repite");
 

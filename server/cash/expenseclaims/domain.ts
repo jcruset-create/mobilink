@@ -319,3 +319,25 @@ export function claveDeDuplicado(l: {
   if (nombre.length < 3) return null;
   return `${l.fecha}|${l.importeCentimos}|NOMBRE:${nombre}`;
 }
+
+/**
+ * Si los números impresos dicen que son DOS papeles distintos.
+ *
+ * Mismo emisor, mismo día y mismo importe no bastan: la ida y la vuelta por el
+ * mismo peaje cuestan lo mismo, y dos menús en el mismo bar también. Cuando
+ * los dos tickets traen su número —el «ID» del peaje, el «Nº Op.» de la caja
+ * del bar— y no coinciden, son dos gastos. Si falta en cualquiera de los dos,
+ * no se puede afirmar nada y la clave sigue mandando.
+ *
+ * Se compara sin espacios ni signos: «0297 1838-6265» y «029718386265» son el
+ * mismo número leído de dos maneras.
+ */
+export function numerosDistintos(a: string | null | undefined, b: string | null | undefined): boolean {
+  const limpio = (x: string | null | undefined) =>
+    String(x ?? "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
+  const x = limpio(a);
+  const y = limpio(b);
+  return Boolean(x) && Boolean(y) && x !== y;
+}

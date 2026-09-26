@@ -224,6 +224,26 @@ function Resultado({ resultado }: { resultado: ResultadoCotejo }) {
       )}
 
       {informe && <Informe informe={informe} />}
+
+      {/*
+        Lo que se ha dejado fuera, dicho: si no, un cobro de la gasolinera que
+        no sale en ningún lado parecería perdido.
+      */}
+      {(resultado.apartadas ?? []).length > 0 && (
+        <p className="px-1 text-xs text-slate-400">
+          No se cotejan porque se arquean aparte en el ERP:{" "}
+          {resultado.apartadas
+            .map(
+              (a) =>
+                `${a.seccion || "sin sección"} (${a.operaciones} ${a.operaciones === 1 ? "operación" : "operaciones"}` +
+                (a.cobrosCentimos ? `, cobros ${euros(a.cobrosCentimos)}` : "") +
+                (a.pagosCentimos ? `, pagos ${euros(a.pagosCentimos)}` : "") +
+                ")"
+            )
+            .join(" · ")}
+          . Se marca en Configuración → Secciones de negocio, «Se arquea aparte».
+        </p>
+      )}
     </>
   );
 }

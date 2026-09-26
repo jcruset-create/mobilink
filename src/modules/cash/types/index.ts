@@ -954,10 +954,18 @@ export type LineaMobilink = {
   importeCentimos: number;
   tipo: "COBRO" | "PAGO";
   concepto?: string | null;
+  /** Las partes en que el ERP puede apuntarla: el pago de una liquidación, por concepto. */
+  desglose?: { concepto: string; importeCentimos: number }[];
 };
 
 export type InformeCotejo = {
-  emparejadas: { erp: LineaErp; mobilink: LineaMobilink; por: "referencia" | "importe" }[];
+  emparejadas: {
+    erp: LineaErp;
+    mobilink: LineaMobilink;
+    por: "referencia" | "importe" | "desglose";
+    /** Con `desglose`: qué parte de la operación es esa línea del ERP. */
+    parte?: string;
+  }[];
   soloEnErp: LineaErp[];
   soloEnMobilink: LineaMobilink[];
   ambiguas: { erp: LineaErp; candidatos: LineaMobilink[] }[];
@@ -995,6 +1003,8 @@ export type ResultadoCotejo = {
     bloqueante: boolean;
   };
   informe: InformeCotejo | null;
+  /** Lo que no se ha cotejado: secciones que se arquean aparte (la gasolinera). */
+  apartadas: { seccion: string; operaciones: number; cobrosCentimos: number; pagosCentimos: number }[];
 };
 
 // ── Liquidaciones de gastos de trabajadores ────────────────────────────────

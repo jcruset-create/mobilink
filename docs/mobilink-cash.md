@@ -339,6 +339,13 @@ Un justificante ilegible o que ya no esté **no rompe el informe**: sale una
 página diciéndolo, con su número de operación. Un cierre sin informe por una
 factura corrupta sería peor que un informe con un hueco señalado.
 
+
+**Al cerrar, la hoja del cierre se imprime sola.** Sin los justificantes, que
+ya están en papel en el cajón (`/sessions/:id/report.pdf?justificantes=0`); el
+informe completo sigue en su botón. Se carga en un iframe invisible y sale el
+diálogo de impresión del navegador. Imprimir sin diálogo lo tiene que activar
+quien administra el PC (Chrome con `--kiosk-printing`); una página web no puede.
+
 ## 7 quinquies. Ingresos bancarios
 
 El cierre de cada jornada aparta un importe "para el banco"
@@ -739,6 +746,20 @@ resultado **no cuenta como cuadrado**. Con dos candidatos del mismo importe no
 se elige: se declara ambiguo. Un emparejamiento inventado es peor que un hueco
 señalado, porque el hueco se ve y el invento no.
 
+**Lo de la gasolinera no se coteja.** Taller y gasolinera comparten cajón
+pero en Genes son dos cajas, y el arqueo del taller no trae los cobros del
+surtidor. Las operaciones de una sección marcada «Se arquea aparte»
+(Configuración → Secciones de negocio) se dejan fuera del cotejo, y la pantalla
+dice cuántas y por cuánto, para que nadie las dé por perdidas.
+
+**El pago de una liquidación casa con Genes partido.** En Mobilink es un solo
+pago por el total; en Genes se apunta una línea por concepto («DIETAS IVAN
+66,40», «AUTOPISTAS IVAN 15,88» por un pago de 82,28). Ese pago llega al cotejo
+con su desglose por concepto (solo si salió por una forma y las partes suman el
+pago), y una pasada después de la de importe entero casa cada parte con su
+línea: mismo tipo, importe y forma, tantas líneas de cada importe como partes,
+y todas o ninguna.
+
 ### Las etiquetas que el ERP corta
 
 El ERP recorta la columna de forma de pago según la resolución del monitor: la
@@ -944,12 +965,30 @@ intenta.
   concepto por defecto. Una regla rellena sola si es segura (≥ 0,8, contando la
   seguridad con la que se leyó el emisor) y las cifras del ticket cuadran; si
   no, solo propone y la pantalla ofrece «Usar».
+- **Aprende de lo que se elige a mano.** Si ninguna regla reconoció el ticket
+  y alguien elige el concepto, quien puede configurar ve «¿Siempre así? …
+  Recordar». Guarda la regla por tipo de establecimiento (o por NIF si el tipo
+  no dice nada; por nombre nunca, «Bar» casaría con cualquiera) y la vuelve a
+  pasar por los tickets ya leídos de esa liquidación sin llamar otra vez a la
+  IA (`aplicarReglasDeConcepto`, `POST /expense-claims/:id/apply-rules`), con
+  las mismas reglas: solo conceptos vacíos de tickets sin revisar.
 - **Un abono no rellena el importe**, y **un ticket en otra moneda se marca**
   y no se presenta hasta pasarlo a euros.
 - **Si falla**, la línea queda FALLIDA con el fichero; se rellena a mano y se
   paga igual. «Volver a leer» la pone otra vez en cola. Una lectura colgada
   (proceso muerto) vuelve a la cola a los 10 minutos, y tras 3 intentos queda
   FALLIDA.
+
+Probado con una semana real de un trabajador (cuatro menús de un bar y
+cuatro peajes de Autopistes de Catalunya, escaneados en PDF sin texto). De
+ahí salieron tres arreglos: el «5,03 EUR.» con punto no se entendía como
+importe; la tarjeta que el peaje imprime con los seis primeros dígitos
+(«494000XXXXXX1743») se guardaba así en el texto del recibo, y ahora queda en
+los cuatro últimos; y las instrucciones del modelo aclaran que el «ID» del
+peaje o el «Nº Op.» de la caja del bar son el número del ticket, que un «FACTURA
+PROFORMA» de bar es un ticket y que el papel puede venir en catalán. Esos
+ajustes del modelo no se han podido contrastar aquí contra la IA de verdad:
+se comprueban subiendo los tickets.
 
 ### Duplicados
 
@@ -961,6 +1000,11 @@ Tres detecciones, todas como evidencias con su resolución:
   corregirlo, al presentar y al pagar.
 - **Mismo número ya pagado** en la caja (Pagos, o una entrega liquidada),
   con la misma consulta que usa Pagos. Mismos momentos.
+
+**Mismo emisor, día e importe con distinto número no es un duplicado**: la ida
+y la vuelta por el mismo peaje cuestan lo mismo. Si los dos traen número y no
+coincide (sin espacios ni signos), son dos gastos; si falta en cualquiera de
+los dos, se pregunta como siempre.
 
 Solo se marca el ticket **posterior**: el original no se bloquea por culpa de
 la copia. Lo que deja de aplicar —la otra línea se excluyó, su liquidación se

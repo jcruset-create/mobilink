@@ -36,6 +36,7 @@ let pago: typeof import("./expenseclaims/pago.ts");
 let stats: typeof import("./expensestats.ts");
 let analisis: typeof import("./expenseclaims/analisis.ts");
 let empleados: typeof import("./expenseclaims/empleados.ts");
+let cotejoErp: typeof import("./cotejoErp.ts");
 
 const EMPRESA = "00000000-0000-4000-a000-0000000000f7";
 const PRESENTA = "00000000-0000-4000-a000-0000000000f8";
@@ -98,6 +99,7 @@ beforeAll(async () => {
   documentos = await import("./documents.ts");
   liquidaciones = await import("./expenseclaims/service.ts");
   tickets = await import("./expenseclaims/lines.ts");
+  cotejoErp = await import("./cotejoErp.ts");
   informe = await import("./expenseclaims/report.ts");
   pago = await import("./expenseclaims/pago.ts");
   stats = await import("./expensestats.ts");
@@ -614,6 +616,46 @@ describe.runIf(RUN)("Liquidaciones · el pago", () => {
       false
     );
 
+  it("en el cotejo con el ERP el pago lleva su desglose por concepto, y casa con Genes partido", async () => {
+    const l = await aprobada82();
+    const r = await pago.pagarLiquidacion(ctxJefe, l.id, enEfectivo(`cotejo-${randomUUID()}`));
+
+    const { lineas } = await cotejoErp.leerJornada(EMPRESA, sesion);
+    const suya = lineas.find((x) => x.id === r.pago.operacionId)!;
+    expect(suya.desglose).toEqual([
+      { concepto: `Dietas ${sufijo}`, importeCentimos: 6640 },
+      { concepto: `Peajes ${sufijo}`, importeCentimos: 1588 },
+    ]);
+
+    // Si las partes no sumaran el pago —un ticket tocado después—, sin desglose: no se inventa.
+    const { rows: [unTicket] } = await db.query(
+      `SELECT id FROM cash_expense_claim_lines WHERE claim_id = $1 ORDER BY id LIMIT 1`,
+      [l.id]
+    );
+    await db.query(`UPDATE cash_expense_claim_lines SET importe_centimos = importe_centimos + 1 WHERE id = $1`, [unTicket.id]);
+    const tocada = (await cotejoErp.leerJornada(EMPRESA, sesion)).lineas.find((x) => x.id === r.pago.operacionId)!;
+    expect(tocada.desglose).toBeUndefined();
+    await db.query(`UPDATE cash_expense_claim_lines SET importe_centimos = importe_centimos - 1 WHERE id = $1`, [unTicket.id]);
+
+    // Así lo apunta Genes: una línea por concepto, las dos CONTADO.
+    const { cotejar } = await import("./domain/cotejo.ts");
+    const inf = cotejar(
+      [
+        { formaErp: "CONTADO", importeCentimos: 6640, tipo: "PAGO", concepto: "DIETAS JUAN" },
+        { formaErp: "CONTADO", importeCentimos: 1588, tipo: "PAGO", concepto: "AUTOPISTAS JUAN" },
+      ],
+      [suya],
+      new Map([["CONTADO", "CASH"]])
+    );
+    expect(inf.cuadra).toBe(true);
+    expect(inf.emparejadas.map((e) => e.por)).toEqual(["desglose", "desglose"]);
+
+    // Con el pago anulado ya no está en la jornada, ni con desglose ni sin él.
+    await servicio.anularOperacion(ctxJefe, r.pago.operacionId, "prueba del cotejo");
+    const tras = await cotejoErp.leerJornada(EMPRESA, sesion);
+    expect(tras.lineas.some((x) => x.id === r.pago.operacionId)).toBe(false);
+  });
+
   it("sale UN pago por el total, del cajón, y los tickets quedan como sus justificantes", async () => {
     const l = await aprobada82();
     const operacionesAntes = await contar("cash_operations");
@@ -1082,6 +1124,166 @@ describe.runIf(RUN)("Liquidaciones · la lectura automática", () => {
     expect((await linea(otro.l.id, otro.x.id)).analisis).toBe("FALLIDO");
   });
 
+  it("una semana de tickets de verdad: bar, autopista, la ida y la vuelta, y uno subido dos veces", async () => {
+    /*
+     * Los nueve papeles que trajo un trabajador la semana del 21/09/2026,
+     * copiados tal y como los imprime cada máquina: el «FACTURA PROFORMA» de
+     * la caja del bar, el «5,03 EUR.» con punto de Autopistes, el año con dos
+     * cifras, el NIF con puntos y guion, la tarjeta con los seis primeros a la
+     * vista. El bar tiene otro nombre y otro NIF: es una persona física.
+     *
+     * Los NIF cambian en cada pasada porque la base se reutiliza y los tickets
+     * de la anterior contarían como duplicados de estos.
+     */
+    conIA();
+    await db.query(
+      `DELETE FROM cash_expense_rules WHERE empresa_id = $1 AND campo = 'TIPO_ESTABLECIMIENTO' AND patron = 'RESTAURANTE'`,
+      [EMPRESA]
+    );
+    const d = sufijo.slice(0, 8);
+    const nifBar = `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}-J`;
+    const nifAutopista = `A-${d}`;
+    const sinRecibo = peaje().recibo;
+
+    const bar = (numero: string, fecha: string) =>
+      peaje({
+        tipo_documento: "TICKET",
+        tipo_establecimiento: "RESTAURANTE",
+        factura: { numero, fecha },
+        emisor: { nombre: "BAR LA PLAÇA", nif: nifBar },
+        concepto: "MENU DIARIO + Cortado",
+        totales: { base_imponible: "15,09 €", iva_importe: "1,51 €", iva_porcentaje: "10,00 %", total: "16,60 €", moneda: "€" },
+        recibo: sinRecibo,
+      });
+    const autopista = (numero: string, fecha: string, importe: string, extra: Record<string, unknown> = {}) =>
+      peaje({
+        tipo_documento: "TICKET",
+        factura: { numero, fecha },
+        emisor: { nombre: "AUTOPISTES DE CATALUNYA S.A.", nif: nifAutopista },
+        concepto: "97 CUBELLES TRONC",
+        totales: { base_imponible: null, iva_importe: null, iva_porcentaje: "21,00 %", total: importe, moneda: "EUR" },
+        recibo: {
+          ...sinRecibo,
+          detectado: true,
+          recibos_detectados: 1,
+          plantilla: "INTEGRADO_ERP",
+          importe,
+          tarjeta: "494000XXXXXX1743",
+          cod_autorizacion: "610401",
+          texto: `TARGETA VISA\nAUT 610401\n494000XXXXXX1743\nImport: ${importe}`,
+        },
+        ...extra,
+      });
+
+    const papeles: Record<string, ReturnType<typeof peaje>> = {
+      "20260921_BAR.pdf": bar("218406", "21/09/2026 13:59"),
+      "20260922_BAR.pdf": bar("218574", "22/09/2026 14:02"),
+      "20260924_BAR.pdf": bar("219903", "24/09/2026 14:03"),
+      "20260925_BAR.pdf": bar("220034", "25/09/2026 14:02"),
+      "20260921_AUTOPISTES_DE.pdf": autopista(`029703186264${d.slice(0, 6)}`, "21/09/26 10:01", "5,03 EUR."),
+      "20260922_AUTOPISTES_CALAFELL.pdf": autopista(`029902386265${d.slice(0, 6)}`, "22/09/26 09:28", "0,79 EUR."),
+      // La ida y la vuelta: mismo día, mismo peaje, mismo importe.
+      "20260922_AUTOPISTES_NORD.pdf": autopista(`029705186265${d.slice(0, 6)}`, "22/09/26 11:38", "5,03 EUR.", {
+        // Casi borrado: el NIF no se lee y el emisor, a medias.
+        emisor: { nombre: "AUTOPISTES DE CATALUNYA S.A.", nif: null },
+        confianza: { numero_factura: 0.7, cliente: 0, emisor: 0.6, total: 0.9, concepto: 0.6, recibo: 0.6 },
+      }),
+      "20260922_AUTOPISTES_SUD.pdf": autopista(`029718386265${d.slice(0, 6)}`, "22/09/26 18:02", "5,03 EUR."),
+    };
+
+    const l = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan, notas: "Semana del 21" });
+    const buffers = new Map<string, Buffer>();
+    for (const nombre of Object.keys(papeles)) buffers.set(nombre, await pdf(`${nombre} ${randomUUID()}`));
+    const subidos = await tickets.subirTickets(ctx, l.id, [
+      ...[...buffers].map(([nombre, b]) => fichero(b, nombre)),
+      // El del 21 en la autopista, subido otra vez: el mismo fichero.
+      fichero(buffers.get("20260921_AUTOPISTES_DE.pdf")!, "20260921_AUTOPISTES_DE.pdf"),
+    ]);
+    expect(subidos).toHaveLength(9);
+
+    await analisis.procesarPendientes(50, async (documento) => papeles[documento.nombre]);
+    const lineas = (await liquidaciones.detalleLiquidacion(ctx, l.id)).lineas;
+    const de = (nombre: string) => lineas.filter((x) => x.nombre === nombre);
+    expect(lineas.every((x) => x.analisis === "LISTO")).toBe(true);
+
+    // El bar: fecha, número de la caja, desglose de IVA que cuadra, y sin concepto (nadie lo ha enseñado).
+    const [lunes] = de("20260921_BAR.pdf");
+    expect(lunes).toMatchObject({
+      fecha: "2026-09-21",
+      emisorNombre: "BAR LA PLAÇA",
+      emisorNif: nifBar,
+      numeroDocumento: "218406",
+      importeCentimos: 1660,
+      baseCentimos: 1509,
+      ivaCentimos: 151,
+      expenseConceptId: null,
+    });
+    expect(lunes.leido?.tipoEstablecimiento).toBe("RESTAURANTE");
+    expect(lunes.leido?.avisos.map((a) => a.codigo)).not.toContain("TOTALES_NO_CUADRAN");
+    expect(lunes.leido?.avisos.map((a) => a.codigo)).not.toContain("NO_ES_FACTURA");
+
+    // La autopista: el «EUR.» con punto, el año con dos cifras, y el concepto por la regla de PEAJE.
+    const [autopista21, repetido] = de("20260921_AUTOPISTES_DE.pdf");
+    expect(autopista21).toMatchObject({ fecha: "2026-09-21", importeCentimos: 503, expenseConceptId: peajes });
+    expect(de("20260922_AUTOPISTES_CALAFELL.pdf")[0]).toMatchObject({ importeCentimos: 79, expenseConceptId: peajes });
+    // El casi borrado: se propone Peajes, pero con esa lectura no se pone solo.
+    const [nord] = de("20260922_AUTOPISTES_NORD.pdf");
+    expect(nord).toMatchObject({ fecha: "2026-09-22", importeCentimos: 503, expenseConceptId: null });
+    expect(nord.leido?.conceptoPropuesto).toMatchObject({ conceptoId: peajes, autoSeleccionar: false });
+
+    // Duplicados: solo el fichero subido dos veces. Ni la ida y la vuelta, ni cuatro menús iguales en días distintos.
+    const conDuplicado = lineas.filter((x) => x.duplicados.some((e) => e.resolucion === "PENDIENTE"));
+    expect(conDuplicado.map((x) => x.id)).toEqual([repetido.id]);
+    expect(repetido.duplicados.map((e) => e.tipo)).toContain("MISMO_FICHERO");
+
+    // De la tarjeta, solo los cuatro últimos: tampoco los seis primeros que imprime el peaje.
+    const { rows: escaneos } = await db.query(
+      `SELECT s.extraccion_cruda FROM cash_invoice_scans s
+         JOIN cash_expense_claim_lines x ON x.scan_id = s.id
+        WHERE x.claim_id = $1`,
+      [l.id]
+    );
+    expect(escaneos.length).toBeGreaterThan(0);
+    expect(JSON.stringify(escaneos)).not.toContain("494000");
+
+    // Aprender: alguien elige Dietas en el primer menú, lo da por revisado y pulsa «Recordar».
+    await tickets.editarLinea(ctx, l.id, lunes.id, { expenseConceptId: dietas, revisada: true });
+    // El repetido se aparta: lo apartado no se toca.
+    await tickets.excluirLinea(ctx, l.id, repetido.id, "Subido dos veces");
+    // El del viernes alguien lo dio por revisado sin concepto: lo que decidió una persona no se pisa.
+    const [viernes] = de("20260925_BAR.pdf");
+    await tickets.editarLinea(ctx, l.id, viernes.id, { revisada: true });
+    await config.guardarReglaGasto(ctx, { campo: "TIPO_ESTABLECIMIENTO", patron: "RESTAURANTE", conceptoId: dietas });
+    const llamadasAntes = (await db.query(`SELECT COUNT(*)::int AS n FROM cash_invoice_scans WHERE empresa_id = $1`, [EMPRESA])).rows[0].n;
+    expect(await analisis.aplicarReglasDeConcepto(ctx, l.id)).toEqual({ propuestas: 8, rellenadas: 2 });
+    // Sin volver a leer: ni un escaneo más.
+    const llamadasDespues = (await db.query(`SELECT COUNT(*)::int AS n FROM cash_invoice_scans WHERE empresa_id = $1`, [EMPRESA])).rows[0].n;
+    expect(llamadasDespues).toBe(llamadasAntes);
+    const tras = (await liquidaciones.detalleLiquidacion(ctx, l.id)).lineas;
+    // Los otros menús, al momento, con el porqué de la regla; el revisado, solo propuesto.
+    const menus = tras.filter((x) => x.leido?.tipoEstablecimiento === "RESTAURANTE");
+    expect(menus.map((x) => x.expenseConceptId)).toEqual([dietas, dietas, dietas, null]);
+    expect(menus[1].leido?.conceptoPropuesto.motivo).toContain("RESTAURANTE");
+    expect(menus[3].leido?.conceptoPropuesto.conceptoId).toBe(dietas);
+    // El peaje casi borrado sigue igual: con esa lectura, propuesta y no más.
+    expect(tras.find((x) => x.id === nord.id)?.expenseConceptId).toBeNull();
+
+    // Una liquidación ya presentada no se toca.
+    const otra = await liquidaciones.crearLiquidacion(ctx, { expenseTargetId: juan });
+    await tickets.subirTickets(ctx, otra.id, [fichero(await pdf(`x ${randomUUID()}`))]);
+    await db.query(`UPDATE cash_expense_claims SET estado = 'PRESENTADA' WHERE id = $1`, [otra.id]);
+    await expect(analisis.aplicarReglasDeConcepto(ctx, otra.id)).rejects.toMatchObject({ codigo: "LINEA_NO_EDITABLE" });
+
+    // Se revisa todo y se presenta: 4 menús y 4 peajes.
+    for (const x of lineas.filter((y) => y.id !== repetido.id)) {
+      const concepto = x.leido?.tipoEstablecimiento === "RESTAURANTE" ? dietas : peajes;
+      await tickets.editarLinea(ctx, l.id, x.id, { expenseConceptId: concepto, revisada: true });
+    }
+    const presentada = await liquidaciones.presentarLiquidacion(ctx, l.id);
+    expect(presentada.estado).toBe("PRESENTADA");
+    expect(presentada.totalCentimos).toBe(4 * 1660 + 503 + 79 + 503 + 503);
+  });
+
   it("las reglas: guardar el mismo par lo reapunta, y una sin concepto vigente sale marcada", async () => {
     const r1 = await config.guardarReglaGasto(ctx, { campo: "NOMBRE_EMISOR", patron: `Cal Pere ${sufijo}`, conceptoId: dietas });
     const r2 = await config.guardarReglaGasto(ctx, { campo: "NOMBRE_EMISOR", patron: `Cal Pere ${sufijo}`, conceptoId: peajes });
@@ -1176,6 +1378,27 @@ describe.runIf(RUN)("Liquidaciones · duplicados por contenido", () => {
     expect(c.duplicados[0]).toMatchObject({ resolucion: "DESCARTADA" });
     expect(c.duplicados[0].motivo).toContain("ya no coincide");
     expect((await liquidaciones.detalleLiquidacion(ctx, b.l.id)).bloqueos).toEqual([]);
+  });
+
+  it("la ida y la vuelta por el mismo peaje: mismo día e importe, distinto número, son dos gastos", async () => {
+    const imp = nuevoImporte();
+    const nif = `A-${sufijo.slice(0, 8)}`;
+    const ida = { fecha: "2026-09-22", emisorNombre: "AUTOPISTES DE CATALUNYA", emisorNif: nif, importeCentimos: imp };
+    await conTicket({ ...ida, numeroDocumento: `0297051862${sufijo.slice(0, 8)}` });
+    const vuelta = await conTicket({ ...ida, numeroDocumento: `0297183862${sufijo.slice(0, 8)}` });
+    expect(vuelta.x.duplicados).toEqual([]);
+
+    // Sin número en uno de los dos no se puede afirmar nada: se pregunta.
+    const sinNumero = await conTicket(ida);
+    expect(sinNumero.x.duplicados.filter((e) => e.tipo === "MISMA_CLAVE")).toHaveLength(2);
+
+    // Y al escribirle su número, distinto, la sospecha se descarta sola.
+    const c = await tickets.editarLinea(ctx, sinNumero.l.id, sinNumero.x.id, { numeroDocumento: `0299023862${sufijo.slice(0, 8)}` });
+    expect(c.duplicados.map((e) => e.resolucion)).toEqual(["DESCARTADA", "DESCARTADA"]);
+
+    // El mismo número, escrito con espacios, sí es el mismo ticket.
+    const copia = await conTicket({ ...ida, numeroDocumento: `0297 0518 62${sufijo.slice(0, 8)}` });
+    expect(copia.x.duplicados.filter((e) => e.resolucion === "PENDIENTE")).toHaveLength(1);
   });
 
   it("el número del ticket ya pagado en la caja se marca contra ese pago", async () => {
