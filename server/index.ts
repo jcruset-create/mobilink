@@ -117,6 +117,21 @@ import { siguienteReferencia } from "./cobros/referencias.ts";
 import { saveCaptureAnalysis, reconcileCaptureAiStatus } from "./core/whatsappCapture.ts";
 import { aE164, clienteTwilio, numeroWhatsAppEmisor } from "./core/twilio.ts";
 import { jsonAjeno } from "./core/jsonAjeno.ts";
+import { enviarConfirmacion } from "./citasWhatsapp/envio.ts";
+import {
+  aplicarEstadoDeEnvio,
+  cambiarCita,
+  citasCandidatas,
+  marcarConfirmacionEnviada,
+} from "./citasWhatsapp/estado.ts";
+import {
+  cambiosPorRespuesta,
+  debePedirConfirmacion,
+  eligeCitaParaRespuesta,
+  estadoEnvioDeTwilio,
+  intencionDeRespuesta,
+  respuestaYaAplicada,
+} from "../src/modules/confirmacionCita.ts";
 import { numeroDeCita } from "./whatsapp/cita.ts";
 import { asistenciasDelOperarioParaCola, soltarCola, trasQueEspera } from "./cola/cola.ts";
 import { enEspera } from "../src/modules/colaEspera.ts";
@@ -14348,9 +14363,72 @@ async function checkAgendaWhatsAppReminders() {
         },
       ];
 
+      /*
+       * El de 24 h ya no es un recordatorio: es la SOLICITUD DE CONFIRMACIÓN.
+       *
+       * Se atiende aparte y antes del bucle de siempre porque manda otra
+       * plantilla —la que lleva los botones—, escribe en otros campos y puede
+       * decidir no mandarse. Los de 1 h y el manual siguen exactamente igual.
+       *
+       * Si no sale el mensaje NO se marca nada, ni siquiera el campo viejo:
+       * una cita marcada como avisada sin haber avisado no se vuelve a
+       * intentar nunca. Al reintentarse cada minuto, en cuanto la plantilla
+       * esté configurada las citas en ventana salen solas.
+       */
+      const confirmacion = reminders.find(
+        (r) => r.sentField === "whatsappReminder24hSentAtMs"
+      );
+      if (
+        confirmacion &&
+        debePedirConfirmacion(job, {
+          dentroDeLaVentana: shouldSendReminder(
+            confirmacion.triggerAtMs,
+            appointmentAtMs,
+            nowMs
+          ),
+        })
+      ) {
+        try {
+          const resultado = await enviarConfirmacion(job, {
+            motivo: getScheduledJobLabel(job),
+          });
+
+          if (resultado.estado === "enviado") {
+            await marcarConfirmacionEnviada(job.id, {
+              sid: resultado.sid,
+              telefono: resultado.telefono,
+              contentSid: resultado.contentSid,
+              ahoraMs: nowMs,
+            });
+            job.whatsappReminder24hSentAtMs = nowMs;
+            job.confirmationStatus = "awaiting_confirmation";
+            console.log(
+              `[Citas] confirmación pedida: cita=${job.id} sid=${resultado.sid}`
+            );
+          } else if (resultado.estado === "sin-plantilla") {
+            console.warn(
+              `[Citas] confirmación NO enviada (cita ${job.id}): falta ` +
+                `TWILIO_CONTENT_SID_CONFIRMACION_CITA. Se reintentará.`
+            );
+          } else {
+            console.warn(
+              `[Citas] confirmación NO enviada (cita ${job.id}): ${resultado.estado}.`
+            );
+          }
+        } catch (error: any) {
+          console.error("[Citas] error pidiendo confirmación:", {
+            cita: job.id,
+            message: error?.message,
+            code: error?.code,
+          });
+        }
+      }
+
       for (const reminder of reminders) {
         if (!reminder.enabled) continue;
         if (reminder.sentAt) continue;
+        // El de 24 h lo ha atendido el bloque de arriba, mande o no mande.
+        if (reminder.sentField === "whatsappReminder24hSentAtMs") continue;
 
         if (!shouldSendReminder(reminder.triggerAtMs, appointmentAtMs, nowMs)) {
           continue;
@@ -15580,10 +15658,27 @@ app.post(
         .filter((u) => /^https?:\/\//i.test(u));
       const urls = [...new Set(candidatos)].map((u) => `${u}/api/whatsapp/inbound`);
 
+      /*
+       * La firma se calcula UNA vez y se lleva como bandera.
+       *
+       * Los caminos que ya existían —recobros, captura, borradores— siguen
+       * procesándose con firma inválida, exactamente como hasta ahora:
+       * endurecerlos de golpe es romper cosas que hoy funcionan sin saber
+       * cuánto ni a quién.
+       *
+       * Lo que NO se hace nunca con firma inválida es tocar una cita. Quien
+       * consiguiera colar un mensaje confirmaría citas ajenas, y un taller que
+       * da por buena una cita que nadie ha confirmado se queda con el hueco
+       * vacío y el cliente sin avisar. Es el mismo razonamiento que ya llevó a
+       * exigir firma en `server/satisfaction/routerCallback.ts`.
+       */
+      let firmaValida = false;
       if (authToken && twilioSig) {
-        const valid = urls.some((u) => twilio.validateRequest(authToken, twilioSig, u, req.body));
-        if (!valid) {
-          console.warn("Invalid Twilio signature on /api/whatsapp/inbound — procesando igualmente");
+        firmaValida = urls.some((u) =>
+          twilio.validateRequest(authToken, twilioSig, u, req.body)
+        );
+        if (!firmaValida) {
+          console.warn("Invalid Twilio signature on /api/whatsapp/inbound — procesando igualmente (las citas NO se tocan)");
         }
       }
 
@@ -15636,6 +15731,71 @@ app.post(
         ]
       );
       const msgId = msgResult.rows[0].id;
+
+      /*
+       * ── ¿Es la respuesta a una solicitud de confirmación de cita? ──────
+       *
+       * Antes que nada porque es lo único de este webhook que puede cambiar
+       * algo que el taller ve como un compromiso con el cliente.
+       */
+      try {
+        const intencion = intencionDeRespuesta({
+          buttonPayload: req.body.ButtonPayload,
+          buttonText: req.body.ButtonText,
+          body: Body,
+        });
+
+        if (intencion) {
+          if (!firmaValida) {
+            // Se guarda el mensaje (ya está guardado arriba) pero la cita no
+            // se toca. Queda el aviso para poder mirarlo.
+            console.error(
+              `[Citas] respuesta «${intencion}» DESCARTADA por firma inválida ` +
+                `(sid=${MessageSid}, de=${From}). Ninguna cita modificada.`
+            );
+          } else {
+            const sidOriginal =
+              req.body.OriginalRepliedMessageSid ?? req.body.OriginalRepliedMessageSId ?? null;
+            const candidatas = await citasCandidatas(String(From), sidOriginal);
+            const eleccion = eligeCitaParaRespuesta(candidatas, { sidOriginal });
+
+            if (eleccion.tipo === "una") {
+              if (respuestaYaAplicada(eleccion.cita as any, MessageSid)) {
+                // Twilio reintenta. Sin esto, la segunda vuelta reescribiría la
+                // hora y la ficha diría que confirmó más tarde de lo que fue.
+                console.log(`[Citas] respuesta ${MessageSid} ya aplicada; se ignora`);
+              } else {
+                await cambiarCita(Number(eleccion.cita.id), () =>
+                  cambiosPorRespuesta(intencion, {
+                    ahoraMs: now,
+                    respuesta: String(req.body.ButtonText ?? Body ?? ""),
+                    messageSid: String(MessageSid),
+                  })
+                );
+                console.log(
+                  `[Citas] cita ${eleccion.cita.id} → ${intencion} ` +
+                    `(por ${eleccion.via}, sid=${MessageSid})`
+                );
+              }
+            } else if (eleccion.tipo === "ambigua") {
+              // NO se toca ninguna. Confirmar la que no era es peor que no
+              // confirmar: la de verdad se queda esperando y nadie se entera.
+              console.error(
+                `[Citas] REVISIÓN MANUAL: «${intencion}» de ${From} encaja con ` +
+                  `${eleccion.candidatas.length} citas ` +
+                  `(${eleccion.candidatas.map((c) => c.id).join(", ")}). ` +
+                  `Ninguna modificada. sid=${MessageSid}`
+              );
+            } else {
+              console.log(
+                `[Citas] «${intencion}» de ${From} sin cita esperando confirmación.`
+              );
+            }
+          }
+        }
+      } catch (e) {
+        console.error("[Citas] error procesando respuesta de confirmación:", e);
+      }
 
       // ── Respuesta de un cliente con expediente de recobro abierto ─────
       // Si el remitente coincide con el teléfono de un cliente con recobro
@@ -15903,6 +16063,31 @@ app.post(
 
       // Actualizar estado del WhatsApp de seguimiento en la asistencia correspondiente.
       // Ranking para no rebajar (p.ej. un 'delivered' tardío no debe pisar 'read').
+      /*
+       * ¿Es el mensaje de confirmación de una cita?
+       *
+       * Va ANTES que la consulta de asistencias y con su propio try: si algo
+       * falla aquí, el seguimiento de asistencias tiene que seguir
+       * funcionando exactamente igual que antes de existir esto.
+       *
+       * Solo mueve el estado del MENSAJE. `confirmationStatus` —lo que ha
+       * dicho el cliente— no se toca desde aquí bajo ningún concepto: que
+       * alguien lea un WhatsApp no dice si va a venir.
+       */
+      if (MessageSid && MessageStatus) {
+        try {
+          const estado = estadoEnvioDeTwilio(MessageStatus);
+          if (estado) {
+            const cita = await aplicarEstadoDeEnvio(String(MessageSid), estado, Date.now());
+            if (cita) {
+              console.log(`[Citas] confirmación ${cita.id}: mensaje ${estado}`);
+            }
+          }
+        } catch (e) {
+          console.error("[Citas] error aplicando estado de envío:", e);
+        }
+      }
+
       if (MessageSid && MessageStatus) {
         await db.query(
           `UPDATE roadside_assistances
